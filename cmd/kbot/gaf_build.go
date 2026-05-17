@@ -21,7 +21,10 @@ import (
 )
 
 func newGAFBuildCommand() *cobra.Command {
-	var target string
+	var (
+		target      string
+		palettePath string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "build <folder>",
@@ -36,12 +39,14 @@ build command reads:
   1.png
   ...
 
-The images are palettized against the standard TA palette.  The output
-is a fully TA-compatible GAF file.
+The images are palettized against the standard TA palette by default.
+Pass --palette <file.pal> to palettize against a custom 1024-byte TA
+.PAL file instead.  The output is a fully TA-compatible GAF file.
 
 Examples:
   kbot gaf build ./sprites --target units.gaf
-  kbot gaf build ./my_gaf                          # writes my_gaf.gaf`,
+  kbot gaf build ./my_gaf                          # writes my_gaf.gaf
+  kbot gaf build ./sprites --palette PALETTE.PAL`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			srcDir := args[0]
@@ -55,9 +60,9 @@ Examples:
 				return fmt.Errorf("source must be an existing directory: %s", srcDir)
 			}
 
-			palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+			palette, err := loadBuildPalette(palettePath)
 			if err != nil {
-				return fmt.Errorf("failed to load palette: %w", err)
+				return err
 			}
 			palModel := palette.ColorModel()
 
@@ -117,8 +122,27 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&target, "target", "", "Output GAF file (default: <folder>.gaf)")
+	cmd.Flags().StringVar(&palettePath, "palette", "", "Path to a custom 1024-byte TA .PAL file (default: embedded TA palette)")
 
 	return cmd
+}
+
+// loadBuildPalette resolves the palette used to palettize input frames.
+// An empty path means use the embedded default TA palette.
+func loadBuildPalette(path string) (*gaf.Palette, error) {
+	if path == "" {
+		palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load default palette: %w", err)
+		}
+		return palette, nil
+	}
+
+	palette, err := gaf.LoadPalette(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load palette %s: %w", path, err)
+	}
+	return palette, nil
 }
 
 // ── sequence builder ───────────────────────────────────────────────────────
