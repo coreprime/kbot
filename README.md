@@ -46,6 +46,7 @@ To develop/code against the project:
   - [`kbot pcx` — PCX Images](#kbot-pcx--pcx-images)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
+  - [`kbot mcp` — Model Context Protocol Server](#kbot-mcp--model-context-protocol-server)
 - [Shell Completion](#shell-completion)
 - [Project Structure](#project-structure)
 - [Development](#development)
@@ -229,6 +230,55 @@ kbot mount ~/ta-content flatten --target ./flat
 - View bitmap fonts with live text preview
 - Call graph visualization for script functions and signals
 - Light/dark/system theme toggle
+
+---
+
+### `kbot mcp` — Model Context Protocol Server
+
+Expose kbot's TA tooling to AI assistants (Claude Code, Claude Desktop, Cursor, etc.) over [MCP](https://modelcontextprotocol.io/). The assistant can then decompile scripts, lint COB, inspect HPI archives, render GAF/PCX, and so on directly against your game install.
+
+```bash
+# stdio transport (default — clients launch kbot as a subprocess)
+kbot mcp --mount ~/games/totala
+
+# Restrict to multiple roots
+kbot mcp --mount ~/games/totala --mount /tmp/kbot-out
+
+# Long-lived HTTP transport for multi-client setups
+kbot mcp --http 127.0.0.1:8765 --mount ~/games/totala
+```
+
+**`--mount`** restricts every path argument the assistant passes to lie inside the given root. Without any `--mount`, the server runs in permissive mode and accepts any absolute path — fine for local development, unsafe on shared hosts. Always pass at least one `--mount` when configuring a long-running assistant.
+
+#### Configuring with Claude Code
+
+Register kbot as a user-scoped MCP server so it loads in every session:
+
+```bash
+claude mcp add -s user kbot kbot mcp --mount /path/to/total-annihilation
+```
+
+If the `claude` CLI is not on your `PATH`, add the entry directly to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "kbot": {
+      "type": "stdio",
+      "command": "kbot",
+      "args": [
+        "mcp",
+        "--mount",
+        "/path/to/total-annihilation"
+      ]
+    }
+  }
+}
+```
+
+Restart any open Claude Code sessions; new sessions will pick up the server automatically. Use `/mcp` inside Claude Code to verify the connection and list the available tools.
+
+For Claude Desktop, add the same `mcpServers` block to its config file (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS) and restart the app.
 
 ---
 

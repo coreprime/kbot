@@ -80,9 +80,30 @@ tasks:
       - task: build
       - go install ./cmd/kbot
     
-  run-explorer:
+  run-explorer-ta:
     desc: Run the KBot Explorer against the TA packed assets
     cmds:
       - task: build
       - task: install
       - kbot mount {{.TA_PACKED_PATH}} --server
+  
+  run-mcp-ta:
+    desc: Run the KBot Explorer against the TA packed assets
+    cmds:
+      - task: build
+      - task: install
+      - kbot mcp --mount {{.TA_PACKED_PATH}}
+   
+  run-explorer-tak:
+    desc: Run the KBot Explorer against the TA packed assets
+    cmds:
+      - task: build
+      - task: install
+      - kbot mount {{.TAK_PACKED_PATH}} --server
+  
+  run-mcp-tak:
+    desc: Run the KBot Explorer against the TA packed assets
+    cmds:
+      - task: build
+      - task: install
+      - kbot mcp --mount {{.TAK_PACKED_PATH}}

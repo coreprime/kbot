@@ -19,7 +19,8 @@ Sub-commands operate on specific file formats:
   cob   COB/BOS scripting (compile, decompile, assemble, disassemble)
   hpi   HPI/UFO/CCX archive files (list, extract, pack, info)
   pcx   PCX image files (describe, convert, info)
-  zrb   Smacker/ZRB video files (info, to-mp4, from-mp4)`,
+  zrb   Smacker/ZRB video files (info, to-mp4, from-mp4)
+  mcp   Run kbot as a Model Context Protocol server`,
 		Version: Version,
 	}
 
@@ -30,6 +31,7 @@ Sub-commands operate on specific file formats:
 		newPCXCommand(),
 		newZRBCommand(),
 		newMountCommand(),
+		newMCPCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
