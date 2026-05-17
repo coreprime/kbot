@@ -37,3 +37,13 @@ const (
 
 // Decryption key for encrypted HPIs
 const DecryptKey = ^byte(0) // XOR with 0xFF
+
+// DefaultHeaderKey is the HeaderKey value Total Annihilation writes into the
+// HPI header for the main game archives shipped on disk (totala1/2/4.hpi).
+// A value of 0 disables encryption entirely.
+const DefaultHeaderKey uint8 = 0xBF
+
+// DefaultTrailer is the 36-byte ASCII signature written at the end of every
+// retail TA HPI archive. The game's loader appears to expect it, so the
+// writer emits it by default to keep custom archives compatible.
+const DefaultTrailer = "Copyright 1997 Cavedog Entertainment"

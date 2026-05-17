@@ -13,8 +13,13 @@ import (
 
 func newHPIPackCommand() *cobra.Command {
 	var (
-		verbose bool
-		target  string
+		verbose      bool
+		target       string
+		compression  int
+		method       string
+		headerKey    uint8
+		encodeChunks bool
+		trailer      string
 	)
 
 	cmd := &cobra.Command{
@@ -52,6 +57,24 @@ Examples:
 			writer, err := hpi.CreateWriter(tmpPath)
 			if err != nil {
 				return fmt.Errorf("failed to create archive: %w", err)
+			}
+			writer.CompressionLevel = compression
+			writer.HeaderKey = headerKey
+			writer.ChunkEncoded = encodeChunks
+			switch method {
+			case "lz77", "":
+				writer.CompressionMethod = hpi.CompressionLZ77
+			case "zlib":
+				writer.CompressionMethod = hpi.CompressionZLib
+			case "none":
+				writer.CompressionMethod = hpi.CompressionNone
+			default:
+				return fmt.Errorf("unknown compression method: %s (use lz77, zlib, or none)", method)
+			}
+			if trailer != "" {
+				writer.SetTrailer([]byte(trailer))
+			} else {
+				writer.SetTrailer(nil)
 			}
 
 			if verbose {
@@ -137,6 +160,14 @@ Examples:
 
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed packing progress")
 	cmd.Flags().StringVar(&target, "target", "", "Output archive path (default: stdout)")
+	cmd.Flags().IntVar(&compression, "compression", 0, "Zlib compression level 1-9 (0 = default)")
+	cmd.Flags().StringVar(&method, "method", "lz77", "Compression method: lz77, zlib, or none")
+	cmd.Flags().Uint8Var(&headerKey, "key", hpi.DefaultHeaderKey,
+		"HPI HeaderKey for XOR encryption (default matches retail TA; 0 disables encryption)")
+	cmd.Flags().BoolVar(&encodeChunks, "encode-chunks", true,
+		"Apply the per-chunk add/XOR transform used by shipped TA archives")
+	cmd.Flags().StringVar(&trailer, "trailer", hpi.DefaultTrailer,
+		"Bytes appended after the file data section (empty string writes no trailer)")
 
 	return cmd
 }
