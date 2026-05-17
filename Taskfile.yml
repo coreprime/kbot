@@ -1,0 +1,88 @@
+version: '3'
+
+dotenv: ['.env.local', '.env']
+
+tasks:
+  default:
+    desc: Build, vet, lint, and test
+    cmds:
+      - task: build
+      - task: vet
+      - task: lint
+      - task: test
+
+  build:
+    desc: Build all binaries
+    cmds:
+      - task: build-web
+      - task: build-kbot
+
+  build-kbot:
+    desc: Build the kbot CLI
+    cmds:
+      - CGO_ENABLED=0 go build -o bin/kbot ./cmd/kbot
+
+  build-web:
+    desc: Build the React web UI
+    cmds:
+      - npm install
+      - npm run build
+    dir: internal/explorer/web
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint and eslint
+    cmds:
+      - golangci-lint run ./...
+      - task: lint-web
+
+  lint-web:
+    desc: Run ESLint on the web UI
+    cmds:
+      - npx eslint . --max-warnings 0
+    dir: internal/explorer/web
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  test-race:
+    desc: Run all tests with race detector
+    cmds:
+      - go test -race ./...
+
+  coverage:
+    desc: Generate code coverage report
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report written to coverage.html"
+
+  test-cover:
+    desc: Run tests with coverage and open in browser
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf bin/ coverage.out coverage.html .cache/
+
+  install:
+    desc: Run the KBot Explorer against the TA assets
+    cmds:
+      - task: build
+      - go install ./cmd/kbot
+    
+  run-explorer:
+    desc: Run the KBot Explorer against the TA packed assets
+    cmds:
+      - task: build
+      - task: install
+      - kbot mount {{.TA_PACKED_PATH}} --server
