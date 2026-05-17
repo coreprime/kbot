@@ -16,7 +16,7 @@ import (
 
 // ── tool registration ─────────────────────────────────────────────────────
 
-func registerHPITools(s *server.MCPServer, guard *PathGuard) {
+func registerHPITools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("hpi_list",
 			mcplib.WithDescription(
@@ -25,13 +25,14 @@ func registerHPITools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the archive."),
+				mcplib.Description("Path to the archive (absolute, virtual, or bare filename)."),
 			),
 			mcplib.WithString("pattern",
 				mcplib.Description("Optional glob to filter by base name (e.g. '*.cob')."),
 			),
+			withGameData(),
 		),
-		makeHPIListHandler(guard),
+		makeHPIListHandler(r),
 	)
 
 	s.AddTool(
@@ -42,10 +43,11 @@ func registerHPITools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the archive."),
+				mcplib.Description("Path to the archive (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makeHPIInfoHandler(guard),
+		makeHPIInfoHandler(r),
 	)
 
 	s.AddTool(
@@ -53,12 +55,12 @@ func registerHPITools(s *server.MCPServer, guard *PathGuard) {
 			mcplib.WithDescription(
 				"Extract a single file from an HPI/UFO/CCX archive and write it "+
 					"to the given output path.  Returns the bytes written and the "+
-					"resolved output path.  Both paths must lie inside the "+
-					"configured mount roots when mounts are set.",
+					"resolved output path.  Output paths are anchored to the "+
+					"game-data folder when relative.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the archive."),
+				mcplib.Description("Path to the archive (absolute, virtual, or bare filename)."),
 			),
 			mcplib.WithString("entry",
 				mcplib.Required(),
@@ -68,8 +70,9 @@ func registerHPITools(s *server.MCPServer, guard *PathGuard) {
 				mcplib.Required(),
 				mcplib.Description("Destination path on disk for the extracted file."),
 			),
+			withGameData(),
 		),
-		makeHPIExtractHandler(guard),
+		makeHPIExtractHandler(r),
 	)
 }
 
@@ -83,24 +86,26 @@ type hpiEntryInfo struct {
 
 type hpiListOutput struct {
 	Archive string         `json:"archive"`
+	Source  string         `json:"source,omitempty"`
 	Total   int            `json:"total"`
 	Matched int            `json:"matched"`
 	Entries []hpiEntryInfo `json:"entries"`
 }
 
-func makeHPIListHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeHPIListHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 		pattern := req.GetString("pattern", "")
 
-		reader, err := hpi.OpenReader(resolved)
+		reader, err := hpi.OpenReader(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("open archive: %w", err)), nil
 		}
@@ -122,7 +127,8 @@ func makeHPIListHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(hpiListOutput{
-			Archive: resolved,
+			Archive: rf.displayPath(),
+			Source:  rf.Source,
 			Total:   len(all),
 			Matched: len(entries),
 			Entries: entries,
@@ -132,6 +138,7 @@ func makeHPIListHandler(guard *PathGuard) server.ToolHandlerFunc {
 
 type hpiInfoOutput struct {
 	Archive          string `json:"archive"`
+	Source           string `json:"source,omitempty"`
 	FileSize         int64  `json:"file_size"`
 	Version          uint32 `json:"version"`
 	DirectorySize    uint32 `json:"directory_size"`
@@ -142,30 +149,32 @@ type hpiInfoOutput struct {
 	UncompressedSize uint64 `json:"uncompressed_size"`
 }
 
-func makeHPIInfoHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeHPIInfoHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		stat, err := os.Stat(resolved)
+		stat, err := os.Stat(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("stat archive: %w", err)), nil
 		}
 
-		reader, err := hpi.OpenReader(resolved)
+		reader, err := hpi.OpenReader(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("open archive: %w", err)), nil
 		}
 		defer func() { _ = reader.Close() }()
 
 		out := hpiInfoOutput{
-			Archive:    resolved,
+			Archive:    rf.displayPath(),
+			Source:     rf.Source,
 			FileSize:   stat.Size(),
 			TotalFiles: len(reader.List()),
 		}
@@ -198,7 +207,7 @@ type hpiExtractOutput struct {
 	BytesWrote int64  `json:"bytes_written"`
 }
 
-func makeHPIExtractHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeHPIExtractHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
@@ -212,17 +221,20 @@ func makeHPIExtractHandler(guard *PathGuard) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+		gameData := req.GetString("game_data", "")
 
-		resolvedArchive, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, gameData)
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolvedOutput, err := guard.Resolve(output)
+		defer func() { _ = rf.Close() }()
+
+		resolvedOutput, err := r.ResolveOutput(output, gameData)
 		if err != nil {
 			return errorResult(fmt.Errorf("output: %w", err)), nil
 		}
 
-		reader, err := hpi.OpenReader(resolvedArchive)
+		reader, err := hpi.OpenReader(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("open archive: %w", err)), nil
 		}
@@ -250,7 +262,7 @@ func makeHPIExtractHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(hpiExtractOutput{
-			Archive:    resolvedArchive,
+			Archive:    rf.displayPath(),
 			Entry:      entry,
 			Output:     resolvedOutput,
 			BytesWrote: n,

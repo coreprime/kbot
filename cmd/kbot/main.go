@@ -19,6 +19,7 @@ Sub-commands operate on specific file formats:
   cob   COB/BOS scripting (compile, decompile, assemble, disassemble)
   hpi   HPI/UFO/CCX archive files (list, extract, pack, info)
   pcx   PCX image files (describe, convert, info)
+  tnt   TNT map files (describe, unpack, pack, image, heightmap, minimap, ascii)
   zrb   Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp   Run kbot as a Model Context Protocol server`,
 		Version: Version,
@@ -29,6 +30,7 @@ Sub-commands operate on specific file formats:
 		newGAFCommand(),
 		newHPICommand(),
 		newPCXCommand(),
+		newTNTCommand(),
 		newZRBCommand(),
 		newMountCommand(),
 		newMCPCommand(),

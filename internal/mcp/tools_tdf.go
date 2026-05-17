@@ -10,7 +10,7 @@ import (
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
-func registerTDFTools(s *server.MCPServer, guard *PathGuard) {
+func registerTDFTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("tdf_parse",
 			mcplib.WithDescription(
@@ -20,10 +20,11 @@ func registerTDFTools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .tdf/.fbi/.ota file."),
+				mcplib.Description("Path to the .tdf/.fbi/.ota file (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makeTDFParseHandler(guard),
+		makeTDFParseHandler(r),
 	)
 }
 
@@ -42,26 +43,28 @@ type tdfField struct {
 
 type tdfOutput struct {
 	Path     string       `json:"path"`
+	Source   string       `json:"source,omitempty"`
 	Sections []tdfSection `json:"sections"`
 }
 
-func makeTDFParseHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeTDFParseHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		doc, err := tdf.ParseFile(resolved)
+		doc, err := tdf.ParseFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse tdf: %w", err)), nil
 		}
 
-		out := tdfOutput{Path: resolved}
+		out := tdfOutput{Path: rf.displayPath(), Source: rf.Source}
 		for _, s := range doc.Sections() {
 			out.Sections = append(out.Sections, convertTDFSection(s))
 		}

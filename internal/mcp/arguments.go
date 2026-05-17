@@ -29,3 +29,12 @@ func errorResult(err error) *mcplib.CallToolResult {
 	}
 	return mcplib.NewToolResultError(err.Error())
 }
+
+// withGameData appends the standard optional game_data parameter every kbot
+// tool accepts.  Pass it after the other WithX options when constructing a
+// tool so the description shows up consistently across the surface.
+func withGameData() mcplib.ToolOption {
+	return mcplib.WithString("game_data",
+		mcplib.Description("Optional name of a --game-data folder to resolve relative or bare-name paths against. Defaults to the first --game-data folder."),
+	)
+}

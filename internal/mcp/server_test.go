@@ -15,10 +15,11 @@ import (
 )
 
 func TestNewServer_NoMount(t *testing.T) {
-	s, err := NewServer(Config{Version: "test"})
+	s, cleanup, err := NewServer(Config{Version: "test"})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	defer func() { _ = cleanup() }()
 	if s == nil {
 		t.Fatal("expected non-nil server")
 	}
@@ -26,13 +27,29 @@ func TestNewServer_NoMount(t *testing.T) {
 
 func TestNewServer_WithMounts(t *testing.T) {
 	root := t.TempDir()
-	s, err := NewServer(Config{
+	s, cleanup, err := NewServer(Config{
 		Version:    "test",
 		MountRoots: []string{root},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	defer func() { _ = cleanup() }()
+	if s == nil {
+		t.Fatal("expected non-nil server")
+	}
+}
+
+func TestNewServer_WithGameData(t *testing.T) {
+	root := t.TempDir()
+	s, cleanup, err := NewServer(Config{
+		Version:  "test",
+		GameData: []string{"totala=" + root},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer func() { _ = cleanup() }()
 	if s == nil {
 		t.Fatal("expected non-nil server")
 	}
@@ -52,7 +69,8 @@ func TestCobInfoHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPathGuard: %v", err)
 	}
-	handler := makeCobInfoHandler(guard)
+	resolver := NewResolver(guard, NewRegistry())
+	handler := makeCobInfoHandler(resolver)
 
 	req := mcplib.CallToolRequest{
 		Params: mcplib.CallToolParams{
@@ -92,7 +110,8 @@ func TestCobInfoHandler_RejectsOutsideMount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPathGuard: %v", err)
 	}
-	handler := makeCobInfoHandler(guard)
+	resolver := NewResolver(guard, NewRegistry())
+	handler := makeCobInfoHandler(resolver)
 
 	req := mcplib.CallToolRequest{
 		Params: mcplib.CallToolParams{

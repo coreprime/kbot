@@ -2,26 +2,60 @@ package hpi
 
 // compressLZ77 compresses data using the HPI sliding-window LZ77 format.
 //
-// Format per group of up to 8 items:
+// Stream layout, per group of up to 8 items:
 //   - 1 tag byte (8 flag bits, LSB first)
 //   - For each bit (0 = literal, 1 = match):
 //       literal: 1 raw byte
-//       match:   2 bytes encoding (offset, length)
-//                packed as (windowOffset << 4) | (matchLen - 2)
+//       match:   2 bytes encoding (windowOffset << 4) | (matchLen - 2)
 //                giving 12-bit offset (1–4095) and 4-bit length (2–17)
 //
-// The stream is terminated by a match with offset 0 (sentinel).
+// A match with windowOffset == 0 terminates the stream.
+//
+// Matching uses a 2-byte hash chain over the input data. The decompressor
+// reconstructs bytes by reading from a 4096-byte sliding window, so the
+// emitted window offset is computed against a tracked windowPos that mirrors
+// the decompressor's state — the window content itself isn't needed for
+// matching since it always equals the corresponding bytes of the input.
 func compressLZ77(data []byte) []byte {
-	const windowSize = 4096
+	const (
+		windowSize    = 4096
+		maxDistance   = 4095
+		maxMatchLen   = 17
+		minMatchLen   = 2
+		hashBits      = 13
+		hashSize      = 1 << hashBits
+		hashMask      = hashSize - 1
+		maxChainDepth = 64
+	)
 
-	window := make([]byte, windowSize)
+	if len(data) == 0 {
+		return []byte{0x01, 0x00, 0x00}
+	}
+
+	head := make([]int32, hashSize)
+	for i := range head {
+		head[i] = -1
+	}
+	prev := make([]int32, len(data))
+
+	hashAt := func(p int) int {
+		return (int(data[p])<<5 ^ int(data[p+1])) & hashMask
+	}
+
+	insertHash := func(p int) {
+		if p+1 >= len(data) {
+			return
+		}
+		h := hashAt(p)
+		prev[p] = head[h]
+		head[h] = int32(p)
+	}
+
 	windowPos := 1
-	written := 0 // how many positions have been filled
-
-	var out []byte
+	out := make([]byte, 0, len(data))
 	pos := 0
-
 	terminated := false
+
 	for pos < len(data) {
 		var tagByte byte
 		var group []byte
@@ -34,25 +68,50 @@ func compressLZ77(data []byte) []byte {
 				break
 			}
 
-			bestLen, bestOff := findMatch(data, pos, window, windowPos, windowSize, written)
+			bestLen := 1
+			bestWpos := 0
+			maxLen := maxMatchLen
+			if remaining := len(data) - pos; remaining < maxLen {
+				maxLen = remaining
+			}
 
-			if bestLen >= 2 {
+			if pos+1 < len(data) && maxLen >= minMatchLen {
+				candidate := int(head[hashAt(pos)])
+				chains := 0
+				for candidate >= 0 && chains < maxChainDepth {
+					dist := pos - candidate
+					if dist > maxDistance {
+						break
+					}
+					wpos := (windowPos - dist) & 0xFFF
+					if wpos != 0 {
+						ml := matchLengthAt(data, pos, dist, maxLen)
+						if ml > bestLen {
+							bestLen = ml
+							bestWpos = wpos
+							if bestLen == maxLen {
+								break
+							}
+						}
+					}
+					candidate = int(prev[candidate])
+					chains++
+				}
+			}
+
+			if bestLen >= minMatchLen {
 				tagByte |= 1 << bit
-				pair := (bestOff << 4) | (bestLen - 2)
+				pair := (bestWpos << 4) | (bestLen - 2)
 				group = append(group, byte(pair&0xFF), byte(pair>>8))
-
-				for i := 0; i < bestLen; i++ {
-					window[windowPos] = data[pos]
+				for k := 0; k < bestLen; k++ {
+					insertHash(pos)
 					windowPos = (windowPos + 1) & 0xFFF
-					written++
 					pos++
 				}
 			} else {
-				b := data[pos]
-				group = append(group, b)
-				window[windowPos] = b
+				insertHash(pos)
+				group = append(group, data[pos])
 				windowPos = (windowPos + 1) & 0xFFF
-				written++
 				pos++
 			}
 		}
@@ -64,89 +123,23 @@ func compressLZ77(data []byte) []byte {
 	if !terminated {
 		out = append(out, 0x01, 0x00, 0x00)
 	}
-
 	return out
 }
 
-// findMatch searches the sliding window for the longest match starting at
-// data[pos]. Returns (length, windowOffset) where windowOffset is the
-// 0-based position within the 4096-byte window. Returns (0, 0) if no
-// match of length ≥ 2 is found.
-//
-// The match validation must simulate the decompressor's overlapping-copy
-// behaviour: during a match, the decompressor reads window[offset+k] while
-// simultaneously writing each byte to window[windowPos+k]. If the source
-// range overlaps the destination, later reads pick up the freshly written
-// values rather than the original window contents.
-func findMatch(data []byte, pos int, window []byte, windowPos int, windowSize int, written int) (int, int) {
-	maxLen := 17 // 4-bit length field + 2
-	remaining := len(data) - pos
-	if remaining < maxLen {
-		maxLen = remaining
-	}
-	if maxLen < 2 {
-		return 0, 0
-	}
-
-	bestLen := 1
-	bestOff := 0
-
-	// Only search positions that have actually been written to.
-	searchLimit := written
-	if searchLimit > windowSize-1 {
-		searchLimit = windowSize - 1
-	}
-
-	for i := 1; i <= searchLimit; i++ {
-		wpos := (windowPos - i) & 0xFFF
-		if wpos == 0 {
-			continue
+// matchLengthAt returns how many bytes starting at data[pos] match a back
+// reference at distance dist, up to maxLen. The decompressor's
+// overlapping-copy semantics are modelled by treating source indices that
+// would fall at or past pos as a repetition of the source prefix with period
+// dist — equivalently, data[pos+k] is compared against data[pos-dist+(k%dist)].
+func matchLengthAt(data []byte, pos, dist, maxLen int) int {
+	src := pos - dist
+	n := 0
+	for n < maxLen {
+		idx := src + (n % dist)
+		if data[idx] != data[pos+n] {
+			break
 		}
-
-		// Check the match while accounting for the decompressor's
-		// overlapping-copy semantics: if a source byte falls on a position
-		// that has already been written as part of *this* match, the
-		// decompressor reads the newly written value.
-		matchLen := 0
-		srcOff := wpos
-		dstOff := windowPos
-
-		// Small buffer tracks bytes written by *this* match so we can
-		// detect overlap without copying the whole window each time.
-		type pending struct {
-			pos int
-			val byte
-		}
-		var written []pending
-
-		for matchLen < maxLen {
-			// Determine what the decompressor would read at srcOff.
-			b := window[srcOff]
-			for _, p := range written {
-				if p.pos == srcOff {
-					b = p.val
-				}
-			}
-			if b != data[pos+matchLen] {
-				break
-			}
-			written = append(written, pending{dstOff, b})
-			srcOff = (srcOff + 1) & 0xFFF
-			dstOff = (dstOff + 1) & 0xFFF
-			matchLen++
-		}
-
-		if matchLen > bestLen {
-			bestLen = matchLen
-			bestOff = wpos
-			if bestLen == maxLen {
-				break
-			}
-		}
+		n++
 	}
-
-	if bestLen < 2 {
-		return 0, 0
-	}
-	return bestLen, bestOff
+	return n
 }

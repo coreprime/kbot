@@ -3,10 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -19,19 +15,21 @@ import (
 
 // ── tool registration ─────────────────────────────────────────────────────
 
-func registerCOBTools(s *server.MCPServer, guard *PathGuard) {
+func registerCOBTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("cob_decompile",
 			mcplib.WithDescription(
 				"Decompile a COB (Compiled Object Bytecode) file to BOS source. "+
-					"Returns the reconstructed source text.",
+					"Returns the reconstructed source text. "+
+					"Path may be absolute, virtual ('scripts/ARMCOM.cob'), or a bare filename to search the game-data VFS for.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .cob file to decompile."),
+				mcplib.Description("Path to the .cob file (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makeCobDecompileHandler(guard),
+		makeCobDecompileHandler(r),
 	)
 
 	s.AddTool(
@@ -43,7 +41,7 @@ func registerCOBTools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .cob file."),
+				mcplib.Description("Path to the .cob file (absolute, virtual, or bare filename)."),
 			),
 			mcplib.WithString("script",
 				mcplib.Description("Optional script name (e.g. 'Create'). When omitted, all scripts are disassembled."),
@@ -51,8 +49,9 @@ func registerCOBTools(s *server.MCPServer, guard *PathGuard) {
 			mcplib.WithBoolean("annotated",
 				mcplib.Description("Annotated output with flow arrows and hex opcodes (default false)."),
 			),
+			withGameData(),
 		),
-		makeCobDisassembleHandler(guard),
+		makeCobDisassembleHandler(r),
 	)
 
 	s.AddTool(
@@ -60,14 +59,15 @@ func registerCOBTools(s *server.MCPServer, guard *PathGuard) {
 			mcplib.WithDescription(
 				"Run kbot's static analysis on a COB file or directory of COB files. "+
 					"Returns structured diagnostics (rule, severity, script, line, message) "+
-					"plus a per-rule summary count.",
+					"plus a per-rule summary count.  Path may also be a virtual directory inside the game-data VFS.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
 				mcplib.Description("Path to a .cob file or a directory containing .cob files."),
 			),
+			withGameData(),
 		),
-		makeCobLintHandler(guard),
+		makeCobLintHandler(r),
 	)
 
 	s.AddTool(
@@ -78,27 +78,29 @@ func registerCOBTools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .cob file."),
+				mcplib.Description("Path to the .cob file (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makeCobInfoHandler(guard),
+		makeCobInfoHandler(r),
 	)
 }
 
 // ── handlers ──────────────────────────────────────────────────────────────
 
-func makeCobDecompileHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeCobDecompileHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		cob, err := scripting.LoadFromFile(resolved)
+		cob, err := scripting.LoadFromFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse cob: %w", err)), nil
 		}
@@ -111,21 +113,22 @@ func makeCobDecompileHandler(guard *PathGuard) server.ToolHandlerFunc {
 	}
 }
 
-func makeCobDisassembleHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeCobDisassembleHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
 		script := req.GetString("script", "")
 		annotated := req.GetBool("annotated", false)
 
-		cob, err := scripting.LoadFromFile(resolved)
+		cob, err := scripting.LoadFromFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse cob: %w", err)), nil
 		}
@@ -166,88 +169,86 @@ type lintOutput struct {
 	HasErrors   bool           `json:"has_errors"`
 }
 
-func makeCobLintHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeCobLintHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
-		if err != nil {
+		gameData := req.GetString("game_data", "")
+
+		// Try the path as a file first.  Lint accepts a directory too, so on
+		// any "is a directory" / "no match" failure, fall back to ResolveDir.
+		rf, err := r.ResolveFile(path, gameData)
+		if err == nil {
+			defer func() { _ = rf.Close() }()
+			return runCobLint(map[string]string{rf.displayPath(): rf.LocalPath})
+		}
+
+		rd, derr := r.ResolveDir(path, gameData, []string{".cob"})
+		if derr != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rd.Close() }()
 
-		info, err := os.Stat(resolved)
-		if err != nil {
-			return errorResult(fmt.Errorf("stat %s: %w", resolved, err)), nil
+		files := map[string]string{}
+		for _, f := range rd.Files {
+			files[f.displayPath()] = f.LocalPath
 		}
-
-		var files []string
-		switch {
-		case info.IsDir():
-			entries, err := os.ReadDir(resolved)
-			if err != nil {
-				return errorResult(fmt.Errorf("read dir: %w", err)), nil
-			}
-			for _, e := range entries {
-				if !e.IsDir() && strings.EqualFold(filepath.Ext(e.Name()), ".cob") {
-					files = append(files, filepath.Join(resolved, e.Name()))
-				}
-			}
-			sort.Strings(files)
-		default:
-			files = []string{resolved}
-		}
-
-		if len(files) == 0 {
-			return errorResult(fmt.Errorf("no .cob files found under %s", resolved)), nil
-		}
-
-		l := linter.New()
-		out := lintOutput{
-			Diagnostics: []lintDiag{},
-			Summary:     map[string]int{},
-		}
-
-		for _, f := range files {
-			cob, err := scripting.LoadFromFile(f)
-			if err != nil {
-				out.Diagnostics = append(out.Diagnostics, lintDiag{
-					File:     f,
-					Rule:     "parse-error",
-					Severity: linter.Error.String(),
-					Message:  err.Error(),
-				})
-				out.Summary["parse-error"]++
-				out.HasErrors = true
-				continue
-			}
-
-			diags := l.Lint(cob)
-			out.Files++
-
-			for _, d := range diags {
-				out.Diagnostics = append(out.Diagnostics, lintDiag{
-					File:     f,
-					Rule:     d.Rule,
-					Severity: d.Severity.String(),
-					Script:   d.Script,
-					Line:     d.Line,
-					Message:  d.Message,
-				})
-				out.Summary[d.Rule]++
-				if d.Severity == linter.Error {
-					out.HasErrors = true
-				}
-			}
-		}
-
-		return jsonResult(out)
+		return runCobLint(files)
 	}
+}
+
+func runCobLint(files map[string]string) (*mcplib.CallToolResult, error) {
+	if len(files) == 0 {
+		return errorResult(fmt.Errorf("no .cob files to lint")), nil
+	}
+
+	l := linter.New()
+	out := lintOutput{
+		Diagnostics: []lintDiag{},
+		Summary:     map[string]int{},
+	}
+
+	for display, local := range files {
+		cob, err := scripting.LoadFromFile(local)
+		if err != nil {
+			out.Diagnostics = append(out.Diagnostics, lintDiag{
+				File:     display,
+				Rule:     "parse-error",
+				Severity: linter.Error.String(),
+				Message:  err.Error(),
+			})
+			out.Summary["parse-error"]++
+			out.HasErrors = true
+			continue
+		}
+
+		diags := l.Lint(cob)
+		out.Files++
+
+		for _, d := range diags {
+			out.Diagnostics = append(out.Diagnostics, lintDiag{
+				File:     display,
+				Rule:     d.Rule,
+				Severity: d.Severity.String(),
+				Script:   d.Script,
+				Line:     d.Line,
+				Message:  d.Message,
+			})
+			out.Summary[d.Rule]++
+			if d.Severity == linter.Error {
+				out.HasErrors = true
+			}
+		}
+	}
+
+	return jsonResult(out)
 }
 
 type cobInfo struct {
 	Path        string   `json:"path"`
+	Source      string   `json:"source,omitempty"`
 	Version     uint32   `json:"version"`
 	NumScripts  uint32   `json:"num_scripts"`
 	NumPieces   uint32   `json:"num_pieces"`
@@ -257,24 +258,26 @@ type cobInfo struct {
 	CodeBytes   int      `json:"code_bytes"`
 }
 
-func makeCobInfoHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeCobInfoHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		cob, err := scripting.LoadFromFile(resolved)
+		cob, err := scripting.LoadFromFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse cob: %w", err)), nil
 		}
 
 		return jsonResult(cobInfo{
-			Path:        resolved,
+			Path:        rf.displayPath(),
+			Source:      rf.Source,
 			Version:     cob.VersionSignature,
 			NumScripts:  cob.NumScripts,
 			NumPieces:   cob.NumPieces,

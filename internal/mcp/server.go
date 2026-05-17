@@ -13,17 +13,49 @@ type Config struct {
 	Version string
 
 	// MountRoots is an allow-list of filesystem roots that tools may
-	// read from or write to.  When empty the server runs in
-	// permissive mode (all absolute paths allowed).
+	// read from or write to.  When empty (and no GameData entries
+	// either) the server runs in permissive mode (all absolute paths
+	// allowed).
 	MountRoots []string
+
+	// GameData lists game-data folders to expose as named virtual
+	// filesystems.  Each entry is either "PATH" or "NAME=PATH"; the
+	// first entry becomes the default used when a tool call omits
+	// game_data.  Game-data base paths are added implicitly to the
+	// guard's mount roots so on-disk paths within them resolve too.
+	GameData []string
 }
 
 // NewServer constructs a configured MCP server with every kbot tool
 // registered.  Callers serve it with ServeStdio or ServeHTTP.
-func NewServer(cfg Config) (*server.MCPServer, error) {
-	guard, err := NewPathGuard(cfg.MountRoots)
+//
+// The returned cleanup function must be called when the server stops to
+// release any loaded game-data filesystems.  It is safe to call multiple
+// times.
+func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
+	registry := NewRegistry()
+	for _, spec := range cfg.GameData {
+		if spec == "" {
+			continue
+		}
+		if _, err := registry.Add(spec); err != nil {
+			_ = registry.Close()
+			return nil, nil, err
+		}
+	}
+
+	mounts := append([]string(nil), cfg.MountRoots...)
+	for _, name := range registry.Names() {
+		gd, _ := registry.Get(name)
+		if gd != nil {
+			mounts = append(mounts, gd.BasePath)
+		}
+	}
+
+	guard, err := NewPathGuard(mounts)
 	if err != nil {
-		return nil, err
+		_ = registry.Close()
+		return nil, nil, err
 	}
 
 	version := cfg.Version
@@ -38,13 +70,18 @@ func NewServer(cfg Config) (*server.MCPServer, error) {
 		server.WithRecovery(),
 	)
 
-	registerCOBTools(s, guard)
-	registerHPITools(s, guard)
-	registerGAFTools(s, guard)
-	registerPCXTools(s, guard)
-	registerTDFTools(s, guard)
+	resolver := NewResolver(guard, registry)
 
-	return s, nil
+	registerCOBTools(s, resolver)
+	registerHPITools(s, resolver)
+	registerGAFTools(s, resolver)
+	registerPCXTools(s, resolver)
+	registerTDFTools(s, resolver)
+	registerTNTTools(s, resolver)
+	registerVFSTools(s, resolver)
+
+	cleanup := func() error { return registry.Close() }
+	return s, cleanup, nil
 }
 
 // ServeStdio runs the server over the stdio transport.  This is the

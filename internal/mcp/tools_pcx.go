@@ -13,7 +13,7 @@ import (
 	"github.com/coreprime/kbot/formats/pcx"
 )
 
-func registerPCXTools(s *server.MCPServer, guard *PathGuard) {
+func registerPCXTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("pcx_describe",
 			mcplib.WithDescription(
@@ -22,22 +22,23 @@ func registerPCXTools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .pcx file."),
+				mcplib.Description("Path to the .pcx file (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makePCXDescribeHandler(guard),
+		makePCXDescribeHandler(r),
 	)
 
 	s.AddTool(
 		mcplib.NewTool("pcx_convert",
 			mcplib.WithDescription(
-				"Convert a PCX image to PNG, GIF or BMP.  The output path must "+
-					"lie inside the configured mount roots when mounts are set.  "+
-					"Format may be omitted if the output extension is recognised.",
+				"Convert a PCX image to PNG, GIF or BMP.  Output paths are anchored "+
+					"to the game-data folder when relative.  Format may be omitted if "+
+					"the output extension is recognised.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .pcx file."),
+				mcplib.Description("Path to the .pcx file (absolute, virtual, or bare filename)."),
 			),
 			mcplib.WithString("output",
 				mcplib.Required(),
@@ -46,13 +47,15 @@ func registerPCXTools(s *server.MCPServer, guard *PathGuard) {
 			mcplib.WithString("format",
 				mcplib.Description("Output format: 'png', 'gif' or 'bmp'.  Inferred from the output extension when omitted."),
 			),
+			withGameData(),
 		),
-		makePCXConvertHandler(guard),
+		makePCXConvertHandler(r),
 	)
 }
 
 type pcxDescribeOutput struct {
 	Path         string `json:"path"`
+	Source       string `json:"source,omitempty"`
 	FileSize     int64  `json:"file_size"`
 	Version      uint8  `json:"version"`
 	Encoding     string `json:"encoding"`
@@ -66,18 +69,19 @@ type pcxDescribeOutput struct {
 	ColorType    string `json:"color_type"`
 }
 
-func makePCXDescribeHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makePCXDescribeHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		f, err := os.Open(resolved)
+		f, err := os.Open(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("open pcx: %w", err)), nil
 		}
@@ -108,7 +112,8 @@ func makePCXDescribeHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		out := pcxDescribeOutput{
-			Path:         resolved,
+			Path:         rf.displayPath(),
+			Source:       rf.Source,
 			Version:      header.Version,
 			Encoding:     encoding,
 			Width:        reader.Width(),
@@ -129,11 +134,12 @@ func makePCXDescribeHandler(guard *PathGuard) server.ToolHandlerFunc {
 
 type pcxConvertOutput struct {
 	Path   string `json:"path"`
+	Source string `json:"source,omitempty"`
 	Output string `json:"output"`
 	Format string `json:"format"`
 }
 
-func makePCXConvertHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makePCXConvertHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
@@ -156,17 +162,20 @@ func makePCXConvertHandler(guard *PathGuard) server.ToolHandlerFunc {
 				return errorResult(fmt.Errorf("format not specified and not inferrable from output extension")), nil
 			}
 		}
+		gameData := req.GetString("game_data", "")
 
-		resolvedIn, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, gameData)
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolvedOut, err := guard.Resolve(output)
+		defer func() { _ = rf.Close() }()
+
+		resolvedOut, err := r.ResolveOutput(output, gameData)
 		if err != nil {
 			return errorResult(fmt.Errorf("output: %w", err)), nil
 		}
 
-		in, err := os.Open(resolvedIn)
+		in, err := os.Open(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("open pcx: %w", err)), nil
 		}
@@ -196,7 +205,8 @@ func makePCXConvertHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(pcxConvertOutput{
-			Path:   resolvedIn,
+			Path:   rf.displayPath(),
+			Source: rf.Source,
 			Output: resolvedOut,
 			Format: format,
 		})

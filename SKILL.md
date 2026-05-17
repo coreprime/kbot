@@ -92,6 +92,22 @@ kbot pcx info <file.pcx>
 kbot pcx convert <file.pcx> --format png|gif|bmp [--target out.png]
 ```
 
+### `kbot tnt` — TNT maps
+
+Terrain layer of TA maps (header + tile grid + per-cell elevation/features + tile gfx + minimap). Sister `.ota`/metal-PCX files are not part of the TNT.
+
+```bash
+kbot tnt describe <file.tnt>                        # summary metadata
+kbot tnt unpack   <file.tnt> --target ./dir         # decompose to editable files
+kbot tnt pack     ./dir      --target out.tnt       # reverse of unpack (byte-identical)
+kbot tnt image    <file.tnt> --target map.png       # full RGBA render
+kbot tnt heightmap <file.tnt> --target height.png   # 8-bit grayscale, raw elevations
+kbot tnt minimap  <file.tnt> --target mini.png      # embedded minimap
+kbot tnt ascii    <file.tnt> --cols 64              # ASCII art height map
+```
+
+`unpack`/`pack` round-trip byte-identically across the full Cavedog TNT corpus including 0xFFFE/0xFFFC feature sentinels, inter-block scratch padding, and the trailing memory in feature-name buffers — anything not derivable from PNG/CSV lives in `metadata.json`.
+
 ### `kbot zrb` — Smacker video
 
 ```bash
@@ -138,8 +154,13 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `pcx_describe` | `path` | — | version, encoding, dimensions, bit depth, plane count, DPI, colour-type |
 | `pcx_convert` | `path`, `output` | `format` (`png`/`gif`/`bmp`; inferred from extension when omitted) | path to converted image |
 | `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order |
+| `tnt_describe` | `path` | — | JSON header summary, tile/feature counts, elevation stats, top features |
+| `tnt_image` | `path`, `output` | — | RGBA PNG render of the tile grid |
+| `tnt_heightmap` | `path`, `output` | `normalize` (bool, default false) | grayscale elevation PNG |
+| `tnt_minimap` | `path`, `output` | `paletted` (bool, default false) | minimap PNG (RGBA or 8-bit indexed) |
+| `tnt_ascii` | `path` | `cols` (number, default 64) | ASCII-art height map |
 
-Only these five format families are exposed via MCP today: COB, HPI, GAF, PCX, TDF. For everything else (SCT, TNT, 3DO, ZRB, FNT, mount/flatten), use the CLI.
+For everything else (SCT, 3DO, ZRB, FNT, mount/flatten), use the CLI.
 
 ## Source layout (when reading/extending the code)
 
@@ -162,7 +183,7 @@ kbot/
 │   ├── smacker/               Smacker video
 │   ├── tdf/                   text data files
 │   ├── tdo/                   3DO models
-│   └── tnt/                   map terrain
+│   └── tnt/                   map terrain (reader, writer, unpack/pack, renderers)
 ├── filesystem/                virtual FS that layers archives over disk
 └── internal/
     ├── assets/                embedded TA palette

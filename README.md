@@ -44,6 +44,7 @@ To develop/code against the project:
   - [`kbot hpi` — Archive Files](#kbot-hpi--archive-files)
   - [`kbot gaf` — Sprite Animations](#kbot-gaf--sprite-animations)
   - [`kbot pcx` — PCX Images](#kbot-pcx--pcx-images)
+  - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
   - [`kbot mcp` — Model Context Protocol Server](#kbot-mcp--model-context-protocol-server)
@@ -179,6 +180,46 @@ kbot pcx info image.pcx
 
 ---
 
+### `kbot tnt` — TNT Maps
+
+Inspect, render, unpack and pack Total Annihilation `.TNT` map terrain.
+
+```bash
+# Summary on the console
+kbot tnt describe "metal heck.tnt"
+
+# Render artefacts
+kbot tnt image     "metal heck.tnt" --target map.png         # full RGBA map
+kbot tnt heightmap "metal heck.tnt" --target height.png      # 8-bit grayscale
+kbot tnt minimap   "metal heck.tnt" --target mini.png        # embedded minimap
+
+# Tiny ASCII rendering (dev-joke / quick sanity check)
+kbot tnt ascii "metal heck.tnt" --cols 64
+
+# Decompose into editable files
+kbot tnt unpack "metal heck.tnt" --target ./metal_heck
+
+# Reverse the unpack — round-trip safe (byte-identical TNT)
+kbot tnt pack ./metal_heck --target metal_heck.tnt
+```
+
+**Unpack layout (`--target <dir>`):**
+
+```
+<dir>/
+  map.png            full RGBA render of the tile grid
+  heightmap.png      8-bit grayscale, pixel = raw elevation byte
+  minimap.png        paletted PNG of the embedded minimap
+  tiles/<n>.png      paletted 32×32 PNG per unique tile
+  tilemap.csv        2D grid of tile indices (rows = y, cols = x)
+  features.csv       feature_index,name,attr_x,attr_y per placement
+  metadata.json      header constants, feature table, byte-perfect round-trip data
+```
+
+`heightmap.png` is unnormalised so the pixel value equals the raw elevation byte — round-trip safe. Pass `--normalize` to stretch the range for human viewing. `minimap.png` is paletted so palette indices survive the round-trip.
+
+---
+
 ### `kbot zrb` — Smacker Video
 
 Work with Smacker (.smk/.zrb) video files.
@@ -238,24 +279,52 @@ kbot mount ~/ta-content flatten --target ./flat
 Expose kbot's TA tooling to AI assistants (Claude Code, Claude Desktop, Cursor, etc.) over [MCP](https://modelcontextprotocol.io/). The assistant can then decompile scripts, lint COB, inspect HPI archives, render GAF/PCX, and so on directly against your game install.
 
 ```bash
-# stdio transport (default — clients launch kbot as a subprocess)
-kbot mcp --mount ~/games/totala
+# Register a TA install as a virtual filesystem (recommended)
+kbot mcp --game-data ~/games/totala
 
-# Restrict to multiple roots
+# Name it explicitly and add a TA: Kingdoms install alongside
+kbot mcp \
+  --game-data totala=~/games/totala \
+  --game-data kingdoms=~/games/tak
+
+# Raw mount roots without the VFS layer (back-compat; assistant must pass absolute paths)
 kbot mcp --mount ~/games/totala --mount /tmp/kbot-out
 
 # Long-lived HTTP transport for multi-client setups
-kbot mcp --http 127.0.0.1:8765 --mount ~/games/totala
+kbot mcp --http 127.0.0.1:8765 --game-data ~/games/totala
 ```
 
-**`--mount`** restricts every path argument the assistant passes to lie inside the given root. Without any `--mount`, the server runs in permissive mode and accepts any absolute path — fine for local development, unsafe on shared hosts. Always pass at least one `--mount` when configuring a long-running assistant.
+**`--game-data NAME=PATH`** (or just `PATH`, name derived from the basename) registers a Total Annihilation / TA: Kingdoms install as a named virtual filesystem. The folder is walked once, every `.hpi` / `.ufo` / `.ccx` / `.gp3` archive is opened, and contents are layered over physical files exactly as the game sees them. The first `--game-data` is the default the assistant uses when a tool call omits `game_data`. Each game-data base is added implicitly to the path guard, so on-disk paths inside it also resolve.
+
+Once a game-data folder is configured, every tool's `path` argument accepts:
+
+- an absolute on-disk path (e.g. `/Users/me/games/totala/units/ARMCOM.fbi`),
+- a virtual path inside the VFS (e.g. `units/ARMCOM.fbi`), or
+- a bare filename (e.g. `ARMCOM.bos`) that the resolver searches for across every archive and physical file. Ambiguous matches return a list so the assistant can pick.
+
+When a hit lives inside an archive, kbot extracts it to a temp file for the duration of the call and cleans up afterwards. Physical files are passed through directly.
+
+**`--mount`** is the older, simpler gate: it just restricts paths the assistant passes to lie inside the given root, with no VFS layering. Use it when you want to expose a non-game-data directory (such as an output scratch dir) without the cost of walking and indexing archives. Without any `--mount` or `--game-data`, the server runs in permissive mode and accepts any absolute path — fine for local development, unsafe on shared hosts.
+
+#### VFS introspection tools
+
+These tools let the assistant query the virtual filesystem directly:
+
+| Tool | Purpose |
+|------|---------|
+| `vfs_game_data` | List registered game-data folders, their base paths, archive counts and file counts. |
+| `vfs_find` | Locate files by bare name (`ARMCOM.bos`), basename glob (`*.bos`) or full-path glob (`units/ARM*.fbi`). Returns the virtual path and the source archive for every hit. |
+| `vfs_list` | List virtual files and subdirectories under a given directory. |
+| `vfs_stat` | Show every layer that contains a file — useful when a mod overrides a base-game asset. |
+
+So the user can ask "where is ARMCOM.bos?" and the assistant calls `vfs_find` with `query: "ARMCOM.bos"`.
 
 #### Configuring with Claude Code
 
 Register kbot as a user-scoped MCP server so it loads in every session:
 
 ```bash
-claude mcp add -s user kbot kbot mcp --mount /path/to/total-annihilation
+claude mcp add -s user kbot kbot mcp --game-data /path/to/total-annihilation
 ```
 
 If the `claude` CLI is not on your `PATH`, add the entry directly to `~/.claude.json`:
@@ -268,7 +337,7 @@ If the `claude` CLI is not on your `PATH`, add the entry directly to `~/.claude.
       "command": "kbot",
       "args": [
         "mcp",
-        "--mount",
+        "--game-data",
         "/path/to/total-annihilation"
       ]
     }

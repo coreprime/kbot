@@ -15,7 +15,7 @@ import (
 	"github.com/coreprime/kbot/internal/assets"
 )
 
-func registerGAFTools(s *server.MCPServer, guard *PathGuard) {
+func registerGAFTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("gaf_list",
 			mcplib.WithDescription(
@@ -24,22 +24,22 @@ func registerGAFTools(s *server.MCPServer, guard *PathGuard) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .gaf file."),
+				mcplib.Description("Path to the .gaf file (absolute, virtual, or bare filename)."),
 			),
+			withGameData(),
 		),
-		makeGAFListHandler(guard),
+		makeGAFListHandler(r),
 	)
 
 	s.AddTool(
 		mcplib.NewTool("gaf_export",
 			mcplib.WithDescription(
 				"Export one sequence from a GAF file as an animated GIF or APNG. "+
-					"The output path must lie inside the configured mount roots "+
-					"when mounts are set.",
+					"Output paths are anchored to the game-data folder when relative.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Path to the .gaf file."),
+				mcplib.Description("Path to the .gaf file (absolute, virtual, or bare filename)."),
 			),
 			mcplib.WithNumber("sequence",
 				mcplib.Description("Sequence index to export (default 0)."),
@@ -51,8 +51,9 @@ func registerGAFTools(s *server.MCPServer, guard *PathGuard) {
 				mcplib.Required(),
 				mcplib.Description("Destination path for the rendered image."),
 			),
+			withGameData(),
 		),
-		makeGAFExportHandler(guard),
+		makeGAFExportHandler(r),
 	)
 }
 
@@ -66,23 +67,25 @@ type gafSeqInfo struct {
 
 type gafListOutput struct {
 	Path      string       `json:"path"`
+	Source    string       `json:"source,omitempty"`
 	Version   uint32       `json:"version"`
 	Total     int          `json:"total_sequences"`
 	Sequences []gafSeqInfo `json:"sequences"`
 }
 
-func makeGAFListHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeGAFListHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolved, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, req.GetString("game_data", ""))
 		if err != nil {
 			return errorResult(err), nil
 		}
+		defer func() { _ = rf.Close() }()
 
-		reader, err := gaf.LoadFromFile(resolved)
+		reader, err := gaf.LoadFromFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse gaf: %w", err)), nil
 		}
@@ -94,7 +97,8 @@ func makeGAFListHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		out := gafListOutput{
-			Path:      resolved,
+			Path:      rf.displayPath(),
+			Source:    rf.Source,
 			Version:   reader.Header().Version,
 			Total:     len(seqs),
 			Sequences: make([]gafSeqInfo, 0, len(seqs)),
@@ -118,6 +122,7 @@ func makeGAFListHandler(guard *PathGuard) server.ToolHandlerFunc {
 
 type gafExportOutput struct {
 	Path     string `json:"path"`
+	Source   string `json:"source,omitempty"`
 	Sequence int    `json:"sequence"`
 	Name     string `json:"name"`
 	Frames   int    `json:"frames"`
@@ -125,7 +130,7 @@ type gafExportOutput struct {
 	Format   string `json:"format"`
 }
 
-func makeGAFExportHandler(guard *PathGuard) server.ToolHandlerFunc {
+func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 		path, err := req.RequireString("path")
 		if err != nil {
@@ -140,17 +145,20 @@ func makeGAFExportHandler(guard *PathGuard) server.ToolHandlerFunc {
 		if format != "gif" && format != "png" {
 			return errorResult(fmt.Errorf("format must be gif or png, got %q", format)), nil
 		}
+		gameData := req.GetString("game_data", "")
 
-		resolvedIn, err := guard.Resolve(path)
+		rf, err := r.ResolveFile(path, gameData)
 		if err != nil {
 			return errorResult(err), nil
 		}
-		resolvedOut, err := guard.Resolve(output)
+		defer func() { _ = rf.Close() }()
+
+		resolvedOut, err := r.ResolveOutput(output, gameData)
 		if err != nil {
 			return errorResult(fmt.Errorf("output: %w", err)), nil
 		}
 
-		reader, err := gaf.LoadFromFile(resolvedIn)
+		reader, err := gaf.LoadFromFile(rf.LocalPath)
 		if err != nil {
 			return errorResult(fmt.Errorf("parse gaf: %w", err)), nil
 		}
@@ -195,7 +203,8 @@ func makeGAFExportHandler(guard *PathGuard) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(gafExportOutput{
-			Path:     resolvedIn,
+			Path:     rf.displayPath(),
+			Source:   rf.Source,
 			Sequence: sequence,
 			Name:     seq.Name,
 			Frames:   len(seq.Frames),

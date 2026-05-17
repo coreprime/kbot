@@ -52,6 +52,13 @@ type Map struct {
 	Minimap  []byte     // Minimap palette indices (or nil)
 	MinimapW int
 	MinimapH int
+
+	// MapDataPad preserves any padding bytes between the end of the
+	// tile-index array and the start of the attribute array.  Cavedog's
+	// authoring tools pad the mapdata block to a 16-byte boundary (with
+	// scratch memory), so we capture it verbatim for byte-perfect
+	// round-trip.  May be empty.
+	MapDataPad []byte
 }
 
 // LoadFromReader parses a TNT file.
@@ -79,6 +86,16 @@ func LoadFromReader(r io.ReadSeeker) (*Map, error) {
 	m.TileMap = make([]uint16, tileCount)
 	if err := binary.Read(r, binary.LittleEndian, m.TileMap); err != nil {
 		return nil, fmt.Errorf("failed to read tile map: %w", err)
+	}
+
+	// Capture any padding between the tile-index block and the attribute block.
+	mapDataEnd := int64(m.Header.PTRMapData) + int64(tileCount*2)
+	if int64(m.Header.PTRMapAttr) > mapDataEnd {
+		gap := int(int64(m.Header.PTRMapAttr) - mapDataEnd)
+		m.MapDataPad = make([]byte, gap)
+		if _, err := io.ReadFull(r, m.MapDataPad); err != nil {
+			return nil, fmt.Errorf("failed to read mapdata padding: %w", err)
+		}
 	}
 
 	// Read tile attributes (AttrW × AttrH entries at 16px resolution).
@@ -257,10 +274,14 @@ func (m *Map) RenderMinimap(palette color.Palette) *image.RGBA {
 	return img
 }
 
-// Feature is a named feature type from the TileAnim table.
+// Feature is a named feature type from the TileAnim table.  Raw preserves
+// the full 128-byte name buffer including any uninitialised scratch memory
+// past the null terminator, so the table can round-trip byte-for-byte.  When
+// Raw is empty the writer falls back to writing Name zero-padded.
 type Feature struct {
 	Index int
 	Name  string
+	Raw   [128]byte
 }
 
 // FeaturePlacement is a placed feature instance on the map.
@@ -287,15 +308,15 @@ func (m *Map) LoadFeatures(r io.ReadSeeker) ([]Feature, error) {
 		if err := binary.Read(r, binary.LittleEndian, &idx); err != nil {
 			return nil, err
 		}
-		nameBytes := make([]byte, 128)
-		if _, err := io.ReadFull(r, nameBytes); err != nil {
+		var rawName [128]byte
+		if _, err := io.ReadFull(r, rawName[:]); err != nil {
 			return nil, err
 		}
-		name := string(nameBytes)
+		name := string(rawName[:])
 		if nul := strings.IndexByte(name, 0); nul >= 0 {
 			name = name[:nul]
 		}
-		features[i] = Feature{Index: int(idx), Name: name}
+		features[i] = Feature{Index: int(idx), Name: name, Raw: rawName}
 	}
 	return features, nil
 }
