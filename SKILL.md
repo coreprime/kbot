@@ -98,15 +98,19 @@ Terrain layer of TA maps (header + tile grid + per-cell elevation/features + til
 
 ```bash
 kbot tnt describe <file.tnt>                        # summary metadata
-kbot tnt unpack   <file.tnt> --target ./dir         # decompose to editable files
-kbot tnt pack     ./dir      --target out.tnt       # reverse of unpack (byte-identical)
+kbot tnt unpack   <file.tnt> --target ./dir         # decompose to editable files (lossy by default)
+kbot tnt unpack   <file.tnt> --target ./dir --lossless   # preserve full feature table for byte-identical repack
+kbot tnt pack     ./dir      --target out.tnt       # reverse of unpack
 kbot tnt image    <file.tnt> --target map.png       # full RGBA render
+kbot tnt preview  <file.tnt> --vfs ~/ta-flattened --target preview.png  # render + feature sprites + StartPos markers
 kbot tnt heightmap <file.tnt> --target height.png   # 8-bit grayscale, raw elevations
 kbot tnt minimap  <file.tnt> --target mini.png      # embedded minimap
 kbot tnt ascii    <file.tnt> --cols 64              # ASCII art height map
 ```
 
-`unpack`/`pack` round-trip byte-identically across the full Cavedog TNT corpus including 0xFFFE/0xFFFC feature sentinels, inter-block scratch padding, and the trailing memory in feature-name buffers — anything not derivable from PNG/CSV lives in `metadata.json`.
+`unpack` is lossy by default: only the unique feature names referenced in `features.csv` survive, and `pack` rebuilds the feature table from them. Pass `--lossless` to record the original feature table (plus any trailing scratch bytes Cavedog's tooling left in feature-name buffers as `feature_raw_b64`) in `metadata.json`; the resulting directory packs back to a byte-identical TNT across the full Cavedog corpus, including 0xFFFE/0xFFFC feature sentinels and inter-block scratch padding.
+
+`preview` reuses the same tile render as `image` and overlays each placed feature's sprite (resolved via `features/*.tdf` -> `anims/*.gaf` in the VFS) plus a numbered circle at every Schema 0 `StartPos` in the sister `.ota`. Without `--vfs` it is equivalent to `image`.
 
 ### `kbot zrb` — Smacker video
 
@@ -156,6 +160,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order |
 | `tnt_describe` | `path` | — | JSON header summary, tile/feature counts, elevation stats, top features |
 | `tnt_image` | `path`, `output` | — | RGBA PNG render of the tile grid |
+| `tnt_preview` | `path`, `output` | — | RGBA PNG with feature sprites + numbered StartPos markers (needs a game-data folder; falls back to bare tile render otherwise). JSON result includes `sprites_painted`, `sprites_missing`, `start_positions`, `sister_ota_found`, `overlay_applied`. |
 | `tnt_heightmap` | `path`, `output` | `normalize` (bool, default false) | grayscale elevation PNG |
 | `tnt_minimap` | `path`, `output` | `paletted` (bool, default false) | minimap PNG (RGBA or 8-bit indexed) |
 | `tnt_ascii` | `path` | `cols` (number, default 64) | ASCII-art height map |

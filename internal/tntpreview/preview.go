@@ -1,10 +1,19 @@
-package main
+// Package tntpreview composites the "preview" view of a Total Annihilation
+// TNT map: the base tile-grid render with feature sprites painted on top and
+// numbered start-position markers drawn from the sister .ota.
+//
+// It is shared between the kbot CLI (kbot tnt preview) and the MCP server
+// (tnt_preview tool).  All inputs are explicit parameters — the package has
+// no global state and reads no on-disk paths directly.
+package tntpreview
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"path"
 	"strings"
 
 	"github.com/coreprime/kbot/filesystem"
@@ -13,16 +22,126 @@ import (
 	"github.com/coreprime/kbot/formats/tnt"
 )
 
+// Stats summarises what the preview compositor did so callers can surface
+// counts to users / MCP results.
+type Stats struct {
+	SpritesPainted int
+	SpritesMissing int
+	StartPositions int
+	HasSisterOTA   bool
+}
+
+// Compose paints feature sprites and start position markers onto base.
+//
+// vfs is required for sprite resolution.  When otaText is empty, the sister
+// .ota is looked up in vfs by tntBasename (the filename without extension).
+// spritePalette is used to decode GAF frames.
+func Compose(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *filesystem.VirtualFileSystem, spritePalette *gaf.Palette, tntBasename, otaText string) (Stats, error) {
+	if base == nil {
+		return Stats{}, fmt.Errorf("base image is nil")
+	}
+	if vfs == nil {
+		return Stats{}, fmt.Errorf("vfs is required")
+	}
+
+	cache := newFeatureSpriteCache(vfs, spritePalette)
+	painted, missing := compositeFeatureSprites(base, m, features, cache)
+
+	stats := Stats{SpritesPainted: painted, SpritesMissing: missing}
+
+	if otaText == "" && tntBasename != "" {
+		if t, ok := loadSisterOTAFromVFS(tntBasename, vfs); ok {
+			otaText = t
+		}
+	}
+	if otaText != "" {
+		stats.HasSisterOTA = true
+		starts := ExtractStartPositions(otaText)
+		drawStartPositionCircles(base, starts, m.TileW*32, m.TileH*32)
+		stats.StartPositions = len(starts)
+	}
+	return stats, nil
+}
+
+// StartPos holds one player start position in map pixel coordinates.
+type StartPos struct {
+	Number int
+	X, Y   int
+}
+
+// ExtractStartPositions pulls the StartPos entries out of an .ota's
+// GlobalHeader / Schema 0 / specials section.
+func ExtractStartPositions(otaText string) []StartPos {
+	doc, err := tdf.ParseString(otaText)
+	if err != nil {
+		return nil
+	}
+	global := doc.Section("GlobalHeader")
+	if global == nil {
+		return nil
+	}
+	var schema0 *tdf.Section
+	for _, s := range global.Sections() {
+		if strings.EqualFold(s.Name(), "Schema 0") {
+			schema0 = s
+			break
+		}
+	}
+	if schema0 == nil {
+		return nil
+	}
+	var specials *tdf.Section
+	for _, s := range schema0.Sections() {
+		if strings.EqualFold(s.Name(), "specials") {
+			specials = s
+			break
+		}
+	}
+	if specials == nil {
+		return nil
+	}
+	var out []StartPos
+	for _, sp := range specials.Sections() {
+		what := sp.String("specialwhat")
+		if !strings.HasPrefix(what, "StartPos") {
+			continue
+		}
+		num := 0
+		_, _ = fmt.Sscanf(strings.TrimPrefix(what, "StartPos"), "%d", &num)
+		out = append(out, StartPos{Number: num, X: sp.Int("XPos"), Y: sp.Int("ZPos")})
+	}
+	return out
+}
+
+// loadSisterOTAFromVFS returns the .ota text whose stem matches the .tnt's
+// basename (case-insensitive), searching the entire VFS.
+func loadSisterOTAFromVFS(tntBasename string, vfs *filesystem.VirtualFileSystem) (string, bool) {
+	want := strings.ToLower(tntBasename)
+	for _, p := range vfs.List() {
+		if !strings.EqualFold(path.Ext(p), ".ota") {
+			continue
+		}
+		stem := strings.TrimSuffix(path.Base(p), path.Ext(p))
+		if strings.ToLower(stem) != want {
+			continue
+		}
+		if b, err := vfs.ReadFile(p); err == nil {
+			return string(b), true
+		}
+	}
+	return "", false
+}
+
 // featureSpriteCache resolves feature names to renderable sprite images by
-// chaining feature-name → TDF lookup → GAF load → sequence index → frame.
+// chaining feature-name -> TDF lookup -> GAF load -> sequence index -> frame.
 // Results (including misses) are memoised so the per-placement loop is cheap.
 type featureSpriteCache struct {
 	vfs       *filesystem.VirtualFileSystem
 	palette   *gaf.Palette
-	tdfIndex  map[string]featureRef // feature name (lower) → ref
+	tdfIndex  map[string]featureRef
 	tdfLoaded bool
-	gafCache  map[string]*gafFile     // gaf path (lower) → loaded sequences
-	sprites   map[string]*spriteImage // feature name (lower) → sprite (nil = miss)
+	gafCache  map[string]*gafFile
+	sprites   map[string]*spriteImage
 }
 
 type featureRef struct {
@@ -32,7 +151,7 @@ type featureRef struct {
 
 type gafFile struct {
 	sequences []*gaf.Sequence
-	byName    map[string]int // lower seq name → index
+	byName    map[string]int
 }
 
 type spriteImage struct {
@@ -51,8 +170,6 @@ func newFeatureSpriteCache(vfs *filesystem.VirtualFileSystem, palette *gaf.Palet
 	}
 }
 
-// loadTDFIndex walks every features/**/*.tdf in the VFS once and indexes
-// every feature section by name → (filename, seqname).
 func (c *featureSpriteCache) loadTDFIndex() {
 	if c.tdfLoaded {
 		return
@@ -84,8 +201,6 @@ func (c *featureSpriteCache) loadTDFIndex() {
 	}
 }
 
-// sprite returns a renderable sprite for the named feature, or nil if no
-// TDF / GAF / sequence chain can be resolved.
 func (c *featureSpriteCache) sprite(name string) *spriteImage {
 	key := strings.ToLower(name)
 	if sp, ok := c.sprites[key]; ok {
@@ -130,7 +245,7 @@ func (c *featureSpriteCache) loadGAF(name string) *gafFile {
 	if gf, ok := c.gafCache[key]; ok {
 		return gf
 	}
-	c.gafCache[key] = nil // negative marker until we succeed
+	c.gafCache[key] = nil
 	gafPath := "anims/" + key + ".gaf"
 	data, err := c.vfs.ReadFile(gafPath)
 	if err != nil {
@@ -156,9 +271,6 @@ func (c *featureSpriteCache) loadGAF(name string) *gafFile {
 	return gf
 }
 
-// compositeFeatureSprites paints each placement's sprite onto base.  Returns
-// the number of sprites painted and the number of placements whose feature
-// could not be resolved.
 func compositeFeatureSprites(base *image.RGBA, m *tnt.Map, features []tnt.Feature, cache *featureSpriteCache) (painted, missing int) {
 	for _, p := range m.GetFeaturePlacements() {
 		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
@@ -170,7 +282,6 @@ func compositeFeatureSprites(base *image.RGBA, m *tnt.Map, features []tnt.Featur
 			missing++
 			continue
 		}
-		// Draw so the sprite's origin lands on the placement pixel.
 		dstX := p.PixelX - sp.originX
 		dstY := p.PixelY - sp.originY
 		dstRect := image.Rect(dstX, dstY, dstX+sp.img.Bounds().Dx(), dstY+sp.img.Bounds().Dy())
@@ -181,12 +292,11 @@ func compositeFeatureSprites(base *image.RGBA, m *tnt.Map, features []tnt.Featur
 }
 
 // drawStartPositionCircles draws each StartPos as a filled white disc with a
-// black ring and a centred digit at the player number.  The marker size
-// scales with the map's longest side so a 332-tile map gets visibly large
-// markers without overwhelming a small 16-tile mission map.  Coordinates
-// outside the map are clipped to its edge so any misconfigured OTA still
-// shows up.
-func drawStartPositionCircles(base *image.RGBA, starts []startPos, mapW, mapH int) {
+// black ring and a centred digit at the player number.  Marker size scales
+// with the map's longest side so a 332-tile map gets visibly large markers
+// without overwhelming a small 16-tile mission map.  Coordinates outside the
+// map are clipped to its edge so any misconfigured OTA still shows up.
+func drawStartPositionCircles(base *image.RGBA, starts []StartPos, mapW, mapH int) {
 	longest := mapW
 	if mapH > longest {
 		longest = mapH
@@ -244,8 +354,7 @@ func drawFilledDisc(img *image.RGBA, cx, cy, r int, c color.Color) {
 }
 
 // digitFont3x5 holds 3-wide, 5-tall bitmaps for '0'..'9'.  Each entry is 5
-// rows; bit 2 is leftmost.  Suitable for the small ~18px circles drawn for
-// start positions — scaled up 2× by the renderer.
+// rows; bit 2 is leftmost.
 var digitFont3x5 = map[rune][5]byte{
 	'0': {0b111, 0b101, 0b101, 0b101, 0b111},
 	'1': {0b010, 0b110, 0b010, 0b010, 0b111},
@@ -259,10 +368,6 @@ var digitFont3x5 = map[rune][5]byte{
 	'9': {0b111, 0b101, 0b111, 0b001, 0b111},
 }
 
-// drawCenteredNumber prints n at (cx, cy) using the 3×5 bitmap font scaled
-// by the given factor.  Negative and zero numbers fall back to the printable
-// form of n (which gives "0", "-1" etc.) so the renderer never silently
-// drops a marker.
 func drawCenteredNumber(img *image.RGBA, cx, cy, n int, c color.Color, scale int) {
 	if scale < 1 {
 		scale = 1

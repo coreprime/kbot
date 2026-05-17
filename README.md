@@ -193,13 +193,24 @@ kbot tnt image     "metal heck.tnt" --target map.png         # full RGBA map
 kbot tnt heightmap "metal heck.tnt" --target height.png      # 8-bit grayscale
 kbot tnt minimap   "metal heck.tnt" --target mini.png        # embedded minimap
 
+# Same as `image`, but composite feature sprites and draw numbered StartPos
+# markers from the sister .ota.  --vfs points at a flattened TA install (or
+# any directory containing features/*.tdf and anims/*.gaf).
+kbot tnt preview "metal heck.tnt" --vfs ~/ta-flattened --target preview.png
+
 # Tiny ASCII rendering (dev-joke / quick sanity check)
 kbot tnt ascii "metal heck.tnt" --cols 64
 
 # Decompose into editable files
 kbot tnt unpack "metal heck.tnt" --target ./metal_heck
 
-# Reverse the unpack — round-trip safe (byte-identical TNT)
+# Preserve the original feature table verbatim so the unpack/pack round-trip
+# is byte-identical (default unpack drops trailing scratch bytes Cavedog's
+# tooling left in feature-name buffers; pack rebuilds the table from the
+# unique names referenced in features.csv).
+kbot tnt unpack "metal heck.tnt" --target ./metal_heck --lossless
+
+# Reverse the unpack
 kbot tnt pack ./metal_heck --target metal_heck.tnt
 ```
 
@@ -213,10 +224,12 @@ kbot tnt pack ./metal_heck --target metal_heck.tnt
   tiles/<n>.png      paletted 32×32 PNG per unique tile
   tilemap.csv        2D grid of tile indices (rows = y, cols = x)
   features.csv       feature_index,name,attr_x,attr_y per placement
-  metadata.json      header constants, feature table, byte-perfect round-trip data
+  metadata.json      header constants + round-trip info (feature table when --lossless)
 ```
 
 `heightmap.png` is unnormalised so the pixel value equals the raw elevation byte — round-trip safe. Pass `--normalize` to stretch the range for human viewing. `minimap.png` is paletted so palette indices survive the round-trip.
+
+`kbot tnt unpack` is lossy by default: the feature name table is omitted from `metadata.json` and `kbot tnt pack` rebuilds it from the unique names in `features.csv`. This loses any trailing scratch bytes the original tooling left in the table. Pass `--lossless` to record the original feature table (and the raw feature bytes as `feature_raw_b64`) in `metadata.json` so the directory packs back to a byte-identical TNT.
 
 ---
 

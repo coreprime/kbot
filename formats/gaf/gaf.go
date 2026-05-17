@@ -14,6 +14,14 @@ import (
 // Standard GAF version
 const VersionTA = 0x00010100
 
+// isSupportedGAFVersion reports whether a header version field is recognised.
+// Cavedog shipped a handful of stock GAFs (e.g. anims/terrain.gaf,
+// anims/vismasks.gaf) with the version field set to zero; original TA tooling
+// like Kinboat treats the field as opaque and reads them fine.
+func isSupportedGAFVersion(v uint32) bool {
+	return v == VersionTA || v == 0
+}
+
 // Header represents the GAF file header (12 bytes)
 type Header struct {
 	Version       uint32 // Always 0x00010100
@@ -83,7 +91,7 @@ func LoadFromReader(rs io.ReadSeeker) (*Reader, error) {
 	}
 
 	// Validate version
-	if r.header.Version != VersionTA {
+	if !isSupportedGAFVersion(r.header.Version) {
 		return nil, fmt.Errorf("unsupported GAF version: 0x%08X", r.header.Version)
 	}
 
@@ -105,7 +113,7 @@ func LoadFromFile(path string) (*Reader, error) {
 	}
 
 	// Validate version
-	if r.header.Version != VersionTA {
+	if !isSupportedGAFVersion(r.header.Version) {
 		_ = file.Close()
 		return nil, fmt.Errorf("unsupported GAF version: 0x%08X (expected 0x%08X)", r.header.Version, VersionTA)
 	}

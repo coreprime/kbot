@@ -8,7 +8,9 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -16,6 +18,7 @@ import (
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/tnt"
 	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
 func registerTNTTools(s *server.MCPServer, r *Resolver) {
@@ -77,6 +80,22 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 	)
 
 	s.AddTool(
+		mcplib.NewTool("tnt_preview",
+			mcplib.WithDescription(
+				"Render the TNT terrain layer and overlay it with each placed feature's "+
+					"sprite plus a numbered marker at every Schema 0 StartPos found in the "+
+					"sister .ota.  Requires a game-data folder so feature sprites (features/*.tdf, "+
+					"anims/*.gaf) and the .ota can be resolved; without one this degrades to "+
+					"the same render as tnt_image.",
+			),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
+			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
+			withGameData(),
+		),
+		makeTNTPreviewHandler(r),
+	)
+
+	s.AddTool(
 		mcplib.NewTool("tnt_ascii",
 			mcplib.WithDescription(
 				"Render the height map as compact ASCII art — quick sanity check that "+
@@ -125,6 +144,18 @@ type tntImageOutput struct {
 	Output string `json:"output"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+}
+
+type tntPreviewOutput struct {
+	Path            string `json:"path"`
+	Output          string `json:"output"`
+	Width           int    `json:"width"`
+	Height          int    `json:"height"`
+	SpritesPainted  int    `json:"sprites_painted"`
+	SpritesMissing  int    `json:"sprites_missing"`
+	StartPositions  int    `json:"start_positions"`
+	SisterOTAFound  bool   `json:"sister_ota_found"`
+	OverlayApplied  bool   `json:"overlay_applied"`
 }
 
 type tntASCIIOutput struct {
@@ -286,6 +317,85 @@ func makeTNTImageHandler(r *Resolver) server.ToolHandlerFunc {
 		}
 		return jsonResult(tntImageOutput{Path: rf.displayPath(), Output: outPath, Width: img.Bounds().Dx(), Height: img.Bounds().Dy()})
 	}
+}
+
+func makeTNTPreviewHandler(r *Resolver) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		path, err := req.RequireString("path")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		outArg, err := req.RequireString("output")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		gameData := req.GetString("game_data", "")
+		rf, err := r.ResolveFile(path, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		defer func() { _ = rf.Close() }()
+		outPath, err := r.ResolveOutput(outArg, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		m, feats, _, err := loadTNT(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		pal, err := tntServerPalette()
+		if err != nil {
+			return errorResult(err), nil
+		}
+		base := m.RenderTileMap(pal)
+
+		out := tntPreviewOutput{
+			Path:   rf.displayPath(),
+			Output: outPath,
+			Width:  base.Bounds().Dx(),
+			Height: base.Bounds().Dy(),
+		}
+
+		gd, _ := r.Registry().Get(rf.GameData)
+		if gd != nil {
+			vfs, vfsErr := gd.VFS()
+			if vfsErr != nil {
+				return errorResult(fmt.Errorf("open game-data vfs: %w", vfsErr)), nil
+			}
+			spritePal, palErr := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+			if palErr != nil {
+				return errorResult(palErr), nil
+			}
+			basename := previewBasename(rf)
+			stats, cErr := tntpreview.Compose(base, m, feats, vfs, spritePal, basename, "")
+			if cErr != nil {
+				return errorResult(cErr), nil
+			}
+			out.OverlayApplied = true
+			out.SpritesPainted = stats.SpritesPainted
+			out.SpritesMissing = stats.SpritesMissing
+			out.StartPositions = stats.StartPositions
+			out.SisterOTAFound = stats.HasSisterOTA
+		}
+
+		if err := writeServerPNG(outPath, base); err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(out)
+	}
+}
+
+// previewBasename returns the .tnt's filename without its extension, used to
+// locate the sister .ota in the VFS by stem.  Prefers the virtual path so a
+// game-data hit yields the in-archive name even when the file was extracted to
+// a temp location.
+func previewBasename(rf *ResolvedFile) string {
+	p := rf.VirtualPath
+	if p == "" {
+		p = rf.LocalPath
+	}
+	base := filepath.Base(p)
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 func makeTNTHeightmapHandler(r *Resolver) server.ToolHandlerFunc {

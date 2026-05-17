@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image/png"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -13,9 +12,9 @@ import (
 
 	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
 	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
 func newTNTPreviewCommand() *cobra.Command {
@@ -66,14 +65,17 @@ Without --vfs the output is just the tile-grid render (no overlays).`,
 					return err
 				}
 
-				cache := newFeatureSpriteCache(vfs, palette)
-				painted, missing := compositeFeatureSprites(base, m, features, cache)
-				fmt.Fprintf(os.Stderr, "Composited %d feature sprites (%d unresolved)\n", painted, missing)
+				// Prefer the on-disk sister .ota so a local edit beats the VFS copy.
+				otaText := readOnDiskSisterOTA(tntPath)
+				basename := strings.TrimSuffix(filepath.Base(tntPath), filepath.Ext(tntPath))
 
-				if otaText, ok := loadSisterOTA(tntPath, vfs); ok {
-					starts := extractStartPositions(otaText)
-					drawStartPositionCircles(base, starts, m.TileW*32, m.TileH*32)
-					fmt.Fprintf(os.Stderr, "Drew %d start position markers\n", len(starts))
+				stats, err := tntpreview.Compose(base, m, features, vfs, palette, basename, otaText)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(os.Stderr, "Composited %d feature sprites (%d unresolved)\n", stats.SpritesPainted, stats.SpritesMissing)
+				if stats.HasSisterOTA {
+					fmt.Fprintf(os.Stderr, "Drew %d start position markers\n", stats.StartPositions)
 				} else {
 					fmt.Fprintln(os.Stderr, "No sister .ota found; skipping start position overlay")
 				}
@@ -106,8 +108,6 @@ func vfsOrEmbeddedPalette(vfs *filesystem.VirtualFileSystem) (*gaf.Palette, erro
 	return tntPaletteRaw()
 }
 
-// tntPaletteRaw mirrors tntPalette but returns the gaf.Palette struct so we
-// can pass it into Frame.ToImage.
 func tntPaletteRaw() (*gaf.Palette, error) {
 	pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
 	if err != nil {
@@ -116,74 +116,14 @@ func tntPaletteRaw() (*gaf.Palette, error) {
 	return pal, nil
 }
 
-// loadSisterOTA returns the text of the .ota that lives next to the given
-// .tnt — first checking the on-disk directory, then the VFS using the .tnt's
-// basename.
-func loadSisterOTA(tntPath string, vfs *filesystem.VirtualFileSystem) (string, bool) {
+// readOnDiskSisterOTA returns the text of the .ota next to tntPath on disk, or
+// "" if no such file exists.  Composing prefers this over the VFS copy so a
+// user editing an .ota locally sees their changes.
+func readOnDiskSisterOTA(tntPath string) string {
 	ext := filepath.Ext(tntPath)
-	diskCandidate := strings.TrimSuffix(tntPath, ext) + ".ota"
-	if b, err := os.ReadFile(diskCandidate); err == nil {
-		return string(b), true
+	candidate := strings.TrimSuffix(tntPath, ext) + ".ota"
+	if b, err := os.ReadFile(candidate); err == nil {
+		return string(b)
 	}
-	base := strings.TrimSuffix(filepath.Base(tntPath), ext)
-	for _, p := range vfs.List() {
-		if !strings.EqualFold(filepath.Ext(p), ".ota") {
-			continue
-		}
-		stem := strings.TrimSuffix(path.Base(p), path.Ext(p))
-		if strings.EqualFold(stem, base) {
-			if b, err := vfs.ReadFile(p); err == nil {
-				return string(b), true
-			}
-		}
-	}
-	return "", false
-}
-
-// startPos holds one player start position in map pixel coordinates.
-type startPos struct {
-	Number int
-	X, Y   int
-}
-
-func extractStartPositions(otaText string) []startPos {
-	doc, err := tdf.ParseString(otaText)
-	if err != nil {
-		return nil
-	}
-	global := doc.Section("GlobalHeader")
-	if global == nil {
-		return nil
-	}
-	var schema0 *tdf.Section
-	for _, s := range global.Sections() {
-		if strings.EqualFold(s.Name(), "Schema 0") {
-			schema0 = s
-			break
-		}
-	}
-	if schema0 == nil {
-		return nil
-	}
-	var specials *tdf.Section
-	for _, s := range schema0.Sections() {
-		if strings.EqualFold(s.Name(), "specials") {
-			specials = s
-			break
-		}
-	}
-	if specials == nil {
-		return nil
-	}
-	var out []startPos
-	for _, sp := range specials.Sections() {
-		what := sp.String("specialwhat")
-		if !strings.HasPrefix(what, "StartPos") {
-			continue
-		}
-		num := 0
-		_, _ = fmt.Sscanf(strings.TrimPrefix(what, "StartPos"), "%d", &num)
-		out = append(out, startPos{Number: num, X: sp.Int("XPos"), Y: sp.Int("ZPos")})
-	}
-	return out
+	return ""
 }
