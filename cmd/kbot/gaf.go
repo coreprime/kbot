@@ -15,6 +15,7 @@ files containing sprite sequences and animation frames.`,
 		newGAFExportCommand(),
 		newGAFDumpCommand(),
 		newGAFBuildCommand(),
+		newGAFRoundtripCommand(),
 	)
 
 	return cmd

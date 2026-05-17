@@ -166,7 +166,8 @@ func buildSequence(dir, name string, palModel color.Palette, palette *gaf.Palett
 	}
 
 	if len(metas) == 0 {
-		return nil, fmt.Errorf("frames.csv is empty")
+		// Header-only frames.csv → empty sequence.
+		return &gaf.Sequence{Name: name}, nil
 	}
 
 	// Load each frame image and palettize.
@@ -215,8 +216,13 @@ func readFramesCSV(path string) ([]frameMeta, error) {
 		return nil, err
 	}
 
-	if len(records) < 2 {
-		return nil, fmt.Errorf("no data rows")
+	if len(records) == 0 {
+		return nil, fmt.Errorf("missing header row")
+	}
+	if len(records) == 1 {
+		// Header-only: a legitimately empty sequence (e.g. a placeholder
+		// sequence that ships with TA's anims/*.gaf files).
+		return nil, nil
 	}
 
 	// Build column index from header.
@@ -293,9 +299,31 @@ func loadImage(path string) (image.Image, error) {
 
 // palettizeImage converts an image to palette indices.
 // Fully transparent pixels → transpIdx.
+//
+// When the source image is already a *image.Paletted whose palette has the
+// same RGB values as the target palette (e.g. dumped by "kbot gaf dump"),
+// indices are copied directly — this avoids Euclidean nearest-colour lookup
+// returning a different slot when the palette contains duplicate colours.
 func palettizeImage(img image.Image, pal color.Palette, transpIdx uint8) []byte {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
+
+	if pix, ok := paletteIndexFastPath(img, pal); ok {
+		// The source paletted image's indices are authoritative.  We still
+		// need to make sure any pixel whose palette entry is fully
+		// transparent ends up on the configured transparency index.
+		out := make([]byte, len(pix))
+		srcPal := img.(*image.Paletted).Palette
+		for i, idx := range pix {
+			if _, _, _, a := srcPal[idx].RGBA(); a < 0x8000 {
+				out[i] = transpIdx
+			} else {
+				out[i] = idx
+			}
+		}
+		return out
+	}
+
 	pixels := make([]byte, w*h)
 
 	for y := 0; y < h; y++ {
@@ -320,6 +348,39 @@ func palettizeImage(img image.Image, pal color.Palette, transpIdx uint8) []byte 
 	}
 
 	return pixels
+}
+
+// paletteIndexFastPath returns the source image's raw palette indices when
+// the image is a *image.Paletted and its palette's RGB values match the
+// target palette slot-for-slot.
+//
+// Slots whose alpha is zero in either palette are skipped during the RGB
+// comparison: Go's png decoder returns tRNS-marked entries as
+// color.NRGBA{r,g,b,0}, whose .RGBA() premultiplies away the RGB.  Those
+// entries are still positionally meaningful in Pix.
+func paletteIndexFastPath(img image.Image, target color.Palette) ([]byte, bool) {
+	pImg, ok := img.(*image.Paletted)
+	if !ok || len(pImg.Palette) != len(target) {
+		return nil, false
+	}
+	for i, c := range pImg.Palette {
+		sr, sg, sb, sa := c.RGBA()
+		tr, tg, tb, ta := target[i].RGBA()
+		if sa == 0 || ta == 0 {
+			continue
+		}
+		if sr != tr || sg != tg || sb != tb {
+			return nil, false
+		}
+	}
+	bounds := pImg.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	out := make([]byte, w*h)
+	for y := 0; y < h; y++ {
+		row := pImg.Pix[y*pImg.Stride : y*pImg.Stride+w]
+		copy(out[y*w:(y+1)*w], row)
+	}
+	return out, true
 }
 
 func nearestNonTransp(c color.Color, pal color.Palette, transpIdx uint8) int {
