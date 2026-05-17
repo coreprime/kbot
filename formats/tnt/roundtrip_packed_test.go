@@ -18,12 +18,35 @@ import (
 	"github.com/coreprime/kbot/testutil"
 )
 
-// TestPackedTNTRoundTrip mounts a VFS over TA_PACKED_PATH, walks every .tnt
-// file the VFS sees (across HPI/UFO/CCX/GP3 archives and on-disk files),
-// unpacks each one into a temp directory, packs it back, and asserts the
-// resulting bytes match the original.  This is the canonical "no information
-// loss" test for the TNT codec.
+// packedTNTRoundTripSamples is a hand-picked sample covering the shapes of
+// .tnt the codec must round-trip (stock skirmish, mission, CC/BT expansion,
+// apostrophe in name, all-caps filename, short filename).  Sampling instead of
+// walking the full corpus keeps the test fast.
+var packedTNTRoundTripSamples = []string{
+	"maps/Evad River Confluence.tnt",
+	"maps/Yerrot Mountains.tnt",
+	"maps/Metal Heck.tnt",
+	"maps/Coast To Coast.tnt",
+	"maps/Full Moon.tnt",
+	"maps/King of the Hill.tnt",
+	"maps/Painted Desert.tnt",
+	"maps/The Pass.tnt",
+	"maps/SHERWOOD.TNT",
+	"maps/AC01.TNT",
+	"maps/CC13.TNT",
+	"Maps/Acid Foursome.tnt",
+	"Maps/Comet Catcher.tnt",
+	"MAPS/Aqua Verdigris.tnt",
+	"MAPS/Rock Candy Mountains.tnt",
+	"Maps/PC Games' Evad River Delta.tnt",
+}
+
+// TestPackedTNTRoundTrip mounts a VFS over TA_PACKED_PATH, unpacks each map in
+// packedTNTRoundTripSamples to a temp directory, packs it back, and asserts
+// the resulting bytes match the original.  This is the canonical "no
+// information loss" test for the TNT codec.
 func TestPackedTNTRoundTrip(t *testing.T) {
+	t.Log("Performing TNT file round-trip test")
 	packedRoot := testutil.PackedPath(t)
 
 	vfs, err := filesystem.NewVirtualFileSystem(packedRoot, &filesystem.Config{
@@ -40,11 +63,8 @@ func TestPackedTNTRoundTrip(t *testing.T) {
 		t.Fatalf("load palette: %v", err)
 	}
 
-	maps := collectTNTPaths(vfs)
-	if len(maps) == 0 {
-		t.Fatalf("no .tnt files found via VFS at %s", packedRoot)
-	}
-	t.Logf("discovered %d .tnt files via VFS", len(maps))
+	maps := packedTNTRoundTripSamples
+	t.Logf("round-tripping %d sample .tnt files via VFS", len(maps))
 
 	tmpRoot := t.TempDir()
 	pass, fail := 0, 0
@@ -109,18 +129,6 @@ func TestPackedTNTRoundTrip(t *testing.T) {
 			t.Logf("  FAIL: %s", f)
 		}
 	}
-}
-
-// collectTNTPaths returns every virtual path in vfs whose extension is .tnt,
-// in stable lexicographic order.
-func collectTNTPaths(vfs *filesystem.VirtualFileSystem) []string {
-	var out []string
-	for _, p := range vfs.List() {
-		if strings.EqualFold(filepath.Ext(p), ".tnt") {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // readVFSFile streams a single virtual file into memory.

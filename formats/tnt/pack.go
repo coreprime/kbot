@@ -22,7 +22,7 @@ type Metadata struct {
 	Version          string          `json:"version"`
 	Header           HeaderMetadata  `json:"header"`
 	Minimap          MinimapMetadata `json:"minimap"`
-	Features         []string        `json:"features"`
+	Features         []string        `json:"features,omitempty"`
 	FeatureRawB64    []string        `json:"feature_raw_b64,omitempty"`
 	FeatureSentinels []FeatureMarker `json:"feature_sentinels,omitempty"`
 	AttrPadB64       string          `json:"attr_pad_b64,omitempty"`
@@ -55,8 +55,26 @@ type FeatureMarker struct {
 	Value uint16 `json:"value"`
 }
 
-// Unpack writes m and the supplied feature table into dir as a directory of
-// editable artefacts:
+// UnpackOptions tunes what Unpack writes alongside the artefact files.
+//
+// When Lossless is true the metadata.json carries the full feature name table
+// (and its raw 128-byte buffers when they hold trailing scratch memory), so
+// the directory can be packed back into a byte-identical TNT.  When false the
+// features field is omitted and a subsequent Pack call rebuilds the feature
+// table from the unique names referenced in features.csv — convenient for
+// editing but not byte-stable.
+type UnpackOptions struct {
+	Lossless bool
+}
+
+// Unpack is shorthand for UnpackWithOptions with Lossless=true, preserving
+// the historical byte-identical round-trip guarantee.
+func Unpack(m *Map, features []Feature, palette color.Palette, dir string) error {
+	return UnpackWithOptions(m, features, palette, dir, UnpackOptions{Lossless: true})
+}
+
+// UnpackWithOptions writes m and the supplied feature table into dir as a
+// directory of editable artefacts:
 //
 //	map.png            full RGBA render of the tile grid
 //	heightmap.png      8-bit grayscale, pixel = raw elevation byte
@@ -67,7 +85,7 @@ type FeatureMarker struct {
 //	metadata.json      header constants + feature table + round-trip info
 //
 // dir is created if missing.
-func Unpack(m *Map, features []Feature, palette color.Palette, dir string) error {
+func UnpackWithOptions(m *Map, features []Feature, palette color.Palette, dir string, opts UnpackOptions) error {
 	if m == nil {
 		return fmt.Errorf("nil map")
 	}
@@ -111,22 +129,24 @@ func Unpack(m *Map, features []Feature, palette color.Palette, dir string) error
 			Pad3:      m.Header.Pad3,
 			Pad4:      m.Header.Pad4,
 		},
-		Minimap:  MinimapMetadata{Width: m.MinimapW, Height: m.MinimapH},
-		Features: make([]string, len(features)),
+		Minimap: MinimapMetadata{Width: m.MinimapW, Height: m.MinimapH},
 	}
-	anyRaw := false
-	rawB64 := make([]string, len(features))
-	for i, f := range features {
-		meta.Features[i] = f.Name
-		expected := make([]byte, 128)
-		copy(expected, f.Name)
-		if !equalBytes(f.Raw[:], expected) {
-			rawB64[i] = base64.StdEncoding.EncodeToString(f.Raw[:])
-			anyRaw = true
+	if opts.Lossless {
+		meta.Features = make([]string, len(features))
+		anyRaw := false
+		rawB64 := make([]string, len(features))
+		for i, f := range features {
+			meta.Features[i] = f.Name
+			expected := make([]byte, 128)
+			copy(expected, f.Name)
+			if !equalBytes(f.Raw[:], expected) {
+				rawB64[i] = base64.StdEncoding.EncodeToString(f.Raw[:])
+				anyRaw = true
+			}
 		}
-	}
-	if anyRaw {
-		meta.FeatureRawB64 = rawB64
+		if anyRaw {
+			meta.FeatureRawB64 = rawB64
+		}
 	}
 
 	pads := make([]byte, len(m.TileAttr))
@@ -236,7 +256,18 @@ func Pack(dir string) (*Map, []Feature, error) {
 			attrs[i].Pad = padBytes[i]
 		}
 	}
-	if err := applyFeaturesCSV(filepath.Join(dir, "features.csv"), attrs, attrW, attrH, len(meta.Features)); err != nil {
+	featureNames := meta.Features
+	lossy := len(featureNames) == 0
+	if lossy {
+		// No feature table in metadata.json — rebuild it from the unique
+		// names referenced in features.csv (in order of first appearance).
+		discovered, derr := discoverFeatureNames(filepath.Join(dir, "features.csv"))
+		if derr != nil {
+			return nil, nil, derr
+		}
+		featureNames = discovered
+	}
+	if err := applyFeaturesCSV(filepath.Join(dir, "features.csv"), attrs, attrW, attrH, featureNames, lossy); err != nil {
 		return nil, nil, err
 	}
 	for _, s := range meta.FeatureSentinels {
@@ -306,8 +337,8 @@ func Pack(dir string) (*Map, []Feature, error) {
 		MapDataPad: mapDataPad,
 	}
 
-	features := make([]Feature, len(meta.Features))
-	for i, name := range meta.Features {
+	features := make([]Feature, len(featureNames))
+	for i, name := range featureNames {
 		features[i] = Feature{Index: i, Name: name}
 		if i < len(meta.FeatureRawB64) && meta.FeatureRawB64[i] != "" {
 			raw, derr := base64.StdEncoding.DecodeString(meta.FeatureRawB64[i])
@@ -322,6 +353,42 @@ func Pack(dir string) (*Map, []Feature, error) {
 	}
 
 	return m, features, nil
+}
+
+// discoverFeatureNames scans features.csv and returns the unique non-empty
+// names in order of first appearance.  Used by Pack in lossy mode when the
+// metadata.json doesn't carry a feature name table.
+func discoverFeatureNames(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open features.csv: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1
+	rows, err := r.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("parse features.csv: %w", err)
+	}
+	var names []string
+	seen := make(map[string]bool)
+	for ri, row := range rows {
+		if ri == 0 && len(row) > 0 && !isAllDigits(row[0]) {
+			continue
+		}
+		if len(row) < 2 {
+			return nil, fmt.Errorf("features.csv row %d: need at least feature_index and name", ri)
+		}
+		name := strings.TrimSpace(row[1])
+		if name == "" {
+			return nil, fmt.Errorf("features.csv row %d has empty name (lossy pack needs names to rebuild the feature table)", ri)
+		}
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func encodePNGFile(path string, img image.Image) error {
@@ -493,7 +560,11 @@ func readTilesDir(dir string) ([][]byte, error) {
 	return tiles, nil
 }
 
-func applyFeaturesCSV(path string, attrs []TileAttr, attrW, attrH, featureCount int) error {
+// applyFeaturesCSV reads placements from features.csv and writes them into
+// attrs.  In lossless mode the row's feature_index column is authoritative.
+// In lossy mode the row's name is looked up in featureNames (which was
+// rebuilt by discoverFeatureNames) and that lookup defines the new index.
+func applyFeaturesCSV(path string, attrs []TileAttr, attrW, attrH int, featureNames []string, lossy bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open features.csv: %w", err)
@@ -505,19 +576,16 @@ func applyFeaturesCSV(path string, attrs []TileAttr, attrW, attrH, featureCount 
 	if err != nil {
 		return fmt.Errorf("parse features.csv: %w", err)
 	}
+	nameToIdx := make(map[string]int, len(featureNames))
+	for i, n := range featureNames {
+		nameToIdx[n] = i
+	}
 	for ri, row := range rows {
 		if ri == 0 && len(row) > 0 && !isAllDigits(row[0]) {
 			continue
 		}
 		if len(row) < 4 {
 			return fmt.Errorf("features.csv row %d: expected 4 fields, got %d", ri, len(row))
-		}
-		idx, ierr := strconv.Atoi(strings.TrimSpace(row[0]))
-		if ierr != nil {
-			return fmt.Errorf("features.csv row %d feature_index not numeric: %q", ri, row[0])
-		}
-		if featureCount > 0 && (idx < 0 || idx >= featureCount) {
-			return fmt.Errorf("features.csv row %d feature_index %d out of range (table has %d entries)", ri, idx, featureCount)
 		}
 		x, xerr := strconv.Atoi(strings.TrimSpace(row[2]))
 		if xerr != nil {
@@ -529,6 +597,24 @@ func applyFeaturesCSV(path string, attrs []TileAttr, attrW, attrH, featureCount 
 		}
 		if x < 0 || x >= attrW || y < 0 || y >= attrH {
 			return fmt.Errorf("features.csv row %d position (%d,%d) outside %dx%d grid", ri, x, y, attrW, attrH)
+		}
+		var idx int
+		if lossy {
+			name := strings.TrimSpace(row[1])
+			ni, ok := nameToIdx[name]
+			if !ok {
+				return fmt.Errorf("features.csv row %d: name %q not in rebuilt feature table", ri, name)
+			}
+			idx = ni
+		} else {
+			n, ierr := strconv.Atoi(strings.TrimSpace(row[0]))
+			if ierr != nil {
+				return fmt.Errorf("features.csv row %d feature_index not numeric: %q", ri, row[0])
+			}
+			if len(featureNames) > 0 && (n < 0 || n >= len(featureNames)) {
+				return fmt.Errorf("features.csv row %d feature_index %d out of range (table has %d entries)", ri, n, len(featureNames))
+			}
+			idx = n
 		}
 		attrs[y*attrW+x].Feature = uint16(idx)
 	}
