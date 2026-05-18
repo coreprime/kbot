@@ -214,8 +214,7 @@ func (m *Map) RenderHeightMap() *image.Gray {
 			if maxH > minH {
 				v = uint8(uint16(h-minH) * 255 / uint16(maxH-minH))
 			}
-			// Height data Y-axis is inverted relative to tile map.
-			img.SetGray(ax, m.AttrH-1-ay, color.Gray{v})
+			img.SetGray(ax, ay, color.Gray{v})
 		}
 	}
 	return img
