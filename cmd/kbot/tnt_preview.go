@@ -30,7 +30,12 @@ flattened TA install (or any VFS root containing features/ and anims/),
 composite each placed feature's sprite onto the map and draw a numbered
 circle at every Schema_0 StartPos found in the sister .ota.
 
-Without --vfs the output is just the tile-grid render (no overlays).`,
+If --vfs is omitted, the active kbot context (see 'kbot ctx') is used
+as the VFS root.  Set KBOT_CONTEXT=<alias> to pick a different
+registered context for this invocation.
+
+Without --vfs and without a registered context the output is just the
+tile-grid render (no overlays).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tntPath := args[0]
@@ -53,10 +58,15 @@ Without --vfs the output is just the tile-grid render (no overlays).`,
 			}
 			base := m.RenderTileMap(pal)
 
-			if vfsRoot != "" {
-				vfs, err := filesystem.NewVirtualFileSystem(vfsRoot, nil)
+			resolvedRoot, source, err := resolveVFSPath(vfsRoot)
+			if err != nil {
+				return err
+			}
+			if resolvedRoot != "" {
+				reportContextSource(source)
+				vfs, err := filesystem.NewVirtualFileSystem(resolvedRoot, nil)
 				if err != nil {
-					return fmt.Errorf("mount vfs at %s: %w", vfsRoot, err)
+					return fmt.Errorf("mount vfs at %s: %w", resolvedRoot, err)
 				}
 				defer func() { _ = vfs.Close() }()
 
@@ -94,7 +104,7 @@ Without --vfs the output is just the tile-grid render (no overlays).`,
 	}
 	cmd.Flags().StringVar(&target, "target", "", "Output PNG path (default: stdout)")
 	cmd.Flags().StringVar(&vfsRoot, "vfs", "",
-		"Path to a flattened TA install / VFS root used to resolve feature sprites and the sister .ota")
+		"Path to a flattened TA install / VFS root used to resolve feature sprites and the sister .ota (defaults to active kbot context)")
 	return cmd
 }
 

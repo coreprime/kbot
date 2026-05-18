@@ -5,7 +5,46 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/coreprime/kbot/internal/kbotctx"
 )
+
+// resolveVFSPath returns the working directory a VFS-backed command
+// should mount, in priority order: explicit user input, then the
+// active kbot context (env override or persisted current).  An empty
+// return with a nil error means no path is available and the caller
+// should produce its own "path required" diagnostic.
+func resolveVFSPath(explicit string) (path, source string, err error) {
+	if explicit != "" {
+		return explicit, "flag", nil
+	}
+	cfg, err := kbotctx.Load()
+	if err != nil {
+		return "", "", err
+	}
+	alias, ctx, src, ok := cfg.Active()
+	if !ok {
+		if alias != "" && src == "env" {
+			return "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
+		}
+		return "", "", nil
+	}
+	label := fmt.Sprintf("context %q", alias)
+	if src == "env" {
+		label = fmt.Sprintf("context %q (via %s)", alias, kbotctx.EnvVar)
+	}
+	return ctx.Path, label, nil
+}
+
+// reportContextSource prints a short note to stderr about where a
+// path argument came from when it wasn't supplied explicitly.  Pass
+// the source returned by resolveVFSPath.
+func reportContextSource(source string) {
+	if source == "" || source == "flag" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Using %s\n", source)
+}
 
 // hpiInputPath resolves an archive path from args or stdin.
 // When stream is true (or no args), stdin is spooled to a temp file because

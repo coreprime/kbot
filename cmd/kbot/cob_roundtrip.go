@@ -21,17 +21,32 @@ func newCobRoundtripCommand() *cobra.Command {
 	var detailed bool
 
 	cmd := &cobra.Command{
-		Use:   "roundtrip <path>",
+		Use:   "roundtrip [path]",
 		Short: "Validate roundtrip fidelity for COB files",
 		Long: `Scan a directory for .cob files and verify that both the
 decompile→compile and disassemble→assemble pipelines produce
 byte-identical output.
 
+When <path> is omitted, the active kbot context is scanned (see
+'kbot ctx').
+
 Each file is tested entirely in memory.  Use --detailed to see
 step-by-step output for every file.`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRoundtrip(args[0], detailed)
+			path := ""
+			if len(args) > 0 {
+				path = args[0]
+			}
+			resolved, source, err := resolveVFSPath(path)
+			if err != nil {
+				return err
+			}
+			if resolved == "" {
+				return fmt.Errorf("provide a directory or register a kbot context (run `kbot ctx add`)")
+			}
+			reportContextSource(source)
+			return runRoundtrip(resolved, detailed)
 		},
 	}
 

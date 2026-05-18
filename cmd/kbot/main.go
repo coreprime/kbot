@@ -17,6 +17,7 @@ func main() {
 
 Sub-commands operate on specific file formats:
   cob   COB/BOS scripting (compile, decompile, assemble, disassemble)
+  ctx   Manage named working-directory contexts (~/.kbot)
   fnt   Bitmap font files (info, describe, render, sheet, dump)
   gaf   GAF sprite animations (list, export, dump, build)
   hpi   HPI/UFO/CCX archive files (list, extract, pack, info)
@@ -31,6 +32,7 @@ Sub-commands operate on specific file formats:
 
 	rootCmd.AddCommand(
 		newCobCommand(),
+		newCtxCommand(),
 		newFNTCommand(),
 		newGAFCommand(),
 		newHPICommand(),

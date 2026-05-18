@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/coreprime/kbot/internal/kbotctx"
 	kmcp "github.com/coreprime/kbot/internal/mcp"
 )
 
@@ -52,16 +53,38 @@ Game-data folders:
   The new vfs_find / vfs_list / vfs_stat tools let the model query the
   virtual filesystem directly.
 
+  If no --game-data flag is passed, kbot falls back to the active kbot
+  context (see 'kbot ctx').  Set KBOT_CONTEXT=<alias> to pick a
+  different registered context for this invocation.
+
 Examples:
   kbot mcp --mount ~/games/totala
   kbot mcp --game-data ~/games/totala
   kbot mcp --game-data totala=~/games/totala --game-data kingdoms=~/games/tak
   kbot mcp --http 127.0.0.1:8765 --game-data ~/games/totala`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolvedGameData := gameData
+			if len(resolvedGameData) == 0 && len(mounts) == 0 {
+				cfg, err := kbotctx.Load()
+				if err != nil {
+					return err
+				}
+				if alias, ctxEntry, src, ok := cfg.Active(); ok {
+					resolvedGameData = []string{fmt.Sprintf("%s=%s", alias, ctxEntry.Path)}
+					srcLabel := "kbot context"
+					if src == "env" {
+						srcLabel = fmt.Sprintf("kbot context via %s", kbotctx.EnvVar)
+					}
+					fmt.Fprintf(os.Stderr, "kbot mcp: using %s %q (%s)\n", srcLabel, alias, ctxEntry.Path)
+				} else if alias != "" && src == "env" {
+					return fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
+				}
+			}
+
 			srv, cleanup, err := kmcp.NewServer(kmcp.Config{
 				Version:    Version,
 				MountRoots: mounts,
-				GameData:   gameData,
+				GameData:   resolvedGameData,
 			})
 			if err != nil {
 				return fmt.Errorf("init mcp server: %w", err)
@@ -73,10 +96,10 @@ Examples:
 			if len(mounts) > 0 {
 				fmt.Fprintf(os.Stderr, "kbot mcp: %d mount root(s) configured\n", len(mounts))
 			}
-			if len(gameData) > 0 {
-				fmt.Fprintf(os.Stderr, "kbot mcp: %d game-data folder(s) configured\n", len(gameData))
+			if len(resolvedGameData) > 0 {
+				fmt.Fprintf(os.Stderr, "kbot mcp: %d game-data folder(s) configured\n", len(resolvedGameData))
 			}
-			if len(mounts) == 0 && len(gameData) == 0 {
+			if len(mounts) == 0 && len(resolvedGameData) == 0 {
 				fmt.Fprintln(os.Stderr, "kbot mcp: running in permissive mode — no mounts or game-data configured")
 			}
 

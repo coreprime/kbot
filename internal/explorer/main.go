@@ -18,8 +18,34 @@ import (
 	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
+
+// resolveContextPath resolves a working directory from an explicit
+// argument (when provided) or the active kbot context.  Returns the
+// resolved path and a human-readable note about where it came from.
+func resolveContextPath(args []string) (string, string, error) {
+	if len(args) > 0 && args[0] != "" {
+		return args[0], "", nil
+	}
+	cfg, err := kbotctx.Load()
+	if err != nil {
+		return "", "", err
+	}
+	alias, ctx, src, ok := cfg.Active()
+	if !ok {
+		if alias != "" && src == "env" {
+			return "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
+		}
+		return "", "", fmt.Errorf("no path provided and no kbot context configured (run `kbot ctx add` or pass an explicit path)")
+	}
+	note := fmt.Sprintf("Using context %q (%s)", alias, ctx.Path)
+	if src == "env" {
+		note = fmt.Sprintf("Using context %q via %s (%s)", alias, kbotctx.EnvVar, ctx.Path)
+	}
+	return ctx.Path, note, nil
+}
 
 var (
 	vfs        *filesystem.VirtualFileSystem
@@ -34,10 +60,14 @@ var (
 // embedding as a subcommand in a larger CLI (e.g. kbot mount).
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "mount <path>",
+		Use:   "mount [path]",
 		Short: "Browse Total Annihilation archives interactively",
 		Long: `Mount and browse Total Annihilation game files from HPI, UFO, CCX,
 and GP3 archives in an interactive terminal or web UI.
+
+When <path> is omitted, the active kbot context (see 'kbot ctx') is
+mounted instead.  Set KBOT_CONTEXT=<alias> to pick a different
+registered context for this invocation.
 
 Terminal Mode Commands:
   ls [path]           - List directory contents
@@ -52,7 +82,7 @@ Terminal Mode Commands:
 
 Web Server Mode:
   Use --server flag to run as a web server instead of terminal mode`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: runBrowser,
 	}
 
@@ -67,7 +97,13 @@ Web Server Mode:
 }
 
 func runBrowser(cmd *cobra.Command, args []string) error {
-	basePath := args[0]
+	basePath, note, err := resolveContextPath(args)
+	if err != nil {
+		return err
+	}
+	if note != "" {
+		fmt.Println(note)
+	}
 
 	// Check path exists
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
@@ -86,7 +122,6 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 		SkipErrors:         true,
 	}
 
-	var err error
 	vfs, err = filesystem.NewVirtualFileSystem(basePath, config)
 	if err != nil {
 		return fmt.Errorf("failed to create VFS: %w", err)

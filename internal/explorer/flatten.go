@@ -17,19 +17,29 @@ func newFlattenCommand() *cobra.Command {
 	var verify bool
 
 	cmd := &cobra.Command{
-		Use:   "flatten <source-path>",
+		Use:   "flatten [source-path]",
 		Short: "Flatten VFS to directory with effective files",
 		Long: `Extract the effective set of all files from the virtual filesystem to a target directory.
-		
+
 This creates a flattened view showing which file version "wins" after applying all
 archive priorities (Physical > GP3 > CCX > HPI).
 
+When <source-path> is omitted, the active kbot context (see 'kbot ctx')
+is used as the source.
+
 Example:
   kbot mount flatten ~/ta-content --target /tmp/ta-flat
-  kbot mount flatten ~/ta-content --target /tmp/ta-flat --verify`,
-		Args: cobra.ExactArgs(1),
+  kbot mount flatten ~/ta-content --target /tmp/ta-flat --verify
+  kbot mount flatten --target /tmp/ta-flat                # uses active context`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sourcePath := args[0]
+			sourcePath, note, err := resolveContextPath(args)
+			if err != nil {
+				return err
+			}
+			if note != "" {
+				fmt.Println(note)
+			}
 			
 			// Create VFS
 			cfg := &filesystem.Config{

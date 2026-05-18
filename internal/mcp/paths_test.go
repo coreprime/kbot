@@ -136,7 +136,14 @@ func TestPathGuard_RelativePathAnchorsToFirstRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve relative: %v", err)
 	}
-	want := filepath.Join(root, "foo", "bar.cob")
+	// NewPathGuard canonicalises roots via EvalSymlinks; on macOS
+	// /var → /private/var, so build the expected path from the same
+	// canonical form rather than the raw t.TempDir() value.
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		canonicalRoot = root
+	}
+	want := filepath.Join(canonicalRoot, "foo", "bar.cob")
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

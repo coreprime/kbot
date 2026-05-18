@@ -40,6 +40,7 @@ To develop/code against the project:
 
 - [Installation](#installation)
 - [Commands](#commands)
+  - [`kbot ctx` — Working-Directory Contexts](#kbot-ctx--working-directory-contexts)
   - [`kbot cob` — COB/BOS Scripting](#kbot-cob--cobbos-scripting)
   - [`kbot hpi` — Archive Files](#kbot-hpi--archive-files)
   - [`kbot gaf` — Sprite Animations](#kbot-gaf--sprite-animations)
@@ -59,6 +60,96 @@ To develop/code against the project:
 
 
 ## Commands
+
+### `kbot ctx` — Working-Directory Contexts
+
+Register named Total Annihilation installs (packed or flattened) so the other
+kbot subcommands that rely on a virtual filesystem can pick them up
+automatically — no more typing `--vfs ~/games/totala` on every command.
+
+Contexts persist to `~/.kbot` (a small JSON file, conceptually equivalent to
+`~/.kube/config`). One context is marked *current* at any time; the
+`KBOT_CONTEXT` environment variable overrides the persisted current for the
+running process so you can flip between installs per-shell without editing the
+file.
+
+```bash
+# Register a packed TA install and mark it current
+kbot ctx add ~/games/totala --alias ta-gog --game totala --version 3.1c
+
+# Register a TA: Kingdoms install alongside
+kbot ctx add ~/games/tak --alias kingdoms --game takingdoms
+
+# Register a flattened directory you keep for development
+kbot ctx add ~/ta-flattened --alias ta-flat --game totala --version 3.1c-flat
+
+# Adopt the current directory.  If it's already registered, just switch
+# to it; otherwise launch a small interactive prompt for alias, game,
+# and version.
+cd ~/games/totala
+kbot ctx here
+
+# Show every registered context (the current one is starred).
+# `kbot ctx` with no subcommand does the same; use `kbot ctx --help`
+# for the full help text.
+kbot ctx
+kbot ctx list
+
+# Print the active context's path — handy in shell substitution
+cd "$(kbot ctx path)"
+ls "$(kbot ctx path)/units"
+
+# Print a specific context's path without switching to it
+kbot ctx path --alias kingdoms
+
+# Switch the persisted current context
+kbot ctx use kingdoms
+
+# Per-shell override (does not touch ~/.kbot)
+KBOT_CONTEXT=ta-flat kbot tnt preview "metal heck.tnt" --target preview.png
+
+# Replace an existing entry (e.g. you moved the game folder)
+kbot ctx add ~/new/totala --alias ta-gog --game totala --version 3.1c --replace
+
+# Remove a context
+kbot ctx delete kingdoms
+```
+
+**`--game`** must be one of `totala`, `takingdoms`, or `custom`. `custom` is the
+escape hatch for directories that look like a TA layout but aren't an official
+release (mod test-beds, partial extractions, etc.).
+
+**Where contexts apply.** Any subcommand that mounts a VFS will fall back to
+the active context when its path argument is omitted:
+
+| Command | Without an arg/flag |
+|---------|--------------------|
+| `kbot mount` | Mounts the active context. |
+| `kbot mount flatten --target …` | Flattens the active context. |
+| `kbot tnt preview <file.tnt>` | Uses the active context as the VFS root for sprites and the sister `.ota`. |
+| `kbot mcp` | Registers the active context as the default `game-data` folder. |
+| `kbot cob lint` | Lints the active context's tree when no path is passed. |
+| `kbot cob roundtrip` | Scans the active context's tree when no path is passed. |
+| `kbot gaf roundtrip` | Scans the active context's tree when no path is passed. |
+
+Explicit arguments (a positional path, `--vfs`, or `--game-data`) always
+override the context.  Use `KBOT_CONTEXT=<alias>` to pick a different
+registered context just for one invocation.
+
+The file format is plain JSON, so you can hand-edit it if you need to:
+
+```json
+{
+  "current": "ta-gog",
+  "contexts": {
+    "ta-gog":    { "path": "/Users/me/games/totala", "game": "totala",     "version": "3.1c" },
+    "kingdoms":  { "path": "/Users/me/games/tak",    "game": "takingdoms" },
+    "ta-flat":   { "path": "/Users/me/ta-flattened", "game": "totala",     "version": "3.1c-flat" }
+  }
+}
+```
+
+---
 
 ### `kbot cob` — COB/BOS Scripting
 
@@ -283,6 +374,9 @@ kbot tnt minimap   "metal heck.tnt" --target mini.png        # embedded minimap
 # any directory containing features/*.tdf and anims/*.gaf).
 kbot tnt preview "metal heck.tnt" --vfs ~/ta-flattened --target preview.png
 
+# --vfs may be omitted when a kbot context is active (see `kbot ctx`)
+kbot tnt preview "metal heck.tnt" --target preview.png
+
 # Tiny ASCII rendering (dev-joke / quick sanity check)
 kbot tnt ascii "metal heck.tnt" --cols 64
 
@@ -351,6 +445,10 @@ kbot mount ~/ta-content --server --port 8080
 
 # Flatten (extract all files to disk)
 kbot mount ~/ta-content flatten --target ./flat
+
+# Omit the path to mount the active kbot context (see `kbot ctx`)
+kbot mount --server
+kbot mount flatten --target ./flat
 ```
 
 **Terminal commands:** `ls`, `cd`, `pwd`, `cat`, `describe`, `archives`, `stats`, `exit`
@@ -390,6 +488,10 @@ kbot mcp --mount ~/games/totala --mount /tmp/kbot-out
 
 # Long-lived HTTP transport for multi-client setups
 kbot mcp --http 127.0.0.1:8765 --game-data ~/games/totala
+
+# Without --game-data or --mount, kbot mcp registers the active kbot
+# context (see `kbot ctx`) as the default game-data folder
+kbot mcp
 ```
 
 **`--game-data NAME=PATH`** (or just `PATH`, name derived from the basename) registers a Total Annihilation / TA: Kingdoms install as a named virtual filesystem. The folder is walked once, every `.hpi` / `.ufo` / `.ccx` / `.gp3` archive is opened, and contents are layered over physical files exactly as the game sees them. The first `--game-data` is the default the assistant uses when a tool call omits `game_data`. Each game-data base is added implicitly to the path guard, so on-disk paths inside it also resolve.

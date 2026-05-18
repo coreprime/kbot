@@ -22,15 +22,14 @@ func newCobLintCommand() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "lint <file.cob|directory>",
+		Use:   "lint [file.cob|directory]",
 		Short: "Lint COB files for common issues",
 		Long: `Run static analysis on COB bytecode files to detect potential issues
 such as unused pieces, dead code, invalid script calls, and more.
 
-When given a directory, all .cob files in it are linted.
-
-The parent directory of each .cob file is used as a virtual filesystem
-root so that included files (e.g. SmokeUnit.h) can be resolved.
+When given a directory, all .cob files in it are linted.  When no
+argument is given (and --stream is not used), the active kbot context
+is linted (see 'kbot ctx').
 
 Rules:
   unused-piece     Piece declared but never used by any animation command
@@ -45,10 +44,19 @@ Rules:
 			if stream {
 				return lintStream(quiet, verbose)
 			}
-			if len(args) == 0 {
-				return fmt.Errorf("provide a .cob file, directory, or use --stream")
+			path := ""
+			if len(args) > 0 {
+				path = args[0]
 			}
-			return lintPath(args[0], quiet, verbose)
+			resolved, source, err := resolveVFSPath(path)
+			if err != nil {
+				return err
+			}
+			if resolved == "" {
+				return fmt.Errorf("provide a .cob file, directory, --stream, or register a kbot context (run `kbot ctx add`)")
+			}
+			reportContextSource(source)
+			return lintPath(resolved, quiet, verbose)
 		},
 	}
 
