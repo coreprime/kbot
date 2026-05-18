@@ -20,6 +20,14 @@ import (
 type GameData struct {
 	Name     string
 	BasePath string
+	// Game and Version are optional metadata copied from the kbot ctx
+	// entry the folder was registered from.  They are empty when the
+	// folder was registered via --game-data.
+	Game    string
+	Version string
+	// Source records where this registration came from: "flag" for
+	// --game-data, "context" for a kbot ctx entry, "" for ad-hoc.
+	Source string
 
 	once sync.Once
 	vfs  *filesystem.VirtualFileSystem
@@ -28,8 +36,28 @@ type GameData struct {
 	archiveIndex map[string][]string // lowercase basename -> absolute paths
 }
 
+// GameDataOption customises a GameData at construction time.  Used to attach
+// metadata (game flavour, version label) sourced from a kbot ctx entry.
+type GameDataOption func(*GameData)
+
+// WithGame records the game flavour (totala, takingdoms, custom) for the
+// folder.  Surfaced through vfs_game_data and ctx_list.
+func WithGame(game string) GameDataOption {
+	return func(g *GameData) { g.Game = game }
+}
+
+// WithVersion records the version label for the folder.
+func WithVersion(version string) GameDataOption {
+	return func(g *GameData) { g.Version = version }
+}
+
+// WithSource records the registration source ("flag" or "context").
+func WithSource(source string) GameDataOption {
+	return func(g *GameData) { g.Source = source }
+}
+
 // NewGameData constructs an unloaded GameData.  The VFS is built on first use.
-func NewGameData(name, basePath string) (*GameData, error) {
+func NewGameData(name, basePath string, opts ...GameDataOption) (*GameData, error) {
 	if basePath == "" {
 		return nil, fmt.Errorf("game data %q: base path is required", name)
 	}
@@ -51,6 +79,9 @@ func NewGameData(name, basePath string) (*GameData, error) {
 		Name:         name,
 		BasePath:     filepath.Clean(abs),
 		archiveIndex: map[string][]string{},
+	}
+	for _, opt := range opts {
+		opt(gd)
 	}
 	if err := gd.indexArchives(); err != nil {
 		return nil, fmt.Errorf("game data %q: index archives: %w", name, err)

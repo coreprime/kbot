@@ -92,6 +92,9 @@ type gameDataEntry struct {
 	Name      string `json:"name"`
 	BasePath  string `json:"base_path"`
 	IsDefault bool   `json:"is_default"`
+	Game      string `json:"game,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Source    string `json:"source,omitempty"`
 	Archives  int    `json:"archives,omitempty"`
 	Files     int    `json:"files,omitempty"`
 	Loaded    bool   `json:"loaded"`
@@ -116,6 +119,9 @@ func makeVFSGameDataHandler(r *Resolver) server.ToolHandlerFunc {
 				Name:      gd.Name,
 				BasePath:  gd.BasePath,
 				IsDefault: i == 0,
+				Game:      gd.Game,
+				Version:   gd.Version,
+				Source:    gd.Source,
 			}
 			if vfs, err := gd.VFS(); err == nil {
 				entry.Loaded = true

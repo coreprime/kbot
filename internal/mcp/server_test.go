@@ -55,6 +55,60 @@ func TestNewServer_WithGameData(t *testing.T) {
 	}
 }
 
+func TestNewServer_WithContexts_CurrentIsDefault(t *testing.T) {
+	a := t.TempDir()
+	b := t.TempDir()
+
+	registry := NewRegistry()
+	defer func() { _ = registry.Close() }()
+
+	specs := []ContextSpec{
+		{Alias: "kingdoms", Path: a, Game: "takingdoms"},
+		{Alias: "ta-gog", Path: b, Game: "totala", Version: "3.1c", Current: true},
+	}
+	s, cleanup, err := NewServer(Config{
+		Version:  "test",
+		Contexts: specs,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if s == nil {
+		t.Fatal("nil server")
+	}
+}
+
+func TestOrderContexts_CurrentFirst(t *testing.T) {
+	specs := []ContextSpec{
+		{Alias: "a"},
+		{Alias: "b", Current: true},
+		{Alias: "c"},
+	}
+	got := orderContexts(specs)
+	if len(got) != 3 || got[0].Alias != "b" {
+		t.Fatalf("expected current first, got %+v", got)
+	}
+	// Non-current entries keep their input order.
+	if got[1].Alias != "a" || got[2].Alias != "c" {
+		t.Fatalf("non-current order changed: %+v", got)
+	}
+}
+
+func TestOrderContexts_NoCurrent(t *testing.T) {
+	specs := []ContextSpec{{Alias: "a"}, {Alias: "b"}}
+	got := orderContexts(specs)
+	if len(got) != 2 || got[0].Alias != "a" || got[1].Alias != "b" {
+		t.Fatalf("expected input order preserved, got %+v", got)
+	}
+}
+
+func TestOrderContexts_Empty(t *testing.T) {
+	if got := orderContexts(nil); got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
 // TestCobInfoHandler runs the cob_info tool end-to-end against a real
 // .cob file from the unpacked TA assets.  It skips when assets are not
 // available so the test still passes on dev machines without them.

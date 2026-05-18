@@ -36,6 +36,19 @@ func (r *Registry) Add(spec string) (*GameData, error) {
 		name = defaultGameDataName(path)
 	}
 
+	return r.AddNamed(name, path, WithSource("flag"))
+}
+
+// AddNamed registers a game-data folder with an explicit name and optional
+// metadata.  Used by the kbot ctx loader to attach game/version info.
+func (r *Registry) AddNamed(name, path string, opts ...GameDataOption) (*GameData, error) {
+	if name == "" {
+		return nil, fmt.Errorf("registry: name is required")
+	}
+	if path == "" {
+		return nil, fmt.Errorf("registry %q: path is required", name)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -43,7 +56,7 @@ func (r *Registry) Add(spec string) (*GameData, error) {
 		return nil, fmt.Errorf("duplicate game-data name %q", name)
 	}
 
-	gd, err := NewGameData(name, path)
+	gd, err := NewGameData(name, path, opts...)
 	if err != nil {
 		return nil, err
 	}

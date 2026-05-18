@@ -7,15 +7,27 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// ContextSpec describes a kbot ctx entry to expose through the MCP
+// server.  Contexts are richer than --game-data flags: they carry the
+// game flavour and version label that kbot ctx tracks, and one entry
+// may be marked Current so it becomes the registry default.
+type ContextSpec struct {
+	Alias   string
+	Path    string
+	Game    string
+	Version string
+	Current bool
+}
+
 // Config configures a kbot MCP server.
 type Config struct {
 	// Version is reported to MCP clients during the handshake.
 	Version string
 
 	// MountRoots is an allow-list of filesystem roots that tools may
-	// read from or write to.  When empty (and no GameData entries
-	// either) the server runs in permissive mode (all absolute paths
-	// allowed).
+	// read from or write to.  When empty (and no GameData / Contexts
+	// entries either) the server runs in permissive mode (all absolute
+	// paths allowed).
 	MountRoots []string
 
 	// GameData lists game-data folders to expose as named virtual
@@ -24,6 +36,13 @@ type Config struct {
 	// game_data.  Game-data base paths are added implicitly to the
 	// guard's mount roots so on-disk paths within them resolve too.
 	GameData []string
+
+	// Contexts lists kbot ctx entries to expose as named virtual
+	// filesystems.  Registered alongside GameData; the Current entry is
+	// inserted first so it becomes the registry default.  Use this
+	// instead of GameData when you want the model to see the kbot ctx
+	// metadata (game flavour, version) via the ctx_* tools.
+	Contexts []ContextSpec
 }
 
 // NewServer constructs a configured MCP server with every kbot tool
@@ -41,6 +60,18 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 		if _, err := registry.Add(spec); err != nil {
 			_ = registry.Close()
 			return nil, nil, err
+		}
+	}
+	// Insert current context first so Registry.Default() returns it.
+	orderedContexts := orderContexts(cfg.Contexts)
+	for _, c := range orderedContexts {
+		if _, err := registry.AddNamed(c.Alias, c.Path,
+			WithGame(c.Game),
+			WithVersion(c.Version),
+			WithSource("context"),
+		); err != nil {
+			_ = registry.Close()
+			return nil, nil, fmt.Errorf("kbot context %q: %w", c.Alias, err)
 		}
 	}
 
@@ -73,6 +104,7 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 	resolver := NewResolver(guard, registry)
 
 	registerCOBTools(s, resolver)
+	registerCtxTools(s, resolver)
 	registerFNTTools(s, resolver)
 	registerHPITools(s, resolver)
 	registerGAFTools(s, resolver)
@@ -85,6 +117,27 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 
 	cleanup := func() error { return registry.Close() }
 	return s, cleanup, nil
+}
+
+// orderContexts returns specs ordered so the Current entry is first.
+// The remaining entries keep their input order so callers can choose a
+// deterministic listing (e.g. alphabetical) when populating Contexts.
+func orderContexts(specs []ContextSpec) []ContextSpec {
+	if len(specs) == 0 {
+		return nil
+	}
+	out := make([]ContextSpec, 0, len(specs))
+	for _, c := range specs {
+		if c.Current {
+			out = append(out, c)
+		}
+	}
+	for _, c := range specs {
+		if !c.Current {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ServeStdio runs the server over the stdio transport.  This is the
