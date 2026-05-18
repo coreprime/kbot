@@ -17,8 +17,12 @@ func main() {
 
 Sub-commands operate on specific file formats:
   cob   COB/BOS scripting (compile, decompile, assemble, disassemble)
+  fnt   Bitmap font files (info, describe, render, sheet, dump)
+  gaf   GAF sprite animations (list, export, dump, build)
   hpi   HPI/UFO/CCX archive files (list, extract, pack, info)
+  pal   TA palettes and ALP/LHT/SHD lookup tables (info, describe, swatch, convert, lookup)
   pcx   PCX image files (describe, convert, info)
+  sct   SCT map sections (info, describe, image, heightmap, minimap)
   tnt   TNT map files (describe, unpack, pack, image, heightmap, minimap, ascii)
   zrb   Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp   Run kbot as a Model Context Protocol server`,
@@ -27,9 +31,12 @@ Sub-commands operate on specific file formats:
 
 	rootCmd.AddCommand(
 		newCobCommand(),
+		newFNTCommand(),
 		newGAFCommand(),
 		newHPICommand(),
+		newPALCommand(),
 		newPCXCommand(),
+		newSCTCommand(),
 		newTNTCommand(),
 		newZRBCommand(),
 		newMountCommand(),

@@ -44,6 +44,9 @@ To develop/code against the project:
   - [`kbot hpi` — Archive Files](#kbot-hpi--archive-files)
   - [`kbot gaf` — Sprite Animations](#kbot-gaf--sprite-animations)
   - [`kbot pcx` — PCX Images](#kbot-pcx--pcx-images)
+  - [`kbot fnt` — Bitmap Fonts](#kbot-fnt--bitmap-fonts)
+  - [`kbot sct` — Map Sections](#kbot-sct--map-sections)
+  - [`kbot pal` — Palettes & Lookup Tables](#kbot-pal--palettes--lookup-tables)
   - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
@@ -176,6 +179,88 @@ kbot pcx convert image.pcx --format png --target output.png
 
 # One-line info summary
 kbot pcx info image.pcx
+```
+
+---
+
+### `kbot fnt` — Bitmap Fonts
+
+Inspect and render Total Annihilation 1-bpp bitmap fonts.  Each `.fnt` file
+holds up to 256 glyphs sharing a single height; widths vary per glyph.
+
+```bash
+# One-line summary
+kbot fnt info comix.fnt
+
+# Detailed metadata (height, flags, glyph count, code-point coverage)
+kbot fnt describe comix.fnt
+kbot fnt describe comix.fnt --list      # also enumerate every defined glyph
+
+# Render a string to PNG
+kbot fnt render comix.fnt --text "Hello TA" --target hello.png
+kbot fnt render armfont.fnt --text "Commander" --fg "#ffff00" --bg transparent
+
+# Render every defined glyph as a 16-column sprite sheet
+kbot fnt sheet comix.fnt --target sheet.png
+
+# Dump one PNG per glyph (named U+00XX.png) into a directory
+kbot fnt dump comix.fnt --target ./glyphs
+```
+
+Colors accept `#rrggbb`, `#rrggbbaa`, or the literal `transparent` / `none`.
+
+---
+
+### `kbot sct` — Map Sections
+
+Inspect and render Total Annihilation `.SCT` map sections — the reusable tile
+blocks the official map editor stitches together to build `.TNT` maps.
+
+```bash
+# One-line summary
+kbot sct info hill01.sct
+
+# Detailed metadata (header, tile/attr counts, height stats)
+kbot sct describe hill01.sct
+
+# Render the full tile grid (32 px per tile) to PNG
+kbot sct image hill01.sct --target hill01.png
+
+# Export the elevation grid (16 px resolution) as a normalised grayscale PNG
+kbot sct heightmap hill01.sct --target hill01-h.png
+
+# Export the embedded 128x128 minimap as PNG
+kbot sct minimap hill01.sct --target hill01-mini.png
+```
+
+---
+
+### `kbot pal` — Palettes & Lookup Tables
+
+Inspect and convert Total Annihilation `.PAL` palettes, plus the related
+1024-byte `.ALP` / `.LHT` / `.SHD` 256×4 color-index lookup tables used for
+shadow blending and light levels.
+
+```bash
+# One-line summary (size, unique colors, duplicates, TA-style flag)
+kbot pal info palette.pal
+
+# Every entry with hex + RGB
+kbot pal describe palette.pal
+
+# 16x16 PNG swatch grid (index 0 hatched with magenta to highlight the
+# transparent sentinel)
+kbot pal swatch palette.pal --target palette.png --cell 16
+
+# Convert to editor-friendly formats
+kbot pal convert palette.pal --target palette.gpl              # GIMP Palette
+kbot pal convert palette.pal --target palette.txt --format jasc  # JASC-PAL text
+kbot pal convert palette.pal --target re-emitted.pal --format pal  # binary TA .PAL
+
+# Render an .ALP/.LHT/.SHD lookup table as a 256x4 PNG using the embedded
+# palette (or pass --palette to use a specific one)
+kbot pal lookup palette.alp --target alp.png
+kbot pal lookup palette.lht --palette palette.pal --target lht.png
 ```
 
 ---
@@ -424,6 +509,7 @@ kbot/
 │   ├── fnt/         Bitmap fonts (1bpp, MSB-first)
 │   ├── gaf/         Sprite animations + writer
 │   ├── hpi/         HPI/UFO/CCX archives
+│   ├── pal/         TA .PAL palettes + .ALP/.LHT/.SHD lookup tables
 │   ├── pcx/         PCX images
 │   ├── scripting/   COB/BOS bytecode
 │   │   ├── assembly/    Assembler + disassembler

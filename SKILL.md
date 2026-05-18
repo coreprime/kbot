@@ -92,6 +92,36 @@ kbot pcx info <file.pcx>
 kbot pcx convert <file.pcx> --format png|gif|bmp [--target out.png]
 ```
 
+### `kbot fnt` — bitmap fonts
+
+```bash
+kbot fnt info     <file.fnt>                                          # one-line summary
+kbot fnt describe <file.fnt> [--list]                                  # height, flags, glyph ranges, widths
+kbot fnt render   <file.fnt> --text "Hello"  [--target hello.png] [--fg #ffff00 --bg transparent]
+kbot fnt sheet    <file.fnt> [--target sheet.png]                      # 16-column glyph sprite-sheet
+kbot fnt dump     <file.fnt> --target ./glyphs                         # one PNG per glyph (U+00XX.png)
+```
+
+### `kbot sct` — SCT map sections
+
+```bash
+kbot sct info       <file.sct>                                         # one-line summary
+kbot sct describe   <file.sct>                                         # header + height stats
+kbot sct image      <file.sct> [--target out.png]                      # full tile grid render
+kbot sct heightmap  <file.sct> [--target h.png]                        # grayscale elevation
+kbot sct minimap    <file.sct> [--target mini.png]                     # 128x128 embedded minimap
+```
+
+### `kbot pal` — palettes and color-lookup tables
+
+```bash
+kbot pal info     <file.pal>                                           # size, unique colors, TA-style?
+kbot pal describe <file.pal>                                           # every entry with hex + RGB
+kbot pal swatch   <file.pal> [--target pal.png] [--cell 16]            # 16x16 PNG swatch grid
+kbot pal convert  <file.pal> --target out.gpl                          # to JASC-PAL / GIMP (.gpl) / TA .PAL
+kbot pal lookup   <file.alp|.lht|.shd> [--palette ref.pal] [--target lut.png]   # render 256x4 lookup table
+```
+
 ### `kbot tnt` — TNT maps
 
 Terrain layer of TA maps (header + tile grid + per-cell elevation/features + tile gfx + minimap). Sister `.ota`/metal-PCX files are not part of the TNT.
@@ -164,8 +194,19 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `tnt_heightmap` | `path`, `output` | `normalize` (bool, default false) | grayscale elevation PNG |
 | `tnt_minimap` | `path`, `output` | `paletted` (bool, default false) | minimap PNG (RGBA or 8-bit indexed) |
 | `tnt_ascii` | `path` | `cols` (number, default 64) | ASCII-art height map |
+| `fnt_describe` | `path` | — | JSON `{height, flags, glyph_count, min_width, max_width, mean_width, ranges}` |
+| `fnt_render` | `path`, `output`, `text` | `fg`, `bg` (#rrggbb / #rrggbbaa / 'transparent') | rendered text PNG |
+| `fnt_sheet` | `path`, `output` | `fg`, `bg` | 16-column glyph sprite-sheet PNG |
+| `sct_describe` | `path` | — | JSON header + tile/attr counts, height stats, minimap presence |
+| `sct_image` | `path`, `output` | — | RGBA tile-grid PNG (32 px/tile) |
+| `sct_heightmap` | `path`, `output` | — | normalised grayscale elevation PNG |
+| `sct_minimap` | `path`, `output` | — | 128x128 embedded minimap PNG |
+| `pal_describe` | `path` | `list_entries` (bool, default false) | JSON unique/duplicate counts, TA-style flag, optional 256-entry list |
+| `pal_swatch` | `path`, `output` | `cell` (number, default 16) | 16x16 PNG swatch grid |
+| `pal_convert` | `path`, `output` | `format` (`jasc`/`gpl`/`pal`), `name` | converted palette file |
+| `pal_lookup` | `path`, `output` | `palette` (override .pal), `cell` (default 4) | 256x4 PNG render of an .ALP/.LHT/.SHD lookup table |
 
-For everything else (SCT, 3DO, ZRB, FNT, mount/flatten), use the CLI.
+For everything else (3DO, ZRB, mount/flatten), use the CLI.
 
 ## Source layout (when reading/extending the code)
 
@@ -177,6 +218,7 @@ kbot/
 │   ├── fnt/                   Bitmap fonts (1bpp, MSB-first)
 │   ├── gaf/                   Sprite animations + writer
 │   ├── hpi/                   HPI/UFO/CCX archives
+│   ├── pal/                   TA .PAL palettes + .ALP/.LHT/.SHD lookup tables
 │   ├── pcx/                   PCX images
 │   ├── scripting/             COB/BOS bytecode
 │   │   ├── assembly/             assembler + disassembler
