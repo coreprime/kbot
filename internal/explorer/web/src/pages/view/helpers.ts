@@ -56,6 +56,19 @@ export function isColorTable(fmt: string): boolean {
   return fmt.includes('blending table') || fmt.includes('lighting table') || fmt.includes('shadow table')
 }
 
+// isImage matches the native browser-renderable image formats the server
+// surfaces an imageUrl for (PNG/JPG/GIF/BMP/WebP/SVG). PCX uses its own
+// dedicated viewer because it carries a palette and needs server-side
+// conversion to a browser-readable format.
+export function isImage(fmt: string): boolean {
+  const lower = fmt.toLowerCase()
+  return lower.includes('image') && !lower.includes('pcx')
+}
+
+export function isHTML(fmt: string): boolean {
+  return fmt.toLowerCase() === 'html'
+}
+
 export function hasSections(data: ViewResult): boolean {
   return Array.isArray(data.sections) && data.sections.length > 0
 }
@@ -95,8 +108,14 @@ export function buildTabs(data: ViewResult) {
       { id: 'features', label: '🏗️ Features' },
       { id: 'tiles', label: '🧩 Tiles' },
       { id: 'heightmap', label: '⛰️ Height Map' },
-      { id: 'metadata', label: '📋 Metadata' },
     ]
+    const tntLint = (data as Record<string, unknown>).lintResults as unknown[] | undefined
+    const tntLintErr = (data as Record<string, unknown>).lintError as string | undefined
+    if (tntLint || tntLintErr) {
+      const n = tntLint ? tntLint.length : 0
+      tabs.push({ id: 'lint', label: `🔍 Lint${n > 0 ? ` (${n})` : ''}` })
+    }
+    tabs.push({ id: 'metadata', label: '📋 Metadata' })
     if (data.hexDump) {
       tabs.push({ id: 'binary', label: '🔢 Binary' })
     }
@@ -177,6 +196,33 @@ export function buildTabs(data: ViewResult) {
     if (data.hexDump) {
       tabs.push({ id: 'binary', label: '🔢 Binary' })
     }
+    if (data.layers && data.layers.length > 0) {
+      tabs.push({ id: 'layers', label: `📚 Layering (${data.layers.length})` })
+    }
+    return tabs
+  }
+
+  // Inline image files (PNG/JPG/GIF/...) get a minimal viewer tab set.
+  if (isImage(fmt)) {
+    const tabs: { id: string; label: string }[] = [
+      { id: 'content', label: '🖼 Image' },
+    ]
+    tabs.push({ id: 'metadata', label: '📋 Metadata' })
+    if (data.layers && data.layers.length > 0) {
+      tabs.push({ id: 'layers', label: `📚 Layering (${data.layers.length})` })
+    }
+    return tabs
+  }
+
+  // HTML files get an iframe viewer.
+  if (isHTML(fmt)) {
+    const tabs: { id: string; label: string }[] = [
+      { id: 'content', label: '🌐 Page' },
+    ]
+    if (data.isText && data.textContent) {
+      tabs.push({ id: 'text', label: '📄 Source' })
+    }
+    tabs.push({ id: 'metadata', label: '📋 Metadata' })
     if (data.layers && data.layers.length > 0) {
       tabs.push({ id: 'layers', label: `📚 Layering (${data.layers.length})` })
     }

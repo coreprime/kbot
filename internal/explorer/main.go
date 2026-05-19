@@ -773,7 +773,7 @@ func describeCOB(filePath string) {
 	fmt.Printf("Scripts: %d\n", cob.NumScripts)
 	fmt.Printf("Pieces: %d\n", cob.NumPieces)
 	fmt.Printf("Code Length: %d bytes\n", len(cob.Code))
-	fmt.Printf("Static Variables: %d\n", cob.Unknown1)
+	fmt.Printf("Static Variables: %d\n", cob.NumberOfStaticVars)
 	fmt.Println()
 
 	if len(cob.PieceNames) > 0 {

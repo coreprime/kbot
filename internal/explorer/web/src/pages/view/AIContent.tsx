@@ -21,10 +21,16 @@ export default function AIContent({ data }: { data: ViewResult }) {
         const maxWeight = plan.Weights
           ? Math.max(...plan.Weights.map(w => Math.abs(w.Weight)), 1)
           : 1
+        // TA: Kingdoms AI files often have no `plan` directive — the parser
+        // buckets the weights/limits into a synthetic "default" plan. Hide
+        // the per-plan header in that case to keep the viewer clean.
+        const isDefaultOnly = plans.length === 1 && plan.Name === 'default'
 
         return (
           <div key={pi} className="ai-plan-card">
-            <h3 className="ai-plan-name">📋 {plan.Name} Difficulty</h3>
+            {!isDefaultOnly && (
+              <h3 className="ai-plan-name">📋 {plan.Name} Difficulty</h3>
+            )}
 
             {plan.Weights && plan.Weights.length > 0 && (
               <div className="ai-section">

@@ -4,23 +4,28 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
+	"hash/fnv"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/coreprime/kbot/internal/assets"
 	"github.com/coreprime/kbot/internal/cache"
+	"github.com/coreprime/kbot/internal/palettepick"
 	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/formats/fnt"
 	"github.com/coreprime/kbot/formats/gaf"
@@ -195,6 +200,7 @@ func runWebServer(vfsInstance *filesystem.VirtualFileSystem, port int) error {
 	http.HandleFunc("/api/browse/", handleAPIBrowse)
 	http.HandleFunc("/api/describe/", handleAPIDescribe)
 	http.HandleFunc("/api/view/", handleAPIView)
+	http.HandleFunc("/api/gaf-palettes/", handleAPIGAFPalettes)
 
 	// Binary asset endpoints (not JSON — serve raw bytes)
 	http.HandleFunc("/fnt-sheet/", handleFntSheet)
@@ -209,6 +215,7 @@ func runWebServer(vfsInstance *filesystem.VirtualFileSystem, port int) error {
 	http.HandleFunc("/sct-minimap/", handleSCTMinimap)
 	http.HandleFunc("/zrb-thumb/", handleZRBThumb)
 	http.HandleFunc("/raw/", handleWebRaw)
+	http.HandleFunc("/htmlview/", handleWebHTMLView)
 	http.HandleFunc("/gif/", handleWebGIF)
 	http.HandleFunc("/png/", handleWebPNG)
 	http.HandleFunc("/apng/", handleWebAPNG)
@@ -303,24 +310,130 @@ func handleWebRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set content type based on extension
+	// Set content type based on extension. The `inline` flag controls whether
+	// the response renders in the browser tab (true) or triggers a download
+	// (false). Anything embeddable into the viewer pane — images, HTML, audio
+	// — wants inline disposition; everything else falls back to attachment.
 	ext := strings.ToLower(filepath.Ext(filePath))
-	switch ext {
-	case ".tdf", ".fbi", ".gui", ".txt":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	case ".wav":
-		w.Header().Set("Content-Type", "audio/wav")
-	case ".mp3":
-		w.Header().Set("Content-Type", "audio/mpeg")
-	default:
-		w.Header().Set("Content-Type", "application/octet-stream")
+	ctype, inline := rawContentType(ext)
+	w.Header().Set("Content-Type", ctype)
+	disp := "attachment"
+	if inline {
+		disp = "inline"
 	}
-
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(filePath)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disp, filepath.Base(filePath)))
 
 	if _, err := w.Write(data); err != nil {
-		logger.Error("Failed to write response", zap.Error(err))
+		logWriteResponseError("Failed to write raw response", err)
 	}
+}
+
+// rawContentType maps a file extension to a Content-Type and reports whether
+// the browser should render the body inline (true) or treat it as a download
+// (false).
+func rawContentType(ext string) (string, bool) {
+	switch ext {
+	case ".tdf", ".fbi", ".gui", ".ota", ".txt":
+		return "text/plain; charset=utf-8", true
+	case ".htm", ".html":
+		return "text/html; charset=utf-8", true
+	case ".wav":
+		return "audio/wav", true
+	case ".mp3":
+		return "audio/mpeg", true
+	case ".png":
+		return "image/png", true
+	case ".jpg", ".jpeg":
+		return "image/jpeg", true
+	case ".gif":
+		return "image/gif", true
+	case ".bmp":
+		return "image/bmp", true
+	case ".webp":
+		return "image/webp", true
+	case ".svg":
+		return "image/svg+xml", true
+	default:
+		return "application/octet-stream", false
+	}
+}
+
+// handleWebHTMLView serves an HTML file (.htm/.html) with two safety
+// transforms applied so it can be displayed inside an iframe in the viewer:
+//
+//  1. Any existing `<base>` tag is stripped, then a new one pointing at the
+//     file's directory under /raw/ is injected so every relative URL (img,
+//     link, script, anchor) resolves through the explorer's own /raw/ path
+//     guard instead of trying to hit the user's filesystem directly.
+//
+//  2. A restrictive `<meta http-equiv="Content-Security-Policy">` is injected
+//     to disable inline scripts. The frontend already wraps the iframe in
+//     `sandbox="allow-same-origin"`, so this is belt-and-braces against any
+//     legacy game-shipped HTML that tries to run scripts or open popups.
+func handleWebHTMLView(w http.ResponseWriter, r *http.Request) {
+	filePath := strings.TrimPrefix(r.URL.Path, "/htmlview/")
+	if filePath == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+
+	data, err := vfs.ReadFile(filePath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	// Compute the base URL for relative references. filepath.Dir on a slash
+	// path returns "." for top-level files; treat that as the root.
+	dir := strings.TrimSuffix(filePath, filepath.Base(filePath))
+	dir = strings.TrimRight(dir, "/")
+	var baseHref string
+	if dir == "" {
+		baseHref = "/raw/"
+	} else {
+		baseHref = "/raw/" + dir + "/"
+	}
+
+	rewritten := rewriteHTMLBase(data, baseHref)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if _, err := w.Write(rewritten); err != nil {
+		logWriteResponseError("Failed to write HTML view", err)
+	}
+}
+
+// existingBaseRE strips any `<base ...>` tag the source HTML carries so our
+// injected base takes effect unambiguously.
+var existingBaseRE = regexp.MustCompile(`(?i)<base[^>]*>`)
+
+// headOpenRE matches the opening <head> tag (with optional attributes) so we
+// can inject our own elements immediately after it.
+var headOpenRE = regexp.MustCompile(`(?i)<head\b[^>]*>`)
+
+// rewriteHTMLBase removes any existing <base> tag and injects our own (plus
+// a tight CSP meta) so embedded asset references resolve through /raw/.
+func rewriteHTMLBase(html []byte, baseHref string) []byte {
+	stripped := existingBaseRE.ReplaceAll(html, nil)
+	injection := []byte(fmt.Sprintf(
+		`<base href=%q><meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data:; script-src 'none'; object-src 'none'; frame-ancestors 'self'">`,
+		baseHref,
+	))
+	if loc := headOpenRE.FindIndex(stripped); loc != nil {
+		out := make([]byte, 0, len(stripped)+len(injection))
+		out = append(out, stripped[:loc[1]]...)
+		out = append(out, injection...)
+		out = append(out, stripped[loc[1]:]...)
+		return out
+	}
+	// No <head>: prepend a synthetic one so the base + CSP still apply. The
+	// browser is lenient enough to merge this with whatever the document has.
+	out := make([]byte, 0, len(stripped)+len(injection)+32)
+	out = append(out, []byte("<head>")...)
+	out = append(out, injection...)
+	out = append(out, []byte("</head>")...)
+	out = append(out, stripped...)
+	return out
 }
 
 // handleWebDescribe shows metadata for supported file formats
@@ -378,13 +491,19 @@ func handleWebGIF(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Create cache key suffix based on sequence and frame
-	// Format: -seq<N>.gif for animations or -seq<N>-frame<F>.gif for single frames
+	// Resolve the palette up-front so it can be folded into the cache key —
+	// otherwise switching palettes wouldn't invalidate a previously cached GIF.
+	paletteOverride := r.URL.Query().Get("palette")
+	palette, paletteTag := resolveGAFPalette(filePath, paletteOverride)
+	renderOpts, transparencyTag := parseTransparencyOverride(r.URL.Query().Get("transparency"))
+
+	// Create cache key suffix based on sequence, frame, palette and
+	// transparency choice. Format: -seq<N>[-frame<F>]-p<hash>-<tTag>.gif
 	cacheExt := fmt.Sprintf("-seq%d", seqIndex)
 	if frameIndex >= 0 {
 		cacheExt += fmt.Sprintf("-frame%d", frameIndex)
 	}
-	cacheExt += ".gif"
+	cacheExt += "-" + paletteCacheSuffix(paletteTag) + "-" + transparencyTag + ".gif"
 	
 	// Check cache first using VFS MD5 if available
 	var cacheKey string
@@ -444,9 +563,6 @@ func handleWebGIF(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load palette - try VFS first, then fall back to embedded default
-	palette := loadPalette()
-
 	// Convert to GIF - write to buffer for caching
 	var gifBuffer bytes.Buffer
 	
@@ -456,13 +572,13 @@ func handleWebGIF(w http.ResponseWriter, r *http.Request) {
 			Name:   fmt.Sprintf("%s_frame%d", seq.Name, frameIndex),
 			Frames: []*gaf.Frame{seq.Frames[frameIndex]},
 		}
-		if err := singleFrame.WriteGIF(&gifBuffer, palette); err != nil {
+		if err := singleFrame.WriteGIFWith(&gifBuffer, palette, renderOpts); err != nil {
 			http.Error(w, fmt.Sprintf("Error generating GIF: %v", err), http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// All frames (animated)
-		if err := seq.WriteGIF(&gifBuffer, palette); err != nil {
+		if err := seq.WriteGIFWith(&gifBuffer, palette, renderOpts); err != nil {
 			http.Error(w, fmt.Sprintf("Error generating GIF: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -499,7 +615,7 @@ func handleWebGIF(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Serve from buffer
 		if _, err := w.Write(gifData); err != nil {
-			logger.Error("Failed to write GIF response", zap.Error(err))
+			logWriteResponseError("Failed to write GIF response", err)
 		}
 	}
 }
@@ -624,6 +740,41 @@ func isTextContent(data []byte) bool {
 	return printable > (len(sample) * 80 / 100)
 }
 
+// isClientDisconnect reports whether a write error came from the HTTP client
+// going away mid-response (closed tab, navigated elsewhere, browser
+// cancelled a stale request because a newer one superseded it). These show
+// up as ECONNRESET on macOS, EPIPE on Linux, or as wrapped *net.OpErrors,
+// and aren't actionable — kbot did its job, the bytes just had nowhere to
+// land.
+func isClientDisconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	// Fallback for wrapped or stringly-typed errors that escape errors.Is
+	// (older Go versions, third-party wrappers).
+	msg := err.Error()
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "client disconnected")
+}
+
+// logWriteResponseError downgrades the common "client went away while we
+// were writing the response" case to a debug-level message and only
+// surfaces real I/O failures at error level.
+func logWriteResponseError(what string, err error) {
+	if err == nil {
+		return
+	}
+	if isClientDisconnect(err) {
+		logger.Debug(what+" aborted by client", zap.Error(err))
+		return
+	}
+	logger.Error(what, zap.Error(err))
+}
+
 // loadPalette attempts to load palette from VFS, falls back to embedded default
 func loadPalette() *gaf.Palette {
 	// Try to load from VFS at standard location
@@ -642,6 +793,88 @@ func loadPalette() *gaf.Palette {
 		return nil
 	}
 	return palette
+}
+
+// resolveGAFPalette picks a palette for rendering gafPath, honoring an
+// optional UI-supplied override and using palettepick.Resolve's auto-detection
+// otherwise. Returns the palette plus a short tag (palette source + path)
+// suitable for folding into a cache key so swapping palettes invalidates
+// stale renders.
+func resolveGAFPalette(gafPath, override string) (*gaf.Palette, string) {
+	res, err := palettepick.Resolve(vfs, gafPath, override)
+	if err != nil || res.Palette == nil {
+		fallback, _ := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		return fallback, "embedded"
+	}
+	tag := res.Source.String()
+	if res.Path != "" {
+		tag += ":" + res.Path
+	}
+	return res.Palette, tag
+}
+
+// paletteCacheSuffix derives a short hash from a palette tag so it can be
+// appended to cache keys without exploding their length. The hash space is
+// large enough that collisions are not a real concern for kbot's working set.
+func paletteCacheSuffix(tag string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(tag))
+	return fmt.Sprintf("p%08x", h.Sum32())
+}
+
+// parseTransparencyOverride converts the ?transparency= query param into a
+// gaf.RenderOptions value plus a short tag suitable for folding into cache
+// keys. Accepted forms:
+//
+//	"" or "auto"       → heuristic-based (default)
+//	"metadata"         → use Frame.TransparencyIndex as-is
+//	"none"             → disable transparency entirely
+//	"0".."255"         → force that palette index
+//
+// Unrecognised values fall back to auto so a stale query param can't break
+// rendering.
+func parseTransparencyOverride(q string) (gaf.RenderOptions, string) {
+	switch strings.ToLower(q) {
+	case "", "auto":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeAuto}, "t-auto"
+	case "metadata", "meta":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, "t-meta"
+	case "none", "opaque", "off":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}, "t-none"
+	}
+	if n, err := strconv.Atoi(q); err == nil && n >= 0 && n <= 255 {
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeIndex, Index: uint8(n)}, fmt.Sprintf("t-i%03d", n)
+	}
+	return gaf.RenderOptions{Mode: gaf.TransparencyModeAuto}, "t-auto"
+}
+
+// handleAPIGAFPalettes returns the candidate palettes for rendering a GAF
+// so the viewer UI can populate a palette picker.
+//
+//	GET /api/gaf-palettes/<gaf-path>
+//	→ { "candidates": [{ "path": "...", "label": "...", "source": "..." }, ...] }
+func handleAPIGAFPalettes(w http.ResponseWriter, r *http.Request) {
+	gafPath := strings.TrimPrefix(r.URL.Path, "/api/gaf-palettes/")
+	if gafPath == "" {
+		http.Error(w, "missing GAF path", http.StatusBadRequest)
+		return
+	}
+	cands := palettepick.Candidates(vfs, gafPath)
+	type entry struct {
+		Path   string `json:"path"`
+		Label  string `json:"label"`
+		Source string `json:"source"`
+	}
+	out := struct {
+		Candidates []entry `json:"candidates"`
+	}{Candidates: make([]entry, 0, len(cands))}
+	for _, c := range cands {
+		out.Candidates = append(out.Candidates, entry{Path: c.Path, Label: c.Label, Source: string(c.Source)})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		logger.Error("encode gaf-palettes response", zap.Error(err))
+	}
 }
 
 // handleWebVideo converts and streams Smacker videos as MP4
@@ -932,6 +1165,16 @@ func serveTNTImage(w http.ResponseWriter, r *http.Request, prefix, suffix string
 // ── SCT tile/height/minimap handlers ───────────────────────────────────────
 
 func loadVFSPalette() color.Palette {
+	// Fall back to the embedded palette when the explorer is being
+	// exercised outside a server context (e.g. unit tests) and vfs has
+	// not been initialised.
+	if vfs == nil {
+		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		if err != nil {
+			return nil
+		}
+		return pal.ColorModel()
+	}
 	palData, err := vfs.ReadFile("palettes/palette.pal")
 	if err != nil {
 		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
@@ -1264,7 +1507,7 @@ func handleCacheStats(w http.ResponseWriter, r *http.Request) {
 		progress["gifs"],
 		calculateProgress(progress),
 	); err != nil {
-		logger.Error("Failed to write cache stats response", zap.Error(err))
+		logWriteResponseError("Failed to write cache stats response", err)
 	}
 }
 
@@ -1324,7 +1567,10 @@ func handleWebPNG(w http.ResponseWriter, r *http.Request) {
 		cacheKey = cache.HashData(data)
 	}
 	
-	cacheExt := fmt.Sprintf("-seq%d-frame%d.png", seqIndex, frameIndex)
+	paletteOverride := r.URL.Query().Get("palette")
+	palette, paletteTag := resolveGAFPalette(filePath, paletteOverride)
+	renderOpts, transparencyTag := parseTransparencyOverride(r.URL.Query().Get("transparency"))
+	cacheExt := fmt.Sprintf("-seq%d-frame%d-%s-%s.png", seqIndex, frameIndex, paletteCacheSuffix(paletteTag), transparencyTag)
 	cachedPath := pngCache.GetPath(cacheKey, cacheExt)
 	if _, err := os.Stat(cachedPath); err == nil {
 		http.ServeFile(w, r, cachedPath)
@@ -1357,12 +1603,9 @@ func handleWebPNG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load palette
-	palette := loadPalette()
-
 	// Generate PNG
 	var pngBuffer bytes.Buffer
-	if err := seq.Frames[frameIndex].ToPNG(palette, &pngBuffer); err != nil {
+	if err := seq.Frames[frameIndex].ToPNGWith(palette, renderOpts, &pngBuffer); err != nil {
 		http.Error(w, fmt.Sprintf("Error generating PNG: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -1386,7 +1629,7 @@ func handleWebPNG(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=31536000")
 	if _, err := w.Write(pngData); err != nil {
-		logger.Error("Failed to write PNG response", zap.Error(err))
+		logWriteResponseError("Failed to write PNG response", err)
 	}
 }
 
@@ -1437,7 +1680,10 @@ func handleWebAPNG(w http.ResponseWriter, r *http.Request) {
 		cacheKey = cache.HashData(data)
 	}
 	
-	cacheExt := fmt.Sprintf("-seq%d.apng", seqIndex)
+	paletteOverride := r.URL.Query().Get("palette")
+	palette, paletteTag := resolveGAFPalette(filePath, paletteOverride)
+	renderOpts, transparencyTag := parseTransparencyOverride(r.URL.Query().Get("transparency"))
+	cacheExt := fmt.Sprintf("-seq%d-%s-%s.apng", seqIndex, paletteCacheSuffix(paletteTag), transparencyTag)
 	cachedPath := apngCache.GetPath(cacheKey, cacheExt)
 	if _, err := os.Stat(cachedPath); err == nil {
 		http.ServeFile(w, r, cachedPath)
@@ -1466,12 +1712,9 @@ func handleWebAPNG(w http.ResponseWriter, r *http.Request) {
 
 	seq := sequences[seqIndex]
 
-	// Load palette
-	palette := loadPalette()
-
 	// Generate APNG
 	var apngBuffer bytes.Buffer
-	if err := seq.ToAPNG(palette, &apngBuffer); err != nil {
+	if err := seq.ToAPNGWith(palette, renderOpts, &apngBuffer); err != nil {
 		http.Error(w, fmt.Sprintf("Error generating APNG: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -1495,7 +1738,7 @@ func handleWebAPNG(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/apng")
 	w.Header().Set("Cache-Control", "public, max-age=31536000")
 	if _, err := w.Write(apngData); err != nil {
-		logger.Error("Failed to write APNG response", zap.Error(err))
+		logWriteResponseError("Failed to write APNG response", err)
 	}
 }
 

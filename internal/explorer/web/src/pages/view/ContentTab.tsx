@@ -1,5 +1,5 @@
 import { rawURL, type ViewResult, type LintLineInfo } from '../../api'
-import { isCOB, isGAF, isPCX, isVideo, isAI, isAudio, is3DO, isFont, isPalette, isColorTable, isSCT, isTNT, hasSections, isBOS } from './helpers'
+import { isCOB, isGAF, isPCX, isVideo, isAI, isAudio, is3DO, isFont, isPalette, isColorTable, isSCT, isTNT, hasSections, isBOS, isImage, isHTML } from './helpers'
 import GafContent from './GafContent'
 import PcxContent from './PcxContent'
 import VideoContent from './VideoContent'
@@ -13,6 +13,8 @@ import { TNTMapView } from './TNTContent'
 import AIContent from './AIContent'
 import CobContent from './CobContent'
 import SectionsContent from './SectionsContent'
+import ImageContent from './ImageContent'
+import HtmlContent from './HtmlContent'
 import BOSHighlighter from '../../components/BOSHighlighter'
 
 export default function ContentTab({ data, filePath, lintLines, highlightLine }: {
@@ -23,6 +25,8 @@ export default function ContentTab({ data, filePath, lintLines, highlightLine }:
 
   if (isGAF(fmt)) return <GafContent data={data} filePath={filePath} />
   if (isPCX(fmt)) return <PcxContent data={data} filePath={filePath} />
+  if (isImage(fmt)) return <ImageContent data={data} filePath={filePath} />
+  if (isHTML(fmt)) return <HtmlContent data={data} filePath={filePath} />
   if (isVideo(fmt)) return <VideoContent data={data} filePath={filePath} />
   if (isAudio(fmt)) return <WavContent data={data} filePath={filePath} />
   if (is3DO(fmt)) return <TDOContent data={data} />

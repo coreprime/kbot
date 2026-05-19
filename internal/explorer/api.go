@@ -361,7 +361,7 @@ func describeCOBAPI(data []byte, result map[string]any) {
 	result["scriptCount"] = cob.NumScripts
 	result["pieceCount"] = cob.NumPieces
 	result["codeLength"] = len(cob.Code)
-	result["staticVars"] = cob.Unknown1
+	result["staticVars"] = cob.NumberOfStaticVars
 	result["scriptNames"] = cob.ScriptNames
 	result["pieceNames"] = cob.PieceNames
 }
@@ -484,6 +484,10 @@ func handleAPIView(w http.ResponseWriter, r *http.Request) {
 		viewLightingTableAPI(data, result)
 	case ".shd":
 		viewShadowTableAPI(data, result)
+	case ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg":
+		viewImageAPI(filePath, ext, result)
+	case ".htm", ".html":
+		viewHTMLAPI(filePath, result)
 	}
 
 	if ext == ".ai" || (ext == ".txt" && ai.IsAIFile(data)) {
@@ -619,7 +623,7 @@ func viewCOBAPI(data []byte, result map[string]any) {
 	result["cobScriptCount"] = cob.NumScripts
 	result["cobPieceCount"] = cob.NumPieces
 	result["cobCodeLength"] = len(cob.Code)
-	result["cobStaticVars"] = cob.Unknown1
+	result["cobStaticVars"] = cob.NumberOfStaticVars
 	result["cobScriptNames"] = cob.ScriptNames
 	result["cobPieceNames"] = cob.PieceNames
 
@@ -791,6 +795,29 @@ func viewAIAPI(data []byte, result map[string]any) {
 	result["hasContent"] = true
 	result["format"] = "AI Profile"
 	result["aiPlans"] = aiFile.Plans
+}
+
+// viewImageAPI surfaces a browser-renderable URL for native image formats
+// (PNG/JPG/GIF/etc.). The frontend uses `imageUrl` to display the asset
+// inline through the existing /raw/ pipeline.
+func viewImageAPI(filePath, ext string, result map[string]any) {
+	result["hasContent"] = true
+	// Strip the leading dot and uppercase: "png" → "PNG".
+	if len(ext) > 1 {
+		result["format"] = strings.ToUpper(ext[1:]) + " Image"
+	} else {
+		result["format"] = "Image"
+	}
+	result["imageUrl"] = "/raw/" + filePath
+}
+
+// viewHTMLAPI points the frontend at the rewriting HTML view handler so
+// embedded image/style references resolve through the explorer's /raw/
+// pipeline instead of trying to hit the filesystem directly.
+func viewHTMLAPI(filePath string, result map[string]any) {
+	result["hasContent"] = true
+	result["format"] = "HTML"
+	result["htmlUrl"] = "/htmlview/" + filePath
 }
 
 func viewWavAPI(data []byte, filePath string, result map[string]any) {
@@ -1065,6 +1092,53 @@ func viewTNTAPI(data []byte, filePath string, result map[string]any) {
 			result["tntStartPositions"] = startPositions
 		}
 	}
+
+	// Lint findings (kbot tnt lint).  Mirrors the COB linting surface so
+	// the viewer can reuse the same Lint tab UI.  Similarity is run at
+	// the default 1.0% threshold; the palette is taken from the active
+	// VFS so colour comparisons match what the explorer renders.
+	lintTNT(m, result)
+}
+
+// lintTNT runs the TNT linter and writes findings into result under
+// the same lintResults/lintSummary keys the explorer's Lint tab reads
+// from for COB files.
+func lintTNT(m *tnt.Map, result map[string]any) {
+	pal := loadVFSPalette()
+	opts := tnt.LintOptions{SimilarityPercent: 1.0, Palette: pal}
+	if pal == nil {
+		opts.SimilarityPercent = 0
+	}
+	diags, err := m.Lint(opts)
+	if err != nil {
+		result["lintError"] = fmt.Sprintf("Lint failed: %v", err)
+		return
+	}
+
+	type lintDiag struct {
+		Line       int    `json:"line"`
+		Rule       string `json:"rule"`
+		Severity   string `json:"severity"`
+		Script     string `json:"script"`
+		Message    string `json:"message"`
+		Count      int    `json:"count"`
+		BytesSaved int    `json:"bytes_saved"`
+	}
+
+	out := make([]lintDiag, 0, len(diags))
+	summary := make(map[string]int)
+	for _, d := range diags {
+		out = append(out, lintDiag{
+			Rule:       d.Rule,
+			Severity:   string(d.Severity),
+			Message:    d.Message,
+			Count:      d.Count,
+			BytesSaved: d.BytesSaved,
+		})
+		summary[d.Rule] += d.Count
+	}
+	result["lintResults"] = out
+	result["lintSummary"] = summary
 }
 
 // loadDefaultPalette loads the TA palette for color table lookups.

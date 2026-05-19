@@ -164,6 +164,10 @@ export interface ViewResult {
   aiPlans?: AIPlan[]
   // TDF/FBI sections
   sections?: Section[]
+  // Native browser-renderable image (.png/.jpg/.gif/...)
+  imageUrl?: string
+  // HTML doc served through the rewriting view handler
+  htmlUrl?: string
   [key: string]: unknown
 }
 
@@ -205,17 +209,41 @@ export function gifURL(path: string): string {
   return `/gif/${clean}`
 }
 
-export function pngURL(path: string, seq: number | string, frame?: number | string): string {
-  const clean = path.replace(/^\/+/, '')
-  if (frame !== undefined) {
-    return `/png/${clean}/${seq}/${frame}`
-  }
-  return `/png/${clean}/${seq}`
+function gafQuery(palette?: string, transparency?: string): string {
+  const parts: string[] = []
+  if (palette) parts.push(`palette=${encodeURIComponent(palette)}`)
+  if (transparency) parts.push(`transparency=${encodeURIComponent(transparency)}`)
+  return parts.length ? `?${parts.join('&')}` : ''
 }
 
-export function apngURL(path: string, seq: number | string): string {
+export function pngURL(path: string, seq: number | string, frame?: number | string, palette?: string, transparency?: string): string {
   const clean = path.replace(/^\/+/, '')
-  return `/apng/${clean}/${seq}`
+  const base = frame !== undefined ? `/png/${clean}/${seq}/${frame}` : `/png/${clean}/${seq}`
+  return base + gafQuery(palette, transparency)
+}
+
+export function apngURL(path: string, seq: number | string, palette?: string, transparency?: string): string {
+  const clean = path.replace(/^\/+/, '')
+  return `/apng/${clean}/${seq}` + gafQuery(palette, transparency)
+}
+
+export function gifSeqURL(path: string, seq: number | string, palette?: string, transparency?: string): string {
+  const clean = path.replace(/^\/+/, '')
+  return `/gif/${clean}/${seq}` + gafQuery(palette, transparency)
+}
+
+export interface PaletteCandidate {
+  path: string
+  label: string
+  source: string
+}
+
+export async function fetchGAFPalettes(gafPath: string): Promise<PaletteCandidate[]> {
+  const clean = gafPath.replace(/^\/+/, '')
+  const res = await fetch(`/api/gaf-palettes/${clean}`)
+  if (!res.ok) return []
+  const body = await res.json() as { candidates?: PaletteCandidate[] }
+  return body.candidates ?? []
 }
 
 export function pcxURL(path: string, palette?: string): string {
