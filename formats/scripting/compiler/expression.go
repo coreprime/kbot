@@ -168,6 +168,51 @@ func (c *Compiler) compileExpression(expr string) {
 		}
 	}
 
+	// TA: Kingdoms stack-neutral math intrinsics. These wrap an inner
+	// expression and emit the TAK opcode after the expression has pushed
+	// its value — modelled as `local_x = __tak_math_09(3 * 2);` which
+	// round-trips the original `MUL / TAK_MATH_09 / POP_LOCAL` pattern.
+	// The opcode appears empirically as a stack-neutral pseudo-op in
+	// every retail TAK .cob site we've inspected.
+	if strings.HasPrefix(expr, "__tak_math_09(") && strings.HasSuffix(expr, ")") {
+		inner := expr[len("__tak_math_09(") : len(expr)-1]
+		c.compileExpression(strings.TrimSpace(inner))
+		c.emit(scripting.OP_TAK_MATH_09, 0)
+		return
+	}
+	if strings.HasPrefix(expr, "__tak_math_0b(") && strings.HasSuffix(expr, ")") {
+		inner := expr[len("__tak_math_0b(") : len(expr)-1]
+		c.compileExpression(strings.TrimSpace(inner))
+		c.emit(scripting.OP_TAK_MATH_0B, 0)
+		return
+	}
+
+	// Mission-Command as a value-producing expression: emit stack args
+	// then the opcode with (soundNameIndex, argCount) inline. The result
+	// stays on the stack for the caller to consume.
+	if strings.HasPrefix(expr, "Mission-Command(") && strings.HasSuffix(expr, ")") {
+		if err := c.compileMissionCommandExpr(expr); err == nil {
+			return
+		}
+		// Fall through to the constant-0 fallback if the call is malformed,
+		// matching how the rest of compileExpression handles bad input.
+	}
+
+	// play-sound(<id>, <volume>) is a value-producing expression: push id,
+	// emit PLAY_SOUND with inline volume. The caller consumes the result
+	// (either via POP_STACK for discard or POP_* for assignment).
+	if strings.HasPrefix(expr, "play-sound(") && strings.HasSuffix(expr, ")") {
+		inner := expr[len("play-sound(") : len(expr)-1]
+		parts := splitParams(inner)
+		if len(parts) == 2 {
+			c.compileExpression(strings.TrimSpace(parts[0]))
+			if vol, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
+				c.emit(scripting.OP_PLAY_SOUND, int32(vol))
+				return
+			}
+		}
+	}
+
 	// Check for variable reference
 	if idx, ok := c.localIndex[expr]; ok {
 		c.emit(scripting.OP_PUSH_LOCAL_VAR, int32(idx))
@@ -251,11 +296,14 @@ func splitBinaryOp(expr, op string) (string, string, string, bool) {
 	return "", "", "", false
 }
 
-// getPortNumber returns the port number for a port name
+// getPortNumber returns the port number for a port name. Ports 1–20 are
+// the standard TA set; ports 21+ are TA: Kingdoms additions taken from
+// Scriptor's [UNITVLAUES] table.
 func (c *Compiler) getPortNumber(name string) int {
 	ports := map[string]int{
 		"ACTIVATION":         1,
 		"STANDINGMOVEORDERS": 2,
+		"STANDINGFIREORDERS": 3,
 		"HEALTH":             4,
 		"INBUILDSTANCE":      5,
 		"BUSY":               6,
@@ -273,6 +321,17 @@ func (c *Compiler) getPortNumber(name string) int {
 		"YARD_OPEN":          18,
 		"BUGGER_OFF":         19,
 		"ARMORED":            20,
+		// TA: Kingdoms additions.
+		"WEAPON_AIM_ABORTED": 21,
+		"WEAPON_READY":       22,
+		"WEAPON_LAUNCH_NOW":  23,
+		"FINISHED_DYING":     26,
+		"ORIENTATION":        27,
+		"IN_WATER":           28,
+		"CURRENT_SPEED":      29,
+		"MAGIC_DEATH":        31,
+		"VETERAN_LEVEL":      32,
+		"ON_ROAD":            34,
 	}
 
 	if num, ok := ports[name]; ok {
@@ -296,25 +355,38 @@ func parseScriptCall(s string) (name, params string) {
 	return name, strings.TrimSpace(inner)
 }
 
-// splitParams splits a comma-separated parameter list respecting parenthesis nesting.
+// splitParams splits a comma-separated parameter list respecting parenthesis
+// nesting and double-quoted string literals. Quoted strings can themselves
+// contain commas — e.g. TA: Kingdoms `Mission-Command("SetMission o 1, s", …)`
+// — so the parameter splitter must not break on commas inside a quoted span.
 func splitParams(s string) []string {
 	if s == "" {
 		return nil
 	}
 	var parts []string
 	depth := 0
+	inString := false
 	start := 0
-	for i, ch := range s {
-		switch ch {
-		case '(':
-			depth++
-		case ')':
-			depth--
-		case ',':
-			if depth == 0 {
-				parts = append(parts, strings.TrimSpace(s[start:i]))
-				start = i + 1
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case inString:
+			if ch == '\\' && i+1 < len(s) {
+				i++ // skip the escaped byte
+				continue
 			}
+			if ch == '"' {
+				inString = false
+			}
+		case ch == '"':
+			inString = true
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+		case ch == ',' && depth == 0:
+			parts = append(parts, strings.TrimSpace(s[start:i]))
+			start = i + 1
 		}
 	}
 	parts = append(parts, strings.TrimSpace(s[start:]))

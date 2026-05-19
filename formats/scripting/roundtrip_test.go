@@ -169,10 +169,10 @@ func generateMetadata(cob *scripting.COB) string {
 	fmt.Fprintf(&buf, "Scripts:          %d\n", cob.NumScripts)
 	fmt.Fprintf(&buf, "Pieces:           %d\n", cob.NumPieces)
 	fmt.Fprintf(&buf, "Code size:        %d bytes\n", len(cob.Code))
-	fmt.Fprintf(&buf, "Unknown0:         %d\n", cob.Unknown0)
-	fmt.Fprintf(&buf, "Unknown1:         %d\n", cob.Unknown1)
-	fmt.Fprintf(&buf, "Unknown2:         %d\n", cob.Unknown2)
-	fmt.Fprintf(&buf, "Unknown3:         %d\n\n", cob.Unknown3)
+	fmt.Fprintf(&buf, "LengthOfScripts:    %d\n", cob.LengthOfScripts)
+	fmt.Fprintf(&buf, "NumberOfStaticVars: %d\n", cob.NumberOfStaticVars)
+	fmt.Fprintf(&buf, "UKZero:             %d\n", cob.UKZero)
+	fmt.Fprintf(&buf, "OffsetToNameArray:  %d\n\n", cob.OffsetToNameArray)
 	
 	fmt.Fprintf(&buf, "Script Names (%d):\n", len(cob.ScriptNames))
 	for i, name := range cob.ScriptNames {
@@ -234,7 +234,7 @@ func generateDetailedDiff(origCOB, recompCOB *scripting.COB, origBytes, recompBy
 	compareField("VersionSignature", origCOB.VersionSignature, recompCOB.VersionSignature)
 	compareField("NumScripts", origCOB.NumScripts, recompCOB.NumScripts)
 	compareField("NumPieces", origCOB.NumPieces, recompCOB.NumPieces)
-	compareField("Unknown0", origCOB.Unknown0, recompCOB.Unknown0)
+	compareField("LengthOfScripts", origCOB.LengthOfScripts, recompCOB.LengthOfScripts)
 	compareField("Code offset", origCOB.OffsetToScriptCode, recompCOB.OffsetToScriptCode)
 	compareField("Code size", uint32(len(origCOB.Code)), uint32(len(recompCOB.Code)))
 	

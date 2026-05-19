@@ -15,6 +15,7 @@ type Assembler struct {
 	version    int
 	numStatics int
 	pieceNames []string
+	soundNames []string // TA: Kingdoms per-COB sound-name table
 	scripts    []*assembledScript
 }
 
@@ -127,6 +128,17 @@ func (a *Assembler) parseDirective(line string) error {
 		}
 		a.numStatics = v
 
+	case ".sound_name":
+		// TA: Kingdoms per-COB sound-name table. The argument is a
+		// Go-syntax quoted string (matches what the disassembler emits
+		// via `%q`); the writer rebuilds the v6 sub-header and offset
+		// table from these on round-trip.
+		s, err := strconv.Unquote(arg)
+		if err != nil {
+			return fmt.Errorf("bad .sound_name value %q: %w", arg, err)
+		}
+		a.soundNames = append(a.soundNames, s)
+
 	case ".piece":
 		if arg == "" {
 			return fmt.Errorf(".piece requires a name")
@@ -154,12 +166,21 @@ func (a *Assembler) parseInstruction(line string) (*scripting.Instruction, error
 		return nil, nil // too short, skip
 	}
 
-	// Extract offset (4 hex digits, optionally followed by ':').
-	offsetEnd := 4
-	if offsetEnd < len(line) && line[offsetEnd] == ':' {
-		offsetEnd = 5
+	// Extract offset: the leading run of hex digits, optionally followed by
+	// ':'. The disassembler uses %04X (zero-padded to four digits, but with
+	// no upper bound) so files larger than 64 KiB — common in TA: Kingdoms
+	// missions — produce 5+ digit offsets that we must parse fully.
+	offsetEnd := 0
+	for offsetEnd < len(line) && isHexDigit(line[offsetEnd]) {
+		offsetEnd++
 	}
-	offsetStr := strings.TrimRight(line[:offsetEnd], ":")
+	if offsetEnd == 0 {
+		return nil, nil // line doesn't start with hex digits
+	}
+	offsetStr := line[:offsetEnd]
+	if offsetEnd < len(line) && line[offsetEnd] == ':' {
+		offsetEnd++ // consume the optional ':' separator
+	}
 	offset, err := strconv.ParseUint(offsetStr, 16, 32)
 	if err != nil {
 		return nil, nil // not an instruction line
@@ -268,27 +289,36 @@ func (a *Assembler) buildCOB() *scripting.COB {
 	numPieces := uint32(len(a.pieceNames))
 	codeSize := uint32(len(code))
 	headerSize := uint32(44)
+	subHeaderSize := uint32(0)
+	if a.version == 6 {
+		subHeaderSize = 8
+	}
 
-	scriptCodeIdxOff := headerSize + codeSize
+	codeOffset := headerSize + subHeaderSize
+	scriptCodeIdxOff := codeOffset + codeSize
 	scriptNameOff := scriptCodeIdxOff + numScripts*4
 	pieceNameOff := scriptNameOff + numScripts*4
-	stringPoolOff := pieceNameOff + numPieces*4
+	soundNameOff := pieceNameOff + numPieces*4
 
 	return &scripting.COB{
 		VersionSignature:              uint32(a.version),
 		NumScripts:                    numScripts,
 		NumPieces:                     numPieces,
-		Unknown0:                      codeSize / 4,
-		Unknown1:                      uint32(a.numStatics),
+		LengthOfScripts:               codeSize / 4,
+		NumberOfStaticVars:            uint32(a.numStatics),
 		Code:                          code,
 		ScriptCodeIndices:             indices,
 		ScriptNames:                   names,
 		PieceNames:                    a.pieceNames,
-		OffsetToScriptCode:            headerSize,
+		SoundNames:                    a.soundNames,
+		OffsetToScriptCode:            codeOffset,
 		OffsetToScriptCodeIndexArray:  scriptCodeIdxOff,
 		OffsetToScriptNameOffsetArray: scriptNameOff,
 		OffsetToPieceNameOffsetArray:  pieceNameOff,
-		Unknown3:                      stringPoolOff,
+		// OffsetToNameArray == byte just past the piece-name array
+		// (i.e. the sound-name offset table for v6, or string-pool start
+		// for v4).
+		OffsetToNameArray: soundNameOff,
 	}
 }
 
@@ -296,4 +326,10 @@ func appendU32(buf []byte, v uint32) []byte {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, v)
 	return append(buf, b...)
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') ||
+		(c >= 'a' && c <= 'f') ||
+		(c >= 'A' && c <= 'F')
 }

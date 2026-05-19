@@ -78,7 +78,7 @@ func GenerateWebDisassembly(cob *scripting.COB) (string, error) {
 	
 	// Generate header with file metadata
 	staticVars := []string{}
-	for i := 0; i < int(cob.Unknown1); i++ {
+	for i := 0; i < int(cob.NumberOfStaticVars); i++ {
 		varName := fmt.Sprintf("global_%d", i)
 		// Check if this is unitviewer
 		if name, ok := globalNames[i]; ok {
@@ -94,7 +94,7 @@ func GenerateWebDisassembly(cob *scripting.COB) (string, error) {
 		CodeLength:  len(cob.Code),
 		PieceNames:  cob.PieceNames,
 		StaticVars:  staticVars,
-		StaticCount: cob.Unknown1,
+		StaticCount: cob.NumberOfStaticVars,
 	}
 	
 	scripts := []WebDisassemblyScript{}

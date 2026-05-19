@@ -22,8 +22,8 @@ func TestAssemblerDirectives(t *testing.T) {
 	if cob.VersionSignature != 4 {
 		t.Errorf("Version = %d, want 4", cob.VersionSignature)
 	}
-	if cob.Unknown1 != 4 {
-		t.Errorf("Unknown1 (statics) = %d, want 4", cob.Unknown1)
+	if cob.NumberOfStaticVars != 4 {
+		t.Errorf("NumberOfStaticVars = %d, want 4", cob.NumberOfStaticVars)
 	}
 	if len(cob.PieceNames) != 2 {
 		t.Errorf("PieceNames = %v, want [base turret]", cob.PieceNames)

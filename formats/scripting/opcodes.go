@@ -86,6 +86,30 @@ const (
 	OP_SET_VALUE      = 0x10082000 // Set unit value (port# from stack, value from stack)
 	OP_ATTACH_UNIT    = 0x10083000 // Attach unit (piece# after)
 	OP_DROP_UNIT      = 0x10084000 // Drop unit
+
+	// DONT_SHADOW disables shadow casting for a single piece. It shares the
+	// shape of the other animation opcodes (one inline piece# DWORD) and
+	// only appears in retail TA: Kingdoms .cob files (Scriptor's keyword
+	// `dont-shadow` lives in the same animation category as `dont-shade`).
+	OP_DONT_SHADOW = 0x1000A000
+
+	// MISSION_COMMAND invokes a named TAK engine command. Two inline DWORDs
+	// encode (soundNameIndex, stackArgCount); the engine pops `stackArgCount`
+	// values off the stack, executes the command stored at index
+	// `soundNameIndex` of the per-COB sound-name table, and pushes a result
+	// back. The result is consumed by whichever POP_* opcode follows
+	// (POP_STATIC/POP_LOCAL for assignment, POP_STACK to discard). Maps to
+	// Scriptor's `Mission-Command(STRING, args...)` keyword.
+	OP_MISSION_COMMAND = 0x10073000
+
+	// OP_TAK_MATH_09 / OP_TAK_MATH_0B are TAK-only math opcodes whose exact
+	// semantics have not been documented. Scriptor labels them `??` / `????`,
+	// so even the canonical TAK-aware tool treats them as opaque operators.
+	// Empirically every retail .cob site uses them as stack-neutral
+	// pseudo-ops wrapping a producing expression — that's how we round-trip
+	// them through decompile/compile.
+	OP_TAK_MATH_09 = 0x10039000
+	OP_TAK_MATH_0B = 0x1003B000
 )
 
 // OpcodeName returns the mnemonic name for an opcode
@@ -164,6 +188,15 @@ func OpcodeName(opcode uint32) string {
 		return "BITWISE_XOR"
 	case OP_BITWISE_NOT:
 		return "BITWISE_NOT"
+	// TA: Kingdoms extensions
+	case OP_DONT_SHADOW:
+		return "DONT_SHADOW"
+	case OP_TAK_MATH_09:
+		return "TAK_MATH_09"
+	case OP_TAK_MATH_0B:
+		return "TAK_MATH_0B"
+	case OP_MISSION_COMMAND:
+		return "MISSION_COMMAND"
 	// Special
 	case OP_RAND:
 		return "RAND"
@@ -272,6 +305,14 @@ func OpcodeHasInlineParam(opcode uint32) bool {
 	// Sound with volume parameter
 	case OP_PLAY_SOUND:
 		return true
+	// TA: Kingdoms DONT_SHADOW — followed by one piece# DWORD like the
+	// other ANIM_*-category opcodes.
+	case OP_DONT_SHADOW:
+		return true
+	// TA: Kingdoms MISSION_COMMAND — two inline DWORDs (sound-name index
+	// + stack-arg count).
+	case OP_MISSION_COMMAND:
+		return true
 	default:
 		return false
 	}
@@ -285,7 +326,8 @@ func OpcodeParamCount(opcode uint32) int {
 		OP_POP_LOCAL_VAR, OP_POP_STATIC, OP_PUSH_IMMEDIATE,
 		OP_JUMP, OP_JUMP_IF_FALSE,
 		OP_SHOW, OP_HIDE, OP_CACHE, OP_DONT_CACHE, OP_DONT_SHADE, OP_SHADE,
-		OP_EMIT_SFX, OP_EXPLODE, OP_PLAY_SOUND:
+		OP_EMIT_SFX, OP_EXPLODE, OP_PLAY_SOUND,
+		OP_DONT_SHADOW:
 		return 1
 	// 2 parameters (piece#, axis# for NOW variants OR script#, param_count)
 	case OP_WAIT_FOR_TURN, OP_WAIT_FOR_MOVE,
@@ -294,6 +336,9 @@ func OpcodeParamCount(opcode uint32) int {
 		return 2
 	// 2 parameters (piece#, axis# as separate words for all animation opcodes)
 	case OP_MOVE, OP_TURN, OP_SPIN, OP_STOP_SPIN:
+		return 2
+	// MISSION_COMMAND: (soundNameIndex, stackArgCount)
+	case OP_MISSION_COMMAND:
 		return 2
 	default:
 		return 0
@@ -349,7 +394,7 @@ func OpcodeByName(name string) (uint32, bool) {
 		"DONT_CACHE":      OP_DONT_CACHE,
 		"SHADE":           OP_SHADE,
 		"DONT_SHADE":      OP_DONT_SHADE,
-		"DONT_SHADOW":     OP_DONT_SHADE,
+		"DONT_SHADOW":     OP_DONT_SHADOW,
 
 		// Effects
 		"EMIT_SFX":        OP_EMIT_SFX,
@@ -379,12 +424,16 @@ func OpcodeByName(name string) (uint32, bool) {
 		// Stack / variables (canonical names from OpcodeName)
 		"STACK_ALLOC":     OP_STACK_ALLOC,
 		"PUSH_CONST":      OP_PUSH_CONSTANT,
+		"PUSH_IMM":        OP_PUSH_IMMEDIATE,
 		"PUSH_LOCAL":       OP_PUSH_LOCAL_VAR,
 		"POP_LOCAL":        OP_POP_LOCAL_VAR,
 		"PUSH_STATIC":     OP_PUSH_STATIC,
 		"POP_STATIC":      OP_POP_STATIC,
+		"POP_STACK":       OP_POP_STACK,
+		"CREATE_LOCAL":    OP_CREATE_LOCAL,
 		// Legacy aliases
 		"PUSH_CONSTANT":   OP_PUSH_CONSTANT,
+		"PUSH_IMMEDIATE":  OP_PUSH_IMMEDIATE,
 		"PUSH_LOCAL_VAR":  OP_PUSH_LOCAL_VAR,
 		"POP_LOCAL_VAR":   OP_POP_LOCAL_VAR,
 
@@ -393,6 +442,7 @@ func OpcodeByName(name string) (uint32, bool) {
 		"SUB":             OP_SUB,
 		"MUL":             OP_MUL,
 		"DIV":             OP_DIV,
+		"MOD":             OP_MOD,
 
 		// Bitwise
 		"BITWISE_AND":     OP_BITWISE_AND,
@@ -403,6 +453,7 @@ func OpcodeByName(name string) (uint32, bool) {
 		// Logical
 		"LOGICAL_AND":     OP_LOGICAL_AND,
 		"LOGICAL_OR":      OP_LOGICAL_OR,
+		"LOGICAL_XOR":     OP_LOGICAL_XOR,
 		"LOGICAL_NOT":     OP_LOGICAL_NOT,
 
 		// Comparison
@@ -419,6 +470,11 @@ func OpcodeByName(name string) (uint32, bool) {
 		"GET":             OP_GET,
 		"GET_UNIT_VALUE":  OP_GET_UNIT_VALUE,
 		"SET_VALUE":       OP_SET_VALUE,
+
+		// TA: Kingdoms extensions (see opcode declarations above).
+		"MISSION_COMMAND": OP_MISSION_COMMAND,
+		"TAK_MATH_09":     OP_TAK_MATH_09,
+		"TAK_MATH_0B":     OP_TAK_MATH_0B,
 	}
 	
 	opcode, ok := opcodeMap[name]

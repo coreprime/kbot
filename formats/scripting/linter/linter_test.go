@@ -62,7 +62,7 @@ func TestInvalidCallRule(t *testing.T) {
 		ScriptNames:      []string{"Create", "Helper"},
 		PieceNames:       []string{"base"},
 		ScriptCodeIndices: []uint32{0, 5},
-		Unknown1:         0,
+		NumberOfStaticVars: 0,
 	}
 
 	// Script 0 (Create): CALL_SCRIPT 5 (out of range), RETURN

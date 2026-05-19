@@ -123,6 +123,24 @@ func (c *Compiler) compileBlock(lines []string) error {
 				return err
 			}
 
+		case strings.HasPrefix(line, "dont-shadow("):
+			if err := c.compileDontShadow(line); err != nil {
+				return err
+			}
+
+		case strings.HasPrefix(line, "Mission-Command("):
+			if err := c.compileMissionCommandStatement(line); err != nil {
+				return err
+			}
+
+		case strings.HasPrefix(line, "play-sound("):
+			// Compile as the value-producing expression then drop the
+			// return value (POP_STACK) — matches the
+			// `PUSH id ; PLAY_SOUND vol ; POP_STACK` shape Cavedog emits
+			// for stand-alone calls.
+			c.compileExpression(strings.TrimSuffix(strings.TrimSpace(line), ";"))
+			c.emit(scripting.OP_POP_STACK, 0)
+
 		case strings.HasPrefix(line, "wait-for-move "):
 			if err := c.compileWaitForMove(line); err != nil {
 				return err
@@ -163,11 +181,20 @@ func (c *Compiler) compileReturn(line string) {
 	line = strings.TrimSuffix(strings.TrimSpace(line), ";")
 
 	if line == "return" {
+		// `return;` (no expression) lays down a STACK_ALLOC prefix for
+		// TA: Kingdoms v6 .cob output — every retail TAK function ends
+		// with the pattern `… ; STACK_ALLOC ; RETURN` for a value-less
+		// return. TA's v4 compiler doesn't emit anything extra.
+		if c.versionOverride == 6 {
+			c.emit(scripting.OP_STACK_ALLOC, 0)
+		}
 		c.emit(scripting.OP_RETURN, 0)
 		return
 	}
 
-	// Parse return value
+	// `return <expr>;` compiles the expression and then RETURN. Empirically
+	// the TAK compiler emits no STACK_ALLOC prefix on value-returning
+	// returns (e.g. `return 0;` → `PUSH_CONST 0 ; RETURN`).
 	valStr := strings.TrimSpace(strings.TrimPrefix(line, "return"))
 	c.compileExpression(valStr)
 	c.emit(scripting.OP_RETURN, 0)

@@ -40,7 +40,7 @@ type UnusedStaticRule struct{}
 func (r *UnusedStaticRule) Name() string { return "unused-static" }
 
 func (r *UnusedStaticRule) Check(info *FileInfo) []Diagnostic {
-	numStatics := int(info.COB.Unknown1)
+	numStatics := int(info.COB.NumberOfStaticVars)
 	if numStatics == 0 {
 		return nil
 	}

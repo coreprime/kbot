@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/scripting"
@@ -21,6 +22,15 @@ type Compiler struct {
 	currentScript *CompiledScript
 	localIndex    map[string]int
 	paramCount    int
+
+	// COB metadata picked up from optional top-of-file BOS directives.
+	// `.version` and `.sound_name "…"` are emitted by
+	// `kbot cob decompile` so a TA: Kingdoms v6 .cob round-trips with the
+	// right header version and per-COB sound-name table; legacy BOS files
+	// without the directives default to TA's v4 layout with no sound
+	// names.
+	versionOverride int
+	soundNames      []string
 }
 
 // CompiledScript represents a compiled script
@@ -61,7 +71,9 @@ func (c *Compiler) Compile() (*scripting.COB, error) {
 	return c.buildCOB(), nil
 }
 
-// parseDeclarations extracts piece and static-var declarations
+// parseDeclarations extracts piece and static-var declarations, plus the
+// optional `.version` / `.extra_header` / `.trailing_data` metadata
+// directives the decompiler emits for TA: Kingdoms .cob files.
 func (c *Compiler) parseDeclarations(lines []string) error {
 	pieceRE := regexp.MustCompile(`^piece\s+(.+);`)
 	staticRE := regexp.MustCompile(`^static-var\s+(.+);`)
@@ -69,6 +81,16 @@ func (c *Compiler) parseDeclarations(lines []string) error {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+
+		// Metadata directives (lifted from the assembler — see
+		// formats/scripting/assembly/assembler.go for the matching
+		// surface and rationale).
+		if strings.HasPrefix(line, ".") {
+			if err := c.parseDirective(line); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -95,6 +117,38 @@ func (c *Compiler) parseDeclarations(lines []string) error {
 		}
 	}
 
+	return nil
+}
+
+// parseDirective handles top-of-file BOS directives.
+func (c *Compiler) parseDirective(line string) error {
+	parts := strings.SplitN(line, " ", 2)
+	directive := parts[0]
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	switch directive {
+	case ".version":
+		v, err := strconv.Atoi(arg)
+		if err != nil {
+			return fmt.Errorf("bad .version value %q: %w", arg, err)
+		}
+		c.versionOverride = v
+	case ".sound_name":
+		s, err := strconv.Unquote(arg)
+		if err != nil {
+			return fmt.Errorf("bad .sound_name value %q: %w", arg, err)
+		}
+		c.soundNames = append(c.soundNames, s)
+	case ".statics":
+		// Tolerated for symmetry with the assembler form. The actual
+		// static count is derived from `static-var` declarations.
+	case ".piece":
+		// Same — `.piece` is the assembler form; BOS uses `piece a, b;`.
+	default:
+		return fmt.Errorf("unknown directive: %s", directive)
+	}
 	return nil
 }
 
@@ -239,10 +293,19 @@ func (c *Compiler) emitPlaceholder(opcode uint32) int {
 	return idx + 1 // Return operand index
 }
 
-// getPieceIndex looks up piece index, returns -1 if not found
+// getPieceIndex looks up piece index by symbolic name. As a last resort it
+// accepts the synthetic `piece_<N>` placeholders the decompiler emits when
+// a referenced index lies past the COB's declared piece-name table — this
+// happens in TA: Kingdoms mission COBs where the bytecode references piece
+// slots that the script declares no name for.
 func (c *Compiler) getPieceIndex(name string) (int, error) {
 	if idx, ok := c.pieces[name]; ok {
 		return idx, nil
+	}
+	if strings.HasPrefix(name, "piece_") {
+		if idx, err := strconv.Atoi(name[len("piece_"):]); err == nil && idx >= 0 {
+			return idx, nil
+		}
 	}
 	return -1, fmt.Errorf("unknown piece: %s", name)
 }
@@ -318,28 +381,47 @@ func (c *Compiler) buildCOB() *scripting.COB {
 		}
 	}
 
-	// Calculate Unknown3 (seems to point to start of string pool)
-	codeOffset := 44
-	scriptCodeIndexOffset := codeOffset + len(code)
-	scriptNameOffset := scriptCodeIndexOffset + len(c.scripts)*4
-	stringPoolStart := scriptNameOffset + len(c.scripts)*4 + len(c.pieceNames)*4
-
-	// Build scripting.COB with correct fields
-	cob := &scripting.COB{
-		VersionSignature:  4, // Use version 4 like original TA files
-		NumScripts:        uint32(len(c.scripts)),
-		NumPieces:         uint32(len(c.pieceNames)),
-		Unknown0:          uint32(len(code) / 4), // Code size in DWORDs
-		Unknown1:          uint32(len(c.statics)),
-		Unknown2:          0,
-		Unknown3:          uint32(stringPoolStart),
-		Code:              code,
-		ScriptCodeIndices: indices,
-		ScriptNames:       scriptNames,
-		PieceNames:        c.pieceNames,
+	// Pick the version: explicit .version directive wins; otherwise
+	// preserve TA's historical default of 4. TA: Kingdoms v6 .cob files
+	// carry an 8-byte sub-header between the canonical 44-byte header and
+	// the code section that the writer reconstructs from the structured
+	// fields below.
+	version := 4
+	if c.versionOverride != 0 {
+		version = c.versionOverride
+	}
+	subHeaderSize := 0
+	if version == 6 {
+		subHeaderSize = 8
 	}
 
-	return cob
+	codeOffset := 44 + subHeaderSize
+	scriptCodeIndexOffset := codeOffset + len(code)
+	scriptNameOffset := scriptCodeIndexOffset + len(c.scripts)*4
+	pieceNameOffset := scriptNameOffset + len(c.scripts)*4
+	soundNameOffset := pieceNameOffset + len(c.pieceNames)*4
+
+	return &scripting.COB{
+		VersionSignature:   uint32(version),
+		NumScripts:         uint32(len(c.scripts)),
+		NumPieces:          uint32(len(c.pieceNames)),
+		LengthOfScripts:    uint32(len(code) / 4),
+		NumberOfStaticVars: uint32(len(c.statics)),
+		UKZero:             0,
+		// OffsetToNameArray == byte just past the piece-name array
+		// (i.e. start of the sound-name offset table for v6, or
+		// string-pool start for v4 where there is no sound-name table).
+		OffsetToNameArray:             uint32(soundNameOffset),
+		Code:                          code,
+		ScriptCodeIndices:             indices,
+		ScriptNames:                   scriptNames,
+		PieceNames:                    c.pieceNames,
+		SoundNames:                    c.soundNames,
+		OffsetToScriptCode:            uint32(codeOffset),
+		OffsetToScriptCodeIndexArray:  uint32(scriptCodeIndexOffset),
+		OffsetToScriptNameOffsetArray: uint32(scriptNameOffset),
+		OffsetToPieceNameOffsetArray:  uint32(pieceNameOffset),
+	}
 }
 
 // parseScriptCall splits "ScriptName(param1, param2)" into name and param string.

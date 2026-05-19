@@ -23,11 +23,22 @@ func NewDecompiler(cob *scripting.COB) *Decompiler {
 // Decompile converts COB bytecode to valid BOS source code
 func (d *Decompiler) Decompile() (string, error) {
 	var sb strings.Builder
-	
+
 	// Header comment
 	sb.WriteString("// Decompiled from COB bytecode\n")
 	sb.WriteString("// Some details may differ from original source\n\n")
-	
+
+	// COB metadata directives the compiler honors for round-trip fidelity.
+	// `.version` is always emitted so TA: Kingdoms COBs (`v6`) survive a
+	// decompile/compile cycle without falling back to the v4 default.
+	// `.sound_name "..."` emits the TAK-only per-COB sound-name table; the
+	// writer rebuilds the v6 sub-header + offset table from those entries.
+	fmt.Fprintf(&sb, ".version %d\n", d.cob.VersionSignature)
+	for _, s := range d.cob.SoundNames {
+		fmt.Fprintf(&sb, ".sound_name %q\n", s)
+	}
+	sb.WriteByte('\n')
+
 	// Piece declarations
 	if len(d.cob.PieceNames) > 0 {
 		sb.WriteString("piece ")
@@ -63,9 +74,9 @@ func (d *Decompiler) Decompile() (string, error) {
 	}
 	
 	// Static variables
-	if d.cob.Unknown1 > 0 {
+	if d.cob.NumberOfStaticVars > 0 {
 		sb.WriteString("static-var")
-		for i := uint32(0); i < d.cob.Unknown1; i++ {
+		for i := uint32(0); i < d.cob.NumberOfStaticVars; i++ {
 			if i > 0 {
 				sb.WriteString(",")
 			}
@@ -109,7 +120,15 @@ func (d *Decompiler) Disassemble(format assembly.Format) (string, error) {
 
 	// Structured header — parsed by the assembler for roundtrip.
 	fmt.Fprintf(&sb, ".version %d\n", d.cob.VersionSignature)
-	fmt.Fprintf(&sb, ".statics %d\n", d.cob.Unknown1)
+	fmt.Fprintf(&sb, ".statics %d\n", d.cob.NumberOfStaticVars)
+
+	// TA: Kingdoms v6 COBs carry a per-file sound-name table referenced
+	// from the bytecode by index. Emit each entry as a `.sound_name`
+	// directive; the assembler rebuilds the v6 sub-header and offset
+	// table from these on round-trip.
+	for _, s := range d.cob.SoundNames {
+		fmt.Fprintf(&sb, ".sound_name %q\n", s)
+	}
 
 	for _, piece := range d.cob.PieceNames {
 		fmt.Fprintf(&sb, ".piece %s\n", piece)
@@ -173,10 +192,39 @@ func (d *Decompiler) decompileScript(index int, name string, signalDefines map[i
 		}
 	}
 	
-	// Count STACK_ALLOC operations first — these are the hard limit on local count
+	// Count STACK_ALLOC operations first — these are the canonical signal
+	// from Cavedog's compiler that a local slot is being reserved.
+	// TA emits them all up-front; TA: Kingdoms sometimes interleaves
+	// SIGNAL/SET_SIGNAL_MASK before the STACK_ALLOCs and also adds an
+	// epilogue STACK_ALLOC right before RETURN, so we walk the full
+	// instruction list rather than only the prefix run.
 	stackAllocCount := 0
-	for i := 0; i < len(instructions) && instructions[i].Opcode == scripting.OP_STACK_ALLOC; i++ {
+	for i, in := range instructions {
+		if in.Opcode != scripting.OP_STACK_ALLOC {
+			continue
+		}
+		// Skip the TAK epilogue marker — a STACK_ALLOC immediately
+		// followed by RETURN, which is a return-shape pattern rather
+		// than a real local-variable allocation.
+		if i+1 < len(instructions) && instructions[i+1].Opcode == scripting.OP_RETURN {
+			continue
+		}
 		stackAllocCount++
+	}
+	// As a defensive lower bound, also count the highest local-variable
+	// index touched. This rescues functions where Cavedog's compiler
+	// omitted a STACK_ALLOC for a slot we can plainly see being used.
+	maxLocal := -1
+	for _, in := range instructions {
+		switch in.Opcode {
+		case scripting.OP_PUSH_LOCAL_VAR, scripting.OP_POP_LOCAL_VAR, scripting.OP_CREATE_LOCAL:
+			if int(in.Operand) > maxLocal {
+				maxLocal = int(in.Operand)
+			}
+		}
+	}
+	if maxLocal+1 > stackAllocCount {
+		stackAllocCount = maxLocal + 1
 	}
 	
 	// Check if we have a well-known signature with more parameters
@@ -663,6 +711,84 @@ func (d *Decompiler) translateInstruction(inst scripting.Instruction, stack *exp
 		}
 		return ""
 	
+	// play-sound consumes the sound id from the stack and pushes a return
+	// value; the BOS form is `play-sound <id> volume <vol>;`. Volume is
+	// inline. The pushed result is dropped via the POP_STACK that
+	// follows in the bytecode.
+	case scripting.OP_PLAY_SOUND:
+		soundID := stack.pop()
+		if soundID == "" {
+			soundID = "0"
+		}
+		stack.push(fmt.Sprintf("play-sound(%s, %d)", soundID, inst.Operand))
+		return ""
+
+	// POP_STACK discards the top of the stack. When the popped expression
+	// has side effects (a Mission-Command call, a START_SCRIPT spawn) we
+	// need to emit it as a stand-alone statement; otherwise the
+	// decompile→compile round-trip silently drops the call. Pure values
+	// (literal constants, locals) can still be discarded silently.
+	case scripting.OP_POP_STACK:
+		v := stack.pop()
+		if v == "" {
+			return ""
+		}
+		if expressionHasSideEffect(v) {
+			return v + ";"
+		}
+		return ""
+
+	// TA: Kingdoms stack-neutral math intrinsics. We wrap the top of the
+	// symbolic stack so a `local = 3 * 2 ; TAK_MATH_09 ; POP_LOCAL` site
+	// decompiles to `local = __tak_math_09(3 * 2);` — round-tripping back
+	// through the compiler reinstates the opcode at the same offset.
+	case scripting.OP_TAK_MATH_09:
+		if v := stack.pop(); v != "" {
+			stack.push(fmt.Sprintf("__tak_math_09(%s)", v))
+		}
+		return ""
+	case scripting.OP_TAK_MATH_0B:
+		if v := stack.pop(); v != "" {
+			stack.push(fmt.Sprintf("__tak_math_0b(%s)", v))
+		}
+		return ""
+
+	// TA: Kingdoms DONT_SHADOW — disables shadow casting for one piece.
+	case scripting.OP_DONT_SHADOW:
+		pieceIdx := int(inst.Operand)
+		pieceName := fmt.Sprintf("piece_%d", pieceIdx)
+		if pieceIdx >= 0 && pieceIdx < len(d.cob.PieceNames) {
+			pieceName = d.cob.PieceNames[pieceIdx]
+		}
+		return fmt.Sprintf("dont-shadow(%s);", pieceName)
+
+	// TA: Kingdoms MISSION_COMMAND. Two inline DWORDs encode
+	// (soundNameIndex, stackArgCount); the engine pops the named number
+	// of values off the stack, runs the command stored at that index in
+	// the COB's sound-name table, and pushes a single result back. The
+	// result is consumed by whichever POP_* opcode follows — either
+	// POP_STATIC/POP_LOCAL when the BOS assigns it or POP_STACK when it
+	// discards. We render it as `Mission-Command(...)` to match
+	// Scriptor's canonical TAK BOS keyword.
+	case scripting.OP_MISSION_COMMAND:
+		cmdIdx := int(inst.Operand)
+		argCount := int(inst.Operand2)
+		// Collect the stack arguments (popped most-recent first).
+		args := make([]string, argCount)
+		for i := argCount - 1; i >= 0; i-- {
+			args[i] = stack.pop()
+		}
+		cmd := fmt.Sprintf("sound_%d", cmdIdx)
+		if cmdIdx >= 0 && cmdIdx < len(d.cob.SoundNames) {
+			cmd = fmt.Sprintf("%q", d.cob.SoundNames[cmdIdx])
+		}
+		expr := fmt.Sprintf("Mission-Command(%s, %s)", cmd, strings.Join(args, ", "))
+		if argCount == 0 {
+			expr = fmt.Sprintf("Mission-Command(%s)", cmd)
+		}
+		stack.push(expr)
+		return ""
+
 	case scripting.OP_BITWISE_NOT: // 0x2B
 		if val := stack.pop(); val != "" {
 			stack.push(fmt.Sprintf("~%s", val))
@@ -987,12 +1113,13 @@ func (d *Decompiler) translateInstruction(inst scripting.Instruction, stack *exp
 				flags := strings.Join(flagNames, " | ")
 				return fmt.Sprintf("explode %s type %s;", pieceName, flags)
 			} else if len(flagNames) == 1 {
-			return fmt.Sprintf("explode %s type %s;", pieceName, flagNames[0])
-			} else {
 				return fmt.Sprintf("explode %s type %s;", pieceName, flagNames[0])
 			}
+			// No known flag bits set — fall through to the raw-expression
+			// form so we don't panic on (e.g.) TAK scripts using
+			// `explode <piece> type 0;` or yet-unmapped flag bits.
 		}
-		
+
 		// If not a simple number or no flags decoded, use the expression as-is
 		return fmt.Sprintf("explode %s type %s;", pieceName, typeExpr)
 	
@@ -1141,6 +1268,22 @@ func (s *exprStack) isEmpty() bool {
 	return len(s.items) == 0
 }
 
+// expressionHasSideEffect reports whether an expression on the symbolic
+// stack carries side effects we'd silently lose if POP_STACK drops it.
+// This is intentionally a string check rather than tracking expression
+// kinds through the stack — the symbol stack is already a string-builder,
+// and intrinsic / call expressions are easy to recognise by their leading
+// token.
+func expressionHasSideEffect(expr string) bool {
+	if strings.HasPrefix(expr, "Mission-Command(") {
+		return true
+	}
+	if strings.HasPrefix(expr, "play-sound(") {
+		return true
+	}
+	return false
+}
+
 // popNReverse pops n items from the stack and returns them in push order (oldest first).
 // Parameters are pushed left-to-right, so the last-pushed is on top; reversing restores
 // the original call order for the output string.
@@ -1153,10 +1296,14 @@ func popNReverse(stack *exprStack, n int) []string {
 }
 
 // getPortName returns the symbolic name for a GET_UNIT_VALUE port number.
+// Ports 1–20 are shared with TA; ports 21+ are TAK additions taken from
+// Scriptor's [UNITVLAUES] table — present in retail TAK .cob files but
+// inert under the TA engine.
 func getPortName(port string) string {
 	portMap := map[string]string{
 		"1":  "ACTIVATION",
 		"2":  "STANDINGMOVEORDERS",
+		"3":  "STANDINGFIREORDERS",
 		"4":  "HEALTH",
 		"5":  "INBUILDSTANCE",
 		"6":  "BUSY",
@@ -1174,8 +1321,19 @@ func getPortName(port string) string {
 		"18": "YARD_OPEN",
 		"19": "BUGGER_OFF",
 		"20": "ARMORED",
+		// TA: Kingdoms additions.
+		"21": "WEAPON_AIM_ABORTED",
+		"22": "WEAPON_READY",
+		"23": "WEAPON_LAUNCH_NOW",
+		"26": "FINISHED_DYING",
+		"27": "ORIENTATION",
+		"28": "IN_WATER",
+		"29": "CURRENT_SPEED",
+		"31": "MAGIC_DEATH",
+		"32": "VETERAN_LEVEL",
+		"34": "ON_ROAD",
 	}
-	
+
 	if name, ok := portMap[port]; ok {
 		return name
 	}
