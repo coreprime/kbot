@@ -91,11 +91,56 @@ type mapCatalogState struct {
 
 var mapCatalog = &mapCatalogState{minimaps: map[string][]byte{}}
 
-// startMapPreload walks the VFS for .tnt files, summarises each, and
-// pre-renders the embedded minimap as a PNG.  Intended to run once in
-// a goroutine after the VFS is mounted.
-func startMapPreload() {
+// sectionPreviewCache memoises rendered section-preview PNGs so the
+// drawer's per-section thumbnails don't re-parse the SCT on every
+// request.  Populated lazily and by the startup preload goroutine.
+var (
+	sectionPreviewMu    sync.RWMutex
+	sectionPreviewCache = map[string][]byte{}
+)
+
+// preloadProgress is a tiny progress tracker the TTY renderer reads.
+// All counters are guarded by mu so the renderer's snapshot stays
+// internally consistent (no torn reads across phase/done/total).
+type preloadTracker struct {
+	mu       sync.Mutex
+	phase    string
+	done     int
+	total    int
+	finished bool
+}
+
+var preloadProgress = &preloadTracker{}
+
+func (p *preloadTracker) set(phase string, done, total int) {
+	p.mu.Lock()
+	p.phase = phase
+	p.done = done
+	p.total = total
+	p.mu.Unlock()
+}
+
+func (p *preloadTracker) snapshot() (string, int, int, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.phase, p.done, p.total, p.finished
+}
+
+func (p *preloadTracker) finish() {
+	p.mu.Lock()
+	p.finished = true
+	p.mu.Unlock()
+}
+
+// startAssetPreload walks every map, section, and feature in the VFS
+// and pre-renders the PNGs the studio web UI needs.  Runs in a single
+// background goroutine after the server boots; the TTY progress bar
+// (when stdout is a terminal) follows the preloadProgress counters.
+func startAssetPreload() {
+	pal := loadVFSPalette()
 	paths := vfs.List()
+
+	// ── Maps ──
 	var tntPaths []string
 	for _, p := range paths {
 		lower := strings.ToLower(p)
@@ -103,15 +148,16 @@ func startMapPreload() {
 			tntPaths = append(tntPaths, p)
 		}
 	}
-	pal := loadVFSPalette()
-	for _, p := range tntPaths {
-		entry, png := summariseMapWithMinimap(p, pal)
+	preloadProgress.set("maps", 0, len(tntPaths))
+	for i, p := range tntPaths {
+		entry, mini := summariseMapWithMinimap(p, pal)
 		mapCatalog.mu.Lock()
 		mapCatalog.entries = append(mapCatalog.entries, entry)
-		if png != nil {
-			mapCatalog.minimaps[p] = png
+		if mini != nil {
+			mapCatalog.minimaps[p] = mini
 		}
 		mapCatalog.mu.Unlock()
+		preloadProgress.set("maps", i+1, len(tntPaths))
 	}
 	mapCatalog.mu.Lock()
 	sort.Slice(mapCatalog.entries, func(i, j int) bool {
@@ -119,6 +165,82 @@ func startMapPreload() {
 	})
 	mapCatalog.ready = true
 	mapCatalog.mu.Unlock()
+
+	// ── Sections ──
+	sections := allSectionsFromVFS()
+	preloadProgress.set("sections", 0, len(sections))
+	for i, s := range sections {
+		bytes := renderSectionPreviewPNG(s.Path, pal)
+		if bytes != nil {
+			sectionPreviewMu.Lock()
+			sectionPreviewCache[s.Path] = bytes
+			sectionPreviewMu.Unlock()
+		}
+		preloadProgress.set("sections", i+1, len(sections))
+	}
+
+	// ── Feature thumbnails ──
+	features, _ := scanFeatures()
+	withFile := features[:0:0]
+	for _, f := range features {
+		if f.Filename != "" && f.Seqname != "" {
+			withFile = append(withFile, f)
+		}
+	}
+	preloadProgress.set("features", 0, len(withFile))
+	for i, f := range withFile {
+		// Static-only PNG ?static=1 — the canvas placement path uses
+		// these.  Animated APNGs render on-demand still.
+		if data, err := renderFeatureStaticPNG(f.Filename, f.Seqname); err == nil {
+			key := strings.ToLower(f.Name) + "|static"
+			featureCacheMu.Lock()
+			featureCache[key] = data
+			featureCacheMu.Unlock()
+		}
+		preloadProgress.set("features", i+1, len(withFile))
+	}
+
+	preloadProgress.finish()
+}
+
+// renderSectionPreviewPNG renders the same PNG handleSectionPreview
+// would serve, so the preload goroutine and the live handler agree
+// on bytes.
+func renderSectionPreviewPNG(sectionPath string, pal color.Palette) []byte {
+	data, err := vfs.ReadFile(sectionPath)
+	if err != nil {
+		return nil
+	}
+	section, err := sct.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	var img image.Image
+	if section.Minimap != nil {
+		img = section.RenderMinimap(pal)
+	} else {
+		img = section.RenderTileMap(pal)
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+// allSectionsFromVFS lists all .sct paths under sections/.  Mirrors
+// what handleSections does, kept local so the preload doesn't depend
+// on the JSON-serialising path.
+func allSectionsFromVFS() []sectionEntry {
+	var out []sectionEntry
+	for _, p := range vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "sections/") || !strings.HasSuffix(lower, ".sct") {
+			continue
+		}
+		out = append(out, sectionEntry{Path: p})
+	}
+	return out
 }
 
 func handleMapsList(w http.ResponseWriter, _ *http.Request) {
@@ -584,34 +706,36 @@ func summariseSection(p string) sectionEntry {
 // ── /api/studio/section-preview/<path> ─────────────────────────────────────
 
 // handleSectionPreview returns a PNG for the section: minimap when present,
-// otherwise a rendered tile-grid.  The browser uses this for the drawer
-// thumbnails and the placement cursor preview.
+// otherwise a rendered tile-grid.  Cached in memory — the preload
+// goroutine populates the cache up front and live requests fall back
+// to a render+cache when the cache misses.
 func handleSectionPreview(w http.ResponseWriter, r *http.Request) {
 	sectionPath := strings.TrimPrefix(r.URL.Path, "/api/studio/section-preview/")
 	if sectionPath == "" {
 		http.Error(w, "missing section path", http.StatusBadRequest)
 		return
 	}
-	data, err := vfs.ReadFile(sectionPath)
-	if err != nil {
-		http.Error(w, "section not found", http.StatusNotFound)
-		return
-	}
-	section, err := sct.LoadFromReader(bytes.NewReader(data))
-	if err != nil {
-		http.Error(w, "failed to parse SCT", http.StatusInternalServerError)
+	sectionPreviewMu.RLock()
+	cached := sectionPreviewCache[sectionPath]
+	sectionPreviewMu.RUnlock()
+	if cached != nil {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(cached)
 		return
 	}
 	pal := loadVFSPalette()
-	var img image.Image
-	if section.Minimap != nil {
-		img = section.RenderMinimap(pal)
-	} else {
-		img = section.RenderTileMap(pal)
+	pngBytes := renderSectionPreviewPNG(sectionPath, pal)
+	if pngBytes == nil {
+		http.Error(w, "section not found", http.StatusNotFound)
+		return
 	}
+	sectionPreviewMu.Lock()
+	sectionPreviewCache[sectionPath] = pngBytes
+	sectionPreviewMu.Unlock()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_ = png.Encode(w, img)
+	_, _ = w.Write(pngBytes)
 }
 
 // ── /api/studio/feature-preview/<name> ─────────────────────────────────────

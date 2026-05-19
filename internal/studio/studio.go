@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/internal/kbotctx"
@@ -82,9 +83,14 @@ func runStudio(_ *cobra.Command, args []string) error {
 	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
 	fmt.Printf("✓ %d files available\n\n", stats["total_files"])
 
-	// Pre-parse every .tnt file in the background and render its minimap
-	// PNG so the Open dialog opens instantly on first click.
-	go startMapPreload()
+	// Pre-render maps, sections, and feature thumbnails so the editor
+	// doesn't pay parse costs on first open.  The progress reporter
+	// follows the same goroutine and only renders to a TTY (silent in
+	// pipes or non-interactive shells).
+	go startAssetPreload()
+	if isTerminal(os.Stdout) {
+		go reportPreloadProgress()
+	}
 
 	mux := http.NewServeMux()
 	registerAPI(mux)
@@ -148,6 +154,45 @@ func registerStatic(mux *http.ServeMux) {
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(data)
 	}))
+}
+
+// isTerminal returns true when f appears to be a character device
+// (i.e., a real TTY).  Pipes and files come back false so the progress
+// bar never garbles CI logs or piped output.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// reportPreloadProgress draws a single-line progress bar to stdout
+// until the preload goroutine flips finished=true.  Redraws every
+// 100 ms using carriage return + clear-to-EOL; the line is cleared
+// on completion so the server's normal output isn't garbled.
+func reportPreloadProgress() {
+	const barWidth = 24
+	const clearLine = "\r\033[2K"
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		phase, done, total, finished := preloadProgress.snapshot()
+		if finished {
+			_, _ = fmt.Fprint(os.Stdout, clearLine+"✓ Asset cache ready\n")
+			return
+		}
+		if total == 0 {
+			continue
+		}
+		ratio := float64(done) / float64(total)
+		if ratio > 1 {
+			ratio = 1
+		}
+		fill := int(ratio * float64(barWidth))
+		bar := strings.Repeat("█", fill) + strings.Repeat("░", barWidth-fill)
+		_, _ = fmt.Fprintf(os.Stdout, "%sCaching %s: [%s] %d/%d (%d%%)", clearLine, phase, bar, done, total, int(ratio*100))
+	}
 }
 
 func contentTypeFor(name string) string {
