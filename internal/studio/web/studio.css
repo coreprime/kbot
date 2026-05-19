@@ -1493,6 +1493,16 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 
+/* Feature info callout — pinned below the Stats panel using the same
+   visual vocabulary so the three side panels read as a stack. */
+.feature-info {
+  top: 460px; /* below #dev-stats-panel (272 + ~180 body) */
+  width: 232px;
+}
+.feature-info .dev-stats-header {
+  cursor: default;
+}
+
 /* ── Developer information dialog ──────────────────────────────────── */
 .dev-tabs {
   display: flex;

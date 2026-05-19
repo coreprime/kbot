@@ -2002,7 +2002,7 @@ function wireCanvas() {
     } else if (wasFeature && state.selected?.type === 'feature') {
       // Features remain a one-shot drop — they have no anchored state
       // and the user can re-drag them in Place Features mode after.
-      const { ax, ay } = pickAttrCell(e)
+      const { ax, ay } = pickFeatureAttrCell(e, state.selected)
       if (ax >= 0 && ax < state.tileW * 2 && ay >= 0 && ay < state.tileH * 2) {
         beginTransaction()
         placeFeature(ax, ay)
@@ -2038,16 +2038,34 @@ function pickCell(e) {
   return { tx: Math.floor(x), ty: Math.floor(y) }
 }
 
-// pickAttrCell returns the (ax, ay) attribute cell under the cursor.
-// The attribute grid is 16-px (half a tile), so features placed via this
-// picker can snap to any half-tile position instead of every-tile-centre
-// like the old placement path.
-function pickAttrCell(e) {
+// pickFeatureAttrCell returns the (ax, ay) attribute cell to assign to
+// a feature placed under the cursor.  It inverts the same offset
+// featureAnchorWorld applies on the way out — Footprint*8 in X plus
+// Footprint*8 - Height/2 in Y — so the rendered anchor visually lines
+// up with the cursor (modulo the unavoidable ±8 px snap to the 16-px
+// attribute grid).  Height is sampled at the cursor's plain cell as a
+// one-step estimate; the stored ax/ay round-trips through load/save
+// unchanged.
+function pickFeatureAttrCell(e, sel) {
   const canvas = $('#canvas')
   const rect = canvas.getBoundingClientRect()
-  const x = (e.clientX - rect.left) / rect.width * state.tileW * 2
-  const y = (e.clientY - rect.top) / rect.height * state.tileH * 2
-  return { ax: Math.floor(x), ay: Math.floor(y) }
+  const cx = (e.clientX - rect.left) / rect.width * canvas.width
+  const cy = (e.clientY - rect.top) / rect.height * canvas.height
+  const fw = (sel && sel.footprintX) || 1
+  const fh = (sel && sel.footprintZ) || 1
+  const cellPx = TILE_PX / 2 // 16
+  const anchorPx = TILE_PX / 4 // 8
+  // Tentative ay from the cursor's plain cell, used only to sample the
+  // height byte for the inverse offset.  Out-of-bounds returns 0 so the
+  // first row/column still works.
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  const tentativeAx = clamp(Math.floor(cx / cellPx), 0, aw - 1)
+  const tentativeAy = clamp(Math.floor(cy / cellPx), 0, ah - 1)
+  const h = (state.heights && state.heights.length) ? (state.heights[tentativeAy * aw + tentativeAx] | 0) : 0
+  const ax = clamp(Math.floor((cx - fw * anchorPx) / cellPx), 0, aw - 1)
+  const ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
+  return { ax, ay }
 }
 
 function updateHoverLabel(e) {
@@ -2276,7 +2294,7 @@ function tryAutoSwitchAt(e) {
         featureDragging = true
         beginTransaction()
         const f = state.features[fhit]
-        const cur = pickAttrCell(e)
+        const cur = pickFeatureAttrCell(e, f)
         featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
         state.featureJustMoved = -1
         renderCanvas()
@@ -2859,7 +2877,7 @@ function onFeatureMouseDown(e) {
     featureDragging = true
     beginTransaction()
     const f = state.features[hit]
-    const cur = pickAttrCell(e)
+    const cur = pickFeatureAttrCell(e, f)
     featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
     state.featureJustMoved = -1
     renderCanvas()
@@ -2868,7 +2886,7 @@ function onFeatureMouseDown(e) {
   // Empty space + a feature in the drawer → drop a copy here.  This is
   // how the user places multiple features without leaving the mode.
   if (state.selected?.type === 'feature') {
-    const { ax, ay } = pickAttrCell(e)
+    const { ax, ay } = pickFeatureAttrCell(e, state.selected)
     beginTransaction()
     placeFeature(ax, ay)
     commitTransaction('Place feature')
@@ -2881,8 +2899,8 @@ function onFeatureMouseDown(e) {
 
 function onFeatureMouseMove(e) {
   if (!featureDragging || state.selectedFeature < 0) return
-  const { ax, ay } = pickAttrCell(e)
   const f = state.features[state.selectedFeature]
+  const { ax, ay } = pickFeatureAttrCell(e, f)
   f.ax = clamp(ax + (featureDragOffset?.ax || 0), 0, state.tileW * 2 - 1)
   f.ay = clamp(ay + (featureDragOffset?.ay || 0), 0, state.tileH * 2 - 1)
   bumpContentVersion()
@@ -2916,8 +2934,7 @@ function findFeatureAt(tx, ty) {
   for (let i = candidates.length - 1; i >= 0; i--) {
     const idx = candidates[i]
     const f = state.features[idx]
-    const px = (f.ax / 2) * TILE_PX
-    const py = (f.ay / 2) * TILE_PX
+    const { px, py } = featureAnchorWorld(f)
     const r = featureRenderRect(f, px, py)
     if (cpx >= r.x && cpx <= r.x + r.w && cpy >= r.y && cpy <= r.y + r.h) return idx
   }
@@ -3227,7 +3244,7 @@ function handlePaint(e) {
     stampSection(tx, ty)
     paintedDuringStroke = true
   } else if (state.selected.type === 'feature') {
-    const { ax, ay } = pickAttrCell(e)
+    const { ax, ay } = pickFeatureAttrCell(e, state.selected)
     placeFeature(ax, ay)
     paintedDuringStroke = true
   }
@@ -3426,6 +3443,45 @@ function renderCanvas() {
   // Refresh the developer stats panel on the next frame too — keeps
   // the counts in sync with whatever the user just stamped.
   scheduleDevStatsRefresh()
+  // Keep the per-feature callout in sync with the current selection.
+  updateFeatureInfoPanel()
+}
+
+// updateFeatureInfoPanel populates the floating callout that appears
+// while the user has a single feature selected.  It shows the data
+// you'd want to round-trip through the TNT file — map tile, attribute
+// sub-cell, world pixel, terrain height byte, footprint, category.
+// Hidden on no-selection or multi-select (Picker mode).
+function updateFeatureInfoPanel() {
+  const panel = $('#feature-info-panel')
+  if (!panel) return
+  const multi = state.selectedFeatures && state.selectedFeatures.size > 0
+  const idx = state.selectedFeature
+  if (multi || idx < 0 || idx >= (state.features || []).length) {
+    panel.classList.add('hidden')
+    return
+  }
+  const f = state.features[idx]
+  if (!f) { panel.classList.add('hidden'); return }
+  panel.classList.remove('hidden')
+  // Tile = which 32-px tile the anchor falls in.  Sub-tile is the 0/1
+  // attribute offset inside that tile (TA's 2×2 attribute grid per tile).
+  const tx = Math.floor(f.ax / 2)
+  const ty = Math.floor(f.ay / 2)
+  const sx = f.ax & 1
+  const sy = f.ay & 1
+  const anchor = featureAnchorWorld(f)
+  const height = featureGroundHeight(f)
+  const fw = f.footprintX || 1
+  const fh = f.footprintZ || 1
+  $('#feature-info-title').textContent = f.name || 'Feature'
+  $('#fi-tile').textContent = `${tx}, ${ty}`
+  $('#fi-subtile').textContent = `${sx}, ${sy}`
+  $('#fi-attr').textContent = `${f.ax}, ${f.ay}`
+  $('#fi-world').textContent = `${anchor.px}, ${anchor.py}`
+  $('#fi-height').textContent = `${height}`
+  $('#fi-footprint').textContent = `${fw} × ${fh}`
+  $('#fi-category').textContent = f.category || f.world || '—'
 }
 
 // ── WebGL renderer (tile + feature batches) ───────────────────────────────
@@ -3610,8 +3666,7 @@ function glRenderTilesAndFeatures(vp) {
   const visible = []
   for (const f of state.features) {
     if (!f.previewUrl) continue
-    const px = (f.ax / 2) * TILE_PX
-    const py = (f.ay / 2) * TILE_PX
+    const { px, py } = featureAnchorWorld(f)
     const img = state.featureImages.get((f.name || '').toLowerCase())
     if (!img || !img.complete || img.naturalWidth === 0) {
       if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
@@ -3865,8 +3920,7 @@ function drawFeatures(ctx) {
   ctx.textBaseline = 'middle'
   const vp = visiblePixelBounds()
   for (const f of state.features) {
-    const px = (f.ax / 2) * TILE_PX
-    const py = (f.ay / 2) * TILE_PX
+    const { px, py } = featureAnchorWorld(f)
     const img = f.previewUrl ? state.featureImages.get(f.name.toLowerCase()) : null
     if (img && img.complete && img.naturalWidth > 0) {
       // GAF frames carry an OriginX/OriginY hotspot — the in-game
@@ -3907,6 +3961,36 @@ function featureAnchorOffset(f, img) {
     return { dx: f.originX, dy: f.originY }
   }
   return { dx: img.naturalWidth / 2, dy: img.naturalHeight }
+}
+
+// featureAnchorWorld returns the world-pixel position the feature is
+// anchored at.  TA stores f.ax / f.ay as the *top-left* attribute cell
+// of the feature's footprint, but the rendered anchor lives at the
+// CENTRE of the footprint, shifted UP by Height/2 to account for the
+// underlying terrain elevation — see Kinboat's classTAMap.cls:3340:
+//   FeatureTop = IndexY*16 - Height/2 - PositionY + FootprintY*8
+// Without the Height/2 term, TA's default ground (height ≈ 64) made
+// every feature render one tile too low.
+function featureAnchorWorld(f) {
+  const fw = f.footprintX || 1
+  const fh = f.footprintZ || 1
+  const px = f.ax * (TILE_PX / 2) + fw * (TILE_PX / 4)
+  const py = f.ay * (TILE_PX / 2) + fh * (TILE_PX / 4) - (featureGroundHeight(f) >> 1)
+  return { px, py }
+}
+
+// featureGroundHeight reads the height byte from the attribute grid at
+// the feature's anchor cell.  Heights live one byte per 16-px attr cell
+// in state.heights, sized state.tileW*2 × state.tileH*2.  Out-of-range
+// (e.g. orphaned features) returns 0 so the feature falls back to its
+// cell centre without any elevation kick.
+function featureGroundHeight(f) {
+  if (!state.heights || !state.tileW) return 0
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  if (f.ax < 0 || f.ay < 0 || f.ax >= aw || f.ay >= ah) return 0
+  const idx = f.ay * aw + f.ax
+  return state.heights[idx] | 0
 }
 
 function drawDropPreview(ctx) {
@@ -4398,8 +4482,9 @@ function drawTerrainClipboard(ctx) {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     for (const f of c.features) {
-      const px = (c.tx + f.ax / 2) * TILE_PX
-      const py = (c.ty + f.ay / 2) * TILE_PX
+      const local = featureAnchorWorld(f)
+      const px = c.tx * TILE_PX + local.px
+      const py = c.ty * TILE_PX + local.py
       const img = f.previewUrl ? state.featureImages.get(f.name.toLowerCase()) : null
       if (img && img.complete && img.naturalWidth > 0) {
         const { dx, dy } = featureAnchorOffset(f, img)
@@ -4533,8 +4618,7 @@ function drawSelectedFeatureOutline(ctx) {
   // Single-pick (Place Features) — yellow ring at the anchor.
   if (state.selectedFeature >= 0 && state.selectedFeature < state.features.length) {
     const f = state.features[state.selectedFeature]
-    const px = (f.ax / 2) * TILE_PX
-    const py = (f.ay / 2) * TILE_PX
+    const { px, py } = featureAnchorWorld(f)
     ctx.strokeStyle = '#ffcc00'
     ctx.lineWidth = 2
     ctx.beginPath()
@@ -4549,8 +4633,7 @@ function drawSelectedFeatureOutline(ctx) {
     for (const i of state.selectedFeatures) {
       if (i < 0 || i >= state.features.length) continue
       const f = state.features[i]
-      const px = (f.ax / 2) * TILE_PX
-      const py = (f.ay / 2) * TILE_PX
+      const { px, py } = featureAnchorWorld(f)
       ctx.beginPath()
       ctx.arc(px, py, 13, 0, Math.PI * 2)
       ctx.stroke()
@@ -4593,8 +4676,7 @@ function drawHighlightedFeatureOutlines(ctx) {
   ctx.setLineDash([4, 3])
   for (const idx of indices) {
     const f = state.features[idx]
-    const px = (f.ax / 2) * TILE_PX
-    const py = (f.ay / 2) * TILE_PX
+    const { px, py } = featureAnchorWorld(f)
     const r = featureRenderRect(f, px, py)
     if (r.x + r.w < vp.minX || r.x > vp.maxX || r.y + r.h < vp.minY || r.y > vp.maxY) continue
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
@@ -4878,8 +4960,9 @@ function renderMinimap() {
       ctx.fillStyle = '#f85149'
       for (const idx of indices) {
         const f = state.features[idx]
-        const px = ox + (f.ax / 2 / state.tileW) * dw
-        const py = oy + (f.ay / 2 / state.tileH) * dh
+        const a = featureAnchorWorld(f)
+        const px = ox + (a.px / (state.tileW * TILE_PX)) * dw
+        const py = oy + (a.py / (state.tileH * TILE_PX)) * dh
         ctx.beginPath()
         ctx.arc(px, py, 2.8, 0, Math.PI * 2)
         ctx.fill()
@@ -4887,7 +4970,41 @@ function renderMinimap() {
     }
   }
 
+  drawMinimapStartPositions(ctx, ox, oy, dw, dh)
+
   updateMinimapViewport(ox, oy, dw, dh)
+}
+
+// drawMinimapStartPositions overlays the active schema's start markers
+// onto the minimap as numbered gold circles.  Always rendered (no
+// hover gate) so the user can see at a glance where the players spawn
+// — the markers double as a sanity check that the schema lines up with
+// the terrain.
+function drawMinimapStartPositions(ctx, ox, oy, dw, dh) {
+  const schema = activeSchema?.()
+  if (!schema || !schema.startPositions || schema.startPositions.length === 0) return
+  const fontFamily = getComputedStyle(document.body).fontFamily
+  const mapW = state.tileW * TILE_PX
+  const mapH = state.tileH * TILE_PX
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (const sp of schema.startPositions) {
+    if (typeof sp.x !== 'number' || typeof sp.z !== 'number') continue
+    const px = ox + (sp.x / mapW) * dw
+    const py = oy + (sp.z / mapH) * dh
+    ctx.fillStyle = 'rgba(255, 200, 0, 0.95)'
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    ctx.arc(px, py, 7, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = '#1a1a1a'
+    ctx.font = `bold 9px ${fontFamily}`
+    ctx.fillText(String(sp.number || ''), px, py + 0.5)
+  }
+  ctx.restore()
 }
 
 // updateMinimapViewport draws a rectangle showing what portion of the map
