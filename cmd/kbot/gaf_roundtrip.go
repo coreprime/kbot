@@ -206,6 +206,17 @@ func testOneGAF(path string, palette *gaf.Palette, detailed bool) gafRoundtripRe
 	r.OrigSize = len(origData)
 	r.OrigHash = md5hex(origData)
 
+	// Zero-byte GAFs ship with some installs (Cavedog quirk — TA: Kingdoms'
+	// data.hpi carries an empty anims/zonlogo.gaf). They aren't valid GAFs,
+	// so report a clean pass: there's nothing to lose fidelity on.
+	if len(origData) == 0 {
+		r.EncodeOK = true
+		r.BuildOK = true
+		r.EncodeBytes = true
+		log("  %s\n    ✓ zero-byte GAF — skipping (no content to round-trip)\n", name)
+		return r
+	}
+
 	origSeqs, err := loadGAFSequences(origData)
 	if err != nil {
 		r.EncodeErr = "parse"
@@ -363,7 +374,14 @@ func dumpBuildRoundtrip(seqs []*gaf.Sequence, palette *gaf.Palette) error {
 
 		for fi, frame := range seq.Frames {
 			framePath := filepath.Join(seqDir, fmt.Sprintf("%d.png", fi))
-			if err := writeFrame(frame, palette, "png", framePath); err != nil {
+			// Use TransparencyModeNone on dump so every palette slot stays
+			// opaque in the PNG. The build's palettize fast-path remaps any
+			// pixel whose palette entry has alpha<0x8000 to the metadata TI
+			// — useful for display, but it destroys the index-level mapping
+			// needed for a faithful round-trip. With all entries opaque the
+			// build copies indices through verbatim.
+			if err := writeFrameWith(frame, palette, "png", framePath,
+				gaf.RenderOptions{Mode: gaf.TransparencyModeNone}); err != nil {
 				return fmt.Errorf("dump frame: %w", err)
 			}
 		}

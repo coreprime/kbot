@@ -74,6 +74,100 @@ type Frame struct {
 	Pixels            []byte // Palette indices
 }
 
+// TransparencyMode selects how a frame's transparency index is resolved at
+// render time. The zero value is TransparencyModeAuto, which preserves the
+// historical behavior callers got from Frame.TransparencyIndex.
+type TransparencyMode int
+
+const (
+	// TransparencyModeAuto uses EffectiveTransparencyIndex (corner-detect
+	// heuristic for TAK uncompressed frames, metadata otherwise).
+	TransparencyModeAuto TransparencyMode = iota
+	// TransparencyModeMetadata forces use of Frame.TransparencyIndex
+	// exactly as stored on disk, bypassing the heuristic.
+	TransparencyModeMetadata
+	// TransparencyModeNone disables transparency for the render — every
+	// palette entry stays opaque.
+	TransparencyModeNone
+	// TransparencyModeIndex uses a caller-supplied palette index.
+	TransparencyModeIndex
+)
+
+// RenderOptions controls per-render transparency choices. A zero-valued
+// RenderOptions resolves to TransparencyModeAuto.
+type RenderOptions struct {
+	Mode  TransparencyMode
+	Index uint8 // honored when Mode == TransparencyModeIndex
+}
+
+// resolveTransparency returns the palette index to make transparent and
+// whether transparency should be applied at all.
+func (f *Frame) resolveTransparency(opts RenderOptions) (uint8, bool) {
+	switch opts.Mode {
+	case TransparencyModeMetadata:
+		return f.TransparencyIndex, true
+	case TransparencyModeNone:
+		return 0, false
+	case TransparencyModeIndex:
+		return opts.Index, true
+	default:
+		return f.EffectiveTransparencyIndex(), true
+	}
+}
+
+// EffectiveTransparencyIndex returns the palette index that should be treated
+// as transparent when this frame is rendered.
+//
+// Most TA assets store an honest TransparencyIndex in the frame header — the
+// artist used that exact palette index for transparent pixels and the
+// renderer simply makes palette[TI] transparent. TA: Kingdoms texture-atlas
+// GAFs frequently carry a TransparencyIndex that doesn't match the actual
+// pixel value the artist used as the transparent fill (e.g. metadata claims
+// 9, the on-disk pixels are 5). In that case TA-style rendering shows the
+// background as an opaque dark teal rather than transparent.
+//
+// The heuristic:
+//
+//  1. If TransparencyIndex appears anywhere in the pixel data, trust it.
+//     This is the common case — the decompressor's "transparent run" opcode
+//     fills with TI, and TA assets where TI is correctly authored also have
+//     TI-valued pixels in the data.
+//
+//  2. Otherwise sample the four corners; if they all agree on a value, use
+//     that. This rescues TAK uncompressed frames where TI is bogus but the
+//     artist painted a uniform border (the canonical "background" pixels).
+//
+//  3. Otherwise fall back to TransparencyIndex.
+//
+// The on-disk TransparencyIndex value is never overwritten — round-trip
+// writers still see the original byte.
+func (f *Frame) EffectiveTransparencyIndex() uint8 {
+	if f == nil || len(f.Pixels) == 0 || f.Width == 0 || f.Height == 0 {
+		return f.TransparencyIndex
+	}
+	// Cheap scan: if metadata TI is present in the pixel data, prefer it.
+	for _, p := range f.Pixels {
+		if p == f.TransparencyIndex {
+			return f.TransparencyIndex
+		}
+	}
+	w := int(f.Width)
+	h := int(f.Height)
+	if w*h != len(f.Pixels) {
+		// Mismatched pixel buffer (corrupt frame) — fall back to metadata
+		// rather than indexing out of range.
+		return f.TransparencyIndex
+	}
+	tl := f.Pixels[0]
+	tr := f.Pixels[w-1]
+	bl := f.Pixels[(h-1)*w]
+	br := f.Pixels[h*w-1]
+	if tl == tr && tr == bl && bl == br {
+		return tl
+	}
+	return f.TransparencyIndex
+}
+
 // Reader reads GAF files
 type Reader struct {
 	file   io.ReadSeeker
@@ -367,8 +461,14 @@ func (r *Reader) readCompressed(width, height uint16, transparencyIndex uint8) (
 	return pixels, nil
 }
 
-// ToImage converts a frame to an image.Image using the TA palette
+// ToImage converts a frame to an image.Image using the TA palette and the
+// auto-resolved transparency index.
 func (f *Frame) ToImage(palette *Palette) *image.Paletted {
+	return f.ToImageWith(palette, RenderOptions{Mode: TransparencyModeAuto})
+}
+
+// ToImageWith renders a frame with explicit transparency handling.
+func (f *Frame) ToImageWith(palette *Palette, opts RenderOptions) *image.Paletted {
 	var pal color.Palette
 	if palette != nil {
 		pal = palette.ColorModel()
@@ -376,11 +476,15 @@ func (f *Frame) ToImage(palette *Palette) *image.Paletted {
 		pal = FallbackPalette().ColorModel()
 	}
 
+	transIdx, apply := f.resolveTransparency(opts)
+
 	// Set transparency in palette for GIF encoding
 	// Go's gif package detects transparent index by finding color.Transparent in palette
 	palCopy := make(color.Palette, len(pal))
 	copy(palCopy, pal)
-	palCopy[f.TransparencyIndex] = color.Transparent
+	if apply {
+		palCopy[transIdx] = color.Transparent
+	}
 	pal = palCopy
 
 	img := image.NewPaletted(
@@ -399,7 +503,7 @@ func (f *Frame) ToImage(palette *Palette) *image.Paletted {
 			copy(padded, f.Pixels)
 			// Fill rest with transparency index
 			for i := len(f.Pixels); i < expectedSize; i++ {
-				padded[i] = f.TransparencyIndex
+				padded[i] = transIdx
 			}
 			copy(img.Pix, padded)
 		} else {
@@ -413,8 +517,14 @@ func (f *Frame) ToImage(palette *Palette) *image.Paletted {
 	return img
 }
 
-// ToGIF converts a sequence to an animated GIF
+// ToGIF converts a sequence to an animated GIF using auto transparency.
 func (s *Sequence) ToGIF(palette *Palette) (*gif.GIF, error) {
+	return s.ToGIFWith(palette, RenderOptions{Mode: TransparencyModeAuto})
+}
+
+// ToGIFWith converts a sequence to an animated GIF using explicit transparency
+// options.
+func (s *Sequence) ToGIFWith(palette *Palette, opts RenderOptions) (*gif.GIF, error) {
 	if len(s.Frames) == 0 {
 		return nil, fmt.Errorf("no frames in sequence")
 	}
@@ -449,10 +559,12 @@ func (s *Sequence) ToGIF(palette *Palette) (*gif.GIF, error) {
 	canvasWidth := int(maxX - minX)
 	canvasHeight := int(maxY - minY)
 
-	// Get transparency index from first frame
+	// Resolve transparency once from the first frame so the GIF's global
+	// palette is built around what will actually render as transparent.
 	transparencyIndex := uint8(0)
+	applyTransparency := true
 	if len(s.Frames) > 0 && s.Frames[0] != nil {
-		transparencyIndex = s.Frames[0].TransparencyIndex
+		transparencyIndex, applyTransparency = s.Frames[0].resolveTransparency(opts)
 	}
 
 	if canvasWidth <= 0 || canvasHeight <= 0 {
@@ -470,7 +582,9 @@ func (s *Sequence) ToGIF(palette *Palette) (*gif.GIF, error) {
 	// Go's gif package detects transparent index by finding color.Transparent in palette
 	palCopy := make(color.Palette, len(pal))
 	copy(palCopy, pal)
-	palCopy[transparencyIndex] = color.Transparent
+	if applyTransparency {
+		palCopy[transparencyIndex] = color.Transparent
+	}
 	pal = palCopy
 
 	g := &gif.GIF{
@@ -503,8 +617,9 @@ func (s *Sequence) ToGIF(palette *Palette) (*gif.GIF, error) {
 			canvas.Pix[i] = transparencyIndex
 		}
 
-		// Get frame image
-		frameImg := frame.ToImage(palette)
+		// Get frame image (carry the same transparency options through so
+		// the per-frame palette matches the GIF's global palette).
+		frameImg := frame.ToImageWith(palette, opts)
 
 		// Position frame on canvas
 		// Frame's top-left is at (-OriginX, -OriginY) relative to hotspot
@@ -545,9 +660,14 @@ func (s *Sequence) ToGIF(palette *Palette) (*gif.GIF, error) {
 	return g, nil
 }
 
-// WriteGIF writes an animated GIF to the given writer
+// WriteGIF writes an animated GIF to the given writer using auto transparency.
 func (s *Sequence) WriteGIF(w io.Writer, palette *Palette) error {
-	g, err := s.ToGIF(palette)
+	return s.WriteGIFWith(w, palette, RenderOptions{Mode: TransparencyModeAuto})
+}
+
+// WriteGIFWith writes an animated GIF using explicit transparency options.
+func (s *Sequence) WriteGIFWith(w io.Writer, palette *Palette, opts RenderOptions) error {
+	g, err := s.ToGIFWith(palette, opts)
 	if err != nil {
 		return err
 	}

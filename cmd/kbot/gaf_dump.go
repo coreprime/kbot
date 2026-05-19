@@ -12,15 +12,15 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/internal/assets"
 	"github.com/coreprime/kbot/formats/gaf"
 )
 
 func newGAFDumpCommand() *cobra.Command {
 	var (
-		stream bool
-		target string
-		format string
+		stream      bool
+		target      string
+		format      string
+		palettePath string
 	)
 
 	cmd := &cobra.Command{
@@ -77,9 +77,9 @@ Examples:
 				return fmt.Errorf("failed to read sequences: %w", err)
 			}
 
-			palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+			palette, err := loadGAFRenderPalette(palettePath)
 			if err != nil {
-				return fmt.Errorf("failed to load palette: %w", err)
+				return err
 			}
 
 			totalFrames := 0
@@ -123,6 +123,8 @@ Examples:
 	cmd.Flags().BoolVar(&stream, "stream", false, "Read input from stdin")
 	cmd.Flags().StringVar(&target, "target", "", "Output directory (default: <input> without extension)")
 	cmd.Flags().StringVar(&format, "format", "gif", "Frame format: png or gif")
+	cmd.Flags().StringVar(&palettePath, "palette", "",
+		"Palette source: .pal file or .pcx with embedded palette (default: embedded TA palette)")
 
 	return cmd
 }
@@ -138,6 +140,13 @@ func safeName(name string) string {
 }
 
 func writeFrame(frame *gaf.Frame, palette *gaf.Palette, format, path string) error {
+	return writeFrameWith(frame, palette, format, path, gaf.RenderOptions{Mode: gaf.TransparencyModeAuto})
+}
+
+// writeFrameWith dumps a frame with caller-supplied transparency options.
+// Round-trip tests use this with TransparencyModeMetadata so PNG indices
+// stay reversible.
+func writeFrameWith(frame *gaf.Frame, palette *gaf.Palette, format, path string, opts gaf.RenderOptions) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -146,9 +155,9 @@ func writeFrame(frame *gaf.Frame, palette *gaf.Palette, format, path string) err
 
 	switch format {
 	case "png":
-		return frame.ToPNG(palette, f)
+		return frame.ToPNGWith(palette, opts, f)
 	case "gif":
-		img := frame.ToImage(palette)
+		img := frame.ToImageWith(palette, opts)
 		return gif.Encode(f, img, nil)
 	}
 	return fmt.Errorf("unsupported format: %s", format)

@@ -11,8 +11,13 @@ import (
 	"io"
 )
 
-// ToPNG converts a single frame to PNG format
+// ToPNG converts a single frame to PNG with auto transparency.
 func (f *Frame) ToPNG(palette *Palette, w io.Writer) error {
+	return f.ToPNGWith(palette, RenderOptions{Mode: TransparencyModeAuto}, w)
+}
+
+// ToPNGWith converts a single frame to PNG with explicit transparency options.
+func (f *Frame) ToPNGWith(palette *Palette, opts RenderOptions, w io.Writer) error {
 	// Build palette
 	var pal color.Palette
 	if palette != nil {
@@ -51,21 +56,24 @@ func (f *Frame) ToPNG(palette *Palette, w io.Writer) error {
 		return err
 	}
 
-	// Write tRNS chunk (transparency)
+	// Write tRNS chunk (transparency). resolveTransparency handles the TAK
+	// case where the on-disk metadata TI disagrees with the actual
+	// transparent pixel value (see formats/gaf/gaf.go for details). When
+	// the override disables transparency, every entry is fully opaque.
+	transIdx, apply := f.resolveTransparency(opts)
 	trns := make([]byte, len(pal))
 	for i := range trns {
-		if i == int(f.TransparencyIndex) {
-			trns[i] = 0 // Transparent
-		} else {
-			trns[i] = 255 // Opaque
-		}
+		trns[i] = 255 // Opaque by default
+	}
+	if apply {
+		trns[int(transIdx)] = 0
 	}
 	if err := writeChunk(w, "tRNS", trns); err != nil {
 		return err
 	}
 
 	// Encode image to get IDAT data
-	img := f.ToImage(palette)
+	img := f.ToImageWith(palette, opts)
 	pngBuf := &bytes.Buffer{}
 	if err := png.Encode(pngBuf, img); err != nil {
 		return err
@@ -84,16 +92,21 @@ func (f *Frame) ToPNG(palette *Palette, w io.Writer) error {
 	return writeChunk(w, "IEND", nil)
 }
 
-// ToAPNG converts a sequence to an animated PNG (APNG) format
-// ToAPNG converts a sequence to an animated PNG (APNG) format
+// ToAPNG converts a sequence to an animated PNG (APNG) using auto transparency.
 func (s *Sequence) ToAPNG(palette *Palette, w io.Writer) error {
+	return s.ToAPNGWith(palette, RenderOptions{Mode: TransparencyModeAuto}, w)
+}
+
+// ToAPNGWith converts a sequence to an animated PNG (APNG) with explicit
+// transparency options.
+func (s *Sequence) ToAPNGWith(palette *Palette, opts RenderOptions, w io.Writer) error {
 	if len(s.Frames) == 0 {
 		return fmt.Errorf("no frames in sequence")
 	}
 
-	// For single frame, just write PNG
+	// For single frame, just write PNG with the same options.
 	if len(s.Frames) == 1 {
-		return s.Frames[0].ToPNG(palette, w)
+		return s.Frames[0].ToPNGWith(palette, opts, w)
 	}
 
 	// Calculate canvas dimensions using same logic as GIF
@@ -124,10 +137,12 @@ func (s *Sequence) ToAPNG(palette *Palette, w io.Writer) error {
 	canvasWidth := int(maxX - minX)
 	canvasHeight := int(maxY - minY)
 
-	// Get transparency index from first frame
+	// Resolve transparency once from the first frame so the APNG palette
+	// is built around what will actually render as transparent.
 	transparencyIndex := uint8(0)
+	applyTransparency := true
 	if len(s.Frames) > 0 && s.Frames[0] != nil {
-		transparencyIndex = s.Frames[0].TransparencyIndex
+		transparencyIndex, applyTransparency = s.Frames[0].resolveTransparency(opts)
 	}
 
 	// Build palette
@@ -176,14 +191,14 @@ func (s *Sequence) ToAPNG(palette *Palette, w io.Writer) error {
 		return err
 	}
 
-	// Write tRNS chunk (transparency) - index 0 is fully transparent
+	// Write tRNS chunk (transparency). When the caller asked for "none",
+	// every entry stays opaque.
 	trns := make([]byte, len(pal))
 	for i := range trns {
-		if i == int(transparencyIndex) {
-			trns[i] = 0 // Index 0 is transparent
-		} else {
-			trns[i] = 255 // All others opaque
-		}
+		trns[i] = 255
+	}
+	if applyTransparency {
+		trns[int(transparencyIndex)] = 0
 	}
 	if err := writeChunk(w, "tRNS", trns); err != nil {
 		return err
@@ -212,8 +227,9 @@ func (s *Sequence) ToAPNG(palette *Palette, w io.Writer) error {
 			canvas.Pix[i] = transparencyIndex
 		}
 
-		// Copy frame pixels to canvas
-		frameImg := frame.ToImage(palette)
+		// Copy frame pixels to canvas (carry the same transparency options
+		// through so the per-frame palette matches the APNG global palette).
+		frameImg := frame.ToImageWith(palette, opts)
 
 		for y := 0; y < int(frame.Height); y++ {
 			for x := 0; x < int(frame.Width); x++ {
