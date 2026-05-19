@@ -12,15 +12,23 @@ import (
 	"strings"
 )
 
-// Entry represents a file or directory in the HPI archive
+// Entry represents a file or directory in the HPI archive.
+//
+// For v1 archives, Size is the file's decompressed size and CompType selects
+// the per-file compression scheme used by the multi-chunk file payload.
+//
+// For v2 archives (TA: Kingdoms), Size is the decompressed size and
+// CompressedSize is the on-disk SQSH chunk size; CompressedSize == 0 means the
+// payload is stored uncompressed.
 type Entry struct {
-	Name     string
-	IsDir    bool
-	Offset   uint32
-	Size     uint32
-	CompType uint8
-	Children []*Entry
-	Parent   *Entry
+	Name           string
+	IsDir          bool
+	Offset         uint32
+	Size           uint32
+	CompressedSize uint32
+	CompType       uint8
+	Children       []*Entry
+	Parent         *Entry
 }
 
 // FullPath returns the full path of this entry
@@ -78,6 +86,12 @@ type Reader struct {
 	header     *Header
 	root       *Entry
 	decryptKey uint8
+	version    uint32
+}
+
+// Version reports the on-disk HPI version (VersionV1 or VersionV2).
+func (r *Reader) Version() uint32 {
+	return r.version
 }
 
 // OpenReader opens an HPI file for reading
@@ -219,32 +233,64 @@ func (r *Reader) getCurrentPosition() int64 {
 	return pos
 }
 
-// readHeader reads the HPI header
+// readHeader reads the HPI header. Only the first 8 bytes (marker + version)
+// have the same meaning across v1 and v2; the rest of the v1 Header struct is
+// only valid when Version == VersionV1.
 func (r *Reader) readHeader() error {
-	header := &Header{}
-	if err := binary.Read(r.file, binary.LittleEndian, header); err != nil {
+	// Read marker + version up-front so we can dispatch on version.
+	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-
-	if header.Marker != HeaderMarker {
-		return fmt.Errorf("invalid HPI marker: 0x%X", header.Marker)
+	var marker, version uint32
+	if err := binary.Read(r.file, binary.LittleEndian, &marker); err != nil {
+		return err
+	}
+	if err := binary.Read(r.file, binary.LittleEndian, &version); err != nil {
+		return err
+	}
+	if marker != HeaderMarker {
+		return fmt.Errorf("invalid HPI marker: 0x%X", marker)
 	}
 
-	if header.Version != 0x00010000 {
-		return fmt.Errorf("unsupported HPI version: 0x%X", header.Version)
+	switch version {
+	case VersionV1:
+		// Re-read the full v1 header at offset 0.
+		if _, err := r.file.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		header := &Header{}
+		if err := binary.Read(r.file, binary.LittleEndian, header); err != nil {
+			return err
+		}
+		r.header = header
+		r.version = VersionV1
+		// Transform decrypt key as the v1 loader does.
+		headerKey := uint8(header.DecryptKey)
+		r.decryptKey = (headerKey << 2) | (headerKey >> 6)
+		return nil
+
+	case VersionV2:
+		// v2 has a different layout after the version word; record the marker
+		// and version so callers can introspect, leave v1-only fields zero.
+		r.header = &Header{Marker: marker, Version: version}
+		r.version = VersionV2
+		r.decryptKey = 0
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported HPI version: 0x%X", version)
 	}
-
-	r.header = header
-	
-	// Transform decrypt key (this is the critical fix!)
-	headerKey := uint8(header.DecryptKey)
-	r.decryptKey = (headerKey << 2) | (headerKey >> 6)
-
-	return nil
 }
 
-// readDirectory reads the directory structure
+// readDirectory reads the directory structure (dispatches on version).
 func (r *Reader) readDirectory() error {
+	if r.version == VersionV2 {
+		return r.readDirectoryV2()
+	}
+	return r.readDirectoryV1()
+}
+
+func (r *Reader) readDirectoryV1() error {
 	// Allocate buffer for full directory size
 	dirBuffer := make([]byte, r.header.DirectorySize)
 	
@@ -366,8 +412,11 @@ func (r *Reader) readNullTerminatedString(buffer []byte, offset int) (string, er
 	return string(buffer[offset:end]), nil
 }
 
-// extractFile extracts a file's data
+// extractFile extracts a file's data.
 func (r *Reader) extractFile(entry *Entry) ([]byte, error) {
+	if r.version == VersionV2 {
+		return r.extractFileV2(entry)
+	}
 	switch entry.CompType {
 	case CompressionNone:
 		return r.extractUncompressed(entry)

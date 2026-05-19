@@ -5,11 +5,11 @@ package hpi
 const (
 	// HeaderMarker is the magic number identifying HPI files
 	HeaderMarker = 0x49504148 // "HAPI" in little-endian
-	
+
 	// ChunkMarker is the magic number for compressed chunks
 	ChunkMarker = 0x48535153 // "SQSH" in little-endian
 
-	// HeaderSize is the size of the HPI header in bytes
+	// HeaderSize is the size of the HPI v1 header in bytes
 	HeaderSize = 20
 
 	// DirectoryEntrySize is the size of a directory entry
@@ -20,6 +20,23 @@ const (
 
 	// ChunkHeaderSize is the size of a chunk header
 	ChunkHeaderSize = 9
+
+	// SQSHHeaderSize is the on-disk size of a SQSH chunk header
+	// (uint32 marker + 3 uint8s + 3 uint32s = 19 bytes, packed).
+	SQSHHeaderSize = 19
+)
+
+// HPI archive versions.
+const (
+	VersionV1 uint32 = 0x00010000 // Total Annihilation
+	VersionV2 uint32 = 0x00020000 // TA: Kingdoms
+)
+
+// v2-specific structure sizes (each field is a 32-bit little-endian int).
+const (
+	headerV2Size = 24 // DirectoryBlock, DirectorySize, NameBlock, NameSize, Data, Last78
+	dirV2Size    = 20 // NamePtr, FirstSubDirectory, SubCount, FirstFile, FileCount
+	entryV2Size  = 24 // NamePtr, Start, DecompressedSize, CompressedSize, Date, Checksum
 )
 
 // Compression types
