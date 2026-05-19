@@ -487,3 +487,23 @@ func ConvertToGIFWithPalette(w io.Writer, r io.Reader, pal *gaf.Palette) error {
 func (r *Reader) HasEmbeddedPalette() bool {
 	return r.embedded
 }
+
+// EmbeddedPalette returns the 256-color palette embedded at the end of the PCX
+// file as a *gaf.Palette. Returns nil if the file does not carry an embedded
+// palette (PCX header signals the 0x0C marker before the trailing 768 bytes).
+//
+// TA: Kingdoms uses sidecar PCX files (often 1x1 px) purely as palette
+// containers next to .gaf files, so this is the canonical way to fish the
+// palette out without re-decoding the image data.
+func (r *Reader) EmbeddedPalette() *gaf.Palette {
+	if !r.embedded || len(r.rawData) < 768 {
+		return nil
+	}
+	src := r.rawData[len(r.rawData)-768:]
+	p := &gaf.Palette{}
+	for i := 0; i < 256; i++ {
+		p.Colors[i] = color.RGBA{R: src[i*3], G: src[i*3+1], B: src[i*3+2], A: 255}
+	}
+	p.Colors[0].A = 0
+	return p
+}
