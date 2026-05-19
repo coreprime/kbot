@@ -55,6 +55,8 @@ const state = {
   selectedFeatures: new Set(),   // multi-select indices (Picker mode)
   pickerRect: null,              // { x, y, w, h } during a Picker drag-select
   selectedStartPos: -1,          // index into active schema's startPositions
+  featureJustMoved: -1,          // feature index whose move just committed — next click clears the pick
+  startPosJustMoved: -1,         // same idea for start positions
   ota: null,                     // see defaultOTAState
   activeSchema: 0,               // index into state.ota.schemas
   showMinimap: true,             // minimap panel visibility (toggleable from View)
@@ -205,7 +207,60 @@ document.addEventListener('DOMContentLoaded', () => {
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
   startServerHeartbeat()
+  // ?initial_map=<name> skips the Welcome dialog and jumps straight
+  // into the named map.  Match is case-insensitive against either the
+  // file name or the OTA mission name so URL-friendly slugs like
+  // "Metal%20Heck" line up with however the catalogue indexes them.
+  maybeAutoOpenFromQuery()
 })
+
+async function maybeAutoOpenFromQuery() {
+  let target
+  try {
+    target = new URLSearchParams(window.location.search).get('initial_map')
+  } catch { return }
+  if (!target) return
+  const wanted = target.trim().toLowerCase()
+  if (!wanted) return
+  try {
+    // Poll until the server's map catalogue has finished preloading —
+    // the entry we're looking for may not be in the partial response
+    // delivered before /api/studio/maps flips loading=false.
+    let entries = []
+    for (let i = 0; i < 30; i++) {
+      const resp = await fetch('/api/studio/maps')
+      const data = await resp.json()
+      entries = data.maps || []
+      const match = pickMapByName(entries, wanted)
+      if (match) {
+        const loadResp = await fetch('/api/studio/load?path=' + encodeURIComponent(match.path))
+        if (!loadResp.ok) throw new Error(await loadResp.text() || `HTTP ${loadResp.status}`)
+        const loaded = await loadResp.json()
+        await openLoadedMap(loaded, match)
+        return
+      }
+      if (!data.loading) break
+      await new Promise(r => setTimeout(r, 250))
+    }
+    setStatus(`initial_map="${target}" not found in this kbot context.`)
+  } catch (err) {
+    setStatus(`Failed to auto-open ${target}: ${err.message || err}`)
+  }
+}
+
+function pickMapByName(entries, wanted) {
+  for (const m of entries) {
+    if ((m.name || '').toLowerCase() === wanted) return m
+    if ((m.missionName || '').toLowerCase() === wanted) return m
+  }
+  // Substring fallback so partial names like "metal heck" still match
+  // a fuller "Metal Heck (Free)" if the catalogue carries the suffix.
+  for (const m of entries) {
+    const hay = `${m.name || ''} ${m.missionName || ''}`.toLowerCase()
+    if (hay.includes(wanted)) return m
+  }
+  return null
+}
 
 // ── Server heartbeat ──────────────────────────────────────────────────────
 // Polls /api/studio/heartbeat every HEARTBEAT_INTERVAL_MS to detect when
@@ -1547,8 +1602,8 @@ function viewportCellCenter() {
   if (!wrap || !canvas) {
     return { tx: Math.floor(state.tileW / 2), ty: Math.floor(state.tileH / 2) }
   }
-  const cx = (wrap.scrollLeft + wrap.clientWidth / 2) / state.zoom
-  const cy = (wrap.scrollTop + wrap.clientHeight / 2) / state.zoom
+  const cx = (wrap.scrollLeft - overscrollPadding.x + wrap.clientWidth / 2) / state.zoom
+  const cy = (wrap.scrollTop - overscrollPadding.y + wrap.clientHeight / 2) / state.zoom
   return {
     tx: clamp(Math.floor(cx / TILE_PX), 0, state.tileW - 1),
     ty: clamp(Math.floor(cy / TILE_PX), 0, state.tileH - 1),
@@ -1825,10 +1880,19 @@ function wireCanvas() {
     glCanvas.style.width = canvas.style.width
     glCanvas.style.height = canvas.style.height
   }
-  const stack = $('#canvas-stack')
-  if (stack) {
-    stack.style.width = canvas.style.width
-    stack.style.height = canvas.style.height
+  applyOverscrollPadding()
+  // Recompute padding whenever the scroll viewport changes size so the
+  // half-viewport overscroll stays accurate after window resizes.
+  if (typeof ResizeObserver !== 'undefined') {
+    const wrap = $('#canvas-scroll')
+    if (wrap) {
+      const ro = new ResizeObserver(() => {
+        applyOverscrollPadding()
+        scheduleRenderCanvas()
+        scheduleMinimapRender()
+      })
+      ro.observe(wrap)
+    }
   }
 
   canvas.addEventListener('mousedown', (e) => onCanvasMouseDown(e))
@@ -1938,10 +2002,10 @@ function wireCanvas() {
     } else if (wasFeature && state.selected?.type === 'feature') {
       // Features remain a one-shot drop — they have no anchored state
       // and the user can re-drag them in Place Features mode after.
-      const { tx, ty } = pickCell(e)
-      if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
+      const { ax, ay } = pickAttrCell(e)
+      if (ax >= 0 && ax < state.tileW * 2 && ay >= 0 && ay < state.tileH * 2) {
         beginTransaction()
-        placeFeature(tx, ty)
+        placeFeature(ax, ay)
         commitTransaction('Place feature')
         paintedDuringStroke = true
       }
@@ -1972,6 +2036,18 @@ function pickCell(e) {
   const x = (e.clientX - rect.left) / rect.width * state.tileW
   const y = (e.clientY - rect.top) / rect.height * state.tileH
   return { tx: Math.floor(x), ty: Math.floor(y) }
+}
+
+// pickAttrCell returns the (ax, ay) attribute cell under the cursor.
+// The attribute grid is 16-px (half a tile), so features placed via this
+// picker can snap to any half-tile position instead of every-tile-centre
+// like the old placement path.
+function pickAttrCell(e) {
+  const canvas = $('#canvas')
+  const rect = canvas.getBoundingClientRect()
+  const x = (e.clientX - rect.left) / rect.width * state.tileW * 2
+  const y = (e.clientY - rect.top) / rect.height * state.tileH * 2
+  return { ax: Math.floor(x), ay: Math.floor(y) }
 }
 
 function updateHoverLabel(e) {
@@ -2200,7 +2276,9 @@ function tryAutoSwitchAt(e) {
         featureDragging = true
         beginTransaction()
         const f = state.features[fhit]
-        featureDragOffset = { ax: f.ax - tx * 2, ay: f.ay - ty * 2 }
+        const cur = pickAttrCell(e)
+        featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
+        state.featureJustMoved = -1
         renderCanvas()
         setStatus(`Picked ${f.name} — drag to reposition, Delete to remove.`)
         return true
@@ -2769,19 +2847,30 @@ function onFeatureMouseDown(e) {
   // Hit-test by attribute cell: a feature occupies (ax/2, ay/2) on the tile grid.
   const hit = findFeatureAt(tx, ty)
   if (hit >= 0) {
+    // Treat a click on the just-moved selection as "I'm done with that
+    // operation" and clear the selection instead of re-grabbing it.
+    if (state.featureJustMoved === hit) {
+      state.featureJustMoved = -1
+      state.selectedFeature = -1
+      renderCanvas()
+      return
+    }
     state.selectedFeature = hit
     featureDragging = true
     beginTransaction()
     const f = state.features[hit]
-    featureDragOffset = { ax: f.ax - tx * 2, ay: f.ay - ty * 2 }
+    const cur = pickAttrCell(e)
+    featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
+    state.featureJustMoved = -1
     renderCanvas()
     return
   }
   // Empty space + a feature in the drawer → drop a copy here.  This is
   // how the user places multiple features without leaving the mode.
   if (state.selected?.type === 'feature') {
+    const { ax, ay } = pickAttrCell(e)
     beginTransaction()
-    placeFeature(tx, ty)
+    placeFeature(ax, ay)
     commitTransaction('Place feature')
     return
   }
@@ -2792,10 +2881,14 @@ function onFeatureMouseDown(e) {
 
 function onFeatureMouseMove(e) {
   if (!featureDragging || state.selectedFeature < 0) return
-  const { tx, ty } = pickCell(e)
+  const { ax, ay } = pickAttrCell(e)
   const f = state.features[state.selectedFeature]
-  f.ax = clamp(tx * 2 + (featureDragOffset?.ax || 1), 0, state.tileW * 2 - 1)
-  f.ay = clamp(ty * 2 + (featureDragOffset?.ay || 1), 0, state.tileH * 2 - 1)
+  f.ax = clamp(ax + (featureDragOffset?.ax || 0), 0, state.tileW * 2 - 1)
+  f.ay = clamp(ay + (featureDragOffset?.ay || 0), 0, state.tileH * 2 - 1)
+  bumpContentVersion()
+  // Remember that this selection was just moved — a subsequent click on
+  // the same feature clears the selection (treats the click as "done").
+  state.featureJustMoved = state.selectedFeature
   renderCanvas()
 }
 
@@ -2891,11 +2984,20 @@ function onStartPosMouseDown(e) {
   const cy = (e.clientY - rect.top) / rect.height * canvas.height
   const hit = findStartPositionAt(schema, cx, cy)
   if (hit >= 0) {
+    // Re-clicking the just-moved start position clears the selection
+    // (treat as confirming the move is done).
+    if (state.startPosJustMoved === hit) {
+      state.startPosJustMoved = -1
+      state.selectedStartPos = -1
+      renderCanvas()
+      return
+    }
     state.selectedStartPos = hit
     const sp = schema.startPositions[hit]
     const { px, py } = gameToCanvas(sp.x, sp.z)
     startPosDragOffset = { dx: px - cx, dy: py - cy }
     startPosDragging = true
+    state.startPosJustMoved = -1
     beginTransaction()
     renderCanvas()
     return
@@ -2936,6 +3038,7 @@ function onStartPosMouseMove(e) {
   if (sp) {
     sp.x = clamp(gx, 0, state.tileW * 32)
     sp.z = clamp(gz, 0, state.tileH * 32)
+    state.startPosJustMoved = state.selectedStartPos
     renderCanvas()
   }
 }
@@ -3124,7 +3227,8 @@ function handlePaint(e) {
     stampSection(tx, ty)
     paintedDuringStroke = true
   } else if (state.selected.type === 'feature') {
-    placeFeature(tx, ty)
+    const { ax, ay } = pickAttrCell(e)
+    placeFeature(ax, ay)
     paintedDuringStroke = true
   }
 }
@@ -3186,13 +3290,12 @@ function stampSection(tx, ty) {
   stampSectionWithRotation(tx, ty, sel.path, sel.tileW, sel.tileH, rotation, !!sel.flipH, !!sel.flipV)
 }
 
-function placeFeature(tx, ty) {
+function placeFeature(ax, ay) {
   const sel = state.selected
-  // Features sit on the 16px attribute grid — anchor to the centre of the
-  // clicked tile so they snap cleanly.
-  const ax = tx * 2 + 1
-  const ay = ty * 2 + 1
-  // Replace any existing feature in this attr cell.
+  // Features sit on the 16-px attribute grid.  Earlier the placement
+  // snapped to tile centres (`tx*2+1`) which made the cursor feel coarse
+  // and disagreed with what TA stores in the TNT.  Now the caller passes
+  // the actual attribute cell under the cursor.
   state.features = state.features.filter((f) => !(f.ax === ax && f.ay === ay))
   state.features.push({
     name: sel.name,
@@ -3204,6 +3307,7 @@ function placeFeature(tx, ty) {
     originX: sel.originX || 0,
     originY: sel.originY || 0,
   })
+  bumpContentVersion()
   renderCanvas()
 }
 
@@ -3236,14 +3340,10 @@ function renderCanvas() {
     canvas.style.height = wantStyleH
     if (glCanvas) glCanvas.style.height = wantStyleH
   }
-  // The wrapper owns the normal-flow size for the scroll container; both
-  // canvases are absolute inside it, so the wrapper has to match their
-  // CSS-scaled pixel dimensions for the scrollbars to do the right thing.
-  const stack = $('#canvas-stack')
-  if (stack) {
-    if (stack.style.width !== wantStyleW) stack.style.width = wantStyleW
-    if (stack.style.height !== wantStyleH) stack.style.height = wantStyleH
-  }
+  // .canvas-stack is the normal-flow scroll content; we pad it with
+  // half a viewport on every side so the user can pan the map past
+  // any edge until that edge sits at the centre of the viewport.
+  applyOverscrollPadding()
   const ctx = canvas.getContext('2d')
   ctx.imageSmoothingEnabled = false
 
@@ -3498,8 +3598,16 @@ function glRenderTilesAndFeatures(vp) {
   }
 
   // ── Features ─────────────────────────────────────────────────
+  // Painted in Y-order (anchor py ascending) so a sprite further south
+  // always overlays sprites to its north.  Without this an unsorted
+  // batch would let an earlier-in-array tree paint on top of a tree
+  // anchored visually below it.  Same-texture features are batched in
+  // contiguous runs so the typical "cluster of identical trees" still
+  // hits the GPU as one draw call.
   if (!state.showFeatures || state.viewMode === 'tiles') return
-  const featGroups = new Map()
+  const pxMinX = vp.minTX * TILE_PX, pxMaxX = (vp.maxTX + 1) * TILE_PX
+  const pxMinY = vp.minTY * TILE_PX, pxMaxY = (vp.maxTY + 1) * TILE_PX
+  const visible = []
   for (const f of state.features) {
     if (!f.previewUrl) continue
     const px = (f.ax / 2) * TILE_PX
@@ -3512,25 +3620,29 @@ function glRenderTilesAndFeatures(vp) {
     }
     const { dx, dy } = featureAnchorOffset(f, img)
     const x = px - dx, y = py - dy
-    // Cull off-viewport feature sprites — convert tile bounds to
-    // pixel-space inline so we don't need a second helper.
-    const pxMinX = vp.minTX * TILE_PX, pxMaxX = (vp.maxTX + 1) * TILE_PX
-    const pxMinY = vp.minTY * TILE_PX, pxMaxY = (vp.maxTY + 1) * TILE_PX
     if (x + img.naturalWidth < pxMinX || x > pxMaxX || y + img.naturalHeight < pxMinY || y > pxMaxY) continue
-    const key = (f.name || '').toLowerCase()
-    let list = featGroups.get(key)
-    if (!list) { list = { img, items: [] }; featGroups.set(key, list) }
-    list.items.push({ x, y })
+    visible.push({ key: (f.name || '').toLowerCase(), x, y, py, img })
   }
-  for (const [key, group] of featGroups) {
-    const t = glTextureFor('feature:' + key, group.img)
+  // Sort by anchor py (tie-break on px so order is deterministic).
+  visible.sort((a, b) => a.py === b.py ? a.x - b.x : a.py - b.py)
+  // Emit batches of same-key contiguous runs.
+  let i = 0
+  while (i < visible.length) {
+    const key = visible[i].key
+    const img = visible[i].img
+    const run = []
+    while (i < visible.length && visible[i].key === key) {
+      run.push({ x: visible[i].x, y: visible[i].y })
+      i++
+    }
+    const t = glTextureFor('feature:' + key, img)
     if (!t) continue
-    const verts = buildFeatureBatch(group.items, group.img.naturalWidth, group.img.naturalHeight)
+    const verts = buildFeatureBatch(run, img.naturalWidth, img.naturalHeight)
     ctx.bufferData(ctx.ARRAY_BUFFER, verts, ctx.DYNAMIC_DRAW)
     ctx.activeTexture(ctx.TEXTURE0)
     ctx.bindTexture(ctx.TEXTURE_2D, t.tex)
     ctx.uniform1i(gl.texLoc, 0)
-    ctx.drawArrays(ctx.TRIANGLES, 0, group.items.length * 6)
+    ctx.drawArrays(ctx.TRIANGLES, 0, run.length * 6)
   }
 }
 
@@ -3647,15 +3759,15 @@ function drawTiles(ctx) {
 function visibleTileBounds() {
   const wrap = $('#canvas-scroll')
   if (!wrap) return { minTX: 0, minTY: 0, maxTX: state.tileW - 1, maxTY: state.tileH - 1 }
-  // The canvas's CSS size is scaled by state.zoom; convert scroll
-  // pixels back to canvas pixels by dividing.
+  // The canvas sits at (overscrollPadding.x, overscrollPadding.y) inside
+  // .canvas-stack, so subtract that offset before converting scroll
+  // pixels to canvas pixels.  Negative values just mean we're looking
+  // at the whitespace beyond a map edge — they clamp away below.
   const z = state.zoom || 1
-  const left = wrap.scrollLeft / z
-  const top = wrap.scrollTop / z
-  const right = (wrap.scrollLeft + wrap.clientWidth) / z
-  const bottom = (wrap.scrollTop + wrap.clientHeight) / z
-  // One-tile padding so a feature whose anchor lands just outside the
-  // viewport still gets its (taller) sprite drawn correctly.
+  const left = (wrap.scrollLeft - overscrollPadding.x) / z
+  const top = (wrap.scrollTop - overscrollPadding.y) / z
+  const right = (wrap.scrollLeft - overscrollPadding.x + wrap.clientWidth) / z
+  const bottom = (wrap.scrollTop - overscrollPadding.y + wrap.clientHeight) / z
   const minTX = clamp(Math.floor(left / TILE_PX) - 1, 0, state.tileW - 1)
   const minTY = clamp(Math.floor(top / TILE_PX) - 1, 0, state.tileH - 1)
   const maxTX = clamp(Math.ceil(right / TILE_PX), 0, state.tileW - 1)
@@ -4792,8 +4904,12 @@ function updateMinimapViewport(ox, oy, dw, dh) {
     return
   }
   vp.style.display = 'block'
-  const fracL = wrap.scrollLeft / fullW
-  const fracT = wrap.scrollTop / fullH
+  // Scroll position is in stack-pixels; the canvas starts at the padding
+  // offset, so subtract that and clamp to the map for the minimap rect.
+  const sL = clamp(wrap.scrollLeft - overscrollPadding.x, 0, fullW)
+  const sT = clamp(wrap.scrollTop - overscrollPadding.y, 0, fullH)
+  const fracL = sL / fullW
+  const fracT = sT / fullH
   const fracW = Math.min(1, wrap.clientWidth / fullW)
   const fracH = Math.min(1, wrap.clientHeight / fullH)
 
@@ -4823,8 +4939,10 @@ function wireMinimap() {
     const canvas = $('#canvas')
     const fullW = canvas.width * state.zoom
     const fullH = canvas.height * state.zoom
-    wrap.scrollLeft = cx * fullW - wrap.clientWidth / 2
-    wrap.scrollTop = cy * fullH - wrap.clientHeight / 2
+    // Convert minimap fraction → map-pixel → stack-pixel by adding the
+    // overscroll padding (the canvas's offset within .canvas-stack).
+    wrap.scrollLeft = cx * fullW - wrap.clientWidth / 2 + overscrollPadding.x
+    wrap.scrollTop = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
   }
   mini.addEventListener('mousedown', (e) => { panning = true; panTo(e) })
   window.addEventListener('mousemove', (e) => { if (panning) panTo(e) })
@@ -5104,13 +5222,54 @@ function setZoom(z) {
     glCanvas.style.width = w
     glCanvas.style.height = h
   }
-  const stack = $('#canvas-stack')
-  if (stack) {
-    stack.style.width = w
-    stack.style.height = h
-  }
+  applyOverscrollPadding()
   scheduleRenderCanvas()
   scheduleMinimapRender()
+}
+
+// overscrollPadding tracks the half-viewport padding currently applied
+// to .canvas-stack so visibleTileBounds and the minimap viewport
+// rectangle can convert scroll position back to canvas-pixel space.
+const overscrollPadding = { x: 0, y: 0 }
+
+// applyOverscrollPadding resizes .canvas-stack to (map + viewport) and
+// positions both canvases at the centre of that padded box, so the
+// scroll container can pan the map past any edge until the centre of
+// the viewport reaches a map corner.  Scroll position is adjusted by
+// the padding delta so the rendered scene doesn't visibly jump when
+// padding grows or shrinks (window resize, zoom change).
+function applyOverscrollPadding() {
+  const wrap = $('#canvas-scroll')
+  const stack = $('#canvas-stack')
+  const canvas = $('#canvas')
+  const glCanvas = $('#canvas-gl')
+  if (!wrap || !stack || !canvas) return
+  const padX = Math.max(0, Math.floor(wrap.clientWidth / 2))
+  const padY = Math.max(0, Math.floor(wrap.clientHeight / 2))
+  const canvasW = parseFloat(canvas.style.width) || canvas.width
+  const canvasH = parseFloat(canvas.style.height) || canvas.height
+  const stackW = canvasW + padX * 2
+  const stackH = canvasH + padY * 2
+  const stackWS = stackW + 'px'
+  const stackHS = stackH + 'px'
+  if (stack.style.width !== stackWS) stack.style.width = stackWS
+  if (stack.style.height !== stackHS) stack.style.height = stackHS
+  const padXS = padX + 'px'
+  const padYS = padY + 'px'
+  if (canvas.style.left !== padXS) canvas.style.left = padXS
+  if (canvas.style.top !== padYS) canvas.style.top = padYS
+  if (glCanvas) {
+    if (glCanvas.style.left !== padXS) glCanvas.style.left = padXS
+    if (glCanvas.style.top !== padYS) glCanvas.style.top = padYS
+  }
+  if (overscrollPadding.x !== padX) {
+    wrap.scrollLeft += padX - overscrollPadding.x
+    overscrollPadding.x = padX
+  }
+  if (overscrollPadding.y !== padY) {
+    wrap.scrollTop += padY - overscrollPadding.y
+    overscrollPadding.y = padY
+  }
 }
 
 // zoomAtPointer scales around a screen-space point (typically the cursor
@@ -5141,8 +5300,11 @@ function zoomAtPointer(clientX, clientY, deltaY) {
   //   newCanvasLeft = scrollLeft + (canvas.offsetLeft relative to content)
   // Easiest path: compute the new desired scroll directly.
   const wrapRect = wrap.getBoundingClientRect()
-  wrap.scrollLeft = mapX * newZoom - (clientX - wrapRect.left)
-  wrap.scrollTop = mapY * newZoom - (clientY - wrapRect.top)
+  // The canvas sits at overscrollPadding inside .canvas-stack, so the
+  // scroll position that puts map pixel (mapX, mapY) under the cursor
+  // is offset by the same padding.
+  wrap.scrollLeft = mapX * newZoom - (clientX - wrapRect.left) + overscrollPadding.x
+  wrap.scrollTop = mapY * newZoom - (clientY - wrapRect.top) + overscrollPadding.y
 }
 
 function fitZoom() {
