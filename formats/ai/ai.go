@@ -53,23 +53,18 @@ type AIFile struct {
 	Plans []DifficultyPlan
 }
 
-// IsAIFile checks if the content looks like a TA AI file
+// IsAIFile checks if the content looks like a TA / TA: Kingdoms AI profile
+// file. TA's own AI files always carry per-difficulty `plan <name>` blocks;
+// TA: Kingdoms profiles often skip them and list weights/limits directly, so a
+// single weight or limit directive is enough to identify the file.
 func IsAIFile(content []byte) bool {
-	text := string(content)
-	textLower := strings.ToLower(text)
-	
-	// Check for Weight or Limit directives (case-insensitive)
-	if !strings.Contains(textLower, "weight ") && !strings.Contains(textLower, "limit ") {
-		return false
-	}
-	
-	// Should have "plan" directive
-	if !strings.Contains(textLower, "plan ") {
-		return false
-	}
-	
-	return true
+	textLower := strings.ToLower(string(content))
+	return strings.Contains(textLower, "weight ") || strings.Contains(textLower, "limit ")
 }
+
+// defaultPlanName is the synthetic plan used when an AI file has weights and
+// limits but no explicit `plan` directive (the TA: Kingdoms convention).
+const defaultPlanName = "default"
 
 // Parse parses an AI file from bytes
 func Parse(content []byte) (*AIFile, error) {
@@ -106,10 +101,16 @@ func Parse(content []byte) (*AIFile, error) {
 		}
 		
 		if currentPlan == nil {
-			// No plan started yet, skip
-			continue
+			// No `plan` directive yet — TA: Kingdoms profiles are typically
+			// laid out this way. Open a synthetic plan so the weights/limits
+			// that follow have somewhere to land.
+			currentPlan = &DifficultyPlan{
+				Name:    defaultPlanName,
+				Weights: []UnitWeight{},
+				Limits:  []UnitLimit{},
+			}
 		}
-		
+
 		// Parse "Weight <unit> <value>" directive
 		if strings.HasPrefix(strings.ToLower(line), "weight ") {
 			parts := strings.Fields(line[7:])

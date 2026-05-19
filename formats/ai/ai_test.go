@@ -18,6 +18,14 @@ Limit ARMCOM 1`,
 			expected: true,
 		},
 		{
+			name: "TAK-style AI file (no plan, weights only)",
+			content: `// Kingdoms Default AI Profile
+weight araarch 5
+weight arabuild 10
+limit araarch 16`,
+			expected: true,
+		},
+		{
 			name:     "not an AI file",
 			content:  "Just some text",
 			expected: false,
@@ -101,5 +109,36 @@ Limit ARMPW 20`
 	}
 	if len(ai.Plans[1].Limits) != 3 {
 		t.Errorf("Hard plan limits count = %d, want 3", len(ai.Plans[1].Limits))
+	}
+}
+
+// TestParseNoPlan covers the TA: Kingdoms style where the file lists weights
+// and limits without any `plan` directive. The parser should bucket them into
+// a single synthetic "default" plan instead of silently dropping every line.
+func TestParseNoPlan(t *testing.T) {
+	content := `// Kingdoms Default AI Profile
+weight araarch 5
+weight arabuild 10
+limit araarch 16`
+
+	f, err := Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(f.Plans) != 1 {
+		t.Fatalf("plans = %d, want 1", len(f.Plans))
+	}
+	p := f.Plans[0]
+	if p.Name != defaultPlanName {
+		t.Errorf("plan name = %q, want %q", p.Name, defaultPlanName)
+	}
+	if len(p.Weights) != 2 {
+		t.Errorf("weights = %d, want 2", len(p.Weights))
+	}
+	if len(p.Limits) != 1 {
+		t.Errorf("limits = %d, want 1", len(p.Limits))
+	}
+	if p.Weights[0].UnitName != "ARAARCH" || p.Weights[0].Weight != 5 {
+		t.Errorf("first weight = %+v, want ARAARCH/5", p.Weights[0])
 	}
 }
