@@ -1,0 +1,54 @@
+# Reference — TA: Kingdoms Unit IDs
+
+Every unit definition shipped in *Total Annihilation: Kingdoms* (base
+game + *Iron Plague* expansion), extracted directly from the
+flattened install's `units/*.fbi`. Counts as of the GoG release:
+**{{.TotalUnits}} units total** across {{len .Sides}} side(s).
+
+Each row's `Code` is the unit's `unitname=` (uppercased — the lookup
+key the rest of the game's data refers to). TA:K uses 3-letter side
+prefixes: ARA = Aramon, TAR = Taros, VER = Veruna, ZON = Zhon,
+CRE = Creon (Iron Plague), plus MON/LIF/NPC for monsters, wildlife,
+and campaign NPCs.
+
+Cost is in **mogrium** (TA:K's single combined resource). Weapons
+are listed by their inline `[WEAPONn]` `name=` field, comma-separated.
+Each row's portrait is the 64×48 JPG from `anims/buildpic/<unitname>.jpg`
+in the install, copied verbatim into [`img/tak-units/`](img/tak-units/).
+
+See the kbot docs:
+- [FBI field dictionary](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md#appendix-a--fbi-field-dictionary)
+  (TA-focused but the parser is shared)
+- [TA: Kingdoms research notes](https://github.com/coreprime/kbot/blob/main/docs/formats/takmap.md)
+
+> [!TIP]
+> **To regenerate this page**, run `kbot document --game takingdoms`
+> (or `task document-tak`) from a kbot checkout.
+
+## Contents
+
+{{range .Sides -}}
+- [{{.Label}}](#{{.SideAnchor}})
+{{- range .Groups}}
+  - [{{.Key.Label}}](#{{.Anchor}})
+{{- end}}
+{{end}}
+---
+{{range .Sides}}
+## {{.Side}} — {{.Label}}
+
+**{{.Label}}** — {{.Total}} units across {{len .Groups}} categories.
+
+{{range .Groups}}
+### {{.Heading}}
+
+{{len .Units}} unit{{plural (len .Units) "" "s"}}.
+
+| | Code | Name | Description | TEDClass | Cost (mogrium) | HP | Weapons |
+|:-:|------|------|-------------|----------|---------------:|---:|---------|
+{{range .Units -}}
+| {{pic . 128}} | `{{.UnitName}}` | {{truncate (escapePipe (defaultDash .Name)) 30}} | {{truncate (escapePipe (defaultDash .Description)) 60}} | {{escapePipe (defaultDash .TEDClass)}} | {{defaultDash .BuildCost}} | {{defaultDash .MaxDamage}} | {{weaponCell .}} |
+{{end}}
+{{end -}}
+---
+{{end}}

@@ -1,0 +1,48 @@
+# Reference — TA Unit IDs
+
+Every unit definition shipped in Total Annihilation v3.1c (base game +
+Core Contingency + Battle Tactics + the rev 3.1 patch), extracted
+directly from the flattened install's `units/*.fbi`. Counts as of
+the GoG release: **{{.TotalUnits}} units total** ({{range $i, $s := .Sides}}{{if $i}} + {{end}}{{$s.Total}} {{$s.Side}}{{end}}).
+
+Each row's portrait is the unit's `unitpics/<Objectname>.pcx`,
+converted to PNG and stored under [`img/ta-units/`](img/ta-units/).
+`Code` is the unit's `UnitName=` (the lookup key everything else
+uses to refer to the unit). See the
+[FBI field dictionary](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md#appendix-a--fbi-field-dictionary)
+in the kbot docs for what each FBI field controls. `Weapons`
+columns are the literal `Weapon1/2/3=` values — cross-reference
+with [TA weapons](ta-weapons.md).
+
+> [!TIP]
+> **To regenerate this page**, run `kbot document` (or `task document`)
+> from a kbot checkout. Source is the flattened TA install at the path
+> your kbot context points at.
+
+## Contents
+
+{{range .Sides -}}
+- [{{.Label}}](#{{.SideAnchor}})
+{{- range .Groups}}
+  - [{{.Key.Label}}](#{{.Anchor}})
+{{- end}}
+{{end}}
+---
+{{range .Sides}}
+## {{.Side}}
+
+**{{.Label}}** — {{.Total}} units across {{len .Groups}} categories.
+
+{{range .Groups}}
+### {{.Heading}}
+
+{{len .Units}} unit{{plural (len .Units) "" "s"}}.
+
+| | Code | Name | Description | TED | Cost (M/E) | HP | Weapons |
+|:-:|------|------|-------------|-----|-----------:|---:|---------|
+{{range .Units -}}
+| {{pic . 64}} | `{{.UnitName}}` | {{truncate (escapePipe (defaultDash .Name)) 30}} | {{truncate (escapePipe (defaultDash .Description)) 60}} | {{escapePipe (defaultDash .TEDClass)}} | {{defaultDash .BuildMetal}} / {{defaultDash .BuildEnergy}} | {{defaultDash .MaxDamage}} | {{weaponCell .}} |
+{{end}}
+{{end -}}
+---
+{{end}}

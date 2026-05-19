@@ -1,0 +1,146 @@
+{{- /*
+  Build-tree page.  Lays out each builder's buildables in TA's true
+  2-column × 3-row per-page grid, followed by a visual reverse index.
+*/ -}}
+# Reference — TA Build Tree
+
+How units actually get into the game: which constructor builds
+what, **laid out in the exact 2-column × 3-row grid TA shows**
+in the in-game build menu. Derived from
+`gamedata/sidedata.tdf`'s `[CANBUILD]` table plus every
+`download/*.tdf` `[MENUENTRY]` registration, merged the way the
+engine merges them at boot.
+
+- **{{.TotalBuilders}} builders** across {{len .Sides}} sides.
+- **{{.TotalPairs}} `(builder, unit)` pairs total**, of which
+  **{{.DownloadPairs}}** come from `download/*.tdf` (marked ⬇️).
+
+Each builder block below shows that constructor's build menu
+**one page at a time**, with each page laid out as a 2-column
+× 3-row table. Slots are numbered left-to-right, top-to-bottom
+(`button 0` = top-left, `button 5` = bottom-right). Empty slots
+on a page render as `·`.
+
+- See [TA unit IDs](ta-units.md) for full per-unit stats.
+- See [TDF: `[MENUENTRY]`](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md#menuentry--build-menu-extension)
+  in the kbot docs for the format that ships the ⬇️ additions.
+- See [Gamedata: `sidedata.tdf`](https://github.com/coreprime/kbot/blob/main/docs/formats/gamedata.md#canbuild-build-menus)
+  in the kbot docs for the static `[CANBUILD]` table.
+
+> [!TIP]
+> **Hover any thumbnail** for its `UnitName`. The portraits are
+> the same files used by [ta-units.md](ta-units.md).
+
+## Contents
+
+{{range .Sides -}}
+- [{{.Label}}](#{{.SideAnchor}})
+{{- range .Tiers}}
+  - [{{.Key.Label}}](#{{.Anchor}})
+{{- end}}
+{{end}}
+---
+{{range .Sides}}
+## {{.Side}}
+
+{{.Total}} builders across {{len .Tiers}} tiers.
+
+{{range .Tiers}}
+### {{.Heading}}
+
+{{range .Builders -}}
+{{template "builder" (dict "Builder" . "Units" $.UnitByKey)}}
+{{end -}}
+{{end -}}
+---
+{{end}}
+{{/* ----- Reverse index ----- */}}
+## Reverse index: who can build each unit
+
+Sorted alphabetically. For each buildable unit, the constructors
+that can produce it — each builder shown with its own portrait,
+code, and display name. Useful when you're staring at a tech
+requirement and trying to remember which factory you need to
+queue first.
+
+{{range .Reverse}}
+### {{.Label}} buildables — {{.Total}} unit{{plural .Total "" "s"}}
+
+{{range .Entries -}}
+{{template "reverseEntry" (dict "Entry" .)}}
+{{end -}}
+{{end}}
+{{if .Unbuildable}}
+### Units not registered with any builder
+
+{{len .Unbuildable}} units defined in `units/*.fbi` but not
+reachable through any constructor's build menu — these are
+mission-only spawns, decoy variants, features, mines deployed
+by mine-layers, or wreckage. Their full stats remain in
+[ta-units.md](ta-units.md).
+
+{{joinCodes .Unbuildable}}.
+{{end}}
+{{- /* ====================================================== */ -}}
+{{- /* Reusable "builder" sub-template — renders one builder   */ -}}
+{{- /* with its portrait + page-by-page grid + summary footer. */ -}}
+{{- /* ====================================================== */ -}}
+{{define "builder" -}}
+{{- $units := .Units -}}
+{{- with .Builder -}}
+#### `{{.Builder}}` — {{if .Unit.Name}}{{.Unit.Name}}{{else if .Unit.Designation}}{{.Unit.Designation}}{{else}}{{.Builder}}{{end}}
+
+{{if .Unit.Description}}_{{.Unit.Description}}_
+
+{{end}}
+{{- if not .Pages -}}
+<table><tr><td valign="top">{{pic .Unit 80}}</td><td><em>No buildable units.</em></td></tr></table>
+
+{{- else -}}
+<table>
+<tr>
+<td valign="top" width="96">{{pic .Unit 80}}<br/><sub><code>{{.Builder}}</code></sub></td>
+<td>
+
+{{range $i, $p := .Pages -}}
+{{if $i}}
+
+{{end -}}
+<table>
+  <thead><tr><th colspan="2" align="left">Page {{$p.Page}}</th></tr></thead>
+  <tr>{{slotCell (slotAt $p 0) $units}}{{slotCell (slotAt $p 1) $units}}</tr>
+  <tr>{{slotCell (slotAt $p 2) $units}}{{slotCell (slotAt $p 3) $units}}</tr>
+  <tr>{{slotCell (slotAt $p 4) $units}}{{slotCell (slotAt $p 5) $units}}</tr>
+</table>
+{{end}}
+
+<sub><b>{{.Total}}</b> buildable unit{{plural .Total "" "s"}} across <b>{{len .Pages}}</b> page{{plural (len .Pages) "" "s"}}{{if .DownloadCount}}; <b>{{.DownloadCount}}</b> ⬇️ added by <code>download/*.tdf</code>{{end}}.</sub>
+</td>
+</tr>
+</table>
+{{end}}
+{{end -}}
+{{end}}
+{{- /* ====================================================== */ -}}
+{{- /* Reusable "reverseEntry" sub-template                     */ -}}
+{{- /* ====================================================== */ -}}
+{{define "reverseEntry" -}}
+{{- with .Entry -}}
+<table>
+<tr><td valign="top" width="120" rowspan="2" align="center">
+{{pic .Unit 80}}<br/><b><code>{{.Unit.UnitName}}</code></b><br/><sub>{{unitLabel .Unit}}</sub>
+</td>
+<td valign="top">
+{{if .Unit.Side}}<b>{{.Unit.Side}}</b> · {{end}}built by <b>{{len .Builders}}</b> constructor{{plural (len .Builders) "" "s"}}{{if .Unit.Description}} · <em>{{.Unit.Description}}</em>{{end}}
+</td></tr>
+<tr><td valign="top">
+<table>
+{{range chunkUnits 6 .Builders -}}
+  <tr>{{range . }}<td valign="top" align="center" width="56">{{pic . 48}}<br/><code>{{.UnitName}}</code><br/><sub>{{unitLabel .}}</sub></td>{{end}}{{padCells 6 (len .)}}</tr>
+{{end -}}
+</table>
+</td></tr>
+</table>
+
+{{end -}}
+{{end}}

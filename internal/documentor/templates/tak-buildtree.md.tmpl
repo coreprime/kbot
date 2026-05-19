@@ -1,0 +1,137 @@
+{{- /*
+  TA: Kingdoms build-tree page. Each builder has a single linear menu
+  (sorted by Priority from canbuild/<builder>/<unit>.tdf); no 2×3 grid.
+*/ -}}
+# Reference — TA: Kingdoms Build Tree
+
+How units get into the game in *TA: Kingdoms*: each builder
+(monarch, castle, keep, trainer) has a directory under
+`canbuild/<builder>/`, and every file in that directory is a TDF
+specifying a buildable unit with a `[Menu] { Priority = N; }` block.
+We sort by `Priority` to produce the list each builder shows in
+order.
+
+- **{{.TotalBuilders}} builders** across {{len .Sides}} side(s).
+- **{{.TotalPairs}} `(builder, unit)` pairs total.**
+
+Unlike TA, TA:K's build menu is **linear**, not a 2×3 grid — so each
+builder block below is a single ordered table. The `Priority` column
+is the value of `[Menu].Priority` from `canbuild/<builder>/<unit>.tdf`
+(lower = appears first in the in-game menu).
+
+Column reference:
+
+- **Code** — the buildable unit's `unitname=` (the FBI lookup key).
+- **Name** — the FBI's `name=` field (player-visible display name).
+- **Description** — the FBI's `description=` field, frequently just
+  the side name in TA:K (`Aramon`, `Taros`, …).
+
+For field semantics, see the kbot docs:
+- [FBI / TDF / OTA](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md)
+  — what each FBI field controls.
+- [TA vs TA:K formats matrix](https://github.com/coreprime/kbot/blob/main/docs/formats/compare.md)
+  — how TA:K's `canbuild/` directory model differs from TA's
+  `gamedata/sidedata.tdf` + `download/*.tdf` model.
+
+Full per-unit stats live in [TA:K unit IDs](tak-units.md).
+
+> [!TIP]
+> **To regenerate this page**, run `kbot document --game takingdoms`
+> (or `task document-tak`).
+
+## Contents
+
+{{range .Sides -}}
+- [{{.Label}}](#{{.SideAnchor}})
+{{- range .Tiers}}
+  - [{{.Key.Label}}](#{{.Anchor}})
+{{- end}}
+{{end}}
+---
+{{range .Sides}}
+## {{.Side}} — {{.Label}}
+
+{{.Total}} builders across {{len .Tiers}} tiers.
+
+{{range .Tiers}}
+### {{.Heading}}
+
+{{range .Builders -}}
+{{template "takBuilder" (dict "Builder" . "Units" $.UnitByKey)}}
+{{end -}}
+{{end -}}
+---
+{{end}}
+## Reverse index: who can build each unit
+
+Sorted alphabetically. For each buildable unit, the constructors that
+can produce it — each shown with its portrait and code.
+
+{{range .Reverse -}}
+### {{.Label}} buildables — {{.Total}} unit{{plural .Total "" "s"}}
+
+{{range .Entries -}}
+{{template "takReverseEntry" (dict "Entry" .)}}
+{{end -}}
+{{end}}
+
+{{if .Unbuildable -}}
+### Units not registered with any builder
+
+{{len .Unbuildable}} units defined in `units/*.fbi` but not reachable
+through any constructor's canbuild list. These are mission-only
+spawns, monsters, wildlife, decoy units, or unused content. Full
+stats remain in [tak-units.md](tak-units.md).
+
+{{joinCodes .Unbuildable}}.
+{{end}}
+{{define "takBuilder" -}}
+{{- $units := .Units -}}
+{{- with .Builder -}}
+#### `{{.Builder}}` — {{if .Unit.Name}}{{.Unit.Name}}{{else}}{{.Builder}}{{end}}
+
+{{if .Unit.Description}}_{{.Unit.Description}}_
+
+{{end}}
+{{- if not .Pages -}}
+<table><tr><td valign="top">{{pic .Unit 128}}</td><td><em>No buildable units.</em></td></tr></table>
+{{- else -}}
+<table>
+<tr>
+<td valign="top" width="160">{{pic .Unit 128}}<br/><sub><code>{{.Builder}}</code></sub></td>
+<td>
+
+| | Priority | Code | Name | Description |
+|:-:|---------:|------|------|-------------|
+{{range $slot := sortedSlots . -}}
+{{- $u := index $units $slot.Unit -}}
+| {{pic $u 96}} | {{$slot.Button}} | `{{$slot.Unit}}` | {{defaultDash $u.Name}} | {{defaultDash $u.Description}} |
+{{end}}
+
+<sub><b>{{.Total}}</b> buildable unit{{plural .Total "" "s"}}.</sub>
+</td>
+</tr>
+</table>
+{{end}}
+{{end -}}
+{{end}}
+{{define "takReverseEntry" -}}
+{{- with .Entry -}}
+<table>
+<tr><td valign="top" width="160" rowspan="2" align="center">
+{{pic .Unit 128}}<br/><b><code>{{.Unit.UnitName}}</code></b><br/><sub>{{unitLabel .Unit}}</sub>
+</td>
+<td valign="top">
+{{if .Unit.Side}}<b>{{.Unit.Side}}</b> · {{end}}built by <b>{{len .Builders}}</b> constructor{{plural (len .Builders) "" "s"}}{{if .Unit.Description}} · <em>{{.Unit.Description}}</em>{{end}}
+</td></tr>
+<tr><td valign="top">
+<table>
+{{range chunkUnits 4 .Builders -}}
+  <tr>{{range . }}<td valign="top" align="center" width="128">{{pic . 96}}<br/><code>{{.UnitName}}</code><br/><sub>{{unitLabel .}}</sub></td>{{end}}{{padCells 4 (len .)}}</tr>
+{{end -}}
+</table>
+</td></tr>
+</table>
+
+{{end -}}
+{{end}}

@@ -1,0 +1,68 @@
+# Reference — TA: Kingdoms Weapons
+
+Every `[WEAPONn]` sub-section harvested from every `units/*.fbi`.
+TA:K embeds weapon stats directly inside each unit's FBI rather than
+maintaining a separate `weapons/` directory like TA does, so each row
+here is tied to exactly one owner unit.
+
+**{{.TotalWeapons}} weapon definitions** across **{{.UnitsWithWeapon}}
+weapon-bearing units**.
+
+Each weapon's `Owner` is the `unitname=` of the FBI it lives in.
+`Slot` is the `[WEAPONn]` section name within that FBI (units carry up
+to three slots). `Type` is the inline `type=` field, typically
+`Ballistic`, `Missile`, `Magical`, or `Melee`. `Range` is in pixels;
+`Damage` is the `[DAMAGE].default` value (per-target overrides exist
+but are not shown).
+
+Column definitions are documented in the kbot format docs:
+
+- **TDF format** (the on-disk syntax these fields live in) — see
+  [FBI / TDF / OTA](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md)
+  in the kbot documentation.
+- **Weapon archetype taxonomy** — see
+  [Gamedata: weapons.tdf reference](https://github.com/coreprime/kbot/blob/main/docs/formats/gamedata.md#weaponstdf--weapon-tdf-reference).
+- **How weapons hook into units** — the inline `[WEAPONn]` model is
+  TA:K-specific; TA uses a separate `weapons/*.tdf` directory instead
+  (see the
+  [TA vs TA:K matrix](https://github.com/coreprime/kbot/blob/main/docs/formats/compare.md)).
+
+Cross-reference unit codes with [TA:K unit IDs](tak-units.md).
+
+> [!TIP]
+> **To regenerate this page**, run `kbot document --game takingdoms`
+> (or `task document-tak`).
+
+## Contents
+
+{{range .Groups -}}
+- [{{.Key.Label}}](#{{toAnchor .Key.Label}})
+{{end -}}
+- [Used-by cross-reference](#used-by-cross-reference)
+
+---
+
+{{range .Groups -}}
+## {{.Key.Label}}
+
+{{len .Weapons}} weapon definition{{plural (len .Weapons) "" "s"}}.
+
+| Owner | Slot | Display name | Type | Range | Damage |
+|-------|------|--------------|------|------:|-------:|
+{{range .Weapons -}}
+| `{{.Owner}}` | `{{.NameKey}}` | {{truncate (trim (defaultDash .Display)) 30}} | {{truncate (.ArchetypeString) 18}} | {{defaultDash .Range}} | {{defaultDash .DefaultDamage}} |
+{{end}}
+{{end -}}
+
+---
+
+## Used-by cross-reference
+
+Each weapon-bearing unit and its `[WEAPONn]` sections, alphabetised.
+
+| Owner unit | Weapons (slot → display name) |
+|------------|------------------------------|
+{{range .UserKeys -}}
+{{- $u := index $.UserMap . -}}
+| `{{.}}` | {{joinCodes $u}} |
+{{end}}

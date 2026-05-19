@@ -1,0 +1,66 @@
+# Reference — TA Weapons
+
+Every weapon section in `weapons/*.tdf` + `gamedata/weapons.tdf` from
+the v3.1c install, cross-referenced with each unit's `Weapon1/2/3=`
+fields. **{{.TotalWeapons}} unique weapon definitions**, used (collectively) by
+**{{.UnitsWithWeapon}} units** (and some unused / fired only by other weapons).
+
+Each row's `Key` is the section name in the weapon's TDF; that's the
+string the unit's FBI cites in `Weapon1=` / `Weapon2=` / `Weapon3=`.
+`ID` is the weapon's `ID=` field (0–255 unique-ish across the install).
+Archetype tokens come from the boolean weapon flags (`ballistic`,
+`lineofsight`, `dropped`, `beamweapon`, `guidance`, `selfprop`,
+`twophase`, `burnblow`, `waterweapon`, `noexplode`).
+
+See the kbot docs for column semantics:
+
+- [TDF: weapon TDFs](https://github.com/coreprime/kbot/blob/main/docs/formats/tdf.md#tdf--feature-weapon-sound-definitions)
+  — what each `weapons/*.tdf` field controls.
+- [Gamedata: weapons.tdf reference](https://github.com/coreprime/kbot/blob/main/docs/formats/gamedata.md#weaponstdf--weapon-tdf-reference)
+  — the engine's full weapon-field catalogue.
+- [TA vs TA:K formats matrix](https://github.com/coreprime/kbot/blob/main/docs/formats/compare.md)
+  — how TA's separate `weapons/*.tdf` model differs from TA:K's inline
+  `[WEAPONn]` model.
+
+> [!NOTE]
+> **Not every unit-cited weapon name resolves to a definition here.**
+> Some weapons are hard-coded into the engine (e.g. `BULLET`,
+> `STD_MISSILE`) and have no TDF; others are macro-expanded by the
+> unit's own TDF at load time. Rows marked `—` in the *Used by*
+> column fall in this category.
+
+## Contents
+
+{{range .Groups -}}
+- [{{.Key.Label}}](#{{toAnchor .Key.Label}})
+{{end -}}
+- [Used-by cross-reference](#used-by-cross-reference)
+
+---
+
+{{range .Groups -}}
+## {{.Key.Label}}
+
+{{len .Weapons}} weapon definition{{plural (len .Weapons) "" "s"}}.
+
+| Key | Display name | ID | Archetype | Range | AOE | Damage | Used by |
+|-----|--------------|---:|-----------|------:|----:|-------:|---------|
+{{range .Weapons -}}
+{{- $key := upper .NameKey -}}
+| `{{.NameKey}}` | {{truncate (trim (defaultDash .Display)) 24}} | {{defaultDash .ID}} | {{truncate (.ArchetypeString) 28}} | {{defaultDash .Range}} | {{defaultDash .AOE}} | {{defaultDash .DefaultDamage}} | {{usedByCell $.UserMap $key}} |
+{{end}}
+{{end -}}
+
+---
+
+## Used-by cross-reference
+
+Every weapon string referenced by a unit FBI's `Weapon1/2/3=`,
+sorted alphabetically with the units that use it.
+
+| Weapon key | Defined? | Used by |
+|------------|:--------:|---------|
+{{range .UserKeys -}}
+{{- $u := index $.UserMap . -}}
+| `{{.}}` | {{if index $.Defined .}}✅{{else}}—{{end}}{{` `}} | {{joinCodes $u}} |
+{{end}}
