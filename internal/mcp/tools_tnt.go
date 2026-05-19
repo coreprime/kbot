@@ -107,6 +107,30 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 		),
 		makeTNTASCIIHandler(r),
 	)
+
+	s.AddTool(
+		mcplib.NewTool("tnt_optimize",
+			mcplib.WithDescription(
+				"Rewrite a TNT map with redundant tile graphics consolidated.  Three "+
+					"passes run in order: byte-identical tile graphics are merged, "+
+					"visually-similar tiles whose tilemap placements share the same "+
+					"heightmap footprint are merged (configurable via similarity), and "+
+					"any tile graphic the tilemap no longer references is dropped.  The "+
+					"on-disk heightmap and feature placements are preserved verbatim.  "+
+					"Returns a JSON summary of the merges plus the bytes saved.",
+			),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the source .tnt file.")),
+			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination .tnt path for the optimised map.")),
+			mcplib.WithNumber("similarity",
+				mcplib.Description("Maximum mean per-channel pixel difference (% of 255) for visual-similarity merging.  0 disables the similarity pass.  Defaults to 1.0."),
+			),
+			mcplib.WithBoolean("keep_unused",
+				mcplib.Description("Keep tile graphics that no map cell references (default false)."),
+			),
+			withGameData(),
+		),
+		makeTNTOptimizeHandler(r),
+	)
 }
 
 type tntDescribeOutput struct {
@@ -162,6 +186,20 @@ type tntASCIIOutput struct {
 	Path  string `json:"path"`
 	ASCII string `json:"ascii"`
 	Cols  int    `json:"cols"`
+}
+
+type tntOptimizeOutput struct {
+	Path              string  `json:"path"`
+	Output            string  `json:"output"`
+	SimilarityPercent float64 `json:"similarity_percent"`
+	KeepUnused        bool    `json:"keep_unused"`
+	TilesBefore       int     `json:"tiles_before"`
+	TilesAfter        int     `json:"tiles_after"`
+	ExactMerges       int     `json:"exact_merges"`
+	SimilarityMerges  int     `json:"similarity_merges"`
+	UnusedRemoved     int     `json:"unused_removed"`
+	TileBytesSaved    int     `json:"tile_bytes_saved"`
+	OutputFileSize    int64   `json:"output_file_size"`
 }
 
 func loadTNT(path string) (*tnt.Map, []tnt.Feature, []byte, error) {
@@ -503,5 +541,94 @@ func makeTNTASCIIHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		return jsonResult(tntASCIIOutput{Path: rf.displayPath(), ASCII: m.RenderASCII(cols), Cols: cols})
+	}
+}
+
+func makeTNTOptimizeHandler(r *Resolver) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		path, err := req.RequireString("path")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		outArg, err := req.RequireString("output")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		similarity := req.GetFloat("similarity", 1.0)
+		keepUnused := req.GetBool("keep_unused", false)
+		gameData := req.GetString("game_data", "")
+
+		rf, err := r.ResolveFile(path, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		defer func() { _ = rf.Close() }()
+		outPath, err := r.ResolveOutput(outArg, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		m, feats, _, err := loadTNT(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		opts := tnt.OptimizeOptions{
+			SimilarityPercent: similarity,
+			KeepUnused:        keepUnused,
+		}
+		if similarity > 0 {
+			pal, palErr := tntServerPalette()
+			if palErr != nil {
+				return errorResult(palErr), nil
+			}
+			opts.Palette = pal
+		}
+
+		stats, err := m.Optimize(opts)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Write to a tempfile in the destination directory and rename so
+		// that a mid-write crash never leaves a half-written .tnt where
+		// the caller asked for a finished one.
+		dir := filepath.Dir(outPath)
+		tmp, err := os.CreateTemp(dir, ".tnt-optimize-*.tmp")
+		if err != nil {
+			return errorResult(fmt.Errorf("create temp: %w", err)), nil
+		}
+		tmpName := tmp.Name()
+		if err := m.Save(tmp, feats); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			return errorResult(fmt.Errorf("save tnt: %w", err)), nil
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmpName)
+			return errorResult(fmt.Errorf("close temp: %w", err)), nil
+		}
+		if err := os.Rename(tmpName, outPath); err != nil {
+			_ = os.Remove(tmpName)
+			return errorResult(fmt.Errorf("rename to %s: %w", outPath, err)), nil
+		}
+
+		var outSize int64
+		if info, statErr := os.Stat(outPath); statErr == nil {
+			outSize = info.Size()
+		}
+
+		return jsonResult(tntOptimizeOutput{
+			Path:              rf.displayPath(),
+			Output:            outPath,
+			SimilarityPercent: similarity,
+			KeepUnused:        keepUnused,
+			TilesBefore:       stats.TilesBefore,
+			TilesAfter:        stats.TilesAfter,
+			ExactMerges:       stats.ExactMerges,
+			SimilarityMerges:  stats.SimilarityMerges,
+			UnusedRemoved:     stats.UnusedRemoved,
+			TileBytesSaved:    (stats.TilesBefore - stats.TilesAfter) * tnt.TileGfxSize,
+			OutputFileSize:    outSize,
+		})
 	}
 }

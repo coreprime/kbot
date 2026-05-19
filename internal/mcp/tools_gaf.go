@@ -13,6 +13,7 @@ import (
 
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot/internal/palettepick"
 )
 
 func registerGAFTools(s *server.MCPServer, r *Resolver) {
@@ -35,7 +36,10 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("gaf_export",
 			mcplib.WithDescription(
 				"Export one sequence from a GAF file as an animated GIF or APNG. "+
-					"Output paths are anchored to the game-data folder when relative.",
+					"Output paths are anchored to the game-data folder when relative. "+
+					"When 'palette' is omitted, kbot auto-detects a palette from the "+
+					"game-data VFS (TA: Kingdoms ships per-asset palettes); pass an "+
+					"explicit VFS path to override.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -50,6 +54,12 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 			mcplib.WithString("output",
 				mcplib.Required(),
 				mcplib.Description("Destination path for the rendered image."),
+			),
+			mcplib.WithString("palette",
+				mcplib.Description(
+					"Optional VFS path to a .pal or .pcx palette inside game-data. "+
+						"Omit to auto-detect (same-name .pcx sidecar > side palette > global palette.pal).",
+				),
 			),
 			withGameData(),
 		),
@@ -121,13 +131,15 @@ func makeGAFListHandler(r *Resolver) server.ToolHandlerFunc {
 }
 
 type gafExportOutput struct {
-	Path     string `json:"path"`
-	Source   string `json:"source,omitempty"`
-	Sequence int    `json:"sequence"`
-	Name     string `json:"name"`
-	Frames   int    `json:"frames"`
-	Output   string `json:"output"`
-	Format   string `json:"format"`
+	Path          string `json:"path"`
+	Source        string `json:"source,omitempty"`
+	Sequence      int    `json:"sequence"`
+	Name          string `json:"name"`
+	Frames        int    `json:"frames"`
+	Output        string `json:"output"`
+	Format        string `json:"format"`
+	Palette       string `json:"palette,omitempty"`
+	PaletteSource string `json:"palette_source,omitempty"`
 }
 
 func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
@@ -146,6 +158,7 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("format must be gif or png, got %q", format)), nil
 		}
 		gameData := req.GetString("game_data", "")
+		paletteOverride := req.GetString("palette", "")
 
 		rf, err := r.ResolveFile(path, gameData)
 		if err != nil {
@@ -172,9 +185,12 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("sequence %d out of range (0..%d)", sequence, len(seqs)-1)), nil
 		}
 
-		palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		// Resolve palette via the game-data VFS when available; without a
+		// game-data context (raw --mount mode), fall back to the embedded
+		// palette so behavior matches the historical default.
+		palette, paletteRes, err := resolveMCPGAFPalette(r, gameData, rf.VirtualPath, paletteOverride)
 		if err != nil {
-			return errorResult(fmt.Errorf("load palette: %w", err)), nil
+			return errorResult(err), nil
 		}
 
 		if err := os.MkdirAll(filepath.Dir(resolvedOut), 0o755); err != nil {
@@ -203,13 +219,43 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 		}
 
 		return jsonResult(gafExportOutput{
-			Path:     rf.displayPath(),
-			Source:   rf.Source,
-			Sequence: sequence,
-			Name:     seq.Name,
-			Frames:   len(seq.Frames),
-			Output:   resolvedOut,
-			Format:   format,
+			Path:          rf.displayPath(),
+			Source:        rf.Source,
+			Sequence:      sequence,
+			Name:          seq.Name,
+			Frames:        len(seq.Frames),
+			Output:        resolvedOut,
+			Format:        format,
+			Palette:       paletteRes.Path,
+			PaletteSource: string(paletteRes.Source),
 		})
 	}
+}
+
+// resolveMCPGAFPalette picks the rendering palette for an MCP gaf_export call.
+// When the call is anchored to a game-data folder, the resolver runs against
+// that VFS so per-asset palettes resolve correctly; otherwise the embedded TA
+// palette is used to preserve historical behavior.
+func resolveMCPGAFPalette(r *Resolver, gameData, gafVirtualPath, override string) (*gaf.Palette, palettepick.Result, error) {
+	gd, err := r.registry.Get(gameData)
+	if err != nil || gd == nil {
+		// No game-data registered: stick with embedded.
+		if override != "" {
+			return nil, palettepick.Result{}, fmt.Errorf("palette override %q requires a game-data folder", override)
+		}
+		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		if err != nil {
+			return nil, palettepick.Result{}, fmt.Errorf("load embedded palette: %w", err)
+		}
+		return pal, palettepick.Result{Palette: pal, Source: palettepick.SourceEmbedded, Label: "embedded TA palette"}, nil
+	}
+	v, err := gd.VFS()
+	if err != nil {
+		return nil, palettepick.Result{}, fmt.Errorf("open game-data vfs: %w", err)
+	}
+	res, err := palettepick.Resolve(v, gafVirtualPath, override)
+	if err != nil {
+		return nil, palettepick.Result{}, err
+	}
+	return res.Palette, res, nil
 }

@@ -23,6 +23,9 @@ metal/height PCXes) live alongside but are not part of the TNT.`,
 		newTNTHeightmapCommand(),
 		newTNTMinimapCommand(),
 		newTNTASCIICommand(),
+		newTNTOptimizeCommand(),
+		newTNTOptimiseCommand(),
+		newTNTLintCommand(),
 	)
 
 	return cmd

@@ -281,7 +281,7 @@ func makeCobInfoHandler(r *Resolver) server.ToolHandlerFunc {
 			Version:     cob.VersionSignature,
 			NumScripts:  cob.NumScripts,
 			NumPieces:   cob.NumPieces,
-			NumStatics:  cob.Unknown1,
+			NumStatics:  cob.NumberOfStaticVars,
 			ScriptNames: cob.ScriptNames,
 			PieceNames:  cob.PieceNames,
 			CodeBytes:   len(cob.Code),

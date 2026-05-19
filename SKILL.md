@@ -194,6 +194,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `tnt_heightmap` | `path`, `output` | `normalize` (bool, default false) | grayscale elevation PNG |
 | `tnt_minimap` | `path`, `output` | `paletted` (bool, default false) | minimap PNG (RGBA or 8-bit indexed) |
 | `tnt_ascii` | `path` | `cols` (number, default 64) | ASCII-art height map |
+| `tnt_optimize` | `path`, `output` | `similarity` (% of 255, default 1.0; 0 disables), `keep_unused` (bool, default false) | Writes a TNT with exact-duplicate, visually-similar (same heightmap footprint), and unused tile graphics consolidated. JSON result reports `tiles_before/after`, `exact_merges`, `similarity_merges`, `unused_removed`, `tile_bytes_saved`, `output_file_size`. |
 | `fnt_describe` | `path` | — | JSON `{height, flags, glyph_count, min_width, max_width, mean_width, ranges}` |
 | `fnt_render` | `path`, `output`, `text` | `fg`, `bg` (#rrggbb / #rrggbbaa / 'transparent') | rendered text PNG |
 | `fnt_sheet` | `path`, `output` | `fg`, `bg` | 16-column glyph sprite-sheet PNG |

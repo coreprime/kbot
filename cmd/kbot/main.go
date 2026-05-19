@@ -25,14 +25,17 @@ Sub-commands operate on specific file formats:
   pcx   PCX image files (describe, convert, info)
   sct   SCT map sections (info, describe, image, heightmap, minimap)
   tnt   TNT map files (describe, unpack, pack, image, heightmap, minimap, ascii)
-  zrb   Smacker/ZRB video files (info, to-mp4, from-mp4)
-  mcp   Run kbot as a Model Context Protocol server`,
+  zrb      Smacker/ZRB video files (info, to-mp4, from-mp4)
+  mcp      Run kbot as a Model Context Protocol server
+  studio   Web-based map editor (KBot Studio)
+  document Regenerate the TA reference catalogue (units, weapons, build tree)`,
 		Version: Version,
 	}
 
 	rootCmd.AddCommand(
 		newCobCommand(),
 		newCtxCommand(),
+		newDocumentCommand(),
 		newFNTCommand(),
 		newGAFCommand(),
 		newHPICommand(),
@@ -43,6 +46,7 @@ Sub-commands operate on specific file formats:
 		newZRBCommand(),
 		newMountCommand(),
 		newMCPCommand(),
+		newStudioCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

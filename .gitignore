@@ -22,6 +22,7 @@ vendor/
 
 # Node
 internal/explorer/web/node_modules/
+internal/studio/web/node_modules/
 
 # IDE
 .idea/

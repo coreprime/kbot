@@ -27,8 +27,9 @@ func newCobRoundtripCommand() *cobra.Command {
 decompile→compile and disassemble→assemble pipelines produce
 byte-identical output.
 
-When <path> is omitted, the active kbot context is scanned (see
-'kbot ctx').
+Path resolution: an explicit <path> wins; otherwise the active
+kbot context is scanned (see 'kbot ctx'); otherwise the current
+working directory.
 
 Each file is tested entirely in memory.  Use --detailed to see
 step-by-step output for every file.`,
@@ -43,7 +44,12 @@ step-by-step output for every file.`,
 				return err
 			}
 			if resolved == "" {
-				return fmt.Errorf("provide a directory or register a kbot context (run `kbot ctx add`)")
+				cwd, cwdErr := os.Getwd()
+				if cwdErr != nil {
+					return fmt.Errorf("no path, no active kbot context, and could not read the current directory: %w", cwdErr)
+				}
+				resolved = cwd
+				source = "current directory"
 			}
 			reportContextSource(source)
 			return runRoundtrip(resolved, detailed)

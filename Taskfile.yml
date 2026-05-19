@@ -15,6 +15,7 @@ tasks:
     desc: Build all binaries
     cmds:
       - task: build-web
+      - task: build-studio-web
       - task: build-kbot
 
   build-kbot:
@@ -29,6 +30,13 @@ tasks:
       - npm run build
     dir: internal/explorer/web
 
+  build-studio-web:
+    desc: Install and validate the KBot Studio web assets
+    cmds:
+      - npm install
+      - task: lint-studio-web
+    dir: internal/studio/web
+
   vet:
     desc: Run go vet
     cmds:
@@ -39,12 +47,19 @@ tasks:
     cmds:
       - golangci-lint run ./...
       - task: lint-web
+      - task: lint-studio-web
 
   lint-web:
     desc: Run ESLint on the web UI
     cmds:
       - npx eslint . --max-warnings 0
     dir: internal/explorer/web
+
+  lint-studio-web:
+    desc: Run ESLint on the KBot Studio web assets
+    cmds:
+      - npx eslint . --max-warnings 0
+    dir: internal/studio/web
 
   test:
     desc: Run all tests
@@ -115,3 +130,19 @@ tasks:
       - task: install
       - kbot cob roundtrip {{.TA_UNPACKED_PATH}}
       - kbot gaf roundtrip {{.TA_UNPACKED_PATH}}
+
+  document:
+    desc: Regenerate the TA reference catalogue at ../reference-ta (sibling to kbot)
+    vars:
+      REFERENCE_PATH: '{{.REFERENCE_PATH | default "../reference-ta"}}'
+    cmds:
+      - task: install
+      - kbot document --source {{.TA_UNPACKED_PATH}} --target {{.REFERENCE_PATH}}
+
+  document-tak:
+    desc: Regenerate the TA:K reference catalogue at ../reference-tak (sibling to kbot)
+    vars:
+      REFERENCE_PATH: '{{.REFERENCE_TAK_PATH | default "../reference-tak"}}'
+    cmds:
+      - task: install
+      - kbot document --game takingdoms --source {{.TAK_UNPACKED_PATH}} --target {{.REFERENCE_PATH}}

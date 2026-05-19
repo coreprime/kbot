@@ -39,6 +39,8 @@ To develop/code against the project:
 ## Table of Contents
 
 - [Installation](#installation)
+- [File-Format Reference](docs/formats/README.md) — deep dive into HPI, GAF,
+  PCX, PAL, FNT, SCT, TNT, 3DO, COB/BOS, TDF/FBI/OTA, TA:K GUI
 - [Commands](#commands)
   - [`kbot ctx` — Working-Directory Contexts](#kbot-ctx--working-directory-contexts)
   - [`kbot cob` — COB/BOS Scripting](#kbot-cob--cobbos-scripting)
@@ -51,6 +53,8 @@ To develop/code against the project:
   - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
+  - [`kbot studio` — KBot Studio (Map Editor)](#kbot-studio--kbot-studio-map-editor)
+  - [`kbot document` — Reference Catalogue Generator](#kbot-document--reference-catalogue-generator)
   - [`kbot mcp` — Model Context Protocol Server](#kbot-mcp--model-context-protocol-server)
 - [Shell Completion](#shell-completion)
 - [Project Structure](#project-structure)
@@ -467,6 +471,103 @@ kbot mount flatten --target ./flat
 - View bitmap fonts with live text preview
 - Call graph visualization for script functions and signals
 - Light/dark/system theme toggle
+
+---
+
+### `kbot studio` — KBot Studio (Map Editor)
+
+Launch a browser-based map editor for Total Annihilation and TA: Kingdoms
+maps.  The editor mounts a TA install over a VFS, lets you drag sections and
+features into the world, and bundles the result into a downloadable `.hpi`
+archive containing `maps/<name>.tnt` and `maps/<name>.ota`.
+
+```bash
+# Edit against a packed TA install
+kbot studio ~/games/totala
+
+# Or use the active kbot context (see `kbot ctx`)
+kbot studio
+
+# Custom port (default 8100)
+kbot studio --port 9000
+```
+
+When the page loads you pick the initial map dimensions in tiles (default
+`128 × 128`, roughly the size of *Metal Heck*) and choose a planet/world.
+The sidebar lists every `.sct` under `sections/` grouped by world/group;
+click one to select, then click on the canvas to stamp it.  Hit **Save**
+to download an `.hpi` ready to drop into the game's `maps/` folder.
+
+---
+
+### `kbot document` — Reference Catalogue Generator
+
+Generate the markdown reference catalogues that live in two standalone
+sibling repos:
+
+- [coreprime/reference-ta](https://github.com/coreprime/reference-ta) — Total Annihilation (278 units, 199 weapons, 45 builders).
+- [coreprime/reference-tak](https://github.com/coreprime/reference-tak) — TA: Kingdoms + Iron Plague (203 units, 198 weapons, 32 builders).
+
+```bash
+# Total Annihilation — uses the active kbot context for --source
+kbot document --target ~/go/src/github.com/coreprime/reference-ta
+
+# TA: Kingdoms
+kbot document --game takingdoms \
+              --source ~/tak-flat \
+              --target ~/go/src/github.com/coreprime/reference-tak
+
+# Explicit source + skip the portrait re-conversion (TA only — TA:K
+# has no unitpics/ to convert)
+kbot document --source ~/ta-flat --target ./reference --skip-portraits
+
+# Force a fresh PCX → PNG batch (default skips if PNG already exists)
+kbot document --target ./reference --force-portraits
+```
+
+Output layout under `--target` (TA):
+
+```
+<target>/
+├── ta-units.md         278-row unit catalogue
+├── ta-weapons.md       198-row weapon catalogue + reverse cross-ref
+├── ta-buildtree.md     per-builder 2×3 menu grids + visual reverse index
+└── img/ta-units/*.png  282 unit portraits (Objectname-keyed, lowercased)
+```
+
+Output layout under `--target` (TA: Kingdoms):
+
+```
+<target>/
+├── tak-units.md        per-side unit catalogue (Aramon/Taros/Veruna/Zhon/Creon/Mon/Lif/NPC)
+├── tak-weapons.md      inline [WEAPONn] sections harvested from every FBI
+└── tak-buildtree.md    per-builder canbuild/ listings (linear Priority order)
+```
+
+Implementation lives in [`internal/documentor`](internal/documentor/);
+text/template files are embedded under
+`internal/documentor/templates/` (one set per game). The TA:K extractor
+([`extract_tak.go`](internal/documentor/extract_tak.go)) is separate
+from the TA extractor because TA:K inlines weapons in FBIs, has
+4 sides (5 with Iron Plague), and uses `canbuild/<builder>/*.tdf`
+directories rather than `gamedata/sidedata.tdf` + `download/*.tdf`.
+
+Convenience targets:
+
+| Task | What it does |
+|------|--------------|
+| `task document` | TA → `../reference-ta` (uses `$TA_UNPACKED_PATH`) |
+| `task document-tak` | TA:K → `../reference-tak` (uses `$TAK_UNPACKED_PATH`) |
+
+> **Note on output licensing.** The `kbot document` tool itself is
+> MIT-licensed (it ships in this repo). Its *output* — the rendered
+> markdown tables and the copied/converted unit portraits — is
+> derivative of Cavedog/Humongous game data and **is not covered by
+> kbot's MIT licence**. The reference repos
+> ([coreprime/reference-ta](https://github.com/coreprime/reference-ta) /
+> [coreprime/reference-tak](https://github.com/coreprime/reference-tak))
+> intentionally ship without a `LICENSE` file for that reason; see
+> their READMEs for the attribution notice.
 
 ---
 
