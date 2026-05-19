@@ -82,6 +82,10 @@ func runStudio(_ *cobra.Command, args []string) error {
 	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
 	fmt.Printf("✓ %d files available\n\n", stats["total_files"])
 
+	// Pre-parse every .tnt file in the background and render its minimap
+	// PNG so the Open dialog opens instantly on first click.
+	go startMapPreload()
+
 	mux := http.NewServeMux()
 	registerAPI(mux)
 	registerStatic(mux)

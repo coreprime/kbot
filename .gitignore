@@ -34,3 +34,7 @@ internal/studio/web/node_modules/
 
 # Game Assets from Local Workspace
 flat
+
+# Local Files
+.claude
+.local

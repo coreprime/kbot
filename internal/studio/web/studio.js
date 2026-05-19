@@ -270,6 +270,8 @@ function applyConnectionUI() {
 // ── Open Existing Map flow ────────────────────────────────────────────────
 
 let availableMaps = []
+let mapsLoading = false
+let mapsPollTimer = null
 let selectedMapPath = null
 let openMapSource = 'welcome' // 'welcome' or 'editor' — controls where Back returns to
 let sizeDialogSource = 'welcome' // same idea for the New-map size dialog
@@ -278,19 +280,33 @@ async function openMapDialog(source = 'welcome') {
   openMapSource = source
   $('#welcome-dialog').classList.add('hidden')
   $('#open-dialog').classList.remove('hidden')
-  $('#open-list').innerHTML = '<div class="loading">Loading maps…</div>'
   $('#open-confirm').disabled = true
   selectedMapPath = null
+  if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
+  // Show skeleton immediately so the dialog never appears empty, then
+  // start fetching.  fetchMaps polls until the server marks the catalog
+  // as fully loaded.
+  if (availableMaps.length === 0) mapsLoading = true
+  renderOpenList()
+  fetchMaps()
+}
+
+async function fetchMaps() {
   try {
     const resp = await fetch('/api/studio/maps')
     const data = await resp.json()
     availableMaps = data.maps || []
+    mapsLoading = !!data.loading
   } catch (err) {
     availableMaps = []
+    mapsLoading = false
     $('#open-list').innerHTML = `<div class="loading">Failed to load maps: ${escapeHTML(String(err))}</div>`
     return
   }
   renderOpenList()
+  if (mapsLoading) {
+    mapsPollTimer = setTimeout(fetchMaps, 500)
+  }
 }
 
 // closeOpenDialog returns the user to whichever surface they came from —
@@ -298,6 +314,7 @@ async function openMapDialog(source = 'welcome') {
 // they hit File → Open mid-session.
 function closeOpenDialog() {
   $('#open-dialog').classList.add('hidden')
+  if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
   if (openMapSource === 'editor') {
     $('#app').classList.remove('hidden')
   } else {
@@ -314,6 +331,20 @@ function renderOpenList() {
     return hay.includes(q)
   })
   if (filtered.length === 0) {
+    // While the catalog is still loading, paint skeleton tiles instead
+    // of "no matches" — even when the user is mid-type — so the filter
+    // result doesn't lie about the empty result.
+    if (mapsLoading) {
+      const frag = document.createDocumentFragment()
+      for (let i = 0; i < 8; i++) {
+        const sk = document.createElement('div')
+        sk.className = 'open-list-skeleton'
+        sk.innerHTML = '<div class="thumb"></div><div class="line"></div><div class="line short"></div>'
+        frag.appendChild(sk)
+      }
+      list.replaceChildren(frag)
+      return
+    }
     list.innerHTML = '<div class="loading">No maps in this context match.</div>'
     return
   }
@@ -421,6 +452,9 @@ async function openLoadedMap(data, card) {
   }
   state.ota = data.ota || defaultOTAState(state.name, state.planet, w, h)
   state.activeSchema = 0
+  // Bump again now that features are populated — the spatial /
+  // name indices need to rebuild after the bulk load.
+  bumpContentVersion()
 
   // Preload the tile pool atlas as a section image so the existing
   // drawSectionTiles path can render the loaded map at full fidelity.
@@ -466,6 +500,7 @@ async function startEditor() {
   state.tiles = new Array(w * h).fill(null)
   state.heights = new Array(w * 2 * h * 2).fill(80)
   state.features = []
+  bumpContentVersion()
   state.ota = defaultOTAState(name, planet, w, h)
   // Replace the placeholder schema list with one Network-N schema
   // per selected player count.
@@ -559,39 +594,39 @@ function renderDiceGrid() {
   grid.replaceChildren(frag)
 }
 
-// buildDicePips returns a domino-style pip layout for any count 1..10.
-// Classic d6 faces (1..6) keep the canonical placements; 7..10 extend
-// the pattern by adding pips along the centre row and edges.  Pips are
-// laid out on a 4×4 grid: enough resolution to depict up to ten dots
-// without crowding while still reading as a die face.
+// buildDicePips returns a domino-style face with exactly N pips.  Pips
+// are absolutely positioned (in % within the 44px art square) so we
+// don't run into the 4×4-grid problem where the centre dot needs 4
+// cells to look centred and the count ends up wrong.
 function buildDicePips(n) {
   const wrap = document.createElement('div')
   wrap.className = 'dice-pips'
-  // 4x4 grid positions encoded as 16-bit bitmaps so the layout table
-  // stays compact + the JS can iterate it linearly.  "1" places a pip.
-  //  row 0: 0  1  2  3
-  //  row 1: 4  5  6  7
-  //  row 2: 8  9 10 11
-  //  row 3:12 13 14 15
-  const layouts = {
-    1:  [0,0,0,0, 0,1,1,0, 0,1,1,0, 0,0,0,0],
-    2:  [1,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1],
-    3:  [1,0,0,0, 0,1,1,0, 0,1,1,0, 0,0,0,1],
-    4:  [1,0,0,1, 0,0,0,0, 0,0,0,0, 1,0,0,1],
-    5:  [1,0,0,1, 0,1,1,0, 0,1,1,0, 1,0,0,1],
-    6:  [1,0,0,1, 1,0,0,1, 1,0,0,1, 0,0,0,0],
-    7:  [1,0,0,1, 1,0,0,1, 1,0,0,1, 0,1,1,0],
-    8:  [1,0,0,1, 1,0,0,1, 1,0,0,1, 1,0,0,1],
-    9:  [1,0,0,1, 1,0,0,1, 1,1,1,1, 1,0,0,1],
-    10: [1,1,1,1, 1,0,0,1, 1,0,0,1, 1,1,1,1],
-  }
-  const grid = layouts[n] || layouts[1]
-  for (let i = 0; i < 16; i++) {
-    const cell = document.createElement('span')
-    if (!grid[i]) cell.style.visibility = 'hidden'
-    wrap.appendChild(cell)
+  const positions = DICE_PIP_POSITIONS[n] || []
+  for (const [px, py] of positions) {
+    const dot = document.createElement('span')
+    dot.style.left = (px * 100) + '%'
+    dot.style.top = (py * 100) + '%'
+    wrap.appendChild(dot)
   }
   return wrap
+}
+
+// DICE_PIP_POSITIONS — each entry is a list of [x, y] normalised to
+// the pip area (0..1).  Faces 1..6 are the canonical d6 layouts; 7..10
+// extend the pattern dominos-style (3-1-3, 3-2-3, 3-3-3, 4-2-4).  The
+// arrays here are what's actually rendered, so the dot count matches
+// the player count by construction.
+const DICE_PIP_POSITIONS = {
+  1:  [[0.50, 0.50]],
+  2:  [[0.25, 0.25], [0.75, 0.75]],
+  3:  [[0.22, 0.22], [0.50, 0.50], [0.78, 0.78]],
+  4:  [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]],
+  5:  [[0.22, 0.22], [0.78, 0.22], [0.50, 0.50], [0.22, 0.78], [0.78, 0.78]],
+  6:  [[0.25, 0.18], [0.75, 0.18], [0.25, 0.50], [0.75, 0.50], [0.25, 0.82], [0.75, 0.82]],
+  7:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.50, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
+  8:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.22, 0.50], [0.78, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
+  9:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.22, 0.50], [0.50, 0.50], [0.78, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
+  10: [[0.18, 0.18], [0.39, 0.18], [0.61, 0.18], [0.82, 0.18], [0.32, 0.50], [0.68, 0.50], [0.18, 0.82], [0.39, 0.82], [0.61, 0.82], [0.82, 0.82]],
 }
 
 // finishEditorBoot wires the toolbar / canvas / drawer and loads the
@@ -612,13 +647,13 @@ async function finishEditorBoot() {
     wireViewMenu()
     wireKeyboard()
     editorWired = true
-  } else {
-    const cnv = $('#canvas')
-    if (cnv) {
-      cnv.width = state.tileW * TILE_PX
-      cnv.height = state.tileH * TILE_PX
-    }
   }
+  // Don't poke canvas.width here on a mid-session swap.  renderCanvas
+  // owns the canvas/glCanvas/.canvas-stack dimensions and skips work
+  // when they already match — pre-setting only the 2D canvas hides the
+  // dim change from it, leaving glCanvas stuck at the previous map's
+  // size.  That stale GL buffer is what made the tile layer render
+  // garbage after a map switch.
 
   await Promise.all([loadSections(), loadFeatures()])
   renderCanvas()
@@ -1078,8 +1113,52 @@ async function fetchFeatureOrigins() {
   } catch { /* ignore — drawing falls back to bottom-centre */ }
 }
 
+// Per-row height (in CSS px) used when reserving space for groups whose
+// items haven't been materialised yet.  Keeps the drawer's scrollbar
+// honest while items render lazily — see virtualisedDrawerBody.
+const DRAWER_ITEM_HEIGHT = 60
+const DRAWER_OBSERVER_MARGIN = '400px 0px'
+
+let drawerObserver = null
+function ensureDrawerObserver() {
+  if (drawerObserver) return drawerObserver
+  drawerObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue
+      const populate = e.target._populate
+      if (populate) {
+        delete e.target._populate
+        drawerObserver.unobserve(e.target)
+        populate(e.target)
+      }
+    }
+  }, { root: $('#drawer'), rootMargin: DRAWER_OBSERVER_MARGIN, threshold: 0 })
+  return drawerObserver
+}
+
+// virtualisedDrawerBody creates a drawer-group-body element that
+// reserves space for `itemCount` rows but defers item creation until
+// the body scrolls into view.  Reservations make the drawer scrollbar
+// match the real total height even though the DOM only holds visible
+// items.  When a group is collapsed (display:none) the observer simply
+// doesn't fire until the user expands it — exactly what we want.
+function virtualisedDrawerBody(itemCount, populate) {
+  const body = document.createElement('div')
+  body.className = 'drawer-group-body'
+  if (itemCount > 0) body.style.minHeight = (itemCount * DRAWER_ITEM_HEIGHT) + 'px'
+  body._populate = (el) => {
+    el.style.minHeight = ''
+    populate(el)
+  }
+  ensureDrawerObserver().observe(body)
+  return body
+}
+
 function renderDrawer() {
   const drawer = $('#drawer')
+  // Tear down any pending observers from the previous render — those
+  // bodies are about to be discarded and would otherwise keep refs.
+  if (drawerObserver) { drawerObserver.disconnect(); drawerObserver = null }
   const q = (state.drawerFilters[state.drawer] || '').trim().toLowerCase()
   if (state.drawer === 'sections') renderSectionsDrawer(drawer, q)
   else renderFeaturesDrawer(drawer, q)
@@ -1162,6 +1241,9 @@ function renderDrawerWorldGroup(key, worldName, totalItems, activeByDefault) {
 // renderSectionGroup builds the DOM for one collapsible group of sections.
 // `key` is the persistent identifier used for the collapse-state set;
 // `defaultCollapsed` is the starting state when the key is unknown.
+// Items inside the body are materialised lazily when the body scrolls
+// into view so the editor doesn't spend boot time building thousands of
+// hidden DOM rows.
 function renderSectionGroup(key, groupName, items, defaultCollapsed) {
   const groupEl = document.createElement('div')
   groupEl.className = 'drawer-group'
@@ -1174,29 +1256,33 @@ function renderSectionGroup(key, groupName, items, defaultCollapsed) {
   title.addEventListener('click', () => toggleGroup(key, defaultCollapsed))
   groupEl.appendChild(title)
 
-  const body = document.createElement('div')
-  body.className = 'drawer-group-body'
-  for (const s of items) {
-    const item = document.createElement('div')
-    item.className = 'drawer-item'
-    item.draggable = true
-    item.dataset.path = s.path
-    if (state.selected?.type === 'section' && state.selected.path === s.path) {
-      item.classList.add('selected')
-    }
-    item.innerHTML = `
-      <img class="drawer-thumb" src="/api/studio/section-preview/${encodeURI(s.path)}" alt="" draggable="false" />
-      <div class="drawer-meta">
-        <div class="drawer-name">${escapeHTML(s.name)}</div>
-        <div class="drawer-sub">${s.tileW || '?'}×${s.tileH || '?'} tiles · ${escapeHTML(s.group || '')}</div>
-      </div>
-    `
-    item.addEventListener('click', () => selectSection(s))
-    item.addEventListener('dragstart', (e) => beginSectionDrag(e, s))
-    body.appendChild(item)
-  }
+  const body = virtualisedDrawerBody(items.length, (el) => {
+    const frag = document.createDocumentFragment()
+    for (const s of items) frag.appendChild(createSectionItem(s))
+    el.appendChild(frag)
+  })
   groupEl.appendChild(body)
   return groupEl
+}
+
+function createSectionItem(s) {
+  const item = document.createElement('div')
+  item.className = 'drawer-item'
+  item.draggable = true
+  item.dataset.path = s.path
+  if (state.selected?.type === 'section' && state.selected.path === s.path) {
+    item.classList.add('selected')
+  }
+  item.innerHTML = `
+    <img class="drawer-thumb" src="/api/studio/section-preview/${encodeURI(s.path)}" alt="" loading="lazy" draggable="false" />
+    <div class="drawer-meta">
+      <div class="drawer-name">${escapeHTML(s.name)}</div>
+      <div class="drawer-sub">${s.tileW || '?'}×${s.tileH || '?'} tiles · ${escapeHTML(s.group || '')}</div>
+    </div>
+  `
+  item.addEventListener('click', () => selectSection(s))
+  item.addEventListener('dragstart', (e) => beginSectionDrag(e, s))
+  return item
 }
 
 // toggleGroup flips a group between collapsed/expanded.  `defaultCollapsed`
@@ -1291,61 +1377,62 @@ function renderFeatureGroup(key, groupName, items, defaultCollapsed, usage) {
   title.addEventListener('click', () => toggleGroup(key, defaultCollapsed))
   groupEl.appendChild(title)
 
-  const body = document.createElement('div')
-  body.className = 'drawer-group-body'
-  for (const f of items) {
-    const item = document.createElement('div')
-    item.className = 'drawer-item feature-item'
-    item.draggable = true
-    item.dataset.name = f.name
-    if (state.selected?.type === 'feature' && state.selected.name === f.name) {
-      item.classList.add('selected')
-    }
-    const fp = `${f.footprintX || 1}×${f.footprintZ || 1}`
-    const useCount = usage ? (usage.get((f.name || '').toLowerCase()) || 0) : 0
-    const usageBadge = useCount > 0 ? `<span class="usage-badge">${useCount}</span>` : ''
-    const staticUrl = f.previewUrl ? f.previewUrl + '?static=1' : null
-    const initialUrl = (state.animateFeatures || state.hoveredFeatureName === f.name)
-      ? f.previewUrl
-      : staticUrl
-    const thumb = f.previewUrl
-      ? `<img class="drawer-thumb feature-thumb" src="${initialUrl}" data-animated="${f.previewUrl}" data-static="${staticUrl}" alt="" loading="lazy" draggable="false" />`
-      : `<div class="drawer-thumb drawer-thumb-glyph">🌲</div>`
-    item.innerHTML = `
-      ${thumb}
-      <div class="drawer-meta">
-        <div class="drawer-name">${escapeHTML(f.name)}</div>
-        <div class="drawer-sub">${fp} · ${escapeHTML(f.description || f.category || '')}</div>
-      </div>
-      ${usageBadge}
-    `
-    item.addEventListener('click', () => selectFeature(f))
-    item.addEventListener('dragstart', (e) => beginFeatureDrag(e, f))
-    // Hover-to-animate and hover-highlight: while the cursor is over this
-    // row, force the thumb to animate (even with global animation off)
-    // and outline every placement of that feature in red on the canvas.
-    item.addEventListener('mouseenter', () => {
-      state.hoveredFeatureName = f.name
-      state.highlightFeatureName = (f.name || '').toLowerCase()
-      if (f.previewUrl && !state.animateFeatures) {
-        const img = item.querySelector('img.feature-thumb')
-        if (img) img.src = img.dataset.animated
-      }
-      renderCanvas()
-    })
-    item.addEventListener('mouseleave', () => {
-      if (state.hoveredFeatureName === f.name) state.hoveredFeatureName = null
-      if (state.highlightFeatureName === (f.name || '').toLowerCase()) state.highlightFeatureName = null
-      if (f.previewUrl && !state.animateFeatures) {
-        const img = item.querySelector('img.feature-thumb')
-        if (img) img.src = img.dataset.static
-      }
-      renderCanvas()
-    })
-    body.appendChild(item)
-  }
+  const body = virtualisedDrawerBody(items.length, (el) => {
+    const frag = document.createDocumentFragment()
+    for (const f of items) frag.appendChild(createFeatureItem(f, usage))
+    el.appendChild(frag)
+  })
   groupEl.appendChild(body)
   return groupEl
+}
+
+function createFeatureItem(f, usage) {
+  const item = document.createElement('div')
+  item.className = 'drawer-item feature-item'
+  item.draggable = true
+  item.dataset.name = f.name
+  if (state.selected?.type === 'feature' && state.selected.name === f.name) {
+    item.classList.add('selected')
+  }
+  const fp = `${f.footprintX || 1}×${f.footprintZ || 1}`
+  const useCount = usage ? (usage.get((f.name || '').toLowerCase()) || 0) : 0
+  const usageBadge = useCount > 0 ? `<span class="usage-badge">${useCount}</span>` : ''
+  const staticUrl = f.previewUrl ? f.previewUrl + '?static=1' : null
+  const initialUrl = (state.animateFeatures || state.hoveredFeatureName === f.name)
+    ? f.previewUrl
+    : staticUrl
+  const thumb = f.previewUrl
+    ? `<img class="drawer-thumb feature-thumb" src="${initialUrl}" data-animated="${f.previewUrl}" data-static="${staticUrl}" alt="" loading="lazy" draggable="false" />`
+    : `<div class="drawer-thumb drawer-thumb-glyph">🌲</div>`
+  item.innerHTML = `
+    ${thumb}
+    <div class="drawer-meta">
+      <div class="drawer-name">${escapeHTML(f.name)}</div>
+      <div class="drawer-sub">${fp} · ${escapeHTML(f.description || f.category || '')}</div>
+    </div>
+    ${usageBadge}
+  `
+  item.addEventListener('click', () => selectFeature(f))
+  item.addEventListener('dragstart', (e) => beginFeatureDrag(e, f))
+  item.addEventListener('mouseenter', () => {
+    state.hoveredFeatureName = f.name
+    state.highlightFeatureName = (f.name || '').toLowerCase()
+    if (f.previewUrl && !state.animateFeatures) {
+      const img = item.querySelector('img.feature-thumb')
+      if (img) img.src = img.dataset.animated
+    }
+    renderCanvas()
+  })
+  item.addEventListener('mouseleave', () => {
+    if (state.hoveredFeatureName === f.name) state.hoveredFeatureName = null
+    if (state.highlightFeatureName === (f.name || '').toLowerCase()) state.highlightFeatureName = null
+    if (f.previewUrl && !state.animateFeatures) {
+      const img = item.querySelector('img.feature-thumb')
+      if (img) img.src = img.dataset.static
+    }
+    renderCanvas()
+  })
+  return item
 }
 
 // beginSectionDrag and beginFeatureDrag are called from dragstart.  We
@@ -1731,6 +1818,18 @@ function wireCanvas() {
   canvas.height = state.tileH * TILE_PX
   canvas.style.width = canvas.width * state.zoom + 'px'
   canvas.style.height = canvas.height * state.zoom + 'px'
+  const glCanvas = $('#canvas-gl')
+  if (glCanvas) {
+    glCanvas.width = canvas.width
+    glCanvas.height = canvas.height
+    glCanvas.style.width = canvas.style.width
+    glCanvas.style.height = canvas.style.height
+  }
+  const stack = $('#canvas-stack')
+  if (stack) {
+    stack.style.width = canvas.style.width
+    stack.style.height = canvas.style.height
+  }
 
   canvas.addEventListener('mousedown', (e) => onCanvasMouseDown(e))
   window.addEventListener('mouseup', (e) => onCanvasMouseUp(e))
@@ -2311,12 +2410,12 @@ function stampSectionWithRotation(tx, ty, sectionPath, origW, origH, rotation, f
       if (mx < 0 || my < 0 || mx >= state.tileW || my >= state.tileH) continue
       const src = transformedSourceCell(dx, dy, origW, origH, rotation, flipH, flipV)
       state.tiles[my * state.tileW + mx] = { sectionPath, sx: src.sx, sy: src.sy, rotation, flipH, flipV }
+      patchMinimapTile(mx, my)
 
       if (sec) copyTileHeights(sec, src.sx, src.sy, mx, my, rotation, origW, origH, flipH, flipV)
     }
   }
   paintedDuringStroke = true
-  invalidateMinimapBase()
   renderCanvas()
 }
 
@@ -2711,15 +2810,23 @@ function onFeatureMouseUp(_e) {
 // hit-box matches the sprite as drawn (not bottom-centred).  We
 // re-iterate in z-order (drawn last = on top) so the topmost feature
 // wins overlaps.
+// FEATURE_HIT_SEARCH_TILES — how far from the click tile we look for
+// candidate features.  Sprites can extend off their anchor; this is
+// the upper bound for typical TA sprites (5 tiles ≈ 160 game pixels).
+const FEATURE_HIT_SEARCH_TILES = 6
+
 function findFeatureAt(tx, ty) {
   const cpx = tx * TILE_PX + TILE_PX / 2
   const cpy = ty * TILE_PX + TILE_PX / 2
-  for (let i = state.features.length - 1; i >= 0; i--) {
-    const f = state.features[i]
+  const candidates = featuresNear(tx, ty, FEATURE_HIT_SEARCH_TILES)
+  // Walk in reverse insertion order (drawn last → on top wins overlaps).
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const idx = candidates[i]
+    const f = state.features[idx]
     const px = (f.ax / 2) * TILE_PX
     const py = (f.ay / 2) * TILE_PX
     const r = featureRenderRect(f, px, py)
-    if (cpx >= r.x && cpx <= r.x + r.w && cpy >= r.y && cpy <= r.y + r.h) return i
+    if (cpx >= r.x && cpx <= r.x + r.w && cpy >= r.y && cpy <= r.y + r.h) return idx
   }
   return -1
 }
@@ -3049,7 +3156,11 @@ function eraseAt(tx, ty) {
       for (let tx2 = x0; tx2 < x1; tx2++) {
         if (tx2 < 0 || tx2 >= state.tileW) continue
         const i = ty2 * state.tileW + tx2
-        if (state.tiles[i]) { state.tiles[i] = null; dirty = true }
+        if (state.tiles[i]) {
+          state.tiles[i] = null
+          patchMinimapTile(tx2, ty2)
+          dirty = true
+        }
       }
     }
   }
@@ -3061,12 +3172,12 @@ function eraseAt(tx, ty) {
     state.features = state.features.filter((f) => {
       return !(f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY)
     })
-    if (state.features.length !== before) dirty = true
+    if (state.features.length !== before) {
+      bumpContentVersion()
+      dirty = true
+    }
   }
-  if (dirty) {
-    invalidateMinimapBase()
-    renderCanvas()
-  }
+  if (dirty) renderCanvas()
 }
 
 function stampSection(tx, ty) {
@@ -3098,21 +3209,74 @@ function placeFeature(tx, ty) {
 
 function renderCanvas() {
   const canvas = $('#canvas')
-  canvas.width = state.tileW * TILE_PX
-  canvas.height = state.tileH * TILE_PX
-  canvas.style.width = canvas.width * state.zoom + 'px'
-  canvas.style.height = canvas.height * state.zoom + 'px'
+  const glCanvas = $('#canvas-gl')
+  const wantW = state.tileW * TILE_PX
+  const wantH = state.tileH * TILE_PX
+  // Reassigning canvas.width/height reallocates the pixel buffer —
+  // for a 128-tile map that's a 64 MB texture, and a 256-tile map
+  // is 256 MB.  Doing it every render (including on every scroll
+  // tick) is what made the editor feel "insanely slow".  Only pay
+  // that cost when the dimensions actually change.
+  const dimsChanged = canvas.width !== wantW || canvas.height !== wantH
+  if (dimsChanged) {
+    canvas.width = wantW
+    canvas.height = wantH
+    if (glCanvas) {
+      glCanvas.width = wantW
+      glCanvas.height = wantH
+    }
+  }
+  const wantStyleW = wantW * state.zoom + 'px'
+  const wantStyleH = wantH * state.zoom + 'px'
+  if (canvas.style.width !== wantStyleW) {
+    canvas.style.width = wantStyleW
+    if (glCanvas) glCanvas.style.width = wantStyleW
+  }
+  if (canvas.style.height !== wantStyleH) {
+    canvas.style.height = wantStyleH
+    if (glCanvas) glCanvas.style.height = wantStyleH
+  }
+  // The wrapper owns the normal-flow size for the scroll container; both
+  // canvases are absolute inside it, so the wrapper has to match their
+  // CSS-scaled pixel dimensions for the scrollbars to do the right thing.
+  const stack = $('#canvas-stack')
+  if (stack) {
+    if (stack.style.width !== wantStyleW) stack.style.width = wantStyleW
+    if (stack.style.height !== wantStyleH) stack.style.height = wantStyleH
+  }
   const ctx = canvas.getContext('2d')
   ctx.imageSmoothingEnabled = false
 
-  // Background fill.
-  ctx.fillStyle = VOID_COLOR
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  // 2D overlay layer must be transparent everywhere we don't paint
+  // an overlay, so the WebGL tile+feature layer shows through.  Clear
+  // the visible viewport instead of fill-rect-with-void-colour — the
+  // void is now drawn by the GL layer's clear().
+  const vp = visiblePixelBounds()
+  if (dimsChanged) {
+    ctx.clearRect(0, 0, wantW, wantH)
+  } else {
+    ctx.clearRect(vp.minX, vp.minY, vp.maxX - vp.minX, vp.maxY - vp.minY)
+  }
 
+  // Tiles + features render via WebGL.  Heightmap view stays on 2D
+  // (it's a one-off greyscale fill, not a per-tile drawImage hot
+  // path).  When the GL context isn't available (no WebGL support),
+  // fall back to the 2D path so the editor still works.  Note that
+  // the GL renderer iterates tile *cells* — it needs visibleTileBounds,
+  // not the pixel bounds we use for the 2D clearRect.
+  const glReady = ensureGLRenderer()
+  const tb = visibleTileBounds()
   if (state.viewMode === 'heightmap') {
+    if (glReady) glClearViewport()
     drawHeightmap(ctx)
   } else {
-    drawTiles(ctx)
+    if (glReady) {
+      glRenderTilesAndFeatures(tb)
+    } else {
+      ctx.fillStyle = VOID_COLOR
+      ctx.fillRect(vp.minX, vp.minY, vp.maxX - vp.minX, vp.maxY - vp.minY)
+      drawTiles(ctx)
+    }
     if (state.viewMode === 'blended') drawHeightmapOverlay(ctx)
   }
 
@@ -3134,8 +3298,9 @@ function renderCanvas() {
     }
   }
 
-  // Features — drawn on top of tiles.  Hidden in tiles-only / heightmap.
-  if (state.showFeatures && state.viewMode !== 'tiles' && state.viewMode !== 'heightmap') {
+  // Features are rendered by the WebGL layer above when GL is active;
+  // fall back to the 2D path only when GL isn't available.
+  if (!glReady && state.showFeatures && state.viewMode !== 'tiles' && state.viewMode !== 'heightmap') {
     drawFeatures(ctx)
   }
 
@@ -3161,6 +3326,292 @@ function renderCanvas() {
   // Refresh the developer stats panel on the next frame too — keeps
   // the counts in sync with whatever the user just stamped.
   scheduleDevStatsRefresh()
+}
+
+// ── WebGL renderer (tile + feature batches) ───────────────────────────────
+//
+// The 2D drawImage path hit a wall at ~17k tile cells × per-cell
+// drawImage overhead.  This renderer collapses every tile sharing a
+// source texture into one batched draw call (a tightly-packed vertex
+// buffer of triangles + UVs), and does the same for feature sprites.
+// Each section image becomes a texture; the shader samples it for
+// every quad.  Pan/scroll only re-uploads the vertex buffer for the
+// new visible viewport — no per-frame `drawImage` JS↔C++ crossings.
+//
+// The 2D overlay canvas still draws on top for placement previews,
+// gridlines, selection rectangles, etc., which are low-volume and
+// don't benefit from the GL rewrite.
+
+const gl = { ctx: null, prog: null, posLoc: -1, uvLoc: -1, texLoc: -1, projLoc: -1, vbo: null, textures: new Map(), failed: false }
+
+// ensureGLRenderer is called from renderCanvas; returns true when the
+// WebGL context is live and ready to draw.  Returns false (and only
+// the first time logs a warning) when WebGL isn't supported, so the
+// 2D fallback path stays in play.
+function ensureGLRenderer() {
+  if (gl.ctx) return true
+  if (gl.failed) return false
+  const canvas = $('#canvas-gl')
+  if (!canvas) return false
+  const ctx = canvas.getContext('webgl2', { premultipliedAlpha: false, antialias: false })
+    || canvas.getContext('webgl', { premultipliedAlpha: false, antialias: false })
+  if (!ctx) {
+    gl.failed = true
+    console.warn('WebGL unavailable — falling back to 2D rendering')
+    return false
+  }
+  // Vertex shader: per-vertex pixel position + UV.  An ortho projection
+  // maps map-pixel coords (0..mapW, 0..mapH) into clip space, with Y
+  // flipped so (0,0) sits at the top-left like the 2D canvas.
+  const vsrc = `
+    attribute vec2 aPos;
+    attribute vec2 aUV;
+    uniform vec2 uProj;
+    varying vec2 vUV;
+    void main() {
+      vec2 ndc = vec2(aPos.x / uProj.x * 2.0 - 1.0, 1.0 - aPos.y / uProj.y * 2.0);
+      gl_Position = vec4(ndc, 0.0, 1.0);
+      vUV = aUV;
+    }
+  `
+  // Fragment shader: sample the bound texture.  We keep fully-transparent
+  // pixels around (no discard) so the GPU's blend stage handles the
+  // composite — discarding was eating opaque section tiles whose blue
+  // channel happened to coincide with the alpha threshold in tests.
+  const fsrc = `
+    precision mediump float;
+    varying vec2 vUV;
+    uniform sampler2D uTex;
+    void main() {
+      gl_FragColor = texture2D(uTex, vUV);
+    }
+  `
+  const vs = ctx.createShader(ctx.VERTEX_SHADER)
+  ctx.shaderSource(vs, vsrc); ctx.compileShader(vs)
+  if (!ctx.getShaderParameter(vs, ctx.COMPILE_STATUS)) {
+    console.warn('vertex shader compile failed:', ctx.getShaderInfoLog(vs))
+    gl.failed = true; return false
+  }
+  const fs = ctx.createShader(ctx.FRAGMENT_SHADER)
+  ctx.shaderSource(fs, fsrc); ctx.compileShader(fs)
+  if (!ctx.getShaderParameter(fs, ctx.COMPILE_STATUS)) {
+    console.warn('fragment shader compile failed:', ctx.getShaderInfoLog(fs))
+    gl.failed = true; return false
+  }
+  const prog = ctx.createProgram()
+  ctx.attachShader(prog, vs); ctx.attachShader(prog, fs); ctx.linkProgram(prog)
+  if (!ctx.getProgramParameter(prog, ctx.LINK_STATUS)) {
+    console.warn('program link failed:', ctx.getProgramInfoLog(prog))
+    gl.failed = true; return false
+  }
+  gl.ctx = ctx
+  gl.prog = prog
+  gl.posLoc = ctx.getAttribLocation(prog, 'aPos')
+  gl.uvLoc = ctx.getAttribLocation(prog, 'aUV')
+  gl.texLoc = ctx.getUniformLocation(prog, 'uTex')
+  gl.projLoc = ctx.getUniformLocation(prog, 'uProj')
+  gl.vbo = ctx.createBuffer()
+  ctx.enable(ctx.BLEND)
+  ctx.blendFunc(ctx.SRC_ALPHA, ctx.ONE_MINUS_SRC_ALPHA)
+  return true
+}
+
+// glTextureFor uploads an HTMLImageElement to a GPU texture once and
+// returns the cached handle.  Images that haven't decoded yet return
+// null; callers should fall through and let the load listener retry
+// the render once the pixels are available.
+function glTextureFor(key, img) {
+  if (!gl.ctx || !img || !img.complete || img.naturalWidth === 0) return null
+  const cached = gl.textures.get(key)
+  if (cached) return cached
+  const ctx = gl.ctx
+  const tex = ctx.createTexture()
+  ctx.bindTexture(ctx.TEXTURE_2D, tex)
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MIN_FILTER, ctx.NEAREST)
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST)
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE)
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE)
+  ctx.pixelStorei(ctx.UNPACK_FLIP_Y_WEBGL, false)
+  ctx.pixelStorei(ctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, ctx.RGBA, ctx.UNSIGNED_BYTE, img)
+  gl.textures.set(key, { tex, w: img.naturalWidth, h: img.naturalHeight })
+  return gl.textures.get(key)
+}
+
+// glClearViewport fills the GL canvas with the void colour so the
+// non-GL view modes (heightmap) see a clean backdrop.
+function glClearViewport() {
+  if (!gl.ctx) return
+  const ctx = gl.ctx
+  ctx.viewport(0, 0, ctx.drawingBufferWidth, ctx.drawingBufferHeight)
+  ctx.clearColor(0x1d / 255, 0x30 / 255, 0x45 / 255, 1)
+  ctx.clear(ctx.COLOR_BUFFER_BIT)
+}
+
+// glRenderTilesAndFeatures repaints the GL layer.  Walks visible tiles
+// grouped by section path, builds one batched vertex buffer per group,
+// and draws each group with a single drawArrays call.  Features are
+// batched the same way, keyed by feature name.
+function glRenderTilesAndFeatures(vp) {
+  if (!gl.ctx) return
+  const ctx = gl.ctx
+  ctx.viewport(0, 0, ctx.drawingBufferWidth, ctx.drawingBufferHeight)
+  ctx.clearColor(0x1d / 255, 0x30 / 255, 0x45 / 255, 1)
+  ctx.clear(ctx.COLOR_BUFFER_BIT)
+
+  ctx.useProgram(gl.prog)
+  ctx.uniform2f(gl.projLoc, ctx.drawingBufferWidth, ctx.drawingBufferHeight)
+  ctx.bindBuffer(ctx.ARRAY_BUFFER, gl.vbo)
+  ctx.enableVertexAttribArray(gl.posLoc)
+  ctx.enableVertexAttribArray(gl.uvLoc)
+  // Each vertex is 4 floats: x, y, u, v.  Stride 16 bytes.
+  ctx.vertexAttribPointer(gl.posLoc, 2, ctx.FLOAT, false, 16, 0)
+  ctx.vertexAttribPointer(gl.uvLoc, 2, ctx.FLOAT, false, 16, 8)
+
+  // ── Tiles ────────────────────────────────────────────────────
+  // Group visible tile stamps by section path so each section image
+  // turns into exactly one batched draw call.
+  const tileGroups = new Map()
+  const tw = state.tileW
+  for (let ty = vp.minTY; ty <= vp.maxTY; ty++) {
+    for (let tx = vp.minTX; tx <= vp.maxTX; tx++) {
+      const stamp = state.tiles[ty * tw + tx]
+      if (!stamp || !stamp.sectionPath) continue
+      let list = tileGroups.get(stamp.sectionPath)
+      if (!list) { list = []; tileGroups.set(stamp.sectionPath, list) }
+      list.push({ tx, ty, stamp })
+    }
+  }
+  for (const [path, list] of tileGroups) {
+    const img = state.sectionImages.get(path)
+    const t = glTextureFor(path, img)
+    if (!t) {
+      if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
+      continue
+    }
+    const verts = buildTileBatch(list, t.w, t.h)
+    ctx.bufferData(ctx.ARRAY_BUFFER, verts, ctx.DYNAMIC_DRAW)
+    ctx.activeTexture(ctx.TEXTURE0)
+    ctx.bindTexture(ctx.TEXTURE_2D, t.tex)
+    ctx.uniform1i(gl.texLoc, 0)
+    ctx.drawArrays(ctx.TRIANGLES, 0, list.length * 6)
+  }
+
+  // ── Features ─────────────────────────────────────────────────
+  if (!state.showFeatures || state.viewMode === 'tiles') return
+  const featGroups = new Map()
+  for (const f of state.features) {
+    if (!f.previewUrl) continue
+    const px = (f.ax / 2) * TILE_PX
+    const py = (f.ay / 2) * TILE_PX
+    const img = state.featureImages.get((f.name || '').toLowerCase())
+    if (!img || !img.complete || img.naturalWidth === 0) {
+      if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
+      else preloadFeatureImage(f)
+      continue
+    }
+    const { dx, dy } = featureAnchorOffset(f, img)
+    const x = px - dx, y = py - dy
+    // Cull off-viewport feature sprites — convert tile bounds to
+    // pixel-space inline so we don't need a second helper.
+    const pxMinX = vp.minTX * TILE_PX, pxMaxX = (vp.maxTX + 1) * TILE_PX
+    const pxMinY = vp.minTY * TILE_PX, pxMaxY = (vp.maxTY + 1) * TILE_PX
+    if (x + img.naturalWidth < pxMinX || x > pxMaxX || y + img.naturalHeight < pxMinY || y > pxMaxY) continue
+    const key = (f.name || '').toLowerCase()
+    let list = featGroups.get(key)
+    if (!list) { list = { img, items: [] }; featGroups.set(key, list) }
+    list.items.push({ x, y })
+  }
+  for (const [key, group] of featGroups) {
+    const t = glTextureFor('feature:' + key, group.img)
+    if (!t) continue
+    const verts = buildFeatureBatch(group.items, group.img.naturalWidth, group.img.naturalHeight)
+    ctx.bufferData(ctx.ARRAY_BUFFER, verts, ctx.DYNAMIC_DRAW)
+    ctx.activeTexture(ctx.TEXTURE0)
+    ctx.bindTexture(ctx.TEXTURE_2D, t.tex)
+    ctx.uniform1i(gl.texLoc, 0)
+    ctx.drawArrays(ctx.TRIANGLES, 0, group.items.length * 6)
+  }
+}
+
+// buildTileBatch assembles the vertex array for every tile in a batch.
+// Each tile becomes two triangles (6 verts).  The 32×32 source rect
+// inside the section image is determined by the rotated/flipped
+// transformedSourceCell logic — the four corners are emitted in an
+// order that bakes the same rotation+flip the 2D path would apply,
+// so the sampled UVs hit the right pixels.
+function buildTileBatch(list, imgW, imgH) {
+  const out = new Float32Array(list.length * 6 * 4)
+  let o = 0
+  for (const { tx, ty, stamp } of list) {
+    const dx0 = tx * TILE_PX, dy0 = ty * TILE_PX
+    const dx1 = dx0 + TILE_PX, dy1 = dy0 + TILE_PX
+    const src = stamp.sectionPath
+      ? transformedSourceCell(0, 0, 1, 1, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV)
+      : { sx: stamp.sx, sy: stamp.sy }
+    // The source cell from the stamp is already pre-rotated (it was
+    // baked at stamp-time), but the per-tile rotation/flip still
+    // controls how the *pixels* sit inside that source slot.
+    const sx0 = stamp.sx * 32 / imgW
+    const sy0 = stamp.sy * 32 / imgH
+    const sx1 = (stamp.sx + 1) * 32 / imgW
+    const sy1 = (stamp.sy + 1) * 32 / imgH
+    void src
+    // Compute the four UV corners after applying rotation + flips so
+    // the texture is sampled the same way the 2D drawTransformedTile
+    // would paint it.
+    let uTL = sx0, vTL = sy0, uTR = sx1, vTR = sy0, uBR = sx1, vBR = sy1, uBL = sx0, vBL = sy1
+    const rot = (stamp.rotation || 0) & 3
+    for (let i = 0; i < rot; i++) {
+      // 90° CW: TL←BL, TR←TL, BR←TR, BL←BR
+      const nuTL = uBL, nvTL = vBL
+      const nuTR = uTL, nvTR = vTL
+      const nuBR = uTR, nvBR = vTR
+      const nuBL = uBR, nvBL = vBR
+      uTL = nuTL; vTL = nvTL; uTR = nuTR; vTR = nvTR; uBR = nuBR; vBR = nvBR; uBL = nuBL; vBL = nvBL
+    }
+    if (stamp.flipH) {
+      // Mirror across the vertical axis: swap left↔right UVs.
+      let t = uTL; uTL = uTR; uTR = t
+      t = vTL; vTL = vTR; vTR = t
+      t = uBL; uBL = uBR; uBR = t
+      t = vBL; vBL = vBR; vBR = t
+    }
+    if (stamp.flipV) {
+      let t = uTL; uTL = uBL; uBL = t
+      t = vTL; vTL = vBL; vBL = t
+      t = uTR; uTR = uBR; uBR = t
+      t = vTR; vTR = vBR; vBR = t
+    }
+    // Triangle 1: TL, TR, BR
+    out[o++] = dx0; out[o++] = dy0; out[o++] = uTL; out[o++] = vTL
+    out[o++] = dx1; out[o++] = dy0; out[o++] = uTR; out[o++] = vTR
+    out[o++] = dx1; out[o++] = dy1; out[o++] = uBR; out[o++] = vBR
+    // Triangle 2: TL, BR, BL
+    out[o++] = dx0; out[o++] = dy0; out[o++] = uTL; out[o++] = vTL
+    out[o++] = dx1; out[o++] = dy1; out[o++] = uBR; out[o++] = vBR
+    out[o++] = dx0; out[o++] = dy1; out[o++] = uBL; out[o++] = vBL
+  }
+  return out
+}
+
+// buildFeatureBatch produces the vertex array for every feature in a
+// group.  Each feature is one quad sized to the sprite's natural
+// dimensions; no rotation/flip support since the GAF sprites we serve
+// for the canvas are already the final pose.
+function buildFeatureBatch(items, w, h) {
+  const out = new Float32Array(items.length * 6 * 4)
+  let o = 0
+  for (const { x, y } of items) {
+    const x1 = x + w, y1 = y + h
+    out[o++] = x;   out[o++] = y;   out[o++] = 0; out[o++] = 0
+    out[o++] = x1;  out[o++] = y;   out[o++] = 1; out[o++] = 0
+    out[o++] = x1;  out[o++] = y1;  out[o++] = 1; out[o++] = 1
+    out[o++] = x;   out[o++] = y;   out[o++] = 0; out[o++] = 0
+    out[o++] = x1;  out[o++] = y1;  out[o++] = 1; out[o++] = 1
+    out[o++] = x;   out[o++] = y1;  out[o++] = 0; out[o++] = 1
+  }
+  return out
 }
 
 // ── View-mode renderers ────────────────────────────────────────────────────
@@ -4005,21 +4456,35 @@ function drawSelectedFeatureOutline(ctx) {
   }
 }
 
+// FEATURE_HIGHLIGHT_LIMIT — disable the hover-highlight passes
+// (canvas red outlines + minimap dots) on heavily populated maps.
+// At thousands of features the outline pass becomes the dominant
+// cost on each mouse-move; below the limit the visual cue is more
+// helpful than the work is expensive.
+const FEATURE_HIGHLIGHT_LIMIT = 1000
+
 // drawHighlightedFeatureOutlines draws a red rectangle around every
 // placement of the currently-hovered drawer feature.  The rectangle
 // follows the feature's footprint so the user can see *exactly* which
-// cells are occupied.
+// cells are occupied.  Skipped entirely once state.features grows
+// past FEATURE_HIGHLIGHT_LIMIT — for huge maps the highlight makes
+// every hover feel sluggish and the user can still pick out the
+// hovered type via the drawer thumbnail.
 function drawHighlightedFeatureOutlines(ctx) {
   if (!state.highlightFeatureName) return
-  const target = state.highlightFeatureName
+  if ((state.features || []).length > FEATURE_HIGHLIGHT_LIMIT) return
+  const indices = getFeaturesByName(state.highlightFeatureName)
+  if (!indices.length) return
+  const vp = visiblePixelBounds()
   ctx.strokeStyle = '#f85149'
   ctx.lineWidth = 2
   ctx.setLineDash([4, 3])
-  for (const f of state.features) {
-    if ((f.name || '').toLowerCase() !== target) continue
+  for (const idx of indices) {
+    const f = state.features[idx]
     const px = (f.ax / 2) * TILE_PX
     const py = (f.ay / 2) * TILE_PX
     const r = featureRenderRect(f, px, py)
+    if (r.x + r.w < vp.minX || r.x > vp.maxX || r.y + r.h < vp.minY || r.y > vp.maxY) continue
     ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
   }
   ctx.setLineDash([])
@@ -4050,13 +4515,158 @@ function normalizedRect(r) {
 const MINIMAP_PX = 200
 const MINIMAP_HOVER_DOT_LIMIT = 100 // if more than this many of the hovered feature exist, skip dots entirely
 
-// minimapBase holds the cached map render.  Sized to the same aspect
-// ratio as the displayed minimap but drawn at the main canvas's full
-// resolution so the base stays sharp at any zoom level.
+// minimapBase holds the cached map render at one pixel per tile.
+// Feature changes never touch the base — only the dot overlay drawn on
+// top by renderMinimap depends on features — so invalidation is split
+// between tile-only and feature-only paths.
 let minimapBase = null
 let minimapBaseStale = true
 function invalidateMinimapBase() {
   minimapBaseStale = true
+  bumpContentVersion()
+}
+
+// contentVersion is bumped any time state.features changes.  Feature
+// indices (spatial, name) recompute lazily when their cached version
+// falls behind.  Tile changes use invalidateMinimapBase / patchMinimapTile
+// directly and do not need to invalidate the feature indices.
+let contentVersion = 0
+function bumpContentVersion() {
+  contentVersion++
+  featureSpatial = null
+  featureNameIndex = null
+}
+
+// sectionThumbCache maps a sectionPath to a downscaled canvas where
+// each 32-px source tile collapses to a single pixel.  Built once per
+// section via cascading half-size downsamples (browsers handle big
+// single-step downscales poorly — direct 32→1 gives essentially one
+// sampled pixel, which is what made the minimap look like noise on
+// AC01-style maps).  Stored result is tiny (e.g. 64×64 for a 2048×2048
+// atlas) and stays valid for the life of the image.
+const sectionThumbCache = new Map()
+function sectionThumb(path, img) {
+  if (!img || !img.complete || img.naturalWidth === 0) return null
+  const cached = sectionThumbCache.get(path)
+  if (cached && cached.srcW === img.naturalWidth && cached.srcH === img.naturalHeight) {
+    return cached.canvas
+  }
+  const w = img.naturalWidth
+  const h = img.naturalHeight
+  const targetW = Math.max(1, Math.floor(w / TILE_PX))
+  const targetH = Math.max(1, Math.floor(h / TILE_PX))
+  let cur = img
+  let cw = w, ch = h
+  while (cw > targetW * 2 || ch > targetH * 2) {
+    const nw = Math.max(targetW, Math.floor(cw / 2))
+    const nh = Math.max(targetH, Math.floor(ch / 2))
+    const c = document.createElement('canvas')
+    c.width = nw
+    c.height = nh
+    const cctx = c.getContext('2d')
+    cctx.imageSmoothingEnabled = true
+    cctx.imageSmoothingQuality = 'high'
+    cctx.drawImage(cur, 0, 0, nw, nh)
+    cur = c
+    cw = nw
+    ch = nh
+  }
+  const final = document.createElement('canvas')
+  final.width = targetW
+  final.height = targetH
+  const fctx = final.getContext('2d')
+  fctx.imageSmoothingEnabled = true
+  fctx.imageSmoothingQuality = 'high'
+  fctx.drawImage(cur, 0, 0, targetW, targetH)
+  sectionThumbCache.set(path, { canvas: final, srcW: w, srcH: h })
+  return final
+}
+
+// patchMinimapTile updates a single pixel of the cached minimap base
+// for an in-place tile edit (stamp / erase).  Skips when the base is
+// already fully stale (a full rebuild will pick it up) or hasn't been
+// allocated yet (first render will build it from scratch).
+function patchMinimapTile(tx, ty) {
+  if (!minimapBase || minimapBaseStale) return
+  if (minimapBase.width !== state.tileW || minimapBase.height !== state.tileH) {
+    minimapBaseStale = true
+    return
+  }
+  const ctx = minimapBase.getContext('2d')
+  const stamp = state.tiles[ty * state.tileW + tx]
+  if (!stamp) {
+    ctx.fillStyle = VOID_COLOR
+    ctx.fillRect(tx, ty, 1, 1)
+    return
+  }
+  const img = state.sectionImages.get(stamp.sectionPath)
+  const thumb = sectionThumb(stamp.sectionPath, img)
+  if (!thumb) {
+    if (img) img.addEventListener('load', () => invalidateMinimapBase(), { once: true })
+    return
+  }
+  ctx.clearRect(tx, ty, 1, 1)
+  ctx.drawImage(thumb, stamp.sx, stamp.sy, 1, 1, tx, ty, 1, 1)
+  scheduleMinimapRender()
+}
+
+// featureSpatial — tile-keyed bucket of feature indices.  Rebuilt
+// lazily by findFeatureAt / featuresNear when contentVersion ticks
+// past spatialVersion.  Without this, every mouse-move is O(N) over
+// state.features.
+let featureSpatial = null
+let spatialVersion = -1
+function rebuildFeatureSpatial() {
+  featureSpatial = new Map()
+  const tw = state.tileW
+  for (let i = 0; i < state.features.length; i++) {
+    const f = state.features[i]
+    const tx = Math.floor(f.ax / 2)
+    const ty = Math.floor(f.ay / 2)
+    const key = ty * tw + tx
+    let arr = featureSpatial.get(key)
+    if (!arr) { arr = []; featureSpatial.set(key, arr) }
+    arr.push(i)
+  }
+  spatialVersion = contentVersion
+}
+
+// featuresNear returns every feature whose ANCHOR tile is within a
+// radius of (tx, ty).  Sprites can extend off their anchor so callers
+// should still test the final draw rect, but the candidate set is now
+// O(radius²) instead of O(N).
+function featuresNear(tx, ty, radius) {
+  if (!featureSpatial || spatialVersion !== contentVersion) rebuildFeatureSpatial()
+  const tw = state.tileW, th = state.tileH
+  const lo = { x: Math.max(0, tx - radius), y: Math.max(0, ty - radius) }
+  const hi = { x: Math.min(tw - 1, tx + radius), y: Math.min(th - 1, ty + radius) }
+  const out = []
+  for (let cy = lo.y; cy <= hi.y; cy++) {
+    for (let cx = lo.x; cx <= hi.x; cx++) {
+      const arr = featureSpatial.get(cy * tw + cx)
+      if (arr) for (const i of arr) out.push(i)
+    }
+  }
+  return out
+}
+
+// featureNameIndex — name → array of indices.  Used by the hover
+// outline + minimap dot loop, which previously walked all features
+// looking for matches.  Same lifetime as featureSpatial.
+let featureNameIndex = null
+let nameIndexVersion = -1
+function getFeaturesByName(name) {
+  if (!featureNameIndex || nameIndexVersion !== contentVersion) {
+    featureNameIndex = new Map()
+    for (let i = 0; i < state.features.length; i++) {
+      const n = (state.features[i].name || '').toLowerCase()
+      let arr = featureNameIndex.get(n)
+      if (!arr) { arr = []; featureNameIndex.set(n, arr) }
+      arr.push(i)
+    }
+    nameIndexVersion = contentVersion
+  }
+  return featureNameIndex.get(name) || []
 }
 
 let minimapRenderQueued = false
@@ -4083,8 +4693,12 @@ function scheduleRenderCanvas() {
 
 function rebuildMinimapBase() {
   if (!minimapBase) minimapBase = document.createElement('canvas')
-  const W = state.tileW * TILE_PX
-  const H = state.tileH * TILE_PX
+  // Base is one pixel per tile.  Per-tile colour comes from the cached
+  // section thumb (cascading downsample) rather than drawImage'ing the
+  // raw 32×32 source rect to 1 px, which collapses to a single sampled
+  // pixel on most browsers and looks like static.
+  const W = state.tileW
+  const H = state.tileH
   if (minimapBase.width !== W || minimapBase.height !== H) {
     minimapBase.width = W
     minimapBase.height = H
@@ -4093,19 +4707,17 @@ function rebuildMinimapBase() {
   ctx.imageSmoothingEnabled = false
   ctx.fillStyle = VOID_COLOR
   ctx.fillRect(0, 0, W, H)
-  // Draw every tile — no viewport culling, this is the always-full
-  // source for the minimap.  Same per-tile cost as the main canvas
-  // but only paid when content actually changes.
   for (let ty = 0; ty < state.tileH; ty++) {
     for (let tx = 0; tx < state.tileW; tx++) {
       const stamp = state.tiles[ty * state.tileW + tx]
       if (!stamp) continue
       const img = state.sectionImages.get(stamp.sectionPath)
-      if (!img || !img.complete || img.naturalWidth === 0) {
+      const thumb = sectionThumb(stamp.sectionPath, img)
+      if (!thumb) {
         if (img) img.addEventListener('load', () => invalidateMinimapBase(), { once: true })
         continue
       }
-      drawTransformedTile(ctx, img, stamp.sx, stamp.sy, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV, tx * TILE_PX, ty * TILE_PX)
+      ctx.drawImage(thumb, stamp.sx, stamp.sy, 1, 1, tx, ty, 1, 1)
     }
   }
   minimapBaseStale = false
@@ -4145,15 +4757,15 @@ function renderMinimap() {
   // just look like a uniform haze and we'd pay the loop cost on every
   // mouse-move).
   const target = state.highlightFeatureName
-  if (target) {
-    let matches = 0
-    for (const f of state.features) {
-      if ((f.name || '').toLowerCase() === target && ++matches > MINIMAP_HOVER_DOT_LIMIT) break
-    }
-    if (matches > 0 && matches <= MINIMAP_HOVER_DOT_LIMIT) {
+  // Same opt-out as the canvas outline pass — once the map crosses
+  // FEATURE_HIGHLIGHT_LIMIT total features the highlight makes every
+  // mouse-move sluggish, so disable both.
+  if (target && (state.features || []).length <= FEATURE_HIGHLIGHT_LIMIT) {
+    const indices = getFeaturesByName(target)
+    if (indices.length > 0 && indices.length <= MINIMAP_HOVER_DOT_LIMIT) {
       ctx.fillStyle = '#f85149'
-      for (const f of state.features) {
-        if ((f.name || '').toLowerCase() !== target) continue
+      for (const idx of indices) {
+        const f = state.features[idx]
         const px = ox + (f.ax / 2 / state.tileW) * dw
         const py = oy + (f.ay / 2 / state.tileH) * dh
         ctx.beginPath()
@@ -4328,25 +4940,45 @@ function computeDevStats() {
 }
 
 let devStatsRefreshQueued = false
+let lastDevStatsVersion = -1
 function scheduleDevStatsRefresh() {
+  // Cheap no-op when the underlying data hasn't changed — high-freq
+  // renders (scroll, hover, drag preview) skip the rAF entirely.
+  // The dialog's open() call refreshes directly, so we don't have to
+  // poll for it here.
+  if (lastDevStatsVersion === contentVersion) return
   if (devStatsRefreshQueued) return
   devStatsRefreshQueued = true
-  // Use rAF so a burst of edits collapses to one refresh.
   requestAnimationFrame(() => {
     devStatsRefreshQueued = false
+    lastDevStatsVersion = contentVersion
     refreshDevStats()
   })
 }
 
+// devStatsCache memoises the last computeDevStats result and the
+// content-version it was built for.  On a 256×256 map with thousands
+// of features computeDevStats is the heaviest per-render work; gating
+// it on contentVersion keeps scroll/hover from recomputing.
+let devStatsCache = null
+let devStatsCacheVersion = -1
+function getDevStats() {
+  if (devStatsCache && devStatsCacheVersion === contentVersion) return devStatsCache
+  devStatsCache = computeDevStats()
+  devStatsCacheVersion = contentVersion
+  return devStatsCache
+}
 function refreshDevStats() {
-  const stats = computeDevStats()
+  const dlgOpen = !$('#developer-dialog')?.classList.contains('hidden')
+  // Skip the full compute when content hasn't changed AND the dialog
+  // isn't open (its tile grid is the only reader that NEEDS the live
+  // tileEntries map; the panel just shows the three counts).
+  const stats = getDevStats()
   const set = (id, v) => { const el = $('#' + id); if (el) el.textContent = String(v) }
   set('dev-stats-distinct-tiles', stats.distinctTiles)
   set('dev-stats-distinct-features', stats.distinctFeatures)
   set('dev-stats-total-features', stats.totalFeatures)
-  // If the developer dialog is open, keep its summary + grid live too.
-  const dlg = $('#developer-dialog')
-  if (dlg && !dlg.classList.contains('hidden')) {
+  if (dlgOpen) {
     set('dev-dlg-distinct-tiles', stats.distinctTiles)
     set('dev-dlg-sections-used', stats.sectionsUsed)
     renderDevTilesGrid(stats.tileEntries)
@@ -4463,8 +5095,21 @@ function renderDevTilesGrid(tileEntries) {
 function setZoom(z) {
   state.zoom = clamp(z, 0.25, 4)
   const canvas = $('#canvas')
-  canvas.style.width = canvas.width * state.zoom + 'px'
-  canvas.style.height = canvas.height * state.zoom + 'px'
+  const w = canvas.width * state.zoom + 'px'
+  const h = canvas.height * state.zoom + 'px'
+  canvas.style.width = w
+  canvas.style.height = h
+  const glCanvas = $('#canvas-gl')
+  if (glCanvas) {
+    glCanvas.style.width = w
+    glCanvas.style.height = h
+  }
+  const stack = $('#canvas-stack')
+  if (stack) {
+    stack.style.width = w
+    stack.style.height = h
+  }
+  scheduleRenderCanvas()
   scheduleMinimapRender()
 }
 
@@ -5150,9 +5795,10 @@ function applyResize() {
   commitTransaction('Resize map')
 
   closeResizeDialog()
-  const cnv = $('#canvas')
-  cnv.width = newW * TILE_PX
-  cnv.height = newH * TILE_PX
+  // renderCanvas resizes both #canvas and #canvas-gl from state.tileW/H —
+  // touching canvas.width directly here used to short-circuit that path
+  // and leave the GL backing buffer at the old size, which is why the
+  // tile layer panned around with garbage after a resize.
   renderCanvas()
   setStatus(`Resized to ${newW}×${newH}.  Existing content anchored to (${offsetX}, ${offsetY}).`)
 }

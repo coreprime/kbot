@@ -79,39 +79,86 @@ type mapEntry struct {
 	MinimapURL  string `json:"minimapUrl,omitempty"`
 }
 
-func handleMapsList(w http.ResponseWriter, _ *http.Request) {
-	var entries []mapEntry
-	for _, p := range vfs.List() {
+// mapCatalog holds the preloaded list of .tnt maps and their rendered
+// minimap PNGs.  The studio CLI populates this in a goroutine at server
+// start so the Open dialog doesn't need to parse every TNT on first open.
+type mapCatalogState struct {
+	mu       sync.RWMutex
+	ready    bool
+	entries  []mapEntry
+	minimaps map[string][]byte // path -> PNG bytes
+}
+
+var mapCatalog = &mapCatalogState{minimaps: map[string][]byte{}}
+
+// startMapPreload walks the VFS for .tnt files, summarises each, and
+// pre-renders the embedded minimap as a PNG.  Intended to run once in
+// a goroutine after the VFS is mounted.
+func startMapPreload() {
+	paths := vfs.List()
+	var tntPaths []string
+	for _, p := range paths {
 		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "maps/") || !strings.HasSuffix(lower, ".tnt") {
-			continue
+		if strings.HasPrefix(lower, "maps/") && strings.HasSuffix(lower, ".tnt") {
+			tntPaths = append(tntPaths, p)
 		}
-		entry := summariseMap(p)
-		entries = append(entries, entry)
 	}
+	pal := loadVFSPalette()
+	for _, p := range tntPaths {
+		entry, png := summariseMapWithMinimap(p, pal)
+		mapCatalog.mu.Lock()
+		mapCatalog.entries = append(mapCatalog.entries, entry)
+		if png != nil {
+			mapCatalog.minimaps[p] = png
+		}
+		mapCatalog.mu.Unlock()
+	}
+	mapCatalog.mu.Lock()
+	sort.Slice(mapCatalog.entries, func(i, j int) bool {
+		return strings.ToLower(mapCatalog.entries[i].Name) < strings.ToLower(mapCatalog.entries[j].Name)
+	})
+	mapCatalog.ready = true
+	mapCatalog.mu.Unlock()
+}
+
+func handleMapsList(w http.ResponseWriter, _ *http.Request) {
+	mapCatalog.mu.RLock()
+	ready := mapCatalog.ready
+	entries := make([]mapEntry, len(mapCatalog.entries))
+	copy(entries, mapCatalog.entries)
+	mapCatalog.mu.RUnlock()
+	if ready {
+		writeJSON(w, map[string]any{"maps": entries, "loading": false})
+		return
+	}
+	// Still preloading — return whatever's been resolved so far plus a
+	// loading flag.  The client polls until loading flips to false.
 	sort.Slice(entries, func(i, j int) bool {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
-	writeJSON(w, map[string]any{"maps": entries})
+	writeJSON(w, map[string]any{"maps": entries, "loading": true})
 }
 
-func summariseMap(p string) mapEntry {
-	base := strings.TrimSuffix(path.Base(p), path.Ext(p))
-	entry := mapEntry{
-		Path: p,
-		Name: base,
-	}
-	// TNT dimensions — best-effort.
+// summariseMapWithMinimap is summariseMap plus the rendered minimap PNG
+// so the preload goroutine can populate both caches in one TNT parse.
+func summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
+	entry := mapEntry{Path: p, Name: strings.TrimSuffix(path.Base(p), path.Ext(p))}
+	var pngBytes []byte
 	if data, err := vfs.ReadFile(p); err == nil {
 		if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil {
 			entry.TileW = m.TileW
 			entry.TileH = m.TileH
 			if m.Minimap != nil {
 				entry.MinimapURL = "/api/studio/minimap/" + p
+				if img := m.RenderMinimap(pal); img != nil {
+					var buf bytes.Buffer
+					if err := png.Encode(&buf, img); err == nil {
+						pngBytes = buf.Bytes()
+					}
+				}
 			}
 		}
 	}
-	// Pair with .ota for friendly metadata.
 	otaPath := strings.TrimSuffix(p, path.Ext(p)) + ".ota"
 	if data, err := vfs.ReadFile(otaPath); err == nil {
 		if doc, err := tdf.ParseString(string(data)); err == nil {
@@ -122,15 +169,26 @@ func summariseMap(p string) mapEntry {
 			}
 		}
 	}
-	return entry
+	return entry, pngBytes
 }
 
 // handleMapMinimap streams the embedded TNT minimap as a PNG so the
-// open-map dialog can show a thumbnail per map.
+// open-map dialog can show a thumbnail per map.  The preload goroutine
+// usually has the PNG ready; the live fallback covers requests that
+// race ahead of the preload (or maps that weren't picked up by it).
 func handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 	mapPath := strings.TrimPrefix(r.URL.Path, "/api/studio/minimap/")
 	if mapPath == "" {
 		http.Error(w, "missing map path", http.StatusBadRequest)
+		return
+	}
+	mapCatalog.mu.RLock()
+	cached := mapCatalog.minimaps[mapPath]
+	mapCatalog.mu.RUnlock()
+	if cached != nil {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(cached)
 		return
 	}
 	data, err := vfs.ReadFile(mapPath)
