@@ -1681,6 +1681,30 @@ function selectFeature(f) {
   setStatus(`Placing ${f.name} — click anywhere to drop a copy.  Pick a different feature or hit Esc to stop.`)
 }
 
+// whenImageReady fires `cb` the first time `img` finishes loading,
+// dedupes by (img, kind) so callers in tight render loops don't pile
+// up a thousand listeners on the same Image while it decodes.  Every
+// repaint of a frame that touches a not-yet-loaded section atlas used
+// to attach a new 'load' handler — when the atlas finally decoded all
+// those handlers fired in a single tick, each invoking renderCanvas()
+// and burning 99% of JS time in the listener add path.
+const imageReadyCallbacks = new WeakMap()
+function whenImageReady(img, kind, cb) {
+  if (!img) return
+  let registry = imageReadyCallbacks.get(img)
+  if (!registry) {
+    registry = new Set()
+    imageReadyCallbacks.set(img, registry)
+  }
+  if (registry.has(kind)) return
+  registry.add(kind)
+  img.addEventListener('load', () => {
+    const r = imageReadyCallbacks.get(img)
+    if (r) r.delete(kind)
+    cb()
+  }, { once: true })
+}
+
 function preloadFeatureImage(f) {
   if (!f.previewUrl) return
   const key = f.name.toLowerCase()
@@ -3642,7 +3666,7 @@ function glRenderTilesAndFeatures(vp) {
     const img = state.sectionImages.get(path)
     const t = glTextureFor(path, img)
     if (!t) {
-      if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
+      whenImageReady(img, 'render', renderCanvas)
       continue
     }
     const verts = buildTileBatch(list, t.w, t.h)
@@ -3669,7 +3693,7 @@ function glRenderTilesAndFeatures(vp) {
     const { px, py } = featureAnchorWorld(f)
     const img = state.featureImages.get((f.name || '').toLowerCase())
     if (!img || !img.complete || img.naturalWidth === 0) {
-      if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
+      if (img) whenImageReady(img, 'render', renderCanvas)
       else preloadFeatureImage(f)
       continue
     }
@@ -3797,7 +3821,7 @@ function drawTiles(ctx) {
       if (!img || !img.complete || img.naturalWidth === 0) {
         ctx.fillStyle = '#3a4d61'
         ctx.fillRect(tx * TILE_PX, ty * TILE_PX, TILE_PX, TILE_PX)
-        if (img) img.addEventListener('load', () => renderCanvas(), { once: true })
+        whenImageReady(img, 'render', renderCanvas)
         continue
       }
       drawTransformedTile(ctx, img, stamp.sx, stamp.sy, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV, tx * TILE_PX, ty * TILE_PX)
@@ -4796,7 +4820,7 @@ function patchMinimapTile(tx, ty) {
   const img = state.sectionImages.get(stamp.sectionPath)
   const thumb = sectionThumb(stamp.sectionPath, img)
   if (!thumb) {
-    if (img) img.addEventListener('load', () => invalidateMinimapBase(), { once: true })
+    whenImageReady(img, 'minimap-base', invalidateMinimapBase)
     return
   }
   ctx.clearRect(tx, ty, 1, 1)
@@ -4908,7 +4932,7 @@ function rebuildMinimapBase() {
       const img = state.sectionImages.get(stamp.sectionPath)
       const thumb = sectionThumb(stamp.sectionPath, img)
       if (!thumb) {
-        if (img) img.addEventListener('load', () => invalidateMinimapBase(), { once: true })
+        whenImageReady(img, 'minimap-base', invalidateMinimapBase)
         continue
       }
       ctx.drawImage(thumb, stamp.sx, stamp.sy, 1, 1, tx, ty, 1, 1)
@@ -5314,7 +5338,7 @@ function renderDevTilesGrid(tileEntries) {
     } else {
       cctx.fillStyle = '#3a4d61'
       cctx.fillRect(0, 0, 32, 32)
-      if (img) img.addEventListener('load', () => refreshDevStats(), { once: true })
+      whenImageReady(img, 'dev-stats', refreshDevStats)
     }
     cell.appendChild(cnv)
     const tag = document.createElement('div')
