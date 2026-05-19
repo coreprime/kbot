@@ -1,0 +1,1598 @@
+:root {
+  --bg-0: #0f1115;
+  --bg-1: #161a21;
+  --bg-2: #1d222b;
+  --bg-3: #252b36;
+  --border: #2a313d;
+  --text: #d7dee8;
+  --muted: #8a93a3;
+  --accent: #8b5cf6;
+  --accent-hover: #a784ff;
+  --danger: #f85149;
+  --good: #3fb950;
+  --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--sans);
+  background: var(--bg-0);
+  color: var(--text);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+kbd {
+  font-family: var(--mono);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+/* ── Initial size dialog ───────────────────────────────────────────── */
+/* Dialogs (size, OTA, schema editor, confirm) sit on top of every
+   floating panel + dropdown popup so a modal prompt is never partly
+   obscured.  The disconnect overlay still goes higher (z 9000) — when
+   the server's gone, even modals are unreachable. */
+.dialog {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5000;
+}
+.dialog-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px 32px;
+  width: min(440px, 92vw);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}
+.dialog-card-wide {
+  width: min(720px, 94vw);
+  max-height: 88vh;
+  /* The card itself is a flex column so the scrollable body shrinks
+     before the action bar.  Without this the Cancel/Apply row gets
+     pushed below the viewport on small screens. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-card-wide > h1,
+.dialog-card-wide > .dialog-sub,
+.dialog-card-wide > .dialog-actions { flex-shrink: 0; }
+.dialog-card-wide > .ota-grid,
+.dialog-card-wide > .dev-tab-bodies,
+.dialog-card-wide > div:not(.dialog-actions) { overflow-y: auto; }
+.dialog-card-narrow {
+  width: min(380px, 92vw);
+}
+
+/* ── Dice-face player-count picker (size dialog) ────────────────────────
+   Buttons are styled to look like classic d6 faces — a 5-pip "5" reads
+   the same as the dice rolled in a TA lobby.  The user multi-selects
+   any combination they want to seed Network N schemas for. */
+.field-help {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 4px 0 6px;
+}
+.dice-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+.dice-face {
+  width: 100%;
+  aspect-ratio: auto;
+  padding: 8px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.dice-face .dice-face-art {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dice-face .dice-pips {
+  display: grid;
+  grid-template-columns: repeat(4, 6px);
+  grid-template-rows: repeat(4, 6px);
+  gap: 3px;
+}
+.dice-face .dice-pips span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text);
+  align-self: center;
+  justify-self: center;
+}
+.dice-face .dice-caption {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-weight: 500;
+}
+.dice-face .dice-count { display: none; }
+.dice-face.selected .dice-caption { color: #fff; }
+.dice-face {
+  position: relative;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 80ms ease;
+}
+.dice-face:hover {
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+.dice-face:active { transform: scale(0.96); }
+.dice-face.selected {
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.18);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.dice-face.selected .dice-pips span { background: #fff; }
+
+/* ── Schema popup rows ────────────────────────────────────────────── */
+.schema-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.schema-row:hover { background: var(--bg-2); }
+.schema-row.active {
+  background: var(--accent);
+  color: #fff;
+}
+.schema-row .schema-row-name { flex: 1; }
+.schema-row .schema-row-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.schema-row.active .schema-row-count { color: rgba(255,255,255,0.85); }
+.schema-row .schema-row-del,
+.schema-row .schema-row-gear {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.schema-row .schema-row-gear:hover {
+  background: rgba(139, 92, 246, 0.22);
+  color: var(--accent);
+}
+.schema-row .schema-row-del:hover {
+  background: rgba(248, 81, 73, 0.18);
+  color: #f85149;
+}
+.schema-row.active .schema-row-del,
+.schema-row.active .schema-row-gear { color: rgba(255,255,255,0.85); }
+.schema-row.active .schema-row-del:hover,
+.schema-row.active .schema-row-gear:hover { background: rgba(0,0,0,0.2); color: #fff; }
+.schema-row.disabled {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+.schema-add-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 4px 6px;
+}
+.schema-add-chip {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text);
+  padding: 4px 0;
+  cursor: pointer;
+}
+.schema-add-chip:hover {
+  border-color: var(--accent);
+  background: var(--bg-3);
+}
+.schema-add-chip:disabled,
+.schema-add-chip.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.schema-add-empty {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-style: italic;
+}
+
+/* ── Welcome modal ─────────────────────────────────────────────────── */
+.welcome-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 18px;
+}
+.welcome-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  transition: transform 100ms ease, border-color 100ms ease, background 100ms ease;
+}
+.welcome-card:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.welcome-card-ico { font-size: 40px; line-height: 1; }
+.welcome-card-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.welcome-card-sub {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ── Open-map dialog ───────────────────────────────────────────────── */
+.open-filter input[type="search"] {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+.open-filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
+.open-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+.open-list .loading { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 24px; }
+.open-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text);
+}
+.open-list-item:hover { border-color: var(--accent); }
+.open-list-item.selected { border-color: var(--accent); background: rgba(139, 92, 246, 0.08); }
+.open-list-item .thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  background: var(--bg-3);
+  border-radius: 4px;
+  image-rendering: pixelated;
+  object-fit: cover;
+}
+.open-list-item .title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.open-list-item .meta {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ota-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 16px;
+  margin-bottom: 8px;
+}
+.ota-grid .field { margin-bottom: 0; }
+.ota-grid .field-wide { grid-column: 1 / span 2; }
+.ota-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin-top: 18px;
+  margin-bottom: 4px;
+}
+.dialog-card-wide code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* Schema selector dropdown — match the toolbar look. */
+#schema-select {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 12px;
+}
+#schema-select:focus { outline: none; border-color: var(--accent); }
+.dialog-card h1 {
+  font-size: 22px;
+  margin-bottom: 6px;
+}
+.dialog-sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+.field span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.field input,
+.field select {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-size: 14px;
+}
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.dialog-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* ── Resize dialog ─────────────────────────────────────────────────── */
+.resize-row {
+  display: flex;
+  gap: 12px;
+}
+.resize-row .field {
+  flex: 1;
+}
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  width: 132px;
+  margin-bottom: 8px;
+}
+.anchor-grid button {
+  aspect-ratio: 1;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  font-family: var(--mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.anchor-grid button:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+}
+.anchor-grid button.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.anchor-preview {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-family: var(--mono);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
+.btn {
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--border); }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.danger {
+  background: #d23a3a;
+  border-color: #d23a3a;
+  color: #fff;
+}
+.btn.danger:hover { background: #b92e2e; border-color: #b92e2e; }
+
+/* ── App layout ────────────────────────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-rows: 48px auto 1fr 28px;
+  grid-template-columns: 320px 1fr;
+  grid-template-areas:
+    "top top"
+    "ribbon ribbon"
+    "side canvas"
+    "status status";
+  height: 100vh;
+}
+.topbar {
+  grid-area: top;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.brand-mark { font-size: 18px; }
+
+/* ── Ribbon toolbar (modes / actions / zoom / view) ────────────────── */
+.ribbon {
+  grid-area: ribbon;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: stretch;
+  padding: 6px 8px;
+  gap: 8px;
+  overflow-x: auto;
+}
+.ribbon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 5px;
+  /* Recessed/inset look: darker fill + inner shadow so each group
+     reads as a sunken panel against the lighter chrome. */
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  border-radius: 6px;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.03);
+  min-height: 42px;
+  justify-content: space-between;
+}
+.ribbon-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--muted);
+  line-height: 1;
+}
+.ribbon-group {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 2px;
+  gap: 0;
+  height: 30px;
+}
+.ribbon-group > .tool-btn {
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  padding: 0 10px;
+  height: 100%;
+  min-width: 30px;
+  justify-content: center;
+}
+.ribbon-group > .tool-btn:hover {
+  background: var(--bg-3);
+  color: var(--text);
+}
+.ribbon-group > .tool-btn.active,
+.ribbon-group > .tool-btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+.ribbon-group > .tool-btn.primary:hover { background: var(--accent-hover); }
+.ribbon-group > .tool-btn.toggle:not(.active) {
+  background: transparent;
+  color: var(--muted);
+}
+.ribbon-group > .tool-btn.toggle.active {
+  background: var(--accent);
+  color: #fff;
+}
+/* Dropdown selects sit inside groups so unify their height. */
+.ribbon-group > select {
+  background: transparent;
+  border: none;
+  height: 100%;
+  padding: 0 6px;
+  color: var(--text);
+  font: inherit;
+  border-radius: 3px;
+}
+.ribbon-group > select:hover { background: var(--bg-3); }
+.ribbon-group > select:focus { outline: none; background: var(--bg-3); }
+.ribbon-divider {
+  display: inline-block;
+  width: 1px;
+  align-self: stretch;
+  margin: 1px 4px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.tool-btn {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.tool-btn:disabled,
+.tool-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+.tool-btn .ico { font-size: 14px; }
+
+/* ── Ribbon dropdown button + popup ────────────────────────────────── */
+.ribbon-dropdown {
+  position: relative;
+}
+.ribbon-dropdown-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 130px;
+  justify-content: space-between;
+}
+.ribbon-dropdown-btn .chev-down { color: var(--muted); font-size: 10px; }
+.ribbon-dropdown-popup {
+  /* fixed-positioned so the popup escapes the ribbon's overflow
+     clipping (which would otherwise hide popups behind the canvas).
+     JS sets top/left to anchor below the button. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  min-width: 220px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ribbon-dropdown-popup.hidden { display: none; }
+.ribbon-dropdown-popup .menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+}
+.ribbon-dropdown-popup .menu-row:hover { background: var(--bg-2); }
+.ribbon-dropdown-popup .menu-row.active {
+  background: var(--accent);
+  color: #fff;
+}
+.ribbon-dropdown-popup .menu-row .ico { font-size: 15px; width: 18px; text-align: center; }
+.ribbon-dropdown-popup .menu-row .menu-check {
+  margin-left: auto;
+  color: var(--accent);
+  opacity: 0;
+}
+.ribbon-dropdown-popup .menu-row[data-on="1"] .menu-check { opacity: 1; }
+.ribbon-dropdown-popup .menu-row.active .menu-check { color: #fff; opacity: 1; }
+
+/* Slight breathing room between the standalone view toggles. */
+.ribbon-dropdown-popup .toggle-row + .toggle-row { margin-top: 4px; }
+.ribbon-dropdown-popup .menu-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.ribbon-dropdown-popup .menu-section-label:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+.ribbon-dropdown-popup .inline-row {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px;
+}
+.ribbon-dropdown-popup .inline-row .menu-row {
+  flex: 1;
+  justify-content: center;
+}
+
+.ribbon-section-right { margin-left: auto; }
+.ribbon-section.hidden { display: none; }
+
+/* The Erase row in the Mode menu pops out a brush-size submenu on
+   hover.  We use a separate fixed-position popup (positioned via JS so
+   it works in both the narrow drop-down and wide inline ribbon
+   layouts) rather than nesting elements inside the Erase <button>. */
+.ribbon-dropdown-popup .menu-row.has-sub .sub-chev {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  padding-left: 6px;
+}
+.ribbon-dropdown-popup .menu-row.has-sub.active .sub-chev { color: rgba(255,255,255,0.75); }
+.ribbon-dropdown-popup .menu-row.has-sub .sub-current {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.ribbon-dropdown-popup .menu-row.has-sub.active .sub-current {
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+}
+.ribbon-dropdown-popup .menu-row.has-sub .sub-current + .sub-chev { margin-left: 0; }
+.ribbon-submenu { min-width: 140px; }
+.ribbon-submenu .menu-section-label { margin-top: 0; border-top: none; }
+
+/* Hotkey chip on menu rows — appears at the right edge so the user can
+   learn the shortcut without leaving the menu.  Hidden at very narrow
+   widths so the row doesn't wrap. */
+.ribbon-dropdown-popup .menu-row .menu-row-hotkey {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.3;
+}
+.ribbon-dropdown-popup .menu-row.active .menu-row-hotkey {
+  color: rgba(255,255,255,0.9);
+  background: rgba(0,0,0,0.25);
+  border-color: rgba(255,255,255,0.25);
+}
+.ribbon-dropdown-popup .menu-row.has-sub .menu-row-hotkey { margin-left: 6px; }
+
+/* Ribbon popups need to sit above the floating minimap, dev-stats,
+   and the canvas overlay; bump them well over the panel layer. */
+.ribbon-dropdown-popup { z-index: 1500; }
+.ribbon-submenu { z-index: 1600; }
+
+/* The Schema dropdown stays in its compact "show one button + popup"
+   form regardless of viewport width — the player-count picker is a
+   list, not a strip of toggles, so the inline expansion would be
+   visually noisy.  Carved out via [data-keep-compact] so future
+   sections can opt in the same way. */
+.ribbon-dropdown[data-keep-compact] .ribbon-dropdown-btn { display: inline-flex !important; }
+.ribbon-dropdown[data-keep-compact] .ribbon-dropdown-popup {
+  position: fixed !important;
+  display: none !important;
+  flex-direction: column !important;
+  background: var(--bg-1) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  padding: 6px !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5) !important;
+  min-width: 220px !important;
+  z-index: 1500 !important;
+}
+.ribbon-dropdown[data-keep-compact] .ribbon-dropdown-popup:not(.hidden) { display: flex !important; }
+
+/* ── Wide-screen toolbar: expand dropdowns inline ────────────────────
+   Inline expansion only kicks in on genuinely wide displays.  Below
+   the breakpoint, every section collapses to a "single button +
+   popup" so the ribbon stays readable and the canvas keeps its
+   horizontal real estate. */
+@media (min-width: 1400px) {
+  /* Hide the dropdown trigger buttons and show the popup contents
+     in-place as a horizontal MUI button-group. */
+  .ribbon-dropdown-btn { display: none; }
+  .ribbon-dropdown { display: inline-flex; align-items: stretch; }
+  .ribbon-dropdown-popup {
+    position: static;
+    display: flex !important;
+    flex-direction: row;
+    align-items: stretch;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    gap: 0;
+    min-width: 0;
+    z-index: auto;
+  }
+  /* Menu rows behave like inline ribbon buttons. */
+  .ribbon-dropdown-popup .menu-row {
+    border-radius: 3px;
+    padding: 0 10px;
+    height: 100%;
+    width: auto;
+    background: transparent;
+    color: var(--text);
+    flex-direction: row;
+    align-items: center;
+  }
+  .ribbon-dropdown-popup .menu-row:hover { background: var(--bg-3); }
+  .ribbon-dropdown-popup .menu-row.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  /* Toggle rows visually reflect on/off via the accent fill. */
+  .ribbon-dropdown-popup .menu-row[data-on="1"] {
+    background: var(--accent);
+    color: #fff;
+  }
+  /* Hide section labels + check marks — state is shown via .active. */
+  .ribbon-dropdown-popup .menu-section-label {
+    align-self: stretch;
+    width: 1px;
+    padding: 0;
+    margin: 4px 4px;
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+    text-indent: -9999px;
+    font-size: 0;
+  }
+  .ribbon-dropdown-popup .menu-row .menu-check { display: none; }
+  .ribbon-dropdown-popup .inline-row {
+    padding: 0;
+    flex-direction: row;
+    flex: 0 0 auto;
+  }
+  /* At wide widths the popup is horizontal — switch the toggle-row
+     spacing from top→left. */
+  .ribbon-dropdown-popup .toggle-row + .toggle-row {
+    margin-top: 0;
+    margin-left: 4px;
+  }
+  /* Hide the hotkey chip when the popup is flattened — inline ribbon
+     buttons stay compact with just an icon + label. */
+  .ribbon-dropdown-popup .menu-row .menu-row-hotkey { display: none; }
+  /* Hover submenus (e.g. the Erase brush picker) stay as floating
+     popups — the inline ribbon flattening above mustn't flatten the
+     submenu itself, only the host menu rows. */
+  .ribbon-dropdown-popup.ribbon-submenu {
+    position: fixed;
+    display: flex !important;
+    flex-direction: column;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+    min-width: 140px;
+    z-index: 500;
+  }
+  .ribbon-dropdown-popup.ribbon-submenu.hidden { display: none !important; }
+  .ribbon-dropdown-popup.ribbon-submenu .menu-row {
+    border-radius: 4px;
+    padding: 6px 10px;
+    height: auto;
+    width: 100%;
+    background: transparent;
+    color: var(--text);
+    flex-direction: row;
+    justify-content: flex-start;
+  }
+  .ribbon-dropdown-popup.ribbon-submenu .menu-row:hover { background: var(--bg-2); }
+  .ribbon-dropdown-popup.ribbon-submenu .menu-row.active {
+    background: var(--accent);
+    color: #fff;
+  }
+  .ribbon-dropdown-popup.ribbon-submenu .menu-section-label {
+    align-self: auto;
+    width: auto;
+    padding: 8px 10px 4px;
+    margin: 0;
+    border: none;
+    text-indent: 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+}
+.tool-btn.toggle:not(.active) {
+  background: var(--bg-2);
+  color: var(--muted);
+}
+.tool-btn.toggle.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Segmented control for display-mode selection — laid out inline with
+   the toggle buttons in the View section. */
+.display-mode-group {
+  display: inline-flex;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px;
+  gap: 0;
+  align-items: center;
+}
+.display-mode-group .tool-btn {
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  padding: 3px 9px;
+  font-size: 12px;
+}
+.display-mode-group .tool-btn:hover {
+  background: var(--bg-3);
+}
+.display-mode-group .tool-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── Placement hint overlay ────────────────────────────────────────── */
+.placement-hint {
+  position: sticky;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: rgba(20, 24, 32, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 40;
+  font-size: 13px;
+  margin: 12px;
+  width: max-content;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+.placement-hint.hidden { display: none; }
+
+/* ── Rotation badge ───────────────────────────────────────────────── */
+/* Lives inside the scroll container but is *not* drawn on the canvas
+   itself — it's an HTML overlay so it stays a fixed CSS size
+   regardless of zoom.  Position is set in JS from the placement's
+   tx/ty scaled by state.zoom. */
+.rotation-badge {
+  position: absolute;
+  background: rgba(20, 24, 32, 0.95);
+  border: 2px solid rgba(139, 92, 246, 0.95);
+  border-radius: 6px;
+  padding: 6px 12px;
+  z-index: 40;
+  pointer-events: none;
+  white-space: nowrap;
+  font-family: var(--sans);
+  color: #e0d7ff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.rotation-badge.hidden { display: none; }
+.rotation-badge .rb-title {
+  font-weight: 600;
+  font-size: 16px;
+  line-height: 1.1;
+}
+.rotation-badge .rb-arrow { font-size: 18px; }
+.rotation-badge .rb-sub {
+  font-size: 11px;
+  color: rgba(220, 220, 220, 0.8);
+  margin-top: 2px;
+}
+.placement-hint .hint-keys {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.placement-hint .hint-keys .hint-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.placement-hint .hint-keys .hint-row.hidden { display: none; }
+.placement-hint .hint-keys kbd {
+  margin-right: 2px;
+}
+
+/* ── Selection box (Select Terrain mode) ───────────────────────────── */
+.selection-info {
+  position: sticky;
+  bottom: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(20, 24, 32, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  z-index: 40;
+  font-size: 12px;
+  margin: 12px;
+  width: max-content;
+  pointer-events: none;
+}
+.selection-info.hidden { display: none; }
+.map-info {
+  flex: 1;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tool-toggle input { cursor: pointer; }
+
+.sidebar {
+  grid-area: side;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 10px 0;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.filter {
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.filter input[type="search"] {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.filter-toggle.hidden { display: none; }
+.filter-toggle input { cursor: pointer; }
+
+.usage-badge {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 1px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: rgba(139, 92, 246, 0.12);
+}
+.drawer {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.loading { color: var(--muted); padding: 16px; text-align: center; }
+
+.drawer-group {
+  margin-bottom: 8px;
+}
+.drawer-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.drawer-group-title:hover {
+  color: var(--text);
+}
+.drawer-group-title .chev {
+  display: inline-block;
+  transition: transform 120ms ease;
+  font-size: 10px;
+  color: var(--muted);
+}
+.drawer-group.collapsed .chev {
+  transform: rotate(-90deg);
+}
+.drawer-group.collapsed .drawer-group-body {
+  display: none;
+}
+.drawer-group-count {
+  margin-left: auto;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.drawer-tileset-label {
+  margin-left: 6px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+}
+
+/* World-level (outer) groups stack flat; the groups nested inside them
+   (e.g. "Trees" under "Green World") get a subtle indent with a left
+   guide line so the hierarchy is readable without dominating the
+   drawer.  Tile items inside the inner groups get a matching indent. */
+.drawer-world > .drawer-group-body {
+  padding-left: 10px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.drawer-world > .drawer-group-body > .drawer-group {
+  margin-bottom: 6px;
+}
+.drawer-world > .drawer-group-body > .drawer-group > .drawer-group-title {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  border-bottom: none;
+  padding: 4px 4px 4px 2px;
+}
+.drawer-world > .drawer-group-body > .drawer-group > .drawer-group-body {
+  padding-left: 6px;
+}
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 6px;
+  cursor: grab;
+  border: 1px solid transparent;
+  user-select: none;
+}
+.drawer-item:active {
+  cursor: grabbing;
+}
+.drawer-item:hover {
+  background: var(--bg-2);
+}
+.drawer-item.selected {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+.drawer-thumb {
+  width: 48px;
+  height: 48px;
+  background: var(--bg-3);
+  border-radius: 4px;
+  flex-shrink: 0;
+  image-rendering: pixelated;
+  object-fit: cover;
+}
+.drawer-meta {
+  flex: 1;
+  min-width: 0;
+}
+.drawer-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drawer-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.feature-item .drawer-thumb {
+  background:
+    linear-gradient(45deg, #1a2030 25%, transparent 25%),
+    linear-gradient(-45deg, #1a2030 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1a2030 75%),
+    linear-gradient(-45deg, transparent 75%, #1a2030 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: #11161e;
+  object-fit: contain;
+  padding: 2px;
+}
+.feature-item .drawer-thumb-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.canvas-wrap {
+  grid-area: canvas;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.canvas-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.canvas-scroll {
+  flex: 1;
+  overflow: auto;
+  background:
+    linear-gradient(45deg, #161a21 25%, transparent 25%),
+    linear-gradient(-45deg, #161a21 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #161a21 75%),
+    linear-gradient(-45deg, transparent 75%, #161a21 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-color: #11141a;
+  position: relative;
+}
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+/* ── Floating minimap ──────────────────────────────────────────────── */
+.minimap {
+  /* Pinned to the top-right of .canvas-wrap (which is position:relative)
+     so it overlays the scrolling canvas and stays put while the user
+     pans/zooms. */
+  position: absolute;
+  top: 48px; /* below the canvas-toolbar */
+  right: 12px;
+  width: 216px;
+  background: rgba(20, 24, 32, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+.minimap.collapsed .minimap-body { display: none; }
+.minimap.collapsed { width: auto; }
+.minimap.hidden { display: none; }
+.minimap-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+  cursor: grab;
+  user-select: none;
+}
+.minimap-header:active { cursor: grabbing; }
+.minimap-header.dragging { cursor: grabbing; }
+.minimap-grip {
+  font-size: 14px;
+  letter-spacing: -2px;
+  color: var(--border-light, var(--muted));
+  cursor: inherit;
+}
+.minimap-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-family: var(--mono);
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.minimap-toggle:hover { background: var(--bg-3); color: var(--text); }
+.minimap-body {
+  position: relative;
+  display: block;
+}
+#minimap {
+  display: block;
+  background: var(--bg-0);
+  border-radius: 4px;
+  image-rendering: pixelated;
+  cursor: crosshair;
+  width: 200px;
+  height: 200px;
+}
+.minimap-viewport {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  background: rgba(139, 92, 246, 0.12);
+  pointer-events: none;
+  border-radius: 2px;
+  display: none;
+}
+
+/* ── Floating developer stats panel ────────────────────────────────── */
+.dev-stats {
+  /* Same visual language as the minimap so the two read as a pair. */
+  position: absolute;
+  top: 272px; /* below the minimap (48 + 216 + a margin) */
+  right: 12px;
+  width: 216px;
+  background: rgba(20, 24, 32, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+  font-size: 12px;
+}
+.dev-stats.collapsed .dev-stats-body { display: none; }
+.dev-stats.collapsed { width: auto; }
+.dev-stats-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+  cursor: grab;
+  user-select: none;
+}
+.dev-stats-header.dragging { cursor: grabbing; }
+.dev-stats-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dev-stats-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  color: var(--text);
+}
+.dev-stats-label { color: var(--muted); }
+.dev-stats-value {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Developer information dialog ──────────────────────────────────── */
+.dev-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 8px;
+}
+.dev-tab {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-family: inherit;
+}
+.dev-tab:hover { color: var(--text); }
+.dev-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.dev-tab-body { display: none; }
+.dev-tab-body.active { display: block; }
+.dev-tiles-summary {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.dev-stats-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+}
+.dev-stats-pill-label { color: var(--muted); }
+.dev-stats-pill-value {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.dev-tiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-2);
+  border-radius: 6px;
+}
+.dev-tile-cell {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.dev-tile-cell img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+.dev-tile-count {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  padding: 0 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 10px;
+  font-family: var(--mono, ui-monospace, monospace);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.statusbar {
+  grid-area: status;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  gap: 12px;
+}
+.statusbar .right { margin-left: auto; }
+.statusbar .hints { margin-left: auto; }
+.statusbar .copyright {
+  margin-left: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* ── Server-connection indicator ─────────────────────────────────────
+   Same visual language as the explorer's cache-progress card —
+   bottom-right floating panel with an orange spinner while the
+   server is unreachable.  The accompanying disconnect overlay sits
+   below the card (lower z-index) and swallows pointer events so the
+   user can't continue editing against a dead backend. */
+.connection-card {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  min-width: 280px;
+  max-width: 360px;
+  background: var(--bg-1);
+  border: 1px solid #d97706;
+  border-radius: 10px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  animation: connection-slide-up 220ms ease-out;
+  overflow: hidden;
+}
+.connection-card.hidden { display: none; }
+.connection-card-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.connection-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(217, 119, 6, 0.25);
+  border-top-color: #d97706;
+  border-radius: 50%;
+  animation: connection-spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+.connection-text { flex: 1; min-width: 0; }
+.connection-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.connection-detail {
+  font-size: 12px;
+  color: var(--muted);
+}
+.disconnect-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9000;
+  cursor: not-allowed;
+}
+.disconnect-overlay.hidden { display: none; }
+@keyframes connection-spin { to { transform: rotate(360deg); } }
+@keyframes connection-slide-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}

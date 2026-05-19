@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KBot Studio</title>
+  <link rel="stylesheet" href="/studio.css" />
+</head>
+<body>
+  <div id="welcome-dialog" class="dialog">
+    <div class="dialog-card dialog-card-wide">
+      <h1>KBot Studio</h1>
+      <p class="dialog-sub">A web-based map editor for Total Annihilation and TA: Kingdoms.  Pick how you'd like to begin.</p>
+      <div class="welcome-options">
+        <button class="welcome-card" id="welcome-new">
+          <span class="welcome-card-ico">✨</span>
+          <span class="welcome-card-title">Create a new map</span>
+          <span class="welcome-card-sub">Start from a blank canvas — choose tileset, dimensions and name.</span>
+        </button>
+        <button class="welcome-card" id="welcome-open">
+          <span class="welcome-card-ico">📂</span>
+          <span class="welcome-card-title">Open an existing map</span>
+          <span class="welcome-card-sub">Browse the maps in your kbot context / VFS.</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="open-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Open an existing map</h1>
+      <p class="dialog-sub">Pick a map from your kbot context.  Editing the loaded data is a work in progress — for now you can browse and re-stamp over it.</p>
+      <div class="open-filter">
+        <input type="search" id="open-filter" placeholder="Filter by name, planet, or player count" />
+      </div>
+      <div class="open-list" id="open-list">
+        <div class="loading">Loading maps…</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="open-back" class="btn">← Back</button>
+        <button id="open-confirm" class="btn primary" disabled>Open selected</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="size-dialog" class="dialog hidden">
+    <div class="dialog-card">
+      <h1>KBot Studio</h1>
+      <p class="dialog-sub">A web-based map editor for Total Annihilation.</p>
+      <p class="dialog-sub">Pick your map dimensions (in tiles).  The default
+        roughly matches <em>Metal Heck</em>.</p>
+      <label class="field">
+        <span>Width (tiles)</span>
+        <input type="number" id="size-w" value="128" min="16" max="256" step="1" />
+      </label>
+      <label class="field">
+        <span>Height (tiles)</span>
+        <input type="number" id="size-h" value="128" min="16" max="256" step="1" />
+      </label>
+      <label class="field">
+        <span>Map name</span>
+        <input type="text" id="size-name" value="newmap" />
+      </label>
+      <label class="field">
+        <span>Tileset</span>
+        <select id="size-planet">
+          <option value="greenworld">Green</option>
+          <option value="metal">Metal</option>
+          <option value="mars">Mars / Desert</option>
+          <option value="moon">Moon / Lunar</option>
+          <option value="archipelago">Archipelago / Water</option>
+          <option value="lava">Lava</option>
+        </select>
+      </label>
+      <div class="field">
+        <span>Multiplayer schemas</span>
+        <p class="field-help">Pick how many player slots each network schema supports. You can change this later.</p>
+        <div class="dice-grid" id="size-dice-grid"></div>
+      </div>
+      <div class="dialog-actions">
+        <button id="size-cancel" class="btn">Cancel</button>
+        <button id="size-confirm" class="btn primary">Start designing</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="developer-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Developer information</h1>
+      <p class="dialog-sub">Live counts and a per-tile breakdown of what's stamped on the map.</p>
+      <div class="dev-tabs">
+        <button class="dev-tab active" data-dev-tab="tiles">Distinct Tiles</button>
+      </div>
+      <div class="dev-tab-bodies">
+        <div class="dev-tab-body" data-dev-tab-body="tiles">
+          <div class="dev-tiles-summary" id="dev-tiles-summary">
+            <span class="dev-stats-pill"><span class="dev-stats-pill-label">Distinct tiles</span><span class="dev-stats-pill-value" id="dev-dlg-distinct-tiles">0</span></span>
+            <span class="dev-stats-pill"><span class="dev-stats-pill-label">Sections used</span><span class="dev-stats-pill-value" id="dev-dlg-sections-used">0</span></span>
+          </div>
+          <div class="dev-tiles-grid" id="dev-tiles-grid"></div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button id="dev-dialog-close" class="btn primary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirm-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-narrow">
+      <h1 id="confirm-title">Confirm</h1>
+      <p class="dialog-sub" id="confirm-message"></p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="btn">Cancel</button>
+        <button id="confirm-ok" class="btn primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="ota-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Map properties</h1>
+      <p class="dialog-sub">These fields are written to the map's <code>.ota</code> file and shown to players in the multiplayer lobby.</p>
+      <div class="ota-grid">
+        <label class="field">
+          <span>Mission name</span>
+          <input type="text" id="ota-mission-name" />
+        </label>
+        <label class="field">
+          <span>Planet</span>
+          <select id="ota-planet">
+            <option value="Green">Green</option>
+            <option value="Metal">Metal</option>
+            <option value="Desert">Desert</option>
+            <option value="Mars">Mars</option>
+            <option value="Lunar">Lunar</option>
+            <option value="Moon">Moon</option>
+            <option value="Water">Water</option>
+            <option value="Lava">Lava</option>
+            <option value="Acid">Acid</option>
+            <option value="Slate">Slate</option>
+          </select>
+        </label>
+        <label class="field field-wide">
+          <span>Description</span>
+          <input type="text" id="ota-mission-description" />
+        </label>
+        <label class="field">
+          <span>Players supported</span>
+          <input type="text" id="ota-numplayers" placeholder="2, 3, 4" />
+        </label>
+        <label class="field">
+          <span>Size (16-tile blocks)</span>
+          <input type="text" id="ota-size" placeholder="8 x 8" />
+        </label>
+        <label class="field">
+          <span>Tidal strength</span>
+          <input type="number" id="ota-tidal" min="0" max="500" />
+        </label>
+        <label class="field">
+          <span>Solar strength</span>
+          <input type="number" id="ota-solar" min="0" max="500" />
+        </label>
+        <label class="field">
+          <span>Gravity</span>
+          <input type="number" id="ota-gravity" min="0" max="500" />
+        </label>
+        <label class="field">
+          <span>Min wind speed</span>
+          <input type="number" id="ota-min-wind" min="0" max="5000" />
+        </label>
+        <label class="field">
+          <span>Max wind speed</span>
+          <input type="number" id="ota-max-wind" min="0" max="5000" />
+        </label>
+        <label class="field">
+          <span>Kill multiplier</span>
+          <input type="number" id="ota-killmul" min="0" max="500" />
+        </label>
+        <label class="field">
+          <span>Lava world</span>
+          <select id="ota-lava">
+            <option value="0">No</option>
+            <option value="1">Yes</option>
+          </select>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button id="ota-cancel" class="btn">Cancel</button>
+        <button id="ota-apply" class="btn primary">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="schema-edit-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Edit schema</h1>
+      <p class="dialog-sub">Per-schema economy and AI settings.  These ride along inside the saved .ota.</p>
+      <div class="ota-grid">
+        <label class="field">
+          <span>Schema name</span>
+          <input type="text" id="se-name" />
+        </label>
+        <label class="field">
+          <span>Type</span>
+          <input type="text" id="se-type" placeholder="Network 1" />
+        </label>
+        <label class="field">
+          <span>AI profile</span>
+          <input type="text" id="se-ai-profile" />
+        </label>
+        <label class="field">
+          <span>Surface metal</span>
+          <input type="number" id="se-surface-metal" min="0" max="255" />
+        </label>
+        <label class="field">
+          <span>Moho metal</span>
+          <input type="number" id="se-moho-metal" min="0" max="255" />
+        </label>
+        <label class="field">
+          <span>Human starting metal</span>
+          <input type="number" id="se-human-metal" min="0" max="1000000" />
+        </label>
+        <label class="field">
+          <span>Computer starting metal</span>
+          <input type="number" id="se-computer-metal" min="0" max="1000000" />
+        </label>
+        <label class="field">
+          <span>Human starting energy</span>
+          <input type="number" id="se-human-energy" min="0" max="1000000" />
+        </label>
+        <label class="field">
+          <span>Computer starting energy</span>
+          <input type="number" id="se-computer-energy" min="0" max="1000000" />
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button id="se-cancel" class="btn">Cancel</button>
+        <button id="se-apply" class="btn primary">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="resize-dialog" class="dialog hidden">
+    <div class="dialog-card">
+      <h1>Resize map</h1>
+      <p class="dialog-sub">Choose the new dimensions and an anchor point.
+        Existing tiles are preserved relative to the anchor — growing the
+        map adds blank tiles around the anchored content, shrinking it
+        truncates the opposite side.</p>
+      <div class="resize-row">
+        <label class="field">
+          <span>Width (tiles)</span>
+          <input type="number" id="resize-w" min="16" max="256" step="1" />
+        </label>
+        <label class="field">
+          <span>Height (tiles)</span>
+          <input type="number" id="resize-h" min="16" max="256" step="1" />
+        </label>
+      </div>
+      <div class="field">
+        <span>Anchor</span>
+        <div class="anchor-grid" id="resize-anchor">
+          <button type="button" data-r="0" data-c="0" title="Top-left">↖</button>
+          <button type="button" data-r="0" data-c="1" title="Top">↑</button>
+          <button type="button" data-r="0" data-c="2" title="Top-right">↗</button>
+          <button type="button" data-r="1" data-c="0" title="Left">←</button>
+          <button type="button" data-r="1" data-c="1" class="selected" title="Centre">·</button>
+          <button type="button" data-r="1" data-c="2" title="Right">→</button>
+          <button type="button" data-r="2" data-c="0" title="Bottom-left">↙</button>
+          <button type="button" data-r="2" data-c="1" title="Bottom">↓</button>
+          <button type="button" data-r="2" data-c="2" title="Bottom-right">↘</button>
+        </div>
+        <div class="anchor-preview" id="resize-preview"></div>
+      </div>
+      <div class="dialog-actions">
+        <button id="resize-cancel" class="btn">Cancel</button>
+        <button id="resize-crop" class="btn" title="Shrink the map to fit the bounding box of placed tiles and features">Crop to content</button>
+        <button id="resize-apply" class="btn primary">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">⚙️</span>
+        <span>KBot Studio</span>
+      </div>
+      <div class="map-info">
+        <span id="info-name">newmap</span>
+        <span class="muted">·</span>
+        <span id="info-size">128 × 128</span>
+      </div>
+    </header>
+
+    <div class="ribbon" id="ribbon">
+      <div class="ribbon-section">
+        <div class="ribbon-label">File</div>
+        <div class="ribbon-group">
+          <button id="btn-new" class="tool-btn" title="Start a new map (discards the current one)">
+            <span class="ico">📄</span><span class="lbl">New</span>
+          </button>
+          <button id="btn-open" class="tool-btn" title="Open an existing map from the loaded game data">
+            <span class="ico">📂</span><span class="lbl">Open</span>
+          </button>
+          <button id="btn-save" class="tool-btn" title="Save current map as .hpi">
+            <span class="ico">💾</span><span class="lbl">Save</span>
+          </button>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Mode</div>
+        <div class="ribbon-group ribbon-dropdown" id="mode-dropdown">
+          <button class="tool-btn ribbon-dropdown-btn" id="mode-dropdown-btn" title="Editor mode — choose what clicks on the canvas do">
+            <span class="ico" id="mode-current-ico">🖌</span>
+            <span class="lbl" id="mode-current-lbl">Place Tiles</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="mode-dropdown-popup">
+            <button class="menu-row active" data-mode="select-terrain" title="Select — pick an area to drag/rotate">
+              <span class="ico">⬚</span><span>Select</span><kbd class="menu-row-hotkey">T</kbd>
+            </button>
+            <button class="menu-row" data-mode="view" title="View — pan, scroll and zoom without making changes">
+              <span class="ico">✋</span><span>View</span><kbd class="menu-row-hotkey">V</kbd>
+            </button>
+            <button class="menu-row" data-mode="paint" title="Place Tiles">
+              <span class="ico">🖌</span><span>Tiler</span><kbd class="menu-row-hotkey">P</kbd>
+            </button>
+            <button class="menu-row" data-mode="select-features" title="Place Features">
+              <span class="ico">🌳</span><span>Features</span><kbd class="menu-row-hotkey">F</kbd>
+            </button>
+            <button class="menu-row" data-mode="picker" title="Picker — marquee multi-select features">
+              <span class="ico">🎯</span><span>Picker</span><kbd class="menu-row-hotkey">K</kbd>
+            </button>
+            <button class="menu-row" data-mode="start-points" title="Start Points">
+              <span class="ico">🤖</span><span>Start Points</span><kbd class="menu-row-hotkey">S</kbd>
+            </button>
+            <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
+              <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▾</span>
+            </button>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="brush-dropdown-popup">
+            <div class="menu-section-label">Erase scope</div>
+            <div class="inline-row" id="erase-scope-row">
+              <button class="menu-row scope-row active" data-scope="all" title="Erase tiles and features">All</button>
+              <button class="menu-row scope-row" data-scope="terrain" title="Erase only terrain tiles">Terrain</button>
+              <button class="menu-row scope-row" data-scope="features" title="Erase only placed features">Features</button>
+            </div>
+            <div class="menu-section-label">Brush size</div>
+            <button class="menu-row active" data-size="1"><span class="ico">▪</span><span>1×1</span></button>
+            <button class="menu-row" data-size="2"><span class="ico">▪</span><span>2×2</span></button>
+            <button class="menu-row" data-size="3"><span class="ico">▪</span><span>3×3</span></button>
+            <button class="menu-row" data-size="4"><span class="ico">▪</span><span>4×4</span></button>
+            <button class="menu-row" data-size="6"><span class="ico">▪</span><span>6×6</span></button>
+            <button class="menu-row" data-size="8"><span class="ico">▪</span><span>8×8</span></button>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Actions</div>
+        <div class="ribbon-group ribbon-dropdown" id="actions-dropdown">
+          <button class="tool-btn ribbon-dropdown-btn" id="actions-dropdown-btn" title="Undo / redo">
+            <span class="ico">↶</span><span class="lbl">Edit</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="actions-dropdown-popup">
+            <button id="btn-undo" class="menu-row" disabled title="Nothing to undo">
+              <span class="ico">↶</span><span id="undo-label">Undo</span><kbd class="menu-row-hotkey">⌘Z</kbd>
+            </button>
+            <button id="btn-redo" class="menu-row" disabled title="Nothing to redo">
+              <span class="ico">↷</span><span id="redo-label">Redo</span><kbd class="menu-row-hotkey">⇧⌘Z</kbd>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Zoom</div>
+        <div class="ribbon-group">
+          <button id="zoom-out" class="tool-btn" title="Zoom out (scroll-wheel down)">
+            <span class="ico">－</span>
+          </button>
+          <button id="zoom-in" class="tool-btn" title="Zoom in (scroll-wheel up)">
+            <span class="ico">＋</span>
+          </button>
+          <button id="zoom-fit" class="tool-btn" title="Fit map to view">
+            <span class="lbl">Fit</span>
+          </button>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">View</div>
+        <div class="ribbon-group ribbon-dropdown" id="view-dropdown">
+          <button class="tool-btn ribbon-dropdown-btn" id="view-dropdown-btn" title="Gridlines / animation / display mode">
+            <span class="ico">👁</span><span class="lbl" id="view-current-lbl">Map</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="view-dropdown-popup">
+            <button class="menu-row toggle-row" id="opt-gridlines" data-on="1">
+              <span class="ico">⌗</span><span>Grid</span><span class="menu-check">✓</span>
+            </button>
+            <button class="menu-row toggle-row" id="opt-animate" data-on="1">
+              <span class="ico">▶</span><span>Animation</span><span class="menu-check">✓</span>
+            </button>
+            <button class="menu-row toggle-row" id="opt-minimap" data-on="1">
+              <span class="ico">🗺</span><span>Minimap</span><span class="menu-check">✓</span>
+            </button>
+            <div class="menu-section-label">Display mode</div>
+            <div class="inline-row" id="display-mode-group">
+              <button class="menu-row active" data-display="map">
+                <span class="ico">🗺</span><span>Map</span>
+              </button>
+              <button class="menu-row" data-display="heightmap">
+                <span class="ico">⛰</span><span>Height</span>
+              </button>
+              <button class="menu-row" data-display="blended">
+                <span class="ico">🏞</span><span>Blended</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section" id="schema-section">
+        <div class="ribbon-label">Schema</div>
+        <div class="ribbon-group ribbon-dropdown" id="schema-dropdown" data-keep-compact>
+          <button class="tool-btn ribbon-dropdown-btn" id="schema-dropdown-btn" title="Active multiplayer schema — pick, add, or delete">
+            <span class="ico">🎲</span>
+            <span class="lbl" id="schema-current-lbl">Schema</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="schema-dropdown-popup">
+            <div class="menu-section-label">Schemas</div>
+            <div id="schema-row-list"></div>
+            <div class="menu-section-label">Add</div>
+            <div id="schema-add-grid" class="schema-add-grid"></div>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section ribbon-section-right">
+        <div class="ribbon-label">Map</div>
+        <div class="ribbon-group">
+          <button id="btn-ota" class="tool-btn" title="Edit map properties (OTA metadata)">
+            <span class="ico">⚙</span><span class="lbl">Properties</span>
+          </button>
+          <button id="btn-resize" class="tool-btn" title="Resize map dimensions">
+            <span class="ico">📐</span><span class="lbl">Resize</span>
+          </button>
+          <button id="btn-developer" class="tool-btn" title="Developer information">
+            <span class="ico">🔬</span><span class="lbl">Developer</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <aside class="sidebar">
+      <div class="tabs">
+        <button data-tab="sections" class="tab active">Sections</button>
+        <button data-tab="features" class="tab">Features</button>
+      </div>
+      <div class="filter">
+        <input type="search" id="filter" placeholder="Filter by name, world, group" />
+        <div class="filter-row">
+          <label class="filter-toggle hidden" id="filter-used-wrap" title="Only show features currently placed on the map">
+            <input type="checkbox" id="filter-used" />
+            <span>Used only</span>
+          </label>
+          <label class="filter-toggle hidden" id="filter-wreckage-wrap" title="Wreckage / corpses are filtered out by default">
+            <input type="checkbox" id="filter-wreckage" />
+            <span>Include wreckage</span>
+          </label>
+        </div>
+      </div>
+      <div id="drawer" class="drawer">
+        <div class="loading">Loading sections…</div>
+      </div>
+    </aside>
+
+    <main class="canvas-wrap">
+      <div class="canvas-toolbar">
+        <span id="hover-cell" class="muted">—</span>
+      </div>
+      <div class="canvas-scroll" id="canvas-scroll">
+        <canvas id="canvas"></canvas>
+        <div class="rotation-badge hidden" id="rotation-badge">
+          <div class="rb-title"><span class="rb-arrow">↻</span> <span id="rb-angle">0°</span><span id="rb-flip"></span></div>
+          <div class="rb-sub">Q / E rotate · F / G flip</div>
+        </div>
+        <div class="placement-hint hidden" id="placement-hint">
+          <span id="placement-hint-label">Placing section</span>
+          <span class="hint-keys" id="placement-hint-keys">
+            <span class="hint-row" id="placement-hint-rotate">
+              <kbd>Q</kbd> rotate left
+              <kbd>E</kbd> rotate right
+            </span>
+            <span class="hint-row" id="placement-hint-flip">
+              <kbd>F</kbd> flip horizontal
+              <kbd>G</kbd> flip vertical
+            </span>
+            <span class="hint-row">
+              <kbd>Esc</kbd> cancel · click to place
+            </span>
+          </span>
+        </div>
+      </div>
+      <aside class="minimap" id="minimap-panel">
+        <div class="minimap-header" id="minimap-header" title="Drag to move">
+          <span class="minimap-grip">⠿</span>
+          <span>Map preview</span>
+          <button id="minimap-toggle" class="minimap-toggle" title="Collapse">−</button>
+          <button id="minimap-close" class="minimap-toggle" title="Close (toggle from View menu to bring back)">×</button>
+        </div>
+        <div class="minimap-body">
+          <canvas id="minimap" width="200" height="200"></canvas>
+          <div class="minimap-viewport" id="minimap-viewport"></div>
+        </div>
+      </aside>
+      <aside class="dev-stats" id="dev-stats-panel" title="Drag to move">
+        <div class="dev-stats-header" id="dev-stats-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Stats</span>
+          <button id="dev-stats-toggle" class="minimap-toggle" title="Collapse">−</button>
+        </div>
+        <div class="dev-stats-body">
+          <div class="dev-stats-row"><span class="dev-stats-label">Distinct tiles</span><span class="dev-stats-value" id="dev-stats-distinct-tiles">0</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Distinct features</span><span class="dev-stats-value" id="dev-stats-distinct-features">0</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Total features</span><span class="dev-stats-value" id="dev-stats-total-features">0</span></div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status">Ready.  Pick a section on the left, then click on the canvas to stamp it.</span>
+      <span class="muted hints">Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).</span>
+      <span class="copyright">KBot &copy; Steve Gray <span id="copyright-year"></span></span>
+    </footer>
+  </div>
+
+  <div id="disconnect-overlay" class="disconnect-overlay hidden"></div>
+  <div id="connection-card" class="connection-card hidden">
+    <div class="connection-card-body">
+      <div class="connection-spinner"></div>
+      <div class="connection-text">
+        <div class="connection-title">Server disconnected</div>
+        <div class="connection-detail">Reconnecting…</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/studio.js"></script>
+</body>
+</html>
