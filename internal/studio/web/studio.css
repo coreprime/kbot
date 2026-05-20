@@ -1189,6 +1189,26 @@ kbd {
   letter-spacing: 0;
   color: var(--accent);
 }
+.drawer-world-pill {
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.drawer-world-pill:hover { color: var(--text); border-color: var(--accent); }
+.drawer-world-pill-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.12);
+  cursor: default;
+}
+.drawer-world-name { flex: 0 1 auto; }
 
 /* World-level (outer) groups stack flat; the groups nested inside them
    (e.g. "Trees" under "Green World") get a subtle indent with a left
@@ -1444,7 +1464,13 @@ canvas {
   backdrop-filter: blur(6px);
   pointer-events: auto;
   font-size: 12px;
+  /* These panels are read-only HUDs.  Prevent the user from
+     selecting / focusing their text so scroll wheels and tab
+     traversal never accidentally land on them. */
+  user-select: none;
+  -webkit-user-select: none;
 }
+.dev-stats * { outline: none; }
 .dev-stats.collapsed .dev-stats-body { display: none; }
 .dev-stats.collapsed { width: auto; }
 .dev-stats-header {

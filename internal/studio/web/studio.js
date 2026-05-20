@@ -226,6 +226,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Paint the dice-face player-count picker so the size dialog is ready
   // to interact with the moment the user opens it.
   renderDiceGrid()
+  // Populate the tileset / planet pickers from the single
+  // TILESET_PLANETS source of truth so adding a new world only
+  // requires one edit.
+  populateTilesetSelect($('#size-planet'), 'slug')
+  populateTilesetSelect($('#ota-planet'), 'ota')
   // Start the server heartbeat as soon as the page is wired — works
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
@@ -786,6 +791,57 @@ const PLAYER_COUNT_NAMES = {
   10: 'Ten Players',
 }
 function playerCountLabel(n) { return PLAYER_COUNT_NAMES[n] || `${n} Players` }
+
+// TILESET_PLANETS is the single source of truth for the worlds the
+// editor knows about and the planet OTA value each one maps to.  Used
+// to populate the New-map + OTA Properties planet pickers AND to
+// translate "Set as active" clicks on the sections drawer into a
+// state.planet value the rest of the editor reads.
+//   slug:    matches the section drawer's world folder name + the
+//            value stored in state.planet (lowercased).
+//   ota:     the value written into the saved .ota's planet field
+//            (TA's stock OTAs use these display-cased names).
+//   label:   shown in pickers + drawer pills.
+//   aliases: alternative OTA strings TA's stock maps use for the
+//            same tileset (read-side compatibility).
+const TILESET_PLANETS = [
+  { slug: 'greenworld',  ota: 'Green',       label: 'Green',       aliases: ['greenworld'] },
+  { slug: 'metal',       ota: 'Metal',       label: 'Metal',       aliases: [] },
+  { slug: 'mars',        ota: 'Desert',      label: 'Mars / Desert', aliases: ['mars'] },
+  { slug: 'moon',        ota: 'Lunar',       label: 'Moon / Lunar',  aliases: ['moon'] },
+  { slug: 'archipelago', ota: 'Water',       label: 'Archipelago / Water', aliases: ['archipelago'] },
+  { slug: 'lava',        ota: 'Lava',        label: 'Lava',        aliases: [] },
+  { slug: 'acid',        ota: 'Acid',        label: 'Acid',        aliases: [] },
+  { slug: 'slate',       ota: 'Slate',       label: 'Slate',       aliases: [] },
+]
+
+// tilesetForWorld resolves a tileset entry from the drawer's world
+// string (slug or a friendly cased variant).  Returns null when no
+// entry matches.
+function tilesetForWorld(world) {
+  const w = (world || '').toLowerCase().replace(/[\s_-]+/g, '')
+  for (const t of TILESET_PLANETS) {
+    if (t.slug === w) return t
+    if (t.ota.toLowerCase() === w) return t
+    for (const a of t.aliases) if (a.toLowerCase() === w) return t
+  }
+  return null
+}
+
+// populateTilesetSelect rewrites a <select>'s options from the
+// TILESET_PLANETS table.  `valueKind` picks whether the option value
+// is the slug (matches state.planet — used by the New-map picker) or
+// the OTA cased string (matches .ota.planet — used by the Properties
+// dialog).  Called once at boot for each picker.
+function populateTilesetSelect(el, valueKind) {
+  if (!el) return
+  el.replaceChildren(...TILESET_PLANETS.map((t) => {
+    const opt = document.createElement('option')
+    opt.value = valueKind === 'slug' ? t.slug : t.ota
+    opt.textContent = t.label
+    return opt
+  }))
+}
 
 function renderDiceGrid() {
   const grid = $('#size-dice-grid')
@@ -1759,13 +1815,55 @@ function renderDrawerWorldGroup(key, worldName, totalItems, activeByDefault) {
   if (collapsed) groupEl.classList.add('collapsed')
   const title = document.createElement('div')
   title.className = 'drawer-group-title'
-  title.innerHTML = `<span class="chev">▾</span><span>${escapeHTML(worldName)}</span><span class="drawer-group-count">${totalItems}</span>`
+  title.innerHTML = `<span class="chev">▾</span><span class="drawer-world-name">${escapeHTML(worldName)}</span><span class="drawer-group-count">${totalItems}</span>`
   title.addEventListener('click', () => toggleGroup(key, defaultCollapsed))
+  // "Set as active" pill — clicking promotes this world to the map's
+  // active tileset (state.planet).  Hides on the world that's already
+  // active so the only visible pill is the actionable one.
+  const tileset = tilesetForWorld(worldName)
+  if (tileset && !activeByDefault) {
+    const pill = document.createElement('button')
+    pill.className = 'drawer-world-pill'
+    pill.type = 'button'
+    pill.title = `Make ${tileset.label} the active tileset for this map`
+    pill.textContent = 'Set active'
+    pill.addEventListener('click', (e) => {
+      e.stopPropagation()
+      setActiveTileset(tileset)
+    })
+    title.appendChild(pill)
+  } else if (activeByDefault) {
+    const badge = document.createElement('span')
+    badge.className = 'drawer-world-pill drawer-world-pill-active'
+    badge.textContent = 'Active'
+    title.appendChild(badge)
+  }
   groupEl.appendChild(title)
   const body = document.createElement('div')
   body.className = 'drawer-group-body'
   groupEl.appendChild(body)
   return groupEl
+}
+
+// setActiveTileset switches the editor's planet/tileset to the
+// supplied entry — re-rendering the drawer (so the chosen world
+// sorts to the top + its pill flips to "Active"), updating any open
+// OTA properties dialog, and committing the change as an undo step
+// so the user can roll back.
+function setActiveTileset(tileset) {
+  if (!tileset) return
+  if (state.planet === tileset.slug) return
+  beginTransaction()
+  state.planet = tileset.slug
+  if (state.ota) state.ota.planet = tileset.ota
+  commitTransaction(`Set tileset to ${tileset.label}`)
+  // Reflect in the open OTA dialog if it happens to be on screen.
+  const otaSelect = $('#ota-planet')
+  if (otaSelect && !$('#ota-dialog')?.classList.contains('hidden')) {
+    otaSelect.value = tileset.ota
+  }
+  renderDrawer()
+  setStatus(`Active tileset: ${tileset.label}.`)
 }
 
 // renderSectionGroup builds the DOM for one collapsible group of sections.
