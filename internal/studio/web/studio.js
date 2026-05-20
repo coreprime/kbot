@@ -1698,6 +1698,19 @@ function wireKeyboard() {
       e.preventDefault()
       selectAllContent()
     }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+      // Copy the current Select-Terrain rectangle (or already-lifted
+      // terrainClipboard) to the system clipboard.  The OS clipboard
+      // is what makes this work across Chrome windows.
+      e.preventDefault()
+      copyToClipboard()
+    }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+      // Paste a KBot Studio rectangle from the system clipboard,
+      // staged as a follow-the-cursor terrainClipboard.
+      e.preventDefault()
+      pasteFromClipboard()
+    }
     else if (e.key === 'v' || e.key === 'V') setVoidsVisible(!state.showVoids)
     else if (e.key === 'p' || e.key === 'P') setMode('paint')
     else if (e.key === 't' || e.key === 'T') setMode('select-terrain')
@@ -2661,6 +2674,11 @@ function preloadFeatureImage(f) {
 
 // ── Canvas ─────────────────────────────────────────────────────────────────
 
+// Tracks the cell under the cursor for hotkey actions that don't fire
+// from a mouse event (notably Ctrl+V paste, which wants to drop the
+// pasted rectangle at the user's last hover point).  Null while the
+// cursor is outside the canvas.
+let lastHoverCell = null
 let painting = false
 let paintedDuringStroke = false
 
@@ -2954,6 +2972,7 @@ class EditorView {
       $('#hover-cell').textContent = '—'
       updateCameraInfoCursor(null)
       if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
+      lastHoverCell = null
     }, sig)
 
     // Wheel/trackpad routing:
@@ -3247,6 +3266,12 @@ function onCanvasMouseDown(e) {
 function onCanvasMouseMove(e) {
   if (panState) { updatePan(e); return }
   updateHoverLabel(e)
+  // Track the cursor cell so Ctrl+V can paste at the user's last hover
+  // point.  Reset on mouseleave (handled by the canvas leave listener).
+  const cell = pickCell(e)
+  if (cell.tx >= 0 && cell.tx < state.tileW && cell.ty >= 0 && cell.ty < state.tileH) {
+    lastHoverCell = cell
+  }
   if (state.mode === 'paint') {
     if (placementMoveAnchor && state.placement) {
       const { tx, ty } = pickCell(e)
@@ -3966,6 +3991,115 @@ function cancelTerrainClipboard() {
   // We don't track the original capture origin, so cancelling just
   // drops the clipboard back at its current position.
   dropTerrainClipboard()
+}
+
+// ── System clipboard (Ctrl+C / Ctrl+V) ────────────────────────────────
+//
+// Serialises a terrain-rectangle selection to the OS clipboard so the
+// user can paste it back in the same tab — or in another KBot Studio
+// tab inside the same Chrome session — via Ctrl+V.  The payload is a
+// magic-prefixed JSON string; non-KBot clipboard contents are ignored
+// on paste.
+
+const CLIP_PREFIX = 'KBOTSTUDIO_CLIP_V1:'
+
+// extractTerrainRect pulls a non-destructive copy of a tile rectangle
+// + its attribute-cell heights + any features whose anchor lies inside
+// it.  Used by copyToClipboard so a Ctrl+C doesn't disturb the map the
+// way captureTerrain() (drag-to-move) does.
+function extractTerrainRect(x, y, w, h) {
+  const tiles = new Array(w * h).fill(null)
+  const heights = new Array(w * 2 * h * 2).fill(80)
+  const mapAttrW = state.tileW * 2
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const mx = x + dx, my = y + dy
+      const cell = state.tiles[my * state.tileW + mx]
+      if (cell) tiles[dy * w + dx] = { ...cell }
+      for (let qy = 0; qy < 2; qy++) {
+        for (let qx = 0; qx < 2; qx++) {
+          const srcAY = my * 2 + qy
+          const srcAX = mx * 2 + qx
+          heights[(dy * 2 + qy) * (w * 2) + (dx * 2 + qx)] = state.heights[srcAY * mapAttrW + srcAX]
+        }
+      }
+    }
+  }
+  const minAX = x * 2, maxAX = (x + w) * 2
+  const minAY = y * 2, maxAY = (y + h) * 2
+  const features = []
+  for (const f of state.features) {
+    if (f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY) {
+      features.push({ ...f, ax: f.ax - minAX, ay: f.ay - minAY })
+    }
+  }
+  return { w, h, tiles, heights, features }
+}
+
+async function copyToClipboard() {
+  let payload = null
+  if (state.terrainClipboard) {
+    const c = state.terrainClipboard
+    payload = { w: c.w, h: c.h, tiles: c.tiles, heights: c.heights, features: c.features }
+  } else if (state.rectSelection) {
+    const r = state.rectSelection
+    payload = extractTerrainRect(r.x, r.y, r.w, r.h)
+  }
+  if (!payload) {
+    setStatus('Nothing to copy — make a Select-Terrain rectangle first.')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(CLIP_PREFIX + JSON.stringify(payload))
+    setStatus(`Copied ${payload.w}×${payload.h} terrain rectangle to clipboard.`)
+  } catch (err) {
+    setStatus(`Copy failed: ${err.message || err}`)
+  }
+}
+
+async function pasteFromClipboard() {
+  let text
+  try { text = await navigator.clipboard.readText() }
+  catch (err) { setStatus(`Paste failed: ${err.message || err}`); return }
+  if (!text || !text.startsWith(CLIP_PREFIX)) {
+    setStatus('Clipboard does not contain a KBot Studio selection.')
+    return
+  }
+  let payload
+  try { payload = JSON.parse(text.slice(CLIP_PREFIX.length)) }
+  catch { setStatus('Clipboard data is corrupted.'); return }
+  if (!payload || !Number.isInteger(payload.w) || !Number.isInteger(payload.h) || payload.w <= 0 || payload.h <= 0) {
+    setStatus('Clipboard data is invalid.')
+    return
+  }
+  // Drop any in-flight selection / placement so the pasted clipboard
+  // is the only thing the user has to drag around.
+  if (state.terrainClipboard) cancelTerrainClipboard()
+  cancelPlacement()
+  state.rectSelection = null
+  // Anchor at the cursor's last hover cell when available, else the
+  // map centre.  The user can drag from there before clicking outside
+  // to commit.
+  const w = payload.w, h = payload.h
+  let tx, ty
+  if (lastHoverCell) {
+    tx = clamp(lastHoverCell.tx - Math.floor(w / 2), 0, Math.max(0, state.tileW - w))
+    ty = clamp(lastHoverCell.ty - Math.floor(h / 2), 0, Math.max(0, state.tileH - h))
+  } else {
+    tx = Math.max(0, Math.floor((state.tileW - w) / 2))
+    ty = Math.max(0, Math.floor((state.tileH - h) / 2))
+  }
+  state.terrainClipboard = {
+    tx, ty, w, h,
+    tiles: payload.tiles || new Array(w * h).fill(null),
+    heights: payload.heights || new Array(w * 2 * h * 2).fill(80),
+    features: payload.features || [],
+    rotation: 0,
+  }
+  if (state.mode !== 'select-terrain') setMode('select-terrain')
+  showPlacementHint(`Pasting ${w}×${h} terrain rectangle`, 'section')
+  setStatus(`Pasted ${w}×${h} terrain.  Drag to move, Q/E to rotate, click outside to drop, Esc to cancel.`)
+  renderCanvas()
 }
 
 // ── Select Features mode ───────────────────────────────────────────────────
