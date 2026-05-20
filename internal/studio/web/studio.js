@@ -6185,6 +6185,7 @@ function wireToolbar() {
   $('#scatter-cancel')?.addEventListener('click', closeScatterDialog)
   $('#scatter-apply')?.addEventListener('click', applyScatter)
   $('#btn-export-heightmap')?.addEventListener('click', exportHeightmap)
+  $('#btn-export-minimap')?.addEventListener('click', exportMinimap)
   $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file').click())
   $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
   $('#btn-undo').addEventListener('click', undo)
@@ -7242,6 +7243,25 @@ function exportHeightmap() {
     document.body.appendChild(a); a.click(); a.remove()
     URL.revokeObjectURL(url)
     setStatus(`Exported ${attrW}×${attrH} heightmap PNG.`)
+  }, 'image/png')
+}
+
+function exportMinimap() {
+  // Ensure the visible minimap canvas is in sync with the latest map
+  // state before exporting — renderMinimap is idempotent, so re-running
+  // it here is cheap and avoids exporting a stale frame.
+  renderMinimap()
+  const mini = $('#minimap')
+  if (!mini) { setStatus('Minimap not available to export.'); return }
+  mini.toBlob((blob) => {
+    if (!blob) { setStatus('Minimap export failed.'); return }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sanitiseFilename(state.name)}-minimap.png`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    setStatus(`Exported ${mini.width}×${mini.height} minimap PNG.`)
   }, 'image/png')
 }
 
