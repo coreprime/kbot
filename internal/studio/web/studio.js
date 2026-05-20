@@ -4177,6 +4177,12 @@ function onFillMouseDown(e) {
   setStatus(`Flood-filled ${filled} tile${filled === 1 ? '' : 's'} with ${sel.name}.  Shift-click to replace globally.`)
 }
 
+// hmHoldTimer keeps the brush firing while the user holds the mouse
+// button still — raise / lower / smooth all need continuous application
+// to sculpt large changes without the user having to wiggle the cursor.
+let hmHoldTimer = null
+const HM_HOLD_INTERVAL_MS = 60
+
 function onHeightmapMouseDown(e) {
   const { ax, ay } = pickAttrCellForVoid(e)
   beginTransaction()
@@ -4189,6 +4195,16 @@ function onHeightmapMouseDown(e) {
   paintHeightAt(ax, ay)
   paintedDuringStroke = true
   renderCanvas()
+  // Auto-repeat: keep applying the brush at the most-recent cursor
+  // cell until the user releases the button.  Smooth + level are
+  // idempotent at the same cell so this is safe to do.
+  if (hmHoldTimer) clearInterval(hmHoldTimer)
+  hmHoldTimer = setInterval(() => {
+    if (!painting || !state.hmCursor) return
+    paintHeightAt(state.hmCursor.ax, state.hmCursor.ay)
+    paintedDuringStroke = true
+    renderCanvas()
+  }, HM_HOLD_INTERVAL_MS)
 }
 
 function onHeightmapMouseMove(e) {
@@ -4204,6 +4220,7 @@ function onHeightmapMouseMove(e) {
 }
 
 function onHeightmapMouseUp(_e) {
+  if (hmHoldTimer) { clearInterval(hmHoldTimer); hmHoldTimer = null }
   if (painting && paintedDuringStroke) commitTransaction(`Heightmap ${state.hmTool}`)
   else if (painting) abortTransaction()
   invalidateMinimapBase()
@@ -7019,6 +7036,12 @@ function wireToolbar() {
   wireHistoryFlyout($('#btn-redo'), $('#redo-history-popup'))
   $('#btn-new').addEventListener('click', startNewMapFromEditor)
   $('#btn-open').addEventListener('click', openExistingMapFromEditor)
+  // New Window opens the studio in a fresh tab — the user can run two
+  // copies side by side and compare/edit different maps without
+  // discarding the current session.
+  $('#btn-new-window')?.addEventListener('click', () => {
+    window.open(location.origin + '/', '_blank', 'noopener')
+  })
   $('#btn-ota').addEventListener('click', openOTADialog)
 
   // Actions dropdown.
