@@ -1170,6 +1170,8 @@ function wireKeyboard() {
     else if (e.key === 'b' || e.key === 'B') setMode('fill')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
+    else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
+    else if (e.key === 'ArrowRight' && pageSectionSibling(1)) { e.preventDefault() }
     else if (e.key === 'Escape') {
       // Clear whatever transient state is active first, then drop the
       // user back into Select mode — that's the "neutral" mode that
@@ -1796,6 +1798,23 @@ function attachDragEnd(el) {
     el.removeEventListener('dragend', once)
   }
   el.addEventListener('dragend', once)
+}
+
+// pageSectionSibling jumps to the previous (-1) or next (+1) section
+// in state.sectionsList relative to the currently selected one.  Used
+// by the ArrowLeft / ArrowRight hotkeys to flip through tilesets fast.
+// Returns true when it actually paged (so the hotkey can preventDefault).
+function pageSectionSibling(direction) {
+  if (!state.selected || state.selected.type !== 'section') return false
+  const list = state.sectionsList || []
+  if (list.length < 2) return false
+  const cur = list.findIndex((s) => s.path === state.selected.path)
+  if (cur < 0) return false
+  const next = ((cur + direction) % list.length + list.length) % list.length
+  // Fire-and-forget — selectSection is async because of asset loading
+  // but we want the keypress to return immediately.
+  selectSection(list[next])
+  return true
 }
 
 async function selectSection(s) {
