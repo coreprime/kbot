@@ -1053,6 +1053,10 @@ function setMode(mode) {
       const lbl = $('#view-current-lbl')
       if (lbl) lbl.textContent = 'Map'
     }
+    // Also enable the View → Voids toggle so it sticks after the user
+    // leaves Voids mode — the overlay-on state matches what they were
+    // just looking at, instead of vanishing the moment they switch tool.
+    if (!state.showVoids) setVoidsVisible(true)
   }
   if (mode === 'heightmap') {
     // Switch to Heightmap view so the user can see what the brush is doing.
@@ -1205,7 +1209,7 @@ function wireKeyboard() {
       e.preventDefault()
       selectAllContent()
     }
-    else if (e.key === 'v' || e.key === 'V') setMode('view')
+    else if (e.key === 'v' || e.key === 'V') setVoidsVisible(!state.showVoids)
     else if (e.key === 'p' || e.key === 'P') setMode('paint')
     else if (e.key === 't' || e.key === 'T') setMode('select-terrain')
     else if (e.key === 'f' || e.key === 'F') {
