@@ -270,6 +270,16 @@ func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 		idx := addFeatureName(fp.Name)
 		attrs[fp.AY*attrW+fp.AX].Feature = uint16(idx)
 	}
+	// Voids stomp any feature index that happened to land on the same
+	// cell — void cells can't host features in the engine.  The marker
+	// 0xFFFC is the canonical void sentinel.
+	if len(req.Voids) == attrW*attrH {
+		for i, v := range req.Voids {
+			if v != 0 {
+				attrs[i].Feature = 0xFFFC
+			}
+		}
+	}
 	features := make([]tnt.Feature, len(featureNames))
 	for i, name := range featureNames {
 		features[i] = tnt.Feature{Index: i, Name: name}

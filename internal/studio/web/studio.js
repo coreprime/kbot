@@ -30,6 +30,7 @@ const state = {
   planet: 'Green',
   tiles: [],     // length tileW*tileH; each entry null | { sectionPath, sx, sy, rotation }
   heights: [],   // length (tileW*2)*(tileH*2); per attribute cell (0..255)
+  voids: [],     // length (tileW*2)*(tileH*2); 0/1 per attribute cell (1 = impassable)
   features: [],
   zoom: 1,
   drawer: 'sections',
@@ -49,7 +50,7 @@ const state = {
   highlightFeatureName: null,     // lowercased name; placements outlined in red while hovered
 
   // ── new ───────────────────────────────────────────────────────────────
-  mode: 'select-terrain',        // 'paint' | 'select-terrain' | 'select-features' | 'view' | 'picker' | 'start-points' | 'erase'
+  mode: 'select-terrain',        // 'paint' | 'select-terrain' | 'select-features' | 'view' | 'picker' | 'start-points' | 'erase' | 'voids'
   viewMode: 'map',               // 'map' | 'heightmap' | 'tiles'
   showGridlines: true,
   animateFeatures: true,
@@ -483,6 +484,12 @@ async function openLoadedMap(data, card) {
   for (let i = 0; i < data.heights.length && i < state.heights.length; i++) {
     state.heights[i] = data.heights[i] | 0
   }
+  state.voids = new Array(w * 2 * h * 2).fill(0)
+  if (Array.isArray(data.voids)) {
+    for (let i = 0; i < data.voids.length && i < state.voids.length; i++) {
+      state.voids[i] = data.voids[i] ? 1 : 0
+    }
+  }
   // Features come back as bare { name, ax, ay }; flesh them out with
   // the cataloged features metadata so the canvas can draw previews.
   const featuresByName = new Map()
@@ -560,6 +567,7 @@ async function startEditor() {
   state.planet = planet
   state.tiles = new Array(w * h).fill(null)
   state.heights = new Array(w * 2 * h * 2).fill(80)
+  state.voids = new Array(w * 2 * h * 2).fill(0)
   state.features = []
   bumpContentVersion()
   state.ota = defaultOTAState(name, planet, w, h)
@@ -901,6 +909,18 @@ function setMode(mode) {
   if (mode !== 'start-points') {
     state.selectedStartPos = -1
   }
+  if (mode !== 'voids') {
+    voidsDragState = null
+  } else {
+    // Force Map view in Voids mode so the red overlay paints on top of
+    // the terrain instead of getting hidden behind the Heightmap view.
+    if (state.viewMode !== 'map') {
+      state.viewMode = 'map'
+      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'map'))
+      const lbl = $('#view-current-lbl')
+      if (lbl) lbl.textContent = 'Map'
+    }
+  }
   // Sync the dropdown label/active row.  The old inline `.tool-btn`s
   // were replaced by the dropdown rows.
   refreshModeDropdown()
@@ -911,6 +931,7 @@ function setMode(mode) {
     else if (mode === 'erase') cnv.style.cursor = 'cell'
     else if (mode === 'picker') cnv.style.cursor = 'crosshair'
     else if (mode === 'start-points') cnv.style.cursor = 'crosshair'
+    else if (mode === 'voids') cnv.style.cursor = 'crosshair'
     else cnv.style.cursor = 'default'
   }
   syncDrawerToMode(mode)
@@ -927,6 +948,7 @@ function modeHint(mode) {
     case 'picker': return 'Picker — click features to select, drag a rectangle for multi-select, Shift+click to toggle, Delete to remove.'
     case 'erase': return 'Erase — click or drag to remove tiles and features.  Switch to another mode when done.'
     case 'start-points': return 'Start Points — click empty space to drop the next available start position; click an existing one to drag/delete.'
+    case 'voids': return 'Voids — click or drag to mark attribute cells impassable / no-build.  The first cell sets the brush state for the rest of the drag.'
   }
   return ''
 }
@@ -1035,6 +1057,7 @@ function wireKeyboard() {
       if (!e.ctrlKey && !e.metaKey) setMode('start-points')
     }
     else if (e.key === 'x' || e.key === 'X') setMode('erase')
+    else if (e.key === 'd' || e.key === 'D') setMode('voids')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
     else if (e.key === 'Escape') {
@@ -1830,6 +1853,7 @@ function captureSnapshot() {
   return {
     tiles: state.tiles.slice(),
     heights: state.heights.slice(),
+    voids: state.voids.slice(),
     features: state.features.map((f) => ({ ...f })),
     tileW: state.tileW,
     tileH: state.tileH,
@@ -1859,6 +1883,7 @@ function restoreSnapshot(snap) {
   if (typeof invalidateMinimapBase === 'function') invalidateMinimapBase()
   state.tiles = snap.tiles.slice()
   state.heights = snap.heights.slice()
+  state.voids = (snap.voids || []).slice()
   state.features = snap.features.map((f) => ({ ...f }))
   if (snap.tileW !== state.tileW || snap.tileH !== state.tileH) {
     state.tileW = snap.tileW
@@ -2245,6 +2270,8 @@ function onCanvasMouseDown(e) {
     onPickerMouseDown(e)
   } else if (state.mode === 'start-points') {
     onStartPosMouseDown(e)
+  } else if (state.mode === 'voids') {
+    onVoidsMouseDown(e)
   }
 }
 
@@ -2290,6 +2317,8 @@ function onCanvasMouseMove(e) {
     onPickerMouseMove(e)
   } else if (state.mode === 'start-points') {
     onStartPosMouseMove(e)
+  } else if (state.mode === 'voids') {
+    onVoidsMouseMove(e)
   }
 }
 
@@ -2330,6 +2359,8 @@ function onCanvasMouseUp(e) {
     onPickerMouseUp(e)
   } else if (state.mode === 'start-points') {
     onStartPosMouseUp(e)
+  } else if (state.mode === 'voids') {
+    onVoidsMouseUp(e)
   }
   painting = false
   paintedDuringStroke = false
@@ -3350,6 +3381,78 @@ function onPickerMouseUp(_e) {
   }
 }
 
+// ── Voids mode ──────────────────────────────────────────────────────────
+// Painting impassable / no-build cells.  The first cell clicked sets the
+// brush state (toggle of whatever was there); the rest of the drag
+// applies that same target state to every attribute cell inside the
+// rectangle spanned by the cursor.  Mouseup commits as a single undo.
+
+let voidsDragState = null // { ax0, ay0, target, prevSnapshot } while dragging
+
+function onVoidsMouseDown(e) {
+  const { ax, ay } = pickAttrCellForVoid(e)
+  if (ax < 0 || ay < 0 || ax >= state.tileW * 2 || ay >= state.tileH * 2) return
+  const aw = state.tileW * 2
+  const prev = state.voids[ay * aw + ax] | 0
+  beginTransaction()
+  voidsDragState = { ax0: ax, ay0: ay, ax1: ax, ay1: ay, target: prev ? 0 : 1 }
+  paintVoidRect(voidsDragState)
+  renderCanvas()
+}
+
+function onVoidsMouseMove(e) {
+  if (!voidsDragState) {
+    // Hover only — no action yet, but force a redraw so the user sees
+    // their cursor highlight if we ever add one.
+    return
+  }
+  const { ax, ay } = pickAttrCellForVoid(e)
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  voidsDragState.ax1 = clamp(ax, 0, aw - 1)
+  voidsDragState.ay1 = clamp(ay, 0, ah - 1)
+  paintVoidRect(voidsDragState)
+  renderCanvas()
+}
+
+function onVoidsMouseUp(_e) {
+  if (!voidsDragState) return
+  paintVoidRect(voidsDragState, true)
+  voidsDragState = null
+  commitTransaction('Paint voids')
+  invalidateMinimapBase()
+  renderCanvas()
+}
+
+// paintVoidRect stamps the brush target value into every cell of the
+// rectangle defined by (ax0, ay0) and (ax1, ay1).  Called on every
+// drag tick and a final time on mouseup; the result is idempotent.
+function paintVoidRect(d, commit) {
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  const x0 = clamp(Math.min(d.ax0, d.ax1), 0, aw - 1)
+  const x1 = clamp(Math.max(d.ax0, d.ax1), 0, aw - 1)
+  const y0 = clamp(Math.min(d.ay0, d.ay1), 0, ah - 1)
+  const y1 = clamp(Math.max(d.ay0, d.ay1), 0, ah - 1)
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      state.voids[y * aw + x] = d.target
+    }
+  }
+  void commit // commit flag reserved for future "only stamp once" optimisations
+}
+
+// pickAttrCellForVoid converts a MouseEvent into the attribute cell
+// directly under the cursor, ignoring the feature-anchor / Height/2
+// adjustment pickFeatureAttrCell applies — voids are flat-grid edits.
+function pickAttrCellForVoid(e) {
+  const canvas = $('#canvas')
+  const rect = canvas.getBoundingClientRect()
+  const ax = Math.floor((e.clientX - rect.left) / rect.width * state.tileW * 2)
+  const ay = Math.floor((e.clientY - rect.top) / rect.height * state.tileH * 2)
+  return { ax, ay }
+}
+
 function handlePaint(e) {
   const { tx, ty } = pickCell(e)
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
@@ -3541,6 +3644,7 @@ function renderCanvas() {
   drawHighlightedFeatureOutlines(ctx)
   drawStartPositions(ctx)
   drawEraseBrush(ctx)
+  drawVoidOverlay(ctx)
 
   // Rotation badge is an HTML overlay — hide it when there's nothing
   // to rotate.  The drawPlacementPreview / drawTerrainClipboard
@@ -4795,6 +4899,57 @@ function drawGridlines(ctx, canvas) {
     ctx.lineTo(canvas.width, yp)
     ctx.stroke()
   }
+  ctx.restore()
+}
+
+// drawVoidOverlay paints translucent red over every void attribute
+// cell.  Each cell is 16 game-pixels (TILE_PX / 2).  Skipped entirely
+// when the array is empty or the cells slice is dimensioned wrong
+// (e.g. mid-resize) to avoid out-of-bounds reads.  While the user is
+// mid-drag in Voids mode, the rectangle they're sweeping renders as
+// a dashed red selection on top of the committed overlay.
+function drawVoidOverlay(ctx) {
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  if (!state.voids || state.voids.length !== aw * ah) {
+    // Still draw the drag rectangle even if no committed voids exist.
+    drawVoidsDragRect(ctx)
+    return
+  }
+  const cell = TILE_PX / 2
+  ctx.save()
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.42)'
+  for (let y = 0; y < ah; y++) {
+    let runStart = -1
+    for (let x = 0; x <= aw; x++) {
+      const v = x < aw ? state.voids[y * aw + x] : 0
+      if (v) {
+        if (runStart < 0) runStart = x
+      } else if (runStart >= 0) {
+        // Flush a horizontal run of void cells as one fillRect — keeps
+        // 70-tile maps from issuing thousands of single-cell fills.
+        ctx.fillRect(runStart * cell, y * cell, (x - runStart) * cell, cell)
+        runStart = -1
+      }
+    }
+  }
+  ctx.restore()
+  drawVoidsDragRect(ctx)
+}
+
+function drawVoidsDragRect(ctx) {
+  if (!voidsDragState) return
+  const cell = TILE_PX / 2
+  const x0 = Math.min(voidsDragState.ax0, voidsDragState.ax1) * cell
+  const y0 = Math.min(voidsDragState.ay0, voidsDragState.ay1) * cell
+  const x1 = (Math.max(voidsDragState.ax0, voidsDragState.ax1) + 1) * cell
+  const y1 = (Math.max(voidsDragState.ay0, voidsDragState.ay1) + 1) * cell
+  ctx.save()
+  ctx.strokeStyle = 'rgba(248, 81, 73, 0.95)'
+  ctx.lineWidth = 2
+  ctx.setLineDash([6, 4])
+  ctx.strokeRect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2)
+  ctx.setLineDash([])
   ctx.restore()
 }
 
@@ -6299,12 +6454,14 @@ function applyResize() {
   const offAX = offsetX * 2
   const offAY = offsetY * 2
   const newHeights = new Array(newAttrW * newAttrH).fill(80)
+  const newVoids = new Array(newAttrW * newAttrH).fill(0)
   for (let ny = 0; ny < newAttrH; ny++) {
     for (let nx = 0; nx < newAttrW; nx++) {
       const ox = nx - offAX
       const oy = ny - offAY
       if (ox < 0 || oy < 0 || ox >= oldAttrW || oy >= oldH * 2) continue
       newHeights[ny * newAttrW + nx] = state.heights[oy * oldAttrW + ox]
+      newVoids[ny * newAttrW + nx] = state.voids[oy * oldAttrW + ox] || 0
     }
   }
 
@@ -6321,6 +6478,7 @@ function applyResize() {
   state.tileH = newH
   state.tiles = newTiles
   state.heights = newHeights
+  state.voids = newVoids
   state.features = newFeatures
   $('#info-size').textContent = `${newW} × ${newH}`
   commitTransaction('Resize map')
@@ -6347,6 +6505,7 @@ async function save() {
     planet: state.planet,
     tiles: state.tiles,
     heights: state.heights,
+    voids: state.voids,
     features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
     ota: state.ota,
   }

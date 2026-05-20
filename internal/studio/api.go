@@ -395,6 +395,7 @@ type loadResponse struct {
 	TilePoolKey string          `json:"tilePoolKey"`
 	Tiles       []loadedTile    `json:"tiles"`
 	Heights     []int           `json:"heights"`
+	Voids       []int           `json:"voids"`
 	Features    []loadedFeature `json:"features"`
 	OTA         *otaState       `json:"ota"`
 }
@@ -440,9 +441,16 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Heights from TileAttr — one byte per 16-px attribute cell.
+	// Voids are encoded in the same TileAttr.Feature field via the
+	// sentinel values 0xFFFC / 0xFFFE (different TA releases use
+	// different markers); 0xFFFF means "no feature, passable".
 	heights := make([]int, len(m.TileAttr))
+	voids := make([]int, len(m.TileAttr))
 	for i, a := range m.TileAttr {
 		heights[i] = int(a.Height)
+		if a.Feature == 0xFFFC || a.Feature == 0xFFFE {
+			voids[i] = 1
+		}
 	}
 
 	// Resolve feature placements to (name, ax, ay).
@@ -491,6 +499,7 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 		TilePoolKey: "tnt:" + mapPath,
 		Tiles:       tiles,
 		Heights:     heights,
+		Voids:       voids,
 		Features:    outFeatures,
 		OTA:         ota,
 	}
@@ -1220,6 +1229,7 @@ type saveRequest struct {
 	SeaLevel    int            `json:"seaLevel"`
 	Tiles       []*saveStamp   `json:"tiles"`
 	Heights     []int          `json:"heights"`
+	Voids       []int          `json:"voids"`
 	Features    []saveFeature  `json:"features"`
 	StartPos    []saveStartPos `json:"startPositions"`
 	Planet      string         `json:"planet"`
