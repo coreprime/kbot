@@ -880,20 +880,37 @@ async function finishEditorBoot() {
   // size.  That stale GL buffer is what made the tile layer render
   // garbage after a map switch.
 
+  // Hide the canvas-stack while the boot async chain is in flight.
+  // Layout still happens (so clientWidth/Height stay meaningful), but
+  // the user doesn't see the top-left of the canvas while sections /
+  // features stream in.
+  const stack = $('#canvas-stack')
+  if (stack) stack.classList.add('booting')
   await Promise.all([loadSections(), loadFeatures()])
   // Size the canvases + overscroll padding before the first paint, so
   // centerViewOnMap can position scroll BEFORE the user ever sees the
-  // top-left of the freshly loaded canvas.  Without this prep, the
-  // first renderCanvas painted with scroll still at (0, 0) — the user
-  // briefly saw the map's top-left corner before the scroll snapped
-  // to centre on the next render.
+  // top-left of the freshly loaded canvas.
   prepareCanvasDimensions()
+  // Force a layout read so wrap.clientHeight reflects the post-show
+  // dimensions of #app — without this, the very first new-map load
+  // can grab a stale (or zero) clientHeight and the resulting
+  // scrollTop puts the map's centre in the top portion of the
+  // viewport instead of the true visual centre.
+  const wrap = $('#canvas-scroll')
+  if (wrap) void wrap.getBoundingClientRect()
   centerViewOnMap()
   renderCanvas()
+  // Reveal after the first paint has the centred scroll position
+  // committed.
+  if (stack) stack.classList.remove('booting')
   // A second pass on the next frame catches any reflow-timing edge
   // case where the post-centerViewOnMap render ran before the browser
-  // had finished resizing the canvas-stack.
-  requestAnimationFrame(() => renderCanvas())
+  // had finished resizing the canvas-stack — also re-runs the
+  // centring math against the now-settled clientHeight.
+  requestAnimationFrame(() => {
+    centerViewOnMap()
+    renderCanvas()
+  })
 }
 
 // prepareCanvasDimensions resizes the 2D and GL canvases (backing

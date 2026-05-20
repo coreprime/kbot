@@ -1327,6 +1327,11 @@ canvas {
 .canvas-stack {
   position: relative;
 }
+/* Suppress the canvas during the first paints of a load — the editor
+   needs to be in the DOM (so clientWidth/Height are meaningful) but
+   we don't want the user to see the half-loaded top-left of the map
+   while sections / features are still streaming in. */
+.canvas-stack.booting { visibility: hidden; }
 #canvas-gl {
   position: absolute;
   top: 0;
