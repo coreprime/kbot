@@ -72,6 +72,13 @@ const state = {
   showStartPositions: true,       // robot markers (forced on while in Start Points mode)
   showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
   minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
+  // panelLayout[panelId] = { vRatio, hSide, hOffset, collapsed }
+  // Floating panel positions persisted to localStorage:
+  //   vRatio  — top fraction of the canvas-wrap (0..1)
+  //   hSide   — 'left' | 'right' (whichever edge the user dragged closer to)
+  //   hOffset — px distance from that side
+  //   collapsed — body shown / hidden
+  panelLayout: {},
   eraseSize: 1,                  // erase brush size (N×N tiles)
   eraseScope: 'all',             // 'all' | 'terrain' | 'features'
   eraseCursor: null,             // last hovered tile while in Erase mode, for the brush outline
@@ -254,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
-  'viewMode', 'drawerFilters']
+  'viewMode', 'drawerFilters', 'panelLayout']
 
 function loadPersistedPrefs() {
   let raw
@@ -955,6 +962,10 @@ async function finishEditorBoot() {
   const wrap = $('#canvas-scroll')
   if (wrap) void wrap.getBoundingClientRect()
   centerViewOnMap()
+  // Restore saved floating-panel positions/collapsed-state BEFORE
+  // un-booting so the user sees the panels in their final spots on
+  // the very first painted frame.
+  applyPanelLayout()
   renderCanvas()
   // Reveal after the first paint has the centred scroll position
   // committed.
@@ -1308,6 +1319,7 @@ function wireViewMenu() {
       if (!panel) return
       panel.classList.toggle('collapsed')
       camToggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
+      persistPanelCollapsed('camera-info-panel', panel.classList.contains('collapsed'))
     })
   }
   // Drag handle on the camera-info panel header — mirrors the dev-stats
@@ -6436,6 +6448,7 @@ function wireMinimap() {
   toggle.addEventListener('click', () => {
     panel.classList.toggle('collapsed')
     toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
+    persistPanelCollapsed('minimap-panel', panel.classList.contains('collapsed'))
   })
 
   // Close button — fully hides the panel.  The user gets it back via
@@ -6692,6 +6705,7 @@ function wireDeveloperPanel() {
   toggle.addEventListener('click', () => {
     panel.classList.toggle('collapsed')
     toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
+    persistPanelCollapsed('dev-stats-panel', panel.classList.contains('collapsed'))
   })
   makePanelDraggable(panel, header)
 }
@@ -6727,8 +6741,86 @@ function makePanelDraggable(panel, header) {
     if (dragOffset) {
       dragOffset = null
       header.classList.remove('dragging')
+      // Save the final position so the panel reopens in the same
+      // spot on the next session.
+      persistPanelLayout(panel)
     }
   })
+}
+
+// persistPanelLayout snapshots the panel's current position into the
+// shared panelLayout map, then writes prefs.  Vertical position is
+// stored as a viewport-height fraction so a wider/taller window on
+// the next launch still puts the panel roughly where the user
+// expects.  Horizontal position is stored as a px offset from
+// whichever edge the panel is closer to.
+function persistPanelLayout(panel) {
+  if (!panel || !panel.id) return
+  const wrap = $('.canvas-wrap')
+  if (!wrap) return
+  const wr = wrap.getBoundingClientRect()
+  const pr = panel.getBoundingClientRect()
+  if (wr.height <= 0 || wr.width <= 0) return
+  const top = pr.top - wr.top
+  const leftDist = pr.left - wr.left
+  const rightDist = wr.right - pr.right
+  const hSide = leftDist <= rightDist ? 'left' : 'right'
+  const hOffset = hSide === 'left' ? Math.round(leftDist) : Math.round(rightDist)
+  const vRatio = clamp(top / wr.height, 0, 1)
+  state.panelLayout = state.panelLayout || {}
+  const cur = state.panelLayout[panel.id] || {}
+  state.panelLayout[panel.id] = {
+    vRatio,
+    hSide,
+    hOffset,
+    collapsed: !!cur.collapsed,
+  }
+  persistPrefs()
+}
+
+// persistPanelCollapsed updates only the collapsed flag for a panel
+// (called from collapse-toggle handlers) without touching position.
+function persistPanelCollapsed(panelId, collapsed) {
+  if (!panelId) return
+  state.panelLayout = state.panelLayout || {}
+  const cur = state.panelLayout[panelId] || {}
+  state.panelLayout[panelId] = { ...cur, collapsed: !!collapsed }
+  persistPrefs()
+}
+
+// applyPanelLayout positions and (un)collapses every panel that has
+// a saved layout entry.  Called once at the end of finishEditorBoot
+// so the canvas-wrap dimensions are settled before we read them.
+function applyPanelLayout() {
+  const map = state.panelLayout || {}
+  const wrap = $('.canvas-wrap')
+  if (!wrap) return
+  const wr = wrap.getBoundingClientRect()
+  for (const id of Object.keys(map)) {
+    const panel = document.getElementById(id)
+    if (!panel) continue
+    const saved = map[id]
+    if (saved.collapsed) panel.classList.add('collapsed')
+    else panel.classList.remove('collapsed')
+    // Reflect the collapse state on the matching toggle button label,
+    // if there is one (dev-stats / camera-info follow the +/− pattern).
+    const toggle = panel.querySelector('.minimap-toggle')
+    if (toggle) toggle.textContent = saved.collapsed ? '+' : '−'
+    if (typeof saved.vRatio === 'number' && wr.height > 0) {
+      const top = clamp(saved.vRatio * wr.height, 4, Math.max(4, wr.height - panel.offsetHeight - 4))
+      panel.style.top = top + 'px'
+      panel.style.bottom = 'auto'
+    }
+    if (typeof saved.hOffset === 'number') {
+      if (saved.hSide === 'right') {
+        panel.style.right = saved.hOffset + 'px'
+        panel.style.left = 'auto'
+      } else {
+        panel.style.left = saved.hOffset + 'px'
+        panel.style.right = 'auto'
+      }
+    }
+  }
 }
 
 function wireDeveloperDialog() {
