@@ -36,6 +36,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/features", handleFeatures)
 	mux.HandleFunc("/api/studio/feature-preview/", handleFeaturePreview)
 	mux.HandleFunc("/api/studio/save", handleSave)
+	mux.HandleFunc("/api/studio/save-loose", handleSaveLoose)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────
@@ -1301,6 +1302,48 @@ func handleSave(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
 	_, _ = w.Write(hpiBytes)
+}
+
+// handleSaveLoose returns the TNT + OTA artifacts as a multipart
+// response so the client can offer separate file downloads.  Pairs
+// with the Map menu's loose-save button for users who want to drop a
+// new TNT into an HPI tool of their choice.
+func handleSaveLoose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var req saveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.TileW <= 0 || req.TileH <= 0 {
+		http.Error(w, "tileW and tileH must be positive", http.StatusBadRequest)
+		return
+	}
+	if req.MapName == "" {
+		req.MapName = "newmap"
+	}
+	req.MapName = sanitiseMapName(req.MapName)
+	which := r.URL.Query().Get("which")
+	if which != "tnt" && which != "ota" {
+		http.Error(w, "which must be 'tnt' or 'ota'", http.StatusBadRequest)
+		return
+	}
+	tntBytes, otaBytes, err := buildArtifacts(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if which == "tnt" {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".tnt"))
+		_, _ = w.Write(tntBytes)
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".ota"))
+		_, _ = w.Write(otaBytes)
+	}
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

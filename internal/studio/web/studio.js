@@ -6269,6 +6269,7 @@ function fitZoom() {
 
 function wireToolbar() {
   $('#btn-save').addEventListener('click', save)
+  $('#btn-save-loose')?.addEventListener('click', saveLoose)
   $('#btn-resize').addEventListener('click', openResizeDialog)
   $('#btn-scatter')?.addEventListener('click', openScatterDialog)
   $('#scatter-cancel')?.addEventListener('click', closeScatterDialog)
@@ -7422,6 +7423,49 @@ async function onImportHeightmapFile(e) {
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+async function saveLoose() {
+  setStatus('Building TNT + OTA…')
+  if (state.terrainClipboard) dropTerrainClipboard()
+  cancelPlacement()
+  const payload = {
+    mapName: state.name,
+    displayName: state.ota?.missionName || state.name,
+    tileW: state.tileW,
+    tileH: state.tileH,
+    planet: state.planet,
+    tiles: state.tiles,
+    heights: state.heights,
+    voids: state.voids,
+    features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
+    seaLevel: state.ota?.seaLevel ?? 0,
+    ota: state.ota,
+  }
+  for (const which of ['tnt', 'ota']) {
+    try {
+      const resp = await fetch(`/api/studio/save-loose?which=${which}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!resp.ok) {
+        const text = await resp.text()
+        throw new Error(text || `HTTP ${resp.status}`)
+      }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${sanitiseFilename(state.name)}.${which}`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setStatus(`Loose save failed (${which}): ${err.message}`)
+      return
+    }
+  }
+  setStatus('Saved loose .tnt + .ota.')
 }
 
 async function save() {

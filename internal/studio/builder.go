@@ -22,18 +22,29 @@ const blankTileByte = 0x64
 // doesn't supply explicit heights.
 const defaultHeight = 80
 
-// buildHPI takes a save request, materialises a TNT + OTA pair, and bundles
-// them into an HPI archive ready for download.
-func buildHPI(req saveRequest) ([]byte, error) {
+// buildArtifacts materialises the TNT + OTA bytes for a save request.
+// Split out from buildHPI so non-HPI save paths (loose .tnt + .ota,
+// overwriting a source HPI, etc.) can reuse the same pipeline without
+// going through the temp-file dance below.
+func buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
 	m, features, err := buildMap(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var tntBuf bytes.Buffer
 	if err := m.Save(&tntBuf, features); err != nil {
-		return nil, fmt.Errorf("encode TNT: %w", err)
+		return nil, nil, fmt.Errorf("encode TNT: %w", err)
 	}
-	otaBytes := []byte(buildOTA(req))
+	return tntBuf.Bytes(), []byte(buildOTA(req)), nil
+}
+
+// buildHPI takes a save request, materialises a TNT + OTA pair, and bundles
+// them into an HPI archive ready for download.
+func buildHPI(req saveRequest) ([]byte, error) {
+	tntBytes, otaBytes, err := buildArtifacts(req)
+	if err != nil {
+		return nil, err
+	}
 
 	// hpi.Writer is file-backed, so route through a temp file and slurp.
 	tmp, err := os.CreateTemp("", "studio-*.hpi")
@@ -50,7 +61,7 @@ func buildHPI(req saveRequest) ([]byte, error) {
 	}
 	hw.SetTrailer(nil)
 	mapName := strings.ToLower(req.MapName)
-	if err := hw.AddFileFromBytes(filepath.ToSlash(filepath.Join("maps", mapName+".tnt")), tntBuf.Bytes()); err != nil {
+	if err := hw.AddFileFromBytes(filepath.ToSlash(filepath.Join("maps", mapName+".tnt")), tntBytes); err != nil {
 		_ = hw.Close()
 		return nil, fmt.Errorf("add tnt: %w", err)
 	}
