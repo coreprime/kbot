@@ -5985,9 +5985,11 @@ function distinctTileKey(stamp) {
 
 function computeDevStats() {
   const tileKeys = new Map() // key → { stamp, count }
+  let occupied = 0
   for (const stamp of state.tiles || []) {
     const k = distinctTileKey(stamp)
     if (!k) continue
+    occupied++
     const entry = tileKeys.get(k)
     if (entry) entry.count++
     else tileKeys.set(k, { stamp, count: 1 })
@@ -5998,11 +6000,16 @@ function computeDevStats() {
   }
   const sectionPaths = new Set()
   for (const v of tileKeys.values()) sectionPaths.add(v.stamp.sectionPath)
+  const total = (state.tileW || 0) * (state.tileH || 0)
+  const compression = (occupied > 0) ? (occupied / tileKeys.size) : 0
   return {
     distinctTiles: tileKeys.size,
     distinctFeatures: featureNames.size,
     totalFeatures: (state.features || []).length,
     sectionsUsed: sectionPaths.size,
+    occupiedTiles: occupied,
+    totalTiles: total,
+    compressionRatio: compression,
     tileEntries: tileKeys, // for the dialog grid
   }
 }
@@ -6049,6 +6056,8 @@ function refreshDevStats() {
   if (dlgOpen) {
     set('dev-dlg-distinct-tiles', stats.distinctTiles)
     set('dev-dlg-sections-used', stats.sectionsUsed)
+    set('dev-dlg-occupied', `${stats.occupiedTiles} / ${stats.totalTiles}`)
+    set('dev-dlg-compression', stats.compressionRatio > 0 ? `${stats.compressionRatio.toFixed(2)}×` : '—')
     renderDevTilesGrid(stats.tileEntries)
   }
 }
