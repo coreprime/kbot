@@ -3636,6 +3636,20 @@ function drawHeightmapBrush(ctx) {
 function drawStartPositions(ctx) {
   if (!state.ota) return
   const fontFamily = getComputedStyle(document.body).fontFamily
+  // Inverse zoom so the marker keeps a stable CSS size as the user
+  // zooms out — clamp upward to avoid mountain-sized badges at 1%
+  // zoom while still rescuing them from the 16-px-into-the-void
+  // disappear they used to do.  At zoom >= 1 we render at the
+  // original sizes.
+  const z = state.zoom || 1
+  const scale = Math.min(8, Math.max(1, 1 / z))
+  const ringR = 16 * scale
+  const dotR = 8 * scale
+  const iconPx = Math.round(18 * scale)
+  const badgePx = Math.round(11 * scale)
+  const badgeOffsetX = 12 * scale
+  const badgeOffsetY = 6 * scale
+  const badgeH = 15 * scale
 
   // Faded markers for non-active schemas (only render if there's more
   // than one schema, otherwise it's noise).
@@ -3649,7 +3663,7 @@ function drawStartPositions(ctx) {
         const { px, py } = gameToCanvas(sp.x, sp.z)
         ctx.fillStyle = '#8b5cf6'
         ctx.beginPath()
-        ctx.arc(px, py, 8, 0, Math.PI * 2)
+        ctx.arc(px, py, dotR, 0, Math.PI * 2)
         ctx.fill()
       }
     }
@@ -3659,7 +3673,6 @@ function drawStartPositions(ctx) {
   const schema = activeSchema()
   if (!schema) return
   ctx.save()
-  ctx.font = `18px ${fontFamily}`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   for (let i = 0; i < schema.startPositions.length; i++) {
@@ -3669,29 +3682,29 @@ function drawStartPositions(ctx) {
     const selected = state.mode === 'start-points' && state.selectedStartPos === i
     ctx.fillStyle = selected ? 'rgba(139, 92, 246, 0.92)' : 'rgba(255, 200, 0, 0.92)'
     ctx.strokeStyle = selected ? '#fff' : 'rgba(0, 0, 0, 0.6)'
-    ctx.lineWidth = 2
+    ctx.lineWidth = 2 * scale
     ctx.beginPath()
-    ctx.arc(px, py, 16, 0, Math.PI * 2)
+    ctx.arc(px, py, ringR, 0, Math.PI * 2)
     ctx.fill()
     ctx.stroke()
     // Robot glyph.
     ctx.fillStyle = '#000'
-    ctx.font = `18px ${fontFamily}`
-    ctx.fillText('🤖', px, py + 1)
+    ctx.font = `${iconPx}px ${fontFamily}`
+    ctx.fillText('🤖', px, py + scale)
     // Number badge — small pill below/right of the marker.
     const label = String(sp.number)
-    ctx.font = `bold 11px ${fontFamily}`
-    const w = ctx.measureText(label).width + 8
-    const bx = px + 12
-    const by = py + 6
+    ctx.font = `bold ${badgePx}px ${fontFamily}`
+    const w = ctx.measureText(label).width + 8 * scale
+    const bx = px + badgeOffsetX
+    const by = py + badgeOffsetY
     ctx.fillStyle = 'rgba(20, 24, 32, 0.95)'
     ctx.strokeStyle = selected ? '#fff' : 'rgba(139, 92, 246, 0.9)'
-    ctx.lineWidth = 1.5
-    roundRect(ctx, bx, by, w, 15, 4)
+    ctx.lineWidth = 1.5 * scale
+    roundRect(ctx, bx, by, w, badgeH, 4 * scale)
     ctx.fill()
     ctx.stroke()
     ctx.fillStyle = '#fff'
-    ctx.fillText(label, bx + w / 2, by + 7)
+    ctx.fillText(label, bx + w / 2, by + badgeH / 2)
   }
   ctx.restore()
 }
