@@ -4149,13 +4149,25 @@ function updateCameraInfoCursor(tx, ty, ax, ay) {
   if (!panel || panel.classList.contains('hidden')) return
   const cursorEl = $('#ci-cursor')
   const subEl = $('#ci-subtile')
+  const hEl = $('#ci-height')
   if (tx == null) {
     if (cursorEl) cursorEl.textContent = '—'
     if (subEl) subEl.textContent = '—'
+    if (hEl) hEl.textContent = '—'
     return
   }
   if (cursorEl) cursorEl.textContent = `${tx}, ${ty}`
   if (subEl) subEl.textContent = `${ax & 1}, ${ay & 1}`
+  // Height byte at the precise attribute cell under the cursor.
+  if (hEl) {
+    const aw = state.tileW * 2
+    const ah = state.tileH * 2
+    if (ax >= 0 && ay >= 0 && ax < aw && ay < ah && state.heights) {
+      hEl.textContent = String(state.heights[ay * aw + ax] | 0)
+    } else {
+      hEl.textContent = '—'
+    }
+  }
 }
 
 // updateFeatureInfoPanel populates the floating callout that appears
@@ -4602,9 +4614,20 @@ function drawHeightmap(ctx) {
 // one stroking horizontal edges, one stroking vertical edges; uses a
 // single path per line colour so big maps stay fast.
 function drawHeightContours(ctx, attrW, attrH, cell) {
-  const step = 16
-  const seaLevel = state.ota?.seaLevel ?? 63
+  // Step grows with zoom-out so we don't draw a dense web of lines at
+  // 5–25% zoom.  Each step is a height bucket; lines render where two
+  // neighbouring cells fall in different buckets.
+  //   ≥75%:  every 16 height units (default detail)
+  //   ≥40%:  every 32
+  //   ≥20%:  every 64
+  //   else:  every 128 (only major bands)
   const z = state.zoom || 1
+  let step
+  if (z >= 0.75) step = 16
+  else if (z >= 0.40) step = 32
+  else if (z >= 0.20) step = 64
+  else step = 128
+  const seaLevel = state.ota?.seaLevel ?? 63
   // Keep strokes at least 1 CSS pixel wide regardless of zoom — same
   // approach the gridlines use, so contours don't alias out at low
   // zoom or balloon at high zoom.
@@ -4612,9 +4635,9 @@ function drawHeightContours(ctx, attrW, attrH, cell) {
   const majorWidth = Math.max(2, Math.ceil(2 / z))
   ctx.save()
   ctx.lineWidth = minorWidth
-  // Regular contours — black with low alpha so they read but don't
-  // overwhelm the underlying greyscale.
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
+  // Light blue contours so they stand out on both the Map tile
+  // textures and the Heightmap greyscale.
+  ctx.strokeStyle = 'rgba(125, 211, 252, 0.85)'
   ctx.beginPath()
   for (let ay = 0; ay < attrH; ay++) {
     for (let ax = 0; ax < attrW; ax++) {
