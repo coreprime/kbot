@@ -535,10 +535,11 @@ kbd {
 /* ── App layout ────────────────────────────────────────────────────── */
 .app {
   display: grid;
-  grid-template-rows: 48px auto 1fr 28px;
+  grid-template-rows: 48px 34px auto 1fr 28px;
   grid-template-columns: 320px 1fr;
   grid-template-areas:
     "top top"
+    "tabs tabs"
     "ribbon ribbon"
     "side canvas"
     "status status";
@@ -560,6 +561,103 @@ kbd {
   font-weight: 600;
 }
 .brand-mark { font-size: 18px; }
+
+/* ── Map tab bar ───────────────────────────────────────────────────── */
+.map-tabs {
+  grid-area: tabs;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: stretch;
+  padding: 4px 8px 0;
+  gap: 2px;
+  position: relative;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+.map-tabs-list { display: flex; gap: 2px; }
+.map-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: var(--bg-0);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.map-tab:hover { background: var(--bg-2); color: var(--text); }
+.map-tab.active {
+  background: var(--bg-2);
+  color: var(--text);
+  border-color: var(--border);
+  /* Visually merge into the ribbon below by overlapping its top border. */
+  margin-bottom: -1px;
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--bg-2);
+}
+.map-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.map-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.map-tab-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.map-tab-add {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  height: 30px;
+  width: 28px;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.map-tab-add:hover { background: var(--bg-2); color: var(--text); }
+.map-tab-add-popup {
+  position: absolute;
+  top: 32px;
+  left: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  z-index: 1500;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+.map-tab-add-popup .menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.map-tab-add-popup .menu-row:hover { background: var(--bg-2); }
+.map-tab-add-popup .ico { font-size: 14px; width: 18px; text-align: center; }
 
 /* ── Ribbon toolbar (modes / actions / zoom / view) ────────────────── */
 .ribbon {

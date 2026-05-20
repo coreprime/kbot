@@ -63,75 +63,143 @@ function worldFor(name) {
   return null
 }
 
-const state = {
-  tileW: 128,
-  tileH: 128,
-  name: 'newmap',
-  planet: 'Green',
-  tiles: [],     // length tileW*tileH; each entry null | { sectionPath, sx, sy, rotation }
-  heights: [],   // length (tileW*2)*(tileH*2); per attribute cell (0..255)
-  voids: [],     // length (tileW*2)*(tileH*2); 0/1 per attribute cell (1 = impassable)
-  features: [],
-  zoom: 1,
+// ── Per-map state model ────────────────────────────────────────────────
+//
+// MapDoc owns one map's per-map state.  The editor maintains an array
+// of these (one per open tab); the active tab's MapDoc backs every
+// `state.X` read for any X in PER_MAP_FIELDS.  Switching tabs swaps
+// which MapDoc the Proxy points to — no data movement, just a pointer
+// flip — so nothing per-map can survive a tab change.
+//
+// Module-level lets that hold per-map editing state (undoStack /
+// redoStack / pendingTransaction / minimapBase, the scroll position)
+// snapshot to / restore from the MapDoc on every tab swap, since they
+// can't be expressed through the Proxy.
+
+const PER_MAP_FIELDS = new Set([
+  'tileW', 'tileH', 'name', 'planet',
+  'tiles', 'heights', 'voids', 'features',
+  'zoom', 'mode',
+  'ota', 'activeSchema',
+  'selected', 'placement', 'terrainClipboard', 'dragging', 'dropPreview',
+  'selectedFeature', 'selectedFeatures', 'selectedStartPos',
+  'rectSelection', 'pickerRect',
+  'featureJustMoved', 'startPosJustMoved',
+  'highlightFeatureName', 'hoveredFeatureName',
+  'eraseCursor', 'hmCursor', 'voidsCursor',
+  'hmLevelHeight',
+])
+
+class MapDoc {
+  constructor() {
+    this.tileW = 128
+    this.tileH = 128
+    this.name = 'newmap'
+    this.planet = 'Green'
+    this.tiles = []
+    this.heights = []
+    this.voids = []
+    this.features = []
+    this.zoom = 1
+    this.mode = 'select-terrain'
+    this.ota = null
+    this.activeSchema = 0
+    this.selected = null
+    this.placement = null
+    this.terrainClipboard = null
+    this.dragging = null
+    this.dropPreview = null
+    this.selectedFeature = -1
+    this.selectedFeatures = new Set()
+    this.selectedStartPos = -1
+    this.rectSelection = null
+    this.pickerRect = null
+    this.featureJustMoved = -1
+    this.startPosJustMoved = -1
+    this.highlightFeatureName = null
+    this.hoveredFeatureName = null
+    this.eraseCursor = null
+    this.hmCursor = null
+    this.voidsCursor = null
+    this.hmLevelHeight = 80
+    // Snapshotted module-level lets — see snapshot/restore helpers.
+    this.undoStack = []
+    this.redoStack = []
+    this.pendingTransaction = null
+    this.minimapBase = null
+    this.minimapBaseStale = true
+    this.scrollLeft = 0
+    this.scrollTop = 0
+  }
+}
+
+// Tabs[] holds one entry per open map.  activeTabIndex picks which is
+// currently shown / edited.  activeMap() is the only legitimate way to
+// reach the active per-map state inside this module.
+const tabs = []
+let activeTabIndex = -1
+function activeMap() { return activeTabIndex >= 0 ? tabs[activeTabIndex]?.map : null }
+
+// Session-level state lives here.  These fields are shared across all
+// tabs: drawer filters, view-menu toggles, panel layout, the section /
+// feature catalogs and their image caches, and the user prefs the
+// PrefsStore persists.  PER_MAP_FIELDS are NOT on this object — the
+// Proxy below forwards them to activeMap().
+const sessionState = {
   drawer: 'sections',
   drawerFilters: { sections: '', features: '' },
-  selected: null, // { type: 'section', path, tileW, tileH, image } | { type: 'feature', name }
   sectionsList: [],
   featuresList: [],
   sectionImages: new Map(),         // path → HTMLImageElement (raw, rotation=0)
   sectionImagesRotated: new Map(),  // `${path}|${rot}` → HTMLCanvasElement
   sectionHeights: new Map(),        // path → { w, h, heights[(w*2)*(h*2)] }
   featureImages: new Map(),         // lowercased name → HTMLImageElement (animated)
-  dragging: null,
-  dropPreview: null,
   collapsedGroups: new Set(),
-  usedOnly: false,                // features tab: hide unused features when true
-  includeWreckage: false,         // features tab: include corpses/wreckage when true
-  highlightFeatureName: null,     // lowercased name; placements outlined in red while hovered
-
-  // ── new ───────────────────────────────────────────────────────────────
-  mode: 'select-terrain',        // 'paint' | 'select-terrain' | 'select-features' | 'view' | 'picker' | 'start-points' | 'erase' | 'voids'
-  viewMode: 'map',               // 'map' | 'heightmap' | 'tiles'
+  usedOnly: false,
+  includeWreckage: false,
+  viewMode: 'map',
   showGridlines: true,
   animateFeatures: true,
   showFeatures: true,
-  placement: null,               // { sectionPath, tileW, tileH, rotation, tx, ty } while a section follows the cursor
-  rectSelection: null,           // { x, y, w, h } during a Select-Terrain rectangle drag
-  terrainClipboard: null,        // captured rectangle being moved/rotated; see captureTerrain()
-  selectedFeature: -1,           // index into state.features when Select-Features picks one
-  selectedFeatures: new Set(),   // multi-select indices (Picker mode)
-  pickerRect: null,              // { x, y, w, h } during a Picker drag-select
-  selectedStartPos: -1,          // index into active schema's startPositions
-  featureJustMoved: -1,          // feature index whose move just committed — next click clears the pick
-  startPosJustMoved: -1,         // same idea for start positions
-  ota: null,                     // see defaultOTAState
-  activeSchema: 0,               // index into state.ota.schemas
-  showMinimap: true,             // minimap panel visibility (toggleable from View)
-  showVoids: true,                // red overlay on void cells (forced on while in Voids mode)
-  showContours: false,            // height contour lines on top of Map view
-  showStartPositions: true,       // robot markers (forced on while in Start Points mode)
-  showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
-  minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
-  // panelLayout[panelId] = { vRatio, hSide, hOffset, collapsed }
-  // Floating panel positions persisted to localStorage:
-  //   vRatio  — top fraction of the canvas-wrap (0..1)
-  //   hSide   — 'left' | 'right' (whichever edge the user dragged closer to)
-  //   hOffset — px distance from that side
-  //   collapsed — body shown / hidden
+  showMinimap: true,
+  showVoids: true,
+  showContours: false,
+  showStartPositions: true,
+  showCameraInfo: true,
+  minimapPos: null,
   panelLayout: {},
-  eraseSize: 1,                  // erase brush size (N×N tiles)
-  eraseScope: 'all',             // 'all' | 'terrain' | 'features'
-  eraseCursor: null,             // last hovered tile while in Erase mode, for the brush outline
-  hoveredFeatureName: null,      // drawer feature being hovered (forces animate)
-  hmTool: 'raise',               // 'raise' | 'lower' | 'smooth' | 'level' — heightmap brush mode
-  hmRadius: 4,                   // brush radius in attribute cells
-  hmStrength: 4,                 // height delta per tick in raise/lower; 0..1 mix for smooth
-  hmCursor: null,                // last hovered attr cell while in Heightmap mode, for the brush outline
-  hmLevelHeight: 80,             // height stamped by the Level tool — set on mousedown
-  voidsBrushSize: 1,             // void paint brush, N×N attribute cells
-  voidsCursor: null,             // last hovered attr cell while in Voids mode
-  symmetry: 'off',               // 'off' | 'x' | 'y' | 'xy' — mirror painting across map centre line(s)
+  eraseSize: 1,
+  eraseScope: 'all',
+  hmTool: 'raise',
+  hmRadius: 4,
+  hmStrength: 4,
+  voidsBrushSize: 1,
+  symmetry: 'off',
 }
+
+// `state` Proxy: per-map fields forward to activeMap(); everything else
+// reads/writes sessionState.  Keeps every existing `state.X` call site
+// working without rewriting it — the data has moved into MapDoc, but
+// the access surface is unchanged.
+const state = new Proxy(sessionState, {
+  get(target, prop) {
+    if (PER_MAP_FIELDS.has(prop)) return activeMap()?.[prop]
+    return target[prop]
+  },
+  set(target, prop, value) {
+    if (PER_MAP_FIELDS.has(prop)) {
+      const m = activeMap()
+      if (m) m[prop] = value
+      // Silently drop writes when no tab is active (boot / welcome screen).
+      return true
+    }
+    target[prop] = value
+    return true
+  },
+  has(target, prop) {
+    return PER_MAP_FIELDS.has(prop) || prop in target
+  },
+})
 
 // ── OTA defaults ───────────────────────────────────────────────────────────
 //
@@ -263,6 +331,8 @@ document.addEventListener('DOMContentLoaded', () => {
   })
   $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
   wireWelcomeDropZone()
+  // Multi-tab management — the tab bar + "+" popout above the toolbar.
+  wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
   // Open-map dialog.
   $('#open-back').addEventListener('click', closeOpenDialog)
@@ -384,6 +454,192 @@ function persistPrefs() {
     for (const k of PREF_FIELDS) blob[k] = state[k]
     prefsStore.save(blob)
   }, 250)
+}
+
+// ── Multi-tab management ────────────────────────────────────────────
+//
+// Each open map has one entry in `tabs` ({ map: MapDoc }) and one
+// chip in the #map-tabs row.  activeTabIndex picks which is currently
+// shown; the state Proxy forwards per-map field reads/writes to
+// tabs[activeTabIndex].map.
+//
+// On a tab swap we:
+//   1) Snapshot module-level lets (undoStack/redoStack/pending
+//      transaction/minimapBase/minimapBaseStale + scroll position)
+//      into the outgoing tab.
+//   2) Abort transient gesture state (panning, painting in progress,
+//      drag offsets) — switching tabs always cancels mid-gesture work.
+//   3) Move activeTabIndex.
+//   4) Restore the new tab's module-level lets.
+//   5) Recreate the canvas DOM + GL context via recreateEditorView()
+//      so the new map renders from a clean surface.
+//   6) Render + restore scroll.
+
+function snapshotActiveTabModuleLets() {
+  if (activeTabIndex < 0) return
+  const tab = tabs[activeTabIndex]
+  if (!tab) return
+  const m = tab.map
+  m.undoStack = undoStack.slice()
+  m.redoStack = redoStack.slice()
+  m.pendingTransaction = pendingTransaction
+  m.minimapBase = minimapBase
+  m.minimapBaseStale = minimapBaseStale
+  const scroll = document.querySelector('#canvas-scroll')
+  if (scroll) {
+    m.scrollLeft = scroll.scrollLeft
+    m.scrollTop = scroll.scrollTop
+  }
+}
+
+function restoreActiveTabModuleLets() {
+  if (activeTabIndex < 0) return
+  const tab = tabs[activeTabIndex]
+  if (!tab) return
+  const m = tab.map
+  undoStack.length = 0
+  for (const x of m.undoStack) undoStack.push(x)
+  redoStack.length = 0
+  for (const x of m.redoStack) redoStack.push(x)
+  pendingTransaction = m.pendingTransaction
+  minimapBase = m.minimapBase
+  minimapBaseStale = m.minimapBaseStale
+  // Scroll restored AFTER the new canvases are sized — see switchToTab.
+}
+
+function abortTransientGestureState() {
+  panState = null
+  spacePanHotkey = false
+  painting = false
+  paintedDuringStroke = false
+  canvasHoverFeature = null
+  placementMoveAnchor = null
+  terrainDragging = false
+  terrainDragStart = null
+  terrainMoveAnchor = null
+  featureDragging = false
+  featureDragOffset = null
+  startPosDragging = false
+  startPosDragOffset = null
+  pickerDragStart = null
+}
+
+function closeTab(idx) {
+  if (idx < 0 || idx >= tabs.length) return
+  // If the user is closing the currently-active tab, snapshot in-flight
+  // module-let state into a doomed MapDoc anyway so the closing tab's
+  // last edit can't taint the next tab's restore.
+  if (idx === activeTabIndex) snapshotActiveTabModuleLets()
+  tabs.splice(idx, 1)
+  if (tabs.length === 0) {
+    activeTabIndex = -1
+    showWelcomeAfterLastTabClose()
+    return
+  }
+  // Pick the previous tab if we closed the active one; otherwise stay
+  // on the same active map.
+  if (idx <= activeTabIndex) activeTabIndex = Math.max(0, activeTabIndex - (idx === activeTabIndex ? 0 : 0))
+  if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1
+  // Re-activate with restore semantics so the now-front tab repaints.
+  switchToTab(activeTabIndex, { fresh: false, force: true })
+}
+
+function showWelcomeAfterLastTabClose() {
+  // Hide the editor surface and bring back the welcome modal.
+  $('#app')?.classList.add('hidden')
+  const wel = $('#welcome-dialog')
+  if (wel) wel.classList.remove('hidden')
+  if (editorView) { editorView.destroy(); editorView = null }
+  renderMapTabs()
+}
+
+function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
+  if (nextIdx < 0 || nextIdx >= tabs.length) return
+  if (!force && nextIdx === activeTabIndex) return
+  // Snapshot the outgoing tab.  Skip on fresh activation (the new
+  // tab's MapDoc is the source of truth — we don't want to splat
+  // module-let leftovers from the previously-active tab onto it).
+  if (!fresh && activeTabIndex >= 0) snapshotActiveTabModuleLets()
+  abortTransientGestureState()
+  activeTabIndex = nextIdx
+  restoreActiveTabModuleLets()
+  renderMapTabs()
+  // recreateEditorView() needs an active app surface to mount into.
+  $('#app')?.classList.remove('hidden')
+  recreateEditorView()
+  // Sync drawer / view / mode UI to the new tab's state.
+  if (typeof updateUndoButtons === 'function') updateUndoButtons()
+  if (typeof bumpContentVersion === 'function') bumpContentVersion()
+  if (typeof renderDrawer === 'function') renderDrawer()
+  if (typeof setMode === 'function') setMode(activeMap()?.mode || 'select-terrain')
+  if (typeof renderCanvas === 'function') renderCanvas()
+  // Restore scroll AFTER the new canvases are sized; canvas-scroll's
+  // scrollLeft/Top is clamped to the live scrollWidth/Height, which
+  // wouldn't exist before mount.
+  const tab = tabs[activeTabIndex]
+  if (tab) {
+    const scroll = document.querySelector('#canvas-scroll')
+    if (scroll) {
+      scroll.scrollLeft = tab.map.scrollLeft || 0
+      scroll.scrollTop = tab.map.scrollTop || 0
+    }
+  }
+}
+
+function renderMapTabs() {
+  const list = document.querySelector('#map-tabs-list')
+  if (!list) return
+  list.replaceChildren()
+  for (let i = 0; i < tabs.length; i++) {
+    const tab = tabs[i]
+    const m = tab.map
+    const el = document.createElement('button')
+    el.type = 'button'
+    el.className = 'map-tab' + (i === activeTabIndex ? ' active' : '')
+    el.dataset.tabIndex = String(i)
+    el.setAttribute('role', 'tab')
+    el.title = `${m.name} (${m.tileW}×${m.tileH})`
+    const lbl = document.createElement('span')
+    lbl.className = 'map-tab-label'
+    lbl.textContent = m.name || '(untitled)'
+    el.appendChild(lbl)
+    const close = document.createElement('button')
+    close.type = 'button'
+    close.className = 'map-tab-close'
+    close.textContent = '×'
+    close.title = 'Close this map'
+    close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(i) })
+    el.appendChild(close)
+    el.addEventListener('click', () => switchToTab(i))
+    list.appendChild(el)
+  }
+}
+
+function wireMapTabBar() {
+  const addBtn = document.querySelector('#map-tab-add')
+  const popup = document.querySelector('#map-tab-add-popup')
+  if (!addBtn || !popup) return
+  addBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    popup.classList.toggle('hidden')
+  })
+  document.querySelector('#map-tab-add-new')?.addEventListener('click', () => {
+    popup.classList.add('hidden')
+    // Open the size dialog in "append a tab" mode.  When the user
+    // confirms, startEditor() pushes a brand-new tab.
+    sizeDialogSource = 'tabbar'
+    document.querySelector('#size-dialog')?.classList.remove('hidden')
+  })
+  document.querySelector('#map-tab-add-open')?.addEventListener('click', () => {
+    popup.classList.add('hidden')
+    openMapDialog('tabbar')
+  })
+  document.addEventListener('click', (e) => {
+    if (popup.classList.contains('hidden')) return
+    if (e.target === addBtn || addBtn.contains(e.target)) return
+    if (popup.contains(e.target)) return
+    popup.classList.add('hidden')
+  })
 }
 
 async function maybeAutoOpenFromQuery() {
@@ -542,10 +798,11 @@ async function fetchMaps() {
 function closeOpenDialog() {
   $('#open-dialog').classList.add('hidden')
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
-  if (openMapSource === 'editor') {
-    $('#app').classList.remove('hidden')
-  } else {
+  if (openMapSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
+  } else {
+    // 'editor' / 'tabbar' — the editor is already mounted; just dismiss
+    // the picker without disturbing the active tab.
   }
 }
 
@@ -674,12 +931,13 @@ function wireWelcomeDropZone() {
 }
 
 async function openLoadedMap(data, card) {
-  // Clear in-flight selections / clipboards / undo history so the new
-  // map starts cleanly — keeps the cached section/feature images
-  // around since those are reusable.
-  resetTransientEditorState()
   const w = data.tileW || 128
   const h = data.tileH || 128
+  // Push a brand-new MapDoc as the active tab.  Subsequent state.X
+  // writes land in this MapDoc — the previously-active tab keeps its
+  // own state intact in tabs[], reachable by clicking back.
+  tabs.push({ map: new MapDoc() })
+  activeTabIndex = tabs.length - 1
   state.tileW = w
   state.tileH = h
   state.name = data.name || (card && card.name) || 'newmap'
@@ -755,8 +1013,7 @@ async function openLoadedMap(data, card) {
   $('#open-dialog').classList.add('hidden')
   $('#welcome-dialog').classList.add('hidden')
   $('#app').classList.remove('hidden')
-  $('#info-name').textContent = state.name
-  $('#info-size').textContent = `${w} × ${h}`
+  renderMapTabs()
 
   // Wire up the canvas + drawer just like startEditor would have done
   // for a fresh map.
@@ -782,10 +1039,6 @@ function confirmOnEnter(e) {
 }
 
 async function startEditor() {
-  // Mid-session New: wipe transient state so the new map doesn't
-  // inherit the old undo history, placement preview, or selections.
-  // First-boot call is a no-op (everything is already empty).
-  resetTransientEditorState()
   const w = clamp(parseInt($('#size-w').value, 10) || 128, 16, 256)
   const h = clamp(parseInt($('#size-h').value, 10) || 128, 16, 256)
   const name = ($('#size-name').value || 'newmap').trim() || 'newmap'
@@ -794,6 +1047,10 @@ async function startEditor() {
   // back to a single 4-player schema if the user somehow deselected
   // everything (the picker's clamp prevents this from the UI side).
   const counts = pickedPlayerCounts()
+  // Push a brand-new MapDoc as the active tab; existing tabs stay in
+  // tabs[] and can be reached by clicking them.
+  tabs.push({ map: new MapDoc() })
+  activeTabIndex = tabs.length - 1
   state.tileW = w
   state.tileH = h
   state.name = name
@@ -828,9 +1085,9 @@ async function startEditor() {
   state.activeSchema = 0
 
   $('#size-dialog').classList.add('hidden')
+  $('#welcome-dialog').classList.add('hidden')
   $('#app').classList.remove('hidden')
-  $('#info-name').textContent = name
-  $('#info-size').textContent = `${w} × ${h}`
+  renderMapTabs()
 
   await finishEditorBoot()
 }
@@ -1061,68 +1318,6 @@ function centerViewOnMap() {
   const midY = overscrollPadding.y + (canvas.height * z) / 2
   wrap.scrollLeft = midX - wrap.clientWidth / 2
   wrap.scrollTop = midY - wrap.clientHeight / 2
-}
-
-// resetTransientEditorState clears in-flight edits (placement,
-// clipboards, selections, undo history) before swapping in a new map.
-// State that survives a swap (sectionImages, sectionHeights,
-// featureImages) is left alone — those are read-only caches.
-function resetTransientEditorState() {
-  state.placement = null
-  state.terrainClipboard = null
-  state.dragging = null
-  state.dropPreview = null
-  state.selected = null
-  state.selectedFeature = -1
-  state.selectedFeatures = new Set()
-  state.selectedStartPos = -1
-  state.featureJustMoved = -1
-  state.startPosJustMoved = -1
-  state.highlightFeatureName = null
-  state.hoveredFeatureName = null
-  state.rectSelection = null
-  state.pickerRect = null
-  state.eraseCursor = null
-  state.undoStack = []
-  state.redoStack = []
-  state.collapsedGroups = new Set()
-  state.zoom = 1
-  // Drop in-flight pointer/keyboard drag state so a half-finished drag
-  // on the previous map can't resume on the new one.
-  panState = null
-  spacePanHotkey = false
-  pendingTransaction = null
-  painting = false
-  paintedDuringStroke = false
-  canvasHoverFeature = null
-  placementMoveAnchor = null
-  terrainDragging = false
-  terrainDragStart = null
-  terrainMoveAnchor = null
-  featureDragging = false
-  featureDragOffset = null
-  startPosDragging = false
-  startPosDragOffset = null
-  pickerDragStart = null
-  // Render-time caches keyed by the previous map's images / tile-pool.
-  // The GL texture cache holds atlas textures for the old tile pool;
-  // dropping it forces a clean re-upload for the new map and stops
-  // stale textures from leaking memory.
-  if (gl && gl.ctx && gl.textures) {
-    for (const t of gl.textures.values()) {
-      if (t && t.tex) gl.ctx.deleteTexture(t.tex)
-    }
-    gl.textures.clear()
-  }
-  if (typeof sectionThumbCache !== 'undefined') sectionThumbCache.clear()
-  minimapBase = null
-  minimapBaseStale = true
-  // Bump the content version so feature spatial / name indices
-  // rebuild lazily on the next query.
-  if (typeof bumpContentVersion === 'function') bumpContentVersion()
-  hidePlacementHint()
-  hideRotationBadge()
-  updateUndoButtons?.()
 }
 
 // ── Sidebar drawer ─────────────────────────────────────────────────────────
@@ -2443,32 +2638,19 @@ function restoreSnapshot(snap) {
   if (snap.tileW !== state.tileW || snap.tileH !== state.tileH) {
     state.tileW = snap.tileW
     state.tileH = snap.tileH
-    const lbl = $('#info-size')
-    if (lbl) lbl.textContent = `${state.tileW} × ${state.tileH}`
-    // Resize BOTH canvases — leaving the GL backing buffer at the old
-    // size would clip rendering identically to the map-switch case.
-    const cnv = $('#canvas')
-    if (cnv) {
-      cnv.width = state.tileW * TILE_PX
-      cnv.height = state.tileH * TILE_PX
-    }
-    const gl = $('#canvas-gl')
-    if (gl) {
-      gl.width = state.tileW * TILE_PX
-      gl.height = state.tileH * TILE_PX
-    }
+    // Undo across a resize: rebuild the canvas stack at the restored
+    // dimensions.  EditorView's destroy+mount path handles all the GL
+    // teardown that the old in-place resize code used to do by hand.
+    recreateEditorView()
   }
   if (snap.ota) {
     state.ota = cloneOTA(snap.ota)
     state.activeSchema = clamp(snap.activeSchema || 0, 0, state.ota.schemas.length - 1)
     refreshSchemaSelector()
   }
-  if (typeof snap.name === 'string') {
-    state.name = snap.name
-    const nm = $('#info-name')
-    if (nm) nm.textContent = snap.name
-  }
+  if (typeof snap.name === 'string') state.name = snap.name
   if (typeof snap.planet === 'string') state.planet = snap.planet
+  renderMapTabs()
 }
 
 // beginTransaction snapshots the current state before the caller mutates
@@ -7731,9 +7913,9 @@ function applyOTADialog() {
   state.ota.impassibleWater = parseInt($('#ota-impassible-water').value, 10) || 0
   state.ota.waterDoesDamage = parseInt($('#ota-water-damage').value, 10) || 0
   commitTransaction('Edit map properties')
-  // Reflect any name change in the top-bar info pill.
-  $('#info-name').textContent = state.ota.missionName
   state.name = state.ota.missionName
+  // The tab chip's label is the mission name — refresh.
+  renderMapTabs()
   refreshSchemaSelector()
   closeOTADialog()
   renderCanvas()
@@ -7808,18 +7990,10 @@ function applySchemaEditor() {
 // startNewMapFromEditor is the toolbar New button — confirms first
 // because it nukes the current canvas, undo history, OTA, everything.
 async function startNewMapFromEditor() {
-  const ok = await confirmDialog({
-    title: 'Start a new map?',
-    message: 'This discards the current map. Unsaved changes will be lost.',
-    okLabel: 'Discard and start new',
-    okDanger: true,
-  })
-  if (!ok) return
-  sizeDialogSource = 'editor'
-  $('#app').classList.add('hidden')
-  // Seed the dialog with whatever the user already has, so a "New"
-  // that's really a "reset" doesn't punish them with a re-entry of
-  // dimensions / planet.
+  // Multi-tab: New simply opens the size dialog and appends a new tab
+  // on confirm.  No discard prompt — the existing map stays on its
+  // own tab.
+  sizeDialogSource = 'tabbar'
   const wIn = $('#size-w'); if (wIn) wIn.value = String(state.tileW || 128)
   const hIn = $('#size-h'); if (hIn) hIn.value = String(state.tileH || 128)
   const nIn = $('#size-name'); if (nIn) nIn.value = state.name || 'newmap'
@@ -7832,26 +8006,18 @@ async function startNewMapFromEditor() {
 // cancelled New leaves the existing editor untouched.
 function closeSizeDialog() {
   $('#size-dialog').classList.add('hidden')
-  if (sizeDialogSource === 'editor') {
-    $('#app').classList.remove('hidden')
-  } else {
+  if (sizeDialogSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
   }
+  // 'editor' / 'tabbar' — editor stays visible behind the dismissed dialog.
 }
 
 // openExistingMapFromEditor confirms then reuses the same picker the
 // Welcome modal shows on first boot — the load flow then replaces the
 // editor's state in place via openLoadedMap → finishEditorBoot.
 async function openExistingMapFromEditor() {
-  const ok = await confirmDialog({
-    title: 'Open another map?',
-    message: 'This discards the current map. Unsaved changes will be lost.',
-    okLabel: 'Discard and open…',
-    okDanger: true,
-  })
-  if (!ok) return
-  $('#app').classList.add('hidden')
-  openMapDialog('editor')
+  // Multi-tab: Open appends a new tab; no need to discard or prompt.
+  openMapDialog('tabbar')
 }
 
 // confirmDialog shows the in-app confirm modal and resolves with the
@@ -8112,7 +8278,7 @@ function applyResize() {
   state.heights = newHeights
   state.voids = newVoids
   state.features = newFeatures
-  $('#info-size').textContent = `${newW} × ${newH}`
+  renderMapTabs()
   commitTransaction('Resize map')
 
   closeResizeDialog()

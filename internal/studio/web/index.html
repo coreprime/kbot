@@ -358,12 +358,22 @@
         <span class="brand-mark">⚙️</span>
         <span>KBot Studio</span>
       </div>
-      <div class="map-info">
-        <span id="info-name">newmap</span>
-        <span class="muted">·</span>
-        <span id="info-size">128 × 128</span>
-      </div>
     </header>
+
+    <!-- Tab bar — one tab per open map.  The "+" button at the end
+         opens a popout with "New Map" / "Open Map".  Populated by JS. -->
+    <nav class="map-tabs" id="map-tabs" role="tablist" aria-label="Open maps">
+      <div class="map-tabs-list" id="map-tabs-list"></div>
+      <button id="map-tab-add" class="map-tab-add" type="button" title="Open another map">+</button>
+      <div class="map-tab-add-popup hidden" id="map-tab-add-popup">
+        <button id="map-tab-add-new" class="menu-row" title="Start a new map in a fresh tab">
+          <span class="ico">✨</span><span>New Map</span>
+        </button>
+        <button id="map-tab-add-open" class="menu-row" title="Open an existing map in a fresh tab">
+          <span class="ico">📂</span><span>Open Map</span>
+        </button>
+      </div>
+    </nav>
 
     <div class="ribbon" id="ribbon">
       <div class="ribbon-section">
