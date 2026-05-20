@@ -215,12 +215,80 @@ document.addEventListener('DOMContentLoaded', () => {
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
   startServerHeartbeat()
+  // Hydrate persisted UI prefs (drawer filters, toggle flags, view
+  // mode, panel visibility) before any panel reads from state.
+  loadPersistedPrefs()
   // ?initial_map=<name> skips the Welcome dialog and jumps straight
   // into the named map.  Match is case-insensitive against either the
   // file name or the OTA mission name so URL-friendly slugs like
   // "Metal%20Heck" line up with however the catalogue indexes them.
   maybeAutoOpenFromQuery()
 })
+
+// ── Persisted prefs ──────────────────────────────────────────────────
+// A handful of UI state lives outside any specific map and is worth
+// remembering across reloads: drawer filters, the usedOnly / wreckage
+// toggles, the animation + gridlines toggles, view mode, and the
+// floating-panel visibility.  Stored as one JSON blob under a single
+// localStorage key so we don't pollute the user's storage namespace.
+const PREFS_KEY = 'kbot-studio:prefs:v1'
+const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
+  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures',
+  'viewMode', 'drawerFilters']
+
+function loadPersistedPrefs() {
+  let raw
+  try { raw = window.localStorage?.getItem(PREFS_KEY) } catch { /* incognito or disabled */ }
+  if (!raw) return
+  let parsed
+  try { parsed = JSON.parse(raw) } catch { return }
+  if (!parsed || typeof parsed !== 'object') return
+  for (const k of PREF_FIELDS) {
+    if (parsed[k] === undefined) continue
+    if (k === 'drawerFilters' && parsed[k] && typeof parsed[k] === 'object') {
+      state.drawerFilters = { ...state.drawerFilters, ...parsed[k] }
+    } else {
+      state[k] = parsed[k]
+    }
+  }
+  // Push the loaded values onto any DOM mirrors so the menu rows
+  // reflect them on first render.
+  syncDomFromPrefs()
+}
+
+function syncDomFromPrefs() {
+  const setOn = (id, on) => { const el = $(id); if (el) el.dataset.on = on ? '1' : '0' }
+  setOn('#opt-gridlines', state.showGridlines)
+  setOn('#opt-animate', state.animateFeatures)
+  setOn('#opt-minimap', state.showMinimap)
+  setOn('#opt-camera-info', state.showCameraInfo)
+  const used = $('#filter-used'); if (used) used.checked = !!state.usedOnly
+  const wrk = $('#filter-wreckage'); if (wrk) wrk.checked = !!state.includeWreckage
+  // View mode active row.
+  $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === state.viewMode))
+  const viewLbl = $('#view-current-lbl')
+  if (viewLbl) {
+    const row = $$('#display-mode-group .menu-row').find((r) => r.dataset.display === state.viewMode)
+    const span = row?.querySelector('span:not(.ico)')
+    if (span) viewLbl.textContent = span.textContent
+  }
+  // Apply panel visibility flags.
+  const mini = $('#minimap-panel')
+  if (mini) mini.classList.toggle('hidden', !state.showMinimap)
+  const cam = $('#camera-info-panel')
+  if (cam) cam.classList.toggle('hidden', !state.showCameraInfo)
+}
+
+let prefsSaveTimer = null
+function persistPrefs() {
+  if (prefsSaveTimer) return
+  prefsSaveTimer = setTimeout(() => {
+    prefsSaveTimer = null
+    const blob = {}
+    for (const k of PREF_FIELDS) blob[k] = state[k]
+    try { window.localStorage?.setItem(PREFS_KEY, JSON.stringify(blob)) } catch { /* ignore */ }
+  }, 250)
+}
 
 async function maybeAutoOpenFromQuery() {
   let target
@@ -823,14 +891,17 @@ function wireTabs() {
     // narrow what's visible on Features when the user switches.
     state.drawerFilters[state.drawer] = e.target.value
     renderDrawer()
+    persistPrefs()
   })
   $('#filter-used').addEventListener('change', (e) => {
     state.usedOnly = e.target.checked
     renderDrawer()
+    persistPrefs()
   })
   $('#filter-wreckage').addEventListener('change', (e) => {
     state.includeWreckage = e.target.checked
     renderDrawer()
+    persistPrefs()
   })
 }
 
@@ -969,12 +1040,14 @@ function wireViewMenu() {
     state.showGridlines = !state.showGridlines
     gridBtn.dataset.on = state.showGridlines ? '1' : '0'
     renderCanvas()
+    persistPrefs()
   })
   animBtn.addEventListener('click', () => {
     state.animateFeatures = !state.animateFeatures
     animBtn.dataset.on = state.animateFeatures ? '1' : '0'
     renderDrawer()
     renderCanvas()
+    persistPrefs()
   })
   const miniBtn = $('#opt-minimap')
   if (miniBtn) {
@@ -1004,6 +1077,7 @@ function wireViewMenu() {
       const lbl = $('#view-current-lbl')
       if (lbl) lbl.textContent = row.querySelector('span:not(.ico)').textContent
       renderCanvas()
+      persistPrefs()
     })
   })
 }
@@ -3708,6 +3782,7 @@ function setCameraInfoVisible(visible) {
   const btn = $('#opt-camera-info')
   if (btn) btn.dataset.on = visible ? '1' : '0'
   if (visible) updateCameraInfoPanel()
+  persistPrefs()
 }
 
 // updateCameraInfoPanel populates the panel with the current camera
@@ -5560,6 +5635,7 @@ function setMinimapVisible(visible) {
   if (panel) panel.classList.toggle('hidden', !visible)
   const toggle = $('#opt-minimap')
   if (toggle) toggle.dataset.on = visible ? '1' : '0'
+  persistPrefs()
 }
 
 function applyMinimapPosition() {
