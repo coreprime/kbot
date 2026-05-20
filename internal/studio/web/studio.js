@@ -6248,8 +6248,11 @@ function renderDevTilesGrid(tileEntries) {
   grid.replaceChildren(frag)
 }
 
+const MIN_ZOOM = 0.01
+const MAX_ZOOM = 2
+
 function setZoom(z) {
-  state.zoom = clamp(z, 0.25, 4)
+  state.zoom = clamp(z, MIN_ZOOM, MAX_ZOOM)
   const canvas = $('#canvas')
   const w = canvas.width * state.zoom + 'px'
   const h = canvas.height * state.zoom + 'px'
@@ -6326,7 +6329,7 @@ function zoomAtPointer(clientX, clientY, deltaY) {
   // Pinch trackpads emit very small deltas; mouse wheels emit large ones.
   // Normalise so a single wheel click is ~1.1×.
   const step = Math.exp(-deltaY * 0.0015)
-  const newZoom = clamp(state.zoom * step, 0.25, 4)
+  const newZoom = clamp(state.zoom * step, MIN_ZOOM, MAX_ZOOM)
   if (newZoom === state.zoom) return
   setZoom(newZoom)
 
