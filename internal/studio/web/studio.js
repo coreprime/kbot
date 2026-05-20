@@ -988,10 +988,19 @@ function wireWelcomeNanoFX() {
   const ctx = cv.getContext('2d')
   let particles = []    // beam particles fired from the emitters
   let sparks = []       // short-lived sparks at the impact points
-  let lastFlash = 0     // throttle the CSS border pulse
+  let hotspots = []     // localised border glow at recent impacts
   let cardRect = null   // cached card bounding rect for impact checks
   let running = false
   let rafId = 0
+  // Emission budget — fractional carry-over so a low rate still
+  // produces particles even when dt is short.  Tuned to feel like a
+  // thin spray, not a wall of light: ~30 beams/sec per side at 60fps.
+  const EMIT_RATE_PER_SIDE = 30
+  let emitBudgetL = 0, emitBudgetR = 0
+  // Sweep phase — drives the aim point left↔right across the card so
+  // each emitter behaves like a spray-can sweeping a stripe of
+  // particles onto the dialog edge.  Counter-phase per side.
+  let sweepT = 0
 
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -1004,9 +1013,6 @@ function wireWelcomeNanoFX() {
   resize()
   window.addEventListener('resize', resize)
 
-  // Where the emitters live + which point on the card to aim at.  The
-  // aim point is the centre of the card; recomputed every frame so
-  // the streams track the card if the viewport reflows.
   function emitterPoint(side) {
     const margin = 40
     return side === 'left'
@@ -1021,115 +1027,124 @@ function wireWelcomeNanoFX() {
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
   }
 
+  // sweepAim returns the per-side target on the card.  Phase is
+  // offset 180° between sides so the two streams sweep in opposite
+  // directions (each painting from its near edge across).
+  function sweepAim(side) {
+    if (!cardRect) return null
+    const range = Math.min(cardRect.width * 0.45, 220)
+    const phase = side === 'left' ? sweepT : sweepT + Math.PI
+    const tx = cardRect.left + cardRect.width / 2 + Math.sin(phase) * range
+    // Y wobble adds a tiny vertical jitter so the band of impacts
+    // sits along the bottom-ish portion of the card rather than a
+    // razor line.
+    const ty = cardRect.top + cardRect.height * 0.55 + Math.cos(phase * 1.7) * Math.min(cardRect.height * 0.25, 60)
+    return { x: tx, y: ty }
+  }
+
   function emit(side) {
     const src = emitterPoint(side)
-    const target = cardCentre()
+    const target = sweepAim(side)
     if (!target) return
-    // Vector from emitter to a wobbly point inside the card so the
-    // stream looks like a cone rather than a single laser line.
-    const tx = target.x + (Math.random() - 0.5) * Math.min(cardRect.width * 0.6, 220)
-    const ty = target.y + (Math.random() - 0.5) * Math.min(cardRect.height * 0.4, 120)
+    // Narrow cone around the swept target — small jitter, not the
+    // big random pool the first cut used.  Result: a thin stream
+    // that actually traces the sweep.
+    const tx = target.x + (Math.random() - 0.5) * 48
+    const ty = target.y + (Math.random() - 0.5) * 32
     const dx = tx - src.x, dy = ty - src.y
     const len = Math.max(1, Math.hypot(dx, dy))
-    const speed = 380 + Math.random() * 260 // px/sec
+    const speed = 420 + Math.random() * 220
     particles.push({
       x: src.x, y: src.y,
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       life: 0, ttl: 0.9 + Math.random() * 0.3,
-      size: 1.6 + Math.random() * 1.4,
+      size: 1.4 + Math.random() * 1.2,
       side,
     })
   }
 
-  // Spark = a small bright dot that scatters from the impact point
-  // along the card edge, then fades.  Cheap to render — just a
-  // gradient blob.
   function spawnSparks(x, y) {
-    const count = 4 + Math.floor(Math.random() * 4)
+    const count = 3 + Math.floor(Math.random() * 3)
     for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2
-      const s = 80 + Math.random() * 160
+      const s = 70 + Math.random() * 130
       sparks.push({
         x, y,
         vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s - 60, // bias upward so they float away
-        life: 0, ttl: 0.35 + Math.random() * 0.35,
-        size: 1.4 + Math.random() * 1.4,
+        vy: Math.sin(a) * s - 60,
+        life: 0, ttl: 0.30 + Math.random() * 0.30,
+        size: 1.2 + Math.random() * 1.2,
       })
     }
   }
 
-  function flashCard() {
-    const now = performance.now()
-    if (now - lastFlash < 90) return // throttle so the pulse doesn't seize on
-    lastFlash = now
-    const card = wel.querySelector('.dialog-card')
-    if (!card) return
-    card.classList.remove('nano-hit')
-    // Force reflow so re-adding the class restarts the animation.
-    void card.offsetWidth
-    card.classList.add('nano-hit')
+  // Hotspot = a soft glow blob anchored to a specific point on the
+  // card edge.  Replaces the previous "entire card flashes" CSS
+  // animation — only the bit of border the particle actually hit
+  // brightens, and it fades over ~350ms.
+  function spawnHotspot(x, y, edge) {
+    hotspots.push({ x, y, edge, life: 0, ttl: 0.35 })
   }
 
   function step(dt) {
-    // Emit a few new particles per frame from each side.  The user's
-    // CPU does the rest; this stays under a few hundred live
-    // particles at any moment.
-    const emitsPerFrame = 3
-    for (let i = 0; i < emitsPerFrame; i++) {
-      emit('left')
-      emit('right')
-    }
+    sweepT += dt * 1.6 // rad/sec; full sweep cycle ≈ 4s
 
-    // Advance beam particles.
+    emitBudgetL += dt * EMIT_RATE_PER_SIDE
+    emitBudgetR += dt * EMIT_RATE_PER_SIDE
+    while (emitBudgetL >= 1) { emit('left'); emitBudgetL -= 1 }
+    while (emitBudgetR >= 1) { emit('right'); emitBudgetR -= 1 }
+
     const keep = []
     for (const p of particles) {
       p.life += dt
       if (p.life >= p.ttl) continue
       p.x += p.vx * dt
       p.y += p.vy * dt
-      // Card-edge collision: when a particle crosses into the card
-      // rect, kill it and spawn sparks at the impact point.
       if (cardRect && p.x >= cardRect.left && p.x <= cardRect.right
           && p.y >= cardRect.top && p.y <= cardRect.bottom) {
-        // Snap impact to the nearest card edge for sparkier sparks.
         const dl = p.x - cardRect.left
         const dr = cardRect.right - p.x
         const dt2 = p.y - cardRect.top
         const db = cardRect.bottom - p.y
         const m = Math.min(dl, dr, dt2, db)
-        let ix = p.x, iy = p.y
-        if (m === dl) ix = cardRect.left
-        else if (m === dr) ix = cardRect.right
-        else if (m === dt2) iy = cardRect.top
-        else iy = cardRect.bottom
+        let ix = p.x, iy = p.y, edge
+        if (m === dl) { ix = cardRect.left; edge = 'left' }
+        else if (m === dr) { ix = cardRect.right; edge = 'right' }
+        else if (m === dt2) { iy = cardRect.top; edge = 'top' }
+        else { iy = cardRect.bottom; edge = 'bottom' }
         spawnSparks(ix, iy)
-        flashCard()
+        spawnHotspot(ix, iy, edge)
         continue
       }
       keep.push(p)
     }
     particles = keep
 
-    // Advance sparks.
     const keepSparks = []
     for (const s of sparks) {
       s.life += dt
       if (s.life >= s.ttl) continue
       s.x += s.vx * dt
       s.y += s.vy * dt
-      s.vy += 220 * dt // gentle gravity
+      s.vy += 220 * dt
       keepSparks.push(s)
     }
     sparks = keepSparks
+
+    const keepHots = []
+    for (const h of hotspots) {
+      h.life += dt
+      if (h.life >= h.ttl) continue
+      keepHots.push(h)
+    }
+    hotspots = keepHots
   }
 
   function draw() {
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
-    // Glow trails: draw each beam particle as a short gradient line
-    // back toward the emitter so the stream reads as a beam, not a
-    // sparse cloud of dots.
+
+    // Beam trails first so sparks + hotspots layer on top.
     for (const p of particles) {
       const src = emitterPoint(p.side)
       const tailDX = src.x - p.x
@@ -1150,7 +1165,38 @@ function wireWelcomeNanoFX() {
       ctx.lineTo(tx, ty)
       ctx.stroke()
     }
-    // Sparks: small glowing dots.
+
+    // Hotspots — soft radial glow stuck to the impacted edge segment.
+    // Only the bit of border the particle hit brightens; the rest of
+    // the card frame stays dark.
+    for (const h of hotspots) {
+      const t = 1 - (h.life / h.ttl)
+      const radius = 22
+      const g = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, radius)
+      g.addColorStop(0, `rgba(220, 255, 200, ${0.85 * t})`)
+      g.addColorStop(0.4, `rgba(127, 255, 102, ${0.55 * t})`)
+      g.addColorStop(1, 'rgba(80, 220, 80, 0)')
+      ctx.fillStyle = g
+      ctx.beginPath()
+      ctx.arc(h.x, h.y, radius, 0, Math.PI * 2)
+      ctx.fill()
+      // Thin bright line along the impacted edge to read as a flash on
+      // the dialog border, not just a generic blob in mid-air.
+      const segLen = 26
+      ctx.strokeStyle = `rgba(180, 255, 150, ${0.7 * t})`
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      if (h.edge === 'top' || h.edge === 'bottom') {
+        ctx.moveTo(h.x - segLen / 2, h.y)
+        ctx.lineTo(h.x + segLen / 2, h.y)
+      } else {
+        ctx.moveTo(h.x, h.y - segLen / 2)
+        ctx.lineTo(h.x, h.y + segLen / 2)
+      }
+      ctx.stroke()
+    }
+
+    // Sparks last.
     for (const s of sparks) {
       const t = 1 - (s.life / s.ttl)
       ctx.fillStyle = `rgba(180, 255, 150, ${t * 0.95})`

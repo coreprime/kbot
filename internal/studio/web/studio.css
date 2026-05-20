@@ -62,13 +62,6 @@ kbd {
   z-index: 0;
 }
 #welcome-dialog .dialog-card { position: relative; z-index: 1; }
-/* Border flash that pulses while particles hit the card edge. */
-@keyframes nano-border-flash {
-  0%   { box-shadow: 0 24px 64px rgba(0,0,0,0.5), 0 0 0 0 rgba(127, 255, 102, 0.0); }
-  30%  { box-shadow: 0 24px 64px rgba(0,0,0,0.5), 0 0 18px 3px rgba(127, 255, 102, 0.55); }
-  100% { box-shadow: 0 24px 64px rgba(0,0,0,0.5), 0 0 0 0 rgba(127, 255, 102, 0.0); }
-}
-#welcome-dialog .dialog-card.nano-hit { animation: nano-border-flash 260ms ease-out; }
 .dialog-card {
   background: var(--bg-1);
   border: 1px solid var(--border);
