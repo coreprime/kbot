@@ -1546,6 +1546,51 @@ function renderDrawer() {
   else renderFeaturesDrawer(drawer, q)
 }
 
+// ensureAutoExpandForFilter forces the first matching world + its
+// first matching group to render expanded when the user is typing a
+// filter but no group is currently open.  Lets a query like "trees"
+// surface the first match without an extra click.  Keys go into the
+// existing _sectionExpanded set, so toggling later collapses them as
+// the user expects.  No-op when the filter is empty or any group is
+// already open.
+function ensureAutoExpandForFilter(q, worldOrder, tree, keyPrefix, isActive) {
+  if (!q || worldOrder.length === 0) return
+  const expanded = state._sectionExpanded ??= new Set()
+  const collapsed = state.collapsedGroups
+  const isOpen = (key, activeByDefault) => {
+    if (collapsed.has(key)) return false
+    if (activeByDefault) return true
+    return expanded.has(key)
+  }
+  // Walk both levels — if anything is already open we leave the
+  // drawer alone (the user's view shouldn't shift while they refine).
+  for (const world of worldOrder) {
+    const worldKey = `${keyPrefix}-world:${world}`
+    const activeWorld = isActive(world)
+    if (isOpen(worldKey, activeWorld)) {
+      const innerMap = tree.get(world)
+      if (innerMap) {
+        for (const inner of innerMap.keys()) {
+          const groupKey = `${keyPrefix}-${keyPrefix === 'sections' ? 'group' : 'cat'}:${world}/${inner}`
+          if (isOpen(groupKey, activeWorld)) return // group inside open world also open → done
+        }
+      }
+    }
+  }
+  // Nothing is open — surface the first match.
+  const firstWorld = worldOrder[0]
+  const worldKey = `${keyPrefix}-world:${firstWorld}`
+  expanded.add(worldKey)
+  collapsed.delete(worldKey)
+  const innerMap = tree.get(firstWorld)
+  if (innerMap && innerMap.size > 0) {
+    const firstInner = innerMap.keys().next().value
+    const groupKey = `${keyPrefix}-${keyPrefix === 'sections' ? 'group' : 'cat'}:${firstWorld}/${firstInner}`
+    expanded.add(groupKey)
+    collapsed.delete(groupKey)
+  }
+}
+
 function renderSectionsDrawer(drawer, q) {
   const active = activeWorldsFor(state.planet)
   const activeLower = active.map((w) => w.toLowerCase())
@@ -1569,6 +1614,8 @@ function renderSectionsDrawer(drawer, q) {
   }
 
   const worlds = sortWorldsForDrawer(Array.from(tree.keys()), activeLower)
+  ensureAutoExpandForFilter(q, worlds, tree, 'sections',
+    (w) => activeLower.includes(w.toLowerCase()))
   const frag = document.createDocumentFragment()
   for (const world of worlds) {
     const groupsMap = tree.get(world)
@@ -1722,6 +1769,8 @@ function renderFeaturesDrawer(drawer, q) {
   }
 
   const worlds = sortFeatureWorldsForDrawer(Array.from(tree.keys()), active)
+  ensureAutoExpandForFilter(q, worlds, tree, 'features',
+    (w) => featureWorldMatches(w, active))
   const frag = document.createDocumentFragment()
   for (const world of worlds) {
     const catsMap = tree.get(world)
