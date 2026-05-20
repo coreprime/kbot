@@ -5874,8 +5874,8 @@ function refreshSchemaSelector() {
       for (const n of available) {
         const chip = document.createElement('button')
         chip.className = 'schema-add-chip'
-        chip.textContent = playerCountLabel(n)
-        chip.title = `Add a Network ${n} schema with ${n} default start positions`
+        chip.textContent = `${n} Players`
+        chip.title = `Add a ${n}-player schema (named after the next free Network N)`
         chip.addEventListener('click', (ev) => {
           ev.stopPropagation()
           addSchemaWithPlayers(n)
@@ -5889,23 +5889,45 @@ function refreshSchemaSelector() {
 
 // addSchemaWithPlayers appends a Network N schema and selects it.
 // The schema starts with no placed positions — the user drops them in
-// via Start Points mode, which gap-fills 1..N as they click.
+// via Start Points mode, which gap-fills 1..N as they click.  The
+// schema's display name is "Network X" where X is the lowest integer
+// not already taken by an existing schema's name; the OTA Type stays
+// `Network <playerCount>` for engine compatibility.
 function addSchemaWithPlayers(playerCount) {
   if (!state.ota) return
   const proto = state.ota.schemas[state.activeSchema] || state.ota.schemas[0]
+  const nextName = nextAvailableSchemaName(state.ota.schemas)
   beginTransaction()
   const newSchema = {
     ...proto,
-    name: `Network ${playerCount}`,
+    name: nextName,
     type: `Network ${playerCount}`,
     startPositions: [],
   }
   state.ota.schemas.push(newSchema)
   state.activeSchema = state.ota.schemas.length - 1
   state.selectedStartPos = -1
-  commitTransaction(`Add ${playerCount}-player schema`)
+  commitTransaction(`Add ${nextName}`)
   refreshSchemaSelector()
   renderCanvas()
+}
+
+// nextAvailableSchemaName scans existing schema names for the pattern
+// "Network N" (also matching bare digit names like "0") and returns
+// "Network X" where X is the smallest non-negative integer not used.
+function nextAvailableSchemaName(schemas) {
+  const used = new Set()
+  for (const s of schemas || []) {
+    const name = (s.name || '').trim()
+    // Match "Network 0", "Network 12", or just "12" — that last form
+    // is what TA's OTAs sometimes store the schema index as.
+    let m = /^network\s+(\d+)$/i.exec(name)
+    if (!m) m = /^(\d+)$/.exec(name)
+    if (m) used.add(parseInt(m[1], 10))
+  }
+  let n = 0
+  while (used.has(n)) n++
+  return `Network ${n}`
 }
 
 function deleteSchema(index) {
