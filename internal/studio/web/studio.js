@@ -1537,33 +1537,46 @@ async function loadFeatures() {
   const data = await resp.json()
   state.featuresList = data.features || []
   if (state.drawer === 'features') renderDrawer()
-  // GAF hotspot offsets are loaded on a separate endpoint so the
-  // (cheap) features list isn't blocked by parsing every GAF on the
-  // server.  Fire-and-forget; drawing falls back to bottom-centred
-  // anchoring until the origins arrive.
-  fetchFeatureOrigins()
+  // GAF hotspot offsets come from a separate endpoint so the cheap
+  // features list isn't blocked by parsing every GAF on the server.
+  // We DO await it here on the very first map load so the first
+  // render uses correct sub-tile hotspots instead of the bottom-
+  // centred fallback (which "snaps" placed features to whole tiles
+  // for the few seconds before origins arrive).  Subsequent map
+  // switches reuse the cached origins map and complete instantly.
+  await fetchFeatureOrigins()
 }
+
+let featureOriginsCache = null
 
 async function fetchFeatureOrigins() {
   try {
-    const resp = await fetch('/api/studio/feature-origins')
-    if (!resp.ok) return
-    const data = await resp.json()
-    const map = new Map()
-    for (const o of (data.origins || [])) map.set((o.name || '').toLowerCase(), o)
-    // Patch the existing entries in place so any drawer items already
-    // rendered pick up the right anchor on the next redraw.
-    for (const f of state.featuresList) {
-      const o = map.get((f.name || '').toLowerCase())
-      if (o) { f.originX = o.originX; f.originY = o.originY }
+    if (!featureOriginsCache) {
+      const resp = await fetch('/api/studio/feature-origins')
+      if (!resp.ok) return
+      const data = await resp.json()
+      featureOriginsCache = new Map()
+      for (const o of (data.origins || [])) {
+        featureOriginsCache.set((o.name || '').toLowerCase(), o)
+      }
     }
-    // Same patch on placed features so the canvas re-anchors them.
-    for (const f of state.features || []) {
-      const o = map.get((f.name || '').toLowerCase())
-      if (o) { f.originX = o.originX; f.originY = o.originY }
-    }
+    applyFeatureOrigins(featureOriginsCache)
     renderCanvas()
   } catch { /* ignore — drawing falls back to bottom-centre */ }
+}
+
+function applyFeatureOrigins(map) {
+  // Patch the drawer catalog so newly-rendered items pick up the
+  // right anchor.
+  for (const f of state.featuresList) {
+    const o = map.get((f.name || '').toLowerCase())
+    if (o) { f.originX = o.originX; f.originY = o.originY }
+  }
+  // Same patch on placed features so the canvas re-anchors them.
+  for (const f of state.features || []) {
+    const o = map.get((f.name || '').toLowerCase())
+    if (o) { f.originX = o.originX; f.originY = o.originY }
+  }
 }
 
 // Per-row height (in CSS px) used when reserving space for groups whose
