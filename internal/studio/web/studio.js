@@ -3644,14 +3644,33 @@ function onFillMouseDown(e) {
     return
   }
   beginTransaction()
-  // Iterative scanline-ish flood — explicit stack to avoid blowing the
-  // call frame on big maps.  Tracks visited cells via a Uint8Array.
   const W = state.tileW
   const H = state.tileH
+  let filled = 0
+  // Shift+click = global replace.  Walks every cell instead of doing a
+  // connected flood — handy when the user wants "swap palette A for B
+  // everywhere" without manually filling each island.
+  if (e.shiftKey) {
+    for (let cy = 0; cy < H; cy++) {
+      for (let cx = 0; cx < W; cx++) {
+        const cell = state.tiles[cy * W + cx]
+        const key = cell ? `${cell.sectionPath}|${cell.sx}|${cell.sy}` : 'null'
+        if (key !== targetKey) continue
+        state.tiles[cy * W + cx] = { ...replacement }
+        patchMinimapTile(cx, cy)
+        filled++
+      }
+    }
+    commitTransaction(`Replace ${filled} tile${filled === 1 ? '' : 's'}`)
+    renderCanvas()
+    setStatus(`Replaced ${filled} tile${filled === 1 ? '' : 's'} globally with ${sel.name}.`)
+    return
+  }
+  // Iterative scanline-ish flood — explicit stack to avoid blowing the
+  // call frame on big maps.  Tracks visited cells via a Uint8Array.
   const visited = new Uint8Array(W * H)
   const stack = [[tx, ty]]
   visited[ty * W + tx] = 1
-  let filled = 0
   while (stack.length > 0) {
     const [cx, cy] = stack.pop()
     const cell = state.tiles[cy * W + cx]
@@ -3670,7 +3689,7 @@ function onFillMouseDown(e) {
   }
   commitTransaction(`Fill ${filled} tile${filled === 1 ? '' : 's'}`)
   renderCanvas()
-  setStatus(`Flood-filled ${filled} tile${filled === 1 ? '' : 's'} with ${sel.name}.`)
+  setStatus(`Flood-filled ${filled} tile${filled === 1 ? '' : 's'} with ${sel.name}.  Shift-click to replace globally.`)
 }
 
 function onHeightmapMouseDown(e) {
