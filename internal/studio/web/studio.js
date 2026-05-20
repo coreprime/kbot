@@ -17,6 +17,12 @@
 const TILE_PX = 32 // map render resolution (1 map tile = 32×32 css px)
 const VOID_COLOR = '#1d3045' // colour shown for unstamped cells
 
+// MAX_START_POSITIONS — the hard upper bound on how many StartPos entries
+// a schema can hold.  TA caps multiplayer at 10 players so the editor
+// never lets you place more than this.  Bump here if a future spinoff
+// supports more than 10.
+const MAX_START_POSITIONS = 10
+
 const state = {
   tileW: 128,
   tileH: 128,
@@ -712,6 +718,27 @@ async function finishEditorBoot() {
 
   await Promise.all([loadSections(), loadFeatures()])
   renderCanvas()
+  // Centre the freshly-loaded map in the viewport.  Must happen AFTER
+  // renderCanvas has sized #canvas and the stack — applyOverscrollPadding
+  // anchors scroll math off the final canvas dims.
+  centerViewOnMap()
+}
+
+// centerViewOnMap places the centre of the map at the centre of the
+// scroll viewport.  Called on every map load (initial and switch) so
+// the user always lands looking at the middle of the map, not the
+// top-left corner.  Works in stack-pixel space — the canvas sits at
+// overscrollPadding.{x,y} inside .canvas-stack, so the world centre's
+// stack-pixel position is overscrollPadding + (mapPixels * zoom / 2).
+function centerViewOnMap() {
+  const wrap = $('#canvas-scroll')
+  const canvas = $('#canvas')
+  if (!wrap || !canvas) return
+  const z = state.zoom || 1
+  const midX = overscrollPadding.x + (canvas.width * z) / 2
+  const midY = overscrollPadding.y + (canvas.height * z) / 2
+  wrap.scrollLeft = midX - wrap.clientWidth / 2
+  wrap.scrollTop = midY - wrap.clientHeight / 2
 }
 
 // resetTransientEditorState clears in-flight edits (placement,
@@ -727,12 +754,50 @@ function resetTransientEditorState() {
   state.selectedFeature = -1
   state.selectedFeatures = new Set()
   state.selectedStartPos = -1
+  state.featureJustMoved = -1
+  state.startPosJustMoved = -1
+  state.highlightFeatureName = null
+  state.hoveredFeatureName = null
   state.rectSelection = null
   state.pickerRect = null
   state.eraseCursor = null
   state.undoStack = []
   state.redoStack = []
   state.collapsedGroups = new Set()
+  state.zoom = 1
+  // Drop in-flight pointer/keyboard drag state so a half-finished drag
+  // on the previous map can't resume on the new one.
+  panState = null
+  spacePanHotkey = false
+  pendingTransaction = null
+  painting = false
+  paintedDuringStroke = false
+  canvasHoverFeature = null
+  placementMoveAnchor = null
+  terrainDragging = false
+  terrainDragStart = null
+  terrainMoveAnchor = null
+  featureDragging = false
+  featureDragOffset = null
+  startPosDragging = false
+  startPosDragOffset = null
+  pickerDragStart = null
+  // Render-time caches keyed by the previous map's images / tile-pool.
+  // The GL texture cache holds atlas textures for the old tile pool;
+  // dropping it forces a clean re-upload for the new map and stops
+  // stale textures from leaking memory.
+  if (gl && gl.ctx && gl.textures) {
+    for (const t of gl.textures.values()) {
+      if (t && t.tex) gl.ctx.deleteTexture(t.tex)
+    }
+    gl.textures.clear()
+  }
+  if (typeof sectionThumbCache !== 'undefined') sectionThumbCache.clear()
+  minimapBase = null
+  minimapBaseStale = true
+  // Bump the content version so feature spatial / name indices
+  // rebuild lazily on the next query.
+  if (typeof bumpContentVersion === 'function') bumpContentVersion()
   hidePlacementHint()
   hideRotationBadge()
   updateUndoButtons?.()
@@ -920,6 +985,17 @@ function wireKeyboard() {
       const typ = (t.type || '').toLowerCase()
       if (typ === '' || /^(text|search|number|password|email|url|tel)$/.test(typ)) return
     }
+    // Escape closes any open Map-section dialog before falling through
+    // to the Escape-clears-selection path below, so the user can dismiss
+    // Properties / Resize / Developer with a single keystroke.
+    if (e.key === 'Escape') {
+      const ota = $('#ota-dialog')
+      if (ota && !ota.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeOTADialog(); return }
+      const resize = $('#resize-dialog')
+      if (resize && !resize.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeResizeDialog(); return }
+      const dev = $('#developer-dialog')
+      if (dev && !dev.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeDeveloperDialog(); return }
+    }
     if (e.key === ' ' && !spacePanHotkey) {
       spacePanHotkey = true
       document.body.style.cursor = 'grab'
@@ -1027,6 +1103,12 @@ function handleDeleteKey() {
     if (schema) {
       beginTransaction()
       schema.startPositions.splice(state.selectedStartPos, 1)
+      // Renumber what's left so player numbers stay 1..N dense — no
+      // gaps, which keeps the click-to-add logic (next = N+1) simple
+      // and matches what TA / the OTA save path expect.
+      for (let i = 0; i < schema.startPositions.length; i++) {
+        schema.startPositions[i].number = i + 1
+      }
       state.selectedStartPos = -1
       commitTransaction('Delete start position')
       renderCanvas()
@@ -2102,7 +2184,7 @@ function updateHoverLabel(e) {
   $('#hover-cell').textContent = `(${tx}, ${ty})`
   // Highlight the feature under the cursor (if any) so the minimap can
   // narrow its dot view to that type — see renderMinimap.
-  const hit = findFeatureAt(tx, ty)
+  const hit = findFeatureAt(e)
   const name = hit >= 0 ? (state.features[hit]?.name || '').toLowerCase() : null
   setCanvasHoverFeature(name)
 }
@@ -2311,7 +2393,7 @@ function tryAutoSwitchAt(e) {
   if (state.mode !== 'select-features') {
     const { tx, ty } = pickCell(e)
     if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
-      const fhit = findFeatureAt(tx, ty)
+      const fhit = findFeatureAt(e)
       if (fhit >= 0) {
         setMode('select-features')
         state.selectedFeature = fhit
@@ -2338,8 +2420,7 @@ function shouldPan(e) {
   if (state.mode === 'view') return true
   if (state.mode === 'paint' && !state.selected && !state.placement) return true
   if (state.mode === 'select-features') {
-    const { tx, ty } = pickCell(e)
-    if (findFeatureAt(tx, ty) < 0 && state.selected?.type !== 'feature') return true
+    if (findFeatureAt(e) < 0 && state.selected?.type !== 'feature') return true
   }
   // Erase mode and Picker mode are explicit tools — never pan with a
   // plain left-click; users can still pan via Space-hold or middle-click.
@@ -2885,9 +2966,10 @@ let featureDragOffset = null
 function onFeatureMouseDown(e) {
   // Start-position click in features mode jumps to start-points mode.
   if (e.button === 0 && !spacePanHotkey && tryAutoSwitchAt(e)) return
-  const { tx, ty } = pickCell(e)
-  // Hit-test by attribute cell: a feature occupies (ax/2, ay/2) on the tile grid.
-  const hit = findFeatureAt(tx, ty)
+  // Hit-test against the actual cursor pixel — the previous tile-centre
+  // shortcut missed 1×1 features whose anchor offset pushed the sprite
+  // rect off the tile-centre point.
+  const hit = findFeatureAt(e)
   if (hit >= 0) {
     // Treat a click on the just-moved selection as "I'm done with that
     // operation" and clear the selection instead of re-grabbing it.
@@ -2950,11 +3032,28 @@ function onFeatureMouseUp(_e) {
 // the upper bound for typical TA sprites (5 tiles ≈ 160 game pixels).
 const FEATURE_HIT_SEARCH_TILES = 6
 
-function findFeatureAt(tx, ty) {
-  const cpx = tx * TILE_PX + TILE_PX / 2
-  const cpy = ty * TILE_PX + TILE_PX / 2
+// findFeatureAt hit-tests the actual canvas-pixel cursor position
+// against every feature's drawn rectangle.  The old version reduced
+// the cursor to its tile centre, which missed clicks whose tile
+// centre fell outside a 1×1 sprite — visible as features on
+// subtile (1,1) being unclickable while subtile (1,0) worked because
+// the anchor offset happened to leave the tile centre inside the rect.
+// Accepts either a MouseEvent or pre-resolved canvas pixel coords.
+function findFeatureAt(e) {
+  let cpx, cpy
+  if (e && typeof e.clientX === 'number') {
+    const canvas = $('#canvas')
+    const rect = canvas.getBoundingClientRect()
+    cpx = (e.clientX - rect.left) / rect.width * canvas.width
+    cpy = (e.clientY - rect.top) / rect.height * canvas.height
+  } else if (e && typeof e.cpx === 'number') {
+    cpx = e.cpx; cpy = e.cpy
+  } else {
+    return -1
+  }
+  const tx = Math.floor(cpx / TILE_PX)
+  const ty = Math.floor(cpy / TILE_PX)
   const candidates = featuresNear(tx, ty, FEATURE_HIT_SEARCH_TILES)
-  // Walk in reverse insertion order (drawn last → on top wins overlaps).
   for (let i = candidates.length - 1; i >= 0; i--) {
     const idx = candidates[i]
     const f = state.features[idx]
@@ -3043,19 +3142,17 @@ function onStartPosMouseDown(e) {
     renderCanvas()
     return
   }
-  // Empty space — place the next available start position.  The cap
-  // comes from the schema's player count (Network N), not a fixed 10,
-  // so a 4-player schema only allows StartPos1..4.  Gap-fill: if
-  // {1, 3} are already placed, the next click drops a StartPos2
-  // before adding any higher number.
-  const cap = Math.max(1, Math.min(10, schemaPlayerCount(schema) || 10))
-  const used = new Set(schema.startPositions.map((sp) => sp.number))
-  let nextNum = 1
-  while (used.has(nextNum) && nextNum <= cap) nextNum++
-  if (nextNum > cap) {
+  // Empty space — place the next available start position.  Numbering
+  // is dense and 1-based: the new marker takes (existing count + 1),
+  // capped at MAX_START_POSITIONS (the game-wide multiplayer ceiling).
+  // Deleting a marker compacts the list so numbers stay contiguous —
+  // see handleDeleteKey.
+  const cap = MAX_START_POSITIONS
+  if (schema.startPositions.length >= cap) {
     setStatus(`This schema is full — all ${cap} start position${cap === 1 ? '' : 's'} are placed.  Drag a marker or Delete one to free a slot.`)
     return
   }
+  const nextNum = schema.startPositions.length + 1
   const { gx, gz } = canvasToGame(cx, cy)
   beginTransaction()
   schema.startPositions.push({ number: nextNum, x: gx, z: gz })
@@ -3192,7 +3289,7 @@ let pickerDragStart = null // { tx, ty, additive } when sweeping a rect
 function onPickerMouseDown(e) {
   const { tx, ty } = pickCell(e)
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
-  const hit = findFeatureAt(tx, ty)
+  const hit = findFeatureAt(e)
   if (hit >= 0) {
     if (e.shiftKey) {
       // Toggle this feature in the selection set.
@@ -3421,23 +3518,11 @@ function renderCanvas() {
     if (state.viewMode === 'blended') drawHeightmapOverlay(ctx)
   }
 
-  // Grid overlay (every 8 tiles) — only when the option is enabled.
-  if (state.showGridlines) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-    ctx.lineWidth = 1
-    for (let x = 0; x <= state.tileW; x += 8) {
-      ctx.beginPath()
-      ctx.moveTo(x * TILE_PX + 0.5, 0)
-      ctx.lineTo(x * TILE_PX + 0.5, canvas.height)
-      ctx.stroke()
-    }
-    for (let y = 0; y <= state.tileH; y += 8) {
-      ctx.beginPath()
-      ctx.moveTo(0, y * TILE_PX + 0.5)
-      ctx.lineTo(canvas.width, y * TILE_PX + 0.5)
-      ctx.stroke()
-    }
-  }
+  // Grid overlay — density adapts to zoom so you can see per-tile
+  // outlines when you're close and big 8×8 blocks when zoomed out.
+  // Major lines every 8 tiles are drawn heavier so the user keeps
+  // a sense of the larger grid even at the densest zoom.
+  if (state.showGridlines) drawGridlines(ctx, canvas)
 
   // Features are rendered by the WebGL layer above when GL is active;
   // fall back to the 2D path only when GL isn't available.
@@ -4638,16 +4723,101 @@ function drawTerrainEdgeHints(ctx, c) {
   }
 }
 
+// drawGridlines paints the optional gridline overlay.  Two design goals:
+//   1. Lines stay AT LEAST 1 CSS pixel wide at every zoom level so they
+//      never alias out — the canvas is rendered in map-pixel space and
+//      CSS-scaled by state.zoom, so a 1-game-pixel line becomes only
+//      `zoom` CSS pixels.  When zoom < 1 that's sub-pixel and gets
+//      averaged into nothing by the browser, which made the grid
+//      "flicker in/out" as the user zoomed.  Game-pixel width is set
+//      from `ceil(targetCssWidth / zoom)` so the rendered stroke is
+//      always at least the target.
+//   2. Density is chosen from the number of *visible tiles per
+//      viewport*, not raw zoom — at low zoom showing 40+ tiles across,
+//      drawing a line per tile is just noise, so we step up to every
+//      4 or 8 tiles.  Major lines every 8 tiles are always drawn so
+//      the user always has a 32-game-pixel reference.
+function drawGridlines(ctx, canvas) {
+  const z = state.zoom || 1
+  const wrap = $('#canvas-scroll')
+  const viewportCssWidth = wrap ? wrap.clientWidth : canvas.width * z
+  // Tiles visible across the current viewport (clamped so single-tile
+  // viewports still pick a sensible step).
+  const tilesAcross = Math.max(1, viewportCssWidth / (TILE_PX * z))
+  let minorStep
+  if (tilesAcross <= 12) minorStep = 1
+  else if (tilesAcross <= 24) minorStep = 2
+  else if (tilesAcross <= 48) minorStep = 4
+  else minorStep = 8
+  const majorStep = 8
+  // Render at fixed CSS-pixel widths regardless of zoom so the lines
+  // don't fade at low zoom or balloon at high zoom.
+  const minorWidth = Math.max(1, Math.ceil(1 / z))
+  const majorWidth = Math.max(1, Math.ceil(2 / z))
+
+  ctx.save()
+  ctx.lineCap = 'butt'
+
+  if (minorStep < majorStep) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+    ctx.lineWidth = minorWidth
+    for (let x = 0; x <= state.tileW; x += minorStep) {
+      if (x % majorStep === 0) continue
+      const xp = x * TILE_PX
+      ctx.beginPath()
+      ctx.moveTo(xp, 0)
+      ctx.lineTo(xp, canvas.height)
+      ctx.stroke()
+    }
+    for (let y = 0; y <= state.tileH; y += minorStep) {
+      if (y % majorStep === 0) continue
+      const yp = y * TILE_PX
+      ctx.beginPath()
+      ctx.moveTo(0, yp)
+      ctx.lineTo(canvas.width, yp)
+      ctx.stroke()
+    }
+  }
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
+  ctx.lineWidth = majorWidth
+  for (let x = 0; x <= state.tileW; x += majorStep) {
+    const xp = x * TILE_PX
+    ctx.beginPath()
+    ctx.moveTo(xp, 0)
+    ctx.lineTo(xp, canvas.height)
+    ctx.stroke()
+  }
+  for (let y = 0; y <= state.tileH; y += majorStep) {
+    const yp = y * TILE_PX
+    ctx.beginPath()
+    ctx.moveTo(0, yp)
+    ctx.lineTo(canvas.width, yp)
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
 function drawSelectedFeatureOutline(ctx) {
-  // Single-pick (Place Features) — yellow ring at the anchor.
+  // Single-pick (Place Features) — dashed white box around the feature's
+  // footprint cells, so the user sees the area the feature actually
+  // occupies on the attribute grid rather than just an anchor circle.
+  // Lifted by Height/2 to mirror the same terrain-elevation offset
+  // featureAnchorWorld applies, so the box hugs the rendered sprite
+  // instead of floating one-to-two tiles below it.
   if (state.selectedFeature >= 0 && state.selectedFeature < state.features.length) {
     const f = state.features[state.selectedFeature]
-    const { px, py } = featureAnchorWorld(f)
-    ctx.strokeStyle = '#ffcc00'
+    const fw = (f.footprintX || 1) * (TILE_PX / 2)
+    const fh = (f.footprintZ || 1) * (TILE_PX / 2)
+    const x = f.ax * (TILE_PX / 2)
+    const y = f.ay * (TILE_PX / 2) - (featureGroundHeight(f) >> 1)
+    ctx.save()
+    ctx.strokeStyle = '#ffffff'
     ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.arc(px, py, 12, 0, Math.PI * 2)
-    ctx.stroke()
+    ctx.setLineDash([6, 4])
+    ctx.strokeRect(x + 0.5, y + 0.5, fw - 1, fh - 1)
+    ctx.setLineDash([])
+    ctx.restore()
   }
   // Multi-select (Picker mode) — accent-coloured ring around every
   // selected placement, plus the in-flight rectangle while sweeping.
@@ -5021,12 +5191,12 @@ function drawMinimapStartPositions(ctx, ox, oy, dw, dh) {
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)'
     ctx.lineWidth = 1.5
     ctx.beginPath()
-    ctx.arc(px, py, 7, 0, Math.PI * 2)
+    ctx.arc(px, py, 10, 0, Math.PI * 2)
     ctx.fill()
     ctx.stroke()
     ctx.fillStyle = '#1a1a1a'
-    ctx.font = `bold 9px ${fontFamily}`
-    ctx.fillText(String(sp.number || ''), px, py + 0.5)
+    ctx.font = `bold 14px ${fontFamily}`
+    ctx.fillText(String(sp.number || ''), px, py + 1)
   }
   ctx.restore()
 }
@@ -5479,6 +5649,23 @@ function wireToolbar() {
     })
   }
 
+  // File dropdown — nests New / Open / Save behind one button so the
+  // ribbon stays narrow.  Menu rows close the popup automatically on
+  // click (matches the Actions dropdown pattern).
+  const fileBtn = $('#file-dropdown-btn')
+  const filePopup = $('#file-dropdown-popup')
+  if (fileBtn && filePopup) {
+    fileBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      closeAllRibbonDropdowns(filePopup)
+      positionRibbonPopup(fileBtn, filePopup)
+      filePopup.classList.toggle('hidden')
+    })
+    for (const row of filePopup.querySelectorAll('.menu-row')) {
+      row.addEventListener('click', () => filePopup.classList.add('hidden'))
+    }
+  }
+
   // Outside-click closes any open ribbon dropdown.
   document.addEventListener('click', (e) => {
     if (e.target.closest('.ribbon-dropdown')) return
@@ -5576,11 +5763,31 @@ const SCHEMA_PLAYER_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 function schemaPlayerCount(schema) {
   if (!schema) return 0
-  // Prefer the explicit Type=Network N suffix; fall back to the
-  // start-position count for legacy / loaded data without a clear type.
+  // The start-position count is the authoritative player count.  TA's
+  // OTA "Type = Network N" stores N as the schema index (0, 1, …), not
+  // the player count, so trusting that would mis-report the cap.  Fall
+  // back to the type-extracted N only when no start positions exist.
+  const sp = (schema.startPositions || []).length
+  if (sp > 0) return sp
   const m = /network\s*(\d+)/i.exec(schema.type || '')
   if (m) return parseInt(m[1], 10)
-  return (schema.startPositions || []).length || 2
+  return 2
+}
+
+// schemaPickerLabel formats the row label for the schema picker.  For
+// Network-type schemas this comes out as "Network <name> (N Players)"
+// where N is the actual start-position count.  TA stores some OTAs with
+// bare digits in the name field ("0", "1", …) so we synthesise the
+// "Network " prefix when it's not already on the name.  Non-Network
+// schemas (rare in TA) display the bare name without a player suffix.
+function schemaPickerLabel(s) {
+  if (!s) return 'Schema'
+  const isNetwork = /network/i.test(s.type || '')
+  let name = s.name || s.type || 'Schema'
+  if (isNetwork && !/^network/i.test(name)) name = `Network ${name}`
+  if (!isNetwork) return name
+  const n = (s.startPositions || []).length
+  return `${name} (${n} ${n === 1 ? 'Player' : 'Players'})`
 }
 
 function wireSchemaSelector() {
@@ -5600,8 +5807,7 @@ function refreshSchemaSelector() {
   const lbl = $('#schema-current-lbl')
   if (lbl && state.ota) {
     const active = state.ota.schemas[state.activeSchema]
-    const count = schemaPlayerCount(active)
-    lbl.textContent = count ? playerCountLabel(count) : 'Schema'
+    lbl.textContent = active ? schemaPickerLabel(active) : 'Schema'
   }
   const list = $('#schema-row-list')
   if (list && state.ota) {
@@ -5611,10 +5817,7 @@ function refreshSchemaSelector() {
       row.className = 'schema-row' + (i === state.activeSchema ? ' active' : '')
       const name = document.createElement('span')
       name.className = 'schema-row-name'
-      name.textContent = s.name || s.type || `Schema ${i + 1}`
-      const count = document.createElement('span')
-      count.className = 'schema-row-count'
-      count.textContent = playerCountLabel(schemaPlayerCount(s))
+      name.textContent = schemaPickerLabel(s)
       const gear = document.createElement('button')
       gear.className = 'schema-row-gear'
       gear.title = 'Edit schema economy / AI settings'
@@ -5647,7 +5850,6 @@ function refreshSchemaSelector() {
         }
       })
       row.appendChild(name)
-      row.appendChild(count)
       row.appendChild(gear)
       row.appendChild(del)
       frag.appendChild(row)
@@ -5656,7 +5858,11 @@ function refreshSchemaSelector() {
   }
   const addGrid = $('#schema-add-grid')
   if (addGrid && state.ota) {
-    const used = new Set(state.ota.schemas.map((s) => schemaPlayerCount(s)))
+    // Only the *current* schema's player count is excluded from the
+    // Add grid — duplicates against other schemas are allowed so users
+    // can keep multiple variants at the same player count.
+    const current = state.ota.schemas[state.activeSchema]
+    const used = new Set(current ? [schemaPlayerCount(current)] : [])
     const frag = document.createDocumentFragment()
     const available = SCHEMA_PLAYER_COUNTS.filter((n) => !used.has(n))
     if (available.length === 0) {

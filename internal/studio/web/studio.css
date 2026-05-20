@@ -553,7 +553,10 @@ kbd {
   align-items: stretch;
   padding: 6px 8px;
   gap: 8px;
-  overflow-x: auto;
+  /* overflow stays visible so the Map section's hover popup can escape
+     vertically.  The compact-only toolbar layout means we don't need
+     horizontal scrolling at common widths. */
+  overflow: visible;
 }
 .ribbon-section {
   display: flex;
@@ -818,120 +821,55 @@ kbd {
 }
 .ribbon-dropdown[data-keep-compact] .ribbon-dropdown-popup:not(.hidden) { display: flex !important; }
 
-/* ── Wide-screen toolbar: expand dropdowns inline ────────────────────
-   Inline expansion only kicks in on genuinely wide displays.  Below
-   the breakpoint, every section collapses to a "single button +
-   popup" so the ribbon stays readable and the canvas keeps its
-   horizontal real estate. */
-@media (min-width: 1400px) {
-  /* Hide the dropdown trigger buttons and show the popup contents
-     in-place as a horizontal MUI button-group. */
-  .ribbon-dropdown-btn { display: none; }
-  .ribbon-dropdown { display: inline-flex; align-items: stretch; }
-  .ribbon-dropdown-popup {
-    position: static;
-    display: flex !important;
-    flex-direction: row;
-    align-items: stretch;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    padding: 0;
-    gap: 0;
-    min-width: 0;
-    z-index: auto;
-  }
-  /* Menu rows behave like inline ribbon buttons. */
-  .ribbon-dropdown-popup .menu-row {
-    border-radius: 3px;
-    padding: 0 10px;
-    height: 100%;
-    width: auto;
-    background: transparent;
-    color: var(--text);
-    flex-direction: row;
-    align-items: center;
-  }
-  .ribbon-dropdown-popup .menu-row:hover { background: var(--bg-3); }
-  .ribbon-dropdown-popup .menu-row.active {
-    background: var(--accent);
-    color: #fff;
-  }
-  /* Toggle rows visually reflect on/off via the accent fill. */
-  .ribbon-dropdown-popup .menu-row[data-on="1"] {
-    background: var(--accent);
-    color: #fff;
-  }
-  /* Hide section labels + check marks — state is shown via .active. */
-  .ribbon-dropdown-popup .menu-section-label {
-    align-self: stretch;
-    width: 1px;
-    padding: 0;
-    margin: 4px 4px;
-    border-left: 1px solid var(--border);
-    overflow: hidden;
-    text-indent: -9999px;
-    font-size: 0;
-  }
-  .ribbon-dropdown-popup .menu-row .menu-check { display: none; }
-  .ribbon-dropdown-popup .inline-row {
-    padding: 0;
-    flex-direction: row;
-    flex: 0 0 auto;
-  }
-  /* At wide widths the popup is horizontal — switch the toggle-row
-     spacing from top→left. */
-  .ribbon-dropdown-popup .toggle-row + .toggle-row {
-    margin-top: 0;
-    margin-left: 4px;
-  }
-  /* Hide the hotkey chip when the popup is flattened — inline ribbon
-     buttons stay compact with just an icon + label. */
-  .ribbon-dropdown-popup .menu-row .menu-row-hotkey { display: none; }
-  /* Hover submenus (e.g. the Erase brush picker) stay as floating
-     popups — the inline ribbon flattening above mustn't flatten the
-     submenu itself, only the host menu rows. */
-  .ribbon-dropdown-popup.ribbon-submenu {
-    position: fixed;
-    display: flex !important;
-    flex-direction: column;
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
-    min-width: 140px;
-    z-index: 500;
-  }
-  .ribbon-dropdown-popup.ribbon-submenu.hidden { display: none !important; }
-  .ribbon-dropdown-popup.ribbon-submenu .menu-row {
-    border-radius: 4px;
-    padding: 6px 10px;
-    height: auto;
-    width: 100%;
-    background: transparent;
-    color: var(--text);
-    flex-direction: row;
-    justify-content: flex-start;
-  }
-  .ribbon-dropdown-popup.ribbon-submenu .menu-row:hover { background: var(--bg-2); }
-  .ribbon-dropdown-popup.ribbon-submenu .menu-row.active {
-    background: var(--accent);
-    color: #fff;
-  }
-  .ribbon-dropdown-popup.ribbon-submenu .menu-section-label {
-    align-self: auto;
-    width: auto;
-    padding: 8px 10px 4px;
-    margin: 0;
-    border: none;
-    text-indent: 0;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
+/* The toolbar lives in its compact "single button + popup" layout at
+   every viewport width now.  The previous wide-screen breakpoint that
+   flattened dropdowns into inline ribbon buttons has been removed —
+   the compact form scans more cleanly and leaves room for new
+   sections without each one growing horizontally. */
+
+/* ── Map section hover popup ─────────────────────────────────────────
+   The Map section shows Properties as its primary always-visible
+   button (clicking opens the OTA dialog).  Hovering the group reveals
+   the secondary Resize + Developer actions beneath it.  The popup
+   anchors to the section's right edge so it never spills outside the
+   viewport — Map sits on the far right of the ribbon. */
+.ribbon-hover-group { position: relative; }
+.ribbon-hover-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  min-width: 160px;
+  z-index: 500;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Transparent hover bridge above the popup so the cursor can travel
+   from the trigger button down to the popup without leaving the
+   `:hover` state.  Without this the 4-ish px gap between button and
+   popup briefly drops hover and the menu hides mid-traversal. */
+.ribbon-hover-popup::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 8px;
+}
+.ribbon-hover-group:hover .ribbon-hover-popup,
+.ribbon-hover-popup:hover { display: flex; }
+/* Inner buttons inherit the regular .tool-btn dark-pill look so the
+   popup feels like a vertical stack of the same buttons the rest of
+   the ribbon uses. */
+.ribbon-hover-popup .tool-btn {
+  width: 100%;
+  justify-content: flex-start;
+  padding: 6px 10px;
 }
 .tool-btn.toggle:not(.active) {
   background: var(--bg-2);
