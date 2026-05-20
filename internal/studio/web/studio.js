@@ -4605,7 +4605,9 @@ function drawHeightmap(ctx) {
       ctx.fillRect(ax * cell, ay * cell, cell, cell)
     }
   }
-  drawHeightContours(ctx, attrW, attrH, cell)
+  // Contours are now gated on the View → Show Contours toggle so the
+  // user controls them in both Heightmap and Map view from one place.
+  if (state.showContours) drawHeightContours(ctx, attrW, attrH, cell)
 }
 
 // drawHeightContours overlays thin lines along every CONTOUR_STEP-byte
