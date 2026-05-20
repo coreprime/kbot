@@ -993,9 +993,10 @@ function wireWelcomeNanoFX() {
   let running = false
   let rafId = 0
   // Emission budget — fractional carry-over so the rate is frame-rate
-  // independent.  Bumped from 30 → 55 beams/sec/side so the streams
-  // feel busier without becoming the wall of light the first cut had.
-  const EMIT_RATE_PER_SIDE = 55
+  // independent.  ~180 beams/sec/side so the cloud reads as a true
+  // spray, paired with the smaller per-particle size below so the
+  // total ink on screen stays manageable.
+  const EMIT_RATE_PER_SIDE = 180
   let emitBudgetL = 0, emitBudgetR = 0
   // Sweep phase — drives the aim point left↔right across the card so
   // each emitter behaves like a spray-can sweeping a stripe of
@@ -1032,13 +1033,12 @@ function wireWelcomeNanoFX() {
   // directions (each painting from its near edge across).
   function sweepAim(side) {
     if (!cardRect) return null
-    // Sweep across nearly the full card width — the streams now visibly
-    // travel from one edge of the dialog to the other rather than
-    // pacing the middle third.
-    const range = Math.min(cardRect.width * 0.55, 340)
+    // Sweep nearly the full card width, capped so very wide viewports
+    // don't send the streams off to the corners.
+    const range = Math.min(cardRect.width * 0.65, 420)
     const phase = side === 'left' ? sweepT : sweepT + Math.PI
     const tx = cardRect.left + cardRect.width / 2 + Math.sin(phase) * range
-    const ty = cardRect.top + cardRect.height * 0.55 + Math.cos(phase * 1.7) * Math.min(cardRect.height * 0.3, 80)
+    const ty = cardRect.top + cardRect.height * 0.5 + Math.cos(phase * 1.7) * Math.min(cardRect.height * 0.45, 110)
     return { x: tx, y: ty }
   }
 
@@ -1046,20 +1046,22 @@ function wireWelcomeNanoFX() {
     const src = emitterPoint(side)
     const target = sweepAim(side)
     if (!target) return
-    // Wider cone around the swept target so the spray reads as a
-    // proper paint cloud rather than a laser tracking a point.
-    // Roughly triples the previous lateral jitter range.
-    const tx = target.x + (Math.random() - 0.5) * 140
-    const ty = target.y + (Math.random() - 0.5) * 90
+    // Big cone of jitter — turns each emission into a dust cloud
+    // rather than a tracked beam.  The wider the jitter, the more
+    // the per-particle paths fan out across the card edge.
+    const tx = target.x + (Math.random() - 0.5) * 320
+    const ty = target.y + (Math.random() - 0.5) * 220
     const dx = tx - src.x, dy = ty - src.y
     const len = Math.max(1, Math.hypot(dx, dy))
-    const speed = 400 + Math.random() * 260
+    const speed = 360 + Math.random() * 320
     particles.push({
       x: src.x, y: src.y,
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
-      life: 0, ttl: 0.9 + Math.random() * 0.3,
-      size: 1.2 + Math.random() * 1.4,
+      life: 0, ttl: 0.85 + Math.random() * 0.35,
+      // Far smaller dots so the higher density doesn't read as a
+      // solid green plate — individual sparks of nanolathe dust.
+      size: 0.4 + Math.random() * 0.6,
       side,
     })
   }
@@ -1150,7 +1152,9 @@ function wireWelcomeNanoFX() {
       const tailDX = src.x - p.x
       const tailDY = src.y - p.y
       const tlen = Math.max(1, Math.hypot(tailDX, tailDY))
-      const tailLen = Math.min(40, tlen * 0.18)
+      // Shorter tail — the dots are far smaller now, so a long
+      // streak would dominate the frame and undo the dust look.
+      const tailLen = Math.min(14, tlen * 0.08)
       const tx = p.x + (tailDX / tlen) * tailLen
       const ty = p.y + (tailDY / tlen) * tailLen
       const grad = ctx.createLinearGradient(p.x, p.y, tx, ty)
