@@ -619,8 +619,18 @@ function wireMapTabBar() {
   const addBtn = document.querySelector('#map-tab-add')
   const popup = document.querySelector('#map-tab-add-popup')
   if (!addBtn || !popup) return
+  // Position the popup just below the "+" button each time it opens.
+  // Using position:fixed sidesteps the #map-tabs overflow-x clip that
+  // was previously hiding the popup.
+  const positionPopup = () => {
+    const r = addBtn.getBoundingClientRect()
+    popup.style.top = `${Math.round(r.bottom + 2)}px`
+    popup.style.left = `${Math.round(r.left)}px`
+  }
   addBtn.addEventListener('click', (e) => {
     e.stopPropagation()
+    const willShow = popup.classList.contains('hidden')
+    if (willShow) positionPopup()
     popup.classList.toggle('hidden')
   })
   document.querySelector('#map-tab-add-new')?.addEventListener('click', () => {

@@ -631,9 +631,12 @@ kbd {
 }
 .map-tab-add:hover { background: var(--bg-2); color: var(--text); }
 .map-tab-add-popup {
-  position: absolute;
-  top: 32px;
-  left: 8px;
+  /* Fixed (not absolute) so #map-tabs' overflow-x clip doesn't hide
+     us — the JS positioner sets top/left from the "+" button's
+     bounding rect each time the popup opens. */
+  position: fixed;
+  top: 0;
+  left: 0;
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: 6px;
