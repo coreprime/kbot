@@ -6709,6 +6709,63 @@ function closeSchemaEditor() {
 function wireSchemaEditor() {
   $('#se-cancel')?.addEventListener('click', closeSchemaEditor)
   $('#se-apply')?.addEventListener('click', applySchemaEditor)
+  $$('#se-template-row [data-template]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      applySchemaTemplate(row.dataset.template)
+    })
+  })
+}
+
+// applySchemaTemplate stamps the named preset into the open schema-edit
+// dialog's input fields (without committing — the user still has to
+// press Apply).  Mirrors the difficulty curves in TA's stock single-
+// player schemas: harder = leaner economy + worse meteors.
+function applySchemaTemplate(name) {
+  const presets = {
+    network: {
+      surfaceMetal: 3, mohoMetal: 30,
+      humanMetal: 1000, computerMetal: 1000,
+      humanEnergy: 1000, computerEnergy: 1000,
+      meteorWeapon: '', meteorRadius: 0, meteorDensity: 0,
+      meteorDuration: 0, meteorInterval: 0,
+    },
+    easy: {
+      surfaceMetal: 5, mohoMetal: 60,
+      humanMetal: 5000, computerMetal: 1500,
+      humanEnergy: 5000, computerEnergy: 1500,
+      meteorWeapon: '', meteorRadius: 0, meteorDensity: 0,
+      meteorDuration: 0, meteorInterval: 0,
+    },
+    medium: {
+      surfaceMetal: 3, mohoMetal: 40,
+      humanMetal: 1500, computerMetal: 3000,
+      humanEnergy: 1500, computerEnergy: 3000,
+      meteorWeapon: 'METEORSML', meteorRadius: 64,
+      meteorDensity: 1, meteorDuration: 240, meteorInterval: 1800,
+    },
+    hard: {
+      surfaceMetal: 2, mohoMetal: 30,
+      humanMetal: 1000, computerMetal: 5000,
+      humanEnergy: 1000, computerEnergy: 5000,
+      meteorWeapon: 'METEORLRG', meteorRadius: 96,
+      meteorDensity: 2, meteorDuration: 360, meteorInterval: 1200,
+    },
+  }
+  const p = presets[name]
+  if (!p) return
+  $('#se-surface-metal').value = p.surfaceMetal
+  $('#se-moho-metal').value = p.mohoMetal
+  $('#se-human-metal').value = p.humanMetal
+  $('#se-computer-metal').value = p.computerMetal
+  $('#se-human-energy').value = p.humanEnergy
+  $('#se-computer-energy').value = p.computerEnergy
+  $('#se-meteor-weapon').value = p.meteorWeapon
+  $('#se-meteor-radius').value = p.meteorRadius
+  $('#se-meteor-density').value = p.meteorDensity
+  $('#se-meteor-duration').value = p.meteorDuration
+  $('#se-meteor-interval').value = p.meteorInterval
+  setStatus(`Applied "${name}" template — press Apply to keep.`)
 }
 
 function applySchemaEditor() {
