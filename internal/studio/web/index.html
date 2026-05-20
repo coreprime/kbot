@@ -414,6 +414,9 @@
             <button class="menu-row toggle-row" id="opt-minimap" data-on="1">
               <span class="ico">🗺</span><span>Minimap</span><span class="menu-check">✓</span>
             </button>
+            <button class="menu-row toggle-row" id="opt-camera-info" data-on="1">
+              <span class="ico">📷</span><span>Camera &amp; Cursor</span><span class="menu-check">✓</span>
+            </button>
             <div class="menu-section-label">Display mode</div>
             <div class="inline-row" id="display-mode-group">
               <button class="menu-row active" data-display="map">
@@ -554,6 +557,19 @@
           <div class="dev-stats-row"><span class="dev-stats-label">Height</span><span class="dev-stats-value" id="fi-height">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Footprint</span><span class="dev-stats-value" id="fi-footprint">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Category</span><span class="dev-stats-value" id="fi-category">—</span></div>
+        </div>
+      </aside>
+      <aside class="dev-stats camera-info" id="camera-info-panel" title="Drag to move">
+        <div class="dev-stats-header" id="camera-info-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Camera &amp; Cursor</span>
+          <button id="camera-info-toggle" class="minimap-toggle" title="Collapse">−</button>
+        </div>
+        <div class="dev-stats-body">
+          <div class="dev-stats-row"><span class="dev-stats-label">Camera</span><span class="dev-stats-value" id="ci-camera">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Cursor</span><span class="dev-stats-value" id="ci-cursor">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Sub-tile</span><span class="dev-stats-value" id="ci-subtile">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Zoom</span><span class="dev-stats-value" id="ci-zoom">100%</span></div>
         </div>
       </aside>
     </main>

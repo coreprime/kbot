@@ -67,6 +67,7 @@ const state = {
   ota: null,                     // see defaultOTAState
   activeSchema: 0,               // index into state.ota.schemas
   showMinimap: true,             // minimap panel visibility (toggleable from View)
+  showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
   minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
   eraseSize: 1,                  // erase brush size (N×N tiles)
   eraseScope: 'all',             // 'all' | 'terrain' | 'features'
@@ -979,6 +980,21 @@ function wireViewMenu() {
   if (miniBtn) {
     miniBtn.addEventListener('click', () => {
       setMinimapVisible(!state.showMinimap)
+    })
+  }
+  const camBtn = $('#opt-camera-info')
+  if (camBtn) {
+    camBtn.addEventListener('click', () => {
+      setCameraInfoVisible(!state.showCameraInfo)
+    })
+  }
+  const camToggle = $('#camera-info-toggle')
+  if (camToggle) {
+    camToggle.addEventListener('click', () => {
+      const panel = $('#camera-info-panel')
+      if (!panel) return
+      panel.classList.toggle('collapsed')
+      camToggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
     })
   }
   $$('#display-mode-group .menu-row').forEach((row) => {
@@ -2031,6 +2047,7 @@ function wireCanvas() {
   canvas.addEventListener('mousemove', (e) => onCanvasMouseMove(e))
   canvas.addEventListener('mouseleave', () => {
     $('#hover-cell').textContent = '—'
+    updateCameraInfoCursor(null)
     if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
   })
 
@@ -2204,6 +2221,7 @@ function updateHoverLabel(e) {
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) {
     $('#hover-cell').textContent = '—'
     setCanvasHoverFeature(null)
+    updateCameraInfoCursor(null)
     return
   }
   $('#hover-cell').textContent = `(${tx}, ${ty})`
@@ -2212,6 +2230,11 @@ function updateHoverLabel(e) {
   const hit = findFeatureAt(e)
   const name = hit >= 0 ? (state.features[hit]?.name || '').toLowerCase() : null
   setCanvasHoverFeature(name)
+  // Camera & Cursor panel cursor row: sub-tile is computed from the
+  // raw attribute cell under the cursor (independent of feature-anchor
+  // adjustments).
+  const aa = pickAttrCellForVoid(e)
+  updateCameraInfoCursor(tx, ty, aa.ax, aa.ay)
 }
 
 // setCanvasHoverFeature updates state.highlightFeatureName from the
@@ -3658,6 +3681,54 @@ function renderCanvas() {
   scheduleDevStatsRefresh()
   // Keep the per-feature callout in sync with the current selection.
   updateFeatureInfoPanel()
+  updateCameraInfoPanel()
+}
+
+// setCameraInfoVisible toggles the Camera & Cursor panel.  Mirrors the
+// View-menu Minimap toggle so users get a familiar pattern.
+function setCameraInfoVisible(visible) {
+  state.showCameraInfo = !!visible
+  const panel = $('#camera-info-panel')
+  if (panel) panel.classList.toggle('hidden', !visible)
+  const btn = $('#opt-camera-info')
+  if (btn) btn.dataset.on = visible ? '1' : '0'
+  if (visible) updateCameraInfoPanel()
+}
+
+// updateCameraInfoPanel populates the panel with the current camera
+// (viewport-centre) tile, the cursor's tile + sub-tile when the mouse
+// is over the canvas, and the zoom level as a percentage.  Called from
+// renderCanvas (camera + zoom) and from updateHoverLabel (cursor).
+function updateCameraInfoPanel() {
+  const panel = $('#camera-info-panel')
+  if (!panel || panel.classList.contains('hidden')) return
+  // Camera centre — viewportCellCenter returns the tile at the centre
+  // of the visible viewport, taking overscroll padding + zoom into
+  // account.  Out-of-range falls back to the map centre.
+  const cam = viewportCellCenter()
+  const camEl = $('#ci-camera')
+  if (camEl) camEl.textContent = `${cam.tx}, ${cam.ty}`
+  const zEl = $('#ci-zoom')
+  if (zEl) zEl.textContent = `${Math.round((state.zoom || 1) * 100)}%`
+  // Cursor info is populated by setCanvasHoverFeature / updateHoverLabel
+  // when the mouse moves over the canvas; this function just keeps the
+  // camera + zoom rows in sync after pan/zoom.
+}
+
+// updateCameraInfoCursor writes the cursor tile + sub-tile fields when
+// the user is hovering the canvas.  Called from updateHoverLabel.
+function updateCameraInfoCursor(tx, ty, ax, ay) {
+  const panel = $('#camera-info-panel')
+  if (!panel || panel.classList.contains('hidden')) return
+  const cursorEl = $('#ci-cursor')
+  const subEl = $('#ci-subtile')
+  if (tx == null) {
+    if (cursorEl) cursorEl.textContent = '—'
+    if (subEl) subEl.textContent = '—'
+    return
+  }
+  if (cursorEl) cursorEl.textContent = `${tx}, ${ty}`
+  if (subEl) subEl.textContent = `${ax & 1}, ${ay & 1}`
 }
 
 // updateFeatureInfoPanel populates the floating callout that appears

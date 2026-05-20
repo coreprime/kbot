@@ -1440,6 +1440,16 @@ canvas {
 .feature-info .dev-stats-header {
   cursor: default;
 }
+/* Camera & Cursor panel — stacks below the Stats panel as well; when
+   the Feature-info panel is hidden (no selection) this one shifts up
+   to sit directly below Stats. */
+.camera-info {
+  top: 460px;
+  width: 232px;
+}
+#feature-info-panel:not(.hidden) ~ .camera-info {
+  top: 660px;
+}
 
 /* ── Developer information dialog ──────────────────────────────────── */
 .dev-tabs {
