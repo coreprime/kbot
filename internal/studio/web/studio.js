@@ -1313,6 +1313,9 @@ function wireViewMenu() {
   // Drag handle on the camera-info panel header — mirrors the dev-stats
   // and minimap panels so all three behave the same way.
   makePanelDraggable($('#camera-info-panel'), $('#camera-info-header'))
+  // Same drag handle on the feature-info panel so the user can move
+  // the callout away from whatever they're working on.
+  makePanelDraggable($('#feature-info-panel'), $('#feature-info-header'))
   $$('#display-mode-group .menu-row').forEach((row) => {
     row.addEventListener('click', () => {
       state.viewMode = row.dataset.display
