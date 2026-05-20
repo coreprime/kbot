@@ -117,6 +117,9 @@ kbd {
   flex-direction: column;
   overflow: hidden;
 }
+/* Even wider variant for the Open-map browser — 4 thumb columns
+   fit comfortably at this width. */
+.dialog-card-xwide { width: min(1100px, 96vw); }
 .dialog-card-wide > h1,
 .dialog-card-wide > .dialog-sub,
 .dialog-card-wide > .dialog-actions { flex-shrink: 0; }
@@ -359,9 +362,12 @@ kbd {
 .open-filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
 .open-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  /* 4 columns across in the wide Open-map dialog.  max-height shows
+     exactly 2.5 rows so the user can tell at a glance there's more
+     to scroll. */
+  grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  max-height: 50vh;
+  max-height: 52vh;
   overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--border);
@@ -386,7 +392,7 @@ kbd {
   animation: open-list-shimmer 1.2s linear infinite;
   border-radius: 4px;
 }
-.open-list-skeleton .thumb { width: 100%; aspect-ratio: 1; }
+.open-list-skeleton .thumb { width: 50%; aspect-ratio: 1; margin: 0 auto; }
 .open-list-skeleton .line { height: 12px; }
 .open-list-skeleton .line.short { width: 60%; }
 @keyframes open-list-shimmer {
@@ -409,12 +415,18 @@ kbd {
 .open-list-item:hover { border-color: var(--accent); }
 .open-list-item.selected { border-color: var(--accent); background: rgba(139, 92, 246, 0.08); }
 .open-list-item .thumb {
-  width: 100%;
+  /* ~50% of the old size: half the card width, centred.  object-fit:
+     cover + object-position: center crops non-square minimaps to
+     their centre rectangle, matching the requirement that wide /
+     tall maps still preview as a square. */
+  width: 50%;
   aspect-ratio: 1;
+  margin: 0 auto;
   background: var(--bg-3);
   border-radius: 4px;
   image-rendering: pixelated;
   object-fit: cover;
+  object-position: center;
 }
 .open-list-item .title {
   font-size: 13px;
