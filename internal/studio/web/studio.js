@@ -210,6 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#size-dialog').classList.remove('hidden')
   })
   $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
+  wireWelcomeDropZone()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
   // Open-map dialog.
   $('#open-back').addEventListener('click', closeOpenDialog)
@@ -537,6 +538,55 @@ async function confirmOpenMap() {
 // dialog).  The TNT's tile pool is fetched as a synthetic "section"
 // keyed `tnt:<path>` — the rest of the render/save path treats it like
 // any other section thanks to the `tnt:` prefix branch in builder.go.
+// wireWelcomeDropZone binds dragover/drop on the welcome modal so the
+// user can drop a .tnt (+ optional .ota sibling) from their desktop
+// and have the editor load it without going through VFS.  The drop
+// targets are the welcome-options grid; the body is a fallback so the
+// page doesn't navigate away when a file misses the modal.
+function wireWelcomeDropZone() {
+  const wel = $('#welcome-dialog')
+  if (!wel) return
+  const block = (e) => { e.preventDefault(); e.stopPropagation() }
+  for (const ev of ['dragenter', 'dragover']) {
+    wel.addEventListener(ev, (e) => { block(e); wel.classList.add('drop-hover') })
+  }
+  for (const ev of ['dragleave', 'drop']) {
+    wel.addEventListener(ev, (e) => { block(e); wel.classList.remove('drop-hover') })
+  }
+  wel.addEventListener('drop', async (e) => {
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length === 0) return
+    let tntFile = null
+    let otaFile = null
+    for (const f of files) {
+      const lower = (f.name || '').toLowerCase()
+      if (lower.endsWith('.tnt')) tntFile = f
+      else if (lower.endsWith('.ota')) otaFile = f
+    }
+    if (!tntFile) {
+      setStatus('Drop a .tnt file (and optionally a sibling .ota) to load.')
+      return
+    }
+    const form = new FormData()
+    form.append('tnt', tntFile)
+    if (otaFile) form.append('ota', otaFile)
+    try {
+      const resp = await fetch('/api/studio/load-upload', { method: 'POST', body: form })
+      if (!resp.ok) {
+        const text = await resp.text()
+        throw new Error(text || `HTTP ${resp.status}`)
+      }
+      const data = await resp.json()
+      $('#welcome-dialog').classList.add('hidden')
+      $('#app').classList.remove('hidden')
+      await openLoadedMap(data, null)
+      setStatus(`Loaded ${tntFile.name}.`)
+    } catch (err) {
+      setStatus(`Upload failed: ${err.message}`)
+    }
+  })
+}
+
 async function openLoadedMap(data, card) {
   // Clear in-flight selections / clipboards / undo history so the new
   // map starts cleanly — keeps the cached section/feature images

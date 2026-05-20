@@ -279,6 +279,20 @@ kbd {
   text-align: center;
   line-height: 1.4;
 }
+.welcome-drop-hint {
+  font-size: 11px;
+  text-align: center;
+  margin-top: 12px;
+}
+.welcome-drop-hint code {
+  background: var(--bg-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+#welcome-dialog.drop-hover .dialog-card {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+}
 
 /* ── Open-map dialog ───────────────────────────────────────────────── */
 .open-filter input[type="search"] {

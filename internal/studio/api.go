@@ -7,12 +7,14 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/sct"
@@ -28,6 +30,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/maps", handleMapsList)
 	mux.HandleFunc("/api/studio/minimap/", handleMapMinimap)
 	mux.HandleFunc("/api/studio/load", handleMapLoad)
+	mux.HandleFunc("/api/studio/load-upload", handleMapLoadUpload)
 	mux.HandleFunc("/api/studio/tile-pool/", handleMapTilePool)
 	mux.HandleFunc("/api/studio/sections", handleSections)
 	mux.HandleFunc("/api/studio/section-preview/", handleSectionPreview)
@@ -538,6 +541,122 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// handleMapLoadUpload accepts a multipart POST carrying a .tnt (and
+// optionally a sibling .ota) from the user's local disk, parses it
+// in-memory, stuffs the *tnt.Map into the TNT cache under a synthetic
+// "upload:<name>" path, and returns the same loadResponse shape the
+// VFS-backed loader does.  The tile-pool serving relies on the LRU
+// cache; cache eviction would break subsequent tile-pool fetches, but
+// the cap is 16 entries so that's only an issue when juggling many
+// uploads at once.
+func handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-origin POST refused", http.StatusForbidden)
+		return
+	}
+	// 32 MB cap — big enough for the largest stock TNTs by a margin.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "parse upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	tntFile, tntHdr, err := r.FormFile("tnt")
+	if err != nil {
+		http.Error(w, "missing tnt file", http.StatusBadRequest)
+		return
+	}
+	defer func() { _ = tntFile.Close() }()
+	tntBytes, err := io.ReadAll(tntFile)
+	if err != nil {
+		http.Error(w, "read tnt: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	m, err := tnt.LoadFromReader(bytes.NewReader(tntBytes))
+	if err != nil {
+		http.Error(w, "parse TNT: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	features, _ := m.LoadFeatures(bytes.NewReader(tntBytes))
+	placements := m.GetFeaturePlacements()
+
+	baseName := strings.TrimSuffix(path.Base(tntHdr.Filename), path.Ext(tntHdr.Filename))
+	if baseName == "" {
+		baseName = "upload"
+	}
+	baseName = sanitiseMapName(baseName)
+	uploadPath := fmt.Sprintf("upload:%s:%d", baseName, time.Now().UnixNano())
+	cacheTNT(uploadPath, m)
+
+	poolCols := tilePoolCols(len(m.Tiles))
+	tiles := make([]loadedTile, len(m.TileMap))
+	for i, idx := range m.TileMap {
+		px := int(idx) % poolCols
+		py := int(idx) / poolCols
+		tiles[i] = loadedTile{SX: px, SY: py}
+	}
+	heights := make([]int, len(m.TileAttr))
+	voids := make([]int, len(m.TileAttr))
+	for i, a := range m.TileAttr {
+		heights[i] = int(a.Height)
+		if a.Feature == 0xFFFC || a.Feature == 0xFFFE {
+			voids[i] = 1
+		}
+	}
+	outFeatures := make([]loadedFeature, 0, len(placements))
+	for _, p := range placements {
+		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
+			continue
+		}
+		name := strings.TrimSpace(features[p.FeatureIdx].Name)
+		if name == "" {
+			continue
+		}
+		outFeatures = append(outFeatures, loadedFeature{Name: name, AX: p.AttrX, AY: p.AttrY})
+	}
+
+	// Optional OTA upload.  Best-effort — silently dropped on parse fail.
+	var ota *otaState
+	planet := ""
+	missionName := baseName
+	if otaFile, _, err := r.FormFile("ota"); err == nil {
+		if data, err := io.ReadAll(otaFile); err == nil {
+			ota = parseOTA(string(data), m.TileW, m.TileH)
+			if ota != nil {
+				if ota.Planet != "" {
+					planet = ota.Planet
+				}
+				if ota.MissionName != "" {
+					missionName = ota.MissionName
+				}
+				if ota.SeaLevel == 0 && m.Header.SeaLevel > 0 {
+					ota.SeaLevel = int(m.Header.SeaLevel)
+				}
+			}
+		}
+		_ = otaFile.Close()
+	}
+
+	resp := loadResponse{
+		Name:        baseName,
+		Path:        uploadPath,
+		TileW:       m.TileW,
+		TileH:       m.TileH,
+		Planet:      planet,
+		MissionName: missionName,
+		TilePoolURL: "/api/studio/tile-pool/" + url.PathEscape(uploadPath),
+		TilePoolKey: "upload:" + uploadPath,
+		Tiles:       tiles,
+		Heights:     heights,
+		Voids:       voids,
+		Features:    outFeatures,
+		OTA:         ota,
+	}
+	writeJSON(w, resp)
+}
+
 // handleMapTilePool renders the TNT's full tile pool as a PNG atlas —
 // each 32×32 tile sits at (sx*32, sy*32) where sx/sy match what
 // handleMapLoad reported in `tiles[i]`.
@@ -550,6 +669,12 @@ func handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 	}
 	m := lookupTNT(mapPath)
 	if m == nil {
+		// Upload-only maps live in cache; once evicted they can't be
+		// rehydrated, so don't try to read them from VFS.
+		if strings.HasPrefix(mapPath, "upload:") {
+			http.Error(w, "uploaded map evicted from cache — reload from welcome screen", http.StatusGone)
+			return
+		}
 		// Cache miss (process restart, direct URL hit before /load) —
 		// re-parse the file on the fly so the endpoint stays usable.
 		data, err := vfs.ReadFile(mapPath)
