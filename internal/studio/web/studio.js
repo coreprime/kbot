@@ -2219,10 +2219,17 @@ function restoreSnapshot(snap) {
     state.tileH = snap.tileH
     const lbl = $('#info-size')
     if (lbl) lbl.textContent = `${state.tileW} × ${state.tileH}`
+    // Resize BOTH canvases — leaving the GL backing buffer at the old
+    // size would clip rendering identically to the map-switch case.
     const cnv = $('#canvas')
     if (cnv) {
       cnv.width = state.tileW * TILE_PX
       cnv.height = state.tileH * TILE_PX
+    }
+    const gl = $('#canvas-gl')
+    if (gl) {
+      gl.width = state.tileW * TILE_PX
+      gl.height = state.tileH * TILE_PX
     }
   }
   if (snap.ota) {
@@ -4182,15 +4189,19 @@ function renderCanvas() {
       glCanvas.height = wantH
     }
   }
+  // Sync the CSS size on BOTH canvases regardless of whether the 2D
+  // canvas's value happened to match — the two layers must always agree
+  // on dimensions or features render outside the visible canvas.  This
+  // also catches the map-switch case where the previous map's GL canvas
+  // style was left stale because the 2D canvas's style happened to
+  // already be the new target after a dimsChanged reset.
   const wantStyleW = wantW * state.zoom + 'px'
   const wantStyleH = wantH * state.zoom + 'px'
-  if (canvas.style.width !== wantStyleW) {
-    canvas.style.width = wantStyleW
-    if (glCanvas) glCanvas.style.width = wantStyleW
-  }
-  if (canvas.style.height !== wantStyleH) {
-    canvas.style.height = wantStyleH
-    if (glCanvas) glCanvas.style.height = wantStyleH
+  if (canvas.style.width !== wantStyleW) canvas.style.width = wantStyleW
+  if (canvas.style.height !== wantStyleH) canvas.style.height = wantStyleH
+  if (glCanvas) {
+    if (glCanvas.style.width !== wantStyleW) glCanvas.style.width = wantStyleW
+    if (glCanvas.style.height !== wantStyleH) glCanvas.style.height = wantStyleH
   }
   // .canvas-stack is the normal-flow scroll content; we pad it with
   // half a viewport on every side so the user can pan the map past
