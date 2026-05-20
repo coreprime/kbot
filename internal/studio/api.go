@@ -342,21 +342,49 @@ func handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 // cache the parsed *tnt.Map in tntCache so the save path can resolve
 // the original pixel bytes without re-reading the file.
 
+const tntCacheCap = 16
+
 var (
-	tntCacheMu sync.Mutex
-	tntCache   = map[string]*tnt.Map{}
+	tntCacheMu    sync.Mutex
+	tntCache      = map[string]*tnt.Map{}
+	tntCacheOrder []string // LRU recency, most-recent last
 )
 
 func cacheTNT(mapPath string, m *tnt.Map) {
 	tntCacheMu.Lock()
+	defer tntCacheMu.Unlock()
+	if _, ok := tntCache[mapPath]; ok {
+		tntCacheTouchLocked(mapPath)
+	} else {
+		tntCacheOrder = append(tntCacheOrder, mapPath)
+	}
 	tntCache[mapPath] = m
-	tntCacheMu.Unlock()
+	for len(tntCacheOrder) > tntCacheCap {
+		evict := tntCacheOrder[0]
+		tntCacheOrder = tntCacheOrder[1:]
+		delete(tntCache, evict)
+	}
 }
 
 func lookupTNT(mapPath string) *tnt.Map {
 	tntCacheMu.Lock()
 	defer tntCacheMu.Unlock()
-	return tntCache[mapPath]
+	m, ok := tntCache[mapPath]
+	if !ok {
+		return nil
+	}
+	tntCacheTouchLocked(mapPath)
+	return m
+}
+
+func tntCacheTouchLocked(mapPath string) {
+	for i, p := range tntCacheOrder {
+		if p == mapPath {
+			tntCacheOrder = append(tntCacheOrder[:i], tntCacheOrder[i+1:]...)
+			tntCacheOrder = append(tntCacheOrder, mapPath)
+			return
+		}
+	}
 }
 
 // tilePoolCols picks a square-ish layout for the tile-pool atlas.  An
