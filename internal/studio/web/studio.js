@@ -1063,12 +1063,15 @@ function setMode(mode) {
     if (!state.showVoids) setVoidsVisible(true)
   }
   if (mode === 'heightmap') {
-    // Switch to Heightmap view so the user can see what the brush is doing.
-    if (state.viewMode !== 'heightmap') {
-      state.viewMode = 'heightmap'
-      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'heightmap'))
+    // If the user is on the plain Map view, switch to Blended so they
+    // can see the heightmap variance overlaid on the terrain while
+    // they edit.  Other view modes (Heightmap / Blended) are left
+    // alone — the user's explicit choice wins.
+    if (state.viewMode === 'map') {
+      state.viewMode = 'blended'
+      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'blended'))
       const lbl = $('#view-current-lbl')
-      if (lbl) lbl.textContent = 'Heightmap'
+      if (lbl) lbl.textContent = 'Blended'
     }
   }
   // Sync the dropdown label/active row.  The old inline `.tool-btn`s
@@ -1259,8 +1262,19 @@ function wireKeyboard() {
       if (state.selectedFeatures.size > 0) state.selectedFeatures.clear()
       if (state.selectedFeature >= 0) state.selectedFeature = -1
       if (state.selected?.type === 'feature') clearStampSelection()
+      // Leaving Heightmap mode → drop back to the plain Map view so
+      // the editor isn't left in greyscale / blended once the user
+      // has finished sculpting.
+      const leavingHeightmap = state.mode === 'heightmap'
       if (state.mode !== 'select-terrain') setMode('select-terrain')
       else renderCanvas()
+      if (leavingHeightmap && state.viewMode !== 'map') {
+        state.viewMode = 'map'
+        $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'map'))
+        const lbl = $('#view-current-lbl')
+        if (lbl) lbl.textContent = 'Map'
+        renderCanvas()
+      }
     }
     else if (e.key === 'Delete' || e.key === 'Backspace') {
       handleDeleteKey()
