@@ -5954,6 +5954,9 @@ function wireToolbar() {
   $('#btn-scatter')?.addEventListener('click', openScatterDialog)
   $('#scatter-cancel')?.addEventListener('click', closeScatterDialog)
   $('#scatter-apply')?.addEventListener('click', applyScatter)
+  $('#btn-export-heightmap')?.addEventListener('click', exportHeightmap)
+  $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file').click())
+  $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
   $('#btn-undo').addEventListener('click', undo)
   $('#btn-redo').addEventListener('click', redo)
   $('#btn-new').addEventListener('click', startNewMapFromEditor)
@@ -6808,6 +6811,74 @@ function applyScatter() {
   closeScatterDialog()
   renderCanvas()
   setStatus(`Scattered ${placed} feature${placed === 1 ? '' : 's'} (seed ${seed}).`)
+}
+
+function exportHeightmap() {
+  const attrW = state.tileW * 2
+  const attrH = state.tileH * 2
+  const c = document.createElement('canvas')
+  c.width = attrW; c.height = attrH
+  const ctx = c.getContext('2d')
+  const img = ctx.createImageData(attrW, attrH)
+  for (let i = 0; i < attrW * attrH; i++) {
+    const h = clamp(state.heights[i] | 0, 0, 255)
+    img.data[i * 4 + 0] = h
+    img.data[i * 4 + 1] = h
+    img.data[i * 4 + 2] = h
+    img.data[i * 4 + 3] = 255
+  }
+  ctx.putImageData(img, 0, 0)
+  c.toBlob((blob) => {
+    if (!blob) { setStatus('Heightmap export failed.'); return }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sanitiseFilename(state.name)}-heightmap.png`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    setStatus(`Exported ${attrW}×${attrH} heightmap PNG.`)
+  }, 'image/png')
+}
+
+async function onImportHeightmapFile(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = ''
+  if (!file) return
+  const attrW = state.tileW * 2
+  const attrH = state.tileH * 2
+  const img = new Image()
+  const url = URL.createObjectURL(file)
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve
+      img.onerror = () => reject(new Error('decode failed'))
+      img.src = url
+    })
+    const c = document.createElement('canvas')
+    c.width = attrW; c.height = attrH
+    const ctx = c.getContext('2d')
+    // Nearest-neighbour-ish: disable smoothing so a same-size import is
+    // exact, and a different-size import is sampled rather than blurred.
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(img, 0, 0, attrW, attrH)
+    const data = ctx.getImageData(0, 0, attrW, attrH).data
+    beginTransaction()
+    for (let i = 0; i < attrW * attrH; i++) {
+      // Use luminance so colour PNGs still produce sensible heights.
+      const r = data[i * 4 + 0]
+      const g = data[i * 4 + 1]
+      const b = data[i * 4 + 2]
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) | 0
+      state.heights[i] = clamp(lum, 0, 255)
+    }
+    commitTransaction('Import heightmap')
+    renderCanvas()
+    setStatus(`Imported heightmap from ${file.name} (${img.naturalWidth}×${img.naturalHeight} → ${attrW}×${attrH}).`)
+  } catch (err) {
+    setStatus(`Heightmap import failed: ${err.message}`)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 async function save() {
