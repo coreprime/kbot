@@ -1254,6 +1254,16 @@ function wireKeyboard() {
     else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
     else if (e.key === 'ArrowRight' && pageSectionSibling(1)) { e.preventDefault() }
     else if (e.key === 'Escape') {
+      // If a ribbon dropdown or hover submenu is open, the first
+      // Escape press just closes it.  Saves the user from having to
+      // mouse away to dismiss, and avoids triggering the mode-reset
+      // path below by accident while they were exploring a menu.
+      const openPopup = document.querySelector('.ribbon-dropdown-popup:not(.hidden)')
+      if (openPopup) {
+        document.querySelectorAll('.ribbon-dropdown-popup:not(.hidden)').forEach((el) => el.classList.add('hidden'))
+        e.preventDefault()
+        return
+      }
       // Clear whatever transient state is active first, then drop the
       // user back into Select mode — that's the "neutral" mode that
       // lets them re-orient before picking a new tool.
