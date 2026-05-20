@@ -665,13 +665,17 @@ function renderMapTabs() {
     const display = mapDisplayName(m)
     const el = document.createElement('button')
     el.type = 'button'
-    el.className = 'map-tab' + (i === activeTabIndex ? ' active' : '')
+    // Dirty maps render their label in italic + a trailing * so the
+    // user can see at a glance which tabs have unsaved edits (#45).
+    el.className = 'map-tab'
+      + (i === activeTabIndex ? ' active' : '')
+      + (m.dirty ? ' dirty' : '')
     el.dataset.tabIndex = String(i)
     el.setAttribute('role', 'tab')
-    el.title = `${display} · ${m.name || '(no file)'} · ${m.tileW}×${m.tileH}`
+    el.title = `${display}${m.dirty ? ' (unsaved changes)' : ''} · ${m.name || '(no file)'} · ${m.tileW}×${m.tileH}`
     const lbl = document.createElement('span')
     lbl.className = 'map-tab-label'
-    lbl.textContent = display
+    lbl.textContent = m.dirty ? `${display}*` : display
     el.appendChild(lbl)
     const close = document.createElement('button')
     close.type = 'button'
@@ -778,25 +782,41 @@ function pickMapByName(entries, wanted) {
 // swallows clicks so the user doesn't try to edit against a dead
 // backend.  Subsequent successful pings dismiss both immediately.
 
+// Two cadences: idle polls every 5s when everything's fine, but the
+// moment we detect a drop we switch to 1s retries (#44) so the
+// reconnect feels snappy and the user knows the page is actively
+// trying.  Single setTimeout chain rather than setInterval so each
+// tick can pick its own next delay.
 const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_TIMEOUT_MS = 4000
+const HEARTBEAT_RECONNECT_MS = 1000
+const HEARTBEAT_TIMEOUT_OK_MS = 4000
+const HEARTBEAT_TIMEOUT_RETRY_MS = 1500
 const DISCONNECT_THRESHOLD = 2 // consecutive failures before showing "disconnected"
 
 let heartbeatState = 'connecting' // 'connecting' | 'connected' | 'disconnected'
 let heartbeatFailures = 0
 let heartbeatTimer = null
+// Monotonically increases each time the status card is shown; the
+// retry-counter UI reads this to display "retry N…" while the
+// server is down so the user can see we're actually polling.
+let heartbeatRetryCount = 0
 
 function startServerHeartbeat() {
   // The first ping fires immediately so we know about a dead server
   // before the user takes any action.
   pingHeartbeat()
-  if (heartbeatTimer) clearInterval(heartbeatTimer)
-  heartbeatTimer = setInterval(pingHeartbeat, HEARTBEAT_INTERVAL_MS)
+}
+
+function scheduleNextHeartbeat() {
+  if (heartbeatTimer) clearTimeout(heartbeatTimer)
+  const delay = heartbeatState === 'disconnected' ? HEARTBEAT_RECONNECT_MS : HEARTBEAT_INTERVAL_MS
+  heartbeatTimer = setTimeout(pingHeartbeat, delay)
 }
 
 async function pingHeartbeat() {
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), HEARTBEAT_TIMEOUT_MS)
+  const timeoutMs = heartbeatState === 'disconnected' ? HEARTBEAT_TIMEOUT_RETRY_MS : HEARTBEAT_TIMEOUT_OK_MS
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
   let ok
   try {
     const resp = await fetch('/api/studio/heartbeat', {
@@ -810,15 +830,23 @@ async function pingHeartbeat() {
     heartbeatFailures = 0
     if (heartbeatState !== 'connected') {
       heartbeatState = 'connected'
+      heartbeatRetryCount = 0
       applyConnectionUI()
     }
   } else {
     heartbeatFailures++
     if (heartbeatFailures >= DISCONNECT_THRESHOLD && heartbeatState !== 'disconnected') {
       heartbeatState = 'disconnected'
+      heartbeatRetryCount = 0
       applyConnectionUI()
     }
+    if (heartbeatState === 'disconnected') {
+      heartbeatRetryCount++
+      const detail = document.querySelector('#connection-detail')
+      if (detail) detail.textContent = `Reconnecting… (try ${heartbeatRetryCount})`
+    }
   }
+  scheduleNextHeartbeat()
 }
 
 function applyConnectionUI() {
@@ -828,6 +856,10 @@ function applyConnectionUI() {
   const offline = heartbeatState === 'disconnected'
   card.classList.toggle('hidden', !offline)
   overlay.classList.toggle('hidden', !offline)
+  if (!offline) {
+    const detail = document.querySelector('#connection-detail')
+    if (detail) detail.textContent = 'Reconnecting…'
+  }
 }
 
 // ── Open Existing Map flow ────────────────────────────────────────────────

@@ -652,6 +652,9 @@ kbd {
   padding-bottom: 1px;
   border-bottom: 1px solid var(--bg-2);
 }
+/* Dirty maps (any commitTransaction since the last save) show their
+   label in italic; the JS-side render adds a trailing "*" too (#45). */
+.map-tab.dirty .map-tab-label { font-style: italic; }
 .map-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
