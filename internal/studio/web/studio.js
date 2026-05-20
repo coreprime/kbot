@@ -4508,6 +4508,76 @@ function drawHeightmap(ctx) {
       ctx.fillRect(ax * cell, ay * cell, cell, cell)
     }
   }
+  drawHeightContours(ctx, attrW, attrH, cell)
+}
+
+// drawHeightContours overlays thin lines along every CONTOUR_STEP-byte
+// height change between neighbouring attribute cells, plus a thicker
+// blue line at the configured sea level.  Two passes over the grid:
+// one stroking horizontal edges, one stroking vertical edges; uses a
+// single path per line colour so big maps stay fast.
+function drawHeightContours(ctx, attrW, attrH, cell) {
+  const step = 16
+  const seaLevel = state.ota?.seaLevel ?? 63
+  ctx.save()
+  ctx.lineWidth = 1
+  // Regular contours — black with low alpha so they read but don't
+  // overwhelm the underlying greyscale.
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
+  ctx.beginPath()
+  for (let ay = 0; ay < attrH; ay++) {
+    for (let ax = 0; ax < attrW; ax++) {
+      const h = state.heights[ay * attrW + ax]
+      // Right edge.
+      if (ax + 1 < attrW) {
+        const r = state.heights[ay * attrW + (ax + 1)]
+        if (Math.floor(h / step) !== Math.floor(r / step)) {
+          const x = (ax + 1) * cell
+          ctx.moveTo(x, ay * cell)
+          ctx.lineTo(x, (ay + 1) * cell)
+        }
+      }
+      // Bottom edge.
+      if (ay + 1 < attrH) {
+        const b = state.heights[(ay + 1) * attrW + ax]
+        if (Math.floor(h / step) !== Math.floor(b / step)) {
+          const y = (ay + 1) * cell
+          ctx.moveTo(ax * cell, y)
+          ctx.lineTo((ax + 1) * cell, y)
+        }
+      }
+    }
+  }
+  ctx.stroke()
+  // Sea-level line — heavier and tinted blue so it stands out from
+  // the regular contours.
+  ctx.strokeStyle = 'rgba(56, 132, 255, 0.95)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  for (let ay = 0; ay < attrH; ay++) {
+    for (let ax = 0; ax < attrW; ax++) {
+      const h = state.heights[ay * attrW + ax]
+      const above = h >= seaLevel
+      if (ax + 1 < attrW) {
+        const r = state.heights[ay * attrW + (ax + 1)]
+        if (above !== (r >= seaLevel)) {
+          const x = (ax + 1) * cell
+          ctx.moveTo(x, ay * cell)
+          ctx.lineTo(x, (ay + 1) * cell)
+        }
+      }
+      if (ay + 1 < attrH) {
+        const b = state.heights[(ay + 1) * attrW + ax]
+        if (above !== (b >= seaLevel)) {
+          const y = (ay + 1) * cell
+          ctx.moveTo(ax * cell, y)
+          ctx.lineTo((ax + 1) * cell, y)
+        }
+      }
+    }
+  }
+  ctx.stroke()
+  ctx.restore()
 }
 
 // drawHeightmapOverlay paints a translucent grayscale of the height
