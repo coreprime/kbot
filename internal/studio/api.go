@@ -1279,6 +1279,10 @@ func handleSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-origin POST refused", http.StatusForbidden)
+		return
+	}
 	var req saveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -1311,6 +1315,10 @@ func handleSave(w http.ResponseWriter, r *http.Request) {
 func handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	if !sameOrigin(r) {
+		http.Error(w, "cross-origin POST refused", http.StatusForbidden)
 		return
 	}
 	var req saveRequest
@@ -1347,6 +1355,40 @@ func handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+// sameOrigin reports whether the request was initiated by a page that
+// shares an origin with this server.  Used as a low-cost CSRF guard on
+// mutating endpoints — a foreign site holding a fetch() to localhost
+// can't read the response thanks to CORS, but it CAN issue a side
+// effect like /api/studio/save.  We block those by comparing the
+// browser-supplied Origin (or, as a fallback, Referer) host against
+// the request's own Host header.  Requests with no Origin/Referer
+// (curl, server-to-server, same-origin form posts) are allowed
+// through — the editor's own fetches always carry a same-origin
+// Origin header so they pass.
+func sameOrigin(r *http.Request) bool {
+	matches := func(raw string) (claimed, ok bool) {
+		if raw == "" {
+			return false, true // header absent — not claimed; defer to next check
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return true, false
+		}
+		return true, u.Host == r.Host
+	}
+	if claimed, ok := matches(r.Header.Get("Origin")); claimed {
+		return ok
+	}
+	if claimed, ok := matches(r.Header.Get("Referer")); claimed {
+		return ok
+	}
+	// Neither Origin nor Referer claimed an origin (non-browser caller
+	// like curl).  We can't reach this state from a malicious browser
+	// page, so allow it through — the user's own scripted tooling is
+	// often the intended caller.
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
