@@ -867,6 +867,16 @@ async function finishEditorBoot() {
   // renderCanvas has sized #canvas and the stack — applyOverscrollPadding
   // anchors scroll math off the final canvas dims.
   centerViewOnMap()
+  // Map switches can leave the GL viewport-cull set from the previous
+  // map's scroll position — the first renderCanvas inside this boot
+  // ran before centerViewOnMap moved the scroll, so visibleTileBounds
+  // saw the old scroll and the new map's left / top edges fell out of
+  // the cull window.  Re-render now that scrollLeft/Top are correct,
+  // and again on the next frame after the browser has reflowed the
+  // grown / shrunk canvas-stack.  Belt-and-braces because reflow
+  // timing across browsers isn't guaranteed.
+  renderCanvas()
+  requestAnimationFrame(() => renderCanvas())
 }
 
 // centerViewOnMap places the centre of the map at the centre of the
@@ -6434,7 +6444,7 @@ function renderDevDiagnostics() {
     ['Stack size (canvas-stack)', stack ? `${parseFloat(stack.style.width || 0).toFixed(0)} × ${parseFloat(stack.style.height || 0).toFixed(0)}` : '—'],
     ['Overscroll padding', `(${overscrollPadding.x}, ${overscrollPadding.y})`],
     ['Canvas offset (left, top)', canvas ? `(${parseFloat(canvas.style.left || 0).toFixed(0)}, ${parseFloat(canvas.style.top || 0).toFixed(0)})` : '—'],
-    ['Visible tile bounds', tb ? `tx [${tb.minTx}..${tb.maxTx}]  ty [${tb.minTy}..${tb.maxTy}]` : '—'],
+    ['Visible tile bounds', tb ? `tx [${tb.minTX}..${tb.maxTX}]  ty [${tb.minTY}..${tb.maxTY}]` : '—'],
     ['Visible pixel bounds', vp ? `x [${vp.minX}..${vp.maxX}]  y [${vp.minY}..${vp.maxY}]` : '—'],
     ['Content version', num(typeof contentVersion === 'number' ? contentVersion : null)],
     ['Tile / feature counts', `${(state.tiles || []).filter(Boolean).length} tile cells • ${(state.features || []).length} features`],
