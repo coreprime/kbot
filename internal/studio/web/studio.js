@@ -338,6 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
   })
   $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
   wireWelcomeDropZone()
+  wireWelcomeNanoFX()
   // Multi-tab management — the tab bar + "+" popout above the toolbar.
   wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
@@ -962,6 +963,241 @@ async function confirmOpenMap() {
 // any other section thanks to the `tnt:` prefix branch in builder.go.
 // wireWelcomeDropZone binds dragover/drop on the welcome modal so the
 // user can drop a .tnt (+ optional .ota sibling) from their desktop
+// ── Welcome dialog nanolathe FX ───────────────────────────────────────
+//
+// Two emitters at the bottom-left + bottom-right of the viewport fire
+// bright-green particle streams toward the centre of the welcome
+// dialog card.  On impact the particles burst into short-lived sparks
+// that scatter along the card edge, and the card itself briefly
+// pulses a green glow via a CSS animation.  Pure visual fluff while
+// the user picks New vs Open.
+//
+// The whole thing runs on requestAnimationFrame only while the
+// welcome dialog is visible — wireWelcomeNanoFX() starts the loop at
+// boot, and the loop self-suspends when #welcome-dialog gets the
+// `hidden` class.
+
+const NANO_GREEN_CORE = 'rgba(220, 255, 200, 1)'
+const NANO_GREEN_BODY = 'rgba(127, 255, 102, 0.9)'
+const NANO_GREEN_TAIL = 'rgba(80, 220, 80, 0.0)'
+
+function wireWelcomeNanoFX() {
+  const wel = document.querySelector('#welcome-dialog')
+  const cv = document.querySelector('#welcome-nanofx')
+  if (!wel || !cv) return
+  const ctx = cv.getContext('2d')
+  let particles = []    // beam particles fired from the emitters
+  let sparks = []       // short-lived sparks at the impact points
+  let lastFlash = 0     // throttle the CSS border pulse
+  let cardRect = null   // cached card bounding rect for impact checks
+  let running = false
+  let rafId = 0
+
+  const resize = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    cv.width = Math.round(window.innerWidth * dpr)
+    cv.height = Math.round(window.innerHeight * dpr)
+    cv.style.width = window.innerWidth + 'px'
+    cv.style.height = window.innerHeight + 'px'
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  }
+  resize()
+  window.addEventListener('resize', resize)
+
+  // Where the emitters live + which point on the card to aim at.  The
+  // aim point is the centre of the card; recomputed every frame so
+  // the streams track the card if the viewport reflows.
+  function emitterPoint(side) {
+    const margin = 40
+    return side === 'left'
+      ? { x: margin, y: window.innerHeight - margin }
+      : { x: window.innerWidth - margin, y: window.innerHeight - margin }
+  }
+  function cardCentre() {
+    const card = wel.querySelector('.dialog-card')
+    if (!card) return null
+    const r = card.getBoundingClientRect()
+    cardRect = r
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  }
+
+  function emit(side) {
+    const src = emitterPoint(side)
+    const target = cardCentre()
+    if (!target) return
+    // Vector from emitter to a wobbly point inside the card so the
+    // stream looks like a cone rather than a single laser line.
+    const tx = target.x + (Math.random() - 0.5) * Math.min(cardRect.width * 0.6, 220)
+    const ty = target.y + (Math.random() - 0.5) * Math.min(cardRect.height * 0.4, 120)
+    const dx = tx - src.x, dy = ty - src.y
+    const len = Math.max(1, Math.hypot(dx, dy))
+    const speed = 380 + Math.random() * 260 // px/sec
+    particles.push({
+      x: src.x, y: src.y,
+      vx: (dx / len) * speed,
+      vy: (dy / len) * speed,
+      life: 0, ttl: 0.9 + Math.random() * 0.3,
+      size: 1.6 + Math.random() * 1.4,
+      side,
+    })
+  }
+
+  // Spark = a small bright dot that scatters from the impact point
+  // along the card edge, then fades.  Cheap to render — just a
+  // gradient blob.
+  function spawnSparks(x, y) {
+    const count = 4 + Math.floor(Math.random() * 4)
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2
+      const s = 80 + Math.random() * 160
+      sparks.push({
+        x, y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s - 60, // bias upward so they float away
+        life: 0, ttl: 0.35 + Math.random() * 0.35,
+        size: 1.4 + Math.random() * 1.4,
+      })
+    }
+  }
+
+  function flashCard() {
+    const now = performance.now()
+    if (now - lastFlash < 90) return // throttle so the pulse doesn't seize on
+    lastFlash = now
+    const card = wel.querySelector('.dialog-card')
+    if (!card) return
+    card.classList.remove('nano-hit')
+    // Force reflow so re-adding the class restarts the animation.
+    void card.offsetWidth
+    card.classList.add('nano-hit')
+  }
+
+  function step(dt) {
+    // Emit a few new particles per frame from each side.  The user's
+    // CPU does the rest; this stays under a few hundred live
+    // particles at any moment.
+    const emitsPerFrame = 3
+    for (let i = 0; i < emitsPerFrame; i++) {
+      emit('left')
+      emit('right')
+    }
+
+    // Advance beam particles.
+    const keep = []
+    for (const p of particles) {
+      p.life += dt
+      if (p.life >= p.ttl) continue
+      p.x += p.vx * dt
+      p.y += p.vy * dt
+      // Card-edge collision: when a particle crosses into the card
+      // rect, kill it and spawn sparks at the impact point.
+      if (cardRect && p.x >= cardRect.left && p.x <= cardRect.right
+          && p.y >= cardRect.top && p.y <= cardRect.bottom) {
+        // Snap impact to the nearest card edge for sparkier sparks.
+        const dl = p.x - cardRect.left
+        const dr = cardRect.right - p.x
+        const dt2 = p.y - cardRect.top
+        const db = cardRect.bottom - p.y
+        const m = Math.min(dl, dr, dt2, db)
+        let ix = p.x, iy = p.y
+        if (m === dl) ix = cardRect.left
+        else if (m === dr) ix = cardRect.right
+        else if (m === dt2) iy = cardRect.top
+        else iy = cardRect.bottom
+        spawnSparks(ix, iy)
+        flashCard()
+        continue
+      }
+      keep.push(p)
+    }
+    particles = keep
+
+    // Advance sparks.
+    const keepSparks = []
+    for (const s of sparks) {
+      s.life += dt
+      if (s.life >= s.ttl) continue
+      s.x += s.vx * dt
+      s.y += s.vy * dt
+      s.vy += 220 * dt // gentle gravity
+      keepSparks.push(s)
+    }
+    sparks = keepSparks
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+    // Glow trails: draw each beam particle as a short gradient line
+    // back toward the emitter so the stream reads as a beam, not a
+    // sparse cloud of dots.
+    for (const p of particles) {
+      const src = emitterPoint(p.side)
+      const tailDX = src.x - p.x
+      const tailDY = src.y - p.y
+      const tlen = Math.max(1, Math.hypot(tailDX, tailDY))
+      const tailLen = Math.min(40, tlen * 0.18)
+      const tx = p.x + (tailDX / tlen) * tailLen
+      const ty = p.y + (tailDY / tlen) * tailLen
+      const grad = ctx.createLinearGradient(p.x, p.y, tx, ty)
+      grad.addColorStop(0, NANO_GREEN_CORE)
+      grad.addColorStop(0.3, NANO_GREEN_BODY)
+      grad.addColorStop(1, NANO_GREEN_TAIL)
+      ctx.strokeStyle = grad
+      ctx.lineWidth = p.size
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(p.x, p.y)
+      ctx.lineTo(tx, ty)
+      ctx.stroke()
+    }
+    // Sparks: small glowing dots.
+    for (const s of sparks) {
+      const t = 1 - (s.life / s.ttl)
+      ctx.fillStyle = `rgba(180, 255, 150, ${t * 0.95})`
+      ctx.beginPath()
+      ctx.arc(s.x, s.y, s.size * t + 0.4, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
+  let lastTime = 0
+  function frame(now) {
+    if (!running) return
+    const dt = Math.min(0.05, (now - lastTime) / 1000 || 0)
+    lastTime = now
+    cardCentre() // refresh cardRect
+    step(dt)
+    draw()
+    rafId = requestAnimationFrame(frame)
+  }
+
+  function start() {
+    if (running) return
+    running = true
+    lastTime = performance.now()
+    rafId = requestAnimationFrame(frame)
+  }
+  function stop() {
+    if (!running) return
+    running = false
+    cancelAnimationFrame(rafId)
+    particles.length = 0
+    sparks.length = 0
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+  }
+
+  // Drive start/stop off the welcome dialog's `hidden` class so the
+  // loop only burns frames while the user is actually looking at the
+  // dialog.  MutationObserver catches programmatic class changes from
+  // startEditor / openLoadedMap.
+  const sync = () => {
+    if (wel.classList.contains('hidden')) stop(); else start()
+  }
+  const obs = new MutationObserver(sync)
+  obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
+  sync()
+}
+
 // and have the editor load it without going through VFS.  The drop
 // targets are the welcome-options grid; the body is a fallback so the
 // page doesn't navigate away when a file misses the modal.

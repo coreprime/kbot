@@ -8,6 +8,11 @@
 </head>
 <body>
   <div id="welcome-dialog" class="dialog">
+    <!-- Nanolathe FX layer: two green particle emitters fire toward
+         the dialog card from the bottom corners.  Lives behind the
+         card via z-index in CSS.  Drawing + animation is owned by
+         the NanoFX module; the canvas is sized to the viewport. -->
+    <canvas id="welcome-nanofx" class="welcome-nanofx" aria-hidden="true"></canvas>
     <div class="dialog-card dialog-card-wide">
       <h1>KBot Studio</h1>
       <p class="dialog-sub">A web-based map editor for Total Annihilation and TA: Kingdoms.  Pick how you'd like to begin.</p>
