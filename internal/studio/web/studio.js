@@ -302,13 +302,39 @@ const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
   'viewMode', 'drawerFilters', 'panelLayout']
 
+// createPrefsStore returns a {load, save} interface backed by a Web
+// Storage implementation (defaults to window.localStorage).  The
+// abstraction lets the editor pass in a different backing store for
+// tests, throw-away sessions ("Open in new tab" with prefs disabled),
+// or future server-side sync.  All localStorage access in this file
+// goes through this interface — nothing else calls window.localStorage
+// directly.
+function createPrefsStore({ key, storage } = {}) {
+  const k = key || PREFS_KEY
+  const s = storage !== undefined ? storage : (typeof window !== 'undefined' ? window.localStorage : null)
+  return {
+    load() {
+      try {
+        const raw = s?.getItem(k)
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        return (parsed && typeof parsed === 'object') ? parsed : null
+      } catch { return null }
+    },
+    save(blob) {
+      try { s?.setItem(k, JSON.stringify(blob)) } catch { /* incognito / quota / disabled */ }
+    },
+  }
+}
+
+// Module-level singleton for prefs persistence.  Swappable for tests by
+// reassigning this to a different createPrefsStore() return value, or
+// to a `{ load: () => null, save: () => {} }` no-op stub.
+let prefsStore = createPrefsStore()
+
 function loadPersistedPrefs() {
-  let raw
-  try { raw = window.localStorage?.getItem(PREFS_KEY) } catch { /* incognito or disabled */ }
-  if (!raw) return
-  let parsed
-  try { parsed = JSON.parse(raw) } catch { return }
-  if (!parsed || typeof parsed !== 'object') return
+  const parsed = prefsStore.load()
+  if (!parsed) return
   for (const k of PREF_FIELDS) {
     if (parsed[k] === undefined) continue
     if (k === 'drawerFilters' && parsed[k] && typeof parsed[k] === 'object') {
@@ -356,7 +382,7 @@ function persistPrefs() {
     prefsSaveTimer = null
     const blob = {}
     for (const k of PREF_FIELDS) blob[k] = state[k]
-    try { window.localStorage?.setItem(PREFS_KEY, JSON.stringify(blob)) } catch { /* ignore */ }
+    prefsStore.save(blob)
   }, 250)
 }
 
@@ -929,7 +955,7 @@ let editorWired = false
 async function finishEditorBoot() {
   if (!editorWired) {
     wireToolbar()
-    wireCanvas()
+    wireZoomButtons()
     wireTabs()
     wireMinimap()
     wireDeveloperPanel()
@@ -939,6 +965,12 @@ async function finishEditorBoot() {
     wireKeyboard()
     editorWired = true
   }
+  // Tear down the previous editing window's canvas DOM + GL state and
+  // mount a fresh pair of canvases.  Done every call so File → New,
+  // Open, and Resize all start from a guaranteed-clean editing surface
+  // — no stale listeners, no carried-over GL textures, no orphaned
+  // ResizeObservers.
+  recreateEditorView()
   // Don't poke canvas.width here on a mid-session swap.  renderCanvas
   // owns the canvas/glCanvas/.canvas-stack dimensions and skips work
   // when they already match — pre-setting only the 2D canvas hides the
@@ -2566,170 +2598,237 @@ function refreshHistoryFlyouts() {
   fillList('redo-history-list', redoStack, 'Nothing to redo')
 }
 
-function wireCanvas() {
-  const canvas = $('#canvas')
-  canvas.width = state.tileW * TILE_PX
-  canvas.height = state.tileH * TILE_PX
-  canvas.style.width = canvas.width * state.zoom + 'px'
-  canvas.style.height = canvas.height * state.zoom + 'px'
-  const glCanvas = $('#canvas-gl')
-  if (glCanvas) {
+// ── EditorView ─────────────────────────────────────────────────────────────
+//
+// EditorView owns the editing window's mutable DOM: the 2D #canvas, the
+// WebGL #canvas-gl, the per-canvas event listeners, and the
+// ResizeObserver watching the scroll wrap.  Each map load (New, Open,
+// Resize) calls recreateEditorView(), which destroys the previous view
+// — removing the canvas elements, aborting their listeners, and losing
+// the GL context — and mounts a fresh one.  No DOM, no event listeners,
+// and no GL state from the previous map can leak into the next.
+
+// Module-level singleton.  Reassigned by recreateEditorView().
+let editorView = null
+
+class EditorView {
+  constructor() {
+    this.stack = document.querySelector('#canvas-stack')
+    this.scroll = document.querySelector('#canvas-scroll')
+    this.canvas = null
+    this.glCanvas = null
+    this.abort = null
+    this.resizeObserver = null
+  }
+
+  mount() {
+    if (!this.stack) return
+    // Wipe any pre-existing canvases (initial HTML markup or a stale
+    // mount that destroy() somehow missed).
+    for (const c of Array.from(this.stack.querySelectorAll('canvas'))) {
+      this.stack.removeChild(c)
+    }
+    // glCanvas first (sits under the 2D overlay).
+    const glCanvas = document.createElement('canvas')
+    glCanvas.id = 'canvas-gl'
+    const canvas = document.createElement('canvas')
+    canvas.id = 'canvas'
+    this.stack.append(glCanvas, canvas)
+    this.glCanvas = glCanvas
+    this.canvas = canvas
+
+    canvas.width = state.tileW * TILE_PX
+    canvas.height = state.tileH * TILE_PX
+    canvas.style.width = canvas.width * state.zoom + 'px'
+    canvas.style.height = canvas.height * state.zoom + 'px'
     glCanvas.width = canvas.width
     glCanvas.height = canvas.height
     glCanvas.style.width = canvas.style.width
     glCanvas.style.height = canvas.style.height
-  }
-  applyOverscrollPadding()
-  // Recompute padding whenever the scroll viewport changes size so the
-  // half-viewport overscroll stays accurate after window resizes.
-  if (typeof ResizeObserver !== 'undefined') {
-    const wrap = $('#canvas-scroll')
-    if (wrap) {
-      const ro = new ResizeObserver(() => {
-        applyOverscrollPadding()
-        scheduleRenderCanvas()
-        scheduleMinimapRender()
-      })
-      ro.observe(wrap)
-    }
+
+    applyOverscrollPadding()
+    this.abort = new AbortController()
+    this._bindCanvasListeners()
+    this._bindResizeObserver()
   }
 
-  canvas.addEventListener('mousedown', (e) => onCanvasMouseDown(e))
-  window.addEventListener('mouseup', (e) => onCanvasMouseUp(e))
-  canvas.addEventListener('mousemove', (e) => onCanvasMouseMove(e))
-  canvas.addEventListener('mouseleave', () => {
-    $('#hover-cell').textContent = '—'
-    updateCameraInfoCursor(null)
-    if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
-  })
+  destroy() {
+    if (this.abort) { this.abort.abort(); this.abort = null }
+    if (this.resizeObserver) { this.resizeObserver.disconnect(); this.resizeObserver = null }
+    resetGL()
+    if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas)
+    if (this.glCanvas?.parentNode) this.glCanvas.parentNode.removeChild(this.glCanvas)
+    this.canvas = null
+    this.glCanvas = null
+  }
 
-  // Wheel/trackpad routing:
-  //   - Ctrl/Cmd + wheel → zoom (covers Mac pinch — Safari sends pinch
-  //     as wheel-with-ctrlKey).
-  //   - Any horizontal delta (deltaX) → pan horizontally.
-  //   - Shift + wheel → pan vertically.
-  //   - Otherwise → zoom anchored to the cursor.
-  const wrap = $('#canvas-scroll')
-  wrap.addEventListener('wheel', (e) => {
-    // Ignore wheel events while any modal dialog is showing — they
-    // were sneaking past the dialog overlay and nudging zoom while
-    // the user was scrolling dialog content.  Symptom: map switches
-    // landed at zoom 1.0015 instead of 1.0.
-    if (document.querySelector('.dialog:not(.hidden)')) return
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault()
-      zoomAtPointer(e.clientX, e.clientY, e.deltaY)
-      return
-    }
-    if (e.deltaX !== 0) {
-      e.preventDefault()
-      wrap.scrollLeft += e.deltaX
-      if (e.deltaY !== 0) wrap.scrollTop += e.deltaY
-      return
-    }
-    if (e.shiftKey) {
-      e.preventDefault()
-      wrap.scrollTop += e.deltaY
-      return
-    }
-    e.preventDefault()
-    zoomAtPointer(e.clientX, e.clientY, e.deltaY)
-  }, { passive: false })
+  _bindResizeObserver() {
+    if (typeof ResizeObserver === 'undefined' || !this.scroll) return
+    this.resizeObserver = new ResizeObserver(() => {
+      applyOverscrollPadding()
+      scheduleRenderCanvas()
+      scheduleMinimapRender()
+    })
+    this.resizeObserver.observe(this.scroll)
+  }
 
-  // Drag-and-drop from the sidebar drawer.  `dragover` only updates the
-  // hover highlight; the actual stamp is committed once on `drop`.  This
-  // avoids smearing the drag path across every cell the cursor passed.
-  canvas.addEventListener('dragenter', (e) => { e.preventDefault() })
-  canvas.addEventListener('dragover', (e) => {
-    if (!state.dragging) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
-    updateHoverLabel(e)
-    const { tx, ty } = pickCell(e)
-    let dirty = false
-    if (state.dropPreview?.tx !== tx || state.dropPreview?.ty !== ty) {
-      state.dropPreview = { tx, ty }
-      dirty = true
-    }
-    // While dragging a section, also engage a full placement preview so
-    // the user sees the section's pixels + rotation badge + edge hints
-    // exactly like a click-to-place flow.  The section is centred on
-    // the cursor (rather than top-left anchored) — matches what
-    // setDragImage does for the drag ghost.
-    if (state.dragging.type === 'section' && state.selected?.type === 'section') {
-      if (!state.placement || state.placement.sectionPath !== state.selected.path) {
-        state.placement = {
-          sectionPath: state.selected.path,
-          origW: state.selected.tileW,
-          origH: state.selected.tileH,
-          rotation: state.selected.rotation || 0,
-          tx, ty,
+  _bindCanvasListeners() {
+    const { canvas, scroll, abort } = this
+    if (!canvas || !abort) return
+    const sig = { signal: abort.signal }
+    canvas.addEventListener('mousedown', (e) => onCanvasMouseDown(e), sig)
+    window.addEventListener('mouseup', (e) => onCanvasMouseUp(e), sig)
+    canvas.addEventListener('mousemove', (e) => onCanvasMouseMove(e), sig)
+    canvas.addEventListener('mouseleave', () => {
+      $('#hover-cell').textContent = '—'
+      updateCameraInfoCursor(null)
+      if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
+    }, sig)
+
+    // Wheel/trackpad routing:
+    //   - Ctrl/Cmd + wheel → zoom (covers Mac pinch — Safari sends pinch
+    //     as wheel-with-ctrlKey).
+    //   - Any horizontal delta (deltaX) → pan horizontally.
+    //   - Shift + wheel → pan vertically.
+    //   - Otherwise → zoom anchored to the cursor.
+    if (scroll) {
+      scroll.addEventListener('wheel', (e) => {
+        // Ignore wheel events while any modal dialog is showing — they
+        // were sneaking past the dialog overlay and nudging zoom while
+        // the user was scrolling dialog content.  Symptom: map switches
+        // landed at zoom 1.0015 instead of 1.0.
+        if (document.querySelector('.dialog:not(.hidden)')) return
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault()
+          zoomAtPointer(e.clientX, e.clientY, e.deltaY)
+          return
         }
-      }
-      const anchor = placementAnchor(tx, ty, state.placement)
-      if (state.placement.tx !== anchor.tx || state.placement.ty !== anchor.ty) {
-        state.placement.tx = anchor.tx
-        state.placement.ty = anchor.ty
-        tryAutoRotatePlacement(state.placement)
+        if (e.deltaX !== 0) {
+          e.preventDefault()
+          scroll.scrollLeft += e.deltaX
+          if (e.deltaY !== 0) scroll.scrollTop += e.deltaY
+          return
+        }
+        if (e.shiftKey) {
+          e.preventDefault()
+          scroll.scrollTop += e.deltaY
+          return
+        }
+        e.preventDefault()
+        zoomAtPointer(e.clientX, e.clientY, e.deltaY)
+      }, { passive: false, signal: abort.signal })
+    }
+
+    // Drag-and-drop from the sidebar drawer.  `dragover` only updates the
+    // hover highlight; the actual stamp is committed once on `drop`.  This
+    // avoids smearing the drag path across every cell the cursor passed.
+    canvas.addEventListener('dragenter', (e) => { e.preventDefault() }, sig)
+    canvas.addEventListener('dragover', (e) => {
+      if (!state.dragging) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      updateHoverLabel(e)
+      const { tx, ty } = pickCell(e)
+      let dirty = false
+      if (state.dropPreview?.tx !== tx || state.dropPreview?.ty !== ty) {
+        state.dropPreview = { tx, ty }
         dirty = true
       }
-    }
-    if (dirty) renderCanvas()
-  })
-  canvas.addEventListener('dragleave', () => {
-    state.dropPreview = null
-    renderCanvas()
-  })
-  canvas.addEventListener('drop', (e) => {
-    if (!state.dragging) return
-    e.preventDefault()
-    state.dropPreview = null
-    paintedDuringStroke = false
-    const wasFeature = state.dragging.type === 'feature'
-    if (state.dragging.type === 'section' && state.placement) {
-      // Anchor the section at the drop point instead of immediately
-      // overwriting the tiles underneath — the user can then drag /
-      // rotate it and only commit on the next click outside the
-      // footprint (or Esc to cancel).  This way the original tiles at
-      // the drop point are preserved until the user is happy.
-      const { tx: cx, ty: cy } = pickCell(e)
-      if (cx >= 0 && cx < state.tileW && cy >= 0 && cy < state.tileH) {
-        // Force Paint mode so the anchored placement is interactive
-        // regardless of what mode the drag started from (e.g., View).
-        if (state.mode !== 'paint') setMode('paint')
-        const anchor = placementAnchor(cx, cy, state.placement)
-        state.placement.tx = anchor.tx
-        state.placement.ty = anchor.ty
-        state.placement.anchored = true
-        setStatus('Section anchored — drag inside to reposition, Q / E to rotate, click outside to confirm, Esc to cancel.')
-        renderCanvas()
+      // While dragging a section, also engage a full placement preview so
+      // the user sees the section's pixels + rotation badge + edge hints
+      // exactly like a click-to-place flow.  The section is centred on
+      // the cursor (rather than top-left anchored) — matches what
+      // setDragImage does for the drag ghost.
+      if (state.dragging.type === 'section' && state.selected?.type === 'section') {
+        if (!state.placement || state.placement.sectionPath !== state.selected.path) {
+          state.placement = {
+            sectionPath: state.selected.path,
+            origW: state.selected.tileW,
+            origH: state.selected.tileH,
+            rotation: state.selected.rotation || 0,
+            tx, ty,
+          }
+        }
+        const anchor = placementAnchor(tx, ty, state.placement)
+        if (state.placement.tx !== anchor.tx || state.placement.ty !== anchor.ty) {
+          state.placement.tx = anchor.tx
+          state.placement.ty = anchor.ty
+          tryAutoRotatePlacement(state.placement)
+          dirty = true
+        }
       }
-    } else if (wasFeature && state.selected?.type === 'feature') {
-      // Features remain a one-shot drop — they have no anchored state
-      // and the user can re-drag them in Place Features mode after.
-      const { ax, ay } = pickFeatureAttrCell(e, state.selected)
-      if (ax >= 0 && ax < state.tileW * 2 && ay >= 0 && ay < state.tileH * 2) {
+      if (dirty) renderCanvas()
+    }, sig)
+    canvas.addEventListener('dragleave', () => {
+      state.dropPreview = null
+      renderCanvas()
+    }, sig)
+    canvas.addEventListener('drop', (e) => {
+      if (!state.dragging) return
+      e.preventDefault()
+      state.dropPreview = null
+      paintedDuringStroke = false
+      const wasFeature = state.dragging.type === 'feature'
+      if (state.dragging.type === 'section' && state.placement) {
+        // Anchor the section at the drop point instead of immediately
+        // overwriting the tiles underneath — the user can then drag /
+        // rotate it and only commit on the next click outside the
+        // footprint (or Esc to cancel).  This way the original tiles at
+        // the drop point are preserved until the user is happy.
+        const { tx: cx, ty: cy } = pickCell(e)
+        if (cx >= 0 && cx < state.tileW && cy >= 0 && cy < state.tileH) {
+          // Force Paint mode so the anchored placement is interactive
+          // regardless of what mode the drag started from (e.g., View).
+          if (state.mode !== 'paint') setMode('paint')
+          const anchor = placementAnchor(cx, cy, state.placement)
+          state.placement.tx = anchor.tx
+          state.placement.ty = anchor.ty
+          state.placement.anchored = true
+          setStatus('Section anchored — drag inside to reposition, Q / E to rotate, click outside to confirm, Esc to cancel.')
+          renderCanvas()
+        }
+      } else if (wasFeature && state.selected?.type === 'feature') {
+        // Features remain a one-shot drop — they have no anchored state
+        // and the user can re-drag them in Place Features mode after.
+        const { ax, ay } = pickFeatureAttrCell(e, state.selected)
+        if (ax >= 0 && ax < state.tileW * 2 && ay >= 0 && ay < state.tileH * 2) {
+          beginTransaction()
+          placeFeature(ax, ay)
+          commitTransaction('Place feature')
+          paintedDuringStroke = true
+        }
+      } else {
         beginTransaction()
-        placeFeature(ax, ay)
-        commitTransaction('Place feature')
-        paintedDuringStroke = true
+        handlePaint(e)
+        commitTransaction('Place')
       }
-    } else {
-      beginTransaction()
-      handlePaint(e)
-      commitTransaction('Place')
-    }
-    state.dragging = null
-    if (wasFeature && state.selected?.type === 'feature') {
-      showPlacementHint(`Placing ${state.selected.name}`, 'feature')
-    } else if (!wasFeature) {
-      // Keep the section placement hint visible so the user knows
-      // they're now in the anchored / movable state.
-      // (showPlacementHint was already called by beginSectionDrag.)
-    }
-    paintedDuringStroke = false
-  })
+      state.dragging = null
+      if (wasFeature && state.selected?.type === 'feature') {
+        showPlacementHint(`Placing ${state.selected.name}`, 'feature')
+      } else if (!wasFeature) {
+        // Keep the section placement hint visible so the user knows
+        // they're now in the anchored / movable state.
+        // (showPlacementHint was already called by beginSectionDrag.)
+      }
+      paintedDuringStroke = false
+    }, sig)
+  }
+}
 
+// recreateEditorView tears down any previously-mounted EditorView and
+// mounts a fresh one.  Called from finishEditorBoot (on every map open
+// or new) and applyResize so no DOM nodes, event listeners, or GL
+// state from the previous map survive the switch.
+function recreateEditorView() {
+  if (editorView) editorView.destroy()
+  editorView = new EditorView()
+  editorView.mount()
+}
+
+// wireZoomButtons binds the three Zoom ribbon buttons.  Lives outside
+// EditorView because the buttons sit in the toolbar (which is mounted
+// once for the session) rather than the canvas stack.
+function wireZoomButtons() {
   $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * 1.25))
   $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / 1.25))
   $('#zoom-fit').addEventListener('click', fitZoom)
@@ -4636,6 +4735,33 @@ function updateFeatureInfoPanel() {
 // don't benefit from the GL rewrite.
 
 const gl = { ctx: null, prog: null, posLoc: -1, uvLoc: -1, texLoc: -1, projLoc: -1, vbo: null, textures: new Map(), failed: false }
+
+// resetGL drops the WebGL context, textures, and program references so
+// the next ensureGLRenderer() call rebuilds everything against the
+// freshly-mounted #canvas-gl element.  EditorView.destroy() calls this
+// before removing the canvas from the DOM.
+function resetGL() {
+  if (gl.ctx) {
+    try {
+      for (const t of gl.textures.values()) if (t && t.tex) gl.ctx.deleteTexture(t.tex)
+      if (gl.vbo) gl.ctx.deleteBuffer(gl.vbo)
+      if (gl.prog) gl.ctx.deleteProgram(gl.prog)
+      gl.ctx.getExtension('WEBGL_lose_context')?.loseContext()
+    } catch { /* the context may already be lost */ }
+  }
+  gl.textures.clear()
+  gl.ctx = null
+  gl.prog = null
+  gl.vbo = null
+  gl.posLoc = -1
+  gl.uvLoc = -1
+  gl.texLoc = -1
+  gl.projLoc = -1
+  // Clear `failed` so a fresh GL context gets a real attempt — the
+  // previous failure could have been transient (e.g. a lost context
+  // during a map switch).
+  gl.failed = false
+}
 
 // ensureGLRenderer is called from renderCanvas; returns true when the
 // WebGL context is live and ready to draw.  Returns false (and only
@@ -7990,10 +8116,11 @@ function applyResize() {
   commitTransaction('Resize map')
 
   closeResizeDialog()
-  // renderCanvas resizes both #canvas and #canvas-gl from state.tileW/H —
-  // touching canvas.width directly here used to short-circuit that path
-  // and leave the GL backing buffer at the old size, which is why the
-  // tile layer panned around with garbage after a resize.
+  // Recreate the canvas DOM + GL context at the new dimensions.  The
+  // previous map-switch bug class came from re-using the existing
+  // canvas elements at a different size; tearing them out and mounting
+  // fresh ones guarantees no stale backing buffers survive.
+  recreateEditorView()
   renderCanvas()
   setStatus(`Resized to ${newW}×${newH}.  Existing content anchored to (${offsetX}, ${offsetY}).`)
 }

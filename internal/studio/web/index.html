@@ -648,10 +648,9 @@
         <span id="hover-cell" class="muted">—</span>
       </div>
       <div class="canvas-scroll" id="canvas-scroll">
-        <div class="canvas-stack" id="canvas-stack">
-          <canvas id="canvas-gl"></canvas>
-          <canvas id="canvas"></canvas>
-        </div>
+        <!-- canvas-stack starts empty; EditorView.mount() creates the
+             #canvas-gl + #canvas elements on every map open/resize. -->
+        <div class="canvas-stack" id="canvas-stack"></div>
         <div class="rotation-badge hidden" id="rotation-badge">
           <div class="rb-title"><span class="rb-arrow">↻</span> <span id="rb-angle">0°</span><span id="rb-flip"></span></div>
           <div class="rb-sub">Q / E rotate · F / G flip</div>
