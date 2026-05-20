@@ -5368,77 +5368,73 @@ function drawTerrainEdgeHints(ctx, c) {
   }
 }
 
-// drawGridlines paints the optional gridline overlay.  Two design goals:
-//   1. Lines stay AT LEAST 1 CSS pixel wide at every zoom level so they
-//      never alias out — the canvas is rendered in map-pixel space and
-//      CSS-scaled by state.zoom, so a 1-game-pixel line becomes only
-//      `zoom` CSS pixels.  When zoom < 1 that's sub-pixel and gets
-//      averaged into nothing by the browser, which made the grid
-//      "flicker in/out" as the user zoomed.  Game-pixel width is set
-//      from `ceil(targetCssWidth / zoom)` so the rendered stroke is
-//      always at least the target.
-//   2. Density is chosen from the number of *visible tiles per
-//      viewport*, not raw zoom — at low zoom showing 40+ tiles across,
-//      drawing a line per tile is just noise, so we step up to every
-//      4 or 8 tiles.  Major lines every 8 tiles are always drawn so
-//      the user always has a 32-game-pixel reference.
+// drawGridlines paints the optional gridline overlay.  Density is
+// chosen from zoom directly (user-specified bands), and at each band
+// we render the chosen step (the "main" grid, lighter) plus the
+// next-larger step (bolder) so the user always has a wider reference.
+//
+// Bands (tile spacing for the main grid):
+//   zoom >= 1.50 → 1×1   (with 4×4 reference)
+//   zoom >= 1.00 → 4×4   (with 8×8 reference)
+//   zoom >= 0.50 → 8×8   (with 16×16)
+//   zoom >= 0.25 → 16×16 (with 32×32)
+//   zoom >= 0.12 → 32×32 (with 64×64)
+//   zoom >= 0.05 → 64×64 (no larger reference)
+//   zoom <  0.05 → off
+const GRIDLINE_BANDS = [
+  { zoom: 1.50, main: 1 },
+  { zoom: 1.00, main: 4 },
+  { zoom: 0.50, main: 8 },
+  { zoom: 0.25, main: 16 },
+  { zoom: 0.12, main: 32 },
+  { zoom: 0.05, main: 64 },
+]
+
 function drawGridlines(ctx, canvas) {
   const z = state.zoom || 1
-  const wrap = $('#canvas-scroll')
-  const viewportCssWidth = wrap ? wrap.clientWidth : canvas.width * z
-  // Tiles visible across the current viewport (clamped so single-tile
-  // viewports still pick a sensible step).
-  const tilesAcross = Math.max(1, viewportCssWidth / (TILE_PX * z))
-  let minorStep
-  if (tilesAcross <= 12) minorStep = 1
-  else if (tilesAcross <= 24) minorStep = 2
-  else if (tilesAcross <= 48) minorStep = 4
-  else minorStep = 8
-  const majorStep = 8
-  // Render at fixed CSS-pixel widths regardless of zoom so the lines
-  // don't fade at low zoom or balloon at high zoom.
-  const minorWidth = Math.max(1, Math.ceil(1 / z))
-  const majorWidth = Math.max(1, Math.ceil(2 / z))
+  let bandIdx = -1
+  for (let i = 0; i < GRIDLINE_BANDS.length; i++) {
+    if (z >= GRIDLINE_BANDS[i].zoom) { bandIdx = i; break }
+  }
+  if (bandIdx < 0) return
+  const mainStep = GRIDLINE_BANDS[bandIdx].main
+  // The "next larger" reference is the entry with a smaller zoom
+  // threshold = wider tile spacing, i.e. the entry AFTER bandIdx.
+  const refStep = bandIdx + 1 < GRIDLINE_BANDS.length ? GRIDLINE_BANDS[bandIdx + 1].main : null
+  // Stroke widths in game-pixels — we want stable CSS widths regardless
+  // of zoom so they don't fade at low zoom or balloon at high zoom.
+  const mainWidth = Math.max(1, Math.ceil(1 / z))
+  const refWidth = Math.max(2, Math.ceil(2 / z))
 
   ctx.save()
   ctx.lineCap = 'butt'
 
-  if (minorStep < majorStep) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
-    ctx.lineWidth = minorWidth
-    for (let x = 0; x <= state.tileW; x += minorStep) {
-      if (x % majorStep === 0) continue
-      const xp = x * TILE_PX
-      ctx.beginPath()
-      ctx.moveTo(xp, 0)
-      ctx.lineTo(xp, canvas.height)
-      ctx.stroke()
-    }
-    for (let y = 0; y <= state.tileH; y += minorStep) {
-      if (y % majorStep === 0) continue
-      const yp = y * TILE_PX
-      ctx.beginPath()
-      ctx.moveTo(0, yp)
-      ctx.lineTo(canvas.width, yp)
-      ctx.stroke()
-    }
+  // Main (lighter) — skip lines that coincide with the reference grid
+  // so the bolder strokes don't get washed out by the thinner overlay.
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+  ctx.lineWidth = mainWidth
+  for (let x = 0; x <= state.tileW; x += mainStep) {
+    if (refStep && x % refStep === 0) continue
+    const xp = x * TILE_PX
+    ctx.beginPath(); ctx.moveTo(xp, 0); ctx.lineTo(xp, canvas.height); ctx.stroke()
+  }
+  for (let y = 0; y <= state.tileH; y += mainStep) {
+    if (refStep && y % refStep === 0) continue
+    const yp = y * TILE_PX
+    ctx.beginPath(); ctx.moveTo(0, yp); ctx.lineTo(canvas.width, yp); ctx.stroke()
   }
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
-  ctx.lineWidth = majorWidth
-  for (let x = 0; x <= state.tileW; x += majorStep) {
-    const xp = x * TILE_PX
-    ctx.beginPath()
-    ctx.moveTo(xp, 0)
-    ctx.lineTo(xp, canvas.height)
-    ctx.stroke()
-  }
-  for (let y = 0; y <= state.tileH; y += majorStep) {
-    const yp = y * TILE_PX
-    ctx.beginPath()
-    ctx.moveTo(0, yp)
-    ctx.lineTo(canvas.width, yp)
-    ctx.stroke()
+  if (refStep) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)'
+    ctx.lineWidth = refWidth
+    for (let x = 0; x <= state.tileW; x += refStep) {
+      const xp = x * TILE_PX
+      ctx.beginPath(); ctx.moveTo(xp, 0); ctx.lineTo(xp, canvas.height); ctx.stroke()
+    }
+    for (let y = 0; y <= state.tileH; y += refStep) {
+      const yp = y * TILE_PX
+      ctx.beginPath(); ctx.moveTo(0, yp); ctx.lineTo(canvas.width, yp); ctx.stroke()
+    }
   }
   ctx.restore()
 }
