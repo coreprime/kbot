@@ -734,12 +734,29 @@ kbd {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: stretch;
-  padding: 6px 8px;
+  /* Right-pad to reserve room for the pinned Help section so other
+     ribbon items don't slide underneath it on wider screens. */
+  padding: 6px 96px 6px 8px;
   gap: 8px;
   /* overflow stays visible so the Map section's hover popup can escape
-     vertically.  The compact-only toolbar layout means we don't need
-     horizontal scrolling at common widths. */
+     vertically.  Position: relative anchors the pinned Help section. */
   overflow: visible;
+  position: relative;
+}
+/* Pinned ribbon section — always visible at the far right of the
+   toolbar regardless of the flex flow.  Used by Help so a narrow
+   viewport never hides it.  Sits above any other section that might
+   overlap via z-index. */
+.ribbon-section-pinned {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  bottom: 6px;
+  z-index: 5;
+  /* Same vertical layout as a normal ribbon-section so the label sits
+     above the button. */
+  display: flex;
+  flex-direction: column;
 }
 .ribbon-section {
   display: flex;
