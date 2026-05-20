@@ -947,6 +947,42 @@ kbd {
 
 .ribbon-section-right { margin-left: auto; }
 
+/* Settings dialog — same auto-fit grid style as Help, but each section
+   stacks form controls instead of a dl of shortcuts. */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px 24px;
+  margin: 4px 0 12px;
+  overflow-y: auto;
+}
+.settings-section h2 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.settings-section .field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.settings-section .field > span { font-size: 12px; color: var(--text); }
+.settings-section .field input[type="number"] {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--text);
+  font: inherit;
+}
+.settings-section .field-help { font-size: 11px; color: var(--muted); margin: 0 0 8px; }
+.settings-section .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
 /* Help / keyboard cheat-sheet — two-column responsive grid of
    <section> blocks, each with its own dl of <kbd>shortcut</kbd> +
    description.  Single column on narrow viewports. */

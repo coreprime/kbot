@@ -188,6 +188,17 @@ const sessionState = {
   hmStrength: 4,
   voidsBrushSize: 1,
   symmetry: 'off',
+  // Centralised user-tunable settings.  Surfaced in the Settings
+  // dialog; persisted via PrefsStore alongside the visibility toggles.
+  settings: {
+    zoomStep: 1.25,
+    heartbeatIdleMs: 5000,
+    heartbeatReconnectMs: 1000,
+    defaultEraseSize: 1,
+    defaultVoidsSize: 1,
+    defaultHmRadius: 4,
+    defaultHmStrength: 4,
+  },
 }
 
 // `state` Proxy: per-map fields forward to activeMap(); everything else
@@ -384,7 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
-  'viewMode', 'panelLayout']
+  'viewMode', 'panelLayout', 'settings']
 
 // createPrefsStore returns a {load, save} interface backed by a Web
 // Storage implementation (defaults to window.localStorage).  The
@@ -788,13 +799,11 @@ function pickMapByName(entries, wanted) {
 // swallows clicks so the user doesn't try to edit against a dead
 // backend.  Subsequent successful pings dismiss both immediately.
 
-// Two cadences: idle polls every 5s when everything's fine, but the
-// moment we detect a drop we switch to 1s retries (#44) so the
+// Two cadences: idle polls slowly when everything's fine, then the
+// moment we detect a drop switch to a faster retry rate so the
 // reconnect feels snappy and the user knows the page is actively
-// trying.  Single setTimeout chain rather than setInterval so each
-// tick can pick its own next delay.
-const HEARTBEAT_INTERVAL_MS = 5000
-const HEARTBEAT_RECONNECT_MS = 1000
+// trying.  Both cadences come from settings (Settings dialog) so the
+// user can tune them; the defaults match the original constants.
 const HEARTBEAT_TIMEOUT_OK_MS = 4000
 const HEARTBEAT_TIMEOUT_RETRY_MS = 1500
 const DISCONNECT_THRESHOLD = 2 // consecutive failures before showing "disconnected"
@@ -815,7 +824,9 @@ function startServerHeartbeat() {
 
 function scheduleNextHeartbeat() {
   if (heartbeatTimer) clearTimeout(heartbeatTimer)
-  const delay = heartbeatState === 'disconnected' ? HEARTBEAT_RECONNECT_MS : HEARTBEAT_INTERVAL_MS
+  const idle = state.settings?.heartbeatIdleMs ?? 5000
+  const retry = state.settings?.heartbeatReconnectMs ?? 1000
+  const delay = heartbeatState === 'disconnected' ? retry : idle
   heartbeatTimer = setTimeout(pingHeartbeat, delay)
 }
 
@@ -2010,6 +2021,8 @@ function wireKeyboard() {
       if (dev && !dev.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeDeveloperDialog(); return }
       const help = $('#help-dialog')
       if (help && !help.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeHelpDialog(); return }
+      const settings = $('#settings-dialog')
+      if (settings && !settings.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeSettingsDialog(); return }
     }
     // `?` (shift+/) opens the help cheat-sheet from anywhere outside
     // a text input.  Symbol comparison handles both US and non-US
@@ -3460,8 +3473,8 @@ function recreateEditorView() {
 // EditorView because the buttons sit in the toolbar (which is mounted
 // once for the session) rather than the canvas stack.
 function wireZoomButtons() {
-  $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * 1.25))
-  $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / 1.25))
+  $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)))
+  $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)))
   $('#zoom-fit').addEventListener('click', fitZoom)
 }
 
@@ -7881,6 +7894,10 @@ function wireDeveloperDialog() {
   $('#dev-dialog-close')?.addEventListener('click', closeDeveloperDialog)
   $('#btn-help')?.addEventListener('click', openHelpDialog)
   $('#help-close')?.addEventListener('click', closeHelpDialog)
+  $('#btn-settings')?.addEventListener('click', openSettingsDialog)
+  $('#settings-cancel')?.addEventListener('click', closeSettingsDialog)
+  $('#settings-apply')?.addEventListener('click', applySettingsDialog)
+  $('#settings-reset')?.addEventListener('click', resetSettingsDialog)
   $$('#developer-dialog .dev-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const key = tab.dataset.devTab
@@ -7914,6 +7931,91 @@ function openHelpDialog() {
 
 function closeHelpDialog() {
   $('#help-dialog')?.classList.add('hidden')
+}
+
+// ── Settings dialog ────────────────────────────────────────────────
+//
+// state.settings is the canonical source of truth, persisted via the
+// PrefsStore alongside the visibility toggles.  Opening the dialog
+// populates the form controls from current values; Apply pushes them
+// back and re-renders affected UI.  Reset restores the shipped
+// defaults defined in the sessionState declaration.
+
+const DEFAULT_SETTINGS = {
+  zoomStep: 1.25,
+  heartbeatIdleMs: 5000,
+  heartbeatReconnectMs: 1000,
+  defaultEraseSize: 1,
+  defaultVoidsSize: 1,
+  defaultHmRadius: 4,
+  defaultHmStrength: 4,
+}
+
+function openSettingsDialog() {
+  const dlg = $('#settings-dialog')
+  if (!dlg) return
+  const s = state.settings || DEFAULT_SETTINGS
+  $('#set-zoom-step').value = s.zoomStep ?? 1.25
+  $('#set-erase-size').value = s.defaultEraseSize ?? 1
+  $('#set-voids-size').value = s.defaultVoidsSize ?? 1
+  $('#set-hm-radius').value = s.defaultHmRadius ?? 4
+  $('#set-hm-strength').value = s.defaultHmStrength ?? 4
+  $('#set-hb-idle').value = s.heartbeatIdleMs ?? 5000
+  $('#set-hb-retry').value = s.heartbeatReconnectMs ?? 1000
+  // Visibility defaults read from the live state booleans (they're
+  // the same flags the View menu toggles).
+  $('#set-show-minimap').checked = !!state.showMinimap
+  $('#set-show-camera-info').checked = !!state.showCameraInfo
+  $('#set-show-gridlines').checked = !!state.showGridlines
+  $('#set-animate-features').checked = !!state.animateFeatures
+  $('#set-show-voids').checked = !!state.showVoids
+  $('#set-show-contours').checked = !!state.showContours
+  $('#set-show-features').checked = !!state.showFeatures
+  $('#set-show-startpos').checked = !!state.showStartPositions
+  dlg.classList.remove('hidden')
+  $('#set-zoom-step').focus()
+}
+
+function closeSettingsDialog() {
+  $('#settings-dialog')?.classList.add('hidden')
+}
+
+function applySettingsDialog() {
+  const num = (id, fb) => {
+    const v = parseFloat($(id).value)
+    return Number.isFinite(v) ? v : fb
+  }
+  const s = { ...DEFAULT_SETTINGS, ...(state.settings || {}) }
+  s.zoomStep = clamp(num('#set-zoom-step', 1.25), 1.05, 2)
+  s.defaultEraseSize = clamp(Math.round(num('#set-erase-size', 1)), 1, 16)
+  s.defaultVoidsSize = clamp(Math.round(num('#set-voids-size', 1)), 1, 32)
+  s.defaultHmRadius = clamp(Math.round(num('#set-hm-radius', 4)), 1, 32)
+  s.defaultHmStrength = clamp(Math.round(num('#set-hm-strength', 4)), 1, 32)
+  s.heartbeatIdleMs = clamp(Math.round(num('#set-hb-idle', 5000)), 500, 60000)
+  s.heartbeatReconnectMs = clamp(Math.round(num('#set-hb-retry', 1000)), 200, 10000)
+  state.settings = s
+  // Visibility flags: push through the existing setters so the View
+  // menu rows + canvas re-render in step.
+  setMinimapVisible($('#set-show-minimap').checked)
+  setCameraInfoVisible($('#set-show-camera-info').checked)
+  state.showGridlines = $('#set-show-gridlines').checked
+  state.animateFeatures = $('#set-animate-features').checked
+  state.showVoids = $('#set-show-voids').checked
+  state.showContours = $('#set-show-contours').checked
+  state.showFeatures = $('#set-show-features').checked
+  state.showStartPositions = $('#set-show-startpos').checked
+  syncDomFromPrefs()
+  persistPrefs()
+  renderCanvas()
+  closeSettingsDialog()
+  setStatus('Settings applied and saved.')
+}
+
+function resetSettingsDialog() {
+  state.settings = { ...DEFAULT_SETTINGS }
+  // Re-open so the form repaints with the defaults — saves the user
+  // a second click to verify what changed.
+  openSettingsDialog()
 }
 
 // renderDevTilesGrid paints a thumbnail per distinct tile + occurrence

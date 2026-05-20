@@ -138,6 +138,97 @@
     </div>
   </div>
 
+  <!-- Settings — centralised tunables that persist via PrefsStore.  All
+       values live on state.settings; the dialog pushes edits back and
+       saves on Apply.  Reset restores the shipped defaults. -->
+  <div id="settings-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Settings</h1>
+      <p class="dialog-sub">User preferences — saved automatically and remembered across sessions.</p>
+      <div class="settings-grid">
+        <section class="settings-section">
+          <h2>Zoom</h2>
+          <label class="field">
+            <span>Zoom step (per +/− press)</span>
+            <input type="number" id="set-zoom-step" min="1.05" max="2" step="0.05" />
+          </label>
+          <p class="field-help">Each click of the Zoom + or − button multiplies / divides the zoom by this factor.  Default 1.25.</p>
+        </section>
+        <section class="settings-section">
+          <h2>Brush defaults</h2>
+          <label class="field">
+            <span>Erase brush size (tiles)</span>
+            <input type="number" id="set-erase-size" min="1" max="16" step="1" />
+          </label>
+          <label class="field">
+            <span>Voids brush size (attr cells)</span>
+            <input type="number" id="set-voids-size" min="1" max="32" step="1" />
+          </label>
+          <label class="field">
+            <span>Heightmap brush radius (attr cells)</span>
+            <input type="number" id="set-hm-radius" min="1" max="32" step="1" />
+          </label>
+          <label class="field">
+            <span>Heightmap brush strength</span>
+            <input type="number" id="set-hm-strength" min="1" max="32" step="1" />
+          </label>
+        </section>
+        <section class="settings-section">
+          <h2>Heartbeat</h2>
+          <label class="field">
+            <span>Idle poll interval (ms)</span>
+            <input type="number" id="set-hb-idle" min="500" max="60000" step="500" />
+          </label>
+          <label class="field">
+            <span>Reconnect retry interval (ms)</span>
+            <input type="number" id="set-hb-retry" min="200" max="10000" step="100" />
+          </label>
+          <p class="field-help">Once the studio loses contact with the kbot server, it polls more aggressively.  Both intervals take effect on the next tick.</p>
+        </section>
+        <section class="settings-section">
+          <h2>Panel visibility defaults</h2>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-minimap" />
+            <span>Minimap</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-camera-info" />
+            <span>Camera &amp; Cursor</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-gridlines" />
+            <span>Gridlines</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-animate-features" />
+            <span>Animate features</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-voids" />
+            <span>Show voids overlay</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-contours" />
+            <span>Show contour lines</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-features" />
+            <span>Show features</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="set-show-startpos" />
+            <span>Show start positions</span>
+          </label>
+        </section>
+      </div>
+      <div class="dialog-actions">
+        <button id="settings-reset" class="btn" title="Restore shipped defaults">Reset to defaults</button>
+        <button id="settings-cancel" class="btn">Cancel</button>
+        <button id="settings-apply" class="btn primary">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Help / keyboard cheat-sheet.  Opens on ? or via the Help ribbon
        button; Escape (or clicking Close) dismisses. -->
   <div id="help-dialog" class="dialog hidden">
@@ -689,6 +780,19 @@
             <span class="chev-down">▾</span>
           </button>
           <div class="ribbon-dropdown-popup hidden" id="view-dropdown-popup">
+            <div class="menu-section-label">Display mode</div>
+            <div class="inline-row" id="display-mode-group">
+              <button class="menu-row active" data-display="map">
+                <span class="ico">🗺</span><span>Map</span>
+              </button>
+              <button class="menu-row" data-display="heightmap">
+                <span class="ico">⛰</span><span>Height</span>
+              </button>
+              <button class="menu-row" data-display="blended">
+                <span class="ico">🏞</span><span>Blended</span>
+              </button>
+            </div>
+            <div class="menu-section-label">Overlays</div>
             <button class="menu-row toggle-row" id="opt-gridlines" data-on="1">
               <span class="ico">⌗</span><span>Grid</span><span class="menu-check">✓</span>
             </button>
@@ -713,18 +817,6 @@
             <button class="menu-row toggle-row" id="opt-startpoints" data-on="1" title="Show player start positions.  Forced on while Start Points mode is active.">
               <span class="ico">🤖</span><span>Start Points</span><span class="menu-check">✓</span>
             </button>
-            <div class="menu-section-label">Display mode</div>
-            <div class="inline-row" id="display-mode-group">
-              <button class="menu-row active" data-display="map">
-                <span class="ico">🗺</span><span>Map</span>
-              </button>
-              <button class="menu-row" data-display="heightmap">
-                <span class="ico">⛰</span><span>Height</span>
-              </button>
-              <button class="menu-row" data-display="blended">
-                <span class="ico">🏞</span><span>Blended</span>
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -764,6 +856,9 @@
       <div class="ribbon-section ribbon-section-pinned">
         <div class="ribbon-label">Help</div>
         <div class="ribbon-group">
+          <button id="btn-settings" class="tool-btn" title="KBot Studio settings — zoom, brushes, heartbeat, panel defaults">
+            <span class="ico">⚙</span><span class="lbl">Settings</span>
+          </button>
           <button id="btn-help" class="tool-btn" title="Keyboard shortcuts and tips (?)">
             <span class="ico">❓</span><span class="lbl">Help</span>
           </button>
