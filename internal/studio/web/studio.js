@@ -6129,7 +6129,14 @@ function setVoidsVisible(visible) {
   const toggle = $('#opt-voids')
   if (toggle) toggle.dataset.on = visible ? '1' : '0'
   persistPrefs()
-  renderCanvas()
+  // Hiding voids while the user is still in Voids paint mode would
+  // leave them with an invisible tool — drop back to Select so the
+  // editor stays in a coherent state.
+  if (!visible && state.mode === 'voids') {
+    setMode('select-terrain')
+  } else {
+    renderCanvas()
+  }
 }
 
 function applyMinimapPosition() {
