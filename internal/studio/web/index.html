@@ -138,6 +138,81 @@
     </div>
   </div>
 
+  <!-- Help / keyboard cheat-sheet.  Opens on ? or via the Help ribbon
+       button; Escape (or clicking Close) dismisses. -->
+  <div id="help-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Keyboard shortcuts</h1>
+      <p class="dialog-sub">Every hotkey, grouped by what it does.  Most modes can be reached by clicking the Mode menu too.</p>
+      <div class="help-grid" id="help-grid">
+        <section class="help-section">
+          <h2>Modes</h2>
+          <dl>
+            <dt><kbd>T</kbd></dt><dd>Select Terrain — drag a rectangle to pick up tiles</dd>
+            <dt><kbd>P</kbd></dt><dd>Place Tiles (Paint)</dd>
+            <dt><kbd>F</kbd></dt><dd>Place Features — or flip placement horizontally</dd>
+            <dt><kbd>G</kbd></dt><dd>Flip placement vertically (during placement)</dd>
+            <dt><kbd>K</kbd></dt><dd>Feature Select — marquee multi-select</dd>
+            <dt><kbd>S</kbd></dt><dd>Start Points</dd>
+            <dt><kbd>D</kbd></dt><dd>Voids — paint impassable cells</dd>
+            <dt><kbd>H</kbd></dt><dd>Heightmap — sculpt terrain heights</dd>
+            <dt><kbd>B</kbd></dt><dd>Bucket Fill (Shift-click to replace globally)</dd>
+            <dt><kbd>X</kbd></dt><dd>Erase</dd>
+            <dt><kbd>R</kbd></dt><dd>Ruler — click twice to measure</dd>
+          </dl>
+        </section>
+        <section class="help-section">
+          <h2>Placement</h2>
+          <dl>
+            <dt><kbd>Q</kbd></dt><dd>Rotate left</dd>
+            <dt><kbd>E</kbd></dt><dd>Rotate right</dd>
+            <dt><kbd>F</kbd></dt><dd>Flip horizontal</dd>
+            <dt><kbd>G</kbd></dt><dd>Flip vertical</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Cancel placement / clear selection / back to Select</dd>
+            <dt><kbd>Delete</kbd></dt><dd>Remove selected feature(s) or start point</dd>
+          </dl>
+        </section>
+        <section class="help-section">
+          <h2>Edit / clipboard</h2>
+          <dl>
+            <dt><kbd>⌘C</kbd> / <kbd>Ctrl+C</kbd></dt><dd>Copy current Select-Terrain rectangle to system clipboard</dd>
+            <dt><kbd>⌘V</kbd> / <kbd>Ctrl+V</kbd></dt><dd>Paste clipboard rectangle (works across Chrome windows)</dd>
+            <dt><kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd></dt><dd>Undo</dd>
+            <dt><kbd>⌘⇧Z</kbd> / <kbd>Ctrl+Y</kbd></dt><dd>Redo</dd>
+            <dt><kbd>⌘A</kbd> / <kbd>Ctrl+A</kbd></dt><dd>Select all stamped content</dd>
+          </dl>
+        </section>
+        <section class="help-section">
+          <h2>Camera / navigation</h2>
+          <dl>
+            <dt><kbd>Space</kbd> + drag</dt><dd>Pan the map</dd>
+            <dt>Middle-click + drag</dt><dd>Pan</dd>
+            <dt>Scroll</dt><dd>Zoom anchored to the cursor</dd>
+            <dt><kbd>Shift</kbd> + scroll</dt><dd>Pan vertically</dd>
+            <dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Page through drawer items</dd>
+          </dl>
+        </section>
+        <section class="help-section">
+          <h2>View</h2>
+          <dl>
+            <dt><kbd>V</kbd></dt><dd>Toggle Voids overlay</dd>
+            <dt>Mouse wheel zoom</dt><dd>1% – 200%; "Fit" button resets</dd>
+          </dl>
+        </section>
+        <section class="help-section">
+          <h2>Misc</h2>
+          <dl>
+            <dt><kbd>?</kbd></dt><dd>Open this dialog</dd>
+            <dt><kbd>Esc</kbd></dt><dd>Close any open dialog</dd>
+          </dl>
+        </section>
+      </div>
+      <div class="dialog-actions">
+        <button id="help-close" class="btn primary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Unsaved-changes warning when closing a tab with pending edits.
        Three outcomes: save (then close), discard (close anyway), or
        cancel (Escape / cancel button — leaves the tab open). -->
@@ -684,6 +759,14 @@
               <span class="ico">🔬</span><span class="lbl">Developer</span>
             </button>
           </div>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Help</div>
+        <div class="ribbon-group">
+          <button id="btn-help" class="tool-btn" title="Keyboard shortcuts and tips (?)">
+            <span class="ico">❓</span><span class="lbl">Help</span>
+          </button>
         </div>
       </div>
     </div>

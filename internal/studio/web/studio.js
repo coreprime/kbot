@@ -2008,6 +2008,16 @@ function wireKeyboard() {
       if (resize && !resize.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeResizeDialog(); return }
       const dev = $('#developer-dialog')
       if (dev && !dev.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeDeveloperDialog(); return }
+      const help = $('#help-dialog')
+      if (help && !help.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeHelpDialog(); return }
+    }
+    // `?` (shift+/) opens the help cheat-sheet from anywhere outside
+    // a text input.  Symbol comparison handles both US and non-US
+    // layouts where Shift+/ produces different keys.
+    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault()
+      openHelpDialog()
+      return
     }
     if (e.key === ' ' && !spacePanHotkey) {
       spacePanHotkey = true
@@ -7869,6 +7879,8 @@ function applyPanelLayout() {
 function wireDeveloperDialog() {
   $('#btn-developer')?.addEventListener('click', openDeveloperDialog)
   $('#dev-dialog-close')?.addEventListener('click', closeDeveloperDialog)
+  $('#btn-help')?.addEventListener('click', openHelpDialog)
+  $('#help-close')?.addEventListener('click', closeHelpDialog)
   $$('#developer-dialog .dev-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const key = tab.dataset.devTab
@@ -7890,6 +7902,18 @@ function openDeveloperDialog() {
 
 function closeDeveloperDialog() {
   $('#developer-dialog')?.classList.add('hidden')
+}
+
+function openHelpDialog() {
+  const dlg = $('#help-dialog')
+  if (!dlg) return
+  dlg.classList.remove('hidden')
+  // Focus the Close button so Enter / Space dismiss matches Escape.
+  $('#help-close')?.focus()
+}
+
+function closeHelpDialog() {
+  $('#help-dialog')?.classList.add('hidden')
 }
 
 // renderDevTilesGrid paints a thumbnail per distinct tile + occurrence
