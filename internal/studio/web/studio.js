@@ -126,6 +126,10 @@ class MapDoc {
     this.voidsCursor = null
     this.hmLevelHeight = 80
     this.drawerFilters = { sections: '', features: '' }
+    // dirty flips to true on every commitTransaction and resets after a
+    // successful Save / Save-loose.  Closing a dirty tab triggers the
+    // unsaved-changes prompt (#40).
+    this.dirty = false
     // Snapshotted module-level lets — see snapshot/restore helpers.
     this.undoStack = []
     this.redoStack = []
@@ -523,8 +527,60 @@ function abortTransientGestureState() {
   pickerDragStart = null
 }
 
-function closeTab(idx) {
+// unsavedChangesDialog asks the user how to proceed when closing a tab
+// with pending edits.  Resolves to 'save' / 'discard' / 'cancel'.
+// Escape resolves 'cancel' (so the close is aborted).  Matches the
+// confirmDialog plumbing pattern.
+function unsavedChangesDialog({ mapName } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.querySelector('#unsaved-dialog')
+    const msg = document.querySelector('#unsaved-message')
+    const saveBtn = document.querySelector('#unsaved-save')
+    const discardBtn = document.querySelector('#unsaved-discard')
+    const cancelBtn = document.querySelector('#unsaved-cancel')
+    if (!dlg || !saveBtn || !discardBtn || !cancelBtn) {
+      resolve(window.confirm(`Close ${mapName} without saving?`) ? 'discard' : 'cancel')
+      return
+    }
+    msg.textContent = `"${mapName || 'This map'}" has changes that haven't been saved. What would you like to do?`
+    dlg.classList.remove('hidden')
+    const cleanup = (result) => {
+      dlg.classList.add('hidden')
+      saveBtn.removeEventListener('click', onSave)
+      discardBtn.removeEventListener('click', onDiscard)
+      cancelBtn.removeEventListener('click', onCancel)
+      document.removeEventListener('keydown', onKey, true)
+      resolve(result)
+    }
+    const onSave = () => cleanup('save')
+    const onDiscard = () => cleanup('discard')
+    const onCancel = () => cleanup('cancel')
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup('cancel') }
+    }
+    saveBtn.addEventListener('click', onSave)
+    discardBtn.addEventListener('click', onDiscard)
+    cancelBtn.addEventListener('click', onCancel)
+    document.addEventListener('keydown', onKey, true)
+    saveBtn.focus()
+  })
+}
+
+async function closeTab(idx) {
   if (idx < 0 || idx >= tabs.length) return
+  const tab = tabs[idx]
+  // Prompt before closing a dirty tab.  Move focus to that tab first
+  // so the user can see what they're about to lose AND so a 'Save'
+  // choice operates on this tab's data (save() reads state).
+  if (tab.map.dirty) {
+    if (idx !== activeTabIndex) switchToTab(idx, { force: true })
+    const choice = await unsavedChangesDialog({ mapName: mapDisplayName(tab.map) })
+    if (choice === 'cancel') return
+    if (choice === 'save') {
+      const ok = await save()
+      if (!ok) return // save failed — leave tab open so the user can retry
+    }
+  }
   // If the user is closing the currently-active tab, snapshot in-flight
   // module-let state into a doomed MapDoc anyway so the closing tab's
   // last edit can't taint the next tab's restore.
@@ -2701,6 +2757,11 @@ function commitTransaction(label) {
   while (undoStack.length > UNDO_MAX) undoStack.shift()
   redoStack.length = 0
   updateUndoButtons()
+  // The active tab now diverges from its last saved state; the tab
+  // chip's close button will pop the unsaved-changes prompt.
+  const m = activeMap()
+  if (m) m.dirty = true
+  renderMapTabs()
   // Any committed edit can change the tile data → the cached minimap
   // base needs to be rebuilt on the next render.
   if (typeof invalidateMinimapBase === 'function') invalidateMinimapBase()
@@ -8592,10 +8653,13 @@ async function saveLoose() {
       URL.revokeObjectURL(url)
     } catch (err) {
       setStatus(`Loose save failed (${which}): ${err.message}`)
-      return
+      return false
     }
   }
   setStatus('Saved loose .tnt + .ota.')
+  const m = activeMap()
+  if (m) { m.dirty = false; renderMapTabs() }
+  return true
 }
 
 async function save() {
@@ -8636,8 +8700,12 @@ async function save() {
     a.remove()
     URL.revokeObjectURL(url)
     setStatus(`Saved ${a.download}.`)
+    const m = activeMap()
+    if (m) { m.dirty = false; renderMapTabs() }
+    return true
   } catch (err) {
     setStatus(`Save failed: ${err.message}`)
+    return false
   }
 }
 

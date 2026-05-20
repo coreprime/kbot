@@ -122,6 +122,21 @@
     </div>
   </div>
 
+  <!-- Unsaved-changes warning when closing a tab with pending edits.
+       Three outcomes: save (then close), discard (close anyway), or
+       cancel (Escape / cancel button — leaves the tab open). -->
+  <div id="unsaved-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-narrow">
+      <h1>Unsaved changes</h1>
+      <p class="dialog-sub" id="unsaved-message">This map has changes that haven't been saved yet.</p>
+      <div class="dialog-actions">
+        <button id="unsaved-cancel" class="btn" title="Keep working on this map (Esc)">Cancel</button>
+        <button id="unsaved-discard" class="btn danger" title="Close without saving">Discard</button>
+        <button id="unsaved-save" class="btn primary" title="Save the map then close the tab">Save and close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="ota-dialog" class="dialog hidden">
     <div class="dialog-card dialog-card-wide">
       <h1>Map properties</h1>
