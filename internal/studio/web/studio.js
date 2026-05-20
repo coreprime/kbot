@@ -3955,16 +3955,21 @@ function dropTerrainClipboard() {
   if (!c) return
   const mapAttrW = state.tileW * 2
   const mapAttrH = state.tileH * 2
-  for (let dy = 0; dy < c.h; dy++) {
-    for (let dx = 0; dx < c.w; dx++) {
-      const mx = c.tx + dx, my = c.ty + dy
-      if (mx < 0 || my < 0 || mx >= state.tileW || my >= state.tileH) continue
-      const cell = c.tiles[dy * c.w + dx]
-      if (cell) state.tiles[my * state.tileW + mx] = { ...cell }
-      for (let qy = 0; qy < 2; qy++) {
-        for (let qx = 0; qx < 2; qx++) {
-          const h = c.heights[(dy * 2 + qy) * (c.w * 2) + (dx * 2 + qx)]
-          state.heights[(my * 2 + qy) * mapAttrW + (mx * 2 + qx)] = h
+  // A "paste features only" clipboard intentionally carries no tile or
+  // heightmap data; skip the tile overlay so the existing map under the
+  // dropped rectangle stays intact.  Features still re-attach below.
+  if (!c.skipTiles) {
+    for (let dy = 0; dy < c.h; dy++) {
+      for (let dx = 0; dx < c.w; dx++) {
+        const mx = c.tx + dx, my = c.ty + dy
+        if (mx < 0 || my < 0 || mx >= state.tileW || my >= state.tileH) continue
+        const cell = c.tiles[dy * c.w + dx]
+        if (cell) state.tiles[my * state.tileW + mx] = { ...cell }
+        for (let qy = 0; qy < 2; qy++) {
+          for (let qx = 0; qx < 2; qx++) {
+            const h = c.heights[(dy * 2 + qy) * (c.w * 2) + (dx * 2 + qx)]
+            state.heights[(my * 2 + qy) * mapAttrW + (mx * 2 + qx)] = h
+          }
         }
       }
     }
@@ -4057,7 +4062,13 @@ async function copyToClipboard() {
   }
 }
 
-async function pasteFromClipboard() {
+// pasteFromClipboard stages the clipboard payload as a terrainClipboard
+// the user can position then drop.  `mode` filters what comes along:
+//   'all'      — tiles + heights + features (default)
+//   'tiles'    — tiles + heights only; features dropped on the floor
+//   'features' — features only; tiles and heightmap left blank so a
+//                drop overlays the existing map without disturbing it
+async function pasteFromClipboard(mode = 'all') {
   let text
   try { text = await navigator.clipboard.readText() }
   catch (err) { setStatus(`Paste failed: ${err.message || err}`); return }
@@ -4089,16 +4100,27 @@ async function pasteFromClipboard() {
     tx = Math.max(0, Math.floor((state.tileW - w) / 2))
     ty = Math.max(0, Math.floor((state.tileH - h) / 2))
   }
+  const includeTiles = mode === 'all' || mode === 'tiles'
+  const includeFeatures = mode === 'all' || mode === 'features'
   state.terrainClipboard = {
     tx, ty, w, h,
-    tiles: payload.tiles || new Array(w * h).fill(null),
-    heights: payload.heights || new Array(w * 2 * h * 2).fill(80),
-    features: payload.features || [],
+    tiles: includeTiles
+      ? (payload.tiles || new Array(w * h).fill(null))
+      : new Array(w * h).fill(null),
+    heights: includeTiles
+      ? (payload.heights || new Array(w * 2 * h * 2).fill(80))
+      : new Array(w * 2 * h * 2).fill(80),
+    features: includeFeatures ? (payload.features || []) : [],
     rotation: 0,
+    // When pasting tiles-only or features-only, mark the clipboard so
+    // dropTerrainClipboard can skip overlaying the empty layer the user
+    // didn't ask for.
+    skipTiles: !includeTiles,
   }
   if (state.mode !== 'select-terrain') setMode('select-terrain')
-  showPlacementHint(`Pasting ${w}×${h} terrain rectangle`, 'section')
-  setStatus(`Pasted ${w}×${h} terrain.  Drag to move, Q/E to rotate, click outside to drop, Esc to cancel.`)
+  const what = mode === 'tiles' ? 'tiles' : mode === 'features' ? 'features' : 'terrain'
+  showPlacementHint(`Pasting ${w}×${h} ${what} rectangle`, 'section')
+  setStatus(`Pasted ${w}×${h} ${what}.  Drag to move, Q/E to rotate, click outside to drop, Esc to cancel.`)
   renderCanvas()
 }
 
@@ -7573,6 +7595,13 @@ function wireToolbar() {
   wireHistoryFlyout($('#btn-redo'), $('#redo-history-popup'))
   $('#btn-new').addEventListener('click', startNewMapFromEditor)
   $('#btn-open').addEventListener('click', openExistingMapFromEditor)
+  // Edit dropdown clipboard entries — share the same handlers as the
+  // Ctrl+C / Ctrl+V hotkeys so a user who reaches for the menu gets
+  // the same behaviour.
+  $('#btn-copy')?.addEventListener('click', copyToClipboard)
+  $('#btn-paste')?.addEventListener('click', () => pasteFromClipboard('all'))
+  $('#btn-paste-features')?.addEventListener('click', () => pasteFromClipboard('features'))
+  $('#btn-paste-tiles')?.addEventListener('click', () => pasteFromClipboard('tiles'))
   // New Window opens the studio in a fresh tab — the user can run two
   // copies side by side and compare/edit different maps without
   // discarding the current session.
@@ -7607,6 +7636,22 @@ function wireToolbar() {
     })
     for (const row of filePopup.querySelectorAll('.menu-row')) {
       row.addEventListener('click', () => filePopup.classList.add('hidden'))
+    }
+  }
+
+  // Edit dropdown — clipboard operations.  Same toggle pattern as the
+  // File menu; menu rows close on click.
+  const editBtn = $('#edit-dropdown-btn')
+  const editPopup = $('#edit-dropdown-popup')
+  if (editBtn && editPopup) {
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      closeAllRibbonDropdowns(editPopup)
+      positionRibbonPopup(editBtn, editPopup)
+      editPopup.classList.toggle('hidden')
+    })
+    for (const row of editPopup.querySelectorAll('.menu-row')) {
+      row.addEventListener('click', () => editPopup.classList.add('hidden'))
     }
   }
 

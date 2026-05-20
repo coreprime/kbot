@@ -418,6 +418,30 @@
         </div>
       </div>
       <div class="ribbon-section">
+        <div class="ribbon-label">Edit</div>
+        <div class="ribbon-group ribbon-dropdown" id="edit-dropdown">
+          <button class="tool-btn ribbon-dropdown-btn" id="edit-dropdown-btn" title="Clipboard: copy, paste, and paste-special">
+            <span class="ico">📋</span><span class="lbl">Edit</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="edit-dropdown-popup">
+            <button id="btn-copy" class="menu-row" title="Copy the current Select-Terrain rectangle to the clipboard.  Works across KBot Studio tabs / Chrome windows.">
+              <span class="ico">📋</span><span>Copy</span><kbd class="menu-row-hotkey">⌘C</kbd>
+            </button>
+            <button id="btn-paste" class="menu-row" title="Paste a previously-copied rectangle.  Tiles, heightmap cells and any features all come along.">
+              <span class="ico">📌</span><span>Paste</span><kbd class="menu-row-hotkey">⌘V</kbd>
+            </button>
+            <div class="menu-section-label">Paste special</div>
+            <button id="btn-paste-features" class="menu-row" title="Paste only the features from the clipboard rectangle — tiles and heightmap left as-is.">
+              <span class="ico">🌳</span><span>Paste features only</span>
+            </button>
+            <button id="btn-paste-tiles" class="menu-row" title="Paste only the tiles + heightmap from the clipboard rectangle — features dropped on the floor.">
+              <span class="ico">🖌</span><span>Paste tiles only</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section">
         <div class="ribbon-label">Mode</div>
         <div class="ribbon-group ribbon-dropdown" id="mode-dropdown">
           <button class="tool-btn ribbon-dropdown-btn" id="mode-dropdown-btn" title="Editor mode — choose what clicks on the canvas do">
