@@ -2627,16 +2627,31 @@ function pickFeatureAttrCell(e, sel) {
   const fh = (sel && sel.footprintZ) || 1
   const cellPx = TILE_PX / 2 // 16
   const anchorPx = TILE_PX / 4 // 8
-  // Tentative ay from the cursor's plain cell, used only to sample the
-  // height byte for the inverse offset.  Out-of-bounds returns 0 so the
-  // first row/column still works.
   const aw = state.tileW * 2
   const ah = state.tileH * 2
-  const tentativeAx = clamp(Math.floor(cx / cellPx), 0, aw - 1)
-  const tentativeAy = clamp(Math.floor(cy / cellPx), 0, ah - 1)
-  const h = (state.heights && state.heights.length) ? (state.heights[tentativeAy * aw + tentativeAx] | 0) : 0
+  const heights = state.heights
+  const sampleH = (ax, ay) => {
+    if (!heights || !heights.length) return 0
+    if (ax < 0 || ay < 0 || ax >= aw || ay >= ah) return 0
+    return heights[ay * aw + ax] | 0
+  }
   const ax = clamp(Math.floor((cx - fw * anchorPx) / cellPx), 0, aw - 1)
-  const ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
+  // Tentative ay using the cursor cell's height — then iterate so the
+  // height we use to compute ay matches the height at the cell ay
+  // actually lands in.  Without this, releasing a feature near a
+  // slope makes the renderer (which reads state.heights at the final
+  // ax/ay) disagree with the picker (which read state.heights at the
+  // cursor cell), and the feature visibly snaps to a different
+  // position after the drop completes.
+  const cursorAy = clamp(Math.floor(cy / cellPx), 0, ah - 1)
+  let h = sampleH(ax, cursorAy)
+  let ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
+  for (let i = 0; i < 3; i++) {
+    const nextH = sampleH(ax, ay)
+    if (nextH === h) break
+    h = nextH
+    ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
+  }
   return { ax, ay }
 }
 
