@@ -823,7 +823,7 @@ kbd {
    learn the shortcut without leaving the menu.  Hidden at very narrow
    widths so the row doesn't wrap. */
 .ribbon-dropdown-popup .menu-row .menu-row-hotkey {
-  margin-left: auto;
+  margin-left: 8px;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--muted);
@@ -838,7 +838,6 @@ kbd {
   background: rgba(0,0,0,0.25);
   border-color: rgba(255,255,255,0.25);
 }
-.ribbon-dropdown-popup .menu-row.has-sub .menu-row-hotkey { margin-left: 6px; }
 
 /* Ribbon popups need to sit above the floating minimap, dev-stats,
    and the canvas overlay; bump them well over the panel layer. */
