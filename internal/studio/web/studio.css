@@ -489,6 +489,9 @@ kbd {
   margin-top: 4px;
   font-family: var(--mono);
 }
+.anchor-preview.warning {
+  color: #facc15;
+}
 
 /* ── Buttons ───────────────────────────────────────────────────────── */
 .btn {

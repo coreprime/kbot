@@ -7003,13 +7003,42 @@ function closeResizeDialog() {
 function updateResizePreview() {
   const newW = clamp(parseInt($('#resize-w').value, 10) || state.tileW, 16, 256)
   const newH = clamp(parseInt($('#resize-h').value, 10) || state.tileH, 16, 256)
-  const { offsetX, offsetY } = anchorOffsets(state.tileW, state.tileH, newW, newH)
-  const dW = newW - state.tileW
-  const dH = newH - state.tileH
-  const desc = `${state.tileW}×${state.tileH} → ${newW}×${newH}` +
+  const oldW = state.tileW
+  const oldH = state.tileH
+  const { offsetX, offsetY } = anchorOffsets(oldW, oldH, newW, newH)
+  const dW = newW - oldW
+  const dH = newH - oldH
+  // Count tiles and features that would fall outside the new canvas
+  // with the current anchor offset.  Iterates the live grid so it
+  // tracks any in-progress edits accurately.
+  let lostTiles = 0
+  for (let oy = 0; oy < oldH; oy++) {
+    const ny = oy + offsetY
+    for (let ox = 0; ox < oldW; ox++) {
+      if (!state.tiles[oy * oldW + ox]) continue
+      const nx = ox + offsetX
+      if (nx < 0 || ny < 0 || nx >= newW || ny >= newH) lostTiles++
+    }
+  }
+  let lostFeatures = 0
+  const attrOffX = offsetX * 2
+  const attrOffY = offsetY * 2
+  const newAttrW = newW * 2
+  const newAttrH = newH * 2
+  for (const f of state.features) {
+    const nax = f.ax + attrOffX
+    const nay = f.ay + attrOffY
+    if (nax < 0 || nay < 0 || nax >= newAttrW || nay >= newAttrH) lostFeatures++
+  }
+  const lossText = (lostTiles || lostFeatures)
+    ? `  · ⚠ would lose ${lostTiles} tile${lostTiles === 1 ? '' : 's'}, ${lostFeatures} feature${lostFeatures === 1 ? '' : 's'}`
+    : ''
+  const desc = `${oldW}×${oldH} → ${newW}×${newH}` +
     `  (Δ ${dW >= 0 ? '+' : ''}${dW}, ${dH >= 0 ? '+' : ''}${dH})` +
-    `  · existing content placed at (${offsetX}, ${offsetY})`
-  $('#resize-preview').textContent = desc
+    `  · existing content placed at (${offsetX}, ${offsetY})${lossText}`
+  const el = $('#resize-preview')
+  el.textContent = desc
+  el.classList.toggle('warning', !!(lostTiles || lostFeatures))
 }
 
 // anchorOffsets returns the (offsetX, offsetY) in tiles that the existing
