@@ -485,6 +485,9 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 			if ota.MissionName != "" {
 				missionName = ota.MissionName
 			}
+			if ota.SeaLevel == 0 && m.Header.SeaLevel > 0 {
+				ota.SeaLevel = int(m.Header.SeaLevel)
+			}
 		}
 	}
 
@@ -587,6 +590,9 @@ func parseOTA(content string, tileW, tileH int) *otaState {
 		MinWindSpeed:       gh.Int("minwindspeed"),
 		MaxWindSpeed:       gh.Int("maxwindspeed"),
 		Gravity:            gh.Int("gravity"),
+		SeaLevel:           gh.Int("sealevel"),
+		ImpassibleWater:    gh.Int("impassiblewater"),
+		WaterDoesDamage:    gh.Int("waterdoesdamage"),
 	}
 	for _, sec := range gh.Sections() {
 		if !strings.HasPrefix(strings.ToLower(sec.Name()), "schema") {
@@ -1217,6 +1223,9 @@ type otaState struct {
 	MinWindSpeed       int         `json:"minWindSpeed"`
 	MaxWindSpeed       int         `json:"maxWindSpeed"`
 	Gravity            int         `json:"gravity"`
+	SeaLevel           int         `json:"seaLevel"`
+	ImpassibleWater    int         `json:"impassibleWater"`
+	WaterDoesDamage    int         `json:"waterDoesDamage"`
 	Schemas            []otaSchema `json:"schemas"`
 }
 

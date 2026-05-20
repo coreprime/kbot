@@ -104,6 +104,9 @@ function defaultOTAState(mapName, planet, tileW, tileH) {
     minWindSpeed: 200,
     maxWindSpeed: 2500,
     gravity: 112,
+    seaLevel: 63,
+    impassibleWater: 0,
+    waterDoesDamage: 0,
     schemas: [defaultSchema('Default', 'Network 1', tileW, tileH)],
   }
 }
@@ -6274,6 +6277,9 @@ function openOTADialog() {
   $('#ota-max-wind').value = state.ota.maxWindSpeed
   $('#ota-killmul').value = state.ota.killmul
   $('#ota-lava').value = String(state.ota.lavaWorld || 0)
+  $('#ota-sea-level').value = state.ota.seaLevel ?? 63
+  $('#ota-impassible-water').value = String(state.ota.impassibleWater || 0)
+  $('#ota-water-damage').value = String(state.ota.waterDoesDamage || 0)
   $('#ota-dialog').classList.remove('hidden')
 }
 
@@ -6299,6 +6305,9 @@ function applyOTADialog() {
   state.ota.maxWindSpeed = parseInt($('#ota-max-wind').value, 10) || 0
   state.ota.killmul = parseInt($('#ota-killmul').value, 10) || 0
   state.ota.lavaWorld = parseInt($('#ota-lava').value, 10) || 0
+  state.ota.seaLevel = clamp(parseInt($('#ota-sea-level').value, 10) || 0, 0, 255)
+  state.ota.impassibleWater = parseInt($('#ota-impassible-water').value, 10) || 0
+  state.ota.waterDoesDamage = parseInt($('#ota-water-damage').value, 10) || 0
   commitTransaction('Edit map properties')
   // Reflect any name change in the top-bar info pill.
   $('#info-name').textContent = state.ota.missionName
@@ -6669,6 +6678,7 @@ async function save() {
     heights: state.heights,
     voids: state.voids,
     features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
+    seaLevel: state.ota?.seaLevel ?? 0,
     ota: state.ota,
   }
   try {

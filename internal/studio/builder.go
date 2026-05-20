@@ -290,6 +290,9 @@ func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 	minimap := buildMinimap(tileW, tileH, tileMap, tilePool)
 
 	seaLevel := uint32(req.SeaLevel)
+	if seaLevel == 0 && req.OTA != nil {
+		seaLevel = uint32(req.OTA.SeaLevel)
+	}
 
 	m := &tnt.Map{
 		Header: tnt.Header{
@@ -371,6 +374,9 @@ func buildOTA(req saveRequest) string {
 	fmt.Fprintf(&b, "\tminwindspeed=%d;\n", ota.MinWindSpeed)
 	fmt.Fprintf(&b, "\tmaxwindspeed=%d;\n", ota.MaxWindSpeed)
 	fmt.Fprintf(&b, "\tgravity=%d;\n", ota.Gravity)
+	fmt.Fprintf(&b, "\tsealevel=%d;\n", ota.SeaLevel)
+	fmt.Fprintf(&b, "\timpassiblewater=%d;\n", ota.ImpassibleWater)
+	fmt.Fprintf(&b, "\twaterdoesdamage=%d;\n", ota.WaterDoesDamage)
 	fmt.Fprintf(&b, "\tnumplayers=%s;\n", ota.NumPlayers)
 	fmt.Fprintf(&b, "\tsize=%s;\n", ota.Size)
 	fmt.Fprintf(&b, "\tmemory=%s;\n", ota.Memory)
