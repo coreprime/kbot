@@ -23,6 +23,46 @@ const VOID_COLOR = '#1d3045' // colour shown for unstamped cells
 // supports more than 10.
 const MAX_START_POSITIONS = 10
 
+// ── Worlds ─────────────────────────────────────────────────────────────────
+// WORLDS is the single source of truth for the distinct worlds the editor
+// recognises.  One entry per world — Mars and Moon are their own rows
+// rather than being collapsed into "Mars / Desert" or "Moon / Lunar"
+// pairs.  Used to populate the New-map + OTA Properties planet pickers
+// AND to translate "Set as active" clicks on the sections drawer into a
+// state.planet value.
+//   slug:           matches the section drawer's world folder + the
+//                   value stored in state.planet (lowercased).
+//   label:          shown in pickers + drawer pills.
+//   defaultTileset: the canonical value written to the .ota's planet
+//                   field for this world (TA's stock OTAs use these
+//                   display-cased names).
+//   aliases:        additional strings (beyond slug + defaultTileset)
+//                   that should still resolve to this world on read.
+const WORLDS = [
+  { slug: 'greenworld',  label: 'Green',       defaultTileset: 'Green',  aliases: [] },
+  { slug: 'metal',       label: 'Metal',       defaultTileset: 'Metal',  aliases: [] },
+  { slug: 'mars',        label: 'Mars',        defaultTileset: 'Desert', aliases: [] },
+  { slug: 'moon',        label: 'Moon',        defaultTileset: 'Lunar',  aliases: [] },
+  { slug: 'archipelago', label: 'Archipelago', defaultTileset: 'Water',  aliases: [] },
+  { slug: 'lava',        label: 'Lava',        defaultTileset: 'Lava',   aliases: [] },
+  { slug: 'acid',        label: 'Acid',        defaultTileset: 'Acid',   aliases: [] },
+  { slug: 'slate',       label: 'Slate',       defaultTileset: 'Slate',  aliases: [] },
+]
+
+// worldFor resolves a world string (a slug, a default-tileset name, or
+// an alias) to its WORLDS entry.  Returns null when nothing matches.
+// Normalises whitespace/dashes so "Green World" → "greenworld".
+function worldFor(name) {
+  const w = (name || '').toLowerCase().replace(/[\s_-]+/g, '')
+  if (!w) return null
+  for (const t of WORLDS) {
+    if (t.slug === w) return t
+    if (t.defaultTileset.toLowerCase() === w) return t
+    for (const a of t.aliases) if (a.toLowerCase() === w) return t
+  }
+  return null
+}
+
 const state = {
   tileW: 128,
   tileH: 128,
@@ -169,24 +209,22 @@ function defaultStartPositionsForSchema(tileW, tileH) {
   ]
 }
 
-// activeWorldFor maps a planet/tileset slug to the list of section worlds
-// that should be considered "matching".  Plant-named worlds (greenworld,
-// archipelago, etc.) are also matched by their planet aliases.
+// activeWorldsFor resolves a planet/tileset string to the list of
+// section worlds that count as "matching".  state.planet can hold
+// either a slug ("mars") or a default-tileset name ("Desert"); WORLDS
+// covers both so we route through worldFor.
 function activeWorldsFor(planet) {
+  const t = worldFor(planet)
+  if (t) return [t.slug]
   const p = (planet || '').toLowerCase()
-  if (p === 'greenworld' || p === 'green') return ['greenworld']
-  if (p === 'metal') return ['metal']
-  if (p === 'mars' || p === 'desert') return ['mars']
-  if (p === 'moon' || p === 'lunar') return ['moon']
-  if (p === 'archipelago' || p === 'water') return ['archipelago']
-  if (p === 'lava') return ['lava']
   return p ? [p] : []
 }
 
 // featureWorldMatches returns true when a feature's world string should
 // count as part of the active tileset.  Feature TDFs use slightly different
 // world names (e.g. "Green World", "All Worlds") than the section folder
-// layout, so we normalise both sides before comparing.
+// layout, so we normalise both sides before comparing and consult WORLDS
+// for the default-tileset + alias spellings of each active slug.
 function featureWorldMatches(featureWorld, activeWorlds) {
   if (!activeWorlds.length) return true
   const w = (featureWorld || '').toLowerCase().replace(/[\s_-]+/g, '')
@@ -194,10 +232,12 @@ function featureWorldMatches(featureWorld, activeWorlds) {
   for (const a of activeWorlds) {
     const norm = a.toLowerCase().replace(/[\s_-]+/g, '')
     if (w.includes(norm)) return true
-    // "Green World" → "greenworld"; "mars" → "mars"
-    if (norm === 'mars' && w.includes('desert')) return true
-    if (norm === 'moon' && (w.includes('moon') || w.includes('lunar'))) return true
-    if (norm === 'archipelago' && (w.includes('archipelago') || w.includes('water'))) return true
+    const t = worldFor(norm)
+    if (!t) continue
+    if (w.includes(t.defaultTileset.toLowerCase())) return true
+    for (const alias of t.aliases) {
+      if (w.includes(alias.toLowerCase())) return true
+    }
   }
   return false
 }
@@ -233,11 +273,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Paint the dice-face player-count picker so the size dialog is ready
   // to interact with the moment the user opens it.
   renderDiceGrid()
-  // Populate the tileset / planet pickers from the single
-  // TILESET_PLANETS source of truth so adding a new world only
-  // requires one edit.
-  populateTilesetSelect($('#size-planet'), 'slug')
-  populateTilesetSelect($('#ota-planet'), 'ota')
+  // Populate the world / planet pickers from the single WORLDS source
+  // of truth so adding a new world only requires one edit.
+  populateWorldSelect($('#size-planet'), 'slug')
+  populateWorldSelect($('#ota-planet'), 'defaultTileset')
   // Start the server heartbeat as soon as the page is wired — works
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
@@ -799,52 +838,16 @@ const PLAYER_COUNT_NAMES = {
 }
 function playerCountLabel(n) { return PLAYER_COUNT_NAMES[n] || `${n} Players` }
 
-// TILESET_PLANETS is the single source of truth for the worlds the
-// editor knows about and the planet OTA value each one maps to.  Used
-// to populate the New-map + OTA Properties planet pickers AND to
-// translate "Set as active" clicks on the sections drawer into a
-// state.planet value the rest of the editor reads.
-//   slug:    matches the section drawer's world folder name + the
-//            value stored in state.planet (lowercased).
-//   ota:     the value written into the saved .ota's planet field
-//            (TA's stock OTAs use these display-cased names).
-//   label:   shown in pickers + drawer pills.
-//   aliases: alternative OTA strings TA's stock maps use for the
-//            same tileset (read-side compatibility).
-const TILESET_PLANETS = [
-  { slug: 'greenworld',  ota: 'Green',       label: 'Green',       aliases: ['greenworld'] },
-  { slug: 'metal',       ota: 'Metal',       label: 'Metal',       aliases: [] },
-  { slug: 'mars',        ota: 'Desert',      label: 'Mars / Desert', aliases: ['mars'] },
-  { slug: 'moon',        ota: 'Lunar',       label: 'Moon / Lunar',  aliases: ['moon'] },
-  { slug: 'archipelago', ota: 'Water',       label: 'Archipelago / Water', aliases: ['archipelago'] },
-  { slug: 'lava',        ota: 'Lava',        label: 'Lava',        aliases: [] },
-  { slug: 'acid',        ota: 'Acid',        label: 'Acid',        aliases: [] },
-  { slug: 'slate',       ota: 'Slate',       label: 'Slate',       aliases: [] },
-]
-
-// tilesetForWorld resolves a tileset entry from the drawer's world
-// string (slug or a friendly cased variant).  Returns null when no
-// entry matches.
-function tilesetForWorld(world) {
-  const w = (world || '').toLowerCase().replace(/[\s_-]+/g, '')
-  for (const t of TILESET_PLANETS) {
-    if (t.slug === w) return t
-    if (t.ota.toLowerCase() === w) return t
-    for (const a of t.aliases) if (a.toLowerCase() === w) return t
-  }
-  return null
-}
-
-// populateTilesetSelect rewrites a <select>'s options from the
-// TILESET_PLANETS table.  `valueKind` picks whether the option value
-// is the slug (matches state.planet — used by the New-map picker) or
-// the OTA cased string (matches .ota.planet — used by the Properties
-// dialog).  Called once at boot for each picker.
-function populateTilesetSelect(el, valueKind) {
+// populateWorldSelect rewrites a <select>'s options from the WORLDS
+// table.  `valueKind` picks whether the option value is the slug
+// (matches state.planet — used by the New-map picker) or the
+// default-tileset string (matches .ota.planet — used by the
+// Properties dialog).  Called once at boot for each picker.
+function populateWorldSelect(el, valueKind) {
   if (!el) return
-  el.replaceChildren(...TILESET_PLANETS.map((t) => {
+  el.replaceChildren(...WORLDS.map((t) => {
     const opt = document.createElement('option')
-    opt.value = valueKind === 'slug' ? t.slug : t.ota
+    opt.value = valueKind === 'slug' ? t.slug : t.defaultTileset
     opt.textContent = t.label
     return opt
   }))
@@ -1835,16 +1838,16 @@ function renderDrawerWorldGroup(key, worldName, totalItems, activeByDefault) {
   // "Set as active" pill — clicking promotes this world to the map's
   // active tileset (state.planet).  Hides on the world that's already
   // active so the only visible pill is the actionable one.
-  const tileset = tilesetForWorld(worldName)
-  if (tileset && !activeByDefault) {
+  const world = worldFor(worldName)
+  if (world && !activeByDefault) {
     const pill = document.createElement('button')
     pill.className = 'drawer-world-pill'
     pill.type = 'button'
-    pill.title = `Make ${tileset.label} the active tileset for this map`
+    pill.title = `Make ${world.label} the active tileset for this map`
     pill.textContent = 'Set active'
     pill.addEventListener('click', (e) => {
       e.stopPropagation()
-      setActiveTileset(tileset)
+      setActiveWorld(world)
     })
     title.appendChild(pill)
   } else if (activeByDefault) {
@@ -1860,25 +1863,25 @@ function renderDrawerWorldGroup(key, worldName, totalItems, activeByDefault) {
   return groupEl
 }
 
-// setActiveTileset switches the editor's planet/tileset to the
-// supplied entry — re-rendering the drawer (so the chosen world
-// sorts to the top + its pill flips to "Active"), updating any open
-// OTA properties dialog, and committing the change as an undo step
-// so the user can roll back.
-function setActiveTileset(tileset) {
-  if (!tileset) return
-  if (state.planet === tileset.slug) return
+// setActiveWorld switches the editor's planet/tileset to the
+// supplied WORLDS entry — re-rendering the drawer (so the chosen
+// world sorts to the top + its pill flips to "Active"), updating any
+// open OTA properties dialog, and committing the change as an undo
+// step so the user can roll back.
+function setActiveWorld(world) {
+  if (!world) return
+  if (state.planet === world.slug) return
   beginTransaction()
-  state.planet = tileset.slug
-  if (state.ota) state.ota.planet = tileset.ota
-  commitTransaction(`Set tileset to ${tileset.label}`)
+  state.planet = world.slug
+  if (state.ota) state.ota.planet = world.defaultTileset
+  commitTransaction(`Set tileset to ${world.label}`)
   // Reflect in the open OTA dialog if it happens to be on screen.
   const otaSelect = $('#ota-planet')
   if (otaSelect && !$('#ota-dialog')?.classList.contains('hidden')) {
-    otaSelect.value = tileset.ota
+    otaSelect.value = world.defaultTileset
   }
   renderDrawer()
-  setStatus(`Active tileset: ${tileset.label}.`)
+  setStatus(`Active tileset: ${world.label}.`)
 }
 
 // renderSectionGroup builds the DOM for one collapsible group of sections.
