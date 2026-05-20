@@ -1524,6 +1524,27 @@ canvas {
   gap: 8px;
   margin-bottom: 12px;
 }
+/* Camera & Canvas diagnostics tab — read-only two-column table. */
+.dev-diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.dev-diag-table th,
+.dev-diag-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.dev-diag-table th {
+  color: var(--muted);
+  font-weight: normal;
+  white-space: nowrap;
+  width: 220px;
+}
+.dev-diag-table td { color: var(--text); }
+
 .dev-stats-pill {
   display: inline-flex;
   align-items: center;

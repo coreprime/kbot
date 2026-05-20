@@ -90,10 +90,11 @@
       <h1>Developer information</h1>
       <p class="dialog-sub">Live counts and a per-tile breakdown of what's stamped on the map.</p>
       <div class="dev-tabs">
-        <button class="dev-tab active" data-dev-tab="tiles">Distinct Tiles</button>
+        <button class="dev-tab active" data-dev-tab="tiles">Tiles</button>
+        <button class="dev-tab" data-dev-tab="camera">Camera &amp; Canvas</button>
       </div>
       <div class="dev-tab-bodies">
-        <div class="dev-tab-body" data-dev-tab-body="tiles">
+        <div class="dev-tab-body active" data-dev-tab-body="tiles">
           <div class="dev-tiles-summary" id="dev-tiles-summary">
             <span class="dev-stats-pill"><span class="dev-stats-pill-label">Distinct tiles</span><span class="dev-stats-pill-value" id="dev-dlg-distinct-tiles">0</span></span>
             <span class="dev-stats-pill"><span class="dev-stats-pill-label">Sections used</span><span class="dev-stats-pill-value" id="dev-dlg-sections-used">0</span></span>
@@ -101,6 +102,13 @@
             <span class="dev-stats-pill" title="Average tiles per distinct entry — higher = the TNT compresses better"><span class="dev-stats-pill-label">Compress ratio</span><span class="dev-stats-pill-value" id="dev-dlg-compression">1.00×</span></span>
           </div>
           <div class="dev-tiles-grid" id="dev-tiles-grid"></div>
+        </div>
+        <div class="dev-tab-body" data-dev-tab-body="camera">
+          <p class="dialog-sub">Live snapshot of the rendering pipeline.  Useful when diagnosing
+            clipping, scroll-anchor, or canvas-sizing bugs.  Refreshes when the dialog opens.</p>
+          <table class="dev-diag-table" id="dev-diag-table">
+            <tbody></tbody>
+          </table>
         </div>
       </div>
       <div class="dialog-actions">

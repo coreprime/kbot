@@ -6402,7 +6402,54 @@ function refreshDevStats() {
     set('dev-dlg-occupied', `${stats.occupiedTiles} / ${stats.totalTiles}`)
     set('dev-dlg-compression', stats.compressionRatio > 0 ? `${stats.compressionRatio.toFixed(2)}×` : '—')
     renderDevTilesGrid(stats.tileEntries)
+    renderDevDiagnostics()
   }
+}
+
+// renderDevDiagnostics fills the Camera & Canvas tab with live numbers
+// pulled straight from the rendering DOM so the user can see exactly
+// what state the renderer is reading.  Read-only — purely for debugging.
+function renderDevDiagnostics() {
+  const tbody = $('#dev-diag-table tbody')
+  if (!tbody) return
+  const canvas = $('#canvas')
+  const glCanvas = $('#canvas-gl')
+  const wrap = $('#canvas-scroll')
+  const stack = $('#canvas-stack')
+  const num = (v, suffix = '') => (v == null ? '—' : `${v}${suffix}`)
+  const tb = (typeof visibleTileBounds === 'function') ? visibleTileBounds() : null
+  const vp = (typeof visiblePixelBounds === 'function') ? visiblePixelBounds() : null
+  const rows = [
+    ['Mode', state.mode || '—'],
+    ['View mode', state.viewMode || '—'],
+    ['Zoom', `${(state.zoom * 100).toFixed(1)}%  (raw ${state.zoom.toFixed(4)})`],
+    ['Map size (tiles)', `${state.tileW} × ${state.tileH}  (attr ${state.tileW * 2} × ${state.tileH * 2})`],
+    ['Map size (game-px)', `${state.tileW * TILE_PX} × ${state.tileH * TILE_PX}`],
+    ['2D canvas backing buffer', canvas ? `${canvas.width} × ${canvas.height}` : '—'],
+    ['2D canvas CSS size', canvas ? `${parseFloat(canvas.style.width || 0).toFixed(1)} × ${parseFloat(canvas.style.height || 0).toFixed(1)}` : '—'],
+    ['GL canvas backing buffer', glCanvas ? `${glCanvas.width} × ${glCanvas.height}` : '—'],
+    ['GL canvas CSS size', glCanvas ? `${parseFloat(glCanvas.style.width || 0).toFixed(1)} × ${parseFloat(glCanvas.style.height || 0).toFixed(1)}` : '—'],
+    ['Scroll viewport (canvas-scroll)', wrap ? `${wrap.clientWidth} × ${wrap.clientHeight}` : '—'],
+    ['Scroll position', wrap ? `(${wrap.scrollLeft}, ${wrap.scrollTop})` : '—'],
+    ['Stack size (canvas-stack)', stack ? `${parseFloat(stack.style.width || 0).toFixed(0)} × ${parseFloat(stack.style.height || 0).toFixed(0)}` : '—'],
+    ['Overscroll padding', `(${overscrollPadding.x}, ${overscrollPadding.y})`],
+    ['Canvas offset (left, top)', canvas ? `(${parseFloat(canvas.style.left || 0).toFixed(0)}, ${parseFloat(canvas.style.top || 0).toFixed(0)})` : '—'],
+    ['Visible tile bounds', tb ? `tx [${tb.minTx}..${tb.maxTx}]  ty [${tb.minTy}..${tb.maxTy}]` : '—'],
+    ['Visible pixel bounds', vp ? `x [${vp.minX}..${vp.maxX}]  y [${vp.minY}..${vp.maxY}]` : '—'],
+    ['Content version', num(typeof contentVersion === 'number' ? contentVersion : null)],
+    ['Tile / feature counts', `${(state.tiles || []).filter(Boolean).length} tile cells • ${(state.features || []).length} features`],
+    ['Renderer', (typeof ensureGLRenderer === 'function' && ensureGLRenderer()) ? 'WebGL2 (tiles+features)' : '2D fallback'],
+    ['devicePixelRatio', String(window.devicePixelRatio || 1)],
+  ]
+  // Re-build the table contents from scratch — small enough that the
+  // cost is negligible and avoids per-row id juggling.
+  tbody.replaceChildren(...rows.map(([label, value]) => {
+    const tr = document.createElement('tr')
+    const th = document.createElement('th'); th.textContent = label
+    const td = document.createElement('td'); td.textContent = value
+    tr.appendChild(th); tr.appendChild(td)
+    return tr
+  }))
 }
 
 function wireDeveloperPanel() {
