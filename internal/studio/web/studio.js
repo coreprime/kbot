@@ -627,6 +627,12 @@ async function openLoadedMap(data, card) {
       state.voids[i] = data.voids[i] ? 1 : 0
     }
   }
+  // Clear features SYNCHRONOUSLY before the upcoming async features-
+  // catalog fetch.  Otherwise the previous map's features briefly
+  // render against the new map's heights array — and since their ax/ay
+  // coords mean different cells in the new heights grid, they appear
+  // visibly shifted for a few frames until the catalog fetch finishes.
+  state.features = []
   // Features come back as bare { name, ax, ay }; flesh them out with
   // the cataloged features metadata so the canvas can draw previews.
   const featuresByName = new Map()
@@ -875,21 +881,50 @@ async function finishEditorBoot() {
   // garbage after a map switch.
 
   await Promise.all([loadSections(), loadFeatures()])
-  renderCanvas()
-  // Centre the freshly-loaded map in the viewport.  Must happen AFTER
-  // renderCanvas has sized #canvas and the stack — applyOverscrollPadding
-  // anchors scroll math off the final canvas dims.
+  // Size the canvases + overscroll padding before the first paint, so
+  // centerViewOnMap can position scroll BEFORE the user ever sees the
+  // top-left of the freshly loaded canvas.  Without this prep, the
+  // first renderCanvas painted with scroll still at (0, 0) — the user
+  // briefly saw the map's top-left corner before the scroll snapped
+  // to centre on the next render.
+  prepareCanvasDimensions()
   centerViewOnMap()
-  // Map switches can leave the GL viewport-cull set from the previous
-  // map's scroll position — the first renderCanvas inside this boot
-  // ran before centerViewOnMap moved the scroll, so visibleTileBounds
-  // saw the old scroll and the new map's left / top edges fell out of
-  // the cull window.  Re-render now that scrollLeft/Top are correct,
-  // and again on the next frame after the browser has reflowed the
-  // grown / shrunk canvas-stack.  Belt-and-braces because reflow
-  // timing across browsers isn't guaranteed.
   renderCanvas()
+  // A second pass on the next frame catches any reflow-timing edge
+  // case where the post-centerViewOnMap render ran before the browser
+  // had finished resizing the canvas-stack.
   requestAnimationFrame(() => renderCanvas())
+}
+
+// prepareCanvasDimensions resizes the 2D and GL canvases (backing
+// buffers + CSS sizes) and runs applyOverscrollPadding to set the
+// surrounding canvas-stack dimensions.  Extracted from renderCanvas so
+// finishEditorBoot can size everything before the first paint runs,
+// which lets centerViewOnMap position scrollLeft / scrollTop against
+// the FINAL dimensions instead of the previous map's leftovers.
+function prepareCanvasDimensions() {
+  const canvas = $('#canvas')
+  const glCanvas = $('#canvas-gl')
+  if (!canvas) return
+  const wantW = state.tileW * TILE_PX
+  const wantH = state.tileH * TILE_PX
+  if (canvas.width !== wantW || canvas.height !== wantH) {
+    canvas.width = wantW
+    canvas.height = wantH
+    if (glCanvas) {
+      glCanvas.width = wantW
+      glCanvas.height = wantH
+    }
+  }
+  const wantStyleW = wantW * state.zoom + 'px'
+  const wantStyleH = wantH * state.zoom + 'px'
+  if (canvas.style.width !== wantStyleW) canvas.style.width = wantStyleW
+  if (canvas.style.height !== wantStyleH) canvas.style.height = wantStyleH
+  if (glCanvas) {
+    if (glCanvas.style.width !== wantStyleW) glCanvas.style.width = wantStyleW
+    if (glCanvas.style.height !== wantStyleH) glCanvas.style.height = wantStyleH
+  }
+  applyOverscrollPadding()
 }
 
 // centerViewOnMap places the centre of the map at the centre of the
@@ -4984,11 +5019,12 @@ function featureAnchorOffset(f, img) {
 //   FeatureTop = IndexY*16 - Height/2 - PositionY + FootprintY*8
 // Without the Height/2 term, TA's default ground (height ≈ 64) made
 // every feature render one tile too low.
-function featureAnchorWorld(f) {
+function featureAnchorWorld(f, heightOverride) {
   const fw = f.footprintX || 1
   const fh = f.footprintZ || 1
   const px = f.ax * (TILE_PX / 2) + fw * (TILE_PX / 4)
-  const py = f.ay * (TILE_PX / 2) + fh * (TILE_PX / 4) - (featureGroundHeight(f) >> 1)
+  const h = heightOverride != null ? heightOverride : featureGroundHeight(f)
+  const py = f.ay * (TILE_PX / 2) + fh * (TILE_PX / 4) - (h >> 1)
   return { px, py }
 }
 
@@ -5498,8 +5534,19 @@ function drawTerrainClipboard(ctx) {
     ctx.font = '14px ' + getComputedStyle(document.body).fontFamily
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
+    const cAttrW = c.w * 2
+    const cAttrH = c.h * 2
     for (const f of c.features) {
-      const local = featureAnchorWorld(f)
+      // Carried features have ax/ay relative to the clipboard, not the
+      // world.  featureGroundHeight would read state.heights at the
+      // wrong (or zeroed-out) cell — pass the height from the captured
+      // c.heights array so the lift matches what the feature had before
+      // the user grabbed it.
+      let groundH = 0
+      if (f.ax >= 0 && f.ay >= 0 && f.ax < cAttrW && f.ay < cAttrH) {
+        groundH = c.heights[f.ay * cAttrW + f.ax] | 0
+      }
+      const local = featureAnchorWorld(f, groundH)
       const px = c.tx * TILE_PX + local.px
       const py = c.ty * TILE_PX + local.py
       const img = f.previewUrl ? state.featureImages.get(f.name.toLowerCase()) : null
