@@ -6504,6 +6504,9 @@ function wireMinimap() {
       if (dragOffset) {
         dragOffset = null
         header.classList.remove('dragging')
+        // Persist via the same shared layout map the other panels
+        // use, so the minimap reopens in the same spot next session.
+        persistPanelLayout(panel)
       }
     })
   }
