@@ -279,6 +279,44 @@
     </div>
   </div>
 
+  <div id="scatter-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Scatter features</h1>
+      <p class="dialog-sub">Randomly place features across the map.  Cells
+        already occupied by features or marked void are skipped, so the
+        scatter never overwrites your work.</p>
+      <div class="ota-grid">
+        <label class="field field-wide">
+          <span>Feature kinds (comma-separated names — leave blank for current Features filter)</span>
+          <input type="text" id="scatter-names" placeholder="e.g. tree01, rock1, btreebog" />
+        </label>
+        <label class="field">
+          <span>Count</span>
+          <input type="number" id="scatter-count" min="1" max="5000" value="50" />
+        </label>
+        <label class="field">
+          <span>Min spacing (tiles)</span>
+          <input type="number" id="scatter-spacing" min="0" max="64" value="2" />
+        </label>
+        <label class="field">
+          <span>Random seed (0 = time)</span>
+          <input type="number" id="scatter-seed" min="0" max="4294967295" value="0" />
+        </label>
+        <label class="field">
+          <span>Area</span>
+          <select id="scatter-area">
+            <option value="map">Whole map</option>
+            <option value="selection">Current selection (if any)</option>
+          </select>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button id="scatter-cancel" class="btn">Cancel</button>
+        <button id="scatter-apply" class="btn primary">Scatter</button>
+      </div>
+    </div>
+  </div>
+
   <div id="resize-dialog" class="dialog hidden">
     <div class="dialog-card">
       <h1>Resize map</h1>
@@ -496,6 +534,9 @@
           <div class="ribbon-hover-popup" id="map-hover-popup">
             <button id="btn-resize" class="tool-btn" title="Resize map dimensions">
               <span class="ico">📐</span><span class="lbl">Resize</span>
+            </button>
+            <button id="btn-scatter" class="tool-btn" title="Randomly scatter features across the map">
+              <span class="ico">🎲</span><span class="lbl">Scatter</span>
             </button>
             <button id="btn-developer" class="tool-btn" title="Developer information">
               <span class="ico">🔬</span><span class="lbl">Developer</span>
