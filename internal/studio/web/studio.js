@@ -1166,6 +1166,7 @@ function wireKeyboard() {
     else if (e.key === 'x' || e.key === 'X') setMode('erase')
     else if (e.key === 'd' || e.key === 'D') setMode('voids')
     else if (e.key === 'h' || e.key === 'H') setMode('heightmap')
+    else if (e.key === 'b' || e.key === 'B') setMode('fill')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
     else if (e.key === 'Escape') {
@@ -2404,6 +2405,8 @@ function onCanvasMouseDown(e) {
     onVoidsMouseDown(e)
   } else if (state.mode === 'heightmap') {
     onHeightmapMouseDown(e)
+  } else if (state.mode === 'fill') {
+    onFillMouseDown(e)
   }
 }
 
@@ -3610,6 +3613,63 @@ function pickAttrCellForVoid(e) {
   const ax = Math.floor((e.clientX - rect.left) / rect.width * state.tileW * 2)
   const ay = Math.floor((e.clientY - rect.top) / rect.height * state.tileH * 2)
   return { ax, ay }
+}
+
+// onFillMouseDown floods the connected region of tiles matching the
+// tile under the cursor with the active section's (0,0) source.  4-way
+// connectivity; bounded by the map.
+function onFillMouseDown(e) {
+  const { tx, ty } = pickCell(e)
+  if (tx < 0 || ty < 0 || tx >= state.tileW || ty >= state.tileH) return
+  const sel = state.selected
+  if (!sel || sel.type !== 'section') {
+    setStatus('Fill: pick a section from the drawer first.')
+    return
+  }
+  const target = state.tiles[ty * state.tileW + tx]
+  const targetKey = target ? `${target.sectionPath}|${target.sx}|${target.sy}` : 'null'
+  // The section's (0,0) cell after rotation/flip gives the replacement tile.
+  const src = transformedSourceCell(0, 0, sel.tileW, sel.tileH, sel.rotation || 0, !!sel.flipH, !!sel.flipV)
+  const replacement = {
+    sectionPath: sel.path,
+    sx: src.sx, sy: src.sy,
+    rotation: sel.rotation || 0,
+    flipH: !!sel.flipH,
+    flipV: !!sel.flipV,
+  }
+  const replacementKey = `${replacement.sectionPath}|${replacement.sx}|${replacement.sy}`
+  if (replacementKey === targetKey) {
+    setStatus('Fill: source and target are identical — nothing to do.')
+    return
+  }
+  beginTransaction()
+  // Iterative scanline-ish flood — explicit stack to avoid blowing the
+  // call frame on big maps.  Tracks visited cells via a Uint8Array.
+  const W = state.tileW
+  const H = state.tileH
+  const visited = new Uint8Array(W * H)
+  const stack = [[tx, ty]]
+  visited[ty * W + tx] = 1
+  let filled = 0
+  while (stack.length > 0) {
+    const [cx, cy] = stack.pop()
+    const cell = state.tiles[cy * W + cx]
+    const key = cell ? `${cell.sectionPath}|${cell.sx}|${cell.sy}` : 'null'
+    if (key !== targetKey) continue
+    state.tiles[cy * W + cx] = { ...replacement }
+    patchMinimapTile(cx, cy)
+    filled++
+    const neighbours = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]]
+    for (const [nx, ny] of neighbours) {
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue
+      if (visited[ny * W + nx]) continue
+      visited[ny * W + nx] = 1
+      stack.push([nx, ny])
+    }
+  }
+  commitTransaction(`Fill ${filled} tile${filled === 1 ? '' : 's'}`)
+  renderCanvas()
+  setStatus(`Flood-filled ${filled} tile${filled === 1 ? '' : 's'} with ${sel.name}.`)
 }
 
 function onHeightmapMouseDown(e) {
