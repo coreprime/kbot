@@ -67,6 +67,7 @@ const state = {
   ota: null,                     // see defaultOTAState
   activeSchema: 0,               // index into state.ota.schemas
   showMinimap: true,             // minimap panel visibility (toggleable from View)
+  showVoids: true,                // red overlay on void cells (forced on while in Voids mode)
   showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
   minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
   eraseSize: 1,                  // erase brush size (N×N tiles)
@@ -243,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // localStorage key so we don't pollute the user's storage namespace.
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
-  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures',
+  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids',
   'viewMode', 'drawerFilters']
 
 function loadPersistedPrefs() {
@@ -272,6 +273,7 @@ function syncDomFromPrefs() {
   setOn('#opt-animate', state.animateFeatures)
   setOn('#opt-minimap', state.showMinimap)
   setOn('#opt-camera-info', state.showCameraInfo)
+  setOn('#opt-voids', state.showVoids)
   const used = $('#filter-used'); if (used) used.checked = !!state.usedOnly
   const wrk = $('#filter-wreckage'); if (wrk) wrk.checked = !!state.includeWreckage
   // View mode active row.
@@ -1127,6 +1129,12 @@ function wireViewMenu() {
   if (camBtn) {
     camBtn.addEventListener('click', () => {
       setCameraInfoVisible(!state.showCameraInfo)
+    })
+  }
+  const voidsBtn = $('#opt-voids')
+  if (voidsBtn) {
+    voidsBtn.addEventListener('click', () => {
+      setVoidsVisible(!state.showVoids)
     })
   }
   const camToggle = $('#camera-info-toggle')
@@ -5444,6 +5452,16 @@ function drawGridlines(ctx, canvas) {
 function drawVoidOverlay(ctx) {
   const aw = state.tileW * 2
   const ah = state.tileH * 2
+  // Voids mode forces the overlay on regardless of the View pref so
+  // the user can always see what they're painting.
+  const visible = state.showVoids || state.mode === 'voids'
+  if (!visible) {
+    // Still draw the in-flight drag rectangle so the cursor preview
+    // shows up even when the toggle is off — but only when actively
+    // dragging, which only happens in Voids mode anyway.
+    drawVoidsDragRect(ctx)
+    return
+  }
   if (!state.voids || state.voids.length !== aw * ah) {
     // Still draw the drag rectangle even if no committed voids exist.
     drawVoidsDragRect(ctx)
@@ -6008,6 +6026,17 @@ function setMinimapVisible(visible) {
   const toggle = $('#opt-minimap')
   if (toggle) toggle.dataset.on = visible ? '1' : '0'
   persistPrefs()
+}
+
+// setVoidsVisible toggles the view-menu pref.  The actual draw call
+// in drawVoidOverlay reads state.showVoids AND the active mode, so a
+// user in Voids mode still sees what they're painting.
+function setVoidsVisible(visible) {
+  state.showVoids = visible
+  const toggle = $('#opt-voids')
+  if (toggle) toggle.dataset.on = visible ? '1' : '0'
+  persistPrefs()
+  renderCanvas()
 }
 
 function applyMinimapPosition() {
