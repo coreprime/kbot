@@ -48,7 +48,7 @@
       <h1>Open an existing map</h1>
       <p class="dialog-sub">Pick a map from your kbot context.  Editing the loaded data is a work in progress — for now you can browse and re-stamp over it.</p>
       <div class="open-filter">
-        <input type="search" id="open-filter" placeholder="Filter by name, planet, or player count" />
+        <input type="search" id="open-filter" placeholder="Filter by name, planet, or player count" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
       </div>
       <div class="open-list" id="open-list">
         <div class="loading">Loading maps…</div>
@@ -691,7 +691,7 @@
         <button data-tab="features" class="tab">Features</button>
       </div>
       <div class="filter">
-        <input type="search" id="filter" placeholder="Filter by name, world, group" />
+        <input type="search" id="filter" placeholder="Filter by name, world, group" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
         <div class="filter-row">
           <label class="filter-toggle hidden" id="filter-used-wrap" title="Only show features currently placed on the map">
             <input type="checkbox" id="filter-used" />
