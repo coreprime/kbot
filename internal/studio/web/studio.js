@@ -1146,6 +1146,9 @@ function wireViewMenu() {
       camToggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
     })
   }
+  // Drag handle on the camera-info panel header — mirrors the dev-stats
+  // and minimap panels so all three behave the same way.
+  makePanelDraggable($('#camera-info-panel'), $('#camera-info-header'))
   $$('#display-mode-group .menu-row').forEach((row) => {
     row.addEventListener('click', () => {
       state.viewMode = row.dataset.display
@@ -6146,6 +6149,14 @@ function wireDeveloperPanel() {
     panel.classList.toggle('collapsed')
     toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
   })
+  makePanelDraggable(panel, header)
+}
+
+// makePanelDraggable wires a header element to drag its panel within
+// .canvas-wrap.  Used for both the dev-stats panel and the camera-info
+// panel — both share the same DOM shape (header bar + grip handle).
+function makePanelDraggable(panel, header) {
+  if (!panel || !header) return
   let dragOffset = null
   header.addEventListener('mousedown', (e) => {
     if (e.target.closest('button')) return
@@ -6166,6 +6177,7 @@ function wireDeveloperPanel() {
     panel.style.left = left + 'px'
     panel.style.top = top + 'px'
     panel.style.right = 'auto'
+    panel.style.bottom = 'auto'
   })
   window.addEventListener('mouseup', () => {
     if (dragOffset) {
