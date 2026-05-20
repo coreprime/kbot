@@ -992,10 +992,10 @@ function wireWelcomeNanoFX() {
   let cardRect = null   // cached card bounding rect for impact checks
   let running = false
   let rafId = 0
-  // Emission budget — fractional carry-over so a low rate still
-  // produces particles even when dt is short.  Tuned to feel like a
-  // thin spray, not a wall of light: ~30 beams/sec per side at 60fps.
-  const EMIT_RATE_PER_SIDE = 30
+  // Emission budget — fractional carry-over so the rate is frame-rate
+  // independent.  Bumped from 30 → 55 beams/sec/side so the streams
+  // feel busier without becoming the wall of light the first cut had.
+  const EMIT_RATE_PER_SIDE = 55
   let emitBudgetL = 0, emitBudgetR = 0
   // Sweep phase — drives the aim point left↔right across the card so
   // each emitter behaves like a spray-can sweeping a stripe of
@@ -1032,13 +1032,13 @@ function wireWelcomeNanoFX() {
   // directions (each painting from its near edge across).
   function sweepAim(side) {
     if (!cardRect) return null
-    const range = Math.min(cardRect.width * 0.45, 220)
+    // Sweep across nearly the full card width — the streams now visibly
+    // travel from one edge of the dialog to the other rather than
+    // pacing the middle third.
+    const range = Math.min(cardRect.width * 0.55, 340)
     const phase = side === 'left' ? sweepT : sweepT + Math.PI
     const tx = cardRect.left + cardRect.width / 2 + Math.sin(phase) * range
-    // Y wobble adds a tiny vertical jitter so the band of impacts
-    // sits along the bottom-ish portion of the card rather than a
-    // razor line.
-    const ty = cardRect.top + cardRect.height * 0.55 + Math.cos(phase * 1.7) * Math.min(cardRect.height * 0.25, 60)
+    const ty = cardRect.top + cardRect.height * 0.55 + Math.cos(phase * 1.7) * Math.min(cardRect.height * 0.3, 80)
     return { x: tx, y: ty }
   }
 
@@ -1046,20 +1046,20 @@ function wireWelcomeNanoFX() {
     const src = emitterPoint(side)
     const target = sweepAim(side)
     if (!target) return
-    // Narrow cone around the swept target — small jitter, not the
-    // big random pool the first cut used.  Result: a thin stream
-    // that actually traces the sweep.
-    const tx = target.x + (Math.random() - 0.5) * 48
-    const ty = target.y + (Math.random() - 0.5) * 32
+    // Wider cone around the swept target so the spray reads as a
+    // proper paint cloud rather than a laser tracking a point.
+    // Roughly triples the previous lateral jitter range.
+    const tx = target.x + (Math.random() - 0.5) * 140
+    const ty = target.y + (Math.random() - 0.5) * 90
     const dx = tx - src.x, dy = ty - src.y
     const len = Math.max(1, Math.hypot(dx, dy))
-    const speed = 420 + Math.random() * 220
+    const speed = 400 + Math.random() * 260
     particles.push({
       x: src.x, y: src.y,
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       life: 0, ttl: 0.9 + Math.random() * 0.3,
-      size: 1.4 + Math.random() * 1.2,
+      size: 1.2 + Math.random() * 1.4,
       side,
     })
   }

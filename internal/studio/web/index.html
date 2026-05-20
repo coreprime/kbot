@@ -15,20 +15,31 @@
     <canvas id="welcome-nanofx" class="welcome-nanofx" aria-hidden="true"></canvas>
     <div class="dialog-card dialog-card-wide">
       <h1>KBot Studio</h1>
-      <p class="dialog-sub">A web-based map editor for Total Annihilation and TA: Kingdoms.  Pick how you'd like to begin.</p>
-      <div class="welcome-options">
-        <button class="welcome-card" id="welcome-new">
-          <span class="welcome-card-ico">✨</span>
-          <span class="welcome-card-title">Create a new map</span>
-          <span class="welcome-card-sub">Start from a blank canvas — choose tileset, dimensions and name.</span>
-        </button>
-        <button class="welcome-card" id="welcome-open">
-          <span class="welcome-card-ico">📂</span>
-          <span class="welcome-card-title">Open an existing map</span>
-          <span class="welcome-card-sub">Browse the maps in your kbot context / VFS.</span>
-        </button>
+      <p class="dialog-sub">A web-based workbench for Total Annihilation and TA: Kingdoms.  Pick a workflow to begin.</p>
+      <!-- Workflow tabs.  Only Mapping is implemented today; the rest
+           are placeholder stubs so the user can see the shape of
+           what's coming. -->
+      <div class="welcome-tabs" role="tablist" aria-label="Workflow">
+        <button class="welcome-tab active" role="tab" aria-selected="true" data-welcome-tab="mapping">Mapping</button>
+        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: unit / building model editor.">Modelling</button>
+        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: COB / scripting editor.">Scripting</button>
+        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="More workflows on the roadmap.">Other</button>
       </div>
-      <p class="dialog-sub welcome-drop-hint">…or drop a <code>.tnt</code> (and optional sibling <code>.ota</code>) file anywhere on this dialog.</p>
+      <div class="welcome-tab-panel" data-welcome-tab-panel="mapping">
+        <div class="welcome-options">
+          <button class="welcome-card" id="welcome-new">
+            <span class="welcome-card-ico">✨</span>
+            <span class="welcome-card-title">Create a new map</span>
+            <span class="welcome-card-sub">Start from a blank canvas — choose tileset, dimensions and name.</span>
+          </button>
+          <button class="welcome-card" id="welcome-open">
+            <span class="welcome-card-ico">📂</span>
+            <span class="welcome-card-title">Open an existing map</span>
+            <span class="welcome-card-sub">Browse the maps in your kbot context / VFS.</span>
+          </button>
+        </div>
+        <p class="dialog-sub welcome-drop-hint">…or drop a <code>.tnt</code> (and optional sibling <code>.ota</code>) file anywhere on this dialog.</p>
+      </div>
     </div>
   </div>
 

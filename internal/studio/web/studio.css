@@ -62,6 +62,43 @@ kbd {
   z-index: 0;
 }
 #welcome-dialog .dialog-card { position: relative; z-index: 1; }
+
+/* Workflow tab row above the New / Open Map cards.  Only the active
+   tab (Mapping) is wired up today — the others are placeholders so
+   the user can see the broader roadmap. */
+.welcome-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+.welcome-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  /* Sit on the bottom border of .welcome-tabs so the active tab can
+     merge into the panel below it like a real folder tab. */
+  margin-bottom: -1px;
+}
+.welcome-tab:hover:not([disabled]) { color: var(--text); }
+.welcome-tab.active {
+  background: var(--bg-1);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg-1);
+  color: var(--text);
+  font-weight: 600;
+}
+.welcome-tab[disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.welcome-tab-panel { padding-top: 4px; }
 .dialog-card {
   background: var(--bg-1);
   border: 1px solid var(--border);
