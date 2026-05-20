@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreprime/kbot/formats/gaf"
@@ -170,20 +171,14 @@ func startAssetPreload() {
 	mapCatalog.ready = true
 	mapCatalog.mu.Unlock()
 
-	// ── Sections ──
+	// ── Sections + feature thumbnails (parallel via the asset queue) ──
+	//
+	// Both phases share one worker pool so the warm-up actually uses
+	// multiple cores instead of running each phase serially.  Jobs are
+	// LOW priority — if the user hits the editor mid-warm and asks for
+	// a specific section/feature, the handler enqueues at HIGH and
+	// jumps the queue.
 	sections := allSectionsFromVFS()
-	preloadProgress.set("sections", 0, len(sections))
-	for i, s := range sections {
-		bytes := renderSectionPreviewPNG(s.Path, pal)
-		if bytes != nil {
-			sectionPreviewMu.Lock()
-			sectionPreviewCache[s.Path] = bytes
-			sectionPreviewMu.Unlock()
-		}
-		preloadProgress.set("sections", i+1, len(sections))
-	}
-
-	// ── Feature thumbnails ──
 	features, _ := scanFeatures()
 	withFile := features[:0:0]
 	for _, f := range features {
@@ -191,17 +186,59 @@ func startAssetPreload() {
 			withFile = append(withFile, f)
 		}
 	}
+
+	q := getAssetQueue()
+
+	// Track section + feature drain progress separately so the TTY
+	// progress bar still reports per-phase counters.
+	var sectionsDone, featuresDone atomic.Int64
+	preloadProgress.set("sections", 0, len(sections))
 	preloadProgress.set("features", 0, len(withFile))
-	for i, f := range withFile {
-		// Static-only PNG ?static=1 — the canvas placement path uses
-		// these.  Animated APNGs render on-demand still.
-		if data, err := renderFeatureStaticPNG(f.Filename, f.Seqname); err == nil {
-			key := strings.ToLower(f.Name) + "|static"
+
+	for _, s := range sections {
+		path := s.Path
+		q.Submit(priorityLow, func() {
+			// Skip if a HIGH-priority handler raced ahead and cached
+			// this section already — no point burning a worker.
+			sectionPreviewMu.RLock()
+			cached := sectionPreviewCache[path] != nil
+			sectionPreviewMu.RUnlock()
+			if !cached {
+				if b := renderSectionPreviewPNG(path, pal); b != nil {
+					sectionPreviewMu.Lock()
+					sectionPreviewCache[path] = b
+					sectionPreviewMu.Unlock()
+				}
+			}
+			n := sectionsDone.Add(1)
+			preloadProgress.set("sections", int(n), len(sections))
+		})
+	}
+
+	for _, f := range withFile {
+		feat := f
+		q.Submit(priorityLow, func() {
+			key := strings.ToLower(feat.Name) + "|static"
 			featureCacheMu.Lock()
-			featureCache[key] = data
+			_, already := featureCache[key]
 			featureCacheMu.Unlock()
-		}
-		preloadProgress.set("features", i+1, len(withFile))
+			if !already {
+				if data, err := renderFeatureStaticPNG(feat.Filename, feat.Seqname); err == nil {
+					featureCacheMu.Lock()
+					featureCache[key] = data
+					featureCacheMu.Unlock()
+				}
+			}
+			n := featuresDone.Add(1)
+			preloadProgress.set("features", int(n), len(withFile))
+		})
+	}
+
+	// Block until both phases have drained.  Polling the atomic
+	// counters lets handler-triggered HIGH-priority work flow in
+	// without us blocking a worker.
+	for sectionsDone.Load() < int64(len(sections)) || featuresDone.Load() < int64(len(withFile)) {
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	preloadProgress.finish()
@@ -893,15 +930,25 @@ func handleSectionPreview(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(cached)
 		return
 	}
-	pal := loadVFSPalette()
-	pngBytes := renderSectionPreviewPNG(sectionPath, pal)
+	// Jump the warm queue: the user is staring at the drawer waiting
+	// for this exact section.  singleflight inside Run() dedupes
+	// concurrent requests for the same path.
+	getAssetQueue().Run("section:"+sectionPath, func() {
+		pal := loadVFSPalette()
+		b := renderSectionPreviewPNG(sectionPath, pal)
+		if b != nil {
+			sectionPreviewMu.Lock()
+			sectionPreviewCache[sectionPath] = b
+			sectionPreviewMu.Unlock()
+		}
+	})
+	sectionPreviewMu.RLock()
+	pngBytes := sectionPreviewCache[sectionPath]
+	sectionPreviewMu.RUnlock()
 	if pngBytes == nil {
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
 	}
-	sectionPreviewMu.Lock()
-	sectionPreviewCache[sectionPath] = pngBytes
-	sectionPreviewMu.Unlock()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(pngBytes)
@@ -955,21 +1002,36 @@ func handleFeaturePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var imgBytes []byte
-	if staticOnly {
-		imgBytes, err = renderFeatureStaticPNG(entry.Filename, entry.Seqname)
-	} else {
-		imgBytes, err = renderFeatureAPNG(entry.Filename, entry.Seqname)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	// Jump the warm queue at HIGH priority + dedupe concurrent requests
+	// for the same (feature, static) key via singleflight inside Run().
+	var renderErr error
+	getAssetQueue().Run("feature:"+key, func() {
+		var b []byte
+		var e error
+		if staticOnly {
+			b, e = renderFeatureStaticPNG(entry.Filename, entry.Seqname)
+		} else {
+			b, e = renderFeatureAPNG(entry.Filename, entry.Seqname)
+		}
+		if e != nil {
+			renderErr = e
+			return
+		}
+		featureCacheMu.Lock()
+		featureCache[key] = b
+		featureCacheMu.Unlock()
+	})
+	if renderErr != nil {
+		http.Error(w, renderErr.Error(), http.StatusNotFound)
 		return
 	}
-
 	featureCacheMu.Lock()
-	featureCache[key] = imgBytes
+	imgBytes := featureCache[key]
 	featureCacheMu.Unlock()
-
+	if imgBytes == nil {
+		http.Error(w, "feature render failed", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", contentTypeForFeature(staticOnly))
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(imgBytes)
