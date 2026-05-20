@@ -78,6 +78,7 @@ const state = {
   hmStrength: 4,                 // height delta per tick in raise/lower; 0..1 mix for smooth
   hmCursor: null,                // last hovered attr cell while in Heightmap mode, for the brush outline
   hmLevelHeight: 80,             // height stamped by the Level tool — set on mousedown
+  symmetry: 'off',               // 'off' | 'x' | 'y' | 'xy' — mirror painting across map centre line(s)
 }
 
 // ── OTA defaults ───────────────────────────────────────────────────────────
@@ -3705,11 +3706,16 @@ function onHeightmapMouseUp(_e) {
   renderCanvas()
 }
 
-// paintHeightAt applies the active heightmap brush at attribute-cell
-// (ax, ay).  Falloff is a quadratic so the brush feels soft at the edge
-// without per-cell trig.  Smooth runs a 3×3 box blur weighted by the
-// brush mask so light passes are clean and heavy passes still settle.
 function paintHeightAt(ax, ay) {
+  paintHeightAtSingle(ax, ay)
+  for (const m of symmetryMatesAttr(ax, ay)) paintHeightAtSingle(m.ax, m.ay)
+}
+
+// paintHeightAtSingle applies the active heightmap brush at attribute-
+// cell (ax, ay).  Falloff is a quadratic so the brush feels soft at the
+// edge without per-cell trig.  Smooth runs a 3×3 box blur weighted by
+// the brush mask so light passes are clean and heavy passes settle.
+function paintHeightAtSingle(ax, ay) {
   const aw = state.tileW * 2
   const ah = state.tileH * 2
   const r = Math.max(1, state.hmRadius | 0)
@@ -3792,6 +3798,11 @@ function clearStampSelection() {
 }
 
 function eraseAt(tx, ty) {
+  eraseAtSingle(tx, ty)
+  for (const m of symmetryMatesTile(tx, ty, 1, 1)) eraseAtSingle(m.tx, m.ty)
+}
+
+function eraseAtSingle(tx, ty) {
   const size = Math.max(1, state.eraseSize || 1)
   const scope = state.eraseScope || 'all'
   // Brush is centred (or near-centred for even sizes) on the cursor tile.
@@ -3834,7 +3845,12 @@ function eraseAt(tx, ty) {
 function stampSection(tx, ty) {
   const sel = state.selected
   const rotation = sel.rotation || 0
+  const { w: fw, h: fh } = rotatedFootprint(sel.tileW, sel.tileH, rotation)
   stampSectionWithRotation(tx, ty, sel.path, sel.tileW, sel.tileH, rotation, !!sel.flipH, !!sel.flipV)
+  for (const m of symmetryMatesTile(tx, ty, fw, fh)) {
+    stampSectionWithRotation(m.tx, m.ty, sel.path, sel.tileW, sel.tileH, rotation,
+      !!sel.flipH !== m.fx, !!sel.flipV !== m.fy)
+  }
 }
 
 function placeFeature(ax, ay) {
@@ -3843,17 +3859,20 @@ function placeFeature(ax, ay) {
   // snapped to tile centres (`tx*2+1`) which made the cursor feel coarse
   // and disagreed with what TA stores in the TNT.  Now the caller passes
   // the actual attribute cell under the cursor.
-  state.features = state.features.filter((f) => !(f.ax === ax && f.ay === ay))
-  state.features.push({
-    name: sel.name,
-    ax,
-    ay,
-    footprintX: sel.footprintX || 1,
-    footprintZ: sel.footprintZ || 1,
-    previewUrl: sel.previewUrl || null,
-    originX: sel.originX || 0,
-    originY: sel.originY || 0,
-  })
+  const points = [{ ax, ay }, ...symmetryMatesAttr(ax, ay)]
+  for (const p of points) {
+    state.features = state.features.filter((f) => !(f.ax === p.ax && f.ay === p.ay))
+    state.features.push({
+      name: sel.name,
+      ax: p.ax,
+      ay: p.ay,
+      footprintX: sel.footprintX || 1,
+      footprintZ: sel.footprintZ || 1,
+      previewUrl: sel.previewUrl || null,
+      originX: sel.originX || 0,
+      originY: sel.originY || 0,
+    })
+  }
   bumpContentVersion()
   renderCanvas()
 }
@@ -6196,8 +6215,54 @@ function wireToolbar() {
   wireSchemaEditor()
   wireBrushSizeGroup()
   wireHeightmapBrushGroup()
+  wireSymmetryGroup()
   refreshSchemaSelector()
   updateUndoButtons()
+}
+
+function wireSymmetryGroup() {
+  $$('#symmetry-row [data-symmetry]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      state.symmetry = row.dataset.symmetry
+      $$('#symmetry-row [data-symmetry]').forEach((r) => r.classList.toggle('active', r === row))
+      const labels = { off: 'off', x: 'X (mirror left↔right)', y: 'Y (mirror top↔bottom)', xy: 'XY (4-way)' }
+      setStatus(`Symmetry: ${labels[state.symmetry]}.`)
+      renderCanvas()
+    })
+  })
+}
+
+// symmetryMatesTile returns the tile coords each stroke should also
+// touch when symmetry is on.  The original (tx, ty) is implicit and
+// not included.  Each mate carries its own (dx, dy) flip flags so
+// callers can apply matching tile rotations.
+function symmetryMatesTile(tx, ty, footW = 1, footH = 1) {
+  if (state.symmetry === 'off') return []
+  const W = state.tileW
+  const H = state.tileH
+  // The mirrored top-left for a footprint is the reflection of the *far*
+  // edge so the footprint's body lands inside the canvas.
+  const mx = W - tx - footW
+  const my = H - ty - footH
+  const mates = []
+  if (state.symmetry === 'x' || state.symmetry === 'xy') mates.push({ tx: mx, ty, fx: true, fy: false })
+  if (state.symmetry === 'y' || state.symmetry === 'xy') mates.push({ tx, ty: my, fx: false, fy: true })
+  if (state.symmetry === 'xy') mates.push({ tx: mx, ty: my, fx: true, fy: true })
+  return mates
+}
+
+function symmetryMatesAttr(ax, ay) {
+  if (state.symmetry === 'off') return []
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  const mx = aw - 1 - ax
+  const my = ah - 1 - ay
+  const mates = []
+  if (state.symmetry === 'x' || state.symmetry === 'xy') mates.push({ ax: mx, ay })
+  if (state.symmetry === 'y' || state.symmetry === 'xy') mates.push({ ax, ay: my })
+  if (state.symmetry === 'xy') mates.push({ ax: mx, ay: my })
+  return mates
 }
 
 function wireHeightmapBrushGroup() {

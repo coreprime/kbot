@@ -427,6 +427,13 @@
             <button class="menu-row" data-mode="fill" title="Bucket fill — replace a connected region of matching tiles with the selected section's top-left tile">
               <span class="ico">🪣</span><span>Fill</span><kbd class="menu-row-hotkey">B</kbd>
             </button>
+            <div class="menu-section-label">Symmetry</div>
+            <div class="inline-row" id="symmetry-row">
+              <button class="menu-row scope-row active" data-symmetry="off" title="No mirroring">Off</button>
+              <button class="menu-row scope-row" data-symmetry="x" title="Mirror across the vertical centre (left↔right)">X</button>
+              <button class="menu-row scope-row" data-symmetry="y" title="Mirror across the horizontal centre (top↔bottom)">Y</button>
+              <button class="menu-row scope-row" data-symmetry="xy" title="Mirror across both axes (4-way)">XY</button>
+            </div>
             <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
               <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▾</span>
             </button>
