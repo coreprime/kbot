@@ -68,6 +68,7 @@ const state = {
   activeSchema: 0,               // index into state.ota.schemas
   showMinimap: true,             // minimap panel visibility (toggleable from View)
   showVoids: true,                // red overlay on void cells (forced on while in Voids mode)
+  showContours: false,            // height contour lines on top of Map view
   showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
   minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
   eraseSize: 1,                  // erase brush size (N×N tiles)
@@ -244,7 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // localStorage key so we don't pollute the user's storage namespace.
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
-  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids',
+  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours',
   'viewMode', 'drawerFilters']
 
 function loadPersistedPrefs() {
@@ -274,6 +275,7 @@ function syncDomFromPrefs() {
   setOn('#opt-minimap', state.showMinimap)
   setOn('#opt-camera-info', state.showCameraInfo)
   setOn('#opt-voids', state.showVoids)
+  setOn('#opt-contours', state.showContours)
   const used = $('#filter-used'); if (used) used.checked = !!state.usedOnly
   const wrk = $('#filter-wreckage'); if (wrk) wrk.checked = !!state.includeWreckage
   // View mode active row.
@@ -1139,6 +1141,15 @@ function wireViewMenu() {
   if (voidsBtn) {
     voidsBtn.addEventListener('click', () => {
       setVoidsVisible(!state.showVoids)
+    })
+  }
+  const contoursBtn = $('#opt-contours')
+  if (contoursBtn) {
+    contoursBtn.addEventListener('click', () => {
+      state.showContours = !state.showContours
+      contoursBtn.dataset.on = state.showContours ? '1' : '0'
+      persistPrefs()
+      renderCanvas()
     })
   }
   const camToggle = $('#camera-info-toggle')
@@ -4047,6 +4058,15 @@ function renderCanvas() {
       drawTiles(ctx)
     }
     if (state.viewMode === 'blended') drawHeightmapOverlay(ctx)
+    // Optional height contour overlay on Map / Blended views.  The
+    // Heightmap view always draws contours via drawHeightmap → here
+    // we re-use the same function so the on-screen lines match.
+    if (state.showContours) {
+      const attrW = state.tileW * 2
+      const attrH = state.tileH * 2
+      const cell = TILE_PX / 2
+      drawHeightContours(ctx, attrW, attrH, cell)
+    }
   }
 
   // Grid overlay — density adapts to zoom so you can see per-tile
@@ -4584,8 +4604,14 @@ function drawHeightmap(ctx) {
 function drawHeightContours(ctx, attrW, attrH, cell) {
   const step = 16
   const seaLevel = state.ota?.seaLevel ?? 63
+  const z = state.zoom || 1
+  // Keep strokes at least 1 CSS pixel wide regardless of zoom — same
+  // approach the gridlines use, so contours don't alias out at low
+  // zoom or balloon at high zoom.
+  const minorWidth = Math.max(1, Math.ceil(1 / z))
+  const majorWidth = Math.max(2, Math.ceil(2 / z))
   ctx.save()
-  ctx.lineWidth = 1
+  ctx.lineWidth = minorWidth
   // Regular contours — black with low alpha so they read but don't
   // overwhelm the underlying greyscale.
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)'
@@ -4617,7 +4643,7 @@ function drawHeightContours(ctx, attrW, attrH, cell) {
   // Sea-level line — heavier and tinted blue so it stands out from
   // the regular contours.
   ctx.strokeStyle = 'rgba(56, 132, 255, 0.95)'
-  ctx.lineWidth = 2
+  ctx.lineWidth = majorWidth
   ctx.beginPath()
   for (let ay = 0; ay < attrH; ay++) {
     for (let ax = 0; ax < attrW; ax++) {
