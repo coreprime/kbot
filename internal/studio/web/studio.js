@@ -1919,7 +1919,10 @@ async function selectSection(s) {
   // anchored: false → the preview follows the cursor; first canvas
   // click flips this to true so the preview "drops" at that spot and
   // can be drag-repositioned / rotated before being committed.
-  const placement = { sectionPath: s.path, origW: s.tileW, origH: s.tileH, rotation: 0, tx: 0, ty: 0, anchored: false, userRotated: false }
+  // dormant: true → don't draw the preview until the cursor enters
+  // the canvas.  Avoids the "ghost flashes at viewport centre then
+  // jumps to the cursor" effect when picking from the drawer.
+  const placement = { sectionPath: s.path, origW: s.tileW, origH: s.tileH, rotation: 0, tx: 0, ty: 0, anchored: false, userRotated: false, dormant: true }
   const center = viewportCellCenter()
   const anchor = placementAnchor(center.tx, center.ty, placement)
   placement.tx = anchor.tx
@@ -2748,15 +2751,20 @@ function updatePlacementHover(e) {
   const { tx: cx, ty: cy } = pickCell(e)
   const { tx, ty } = placementAnchor(cx, cy, state.placement)
   const moved = state.placement.tx !== tx || state.placement.ty !== ty
+  const waking = !!state.placement.dormant
   if (moved) {
     state.placement.tx = tx
     state.placement.ty = ty
   }
+  // Cursor entered the canvas → wake the preview so it starts
+  // rendering under the cursor instead of (invisibly) at the
+  // viewport centre we seeded it with.
+  if (waking) state.placement.dormant = false
   // Auto-fit rotation while the cursor is dragging the preview around:
   // a new position can change which orientation is the only seam-clean
   // option.  Once Q/E sets userRotated, this becomes a no-op.
   if (moved) tryAutoRotatePlacement(state.placement)
-  if (moved) renderCanvas()
+  if (moved || waking) renderCanvas()
 }
 
 // placementMoveAnchor tracks an in-flight drag of an already-anchored
@@ -4875,6 +4883,10 @@ function drawFeatureDragPreview(ctx) {
 // to commit).  Honours the current rotation so Q/E feedback is live.
 function drawPlacementPreview(ctx) {
   if (!state.placement || state.placement.tx == null) return
+  // Drawer-pick starts dormant — wait for the cursor to enter the
+  // canvas before drawing a ghost, so the preview doesn't briefly
+  // sit at viewport centre.
+  if (state.placement.dormant) return
   const p = state.placement
   const img = state.sectionImages.get(p.sectionPath)
   const { w: fw, h: fh } = rotatedFootprint(p.origW, p.origH, p.rotation)
