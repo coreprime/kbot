@@ -6337,6 +6337,11 @@ function openSchemaEditor(index) {
   $('#se-computer-metal').value = s.computerMetal || 0
   $('#se-human-energy').value = s.humanEnergy || 0
   $('#se-computer-energy').value = s.computerEnergy || 0
+  $('#se-meteor-weapon').value = s.meteorWeapon || ''
+  $('#se-meteor-radius').value = s.meteorRadius || 0
+  $('#se-meteor-density').value = s.meteorDensity || 0
+  $('#se-meteor-duration').value = s.meteorDuration || 0
+  $('#se-meteor-interval').value = s.meteorInterval || 0
   // Close the schema dropdown so it doesn't sit on top of the dialog.
   $('#schema-dropdown-popup')?.classList.add('hidden')
   $('#schema-edit-dialog').classList.remove('hidden')
@@ -6368,6 +6373,11 @@ function applySchemaEditor() {
   s.computerMetal = parseInt($('#se-computer-metal').value, 10) || 0
   s.humanEnergy = parseInt($('#se-human-energy').value, 10) || 0
   s.computerEnergy = parseInt($('#se-computer-energy').value, 10) || 0
+  s.meteorWeapon = $('#se-meteor-weapon').value.trim()
+  s.meteorRadius = parseInt($('#se-meteor-radius').value, 10) || 0
+  s.meteorDensity = parseInt($('#se-meteor-density').value, 10) || 0
+  s.meteorDuration = parseInt($('#se-meteor-duration').value, 10) || 0
+  s.meteorInterval = parseInt($('#se-meteor-interval').value, 10) || 0
   commitTransaction(`Edit schema: ${s.name}`)
   refreshSchemaSelector()
   closeSchemaEditor()
