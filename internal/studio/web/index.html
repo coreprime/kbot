@@ -445,13 +445,15 @@
             <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
               <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▸</span>
             </button>
-            <div class="menu-section-label">Symmetry</div>
-            <div class="inline-row" id="symmetry-row">
-              <button class="menu-row scope-row active" data-symmetry="off" title="No mirroring">Off</button>
-              <button class="menu-row scope-row" data-symmetry="x" title="Mirror across the vertical centre (left↔right)">X</button>
-              <button class="menu-row scope-row" data-symmetry="y" title="Mirror across the horizontal centre (top↔bottom)">Y</button>
-              <button class="menu-row scope-row" data-symmetry="xy" title="Mirror across both axes (4-way)">XY</button>
-            </div>
+            <button class="menu-row toggle-row has-sub" id="mode-row-symmetry" data-on="0" title="Symmetry — mirror painting across one or both axes.  Hover for options.">
+              <span class="ico">⇆</span><span>Symmetry</span><span class="sub-current" id="symmetry-current-lbl">Off</span><span class="menu-check">✓</span><span class="sub-chev">▸</span>
+            </button>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="symmetry-dropdown-popup">
+            <button class="menu-row active" data-symmetry="off" title="No mirroring"><span class="ico">·</span><span>Off</span></button>
+            <button class="menu-row" data-symmetry="x" title="Mirror across the vertical centre (left↔right)"><span class="ico">↔</span><span>Vertical</span></button>
+            <button class="menu-row" data-symmetry="y" title="Mirror across the horizontal centre (top↔bottom)"><span class="ico">↕</span><span>Horizontal</span></button>
+            <button class="menu-row" data-symmetry="xy" title="Mirror across both axes (4-way)"><span class="ico">✛</span><span>Both</span></button>
           </div>
           <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="voids-dropdown-popup">
             <div class="menu-section-label">Voids brush (attribute cells)</div>

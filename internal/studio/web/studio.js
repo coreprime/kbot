@@ -6512,16 +6512,51 @@ function wireToolbar() {
   updateUndoButtons()
 }
 
+// Symmetry is now exposed as a single has-sub menu row that pops a
+// submenu to the right with the four choices.  The row itself shows
+// the active label + a tick when symmetry is non-off, matching the
+// gridlines / animation toggle rows in the View menu.
+const SYMMETRY_LABELS = { off: 'Off', x: 'Vertical', y: 'Horizontal', xy: 'Both' }
+
 function wireSymmetryGroup() {
-  $$('#symmetry-row [data-symmetry]').forEach((row) => {
-    row.addEventListener('click', (e) => {
+  const row = $('#mode-row-symmetry')
+  const popup = $('#symmetry-dropdown-popup')
+  if (!row || !popup) return
+  let closeTimer = null
+  const open = () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+    positionSubmenuRight(row, popup)
+  }
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer)
+    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
+  }
+  row.addEventListener('mouseenter', open)
+  row.addEventListener('mouseleave', scheduleClose)
+  popup.addEventListener('mouseenter', () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+  })
+  popup.addEventListener('mouseleave', scheduleClose)
+  $$('#symmetry-dropdown-popup [data-symmetry]').forEach((r) => {
+    r.addEventListener('click', (e) => {
       e.stopPropagation()
-      state.symmetry = row.dataset.symmetry
-      $$('#symmetry-row [data-symmetry]').forEach((r) => r.classList.toggle('active', r === row))
-      const labels = { off: 'off', x: 'X (mirror left↔right)', y: 'Y (mirror top↔bottom)', xy: 'XY (4-way)' }
-      setStatus(`Symmetry: ${labels[state.symmetry]}.`)
+      state.symmetry = r.dataset.symmetry
+      refreshSymmetryRow()
+      popup.classList.add('hidden')
+      setStatus(`Symmetry: ${SYMMETRY_LABELS[state.symmetry].toLowerCase()}.`)
       renderCanvas()
     })
+  })
+  refreshSymmetryRow()
+}
+
+function refreshSymmetryRow() {
+  const row = $('#mode-row-symmetry')
+  const lbl = $('#symmetry-current-lbl')
+  if (lbl) lbl.textContent = SYMMETRY_LABELS[state.symmetry] || 'Off'
+  if (row) row.dataset.on = state.symmetry === 'off' ? '0' : '1'
+  $$('#symmetry-dropdown-popup [data-symmetry]').forEach((r) => {
+    r.classList.toggle('active', r.dataset.symmetry === state.symmetry)
   })
 }
 
