@@ -80,6 +80,8 @@ const state = {
   hmStrength: 4,                 // height delta per tick in raise/lower; 0..1 mix for smooth
   hmCursor: null,                // last hovered attr cell while in Heightmap mode, for the brush outline
   hmLevelHeight: 80,             // height stamped by the Level tool — set on mousedown
+  voidsBrushSize: 1,             // void paint brush, N×N attribute cells
+  voidsCursor: null,             // last hovered attr cell while in Voids mode
   symmetry: 'off',               // 'off' | 'x' | 'y' | 'xy' — mirror painting across map centre line(s)
 }
 
@@ -3645,7 +3647,10 @@ function onPickerMouseUp(_e) {
 // applies that same target state to every attribute cell inside the
 // rectangle spanned by the cursor.  Mouseup commits as a single undo.
 
-let voidsDragState = null // { ax0, ay0, target, prevSnapshot } while dragging
+// voidsDragState records the toggle target chosen on mousedown so the
+// whole drag uses the same paint vs. erase mode (matches the previous
+// rectangle-paint behaviour).
+let voidsDragState = null // { target } while dragging
 
 function onVoidsMouseDown(e) {
   const { ax, ay } = pickAttrCellForVoid(e)
@@ -3653,51 +3658,51 @@ function onVoidsMouseDown(e) {
   const aw = state.tileW * 2
   const prev = state.voids[ay * aw + ax] | 0
   beginTransaction()
-  voidsDragState = { ax0: ax, ay0: ay, ax1: ax, ay1: ay, target: prev ? 0 : 1 }
-  paintVoidRect(voidsDragState)
+  voidsDragState = { target: prev ? 0 : 1 }
+  paintVoidBrush(ax, ay, voidsDragState.target)
   renderCanvas()
 }
 
 function onVoidsMouseMove(e) {
-  if (!voidsDragState) {
-    // Hover only — no action yet, but force a redraw so the user sees
-    // their cursor highlight if we ever add one.
-    return
-  }
   const { ax, ay } = pickAttrCellForVoid(e)
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  voidsDragState.ax1 = clamp(ax, 0, aw - 1)
-  voidsDragState.ay1 = clamp(ay, 0, ah - 1)
-  paintVoidRect(voidsDragState)
+  // Track cursor for the brush outline overlay even when not painting.
+  if (!state.voidsCursor || state.voidsCursor.ax !== ax || state.voidsCursor.ay !== ay) {
+    state.voidsCursor = { ax, ay }
+    renderCanvas()
+  }
+  if (!voidsDragState) return
+  paintVoidBrush(ax, ay, voidsDragState.target)
   renderCanvas()
 }
 
 function onVoidsMouseUp(_e) {
   if (!voidsDragState) return
-  paintVoidRect(voidsDragState, true)
   voidsDragState = null
   commitTransaction('Paint voids')
   invalidateMinimapBase()
   renderCanvas()
 }
 
-// paintVoidRect stamps the brush target value into every cell of the
-// rectangle defined by (ax0, ay0) and (ax1, ay1).  Called on every
-// drag tick and a final time on mouseup; the result is idempotent.
-function paintVoidRect(d, commit) {
+// paintVoidBrush stamps a size×size block centred on (ax, ay) with the
+// given target value (1=void, 0=passable).  Centring matches the
+// erase brush so a "1×1" stamp is exactly one cell under the cursor
+// and even sizes lean toward the top-left of the cursor cell.
+function paintVoidBrush(ax, ay, target) {
+  const size = Math.max(1, state.voidsBrushSize || 1)
+  const off = Math.floor(size / 2)
   const aw = state.tileW * 2
   const ah = state.tileH * 2
-  const x0 = clamp(Math.min(d.ax0, d.ax1), 0, aw - 1)
-  const x1 = clamp(Math.max(d.ax0, d.ax1), 0, aw - 1)
-  const y0 = clamp(Math.min(d.ay0, d.ay1), 0, ah - 1)
-  const y1 = clamp(Math.max(d.ay0, d.ay1), 0, ah - 1)
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      state.voids[y * aw + x] = d.target
+  const x0 = ax - off
+  const y0 = ay - off
+  for (let dy = 0; dy < size; dy++) {
+    const cy = y0 + dy
+    if (cy < 0 || cy >= ah) continue
+    for (let dx = 0; dx < size; dx++) {
+      const cx = x0 + dx
+      if (cx < 0 || cx >= aw) continue
+      state.voids[cy * aw + cx] = target
     }
   }
-  void commit // commit flag reserved for future "only stamp once" optimisations
 }
 
 // pickAttrCellForVoid converts a MouseEvent into the attribute cell
@@ -5542,18 +5547,26 @@ function drawVoidOverlay(ctx) {
   drawVoidsDragRect(ctx)
 }
 
+// drawVoidsDragRect now renders the void brush footprint at the cursor
+// — a dashed red square sized to state.voidsBrushSize so the user
+// sees what their next stamp will affect.  Drawn even when not
+// actively painting so the brush size is discoverable on hover.
 function drawVoidsDragRect(ctx) {
-  if (!voidsDragState) return
+  if (state.mode !== 'voids' || !state.voidsCursor) return
   const cell = TILE_PX / 2
-  const x0 = Math.min(voidsDragState.ax0, voidsDragState.ax1) * cell
-  const y0 = Math.min(voidsDragState.ay0, voidsDragState.ay1) * cell
-  const x1 = (Math.max(voidsDragState.ax0, voidsDragState.ax1) + 1) * cell
-  const y1 = (Math.max(voidsDragState.ay0, voidsDragState.ay1) + 1) * cell
+  const size = Math.max(1, state.voidsBrushSize || 1)
+  const off = Math.floor(size / 2)
+  const x0 = (state.voidsCursor.ax - off) * cell
+  const y0 = (state.voidsCursor.ay - off) * cell
+  const w = size * cell
+  const h = size * cell
   ctx.save()
+  ctx.fillStyle = 'rgba(248, 81, 73, 0.20)'
+  ctx.fillRect(x0, y0, w, h)
   ctx.strokeStyle = 'rgba(248, 81, 73, 0.95)'
   ctx.lineWidth = 2
   ctx.setLineDash([6, 4])
-  ctx.strokeRect(x0 + 1, y0 + 1, x1 - x0 - 2, y1 - y0 - 2)
+  ctx.strokeRect(x0 + 1, y0 + 1, w - 2, h - 2)
   ctx.setLineDash([])
   ctx.restore()
 }
@@ -6479,6 +6492,7 @@ function wireToolbar() {
   wireSchemaEditor()
   wireBrushSizeGroup()
   wireHeightmapBrushGroup()
+  wireVoidsBrushGroup()
   wireSymmetryGroup()
   refreshSchemaSelector()
   updateUndoButtons()
@@ -6529,28 +6543,70 @@ function symmetryMatesAttr(ax, ay) {
   return mates
 }
 
+// positionSubmenuRight places `popup` to the right of `parentRow`,
+// flipping to the left if there isn't horizontal room, and clamping
+// vertically so the popup stays on-screen.  Used by all the mode-row
+// hover submenus (Erase / Heightmap / Voids) so they appear off to
+// the side instead of dropping below their parent.
+function positionSubmenuRight(parentRow, popup) {
+  const rect = parentRow.getBoundingClientRect()
+  popup.classList.remove('hidden') // need real dimensions
+  const popW = popup.offsetWidth
+  const popH = popup.offsetHeight
+  const vpW = window.innerWidth
+  const vpH = window.innerHeight
+  let left = rect.right + 4
+  let top = rect.top
+  if (left + popW > vpW - 8) left = Math.max(8, rect.left - popW - 4)
+  if (top + popH > vpH - 8) top = Math.max(8, vpH - popH - 8)
+  popup.style.left = left + 'px'
+  popup.style.top = top + 'px'
+}
+
+function wireVoidsBrushGroup() {
+  const row = $('#mode-row-voids')
+  const popup = $('#voids-dropdown-popup')
+  if (!row || !popup) return
+  let closeTimer = null
+  const open = () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+    positionSubmenuRight(row, popup)
+  }
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer)
+    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
+  }
+  row.addEventListener('mouseenter', open)
+  row.addEventListener('mouseleave', scheduleClose)
+  popup.addEventListener('mouseenter', () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+  })
+  popup.addEventListener('mouseleave', scheduleClose)
+  $$('#voids-dropdown-popup [data-voids-size]').forEach((r) => {
+    r.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const sz = parseInt(r.dataset.voidsSize, 10) || 1
+      state.voidsBrushSize = sz
+      $$('#voids-dropdown-popup [data-voids-size]').forEach((x) => x.classList.toggle('active', x === r))
+      const lbl = $('#voids-current-lbl')
+      if (lbl) lbl.textContent = `${sz}×${sz}`
+      popup.classList.add('hidden')
+      $('#mode-dropdown-popup')?.classList.add('hidden')
+      if (state.mode !== 'voids') setMode('voids')
+      setStatus(`Voids brush set to ${sz}×${sz}.`)
+      renderCanvas()
+    })
+  })
+}
+
 function wireHeightmapBrushGroup() {
   const hmRow = $('#mode-row-heightmap')
   const popup = $('#hm-dropdown-popup')
   if (!hmRow || !popup) return
   let closeTimer = null
-  const positionSubmenu = () => {
-    const rect = hmRow.getBoundingClientRect()
-    popup.classList.remove('hidden')
-    const popW = popup.offsetWidth
-    const popH = popup.offsetHeight
-    const vpW = window.innerWidth
-    const vpH = window.innerHeight
-    let left = rect.left
-    let top = rect.bottom + 4
-    if (left + popW > vpW - 8) left = Math.max(8, vpW - popW - 8)
-    if (top + popH > vpH - 8) top = Math.max(8, rect.top - popH - 4)
-    popup.style.left = left + 'px'
-    popup.style.top = top + 'px'
-  }
   const open = () => {
     if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenu()
+    positionSubmenuRight(hmRow, popup)
   }
   const scheduleClose = () => {
     if (closeTimer) clearTimeout(closeTimer)
@@ -6608,26 +6664,9 @@ function wireBrushSizeGroup() {
   // the row pops the size choices out to the side; mouseleave closes
   // after a short grace period so the cursor can travel onto the popup.
   let closeTimer = null
-  const positionSubmenu = () => {
-    const rect = eraseRow.getBoundingClientRect()
-    popup.classList.remove('hidden') // need real dimensions
-    const popW = popup.offsetWidth
-    const popH = popup.offsetHeight
-    const vpW = window.innerWidth
-    const vpH = window.innerHeight
-    // Drop directly under the Erase row by default; flip above when
-    // there isn't vertical room, and nudge left if the popup runs
-    // off the right edge.
-    let left = rect.left
-    let top = rect.bottom + 4
-    if (left + popW > vpW - 8) left = Math.max(8, vpW - popW - 8)
-    if (top + popH > vpH - 8) top = Math.max(8, rect.top - popH - 4)
-    popup.style.left = left + 'px'
-    popup.style.top = top + 'px'
-  }
   const open = () => {
     if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenu()
+    positionSubmenuRight(eraseRow, popup)
   }
   const scheduleClose = () => {
     if (closeTimer) clearTimeout(closeTimer)

@@ -433,14 +433,17 @@
             <button class="menu-row" data-mode="start-points" title="Start Points">
               <span class="ico">🤖</span><span>Start Points</span><kbd class="menu-row-hotkey">S</kbd>
             </button>
-            <button class="menu-row" data-mode="voids" title="Voids — paint impassable / no-build cells">
-              <span class="ico">🚫</span><span>Voids</span><kbd class="menu-row-hotkey">D</kbd>
+            <button class="menu-row has-sub" data-mode="voids" id="mode-row-voids" title="Voids — paint impassable / no-build cells.  Hover for brush size.">
+              <span class="ico">🚫</span><span>Voids</span><span class="sub-current" id="voids-current-lbl">1×1</span><kbd class="menu-row-hotkey">D</kbd><span class="sub-chev">▸</span>
             </button>
             <button class="menu-row has-sub" data-mode="heightmap" id="mode-row-heightmap" title="Heightmap — raise, lower, smooth or level terrain">
-              <span class="ico">⛰</span><span>Heightmap</span><span class="sub-current" id="hm-current-lbl">Raise · 4</span><kbd class="menu-row-hotkey">H</kbd><span class="sub-chev">▾</span>
+              <span class="ico">⛰</span><span>Heightmap</span><span class="sub-current" id="hm-current-lbl">Raise · 4</span><kbd class="menu-row-hotkey">H</kbd><span class="sub-chev">▸</span>
             </button>
             <button class="menu-row" data-mode="fill" title="Bucket fill — replace a connected region of matching tiles with the selected section's top-left tile.  Shift-click to replace globally across the whole map.">
               <span class="ico">🪣</span><span>Fill</span><kbd class="menu-row-hotkey">B</kbd>
+            </button>
+            <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
+              <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▸</span>
             </button>
             <div class="menu-section-label">Symmetry</div>
             <div class="inline-row" id="symmetry-row">
@@ -449,9 +452,14 @@
               <button class="menu-row scope-row" data-symmetry="y" title="Mirror across the horizontal centre (top↔bottom)">Y</button>
               <button class="menu-row scope-row" data-symmetry="xy" title="Mirror across both axes (4-way)">XY</button>
             </div>
-            <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
-              <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▾</span>
-            </button>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="voids-dropdown-popup">
+            <div class="menu-section-label">Voids brush (attribute cells)</div>
+            <button class="menu-row active" data-voids-size="1"><span class="ico">▪</span><span>1×1</span></button>
+            <button class="menu-row" data-voids-size="2"><span class="ico">▪</span><span>2×2</span></button>
+            <button class="menu-row" data-voids-size="4"><span class="ico">▪</span><span>4×4</span></button>
+            <button class="menu-row" data-voids-size="8"><span class="ico">▪</span><span>8×8</span></button>
+            <button class="menu-row" data-voids-size="16"><span class="ico">▪</span><span>16×16</span></button>
           </div>
           <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="brush-dropdown-popup">
             <div class="menu-section-label">Erase scope</div>
