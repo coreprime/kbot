@@ -1449,6 +1449,13 @@ function createSectionItem(s) {
   if (state.selected?.type === 'section' && state.selected.path === s.path) {
     item.classList.add('selected')
   }
+  // Native title gives the user the full path + dimensions on hover.
+  const tooltipParts = [s.name]
+  if (s.tileW || s.tileH) tooltipParts.push(`${s.tileW || '?'}×${s.tileH || '?'} tiles`)
+  if (s.world) tooltipParts.push(`World: ${s.world}`)
+  if (s.group) tooltipParts.push(`Group: ${s.group}`)
+  if (s.path) tooltipParts.push(s.path)
+  item.title = tooltipParts.join('\n')
   item.innerHTML = `
     <img class="drawer-thumb" src="/api/studio/section-preview/${encodeURI(s.path)}" alt="" loading="lazy" draggable="false" />
     <div class="drawer-meta">
@@ -1573,6 +1580,14 @@ function createFeatureItem(f, usage) {
   const fp = `${f.footprintX || 1}×${f.footprintZ || 1}`
   const useCount = usage ? (usage.get((f.name || '').toLowerCase()) || 0) : 0
   const usageBadge = useCount > 0 ? `<span class="usage-badge">${useCount}</span>` : ''
+  // Tooltip — fall back to the bare name if every other field is blank.
+  const tooltipParts = [f.name]
+  if (f.world) tooltipParts.push(`World: ${f.world}`)
+  if (f.category) tooltipParts.push(`Category: ${f.category}`)
+  tooltipParts.push(`Footprint: ${fp}`)
+  if (useCount > 0) tooltipParts.push(`Placed: ${useCount}`)
+  if (f.description) tooltipParts.push(f.description)
+  item.title = tooltipParts.join('\n')
   const staticUrl = f.previewUrl ? f.previewUrl + '?static=1' : null
   const initialUrl = (state.animateFeatures || state.hoveredFeatureName === f.name)
     ? f.previewUrl
