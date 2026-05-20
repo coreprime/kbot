@@ -678,6 +678,19 @@ async function openLoadedMap(data, card) {
   // Wire up the canvas + drawer just like startEditor would have done
   // for a fresh map.
   await finishEditorBoot()
+  // Belt-and-braces: snap state.zoom back to 1.0 in case any wheel
+  // event leaked between map loads (e.g. while the user was clicking
+  // through the Open dialog), then force one more GL render with the
+  // clean state so the new map's atlas texture is guaranteed to be
+  // uploaded before the user looks at it.
+  if (Math.abs((state.zoom || 1) - 1) < 0.05) state.zoom = 1
+  if (gl && gl.ctx && gl.textures) {
+    for (const t of gl.textures.values()) {
+      if (t && t.tex) gl.ctx.deleteTexture(t.tex)
+    }
+    gl.textures.clear()
+  }
+  renderCanvas()
   setStatus(`Opened ${state.name} (${w}×${h}).`)
 }
 
@@ -2417,6 +2430,11 @@ function wireCanvas() {
   //   - Otherwise → zoom anchored to the cursor.
   const wrap = $('#canvas-scroll')
   wrap.addEventListener('wheel', (e) => {
+    // Ignore wheel events while any modal dialog is showing — they
+    // were sneaking past the dialog overlay and nudging zoom while
+    // the user was scrolling dialog content.  Symptom: map switches
+    // landed at zoom 1.0015 instead of 1.0.
+    if (document.querySelector('.dialog:not(.hidden)')) return
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
       zoomAtPointer(e.clientX, e.clientY, e.deltaY)
