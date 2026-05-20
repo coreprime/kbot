@@ -91,6 +91,9 @@ const PER_MAP_FIELDS = new Set([
   // Sidebar drawer filter strings — typing "tree" while editing TabOne
   // shouldn't carry over to TabTwo (#36).
   'drawerFilters',
+  // Ruler measurement (per tab so the line doesn't follow you between
+  // maps).
+  'ruler',
 ])
 
 class MapDoc {
@@ -126,6 +129,9 @@ class MapDoc {
     this.voidsCursor = null
     this.hmLevelHeight = 80
     this.drawerFilters = { sections: '', features: '' }
+    // Ruler tool state — { a: {tx, ty}, b: {tx, ty}, locked }.  When
+    // null, no measurement is on screen.  Cleared on Escape.
+    this.ruler = null
     // dirty flips to true on every commitTransaction and resets after a
     // successful Save / Save-loose.  Closing a dirty tab triggers the
     // unsaved-changes prompt (#40).
@@ -1823,6 +1829,11 @@ function setMode(mode) {
   if (mode !== 'start-points') {
     state.selectedStartPos = -1
   }
+  if (mode !== 'ruler' && state.ruler) {
+    // Leaving ruler mode clears the measurement so it isn't drawn on
+    // top of an unrelated tool overlay.
+    state.ruler = null
+  }
   if (mode !== 'voids') {
     voidsDragState = null
   } else {
@@ -2053,6 +2064,7 @@ function wireKeyboard() {
     else if (e.key === 'd' || e.key === 'D') setMode('voids')
     else if (e.key === 'h' || e.key === 'H') setMode('heightmap')
     else if (e.key === 'b' || e.key === 'B') setMode('fill')
+    else if (e.key === 'r' || e.key === 'R') setMode('ruler')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
     else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
@@ -2081,6 +2093,7 @@ function wireKeyboard() {
       // lets them re-orient before picking a new tool.
       if (state.placement) cancelPlacement()
       if (state.terrainClipboard) cancelTerrainClipboard()
+      if (state.ruler) { state.ruler = null; renderCanvas() }
       if (state.selectedFeatures.size > 0) state.selectedFeatures.clear()
       if (state.selectedFeature >= 0) state.selectedFeature = -1
       if (state.selected?.type === 'feature') clearStampSelection()
@@ -3578,6 +3591,8 @@ function onCanvasMouseDown(e) {
     onHeightmapMouseDown(e)
   } else if (state.mode === 'fill') {
     onFillMouseDown(e)
+  } else if (state.mode === 'ruler') {
+    onRulerMouseDown(e)
   }
 }
 
@@ -3633,6 +3648,8 @@ function onCanvasMouseMove(e) {
     onVoidsMouseMove(e)
   } else if (state.mode === 'heightmap') {
     onHeightmapMouseMove(e)
+  } else if (state.mode === 'ruler') {
+    onRulerMouseMove(e)
   }
 }
 
@@ -5024,6 +5041,137 @@ function onFillMouseDown(e) {
   setStatus(`Flood-filled ${filled} tile${filled === 1 ? '' : 's'} with ${sel.name}.  Shift-click to replace globally.`)
 }
 
+// ── Ruler mode ─────────────────────────────────────────────────────────
+//
+// Click once to drop the start point, then move the cursor — the end
+// point follows.  A second click locks the measurement; a third click
+// starts a new one.  Esc clears.  Distances are reported in attr cells
+// (16-px resolution, matching the heightmap grid) AND tiles AND map
+// pixels, plus the min / max / delta heightmap value sampled along the
+// line so the user can sanity-check cliffs and start-position fairness.
+
+function onRulerMouseDown(e) {
+  const { ax, ay } = pickAttrCellForVoid(e)
+  const r = state.ruler
+  if (!r || r.locked) {
+    state.ruler = { a: { ax, ay }, b: { ax, ay }, locked: false }
+  } else {
+    state.ruler = { a: r.a, b: { ax, ay }, locked: true }
+  }
+  renderCanvas()
+}
+
+function onRulerMouseMove(e) {
+  const r = state.ruler
+  if (!r || r.locked) return
+  const { ax, ay } = pickAttrCellForVoid(e)
+  if (r.b.ax === ax && r.b.ay === ay) return
+  r.b = { ax, ay }
+  renderCanvas()
+}
+
+// rulerStats summarises the active ruler as { dPx, dTiles, dAttr,
+// hMin, hMax, hDelta } — or null when there's nothing to measure.
+// Heightmap samples walk the line in attribute-cell increments so
+// every cell the line crosses contributes to the min / max / delta.
+function rulerStats() {
+  const r = state.ruler
+  if (!r) return null
+  const { a, b } = r
+  const aw = state.tileW * 2, ah = state.tileH * 2
+  const ainA = a.ax >= 0 && a.ax < aw && a.ay >= 0 && a.ay < ah
+  const binA = b.ax >= 0 && b.ax < aw && b.ay >= 0 && b.ay < ah
+  // Distance in attr cells (16-px); tiles is half of that; pixels x16.
+  const dAttrX = b.ax - a.ax, dAttrY = b.ay - a.ay
+  const dAttr = Math.hypot(dAttrX, dAttrY)
+  const dTiles = dAttr / 2
+  const dPx = dAttr * 16
+  // Walk the line sampling heights.  Step in 1-attr increments so
+  // we hit every cell along the path.
+  let hMin = Infinity, hMax = -Infinity
+  const steps = Math.max(1, Math.ceil(dAttr))
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    const sx = Math.round(a.ax + dAttrX * t)
+    const sy = Math.round(a.ay + dAttrY * t)
+    if (sx < 0 || sx >= aw || sy < 0 || sy >= ah) continue
+    const h = state.heights[sy * aw + sx] | 0
+    if (h < hMin) hMin = h
+    if (h > hMax) hMax = h
+  }
+  if (!isFinite(hMin)) { hMin = 0; hMax = 0 }
+  return { dPx, dTiles, dAttr, hMin, hMax, hDelta: hMax - hMin, ainA, binA }
+}
+
+function drawRulerOverlay(ctx) {
+  const r = state.ruler
+  if (!r) return
+  const stats = rulerStats()
+  if (!stats) return
+  // Convert attr cells (16-px) to map pixels.  Centre of the cell so
+  // the line endpoints sit nicely inside the highlighted square.
+  const ax = r.a.ax * 16 + 8
+  const ay = r.a.ay * 16 + 8
+  const bx = r.b.ax * 16 + 8
+  const by = r.b.ay * 16 + 8
+
+  ctx.save()
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  // Soft outer glow then bright inner line.
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)'
+  ctx.lineWidth = 5
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
+  ctx.strokeStyle = r.locked ? 'rgba(255, 220, 80, 0.95)' : 'rgba(255, 255, 255, 0.95)'
+  ctx.lineWidth = 2
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
+
+  // Endpoint markers.
+  const drawEnd = (x, y) => {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
+    ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = r.locked ? 'rgb(255, 220, 80)' : '#fff'
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill()
+  }
+  drawEnd(ax, ay)
+  drawEnd(bx, by)
+
+  // Floating label near the midpoint with the measurement.
+  const mx = (ax + bx) / 2
+  const my = (ay + by) / 2
+  const lines = [
+    `${stats.dTiles.toFixed(2)} tiles  ·  ${stats.dAttr.toFixed(1)} attr  ·  ${Math.round(stats.dPx)} px`,
+    `Δh ${stats.hDelta}  (${stats.hMin}–${stats.hMax})`,
+  ]
+  ctx.font = '600 12px var(--mono, monospace)'
+  // Measure width for the bg rect.
+  let w = 0
+  for (const l of lines) w = Math.max(w, ctx.measureText(l).width)
+  const padX = 8, padY = 6, lineH = 14
+  const boxW = w + padX * 2
+  const boxH = lines.length * lineH + padY * 2
+  // Offset the label so it doesn't sit on top of the line.
+  const off = 16
+  let bxL = mx + off
+  let byL = my + off
+  // Keep inside the canvas if possible.
+  const mapW = state.tileW * 32, mapH = state.tileH * 32
+  if (bxL + boxW > mapW) bxL = mx - off - boxW
+  if (byL + boxH > mapH) byL = my - off - boxH
+  if (bxL < 0) bxL = 0
+  if (byL < 0) byL = 0
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
+  ctx.beginPath()
+  ctx.roundRect ? ctx.roundRect(bxL, byL, boxW, boxH, 4) : ctx.rect(bxL, byL, boxW, boxH)
+  ctx.fill()
+  ctx.fillStyle = '#fff'
+  ctx.textBaseline = 'top'
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], bxL + padX, byL + padY + i * lineH)
+  }
+  ctx.restore()
+}
+
 // hmHoldTimer keeps the brush firing while the user holds the mouse
 // button still — raise / lower / smooth all need continuous application
 // to sculpt large changes without the user having to wiggle the cursor.
@@ -5352,6 +5500,7 @@ function renderCanvas() {
   drawEraseBrush(ctx)
   drawHeightmapBrush(ctx)
   drawVoidOverlay(ctx)
+  drawRulerOverlay(ctx)
 
   // Rotation badge is an HTML overlay — hide it when there's nothing
   // to rotate.  The drawPlacementPreview / drawTerrainClipboard
