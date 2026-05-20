@@ -88,6 +88,9 @@ const PER_MAP_FIELDS = new Set([
   'highlightFeatureName', 'hoveredFeatureName',
   'eraseCursor', 'hmCursor', 'voidsCursor',
   'hmLevelHeight',
+  // Sidebar drawer filter strings — typing "tree" while editing TabOne
+  // shouldn't carry over to TabTwo (#36).
+  'drawerFilters',
 ])
 
 class MapDoc {
@@ -122,6 +125,7 @@ class MapDoc {
     this.hmCursor = null
     this.voidsCursor = null
     this.hmLevelHeight = 80
+    this.drawerFilters = { sections: '', features: '' }
     // Snapshotted module-level lets — see snapshot/restore helpers.
     this.undoStack = []
     this.redoStack = []
@@ -147,7 +151,6 @@ function activeMap() { return activeTabIndex >= 0 ? tabs[activeTabIndex]?.map : 
 // Proxy below forwards them to activeMap().
 const sessionState = {
   drawer: 'sections',
-  drawerFilters: { sections: '', features: '' },
   sectionsList: [],
   featuresList: [],
   sectionImages: new Map(),         // path → HTMLImageElement (raw, rotation=0)
@@ -327,7 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#welcome-new').addEventListener('click', () => {
     sizeDialogSource = 'welcome'
     $('#welcome-dialog').classList.add('hidden')
-    $('#size-dialog').classList.remove('hidden')
+    openSizeDialog()
   })
   $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
   wireWelcomeDropZone()
@@ -370,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
-  'viewMode', 'drawerFilters', 'panelLayout']
+  'viewMode', 'panelLayout']
 
 // createPrefsStore returns a {load, save} interface backed by a Web
 // Storage implementation (defaults to window.localStorage).  The
@@ -407,11 +410,7 @@ function loadPersistedPrefs() {
   if (!parsed) return
   for (const k of PREF_FIELDS) {
     if (parsed[k] === undefined) continue
-    if (k === 'drawerFilters' && parsed[k] && typeof parsed[k] === 'object') {
-      state.drawerFilters = { ...state.drawerFilters, ...parsed[k] }
-    } else {
-      state[k] = parsed[k]
-    }
+    state[k] = parsed[k]
   }
   // Push the loaded values onto any DOM mirrors so the menu rows
   // reflect them on first render.
@@ -570,6 +569,9 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // Sync drawer / view / mode UI to the new tab's state.
   if (typeof updateUndoButtons === 'function') updateUndoButtons()
   if (typeof bumpContentVersion === 'function') bumpContentVersion()
+  // Reflect the new tab's drawer filter in the sidebar input.
+  const filterInput = document.querySelector('#filter')
+  if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
   if (typeof renderDrawer === 'function') renderDrawer()
   if (typeof setMode === 'function') setMode(activeMap()?.mode || 'select-terrain')
   if (typeof renderCanvas === 'function') renderCanvas()
@@ -586,6 +588,16 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   }
 }
 
+// mapDisplayName returns the friendly label for a MapDoc — prefers the
+// OTA mission name (the human-readable title the player sees in the
+// lobby) and falls back to the TNT filename when the mission name is
+// empty (#37).
+function mapDisplayName(m) {
+  const mission = (m?.ota?.missionName || '').trim()
+  if (mission) return mission
+  return (m?.name || '').trim() || '(untitled)'
+}
+
 function renderMapTabs() {
   const list = document.querySelector('#map-tabs-list')
   if (!list) return
@@ -593,15 +605,16 @@ function renderMapTabs() {
   for (let i = 0; i < tabs.length; i++) {
     const tab = tabs[i]
     const m = tab.map
+    const display = mapDisplayName(m)
     const el = document.createElement('button')
     el.type = 'button'
     el.className = 'map-tab' + (i === activeTabIndex ? ' active' : '')
     el.dataset.tabIndex = String(i)
     el.setAttribute('role', 'tab')
-    el.title = `${m.name} (${m.tileW}×${m.tileH})`
+    el.title = `${display} · ${m.name || '(no file)'} · ${m.tileW}×${m.tileH}`
     const lbl = document.createElement('span')
     lbl.className = 'map-tab-label'
-    lbl.textContent = m.name || '(untitled)'
+    lbl.textContent = display
     el.appendChild(lbl)
     const close = document.createElement('button')
     close.type = 'button'
@@ -638,7 +651,7 @@ function wireMapTabBar() {
     // Open the size dialog in "append a tab" mode.  When the user
     // confirms, startEditor() pushes a brand-new tab.
     sizeDialogSource = 'tabbar'
-    document.querySelector('#size-dialog')?.classList.remove('hidden')
+    openSizeDialog()
   })
   document.querySelector('#map-tab-add-open')?.addEventListener('click', () => {
     popup.classList.add('hidden')
@@ -1238,6 +1251,11 @@ async function finishEditorBoot() {
   // — no stale listeners, no carried-over GL textures, no orphaned
   // ResizeObservers.
   recreateEditorView()
+  // Reflect the active map's drawer filter in the sidebar input.  Per-tab
+  // filters live on MapDoc, so the previous tab's "tree-A" must not leak
+  // into the new map's empty filter (#36).
+  const filterInput = document.querySelector('#filter')
+  if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
   // Don't poke canvas.width here on a mid-session swap.  renderCanvas
   // owns the canvas/glCanvas/.canvas-stack dimensions and skips work
   // when they already match — pre-setting only the 2D canvas hides the
@@ -8007,7 +8025,7 @@ async function startNewMapFromEditor() {
   const wIn = $('#size-w'); if (wIn) wIn.value = String(state.tileW || 128)
   const hIn = $('#size-h'); if (hIn) hIn.value = String(state.tileH || 128)
   const nIn = $('#size-name'); if (nIn) nIn.value = state.name || 'newmap'
-  $('#size-dialog').classList.remove('hidden')
+  openSizeDialog()
 }
 
 // closeSizeDialog returns the user to the surface they came from when
@@ -8020,6 +8038,21 @@ function closeSizeDialog() {
     $('#welcome-dialog').classList.remove('hidden')
   }
   // 'editor' / 'tabbar' — editor stays visible behind the dismissed dialog.
+}
+
+// openSizeDialog reveals the New-map dialog and focuses the name input
+// so the user can immediately type the friendly map name (#38).
+function openSizeDialog() {
+  $('#size-dialog').classList.remove('hidden')
+  // Defer the focus to the next frame so the browser has shown the
+  // dialog before we try to put the caret in the input.
+  requestAnimationFrame(() => {
+    const nm = $('#size-name')
+    if (nm) {
+      nm.focus()
+      nm.select()
+    }
+  })
 }
 
 // openExistingMapFromEditor confirms then reuses the same picker the

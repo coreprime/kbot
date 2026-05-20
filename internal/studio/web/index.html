@@ -48,8 +48,12 @@
     <div class="dialog-card">
       <h1>KBot Studio</h1>
       <p class="dialog-sub">A web-based map editor for Total Annihilation.</p>
-      <p class="dialog-sub">Pick your map dimensions (in tiles).  The default
-        roughly matches <em>Metal Heck</em>.</p>
+      <p class="dialog-sub">Name your map, then pick its dimensions (in
+        tiles).  The default size roughly matches <em>Metal Heck</em>.</p>
+      <label class="field">
+        <span>Map name</span>
+        <input type="text" id="size-name" value="newmap" autofocus />
+      </label>
       <label class="field">
         <span>Width (tiles)</span>
         <input type="number" id="size-w" value="128" min="16" max="256" step="1" />
@@ -57,10 +61,6 @@
       <label class="field">
         <span>Height (tiles)</span>
         <input type="number" id="size-h" value="128" min="16" max="256" step="1" />
-      </label>
-      <label class="field">
-        <span>Map name</span>
-        <input type="text" id="size-name" value="newmap" />
       </label>
       <label class="field">
         <span>Tileset</span>
