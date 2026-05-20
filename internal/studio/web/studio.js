@@ -69,6 +69,7 @@ const state = {
   showMinimap: true,             // minimap panel visibility (toggleable from View)
   showVoids: true,                // red overlay on void cells (forced on while in Voids mode)
   showContours: false,            // height contour lines on top of Map view
+  showStartPositions: true,       // robot markers (forced on while in Start Points mode)
   showCameraInfo: true,          // Camera & Cursor panel visibility (toggleable from View)
   minimapPos: null,              // { top, left } in canvas-wrap coords once user drags
   eraseSize: 1,                  // erase brush size (N×N tiles)
@@ -247,7 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // localStorage key so we don't pollute the user's storage namespace.
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
-  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours',
+  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
   'viewMode', 'drawerFilters']
 
 function loadPersistedPrefs() {
@@ -278,6 +279,8 @@ function syncDomFromPrefs() {
   setOn('#opt-camera-info', state.showCameraInfo)
   setOn('#opt-voids', state.showVoids)
   setOn('#opt-contours', state.showContours)
+  setOn('#opt-features', state.showFeatures)
+  setOn('#opt-startpoints', state.showStartPositions)
   const used = $('#filter-used'); if (used) used.checked = !!state.usedOnly
   const wrk = $('#filter-wreckage'); if (wrk) wrk.checked = !!state.includeWreckage
   // View mode active row.
@@ -1062,6 +1065,14 @@ function setMode(mode) {
     // just looking at, instead of vanishing the moment they switch tool.
     if (!state.showVoids) setVoidsVisible(true)
   }
+  // Modes that hunt for placed objects need their layer visible — auto
+  // -enable the View toggle so the mode doesn't become a no-op.
+  if ((mode === 'select-features' || mode === 'picker') && !state.showFeatures) {
+    setFeaturesVisible(true)
+  }
+  if (mode === 'start-points' && !state.showStartPositions) {
+    setStartPositionsVisible(true)
+  }
   if (mode === 'heightmap') {
     // If the user is on the plain Map view, switch to Blended so they
     // can see the heightmap variance overlaid on the terrain while
@@ -1098,7 +1109,7 @@ function modeHint(mode) {
     case 'paint': return 'Place Tiles — pick a section on the left and click on the canvas to stamp.'
     case 'select-terrain': return 'Select Area — click and drag to grab a rectangle of tiles, then drag to move or Q/E to rotate.  Click outside to drop.'
     case 'select-features': return 'Place Features — pick a feature on the left to drop copies, or click a placed feature to pick/move it.'
-    case 'picker': return 'Picker — click features to select, drag a rectangle for multi-select, Shift+click to toggle, Delete to remove.'
+    case 'picker': return 'Feature Select — click features to select, drag a rectangle for multi-select, Shift+click to toggle, Delete to remove.'
     case 'erase': return 'Erase — click or drag to remove tiles and features.  Switch to another mode when done.'
     case 'start-points': return 'Start Points — click empty space to drop the next available start position; click an existing one to drag/delete.'
     case 'voids': return 'Voids — click or drag to mark attribute cells impassable / no-build.  The first cell sets the brush state for the rest of the drag.'
@@ -1157,6 +1168,8 @@ function wireViewMenu() {
       renderCanvas()
     })
   }
+  $('#opt-features')?.addEventListener('click', () => setFeaturesVisible(!state.showFeatures))
+  $('#opt-startpoints')?.addEventListener('click', () => setStartPositionsVisible(!state.showStartPositions))
   const camToggle = $('#camera-info-toggle')
   if (camToggle) {
     camToggle.addEventListener('click', () => {
@@ -2760,9 +2773,9 @@ function tryAutoSwitchAt(e) {
   const cpy = (e.clientY - rect.top) / rect.height * canvas.height
 
   // Start positions are drawn on top of features visually, so they
-  // win ties (overlapping click).
+  // win ties (overlapping click).  Hidden layers don't accept clicks.
   const schema = activeSchema()
-  if (schema && state.mode !== 'start-points') {
+  if (schema && state.mode !== 'start-points' && state.showStartPositions) {
     const hit = findStartPositionAt(schema, cpx, cpy)
     if (hit >= 0) {
       setMode('start-points')
@@ -2779,8 +2792,9 @@ function tryAutoSwitchAt(e) {
   }
 
   // Features are anchored at (ax, ay) in 16-px attr coords; hit-test by
-  // the tile they sit on.
-  if (state.mode !== 'select-features') {
+  // the tile they sit on.  Skip when features are hidden — clicks fall
+  // through to whatever's underneath.
+  if (state.mode !== 'select-features' && state.showFeatures) {
     const { tx, ty } = pickCell(e)
     if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
       const fhit = findFeatureAt(e)
@@ -3635,6 +3649,9 @@ function drawHeightmapBrush(ctx) {
 
 function drawStartPositions(ctx) {
   if (!state.ota) return
+  // Hidden via View toggle, and the user isn't in start-points mode
+  // (mode forces the layer on so they can see what they're editing).
+  if (!state.showStartPositions && state.mode !== 'start-points') return
   const fontFamily = getComputedStyle(document.body).fontFamily
   // Inverse zoom so the marker keeps a stable CSS size as the user
   // zooms out — clamp upward to avoid mountain-sized badges at 1%
@@ -6237,6 +6254,35 @@ function setMinimapVisible(visible) {
   const toggle = $('#opt-minimap')
   if (toggle) toggle.dataset.on = visible ? '1' : '0'
   persistPrefs()
+}
+
+// setFeaturesVisible / setStartPositionsVisible mirror setMinimapVisible
+// but cover the two new View toggles.  Toggling features off while the
+// user is in a feature-centric mode (select-features or picker) drops
+// them back to Select, since a tool that can't see its targets is
+// useless.  Same for start-positions mode.
+function setFeaturesVisible(visible) {
+  state.showFeatures = visible
+  const t = $('#opt-features')
+  if (t) t.dataset.on = visible ? '1' : '0'
+  persistPrefs()
+  if (!visible && (state.mode === 'select-features' || state.mode === 'picker')) {
+    setMode('select-terrain')
+  } else {
+    renderCanvas()
+  }
+}
+
+function setStartPositionsVisible(visible) {
+  state.showStartPositions = visible
+  const t = $('#opt-startpoints')
+  if (t) t.dataset.on = visible ? '1' : '0'
+  persistPrefs()
+  if (!visible && state.mode === 'start-points') {
+    setMode('select-terrain')
+  } else {
+    renderCanvas()
+  }
 }
 
 // setVoidsVisible toggles the view-menu pref.  The actual draw call

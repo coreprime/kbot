@@ -418,8 +418,8 @@
             <button class="menu-row" data-mode="select-features" title="Place Features">
               <span class="ico">🌳</span><span>Features</span><kbd class="menu-row-hotkey">F</kbd>
             </button>
-            <button class="menu-row" data-mode="picker" title="Picker — marquee multi-select features">
-              <span class="ico">🎯</span><span>Picker</span><kbd class="menu-row-hotkey">K</kbd>
+            <button class="menu-row" data-mode="picker" title="Feature Select — marquee multi-select features">
+              <span class="ico">🎯</span><span>Feature Select</span><kbd class="menu-row-hotkey">K</kbd>
             </button>
             <button class="menu-row" data-mode="start-points" title="Start Points">
               <span class="ico">🤖</span><span>Start Points</span><kbd class="menu-row-hotkey">S</kbd>
@@ -568,6 +568,12 @@
             </button>
             <button class="menu-row toggle-row" id="opt-contours" data-on="0" title="Overlay height contour lines on the Map view.  Already always shown in Heightmap view.">
               <span class="ico">〰</span><span>Show Contours</span><span class="menu-check">✓</span>
+            </button>
+            <button class="menu-row toggle-row" id="opt-features" data-on="1" title="Show placed features.  Forced on while Feature Select / Features modes are active.">
+              <span class="ico">🌳</span><span>Features</span><span class="menu-check">✓</span>
+            </button>
+            <button class="menu-row toggle-row" id="opt-startpoints" data-on="1" title="Show player start positions.  Forced on while Start Points mode is active.">
+              <span class="ico">🤖</span><span>Start Points</span><span class="menu-check">✓</span>
             </button>
             <div class="menu-section-label">Display mode</div>
             <div class="inline-row" id="display-mode-group">
