@@ -493,8 +493,8 @@
       <div class="ribbon-section">
         <div class="ribbon-label">Actions</div>
         <div class="ribbon-group ribbon-dropdown" id="actions-dropdown">
-          <button class="tool-btn ribbon-dropdown-btn" id="actions-dropdown-btn" title="Undo / redo">
-            <span class="ico">↶</span><span class="lbl">Edit</span>
+          <button class="tool-btn ribbon-dropdown-btn" id="actions-dropdown-btn" title="Undo / redo + editing tools">
+            <span class="ico">↶</span><span class="lbl">Editing Tools</span>
             <span class="chev-down">▾</span>
           </button>
           <div class="ribbon-dropdown-popup hidden" id="actions-dropdown-popup">
@@ -504,6 +504,20 @@
             <button id="btn-redo" class="menu-row has-sub" disabled title="Nothing to redo">
               <span class="ico">↷</span><span id="redo-label">Redo</span><kbd class="menu-row-hotkey">⇧⌘Z</kbd><span class="sub-chev">▸</span>
             </button>
+            <div class="menu-section-label">Tools</div>
+            <button id="btn-resize" class="menu-row" title="Resize map dimensions">
+              <span class="ico">📐</span><span>Resize</span>
+            </button>
+            <button id="btn-scatter" class="menu-row" title="Randomly scatter features across the map">
+              <span class="ico">🎲</span><span>Scatter features…</span>
+            </button>
+            <button id="btn-export-heightmap" class="menu-row" title="Export heightmap as 8-bit greyscale PNG">
+              <span class="ico">⛰</span><span>Export Heightmap</span>
+            </button>
+            <button id="btn-import-heightmap" class="menu-row" title="Import heightmap from greyscale PNG (matched to current attr-cell resolution)">
+              <span class="ico">📥</span><span>Import Heightmap</span>
+            </button>
+            <input type="file" id="import-heightmap-file" accept="image/png,image/bmp,image/jpeg" hidden />
           </div>
           <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="undo-history-popup">
             <div class="menu-section-label">Next undo →</div>
@@ -594,22 +608,9 @@
             <span class="chev-down">▾</span>
           </button>
           <div class="ribbon-hover-popup" id="map-hover-popup">
-            <button id="btn-resize" class="tool-btn" title="Resize map dimensions">
-              <span class="ico">📐</span><span class="lbl">Resize</span>
-            </button>
-            <button id="btn-scatter" class="tool-btn" title="Randomly scatter features across the map">
-              <span class="ico">🎲</span><span class="lbl">Scatter</span>
-            </button>
-            <button id="btn-export-heightmap" class="tool-btn" title="Export heightmap as 8-bit greyscale PNG">
-              <span class="ico">⛰</span><span class="lbl">Export Heightmap</span>
-            </button>
             <button id="btn-export-minimap" class="tool-btn" title="Export minimap as PNG (252×252, aspect-fit)">
               <span class="ico">🗺</span><span class="lbl">Export Minimap</span>
             </button>
-            <button id="btn-import-heightmap" class="tool-btn" title="Import heightmap from greyscale PNG (matched to current attr-cell resolution)">
-              <span class="ico">📥</span><span class="lbl">Import Heightmap</span>
-            </button>
-            <input type="file" id="import-heightmap-file" accept="image/png,image/bmp,image/jpeg" hidden />
             <button id="btn-developer" class="tool-btn" title="Developer information">
               <span class="ico">🔬</span><span class="lbl">Developer</span>
             </button>
