@@ -421,6 +421,9 @@
             <button class="menu-row" data-mode="voids" title="Voids — paint impassable / no-build cells">
               <span class="ico">🚫</span><span>Voids</span><kbd class="menu-row-hotkey">D</kbd>
             </button>
+            <button class="menu-row has-sub" data-mode="heightmap" id="mode-row-heightmap" title="Heightmap — raise, lower, smooth or level terrain">
+              <span class="ico">⛰</span><span>Heightmap</span><span class="sub-current" id="hm-current-lbl">Raise · 4</span><kbd class="menu-row-hotkey">H</kbd><span class="sub-chev">▾</span>
+            </button>
             <button class="menu-row has-sub" data-mode="erase" id="mode-row-erase" title="Erase — hover for brush size">
               <span class="ico">🧽</span><span>Erase</span><span class="sub-current" id="brush-current-lbl">1×1</span><kbd class="menu-row-hotkey">X</kbd><span class="sub-chev">▾</span>
             </button>
@@ -439,6 +442,25 @@
             <button class="menu-row" data-size="4"><span class="ico">▪</span><span>4×4</span></button>
             <button class="menu-row" data-size="6"><span class="ico">▪</span><span>6×6</span></button>
             <button class="menu-row" data-size="8"><span class="ico">▪</span><span>8×8</span></button>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="hm-dropdown-popup">
+            <div class="menu-section-label">Tool</div>
+            <div class="inline-row" id="hm-tool-row">
+              <button class="menu-row scope-row active" data-hmtool="raise" title="Raise terrain under the brush">Raise</button>
+              <button class="menu-row scope-row" data-hmtool="lower" title="Lower terrain under the brush">Lower</button>
+              <button class="menu-row scope-row" data-hmtool="smooth" title="Smooth terrain under the brush">Smooth</button>
+              <button class="menu-row scope-row" data-hmtool="level" title="Set terrain to the cell first clicked">Level</button>
+            </div>
+            <div class="menu-section-label">Radius (attribute cells)</div>
+            <button class="menu-row" data-hm-radius="1"><span class="ico">○</span><span>1</span></button>
+            <button class="menu-row" data-hm-radius="2"><span class="ico">○</span><span>2</span></button>
+            <button class="menu-row active" data-hm-radius="4"><span class="ico">○</span><span>4</span></button>
+            <button class="menu-row" data-hm-radius="8"><span class="ico">○</span><span>8</span></button>
+            <button class="menu-row" data-hm-radius="16"><span class="ico">○</span><span>16</span></button>
+            <div class="menu-section-label">Strength</div>
+            <button class="menu-row" data-hm-strength="1"><span class="ico">·</span><span>Light (1)</span></button>
+            <button class="menu-row active" data-hm-strength="4"><span class="ico">·</span><span>Normal (4)</span></button>
+            <button class="menu-row" data-hm-strength="12"><span class="ico">·</span><span>Heavy (12)</span></button>
           </div>
         </div>
       </div>

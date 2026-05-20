@@ -73,6 +73,11 @@ const state = {
   eraseScope: 'all',             // 'all' | 'terrain' | 'features'
   eraseCursor: null,             // last hovered tile while in Erase mode, for the brush outline
   hoveredFeatureName: null,      // drawer feature being hovered (forces animate)
+  hmTool: 'raise',               // 'raise' | 'lower' | 'smooth' | 'level' — heightmap brush mode
+  hmRadius: 4,                   // brush radius in attribute cells
+  hmStrength: 4,                 // height delta per tick in raise/lower; 0..1 mix for smooth
+  hmCursor: null,                // last hovered attr cell while in Heightmap mode, for the brush outline
+  hmLevelHeight: 80,             // height stamped by the Level tool — set on mousedown
 }
 
 // ── OTA defaults ───────────────────────────────────────────────────────────
@@ -996,6 +1001,15 @@ function setMode(mode) {
       if (lbl) lbl.textContent = 'Map'
     }
   }
+  if (mode === 'heightmap') {
+    // Switch to Heightmap view so the user can see what the brush is doing.
+    if (state.viewMode !== 'heightmap') {
+      state.viewMode = 'heightmap'
+      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'heightmap'))
+      const lbl = $('#view-current-lbl')
+      if (lbl) lbl.textContent = 'Heightmap'
+    }
+  }
   // Sync the dropdown label/active row.  The old inline `.tool-btn`s
   // were replaced by the dropdown rows.
   refreshModeDropdown()
@@ -1151,6 +1165,7 @@ function wireKeyboard() {
     }
     else if (e.key === 'x' || e.key === 'X') setMode('erase')
     else if (e.key === 'd' || e.key === 'D') setMode('voids')
+    else if (e.key === 'h' || e.key === 'H') setMode('heightmap')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
     else if (e.key === 'Escape') {
@@ -2387,6 +2402,8 @@ function onCanvasMouseDown(e) {
     onStartPosMouseDown(e)
   } else if (state.mode === 'voids') {
     onVoidsMouseDown(e)
+  } else if (state.mode === 'heightmap') {
+    onHeightmapMouseDown(e)
   }
 }
 
@@ -2434,6 +2451,8 @@ function onCanvasMouseMove(e) {
     onStartPosMouseMove(e)
   } else if (state.mode === 'voids') {
     onVoidsMouseMove(e)
+  } else if (state.mode === 'heightmap') {
+    onHeightmapMouseMove(e)
   }
 }
 
@@ -2476,6 +2495,8 @@ function onCanvasMouseUp(e) {
     onStartPosMouseUp(e)
   } else if (state.mode === 'voids') {
     onVoidsMouseUp(e)
+  } else if (state.mode === 'heightmap') {
+    onHeightmapMouseUp(e)
   }
   painting = false
   paintedDuringStroke = false
@@ -3361,6 +3382,29 @@ function drawEraseBrush(ctx) {
   ctx.restore()
 }
 
+// drawHeightmapBrush renders a circular outline at the cursor while in
+// Heightmap mode, sized to state.hmRadius (in attribute cells).  Drawn
+// in the canvas's tile-pixel coordinate space, so the circle stays the
+// same size regardless of zoom.
+function drawHeightmapBrush(ctx) {
+  if (state.mode !== 'heightmap' || !state.hmCursor) return
+  const { ax, ay } = state.hmCursor
+  const cellPx = TILE_PX / 2 // one attribute cell = 16px in a 32px tile
+  const cx = (ax + 0.5) * cellPx
+  const cy = (ay + 0.5) * cellPx
+  const r = Math.max(1, state.hmRadius | 0) * cellPx
+  const colour = state.hmTool === 'lower' ? 'rgba(56, 132, 255, ' : 'rgba(82, 196, 26, '
+  ctx.save()
+  ctx.fillStyle = colour + '0.10)'
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill()
+  ctx.strokeStyle = colour + '0.95)'
+  ctx.lineWidth = 2
+  ctx.setLineDash([6, 4])
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+  ctx.setLineDash([])
+  ctx.restore()
+}
+
 function drawStartPositions(ctx) {
   if (!state.ota) return
   const fontFamily = getComputedStyle(document.body).fontFamily
@@ -3568,6 +3612,93 @@ function pickAttrCellForVoid(e) {
   return { ax, ay }
 }
 
+function onHeightmapMouseDown(e) {
+  const { ax, ay } = pickAttrCellForVoid(e)
+  beginTransaction()
+  // Level samples the cell first clicked so the rest of the stroke
+  // flattens to that height.
+  const aw = state.tileW * 2
+  if (state.hmTool === 'level' && ax >= 0 && ay >= 0 && ax < aw && ay < state.tileH * 2) {
+    state.hmLevelHeight = state.heights[ay * aw + ax] | 0
+  }
+  paintHeightAt(ax, ay)
+  paintedDuringStroke = true
+  renderCanvas()
+}
+
+function onHeightmapMouseMove(e) {
+  const { ax, ay } = pickAttrCellForVoid(e)
+  if (!state.hmCursor || state.hmCursor.ax !== ax || state.hmCursor.ay !== ay) {
+    state.hmCursor = { ax, ay }
+    renderCanvas()
+  }
+  if (painting) {
+    paintHeightAt(ax, ay)
+    paintedDuringStroke = true
+  }
+}
+
+function onHeightmapMouseUp(_e) {
+  if (painting && paintedDuringStroke) commitTransaction(`Heightmap ${state.hmTool}`)
+  else if (painting) abortTransaction()
+  invalidateMinimapBase()
+  renderCanvas()
+}
+
+// paintHeightAt applies the active heightmap brush at attribute-cell
+// (ax, ay).  Falloff is a quadratic so the brush feels soft at the edge
+// without per-cell trig.  Smooth runs a 3×3 box blur weighted by the
+// brush mask so light passes are clean and heavy passes still settle.
+function paintHeightAt(ax, ay) {
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  const r = Math.max(1, state.hmRadius | 0)
+  const r2 = r * r
+  const tool = state.hmTool
+  const strength = Math.max(1, state.hmStrength | 0)
+  const target = (tool === 'level') ? clamp(state.hmLevelHeight | 0, 0, 255) : 0
+  for (let dy = -r; dy <= r; dy++) {
+    const yy = ay + dy
+    if (yy < 0 || yy >= ah) continue
+    for (let dx = -r; dx <= r; dx++) {
+      const xx = ax + dx
+      if (xx < 0 || xx >= aw) continue
+      const d2 = dx * dx + dy * dy
+      if (d2 > r2) continue
+      const mask = 1 - d2 / r2 // 0 at the edge, 1 at the centre
+      const idx = yy * aw + xx
+      const cur = state.heights[idx] | 0
+      let next = cur
+      if (tool === 'raise') {
+        next = cur + Math.round(strength * mask)
+      } else if (tool === 'lower') {
+        next = cur - Math.round(strength * mask)
+      } else if (tool === 'level') {
+        // Mix the cell toward the captured height.
+        const t = mask * 0.5
+        next = Math.round(cur * (1 - t) + target * t)
+      } else if (tool === 'smooth') {
+        // 3×3 mean of the *current* neighbourhood, mixed in by the mask.
+        let sum = 0; let n = 0
+        for (let ny = -1; ny <= 1; ny++) {
+          const ny2 = yy + ny
+          if (ny2 < 0 || ny2 >= ah) continue
+          for (let nx = -1; nx <= 1; nx++) {
+            const nx2 = xx + nx
+            if (nx2 < 0 || nx2 >= aw) continue
+            sum += state.heights[ny2 * aw + nx2] | 0
+            n++
+          }
+        }
+        const avg = n > 0 ? sum / n : cur
+        const t = mask * Math.min(1, strength / 12)
+        next = Math.round(cur * (1 - t) + avg * t)
+      }
+      state.heights[idx] = clamp(next, 0, 255)
+    }
+  }
+}
+
 function handlePaint(e) {
   const { tx, ty } = pickCell(e)
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
@@ -3759,6 +3890,7 @@ function renderCanvas() {
   drawHighlightedFeatureOutlines(ctx)
   drawStartPositions(ctx)
   drawEraseBrush(ctx)
+  drawHeightmapBrush(ctx)
   drawVoidOverlay(ctx)
 
   // Rotation badge is an HTML overlay — hide it when there's nothing
@@ -6003,8 +6135,80 @@ function wireToolbar() {
   wireOTADialog()
   wireSchemaEditor()
   wireBrushSizeGroup()
+  wireHeightmapBrushGroup()
   refreshSchemaSelector()
   updateUndoButtons()
+}
+
+function wireHeightmapBrushGroup() {
+  const hmRow = $('#mode-row-heightmap')
+  const popup = $('#hm-dropdown-popup')
+  if (!hmRow || !popup) return
+  let closeTimer = null
+  const positionSubmenu = () => {
+    const rect = hmRow.getBoundingClientRect()
+    popup.classList.remove('hidden')
+    const popW = popup.offsetWidth
+    const popH = popup.offsetHeight
+    const vpW = window.innerWidth
+    const vpH = window.innerHeight
+    let left = rect.left
+    let top = rect.bottom + 4
+    if (left + popW > vpW - 8) left = Math.max(8, vpW - popW - 8)
+    if (top + popH > vpH - 8) top = Math.max(8, rect.top - popH - 4)
+    popup.style.left = left + 'px'
+    popup.style.top = top + 'px'
+  }
+  const open = () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+    positionSubmenu()
+  }
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer)
+    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
+  }
+  hmRow.addEventListener('mouseenter', open)
+  hmRow.addEventListener('mouseleave', scheduleClose)
+  popup.addEventListener('mouseenter', () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+  })
+  popup.addEventListener('mouseleave', scheduleClose)
+
+  const refreshLabel = () => {
+    const lbl = $('#hm-current-lbl')
+    if (lbl) {
+      const cap = state.hmTool.charAt(0).toUpperCase() + state.hmTool.slice(1)
+      lbl.textContent = `${cap} · ${state.hmRadius}`
+    }
+  }
+
+  $$('#hm-dropdown-popup [data-hmtool]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      state.hmTool = row.dataset.hmtool
+      $$('#hm-dropdown-popup [data-hmtool]').forEach((r) => r.classList.toggle('active', r === row))
+      if (state.mode !== 'heightmap') setMode('heightmap')
+      refreshLabel()
+      setStatus(`Heightmap tool: ${state.hmTool}.`)
+    })
+  })
+  $$('#hm-dropdown-popup [data-hm-radius]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      state.hmRadius = parseInt(row.dataset.hmRadius, 10) || 4
+      $$('#hm-dropdown-popup [data-hm-radius]').forEach((r) => r.classList.toggle('active', r === row))
+      if (state.mode !== 'heightmap') setMode('heightmap')
+      refreshLabel()
+    })
+  })
+  $$('#hm-dropdown-popup [data-hm-strength]').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      state.hmStrength = parseInt(row.dataset.hmStrength, 10) || 4
+      $$('#hm-dropdown-popup [data-hm-strength]').forEach((r) => r.classList.toggle('active', r === row))
+      if (state.mode !== 'heightmap') setMode('heightmap')
+    })
+  })
 }
 
 function wireBrushSizeGroup() {
