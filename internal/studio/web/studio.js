@@ -2253,6 +2253,44 @@ function updateUndoButtons() {
     r.disabled = redoStack.length === 0
     r.title = redoStack.length ? `Redo: ${redoStack[redoStack.length - 1].label} (Ctrl+Shift+Z)` : 'Nothing to redo'
   }
+  refreshHistoryFlyouts()
+}
+
+// refreshHistoryFlyouts populates the undo / redo hover flyouts with
+// the next HISTORY_FLYOUT_N labels from each stack.  Top of undoStack
+// is the next undo (LIFO), top of redoStack is the next redo.
+const HISTORY_FLYOUT_N = 5
+function refreshHistoryFlyouts() {
+  const fillList = (containerId, source, emptyText) => {
+    const el = $('#' + containerId)
+    if (!el) return
+    el.innerHTML = ''
+    if (source.length === 0) {
+      const row = document.createElement('div')
+      row.className = 'menu-row history-empty'
+      row.textContent = emptyText
+      el.appendChild(row)
+      return
+    }
+    // Walk back from the top of the stack so the first row is the
+    // very next action that would fire.
+    const start = source.length - 1
+    const end = Math.max(-1, start - HISTORY_FLYOUT_N)
+    for (let i = start; i > end; i--) {
+      const row = document.createElement('div')
+      row.className = 'menu-row history-row'
+      const step = document.createElement('span')
+      step.className = 'history-step'
+      step.textContent = String(start - i + 1)
+      const label = document.createElement('span')
+      label.textContent = source[i].label
+      row.appendChild(step)
+      row.appendChild(label)
+      el.appendChild(row)
+    }
+  }
+  fillList('undo-history-list', undoStack, 'Nothing to undo')
+  fillList('redo-history-list', redoStack, 'Nothing to redo')
 }
 
 function wireCanvas() {
@@ -6498,6 +6536,8 @@ function wireToolbar() {
   $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
   $('#btn-undo').addEventListener('click', undo)
   $('#btn-redo').addEventListener('click', redo)
+  wireHistoryFlyout($('#btn-undo'), $('#undo-history-popup'))
+  wireHistoryFlyout($('#btn-redo'), $('#redo-history-popup'))
   $('#btn-new').addEventListener('click', startNewMapFromEditor)
   $('#btn-open').addEventListener('click', openExistingMapFromEditor)
   $('#btn-ota').addEventListener('click', openOTADialog)
@@ -6647,6 +6687,30 @@ function positionSubmenuRight(parentRow, popup) {
   if (top + popH > vpH - 8) top = Math.max(8, vpH - popH - 8)
   popup.style.left = left + 'px'
   popup.style.top = top + 'px'
+}
+
+// wireHistoryFlyout opens a list popup to the right of the Undo or
+// Redo row when hovered, showing what would happen on the next few
+// presses.  Skips opening when the row is disabled (empty stack).
+function wireHistoryFlyout(row, popup) {
+  if (!row || !popup) return
+  let closeTimer = null
+  const open = () => {
+    if (row.disabled) return
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+    refreshHistoryFlyouts()
+    positionSubmenuRight(row, popup)
+  }
+  const scheduleClose = () => {
+    if (closeTimer) clearTimeout(closeTimer)
+    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
+  }
+  row.addEventListener('mouseenter', open)
+  row.addEventListener('mouseleave', scheduleClose)
+  popup.addEventListener('mouseenter', () => {
+    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+  })
+  popup.addEventListener('mouseleave', scheduleClose)
 }
 
 function wireVoidsBrushGroup() {

@@ -792,6 +792,33 @@ kbd {
 .ribbon-submenu { min-width: 140px; }
 .ribbon-submenu .menu-section-label { margin-top: 0; border-top: none; }
 
+/* Undo/Redo history flyouts list a numbered queue of upcoming
+   transactions.  Slightly indented step badges + muted text so the
+   focus stays on the labels rather than the index. */
+.ribbon-submenu .history-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.ribbon-submenu .history-step {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ribbon-submenu .history-empty {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12px;
+}
+
 /* Hotkey chip on menu rows — appears at the right edge so the user can
    learn the shortcut without leaving the menu.  Hidden at very narrow
    widths so the row doesn't wrap. */

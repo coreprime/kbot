@@ -498,12 +498,20 @@
             <span class="chev-down">▾</span>
           </button>
           <div class="ribbon-dropdown-popup hidden" id="actions-dropdown-popup">
-            <button id="btn-undo" class="menu-row" disabled title="Nothing to undo">
-              <span class="ico">↶</span><span id="undo-label">Undo</span><kbd class="menu-row-hotkey">⌘Z</kbd>
+            <button id="btn-undo" class="menu-row has-sub" disabled title="Nothing to undo">
+              <span class="ico">↶</span><span id="undo-label">Undo</span><kbd class="menu-row-hotkey">⌘Z</kbd><span class="sub-chev">▸</span>
             </button>
-            <button id="btn-redo" class="menu-row" disabled title="Nothing to redo">
-              <span class="ico">↷</span><span id="redo-label">Redo</span><kbd class="menu-row-hotkey">⇧⌘Z</kbd>
+            <button id="btn-redo" class="menu-row has-sub" disabled title="Nothing to redo">
+              <span class="ico">↷</span><span id="redo-label">Redo</span><kbd class="menu-row-hotkey">⇧⌘Z</kbd><span class="sub-chev">▸</span>
             </button>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="undo-history-popup">
+            <div class="menu-section-label">Next undo →</div>
+            <div id="undo-history-list"></div>
+          </div>
+          <div class="ribbon-dropdown-popup ribbon-submenu hidden" id="redo-history-popup">
+            <div class="menu-section-label">Next redo →</div>
+            <div id="redo-history-list"></div>
           </div>
         </div>
       </div>
