@@ -1791,11 +1791,16 @@ function wireWelcomeDropZone() {
 async function openLoadedMap(data, card) {
   const w = data.tileW || 128
   const h = data.tileH || 128
-  // Push a brand-new MapDoc as the active tab.  Subsequent state.X
-  // writes land in this MapDoc — the previously-active tab keeps its
-  // own state intact in tabs[], reachable by clicking back.
+  // Push a brand-new MapDoc as the active tab.  Snapshot the
+  // outgoing tab first so its undo stack / minimap cache survive,
+  // then restore from the fresh MapDoc so the previous map's
+  // minimap doesn't leak across.  Subsequent state.X writes land
+  // in this new MapDoc — the prior tab keeps its own state intact
+  // in tabs[], reachable by clicking back.
+  if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
   tabs.push({ map: new MapDoc() })
   activeTabIndex = tabs.length - 1
+  restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
   state.name = data.name || (card && card.name) || 'newmap'
@@ -1906,9 +1911,16 @@ async function startEditor() {
   // everything (the picker's clamp prevents this from the UI side).
   const counts = pickedPlayerCounts()
   // Push a brand-new MapDoc as the active tab; existing tabs stay in
-  // tabs[] and can be reached by clicking them.
+  // tabs[] and can be reached by clicking them.  Snapshot the
+  // outgoing tab first so its undo stack / minimap cache survive the
+  // round trip, then restore from the fresh MapDoc so module-level
+  // state (minimapBase especially) resets to the new tab's defaults
+  // — otherwise the previous map's minimap leaks into the new one
+  // until the next commit.
+  if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
   tabs.push({ map: new MapDoc() })
   activeTabIndex = tabs.length - 1
+  restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
   state.name = name
