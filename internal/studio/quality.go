@@ -33,6 +33,19 @@ const (
 	// cell; 32 is double that and a reliable "this looks broken"
 	// floor.
 	heightDiscontinuityThreshold = 32
+
+	// metalRichSurfaceThreshold — when a schema's SurfaceMetal is
+	// at or above this value the map is considered metal-rich
+	// (Metal Heck uses 255).  In that mode the engine extracts
+	// metal from open ground via mexes anywhere, so the
+	// metal-proximity check skips that schema's starts.
+	metalRichSurfaceThreshold = 8
+
+	// voidIslandsTolerance — flood-fill from starts will routinely
+	// strand a few cells in tight corners or behind feature
+	// footprints.  Anything under this count is treated as
+	// acceptable noise and the check stays green.
+	voidIslandsTolerance = 20
 )
 
 // qualityIssue is one row in the Quality Checker dialog.  Severity is
@@ -155,12 +168,32 @@ func checkStartPositionsInBounds(m *tnt.Map, req saveRequest) qualityIssue {
 // distance to its nearest metal-producing feature.  Anything past
 // the metalProximityTiles radius gets flagged — the commander can't
 // reach metal in the opening seconds and the player has a stunted
-// economy.
+// economy.  Schemas configured as metal-rich (SurfaceMetal at or
+// above metalRichSurfaceThreshold, i.e. Metal Heck-style) skip the
+// check entirely because mexes extract metal from open ground in
+// that mode and proximity is irrelevant.
 func checkMetalProximity(req saveRequest) qualityIssue {
 	const id = "metalProximity"
 	const label = "Metal Near Starts"
 	if req.OTA == nil || len(req.OTA.Schemas) == 0 {
 		return ok(id, label, "No schemas to check.")
+	}
+	// Filter to schemas that actually need feature-based metal.  A
+	// short-circuit: when every schema is metal-rich the check has
+	// nothing to do and reports a friendly "skipped" message.
+	type checkable struct {
+		schemaIdx int
+		schema    otaSchema
+	}
+	var toCheck []checkable
+	for si, s := range req.OTA.Schemas {
+		if s.SurfaceMetal >= metalRichSurfaceThreshold {
+			continue
+		}
+		toCheck = append(toCheck, checkable{si, s})
+	}
+	if len(toCheck) == 0 {
+		return ok(id, label, fmt.Sprintf("All schemas are metal-rich (SurfaceMetal ≥ %d) — proximity not required.", metalRichSurfaceThreshold))
 	}
 	_, byName := scanFeatures()
 	if len(byName) == 0 {
@@ -184,8 +217,8 @@ func checkMetalProximity(req saveRequest) qualityIssue {
 	}
 	limitSq := float64(metalProximityTiles * metalProximityTiles)
 	var bad []string
-	for si, s := range req.OTA.Schemas {
-		for _, sp := range s.StartPos {
+	for _, c := range toCheck {
+		for _, sp := range c.schema.StartPos {
 			// Game pixels → tile units (1 tile = 32 px).
 			sx := float64(sp.X) / 32
 			sy := float64(sp.Z) / 32
@@ -199,7 +232,7 @@ func checkMetalProximity(req saveRequest) qualityIssue {
 				}
 			}
 			if nearestSq > limitSq {
-				bad = append(bad, fmt.Sprintf("Schema %d / StartPos%d (%dt away)", si+1, sp.Number, int(math.Sqrt(nearestSq))))
+				bad = append(bad, fmt.Sprintf("Schema %d / StartPos%d (%dt away)", c.schemaIdx+1, sp.Number, int(math.Sqrt(nearestSq))))
 			}
 		}
 	}
@@ -267,6 +300,12 @@ func checkVoidIslands(m *tnt.Map, req saveRequest) qualityIssue {
 	}
 	if stranded == 0 {
 		return ok(id, label, "All passable cells are reachable from a start.")
+	}
+	// Sub-tolerance dribbles are unavoidable noise (cells tucked
+	// behind feature footprints, dead corners) and not worth
+	// alarming the user about.
+	if stranded < voidIslandsTolerance {
+		return ok(id, label, fmt.Sprintf("%d cell(s) stranded — within tolerance (<%d).", stranded, voidIslandsTolerance))
 	}
 	pct := 0.0
 	if totalPassable > 0 {
@@ -361,18 +400,25 @@ func checkMissingOTAFields(req saveRequest) qualityIssue {
 	}
 }
 
-// checkSchemaSlotsVsPlayers verifies each schema has enough start
-// positions to satisfy the highest player count listed in
-// OTA.NumPlayers.  e.g. a "2, 3, 4" lobby string with a schema that
-// only carries 2 starts won't open a 4-player game cleanly.
+// checkSchemaSlotsVsPlayers verifies every player count declared in
+// OTA.NumPlayers can be hosted by at least one schema.  A schema can
+// host N players when its StartPos array carries N or more spawn
+// points — the engine just picks the first N for the active game.
+// The schema's Type field is a label (Network 1, 2, 3…), not a
+// capacity, so we ignore it here.
+//
+// e.g. Metal Heck declares numplayers "2,3,4,5,7,8" and ships four
+// schemas with 10/3/5/7 starts.  Every count is covered because at
+// least one schema has ≥ that many starts (the 10-start schema
+// covers everything up to 8).
 func checkSchemaSlotsVsPlayers(req saveRequest) qualityIssue {
 	const id = "schemaSlots"
 	const label = "Schema Player Slots"
 	if req.OTA == nil || len(req.OTA.Schemas) == 0 {
 		return ok(id, label, "No schemas to check.")
 	}
-	maxPlayers := parseMaxPlayers(req.OTA.NumPlayers)
-	if maxPlayers <= 0 {
+	counts := parsePlayerCounts(req.OTA.NumPlayers)
+	if len(counts) == 0 {
 		// numplayers blank — covered by checkMissingOTAFields; here
 		// we still confirm every schema has at least one start.
 		var thin []string
@@ -389,37 +435,64 @@ func checkSchemaSlotsVsPlayers(req saveRequest) qualityIssue {
 			Message: "Schemas with zero starts: " + strings.Join(thin, ", "),
 		}
 	}
-	var thin []string
+	startsPerSchema := make([]int, len(req.OTA.Schemas))
+	maxStarts := 0
 	for i, s := range req.OTA.Schemas {
-		if len(s.StartPos) < maxPlayers {
-			thin = append(thin, fmt.Sprintf("Schema %d (%d/%d)", i+1, len(s.StartPos), maxPlayers))
+		startsPerSchema[i] = len(s.StartPos)
+		if len(s.StartPos) > maxStarts {
+			maxStarts = len(s.StartPos)
 		}
 	}
-	if len(thin) == 0 {
-		return ok(id, label, fmt.Sprintf("Every schema supports up to %d players.", maxPlayers))
+	var missing []string
+	for _, n := range counts {
+		if maxStarts < n {
+			missing = append(missing, strconv.Itoa(n))
+		}
+	}
+	if len(missing) == 0 {
+		return ok(id, label, fmt.Sprintf("Schemas cover every player count (%s).", strings.Join(intsToStrings(counts), ", ")))
 	}
 	return qualityIssue{
 		Check: id, Label: label, Severity: "warning",
-		Message: fmt.Sprintf("Need %d starts per schema: %s", maxPlayers, strings.Join(thin, ", ")),
+		Message: fmt.Sprintf("No schema has enough starts for player count(s): %s", strings.Join(missing, ", ")),
 	}
 }
 
-// parseMaxPlayers pulls the largest integer out of a comma-list
-// like "2, 3, 4" (TA's typical numplayers format).  Returns 0 when
-// the string contains no numbers — callers treat that as "no limit
-// declared, just sanity-check non-emptiness".
-func parseMaxPlayers(s string) int {
-	max := 0
+// parsePlayerCounts splits a numplayers string like "2, 3, 4" into
+// its individual integer entries.  Returns nil for blank or
+// nonsense input.
+func parsePlayerCounts(s string) []int {
+	var out []int
 	for _, tok := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
 		n, err := strconv.Atoi(strings.TrimSpace(tok))
-		if err != nil {
+		if err != nil || n <= 0 {
 			continue
 		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// parseMaxPlayers returns the largest integer in a numplayers string
+// like "2, 3, 4".  Kept for callers (and tests) that just need the
+// ceiling; checkSchemaSlotsVsPlayers uses parsePlayerCounts instead
+// to validate every declared count individually.
+func parseMaxPlayers(s string) int {
+	max := 0
+	for _, n := range parsePlayerCounts(s) {
 		if n > max {
 			max = n
 		}
 	}
 	return max
+}
+
+func intsToStrings(xs []int) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = strconv.Itoa(x)
+	}
+	return out
 }
 
 // ── Small shared helpers ───────────────────────────────────────────────────
