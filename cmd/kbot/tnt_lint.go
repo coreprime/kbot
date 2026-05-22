@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -43,10 +44,13 @@ func newTNTLintCommand() *cobra.Command {
     voidIslands              passable cells unreachable from any start
     heightDiscontinuities    cliff edges that block ground pathing
 
-The sister .ota is auto-discovered from the .tnt's basename; pass
---ota <path> to override.  --vfs <root> mounts a TA install so the
-metal-proximity check can identify metal-producing features.  Pass
---no-quality to skip the quality pass entirely (CI / size-only runs).
+By default the command mounts the active kbot context (` + "`kbot ctx`" + `)
+as a virtual filesystem so the .tnt argument can be a bare basename
+("metal heck.tnt") or a virtual path ("maps/metal heck.tnt") that
+lives inside an HPI archive — sibling .ota lookup and the feature
+registry both inherit that VFS.  Pass an absolute path or --vfs
+<root> to override.  --no-quality skips the quality pass for
+size-only / CI runs.
 
 The map is not modified.  When at least one issue is reported the
 exit code is 1 so the command can be used in CI; clean maps exit 0.`,
@@ -54,18 +58,31 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, args []string) error {
-			path := args[0]
-			data, err := os.ReadFile(path)
+			arg := args[0]
+
+			// Mount the VFS first.  --vfs > active kbot context > nil.
+			vfs, vfsLabel, err := openLintVFS(vfsRoot)
 			if err != nil {
-				return fmt.Errorf("read tnt: %w", err)
+				return err
 			}
-			m, err := tnt.LoadFromReader(bytes.NewReader(data))
+			if vfs != nil {
+				defer func() { _ = vfs.Close() }()
+				reportContextSource(vfsLabel)
+			}
+
+			// Resolve the .tnt: local file first, fall back to VFS.
+			tntBytes, tntSource, err := readLintInput(arg, vfs)
+			if err != nil {
+				return err
+			}
+
+			m, err := tnt.LoadFromReader(bytes.NewReader(tntBytes))
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
 
-			// Tile-pool diagnostics first — these are about pure
-			// storage efficiency and don't need an OTA or VFS.
+			// Tile-pool diagnostics first — pure storage efficiency,
+			// no OTA or feature registry required.
 			opts := tnt.LintOptions{SimilarityPercent: similarity}
 			if similarity > 0 {
 				pal, palErr := tntPalette()
@@ -79,7 +96,7 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "TNT file:        %s\n", path)
+			fmt.Fprintf(os.Stderr, "TNT file:        %s\n", tntSource)
 			fmt.Fprintf(os.Stderr, "Tile graphics:   %d\n", len(m.Tiles))
 			fmt.Fprintf(os.Stderr, "Map size:        %dx%d cells (%dx%d tiles)\n",
 				m.AttrW, m.AttrH, m.TileW, m.TileH)
@@ -103,14 +120,12 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 					totalCount, sIfPlural(totalCount), totalBytes)
 			}
 
-			// Quality checks (optional but on by default).
 			qualityWarnings := 0
 			if !qualityOff {
-				in, otaSrc, vfsSrc, qErr := buildMaplintInputFromCLI(path, m, otaPath, vfsRoot)
+				in, otaSrc, vfsSrc, qErr := buildMaplintInputFromCLI(arg, tntSource, m, tntBytes, otaPath, vfs, vfsLabel)
 				if qErr != nil {
 					return qErr
 				}
-				qDiags := maplint.Run(in)
 				fmt.Fprintln(os.Stderr)
 				fmt.Fprintln(os.Stderr, "  Map quality:")
 				if otaSrc != "" {
@@ -123,7 +138,7 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 				} else {
 					fmt.Fprintln(os.Stderr, "    Feature VFS:   (none — metal-proximity check will skip)")
 				}
-				for _, d := range qDiags {
+				for _, d := range maplint.Run(in) {
 					icon := maplintIcon(d.Severity)
 					fmt.Fprintf(os.Stderr, "    %s  %-24s %s\n", icon, d.ID, d.Message)
 					if d.Severity != maplint.SeverityOK {
@@ -143,88 +158,185 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 	cmd.Flags().Float64Var(&similarity, "similarity", 1.0,
 		"Mean per-channel pixel-difference threshold (% of 255) for the similar-tiles rule; 0 disables")
 	cmd.Flags().StringVar(&otaPath, "ota", "",
-		"Path to the sister .ota; defaults to <tnt-basename>.ota next to the .tnt")
+		"Path to the sister .ota (local or virtual); defaults to <tnt-basename>.ota next to the .tnt")
 	cmd.Flags().StringVar(&vfsRoot, "vfs", "",
-		"Mount a TA install (or flattened directory) so the metal-proximity check can recognise metal-producing features. Defaults to the active kbot context if any.")
+		"Mount a TA install (or flattened directory) for .tnt / .ota / feature-registry lookups. Defaults to the active kbot context.")
 	cmd.Flags().BoolVar(&qualityOff, "no-quality", false,
 		"Skip the map-quality pass; only run tile-pool diagnostics")
 	return cmd
 }
 
+// openLintVFS mounts the right virtual filesystem for a lint invocation.
+// Returns nil VFS (and empty label) when neither an explicit --vfs nor
+// an active kbot context is configured — the command then only runs
+// against local disk.
+func openLintVFS(explicit string) (*filesystem.VirtualFileSystem, string, error) {
+	root, source, err := resolveVFSPath(explicit)
+	if err != nil {
+		return nil, "", err
+	}
+	if root == "" {
+		return nil, "", nil
+	}
+	vfs, err := filesystem.NewVirtualFileSystem(root, &filesystem.Config{
+		Extensions:        []string{".hpi", ".ccx", ".gp3", ".ufo"},
+		ExcludeExtensions: []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
+		ExcludePrefixes:   []string{"goggame"},
+		SkipErrors:        true,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("mount vfs at %s: %w", root, err)
+	}
+	return vfs, source, nil
+}
+
+// readLintInput returns the bytes of the .tnt the user asked for,
+// plus a human-readable source label.  Resolution order: local disk
+// (absolute or relative), then virtual-path lookup against the
+// mounted VFS, then bare-basename search under maps/ of the VFS.
+func readLintInput(arg string, vfs *filesystem.VirtualFileSystem) ([]byte, string, error) {
+	// 1. Local disk first — keeps the common "I edited this map
+	// outside the install" workflow snappy.
+	if info, statErr := os.Stat(arg); statErr == nil && !info.IsDir() {
+		data, err := os.ReadFile(arg)
+		if err != nil {
+			return nil, "", fmt.Errorf("read tnt: %w", err)
+		}
+		return data, arg, nil
+	}
+	if vfs == nil {
+		return nil, "", fmt.Errorf("read tnt: %q is not a local file and no VFS is mounted (try `kbot ctx add` or pass --vfs)", arg)
+	}
+	// 2. Exact virtual path.
+	if vfs.Exists(arg) && !vfs.IsDir(arg) {
+		data, err := vfs.ReadFile(arg)
+		if err != nil {
+			return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
+		}
+		return data, "vfs:" + arg, nil
+	}
+	// 3. Bare basename — search maps/ for a single match.
+	if !strings.ContainsAny(arg, "/\\") {
+		candidate := "maps/" + strings.ToLower(arg)
+		if vfs.Exists(candidate) && !vfs.IsDir(candidate) {
+			data, err := vfs.ReadFile(candidate)
+			if err != nil {
+				return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
+			}
+			return data, "vfs:" + candidate, nil
+		}
+		// Walk the VFS once looking for any maps/*.tnt with this basename.
+		target := strings.ToLower(arg)
+		var hits []string
+		for _, p := range vfs.List() {
+			lower := strings.ToLower(p)
+			if !strings.HasPrefix(lower, "maps/") || !strings.HasSuffix(lower, ".tnt") {
+				continue
+			}
+			if path.Base(lower) == target {
+				hits = append(hits, p)
+			}
+		}
+		if len(hits) == 1 {
+			data, err := vfs.ReadFile(hits[0])
+			if err != nil {
+				return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
+			}
+			return data, "vfs:" + hits[0], nil
+		}
+		if len(hits) > 1 {
+			return nil, "", fmt.Errorf("read tnt: %q matches %d maps in the vfs (%s) — pass a fuller path",
+				arg, len(hits), strings.Join(hits, ", "))
+		}
+	}
+	return nil, "", fmt.Errorf("read tnt: %q not found locally or in the mounted vfs", arg)
+}
+
+// readSiblingOTA returns the bytes + source label of the sister .ota
+// for a TNT, applying the same local-then-VFS lookup order.  Returns
+// ("", "", nil) when no .ota is found — that's not an error.
+func readSiblingOTA(tntArg, override string, vfs *filesystem.VirtualFileSystem, tntSource string) ([]byte, string) {
+	// Explicit --ota wins.
+	if override != "" {
+		if data, err := os.ReadFile(override); err == nil {
+			return data, override
+		}
+		if vfs != nil && vfs.Exists(override) {
+			if data, err := vfs.ReadFile(override); err == nil {
+				return data, "vfs:" + override
+			}
+		}
+		return nil, ""
+	}
+	// Derive the sibling path from the resolved source.  When the TNT
+	// came from the VFS, prefer the same VFS slot so we don't have to
+	// reach back to local disk.
+	if strings.HasPrefix(tntSource, "vfs:") {
+		virt := strings.TrimPrefix(tntSource, "vfs:")
+		otaPath := strings.TrimSuffix(virt, path.Ext(virt)) + ".ota"
+		if vfs != nil && vfs.Exists(otaPath) {
+			if data, err := vfs.ReadFile(otaPath); err == nil {
+				return data, "vfs:" + otaPath
+			}
+		}
+		return nil, ""
+	}
+	// Local TNT — look for a sibling on disk.
+	otaPath := strings.TrimSuffix(tntArg, filepath.Ext(tntArg)) + ".ota"
+	if data, err := os.ReadFile(otaPath); err == nil {
+		return data, otaPath
+	}
+	return nil, ""
+}
+
 // buildMaplintInputFromCLI gathers the optional inputs the quality
 // pass needs.  Returns the assembled Input plus human-readable
 // source labels for the OTA and VFS so the CLI can report what it
-// found.  A missing .ota or VFS isn't an error — the relevant
-// checks just skip themselves.
-func buildMaplintInputFromCLI(tntPath string, m *tnt.Map, otaOverride, vfsRoot string) (maplint.Input, string, string, error) {
+// found.  tntSource is the label readLintInput returned, used to
+// drive sibling-OTA lookup against the same backing store.
+func buildMaplintInputFromCLI(arg, tntSource string, m *tnt.Map, tntBytes []byte, otaOverride string, vfs *filesystem.VirtualFileSystem, vfsLabel string) (maplint.Input, string, string, error) {
 	in := maplint.Input{Map: m}
 
-	// OTA: explicit > sibling on disk.
-	otaPath := otaOverride
-	if otaPath == "" {
-		otaPath = strings.TrimSuffix(tntPath, filepath.Ext(tntPath)) + ".ota"
-	}
-	otaSrc := ""
-	if data, err := os.ReadFile(otaPath); err == nil {
-		ota, parseErr := maplint.ParseOTA(string(data))
+	otaBytes, otaSrc := readSiblingOTA(arg, otaOverride, vfs, tntSource)
+	if otaBytes != nil {
+		ota, parseErr := maplint.ParseOTA(string(otaBytes))
 		if parseErr != nil {
-			return in, "", "", fmt.Errorf("parse %s: %w", otaPath, parseErr)
+			return in, "", "", fmt.Errorf("parse ota: %w", parseErr)
 		}
 		if ota != nil {
 			in.OTA = ota
-			otaSrc = otaPath
 		}
 	}
 
-	// Feature placements from the TNT itself.  These are the engine's
-	// "Feature" table records — we cross-reference their names with
-	// the VFS-provided feature registry for the metal-proximity check.
-	if data, err := os.ReadFile(tntPath); err == nil {
-		features, _ := m.LoadFeatures(bytes.NewReader(data))
-		placements := m.GetFeaturePlacements()
-		fs := make([]maplint.FeaturePlacement, 0, len(placements))
-		for _, p := range placements {
-			if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
-				continue
-			}
-			name := strings.TrimSpace(features[p.FeatureIdx].Name)
-			if name == "" {
-				continue
-			}
-			fs = append(fs, maplint.FeaturePlacement{Name: name, AX: p.AttrX, AY: p.AttrY})
+	// Feature placements baked into the TNT.
+	features, _ := m.LoadFeatures(bytes.NewReader(tntBytes))
+	placements := m.GetFeaturePlacements()
+	fs := make([]maplint.FeaturePlacement, 0, len(placements))
+	for _, p := range placements {
+		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
+			continue
 		}
-		in.Features = fs
+		name := strings.TrimSpace(features[p.FeatureIdx].Name)
+		if name == "" {
+			continue
+		}
+		fs = append(fs, maplint.FeaturePlacement{Name: name, AX: p.AttrX, AY: p.AttrY})
 	}
+	in.Features = fs
 
-	// Feature registry from a VFS — explicit > active context.
-	resolvedRoot := vfsRoot
-	if resolvedRoot == "" {
-		path, _, _ := resolveVFSPath("")
-		resolvedRoot = path
-	}
+	// Feature registry comes straight from the mounted VFS.
 	vfsSrc := ""
-	if resolvedRoot != "" {
-		vfs, err := filesystem.NewVirtualFileSystem(resolvedRoot, &filesystem.Config{
-			Extensions:        []string{".hpi", ".ccx", ".gp3", ".ufo"},
-			ExcludeExtensions: []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-			ExcludePrefixes:   []string{"goggame"},
-			SkipErrors:        true,
-		})
-		if err == nil {
-			defer func() { _ = vfs.Close() }()
-			reg := scanFeatureRegistry(vfs)
-			if len(reg) > 0 {
-				in.FeatureRegistry = reg
-				vfsSrc = resolvedRoot
-			}
+	if vfs != nil {
+		if reg := scanFeatureRegistry(vfs); len(reg) > 0 {
+			in.FeatureRegistry = reg
+			vfsSrc = vfsLabel
 		}
 	}
 	return in, otaSrc, vfsSrc, nil
 }
 
 // scanFeatureRegistry walks features/*.tdf in the VFS and returns a
-// lowercased-feature-name → metal-yield map.  Used by the quality
-// pass's metal-proximity check.
+// lowercased-feature-name → metal-yield map.
 func scanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
 	out := map[string]int{}
 	for _, p := range vfs.List() {

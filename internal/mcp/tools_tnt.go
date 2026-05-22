@@ -119,9 +119,13 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 					"tile graphics) and map-quality checks identical to Studio's Quality Checker "+
 					"(missing OTA metadata, unreachable / void start positions, schema player-slot "+
 					"coverage, metal proximity, void islands, height discontinuities, duplicate "+
-					"tile graphics).  Returns a JSON list of diagnostics with severity + message.",
+					"tile graphics).  Returns a JSON list of diagnostics with severity + message.  "+
+					"`path` accepts an absolute disk path, a virtual path inside the supplied "+
+					"`game_data` (e.g. \"maps/the pass.tnt\"), or a bare basename (\"the pass.tnt\") "+
+					"which is searched against the VFS.  The sibling .ota and the metal-proximity "+
+					"feature registry are resolved through the same VFS automatically.",
 			),
-			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file — absolute, virtual ('maps/foo.tnt'), or bare basename.")),
 			mcplib.WithString("ota_path",
 				mcplib.Description("Override the sister .ota path (default: <tnt-basename>.ota next to the .tnt)."),
 			),

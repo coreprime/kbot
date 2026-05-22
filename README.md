@@ -421,19 +421,29 @@ applies, plus the tile-pool diagnostics that `kbot tnt optimize` is
 built on.  No files are modified — the command is read-only and
 returns exit-1 when any issue is reported (handy for CI).
 
+By default the command mounts the **active kbot context** (`kbot
+ctx`) as a virtual filesystem, so the `path` argument can be a bare
+basename, a virtual path inside an HPI / GP3 archive, or an absolute
+disk path.  The sibling `.ota` and the metal-proximity feature
+registry are picked up from the same VFS automatically.
+
 ```bash
-# Default: tile-pool + quality (auto-detects sibling .ota).
+# Bare basename — searched against maps/ in the active context VFS.
 kbot tnt lint "metal heck.tnt"
 
-# Point at a TA install so the metal-proximity check can recognise
-# metal-producing features.  --vfs falls back to the active kbot
-# context (`kbot ctx`) when omitted.
+# Virtual path — addresses a file inside an HPI archive directly.
+kbot tnt lint "maps/the pass.tnt"
+
+# Local file on disk (absolute or relative to cwd) still works.
+kbot tnt lint ./my-edit.tnt
+
+# Override the mount root for one invocation.
 kbot tnt lint --vfs ~/ta-flattened "metal heck.tnt"
 
 # Skip the quality pass; just report tile-pool savings.
 kbot tnt lint --no-quality "metal heck.tnt"
 
-# Override the sister .ota path (useful for editing in a workspace).
+# Override the sister .ota lookup (also accepts virtual paths).
 kbot tnt lint --ota ./my-edit.ota "metal heck.tnt"
 ```
 
