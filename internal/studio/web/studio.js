@@ -47,6 +47,13 @@ const QUALITY_WINDOW_MIN_MS = 1500
 const BUILDABLE_MAX_SLOPE = 12
 const BUILDABLE_FILL = 'rgba(96, 180, 255, 0.34)'
 
+// Keyboard map navigation.  Pan distance is in canvas-pixel space
+// (TILE_PX = 32, so this is two tiles per arrow press).  Holding
+// Shift triples the step for fast traversal.  Zoom step matches the
+// +/- toolbar buttons via state.settings.zoomStep.
+const MAP_PAN_STEP_PX = 64
+const MAP_PAN_FAST_MULT = 3
+
 // ── Worlds ─────────────────────────────────────────────────────────────────
 // WORLDS is the single source of truth for the distinct worlds the editor
 // recognises.  One entry per world — Mars and Moon are their own rows
@@ -928,6 +935,10 @@ async function openMapDialog(source = 'welcome') {
   $('#open-dialog').classList.remove('hidden')
   $('#open-confirm').disabled = true
   selectedMapPath = null
+  // Clear any text the user typed in a previous session — the filter
+  // is session-scoped, not persisted, so each open is a clean start.
+  const filter = $('#open-filter')
+  if (filter) filter.value = ''
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
   // Show skeleton immediately so the dialog never appears empty, then
   // start fetching.  fetchMaps polls until the server marks the catalog
@@ -2422,8 +2433,27 @@ function wireKeyboard() {
     else if (e.key === 'r' || e.key === 'R') setMode('ruler')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
+    // Arrow keys: page through drawer sections when a section is the
+    // active selection, otherwise pan the map.  Holding Shift makes
+    // each press pan a longer step for fast traversal.
     else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
     else if (e.key === 'ArrowRight' && pageSectionSibling(1)) { e.preventDefault() }
+    else if (e.key === 'ArrowLeft')  { e.preventDefault(); panMap(-1,  0, e.shiftKey) }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); panMap( 1,  0, e.shiftKey) }
+    else if (e.key === 'ArrowUp')    { e.preventDefault(); panMap( 0, -1, e.shiftKey) }
+    else if (e.key === 'ArrowDown')  { e.preventDefault(); panMap( 0,  1, e.shiftKey) }
+    // Page Up / Page Down zoom in / out.  Same step as the toolbar
+    // buttons so the keyboard + mouse paths stay in sync.
+    else if (e.key === 'PageUp') {
+      e.preventDefault()
+      setZoom(state.zoom * (state.settings?.zoomStep || 1.25))
+    }
+    else if (e.key === 'PageDown') {
+      e.preventDefault()
+      setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
+    }
+    // Home: fit the entire map to the viewport.
+    else if (e.key === 'Home') { e.preventDefault(); fitZoom() }
     else if (e.key === 'Escape') {
       // If the schema-edit dialog is open, Esc cancels it.  Done
       // before the menu / mode-reset paths so editing a schema and
@@ -8674,6 +8704,19 @@ function fitZoom() {
   const zx = wrap.clientWidth / canvas.width
   const zy = wrap.clientHeight / canvas.height
   setZoom(Math.min(zx, zy) * 0.95)
+}
+
+// panMap nudges the canvas-scroll viewport by (dx, dy) units of
+// MAP_PAN_STEP_PX canvas-pixels each.  Shift-modifier multiplies the
+// step by MAP_PAN_FAST_MULT so power users can race across a 256-
+// tile map without spamming arrow keys.  Native scrollLeft / Top
+// clamping handles edge cases at the map boundary.
+function panMap(dx, dy, fast = false) {
+  const wrap = $('#canvas-scroll')
+  if (!wrap) return
+  const step = MAP_PAN_STEP_PX * (fast ? MAP_PAN_FAST_MULT : 1) * (state.zoom || 1)
+  wrap.scrollLeft += dx * step
+  wrap.scrollTop  += dy * step
 }
 
 // ── Toolbar ────────────────────────────────────────────────────────────────
