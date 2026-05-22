@@ -4962,15 +4962,53 @@ function clearRegion() {
 // cutSelection = Copy + Clear region, all in one transactional shot.
 // Falls through cleanly if there's nothing to act on.
 async function cutSelection() {
-  if (!state.rectSelection && !state.terrainClipboard) {
+  // Build the clipboard payload synchronously so it survives any
+  // events that fire during the async clipboard write below.  Doing
+  // it in this order also means an aborted clipboard write doesn't
+  // leave the user with an unexpected "selection cleared but no
+  // paste available" state — the clear only happens once the payload
+  // is locked in.
+  let payload = null
+  if (state.terrainClipboard) {
+    const c = state.terrainClipboard
+    payload = { w: c.w, h: c.h, tiles: c.tiles, heights: c.heights, features: c.features }
+  } else if (state.rectSelection) {
+    const r = state.rectSelection
+    payload = extractTerrainRect(r.x, r.y, r.w, r.h)
+  }
+  if (!payload) {
     setStatus('Nothing to cut — make a Select-Terrain rectangle first.')
     return
   }
-  // Snapshot the rectangle to copy first, then clear.  Doing the copy
-  // before the transaction keeps the system-clipboard write outside
-  // the undoable diff — it doesn't survive undo anyway.
-  await copyToClipboard()
-  if (state.rectSelection) clearRegion()
+  // Clear synchronously *before* the clipboard write.  This way, an
+  // event firing during the await can't sneak in and lose
+  // state.rectSelection out from under clearRegion().  When the
+  // selection was already a terrainClipboard (drag-lifted), the
+  // source cells are already empty so no extra clear is needed.
+  const hadRectSelection = !!state.rectSelection
+  if (hadRectSelection) {
+    clearRegion()
+  } else if (state.terrainClipboard) {
+    // Drag-lifted content already has its source cells cleared (the
+    // captureTerrain that lifted it did that).  Cut should discard
+    // the lifted clipboard *without* re-pasting it — that's the
+    // point of cut vs. cancel.  Run inside a transaction so the
+    // operation is undoable.
+    beginTransaction()
+    state.terrainClipboard = null
+    hidePlacementHint()
+    commitTransaction(`Cut ${payload.w}×${payload.h} terrain`)
+    renderCanvas()
+  }
+  try {
+    await navigator.clipboard.writeText(CLIP_PREFIX + JSON.stringify(payload))
+    setStatus(`Cut ${payload.w}×${payload.h} terrain rectangle to clipboard.`)
+  } catch (err) {
+    // Clipboard permissions can deny the write (no document focus,
+    // sandbox, etc.).  The local clear already happened — flag it so
+    // the user knows their content isn't on the system clipboard.
+    setStatus(`Cut cleared the selection, but clipboard write failed: ${err.message || err}`)
+  }
 }
 
 // clearAllFeatures wipes every placed feature from the map.  Voids,
