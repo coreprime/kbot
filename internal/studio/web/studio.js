@@ -7227,47 +7227,39 @@ function drawBuildableOverlay(ctx) {
   const cell = TILE_PX / 2
   const slopeMax = BUILDABLE_MAX_SLOPE
 
-  // Pre-compute buildability bitmap so the run-length pass below
-  // doesn't repeat the four-neighbour comparison per cell.
+  // Pre-compute buildability bitmap.  The check is terrain-only —
+  // void + sea-level + slope — so the overlay answers "where does
+  // the heightmap allow building?" rather than "where could I place
+  // a new structure right now?".  Existing feature placements are
+  // shown by the feature renderer; the user can see where they sit.
+  // This keeps the overlay readable on metal-heavy maps where every
+  // platform is decorated with wreckage features.
   const buildable = new Uint8Array(aw * ah)
-  // Stamp feature footprints first — the engine treats every cell
-  // under a feature's footprint as occupied, no matter how flat or
-  // dry the underlying terrain is.  Metal Heck's decorative wreckage
-  // pieces sit on flat metal floor; without this pass the cells
-  // immediately under those features wrongly read as buildable while
-  // the visible sprite extends past the footprint and *looks* like
-  // it was the buildable region.
-  const occupied = new Uint8Array(aw * ah)
-  for (const f of state.features || []) {
-    const ax = f.ax | 0, ay = f.ay | 0
-    const fx = Math.max(1, f.footprintX | 0)
-    const fz = Math.max(1, f.footprintZ | 0)
-    for (let dy = 0; dy < fz; dy++) {
-      const yy = ay + dy
-      if (yy < 0 || yy >= ah) continue
-      for (let dx = 0; dx < fx; dx++) {
-        const xx = ax + dx
-        if (xx < 0 || xx >= aw) continue
-        occupied[yy * aw + xx] = 1
-      }
-    }
-  }
   for (let y = 0; y < ah; y++) {
     for (let x = 0; x < aw; x++) {
       const idx = y * aw + x
       if (voids && voids[idx]) continue
-      if (occupied[idx]) continue
       const h = heights[idx]
       if (h < seaLevel) continue
-      // Cardinal neighbours — skip out-of-bounds (edge cells effectively
-      // get a "free pass" on the missing direction, matching the engine's
-      // behaviour at the map border).
-      let bad = false
-      if (x > 0      && Math.abs(h - heights[idx - 1])  > slopeMax) bad = true
-      else if (x + 1 < aw && Math.abs(h - heights[idx + 1])  > slopeMax) bad = true
-      else if (y > 0      && Math.abs(h - heights[idx - aw]) > slopeMax) bad = true
-      else if (y + 1 < ah && Math.abs(h - heights[idx + aw]) > slopeMax) bad = true
-      if (!bad) buildable[idx] = 1
+      // 3×3 max-min check: a unit's footprint sits across multiple
+      // cells, so the engine's slope tolerance is really about the
+      // height differential across a patch, not just a single
+      // neighbour edge.  Comparing the cell against its full 3×3
+      // patch makes plateau edges + slope cells correctly fail
+      // while broad flat regions (interior + ground) still pass.
+      let minH = h, maxH = h
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy
+        if (ny < 0 || ny >= ah) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx
+          if (nx < 0 || nx >= aw) continue
+          const nh = heights[ny * aw + nx]
+          if (nh < minH) minH = nh
+          if (nh > maxH) maxH = nh
+        }
+      }
+      if (maxH - minH <= slopeMax) buildable[idx] = 1
     }
   }
 
