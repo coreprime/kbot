@@ -1077,6 +1077,16 @@ function wireOpenDialogKeyboard() {
     if (i >= 0) return i
     return cards.findIndex((c) => c.dataset.path === selectedMapPath)
   }
+  // When focus first lands on the list (Tab from filter, or click on
+  // empty list area), light up the first card so arrow keys have an
+  // anchor immediately.  Without this the user would have to press
+  // Arrow once "blind" to make the first selection visible.
+  list.addEventListener('focus', () => {
+    if (currentIdx() < 0) {
+      const cards = visibleCards()
+      if (cards.length > 0) setKbdFocus(0)
+    }
+  })
   // Arrow + Enter on the list itself.
   list.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
