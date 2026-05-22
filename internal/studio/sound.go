@@ -21,7 +21,7 @@ func handleSound(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch slug {
-	case "watnano1", "watnano2":
+	case "watnano1", "watnano2", "build1", "build2":
 	default:
 		http.Error(w, "sound not in allowlist", http.StatusNotFound)
 		return

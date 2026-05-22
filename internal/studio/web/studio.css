@@ -148,18 +148,18 @@ kbd {
   letter-spacing: 0.04em;
   margin: 4px 0 10px;
 }
-/* Tagline lives in an opaque pill that matches the card's own
-   background, with a touch of translucency to mute the grid strobe
-   behind the text — keeps the line readable without bleaching the
-   surrounding card. */
+/* Tagline lives in a wide block (90% of the card width) at 50%
+   translucency, so the strobing grid still reads through it but the
+   text stays legible against the busier portions of the glamour
+   backdrop. */
 .welcome-tagline {
   text-align: center;
   margin: 0 auto 4px;
-  max-width: 540px;
+  width: 90%;
 }
 .welcome-tagline span {
-  display: inline-block;
-  background: rgba(22, 26, 33, 0.82);
+  display: block;
+  background: rgba(22, 26, 33, 0.5);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 13px;
@@ -173,10 +173,10 @@ kbd {
 .welcome-tabs {
   display: flex;
   gap: 6px;
-  margin: 16px 0 18px;
-  /* Whiter hairline along the tab strip so the bar reads as a real
-     piece of structural chrome rather than a soft separator. */
-  border-bottom: 1px solid rgba(255, 255, 255, 0.55);
+  /* Tab strip sits flush with the panel underneath — no baseline
+     hairline.  The active tab merges into the panel border via its
+     own negative bottom margin (see .welcome-tab.active below). */
+  margin: 16px 0 0;
 }
 .welcome-tab {
   background: transparent;
@@ -189,25 +189,34 @@ kbd {
   letter-spacing: 0.02em;
   color: var(--muted);
   cursor: pointer;
-  /* Sit on the bottom border of .welcome-tabs so the active tab can
-     merge into the panel below it like a real folder tab. */
-  margin-bottom: -1px;
 }
 .welcome-tab:hover:not([disabled]) { color: var(--text); }
 .welcome-tab.active {
-  background: var(--bg-1);
-  /* Whiter hairlines on the active tab edges too — matches the new
-     tab-strip baseline so the active tab visually attaches to it. */
+  /* Match the panel background + border so the active tab visually
+     attaches to the panel below it like a real folder tab.  -1px
+     bottom margin lets the tab eat the panel's top border under it. */
+  background: rgba(22, 26, 33, 0.25);
   border-color: rgba(255, 255, 255, 0.55);
-  border-bottom: 1px solid var(--bg-1);
   color: var(--text);
   font-weight: 600;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
 }
 .welcome-tab[disabled] {
   cursor: not-allowed;
   opacity: 0.55;
 }
-.welcome-tab-panel { padding-top: 4px; }
+/* Folder body — the bordered panel that wraps the card grid + drop
+   hint, attached to the active tab's bottom edge.  Mostly see-
+   through (alpha 0.25) so the strobing grid keeps reading; the
+   white outline is what gives the cards their containing frame. */
+.welcome-tab-panel {
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 0 8px 8px 8px;
+  background: rgba(22, 26, 33, 0.25);
+  padding: 18px 20px 16px;
+}
 .dialog-card {
   background: var(--bg-1);
   border: 1px solid var(--border);

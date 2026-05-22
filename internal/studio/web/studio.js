@@ -1329,57 +1329,45 @@ function wireWelcomeNanoFX() {
 // do we cross-fade, so the user never sees a partial paint.
 const WELCOME_GLAMOUR_INTERVAL_MS = 15000
 
-// Faint nanolathe ambience while the welcome screen is up.  Browser
-// autoplay gates block playback until the user has interacted with
-// the page, so we attach a one-shot gesture listener that kicks the
-// loop on the first move/click — by the time they're reaching for
-// New/Open they've already moved the mouse.
+// One-shot "construction" cue on the welcome screen.  Plays once
+// when the user first interacts with the page (autoplay gate), then
+// stays silent — the looping ambient was too persistent so we
+// reduced it to a single bookend that lines up with the dialog's
+// "particles constructing the display" theme.
 const WELCOME_AMBIENT_VOLUME = 0.18
 
 function wireWelcomeAmbient() {
   const wel = $('#welcome-dialog')
-  const a1 = $('#welcome-ambient-1')
-  const a2 = $('#welcome-ambient-2')
-  if (!wel || !a1 || !a2) return
-  // Alternate which loop is active each session so back-to-back loads
-  // don't always lead with the same sample.
-  const tracks = Math.random() < 0.5 ? [a1, a2] : [a2, a1]
-  for (const el of tracks) el.volume = WELCOME_AMBIENT_VOLUME
-  let active = tracks[0]
+  const audio = $('#welcome-ambient')
+  if (!wel || !audio) return
+  audio.volume = WELCOME_AMBIENT_VOLUME
+  audio.loop = false
   let kicked = false
-  let visible = !wel.classList.contains('hidden')
 
   const tryPlay = () => {
-    if (!visible) return
-    const p = active.play()
-    if (p && typeof p.catch === 'function') p.catch(() => { /* autoplay blocked, wait for gesture */ })
+    const p = audio.play()
+    if (p && typeof p.catch === 'function') p.catch(() => { /* missing sound or autoplay blocked */ })
   }
   const onGesture = () => {
     if (kicked) return
     kicked = true
-    tryPlay()
+    if (!wel.classList.contains('hidden')) tryPlay()
   }
   // First user input anywhere in the page satisfies the autoplay gate.
   for (const ev of ['pointerdown', 'pointermove', 'keydown']) {
     document.addEventListener(ev, onGesture, { once: true, passive: true })
   }
 
-  const stopAll = () => {
-    for (const el of [a1, a2]) {
-      try { el.pause(); el.currentTime = 0 } catch { /* ignore */ }
-    }
+  const stop = () => {
+    try { audio.pause(); audio.currentTime = 0 } catch { /* ignore */ }
   }
-  const sync = () => {
-    visible = !wel.classList.contains('hidden')
-    if (visible) {
-      if (kicked) tryPlay()
-    } else {
-      stopAll()
-    }
-  }
-  const obs = new MutationObserver(sync)
+  // Stop on dialog hide so closing the welcome screen mid-play
+  // cuts the sound cleanly.  No restart on re-show — it's a one-
+  // shot bookend, not an ambient loop.
+  const obs = new MutationObserver(() => {
+    if (wel.classList.contains('hidden')) stop()
+  })
   obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
-  sync()
 }
 
 function wireWelcomeGlamour() {
