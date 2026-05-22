@@ -734,29 +734,11 @@ kbd {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: stretch;
-  /* Right-pad to reserve room for the pinned Help section so other
-     ribbon items don't slide underneath it on wider screens. */
-  padding: 6px 96px 6px 8px;
+  padding: 6px 8px;
   gap: 8px;
-  /* overflow stays visible so the Map section's hover popup can escape
-     vertically.  Position: relative anchors the pinned Help section. */
+  /* overflow stays visible so ribbon popups can escape vertically. */
   overflow: visible;
   position: relative;
-}
-/* Pinned ribbon section — always visible at the far right of the
-   toolbar regardless of the flex flow.  Used by Help so a narrow
-   viewport never hides it.  Sits above any other section that might
-   overlap via z-index. */
-.ribbon-section-pinned {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  bottom: 6px;
-  z-index: 5;
-  /* Same vertical layout as a normal ribbon-section so the label sits
-     above the button. */
-  display: flex;
-  flex-direction: column;
 }
 .ribbon-section {
   display: flex;
@@ -793,7 +775,8 @@ kbd {
   gap: 0;
   height: 30px;
 }
-.ribbon-group > .tool-btn {
+.ribbon-group > .tool-btn,
+.ribbon-group > .ribbon-dropdown > .ribbon-dropdown-btn {
   background: transparent;
   border: none;
   border-radius: 3px;
@@ -802,6 +785,8 @@ kbd {
   min-width: 30px;
   justify-content: center;
 }
+.ribbon-group > .ribbon-dropdown > .ribbon-dropdown-btn { justify-content: space-between; }
+.ribbon-group > .ribbon-dropdown > .ribbon-dropdown-btn:hover { background: var(--bg-3); }
 .ribbon-group > .tool-btn:hover {
   background: var(--bg-3);
   color: var(--text);
@@ -1135,50 +1120,6 @@ kbd {
    the compact form scans more cleanly and leaves room for new
    sections without each one growing horizontally. */
 
-/* ── Map section hover popup ─────────────────────────────────────────
-   The Map section shows Properties as its primary always-visible
-   button (clicking opens the OTA dialog).  Hovering the group reveals
-   the secondary Resize + Developer actions beneath it.  The popup
-   anchors to the section's right edge so it never spills outside the
-   viewport — Map sits on the far right of the ribbon. */
-.ribbon-hover-group { position: relative; }
-.ribbon-hover-popup {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
-  min-width: 160px;
-  z-index: 500;
-  display: none;
-  flex-direction: column;
-  gap: 4px;
-}
-/* Transparent hover bridge above the popup so the cursor can travel
-   from the trigger button down to the popup without leaving the
-   `:hover` state.  Without this the 4-ish px gap between button and
-   popup briefly drops hover and the menu hides mid-traversal. */
-.ribbon-hover-popup::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: -8px;
-  height: 8px;
-}
-.ribbon-hover-group:hover .ribbon-hover-popup,
-.ribbon-hover-popup:hover { display: flex; }
-/* Inner buttons inherit the regular .tool-btn dark-pill look so the
-   popup feels like a vertical stack of the same buttons the rest of
-   the ribbon uses. */
-.ribbon-hover-popup .tool-btn {
-  width: 100%;
-  justify-content: flex-start;
-  padding: 6px 10px;
-}
 .tool-btn.toggle:not(.active) {
   background: var(--bg-2);
   color: var(--muted);

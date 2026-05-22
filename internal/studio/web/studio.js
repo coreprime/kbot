@@ -1999,19 +1999,10 @@ function wireKeyboard() {
   // node sits inside the drawer item and could otherwise stop the
   // event from reaching the document listener in some browsers).
   document.addEventListener('keydown', (e) => {
-    // Don't intercept while the user is typing into a text input — but
-    // checkbox / radio / file <input>s and <select> dropdowns shouldn't
-    // swallow our shortcuts (the schema-select used to steal focus and
-    // block Q/E rotation).
-    const t = e.target
-    if (t instanceof HTMLTextAreaElement) return
-    if (t instanceof HTMLInputElement) {
-      const typ = (t.type || '').toLowerCase()
-      if (typ === '' || /^(text|search|number|password|email|url|tel)$/.test(typ)) return
-    }
-    // Escape closes any open Map-section dialog before falling through
-    // to the Escape-clears-selection path below, so the user can dismiss
-    // Properties / Resize / Developer with a single keystroke.
+    // Escape must close an open dialog *before* the text-input guard
+    // below kicks in — dialogs auto-focus their first input on open, so
+    // letting the guard run first would swallow Escape and leave the
+    // dialog stranded until the user clicked out of the input.
     if (e.key === 'Escape') {
       const ota = $('#ota-dialog')
       if (ota && !ota.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeOTADialog(); return }
@@ -2023,6 +2014,16 @@ function wireKeyboard() {
       if (help && !help.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeHelpDialog(); return }
       const settings = $('#settings-dialog')
       if (settings && !settings.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeSettingsDialog(); return }
+    }
+    // Don't intercept other shortcuts while the user is typing into a
+    // text input — but checkbox / radio / file <input>s and <select>
+    // dropdowns shouldn't swallow our shortcuts (the schema-select used
+    // to steal focus and block Q/E rotation).
+    const t = e.target
+    if (t instanceof HTMLTextAreaElement) return
+    if (t instanceof HTMLInputElement) {
+      const typ = (t.type || '').toLowerCase()
+      if (typ === '' || /^(text|search|number|password|email|url|tel)$/.test(typ)) return
     }
     // `?` (shift+/) opens the help cheat-sheet from anywhere outside
     // a text input.  Symbol comparison handles both US and non-US
@@ -8245,6 +8246,22 @@ function wireToolbar() {
     })
     for (const row of editPopup.querySelectorAll('.menu-row')) {
       row.addEventListener('click', () => editPopup.classList.add('hidden'))
+    }
+  }
+
+  // Advanced dropdown — exports and diagnostics today; future home for
+  // power-user tools.  Same click-toggle pattern as File / Edit.
+  const advBtn = $('#advanced-dropdown-btn')
+  const advPopup = $('#advanced-dropdown-popup')
+  if (advBtn && advPopup) {
+    advBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      closeAllRibbonDropdowns(advPopup)
+      positionRibbonPopup(advBtn, advPopup)
+      advPopup.classList.toggle('hidden')
+    })
+    for (const row of advPopup.querySelectorAll('.menu-row')) {
+      row.addEventListener('click', () => advPopup.classList.add('hidden'))
     }
   }
 

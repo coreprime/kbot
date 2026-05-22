@@ -821,44 +821,56 @@
         </div>
       </div>
       <div class="ribbon-section" id="schema-section">
-        <div class="ribbon-label">Schema</div>
-        <div class="ribbon-group ribbon-dropdown" id="schema-dropdown" data-keep-compact>
-          <button class="tool-btn ribbon-dropdown-btn" id="schema-dropdown-btn" title="Active multiplayer schema — pick, add, or delete">
-            <span class="ico">🎲</span>
-            <span class="lbl" id="schema-current-lbl">Schema</span>
-            <span class="chev-down">▾</span>
+        <div class="ribbon-label">Map Settings</div>
+        <div class="ribbon-group" id="map-settings-group">
+          <button id="btn-ota" class="tool-btn" title="Edit map properties (OTA metadata) — mission name, planet, players, water flags">
+            <span class="ico">⚙</span><span class="lbl">Properties</span>
           </button>
-          <div class="ribbon-dropdown-popup hidden" id="schema-dropdown-popup">
-            <div class="menu-section-label">Schemas</div>
-            <div id="schema-row-list"></div>
-            <div class="menu-section-label">Add</div>
-            <div id="schema-add-grid" class="schema-add-grid"></div>
+          <div class="ribbon-dropdown" id="schema-dropdown" data-keep-compact>
+            <button class="tool-btn ribbon-dropdown-btn" id="schema-dropdown-btn" title="Active multiplayer schema — pick, add, or delete">
+              <span class="ico">🎲</span>
+              <span class="lbl" id="schema-current-lbl">Schema</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="schema-dropdown-popup">
+              <div class="menu-section-label">Schemas</div>
+              <div id="schema-row-list"></div>
+              <div class="menu-section-label">Add</div>
+              <div id="schema-add-grid" class="schema-add-grid"></div>
+            </div>
           </div>
         </div>
       </div>
       <div class="ribbon-section ribbon-section-right">
-        <div class="ribbon-label">Map</div>
-        <div class="ribbon-group ribbon-hover-group" id="map-actions">
-          <button id="btn-ota" class="tool-btn" title="Edit map properties (OTA metadata) — hover for more">
-            <span class="ico">⚙</span><span class="lbl">Properties</span>
-            <span class="chev-down">▾</span>
-          </button>
-          <div class="ribbon-hover-popup" id="map-hover-popup">
-            <button id="btn-export-minimap" class="tool-btn" title="Export minimap as PNG (252×252, aspect-fit)">
-              <span class="ico">🗺</span><span class="lbl">Export Minimap</span>
-            </button>
-            <button id="btn-developer" class="tool-btn" title="Developer information">
-              <span class="ico">🔬</span><span class="lbl">Developer</span>
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="ribbon-section ribbon-section-pinned">
-        <div class="ribbon-label">Help</div>
+        <div class="ribbon-label">Configure</div>
         <div class="ribbon-group">
           <button id="btn-settings" class="tool-btn" title="KBot Studio settings — zoom, brushes, heartbeat, panel defaults">
             <span class="ico">⚙</span><span class="lbl">Settings</span>
           </button>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Advanced</div>
+        <div class="ribbon-group ribbon-dropdown" id="advanced-dropdown">
+          <button class="tool-btn ribbon-dropdown-btn" id="advanced-dropdown-btn" title="Advanced tools — exports and diagnostics. More coming.">
+            <span class="ico">🛠</span><span class="lbl">Advanced</span>
+            <span class="chev-down">▾</span>
+          </button>
+          <div class="ribbon-dropdown-popup hidden" id="advanced-dropdown-popup">
+            <div class="menu-section-label">Export</div>
+            <button id="btn-export-minimap" class="menu-row" title="Export minimap as PNG (252×252, aspect-fit)">
+              <span class="ico">🗺</span><span>Export Minimap</span>
+            </button>
+            <div class="menu-section-label">Diagnostics</div>
+            <button id="btn-developer" class="menu-row" title="Developer information">
+              <span class="ico">🔬</span><span>Developer</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="ribbon-section">
+        <div class="ribbon-label">Help</div>
+        <div class="ribbon-group">
           <button id="btn-help" class="tool-btn" title="Keyboard shortcuts and tips (?)">
             <span class="ico">❓</span><span class="lbl">Help</span>
           </button>
