@@ -47,12 +47,16 @@ const QUALITY_WINDOW_MIN_MS = 1500
 const BUILDABLE_MAX_SLOPE = 12
 const BUILDABLE_FILL = 'rgba(96, 180, 255, 0.34)'
 
-// Keyboard map navigation.  Pan distance is in canvas-pixel space
-// (TILE_PX = 32, so this is two tiles per arrow press).  Holding
-// Shift triples the step for fast traversal.  Zoom step matches the
+// Keyboard map navigation.  Held arrow keys pan continuously via a
+// requestAnimationFrame loop with a linear acceleration ramp from
+// 1× to MAP_PAN_ACCEL_MAX_MULT over MAP_PAN_ACCEL_TIME_MS — quick
+// taps stay precise, long holds race across big maps.  Speed is in
+// canvas-pixel space (i.e. pre-zoom) so the on-screen panning rate
+// stays constant regardless of zoom level.  Zoom step matches the
 // +/- toolbar buttons via state.settings.zoomStep.
-const MAP_PAN_STEP_PX = 64
-const MAP_PAN_FAST_MULT = 3
+const MAP_PAN_RATE_PX_S = 720
+const MAP_PAN_ACCEL_MAX_MULT = 3
+const MAP_PAN_ACCEL_TIME_MS = 2000
 
 // ── Worlds ─────────────────────────────────────────────────────────────────
 // WORLDS is the single source of truth for the distinct worlds the editor
@@ -391,6 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
     openSizeDialog()
   })
   $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
+  wireWelcomeKeyboard()
   wireWelcomeDropZone()
   wireWelcomeNanoFX()
   wireWelcomeGlamour()
@@ -1151,6 +1156,55 @@ function wireOpenDialogKeyboard() {
 // dialog).  The TNT's tile pool is fetched as a synthetic "section"
 // keyed `tnt:<path>` — the rest of the render/save path treats it like
 // any other section thanks to the `tnt:` prefix branch in builder.go.
+// wireWelcomeKeyboard makes the welcome dialog navigable from the
+// keyboard.  ArrowLeft / ArrowRight toggle focus between the New
+// and Open cards; Enter activates whichever is focused.  Focus
+// lands on New the first time the dialog becomes visible, so the
+// user can drive the whole picker without touching the mouse.
+// Ctrl+Up / Ctrl+Left/Right are reserved for future tab switching
+// (Mapping / Modelling / Scripting / Other) — not wired yet.
+function wireWelcomeKeyboard() {
+  const wel = $('#welcome-dialog')
+  const cards = [$('#welcome-new'), $('#welcome-open')]
+  if (!wel || cards.some((c) => !c)) return
+  const focusCard = (i) => {
+    const idx = ((i % cards.length) + cards.length) % cards.length
+    cards[idx].focus()
+  }
+  wel.addEventListener('keydown', (e) => {
+    if (wel.classList.contains('hidden')) return
+    const i = cards.indexOf(document.activeElement)
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      focusCard(i < 0 ? 0 : i - 1)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      focusCard(i < 0 ? 0 : i + 1)
+    } else if (e.key === 'Enter') {
+      // Enter is already native button activation when a card has
+      // focus.  We only intercept when nothing's focused so the
+      // user gets a sensible default (the New card).
+      if (i < 0) {
+        e.preventDefault()
+        cards[0].click()
+      }
+    }
+  })
+  // Focus New on first show.  MutationObserver fires whenever the
+  // welcome dialog's class list changes so re-shows (closing a map
+  // back to welcome) re-focus too.
+  const sync = () => {
+    if (wel.classList.contains('hidden')) return
+    // rAF defers the focus call until the dialog is actually
+    // displayed — Chrome ignores focus() on a hidden ancestor.
+    requestAnimationFrame(() => {
+      if (!wel.classList.contains('hidden')) cards[0].focus()
+    })
+  }
+  new MutationObserver(sync).observe(wel, { attributes: true, attributeFilter: ['class'] })
+  sync()
+}
+
 // wireWelcomeDropZone binds dragover/drop on the welcome modal so the
 // user can drop a .tnt (+ optional .ota sibling) from their desktop
 // ── Welcome dialog nanolathe FX ───────────────────────────────────────
@@ -2433,15 +2487,27 @@ function wireKeyboard() {
     else if (e.key === 'r' || e.key === 'R') setMode('ruler')
     else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
     else if (e.key === 'e' || e.key === 'E') rotateActive(1)
-    // Arrow keys: page through drawer sections when a section is the
-    // active selection, otherwise pan the map.  Holding Shift makes
-    // each press pan a longer step for fast traversal.
+    // Shift + Up/Down: zoom in / out at the keyboard.  Handled
+    // *before* the bare-arrow pan branch so the modifier wins.
+    else if (e.shiftKey && e.key === 'ArrowUp') {
+      e.preventDefault()
+      setZoom(state.zoom * (state.settings?.zoomStep || 1.25))
+    }
+    else if (e.shiftKey && e.key === 'ArrowDown') {
+      e.preventDefault()
+      setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
+    }
+    // Arrow keys: page through drawer sections when a section is
+    // the active selection, otherwise start a continuous pan that
+    // ramps from 1× to MAP_PAN_ACCEL_MAX_MULT over
+    // MAP_PAN_ACCEL_TIME_MS while held.  The repeat-flag check
+    // ignores the OS auto-repeat — the rAF loop drives motion.
     else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
     else if (e.key === 'ArrowRight' && pageSectionSibling(1)) { e.preventDefault() }
-    else if (e.key === 'ArrowLeft')  { e.preventDefault(); panMap(-1,  0, e.shiftKey) }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); panMap( 1,  0, e.shiftKey) }
-    else if (e.key === 'ArrowUp')    { e.preventDefault(); panMap( 0, -1, e.shiftKey) }
-    else if (e.key === 'ArrowDown')  { e.preventDefault(); panMap( 0,  1, e.shiftKey) }
+    else if (e.key === 'ArrowLeft')  { e.preventDefault(); if (!e.repeat) startMapPan('ArrowLeft',  -1,  0) }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); if (!e.repeat) startMapPan('ArrowRight',  1,  0) }
+    else if (e.key === 'ArrowUp')    { e.preventDefault(); if (!e.repeat) startMapPan('ArrowUp',     0, -1) }
+    else if (e.key === 'ArrowDown')  { e.preventDefault(); if (!e.repeat) startMapPan('ArrowDown',   0,  1) }
     // Page Up / Page Down zoom in / out.  Same step as the toolbar
     // buttons so the keyboard + mouse paths stay in sync.
     else if (e.key === 'PageUp') {
@@ -2505,7 +2571,16 @@ function wireKeyboard() {
       spacePanHotkey = false
       if (!panState) document.body.style.cursor = ''
     }
+    // Stop the held-key pan when the user lets go.  Each direction
+    // tracks its own held state, so releasing one of two pressed
+    // arrows keeps the other one going.
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      stopMapPan(e.key)
+    }
   })
+  // Window-blur safety net — if the user alt-tabs while holding an
+  // arrow, we never see the keyup and would scroll forever.
+  window.addEventListener('blur', stopAllMapPan)
 }
 
 // handleDeleteKey resolves the Delete keystroke against whatever the
@@ -8429,6 +8504,20 @@ function wireDeveloperDialog() {
   $('#dev-dialog-close')?.addEventListener('click', closeDeveloperDialog)
   $('#btn-help')?.addEventListener('click', openHelpDialog)
   $('#help-close')?.addEventListener('click', closeHelpDialog)
+  // Help dialog tab strip — same DOM pattern as the welcome tabs.
+  $$('#help-dialog .help-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const key = tab.dataset.helpTab
+      $$('#help-dialog .help-tab').forEach((t) => {
+        const on = t.dataset.helpTab === key
+        t.classList.toggle('active', on)
+        t.setAttribute('aria-selected', on ? 'true' : 'false')
+      })
+      $$('#help-dialog .help-tab-body').forEach((b) => {
+        b.classList.toggle('active', b.dataset.helpTabBody === key)
+      })
+    })
+  })
   $('#btn-settings')?.addEventListener('click', openSettingsDialog)
   $('#settings-cancel')?.addEventListener('click', closeSettingsDialog)
   $('#settings-apply')?.addEventListener('click', applySettingsDialog)
@@ -8706,17 +8795,54 @@ function fitZoom() {
   setZoom(Math.min(zx, zy) * 0.95)
 }
 
-// panMap nudges the canvas-scroll viewport by (dx, dy) units of
-// MAP_PAN_STEP_PX canvas-pixels each.  Shift-modifier multiplies the
-// step by MAP_PAN_FAST_MULT so power users can race across a 256-
-// tile map without spamming arrow keys.  Native scrollLeft / Top
-// clamping handles edge cases at the map boundary.
-function panMap(dx, dy, fast = false) {
+// Continuous pan via held arrow keys.  startMapPan / stopMapPan
+// register a direction in heldPanKeys; mapPanRAF drives a rAF loop
+// that scrolls every frame at MAP_PAN_RATE_PX_S, ramping the speed
+// up to MAP_PAN_ACCEL_MAX_MULT over MAP_PAN_ACCEL_TIME_MS.  Native
+// scrollLeft / Top clamping handles edge cases at the map boundary.
+const heldPanKeys = new Map() // key -> { dx, dy, pressedAt }
+let mapPanRAF = 0
+let mapPanLastT = 0
+
+function startMapPan(key, dx, dy) {
+  if (heldPanKeys.has(key)) return
+  heldPanKeys.set(key, { dx, dy, pressedAt: performance.now() })
+  if (mapPanRAF) return
+  mapPanLastT = performance.now()
+  mapPanRAF = requestAnimationFrame(mapPanTick)
+}
+
+function stopMapPan(key) {
+  heldPanKeys.delete(key)
+  if (heldPanKeys.size === 0 && mapPanRAF) {
+    cancelAnimationFrame(mapPanRAF)
+    mapPanRAF = 0
+  }
+}
+
+function mapPanTick(now) {
+  mapPanRAF = 0
   const wrap = $('#canvas-scroll')
-  if (!wrap) return
-  const step = MAP_PAN_STEP_PX * (fast ? MAP_PAN_FAST_MULT : 1) * (state.zoom || 1)
-  wrap.scrollLeft += dx * step
-  wrap.scrollTop  += dy * step
+  if (!wrap || heldPanKeys.size === 0) return
+  const dt = Math.min(0.1, (now - mapPanLastT) / 1000 || 0)
+  mapPanLastT = now
+  let dxSum = 0, dySum = 0
+  for (const entry of heldPanKeys.values()) {
+    const heldMs = now - entry.pressedAt
+    const ramp = Math.min(1, heldMs / MAP_PAN_ACCEL_TIME_MS)
+    const mult = 1 + ramp * (MAP_PAN_ACCEL_MAX_MULT - 1)
+    const px = MAP_PAN_RATE_PX_S * mult * (state.zoom || 1) * dt
+    dxSum += entry.dx * px
+    dySum += entry.dy * px
+  }
+  if (dxSum) wrap.scrollLeft += dxSum
+  if (dySum) wrap.scrollTop  += dySum
+  mapPanRAF = requestAnimationFrame(mapPanTick)
+}
+
+function stopAllMapPan() {
+  heldPanKeys.clear()
+  if (mapPanRAF) { cancelAnimationFrame(mapPanRAF); mapPanRAF = 0 }
 }
 
 // ── Toolbar ────────────────────────────────────────────────────────────────

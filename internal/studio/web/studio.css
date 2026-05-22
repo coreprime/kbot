@@ -453,12 +453,14 @@ kbd {
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
   transition: transform 100ms ease, border-color 100ms ease, background 100ms ease, box-shadow 100ms ease;
 }
-.welcome-card:hover {
+.welcome-card:hover,
+.welcome-card:focus-visible {
   background: var(--bg-3);
   border-color: #fff;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset, 0 0 24px rgba(127, 255, 102, 0.25);
   transform: translateY(-1px);
 }
+.welcome-card:focus-visible { outline: none; }
 .welcome-card-ico { font-size: 40px; line-height: 1; }
 .welcome-card-title {
   font-size: 17px;
@@ -1247,16 +1249,74 @@ kbd {
   font-size: 12px;
 }
 
-/* Help / keyboard cheat-sheet — two-column responsive grid of
-   <section> blocks, each with its own dl of <kbd>shortcut</kbd> +
-   description.  Single column on narrow viewports. */
-.help-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px 24px;
-  margin: 4px 0 12px;
-  overflow-y: auto;
+/* Help / keyboard cheat-sheet — shortcut groups are organised behind
+   tabs.  The active body fills the dialog with a single-column dl;
+   inactive bodies are display:none.  Tab strip uses the same folder-
+   tab styling as the welcome dialog for a consistent feel. */
+.help-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
 }
+.help-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.help-tab:hover { color: var(--text); }
+.help-tab.active {
+  background: var(--bg-1);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: var(--text);
+  font-weight: 600;
+}
+.help-tab-bodies {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 14px;
+}
+.help-tab-body { display: none; }
+.help-tab-body.active { display: block; }
+.help-tab-body dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 16px;
+  margin: 0;
+}
+.help-tab-body dt {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.help-tab-body dd {
+  font-size: 13px;
+  color: var(--text);
+  margin: 0;
+  line-height: 1.45;
+}
+.help-tab-body kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text);
+}
+/* Legacy .help-section selectors kept for any other dialogs that
+   might still use the old structure (none today, but cheap to keep). */
 .help-section h2 {
   font-size: 12px;
   font-weight: 600;
