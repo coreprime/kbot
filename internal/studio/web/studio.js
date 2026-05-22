@@ -2373,6 +2373,12 @@ function wireKeyboard() {
       e.preventDefault()
       copyToClipboard()
     }
+    else if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
+      // Cut = copy + clear region.  Same selection rule as Copy
+      // (rectSelection or already-lifted terrainClipboard).
+      e.preventDefault()
+      cutSelection()
+    }
     else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
       // Paste a KBot Studio rectangle from the system clipboard,
       // staged as a follow-the-cursor terrainClipboard.
@@ -4713,6 +4719,105 @@ function extractTerrainRect(x, y, w, h) {
     }
   }
   return { w, h, tiles, heights, features }
+}
+
+// clearRegion wipes tiles + heights + features inside the current
+// Select-Terrain rectangle.  Different from the Erase brush: this
+// clears the entire selection in one transactional shot, with a
+// status update and undo support.  No-op when nothing is selected.
+function clearRegion() {
+  const r = state.rectSelection
+  if (!r || r.w <= 0 || r.h <= 0) {
+    setStatus('Nothing to clear — make a Select-Terrain rectangle first.')
+    return
+  }
+  beginTransaction()
+  const mapAttrW = state.tileW * 2
+  let tilesCleared = 0
+  let heightsTouched = 0
+  for (let dy = 0; dy < r.h; dy++) {
+    for (let dx = 0; dx < r.w; dx++) {
+      const mx = r.x + dx, my = r.y + dy
+      const idx = my * state.tileW + mx
+      if (state.tiles[idx]) { state.tiles[idx] = null; tilesCleared++ }
+      for (let qy = 0; qy < 2; qy++) {
+        for (let qx = 0; qx < 2; qx++) {
+          const ay = my * 2 + qy
+          const ax = mx * 2 + qx
+          const ai = ay * mapAttrW + ax
+          if (state.heights[ai] !== 80) { state.heights[ai] = 80; heightsTouched++ }
+        }
+      }
+    }
+  }
+  const minAX = r.x * 2, maxAX = (r.x + r.w) * 2
+  const minAY = r.y * 2, maxAY = (r.y + r.h) * 2
+  const before = state.features.length
+  state.features = state.features.filter((f) => !(f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY))
+  const featuresRemoved = before - state.features.length
+  // Reset feature selection if any of its members disappeared.
+  if (state.selectedFeature >= 0 && state.selectedFeature >= state.features.length) state.selectedFeature = -1
+  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
+  commitTransaction(`Clear ${r.w}×${r.h} region`)
+  setStatus(`Cleared ${r.w}×${r.h} region — ${tilesCleared} tile(s), ${heightsTouched} height cell(s), ${featuresRemoved} feature(s).`)
+  renderCanvas()
+}
+
+// cutSelection = Copy + Clear region, all in one transactional shot.
+// Falls through cleanly if there's nothing to act on.
+async function cutSelection() {
+  if (!state.rectSelection && !state.terrainClipboard) {
+    setStatus('Nothing to cut — make a Select-Terrain rectangle first.')
+    return
+  }
+  // Snapshot the rectangle to copy first, then clear.  Doing the copy
+  // before the transaction keeps the system-clipboard write outside
+  // the undoable diff — it doesn't survive undo anyway.
+  await copyToClipboard()
+  if (state.rectSelection) clearRegion()
+}
+
+// clearAllFeatures wipes every placed feature from the map.  Voids,
+// tiles and heights are left alone.  Annihilator names this
+// "Features → Clear All".
+function clearAllFeatures() {
+  if (!state.features || state.features.length === 0) {
+    setStatus('No features placed.')
+    return
+  }
+  beginTransaction()
+  const removed = state.features.length
+  state.features = []
+  state.selectedFeature = -1
+  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
+  commitTransaction(`Clear ${removed} feature(s)`)
+  setStatus(`Removed ${removed} feature(s) from the map.`)
+  renderCanvas()
+}
+
+// clearFeaturesInSelection removes only the features whose anchor
+// lies inside the current Select-Terrain rectangle.  Tiles + heights
+// untouched.  Annihilator's "Features → Clear Selection".
+function clearFeaturesInSelection() {
+  const r = state.rectSelection
+  if (!r || r.w <= 0 || r.h <= 0) {
+    setStatus('Nothing to clear — make a Select-Terrain rectangle first.')
+    return
+  }
+  const minAX = r.x * 2, maxAX = (r.x + r.w) * 2
+  const minAY = r.y * 2, maxAY = (r.y + r.h) * 2
+  const inside = state.features.filter((f) => f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY)
+  if (inside.length === 0) {
+    setStatus('No features inside the current selection.')
+    return
+  }
+  beginTransaction()
+  state.features = state.features.filter((f) => !(f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY))
+  state.selectedFeature = -1
+  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
+  commitTransaction(`Clear ${inside.length} feature(s) in selection`)
+  setStatus(`Removed ${inside.length} feature(s) inside the selection.`)
+  renderCanvas()
 }
 
 async function copyToClipboard() {
@@ -8587,10 +8692,14 @@ function wireToolbar() {
   // Edit dropdown clipboard entries — share the same handlers as the
   // Ctrl+C / Ctrl+V hotkeys so a user who reaches for the menu gets
   // the same behaviour.
+  $('#btn-cut')?.addEventListener('click', cutSelection)
   $('#btn-copy')?.addEventListener('click', copyToClipboard)
   $('#btn-paste')?.addEventListener('click', () => pasteFromClipboard('all'))
   $('#btn-paste-features')?.addEventListener('click', () => pasteFromClipboard('features'))
   $('#btn-paste-tiles')?.addEventListener('click', () => pasteFromClipboard('tiles'))
+  $('#btn-clear-region')?.addEventListener('click', clearRegion)
+  $('#btn-clear-features-selection')?.addEventListener('click', clearFeaturesInSelection)
+  $('#btn-clear-all-features')?.addEventListener('click', clearAllFeatures)
   // New Window opens the studio in a fresh tab — the user can run two
   // copies side by side and compare/edit different maps without
   // discarding the current session.

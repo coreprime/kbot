@@ -640,6 +640,9 @@
             <span class="chev-down">▾</span>
           </button>
           <div class="ribbon-dropdown-popup hidden" id="edit-dropdown-popup">
+            <button id="btn-cut" class="menu-row" title="Copy the current Select-Terrain rectangle to the clipboard and clear the underlying tiles, heights and features.">
+              <span class="ico">✂</span><span>Cut</span><kbd class="menu-row-hotkey">⌘X</kbd>
+            </button>
             <button id="btn-copy" class="menu-row" title="Copy the current Select-Terrain rectangle to the clipboard.  Works across KBot Studio tabs / Chrome windows.">
               <span class="ico">📋</span><span>Copy</span><kbd class="menu-row-hotkey">⌘C</kbd>
             </button>
@@ -652,6 +655,16 @@
             </button>
             <button id="btn-paste-tiles" class="menu-row" title="Paste only the tiles + heightmap from the clipboard rectangle — features dropped on the floor.">
               <span class="ico">🖌</span><span>Paste tiles only</span>
+            </button>
+            <div class="menu-section-label">Clear</div>
+            <button id="btn-clear-region" class="menu-row" title="Empty the current Select-Terrain rectangle — tiles, heights and features inside it are wiped.  Distinct from the Erase brush which paints cell-by-cell.">
+              <span class="ico">🧹</span><span>Clear region</span>
+            </button>
+            <button id="btn-clear-features-selection" class="menu-row" title="Remove features inside the current Select-Terrain rectangle.  Tiles and heights are left alone.">
+              <span class="ico">🌲</span><span>Clear features in selection</span>
+            </button>
+            <button id="btn-clear-all-features" class="menu-row" title="Remove every feature on the map.  Tiles and heights are left alone.">
+              <span class="ico">🔥</span><span>Clear all features</span>
             </button>
           </div>
         </div>
