@@ -32,6 +32,21 @@ const MAX_START_POSITIONS = 10
 const QUALITY_CHECK_MIN_MS = 250
 const QUALITY_WINDOW_MIN_MS = 1500
 
+// Buildable-area overlay tuning.  Matches TA's per-attribute-cell
+// build-grid rules well enough for an editor preview:
+//   - The cell can't be a void.
+//   - The cell can't be submerged below sea level (land structures
+//     are the common case; ship-pad cells light up only when the
+//     map has no impassible water, which the editor doesn't model
+//     here — close enough for a quick overlay).
+//   - The slope into every cardinal neighbour must stay within
+//     BUILDABLE_MAX_SLOPE height units.  12 is the middle of the
+//     stock TA structure MaxSlope range (3 for tank pads, 25 for
+//     KBot factories) and gives a generic "any builder could plant
+//     a factory here" answer.
+const BUILDABLE_MAX_SLOPE = 12
+const BUILDABLE_FILL = 'rgba(96, 180, 255, 0.34)'
+
 // ── Worlds ─────────────────────────────────────────────────────────────────
 // WORLDS is the single source of truth for the distinct worlds the editor
 // recognises.  One entry per world — Mars and Moon are their own rows
@@ -191,6 +206,7 @@ const sessionState = {
   showMinimap: true,
   showVoids: true,
   showContours: false,
+  showBuildable: false,
   showStartPositions: true,
   showCameraInfo: true,
   minimapPos: null,
@@ -410,7 +426,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // localStorage key so we don't pollute the user's storage namespace.
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
-  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showStartPositions',
+  'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showBuildable', 'showStartPositions',
   'viewMode', 'panelLayout', 'settings']
 
 // createPrefsStore returns a {load, save} interface backed by a Web
@@ -463,6 +479,7 @@ function syncDomFromPrefs() {
   setOn('#opt-camera-info', state.showCameraInfo)
   setOn('#opt-voids', state.showVoids)
   setOn('#opt-contours', state.showContours)
+  setOn('#opt-buildable', state.showBuildable)
   setOn('#opt-features', state.showFeatures)
   setOn('#opt-startpoints', state.showStartPositions)
   const used = $('#filter-used'); if (used) used.checked = !!state.usedOnly
@@ -2124,6 +2141,15 @@ function wireViewMenu() {
     contoursBtn.addEventListener('click', () => {
       state.showContours = !state.showContours
       contoursBtn.dataset.on = state.showContours ? '1' : '0'
+      persistPrefs()
+      renderCanvas()
+    })
+  }
+  const buildableBtn = $('#opt-buildable')
+  if (buildableBtn) {
+    buildableBtn.addEventListener('click', () => {
+      state.showBuildable = !state.showBuildable
+      buildableBtn.dataset.on = state.showBuildable ? '1' : '0'
       persistPrefs()
       renderCanvas()
     })
@@ -5688,6 +5714,7 @@ function renderCanvas() {
   drawEraseBrush(ctx)
   drawHeightmapBrush(ctx)
   drawVoidOverlay(ctx)
+  drawBuildableOverlay(ctx)
   drawRulerOverlay(ctx)
 
   // Rotation badge is an HTML overlay — hide it when there's nothing
@@ -7178,6 +7205,64 @@ function drawVoidOverlay(ctx) {
   }
   ctx.restore()
   drawVoidsDragRect(ctx)
+}
+
+// drawBuildableOverlay paints a translucent light-blue square on every
+// attribute cell where a TA builder could plant a structure.  Rules
+// (per BUILDABLE_* constants at the top of the file):
+//   - cell isn't a void
+//   - cell sits at or above sea level (land-based structures)
+//   - height delta into every cardinal neighbour is within
+//     BUILDABLE_MAX_SLOPE units
+// Runs of buildable cells in a row are flushed as a single fillRect
+// so a 256×256 map still renders in a frame.
+function drawBuildableOverlay(ctx) {
+  if (!state.showBuildable) return
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  if (!state.heights || state.heights.length !== aw * ah) return
+  const voids = state.voids && state.voids.length === aw * ah ? state.voids : null
+  const seaLevel = state.ota?.seaLevel ?? 0
+  const heights = state.heights
+  const cell = TILE_PX / 2
+  const slopeMax = BUILDABLE_MAX_SLOPE
+
+  // Pre-compute buildability bitmap so the run-length pass below
+  // doesn't repeat the four-neighbour comparison per cell.
+  const buildable = new Uint8Array(aw * ah)
+  for (let y = 0; y < ah; y++) {
+    for (let x = 0; x < aw; x++) {
+      const idx = y * aw + x
+      if (voids && voids[idx]) continue
+      const h = heights[idx]
+      if (h < seaLevel) continue
+      // Cardinal neighbours — skip out-of-bounds (edge cells effectively
+      // get a "free pass" on the missing direction, matching the engine's
+      // behaviour at the map border).
+      let bad = false
+      if (x > 0      && Math.abs(h - heights[idx - 1])  > slopeMax) bad = true
+      else if (x + 1 < aw && Math.abs(h - heights[idx + 1])  > slopeMax) bad = true
+      else if (y > 0      && Math.abs(h - heights[idx - aw]) > slopeMax) bad = true
+      else if (y + 1 < ah && Math.abs(h - heights[idx + aw]) > slopeMax) bad = true
+      if (!bad) buildable[idx] = 1
+    }
+  }
+
+  ctx.save()
+  ctx.fillStyle = BUILDABLE_FILL
+  for (let y = 0; y < ah; y++) {
+    let runStart = -1
+    for (let x = 0; x <= aw; x++) {
+      const v = x < aw ? buildable[y * aw + x] : 0
+      if (v) {
+        if (runStart < 0) runStart = x
+      } else if (runStart >= 0) {
+        ctx.fillRect(runStart * cell, y * cell, (x - runStart) * cell, cell)
+        runStart = -1
+      }
+    }
+  }
+  ctx.restore()
 }
 
 // drawVoidsDragRect now renders the void brush footprint at the cursor
