@@ -147,20 +147,32 @@ func printTNTLintHuman(hit *VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnos
 		}
 	}
 
+	// Tile-pool diagnostics — always render a row per rule with the
+	// finding count as the leading column.  The previous ℹ glyph was
+	// easily misread as the digit 1, so each row's left column is now
+	// the count itself (0 when the rule is clean), making the column
+	// self-describing.
 	issueCount := 0
-	if len(poolDiags) == 0 {
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "  ✓  tile-pool: no issues found")
-	} else {
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "  Tile-pool diagnostics:")
-		totalCount, totalBytes := 0, 0
-		for _, d := range poolDiags {
-			fmt.Fprintf(os.Stderr, "    %s  %-22s %s\n", severityIcon(d.Severity), d.Rule, d.Message)
+	byRule := make(map[string]tnt.LintDiagnostic, len(poolDiags))
+	for _, d := range poolDiags {
+		byRule[d.Rule] = d
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  Tile-pool diagnostics:")
+	totalCount, totalBytes := 0, 0
+	for _, r := range tntLintPoolRules {
+		if d, ok := byRule[r.id]; ok {
+			fmt.Fprintf(os.Stderr, "    %-3d %-22s %s\n", d.Count, d.Rule, d.Message)
 			totalCount += d.Count
 			totalBytes += d.BytesSaved
 			issueCount++
+			continue
 		}
+		fmt.Fprintf(os.Stderr, "    %-3d %-22s no %s\n", 0, r.id, r.cleanNoun)
+	}
+	if totalCount == 0 {
+		fmt.Fprintln(os.Stderr, "    tile pool is clean — nothing for `kbot tnt optimize` to remove.")
+	} else {
 		fmt.Fprintf(os.Stderr,
 			"    %d tile graphic%s (%d bytes) could be removed by `kbot tnt optimize`.\n",
 			totalCount, sIfPlural(totalCount), totalBytes)
@@ -367,20 +379,23 @@ func filePathExt(p string) string {
 	return ""
 }
 
-// severityIcon renders a tnt.LintSeverity as a single-cell character
-// so neighbouring rows line up regardless of which severity each
-// uses.  Emoji + variation selectors would render at different
-// widths in some terminals.
-func severityIcon(s tnt.LintSeverity) string {
-	switch s {
-	case tnt.LintWarning:
-		return "⚠"
-	default:
-		return "ℹ"
-	}
+// tntLintPoolRules is the canonical order + clean-state label for the
+// three tile-pool rules.  The human output renders one row per entry
+// here so a fully-clean map still shows `0` against each rule rather
+// than collapsing them under a single status pill.
+var tntLintPoolRules = []struct {
+	id        string
+	cleanNoun string
+}{
+	{"duplicate-tiles", "byte-identical duplicate tile graphics"},
+	{"similar-tiles", "visually-similar tile graphics"},
+	{"unused-tiles", "unreferenced tile graphics"},
 }
 
-// maplintIcon mirrors severityIcon for maplint severities.
+// maplintIcon renders a maplint severity as a single-cell character so
+// neighbouring rows line up regardless of which severity each uses.
+// Emoji + variation selectors would render at different widths in some
+// terminals.
 func maplintIcon(s maplint.Severity) string {
 	switch s {
 	case maplint.SeverityError:

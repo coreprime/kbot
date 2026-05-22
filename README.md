@@ -370,14 +370,19 @@ Inspect, render, unpack and pack Total Annihilation `.TNT` map terrain.
 kbot tnt describe "metal heck.tnt"
 
 # Render artefacts
-kbot tnt image     "metal heck.tnt" --target map.png         # full RGBA map
-kbot tnt heightmap "metal heck.tnt" --target height.png      # 8-bit grayscale
+kbot tnt image     "metal heck.tnt" --target map.png         # full RGBA map (1:1, 32 px / tile)
+kbot tnt heightmap "metal heck.tnt" --target height.png      # 8-bit grayscale (16 px / cell)
+kbot tnt buildmap  "metal heck.tnt" --target build.png       # per-cell buildability classification
+kbot tnt voidmap   "metal heck.tnt" --target voids.png       # engine-void mask (Feature == 0xFFFC only)
 kbot tnt minimap   "metal heck.tnt" --target mini.png        # embedded minimap
 
 # Same as `image`, but composite feature sprites and draw numbered StartPos
 # markers from the sister .ota.  --vfs points at a flattened TA install (or
 # any directory containing features/*.tdf and anims/*.gaf).
 kbot tnt preview "metal heck.tnt" --vfs ~/ta-flattened --target preview.png
+
+# Pick a different schema's StartPos set (0-based; default 0).
+kbot tnt preview "metal heck.tnt" --schema 2 --target preview-s2.png
 
 # --vfs may be omitted when a kbot context is active (see `kbot ctx`)
 kbot tnt preview "metal heck.tnt" --target preview.png
@@ -414,6 +419,34 @@ kbot tnt pack ./metal_heck --target metal_heck.tnt
 `heightmap.png` is unnormalised so the pixel value equals the raw elevation byte — round-trip safe. Pass `--normalize` to stretch the range for human viewing. `minimap.png` is paletted so palette indices survive the round-trip.
 
 `kbot tnt unpack` is lossy by default: the feature name table is omitted from `metadata.json` and `kbot tnt pack` rebuilds it from the unique names in `features.csv`. This loses any trailing scratch bytes the original tooling left in the table. Pass `--lossless` to record the original feature table (and the raw feature bytes as `feature_raw_b64`) in `metadata.json` so the directory packs back to a byte-identical TNT.
+
+**Buildmap classification (`kbot tnt buildmap`):**
+
+The PNG is at attribute-cell resolution (one pixel per 16×16 cell, same as `heightmap`).  Each cell is classified, in priority order:
+
+| Colour | Meaning |
+|---|---|
+| Black  | engine-void — `TileAttr.Feature == 0xFFFC` |
+| Red    | a feature is placed in the cell (rocks, trees, geo-vents, ...) |
+| Blue   | underwater — `Height` is below sea level |
+| Yellow | cliff edge — `\|Δheight\|` to a 4-neighbour exceeds 32 game units |
+| Green  | buildable |
+
+By default the .tnt header's `SeaLevel` field drives the underwater check; pass `--sealevel <n>` to override (0 disables the check).  `0xFFFD` / `0xFFFE` are **not** classified as void — see [docs/formats/tnt.md](docs/formats/tnt.md) for the rationale (Metal Heck and a few other early Cavedog maps mark steam vents this way, and those cells are demonstrably buildable in-engine).
+
+**Voidmap (`kbot tnt voidmap`):**
+
+A transparent PNG at attribute-cell resolution.  Cells with `Feature == 0xFFFC` are opaque red; everything else is transparent — overlay it on a `kbot tnt image` render to highlight just the engine-void areas.
+
+> The Studio's **Advanced › Export** menu offers the same artefacts plus the minimap and the active-schema preview:
+>
+> | Menu item | Backend | CLI / MCP equivalent |
+> |---|---|---|
+> | Export Minimap | client canvas snapshot | (n/a) |
+> | Export Full Render | `tnt.RenderTileMap` + `tntpreview.ComposeWith` (active schema's StartPos markers) | `kbot tnt preview --schema <ActiveSchema>` / `tnt_preview` |
+> | Export Map Image | `tnt.RenderTileMap` (bare tile grid, no overlays) | `kbot tnt image` / `tnt_image` |
+> | Export Buildmap | `tnt.RenderBuildMap` | `kbot tnt buildmap` / `tnt_buildmap` |
+> | Export Voidmap | `tnt.RenderVoidMap` | `kbot tnt voidmap` / `tnt_voidmap` |
 
 **Linting a map:**
 
@@ -664,6 +697,19 @@ Once a game-data folder is configured, every tool's `path` argument accepts:
 When a hit lives inside an archive, kbot extracts it to a temp file for the duration of the call and cleans up afterwards. Physical files are passed through directly.
 
 **`--mount`** is the older, simpler gate: it just restricts paths the assistant passes to lie inside the given root, with no VFS layering. Use it when you want to expose a non-game-data directory (such as an output scratch dir) without the cost of walking and indexing archives. Without any `--mount` or `--game-data`, the server runs in permissive mode and accepts any absolute path — fine for local development, unsafe on shared hosts.
+
+#### TNT render tools
+
+These tools render various artefacts from a `.tnt` to PNG.  Each accepts `path` (the `.tnt` argument, resolved through the same VFS rules as every other tool) and `output` (the destination PNG path):
+
+| Tool | Purpose |
+|------|---------|
+| `tnt_image` | Full tile-grid render at 32 px per tile.  Used by the studio's **Export Full Render** menu item. |
+| `tnt_heightmap` | 8-bit grayscale elevation grid (round-trip safe by default; `normalize=true` for human viewing). |
+| `tnt_buildmap` | Per-cell buildability classification — black/red/blue/yellow/green key (see the CLI section above).  Optional `sealevel` overrides the .tnt header's value (0 disables the underwater check). |
+| `tnt_voidmap` | Engine-void mask — cells with `Feature == 0xFFFC` painted red, everything else transparent. |
+| `tnt_minimap` | Embedded 252×252 minimap (paletted PNG when `paletted=true`). |
+| `tnt_preview` | `tnt_image` plus composited feature sprites and numbered StartPos markers for the schema chosen by `schema` (0-based; defaults to 0).  Requires `game_data` so feature sprites and the sister `.ota` resolve. |
 
 #### VFS introspection tools
 

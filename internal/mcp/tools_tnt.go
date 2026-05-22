@@ -68,6 +68,39 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 	)
 
 	s.AddTool(
+		mcplib.NewTool("tnt_buildmap",
+			mcplib.WithDescription(
+				"Render a per-cell buildability classification PNG (one pixel per 16×16 "+
+					"attribute cell).  Black = engine-void (Feature == 0xFFFC), red = a "+
+					"feature is placed in the cell, blue = underwater (Height < sea level), "+
+					"yellow = cliff edge (|Δheight| to a 4-neighbour > 32), green = "+
+					"buildable.  By default the .tnt header's SeaLevel is used; pass "+
+					"sealevel to override (0 disables the underwater check).",
+			),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
+			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
+			mcplib.WithNumber("sealevel", mcplib.Description("Override sea level for the underwater check (default: TNT header value, 0 disables).")),
+			withGameData(),
+		),
+		makeTNTBuildmapHandler(r),
+	)
+
+	s.AddTool(
+		mcplib.NewTool("tnt_voidmap",
+			mcplib.WithDescription(
+				"Render the engine-void mask as a PNG (one pixel per 16×16 attribute "+
+					"cell).  Cells whose Feature is 0xFFFC are opaque red; everything else "+
+					"is transparent so the result can be overlaid on a tnt_image render.  "+
+					"0xFFFD / 0xFFFE are not classified as void — see docs/formats/tnt.md.",
+			),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
+			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
+			withGameData(),
+		),
+		makeTNTVoidmapHandler(r),
+	)
+
+	s.AddTool(
 		mcplib.NewTool("tnt_minimap",
 			mcplib.WithDescription(
 				"Export the embedded minimap as a PNG.  By default outputs an RGBA image "+
@@ -86,13 +119,15 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("tnt_preview",
 			mcplib.WithDescription(
 				"Render the TNT terrain layer and overlay it with each placed feature's "+
-					"sprite plus a numbered marker at every Schema 0 StartPos found in the "+
+					"sprite plus a numbered marker at every StartPos in the selected schema "+
+					"(default Schema 0; pass schema=<n> for a different one) found in the "+
 					"sister .ota.  Requires a game-data folder so feature sprites (features/*.tdf, "+
 					"anims/*.gaf) and the .ota can be resolved; without one this degrades to "+
 					"the same render as tnt_image.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
+			mcplib.WithNumber("schema", mcplib.Description("Schema index whose StartPos markers are drawn (0-based; default 0).")),
 			withGameData(),
 		),
 		makeTNTPreviewHandler(r),
@@ -400,6 +435,12 @@ func makeTNTPreviewHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		gameData := req.GetString("game_data", "")
+		// Negative default keeps "not provided" indistinguishable from
+		// the previous behaviour (Schema 0).
+		schema := 0
+		if v := req.GetFloat("schema", -1); v >= 0 {
+			schema = int(v)
+		}
 		rf, err := r.ResolveFile(path, gameData)
 		if err != nil {
 			return errorResult(err), nil
@@ -437,7 +478,7 @@ func makeTNTPreviewHandler(r *Resolver) server.ToolHandlerFunc {
 				return errorResult(palErr), nil
 			}
 			basename := previewBasename(rf)
-			stats, cErr := tntpreview.Compose(base, m, feats, vfs, spritePal, basename, "")
+			stats, cErr := tntpreview.ComposeWith(base, m, feats, vfs, spritePal, basename, "", tntpreview.Options{SchemaIndex: schema})
 			if cErr != nil {
 				return errorResult(cErr), nil
 			}
@@ -499,6 +540,85 @@ func makeTNTHeightmapHandler(r *Resolver) server.ToolHandlerFunc {
 			img = m.RenderHeightMap()
 		} else {
 			img = m.RenderHeightMapRaw()
+		}
+		if err := writeServerPNG(outPath, img); err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(tntImageOutput{Path: rf.displayPath(), Output: outPath, Width: img.Bounds().Dx(), Height: img.Bounds().Dy()})
+	}
+}
+
+func makeTNTBuildmapHandler(r *Resolver) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		path, err := req.RequireString("path")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		outArg, err := req.RequireString("output")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		gameData := req.GetString("game_data", "")
+
+		rf, err := r.ResolveFile(path, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		defer func() { _ = rf.Close() }()
+		outPath, err := r.ResolveOutput(outArg, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		m, _, _, err := loadTNT(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		// Negative default acts as "not provided" — anything ≥ 0 wins
+		// over the .tnt header's sea level, so callers can pass 0 to
+		// disable the underwater check explicitly.
+		sea := m.Header.SeaLevel
+		if v := req.GetFloat("sealevel", -1); v >= 0 {
+			sea = uint32(v)
+		}
+		img := m.RenderBuildMap(sea)
+		if img == nil {
+			return errorResult(fmt.Errorf("map has no attribute grid")), nil
+		}
+		if err := writeServerPNG(outPath, img); err != nil {
+			return errorResult(err), nil
+		}
+		return jsonResult(tntImageOutput{Path: rf.displayPath(), Output: outPath, Width: img.Bounds().Dx(), Height: img.Bounds().Dy()})
+	}
+}
+
+func makeTNTVoidmapHandler(r *Resolver) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		path, err := req.RequireString("path")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		outArg, err := req.RequireString("output")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		gameData := req.GetString("game_data", "")
+
+		rf, err := r.ResolveFile(path, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		defer func() { _ = rf.Close() }()
+		outPath, err := r.ResolveOutput(outArg, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		m, _, _, err := loadTNT(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		img := m.RenderVoidMap()
+		if img == nil {
+			return errorResult(fmt.Errorf("map has no attribute grid")), nil
 		}
 		if err := writeServerPNG(outPath, img); err != nil {
 			return errorResult(err), nil
@@ -752,15 +872,15 @@ func makeTNTLintHandler(r *Resolver) server.ToolHandlerFunc {
 		if runQuality {
 			lintIn := maplint.Input{Map: m}
 
-			// OTA — explicit override > sibling on disk.
-			otaPath := otaOverride
-			if otaPath == "" {
-				otaPath = strings.TrimSuffix(rf.LocalPath, filepath.Ext(rf.LocalPath)) + ".ota"
-			}
-			if otaData, otaErr := os.ReadFile(otaPath); otaErr == nil {
+			// OTA — explicit override > sibling on the same backing store as
+			// the TNT.  When the TNT was extracted from an archive, rf.LocalPath
+			// is a temp file with no sibling on disk; the VFS-aware lookup
+			// below catches that case so the quality pass doesn't degrade to
+			// "no schemas to check" purely because of where the TNT lives.
+			if otaData, otaSrc := tntLintReadSiblingOTA(rf, otaOverride, r, gameData); otaData != nil {
 				if ota, parseErr := maplint.ParseOTA(string(otaData)); parseErr == nil && ota != nil {
 					lintIn.OTA = ota
-					out.OTAPath = otaPath
+					out.OTAPath = otaSrc
 				}
 			}
 
@@ -807,6 +927,43 @@ func makeTNTLintHandler(r *Resolver) server.ToolHandlerFunc {
 		out.IssueCount = issueCount
 		return jsonResult(out)
 	}
+}
+
+// tntLintReadSiblingOTA mirrors the CLI's lookup order: an explicit
+// override wins; otherwise we look for the sibling .ota on whatever
+// backing store produced the TNT.  TNTs that came from an archive
+// have a non-empty VirtualPath, and their LocalPath is a temp file
+// without a sibling on disk — that case is what makes a plain disk
+// fallback unreliable in MCP runs.
+func tntLintReadSiblingOTA(rf *ResolvedFile, otaOverride string, r *Resolver, gameData string) ([]byte, string) {
+	if otaOverride != "" {
+		return tntLintReadOTAVia(r, otaOverride, gameData)
+	}
+	if rf.VirtualPath != "" {
+		sib := strings.TrimSuffix(rf.VirtualPath, filepath.Ext(rf.VirtualPath)) + ".ota"
+		return tntLintReadOTAVia(r, sib, gameData)
+	}
+	sib := strings.TrimSuffix(rf.LocalPath, filepath.Ext(rf.LocalPath)) + ".ota"
+	if data, err := os.ReadFile(sib); err == nil {
+		return data, sib
+	}
+	return nil, ""
+}
+
+// tntLintReadOTAVia resolves an OTA path through the Resolver so that
+// virtual paths, bare names and absolute paths all work the same way
+// the CLI handles them.
+func tntLintReadOTAVia(r *Resolver, p, gameData string) ([]byte, string) {
+	otaRF, err := r.ResolveFile(p, gameData)
+	if err != nil {
+		return nil, ""
+	}
+	defer func() { _ = otaRF.Close() }()
+	data, readErr := os.ReadFile(otaRF.LocalPath)
+	if readErr != nil {
+		return nil, ""
+	}
+	return data, otaRF.displayPath()
 }
 
 // tntScanFeatureRegistry walks features/*.tdf in the supplied VFS and

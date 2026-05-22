@@ -42,6 +42,10 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/save", handleSave)
 	mux.HandleFunc("/api/studio/save-loose", handleSaveLoose)
 	mux.HandleFunc("/api/studio/quality-check", handleQualityCheck)
+	mux.HandleFunc("/api/studio/export-render", handleExportFullRender)
+	mux.HandleFunc("/api/studio/export-map-image", handleExportMapImage)
+	mux.HandleFunc("/api/studio/export-buildmap", handleExportBuildmap)
+	mux.HandleFunc("/api/studio/export-voidmap", handleExportVoidmap)
 	mux.HandleFunc("/api/studio/glamour/list", handleGlamourList)
 	mux.HandleFunc("/api/studio/glamour/image/", handleGlamourImage)
 	mux.HandleFunc("/api/studio/sound/", handleSound)
@@ -514,14 +518,17 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Heights from TileAttr — one byte per 16-px attribute cell.
-	// Voids are encoded in the same TileAttr.Feature field via the
-	// sentinel values 0xFFFC / 0xFFFE (different TA releases use
-	// different markers); 0xFFFF means "no feature, passable".
+	// Voids are encoded in the same TileAttr.Feature field; 0xFFFC is
+	// the canonical void sentinel and 0xFFFF means "no feature,
+	// passable".  Early Cavedog maps (Metal Heck, Lava Run) also use
+	// 0xFFFE on cells that are demonstrably buildable in-engine, so we
+	// treat those as ordinary passable cells per the project's TNT
+	// pitfall note (docs/formats/tnt.md).
 	heights := make([]int, len(m.TileAttr))
 	voids := make([]int, len(m.TileAttr))
 	for i, a := range m.TileAttr {
 		heights[i] = int(a.Height)
-		if a.Feature == 0xFFFC || a.Feature == 0xFFFE {
+		if a.Feature == 0xFFFC {
 			voids[i] = 1
 		}
 	}
@@ -642,7 +649,7 @@ func handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
 	voids := make([]int, len(m.TileAttr))
 	for i, a := range m.TileAttr {
 		heights[i] = int(a.Height)
-		if a.Feature == 0xFFFC || a.Feature == 0xFFFE {
+		if a.Feature == 0xFFFC {
 			voids[i] = 1
 		}
 	}
@@ -1469,21 +1476,18 @@ type saveRequest struct {
 	StartPos    []saveStartPos `json:"startPositions"`
 	Planet      string         `json:"planet"`
 	OTA         *otaState      `json:"ota"`
-	// Fixes lists the quality-check fixes to apply during the build.
-	// Recognised ids: "compressTiles" — dedup the TNT tile pool.  An
-	// unrecognised id is silently ignored so the client can roll new
-	// fixes without forcing a server upgrade.
+	// Fixes lists the quality-check fixes the user has accepted.  The
+	// list is forwarded to maplint as AppliedFixes so rules with a
+	// dialog-driven auto-fix know to skip re-flagging.  Unknown ids are
+	// silently ignored, so the client can roll new fixes without a
+	// coordinated server upgrade.
 	Fixes []string `json:"fixes,omitempty"`
-}
 
-// hasFix reports whether the named fix id is present in r.Fixes.
-func (r saveRequest) hasFix(id string) bool {
-	for _, f := range r.Fixes {
-		if f == id {
-			return true
-		}
-	}
-	return false
+	// ActiveSchema is the 0-based schema index the editor's schema
+	// picker currently has selected.  Used by the export-render
+	// endpoint so the rendered StartPos markers reflect what the user
+	// is looking at, not always Schema 0.
+	ActiveSchema int `json:"activeSchema,omitempty"`
 }
 
 func handleSave(w http.ResponseWriter, r *http.Request) {

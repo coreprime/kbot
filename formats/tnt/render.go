@@ -141,6 +141,136 @@ func (m *Map) RenderASCII(maxCols int) string {
 	return b.String()
 }
 
+// Cliff-edge threshold reused by RenderBuildMap.  Adjacent attribute
+// cells whose |Δheight| exceeds this read as cliffs in TA's pathing —
+// ground units can't traverse them and you can't site a building
+// straddling one.  Lives in the format package so the renderer doesn't
+// reach into internal/maplint; keep the constant in sync.
+const buildMapCliffThreshold = 32
+
+// Build-map classification palette.  RGBA so callers can composite the
+// result with the tile or height render.  Colors are chosen for
+// at-a-glance reading at 16px-per-cell — green = go, blue = water,
+// yellow = cliff, red = blocking feature, black = engine-void.
+var (
+	buildMapBuildable    = color.RGBA{R: 0x46, G: 0xb0, B: 0x55, A: 0xff}
+	buildMapUnderwater   = color.RGBA{R: 0x2f, G: 0x6f, B: 0xc8, A: 0xff}
+	buildMapCliff        = color.RGBA{R: 0xe6, G: 0xc8, B: 0x39, A: 0xff}
+	buildMapFeatureBlock = color.RGBA{R: 0xc2, G: 0x4a, B: 0x4a, A: 0xff}
+	buildMapVoid         = color.RGBA{R: 0x12, G: 0x12, B: 0x14, A: 0xff}
+)
+
+// RenderBuildMap produces an attribute-resolution RGBA image showing
+// per-cell buildability.  Each cell is classified, in priority order:
+//
+//	void          Feature == 0xFFFC (canonical engine-void sentinel)
+//	feature       Feature is a valid index in the .tnt feature table
+//	underwater    Height < seaLevel (the cell would be submerged)
+//	cliff         max |Δheight| to a 4-neighbour exceeds the cliff
+//	              threshold — TA's pathing blocks traversal so no
+//	              build either
+//	buildable     otherwise
+//
+// 0xFFFD / 0xFFFE are deliberately not treated as void — see
+// docs/formats/tnt.md.  When seaLevel is 0 the underwater check is
+// skipped (matches a map authoring tool that never wrote a sea level).
+// Returns nil when the map has no attribute grid.
+func (m *Map) RenderBuildMap(seaLevel uint32) *image.RGBA {
+	if m.TileAttr == nil || m.AttrW == 0 || m.AttrH == 0 {
+		return nil
+	}
+	w, h := m.AttrW, m.AttrH
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	// Pre-fetch heights as ints to avoid repeated uint8→int conversions
+	// in the cliff check.
+	heights := make([]int, w*h)
+	for i, a := range m.TileAttr {
+		heights[i] = int(a.Height)
+	}
+
+	// Header.TileAnims is the size of the feature name table — any
+	// Feature value below it is a real placement; anything ≥ it that
+	// isn't 0xFFFC is a non-sentinel oddity we treat as "no feature".
+	maxFeature := uint16(m.Header.TileAnims)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := y*w + x
+			a := m.TileAttr[i]
+			switch {
+			case a.Feature == 0xFFFC:
+				img.SetRGBA(x, y, buildMapVoid)
+				continue
+			case a.Feature < maxFeature:
+				img.SetRGBA(x, y, buildMapFeatureBlock)
+				continue
+			}
+			if seaLevel > 0 && uint32(a.Height) < seaLevel {
+				img.SetRGBA(x, y, buildMapUnderwater)
+				continue
+			}
+			if cellIsCliff(heights, w, h, x, y) {
+				img.SetRGBA(x, y, buildMapCliff)
+				continue
+			}
+			img.SetRGBA(x, y, buildMapBuildable)
+		}
+	}
+	return img
+}
+
+// cellIsCliff returns true when the cell at (x,y) has a 4-neighbour
+// whose absolute elevation delta is above buildMapCliffThreshold.
+// Out-of-bounds neighbours are skipped — they don't push a border cell
+// into the cliff bucket.
+func cellIsCliff(heights []int, w, h, x, y int) bool {
+	c := heights[y*w+x]
+	check := func(dx, dy int) bool {
+		nx, ny := x+dx, y+dy
+		if nx < 0 || ny < 0 || nx >= w || ny >= h {
+			return false
+		}
+		d := heights[ny*w+nx] - c
+		if d < 0 {
+			d = -d
+		}
+		return d > buildMapCliffThreshold
+	}
+	return check(-1, 0) || check(1, 0) || check(0, -1) || check(0, 1)
+}
+
+// VoidMap classification palette.  Void cells render as opaque red so
+// they show up against any backdrop; non-void cells are transparent so
+// callers can composite the result over the tile render.
+var (
+	voidMapVoid    = color.RGBA{R: 0xc2, G: 0x4a, B: 0x4a, A: 0xff}
+	voidMapPassage = color.RGBA{}
+)
+
+// RenderVoidMap produces an attribute-resolution RGBA image with the
+// engine-void cells (Feature == 0xFFFC) painted opaque-red and every
+// other cell transparent.  See [Map.RenderBuildMap] for why 0xFFFD /
+// 0xFFFE are not treated as void.  Returns nil when the map has no
+// attribute grid.
+func (m *Map) RenderVoidMap() *image.RGBA {
+	if m.TileAttr == nil || m.AttrW == 0 || m.AttrH == 0 {
+		return nil
+	}
+	w, h := m.AttrW, m.AttrH
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			a := m.TileAttr[y*w+x]
+			if a.Feature == 0xFFFC {
+				img.SetRGBA(x, y, voidMapVoid)
+				continue
+			}
+			img.SetRGBA(x, y, voidMapPassage)
+		}
+	}
+	return img
+}
+
 // FeatureCounts tallies placement counts keyed by feature index.
 func (m *Map) FeatureCounts() map[int]int {
 	out := make(map[int]int)

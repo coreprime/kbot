@@ -7676,10 +7676,21 @@ function drawVoidOverlay(ctx) {
 // (per BUILDABLE_* constants at the top of the file):
 //   - cell isn't a void
 //   - cell sits at or above sea level (land-based structures)
-//   - height delta into every cardinal neighbour is within
-//     BUILDABLE_MAX_SLOPE units
-// Runs of buildable cells in a row are flushed as a single fillRect
-// so a 256×256 map still renders in a frame.
+//   - height delta across the cell's 3×3 patch is within
+//     BUILDABLE_MAX_SLOPE units (a structure's footprint sits across
+//     multiple cells, so the engine's slope tolerance is really about
+//     the height differential across a patch, not just a single
+//     neighbour edge — broad flat regions pass, plateau interiors
+//     pass, slope cells fail)
+//
+// Each painted rectangle is lifted by Height/2 pixels to match the
+// visual elevation offset features apply via featureAnchorWorld, so
+// the build-plate sits visually on top of the tall structure where
+// the player would actually drop a building — not floating at the
+// flat tile-grid position with the tower top above it.
+//
+// Runs of cells in a row that share both buildability AND height are
+// flushed as one fillRect so a 256×256 map still renders in a frame.
 function drawBuildableOverlay(ctx) {
   if (!state.showBuildable) return
   const aw = state.tileW * 2
@@ -7691,13 +7702,6 @@ function drawBuildableOverlay(ctx) {
   const cell = TILE_PX / 2
   const slopeMax = BUILDABLE_MAX_SLOPE
 
-  // Pre-compute buildability bitmap.  The check is terrain-only —
-  // void + sea-level + slope — so the overlay answers "where does
-  // the heightmap allow building?" rather than "where could I place
-  // a new structure right now?".  Existing feature placements are
-  // shown by the feature renderer; the user can see where they sit.
-  // This keeps the overlay readable on metal-heavy maps where every
-  // platform is decorated with wreckage features.
   const buildable = new Uint8Array(aw * ah)
   for (let y = 0; y < ah; y++) {
     for (let x = 0; x < aw; x++) {
@@ -7705,12 +7709,6 @@ function drawBuildableOverlay(ctx) {
       if (voids && voids[idx]) continue
       const h = heights[idx]
       if (h < seaLevel) continue
-      // 3×3 max-min check: a unit's footprint sits across multiple
-      // cells, so the engine's slope tolerance is really about the
-      // height differential across a patch, not just a single
-      // neighbour edge.  Comparing the cell against its full 3×3
-      // patch makes plateau edges + slope cells correctly fail
-      // while broad flat regions (interior + ground) still pass.
       let minH = h, maxH = h
       for (let dy = -1; dy <= 1; dy++) {
         const ny = y + dy
@@ -7731,13 +7729,17 @@ function drawBuildableOverlay(ctx) {
   ctx.fillStyle = BUILDABLE_FILL
   for (let y = 0; y < ah; y++) {
     let runStart = -1
+    let runShift = 0
     for (let x = 0; x <= aw; x++) {
       const v = x < aw ? buildable[y * aw + x] : 0
-      if (v) {
-        if (runStart < 0) runStart = x
-      } else if (runStart >= 0) {
-        ctx.fillRect(runStart * cell, y * cell, (x - runStart) * cell, cell)
-        runStart = -1
+      const shift = v ? (heights[y * aw + x] >> 1) : 0
+      if (v && (runStart < 0 || shift === runShift)) {
+        if (runStart < 0) { runStart = x; runShift = shift }
+      } else {
+        if (runStart >= 0) {
+          ctx.fillRect(runStart * cell, y * cell - runShift, (x - runStart) * cell, cell)
+        }
+        if (v) { runStart = x; runShift = shift } else { runStart = -1 }
       }
     }
   }
@@ -8975,6 +8977,10 @@ function wireToolbar() {
   $('#scatter-apply')?.addEventListener('click', applyScatter)
   $('#btn-export-heightmap')?.addEventListener('click', exportHeightmap)
   $('#btn-export-minimap')?.addEventListener('click', exportMinimap)
+  $('#btn-export-full-render')?.addEventListener('click', exportFullRender)
+  $('#btn-export-map-image')?.addEventListener('click', exportMapImage)
+  $('#btn-export-buildmap')?.addEventListener('click', exportBuildmap)
+  $('#btn-export-voidmap')?.addEventListener('click', exportVoidmap)
   $('#btn-quality-audit')?.addEventListener('click', () => {
     // Advanced › Quality Check… — standalone audit, no save afterward.
     runQualityChecker(buildSavePayload(), { mode: 'audit' })
@@ -10168,6 +10174,71 @@ function exportMinimap() {
   }, 'image/png')
 }
 
+// exportFromBackend POSTs the current map state to one of the
+// /api/studio/export-* endpoints and triggers a download of the
+// returned PNG.  The endpoints share their request shape with
+// /api/studio/save (saveRequest), so we can reuse buildSavePayload()
+// for all of them — same data, three different renderers on the
+// server side.
+async function exportFromBackend(endpoint, suffix, label) {
+  setStatus(`Rendering ${label}…`)
+  try {
+    const resp = await fetch(`/api/studio/${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSavePayload()),
+    })
+    if (!resp.ok) {
+      const text = await resp.text()
+      throw new Error(text || `HTTP ${resp.status}`)
+    }
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sanitiseFilename(state.name)}-${suffix}.png`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+    setStatus(`Exported ${label} PNG.`)
+  } catch (err) {
+    setStatus(`${label} export failed: ${err.message || err}`)
+  }
+}
+
+// confirmLargeRender warns the user that a 1:1 PNG render of a big map
+// could chew memory and produce a huge file.  Shared by both the full
+// render (with features + markers) and the bare map image — both ship
+// the same per-pixel payload, only their compositing differs.
+function confirmLargeRender(label) {
+  const pxW = state.tileW * 32
+  const pxH = state.tileH * 32
+  if (pxW * pxH > 6000 * 6000) {
+    const ok = window.confirm(
+      `${label} is ${pxW}×${pxH} pixels.  This can take a while and the PNG file may be very large.  Continue?`,
+    )
+    if (!ok) { setStatus(`${label} cancelled.`); return false }
+  }
+  return true
+}
+
+function exportFullRender() {
+  if (!confirmLargeRender('Full render')) return
+  exportFromBackend('export-render', 'render', 'full render')
+}
+
+function exportMapImage() {
+  if (!confirmLargeRender('Map image')) return
+  exportFromBackend('export-map-image', 'map', 'map image')
+}
+
+function exportBuildmap() {
+  exportFromBackend('export-buildmap', 'buildmap', 'buildmap')
+}
+
+function exportVoidmap() {
+  exportFromBackend('export-voidmap', 'voidmap', 'voidmap')
+}
+
 async function onImportHeightmapFile(e) {
   const file = e.target.files && e.target.files[0]
   e.target.value = ''
@@ -10229,6 +10300,7 @@ function buildSavePayload() {
     features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
     seaLevel: state.ota?.seaLevel ?? 0,
     ota: state.ota,
+    activeSchema: state.activeSchema | 0,
   }
 }
 
@@ -10359,40 +10431,92 @@ async function runQualityChecker(payload, { mode = 'save' } = {}) {
       fix: issue.fix,
     })
 
+    // renderRows patches the existing row DOM in place rather than
+    // rebuilding it.  Each call previously did list.replaceChildren()
+    // + createElement per row, which made every row re-trigger the
+    // quality-row-in fade animation on every progress tick — the
+    // dialog visibly flickered as checks completed sequentially.  By
+    // creating each row once and updating only the parts that changed
+    // (severity class, status glyph, message text, optional progress
+    // bar and Fix button), the entrance animation plays exactly once
+    // per row and the running spinner's infinite animation keeps its
+    // current frame between ticks.
+    const statusGlyph = { ok: '✓', warning: '!', error: '✗', running: '' }
     function renderRows(rows) {
-      list.replaceChildren()
+      const wanted = new Set(rows.map((r) => r.check))
+      for (const el of Array.from(list.querySelectorAll('.quality-row'))) {
+        if (!wanted.has(el.dataset.check)) el.remove()
+      }
+      const existing = new Map()
+      for (const el of list.querySelectorAll('.quality-row')) {
+        existing.set(el.dataset.check, el)
+      }
+      let prev = null
       for (const r of rows) {
-        const row = document.createElement('div')
-        row.className = `quality-row severity-${r.severity}`
-        row.dataset.check = r.check
-        const status = document.createElement('div')
-        status.className = 'quality-status'
-        status.textContent = ({ ok: '✓', warning: '!', error: '✗', running: '' })[r.severity] ?? ''
-        const body = document.createElement('div')
-        body.className = 'quality-body'
-        const label = document.createElement('div')
-        label.className = 'quality-label'
-        label.textContent = r.label
-        const msg = document.createElement('div')
-        msg.className = 'quality-message'
-        msg.textContent = r.message
-        body.append(label, msg)
+        let row = existing.get(r.check)
+        if (!row) {
+          row = document.createElement('div')
+          row.dataset.check = r.check
+          const status = document.createElement('div')
+          const body = document.createElement('div')
+          row.append(status, body)
+          if (prev && prev.nextSibling) list.insertBefore(row, prev.nextSibling)
+          else if (prev) list.appendChild(row)
+          else if (list.firstChild) list.insertBefore(row, list.firstChild)
+          else list.appendChild(row)
+        } else {
+          const expected = prev ? prev.nextSibling : list.firstChild
+          if (row !== expected) list.insertBefore(row, expected)
+        }
+        const targetClass = `quality-row severity-${r.severity}`
+        if (row.className !== targetClass) row.className = targetClass
+        const status = row.children[0]
+        const wantStatusClass = 'quality-status'
+        if (status.className !== wantStatusClass) status.className = wantStatusClass
+        const glyph = statusGlyph[r.severity] ?? ''
+        if (status.textContent !== glyph) status.textContent = glyph
+        const body = row.children[1]
+        if (body.className !== 'quality-body') body.className = 'quality-body'
+        let label = body.querySelector('.quality-label')
+        if (!label) {
+          label = document.createElement('div')
+          label.className = 'quality-label'
+          body.appendChild(label)
+        }
+        if (label.textContent !== r.label) label.textContent = r.label
+        let msg = body.querySelector('.quality-message')
+        if (!msg) {
+          msg = document.createElement('div')
+          msg.className = 'quality-message'
+          body.appendChild(msg)
+        }
+        if (msg.textContent !== r.message) msg.textContent = r.message
+        let prog = body.querySelector('.quality-progress')
         if (r.severity === 'running') {
-          const prog = document.createElement('div')
-          prog.className = 'quality-progress'
-          prog.appendChild(document.createElement('span'))
-          body.appendChild(prog)
+          if (!prog) {
+            prog = document.createElement('div')
+            prog.className = 'quality-progress'
+            prog.appendChild(document.createElement('span'))
+            body.appendChild(prog)
+          }
+        } else if (prog) {
+          prog.remove()
         }
-        row.append(status, body)
-        if (r.severity !== 'ok' && r.severity !== 'running' && r.canAutoFix && r.fix) {
-          const fixBtn = document.createElement('button')
-          fixBtn.className = 'btn primary'
-          fixBtn.textContent = 'Fix'
+        let fixBtn = row.querySelector('.btn')
+        const wantFix = r.severity !== 'ok' && r.severity !== 'running' && r.canAutoFix && r.fix
+        if (wantFix) {
+          if (!fixBtn) {
+            fixBtn = document.createElement('button')
+            fixBtn.className = 'btn primary'
+            fixBtn.textContent = 'Fix'
+            fixBtn.addEventListener('click', () => applyFixes([r.fix]))
+            row.appendChild(fixBtn)
+          }
           fixBtn.disabled = busy
-          fixBtn.addEventListener('click', () => applyFixes([r.fix]))
-          row.appendChild(fixBtn)
+        } else if (fixBtn) {
+          fixBtn.remove()
         }
-        list.appendChild(row)
+        prev = row
       }
     }
 

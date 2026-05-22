@@ -24,11 +24,14 @@ import (
 // Tunable thresholds shared across all callers.  Documented here so a
 // future maintainer can change behaviour in one place.
 const (
-	// VoidFeatureLow / VoidFeatureHigh — TA marks impassable / void
-	// attribute cells with one of two sentinels in TileAttr.Feature.
-	// 0xFFFF means "no feature, passable".
-	VoidFeatureLow  = uint16(0xFFFC)
-	VoidFeatureHigh = uint16(0xFFFE)
+	// VoidFeature — the canonical sentinel TA writes into
+	// TileAttr.Feature for impassable / void cells.  0xFFFF means "no
+	// feature, passable"; 0xFFFE / 0xFFFD also appear in the wild on a
+	// handful of early Cavedog maps (Metal Heck has 724 of them on
+	// what are clearly buildable steam-vent cells, and Lava Run has a
+	// similar pattern) — their semantics are not "void" in the engine
+	// and we treat them as "no feature" defensively.
+	VoidFeature = uint16(0xFFFC)
 
 	// MetalProximityTiles — a start position is flagged when its
 	// nearest metal-producing feature is further than this many
@@ -206,7 +209,7 @@ func CheckStartPositionsInBounds(in Input) Diagnostic {
 				continue
 			}
 			a := m.TileAttr[ay*attrW+ax]
-			if a.Feature == VoidFeatureLow || a.Feature == VoidFeatureHigh {
+			if a.Feature == VoidFeature {
 				bad = append(bad, fmt.Sprintf("Schema %d / StartPos%d (in void)", si+1, sp.Number))
 			}
 		}
@@ -304,7 +307,7 @@ func CheckVoidIslands(in Input) Diagnostic {
 	passable := make([]bool, w*h)
 	totalPassable := 0
 	for i, a := range m.TileAttr {
-		if a.Feature != VoidFeatureLow && a.Feature != VoidFeatureHigh {
+		if a.Feature != VoidFeature {
 			passable[i] = true
 			totalPassable++
 		}

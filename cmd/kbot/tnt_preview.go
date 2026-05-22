@@ -21,6 +21,7 @@ func newTNTPreviewCommand() *cobra.Command {
 	var (
 		target  string
 		vfsRoot string
+		schema  int
 	)
 	cmd := &cobra.Command{
 		Use:   "preview <file.tnt>",
@@ -28,7 +29,8 @@ func newTNTPreviewCommand() *cobra.Command {
 		Long: `Render the tile grid like 'kbot tnt image' and, when --vfs points at a
 flattened TA install (or any VFS root containing features/ and anims/),
 composite each placed feature's sprite onto the map and draw a numbered
-circle at every Schema_0 StartPos found in the sister .ota.
+circle at every StartPos in the chosen schema (default Schema 0; pass
+--schema <n> for a different one).
 
 If --vfs is omitted, the active kbot context (see 'kbot ctx') is used
 as the VFS root.  Set KBOT_CONTEXT=<alias> to pick a different
@@ -79,7 +81,7 @@ tile-grid render (no overlays).`,
 				otaText := readOnDiskSisterOTA(tntPath)
 				basename := strings.TrimSuffix(filepath.Base(tntPath), filepath.Ext(tntPath))
 
-				stats, err := tntpreview.Compose(base, m, features, vfs, palette, basename, otaText)
+				stats, err := tntpreview.ComposeWith(base, m, features, vfs, palette, basename, otaText, tntpreview.Options{SchemaIndex: schema})
 				if err != nil {
 					return err
 				}
@@ -105,6 +107,8 @@ tile-grid render (no overlays).`,
 	cmd.Flags().StringVar(&target, "target", "", "Output PNG path (default: stdout)")
 	cmd.Flags().StringVar(&vfsRoot, "vfs", "",
 		"Path to a flattened TA install / VFS root used to resolve feature sprites and the sister .ota (defaults to active kbot context)")
+	cmd.Flags().IntVar(&schema, "schema", 0,
+		"Schema index whose StartPos markers are drawn (0-based; default 0)")
 	return cmd
 }
 

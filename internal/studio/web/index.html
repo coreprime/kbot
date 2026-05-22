@@ -926,6 +926,18 @@
             <button id="btn-export-minimap" class="menu-row" title="Export minimap as PNG (252×252, aspect-fit)">
               <span class="ico">🗺</span><span>Export Minimap</span>
             </button>
+            <button id="btn-export-full-render" class="menu-row" title="Render the map with feature sprites and numbered StartPos markers for the active schema — file can be very large for big maps">
+              <span class="ico">🖼</span><span>Export Full Render</span>
+            </button>
+            <button id="btn-export-map-image" class="menu-row" title="Export the bare tile grid at 1:1 (32 px per tile), no features or markers — file can be very large for big maps">
+              <span class="ico">🗾</span><span>Export Map Image</span>
+            </button>
+            <button id="btn-export-buildmap" class="menu-row" title="Export the per-cell buildability classification PNG (green=buildable, blue=water, yellow=cliff, red=feature, black=void)">
+              <span class="ico">🧱</span><span>Export Buildmap</span>
+            </button>
+            <button id="btn-export-voidmap" class="menu-row" title="Export the engine-void mask PNG (cells with Feature == 0xFFFC)">
+              <span class="ico">⬛</span><span>Export Voidmap</span>
+            </button>
             <div class="menu-section-label">Quality</div>
             <button id="btn-quality-audit" class="menu-row" title="Run the Quality Checker without saving — inspect and optionally fix the current map">
               <span class="ico">🧪</span><span>Quality Check…</span>

@@ -63,7 +63,7 @@ func minimalMap() *tnt.Map {
 
 func TestStartPositionsInBoundsDetectsVoid(t *testing.T) {
 	m := minimalMap()
-	m.TileAttr[4*m.AttrW+4].Feature = VoidFeatureLow
+	m.TileAttr[4*m.AttrW+4].Feature = VoidFeature
 	ota := &OTAInfo{Schemas: []SchemaInfo{{StartPos: []StartPos{{Number: 1, X: 64, Z: 64}}}}}
 	d := CheckStartPositionsInBounds(Input{Map: m, OTA: ota})
 	if d.Severity != SeverityWarning {
@@ -181,7 +181,7 @@ func TestCheckMetalProximityMetalRichSkips(t *testing.T) {
 func TestVoidIslandsTolerance(t *testing.T) {
 	m := minimalMap()
 	for _, off := range [][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}} {
-		m.TileAttr[(6+off[1])*m.AttrW+(6+off[0])].Feature = VoidFeatureLow
+		m.TileAttr[(6+off[1])*m.AttrW+(6+off[0])].Feature = VoidFeature
 	}
 	ota := &OTAInfo{Schemas: []SchemaInfo{{StartPos: []StartPos{{Number: 1, X: 16, Z: 16}}}}}
 	d := CheckVoidIslands(Input{Map: m, OTA: ota})
@@ -198,7 +198,7 @@ func TestVoidIslandsAboveTolerance(t *testing.T) {
 	}
 	m := &tnt.Map{AttrW: attrW, AttrH: attrH, TileW: 8, TileH: 8, TileAttr: attrs}
 	for y := 0; y < attrH; y++ {
-		m.TileAttr[y*attrW+5].Feature = VoidFeatureLow
+		m.TileAttr[y*attrW+5].Feature = VoidFeature
 	}
 	ota := &OTAInfo{Schemas: []SchemaInfo{{StartPos: []StartPos{{Number: 1, X: 16, Z: 16}}}}}
 	d := CheckVoidIslands(Input{Map: m, OTA: ota})

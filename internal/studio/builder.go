@@ -103,28 +103,25 @@ func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 		return s, nil
 	}
 
-	// Tile pool.  Dedup is gated on the "compressTiles" quality-check
-	// fix so a save without the Quality Checker's blessing can show the
-	// raw, redundant pool the checker is supposed to flag.  Tile index 0
-	// is reserved as the "blank" tile filled with the void byte so
-	// unstamped cells render uniformly.
+	// Tile pool.  Byte-identical tiles are always coalesced — the studio
+	// rewrites the pool on every save, so emitting redundant entries
+	// would just produce a fatter file with no user-visible benefit and
+	// would inflate the dedupTiles quality count against a synthetic
+	// per-cell pool that nothing the user did actually built.  Tile
+	// index 0 is reserved as the "blank" tile filled with the void byte
+	// so unstamped cells render uniformly.
 	type tileKey [1024]byte
-	compress := req.hasFix("compressTiles")
 	tilePool := make([][]byte, 0, 32)
 	tileIndex := make(map[tileKey]uint16)
 	addTile := func(pixels []byte) uint16 {
 		var key tileKey
-		if compress {
-			copy(key[:], pixels)
-			if idx, ok := tileIndex[key]; ok {
-				return idx
-			}
+		copy(key[:], pixels)
+		if idx, ok := tileIndex[key]; ok {
+			return idx
 		}
 		idx := uint16(len(tilePool))
 		tilePool = append(tilePool, append([]byte(nil), pixels...))
-		if compress {
-			tileIndex[key] = idx
-		}
+		tileIndex[key] = idx
 		return idx
 	}
 	blank := make([]byte, 1024)
