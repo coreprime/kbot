@@ -590,13 +590,19 @@ kbd {
 }
 
 /* Quality Checker — vertical list of check rows, each with a status
-   pill, label, message, and an optional per-row Fix button. */
+   pill, label, message, and an optional per-row Fix button.  The
+   list is scrollable so the dialog stays a sensible height when the
+   check count grows; each row uses a subtle fade-in transition so
+   sequential reveals don't snap into place. */
 .quality-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin: 12px 0 16px;
   min-height: 72px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .quality-row {
   display: grid;
@@ -607,6 +613,14 @@ kbd {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 6px;
+  /* Fade in from a slight downward offset.  Sequential reveals layer
+     these animations one after the other so the user sees the dialog
+     building itself row by row. */
+  animation: quality-row-in 240ms ease-out both;
+}
+@keyframes quality-row-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .quality-row.severity-ok { border-color: rgba(80, 200, 120, 0.45); }
 .quality-row.severity-warning { border-color: rgba(255, 196, 70, 0.55); }

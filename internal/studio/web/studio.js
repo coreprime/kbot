@@ -9865,12 +9865,15 @@ async function runQualityChecker(payload, { mode = 'save' } = {}) {
       busy = false
       renderRows(results.map((i) => rowSpec(i, i.severity, i.message)))
       refreshFooter()
+      const total = results.length
+      const passed = results.filter((i) => i.severity === 'ok').length
+      const summary = `${passed} of ${total} checks passed`
       if (data.allOk) {
         if (!userInteracted && !isAudit) {
           // Clean first check on the save path — sail through, but
           // wait for the overall window minimum so the dialog stays
           // visible long enough to register.
-          subtitle.textContent = 'All checks passed. Saving…'
+          subtitle.textContent = `${summary} — saving…`
           const elapsed = performance.now() - windowStart
           const wait = Math.max(0, QUALITY_WINDOW_MIN_MS - elapsed)
           setTimeout(() => finish(Array.from(fixes)), wait)
@@ -9879,13 +9882,13 @@ async function runQualityChecker(payload, { mode = 'save' } = {}) {
         // Hold the dialog open — either the user fixed something
         // (save mode: green Save) or this is an audit (Close button).
         subtitle.textContent = isAudit
-          ? 'All checks passed.'
-          : 'All checks passed. Click Save to write the map.'
+          ? `${summary}.`
+          : `${summary} — click Save to write the map.`
         return
       }
       subtitle.textContent = isAudit
-        ? 'Some checks need attention.'
-        : 'Some checks need attention before save.'
+        ? `${summary} — review the warnings below.`
+        : `${summary} — review before saving.`
     }
 
     async function applyFixes(ids) {

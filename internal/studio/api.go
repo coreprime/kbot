@@ -1210,7 +1210,12 @@ type featureEntry struct {
 	Seqname     string `json:"seqname"`
 	OriginX     int    `json:"originX"`
 	OriginY     int    `json:"originY"`
-	PreviewURL  string `json:"previewUrl,omitempty"`
+	// Metal yield (non-zero for the rocks-with-metal features the
+	// engine considers a starting resource).  Used by the Quality
+	// Checker's metal-proximity check; harmless extra field for the
+	// rest of the UI which just ignores it.
+	Metal      int    `json:"metal,omitempty"`
+	PreviewURL string `json:"previewUrl,omitempty"`
 }
 
 func handleFeatures(w http.ResponseWriter, _ *http.Request) {
@@ -1283,6 +1288,7 @@ func scanFeatures() ([]featureEntry, map[string]featureEntry) {
 				FootprintZ:  s.Int("footprintz"),
 				Filename:    s.String("filename"),
 				Seqname:     s.String("seqname"),
+				Metal:       s.Int("metal"),
 			}
 			if entry.Filename != "" && entry.Seqname != "" {
 				entry.PreviewURL = "/api/studio/feature-preview/" + url.PathEscape(name)
