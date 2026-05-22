@@ -7230,10 +7230,33 @@ function drawBuildableOverlay(ctx) {
   // Pre-compute buildability bitmap so the run-length pass below
   // doesn't repeat the four-neighbour comparison per cell.
   const buildable = new Uint8Array(aw * ah)
+  // Stamp feature footprints first — the engine treats every cell
+  // under a feature's footprint as occupied, no matter how flat or
+  // dry the underlying terrain is.  Metal Heck's decorative wreckage
+  // pieces sit on flat metal floor; without this pass the cells
+  // immediately under those features wrongly read as buildable while
+  // the visible sprite extends past the footprint and *looks* like
+  // it was the buildable region.
+  const occupied = new Uint8Array(aw * ah)
+  for (const f of state.features || []) {
+    const ax = f.ax | 0, ay = f.ay | 0
+    const fx = Math.max(1, f.footprintX | 0)
+    const fz = Math.max(1, f.footprintZ | 0)
+    for (let dy = 0; dy < fz; dy++) {
+      const yy = ay + dy
+      if (yy < 0 || yy >= ah) continue
+      for (let dx = 0; dx < fx; dx++) {
+        const xx = ax + dx
+        if (xx < 0 || xx >= aw) continue
+        occupied[yy * aw + xx] = 1
+      }
+    }
+  }
   for (let y = 0; y < ah; y++) {
     for (let x = 0; x < aw; x++) {
       const idx = y * aw + x
       if (voids && voids[idx]) continue
+      if (occupied[idx]) continue
       const h = heights[idx]
       if (h < seaLevel) continue
       // Cardinal neighbours — skip out-of-bounds (edge cells effectively
@@ -8220,6 +8243,7 @@ function openSettingsDialog() {
   $('#set-animate-features').checked = !!state.animateFeatures
   $('#set-show-voids').checked = !!state.showVoids
   $('#set-show-contours').checked = !!state.showContours
+  $('#set-show-buildable').checked = !!state.showBuildable
   $('#set-show-features').checked = !!state.showFeatures
   $('#set-show-startpos').checked = !!state.showStartPositions
   dlg.classList.remove('hidden')
@@ -8252,6 +8276,7 @@ function applySettingsDialog() {
   state.animateFeatures = $('#set-animate-features').checked
   state.showVoids = $('#set-show-voids').checked
   state.showContours = $('#set-show-contours').checked
+  state.showBuildable = $('#set-show-buildable').checked
   state.showFeatures = $('#set-show-features').checked
   state.showStartPositions = $('#set-show-startpos').checked
   syncDomFromPrefs()
