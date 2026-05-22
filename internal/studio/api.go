@@ -42,6 +42,8 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/save", handleSave)
 	mux.HandleFunc("/api/studio/save-loose", handleSaveLoose)
 	mux.HandleFunc("/api/studio/quality-check", handleQualityCheck)
+	mux.HandleFunc("/api/studio/glamour/list", handleGlamourList)
+	mux.HandleFunc("/api/studio/glamour/image/", handleGlamourImage)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────

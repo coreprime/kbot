@@ -8,6 +8,14 @@
 </head>
 <body>
   <div id="welcome-dialog" class="dialog">
+    <!-- Glamour slideshow layer.  Two <img> elements cross-fade every
+         15s; JS preloads the next image before swapping, populated
+         only when the VFS has bitmaps/glamour/ content.  Sits behind
+         the nanofx canvas. -->
+    <div id="welcome-glamour" class="welcome-glamour" aria-hidden="true">
+      <img id="welcome-glamour-a" alt="" />
+      <img id="welcome-glamour-b" alt="" />
+    </div>
     <!-- Nanolathe FX layer: two green particle emitters fire toward
          the dialog card from the bottom corners.  Lives behind the
          card via z-index in CSS.  Drawing + animation is owned by
