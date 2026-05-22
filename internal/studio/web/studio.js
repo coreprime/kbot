@@ -1103,6 +1103,29 @@ function wireOpenDialogKeyboard() {
       if (cards.length > 0) setKbdFocus(0)
     }
   })
+  // Type-ahead jump.  Letters / digits typed while the list has focus
+  // accumulate into a small buffer and the first card whose visible
+  // title starts with that buffer (case-insensitive) is highlighted.
+  // Arrow keys clear the buffer so a "ME → ↑K" sequence ends up at
+  // K, not "MEK".  TYPEAHEAD_TIMEOUT_MS also resets the buffer once
+  // the user has paused — typical OS picker behaviour.
+  const TYPEAHEAD_TIMEOUT_MS = 1000
+  let typeaheadBuf = ''
+  let typeaheadTimer = 0
+  function resetTypeahead() {
+    typeaheadBuf = ''
+    if (typeaheadTimer) { clearTimeout(typeaheadTimer); typeaheadTimer = 0 }
+  }
+  function cardTitle(card) {
+    // .title element holds the rendered name (mission or filename).
+    return (card.querySelector('.title')?.textContent || '').toLowerCase()
+  }
+  function jumpToPrefix(buf) {
+    const needle = buf.toLowerCase()
+    const cards = visibleCards()
+    const hit = cards.findIndex((c) => cardTitle(c).startsWith(needle))
+    if (hit >= 0) setKbdFocus(hit)
+  }
   // Arrow + Enter on the list itself.
   list.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
@@ -1120,8 +1143,34 @@ function wireOpenDialogKeyboard() {
     else if (e.key === 'ArrowLeft') next = cur < 0 ? 0 : cur - 1
     else if (e.key === 'Home')      next = 0
     else if (e.key === 'End')       next = cards.length - 1
-    else return
+    else {
+      // Type-ahead: any single printable character feeds the prefix
+      // buffer.  Filtering modifier+key combos (Ctrl+A, Alt+X) keeps
+      // the dialog's other shortcuts working.
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && /[a-z0-9 \-_]/i.test(e.key)) {
+        e.preventDefault()
+        typeaheadBuf += e.key
+        jumpToPrefix(typeaheadBuf)
+        if (typeaheadTimer) clearTimeout(typeaheadTimer)
+        typeaheadTimer = setTimeout(resetTypeahead, TYPEAHEAD_TIMEOUT_MS)
+      } else if (e.key === 'Backspace') {
+        // Shorten the buffer one char at a time so the user can fix
+        // a typo without starting over.
+        e.preventDefault()
+        typeaheadBuf = typeaheadBuf.slice(0, -1)
+        if (typeaheadBuf) {
+          jumpToPrefix(typeaheadBuf)
+          if (typeaheadTimer) clearTimeout(typeaheadTimer)
+          typeaheadTimer = setTimeout(resetTypeahead, TYPEAHEAD_TIMEOUT_MS)
+        } else {
+          resetTypeahead()
+        }
+      }
+      return
+    }
     e.preventDefault()
+    // Any arrow key clears the type-ahead — "ME ↑ K" ends at K.
+    resetTypeahead()
     setKbdFocus(next)
   })
   // Enter on the filter — if the current filter narrows to one map,
