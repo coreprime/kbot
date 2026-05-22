@@ -9634,11 +9634,13 @@ function applySchemaEditor() {
 async function startNewMapFromEditor() {
   // Multi-tab: New simply opens the size dialog and appends a new tab
   // on confirm.  No discard prompt — the existing map stays on its
-  // own tab.
+  // own tab.  Dimensions inherit from the current map (likely the
+  // user wants the same size), but the name resets to "newmap" so
+  // a previous map's name doesn't shadow what they're about to make.
   sizeDialogSource = 'tabbar'
   const wIn = $('#size-w'); if (wIn) wIn.value = String(state.tileW || 128)
   const hIn = $('#size-h'); if (hIn) hIn.value = String(state.tileH || 128)
-  const nIn = $('#size-name'); if (nIn) nIn.value = state.name || 'newmap'
+  const nIn = $('#size-name'); if (nIn) nIn.value = 'newmap'
   openSizeDialog()
 }
 
