@@ -194,8 +194,9 @@ kbd {
 .welcome-tab.active {
   /* Folder-tab look — top + sides framed in bright white, bottom is
      open so the tab visually pours into the panel below.  The panel
-     has no border-top of its own (see .welcome-tab-panel) so there's
-     no horizontal line to mask under the tab. */
+     keeps its border-top (so the line continues to either side of
+     the tab); we mask the segment immediately under the tab via an
+     opaque ::after strip so it doesn't cross through. */
   background: rgba(22, 26, 33, 0.25);
   border-color: rgba(255, 255, 255, 0.9);
   color: var(--text);
@@ -203,21 +204,33 @@ kbd {
   position: relative;
   z-index: 1;
 }
+.welcome-tab.active::after {
+  content: '';
+  position: absolute;
+  /* -1px / -1px so the strip extends through the tab's left + right
+     borders and covers the full outer footprint where the panel
+     border-top sits.  top: 100% places it at the tab's bottom edge. */
+  left: -1px;
+  right: -1px;
+  top: 100%;
+  height: 1px;
+  background: var(--bg-1);
+  z-index: 2;
+}
 .welcome-tab[disabled] {
   cursor: not-allowed;
   opacity: 0.55;
 }
 /* Folder body — the bordered panel that wraps the card grid + drop
-   hint, attached to the active tab's bottom edge.  No border-top:
-   the tab strip's bottom edge serves as the implicit top of the
-   panel, so a horizontal line never crosses under the active tab.
+   hint.  Full border on all four sides; the segment of border-top
+   directly under the active tab is masked by an ::after strip on
+   that tab (see .welcome-tab.active::after) so the horizontal line
+   continues on either side of the tab but never crosses through it.
    Mostly see-through (alpha 0.25) so the strobing grid keeps
-   reading; the white outline on the other three sides frames the
-   cards. */
+   reading; the white outline frames the cards. */
 .welcome-tab-panel {
   border: 1px solid rgba(255, 255, 255, 0.9);
-  border-top: none;
-  border-radius: 0 0 8px 8px;
+  border-radius: 0 8px 8px 8px;
   background: rgba(22, 26, 33, 0.25);
   padding: 18px 20px 16px;
 }
