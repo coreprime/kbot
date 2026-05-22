@@ -4,10 +4,139 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
+	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/internal/kbotctx"
 )
+
+// VFSInputHit describes a successful path resolution.
+type VFSInputHit struct {
+	// Data is the file bytes.
+	Data []byte
+	// Source is a human-readable label for diagnostics ("./local-edit.tnt",
+	// "vfs:maps/the pass.tnt", etc.).
+	Source string
+	// VirtualPath is the canonical lowercase VFS slot the file was found
+	// at (empty when the file came from local disk).  Callers use this
+	// to derive sibling files in the same backing store.
+	VirtualPath string
+}
+
+// resolveVFSInput finds a file the user asked for, trying the local
+// filesystem first and then the supplied virtual filesystem.  The
+// matching logic mirrors what an OS-level path picker would do:
+//
+//   - Absolute or cwd-relative paths that resolve to an on-disk file
+//     win immediately, regardless of any VFS mount.
+//   - Otherwise the argument is normalised (leading "./" stripped,
+//     backslashes converted to forward slashes, lowercased) and looked
+//     up in the VFS.  Any segment equal to ".." is rejected — relative
+//     paths must stay inside the mounted root.
+//   - Bare basenames are searched against the VFS as a last resort,
+//     restricted to the directory prefix the caller supplies (e.g.
+//     "maps/") so we don't accidentally match a same-named file from
+//     a different category.
+//
+// The wantExt and basenameDirs parameters narrow the search.  Pass an
+// empty wantExt to accept any extension; pass nil basenameDirs to
+// disable the bare-basename fallback.
+func resolveVFSInput(arg string, vfs *filesystem.VirtualFileSystem, wantExt string, basenameDirs []string) (*VFSInputHit, error) {
+	if arg == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+	// 1. Local disk first — keeps `./local-edit.tnt` snappy and lets the
+	// user point at scratch files outside the install.
+	if info, err := os.Stat(arg); err == nil && !info.IsDir() {
+		data, rerr := os.ReadFile(arg)
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s: %w", arg, rerr)
+		}
+		return &VFSInputHit{Data: data, Source: arg}, nil
+	}
+	if vfs == nil {
+		return nil, fmt.Errorf("read %s: not a local file and no VFS is mounted (try `kbot ctx add` or pass --vfs)", arg)
+	}
+	normalised, err := normaliseVFSPath(arg)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", arg, err)
+	}
+	// 2. Exact virtual-path lookup (case-insensitive, VFS keys live lowercase).
+	if hit := vfs.Exists(normalised); hit && !vfs.IsDir(normalised) {
+		data, rerr := vfs.ReadFile(normalised)
+		if rerr != nil {
+			return nil, fmt.Errorf("read %s from vfs: %w", normalised, rerr)
+		}
+		return &VFSInputHit{Data: data, Source: "vfs:" + normalised, VirtualPath: normalised}, nil
+	}
+	// 3. Bare basename — search the configured prefixes.
+	if !strings.ContainsAny(normalised, "/\\") && len(basenameDirs) > 0 {
+		target := normalised
+		var hits []string
+		for _, p := range vfs.List() {
+			lower := strings.ToLower(p)
+			if !hasAnyPrefix(lower, basenameDirs) {
+				continue
+			}
+			if wantExt != "" && !strings.HasSuffix(lower, wantExt) {
+				continue
+			}
+			if path.Base(lower) == target {
+				hits = append(hits, p)
+			}
+		}
+		switch len(hits) {
+		case 1:
+			data, rerr := vfs.ReadFile(hits[0])
+			if rerr != nil {
+				return nil, fmt.Errorf("read %s from vfs: %w", hits[0], rerr)
+			}
+			return &VFSInputHit{Data: data, Source: "vfs:" + hits[0], VirtualPath: hits[0]}, nil
+		case 0:
+			// fall through to not-found below
+		default:
+			return nil, fmt.Errorf("read %s: matches %d files in the vfs (%s) — pass a fuller path",
+				arg, len(hits), strings.Join(hits, ", "))
+		}
+	}
+	return nil, fmt.Errorf("read %s: not found locally or in the mounted vfs", arg)
+}
+
+// normaliseVFSPath rewrites a user-supplied path into the canonical
+// lowercase, forward-slash form the VFS uses as keys.  Rejects any
+// ".." segments — relative paths can't escape the mount root.
+func normaliseVFSPath(p string) (string, error) {
+	// Backslashes → forward slashes so Windows-style paths work.
+	clean := strings.ReplaceAll(p, "\\", "/")
+	// Strip a leading "./" (no-op prefix users routinely add via tab-completion).
+	for strings.HasPrefix(clean, "./") {
+		clean = clean[2:]
+	}
+	// Reject leading "/" — VFS paths are always relative to the mount root.
+	clean = strings.TrimPrefix(clean, "/")
+	// Reject any ".." segments, no matter where they appear.  This is
+	// the workspace-escape guard the caller asked for.
+	for _, seg := range strings.Split(clean, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("path escapes the mount root (%q)", p)
+		}
+	}
+	return strings.ToLower(clean), nil
+}
+
+// hasAnyPrefix reports whether s starts with any of the supplied
+// prefixes.  Used by resolveVFSInput's basename search to scope the
+// walk.
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // resolveVFSPath returns the working directory a VFS-backed command
 // should mount, in priority order: explicit user input, then the

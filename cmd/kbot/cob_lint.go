@@ -19,6 +19,7 @@ func newCobLintCommand() *cobra.Command {
 		stream  bool
 		quiet   bool
 		verbose bool
+		ciMode  bool
 	)
 
 	cmd := &cobra.Command{
@@ -29,7 +30,8 @@ such as unused pieces, dead code, invalid script calls, and more.
 
 When given a directory, all .cob files in it are linted.  When no
 argument is given (and --stream is not used), the active kbot context
-is linted (see 'kbot ctx').
+is linted (see 'kbot ctx').  --ci emits SARIF 2.1.0 JSON on stdout
+for ingest by GitHub, GitLab, Harness and other code-scanning UIs.
 
 Rules:
   unused-piece     Piece declared but never used by any animation command
@@ -42,7 +44,7 @@ Rules:
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stream {
-				return lintStream(quiet, verbose)
+				return lintStream(quiet, verbose, ciMode)
 			}
 			path := ""
 			if len(args) > 0 {
@@ -55,19 +57,22 @@ Rules:
 			if resolved == "" {
 				return fmt.Errorf("provide a .cob file, directory, --stream, or register a kbot context (run `kbot ctx add`)")
 			}
-			reportContextSource(source)
-			return lintPath(resolved, quiet, verbose)
+			if !ciMode {
+				reportContextSource(source)
+			}
+			return lintPath(resolved, quiet, verbose, ciMode)
 		},
 	}
 
 	cmd.Flags().BoolVar(&stream, "stream", false, "Read COB from stdin")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Only show summary counts")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show files with zero issues")
+	cmd.Flags().BoolVar(&ciMode, "ci", false, "Emit SARIF 2.1.0 JSON on stdout for ingest by GitHub/GitLab/Harness/etc. (quiet stderr)")
 
 	return cmd
 }
 
-func lintPath(path string, quiet, verbose bool) error {
+func lintPath(path string, quiet, verbose, ciMode bool) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("cannot access %s: %w", path, err)
@@ -97,17 +102,24 @@ func lintPath(path string, quiet, verbose bool) error {
 	totalDiags := 0
 	totalByRule := make(map[string]int)
 	hasErrors := false
+	// SARIF collector — accumulated when --ci is on so we can emit a
+	// single JSON document covering every file the linter scanned.
+	var sarifResults []sarifResult
 
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ %s: %v\n", filepath.Base(f), err)
+			if !ciMode {
+				fmt.Fprintf(os.Stderr, "  ⚠ %s: %v\n", filepath.Base(f), err)
+			}
 			continue
 		}
 
 		cob, err := scripting.LoadFromReader(bytes.NewReader(data))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ %s: parse error: %v\n", filepath.Base(f), err)
+			if !ciMode {
+				fmt.Fprintf(os.Stderr, "  ⚠ %s: parse error: %v\n", filepath.Base(f), err)
+			}
 			continue
 		}
 
@@ -120,9 +132,12 @@ func lintPath(path string, quiet, verbose bool) error {
 			if d.Severity == linter.Error {
 				hasErrors = true
 			}
+			if ciMode {
+				sarifResults = append(sarifResults, cobDiagnosticToSARIF(f, d))
+			}
 		}
 
-		if !quiet {
+		if !quiet && !ciMode {
 			if len(diags) > 0 {
 				fmt.Fprintf(os.Stderr, "\n  %s  (%d issue%s)\n", filepath.Base(f), len(diags), plural(len(diags)))
 				fmt.Fprint(os.Stderr, linter.FormatDiagnostics(diags))
@@ -130,6 +145,16 @@ func lintPath(path string, quiet, verbose bool) error {
 				fmt.Fprintf(os.Stderr, "  ✅  %s\n", filepath.Base(f))
 			}
 		}
+	}
+
+	if ciMode {
+		if err := writeSARIF(os.Stdout, "kbot cob lint", cobLintRuleCatalogue(), sarifResults); err != nil {
+			return fmt.Errorf("encode sarif: %w", err)
+		}
+		if hasErrors {
+			return fmt.Errorf("lint found errors")
+		}
+		return nil
 	}
 
 	// Summary
@@ -163,7 +188,7 @@ func lintPath(path string, quiet, verbose bool) error {
 	return nil
 }
 
-func lintStream(quiet, verbose bool) error {
+func lintStream(quiet, verbose, ciMode bool) error {
 	data, err := readInput(nil, true)
 	if err != nil {
 		return err
@@ -177,11 +202,28 @@ func lintStream(quiet, verbose bool) error {
 	l := linter.New()
 	diags := l.Lint(cob)
 
+	if ciMode {
+		var results []sarifResult
+		for _, d := range diags {
+			results = append(results, cobDiagnosticToSARIF("<stdin>", d))
+		}
+		if err := writeSARIF(os.Stdout, "kbot cob lint", cobLintRuleCatalogue(), results); err != nil {
+			return fmt.Errorf("encode sarif: %w", err)
+		}
+		for _, d := range diags {
+			if d.Severity == linter.Error {
+				return fmt.Errorf("lint found errors")
+			}
+		}
+		return nil
+	}
+
 	if !quiet {
 		if len(diags) > 0 {
 			fmt.Fprint(os.Stderr, linter.FormatDiagnostics(diags))
 		}
 	}
+	_ = verbose
 
 	if len(diags) == 0 {
 		fmt.Fprintf(os.Stderr, "  ✅  no issues found\n")
@@ -202,4 +244,47 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// cobLintRuleCatalogue is the rule list the cob-lint SARIF run
+// advertises.  Mirrors the rules listed in the command help text.
+func cobLintRuleCatalogue() []sarifRule {
+	return []sarifRule{
+		sarifShortRule("cob.unused-piece", "Piece declared but never used by any animation command."),
+		sarifShortRule("cob.unused-static", "Global variable declared but never read or written."),
+		sarifShortRule("cob.unused-local", "Local variable allocated but never accessed."),
+		sarifShortRule("cob.always-true", "Redundant condition (if/while with constant 1)."),
+		sarifShortRule("cob.dead-code", "Impossible condition (if/while with constant 0)."),
+		sarifShortRule("cob.long-function", "Function exceeds 100 instruction-lines."),
+		sarifShortRule("cob.invalid-call", "call-script / start-script references a non-existent function."),
+	}
+}
+
+// cobDiagnosticToSARIF converts a single linter diagnostic to a
+// SARIF result.  When the linter knows the originating line in the
+// decompiled output it lands in physicalLocation.region.startLine
+// — close enough for code-scanning UIs to surface the issue inline.
+func cobDiagnosticToSARIF(filePath string, d linter.Diagnostic) sarifResult {
+	level := "warning"
+	if d.Severity == linter.Error {
+		level = "error"
+	}
+	loc := sarifLocation{
+		PhysicalLocation: sarifPhysicalLocation{
+			ArtifactLocation: sarifArtifactLocation{URI: filePath},
+		},
+	}
+	if d.Line > 0 {
+		loc.PhysicalLocation.Region = &sarifRegion{StartLine: d.Line}
+	}
+	msg := d.Message
+	if d.Script != "" {
+		msg = d.Script + ": " + msg
+	}
+	return sarifResult{
+		RuleID:    "cob." + d.Rule,
+		Level:     level,
+		Message:   sarifMessage{Text: msg},
+		Locations: []sarifLocation{loc},
+	}
 }

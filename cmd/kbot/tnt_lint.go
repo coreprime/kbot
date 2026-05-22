@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,6 +21,7 @@ func newTNTLintCommand() *cobra.Command {
 		otaPath    string
 		vfsRoot    string
 		qualityOff bool
+		ciMode     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "lint <file.tnt>",
@@ -46,11 +46,12 @@ func newTNTLintCommand() *cobra.Command {
 
 By default the command mounts the active kbot context (` + "`kbot ctx`" + `)
 as a virtual filesystem so the .tnt argument can be a bare basename
-("metal heck.tnt") or a virtual path ("maps/metal heck.tnt") that
-lives inside an HPI archive — sibling .ota lookup and the feature
-registry both inherit that VFS.  Pass an absolute path or --vfs
-<root> to override.  --no-quality skips the quality pass for
-size-only / CI runs.
+("metal heck.tnt"), a virtual path ("maps/metal heck.tnt"), or a
+cwd-relative path ("./local-edit.tnt") — sibling .ota lookup and the
+feature registry both inherit that VFS.  Pass --vfs <root> to
+override.  --no-quality skips the quality pass for size-only / CI
+runs.  --ci emits SARIF 2.1.0 JSON on stdout for ingest by GitHub,
+GitLab, Harness and other code-scanning UIs.
 
 The map is not modified.  When at least one issue is reported the
 exit code is 1 so the command can be used in CI; clean maps exit 0.`,
@@ -60,23 +61,23 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 		RunE: func(_ *cobra.Command, args []string) error {
 			arg := args[0]
 
-			// Mount the VFS first.  --vfs > active kbot context > nil.
+			// Mount the VFS first — --vfs > active kbot context.
 			vfs, vfsLabel, err := openLintVFS(vfsRoot)
 			if err != nil {
 				return err
 			}
 			if vfs != nil {
 				defer func() { _ = vfs.Close() }()
-				reportContextSource(vfsLabel)
+				if !ciMode {
+					reportContextSource(vfsLabel)
+				}
 			}
 
-			// Resolve the .tnt: local file first, fall back to VFS.
-			tntBytes, tntSource, err := readLintInput(arg, vfs)
+			hit, err := resolveVFSInput(arg, vfs, ".tnt", []string{"maps/"})
 			if err != nil {
 				return err
 			}
-
-			m, err := tnt.LoadFromReader(bytes.NewReader(tntBytes))
+			m, err := tnt.LoadFromReader(bytes.NewReader(hit.Data))
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
@@ -91,68 +92,27 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 				}
 				opts.Palette = pal
 			}
-			diags, err := m.Lint(opts)
+			poolDiags, err := m.Lint(opts)
 			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(os.Stderr, "TNT file:        %s\n", tntSource)
-			fmt.Fprintf(os.Stderr, "Tile graphics:   %d\n", len(m.Tiles))
-			fmt.Fprintf(os.Stderr, "Map size:        %dx%d cells (%dx%d tiles)\n",
-				m.AttrW, m.AttrH, m.TileW, m.TileH)
-
-			tilePoolIssues := len(diags)
-			if tilePoolIssues == 0 {
-				fmt.Fprintln(os.Stderr)
-				fmt.Fprintln(os.Stderr, "  ✅  tile-pool: no issues found")
-			} else {
-				fmt.Fprintln(os.Stderr)
-				fmt.Fprintln(os.Stderr, "  Tile-pool diagnostics:")
-				totalCount, totalBytes := 0, 0
-				for _, d := range diags {
-					icon := severityIcon(d.Severity)
-					fmt.Fprintf(os.Stderr, "    %s  %-16s %s\n", icon, d.Rule, d.Message)
-					totalCount += d.Count
-					totalBytes += d.BytesSaved
-				}
-				fmt.Fprintf(os.Stderr,
-					"    %d tile graphic%s (%d bytes) could be removed by `kbot tnt optimize`.\n",
-					totalCount, sIfPlural(totalCount), totalBytes)
-			}
-
-			qualityWarnings := 0
+			// Quality diagnostics (optional but on by default).
+			var qualityDiags []maplint.Diagnostic
+			var otaSrc string
 			if !qualityOff {
-				in, otaSrc, vfsSrc, qErr := buildMaplintInputFromCLI(arg, tntSource, m, tntBytes, otaPath, vfs, vfsLabel)
+				in, srcOTA, _, qErr := buildMaplintInputFromCLI(arg, hit, m, otaPath, vfs)
 				if qErr != nil {
 					return qErr
 				}
-				fmt.Fprintln(os.Stderr)
-				fmt.Fprintln(os.Stderr, "  Map quality:")
-				if otaSrc != "" {
-					fmt.Fprintf(os.Stderr, "    .ota source:   %s\n", otaSrc)
-				} else {
-					fmt.Fprintln(os.Stderr, "    .ota source:   (none — metadata + schema + start checks will skip)")
-				}
-				if vfsSrc != "" {
-					fmt.Fprintf(os.Stderr, "    Feature VFS:   %s\n", vfsSrc)
-				} else {
-					fmt.Fprintln(os.Stderr, "    Feature VFS:   (none — metal-proximity check will skip)")
-				}
-				for _, d := range maplint.Run(in) {
-					icon := maplintIcon(d.Severity)
-					fmt.Fprintf(os.Stderr, "    %s  %-24s %s\n", icon, d.ID, d.Message)
-					if d.Severity != maplint.SeverityOK {
-						qualityWarnings++
-					}
-				}
+				otaSrc = srcOTA
+				qualityDiags = maplint.Run(in)
 			}
 
-			fmt.Fprintln(os.Stderr)
-			total := tilePoolIssues + qualityWarnings
-			if total == 0 {
-				return nil
+			if ciMode {
+				return emitTNTLintSARIF(hit, m, poolDiags, qualityDiags)
 			}
-			return fmt.Errorf("lint found %d issue%s", total, sIfPlural(total))
+			return printTNTLintHuman(hit, m, poolDiags, qualityDiags, otaSrc, vfsLabel, qualityOff)
 		},
 	}
 	cmd.Flags().Float64Var(&similarity, "similarity", 1.0,
@@ -163,13 +123,109 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 		"Mount a TA install (or flattened directory) for .tnt / .ota / feature-registry lookups. Defaults to the active kbot context.")
 	cmd.Flags().BoolVar(&qualityOff, "no-quality", false,
 		"Skip the map-quality pass; only run tile-pool diagnostics")
+	cmd.Flags().BoolVar(&ciMode, "ci", false,
+		"Emit SARIF 2.1.0 JSON on stdout for ingest by GitHub/GitLab/Harness/etc. (quiet stderr)")
 	return cmd
 }
 
+// printTNTLintHuman writes the friendly stderr output the interactive
+// user sees.  Quality-pass sources are already shown in the header,
+// so we don't repeat them in the rule listing.
+func printTNTLintHuman(hit *VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic, otaSrc, vfsLabel string, qualityOff bool) error {
+	fmt.Fprintf(os.Stderr, "TNT file:        %s\n", hit.Source)
+	fmt.Fprintf(os.Stderr, "Tile graphics:   %d\n", len(m.Tiles))
+	fmt.Fprintf(os.Stderr, "Map size:        %dx%d cells (%dx%d tiles)\n",
+		m.AttrW, m.AttrH, m.TileW, m.TileH)
+	if !qualityOff {
+		if otaSrc != "" {
+			fmt.Fprintf(os.Stderr, ".ota source:     %s\n", otaSrc)
+		} else {
+			fmt.Fprintln(os.Stderr, ".ota source:     (none — metadata + schema + start checks will skip)")
+		}
+		if vfsLabel != "" {
+			fmt.Fprintf(os.Stderr, "Feature VFS:     %s\n", vfsLabel)
+		}
+	}
+
+	issueCount := 0
+	if len(poolDiags) == 0 {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  ✓  tile-pool: no issues found")
+	} else {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  Tile-pool diagnostics:")
+		totalCount, totalBytes := 0, 0
+		for _, d := range poolDiags {
+			fmt.Fprintf(os.Stderr, "    %s  %-22s %s\n", severityIcon(d.Severity), d.Rule, d.Message)
+			totalCount += d.Count
+			totalBytes += d.BytesSaved
+			issueCount++
+		}
+		fmt.Fprintf(os.Stderr,
+			"    %d tile graphic%s (%d bytes) could be removed by `kbot tnt optimize`.\n",
+			totalCount, sIfPlural(totalCount), totalBytes)
+	}
+
+	if !qualityOff {
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  Map quality:")
+		for _, d := range qualityDiags {
+			fmt.Fprintf(os.Stderr, "    %s  %-22s %s\n", maplintIcon(d.Severity), d.ID, d.Message)
+			if d.Severity != maplint.SeverityOK {
+				issueCount++
+			}
+		}
+	}
+
+	fmt.Fprintln(os.Stderr)
+	if issueCount == 0 {
+		return nil
+	}
+	return fmt.Errorf("lint found %d issue%s", issueCount, sIfPlural(issueCount))
+}
+
+// emitTNTLintSARIF writes a SARIF 2.1.0 run to stdout.  Stderr stays
+// silent in CI mode so build pipes don't capture the human text.
+func emitTNTLintSARIF(hit *VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic) error {
+	uri := strings.TrimPrefix(hit.Source, "vfs:")
+	results := make([]sarifResult, 0, len(poolDiags)+len(qualityDiags))
+	for _, d := range poolDiags {
+		results = append(results, sarifResult{
+			RuleID:  "tnt." + d.Rule,
+			Level:   sarifLevelForPool(d.Severity),
+			Message: sarifMessage{Text: d.Message},
+			Locations: []sarifLocation{{
+				PhysicalLocation: sarifPhysicalLocation{
+					ArtifactLocation: sarifArtifactLocation{URI: uri},
+				},
+			}},
+		})
+	}
+	for _, d := range qualityDiags {
+		if d.Severity == maplint.SeverityOK {
+			continue
+		}
+		results = append(results, sarifResult{
+			RuleID:  "maplint." + d.ID,
+			Level:   sarifLevelForMaplint(d.Severity),
+			Message: sarifMessage{Text: d.Message},
+			Locations: []sarifLocation{{
+				PhysicalLocation: sarifPhysicalLocation{
+					ArtifactLocation: sarifArtifactLocation{URI: uri},
+				},
+			}},
+		})
+	}
+	if err := writeSARIF(os.Stdout, "kbot tnt lint", tntLintRuleCatalogue(), results); err != nil {
+		return fmt.Errorf("encode sarif: %w", err)
+	}
+	if len(results) > 0 {
+		return fmt.Errorf("lint found %d issue%s", len(results), sIfPlural(len(results)))
+	}
+	return nil
+}
+
 // openLintVFS mounts the right virtual filesystem for a lint invocation.
-// Returns nil VFS (and empty label) when neither an explicit --vfs nor
-// an active kbot context is configured — the command then only runs
-// against local disk.
 func openLintVFS(explicit string) (*filesystem.VirtualFileSystem, string, error) {
 	root, source, err := resolveVFSPath(explicit)
 	if err != nil {
@@ -190,114 +246,14 @@ func openLintVFS(explicit string) (*filesystem.VirtualFileSystem, string, error)
 	return vfs, source, nil
 }
 
-// readLintInput returns the bytes of the .tnt the user asked for,
-// plus a human-readable source label.  Resolution order: local disk
-// (absolute or relative), then virtual-path lookup against the
-// mounted VFS, then bare-basename search under maps/ of the VFS.
-func readLintInput(arg string, vfs *filesystem.VirtualFileSystem) ([]byte, string, error) {
-	// 1. Local disk first — keeps the common "I edited this map
-	// outside the install" workflow snappy.
-	if info, statErr := os.Stat(arg); statErr == nil && !info.IsDir() {
-		data, err := os.ReadFile(arg)
-		if err != nil {
-			return nil, "", fmt.Errorf("read tnt: %w", err)
-		}
-		return data, arg, nil
-	}
-	if vfs == nil {
-		return nil, "", fmt.Errorf("read tnt: %q is not a local file and no VFS is mounted (try `kbot ctx add` or pass --vfs)", arg)
-	}
-	// 2. Exact virtual path.
-	if vfs.Exists(arg) && !vfs.IsDir(arg) {
-		data, err := vfs.ReadFile(arg)
-		if err != nil {
-			return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
-		}
-		return data, "vfs:" + arg, nil
-	}
-	// 3. Bare basename — search maps/ for a single match.
-	if !strings.ContainsAny(arg, "/\\") {
-		candidate := "maps/" + strings.ToLower(arg)
-		if vfs.Exists(candidate) && !vfs.IsDir(candidate) {
-			data, err := vfs.ReadFile(candidate)
-			if err != nil {
-				return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
-			}
-			return data, "vfs:" + candidate, nil
-		}
-		// Walk the VFS once looking for any maps/*.tnt with this basename.
-		target := strings.ToLower(arg)
-		var hits []string
-		for _, p := range vfs.List() {
-			lower := strings.ToLower(p)
-			if !strings.HasPrefix(lower, "maps/") || !strings.HasSuffix(lower, ".tnt") {
-				continue
-			}
-			if path.Base(lower) == target {
-				hits = append(hits, p)
-			}
-		}
-		if len(hits) == 1 {
-			data, err := vfs.ReadFile(hits[0])
-			if err != nil {
-				return nil, "", fmt.Errorf("read tnt from vfs: %w", err)
-			}
-			return data, "vfs:" + hits[0], nil
-		}
-		if len(hits) > 1 {
-			return nil, "", fmt.Errorf("read tnt: %q matches %d maps in the vfs (%s) — pass a fuller path",
-				arg, len(hits), strings.Join(hits, ", "))
-		}
-	}
-	return nil, "", fmt.Errorf("read tnt: %q not found locally or in the mounted vfs", arg)
-}
-
-// readSiblingOTA returns the bytes + source label of the sister .ota
-// for a TNT, applying the same local-then-VFS lookup order.  Returns
-// ("", "", nil) when no .ota is found — that's not an error.
-func readSiblingOTA(tntArg, override string, vfs *filesystem.VirtualFileSystem, tntSource string) ([]byte, string) {
-	// Explicit --ota wins.
-	if override != "" {
-		if data, err := os.ReadFile(override); err == nil {
-			return data, override
-		}
-		if vfs != nil && vfs.Exists(override) {
-			if data, err := vfs.ReadFile(override); err == nil {
-				return data, "vfs:" + override
-			}
-		}
-		return nil, ""
-	}
-	// Derive the sibling path from the resolved source.  When the TNT
-	// came from the VFS, prefer the same VFS slot so we don't have to
-	// reach back to local disk.
-	if strings.HasPrefix(tntSource, "vfs:") {
-		virt := strings.TrimPrefix(tntSource, "vfs:")
-		otaPath := strings.TrimSuffix(virt, path.Ext(virt)) + ".ota"
-		if vfs != nil && vfs.Exists(otaPath) {
-			if data, err := vfs.ReadFile(otaPath); err == nil {
-				return data, "vfs:" + otaPath
-			}
-		}
-		return nil, ""
-	}
-	// Local TNT — look for a sibling on disk.
-	otaPath := strings.TrimSuffix(tntArg, filepath.Ext(tntArg)) + ".ota"
-	if data, err := os.ReadFile(otaPath); err == nil {
-		return data, otaPath
-	}
-	return nil, ""
-}
-
 // buildMaplintInputFromCLI gathers the optional inputs the quality
 // pass needs.  Returns the assembled Input plus human-readable
-// source labels for the OTA and VFS so the CLI can report what it
-// found.  tntSource is the label readLintInput returned, used to
-// drive sibling-OTA lookup against the same backing store.
-func buildMaplintInputFromCLI(arg, tntSource string, m *tnt.Map, tntBytes []byte, otaOverride string, vfs *filesystem.VirtualFileSystem, vfsLabel string) (maplint.Input, string, string, error) {
+// source labels for the OTA and VFS.
+func buildMaplintInputFromCLI(arg string, hit *VFSInputHit, m *tnt.Map, otaOverride string, vfs *filesystem.VirtualFileSystem) (maplint.Input, string, string, error) {
 	in := maplint.Input{Map: m}
 
-	otaBytes, otaSrc := readSiblingOTA(arg, otaOverride, vfs, tntSource)
+	// OTA — explicit override > sibling on the same backing store as the TNT.
+	otaBytes, otaSrc := readSiblingOTA(arg, hit, otaOverride, vfs)
 	if otaBytes != nil {
 		ota, parseErr := maplint.ParseOTA(string(otaBytes))
 		if parseErr != nil {
@@ -309,7 +265,7 @@ func buildMaplintInputFromCLI(arg, tntSource string, m *tnt.Map, tntBytes []byte
 	}
 
 	// Feature placements baked into the TNT.
-	features, _ := m.LoadFeatures(bytes.NewReader(tntBytes))
+	features, _ := m.LoadFeatures(bytes.NewReader(hit.Data))
 	placements := m.GetFeaturePlacements()
 	fs := make([]maplint.FeaturePlacement, 0, len(placements))
 	for _, p := range placements {
@@ -329,10 +285,44 @@ func buildMaplintInputFromCLI(arg, tntSource string, m *tnt.Map, tntBytes []byte
 	if vfs != nil {
 		if reg := scanFeatureRegistry(vfs); len(reg) > 0 {
 			in.FeatureRegistry = reg
-			vfsSrc = vfsLabel
+			vfsSrc = "mounted"
 		}
 	}
 	return in, otaSrc, vfsSrc, nil
+}
+
+// readSiblingOTA returns the bytes + source label of the sister .ota
+// for a TNT, applying the same local-then-VFS lookup order via
+// resolveVFSInput.  Returns (nil, "") when no .ota is found.
+func readSiblingOTA(arg string, hit *VFSInputHit, otaOverride string, vfs *filesystem.VirtualFileSystem) ([]byte, string) {
+	// Explicit --ota wins.  Run it through resolveVFSInput so virtual
+	// paths and relative paths work the same as the .tnt argument.
+	if otaOverride != "" {
+		if r, err := resolveVFSInput(otaOverride, vfs, ".ota", []string{"maps/"}); err == nil {
+			return r.Data, r.Source
+		}
+		return nil, ""
+	}
+	// Derive the sibling path from the resolved source.  When the TNT
+	// came from the VFS, prefer the same VFS slot so we don't have to
+	// reach back to local disk.
+	if hit.VirtualPath != "" {
+		otaPath := strings.TrimSuffix(hit.VirtualPath, path.Ext(hit.VirtualPath)) + ".ota"
+		if vfs != nil && vfs.Exists(otaPath) && !vfs.IsDir(otaPath) {
+			if data, err := vfs.ReadFile(otaPath); err == nil {
+				return data, "vfs:" + otaPath
+			}
+		}
+		return nil, ""
+	}
+	// Local TNT — look for a sibling on disk.
+	if hit.Source != "" {
+		otaPath := strings.TrimSuffix(hit.Source, filePathExt(hit.Source)) + ".ota"
+		if data, err := os.ReadFile(otaPath); err == nil {
+			return data, otaPath
+		}
+	}
+	return nil, ""
 }
 
 // scanFeatureRegistry walks features/*.tdf in the VFS and returns a
@@ -362,23 +352,43 @@ func scanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
 	return out
 }
 
+// filePathExt returns the extension of a path including the dot.
+// Pulled out as its own helper so we can do simple suffix math
+// without importing path/filepath everywhere.
+func filePathExt(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		switch p[i] {
+		case '.':
+			return p[i:]
+		case '/', '\\':
+			return ""
+		}
+	}
+	return ""
+}
+
+// severityIcon renders a tnt.LintSeverity as a single-cell character
+// so neighbouring rows line up regardless of which severity each
+// uses.  Emoji + variation selectors would render at different
+// widths in some terminals.
 func severityIcon(s tnt.LintSeverity) string {
 	switch s {
 	case tnt.LintWarning:
-		return "⚠️"
+		return "⚠"
 	default:
-		return "ℹ️"
+		return "ℹ"
 	}
 }
 
+// maplintIcon mirrors severityIcon for maplint severities.
 func maplintIcon(s maplint.Severity) string {
 	switch s {
 	case maplint.SeverityError:
-		return "❌"
+		return "✗"
 	case maplint.SeverityWarning:
-		return "⚠️"
+		return "⚠"
 	default:
-		return "✅"
+		return "✓"
 	}
 }
 
@@ -387,4 +397,44 @@ func sIfPlural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// ── SARIF support ──────────────────────────────────────────────────────────
+
+// tntLintRuleCatalogue exports the rule list the SARIF run advertises
+// in tool.driver.rules so consumers like GitHub Code Scanning can
+// show stable rule descriptions.
+func tntLintRuleCatalogue() []sarifRule {
+	return []sarifRule{
+		sarifShortRule("tnt.duplicate-tiles", "Byte-identical tile graphics found in the TNT pool."),
+		sarifShortRule("tnt.similar-tiles", "Visually-similar tile graphics sharing the same heightmap footprint."),
+		sarifShortRule("tnt.unused-tiles", "Tile graphics referenced by no map cell."),
+		sarifShortRule("maplint.dedupTiles", "Duplicate tile graphics in the TNT pool."),
+		sarifShortRule("maplint.otaFields", "Lobby-required OTA metadata missing."),
+		sarifShortRule("maplint.startsInBounds", "A start position lies outside the map or in a void cell."),
+		sarifShortRule("maplint.schemaSlots", "An advertised numplayers count has no schema with enough StartPos entries."),
+		sarifShortRule("maplint.metalProximity", "A start position has no metal-producing feature within 24 tiles."),
+		sarifShortRule("maplint.voidIslands", "Passable cells are unreachable from any start (≥ 20 cells)."),
+		sarifShortRule("maplint.heightDiscontinuities", "Cliff edges > 32 height units between adjacent cells block ground pathing."),
+	}
+}
+
+func sarifLevelForPool(s tnt.LintSeverity) string {
+	switch s {
+	case tnt.LintWarning:
+		return "warning"
+	default:
+		return "note"
+	}
+}
+
+func sarifLevelForMaplint(s maplint.Severity) string {
+	switch s {
+	case maplint.SeverityError:
+		return "error"
+	case maplint.SeverityWarning:
+		return "warning"
+	default:
+		return "none"
+	}
 }

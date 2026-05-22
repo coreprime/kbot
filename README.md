@@ -179,6 +179,7 @@ kbot cob assemble unit.coba --target unit.cob
 kbot cob lint unit.cob
 kbot cob lint scripts/                     # lint a whole directory
 kbot cob lint scripts/ -q                  # summary only
+kbot cob lint scripts/ --ci > cob.sarif    # SARIF 2.1.0 for CI ingest
 
 # Roundtrip validation (byte-perfect decompile→compile and disassemble→assemble)
 kbot cob roundtrip scripts/
@@ -445,7 +446,14 @@ kbot tnt lint --no-quality "metal heck.tnt"
 
 # Override the sister .ota lookup (also accepts virtual paths).
 kbot tnt lint --ota ./my-edit.ota "metal heck.tnt"
+
+# Emit SARIF 2.1.0 on stdout for CI ingest (GitHub, GitLab, Harness…).
+kbot tnt lint --ci "metal heck.tnt" > tnt-lint.sarif
 ```
+
+Relative paths like `./maps/Metal Heck.tnt` are resolved against the
+mounted VFS (lowercased and `./` stripped); any `..` segment is
+rejected so a path argument can't escape the kbot workspace.
 
 Checks (each emits a row, ✅ / ⚠️ / ❌ icon, one-line summary):
 
