@@ -414,6 +414,46 @@ kbot tnt pack ./metal_heck --target metal_heck.tnt
 
 `kbot tnt unpack` is lossy by default: the feature name table is omitted from `metadata.json` and `kbot tnt pack` rebuilds it from the unique names in `features.csv`. This loses any trailing scratch bytes the original tooling left in the table. Pass `--lossless` to record the original feature table (and the raw feature bytes as `feature_raw_b64`) in `metadata.json` so the directory packs back to a byte-identical TNT.
 
+**Linting a map:**
+
+`kbot tnt lint` runs the same checks Studio's Quality Checker dialog
+applies, plus the tile-pool diagnostics that `kbot tnt optimize` is
+built on.  No files are modified — the command is read-only and
+returns exit-1 when any issue is reported (handy for CI).
+
+```bash
+# Default: tile-pool + quality (auto-detects sibling .ota).
+kbot tnt lint "metal heck.tnt"
+
+# Point at a TA install so the metal-proximity check can recognise
+# metal-producing features.  --vfs falls back to the active kbot
+# context (`kbot ctx`) when omitted.
+kbot tnt lint --vfs ~/ta-flattened "metal heck.tnt"
+
+# Skip the quality pass; just report tile-pool savings.
+kbot tnt lint --no-quality "metal heck.tnt"
+
+# Override the sister .ota path (useful for editing in a workspace).
+kbot tnt lint --ota ./my-edit.ota "metal heck.tnt"
+```
+
+Checks (each emits a row, ✅ / ⚠️ / ❌ icon, one-line summary):
+
+| Group | Rule | Catches |
+|---|---|---|
+| Tile pool | `duplicate-tiles` | Byte-identical tile graphics |
+| Tile pool | `similar-tiles` | Visually-similar graphics sharing a heightmap footprint (configurable via `--similarity`) |
+| Tile pool | `unused-tiles` | Tile graphics no cell references |
+| Quality | `dedupTiles` | Same as `duplicate-tiles`, surfaced via the Studio quality dialog id |
+| Quality | `otaFields` | Lobby-required OTA metadata missing |
+| Quality | `startsInBounds` | Start positions outside the map or sitting on a void cell |
+| Quality | `schemaSlots` | An advertised `numplayers` count no schema can host (insufficient StartPos entries) |
+| Quality | `metalProximity` | Start without a metal-producing feature within 24 tiles (skipped on metal-rich schemas) |
+| Quality | `voidIslands` | Passable cells unreachable from any start (≥ 20 cells) |
+| Quality | `heightDiscontinuities` | Cliffs > 32 height units between adjacent cells — likely to block ground pathing |
+
+The shared implementation lives in [`internal/maplint`](internal/maplint) so the CLI, the studio dialog, and the MCP tool all run identical logic against identical thresholds.  The MCP tool name is `tnt_lint` and accepts `path`, `ota_path` (optional), `similarity` (optional, defaults to 1.0), `quality` (optional, defaults to true), and `game_data` (optional, picks the VFS used for the metal-proximity check).
+
 ---
 
 ### `kbot zrb` — Smacker Video

@@ -15,9 +15,12 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
 	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot/internal/maplint"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -106,6 +109,31 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 			withGameData(),
 		),
 		makeTNTASCIIHandler(r),
+	)
+
+	s.AddTool(
+		mcplib.NewTool("tnt_lint",
+			mcplib.WithDescription(
+				"Inspect a TNT map and report two classes of issues without modifying it: "+
+					"tile-pool diagnostics (mirroring tnt_optimize — duplicate, similar, unused "+
+					"tile graphics) and map-quality checks identical to Studio's Quality Checker "+
+					"(missing OTA metadata, unreachable / void start positions, schema player-slot "+
+					"coverage, metal proximity, void islands, height discontinuities, duplicate "+
+					"tile graphics).  Returns a JSON list of diagnostics with severity + message.",
+			),
+			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
+			mcplib.WithString("ota_path",
+				mcplib.Description("Override the sister .ota path (default: <tnt-basename>.ota next to the .tnt)."),
+			),
+			mcplib.WithNumber("similarity",
+				mcplib.Description("Mean per-channel pixel-difference threshold (% of 255) for the similar-tiles rule; 0 disables.  Defaults to 1.0."),
+			),
+			mcplib.WithBoolean("quality",
+				mcplib.Description("Run the map-quality pass alongside tile-pool diagnostics (default true)."),
+			),
+			withGameData(),
+		),
+		makeTNTLintHandler(r),
 	)
 
 	s.AddTool(
@@ -631,4 +659,176 @@ func makeTNTOptimizeHandler(r *Resolver) server.ToolHandlerFunc {
 			OutputFileSize:    outSize,
 		})
 	}
+}
+
+// tntLintOutput is the JSON shape returned by the tnt_lint MCP tool.
+type tntLintOutput struct {
+	Path              string                  `json:"path"`
+	Source            string                  `json:"source,omitempty"`
+	TileGraphics      int                     `json:"tile_graphics"`
+	AttrWidth         int                     `json:"attr_width"`
+	AttrHeight        int                     `json:"attr_height"`
+	OTAPath           string                  `json:"ota_path,omitempty"`
+	FeatureRegistryOK bool                    `json:"feature_registry_loaded"`
+	TilePool          []tntLintTilePoolEntry  `json:"tile_pool_diagnostics"`
+	Quality           []tntLintQualityEntry   `json:"quality"`
+	IssueCount        int                     `json:"issue_count"`
+}
+
+type tntLintTilePoolEntry struct {
+	Rule       string `json:"rule"`
+	Severity   string `json:"severity"`
+	Message    string `json:"message"`
+	Count      int    `json:"count,omitempty"`
+	BytesSaved int    `json:"bytes_saved,omitempty"`
+}
+
+type tntLintQualityEntry struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+func makeTNTLintHandler(r *Resolver) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+		path, err := req.RequireString("path")
+		if err != nil {
+			return errorResult(err), nil
+		}
+		gameData := req.GetString("game_data", "")
+		otaOverride := req.GetString("ota_path", "")
+		similarity := req.GetFloat("similarity", 1.0)
+		runQuality := req.GetBool("quality", true)
+
+		rf, err := r.ResolveFile(path, gameData)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		defer func() { _ = rf.Close() }()
+
+		m, _, data, err := loadTNT(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+
+		// Tile-pool diagnostics.
+		opts := tnt.LintOptions{SimilarityPercent: similarity}
+		if similarity > 0 {
+			pal, palErr := tntServerPalette()
+			if palErr != nil {
+				return errorResult(palErr), nil
+			}
+			opts.Palette = pal
+		}
+		diags, err := m.Lint(opts)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		out := tntLintOutput{
+			Path:         rf.displayPath(),
+			Source:       rf.Source,
+			TileGraphics: len(m.Tiles),
+			AttrWidth:    m.AttrW,
+			AttrHeight:   m.AttrH,
+		}
+		issueCount := 0
+		for _, d := range diags {
+			out.TilePool = append(out.TilePool, tntLintTilePoolEntry{
+				Rule:       d.Rule,
+				Severity:   string(d.Severity),
+				Message:    d.Message,
+				Count:      d.Count,
+				BytesSaved: d.BytesSaved,
+			})
+			issueCount++
+		}
+
+		// Map-quality pass.
+		if runQuality {
+			lintIn := maplint.Input{Map: m}
+
+			// OTA — explicit override > sibling on disk.
+			otaPath := otaOverride
+			if otaPath == "" {
+				otaPath = strings.TrimSuffix(rf.LocalPath, filepath.Ext(rf.LocalPath)) + ".ota"
+			}
+			if otaData, otaErr := os.ReadFile(otaPath); otaErr == nil {
+				if ota, parseErr := maplint.ParseOTA(string(otaData)); parseErr == nil && ota != nil {
+					lintIn.OTA = ota
+					out.OTAPath = otaPath
+				}
+			}
+
+			// Feature placements baked into the TNT.
+			featTable, _ := m.LoadFeatures(bytes.NewReader(data))
+			for _, p := range m.GetFeaturePlacements() {
+				if p.FeatureIdx < 0 || p.FeatureIdx >= len(featTable) {
+					continue
+				}
+				name := strings.TrimSpace(featTable[p.FeatureIdx].Name)
+				if name == "" {
+					continue
+				}
+				lintIn.Features = append(lintIn.Features, maplint.FeaturePlacement{
+					Name: name, AX: p.AttrX, AY: p.AttrY,
+				})
+			}
+
+			// Feature registry from the resolved game-data VFS (when one
+			// was bound — game_data="" leaves this nil, in which case the
+			// metal-proximity check skips itself with a friendly message).
+			if gd, gdErr := r.registry.Get(gameData); gdErr == nil && gd != nil {
+				if vfs, vfsErr := gd.VFS(); vfsErr == nil && vfs != nil {
+					if reg := tntScanFeatureRegistry(vfs); len(reg) > 0 {
+						lintIn.FeatureRegistry = reg
+						out.FeatureRegistryOK = true
+					}
+				}
+			}
+
+			for _, d := range maplint.Run(lintIn) {
+				out.Quality = append(out.Quality, tntLintQualityEntry{
+					ID:       d.ID,
+					Label:    d.Label,
+					Severity: string(d.Severity),
+					Message:  d.Message,
+				})
+				if d.Severity != maplint.SeverityOK {
+					issueCount++
+				}
+			}
+		}
+
+		out.IssueCount = issueCount
+		return jsonResult(out)
+	}
+}
+
+// tntScanFeatureRegistry walks features/*.tdf in the supplied VFS and
+// returns a lowercased-feature-name → metal-yield map for use by the
+// maplint metal-proximity check.
+func tntScanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
+	out := map[string]int{}
+	for _, p := range vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
+			continue
+		}
+		data, err := vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		doc, err := tdf.ParseString(string(data))
+		if err != nil {
+			continue
+		}
+		for _, s := range doc.Sections() {
+			metal := s.Int("metal")
+			if metal > 0 {
+				out[strings.ToLower(s.Name())] = metal
+			}
+		}
+	}
+	return out
 }

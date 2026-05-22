@@ -12,6 +12,74 @@ import (
 	"github.com/coreprime/kbot/testutil"
 )
 
+// TestTNTLintHandler runs the tnt_lint MCP tool against a stock TA
+// map and asserts the tile-pool + quality diagnostics come back with
+// the expected shape.
+func TestTNTLintHandler(t *testing.T) {
+	src := testutil.UnpackedFile(t, "maps", "metal heck.tnt")
+	mountRoot := t.TempDir()
+	srcData, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read src: %v", err)
+	}
+	srcCopy := filepath.Join(mountRoot, "metal heck.tnt")
+	if err := os.WriteFile(srcCopy, srcData, 0o644); err != nil {
+		t.Fatalf("write src copy: %v", err)
+	}
+	// Sibling .ota — copy that too so the quality pass picks it up.
+	otaSrc := filepath.Join(filepath.Dir(src), "metal heck.ota")
+	if otaData, otaErr := os.ReadFile(otaSrc); otaErr == nil {
+		if err := os.WriteFile(filepath.Join(mountRoot, "metal heck.ota"), otaData, 0o644); err != nil {
+			t.Fatalf("write ota copy: %v", err)
+		}
+	}
+
+	guard, err := NewPathGuard([]string{mountRoot})
+	if err != nil {
+		t.Fatalf("NewPathGuard: %v", err)
+	}
+	resolver := NewResolver(guard, NewRegistry())
+	handler := makeTNTLintHandler(resolver)
+
+	req := mcplib.CallToolRequest{
+		Params: mcplib.CallToolParams{
+			Name: "tnt_lint",
+			Arguments: map[string]any{
+				"path":       srcCopy,
+				"similarity": 0.0, // skip slow visual-similarity pass
+			},
+		},
+	}
+	res, err := handler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if res == nil || res.IsError {
+		t.Fatalf("unexpected error: %s", textOf(res))
+	}
+	var out tntLintOutput
+	if err := json.Unmarshal([]byte(textOf(res)), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.TileGraphics == 0 {
+		t.Errorf("expected non-zero tile graphics")
+	}
+	if len(out.Quality) == 0 {
+		t.Errorf("expected quality diagnostics in the response")
+	}
+	// dedupTiles should be present in the quality list.
+	var foundDedup bool
+	for _, q := range out.Quality {
+		if q.ID == "dedupTiles" {
+			foundDedup = true
+			break
+		}
+	}
+	if !foundDedup {
+		t.Errorf("expected dedupTiles in quality results, got: %+v", out.Quality)
+	}
+}
+
 // TestTNTOptimizeHandler runs the tnt_optimize tool against a real
 // corpus map and asserts that the resulting JSON summary reports a
 // non-empty tile graphic count and that the file is rewritten in
