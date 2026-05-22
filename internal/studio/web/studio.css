@@ -487,6 +487,14 @@ kbd {
 }
 
 /* ── Open-map dialog ───────────────────────────────────────────────── */
+/* The filter row needs flex-shrink: 0 — without it the column flex
+   layout will gladly crush it to ~2 px to make room for the
+   flex:1 .open-list below.  (Inherited rule
+   `.dialog-card-wide > div:not(.dialog-actions) { overflow-y: auto }`
+   sets the overflow, but the height still gets squeezed.) */
+.open-filter {
+  flex-shrink: 0;
+}
 .open-filter input[type="search"] {
   width: 100%;
   background: var(--bg-2);
