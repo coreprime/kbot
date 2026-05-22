@@ -9405,11 +9405,15 @@ async function onImportHeightmapFile(e) {
   }
 }
 
-async function saveLoose() {
-  setStatus('Building TNT + OTA…')
+// buildSavePayload snapshots the current per-map state into the shape
+// the save / quality-check endpoints accept.  Splitting it out lets
+// the Quality Checker re-send the same payload across multiple fix
+// iterations without rebuilding it each time — and keeps save() /
+// saveLoose() honest about what they ship.
+function buildSavePayload() {
   if (state.terrainClipboard) dropTerrainClipboard()
   cancelPlacement()
-  const payload = {
+  return {
     mapName: state.name,
     displayName: state.ota?.missionName || state.name,
     tileW: state.tileW,
@@ -9422,6 +9426,14 @@ async function saveLoose() {
     seaLevel: state.ota?.seaLevel ?? 0,
     ota: state.ota,
   }
+}
+
+async function saveLoose() {
+  const payload = buildSavePayload()
+  const fixes = await runQualityChecker(payload)
+  if (!fixes) return false
+  payload.fixes = fixes
+  setStatus('Building TNT + OTA…')
   for (const which of ['tnt', 'ota']) {
     try {
       const resp = await fetch(`/api/studio/save-loose?which=${which}`, {
@@ -9452,23 +9464,11 @@ async function saveLoose() {
 }
 
 async function save() {
+  const payload = buildSavePayload()
+  const fixes = await runQualityChecker(payload)
+  if (!fixes) return false
+  payload.fixes = fixes
   setStatus('Building HPI archive…')
-  // Drop in-flight selections so they don't leak into the saved map.
-  if (state.terrainClipboard) dropTerrainClipboard()
-  cancelPlacement()
-  const payload = {
-    mapName: state.name,
-    displayName: state.ota?.missionName || state.name,
-    tileW: state.tileW,
-    tileH: state.tileH,
-    planet: state.planet,
-    tiles: state.tiles,
-    heights: state.heights,
-    voids: state.voids,
-    features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
-    seaLevel: state.ota?.seaLevel ?? 0,
-    ota: state.ota,
-  }
   try {
     const resp = await fetch('/api/studio/save', {
       method: 'POST',
@@ -9496,6 +9496,205 @@ async function save() {
     setStatus(`Save failed: ${err.message}`)
     return false
   }
+}
+
+// ── Quality Checker ────────────────────────────────────────────────────────
+//
+// The save flow opens this dialog, runs every server-side check
+// against the build of `payload`, and either auto-closes on green
+// (proceeding straight to the actual save) or hands control to the
+// user.  The user can apply individual Fix actions (which add the
+// fix's id to a set and re-run all checks), apply every fix in one
+// click (Fix All), force a save with the issues unresolved (Save
+// anyway, gated by a confirm dialog), or back out entirely (Cancel).
+//
+// Resolves with:
+//   - an array of fix ids to apply during the actual save (possibly empty)
+//   - or `null` when the user cancelled — the caller should bail without saving.
+async function runQualityChecker(payload) {
+  const dlg = document.querySelector('#quality-dialog')
+  const list = document.querySelector('#quality-list')
+  const subtitle = document.querySelector('#quality-subtitle')
+  const cancelBtn = document.querySelector('#quality-cancel')
+  const fixAllBtn = document.querySelector('#quality-fix-all')
+  const saveAnywayBtn = document.querySelector('#quality-save-anyway')
+  if (!dlg || !list) return [] // no dialog present — skip checks
+  return new Promise((resolve) => {
+    const fixes = new Set()
+    let latestIssues = []
+    let busy = false
+
+    const rowSpec = (issue, severity, message) => ({
+      check: issue.check,
+      label: issue.label,
+      severity,
+      message: message ?? issue.message ?? '',
+      canAutoFix: issue.canAutoFix,
+      fix: issue.fix,
+    })
+
+    function renderRows(rows) {
+      list.replaceChildren()
+      for (const r of rows) {
+        const row = document.createElement('div')
+        row.className = `quality-row severity-${r.severity}`
+        row.dataset.check = r.check
+        const status = document.createElement('div')
+        status.className = 'quality-status'
+        status.textContent = ({ ok: '✓', warning: '!', error: '✗', running: '' })[r.severity] ?? ''
+        const body = document.createElement('div')
+        body.className = 'quality-body'
+        const label = document.createElement('div')
+        label.className = 'quality-label'
+        label.textContent = r.label
+        const msg = document.createElement('div')
+        msg.className = 'quality-message'
+        msg.textContent = r.message
+        body.append(label, msg)
+        if (r.severity === 'running') {
+          const prog = document.createElement('div')
+          prog.className = 'quality-progress'
+          prog.appendChild(document.createElement('span'))
+          body.appendChild(prog)
+        }
+        row.append(status, body)
+        if (r.severity !== 'ok' && r.severity !== 'running' && r.canAutoFix && r.fix) {
+          const fixBtn = document.createElement('button')
+          fixBtn.className = 'btn primary'
+          fixBtn.textContent = 'Fix'
+          fixBtn.disabled = busy
+          fixBtn.addEventListener('click', () => applyFixes([r.fix]))
+          row.appendChild(fixBtn)
+        }
+        list.appendChild(row)
+      }
+    }
+
+    function refreshFooter() {
+      const fixableLeft = latestIssues.some(
+        (i) => i.severity !== 'ok' && i.canAutoFix && i.fix && !fixes.has(i.fix),
+      )
+      const anyIssue = latestIssues.some((i) => i.severity !== 'ok')
+      fixAllBtn.classList.toggle('hidden', !fixableLeft)
+      fixAllBtn.disabled = busy || !fixableLeft
+      saveAnywayBtn.classList.toggle('hidden', !anyIssue)
+      saveAnywayBtn.disabled = busy
+      cancelBtn.disabled = busy
+    }
+
+    async function runChecks() {
+      busy = true
+      refreshFooter()
+      // Seed every known check as "running" so the user sees motion
+      // immediately, then patch in real results on response.
+      const placeholders = latestIssues.length
+        ? latestIssues.map((i) => rowSpec(i, 'running', 'Re-checking…'))
+        : [rowSpec({ check: 'dedupTiles', label: 'Deduplicate Tiles', canAutoFix: false, fix: '' }, 'running', 'Inspecting tile pool…')]
+      renderRows(placeholders)
+      subtitle.textContent = 'Running pre-save checks…'
+      try {
+        const resp = await fetch('/api/studio/quality-check', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, fixes: Array.from(fixes) }),
+        })
+        if (!resp.ok) {
+          const text = await resp.text()
+          throw new Error(text || `HTTP ${resp.status}`)
+        }
+        const data = await resp.json()
+        latestIssues = Array.isArray(data.issues) ? data.issues : []
+        renderRows(latestIssues.map((i) => rowSpec(i, i.severity, i.message)))
+        if (data.allOk) {
+          subtitle.textContent = 'All checks passed. Saving…'
+          busy = false
+          refreshFooter()
+          // Brief beat so the user sees the green ticks before the
+          // dialog vanishes — they asked for this transparency.
+          setTimeout(() => finish(Array.from(fixes)), 400)
+          return
+        }
+        subtitle.textContent = 'Some checks need attention before save.'
+      } catch (err) {
+        latestIssues = []
+        renderRows([{
+          check: 'fetch',
+          label: 'Quality Checker',
+          severity: 'error',
+          message: `Could not reach the kbot server: ${err.message}`,
+          canAutoFix: false,
+          fix: '',
+        }])
+        subtitle.textContent = 'Check failed.'
+      } finally {
+        busy = false
+        refreshFooter()
+      }
+    }
+
+    async function applyFixes(ids) {
+      for (const id of ids) fixes.add(id)
+      await runChecks()
+    }
+
+    function finish(result) {
+      dlg.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onDocKey, true)
+      cancelBtn.removeEventListener('click', onCancel)
+      fixAllBtn.removeEventListener('click', onFixAll)
+      saveAnywayBtn.removeEventListener('click', onSaveAnyway)
+      dlg.classList.add('hidden')
+      resolve(result)
+    }
+
+    function onCancel() {
+      if (busy) return
+      setStatus('Save cancelled.')
+      finish(null)
+    }
+
+    async function onFixAll() {
+      if (busy) return
+      const ids = latestIssues
+        .filter((i) => i.severity !== 'ok' && i.canAutoFix && i.fix && !fixes.has(i.fix))
+        .map((i) => i.fix)
+      if (ids.length === 0) return
+      await applyFixes(ids)
+    }
+
+    async function onSaveAnyway() {
+      if (busy) return
+      const ok = await confirmDialog({
+        title: 'Save with unresolved issues?',
+        message: 'There are issues with this map. The TNT will still be written, but the unresolved warnings remain in the saved file.',
+        okLabel: 'Save anyway',
+        okDanger: true,
+      })
+      if (!ok) return
+      finish(Array.from(fixes))
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel() }
+    }
+    // The Escape global handler closes the OTA / Resize / Settings
+    // dialogs — wire the same convention here.  Using capture so we
+    // beat the global handler's `closest('input')` guard.
+    function onDocKey(e) {
+      if (dlg.classList.contains('hidden')) return
+      if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation(); onCancel()
+      }
+    }
+
+    cancelBtn.addEventListener('click', onCancel)
+    fixAllBtn.addEventListener('click', onFixAll)
+    saveAnywayBtn.addEventListener('click', onSaveAnyway)
+    dlg.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onDocKey, true)
+    dlg.classList.remove('hidden')
+    runChecks()
+  })
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────

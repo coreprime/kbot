@@ -467,6 +467,91 @@ kbd {
   border-radius: 3px;
 }
 
+/* Quality Checker — vertical list of check rows, each with a status
+   pill, label, message, and an optional per-row Fix button. */
+.quality-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 16px;
+  min-height: 72px;
+}
+.quality-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.quality-row.severity-ok { border-color: rgba(80, 200, 120, 0.45); }
+.quality-row.severity-warning { border-color: rgba(255, 196, 70, 0.55); }
+.quality-row.severity-error { border-color: rgba(255, 88, 88, 0.55); }
+.quality-row.severity-running { border-color: rgba(140, 170, 220, 0.45); }
+.quality-status {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #fff;
+}
+.severity-running .quality-status {
+  background: transparent;
+  border: 2px solid rgba(140, 170, 220, 0.8);
+  border-top-color: transparent;
+  animation: quality-spin 0.7s linear infinite;
+}
+.severity-running .quality-status::after { content: ''; }
+.severity-ok .quality-status { background: #3aaa6b; }
+.severity-warning .quality-status { background: #d8a534; color: #111; }
+.severity-error .quality-status { background: #c74848; }
+@keyframes quality-spin { to { transform: rotate(360deg); } }
+.quality-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.quality-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+.quality-message {
+  color: var(--muted);
+  font-size: 12px;
+}
+.quality-row .btn { padding: 4px 12px; font-size: 12px; }
+.quality-row .btn[disabled] { opacity: 0.5; }
+/* Progress bar slot shows on running rows below the message so the
+   user sees the dialog is doing work even on a slow build. */
+.quality-progress {
+  height: 3px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.quality-progress > span {
+  display: block;
+  height: 100%;
+  width: 30%;
+  background: rgba(140, 170, 220, 0.8);
+  animation: quality-progress-glide 1.1s ease-in-out infinite;
+}
+@keyframes quality-progress-glide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+/* Fix All sits between Cancel (left) and Save Anyway (right); use
+   margin-left:auto to anchor it correctly when only some buttons are
+   visible. */
+#quality-fix-all { margin-left: auto; }
+
 /* Schema selector dropdown — match the toolbar look. */
 #schema-select {
   background: var(--bg-2);

@@ -41,6 +41,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/feature-preview/", handleFeaturePreview)
 	mux.HandleFunc("/api/studio/save", handleSave)
 	mux.HandleFunc("/api/studio/save-loose", handleSaveLoose)
+	mux.HandleFunc("/api/studio/quality-check", handleQualityCheck)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────
@@ -1459,6 +1460,21 @@ type saveRequest struct {
 	StartPos    []saveStartPos `json:"startPositions"`
 	Planet      string         `json:"planet"`
 	OTA         *otaState      `json:"ota"`
+	// Fixes lists the quality-check fixes to apply during the build.
+	// Recognised ids: "compressTiles" — dedup the TNT tile pool.  An
+	// unrecognised id is silently ignored so the client can roll new
+	// fixes without forcing a server upgrade.
+	Fixes []string `json:"fixes,omitempty"`
+}
+
+// hasFix reports whether the named fix id is present in r.Fixes.
+func (r saveRequest) hasFix(id string) bool {
+	for _, f := range r.Fixes {
+		if f == id {
+			return true
+		}
+	}
+	return false
 }
 
 func handleSave(w http.ResponseWriter, r *http.Request) {

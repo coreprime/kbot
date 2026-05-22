@@ -304,6 +304,22 @@
     </div>
   </div>
 
+  <!-- Quality Checker — runs a series of pre-save inspections, surfaces
+       warnings/errors with optional Fix actions, and gates the actual
+       save behind the user's review. -->
+  <div id="quality-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide">
+      <h1>Quality Checker</h1>
+      <p class="dialog-sub" id="quality-subtitle">Running pre-save checks…</p>
+      <div class="quality-list" id="quality-list"></div>
+      <div class="dialog-actions">
+        <button id="quality-cancel" class="btn" title="Return to the editor without saving">Cancel</button>
+        <button id="quality-fix-all" class="btn" title="Apply every available auto-fix and re-check">Fix All</button>
+        <button id="quality-save-anyway" class="btn danger" title="Save the map with the current issues unresolved">Save anyway</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Unsaved-changes warning when closing a tab with pending edits.
        Three outcomes: save (then close), discard (close anyway), or
        cancel (Escape / cancel button — leaves the tab open). -->
