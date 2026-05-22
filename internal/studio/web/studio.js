@@ -1070,7 +1070,21 @@ async function confirmOpenMap() {
 function wireOpenDialogKeyboard() {
   const filter = $('#open-filter')
   const list = $('#open-list')
-  if (!filter || !list) return
+  const dlg = $('#open-dialog')
+  if (!filter || !list || !dlg) return
+  // Escape dismisses the dialog from any focus location inside it.
+  // The main editor-mode Escape handler in wireKeyboard() only mounts
+  // after finishEditorBoot, so on the welcome → Open flow that path
+  // isn't wired yet — handle it here so Esc works either way.
+  // Capture phase ensures we beat the search-input's native
+  // clear-on-escape behaviour.
+  dlg.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    if (dlg.classList.contains('hidden')) return
+    e.preventDefault()
+    e.stopPropagation()
+    closeOpenDialog()
+  }, true)
 
   function visibleCards() {
     return Array.from(list.querySelectorAll('.open-list-item'))
@@ -2453,6 +2467,12 @@ function wireKeyboard() {
       if (help && !help.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeHelpDialog(); return }
       const settings = $('#settings-dialog')
       if (settings && !settings.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeSettingsDialog(); return }
+      const openMap = $('#open-dialog')
+      if (openMap && !openMap.classList.contains('hidden')) {
+        // closeOpenDialog handles "back to welcome vs. stay on editor"
+        // routing via openMapSource, matching the Cancel button.
+        e.preventDefault(); e.stopPropagation(); closeOpenDialog(); return
+      }
     }
     // Don't intercept other shortcuts while the user is typing into a
     // text input — but checkbox / radio / file <input>s and <select>
