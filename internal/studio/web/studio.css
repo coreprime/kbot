@@ -549,8 +549,17 @@ kbd {
 }
 /* Fix All sits between Cancel (left) and Save Anyway (right); use
    margin-left:auto to anchor it correctly when only some buttons are
-   visible. */
-#quality-fix-all { margin-left: auto; }
+   visible.  A dedicated blue overrides the .primary accent purple so
+   the bulk-apply action reads as the recommended path forward (Save
+   anyway stays red — the dangerous fallback). */
+#quality-fix-all {
+  margin-left: auto;
+  background: #2f6fed;
+  border-color: #2f6fed;
+  color: #fff;
+}
+#quality-fix-all:hover { background: #4581f5; border-color: #4581f5; }
+#quality-fix-all:disabled { background: #2f6fed; border-color: #2f6fed; }
 
 /* Schema selector dropdown — match the toolbar look. */
 #schema-select {

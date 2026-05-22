@@ -136,6 +136,11 @@ class MapDoc {
     // successful Save / Save-loose.  Closing a dirty tab triggers the
     // unsaved-changes prompt (#40).
     this.dirty = false
+    // Quality Checker fixes the user has already accepted for this map.
+    // Seeded into runQualityChecker() so subsequent saves don't keep
+    // re-prompting for the same approvals — once "Fix" sticks, the
+    // dialog auto-passes those checks and closes through to the save.
+    this.appliedFixes = new Set()
     // Snapshotted module-level lets — see snapshot/restore helpers.
     this.undoStack = []
     this.redoStack = []
@@ -9520,7 +9525,10 @@ async function runQualityChecker(payload) {
   const saveAnywayBtn = document.querySelector('#quality-save-anyway')
   if (!dlg || !list) return [] // no dialog present — skip checks
   return new Promise((resolve) => {
-    const fixes = new Set()
+    // Seed from any fixes the user has previously accepted on this
+    // map — they shouldn't have to re-click Fix every save.
+    const m = activeMap()
+    const fixes = new Set(m?.appliedFixes ?? [])
     let latestIssues = []
     let busy = false
 
@@ -9604,10 +9612,13 @@ async function runQualityChecker(payload) {
         }
         const data = await resp.json()
         latestIssues = Array.isArray(data.issues) ? data.issues : []
+        // Clear the busy flag *before* rendering so the per-row Fix
+        // buttons are interactive (busy is checked at row-creation
+        // time, not on every refreshFooter call).
+        busy = false
         renderRows(latestIssues.map((i) => rowSpec(i, i.severity, i.message)))
         if (data.allOk) {
           subtitle.textContent = 'All checks passed. Saving…'
-          busy = false
           refreshFooter()
           // Brief beat so the user sees the green ticks before the
           // dialog vanishes — they asked for this transparency.
@@ -9617,6 +9628,7 @@ async function runQualityChecker(payload) {
         subtitle.textContent = 'Some checks need attention before save.'
       } catch (err) {
         latestIssues = []
+        busy = false
         renderRows([{
           check: 'fetch',
           label: 'Quality Checker',
@@ -9633,7 +9645,12 @@ async function runQualityChecker(payload) {
     }
 
     async function applyFixes(ids) {
-      for (const id of ids) fixes.add(id)
+      for (const id of ids) {
+        fixes.add(id)
+        // Persist into the active map so future saves don't re-prompt
+        // for fixes the user has already approved.
+        if (m) m.appliedFixes.add(id)
+      }
       await runChecks()
     }
 
