@@ -23,6 +23,15 @@ const VOID_COLOR = '#1d3045' // colour shown for unstamped cells
 // supports more than 10.
 const MAX_START_POSITIONS = 10
 
+// Quality Checker pacing.  The server can finish every check in tens of
+// ms which makes the dialog feel like a placebo — the user clicks Save
+// and the window flashes once.  These two minimums give every check
+// visible breathing room (250ms of "running" before its result is
+// revealed) and guarantee the window itself sticks around long enough
+// to read (1.5s total).  Bump if the dialog still feels rushed.
+const QUALITY_CHECK_MIN_MS = 250
+const QUALITY_WINDOW_MIN_MS = 1500
+
 // ── Worlds ─────────────────────────────────────────────────────────────────
 // WORLDS is the single source of truth for the distinct worlds the editor
 // recognises.  One entry per world — Mars and Moon are their own rows
@@ -8186,6 +8195,10 @@ function wireToolbar() {
   $('#scatter-apply')?.addEventListener('click', applyScatter)
   $('#btn-export-heightmap')?.addEventListener('click', exportHeightmap)
   $('#btn-export-minimap')?.addEventListener('click', exportMinimap)
+  $('#btn-quality-audit')?.addEventListener('click', () => {
+    // Advanced › Quality Check… — standalone audit, no save afterward.
+    runQualityChecker(buildSavePayload(), { mode: 'audit' })
+  })
   $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file').click())
   $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
   $('#btn-undo').addEventListener('click', undo)
@@ -9516,7 +9529,14 @@ async function save() {
 // Resolves with:
 //   - an array of fix ids to apply during the actual save (possibly empty)
 //   - or `null` when the user cancelled — the caller should bail without saving.
-async function runQualityChecker(payload) {
+//
+// `mode` switches the dialog between two callers:
+//   - 'save'  (default): the pre-save flow.  Auto-closes on a clean
+//             first check, green "Save" button after a manual fix.
+//   - 'audit': opened from the Advanced menu for a standalone
+//             inspection.  No Save button at any time; the user
+//             dismisses with Cancel (relabelled "Close") when done.
+async function runQualityChecker(payload, { mode = 'save' } = {}) {
   const dlg = document.querySelector('#quality-dialog')
   const list = document.querySelector('#quality-list')
   const subtitle = document.querySelector('#quality-subtitle')
@@ -9524,6 +9544,7 @@ async function runQualityChecker(payload) {
   const fixAllBtn = document.querySelector('#quality-fix-all')
   const saveAnywayBtn = document.querySelector('#quality-save-anyway')
   if (!dlg || !list) return [] // no dialog present — skip checks
+  const isAudit = mode === 'audit'
   return new Promise((resolve) => {
     // Seed from any fixes the user has previously accepted on this
     // map — they shouldn't have to re-click Fix every save.
@@ -9537,6 +9558,11 @@ async function runQualityChecker(payload) {
     // has fixed something, we hold the dialog open with a green
     // "Save" button so they get to confirm what they fixed.
     let userInteracted = false
+    // performance.now() at the moment the dialog became visible.  The
+    // overall window minimum (QUALITY_WINDOW_MIN_MS) is measured from
+    // here so a sub-second check still feels deliberate.
+    const windowStart = performance.now()
+    cancelBtn.textContent = isAudit ? 'Close' : 'Cancel'
 
     const rowSpec = (issue, severity, message) => ({
       check: issue.check,
@@ -9595,8 +9621,10 @@ async function runQualityChecker(payload) {
       // remain) and "Save" (green, when the user has fixed everything
       // and we're holding the dialog open for their final click).  We
       // only hide it for the initial-clean-check case — there the
-      // dialog auto-closes and the user never needs it.
-      const showSave = anyIssue || userInteracted
+      // dialog auto-closes and the user never needs it.  Audit mode
+      // (Advanced › Quality Check…) hides the button at all times —
+      // there's no save to advance to.
+      const showSave = !isAudit && (anyIssue || userInteracted)
       saveAnywayBtn.classList.toggle('hidden', !showSave)
       saveAnywayBtn.disabled = busy
       if (anyIssue) {
@@ -9622,7 +9650,11 @@ async function runQualityChecker(payload) {
         ? latestIssues.map((i) => rowSpec(i, 'running', 'Re-checking…'))
         : [rowSpec({ check: 'dedupTiles', label: 'Deduplicate Tiles', canAutoFix: false, fix: '' }, 'running', 'Inspecting tile pool…')]
       renderRows(placeholders)
-      subtitle.textContent = 'Running pre-save checks…'
+      subtitle.textContent = isAudit
+        ? 'Running quality checks…'
+        : 'Running pre-save checks…'
+      const checkStart = performance.now()
+      let data, fetchErr
       try {
         const resp = await fetch('/api/studio/quality-check', {
           method: 'POST',
@@ -9631,49 +9663,79 @@ async function runQualityChecker(payload) {
         })
         if (!resp.ok) {
           const text = await resp.text()
-          throw new Error(text || `HTTP ${resp.status}`)
+          fetchErr = new Error(text || `HTTP ${resp.status}`)
+        } else {
+          data = await resp.json()
         }
-        const data = await resp.json()
-        latestIssues = Array.isArray(data.issues) ? data.issues : []
-        // Clear the busy flag *before* rendering so the per-row Fix
-        // buttons are interactive (busy is checked at row-creation
-        // time, not on every refreshFooter call).
-        busy = false
-        renderRows(latestIssues.map((i) => rowSpec(i, i.severity, i.message)))
-        if (data.allOk) {
-          if (!userInteracted) {
-            // Clean first check — no human effort required, sail
-            // through with a brief beat so the green ticks are
-            // visible before the dialog closes.
-            subtitle.textContent = 'All checks passed. Saving…'
-            refreshFooter()
-            setTimeout(() => finish(Array.from(fixes)), 400)
-            return
-          }
-          // The user fixed something to get here.  Hold the dialog
-          // open with a green Save button so they confirm what they
-          // applied — Fix All hides itself via refreshFooter().
-          subtitle.textContent = 'All checks passed. Click Save to write the map.'
-          refreshFooter()
-          return
-        }
-        subtitle.textContent = 'Some checks need attention before save.'
       } catch (err) {
+        fetchErr = err
+      }
+      if (fetchErr) {
+        // Even the error path respects the per-check minimum — the
+        // single error row needs at least QUALITY_CHECK_MIN_MS of
+        // visible "running" before we flip it to the error state.
+        const elapsed = performance.now() - checkStart
+        if (elapsed < QUALITY_CHECK_MIN_MS) {
+          await new Promise((r) => setTimeout(r, QUALITY_CHECK_MIN_MS - elapsed))
+        }
         latestIssues = []
         busy = false
         renderRows([{
           check: 'fetch',
           label: 'Quality Checker',
           severity: 'error',
-          message: `Could not reach the kbot server: ${err.message}`,
+          message: `Could not reach the kbot server: ${fetchErr.message}`,
           canAutoFix: false,
           fix: '',
         }])
         subtitle.textContent = 'Check failed.'
-      } finally {
-        busy = false
         refreshFooter()
+        return
       }
+      const results = Array.isArray(data.issues) ? data.issues : []
+      // Sequentially reveal each result — each check spends at least
+      // QUALITY_CHECK_MIN_MS in the "running" state before its row
+      // transitions to its final colour.  Without this, the dialog
+      // feels like a placebo on a fast machine.
+      for (let i = 0; i < results.length; i++) {
+        const targetMs = (i + 1) * QUALITY_CHECK_MIN_MS
+        const wait = targetMs - (performance.now() - checkStart)
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+        const rows = results.map((iss, j) => {
+          if (j <= i) return rowSpec(iss, iss.severity, iss.message)
+          const ph = placeholders[j]
+          return rowSpec(iss, 'running', ph?.message ?? 'Inspecting…')
+        })
+        renderRows(rows)
+      }
+      latestIssues = results
+      // Clear busy *before* the final renderRows so per-row Fix
+      // buttons are interactive (button.disabled is sampled at
+      // row-creation time, not via refreshFooter).
+      busy = false
+      renderRows(results.map((i) => rowSpec(i, i.severity, i.message)))
+      refreshFooter()
+      if (data.allOk) {
+        if (!userInteracted && !isAudit) {
+          // Clean first check on the save path — sail through, but
+          // wait for the overall window minimum so the dialog stays
+          // visible long enough to register.
+          subtitle.textContent = 'All checks passed. Saving…'
+          const elapsed = performance.now() - windowStart
+          const wait = Math.max(0, QUALITY_WINDOW_MIN_MS - elapsed)
+          setTimeout(() => finish(Array.from(fixes)), wait)
+          return
+        }
+        // Hold the dialog open — either the user fixed something
+        // (save mode: green Save) or this is an audit (Close button).
+        subtitle.textContent = isAudit
+          ? 'All checks passed.'
+          : 'All checks passed. Click Save to write the map.'
+        return
+      }
+      subtitle.textContent = isAudit
+        ? 'Some checks need attention.'
+        : 'Some checks need attention before save.'
     }
 
     async function applyFixes(ids) {
@@ -9699,7 +9761,7 @@ async function runQualityChecker(payload) {
 
     function onCancel() {
       if (busy) return
-      setStatus('Save cancelled.')
+      setStatus(isAudit ? 'Quality check closed.' : 'Save cancelled.')
       finish(null)
     }
 
