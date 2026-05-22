@@ -499,19 +499,33 @@ kbd {
   margin-bottom: 12px;
 }
 .open-filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
+/* Open-map dialog: pinned to 80vh so the picker doesn't grow or
+   shrink as the filter narrows the map list — the user reaches for
+   the same screen real estate every time.  Card is a flex column
+   (set by .dialog-card-wide); flex:1 on .open-list expands it to
+   fill whatever's left after the title + filter + actions. */
+#open-dialog .dialog-card {
+  height: 80vh;
+}
 .open-list {
   display: grid;
-  /* 4 columns across in the wide Open-map dialog.  max-height shows
-     exactly 2.5 rows so the user can tell at a glance there's more
-     to scroll. */
+  /* 4 columns across in the wide Open-map dialog.  Height grows
+     from the flex parent (.dialog-card) so the grid always fills
+     the remaining vertical space — no max-height + collapse jitter. */
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
-  max-height: 52vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-2);
+}
+.open-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.open-list-item.kbd-focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.35);
 }
 .open-list .loading { grid-column: 1 / -1; color: var(--muted); text-align: center; padding: 24px; }
 .open-list-skeleton {

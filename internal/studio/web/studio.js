@@ -395,6 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#open-back').addEventListener('click', closeOpenDialog)
   $('#open-filter').addEventListener('input', () => renderOpenList())
   $('#open-confirm').addEventListener('click', confirmOpenMap)
+  wireOpenDialogKeyboard()
   const yr = $('#copyright-year')
   if (yr) yr.textContent = new Date().getFullYear()
   // Paint the dice-face player-count picker so the size dialog is ready
@@ -934,6 +935,12 @@ async function openMapDialog(source = 'welcome') {
   if (availableMaps.length === 0) mapsLoading = true
   renderOpenList()
   fetchMaps()
+  // Cursor lands in the filter every open so the user can start
+  // typing immediately — keeps the keyboard-driven flow alive.
+  // A requestAnimationFrame deferral lets the dialog actually become
+  // visible before we steal focus (Chrome ignores focus() on a
+  // display:none ancestor).
+  requestAnimationFrame(() => $('#open-filter')?.focus())
 }
 
 async function fetchMaps() {
@@ -1036,6 +1043,86 @@ async function confirmOpenMap() {
     return
   }
   if (confirmBtn) confirmBtn.textContent = 'Open'
+}
+
+// wireOpenDialogKeyboard makes the open-map list keyboard-navigable:
+// Tab from the filter lands on the list, arrow keys move the
+// kbd-focus marker through the visible cards (no DOM focus shuffling
+// — that would scroll the dialog while typing), Enter loads the
+// current selection.  Falls back gracefully when no cards are
+// rendered (skeleton / empty state).
+function wireOpenDialogKeyboard() {
+  const filter = $('#open-filter')
+  const list = $('#open-list')
+  if (!filter || !list) return
+
+  function visibleCards() {
+    return Array.from(list.querySelectorAll('.open-list-item'))
+  }
+  function setKbdFocus(idx) {
+    const cards = visibleCards()
+    if (cards.length === 0) return
+    const wrapped = ((idx % cards.length) + cards.length) % cards.length
+    cards.forEach((c, i) => c.classList.toggle('kbd-focus', i === wrapped))
+    const target = cards[wrapped]
+    // selectedMapPath also tracks the kbd cursor so Open Selected lights up.
+    selectedMapPath = target.dataset.path
+    cards.forEach((c) => c.classList.toggle('selected', c.dataset.path === selectedMapPath))
+    $('#open-confirm').disabled = false
+    target.scrollIntoView({ block: 'nearest' })
+  }
+  function currentIdx() {
+    const cards = visibleCards()
+    const i = cards.findIndex((c) => c.classList.contains('kbd-focus'))
+    if (i >= 0) return i
+    return cards.findIndex((c) => c.dataset.path === selectedMapPath)
+  }
+  // Arrow + Enter on the list itself.
+  list.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (selectedMapPath) { e.preventDefault(); confirmOpenMap() }
+      return
+    }
+    const cards = visibleCards()
+    if (cards.length === 0) return
+    const cols = 4 // matches .open-list grid-template-columns
+    const cur = currentIdx()
+    let next
+    if (e.key === 'ArrowDown')      next = cur < 0 ? 0 : cur + cols
+    else if (e.key === 'ArrowUp')   next = cur < 0 ? 0 : cur - cols
+    else if (e.key === 'ArrowRight')next = cur < 0 ? 0 : cur + 1
+    else if (e.key === 'ArrowLeft') next = cur < 0 ? 0 : cur - 1
+    else if (e.key === 'Home')      next = 0
+    else if (e.key === 'End')       next = cards.length - 1
+    else return
+    e.preventDefault()
+    setKbdFocus(next)
+  })
+  // Enter on the filter — if the current filter narrows to one map,
+  // pressing Enter opens it.  Saves a Tab → Enter round-trip when
+  // the user already knows what they want.
+  filter.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return
+    const cards = visibleCards()
+    if (cards.length === 0) return
+    // Pick the kbd-focused card if any, else the first.
+    const cur = currentIdx()
+    const idx = cur >= 0 ? cur : 0
+    e.preventDefault()
+    setKbdFocus(idx)
+    confirmOpenMap()
+  })
+  // Arrow down from the filter jumps into the list with the first
+  // card focused — quicker than Tab for keyboard-only users.
+  filter.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      const cards = visibleCards()
+      if (cards.length === 0) return
+      e.preventDefault()
+      list.focus()
+      setKbdFocus(currentIdx() >= 0 ? currentIdx() : 0)
+    }
+  })
 }
 
 // openLoadedMap hydrates editor state from a /api/studio/load response
@@ -1351,38 +1438,76 @@ const WELCOME_GLAMOUR_INTERVAL_MS = 15000
 // stays silent — the looping ambient was too persistent so we
 // reduced it to a single bookend that lines up with the dialog's
 // "particles constructing the display" theme.
+//
+// Implementation goes through Web Audio (not HTMLAudioElement) for
+// two reasons: TA's WAVs are 8-bit PCM at 11025 Hz and Chrome's
+// <audio> element handles those unreliably (silent-decode bugs that
+// vary by version); and AudioContext.resume() is the
+// canonical way to satisfy the autoplay gate via a user gesture.
 const WELCOME_AMBIENT_VOLUME = 0.18
 
 function wireWelcomeAmbient() {
   const wel = $('#welcome-dialog')
-  const audio = $('#welcome-ambient')
-  if (!wel || !audio) return
-  audio.volume = WELCOME_AMBIENT_VOLUME
-  audio.loop = false
+  if (!wel) return
+  const AudioCtor = window.AudioContext || window.webkitAudioContext
+  if (!AudioCtor) return // older browsers — silently skip
+  let ctx = null
+  let buffer = null
+  let activeSrc = null
   let kicked = false
+  let visible = !wel.classList.contains('hidden')
 
-  const tryPlay = () => {
-    const p = audio.play()
-    if (p && typeof p.catch === 'function') p.catch(() => { /* missing sound or autoplay blocked */ })
+  // Fetch + decode at boot so playback on first gesture is instant.
+  async function loadBuffer() {
+    try {
+      const resp = await fetch('/api/studio/sound/build1')
+      if (!resp.ok) return
+      const data = await resp.arrayBuffer()
+      ctx = ctx || new AudioCtor()
+      buffer = await new Promise((resolve, reject) => {
+        // Use the callback form — Safari historically didn't return a
+        // Promise from decodeAudioData even though the modern signature
+        // does.  Either form works in Chrome / Firefox.
+        ctx.decodeAudioData(data, resolve, reject)
+      })
+    } catch { /* decode failed — silently no-op */ }
   }
+  loadBuffer()
+
+  function tryPlay() {
+    if (!buffer || !ctx) return
+    if (ctx.state === 'suspended') ctx.resume()
+    const src = ctx.createBufferSource()
+    const gain = ctx.createGain()
+    src.buffer = buffer
+    gain.gain.value = WELCOME_AMBIENT_VOLUME
+    src.connect(gain).connect(ctx.destination)
+    src.start()
+    activeSrc = src
+    src.addEventListener('ended', () => { if (activeSrc === src) activeSrc = null })
+  }
+  function stop() {
+    if (!activeSrc) return
+    try { activeSrc.stop() } catch { /* already stopped */ }
+    activeSrc = null
+  }
+
   const onGesture = () => {
     if (kicked) return
     kicked = true
-    if (!wel.classList.contains('hidden')) tryPlay()
+    if (visible) tryPlay()
   }
   // First user input anywhere in the page satisfies the autoplay gate.
   for (const ev of ['pointerdown', 'pointermove', 'keydown']) {
     document.addEventListener(ev, onGesture, { once: true, passive: true })
   }
 
-  const stop = () => {
-    try { audio.pause(); audio.currentTime = 0 } catch { /* ignore */ }
-  }
   // Stop on dialog hide so closing the welcome screen mid-play
   // cuts the sound cleanly.  No restart on re-show — it's a one-
   // shot bookend, not an ambient loop.
   const obs = new MutationObserver(() => {
-    if (wel.classList.contains('hidden')) stop()
+    visible = !wel.classList.contains('hidden')
+    if (!visible) stop()
   })
   obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
 }
