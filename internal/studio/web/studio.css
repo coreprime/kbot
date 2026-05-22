@@ -110,6 +110,10 @@ kbd {
   0%, 100% { background-position: 0 0, 0 0%; }
   50%      { background-position: 0 0, 0 100%; }
 }
+/* Green grid overlay.  The grid itself is faint and translucent;
+   the strobe is driven by a hue/opacity pulse cycling through three
+   tints (cool green → bright green → cyan-green) so it reads as a
+   live, energised surface instead of a static decal. */
 #welcome-dialog .dialog-card::before {
   content: '';
   position: absolute;
@@ -117,31 +121,72 @@ kbd {
   pointer-events: none;
   border-radius: inherit;
   background-image:
-    linear-gradient(rgba(127, 255, 102, 0.07) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(127, 255, 102, 0.07) 1px, transparent 1px);
+    linear-gradient(currentColor 1px, transparent 1px),
+    linear-gradient(90deg, currentColor 1px, transparent 1px);
   background-size: 24px 24px;
+  color: rgba(127, 255, 102, 0.08);
   z-index: 0;
   mix-blend-mode: screen;
+  animation: welcome-grid-strobe 2.4s ease-in-out infinite;
+}
+@keyframes welcome-grid-strobe {
+  0%   { color: rgba(127, 255, 102, 0.05); opacity: 0.55; }
+  35%  { color: rgba(180, 255, 150, 0.18); opacity: 0.95; }
+  55%  { color: rgba(100, 255, 200, 0.12); opacity: 0.75; }
+  85%  { color: rgba(180, 255, 150, 0.18); opacity: 0.95; }
+  100% { color: rgba(127, 255, 102, 0.05); opacity: 0.55; }
 }
 #welcome-dialog .dialog-card > * { position: relative; z-index: 1; }
+
+/* Title — bigger, centred at the top of the card so the dialog
+   feels like a name plate rather than a paragraph header.  Selector
+   is scoped to #welcome-dialog so it beats the generic .dialog-card
+   h1 rule below. */
+#welcome-dialog h1.welcome-title {
+  text-align: center;
+  font-size: 32px;
+  letter-spacing: 0.04em;
+  margin: 4px 0 10px;
+}
+/* Tagline lives in an opaque pill that matches the card's own
+   background, with a touch of translucency to mute the grid strobe
+   behind the text — keeps the line readable without bleaching the
+   surrounding card. */
+.welcome-tagline {
+  text-align: center;
+  margin: 0 auto 4px;
+  max-width: 540px;
+}
+.welcome-tagline span {
+  display: inline-block;
+  background: rgba(22, 26, 33, 0.82);
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+}
 
 /* Workflow tab row above the New / Open Map cards.  Only the active
    tab (Mapping) is wired up today — the others are placeholders so
    the user can see the broader roadmap. */
 .welcome-tabs {
   display: flex;
-  gap: 4px;
-  margin: 12px 0 14px;
-  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  margin: 16px 0 18px;
+  /* Whiter hairline along the tab strip so the bar reads as a real
+     piece of structural chrome rather than a soft separator. */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.55);
 }
 .welcome-tab {
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  padding: 6px 14px;
+  border-radius: 8px 8px 0 0;
+  padding: 10px 22px;
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
+  letter-spacing: 0.02em;
   color: var(--muted);
   cursor: pointer;
   /* Sit on the bottom border of .welcome-tabs so the active tab can
@@ -151,14 +196,16 @@ kbd {
 .welcome-tab:hover:not([disabled]) { color: var(--text); }
 .welcome-tab.active {
   background: var(--bg-1);
-  border-color: var(--border);
+  /* Whiter hairlines on the active tab edges too — matches the new
+     tab-strip baseline so the active tab visually attaches to it. */
+  border-color: rgba(255, 255, 255, 0.55);
   border-bottom: 1px solid var(--bg-1);
   color: var(--text);
   font-weight: 600;
 }
 .welcome-tab[disabled] {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.55;
 }
 .welcome-tab-panel { padding-top: 4px; }
 .dialog-card {
@@ -365,7 +412,9 @@ kbd {
 }
 .welcome-card {
   background: var(--bg-2);
-  border: 1px solid var(--border);
+  /* Strong white border picks the New / Open cards out cleanly from
+     the busy glamour + grid backdrop. */
+  border: 2px solid rgba(255, 255, 255, 0.85);
   border-radius: 10px;
   padding: 28px 22px;
   display: flex;
@@ -375,11 +424,13 @@ kbd {
   cursor: pointer;
   font-family: inherit;
   color: var(--text);
-  transition: transform 100ms ease, border-color 100ms ease, background 100ms ease;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  transition: transform 100ms ease, border-color 100ms ease, background 100ms ease, box-shadow 100ms ease;
 }
 .welcome-card:hover {
   background: var(--bg-3);
-  border-color: var(--accent);
+  border-color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15) inset, 0 0 24px rgba(127, 255, 102, 0.25);
   transform: translateY(-1px);
 }
 .welcome-card-ico { font-size: 40px; line-height: 1; }

@@ -44,6 +44,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/quality-check", handleQualityCheck)
 	mux.HandleFunc("/api/studio/glamour/list", handleGlamourList)
 	mux.HandleFunc("/api/studio/glamour/image/", handleGlamourImage)
+	mux.HandleFunc("/api/studio/sound/", handleSound)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────

@@ -371,6 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeDropZone()
   wireWelcomeNanoFX()
   wireWelcomeGlamour()
+  wireWelcomeAmbient()
   // Multi-tab management — the tab bar + "+" popout above the toolbar.
   wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
@@ -1327,6 +1328,59 @@ function wireWelcomeNanoFX() {
 // fetched into a hidden <img> first; only after `decode()` resolves
 // do we cross-fade, so the user never sees a partial paint.
 const WELCOME_GLAMOUR_INTERVAL_MS = 15000
+
+// Faint nanolathe ambience while the welcome screen is up.  Browser
+// autoplay gates block playback until the user has interacted with
+// the page, so we attach a one-shot gesture listener that kicks the
+// loop on the first move/click — by the time they're reaching for
+// New/Open they've already moved the mouse.
+const WELCOME_AMBIENT_VOLUME = 0.18
+
+function wireWelcomeAmbient() {
+  const wel = $('#welcome-dialog')
+  const a1 = $('#welcome-ambient-1')
+  const a2 = $('#welcome-ambient-2')
+  if (!wel || !a1 || !a2) return
+  // Alternate which loop is active each session so back-to-back loads
+  // don't always lead with the same sample.
+  const tracks = Math.random() < 0.5 ? [a1, a2] : [a2, a1]
+  for (const el of tracks) el.volume = WELCOME_AMBIENT_VOLUME
+  let active = tracks[0]
+  let kicked = false
+  let visible = !wel.classList.contains('hidden')
+
+  const tryPlay = () => {
+    if (!visible) return
+    const p = active.play()
+    if (p && typeof p.catch === 'function') p.catch(() => { /* autoplay blocked, wait for gesture */ })
+  }
+  const onGesture = () => {
+    if (kicked) return
+    kicked = true
+    tryPlay()
+  }
+  // First user input anywhere in the page satisfies the autoplay gate.
+  for (const ev of ['pointerdown', 'pointermove', 'keydown']) {
+    document.addEventListener(ev, onGesture, { once: true, passive: true })
+  }
+
+  const stopAll = () => {
+    for (const el of [a1, a2]) {
+      try { el.pause(); el.currentTime = 0 } catch { /* ignore */ }
+    }
+  }
+  const sync = () => {
+    visible = !wel.classList.contains('hidden')
+    if (visible) {
+      if (kicked) tryPlay()
+    } else {
+      stopAll()
+    }
+  }
+  const obs = new MutationObserver(sync)
+  obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
+  sync()
+}
 
 function wireWelcomeGlamour() {
   const wel = $('#welcome-dialog')

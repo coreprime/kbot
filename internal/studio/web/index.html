@@ -21,9 +21,15 @@
          card via z-index in CSS.  Drawing + animation is owned by
          the NanoFX module; the canvas is sized to the viewport. -->
     <canvas id="welcome-nanofx" class="welcome-nanofx" aria-hidden="true"></canvas>
+    <!-- Ambient nanolathe loop.  Hidden — JS picks one of these and
+         starts playback on the first user gesture (browser autoplay
+         gate).  Volume is held faint so the welcome screen reads as
+         a quiet construction bay, not a slot machine. -->
+    <audio id="welcome-ambient-1" src="/api/studio/sound/watnano1" preload="auto" loop></audio>
+    <audio id="welcome-ambient-2" src="/api/studio/sound/watnano2" preload="auto" loop></audio>
     <div class="dialog-card dialog-card-wide">
-      <h1>KBot Studio</h1>
-      <p class="dialog-sub">A web-based workbench for Total Annihilation and TA: Kingdoms.  Pick a workflow to begin.</p>
+      <h1 class="welcome-title">KBot Studio</h1>
+      <p class="welcome-tagline"><span>A web-based workbench for Total Annihilation and TA: Kingdoms.  Pick a workflow to begin.</span></p>
       <!-- Workflow tabs.  Only Mapping is implemented today; the rest
            are placeholder stubs so the user can see the shape of
            what's coming. -->
