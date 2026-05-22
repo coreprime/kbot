@@ -9531,6 +9531,12 @@ async function runQualityChecker(payload) {
     const fixes = new Set(m?.appliedFixes ?? [])
     let latestIssues = []
     let busy = false
+    // Tracks whether the user has clicked Fix / Fix All this session.
+    // Drives the save-button state machine: a clean first check
+    // auto-closes the dialog (no user effort needed); once the user
+    // has fixed something, we hold the dialog open with a green
+    // "Save" button so they get to confirm what they fixed.
+    let userInteracted = false
 
     const rowSpec = (issue, severity, message) => ({
       check: issue.check,
@@ -9585,8 +9591,25 @@ async function runQualityChecker(payload) {
       const anyIssue = latestIssues.some((i) => i.severity !== 'ok')
       fixAllBtn.classList.toggle('hidden', !fixableLeft)
       fixAllBtn.disabled = busy || !fixableLeft
-      saveAnywayBtn.classList.toggle('hidden', !anyIssue)
+      // The save button doubles as both "Save anyway" (red, when issues
+      // remain) and "Save" (green, when the user has fixed everything
+      // and we're holding the dialog open for their final click).  We
+      // only hide it for the initial-clean-check case — there the
+      // dialog auto-closes and the user never needs it.
+      const showSave = anyIssue || userInteracted
+      saveAnywayBtn.classList.toggle('hidden', !showSave)
       saveAnywayBtn.disabled = busy
+      if (anyIssue) {
+        saveAnywayBtn.textContent = 'Save anyway'
+        saveAnywayBtn.classList.remove('ready')
+        saveAnywayBtn.classList.add('danger')
+        saveAnywayBtn.title = 'Save the map with the current issues unresolved'
+      } else {
+        saveAnywayBtn.textContent = 'Save'
+        saveAnywayBtn.classList.remove('danger')
+        saveAnywayBtn.classList.add('ready')
+        saveAnywayBtn.title = 'All checks passed — write the map to disk'
+      }
       cancelBtn.disabled = busy
     }
 
@@ -9618,11 +9641,20 @@ async function runQualityChecker(payload) {
         busy = false
         renderRows(latestIssues.map((i) => rowSpec(i, i.severity, i.message)))
         if (data.allOk) {
-          subtitle.textContent = 'All checks passed. Saving…'
+          if (!userInteracted) {
+            // Clean first check — no human effort required, sail
+            // through with a brief beat so the green ticks are
+            // visible before the dialog closes.
+            subtitle.textContent = 'All checks passed. Saving…'
+            refreshFooter()
+            setTimeout(() => finish(Array.from(fixes)), 400)
+            return
+          }
+          // The user fixed something to get here.  Hold the dialog
+          // open with a green Save button so they confirm what they
+          // applied — Fix All hides itself via refreshFooter().
+          subtitle.textContent = 'All checks passed. Click Save to write the map.'
           refreshFooter()
-          // Brief beat so the user sees the green ticks before the
-          // dialog vanishes — they asked for this transparency.
-          setTimeout(() => finish(Array.from(fixes)), 400)
           return
         }
         subtitle.textContent = 'Some checks need attention before save.'
@@ -9645,6 +9677,7 @@ async function runQualityChecker(payload) {
     }
 
     async function applyFixes(ids) {
+      userInteracted = true
       for (const id of ids) {
         fixes.add(id)
         // Persist into the active map so future saves don't re-prompt
@@ -9681,6 +9714,14 @@ async function runQualityChecker(payload) {
 
     async function onSaveAnyway() {
       if (busy) return
+      const anyIssue = latestIssues.some((i) => i.severity !== 'ok')
+      // Green-Save path (no remaining issues) — skip the confirm prompt
+      // since there's nothing dangerous to confirm.  The red Save-anyway
+      // path still gates the save behind the confirmation.
+      if (!anyIssue) {
+        finish(Array.from(fixes))
+        return
+      }
       const ok = await confirmDialog({
         title: 'Save with unresolved issues?',
         message: 'There are issues with this map. The TNT will still be written, but the unresolved warnings remain in the saved file.',

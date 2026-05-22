@@ -560,6 +560,16 @@ kbd {
 }
 #quality-fix-all:hover { background: #4581f5; border-color: #4581f5; }
 #quality-fix-all:disabled { background: #2f6fed; border-color: #2f6fed; }
+/* Save button enters its "ready" state when every check is green AND
+   the user has applied at least one Fix.  It replaces the red Save-
+   anyway styling — same DOM node, new colour + label. */
+.btn.ready {
+  background: #2c9b59;
+  border-color: #2c9b59;
+  color: #fff;
+}
+.btn.ready:hover { background: #34b76a; border-color: #34b76a; }
+.btn.ready:disabled { background: #2c9b59; border-color: #2c9b59; }
 
 /* Schema selector dropdown — match the toolbar look. */
 #schema-select {
