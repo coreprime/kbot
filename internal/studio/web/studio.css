@@ -192,14 +192,14 @@ kbd {
 }
 .welcome-tab:hover:not([disabled]) { color: var(--text); }
 .welcome-tab.active {
-  /* Match the panel background + border so the active tab visually
-     attaches to the panel below it like a real folder tab.  -1px
-     bottom margin lets the tab eat the panel's top border under it. */
+  /* Folder-tab look — top + sides framed in bright white, bottom is
+     open so the tab visually pours into the panel below.  The panel
+     has no border-top of its own (see .welcome-tab-panel) so there's
+     no horizontal line to mask under the tab. */
   background: rgba(22, 26, 33, 0.25);
-  border-color: rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.9);
   color: var(--text);
   font-weight: 600;
-  margin-bottom: -1px;
   position: relative;
   z-index: 1;
 }
@@ -208,12 +208,16 @@ kbd {
   opacity: 0.55;
 }
 /* Folder body — the bordered panel that wraps the card grid + drop
-   hint, attached to the active tab's bottom edge.  Mostly see-
-   through (alpha 0.25) so the strobing grid keeps reading; the
-   white outline is what gives the cards their containing frame. */
+   hint, attached to the active tab's bottom edge.  No border-top:
+   the tab strip's bottom edge serves as the implicit top of the
+   panel, so a horizontal line never crosses under the active tab.
+   Mostly see-through (alpha 0.25) so the strobing grid keeps
+   reading; the white outline on the other three sides frames the
+   cards. */
 .welcome-tab-panel {
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  border-radius: 0 8px 8px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
   background: rgba(22, 26, 33, 0.25);
   padding: 18px 20px 16px;
 }
