@@ -167,30 +167,28 @@ const SEA_WAVES_GLSL = `
   // shallow the bed is at that point, exposing the rocks through the
   // surface).
   float seabedHeight(vec2 xz) {
-    // Large dunes — coarser spacing (was 0.08) means fewer
-    // peaks-per-unit-area, each substantially larger.  Combined
-    // with the deeper seabed this gives a stark, sparse landscape
-    // rather than a busy field of small bumps.
-    vec2 dp = xz * 0.025;
-    float dune = sin(dp.x * 0.9 + 0.4) * cos(dp.y * 1.1 - 0.7) * 2.00
-               + sin(dp.x * 1.7 - dp.y * 0.6 + 1.9) * 1.20
-               + sin(dp.x * 0.4 + dp.y * 0.3 + 5.2) * 1.80;
-    // Hash-cell rock peaks.  Cell spacing 5.5 → 18 wu so rocks are
-    // significantly more spread out and individually larger.  Same
-    // jitter pattern places each rock somewhere inside its cell.
-    vec2 cell = floor(xz / 18.0);
-    vec2 cf = fract(xz / 18.0);
+    // Large dunes — XZ wavelength scaled 10× from before (0.025 →
+    // 0.0025), height ~4× (≈2 → ≈8 wu), so the bed reads as
+    // sweeping geological ridges instead of busy small bumps.
+    vec2 dp = xz * 0.0025;
+    float dune = sin(dp.x * 0.9 + 0.4) * cos(dp.y * 1.1 - 0.7) * 8.00
+               + sin(dp.x * 1.7 - dp.y * 0.6 + 1.9) * 4.80
+               + sin(dp.x * 0.4 + dp.y * 0.3 + 5.2) * 7.20;
+    // Hash-cell rock peaks — cells massively bigger (18 → 180 wu)
+    // so the "leopard spot" repetition disappears at typical
+    // viewing distances.  Density cut hard (probability 55% → 12%)
+    // so a rock appears only in roughly one cell out of ten, and
+    // peak heights pushed 4× to ~24 wu — true outcrops.
+    vec2 cell = floor(xz / 180.0);
+    vec2 cf = fract(xz / 180.0);
     float h0 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5);
     float h1 = fract(sin(dot(cell, vec2(269.5,  183.3))) * 17483.5);
     float h2 = fract(sin(dot(cell, vec2(419.2,  371.9))) * 28197.7);
-    // Probability of a rock in a cell ~55% — fewer cells overall
-    // but each more likely to host a feature.
-    float present = step(0.45, h0);
-    vec2 centre = vec2(h1, h2) * 0.7 + 0.15;
+    float present = step(0.88, h0);
+    vec2 centre = vec2(h1, h2) * 0.6 + 0.20;
     float dist = length(cf - centre);
-    float radius = 0.22 + h1 * 0.28;
-    // Peak heights up to ~6 wu so rocks read as proper outcrops.
-    float peakH = 2.0 + h2 * 4.0;
+    float radius = 0.28 + h1 * 0.30;
+    float peakH = 8.0 + h2 * 16.0;
     float rock = present * peakH * smoothstep(radius, 0.0, dist);
     return dune + rock;
   }
@@ -599,6 +597,7 @@ const ENVIRONMENT_PRESETS = {
 }
 
 const MAIN_VS = `
+  ${SEA_WAVES_GLSL}
   attribute vec3 aPos;
   attribute vec3 aNormal;
   attribute vec2 aUV;
@@ -606,6 +605,10 @@ const MAIN_VS = `
   uniform mat4 uView;
   uniform mat4 uWorld;
   uniform mat4 uLightSpace;
+  uniform float uReflectionTint;
+  uniform float uTime;
+  uniform float uWaterY;
+  uniform float uWavesIntensity;
   varying vec2 vUV;
   varying vec3 vNormal;
   varying vec3 vWorldPos;
@@ -614,6 +617,19 @@ const MAIN_VS = `
     vUV = aUV;
     vNormal = mat3(uWorld) * aNormal;
     vec4 worldPos = uWorld * vec4(aPos, 1.0);
+    // Refraction warp: when this draw is the reflection pass, push
+    // each vertex sideways by the wave slope at the vertex's XZ.
+    // Vertices closer to the surface get smaller offsets; deeper
+    // fragments shift further — same way Snell's law refracts a
+    // straight-down view through a wavy interface.  Stylised, not
+    // physically exact, but it reads as the reflection rippling
+    // with the waves above instead of being a perfect rigid mirror.
+    if (uReflectionTint > 0.5) {
+      vec3 hs = seaWaveHS(worldPos.xz, uTime);
+      float depthBelow = max(0.0, uWaterY - worldPos.y);
+      vec2 refr = vec2(hs.y, hs.z) * uWavesIntensity * depthBelow * 0.35;
+      worldPos.xz += refr;
+    }
     vWorldPos = worldPos.xyz;
     vLightSpacePos = uLightSpace * worldPos;
     gl_Position = uProj * uView * worldPos;
@@ -1159,7 +1175,10 @@ const GROUND_FS = `
       // Archipelago gets white sand, Metal gets dark grey, Lava
       // glows red, etc.
       float bedH = seabedHeight(vWorldPos.xz);
-      float rockMix = smoothstep(2.0, 5.5, bedH);
+      // Threshold pushed up since dunes alone now reach ~20 wu and
+      // rock peaks ~24+ wu.  Sand reads up to ~10 wu of bedH; the
+      // rock palette dominates for the actual outcrops above that.
+      float rockMix = smoothstep(10.0, 22.0, bedH);
       vec3 col = mix(uSeabedSand, uSeabedRock, rockMix);
       // Static caustic shading — sampled with t=0 so the bed reads
       // as a fixed environment rather than a rippling layer of
@@ -1662,7 +1681,13 @@ export class ModelRenderer {
     // it as the surface paints over the reflected geometry.  Other
     // modes / grounds skip this — flat shading + wireframes don't
     // need the cinematic effect.
-    const showReflection = this.renderMode === 'full' && this.groundMode === 'sea' && this.optReflections
+    // Reflection only renders when the camera is ABOVE the water
+    // plane.  Below the surface the mirrored geometry would be
+    // visible directly (no water surface between camera + reflection)
+    // and the trick of "the reflection IS a flipped copy" leaks out.
+    const waterY = this.model ? (this.model.bounds.min[1] - 0.05) : 0
+    const cameraAboveWater = !this.camera || this.camera.eye[1] > waterY
+    const showReflection = this.renderMode === 'full' && this.groundMode === 'sea' && this.optReflections && cameraAboveWater
     if (this.groundMode === 'sea') {
       // Sea pipeline: seabed first (writes depth), reflection second
       // (depth-tested against the bed so it can't ghost through it),
@@ -1937,6 +1962,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
     gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
     gl.uniform1f(this.uMainWaterOnHull, 0)
+    gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
 
     // Mirror across water Y = model.bounds.min[1] - 0.05 (same Y
     // the ground plane sits at).  reflectMatrix = T(0, 2*Y, 0) * S(1,-1,1)
@@ -2000,6 +2026,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
     gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
     gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
+    gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -2278,6 +2305,7 @@ export class ModelRenderer {
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
     this.uMainTime = gl.getUniformLocation(prog, 'uTime')
     this.uMainWaterY = gl.getUniformLocation(prog, 'uWaterY')
+    this.uMainWavesIntensity = gl.getUniformLocation(prog, 'uWavesIntensity')
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
   }
 
