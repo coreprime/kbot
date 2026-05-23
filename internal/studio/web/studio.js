@@ -11186,26 +11186,65 @@ function wireModelViewMenu() {
   })
   // Environment parent row — click toggles the .open class on the
   // row, which CSS uses to show/hide the submenu.  Clicking again
-  // (or clicking outside the dropdown) closes it.
+  // (or clicking outside the dropdown) closes it.  Snapshot the
+  // currently-committed environment so the hover-preview can revert
+  // to it if the user dismisses the submenu without a click.
   const envParent = $('#mv-opt-env-row')
   const envSubmenu = $('#mv-env-submenu')
+  // Track whether we're hover-previewing.  The committed env is the
+  // .active row's data-mv-env value — that survives across helpers
+  // (applyUnitEditorDefaults flips .active too) so we always have a
+  // canonical "what should the scene revert to" reference.
+  let envPreviewing = false
+  const getCommittedEnv = () => {
+    const r = [...$$('.mv-env-row')].find((row) => row.classList.contains('active'))
+    return r?.dataset.mvEnv || 'earth'
+  }
+  const revertEnvIfPreviewing = () => {
+    if (!envPreviewing) return
+    envPreviewing = false
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(getCommittedEnv())
+  }
+  if (envSubmenu) {
+    // Mouse out of the submenu without clicking a row → revert any
+    // active preview so the scene snaps back to the committed env.
+    envSubmenu.addEventListener('mouseleave', () => revertEnvIfPreviewing())
+  }
   if (envParent && envSubmenu) {
     envParent.addEventListener('click', (e) => {
-      // Suppress if click bubbled up from a child row — the row
-      // handler below already closes the submenu after applying.
       if (e.target.closest('.mv-env-row')) return
       e.stopPropagation()
-      // The global `.hidden { display: none !important }` rule
-      // means we have to toggle the class directly rather than
-      // relying on a more-specific CSS selector to override it.
       const wasHidden = envSubmenu.classList.contains('hidden')
       envSubmenu.classList.toggle('hidden', !wasHidden)
       envParent.classList.toggle('open', wasHidden)
+      // Submenu just closed without a row click → revert any preview.
+      if (!wasHidden) revertEnvIfPreviewing()
     })
+    // Closing the parent dropdown popup also dismisses the submenu —
+    // listen for that on the popup element via mouseleave.  Anything
+    // that hides the popup without picking an env should revert.
+    const popup = document.querySelector('#mv-options-dropdown-popup')
+    if (popup) {
+      const obs = new MutationObserver(() => {
+        if (popup.classList.contains('hidden') && envPreviewing) {
+          // Popup got closed (e.g. user clicked outside) — revert.
+          revertEnvIfPreviewing()
+          envSubmenu.classList.add('hidden')
+          envParent.classList.remove('open')
+        }
+      })
+      obs.observe(popup, { attributes: true, attributeFilter: ['class'] })
+    }
   }
-  // Environment submenu rows — pick an env and close the submenu.
+  // Environment submenu rows — hover previews live, click commits.
   const envLabel = $('#mv-env-current-lbl')
   for (const row of $$('.mv-env-row')) {
+    row.addEventListener('mouseenter', () => {
+      const env = row.dataset.mvEnv
+      if (!env) return
+      envPreviewing = (env !== getCommittedEnv())
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
+    })
     row.addEventListener('click', (e) => {
       e.stopPropagation()
       const env = row.dataset.mvEnv
@@ -11213,6 +11252,7 @@ function wireModelViewMenu() {
       $$('.mv-env-row').forEach((r) => r.classList.toggle('active', r === row))
       const lbl = row.textContent.trim()
       if (envLabel) envLabel.textContent = lbl
+      envPreviewing = false
       if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
       if (envParent) envParent.classList.remove('open')
       if (envSubmenu) envSubmenu.classList.add('hidden')
