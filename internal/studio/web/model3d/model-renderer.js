@@ -1604,9 +1604,16 @@ export class ModelRenderer {
       return base + height * 0.15
     }
     if (this.submersionMode === 'submerged') {
-      // Push water up past the top of the unit by ~2 wu — the unit
-      // is fully under the surface, like a sub at periscope depth.
-      return base + height + 2.0
+      // Push the water plane well above the unit so the orbit-
+      // camera's default framing puts the eye below the surface —
+      // the user opens a sub and is immediately looking at it
+      // through metres of water above (periscope-cam feel).  The
+      // camera's eye is ~target + distance*sin(pitch); for typical
+      // units distance ≈ 1.5× span at pitch 18°, so the eye sits
+      // about 0.5× span above the unit centroid.  Water at top +
+      // 3× unit-height puts the surface a good margin above the
+      // eye for any reasonable bounding box.
+      return base + height + Math.max(height * 3.0, 40)
     }
     return base
   }

@@ -1247,7 +1247,11 @@ kbd {
   position: absolute;
   left: 100%;
   top: -4px;
-  margin-left: 4px;
+  /* No horizontal gap so the cursor can cross from the parent row
+     into the submenu without mouseleave firing.  A small invisible
+     ::before bridge sits in the corner where the row and submenu
+     meet so the cursor never enters dead space. */
+  margin-left: 0;
   min-width: 180px;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -1255,6 +1259,17 @@ kbd {
   padding: 4px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
   z-index: 10;
+}
+/* Invisible 8px-wide bridge from the row's right edge into the
+   submenu so mouseleave doesn't fire halfway across.  Sits on top
+   of the submenu's left edge. */
+.ribbon-submenu::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 0;
+  width: 12px;
+  height: 100%;
 }
 .ribbon-submenu.hidden { display: none; }
 .menu-row-submenu.open .ribbon-submenu { display: block; }

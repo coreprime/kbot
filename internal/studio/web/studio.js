@@ -11040,6 +11040,27 @@ function wireModelDialogs() {
   })
 }
 
+// rowNameText pulls just the human-readable name out of a menu-row.
+// The row's structure is <span ico><span name><span check><span chev>;
+// row.textContent concatenates all of them, so a naive textContent
+// read picks up the icon emoji + the check glyph and ends up
+// painting "🌊🌊Sea" on the dropdown button.  This helper grabs
+// just the children that aren't icon / check / chev / lbl spans.
+function rowNameText(row) {
+  if (!row) return ''
+  const parts = [...row.children].filter((c) => (
+    c.tagName === 'SPAN' &&
+    !c.classList.contains('ico') &&
+    !c.classList.contains('menu-check') &&
+    !c.classList.contains('chev-right') &&
+    !c.classList.contains('chev-down') &&
+    !c.classList.contains('lbl') &&
+    !c.classList.contains('env-current-lbl')
+  ))
+  if (parts.length === 0) return row.textContent.trim()
+  return parts.map((c) => c.textContent).join(' ').trim()
+}
+
 // wireToggleSubmenu wires a menu row that does both:
 //   * Body click → toggles a boolean effect on/off (the menu-check
 //     glyph shows the state)
@@ -11195,7 +11216,7 @@ function wireModelViewMenu() {
       const mode = row.dataset.mvMode
       if (!mode) return
       $$('.mv-mode-row').forEach((r) => r.classList.toggle('active', r === row))
-      if (modeLabel) modeLabel.textContent = row.textContent.trim().replace(/✓.*$/, '').trim()
+      if (modeLabel) modeLabel.textContent = rowNameText(row)
       // Mirror the row's icon onto the dropdown button so the
       // closed dropdown shows the picked mode at a glance.
       const rowIco = row.querySelector('.ico')
@@ -11214,8 +11235,7 @@ function wireModelViewMenu() {
       // Update the dropdown button face so the closed menu shows
       // the current ground at a glance, matching Rendering's pattern.
       const ico = row.querySelector('.ico')
-      const lbl = row.textContent.trim().replace(/✓.*$/, '').trim()
-      if (groundLabel) groundLabel.textContent = lbl
+      if (groundLabel) groundLabel.textContent = rowNameText(row)
       if (groundIco && ico) groundIco.textContent = ico.textContent
       applyGround(mode)
     })
@@ -11352,8 +11372,7 @@ function wireModelViewMenu() {
       const env = row.dataset.mvEnv
       if (!env) return
       $$('.mv-env-row').forEach((r) => r.classList.toggle('active', r === row))
-      const lbl = row.textContent.trim()
-      if (envLabel) envLabel.textContent = lbl
+      if (envLabel) envLabel.textContent = rowNameText(row)
       const rowIco = row.querySelector('.ico')
       if (envIco && rowIco) envIco.textContent = rowIco.textContent
       envPreviewing = false
@@ -11508,7 +11527,7 @@ function applyUnitEditorDefaults() {
     $$('.mv-env-row').forEach((row) => row.classList.toggle('active', row === envRow))
     const envLbl = $('#mv-env-current-lbl')
     const envIco2 = $('#mv-env-current-ico')
-    if (envLbl) envLbl.textContent = envRow.textContent.trim()
+    if (envLbl) envLbl.textContent = rowNameText(envRow)
     const rIco = envRow.querySelector('.ico')
     if (envIco2 && rIco) envIco2.textContent = rIco.textContent
   }
