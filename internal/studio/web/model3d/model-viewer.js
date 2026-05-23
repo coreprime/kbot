@@ -13,6 +13,8 @@ import { TextureCache } from './texture-cache.js'
 import { ModelLoader } from './model-loader.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
+import { CobRuntime } from './cob/cob-runtime.js'
+import { CobBinding } from './cob/cob-binding.js'
 
 export class ModelViewer {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -25,9 +27,44 @@ export class ModelViewer {
     this.renderer = null
     this.camera = null
     this.model = null
+    // cob is the per-unit script runtime + model binding.  Set by
+    // open() after the COB fetch resolves; remains null when the
+    // unit ships no .COB (many props / features).  Per-frame
+    // animation tick is driven from the renderer via setCobBinding.
+    this.cob = null
+    // cobDamage drives the GET_UNIT_VALUE port for HEALTH so the
+    // user can preview "this unit at 50% health" via the studio's
+    // damage popup.  Some bos scripts also emit damage smoke when
+    // HEALTH < threshold (the SmokeUnit thread polls in a loop) so
+    // bumping this slider lights up the SFX pipeline visibly.
+    this.cobDamage = 0
     this._pointerState = null
     this._resizeObserver = null
     this._wireInputs()
+  }
+
+  // setDamage sets the unit's damage percent (0..100).  When
+  // non-zero, GET_UNIT_VALUE(HEALTH) returns (100 - damage) so any
+  // bos script polling for low health (SmokeUnit, MotionControl
+  // checks, etc.) sees the new value next iteration.
+  //
+  // SmokeUnit dedup explained: the script body is `while (1) { …
+  // emit smoke … sleep N … }` - one perpetually-alive instance is
+  // enough to emit smoke as long as HEALTH stays low.  My earlier
+  // version started a NEW SmokeUnit thread on every slider event,
+  // which compounded N threads in the runtime and made the smoke
+  // density grow with slider movement instead of with damage.
+  // We now spawn AT MOST ONE: if a SmokeUnit thread is already
+  // alive we leave it alone (it'll see the new HEALTH on its
+  // next polling iteration); only when none exists AND damage>0
+  // do we kick off a single instance.
+  setDamage(percent) {
+    this.cobDamage = Math.max(0, Math.min(100, +percent || 0))
+    if (!this.cob || !this.cob.hasScript('SmokeUnit') || this.cobDamage <= 0) return
+    const alreadyRunning = this.cob.runtime._threads.some(
+      (t) => t.script.name.toLowerCase() === 'smokeunit',
+    )
+    if (!alreadyRunning) this.cob.start('SmokeUnit')
   }
 
   // open initialises (or reuses) the WebGL pipeline and loads the named
@@ -48,6 +85,11 @@ export class ModelViewer {
       this.camera = new OrbitCamera({})
       this.renderer.setCamera(this.camera)
       this.#observeResize()
+      // Shaders now live as standalone .vert/.frag files under
+      // shaders/ and load over fetch().  init() resolves once they're
+      // compiled + linked so the first frame doesn't fire at an
+      // un-ready renderer.
+      await this.renderer.init()
       this.renderer.start()
     }
     try {
@@ -66,7 +108,58 @@ export class ModelViewer {
       this.camera.pitch = 18 * Math.PI / 180
       this.camera.distance *= 1.25
       this.renderer.requestRedraw()
-      if (this.onModelLoaded) this.onModelLoaded(model)
+      // Try to fetch + attach the unit's COB script.  Many units
+      // ship without one (features / props / placeholders) so the
+      // 404 path just leaves this.cob null and the unit displays
+      // statically.  The runtime auto-runs Create + Activate on
+      // load so flares hide / blades start spinning without the
+      // user clicking anything.
+      this.cob = null
+      this.renderer.setCobBinding(null)
+      try {
+        const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}`)
+        if (cobResp.ok) {
+          const cobJson = await cobResp.json()
+          const runtime = new CobRuntime(cobJson, {
+            // Tag log lines so they're easy to spot in the console.
+            log: (msg) => console.warn(`[cob:${modelName}]`, msg),
+            // Provide the unit-value port reads the bos scripts
+            // query - HEALTH, ACTIVATION etc.  Damage comes from
+            // the studio's per-unit UI; default 0 ("undamaged")
+            // until the user drags the slider.
+            getUnitValue: (port) => {
+              if (port === 4 /* HEALTH */) return Math.max(0, 100 - (this.cobDamage || 0))
+              if (port === 1 /* ACTIVATION */) return 1
+              return 0
+            },
+          })
+          this.cob = new CobBinding(model, runtime)
+          this.renderer.setCobBinding(this.cob)
+          // TA convention: Create runs first (sets up initial
+          // piece positions), then Activate kicks off the
+          // running-state animations (radar dish spin, hide
+          // muzzle flares, etc.).  Fall through quietly when a
+          // script doesn't define either entry point - rare but
+          // a few features ship a stub COB.
+          if (this.cob.hasScript('Create')) this.cob.start('Create')
+          if (this.cob.hasScript('Activate')) this.cob.start('Activate')
+          // Seed the reload-time global the AimWeapon/RestoreAfter-
+          // Delay scripts read.  The bos source typically computes
+          // global_2 = reloadTime * 2 inside SetMaxReloadTime(); in
+          // a real match the engine calls that with the unit's FBI
+          // ReloadTime (3-5 seconds).  We don't have access to FBI
+          // here so seed a single sensible value via the same entry
+          // point — the script then populates its own globals and
+          // RestoreAfterDelay snaps the turret back ~6 seconds
+          // after the aim completes, matching in-game pacing.
+          if (this.cob.hasScript('SetMaxReloadTime')) {
+            this.cob.start('SetMaxReloadTime', [3000])
+          }
+        }
+      } catch (e) {
+        console.warn(`[cob:${modelName}] fetch failed:`, e)
+      }
+      if (this.onModelLoaded) this.onModelLoaded(model, this.cob)
       this.#setStatus(`${modelName} · ${model.flat.length} piece${model.flat.length === 1 ? '' : 's'}`)
     } catch (err) {
       this.#setStatus(`Failed to load ${modelName}: ${err.message || err}`)

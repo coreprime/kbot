@@ -110,19 +110,28 @@ export class TextureCache {
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
-    // Mipmaps + trilinear filtering smooth the chunky TA palette
-    // when textures are sampled at oblique angles or far from the
-    // camera.  WebGL1's generateMipmap requires power-of-two
-    // textures — TA's atlas tiles are all square POT (8 / 16 / 32 /
-    // 64), so this is safe.
-    const pot = this.#isPowerOfTwo(image.naturalWidth) && this.#isPowerOfTwo(image.naturalHeight)
-    if (pot) {
-      gl.generateMipmap(gl.TEXTURE_2D)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-    } else {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    // Mipmaps + trilinear + anisotropic make the biggest single
+    // upgrade to texture quality at oblique angles + at distance.
+    // WebGL1 requires power-of-two for mipmaps, so non-POT textures
+    // get resized into a POT canvas first; the source pixels stay
+    // intact (no quality loss), the canvas just provides the size.
+    let src = image
+    const w = image.naturalWidth || image.width
+    const h = image.naturalHeight || image.height
+    if (!this.#isPowerOfTwo(w) || !this.#isPowerOfTwo(h)) {
+      const wp = this.#nextPOT(w)
+      const hp = this.#nextPOT(h)
+      const canvas = document.createElement('canvas')
+      canvas.width = wp
+      canvas.height = hp
+      const cx = canvas.getContext('2d')
+      cx.imageSmoothingEnabled = false
+      cx.drawImage(image, 0, 0, wp, hp)
+      src = canvas
     }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src)
+    gl.generateMipmap(gl.TEXTURE_2D)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
@@ -132,9 +141,15 @@ export class TextureCache {
     this.entries.set(key, {
       tex,
       ready: true,
-      width: image.naturalWidth,
-      height: image.naturalHeight,
+      width: w,
+      height: h,
     })
+  }
+
+  #nextPOT(v) {
+    let p = 1
+    while (p < v) p <<= 1
+    return p
   }
 
   #isPowerOfTwo(n) {

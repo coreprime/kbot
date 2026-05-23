@@ -407,6 +407,12 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeGlamour()
   wireWelcomeAmbient()
   wireWelcomeTabs()
+  // Hydrate persisted UI prefs FIRST — the wire* helpers below read
+  // from state during setup (e.g. wireMvInspectors decides each
+  // inspector panel's initial visibility from state.mvInspectorVisible).
+  // If load runs after wiring, every wire-time read sees an empty
+  // state and the user's saved choices get clobbered on each reload.
+  loadPersistedPrefs()
   wireModelDialogs()
   // Settings + Help + Developer dialog handlers are needed even
   // when the user never enters the map editor (e.g. open straight
@@ -434,9 +440,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
   startServerHeartbeat()
-  // Hydrate persisted UI prefs (drawer filters, toggle flags, view
-  // mode, panel visibility) before any panel reads from state.
-  loadPersistedPrefs()
   // ?initial_map=<name> skips the Welcome dialog and jumps straight
   // into the named map.  Match is case-insensitive against either the
   // file name or the OTA mission name so URL-friendly slugs like
@@ -453,7 +456,18 @@ document.addEventListener('DOMContentLoaded', () => {
 const PREFS_KEY = 'kbot-studio:prefs:v1'
 const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   'showGridlines', 'showMinimap', 'showCameraInfo', 'showFeatures', 'showVoids', 'showContours', 'showBuildable', 'showStartPositions',
-  'viewMode', 'panelLayout', 'settings']
+  'viewMode', 'panelLayout', 'settings',
+  // Model-viewer inspector panels.  Without these the close /
+  // collapse / drag positions are written to state.* but never
+  // serialised, so the panels would forget every preference on
+  // reload — including a user's explicit close, which is exactly
+  // the signal the "default visible" logic uses to decide whether
+  // to auto-show next time.
+  'mvInspectorVisible', 'mvInspectorCollapsed', 'mvInspectorPos',
+  // Actions inspector's "Include Private" filter — preserved across
+  // sessions so a user debugging internal helpers doesn't have to
+  // re-tick the box on every reload.
+  'mvActionsIncludePrivate']
 
 // createPrefsStore returns a {load, save} interface backed by a Web
 // Storage implementation (defaults to window.localStorage).  The
@@ -11023,6 +11037,8 @@ function wireModelDialogs() {
   wireModelRibbonDropdown('mv-render-dropdown')
   wireModelRibbonDropdown('mv-ground-dropdown')
   wireModelRibbonDropdown('mv-options-dropdown')
+  wireModelRibbonDropdown('mv-view-dropdown')
+  wireMvInspectors()
   wireModelViewMenu()
   wireModelTabBar()
   wireModelChromeButtons()
@@ -11103,14 +11119,18 @@ function wireToggleSubmenu({ rowId, submenuId, onToggle }) {
 // wireSliderInput hooks a range input + value label.  The input
 // value is divided by 100 before being handed to the callback so
 // HTML can use integer steps for cleaner scrub behaviour and the
-// renderer still gets a smooth float multiplier.
-function wireSliderInput(inputId, valueId, cb) {
+// renderer still gets a smooth float multiplier.  An optional
+// formatter overrides the default "1.0×" label - used by sliders
+// that want a "12%" or other-unit display.  The formatter receives
+// the post-scaling float so 12 (% step) reads as 0.12 to the
+// callback but 12% to the user.
+function wireSliderInput(inputId, valueId, cb, format) {
   const inp = document.getElementById(inputId)
   const lbl = document.getElementById(valueId)
   if (!inp) return
   const update = () => {
     const v = parseInt(inp.value, 10) / 100
-    if (lbl) lbl.textContent = v.toFixed(1) + '×'
+    if (lbl) lbl.textContent = format ? format(parseInt(inp.value, 10), v) : (v.toFixed(1) + '×')
     cb(v)
   }
   inp.addEventListener('input', update)
@@ -11283,6 +11303,56 @@ function wireModelViewMenu() {
   wireSliderInput('mv-waves-intensity', 'mv-waves-intensity-val', (v) => {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWavesIntensity(v)
   })
+  // Background terrain — the procedural mountain ring on non-sea
+  // worlds.  Toggle controls visibility; sliders feed scalars
+  // through to the env preset's mountainHeight / mountainScale.
+  wireToggleSubmenu({
+    rowId: 'mv-opt-bgterrain-row',
+    submenuId: 'mv-bgterrain-submenu',
+    onToggle: (on) => {
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainEnabled(on)
+    },
+  })
+  wireSliderInput('mv-bgterrain-height', 'mv-bgterrain-height-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainHeight(v)
+  })
+  wireSliderInput('mv-bgterrain-scale', 'mv-bgterrain-scale-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainScale(v)
+  })
+  // Seabed features — same idea for the underwater rocks + dunes.
+  // No on/off toggle here (seabed always exists in Sea mode); just
+  // height / scale / rock-density sliders.  The parent row is
+  // hover-driven via the env-style mouseenter pattern.
+  const seabedParent = document.querySelector('#mv-opt-seabed-row')
+  const seabedSubmenu = document.querySelector('#mv-seabed-submenu')
+  if (seabedParent && seabedSubmenu) {
+    seabedParent.addEventListener('mouseenter', () => {
+      seabedSubmenu.classList.remove('hidden')
+      seabedParent.classList.add('open')
+    })
+    seabedParent.addEventListener('mouseleave', (e) => {
+      if (e.relatedTarget && seabedSubmenu.contains(e.relatedTarget)) return
+      seabedSubmenu.classList.add('hidden')
+      seabedParent.classList.remove('open')
+    })
+    seabedSubmenu.addEventListener('mouseleave', () => {
+      seabedSubmenu.classList.add('hidden')
+      seabedParent.classList.remove('open')
+    })
+  }
+  wireSliderInput('mv-seabed-height', 'mv-seabed-height-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedHeight(v)
+  })
+  wireSliderInput('mv-seabed-scale', 'mv-seabed-scale-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedScale(v)
+  })
+  // Rocks slider's raw value (0..100) is the probability percent;
+  // wireSliderInput divides by 100 before calling the callback, so
+  // `v` here is already 0..1 - exactly what setSeabedRockChance
+  // wants.  Custom formatter shows the raw int with a % suffix.
+  wireSliderInput('mv-seabed-rocks', 'mv-seabed-rocks-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedRockChance(v)
+  }, (raw) => `${raw}%`)
   wireToggleRow('mv-opt-water-reflections', (on) => {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWaterReflectionsEnabled(on)
   })
@@ -11291,6 +11361,9 @@ function wireModelViewMenu() {
   })
   wireToggleRow('mv-opt-godbeams', (on) => {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setGodBeamsEnabled(on)
+  })
+  wireToggleRow('mv-opt-dof', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setDoFEnabled(on)
   })
   // Environment parent row — click toggles the .open class on the
   // row, which CSS uses to show/hide the submenu.  Clicking again
@@ -11380,6 +11453,85 @@ function wireModelViewMenu() {
       if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
       if (envParent) envParent.classList.remove('open')
       if (envSubmenu) envSubmenu.classList.add('hidden')
+    })
+  }
+
+  // ── Team Colour picker ───────────────────────────────────────────
+  // Mirrors the env-row mechanism: hover opens the submenu, hover on
+  // a row previews via setTeamColor, click commits, mouseleave on the
+  // submenu reverts to whichever row is .active.  Blue is the ARM
+  // default — picking it disables the shader's hue shift entirely.
+  const TEAM_COLOURS = {
+    blue:   null, // sentinel — original blue, no recolour
+    red:    [0.92, 0.18, 0.16],
+    green:  [0.20, 0.78, 0.28],
+    yellow: [0.95, 0.85, 0.20],
+    purple: [0.62, 0.30, 0.85],
+    cyan:   [0.20, 0.80, 0.92],
+    orange: [0.98, 0.55, 0.18],
+    white:  [0.95, 0.95, 0.95],
+    black:  [0.10, 0.10, 0.12],
+  }
+  const teamParent = $('#mv-opt-team-row')
+  const teamSubmenu = $('#mv-team-submenu')
+  const teamLabel = $('#mv-team-current-lbl')
+  const teamIco = $('#mv-team-current-ico')
+  let teamPreviewing = false
+  const getCommittedTeam = () => {
+    const r = [...$$('.mv-team-row')].find((row) => row.classList.contains('active'))
+    return r?.dataset.mvTeam || 'blue'
+  }
+  const applyTeam = (key) => {
+    if (!modelViewerInstance?.renderer) return
+    modelViewerInstance.renderer.setTeamColor(TEAM_COLOURS[key] ?? null)
+  }
+  const revertTeamIfPreviewing = () => {
+    if (!teamPreviewing) return
+    teamPreviewing = false
+    applyTeam(getCommittedTeam())
+  }
+  if (teamSubmenu) {
+    teamSubmenu.addEventListener('mouseleave', () => revertTeamIfPreviewing())
+  }
+  if (teamParent && teamSubmenu) {
+    teamParent.addEventListener('mouseenter', () => {
+      teamSubmenu.classList.remove('hidden')
+      teamParent.classList.add('open')
+    })
+    teamParent.addEventListener('mouseleave', (e) => {
+      if (e.relatedTarget && teamSubmenu.contains(e.relatedTarget)) return
+      teamSubmenu.classList.add('hidden')
+      teamParent.classList.remove('open')
+      revertTeamIfPreviewing()
+    })
+    teamParent.addEventListener('click', (e) => {
+      if (e.target.closest('.mv-team-row')) return
+      e.stopPropagation()
+      const wasHidden = teamSubmenu.classList.contains('hidden')
+      teamSubmenu.classList.toggle('hidden', !wasHidden)
+      teamParent.classList.toggle('open', wasHidden)
+      if (!wasHidden) revertTeamIfPreviewing()
+    })
+  }
+  for (const row of $$('.mv-team-row')) {
+    row.addEventListener('mouseenter', () => {
+      const key = row.dataset.mvTeam
+      if (!key) return
+      teamPreviewing = (key !== getCommittedTeam())
+      applyTeam(key)
+    })
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const key = row.dataset.mvTeam
+      if (!key) return
+      $$('.mv-team-row').forEach((r) => r.classList.toggle('active', r === row))
+      if (teamLabel) teamLabel.textContent = rowNameText(row)
+      const rowIco = row.querySelector('.ico')
+      if (teamIco && rowIco) teamIco.textContent = rowIco.textContent
+      teamPreviewing = false
+      applyTeam(key)
+      if (teamParent) teamParent.classList.remove('open')
+      if (teamSubmenu) teamSubmenu.classList.add('hidden')
     })
   }
   const overlay = $('#mv-act-wire-overlay')
@@ -11491,12 +11643,33 @@ async function activateModelTab(tab) {
       // viewer messages too — same DOM element the map editor
       // writes into.
       statusEl: $('#status'),
-      onModelLoaded: (model) => renderPieceTree(model),
+      onModelLoaded: (model, cob) => {
+        renderPieceTree(model)
+        refreshCobPanel(cob)
+        // The Actions inspector lists every COB entry-point — re-
+        // render whenever a new unit loads so the buttons reflect
+        // THIS unit's scripts (not whatever was open before).
+        renderMvActionsPanel(cob)
+        // Hook the inspector refresh into the renderer's per-frame
+        // callback.  Done here (not at construction) because the
+        // renderer is created lazily inside ModelViewer.open(), so
+        // it doesn't exist when activateModelTab first runs.  By
+        // the time onModelLoaded fires the renderer is live.
+        // Idempotent — reassignment is cheap.
+        if (modelViewerInstance.renderer) {
+          modelViewerInstance.renderer.onAfterFrame = (dtMs) => refreshMvInspectors(dtMs)
+        }
+      },
     })
     // Expose the viewer + its renderer/camera on window so external
     // tooling (the preview eval harness, dev console) can poke camera
     // angles or sky presets without having to chase closures.
     window.__modelViewer = modelViewerInstance
+  }
+  // Wire the per-frame inspector refresh callback the first time
+  // the renderer is alive.  Idempotent — re-assignment is cheap.
+  if (modelViewerInstance.renderer && !modelViewerInstance.renderer.onAfterFrame) {
+    modelViewerInstance.renderer.onAfterFrame = (dtMs) => refreshMvInspectors(dtMs)
   }
   const autoBtn = $('#mv-act-autorotate')
   if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')
@@ -11573,6 +11746,27 @@ function applyDefaultGroundFor(meta) {
     modelViewerInstance.camera.target[1] += yOff
     modelViewerInstance.renderer.requestRedraw()
   }
+  // Submerged units need the camera eye to sit BELOW the water
+  // plane, otherwise the renderer paints the surface from above
+  // and the sub itself disappears under the waves.  open() set
+  // pitch=18 deg / distance×1.25 unconditionally — for subs we
+  // recompute pitch so eye.y lands a few units under uWaterY.
+  //   eye.y = target.y + distance · sin(pitch)
+  // Solve for pitch given a target eye.y of (waterY - margin).
+  if (meta?.submersionMode === 'submerged' && modelViewerInstance.camera) {
+    const cam = modelViewerInstance.camera
+    const r = modelViewerInstance.renderer
+    const waterY = r._getWaterY ? r._getWaterY() : 0
+    const margin = 6 // eye sits this far under the surface
+    const desiredEyeY = waterY - margin
+    const dy = desiredEyeY - cam.target[1]
+    const dist = Math.max(1, cam.distance || 1)
+    // Clamp the sine to [-1, 0.05] so we always land at or just
+    // below horizontal even if the math says the eye should rise.
+    const sinP = Math.max(-1, Math.min(0.05, dy / dist))
+    cam.pitch = Math.asin(sinP)
+    r.requestRedraw()
+  }
   const activeRow = [...$$('.mv-ground-row')].find((r) => r.dataset.mvGround === want)
   $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === activeRow))
   // Sync the dropdown button face so the closed dropdown shows
@@ -11583,7 +11777,11 @@ function applyDefaultGroundFor(meta) {
   const groundIco = $('#mv-ground-current-ico')
   if (activeRow) {
     const ico = activeRow.querySelector('.ico')
-    if (groundLabel) groundLabel.textContent = activeRow.textContent.trim().replace(/✓.*$/, '').trim()
+    // rowNameText strips the .ico / .menu-check / .chev-right spans
+    // so the button face shows "Terrain" not "🌱 Terrain 🌱 Terrain" -
+    // the raw textContent of the row included the icon emoji and we
+    // were already painting the icon separately into groundIco.
+    if (groundLabel) groundLabel.textContent = rowNameText(activeRow)
     if (groundIco && ico) groundIco.textContent = ico.textContent
   }
 }
@@ -11617,6 +11815,624 @@ function pieceDisplayName(piece) {
 // drawer-group (if it has children) or a drawer-item-piece (leaf).
 // Click the row to centre the camera on the piece; hover highlights
 // the piece's wireframe in red; the eye toggle hides/shows the piece.
+// ── Model viewer floating inspectors ──────────────────────────────
+//
+// Three overlays — COB Scripts, Static Vars, Camera — that hover
+// over the canvas, can be dragged / collapsed / closed, and are
+// individually toggleable from the View dropdown.  Each is hidden
+// by default; the user opts in via the View menu (and the prefs
+// remember the choice).  Per-frame contents are refreshed by
+// refreshMvInspectors() which the model renderer calls at the
+// tail of every redraw — cheap when panels are hidden because
+// the function early-returns on each closed panel.
+
+const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars', 'mv-inspector-camera']
+
+function wireMvInspectors() {
+  // Wire drag + collapse + close on each panel + the View menu
+  // toggle that brings the panel back when it was closed.  Order
+  // matters: the drag handler reads from state.mvInspectorPos so
+  // we restore positions FIRST, then attach listeners.
+  for (const id of MV_INSPECTOR_IDS) wireMvInspector(id)
+  for (const btn of document.querySelectorAll('#mv-view-dropdown-popup .toggle-row')) {
+    const panelId = btn.dataset.panel
+    if (!panelId) continue
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const panel = document.getElementById(panelId)
+      if (!panel) return
+      const next = panel.classList.contains('hidden')
+      setMvInspectorVisible(panelId, next)
+    })
+  }
+  // Threads panel's "Stop All" header button — wired ONCE at boot.
+  // stopPropagation so a click inside the draggable header doesn't
+  // start a drag gesture or fire the collapse/close buttons.
+  const stopAll = document.getElementById('mv-threads-stopall')
+  if (stopAll && stopAll.dataset.wired !== '1') {
+    stopAll.dataset.wired = '1'
+    stopAll.addEventListener('click', (e) => {
+      e.stopPropagation()
+      modelViewerInstance?.cob?.runtime?.killAllThreads?.()
+    })
+    stopAll.addEventListener('pointerdown', (e) => e.stopPropagation())
+    stopAll.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
+  // Restore visibility prefs.  Default each panel to VISIBLE on
+  // first open — the inspectors are the main way to inspect a
+  // unit's COB state, so showing them by default avoids requiring
+  // the user to dig into the View menu just to see anything.  Once
+  // the user explicitly closes a panel that decision is persisted
+  // (stored as `false` in state.mvInspectorVisible) and respected
+  // on subsequent opens — only the never-toggled case defaults on.
+  const vis = state.mvInspectorVisible || {}
+  for (const id of MV_INSPECTOR_IDS) {
+    const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
+    const visible = wasSet ? !!vis[id] : true
+    setMvInspectorVisible(id, visible, { persist: false })
+  }
+}
+
+function wireMvInspector(panelId) {
+  const panel = document.getElementById(panelId)
+  if (!panel) return
+  const header = document.getElementById(panelId + '-header')
+  // Restore saved position if any.
+  const savedPos = (state.mvInspectorPos || {})[panelId]
+  if (savedPos) {
+    panel.style.top = savedPos.top + 'px'
+    panel.style.left = savedPos.left + 'px'
+    // Clear the right/bottom defaults the CSS sets for the
+    // right-column anchored panels — without this a previously-
+    // dragged Camera or StaticVars panel would still get pulled
+    // back to the right/bottom edge by the unfired CSS rule.
+    // Same goes for `transform: translateY(-50%)` on the Scripts
+    // panel's vertical-centre default — leaving it in place after
+    // restore offsets the saved top by half the panel's height.
+    panel.style.right = 'auto'
+    panel.style.bottom = 'auto'
+    panel.style.transform = 'none'
+  }
+  const savedCollapsed = (state.mvInspectorCollapsed || {})[panelId]
+  if (savedCollapsed) panel.classList.add('collapsed')
+  // Collapse / close buttons.
+  for (const btn of panel.querySelectorAll('.mv-inspector-toggle')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      panel.classList.toggle('collapsed')
+      btn.textContent = panel.classList.contains('collapsed') ? '+' : '−'
+      state.mvInspectorCollapsed = state.mvInspectorCollapsed || {}
+      state.mvInspectorCollapsed[panelId] = panel.classList.contains('collapsed')
+      persistPrefs()
+    })
+  }
+  for (const btn of panel.querySelectorAll('.mv-inspector-close')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      setMvInspectorVisible(panelId, false)
+    })
+  }
+  // Drag via header.  Constrained to the .model-viewer-shell so
+  // panels can't be flung over the ribbon / sidebar / footer.
+  if (header) {
+    let dragOff = null
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return
+      e.preventDefault()
+      const r = panel.getBoundingClientRect()
+      dragOff = { dx: e.clientX - r.left, dy: e.clientY - r.top }
+      header.classList.add('dragging')
+    })
+    window.addEventListener('mousemove', (e) => {
+      if (!dragOff) return
+      // Clamp to the stage (canvas area), not the whole shell — the
+      // shell includes the ribbon, and a panel dragged into that row
+      // would overlap the toolbar.  Stage is also the panel's
+      // positioning context, so its rect's top/left match the
+      // coordinate origin we're writing into style.top / style.left.
+      const stage = document.querySelector('.model-viewer-stage')
+      if (!stage) return
+      const sr = stage.getBoundingClientRect()
+      const w = panel.offsetWidth || 220
+      const h = panel.offsetHeight || 100
+      const left = clamp(e.clientX - dragOff.dx - sr.left, 4, Math.max(4, sr.width - w - 4))
+      const top = clamp(e.clientY - dragOff.dy - sr.top, 4, Math.max(4, sr.height - h - 4))
+      panel.style.left = left + 'px'
+      panel.style.top = top + 'px'
+      // Clear right/bottom/transform — panels whose default position
+      // is right/bottom-anchored (Camera/StaticVars) or transform-
+      // centred (Scripts) carry CSS rules for those edges; once the
+      // user drags them we pin to top/left in px and need to unstick
+      // the original edge rules so the panel actually follows the
+      // cursor instead of being yanked back to its CSS default.
+      panel.style.right = 'auto'
+      panel.style.bottom = 'auto'
+      panel.style.transform = 'none'
+    })
+    window.addEventListener('mouseup', () => {
+      if (!dragOff) return
+      dragOff = null
+      header.classList.remove('dragging')
+      const left = parseInt(panel.style.left, 10) || 0
+      const top = parseInt(panel.style.top, 10) || 0
+      state.mvInspectorPos = state.mvInspectorPos || {}
+      state.mvInspectorPos[panelId] = { top, left }
+      persistPrefs()
+    })
+  }
+}
+
+function setMvInspectorVisible(panelId, visible, opts = {}) {
+  const panel = document.getElementById(panelId)
+  if (!panel) return
+  panel.classList.toggle('hidden', !visible)
+  // Mirror the toggle state into the View menu button.
+  const btn = document.querySelector(`#mv-view-dropdown-popup [data-panel="${panelId}"]`)
+  if (btn) {
+    btn.dataset.on = visible ? '1' : '0'
+    btn.classList.toggle('active', visible)
+  }
+  if (opts.persist !== false) {
+    state.mvInspectorVisible = state.mvInspectorVisible || {}
+    state.mvInspectorVisible[panelId] = !!visible
+    persistPrefs()
+  }
+}
+
+// refreshMvInspectors is called from the model renderer's draw loop
+// each frame.  Cheap when nothing is visible — checks each panel's
+// hidden flag and bails early.  Throttled to 4 Hz so an
+// auto-rotating camera doesn't burn DOM ops every animation tick.
+let _mvInspectorThrottleMs = 0
+function refreshMvInspectors(dtMs = 16) {
+  _mvInspectorThrottleMs += dtMs
+  if (_mvInspectorThrottleMs < 250) return
+  _mvInspectorThrottleMs = 0
+  const mv = modelViewerInstance
+  if (!mv) return
+  // COB Scripts panel
+  const scriptsPanel = document.getElementById('mv-inspector-scripts')
+  if (scriptsPanel && !scriptsPanel.classList.contains('hidden')) {
+    const body = document.getElementById('mv-inspector-scripts-body')
+    if (body) renderMvScriptsPanel(body, mv.cob)
+  }
+  // Static Vars panel
+  const svPanel = document.getElementById('mv-inspector-staticvars')
+  if (svPanel && !svPanel.classList.contains('hidden')) {
+    const body = document.getElementById('mv-inspector-staticvars-body')
+    if (body) renderMvStaticVarsPanel(body, mv.cob)
+  }
+  // Camera panel
+  const camPanel = document.getElementById('mv-inspector-camera')
+  if (camPanel && !camPanel.classList.contains('hidden')) {
+    renderMvCameraPanel(mv)
+  }
+}
+
+function renderMvScriptsPanel(body, cob) {
+  body.replaceChildren()
+  if (!cob || !cob.runtime) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No COB loaded.'
+    body.appendChild(empty)
+    return
+  }
+  const live = cob.runtime._threads
+  const killed = cob.runtime._recentlyKilled || []
+  if (live.length === 0 && killed.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No active scripts.'
+    body.appendChild(empty)
+    return
+  }
+  // Render killed threads FIRST so they sit at the top while their
+  // red flash plays - draws the user's eye to which script just
+  // got cancelled.  After the CSS animation completes (~1.2s) the
+  // runtime will have evicted them from _recentlyKilled.
+  for (const k of killed) {
+    body.appendChild(renderMvThreadRow({
+      script: k.script,
+      pc: k.pc,
+      sleepMs: 0,
+      waitOn: null,
+      signalMask: k.signalMask,
+      _killedBy: k.killedBySignal,
+    }, true, null))
+  }
+  for (const t of live) {
+    body.appendChild(renderMvThreadRow(t, false, cob))
+  }
+}
+
+// renderMvThreadRow builds one row for the scripts overlay.
+// `killed=true` adds the .killed class which triggers the red
+// flash animation.  Signal chips matching the killing mask get
+// their own `.killed` class so the user can spot which bit took
+// the row down.  Each thread renders THREE lines:
+//   1. script name + PC + byte offset
+//   2. waiting/sleeping/running status, indented
+//   3. signal mask, indented
+function renderMvThreadRow(t, killed, cob) {
+  const row = document.createElement('div')
+  row.className = killed ? 'mv-cob-thread-row killed' : 'mv-cob-thread-row'
+  const name = document.createElement('div')
+  name.className = 'mv-cob-thread-name'
+  const left = document.createElement('span')
+  left.textContent = t.script.name
+  const pc = document.createElement('span')
+  pc.className = 'mv-cob-thread-pc'
+  const inst = t.script.instructions[t.pc] || t.script.instructions[t.script.instructions.length - 1]
+  const off = inst ? `0x${inst.offset.toString(16)}` : '—'
+  pc.textContent = `#${t.pc} @ ${off}`
+  name.appendChild(left)
+  name.appendChild(pc)
+  // Per-row trash-can — only on LIVE rows (kill replays already
+  // dead).  Click drops just this thread; killed status flashes
+  // red briefly via the existing _recentlyKilled buffer on the
+  // next render tick.  stopPropagation so clicking inside the
+  // (potentially draggable) panel header doesn't start a drag.
+  if (cob && !killed) {
+    const kill = document.createElement('button')
+    kill.className = 'mv-cob-thread-kill'
+    kill.title = `Terminate this ${t.script.name} thread`
+    kill.textContent = '🗑'
+    kill.addEventListener('click', (e) => {
+      e.stopPropagation()
+      cob.runtime.killThreadById(t.id)
+    })
+    kill.addEventListener('pointerdown', (e) => e.stopPropagation())
+    name.appendChild(kill)
+  }
+  row.appendChild(name)
+  // Status line — sleep / wait / running, in a sentence the user
+  // can read at a glance.  Indented (CSS padding-left on
+  // .mv-cob-thread-detail) so it visually groups under the name.
+  const statusDetail = document.createElement('div')
+  statusDetail.className = 'mv-cob-thread-detail'
+  let statusText
+  if (killed) {
+    statusText = `killed by signal ${t._killedBy}`
+  } else if (t.sleepMs > 0) {
+    // Show whole-second precision when long; ms when short.  The
+    // user wanted to "see it's waiting" — give a concrete value.
+    statusText = t.sleepMs >= 1000
+      ? `Sleeping ${(t.sleepMs / 1000).toFixed(1)}s remaining`
+      : `Sleeping ${t.sleepMs | 0}ms remaining`
+  } else if (t.waitOn) {
+    // waitOn.type is 'turn' or 'move'.  We translate to a human
+    // sentence; piece + axis would be ideal but the runtime
+    // doesn't store them post-wait.  TODO if anyone wants that.
+    statusText = t.waitOn.type === 'turn'
+      ? 'Waiting for turn to complete'
+      : 'Waiting for move to complete'
+  } else {
+    statusText = 'Running'
+  }
+  statusDetail.textContent = `status: ${statusText}`
+  row.appendChild(statusDetail)
+  // Signal mask line (also indented).
+  const sigDetail = document.createElement('div')
+  sigDetail.className = 'mv-cob-thread-detail'
+  if (t.signalMask !== 0) {
+    sigDetail.appendChild(document.createTextNode('signals: '))
+    for (let b = 0; b < 16; b++) {
+      const bit = 1 << b
+      if (t.signalMask & bit) {
+        const chip = document.createElement('span')
+        chip.className = killed && (t._killedBy & bit) ? 'mv-sig-bit killed' : 'mv-sig-bit'
+        chip.textContent = String(bit)
+        sigDetail.appendChild(chip)
+      }
+    }
+  } else {
+    sigDetail.textContent = 'signals: —'
+  }
+  row.appendChild(sigDetail)
+  return row
+}
+
+function renderMvStaticVarsPanel(body, cob) {
+  body.replaceChildren()
+  if (!cob || !cob.runtime) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No COB loaded.'
+    body.appendChild(empty)
+    return
+  }
+  const vars = cob.runtime.staticVars
+  if (vars.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No static vars.'
+    body.appendChild(empty)
+    return
+  }
+  for (let i = 0; i < vars.length; i++) {
+    const row = document.createElement('div')
+    row.className = 'mv-staticvar-row'
+    const name = document.createElement('span')
+    name.className = 'mv-sv-name'
+    name.textContent = `global_${i}`
+    const val = document.createElement('span')
+    val.className = 'mv-sv-value'
+    val.textContent = String(vars[i] | 0)
+    row.appendChild(name)
+    row.appendChild(val)
+    body.appendChild(row)
+  }
+}
+
+function renderMvCameraPanel(mv) {
+  const cam = mv.camera
+  if (!cam) return
+  const fmt = (a, p = 2) => Array.isArray(a) ? `(${a.map(v => v.toFixed(p)).join(', ')})` : a.toFixed(p)
+  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
+  set('mv-ci-eye', fmt(cam.eye, 1))
+  set('mv-ci-target', fmt(cam.target, 1))
+  set('mv-ci-yaw', `${(cam.yaw * 180 / Math.PI).toFixed(1)}°`)
+  set('mv-ci-pitch', `${(cam.pitch * 180 / Math.PI).toFixed(1)}°`)
+  set('mv-ci-dist', cam.distance.toFixed(1) + ' wu')
+  if (cam.fov !== undefined) set('mv-ci-fov', `${(cam.fov * 180 / Math.PI).toFixed(0)}°`)
+  else set('mv-ci-fov', '—')
+}
+
+// renderMvActionsPanel rebuilds the Actions inspector's button list
+// from the currently-loaded COB.  Re-run when:
+//   1) a new model loads (onModelLoaded hook in activateModelTab),
+//   2) the Include-Private checkbox toggles (handler set by
+//      wireMvActionsPanel below).
+// Private filter is name-first-char-isLowercase — TA convention is
+// CamelCase for public entry points (Create, Activate, FirePrimary)
+// and lowercase for internal helpers (activatescr, deactivatescr,
+// initstate).  Re-uses runCobEntry so the action buttons pass the
+// same argument-injection logic the ribbon dropdown does — random
+// heading/level pitch for Aim*, factory-redirect for Activate, etc.
+function renderMvActionsPanel(cob) {
+  // Wire the checkbox handler once.  Idempotent guard via dataset
+  // flag avoids stacking listeners on each model reload.
+  wireMvActionsPanel()
+  const list = document.getElementById('mv-actions-list')
+  if (!list) return
+  list.replaceChildren()
+  if (!cob || !cob.runtime) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No COB loaded.'
+    list.appendChild(empty)
+    return
+  }
+  const includePrivate = !!state.mvActionsIncludePrivate
+  const names = cob.listScripts()
+  // Alphabetical sort — case-insensitive so the lowercase private
+  // helpers (activatescr, deactivatescr) interleave with their
+  // CamelCase neighbours instead of clumping together at the end of
+  // an ASCII-sorted list (where 'a' > 'Z').
+  const visible = names
+    .filter((n) => {
+      const first = n.charAt(0)
+      const isPrivate = first === first.toLowerCase() && first !== first.toUpperCase()
+      return includePrivate || !isPrivate
+    })
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+  if (visible.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = includePrivate ? 'COB has no scripts.' : 'Only private helpers — tick Include Private.'
+    list.appendChild(empty)
+    return
+  }
+  for (const name of visible) {
+    const first = name.charAt(0)
+    const isPrivate = first === first.toLowerCase() && first !== first.toUpperCase()
+    const btn = document.createElement('button')
+    btn.className = isPrivate ? 'mv-actions-btn private' : 'mv-actions-btn'
+    btn.textContent = name
+    btn.title = isPrivate
+      ? `Run ${name} (internal helper)`
+      : `Run ${name} (one-shot)`
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      runCobEntry(cob, name)
+    })
+    list.appendChild(btn)
+  }
+}
+
+function wireMvActionsPanel() {
+  const cb = document.getElementById('mv-actions-private')
+  if (!cb || cb.dataset.wired === '1') return
+  cb.dataset.wired = '1'
+  cb.checked = !!state.mvActionsIncludePrivate
+  cb.addEventListener('change', () => {
+    state.mvActionsIncludePrivate = !!cb.checked
+    persistPrefs()
+    renderMvActionsPanel(modelViewerInstance?.cob)
+  })
+  // Stop the click from bubbling out — without this, clicking the
+  // checkbox inside the panel header bubbles up to the (potential)
+  // drag handler or outside-click dismissers and feels jumpy.
+  cb.addEventListener('click', (e) => e.stopPropagation())
+  cb.addEventListener('pointerdown', (e) => e.stopPropagation())
+}
+
+// wireCobAttributeSliders is idempotent — safe to call on every
+// refreshCobPanel without rebinding handlers.  Uses an existence
+// guard via a dataset flag so repeated invocations are no-ops.
+function wireCobAttributeSliders() {
+  const dmg = document.getElementById('mv-cob-damage')
+  const dmgVal = document.getElementById('mv-cob-damage-val')
+  if (dmg && dmg.dataset.wired !== '1') {
+    dmg.addEventListener('input', () => {
+      const v = parseInt(dmg.value, 10) | 0
+      if (dmgVal) dmgVal.textContent = `${v}%`
+      modelViewerInstance?.setDamage(v)
+    })
+    dmg.addEventListener('click', (e) => e.stopPropagation())
+    dmg.addEventListener('pointerdown', (e) => e.stopPropagation())
+    dmg.dataset.wired = '1'
+  }
+  const pb = document.getElementById('mv-cob-playback')
+  const pbVal = document.getElementById('mv-cob-playback-val')
+  if (pb && pb.dataset.wired !== '1') {
+    pb.addEventListener('input', () => {
+      const v = (parseInt(pb.value, 10) | 0) / 100
+      if (pbVal) pbVal.textContent = `${v.toFixed(2)}×`
+      const cob = modelViewerInstance?.cob
+      if (cob) cob.runtime.setPlaybackRate(v)
+    })
+    pb.addEventListener('click', (e) => e.stopPropagation())
+    pb.addEventListener('pointerdown', (e) => e.stopPropagation())
+    pb.dataset.wired = '1'
+  }
+}
+
+// refreshCobPanel wires the Animation→COB dropdown buttons to the
+// currently-loaded unit's runtime.  Entry-point buttons grey out
+// when the script isn't present.  The "All scripts" list at the
+// bottom enumerates every entry point the COB carries — useful
+// for AimFromPrimary / QueryPrimary / RestoreAfterDelay and other
+// less-common scripts the static button row doesn't enumerate.
+function refreshCobPanel(cob) {
+  wireCobAttributeSliders()
+  // Sync slider displays to the new unit's state.
+  const dmg = document.getElementById('mv-cob-damage')
+  const dmgVal = document.getElementById('mv-cob-damage-val')
+  if (dmg && dmgVal) {
+    const v = modelViewerInstance?.cobDamage || 0
+    dmg.value = String(v)
+    dmgVal.textContent = `${v}%`
+  }
+  const pb = document.getElementById('mv-cob-playback')
+  const pbVal = document.getElementById('mv-cob-playback-val')
+  if (pb && pbVal) {
+    const v = cob ? cob.runtime.playbackRate : 1
+    pb.value = String(Math.round(v * 100))
+    pbVal.textContent = `${v.toFixed(2)}×`
+  }
+  for (const btn of $$('.cob-entry')) {
+    const name = btn.dataset.cobEntry
+    const has = cob && cob.hasScript(name)
+    // Hide rows the loaded COB doesn't define instead of greying
+    // them out — a row of disabled buttons in the dropdown adds
+    // noise without telling the user anything useful.  When no
+    // COB is loaded at all, show every row (the global empty
+    // state is communicated by the script list below).
+    btn.classList.toggle('hidden', !!cob && !has)
+    btn.disabled = false
+    btn.onclick = has ? (e) => {
+      e.stopPropagation()
+      runCobEntry(cob, name)
+    } : null
+  }
+  const list = $('#mv-cob-script-list')
+  if (!list) return
+  list.replaceChildren()
+  if (!cob) {
+    const empty = document.createElement('div')
+    empty.className = 'cob-empty'
+    empty.textContent = 'No COB attached.'
+    list.appendChild(empty)
+    return
+  }
+  const names = cob.listScripts()
+  if (!names.length) {
+    const empty = document.createElement('div')
+    empty.className = 'cob-empty'
+    empty.textContent = 'COB has no scripts.'
+    list.appendChild(empty)
+    return
+  }
+  for (const name of names) {
+    const row = document.createElement('button')
+    row.className = 'cob-row'
+    row.textContent = name
+    row.title = `Run ${name} (one-shot)`
+    row.onclick = (e) => { e.stopPropagation(); runCobEntry(cob, name) }
+    list.appendChild(row)
+  }
+}
+
+// runCobEntry invokes a script by name, randomising any required
+// inputs.  AimWeapon-class scripts expect (heading, pitch) on the
+// stack in TA's fixed-point angle units (65536 = 360°); we pick a
+// fully random target in the unit's forward hemisphere so every
+// click visibly retargets to a fresh spot.  Primary and secondary
+// can run concurrently — the runtime supports independent threads
+// per weapon (they signal-mask different bits so retargeting one
+// weapon does NOT interrupt the other).
+function runCobEntry(cob, name) {
+  if (!cob || !cob.hasScript(name)) return
+  // Factory units (Krogoth Gantry, Construction Kbot Lab, etc.)
+  // expose the actual open / close animation as a lowercase
+  // helper script (`activatescr`, `deactivatescr`, `OpenYard`,
+  // `CloseYard`) and route the user-facing `Activate` /
+  // `Deactivate` through a state-machine query (RequestState)
+  // that needs the live game loop to dispatch.  In the studio
+  // viewer that game loop doesn't exist, so Activate sits inert.
+  // Fire the helper directly so the visible animation plays.
+  if (/^Activate$/i.test(name)) {
+    if (cob.hasScript('activatescr')) cob.start('activatescr')
+    if (cob.hasScript('OpenYard')) cob.start('OpenYard')
+  }
+  if (/^Deactivate$/i.test(name)) {
+    if (cob.hasScript('deactivatescr')) cob.start('deactivatescr')
+    if (cob.hasScript('CloseYard')) cob.start('CloseYard')
+  }
+  if (/^Aim(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(name)) {
+    // Each Aim* call's bos spawns RestoreAfterDelay which sleeps
+    // the reload-timer then snaps the turret back to neutral.  If
+    // the previous aim's RestoreAfterDelay is still pending when
+    // the user re-aims, its timer fires partway through the new
+    // aim's hold window and yanks the turret back early — the
+    // "instant snap" the user reported.  Kill any stale ones so
+    // the LATEST aim gets its full timer.
+    cob.runtime.killThreadsByName('RestoreAfterDelay')
+    cob.runtime.killThreadsByName('RestorePosition')
+    // Independent random heading per click - no per-weapon bias.
+    // Forward hemisphere only (±90°): aiming behind a unit clips
+    // through the body on most TA models and looks broken.
+    //
+    // Pitch is NOT random — we aim at a virtual target sitting at
+    // the unit's own elevation, ≥10× the unit size away.  At that
+    // distance the angle from a turret mounted on top of the unit
+    // down to a same-altitude target is ~ atan(turret_height /
+    // distance) — a few degrees at most.  This stops the gun from
+    // tipping down through the deck when the random pitch happened
+    // to land at -15° with the implicit target inside the unit's
+    // own build footprint (the "shooting through your own hull"
+    // bug the user reported).  Heights from model.bounds: max Y
+    // is the top of the unit's bbox (a reasonable proxy for where
+    // the turret sits), centre Y is the target altitude.
+    const TURNS = 65536
+    const heading = Math.floor((Math.random() - 0.5) * TURNS * 0.5)
+    const m = modelViewerInstance?.model
+    let pitch = 0
+    if (m && m.bounds && m.bounds.min && m.bounds.max) {
+      const ext = [
+        m.bounds.max[0] - m.bounds.min[0],
+        m.bounds.max[1] - m.bounds.min[1],
+        m.bounds.max[2] - m.bounds.min[2],
+      ]
+      // Unit size = largest horizontal extent; height feeds the
+      // turret-mount offset, not the distance, so the aim line
+      // stays roughly flat regardless of how tall the unit is.
+      const unitSize = Math.max(ext[0], ext[2]) || ext[1] || 1
+      const distance = 10 * unitSize
+      const turretY = m.bounds.max[1]
+      const targetY = (m.bounds.min[1] + m.bounds.max[1]) * 0.5
+      const dy = targetY - turretY // negative → looking down
+      const pitchRad = Math.atan2(dy, distance)
+      pitch = Math.round(pitchRad * TURNS / (2 * Math.PI))
+    }
+    cob.start(name, [heading, pitch])
+    return
+  }
+  cob.start(name)
+}
+
 function renderPieceTree(model) {
   const host = $('#model-viewer-tree')
   if (!host || !model) return

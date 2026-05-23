@@ -209,6 +209,12 @@ func contentTypeFor(name string) string {
 		return "image/svg+xml"
 	case ".png":
 		return "image/png"
+	case ".glsl", ".vert", ".frag", ".vs", ".fs":
+		// GLSL source files served as plain text so the browser's
+		// fetch().text() returns the raw shader body.  The renderer's
+		// shader-loader.js then runs the #include preprocessor before
+		// handing the text to glShaderSource.
+		return "text/plain; charset=utf-8"
 	}
 	return "application/octet-stream"
 }

@@ -18,181 +18,23 @@
 // lighting + a soft blob shadow on the ground plane.
 
 import { Mat4 } from './mat4.js'
+import { loadAllShaders } from './shader-loader.js'
 
-const VERTEX_STRIDE = 8 * 4 // 8 floats × 4 bytes
+const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 const POS_OFFSET = 0
 const NRM_OFFSET = 3 * 4
 const UV_OFFSET = 6 * 4
+const AO_OFFSET = 8 * 4
 
 const SHADOW_MAP_SIZE = 1024
 
-// ── Main shaders ─────────────────────────────────────────────────────
-//
-// vWorldPos is forwarded to the fragment shader so we can transform
-// world-space positions into light space for shadow sampling.
-
-// SEA_WAVES_GLSL holds the shared sea helpers (wave field, caustic,
-// seabed height) injected into every shader that needs them — the
-// ground program for surface & seabed, and the main program so the
-// hull picks up bounce light + shimmer that tracks the water below.
-// Declared first because const has temporal-dead-zone semantics; the
-// MAIN/GROUND shader templates below interpolate it via ${...}.
-const SEA_WAVES_GLSL = `
-  // Hash + value noise helpers — shared between the sea (for domain
-  // warping the wave field so it doesn't read as a sinusoid grid)
-  // and the seabed (for rock placement).  Standard prime-vector
-  // hash, smoothstep-interpolated value noise.
-  float seaHash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float seaNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = seaHash(i);
-    float b = seaHash(i + vec2(1.0, 0.0));
-    float c = seaHash(i + vec2(0.0, 1.0));
-    float d = seaHash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-  }
-
-  // seaWaveHS: 5-octave wave field with prime-ratio frequencies and
-  // cross-axis interference, then domain-warped by value noise so
-  // the surface never reads as a tiled grid of sines.  Peak
-  // amplitude is around 2.6 wu — tall enough to produce visible
-  // cresting and breaking foam, low enough that a battleship still
-  // sits on rather than under the wave.
-  vec3 seaWaveHS(vec2 xzIn, float t) {
-    // Domain warp — perturb the input coordinates by value noise so
-    // the underlying sine pattern stops aligning to a grid.  Two
-    // octaves of warp give large-scale flow plus fine breakup; the
-    // time term lets the warp itself drift slowly with the swell.
-    vec2 wA = vec2(seaNoise(xzIn * 0.035 + t * 0.03),
-                   seaNoise(xzIn * 0.035 - t * 0.02 + 17.3)) - 0.5;
-    vec2 wB = vec2(seaNoise(xzIn * 0.12 + t * 0.06 + 3.7),
-                   seaNoise(xzIn * 0.12 - t * 0.05 + 9.1)) - 0.5;
-    vec2 xz = xzIn + wA * 18.0 + wB * 5.0;
-    // Five spatial scales.  Each octave gets its own offset so the
-    // beat pattern between layers shifts the "interesting" parts of
-    // the surface around as time progresses.
-    vec2 p1 = xz * 0.085;   // long primary swell (~74 wu wavelength)
-    vec2 p2 = xz * 0.21;    // secondary swell (~30 wu)
-    vec2 p3 = xz * 0.46;    // chop (~14 wu)
-    vec2 p4 = xz * 1.05;    // small chop (~6 wu)
-    vec2 p5 = xz * 2.40;    // capillary detail (~2.6 wu)
-    // Octave 1 — two crossing components, slightly off-perpendicular
-    // so the long swell isn't axis-aligned.  Largest amplitude →
-    // dominates the silhouette.
-    float A1a = sin(p1.x * 0.97 + p1.y * 0.21 + t * 0.42);
-    float A1b = sin(p1.y * 1.05 - p1.x * 0.18 - t * 0.36);
-    // Octave 2 — different direction.
-    float A2a = sin(p2.x * 0.78 - p2.y * 0.62 + t * 0.80);
-    float A2b = sin(p2.x * 0.21 + p2.y * 0.93 - t * 0.72);
-    // Octave 3 — chop with stronger time variation; crossing makes
-    // wave crests look broken rather than parallel.
-    float A3a = sin(p3.x * 1.13 + p3.y * 0.71 + t * 1.55);
-    float A3b = sin(p3.x * 0.42 - p3.y * 1.07 + t * 1.30);
-    // Octave 4 — small wavelets that put texture into the surface.
-    float A4a = sin(p4.x * 1.31 + p4.y * 0.87 + t * 2.30);
-    float A4b = sin(p4.x * 0.55 - p4.y * 1.21 + t * 2.65);
-    // Octave 5 — capillary glitter (negligible height contribution,
-    // matters mostly for the per-pixel normal).
-    float A5a = sin(p5.x * 0.93 + p5.y * 0.47 + t * 3.85);
-    float A5b = sin(p5.x * 0.27 - p5.y * 1.11 + t * 4.20);
-    // Slowly varying "gust" envelope: large patches of rougher water
-    // drift around the scene so the sea is more turbulent in some
-    // areas than others.  Range 0.55..1.75 — average wave near
-    // current amplitude, but pockets ~3× as tall (real cresting).
-    float gust = 1.0
-               + 0.35 * sin(xz.x * 0.018 + t * 0.13) * cos(xz.y * 0.020 - t * 0.10)
-               + 0.25 * sin((xz.x + xz.y) * 0.013 + t * 0.07)
-               + 0.15 * cos(xz.x * 0.031 - xz.y * 0.024 + t * 0.19);
-    gust = clamp(gust, 0.55, 1.75);
-    // Pure-noise layer mixed in directly — breaks the residual sine
-    // banding when the sinusoid octaves happen to constructively
-    // interfere.  Centered on 0 so it doesn't bias the mean height.
-    float noiseLayer = (seaNoise(xz * 0.18 + t * 0.06) - 0.5) * 0.45
-                     + (seaNoise(xz * 0.55 - t * 0.04 + 11.0) - 0.5) * 0.20;
-    float h = (A1a * 0.55 + A1b * 0.55
-            + A2a * 0.42 + A2b * 0.32
-            + A3a * 0.22 + A3b * 0.18
-            + A4a * 0.10 + A4b * 0.10
-            + A5a * 0.03 + A5b * 0.03
-            + noiseLayer) * gust;
-    // Slope: chain-rule each component.  freqs were declared above so
-    // the partials follow directly — keep these in sync if the
-    // amplitudes/frequencies change.
-    float dhx = cos(p1.x * 0.97 + p1.y * 0.21 + t * 0.42) * 0.97 * 0.085 * 0.55
-              + cos(p1.y * 1.05 - p1.x * 0.18 - t * 0.36) * (-0.18) * 0.085 * 0.55
-              + cos(p2.x * 0.78 - p2.y * 0.62 + t * 0.80) * 0.78 * 0.21 * 0.42
-              + cos(p2.x * 0.21 + p2.y * 0.93 - t * 0.72) * 0.21 * 0.21 * 0.32
-              + cos(p3.x * 1.13 + p3.y * 0.71 + t * 1.55) * 1.13 * 0.46 * 0.22
-              + cos(p3.x * 0.42 - p3.y * 1.07 + t * 1.30) * 0.42 * 0.46 * 0.18
-              + cos(p4.x * 1.31 + p4.y * 0.87 + t * 2.30) * 1.31 * 1.05 * 0.10
-              + cos(p4.x * 0.55 - p4.y * 1.21 + t * 2.65) * 0.55 * 1.05 * 0.10
-              + cos(p5.x * 0.93 + p5.y * 0.47 + t * 3.85) * 0.93 * 2.40 * 0.03
-              + cos(p5.x * 0.27 - p5.y * 1.11 + t * 4.20) * 0.27 * 2.40 * 0.03;
-    float dhz = cos(p1.x * 0.97 + p1.y * 0.21 + t * 0.42) * 0.21 * 0.085 * 0.55
-              + cos(p1.y * 1.05 - p1.x * 0.18 - t * 0.36) * 1.05 * 0.085 * 0.55
-              + cos(p2.x * 0.78 - p2.y * 0.62 + t * 0.80) * (-0.62) * 0.21 * 0.42
-              + cos(p2.x * 0.21 + p2.y * 0.93 - t * 0.72) * 0.93 * 0.21 * 0.32
-              + cos(p3.x * 1.13 + p3.y * 0.71 + t * 1.55) * 0.71 * 0.46 * 0.22
-              + cos(p3.x * 0.42 - p3.y * 1.07 + t * 1.30) * (-1.07) * 0.46 * 0.18
-              + cos(p4.x * 1.31 + p4.y * 0.87 + t * 2.30) * 0.87 * 1.05 * 0.10
-              + cos(p4.x * 0.55 - p4.y * 1.21 + t * 2.65) * (-1.21) * 1.05 * 0.10
-              + cos(p5.x * 0.93 + p5.y * 0.47 + t * 3.85) * 0.47 * 2.40 * 0.03
-              + cos(p5.x * 0.27 - p5.y * 1.11 + t * 4.20) * (-1.11) * 2.40 * 0.03;
-    // Scale slopes by the same gust factor so the wave normal stays
-    // consistent with the displaced height (otherwise crests get
-    // gentle normals at the same time their geometry is doubled).
-    return vec3(h, dhx * gust, dhz * gust);
-  }
-
-  // seaCaustic: the dancing sun-net on the seabed.  Three offset
-  // sinusoid sums clamped through smoothstep produce a tessellated
-  // caustic pattern that pulses with time.  Shared by the seabed
-  // pass (paint on rocks) and the main shader (bounce light onto
-  // the unit's hull).
-  float seaCaustic(vec2 xz, float t) {
-    vec2 cp = xz * 0.55;
-    float c1 = abs(sin(cp.x + t * 0.55) + sin(cp.y * 0.95 - t * 0.6) + sin((cp.x + cp.y) * 0.6 + t * 0.4));
-    float c2 = abs(sin(cp.x * 1.4 - t * 0.5) + sin(cp.y * 1.1 + t * 0.7) + sin((cp.x - cp.y) * 0.8 - t * 0.45));
-    float caustic = 1.0 - smoothstep(0.2, 2.0, min(c1, c2));
-    return pow(caustic, 1.4);
-  }
-
-  // seabedHeight: hash-grid placed rocks + low-freq dunes.  The same
-  // function runs in both the seabed vertex shader (for displacement)
-  // and the water surface shader (so the water alpha tracks how
-  // shallow the bed is at that point, exposing the rocks through the
-  // surface).
-  float seabedHeight(vec2 xz) {
-    // Large dunes — XZ wavelength scaled 10× from before (0.025 →
-    // 0.0025), height ~4× (≈2 → ≈8 wu), so the bed reads as
-    // sweeping geological ridges instead of busy small bumps.
-    vec2 dp = xz * 0.0025;
-    float dune = sin(dp.x * 0.9 + 0.4) * cos(dp.y * 1.1 - 0.7) * 8.00
-               + sin(dp.x * 1.7 - dp.y * 0.6 + 1.9) * 4.80
-               + sin(dp.x * 0.4 + dp.y * 0.3 + 5.2) * 7.20;
-    // Hash-cell rock peaks — cells massively bigger (18 → 180 wu)
-    // so the "leopard spot" repetition disappears at typical
-    // viewing distances.  Density cut hard (probability 55% → 12%)
-    // so a rock appears only in roughly one cell out of ten, and
-    // peak heights pushed 4× to ~24 wu — true outcrops.
-    vec2 cell = floor(xz / 180.0);
-    vec2 cf = fract(xz / 180.0);
-    float h0 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5);
-    float h1 = fract(sin(dot(cell, vec2(269.5,  183.3))) * 17483.5);
-    float h2 = fract(sin(dot(cell, vec2(419.2,  371.9))) * 28197.7);
-    float present = step(0.88, h0);
-    vec2 centre = vec2(h1, h2) * 0.6 + 0.20;
-    float dist = length(cf - centre);
-    float radius = 0.28 + h1 * 0.30;
-    float peakH = 8.0 + h2 * 16.0;
-    float rock = present * peakH * smoothstep(radius, 0.0, dist);
-    return dune + rock;
-  }
-`
+// Shader sources live in shaders/{main,sky,ground,shadow,wire,dof}/
+// as .vert/.frag files so they open with proper GLSL highlighting in
+// editors.  shader-loader.js fetches + resolves `#include` directives
+// and the renderer pulls the bodies via init() before linking
+// programs.  All the inline template-literal shader constants that
+// used to live here have moved to those files; this comment is the
+// trail of breadcrumbs.
 
 // SKY_PRESETS: every aesthetic knob the skybox shader reads.  Each
 // preset is a fully-formed sky scheme — call ModelRenderer.setSky-
@@ -248,8 +90,16 @@ const SKY_PRESETS = {
     name: 'Alien (twin suns)',
     zenith: [0.18, 0.05, 0.42],
     horizon: [0.85, 0.45, 0.70],
-    sun1: { color: [2.20, 0.95, 0.40], dir: [-0.45, 0.35, 0.82], size: 0.045 },
-    sun2: { color: [0.65, 0.85, 1.60], dir: [0.45, 0.45, 0.78], size: 0.030 },
+    // Twin suns sit on either side of the default camera's forward
+    // axis (yaw=215 deg, pitch=18 deg → forward ≈ (0.55, -0.31, 0.78))
+    // so BOTH land in the sky strip above the unit.  Amber sun1
+    // toward the left, cool-blue sun2 toward the right; their
+    // shadows splay in opposite directions (visible on the ground
+    // beneath any unit).  Sizes bumped enough that the discs read
+    // as discrete bodies in the small sky strip the default view
+    // exposes — 0.045/0.030 used to disappear into the gradient.
+    sun1: { color: [2.60, 1.20, 0.55], dir: [-0.55, 0.45, 0.70], size: 0.070 },
+    sun2: { color: [0.65, 1.05, 2.10], dir: [ 0.85, 0.30, 0.50], size: 0.055 },
     cloudColor: [0.85, 0.50, 0.70],
     cloudShadow: [0.30, 0.08, 0.25],
     cloudCoverage: 0.70,
@@ -429,6 +279,14 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.25, 0.32, 0.30],
     seabedRock:    [0.14, 0.18, 0.18],
     seabedCaustic: [0.35, 0.65, 0.95],
+    // Rocky mountain ring - mossy green-brown lowlands climbing to
+    // pale grey-blue peaks.  Default for the temperate-Earth feel.
+    mountainStyle: 0,
+    mountainHeight: 62,
+    mountainScale: 1.0,
+    mountainBase: [0.28, 0.32, 0.22],
+    mountainPeak: [0.72, 0.78, 0.80],
+    mountainGloss: 0.0,
   },
   archipelago: {
     name: 'Archipelago',
@@ -444,6 +302,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.95, 0.92, 0.78],   // white tropical sand
     seabedRock:    [0.78, 0.72, 0.55],
     seabedCaustic: [0.95, 0.95, 0.85],
+    // Low tropical headlands - shorter peaks, pale beachy tones.
+    mountainStyle: 0,
+    mountainHeight: 40,
+    mountainScale: 1.3,
+    mountainBase: [0.68, 0.62, 0.42],
+    mountainPeak: [0.92, 0.88, 0.72],
+    mountainGloss: 0.0,
   },
   metal: {
     name: 'Metal world',
@@ -461,6 +326,15 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.22, 0.22, 0.24],
     seabedRock:    [0.36, 0.32, 0.28],   // rust-stained metal plates
     seabedCaustic: [0.55, 0.55, 0.65],
+    // Angular metal protrusions - mechanical, plated, glossy.
+    // Style 1 triggers the ridged-value noise + panel grid in
+    // ground.frag so these read as fabricated structures.
+    mountainStyle: 1,
+    mountainHeight: 80,
+    mountainScale: 0.85,
+    mountainBase: [0.18, 0.20, 0.24],
+    mountainPeak: [0.55, 0.58, 0.65],
+    mountainGloss: 0.85,
   },
   lava: {
     name: 'Lava world',
@@ -477,6 +351,14 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.55, 0.20, 0.08],   // cooled lava crust
     seabedRock:    [0.18, 0.06, 0.03],
     seabedCaustic: [1.50, 0.85, 0.25],
+    // Volcanic stratovolcanoes - dark obsidian lowlands, glowing
+    // red-orange near the peaks where fresh lava cools.
+    mountainStyle: 0,
+    mountainHeight: 95,
+    mountainScale: 1.1,
+    mountainBase: [0.18, 0.07, 0.04],
+    mountainPeak: [0.85, 0.32, 0.10],
+    mountainGloss: 0.0,
   },
   moon: {
     name: 'Lunar',
@@ -493,6 +375,14 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.62, 0.60, 0.58],   // lunar regolith
     seabedRock:    [0.32, 0.30, 0.28],
     seabedCaustic: [0.80, 0.85, 0.95],
+    // Lunar highlands - cratered grey, no atmosphere so no haze
+    // pull on the peaks.  Lower height than Earth ranges.
+    mountainStyle: 0,
+    mountainHeight: 55,
+    mountainScale: 1.4,
+    mountainBase: [0.32, 0.32, 0.32],
+    mountainPeak: [0.78, 0.78, 0.78],
+    mountainGloss: 0.0,
   },
   mars: {
     name: 'Mars',
@@ -508,6 +398,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.55, 0.30, 0.22],   // iron-oxide red
     seabedRock:    [0.32, 0.18, 0.14],
     seabedCaustic: [0.80, 0.55, 0.85],
+    // Rust-red Martian highlands.
+    mountainStyle: 0,
+    mountainHeight: 70,
+    mountainScale: 1.2,
+    mountainBase: [0.48, 0.22, 0.14],
+    mountainPeak: [0.85, 0.55, 0.35],
+    mountainGloss: 0.0,
   },
   slate: {
     name: 'Slate',
@@ -522,6 +419,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.28, 0.30, 0.30],
     seabedRock:    [0.15, 0.17, 0.18],
     seabedCaustic: [0.55, 0.65, 0.75],
+    // Cold grey quarry crags.
+    mountainStyle: 0,
+    mountainHeight: 65,
+    mountainScale: 1.05,
+    mountainBase: [0.22, 0.24, 0.26],
+    mountainPeak: [0.62, 0.66, 0.70],
+    mountainGloss: 0.0,
   },
   marsh: {
     name: 'Marsh',
@@ -536,6 +440,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.32, 0.30, 0.18],
     seabedRock:    [0.15, 0.18, 0.10],
     seabedCaustic: [0.65, 0.75, 0.45],
+    // Marshland hummocks - flat-ish terrain in the distance, mossy.
+    mountainStyle: 0,
+    mountainHeight: 42,
+    mountainScale: 1.4,
+    mountainBase: [0.20, 0.22, 0.14],
+    mountainPeak: [0.45, 0.52, 0.32],
+    mountainGloss: 0.0,
   },
   desert: {
     name: 'Desert (acid)',
@@ -550,6 +461,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.55, 0.48, 0.22],   // dry yellow dirt
     seabedRock:    [0.28, 0.22, 0.10],
     seabedCaustic: [0.85, 0.95, 0.45],
+    // Sand dunes - style 2 picks the smooth rolling profile.
+    mountainStyle: 2,
+    mountainHeight: 52,
+    mountainScale: 1.5,
+    mountainBase: [0.62, 0.45, 0.22],
+    mountainPeak: [0.92, 0.75, 0.45],
+    mountainGloss: 0.0,
   },
   sunset: {
     name: 'Sunset',
@@ -565,6 +483,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.32, 0.25, 0.22],
     seabedRock:    [0.18, 0.12, 0.10],
     seabedCaustic: [0.85, 0.55, 0.45],
+    // Sunset-warm mountain silhouettes.
+    mountainStyle: 0,
+    mountainHeight: 62,
+    mountainScale: 1.0,
+    mountainBase: [0.28, 0.18, 0.18],
+    mountainPeak: [0.88, 0.55, 0.38],
+    mountainGloss: 0.0,
   },
   night: {
     name: 'Night',
@@ -578,6 +503,13 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.10, 0.12, 0.15],
     seabedRock:    [0.04, 0.05, 0.08],
     seabedCaustic: [0.20, 0.35, 0.55],
+    // Night-time silhouettes - dim, cool grey-blue.
+    mountainStyle: 0,
+    mountainHeight: 62,
+    mountainScale: 1.0,
+    mountainBase: [0.08, 0.10, 0.14],
+    mountainPeak: [0.32, 0.38, 0.48],
+    mountainGloss: 0.0,
   },
   alienTwin: {
     name: 'Alien (twin suns)',
@@ -593,801 +525,16 @@ const ENVIRONMENT_PRESETS = {
     seabedSand:    [0.42, 0.32, 0.55],
     seabedRock:    [0.20, 0.12, 0.32],
     seabedCaustic: [0.60, 1.00, 0.95],
+    // Alien angular spires - sharp metal-style ridges in a deep
+    // bioluminescent palette.
+    mountainStyle: 1,
+    mountainHeight: 85,
+    mountainScale: 0.9,
+    mountainBase: [0.16, 0.10, 0.28],
+    mountainPeak: [0.55, 0.32, 0.78],
+    mountainGloss: 0.65,
   },
 }
-
-const MAIN_VS = `
-  ${SEA_WAVES_GLSL}
-  attribute vec3 aPos;
-  attribute vec3 aNormal;
-  attribute vec2 aUV;
-  uniform mat4 uProj;
-  uniform mat4 uView;
-  uniform mat4 uWorld;
-  uniform mat4 uLightSpace;
-  uniform mat4 uLightSpace2;
-  uniform float uReflectionTint;
-  uniform float uTime;
-  uniform float uWaterY;
-  uniform float uWavesIntensity;
-  varying vec2 vUV;
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-  varying vec4 vLightSpacePos;
-  varying vec4 vLightSpacePos2;
-  void main() {
-    vUV = aUV;
-    vNormal = mat3(uWorld) * aNormal;
-    vec4 worldPos = uWorld * vec4(aPos, 1.0);
-    // Refraction warp: when this draw is the reflection pass, push
-    // each vertex sideways by the wave slope at the vertex's XZ.
-    // Vertices closer to the surface get smaller offsets; deeper
-    // fragments shift further — same way Snell's law refracts a
-    // straight-down view through a wavy interface.  Stylised, not
-    // physically exact, but it reads as the reflection rippling
-    // with the waves above instead of being a perfect rigid mirror.
-    if (uReflectionTint > 0.5) {
-      vec3 hs = seaWaveHS(worldPos.xz, uTime);
-      float depthBelow = max(0.0, uWaterY - worldPos.y);
-      vec2 refr = vec2(hs.y, hs.z) * uWavesIntensity * depthBelow * 0.35;
-      worldPos.xz += refr;
-    }
-    vWorldPos = worldPos.xyz;
-    vLightSpacePos = uLightSpace * worldPos;
-    vLightSpacePos2 = uLightSpace2 * worldPos;
-    gl_Position = uProj * uView * worldPos;
-    gl_PointSize = 4.0;
-  }
-`
-
-const MAIN_FS = `
-  precision highp float;
-  precision highp int;
-  ${SEA_WAVES_GLSL}
-  varying vec2 vUV;
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-  varying vec4 vLightSpacePos;
-  varying vec4 vLightSpacePos2;
-  uniform sampler2D uTex;
-  uniform sampler2D uShadowMap;
-  uniform sampler2D uShadowMap2;
-  uniform int uMode;            // 0 = textured, 1 = flat colour
-  uniform vec4 uTint;
-  uniform vec3 uLightDir;       // direction the light is coming FROM (toward sun)
-  uniform vec3 uLightColor;
-  uniform vec3 uLightDir2;      // second light (twin-sun worlds), zero colour = inactive
-  uniform vec3 uLightColor2;
-  uniform vec3 uSkyColor;       // hemisphere ambient when normal points up
-  uniform vec3 uGroundColor;    // hemisphere ambient when normal points down
-  uniform float uShadowEnabled; // 1 if uShadowMap is bound to a real depth texture, else 0
-  uniform float uShadowBias;
-  uniform float uFlatLighting;  // 1 = no directional/ambient/shadow, full bright (Flat display mode)
-  uniform float uReflectionTint; // 1 = output is dimmed + blue-tinted, used by the water reflection pass
-  uniform float uSeaActive;     // 1 in Sea mode — adds caustic bounce light + sun shimmer to the hull
-  uniform float uTime;          // shared sea time (for the bounce light to animate with the water)
-  uniform float uWaterY;        // world Y of the water plane — fades reflections out above it
-  uniform float uWaterOnHull;   // Water Surface Reflections toggle — 0 disables hull bounce/shimmer
-
-  // sampleShadow does a 3×3 PCF tap into the shadow map.  Returns
-  // 1.0 = fully lit, 0.0 = fully shadowed (with a soft penumbra in
-  // between).  Skipped when the depth-texture extension is missing.
-  // sampleShadowMap1: 3×3 PCF tap into the primary shadow map.  Kept
-  // as a separate function from sampleShadowMap2 because WebGL1
-  // doesn't allow sampler arrays or sampler indexing — each map
-  // gets its own copy of the sampling code.
-  float sampleShadowMap1(vec3 normal) {
-    if (uShadowEnabled < 0.5) return 1.0;
-    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
-    proj = proj * 0.5 + 0.5;
-    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
-    float ndl = max(0.0, dot(normalize(normal), normalize(uLightDir)));
-    float bias = max(uShadowBias * (1.0 - ndl), 0.0005);
-    float lit = 0.0;
-    float texel = 1.0 / 1024.0;
-    for (int dx = -1; dx <= 1; dx++) {
-      for (int dy = -1; dy <= 1; dy++) {
-        float depth = texture2D(uShadowMap, proj.xy + vec2(float(dx), float(dy)) * texel).r;
-        lit += (proj.z - bias < depth) ? 1.0 : 0.0;
-      }
-    }
-    return lit / 9.0;
-  }
-  float sampleShadowMap2(vec3 normal) {
-    if (uShadowEnabled < 0.5) return 1.0;
-    vec3 proj = vLightSpacePos2.xyz / vLightSpacePos2.w;
-    proj = proj * 0.5 + 0.5;
-    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
-    float ndl = max(0.0, dot(normalize(normal), normalize(uLightDir2)));
-    float bias = max(uShadowBias * (1.0 - ndl), 0.0005);
-    float lit = 0.0;
-    float texel = 1.0 / 1024.0;
-    for (int dx = -1; dx <= 1; dx++) {
-      for (int dy = -1; dy <= 1; dy++) {
-        float depth = texture2D(uShadowMap2, proj.xy + vec2(float(dx), float(dy)) * texel).r;
-        lit += (proj.z - bias < depth) ? 1.0 : 0.0;
-      }
-    }
-    return lit / 9.0;
-  }
-
-  void main() {
-    vec4 base;
-    if (uMode == 1) {
-      base = uTint;
-    } else {
-      base = texture2D(uTex, vUV);
-    }
-    if (base.a < 0.5) discard;
-
-    // Reflection pass clipping: when this draw is the mirrored
-    // copy, any fragment whose mirrored world Y is ABOVE the
-    // waterline came from the original under-water portion of the
-    // hull and would visibly interpenetrate with the original unit.
-    // Drop those fragments so only the genuine "below water"
-    // reflection of the above-water hull remains.
-    if (uReflectionTint > 0.5 && vWorldPos.y > uWaterY) discard;
-
-    // Flat display mode: pass the texture (or tint) straight through,
-    // skipping shadows + directional + ambient.  Used for diagnosing
-    // texture issues with no shading bias.
-    if (uFlatLighting > 0.5) {
-      gl_FragColor = vec4(base.rgb, 1.0);
-      return;
-    }
-
-    vec3 N = normalize(vNormal);
-    vec3 L = normalize(uLightDir);
-    float ndl = max(0.0, dot(N, L));
-    // 3DO has no consistent winding direction, so we treat the
-    // brighter face as the front — symmetric lighting reads
-    // correctly from either side.
-    ndl = max(ndl, max(0.0, dot(-N, L)) * 0.4);
-
-    // Hemisphere ambient: sky tint from above, ground tint from below.
-    // Multiplied by the texture so the colour temperature shifts with
-    // the unit's pose (under-side picks up the warm ground bounce).
-    float hemiMix = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 ambient = mix(uGroundColor, uSkyColor, hemiMix);
-
-    // Rim light along the camera-facing silhouette.  Cheap fake — uses
-    // world-space up as a stand-in for view direction; the unit
-    // rotates under the camera so this still picks out the edges.
-    float rim = pow(1.0 - max(0.0, N.z), 3.0) * 0.25;
-
-    float shadow = sampleShadowMap1(N);
-    vec3 directLight = ndl * uLightColor * shadow;
-    // Second sun contribution — twin-sun environments fill this in
-    // with a non-zero colour, single-sun worlds leave it black and
-    // it costs almost nothing.
-    if (dot(uLightColor2, uLightColor2) > 0.0001) {
-      vec3 L2 = normalize(uLightDir2);
-      float ndl2 = max(0.0, dot(N, L2));
-      ndl2 = max(ndl2, max(0.0, dot(-N, L2)) * 0.4);
-      float shadow2 = sampleShadowMap2(N);
-      directLight += ndl2 * uLightColor2 * shadow2;
-    }
-    vec3 lighting = ambient + directLight + vec3(rim);
-
-    // ── Sea bounce light ───────────────────────────────────────
-    // When the unit sits on Sea ground, the water below kicks
-    // light back up onto the hull two ways:
-    //   * Caustic bounce — diffuse glow that rises through the
-    //     surface and lights the sides + underside of the hull.
-    //     Brightest under the unit; tinted with the lagoon's blue.
-    //   * Sun shimmer — sharp diamond highlights where a wave
-    //     facet reflects the sun directly at the hull.  Hits
-    //     side-facing surfaces best, dances across them as the
-    //     waves move.
-    if (uSeaActive > 0.5 && uWaterOnHull > 0.5) {
-      // Water reflections only land on the SIDES of a hull — the
-      // plating that's near the waterline and faces roughly outward.
-      // Two gates pick those out:
-      //
-      //   sideness = 1 - abs(N.y)
-      //     Favours horizontal normals.  Tops (N.y ≈ +1), bottoms
-      //     (N.y ≈ -1), and anything in between get progressively
-      //     less.  Using abs() makes this robust to 3DO's inverted
-      //     winding — the format stores no consistent face direction,
-      //     so the renderer can't trust the sign of N.y to mean
-      //     "this is the topside".
-      //
-      //   waterProximity = 1 - smoothstep(0, 8, y - waterY)
-      //     A fragment 8 wu above the waterline gets nothing; one at
-      //     the waterline gets full strength.  Stops decks + masts
-      //     from picking up reflections just because they happen to
-      //     have a sideways normal.
-      float sideness = 1.0 - abs(N.y);
-      // Extended falloff (was 8 wu) so the side plating ~12 wu up
-      // the hull still picks up some bounce — keeps the effect
-      // reading on tall units, not just the boot-stripe.
-      float waterProximity = 1.0 - smoothstep(0.0, 12.0, max(0.0, vWorldPos.y - uWaterY));
-      float gate = sideness * waterProximity;
-      if (gate > 0.001) {
-        // Diffuse bounce — kept strong since the user wanted clearly
-        // visible reflections on the side plates.
-        float caustic = seaCaustic(vWorldPos.xz, uTime);
-        vec3 bounceTint = vec3(0.45, 0.95, 1.40);
-        lighting += bounceTint * (0.30 + caustic) * gate * 1.40;
-
-        // Sun shimmer — pulled WAY back (3.5 → 0.9) and modulated by
-        // value noise instead of just a pow(dot) so the highlights
-        // read as scattered glints rather than a hard gridded grid.
-        // The noise also varies in time so the shimmer twinkles
-        // instead of moving in a regular pattern.
-        vec3 hs = seaWaveHS(vWorldPos.xz, uTime);
-        vec3 waveN = normalize(vec3(-hs.y, 1.0, -hs.z));
-        vec3 sunRefl = reflect(-L, waveN);
-        float shimmerAlign = pow(abs(dot(sunRefl, N)), 14.0);
-        float shimmerNoise = seaNoise(vWorldPos.xz * 0.6 + uTime * 0.7);
-        float shimmer = shimmerAlign * smoothstep(0.45, 0.85, shimmerNoise);
-        lighting += vec3(1.30, 1.10, 0.80) * shimmer * gate;
-      }
-    }
-
-    vec3 col = base.rgb * lighting;
-    // Subtle vignette / ACES-ish tone curve to lift colour pop.
-    col = col / (col + vec3(0.55));
-    col = pow(col, vec3(0.9));
-    if (uReflectionTint > 0.5) {
-      // Mirror reflection underwater: shift toward the deep-water
-      // hue but keep most of the original brightness so the
-      // reflection survives the water-surface alpha blend on top.
-      col = mix(col, col * vec3(0.55, 0.75, 0.95), 0.45);
-      col *= 0.90;
-    }
-    // Reflection pass output at full alpha so the water surface's
-    // alpha mix is the only thing dimming it — previously dropping
-    // to 0.65 here compounded with the water alpha and made the
-    // reflection nearly invisible.
-    gl_FragColor = vec4(col, 1.0);
-  }
-`
-
-// ── Wireframe shader: thin line segments in a uniform colour ────────
-
-const WIRE_VS = `
-  attribute vec3 aPos;
-  uniform mat4 uProj;
-  uniform mat4 uView;
-  uniform mat4 uWorld;
-  uniform vec2 uPixelOffset; // NDC-space jitter for fake thick lines
-  void main() {
-    vec4 p = uProj * uView * uWorld * vec4(aPos, 1.0);
-    p.xy += uPixelOffset * p.w;
-    gl_Position = p;
-  }
-`
-
-const WIRE_FS = `
-  precision mediump float;
-  uniform vec4 uColor;
-  void main() { gl_FragColor = uColor; }
-`
-
-// ── Shadow pass: depth-only, no fragment writes needed ──────────────
-
-const SHADOW_VS = `
-  attribute vec3 aPos;
-  attribute vec2 aUV;
-  uniform mat4 uLightSpace;
-  uniform mat4 uWorld;
-  varying vec2 vUV;
-  void main() {
-    vUV = aUV;
-    gl_Position = uLightSpace * uWorld * vec4(aPos, 1.0);
-  }
-`
-
-// We still need a fragment shader to honour alpha-keyed primitives —
-// otherwise transparent texels would cast solid shadows.
-const SHADOW_FS = `
-  precision mediump float;
-  varying vec2 vUV;
-  uniform sampler2D uTex;
-  uniform int uMode;
-  void main() {
-    if (uMode == 0) {
-      vec4 s = texture2D(uTex, vUV);
-      if (s.a < 0.5) discard;
-    }
-    gl_FragColor = vec4(1.0);
-  }
-`
-
-// ── Sky: vertical gradient quad ──────────────────────────────────────
-
-// SKY_VS draws a fullscreen triangle pair at the far plane.  The
-// fragment shader uses uInvViewProj to project NDC back into a
-// world-space view direction; that direction drives the gradient,
-// sun discs, and procedural cloud sampling.
-const SKY_VS = `
-  attribute vec2 aPos;
-  varying vec2 vNDC;
-  void main() {
-    vNDC = aPos;
-    gl_Position = vec4(aPos, 1.0, 1.0);
-  }
-`
-
-// SKY_FS implements a parameterisable skybox:
-//   * Zenith/horizon gradient (uZenith / uHorizon).
-//   * Up to two suns (uSun1Color/Dir/Size, uSun2Color/Dir/Size).
-//     A zero-magnitude colour disables that sun.
-//   * Procedural fbm clouds at a configurable altitude band, with
-//     drift speed and shadow tint.
-// All knobs are uniforms so the JS side can pick a preset per render
-// (earth, twin-sun alien, mars, etc.) without touching the shader.
-const SKY_FS = `
-  precision highp float;
-  varying vec2 vNDC;
-  uniform mat4 uInvViewProj;
-  uniform vec3 uEyePos;
-  uniform vec3 uZenith;
-  uniform vec3 uHorizon;
-  uniform vec3 uSun1Color;
-  uniform vec3 uSun1Dir;
-  uniform float uSun1Size;
-  uniform vec3 uSun2Color;
-  uniform vec3 uSun2Dir;
-  uniform float uSun2Size;
-  uniform vec3 uCloudColor;
-  uniform vec3 uCloudShadow;
-  uniform float uCloudCoverage;
-  uniform float uCloudDensity;
-  uniform float uCloudSpeed;
-  uniform float uTime;
-  uniform float uOptGodBeams; // 0 disables crepuscular rays from the sun(s)
-
-  // Hash + value noise + fbm.  Compact enough to fit in WebGL1 and
-  // accurate enough that a 5-octave fbm reads as drifting clouds
-  // rather than checkerboard noise.
-  float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-  }
-  float fbm(vec2 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 5; i++) {
-      v += a * vnoise(p);
-      p = p * 2.07 + vec2(11.7, 5.3);
-      a *= 0.5;
-    }
-    return v;
-  }
-
-  // sunDisc combines a sharp pow() falloff for the sun's body and a
-  // looser pow() for the surrounding glow.  uSize maps to the dot
-  // exponent: smaller → wider disc (closer to 1.0 means crisp
-  // pinpoint sun, larger means soft halo with no defined edge).
-  vec3 sunDisc(vec3 dir, vec3 sunDir, vec3 sunColor, float size) {
-    if (dot(sunColor, sunColor) < 0.0001) return vec3(0.0);
-    float a = max(0.0, dot(dir, normalize(sunDir)));
-    // Disc body: very sharp peak.
-    float discE = max(1.0, 1.0 / max(size, 0.0005));
-    float body = pow(a, discE);
-    // Outer glow: softer, broader.
-    float halo = pow(a, max(20.0, discE * 0.08)) * 0.45;
-    return sunColor * (body + halo);
-  }
-
-  void main() {
-    // Reconstruct a world-space ray through this NDC fragment.  The
-    // near + far points come from inv(VP)·(x,y,±1); their direction
-    // is the view ray.  Using ±1 instead of just the far point keeps
-    // the math stable even when the camera near plane is tiny.
-    vec4 nearH = uInvViewProj * vec4(vNDC, -1.0, 1.0);
-    vec4 farH  = uInvViewProj * vec4(vNDC,  1.0, 1.0);
-    vec3 nearW = nearH.xyz / nearH.w;
-    vec3 farW  = farH.xyz / farH.w;
-    vec3 dir = normalize(farW - nearW);
-
-    // Vertical gradient driven by the ray's Y component.  smoothstep
-    // pulls the horizon line down slightly so the zenith colour
-    // dominates upward views without a hard band.
-    float y = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 col = mix(uHorizon, uZenith, smoothstep(0.40, 0.95, y));
-
-    // Suns: each contributes a disc + halo, additively on top of the
-    // sky.  Disabled when colour is the zero vector.
-    col += sunDisc(dir, uSun1Dir, uSun1Color, uSun1Size);
-    col += sunDisc(dir, uSun2Dir, uSun2Color, uSun2Size);
-
-    // Procedural clouds at altitude.  Projected onto a flat cloud
-    // sheet at unit height; the dir.y > 0 branch keeps the
-    // projection sane when the camera looks at the horizon.  Two
-    // octaves of fbm break the cloud puffs into bodies + wispy
-    // edges; the horizon fade is gentle so even small upward
-    // angles pick up a few clouds drifting in.
-    //
-    // cMask is also fed back into the god-ray calculation below
-    // (beams shine through GAPS in clouds, not through dense bodies),
-    // so we compute it outside the dir.y > 0 guard at default 0.
-    float cMask = 0.0;
-    if (dir.y > 0.005) {
-      vec2 cp = dir.xz / max(dir.y, 0.005) * 0.40 + vec2(uTime * uCloudSpeed, uTime * uCloudSpeed * 0.7);
-      float c = fbm(cp);
-      float c2 = fbm(cp * 0.45 - 1.7);
-      cMask = smoothstep(1.0 - uCloudCoverage, 1.0 - uCloudCoverage + 0.30, c * (c2 + 0.3) * 1.8);
-      vec3 cloudCol = mix(uCloudShadow, uCloudColor, smoothstep(0.25, 0.95, c));
-      float horizonFade = smoothstep(0.01, 0.18, dir.y);
-      col = mix(col, cloudCol, cMask * uCloudDensity * horizonFade);
-    }
-
-    // ── God-rays / crepuscular beams ─────────────────────────
-    // Radial streaks emanating from the sun, brightest where the
-    // view direction is near the sun and the cloud cover is low.
-    // The stripe pattern uses an angular noise of the tangent
-    // component (dir minus its projection onto the sun direction);
-    // that gives streaks that radiate outward from the sun rather
-    // than wrap around the sphere.  Multiple sines of the angle
-    // create irregular thick/thin beams instead of a perfect fan.
-    if (uOptGodBeams > 0.5 && dot(uSun1Color, uSun1Color) > 0.0001) {
-      vec3 toSun = normalize(uSun1Dir);
-      vec3 tang = dir - toSun * dot(dir, toSun);
-      float tLen = length(tang);
-      float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      // Value-noise-modulated shafts: instead of regular sine
-      // stripes, sample noise along the angular axis to pick out
-      // irregular bright shafts.  Two scales give chunky main
-      // beams + finer cross-modulation; a slow time drift makes
-      // the shafts breathe rather than march at a fixed cadence.
-      float shaftHi = vnoise(vec2(ang * 2.2, uTime * 0.03));
-      float shaftLo = vnoise(vec2(ang * 5.7 + 11.0, -uTime * 0.05));
-      float beam = pow(smoothstep(0.45, 0.85, shaftHi), 1.4)
-                 * (0.5 + 0.5 * shaftLo);
-      // Beam noise gated through smoothstep so individual shafts
-      // have crisp edges instead of a smooth wash — the gap
-      // between shafts is what makes them read as discrete bars
-      // of light rather than a glowing fan.
-      // Wider falloff so shafts reach further across the sky, with
-      // a much softer cloud-gap cutoff — patchy clouds modulate the
-      // intensity but don't kill the beam outright.
-      float coneFall = exp(-tLen * 1.4);
-      float gap = mix(0.45, 1.0, 1.0 - smoothstep(0.40, 0.95, cMask));
-      float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun1Color * beam * coneFall * gap * upward * 1.80;
-    }
-    if (uOptGodBeams > 0.5 && dot(uSun2Color, uSun2Color) > 0.0001) {
-      vec3 toSun = normalize(uSun2Dir);
-      vec3 tang = dir - toSun * dot(dir, toSun);
-      float tLen = length(tang);
-      float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      float shaftHi = vnoise(vec2(ang * 2.2, uTime * 0.03));
-      float shaftLo = vnoise(vec2(ang * 5.7 + 11.0, -uTime * 0.05));
-      float beam = pow(smoothstep(0.45, 0.85, shaftHi), 1.4)
-                 * (0.5 + 0.5 * shaftLo);
-      float coneFall = exp(-tLen * 1.4);
-      float gap = mix(0.45, 1.0, 1.0 - smoothstep(0.40, 0.95, cMask));
-      float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun2Color * beam * coneFall * gap * upward * 1.50;
-    }
-
-    gl_FragColor = vec4(col, 1.0);
-  }
-`
-
-// ── Ground plane: receives projected shadow ──────────────────────────
-
-// SEA_WAVES_GLSL: the canonical wave height + slope used by BOTH the
-// ground vertex shader (to displace surface tessellation) and the
-// fragment shader (to re-evaluate the per-pixel normal).  Keeping
-// the formula in one place is the only way the swell-crest silhouette
-// and the per-pixel shading stay in sync; if they drift the surface
-// reads as papered-on rather than truly waving.
-//
-// Returns:
-//   .x = wave height (world Y offset)
-//   .y = dH/dx (slope along world X)
-//   .z = dH/dz (slope along world Z)
-const GROUND_VS = `
-  precision highp float;
-  precision highp int;
-  attribute vec3 aPos;
-  uniform mat4 uProj;
-  uniform mat4 uView;
-  uniform mat4 uLightSpace;
-  uniform float uGroundY;
-  uniform float uSeabedY;
-  uniform float uSeabedActive;
-  uniform int uGroundMode;
-  uniform float uTime;
-  uniform float uWavesIntensity;
-  varying vec3 vWorldPos;
-  varying vec4 vLightSpacePos;
-  ${SEA_WAVES_GLSL}
-  void main() {
-    // Three displacement modes baked into one program:
-    //   * Seabed pass — random rocks + dunes, at a depressed Y below
-    //     the water plane.
-    //   * Sea surface — the shared wave function rolls the tessellated
-    //     quad in 3D so the silhouette actually crests.
-    //   * Other ground modes — flat plane at uGroundY.
-    float y;
-    if (uSeabedActive > 0.5) {
-      y = uSeabedY + seabedHeight(aPos.xz);
-    } else if (uGroundMode == 2) {
-      y = uGroundY + seaWaveHS(aPos.xz, uTime).x * uWavesIntensity;
-    } else {
-      y = uGroundY;
-    }
-    vec3 worldPos = vec3(aPos.x, y, aPos.z);
-    vWorldPos = worldPos;
-    vLightSpacePos = uLightSpace * vec4(worldPos, 1.0);
-    gl_Position = uProj * uView * vec4(worldPos, 1.0);
-  }
-`
-
-const GROUND_FS = `
-  precision highp float;
-  precision highp int;
-  ${SEA_WAVES_GLSL}
-  varying vec3 vWorldPos;
-  varying vec4 vLightSpacePos;
-  uniform sampler2D uShadowMap;
-  uniform sampler2D uTerrainTex;
-  uniform float uShadowEnabled;
-  uniform vec3 uColorA;
-  uniform vec3 uColorB;
-  uniform vec3 uCenter;
-  uniform float uRadius;
-  uniform int uGroundMode;       // 0 = grid, 1 = terrain (textured), 2 = sea (procedural waves), 3 = legacy plain
-  uniform float uTileSize;       // world units per repeat (one TA map tile)
-  uniform float uTerrainReady;   // 1 once the terrain texture has uploaded
-  uniform float uTime;           // seconds since renderer start, drives sea animation
-  uniform vec3 uLightDir;        // world-space direction toward the sun, used by Sea specular
-  uniform vec3 uEyePos;          // camera world position — Sea Fresnel needs the real view dir
-  uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
-  uniform float uSeabedY;        // base Y of the seabed plane (below uGroundY)
-  uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
-  uniform float uOptSpecular;        // 0 disables broad/tight specular + sparkles
-  uniform float uWavesIntensity;     // multiplier on wave amplitude (also flat=0 when Waves toggle off)
-  uniform vec3 uWaterShallow;        // shallow / sunlit water tint (closest to surface light)
-  uniform vec3 uWaterMid;            // mid depth tint
-  uniform vec3 uWaterDeep;           // abyssal tint
-  uniform float uWaterTranslucency;  // multiplier on water alpha — higher = clearer
-  uniform vec3 uSeabedSand;          // colour of the bed's sand / dune surface
-  uniform vec3 uSeabedRock;          // colour of rocky outcrops
-  uniform vec3 uSeabedCaustic;       // tint of the caustic light shaft on the bed
-
-  float sampleShadow() {
-    if (uShadowEnabled < 0.5) return 1.0;
-    vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
-    proj = proj * 0.5 + 0.5;
-    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
-    float lit = 0.0;
-    float texel = 1.0 / 1024.0;
-    for (int dx = -2; dx <= 2; dx++) {
-      for (int dy = -2; dy <= 2; dy++) {
-        float depth = texture2D(uShadowMap, proj.xy + vec2(float(dx), float(dy)) * texel).r;
-        lit += (proj.z - 0.0008 < depth) ? 1.0 : 0.0;
-      }
-    }
-    return lit / 25.0;
-  }
-
-  void main() {
-    vec2 g = vWorldPos.xz - uCenter.xz;
-    float d = length(g);
-    // Sea, terrain, and seabed all extend to the visible horizon —
-    // they only differ in how they blend into the sky.  The
-    // unit-radius alpha fade is now reserved for the Grid mode +
-    // legacy fallback which intentionally stays as a small
-    // decorative pad around the unit.
-    float fade = (uGroundMode == 0 || uGroundMode == 3)
-                ? clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0)
-                : 1.0;
-    float shadow = sampleShadow();
-
-    if (uGroundMode == 0) {
-      // Grid mode: light-green lattice over a dark-green fill, sized
-      // to one TA map tile (uTileSize world units per cell).  fwidth
-      // would give crisper sub-pixel lines but isn't available in
-      // WebGL1 by default — a small constant line width works fine.
-      vec2 tile = fract(vWorldPos.xz / uTileSize);
-      float lineX = smoothstep(0.0, 0.04, tile.x) * (1.0 - smoothstep(0.96, 1.0, tile.x));
-      float lineY = smoothstep(0.0, 0.04, tile.y) * (1.0 - smoothstep(0.96, 1.0, tile.y));
-      float onLine = 1.0 - lineX * lineY;
-      vec3 fill = vec3(0.04, 0.10, 0.06);
-      vec3 line = vec3(0.30, 0.65, 0.34);
-      vec3 base = mix(fill, line, onLine);
-      base *= mix(1.0, shadow, 0.85 * fade);
-      gl_FragColor = vec4(base, fade);
-      return;
-    }
-    if (uGroundMode == 1 && uTerrainReady > 0.5) {
-      // Terrain mode: tile the flat tileset texture.  REPEAT wrap
-      // on the texture handles the UV overflow; no manual fract here.
-      vec2 uv = vWorldPos.xz / uTileSize;
-      vec3 base = texture2D(uTerrainTex, uv).rgb;
-      base *= mix(1.0, shadow, 0.85);
-      // Horizon haze: same trick the sea pass uses — mix toward the
-      // sky's horizon colour at long range so the terrain blends
-      // smoothly into the skybox at the visible horizon instead of
-      // ending at a hard line.  Distance from the camera, not from
-      // the unit, because we want the haze to read consistently
-      // wherever the user orbits.
-      float dCamT = length(uEyePos - vWorldPos);
-      float horizonMix = smoothstep(500.0, 2400.0, dCamT);
-      base = mix(base, uHorizonColor, horizonMix * 0.92);
-      gl_FragColor = vec4(base, 1.0);
-      return;
-    }
-    if (uSeabedActive > 0.5) {
-      // ── Seabed pass: rocks + dunes.  Drawn first, depth-tested
-      // under the reflection + water surface.  Bed colours come
-      // from the active environment preset so Archipelago gets
-      // white sand, Metal gets dark plating, Lava glows red, etc.
-      float bedH = seabedHeight(vWorldPos.xz);
-      float rockMix = smoothstep(10.0, 22.0, bedH);
-      vec3 col = mix(uSeabedSand, uSeabedRock, rockMix);
-      // Subtle multi-octave noise lightens / darkens patches of
-      // sand so the bed isn't a flat tint.  Crucially this is NOT
-      // the seaCaustic sine grid — that produced a repeating
-      // scallop pattern that read as "fish-scale leopard skin"
-      // tiled across the whole bed.  Smooth FBM noise gives an
-      // organic, irregular variation instead.
-      float n1 = seaNoise(vWorldPos.xz * 0.012);
-      float n2 = seaNoise(vWorldPos.xz * 0.045 + 7.1);
-      float bedVar = 0.7 + 0.6 * n1 + 0.25 * n2;
-      col *= bedVar;
-      col *= 0.50 + 0.35 * shadow;
-      // Seabed also fades into the horizon colour at distance so
-      // the far-edge isn't a sharp ring of dark seafloor visible
-      // through the haze of the water surface above.
-      float dCamBed = length(uEyePos - vWorldPos);
-      float bedHaze = smoothstep(500.0, 2200.0, dCamBed);
-      col = mix(col, uHorizonColor * 0.45, bedHaze);
-      gl_FragColor = vec4(col, 1.0);
-      return;
-    }
-    if (uGroundMode == 2) {
-      // ── Sea-surface pass ────────────────────────────────────
-      //
-      // Translucent water on top of the rocky seabed: water column
-      // colour (deep blue), sky reflection (Fresnel), sun specular,
-      // sparkle, foam at crests, and an alpha that drops where the
-      // seabed is shallow so the rocks show through.
-      float t = uTime;
-      vec3 hs = seaWaveHS(vWorldPos.xz, t);
-      // Apply Waves Intensity to both the height (drives foam,
-      // depth proxy, backlit) and the slopes (drives wave normal +
-      // reflection direction).  At intensity=0 the surface is flat
-      // and the sea reads as a calm dead pool.
-      float h = hs.x * uWavesIntensity;
-      float dhx = hs.y * uWavesIntensity;
-      float dhz = hs.z * uWavesIntensity;
-      // Distance fade: at range, the per-pixel wave normal aliases
-      // into a noisy "white box" moire.  Damp the slopes toward a
-      // flat normal as the camera distance grows, and gate all the
-      // high-frequency embellishments (foam, sparkles, specular)
-      // by the same factor.  The sea reads crisp up close and
-      // smoothly merges into a haze band at the horizon.
-      float dCam = length(uEyePos - vWorldPos);
-      float closeUp = 1.0 - smoothstep(120.0, 600.0, dCam);
-      vec3 wn = normalize(vec3(-dhx * closeUp, 1.0, -dhz * closeUp));
-      float slope = length(vec2(dhx, dhz)) * closeUp;
-
-      // ── Water column: shallow → mid → deep, per-planet ───────
-      // Three tint stops come from the active environment preset
-      // (uWaterShallow/Mid/Deep) so Mars gets purple water, lava
-      // gets oily red, etc.  Three stops blend by an absorption
-      // proxy that uses wave height (crests are optically
-      // shallower than troughs).
-      vec3 shallowTint = uWaterShallow;
-      vec3 midTint     = uWaterMid;
-      vec3 deepTint    = uWaterDeep;
-      float depthProxy = 1.6 - h;
-      float absorb = exp(-depthProxy * 0.55);
-      vec3 waterCol = mix(deepTint, midTint, smoothstep(0.0, 0.55, absorb));
-      waterCol = mix(waterCol, shallowTint, smoothstep(0.55, 1.0, absorb));
-
-      // ── Surface highlights ───────────────────────────────────
-      vec3 V = normalize(uEyePos - vWorldPos);
-      float ndv = max(0.0, dot(wn, V));
-      float fresnel = pow(1.0 - ndv, 4.0);
-      vec3 skyTop = vec3(0.32, 0.58, 1.10);
-      vec3 skyHor = vec3(1.15, 0.92, 0.65);
-      vec3 sky = mix(skyTop, skyHor, fresnel);
-      vec3 L = normalize(uLightDir);
-      vec3 H = normalize(L + V);
-      float ndh = max(0.0, dot(wn, H));
-      // Specular pulled back to roughly 25% of the previous level —
-      // previous setting was blowing out a wide white band across
-      // the water that overpowered every other element.  Tight
-      // pinpoint kept relatively brighter than the broad halo so
-      // isolated wave crests still register as glints.
-      float specBroad = pow(ndh, 28.0) * 0.32 * closeUp;
-      float specTight = pow(ndh, 160.0) * 0.90 * closeUp;
-      vec3 sunColor = vec3(1.55, 1.30, 0.90);
-      // Fresnel sky-on-water reflection is intrinsic to how water
-      // reads — without it the surface looks like flat blue paint.
-      // Toggling "Water Surface Reflections" off doesn't kill this;
-      // that toggle gates the hull bounce in the main shader so the
-      // unit stops picking up the water's reflections.
-      float reflectivity = 0.10 + 0.90 * fresnel;
-      vec3 surface = mix(waterCol, sky, reflectivity);
-      surface += (specBroad + specTight) * sunColor * uOptSpecular;
-
-      // ── Sun-glint sparkles — heavily faded at distance + cut
-      // back to ~25% intensity since the prior setting was the main
-      // contributor to the overpowering white band on the sea.
-      vec3 Rd = reflect(-L, wn);
-      float sparkleAlign = pow(max(0.0, dot(Rd, V)), 110.0) * 0.22
-                         + pow(max(0.0, dot(Rd, V)), 320.0) * 0.75;
-      float sparkleNoise = sin(vWorldPos.x * 9.0 + t * 2.7)
-                         * sin(vWorldPos.z * 11.0 + t * 2.3)
-                         * sin((vWorldPos.x + vWorldPos.z) * 5.0 - t * 1.7);
-      float sparkle = sparkleAlign * smoothstep(0.28, 0.95, abs(sparkleNoise));
-      float sparkleFade = 1.0 - smoothstep(80.0, 350.0, dCam);
-      surface += vec3(1.10, 0.95, 0.75) * sparkle * sparkleFade * uOptSpecular;
-
-      // ── Sub-surface scatter: backlit crest glow ──────────────
-      float backlit = pow(max(0.0, dot(L, -V)) * 0.5 + 0.5, 2.0)
-                    * smoothstep(0.20, 0.80, h);
-      surface += vec3(0.18, 0.55, 0.95) * backlit * 0.55 * closeUp;
-
-      // ── Foam (crests + breaking + haze), all distance-faded ─
-      float crestFoam = smoothstep(1.10, 2.10, h) * 0.95;
-      float breakingFoam = smoothstep(0.30, 0.55, slope) * smoothstep(0.40, 0.95, h);
-      float hazeFoam     = smoothstep(0.12, 0.28, slope) * 0.35;
-      float foamFade = 1.0 - smoothstep(120.0, 500.0, dCam);
-      surface = mix(surface, vec3(1.08, 1.10, 1.12),
-                    clamp(crestFoam + breakingFoam + hazeFoam * 0.5, 0.0, 0.92) * foamFade);
-
-      surface *= mix(1.0, shadow, 0.18);
-      surface = surface / (surface * 0.55 + vec3(0.55));
-
-      // ── Horizon haze: sea fades into the sky ────────────────
-      // Long-distance mix toward the sky's horizon colour gives
-      // the sea an infinite-looking edge.  uHorizonColor is set
-      // each frame from the active sky scheme so the haze always
-      // matches whatever sky is painted behind it.
-      float horizonMix = smoothstep(500.0, 2400.0, dCam);
-      surface = mix(surface, uHorizonColor, horizonMix * 0.92);
-
-      // Alpha: aqua water is more translucent overall, with a
-      // little extra opacity at high Fresnel.  At extreme distance
-      // alpha climbs to full so the haze tint wins cleanly over
-      // anything behind.
-      float bedAtXZ = uSeabedY + seabedHeight(vWorldPos.xz);
-      float bedDepth = max(0.0, vWorldPos.y - bedAtXZ);
-      // Water alpha is intentionally low so the ship reflection
-      // rendered underneath bleeds through clearly.  The water
-      // column colour is multiplied INTO the reflection by the
-      // alpha blend (water alpha 0.55 = 55% water tint + 45%
-      // reflection), giving a believable "ship + water" mix.
-      float aOut = mix(0.35, 0.62, smoothstep(1.0, 6.0, bedDepth));
-      aOut = mix(aOut, 0.78, fresnel * 0.6);
-      aOut = mix(aOut, 1.0, horizonMix);
-      // Per-environment translucency multiplier — Archipelago and
-      // Lunar pull this DOWN to expose more of the seabed; Metal
-      // pushes it UP for thick oily liquid; default 1.0 keeps the
-      // base aqua look.
-      aOut = clamp(aOut * uWaterTranslucency, 0.05, 1.0);
-      gl_FragColor = vec4(surface, aOut * fade);
-      return;
-    }
-
-    // Legacy / fallback: same gentle decorative ground we used before
-    // the three-mode rework.  Reached when terrain mode is selected
-    // but the tile texture hasn't uploaded yet.
-    float footprintMask = smoothstep(uRadius * 1.0, uRadius * 1.6, d);
-    float grid = step(0.5, fract(g.x * 0.05) + fract(g.y * 0.05));
-    vec3 base = mix(uColorA, uColorB, grid * 0.18 * footprintMask);
-    base *= mix(1.0, shadow, 0.85 * fade);
-    gl_FragColor = vec4(base, fade);
-  }
-`
 
 export class ModelRenderer {
   constructor({ canvas, textureCache, gl }) {
@@ -1427,6 +574,34 @@ export class ModelRenderer {
     this.skyBottom = [0.07, 0.09, 0.12]
     this.groundColorA = [0.12, 0.14, 0.18]
     this.groundColorB = [0.18, 0.2, 0.25]
+
+    // Team colour picker.  When teamColorEnable is true, the MAIN_FS
+    // shifts the texture's blue (hue ≈ 225°) team palette range to
+    // this RGB.  The "blue" team is the original game default, so
+    // null means "leave the texture alone".
+    this.teamColor = null
+    this.teamColorEnable = false
+
+    // Background mountain ring.  The renderer paints procedural
+    // mountains on non-sea ground modes, outside a clearing centred
+    // on the unit.  Style + colours come from the active environment
+    // preset; the radius / falloff / height multiplier scale with
+    // the unit's bounding span so a Krogoth gets a bigger valley
+    // than a flea.  optBgTerrain gates the whole feature.
+    this.optBgTerrain = true
+    this.bgTerrainHeightMul = 1.0       // user-controlled scalar applied to env's mountainHeight
+    this.bgTerrainScaleMul = 1.0        // user-controlled scalar applied to env's mountainScale
+    this.bgTerrainStyle = 0             // 0=rocky 1=angular metal 2=sand dunes (env overrides on setEnv)
+    this.bgTerrainBase = [0.30, 0.30, 0.34]
+    this.bgTerrainPeak = [0.85, 0.85, 0.90]
+    this.bgTerrainGloss = 0.0
+    // Seabed feature sliders mirror the same idea for sea worlds.
+    // These multiply uniforms in the GLSL seabedHeight() helper - 1.0
+    // = stock tuning, 0 = smooth dune-only bed, larger = more
+    // dramatic outcrops.
+    this.seabedHeightMul = 1.0
+    this.seabedScaleMul = 1.0
+    this.seabedRockChance = 0.12
 
     this.autoRotate = true
     this.rotateY = 0
@@ -1495,12 +670,26 @@ export class ModelRenderer {
     const aniso = ctx.getExtension('EXT_texture_filter_anisotropic') || ctx.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
     if (aniso && textureCache) textureCache.setAnisotropicExt(aniso)
 
-    this.#initMainProgram()
-    this.#initShadowProgram()
-    this.#initSkyProgram()
-    this.#initGroundProgram()
-    this.#initWireProgram()
-    if (this._depthExt) this.#initShadowFBO()
+    // DoF toggle + tuning parameters.  Default off so users see no
+    // surprises until they opt in via the Studio Options checkbox.
+    this.optDof = false
+    // NDC depth is wildly nonlinear: with near=0.05 / far=6000,
+    // z_ndc=0.985 sits at only ~3 world units from the camera, so
+    // the old defaults were sweeping the unit itself into the blur
+    // zone.  Bumping focalDepth to 0.998 puts the in-focus plane at
+    // roughly 25 wu (~10x further) - matching where the unit sits at
+    // default framing.  focalRange widened to 0.0015 so the ramp out
+    // to full blur covers a meaningful distance instead of saturating
+    // a few world units past the unit.  Max blur dropped to 8 px
+    // since only the genuine background should pick it up now.
+    this.dofFocalDepth = 0.998
+    this.dofFocalRange = 0.0015
+    this.dofMaxBlur = 8
+    // Shader program init is deferred to ModelRenderer.init() — that
+    // method fetches shader sources from shaders/ and links them.  Set
+    // to true once init() has resolved so render() bails early when
+    // called from a stray RAF before shaders are ready.
+    this._programsReady = false
 
     // Scratch matrices live on the instance so per-frame work doesn't
     // allocate.  worldScratch threads through Piece.computeWorldMatrix.
@@ -1525,8 +714,53 @@ export class ModelRenderer {
     if (this.groundMode === 'terrain') this.#loadTerrainTexture()
   }
 
+  // init fetches every shader from shaders/ + links the GPU programs.
+  // Must be awaited before the renderer is asked to draw a frame; the
+  // viewer wires this into open() before calling start().  Safe to
+  // call more than once - subsequent calls return the same Promise so
+  // multiple async callers can join on a single init.
+  init() {
+    if (this._initPromise) return this._initPromise
+    this._initPromise = (async () => {
+      const sources = await loadAllShaders()
+      this.#initMainProgram(sources.main.vs, sources.main.fs)
+      this.#initShadowProgram(sources.shadow.vs, sources.shadow.fs)
+      this.#initSkyProgram(sources.sky.vs, sources.sky.fs)
+      this.#initGroundProgram(sources.ground.vs, sources.ground.fs)
+      this.#initWireProgram(sources.wire.vs, sources.wire.fs)
+      this.#initParticlesProgram(sources.particles.vs, sources.particles.fs)
+      if (this._depthExt) {
+        this.#initShadowFBO()
+        // DoF needs the same depth-texture extension as shadows -
+        // when missing, the renderer skips the post-process pass
+        // entirely.
+        this.#initDoFProgram(sources.dof.vs, sources.dof.fs)
+      }
+      this._programsReady = true
+      this.requestRedraw()
+    })()
+    return this._initPromise
+  }
+
   setModel(model) {
     this.model = model
+  }
+
+  // setCobBinding attaches a per-frame COB-runtime tick to this
+  // renderer.  Pass null to detach (e.g. switching to a unit
+  // without a script).  When set, the render loop calls
+  // binding.tick(dtMs) before each draw, which advances the COB
+  // animators and copies per-piece state into the Model.
+  setCobBinding(binding) {
+    this.cobBinding = binding || null
+    // Forward the binding's particle pool to the renderer's SFX
+    // pass.  Detaching the binding also detaches the pool so the
+    // old unit's particles don't keep drawing.
+    this.setParticlePool(binding ? binding.particles : null)
+    // Force a redraw on attach so static scripts (Create) get
+    // their initial piece transforms applied immediately.
+    if (binding) binding.tick(0)
+    this.requestRedraw()
   }
 
   setCamera(camera) {
@@ -1709,6 +943,64 @@ export class ModelRenderer {
     return base
   }
 
+  // _fillColor returns the cinematic fill light tint — a cool, ~30% blue
+  // tinge of the sky's ambient.  Cool fill against a warm key reads as
+  // the classic 3-point film lighting (key=sun, fill=skylight bounce,
+  // back=hot rim).  We pull from the active sky ambient so each
+  // environment preset gets a fill that matches the world's mood (cold
+  // arctic skylight vs warm sunset bounce).
+  _fillColor() {
+    const s = this.skyColor || [1, 1, 1]
+    return [s[0] * 0.55, s[1] * 0.65, s[2] * 0.80]
+  }
+
+  // _backColor returns the back-light tint — warm, slightly hotter than
+  // the key so the rim picks out the silhouette cleanly.  Mirrors the
+  // active sun colour but with a 20% lift so it shows up even on
+  // overcast presets where the sun colour itself is muted.
+  _backColor() {
+    const k = this.lightColor || [1, 1, 1]
+    return [Math.min(1.2, k[0] * 1.2), Math.min(1.2, k[1] * 1.1), Math.min(1.2, k[2] * 0.95)]
+  }
+
+  // setTeamColor accepts either null (use original blue) or an [r,g,b]
+  // triple in 0–1 linear space.  The shader compares the texture's hue
+  // against the blue team-color range and rotates matching pixels to
+  // the chosen team's hue.
+  setTeamColor(rgb) {
+    if (rgb == null) {
+      this.teamColor = null
+      this.teamColorEnable = false
+    } else {
+      this.teamColor = [rgb[0], rgb[1], rgb[2]]
+      this.teamColorEnable = true
+    }
+    this.requestRedraw()
+  }
+
+  // setDoFEnabled turns the post-process depth-of-field pass on/off.
+  // When off, the renderer skips the scene FBO entirely so the cost is
+  // a single extra `if` per frame.
+  setDoFEnabled(on) { this.optDof = !!on; this.requestRedraw() }
+
+  // setBgTerrainEnabled toggles the background-mountain ring.  When
+  // off, the vertex shader's uMountainActive=0 fast-path keeps the
+  // ground flat - no cost beyond a few extra clamps per vertex.
+  setBgTerrainEnabled(on) { this.optBgTerrain = !!on; this.requestRedraw() }
+  // setBgTerrainHeight scales the ENV-driven peak height by a user
+  // factor (0..2).  1 = preset default.
+  setBgTerrainHeight(v) { this.bgTerrainHeightMul = Math.max(0, +v) || 0; this.requestRedraw() }
+  // setBgTerrainScale stretches the noise field horizontally so the
+  // mountains read wider / narrower without changing their height.
+  setBgTerrainScale(v) { this.bgTerrainScaleMul = Math.max(0.05, +v) || 1; this.requestRedraw() }
+
+  // setSeabedHeight and setSeabedScale - the sea counterpart to the
+  // mountain knobs.  Multiply the seabedHeight() output before it's
+  // applied to the seabed Y, and stretch the noise scale.
+  setSeabedHeight(v) { this.seabedHeightMul = Math.max(0, +v) || 0; this.requestRedraw() }
+  setSeabedScale(v) { this.seabedScaleMul = Math.max(0.05, +v) || 1; this.requestRedraw() }
+  setSeabedRockChance(v) { this.seabedRockChance = Math.max(0, Math.min(1, +v)) || 0; this.requestRedraw() }
+
   setReflectionsEnabled(on) { this.optReflections = !!on; this.requestRedraw() }
   setBobEnabled(on) { this.optBob = !!on; this.requestRedraw() }
   setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
@@ -1746,7 +1038,17 @@ export class ModelRenderer {
         // left off.
         this.camera.yaw += dt * (Math.PI / 15)
       }
+      // COB animation tick — drives per-piece move/turn/spin
+      // animators and writes the results into the model's piece
+      // tree.  Must run before draw() so the new transforms land
+      // in this frame's geometry pass.
+      if (this.cobBinding) this.cobBinding.tick(dt * 1000)
       this.draw()
+      // Notify external observers (studio inspector overlays) that
+      // a frame finished.  The host wires a refresh callback so
+      // overlays show up-to-date COB / camera state.  Cheap when
+      // unhooked.
+      if (this.onAfterFrame) this.onAfterFrame(dt * 1000)
       this.rafId = requestAnimationFrame(loop)
     }
     this.rafId = requestAnimationFrame(loop)
@@ -1765,6 +1067,11 @@ export class ModelRenderer {
 
   draw() {
     const gl = this.gl
+    // Shader programs are loaded asynchronously by init(); until they
+    // resolve there's nothing to draw.  When init completes it calls
+    // requestRedraw() which triggers a fresh draw with everything
+    // ready - so silently skipping here is harmless.
+    if (!this._programsReady) return
     this.resize()
 
     if (!this.camera || !this.model) {
@@ -1824,8 +1131,19 @@ export class ModelRenderer {
       if (sun2Mag > 0.001 && this._shadowFBO2) this.#renderShadowPass(1)
     }
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    // DoF needs an offscreen colour + depth target to do its
+    // distance-weighted blur from.  When the scene FBO is set up, we
+    // render the entire pass into it and composite via #compositeDoF
+    // below.  Falling back to the default framebuffer when DoF is
+    // disabled / unavailable keeps the existing direct-render path.
+    const useScenePass = this.optDof && this.#ensureSceneFBO()
+    if (useScenePass) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this._sceneFBO)
+      gl.viewport(0, 0, this._sceneW, this._sceneH)
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    }
     gl.disable(gl.DEPTH_TEST)
     gl.disable(gl.BLEND)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -1888,6 +1206,15 @@ export class ModelRenderer {
       // refers to even when it's tucked behind another panel.
       this.#renderHoverHighlight()
     }
+
+    // COB SFX particles — drawn after the unit so smoke + sparks
+    // composite over the hull.  Inside the scene FBO when DoF is
+    // active so the post-process catches them too.
+    this.#renderParticles()
+
+    // When the scene rendered into our offscreen FBO (DoF enabled),
+    // composite to the default framebuffer via the post-process pass.
+    if (useScenePass) this.#compositeDoF()
   }
 
   #renderHoverHighlight() {
@@ -2013,8 +1340,12 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uGroundProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uGroundView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uGroundLightSpace, false, this._lightSpace)
+    gl.uniformMatrix4fv(this.uGroundLightSpace2, false, this._lightSpace2)
     gl.uniform3fv(this.uGroundColorA, this.groundColorA)
     gl.uniform3fv(this.uGroundColorB, this.groundColorB)
+    // Hand the ground program sun2's colour so it can short-circuit
+    // the second shadow tap on single-sun environments.
+    gl.uniform3fv(this.uGroundLightColor2, this.lightColor2)
     // In non-sea modes the ground plane sits just under the model's
     // lowest vertex so the unit stands ON it.  In Sea mode it gets
     // shifted up by submersionMode so ships ride at boot-stripe
@@ -2032,6 +1363,14 @@ export class ModelRenderer {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
       gl.uniform1i(this.uGroundShadowMap, 1)
+      // Twin-sun secondary shadow.  Bound regardless of whether
+      // it's actively used - the fragment shader gates the sample
+      // on uLightColor2 so single-sun envs spend no extra ALU.
+      // Sampler still needs to point at a real texture or some
+      // drivers throw INVALID_OPERATION.
+      gl.activeTexture(gl.TEXTURE3)
+      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex2 || this._shadowTex)
+      gl.uniform1i(this.uGroundShadowMap2, 3)
     }
     // Mode + terrain texture.  TileSize ≈ 16 world units per cell —
     // matches TA's footprint convention (a "1x1" footprint slot in
@@ -2065,6 +1404,29 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundSeabedSand,    env.seabedSand    || [0.25, 0.32, 0.30])
     gl.uniform3fv(this.uGroundSeabedRock,    env.seabedRock    || [0.14, 0.18, 0.18])
     gl.uniform3fv(this.uGroundSeabedCaustic, env.seabedCaustic || [0.35, 0.65, 0.95])
+    // Seabed feature knobs — user-controlled multipliers on the
+    // GLSL seabedHeight() helper.
+    gl.uniform1f(this.uGroundSeabedHeightMul, this.seabedHeightMul)
+    gl.uniform1f(this.uGroundSeabedScaleMul, this.seabedScaleMul)
+    gl.uniform1f(this.uGroundSeabedRockChance, this.seabedRockChance)
+    // Background mountain ring.  Active only on non-sea ground
+    // modes; sea pass already paints water + seabed and shouldn't
+    // be displaced.  Inner clearing scales with the unit's bounding
+    // span so a Krogoth doesn't get hemmed in.
+    const bgActive = this.optBgTerrain && this.groundMode !== 'sea' && this.groundMode !== 'off'
+    gl.uniform1f(this.uGroundMountainActive, bgActive ? 1 : 0)
+    if (bgActive) {
+      const clearR = Math.max(span * 3.5, 120)
+      gl.uniform3fv(this.uGroundClearCenter, [cx, groundY, cz])
+      gl.uniform1f(this.uGroundClearRadius, clearR)
+      gl.uniform1f(this.uGroundClearFalloff, Math.max(span * 2.5, 80))
+      gl.uniform1f(this.uGroundMountainHeight, (env.mountainHeight || 62) * this.bgTerrainHeightMul)
+      gl.uniform1f(this.uGroundMountainScale, (env.mountainScale || 1) * this.bgTerrainScaleMul)
+      gl.uniform1i(this.uGroundMountainStyle, env.mountainStyle ?? this.bgTerrainStyle)
+      gl.uniform3fv(this.uGroundMountainBase, env.mountainBase || this.bgTerrainBase)
+      gl.uniform3fv(this.uGroundMountainPeak, env.mountainPeak || this.bgTerrainPeak)
+      gl.uniform1f(this.uGroundMountainGloss, env.mountainGloss ?? this.bgTerrainGloss)
+    }
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -2122,8 +1484,11 @@ export class ModelRenderer {
     gl.uniform3fv(this.uLightColor, this.lightColor)
     gl.uniform3fv(this.uLightDir2, this.lightDir2)
     gl.uniform3fv(this.uLightColor2, this.lightColor2)
-    gl.uniform3fv(this.uSkyColor, this.skyColor)
+    gl.uniform3fv(this.uSkyColorMain, this.skyColor)
     gl.uniform3fv(this.uGroundColor, this.groundColor)
+    gl.uniform3fv(this.uMainEyePos, this.camera.eye)
+    gl.uniform3fv(this.uMainFillColor, this._fillColor())
+    gl.uniform3fv(this.uMainBackColor, this._backColor())
     gl.uniform1f(this.uFlatLighting, 0)
     gl.uniform1f(this.uShadowEnabled, 0) // reflection doesn't read the depth map
     gl.uniform1f(this.uReflectionTint, 1)
@@ -2135,6 +1500,8 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
+    gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
+    gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
 
     // Mirror across the water plane.  _getWaterY() handles the
     // submersion-mode offset so a sub's reflection mirrors across
@@ -2190,8 +1557,11 @@ export class ModelRenderer {
     gl.uniform3fv(this.uLightColor, this.lightColor)
     gl.uniform3fv(this.uLightDir2, this.lightDir2)
     gl.uniform3fv(this.uLightColor2, this.lightColor2)
-    gl.uniform3fv(this.uSkyColor, this.skyColor)
+    gl.uniform3fv(this.uSkyColorMain, this.skyColor)
     gl.uniform3fv(this.uGroundColor, this.groundColor)
+    gl.uniform3fv(this.uMainEyePos, this.camera.eye)
+    gl.uniform3fv(this.uMainFillColor, this._fillColor())
+    gl.uniform3fv(this.uMainBackColor, this._backColor())
     // Flat mode bypasses the directional + ambient + shadow path so
     // the renderer prints the raw texture / palette colour.
     gl.uniform1f(this.uFlatLighting, flat ? 1 : 0)
@@ -2206,6 +1576,8 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
+    gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
+    gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -2324,6 +1696,13 @@ export class ModelRenderer {
             gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, VERTEX_STRIDE, POS_OFFSET)
             gl.vertexAttribPointer(this.aNormal, 3, gl.FLOAT, false, VERTEX_STRIDE, NRM_OFFSET)
             gl.vertexAttribPointer(this.aUV, 2, gl.FLOAT, false, VERTEX_STRIDE, UV_OFFSET)
+            // aAO may bind to -1 if the driver optimised the attribute
+            // away (e.g. when the AO term is dead-code-eliminated in
+            // future shader changes) — guard the enable to stay safe.
+            if (this.aAO >= 0) {
+              gl.enableVertexAttribArray(this.aAO)
+              gl.vertexAttribPointer(this.aAO, 1, gl.FLOAT, false, VERTEX_STRIDE, AO_OFFSET)
+            }
             if (group.textureName && this.textureCache) {
               const entry = this.textureCache.get(group.textureName)
               gl.activeTexture(gl.TEXTURE0)
@@ -2477,13 +1856,14 @@ export class ModelRenderer {
 
   // ── Shader/program setup ───────────────────────────────────────────
 
-  #initMainProgram() {
-    const prog = this.#linkProgram(MAIN_VS, MAIN_FS)
+  #initMainProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
     this.programMain = prog
     const gl = this.gl
     this.aPos = gl.getAttribLocation(prog, 'aPos')
     this.aNormal = gl.getAttribLocation(prog, 'aNormal')
     this.aUV = gl.getAttribLocation(prog, 'aUV')
+    this.aAO = gl.getAttribLocation(prog, 'aAO')
     this.uProj = gl.getUniformLocation(prog, 'uProj')
     this.uView = gl.getUniformLocation(prog, 'uView')
     this.uWorld = gl.getUniformLocation(prog, 'uWorld')
@@ -2498,8 +1878,11 @@ export class ModelRenderer {
     this.uLightColor = gl.getUniformLocation(prog, 'uLightColor')
     this.uLightDir2 = gl.getUniformLocation(prog, 'uLightDir2')
     this.uLightColor2 = gl.getUniformLocation(prog, 'uLightColor2')
-    this.uSkyColor = gl.getUniformLocation(prog, 'uSkyColor')
+    this.uSkyColorMain = gl.getUniformLocation(prog, 'uSkyColor')
     this.uGroundColor = gl.getUniformLocation(prog, 'uGroundColor')
+    this.uMainEyePos = gl.getUniformLocation(prog, 'uEyePos')
+    this.uMainFillColor = gl.getUniformLocation(prog, 'uFillColor')
+    this.uMainBackColor = gl.getUniformLocation(prog, 'uBackColor')
     this.uShadowEnabled = gl.getUniformLocation(prog, 'uShadowEnabled')
     this.uShadowBias = gl.getUniformLocation(prog, 'uShadowBias')
     this.uFlatLighting = gl.getUniformLocation(prog, 'uFlatLighting')
@@ -2509,10 +1892,12 @@ export class ModelRenderer {
     this.uMainWaterY = gl.getUniformLocation(prog, 'uWaterY')
     this.uMainWavesIntensity = gl.getUniformLocation(prog, 'uWavesIntensity')
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
+    this.uMainTeamColor = gl.getUniformLocation(prog, 'uTeamColor')
+    this.uMainTeamColorEnable = gl.getUniformLocation(prog, 'uTeamColorEnable')
   }
 
-  #initShadowProgram() {
-    const prog = this.#linkProgram(SHADOW_VS, SHADOW_FS)
+  #initShadowProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
     this.programShadow = prog
     const gl = this.gl
     this.aShadowPos = gl.getAttribLocation(prog, 'aPos')
@@ -2523,8 +1908,8 @@ export class ModelRenderer {
     this.uShadowMode = gl.getUniformLocation(prog, 'uMode')
   }
 
-  #initSkyProgram() {
-    const prog = this.#linkProgram(SKY_VS, SKY_FS)
+  #initSkyProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
     this.programSky = prog
     const gl = this.gl
     this.aSkyPos = gl.getAttribLocation(prog, 'aPos')
@@ -2559,16 +1944,19 @@ export class ModelRenderer {
     this._invVP   = Mat4.create()
   }
 
-  #initGroundProgram() {
-    const prog = this.#linkProgram(GROUND_VS, GROUND_FS)
+  #initGroundProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
     this.programGround = prog
     const gl = this.gl
     this.aGroundPos = gl.getAttribLocation(prog, 'aPos')
     this.uGroundProj = gl.getUniformLocation(prog, 'uProj')
     this.uGroundView = gl.getUniformLocation(prog, 'uView')
     this.uGroundLightSpace = gl.getUniformLocation(prog, 'uLightSpace')
+    this.uGroundLightSpace2 = gl.getUniformLocation(prog, 'uLightSpace2')
     this.uGroundShadowMap = gl.getUniformLocation(prog, 'uShadowMap')
+    this.uGroundShadowMap2 = gl.getUniformLocation(prog, 'uShadowMap2')
     this.uGroundShadowEnabled = gl.getUniformLocation(prog, 'uShadowEnabled')
+    this.uGroundLightColor2 = gl.getUniformLocation(prog, 'uLightColor2')
     this.uGroundColorA = gl.getUniformLocation(prog, 'uColorA')
     this.uGroundColorB = gl.getUniformLocation(prog, 'uColorB')
     this.uGroundCenter = gl.getUniformLocation(prog, 'uCenter')
@@ -2594,6 +1982,22 @@ export class ModelRenderer {
     this.uGroundSeabedSand = gl.getUniformLocation(prog, 'uSeabedSand')
     this.uGroundSeabedRock = gl.getUniformLocation(prog, 'uSeabedRock')
     this.uGroundSeabedCaustic = gl.getUniformLocation(prog, 'uSeabedCaustic')
+    // Background mountain uniforms — paired with state on the renderer
+    // instance.  When optBgTerrain is false, uMountainActive is sent
+    // as 0 and the vertex shader short-circuits the displacement.
+    this.uGroundClearCenter = gl.getUniformLocation(prog, 'uClearCenter')
+    this.uGroundClearRadius = gl.getUniformLocation(prog, 'uClearRadius')
+    this.uGroundClearFalloff = gl.getUniformLocation(prog, 'uClearFalloff')
+    this.uGroundMountainHeight = gl.getUniformLocation(prog, 'uMountainHeight')
+    this.uGroundMountainScale = gl.getUniformLocation(prog, 'uMountainScale')
+    this.uGroundMountainActive = gl.getUniformLocation(prog, 'uMountainActive')
+    this.uGroundMountainStyle = gl.getUniformLocation(prog, 'uMountainStyle')
+    this.uGroundMountainBase = gl.getUniformLocation(prog, 'uMountainBase')
+    this.uGroundMountainPeak = gl.getUniformLocation(prog, 'uMountainPeak')
+    this.uGroundMountainGloss = gl.getUniformLocation(prog, 'uMountainGloss')
+    this.uGroundSeabedHeightMul = gl.getUniformLocation(prog, 'uSeabedHeightMul')
+    this.uGroundSeabedScaleMul = gl.getUniformLocation(prog, 'uSeabedScaleMul')
+    this.uGroundSeabedRockChance = gl.getUniformLocation(prog, 'uSeabedRockChance')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at
@@ -2631,8 +2035,8 @@ export class ModelRenderer {
     this._groundVertexCount = verts.length / 3
   }
 
-  #initWireProgram() {
-    const prog = this.#linkProgram(WIRE_VS, WIRE_FS)
+  #initWireProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
     this.programWire = prog
     const gl = this.gl
     this.aWirePos = gl.getAttribLocation(prog, 'aPos')
@@ -2641,6 +2045,192 @@ export class ModelRenderer {
     this.uWireWorld = gl.getUniformLocation(prog, 'uWorld')
     this.uWireColor = gl.getUniformLocation(prog, 'uColor')
     this.uWirePixelOffset = gl.getUniformLocation(prog, 'uPixelOffset')
+  }
+
+  // #initParticlesProgram links the COB-SFX particle program and
+  // allocates the interleaved-attribute VBO the per-frame upload
+  // streams into.  Layout: pos(3) + color(4) + size(1) = 8 floats
+  // per particle.  Sized for an initial capacity of 1024 particles
+  // — the upload path grows the buffer if a frame ever wants more.
+  #initParticlesProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programParticles = prog
+    const gl = this.gl
+    this.aPartPos = gl.getAttribLocation(prog, 'aPos')
+    this.aPartColor = gl.getAttribLocation(prog, 'aColor')
+    this.aPartSize = gl.getAttribLocation(prog, 'aSize')
+    this.uPartProj = gl.getUniformLocation(prog, 'uProj')
+    this.uPartView = gl.getUniformLocation(prog, 'uView')
+    this.uPartViewport = gl.getUniformLocation(prog, 'uViewport')
+    this._partCapacity = 1024
+    this._partInterleaved = new Float32Array(this._partCapacity * 8)
+    this._partVBO = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._partVBO)
+    gl.bufferData(gl.ARRAY_BUFFER, this._partInterleaved.byteLength, gl.DYNAMIC_DRAW)
+  }
+
+  // setParticlePool attaches a CobBinding's ParticlePool to the
+  // renderer.  Per-frame the renderer ticks the pool against the
+  // frame dt + uploads the alive prefix to the GPU and draws.
+  // Detach by passing null when the unit changes.
+  setParticlePool(pool) { this._particlePool = pool || null }
+
+  // #renderParticles emits the alive prefix of the pool as a single
+  // additive-blended GL_POINTS draw.  Called after the main scene
+  // pass so particles composite over the unit/ground.  Skipped when
+  // no pool is bound or it's empty.
+  #renderParticles() {
+    const pool = this._particlePool
+    if (!pool || pool.count === 0 || !this.programParticles) return
+    const gl = this.gl
+    // Grow the interleaved buffer if the pool overflowed our capacity.
+    if (pool.count > this._partCapacity) {
+      while (this._partCapacity < pool.count) this._partCapacity *= 2
+      this._partInterleaved = new Float32Array(this._partCapacity * 8)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._partVBO)
+      gl.bufferData(gl.ARRAY_BUFFER, this._partInterleaved.byteLength, gl.DYNAMIC_DRAW)
+    }
+    // Pack alive particles into the interleaved layout the shader
+    // attributes expect: [px, py, pz, r, g, b, a, size] × N.
+    const data = this._partInterleaved
+    for (let i = 0; i < pool.count; i++) {
+      const o = i * 8
+      data[o + 0] = pool.x[i]
+      data[o + 1] = pool.y[i]
+      data[o + 2] = pool.z[i]
+      data[o + 3] = pool.r[i]
+      data[o + 4] = pool.g[i]
+      data[o + 5] = pool.b[i]
+      data[o + 6] = pool.a[i]
+      data[o + 7] = pool.size[i]
+    }
+    gl.useProgram(this.programParticles)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._partVBO)
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, pool.count * 8))
+    const STRIDE = 8 * 4
+    gl.enableVertexAttribArray(this.aPartPos)
+    gl.vertexAttribPointer(this.aPartPos, 3, gl.FLOAT, false, STRIDE, 0)
+    gl.enableVertexAttribArray(this.aPartColor)
+    gl.vertexAttribPointer(this.aPartColor, 4, gl.FLOAT, false, STRIDE, 3 * 4)
+    gl.enableVertexAttribArray(this.aPartSize)
+    gl.vertexAttribPointer(this.aPartSize, 1, gl.FLOAT, false, STRIDE, 7 * 4)
+    gl.uniformMatrix4fv(this.uPartProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uPartView, false, this.camera.viewMatrix)
+    gl.uniform2f(this.uPartViewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    // Regular alpha blend so dark smoke OCCLUDES (additive would
+    // brighten - wrong for damage trails).  Bright sparks still
+    // read fine because their colour values are >1, which clamps
+    // to bright pixels even through alpha blending.  Depth test
+    // on, depth write OFF so particles don't pollute the depth
+    // buffer (would interfere with the DoF post-process).
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.depthMask(false)
+    gl.drawArrays(gl.POINTS, 0, pool.count)
+    gl.depthMask(true)
+  }
+
+  // #initDoFProgram links the post-process DoF program + sets up the
+  // shared full-screen quad VBO it draws into.  The scene FBO is
+  // (re)allocated per-frame because the canvas size can change with
+  // window resizes — see #ensureSceneFBO.
+  #initDoFProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programDoF = prog
+    const gl = this.gl
+    this.aDoFPos = gl.getAttribLocation(prog, 'aPos')
+    this.uDoFScene = gl.getUniformLocation(prog, 'uScene')
+    this.uDoFSceneDepth = gl.getUniformLocation(prog, 'uSceneDepth')
+    this.uDoFTexel = gl.getUniformLocation(prog, 'uTexel')
+    this.uDoFFocalDepth = gl.getUniformLocation(prog, 'uFocalDepth')
+    this.uDoFFocalRange = gl.getUniformLocation(prog, 'uFocalRange')
+    this.uDoFMaxBlur = gl.getUniformLocation(prog, 'uMaxBlur')
+    this.uDoFEnabled = gl.getUniformLocation(prog, 'uEnabled')
+    const buf = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1, 1, -1, 1, 1,
+      -1, -1, 1, 1, -1, 1,
+    ]), gl.STATIC_DRAW)
+    this._dofVBO = buf
+  }
+
+  // #ensureSceneFBO (re)allocates the scene colour + depth attachments
+  // when the canvas dimensions change.  No-op when sized correctly.
+  // Returns false when the FBO can't be created (no depth-texture
+  // extension, no GL state) so callers can skip the DoF pass.
+  #ensureSceneFBO() {
+    if (!this._depthExt || !this.programDoF) return false
+    const gl = this.gl
+    const w = gl.drawingBufferWidth | 0
+    const h = gl.drawingBufferHeight | 0
+    if (w <= 0 || h <= 0) return false
+    if (this._sceneFBO && this._sceneW === w && this._sceneH === h) return true
+    if (this._sceneFBO) gl.deleteFramebuffer(this._sceneFBO)
+    if (this._sceneColorTex) gl.deleteTexture(this._sceneColorTex)
+    if (this._sceneDepthTex) gl.deleteTexture(this._sceneDepthTex)
+    this._sceneFBO = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._sceneFBO)
+    const color = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, color)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0)
+    const depth = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, depth)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_SHORT, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depth, 0)
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteFramebuffer(this._sceneFBO)
+      gl.deleteTexture(color)
+      gl.deleteTexture(depth)
+      this._sceneFBO = null
+      this._sceneColorTex = null
+      this._sceneDepthTex = null
+      return false
+    }
+    this._sceneColorTex = color
+    this._sceneDepthTex = depth
+    this._sceneW = w
+    this._sceneH = h
+    return true
+  }
+
+  // #compositeDoF draws the scene FBO into the default framebuffer
+  // through the DoF post-process shader.  When DoF is disabled or the
+  // FBO isn't ready, it does a straight copy (uEnabled=0).
+  #compositeDoF() {
+    const gl = this.gl
+    if (!this.programDoF || !this._sceneFBO) return
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    gl.disable(gl.DEPTH_TEST)
+    gl.disable(gl.BLEND)
+    gl.useProgram(this.programDoF)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this._sceneColorTex)
+    gl.uniform1i(this.uDoFScene, 0)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this._sceneDepthTex)
+    gl.uniform1i(this.uDoFSceneDepth, 1)
+    gl.uniform2f(this.uDoFTexel, 1 / this._sceneW, 1 / this._sceneH)
+    gl.uniform1f(this.uDoFFocalDepth, this.dofFocalDepth)
+    gl.uniform1f(this.uDoFFocalRange, this.dofFocalRange)
+    gl.uniform1f(this.uDoFMaxBlur, this.dofMaxBlur)
+    gl.uniform1f(this.uDoFEnabled, this.optDof ? 1 : 0)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._dofVBO)
+    gl.enableVertexAttribArray(this.aDoFPos)
+    gl.vertexAttribPointer(this.aDoFPos, 2, gl.FLOAT, false, 0, 0)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
   }
 
   // #loadTerrainTexture pulls the active tileset's flat-tile PNG from

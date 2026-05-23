@@ -4,8 +4,15 @@
 // computes a face normal so the shader can flat-shade non-textured
 // faces, and uploads the result to GPU buffers under each Piece.
 //
-// Per-vertex layout (8 floats):
-//   [ x, y, z, nx, ny, nz, u, v ]
+// Per-vertex layout (9 floats):
+//   [ x, y, z, nx, ny, nz, u, v, ao ]
+//
+// The trailing `ao` is a baked ambient-occlusion factor in [0, 1]:
+// 1.0 = unoccluded, lower values darken the ambient term in concave
+// regions.  It's computed from the spread of incident face normals at
+// the vertex's position — flat plates score 1.0, vertices wedged
+// inside a tight crease (many face normals pointing different ways)
+// score lower.  See #smoothNormalsAcrossBuckets.
 //
 // We bake one vertex buffer per (texture | flat colour) bucket inside a
 // piece so each draw call binds at most one texture.  This keeps the
@@ -14,7 +21,7 @@
 import { Piece } from './piece.js'
 import { Model } from './model.js'
 
-const FLOATS_PER_VERTEX = 8
+const FLOATS_PER_VERTEX = 9
 
 export class ModelLoader {
   constructor({ gl, palette, textureCache }) {
@@ -202,7 +209,7 @@ export class ModelLoader {
         const bucket = this.#getOrCreate(pointBuckets, bucketKey, prim.texture, color)
         const v = indices[0]
         const x = verts[v * 3] || 0, y = verts[v * 3 + 1] || 0, z = verts[v * 3 + 2] || 0
-        bucket.interleaved.push(x, y, z, 0, 1, 0, 0.5, 0.5)
+        bucket.interleaved.push(x, y, z, 0, 1, 0, 0.5, 0.5, 1)
         continue
       }
       if (count === 2) {
@@ -210,7 +217,7 @@ export class ModelLoader {
         for (let i = 0; i < 2; i++) {
           const v = indices[i]
           const x = verts[v * 3] || 0, y = verts[v * 3 + 1] || 0, z = verts[v * 3 + 2] || 0
-          bucket.interleaved.push(x, y, z, 0, 1, 0, i, 0)
+          bucket.interleaved.push(x, y, z, 0, 1, 0, i, 0, 1)
         }
         continue
       }
@@ -233,13 +240,15 @@ export class ModelLoader {
       // Stash the tier on the bucket so the renderer can apply a
       // depth offset to higher-tier coplanar layers.
       bucket.depthTier = Math.max(bucket.depthTier || 0, tier)
-      // Triangle fan: (0, i, i+1) for i = 1..count-2.
+      // Triangle fan: (0, i, i+1) for i = 1..count-2.  AO seeds at
+      // 1.0 (no occlusion); the smoothing pass replaces it with a
+      // baked value derived from local face-normal divergence.
       for (let i = 1; i < count - 1; i++) {
         const tri = [0, i, i + 1]
         for (const k of tri) {
           const p = positions[k]
           const uv = uvs[k]
-          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1])
+          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1], 1)
         }
       }
       // Wireframe edges follow the original polygon outline so quads
@@ -278,10 +287,18 @@ export class ModelLoader {
         for (const k of tri) {
           const p = positions[k]
           const uv = uvs[k]
-          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1])
+          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1], 1)
         }
       }
     }
+
+    // Smooth normals across shared vertex positions where adjacent
+    // faces aren't too sharp.  3DO only carries per-face normals
+    // (the loader computes them above) so the unit reads as a
+    // chunky faceted block; this averaging pass softens the
+    // panels back into curved-feeling surfaces while keeping
+    // genuine hard corners (dot < 0.7 between face normals) sharp.
+    this.#smoothNormalsAcrossBuckets(triBuckets)
 
     const gl = this.gl
     const finalize = (map, mode) => {
@@ -379,5 +396,90 @@ export class ModelLoader {
     if (len > 0) { nx /= len; ny /= len; nz /= len }
     else { nx = 0; ny = 1; nz = 0 }
     return [nx, ny, nz]
+  }
+
+  // smoothNormalsAcrossBuckets averages each vertex's normal with the
+  // normals of every face that touches the same world-space position,
+  // provided the face normals are within ~45° of each other.  Faces
+  // sharing an edge that bends sharper than that (e.g. a panel meeting
+  // a hard corner) keep their original face normal so the silhouette
+  // and the hard creases stay crisp.  We quantise position to 1/100 wu
+  // so floating-point jitter between primitives doesn't break the
+  // shared-vertex grouping.
+  //
+  // The pass also bakes a per-vertex AO factor into the 9th float of
+  // every triangle vertex.  AO = |Σ face_normals| / count over all
+  // incident faces — a flat plate scores 1.0 (all normals aligned)
+  // while a tight crease scores lower (incident normals cancel out).
+  // The fragment shader multiplies the ambient term by this AO so
+  // crevices darken without paying for a screen-space pass.
+  #smoothNormalsAcrossBuckets(buckets) {
+    if (!buckets.size) return
+    const COS_THRESHOLD = 0.7 // ≈ 45° between adjacent face normals
+    // Pass 1: gather all face normals incident on each unique position.
+    const incident = new Map()
+    for (const bucket of buckets.values()) {
+      const arr = bucket.interleaved
+      for (let i = 0; i < arr.length; i += FLOATS_PER_VERTEX) {
+        const kx = Math.round(arr[i] * 100) / 100
+        const ky = Math.round(arr[i + 1] * 100) / 100
+        const kz = Math.round(arr[i + 2] * 100) / 100
+        const key = `${kx},${ky},${kz}`
+        let entry = incident.get(key)
+        if (!entry) { entry = []; incident.set(key, entry) }
+        entry.push(arr[i + 3], arr[i + 4], arr[i + 5])
+      }
+    }
+    // Pre-compute per-position AO once so we don't re-scan the
+    // incident list inside the per-vertex loop.  Map a position key
+    // to the normalised divergence factor — close to 1 for flat
+    // regions, closer to 0 for crevices.
+    const aoByPos = new Map()
+    for (const [key, list] of incident) {
+      const n = list.length / 3
+      let sx = 0, sy = 0, sz = 0
+      for (let j = 0; j < list.length; j += 3) {
+        sx += list[j]; sy += list[j + 1]; sz += list[j + 2]
+      }
+      const mag = Math.hypot(sx, sy, sz)
+      // Bias so single-face vertices stay at 1.0 and only true
+      // crevices (mag/n significantly less than 1) get darkened.
+      // Lift the floor to 0.55 — full black ambient looks like a
+      // missing texture, not a soft AO.
+      const raw = n > 0 ? mag / n : 1
+      const ao = 0.55 + 0.45 * raw
+      aoByPos.set(key, Math.min(1, ao))
+    }
+    // Pass 2: rewrite each vertex's normal to the unit average of all
+    // incident face normals whose dot with the current vertex normal
+    // exceeds the threshold.  When the seed normal is the only one
+    // aligned (hard edge), the result equals the original.
+    for (const bucket of buckets.values()) {
+      const arr = bucket.interleaved
+      for (let i = 0; i < arr.length; i += FLOATS_PER_VERTEX) {
+        const kx = Math.round(arr[i] * 100) / 100
+        const ky = Math.round(arr[i + 1] * 100) / 100
+        const kz = Math.round(arr[i + 2] * 100) / 100
+        const key = `${kx},${ky},${kz}`
+        const list = incident.get(key)
+        if (!list) continue
+        const nx = arr[i + 3], ny = arr[i + 4], nz = arr[i + 5]
+        let sx = 0, sy = 0, sz = 0
+        for (let j = 0; j < list.length; j += 3) {
+          const mx = list[j], my = list[j + 1], mz = list[j + 2]
+          if (nx * mx + ny * my + nz * mz >= COS_THRESHOLD) {
+            sx += mx; sy += my; sz += mz
+          }
+        }
+        const len = Math.hypot(sx, sy, sz)
+        if (len > 1e-6) {
+          arr[i + 3] = sx / len
+          arr[i + 4] = sy / len
+          arr[i + 5] = sz / len
+        }
+        const ao = aoByPos.get(key)
+        if (ao !== undefined) arr[i + 8] = ao
+      }
+    }
   }
 }

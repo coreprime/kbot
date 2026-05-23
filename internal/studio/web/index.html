@@ -249,6 +249,38 @@
                   </button>
                 </div>
               </div>
+              <div class="menu-row menu-row-submenu" id="mv-opt-team-row" role="button" tabindex="0" title="Recolour the unit's team-colour panels">
+                <span class="ico" id="mv-team-current-ico">🔵</span><span class="env-current-lbl" id="mv-team-current-lbl">Blue (default)</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-team-submenu">
+                  <button class="menu-row mv-team-row active" data-mv-team="blue" title="ARM blue — the original game default, no recolouring applied">
+                    <span class="ico">🔵</span><span>Blue (default)</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="red" title="CORE red">
+                    <span class="ico">🔴</span><span>Red</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="green" title="Green team">
+                    <span class="ico">🟢</span><span>Green</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="yellow" title="Yellow team">
+                    <span class="ico">🟡</span><span>Yellow</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="purple" title="Purple team">
+                    <span class="ico">🟣</span><span>Purple</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="cyan" title="Cyan team">
+                    <span class="ico">🩵</span><span>Cyan</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="orange" title="Orange team">
+                    <span class="ico">🟠</span><span>Orange</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="white" title="White team">
+                    <span class="ico">⚪</span><span>White</span>
+                  </button>
+                  <button class="menu-row mv-team-row" data-mv-team="black" title="Black team">
+                    <span class="ico">⚫</span><span>Black</span>
+                  </button>
+                </div>
+              </div>
               <div class="menu-section-label">General Effects</div>
               <button id="mv-opt-reflections" class="menu-row toggle-row" data-on="1" title="The unit reflects on the water (and other reflective surfaces).">
                 <span class="ico">🪞</span><span>Reflections</span><span class="menu-check">✓</span>
@@ -259,6 +291,45 @@
               <button id="mv-opt-godbeams" class="menu-row toggle-row" data-on="1" title="Crepuscular light shafts from the sun through clouds">
                 <span class="ico">🌟</span><span>God Beams</span><span class="menu-check">✓</span>
               </button>
+              <button id="mv-opt-dof" class="menu-row toggle-row" data-on="0" title="Cinematic depth of field — unit stays sharp, background softens">
+                <span class="ico">🎞️</span><span>Depth of Field</span><span class="menu-check">✓</span>
+              </button>
+              <div class="menu-section-label">Background Terrain</div>
+              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-bgterrain-row" role="button" tabindex="0" title="Procedural mountains in the background of non-sea worlds — hover for height + scale">
+                <span class="ico">🏔️</span><span>Background Mountains</span><span class="menu-check" id="mv-bgterrain-check">✓</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-bgterrain-submenu">
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Height</span>
+                    <input id="mv-bgterrain-height" type="range" min="0" max="200" step="5" value="100" />
+                    <span class="slider-val" id="mv-bgterrain-height-val">1.0×</span>
+                  </div>
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Scale</span>
+                    <input id="mv-bgterrain-scale" type="range" min="30" max="300" step="5" value="100" />
+                    <span class="slider-val" id="mv-bgterrain-scale-val">1.0×</span>
+                  </div>
+                </div>
+              </div>
+              <div class="menu-row menu-row-submenu" id="mv-opt-seabed-row" role="button" tabindex="0" title="Sea-floor rocks + dunes — height, scale, density">
+                <span class="ico">🪨</span><span>Seabed Features</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-seabed-submenu">
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Height</span>
+                    <input id="mv-seabed-height" type="range" min="0" max="300" step="5" value="100" />
+                    <span class="slider-val" id="mv-seabed-height-val">1.0×</span>
+                  </div>
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Scale</span>
+                    <input id="mv-seabed-scale" type="range" min="30" max="300" step="5" value="100" />
+                    <span class="slider-val" id="mv-seabed-scale-val">1.0×</span>
+                  </div>
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Rocks</span>
+                    <input id="mv-seabed-rocks" type="range" min="0" max="100" step="2" value="12" />
+                    <span class="slider-val" id="mv-seabed-rocks-val">12%</span>
+                  </div>
+                </div>
+              </div>
               <div class="menu-section-label">Liquid Simulation</div>
               <button id="mv-opt-water-reflections" class="menu-row toggle-row" data-on="1" title="Water reflects onto the unit's hull — caustic bounce + sun shimmer on side plates">
                 <span class="ico">🌅</span><span>Water Surface Reflections</span><span class="menu-check">✓</span>
@@ -294,23 +365,66 @@
         <div class="ribbon-section">
           <div class="ribbon-label">Animation</div>
           <div class="ribbon-group ribbon-dropdown" id="mv-anim-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-anim-dropdown-btn" title="COB-driven animation (coming soon)">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-anim-dropdown-btn" title="COB-driven animation: trigger the unit's standard entry points.">
               <span class="ico">🎬</span><span class="lbl">COB</span>
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-anim-dropdown-popup">
-              <button class="menu-row" disabled title="Run Create() / Activate() / MotionControl().">
-                <span class="ico">▶</span><span>Play scripts</span>
+              <div class="menu-section-label">Lifecycle</div>
+              <button class="menu-row cob-entry" data-cob-entry="Create" title="Initial setup script that runs on unit spawn (hides flares, sets piece offsets)."><span class="ico">🪄</span><span>Create</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="Activate" title="Powers on the unit — radar dishes spin, hatches open, etc."><span class="ico">⚡</span><span>Activate</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="Deactivate" title="Powers off — folds antennas, closes hatches."><span class="ico">🔌</span><span>Deactivate</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="Killed" title="Death animation — body parts fly off, smoke trails."><span class="ico">💀</span><span>Killed</span></button>
+              <div class="menu-section-label">Movement</div>
+              <button class="menu-row cob-entry" data-cob-entry="StartMoving" title="Start walking / driving animation."><span class="ico">🚶</span><span>StartMoving</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="StopMoving" title="Stop walking / driving animation."><span class="ico">🛑</span><span>StopMoving</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="StartBuilding" title="Begin construction animation (cranes extending)."><span class="ico">🏗️</span><span>StartBuilding</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="StopBuilding" title="End construction animation."><span class="ico">✋</span><span>StopBuilding</span></button>
+              <div class="menu-section-label">Weapons</div>
+              <button class="menu-row cob-entry" data-cob-entry="AimPrimary" title="Aim primary weapon at a random heading + elevation in the unit's FOV."><span class="ico">🎯</span><span>AimPrimary</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="FirePrimary" title="Fire primary weapon (recoil + muzzle flash)."><span class="ico">💥</span><span>FirePrimary</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="AimSecondary" title="Aim secondary weapon at a random target."><span class="ico">🎯</span><span>AimSecondary</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="FireSecondary" title="Fire secondary weapon."><span class="ico">💥</span><span>FireSecondary</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="AimTertiary" title="Aim tertiary weapon."><span class="ico">🎯</span><span>AimTertiary</span></button>
+              <button class="menu-row cob-entry" data-cob-entry="FireTertiary" title="Fire tertiary weapon."><span class="ico">💥</span><span>FireTertiary</span></button>
+              <div class="menu-section-label">Unit attributes</div>
+              <div class="submenu-slider-row" title="Unit damage % - low health triggers SmokeUnit which emits damage smoke from the hull.">
+                <span class="slider-lbl">Damage</span>
+                <input id="mv-cob-damage" type="range" min="0" max="100" step="5" value="0" />
+                <span class="slider-val" id="mv-cob-damage-val">0%</span>
+              </div>
+              <div class="submenu-slider-row" title="Playback speed for COB animations.  0.25x = quarter speed (slow-motion inspection).  1.0x = real-time TA pacing.  2x = double speed.">
+                <span class="slider-lbl">Playback</span>
+                <input id="mv-cob-playback" type="range" min="10" max="200" step="5" value="100" />
+                <span class="slider-val" id="mv-cob-playback-val">1.0×</span>
+              </div>
+              <div class="menu-section-label">All scripts</div>
+              <div id="mv-cob-script-list" class="cob-script-list">
+                <div class="cob-empty">No COB attached.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section ribbon-section-right">
+          <div class="ribbon-label">View</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-view-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-view-dropdown-btn" title="Toggle floating inspector overlays.">
+              <span class="ico">👁</span><span class="lbl">View</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-view-dropdown-popup">
+              <div class="menu-section-label">Inspectors</div>
+              <button id="mv-view-scripts" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts" title="Show / hide the Threads overlay (active COB threads + PC + signal mask).">
+                <span class="ico">📜</span><span>Threads</span><span class="menu-check">✓</span>
               </button>
-              <button class="menu-row" disabled title="Step one game tick at a time.">
-                <span class="ico">⏭</span><span>Step a frame</span>
+              <button id="mv-view-actions" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-actions" title="Show / hide the Actions overlay (clickable buttons for every COB script).">
+                <span class="ico">🎬</span><span>Actions</span><span class="menu-check">✓</span>
               </button>
-              <button class="menu-row" disabled title="Reset every piece to its rest transform.">
-                <span class="ico">⏹</span><span>Reset pose</span>
+              <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars" title="Show / hide the Static Vars overlay (COB global_N values).">
+                <span class="ico">📊</span><span>Static Vars</span><span class="menu-check">✓</span>
               </button>
-              <div class="menu-section-label">Scripts</div>
-              <button class="menu-row" disabled title="Coming soon: pick which COB script drives the model.">
-                <span class="ico">📜</span><span>Attach COB…</span>
+              <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera" title="Show / hide the Camera overlay (eye position, yaw / pitch / distance).">
+                <span class="ico">🎥</span><span>Camera</span><span class="menu-check">✓</span>
               </button>
             </div>
           </div>
@@ -340,7 +454,80 @@
         <div class="drawer" id="model-viewer-tree"></div>
       </aside>
 
+      <!-- .model-viewer-stage scopes the floating inspector overlays
+           to the rendering area only.  Without this wrapper, absolute
+           positioning resolves to the (position:fixed) dialog, which
+           includes the ribbon row — so panels with `top: 12px`
+           previously overlapped the toolbar.  The stage is the grid
+           cell that holds the canvas, with position:relative so
+           absolute children anchor to its top-left (just below the
+           ribbon), and overflow:hidden so a wildly-dragged panel
+           can't bleed onto the sidebar or topbar. -->
+      <div class="model-viewer-stage">
       <canvas id="model-viewer-canvas" class="model-viewer-canvas"></canvas>
+
+      <!-- Floating inspector overlays.  Movable / collapsible /
+           closable, each individually toggleable from the model
+           viewer's View dropdown.  Same DOM convention as the map
+           editor's .dev-stats panels so the drag + persist helper
+           code can be shared. -->
+      <aside class="mv-inspector hidden" id="mv-inspector-scripts" title="Drag to move">
+        <div class="mv-inspector-header" id="mv-inspector-scripts-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Threads</span>
+          <button class="minimap-toggle mv-threads-stopall" id="mv-threads-stopall" title="Stop all running threads (animators freeze at their current pose).">⏹</button>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-scripts" title="Collapse">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-scripts" title="Close (re-open from View menu)">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-scripts-body">
+          <div class="mv-inspector-empty">No active threads.</div>
+        </div>
+      </aside>
+      <aside class="mv-inspector hidden" id="mv-inspector-actions" title="Drag to move">
+        <div class="mv-inspector-header" id="mv-inspector-actions-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Actions</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-actions" title="Collapse">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-actions" title="Close (re-open from View menu)">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-actions-body">
+          <label class="mv-actions-filter">
+            <input type="checkbox" id="mv-actions-private" />
+            <span>Include Private</span>
+          </label>
+          <div class="mv-actions-list" id="mv-actions-list">
+            <div class="mv-inspector-empty">No COB loaded.</div>
+          </div>
+        </div>
+      </aside>
+      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag to move">
+        <div class="mv-inspector-header" id="mv-inspector-staticvars-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Static Vars</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-staticvars" title="Collapse">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-staticvars" title="Close (re-open from View menu)">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-staticvars-body">
+          <div class="mv-inspector-empty">No COB loaded.</div>
+        </div>
+      </aside>
+      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag to move">
+        <div class="mv-inspector-header" id="mv-inspector-camera-header">
+          <span class="minimap-grip">⠿</span>
+          <span>Camera</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-camera" title="Collapse">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-camera" title="Close (re-open from View menu)">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-camera-body">
+          <div class="dev-stats-row"><span class="dev-stats-label">Position</span><span class="dev-stats-value" id="mv-ci-eye">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Target</span><span class="dev-stats-value" id="mv-ci-target">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Yaw</span><span class="dev-stats-value" id="mv-ci-yaw">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Pitch</span><span class="dev-stats-value" id="mv-ci-pitch">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">Distance</span><span class="dev-stats-value" id="mv-ci-dist">—</span></div>
+          <div class="dev-stats-row"><span class="dev-stats-label">FOV</span><span class="dev-stats-value" id="mv-ci-fov">—</span></div>
+        </div>
+      </aside>
+      </div>
     </div>
   </div>
 

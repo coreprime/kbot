@@ -154,21 +154,38 @@ func inferDefaultGround(s *tdf.Section) string {
 	case "SHIP", "SUB", "UWMINE", "UWBLDG":
 		return "sea"
 	}
-	cat := strings.ToUpper(s.String("Category"))
+	// Category is a space-separated token list — e.g. ARMCOM has
+	// `ARM commander LEVEL10 WEAPON NOTAIR NOTSUB CTRL_C`.  A plain
+	// substring check matched the `SUB` inside `NOTSUB` and shoved
+	// the Commander onto Sea.  Tokenise + check exact membership.
+	tokens := categoryTokens(s.String("Category"))
 	for _, kw := range []string{"SHIP", "SUB", "UNDERWATER"} {
-		if strings.Contains(cat, kw) {
+		if tokens[kw] {
 			return "sea"
 		}
 	}
 	// MinWaterDepth > 0 means the unit only spawns where there's at
 	// least that much water (subs, water mines).  MaxWaterDepth > 0
 	// without a paired land flag is also a strong "this lives in
-	// water" signal — but it overlaps with hovercraft, so we leave
-	// hovercraft on terrain.
+	// water" signal — but it overlaps with hovercraft + the
+	// Commander (who has MaxWaterDepth=35 because he can wade), so
+	// we don't trust it on its own.
 	if s.Int("MinWaterDepth") > 0 {
 		return "sea"
 	}
 	return ""
+}
+
+// categoryTokens splits a TA Category field on whitespace and
+// returns a set of upper-cased tokens.  Used by both the default-
+// ground and submersion classifiers to avoid the NOTSUB / NOTSHIP
+// pitfall a plain substring check trips into.
+func categoryTokens(raw string) map[string]bool {
+	out := make(map[string]bool)
+	for _, t := range strings.Fields(strings.ToUpper(raw)) {
+		out[t] = true
+	}
+	return out
 }
 
 // inferSubmersionMode classifies how the unit should sit relative
@@ -179,7 +196,7 @@ func inferDefaultGround(s *tdf.Section) string {
 // Hovercraft / non-water units return "".
 func inferSubmersionMode(s *tdf.Section) string {
 	ted := strings.ToUpper(strings.TrimSpace(s.String("TEDClass")))
-	cat := strings.ToUpper(s.String("Category"))
+	tokens := categoryTokens(s.String("Category"))
 	// Submarine signals (in priority order):
 	//   * Category explicitly tags UNDERWATER (TA's submarine units
 	//     always include this).
@@ -190,13 +207,15 @@ func inferSubmersionMode(s *tdf.Section) string {
 	// Surface ship signals: TEDClass = SHIP, or Category contains
 	// SHIP without UNDERWATER (so a "ship sub" wouldn't get
 	// double-counted).  Anything else returns "" so the renderer
-	// leaves the unit sitting ON the water.
-	if strings.Contains(cat, "UNDERWATER") ||
+	// leaves the unit sitting ON the water.  Token-based matching
+	// avoids the NOTSUB / NOTSHIP substring traps the Commander and
+	// other walking units used to trigger.
+	if tokens["UNDERWATER"] ||
 		ted == "SUB" || ted == "UWMINE" || ted == "UWBLDG" ||
 		s.Int("WaterLine") > 0 {
 		return "submerged"
 	}
-	if ted == "SHIP" || strings.Contains(cat, "SHIP") {
+	if ted == "SHIP" || tokens["SHIP"] {
 		return "surface"
 	}
 	return ""
