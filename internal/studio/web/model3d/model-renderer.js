@@ -1178,13 +1178,14 @@ const GROUND_FS = `
   void main() {
     vec2 g = vWorldPos.xz - uCenter.xz;
     float d = length(g);
-    // In Sea mode the ocean extends to the horizon — never fade.
-    // Other ground modes fade out beyond ~1.8× the unit's radius so
-    // the procedural ground stays an unobtrusive backdrop for the
-    // unit, not a horizon-filling plane.
-    float fade = (uGroundMode == 2 || uSeabedActive > 0.5)
-                ? 1.0
-                : clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0);
+    // Sea, terrain, and seabed all extend to the visible horizon —
+    // they only differ in how they blend into the sky.  The
+    // unit-radius alpha fade is now reserved for the Grid mode +
+    // legacy fallback which intentionally stays as a small
+    // decorative pad around the unit.
+    float fade = (uGroundMode == 0 || uGroundMode == 3)
+                ? clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0)
+                : 1.0;
     float shadow = sampleShadow();
 
     if (uGroundMode == 0) {
@@ -1204,12 +1205,21 @@ const GROUND_FS = `
       return;
     }
     if (uGroundMode == 1 && uTerrainReady > 0.5) {
-      // Terrain mode: tile the greenworld flat texture.  REPEAT wrap
+      // Terrain mode: tile the flat tileset texture.  REPEAT wrap
       // on the texture handles the UV overflow; no manual fract here.
       vec2 uv = vWorldPos.xz / uTileSize;
       vec3 base = texture2D(uTerrainTex, uv).rgb;
-      base *= mix(1.0, shadow, 0.85 * fade);
-      gl_FragColor = vec4(base, fade);
+      base *= mix(1.0, shadow, 0.85);
+      // Horizon haze: same trick the sea pass uses — mix toward the
+      // sky's horizon colour at long range so the terrain blends
+      // smoothly into the skybox at the visible horizon instead of
+      // ending at a hard line.  Distance from the camera, not from
+      // the unit, because we want the haze to read consistently
+      // wherever the user orbits.
+      float dCamT = length(uEyePos - vWorldPos);
+      float horizonMix = smoothstep(500.0, 2400.0, dCamT);
+      base = mix(base, uHorizonColor, horizonMix * 0.92);
+      gl_FragColor = vec4(base, 1.0);
       return;
     }
     if (uSeabedActive > 0.5) {
