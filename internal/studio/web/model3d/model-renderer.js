@@ -960,11 +960,13 @@ const GROUND_FS = `
       vec3 L = normalize(uLightDir);
       vec3 H = normalize(L + V);
       float ndh = max(0.0, dot(wn, H));
-      // Specular pumped up — the user wants brighter sun highlights.
-      // Broad halo + tight pinpoint, both gated by closeUp + the
-      // user's Specular toggle.
-      float specBroad = pow(ndh, 24.0) * 1.30 * closeUp;
-      float specTight = pow(ndh, 140.0) * 3.60 * closeUp;
+      // Specular pulled back to roughly 25% of the previous level —
+      // previous setting was blowing out a wide white band across
+      // the water that overpowered every other element.  Tight
+      // pinpoint kept relatively brighter than the broad halo so
+      // isolated wave crests still register as glints.
+      float specBroad = pow(ndh, 28.0) * 0.32 * closeUp;
+      float specTight = pow(ndh, 160.0) * 0.90 * closeUp;
       vec3 sunColor = vec3(1.55, 1.30, 0.90);
       // Fresnel sky-on-water reflection is intrinsic to how water
       // reads — without it the surface looks like flat blue paint.
@@ -975,16 +977,18 @@ const GROUND_FS = `
       vec3 surface = mix(waterCol, sky, reflectivity);
       surface += (specBroad + specTight) * sunColor * uOptSpecular;
 
-      // ── Sun-glint sparkles — heavily faded at distance ──────
+      // ── Sun-glint sparkles — heavily faded at distance + cut
+      // back to ~25% intensity since the prior setting was the main
+      // contributor to the overpowering white band on the sea.
       vec3 Rd = reflect(-L, wn);
-      float sparkleAlign = pow(max(0.0, dot(Rd, V)), 90.0) * 0.9
-                         + pow(max(0.0, dot(Rd, V)), 280.0) * 3.0;
+      float sparkleAlign = pow(max(0.0, dot(Rd, V)), 110.0) * 0.22
+                         + pow(max(0.0, dot(Rd, V)), 320.0) * 0.75;
       float sparkleNoise = sin(vWorldPos.x * 9.0 + t * 2.7)
                          * sin(vWorldPos.z * 11.0 + t * 2.3)
                          * sin((vWorldPos.x + vWorldPos.z) * 5.0 - t * 1.7);
       float sparkle = sparkleAlign * smoothstep(0.28, 0.95, abs(sparkleNoise));
       float sparkleFade = 1.0 - smoothstep(80.0, 350.0, dCam);
-      surface += vec3(4.2, 3.80, 3.00) * sparkle * sparkleFade * uOptSpecular;
+      surface += vec3(1.10, 0.95, 0.75) * sparkle * sparkleFade * uOptSpecular;
 
       // ── Sub-surface scatter: backlit crest glow ──────────────
       float backlit = pow(max(0.0, dot(L, -V)) * 0.5 + 0.5, 2.0)
