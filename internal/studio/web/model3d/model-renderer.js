@@ -694,6 +694,14 @@ const MAIN_FS = `
     }
     if (base.a < 0.5) discard;
 
+    // Reflection pass clipping: when this draw is the mirrored
+    // copy, any fragment whose mirrored world Y is ABOVE the
+    // waterline came from the original under-water portion of the
+    // hull and would visibly interpenetrate with the original unit.
+    // Drop those fragments so only the genuine "below water"
+    // reflection of the above-water hull remains.
+    if (uReflectionTint > 0.5 && vWorldPos.y > uWaterY) discard;
+
     // Flat display mode: pass the texture (or tint) straight through,
     // skipping shadows + directional + ambient.  Used for diagnosing
     // texture issues with no shading bias.
