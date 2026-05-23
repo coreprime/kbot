@@ -943,11 +943,13 @@ const GROUND_FS = `
       vec3 rock = vec3(0.14, 0.12, 0.10);
       float rockMix = smoothstep(0.4, 2.0, bedH);
       vec3 col = mix(sand, rock, rockMix);
-      // Caustic net dances across the bed, dimmer than before so the
-      // bed reads as "dark with bright light bands" rather than
-      // "bright everywhere".
-      float caustic = seaCaustic(vWorldPos.xz, uTime);
-      col += caustic * vec3(0.45, 0.70, 0.95) * 0.55;
+      // Static caustic shading — sampled with t=0 so the bed reads
+      // as a fixed environment rather than a rippling layer of
+      // water.  Earlier passes animated the caustic against time,
+      // which made the user perceive the SEABED itself as moving.
+      // The water surface above still animates; the bed sits still.
+      float caustic = seaCaustic(vWorldPos.xz, 0.0);
+      col += caustic * vec3(0.45, 0.70, 0.95) * 0.45;
       col *= 0.45 + 0.35 * shadow;
       // Seabed also fades into the horizon colour at distance so
       // the far-edge isn't a sharp ring of dark seafloor visible
@@ -1609,10 +1611,11 @@ export class ModelRenderer {
     // shader's per-fragment alpha drops where the bed sits close to
     // the surface so the rocks visibly poke through.  Other ground
     // modes skip the seabed pass entirely.
-    // Seabed sits well below the water plane so even tall rock peaks
-    // never reach into the wave troughs above; 7 wu down is enough
-    // breathing room for the 2-ish wu rocks + the ~2.6 wu wave dip.
-    const seabedY = groundY - 7.0
+    // Seabed sits ~21 wu below the water plane so the sea reads as
+    // proper open-ocean depth — three times the previous setting.
+    // Tall rocks (≤ ~2 wu) and wave troughs (≤ ~2.6 wu deep) stay
+    // comfortably clear of the surface above.
+    const seabedY = groundY - 21.0
     gl.uniform1f(this.uGroundSeabedY, seabedY)
     if (this.groundMode === 'sea') {
       // Pass 1: seabed (opaque).  Write depth normally so the water
