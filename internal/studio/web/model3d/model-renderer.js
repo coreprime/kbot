@@ -1412,6 +1412,12 @@ export class ModelRenderer {
     // Each gates a specific effect that the user can flip off when
     // they want a cleaner / faster render or are looking for
     // something specific in the model.  All default to on.
+    // Submersion mode tells the renderer how to position the unit
+    // relative to the water plane: 'surface' = ship riding the
+    // boot-stripe at waterline; 'submerged' = submarine fully under
+    // water; '' = sits ON the water (the previous default).  Comes
+    // in from the host via setSubmersionMode().
+    this.submersionMode = ''
     this.optReflections = true       // unit's mirrored reflection on the water
     this.optBob = true               // unit heave + pitch + roll on the swell
     this.optWaterReflections = true  // sky / sun reflected in the water surface
@@ -1562,6 +1568,41 @@ export class ModelRenderer {
   // Each flag drops its corresponding visual contribution.  The
   // shaders/passes read the flag via uniforms so flipping a toggle
   // takes effect on the next frame.
+  // setSubmersionMode shifts the water plane so the unit reads as
+  // sitting in the water at an appropriate depth.  Values:
+  //   'surface'   — ship; water covers the bottom ~15% of the hull
+  //   'submerged' — sub; entire unit ~2 wu below water surface
+  //   ''          — no shift; unit sits ON the water
+  // The shift is achieved by raising the water plane (uGroundY) for
+  // the sea pass instead of moving the unit, so the bob math, the
+  // seabed Y, and the reflection mirror all stay in sync via the
+  // same _getWaterY().
+  setSubmersionMode(mode) {
+    this.submersionMode = mode || ''
+    this.requestRedraw()
+  }
+
+  // _getWaterY returns the world Y of the water surface.  Centralised
+  // here because every sea pass (ground, reflection, bob, main shader
+  // uniform) needs the same value — drift between them would float
+  // the unit off the wave or misposition the reflection mirror.
+  _getWaterY() {
+    if (!this.model) return 0
+    const base = this.model.bounds.min[1] - 0.05
+    const height = Math.max(1, this.model.bounds.max[1] - this.model.bounds.min[1])
+    if (this.submersionMode === 'surface') {
+      // Push water up by 15% of unit height so the boot-stripe area
+      // lines up with the visible waterline on most TA hull textures.
+      return base + height * 0.15
+    }
+    if (this.submersionMode === 'submerged') {
+      // Push water up past the top of the unit by ~2 wu — the unit
+      // is fully under the surface, like a sub at periscope depth.
+      return base + height + 2.0
+    }
+    return base
+  }
+
   setReflectionsEnabled(on) { this.optReflections = !!on; this.requestRedraw() }
   setBobEnabled(on) { this.optBob = !!on; this.requestRedraw() }
   setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
@@ -1686,7 +1727,7 @@ export class ModelRenderer {
     // plane.  Below the surface the mirrored geometry would be
     // visible directly (no water surface between camera + reflection)
     // and the trick of "the reflection IS a flipped copy" leaks out.
-    const waterY = this.model ? (this.model.bounds.min[1] - 0.05) : 0
+    const waterY = this._getWaterY()
     const cameraAboveWater = !this.camera || this.camera.eye[1] > waterY
     const showReflection = this.renderMode === 'full' && this.groundMode === 'sea' && this.optReflections && cameraAboveWater
     if (this.groundMode === 'sea') {
@@ -1849,10 +1890,12 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uGroundLightSpace, false, this._lightSpace)
     gl.uniform3fv(this.uGroundColorA, this.groundColorA)
     gl.uniform3fv(this.uGroundColorB, this.groundColorB)
-    // Position the ground plane just under the model's lowest vertex
-    // so the unit always stands ON it — not above (looks like it's
-    // floating) nor below (foot geometry pokes through).
-    const groundY = this.model.bounds.min[1] - 0.05
+    // In non-sea modes the ground plane sits just under the model's
+    // lowest vertex so the unit stands ON it.  In Sea mode it gets
+    // shifted up by submersionMode so ships ride at boot-stripe
+    // level and subs end up under the surface — _getWaterY()
+    // bakes that adjustment in.
+    const groundY = this.groundMode === 'sea' ? this._getWaterY() : (this.model.bounds.min[1] - 0.05)
     const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
     const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
     const span = Math.hypot(this.model.bounds.max[0] - this.model.bounds.min[0], this.model.bounds.max[2] - this.model.bounds.min[2])
@@ -1961,15 +2004,14 @@ export class ModelRenderer {
     // off for this pass.
     gl.uniform1f(this.uSeaActive, 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
-    gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
+    gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
 
-    // Mirror across water Y = model.bounds.min[1] - 0.05 (same Y
-    // the ground plane sits at).  reflectMatrix = T(0, 2*Y, 0) * S(1,-1,1)
-    // composed with the bob transform so the reflection rides the
-    // swell upside-down in lock-step with the boat above.
-    const waterY = this.model.bounds.min[1] - 0.05
+    // Mirror across the water plane.  _getWaterY() handles the
+    // submersion-mode offset so a sub's reflection mirrors across
+    // the shifted-up water level, not the unit's bounding-box floor.
+    const waterY = this._getWaterY()
     const mirror = this._scratch
     Mat4.identity(mirror)
     mirror[5] = -1                     // scale Y by -1
@@ -2025,7 +2067,7 @@ export class ModelRenderer {
     // and wireframe modes bypass it.
     gl.uniform1f(this.uSeaActive, (!flat && this.groundMode === 'sea') ? 1 : 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
-    gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
+    gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     if (this._shadowFBO && !flat) {

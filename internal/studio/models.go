@@ -42,6 +42,13 @@ type modelEntry struct {
 	Description   string `json:"description"`             // FBI Description
 	Category      string `json:"category"`                // FBI TEDClass
 	DefaultGround string `json:"defaultGround,omitempty"` // recommended initial ground mode ("terrain" / "sea") inferred from the unit's environment hints
+	// SubmersionMode: how the unit sits relative to the water plane.
+	//   "surface"   = surface ship, hull boot-stripe at waterline
+	//   "submerged" = submarine / underwater, top of unit below water
+	//   ""          = no override, unit sits ON the water plane
+	// Derived from FBI Category + TEDClass + WaterLine in
+	// inferSubmersionMode below.
+	SubmersionMode string `json:"submersionMode,omitempty"`
 }
 
 var (
@@ -104,6 +111,7 @@ func buildModelIndex() {
 				entry.Description = s.String("Description")
 				entry.Category = s.String("TEDClass")
 				entry.DefaultGround = inferDefaultGround(s)
+				entry.SubmersionMode = inferSubmersionMode(s)
 				byID[obj] = entry
 			}
 		}
@@ -159,6 +167,37 @@ func inferDefaultGround(s *tdf.Section) string {
 	// hovercraft on terrain.
 	if s.Int("MinWaterDepth") > 0 {
 		return "sea"
+	}
+	return ""
+}
+
+// inferSubmersionMode classifies how the unit should sit relative
+// to the water plane.  Lurker-style submarines have an explicit
+// WaterLine (depth-below-water at which they ride) — typically 20
+// for TA's subs — and almost always carry "UNDERWATER" in their
+// Category.  Surface ships are TEDClass=SHIP with no WaterLine.
+// Hovercraft / non-water units return "".
+func inferSubmersionMode(s *tdf.Section) string {
+	ted := strings.ToUpper(strings.TrimSpace(s.String("TEDClass")))
+	cat := strings.ToUpper(s.String("Category"))
+	// Submarine signals (in priority order):
+	//   * Category explicitly tags UNDERWATER (TA's submarine units
+	//     always include this).
+	//   * TEDClass = SUB / UWMINE / UWBLDG.
+	//   * WaterLine field present + non-trivial — TA uses this
+	//     numeric field only for diving units; surface ships leave
+	//     it blank.
+	// Surface ship signals: TEDClass = SHIP, or Category contains
+	// SHIP without UNDERWATER (so a "ship sub" wouldn't get
+	// double-counted).  Anything else returns "" so the renderer
+	// leaves the unit sitting ON the water.
+	if strings.Contains(cat, "UNDERWATER") ||
+		ted == "SUB" || ted == "UWMINE" || ted == "UWBLDG" ||
+		s.Int("WaterLine") > 0 {
+		return "submerged"
+	}
+	if ted == "SHIP" || strings.Contains(cat, "SHIP") {
+		return "surface"
 	}
 	return ""
 }

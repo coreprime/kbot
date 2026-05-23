@@ -11536,6 +11536,11 @@ function applyUnitEditorDefaults() {
 function applyDefaultGroundFor(meta) {
   if (!modelViewerInstance?.renderer) return
   const want = meta?.defaultGround || 'terrain'
+  // Submersion comes from the FBI's TEDClass / Category / WaterLine
+  // (computed server-side in inferSubmersionMode).  Surface ships
+  // ride the boot-stripe; subs end up under the water; everything
+  // else sits on top.
+  modelViewerInstance.renderer.setSubmersionMode(meta?.submersionMode || '')
   modelViewerInstance.renderer.setGroundMode(want)
   const activeRow = [...$$('.mv-ground-row')].find((r) => r.dataset.mvGround === want)
   $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === activeRow))
