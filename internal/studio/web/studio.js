@@ -11298,13 +11298,27 @@ function wireModelViewMenu() {
     envSubmenu.addEventListener('mouseleave', () => revertEnvIfPreviewing())
   }
   if (envParent && envSubmenu) {
+    // Hover the env row → submenu pops out automatically.  No
+    // click required; the user is already deep in a dropdown so
+    // saving them a click is a clear win.
+    envParent.addEventListener('mouseenter', () => {
+      envSubmenu.classList.remove('hidden')
+      envParent.classList.add('open')
+    })
+    // Cursor moves out of the row AND off the submenu → close it.
+    envParent.addEventListener('mouseleave', (e) => {
+      if (e.relatedTarget && envSubmenu.contains(e.relatedTarget)) return
+      envSubmenu.classList.add('hidden')
+      envParent.classList.remove('open')
+      revertEnvIfPreviewing()
+    })
+    // Click is still accepted as a fallback (e.g. keyboard / touch).
     envParent.addEventListener('click', (e) => {
       if (e.target.closest('.mv-env-row')) return
       e.stopPropagation()
       const wasHidden = envSubmenu.classList.contains('hidden')
       envSubmenu.classList.toggle('hidden', !wasHidden)
       envParent.classList.toggle('open', wasHidden)
-      // Submenu just closed without a row click → revert any preview.
       if (!wasHidden) revertEnvIfPreviewing()
     })
     // Closing the parent dropdown popup also dismisses the submenu —

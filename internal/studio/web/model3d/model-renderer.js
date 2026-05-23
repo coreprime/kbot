@@ -167,25 +167,30 @@ const SEA_WAVES_GLSL = `
   // shallow the bed is at that point, exposing the rocks through the
   // surface).
   float seabedHeight(vec2 xz) {
-    // Large dunes — gentle low-amplitude undulation across the bed.
-    vec2 dp = xz * 0.08;
-    float dune = sin(dp.x * 0.9 + 0.4) * cos(dp.y * 1.1 - 0.7) * 0.40
-               + sin(dp.x * 1.7 - dp.y * 0.6 + 1.9) * 0.25;
-    // Hash-cell rock peaks.  Each cell may contain a single rock
-    // whose centre is jittered inside the cell so they don't snap to
-    // a grid.  Peaks capped at ~2 wu so they read as scattered rocks
-    // rather than mountain ranges, and never poke through the
-    // troughs of the water above.
-    vec2 cell = floor(xz / 5.5);
-    vec2 cf = fract(xz / 5.5);
+    // Large dunes — coarser spacing (was 0.08) means fewer
+    // peaks-per-unit-area, each substantially larger.  Combined
+    // with the deeper seabed this gives a stark, sparse landscape
+    // rather than a busy field of small bumps.
+    vec2 dp = xz * 0.025;
+    float dune = sin(dp.x * 0.9 + 0.4) * cos(dp.y * 1.1 - 0.7) * 2.00
+               + sin(dp.x * 1.7 - dp.y * 0.6 + 1.9) * 1.20
+               + sin(dp.x * 0.4 + dp.y * 0.3 + 5.2) * 1.80;
+    // Hash-cell rock peaks.  Cell spacing 5.5 → 18 wu so rocks are
+    // significantly more spread out and individually larger.  Same
+    // jitter pattern places each rock somewhere inside its cell.
+    vec2 cell = floor(xz / 18.0);
+    vec2 cf = fract(xz / 18.0);
     float h0 = fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5);
     float h1 = fract(sin(dot(cell, vec2(269.5,  183.3))) * 17483.5);
     float h2 = fract(sin(dot(cell, vec2(419.2,  371.9))) * 28197.7);
-    float present = step(0.72, h0);
+    // Probability of a rock in a cell ~55% — fewer cells overall
+    // but each more likely to host a feature.
+    float present = step(0.45, h0);
     vec2 centre = vec2(h1, h2) * 0.7 + 0.15;
     float dist = length(cf - centre);
-    float radius = 0.18 + h1 * 0.20;
-    float peakH = 0.6 + h2 * 1.6;
+    float radius = 0.22 + h1 * 0.28;
+    // Peak heights up to ~6 wu so rocks read as proper outcrops.
+    float peakH = 2.0 + h2 * 4.0;
     float rock = present * peakH * smoothstep(radius, 0.0, dist);
     return dune + rock;
   }
@@ -1476,8 +1481,21 @@ export class ModelRenderer {
     // modes / grounds skip this — flat shading + wireframes don't
     // need the cinematic effect.
     const showReflection = this.renderMode === 'full' && this.groundMode === 'sea' && this.optReflections
-    if (showReflection) this.#renderReflection()
-    if (this.groundMode !== 'off') this.#renderGround()
+    if (this.groundMode === 'sea') {
+      // Sea pipeline: seabed first (writes depth), reflection second
+      // (depth-tested against the bed so it can't ghost through it),
+      // water surface third (alpha-blends over both).  The reflection
+      // physically sits between the bed and the surface, exactly
+      // where its mirrored geometry lives in world space.
+      this._groundPass = 'seabed'
+      this.#renderGround()
+      if (showReflection) this.#renderReflection()
+      this._groundPass = 'water'
+      this.#renderGround()
+      this._groundPass = null
+    } else if (this.groundMode !== 'off') {
+      this.#renderGround()
+    }
 
     if (this.renderMode === 'wireframe') {
       this.#renderWireframe([0.85, 0.92, 1.0, 1.0])
@@ -1676,23 +1694,29 @@ export class ModelRenderer {
     // shader's per-fragment alpha drops where the bed sits close to
     // the surface so the rocks visibly poke through.  Other ground
     // modes skip the seabed pass entirely.
-    // Seabed sits ~21 wu below the water plane so the sea reads as
-    // proper open-ocean depth — three times the previous setting.
-    // Tall rocks (≤ ~2 wu) and wave troughs (≤ ~2.6 wu deep) stay
-    // comfortably clear of the surface above.
-    const seabedY = groundY - 21.0
+    // Seabed sits ~45 wu below the water plane — deep enough that
+    // the new taller rock outcrops (~6 wu peaks + ~5 wu dune crests)
+    // never reach the wave troughs above (~2.6 wu deep), and the
+    // water column reads as a real ocean depth.
+    const seabedY = groundY - 45.0
     gl.uniform1f(this.uGroundSeabedY, seabedY)
     if (this.groundMode === 'sea') {
-      // Pass 1: seabed (opaque).  Write depth normally so the water
-      // surface above will reject any fragments hidden behind tall
-      // rocks (e.g. peaks poking above the trough Y).
-      gl.uniform1f(this.uGroundSeabedActive, 1)
-      gl.disable(gl.BLEND)
+      if (!this._groundPass || this._groundPass === 'seabed') {
+        // Pass 1: seabed (opaque).  Write depth normally so the
+        // reflection + water passes can depth-test against it —
+        // anything geometrically below the bed gets clipped.
+        gl.uniform1f(this.uGroundSeabedActive, 1)
+        gl.disable(gl.BLEND)
+        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+        gl.enable(gl.BLEND)
+        gl.uniform1f(this.uGroundSeabedActive, 0)
+      }
+      if (!this._groundPass || this._groundPass === 'water') {
+        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+      }
+    } else {
       gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
-      gl.enable(gl.BLEND)
-      gl.uniform1f(this.uGroundSeabedActive, 0)
     }
-    gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
     gl.disableVertexAttribArray(this.aGroundPos)
   }
 
@@ -1748,14 +1772,18 @@ export class ModelRenderer {
     } else {
       Mat4.copy(refl, mirror)
     }
-    // Blending: reflection paints with alpha (set by the fragment
-    // shader when uReflectionTint > 0.5).  Depth write OFF so the
-    // water surface afterwards can still draw — without this the
-    // reflection geometry would occlude itself in weird ways at
-    // the water plane.
-    gl.depthMask(false)
+    // Pipeline (in the caller) is: seabed → reflection → water.  The
+    // reflection now WRITES depth so the water surface above can
+    // depth-test against it (LEQUAL → water at the water plane is
+    // <= reflection at top of mirrored hull, so water still wins).
+    // Polygon offset pushes the reflection's depth slightly away
+    // from the camera so it can't z-fight against the water surface
+    // at the boundary where they touch.
+    gl.enable(gl.POLYGON_OFFSET_FILL)
+    gl.polygonOffset(1.0, 1.0)
     this.#drawGeometry(this.model.root, refl, false)
-    gl.depthMask(true)
+    gl.polygonOffset(0.0, 0.0)
+    gl.disable(gl.POLYGON_OFFSET_FILL)
 
     gl.uniform1f(this.uReflectionTint, 0)
   }
