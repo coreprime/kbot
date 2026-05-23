@@ -8851,7 +8851,7 @@ const DEFAULT_SETTINGS = {
   defaultHmRadius: 4,
   defaultHmStrength: 4,
   // Unit Editor defaults — applied when a new model tab opens.
-  unitDefaultEnv: 'earth',
+  unitDefaultEnv: 'greenworld',
   unitDefaultReflections: true,
   unitDefaultBob: true,
   unitDefaultWaterReflections: true,
@@ -8882,7 +8882,7 @@ function openSettingsDialog() {
   $('#set-show-features').checked = !!state.showFeatures
   $('#set-show-startpos').checked = !!state.showStartPositions
   // Unit Editor tab — defaults for newly-opened model tabs.
-  if ($('#set-unit-env')) $('#set-unit-env').value = s.unitDefaultEnv ?? 'earth'
+  if ($('#set-unit-env')) $('#set-unit-env').value = s.unitDefaultEnv ?? 'greenworld'
   if ($('#set-unit-reflections')) $('#set-unit-reflections').checked = s.unitDefaultReflections !== false
   if ($('#set-unit-bob')) $('#set-unit-bob').checked = s.unitDefaultBob !== false
   if ($('#set-unit-water-reflections')) $('#set-unit-water-reflections').checked = s.unitDefaultWaterReflections !== false
@@ -11501,8 +11501,8 @@ function applyUnitEditorDefaults() {
   const r = modelViewerInstance.renderer
   // Environment first because it swaps the sky scheme; the toggles
   // below operate on flags the env doesn't touch.
-  r.setEnvironment(s.unitDefaultEnv || 'earth')
-  const env = s.unitDefaultEnv || 'earth'
+  r.setEnvironment(s.unitDefaultEnv || 'greenworld')
+  const env = s.unitDefaultEnv || 'greenworld'
   const envRow = [...$$('.mv-env-row')].find((row) => row.dataset.mvEnv === env)
   if (envRow) {
     $$('.mv-env-row').forEach((row) => row.classList.toggle('active', row === envRow))

@@ -318,6 +318,73 @@ const SKY_PRESETS = {
     cloudDensity: 0.55,
     cloudSpeed: 0.015,
   },
+  archipelago: {
+    name: 'Archipelago',
+    // Tropical clear sky — strong blue above, hazy white at horizon.
+    zenith: [0.10, 0.45, 0.92],
+    horizon: [0.85, 0.95, 1.02],
+    sun1: { color: [2.50, 2.20, 1.55], dir: [-0.45, 0.45, -0.78], size: 0.030 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [1.15, 1.15, 1.18],
+    cloudShadow: [0.65, 0.72, 0.80],
+    cloudCoverage: 0.35,
+    cloudDensity: 0.70,
+    cloudSpeed: 0.012,
+  },
+  metal: {
+    name: 'Metal world',
+    // Cloudless metallic sky — neutral steel above, hot exhaust
+    // band at horizon (think industrial smog without the clouds).
+    zenith: [0.32, 0.36, 0.42],
+    horizon: [0.85, 0.78, 0.65],
+    sun1: { color: [1.95, 1.85, 1.65], dir: [-0.50, 0.45, -0.75], size: 0.025 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.0, 0.0, 0.0],
+    cloudShadow: [0.0, 0.0, 0.0],
+    cloudCoverage: 0.0,   // no clouds per request
+    cloudDensity: 0.0,
+    cloudSpeed: 0.0,
+  },
+  lunar: {
+    name: 'Lunar',
+    // Airless world — near-black sky shading into a faint planet
+    // glow at the horizon.  No clouds because no atmosphere.
+    zenith: [0.005, 0.008, 0.025],
+    horizon: [0.12, 0.10, 0.16],
+    sun1: { color: [3.00, 2.85, 2.55], dir: [-0.45, 0.55, -0.70], size: 0.020 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.0, 0.0, 0.0],
+    cloudShadow: [0.0, 0.0, 0.0],
+    cloudCoverage: 0.0,
+    cloudDensity: 0.0,
+    cloudSpeed: 0.0,
+  },
+  slate: {
+    name: 'Slate (overcast)',
+    // Gunmetal overcast sky — heavy cloud cover, diffuse light.
+    zenith: [0.32, 0.34, 0.38],
+    horizon: [0.65, 0.65, 0.68],
+    sun1: { color: [1.20, 1.20, 1.18], dir: [-0.45, 0.65, -0.65], size: 0.040 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.78, 0.78, 0.80],
+    cloudShadow: [0.40, 0.40, 0.45],
+    cloudCoverage: 0.95,
+    cloudDensity: 0.85,
+    cloudSpeed: 0.018,
+  },
+  marsh: {
+    name: 'Marsh (hazy)',
+    // Swampy haze — yellowed sky with low-hanging clouds.
+    zenith: [0.55, 0.60, 0.55],
+    horizon: [0.92, 0.88, 0.65],
+    sun1: { color: [1.85, 1.65, 1.10], dir: [-0.45, 0.55, -0.70], size: 0.045 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.92, 0.88, 0.72],
+    cloudShadow: [0.45, 0.42, 0.30],
+    cloudCoverage: 0.55,
+    cloudDensity: 0.70,
+    cloudSpeed: 0.008,
+  },
 }
 
 // ENVIRONMENT_PRESETS bundle every visual world knob into one
@@ -334,18 +401,157 @@ const SKY_PRESETS = {
 // the sea shader; defined here so a future water-tint pass can pick
 // up the preset without re-editing the renderer.  For now the sea
 // shader uses its built-in aqua palette.
+// ENVIRONMENT_PRESETS map onto Total Annihilation's actual map
+// tilesets where one exists — Greenworld is the default since most
+// TA maps use it, and the other built-in TA tilesets get their own
+// thematically appropriate water + seabed + sky settings.  A few
+// extras (sunset / night / alien-twin) extend the picker for
+// special moods without needing dedicated tileset assets.
+//
+// Per-environment fields:
+//   * sky                — name of a SKY_PRESETS entry
+//   * terrainTileset     — passed to /api/studio/ground-tile/{name}
+//   * lightDir           — world-space direction toward the sun
+//   * waterShallow/Mid/Deep — three-stop water column tint
+//   * waterTranslucency  — alpha multiplier (0.5 = opaque, 1.5 = glass)
+//   * seabedSand/Rock    — colours of the seabed dunes + outcrops
+//   * seabedCaustic      — tint of the caustic light shaft on the bed
 const ENVIRONMENT_PRESETS = {
-  earth: {
-    name: 'Earth',
+  greenworld: {
+    name: 'Greenworld',
     sky: 'earth',
     terrainTileset: 'greenworld',
     lightDir: [-0.6, 0.95, 0.4],
-    // Classic Caribbean three-stop: turquoise shallows, teal mid,
-    // navy abyss.  Stays as the reference all other planets riff
-    // on visually.
-    waterShallow: [0.20, 0.78, 0.82],
-    waterMid:     [0.08, 0.45, 0.62],
-    waterDeep:    [0.02, 0.12, 0.28],
+    // Deeper blue ocean per request — moves away from the previous
+    // tropical aqua toward a temperate / open-ocean look.
+    waterShallow: [0.10, 0.40, 0.72],
+    waterMid:     [0.04, 0.18, 0.45],
+    waterDeep:    [0.01, 0.05, 0.20],
+    waterTranslucency: 0.95,
+    seabedSand:    [0.25, 0.32, 0.30],
+    seabedRock:    [0.14, 0.18, 0.18],
+    seabedCaustic: [0.35, 0.65, 0.95],
+  },
+  archipelago: {
+    name: 'Archipelago',
+    sky: 'archipelago',
+    terrainTileset: 'archipelago',
+    lightDir: [-0.50, 0.92, 0.35],
+    // Crystal Caribbean: vibrant aqua, very translucent so the
+    // pale sandy bed reads clearly through the water.
+    waterShallow: [0.40, 0.92, 0.95],
+    waterMid:     [0.12, 0.65, 0.85],
+    waterDeep:    [0.04, 0.22, 0.45],
+    waterTranslucency: 1.55,
+    seabedSand:    [0.95, 0.92, 0.78],   // white tropical sand
+    seabedRock:    [0.78, 0.72, 0.55],
+    seabedCaustic: [0.95, 0.95, 0.85],
+  },
+  metal: {
+    name: 'Metal world',
+    sky: 'metal',
+    terrainTileset: 'metal',
+    lightDir: [-0.55, 0.85, 0.30],
+    // Oily industrial liquid: thick dark goo with a metallic sheen
+    // at the top, drops to deep black underneath.  Translucency
+    // pushed down so the bed is barely visible — this stuff isn't
+    // water, it's coolant.
+    waterShallow: [0.32, 0.30, 0.28],
+    waterMid:     [0.14, 0.12, 0.12],
+    waterDeep:    [0.04, 0.04, 0.05],
+    waterTranslucency: 0.55,
+    seabedSand:    [0.22, 0.22, 0.24],
+    seabedRock:    [0.36, 0.32, 0.28],   // rust-stained metal plates
+    seabedCaustic: [0.55, 0.55, 0.65],
+  },
+  lava: {
+    name: 'Lava world',
+    sky: 'lava',
+    terrainTileset: 'lava',
+    lightDir: [-0.50, 0.70, 0.40],
+    // Glowing molten lake — yellow-hot crusts breaking through
+    // dark cooled flows, going black in the deeps.  Translucency
+    // up because the molten layer is bright enough to bleed.
+    waterShallow: [1.40, 0.55, 0.08],
+    waterMid:     [0.85, 0.18, 0.02],
+    waterDeep:    [0.18, 0.04, 0.01],
+    waterTranslucency: 1.15,
+    seabedSand:    [0.55, 0.20, 0.08],   // cooled lava crust
+    seabedRock:    [0.18, 0.06, 0.03],
+    seabedCaustic: [1.50, 0.85, 0.25],
+  },
+  moon: {
+    name: 'Lunar',
+    sky: 'lunar',
+    terrainTileset: 'moon',
+    lightDir: [-0.45, 0.85, 0.35],
+    // Lunar water — barely there.  Cold pale blue tint with very
+    // high translucency so the bed dominates the look.  Stylised
+    // — there's obviously no real water on the moon.
+    waterShallow: [0.45, 0.55, 0.70],
+    waterMid:     [0.20, 0.30, 0.45],
+    waterDeep:    [0.05, 0.08, 0.18],
+    waterTranslucency: 1.85,
+    seabedSand:    [0.62, 0.60, 0.58],   // lunar regolith
+    seabedRock:    [0.32, 0.30, 0.28],
+    seabedCaustic: [0.80, 0.85, 0.95],
+  },
+  mars: {
+    name: 'Mars',
+    sky: 'mars',
+    terrainTileset: 'mars',
+    lightDir: [-0.55, 0.65, 0.40],
+    // Purple Martian water as requested — rusty mauve at the top,
+    // deepening to dark indigo.
+    waterShallow: [0.62, 0.38, 0.72],
+    waterMid:     [0.32, 0.18, 0.50],
+    waterDeep:    [0.08, 0.04, 0.18],
+    waterTranslucency: 0.90,
+    seabedSand:    [0.55, 0.30, 0.22],   // iron-oxide red
+    seabedRock:    [0.32, 0.18, 0.14],
+    seabedCaustic: [0.80, 0.55, 0.85],
+  },
+  slate: {
+    name: 'Slate',
+    sky: 'slate',
+    terrainTileset: 'slate',
+    lightDir: [-0.45, 0.85, 0.40],
+    // Cold grey water under overcast sky — like a quarry pool.
+    waterShallow: [0.32, 0.38, 0.42],
+    waterMid:     [0.15, 0.20, 0.25],
+    waterDeep:    [0.04, 0.06, 0.10],
+    waterTranslucency: 0.80,
+    seabedSand:    [0.28, 0.30, 0.30],
+    seabedRock:    [0.15, 0.17, 0.18],
+    seabedCaustic: [0.55, 0.65, 0.75],
+  },
+  marsh: {
+    name: 'Marsh',
+    sky: 'marsh',
+    terrainTileset: 'marsh',
+    lightDir: [-0.45, 0.85, 0.40],
+    // Tannin-stained swamp water — brown-green muddy translucent.
+    waterShallow: [0.45, 0.55, 0.30],
+    waterMid:     [0.20, 0.28, 0.12],
+    waterDeep:    [0.06, 0.10, 0.04],
+    waterTranslucency: 0.85,
+    seabedSand:    [0.32, 0.30, 0.18],
+    seabedRock:    [0.15, 0.18, 0.10],
+    seabedCaustic: [0.65, 0.75, 0.45],
+  },
+  desert: {
+    name: 'Desert (acid)',
+    sky: 'desert',
+    terrainTileset: 'desert',
+    lightDir: [-0.55, 0.85, 0.35],
+    // Acid lake — pale chartreuse shallows over toxic green deeps.
+    waterShallow: [0.55, 0.92, 0.30],
+    waterMid:     [0.18, 0.55, 0.15],
+    waterDeep:    [0.05, 0.18, 0.06],
+    waterTranslucency: 0.95,
+    seabedSand:    [0.55, 0.48, 0.22],   // dry yellow dirt
+    seabedRock:    [0.28, 0.22, 0.10],
+    seabedCaustic: [0.85, 0.95, 0.45],
   },
   sunset: {
     name: 'Sunset',
@@ -357,6 +563,10 @@ const ENVIRONMENT_PRESETS = {
     waterShallow: [0.55, 0.55, 0.65],
     waterMid:     [0.20, 0.20, 0.45],
     waterDeep:    [0.05, 0.05, 0.18],
+    waterTranslucency: 0.95,
+    seabedSand:    [0.32, 0.25, 0.22],
+    seabedRock:    [0.18, 0.12, 0.10],
+    seabedCaustic: [0.85, 0.55, 0.45],
   },
   night: {
     name: 'Night',
@@ -366,59 +576,25 @@ const ENVIRONMENT_PRESETS = {
     waterShallow: [0.10, 0.20, 0.32],
     waterMid:     [0.04, 0.08, 0.18],
     waterDeep:    [0.01, 0.02, 0.06],
-  },
-  desert: {
-    name: 'Desert',
-    sky: 'desert',
-    terrainTileset: 'desert',
-    lightDir: [-0.55, 0.85, 0.35],
-    // Acid lake — pale chartreuse shallows over deeper toxic green.
-    waterShallow: [0.55, 0.85, 0.35],
-    waterMid:     [0.20, 0.55, 0.20],
-    waterDeep:    [0.06, 0.20, 0.08],
-  },
-  arctic: {
-    name: 'Arctic',
-    sky: 'arctic',
-    terrainTileset: 'arctic',
-    lightDir: [-0.40, 0.55, 0.55],
-    // Glacial meltwater — pale icy blue with milky shallows.
-    waterShallow: [0.65, 0.85, 0.95],
-    waterMid:     [0.30, 0.55, 0.78],
-    waterDeep:    [0.05, 0.12, 0.25],
-  },
-  lava: {
-    name: 'Lava',
-    sky: 'lava',
-    terrainTileset: 'lavarock',
-    lightDir: [-0.5, 0.65, 0.4],
-    // Molten lake — yellow-hot crusts at the surface, glowing red
-    // through to black under-pool.
-    waterShallow: [1.10, 0.55, 0.10],
-    waterMid:     [0.55, 0.10, 0.05],
-    waterDeep:    [0.12, 0.02, 0.01],
-  },
-  mars: {
-    name: 'Mars',
-    sky: 'mars',
-    terrainTileset: 'desert',
-    lightDir: [-0.55, 0.65, 0.40],
-    // Purple Martian water as requested — rusty mauve at the top,
-    // deepening to a dark indigo.
-    waterShallow: [0.62, 0.38, 0.72],
-    waterMid:     [0.32, 0.18, 0.50],
-    waterDeep:    [0.08, 0.04, 0.18],
+    waterTranslucency: 0.85,
+    seabedSand:    [0.10, 0.12, 0.15],
+    seabedRock:    [0.04, 0.05, 0.08],
+    seabedCaustic: [0.20, 0.35, 0.55],
   },
   alienTwin: {
     name: 'Alien (twin suns)',
     sky: 'alienTwin',
-    terrainTileset: 'lunar',
+    terrainTileset: 'moon',
     lightDir: [-0.45, 0.75, 0.40],
     // Bioluminescent alien water — cyan shallows, electric teal
     // mid, deep void.
     waterShallow: [0.30, 0.95, 0.85],
     waterMid:     [0.12, 0.50, 0.65],
     waterDeep:    [0.04, 0.10, 0.22],
+    waterTranslucency: 1.10,
+    seabedSand:    [0.42, 0.32, 0.55],
+    seabedRock:    [0.20, 0.12, 0.32],
+    seabedCaustic: [0.60, 1.00, 0.95],
   },
 }
 
@@ -918,6 +1094,10 @@ const GROUND_FS = `
   uniform vec3 uWaterShallow;        // shallow / sunlit water tint (closest to surface light)
   uniform vec3 uWaterMid;            // mid depth tint
   uniform vec3 uWaterDeep;           // abyssal tint
+  uniform float uWaterTranslucency;  // multiplier on water alpha — higher = clearer
+  uniform vec3 uSeabedSand;          // colour of the bed's sand / dune surface
+  uniform vec3 uSeabedRock;          // colour of rocky outcrops
+  uniform vec3 uSeabedCaustic;       // tint of the caustic light shaft on the bed
 
   float sampleShadow() {
     if (uShadowEnabled < 0.5) return 1.0;
@@ -975,20 +1155,17 @@ const GROUND_FS = `
     if (uSeabedActive > 0.5) {
       // ── Seabed pass: rocks + dunes lit by caustic light from
       // above.  Drawn first, depth-tested under the water surface.
-      // Dark palette — the bed should read as silt/wet rock seen
-      // through metres of blue water, not bright sand on a beach.
+      // Bed colours come from the active environment preset so
+      // Archipelago gets white sand, Metal gets dark grey, Lava
+      // glows red, etc.
       float bedH = seabedHeight(vWorldPos.xz);
-      vec3 sand = vec3(0.28, 0.24, 0.20);
-      vec3 rock = vec3(0.14, 0.12, 0.10);
-      float rockMix = smoothstep(0.4, 2.0, bedH);
-      vec3 col = mix(sand, rock, rockMix);
+      float rockMix = smoothstep(2.0, 5.5, bedH);
+      vec3 col = mix(uSeabedSand, uSeabedRock, rockMix);
       // Static caustic shading — sampled with t=0 so the bed reads
       // as a fixed environment rather than a rippling layer of
-      // water.  Earlier passes animated the caustic against time,
-      // which made the user perceive the SEABED itself as moving.
-      // The water surface above still animates; the bed sits still.
+      // water.
       float caustic = seaCaustic(vWorldPos.xz, 0.0);
-      col += caustic * vec3(0.45, 0.70, 0.95) * 0.45;
+      col += caustic * uSeabedCaustic * 0.45;
       col *= 0.45 + 0.35 * shadow;
       // Seabed also fades into the horizon colour at distance so
       // the far-edge isn't a sharp ring of dark seafloor visible
@@ -1118,6 +1295,11 @@ const GROUND_FS = `
       float aOut = mix(0.35, 0.62, smoothstep(1.0, 6.0, bedDepth));
       aOut = mix(aOut, 0.78, fresnel * 0.6);
       aOut = mix(aOut, 1.0, horizonMix);
+      // Per-environment translucency multiplier — Archipelago and
+      // Lunar pull this DOWN to expose more of the seabed; Metal
+      // pushes it UP for thick oily liquid; default 1.0 keeps the
+      // base aqua look.
+      aOut = clamp(aOut * uWaterTranslucency, 0.05, 1.0);
       gl_FragColor = vec4(surface, aOut * fade);
       return;
     }
@@ -1159,7 +1341,7 @@ export class ModelRenderer {
     // activeEnvironment tracks the full env preset (sky scheme +
     // terrain + light dir + water tints).  Pulled from each frame
     // when the sea shader needs its tint stops.
-    this.activeEnvironment = ENVIRONMENT_PRESETS.earth
+    this.activeEnvironment = ENVIRONMENT_PRESETS.greenworld
     this.skyColor = [0.95, 1.00, 1.08]
     this.groundColor = [0.32, 0.30, 0.26]
     this.skyTop = [0.35, 0.45, 0.6]
@@ -1677,13 +1859,18 @@ export class ModelRenderer {
     // Waves toggle off → flat sea (intensity 0); otherwise use the
     // slider value so the user can scale waves from glassy to gale.
     gl.uniform1f(this.uGroundWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
-    // Per-planet water tints come from the active environment preset.
-    // Fall back to the Earth aqua palette if a preset doesn't override
-    // a particular stop.
-    const env = this.activeEnvironment || ENVIRONMENT_PRESETS.earth
-    gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.20, 0.78, 0.82])
-    gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.08, 0.45, 0.62])
-    gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.02, 0.12, 0.28])
+    // Per-environment water + seabed colours come from the active
+    // environment preset.  Default values pull from greenworld so
+    // an environment that doesn't override a particular stop still
+    // looks like temperate ocean.
+    const env = this.activeEnvironment || ENVIRONMENT_PRESETS.greenworld
+    gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.10, 0.40, 0.72])
+    gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.04, 0.18, 0.45])
+    gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.01, 0.05, 0.20])
+    gl.uniform1f(this.uGroundWaterTranslucency, env.waterTranslucency ?? 1.0)
+    gl.uniform3fv(this.uGroundSeabedSand,    env.seabedSand    || [0.25, 0.32, 0.30])
+    gl.uniform3fv(this.uGroundSeabedRock,    env.seabedRock    || [0.14, 0.18, 0.18])
+    gl.uniform3fv(this.uGroundSeabedCaustic, env.seabedCaustic || [0.35, 0.65, 0.95])
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -2173,6 +2360,10 @@ export class ModelRenderer {
     this.uGroundWaterShallow = gl.getUniformLocation(prog, 'uWaterShallow')
     this.uGroundWaterMid = gl.getUniformLocation(prog, 'uWaterMid')
     this.uGroundWaterDeep = gl.getUniformLocation(prog, 'uWaterDeep')
+    this.uGroundWaterTranslucency = gl.getUniformLocation(prog, 'uWaterTranslucency')
+    this.uGroundSeabedSand = gl.getUniformLocation(prog, 'uSeabedSand')
+    this.uGroundSeabedRock = gl.getUniformLocation(prog, 'uSeabedRock')
+    this.uGroundSeabedCaustic = gl.getUniformLocation(prog, 'uSeabedCaustic')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

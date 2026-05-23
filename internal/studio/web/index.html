@@ -209,30 +209,42 @@
             <div class="ribbon-dropdown-popup hidden" id="mv-options-dropdown-popup">
               <div class="menu-section-label">Environment</div>
               <div class="menu-row menu-row-submenu" id="mv-opt-env-row" role="button" tabindex="0" title="Pick the world look">
-                <span class="ico" id="mv-env-current-ico">🌎</span><span class="env-current-lbl" id="mv-env-current-lbl">Earth</span><span class="chev-right">▸</span>
+                <span class="ico" id="mv-env-current-ico">🌳</span><span class="env-current-lbl" id="mv-env-current-lbl">Greenworld</span><span class="chev-right">▸</span>
                 <div class="ribbon-submenu hidden" id="mv-env-submenu">
-                  <button class="menu-row mv-env-row active" data-mv-env="earth" title="Earth — blue sky, green terrain, ocean water">
-                    <span class="ico">🌎</span><span>Earth</span>
+                  <button class="menu-row mv-env-row active" data-mv-env="greenworld" title="Greenworld — lush forest, deeper-blue ocean (TA default)">
+                    <span class="ico">🌳</span><span>Greenworld</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="sunset" title="Earth at sunset — warm sky">
-                    <span class="ico">🌇</span><span>Sunset</span>
+                  <button class="menu-row mv-env-row" data-mv-env="archipelago" title="Archipelago — tropical white-sand seabed, crystal blue translucent water">
+                    <span class="ico">🏝️</span><span>Archipelago</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="night" title="Earth at night — dark sky, moonlit water">
-                    <span class="ico">🌙</span><span>Night</span>
+                  <button class="menu-row mv-env-row" data-mv-env="metal" title="Metal world — cloudless industrial sky, thick oily coolant">
+                    <span class="ico">⚙️</span><span>Metal</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="desert" title="Desert — sandy terrain, hot sky">
+                  <button class="menu-row mv-env-row" data-mv-env="desert" title="Desert — sandy terrain, acid-green lake">
                     <span class="ico">🏜️</span><span>Desert</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="arctic" title="Arctic — pale sky, icy terrain">
-                    <span class="ico">❄️</span><span>Arctic</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="lava" title="Lava world — red sky, molten ground">
+                  <button class="menu-row mv-env-row" data-mv-env="lava" title="Lava world — red sky, glowing molten lakes">
                     <span class="ico">🌋</span><span>Lava</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="mars" title="Mars — orange dusty sky, rusty terrain">
+                  <button class="menu-row mv-env-row" data-mv-env="marsh" title="Marsh — hazy sky, tannin-stained swamp water">
+                    <span class="ico">🪷</span><span>Marsh</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="slate" title="Slate — overcast sky, cold grey quarry water">
+                    <span class="ico">⛰️</span><span>Slate</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="moon" title="Lunar — airless black sky, highly translucent water">
+                    <span class="ico">🌙</span><span>Lunar</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="mars" title="Mars — orange dusty sky, purple water">
                     <span class="ico">🔴</span><span>Mars</span>
                   </button>
-                  <button class="menu-row mv-env-row" data-mv-env="alienTwin" title="Alien — twin suns, purple sky">
+                  <button class="menu-row mv-env-row" data-mv-env="sunset" title="Greenworld at sunset — warm sky, muted water">
+                    <span class="ico">🌇</span><span>Sunset</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="night" title="Greenworld at night — dark sky, moonlit water">
+                    <span class="ico">🌌</span><span>Night</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="alienTwin" title="Alien — twin suns, purple sky, bioluminescent water">
                     <span class="ico">👽</span><span>Alien (twin suns)</span>
                   </button>
                 </div>
@@ -532,13 +544,17 @@
             <label class="field">
               <span>World look for new model tabs</span>
               <select id="set-unit-env">
-                <option value="earth">Earth</option>
+                <option value="greenworld">Greenworld</option>
+                <option value="archipelago">Archipelago</option>
+                <option value="metal">Metal</option>
+                <option value="desert">Desert</option>
+                <option value="lava">Lava</option>
+                <option value="marsh">Marsh</option>
+                <option value="slate">Slate</option>
+                <option value="moon">Lunar</option>
+                <option value="mars">Mars</option>
                 <option value="sunset">Sunset</option>
                 <option value="night">Night</option>
-                <option value="desert">Desert</option>
-                <option value="arctic">Arctic</option>
-                <option value="lava">Lava</option>
-                <option value="mars">Mars</option>
                 <option value="alienTwin">Alien (twin suns)</option>
               </select>
             </label>
