@@ -408,6 +408,7 @@ const MAIN_FS = `
   uniform float uSeaActive;     // 1 in Sea mode — adds caustic bounce light + sun shimmer to the hull
   uniform float uTime;          // shared sea time (for the bounce light to animate with the water)
   uniform float uWaterY;        // world Y of the water plane — fades reflections out above it
+  uniform float uWaterOnHull;   // Water Surface Reflections toggle — 0 disables hull bounce/shimmer
 
   // sampleShadow does a 3×3 PCF tap into the shadow map.  Returns
   // 1.0 = fully lit, 0.0 = fully shadowed (with a soft penumbra in
@@ -482,7 +483,7 @@ const MAIN_FS = `
     //     facet reflects the sun directly at the hull.  Hits
     //     side-facing surfaces best, dances across them as the
     //     waves move.
-    if (uSeaActive > 0.5) {
+    if (uSeaActive > 0.5 && uWaterOnHull > 0.5) {
       // Water reflections only land on the SIDES of a hull — the
       // plating that's near the waterline and faces roughly outward.
       // Two gates pick those out:
@@ -532,12 +533,16 @@ const MAIN_FS = `
     col = pow(col, vec3(0.9));
     if (uReflectionTint > 0.5) {
       // Mirror reflection underwater: shift toward the deep-water
-      // hue, drop overall brightness so the surface clearly reads
-      // as a reflection rather than the actual unit.
-      col = mix(col, col * vec3(0.4, 0.6, 0.85), 0.65);
-      col *= 0.7;
+      // hue but keep most of the original brightness so the
+      // reflection survives the water-surface alpha blend on top.
+      col = mix(col, col * vec3(0.55, 0.75, 0.95), 0.45);
+      col *= 0.90;
     }
-    gl_FragColor = vec4(col, uReflectionTint > 0.5 ? 0.65 : 1.0);
+    // Reflection pass output at full alpha so the water surface's
+    // alpha mix is the only thing dimming it — previously dropping
+    // to 0.65 here compounded with the water alpha and made the
+    // reflection nearly invisible.
+    gl_FragColor = vec4(col, 1.0);
   }
 `
 
@@ -829,7 +834,6 @@ const GROUND_FS = `
   uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
   uniform float uSeabedY;        // base Y of the seabed plane (below uGroundY)
   uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
-  uniform float uOptWaterReflections; // 0 disables sky/sun reflection on the water surface
   uniform float uOptSpecular;        // 0 disables broad/tight specular + sparkles
 
   float sampleShadow() {
@@ -962,9 +966,12 @@ const GROUND_FS = `
       float specBroad = pow(ndh, 24.0) * 1.30 * closeUp;
       float specTight = pow(ndh, 140.0) * 3.60 * closeUp;
       vec3 sunColor = vec3(1.55, 1.30, 0.90);
-      // Water Reflections toggle: when off, the surface ignores the
-      // sky tint entirely (shows only the water column colour).
-      float reflectivity = (0.10 + 0.90 * fresnel) * uOptWaterReflections;
+      // Fresnel sky-on-water reflection is intrinsic to how water
+      // reads — without it the surface looks like flat blue paint.
+      // Toggling "Water Surface Reflections" off doesn't kill this;
+      // that toggle gates the hull bounce in the main shader so the
+      // unit stops picking up the water's reflections.
+      float reflectivity = 0.10 + 0.90 * fresnel;
       vec3 surface = mix(waterCol, sky, reflectivity);
       surface += (specBroad + specTight) * sunColor * uOptSpecular;
 
@@ -1009,8 +1016,13 @@ const GROUND_FS = `
       // anything behind.
       float bedAtXZ = uSeabedY + seabedHeight(vWorldPos.xz);
       float bedDepth = max(0.0, vWorldPos.y - bedAtXZ);
-      float aOut = mix(0.55, 0.90, smoothstep(1.0, 6.0, bedDepth));
-      aOut = mix(aOut, 0.97, fresnel * 0.6);
+      // Water alpha is intentionally low so the ship reflection
+      // rendered underneath bleeds through clearly.  The water
+      // column colour is multiplied INTO the reflection by the
+      // alpha blend (water alpha 0.55 = 55% water tint + 45%
+      // reflection), giving a believable "ship + water" mix.
+      float aOut = mix(0.35, 0.62, smoothstep(1.0, 6.0, bedDepth));
+      aOut = mix(aOut, 0.78, fresnel * 0.6);
       aOut = mix(aOut, 1.0, horizonMix);
       gl_FragColor = vec4(surface, aOut * fade);
       return;
@@ -1597,6 +1609,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uSeaActive, 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
     gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
+    gl.uniform1f(this.uMainWaterOnHull, 0)
 
     // Mirror across water Y = model.bounds.min[1] - 0.05 (same Y
     // the ground plane sits at).  reflectMatrix = T(0, 2*Y, 0) * S(1,-1,1)
@@ -1655,6 +1668,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uSeaActive, (!flat && this.groundMode === 'sea') ? 1 : 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
     gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
+    gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -1926,6 +1940,7 @@ export class ModelRenderer {
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
     this.uMainTime = gl.getUniformLocation(prog, 'uTime')
     this.uMainWaterY = gl.getUniformLocation(prog, 'uWaterY')
+    this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
   }
 
   #initShadowProgram() {
