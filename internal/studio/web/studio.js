@@ -192,7 +192,13 @@ class MapDoc {
 // reach the active per-map state inside this module.
 const tabs = []
 let activeTabIndex = -1
-function activeMap() { return activeTabIndex >= 0 ? tabs[activeTabIndex]?.map : null }
+function activeMap() {
+  const t = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  // Model tabs deliberately have no .map — callers all gracefully
+  // handle the null so the editor's map-only state stays inert when
+  // a 3DO tab is on top.
+  return t && t.type !== 'model' ? t.map : null
+}
 
 // Session-level state lives here.  These fields are shared across all
 // tabs: drawer filters, view-menu toggles, panel layout, the section /
@@ -400,6 +406,8 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeNanoFX()
   wireWelcomeGlamour()
   wireWelcomeAmbient()
+  wireWelcomeTabs()
+  wireModelDialogs()
   // Multi-tab management — the tab bar + "+" popout above the toolbar.
   wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
@@ -545,7 +553,9 @@ function persistPrefs() {
 function snapshotActiveTabModuleLets() {
   if (activeTabIndex < 0) return
   const tab = tabs[activeTabIndex]
-  if (!tab) return
+  // Model tabs have no .map / undo stack — bail out so we don't
+  // throw on `m.undoStack = ...` when the outgoing tab is a 3DO.
+  if (!tab || !tab.map) return
   const m = tab.map
   m.undoStack = undoStack.slice()
   m.redoStack = redoStack.slice()
@@ -562,7 +572,8 @@ function snapshotActiveTabModuleLets() {
 function restoreActiveTabModuleLets() {
   if (activeTabIndex < 0) return
   const tab = tabs[activeTabIndex]
-  if (!tab) return
+  // Same guard as snapshot — model tabs carry no map state.
+  if (!tab || !tab.map) return
   const m = tab.map
   undoStack.length = 0
   for (const x of m.undoStack) undoStack.push(x)
@@ -633,6 +644,21 @@ function unsavedChangesDialog({ mapName } = {}) {
 async function closeTab(idx) {
   if (idx < 0 || idx >= tabs.length) return
   const tab = tabs[idx]
+  // Model tabs have no dirty/save concept — just unhook GPU buffers
+  // (the model3d module handles disposal when the next open() runs
+  // or on viewer dispose) and drop the entry.
+  if (tab.type === 'model') {
+    tabs.splice(idx, 1)
+    if (tabs.length === 0) {
+      activeTabIndex = -1
+      $('#model-viewer-dialog').classList.add('hidden')
+      showWelcomeAfterLastTabClose()
+      return
+    }
+    if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1
+    switchToTab(activeTabIndex, { fresh: false, force: true })
+    return
+  }
   // Prompt before closing a dirty tab.  Move focus to that tab first
   // so the user can see what they're about to lose AND so a 'Save'
   // choice operates on this tab's data (save() reads state).
@@ -675,14 +701,39 @@ function showWelcomeAfterLastTabClose() {
 function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   if (nextIdx < 0 || nextIdx >= tabs.length) return
   if (!force && nextIdx === activeTabIndex) return
-  // Snapshot the outgoing tab.  Skip on fresh activation (the new
-  // tab's MapDoc is the source of truth — we don't want to splat
-  // module-let leftovers from the previously-active tab onto it).
-  if (!fresh && activeTabIndex >= 0) snapshotActiveTabModuleLets()
+  const outgoing = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const incoming = tabs[nextIdx]
+
+  // Snapshot the outgoing MAP tab.  Model tabs hold no module-let
+  // state, so the snapshot/restore dance is bypassed for them.
+  if (!fresh && outgoing && outgoing.type !== 'model') snapshotActiveTabModuleLets()
   abortTransientGestureState()
   activeTabIndex = nextIdx
+
+  // Route on tab type.  Model tabs slot the viewer overlay over
+  // the editor's content area while leaving the shared topbar +
+  // tabs + footer visible; map tabs hide the overlay and bring the
+  // map editor back to front.
+  if (incoming.type === 'model') {
+    renderMapTabs()
+    // .app stays VISIBLE so its topbar / tab bar / statusbar keep
+    // showing — the model viewer dialog overlays only the middle.
+    $('#app')?.classList.remove('hidden')
+    $('#welcome-dialog')?.classList.add('hidden')
+    $('#model-open-dialog')?.classList.add('hidden')
+    $('#model-viewer-dialog').classList.remove('hidden')
+    updateTopbarDocInfo(incoming)
+    void activateModelTab(incoming)
+    return
+  }
+
+  // Map tab: tear down any visible model overlay before the editor
+  // takes the screen.
+  $('#model-viewer-dialog')?.classList.add('hidden')
+
   restoreActiveTabModuleLets()
   renderMapTabs()
+  updateTopbarDocInfo(incoming)
   // recreateEditorView() needs an active app surface to mount into.
   $('#app')?.classList.remove('hidden')
   recreateEditorView()
@@ -719,57 +770,93 @@ function mapDisplayName(m) {
 }
 
 function renderMapTabs() {
+  // Single tab bar now — the .app's .map-tabs is shared between the
+  // map editor and the 3DO viewer (the viewer's overlay sits under
+  // the tabs row).
   const list = document.querySelector('#map-tabs-list')
   if (!list) return
   list.replaceChildren()
   for (let i = 0; i < tabs.length; i++) {
-    const tab = tabs[i]
-    const m = tab.map
-    const display = mapDisplayName(m)
-    const el = document.createElement('button')
-    el.type = 'button'
-    // Dirty maps render their label in italic + a trailing * so the
-    // user can see at a glance which tabs have unsaved edits (#45).
-    el.className = 'map-tab'
-      + (i === activeTabIndex ? ' active' : '')
-      + (m.dirty ? ' dirty' : '')
-    el.dataset.tabIndex = String(i)
-    el.setAttribute('role', 'tab')
-    el.title = `${display}${m.dirty ? ' (unsaved changes)' : ''} · ${m.name || '(no file)'} · ${m.tileW}×${m.tileH}`
-    const lbl = document.createElement('span')
-    lbl.className = 'map-tab-label'
-    lbl.textContent = m.dirty ? `${display}*` : display
-    el.appendChild(lbl)
-    const close = document.createElement('button')
-    close.type = 'button'
-    close.className = 'map-tab-close'
-    close.textContent = '×'
-    close.title = 'Close this map'
-    close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(i) })
-    el.appendChild(close)
-    el.addEventListener('click', () => switchToTab(i))
-    list.appendChild(el)
+    list.appendChild(buildTabElement(tabs[i], i))
   }
 }
 
+function buildTabElement(tab, i) {
+  const el = document.createElement('button')
+  el.type = 'button'
+  el.dataset.tabIndex = String(i)
+  el.setAttribute('role', 'tab')
+
+  let display
+  let title
+  let dirty = false
+  let closeTitle
+  if (tab.type === 'model') {
+    display = tab.meta?.unitTitle || tab.name || '(model)'
+    const metaBits = [tab.meta?.unitName?.toUpperCase(), tab.meta?.side, tab.meta?.category].filter(Boolean).join(' · ')
+    title = `${display}${metaBits ? ` · ${metaBits}` : ''}`
+    closeTitle = 'Close this model'
+  } else {
+    const m = tab.map
+    display = mapDisplayName(m)
+    dirty = !!m?.dirty
+    title = `${display}${dirty ? ' (unsaved changes)' : ''} · ${m?.name || '(no file)'} · ${m?.tileW}×${m?.tileH}`
+    closeTitle = 'Close this map'
+  }
+
+  el.className = 'map-tab'
+    + (i === activeTabIndex ? ' active' : '')
+    + (dirty ? ' dirty' : '')
+    + (tab.type === 'model' ? ' map-tab-model' : '')
+  el.title = title
+
+  // Type icon: 3DO tabs get a tool glyph so map and model tabs are
+  // distinguishable at a glance.
+  if (tab.type === 'model') {
+    const ico = document.createElement('span')
+    ico.className = 'map-tab-icon'
+    ico.textContent = '🛠'
+    el.appendChild(ico)
+  }
+  const lbl = document.createElement('span')
+  lbl.className = 'map-tab-label'
+  lbl.textContent = dirty ? `${display}*` : display
+  el.appendChild(lbl)
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'map-tab-close'
+  close.textContent = '×'
+  close.title = closeTitle
+  close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(i) })
+  el.appendChild(close)
+  el.addEventListener('click', () => switchToTab(i))
+  return el
+}
+
 function wireMapTabBar() {
-  const addBtn = document.querySelector('#map-tab-add')
   const popup = document.querySelector('#map-tab-add-popup')
-  if (!addBtn || !popup) return
-  // Position the popup just below the "+" button each time it opens.
-  // Using position:fixed sidesteps the #map-tabs overflow-x clip that
-  // was previously hiding the popup.
-  const positionPopup = () => {
-    const r = addBtn.getBoundingClientRect()
+  if (!popup) return
+  // The shared tab bar's "+" anchors the popup below it.  Position
+  // uses fixed coords so the popup escapes its host bar's
+  // overflow clip and overlays the model viewer dialog when that's
+  // on top.
+  const anchorPopup = (anchor) => {
+    const r = anchor.getBoundingClientRect()
     popup.style.top = `${Math.round(r.bottom + 2)}px`
     popup.style.left = `${Math.round(r.left)}px`
   }
-  addBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const willShow = popup.classList.contains('hidden')
-    if (willShow) positionPopup()
-    popup.classList.toggle('hidden')
-  })
+  const wireAddButton = (id) => {
+    const btn = document.querySelector(id)
+    if (!btn) return
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const willShow = popup.classList.contains('hidden')
+      if (willShow) anchorPopup(btn)
+      popup.classList.toggle('hidden')
+    })
+  }
+  wireAddButton('#map-tab-add')
+
   document.querySelector('#map-tab-add-new')?.addEventListener('click', () => {
     popup.classList.add('hidden')
     // Open the size dialog in "append a tab" mode.  When the user
@@ -781,9 +868,23 @@ function wireMapTabBar() {
     popup.classList.add('hidden')
     openMapDialog('tabbar')
   })
+  document.querySelector('#map-tab-add-model')?.addEventListener('click', () => {
+    popup.classList.add('hidden')
+    // 'add' so openModelViewer pushes a fresh model tab instead of
+    // overwriting the active one — works from either tab bar.
+    modelOpenIntent = 'add'
+    openModelPicker()
+  })
+  // "New 3DO" is intentionally disabled today — the placeholder is
+  // a click-through to nothing.  Wire it as a defensive no-op so
+  // accidental clicks don't leave the popup open.
+  document.querySelector('#map-tab-add-new-model')?.addEventListener('click', () => {
+    popup.classList.add('hidden')
+  })
   document.addEventListener('click', (e) => {
     if (popup.classList.contains('hidden')) return
-    if (e.target === addBtn || addBtn.contains(e.target)) return
+    const addBtns = ['#map-tab-add'].map((id) => document.querySelector(id)).filter(Boolean)
+    if (addBtns.some((b) => e.target === b || b.contains(e.target))) return
     if (popup.contains(e.target)) return
     popup.classList.add('hidden')
   })
@@ -936,7 +1037,13 @@ let sizeDialogSource = 'welcome' // same idea for the New-map size dialog
 
 async function openMapDialog(source = 'welcome') {
   openMapSource = source
+  // Hide every surface that might be in front of the picker — the
+  // welcome screen on first boot, the 3DO viewer dialog when the
+  // user clicks "Open Map" from a model tab.  Without this the
+  // open list would render behind a higher-z-index dialog and look
+  // like the click did nothing.
   $('#welcome-dialog').classList.add('hidden')
+  $('#model-viewer-dialog').classList.add('hidden')
   $('#open-dialog').classList.remove('hidden')
   $('#open-confirm').disabled = true
   selectedMapPath = null
@@ -978,16 +1085,24 @@ async function fetchMaps() {
 }
 
 // closeOpenDialog returns the user to whichever surface they came from —
-// the Welcome modal on first boot, or back to the editor canvas when
-// they hit File → Open mid-session.
+// the Welcome modal on first boot, the 3DO viewer if the active tab is a
+// model, or back to the map editor when they hit File → Open mid-session.
 function closeOpenDialog() {
   $('#open-dialog').classList.add('hidden')
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
   if (openMapSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
-  } else {
-    // 'editor' / 'tabbar' — the editor is already mounted; just dismiss
-    // the picker without disturbing the active tab.
+    return
+  }
+  // Dialog opened from the editor / tabbar — pop back to whatever was
+  // in front before.  Without this an active model tab leaves the
+  // editor's .app on screen with no map loaded, which the user reads
+  // as "the viewer broke".
+  const active = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  if (active?.type === 'model') {
+    $('#model-viewer-dialog').classList.remove('hidden')
+  } else if (active?.type === 'map') {
+    $('#app')?.classList.remove('hidden')
   }
 }
 
@@ -1798,7 +1913,7 @@ async function openLoadedMap(data, card) {
   // in this new MapDoc — the prior tab keeps its own state intact
   // in tabs[], reachable by clicking back.
   if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
-  tabs.push({ map: new MapDoc() })
+  tabs.push({ type: 'map', map: new MapDoc() })
   activeTabIndex = tabs.length - 1
   restoreActiveTabModuleLets()
   state.tileW = w
@@ -1875,8 +1990,14 @@ async function openLoadedMap(data, card) {
 
   $('#open-dialog').classList.add('hidden')
   $('#welcome-dialog').classList.add('hidden')
+  // If the user came from a model tab, the 3DO viewer was the
+  // surface in front — hide it so the map editor takes the screen.
+  $('#model-viewer-dialog')?.classList.add('hidden')
   $('#app').classList.remove('hidden')
   renderMapTabs()
+  // Refresh the shared topbar + footer hints from this new map tab,
+  // otherwise they keep the previous (model) tab's strings.
+  updateTopbarDocInfo(tabs[activeTabIndex])
 
   // Wire up the canvas + drawer just like startEditor would have done
   // for a fresh map.
@@ -1918,7 +2039,7 @@ async function startEditor() {
   // — otherwise the previous map's minimap leaks into the new one
   // until the next commit.
   if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
-  tabs.push({ map: new MapDoc() })
+  tabs.push({ type: 'map', map: new MapDoc() })
   activeTabIndex = tabs.length - 1
   restoreActiveTabModuleLets()
   state.tileW = w
@@ -1956,8 +2077,10 @@ async function startEditor() {
 
   $('#size-dialog').classList.add('hidden')
   $('#welcome-dialog').classList.add('hidden')
+  $('#model-viewer-dialog')?.classList.add('hidden')
   $('#app').classList.remove('hidden')
   renderMapTabs()
+  updateTopbarDocInfo(tabs[activeTabIndex])
 
   await finishEditorBoot()
 }
@@ -9696,13 +9819,23 @@ function closeSizeDialog() {
   $('#size-dialog').classList.add('hidden')
   if (sizeDialogSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
+    return
   }
-  // 'editor' / 'tabbar' — editor stays visible behind the dismissed dialog.
+  // Restore the surface that was visible before the size dialog
+  // appeared.  When the user came from a model tab via the "+"
+  // popup the 3DO viewer was hidden; bring it back.
+  const active = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  if (active?.type === 'model') {
+    $('#model-viewer-dialog').classList.remove('hidden')
+  }
 }
 
 // openSizeDialog reveals the New-map dialog and focuses the name input
 // so the user can immediately type the friendly map name (#38).
 function openSizeDialog() {
+  // Same as openMapDialog: hide the 3DO viewer if it's the current
+  // surface so the size dialog isn't trapped behind a higher dialog.
+  $('#model-viewer-dialog').classList.add('hidden')
   $('#size-dialog').classList.remove('hidden')
   // Defer the focus to the next frame so the browser has shown the
   // dialog before we try to put the caret in the input.
@@ -10728,6 +10861,621 @@ async function runQualityChecker(payload, { mode = 'save' } = {}) {
     dlg.classList.remove('hidden')
     runChecks()
   })
+}
+
+// ── Modelling tab ──────────────────────────────────────────────────────────
+//
+// The welcome dialog's "Modelling" tab is a thin shell over the model3d/
+// module: clicking "Open a 3DO model" loads /api/studio/models, the
+// browser presents a familiar list-with-filter (same shape as the map
+// picker), and the chosen model opens in a full-screen WebGL viewer.
+
+let modelViewerInstance = null
+let availableModels = []
+let modelsLoaded = false
+let selectedModelName = null
+
+function wireWelcomeTabs() {
+  const tabs = $$('.welcome-tab')
+  const panels = $$('.welcome-tab-panel')
+  if (!tabs.length || !panels.length) return
+  for (const tab of tabs) {
+    if (tab.disabled) continue
+    tab.addEventListener('click', () => {
+      const key = tab.dataset.welcomeTab
+      if (!key) return
+      for (const t of tabs) {
+        t.classList.toggle('active', t === tab)
+        t.setAttribute('aria-selected', t === tab ? 'true' : 'false')
+      }
+      for (const p of panels) {
+        p.classList.toggle('hidden', p.dataset.welcomeTabPanel !== key)
+      }
+    })
+  }
+}
+
+function wireModelDialogs() {
+  const openBtn = $('#welcome-model-open')
+  if (openBtn) openBtn.addEventListener('click', openModelPicker)
+  const back = $('#model-open-back')
+  if (back) back.addEventListener('click', closeModelPicker)
+  const filter = $('#model-filter')
+  if (filter) filter.addEventListener('input', renderModelList)
+  const confirm = $('#model-open-confirm')
+  if (confirm) confirm.addEventListener('click', () => {
+    if (selectedModelName) openModelViewer(selectedModelName)
+  })
+  // No "Close" button on the viewer overlay any more — the user
+  // closes the model tab via the × in the shared tab bar, same
+  // gesture they use for maps.
+  // Camera dropdown: reset + auto-rotate toggle.
+  const reset = $('#mv-act-reset')
+  if (reset) reset.addEventListener('click', () => {
+    if (modelViewerInstance && modelViewerInstance.model) {
+      const cam = modelViewerInstance.camera
+      cam.frameBounds(
+        modelViewerInstance.model.bounds.min,
+        modelViewerInstance.model.bounds.max,
+      )
+      // Restore default angle too — auto-rotate may have walked
+      // yaw around the unit; reset means "back to the entry view".
+      cam.yaw = 35 * Math.PI / 180
+      cam.pitch = 18 * Math.PI / 180
+      modelViewerInstance.renderer.requestRedraw()
+    }
+  })
+  const auto = $('#mv-act-autorotate')
+  if (auto) auto.addEventListener('click', (e) => {
+    // Auto-Rotate now lives inside the Camera dropdown.  Stop the
+    // click from bubbling out to the dropdown's outside-click
+    // handler, otherwise the dropdown closes the instant the user
+    // toggles the row.
+    e.stopPropagation()
+    const on = auto.dataset.on !== '1'
+    auto.dataset.on = on ? '1' : '0'
+    auto.classList.toggle('active', on)
+    if (modelViewerInstance) modelViewerInstance.setAutoRotate(on)
+  })
+  // Tree filter — typing narrows the visible pieces to those whose
+  // name matches.  Match is case-insensitive substring, applied to
+  // both group and leaf rows.
+  const treeFilter = $('#mv-tree-filter')
+  if (treeFilter) treeFilter.addEventListener('input', () => filterPieceTree(treeFilter.value))
+  // Model dropdown actions.
+  wireModelRibbonDropdown('mv-model-dropdown')
+  wireModelRibbonDropdown('mv-anim-dropdown')
+  wireModelRibbonDropdown('mv-camera-dropdown')
+  wireModelRibbonDropdown('mv-render-dropdown')
+  wireModelViewMenu()
+  wireModelTabBar()
+  wireModelChromeButtons()
+  // Copyright year now lives in the shared #copyright-year in the
+  // editor's footer — no per-viewer year stamp needed.
+  const openAgain = $('#mv-act-open')
+  if (openAgain) openAgain.addEventListener('click', () => {
+    closeModelViewer()
+  })
+  const showStats = $('#mv-act-pieces')
+  if (showStats) showStats.addEventListener('click', () => {
+    if (!modelViewerInstance || !modelViewerInstance.model) return
+    const m = modelViewerInstance.model
+    const triCount = m.flat.reduce((n, p) => n + p.drawGroups.reduce((s, g) => s + (g.mode === modelViewerInstance.renderer.gl.TRIANGLES ? g.vertexCount / 3 : 0), 0), 0)
+    setModelViewerStatus(`${m.name} · ${m.flat.length} pieces · ${Math.round(triCount)} triangles`)
+  })
+}
+
+// wireModelRibbonDropdown opens / closes a ribbon-style popup,
+// positioning it below the button.  Mirrors the editor's ribbon
+// behaviour without re-using its handlers (the editor's wireRibbon()
+// is bound to its own button IDs).
+function wireModelRibbonDropdown(id) {
+  const root = document.getElementById(id)
+  if (!root) return
+  const btn = root.querySelector('.ribbon-dropdown-btn')
+  const popup = root.querySelector('.ribbon-dropdown-popup')
+  if (!btn || !popup) return
+  const close = () => popup.classList.add('hidden')
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const wasOpen = !popup.classList.contains('hidden')
+    document.querySelectorAll('#model-viewer-dialog .ribbon-dropdown-popup').forEach((p) => p.classList.add('hidden'))
+    if (wasOpen) return
+    const r = btn.getBoundingClientRect()
+    popup.style.top = `${r.bottom + 4}px`
+    popup.style.left = `${r.left}px`
+    popup.classList.remove('hidden')
+  })
+  document.addEventListener('click', (e) => {
+    if (!root.contains(e.target)) close()
+  })
+  popup.addEventListener('click', (e) => {
+    // Close after a click on any enabled menu-row.
+    const row = e.target.closest('.menu-row')
+    if (row && !row.disabled) close()
+  })
+}
+
+function setModelViewerStatus(msg) {
+  // Shared statusbar — same element the map editor's setStatus
+  // writes to.  Lets the viewer report "armack · 16 pieces" or
+  // "Loading…" in the very same spot the editor uses for tile
+  // commits.
+  const el = $('#status')
+  if (el) el.textContent = msg
+}
+
+// wireModelViewMenu binds the model viewer's Rendering and Camera
+// dropdown menus + the Ground segmented control.  Selecting a Mode
+// row updates both the renderer and the parent button's label so
+// the closed dropdown shows the current choice (matches the map
+// editor's "Display mode" dropdown).
+function wireModelViewMenu() {
+  const applyMode = (mode) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setRenderMode(mode)
+  }
+  const applyOverlay = (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeOverlay(on)
+  }
+  const applyGround = (mode) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setGroundMode(mode)
+  }
+  const applyWireWidth = (px) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeWidth(px)
+  }
+  const modeLabel = $('#mv-render-current-lbl')
+  for (const row of $$('.mv-mode-row')) {
+    row.addEventListener('click', () => {
+      const mode = row.dataset.mvMode
+      if (!mode) return
+      $$('.mv-mode-row').forEach((r) => r.classList.toggle('active', r === row))
+      if (modeLabel) modeLabel.textContent = row.textContent.trim().replace(/✓.*$/, '').trim()
+      applyMode(mode)
+    })
+  }
+  for (const row of $$('.mv-ground-row')) {
+    row.addEventListener('click', () => {
+      const mode = row.dataset.mvGround
+      if (!mode) return
+      $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === row))
+      applyGround(mode)
+    })
+  }
+  const overlay = $('#mv-act-wire-overlay')
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const on = overlay.dataset.on !== '1'
+      overlay.dataset.on = on ? '1' : '0'
+      overlay.classList.toggle('active', on)
+      applyOverlay(on)
+    })
+  }
+  // Wireframe thickness slider — live-updates as the user drags so
+  // they see the effect immediately.  Range 1–6 px (clamped by the
+  // GPU to its supported width range; most drivers cap at 1 px for
+  // standard line rendering, which is why we offer thickness only
+  // as a hint and the renderer fakes thicker lines via a second
+  // overlay pass on top of the first).
+  const slider = $('#mv-wire-thickness')
+  const sliderVal = $('#mv-wire-thickness-val')
+  if (slider) {
+    slider.addEventListener('input', (e) => {
+      e.stopPropagation()
+      const v = parseInt(slider.value, 10)
+      if (sliderVal) sliderVal.textContent = String(v)
+      applyWireWidth(v)
+    })
+  }
+}
+
+// wireModelChromeButtons wires the Settings + Help buttons in the
+// model viewer's right-ribbon to the same dialogs the map editor's
+// chrome opens — sharing dialogs keeps the user out of two parallel
+// UIs and lets them tune brushes / shortcuts in one place.
+function wireModelChromeButtons() {
+  $('#mv-btn-settings')?.addEventListener('click', () => {
+    // openSettingsDialog is defined in the main settings module; if
+    // not yet, click the editor's hidden button as a fallback so the
+    // dialog always reaches whatever wiring lives elsewhere.
+    if (typeof openSettingsDialog === 'function') openSettingsDialog()
+    else $('#btn-settings')?.click()
+  })
+  $('#mv-btn-help')?.addEventListener('click', () => {
+    if (typeof openHelpDialog === 'function') openHelpDialog()
+    else $('#btn-help')?.click()
+  })
+}
+
+// wireModelTabBar — only one tab bar exists now (the shared
+// .map-tabs in the .app shell, populated by renderMapTabs).  Kept
+// as a no-op so the boot sequence stays explicit about which
+// surfaces have tab bars wired.
+function wireModelTabBar() {
+  // intentionally empty — see wireMapTabBar
+}
+
+// modelOpenIntent: tells openModelViewer how to handle the next
+// load — 'add' pushes a new tab, 'replace' overwrites the current
+// active tab (only meaningful when the active tab is already a
+// model tab).
+let modelOpenIntent = 'add'
+
+// updateTopbarDocInfo populates the shared topbar's doc-info pill
+// AND the shared footer's hints from whichever tab is now active.
+// Empty when nothing's open.
+function updateTopbarDocInfo(tab) {
+  const titleEl = $('#app-doc-title')
+  const metaEl = $('#app-doc-meta')
+  const hintsEl = $('#app-hints')
+  const MAP_HINTS = 'Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).'
+  const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
+  if (!titleEl || !metaEl) return
+  if (!tab) {
+    titleEl.textContent = ''
+    metaEl.textContent = ''
+    if (hintsEl) hintsEl.innerHTML = MAP_HINTS
+    return
+  }
+  if (tab.type === 'model') {
+    titleEl.textContent = tab.name
+    const parts = [tab.meta?.unitTitle, tab.meta?.side, tab.meta?.category, tab.meta?.description].filter(Boolean)
+    metaEl.textContent = parts.join(' · ')
+    if (hintsEl) hintsEl.innerHTML = MODEL_HINTS
+  } else {
+    const m = tab.map
+    titleEl.textContent = mapDisplayName(m)
+    const parts = [
+      m?.tileW && m?.tileH ? `${m.tileW}×${m.tileH}` : null,
+      m?.planet || null,
+    ].filter(Boolean)
+    metaEl.textContent = parts.join(' · ')
+    if (hintsEl) hintsEl.innerHTML = MAP_HINTS
+  }
+}
+
+// activateModelTab makes a model tab the visible one — refreshes
+// the shared topbar info and asks the viewer to load that 3DO.
+async function activateModelTab(tab) {
+  // Lazy-import the model3d module so users who never click a
+  // model tab don't pay for the shader / matrix code.
+  const mod = await import('./model3d/index.js')
+  if (!modelViewerInstance) {
+    modelViewerInstance = new mod.ModelViewer({
+      canvas: $('#model-viewer-canvas'),
+      // The shared statusbar's #status element now hosts model
+      // viewer messages too — same DOM element the map editor
+      // writes into.
+      statusEl: $('#status'),
+      onModelLoaded: (model) => renderPieceTree(model),
+    })
+  }
+  const autoBtn = $('#mv-act-autorotate')
+  if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')
+  // open() lazily constructs the renderer the first time, then loads
+  // geometry.  Wait for that before applying the ground hint so
+  // setGroundMode lands on a live renderer.
+  await modelViewerInstance.open(tab.name)
+  applyDefaultGroundFor(tab.meta)
+}
+
+// applyDefaultGroundFor sets the ground mode based on the unit's
+// FBI metadata.  Ships / subs get "sea"; every other unit falls back
+// to "terrain" so opening a kbot after a sub doesn't leave it
+// floating on water from the previous tab's choice.
+function applyDefaultGroundFor(meta) {
+  if (!modelViewerInstance?.renderer) return
+  const want = meta?.defaultGround || 'terrain'
+  modelViewerInstance.renderer.setGroundMode(want)
+  $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r.dataset.mvGround === want))
+}
+
+// refreshPieceTreeEyes resyncs every eye-toggle button in the piece
+// tree from its piece's current `visible` flag.  Called after a
+// cascading hide/show so all descendant rows reflect the new state
+// without rebuilding the entire tree DOM.
+function refreshPieceTreeEyes() {
+  document.querySelectorAll('#model-viewer-tree .piece-eye').forEach((btn) => {
+    const piece = btn._piece
+    if (!piece) return
+    btn.classList.toggle('off', !piece.visible)
+    btn.title = piece.visible ? 'Hide piece (Shift: this piece only)' : 'Show piece (Shift: this piece only)'
+    btn.textContent = piece.visible ? '👁' : '⊘'
+  })
+}
+
+// pieceDisplayName humanises piece names that follow TA conventions
+// the user won't recognise out of context.  "GP" is the universal
+// "Ground Plate" — the flat shadow polygon every TA model carries
+// for its projected ground shadow — so we expand it inline.
+function pieceDisplayName(piece) {
+  const name = piece.name || '<unnamed>'
+  if (name === 'GP' || name === 'gp') return 'Ground Plate (GP)'
+  return name
+}
+
+// renderPieceTree replaces the sidebar drawer with a hierarchical
+// representation of the model's pieces — each piece becomes either a
+// drawer-group (if it has children) or a drawer-item-piece (leaf).
+// Click the row to centre the camera on the piece; hover highlights
+// the piece's wireframe in red; the eye toggle hides/shows the piece.
+function renderPieceTree(model) {
+  const host = $('#model-viewer-tree')
+  if (!host || !model) return
+  host.replaceChildren()
+  const gl = modelViewerInstance?.renderer?.gl
+  const triMode = gl?.TRIANGLES
+  const lineMode = gl?.LINES
+  const collapsed = new Set()
+
+  // Wire hover-to-highlight on the renderer.  Any row that carries
+  // data-piece can light the model's wireframe in red so the user
+  // can match abstract names back to geometry.
+  const setHover = (name) => {
+    if (modelViewerInstance?.renderer) {
+      modelViewerInstance.renderer.setHoveredPieceName(name)
+    }
+  }
+
+  const makeEyeToggle = (piece) => {
+    const eye = document.createElement('button')
+    eye.type = 'button'
+    eye.className = 'piece-eye' + (piece.visible ? '' : ' off')
+    eye.title = piece.visible ? 'Hide piece (Shift: this piece only)' : 'Show piece (Shift: this piece only)'
+    eye.textContent = piece.visible ? '👁' : '⊘'
+    eye.addEventListener('click', (e) => {
+      e.stopPropagation()
+      // Default behaviour: toggle this piece AND every descendant so
+      // hiding e.g. the torso also hides the gun arms attached to it.
+      // Shift-click suppresses the cascade for fine-grained edits.
+      const cascade = !e.shiftKey
+      const target = !piece.visible
+      const apply = (p) => {
+        p.visible = target
+        if (cascade) for (const c of p.children) apply(c)
+      }
+      apply(piece)
+      // Refresh all eye icons in the tree so cascading hides flip
+      // every affected row's glyph in one go.
+      refreshPieceTreeEyes()
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.requestRedraw()
+    })
+    eye._piece = piece
+    return eye
+  }
+
+  const build = (piece) => {
+    const primCount = piece.drawGroups.reduce((n, g) => {
+      if (g.mode === triMode) return n + g.vertexCount / 3
+      if (g.mode === lineMode) return n + g.vertexCount / 2
+      return n + g.vertexCount
+    }, 0)
+    const hasKids = piece.children.length > 0
+    const displayName = pieceDisplayName(piece)
+    if (hasKids) {
+      const groupEl = document.createElement('div')
+      groupEl.className = 'drawer-group drawer-piece-group'
+      groupEl.dataset.piece = piece.name
+      const title = document.createElement('div')
+      title.className = 'drawer-group-title'
+      const chev = document.createElement('span')
+      chev.className = 'chev'
+      chev.textContent = '▾'
+      const name = document.createElement('span')
+      name.className = 'piece-name'
+      name.textContent = displayName
+      const stat = document.createElement('span')
+      stat.className = 'drawer-group-count'
+      stat.textContent = `${Math.round(primCount)} prim`
+      title.appendChild(chev)
+      title.appendChild(name)
+      if (piece.isEmitterPoint) {
+        const ico = document.createElement('span')
+        ico.className = 'piece-emitter'
+        ico.textContent = '✦'
+        ico.title = 'Vertex-only piece (smoke / explosion anchor)'
+        title.appendChild(ico)
+      }
+      title.appendChild(stat)
+      title.appendChild(makeEyeToggle(piece))
+      // Chevron collapses; everything else jumps the camera.
+      chev.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const id = piece.name
+        if (collapsed.has(id)) {
+          collapsed.delete(id)
+          groupEl.classList.remove('collapsed')
+        } else {
+          collapsed.add(id)
+          groupEl.classList.add('collapsed')
+        }
+      })
+      title.addEventListener('click', () => selectPiece(piece.name))
+      title.addEventListener('mouseenter', () => setHover(piece.name))
+      title.addEventListener('mouseleave', () => setHover(null))
+      groupEl.appendChild(title)
+      const body = document.createElement('div')
+      body.className = 'drawer-group-body'
+      for (const c of piece.children) body.appendChild(build(c))
+      groupEl.appendChild(body)
+      return groupEl
+    }
+    const row = document.createElement('div')
+    row.className = 'drawer-item-piece'
+    row.dataset.piece = piece.name
+    const name = document.createElement('span')
+    name.className = 'piece-name'
+    name.textContent = displayName
+    row.appendChild(name)
+    if (piece.isEmitterPoint) {
+      const ico = document.createElement('span')
+      ico.className = 'piece-emitter'
+      ico.textContent = '✦'
+      ico.title = 'Vertex-only piece (smoke / explosion anchor)'
+      row.appendChild(ico)
+    }
+    const stat = document.createElement('span')
+    stat.className = 'piece-stat'
+    stat.textContent = `${Math.round(primCount)} prim`
+    row.appendChild(stat)
+    row.appendChild(makeEyeToggle(piece))
+    row.addEventListener('click', () => selectPiece(piece.name))
+    row.addEventListener('mouseenter', () => setHover(piece.name))
+    row.addEventListener('mouseleave', () => setHover(null))
+    return row
+  }
+  host.appendChild(build(model.root))
+}
+
+function selectPiece(name) {
+  if (!modelViewerInstance) return
+  modelViewerInstance.jumpToPiece(name)
+  $$('#model-viewer-tree .drawer-item-piece, #model-viewer-tree .drawer-piece-group').forEach((el) => {
+    el.classList.toggle('selected', el.dataset.piece === name)
+  })
+}
+
+// filterPieceTree hides rows whose piece name (lowercase) doesn't
+// contain `q`.  Groups stay visible whenever any descendant matches —
+// so typing "nano" still surfaces the parent assembly.
+function filterPieceTree(q) {
+  q = (q || '').trim().toLowerCase()
+  const host = $('#model-viewer-tree')
+  if (!host) return
+  const matches = (el) => {
+    const name = (el.dataset.piece || '').toLowerCase()
+    if (!q) return true
+    if (name.includes(q)) return true
+    // For groups, recurse into children — if any matches, keep us
+    // visible so the user sees the path through the hierarchy.
+    return Array.from(el.querySelectorAll('[data-piece]')).some((c) => c.dataset.piece.toLowerCase().includes(q))
+  }
+  host.querySelectorAll('[data-piece]').forEach((el) => {
+    el.style.display = matches(el) ? '' : 'none'
+  })
+}
+
+async function openModelPicker() {
+  // Hide whichever surface was on top — the picker is its own
+  // dialog and the user shouldn't see a half-z-fight between the
+  // viewer + picker stacks while it's up.
+  $('#welcome-dialog').classList.add('hidden')
+  $('#model-viewer-dialog').classList.add('hidden')
+  $('#model-open-dialog').classList.remove('hidden')
+  $('#model-open-confirm').disabled = true
+  selectedModelName = null
+  const filter = $('#model-filter')
+  if (filter) filter.value = ''
+  if (!modelsLoaded) {
+    await fetchModels()
+  }
+  renderModelList()
+  requestAnimationFrame(() => $('#model-filter')?.focus())
+}
+
+function closeModelPicker() {
+  $('#model-open-dialog').classList.add('hidden')
+  // Return to whichever surface the user came from: an active model
+  // tab restores the viewer, an active map tab restores the editor,
+  // otherwise the welcome dialog reappears.
+  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  if (activeTab?.type === 'model') {
+    $('#model-viewer-dialog').classList.remove('hidden')
+  } else if (activeTab?.type === 'map') {
+    $('#app')?.classList.remove('hidden')
+  } else {
+    $('#welcome-dialog').classList.remove('hidden')
+  }
+}
+
+async function fetchModels() {
+  try {
+    const resp = await fetch('/api/studio/models')
+    const data = await resp.json()
+    availableModels = data.models || []
+    modelsLoaded = true
+  } catch (err) {
+    availableModels = []
+    modelsLoaded = true
+    $('#model-list').innerHTML = `<div class="loading">Failed to load models: ${escapeHTML(String(err))}</div>`
+  }
+}
+
+function renderModelList() {
+  const list = $('#model-list')
+  if (!list) return
+  const q = ($('#model-filter')?.value || '').trim().toLowerCase()
+  const filtered = availableModels.filter((m) => {
+    if (!q) return true
+    const hay = `${m.name} ${m.unitName || ''} ${m.unitTitle || ''} ${m.side || ''} ${m.category || ''} ${m.description || ''}`.toLowerCase()
+    return hay.includes(q)
+  })
+  if (filtered.length === 0) {
+    list.innerHTML = modelsLoaded
+      ? '<div class="loading">No models match.</div>'
+      : '<div class="loading">Loading models…</div>'
+    return
+  }
+  const frag = document.createDocumentFragment()
+  for (const m of filtered) {
+    const card = document.createElement('button')
+    card.className = 'open-list-item model-list-item'
+    card.dataset.name = m.name
+    if (m.name === selectedModelName) card.classList.add('selected')
+    const title = m.unitTitle || m.unitName || m.name
+    const meta = [
+      m.unitName ? m.unitName.toUpperCase() : m.name.toUpperCase(),
+      m.side || null,
+      m.category || null,
+    ].filter(Boolean).join(' · ')
+    const sub = m.description || ''
+    card.innerHTML = `<div class="thumb model-thumb">🛠</div>` +
+      `<div class="title">${escapeHTML(title)}</div>` +
+      `<div class="meta">${escapeHTML(meta)}</div>` +
+      (sub ? `<div class="meta">${escapeHTML(sub)}</div>` : '')
+    card.addEventListener('click', () => {
+      selectedModelName = m.name
+      $$('.model-list-item').forEach((el) => el.classList.toggle('selected', el.dataset.name === m.name))
+      $('#model-open-confirm').disabled = false
+    })
+    card.addEventListener('dblclick', () => openModelViewer(m.name))
+    frag.appendChild(card)
+  }
+  list.replaceChildren(frag)
+}
+
+async function openModelViewer(name) {
+  $('#model-open-dialog').classList.add('hidden')
+  // Push a new model tab into the unified tab array so the map
+  // editor's tab bar (and the viewer's mirrored tab bar) both show
+  // the new entry.  switchToTab routes by type so the dialog mounts
+  // automatically.
+  const meta = availableModels.find((m) => m.name === name)
+  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  if (modelOpenIntent === 'replace' && activeTab?.type === 'model') {
+    activeTab.name = name
+    activeTab.meta = meta
+  } else {
+    tabs.push({ type: 'model', name, meta })
+    activeTabIndex = tabs.length - 1
+  }
+  modelOpenIntent = 'add'
+  // Force-switch so the dialog re-opens, the topbar/footer refresh,
+  // and the viewer loads the new model even when the tab index
+  // stayed put.
+  switchToTab(activeTabIndex, { fresh: false, force: true })
+}
+
+function closeModelViewer() {
+  // The viewer's "Close" button drops the currently-active model
+  // tab — same gesture as the × on the tab itself.  If the user
+  // had a map open too, switchToTab returns them to it; otherwise
+  // the welcome dialog shows.
+  if (activeTabIndex >= 0 && tabs[activeTabIndex]?.type === 'model') {
+    closeTab(activeTabIndex)
+  } else {
+    $('#model-viewer-dialog').classList.add('hidden')
+  }
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────

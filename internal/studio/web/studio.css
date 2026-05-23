@@ -985,7 +985,9 @@ kbd {
 .map-tab-add-popup {
   /* Fixed (not absolute) so #map-tabs' overflow-x clip doesn't hide
      us — the JS positioner sets top/left from the "+" button's
-     bounding rect each time the popup opens. */
+     bounding rect each time the popup opens.  z-index sits ABOVE
+     the .dialog stack (5000) so the popup reaches the user even
+     when the 3DO viewer dialog overlays the editor. */
   position: fixed;
   top: 0;
   left: 0;
@@ -993,8 +995,8 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px;
-  z-index: 1500;
-  min-width: 160px;
+  z-index: 6000;
+  min-width: 180px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 }
 .map-tab-add-popup .menu-row {
@@ -2259,4 +2261,217 @@ canvas {
 @keyframes connection-slide-up {
   from { transform: translateY(12px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Modelling tab — 3DO viewer ───────────────────────────────────────
+   Hidden welcome-tab-panel needs an explicit rule because the base
+   .welcome-tab-panel selector is unconditionally `display: block`.
+   The model picker reuses the existing .open-list / .open-list-item
+   chrome; only the cosmetic .model-thumb is new here. */
+.welcome-tab-panel.hidden { display: none; }
+.model-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  background: linear-gradient(160deg, #2c3a4f, #1a2532);
+  color: #87b8d6;
+}
+.model-list-item .meta { color: var(--muted); }
+
+/* The viewer dialog is a full-screen overlay that hosts a reuse of the
+   editor's own grid layout: topbar + ribbon + sidebar + canvas +
+   statusbar.  Sharing `.app`, `.topbar`, `.ribbon-*`, `.sidebar`,
+   `.drawer-*`, and `.statusbar` keeps the look consistent and avoids
+   duplicating those styles.  Only the bits genuinely unique to the
+   3D surface (the canvas placement, the unit-name pill in the
+   topbar, the piece-row hover affordance) live in this section. */
+.model-viewer-dialog {
+  /* Overlay only the editor's content area — slide between the
+     shared topbar+tabs (82 px) and the shared statusbar (28 px) so
+     the .app's header/footer remain visible behind us.  No more
+     duplicate topbar / tab-bar / footer DOM in the viewer.  Order
+     matters here: inset must reset BEFORE the per-side overrides
+     (otherwise the .dialog base rule's `inset: 0` shorthand wins
+     and we collapse back to a full-screen overlay). */
+  inset: auto;
+  top: 82px;
+  right: 0;
+  bottom: 28px;
+  left: 0;
+  background: var(--bg-0);
+  display: block;
+  padding: 0;
+}
+.model-viewer-dialog.hidden { display: none; }
+.model-viewer-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 320px 1fr;
+  grid-template-areas:
+    "ribbon ribbon"
+    "side canvas";
+  height: 100%;
+  background: var(--bg-0);
+}
+.model-viewer-shell > .ribbon { grid-area: ribbon; }
+.model-viewer-shell > .sidebar { grid-area: side; }
+/* Topbar doc-info badge — replaces the old per-viewer unit pill.
+   Populated by JS on tab switch (unit title for 3DO tabs, map
+   title for map tabs). */
+.topbar-doc-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  margin-left: 18px;
+}
+.topbar-doc-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.1;
+}
+.topbar-doc-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+/* Horizontal Mode / Ground pickers in the model viewer's ribbon: a
+   row of tool-btns, the active one highlighted with the accent
+   colour.  Mirrors the look of the map editor's segmented controls
+   (Display Mode group) — no per-control bespoke styling. */
+.mv-picker .tool-btn {
+  border-radius: 3px;
+  padding: 0 10px;
+  height: 100%;
+  min-width: 30px;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}
+.mv-picker .tool-btn:hover { background: var(--bg-3); color: var(--text); }
+.mv-picker .tool-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.mv-picker .tool-btn .lbl { font-size: 12px; }
+
+/* Model tabs in the unified tab bar — same .map-tab chrome but a
+   small leading icon so 3DO tabs are scannable next to map tabs. */
+.map-tab.map-tab-model {
+  border-color: rgba(139, 92, 246, 0.5);
+}
+.map-tab.map-tab-model.active {
+  border-color: var(--accent);
+}
+.map-tab .map-tab-icon {
+  font-size: 11px;
+  margin-right: 4px;
+  opacity: 0.9;
+}
+/* Model viewer canvas — sits in the grid's canvas cell. */
+.model-viewer-canvas {
+  grid-area: canvas;
+  width: 100%;
+  height: 100%;
+  background: #0e1420;
+  cursor: grab;
+  touch-action: none;
+  display: block;
+}
+.model-viewer-canvas:active { cursor: grabbing; }
+
+/* Piece-tree drawer rows: same drawer-group framing as the section
+   drawer, but with an indent-by-depth inline style applied by JS so
+   nested pieces still read as a hierarchy.  The .drawer-item-piece
+   class adds a click affordance and an emitter glyph for vertex-only
+   pieces (smoke/explode anchors). */
+.drawer-item-piece {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.drawer-item-piece:hover { background: rgba(255, 255, 255, 0.06); }
+.drawer-item-piece.selected { background: var(--accent); color: #fff; }
+.drawer-item-piece .piece-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-item-piece .piece-stat {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: inherit;
+  flex-shrink: 0;
+}
+.drawer-item-piece.selected .piece-stat { color: rgba(255, 255, 255, 0.7); }
+.drawer-item-piece .piece-emitter {
+  font-size: 11px;
+  color: #d9a23b;
+  flex-shrink: 0;
+}
+/* Per-piece visibility toggle button on each tree row.  Stays neutral
+   on idle, the row's hover/selected state still reads through; only
+   the icon changes between 👁 (visible) and ⊘ (hidden).  Off-state
+   gets a muted colour so the hidden rows are scannable. */
+.piece-eye {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 2px;
+  margin-left: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+}
+.piece-eye:hover { color: var(--text); }
+.piece-eye.off { color: rgba(255, 90, 90, 0.7); }
+.piece-eye.off:hover { color: rgba(255, 130, 130, 1); }
+.drawer-piece-group > .drawer-group-title { gap: 4px; }
+
+/* Slider variant of menu-row used by the Rendering dropdown's
+   "Edge thickness" control.  Lets a range slider live inline with
+   the icon + label and a numeric readout on the right. */
+.menu-row-slider {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: default;
+}
+.menu-row-slider input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+  accent-color: var(--accent);
+}
+.menu-row-slider .menu-row-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  min-width: 1.5em;
+  text-align: right;
+}
+.drawer-piece-group > .drawer-group-title {
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  border-bottom: none;
+  padding: 4px 4px 4px 0;
+  margin-bottom: 0;
+}
+.drawer-piece-group > .drawer-group-title:hover { color: var(--accent); }
+.drawer-piece-group.selected > .drawer-group-title { color: var(--accent); }
+.drawer-piece-group > .drawer-group-body {
+  /* Nested groups get a faint left rail so the hierarchy reads at a
+     glance — same visual idiom as the tileset drawer. */
+  border-left: 1px solid var(--border);
+  margin-left: 6px;
+  padding-left: 6px;
 }

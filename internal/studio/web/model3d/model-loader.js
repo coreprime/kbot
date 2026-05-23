@@ -1,0 +1,383 @@
+// ModelLoader fetches /api/studio/model/<name>, walks the JSON tree,
+// triangulates each primitive, generates per-vertex UVs (3DO carries
+// none — they're derived from primitive vertex order, see format docs),
+// computes a face normal so the shader can flat-shade non-textured
+// faces, and uploads the result to GPU buffers under each Piece.
+//
+// Per-vertex layout (8 floats):
+//   [ x, y, z, nx, ny, nz, u, v ]
+//
+// We bake one vertex buffer per (texture | flat colour) bucket inside a
+// piece so each draw call binds at most one texture.  This keeps the
+// renderer's inner loop simple and gives the GPU a clean batch.
+
+import { Piece } from './piece.js'
+import { Model } from './model.js'
+
+const FLOATS_PER_VERTEX = 8
+
+export class ModelLoader {
+  constructor({ gl, palette, textureCache }) {
+    this.gl = gl
+    this.palette = palette
+    this.textureCache = textureCache
+  }
+
+  async load(modelName) {
+    const resp = await fetch(`/api/studio/model/${encodeURIComponent(modelName)}`)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} loading model ${modelName}`)
+    const data = await resp.json()
+    // decalSet flags textures with alpha-keyed pixels — the loader
+    // emits their draw groups AFTER the opaque ones in every piece so
+    // the GPU draws coplanar logos/glass/rotors on top of their base
+    // surface rather than punching the base out via alpha-test.
+    this._decalSet = new Set((data.decals || []).map((n) => n.toLowerCase()))
+    const root = this.#buildPiece(data.root)
+    // X-flip the bounds to match the per-piece flip applied above,
+    // otherwise camera framing centres on the un-flipped X midpoint.
+    const flippedBounds = data.bounds ? {
+      min: [-data.bounds.max[0], data.bounds.min[1], data.bounds.min[2]],
+      max: [-data.bounds.min[0], data.bounds.max[1], data.bounds.max[2]],
+    } : data.bounds
+    const model = new Model({ name: data.name, root, bounds: flippedBounds })
+    if (data.textures && data.textures.length) {
+      // Fire-and-forget — the renderer is happy to draw fallbacks
+      // until the real PNGs land.  ensure() resolves once they have.
+      this.textureCache.ensure(data.textures)
+    }
+    return model
+  }
+
+  #buildPiece(node) {
+    // X-flip: TA's 3DO authoring tooling uses a left-handed
+    // coordinate system; OpenGL is right-handed, so without a flip
+    // every asymmetric unit ends up mirrored — e.g. ARMBATS'
+    // command tower lands on starboard when in-game it's port.
+    // Negate X at the piece-origin AND every vertex so the geometry
+    // matches what TA itself draws.
+    const piece = new Piece({
+      name: node.name,
+      originX: -node.origin[0],
+      originY: node.origin[1],
+      originZ: node.origin[2],
+      selectionPrim: node.selectionPrim,
+      isEmitterPoint: !!node.isEmitterPoint,
+    })
+    const raw = node.vertices || []
+    const verts = new Float32Array(raw.length)
+    for (let i = 0; i < raw.length; i += 3) {
+      verts[i] = -raw[i]
+      verts[i + 1] = raw[i + 1]
+      verts[i + 2] = raw[i + 2]
+    }
+    if (node.primitives && node.primitives.length) {
+      this.#buildDrawGroups(piece, verts, node.primitives)
+    }
+    for (const c of node.children || []) {
+      piece.addChild(this.#buildPiece(c))
+    }
+    return piece
+  }
+
+  #buildDrawGroups(piece, verts, primitives) {
+    // Bucket primitives by (texture | flat colour) so each becomes one
+    // batched draw call.  Keying on lowercased texture name keeps the
+    // case-insensitive matching the GAF lookup uses.
+    const triBuckets = new Map() // key → { interleaved: number[], texture, color }
+    const lineBuckets = new Map()
+    const pointBuckets = new Map()
+    // Wireframe edge data: one VBO per piece containing line segments
+    // for each primitive's outline (the *original* polygon edges, not
+    // the triangulated diagonals).  Built in parallel with the
+    // triangle buckets so the renderer can swap modes without
+    // re-uploading geometry.
+    const wireframeVerts = []
+
+    // Coplanar-primitive detection by POSITION (not index) — TA
+    // artists sometimes emit a base and a decal on the same face
+    // using SEPARATE vertex entries that just happen to share
+    // coordinates.  We quantise positions to 1/100 of a world unit
+    // and signature each primitive by sorted (x,y,z) triples so
+    // those overlapping-but-distinct vertex sets still register as
+    // coplanar.  The signature is used downstream to decide whether
+    // a lonely decal needs a synthetic dark base (it doesn't if some
+    // other primitive sits at the same face already).
+    const decals = this._decalSet || new Set()
+    const positionSig = (indices) => {
+      const triples = []
+      for (const i of indices) {
+        const x = Math.round((verts[i * 3] || 0) * 100) / 100
+        const y = Math.round((verts[i * 3 + 1] || 0) * 100) / 100
+        const z = Math.round((verts[i * 3 + 2] || 0) * 100) / 100
+        triples.push(`${x},${y},${z}`)
+      }
+      triples.sort()
+      return triples.join('|')
+    }
+    const faceCount = new Map()
+    for (const prim of primitives) {
+      if ((prim.indices || []).length < 3) continue
+      // Ignore the shadow-plate primitives — they don't render and
+      // shouldn't be considered "a base" for someone else.
+      const isShadow = !prim.texture && prim.isColored && prim.colorIndex === 0
+      if (isShadow) continue
+      const sig = positionSig(prim.indices)
+      faceCount.set(sig, (faceCount.get(sig) || 0) + 1)
+    }
+    // Faces whose lonely decal needs a synthetic dark backing.
+    // Limited to decals on side / down-facing surfaces — UP-facing
+    // decals (like aircraft-plant grated platforms) want their
+    // alpha-keyed pixels to keep revealing the ground, so we never
+    // fill those.
+    const lonelyFaces = []
+    // depthTierAtSig tracks how many primitives we've already emitted
+    // at a given face position.  TA models routinely stack two or
+    // three OPAQUE primitives at the same face (panel + chevron
+    // overlay + accent) — without a per-tier polygon offset the GPU
+    // z-fights between them because triangulation order differs
+    // even when the world-space vertices coincide.  Each primitive
+    // bumps this counter; the renderer reads back tier > 0 to apply
+    // a glPolygonOffset that pulls the layer slightly toward the
+    // camera so it wins the depth test cleanly.
+    const depthTierAtSig = new Map()
+
+    for (const prim of primitives) {
+      const indices = prim.indices || []
+      const count = indices.length
+      if (count === 0) continue
+      const texKey = (prim.texture || '').toLowerCase()
+      // Palette index 0 is TA's transparency / shadow key.  Untextured
+      // primitives that paint with it are the unit's flat "shadow
+      // plate" polygon — the game draws those as a projected ground
+      // shadow, never as visible model geometry.  Skip them so they
+      // don't render as a solid black slab under the unit.
+      if (!texKey && prim.isColored && prim.colorIndex === 0) continue
+      const color = (!texKey && prim.isColored) ? this.palette.colorFor(prim.colorIndex) : null
+      // Look up depth tier for this primitive's face: 0 for the
+      // first primitive at this position, 1 for the second, etc.
+      // Bucket key gets the tier baked in so primitives at different
+      // tiers never get batched together (which would defeat the
+      // per-bucket polygon offset).
+      let tier = 0
+      if (count >= 3) {
+        const ps = positionSig(indices)
+        tier = depthTierAtSig.get(ps) || 0
+        depthTierAtSig.set(ps, tier + 1)
+      }
+      const baseBucketKey = texKey || (color ? `#${prim.colorIndex}` : '__notex__')
+      const bucketKey = tier === 0 ? baseBucketKey : `${baseBucketKey}#t${tier}`
+
+      // Lonely-decal check: a decal primitive whose face position
+      // doesn't appear in any other (non-shadow) primitive within
+      // this piece.  We back it with a synthetic dark base — but
+      // only if the face is roughly vertical or downward-facing.
+      // Upward-facing decals (baseplates with grate cutouts) need
+      // to keep their see-through pixels so the ground shows.
+      if (count >= 3 && texKey && decals.has(texKey)) {
+        const sig = positionSig(indices)
+        if (faceCount.get(sig) === 1) {
+          const positions = []
+          for (let i = 0; i < count; i++) {
+            const v = indices[i]
+            positions.push([
+              verts[v * 3] || 0,
+              verts[v * 3 + 1] || 0,
+              verts[v * 3 + 2] || 0,
+            ])
+          }
+          const n = this.#faceNormal(positions)
+          // |n.y| < 0.7 means the face is closer to vertical than to
+          // horizontal — those are the panels / side faces that suffer
+          // from sky bleed-through.  Horizontal faces (|n.y| ≥ 0.7)
+          // are baseplate-style cutouts; leave their alpha alone.
+          if (Math.abs(n[1]) < 0.7) {
+            lonelyFaces.push(indices.slice())
+          }
+        }
+      }
+
+      if (count === 1) {
+        // Emit points — used as smoke/explosion anchors.  Rendered as
+        // GL_POINTS so users can see piece anchors in the viewer.
+        const bucket = this.#getOrCreate(pointBuckets, bucketKey, prim.texture, color)
+        const v = indices[0]
+        const x = verts[v * 3] || 0, y = verts[v * 3 + 1] || 0, z = verts[v * 3 + 2] || 0
+        bucket.interleaved.push(x, y, z, 0, 1, 0, 0.5, 0.5)
+        continue
+      }
+      if (count === 2) {
+        const bucket = this.#getOrCreate(lineBuckets, bucketKey, prim.texture, color)
+        for (let i = 0; i < 2; i++) {
+          const v = indices[i]
+          const x = verts[v * 3] || 0, y = verts[v * 3 + 1] || 0, z = verts[v * 3 + 2] || 0
+          bucket.interleaved.push(x, y, z, 0, 1, 0, i, 0)
+        }
+        continue
+      }
+      // 3+ vertices — triangulate as a fan rooted at vertex 0.  UVs
+      // assume the source polygon was authored as a quad in convex
+      // CW order; we lay UVs on a unit square (0,0)-(1,1) and let the
+      // first three vertices keep their natural UVs for triangles.
+      const uvs = this.#computeUVs(count)
+      const positions = []
+      for (let i = 0; i < count; i++) {
+        const v = indices[i]
+        positions.push([
+          verts[v * 3] || 0,
+          verts[v * 3 + 1] || 0,
+          verts[v * 3 + 2] || 0,
+        ])
+      }
+      const normal = this.#faceNormal(positions)
+      const bucket = this.#getOrCreate(triBuckets, bucketKey, prim.texture, color)
+      // Stash the tier on the bucket so the renderer can apply a
+      // depth offset to higher-tier coplanar layers.
+      bucket.depthTier = Math.max(bucket.depthTier || 0, tier)
+      // Triangle fan: (0, i, i+1) for i = 1..count-2.
+      for (let i = 1; i < count - 1; i++) {
+        const tri = [0, i, i + 1]
+        for (const k of tri) {
+          const p = positions[k]
+          const uv = uvs[k]
+          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1])
+        }
+      }
+      // Wireframe edges follow the original polygon outline so quads
+      // stay quads — the diagonals introduced by triangulation never
+      // become visible wireframe lines.
+      for (let i = 0; i < count; i++) {
+        const a = positions[i]
+        const b = positions[(i + 1) % count]
+        wireframeVerts.push(a[0], a[1], a[2], b[0], b[1], b[2])
+      }
+    }
+
+    // Synthesise a dark backing primitive for each lonely decal.  The
+    // base bucket gets a sentinel `__decal_base__` key so it's
+    // collected with the opaque pass (drawn first), and uses the same
+    // vertices + computed normal as the decal so the geometry lines
+    // up at the identical depth value.  When the decal draws on top
+    // with LEQUAL depth + alpha discards, the discarded pixels reveal
+    // the dark base instead of the sky.
+    for (const lonely of lonelyFaces) {
+      const count = lonely.length
+      const uvs = this.#computeUVs(count)
+      const positions = []
+      for (let i = 0; i < count; i++) {
+        const v = lonely[i]
+        positions.push([
+          verts[v * 3] || 0,
+          verts[v * 3 + 1] || 0,
+          verts[v * 3 + 2] || 0,
+        ])
+      }
+      const normal = this.#faceNormal(positions)
+      const bucket = this.#getOrCreateColored(triBuckets, '__decal_base__', [0.06, 0.07, 0.09, 1])
+      for (let i = 1; i < count - 1; i++) {
+        const tri = [0, i, i + 1]
+        for (const k of tri) {
+          const p = positions[k]
+          const uv = uvs[k]
+          bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1])
+        }
+      }
+    }
+
+    const gl = this.gl
+    const finalize = (map, mode) => {
+      // Partition into opaque-first / decal-last so draw order
+      // matches TA's convention: base texture, then any alpha-keyed
+      // overlays.  Within the opaque list we also sort by depthTier
+      // so coplanar layers (panel → chevron → accent) march from
+      // base toward camera in a stable order — the renderer applies
+      // a polygon offset proportional to the tier so the layers
+      // don't z-fight.
+      const opaque = []
+      const decal = []
+      for (const bucket of map.values()) {
+        const group = {
+          vbo: null,
+          mode,
+          vertexCount: 0,
+          textureName: bucket.texture || null,
+          color: bucket.color,
+          isDecal: !!(bucket.texture && decals.has(bucket.texture.toLowerCase())),
+          depthTier: bucket.depthTier || 0,
+        }
+        const arr = new Float32Array(bucket.interleaved)
+        group.vbo = gl.createBuffer()
+        gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)
+        gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW)
+        group.vertexCount = arr.length / FLOATS_PER_VERTEX
+        if (group.isDecal) decal.push(group)
+        else opaque.push(group)
+      }
+      opaque.sort((a, b) => a.depthTier - b.depthTier)
+      for (const g of opaque) piece.drawGroups.push(g)
+      for (const g of decal) piece.drawGroups.push(g)
+    }
+    finalize(triBuckets, gl.TRIANGLES)
+    finalize(lineBuckets, gl.LINES)
+    finalize(pointBuckets, gl.POINTS)
+
+    // Upload the wireframe edge buffer if any primitives contributed.
+    if (wireframeVerts.length) {
+      const arr = new Float32Array(wireframeVerts)
+      const vbo = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW)
+      piece.wireframe = { vbo, vertexCount: arr.length / 3 }
+    }
+  }
+
+  #getOrCreateColored(map, key, color) {
+    let bucket = map.get(key)
+    if (!bucket) {
+      bucket = { interleaved: [], texture: '', color }
+      map.set(key, bucket)
+    }
+    return bucket
+  }
+
+  #getOrCreate(map, key, texture, color) {
+    let bucket = map.get(key)
+    if (!bucket) {
+      bucket = { interleaved: [], texture: texture || '', color }
+      map.set(key, bucket)
+    }
+    return bucket
+  }
+
+  // computeUVs lays unit-square UVs over the polygon vertices in source
+  // order.  Quads cover (0,0) → (1,1); triangles get the top-left half;
+  // higher-order polygons (rare in TA models) get a polar UV around the
+  // primitive's centroid so the texture at least appears smooth.
+  #computeUVs(count) {
+    if (count === 3) return [[0, 1], [1, 1], [1, 0]]
+    if (count === 4) return [[0, 1], [1, 1], [1, 0], [0, 0]]
+    const out = []
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2
+      out.push([0.5 + 0.5 * Math.cos(a), 0.5 + 0.5 * Math.sin(a)])
+    }
+    return out
+  }
+
+  // faceNormal returns the unit normal of the polygon defined by the
+  // first three vertices.  TA primitives can be CW or CCW depending on
+  // the artist's tooling; the renderer disables face culling and uses
+  // |dot(N, L)| for lighting, so the sign doesn't matter — only the
+  // axis.
+  #faceNormal(positions) {
+    const [a, b, c] = positions
+    const ax = b[0] - a[0], ay = b[1] - a[1], az = b[2] - a[2]
+    const bx = c[0] - a[0], by = c[1] - a[1], bz = c[2] - a[2]
+    let nx = ay * bz - az * by
+    let ny = az * bx - ax * bz
+    let nz = ax * by - ay * bx
+    const len = Math.hypot(nx, ny, nz)
+    if (len > 0) { nx /= len; ny /= len; nz /= len }
+    else { nx = 0; ny = 1; nz = 0 }
+    return [nx, ny, nz]
+  }
+}

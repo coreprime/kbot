@@ -34,7 +34,7 @@
            what's coming. -->
       <div class="welcome-tabs" role="tablist" aria-label="Workflow">
         <button class="welcome-tab active" role="tab" aria-selected="true" data-welcome-tab="mapping">Mapping</button>
-        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: unit / building model editor.">Modelling</button>
+        <button class="welcome-tab" role="tab" aria-selected="false" data-welcome-tab="modelling">Modelling</button>
         <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: COB / scripting editor.">Scripting</button>
         <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="More workflows on the roadmap.">Other</button>
       </div>
@@ -53,6 +53,196 @@
         </div>
         <p class="dialog-sub welcome-drop-hint">…or drop a <code>.tnt</code> (and optional sibling <code>.ota</code>) file anywhere on this dialog.</p>
       </div>
+      <div class="welcome-tab-panel hidden" data-welcome-tab-panel="modelling">
+        <div class="welcome-options">
+          <button class="welcome-card" id="welcome-model-open">
+            <span class="welcome-card-ico">🛠</span>
+            <span class="welcome-card-title">Open a 3DO model</span>
+            <span class="welcome-card-sub">Browse every unit, building and feature object in the mounted assets.  Rotates in place — drag to orbit.</span>
+          </button>
+        </div>
+        <p class="dialog-sub welcome-drop-hint">Animation playback via COB scripting is wired in for a future release.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3DO model picker.  Lists every objects3d/*.3do in the VFS, with
+       unit metadata (name, side, description) overlaid where available. -->
+  <div id="model-open-dialog" class="dialog hidden">
+    <div class="dialog-card dialog-card-wide dialog-card-xwide">
+      <h1>Open a 3DO model</h1>
+      <p class="dialog-sub">Pick a unit or building model to inspect in 3D.</p>
+      <div class="open-filter">
+        <input type="search" id="model-filter" placeholder="Filter by name, side, or category" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      </div>
+      <div class="open-list" id="model-list" tabindex="0" role="listbox" aria-label="Models">
+        <div class="loading">Loading models…</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="model-open-back" class="btn">Cancel</button>
+        <button id="model-open-confirm" class="btn primary" disabled>Open selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3D viewer.  Full-screen modal styled to mirror the main editor:
+       topbar + brand on the left, model tab bar inline (shared visual
+       language with the map editor's tabs), a ribbon with horizontal
+       pickers + dropdowns, the piece tree on the left, the WebGL
+       canvas in the centre, and the same footer with status + hints +
+       copyright as the editor.  All chrome reuses the studio's
+       existing classes (.topbar, .ribbon-section, .drawer-group,
+       .statusbar, .map-tabs, .menu-row, etc.) so the look-and-feel
+       stays consistent and styles never duplicate. -->
+  <div id="model-viewer-dialog" class="dialog hidden model-viewer-dialog">
+    <!-- The 3DO viewer mounts as an OVERLAY inside the editor's app
+         shell.  The topbar, .map-tabs and footer belong to .app and
+         stay visible above/below this overlay — only the ribbon /
+         sidebar / canvas area is replaced.  No more duplicated
+         brand / tab-bar / status-bar HTML, no per-viewer Close
+         button (tab × closes the model tab the same way it closes
+         a map tab). -->
+    <div class="model-viewer-shell">
+      <div class="ribbon">
+        <div class="ribbon-section">
+          <div class="ribbon-label">Model</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-model-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-model-dropdown-btn" title="Model file actions">
+              <span class="ico">🛠</span><span class="lbl">Model</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-model-dropdown-popup">
+              <button id="mv-act-open" class="menu-row" title="Browse another 3DO">
+                <span class="ico">📂</span><span>Open another model…</span>
+              </button>
+              <button class="menu-row" disabled title="Coming soon: export as glTF / OBJ.">
+                <span class="ico">📤</span><span>Export as glTF…</span>
+              </button>
+              <button class="menu-row" disabled title="Coming soon: convert and save as .3do.">
+                <span class="ico">💾</span><span>Save as .3do…</span>
+              </button>
+              <div class="menu-section-label">Info</div>
+              <button id="mv-act-pieces" class="menu-row" title="Show piece counts and texture refs in the status bar">
+                <span class="ico">ℹ️</span><span>Show model stats</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Camera</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-camera-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-camera-dropdown-btn" title="Camera controls">
+              <span class="ico">📷</span><span class="lbl">Camera</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-camera-dropdown-popup">
+              <button id="mv-act-reset" class="menu-row" title="Reset camera framing to the unit's bounding box">
+                <span class="ico">🎯</span><span>Reset Camera</span>
+              </button>
+              <button id="mv-act-autorotate" class="menu-row toggle-row" data-on="1" title="Slow turntable around the model">
+                <span class="ico">🔄</span><span>Auto-Rotate</span><span class="menu-check">✓</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Rendering</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-render-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-render-dropdown-btn" title="Pick the render mode + wireframe overlay">
+              <span class="ico">🎨</span><span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-render-dropdown-popup">
+              <div class="menu-section-label">Mode</div>
+              <button class="menu-row mv-mode-row active" data-mv-mode="full" title="Full lit + textured render — the showroom look">
+                <span class="ico">🧱</span><span>Studio Mode</span><span class="menu-check">✓</span>
+              </button>
+              <button class="menu-row mv-mode-row" data-mv-mode="flat" title="Textured but flat-shaded — no directional lighting or shadows">
+                <span class="ico">⬜</span><span>Flat Shading</span><span class="menu-check">✓</span>
+              </button>
+              <button class="menu-row mv-mode-row" data-mv-mode="wireframe" title="Polygon outlines only, no surface texturing">
+                <span class="ico">📐</span><span>Wireframe Only</span><span class="menu-check">✓</span>
+              </button>
+              <div class="menu-section-label">Wireframe</div>
+              <button id="mv-act-wire-overlay" class="menu-row toggle-row" data-on="0" title="Overlay polygon edges on top of the current mode">
+                <span class="ico">🪡</span><span>Show Wireframe</span><span class="menu-check">✓</span>
+              </button>
+              <div class="menu-row menu-row-slider">
+                <span class="ico">📏</span>
+                <span>Edge thickness</span>
+                <input id="mv-wire-thickness" type="range" min="1" max="6" step="1" value="1" />
+                <span class="menu-row-value" id="mv-wire-thickness-val">1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Ground</div>
+          <div class="ribbon-group mv-picker" id="mv-ground-picker">
+            <button class="tool-btn mv-ground-row" data-mv-ground="grid" title="Light-green grid sized to one TA map tile">
+              <span class="ico">⊞</span><span class="lbl">Grid</span>
+            </button>
+            <button class="tool-btn mv-ground-row active" data-mv-ground="terrain" title="Tiled greenworld flat-tile texture under the unit">
+              <span class="ico">🌱</span><span class="lbl">Terrain</span>
+            </button>
+            <button class="tool-btn mv-ground-row" data-mv-ground="sea" title="Procedural animated water under the unit">
+              <span class="ico">🌊</span><span class="lbl">Sea</span>
+            </button>
+            <button class="tool-btn mv-ground-row" data-mv-ground="off" title="Hide the ground plane entirely">
+              <span class="ico">🚫</span><span class="lbl">Off</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Animation</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-anim-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-anim-dropdown-btn" title="COB-driven animation (coming soon)">
+              <span class="ico">🎬</span><span class="lbl">COB</span>
+              <span class="chev-down">▾</span>
+            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-anim-dropdown-popup">
+              <button class="menu-row" disabled title="Run Create() / Activate() / MotionControl().">
+                <span class="ico">▶</span><span>Play scripts</span>
+              </button>
+              <button class="menu-row" disabled title="Step one game tick at a time.">
+                <span class="ico">⏭</span><span>Step a frame</span>
+              </button>
+              <button class="menu-row" disabled title="Reset every piece to its rest transform.">
+                <span class="ico">⏹</span><span>Reset pose</span>
+              </button>
+              <div class="menu-section-label">Scripts</div>
+              <button class="menu-row" disabled title="Coming soon: pick which COB script drives the model.">
+                <span class="ico">📜</span><span>Attach COB…</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section ribbon-section-right">
+          <div class="ribbon-label">Configure</div>
+          <div class="ribbon-group">
+            <button id="mv-btn-settings" class="tool-btn" title="KBot Studio settings">
+              <span class="ico">⚙</span><span class="lbl">Settings</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Help</div>
+          <div class="ribbon-group">
+            <button id="mv-btn-help" class="tool-btn" title="Keyboard shortcuts &amp; tips">
+              <span class="ico">❓</span><span class="lbl">Help</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="sidebar">
+        <div class="filter">
+          <input type="search" id="mv-tree-filter" placeholder="Filter pieces" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        </div>
+        <div class="drawer" id="model-viewer-tree"></div>
+      </aside>
+
+      <canvas id="model-viewer-canvas" class="model-viewer-canvas"></canvas>
     </div>
   </div>
 
@@ -604,21 +794,23 @@
         <span class="brand-mark">⚙️</span>
         <span>KBot Studio</span>
       </div>
+      <!-- Active-document badge populated by JS — shows the unit
+           name + meta when a 3DO tab is on top, the map title when
+           a map tab is active.  Reuses the same visual treatment
+           the 3DO viewer's old embedded topbar used. -->
+      <div class="topbar-doc-info" id="app-doc-info" aria-live="polite">
+        <span class="topbar-doc-title" id="app-doc-title"></span>
+        <span class="topbar-doc-meta" id="app-doc-meta"></span>
+      </div>
     </header>
 
-    <!-- Tab bar — one tab per open map.  The "+" button at the end
-         opens a popout with "New Map" / "Open Map".  Populated by JS. -->
-    <nav class="map-tabs" id="map-tabs" role="tablist" aria-label="Open maps">
+    <!-- Tab bar — one tab per open document (map OR 3DO).  The "+"
+         button at the end opens the popout (which now lives outside
+         .app so it stays visible when the 3DO viewer dialog overlays
+         the editor and hides .app). -->
+    <nav class="map-tabs" id="map-tabs" role="tablist" aria-label="Open documents">
       <div class="map-tabs-list" id="map-tabs-list"></div>
-      <button id="map-tab-add" class="map-tab-add" type="button" title="Open another map">+</button>
-      <div class="map-tab-add-popup hidden" id="map-tab-add-popup">
-        <button id="map-tab-add-new" class="menu-row" title="Start a new map in a fresh tab">
-          <span class="ico">✨</span><span>New Map</span>
-        </button>
-        <button id="map-tab-add-open" class="menu-row" title="Open an existing map in a fresh tab">
-          <span class="ico">📂</span><span>Open Map</span>
-        </button>
-      </div>
+      <button id="map-tab-add" class="map-tab-add" type="button" title="Open another document">+</button>
     </nav>
 
     <div class="ribbon" id="ribbon">
@@ -1068,7 +1260,7 @@
 
     <footer class="statusbar">
       <span id="status">Ready.  Pick a section on the left, then click on the canvas to stamp it.</span>
-      <span class="muted hints">Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).</span>
+      <span class="muted hints" id="app-hints">Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).</span>
       <span class="copyright">KBot &copy; Steve Gray <span id="copyright-year"></span></span>
     </footer>
   </div>
@@ -1082,6 +1274,27 @@
         <div class="connection-detail" id="connection-detail">Reconnecting…</div>
       </div>
     </div>
+  </div>
+
+  <!-- Tab-bar "+" popup.  Lifted to body-level so it stays visible
+       and clickable whether the map editor (.app) or the 3DO viewer
+       dialog is on top — both surfaces have a "+" button that
+       anchors this same popup. -->
+  <div class="map-tab-add-popup hidden" id="map-tab-add-popup">
+    <div class="menu-section-label">Map Editing</div>
+    <button id="map-tab-add-new" class="menu-row" title="Start a new map in a fresh tab">
+      <span class="ico">✨</span><span>New Map</span>
+    </button>
+    <button id="map-tab-add-open" class="menu-row" title="Open an existing map in a fresh tab">
+      <span class="ico">📂</span><span>Open Existing Map</span>
+    </button>
+    <div class="menu-section-label">Unit Editing</div>
+    <button id="map-tab-add-new-model" class="menu-row" disabled title="Coming soon: start a new 3DO from scratch">
+      <span class="ico">✨</span><span>New 3DO</span>
+    </button>
+    <button id="map-tab-add-model" class="menu-row" title="Open a 3DO model in a fresh tab — sits alongside any maps you have open">
+      <span class="ico">🛠</span><span>Open 3DO</span>
+    </button>
   </div>
 
   <script type="module" src="/studio.js"></script>
