@@ -1590,6 +1590,25 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // getUnitYOffset returns the world-Y translation to apply to the
+  // unit model in Sea mode.  For submerged units (subs) the model
+  // bounds are at the origin but the water plane is far above and
+  // the seabed sits 45 wu below the water — without an offset, a
+  // sub at bounds.min[1] = 0 would be buried inside the bed.  This
+  // method lifts the unit so its TOP sits ~12 wu below the water
+  // surface (periscope depth), guaranteeing clearance over the bed.
+  // Surface ships and other modes return 0.  Exposed so the host
+  // can also offset the camera target to keep framing locked on
+  // the actually-rendered unit position.
+  getUnitYOffset() {
+    if (!this.model || this.submersionMode !== 'submerged') return 0
+    const waterY = this._getWaterY()
+    const height = Math.max(1, this.model.bounds.max[1] - this.model.bounds.min[1])
+    const desiredTop = waterY - 12.0
+    const desiredMin = desiredTop - height
+    return desiredMin - this.model.bounds.min[1]
+  }
+
   // _getWaterY returns the world Y of the water surface.  Centralised
   // here because every sea pass (ground, reflection, bob, main shader
   // uniform) needs the same value — drift between them would float
@@ -1689,11 +1708,21 @@ export class ModelRenderer {
     // ground modes leave the model matrix identity (auto-rotate now
     // spins the camera around a stationary scene).
     Mat4.identity(this._modelMatrix)
-    if (this.groundMode === 'sea' && this.model && this.optBob) {
-      const t = (performance.now() - this._t0) / 1000
-      const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
-      const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
-      this._applySeaBob(this._modelMatrix, cx, cz, t)
+    if (this.groundMode === 'sea' && this.model) {
+      // Submersion offset comes first — the model is lifted into
+      // place between water and seabed (subs) BEFORE the bob is
+      // applied so the bob's vertical heave rides on top of the
+      // already-positioned unit.
+      const yOff = this.getUnitYOffset()
+      if (yOff !== 0) {
+        Mat4.translate(this._modelMatrix, this._modelMatrix, 0, yOff, 0)
+      }
+      if (this.optBob) {
+        const t = (performance.now() - this._t0) / 1000
+        const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
+        const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
+        this._applySeaBob(this._modelMatrix, cx, cz, t)
+      }
     }
 
     // Compute light-space matrix on every frame because the model
@@ -2038,6 +2067,11 @@ export class ModelRenderer {
       const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
       const bob = this._bobScratch || (this._bobScratch = Mat4.create())
       Mat4.identity(bob)
+      // Same submersion lift the main model gets — without it the
+      // mirrored unit reflects from y=0 instead of from the unit's
+      // actually-displayed position.
+      const yOff = this.getUnitYOffset()
+      if (yOff !== 0) Mat4.translate(bob, bob, 0, yOff, 0)
       this._applySeaBob(bob, cx, cz, t)
       Mat4.multiply(refl, mirror, bob)
     } else {

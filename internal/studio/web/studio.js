@@ -11561,6 +11561,17 @@ function applyDefaultGroundFor(meta) {
   // else sits on top.
   modelViewerInstance.renderer.setSubmersionMode(meta?.submersionMode || '')
   modelViewerInstance.renderer.setGroundMode(want)
+  // Sub units are lifted UP off the seabed via a model-matrix Y
+  // translation; the camera was framed in open() against the
+  // un-translated bounds, so without this adjustment the camera
+  // target stays at the original centroid (well below the lifted
+  // unit).  Bump target Y by the same offset so the camera keeps
+  // looking at where the unit is actually rendered.
+  const yOff = modelViewerInstance.renderer.getUnitYOffset?.() || 0
+  if (yOff !== 0 && modelViewerInstance.camera) {
+    modelViewerInstance.camera.target[1] += yOff
+    modelViewerInstance.renderer.requestRedraw()
+  }
   const activeRow = [...$$('.mv-ground-row')].find((r) => r.dataset.mvGround === want)
   $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === activeRow))
   // Sync the dropdown button face so the closed dropdown shows
