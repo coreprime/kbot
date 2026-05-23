@@ -605,6 +605,7 @@ const MAIN_VS = `
   uniform mat4 uView;
   uniform mat4 uWorld;
   uniform mat4 uLightSpace;
+  uniform mat4 uLightSpace2;
   uniform float uReflectionTint;
   uniform float uTime;
   uniform float uWaterY;
@@ -613,6 +614,7 @@ const MAIN_VS = `
   varying vec3 vNormal;
   varying vec3 vWorldPos;
   varying vec4 vLightSpacePos;
+  varying vec4 vLightSpacePos2;
   void main() {
     vUV = aUV;
     vNormal = mat3(uWorld) * aNormal;
@@ -632,6 +634,7 @@ const MAIN_VS = `
     }
     vWorldPos = worldPos.xyz;
     vLightSpacePos = uLightSpace * worldPos;
+    vLightSpacePos2 = uLightSpace2 * worldPos;
     gl_Position = uProj * uView * worldPos;
     gl_PointSize = 4.0;
   }
@@ -645,12 +648,16 @@ const MAIN_FS = `
   varying vec3 vNormal;
   varying vec3 vWorldPos;
   varying vec4 vLightSpacePos;
+  varying vec4 vLightSpacePos2;
   uniform sampler2D uTex;
   uniform sampler2D uShadowMap;
+  uniform sampler2D uShadowMap2;
   uniform int uMode;            // 0 = textured, 1 = flat colour
   uniform vec4 uTint;
   uniform vec3 uLightDir;       // direction the light is coming FROM (toward sun)
   uniform vec3 uLightColor;
+  uniform vec3 uLightDir2;      // second light (twin-sun worlds), zero colour = inactive
+  uniform vec3 uLightColor2;
   uniform vec3 uSkyColor;       // hemisphere ambient when normal points up
   uniform vec3 uGroundColor;    // hemisphere ambient when normal points down
   uniform float uShadowEnabled; // 1 if uShadowMap is bound to a real depth texture, else 0
@@ -665,13 +672,15 @@ const MAIN_FS = `
   // sampleShadow does a 3×3 PCF tap into the shadow map.  Returns
   // 1.0 = fully lit, 0.0 = fully shadowed (with a soft penumbra in
   // between).  Skipped when the depth-texture extension is missing.
-  float sampleShadow(vec3 normal) {
+  // sampleShadowMap1: 3×3 PCF tap into the primary shadow map.  Kept
+  // as a separate function from sampleShadowMap2 because WebGL1
+  // doesn't allow sampler arrays or sampler indexing — each map
+  // gets its own copy of the sampling code.
+  float sampleShadowMap1(vec3 normal) {
     if (uShadowEnabled < 0.5) return 1.0;
     vec3 proj = vLightSpacePos.xyz / vLightSpacePos.w;
     proj = proj * 0.5 + 0.5;
     if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
-    // Slope-scaled bias: surfaces facing the light suffer less
-    // self-acne, glancing surfaces need a heftier offset.
     float ndl = max(0.0, dot(normalize(normal), normalize(uLightDir)));
     float bias = max(uShadowBias * (1.0 - ndl), 0.0005);
     float lit = 0.0;
@@ -679,6 +688,23 @@ const MAIN_FS = `
     for (int dx = -1; dx <= 1; dx++) {
       for (int dy = -1; dy <= 1; dy++) {
         float depth = texture2D(uShadowMap, proj.xy + vec2(float(dx), float(dy)) * texel).r;
+        lit += (proj.z - bias < depth) ? 1.0 : 0.0;
+      }
+    }
+    return lit / 9.0;
+  }
+  float sampleShadowMap2(vec3 normal) {
+    if (uShadowEnabled < 0.5) return 1.0;
+    vec3 proj = vLightSpacePos2.xyz / vLightSpacePos2.w;
+    proj = proj * 0.5 + 0.5;
+    if (proj.x < 0.0 || proj.x > 1.0 || proj.y < 0.0 || proj.y > 1.0 || proj.z > 1.0) return 1.0;
+    float ndl = max(0.0, dot(normalize(normal), normalize(uLightDir2)));
+    float bias = max(uShadowBias * (1.0 - ndl), 0.0005);
+    float lit = 0.0;
+    float texel = 1.0 / 1024.0;
+    for (int dx = -1; dx <= 1; dx++) {
+      for (int dy = -1; dy <= 1; dy++) {
+        float depth = texture2D(uShadowMap2, proj.xy + vec2(float(dx), float(dy)) * texel).r;
         lit += (proj.z - bias < depth) ? 1.0 : 0.0;
       }
     }
@@ -729,8 +755,18 @@ const MAIN_FS = `
     // rotates under the camera so this still picks out the edges.
     float rim = pow(1.0 - max(0.0, N.z), 3.0) * 0.25;
 
-    float shadow = sampleShadow(N);
+    float shadow = sampleShadowMap1(N);
     vec3 directLight = ndl * uLightColor * shadow;
+    // Second sun contribution — twin-sun environments fill this in
+    // with a non-zero colour, single-sun worlds leave it black and
+    // it costs almost nothing.
+    if (dot(uLightColor2, uLightColor2) > 0.0001) {
+      vec3 L2 = normalize(uLightDir2);
+      float ndl2 = max(0.0, dot(N, L2));
+      ndl2 = max(ndl2, max(0.0, dot(-N, L2)) * 0.4);
+      float shadow2 = sampleShadowMap2(N);
+      directLight += ndl2 * uLightColor2 * shadow2;
+    }
     vec3 lighting = ambient + directLight + vec3(rim);
 
     // ── Sea bounce light ───────────────────────────────────────
@@ -1361,6 +1397,11 @@ export class ModelRenderer {
     // unit to ~0.65 luminance.  Bumping the sun + ambient pushes
     // typical hull pixels back into a comfortable 0.7-0.85 range.
     this.lightColor = [1.55, 1.45, 1.30]
+    // Optional second light, used by the twin-sun environment.  All
+    // zeros → no second light, no second shadow pass.  Set by
+    // setEnvironment when the active sky scheme defines sun2.
+    this.lightDir2 = [0, 1, 0]
+    this.lightColor2 = [0, 0, 0]
     // skyScheme picks the gradient + suns + clouds painted by the
     // skybox shader.  Setter `setSkyScheme(name)` swaps presets at
     // runtime; the renderer doesn't care which preset is active —
@@ -1459,6 +1500,12 @@ export class ModelRenderer {
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
+    // Second-light matrices (twin-sun worlds).  Same role as the
+    // first set, but driven by lightDir2.  Live alongside the
+    // first set so #updateLightMatrices can fill both in one go.
+    this._lightView2 = Mat4.create()
+    this._lightProj2 = Mat4.create()
+    this._lightSpace2 = Mat4.create()
 
     if (this.textureCache) this.textureCache.onAnyTextureReady = () => this.requestRedraw()
 
@@ -1554,6 +1601,21 @@ export class ModelRenderer {
     this.activeEnvironment = env
     this.setSkyScheme(env.sky)
     if (env.lightDir) this.lightDir = ModelRenderer.#normalise(env.lightDir)
+    // Pull sun2 from the active sky scheme so the scene-lighting
+    // pass casts a shadow from it too (single suns leave it at
+    // zero colour, in which case the shadow pass is skipped).
+    const sky = this.skyScheme || {}
+    const sun2 = sky.sun2 || { color: [0, 0, 0] }
+    const sun2Mag = sun2.color[0] + sun2.color[1] + sun2.color[2]
+    if (sun2Mag > 0.001 && sun2.dir) {
+      this.lightDir2 = ModelRenderer.#normalise(sun2.dir)
+      // Dim the second light a bit so its shadow contribution
+      // doesn't overpower the primary — twin-sun scenes still want
+      // a clear primary key light, with the second adding texture.
+      this.lightColor2 = [sun2.color[0] * 0.6, sun2.color[1] * 0.6, sun2.color[2] * 0.6]
+    } else {
+      this.lightColor2 = [0, 0, 0]
+    }
     // Tileset switch: drop the cached terrain texture so the lazy
     // fetcher picks up the new tileset the next time Terrain mode is
     // active.  If the user is currently in Terrain mode, trigger the
@@ -1744,7 +1806,13 @@ export class ModelRenderer {
     // Shadow pass is meaningful only when the main pass actually uses
     // shadows.  In Flat / Wireframe modes we skip it to save GPU.
     const usesShadows = this.renderMode === 'full'
-    if (this._shadowFBO && usesShadows) this.#renderShadowPass()
+    if (this._shadowFBO && usesShadows) {
+      this.#renderShadowPass(0)
+      // Second shadow pass only when the active environment has a
+      // real second sun — single-sun worlds skip the cost.
+      const sun2Mag = this.lightColor2[0] + this.lightColor2[1] + this.lightColor2[2]
+      if (sun2Mag > 0.001 && this._shadowFBO2) this.#renderShadowPass(1)
+    }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
@@ -1859,9 +1927,12 @@ export class ModelRenderer {
 
   // ── Frame: shadow pass ──────────────────────────────────────────────
 
-  #renderShadowPass() {
+  #renderShadowPass(lightIdx = 0) {
     const gl = this.gl
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this._shadowFBO)
+    const fbo = lightIdx === 1 ? this._shadowFBO2 : this._shadowFBO
+    const space = lightIdx === 1 ? this._lightSpace2 : this._lightSpace
+    if (!fbo) return
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
     gl.viewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
     gl.clearColor(1, 1, 1, 1)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -1875,7 +1946,7 @@ export class ModelRenderer {
     gl.disable(gl.BLEND)
 
     gl.useProgram(this.programShadow)
-    gl.uniformMatrix4fv(this.uShadowLightSpace, false, this._lightSpace)
+    gl.uniformMatrix4fv(this.uShadowLightSpace, false, space)
     this.#drawGeometry(this.model.root, this._modelMatrix, true)
 
     gl.disable(gl.CULL_FACE)
@@ -2036,8 +2107,11 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uLightSpace, false, this._lightSpace)
+    gl.uniformMatrix4fv(this.uLightSpace2, false, this._lightSpace2)
     gl.uniform3fv(this.uLightDir, this.lightDir)
     gl.uniform3fv(this.uLightColor, this.lightColor)
+    gl.uniform3fv(this.uLightDir2, this.lightDir2)
+    gl.uniform3fv(this.uLightColor2, this.lightColor2)
     gl.uniform3fv(this.uSkyColor, this.skyColor)
     gl.uniform3fv(this.uGroundColor, this.groundColor)
     gl.uniform1f(this.uFlatLighting, 0)
@@ -2101,8 +2175,11 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uLightSpace, false, this._lightSpace)
+    gl.uniformMatrix4fv(this.uLightSpace2, false, this._lightSpace2)
     gl.uniform3fv(this.uLightDir, this.lightDir)
     gl.uniform3fv(this.uLightColor, this.lightColor)
+    gl.uniform3fv(this.uLightDir2, this.lightDir2)
+    gl.uniform3fv(this.uLightColor2, this.lightColor2)
     gl.uniform3fv(this.uSkyColor, this.skyColor)
     gl.uniform3fv(this.uGroundColor, this.groundColor)
     // Flat mode bypasses the directional + ambient + shadow path so
@@ -2123,6 +2200,14 @@ export class ModelRenderer {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
       gl.uniform1i(this.uShadowMap, 1)
+      // Bind the second light's shadow map regardless of whether
+      // it's actively in use — the shader's branch on uLightColor2
+      // determines whether the sample contributes.  Pointing the
+      // sampler at a real texture (even if it's a stale frame's
+      // content) keeps WebGL happy.
+      gl.activeTexture(gl.TEXTURE3)
+      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex2 || this._shadowTex)
+      gl.uniform1i(this.uShadowMap2, 3)
     }
     this.#drawGeometry(this.model.root, this._modelMatrix, false)
   }
@@ -2367,6 +2452,17 @@ export class ModelRenderer {
     Mat4.lookAt(this._lightView, eye, [cx, cy, cz], [0, 1, 0])
     Mat4.ortho(this._lightProj, -r, r, -r, r, 0.1, dist + r * 2)
     Mat4.multiply(this._lightSpace, this._lightProj, this._lightView)
+    // Same shadow-frustum math for the second light when it's
+    // active.  Skipping it for single-sun worlds (lightColor2 zero)
+    // saves the per-frame matrix work AND keeps the shadow pass
+    // skip below cheap.
+    const sun2Mag = this.lightColor2[0] + this.lightColor2[1] + this.lightColor2[2]
+    if (sun2Mag > 0.001) {
+      const eye2 = [cx + this.lightDir2[0] * dist, cy + this.lightDir2[1] * dist, cz + this.lightDir2[2] * dist]
+      Mat4.lookAt(this._lightView2, eye2, [cx, cy, cz], [0, 1, 0])
+      Mat4.ortho(this._lightProj2, -r, r, -r, r, 0.1, dist + r * 2)
+      Mat4.multiply(this._lightSpace2, this._lightProj2, this._lightView2)
+    }
   }
 
   // ── Shader/program setup ───────────────────────────────────────────
@@ -2382,12 +2478,16 @@ export class ModelRenderer {
     this.uView = gl.getUniformLocation(prog, 'uView')
     this.uWorld = gl.getUniformLocation(prog, 'uWorld')
     this.uLightSpace = gl.getUniformLocation(prog, 'uLightSpace')
+    this.uLightSpace2 = gl.getUniformLocation(prog, 'uLightSpace2')
     this.uTex = gl.getUniformLocation(prog, 'uTex')
     this.uShadowMap = gl.getUniformLocation(prog, 'uShadowMap')
+    this.uShadowMap2 = gl.getUniformLocation(prog, 'uShadowMap2')
     this.uMode = gl.getUniformLocation(prog, 'uMode')
     this.uTint = gl.getUniformLocation(prog, 'uTint')
     this.uLightDir = gl.getUniformLocation(prog, 'uLightDir')
     this.uLightColor = gl.getUniformLocation(prog, 'uLightColor')
+    this.uLightDir2 = gl.getUniformLocation(prog, 'uLightDir2')
+    this.uLightColor2 = gl.getUniformLocation(prog, 'uLightColor2')
     this.uSkyColor = gl.getUniformLocation(prog, 'uSkyColor')
     this.uGroundColor = gl.getUniformLocation(prog, 'uGroundColor')
     this.uShadowEnabled = gl.getUniformLocation(prog, 'uShadowEnabled')
@@ -2602,6 +2702,33 @@ export class ModelRenderer {
     this._shadowFBO = fbo
     this._shadowTex = tex
     this._shadowColorTex = color
+    // Second shadow FBO + textures for the twin-sun environment.
+    // Built lazily on the same depth-texture path as the first.
+    const tex2 = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, tex2)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    const fbo2 = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo2)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, tex2, 0)
+    const color2 = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, color2)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color2, 0)
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      this._shadowFBO2 = fbo2
+      this._shadowTex2 = tex2
+      this._shadowColorTex2 = color2
+    } else {
+      gl.deleteFramebuffer(fbo2)
+      gl.deleteTexture(tex2)
+      gl.deleteTexture(color2)
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
 
