@@ -542,22 +542,24 @@ const MAIN_FS = `
       float waterProximity = 1.0 - smoothstep(0.0, 12.0, max(0.0, vWorldPos.y - uWaterY));
       float gate = sideness * waterProximity;
       if (gate > 0.001) {
+        // Diffuse bounce — kept strong since the user wanted clearly
+        // visible reflections on the side plates.
         float caustic = seaCaustic(vWorldPos.xz, uTime);
-        // Brighter diffuse bounce + more saturated tint so the
-        // reflected water reads as a clear blue glow on the side
-        // plates rather than a hint.
         vec3 bounceTint = vec3(0.45, 0.95, 1.40);
-        lighting += bounceTint * (0.30 + caustic) * gate * 1.50;
+        lighting += bounceTint * (0.30 + caustic) * gate * 1.40;
 
-        // Sun shimmer: reflected wave-mirrored sun hitting the
-        // hull.  Wider exponent (was 12) plus a stronger intensity
-        // multiplier so individual glints are unmistakable.  abs()
-        // on the dot keeps the test winding-agnostic.
+        // Sun shimmer — pulled WAY back (3.5 → 0.9) and modulated by
+        // value noise instead of just a pow(dot) so the highlights
+        // read as scattered glints rather than a hard gridded grid.
+        // The noise also varies in time so the shimmer twinkles
+        // instead of moving in a regular pattern.
         vec3 hs = seaWaveHS(vWorldPos.xz, uTime);
         vec3 waveN = normalize(vec3(-hs.y, 1.0, -hs.z));
         vec3 sunRefl = reflect(-L, waveN);
-        float shimmerAlign = pow(abs(dot(sunRefl, N)), 8.0);
-        lighting += vec3(3.50, 3.00, 2.10) * shimmerAlign * gate;
+        float shimmerAlign = pow(abs(dot(sunRefl, N)), 14.0);
+        float shimmerNoise = seaNoise(vWorldPos.xz * 0.6 + uTime * 0.7);
+        float shimmer = shimmerAlign * smoothstep(0.45, 0.85, shimmerNoise);
+        lighting += vec3(1.30, 1.10, 0.80) * shimmer * gate;
       }
     }
 
