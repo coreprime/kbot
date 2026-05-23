@@ -38,12 +38,40 @@ const SHADOW_MAP_SIZE = 1024
 // Declared first because const has temporal-dead-zone semantics; the
 // MAIN/GROUND shader templates below interpolate it via ${...}.
 const SEA_WAVES_GLSL = `
+  // Hash + value noise helpers — shared between the sea (for domain
+  // warping the wave field so it doesn't read as a sinusoid grid)
+  // and the seabed (for rock placement).  Standard prime-vector
+  // hash, smoothstep-interpolated value noise.
+  float seaHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  float seaNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = seaHash(i);
+    float b = seaHash(i + vec2(1.0, 0.0));
+    float c = seaHash(i + vec2(0.0, 1.0));
+    float d = seaHash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+
   // seaWaveHS: 5-octave wave field with prime-ratio frequencies and
-  // cross-axis interference so the surface never reads as a tiled
-  // grid of sines.  Peak amplitude is around 2.6 wu — tall enough to
-  // produce visible cresting and breaking foam, low enough that a
-  // battleship still sits on rather than under the wave.
-  vec3 seaWaveHS(vec2 xz, float t) {
+  // cross-axis interference, then domain-warped by value noise so
+  // the surface never reads as a tiled grid of sines.  Peak
+  // amplitude is around 2.6 wu — tall enough to produce visible
+  // cresting and breaking foam, low enough that a battleship still
+  // sits on rather than under the wave.
+  vec3 seaWaveHS(vec2 xzIn, float t) {
+    // Domain warp — perturb the input coordinates by value noise so
+    // the underlying sine pattern stops aligning to a grid.  Two
+    // octaves of warp give large-scale flow plus fine breakup; the
+    // time term lets the warp itself drift slowly with the swell.
+    vec2 wA = vec2(seaNoise(xzIn * 0.035 + t * 0.03),
+                   seaNoise(xzIn * 0.035 - t * 0.02 + 17.3)) - 0.5;
+    vec2 wB = vec2(seaNoise(xzIn * 0.12 + t * 0.06 + 3.7),
+                   seaNoise(xzIn * 0.12 - t * 0.05 + 9.1)) - 0.5;
+    vec2 xz = xzIn + wA * 18.0 + wB * 5.0;
     // Five spatial scales.  Each octave gets its own offset so the
     // beat pattern between layers shifts the "interesting" parts of
     // the surface around as time progresses.
@@ -80,11 +108,17 @@ const SEA_WAVES_GLSL = `
                + 0.25 * sin((xz.x + xz.y) * 0.013 + t * 0.07)
                + 0.15 * cos(xz.x * 0.031 - xz.y * 0.024 + t * 0.19);
     gust = clamp(gust, 0.55, 1.75);
+    // Pure-noise layer mixed in directly — breaks the residual sine
+    // banding when the sinusoid octaves happen to constructively
+    // interfere.  Centered on 0 so it doesn't bias the mean height.
+    float noiseLayer = (seaNoise(xz * 0.18 + t * 0.06) - 0.5) * 0.45
+                     + (seaNoise(xz * 0.55 - t * 0.04 + 11.0) - 0.5) * 0.20;
     float h = (A1a * 0.55 + A1b * 0.55
             + A2a * 0.42 + A2b * 0.32
             + A3a * 0.22 + A3b * 0.18
             + A4a * 0.10 + A4b * 0.10
-            + A5a * 0.03 + A5b * 0.03) * gust;
+            + A5a * 0.03 + A5b * 0.03
+            + noiseLayer) * gust;
     // Slope: chain-rule each component.  freqs were declared above so
     // the partials follow directly — keep these in sync if the
     // amplitudes/frequencies change.
