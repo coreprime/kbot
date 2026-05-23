@@ -58,9 +58,13 @@ export class ModelViewer {
       this.camera.frameBounds(model.bounds.min, model.bounds.max)
       // Reset orbit angle on each new model so the user always
       // sees the entry view first, regardless of where the previous
-      // tab's auto-rotate left the camera.
-      this.camera.yaw = 35 * Math.PI / 180
+      // tab's auto-rotate left the camera.  Yaw 215° (180° behind
+      // the historical 35°) + 25% further distance matches the
+      // angle used by TA's build-picture thumbnails — units read
+      // from their natural front-quarter view.
+      this.camera.yaw = 215 * Math.PI / 180
       this.camera.pitch = 18 * Math.PI / 180
+      this.camera.distance *= 1.25
       this.renderer.requestRedraw()
       if (this.onModelLoaded) this.onModelLoaded(model)
       this.#setStatus(`${modelName} · ${model.flat.length} piece${model.flat.length === 1 ? '' : 's'}`)

@@ -10993,8 +10993,9 @@ function wireModelDialogs() {
       )
       // Restore default angle too — auto-rotate may have walked
       // yaw around the unit; reset means "back to the entry view".
-      cam.yaw = 35 * Math.PI / 180
+      cam.yaw = 215 * Math.PI / 180
       cam.pitch = 18 * Math.PI / 180
+      cam.distance *= 1.25
       modelViewerInstance.renderer.requestRedraw()
     }
   })
