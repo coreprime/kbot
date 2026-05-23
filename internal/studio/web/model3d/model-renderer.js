@@ -335,64 +335,85 @@ const ENVIRONMENT_PRESETS = {
     sky: 'earth',
     terrainTileset: 'greenworld',
     lightDir: [-0.6, 0.95, 0.4],
+    // Classic Caribbean three-stop: turquoise shallows, teal mid,
+    // navy abyss.  Stays as the reference all other planets riff
+    // on visually.
     waterShallow: [0.20, 0.78, 0.82],
-    waterDeep: [0.02, 0.12, 0.28],
+    waterMid:     [0.08, 0.45, 0.62],
+    waterDeep:    [0.02, 0.12, 0.28],
   },
   sunset: {
     name: 'Sunset',
     sky: 'sunset',
     terrainTileset: 'greenworld',
     lightDir: [-0.55, 0.35, 0.50],
-    waterShallow: [0.45, 0.65, 0.70],
-    waterDeep: [0.10, 0.10, 0.22],
+    // Lit warm at the surface by the low sun, deepening to a
+    // muted purple-blue underneath.
+    waterShallow: [0.55, 0.55, 0.65],
+    waterMid:     [0.20, 0.20, 0.45],
+    waterDeep:    [0.05, 0.05, 0.18],
   },
   night: {
     name: 'Night',
     sky: 'night',
     terrainTileset: 'greenworld',
     lightDir: [-0.40, 0.85, 0.30],
-    waterShallow: [0.08, 0.18, 0.28],
-    waterDeep: [0.02, 0.04, 0.10],
+    waterShallow: [0.10, 0.20, 0.32],
+    waterMid:     [0.04, 0.08, 0.18],
+    waterDeep:    [0.01, 0.02, 0.06],
   },
   desert: {
     name: 'Desert',
     sky: 'desert',
     terrainTileset: 'desert',
     lightDir: [-0.55, 0.85, 0.35],
-    waterShallow: [0.30, 0.60, 0.62],
-    waterDeep: [0.05, 0.12, 0.22],
+    // Acid lake — pale chartreuse shallows over deeper toxic green.
+    waterShallow: [0.55, 0.85, 0.35],
+    waterMid:     [0.20, 0.55, 0.20],
+    waterDeep:    [0.06, 0.20, 0.08],
   },
   arctic: {
     name: 'Arctic',
     sky: 'arctic',
     terrainTileset: 'arctic',
     lightDir: [-0.40, 0.55, 0.55],
-    waterShallow: [0.45, 0.62, 0.75],
-    waterDeep: [0.05, 0.10, 0.18],
+    // Glacial meltwater — pale icy blue with milky shallows.
+    waterShallow: [0.65, 0.85, 0.95],
+    waterMid:     [0.30, 0.55, 0.78],
+    waterDeep:    [0.05, 0.12, 0.25],
   },
   lava: {
     name: 'Lava',
     sky: 'lava',
     terrainTileset: 'lavarock',
     lightDir: [-0.5, 0.65, 0.4],
-    waterShallow: [0.85, 0.30, 0.10],
-    waterDeep: [0.20, 0.05, 0.02],
+    // Molten lake — yellow-hot crusts at the surface, glowing red
+    // through to black under-pool.
+    waterShallow: [1.10, 0.55, 0.10],
+    waterMid:     [0.55, 0.10, 0.05],
+    waterDeep:    [0.12, 0.02, 0.01],
   },
   mars: {
     name: 'Mars',
     sky: 'mars',
     terrainTileset: 'desert',
     lightDir: [-0.55, 0.65, 0.40],
-    waterShallow: [0.55, 0.35, 0.25],
-    waterDeep: [0.12, 0.06, 0.05],
+    // Purple Martian water as requested — rusty mauve at the top,
+    // deepening to a dark indigo.
+    waterShallow: [0.62, 0.38, 0.72],
+    waterMid:     [0.32, 0.18, 0.50],
+    waterDeep:    [0.08, 0.04, 0.18],
   },
   alienTwin: {
     name: 'Alien (twin suns)',
     sky: 'alienTwin',
     terrainTileset: 'lunar',
     lightDir: [-0.45, 0.75, 0.40],
-    waterShallow: [0.35, 0.55, 0.80],
-    waterDeep: [0.10, 0.10, 0.30],
+    // Bioluminescent alien water — cyan shallows, electric teal
+    // mid, deep void.
+    waterShallow: [0.30, 0.95, 0.85],
+    waterMid:     [0.12, 0.50, 0.65],
+    waterDeep:    [0.04, 0.10, 0.22],
   },
 }
 
@@ -889,6 +910,9 @@ const GROUND_FS = `
   uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
   uniform float uOptSpecular;        // 0 disables broad/tight specular + sparkles
   uniform float uWavesIntensity;     // multiplier on wave amplitude (also flat=0 when Waves toggle off)
+  uniform vec3 uWaterShallow;        // shallow / sunlit water tint (closest to surface light)
+  uniform vec3 uWaterMid;            // mid depth tint
+  uniform vec3 uWaterDeep;           // abyssal tint
 
   float sampleShadow() {
     if (uShadowEnabled < 0.5) return 1.0;
@@ -997,14 +1021,15 @@ const GROUND_FS = `
       vec3 wn = normalize(vec3(-dhx * closeUp, 1.0, -dhz * closeUp));
       float slope = length(vec2(dhx, dhz)) * closeUp;
 
-      // ── Water column: aqua → teal → navy ─────────────────────
-      // Aqua palette — more green than the previous cobalt so
-      // shallows read as tropical / Caribbean.  Three stops blend
-      // by an absorption proxy that uses wave height (crests are
-      // optically shallower than troughs).
-      vec3 shallowTint = vec3(0.20, 0.78, 0.82);
-      vec3 midTint     = vec3(0.08, 0.45, 0.62);
-      vec3 deepTint    = vec3(0.02, 0.12, 0.28);
+      // ── Water column: shallow → mid → deep, per-planet ───────
+      // Three tint stops come from the active environment preset
+      // (uWaterShallow/Mid/Deep) so Mars gets purple water, lava
+      // gets oily red, etc.  Three stops blend by an absorption
+      // proxy that uses wave height (crests are optically
+      // shallower than troughs).
+      vec3 shallowTint = uWaterShallow;
+      vec3 midTint     = uWaterMid;
+      vec3 deepTint    = uWaterDeep;
       float depthProxy = 1.6 - h;
       float absorb = exp(-depthProxy * 0.55);
       vec3 waterCol = mix(deepTint, midTint, smoothstep(0.0, 0.55, absorb));
@@ -1126,6 +1151,10 @@ export class ModelRenderer {
     // runtime; the renderer doesn't care which preset is active —
     // it just hands the uniforms to the GPU each frame.
     this.skyScheme = SKY_PRESETS.earth
+    // activeEnvironment tracks the full env preset (sky scheme +
+    // terrain + light dir + water tints).  Pulled from each frame
+    // when the sea shader needs its tint stops.
+    this.activeEnvironment = ENVIRONMENT_PRESETS.earth
     this.skyColor = [0.95, 1.00, 1.08]
     this.groundColor = [0.32, 0.30, 0.26]
     this.skyTop = [0.35, 0.45, 0.6]
@@ -1299,6 +1328,9 @@ export class ModelRenderer {
     } else {
       return
     }
+    // Cache the active env so the sea shader can pull water tints
+    // from it each frame.  See #renderGround.
+    this.activeEnvironment = env
     this.setSkyScheme(env.sky)
     if (env.lightDir) this.lightDir = ModelRenderer.#normalise(env.lightDir)
     // Tileset switch: drop the cached terrain texture so the lazy
@@ -1627,6 +1659,13 @@ export class ModelRenderer {
     // Waves toggle off → flat sea (intensity 0); otherwise use the
     // slider value so the user can scale waves from glassy to gale.
     gl.uniform1f(this.uGroundWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
+    // Per-planet water tints come from the active environment preset.
+    // Fall back to the Earth aqua palette if a preset doesn't override
+    // a particular stop.
+    const env = this.activeEnvironment || ENVIRONMENT_PRESETS.earth
+    gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.20, 0.78, 0.82])
+    gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.08, 0.45, 0.62])
+    gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.02, 0.12, 0.28])
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -2103,6 +2142,9 @@ export class ModelRenderer {
     this.uGroundOptWaterReflections = gl.getUniformLocation(prog, 'uOptWaterReflections')
     this.uGroundOptSpecular = gl.getUniformLocation(prog, 'uOptSpecular')
     this.uGroundWavesIntensity = gl.getUniformLocation(prog, 'uWavesIntensity')
+    this.uGroundWaterShallow = gl.getUniformLocation(prog, 'uWaterShallow')
+    this.uGroundWaterMid = gl.getUniformLocation(prog, 'uWaterMid')
+    this.uGroundWaterDeep = gl.getUniformLocation(prog, 'uWaterDeep')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

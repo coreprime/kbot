@@ -11165,6 +11165,7 @@ function wireModelViewMenu() {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeWidth(px)
   }
   const modeLabel = $('#mv-render-current-lbl')
+  const modeIco = $('#mv-render-current-ico')
   const wireOverlay = $('#mv-act-wire-overlay')
   // applyWireOverlayLock: in Wireframe Only mode the wireframe IS the
   // image — the Show Wireframe toggle must be on (and locked) so the
@@ -11195,6 +11196,10 @@ function wireModelViewMenu() {
       if (!mode) return
       $$('.mv-mode-row').forEach((r) => r.classList.toggle('active', r === row))
       if (modeLabel) modeLabel.textContent = row.textContent.trim().replace(/✓.*$/, '').trim()
+      // Mirror the row's icon onto the dropdown button so the
+      // closed dropdown shows the picked mode at a glance.
+      const rowIco = row.querySelector('.ico')
+      if (modeIco && rowIco) modeIco.textContent = rowIco.textContent
       applyMode(mode)
       applyWireOverlayLock(mode)
     })
@@ -11320,6 +11325,7 @@ function wireModelViewMenu() {
   }
   // Environment submenu rows — hover previews live, click commits.
   const envLabel = $('#mv-env-current-lbl')
+  const envIco = $('#mv-env-current-ico')
   for (const row of $$('.mv-env-row')) {
     row.addEventListener('mouseenter', () => {
       const env = row.dataset.mvEnv
@@ -11334,6 +11340,8 @@ function wireModelViewMenu() {
       $$('.mv-env-row').forEach((r) => r.classList.toggle('active', r === row))
       const lbl = row.textContent.trim()
       if (envLabel) envLabel.textContent = lbl
+      const rowIco = row.querySelector('.ico')
+      if (envIco && rowIco) envIco.textContent = rowIco.textContent
       envPreviewing = false
       if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
       if (envParent) envParent.classList.remove('open')
@@ -11485,7 +11493,10 @@ function applyUnitEditorDefaults() {
   if (envRow) {
     $$('.mv-env-row').forEach((row) => row.classList.toggle('active', row === envRow))
     const envLbl = $('#mv-env-current-lbl')
+    const envIco2 = $('#mv-env-current-ico')
     if (envLbl) envLbl.textContent = envRow.textContent.trim()
+    const rIco = envRow.querySelector('.ico')
+    if (envIco2 && rIco) envIco2.textContent = rIco.textContent
   }
   const togglePairs = [
     ['mv-opt-reflections', s.unitDefaultReflections !== false, (v) => r.setReflectionsEnabled(v)],

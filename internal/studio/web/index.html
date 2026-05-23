@@ -149,7 +149,7 @@
           <div class="ribbon-label">Rendering</div>
           <div class="ribbon-group ribbon-dropdown" id="mv-render-dropdown">
             <button class="tool-btn ribbon-dropdown-btn" id="mv-render-dropdown-btn" title="Pick the render mode + wireframe overlay">
-              <span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
+              <span class="ico" id="mv-render-current-ico">🧱</span><span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-render-dropdown-popup">
@@ -180,7 +180,7 @@
           <div class="ribbon-label">Scene</div>
           <div class="ribbon-group ribbon-dropdown" id="mv-ground-dropdown">
             <button class="tool-btn ribbon-dropdown-btn" id="mv-ground-dropdown-btn" title="Pick what the unit stands on">
-              <span class="lbl">Scene</span>
+              <span class="ico" id="mv-ground-current-ico">🌱</span><span class="lbl" id="mv-ground-current-lbl">Terrain</span>
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-ground-dropdown-popup">
@@ -207,19 +207,9 @@
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-options-dropdown-popup">
-              <div class="menu-section-label">General Effects</div>
-              <button id="mv-opt-reflections" class="menu-row toggle-row" data-on="1" title="The unit reflects on the water (and other reflective surfaces).">
-                <span class="ico">🪞</span><span>Reflections</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-opt-specular" class="menu-row toggle-row" data-on="1" title="Bright sun highlights on the water surface">
-                <span class="ico">💎</span><span>Specular Highlights</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-opt-godbeams" class="menu-row toggle-row" data-on="1" title="Crepuscular light shafts from the sun through clouds">
-                <span class="ico">🌟</span><span>God Beams</span><span class="menu-check">✓</span>
-              </button>
               <div class="menu-section-label">Environment</div>
               <div class="menu-row menu-row-submenu" id="mv-opt-env-row" role="button" tabindex="0" title="Pick the world look">
-                <span class="ico">🌍</span><span class="env-current-lbl" id="mv-env-current-lbl">Earth</span><span class="chev-right">▸</span>
+                <span class="ico" id="mv-env-current-ico">🌎</span><span class="env-current-lbl" id="mv-env-current-lbl">Earth</span><span class="chev-right">▸</span>
                 <div class="ribbon-submenu hidden" id="mv-env-submenu">
                   <button class="menu-row mv-env-row active" data-mv-env="earth" title="Earth — blue sky, green terrain, ocean water">
                     <span class="ico">🌎</span><span>Earth</span>
@@ -247,6 +237,16 @@
                   </button>
                 </div>
               </div>
+              <div class="menu-section-label">General Effects</div>
+              <button id="mv-opt-reflections" class="menu-row toggle-row" data-on="1" title="The unit reflects on the water (and other reflective surfaces).">
+                <span class="ico">🪞</span><span>Reflections</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-opt-specular" class="menu-row toggle-row" data-on="1" title="Bright sun highlights on the water surface">
+                <span class="ico">💎</span><span>Specular Highlights</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-opt-godbeams" class="menu-row toggle-row" data-on="1" title="Crepuscular light shafts from the sun through clouds">
+                <span class="ico">🌟</span><span>God Beams</span><span class="menu-check">✓</span>
+              </button>
               <div class="menu-section-label">Liquid Simulation</div>
               <button id="mv-opt-water-reflections" class="menu-row toggle-row" data-on="1" title="Water reflects onto the unit's hull — caustic bounce + sun shimmer on side plates">
                 <span class="ico">🌅</span><span>Water Surface Reflections</span><span class="menu-check">✓</span>
