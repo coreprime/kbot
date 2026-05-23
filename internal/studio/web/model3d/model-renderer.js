@@ -774,32 +774,40 @@ const SKY_FS = `
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
       float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      // Multiple beam harmonics for more interesting streaks: thick
-      // bands modulated by thinner ones plus a slow wander give
-      // beams that look genuinely volumetric rather than a fan.
-      float beam = 0.5 + 0.5 * sin(ang * 14.0 + uTime * 0.10);
-      beam *= 0.5 + 0.5 * sin(ang * 6.7 - 0.7);
-      beam = pow(beam, 0.65);  // raise the floor so beams aren't pencil-thin
-      // Wider falloff so beams reach across more of the sky, gated
-      // by cloud gaps as before but with a softer threshold so the
-      // beams aren't yanked off entirely by patchy cover.
-      float coneFall = exp(-tLen * 2.2);
-      float gap = 1.0 - smoothstep(0.55, 0.95, cMask);
+      // Value-noise-modulated shafts: instead of regular sine
+      // stripes, sample noise along the angular axis to pick out
+      // irregular bright shafts.  Two scales give chunky main
+      // beams + finer cross-modulation; a slow time drift makes
+      // the shafts breathe rather than march at a fixed cadence.
+      float shaftHi = vnoise(vec2(ang * 2.2, uTime * 0.03));
+      float shaftLo = vnoise(vec2(ang * 5.7 + 11.0, -uTime * 0.05));
+      float beam = pow(smoothstep(0.45, 0.85, shaftHi), 1.4)
+                 * (0.5 + 0.5 * shaftLo);
+      // Beam noise gated through smoothstep so individual shafts
+      // have crisp edges instead of a smooth wash — the gap
+      // between shafts is what makes them read as discrete bars
+      // of light rather than a glowing fan.
+      // Wider falloff so shafts reach further across the sky, with
+      // a much softer cloud-gap cutoff — patchy clouds modulate the
+      // intensity but don't kill the beam outright.
+      float coneFall = exp(-tLen * 1.4);
+      float gap = mix(0.45, 1.0, 1.0 - smoothstep(0.40, 0.95, cMask));
       float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun1Color * beam * coneFall * gap * upward * 1.40;
+      col += uSun1Color * beam * coneFall * gap * upward * 1.80;
     }
     if (uOptGodBeams > 0.5 && dot(uSun2Color, uSun2Color) > 0.0001) {
       vec3 toSun = normalize(uSun2Dir);
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
       float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      float beam = 0.5 + 0.5 * sin(ang * 14.0 + uTime * 0.10);
-      beam *= 0.5 + 0.5 * sin(ang * 6.7 - 0.7);
-      beam = pow(beam, 0.65);
-      float coneFall = exp(-tLen * 2.2);
-      float gap = 1.0 - smoothstep(0.55, 0.95, cMask);
+      float shaftHi = vnoise(vec2(ang * 2.2, uTime * 0.03));
+      float shaftLo = vnoise(vec2(ang * 5.7 + 11.0, -uTime * 0.05));
+      float beam = pow(smoothstep(0.45, 0.85, shaftHi), 1.4)
+                 * (0.5 + 0.5 * shaftLo);
+      float coneFall = exp(-tLen * 1.4);
+      float gap = mix(0.45, 1.0, 1.0 - smoothstep(0.40, 0.95, cMask));
       float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun2Color * beam * coneFall * gap * upward * 1.15;
+      col += uSun2Color * beam * coneFall * gap * upward * 1.50;
     }
 
     gl_FragColor = vec4(col, 1.0);
