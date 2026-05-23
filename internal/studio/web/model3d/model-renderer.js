@@ -772,24 +772,32 @@ const SKY_FS = `
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
       float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      float beam = 0.5 + 0.5 * sin(ang * 16.0 + uTime * 0.10);
-      beam *= 0.5 + 0.5 * sin(ang * 7.3 - 0.7);
-      float coneFall = exp(-tLen * 3.5);
-      float gap = 1.0 - smoothstep(0.4, 0.85, cMask);
+      // Multiple beam harmonics for more interesting streaks: thick
+      // bands modulated by thinner ones plus a slow wander give
+      // beams that look genuinely volumetric rather than a fan.
+      float beam = 0.5 + 0.5 * sin(ang * 14.0 + uTime * 0.10);
+      beam *= 0.5 + 0.5 * sin(ang * 6.7 - 0.7);
+      beam = pow(beam, 0.65);  // raise the floor so beams aren't pencil-thin
+      // Wider falloff so beams reach across more of the sky, gated
+      // by cloud gaps as before but with a softer threshold so the
+      // beams aren't yanked off entirely by patchy cover.
+      float coneFall = exp(-tLen * 2.2);
+      float gap = 1.0 - smoothstep(0.55, 0.95, cMask);
       float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun1Color * beam * coneFall * gap * upward * 0.55;
+      col += uSun1Color * beam * coneFall * gap * upward * 1.40;
     }
     if (uOptGodBeams > 0.5 && dot(uSun2Color, uSun2Color) > 0.0001) {
       vec3 toSun = normalize(uSun2Dir);
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
       float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
-      float beam = 0.5 + 0.5 * sin(ang * 16.0 + uTime * 0.10);
-      beam *= 0.5 + 0.5 * sin(ang * 7.3 - 0.7);
-      float coneFall = exp(-tLen * 3.5);
-      float gap = 1.0 - smoothstep(0.4, 0.85, cMask);
+      float beam = 0.5 + 0.5 * sin(ang * 14.0 + uTime * 0.10);
+      beam *= 0.5 + 0.5 * sin(ang * 6.7 - 0.7);
+      beam = pow(beam, 0.65);
+      float coneFall = exp(-tLen * 2.2);
+      float gap = 1.0 - smoothstep(0.55, 0.95, cMask);
       float upward = smoothstep(-0.05, 0.20, dir.y);
-      col += uSun2Color * beam * coneFall * gap * upward * 0.45;
+      col += uSun2Color * beam * coneFall * gap * upward * 1.15;
     }
 
     gl_FragColor = vec4(col, 1.0);
