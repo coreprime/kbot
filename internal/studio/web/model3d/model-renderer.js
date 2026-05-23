@@ -243,6 +243,123 @@ const SKY_PRESETS = {
     cloudDensity: 0.55,
     cloudSpeed: 0.006,
   },
+  arctic: {
+    name: 'Arctic (pale)',
+    zenith: [0.55, 0.65, 0.78],
+    horizon: [0.92, 0.95, 0.98],
+    sun1: { color: [1.60, 1.55, 1.30], dir: [-0.45, 0.30, -0.78], size: 0.030 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [1.05, 1.05, 1.08],
+    cloudShadow: [0.65, 0.70, 0.78],
+    cloudCoverage: 0.65,
+    cloudDensity: 0.85,
+    cloudSpeed: 0.010,
+  },
+  lava: {
+    name: 'Lava world',
+    zenith: [0.35, 0.10, 0.05],
+    horizon: [1.30, 0.45, 0.15],
+    sun1: { color: [2.20, 0.70, 0.15], dir: [-0.40, 0.25, -0.80], size: 0.045 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.95, 0.55, 0.35],
+    cloudShadow: [0.30, 0.10, 0.05],
+    cloudCoverage: 0.45,
+    cloudDensity: 0.75,
+    cloudSpeed: 0.018,
+  },
+  desert: {
+    name: 'Desert (hot)',
+    zenith: [0.42, 0.55, 0.80],
+    horizon: [1.20, 0.95, 0.55],
+    sun1: { color: [2.30, 1.85, 1.10], dir: [-0.40, 0.30, -0.85], size: 0.038 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [1.15, 1.05, 0.85],
+    cloudShadow: [0.55, 0.45, 0.30],
+    cloudCoverage: 0.30,
+    cloudDensity: 0.55,
+    cloudSpeed: 0.015,
+  },
+}
+
+// ENVIRONMENT_PRESETS bundle every visual world knob into one
+// switchable choice — sky scheme, terrain tileset, water tints,
+// even the light direction.  setEnvironment(name) on the renderer
+// swaps the whole stack so the user picks "Mars" once and the sky,
+// ground, water, and shadows all match.
+//
+// Tilesets reference the TA tilesets served from /api/studio/ground-
+// tile/{tileset}.  Unknown ones fall back to 'greenworld' at the
+// server-side handler, so a typo is a visual mismatch, not a crash.
+//
+// waterShallow / waterDeep / waterAccent are not yet plumbed into
+// the sea shader; defined here so a future water-tint pass can pick
+// up the preset without re-editing the renderer.  For now the sea
+// shader uses its built-in aqua palette.
+const ENVIRONMENT_PRESETS = {
+  earth: {
+    name: 'Earth',
+    sky: 'earth',
+    terrainTileset: 'greenworld',
+    lightDir: [-0.6, 0.95, 0.4],
+    waterShallow: [0.20, 0.78, 0.82],
+    waterDeep: [0.02, 0.12, 0.28],
+  },
+  sunset: {
+    name: 'Sunset',
+    sky: 'sunset',
+    terrainTileset: 'greenworld',
+    lightDir: [-0.55, 0.35, 0.50],
+    waterShallow: [0.45, 0.65, 0.70],
+    waterDeep: [0.10, 0.10, 0.22],
+  },
+  night: {
+    name: 'Night',
+    sky: 'night',
+    terrainTileset: 'greenworld',
+    lightDir: [-0.40, 0.85, 0.30],
+    waterShallow: [0.08, 0.18, 0.28],
+    waterDeep: [0.02, 0.04, 0.10],
+  },
+  desert: {
+    name: 'Desert',
+    sky: 'desert',
+    terrainTileset: 'desert',
+    lightDir: [-0.55, 0.85, 0.35],
+    waterShallow: [0.30, 0.60, 0.62],
+    waterDeep: [0.05, 0.12, 0.22],
+  },
+  arctic: {
+    name: 'Arctic',
+    sky: 'arctic',
+    terrainTileset: 'arctic',
+    lightDir: [-0.40, 0.55, 0.55],
+    waterShallow: [0.45, 0.62, 0.75],
+    waterDeep: [0.05, 0.10, 0.18],
+  },
+  lava: {
+    name: 'Lava',
+    sky: 'lava',
+    terrainTileset: 'lavarock',
+    lightDir: [-0.5, 0.65, 0.4],
+    waterShallow: [0.85, 0.30, 0.10],
+    waterDeep: [0.20, 0.05, 0.02],
+  },
+  mars: {
+    name: 'Mars',
+    sky: 'mars',
+    terrainTileset: 'desert',
+    lightDir: [-0.55, 0.65, 0.40],
+    waterShallow: [0.55, 0.35, 0.25],
+    waterDeep: [0.12, 0.06, 0.05],
+  },
+  alienTwin: {
+    name: 'Alien (twin suns)',
+    sky: 'alienTwin',
+    terrainTileset: 'lunar',
+    lightDir: [-0.45, 0.75, 0.40],
+    waterShallow: [0.35, 0.55, 0.80],
+    waterDeep: [0.10, 0.10, 0.30],
+  },
 }
 
 const MAIN_VS = `
@@ -290,6 +407,7 @@ const MAIN_FS = `
   uniform float uReflectionTint; // 1 = output is dimmed + blue-tinted, used by the water reflection pass
   uniform float uSeaActive;     // 1 in Sea mode — adds caustic bounce light + sun shimmer to the hull
   uniform float uTime;          // shared sea time (for the bounce light to animate with the water)
+  uniform float uWaterY;        // world Y of the water plane — fades reflections out above it
 
   // sampleShadow does a 3×3 PCF tap into the shadow map.  Returns
   // 1.0 = fully lit, 0.0 = fully shadowed (with a soft penumbra in
@@ -365,28 +483,46 @@ const MAIN_FS = `
     //     side-facing surfaces best, dances across them as the
     //     waves move.
     if (uSeaActive > 0.5) {
-      // fromBelow gates the bounce light to surfaces facing the
-      // water — sides and underside.  Deck plates (N.y > 0.4) get
-      // exactly zero contribution so the top of the unit isn't
-      // painted with the water shader by mistake.  smoothstep
-      // crosses zero at N.y ≈ 0.4 and rises to 1.0 by N.y ≈ -0.3.
-      float fromBelow = 1.0 - smoothstep(-0.3, 0.4, N.y);
-      if (fromBelow > 0.0) {
+      // Water reflections only land on the SIDES of a hull — the
+      // plating that's near the waterline and faces roughly outward.
+      // Two gates pick those out:
+      //
+      //   sideness = 1 - abs(N.y)
+      //     Favours horizontal normals.  Tops (N.y ≈ +1), bottoms
+      //     (N.y ≈ -1), and anything in between get progressively
+      //     less.  Using abs() makes this robust to 3DO's inverted
+      //     winding — the format stores no consistent face direction,
+      //     so the renderer can't trust the sign of N.y to mean
+      //     "this is the topside".
+      //
+      //   waterProximity = 1 - smoothstep(0, 8, y - waterY)
+      //     A fragment 8 wu above the waterline gets nothing; one at
+      //     the waterline gets full strength.  Stops decks + masts
+      //     from picking up reflections just because they happen to
+      //     have a sideways normal.
+      float sideness = 1.0 - abs(N.y);
+      // Extended falloff (was 8 wu) so the side plating ~12 wu up
+      // the hull still picks up some bounce — keeps the effect
+      // reading on tall units, not just the boot-stripe.
+      float waterProximity = 1.0 - smoothstep(0.0, 12.0, max(0.0, vWorldPos.y - uWaterY));
+      float gate = sideness * waterProximity;
+      if (gate > 0.001) {
         float caustic = seaCaustic(vWorldPos.xz, uTime);
-        vec3 bounceTint = vec3(0.30, 0.65, 1.05);
-        vec3 bounce = bounceTint * caustic * fromBelow * 0.85;
-        // Sun shimmer — reflect the sun across the wave normal at the
-        // unit's XZ; if the reflected ray hits the hull, paint a
-        // bright sparkle there.
+        // Brighter diffuse bounce + more saturated tint so the
+        // reflected water reads as a clear blue glow on the side
+        // plates rather than a hint.
+        vec3 bounceTint = vec3(0.45, 0.95, 1.40);
+        lighting += bounceTint * (0.30 + caustic) * gate * 1.50;
+
+        // Sun shimmer: reflected wave-mirrored sun hitting the
+        // hull.  Wider exponent (was 12) plus a stronger intensity
+        // multiplier so individual glints are unmistakable.  abs()
+        // on the dot keeps the test winding-agnostic.
         vec3 hs = seaWaveHS(vWorldPos.xz, uTime);
         vec3 waveN = normalize(vec3(-hs.y, 1.0, -hs.z));
         vec3 sunRefl = reflect(-L, waveN);
-        float shimmerAlign = pow(max(0.0, dot(sunRefl, -N)), 8.0);
-        float shimmerNoise = sin(vWorldPos.x * 7.0 + uTime * 3.1)
-                           * sin(vWorldPos.z * 9.0 + uTime * 2.7);
-        float shimmer = shimmerAlign * smoothstep(0.20, 0.95, abs(shimmerNoise));
-        bounce += vec3(1.85, 1.55, 1.10) * shimmer * fromBelow;
-        lighting += bounce;
+        float shimmerAlign = pow(abs(dot(sunRefl, N)), 8.0);
+        lighting += vec3(3.50, 3.00, 2.10) * shimmerAlign * gate;
       }
     }
 
@@ -498,6 +634,7 @@ const SKY_FS = `
   uniform float uCloudDensity;
   uniform float uCloudSpeed;
   uniform float uTime;
+  uniform float uOptGodBeams; // 0 disables crepuscular rays from the sun(s)
 
   // Hash + value noise + fbm.  Compact enough to fit in WebGL1 and
   // accurate enough that a 5-octave fbm reads as drifting clouds
@@ -591,23 +728,19 @@ const SKY_FS = `
     // that gives streaks that radiate outward from the sun rather
     // than wrap around the sphere.  Multiple sines of the angle
     // create irregular thick/thin beams instead of a perfect fan.
-    if (dot(uSun1Color, uSun1Color) > 0.0001) {
+    if (uOptGodBeams > 0.5 && dot(uSun1Color, uSun1Color) > 0.0001) {
       vec3 toSun = normalize(uSun1Dir);
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
-      // Angular direction around the sun (radians).
       float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
       float beam = 0.5 + 0.5 * sin(ang * 16.0 + uTime * 0.10);
       beam *= 0.5 + 0.5 * sin(ang * 7.3 - 0.7);
-      // Beams strongest in a cone around the sun, fading with
-      // angular distance.  Gated by the cloud GAP (1 - cMask) so
-      // they shine through cloud breaks like the real thing.
       float coneFall = exp(-tLen * 3.5);
       float gap = 1.0 - smoothstep(0.4, 0.85, cMask);
       float upward = smoothstep(-0.05, 0.20, dir.y);
       col += uSun1Color * beam * coneFall * gap * upward * 0.55;
     }
-    if (dot(uSun2Color, uSun2Color) > 0.0001) {
+    if (uOptGodBeams > 0.5 && dot(uSun2Color, uSun2Color) > 0.0001) {
       vec3 toSun = normalize(uSun2Dir);
       vec3 tang = dir - toSun * dot(dir, toSun);
       float tLen = length(tang);
@@ -696,6 +829,8 @@ const GROUND_FS = `
   uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
   uniform float uSeabedY;        // base Y of the seabed plane (below uGroundY)
   uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
+  uniform float uOptWaterReflections; // 0 disables sky/sun reflection on the water surface
+  uniform float uOptSpecular;        // 0 disables broad/tight specular + sparkles
 
   float sampleShadow() {
     if (uShadowEnabled < 0.5) return 1.0;
@@ -822,14 +957,16 @@ const GROUND_FS = `
       vec3 H = normalize(L + V);
       float ndh = max(0.0, dot(wn, H));
       // Specular pumped up — the user wants brighter sun highlights.
-      // Broad halo + tight pinpoint, both gated by closeUp so the
-      // distant sea doesn't smear into white.
+      // Broad halo + tight pinpoint, both gated by closeUp + the
+      // user's Specular toggle.
       float specBroad = pow(ndh, 24.0) * 1.30 * closeUp;
       float specTight = pow(ndh, 140.0) * 3.60 * closeUp;
       vec3 sunColor = vec3(1.55, 1.30, 0.90);
-      float reflectivity = 0.10 + 0.90 * fresnel;
+      // Water Reflections toggle: when off, the surface ignores the
+      // sky tint entirely (shows only the water column colour).
+      float reflectivity = (0.10 + 0.90 * fresnel) * uOptWaterReflections;
       vec3 surface = mix(waterCol, sky, reflectivity);
-      surface += (specBroad + specTight) * sunColor;
+      surface += (specBroad + specTight) * sunColor * uOptSpecular;
 
       // ── Sun-glint sparkles — heavily faded at distance ──────
       vec3 Rd = reflect(-L, wn);
@@ -840,7 +977,7 @@ const GROUND_FS = `
                          * sin((vWorldPos.x + vWorldPos.z) * 5.0 - t * 1.7);
       float sparkle = sparkleAlign * smoothstep(0.28, 0.95, abs(sparkleNoise));
       float sparkleFade = 1.0 - smoothstep(80.0, 350.0, dCam);
-      surface += vec3(4.2, 3.80, 3.00) * sparkle * sparkleFade;
+      surface += vec3(4.2, 3.80, 3.00) * sparkle * sparkleFade * uOptSpecular;
 
       // ── Sub-surface scatter: backlit crest glow ──────────────
       float backlit = pow(max(0.0, dot(L, -V)) * 0.5 + 0.5, 2.0)
@@ -902,14 +1039,19 @@ export class ModelRenderer {
     // Light comes from above-left-forward.  Direction points *toward*
     // the light from the model — typical convention for dot(N, L).
     this.lightDir = ModelRenderer.#normalise([-0.6, 0.95, 0.4])
-    this.lightColor = [1.05, 1.0, 0.92]
+    // Brighter than 1.0 — Studio Mode was reading darker than Flat /
+    // Wireframe because the per-pixel lighting goes through the
+    // tone-map (`col / (col + 0.55)`), which clips a single light
+    // unit to ~0.65 luminance.  Bumping the sun + ambient pushes
+    // typical hull pixels back into a comfortable 0.7-0.85 range.
+    this.lightColor = [1.55, 1.45, 1.30]
     // skyScheme picks the gradient + suns + clouds painted by the
     // skybox shader.  Setter `setSkyScheme(name)` swaps presets at
     // runtime; the renderer doesn't care which preset is active —
     // it just hands the uniforms to the GPU each frame.
     this.skyScheme = SKY_PRESETS.earth
-    this.skyColor = [0.65, 0.7, 0.78]
-    this.groundColor = [0.18, 0.16, 0.13]
+    this.skyColor = [0.95, 1.00, 1.08]
+    this.groundColor = [0.32, 0.30, 0.26]
     this.skyTop = [0.35, 0.45, 0.6]
     this.skyBottom = [0.07, 0.09, 0.12]
     this.groundColorA = [0.12, 0.14, 0.18]
@@ -949,9 +1091,20 @@ export class ModelRenderer {
     // ground shader uses to fall back to its plain look until decode.
     this._terrainTex = null
     this._terrainReady = false
-    // Tileset name to fetch when the user picks Terrain.  Future
-    // hook for tileset switching from the UI.
+    // Tileset name to fetch when the user picks Terrain.  Environment
+    // presets swap this to match the visual world (mars → 'desert',
+    // arctic → 'arctic', etc.).
     this.terrainTileset = 'greenworld'
+
+    // ── Studio Options toggles ──────────────────────────────────
+    // Each gates a specific effect that the user can flip off when
+    // they want a cleaner / faster render or are looking for
+    // something specific in the model.  All default to on.
+    this.optReflections = true       // unit's mirrored reflection on the water
+    this.optBob = true               // unit heave + pitch + roll on the swell
+    this.optWaterReflections = true  // sky / sun reflected in the water surface
+    this.optSpecular = true          // sun's specular highlight on water + hull
+    this.optGodBeams = true          // light shafts from the sun(s)
 
     // Enable optional extensions.  Anisotropic gets forwarded to the
     // texture cache so future uploads use it; depth-texture gates the
@@ -1050,6 +1203,51 @@ export class ModelRenderer {
   // host (Studio) can populate a picker without re-importing them.
   static get skyPresets() { return SKY_PRESETS }
 
+  // setEnvironment swaps the whole world look (sky scheme + terrain
+  // tileset + scene light direction + water hints) from one of the
+  // ENVIRONMENT_PRESETS.  The Studio Options UI calls this when the
+  // user picks Mars / Lava / etc.; passing a custom object also
+  // works for scripted scenes.
+  setEnvironment(nameOrPreset) {
+    let env
+    if (typeof nameOrPreset === 'string') {
+      env = ENVIRONMENT_PRESETS[nameOrPreset]
+      if (!env) return
+    } else if (nameOrPreset && nameOrPreset.sky) {
+      env = nameOrPreset
+    } else {
+      return
+    }
+    this.setSkyScheme(env.sky)
+    if (env.lightDir) this.lightDir = ModelRenderer.#normalise(env.lightDir)
+    // Tileset switch: drop the cached terrain texture so the lazy
+    // fetcher picks up the new tileset the next time Terrain mode is
+    // active.  If the user is currently in Terrain mode, trigger the
+    // fetch right away so the swap is instant.
+    if (env.terrainTileset && env.terrainTileset !== this.terrainTileset) {
+      this.terrainTileset = env.terrainTileset
+      if (this._terrainTex) {
+        this.gl.deleteTexture(this._terrainTex)
+        this._terrainTex = null
+        this._terrainReady = false
+      }
+      if (this.groundMode === 'terrain') this.#loadTerrainTexture()
+    }
+    this.requestRedraw()
+  }
+
+  static get environmentPresets() { return ENVIRONMENT_PRESETS }
+
+  // ── Studio Options setters ──────────────────────────────────
+  // Each flag drops its corresponding visual contribution.  The
+  // shaders/passes read the flag via uniforms so flipping a toggle
+  // takes effect on the next frame.
+  setReflectionsEnabled(on) { this.optReflections = !!on; this.requestRedraw() }
+  setBobEnabled(on) { this.optBob = !!on; this.requestRedraw() }
+  setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
+  setSpecularEnabled(on) { this.optSpecular = !!on; this.requestRedraw() }
+  setGodBeamsEnabled(on) { this.optGodBeams = !!on; this.requestRedraw() }
+
   resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1)
     const w = Math.max(1, Math.floor(this.canvas.clientWidth * dpr))
@@ -1111,7 +1309,7 @@ export class ModelRenderer {
     // ground modes leave the model matrix identity (auto-rotate now
     // spins the camera around a stationary scene).
     Mat4.identity(this._modelMatrix)
-    if (this.groundMode === 'sea' && this.model) {
+    if (this.groundMode === 'sea' && this.model && this.optBob) {
       const t = (performance.now() - this._t0) / 1000
       const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
       const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
@@ -1160,7 +1358,7 @@ export class ModelRenderer {
     // it as the surface paints over the reflected geometry.  Other
     // modes / grounds skip this — flat shading + wireframes don't
     // need the cinematic effect.
-    const showReflection = this.renderMode === 'full' && this.groundMode === 'sea'
+    const showReflection = this.renderMode === 'full' && this.groundMode === 'sea' && this.optReflections
     if (showReflection) this.#renderReflection()
     if (this.groundMode !== 'off') this.#renderGround()
 
@@ -1290,6 +1488,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uSkyCloudDen, s.cloudDensity)
     gl.uniform1f(this.uSkyCloudSpd, s.cloudSpeed)
     gl.uniform1f(this.uSkyTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uSkyOptGodBeams, this.optGodBeams ? 1 : 0)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
     gl.disableVertexAttribArray(this.aSkyPos)
   }
@@ -1338,6 +1537,8 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundLightDir, this.lightDir)
     gl.uniform3fv(this.uGroundEyePos, this.camera.eye)
     gl.uniform3fv(this.uGroundHorizonColor, this.skyScheme.horizon)
+    gl.uniform1f(this.uGroundOptWaterReflections, this.optWaterReflections ? 1 : 0)
+    gl.uniform1f(this.uGroundOptSpecular, this.optSpecular ? 1 : 0)
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -1395,6 +1596,7 @@ export class ModelRenderer {
     // off for this pass.
     gl.uniform1f(this.uSeaActive, 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
 
     // Mirror across water Y = model.bounds.min[1] - 0.05 (same Y
     // the ground plane sits at).  reflectMatrix = T(0, 2*Y, 0) * S(1,-1,1)
@@ -1452,6 +1654,7 @@ export class ModelRenderer {
     // and wireframe modes bypass it.
     gl.uniform1f(this.uSeaActive, (!flat && this.groundMode === 'sea') ? 1 : 0)
     gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uMainWaterY, this.model ? (this.model.bounds.min[1] - 0.05) : 0)
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -1722,6 +1925,7 @@ export class ModelRenderer {
     this.uReflectionTint = gl.getUniformLocation(prog, 'uReflectionTint')
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
     this.uMainTime = gl.getUniformLocation(prog, 'uTime')
+    this.uMainWaterY = gl.getUniformLocation(prog, 'uWaterY')
   }
 
   #initShadowProgram() {
@@ -1757,6 +1961,7 @@ export class ModelRenderer {
     this.uSkyCloudDen = gl.getUniformLocation(prog, 'uCloudDensity')
     this.uSkyCloudSpd = gl.getUniformLocation(prog, 'uCloudSpeed')
     this.uSkyTime     = gl.getUniformLocation(prog, 'uTime')
+    this.uSkyOptGodBeams = gl.getUniformLocation(prog, 'uOptGodBeams')
     // Full-screen triangle pair in NDC.
     const buf = gl.createBuffer()
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
@@ -1796,6 +2001,8 @@ export class ModelRenderer {
     this.uGroundSeabedY = gl.getUniformLocation(prog, 'uSeabedY')
     this.uGroundSeabedActive = gl.getUniformLocation(prog, 'uSeabedActive')
     this.uGroundHorizonColor = gl.getUniformLocation(prog, 'uHorizonColor')
+    this.uGroundOptWaterReflections = gl.getUniformLocation(prog, 'uOptWaterReflections')
+    this.uGroundOptSpecular = gl.getUniformLocation(prog, 'uOptSpecular')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

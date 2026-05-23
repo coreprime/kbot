@@ -149,7 +149,7 @@
           <div class="ribbon-label">Rendering</div>
           <div class="ribbon-group ribbon-dropdown" id="mv-render-dropdown">
             <button class="tool-btn ribbon-dropdown-btn" id="mv-render-dropdown-btn" title="Pick the render mode + wireframe overlay">
-              <span class="ico">🎨</span><span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
+              <span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-render-dropdown-popup">
@@ -177,20 +177,84 @@
           </div>
         </div>
         <div class="ribbon-section">
-          <div class="ribbon-label">Ground</div>
-          <div class="ribbon-group mv-picker" id="mv-ground-picker">
-            <button class="tool-btn mv-ground-row" data-mv-ground="grid" title="Light-green grid sized to one TA map tile">
-              <span class="ico">⊞</span><span class="lbl">Grid</span>
+          <div class="ribbon-label">Scene</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-ground-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-ground-dropdown-btn" title="Pick what the unit stands on">
+              <span class="lbl">Scene</span>
+              <span class="chev-down">▾</span>
             </button>
-            <button class="tool-btn mv-ground-row active" data-mv-ground="terrain" title="Tiled greenworld flat-tile texture under the unit">
-              <span class="ico">🌱</span><span class="lbl">Terrain</span>
+            <div class="ribbon-dropdown-popup hidden" id="mv-ground-dropdown-popup">
+              <button class="menu-row mv-ground-row" data-mv-ground="grid" title="Light-green grid sized to one TA map tile">
+                <span class="ico">⊞</span><span>Grid</span><span class="menu-check">✓</span>
+              </button>
+              <button class="menu-row mv-ground-row active" data-mv-ground="terrain" title="Tiled tileset under the unit (changes with Environment)">
+                <span class="ico">🌱</span><span>Terrain</span><span class="menu-check">✓</span>
+              </button>
+              <button class="menu-row mv-ground-row" data-mv-ground="sea" title="Procedural animated water under the unit">
+                <span class="ico">🌊</span><span>Sea</span><span class="menu-check">✓</span>
+              </button>
+              <button class="menu-row mv-ground-row" data-mv-ground="off" title="Hide the ground plane entirely">
+                <span class="ico">🚫</span><span>Off</span><span class="menu-check">✓</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Studio Options</div>
+          <div class="ribbon-group ribbon-dropdown" id="mv-options-dropdown">
+            <button class="tool-btn ribbon-dropdown-btn" id="mv-options-dropdown-btn" title="Toggle studio effects + pick the world look">
+              <span class="lbl">Options</span>
+              <span class="chev-down">▾</span>
             </button>
-            <button class="tool-btn mv-ground-row" data-mv-ground="sea" title="Procedural animated water under the unit">
-              <span class="ico">🌊</span><span class="lbl">Sea</span>
-            </button>
-            <button class="tool-btn mv-ground-row" data-mv-ground="off" title="Hide the ground plane entirely">
-              <span class="ico">🚫</span><span class="lbl">Off</span>
-            </button>
+            <div class="ribbon-dropdown-popup hidden" id="mv-options-dropdown-popup">
+              <div class="menu-section-label">General Effects</div>
+              <button id="mv-opt-reflections" class="menu-row toggle-row" data-on="1" title="Mirrored unit on the water surface">
+                <span class="ico">🪞</span><span>Reflections</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-opt-specular" class="menu-row toggle-row" data-on="1" title="Bright sun highlights on the water surface">
+                <span class="ico">💎</span><span>Specular Highlights</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-opt-godbeams" class="menu-row toggle-row" data-on="1" title="Crepuscular light shafts from the sun through clouds">
+                <span class="ico">🌟</span><span>God Beams</span><span class="menu-check">✓</span>
+              </button>
+              <div class="menu-section-label">Environment</div>
+              <div class="menu-row menu-row-submenu" id="mv-opt-env-row" role="button" tabindex="0" title="Pick the world look">
+                <span class="ico">🌍</span><span class="env-current-lbl" id="mv-env-current-lbl">Earth</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-env-submenu">
+                  <button class="menu-row mv-env-row active" data-mv-env="earth" title="Earth — blue sky, green terrain, ocean water">
+                    <span class="ico">🌎</span><span>Earth</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="sunset" title="Earth at sunset — warm sky">
+                    <span class="ico">🌇</span><span>Sunset</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="night" title="Earth at night — dark sky, moonlit water">
+                    <span class="ico">🌙</span><span>Night</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="desert" title="Desert — sandy terrain, hot sky">
+                    <span class="ico">🏜️</span><span>Desert</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="arctic" title="Arctic — pale sky, icy terrain">
+                    <span class="ico">❄️</span><span>Arctic</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="lava" title="Lava world — red sky, molten ground">
+                    <span class="ico">🌋</span><span>Lava</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="mars" title="Mars — orange dusty sky, rusty terrain">
+                    <span class="ico">🔴</span><span>Mars</span>
+                  </button>
+                  <button class="menu-row mv-env-row" data-mv-env="alienTwin" title="Alien — twin suns, purple sky">
+                    <span class="ico">👽</span><span>Alien (twin suns)</span>
+                  </button>
+                </div>
+              </div>
+              <div class="menu-section-label">Liquid Simulation</div>
+              <button id="mv-opt-water-reflections" class="menu-row toggle-row" data-on="1" title="Sky + sun reflected in the water surface">
+                <span class="ico">🌅</span><span>Water Surface Reflections</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-opt-bob" class="menu-row toggle-row" data-on="1" title="Unit bobs + sways with the swell">
+                <span class="ico">🚤</span><span>Bobbing / Swaying</span><span class="menu-check">✓</span>
+              </button>
+            </div>
           </div>
         </div>
         <div class="ribbon-section">
@@ -348,90 +412,144 @@
     <div class="dialog-card dialog-card-wide">
       <h1>Settings</h1>
       <p class="dialog-sub">User preferences — saved automatically and remembered across sessions.</p>
-      <div class="settings-grid">
-        <section class="settings-section">
-          <h2>Zoom</h2>
-          <label class="field">
-            <span>Zoom step (per +/− press)</span>
-            <input type="number" id="set-zoom-step" min="1.05" max="2" step="0.05" />
-          </label>
-          <p class="field-help">Each click of the Zoom + or − button multiplies / divides the zoom by this factor.  Default 1.25.</p>
-        </section>
-        <section class="settings-section">
-          <h2>Brush defaults</h2>
-          <label class="field">
-            <span>Erase brush size (tiles)</span>
-            <input type="number" id="set-erase-size" min="1" max="16" step="1" />
-          </label>
-          <label class="field">
-            <span>Voids brush size (attr cells)</span>
-            <input type="number" id="set-voids-size" min="1" max="32" step="1" />
-          </label>
-          <label class="field">
-            <span>Heightmap brush radius (attr cells)</span>
-            <input type="number" id="set-hm-radius" min="1" max="32" step="1" />
-          </label>
-          <label class="field">
-            <span>Heightmap brush strength</span>
-            <input type="number" id="set-hm-strength" min="1" max="32" step="1" />
-          </label>
-        </section>
-        <section class="settings-section">
-          <h2>Heartbeat</h2>
-          <label class="field">
-            <span>Idle poll interval (ms)</span>
-            <input type="number" id="set-hb-idle" min="500" max="60000" step="500" />
-          </label>
-          <label class="field">
-            <span>Reconnect retry interval (ms)</span>
-            <input type="number" id="set-hb-retry" min="200" max="10000" step="100" />
-          </label>
-          <p class="field-help">Once the studio loses contact with the kbot server, it polls more aggressively.  Both intervals take effect on the next tick.</p>
-        </section>
-        <section class="settings-section">
-          <h2>Panel visibility defaults</h2>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-minimap" />
-            <span>Minimap</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-camera-info" />
-            <span>Camera &amp; Cursor</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-gridlines" />
-            <span>Gridlines</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-animate-features" />
-            <span>Animate features</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-voids" />
-            <span>Show voids overlay</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-contours" />
-            <span>Show contour lines</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-buildable" />
-            <span>Show buildable area</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-features" />
-            <span>Show features</span>
-          </label>
-          <label class="checkbox-row">
-            <input type="checkbox" id="set-show-startpos" />
-            <span>Show start positions</span>
-          </label>
-        </section>
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
+        <button class="settings-tab" data-settings-tab="map" role="tab" aria-selected="false">Map Editor</button>
+        <button class="settings-tab" data-settings-tab="unit" role="tab" aria-selected="false">Unit Editor</button>
+      </div>
+      <div class="settings-tab-body active" data-settings-tab-body="general">
+        <div class="settings-grid">
+          <section class="settings-section">
+            <h2>Heartbeat</h2>
+            <label class="field">
+              <span>Idle poll interval (ms)</span>
+              <input type="number" id="set-hb-idle" min="500" max="60000" step="500" />
+            </label>
+            <label class="field">
+              <span>Reconnect retry interval (ms)</span>
+              <input type="number" id="set-hb-retry" min="200" max="10000" step="100" />
+            </label>
+            <p class="field-help">Once the studio loses contact with the kbot server, it polls more aggressively.  Both intervals take effect on the next tick.</p>
+          </section>
+        </div>
+      </div>
+      <div class="settings-tab-body" data-settings-tab-body="map">
+        <div class="settings-grid">
+          <section class="settings-section">
+            <h2>Zoom</h2>
+            <label class="field">
+              <span>Zoom step (per +/− press)</span>
+              <input type="number" id="set-zoom-step" min="1.05" max="2" step="0.05" />
+            </label>
+            <p class="field-help">Each click of the Zoom + or − button multiplies / divides the zoom by this factor.  Default 1.25.</p>
+          </section>
+          <section class="settings-section">
+            <h2>Brush defaults</h2>
+            <label class="field">
+              <span>Erase brush size (tiles)</span>
+              <input type="number" id="set-erase-size" min="1" max="16" step="1" />
+            </label>
+            <label class="field">
+              <span>Voids brush size (attr cells)</span>
+              <input type="number" id="set-voids-size" min="1" max="32" step="1" />
+            </label>
+            <label class="field">
+              <span>Heightmap brush radius (attr cells)</span>
+              <input type="number" id="set-hm-radius" min="1" max="32" step="1" />
+            </label>
+            <label class="field">
+              <span>Heightmap brush strength</span>
+              <input type="number" id="set-hm-strength" min="1" max="32" step="1" />
+            </label>
+          </section>
+          <section class="settings-section">
+            <h2>Panel visibility defaults</h2>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-minimap" />
+              <span>Minimap</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-camera-info" />
+              <span>Camera &amp; Cursor</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-gridlines" />
+              <span>Gridlines</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-animate-features" />
+              <span>Animate features</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-voids" />
+              <span>Show voids overlay</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-contours" />
+              <span>Show contour lines</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-buildable" />
+              <span>Show buildable area</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-features" />
+              <span>Show features</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-show-startpos" />
+              <span>Show start positions</span>
+            </label>
+          </section>
+        </div>
+      </div>
+      <div class="settings-tab-body" data-settings-tab-body="unit">
+        <div class="settings-grid">
+          <section class="settings-section">
+            <h2>Default Environment</h2>
+            <label class="field">
+              <span>World look for new model tabs</span>
+              <select id="set-unit-env">
+                <option value="earth">Earth</option>
+                <option value="sunset">Sunset</option>
+                <option value="night">Night</option>
+                <option value="desert">Desert</option>
+                <option value="arctic">Arctic</option>
+                <option value="lava">Lava</option>
+                <option value="mars">Mars</option>
+                <option value="alienTwin">Alien (twin suns)</option>
+              </select>
+            </label>
+            <p class="field-help">The Studio Options &gt; Environment picker still lets you switch per-tab.  This just sets what every newly-opened model starts on.</p>
+          </section>
+          <section class="settings-section">
+            <h2>Effect defaults</h2>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-unit-reflections" />
+              <span>Reflections</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-unit-bob" />
+              <span>Bobbing / Swaying</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-unit-water-reflections" />
+              <span>Water Surface Reflections</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-unit-specular" />
+              <span>Specular Highlights</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="set-unit-godbeams" />
+              <span>God Beams</span>
+            </label>
+          </section>
+        </div>
       </div>
       <div class="dialog-actions">
         <button id="settings-reset" class="btn" title="Restore shipped defaults">Reset to defaults</button>
-        <button id="settings-cancel" class="btn">Cancel</button>
-        <button id="settings-apply" class="btn primary">Apply</button>
+        <button id="settings-apply" class="btn primary" title="Save changes and close">Close</button>
       </div>
     </div>
   </div>

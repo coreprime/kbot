@@ -408,6 +408,11 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeAmbient()
   wireWelcomeTabs()
   wireModelDialogs()
+  // Settings + Help + Developer dialog handlers are needed even
+  // when the user never enters the map editor (e.g. open straight
+  // into a 3DO model).  Wiring them at boot keeps the buttons
+  // working from every entry point.
+  wireDeveloperDialog()
   // Multi-tab management — the tab bar + "+" popout above the toolbar.
   wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
@@ -2209,7 +2214,9 @@ async function finishEditorBoot() {
     wireTabs()
     wireMinimap()
     wireDeveloperPanel()
-    wireDeveloperDialog()
+    // wireDeveloperDialog now runs at DOMContentLoaded so the
+    // Settings / Help / Developer buttons work even when the user
+    // opens the studio straight into a model tab.
     wireModeToolbar()
     wireViewMenu()
     wireKeyboard()
@@ -8763,9 +8770,35 @@ function wireDeveloperDialog() {
     })
   })
   $('#btn-settings')?.addEventListener('click', openSettingsDialog)
-  $('#settings-cancel')?.addEventListener('click', closeSettingsDialog)
+  // Close button on the settings dialog now also saves — the dialog
+  // is small enough that a separate Apply offered no value, just a
+  // surface for "I clicked Close but my changes vanished" confusion.
   $('#settings-apply')?.addEventListener('click', applySettingsDialog)
   $('#settings-reset')?.addEventListener('click', resetSettingsDialog)
+  // ESC closes the settings dialog (saves nothing — same as before).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return
+    const dlg = $('#settings-dialog')
+    if (dlg && !dlg.classList.contains('hidden')) {
+      e.stopPropagation()
+      closeSettingsDialog()
+    }
+  })
+  // Settings dialog tab strip — same pattern as the Help dialog's
+  // tabs.  Clicking a tab activates the matching body pane.
+  $$('#settings-dialog .settings-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const key = tab.dataset.settingsTab
+      $$('#settings-dialog .settings-tab').forEach((t) => {
+        const on = t.dataset.settingsTab === key
+        t.classList.toggle('active', on)
+        t.setAttribute('aria-selected', on ? 'true' : 'false')
+      })
+      $$('#settings-dialog .settings-tab-body').forEach((b) => {
+        b.classList.toggle('active', b.dataset.settingsTabBody === key)
+      })
+    })
+  })
   $$('#developer-dialog .dev-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const key = tab.dataset.devTab
@@ -8817,6 +8850,13 @@ const DEFAULT_SETTINGS = {
   defaultVoidsSize: 1,
   defaultHmRadius: 4,
   defaultHmStrength: 4,
+  // Unit Editor defaults — applied when a new model tab opens.
+  unitDefaultEnv: 'earth',
+  unitDefaultReflections: true,
+  unitDefaultBob: true,
+  unitDefaultWaterReflections: true,
+  unitDefaultSpecular: true,
+  unitDefaultGodBeams: true,
 }
 
 function openSettingsDialog() {
@@ -8841,8 +8881,34 @@ function openSettingsDialog() {
   $('#set-show-buildable').checked = !!state.showBuildable
   $('#set-show-features').checked = !!state.showFeatures
   $('#set-show-startpos').checked = !!state.showStartPositions
+  // Unit Editor tab — defaults for newly-opened model tabs.
+  if ($('#set-unit-env')) $('#set-unit-env').value = s.unitDefaultEnv ?? 'earth'
+  if ($('#set-unit-reflections')) $('#set-unit-reflections').checked = s.unitDefaultReflections !== false
+  if ($('#set-unit-bob')) $('#set-unit-bob').checked = s.unitDefaultBob !== false
+  if ($('#set-unit-water-reflections')) $('#set-unit-water-reflections').checked = s.unitDefaultWaterReflections !== false
+  if ($('#set-unit-specular')) $('#set-unit-specular').checked = s.unitDefaultSpecular !== false
+  if ($('#set-unit-godbeams')) $('#set-unit-godbeams').checked = s.unitDefaultGodBeams !== false
+  // Smart-default the active tab to whatever workspace the user is
+  // currently in.  Model tab open → Unit Editor; map tab → Map
+  // Editor; nothing open → General.
+  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const wantTab = activeTab?.type === 'model' ? 'unit'
+    : activeTab?.type === 'map' ? 'map'
+    : 'general'
+  $$('#settings-dialog .settings-tab').forEach((t) => {
+    const on = t.dataset.settingsTab === wantTab
+    t.classList.toggle('active', on)
+    t.setAttribute('aria-selected', on ? 'true' : 'false')
+  })
+  $$('#settings-dialog .settings-tab-body').forEach((b) => {
+    b.classList.toggle('active', b.dataset.settingsTabBody === wantTab)
+  })
   dlg.classList.remove('hidden')
-  $('#set-zoom-step').focus()
+  // Focus the first input in the active tab body so keyboard users
+  // can start typing right away.  Falls back to the first body's
+  // input if the matcher misses (defensive).
+  const firstInput = dlg.querySelector('.settings-tab-body.active input, .settings-tab-body.active select')
+  if (firstInput) firstInput.focus()
 }
 
 function closeSettingsDialog() {
@@ -8862,6 +8928,13 @@ function applySettingsDialog() {
   s.defaultHmStrength = clamp(Math.round(num('#set-hm-strength', 4)), 1, 32)
   s.heartbeatIdleMs = clamp(Math.round(num('#set-hb-idle', 5000)), 500, 60000)
   s.heartbeatReconnectMs = clamp(Math.round(num('#set-hb-retry', 1000)), 200, 10000)
+  // Unit Editor defaults — picked up by the next openModelViewer().
+  if ($('#set-unit-env')) s.unitDefaultEnv = $('#set-unit-env').value
+  if ($('#set-unit-reflections')) s.unitDefaultReflections = $('#set-unit-reflections').checked
+  if ($('#set-unit-bob')) s.unitDefaultBob = $('#set-unit-bob').checked
+  if ($('#set-unit-water-reflections')) s.unitDefaultWaterReflections = $('#set-unit-water-reflections').checked
+  if ($('#set-unit-specular')) s.unitDefaultSpecular = $('#set-unit-specular').checked
+  if ($('#set-unit-godbeams')) s.unitDefaultGodBeams = $('#set-unit-godbeams').checked
   state.settings = s
   // Visibility flags: push through the existing setters so the View
   // menu rows + canvas re-render in step.
@@ -10947,6 +11020,8 @@ function wireModelDialogs() {
   wireModelRibbonDropdown('mv-anim-dropdown')
   wireModelRibbonDropdown('mv-camera-dropdown')
   wireModelRibbonDropdown('mv-render-dropdown')
+  wireModelRibbonDropdown('mv-ground-dropdown')
+  wireModelRibbonDropdown('mv-options-dropdown')
   wireModelViewMenu()
   wireModelTabBar()
   wireModelChromeButtons()
@@ -10990,9 +11065,17 @@ function wireModelRibbonDropdown(id) {
     if (!root.contains(e.target)) close()
   })
   popup.addEventListener('click', (e) => {
-    // Close after a click on any enabled menu-row.
+    // Close after a click on a menu-row that finishes the user's
+    // intent (mode pick, ground pick, env pick, COB action).  Skip
+    // close for toggle rows + submenu wrappers — those are sticky
+    // controls the user often flips repeatedly without wanting the
+    // dropdown to vanish between flips.
     const row = e.target.closest('.menu-row')
-    if (row && !row.disabled) close()
+    if (!row || row.disabled) return
+    if (row.classList.contains('toggle-row')) return
+    if (row.classList.contains('menu-row-submenu')) return
+    if (row.classList.contains('menu-row-slider')) return
+    close()
   })
 }
 
@@ -11024,6 +11107,30 @@ function wireModelViewMenu() {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeWidth(px)
   }
   const modeLabel = $('#mv-render-current-lbl')
+  const wireOverlay = $('#mv-act-wire-overlay')
+  // applyWireOverlayLock: in Wireframe Only mode the wireframe IS the
+  // image — the Show Wireframe toggle must be on (and locked) so the
+  // user can't render an empty frame.  Switching out of wireframe
+  // automatically clears the overlay so the deck of cards lines
+  // don't keep cluttering the Full/Flat render the user just picked.
+  const applyWireOverlayLock = (mode) => {
+    if (!wireOverlay) return
+    if (mode === 'wireframe') {
+      wireOverlay.dataset.on = '1'
+      wireOverlay.classList.add('active', 'disabled-locked')
+      wireOverlay.setAttribute('aria-disabled', 'true')
+      applyOverlay(true)
+    } else {
+      wireOverlay.classList.remove('disabled-locked')
+      wireOverlay.removeAttribute('aria-disabled')
+      // Clear the overlay when leaving wireframe so the freshly-
+      // selected mode renders cleanly.  If the user wants overlay
+      // on top of Studio Mode they re-tick the toggle themselves.
+      wireOverlay.dataset.on = '0'
+      wireOverlay.classList.remove('active')
+      applyOverlay(false)
+    }
+  }
   for (const row of $$('.mv-mode-row')) {
     row.addEventListener('click', () => {
       const mode = row.dataset.mvMode
@@ -11031,20 +11138,93 @@ function wireModelViewMenu() {
       $$('.mv-mode-row').forEach((r) => r.classList.toggle('active', r === row))
       if (modeLabel) modeLabel.textContent = row.textContent.trim().replace(/✓.*$/, '').trim()
       applyMode(mode)
+      applyWireOverlayLock(mode)
     })
   }
+  const groundLabel = $('#mv-ground-current-lbl')
+  const groundIco = $('#mv-ground-current-ico')
   for (const row of $$('.mv-ground-row')) {
     row.addEventListener('click', () => {
       const mode = row.dataset.mvGround
       if (!mode) return
       $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === row))
+      // Update the dropdown button face so the closed menu shows
+      // the current ground at a glance, matching Rendering's pattern.
+      const ico = row.querySelector('.ico')
+      const lbl = row.textContent.trim().replace(/✓.*$/, '').trim()
+      if (groundLabel) groundLabel.textContent = lbl
+      if (groundIco && ico) groundIco.textContent = ico.textContent
       applyGround(mode)
+    })
+  }
+  // Studio Options toggles — each one drives a ModelRenderer setter.
+  const wireToggleRow = (id, applyFn) => {
+    const el = $('#' + id)
+    if (!el) return
+    el.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const on = el.dataset.on !== '1'
+      el.dataset.on = on ? '1' : '0'
+      el.classList.toggle('active', on)
+      applyFn(on)
+    })
+  }
+  wireToggleRow('mv-opt-reflections', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setReflectionsEnabled(on)
+  })
+  wireToggleRow('mv-opt-bob', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobEnabled(on)
+  })
+  wireToggleRow('mv-opt-water-reflections', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWaterReflectionsEnabled(on)
+  })
+  wireToggleRow('mv-opt-specular', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSpecularEnabled(on)
+  })
+  wireToggleRow('mv-opt-godbeams', (on) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setGodBeamsEnabled(on)
+  })
+  // Environment parent row — click toggles the .open class on the
+  // row, which CSS uses to show/hide the submenu.  Clicking again
+  // (or clicking outside the dropdown) closes it.
+  const envParent = $('#mv-opt-env-row')
+  const envSubmenu = $('#mv-env-submenu')
+  if (envParent && envSubmenu) {
+    envParent.addEventListener('click', (e) => {
+      // Suppress if click bubbled up from a child row — the row
+      // handler below already closes the submenu after applying.
+      if (e.target.closest('.mv-env-row')) return
+      e.stopPropagation()
+      // The global `.hidden { display: none !important }` rule
+      // means we have to toggle the class directly rather than
+      // relying on a more-specific CSS selector to override it.
+      const wasHidden = envSubmenu.classList.contains('hidden')
+      envSubmenu.classList.toggle('hidden', !wasHidden)
+      envParent.classList.toggle('open', wasHidden)
+    })
+  }
+  // Environment submenu rows — pick an env and close the submenu.
+  const envLabel = $('#mv-env-current-lbl')
+  for (const row of $$('.mv-env-row')) {
+    row.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const env = row.dataset.mvEnv
+      if (!env) return
+      $$('.mv-env-row').forEach((r) => r.classList.toggle('active', r === row))
+      const lbl = row.textContent.trim()
+      if (envLabel) envLabel.textContent = lbl
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
+      if (envParent) envParent.classList.remove('open')
+      if (envSubmenu) envSubmenu.classList.add('hidden')
     })
   }
   const overlay = $('#mv-act-wire-overlay')
   if (overlay) {
     overlay.addEventListener('click', (e) => {
       e.stopPropagation()
+      // When locked-on by Wireframe Only mode, ignore clicks — the
+      // overlay HAS to be on for that mode to render anything.
+      if (overlay.classList.contains('disabled-locked')) return
       const on = overlay.dataset.on !== '1'
       overlay.dataset.on = on ? '1' : '0'
       overlay.classList.toggle('active', on)
@@ -11161,6 +11341,45 @@ async function activateModelTab(tab) {
   // setGroundMode lands on a live renderer.
   await modelViewerInstance.open(tab.name)
   applyDefaultGroundFor(tab.meta)
+  // Apply Unit Editor defaults from the persisted Settings — the user's
+  // chosen environment + effect toggles, picked up here once the
+  // renderer is live.  Keeps each freshly opened model consistent
+  // with what they set in Settings → Unit Editor.
+  applyUnitEditorDefaults()
+}
+
+// applyUnitEditorDefaults pushes settings.unitDefault* through the
+// renderer's setters + ticks the matching menu rows so the Studio
+// Options dropdown reflects the actual state.
+function applyUnitEditorDefaults() {
+  if (!modelViewerInstance?.renderer) return
+  const s = state.settings || DEFAULT_SETTINGS
+  const r = modelViewerInstance.renderer
+  // Environment first because it swaps the sky scheme; the toggles
+  // below operate on flags the env doesn't touch.
+  r.setEnvironment(s.unitDefaultEnv || 'earth')
+  const env = s.unitDefaultEnv || 'earth'
+  const envRow = [...$$('.mv-env-row')].find((row) => row.dataset.mvEnv === env)
+  if (envRow) {
+    $$('.mv-env-row').forEach((row) => row.classList.toggle('active', row === envRow))
+    const envLbl = $('#mv-env-current-lbl')
+    if (envLbl) envLbl.textContent = envRow.textContent.trim()
+  }
+  const togglePairs = [
+    ['mv-opt-reflections', s.unitDefaultReflections !== false, (v) => r.setReflectionsEnabled(v)],
+    ['mv-opt-bob', s.unitDefaultBob !== false, (v) => r.setBobEnabled(v)],
+    ['mv-opt-water-reflections', s.unitDefaultWaterReflections !== false, (v) => r.setWaterReflectionsEnabled(v)],
+    ['mv-opt-specular', s.unitDefaultSpecular !== false, (v) => r.setSpecularEnabled(v)],
+    ['mv-opt-godbeams', s.unitDefaultGodBeams !== false, (v) => r.setGodBeamsEnabled(v)],
+  ]
+  for (const [id, on, apply] of togglePairs) {
+    const el = $('#' + id)
+    if (el) {
+      el.dataset.on = on ? '1' : '0'
+      el.classList.toggle('active', on)
+    }
+    apply(on)
+  }
 }
 
 // applyDefaultGroundFor sets the ground mode based on the unit's
@@ -11171,7 +11390,19 @@ function applyDefaultGroundFor(meta) {
   if (!modelViewerInstance?.renderer) return
   const want = meta?.defaultGround || 'terrain'
   modelViewerInstance.renderer.setGroundMode(want)
-  $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r.dataset.mvGround === want))
+  const activeRow = [...$$('.mv-ground-row')].find((r) => r.dataset.mvGround === want)
+  $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === activeRow))
+  // Sync the dropdown button face so the closed dropdown shows
+  // what's actually applied (ship default sets Sea programmatically;
+  // the user never clicked the row so the label wouldn't otherwise
+  // update).
+  const groundLabel = $('#mv-ground-current-lbl')
+  const groundIco = $('#mv-ground-current-ico')
+  if (activeRow) {
+    const ico = activeRow.querySelector('.ico')
+    if (groundLabel) groundLabel.textContent = activeRow.textContent.trim().replace(/✓.*$/, '').trim()
+    if (groundIco && ico) groundIco.textContent = ico.textContent
+  }
 }
 
 // refreshPieceTreeEyes resyncs every eye-toggle button in the piece

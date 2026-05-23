@@ -1219,7 +1219,101 @@ kbd {
   justify-content: center;
 }
 
+/* Submenu (e.g. Environment picker inside Studio Options) — appears
+   to the right of its parent menu row when hovered.  Positioned
+   absolutely against the containing menu-row, which the popup's own
+   relative positioning gives us for free. */
+/* Environment submenu — click the parent row to toggle the
+   submenu open/closed.  Pure-CSS hover was unreliable on touch +
+   click-through, so the JS toggles a `.open` class on the parent. */
+.menu-row-submenu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  width: 100%;
+  cursor: pointer;
+  font-size: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+.menu-row-submenu:hover { background: var(--bg-2); }
+.menu-row-submenu .env-current-lbl { flex: 1; }
+.menu-row-submenu .chev-right { color: var(--muted); font-size: 10px; }
+.ribbon-submenu {
+  position: absolute;
+  left: 100%;
+  top: -4px;
+  margin-left: 4px;
+  min-width: 180px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  z-index: 10;
+}
+.ribbon-submenu.hidden { display: none; }
+.menu-row-submenu.open .ribbon-submenu { display: block; }
+.ribbon-submenu .menu-row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 0; background: transparent; color: var(--text);
+  cursor: pointer; border-radius: 4px;
+}
+.ribbon-submenu .menu-row:hover { background: var(--bg-2); }
+.ribbon-submenu .menu-row.active { background: var(--accent); color: #fff; }
+
+/* Locked menu row — used by Show Wireframe when Wireframe Only mode
+   forces it on.  Reads visually similar to a disabled control: the
+   row keeps its active styling but the cursor turns "not-allowed"
+   and clicks are ignored by JS. */
+.ribbon-dropdown-popup .menu-row.disabled-locked {
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+.ribbon-dropdown-popup .menu-row.disabled-locked:hover {
+  background: var(--bg-2);
+}
+
 .ribbon-section-right { margin-left: auto; }
+
+/* Settings dialog tab strip — same look as Help, but the body
+   container needs to size to its content and let the dialog grow,
+   not flex like Help (Help wraps a scrolling pane). */
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+}
+.settings-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active {
+  background: var(--bg-1);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: var(--text);
+  font-weight: 600;
+}
+.settings-tab-body { display: none; padding-top: 14px; }
+.settings-tab-body.active { display: block; }
 
 /* Settings dialog — same auto-fit grid style as Help, but each section
    stacks form controls instead of a dl of shortcuts. */
