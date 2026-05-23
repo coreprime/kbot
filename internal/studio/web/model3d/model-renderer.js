@@ -1169,23 +1169,24 @@ const GROUND_FS = `
       return;
     }
     if (uSeabedActive > 0.5) {
-      // ── Seabed pass: rocks + dunes lit by caustic light from
-      // above.  Drawn first, depth-tested under the water surface.
-      // Bed colours come from the active environment preset so
-      // Archipelago gets white sand, Metal gets dark grey, Lava
-      // glows red, etc.
+      // ── Seabed pass: rocks + dunes.  Drawn first, depth-tested
+      // under the reflection + water surface.  Bed colours come
+      // from the active environment preset so Archipelago gets
+      // white sand, Metal gets dark plating, Lava glows red, etc.
       float bedH = seabedHeight(vWorldPos.xz);
-      // Threshold pushed up since dunes alone now reach ~20 wu and
-      // rock peaks ~24+ wu.  Sand reads up to ~10 wu of bedH; the
-      // rock palette dominates for the actual outcrops above that.
       float rockMix = smoothstep(10.0, 22.0, bedH);
       vec3 col = mix(uSeabedSand, uSeabedRock, rockMix);
-      // Static caustic shading — sampled with t=0 so the bed reads
-      // as a fixed environment rather than a rippling layer of
-      // water.
-      float caustic = seaCaustic(vWorldPos.xz, 0.0);
-      col += caustic * uSeabedCaustic * 0.45;
-      col *= 0.45 + 0.35 * shadow;
+      // Subtle multi-octave noise lightens / darkens patches of
+      // sand so the bed isn't a flat tint.  Crucially this is NOT
+      // the seaCaustic sine grid — that produced a repeating
+      // scallop pattern that read as "fish-scale leopard skin"
+      // tiled across the whole bed.  Smooth FBM noise gives an
+      // organic, irregular variation instead.
+      float n1 = seaNoise(vWorldPos.xz * 0.012);
+      float n2 = seaNoise(vWorldPos.xz * 0.045 + 7.1);
+      float bedVar = 0.7 + 0.6 * n1 + 0.25 * n2;
+      col *= bedVar;
+      col *= 0.50 + 0.35 * shadow;
       // Seabed also fades into the horizon colour at distance so
       // the far-edge isn't a sharp ring of dark seafloor visible
       // through the haze of the water surface above.
