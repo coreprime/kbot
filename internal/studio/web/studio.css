@@ -1269,6 +1269,39 @@ kbd {
 .ribbon-submenu .menu-row:hover { background: var(--bg-2); }
 .ribbon-submenu .menu-row.active { background: var(--accent); color: #fff; }
 
+/* Toggle-submenu rows (Waves, Bobbing/Swaying) — click the body
+   toggles the effect; the chev opens the slider submenu.  Visual:
+   like a checkbox-row with a peek-out submenu indicator. */
+.menu-row-toggle-submenu .menu-check {
+  margin-left: 6px;
+  opacity: 0.4;
+  font-weight: 700;
+}
+.menu-row-toggle-submenu[data-on="1"] .menu-check { opacity: 1; }
+.menu-row-toggle-submenu.active .menu-check { color: #fff; opacity: 1; }
+/* Submenu slider row — label + range + value, kept compact. */
+.submenu-slider-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+}
+.submenu-slider-row .slider-lbl {
+  font-size: 11px;
+  color: var(--muted);
+}
+.submenu-slider-row .slider-val {
+  font-size: 11px;
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.submenu-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 /* Locked menu row — used by Show Wireframe when Wireframe Only mode
    forces it on.  Reads visually similar to a disabled control: the
    row keeps its active styling but the cursor turns "not-allowed"

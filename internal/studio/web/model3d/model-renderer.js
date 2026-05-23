@@ -831,6 +831,7 @@ const GROUND_VS = `
   uniform float uSeabedActive;
   uniform int uGroundMode;
   uniform float uTime;
+  uniform float uWavesIntensity;
   varying vec3 vWorldPos;
   varying vec4 vLightSpacePos;
   ${SEA_WAVES_GLSL}
@@ -845,7 +846,7 @@ const GROUND_VS = `
     if (uSeabedActive > 0.5) {
       y = uSeabedY + seabedHeight(aPos.xz);
     } else if (uGroundMode == 2) {
-      y = uGroundY + seaWaveHS(aPos.xz, uTime).x;
+      y = uGroundY + seaWaveHS(aPos.xz, uTime).x * uWavesIntensity;
     } else {
       y = uGroundY;
     }
@@ -879,6 +880,7 @@ const GROUND_FS = `
   uniform float uSeabedY;        // base Y of the seabed plane (below uGroundY)
   uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
   uniform float uOptSpecular;        // 0 disables broad/tight specular + sparkles
+  uniform float uWavesIntensity;     // multiplier on wave amplitude (also flat=0 when Waves toggle off)
 
   float sampleShadow() {
     if (uShadowEnabled < 0.5) return 1.0;
@@ -969,9 +971,13 @@ const GROUND_FS = `
       // seabed is shallow so the rocks show through.
       float t = uTime;
       vec3 hs = seaWaveHS(vWorldPos.xz, t);
-      float h = hs.x;
-      float dhx = hs.y;
-      float dhz = hs.z;
+      // Apply Waves Intensity to both the height (drives foam,
+      // depth proxy, backlit) and the slopes (drives wave normal +
+      // reflection direction).  At intensity=0 the surface is flat
+      // and the sea reads as a calm dead pool.
+      float h = hs.x * uWavesIntensity;
+      float dhx = hs.y * uWavesIntensity;
+      float dhz = hs.z * uWavesIntensity;
       // Distance fade: at range, the per-pixel wave normal aliases
       // into a noisy "white box" moire.  Damp the slopes toward a
       // flat normal as the camera distance grows, and gate all the
@@ -1167,6 +1173,11 @@ export class ModelRenderer {
     this.optWaterReflections = true  // sky / sun reflected in the water surface
     this.optSpecular = true          // sun's specular highlight on water + hull
     this.optGodBeams = true          // light shafts from the sun(s)
+    this.optWaves = true             // animate sea surface; false → flat sea
+    // Slider-controlled multipliers — all default to 1.0 (no scaling).
+    this.bobAmount = 1.0             // scales heave + pitch + roll
+    this.bobSpeed = 1.0              // scales the bob's time progression
+    this.wavesIntensity = 1.0        // scales wave amplitude (both vertex + frag)
 
     // Enable optional extensions.  Anisotropic gets forwarded to the
     // texture cache so future uploads use it; depth-texture gates the
@@ -1309,6 +1320,10 @@ export class ModelRenderer {
   setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
   setSpecularEnabled(on) { this.optSpecular = !!on; this.requestRedraw() }
   setGodBeamsEnabled(on) { this.optGodBeams = !!on; this.requestRedraw() }
+  setWavesEnabled(on) { this.optWaves = !!on; this.requestRedraw() }
+  setBobAmount(v) { this.bobAmount = Math.max(0, +v) || 0; this.requestRedraw() }
+  setBobSpeed(v) { this.bobSpeed = Math.max(0, +v) || 0; this.requestRedraw() }
+  setWavesIntensity(v) { this.wavesIntensity = Math.max(0, +v) || 0; this.requestRedraw() }
 
   resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1)
@@ -1601,6 +1616,9 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundHorizonColor, this.skyScheme.horizon)
     gl.uniform1f(this.uGroundOptWaterReflections, this.optWaterReflections ? 1 : 0)
     gl.uniform1f(this.uGroundOptSpecular, this.optSpecular ? 1 : 0)
+    // Waves toggle off → flat sea (intensity 0); otherwise use the
+    // slider value so the user can scale waves from glassy to gale.
+    gl.uniform1f(this.uGroundWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -1929,9 +1947,16 @@ export class ModelRenderer {
   //     the unit.  A real ship's inertia damps high-frequency
   //     surface motion; this is the visual analogue.
   _applySeaBob(out, x, z, t) {
-    const tSlow = t * 0.75
+    // Speed multiplier scales the bob's time progression; default
+    // 1.0 means the same 0.75× slowdown as before (the "0.75" inside
+    // tSlow is the inherent damping for tall ships).
+    const tSlow = t * 0.75 * this.bobSpeed
     const s = this.seaWaveSample(x, z, tSlow)
-    const BOB_SCALE = 0.30
+    // Amount multiplier scales the heave + tilt linearly.  When the
+    // Waves toggle is off the boat still bobs from the static
+    // sample at the same XZ — it would otherwise lurch when the
+    // user flips waves back on with the unit at a wave crest.
+    const BOB_SCALE = 0.30 * this.bobAmount
     const tilt = 0.55 * BOB_SCALE
     const pitch = Math.atan2(s.dhz, 1) * tilt
     const roll  = -Math.atan2(s.dhx, 1) * tilt
@@ -2069,6 +2094,7 @@ export class ModelRenderer {
     this.uGroundHorizonColor = gl.getUniformLocation(prog, 'uHorizonColor')
     this.uGroundOptWaterReflections = gl.getUniformLocation(prog, 'uOptWaterReflections')
     this.uGroundOptSpecular = gl.getUniformLocation(prog, 'uOptSpecular')
+    this.uGroundWavesIntensity = gl.getUniformLocation(prog, 'uWavesIntensity')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

@@ -11040,6 +11040,64 @@ function wireModelDialogs() {
   })
 }
 
+// wireToggleSubmenu wires a menu row that does both:
+//   * Body click → toggles a boolean effect on/off (the menu-check
+//     glyph shows the state)
+//   * Hover or click on the row → reveals a submenu of sliders
+// The Waves and Bobbing/Swaying rows in Studio Options use this.
+function wireToggleSubmenu({ rowId, submenuId, onToggle }) {
+  const row = document.getElementById(rowId)
+  const sub = document.getElementById(submenuId)
+  if (!row || !sub) return
+  // Default state — start with toggle on (data-on already "1" in HTML).
+  row.dataset.on = row.dataset.on || '1'
+  row.classList.toggle('active', row.dataset.on === '1')
+  let suppress = false
+  row.addEventListener('click', (e) => {
+    e.stopPropagation()
+    // Clicks on the slider thumb itself bubble up — ignore so dragging
+    // doesn't flip the toggle.
+    if (e.target.tagName === 'INPUT') return
+    if (suppress) { suppress = false; return }
+    const on = row.dataset.on !== '1'
+    row.dataset.on = on ? '1' : '0'
+    row.classList.toggle('active', on)
+    onToggle(on)
+  })
+  // Mouse over the chev opens the submenu without firing the toggle.
+  // Use mouseenter on the row to reveal; mouseleave hides.  This
+  // matches the Environment row's hover behaviour.
+  row.addEventListener('mouseenter', () => sub.classList.remove('hidden'))
+  row.addEventListener('mouseleave', (e) => {
+    // Keep open if the cursor moved onto the submenu itself.
+    if (e.relatedTarget && sub.contains(e.relatedTarget)) return
+    sub.classList.add('hidden')
+  })
+  sub.addEventListener('mouseleave', () => sub.classList.add('hidden'))
+  // Stop submenu clicks from closing the parent dropdown.
+  sub.addEventListener('click', (e) => e.stopPropagation())
+}
+
+// wireSliderInput hooks a range input + value label.  The input
+// value is divided by 100 before being handed to the callback so
+// HTML can use integer steps for cleaner scrub behaviour and the
+// renderer still gets a smooth float multiplier.
+function wireSliderInput(inputId, valueId, cb) {
+  const inp = document.getElementById(inputId)
+  const lbl = document.getElementById(valueId)
+  if (!inp) return
+  const update = () => {
+    const v = parseInt(inp.value, 10) / 100
+    if (lbl) lbl.textContent = v.toFixed(1) + '×'
+    cb(v)
+  }
+  inp.addEventListener('input', update)
+  // Stop clicks on the slider from bubbling to the parent row's
+  // toggle handler.
+  inp.addEventListener('click', (e) => e.stopPropagation())
+  inp.addEventListener('pointerdown', (e) => e.stopPropagation())
+}
+
 // wireModelRibbonDropdown opens / closes a ribbon-style popup,
 // positioning it below the button.  Mirrors the editor's ribbon
 // behaviour without re-using its handlers (the editor's wireRibbon()
@@ -11172,8 +11230,32 @@ function wireModelViewMenu() {
   wireToggleRow('mv-opt-reflections', (on) => {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setReflectionsEnabled(on)
   })
-  wireToggleRow('mv-opt-bob', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobEnabled(on)
+  // Bobbing/Swaying — body click toggles on/off; chev opens slider
+  // submenu.  Same pattern is used for the Waves row.  wireToggleSubmenu
+  // factors out the duplicated wiring for both.
+  wireToggleSubmenu({
+    rowId: 'mv-opt-bob-row',
+    submenuId: 'mv-bob-submenu',
+    onToggle: (on) => {
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobEnabled(on)
+    },
+  })
+  wireSliderInput('mv-bob-amount', 'mv-bob-amount-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobAmount(v)
+  })
+  wireSliderInput('mv-bob-speed', 'mv-bob-speed-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobSpeed(v)
+  })
+  // Waves — toggles wave animation on/off; slider scales amplitude.
+  wireToggleSubmenu({
+    rowId: 'mv-opt-waves-row',
+    submenuId: 'mv-waves-submenu',
+    onToggle: (on) => {
+      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWavesEnabled(on)
+    },
+  })
+  wireSliderInput('mv-waves-intensity', 'mv-waves-intensity-val', (v) => {
+    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWavesIntensity(v)
   })
   wireToggleRow('mv-opt-water-reflections', (on) => {
     if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWaterReflectionsEnabled(on)
@@ -11407,7 +11489,7 @@ function applyUnitEditorDefaults() {
   }
   const togglePairs = [
     ['mv-opt-reflections', s.unitDefaultReflections !== false, (v) => r.setReflectionsEnabled(v)],
-    ['mv-opt-bob', s.unitDefaultBob !== false, (v) => r.setBobEnabled(v)],
+    ['mv-opt-bob-row', s.unitDefaultBob !== false, (v) => r.setBobEnabled(v)],
     ['mv-opt-water-reflections', s.unitDefaultWaterReflections !== false, (v) => r.setWaterReflectionsEnabled(v)],
     ['mv-opt-specular', s.unitDefaultSpecular !== false, (v) => r.setSpecularEnabled(v)],
     ['mv-opt-godbeams', s.unitDefaultGodBeams !== false, (v) => r.setGodBeamsEnabled(v)],

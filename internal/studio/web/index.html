@@ -251,9 +251,31 @@
               <button id="mv-opt-water-reflections" class="menu-row toggle-row" data-on="1" title="Water reflects onto the unit's hull — caustic bounce + sun shimmer on side plates">
                 <span class="ico">🌅</span><span>Water Surface Reflections</span><span class="menu-check">✓</span>
               </button>
-              <button id="mv-opt-bob" class="menu-row toggle-row" data-on="1" title="Unit bobs + sways with the swell">
-                <span class="ico">🚤</span><span>Bobbing / Swaying</span><span class="menu-check">✓</span>
-              </button>
+              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-waves-row" role="button" tabindex="0" title="Animate the water surface — hover for intensity">
+                <span class="ico">🌊</span><span>Waves</span><span class="menu-check" id="mv-waves-check">✓</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-waves-submenu">
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Intensity</span>
+                    <input id="mv-waves-intensity" type="range" min="0" max="200" step="5" value="100" />
+                    <span class="slider-val" id="mv-waves-intensity-val">1.0×</span>
+                  </div>
+                </div>
+              </div>
+              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-bob-row" role="button" tabindex="0" title="Unit bobs + sways with the swell — hover for amount + speed">
+                <span class="ico">🚤</span><span>Bobbing / Swaying</span><span class="menu-check" id="mv-bob-check">✓</span><span class="chev-right">▸</span>
+                <div class="ribbon-submenu hidden" id="mv-bob-submenu">
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Amount</span>
+                    <input id="mv-bob-amount" type="range" min="0" max="200" step="5" value="100" />
+                    <span class="slider-val" id="mv-bob-amount-val">1.0×</span>
+                  </div>
+                  <div class="submenu-slider-row">
+                    <span class="slider-lbl">Speed</span>
+                    <input id="mv-bob-speed" type="range" min="0" max="200" step="5" value="100" />
+                    <span class="slider-val" id="mv-bob-speed-val">1.0×</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
