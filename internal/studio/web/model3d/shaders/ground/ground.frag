@@ -16,6 +16,7 @@ uniform sampler2D uShadowMap;
 uniform sampler2D uShadowMap2;  // twin-sun environments
 uniform sampler2D uTerrainTex;
 uniform float uShadowEnabled;
+uniform float uShadowStrength; // 0..1 scales shadow darkness — used for the construction fade (translucent shadow at low buildPercent, solid at 100)
 uniform vec3 uLightColor2;      // when non-zero, the second sun also casts shadows
 uniform vec3 uColorA;
 uniform vec3 uColorB;
@@ -128,9 +129,16 @@ float sampleShadow() {
   float s1 = sampleShadowPrimary();
   // dot >= 0.0001 mirrors the main.frag check so single-sun
   // environments don't pay for the second tap.
-  if (dot(uLightColor2, uLightColor2) < 0.0001) return s1;
-  float s2 = sampleShadowSecondary();
-  return (s1 + s2) * 0.5;
+  float s = s1;
+  if (dot(uLightColor2, uLightColor2) >= 0.0001) {
+    float s2 = sampleShadowSecondary();
+    s = (s1 + s2) * 0.5;
+  }
+  // Scale shadow strength toward "fully lit" (1.0) when uShadowStrength
+  // is below 1.  Used by the construction-progress fade — at build 0%
+  // the shadow vanishes (unit is still nano-mass), at 100% the shadow
+  // is at full strength like any finished unit.
+  return mix(1.0, s, clamp(uShadowStrength, 0.0, 1.0));
 }
 
 void main() {

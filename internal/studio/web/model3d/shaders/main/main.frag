@@ -44,6 +44,7 @@ uniform float uWaterY;        // world Y of the water plane - fades reflections 
 uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables hull bounce/shimmer
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
+uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
 
 // rgbToHsv / hsvToRgb come from the standard Sam Hocevar GLSL
 // formulation - branchless, suitable for fragment shaders.  We use
@@ -294,6 +295,8 @@ void main() {
   // Reflection pass output at full alpha so the water surface's
   // alpha mix is the only thing dimming it - previously dropping
   // to 0.65 here compounded with the water alpha and made the
-  // reflection nearly invisible.
-  gl_FragColor = vec4(col, 1.0);
+  // reflection nearly invisible.  The output alpha gates the build-
+  // progress fade — below 100% build, uOutputAlpha = build/100
+  // so the textured model fades in as construction completes.
+  gl_FragColor = vec4(col, uOutputAlpha);
 }

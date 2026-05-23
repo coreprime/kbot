@@ -11858,6 +11858,19 @@ function wireMvInspectors() {
     stopAll.addEventListener('pointerdown', (e) => e.stopPropagation())
     stopAll.addEventListener('mousedown', (e) => e.stopPropagation())
   }
+  // Actions panel's "Reset State" header button — full COB reset:
+  // threads, static vars, animator slots, lifecycle, particles.
+  // Same drag-suppression rules as Stop All.
+  const actionsReset = document.getElementById('mv-actions-reset')
+  if (actionsReset && actionsReset.dataset.wired !== '1') {
+    actionsReset.dataset.wired = '1'
+    actionsReset.addEventListener('click', (e) => {
+      e.stopPropagation()
+      modelViewerInstance?.resetState?.()
+    })
+    actionsReset.addEventListener('pointerdown', (e) => e.stopPropagation())
+    actionsReset.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
   // Restore visibility prefs.  Default each panel to VISIBLE on
   // first open — the inspectors are the main way to inspect a
   // unit's COB state, so showing them by default avoids requiring
@@ -12007,6 +12020,15 @@ function refreshMvInspectors(dtMs = 16) {
   if (camPanel && !camPanel.classList.contains('hidden')) {
     renderMvCameraPanel(mv)
   }
+  // Grey out action / COB-entry buttons whose script has a live
+  // thread, so the user can see at a glance what's running and
+  // can't double-trigger something that would jerk pieces.
+  syncMvActionsRunning(mv.cob)
+  syncCobRibbonRunning(mv.cob)
+  // Thread code-view modal — when open, update PC highlight + locals.
+  if (_mvThreadCodeTarget && !document.getElementById('mv-thread-code-modal')?.classList.contains('hidden')) {
+    refreshMvThreadCodeHighlight()
+  }
 }
 
 function renderMvScriptsPanel(body, cob) {
@@ -12057,6 +12079,18 @@ function renderMvScriptsPanel(body, cob) {
 function renderMvThreadRow(t, killed, cob) {
   const row = document.createElement('div')
   row.className = killed ? 'mv-cob-thread-row killed' : 'mv-cob-thread-row'
+  // Clicking anywhere on the row (except the kill button) opens
+  // the code-view modal for live execution inspection.  Killed
+  // rows skip this since their thread object is a snapshot — no
+  // live PC to track.
+  if (cob && !killed) {
+    row.addEventListener('click', (e) => {
+      // Trash icon's stopPropagation handles its own click; defensively
+      // skip when the click landed on the kill button anyway.
+      if (e.target.closest('.mv-cob-thread-kill')) return
+      openMvThreadCodeModal(cob, t)
+    })
+  }
   const name = document.createElement('div')
   name.className = 'mv-cob-thread-name'
   const left = document.createElement('span')
@@ -12131,6 +12165,244 @@ function renderMvThreadRow(t, killed, cob) {
   }
   row.appendChild(sigDetail)
   return row
+}
+
+// ── Thread code-view modal ─────────────────────────────────────────────
+// Pops over the model viewer when the user clicks a Threads-panel row.
+// Renders the thread's script disassembly (each instruction on a line
+// with offset + opcode-category colour) and highlights the row at the
+// current PC.  Locals + stack tray on the right.  Refreshes via the
+// same 4 Hz `refreshMvInspectors` tick so the highlight tracks live
+// execution.  Tracking by thread id so the modal stays bound to the
+// specific thread (not just "the next thread named Foo").
+
+let _mvThreadCodeTarget = null  // { cob, threadId } when modal open
+
+function openMvThreadCodeModal(cob, thread) {
+  _mvThreadCodeTarget = { cob, threadId: thread.id }
+  const modal = document.getElementById('mv-thread-code-modal')
+  if (!modal) return
+  modal.classList.remove('hidden')
+  wireMvThreadCodeChrome()
+  // Initial render is the full instruction list — only the highlighted
+  // line + locals change frame-to-frame, the rest of the DOM is stable.
+  renderMvThreadCodeSource(cob, thread)
+  refreshMvThreadCodeHighlight()
+}
+
+function closeMvThreadCodeModal() {
+  const modal = document.getElementById('mv-thread-code-modal')
+  if (modal) modal.classList.add('hidden')
+  _mvThreadCodeTarget = null
+}
+
+function wireMvThreadCodeChrome() {
+  const closeBtn = document.getElementById('mv-thread-code-close')
+  if (closeBtn && closeBtn.dataset.wired !== '1') {
+    closeBtn.dataset.wired = '1'
+    closeBtn.addEventListener('click', closeMvThreadCodeModal)
+  }
+  const modal = document.getElementById('mv-thread-code-modal')
+  if (modal && modal.dataset.wired !== '1') {
+    modal.dataset.wired = '1'
+    // Click on the backdrop (anywhere outside the card) closes.
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeMvThreadCodeModal()
+    })
+  }
+}
+
+// Opcode category lookup — keeps the colour rule out of every render
+// call.  Categories mirror the explorer's COBAHighlighter so the
+// assembly reads visually consistent across the two tools.
+const MV_OP_CATEGORY = {
+  // flow
+  JUMP: 'flow', JUMP_IF_FALSE: 'flow', RETURN: 'flow',
+  CALL_SCRIPT: 'flow', START_SCRIPT: 'flow',
+  SIGNAL: 'flow', SET_SIGNAL_MASK: 'flow',
+  // stack / locals
+  PUSH_CONST: 'stack', PUSH_LOCAL: 'stack', PUSH_STATIC: 'stack',
+  POP_LOCAL: 'stack', POP_STATIC: 'stack', POP_STACK: 'stack',
+  STACK_ALLOC: 'stack', CREATE_LOCAL: 'stack',
+  // animator
+  MOVE: 'anim', MOVE_NOW: 'anim', TURN: 'anim', TURN_NOW: 'anim',
+  SPIN: 'anim', STOP_SPIN: 'anim',
+  SHOW: 'anim', HIDE: 'anim',
+  CACHE: 'anim', DONT_CACHE: 'anim', SHADE: 'anim', DONT_SHADE: 'anim',
+  // arithmetic
+  ADD: 'arith', SUB: 'arith', MUL: 'arith', DIV: 'arith', MOD: 'arith',
+  BITWISE_AND: 'arith', BITWISE_OR: 'arith', BITWISE_XOR: 'arith', BITWISE_NOT: 'arith',
+  LESS_THAN: 'arith', LESS_OR_EQUAL: 'arith', GREATER_THAN: 'arith', GREATER_EQUAL: 'arith',
+  EQUAL: 'arith', NOT_EQUAL: 'arith',
+  LOGICAL_AND: 'arith', LOGICAL_OR: 'arith', LOGICAL_XOR: 'arith', LOGICAL_NOT: 'arith',
+  RAND: 'arith', GET: 'arith', GET_UNIT_VALUE: 'arith', SET_VALUE: 'arith',
+  // waits
+  SLEEP: 'wait', WAIT_FOR_TURN: 'wait', WAIT_FOR_MOVE: 'wait',
+  // sfx
+  EMIT_SFX: 'sfx', EXPLODE: 'sfx', PLAY_SOUND: 'sfx',
+}
+function mvOpCategory(name) { return MV_OP_CATEGORY[name] || 'other' }
+
+function renderMvThreadCodeSource(cob, thread) {
+  const src = document.getElementById('mv-thread-code-source')
+  const title = document.getElementById('mv-thread-code-title')
+  if (!src || !thread) return
+  src.replaceChildren()
+  src.dataset.scriptName = thread.script.name
+  if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
+  const pieceNames = cob.runtime.pieceNames || []
+  for (let i = 0; i < thread.script.instructions.length; i++) {
+    const ins = thread.script.instructions[i]
+    const line = document.createElement('div')
+    line.className = 'mv-code-line'
+    line.dataset.idx = String(i)
+    const off = document.createElement('span')
+    off.className = 'mv-code-off'
+    off.textContent = '0x' + (ins.offset >>> 0).toString(16).padStart(4, '0')
+    const code = document.createElement('span')
+    const op = document.createElement('span')
+    op.className = `mv-code-op op-${mvOpCategory(ins.name)}`
+    op.textContent = ins.name
+    code.appendChild(op)
+    // Render operands.  p1 is usually a piece index, immediate, or
+    // jump offset; p2 is an axis index for animator ops.  We pretty
+    // print piece-index operands with the piece name when known.
+    const operandText = mvFormatOperands(ins, pieceNames)
+    if (operandText) {
+      const opd = document.createElement('span')
+      opd.className = 'mv-code-operand'
+      opd.textContent = ' ' + operandText
+      code.appendChild(opd)
+    }
+    line.appendChild(off)
+    line.appendChild(code)
+    src.appendChild(line)
+  }
+}
+
+function mvFormatOperands(ins, pieceNames) {
+  // Piece-targeted ops with axis: piece name + axis letter
+  const pieceAxisOps = new Set(['MOVE', 'TURN', 'SPIN', 'STOP_SPIN', 'MOVE_NOW', 'TURN_NOW', 'WAIT_FOR_TURN', 'WAIT_FOR_MOVE'])
+  if (pieceAxisOps.has(ins.name)) {
+    const pn = pieceNames[ins.p1] || `#${ins.p1}`
+    const axis = ['x', 'y', 'z'][ins.p2 | 0] || '?'
+    return `${pn}, ${axis}-axis`
+  }
+  // Piece-only ops
+  const pieceOps = new Set(['SHOW', 'HIDE', 'CACHE', 'DONT_CACHE', 'SHADE', 'DONT_SHADE', 'DONT_SHADOW', 'EMIT_SFX', 'EXPLODE'])
+  if (pieceOps.has(ins.name)) {
+    const pn = pieceNames[ins.p1] || `#${ins.p1}`
+    return pn
+  }
+  // CALL / START — index into scripts array
+  if (ins.name === 'CALL_SCRIPT' || ins.name === 'START_SCRIPT') {
+    return `script[${ins.p1}], ${ins.p2 | 0} args`
+  }
+  // PUSH_CONST + immediate ops
+  if (ins.name === 'PUSH_CONST') return `${ins.p1}`
+  if (ins.name === 'PUSH_LOCAL' || ins.name === 'POP_LOCAL' || ins.name === 'CREATE_LOCAL') return `L${ins.p1}`
+  if (ins.name === 'PUSH_STATIC' || ins.name === 'POP_STATIC') return `global_${ins.p1}`
+  if (ins.name === 'JUMP' || ins.name === 'JUMP_IF_FALSE') return `→ 0x${(ins.p1 >>> 0).toString(16)}`
+  if (ins.p1 || ins.p2) return `${ins.p1}${ins.p2 ? `, ${ins.p2}` : ''}`
+  return ''
+}
+
+function refreshMvThreadCodeHighlight() {
+  const tgt = _mvThreadCodeTarget
+  if (!tgt) return
+  const thread = tgt.cob.runtime._threads.find((t) => t.id === tgt.threadId && !t.dead)
+  const status = document.getElementById('mv-thread-code-status')
+  if (!thread) {
+    if (status) status.textContent = 'Thread terminated.'
+    // Clear PC highlight when thread dies.
+    for (const el of document.querySelectorAll('#mv-thread-code-source .mv-code-line.pc')) el.classList.remove('pc')
+    renderMvThreadCodeLocals(null)
+    return
+  }
+  // The thread might have changed script via CALL_SCRIPT — re-render
+  // the source if the script object differs from what we drew.
+  const src = document.getElementById('mv-thread-code-source')
+  if (src && src.dataset.scriptName !== thread.script.name) {
+    renderMvThreadCodeSource(tgt.cob, thread)
+    src.dataset.scriptName = thread.script.name
+    const title = document.getElementById('mv-thread-code-title')
+    if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
+  }
+  // Status line — sleep / wait / running.
+  if (status) {
+    if (thread.sleepMs > 0) status.textContent = `Sleeping ${Math.round(thread.sleepMs)}ms · pc=${thread.pc}`
+    else if (thread.waitOn) status.textContent = `Waiting for ${thread.waitOn.type} · pc=${thread.pc}`
+    else status.textContent = `Running · pc=${thread.pc}`
+  }
+  // Update PC class on lines.
+  let prevPc = null
+  for (const el of document.querySelectorAll('#mv-thread-code-source .mv-code-line.pc')) {
+    prevPc = el
+    el.classList.remove('pc')
+  }
+  const target = document.querySelector(`#mv-thread-code-source .mv-code-line[data-idx="${thread.pc}"]`)
+  if (target) {
+    target.classList.add('pc')
+    // Auto-scroll when PC moves to a line not currently in view.  Only
+    // scroll if the highlighted line actually changed — avoids fighting
+    // user scroll position on every refresh tick.
+    if (prevPc !== target) {
+      const container = document.getElementById('mv-thread-code-source')
+      const cr = container.getBoundingClientRect()
+      const lr = target.getBoundingClientRect()
+      if (lr.top < cr.top + 40 || lr.bottom > cr.bottom - 40) {
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      }
+    }
+  }
+  renderMvThreadCodeLocals(thread)
+}
+
+function renderMvThreadCodeLocals(thread) {
+  const locals = document.getElementById('mv-thread-code-locals')
+  const stack = document.getElementById('mv-thread-code-stack')
+  if (locals) {
+    locals.replaceChildren()
+    if (thread && thread.locals && thread.locals.length) {
+      for (let i = 0; i < thread.locals.length; i++) {
+        const row = document.createElement('div')
+        const k = document.createElement('span')
+        k.textContent = `L${i}`
+        const v = document.createElement('span')
+        v.textContent = String(thread.locals[i] | 0)
+        row.appendChild(k); row.appendChild(v)
+        locals.appendChild(row)
+      }
+    } else {
+      const empty = document.createElement('div')
+      empty.style.color = 'var(--muted)'
+      empty.style.fontStyle = 'italic'
+      empty.textContent = thread ? '—' : 'no thread'
+      locals.appendChild(empty)
+    }
+  }
+  if (stack) {
+    stack.replaceChildren()
+    if (thread && thread.stack && thread.stack.length) {
+      // Render top-of-stack first so the newest pushes are at the top
+      // (matches a typical stack-trace display).
+      for (let i = thread.stack.length - 1; i >= 0; i--) {
+        const row = document.createElement('div')
+        const k = document.createElement('span')
+        k.textContent = i === thread.stack.length - 1 ? 'top' : ' '
+        const v = document.createElement('span')
+        v.textContent = String(thread.stack[i] | 0)
+        row.appendChild(k); row.appendChild(v)
+        stack.appendChild(row)
+      }
+    } else {
+      const empty = document.createElement('div')
+      empty.style.color = 'var(--muted)'
+      empty.style.fontStyle = 'italic'
+      empty.textContent = '—'
+      stack.appendChild(empty)
+    }
+  }
 }
 
 function renderMvStaticVarsPanel(body, cob) {
@@ -12230,14 +12502,47 @@ function renderMvActionsPanel(cob) {
     const btn = document.createElement('button')
     btn.className = isPrivate ? 'mv-actions-btn private' : 'mv-actions-btn'
     btn.textContent = name
-    btn.title = isPrivate
-      ? `Run ${name} (internal helper)`
-      : `Run ${name} (one-shot)`
+    btn.dataset.script = name
+    // Tooltip / disabled state get refreshed every inspector tick
+    // by syncMvActionsRunning — what we set here is the initial
+    // state at render time.
+    const running = isCobScriptRunning(cob, name)
+    btn.disabled = running
+    btn.title = running
+      ? `${name} is already running`
+      : (isPrivate ? `Run ${name} (internal helper)` : `Run ${name} (one-shot)`)
     btn.addEventListener('click', (e) => {
       e.stopPropagation()
       runCobEntry(cob, name)
     })
     list.appendChild(btn)
+  }
+}
+
+// syncMvActionsRunning + syncCobRibbonRunning toggle the disabled
+// attribute on action buttons based on which scripts currently have
+// a live thread.  Called from refreshMvInspectors' 4 Hz tick so the
+// greyed state tracks the runtime without us rebuilding the whole
+// button DOM (which would interfere with the hover state mid-click).
+function syncMvActionsRunning(cob) {
+  if (!cob) return
+  for (const btn of document.querySelectorAll('#mv-actions-list .mv-actions-btn')) {
+    const name = btn.dataset.script
+    if (!name) continue
+    const running = isCobScriptRunning(cob, name)
+    if (btn.disabled !== running) {
+      btn.disabled = running
+      btn.title = running ? `${name} is already running` : `Run ${name}`
+    }
+  }
+}
+function syncCobRibbonRunning(cob) {
+  if (!cob) return
+  for (const btn of document.querySelectorAll('.cob-entry')) {
+    const name = btn.dataset.cobEntry
+    if (!name || !cob.hasScript(name)) continue
+    const running = isCobScriptRunning(cob, name)
+    if (btn.disabled !== running) btn.disabled = running
   }
 }
 
@@ -12287,6 +12592,26 @@ function wireCobAttributeSliders() {
     pb.addEventListener('pointerdown', (e) => e.stopPropagation())
     pb.dataset.wired = '1'
   }
+  const build = document.getElementById('mv-cob-build')
+  const buildVal = document.getElementById('mv-cob-build-val')
+  if (build && build.dataset.wired !== '1') {
+    build.addEventListener('input', () => {
+      const v = parseInt(build.value, 10) | 0
+      if (buildVal) buildVal.textContent = `${v}%`
+      modelViewerInstance?.setBuildPercent(v)
+    })
+    build.addEventListener('click', (e) => e.stopPropagation())
+    build.addEventListener('pointerdown', (e) => e.stopPropagation())
+    build.dataset.wired = '1'
+  }
+  const reset = document.getElementById('mv-cob-reset')
+  if (reset && reset.dataset.wired !== '1') {
+    reset.addEventListener('click', (e) => {
+      e.stopPropagation()
+      modelViewerInstance?.resetState()
+    })
+    reset.dataset.wired = '1'
+  }
 }
 
 // refreshCobPanel wires the Animation→COB dropdown buttons to the
@@ -12311,6 +12636,13 @@ function refreshCobPanel(cob) {
     const v = cob ? cob.runtime.playbackRate : 1
     pb.value = String(Math.round(v * 100))
     pbVal.textContent = `${v.toFixed(2)}×`
+  }
+  const build = document.getElementById('mv-cob-build')
+  const buildVal = document.getElementById('mv-cob-build-val')
+  if (build && buildVal) {
+    const v = modelViewerInstance?.cobBuildPercent ?? 100
+    build.value = String(v)
+    buildVal.textContent = `${v}%`
   }
   for (const btn of $$('.cob-entry')) {
     const name = btn.dataset.cobEntry
@@ -12355,6 +12687,20 @@ function refreshCobPanel(cob) {
   }
 }
 
+// isCobScriptRunning reports whether the named script has at least
+// one live thread.  Case-insensitive, matches the runtime's own
+// script lookup semantics.  Used by runCobEntry to no-op a click
+// on a script that's already executing, and by refreshCobPanel +
+// renderMvActionsPanel to grey out the corresponding buttons.
+function isCobScriptRunning(cob, name) {
+  if (!cob || !cob.runtime) return false
+  const lower = name.toLowerCase()
+  for (const t of cob.runtime._threads) {
+    if (!t.dead && t.script.name.toLowerCase() === lower) return true
+  }
+  return false
+}
+
 // runCobEntry invokes a script by name, randomising any required
 // inputs.  AimWeapon-class scripts expect (heading, pitch) on the
 // stack in TA's fixed-point angle units (65536 = 360°); we pick a
@@ -12365,21 +12711,34 @@ function refreshCobPanel(cob) {
 // weapon does NOT interrupt the other).
 function runCobEntry(cob, name) {
   if (!cob || !cob.hasScript(name)) return
-  // Factory units (Krogoth Gantry, Construction Kbot Lab, etc.)
-  // expose the actual open / close animation as a lowercase
-  // helper script (`activatescr`, `deactivatescr`, `OpenYard`,
-  // `CloseYard`) and route the user-facing `Activate` /
-  // `Deactivate` through a state-machine query (RequestState)
-  // that needs the live game loop to dispatch.  In the studio
-  // viewer that game loop doesn't exist, so Activate sits inert.
-  // Fire the helper directly so the visible animation plays.
+  // Don't re-start a script that already has a thread alive.  The
+  // first line of activatescr-style helpers is usually
+  // `turn <piece> to <axis> <0> now` which INSTANTLY snaps the
+  // piece back to origin before animating to the open position —
+  // re-triggering caused a visible jerk while pieces were already
+  // at their target.  For long-running loops (SmokeUnit, MotionControl)
+  // this also prevents stacking N threads from N clicks.
+  if (isCobScriptRunning(cob, name)) return
+  // Lifecycle-state skip: when the user clicks Activate but the
+  // unit is already in the activated state (and the script has
+  // FINISHED its prior run), redundantly re-running activatescr
+  // would replay the entire opening sequence from scratch.  Worse
+  // for Deactivate: its FIRST instructions are `now`-snaps that
+  // teleport every piece BACK to the activated pose, then animate
+  // to closed — so a second Deactivate click on an already-closed
+  // unit causes the lab to pop open and then close again.  Track
+  // the state on the binding and skip the redundant call.
   if (/^Activate$/i.test(name)) {
-    if (cob.hasScript('activatescr')) cob.start('activatescr')
-    if (cob.hasScript('OpenYard')) cob.start('OpenYard')
+    if (cob._lifecycle === 'activated') return
+    cob._lifecycle = 'activated'
+    if (cob.hasScript('activatescr') && !isCobScriptRunning(cob, 'activatescr')) cob.start('activatescr')
+    if (cob.hasScript('OpenYard') && !isCobScriptRunning(cob, 'OpenYard')) cob.start('OpenYard')
   }
   if (/^Deactivate$/i.test(name)) {
-    if (cob.hasScript('deactivatescr')) cob.start('deactivatescr')
-    if (cob.hasScript('CloseYard')) cob.start('CloseYard')
+    if (cob._lifecycle === 'deactivated') return
+    cob._lifecycle = 'deactivated'
+    if (cob.hasScript('deactivatescr') && !isCobScriptRunning(cob, 'deactivatescr')) cob.start('deactivatescr')
+    if (cob.hasScript('CloseYard') && !isCobScriptRunning(cob, 'CloseYard')) cob.start('CloseYard')
   }
   if (/^Aim(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(name)) {
     // Each Aim* call's bos spawns RestoreAfterDelay which sleeps

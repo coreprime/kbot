@@ -629,6 +629,11 @@ export class ModelRenderer {
     // also draws the wireframe pass multiple times with a tiny NDC
     // jitter as a cheap fake "wider line" fallback.
     this.wireframeWidth = 1
+    // buildPercent: 0..100 simulated construction progress.  Below
+    // 100, the main pass renders at reduced alpha and a pulsing
+    // green nano-wireframe overlay is drawn underneath / over (so
+    // the unit reads as "still building").  100 = textured normally.
+    this.buildPercent = 100
     // groundMode: 'grid' (light-green TA-tile lattice), 'terrain'
     // (greenworld flat texture, tiled), or 'off' (no ground plane).
     this.groundMode = 'terrain'
@@ -784,6 +789,17 @@ export class ModelRenderer {
   setWireframeWidth(px) {
     const n = Math.max(1, Math.min(6, parseInt(px, 10) || 1))
     this.wireframeWidth = n
+    this.requestRedraw()
+  }
+
+  // setBuildPercent updates the nano-frame fade.  0 = pure green
+  // pulsing wireframe (textures invisible), 100 = textured normal.
+  // Below 100 we keep the render loop running so the pulse
+  // animates continuously; at exactly 100 the existing redraw is
+  // enough (the static textured model doesn't need a frame loop).
+  setBuildPercent(percent) {
+    this.buildPercent = Math.max(0, Math.min(100, +percent || 0))
+    if (this.buildPercent < 100 && !this.running) this.start()
     this.requestRedraw()
   }
 
@@ -1197,6 +1213,29 @@ export class ModelRenderer {
         // overdraw the surface without z-fight.
         this.#renderWireframe([1.0, 1.0, 1.0, 0.55])
       }
+      // Build-progress nano-frame overlay.  When the simulated
+      // build percent is below 100, draw a pulsing green wireframe
+      // so the unit reads as "still being constructed".  Pulse
+      // floor at 0.6 so even at the dimmest point the lines stay
+      // readable.  Alpha scales with remaining-build, so a low
+      // build% shows a dense bright wireframe while a high build%
+      // shows just a faint nano-flicker.  We explicitly turn on
+      // BLEND + nudge line width up to 2 px for visibility, and
+      // turn depth-write OFF so the bright nano-lines don't
+      // pollute the depth buffer for the DoF post-process.
+      if (this.buildPercent < 100) {
+        const pulse = 0.6 + 0.4 * Math.sin((performance.now() - this._t0) * 0.005)
+        const remaining = 1 - this.buildPercent / 100
+        const alpha = Math.min(1, 0.45 + 0.55 * remaining) * pulse
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+        gl.depthMask(false)
+        const prevWidth = this.wireframeWidth
+        this.wireframeWidth = 2
+        this.#renderWireframe([0.25, 1.0, 0.45, alpha])
+        this.wireframeWidth = prevWidth
+        gl.depthMask(true)
+      }
     }
     if (this._hoveredPieceName) {
       // Hover highlight: bright red wireframe on just the hovered
@@ -1359,6 +1398,11 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundRadius, Math.max(span * 0.6, 4))
     gl.uniform1f(this.uGroundY, groundY)
     gl.uniform1f(this.uGroundShadowEnabled, (this._shadowFBO && this.renderMode === 'full') ? 1 : 0)
+    // Shadow opacity tracks construction progress — translucent at low
+    // build %, solid at 100%.  Cubic ease so the shadow stays subtle
+    // until the build is nearly done, then snaps to full presence.
+    const _bps = (this.buildPercent ?? 100) / 100
+    gl.uniform1f(this.uGroundShadowStrength, _bps * _bps * _bps)
     if (this._shadowFBO) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -1502,6 +1546,13 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
+    // Build-progress fade.  When buildPercent < 100, the textured
+    // model renders at reduced alpha so the green nano-wireframe
+    // overlay drawn afterwards reads cleanly; at 100 the texture
+    // is fully opaque.  Cubic ease so the fade-in feels weighty
+    // toward the end of construction rather than linearly bright.
+    const _bp = (this.buildPercent ?? 100) / 100
+    gl.uniform1f(this.uMainOutputAlpha, _bp * _bp * _bp)
 
     // Mirror across the water plane.  _getWaterY() handles the
     // submersion-mode offset so a sub's reflection mirrors across
@@ -1578,6 +1629,13 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
+    // Build-progress fade.  When buildPercent < 100, the textured
+    // model renders at reduced alpha so the green nano-wireframe
+    // overlay drawn afterwards reads cleanly; at 100 the texture
+    // is fully opaque.  Cubic ease so the fade-in feels weighty
+    // toward the end of construction rather than linearly bright.
+    const _bp = (this.buildPercent ?? 100) / 100
+    gl.uniform1f(this.uMainOutputAlpha, _bp * _bp * _bp)
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -1894,6 +1952,7 @@ export class ModelRenderer {
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
     this.uMainTeamColor = gl.getUniformLocation(prog, 'uTeamColor')
     this.uMainTeamColorEnable = gl.getUniformLocation(prog, 'uTeamColorEnable')
+    this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
   }
 
   #initShadowProgram(vsSrc, fsSrc) {
@@ -1956,6 +2015,7 @@ export class ModelRenderer {
     this.uGroundShadowMap = gl.getUniformLocation(prog, 'uShadowMap')
     this.uGroundShadowMap2 = gl.getUniformLocation(prog, 'uShadowMap2')
     this.uGroundShadowEnabled = gl.getUniformLocation(prog, 'uShadowEnabled')
+    this.uGroundShadowStrength = gl.getUniformLocation(prog, 'uShadowStrength')
     this.uGroundLightColor2 = gl.getUniformLocation(prog, 'uLightColor2')
     this.uGroundColorA = gl.getUniformLocation(prog, 'uColorA')
     this.uGroundColorB = gl.getUniformLocation(prog, 'uColorB')

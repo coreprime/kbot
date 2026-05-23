@@ -202,10 +202,18 @@ export class CobRuntime {
     for (let i = 0; i < this.scriptNames.length; i++) {
       this._scriptByName.set(this.scriptNames[i].toLowerCase(), i)
     }
-    // Piece-axis animator array.  Sized once on first use; the
-    // runtime doesn't know piece count ahead of time so we grow
-    // lazily when an unknown piece-id is referenced.
-    this._anims = []
+    // Piece-axis animator arrays.  TA's `move` and `turn` operate
+    // INDEPENDENTLY on the same (piece, axis) — translation along
+    // axis Z and rotation around axis Z are tracked separately —
+    // so we keep two parallel arrays.  Earlier the runtime collapsed
+    // both into one slot, which silently dropped the corgant arms'
+    // rotation when activatescr did `turn arm1a z-axis 87°` and
+    // then `move arm1a z-axis -12.25wu` on the same axis (the move
+    // overwrote the turn's animator state with kind=1 + a
+    // translation target, leaving the rotation at 0).
+    // Indexed by `piece * 3 + axis` in both arrays.
+    this._moveAnims = []
+    this._rotAnims = []
     this._threads = []
     // _recentlyKilled: ring buffer of threads dropped via signal()
     // within the last ~1.2 seconds.  Used by the studio's inspector
@@ -434,16 +442,16 @@ export class CobRuntime {
   // values to build the piece's world matrix.
   pieceOffset(pieceIdx) {
     return [
-      this._animValueOrZero(pieceIdx, AXIS_X, 1),
-      this._animValueOrZero(pieceIdx, AXIS_Y, 1),
-      this._animValueOrZero(pieceIdx, AXIS_Z, 1),
+      this._moveValue(pieceIdx, AXIS_X),
+      this._moveValue(pieceIdx, AXIS_Y),
+      this._moveValue(pieceIdx, AXIS_Z),
     ]
   }
   pieceRotation(pieceIdx) {
     return [
-      this._animValueOrZero(pieceIdx, AXIS_X, 2),
-      this._animValueOrZero(pieceIdx, AXIS_Y, 2),
-      this._animValueOrZero(pieceIdx, AXIS_Z, 2),
+      this._rotValue(pieceIdx, AXIS_X),
+      this._rotValue(pieceIdx, AXIS_Y),
+      this._rotValue(pieceIdx, AXIS_Z),
     ]
   }
   isPieceVisible(pieceIdx) {
@@ -460,43 +468,54 @@ export class CobRuntime {
   }
 
   // ── Internals ───────────────────────────────────────────────────
+  // Same key shape for both arrays — piece * 3 + axis.  The choice
+  // of array (move vs rot) is the slot family selector.
   _animKey(piece, axis) { return piece * 3 + axis }
-  _anim(piece, axis) {
+  _animMove(piece, axis) {
     const k = this._animKey(piece, axis)
-    let a = this._anims[k]
-    if (!a) { a = new PieceAxisAnim(); this._anims[k] = a }
+    let a = this._moveAnims[k]
+    if (!a) { a = new PieceAxisAnim(); this._moveAnims[k] = a }
     return a
   }
-  // Returns 0 when no animator exists OR the animator's kind
-  // doesn't match what the caller wants.  `expect` filters out
-  // cross-kind reads: 1 = translation, 2 = rotation (turn or spin).
-  // Crucially does NOT check a.done — a finished turn / move /
-  // spin still has a valid rest-pose value the renderer needs.
-  _animValueOrZero(piece, axis, expect) {
-    const a = this._anims[this._animKey(piece, axis)]
+  _animRot(piece, axis) {
+    const k = this._animKey(piece, axis)
+    let a = this._rotAnims[k]
+    if (!a) { a = new PieceAxisAnim(); this._rotAnims[k] = a }
+    return a
+  }
+  // _moveValue / _rotValue return the per-axis translation / angle
+  // for the renderer's matrix build.  Each reads from its own
+  // family so a `move` and a `turn` on the SAME (piece, axis) no
+  // longer compete for one slot.  Both intentionally skip the
+  // `done` check — the rest-pose value must persist after an
+  // animation completes (turret stays where it aimed, etc).
+  _moveValue(piece, axis) {
+    const a = this._moveAnims[this._animKey(piece, axis)]
     if (!a || a.kind === 0) return 0
-    if (expect === 1 && a.kind === 1) return linearToWorld(a.value)
-    if (expect === 2 && (a.kind === 2 || a.kind === 3)) return angleToRadians(a.value)
-    return 0
+    return linearToWorld(a.value)
+  }
+  _rotValue(piece, axis) {
+    const a = this._rotAnims[this._animKey(piece, axis)]
+    if (!a || a.kind === 0) return 0
+    return angleToRadians(a.value)
   }
   // _animDone — used by WAIT_FOR_TURN / WAIT_FOR_MOVE to decide
-  // when to wake the sleeping thread.  We check `done` rather than
-  // `kind` because kind is now sticky (so the rest-pose persists
-  // after the animation finishes); without the done flag we'd
-  // either wake too early or never wake at all.
+  // when to wake the sleeping thread.  Routed to the correct array
+  // via w.family (set when the wait is registered).  We check
+  // `done` rather than `kind` because kind stays sticky after the
+  // animation finishes (so the rest-pose persists).
   _animDone(w) {
-    const a = this._anims[w.key]
+    const arr = w.family === 'move' ? this._moveAnims : this._rotAnims
+    const a = arr[w.key]
     if (!a) return true
-    // Wait satisfied when the animator that matches the wait type
-    // has reached its target.  Mismatched kinds (e.g. waiting on
-    // a move axis that's currently spinning) count as done — the
-    // caller will re-issue the right animation on the right axis.
-    if (w.type === 'move' && a.kind === 1) return !!a.done
-    if (w.type === 'turn' && (a.kind === 2 || a.kind === 3)) return !!a.done
-    return true
+    return !!a.done
   }
   _tickAnimators(dt) {
-    for (const a of this._anims) {
+    this._tickAnimArray(this._moveAnims, dt)
+    this._tickAnimArray(this._rotAnims, dt)
+  }
+  _tickAnimArray(arr, dt) {
+    for (const a of arr) {
       if (!a || a.done) continue
       switch (a.kind) {
         case 1: { // move toward target
@@ -692,14 +711,19 @@ export class CobRuntime {
         //
         // done=false starts the new animation; the animator tick
         // will flip it back to true when target is reached.
+        //
+        // Slot family: MOVE writes to _moveAnims, so a TURN on the
+        // SAME (piece, axis) lives in a separate slot and isn't
+        // overwritten — corgant's arm1a needs both `turn z 87°` AND
+        // `move z -12.25wu` to be live at the same time.
         const target = t.popI(); const speed = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animMove(ins.p1, ins.p2)
         a.kind = 1; a.target = target; a.speed = Math.abs(speed); a.done = false
         return false
       }
       case OP_TURN: {
         const target = t.popI(); const speed = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animRot(ins.p1, ins.p2)
         a.kind = 2; a.target = target; a.speed = Math.abs(speed); a.done = false
         return false
       }
@@ -708,13 +732,13 @@ export class CobRuntime {
         // tick loop running so value accumulates each frame.  A
         // STOP_SPIN issues a decel that eventually flips done=true.
         const speed = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animRot(ins.p1, ins.p2)
         a.kind = 3; a.speed = speed; a.decel = 0; a.done = false
         return false
       }
       case OP_STOP_SPIN: {
         const decel = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animRot(ins.p1, ins.p2)
         if (a.kind === 3) { a.decel = Math.abs(decel) || a.speed; a.done = false }
         return false
       }
@@ -726,13 +750,13 @@ export class CobRuntime {
         // stack instead of reading a third operand.  done=true
         // immediately because the snap is instantaneous.
         const value = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animMove(ins.p1, ins.p2)
         a.kind = 1; a.value = value; a.target = value; a.speed = 0; a.done = true
         return false
       }
       case OP_TURN_NOW: {
         const value = t.popI()
-        const a = this._anim(ins.p1, ins.p2)
+        const a = this._animRot(ins.p1, ins.p2)
         a.kind = 2; a.value = value; a.target = value; a.speed = 0; a.done = true
         return false
       }
@@ -759,11 +783,12 @@ export class CobRuntime {
       case OP_WAIT_FOR_TURN: {
         // Wait until the (piece, axis) turn animator reports idle.
         // piece=p1, axis=p2 - same separated-operand layout as OP_TURN.
-        t.waitOn = { type: 'turn', key: this._animKey(ins.p1, ins.p2) }
+        // family='rot' routes _animDone() to the _rotAnims array.
+        t.waitOn = { type: 'turn', family: 'rot', key: this._animKey(ins.p1, ins.p2) }
         return true
       }
       case OP_WAIT_FOR_MOVE: {
-        t.waitOn = { type: 'move', key: this._animKey(ins.p1, ins.p2) }
+        t.waitOn = { type: 'move', family: 'move', key: this._animKey(ins.p1, ins.p2) }
         return true
       }
 

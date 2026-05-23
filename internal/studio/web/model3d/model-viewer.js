@@ -38,6 +38,15 @@ export class ModelViewer {
     // HEALTH < threshold (the SmokeUnit thread polls in a loop) so
     // bumping this slider lights up the SFX pipeline visibly.
     this.cobDamage = 0
+    // Build progress 0-100% drives the BUILD_PERCENT_LEFT port
+    // (TA returns 100 - build% via this port so SmokeUnit's intro
+    // `while (get BUILD_PERCENT_LEFT)` loop blocks until build
+    // completes).  Also drives the renderer's nano-frame fade
+    // effect — below 100% the unit renders as a pulsing green
+    // wireframe that crossfades into the textured model as it
+    // climbs.  Defaults 100 (= fully built) so freshly opened
+    // units show their normal textured appearance.
+    this.cobBuildPercent = 100
     this._pointerState = null
     this._resizeObserver = null
     this._wireInputs()
@@ -65,6 +74,53 @@ export class ModelViewer {
       (t) => t.script.name.toLowerCase() === 'smokeunit',
     )
     if (!alreadyRunning) this.cob.start('SmokeUnit')
+  }
+
+  // setBuildPercent sets the simulated build progress 0..100%.
+  // Forwards to the renderer so the nano-frame fade can update on
+  // the next draw.  COB scripts polling BUILD_PERCENT_LEFT see the
+  // change on their next iteration via the getUnitValue hook.
+  setBuildPercent(percent) {
+    this.cobBuildPercent = Math.max(0, Math.min(100, +percent || 0))
+    if (this.renderer) this.renderer.setBuildPercent(this.cobBuildPercent)
+  }
+
+  // resetState clears EVERYTHING the user could have driven on the
+  // current COB: kills threads, zeroes static vars, returns every
+  // animator to its rest pose, drops lifecycle state.  Pieces snap
+  // back to their original 3DO positions on the next render tick.
+  resetState() {
+    if (!this.cob) return
+    const rt = this.cob.runtime
+    rt.killAllThreads()
+    // Clear thread list completely (killAllThreads only marks
+    // dead; the next tick removes them, but we want it INSTANT).
+    rt._threads.length = 0
+    rt._recentlyKilled.length = 0
+    // Zero static vars in place so any subsequent script start
+    // sees the same blank-slate state Create would have set up.
+    for (let i = 0; i < rt.staticVars.length; i++) rt.staticVars[i] = 0
+    // Drop every animator slot so pieceOffset / pieceRotation
+    // return 0 immediately — the per-frame sync writes 0/0/0 into
+    // piece.move/rotate and the renderer draws the rest pose.
+    rt._moveAnims.length = 0
+    rt._rotAnims.length = 0
+    // Reset playback rate + drained-tick accumulator so the next
+    // script run starts at a clean clock.
+    rt._tickAccumMs = 0
+    // Restore every piece to fully visible — Create() typically
+    // hides muzzle flares + decorative panels, so the visibility
+    // state needs explicit reset back to the 3DO default of
+    // "everything shown".
+    for (let i = 0; i < rt._pieceVisible.length; i++) rt._pieceVisible[i] = true
+    // Drop lifecycle tracking — Activate/Deactivate go back to a
+    // fresh "no idea what state this is" path.
+    this.cob._lifecycle = undefined
+    // Drop SFX particles so smoke + sparks from prior runs vanish.
+    if (this.cob.particles) this.cob.particles.count = 0
+    // Force a redraw so the user sees the snap-back even when the
+    // renderer's idle (no auto-rotate, no pending animations).
+    if (this.renderer) this.renderer.requestRedraw()
   }
 
   // open initialises (or reuses) the WebGL pipeline and loads the named
@@ -130,31 +186,23 @@ export class ModelViewer {
             getUnitValue: (port) => {
               if (port === 4 /* HEALTH */) return Math.max(0, 100 - (this.cobDamage || 0))
               if (port === 1 /* ACTIVATION */) return 1
+              // BUILD_PERCENT_LEFT = 100 - built% so the script's
+              // common `while (get BUILD_PERCENT_LEFT)` idiom blocks
+              // until build progress hits 100 (LEFT hits 0).
+              if (port === 17 /* BUILD_PERCENT_LEFT */) return Math.max(0, 100 - (this.cobBuildPercent || 0))
               return 0
             },
           })
           this.cob = new CobBinding(model, runtime)
           this.renderer.setCobBinding(this.cob)
-          // TA convention: Create runs first (sets up initial
-          // piece positions), then Activate kicks off the
-          // running-state animations (radar dish spin, hide
-          // muzzle flares, etc.).  Fall through quietly when a
-          // script doesn't define either entry point - rare but
-          // a few features ship a stub COB.
-          if (this.cob.hasScript('Create')) this.cob.start('Create')
-          if (this.cob.hasScript('Activate')) this.cob.start('Activate')
-          // Seed the reload-time global the AimWeapon/RestoreAfter-
-          // Delay scripts read.  The bos source typically computes
-          // global_2 = reloadTime * 2 inside SetMaxReloadTime(); in
-          // a real match the engine calls that with the unit's FBI
-          // ReloadTime (3-5 seconds).  We don't have access to FBI
-          // here so seed a single sensible value via the same entry
-          // point — the script then populates its own globals and
-          // RestoreAfterDelay snaps the turret back ~6 seconds
-          // after the aim completes, matching in-game pacing.
-          if (this.cob.hasScript('SetMaxReloadTime')) {
-            this.cob.start('SetMaxReloadTime', [3000])
-          }
+          // Earlier this auto-fired Create + Activate so freshly-
+          // opened units stood in their idle "deployed" pose
+          // (factories with doors open, gantries with tower raised,
+          // construction bots with guncase open).  That hid the
+          // raw 3DO rest state, which is what most artists need to
+          // see when inspecting a model.  Removed — the user opens
+          // the unit in its un-animated rest geometry, then drives
+          // Create / Activate / etc from the Actions panel.
         }
       } catch (e) {
         console.warn(`[cob:${modelName}] fetch failed:`, e)

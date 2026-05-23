@@ -393,11 +393,17 @@
                 <input id="mv-cob-damage" type="range" min="0" max="100" step="5" value="0" />
                 <span class="slider-val" id="mv-cob-damage-val">0%</span>
               </div>
+              <div class="submenu-slider-row" title="Build progress 0-100%.  Under 100% renders the unit as a pulsing green nano-frame; at 100% the textures fade in fully.  Returned by GET BUILD_PERCENT_LEFT for scripts that poll it (SmokeUnit's intro check, factory nano-spray).">
+                <span class="slider-lbl">Build</span>
+                <input id="mv-cob-build" type="range" min="0" max="100" step="5" value="100" />
+                <span class="slider-val" id="mv-cob-build-val">100%</span>
+              </div>
               <div class="submenu-slider-row" title="Playback speed for COB animations.  0.25x = quarter speed (slow-motion inspection).  1.0x = real-time TA pacing.  2x = double speed.">
                 <span class="slider-lbl">Playback</span>
                 <input id="mv-cob-playback" type="range" min="10" max="200" step="5" value="100" />
                 <span class="slider-val" id="mv-cob-playback-val">1.0×</span>
               </div>
+              <button class="menu-row" id="mv-cob-reset" title="Reset every piece to its original 3DO position, kill all COB threads, and zero all static vars.  The unit returns to its raw rest state — exactly as it would look just after Open with no scripts run."><span class="ico">↺</span><span>Reset State</span></button>
               <div class="menu-section-label">All scripts</div>
               <div id="mv-cob-script-list" class="cob-script-list">
                 <div class="cob-empty">No COB attached.</div>
@@ -487,6 +493,7 @@
         <div class="mv-inspector-header" id="mv-inspector-actions-header">
           <span class="minimap-grip">⠿</span>
           <span>Actions</span>
+          <button class="minimap-toggle mv-actions-reset" id="mv-actions-reset" title="Reset every piece to its original 3DO position, kill all COB threads, and zero all static vars.">↺</button>
           <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-actions" title="Collapse">−</button>
           <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-actions" title="Close (re-open from View menu)">×</button>
         </div>
@@ -527,6 +534,30 @@
           <div class="dev-stats-row"><span class="dev-stats-label">FOV</span><span class="dev-stats-value" id="mv-ci-fov">—</span></div>
         </div>
       </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Thread code-view modal.  Pops over the model viewer when the
+       user clicks a thread row in the Threads panel.  Shows the
+       script's disassembly with the current PC line highlighted, plus
+       a locals tray.  Re-rendered each refresh tick while open so the
+       highlight tracks live execution. -->
+  <div id="mv-thread-code-modal" class="dialog hidden mv-thread-code-modal">
+    <div class="dialog-card mv-thread-code-card">
+      <div class="mv-thread-code-header">
+        <span class="mv-thread-code-title" id="mv-thread-code-title">Thread</span>
+        <span class="mv-thread-code-status" id="mv-thread-code-status"></span>
+        <button class="minimap-toggle" id="mv-thread-code-close" title="Close">×</button>
+      </div>
+      <div class="mv-thread-code-body">
+        <div class="mv-thread-code-source" id="mv-thread-code-source"></div>
+        <div class="mv-thread-code-locals">
+          <div class="mv-thread-code-locals-label">Locals</div>
+          <div class="mv-thread-code-locals-list" id="mv-thread-code-locals"></div>
+          <div class="mv-thread-code-locals-label">Stack</div>
+          <div class="mv-thread-code-locals-list" id="mv-thread-code-stack"></div>
+        </div>
       </div>
     </div>
   </div>
