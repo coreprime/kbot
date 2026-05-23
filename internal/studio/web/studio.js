@@ -11149,6 +11149,10 @@ async function activateModelTab(tab) {
       statusEl: $('#status'),
       onModelLoaded: (model) => renderPieceTree(model),
     })
+    // Expose the viewer + its renderer/camera on window so external
+    // tooling (the preview eval harness, dev console) can poke camera
+    // angles or sky presets without having to chase closures.
+    window.__modelViewer = modelViewerInstance
   }
   const autoBtn = $('#mv-act-autorotate')
   if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')

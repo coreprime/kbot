@@ -71,11 +71,20 @@ const SEA_WAVES_GLSL = `
     // matters mostly for the per-pixel normal).
     float A5a = sin(p5.x * 0.93 + p5.y * 0.47 + t * 3.85);
     float A5b = sin(p5.x * 0.27 - p5.y * 1.11 + t * 4.20);
-    float h = A1a * 0.55 + A1b * 0.55
+    // Slowly varying "gust" envelope: large patches of rougher water
+    // drift around the scene so the sea is more turbulent in some
+    // areas than others.  Range 0.55..1.75 — average wave near
+    // current amplitude, but pockets ~3× as tall (real cresting).
+    float gust = 1.0
+               + 0.35 * sin(xz.x * 0.018 + t * 0.13) * cos(xz.y * 0.020 - t * 0.10)
+               + 0.25 * sin((xz.x + xz.y) * 0.013 + t * 0.07)
+               + 0.15 * cos(xz.x * 0.031 - xz.y * 0.024 + t * 0.19);
+    gust = clamp(gust, 0.55, 1.75);
+    float h = (A1a * 0.55 + A1b * 0.55
             + A2a * 0.42 + A2b * 0.32
             + A3a * 0.22 + A3b * 0.18
             + A4a * 0.10 + A4b * 0.10
-            + A5a * 0.03 + A5b * 0.03;
+            + A5a * 0.03 + A5b * 0.03) * gust;
     // Slope: chain-rule each component.  freqs were declared above so
     // the partials follow directly — keep these in sync if the
     // amplitudes/frequencies change.
@@ -99,7 +108,10 @@ const SEA_WAVES_GLSL = `
               + cos(p4.x * 0.55 - p4.y * 1.21 + t * 2.65) * (-1.21) * 1.05 * 0.10
               + cos(p5.x * 0.93 + p5.y * 0.47 + t * 3.85) * 0.47 * 2.40 * 0.03
               + cos(p5.x * 0.27 - p5.y * 1.11 + t * 4.20) * (-1.11) * 2.40 * 0.03;
-    return vec3(h, dhx, dhz);
+    // Scale slopes by the same gust factor so the wave normal stays
+    // consistent with the displaced height (otherwise crests get
+    // gentle normals at the same time their geometry is doubled).
+    return vec3(h, dhx * gust, dhz * gust);
   }
 
   // seaCaustic: the dancing sun-net on the seabed.  Three offset
@@ -144,6 +156,94 @@ const SEA_WAVES_GLSL = `
     return dune + rock;
   }
 `
+
+// SKY_PRESETS: every aesthetic knob the skybox shader reads.  Each
+// preset is a fully-formed sky scheme — call ModelRenderer.setSky-
+// Scheme('alien-twin') and the whole sky redraws to match.  Adding a
+// new preset is a single object literal here — no shader edits.
+//
+// Keys:
+//   * zenith / horizon: gradient stops (linear-ish RGB; can exceed 1
+//     because the renderer doesn't tone-map the sky pass).
+//   * sun1 / sun2: { color, dir, size }.  color = [0,0,0] disables.
+//     size ~0.005 = pinpoint star, ~0.04 = soft halo.
+//   * cloudColor / cloudShadow: highlight + body tints.
+//   * cloudCoverage: 0..1, fraction of sky filled.
+//   * cloudDensity: 0..1, opacity of cloud bodies on top of sky.
+//   * cloudSpeed: drift velocity (UV units per second).
+//
+// The renderer falls back to sun1.dir = current scene lightDir when
+// the preset doesn't specify one — that way the unit's shadows match
+// the visible sun without the caller having to keep both in sync.
+const SKY_PRESETS = {
+  earth: {
+    name: 'Earth (day)',
+    zenith: [0.18, 0.42, 0.85],
+    horizon: [0.78, 0.86, 0.95],
+    // sun1 sits low above the horizon so it actually appears in the
+    // default camera view (which mostly looks at the unit, with a
+    // narrow strip of sky above).  The unit's shadow light direction
+    // is the renderer's separate `lightDir` — keeping them split
+    // lets us put the visible sun where the camera is pointing
+    // without disturbing the unit's shading.
+    zenith2: [0.18, 0.42, 0.85],
+    sun1: { color: [2.40, 1.95, 1.30], dir: [-0.45, 0.35, -0.85], size: 0.040 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [1.20, 1.18, 1.15],
+    cloudShadow: [0.45, 0.55, 0.70],
+    cloudCoverage: 0.78,
+    cloudDensity: 0.95,
+    cloudSpeed: 0.012,
+  },
+  sunset: {
+    name: 'Earth (sunset)',
+    zenith: [0.18, 0.18, 0.45],
+    horizon: [1.35, 0.55, 0.30],
+    sun1: { color: [2.60, 1.20, 0.45], dir: [-0.60, 0.18, 0.78], size: 0.055 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [1.30, 0.85, 0.65],
+    cloudShadow: [0.40, 0.22, 0.30],
+    cloudCoverage: 0.55,
+    cloudDensity: 0.85,
+    cloudSpeed: 0.008,
+  },
+  alienTwin: {
+    name: 'Alien (twin suns)',
+    zenith: [0.18, 0.05, 0.42],
+    horizon: [0.85, 0.45, 0.70],
+    sun1: { color: [2.20, 0.95, 0.40], dir: [-0.45, 0.35, 0.82], size: 0.045 },
+    sun2: { color: [0.65, 0.85, 1.60], dir: [0.45, 0.45, 0.78], size: 0.030 },
+    cloudColor: [0.85, 0.50, 0.70],
+    cloudShadow: [0.30, 0.08, 0.25],
+    cloudCoverage: 0.70,
+    cloudDensity: 0.75,
+    cloudSpeed: 0.020,
+  },
+  mars: {
+    name: 'Mars (dusty)',
+    zenith: [0.55, 0.32, 0.20],
+    horizon: [1.05, 0.65, 0.35],
+    sun1: { color: [1.55, 1.20, 0.85], dir: [-0.40, 0.30, 0.80], size: 0.030 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.75, 0.55, 0.40],
+    cloudShadow: [0.40, 0.22, 0.15],
+    cloudCoverage: 0.30,
+    cloudDensity: 0.45,
+    cloudSpeed: 0.025,
+  },
+  night: {
+    name: 'Earth (night)',
+    zenith: [0.02, 0.03, 0.10],
+    horizon: [0.08, 0.12, 0.22],
+    sun1: { color: [1.30, 1.35, 1.55], dir: [-0.50, 0.50, 0.70], size: 0.015 },
+    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
+    cloudColor: [0.30, 0.32, 0.38],
+    cloudShadow: [0.08, 0.10, 0.16],
+    cloudCoverage: 0.40,
+    cloudDensity: 0.55,
+    cloudSpeed: 0.006,
+  },
+}
 
 const MAIN_VS = `
   attribute vec3 aPos;
@@ -265,25 +365,29 @@ const MAIN_FS = `
     //     side-facing surfaces best, dances across them as the
     //     waves move.
     if (uSeaActive > 0.5) {
-      // 1 when surface faces sideways or down, 0 when straight up
-      // (no point trying to light a deck plate from below).
-      float fromBelow = clamp(0.85 - N.y * 0.7, 0.0, 1.0);
-      float caustic = seaCaustic(vWorldPos.xz, uTime);
-      vec3 bounceTint = vec3(0.30, 0.65, 1.05);
-      vec3 bounce = bounceTint * caustic * fromBelow * 0.85;
-      // Sun shimmer: reflect the sun across an animated wave normal
-      // sampled just below the unit's XZ, and check how aligned the
-      // reflected ray is with the hull's surface normal — if so the
-      // wave is mirroring the sun straight onto this fragment.
-      vec3 hs = seaWaveHS(vWorldPos.xz, uTime);
-      vec3 waveN = normalize(vec3(-hs.y, 1.0, -hs.z));
-      vec3 sunRefl = reflect(-L, waveN);
-      float shimmerAlign = pow(max(0.0, dot(sunRefl, -N)), 8.0);
-      float shimmerNoise = sin(vWorldPos.x * 7.0 + uTime * 3.1)
-                         * sin(vWorldPos.z * 9.0 + uTime * 2.7);
-      float shimmer = shimmerAlign * smoothstep(0.20, 0.95, abs(shimmerNoise));
-      bounce += vec3(1.85, 1.55, 1.10) * shimmer * fromBelow;
-      lighting += bounce;
+      // fromBelow gates the bounce light to surfaces facing the
+      // water — sides and underside.  Deck plates (N.y > 0.4) get
+      // exactly zero contribution so the top of the unit isn't
+      // painted with the water shader by mistake.  smoothstep
+      // crosses zero at N.y ≈ 0.4 and rises to 1.0 by N.y ≈ -0.3.
+      float fromBelow = 1.0 - smoothstep(-0.3, 0.4, N.y);
+      if (fromBelow > 0.0) {
+        float caustic = seaCaustic(vWorldPos.xz, uTime);
+        vec3 bounceTint = vec3(0.30, 0.65, 1.05);
+        vec3 bounce = bounceTint * caustic * fromBelow * 0.85;
+        // Sun shimmer — reflect the sun across the wave normal at the
+        // unit's XZ; if the reflected ray hits the hull, paint a
+        // bright sparkle there.
+        vec3 hs = seaWaveHS(vWorldPos.xz, uTime);
+        vec3 waveN = normalize(vec3(-hs.y, 1.0, -hs.z));
+        vec3 sunRefl = reflect(-L, waveN);
+        float shimmerAlign = pow(max(0.0, dot(sunRefl, -N)), 8.0);
+        float shimmerNoise = sin(vWorldPos.x * 7.0 + uTime * 3.1)
+                           * sin(vWorldPos.z * 9.0 + uTime * 2.7);
+        float shimmer = shimmerAlign * smoothstep(0.20, 0.95, abs(shimmerNoise));
+        bounce += vec3(1.85, 1.55, 1.10) * shimmer * fromBelow;
+        lighting += bounce;
+      }
     }
 
     vec3 col = base.rgb * lighting;
@@ -354,23 +458,168 @@ const SHADOW_FS = `
 
 // ── Sky: vertical gradient quad ──────────────────────────────────────
 
+// SKY_VS draws a fullscreen triangle pair at the far plane.  The
+// fragment shader uses uInvViewProj to project NDC back into a
+// world-space view direction; that direction drives the gradient,
+// sun discs, and procedural cloud sampling.
 const SKY_VS = `
   attribute vec2 aPos;
-  varying vec2 vPos;
+  varying vec2 vNDC;
   void main() {
-    vPos = aPos;
-    gl_Position = vec4(aPos, 0.0, 1.0);
+    vNDC = aPos;
+    gl_Position = vec4(aPos, 1.0, 1.0);
   }
 `
 
+// SKY_FS implements a parameterisable skybox:
+//   * Zenith/horizon gradient (uZenith / uHorizon).
+//   * Up to two suns (uSun1Color/Dir/Size, uSun2Color/Dir/Size).
+//     A zero-magnitude colour disables that sun.
+//   * Procedural fbm clouds at a configurable altitude band, with
+//     drift speed and shadow tint.
+// All knobs are uniforms so the JS side can pick a preset per render
+// (earth, twin-sun alien, mars, etc.) without touching the shader.
 const SKY_FS = `
-  precision mediump float;
-  varying vec2 vPos;
-  uniform vec3 uTop;
-  uniform vec3 uBottom;
+  precision highp float;
+  varying vec2 vNDC;
+  uniform mat4 uInvViewProj;
+  uniform vec3 uEyePos;
+  uniform vec3 uZenith;
+  uniform vec3 uHorizon;
+  uniform vec3 uSun1Color;
+  uniform vec3 uSun1Dir;
+  uniform float uSun1Size;
+  uniform vec3 uSun2Color;
+  uniform vec3 uSun2Dir;
+  uniform float uSun2Size;
+  uniform vec3 uCloudColor;
+  uniform vec3 uCloudShadow;
+  uniform float uCloudCoverage;
+  uniform float uCloudDensity;
+  uniform float uCloudSpeed;
+  uniform float uTime;
+
+  // Hash + value noise + fbm.  Compact enough to fit in WebGL1 and
+  // accurate enough that a 5-octave fbm reads as drifting clouds
+  // rather than checkerboard noise.
+  float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+  }
+  float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 5; i++) {
+      v += a * vnoise(p);
+      p = p * 2.07 + vec2(11.7, 5.3);
+      a *= 0.5;
+    }
+    return v;
+  }
+
+  // sunDisc combines a sharp pow() falloff for the sun's body and a
+  // looser pow() for the surrounding glow.  uSize maps to the dot
+  // exponent: smaller → wider disc (closer to 1.0 means crisp
+  // pinpoint sun, larger means soft halo with no defined edge).
+  vec3 sunDisc(vec3 dir, vec3 sunDir, vec3 sunColor, float size) {
+    if (dot(sunColor, sunColor) < 0.0001) return vec3(0.0);
+    float a = max(0.0, dot(dir, normalize(sunDir)));
+    // Disc body: very sharp peak.
+    float discE = max(1.0, 1.0 / max(size, 0.0005));
+    float body = pow(a, discE);
+    // Outer glow: softer, broader.
+    float halo = pow(a, max(20.0, discE * 0.08)) * 0.45;
+    return sunColor * (body + halo);
+  }
+
   void main() {
-    float t = clamp(vPos.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 col = mix(uBottom, uTop, smoothstep(0.0, 1.0, t));
+    // Reconstruct a world-space ray through this NDC fragment.  The
+    // near + far points come from inv(VP)·(x,y,±1); their direction
+    // is the view ray.  Using ±1 instead of just the far point keeps
+    // the math stable even when the camera near plane is tiny.
+    vec4 nearH = uInvViewProj * vec4(vNDC, -1.0, 1.0);
+    vec4 farH  = uInvViewProj * vec4(vNDC,  1.0, 1.0);
+    vec3 nearW = nearH.xyz / nearH.w;
+    vec3 farW  = farH.xyz / farH.w;
+    vec3 dir = normalize(farW - nearW);
+
+    // Vertical gradient driven by the ray's Y component.  smoothstep
+    // pulls the horizon line down slightly so the zenith colour
+    // dominates upward views without a hard band.
+    float y = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 col = mix(uHorizon, uZenith, smoothstep(0.40, 0.95, y));
+
+    // Suns: each contributes a disc + halo, additively on top of the
+    // sky.  Disabled when colour is the zero vector.
+    col += sunDisc(dir, uSun1Dir, uSun1Color, uSun1Size);
+    col += sunDisc(dir, uSun2Dir, uSun2Color, uSun2Size);
+
+    // Procedural clouds at altitude.  Projected onto a flat cloud
+    // sheet at unit height; the dir.y > 0 branch keeps the
+    // projection sane when the camera looks at the horizon.  Two
+    // octaves of fbm break the cloud puffs into bodies + wispy
+    // edges; the horizon fade is gentle so even small upward
+    // angles pick up a few clouds drifting in.
+    //
+    // cMask is also fed back into the god-ray calculation below
+    // (beams shine through GAPS in clouds, not through dense bodies),
+    // so we compute it outside the dir.y > 0 guard at default 0.
+    float cMask = 0.0;
+    if (dir.y > 0.005) {
+      vec2 cp = dir.xz / max(dir.y, 0.005) * 0.40 + vec2(uTime * uCloudSpeed, uTime * uCloudSpeed * 0.7);
+      float c = fbm(cp);
+      float c2 = fbm(cp * 0.45 - 1.7);
+      cMask = smoothstep(1.0 - uCloudCoverage, 1.0 - uCloudCoverage + 0.30, c * (c2 + 0.3) * 1.8);
+      vec3 cloudCol = mix(uCloudShadow, uCloudColor, smoothstep(0.25, 0.95, c));
+      float horizonFade = smoothstep(0.01, 0.18, dir.y);
+      col = mix(col, cloudCol, cMask * uCloudDensity * horizonFade);
+    }
+
+    // ── God-rays / crepuscular beams ─────────────────────────
+    // Radial streaks emanating from the sun, brightest where the
+    // view direction is near the sun and the cloud cover is low.
+    // The stripe pattern uses an angular noise of the tangent
+    // component (dir minus its projection onto the sun direction);
+    // that gives streaks that radiate outward from the sun rather
+    // than wrap around the sphere.  Multiple sines of the angle
+    // create irregular thick/thin beams instead of a perfect fan.
+    if (dot(uSun1Color, uSun1Color) > 0.0001) {
+      vec3 toSun = normalize(uSun1Dir);
+      vec3 tang = dir - toSun * dot(dir, toSun);
+      float tLen = length(tang);
+      // Angular direction around the sun (radians).
+      float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
+      float beam = 0.5 + 0.5 * sin(ang * 16.0 + uTime * 0.10);
+      beam *= 0.5 + 0.5 * sin(ang * 7.3 - 0.7);
+      // Beams strongest in a cone around the sun, fading with
+      // angular distance.  Gated by the cloud GAP (1 - cMask) so
+      // they shine through cloud breaks like the real thing.
+      float coneFall = exp(-tLen * 3.5);
+      float gap = 1.0 - smoothstep(0.4, 0.85, cMask);
+      float upward = smoothstep(-0.05, 0.20, dir.y);
+      col += uSun1Color * beam * coneFall * gap * upward * 0.55;
+    }
+    if (dot(uSun2Color, uSun2Color) > 0.0001) {
+      vec3 toSun = normalize(uSun2Dir);
+      vec3 tang = dir - toSun * dot(dir, toSun);
+      float tLen = length(tang);
+      float ang = atan(tang.y, dot(tang, normalize(vec3(toSun.z, 0.0, -toSun.x) + 1e-5)));
+      float beam = 0.5 + 0.5 * sin(ang * 16.0 + uTime * 0.10);
+      beam *= 0.5 + 0.5 * sin(ang * 7.3 - 0.7);
+      float coneFall = exp(-tLen * 3.5);
+      float gap = 1.0 - smoothstep(0.4, 0.85, cMask);
+      float upward = smoothstep(-0.05, 0.20, dir.y);
+      col += uSun2Color * beam * coneFall * gap * upward * 0.45;
+    }
+
     gl_FragColor = vec4(col, 1.0);
   }
 `
@@ -446,6 +695,7 @@ const GROUND_FS = `
   uniform vec3 uEyePos;          // camera world position — Sea Fresnel needs the real view dir
   uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
   uniform float uSeabedY;        // base Y of the seabed plane (below uGroundY)
+  uniform vec3 uHorizonColor;    // sky horizon colour — sea fades to this at distance
 
   float sampleShadow() {
     if (uShadowEnabled < 0.5) return 1.0;
@@ -466,7 +716,13 @@ const GROUND_FS = `
   void main() {
     vec2 g = vWorldPos.xz - uCenter.xz;
     float d = length(g);
-    float fade = clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0);
+    // In Sea mode the ocean extends to the horizon — never fade.
+    // Other ground modes fade out beyond ~1.8× the unit's radius so
+    // the procedural ground stays an unobtrusive backdrop for the
+    // unit, not a horizon-filling plane.
+    float fade = (uGroundMode == 2 || uSeabedActive > 0.5)
+                ? 1.0
+                : clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0);
     float shadow = sampleShadow();
 
     if (uGroundMode == 0) {
@@ -497,22 +753,25 @@ const GROUND_FS = `
     if (uSeabedActive > 0.5) {
       // ── Seabed pass: rocks + dunes lit by caustic light from
       // above.  Drawn first, depth-tested under the water surface.
+      // Dark palette — the bed should read as silt/wet rock seen
+      // through metres of blue water, not bright sand on a beach.
       float bedH = seabedHeight(vWorldPos.xz);
-      // Sand vs rock by elevation.
-      vec3 sand = vec3(0.90, 0.80, 0.62);
-      vec3 rock = vec3(0.42, 0.36, 0.30);
+      vec3 sand = vec3(0.28, 0.24, 0.20);
+      vec3 rock = vec3(0.14, 0.12, 0.10);
       float rockMix = smoothstep(0.4, 2.0, bedH);
       vec3 col = mix(sand, rock, rockMix);
-      // Caustic net dances across the bed.  Tinted with the water
-      // column so the light bands carry the lagoon's blue through
-      // to the bottom.
+      // Caustic net dances across the bed, dimmer than before so the
+      // bed reads as "dark with bright light bands" rather than
+      // "bright everywhere".
       float caustic = seaCaustic(vWorldPos.xz, uTime);
-      col += caustic * vec3(0.55, 0.85, 1.00) * 0.95;
-      // Fake an "above-light" diffuse: sun mostly comes through the
-      // surface, so we boost the unshadowed contribution and let
-      // the caustic do most of the lighting work.  Real shadow
-      // from above is too sharp to read underwater.
-      col *= 0.55 + 0.45 * shadow;
+      col += caustic * vec3(0.45, 0.70, 0.95) * 0.55;
+      col *= 0.45 + 0.35 * shadow;
+      // Seabed also fades into the horizon colour at distance so
+      // the far-edge isn't a sharp ring of dark seafloor visible
+      // through the haze of the water surface above.
+      float dCamBed = length(uEyePos - vWorldPos);
+      float bedHaze = smoothstep(500.0, 2200.0, dCamBed);
+      col = mix(col, uHorizonColor * 0.45, bedHaze);
       gl_FragColor = vec4(col, 1.0);
       return;
     }
@@ -528,17 +787,25 @@ const GROUND_FS = `
       float h = hs.x;
       float dhx = hs.y;
       float dhz = hs.z;
-      vec3 wn = normalize(vec3(-dhx, 1.0, -dhz));
-      float slope = length(vec2(dhx, dhz));
+      // Distance fade: at range, the per-pixel wave normal aliases
+      // into a noisy "white box" moire.  Damp the slopes toward a
+      // flat normal as the camera distance grows, and gate all the
+      // high-frequency embellishments (foam, sparkles, specular)
+      // by the same factor.  The sea reads crisp up close and
+      // smoothly merges into a haze band at the horizon.
+      float dCam = length(uEyePos - vWorldPos);
+      float closeUp = 1.0 - smoothstep(120.0, 600.0, dCam);
+      vec3 wn = normalize(vec3(-dhx * closeUp, 1.0, -dhz * closeUp));
+      float slope = length(vec2(dhx, dhz)) * closeUp;
 
-      // ── Water column: cobalt → navy → midnight ───────────────
-      // Bluer than the previous turquoise palette so the deep parts
-      // read as ocean, not lagoon.  Three stops blend by an
-      // "absorption" proxy that uses wave height (crests are
-      // optically shallower).
-      vec3 shallowTint = vec3(0.10, 0.45, 0.85);
-      vec3 midTint     = vec3(0.04, 0.22, 0.62);
-      vec3 deepTint    = vec3(0.02, 0.08, 0.24);
+      // ── Water column: aqua → teal → navy ─────────────────────
+      // Aqua palette — more green than the previous cobalt so
+      // shallows read as tropical / Caribbean.  Three stops blend
+      // by an absorption proxy that uses wave height (crests are
+      // optically shallower than troughs).
+      vec3 shallowTint = vec3(0.20, 0.78, 0.82);
+      vec3 midTint     = vec3(0.08, 0.45, 0.62);
+      vec3 deepTint    = vec3(0.02, 0.12, 0.28);
       float depthProxy = 1.6 - h;
       float absorb = exp(-depthProxy * 0.55);
       vec3 waterCol = mix(deepTint, midTint, smoothstep(0.0, 0.55, absorb));
@@ -548,23 +815,23 @@ const GROUND_FS = `
       vec3 V = normalize(uEyePos - vWorldPos);
       float ndv = max(0.0, dot(wn, V));
       float fresnel = pow(1.0 - ndv, 4.0);
-      // Sky gradient: zenith blue, horizon warm peach.  Stops over
-      // 1.0 because the tone-map pulls them back into range without
-      // robbing saturation.
       vec3 skyTop = vec3(0.32, 0.58, 1.10);
       vec3 skyHor = vec3(1.15, 0.92, 0.65);
       vec3 sky = mix(skyTop, skyHor, fresnel);
       vec3 L = normalize(uLightDir);
       vec3 H = normalize(L + V);
       float ndh = max(0.0, dot(wn, H));
-      float specBroad = pow(ndh, 28.0) * 0.95;
-      float specTight = pow(ndh, 140.0) * 2.80;
-      vec3 sunColor = vec3(1.40, 1.18, 0.85);
+      // Specular pumped up — the user wants brighter sun highlights.
+      // Broad halo + tight pinpoint, both gated by closeUp so the
+      // distant sea doesn't smear into white.
+      float specBroad = pow(ndh, 24.0) * 1.30 * closeUp;
+      float specTight = pow(ndh, 140.0) * 3.60 * closeUp;
+      vec3 sunColor = vec3(1.55, 1.30, 0.90);
       float reflectivity = 0.10 + 0.90 * fresnel;
       vec3 surface = mix(waterCol, sky, reflectivity);
       surface += (specBroad + specTight) * sunColor;
 
-      // ── Sun-glint sparkles dancing on wave peaks ─────────────
+      // ── Sun-glint sparkles — heavily faded at distance ──────
       vec3 Rd = reflect(-L, wn);
       float sparkleAlign = pow(max(0.0, dot(Rd, V)), 90.0) * 0.9
                          + pow(max(0.0, dot(Rd, V)), 280.0) * 3.0;
@@ -572,35 +839,43 @@ const GROUND_FS = `
                          * sin(vWorldPos.z * 11.0 + t * 2.3)
                          * sin((vWorldPos.x + vWorldPos.z) * 5.0 - t * 1.7);
       float sparkle = sparkleAlign * smoothstep(0.28, 0.95, abs(sparkleNoise));
-      surface += vec3(4.2, 3.80, 3.00) * sparkle;
+      float sparkleFade = 1.0 - smoothstep(80.0, 350.0, dCam);
+      surface += vec3(4.2, 3.80, 3.00) * sparkle * sparkleFade;
 
       // ── Sub-surface scatter: backlit crest glow ──────────────
       float backlit = pow(max(0.0, dot(L, -V)) * 0.5 + 0.5, 2.0)
                     * smoothstep(0.20, 0.80, h);
-      surface += vec3(0.18, 0.55, 0.95) * backlit * 0.55;
+      surface += vec3(0.18, 0.55, 0.95) * backlit * 0.55 * closeUp;
 
-      // ── Foam ─────────────────────────────────────────────────
-      // Three contributions:
-      //   * Crest foam — accumulates on the very top of tall waves.
-      //   * Breaking foam — slopes + height: where the wave is steep
-      //     and tall it has "broken".
-      //   * Haze foam — small streaks from chop.
+      // ── Foam (crests + breaking + haze), all distance-faded ─
       float crestFoam = smoothstep(1.10, 2.10, h) * 0.95;
       float breakingFoam = smoothstep(0.30, 0.55, slope) * smoothstep(0.40, 0.95, h);
       float hazeFoam     = smoothstep(0.12, 0.28, slope) * 0.35;
+      float foamFade = 1.0 - smoothstep(120.0, 500.0, dCam);
       surface = mix(surface, vec3(1.08, 1.10, 1.12),
-                    clamp(crestFoam + breakingFoam + hazeFoam * 0.5, 0.0, 0.92));
+                    clamp(crestFoam + breakingFoam + hazeFoam * 0.5, 0.0, 0.92) * foamFade);
 
-      surface *= mix(1.0, shadow, 0.18 * fade);
+      surface *= mix(1.0, shadow, 0.18);
       surface = surface / (surface * 0.55 + vec3(0.55));
-      // Alpha: shallower (seabed close to surface) ⇒ more
-      // transparent so rocks show through; deeper sand → opaque
-      // blue.  bedDepth is positive distance from surface to bed.
+
+      // ── Horizon haze: sea fades into the sky ────────────────
+      // Long-distance mix toward the sky's horizon colour gives
+      // the sea an infinite-looking edge.  uHorizonColor is set
+      // each frame from the active sky scheme so the haze always
+      // matches whatever sky is painted behind it.
+      float horizonMix = smoothstep(500.0, 2400.0, dCam);
+      surface = mix(surface, uHorizonColor, horizonMix * 0.92);
+
+      // Alpha: aqua water is more translucent overall, with a
+      // little extra opacity at high Fresnel.  At extreme distance
+      // alpha climbs to full so the haze tint wins cleanly over
+      // anything behind.
       float bedAtXZ = uSeabedY + seabedHeight(vWorldPos.xz);
       float bedDepth = max(0.0, vWorldPos.y - bedAtXZ);
-      float aOut = mix(0.30, 0.92, smoothstep(0.4, 3.5, bedDepth));
-      aOut = mix(aOut, 0.95, fresnel * 0.6) * fade;
-      gl_FragColor = vec4(surface, aOut);
+      float aOut = mix(0.55, 0.90, smoothstep(1.0, 6.0, bedDepth));
+      aOut = mix(aOut, 0.97, fresnel * 0.6);
+      aOut = mix(aOut, 1.0, horizonMix);
+      gl_FragColor = vec4(surface, aOut * fade);
       return;
     }
 
@@ -628,6 +903,11 @@ export class ModelRenderer {
     // the light from the model — typical convention for dot(N, L).
     this.lightDir = ModelRenderer.#normalise([-0.6, 0.95, 0.4])
     this.lightColor = [1.05, 1.0, 0.92]
+    // skyScheme picks the gradient + suns + clouds painted by the
+    // skybox shader.  Setter `setSkyScheme(name)` swaps presets at
+    // runtime; the renderer doesn't care which preset is active —
+    // it just hands the uniforms to the GPU each frame.
+    this.skyScheme = SKY_PRESETS.earth
     this.skyColor = [0.65, 0.7, 0.78]
     this.groundColor = [0.18, 0.16, 0.13]
     this.skyTop = [0.35, 0.45, 0.6]
@@ -750,6 +1030,26 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setSkyScheme swaps the skybox preset.  Accepts a preset name
+  // (key of SKY_PRESETS) or a fully-formed scheme object — the
+  // latter lets callers script bespoke skies without touching the
+  // preset table.  Falls back silently to the current scheme if the
+  // name isn't recognised.
+  setSkyScheme(nameOrScheme) {
+    if (typeof nameOrScheme === 'string') {
+      const preset = SKY_PRESETS[nameOrScheme]
+      if (!preset) return
+      this.skyScheme = preset
+    } else if (nameOrScheme && nameOrScheme.zenith) {
+      this.skyScheme = nameOrScheme
+    }
+    this.requestRedraw()
+  }
+
+  // skyPresets exposes the available named presets to the UI so the
+  // host (Studio) can populate a picker without re-importing them.
+  static get skyPresets() { return SKY_PRESETS }
+
   resize() {
     const dpr = Math.min(2, window.devicePixelRatio || 1)
     const w = Math.max(1, Math.floor(this.canvas.clientWidth * dpr))
@@ -829,7 +1129,10 @@ export class ModelRenderer {
       this.model.bounds.max[1] - this.model.bounds.min[1],
       this.model.bounds.max[2] - this.model.bounds.min[2],
     )
-    this.camera.updateMatrices(aspect, Math.max(0.05, span * 0.01), Math.max(100, span * 20 + 200))
+    // Far plane has to reach the new ~2.5 km sea horizon — the
+    // ground tessellation extends much further than the unit so the
+    // water + seabed are visible all the way out.
+    this.camera.updateMatrices(aspect, Math.max(0.05, span * 0.01), Math.max(6000, span * 30 + 1000))
 
     // Shadow pass is meaningful only when the main pass actually uses
     // shadows.  In Flat / Wireframe modes we skip it to save GPU.
@@ -960,8 +1263,33 @@ export class ModelRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this._skyVBO)
     gl.enableVertexAttribArray(this.aSkyPos)
     gl.vertexAttribPointer(this.aSkyPos, 2, gl.FLOAT, false, 0, 0)
-    gl.uniform3fv(this.uSkyTop, this.skyTop)
-    gl.uniform3fv(this.uSkyBottom, this.skyBottom)
+    // Build inv(view*proj) so the fragment shader can recover a
+    // world-space ray for each pixel.  The matrix changes only when
+    // the camera moves so a per-frame inversion is cheap.
+    Mat4.invert(this._invProj, this.camera.projMatrix)
+    Mat4.invert(this._invView, this.camera.viewMatrix)
+    Mat4.multiply(this._invVP, this._invView, this._invProj)
+    gl.uniformMatrix4fv(this.uSkyInvVP, false, this._invVP)
+    gl.uniform3fv(this.uSkyEyePos, this.camera.eye)
+    const s = this.skyScheme
+    gl.uniform3fv(this.uSkyZenith, s.zenith)
+    gl.uniform3fv(this.uSkyHorizon, s.horizon)
+    // Sun 1 — direction is the main scene light direction, normalised
+    // by the renderer's own normalise (lightDir already is).
+    gl.uniform3fv(this.uSkySun1Col, s.sun1.color)
+    gl.uniform3fv(this.uSkySun1Dir, s.sun1.dir || this.lightDir)
+    gl.uniform1f(this.uSkySun1Size, s.sun1.size)
+    // Sun 2 — colour [0,0,0] means "off"; pass anyway to avoid
+    // uniform-undefined warnings on some drivers.
+    gl.uniform3fv(this.uSkySun2Col, s.sun2.color)
+    gl.uniform3fv(this.uSkySun2Dir, s.sun2.dir)
+    gl.uniform1f(this.uSkySun2Size, s.sun2.size)
+    gl.uniform3fv(this.uSkyCloudCol, s.cloudColor)
+    gl.uniform3fv(this.uSkyCloudShd, s.cloudShadow)
+    gl.uniform1f(this.uSkyCloudCov, s.cloudCoverage)
+    gl.uniform1f(this.uSkyCloudDen, s.cloudDensity)
+    gl.uniform1f(this.uSkyCloudSpd, s.cloudSpeed)
+    gl.uniform1f(this.uSkyTime, (performance.now() - this._t0) / 1000)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
     gl.disableVertexAttribArray(this.aSkyPos)
   }
@@ -1009,6 +1337,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundTime, (performance.now() - this._t0) / 1000)
     gl.uniform3fv(this.uGroundLightDir, this.lightDir)
     gl.uniform3fv(this.uGroundEyePos, this.camera.eye)
+    gl.uniform3fv(this.uGroundHorizonColor, this.skyScheme.horizon)
     if (this._terrainTex) {
       gl.activeTexture(gl.TEXTURE2)
       gl.bindTexture(gl.TEXTURE_2D, this._terrainTex)
@@ -1019,7 +1348,10 @@ export class ModelRenderer {
     // shader's per-fragment alpha drops where the bed sits close to
     // the surface so the rocks visibly poke through.  Other ground
     // modes skip the seabed pass entirely.
-    const seabedY = groundY - 4.0
+    // Seabed sits well below the water plane so even tall rock peaks
+    // never reach into the wave troughs above; 7 wu down is enough
+    // breathing room for the 2-ish wu rocks + the ~2.6 wu wave dip.
+    const seabedY = groundY - 7.0
     gl.uniform1f(this.uGroundSeabedY, seabedY)
     if (this.groundMode === 'sea') {
       // Pass 1: seabed (opaque).  Write depth normally so the water
@@ -1278,11 +1610,20 @@ export class ModelRenderer {
     const ph4b = p4x * 0.55 - p4z * 1.21 + t * 2.65
     const ph5a = p5x * 0.93 + p5z * 0.47 + t * 3.85
     const ph5b = p5x * 0.27 - p5z * 1.11 + t * 4.20
-    const h = Math.sin(ph1a) * 0.55 + Math.sin(ph1b) * 0.55
-            + Math.sin(ph2a) * 0.42 + Math.sin(ph2b) * 0.32
-            + Math.sin(ph3a) * 0.22 + Math.sin(ph3b) * 0.18
-            + Math.sin(ph4a) * 0.10 + Math.sin(ph4b) * 0.10
-            + Math.sin(ph5a) * 0.03 + Math.sin(ph5b) * 0.03
+    // Same gust envelope as GLSL — keeps the JS-sampled bob in sync
+    // with the visible surface during the rougher patches.
+    let gust = 1.0
+             + 0.35 * Math.sin(x * 0.018 + t * 0.13) * Math.cos(z * 0.020 - t * 0.10)
+             + 0.25 * Math.sin((x + z) * 0.013 + t * 0.07)
+             + 0.15 * Math.cos(x * 0.031 - z * 0.024 + t * 0.19)
+    if (gust < 0.55) gust = 0.55
+    if (gust > 1.75) gust = 1.75
+    const hRaw = Math.sin(ph1a) * 0.55 + Math.sin(ph1b) * 0.55
+               + Math.sin(ph2a) * 0.42 + Math.sin(ph2b) * 0.32
+               + Math.sin(ph3a) * 0.22 + Math.sin(ph3b) * 0.18
+               + Math.sin(ph4a) * 0.10 + Math.sin(ph4b) * 0.10
+               + Math.sin(ph5a) * 0.03 + Math.sin(ph5b) * 0.03
+    const h = hRaw * gust
     const dhx = Math.cos(ph1a) * 0.97 * 0.085 * 0.55
               + Math.cos(ph1b) * (-0.18) * 0.085 * 0.55
               + Math.cos(ph2a) * 0.78 * 0.21 * 0.42
@@ -1303,7 +1644,7 @@ export class ModelRenderer {
               + Math.cos(ph4b) * (-1.21) * 1.05 * 0.10
               + Math.cos(ph5a) * 0.47 * 2.40 * 0.03
               + Math.cos(ph5b) * (-1.11) * 2.40 * 0.03
-    return { h, dhx, dhz }
+    return { h, dhx: dhx * gust, dhz: dhz * gust }
   }
 
   // _applySeaBob composes T(0, h, 0) * Rx(pitch) * Rz(roll) onto a
@@ -1400,8 +1741,22 @@ export class ModelRenderer {
     this.programSky = prog
     const gl = this.gl
     this.aSkyPos = gl.getAttribLocation(prog, 'aPos')
-    this.uSkyTop = gl.getUniformLocation(prog, 'uTop')
-    this.uSkyBottom = gl.getUniformLocation(prog, 'uBottom')
+    this.uSkyInvVP    = gl.getUniformLocation(prog, 'uInvViewProj')
+    this.uSkyEyePos   = gl.getUniformLocation(prog, 'uEyePos')
+    this.uSkyZenith   = gl.getUniformLocation(prog, 'uZenith')
+    this.uSkyHorizon  = gl.getUniformLocation(prog, 'uHorizon')
+    this.uSkySun1Col  = gl.getUniformLocation(prog, 'uSun1Color')
+    this.uSkySun1Dir  = gl.getUniformLocation(prog, 'uSun1Dir')
+    this.uSkySun1Size = gl.getUniformLocation(prog, 'uSun1Size')
+    this.uSkySun2Col  = gl.getUniformLocation(prog, 'uSun2Color')
+    this.uSkySun2Dir  = gl.getUniformLocation(prog, 'uSun2Dir')
+    this.uSkySun2Size = gl.getUniformLocation(prog, 'uSun2Size')
+    this.uSkyCloudCol = gl.getUniformLocation(prog, 'uCloudColor')
+    this.uSkyCloudShd = gl.getUniformLocation(prog, 'uCloudShadow')
+    this.uSkyCloudCov = gl.getUniformLocation(prog, 'uCloudCoverage')
+    this.uSkyCloudDen = gl.getUniformLocation(prog, 'uCloudDensity')
+    this.uSkyCloudSpd = gl.getUniformLocation(prog, 'uCloudSpeed')
+    this.uSkyTime     = gl.getUniformLocation(prog, 'uTime')
     // Full-screen triangle pair in NDC.
     const buf = gl.createBuffer()
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
@@ -1410,6 +1765,10 @@ export class ModelRenderer {
       -1, -1, 1, 1, -1, 1,
     ]), gl.STATIC_DRAW)
     this._skyVBO = buf
+    // Scratch matrices for inv(view-proj) computation each frame.
+    this._invProj = Mat4.create()
+    this._invView = Mat4.create()
+    this._invVP   = Mat4.create()
   }
 
   #initGroundProgram() {
@@ -1436,26 +1795,33 @@ export class ModelRenderer {
     this.uGroundEyePos = gl.getUniformLocation(prog, 'uEyePos')
     this.uGroundSeabedY = gl.getUniformLocation(prog, 'uSeabedY')
     this.uGroundSeabedActive = gl.getUniformLocation(prog, 'uSeabedActive')
+    this.uGroundHorizonColor = gl.getUniformLocation(prog, 'uHorizonColor')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at
     // ~60 world units across).
-    // Tessellated sea-plane: the swell needs real vertex displacement
-    // to read as a 3D surface, so the quad becomes a NxN triangle grid.
-    // 96² (≈9.2k tris) is comfortably within mobile GPU budgets and
-    // gives ~4 wu spacing — finer than the shortest swell wavelength
-    // so crests aren't aliased.  Grid mode / Terrain / Off all just
-    // ignore the extra vertices (their Y is uGroundY).
-    const half = 200
+    // Tessellated sea-plane.  The grid extends to ~2.5 km on a side
+    // so the water + seabed reach the horizon; tessellation is dense
+    // near the centre and exponentially coarser at the edge so the
+    // GPU only pays for waves where the camera can actually see them.
+    //   * Inner ring (~600 wu radius) — fine vertices, sharp swells.
+    //   * Outer rings — coarse vertices, faked flat at distance.
+    // Non-uniform mapping: cube the parameter t∈[-1,1] so spacing
+    // near 0 is tight and spacing near ±1 is loose.  Total ~96² ≈
+    // 9k quads, well within mobile budgets.
+    const half = 2500
     const N = 96
     const verts = []
-    const step = (2 * half) / N
+    // Build a 1-D ramp of x coordinates with cubic spacing.
+    const xs = new Array(N + 1)
+    for (let i = 0; i <= N; i++) {
+      const t = (i / N) * 2 - 1               // -1..1
+      xs[i] = Math.sign(t) * Math.pow(Math.abs(t), 2.4) * half
+    }
     for (let j = 0; j < N; j++) {
-      const z0 = -half + j * step
-      const z1 = z0 + step
+      const z0 = xs[j], z1 = xs[j + 1]
       for (let i = 0; i < N; i++) {
-        const x0 = -half + i * step
-        const x1 = x0 + step
+        const x0 = xs[i], x1 = xs[i + 1]
         verts.push(x0, 0, z0,  x1, 0, z0,  x1, 0, z1)
         verts.push(x0, 0, z0,  x1, 0, z1,  x0, 0, z1)
       }
