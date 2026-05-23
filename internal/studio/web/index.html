@@ -538,20 +538,24 @@
     </div>
   </div>
 
-  <!-- Thread code-view modal.  Pops over the model viewer when the
-       user clicks a thread row in the Threads panel.  Shows the
-       script's disassembly with the current PC line highlighted, plus
-       a locals tray.  Re-rendered each refresh tick while open so the
-       highlight tracks live execution. -->
-  <div id="mv-thread-code-modal" class="dialog hidden mv-thread-code-modal">
-    <div class="dialog-card mv-thread-code-card">
-      <div class="mv-thread-code-header">
+  <!-- Thread debugger panel.  Movable floating window — no backdrop,
+       so the unit behind stays fully interactive (orbit, click, etc).
+       Three panes: disassembly (left), decompiled BOS source (middle),
+       locals / stack tray (right).  PC highlight tracks the live
+       thread's execution; clicking the gutter toggles a breakpoint
+       that pauses the runtime when hit. -->
+  <div id="mv-thread-code-modal" class="hidden mv-thread-code-panel">
+      <div class="mv-thread-code-header" id="mv-thread-code-header">
+        <span class="minimap-grip">⠿</span>
         <span class="mv-thread-code-title" id="mv-thread-code-title">Thread</span>
         <span class="mv-thread-code-status" id="mv-thread-code-status"></span>
+        <button class="minimap-toggle" id="mv-thread-code-pause" title="Pause / resume the entire runtime.">⏸</button>
+        <button class="minimap-toggle" id="mv-thread-code-step" title="Step past the current breakpoint (resume one instruction).">⤳</button>
         <button class="minimap-toggle" id="mv-thread-code-close" title="Close">×</button>
       </div>
       <div class="mv-thread-code-body">
-        <div class="mv-thread-code-source" id="mv-thread-code-source"></div>
+        <div class="mv-thread-code-source" id="mv-thread-code-source" title="Click the offset column to toggle a breakpoint."></div>
+        <div class="mv-thread-code-decompiled" id="mv-thread-code-decompiled"></div>
         <div class="mv-thread-code-locals">
           <div class="mv-thread-code-locals-label">Locals</div>
           <div class="mv-thread-code-locals-list" id="mv-thread-code-locals"></div>
@@ -559,7 +563,6 @@
           <div class="mv-thread-code-locals-list" id="mv-thread-code-stack"></div>
         </div>
       </div>
-    </div>
   </div>
 
   <div id="open-dialog" class="dialog hidden">

@@ -12187,6 +12187,7 @@ function openMvThreadCodeModal(cob, thread) {
   // Initial render is the full instruction list — only the highlighted
   // line + locals change frame-to-frame, the rest of the DOM is stable.
   renderMvThreadCodeSource(cob, thread)
+  renderMvThreadCodeDecompiled(cob)
   refreshMvThreadCodeHighlight()
 }
 
@@ -12202,12 +12203,63 @@ function wireMvThreadCodeChrome() {
     closeBtn.dataset.wired = '1'
     closeBtn.addEventListener('click', closeMvThreadCodeModal)
   }
-  const modal = document.getElementById('mv-thread-code-modal')
-  if (modal && modal.dataset.wired !== '1') {
-    modal.dataset.wired = '1'
-    // Click on the backdrop (anywhere outside the card) closes.
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeMvThreadCodeModal()
+  // Pause/resume the entire runtime.  Icon swaps ⏸↔▶ so the user
+  // sees what the click WILL do (current state visible as label).
+  const pauseBtn = document.getElementById('mv-thread-code-pause')
+  if (pauseBtn && pauseBtn.dataset.wired !== '1') {
+    pauseBtn.dataset.wired = '1'
+    pauseBtn.addEventListener('click', () => {
+      const rt = modelViewerInstance?.cob?.runtime
+      if (!rt) return
+      rt.setPaused(!rt.paused)
+      pauseBtn.textContent = rt.paused ? '▶' : '⏸'
+      pauseBtn.title = rt.paused ? 'Resume the runtime.' : 'Pause / resume the entire runtime.'
+    })
+  }
+  // Step past a hit breakpoint — clear the thread's breakpointHit flag
+  // so _runThread executes the BP line once.  If the runtime is paused
+  // we briefly unpause, advance one frame's worth, and re-pause.
+  const stepBtn = document.getElementById('mv-thread-code-step')
+  if (stepBtn && stepBtn.dataset.wired !== '1') {
+    stepBtn.dataset.wired = '1'
+    stepBtn.addEventListener('click', () => {
+      const tgt = _mvThreadCodeTarget
+      if (!tgt) return
+      const t = tgt.cob.runtime._threads.find((x) => x.id === tgt.threadId && !x.dead)
+      if (t) t.breakpointHit = false
+      // Force one step even when fully paused.
+      const rt = tgt.cob.runtime
+      const wasPaused = rt.paused
+      rt.paused = false
+      tgt.cob.tick(25)
+      rt.paused = wasPaused
+    })
+  }
+  // Drag handler.  Reads the panel's bounding rect and updates
+  // position via inline left/top so subsequent layout doesn't fight.
+  const header = document.getElementById('mv-thread-code-header')
+  const panel = document.getElementById('mv-thread-code-modal')
+  if (header && panel && header.dataset.wired !== '1') {
+    header.dataset.wired = '1'
+    let dragOff = null
+    header.addEventListener('mousedown', (e) => {
+      if (e.target.closest('button')) return  // chrome buttons aren't drag handles
+      e.preventDefault()
+      const r = panel.getBoundingClientRect()
+      dragOff = { dx: e.clientX - r.left, dy: e.clientY - r.top }
+      header.classList.add('dragging')
+    })
+    window.addEventListener('mousemove', (e) => {
+      if (!dragOff) return
+      const left = clamp(e.clientX - dragOff.dx, 0, window.innerWidth - 100)
+      const top = clamp(e.clientY - dragOff.dy, 0, window.innerHeight - 60)
+      panel.style.left = left + 'px'
+      panel.style.top = top + 'px'
+    })
+    window.addEventListener('mouseup', () => {
+      if (!dragOff) return
+      dragOff = null
+      header.classList.remove('dragging')
     })
   }
 }
@@ -12251,11 +12303,29 @@ function renderMvThreadCodeSource(cob, thread) {
   src.dataset.scriptName = thread.script.name
   if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
   const pieceNames = cob.runtime.pieceNames || []
+  const scriptName = thread.script.name
   for (let i = 0; i < thread.script.instructions.length; i++) {
     const ins = thread.script.instructions[i]
     const line = document.createElement('div')
     line.className = 'mv-code-line'
     line.dataset.idx = String(i)
+    line.dataset.offset = String(ins.offset >>> 0)
+    if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
+    // Breakpoint gutter — click to toggle.
+    const bp = document.createElement('span')
+    bp.className = 'mv-code-bp'
+    bp.title = 'Click to toggle breakpoint at this instruction.'
+    bp.addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) {
+        cob.runtime.removeBreakpoint(scriptName, ins.offset)
+        line.classList.remove('breakpointed')
+      } else {
+        cob.runtime.addBreakpoint(scriptName, ins.offset)
+        line.classList.add('breakpointed')
+      }
+    })
+    line.appendChild(bp)
     const off = document.createElement('span')
     off.className = 'mv-code-off'
     off.textContent = '0x' + (ins.offset >>> 0).toString(16).padStart(4, '0')
@@ -12356,6 +12426,121 @@ function refreshMvThreadCodeHighlight() {
     }
   }
   renderMvThreadCodeLocals(thread)
+  refreshMvThreadCodeDecompHighlight(thread)
+}
+
+// BOS keyword/builtin/modifier/axis sets ported from the explorer's
+// BOSHighlighter so the studio's decompiled view matches it visually.
+const MV_BOS_KEYWORDS = new Set([
+  'piece', 'static-var', 'if', 'else', 'while', 'return', 'sleep',
+  'move', 'turn', 'spin', 'stop-spin', 'wait-for-turn', 'wait-for-move',
+  'show', 'hide', 'explode', 'emit-sfx', 'cache', 'dont-cache',
+  'dont-shade', 'signal', 'set-signal-mask', 'set', 'start-script',
+  'call-script', 'attach-unit', 'drop-unit', 'var',
+])
+const MV_BOS_BUILTINS = new Set(['get', 'rand'])
+const MV_BOS_MODIFIERS = new Set(['now', 'speed', 'accelerate', 'decelerate', 'to', 'around', 'type', 'from'])
+const MV_BOS_AXES = new Set(['x-axis', 'y-axis', 'z-axis'])
+
+function escapeHtmlForCode(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+// Minimal token-based BOS highlighter: walks the line, picking out
+// identifiers vs numbers vs comments vs punctuation, then maps each
+// identifier to a CSS class via the four keyword sets above.
+function highlightBosLine(line) {
+  // Comments — `//…` to end of line, render the whole tail as one
+  // comment span.
+  const cmt = line.indexOf('//')
+  let body = line
+  let trailing = ''
+  if (cmt >= 0) {
+    body = line.slice(0, cmt)
+    trailing = `<span class="bos-comment">${escapeHtmlForCode(line.slice(cmt))}</span>`
+  }
+  let out = ''
+  const re = /([A-Za-z_][A-Za-z_0-9-]*)|(-?\d+\.?\d*)|([{};,()<>=!&|+\-*/?:])|(\s+)|([^\s{};,()<>=!&|+\-*/?:A-Za-z_0-9]+)/g
+  let m
+  while ((m = re.exec(body)) !== null) {
+    if (m[1]) {
+      const word = m[1]
+      const low = word.toLowerCase()
+      if (MV_BOS_KEYWORDS.has(low)) out += `<span class="bos-keyword">${escapeHtmlForCode(word)}</span>`
+      else if (MV_BOS_BUILTINS.has(low)) out += `<span class="bos-builtin">${escapeHtmlForCode(word)}</span>`
+      else if (MV_BOS_MODIFIERS.has(low)) out += `<span class="bos-modifier">${escapeHtmlForCode(word)}</span>`
+      else if (MV_BOS_AXES.has(low)) out += `<span class="bos-axis">${escapeHtmlForCode(word)}</span>`
+      else out += escapeHtmlForCode(word)
+    } else if (m[2]) {
+      out += `<span class="bos-number">${escapeHtmlForCode(m[2])}</span>`
+    } else {
+      out += escapeHtmlForCode(m[0])
+    }
+  }
+  return out + trailing
+}
+
+function renderMvThreadCodeDecompiled(cob) {
+  const pane = document.getElementById('mv-thread-code-decompiled')
+  if (!pane) return
+  pane.replaceChildren()
+  const src = cob.runtime.decompiled || cob.runtime._decompiledSource
+  if (!src) {
+    // Either the server hasn't provided it (older cob.go) or the
+    // decompiler bailed.  Try fetching now and cache on the runtime.
+    const name = cob.runtime.scriptOriginName || cob.runtime.name || (modelViewerInstance?.model?.name)
+    if (!name) {
+      pane.textContent = '// decompile unavailable'
+      return
+    }
+    fetch(`/api/studio/cob/${encodeURIComponent(name)}`)
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((json) => {
+        cob.runtime._decompiledSource = json.decompiled || '// decompile failed'
+        renderMvThreadCodeDecompiled(cob)
+      })
+      .catch((err) => { pane.textContent = `// decompile fetch failed: ${err.message}` })
+    pane.textContent = '// loading…'
+    return
+  }
+  const lines = src.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const div = document.createElement('div')
+    div.dataset.line = String(i)
+    // Detect function-header lines so we can highlight the function
+    // CURRENTLY running.  Pattern: `Name(args)` or `Name()` at line
+    // start (or with leading whitespace).
+    const m = lines[i].match(/^\s*([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
+    if (m) div.dataset.fn = m[1].toLowerCase()
+    div.innerHTML = highlightBosLine(lines[i] || ' ')
+    pane.appendChild(div)
+  }
+}
+
+function refreshMvThreadCodeDecompHighlight(thread) {
+  const pane = document.getElementById('mv-thread-code-decompiled')
+  if (!pane) return
+  // Clear prior highlight + apply to the current function header (and
+  // its trailing body until the next function header).  This is the
+  // approximation we use because the decompiler doesn't emit a
+  // bytecode→source line map; function-granularity is the most we
+  // can deliver without that data.
+  for (const el of pane.querySelectorAll('.bos-current')) el.classList.remove('bos-current')
+  if (!thread) return
+  const fnLower = thread.script.name.toLowerCase()
+  let inFn = false
+  for (const div of pane.children) {
+    const fn = div.dataset.fn
+    if (fn) {
+      if (fn === fnLower) {
+        inFn = true
+        div.classList.add('bos-current')
+      } else if (inFn) {
+        break
+      }
+    } else if (inFn) {
+      div.classList.add('bos-current')
+    }
+  }
 }
 
 function renderMvThreadCodeLocals(thread) {

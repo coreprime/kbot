@@ -193,6 +193,12 @@ export class ModelViewer {
               return 0
             },
           })
+          // Cache the decompiled BOS source on the runtime so the
+          // thread-debugger's right pane can render side-by-side
+          // without an extra fetch.  Empty string when the server
+          // didn't provide it (older endpoint or decompile error).
+          runtime.decompiled = cobJson.decompiled || ''
+          runtime.name = modelName
           this.cob = new CobBinding(model, runtime)
           this.renderer.setCobBinding(this.cob)
           // Earlier this auto-fired Create + Activate so freshly-

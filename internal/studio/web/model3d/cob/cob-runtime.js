@@ -245,6 +245,18 @@ export class CobRuntime {
     // half-decrement sleeps and drift them by the frame remainder
     // every cycle; with it, `sleep 200` is always exactly 8 ticks.
     this._tickAccumMs = 0
+    // Breakpoints: keyed by "<scriptName>:<offset>" so they survive
+    // CALL_SCRIPT / RETURN frame changes.  When _runThread is about
+    // to execute an instruction whose key is in this set, it yields
+    // immediately AND flips the corresponding thread's `breakpointed`
+    // flag — the inspector overlay reads that flag to render the
+    // pause indicator.  Use `addBreakpoint` / `removeBreakpoint` /
+    // `clearBreakpoints` to mutate from the UI.
+    this._breakpoints = new Set()
+    // Per-runtime pause flag — when true, NO thread advances.  Used
+    // by the UI's "Pause" button to halt the whole runtime without
+    // also having to enumerate every thread.
+    this.paused = false
   }
 
   // start spawns a thread on the named script, pushing `args` as the
@@ -295,6 +307,11 @@ export class CobRuntime {
   // — typically a tab-switch pause — so the runtime doesn't burn
   // through a stockpile of accumulated ticks all in one frame.
   tick(dtMs) {
+    // When the runtime is paused (debugger paused, all breakpoints
+    // hit), short-circuit — animators freeze, sleeps freeze, threads
+    // don't advance.  The user's UI controls (slider drag, camera
+    // orbit) still work because they don't go through here.
+    if (this.paused) return 0
     // Apply the playback-rate multiplier to the wall-clock advance so
     // animator + sleep tick share the same scaled clock — without that
     // the animator would run at real-time speed while sleeps still
@@ -422,6 +439,24 @@ export class CobRuntime {
     }
     return false
   }
+
+  // ── Breakpoint API ───────────────────────────────────────────────
+  // Keyed by "<scriptNameLower>:<offset>" so a breakpoint set on
+  // a function survives the runtime never even loading that script
+  // (the next thread that enters there hits the BP normally).
+  addBreakpoint(scriptName, offset) {
+    this._breakpoints.add(`${String(scriptName).toLowerCase()}:${offset >>> 0}`)
+  }
+  removeBreakpoint(scriptName, offset) {
+    this._breakpoints.delete(`${String(scriptName).toLowerCase()}:${offset >>> 0}`)
+  }
+  hasBreakpoint(scriptName, offset) {
+    return this._breakpoints.has(`${String(scriptName).toLowerCase()}:${offset >>> 0}`)
+  }
+  clearBreakpoints() { this._breakpoints.clear() }
+  // Pause / resume the entire runtime — tick() short-circuits while
+  // paused so animators + sleeps + threads all freeze together.
+  setPaused(p) { this.paused = !!p }
 
   // killAllThreads marks every live thread dead.  Animators keep
   // their current rest pose (kind stays sticky), so the visible
@@ -571,6 +606,13 @@ export class CobRuntime {
   _runThread(t) {
     let count = 0
     const MAX = 4096 // runaway guard - generous enough for any real script
+    // If the thread is currently paused on a breakpoint we just hit
+    // (the previous tick yielded after setting `breakpointHit`), we
+    // need to clear that flag on the FIRST instruction this tick so
+    // the thread doesn't immediately re-pause on the same line.
+    // The UI's "continue" advances past the BP by clearing it.
+    let allowFirstBreakpoint = !t.breakpointHit
+    t.breakpointHit = false
     while (!t.dead && count < MAX) {
       const insts = t.script.instructions
       if (t.pc >= insts.length) {
@@ -580,6 +622,18 @@ export class CobRuntime {
         continue
       }
       const ins = insts[t.pc]
+      // Breakpoint check — fires BEFORE the instruction runs so the
+      // user inspects pre-execution state.  Set the thread flag and
+      // yield; pc stays on the breakpoint line so the next resume
+      // can execute it (allowFirstBreakpoint suppresses immediate
+      // re-trigger on that resume).
+      if (allowFirstBreakpoint && this._breakpoints.size > 0) {
+        if (this._breakpoints.has(`${t.script.name.toLowerCase()}:${ins.offset >>> 0}`)) {
+          t.breakpointHit = true
+          break
+        }
+      }
+      allowFirstBreakpoint = true
       t.pc++
       count++
       if (this._exec(t, ins)) break // exec returned `true` → yielded

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/coreprime/kbot/formats/scripting"
+	"github.com/coreprime/kbot/formats/scripting/decompiler"
 )
 
 // registerCobAPI wires the /api/studio/cob/{name} endpoint into the
@@ -28,6 +29,7 @@ type cobScriptJSON struct {
 	ScriptNames    []string           `json:"scriptNames"`     // index → entry-point name
 	SoundNames     []string           `json:"soundNames"`      // TAK-only; empty for v4 TA cobs
 	Scripts        []cobScriptDef     `json:"scripts"`         // one entry per script (matches ScriptNames index)
+	Decompiled     string             `json:"decompiled"`      // full BOS source text — studio uses for side-by-side debug
 }
 
 // cobScriptDef carries the disassembled instructions for a single
@@ -117,6 +119,18 @@ func handleCobScript(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		out.Scripts = append(out.Scripts, script)
+	}
+	// Decompile is best-effort — if the decompiler bails on some
+	// exotic instruction sequence the studio still gets the
+	// disassembly above, so we DON'T error out the whole response.
+	// Surface the error as a comment in the source so the user knows
+	// why the right pane is empty.
+	if dec := decompiler.NewDecompiler(cob); dec != nil {
+		if bos, derr := dec.Decompile(); derr == nil {
+			out.Decompiled = bos
+		} else {
+			out.Decompiled = "// decompile failed: " + derr.Error()
+		}
 	}
 	writeJSON(w, out)
 }

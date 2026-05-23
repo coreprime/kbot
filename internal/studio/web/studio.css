@@ -2782,28 +2782,40 @@ canvas {
 .mv-cob-thread-row { cursor: pointer; }
 .mv-cob-thread-row:hover { background: rgba(139, 92, 246, 0.08); }
 
-/* Thread code-view modal — disassembly with PC highlight + locals
-   tray.  Reuses the .dialog chrome (full-screen translucent backdrop)
-   so it stacks above the model viewer correctly. */
-.mv-thread-code-modal { z-index: 6000; }
-.mv-thread-code-card {
-  width: min(80vw, 720px);
-  max-height: 80vh;
+/* Thread debugger — movable floating panel.  NOT modal: lives over
+   the canvas but doesn't block pointer events outside its own rect,
+   so the user keeps orbiting / clicking the model behind.  z-index
+   sits above the inspector overlays so the debugger drags on top. */
+.mv-thread-code-panel {
+  position: fixed;
+  top: 120px;
+  left: 360px;
+  width: min(70vw, 920px);
+  height: min(70vh, 560px);
+  z-index: 6000;
   display: flex;
   flex-direction: column;
   background: rgba(20, 24, 32, 0.98);
   border: 1px solid var(--border);
   border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   padding: 0;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
+.mv-thread-code-panel.hidden { display: none; }
 .mv-thread-code-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
+  cursor: grab;
 }
+.mv-thread-code-header.dragging { cursor: grabbing; }
+.mv-thread-code-header .minimap-grip { color: var(--muted); cursor: grab; }
 .mv-thread-code-title {
   font-size: 13px;
   font-weight: 600;
@@ -2823,12 +2835,42 @@ canvas {
 }
 .mv-thread-code-source {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: 8px 0;
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
   line-height: 1.5;
   background: var(--bg-0);
+}
+/* Decompiled BOS pane sits to the RIGHT of the assembly, sharing
+   the same source-text style.  Borders flank both sides so the
+   three-pane layout reads as separated columns at a glance. */
+.mv-thread-code-decompiled {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--bg-0);
+  border-left: 1px solid var(--border);
+  white-space: pre;
+  color: var(--text);
+}
+.mv-thread-code-decompiled .bos-keyword { color: #ff7575; font-weight: 600; }
+.mv-thread-code-decompiled .bos-builtin { color: #66c2ff; }
+.mv-thread-code-decompiled .bos-modifier { color: #6ee7c1; }
+.mv-thread-code-decompiled .bos-axis { color: #f5b76e; }
+.mv-thread-code-decompiled .bos-fn-name { color: #ffd866; font-weight: 600; }
+.mv-thread-code-decompiled .bos-number { color: #b3e3ff; font-variant-numeric: tabular-nums; }
+.mv-thread-code-decompiled .bos-comment { color: var(--muted); font-style: italic; }
+.mv-thread-code-decompiled .bos-current {
+  background: rgba(255, 220, 100, 0.12);
+  border-left: 2px solid #ffd866;
+  padding-left: 4px;
+  margin-left: -6px;
 }
 .mv-thread-code-locals {
   width: 180px;
@@ -2868,9 +2910,9 @@ canvas {
    spot it instantly.  Hover any line to inspect (just a brightening). */
 .mv-code-line {
   display: grid;
-  grid-template-columns: 70px 1fr;
-  gap: 10px;
-  padding: 1px 12px;
+  grid-template-columns: 14px 70px 1fr;
+  gap: 6px;
+  padding: 1px 12px 1px 4px;
   border-left: 3px solid transparent;
   white-space: pre;
 }
@@ -2879,10 +2921,29 @@ canvas {
   background: rgba(255, 220, 100, 0.12);
   border-left-color: #ffd866;
 }
+.mv-code-line.pc.breakpointed { border-left-color: var(--danger); }
 .mv-code-line .mv-code-off {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   text-align: right;
+  cursor: pointer;
+}
+.mv-code-line .mv-code-off:hover { color: var(--text); }
+/* Breakpoint gutter — narrow column to the left of the offset; clicking
+   it toggles a breakpoint, which fills the dot red. */
+.mv-code-line .mv-code-bp {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  margin: 2px auto 0;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.mv-code-line .mv-code-bp:hover { border-color: var(--danger); }
+.mv-code-line.breakpointed .mv-code-bp {
+  background: var(--danger);
+  border-color: var(--danger);
 }
 /* Opcode category colours match the explorer's COBAHighlighter so
    the assembly reads identically across tools. */
