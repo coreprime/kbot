@@ -57,26 +57,28 @@
         <div class="welcome-options">
           <button class="welcome-card" id="welcome-model-open">
             <span class="welcome-card-ico">🛠</span>
-            <span class="welcome-card-title">Open a 3DO model</span>
-            <span class="welcome-card-sub">Browse every unit, building and feature object in the mounted assets.  Rotates in place — drag to orbit.</span>
+            <span class="welcome-card-title">Open Unit</span>
+            <span class="welcome-card-sub">Browse every TA unit in the mounted assets — view the 3DO geometry, drive its COB animation scripts, fire its weapons, and edit its runtime ports.</span>
           </button>
         </div>
-        <p class="dialog-sub welcome-drop-hint">Animation playback via COB scripting is wired in for a future release.</p>
       </div>
     </div>
   </div>
 
-  <!-- 3DO model picker.  Lists every objects3d/*.3do in the VFS, with
-       unit metadata (name, side, description) overlaid where available. -->
+  <!-- Unit Editor picker.  Lists every units/*.fbi in the VFS plus
+       any object3d/*.3do that has no FBI ref, with unit metadata
+       (name, side, description) + presence indicators for the
+       related asset files (FBI / 3DO / COB) so the user knows what
+       each entry actually has on disk. -->
   <div id="model-open-dialog" class="dialog hidden">
     <div class="dialog-card dialog-card-wide dialog-card-xwide">
-      <h1>Open a 3DO model</h1>
-      <p class="dialog-sub">Pick a unit or building model to inspect in 3D.</p>
+      <h1>Open Unit</h1>
+      <p class="dialog-sub">Pick a TA unit to view its 3D geometry, drive its COB animations and fire its weapons.  Orphan 3DOs (props / features) without an FBI definition also appear at the bottom of the list.  The coloured chips on each row show which of the FBI / 3DO / COB files for that unit were found in the loaded VFS.</p>
       <div class="open-filter">
         <input type="search" id="model-filter" placeholder="Filter by name, side, or category" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
       </div>
-      <div class="open-list" id="model-list" tabindex="0" role="listbox" aria-label="Models">
-        <div class="loading">Loading models…</div>
+      <div class="open-list" id="model-list" tabindex="0" role="listbox" aria-label="Units">
+        <div class="loading">Loading units…</div>
       </div>
       <div class="dialog-actions">
         <button id="model-open-back" class="btn">Cancel</button>
@@ -112,7 +114,7 @@
               <span class="chev-down">▾</span>
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-model-dropdown-popup">
-              <button id="mv-act-open" class="menu-row" title="Browse another 3DO">
+              <button id="mv-act-open" class="menu-row" title="Browse another unit from the loaded VFS (FBI-derived list with build pictures and FBI / 3DO / COB presence chips)">
                 <span class="ico">📂</span><span>Open another model…</span>
               </button>
               <button class="menu-row" disabled title="Coming soon: export as glTF / OBJ.">
@@ -429,16 +431,16 @@
                 <span class="ico">▶</span><span>Actions</span><span class="menu-check">✓</span>
               </button>
               <button id="mv-view-ports" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-ports"
-                      title="Toggle the Ports overlay — view + edit the COB unit-value ports the scripts read (Active, Move/Fire orders, Health, Build %, etc.).">
-                <span class="ico">🔌</span><span>Ports</span><span class="menu-check">✓</span>
+                      title="Toggle the Controls overlay — drive the unit (Move, Aim+Fire Primary/Secondary/Tertiary) AND view+edit its COB unit-value ports (Active, Move/Fire orders, Health, Build %, etc.).">
+                <span class="ico">🎮</span><span>Controls</span><span class="menu-check">✓</span>
               </button>
               <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
                       title="Toggle the Static Vars overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.">
                 <span class="ico">📊</span><span>Static Vars</span><span class="menu-check">✓</span>
               </button>
               <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
-                      title="Toggle the Camera overlay — live read-out of the viewer camera's eye position, yaw, pitch, distance and FOV.">
-                <span class="ico">🎥</span><span>Camera</span><span class="menu-check">✓</span>
+                      title="Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas's current frame rate.">
+                <span class="ico">🎥</span><span>Renderer</span><span class="menu-check">✓</span>
               </button>
             </div>
           </div>
@@ -499,6 +501,36 @@
              so the header stays focused on identity + chrome.  These
              act on the whole runtime; per-unit actions render inside
              each unit's group header. -->
+        <!-- Stats block — two lines of live telemetry sit above the
+             Speed slider so the user can monitor the runtime's
+             throughput at a glance.  Refreshed by the inspector
+             throttle (4 Hz). -->
+        <div class="mv-runtime-stats" title="Live runtime telemetry — refreshed 4× per second.">
+          <div class="mv-runtime-stats-row mv-runtime-stats-row-3">
+            <span class="mv-runtime-stat" title="Total fixed 25 ms ticks executed since the runtime started.">
+              <span class="mv-runtime-stat-label">Tick</span>
+              <span class="mv-runtime-stat-value" id="mv-runtime-stat-tick">0</span>
+            </span>
+            <span class="mv-runtime-stat" title="COB bytecode operations executed during the most recent tick() call (sums every fixed sub-step the call drained).">
+              <span class="mv-runtime-stat-label">Ops</span>
+              <span class="mv-runtime-stat-value" id="mv-runtime-stat-inst">0</span>
+            </span>
+            <span class="mv-runtime-stat" title="Wall-clock duration of the most recent tick() call (may drain several fixed sub-steps).">
+              <span class="mv-runtime-stat-label">Last</span>
+              <span class="mv-runtime-stat-value" id="mv-runtime-stat-last">0.0 ms</span>
+            </span>
+          </div>
+          <div class="mv-runtime-stats-row">
+            <span class="mv-runtime-stat" title="Number of units currently registered with the runtime.">
+              <span class="mv-runtime-stat-label">Units</span>
+              <span class="mv-runtime-stat-value" id="mv-runtime-stat-units">0</span>
+            </span>
+            <span class="mv-runtime-stat" title="Total live threads across every unit.">
+              <span class="mv-runtime-stat-label">Threads</span>
+              <span class="mv-runtime-stat-value" id="mv-runtime-stat-threads">0</span>
+            </span>
+          </div>
+        </div>
         <div class="mv-runtime-speed" title="Simulation speed — scales every unit's tick clock.  Mirrors the COB menu's Playback slider.">
           <label class="mv-runtime-speed-label">Speed</label>
           <input type="range" min="10" max="200" value="100" id="mv-runtime-speed" class="mv-runtime-speed-input"
@@ -553,21 +585,50 @@
           <div class="mv-inspector-empty">No COB loaded.</div>
         </div>
       </aside>
-      <!-- Ports overlay — view + edit the COB unit-value ports the
-           scripts read.  Active / Move-orders / Fire-orders / Health
-           are editable; In-build-stance / Armoured are read-only.
-           Each tab gets its own panel state via the same drag/persist
-           harness as the other inspectors. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-ports" title="Drag this header to move the Ports overlay">
+      <!-- Controls overlay — drives the loaded unit.  Top section is
+           a row of action buttons (Move, Primary, Secondary, Tertiary)
+           that arm a click-to-target gesture on the canvas; bottom
+           section is the original Ports table (Active / Move orders /
+           Fire orders / Health / Build %).  Each studio tab gets its
+           own panel state via the shared drag/persist harness. -->
+      <aside class="mv-inspector hidden" id="mv-inspector-ports" title="Drag this header to move the Controls overlay">
         <div class="mv-inspector-header" id="mv-inspector-ports-header">
           <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Ports</span>
+          <span>Controls</span>
           <button class="minimap-toggle mv-ports-reset" id="mv-ports-reset"
-                  title="Reset every port to its default value (Active, Move=Roam, Fire=Fire-at-Will, Health 100, Build 100%).">↺</button>
+                  title="Reset every port + clear any move/aim targets — Active, Move=Roam, Fire=Fire-at-Will, Health 100, Build 100%.">↺</button>
           <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-ports"
                   title="Collapse this panel to a thin header bar (click again to expand).">−</button>
           <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-ports"
                   title="Close this panel (re-open later from the View menu).">×</button>
+        </div>
+        <!-- Action button row.  Buttons render disabled when the unit
+             doesn't support the action (no MaxVelocity, missing
+             AimWeapon script).  Click → arms the next scene click as
+             "set this target".  No toggle: re-clicking a button just
+             re-arms (with the previous arm cancelled).  Use Stop to
+             clear targets + halt the unit. -->
+        <div class="mv-controls-actions" id="mv-controls-actions">
+          <button class="mv-ctrl-action" data-ctrl-action="move" disabled
+                  title="Move — click here, then click in the scene to walk the unit there at its FBI-defined speed.  StartMoving / StopMoving scripts fire when those exist.">
+            <span class="ico">🚶</span><span class="lbl">Move</span>
+          </button>
+          <button class="mv-ctrl-action" data-ctrl-action="primary" disabled
+                  title="Primary weapon — click here, then click in the scene to lock the primary aim.  AimPrimary fires each tick; when it returns 1 FirePrimary fires at the weapon's reload rate.">
+            <span class="ico">🎯</span><span class="lbl">Primary</span>
+          </button>
+          <button class="mv-ctrl-action" data-ctrl-action="secondary" disabled
+                  title="Secondary weapon — click here, then click in the scene to lock the secondary aim.  Stored target is independent of Primary's.">
+            <span class="ico">🎯</span><span class="lbl">Secondary</span>
+          </button>
+          <button class="mv-ctrl-action" data-ctrl-action="tertiary" disabled
+                  title="Tertiary weapon — click here, then click in the scene to lock the tertiary aim.  Stored target is independent of the other two.">
+            <span class="ico">🎯</span><span class="lbl">Tertiary</span>
+          </button>
+          <button class="mv-ctrl-action mv-ctrl-action-stop" data-ctrl-action="stop"
+                  title="Stop — clear every move + aim target on this unit.  The walk loop halts (StopMoving fires when defined) and Aim*/Fire* schedulers drop their targets.">
+            <span class="ico">✋</span><span class="lbl">Stop</span>
+          </button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-ports-body">
           <!-- Body is built dynamically by renderMvPortsPanel so the
@@ -575,22 +636,35 @@
           <div class="mv-inspector-empty">No COB loaded.</div>
         </div>
       </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag this header to move the Camera overlay">
+      <!-- Renderer overlay (historically "Camera") — surfaces both the
+           orbit camera's pose AND the GL canvas's frame rate.  DOM id
+           kept as mv-inspector-camera so saved layout positions don't
+           orphan; user-facing label is "Renderer". -->
+      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag this header to move the Renderer overlay">
         <div class="mv-inspector-header" id="mv-inspector-camera-header">
           <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Camera</span>
+          <span>Renderer</span>
           <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-camera"
                   title="Collapse this panel to a thin header bar (click again to expand).">−</button>
           <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-camera"
                   title="Close this panel (re-open later from the View menu).">×</button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-camera-body">
+          <div class="dev-stats-row" title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames."><span class="dev-stats-label">FPS</span><span class="dev-stats-value" id="mv-ci-fps">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Position</span><span class="dev-stats-value" id="mv-ci-eye">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Target</span><span class="dev-stats-value" id="mv-ci-target">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Yaw</span><span class="dev-stats-value" id="mv-ci-yaw">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Pitch</span><span class="dev-stats-value" id="mv-ci-pitch">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Distance</span><span class="dev-stats-value" id="mv-ci-dist">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">FOV</span><span class="dev-stats-value" id="mv-ci-fov">—</span></div>
+          <!-- Tracking toggle — when on, the camera target snaps to
+               the unit's XZ every frame so a walking / flying unit
+               stays centred.  Mirrored by the T hot-key; cleared
+               automatically when the user does a shift-pan. -->
+          <label class="dev-stats-row mv-ci-track-row" title="Track the unit's position with the camera.  Toggle with the T key.  Shift-pan clears this automatically.">
+            <span class="dev-stats-label">Tracking</span>
+            <input type="checkbox" id="mv-ci-track" class="mv-ci-track-cb" />
+          </label>
         </div>
       </aside>
       </div>
@@ -1775,11 +1849,11 @@
       <span class="ico">📂</span><span>Open Existing Map</span>
     </button>
     <div class="menu-section-label">Unit Editing</div>
-    <button id="map-tab-add-new-model" class="menu-row" disabled title="Coming soon: start a new 3DO from scratch">
-      <span class="ico">✨</span><span>New 3DO</span>
+    <button id="map-tab-add-new-model" class="menu-row" disabled title="Coming soon: start a new unit from scratch (3DO geometry + FBI metadata + COB script)">
+      <span class="ico">✨</span><span>New Unit</span>
     </button>
-    <button id="map-tab-add-model" class="menu-row" title="Open a 3DO model in a fresh tab — sits alongside any maps you have open">
-      <span class="ico">🛠</span><span>Open 3DO</span>
+    <button id="map-tab-add-model" class="menu-row" title="Browse the loaded VFS for a TA unit (FBI / 3DO / COB) and open it in a fresh tab alongside any maps you have open">
+      <span class="ico">🛠</span><span>Open Unit</span>
     </button>
   </div>
 

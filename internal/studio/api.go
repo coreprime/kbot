@@ -51,6 +51,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/sound/", handleSound)
 	registerModelAPI(mux)
 	registerCobAPI(mux)
+	registerUnitAPI(mux)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────

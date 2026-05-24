@@ -140,6 +140,13 @@ export class ModelViewer {
     // state needs explicit reset back to the 3DO default of
     // "everything shown".
     for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
+    // Reset the render-flag arrays to their defaults too — Create
+    // typically calls hide / dont-shade on flares to set up the
+    // idle pose, and Reset State should mimic the freshly-loaded
+    // state where every flag is back to TA's engine default.
+    for (let i = 0; i < unit._pieceShade.length; i++)  unit._pieceShade[i]  = true
+    for (let i = 0; i < unit._pieceCache.length; i++)  unit._pieceCache[i]  = false
+    for (let i = 0; i < unit._pieceShadow.length; i++) unit._pieceShadow[i] = true
     // Drop lifecycle tracking — Activate/Deactivate go back to a
     // fresh "no idea what state this is" path AND Create gating
     // re-engages (so the user has to click Create again before
@@ -147,6 +154,11 @@ export class ModelViewer {
     this.cob._lifecycle = (this.cob.hasScript && this.cob.hasScript('Create')) ? 'unborn' : 'created'
     // Drop SFX particles so smoke + sparks from prior runs vanish.
     if (this.cob.particles) this.cob.particles.count = 0
+    // Controls overlay state (move target, aim targets, walk pos)
+    // gets cleared too so Reset really does mean "start over".
+    if (this._mvControls && typeof this._mvControls.resetState === 'function') {
+      this._mvControls.resetState()
+    }
     // Force a redraw so the user sees the snap-back even when the
     // renderer's idle (no auto-rotate, no pending animations).
     if (this.renderer) this.renderer.requestRedraw()
@@ -330,7 +342,29 @@ export class ModelViewer {
     }
     walk(piece, [0, 0, 0])
     if (Number.isFinite(min[0])) {
-      this.camera.frameBounds(min, max, 1.6)
+      // Shift the piece-local bounds by the unit's current world
+      // transform so the camera frames the MOVED unit — without
+      // this offset, clicking a piece on a walking PeeWee that's
+      // drifted to (200, 0, -100) would still aim the camera at
+      // the unit's spawn origin.  Pulled from the renderer's
+      // _unitTransform so both ground walking AND aircraft alt
+      // are accounted for.  Rotation isn't applied because the
+      // piece bounds are still axis-aligned in the unit's local
+      // frame; we just translate them into world space.
+      const ut = this.renderer?._unitTransform
+      if (ut) {
+        min[0] += ut.x; max[0] += ut.x
+        min[1] += ut.y; max[1] += ut.y
+        min[2] += ut.z; max[2] += ut.z
+      }
+      // Padding factor 4.0 (was 1.6) — small pieces like a single
+      // flare or muzzle would otherwise snap so close that the
+      // user lost spatial context with the rest of the unit.  At
+      // 4× the piece's bbox half-extent the camera frames the
+      // piece plus a generous halo of surrounding hull, so it
+      // reads as "this is the piece, here's where it sits on the
+      // unit" rather than "you're inside the part now".
+      this.camera.frameBounds(min, max, 4.0)
       this.renderer.requestRedraw()
     }
   }
@@ -367,7 +401,29 @@ export class ModelViewer {
       this._pointerState.y = e.clientY
       if (!this.camera) return
       if (this._pointerState.button === 2 || e.shiftKey) {
-        this.camera.panBy(dx, dy)
+        // Shift = axis-locked pan.  Picks the dominant axis from
+        // the gesture's accumulated motion (not just this delta —
+        // a single frame's dy can flicker between zero and a few
+        // pixels) and zeroes the other so the pan reads as a
+        // clean vertical OR horizontal slide instead of drifting
+        // diagonally.  Plain right-drag still pans freely.
+        if (e.shiftKey) {
+          // Intentional camera move overrides any active follow-
+          // the-unit tracking.  Otherwise the next render frame's
+          // _followCamera would yank the target straight back to
+          // the unit and undo the pan.
+          if (this._mvControls?.tracking) this._mvControls.setTracking(false)
+          const acc = this._pointerState
+          acc.lockDxAccum = (acc.lockDxAccum || 0) + dx
+          acc.lockDyAccum = (acc.lockDyAccum || 0) + dy
+          if (Math.abs(acc.lockDxAccum) > Math.abs(acc.lockDyAccum)) {
+            this.camera.panBy(dx, 0)
+          } else {
+            this.camera.panBy(0, dy)
+          }
+        } else {
+          this.camera.panBy(dx, dy)
+        }
       } else {
         // Dragging up tilts the camera up (eye orbits over the top,
         // scene's underside comes into view).  With the new "positive

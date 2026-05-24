@@ -7,6 +7,11 @@ import {
   computeJumps as sharedComputeJumps,
 } from './cob-highlight.js'
 
+// Controls overlay — Move + Aim/Fire scheduler.  Lives in its own
+// module so studio.js doesn't sprout another inline subsystem.
+import { MvControls } from './mv-controls.js'
+let _mvControls = null
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -416,6 +421,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeGlamour()
   wireWelcomeAmbient()
   wireWelcomeTabs()
+  wireMvRuntimeVisibility()
   // Hydrate persisted UI prefs FIRST — the wire* helpers below read
   // from state during setup (e.g. wireMvInspectors decides each
   // inspector panel's initial visibility from state.mvInspectorVisible).
@@ -11675,6 +11681,13 @@ async function activateModelTab(tab) {
         // Ports panel bindings target this unit's cobPorts object;
         // rebuild controls so they write into the right state.
         renderMvPortsPanel(modelViewerInstance)
+        // Controls overlay (Move + Aim/Fire).  Spin up a fresh
+        // instance per model load and kick off the unit-meta fetch
+        // so the action buttons enable/disable correctly.
+        if (_mvControls) _mvControls.dispose()
+        _mvControls = new MvControls(modelViewerInstance)
+        modelViewerInstance._mvControls = _mvControls
+        mvFetchUnitMeta(modelViewerInstance)
         // Hook the inspector refresh into the renderer's per-frame
         // callback.  Done here (not at construction) because the
         // renderer is created lazily inside ModelViewer.open(), so
@@ -11682,7 +11695,10 @@ async function activateModelTab(tab) {
         // the time onModelLoaded fires the renderer is live.
         // Idempotent — reassignment is cheap.
         if (modelViewerInstance.renderer) {
-          modelViewerInstance.renderer.onAfterFrame = (dtMs) => refreshMvInspectors(dtMs)
+          modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+            refreshMvInspectors(dtMs)
+            _mvControls?.tick(dtMs)
+          }
         }
       },
     })
@@ -11694,7 +11710,10 @@ async function activateModelTab(tab) {
   // Wire the per-frame inspector refresh callback the first time
   // the renderer is alive.  Idempotent — re-assignment is cheap.
   if (modelViewerInstance.renderer && !modelViewerInstance.renderer.onAfterFrame) {
-    modelViewerInstance.renderer.onAfterFrame = (dtMs) => refreshMvInspectors(dtMs)
+    modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+      refreshMvInspectors(dtMs)
+      _mvControls?.tick(dtMs)
+    }
   }
   const autoBtn = $('#mv-act-autorotate')
   if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')
@@ -11751,6 +11770,36 @@ function applyUnitEditorDefaults() {
 // FBI metadata.  Ships / subs get "sea"; every other unit falls back
 // to "terrain" so opening a kbot after a sub doesn't leave it
 // floating on water from the previous tab's choice.
+// mvFetchUnitMeta loads the FBI movement + weapon refs for the
+// currently-loaded model and pushes the result onto the viewer +
+// the Controls overlay.  Fire-and-forget — failure leaves the
+// action buttons disabled (no metadata = "we don't know what the
+// unit can do" = safe default).
+async function mvFetchUnitMeta(mv) {
+  if (!mv?.model) return
+  mv.unitMeta = null
+  // The model name comes from the COB unit (set by model-viewer.js
+  // open() to the originally-requested model name).  Without a COB
+  // the unit isn't a real unit anyway — props/features have no
+  // FBI metadata.
+  const name = mv.cob?.unit?.name
+  if (!name) return
+  try {
+    const resp = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+    if (!resp.ok) return
+    mv.unitMeta = await resp.json()
+    if (_mvControls) _mvControls.onMetaLoaded()
+    // Re-render the Controls panel so its per-port visibility picks
+    // up the freshly-loaded capability flags (canMove, isBuilder,
+    // onoffable).  Otherwise the panel renders with empty unitMeta
+    // at model-load time and the gated rows never appear once the
+    // async FBI fetch resolves.
+    renderMvPortsPanel(mv)
+  } catch (err) {
+    console.warn(`[unit-meta:${name}] fetch failed:`, err)
+  }
+}
+
 function applyDefaultGroundFor(meta) {
   if (!modelViewerInstance?.renderer) return
   const want = meta?.defaultGround || 'terrain'
@@ -11822,6 +11871,51 @@ function refreshPieceTreeEyes() {
     btn.classList.toggle('off', !piece.visible)
     btn.title = piece.visible ? 'Hide piece (Shift: this piece only)' : 'Show piece (Shift: this piece only)'
     btn.textContent = piece.visible ? '👁' : '⊘'
+  })
+  refreshPieceTreeStatus()
+}
+
+// refreshPieceTreeStatus syncs the per-piece status indicators
+// (shade / cache / shadow) from the live COB runtime state.  Each
+// icon's `data-flag` says which flag it reflects.  Called on every
+// inspector refresh tick so the icons update as scripts call
+// shade / dont-shade / cache / dont-cache / dont-shadow.
+//
+// Glyphs chosen so each flag reads instantly without text:
+//   * 💡 lightbulb — shade ON (lit, scene light affects the piece)
+//     ; greyed bulb when `dont-shade` flips it
+//   * 💾 floppy — cache ON (transform baked / frozen)
+//   * 🌗 half-moon — shadow ON (piece is in the lit half, casting
+//     a shadow); greyed when `dont-shadow` opts out
+function refreshPieceTreeStatus() {
+  const cob = modelViewerInstance?.cob
+  const pieceMap = cob?._pieceMap
+  const unit = cob?.unit
+  if (!unit) return
+  document.querySelectorAll('#model-viewer-tree .piece-status').forEach((btn) => {
+    const piece = btn._piece
+    if (!piece || !pieceMap) return
+    const idx = pieceMap.get(piece)
+    if (typeof idx !== 'number' || idx < 0) return
+    const flag = btn.dataset.flag
+    let on, label, glyph
+    if (flag === 'shade') {
+      on = unit.isPieceShade(idx)
+      glyph = '💡'
+      label = on ? 'Shaded (click to dont-shade — cascades; ⇧ = this piece only)' : 'Unshaded (click to shade — cascades; ⇧ = this piece only)'
+    } else if (flag === 'cache') {
+      on = unit.isPieceCache(idx)
+      glyph = '💾'
+      label = on ? 'Cached (click to dont-cache — cascades; ⇧ = this piece only)' : 'Not cached (click to cache — cascades; ⇧ = this piece only)'
+    } else if (flag === 'shadow') {
+      on = unit.isPieceShadow(idx)
+      glyph = '🌗'
+      label = on ? 'Casts shadow (click to dont-shadow — cascades; ⇧ = this piece only)' : 'No shadow (click to enable — cascades; ⇧ = this piece only)'
+    } else return
+    btn.classList.toggle('on', on)
+    btn.classList.toggle('off', !on)
+    if (btn.textContent !== glyph) btn.textContent = glyph
+    btn.title = label
   })
 }
 
@@ -12101,14 +12195,62 @@ function refreshMvInspectors(dtMs = 16) {
   // Grey out action / COB-entry buttons whose script has a live
   // thread, so the user can see at a glance what's running and
   // can't double-trigger something that would jerk pieces.
+  // Called BEFORE refreshMvControlsGating because syncMvActionsRunning
+  // is the function that promotes cob._lifecycle from 'creating' to
+  // 'created' once the Create thread dies — running it first lets
+  // the gating react on the SAME tick instead of one frame later.
   syncMvActionsRunning(mv.cob)
   syncCobRibbonRunning(mv.cob)
+  // Whole-Controls-panel gating — disable EVERY input under the
+  // overlay until the unit's Create script has completed.  Mirrors
+  // the Actions panel's button gating (real TA blocks all unit
+  // commands until Create finishes).  Cheap enough to run every
+  // refresh tick — toggles a single class on the panel root.
+  refreshMvControlsGating(mv)
+  // Runtime stats — tick counter, last-tick ms, units, threads.
+  // Pulled straight off the runtime object so the numbers reflect
+  // the live state, not whatever snapshot the panel was built with.
+  refreshMvRuntimeStats(mv)
+  // Piece-tree status icons (eye / shade / cache / shadow) — mirror
+  // the live COB-driven per-piece state.  Cheap query-and-toggle
+  // per row so a Create-script hide / dont-shade lights up in the
+  // tree the same tick the opcode runs.
+  refreshPieceTreeEyes()
   // Thread code-view modals — refresh every open debugger panel.
   // Each panel tracks its own thread, hover state, and DOM scope so
   // multiple debuggers can run side-by-side.
   for (const state of _mvThreadCodePanels.values()) {
     refreshMvThreadCodeHighlight(state)
     redrawMvThreadCodeBrackets(state)
+  }
+}
+
+// _mvCollapsedUnits — module-scoped Set of unit IDs the user has
+// collapsed in the Runtime overlay.  Survives the inspector's 4 Hz
+// re-render so collapse state persists.  Cleared explicitly when
+// the model viewer disposes its runtime (each new tab gets a fresh
+// runtime, so the IDs don't collide).
+const _mvCollapsedUnits = new Set()
+
+// applyMvUnitCollapseState walks the Runtime overlay's body and
+// shows / hides each thread row based on the unit it belongs to.
+// Called after every renderMvScriptsPanel + after a chevron click.
+// Also updates the chevron glyph on each unit header to reflect
+// the current state (+ vs −).
+function applyMvUnitCollapseState() {
+  const body = document.getElementById('mv-inspector-scripts-body')
+  if (!body) return
+  for (const row of body.querySelectorAll('.mv-cob-thread-row[data-unit-id]')) {
+    const id = parseInt(row.dataset.unitId, 10)
+    row.classList.toggle('mv-thread-collapsed', _mvCollapsedUnits.has(id))
+  }
+  for (const hdr of body.querySelectorAll('.mv-unit-header[data-unit-id]')) {
+    const id = parseInt(hdr.dataset.unitId, 10)
+    const chev = hdr.querySelector('.mv-unit-header-collapse')
+    if (!chev) continue
+    const collapsed = _mvCollapsedUnits.has(id)
+    chev.textContent = collapsed ? '+' : '−'
+    chev.title = collapsed ? `Expand Unit ${id}` : `Collapse Unit ${id}`
   }
 }
 
@@ -12153,23 +12295,34 @@ function renderMvScriptsPanel(body, cob) {
     }
     body.appendChild(buildMvUnitGroupHeader(unit, cob, /*empty*/ false))
     // Render killed threads first so the red-flash animation sits
-    // at the top of the group while it plays.
+    // at the top of the group while it plays.  Each row is tagged
+    // with the owning unit's id so the collapse handler can hide
+    // every row belonging to a single group with one query.
     for (const k of killed) {
-      body.appendChild(renderMvThreadRow({
+      const row = renderMvThreadRow({
         script: k.script,
         pc: k.pc,
         sleepMs: 0,
         waitOn: null,
         signalMask: k.signalMask,
         _killedBy: k.killedBySignal,
-      }, true, null))
+      }, true, null)
+      row.dataset.unitId = String(unit.id)
+      body.appendChild(row)
       totalShown++
     }
     for (const t of live) {
-      body.appendChild(renderMvThreadRow(t, false, cob))
+      const row = renderMvThreadRow(t, false, cob)
+      row.dataset.unitId = String(unit.id)
+      body.appendChild(row)
       totalShown++
     }
   }
+  // Re-apply the per-unit collapse state to the newly-rendered rows.
+  // The Set survives panel rebuilds (which happen every 250ms via
+  // the inspector throttle); without re-applying, an expanded panel
+  // would forget which units the user had collapsed.
+  applyMvUnitCollapseState()
   if (totalShown === 0) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
@@ -12187,6 +12340,25 @@ function renderMvScriptsPanel(body, cob) {
 function buildMvUnitGroupHeader(unit, cob, empty) {
   const hdr = document.createElement('div')
   hdr.className = empty ? 'mv-unit-header mv-unit-header-empty' : 'mv-unit-header'
+  hdr.dataset.unitId = String(unit.id)
+  // Collapse chevron — first element so it reads as the "twirl
+  // arrow" pattern users expect from tree controls.  Persistence
+  // lives in the module-scoped _mvCollapsedUnits Set so the state
+  // survives panel re-renders (every 4 Hz tick) and tab switches
+  // within a runtime.  Clicking flips the state + immediately
+  // hides/shows the unit's thread rows below.
+  const collapsed = _mvCollapsedUnits.has(unit.id)
+  const chev = document.createElement('button')
+  chev.className = 'mv-unit-header-collapse'
+  chev.textContent = collapsed ? '+' : '−'
+  chev.title = collapsed ? `Expand Unit ${unit.id}` : `Collapse Unit ${unit.id}`
+  chev.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (_mvCollapsedUnits.has(unit.id)) _mvCollapsedUnits.delete(unit.id)
+    else _mvCollapsedUnits.add(unit.id)
+    applyMvUnitCollapseState()
+  })
+  hdr.appendChild(chev)
   const name = unit.name || unit.scriptOriginName || ''
   const label = document.createElement('span')
   label.className = 'mv-unit-header-label'
@@ -13995,11 +14167,58 @@ function renderMvStaticVarsPanel(body, cob) {
   }
 }
 
+// wireMvRuntimeVisibility pauses the COB runtime whenever the browser
+// tab goes background (visibilitychange → hidden) and resumes it
+// when the tab comes back.  Important for two reasons:
+//   1. background tabs get rAF throttled to ~1 Hz, so the per-frame
+//      runtime.tick(dtMs) drains a HUGE dtMs on the next foreground
+//      frame — which would burst through 8 fixed sub-steps in one
+//      go and look like a teleport / animation jump.
+//   2. CPU + battery: a unit-editor tab left in the background
+//      shouldn't keep churning script bytecode the user can't see.
+// Remembers the prior paused state so we don't blow away an
+// explicit user pause (Resume button leaves runtime paused; coming
+// back from background must NOT auto-un-pause).
+function wireMvRuntimeVisibility() {
+  let savedPaused = null
+  document.addEventListener('visibilitychange', () => {
+    const rt = modelViewerInstance?.cob?.runtime || modelViewerInstance?._runtime
+    if (!rt) return
+    if (document.hidden) {
+      // Capture the prior state on the way DOWN — if already
+      // paused (user clicked Pause), savedPaused=true so we leave
+      // it paused when we come back.
+      savedPaused = !!rt.paused
+      if (!rt.paused) rt.setPaused(true)
+    } else {
+      // Restore the captured pre-hide state.  Defensive null-check
+      // — visibilitychange "visible" can fire without a prior
+      // "hidden" in some unusual page-load flows.
+      if (savedPaused !== null && rt.paused && !savedPaused) {
+        rt.setPaused(false)
+      }
+      savedPaused = null
+    }
+  })
+}
+
+// renderMvCameraPanel populates the Renderer overlay — historically a
+// camera-only read-out, now also displays the GL canvas's smoothed
+// FPS so the user can spot rendering hitches.  Function name kept
+// because every call site already references it; the panel's
+// user-facing label is "Renderer".
 function renderMvCameraPanel(mv) {
+  wireMvRendererPanel()
   const cam = mv.camera
   if (!cam) return
   const fmt = (a, p = 2) => Array.isArray(a) ? `(${a.map(v => v.toFixed(p)).join(', ')})` : a.toFixed(p)
   const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
+  // FPS is computed from the render loop's per-frame timestamps —
+  // see model-renderer.js for the rolling-window average that
+  // backs `getFPS()`.  Returns 0 when the loop isn't running
+  // (paused, no model), so we show "—" in that case.
+  const fps = mv.renderer && typeof mv.renderer.getFPS === 'function' ? mv.renderer.getFPS() : 0
+  set('mv-ci-fps', fps > 0 ? fps.toFixed(0) + ' fps' : '—')
   set('mv-ci-eye', fmt(cam.eye, 1))
   set('mv-ci-target', fmt(cam.target, 1))
   set('mv-ci-yaw', `${(cam.yaw * 180 / Math.PI).toFixed(1)}°`)
@@ -14007,6 +14226,40 @@ function renderMvCameraPanel(mv) {
   set('mv-ci-dist', cam.distance.toFixed(1) + ' wu')
   if (cam.fov !== undefined) set('mv-ci-fov', `${(cam.fov * 180 / Math.PI).toFixed(0)}°`)
   else set('mv-ci-fov', '—')
+  // Track checkbox — mirror the live state from MvControls each
+  // tick.  Without this the checkbox would silently desync when
+  // the T key or a shift-pan flipped tracking.
+  const trackCb = document.getElementById('mv-ci-track')
+  if (trackCb && _mvControls) {
+    if (trackCb.checked !== _mvControls.tracking) trackCb.checked = _mvControls.tracking
+  }
+}
+
+// wireMvRendererPanel attaches the Tracking checkbox change handler
+// once on first render of the Renderer panel.  Wired separately
+// from the value-only refresh path so we don't re-bind on every
+// 4 Hz tick.  Also seeds the checkbox to the live MvControls state
+// on first wire so the default-on tracking doesn't render as a
+// blank checkbox until the user opens the panel.
+function wireMvRendererPanel() {
+  const cb = document.getElementById('mv-ci-track')
+  if (!cb || cb.dataset.wired === '1') {
+    // Already wired — just resync (the panel-open path may run
+    // before the Controls overlay has its MvControls).
+    if (cb && _mvControls && cb.checked !== _mvControls.tracking) {
+      cb.checked = _mvControls.tracking
+    }
+    return
+  }
+  cb.dataset.wired = '1'
+  if (_mvControls) cb.checked = _mvControls.tracking
+  cb.addEventListener('change', () => {
+    if (_mvControls) _mvControls.setTracking(cb.checked)
+  })
+  // Clicking the row label shouldn't bubble into the panel-drag
+  // handler — that would start a drag instead of toggling.
+  cb.addEventListener('pointerdown', (e) => e.stopPropagation())
+  cb.addEventListener('mousedown', (e) => e.stopPropagation())
 }
 
 // renderMvPortsPanel builds the Ports overlay body.  Called once on
@@ -14030,21 +14283,59 @@ function renderMvPortsPanel(mv) {
     return
   }
   const ports = mv.cobPorts
-  body.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
-    'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
-    (on) => { ports.activation = on ? 1 : 0 }))
-  body.appendChild(buildPortChoiceRow('Move orders', 'moveOrders', ports.moveOrders,
-    [['Hold', 0, 'Hold Position — never leave the spot'],
-     ['Maneuver', 1, 'Maneuver — move only to gain line of sight'],
-     ['Roam', 2, 'Roam — chase enemies freely (default)']],
-    'GET STANDINGMOVEORDERS — patrol AI scripts read this to decide whether to step toward an enemy.',
-    (v) => { ports.moveOrders = v }))
-  body.appendChild(buildPortChoiceRow('Fire orders', 'fireOrders', ports.fireOrders,
-    [['Hold', 0, 'Hold Fire — never engage'],
-     ['Return', 1, 'Return Fire — only shoot back when attacked'],
-     ['Fire at will', 2, 'Fire at Will — engage anything in range (default)']],
-    'GET STANDINGFIREORDERS — weapon scripts read this to gate Fire* threads.',
-    (v) => { ports.fireOrders = v }))
+  // Per-port capability gating.  The TA UnitValue ports are a long
+  // list but the studio surfaces only the subset that's meaningful
+  // for THIS unit — driven by a mix of FBI hints and COB usage
+  // detection.  Rendering the un-applicable rows just clutters the
+  // panel + invites the user to flip a value the unit will ignore.
+  //
+  //   activation        - onoffable=1 in FBI, OR the COB ships an
+  //                       Activate/Deactivate script (which gives
+  //                       the user something to drive ON/OFF).
+  //   moveOrders/fire   - unit can move (CanMove from FBI) OR is a
+  //                       factory (Builder=1 — produced units inherit
+  //                       the factory's standing orders).
+  //   inBuildStance     - Builder=1 (factories + construction units
+  //                       flip this while assembling).
+  //   health/build%     - always shown.  Every unit has HP + build
+  //                       progress in TA.
+  //   armoured          - COB references the ARMORED port (port 20)
+  //                       via GET/SET — caught by scanning the
+  //                       compiled instruction stream.  Solar panels
+  //                       are the canonical example.
+  const um = mv.unitMeta || {}
+  const cob = mv.cob
+  // ACTIVATION port is shown ONLY when the FBI explicitly flags the
+  // unit as player-toggleable (onoffable=1).  Aircraft like the
+  // Hawk ship Activate/Deactivate scripts — but those are engine-
+  // driven for the take-off / landing sequence, NOT player commands;
+  // in the game UI a Hawk has no on/off button.  Earlier the check
+  // also OR'd on Activate-script presence, which mis-classified
+  // every aircraft as "toggleable".  onoffable=1 is the canonical
+  // signal (Radar, Solar, Adv Fusion etc).
+  const showActive = (um.onoffable === true || um.onoffable === 1)
+  const showMoveFire = !!(um.canMove || um.isBuilder)
+  const showBuildStance = !!um.isBuilder
+  const showArmoured = !!(cob.unit && cob.unit.usesUnitValuePort && cob.unit.usesUnitValuePort(20 /* UV_ARMORED */))
+  if (showActive) {
+    body.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
+      'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
+      (on) => { ports.activation = on ? 1 : 0 }))
+  }
+  if (showMoveFire) {
+    body.appendChild(buildPortChoiceRow('Move orders', 'moveOrders', ports.moveOrders,
+      [['Hold', 0, 'Hold Position — never leave the spot'],
+       ['Maneuver', 1, 'Maneuver — move only to gain line of sight'],
+       ['Roam', 2, 'Roam — chase enemies freely (default)']],
+      'GET STANDINGMOVEORDERS — patrol AI scripts read this to decide whether to step toward an enemy.  Factories pass the value to units they produce.',
+      (v) => { ports.moveOrders = v }))
+    body.appendChild(buildPortChoiceRow('Fire orders', 'fireOrders', ports.fireOrders,
+      [['Hold', 0, 'Hold Fire — never engage'],
+       ['Return', 1, 'Return Fire — only shoot back when attacked'],
+       ['Fire at will', 2, 'Fire at Will — engage anything in range (default)']],
+      'GET STANDINGFIREORDERS — weapon scripts read this to gate Fire* threads.  Factories pass the value to units they produce.',
+      (v) => { ports.fireOrders = v }))
+  }
   body.appendChild(buildPortSliderRow('Health', 'health',
     Math.max(0, 100 - (mv.cobDamage | 0)), 0, 100, '%',
     'GET HEALTH returns this 0–100 value.  Drives SmokeUnit + damage-state scripts.  Synced with the COB ribbon\'s Damage slider.',
@@ -14052,8 +14343,10 @@ function renderMvPortsPanel(mv) {
       mv.cobDamage = Math.max(0, Math.min(100, 100 - v))
       mvSyncCobAttrSlidersFromPorts(mv)
     }))
-  body.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
-    'GET INBUILDSTANCE — set by factory scripts via SET_VALUE while assembling a unit.  Read-only here; toggled by the running script.'))
+  if (showBuildStance) {
+    body.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
+      'GET INBUILDSTANCE — set by factory scripts via SET_VALUE while assembling a unit.  Read-only here; toggled by the running script.'))
+  }
   body.appendChild(buildPortSliderRow('Build % left', 'buildPercentLeft',
     Math.max(0, 100 - (mv.cobBuildPercent | 0)), 0, 100, '%',
     'GET BUILD_PERCENT_LEFT — 100 means nothing built yet, 0 means fully built.  Synced with the COB ribbon\'s Build slider.',
@@ -14061,8 +14354,10 @@ function renderMvPortsPanel(mv) {
       mv.cobBuildPercent = Math.max(0, Math.min(100, 100 - v))
       mvSyncCobAttrSlidersFromPorts(mv)
     }))
-  body.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
-    'GET ARMORED returns 1 when the unit\'s armour plating is engaged.  Read-only here; flipped by damage scripts via SET_VALUE.'))
+  if (showArmoured) {
+    body.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
+      'GET ARMORED returns 1 when the unit\'s armour plating is engaged.  Read-only here; flipped by damage scripts via SET_VALUE.'))
+  }
 }
 
 // refreshMvPortsLiveValues updates the value-only widgets (read-only
@@ -14112,6 +14407,73 @@ function refreshMvPortsLiveValues(mv) {
       b.classList.toggle('active', isActive)
     }
   }
+}
+
+// refreshMvControlsGating disables the entire Controls overlay
+// (action buttons + every port input) until the unit's Create
+// script has finished.  The Actions panel + COB ribbon already
+// gate their individual buttons; this mirrors the same rule for
+// the Controls panel as a single class on the root so the user
+// can see at a glance that nothing in there responds yet.
+//
+// 'unborn' (Create never started) and 'creating' (Create thread
+// is mid-flight) both block input.  Anything else — 'created',
+// 'activated', 'deactivated' — lets the user drive.  When there's
+// no COB at all the panel stays disabled (no scripts to wire to).
+function refreshMvControlsGating(mv) {
+  const panel = document.getElementById('mv-inspector-ports')
+  if (!panel) return
+  const cob = mv?.cob
+  const lifecycle = cob?._lifecycle
+  const blocked = !cob || lifecycle === 'unborn' || lifecycle === 'creating'
+  // .mv-controls-gated drops opacity and disables pointer events on
+  // the action-button row + the port-rows body via CSS — the panel
+  // header (drag grip + collapse + close) stays interactive so the
+  // user can still move/dismiss the overlay while waiting for Create.
+  // Per-button capability gating done by _refreshButtons stays
+  // untouched: when Create completes, the class drops and each
+  // button's own disabled state takes over again.
+  panel.classList.toggle('mv-controls-gated', blocked)
+  // Tooltip on the action row explains WHY the panel is unresponsive,
+  // so the user doesn't think the buttons are broken.
+  const actions = panel.querySelector('#mv-controls-actions')
+  if (actions) {
+    if (blocked) {
+      actions.title = 'Run Create first — these controls activate once the unit\'s Create script has finished.'
+    } else {
+      actions.removeAttribute('title')
+    }
+  }
+}
+
+// refreshMvRuntimeStats updates the four telemetry spans in the
+// Runtime overlay header.  Reads directly off the runtime object
+// — tickCount + lastTickMs are written by CobRuntime.tick(),
+// unitCount() + threadCount() walk the unit map each call (cheap
+// at studio scale).  When no runtime exists the spans show 0/—.
+function refreshMvRuntimeStats(mv) {
+  const panel = document.getElementById('mv-inspector-scripts')
+  if (!panel || panel.classList.contains('hidden')) return
+  const rt = mv?.cob?.runtime || mv?._runtime
+  const tickEl    = document.getElementById('mv-runtime-stat-tick')
+  const lastEl    = document.getElementById('mv-runtime-stat-last')
+  const unitsEl   = document.getElementById('mv-runtime-stat-units')
+  const threadsEl = document.getElementById('mv-runtime-stat-threads')
+  const instEl    = document.getElementById('mv-runtime-stat-inst')
+  if (!tickEl || !lastEl || !unitsEl || !threadsEl || !instEl) return
+  if (!rt) {
+    tickEl.textContent = '0'
+    lastEl.textContent = '— ms'
+    unitsEl.textContent = '0'
+    threadsEl.textContent = '0'
+    instEl.textContent = '0'
+    return
+  }
+  tickEl.textContent = String(rt.tickCount | 0)
+  lastEl.textContent = `${(rt.lastTickMs || 0).toFixed(1)} ms`
+  unitsEl.textContent = String(rt.unitCount ? rt.unitCount() : 0)
+  threadsEl.textContent = String(rt.threadCount ? rt.threadCount() : 0)
+  instEl.textContent = String(rt.lastInstCount | 0)
 }
 
 // ── Ports panel — row builders ────────────────────────────────────
@@ -14597,12 +14959,31 @@ function runCobEntry(cob, name) {
     cob._lifecycle = 'activated'
     if (cob.hasScript('activatescr') && !isCobScriptRunning(cob, 'activatescr')) cob.start('activatescr')
     if (cob.hasScript('OpenYard') && !isCobScriptRunning(cob, 'OpenYard')) cob.start('OpenYard')
+    // FBI SoundCategory's `activate` event — fires the same audio
+    // TA plays for an in-game activation (factory doors open,
+    // radar dish spinning up, etc).  Many unit categories don't
+    // define `activate` (factories like KBOTPLANT carry only
+    // select1 / build / unitcomplete), so fall back to the
+    // unit's acknowledge voice (`select*`) and finally to `build`
+    // — that way the user always hears SOMETHING when they
+    // command an open/yard-up.
+    if (_mvControls) _mvControls._playSoundRandom(['activate', 'select1', 'select2', 'select3', 'build', 'unitcomplete'])
   }
   if (/^Deactivate$/i.test(name)) {
     if (cob._lifecycle === 'deactivated') return
     cob._lifecycle = 'deactivated'
     if (cob.hasScript('deactivatescr') && !isCobScriptRunning(cob, 'deactivatescr')) cob.start('deactivatescr')
     if (cob.hasScript('CloseYard') && !isCobScriptRunning(cob, 'CloseYard')) cob.start('CloseYard')
+    // Same fallback chain as Activate, biased toward the second
+    // acknowledge voice so Activate / Deactivate sound distinct
+    // even when both fall back to the select bank.
+    if (_mvControls) _mvControls._playSoundRandom(['deactivate', 'select2', 'select3', 'select1', 'cant1'])
+  }
+  // Create script kicks the unit "online" — play the select voice
+  // so the user hears the unit acknowledge itself when they bring
+  // it to life.  Skipped when the unit has no Create.
+  if (/^Create$/i.test(name)) {
+    if (_mvControls) _mvControls._playSoundRandom(['select1', 'select2', 'select3', 'unitcomplete'])
   }
   if (/^Aim(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(name)) {
     // Each Aim* call's bos spawns RestoreAfterDelay which sleeps
@@ -14674,6 +15055,51 @@ function renderPieceTree(model) {
     }
   }
 
+  // makeStatusIcon — clickable chip representing one of the
+  // COB-driven render flags for a piece (shade / cache / shadow).
+  // The icon glyph + .on/.off class are refreshed each inspector
+  // tick from the live COB state (refreshPieceTreeStatus).  Click
+  // flips that state — cascades through descendants by default,
+  // shift-click suppresses the cascade.  Writing through to the
+  // CobUnit's flag array means the next render frame + every
+  // future runtime query sees the new value, matching how the
+  // eye toggle behaves.
+  const FLAG_FIELDS = {
+    shade:  '_pieceShade',
+    cache:  '_pieceCache',
+    shadow: '_pieceShadow',
+  }
+  const makeStatusIcon = (piece, flag, _onTitle, _offTitle) => {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'piece-status'
+    btn.dataset.flag = flag
+    btn._piece = piece
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const unit = modelViewerInstance?.cob?.unit
+      const pieceMap = modelViewerInstance?.cob?._pieceMap
+      const field = FLAG_FIELDS[flag]
+      if (!unit || !pieceMap || !field) return
+      // Read current state from the unit, then flip + apply with
+      // the same cascade rules as the eye toggle: shift-click =
+      // this piece only, plain click = this piece + all descendants.
+      const myIdx = pieceMap.get(piece)
+      if (typeof myIdx !== 'number' || myIdx < 0) return
+      // Cache uses default-off, shade + shadow default-on.  Whatever
+      // the new target value is, every cascaded piece gets the same.
+      const target = !unit[field][myIdx]
+      const cascade = !e.shiftKey
+      const apply = (p) => {
+        const idx = pieceMap.get(p)
+        if (typeof idx === 'number' && idx >= 0) unit[field][idx] = target
+        if (cascade) for (const c of p.children) apply(c)
+      }
+      apply(piece)
+      refreshPieceTreeStatus()
+    })
+    return btn
+  }
   const makeEyeToggle = (piece) => {
     const eye = document.createElement('button')
     eye.type = 'button'
@@ -14747,6 +15173,9 @@ function renderPieceTree(model) {
       }
       title.appendChild(stat)
       title.appendChild(makeEyeToggle(piece))
+      title.appendChild(makeStatusIcon(piece, 'shade',  'Shaded',       'Unshaded (dont-shade)'))
+      title.appendChild(makeStatusIcon(piece, 'cache',  'Cached',       'Not cached'))
+      title.appendChild(makeStatusIcon(piece, 'shadow', 'Casts shadow', 'No shadow (dont-shadow)'))
       // Chevron collapses; everything else jumps the camera.
       chev.addEventListener('click', (e) => {
         e.stopPropagation()
@@ -14788,6 +15217,9 @@ function renderPieceTree(model) {
     stat.textContent = `${Math.round(primCount)} prim`
     row.appendChild(stat)
     row.appendChild(makeEyeToggle(piece))
+    row.appendChild(makeStatusIcon(piece, 'shade',  'Shaded',       'Unshaded (dont-shade)'))
+    row.appendChild(makeStatusIcon(piece, 'cache',  'Cached',       'Not cached'))
+    row.appendChild(makeStatusIcon(piece, 'shadow', 'Casts shadow', 'No shadow (dont-shadow)'))
     row.addEventListener('click', () => selectPiece(piece.name))
     row.addEventListener('mouseenter', () => setHover(piece.name))
     row.addEventListener('mouseleave', () => setHover(null))
@@ -14890,6 +15322,9 @@ function renderModelList() {
     const card = document.createElement('button')
     card.className = 'open-list-item model-list-item'
     card.dataset.name = m.name
+    // Units missing the 3DO can't be viewed in 3D — gate selection
+    // visually and via the confirm button.
+    if (!m.has3DO) card.classList.add('disabled-entry')
     if (m.name === selectedModelName) card.classList.add('selected')
     const title = m.unitTitle || m.unitName || m.name
     const meta = [
@@ -14898,16 +15333,32 @@ function renderModelList() {
       m.category || null,
     ].filter(Boolean).join(' · ')
     const sub = m.description || ''
-    card.innerHTML = `<div class="thumb model-thumb">🛠</div>` +
+    // Build-picture thumbnail: only request when the index says one
+    // exists (avoids a wave of 404s from <img> elements pointing at
+    // missing pics).  Fallback is a muted blank tile.
+    const thumb = m.hasBuildPic
+      ? `<div class="thumb model-thumb"><img loading="lazy" alt="" src="/api/studio/buildpic/${encodeURIComponent(m.name)}"></div>`
+      : '<div class="thumb model-thumb model-thumb-empty" title="No build picture in this VFS"></div>'
+    // Presence chips — three small dots per row.  Each is colour-coded
+    // and titled so a hover tells the user exactly what's missing.
+    const chip = (on, label, longTitle) =>
+      `<span class="model-chip ${on ? 'on' : 'off'}" title="${escapeHTML(longTitle)}">${escapeHTML(label)}</span>`
+    const chips =
+      chip(m.hasFBI, 'FBI', m.hasFBI ? 'unit definition (FBI) found in the VFS' : 'no FBI — this is an orphan 3DO (prop / feature / debug geometry)') +
+      chip(m.has3DO, '3DO', m.has3DO ? 'unit geometry (3DO) found' : 'no 3DO — this unit cannot be opened in the 3D viewer') +
+      chip(m.hasCOB, 'COB', m.hasCOB ? 'animation script (COB) found' : 'no COB — the unit will display statically with no animator')
+    card.innerHTML = thumb +
       `<div class="title">${escapeHTML(title)}</div>` +
       `<div class="meta">${escapeHTML(meta)}</div>` +
-      (sub ? `<div class="meta">${escapeHTML(sub)}</div>` : '')
+      (sub ? `<div class="meta">${escapeHTML(sub)}</div>` : '') +
+      `<div class="model-chips">${chips}</div>`
     card.addEventListener('click', () => {
+      if (!m.has3DO) return  // can't open without geometry
       selectedModelName = m.name
       $$('.model-list-item').forEach((el) => el.classList.toggle('selected', el.dataset.name === m.name))
       $('#model-open-confirm').disabled = false
     })
-    card.addEventListener('dblclick', () => openModelViewer(m.name))
+    card.addEventListener('dblclick', () => { if (m.has3DO) openModelViewer(m.name) })
     frag.appendChild(card)
   }
   list.replaceChildren(frag)

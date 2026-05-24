@@ -264,6 +264,33 @@ const SKY_PRESETS = {
 //   * waterTranslucency  — alpha multiplier (0.5 = opaque, 1.5 = glass)
 //   * seabedSand/Rock    — colours of the seabed dunes + outcrops
 //   * seabedCaustic      — tint of the caustic light shaft on the bed
+// Gravity table — per-environment world-Y acceleration in wu/sec²,
+// consumed by the ballistic aim solver to set barrel pitch on
+// cannon-class weapons.  Earth-like tilesets use ~80 (calibrated so
+// the ARM_BATS cannon at its 1250 wu range / 350 wu/sec velocity
+// elevates to ~28°, which matches the visual TA cannon-up posture).
+// Lunar drops to a quarter, Mars to ~⅜ — so switching environment
+// visibly changes the barrel angle for the same range.
+//
+// Indexed by ENVIRONMENT_PRESETS key.  Anything not listed falls
+// back to GRAVITY_EARTH.  Exposed via renderer.getGravity() so
+// mv-controls can re-query each aim cycle without poking internals.
+const GRAVITY_EARTH = 80
+const GRAVITY_BY_ENV = {
+  greenworld:  80,
+  archipelago: 80,
+  desert:      80,
+  marsh:       80,
+  arctic:      80,
+  slate:       80,
+  sunset:      80,
+  night:       80,
+  alienTwin:   90,   // alien world — heavier
+  metal:       80,
+  lava:        80,
+  mars:        30,   // ~⅜ Earth
+  moon:        20,   // ~¼ Earth (ENVIRONMENT_PRESETS key)
+}
 const ENVIRONMENT_PRESETS = {
   greenworld: {
     name: 'Greenworld',
@@ -701,6 +728,15 @@ export class ModelRenderer {
     this._scratch = Mat4.create()
     this._worldScratch = Mat4.create()
     this._modelMatrix = Mat4.identity(Mat4.create())
+    // unitTransform = { x, y, z, headingRad } — applied to
+    // _modelMatrix every frame so the Controls panel's Move action
+    // can walk / fly the unit around the scene.  Y is the runtime
+    // altitude offset (aircraft rise during flight); the
+    // mode-specific submersion offset is layered on TOP via
+    // getUnitYOffset so a flying-over-water unit still sits above
+    // the surface, not below.  Defaults are zero so legacy call
+    // sites that never set this see the unit at world origin.
+    this._unitTransform = { x: 0, y: 0, z: 0, headingRad: 0 }
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -810,6 +846,130 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setUnitTransform places the unit at (x, y, z) world units with
+  // the given Y-axis heading.  Used by the Controls panel's Move
+  // action to walk the unit toward a clicked target, and by the
+  // flight scheduler to raise aircraft above the ground while in
+  // motion.  Values are written into _modelMatrix at the start of
+  // every frame; persists across ticks so the move-loop only needs
+  // to update on motion change.  The legacy 3-arg signature
+  // (x, z, headingRad) is still accepted for callers that don't
+  // care about altitude.
+  setUnitTransform(x, yOrZ, zOrHeading, headingRad) {
+    if (headingRad === undefined) {
+      // Legacy 3-arg form: (x, z, headingRad).  Altitude stays 0.
+      this._unitTransform.x = +x || 0
+      this._unitTransform.y = 0
+      this._unitTransform.z = +yOrZ || 0
+      this._unitTransform.headingRad = +zOrHeading || 0
+    } else {
+      this._unitTransform.x = +x || 0
+      this._unitTransform.y = +yOrZ || 0
+      this._unitTransform.z = +zOrHeading || 0
+      this._unitTransform.headingRad = +headingRad || 0
+    }
+    this.requestRedraw()
+  }
+
+  // unitWorldXZ returns the unit's current world XZ position.  The
+  // aim+fire scheduler uses this to compute the vector from unit
+  // origin to target so its heading/pitch math is in the same
+  // coordinate space the renderer translates by.
+  unitWorldXZ() { return [this._unitTransform.x, this._unitTransform.z] }
+  unitWorldY() { return this._unitTransform.y }
+  unitHeading() { return this._unitTransform.headingRad }
+
+  // worldToCanvas projects a world-space (x, y, z) point onto the
+  // canvas's CSS pixel grid using the camera's live VP matrix.  The
+  // caller adds the canvas's bounding-rect offset to get viewport
+  // coordinates suitable for a position:fixed overlay.  Returns null
+  // when the point is behind the near plane (w <= 0) so the overlay
+  // can be hidden in that case rather than drawn off-screen with a
+  // post-divide NaN.
+  worldToCanvas(world) {
+    if (!this.camera) return null
+    const c = this.camera
+    const x = world[0], y = world[1], z = world[2]
+    // Apply view × proj manually so we can read the w component
+    // before the homogeneous divide.  proj * view * p = clip.
+    const view = c.viewMatrix, proj = c.projMatrix
+    // view * (x,y,z,1)
+    const vx = view[0]*x + view[4]*y + view[8] *z + view[12]
+    const vy = view[1]*x + view[5]*y + view[9] *z + view[13]
+    const vz = view[2]*x + view[6]*y + view[10]*z + view[14]
+    const vw = view[3]*x + view[7]*y + view[11]*z + view[15]
+    // proj * view * p
+    const cx = proj[0]*vx + proj[4]*vy + proj[8] *vz + proj[12]*vw
+    const cy = proj[1]*vx + proj[5]*vy + proj[9] *vz + proj[13]*vw
+    /*const cz = proj[2]*vx + proj[6]*vy + proj[10]*vz + proj[14]*vw*/
+    const cw = proj[3]*vx + proj[7]*vy + proj[11]*vz + proj[15]*vw
+    if (cw <= 1e-6) return null // behind camera or at the eye
+    const ndcX = cx / cw
+    const ndcY = cy / cw
+    // CSS pixels (canvas-local).  Y flipped because NDC Y is up but
+    // CSS Y is down.
+    const w = this.canvas?.clientWidth || this.gl.drawingBufferWidth
+    const h = this.canvas?.clientHeight || this.gl.drawingBufferHeight
+    return {
+      x: (ndcX * 0.5 + 0.5) * w,
+      y: (1 - (ndcY * 0.5 + 0.5)) * h,
+    }
+  }
+
+  // canvasToGroundPoint translates a viewport pixel (canvas-local)
+  // into the world-space ground-plane (Y=0) point under that pixel.
+  // Returns null when the ray misses the plane (e.g. user clicked
+  // the sky above the horizon).  Used by the Controls panel to
+  // resolve a click into a move/aim target.
+  canvasToGroundPoint(cx, cy) {
+    if (!this.camera) return null
+    const w = this.gl.drawingBufferWidth
+    const h = this.gl.drawingBufferHeight
+    // Normalised device coordinates [-1, 1].
+    const ndcX = (cx / Math.max(1, w)) * 2 - 1
+    const ndcY = 1 - (cy / Math.max(1, h)) * 2
+    const c = this.camera
+    // Reuse the camera's live proj+view matrices — they're already
+    // synced by the per-frame update so they match what the user
+    // actually sees on screen.  Combine into a VP, then invert to
+    // unproject NDC back into world coords.  Mat4.invert returns
+    // null on a singular matrix (degenerate camera state).
+    const vp = Mat4.create()
+    Mat4.multiply(vp, c.projMatrix, c.viewMatrix)
+    const inv = Mat4.create()
+    if (!Mat4.invert(inv, vp)) return null
+    // Unproject NDC at the near + far depth, then intersect the ray
+    // (eye → far point) with the y=0 ground plane.  Inline 4-vector
+    // multiplication keeps this self-contained (mat4.js has no
+    // transformPoint helper).
+    const unproject = (nx, ny, nz) => {
+      const w = inv[3] * nx + inv[7] * ny + inv[11] * nz + inv[15]
+      if (Math.abs(w) < 1e-9) return null
+      return [
+        (inv[0] * nx + inv[4] * ny + inv[8]  * nz + inv[12]) / w,
+        (inv[1] * nx + inv[5] * ny + inv[9]  * nz + inv[13]) / w,
+        (inv[2] * nx + inv[6] * ny + inv[10] * nz + inv[14]) / w,
+      ]
+    }
+    const nearP = unproject(ndcX, ndcY, -1)
+    const farP  = unproject(ndcX, ndcY,  1)
+    if (!nearP || !farP) return null
+    // Intersection plane Y — for sea ground mode we want the water
+    // surface, not y=0 (which sits well below the visible water
+    // and would map a click "on the boat" to a far-distant point).
+    // Other ground modes (terrain / grid / off) use y=0.
+    const planeY = (this.groundMode === 'sea') ? this._getWaterY() : 0
+    const dy = farP[1] - nearP[1]
+    if (Math.abs(dy) < 1e-6) return null
+    const t = (planeY - nearP[1]) / dy
+    if (t < 0) return null
+    return [
+      nearP[0] + (farP[0] - nearP[0]) * t,
+      planeY,
+      nearP[2] + (farP[2] - nearP[2]) * t,
+    ]
+  }
+
   setGroundMode(mode) {
     if (!['grid', 'terrain', 'sea', 'off'].includes(mode)) return
     this.groundMode = mode
@@ -848,9 +1008,11 @@ export class ModelRenderer {
   // works for scripted scenes.
   setEnvironment(nameOrPreset) {
     let env
+    let envKey = null
     if (typeof nameOrPreset === 'string') {
       env = ENVIRONMENT_PRESETS[nameOrPreset]
       if (!env) return
+      envKey = nameOrPreset
     } else if (nameOrPreset && nameOrPreset.sky) {
       env = nameOrPreset
     } else {
@@ -859,6 +1021,12 @@ export class ModelRenderer {
     // Cache the active env so the sea shader can pull water tints
     // from it each frame.  See #renderGround.
     this.activeEnvironment = env
+    // Track the environment key separately — gravity lookups go
+    // through this rather than the preset object so the ballistic
+    // aim solver can be redirected to a different world's gravity
+    // without rebuilding the entire env (useful for a future
+    // "gravity slider" debug control too).
+    this._envKey = envKey
     this.setSkyScheme(env.sky)
     if (env.lightDir) this.lightDir = ModelRenderer.#normalise(env.lightDir)
     // Pull sun2 from the active sky scheme so the scene-lighting
@@ -910,6 +1078,21 @@ export class ModelRenderer {
   setSubmersionMode(mode) {
     this.submersionMode = mode || ''
     this.requestRedraw()
+  }
+
+  // getGravity returns the world gravity in wu/sec² for the active
+  // environment, used by the ballistic aim solver to set barrel
+  // pitch on cannon-class weapons.  Switching to a lunar / mars
+  // env lowers this value and the next aim cycle naturally elevates
+  // the barrels further to compensate.  Defaults to Earth gravity
+  // when the env name doesn't appear in the GRAVITY_BY_ENV table
+  // (custom env objects, unknown keys).
+  getGravity() {
+    const k = this._envKey
+    if (k && Object.prototype.hasOwnProperty.call(GRAVITY_BY_ENV, k)) {
+      return GRAVITY_BY_ENV[k]
+    }
+    return GRAVITY_EARTH
   }
 
   // getUnitYOffset returns the world-Y translation to apply to the
@@ -1045,6 +1228,14 @@ export class ModelRenderer {
       if (!this.running) return
       const dt = Math.min(0.1, (ts - this.lastFrameMs) / 1000)
       this.lastFrameMs = ts
+      // FPS sampling — push the per-frame dt into a rolling 60-sample
+      // ring so getFPS() can return a smoothed value (1-second window
+      // at 60 Hz, ~2 seconds at 30 Hz).  Cheap: push + length cap.
+      if (!this._fpsSamples) this._fpsSamples = []
+      if (dt > 0) {
+        this._fpsSamples.push(dt)
+        if (this._fpsSamples.length > 60) this._fpsSamples.shift()
+      }
       if (this.autoRotate && this.camera) {
         // Drive the camera's orbit yaw rather than spinning the
         // model in place — that way the ground / sea rotate WITH
@@ -1076,6 +1267,18 @@ export class ModelRenderer {
     this.rafId = 0
   }
 
+  // getFPS returns the smoothed frames-per-second over the last
+  // ~60 frames of the render loop.  Returns 0 when the loop isn't
+  // running yet (no model loaded) so the Renderer overlay can
+  // distinguish "idle" from "running slowly".
+  getFPS() {
+    if (!this._fpsSamples || this._fpsSamples.length === 0) return 0
+    let sum = 0
+    for (const s of this._fpsSamples) sum += s
+    const avg = sum / this._fpsSamples.length
+    return avg > 0 ? 1 / avg : 0
+  }
+
   requestRedraw() {
     if (this.running) return
     requestAnimationFrame(() => this.draw())
@@ -1103,6 +1306,18 @@ export class ModelRenderer {
     // ground modes leave the model matrix identity (auto-rotate now
     // spins the camera around a stationary scene).
     Mat4.identity(this._modelMatrix)
+    // Unit-position translation (Controls panel Move).  Applied
+    // BEFORE the rotation so the heading rotates around the unit's
+    // own pivot, and BEFORE the sea-bob so the bob still rides on
+    // top of the walking unit.  Y component is the aircraft-flight
+    // altitude (zero for ground units).
+    const ut = this._unitTransform
+    if (ut.x !== 0 || ut.y !== 0 || ut.z !== 0) {
+      Mat4.translate(this._modelMatrix, this._modelMatrix, ut.x, ut.y, ut.z)
+    }
+    if (ut.headingRad !== 0) {
+      Mat4.rotateY(this._modelMatrix, this._modelMatrix, ut.headingRad)
+    }
     if (this.groundMode === 'sea' && this.model) {
       // Submersion offset comes first — the model is lifted into
       // place between water and seabed (subs) BEFORE the bob is
@@ -1267,20 +1482,40 @@ export class ModelRenderer {
     // piece sits behind other geometry from the camera's POV.
     gl.disable(gl.DEPTH_TEST)
     gl.lineWidth?.(2)
-    const draw = (piece, parent) => {
+    // Two-pass walk: first locate the hovered piece (matching by
+    // lowercased name), then paint that piece AND every descendant
+    // in red.  Highlighting the whole sub-tree (not just the leaf)
+    // mirrors how TA scripts manipulate piece hierarchies — selecting
+    // "wing1" should call attention to the wingtip + flare children
+    // too so the user sees the entire animated group.
+    const want = this._hoveredPieceName
+    const paintHierarchy = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
-      const lower = piece.name?.toLowerCase()
-      if (piece.visible && piece.wireframe && lower === this._hoveredPieceName) {
+      if (piece.visible && piece.wireframe) {
         gl.uniformMatrix4fv(this.uWireWorld, false, piece.worldMatrix)
         gl.bindBuffer(gl.ARRAY_BUFFER, piece.wireframe.vbo)
         gl.enableVertexAttribArray(this.aWirePos)
         gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
         gl.drawArrays(gl.LINES, 0, piece.wireframe.vertexCount)
       }
-      for (const c of piece.children) draw(c, piece.worldMatrix)
+      for (const c of piece.children) paintHierarchy(c, piece.worldMatrix)
     }
-    draw(this.model.root, this._modelMatrix)
+    const findAndPaint = (piece, parent) => {
+      if (!piece) return false
+      // Always update world matrix as we descend so paintHierarchy
+      // has fresh transforms when it kicks off from this point.
+      piece.computeWorldMatrix(parent, this._worldScratch)
+      if (piece.name?.toLowerCase() === want) {
+        paintHierarchy(piece, parent)
+        return true
+      }
+      for (const c of piece.children) {
+        if (findAndPaint(c, piece.worldMatrix)) return true
+      }
+      return false
+    }
+    findAndPaint(this.model.root, this._modelMatrix)
     gl.enable(gl.DEPTH_TEST)
   }
 
@@ -1569,6 +1804,15 @@ export class ModelRenderer {
       const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
       const bob = this._bobScratch || (this._bobScratch = Mat4.create())
       Mat4.identity(bob)
+      // Mirror the SAME unit translate + heading rotation the main
+      // pass applies, otherwise a moving unit's reflection stays
+      // anchored at world origin while the actual unit walks away.
+      // Y-mirror commutes with Y-axis rotation so the rotateY here
+      // produces the correct mirrored orientation when multiplied
+      // by `mirror` below.
+      const ut = this._unitTransform
+      if (ut.x !== 0 || ut.z !== 0) Mat4.translate(bob, bob, ut.x, 0, ut.z)
+      if (ut.headingRad !== 0) Mat4.rotateY(bob, bob, ut.headingRad)
       // Same submersion lift the main model gets — without it the
       // mirrored unit reflects from y=0 instead of from the unit's
       // actually-displayed position.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/objects3d"
+	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/sct"
 	"github.com/coreprime/kbot/formats/tdf"
 )
@@ -29,13 +30,14 @@ func registerModelAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/texture/", handleTextureImage)
 	mux.HandleFunc("/api/studio/palette", handlePaletteJSON)
 	mux.HandleFunc("/api/studio/ground-tile/", handleGroundTile)
+	mux.HandleFunc("/api/studio/buildpic/", handleBuildPic)
 }
 
 // ── /api/studio/models ─────────────────────────────────────────────────────
 
 type modelEntry struct {
-	Name          string `json:"name"`                    // object3d basename without extension, lowercase
-	Path          string `json:"path"`                    // VFS path, e.g. objects3d/corkbot.3do
+	Name          string `json:"name"`                    // canonical key (lowercased unit-name when FBI present, else 3DO basename)
+	Path          string `json:"path"`                    // VFS path of the 3DO if known; "" when FBI references a missing 3DO
 	UnitName      string `json:"unitName"`                // FBI [UNITINFO].UnitName (if a unit references this model)
 	UnitTitle     string `json:"unitTitle"`               // FBI Name field (human-readable)
 	Side          string `json:"side"`                    // ARM / CORE / etc.
@@ -49,6 +51,15 @@ type modelEntry struct {
 	// Derived from FBI Category + TEDClass + WaterLine in
 	// inferSubmersionMode below.
 	SubmersionMode string `json:"submersionMode,omitempty"`
+	// Presence flags — the UI renders coloured chips per row so the
+	// user can see at a glance which related files actually shipped
+	// in the loaded VFS for this unit.  A unit can be browsable
+	// (FBI defines it + 3DO exists) even when the COB script is
+	// absent (no animation, static display).
+	HasFBI      bool `json:"hasFBI"`
+	Has3DO      bool `json:"has3DO"`
+	HasCOB      bool `json:"hasCOB"`
+	HasBuildPic bool `json:"hasBuildPic"`
 }
 
 var (
@@ -68,25 +79,47 @@ func ensureModelIndex() ([]modelEntry, map[string]modelEntry) {
 }
 
 func buildModelIndex() {
-	byID := make(map[string]modelEntry)
-	// Walk objects3d/*.3do once.
-	for _, p := range vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "objects3d/") || !strings.HasSuffix(lower, ".3do") {
-			continue
-		}
-		base := strings.TrimSuffix(path.Base(lower), ".3do")
-		if _, dup := byID[base]; dup {
-			continue
-		}
-		byID[base] = modelEntry{Name: base, Path: p}
+	// Walk the VFS ONCE, partitioning by category, then merge the
+	// FBI / 3DO / COB / build-pic indexes into modelEntries.  Walking
+	// the whole VFS once is much cheaper than the previous "walk for
+	// 3DOs, walk for FBIs" two-pass.
+	type seenSet struct {
+		threeDO  map[string]string // objbasename → 3DO vfs path
+		cob      map[string]bool   // script basename → present
+		buildPic map[string]bool   // unitname.pcx → present
+		fbi      []string          // FBI vfs paths
 	}
-	// Enrich with unit metadata (units/*.fbi → Objectname → 3do basename).
+	seen := seenSet{
+		threeDO:  map[string]string{},
+		cob:      map[string]bool{},
+		buildPic: map[string]bool{},
+	}
 	for _, p := range vfs.List() {
 		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "units/") || !strings.HasSuffix(lower, ".fbi") {
-			continue
+		switch {
+		case strings.HasPrefix(lower, "objects3d/") && strings.HasSuffix(lower, ".3do"):
+			base := strings.TrimSuffix(path.Base(lower), ".3do")
+			if _, dup := seen.threeDO[base]; !dup {
+				seen.threeDO[base] = p
+			}
+		case strings.HasPrefix(lower, "scripts/") && strings.HasSuffix(lower, ".cob"):
+			seen.cob[strings.TrimSuffix(path.Base(lower), ".cob")] = true
+		case strings.HasPrefix(lower, "unitpics/") && (strings.HasSuffix(lower, ".pcx") || strings.HasSuffix(lower, ".bmp") || strings.HasSuffix(lower, ".tga")):
+			// Build pictures live under unitpics/.  Keyed by the
+			// stem so a single map covers .pcx/.bmp/.tga variants.
+			stem := path.Base(lower)
+			stem = stem[:len(stem)-len(path.Ext(stem))]
+			seen.buildPic[stem] = true
+		case strings.HasPrefix(lower, "units/") && strings.HasSuffix(lower, ".fbi"):
+			seen.fbi = append(seen.fbi, p)
 		}
+	}
+
+	byID := make(map[string]modelEntry)
+
+	// FBI is the source of truth — iterate each unit definition,
+	// resolve its 3DO + COB references, attach build-pic presence.
+	for _, p := range seen.fbi {
 		data, err := vfs.ReadFile(p)
 		if err != nil {
 			continue
@@ -96,34 +129,78 @@ func buildModelIndex() {
 			continue
 		}
 		for _, s := range doc.Sections() {
+			unitName := strings.TrimSpace(s.String("UnitName"))
 			obj := strings.ToLower(strings.TrimSpace(s.String("Objectname")))
-			if obj == "" {
+			if unitName == "" && obj == "" {
+				continue // not a unit section
+			}
+			key := strings.ToLower(unitName)
+			if key == "" {
+				key = obj
+			}
+			if _, dup := byID[key]; dup {
 				continue
 			}
-			entry, ok := byID[obj]
-			if !ok {
-				continue
+			threePath := seen.threeDO[obj]
+			entry := modelEntry{
+				Name:           key,
+				Path:           threePath,
+				UnitName:       unitName,
+				UnitTitle:      s.String("Name"),
+				Side:           s.String("Side"),
+				Description:    s.String("Description"),
+				Category:       s.String("TEDClass"),
+				DefaultGround:  inferDefaultGround(s),
+				SubmersionMode: inferSubmersionMode(s),
+				HasFBI:         true,
+				Has3DO:         threePath != "",
+				HasCOB:         seen.cob[key] || seen.cob[obj],
+				HasBuildPic:    seen.buildPic[key] || seen.buildPic[obj] || seen.buildPic[strings.ToLower(unitName)],
 			}
-			if entry.UnitName == "" {
-				entry.UnitName = s.String("UnitName")
-				entry.UnitTitle = s.String("Name")
-				entry.Side = s.String("Side")
-				entry.Description = s.String("Description")
-				entry.Category = s.String("TEDClass")
-				entry.DefaultGround = inferDefaultGround(s)
-				entry.SubmersionMode = inferSubmersionMode(s)
-				byID[obj] = entry
-			}
+			byID[key] = entry
 		}
 	}
+
+	// Add any orphan 3DOs that no FBI references — props / features /
+	// debug geometry the studio can still load even though they aren't
+	// real units.  Keyed by the 3DO basename, with a synthetic entry
+	// that reports HasFBI=false so the indicator chip shows accurately.
+	for obj, threePath := range seen.threeDO {
+		if _, claimed := byID[obj]; claimed {
+			continue
+		}
+		// Also guard against an FBI whose UnitName == this obj basename.
+		// (FBI iteration above already keyed by UnitName, but the obj
+		// reference might differ in case.)
+		alreadyByObj := false
+		for _, e := range byID {
+			if strings.EqualFold(e.Name, obj) || strings.EqualFold(strings.TrimSuffix(path.Base(strings.ToLower(e.Path)), ".3do"), obj) {
+				alreadyByObj = true
+				break
+			}
+		}
+		if alreadyByObj {
+			continue
+		}
+		byID[obj] = modelEntry{
+			Name:        obj,
+			Path:        threePath,
+			HasFBI:      false,
+			Has3DO:      true,
+			HasCOB:      seen.cob[obj],
+			HasBuildPic: seen.buildPic[obj],
+		}
+	}
+
 	list := make([]modelEntry, 0, len(byID))
 	for _, e := range byID {
 		list = append(list, e)
 	}
+	// Real units (HasFBI) first, then orphan 3DOs.  Within each
+	// group sort by side then name so ARM/CORE/etc. cluster cleanly.
 	sort.Slice(list, func(i, j int) bool {
-		ai, bi := list[i].UnitName != "", list[j].UnitName != ""
-		if ai != bi {
-			return ai
+		if list[i].HasFBI != list[j].HasFBI {
+			return list[i].HasFBI
 		}
 		if list[i].Side != list[j].Side {
 			return list[i].Side < list[j].Side
@@ -702,4 +779,65 @@ func handlePaletteJSON(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	writeJSON(w, map[string]any{"palette": out})
+}
+
+// ── /api/studio/buildpic/{name} ────────────────────────────────────────────
+
+// handleBuildPic serves the unit's build picture as PNG.  TA ships
+// these as PCX (most common) or occasionally BMP/TGA under
+// unitpics/.  Returns 404 when no build pic is shipped — the JS
+// picker renders a muted "no thumbnail" tile in that case.
+func handleBuildPic(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/buildpic/")
+	name, err := url.PathUnescape(raw)
+	if err != nil || name == "" {
+		http.Error(w, "missing buildpic name", http.StatusBadRequest)
+		return
+	}
+	stem := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".pcx"), ".bmp"), ".tga"))
+	// Try the common variants in the order TA itself would.
+	candidates := []string{
+		"unitpics/" + stem + ".pcx",
+		"unitpics/" + strings.ToUpper(stem) + ".PCX",
+	}
+	var data []byte
+	for _, p := range candidates {
+		if b, e := vfs.ReadFile(p); e == nil {
+			data = b
+			break
+		}
+	}
+	if data == nil {
+		// Last-ditch case-insensitive walk.
+		want := strings.ToLower(stem + ".pcx")
+		for _, p := range vfs.List() {
+			lower := strings.ToLower(p)
+			if !strings.HasPrefix(lower, "unitpics/") { continue }
+			if strings.ToLower(path.Base(lower)) == want {
+				if b, e := vfs.ReadFile(p); e == nil {
+					data = b
+					break
+				}
+			}
+		}
+	}
+	if data == nil {
+		http.Error(w, "build picture not found", http.StatusNotFound)
+		return
+	}
+	rd, err := pcx.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		http.Error(w, "read pcx: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	img, err := rd.Decode()
+	if err != nil {
+		http.Error(w, "decode pcx: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	if err := png.Encode(w, img); err != nil {
+		http.Error(w, "encode png: "+err.Error(), http.StatusInternalServerError)
+	}
 }

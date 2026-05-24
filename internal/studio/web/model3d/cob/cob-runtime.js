@@ -261,6 +261,21 @@ export class CobUnit {
     // Per-piece visibility flag.  Defaults all visible.  SHOW / HIDE
     // flip individual entries; the host queries with isPieceVisible.
     this._pieceVisible = new Array(this.pieceNames.length).fill(true)
+    // Render flags per piece, settable by COB:
+    //   _pieceShade   — `shade` / `dont-shade` opcodes.  Default ON
+    //                   (TA's default is shaded; `dont-shade` flips
+    //                   it for shiny chrome flares etc).
+    //   _pieceCache   — `cache` / `dont-cache` opcodes.  Default OFF
+    //                   (TA caches transforms only when the script
+    //                   explicitly asks; `cache` is a hint to bake
+    //                   the current transform until `dont-cache`).
+    //   _pieceShadow  — `dont-shadow` opcode (no SHADOW opcode in TA;
+    //                   shadow is on by default, scripts opt OUT).
+    // Surfaced via isPieceShade/Cache/Shadow getters so the studio
+    // piece-tree can mirror the live state without poking internals.
+    this._pieceShade  = new Array(this.pieceNames.length).fill(true)
+    this._pieceCache  = new Array(this.pieceNames.length).fill(false)
+    this._pieceShadow = new Array(this.pieceNames.length).fill(true)
     // suppressedScripts: scripts whose START_SCRIPT spawn is silently
     // dropped.  Used by the studio to skip the engine-driven
     // "RestoreAfterDelay" auto-restore that snaps the turret back to
@@ -279,12 +294,23 @@ export class CobUnit {
 
   // start spawns a thread on the named script, pushing `args` as the
   // initial locals.  Returns the thread id (caller can ignore).
+  // Use startThread instead if you need the live thread object (e.g.
+  // to poll thread.returnValue once it dies).
   start(scriptName, args = []) {
+    const t = this.startThread(scriptName, args)
+    return t ? t.id : -1
+  }
+
+  // startThread is the same as start() but returns the CobThread
+  // instance so the caller can hold a reference and read
+  // `thread.dead` / `thread.returnValue` later.  Returns null when
+  // the script name doesn't resolve.
+  startThread(scriptName, args = []) {
     const idx = this._scriptByName.get(scriptName.toLowerCase())
-    if (idx === undefined) return -1
+    if (idx === undefined) return null
     const t = new CobThread(this, idx, args)
     this._threads.push(t)
-    return t.id
+    return t
   }
 
   // Lower-level handle: returns true if the named entry-point exists.
@@ -296,6 +322,35 @@ export class CobUnit {
   // listScripts returns the script names in order - handy for a
   // debug picker that wants to enumerate every entry point.
   listScripts() { return this.scriptNames.slice() }
+
+  // usesUnitValuePort returns true when ANY script in this unit
+  // reads (OP_GET_UNIT_VALUE / OP_GET) or writes (OP_SET_VALUE)
+  // the given port number.  Detection is conservative: TA scripts
+  // push the port via OP_PUSH_IMMEDIATE immediately before the
+  // get/set op (the BOS compiler emits no intermediate code), so
+  // we scan each script's instruction stream for that adjacent
+  // pair.  Cached on first call to keep the Controls panel's
+  // per-port visibility checks cheap.
+  usesUnitValuePort(port) {
+    if (!this._portUsage) this._portUsage = new Map()
+    if (this._portUsage.has(port)) return this._portUsage.get(port)
+    let used = false
+    outer:
+    for (const s of this.scripts) {
+      const ins = s.instructions
+      for (let i = 0; i < ins.length - 1; i++) {
+        if (ins[i].op !== OP_PUSH_IMMEDIATE) continue
+        if (ins[i].p1 !== port) continue
+        const next = ins[i + 1].op
+        if (next === OP_GET_UNIT_VALUE || next === OP_GET || next === OP_SET_VALUE) {
+          used = true
+          break outer
+        }
+      }
+    }
+    this._portUsage.set(port, used)
+    return used
+  }
 
   suppressScript(name) { this._suppressed.add(name.toLowerCase()) }
   unsuppressScript(name) { this._suppressed.delete(name.toLowerCase()) }
@@ -407,6 +462,14 @@ export class CobUnit {
   isPieceVisible(pieceIdx) {
     return pieceIdx < 0 || this._pieceVisible[pieceIdx] !== false
   }
+  // Render-flag getters used by the studio's piece tree to mirror
+  // the live COB state.  Index < 0 (synthetic pieces) returns the
+  // default for that flag.  Shade and shadow default ON, cache
+  // defaults OFF — matches TA's engine defaults so units that never
+  // explicitly call the opcode read as "normal" in the tree.
+  isPieceShade(pieceIdx)  { return pieceIdx < 0 || this._pieceShade[pieceIdx]  !== false }
+  isPieceCache(pieceIdx)  { return pieceIdx >= 0 && this._pieceCache[pieceIdx]  === true }
+  isPieceShadow(pieceIdx) { return pieceIdx < 0 || this._pieceShadow[pieceIdx] !== false }
   pieceIndexByName(name) {
     const lower = name.toLowerCase()
     for (let i = 0; i < this.pieceNames.length; i++) {
@@ -719,12 +782,11 @@ export class CobUnit {
       }
       case OP_SHOW: { this._pieceVisible[ins.p1] = true; return false }
       case OP_HIDE: { this._pieceVisible[ins.p1] = false; return false }
-      case OP_SHADE:
-      case OP_DONT_SHADE:
-      case OP_CACHE:
-      case OP_DONT_CACHE:
-      case OP_DONT_SHADOW:
-        return false
+      case OP_SHADE:        { this._pieceShade[ins.p1]  = true;  return false }
+      case OP_DONT_SHADE:   { this._pieceShade[ins.p1]  = false; return false }
+      case OP_CACHE:        { this._pieceCache[ins.p1]  = true;  return false }
+      case OP_DONT_CACHE:   { this._pieceCache[ins.p1]  = false; return false }
+      case OP_DONT_SHADOW:  { this._pieceShadow[ins.p1] = false; return false }
       case OP_EMIT_SFX: {
         const sfxType = t.popI()
         if (this.hooks.emitSfx) this.hooks.emitSfx(sfxType, ins.p1)
@@ -761,7 +823,14 @@ export class CobUnit {
       }
       case OP_RETURN: {
         const ret = t.stack.length > 0 ? t.popI() : 0
-        if (t.callStack.length === 0) { t.dead = true; return true }
+        if (t.callStack.length === 0) {
+          // Top-level thread returning — stash the value on the
+          // thread itself so external callers (e.g. the studio's
+          // aim+fire scheduler) can read what AimWeapon returned.
+          t.returnValue = ret
+          t.dead = true
+          return true
+        }
         this._returnFromCall(t, ret)
         return false
       }
@@ -771,7 +840,23 @@ export class CobUnit {
         const args = []
         for (let i = 0; i < argCount; i++) args.unshift(t.popI())
         if (childIdx >= 0 && childIdx < this.scripts.length) {
-          if (!this._suppressed.has(this.scriptNames[childIdx].toLowerCase())) {
+          const childNameLower = this.scriptNames[childIdx].toLowerCase()
+          if (!this._suppressed.has(childNameLower)) {
+            // Kill any existing instance of the SAME script before
+            // spawning a new one — matches how real TA handles
+            // start-script invocations: a second AimPrimary while one
+            // is still running cancels the first, and a re-issued
+            // MotionControl clobbers the previous walking thread.
+            // Without this, repeated start-script calls stacked an
+            // ever-growing list of duplicate threads.  Caller-thread
+            // (t) is excluded so a script that start-scripts itself
+            // (rare but legal) doesn't murder its own caller.
+            for (const existing of this._threads) {
+              if (existing === t || existing.dead) continue
+              if (existing.script.name.toLowerCase() === childNameLower) {
+                existing.dead = true
+              }
+            }
             const child = new CobThread(this, childIdx, args)
             this._threads.push(child)
           }
@@ -864,6 +949,33 @@ export class CobRuntime {
     this.paused = false
     this.playbackRate = 1
     this._tickAccumMs = 0
+    // Telemetry — surfaced by the Runtime overlay's stats line so
+    // the user can see the sim's actual throughput.  `tickCount` is
+    // the total number of fixed 25 ms ticks executed across the
+    // runtime's lifetime; `lastTickMs` is wall-clock duration of
+    // the most recent tick() call (which may have drained several
+    // fixed sub-steps).  Both reset only when the runtime is
+    // disposed — the panel divides as needed for "per second" type
+    // displays.
+    this.tickCount = 0
+    this.lastTickMs = 0
+    // Last-tick instruction count — how many bytecode instructions
+    // executed across every unit during the most recent tick() call.
+    // Surfaced in the Runtime overlay's stats line so the user can
+    // see the sim's per-tick CPU load alongside the wall-clock cost.
+    this.lastInstCount = 0
+  }
+
+  // ── Telemetry ───────────────────────────────────────────────
+
+  // threadCount sums live threads across every unit.  Used by the
+  // Runtime overlay's stats line — single pass over the units map
+  // each refresh tick, which is fine since the overlay throttles
+  // to 4 Hz.
+  threadCount() {
+    let n = 0
+    for (const u of this._units.values()) n += u._threads.length
+    return n
   }
 
   // ── Unit registry ───────────────────────────────────────────
@@ -916,11 +1028,18 @@ export class CobRuntime {
     this._tickAccumMs += scaledMs
     let instCount = 0
     let stepsRemaining = 8
+    // Wall-clock wall around the inner loop so the Runtime overlay
+    // can show "last tick X ms" — measures the actual CPU cost of
+    // draining the accumulator, not the wrapping render frame.
+    const start = performance.now()
     while (this._tickAccumMs >= TA_TICK_MS && stepsRemaining-- > 0) {
       this._tickAccumMs -= TA_TICK_MS
       instCount += this._tickStep(TA_TICK_MS)
+      this.tickCount++
     }
     if (stepsRemaining <= 0) this._tickAccumMs = 0
+    this.lastTickMs = performance.now() - start
+    this.lastInstCount = instCount
     return instCount
   }
 

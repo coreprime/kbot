@@ -509,12 +509,15 @@ kbd {
   margin-bottom: 12px;
 }
 .open-filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
-/* Open-map dialog: pinned to 80vh so the picker doesn't grow or
-   shrink as the filter narrows the map list — the user reaches for
-   the same screen real estate every time.  Card is a flex column
-   (set by .dialog-card-wide); flex:1 on .open-list expands it to
-   fill whatever's left after the title + filter + actions. */
-#open-dialog .dialog-card {
+/* Open-map AND Open-unit dialogs: pinned to 80vh so the picker
+   doesn't grow or shrink as the filter narrows the list — the
+   user reaches for the same screen real estate every time, and a
+   one-row "Peewee" filter result doesn't suddenly collapse the
+   card around it.  Card is a flex column (set by .dialog-card-wide);
+   flex:1 on .open-list expands it to fill whatever's left after the
+   title + filter + actions. */
+#open-dialog .dialog-card,
+#model-open-dialog .dialog-card {
   height: 80vh;
 }
 .open-list {
@@ -611,6 +614,40 @@ kbd {
   gap: 6px;
   flex-wrap: wrap;
 }
+/* Unit-editor entries can't always be opened (e.g. orphan FBI with
+   no 3DO).  Mute them and disable hover/click affordance. */
+.open-list-item.disabled-entry {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.open-list-item.disabled-entry:hover { border-color: var(--border); }
+/* Build-picture thumbnail — same square footprint as the map
+   minimaps but we display the IMG inside the .thumb so we can fall
+   back to an empty tile when the PCX 404s mid-load. */
+.model-thumb { padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.model-thumb img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.model-thumb-empty {
+  background: repeating-linear-gradient(45deg, var(--bg-2), var(--bg-2) 6px, var(--bg-3) 6px, var(--bg-3) 12px);
+  font-size: 18px;
+}
+.model-thumb-empty::before { content: '—'; opacity: 0.5; }
+/* Presence chips — three small badges (FBI / 3DO / COB) per row.
+   Green when the file is present, muted-red when missing.  Tiny
+   so they sit unobtrusively below the metadata lines. */
+.model-chips { display: flex; gap: 4px; margin-top: 4px; }
+.model-chip {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.model-chip.on  { background: rgba(110, 231, 156, 0.20); color: #6ee79c; border-color: rgba(110, 231, 156, 0.55); }
+.model-chip.off { background: rgba(248, 81, 73, 0.10);  color: rgba(248, 81, 73, 0.55); border-color: rgba(248, 81, 73, 0.30); }
 .ota-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -2604,7 +2641,11 @@ canvas {
 #mv-inspector-actions    { top: 12px;  left: 12px; right: auto; max-width: 340px; min-width: 280px; }
 .mv-inspector.hidden { display: none; }
 .mv-inspector.collapsed { width: auto; }
-.mv-inspector.collapsed .mv-inspector-body { display: none; }
+.mv-inspector.collapsed .mv-inspector-body,
+.mv-inspector.collapsed .mv-runtime-stats,
+.mv-inspector.collapsed .mv-runtime-speed,
+.mv-inspector.collapsed .mv-inspector-controls,
+.mv-inspector.collapsed #mv-controls-actions { display: none; }
 .mv-inspector-header {
   display: flex;
   align-items: center;
@@ -2659,6 +2700,63 @@ canvas {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
+/* Renderer overlay — Tracking checkbox row.  Sits at the bottom of
+   the Renderer panel body; flexed so the label and checkbox sit on
+   the same baseline as the read-out rows above. */
+.mv-ci-track-row {
+  cursor: pointer;
+  user-select: none;
+}
+.mv-ci-track-cb {
+  margin: 0;
+  cursor: pointer;
+}
+/* Runtime telemetry block — two two-column rows sitting above the
+   Speed slider.  Same visual weight as the Speed row so the panel
+   reads as a single "controls + stats" header.  Tabular-nums on the
+   values keeps the digits from jittering as they update. */
+.mv-runtime-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.mv-runtime-stats-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+/* Three-column variant — Tick / Ops / Last share one row so the
+   most "live" metrics (each refreshes on every render frame) sit
+   together at the top.  Units / Threads in the slower 2-col row
+   below since those rarely change. */
+.mv-runtime-stats-row-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+.mv-runtime-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.mv-runtime-stat-label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.mv-runtime-stat-value {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
 .mv-runtime-speed-label {
   font-size: 10px;
   color: var(--muted);
@@ -2689,6 +2787,18 @@ canvas {
 }
 .mv-unit-header-action:hover { color: var(--accent); }
 .mv-unit-header-action.danger:hover { color: var(--danger); }
+/* Controls overlay — gated state.  Until the unit's Create script
+   completes, the action button row + port table render dimmed and
+   ignore clicks.  The header (drag handle + collapse + close) is
+   excluded so the user can still move/dismiss the panel while
+   they're queueing up Create from the Actions overlay. */
+.mv-inspector.mv-controls-gated #mv-controls-actions,
+.mv-inspector.mv-controls-gated .mv-inspector-body {
+  opacity: 0.40;
+  pointer-events: none;
+  filter: grayscale(0.5);
+  transition: opacity 120ms ease, filter 120ms ease;
+}
 /* Runtime overlay — dedicated control bar above the unit list.
    Pulls the heavy pause/step/stop buttons out of the title bar so
    the header reads as identity + chrome, and the operations grouping
@@ -2746,6 +2856,27 @@ canvas {
 }
 .mv-unit-header-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mv-unit-header-count { color: var(--muted); font-size: 9px; font-weight: 500; }
+/* Collapse chevron — first element in the header.  Click toggles
+   the unit's thread rows.  Same muted/accent treatment as the
+   other header-action buttons but at the LEFT, before the label. */
+.mv-unit-header-collapse {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1;
+  font-family: var(--mono, ui-monospace, monospace);
+  width: 16px;
+  text-align: center;
+}
+.mv-unit-header-collapse:hover { color: var(--accent); }
+/* When the user collapses a unit, hide every following thread row
+   that belongs to it — the JS toggles `.mv-thread-collapsed` on
+   the row itself.  Killed-thread rows obey the same flag so an
+   "idle" unit really does collapse to a single line. */
+.mv-cob-thread-row.mv-thread-collapsed { display: none; }
 .mv-unit-header-killall {
   background: transparent;
   border: 0;
@@ -2821,6 +2952,127 @@ canvas {
   font-family: var(--mono, ui-monospace, monospace);
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+/* Controls overlay's action-button row.  Top of the panel, above
+   the port table.  Each button is a 2-up grid cell with icon + label.
+   Disabled when the unit doesn't expose the action (no FBI velocity,
+   no AimWeapon script). */
+.mv-controls-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.mv-ctrl-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.mv-ctrl-action .ico { font-size: 14px; }
+.mv-ctrl-action .lbl { flex: 1; text-align: left; }
+.mv-ctrl-action:hover:not(:disabled) { background: var(--bg-2); border-color: var(--accent); }
+.mv-ctrl-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.mv-ctrl-action.armed {
+  background: rgba(255, 203, 107, 0.20);
+  border-color: #ffcb6b;
+  color: #ffcb6b;
+}
+/* No `has-target` highlight on the action buttons — they're triggers,
+   not state.  The user knows their order landed when the unit
+   responds (walks / rotates turret); a permanent green dot on the
+   button just adds noise.  Hover-preview (drawn over the scene)
+   makes the target visible when the user looks for it. */
+/* Stop button styling — distinguished from arm-actions: it's a
+   destructive control so it gets the danger-red hover.  Grid spans
+   the whole second row.  Idle state is muted; goes "live" (red tint)
+   when there's something to stop (move target or any aim target),
+   so the user sees at a glance whether Stop will do anything. */
+.mv-ctrl-action-stop {
+  grid-column: 1 / -1;
+  justify-content: center;
+  background: var(--bg-1);
+  color: var(--muted);
+  border-color: var(--border);
+  cursor: pointer;
+}
+.mv-ctrl-action-stop:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.18);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.mv-ctrl-action-stop:active:not(:disabled) {
+  background: rgba(248, 81, 73, 0.35);
+}
+/* Live state — at least one target is set or motion is in flight.
+   Subtle red tint so the user knows Stop will actually do something. */
+.mv-ctrl-action-stop.live {
+  background: rgba(248, 81, 73, 0.12);
+  border-color: rgba(248, 81, 73, 0.70);
+  color: var(--danger);
+}
+.mv-ctrl-action-stop.live:hover:not(:disabled) {
+  background: rgba(248, 81, 73, 0.28);
+}
+/* When the user clicks a Controls action button, the canvas swaps
+   to the matching TA cursor.  Primary source is the game's own
+   GAF via /api/studio/cursor/<seq>; the inline-SVG fallback after
+   the PNG URL (recognised by the browser as a multi-value cursor
+   list) renders an approximation if the GAF isn't shipped with the
+   user's game data.  Hotspot 16 16 lines up with the GAF cursor's
+   centre. */
+.mv-controls-arming-move #model-viewer-canvas {
+  cursor: url('/api/studio/cursor/cursormove') 16 16,
+          url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="11" fill="none" stroke="%2300dd33" stroke-width="2"/><line x1="16" y1="2" x2="16" y2="11" stroke="%2300dd33" stroke-width="2"/><line x1="16" y1="21" x2="16" y2="30" stroke="%2300dd33" stroke-width="2"/><line x1="2" y1="16" x2="11" y2="16" stroke="%2300dd33" stroke-width="2"/><line x1="21" y1="16" x2="30" y2="16" stroke="%2300dd33" stroke-width="2"/><circle cx="16" cy="16" r="2" fill="%2300dd33"/></svg>') 16 16,
+          crosshair;
+}
+.mv-controls-arming-primary #model-viewer-canvas,
+.mv-controls-arming-secondary #model-viewer-canvas,
+.mv-controls-arming-tertiary  #model-viewer-canvas {
+  cursor: url('/api/studio/cursor/cursorattack') 16 16,
+          url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M4 4 L12 4 L12 6 L6 6 L6 12 L4 12 Z" fill="%23ff2222"/><path d="M28 4 L20 4 L20 6 L26 6 L26 12 L28 12 Z" fill="%23ff2222"/><path d="M4 28 L12 28 L12 26 L6 26 L6 20 L4 20 Z" fill="%23ff2222"/><path d="M28 28 L20 28 L20 26 L26 26 L26 20 L28 20 Z" fill="%23ff2222"/><circle cx="16" cy="16" r="2" fill="%23ff2222"/></svg>') 16 16,
+          crosshair;
+}
+/* Armed cursor — animated overlay that follows the pointer while
+   the user has a Move/Primary/Secondary/Tertiary action armed.
+   We use an <img> with the APNG source so the cursor frames
+   actually cycle (browsers freeze `cursor: url(...)` at the first
+   frame).  Fully opaque + above the hover-preview layer so the
+   live cursor reads as primary.  pointer-events:none so clicks
+   pass through to the canvas. */
+.mv-ctrl-armed-cursor {
+  position: fixed;
+  width: 32px;
+  height: 32px;
+  pointer-events: none;
+  opacity: 1.0;
+  transform: translate(-50%, -50%);
+  z-index: 65;
+  image-rendering: pixelated;
+}
+/* Hover-preview cursor — floats faded above the scene at the target
+   the user previously committed for the hovered Controls action.
+   pointer-events:none so it doesn't block canvas clicks.  Anchored
+   with translate so left/top is the centre of the glyph. */
+.mv-ctrl-preview-cursor {
+  position: fixed;
+  width: 32px;
+  height: 32px;
+  pointer-events: none;
+  opacity: 0.55;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  /* Subtle drop shadow so the cursor reads against bright sky. */
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+  transition: opacity 80ms ease;
 }
 /* Ports panel anchored on the LEFT (below the Actions panel) by
    default so the right-edge inspector trio isn't pushed off-screen.
@@ -3689,6 +3941,37 @@ canvas {
 .piece-eye:hover { color: var(--text); }
 .piece-eye.off { color: rgba(255, 90, 90, 0.7); }
 .piece-eye.off:hover { color: rgba(255, 130, 130, 1); }
+/* COB render-flag indicators — clickable emoji chips that mirror
+   the live shade (💡) / cache (💾) / shadow (🌗) state for each
+   piece.  Click flips that flag in the COB runtime and cascades
+   through descendants; shift-click suppresses the cascade (same
+   pattern as the eye toggle).  Greyscale + reduced opacity when
+   the flag is "off" so disabled state reads clearly without
+   competing with the active accent colour. */
+.piece-status {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  padding: 0 1px;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  filter: grayscale(0.7) brightness(0.55);
+  opacity: 0.55;
+  transition: opacity 100ms ease, filter 100ms ease;
+}
+.piece-status.on {
+  filter: none;
+  opacity: 1;
+}
+.piece-status:hover {
+  opacity: 1;
+  filter: none;
+}
 .drawer-piece-group > .drawer-group-title { gap: 4px; }
 
 /* Slider variant of menu-row used by the Rendering dropdown's
