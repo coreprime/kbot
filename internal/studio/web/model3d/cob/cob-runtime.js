@@ -8,10 +8,26 @@
 // Architecture overview
 // ─────────────────────
 //
-// Each CobRuntime instance owns the state for ONE unit:
-//   * static variables          (shared across all threads of the unit)
-//   * piece-animation table     (per-(piece, axis) move/turn/spin state)
-//   * a list of cooperative threads.
+//   CobRuntime  ← one per "world" / studio tab.  Hosts many CobUnits.
+//     ├── paused, playbackRate, tick accumulator  (shared)
+//     ├── _units  Map<unitId, CobUnit>
+//     └── tick(dtMs) drives _tickStep on every unit in lock-step.
+//
+//   CobUnit     ← one per loaded model.  Owns the script + animators
+//                 + thread list + static vars + per-piece visibility.
+//                 Multiple units in the same runtime advance together
+//                 on each fixed 40 Hz tick, exactly like an in-game
+//                 battle would simulate them.
+//
+//   CobThread   ← cooperative thread inside a unit.  Holds the
+//                 instruction PC, stack, locals, signal mask.
+//
+// The legacy single-unit constructor `new CobRuntime(scriptJSON, hooks)`
+// still works — it auto-creates one CobUnit and exposes backwards-
+// compatible proxies on the runtime so the existing studio call sites
+// (`runtime.staticVars`, `runtime._threads`, `runtime.start(...)`, ...)
+// keep working unchanged.  New multi-unit code paths use
+// `runtime.addUnit(scriptJSON, hooks)` + `runtime.removeUnit(unit)`.
 //
 // Threads
 // ───────
@@ -26,10 +42,10 @@
 // Signalling
 // ──────────
 // COB has a one-shot signal/mask model: a script can call
-// signal(N) which marks every thread whose signal-mask AND N is
-// non-zero for death.  This is how AimWeapon interrupts itself if
-// fired again before the previous aim completes.  We honour the
-// model precisely - matching the original game's gun-aiming feel.
+// signal(N) which marks every thread in the SAME UNIT whose
+// signal-mask AND N is non-zero for death.  Signals do not cross
+// units — one unit's AimWeapon doesn't interrupt another unit's
+// threads.
 //
 // Piece animation
 // ───────────────
@@ -45,8 +61,8 @@
 // COB sleeps in milliseconds.  Speeds are "units per second" (for
 // linear) or "TA-angle units per second" (for angular).  The
 // runtime's `tick(dtMs)` is called by the host once per frame with
-// the wall-clock delta in ms; animators advance proportionally and
-// sleeping threads decrement their wait counter.
+// the wall-clock delta in ms; every unit's animators advance
+// proportionally and every sleeping thread decrements together.
 
 import {
   OP_MOVE, OP_TURN, OP_SPIN, OP_STOP_SPIN, OP_SHOW, OP_HIDE,
@@ -75,10 +91,10 @@ import {
 // array at byte-offset positions, so the runtime keeps a per-script
 // offset → index map (built once on load).
 class CobThread {
-  constructor(runtime, scriptIndex, args) {
-    this.runtime = runtime
+  constructor(unit, scriptIndex, args) {
+    this.unit = unit
     this.scriptIndex = scriptIndex
-    this.script = runtime.scripts[scriptIndex]
+    this.script = unit.scripts[scriptIndex]
     // PC is an instruction-array index (not a byte offset).
     this.pc = 0
     // Operand stack.  COB stack values are all 32-bit ints; we use
@@ -106,8 +122,8 @@ class CobThread {
     // Caller stack for CALL_SCRIPT - blocks the caller until the
     // callee returns; on RETURN the stack/locals get restored.
     this.callStack = []
-    // ID is convenient for debug logging.
-    this.id = runtime._nextThreadId++
+    // ID is convenient for debug logging.  Unique within the unit.
+    this.id = unit._nextThreadId++
   }
 
   // Sentinels for hot-path opcode dispatch.
@@ -150,15 +166,36 @@ class PieceAxisAnim {
   }
 }
 
-export class CobRuntime {
-  // script: cobScriptJSON from /api/studio/cob/<name>.
-  // hooks: { getPieceIndex(name) → number, log?, emitSfx?, playSound? }
-  constructor(script, hooks = {}) {
+// ─────────────────────────────────────────────────────────────────
+// CobUnit — one loaded unit's complete script + animator state.
+// Multiple CobUnits live inside one CobRuntime; the runtime drives
+// all of them on a shared 40 Hz tick.
+// ─────────────────────────────────────────────────────────────────
+
+export class CobUnit {
+  // runtime: host CobRuntime
+  // id:      runtime-unique numeric id (set by runtime.addUnit)
+  // script:  cobScriptJSON from /api/studio/cob/<name>
+  // hooks:   per-unit { getPieceIndex, log?, emitSfx?, playSound?,
+  //                     explode?, getUnitValue?, setUnitValue? }
+  constructor(runtime, id, script, hooks = {}) {
+    this.runtime = runtime
+    this.id = id
     this.scripts = script.scripts || []
     this.scriptNames = script.scriptNames || []
     this.pieceNames = script.pieceNames || []
     this.staticVars = new Array(script.numStaticVars || 0).fill(0)
     this.hooks = hooks
+    // Studio-side metadata.  Plain data — the runtime never touches
+    // these; the debugger pane stores the decompiled source + the
+    // BOS↔asm cross-reference maps here so multiple panels of the
+    // same unit share one build.
+    this.decompiled = ''
+    this._decompiledSource = ''
+    this.name = script.name || ''
+    this.scriptOriginName = script.scriptOriginName || ''
+    this._bosMap = null
+    this._asmToBos = null
     // Normalise instruction operands.  The Go JSON encoder strips
     // zero values when the field is tagged omitempty, so p1/p2 land
     // as `undefined` for any opcode whose operand is 0 (notably the
@@ -227,37 +264,18 @@ export class CobRuntime {
     // suppressedScripts: scripts whose START_SCRIPT spawn is silently
     // dropped.  Used by the studio to skip the engine-driven
     // "RestoreAfterDelay" auto-restore that snaps the turret back to
-    // 0 after each aim - in a real game the game loop is constantly
-    // re-issuing aim commands so the restore never fires; in a static
-    // viewer the restore wins and we lose the aimed pose the user
-    // just dialled in.  Names are matched case-insensitively against
-    // the resolved script name at START_SCRIPT time.
+    // 0 after each aim.  Per-unit so a sim with two units can choose
+    // independently whether each restores.
     this._suppressed = new Set()
-    // playbackRate scales every animator step + every sleep decrement.
-    // Default 1.0 = real-time.  The studio exposes a slider so users
-    // can slow down a long sequence (Krogoth gantry open, AimPrimary)
-    // for inspection.
-    this.playbackRate = 1
-    // Fixed-step tick accumulator.  Wall-clock dt feeds in; the
-    // runtime drains it in TA_TICK_MS (25 ms) chunks so animator
-    // advance + sleep decrement land on the same 40 Hz grid TA's
-    // engine uses.  Without this, a 16.67 ms render dt would
-    // half-decrement sleeps and drift them by the frame remainder
-    // every cycle; with it, `sleep 200` is always exactly 8 ticks.
-    this._tickAccumMs = 0
-    // Breakpoints: keyed by "<scriptName>:<offset>" so they survive
-    // CALL_SCRIPT / RETURN frame changes.  When _runThread is about
-    // to execute an instruction whose key is in this set, it yields
-    // immediately AND flips the corresponding thread's `breakpointed`
-    // flag — the inspector overlay reads that flag to render the
-    // pause indicator.  Use `addBreakpoint` / `removeBreakpoint` /
-    // `clearBreakpoints` to mutate from the UI.
+    // Per-unit breakpoint set, keyed by "<scriptNameLower>:<offset>".
+    // Per-unit so two units running the same script can be debugged
+    // independently (BP on unit A doesn't pause when unit B runs the
+    // same op).  In single-unit studio usage this matches the legacy
+    // runtime-level behaviour exactly.
     this._breakpoints = new Set()
-    // Per-runtime pause flag — when true, NO thread advances.  Used
-    // by the UI's "Pause" button to halt the whole runtime without
-    // also having to enumerate every thread.
-    this.paused = false
   }
+
+  // ── Public unit API ──────────────────────────────────────────
 
   // start spawns a thread on the named script, pushing `args` as the
   // initial locals.  Returns the thread id (caller can ignore).
@@ -279,127 +297,13 @@ export class CobRuntime {
   // debug picker that wants to enumerate every entry point.
   listScripts() { return this.scriptNames.slice() }
 
-  // suppressScript / unsuppressScript control which scripts are
-  // silently dropped at START_SCRIPT time.  Matching is
-  // case-insensitive.  See _suppressed for the studio's primary use
-  // case (turret-restore).
   suppressScript(name) { this._suppressed.add(name.toLowerCase()) }
   unsuppressScript(name) { this._suppressed.delete(name.toLowerCase()) }
   isSuppressed(name) { return this._suppressed.has(name.toLowerCase()) }
 
-  // setPlaybackRate scales the per-tick advance.  1.0 = real-time,
-  // 0.25 = quarter speed (handy for inspecting fast cycles like
-  // muzzle recoil).  Larger than 1 is allowed but rarely useful.
-  setPlaybackRate(rate) {
-    this.playbackRate = Math.max(0.01, Math.min(10, +rate || 1))
-  }
-
-  // tick advances every thread + animator by `dtMs` of wall-clock
-  // time.  Call once per render frame.  Returns the number of
-  // instructions executed (useful for runaway detection / metrics).
-  //
-  // The wall-clock dt is accumulated and drained in fixed TA_TICK_MS
-  // (25 ms) steps so animator advance + sleep decrement land on the
-  // same 40 Hz grid TA's engine uses.  This gives deterministic
-  // pacing: a `sleep 200` ALWAYS resolves after exactly 8 ticks,
-  // regardless of whether the renderer hands us 16.67 ms (60 FPS) or
-  // 33 ms (30 FPS) per frame.  Wall-clock dt above 250 ms is clamped
-  // — typically a tab-switch pause — so the runtime doesn't burn
-  // through a stockpile of accumulated ticks all in one frame.
-  tick(dtMs) {
-    // When the runtime is paused (debugger paused, all breakpoints
-    // hit), short-circuit — animators freeze, sleeps freeze, threads
-    // don't advance.  The user's UI controls (slider drag, camera
-    // orbit) still work because they don't go through here.
-    if (this.paused) return 0
-    // Apply the playback-rate multiplier to the wall-clock advance so
-    // animator + sleep tick share the same scaled clock — without that
-    // the animator would run at real-time speed while sleeps still
-    // drained at full rate, producing inconsistent slow-motion.
-    const scaledMs = Math.min(250, Math.max(0, dtMs)) * this.playbackRate
-    this._tickAccumMs += scaledMs
-    let instCount = 0
-    // Safety cap of 8 ticks per frame keeps a momentary stutter from
-    // cascading into a single mega-frame that bursts through several
-    // hundred milliseconds of script time at once.
-    let stepsRemaining = 8
-    while (this._tickAccumMs >= TA_TICK_MS && stepsRemaining-- > 0) {
-      this._tickAccumMs -= TA_TICK_MS
-      instCount += this._tickStep(TA_TICK_MS)
-    }
-    // Drop any over-accumulation that the safety cap left behind, so
-    // we don't bank ticks for the next frame.
-    if (stepsRemaining <= 0) this._tickAccumMs = 0
-    return instCount
-  }
-
-  // _tickStep runs ONE fixed-rate tick of script-time.  Split from
-  // tick() so the accumulator loop can call it N times per render
-  // frame without duplicating the animator+thread walk.
-  _tickStep(stepMs) {
-    const dtSec = stepMs * 0.001
-    // Animators always advance even if no thread is alive - that
-    // way a SPIN started by Activate keeps running after the
-    // script returns.
-    this._tickAnimators(dtSec)
-    // Iterate a snapshot of the thread list - START_SCRIPT may
-    // append new threads during this tick; they'll run next tick.
-    let instCount = 0
-    const snap = this._threads.slice()
-    for (const t of snap) {
-      if (t.dead) continue
-      if (t.waitOn) {
-        if (this._animDone(t.waitOn)) {
-          t.waitOn = null
-          t.sleepMs = 0
-        } else {
-          continue
-        }
-      }
-      if (t.sleepMs > 0) {
-        t.sleepMs -= stepMs
-        if (t.sleepMs > 0) continue
-        t.sleepMs = 0
-      }
-      instCount += this._runThread(t)
-    }
-    // Drop dead threads.  Reverse-iterate so splice indices stay valid.
-    // Recently-signal-killed threads are moved to a ring buffer so the
-    // inspector overlay can still render them briefly with a red flash;
-    // entries older than ~1.5s are dropped.  Naturally-completed
-    // threads (RETURN, end-of-script) are removed immediately.
-    const now = performance.now()
-    for (let i = this._threads.length - 1; i >= 0; i--) {
-      const t = this._threads[i]
-      if (!t.dead) continue
-      if (t.killedBySignal) {
-        this._recentlyKilled.push({
-          script: t.script,
-          pc: t.pc,
-          signalMask: t.signalMask,
-          killedBySignal: t.killedBySignal,
-          killedAt: t.killedAt,
-        })
-      }
-      this._threads.splice(i, 1)
-    }
-    // Cap the recently-killed buffer at 8 entries and drop anything
-    // older than the inspector's flash duration.  Cheap O(n) pass.
-    while (this._recentlyKilled.length > 0 && now - this._recentlyKilled[0].killedAt > 1200) {
-      this._recentlyKilled.shift()
-    }
-    if (this._recentlyKilled.length > 8) {
-      this._recentlyKilled.splice(0, this._recentlyKilled.length - 8)
-    }
-    return instCount
-  }
-
-  // signal(n) marks every thread whose signal-mask AND n is non-zero
-  // for death.  Used by AimWeapon-style scripts to invalidate prior
-  // aiming chains when re-fired.  TA semantics: dying threads run
-  // their next opcode then exit, so we just set dead=true.  We also
-  // stamp `killedBySignal` + `killedAt` for the studio inspector
-  // overlay so it can flash the row red briefly.
+  // signal(n) marks every thread IN THIS UNIT whose signal-mask AND
+  // n is non-zero for death.  Scoped to this unit — signals do not
+  // cross to other units in the same runtime.
   signal(n) {
     for (const t of this._threads) {
       if ((t.signalMask & n) !== 0) {
@@ -410,11 +314,6 @@ export class CobRuntime {
     }
   }
 
-  // killThreadsByName drops any threads running the named script.
-  // Studio uses this to kill stale RestoreAfterDelay threads when
-  // the user re-aims - without it, the FIRST restore's 6-second
-  // timer is already running and fires partway through the LAST
-  // aim's hold window, snapping the turret back early.
   killThreadsByName(name) {
     const lower = name.toLowerCase()
     let killed = 0
@@ -427,12 +326,6 @@ export class CobRuntime {
     return killed
   }
 
-  // killThreadById drops a single thread by its `id` (CobThread.id
-  // is the per-runtime monotonically-increasing identifier set in
-  // the constructor).  Returns true if a matching live thread was
-  // found and marked dead; false otherwise.  Used by the Threads
-  // inspector's per-row trash-can icon so the user can debug a
-  // misbehaving thread without nuking the whole runtime.
   killThreadById(id) {
     for (const t of this._threads) {
       if (t.id === id && !t.dead) { t.dead = true; return true }
@@ -440,10 +333,33 @@ export class CobRuntime {
     return false
   }
 
-  // ── Breakpoint API ───────────────────────────────────────────────
-  // Keyed by "<scriptNameLower>:<offset>" so a breakpoint set on
-  // a function survives the runtime never even loading that script
-  // (the next thread that enters there hits the BP normally).
+  // killAllThreads marks every live thread dead.  Animators keep
+  // their current rest pose so the visible unit freezes in place.
+  // Returns the count of threads killed.  Called when the user
+  // removes the unit from the runtime, or via the Threads panel's
+  // "Stop All" header button.
+  killAllThreads() {
+    let killed = 0
+    for (const t of this._threads) {
+      if (!t.dead) { t.dead = true; killed++ }
+    }
+    return killed
+  }
+
+  // Hard reset — used by the host when removing a unit so any wedged
+  // state can't leak back through hooks the host might still hold.
+  destroy() {
+    this.killAllThreads()
+    this._threads.length = 0
+    this._recentlyKilled.length = 0
+    this._moveAnims.length = 0
+    this._rotAnims.length = 0
+    this._suppressed.clear()
+    this._breakpoints.clear()
+    this.hooks = {}
+  }
+
+  // ── Breakpoint API (per-unit) ────────────────────────────────
   addBreakpoint(scriptName, offset) {
     this._breakpoints.add(`${String(scriptName).toLowerCase()}:${offset >>> 0}`)
   }
@@ -454,27 +370,26 @@ export class CobRuntime {
     return this._breakpoints.has(`${String(scriptName).toLowerCase()}:${offset >>> 0}`)
   }
   clearBreakpoints() { this._breakpoints.clear() }
-  // Pause / resume the entire runtime — tick() short-circuits while
-  // paused so animators + sleeps + threads all freeze together.
-  setPaused(p) { this.paused = !!p }
 
-  // killAllThreads marks every live thread dead.  Animators keep
-  // their current rest pose (kind stays sticky), so the visible
-  // unit doesn't snap back to origin — it just freezes in place
-  // until the user re-fires a script.  Used by the Threads panel's
-  // "Stop All" header button.  Returns the count of threads killed.
-  killAllThreads() {
-    let killed = 0
-    for (const t of this._threads) {
-      if (!t.dead) { t.dead = true; killed++ }
+  // stepOne runs exactly ONE bytecode instruction on the named
+  // thread of THIS unit.  Used by the debugger's Step button.
+  // Animators don't tick — caller is the runtime which decides
+  // whether to advance other units.  Breakpoints aren't checked.
+  stepOne(threadId) {
+    const t = this._threads.find((x) => x.id === threadId && !x.dead)
+    if (!t) return
+    if (t.pc >= t.script.instructions.length) {
+      if (t.callStack.length === 0) { t.dead = true; return }
+      this._returnFromCall(t)
+      return
     }
-    return killed
+    const ins = t.script.instructions[t.pc]
+    t.pc++
+    this._exec(t, ins)
+    t.breakpointHit = false
   }
 
-  // ── Piece API consumed by the renderer ──────────────────────────
-  // Each animator stores either a translation (move) or an angle
-  // (turn / spin), per axis.  The renderer pulls the per-axis
-  // values to build the piece's world matrix.
+  // ── Piece API consumed by the renderer ──────────────────────
   pieceOffset(pieceIdx) {
     return [
       this._moveValue(pieceIdx, AXIS_X),
@@ -492,8 +407,6 @@ export class CobRuntime {
   isPieceVisible(pieceIdx) {
     return pieceIdx < 0 || this._pieceVisible[pieceIdx] !== false
   }
-  // Map piece name to index.  Used by clients that want to query
-  // by name (e.g. piece-tree → COB index).
   pieceIndexByName(name) {
     const lower = name.toLowerCase()
     for (let i = 0; i < this.pieceNames.length; i++) {
@@ -502,9 +415,7 @@ export class CobRuntime {
     return -1
   }
 
-  // ── Internals ───────────────────────────────────────────────────
-  // Same key shape for both arrays — piece * 3 + axis.  The choice
-  // of array (move vs rot) is the slot family selector.
+  // ── Internals ───────────────────────────────────────────────
   _animKey(piece, axis) { return piece * 3 + axis }
   _animMove(piece, axis) {
     const k = this._animKey(piece, axis)
@@ -518,12 +429,6 @@ export class CobRuntime {
     if (!a) { a = new PieceAxisAnim(); this._rotAnims[k] = a }
     return a
   }
-  // _moveValue / _rotValue return the per-axis translation / angle
-  // for the renderer's matrix build.  Each reads from its own
-  // family so a `move` and a `turn` on the SAME (piece, axis) no
-  // longer compete for one slot.  Both intentionally skip the
-  // `done` check — the rest-pose value must persist after an
-  // animation completes (turret stays where it aimed, etc).
   _moveValue(piece, axis) {
     const a = this._moveAnims[this._animKey(piece, axis)]
     if (!a || a.kind === 0) return 0
@@ -534,11 +439,6 @@ export class CobRuntime {
     if (!a || a.kind === 0) return 0
     return angleToRadians(a.value)
   }
-  // _animDone — used by WAIT_FOR_TURN / WAIT_FOR_MOVE to decide
-  // when to wake the sleeping thread.  Routed to the correct array
-  // via w.family (set when the wait is registered).  We check
-  // `done` rather than `kind` because kind stays sticky after the
-  // animation finishes (so the rest-pose persists).
   _animDone(w) {
     const arr = w.family === 'move' ? this._moveAnims : this._rotAnims
     const a = arr[w.key]
@@ -562,8 +462,6 @@ export class CobRuntime {
         }
         case 2: { // turn toward target
           let delta = a.target - a.value
-          // Shortest-arc: wrap delta into [-HALF, +HALF].  HALF =
-          // half a turn in TA angle units.
           const HALF = TA_TURNS_PER_CIRCLE / 2
           while (delta > HALF) delta -= TA_TURNS_PER_CIRCLE
           while (delta < -HALF) delta += TA_TURNS_PER_CIRCLE
@@ -574,12 +472,8 @@ export class CobRuntime {
         }
         case 3: { // spin
           a.value += a.speed * dt
-          // Wrap so the value never grows unbounded - 1 turn = TA_TURNS_PER_CIRCLE.
           if (a.value > TA_TURNS_PER_CIRCLE) a.value -= TA_TURNS_PER_CIRCLE
           if (a.value < -TA_TURNS_PER_CIRCLE) a.value += TA_TURNS_PER_CIRCLE
-          // Decel toward 0 if STOP_SPIN was issued.  When speed
-          // reaches 0 we mark done=true but leave kind=3 so the
-          // spun orientation persists in the rendered transform.
           if (a.decel > 0) {
             const ds = a.decel * dt
             if (Math.abs(a.speed) <= ds) { a.speed = 0; a.done = true; a.decel = 0 }
@@ -589,6 +483,57 @@ export class CobRuntime {
         }
       }
     }
+  }
+
+  // _tickStep runs ONE fixed-rate tick of script-time on this unit.
+  // Called from CobRuntime._tickStep for every active unit.  Animator
+  // advance + sleep decrement + thread instruction run all happen
+  // here.  Returns the number of instructions executed (for metrics).
+  _tickStep(stepMs) {
+    const dtSec = stepMs * 0.001
+    this._tickAnimators(dtSec)
+    let instCount = 0
+    const snap = this._threads.slice()
+    for (const t of snap) {
+      if (t.dead) continue
+      if (t.waitOn) {
+        if (this._animDone(t.waitOn)) {
+          t.waitOn = null
+          t.sleepMs = 0
+        } else {
+          continue
+        }
+      }
+      if (t.sleepMs > 0) {
+        t.sleepMs -= stepMs
+        if (t.sleepMs > 0) continue
+        t.sleepMs = 0
+      }
+      instCount += this._runThread(t)
+    }
+    // Drop dead threads.  Reverse-iterate so splice indices stay valid.
+    const now = performance.now()
+    for (let i = this._threads.length - 1; i >= 0; i--) {
+      const t = this._threads[i]
+      if (!t.dead) continue
+      if (t.killedBySignal) {
+        this._recentlyKilled.push({
+          script: t.script,
+          pc: t.pc,
+          signalMask: t.signalMask,
+          killedBySignal: t.killedBySignal,
+          killedAt: t.killedAt,
+        })
+      }
+      this._threads.splice(i, 1)
+    }
+    while (this._recentlyKilled.length > 0 && now - this._recentlyKilled[0].killedAt > 1200) {
+      this._recentlyKilled.shift()
+    }
+    if (this._recentlyKilled.length > 8) {
+      this._recentlyKilled.splice(0, this._recentlyKilled.length - 8)
+    }
+    return instCount
   }
 
   // _runThread executes a single thread's instructions until it
@@ -605,31 +550,26 @@ export class CobRuntime {
   // t.script said "InitState").
   _runThread(t) {
     let count = 0
-    const MAX = 4096 // runaway guard - generous enough for any real script
-    // If the thread is currently paused on a breakpoint we just hit
-    // (the previous tick yielded after setting `breakpointHit`), we
-    // need to clear that flag on the FIRST instruction this tick so
-    // the thread doesn't immediately re-pause on the same line.
-    // The UI's "continue" advances past the BP by clearing it.
+    const MAX = 4096
     let allowFirstBreakpoint = !t.breakpointHit
     t.breakpointHit = false
     while (!t.dead && count < MAX) {
       const insts = t.script.instructions
       if (t.pc >= insts.length) {
-        // Implicit return at end-of-script.
         if (t.callStack.length === 0) { t.dead = true; break }
         this._returnFromCall(t)
         continue
       }
       const ins = insts[t.pc]
-      // Breakpoint check — fires BEFORE the instruction runs so the
-      // user inspects pre-execution state.  Set the thread flag and
-      // yield; pc stays on the breakpoint line so the next resume
-      // can execute it (allowFirstBreakpoint suppresses immediate
-      // re-trigger on that resume).
       if (allowFirstBreakpoint && this._breakpoints.size > 0) {
         if (this._breakpoints.has(`${t.script.name.toLowerCase()}:${ins.offset >>> 0}`)) {
+          // BP fires: mark this thread as paused-on-bp AND halt the
+          // entire host runtime so animators + other units' threads
+          // also freeze.  Without the runtime-wide pause, the rest
+          // of the world keeps moving — not what "breakpoint" means
+          // to a user.
           t.breakpointHit = true
+          this.runtime.paused = true
           break
         }
       }
@@ -642,8 +582,12 @@ export class CobRuntime {
   }
 
   // _exec runs one instruction.  Returns true when the thread
-  // should yield (sleep, wait, dead).  Centralised so the inner
-  // loop stays a clean while-switch.
+  // should yield (sleep, wait, dead).  All references to per-unit
+  // state (`this.staticVars`, `this._pieceVisible`, `this.hooks`,
+  // `this.scripts`, `this._scriptByName`, `this._suppressed`) read
+  // from this CobUnit — that's what makes the multi-unit model
+  // hang together: two units run the same script binary
+  // concurrently but never touch each other's state.
   _exec(t, ins) {
     const op = ins.op
     switch (op) {
@@ -664,8 +608,6 @@ export class CobRuntime {
       }
       case OP_CREATE_LOCAL:
       case OP_STACK_ALLOC:
-        // Grow locals on demand.  CREATE_LOCAL takes an index;
-        // STACK_ALLOC just opens a slot.  Either way idempotent.
         if (op === OP_CREATE_LOCAL) {
           while (t.locals.length <= ins.p1) t.locals.push(0)
         } else {
@@ -720,14 +662,7 @@ export class CobRuntime {
       }
       case OP_GET_UNIT_VALUE:
       case OP_GET: {
-        // GET pops 1-4 inputs depending on the port.  The runtime
-        // covers the ports a TA viewer actually needs - others
-        // return 0 so legacy scripts that consult exotic ports
-        // still run without crashing.
         const port = t.popI()
-        // For ports that take extra args (PIECE_XZ etc), they were
-        // pushed BEFORE the port.  We don't yet decode every one;
-        // the common ones are stateless.
         let value = 0
         if (this.hooks.getUnitValue) value = this.hooks.getUnitValue(port) | 0
         else if (port === UV_ACTIVATION) value = 1
@@ -747,29 +682,6 @@ export class CobRuntime {
 
       // ── Piece animation ───────────────────────────────────
       case OP_MOVE: {
-        // The Go-side disassembler unpacks piece/axis into separate
-        // p1/p2 fields (NOT the legacy packed-low-16-bits encoding
-        // some bos documentation describes).  piece=p1, axis=p2.
-        // Same convention for every piece-targeted animation opcode
-        // below.  The MOVE_NOW / TURN_NOW family is the exception -
-        // they encode (piece+axis) plus an immediate value, which the
-        // disassembler hands back as a 3-DWORD instruction; see those
-        // cases for the special-handling.
-        //
-        // Stack layout: the bos compiler pushes SPEED first (deeper)
-        // then TARGET (on top), so popI() returns the target first.
-        // Getting this order wrong sends barrels off to absurd
-        // distances at glacial speeds, which is exactly what made the
-        // Millennium's recoil look like an endless backwards crawl
-        // until this was caught.
-        //
-        // done=false starts the new animation; the animator tick
-        // will flip it back to true when target is reached.
-        //
-        // Slot family: MOVE writes to _moveAnims, so a TURN on the
-        // SAME (piece, axis) lives in a separate slot and isn't
-        // overwritten — corgant's arm1a needs both `turn z 87°` AND
-        // `move z -12.25wu` to be live at the same time.
         const target = t.popI(); const speed = t.popI()
         const a = this._animMove(ins.p1, ins.p2)
         a.kind = 1; a.target = target; a.speed = Math.abs(speed); a.done = false
@@ -782,9 +694,6 @@ export class CobRuntime {
         return false
       }
       case OP_SPIN: {
-        // Spins are continuous (no target); done=false keeps the
-        // tick loop running so value accumulates each frame.  A
-        // STOP_SPIN issues a decel that eventually flips done=true.
         const speed = t.popI()
         const a = this._animRot(ins.p1, ins.p2)
         a.kind = 3; a.speed = speed; a.decel = 0; a.done = false
@@ -797,12 +706,6 @@ export class CobRuntime {
         return false
       }
       case OP_MOVE_NOW: {
-        // MOVE_NOW / TURN_NOW carry (piece, axis, value) as three
-        // inline DWORDs.  The Go disassembler emits the first two
-        // (piece, axis) as p1+p2 and reads the value from the stack
-        // via a preceding PUSH_CONST - so we pop the value off the
-        // stack instead of reading a third operand.  done=true
-        // immediately because the snap is instantaneous.
         const value = t.popI()
         const a = this._animMove(ins.p1, ins.p2)
         a.kind = 1; a.value = value; a.target = value; a.speed = 0; a.done = true
@@ -821,7 +724,6 @@ export class CobRuntime {
       case OP_CACHE:
       case OP_DONT_CACHE:
       case OP_DONT_SHADOW:
-        // Rendering hints we don't model - safe to no-op.
         return false
       case OP_EMIT_SFX: {
         const sfxType = t.popI()
@@ -835,9 +737,6 @@ export class CobRuntime {
         return true
       }
       case OP_WAIT_FOR_TURN: {
-        // Wait until the (piece, axis) turn animator reports idle.
-        // piece=p1, axis=p2 - same separated-operand layout as OP_TURN.
-        // family='rot' routes _animDone() to the _rotAnims array.
         t.waitOn = { type: 'turn', family: 'rot', key: this._animKey(ins.p1, ins.p2) }
         return true
       }
@@ -872,11 +771,6 @@ export class CobRuntime {
         const args = []
         for (let i = 0; i < argCount; i++) args.unshift(t.popI())
         if (childIdx >= 0 && childIdx < this.scripts.length) {
-          // Suppression check.  Studio adds names like
-          // "RestoreAfterDelay" here so the auto-snap-back doesn't
-          // overwrite the user's aim.  Args are already popped off
-          // the parent's stack so the call site continues cleanly
-          // regardless of whether the child actually spawns.
           if (!this._suppressed.has(this.scriptNames[childIdx].toLowerCase())) {
             const child = new CobThread(this, childIdx, args)
             this._threads.push(child)
@@ -890,7 +784,6 @@ export class CobRuntime {
         const args = []
         for (let i = 0; i < argCount; i++) args.unshift(t.popI())
         if (childIdx >= 0 && childIdx < this.scripts.length) {
-          // Reuse the same thread - push a frame, switch script.
           t.callStack.push({
             scriptIndex: t.scriptIndex,
             script: t.script,
@@ -927,13 +820,12 @@ export class CobRuntime {
       }
       case OP_ATTACH_UNIT:
       case OP_DROP_UNIT:
-        // Multiplayer-only opcodes; safe to ignore in a viewer.
+        // Multi-unit attachment ops.  In a game we'd resolve the
+        // unit id off the stack and re-parent it; the studio
+        // typically displays a single unit so a no-op is safe.
         return false
 
       default:
-        // Unknown opcodes are logged once via the optional hook and
-        // then skipped so a single unimplemented op doesn't hang the
-        // entire script.
         if (this.hooks.log) this.hooks.log(`COB: unknown op 0x${op.toString(16)} (${ins.name})`)
         return false
     }
@@ -948,4 +840,177 @@ export class CobRuntime {
     t.locals = frame.locals
     t.pushI(value)
   }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// CobRuntime — the world host.  Owns shared time control (paused,
+// playbackRate, fixed-step accumulator) and a map of CobUnits.
+// One CobRuntime per studio editor tab; multiple units inside it
+// would simulate them concurrently as if they were on a battlefield.
+// ─────────────────────────────────────────────────────────────────
+
+export class CobRuntime {
+  // Legacy single-unit constructor: `new CobRuntime(scriptJSON, hooks)`
+  // auto-creates one CobUnit so existing call sites keep working.
+  // Multi-unit usage: `new CobRuntime()` then `runtime.addUnit(...)`.
+  constructor(script, hooks = {}) {
+    this._units = new Map()           // unitId → CobUnit
+    this._nextUnitId = 1
+    // Shared time state.  Sleeps and animators of every unit share
+    // the same fixed-step clock so units don't drift relative to
+    // each other.
+    this.paused = false
+    this.playbackRate = 1
+    this._tickAccumMs = 0
+    if (script) this.addUnit(script, hooks)
+  }
+
+  // ── Multi-unit API ──────────────────────────────────────────
+
+  // addUnit creates a new CobUnit from a compiled script + per-unit
+  // hooks and registers it with the runtime.  Returns the unit so
+  // the caller can issue `unit.start(...)` etc.
+  addUnit(script, hooks = {}) {
+    const id = this._nextUnitId++
+    const unit = new CobUnit(this, id, script, hooks)
+    this._units.set(id, unit)
+    return unit
+  }
+
+  // removeUnit kills every thread in the unit + clears its animator
+  // state + drops it from the runtime's map.  Pass the CobUnit
+  // instance OR its numeric id.  Safe to call mid-tick — the
+  // _tickStep snapshot won't process a removed unit next iteration.
+  removeUnit(unitOrId) {
+    const id = (typeof unitOrId === 'object' && unitOrId !== null) ? unitOrId.id : unitOrId
+    const unit = this._units.get(id)
+    if (!unit) return
+    unit.destroy()
+    this._units.delete(id)
+  }
+
+  // units returns an iterable of every registered CobUnit.  Order is
+  // insertion order (Map iteration semantics).
+  units() { return this._units.values() }
+  unitById(id) { return this._units.get(id) }
+  unitCount() { return this._units.size }
+
+  // ── Time / control ──────────────────────────────────────────
+
+  // setPaused / setPlaybackRate apply to the WHOLE runtime — every
+  // unit's threads + animators react to these.
+  setPaused(p) { this.paused = !!p }
+  setPlaybackRate(rate) {
+    this.playbackRate = Math.max(0.01, Math.min(10, +rate || 1))
+  }
+
+  // tick advances every unit by `dtMs` of wall-clock time.  Call
+  // once per render frame.  The wall-clock dt is accumulated and
+  // drained in fixed TA_TICK_MS (25 ms) steps so every unit's
+  // animator + sleep timer share the same 40 Hz grid.  Returns the
+  // total instructions executed across all units.
+  tick(dtMs) {
+    if (this.paused) return 0
+    const scaledMs = Math.min(250, Math.max(0, dtMs)) * this.playbackRate
+    this._tickAccumMs += scaledMs
+    let instCount = 0
+    let stepsRemaining = 8
+    while (this._tickAccumMs >= TA_TICK_MS && stepsRemaining-- > 0) {
+      this._tickAccumMs -= TA_TICK_MS
+      instCount += this._tickStep(TA_TICK_MS)
+    }
+    if (stepsRemaining <= 0) this._tickAccumMs = 0
+    return instCount
+  }
+
+  _tickStep(stepMs) {
+    let instCount = 0
+    // Snapshot the unit map so addUnit during a tick doesn't try to
+    // run the new unit on the same step (it'll run on the next).
+    const snap = [...this._units.values()]
+    for (const u of snap) instCount += u._tickStep(stepMs)
+    return instCount
+  }
+
+  // stepOne finds the unit that owns `threadId` and advances that
+  // thread by one bytecode instruction.  Used by the debugger's
+  // single-step button.  Animators stay frozen.
+  stepOne(threadId) {
+    for (const u of this._units.values()) {
+      const t = u._threads.find((x) => x.id === threadId)
+      if (t) { u.stepOne(threadId); return }
+    }
+  }
+
+  // ── Backward-compat proxies for legacy single-unit callers ──
+  //
+  // Every property the studio currently reads off `runtime.xxx`
+  // delegates to the first registered unit.  This keeps the
+  // single-unit studio-tab call sites working unchanged while the
+  // multi-unit API is available alongside.
+
+  get _firstUnit() {
+    const v = this._units.values().next()
+    return v.done ? null : v.value
+  }
+
+  // Per-unit data passthrough.
+  get scripts() { return this._firstUnit?.scripts || [] }
+  get scriptNames() { return this._firstUnit?.scriptNames || [] }
+  get pieceNames() { return this._firstUnit?.pieceNames || [] }
+  get staticVars() { return this._firstUnit?.staticVars || [] }
+  set staticVars(v) { if (this._firstUnit) this._firstUnit.staticVars = v }
+  get hooks() { return this._firstUnit?.hooks || {} }
+  get _threads() { return this._firstUnit?._threads || [] }
+  get _recentlyKilled() { return this._firstUnit?._recentlyKilled || [] }
+  get _moveAnims() { return this._firstUnit?._moveAnims || [] }
+  get _rotAnims() { return this._firstUnit?._rotAnims || [] }
+  get _pieceVisible() { return this._firstUnit?._pieceVisible || [] }
+  get _offsetMaps() { return this._firstUnit?._offsetMaps || [] }
+  get _scriptByName() { return this._firstUnit?._scriptByName || new Map() }
+  get _suppressed() { return this._firstUnit?._suppressed || new Set() }
+  get _breakpoints() { return this._firstUnit?._breakpoints || new Set() }
+  get _nextThreadId() { return this._firstUnit?._nextThreadId ?? 1 }
+  set _nextThreadId(v) { if (this._firstUnit) this._firstUnit._nextThreadId = v }
+
+  // Studio-side metadata fields.  Each unit stores its own copy;
+  // backward-compat proxies read/write the first unit so the
+  // debugger's existing `runtime.decompiled = …` writes still work.
+  get decompiled() { return this._firstUnit?.decompiled || '' }
+  set decompiled(v) { if (this._firstUnit) this._firstUnit.decompiled = v }
+  get _decompiledSource() { return this._firstUnit?._decompiledSource || '' }
+  set _decompiledSource(v) { if (this._firstUnit) this._firstUnit._decompiledSource = v }
+  get name() { return this._firstUnit?.name || '' }
+  set name(v) { if (this._firstUnit) this._firstUnit.name = v }
+  get scriptOriginName() { return this._firstUnit?.scriptOriginName || '' }
+  set scriptOriginName(v) { if (this._firstUnit) this._firstUnit.scriptOriginName = v }
+  get _bosMap() { return this._firstUnit?._bosMap }
+  set _bosMap(v) { if (this._firstUnit) this._firstUnit._bosMap = v }
+  get _asmToBos() { return this._firstUnit?._asmToBos }
+  set _asmToBos(v) { if (this._firstUnit) this._firstUnit._asmToBos = v }
+
+  // Per-unit method passthroughs.  All target the first unit so
+  // single-unit call sites work without modification.
+  start(scriptName, args) { return this._firstUnit?.start(scriptName, args) ?? -1 }
+  hasScript(name) { return this._firstUnit?.hasScript(name) || false }
+  listScripts() { return this._firstUnit?.listScripts() || [] }
+  suppressScript(name) { this._firstUnit?.suppressScript(name) }
+  unsuppressScript(name) { this._firstUnit?.unsuppressScript(name) }
+  isSuppressed(name) { return this._firstUnit?.isSuppressed(name) || false }
+  signal(n) { this._firstUnit?.signal(n) }
+  killThreadsByName(name) { return this._firstUnit?.killThreadsByName(name) ?? 0 }
+  killThreadById(id) { return this._firstUnit?.killThreadById(id) ?? false }
+  killAllThreads() { return this._firstUnit?.killAllThreads() ?? 0 }
+  isPieceVisible(idx) { return this._firstUnit?.isPieceVisible(idx) ?? true }
+  pieceOffset(idx) { return this._firstUnit?.pieceOffset(idx) || [0, 0, 0] }
+  pieceRotation(idx) { return this._firstUnit?.pieceRotation(idx) || [0, 0, 0] }
+  pieceIndexByName(name) { return this._firstUnit?.pieceIndexByName(name) ?? -1 }
+
+  // Breakpoint passthrough — first unit only.  Multi-unit callers
+  // should reach into unit._breakpoints directly to scope BPs per
+  // unit (so debugging unit A doesn't pause unit B).
+  addBreakpoint(scriptName, offset) { this._firstUnit?.addBreakpoint(scriptName, offset) }
+  removeBreakpoint(scriptName, offset) { this._firstUnit?.removeBreakpoint(scriptName, offset) }
+  hasBreakpoint(scriptName, offset) { return this._firstUnit?.hasBreakpoint(scriptName, offset) || false }
+  clearBreakpoints() { this._firstUnit?.clearBreakpoints() }
 }

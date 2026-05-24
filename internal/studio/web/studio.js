@@ -1,3 +1,12 @@
+// Shared COB tokenisers + jump-arrow helpers — same algorithm the
+// explorer's BOSHighlighter/COBAHighlighter components run, factored
+// out so both tools render identically.  Pure functions, no DOM.
+import {
+  highlightBosLine as sharedHighlightBosLine,
+  cobaOpCategory,
+  computeJumps as sharedComputeJumps,
+} from './cob-highlight.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -11858,6 +11867,52 @@ function wireMvInspectors() {
     stopAll.addEventListener('pointerdown', (e) => e.stopPropagation())
     stopAll.addEventListener('mousedown', (e) => e.stopPropagation())
   }
+  // Threads-panel debug controls: Break / Continue / Step One.
+  // Same drag-suppression pattern as Stop All.
+  const breakBtn = document.getElementById('mv-threads-break')
+  if (breakBtn && breakBtn.dataset.wired !== '1') {
+    breakBtn.dataset.wired = '1'
+    breakBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const rt = modelViewerInstance?.cob?.runtime
+      if (rt) rt.setPaused(true)
+    })
+    breakBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+    breakBtn.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
+  const contBtn = document.getElementById('mv-threads-continue')
+  if (contBtn && contBtn.dataset.wired !== '1') {
+    contBtn.dataset.wired = '1'
+    contBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const rt = modelViewerInstance?.cob?.runtime
+      if (!rt) return
+      // Resume from paused state AND clear any thread's breakpointHit
+      // so threads stopped on a BP advance off the line.
+      for (const t of rt._threads) if (!t.dead) t.breakpointHit = false
+      rt.setPaused(false)
+    })
+    contBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+    contBtn.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
+  const stepBtn = document.getElementById('mv-threads-step')
+  if (stepBtn && stepBtn.dataset.wired !== '1') {
+    stepBtn.dataset.wired = '1'
+    stepBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const cob = modelViewerInstance?.cob
+      if (!cob) return
+      // Force one tick even when paused.  Clear all breakpointHit
+      // flags so any BP-stopped thread can take its one step.
+      for (const t of cob.runtime._threads) if (!t.dead) t.breakpointHit = false
+      const wasPaused = cob.runtime.paused
+      cob.runtime.paused = false
+      cob.tick(25)
+      cob.runtime.paused = wasPaused || true  // step always leaves runtime paused
+    })
+    stepBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+    stepBtn.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
   // Actions panel's "Reset State" header button — full COB reset:
   // threads, static vars, animator slots, lifecycle, particles.
   // Same drag-suppression rules as Stop All.
@@ -12025,9 +12080,12 @@ function refreshMvInspectors(dtMs = 16) {
   // can't double-trigger something that would jerk pieces.
   syncMvActionsRunning(mv.cob)
   syncCobRibbonRunning(mv.cob)
-  // Thread code-view modal — when open, update PC highlight + locals.
-  if (_mvThreadCodeTarget && !document.getElementById('mv-thread-code-modal')?.classList.contains('hidden')) {
-    refreshMvThreadCodeHighlight()
+  // Thread code-view modals — refresh every open debugger panel.
+  // Each panel tracks its own thread, hover state, and DOM scope so
+  // multiple debuggers can run side-by-side.
+  for (const state of _mvThreadCodePanels.values()) {
+    refreshMvThreadCodeHighlight(state)
+    redrawMvThreadCodeBrackets(state)
   }
 }
 
@@ -12176,73 +12234,131 @@ function renderMvThreadRow(t, killed, cob) {
 // execution.  Tracking by thread id so the modal stays bound to the
 // specific thread (not just "the next thread named Foo").
 
-let _mvThreadCodeTarget = null  // { cob, threadId } when modal open
+// Keyed by thread id → per-panel state.  Multiple debugger panels
+// can be open simultaneously; each clones the template and tracks
+// its own hover/pc/locals scope.  Iterated by the inspector tick
+// (refreshMvInspectors) so each window updates independently.
+const _mvThreadCodePanels = new Map()
 
+// openMvThreadCodeModal opens (or focuses) a debugger panel for the
+// given thread.  If a panel already exists for this thread id it
+// just rises to the top — clicking the same thread twice doesn't
+// pile up duplicates.  Otherwise a fresh template instance is cloned,
+// cascaded ~30px down/right from the previous to keep both visible.
 function openMvThreadCodeModal(cob, thread) {
-  _mvThreadCodeTarget = { cob, threadId: thread.id }
-  const modal = document.getElementById('mv-thread-code-modal')
-  if (!modal) return
-  modal.classList.remove('hidden')
-  wireMvThreadCodeChrome()
-  // Initial render is the full instruction list — only the highlighted
-  // line + locals change frame-to-frame, the rest of the DOM is stable.
-  renderMvThreadCodeSource(cob, thread)
-  renderMvThreadCodeDecompiled(cob)
-  refreshMvThreadCodeHighlight()
-}
-
-function closeMvThreadCodeModal() {
-  const modal = document.getElementById('mv-thread-code-modal')
-  if (modal) modal.classList.add('hidden')
-  _mvThreadCodeTarget = null
-}
-
-function wireMvThreadCodeChrome() {
-  const closeBtn = document.getElementById('mv-thread-code-close')
-  if (closeBtn && closeBtn.dataset.wired !== '1') {
-    closeBtn.dataset.wired = '1'
-    closeBtn.addEventListener('click', closeMvThreadCodeModal)
+  const existing = _mvThreadCodePanels.get(thread.id)
+  if (existing) {
+    bringMvThreadCodePanelToFront(existing)
+    return
   }
+  const tpl = document.getElementById('mv-thread-code-template')
+  if (!tpl) return
+  const node = tpl.content.firstElementChild.cloneNode(true)
+  node.dataset.threadId = String(thread.id)
+  // Cascade — each new panel offsets from the prior so they don't
+  // perfectly overlap.  Wraps every 8 to keep things on-screen.
+  const slot = _mvThreadCodePanels.size
+  const cascade = (slot % 8) * 30
+  node.style.left = (360 + cascade) + 'px'
+  node.style.top = (120 + cascade) + 'px'
+  document.body.appendChild(node)
+  // AbortController scopes the panel's window-level drag/resize
+  // listeners so closing one debugger cleanly removes its handlers
+  // (rather than leaking one set per ever-opened panel).
+  const ac = new AbortController()
+  const state = { panel: node, cob, threadId: thread.id, hoverLine: null, hoverAsmIdx: null, abort: ac }
+  _mvThreadCodePanels.set(thread.id, state)
+  bringMvThreadCodePanelToFront(state)
+  wireMvThreadCodeChrome(state)
+  renderMvThreadCodeSource(state, thread)
+  renderMvThreadCodeDecompiled(state, cob)
+  wireMvThreadCodeBrackets(state)
+  refreshMvThreadCodeHighlight(state)
+  redrawMvThreadCodeBrackets(state)
+}
+
+// bringMvThreadCodePanelToFront tops the z-order of the chosen
+// panel.  Called on initial open + on every header pointerdown.
+// Bumps z-index relative to the highest currently-open panel so
+// clicks always raise the focused one.
+function bringMvThreadCodePanelToFront(state) {
+  let top = 6000
+  for (const s of _mvThreadCodePanels.values()) {
+    const z = parseInt(s.panel.style.zIndex || '6000', 10)
+    if (z > top) top = z
+  }
+  state.panel.style.zIndex = String(top + 1)
+}
+
+function closeMvThreadCodeModal(state) {
+  if (!state) return
+  state.abort?.abort()
+  state.panel.remove()
+  _mvThreadCodePanels.delete(state.threadId)
+}
+
+// wireMvThreadCodeChrome attaches per-panel handlers — close, pause,
+// step, drag, resize, vars-collapse.  Idempotent via dataset.wired
+// (each cloned node starts unwired so flags don't bleed across).
+function wireMvThreadCodeChrome(state) {
+  const panel = state.panel
+  const closeBtn = panel.querySelector('.mv-thread-code-close')
+  if (closeBtn) closeBtn.addEventListener('click', () => closeMvThreadCodeModal(state))
   // Pause/resume the entire runtime.  Icon swaps ⏸↔▶ so the user
   // sees what the click WILL do (current state visible as label).
-  const pauseBtn = document.getElementById('mv-thread-code-pause')
-  if (pauseBtn && pauseBtn.dataset.wired !== '1') {
-    pauseBtn.dataset.wired = '1'
+  const pauseBtn = panel.querySelector('.mv-thread-code-pause')
+  if (pauseBtn) {
     pauseBtn.addEventListener('click', () => {
-      const rt = modelViewerInstance?.cob?.runtime
+      const rt = state.cob?.runtime
       if (!rt) return
       rt.setPaused(!rt.paused)
       pauseBtn.textContent = rt.paused ? '▶' : '⏸'
       pauseBtn.title = rt.paused ? 'Resume the runtime.' : 'Pause / resume the entire runtime.'
     })
   }
-  // Step past a hit breakpoint — clear the thread's breakpointHit flag
-  // so _runThread executes the BP line once.  If the runtime is paused
-  // we briefly unpause, advance one frame's worth, and re-pause.
-  const stepBtn = document.getElementById('mv-thread-code-step')
-  if (stepBtn && stepBtn.dataset.wired !== '1') {
-    stepBtn.dataset.wired = '1'
+  // Step past a hit breakpoint — KEEP the thread's breakpointHit flag
+  // set so _runThread reads `allowFirstBreakpoint=false`, skipping the
+  // BP check for the very first instruction this tick (executing the
+  // BP'd line once) before resuming normal BP checking.  We briefly
+  // unpause the runtime, tick once, then leave it paused again so the
+  // user can keep stepping or hit Resume to keep going.  Clearing
+  // breakpointHit (the old behaviour) caused the BP to immediately
+  // re-trigger on the same line, defeating the step.
+  const stepBtn = panel.querySelector('.mv-thread-code-step')
+  if (stepBtn) {
     stepBtn.addEventListener('click', () => {
-      const tgt = _mvThreadCodeTarget
-      if (!tgt) return
-      const t = tgt.cob.runtime._threads.find((x) => x.id === tgt.threadId && !x.dead)
-      if (t) t.breakpointHit = false
-      // Force one step even when fully paused.
-      const rt = tgt.cob.runtime
-      const wasPaused = rt.paused
-      rt.paused = false
-      tgt.cob.tick(25)
-      rt.paused = wasPaused
+      const rt = state.cob?.runtime
+      if (!rt) return
+      const t = rt._threads.find((x) => x.id === state.threadId && !x.dead)
+      if (!t) return
+      // Clear any pending sleep/wait so the next instruction runs
+      // (the user pressed Step — they don't want to wait out timers).
+      if (t.sleepMs > 0) t.sleepMs = 0
+      if (t.waitOn) t.waitOn = null
+      // Advance exactly one bytecode instruction.  No animator tick —
+      // user can watch e.g. stack pushes accumulate before a CALL.
+      rt.stepOne(state.threadId)
+      // Stay paused after the step so the user can step again.
+      rt.paused = true
+      if (pauseBtn) {
+        pauseBtn.textContent = '▶'
+        pauseBtn.title = 'Resume the runtime.'
+      }
+      // Force an immediate panel refresh so the new PC + locals/stack
+      // values are visible without waiting for the next 4 Hz tick.
+      refreshMvThreadCodeHighlight(state)
     })
   }
   // Drag handler.  Reads the panel's bounding rect and updates
   // position via inline left/top so subsequent layout doesn't fight.
-  const header = document.getElementById('mv-thread-code-header')
-  const panel = document.getElementById('mv-thread-code-modal')
-  if (header && panel && header.dataset.wired !== '1') {
-    header.dataset.wired = '1'
+  // Header pointerdown also raises the panel above its siblings so
+  // overlapping debuggers focus cleanly on click.
+  const sig = state.abort?.signal
+  const header = panel.querySelector('.mv-thread-code-header')
+  if (header) {
     let dragOff = null
     header.addEventListener('mousedown', (e) => {
+      bringMvThreadCodePanelToFront(state)
       if (e.target.closest('button')) return  // chrome buttons aren't drag handles
       e.preventDefault()
       const r = panel.getBoundingClientRect()
@@ -12255,98 +12371,346 @@ function wireMvThreadCodeChrome() {
       const top = clamp(e.clientY - dragOff.dy, 0, window.innerHeight - 60)
       panel.style.left = left + 'px'
       panel.style.top = top + 'px'
-    })
+    }, { signal: sig })
     window.addEventListener('mouseup', () => {
       if (!dragOff) return
       dragOff = null
       header.classList.remove('dragging')
+    }, { signal: sig })
+  }
+  // Resize handle — bottom-right corner.  Writes inline width / height
+  // on mousemove so the panel re-measures (and the source pane can
+  // scroll within the new height).
+  const resize = panel.querySelector('.mv-thread-code-resize')
+  if (resize) {
+    let rzStart = null
+    resize.addEventListener('mousedown', (e) => {
+      e.preventDefault(); e.stopPropagation()
+      const r = panel.getBoundingClientRect()
+      rzStart = { x: e.clientX, y: e.clientY, w: r.width, h: r.height }
     })
+    window.addEventListener('mousemove', (e) => {
+      if (!rzStart) return
+      const w = Math.max(380, rzStart.w + (e.clientX - rzStart.x))
+      const h = Math.max(220, rzStart.h + (e.clientY - rzStart.y))
+      panel.style.width = w + 'px'
+      panel.style.height = h + 'px'
+    }, { signal: sig })
+    window.addEventListener('mouseup', () => { rzStart = null }, { signal: sig })
+  }
+  // Variables-panel collapse toggle (now in the header).
+  const varsSideToggle = panel.querySelector('.mv-thread-code-vars-side-toggle')
+  if (varsSideToggle) {
+    varsSideToggle.addEventListener('click', (e) => {
+      e.stopPropagation()
+      panel.classList.toggle('vars-collapsed')
+      varsSideToggle.textContent = panel.classList.contains('vars-collapsed') ? '▭' : '▮'
+      // Bracket geometry depends on pane widths — repaint after the
+      // transition settles so curves stay glued to the asm edges.
+      setTimeout(() => redrawMvThreadCodeBrackets(state), 200)
+    })
+  }
+  // Per-section (Locals / Globals / Stack) collapse — clicking the
+  // section label toggles a class on the immediately-following list
+  // so the user can hide noisy sections without losing the whole tray.
+  for (const lbl of panel.querySelectorAll('.mv-thread-code-locals-label.mv-section-toggle')) {
+    lbl.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const key = lbl.dataset.section
+      const body = panel.querySelector(`[data-section-body="${key}"]`)
+      if (!body) return
+      const hidden = body.classList.toggle('section-hidden')
+      const caret = lbl.querySelector('.mv-section-caret')
+      if (caret) caret.textContent = hidden ? '▸' : '▾'
+    })
+  }
+  // Always-visible search box — typing filters matches in both panes.
+  // Esc clears + blurs.  Ctrl/Cmd+F inside the panel focuses it.
+  const searchInput = panel.querySelector('.mv-thread-code-search')
+  if (searchInput) {
+    searchInput.addEventListener('input', () => applyMvThreadCodeSearch(state, searchInput.value))
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        searchInput.value = ''
+        applyMvThreadCodeSearch(state, '')
+        searchInput.blur()
+      }
+    })
+  }
+  panel.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      searchInput?.focus()
+      searchInput?.select()
+    }
+  })
+}
+
+// applyMvThreadCodeSearch lights up every line in either pane whose
+// text contains the query.  Case-insensitive substring match; empty
+// query clears all marks.  Matches use a class (not a DOM rewrite)
+// so existing syntax-highlight spans stay intact.
+function applyMvThreadCodeSearch(state, query) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!src || !dec) return
+  for (const el of src.querySelectorAll('.mv-search-match')) el.classList.remove('mv-search-match')
+  for (const el of dec.querySelectorAll('.mv-search-match')) el.classList.remove('mv-search-match')
+  const q = (query || '').trim().toLowerCase()
+  if (!q) return
+  let firstMatch = null
+  for (const line of src.querySelectorAll('.mv-code-line')) {
+    if (line.textContent.toLowerCase().includes(q)) {
+      line.classList.add('mv-search-match')
+      if (!firstMatch) firstMatch = line
+    }
+  }
+  for (const line of dec.querySelectorAll('div[data-line]')) {
+    if (line.textContent.toLowerCase().includes(q)) {
+      line.classList.add('mv-search-match')
+      if (!firstMatch) firstMatch = line
+    }
+  }
+  if (firstMatch) firstMatch.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+// mvOpCategory delegates to the shared cob-highlight module so studio
+// and explorer produce identical opcode classes.
+function mvOpCategory(name) { return cobaOpCategory(name) }
+
+// renderMvThreadCodeSource paints the WHOLE disassembly (all scripts
+// in the COB, not just the currently-executing one).  Each script
+// gets its own section header + jump-arrow gutter.  Lines carry
+// data-script + data-idx so the cross-pane curves, PC tracking, and
+// BP lookups can find them by script name regardless of which thread
+// currently owns the panel.
+function renderMvThreadCodeSource(state, thread) {
+  const panel = state.panel
+  const cob = state.cob
+  const src = panel.querySelector('.mv-thread-code-source')
+  const title = panel.querySelector('.mv-thread-code-title')
+  if (!src) return
+  src.replaceChildren()
+  // dataset.scriptName tracks the thread's CURRENT script — used by
+  // refreshMvThreadCodeHighlight to detect script changes (via
+  // CALL_SCRIPT) and trigger PC-centring.  Still useful even though
+  // we render all scripts.
+  if (thread) {
+    src.dataset.scriptName = thread.script.name
+    if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
+  }
+  const pieceNames = cob.runtime.pieceNames || []
+  const scripts = cob.runtime.scripts || []
+  const LANE_W = 10
+  // outerBody hosts every script section back-to-back.  Each section
+  // is its own positioning context so per-script jump arrows don't
+  // overlap into adjacent script gutters.
+  const outerBody = document.createElement('div')
+  outerBody.className = 'mv-code-outer'
+  // Track jump computations per section so the post-mount RAF can
+  // paint each section's arrows independently.
+  const sectionRenders = []
+  for (let si = 0; si < scripts.length; si++) {
+    const script = scripts[si]
+    if (!script) continue
+    const scriptName = script.name
+    const scriptLower = scriptName.toLowerCase()
+    const instructions = script.instructions || []
+    const section = document.createElement('div')
+    section.className = 'mv-code-script'
+    section.dataset.script = scriptLower
+    // Header — clickable to collapse/expand the section body.
+    const header = document.createElement('div')
+    header.className = 'mv-code-script-header'
+    const caret = document.createElement('span')
+    caret.className = 'mv-code-fold-caret'
+    caret.textContent = '▾'
+    const hdrText = document.createElement('span')
+    hdrText.className = 'coba-directive'
+    hdrText.textContent = '.script '
+    const hdrName = document.createElement('span')
+    hdrName.className = 'coba-script-name'
+    hdrName.textContent = scriptName
+    header.appendChild(caret)
+    header.appendChild(hdrText)
+    header.appendChild(hdrName)
+    section.appendChild(header)
+    // Per-section body — positioning context for jump arrows.
+    const sBody = document.createElement('div')
+    sBody.className = 'mv-code-body'
+    const { jumps, maxLane } = sharedComputeJumps(instructions)
+    const gutterW = maxLane >= 0 ? (maxLane + 1) * LANE_W + 6 : 0
+    sBody.style.paddingLeft = (gutterW ? (gutterW + 4) : 0) + 'px'
+    const arrowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    arrowSvg.classList.add('mv-code-arrows')
+    arrowSvg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    arrowSvg.setAttribute('overflow', 'visible')
+    arrowSvg.style.position = 'absolute'
+    arrowSvg.style.left = '0'
+    arrowSvg.style.top = '0'
+    arrowSvg.style.width = (gutterW || 0) + 'px'
+    arrowSvg.style.pointerEvents = 'none'
+    sBody.appendChild(arrowSvg)
+    for (let i = 0; i < instructions.length; i++) {
+      const ins = instructions[i]
+      const line = mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames)
+      sBody.appendChild(line)
+    }
+    // Collapse / expand handler — toggle a class on the section.
+    header.addEventListener('click', () => {
+      const collapsed = section.classList.toggle('collapsed')
+      caret.textContent = collapsed ? '▸' : '▾'
+      requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
+    })
+    section.appendChild(sBody)
+    outerBody.appendChild(section)
+    sectionRenders.push({ sBody, arrowSvg, jumps, gutterW })
+  }
+  src.appendChild(outerBody)
+  // After lines mount, paint each section's jump arrows.
+  requestAnimationFrame(() => {
+    for (const s of sectionRenders) {
+      drawMvJumpArrows(s.sBody, s.arrowSvg, s.jumps, LANE_W, s.gutterW)
+    }
+  })
+}
+
+// mvBuildAsmLine constructs one assembly row — PC marker + BP dot +
+// offset + opcode + operands — wired with click/hover handlers.
+// Extracted so renderMvThreadCodeSource stays readable while still
+// driving the same line shape across every script section.
+function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
+  const cob = state.cob
+  const line = document.createElement('div')
+  line.className = 'mv-code-line'
+  line.dataset.idx = String(i)
+  line.dataset.offset = String(ins.offset >>> 0)
+  line.dataset.script = scriptLower
+  if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
+  // PC marker column (leftmost).  Empty by default; shows ▶ when the
+  // line is the current PC and is draggable to set t.pc to another
+  // line.  pointer-events on the marker itself (not the line) so
+  // clicking elsewhere on the line stays a no-op.
+  const pcCol = document.createElement('span')
+  pcCol.className = 'mv-code-pc-marker'
+  pcCol.title = 'Drag to move the program counter to another line.'
+  line.appendChild(pcCol)
+  // Breakpoint dot column.
+  const bp = document.createElement('span')
+  bp.className = 'mv-code-bp'
+  bp.title = 'Click to toggle breakpoint at this instruction.'
+  bp.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) {
+      cob.runtime.removeBreakpoint(scriptName, ins.offset)
+      line.classList.remove('breakpointed')
+      // Reflect on BOS side too.
+      mvSyncBosBpForOffset(state, scriptLower, ins.offset >>> 0, false)
+    } else {
+      cob.runtime.addBreakpoint(scriptName, ins.offset)
+      line.classList.add('breakpointed')
+      mvSyncBosBpForOffset(state, scriptLower, ins.offset >>> 0, true)
+    }
+  })
+  line.appendChild(bp)
+  const off = document.createElement('span')
+  off.className = 'mv-code-off coba-offset'
+  off.textContent = '0x' + (ins.offset >>> 0).toString(16).padStart(4, '0')
+  const code = document.createElement('span')
+  const op = document.createElement('span')
+  op.className = mvOpCategory(ins.name)
+  op.textContent = ins.name
+  code.appendChild(op)
+  const operandText = mvFormatOperands(ins, pieceNames)
+  if (operandText) {
+    const opd = document.createElement('span')
+    opd.className = 'coba-operand'
+    opd.textContent = ' ' + operandText
+    code.appendChild(opd)
+  }
+  line.appendChild(off)
+  line.appendChild(code)
+  // Mutual hover — uses the line's data-script so it works across
+  // every section in the full disassembly view.
+  line.addEventListener('mouseenter', () => {
+    const bosLine = cob.runtime._asmToBos?.get(`${scriptLower}:${i}`)
+    state.hoverAsmIdx = i
+    state.hoverAsmScript = scriptLower
+    state.hoverLine = (bosLine !== undefined) ? bosLine : null
+    applyMvThreadCodeCrossHover(state)
+    redrawMvThreadCodeBrackets(state)
+  })
+  line.addEventListener('mouseleave', () => {
+    if (state.hoverAsmIdx === i && state.hoverAsmScript === scriptLower) {
+      state.hoverAsmIdx = null
+      state.hoverAsmScript = null
+      state.hoverLine = null
+      applyMvThreadCodeCrossHover(state)
+      redrawMvThreadCodeBrackets(state)
+    }
+  })
+  return line
+}
+
+// mvSyncBosBpForOffset adds / removes .bos-bp on whichever BOS line
+// owns the given script:offset pair.  Used by the asm-side BP toggle
+// so both panes stay in sync without re-rendering.
+function mvSyncBosBpForOffset(state, scriptLower, offset, on) {
+  const dec = state.panel.querySelector('.mv-thread-code-decompiled')
+  const map = state.cob?.runtime?._bosMap
+  if (!dec || !map) return
+  for (const [lineIdx, entry] of map.entries()) {
+    if (entry.script.toLowerCase() !== scriptLower) continue
+    if ((entry.startOffset >>> 0) !== offset) continue
+    const bosEl = dec.querySelector(`div[data-line="${lineIdx}"]`)
+    if (bosEl) bosEl.classList.toggle('bos-bp', on)
+    return
   }
 }
 
-// Opcode category lookup — keeps the colour rule out of every render
-// call.  Categories mirror the explorer's COBAHighlighter so the
-// assembly reads visually consistent across the two tools.
-const MV_OP_CATEGORY = {
-  // flow
-  JUMP: 'flow', JUMP_IF_FALSE: 'flow', RETURN: 'flow',
-  CALL_SCRIPT: 'flow', START_SCRIPT: 'flow',
-  SIGNAL: 'flow', SET_SIGNAL_MASK: 'flow',
-  // stack / locals
-  PUSH_CONST: 'stack', PUSH_LOCAL: 'stack', PUSH_STATIC: 'stack',
-  POP_LOCAL: 'stack', POP_STATIC: 'stack', POP_STACK: 'stack',
-  STACK_ALLOC: 'stack', CREATE_LOCAL: 'stack',
-  // animator
-  MOVE: 'anim', MOVE_NOW: 'anim', TURN: 'anim', TURN_NOW: 'anim',
-  SPIN: 'anim', STOP_SPIN: 'anim',
-  SHOW: 'anim', HIDE: 'anim',
-  CACHE: 'anim', DONT_CACHE: 'anim', SHADE: 'anim', DONT_SHADE: 'anim',
-  // arithmetic
-  ADD: 'arith', SUB: 'arith', MUL: 'arith', DIV: 'arith', MOD: 'arith',
-  BITWISE_AND: 'arith', BITWISE_OR: 'arith', BITWISE_XOR: 'arith', BITWISE_NOT: 'arith',
-  LESS_THAN: 'arith', LESS_OR_EQUAL: 'arith', GREATER_THAN: 'arith', GREATER_EQUAL: 'arith',
-  EQUAL: 'arith', NOT_EQUAL: 'arith',
-  LOGICAL_AND: 'arith', LOGICAL_OR: 'arith', LOGICAL_XOR: 'arith', LOGICAL_NOT: 'arith',
-  RAND: 'arith', GET: 'arith', GET_UNIT_VALUE: 'arith', SET_VALUE: 'arith',
-  // waits
-  SLEEP: 'wait', WAIT_FOR_TURN: 'wait', WAIT_FOR_MOVE: 'wait',
-  // sfx
-  EMIT_SFX: 'sfx', EXPLODE: 'sfx', PLAY_SOUND: 'sfx',
-}
-function mvOpCategory(name) { return MV_OP_CATEGORY[name] || 'other' }
-
-function renderMvThreadCodeSource(cob, thread) {
-  const src = document.getElementById('mv-thread-code-source')
-  const title = document.getElementById('mv-thread-code-title')
-  if (!src || !thread) return
-  src.replaceChildren()
-  src.dataset.scriptName = thread.script.name
-  if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
-  const pieceNames = cob.runtime.pieceNames || []
-  const scriptName = thread.script.name
-  for (let i = 0; i < thread.script.instructions.length; i++) {
-    const ins = thread.script.instructions[i]
-    const line = document.createElement('div')
-    line.className = 'mv-code-line'
-    line.dataset.idx = String(i)
-    line.dataset.offset = String(ins.offset >>> 0)
-    if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
-    // Breakpoint gutter — click to toggle.
-    const bp = document.createElement('span')
-    bp.className = 'mv-code-bp'
-    bp.title = 'Click to toggle breakpoint at this instruction.'
-    bp.addEventListener('click', (e) => {
-      e.stopPropagation()
-      if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) {
-        cob.runtime.removeBreakpoint(scriptName, ins.offset)
-        line.classList.remove('breakpointed')
-      } else {
-        cob.runtime.addBreakpoint(scriptName, ins.offset)
-        line.classList.add('breakpointed')
-      }
-    })
-    line.appendChild(bp)
-    const off = document.createElement('span')
-    off.className = 'mv-code-off'
-    off.textContent = '0x' + (ins.offset >>> 0).toString(16).padStart(4, '0')
-    const code = document.createElement('span')
-    const op = document.createElement('span')
-    op.className = `mv-code-op op-${mvOpCategory(ins.name)}`
-    op.textContent = ins.name
-    code.appendChild(op)
-    // Render operands.  p1 is usually a piece index, immediate, or
-    // jump offset; p2 is an axis index for animator ops.  We pretty
-    // print piece-index operands with the piece name when known.
-    const operandText = mvFormatOperands(ins, pieceNames)
-    if (operandText) {
-      const opd = document.createElement('span')
-      opd.className = 'mv-code-operand'
-      opd.textContent = ' ' + operandText
-      code.appendChild(opd)
-    }
-    line.appendChild(off)
-    line.appendChild(code)
-    src.appendChild(line)
+// drawMvJumpArrows paints arrow paths into one section's gutter SVG.
+// Called once per script section after the section's lines have
+// mounted (so getBoundingClientRect returns real positions).
+function drawMvJumpArrows(body, svg, jumps, laneW, gutterW) {
+  if (!body || !svg) return
+  const lineEls = body.querySelectorAll('.mv-code-line')
+  if (lineEls.length === 0) return
+  const bodyRect = body.getBoundingClientRect()
+  const yOf = (idx) => {
+    const el = lineEls[idx]
+    if (!el) return 0
+    const r = el.getBoundingClientRect()
+    return ((r.top + r.bottom) * 0.5) - bodyRect.top
+  }
+  // Size the SVG to the section's full content height so arrows
+  // pointing far down still render when the user scrolls.
+  const totalH = body.scrollHeight || body.clientHeight
+  svg.setAttribute('height', String(totalH))
+  svg.setAttribute('width', String(gutterW || 0))
+  svg.style.height = totalH + 'px'
+  svg.replaceChildren()
+  if (!jumps || jumps.length === 0) return
+  const r = 4
+  for (const j of jumps) {
+    const fromY = yOf(j.fromIdx)
+    const toY = yOf(j.toIdx)
+    const x = (j.lane + 1) * laneW
+    const right = x + 6
+    const d = fromY < toY
+      ? `M ${right} ${fromY} H ${x + r} Q ${x} ${fromY} ${x} ${fromY + r} V ${toY - r} Q ${x} ${toY} ${x + r} ${toY} H ${right}`
+      : `M ${right} ${fromY} H ${x + r} Q ${x} ${fromY} ${x} ${fromY - r} V ${toY + r} Q ${x} ${toY} ${x + r} ${toY} H ${right}`
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', d)
+    path.classList.add('mv-jump-arrow')
+    if (j.isLoop) path.classList.add('loop')
+    svg.appendChild(path)
+    const ah = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
+    ah.setAttribute('points', `${right},${toY} ${right - 5},${toY - 3} ${right - 5},${toY + 3}`)
+    ah.classList.add('mv-jump-arrow-head')
+    if (j.isLoop) ah.classList.add('loop')
+    svg.appendChild(ah)
   }
 }
 
@@ -12377,25 +12741,36 @@ function mvFormatOperands(ins, pieceNames) {
   return ''
 }
 
-function refreshMvThreadCodeHighlight() {
-  const tgt = _mvThreadCodeTarget
-  if (!tgt) return
-  const thread = tgt.cob.runtime._threads.find((t) => t.id === tgt.threadId && !t.dead)
-  const status = document.getElementById('mv-thread-code-status')
+function refreshMvThreadCodeHighlight(state) {
+  if (!state) return
+  const panel = state.panel
+  const thread = state.cob.runtime._threads.find((t) => t.id === state.threadId && !t.dead)
+  const status = panel.querySelector('.mv-thread-code-status')
+  // Sync the pause icon to the runtime's actual state — covers the
+  // case where a breakpoint auto-pauses the runtime (the button
+  // wasn't clicked, but the icon needs to flip to ▶).
+  const pauseBtn = panel.querySelector('.mv-thread-code-pause')
+  if (pauseBtn) {
+    const wantTxt = state.cob.runtime.paused ? '▶' : '⏸'
+    if (pauseBtn.textContent !== wantTxt) {
+      pauseBtn.textContent = wantTxt
+      pauseBtn.title = state.cob.runtime.paused ? 'Resume the runtime.' : 'Pause / resume the entire runtime.'
+    }
+  }
   if (!thread) {
     if (status) status.textContent = 'Thread terminated.'
     // Clear PC highlight when thread dies.
-    for (const el of document.querySelectorAll('#mv-thread-code-source .mv-code-line.pc')) el.classList.remove('pc')
-    renderMvThreadCodeLocals(null)
+    for (const el of panel.querySelectorAll('.mv-thread-code-source .mv-code-line.pc')) el.classList.remove('pc')
+    renderMvThreadCodeLocals(state, null)
     return
   }
-  // The thread might have changed script via CALL_SCRIPT — re-render
-  // the source if the script object differs from what we drew.
-  const src = document.getElementById('mv-thread-code-source')
+  // Title tracks the current script for the user's convenience even
+  // though every script is rendered in the asm pane.  No re-render
+  // on CALL_SCRIPT — the new script is already drawn elsewhere.
+  const src = panel.querySelector('.mv-thread-code-source')
   if (src && src.dataset.scriptName !== thread.script.name) {
-    renderMvThreadCodeSource(tgt.cob, thread)
     src.dataset.scriptName = thread.script.name
-    const title = document.getElementById('mv-thread-code-title')
+    const title = panel.querySelector('.mv-thread-code-title')
     if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
   }
   // Status line — sleep / wait / running.
@@ -12404,83 +12779,300 @@ function refreshMvThreadCodeHighlight() {
     else if (thread.waitOn) status.textContent = `Waiting for ${thread.waitOn.type} · pc=${thread.pc}`
     else status.textContent = `Running · pc=${thread.pc}`
   }
-  // Update PC class on lines.
+  // Update PC class on lines — scoped by data-script so the same idx
+  // in two different scripts doesn't both light up.
   let prevPc = null
-  for (const el of document.querySelectorAll('#mv-thread-code-source .mv-code-line.pc')) {
+  for (const el of panel.querySelectorAll('.mv-thread-code-source .mv-code-line.pc')) {
     prevPc = el
     el.classList.remove('pc')
   }
-  const target = document.querySelector(`#mv-thread-code-source .mv-code-line[data-idx="${thread.pc}"]`)
+  const fnLower = thread.script.name.toLowerCase()
+  const target = panel.querySelector(`.mv-thread-code-source .mv-code-line[data-script="${fnLower}"][data-idx="${thread.pc}"]`)
   if (target) {
     target.classList.add('pc')
-    // Auto-scroll when PC moves to a line not currently in view.  Only
-    // scroll if the highlighted line actually changed — avoids fighting
-    // user scroll position on every refresh tick.
-    if (prevPc !== target) {
-      const container = document.getElementById('mv-thread-code-source')
-      const cr = container.getBoundingClientRect()
-      const lr = target.getBoundingClientRect()
-      if (lr.top < cr.top + 40 || lr.bottom > cr.bottom - 40) {
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    // Auto-scroll BOTH panes (asm + BOS) so the current line stays
+    // centred as the thread runs.  Only fires when PC actually moves
+    // — without that gate we'd be fighting user scrolls every tick.
+    if (prevPc !== target) centerMvThreadPanesOnPc(state, thread, target)
+  }
+  renderMvThreadCodeLocals(state, thread)
+  refreshMvThreadCodeDecompHighlight(state, thread)
+}
+
+// centerMvThreadPanesOnPc scrolls the asm pane to put the PC line at
+// vertical centre AND scrolls the BOS pane to put the mapped BOS
+// statement at vertical centre.  Both happen with _scrollSyncing on
+// so the lockstep handlers don't fire and double-correct.
+function centerMvThreadPanesOnPc(state, thread, asmTarget) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!src) return
+  state._scrollSyncing = true
+  // Asm-side centring.  We compute scrollTop directly rather than
+  // scrollIntoView — `scrollIntoView` would also scroll containing
+  // panels (e.g. the panel itself), which is not what we want.
+  {
+    const lineEl = asmTarget
+    const r = lineEl.getBoundingClientRect()
+    const srcRect = src.getBoundingClientRect()
+    const lineCentre = (r.top + r.bottom) * 0.5
+    const srcCentre = srcRect.top + src.clientHeight / 2
+    const delta = lineCentre - srcCentre
+    const max = src.scrollHeight - src.clientHeight
+    src.scrollTop = Math.max(0, Math.min(max, src.scrollTop + delta))
+  }
+  // BOS-side centring on the statement that maps to this PC.  Match
+  // on script + idx range — the BOS pane spans all functions now so
+  // we have to filter to the right script even though the asm-side
+  // PC line carries data-script already.
+  const map = state.cob.runtime._bosMap
+  if (dec && map) {
+    let bestLine = -1
+    const fnLower = thread.script.name.toLowerCase()
+    for (const [lineIdx, entry] of map.entries()) {
+      if (entry.script.toLowerCase() !== fnLower) continue
+      if (thread.pc >= entry.startIdx && thread.pc <= entry.endIdx) {
+        bestLine = lineIdx
+        break
+      }
+    }
+    if (bestLine >= 0) {
+      const bosEl = dec.querySelector(`div[data-line="${bestLine}"]`)
+      if (bosEl) {
+        const r = bosEl.getBoundingClientRect()
+        const decRect = dec.getBoundingClientRect()
+        const lineCentre = (r.top + r.bottom) * 0.5
+        const decCentre = decRect.top + dec.clientHeight / 2
+        const delta = lineCentre - decCentre
+        const max = dec.scrollHeight - dec.clientHeight
+        dec.scrollTop = Math.max(0, Math.min(max, dec.scrollTop + delta))
       }
     }
   }
-  renderMvThreadCodeLocals(thread)
-  refreshMvThreadCodeDecompHighlight(thread)
+  // Release sync guard after the scroll events have fired so the
+  // lockstep handlers don't loop back.
+  // Scroll events fire asynchronously (not during scrollTop=), so a
+  // microtask would release the guard before the echo arrives.  A
+  // short timeout covers the typical browser scroll-event latency.
+  if (state._scrollSyncResetTimer) clearTimeout(state._scrollSyncResetTimer)
+  state._scrollSyncResetTimer = setTimeout(() => {
+    state._scrollSyncing = false
+    state._scrollSyncResetTimer = null
+  }, 60)
 }
 
-// BOS keyword/builtin/modifier/axis sets ported from the explorer's
-// BOSHighlighter so the studio's decompiled view matches it visually.
-const MV_BOS_KEYWORDS = new Set([
-  'piece', 'static-var', 'if', 'else', 'while', 'return', 'sleep',
-  'move', 'turn', 'spin', 'stop-spin', 'wait-for-turn', 'wait-for-move',
-  'show', 'hide', 'explode', 'emit-sfx', 'cache', 'dont-cache',
-  'dont-shade', 'signal', 'set-signal-mask', 'set', 'start-script',
-  'call-script', 'attach-unit', 'drop-unit', 'var',
-])
-const MV_BOS_BUILTINS = new Set(['get', 'rand'])
-const MV_BOS_MODIFIERS = new Set(['now', 'speed', 'accelerate', 'decelerate', 'to', 'around', 'type', 'from'])
-const MV_BOS_AXES = new Set(['x-axis', 'y-axis', 'z-axis'])
+// highlightBosLine delegates to the shared cob-highlight module so
+// studio + explorer render identical syntax colouring.
+function highlightBosLine(line) { return sharedHighlightBosLine(line) }
 
-function escapeHtmlForCode(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-// Minimal token-based BOS highlighter: walks the line, picking out
-// identifiers vs numbers vs comments vs punctuation, then maps each
-// identifier to a CSS class via the four keyword sets above.
-function highlightBosLine(line) {
-  // Comments — `//…` to end of line, render the whole tail as one
-  // comment span.
-  const cmt = line.indexOf('//')
-  let body = line
-  let trailing = ''
-  if (cmt >= 0) {
-    body = line.slice(0, cmt)
-    trailing = `<span class="bos-comment">${escapeHtmlForCode(line.slice(cmt))}</span>`
+// mvBosStatementMatch tries to find the assembly instruction range
+// corresponding to a single BOS source line.  It's a heuristic — the
+// decompiler doesn't emit a source map, so we pattern-match the
+// BOS line against TA's standard opcode shapes:
+//
+//   turn X to A-axis <V> speed <S>;   → PUSH_CONST S, PUSH_CONST V, TURN X,A
+//   turn X to A-axis <V> now;         → PUSH_CONST V, TURN_NOW X,A
+//   move X to A-axis <V> speed <S>;   → PUSH_CONST S, PUSH_CONST V, MOVE X,A
+//   spin X around A-axis speed <S>;   → PUSH_CONST S, SPIN X,A
+//   sleep <V>;                        → PUSH_CONST V, SLEEP
+//   wait-for-(turn|move) X around A;  → WAIT_FOR_TURN/MOVE X,A
+//   show / hide / cache <piece>;      → SHOW/HIDE/CACHE piece
+//
+// Returns { startIdx, endIdx } indexes into `instructions[]` or null
+// when no match.  `cursor` is the current scan position — callers
+// pass the previous match's endIdx+1 so consecutive BOS lines map
+// to consecutive instruction ranges.
+function mvBosStatementMatch(bosLine, instructions, cursor, pieceNames) {
+  const text = bosLine.trim()
+  if (!text || text.startsWith('//') || text === '{' || text === '}') return null
+  // Strip trailing semicolon for matching.
+  const stmt = text.replace(/;\s*(\/\/.*)?$/, '').trim()
+  const pieceIdx = (name) => pieceNames.findIndex((p) => p && p.toLowerCase() === name.toLowerCase())
+  const axisIdx = (a) => ({ 'x-axis': 0, 'y-axis': 1, 'z-axis': 2 }[a.toLowerCase()] ?? -1)
+  // Try a few common shapes — find the relevant tail opcode at or
+  // after `cursor`, then back up over its preceding pushes.
+  // Helper: walk `cursor..` looking for the predicate's first match.
+  const findIns = (pred) => {
+    for (let i = cursor; i < instructions.length; i++) if (pred(instructions[i])) return i
+    return -1
   }
-  let out = ''
-  const re = /([A-Za-z_][A-Za-z_0-9-]*)|(-?\d+\.?\d*)|([{};,()<>=!&|+\-*/?:])|(\s+)|([^\s{};,()<>=!&|+\-*/?:A-Za-z_0-9]+)/g
+  // Helper: count the immediately-preceding PUSH (any) instructions.
+  const countPrecedingPushes = (idx) => {
+    let n = 0
+    for (let i = idx - 1; i >= cursor; i--) {
+      const o = instructions[i].name
+      if (o === 'PUSH_CONST' || o === 'PUSH_LOCAL' || o === 'PUSH_STATIC') n++
+      else break
+    }
+    return n
+  }
   let m
-  while ((m = re.exec(body)) !== null) {
-    if (m[1]) {
-      const word = m[1]
-      const low = word.toLowerCase()
-      if (MV_BOS_KEYWORDS.has(low)) out += `<span class="bos-keyword">${escapeHtmlForCode(word)}</span>`
-      else if (MV_BOS_BUILTINS.has(low)) out += `<span class="bos-builtin">${escapeHtmlForCode(word)}</span>`
-      else if (MV_BOS_MODIFIERS.has(low)) out += `<span class="bos-modifier">${escapeHtmlForCode(word)}</span>`
-      else if (MV_BOS_AXES.has(low)) out += `<span class="bos-axis">${escapeHtmlForCode(word)}</span>`
-      else out += escapeHtmlForCode(word)
-    } else if (m[2]) {
-      out += `<span class="bos-number">${escapeHtmlForCode(m[2])}</span>`
-    } else {
-      out += escapeHtmlForCode(m[0])
+  // turn/move X to Y-axis ...
+  m = stmt.match(/^(turn|move)\s+(\S+)\s+to\s+(x-axis|y-axis|z-axis)\s+/i)
+  if (m) {
+    const [, kind, piece, axis] = m
+    const isNow = /\bnow\b/.test(stmt)
+    const op = kind.toLowerCase() === 'turn' ? (isNow ? 'TURN_NOW' : 'TURN') : (isNow ? 'MOVE_NOW' : 'MOVE')
+    const pi = pieceIdx(piece), ai = axisIdx(axis)
+    const idx = findIns((ins) => ins.name === op && ins.p1 === pi && ins.p2 === ai)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // spin / stop-spin
+  m = stmt.match(/^(spin|stop-spin)\s+(\S+)\s+around\s+(x-axis|y-axis|z-axis)/i)
+  if (m) {
+    const op = m[1].toLowerCase() === 'spin' ? 'SPIN' : 'STOP_SPIN'
+    const pi = pieceIdx(m[2]), ai = axisIdx(m[3])
+    const idx = findIns((ins) => ins.name === op && ins.p1 === pi && ins.p2 === ai)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // wait-for-turn / wait-for-move
+  m = stmt.match(/^wait-for-(turn|move)\s+(\S+)\s+(?:around|along)\s+(x-axis|y-axis|z-axis)/i)
+  if (m) {
+    const op = m[1].toLowerCase() === 'turn' ? 'WAIT_FOR_TURN' : 'WAIT_FOR_MOVE'
+    const pi = pieceIdx(m[2]), ai = axisIdx(m[3])
+    const idx = findIns((ins) => ins.name === op && ins.p1 === pi && ins.p2 === ai)
+    if (idx >= 0) return { startIdx: idx, endIdx: idx }
+  }
+  // sleep <V>
+  if (/^sleep\b/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'SLEEP')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // show / hide / cache / dont-cache / dont-shade
+  m = stmt.match(/^(show|hide|cache|dont-cache|dont-shade)\s+(\S+)/i)
+  if (m) {
+    const op = m[1].toUpperCase().replace('-', '_')
+    const pi = pieceIdx(m[2])
+    const idx = findIns((ins) => ins.name === op && ins.p1 === pi)
+    if (idx >= 0) return { startIdx: idx, endIdx: idx }
+  }
+  // return [val]
+  if (/^return\b/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'RETURN')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // start-script / call-script
+  m = stmt.match(/^(start-script|call-script)\s+(\w+)/i)
+  if (m) {
+    const op = m[1].toLowerCase() === 'start-script' ? 'START_SCRIPT' : 'CALL_SCRIPT'
+    const idx = findIns((ins) => ins.name === op)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // signal / set-signal-mask
+  m = stmt.match(/^(signal|set-signal-mask)\b/i)
+  if (m) {
+    const op = m[1].toLowerCase() === 'signal' ? 'SIGNAL' : 'SET_SIGNAL_MASK'
+    const idx = findIns((ins) => ins.name === op)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // emit-sfx / explode
+  m = stmt.match(/^(emit-sfx|explode)\b/i)
+  if (m) {
+    const op = m[1].toLowerCase() === 'emit-sfx' ? 'EMIT_SFX' : 'EXPLODE'
+    const idx = findIns((ins) => ins.name === op)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // if (cond) — compiles to [cond pushes] + JUMP_IF_FALSE.  Both `if`
+  // and `else if` land here; the `else` keyword on its own is just a
+  // JUMP, handled separately below.
+  if (/^(if|else\s+if|while)\b/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'JUMP_IF_FALSE')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // bare `else` — compiles to a JUMP over the else body.  Skip if not
+  // followed by an `if`.
+  if (/^else\b/i.test(stmt) && !/^else\s+if\b/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'JUMP')
+    if (idx >= 0) return { startIdx: idx, endIdx: idx }
+  }
+  // set static-var-X = expr; or set X = expr;  — compiles to
+  // [expr pushes] + POP_LOCAL/POP_STATIC.
+  if (/^set\b/i.test(stmt) || /^[A-Za-z_][\w-]*\s*=/.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'POP_LOCAL' || ins.name === 'POP_STATIC')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // var X = expr;  — local declaration with initializer.  Same shape
+  // as a set: pushes then POP_LOCAL (sometimes preceded by
+  // CREATE_LOCAL).
+  if (/^var\s+/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'POP_LOCAL' || ins.name === 'CREATE_LOCAL')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // get UNIT-VALUE …; standalone (expression-as-statement — uncommon
+  // but appears in some scripts).  Match the GET op directly.
+  if (/^get\b/i.test(stmt)) {
+    const idx = findIns((ins) => ins.name === 'GET' || ins.name === 'GET_UNIT_VALUE')
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // attach-unit / drop-unit
+  m = stmt.match(/^(attach-unit|drop-unit)\b/i)
+  if (m) {
+    const op = m[1].toLowerCase().replace('-', '_').toUpperCase()
+    const idx = findIns((ins) => ins.name === op)
+    if (idx >= 0) return { startIdx: idx - countPrecedingPushes(idx), endIdx: idx }
+  }
+  // dont-shadow (separate from dont-shade) — matches DONT_SHADOW.
+  m = stmt.match(/^dont-shadow\s+(\S+)/i)
+  if (m) {
+    const pi = pieceIdx(m[1])
+    const idx = findIns((ins) => ins.name === 'DONT_SHADOW' && ins.p1 === pi)
+    if (idx >= 0) return { startIdx: idx, endIdx: idx }
+  }
+  return null
+}
+
+// buildMvBosMap walks the decompiled source once per COB to build the
+// BOS↔assembly cross-reference structures used by every open debugger
+// panel.  Stored on the runtime so multiple panels share the same
+// map without re-walking.  Builds two indexes:
+//   _bosMap : line idx → { script, startIdx, endIdx, startOffset }
+//   _asmToBos : "scriptLower:asmIdx" → bos line idx  (reverse, for
+//             mutual-hover highlighting)
+function buildMvBosMap(cob) {
+  if (cob.runtime._bosMap && cob.runtime._asmToBos) return
+  const src = cob.runtime.decompiled || cob.runtime._decompiledSource
+  cob.runtime._bosMap = new Map()
+  cob.runtime._asmToBos = new Map()
+  if (!src) return
+  const lines = src.split('\n')
+  // BOS keywords that LOOK like function calls (they have parens) but
+  // aren't.  Without this guard, `if (1)` and `while (cond)` would
+  // be treated as function headers and clobber our current-script
+  // tracking — most activatescr-body lines fell through unmapped.
+  const NOT_A_FN = new Set(['if', 'else', 'while', 'for', 'return', 'get', 'rand'])
+  let currentFn = null
+  let cursor = 0
+  let scriptInsts = null
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i]
+    const m = ln.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
+    if (m && !NOT_A_FN.has(m[1].toLowerCase())) {
+      currentFn = m[1]
+      const scriptIdx = cob.runtime.scriptNames.findIndex((n) => n && n.toLowerCase() === m[1].toLowerCase())
+      scriptInsts = scriptIdx >= 0 ? (cob.runtime.scripts[scriptIdx]?.instructions || null) : null
+      cursor = 0
+    } else if (scriptInsts && currentFn) {
+      const match = mvBosStatementMatch(ln, scriptInsts, cursor, cob.runtime.pieceNames)
+      if (match) {
+        cob.runtime._bosMap.set(i, {
+          script: currentFn,
+          startIdx: match.startIdx,
+          endIdx: match.endIdx,
+          startOffset: scriptInsts[match.startIdx].offset,
+        })
+        const fnLower = currentFn.toLowerCase()
+        for (let a = match.startIdx; a <= match.endIdx; a++) {
+          cob.runtime._asmToBos.set(`${fnLower}:${a}`, i)
+        }
+        cursor = match.endIdx + 1
+      }
     }
   }
-  return out + trailing
 }
 
-function renderMvThreadCodeDecompiled(cob) {
-  const pane = document.getElementById('mv-thread-code-decompiled')
+function renderMvThreadCodeDecompiled(state, cob) {
+  const pane = state.panel.querySelector('.mv-thread-code-decompiled')
   if (!pane) return
   pane.replaceChildren()
   const src = cob.runtime.decompiled || cob.runtime._decompiledSource
@@ -12496,74 +13088,600 @@ function renderMvThreadCodeDecompiled(cob) {
       .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((json) => {
         cob.runtime._decompiledSource = json.decompiled || '// decompile failed'
-        renderMvThreadCodeDecompiled(cob)
+        // Bust cached map so it rebuilds against the fetched source.
+        cob.runtime._bosMap = null
+        cob.runtime._asmToBos = null
+        renderMvThreadCodeDecompiled(state, cob)
       })
       .catch((err) => { pane.textContent = `// decompile fetch failed: ${err.message}` })
     pane.textContent = '// loading…'
     return
   }
+  buildMvBosMap(cob)
   const lines = src.split('\n')
+  // BOS keywords that LOOK like function calls (they have parens) but
+  // aren't.  Used here purely for dataset.fn marking so the
+  // function-header lookup in refreshMvThreadCodeDecompHighlight works.
+  const NOT_A_FN = new Set(['if', 'else', 'while', 'for', 'return', 'get', 'rand'])
+  // Track the function the current body lines belong to so each line
+  // can be tagged with `data-fn-parent="<fn>"` — the fold handler
+  // uses this attribute to hide an entire function in one query.
+  let currentFnLower = null
   for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i]
     const div = document.createElement('div')
     div.dataset.line = String(i)
-    // Detect function-header lines so we can highlight the function
-    // CURRENTLY running.  Pattern: `Name(args)` or `Name()` at line
-    // start (or with leading whitespace).
-    const m = lines[i].match(/^\s*([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
-    if (m) div.dataset.fn = m[1].toLowerCase()
-    div.innerHTML = highlightBosLine(lines[i] || ' ')
+    const m = ln.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
+    if (m && !NOT_A_FN.has(m[1].toLowerCase())) {
+      div.dataset.fn = m[1].toLowerCase()
+      div.classList.add('bos-fn-header')
+      currentFnLower = m[1].toLowerCase()
+      // Fold caret prepended to the function-header text.  Click
+      // toggles `.bos-fn-collapsed` on the header + hides every line
+      // whose data-fn-parent matches this function.
+      const caret = document.createElement('span')
+      caret.className = 'bos-fold-caret'
+      caret.textContent = '▾'
+      div.appendChild(caret)
+      div.appendChild(document.createTextNode(' '))
+    } else if (currentFnLower) {
+      div.dataset.fnParent = currentFnLower
+    }
+    div.insertAdjacentHTML('beforeend', highlightBosLine(ln || ' '))
+    // Reflect breakpoint state on initial render.
+    const mapEntry = cob.runtime._bosMap.get(i)
+    if (mapEntry && cob.runtime.hasBreakpoint(mapEntry.script, mapEntry.startOffset)) {
+      div.classList.add('bos-bp')
+    }
+    // Click behaviour depends on line kind:
+    //  · function header → fold/expand the function body
+    //  · mapped statement → toggle a breakpoint at its first asm instr
+    //  · unmapped line → no-op
+    if (div.classList.contains('bos-fn-header')) {
+      div.addEventListener('click', () => {
+        const fn = div.dataset.fn
+        const collapsed = div.classList.toggle('bos-fn-collapsed')
+        const caret = div.querySelector('.bos-fold-caret')
+        if (caret) caret.textContent = collapsed ? '▸' : '▾'
+        const sel = `.mv-thread-code-decompiled > div[data-fn-parent="${fn}"]`
+        for (const row of pane.querySelectorAll(sel)) {
+          row.classList.toggle('bos-fn-hidden', collapsed)
+        }
+        // Bracket curves depend on which BOS lines are visible.
+        requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
+      })
+    } else {
+      div.addEventListener('click', () => {
+        const entry = cob.runtime._bosMap.get(i)
+        if (!entry) return
+        const scriptLower = entry.script.toLowerCase()
+        const asmLine = state.panel.querySelector(`.mv-thread-code-source .mv-code-line[data-script="${scriptLower}"][data-offset="${entry.startOffset}"]`)
+        if (cob.runtime.hasBreakpoint(entry.script, entry.startOffset)) {
+          cob.runtime.removeBreakpoint(entry.script, entry.startOffset)
+          div.classList.remove('bos-bp')
+          if (asmLine) asmLine.classList.remove('breakpointed')
+        } else {
+          cob.runtime.addBreakpoint(entry.script, entry.startOffset)
+          div.classList.add('bos-bp')
+          if (asmLine) asmLine.classList.add('breakpointed')
+        }
+      })
+    }
     pane.appendChild(div)
+  }
+  // After the BOS DOM mounts, paint the cross-pane curves — the
+  // panel may have been visible (and asm rendered) for a while
+  // waiting on the decompile fetch, so don't rely on the next refresh
+  // tick to bring them in.
+  requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
+}
+
+// applyMvThreadCodeCrossHover sets `.cross-hover` on the asm lines
+// and `.bos-cross-hover` on the BOS line for the panel's current
+// hover target.  Called from both the asm and BOS pane hover
+// handlers so the link is mutual.  Cheap — touches a handful of
+// elements.
+function applyMvThreadCodeCrossHover(state) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!src || !dec) return
+  for (const el of src.querySelectorAll('.mv-code-line.cross-hover')) el.classList.remove('cross-hover')
+  for (const el of dec.querySelectorAll('div.bos-cross-hover')) el.classList.remove('bos-cross-hover')
+  if (state.hoverLine === null || state.hoverLine === undefined) return
+  const entry = state.cob.runtime._bosMap?.get(state.hoverLine)
+  if (!entry) return
+  const scriptLower = entry.script.toLowerCase()
+  for (let i = entry.startIdx; i <= entry.endIdx; i++) {
+    const asmLine = src.querySelector(`.mv-code-line[data-script="${scriptLower}"][data-idx="${i}"]`)
+    if (asmLine) asmLine.classList.add('cross-hover')
+  }
+  const bosEl = dec.querySelector(`div[data-line="${state.hoverLine}"]`)
+  if (bosEl) bosEl.classList.add('bos-cross-hover')
+}
+
+// wireMvThreadCodeBrackets attaches scroll + hover + resize listeners
+// for a single panel.  Idempotent via dataset.wired on each cloned
+// node (each cloned panel starts fresh, no cross-bleed).
+function wireMvThreadCodeBrackets(state) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (src && src.dataset.bracketWired !== '1') {
+    src.dataset.bracketWired = '1'
+    src.addEventListener('scroll', () => {
+      // Lockstep: when the user scrolls the asm pane, slide the BOS
+      // pane so its current middle line maps to roughly the asm
+      // middle.  Guarded against the symmetric handler with
+      // _scrollSyncing so the two don't fight.
+      if (!state._scrollSyncing) syncScrollFromAsm(state)
+      redrawMvThreadCodeBrackets(state)
+    })
+    // PC-marker drag: mousedown on the ▶ marker of the active PC line
+    // starts a drag.  Mousemove tracks the asm line currently under
+    // the pointer; mouseup writes that line's idx back to t.pc.
+    wireMvPcDrag(state)
+  }
+  if (dec && dec.dataset.bracketWired !== '1') {
+    dec.dataset.bracketWired = '1'
+    dec.addEventListener('scroll', () => {
+      if (!state._scrollSyncing) syncScrollFromBos(state)
+      redrawMvThreadCodeBrackets(state)
+    })
+    // Hover-snap: when mouse moves over a mapped BOS line, scroll
+    // the assembly pane so the FIRST instruction of that line sits
+    // at the same Y position as the hovered line.  Snap is
+    // suppressed while the user is actively scrolling the assembly
+    // pane (otherwise our scroll fights theirs).
+    dec.addEventListener('mousemove', (e) => {
+      const lineEl = e.target.closest('div[data-line]')
+      if (!lineEl) return
+      const lineIdx = parseInt(lineEl.dataset.line, 10)
+      if (!Number.isFinite(lineIdx)) return
+      const entry = state.cob.runtime._bosMap?.get(lineIdx)
+      if (!entry) {
+        if (state.hoverLine !== null) {
+          state.hoverLine = null
+          state.hoverAsmIdx = null
+          state.hoverAsmScript = null
+          applyMvThreadCodeCrossHover(state)
+          redrawMvThreadCodeBrackets(state)
+        }
+        return
+      }
+      if (state.hoverLine !== lineIdx) {
+        state.hoverLine = lineIdx
+        state.hoverAsmIdx = entry.startIdx
+        state.hoverAsmScript = entry.script.toLowerCase()
+        // Don't snap-scroll the asm pane any more — the lockstep sync
+        // handlers + per-line PC marker handle alignment, and snap
+        // would fight the user's intent when they're just hovering.
+        applyMvThreadCodeCrossHover(state)
+        redrawMvThreadCodeBrackets(state)
+      }
+    })
+    dec.addEventListener('mouseleave', () => {
+      if (state.hoverLine !== null) {
+        state.hoverLine = null
+        state.hoverAsmIdx = null
+        applyMvThreadCodeCrossHover(state)
+        redrawMvThreadCodeBrackets(state)
+      }
+    })
+  }
+  if (panel.dataset.resizeWired !== '1') {
+    panel.dataset.resizeWired = '1'
+    new ResizeObserver(() => redrawMvThreadCodeBrackets(state)).observe(panel)
   }
 }
 
-function refreshMvThreadCodeDecompHighlight(thread) {
-  const pane = document.getElementById('mv-thread-code-decompiled')
+
+
+// syncScrollFromAsm — user scrolled the assembly pane; align the BOS
+// pane so the BOS line mapping to the asm middle row lands on the
+// BOS middle row.  Sets _scrollSyncing while writing the BOS pane's
+// scrollTop so the BOS scroll handler doesn't loop back.
+function syncScrollFromAsm(state) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!src || !dec) return
+  const rt = state.cob?.runtime
+  if (!rt?._asmToBos || !rt._bosMap) return
+  // Asm row sitting on the source pane's vertical midpoint.
+  const midY = src.getBoundingClientRect().top + src.clientHeight / 2
+  const lineEls = src.querySelectorAll('.mv-code-line')
+  let bestI = -1, bestDist = Infinity
+  for (let i = 0; i < lineEls.length; i++) {
+    const r = lineEls[i].getBoundingClientRect()
+    const c = (r.top + r.bottom) * 0.5
+    const d = Math.abs(c - midY)
+    if (d < bestDist) { bestDist = d; bestI = i }
+  }
+  if (bestI < 0) return
+  // Walk outward from the middle line to find one that's mapped
+  // (many PUSH-only asm rows have no BOS mapping; without the walk,
+  // sync would no-op whenever those land on the midpoint).
+  let bosLineIdx
+  for (let off = 0; off < 40; off++) {
+    const idxs = off === 0 ? [bestI] : [bestI - off, bestI + off]
+    for (const idx of idxs) {
+      if (idx < 0 || idx >= lineEls.length) continue
+      const el = lineEls[idx]
+      const asmIdx = parseInt(el.dataset.idx, 10)
+      const asmScript = el.dataset.script
+      const m = rt._asmToBos.get(`${asmScript}:${asmIdx}`)
+      if (m !== undefined) { bosLineIdx = m; break }
+    }
+    if (bosLineIdx !== undefined) break
+  }
+  if (bosLineIdx === undefined) return
+  const bosEl = dec.querySelector(`div[data-line="${bosLineIdx}"]`)
+  if (!bosEl) return
+  // Centre that BOS line within the BOS pane.
+  const decRect = dec.getBoundingClientRect()
+  const bosRect = bosEl.getBoundingClientRect()
+  const bosCentre = (bosRect.top + bosRect.bottom) * 0.5
+  const decCentre = decRect.top + dec.clientHeight / 2
+  const delta = bosCentre - decCentre
+  const max = dec.scrollHeight - dec.clientHeight
+  const next = Math.max(0, Math.min(max, dec.scrollTop + delta))
+  if (Math.abs(next - dec.scrollTop) < 1) return
+  state._scrollSyncing = true
+  dec.scrollTop = next
+  // Release on the next microtask so the scroll event has fired.
+  // Scroll events fire asynchronously (not during scrollTop=), so a
+  // microtask would release the guard before the echo arrives.  A
+  // short timeout covers the typical browser scroll-event latency.
+  if (state._scrollSyncResetTimer) clearTimeout(state._scrollSyncResetTimer)
+  state._scrollSyncResetTimer = setTimeout(() => {
+    state._scrollSyncing = false
+    state._scrollSyncResetTimer = null
+  }, 60)
+}
+
+// syncScrollFromBos — symmetric: user scrolled BOS pane, slide asm
+// pane so the asm chunk mapped to the BOS middle line centres in the
+// source pane.
+function syncScrollFromBos(state) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!src || !dec) return
+  const rt = state.cob?.runtime
+  if (!rt?._bosMap) return
+  const midY = dec.getBoundingClientRect().top + dec.clientHeight / 2
+  let bestEl = null, bestDist = Infinity
+  for (const el of dec.children) {
+    if (!el.dataset || el.dataset.line === undefined) continue
+    const r = el.getBoundingClientRect()
+    const c = (r.top + r.bottom) * 0.5
+    const d = Math.abs(c - midY)
+    if (d < bestDist) { bestDist = d; bestEl = el }
+  }
+  if (!bestEl) return
+  const bosLineIdx = parseInt(bestEl.dataset.line, 10)
+  // Walk outward from the centred BOS line to find one with a mapping
+  // (blank lines + comments don't have entries; without this walk, the
+  // sync would no-op whenever the centred line happens to be unmapped).
+  // The BOS pane spans ALL scripts now, so the matched entry tells us
+  // which asm section to align to.
+  let entry = null
+  for (let off = 0; off < 60; off++) {
+    const idxs = off === 0 ? [bosLineIdx] : [bosLineIdx - off, bosLineIdx + off]
+    for (const idx of idxs) {
+      const e = rt._bosMap.get(idx)
+      if (e) { entry = e; break }
+    }
+    if (entry) break
+  }
+  if (!entry) return
+  const asmEl = src.querySelector(`.mv-code-line[data-script="${entry.script.toLowerCase()}"][data-idx="${entry.startIdx}"]`)
+  if (!asmEl) return
+  const srcRect = src.getBoundingClientRect()
+  const asmRect = asmEl.getBoundingClientRect()
+  const asmCentre = (asmRect.top + asmRect.bottom) * 0.5
+  const srcCentre = srcRect.top + src.clientHeight / 2
+  const delta = asmCentre - srcCentre
+  const max = src.scrollHeight - src.clientHeight
+  const next = Math.max(0, Math.min(max, src.scrollTop + delta))
+  if (Math.abs(next - src.scrollTop) < 1) return
+  state._scrollSyncing = true
+  src.scrollTop = next
+  // Scroll events fire asynchronously (not during scrollTop=), so a
+  // microtask would release the guard before the echo arrives.  A
+  // short timeout covers the typical browser scroll-event latency.
+  if (state._scrollSyncResetTimer) clearTimeout(state._scrollSyncResetTimer)
+  state._scrollSyncResetTimer = setTimeout(() => {
+    state._scrollSyncing = false
+    state._scrollSyncResetTimer = null
+  }, 60)
+}
+
+// redrawMvThreadCodeBrackets paints the SVG bracket overlay.  Walks
+// the VISIBLE BOS lines, finds each mapped line's assembly range,
+// and emits a cubic-bezier path connecting the BOS line midpoint
+// to the assembly chunk midpoint.  Special classes mark the
+// currently-PC'd line + any breakpointed lines + the hover line.
+// Throttled implicitly by the inspector's 4 Hz tick + scroll
+// debouncing the browser already does.
+// Draws curved connectors between each visible assembly instruction
+// and its matching BOS line.  One curve per asm line — many curves
+// converge on the same BOS line when a single statement compiled to
+// multiple ops.  No rectangular {-shape brackets any more (the user
+// asked for "just lines from each displayed assembly line flow to
+// their corresponding code text line").  Visible only inside the
+// gutter strip between the two panes.
+function redrawMvThreadCodeBrackets(state) {
+  if (!state) return
+  const panel = state.panel
+  const svg = panel.querySelector('.mv-thread-code-brackets')
+  const src = panel.querySelector('.mv-thread-code-source')
+  const dec = panel.querySelector('.mv-thread-code-decompiled')
+  if (!svg || !src || !dec || !state.cob.runtime._bosMap) return
+  const body = svg.parentElement
+  const bodyRect = body.getBoundingClientRect()
+  svg.setAttribute('viewBox', `0 0 ${bodyRect.width} ${bodyRect.height}`)
+  svg.setAttribute('width', String(bodyRect.width))
+  svg.setAttribute('height', String(bodyRect.height))
+  svg.replaceChildren()
+  const decRect = dec.getBoundingClientRect()
+  const srcRect = src.getBoundingClientRect()
+  // The two panes sit flush against each other (zero margin between
+  // them), so srcRect.right === decRect.left.  Anchoring the curves
+  // at the pane edges would collapse them to a single vertical line.
+  // Instead we anchor INSIDE each pane's reserved-gutter padding:
+  //   asm has padding-right: 28px → anchor 6 px in from the right
+  //   dec has padding-left:  28px → anchor 6 px in from the left
+  // That gives ~44 px of horizontal travel even with flush panes.
+  const GUTTER_INSET = 22
+  const endX   = srcRect.right - bodyRect.left - GUTTER_INSET   // asm side
+  const startX = decRect.left  - bodyRect.left + GUTTER_INSET   // dec side
+  const mid    = (startX + endX) * 0.5
+  const thread = state.cob.runtime._threads.find((t) => t.id === state.threadId && !t.dead)
+  const pcScript = thread?.script?.name?.toLowerCase()
+  const pcIdx = thread ? thread.pc : -1
+  const bps = state.cob.runtime._breakpoints
+  const asmToBos = state.cob.runtime._asmToBos
+  if (!asmToBos) return
+  for (const asmEl of src.querySelectorAll('.mv-code-line')) {
+    const asmRect = asmEl.getBoundingClientRect()
+    if (asmRect.bottom < srcRect.top - 4 || asmRect.top > srcRect.bottom + 4) continue
+    const asmIdx = parseInt(asmEl.dataset.idx, 10)
+    const asmScript = asmEl.dataset.script
+    if (!Number.isFinite(asmIdx) || !asmScript) continue
+    const bosLineIdx = asmToBos.get(`${asmScript}:${asmIdx}`)
+    if (bosLineIdx === undefined) continue
+    const entry = state.cob.runtime._bosMap.get(bosLineIdx)
+    if (!entry) continue
+    const bosEl = dec.querySelector(`div[data-line="${bosLineIdx}"]`)
+    if (!bosEl) continue
+    const bosRect = bosEl.getBoundingClientRect()
+    if (bosRect.bottom < decRect.top - 4 || bosRect.top > decRect.bottom + 4) continue
+    const asmY = (asmRect.top + asmRect.bottom) * 0.5 - bodyRect.top
+    const bosY = (bosRect.top + bosRect.bottom) * 0.5 - bodyRect.top
+    const asmYClamped = Math.max(srcRect.top - bodyRect.top, Math.min(srcRect.bottom - bodyRect.top, asmY))
+    const bosYClamped = Math.max(decRect.top - bodyRect.top, Math.min(decRect.bottom - bodyRect.top, bosY))
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    const d = `M ${endX} ${asmYClamped} C ${mid} ${asmYClamped}, ${mid} ${bosYClamped}, ${startX} ${bosYClamped}`
+    path.setAttribute('d', d)
+    const isPc = asmScript === pcScript && asmIdx === pcIdx
+    const isBp = bps.has(`${asmScript}:${entry.startOffset >>> 0}`)
+    const isHover = (state.hoverLine === bosLineIdx) ||
+                    (state.hoverAsmIdx === asmIdx && state.hoverAsmScript === asmScript)
+    if (isHover) path.classList.add('hover')
+    else if (isPc) path.classList.add('pc')
+    else if (isBp) path.classList.add('bp')
+    svg.appendChild(path)
+  }
+}
+
+// wireMvPcDrag wires two ways to set the program counter from the
+// debugger:
+//   1. Click any line's PC marker → set PC to that line.
+//   2. Drag the green ▶ on the active PC line → drop on any other
+//      line to set PC there.
+// Implemented with Pointer Events + setPointerCapture so events keep
+// firing even when the pointer leaves the marker mid-drag.  Click vs
+// drag is decided by whether the pointer moved > 3 px before release.
+function wireMvPcDrag(state) {
+  const panel = state.panel
+  const src = panel.querySelector('.mv-thread-code-source')
+  if (!src) return
+  let dragging = false
+  let dragGhost = null
+  let activePointerId = null
+  let armedMarker = null
+  let armedAtClient = null
+  const moveGhost = (x, y) => {
+    if (!dragGhost) return
+    dragGhost.style.left = (x + 10) + 'px'
+    dragGhost.style.top = (y - 8) + 'px'
+  }
+  const clearDropHighlight = () => {
+    for (const el of src.querySelectorAll('.mv-code-line.pc-drop')) el.classList.remove('pc-drop')
+  }
+  src.addEventListener('pointerdown', (e) => {
+    const marker = e.target.closest('.mv-code-pc-marker')
+    if (!marker) return
+    e.preventDefault(); e.stopPropagation()
+    armedMarker = marker
+    armedAtClient = { x: e.clientX, y: e.clientY }
+    activePointerId = e.pointerId
+    try { marker.setPointerCapture(e.pointerId) } catch { /* not supported in some test envs */ }
+  })
+  src.addEventListener('pointermove', (e) => {
+    if (activePointerId !== e.pointerId || !armedMarker) return
+    if (!dragging) {
+      // Promote to drag once the pointer travels > 3 px — otherwise
+      // every casual click would flash a ghost arrow.
+      const dx = e.clientX - armedAtClient.x
+      const dy = e.clientY - armedAtClient.y
+      if (dx * dx + dy * dy < 9) return
+      dragging = true
+      panel.classList.add('pc-dragging')
+      dragGhost = document.createElement('div')
+      dragGhost.className = 'mv-code-pc-ghost'
+      dragGhost.textContent = '▶'
+      document.body.appendChild(dragGhost)
+    }
+    moveGhost(e.clientX, e.clientY)
+    clearDropHighlight()
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.mv-code-line')
+    if (target && src.contains(target)) target.classList.add('pc-drop')
+  })
+  src.addEventListener('pointerup', (e) => {
+    if (activePointerId !== e.pointerId) return
+    const wasDragging = dragging
+    if (wasDragging) {
+      clearDropHighlight()
+      if (dragGhost) { dragGhost.remove(); dragGhost = null }
+      panel.classList.remove('pc-dragging')
+      const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.mv-code-line')
+      if (target && src.contains(target)) mvSetThreadPc(state, target)
+    } else if (armedMarker) {
+      // No motion → treat as click.  Sets PC to the clicked line
+      // regardless of whether it's the previous active PC line.
+      const line = armedMarker.closest('.mv-code-line')
+      if (line) mvSetThreadPc(state, line)
+    }
+    try { armedMarker?.releasePointerCapture(e.pointerId) } catch { /* fine */ }
+    dragging = false
+    armedMarker = null
+    armedAtClient = null
+    activePointerId = null
+  })
+  src.addEventListener('pointercancel', () => {
+    dragging = false
+    armedMarker = null
+    armedAtClient = null
+    activePointerId = null
+    panel.classList.remove('pc-dragging')
+    if (dragGhost) { dragGhost.remove(); dragGhost = null }
+    clearDropHighlight()
+  })
+}
+
+// mvSetThreadPc writes (script, pc) → thread, clears any sleep/wait
+// so execution can resume from the new spot, and refreshes the panel.
+function mvSetThreadPc(state, lineEl) {
+  const newIdx = parseInt(lineEl.dataset.idx, 10)
+  const newScript = lineEl.dataset.script
+  if (!Number.isFinite(newIdx) || !newScript) return
+  const rt = state.cob?.runtime
+  const t = rt?._threads.find((x) => x.id === state.threadId && !x.dead)
+  if (!t) return
+  if (newScript !== t.script.name.toLowerCase()) {
+    const sIdx = rt.scriptNames.findIndex((n) => n && n.toLowerCase() === newScript)
+    if (sIdx >= 0 && rt.scripts[sIdx]) t.script = rt.scripts[sIdx]
+  }
+  t.pc = newIdx
+  t.sleepMs = 0
+  t.waitOn = null
+  t.breakpointHit = false
+  refreshMvThreadCodeHighlight(state)
+}
+
+function refreshMvThreadCodeDecompHighlight(state, thread) {
+  const pane = state.panel.querySelector('.mv-thread-code-decompiled')
   if (!pane) return
-  // Clear prior highlight + apply to the current function header (and
-  // its trailing body until the next function header).  This is the
-  // approximation we use because the decompiler doesn't emit a
-  // bytecode→source line map; function-granularity is the most we
-  // can deliver without that data.
+  // Light up ONLY the BOS line whose mapped asm range covers the
+  // current PC.  Whole-function highlighting (the prior behaviour)
+  // washed out the "you are here" cue; per-statement is precise
+  // since `_bosMap` already gives us the asm-range per BOS line.
   for (const el of pane.querySelectorAll('.bos-current')) el.classList.remove('bos-current')
   if (!thread) return
   const fnLower = thread.script.name.toLowerCase()
-  let inFn = false
-  for (const div of pane.children) {
-    const fn = div.dataset.fn
-    if (fn) {
-      if (fn === fnLower) {
-        inFn = true
-        div.classList.add('bos-current')
-      } else if (inFn) {
-        break
-      }
-    } else if (inFn) {
-      div.classList.add('bos-current')
+  const map = state.cob.runtime._bosMap
+  if (!map) return
+  let bestLine = -1
+  for (const [lineIdx, entry] of map.entries()) {
+    if (entry.script.toLowerCase() !== fnLower) continue
+    if (thread.pc >= entry.startIdx && thread.pc <= entry.endIdx) {
+      bestLine = lineIdx
+      break
     }
+  }
+  if (bestLine < 0) return
+  const lineEl = pane.querySelector(`div[data-line="${bestLine}"]`)
+  if (lineEl) {
+    lineEl.classList.add('bos-current')
+    // Centring is handled by centerMvThreadPanesOnPc (called from
+    // refreshMvThreadCodeHighlight) so we don't double-scroll.
   }
 }
 
-function renderMvThreadCodeLocals(thread) {
-  const locals = document.getElementById('mv-thread-code-locals')
-  const stack = document.getElementById('mv-thread-code-stack')
+// Build one editable variable row.  `getValue` reads the current
+// number; `setValue` writes the parsed result back.  Both contract
+// the value to a 32-bit signed int (TA's COB stack is int32).
+function mvBuildVarRow(label, getValue, setValue) {
+  const row = document.createElement('div')
+  const k = document.createElement('span')
+  k.textContent = label
+  const v = document.createElement('span')
+  v.textContent = String(getValue() | 0)
+  v.contentEditable = 'true'
+  v.spellcheck = false
+  v.addEventListener('focus', () => { v.dataset.editing = '1' })
+  v.addEventListener('blur', () => {
+    v.dataset.editing = ''
+    const parsed = parseInt(v.textContent.trim(), 10)
+    const next = Number.isFinite(parsed) ? (parsed | 0) : (getValue() | 0)
+    setValue(next)
+    v.textContent = String(next)
+  })
+  v.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); v.blur() }
+    if (e.key === 'Escape') { v.textContent = String(getValue() | 0); v.blur() }
+  })
+  row.appendChild(k); row.appendChild(v)
+  return { row, valueEl: v }
+}
+
+function renderMvThreadCodeLocals(state, thread) {
+  const panel = state.panel
+  const locals = panel.querySelector('.mv-thread-code-locals')
+  const stack = panel.querySelector('.mv-thread-code-stack')
+  const globals = panel.querySelector('.mv-thread-code-globals')
   if (locals) {
-    locals.replaceChildren()
-    if (thread && thread.locals && thread.locals.length) {
-      for (let i = 0; i < thread.locals.length; i++) {
-        const row = document.createElement('div')
-        const k = document.createElement('span')
-        k.textContent = `L${i}`
-        const v = document.createElement('span')
-        v.textContent = String(thread.locals[i] | 0)
-        row.appendChild(k); row.appendChild(v)
-        locals.appendChild(row)
+    // Skip a rebuild while the user is editing a value — replacing
+    // the DOM would yank the cursor mid-edit.
+    if (!locals.querySelector('span[data-editing="1"]')) {
+      locals.replaceChildren()
+      if (thread && thread.locals && thread.locals.length) {
+        for (let i = 0; i < thread.locals.length; i++) {
+          const { row } = mvBuildVarRow(`L${i}`,
+            () => thread.locals[i],
+            (n) => { thread.locals[i] = n | 0 })
+          locals.appendChild(row)
+        }
+      } else {
+        const empty = document.createElement('div')
+        empty.style.color = 'var(--muted)'
+        empty.style.fontStyle = 'italic'
+        empty.textContent = thread ? '—' : 'no thread'
+        locals.appendChild(empty)
       }
-    } else {
-      const empty = document.createElement('div')
-      empty.style.color = 'var(--muted)'
-      empty.style.fontStyle = 'italic'
-      empty.textContent = thread ? '—' : 'no thread'
-      locals.appendChild(empty)
+    }
+  }
+  if (globals) {
+    if (!globals.querySelector('span[data-editing="1"]')) {
+      globals.replaceChildren()
+      const rt = state.cob?.runtime
+      if (rt && rt.staticVars && rt.staticVars.length) {
+        for (let i = 0; i < rt.staticVars.length; i++) {
+          const { row } = mvBuildVarRow(`global_${i}`,
+            () => rt.staticVars[i],
+            (n) => { rt.staticVars[i] = n | 0 })
+          globals.appendChild(row)
+        }
+      } else {
+        const empty = document.createElement('div')
+        empty.style.color = 'var(--muted)'
+        empty.style.fontStyle = 'italic'
+        empty.textContent = '—'
+        globals.appendChild(empty)
+      }
     }
   }
   if (stack) {

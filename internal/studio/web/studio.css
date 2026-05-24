@@ -2778,9 +2778,14 @@ canvas {
 .mv-inspector-header .mv-actions-reset:hover { color: var(--accent); background: var(--bg-2); }
 
 /* Thread row click affordance — show a pointer so the user knows the
-   row itself is clickable (not just the trash icon). */
+   row itself is clickable (not just the trash icon).  Cascade the
+   pointer cursor onto child rows (name, status, signals) too so the
+   user discovers anywhere on the row opens the debugger, not only
+   the title line. */
 .mv-cob-thread-row { cursor: pointer; }
+.mv-cob-thread-row :is(.mv-cob-thread-name, .mv-cob-thread-detail) { cursor: pointer; }
 .mv-cob-thread-row:hover { background: rgba(139, 92, 246, 0.08); }
+.mv-cob-thread-row:hover .mv-cob-thread-detail { color: var(--text-secondary, var(--text)); }
 
 /* Thread debugger — movable floating panel.  NOT modal: lives over
    the canvas but doesn't block pointer events outside its own rect,
@@ -2832,17 +2837,51 @@ canvas {
   display: flex;
   flex: 1;
   min-height: 0;
+  position: relative; /* containing block for the SVG bracket overlay */
 }
+/* SVG bracket overlay — positioned absolutely so we can paint
+   curves anywhere over the body without disturbing pane layout.
+   pointer-events: none means hover/click still go to the underlying
+   source / decompiled lines.  z-index sits BELOW the locals tray
+   so the brackets visually pass under the right column. */
+.mv-thread-code-brackets {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+/* Curve connectors only (no rectangular bracket spine).  Faint by
+   default so dense code reads cleanly; PC/BP/hover get progressively
+   stronger strokes so the active connector stands out. */
+.mv-thread-code-brackets path { fill: none; stroke: rgba(139, 92, 246, 0.25); stroke-width: 0.9; }
+.mv-thread-code-brackets path.pc { stroke: #ffcb6b; stroke-width: 2; opacity: 1; }
+.mv-thread-code-brackets path.bp { stroke: var(--danger); stroke-width: 1.6; opacity: 1; }
+.mv-thread-code-brackets path.hover { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
 .mv-thread-code-source {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 8px 0;
+  /* Right padding reserves a gutter for the SVG curve overlay to
+     draw into — without space between the panes the curves would
+     have no horizontal travel and read as straight lines. */
+  padding: 8px 28px 8px 0;
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  line-height: 1.5;
+  /* Smaller than the BOS pane so more assembly fits per line, which
+     makes the lockstep middle-line alignment cleaner — when one BOS
+     statement maps to 4–6 asm ops, we need the asm pane to be able
+     to show all of them in roughly the same vertical extent as the
+     BOS statement's single row. */
+  font-size: 10px;
+  line-height: 1.45;
   background: var(--bg-0);
 }
+/* Jump-arrow gutter on the LEFT of the asm pane.  Lanes assigned by
+   computeJumps; thin connectors so the gutter stays scannable. */
+.mv-code-arrows path.mv-jump-arrow { fill: none; stroke: #546e7a; stroke-width: 1.1; opacity: 0.7; }
+.mv-code-arrows path.mv-jump-arrow.loop { stroke: #c792ea; opacity: 0.85; }
+.mv-code-arrows polygon.mv-jump-arrow-head { fill: #546e7a; opacity: 0.7; }
+.mv-code-arrows polygon.mv-jump-arrow-head.loop { fill: #c792ea; opacity: 0.85; }
 /* Decompiled BOS pane sits to the RIGHT of the assembly, sharing
    the same source-text style.  Borders flank both sides so the
    three-pane layout reads as separated columns at a glance. */
@@ -2850,7 +2889,10 @@ canvas {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  padding: 8px 12px;
+  /* Left padding mirrors the source pane's right gutter — the
+     SVG bracket overlay arcs into this space to land on the BOS
+     line's left edge. */
+  padding: 8px 12px 8px 28px;
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
   line-height: 1.5;
@@ -2859,20 +2901,73 @@ canvas {
   white-space: pre;
   color: var(--text);
 }
-.mv-thread-code-decompiled .bos-keyword { color: #ff7575; font-weight: 600; }
-.mv-thread-code-decompiled .bos-builtin { color: #66c2ff; }
-.mv-thread-code-decompiled .bos-modifier { color: #6ee7c1; }
-.mv-thread-code-decompiled .bos-axis { color: #f5b76e; }
-.mv-thread-code-decompiled .bos-fn-name { color: #ffd866; font-weight: 600; }
-.mv-thread-code-decompiled .bos-number { color: #b3e3ff; font-variant-numeric: tabular-nums; }
-.mv-thread-code-decompiled .bos-comment { color: var(--muted); font-style: italic; }
+/* Palette mirrors the explorer's BOSHighlighter so the studio's
+   decompiled view reads identically across tools. */
+.mv-thread-code-decompiled .bos-keyword  { color: #c792ea; font-weight: 600; }
+.mv-thread-code-decompiled .bos-builtin  { color: #82aaff; }
+.mv-thread-code-decompiled .bos-modifier { color: #89ddff; font-style: italic; }
+.mv-thread-code-decompiled .bos-axis     { color: #f78c6c; }
+.mv-thread-code-decompiled .bos-fn-name  { color: #ffcb6b; font-weight: 600; }
+.mv-thread-code-decompiled .bos-number   { color: #f07178; font-variant-numeric: tabular-nums; }
+.mv-thread-code-decompiled .bos-comment  { color: #546e7a; font-style: italic; }
 .mv-thread-code-decompiled .bos-current {
-  background: rgba(255, 220, 100, 0.12);
-  border-left: 2px solid #ffd866;
+  background: rgba(255, 203, 107, 0.10);
+  border-left: 2px solid #ffcb6b;
   padding-left: 4px;
   margin-left: -6px;
 }
-.mv-thread-code-locals {
+/* Cross-hover: hovering an asm line lights the matching BOS line and
+   vice versa.  Uses the explorer's bos-line-highlight tone so the
+   linked side is unmistakable. */
+.mv-thread-code-decompiled > div.bos-cross-hover {
+  background: rgba(255, 203, 107, 0.20);
+  border-left: 3px solid #ffcb6b;
+  padding-left: 3px;
+  margin-left: -6px;
+}
+/* BOS line with an active breakpoint — red marker + tint, mirrors
+   the assembly-side gutter dot.  Only lines we managed to map
+   (data-line=N has an entry in runtime._bosMap) are clickable in
+   practice; unmapped lines no-op the click. */
+.mv-thread-code-decompiled > div {
+  padding: 0 0 0 6px;
+  cursor: pointer;
+}
+/* Function-header rows wear a fold caret + slightly heavier weight so
+   the user sees them as collapsible. */
+.mv-thread-code-decompiled > div.bos-fn-header { font-weight: 600; }
+.mv-thread-code-decompiled > div.bos-fn-hidden { display: none; }
+.mv-thread-code-decompiled .bos-fold-caret {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--muted);
+  user-select: none;
+}
+.mv-thread-code-decompiled > div.bos-fn-header:hover .bos-fold-caret { color: var(--accent); }
+.mv-thread-code-decompiled > div:hover { background: rgba(139, 92, 246, 0.06); }
+/* BP-marked BOS line — red row tint + red dot in a left gutter to
+   mirror the asm-side .breakpointed look.  ::before paints the dot;
+   sized + positioned to align with the asm-side .mv-code-bp circle. */
+.mv-thread-code-decompiled > div.bos-bp {
+  background: rgba(248, 81, 73, 0.12);
+  border-left: 3px solid var(--danger);
+  margin-left: -6px;
+  padding-left: 14px;
+  position: relative;
+}
+.mv-thread-code-decompiled > div.bos-bp::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.mv-thread-code-locals-panel {
   width: 180px;
   border-left: 1px solid var(--border);
   padding: 8px 10px;
@@ -2888,7 +2983,111 @@ canvas {
   text-transform: uppercase;
   color: var(--muted);
   margin: 6px 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
+.mv-thread-code-locals-label .minimap-toggle {
+  font-size: 11px;
+  padding: 0 4px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+.mv-thread-code-locals-label .minimap-toggle:hover { color: var(--accent); }
+/* Make section headers (Locals/Globals/Stack) click-to-collapse — the
+   ▾/▸ caret indicates state.  Body class `section-collapsed` hides the
+   list that follows the header. */
+.mv-thread-code-locals-label.mv-section-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+.mv-thread-code-locals-label.mv-section-toggle:hover { color: var(--text); }
+.mv-thread-code-locals-label .mv-section-caret {
+  display: inline-block;
+  width: 10px;
+  margin-right: 2px;
+  color: var(--muted);
+  transition: transform 100ms ease;
+}
+.mv-thread-code-locals-list.section-hidden { display: none; }
+/* Always-visible search box in the panel header.  Lights matches in
+   both panes via .mv-search-match.  Sits between the status text and
+   the chrome buttons. */
+.mv-thread-code-search {
+  flex: 0 0 auto;
+  width: 160px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.mv-thread-code-search:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+/* Search-match highlight on both panes — yellow underline so matches
+   are visible without obliterating syntax colours. */
+.mv-search-match {
+  background: rgba(255, 203, 107, 0.30);
+  outline: 1px solid rgba(255, 203, 107, 0.55);
+}
+/* Editable value cells.  contenteditable spans get a subtle hover
+   ring so the user discovers they're editable, plus a focused
+   outline when actively typing. */
+.mv-thread-code-locals-list > div > span:last-child[contenteditable] {
+  cursor: text;
+  padding: 0 4px;
+  border-radius: 2px;
+  outline: 1px solid transparent;
+  transition: outline-color 80ms ease, background 80ms ease;
+}
+.mv-thread-code-locals-list > div > span:last-child[contenteditable]:hover {
+  outline-color: var(--border);
+  background: var(--bg-0);
+}
+.mv-thread-code-locals-list > div > span:last-child[contenteditable]:focus {
+  outline-color: var(--accent);
+  background: var(--bg-0);
+}
+/* Collapsed variables panel — shrink to a thin sliver showing only
+   the toggle button, freeing the source area for wider code. */
+.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel {
+  width: 24px;
+  padding: 8px 4px;
+  overflow: hidden;
+}
+.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel > div { display: none; }
+.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child { display: flex; }
+.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child > span { display: none; }
+/* Resize handle — bottom-right corner.  Mouse drag updates the
+   panel's width + height inline. */
+.mv-thread-code-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  user-select: none;
+  text-align: center;
+}
+.mv-thread-code-resize:hover { color: var(--accent); }
+/* Threads-panel debug button trio (Break / Continue / Step) — tint
+   so the user discovers them as a group separate from Stop All. */
+.mv-inspector-header .mv-threads-break,
+.mv-inspector-header .mv-threads-continue,
+.mv-inspector-header .mv-threads-step {
+  color: var(--muted);
+  font-size: 11px;
+}
+.mv-inspector-header .mv-threads-break:hover    { color: #ffd866; background: var(--bg-2); }
+.mv-inspector-header .mv-threads-continue:hover { color: #66ff97; background: var(--bg-2); }
+.mv-inspector-header .mv-threads-step:hover     { color: var(--accent); background: var(--bg-2); }
 .mv-thread-code-locals-list {
   display: flex;
   flex-direction: column;
@@ -2905,16 +3104,72 @@ canvas {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-/* Source-line rendering — each instruction on its own row.  PC row
-   gets a yellow left-border + brighter background so the user can
-   spot it instantly.  Hover any line to inspect (just a brightening). */
+/* All-scripts disassembly: each script wraps its body in a section so
+   per-script jump arrows live in their own positioning context.
+   Headers are clickable to fold the script body. */
+.mv-code-script { margin-bottom: 6px; }
+.mv-code-script-header {
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  padding: 4px 4px 2px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.mv-code-script-header:hover { background: var(--bg-2); }
+.mv-code-script.collapsed .mv-code-body { display: none; }
+.mv-code-script .mv-code-body { position: relative; }
+.mv-code-fold-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--muted);
+}
+/* Source-line rendering — each instruction on its own row.  Columns:
+   PC marker (16px) · BP dot (14px) · offset (58px) · code (1fr).
+   PC row gets a yellow left-border + brighter background.  Hover any
+   line to inspect (just a brightening). */
 .mv-code-line {
   display: grid;
-  grid-template-columns: 14px 70px 1fr;
-  gap: 6px;
+  grid-template-columns: 16px 14px 58px 1fr;
+  gap: 4px;
   padding: 1px 12px 1px 4px;
   border-left: 3px solid transparent;
   white-space: pre;
+}
+/* PC marker — always present in column 1.  Faint ▷ hint on hover for
+   non-PC lines so the user discovers click-to-set-PC; bright ▶ on
+   the active line so it stands out and can be dragged. */
+.mv-code-line .mv-code-pc-marker {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1;
+  color: transparent;
+  cursor: pointer;
+  user-select: none;
+}
+.mv-code-line:hover .mv-code-pc-marker::before { content: '▷'; color: rgba(110, 231, 156, 0.45); }
+.mv-code-line.pc .mv-code-pc-marker { color: #6ee79c; cursor: grab; }
+.mv-code-line.pc .mv-code-pc-marker::before { content: '▶'; color: #6ee79c; }
+.mv-code-line.pc:hover .mv-code-pc-marker::before { color: #a8ffaf; }
+.mv-thread-code-panel.pc-dragging .mv-code-line.pc .mv-code-pc-marker { cursor: grabbing; }
+/* Drop target highlight while dragging PC marker. */
+.mv-code-line.pc-drop { background: rgba(110, 231, 156, 0.20); border-left-color: #6ee79c; }
+/* Floating ghost ▶ following the mouse during PC-marker drag. */
+.mv-code-pc-ghost {
+  position: fixed;
+  z-index: 9999;
+  color: #6ee79c;
+  font-size: 13px;
+  font-family: var(--mono, ui-monospace, monospace);
+  pointer-events: none;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
 }
 .mv-code-line:hover { background: rgba(139, 92, 246, 0.06); }
 .mv-code-line.pc {
@@ -2922,6 +3177,14 @@ canvas {
   border-left-color: #ffd866;
 }
 .mv-code-line.pc.breakpointed { border-left-color: var(--danger); }
+/* Cross-hover: the asm-side echo of the BOS hover (and vice versa).
+   Lights the entire mapped range so the mapping is visible at a
+   glance.  Outranks the regular .pc highlight on hover so the user
+   sees their own intent clearly. */
+.mv-code-line.cross-hover {
+  background: rgba(255, 203, 107, 0.20);
+  border-left-color: #ffcb6b;
+}
 .mv-code-line .mv-code-off {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -2945,18 +3208,23 @@ canvas {
   background: var(--danger);
   border-color: var(--danger);
 }
-/* Opcode category colours match the explorer's COBAHighlighter so
-   the assembly reads identically across tools. */
-.mv-code-op { font-weight: 600; }
-.mv-code-op.op-flow  { color: #ff7575; }   /* JUMP, RETURN, CALL, START */
-.mv-code-op.op-stack { color: #66c2ff; }   /* PUSH, POP, STACK_ALLOC */
-.mv-code-op.op-anim  { color: #b189ff; }   /* MOVE, TURN, SPIN, SHOW, HIDE */
-.mv-code-op.op-arith { color: #f5b76e; }   /* ADD, SUB, MUL, AND, comparisons */
-.mv-code-op.op-wait  { color: #6ee7c1; }   /* SLEEP, WAIT_FOR_TURN/MOVE */
-.mv-code-op.op-sfx   { color: #ffaa66; }   /* EMIT_SFX, EXPLODE, PLAY_SOUND */
-.mv-code-op.op-other { color: var(--text); }
-.mv-code-operand { color: var(--text); }
-.mv-code-operand-num { color: #b3e3ff; font-variant-numeric: tabular-nums; }
+/* Row-tint when BP is set (matches the BOS-side `.bos-bp` look so the
+   two panes show breakpoints identically). */
+.mv-code-line.breakpointed {
+  background: rgba(248, 81, 73, 0.12);
+  border-left-color: var(--danger);
+}
+/* Opcode category colours mirror the explorer's COBAHighlighter
+   palette (.coba-op-flow / -stack / -anim / -arith / -effect plus
+   .coba-operand and .coba-offset) so the assembly reads identically
+   across tools.  Studio reuses the same class names. */
+.mv-code-line .coba-op-flow   { color: #c792ea; font-weight: 600; }
+.mv-code-line .coba-op-stack  { color: #82aaff; font-weight: 600; }
+.mv-code-line .coba-op-anim   { color: #c3e88d; font-weight: 600; }
+.mv-code-line .coba-op-arith  { color: #89ddff; font-weight: 600; }
+.mv-code-line .coba-op-effect { color: #f78c6c; font-weight: 600; }
+.mv-code-line .coba-operand   { color: #f07178; }
+.mv-code-line .coba-offset    { color: #546e7a; font-variant-numeric: tabular-nums; }
 .mv-cob-thread-detail {
   color: var(--muted);
   font-size: 10px;
