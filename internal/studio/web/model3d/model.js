@@ -36,6 +36,12 @@ export class Model {
         gl.deleteBuffer(p.wireframe.vbo)
         p.wireframe = null
       }
+      if (p.wireframeByTex) {
+        for (const w of p.wireframeByTex.values()) {
+          if (w.vbo) gl.deleteBuffer(w.vbo)
+        }
+        p.wireframeByTex = null
+      }
     }
   }
 }

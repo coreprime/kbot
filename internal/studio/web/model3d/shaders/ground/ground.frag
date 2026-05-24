@@ -37,6 +37,34 @@ uniform vec3 uWaterShallow;        // shallow / sunlit water tint (closest to su
 uniform vec3 uWaterMid;            // mid depth tint
 uniform vec3 uWaterDeep;           // abyssal tint
 uniform float uWaterTranslucency;  // multiplier on water alpha - higher = clearer
+// Dynamic pulse light (matches main.frag uniforms exactly).  Fed
+// by the controller each frame from the strongest active light-
+// emitting particle.  Used here so weapon SFX (d-gun, lasers) cast
+// a visible coloured wash onto the terrain beneath them.  Zero
+// colour means no active pulse — the cheap dot-product test gates
+// the contribution off so quiescent frames pay almost nothing.
+uniform vec3 uPulseLightPos;
+uniform vec3 uPulseLightColor;
+uniform float uPulseLightRange;
+
+// pulseLightContribution computes the additive RGB the dynamic
+// point light deposits on a horizontal ground patch at worldPos.
+// Ground normal is implicit +Y; only the vertical component of the
+// light direction matters for the Lambert dot.  Returns zero when
+// no active pulse so callers can blindly add it.
+vec3 pulseLightContribution(vec3 worldPos) {
+  if (dot(uPulseLightColor, uPulseLightColor) < 0.0001 || uPulseLightRange <= 0.0) {
+    return vec3(0.0);
+  }
+  vec3 d = uPulseLightPos - worldPos;
+  float dist = length(d);
+  if (dist < 0.0001) return vec3(0.0);
+  // ndl against +Y normal = max(0, d.y/dist).
+  float ndl = max(0.0, d.y / dist);
+  float r = dist / uPulseLightRange;
+  float atten = 1.0 / (1.0 + r * r);
+  return uPulseLightColor * ndl * atten;
+}
 uniform vec3 uSeabedSand;          // colour of the bed's sand / dune surface
 uniform vec3 uSeabedRock;          // colour of rocky outcrops
 uniform vec3 uSeabedCaustic;       // tint of the caustic light shaft on the bed
@@ -167,6 +195,7 @@ void main() {
     vec3 line = vec3(0.30, 0.65, 0.34);
     vec3 base = mix(fill, line, onLine);
     base *= mix(1.0, shadow, 0.85 * fade);
+    base += pulseLightContribution(vWorldPos);
     gl_FragColor = vec4(base, fade);
     return;
   }
@@ -196,6 +225,7 @@ void main() {
     float dCamT = length(uEyePos - vWorldPos);
     float horizonMix = smoothstep(1800.0, 5500.0, dCamT);
     base = mix(base, uHorizonColor, horizonMix * 0.78);
+    base += pulseLightContribution(vWorldPos);
     gl_FragColor = vec4(base, 1.0);
     return;
   }

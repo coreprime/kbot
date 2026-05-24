@@ -63,13 +63,62 @@ export class CobBinding {
   // tick advances the WHOLE runtime by dtMs (every unit, not just
   // this binding's one) and then pushes per-piece state into THIS
   // binding's model.  Returns the instruction count for the tick.
+  //
+  // The runtime ticks on a fixed 40 Hz grid; the renderer typically
+  // runs at 60 Hz or faster, so most render frames see no fresh COB
+  // value.  _sync uses dtMs to exponentially smooth the displayed
+  // piece transforms toward the latest COB target — this turns the
+  // visibly stepped "snap each tick" animation into a continuous
+  // ease-toward-target on every render frame, without changing what
+  // the runtime computes (the engine stays bytecode-pure; only the
+  // displayed transform is interpolated).
   tick(dtMs) {
     const count = this.runtime.tick(dtMs)
-    this._sync()
+    this._sync(dtMs)
     // Particles share the runtime's playback rate so slow-mo
     // applies uniformly to script + SFX.
     this.particles.tick(dtMs * this.runtime.playbackRate)
+    // Dynamic light contribution — surface the strongest live
+    // light-emitting particle (d-gun ball, laser pulse) into the
+    // renderer's single pulse-light slot so units near the projectile
+    // get illuminated.  Strongest = max(lightStrength * alpha) so a
+    // fading particle gradually loses its illumination rather than
+    // snapping off.
+    this._pushPulseLight()
     return count
+  }
+
+  // _pushPulseLight scans the alive particles for any flagged as a
+  // light source and forwards the strongest to the renderer.  One
+  // light at a time keeps shader cost flat; in practice the d-gun
+  // dominates any other simultaneous emitter (range 300 vs laser's
+  // 80) so picking the brightest is enough.
+  _pushPulseLight() {
+    // The renderer is back-ref'd onto this binding by setCobBinding.
+    const renderer = this.renderer
+    if (!renderer || typeof renderer.setPulseLight !== 'function') return
+    const p = this.particles
+    let bestIdx = -1
+    let bestScore = 0
+    for (let i = 0; i < p.count; i++) {
+      if (!p.alive[i]) continue
+      const ls = p.lightStrength[i]
+      if (!(ls > 0)) continue
+      // Score combines range × brightness × alpha so a fading puff
+      // gradually dims; the d-gun's huge range keeps it dominant.
+      const lum = Math.max(p.r[i], p.g[i], p.b[i])
+      const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
+      if (s > bestScore) { bestScore = s; bestIdx = i }
+    }
+    if (bestIdx < 0) {
+      renderer.setPulseLight(null, null, 0)
+      return
+    }
+    renderer.setPulseLight(
+      [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
+      [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
+      p.lightStrength[bestIdx]
+    )
   }
 
   // start exposes the unit's entry-point launcher with the same name
@@ -249,7 +298,29 @@ export class CobBinding {
     return [m[12], m[13], m[14]]
   }
 
-  _sync() {
+  _sync(dtMs) {
+    // Exponential smoothing rate.  k = 1 - exp(-dt/tau).
+    //
+    // tau (seconds) controls how quickly the displayed transform
+    // chases the COB target.  Picked ~45 ms — half a 40 Hz tick
+    // period, so two render frames at 60 Hz get the displayed value
+    // ~50% of the way to a freshly-set "now" target, with full reach
+    // inside ~4 frames (≈ 66 ms).  Slower would over-smear quick
+    // poses (walk legs cycling at ~80 ms); faster wouldn't visibly
+    // smooth at all.  Tweakable later if a unit needs snappier or
+    // mushier feel.
+    //
+    // playbackRate scales tau so slow-mo doesn't make the lerp feel
+    // even mushier — the user is already slowing time, the visual
+    // shouldn't lag a SECOND time on top of that.
+    const dt = Math.min(0.1, Math.max(0, (dtMs ?? 16.7) / 1000)) * this.runtime.playbackRate
+    const tau = 0.045
+    const k = 1 - Math.exp(-dt / tau)
+    // First-sync gate — when the binding's never written to the
+    // model pieces, snap rather than lerp so the unit doesn't
+    // visibly drift from origin into its Create-pose on load.
+    const firstSync = !this._syncedOnce
+    this._syncedOnce = true
     for (const [piece, idx] of this._pieceMap) {
       if (idx < 0) continue
       const off = this.unit.pieceOffset(idx)
@@ -288,12 +359,35 @@ export class CobBinding {
       //   Z passthrough — clamp swing rotations + stand1/stand2
       //     tilts in armlab's activatescr produce visually correct
       //     directions without inversion.
-      piece.move[0] = off[0]
-      piece.move[1] = off[1]
-      piece.move[2] = -off[2]
-      piece.rotate[0] = -rot[0]
-      piece.rotate[1] = -rot[1]
-      piece.rotate[2] = rot[2]
+      // Targets in renderer convention.  See the long comment block
+      // above for the per-axis sign rationale — preserving those
+      // flips here keeps existing models posed correctly.
+      const tx  =  off[0]
+      const ty  =  off[1]
+      const tz  = -off[2]
+      const trx = -rot[0]
+      const trY = -rot[1]
+      const trz =  rot[2]
+      if (firstSync) {
+        // Snap on first sync so freshly-loaded units don't visibly
+        // ease from origin to their Create-pose; lerp from frame 2.
+        piece.move[0] = tx; piece.move[1] = ty; piece.move[2] = tz
+        piece.rotate[0] = trx; piece.rotate[1] = trY; piece.rotate[2] = trz
+      } else {
+        piece.move[0] += (tx - piece.move[0]) * k
+        piece.move[1] += (ty - piece.move[1]) * k
+        piece.move[2] += (tz - piece.move[2]) * k
+        piece.rotate[0] += (trx - piece.rotate[0]) * k
+        // Wrap-aware lerp for Y rotation — turret heading sometimes
+        // crosses the ±π discontinuity (e.g. a tank aiming through
+        // its rear arc).  Unwrap the delta so the turret takes the
+        // shortest arc instead of spinning the long way around.
+        let dRy = trY - piece.rotate[1]
+        if (dRy >  Math.PI) dRy -= Math.PI * 2
+        if (dRy < -Math.PI) dRy += Math.PI * 2
+        piece.rotate[1] += dRy * k
+        piece.rotate[2] += (trz - piece.rotate[2]) * k
+      }
       piece.visible = this.unit.isPieceVisible(idx)
     }
   }

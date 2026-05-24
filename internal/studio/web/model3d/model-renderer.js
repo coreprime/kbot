@@ -643,6 +643,12 @@ export class ModelRenderer {
     // tree, set by the host UI via setHoveredPieceName.  Triggers a
     // red-wireframe overlay around just that piece during draw.
     this._hoveredPieceName = null
+    // _hoveredTexture — the Textures tab in the left panel sets
+    // this when the user hovers a texture row.  Every piece whose
+    // drawGroups reference that texture gets its wireframe painted
+    // alongside the piece-hover highlight, so the user can see
+    // which faces use that atlas.
+    this._hoveredTexture = null
 
     // ── View settings ────────────────────────────────────────────────
     // renderMode: 'full' (lit + textured), 'flat' (textured + flat
@@ -794,6 +800,10 @@ export class ModelRenderer {
   // animators and copies per-piece state into the Model.
   setCobBinding(binding) {
     this.cobBinding = binding || null
+    // Hand the binding a back-reference to THIS renderer so per-tick
+    // hooks (the dynamic pulse-light from active particles) can push
+    // state into our uniforms without chasing the viewer's closures.
+    if (binding) binding.renderer = this
     // Forward the binding's particle pool to the renderer's SFX
     // pass.  Detaching the binding also detaches the pool so the
     // old unit's particles don't keep drawing.
@@ -810,6 +820,21 @@ export class ModelRenderer {
 
   setAutoRotate(on) {
     this.autoRotate = !!on
+  }
+
+  // setPulseLight pushes a single dynamic point light into the next
+  // main + reflection passes.  pos = [x,y,z], color = [r,g,b] (over-1
+  // values are fine — the contribution is additive and tone-mapped
+  // post-lighting), range = WORLD-unit radius at which intensity falls
+  // to ~50%.  Pass null (or range = 0) to clear and let the shader
+  // skip the path.  Called per-frame by cob-binding from the strongest
+  // active light-emitting particle.
+  setPulseLight(pos, color, range) {
+    if (!pos || !color || !(range > 0)) {
+      this._pulseLight = null
+    } else {
+      this._pulseLight = { pos, color, range }
+    }
   }
 
   setRenderMode(mode) {
@@ -843,6 +868,18 @@ export class ModelRenderer {
     const next = (typeof name === 'string' && name) ? name.toLowerCase() : null
     if (next === this._hoveredPieceName) return
     this._hoveredPieceName = next
+    this.requestRedraw()
+  }
+
+  // setHoveredTexture flags every piece whose drawGroups reference
+  // the given texture name for the red-wireframe overlay.  Pair
+  // with the Textures tab in the model-viewer's left panel — the
+  // user hovers a texture row and every face painted with that
+  // atlas lights up.  null clears the highlight.
+  setHoveredTexture(name) {
+    const next = (typeof name === 'string' && name) ? name.toLowerCase() : null
+    if (next === this._hoveredTexture) return
+    this._hoveredTexture = next
     this.requestRedraw()
   }
 
@@ -1452,12 +1489,14 @@ export class ModelRenderer {
         gl.depthMask(true)
       }
     }
-    if (this._hoveredPieceName) {
-      // Hover highlight: bright red wireframe on just the hovered
-      // piece, drawn AFTER the main scene with depth-test disabled
-      // so it always sits on top, even on parts hidden behind other
-      // geometry.  Helps the user pinpoint which piece a tree row
-      // refers to even when it's tucked behind another panel.
+    if (this._hoveredPieceName || this._hoveredTexture) {
+      // Hover highlight: bright red wireframe on the hovered piece
+      // (with its descendants) AND/OR every piece whose drawGroups
+      // reference the hovered texture.  Drawn AFTER the main scene
+      // with depth-test disabled so it always sits on top, even on
+      // parts hidden behind other geometry — pinpoints which piece
+      // a tree row or texture row refers to even when tucked behind
+      // another panel.
       this.#renderHoverHighlight()
     }
 
@@ -1488,34 +1527,60 @@ export class ModelRenderer {
     // mirrors how TA scripts manipulate piece hierarchies — selecting
     // "wing1" should call attention to the wingtip + flare children
     // too so the user sees the entire animated group.
-    const want = this._hoveredPieceName
+    const wantPiece   = this._hoveredPieceName
+    const wantTexture = this._hoveredTexture
+    const paintPiece = (piece) => {
+      if (!piece.visible || !piece.wireframe) return
+      gl.uniformMatrix4fv(this.uWireWorld, false, piece.worldMatrix)
+      gl.bindBuffer(gl.ARRAY_BUFFER, piece.wireframe.vbo)
+      gl.enableVertexAttribArray(this.aWirePos)
+      gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+      gl.drawArrays(gl.LINES, 0, piece.wireframe.vertexCount)
+    }
     const paintHierarchy = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
-      if (piece.visible && piece.wireframe) {
-        gl.uniformMatrix4fv(this.uWireWorld, false, piece.worldMatrix)
-        gl.bindBuffer(gl.ARRAY_BUFFER, piece.wireframe.vbo)
-        gl.enableVertexAttribArray(this.aWirePos)
-        gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
-        gl.drawArrays(gl.LINES, 0, piece.wireframe.vertexCount)
-      }
+      paintPiece(piece)
       for (const c of piece.children) paintHierarchy(c, piece.worldMatrix)
     }
-    const findAndPaint = (piece, parent) => {
-      if (!piece) return false
-      // Always update world matrix as we descend so paintHierarchy
-      // has fresh transforms when it kicks off from this point.
-      piece.computeWorldMatrix(parent, this._worldScratch)
-      if (piece.name?.toLowerCase() === want) {
-        paintHierarchy(piece, parent)
-        return true
-      }
-      for (const c of piece.children) {
-        if (findAndPaint(c, piece.worldMatrix)) return true
-      }
-      return false
+    // Single recursive walk: refresh every piece's world matrix
+    // (so paintHierarchy below sees fresh transforms), then for
+    // each piece decide whether to highlight it based on the two
+    // hover criteria.
+    //   * wantPiece — when the piece's name matches, paint it +
+    //     all descendants (existing piece-hover behaviour).
+    //   * wantTexture — when ANY of the piece's drawGroups
+    //     references the texture, paint just that piece.  No
+    //     descendant cascade — the user is asking "which pieces
+    //     use this texture", not "which pieces are under this
+    //     texture in the hierarchy".
+    // Paint only the wireframe edges belonging to primitives that
+    // use `wantTexture`.  The piece's per-texture wireframe map
+    // (built by the model loader) carries exactly the edges whose
+    // tris share a texture name, so a one-face logo decal lights
+    // up that face instead of the whole hull (which the combined
+    // piece.wireframe would cover).
+    const paintPieceTexture = (piece) => {
+      if (!piece.visible || !piece.wireframeByTex) return
+      const w = piece.wireframeByTex.get(wantTexture)
+      if (!w) return
+      gl.uniformMatrix4fv(this.uWireWorld, false, piece.worldMatrix)
+      gl.bindBuffer(gl.ARRAY_BUFFER, w.vbo)
+      gl.enableVertexAttribArray(this.aWirePos)
+      gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+      gl.drawArrays(gl.LINES, 0, w.vertexCount)
     }
-    findAndPaint(this.model.root, this._modelMatrix)
+    const walk = (piece, parent) => {
+      if (!piece) return
+      piece.computeWorldMatrix(parent, this._worldScratch)
+      if (wantPiece && piece.name?.toLowerCase() === wantPiece) {
+        paintHierarchy(piece, parent)
+        return  // descendant matches absorbed into the cascade
+      }
+      if (wantTexture) paintPieceTexture(piece)
+      for (const c of piece.children) walk(c, piece.worldMatrix)
+    }
+    walk(this.model.root, this._modelMatrix)
     gl.enable(gl.DEPTH_TEST)
   }
 
@@ -1688,6 +1753,21 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundSeabedHeightMul, this.seabedHeightMul)
     gl.uniform1f(this.uGroundSeabedScaleMul, this.seabedScaleMul)
     gl.uniform1f(this.uGroundSeabedRockChance, this.seabedRockChance)
+    // Dynamic pulse light — same source as the main pass (set per
+    // frame by setPulseLight from the strongest active particle).
+    // Terrain modes use this to spill a coloured wash from weapon
+    // SFX onto the ground beneath the firing unit; cleared (null)
+    // means the shader's gate skips the contribution entirely.
+    const _gpl = this._pulseLight
+    if (_gpl && _gpl.range > 0) {
+      gl.uniform3fv(this.uGroundPulseLightPos, _gpl.pos)
+      gl.uniform3fv(this.uGroundPulseLightColor, _gpl.color)
+      gl.uniform1f(this.uGroundPulseLightRange, _gpl.range)
+    } else {
+      gl.uniform3fv(this.uGroundPulseLightPos, [0, 0, 0])
+      gl.uniform3fv(this.uGroundPulseLightColor, [0, 0, 0])
+      gl.uniform1f(this.uGroundPulseLightRange, 0)
+    }
     // Background mountain ring.  Active only on non-sea ground
     // modes; sea pass already paints water + seabed and shouldn't
     // be displaced.  Inner clearing scales with the unit's bounding
@@ -1781,6 +1861,20 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
+    // Dynamic pulse light — fed by setPulseLight() from the
+    // controller each frame.  Zero colour gates the shader path off
+    // when no weapon is firing.  Same uniforms in main + reflection
+    // passes so the d-gun light reflects off water too.
+    const _pl = this._pulseLight
+    if (_pl && _pl.range > 0) {
+      gl.uniform3fv(this.uPulseLightPos, _pl.pos)
+      gl.uniform3fv(this.uPulseLightColor, _pl.color)
+      gl.uniform1f(this.uPulseLightRange, _pl.range)
+    } else {
+      gl.uniform3fv(this.uPulseLightPos, [0, 0, 0])
+      gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
+      gl.uniform1f(this.uPulseLightRange, 0)
+    }
     // Build-progress fade.  When buildPercent < 100, the textured
     // model renders at reduced alpha so the green nano-wireframe
     // overlay drawn afterwards reads cleanly; at 100 the texture
@@ -1873,6 +1967,20 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
+    // Dynamic pulse light — fed by setPulseLight() from the
+    // controller each frame.  Zero colour gates the shader path off
+    // when no weapon is firing.  Same uniforms in main + reflection
+    // passes so the d-gun light reflects off water too.
+    const _pl = this._pulseLight
+    if (_pl && _pl.range > 0) {
+      gl.uniform3fv(this.uPulseLightPos, _pl.pos)
+      gl.uniform3fv(this.uPulseLightColor, _pl.color)
+      gl.uniform1f(this.uPulseLightRange, _pl.range)
+    } else {
+      gl.uniform3fv(this.uPulseLightPos, [0, 0, 0])
+      gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
+      gl.uniform1f(this.uPulseLightRange, 0)
+    }
     // Build-progress fade.  When buildPercent < 100, the textured
     // model renders at reduced alpha so the green nano-wireframe
     // overlay drawn afterwards reads cleanly; at 100 the texture
@@ -2130,9 +2238,19 @@ export class ModelRenderer {
   #updateLightMatrices() {
     const min = this.model.bounds.min
     const max = this.model.bounds.max
-    const cx = (min[0] + max[0]) * 0.5
-    const cy = (min[1] + max[1]) * 0.5
-    const cz = (min[2] + max[2]) * 0.5
+    // Centre the shadow frustum on the unit's CURRENT world
+    // position, not its model-local bounding box.  When the unit
+    // walks via _unitTransform, the model vertices are translated
+    // into world space at draw time but the shadow frustum has to
+    // follow — otherwise a unit that walks ~50 wu from spawn ends
+    // up outside the light's ortho frame and its shadow vanishes
+    // (or, worse, gets pinned to the spawn point).  Adding
+    // _unitTransform.{x,y,z} to the model-local centroid lands the
+    // frustum on the unit no matter where it's walked to.
+    const ut = this._unitTransform
+    const cx = (min[0] + max[0]) * 0.5 + (ut ? ut.x : 0)
+    const cy = (min[1] + max[1]) * 0.5 + (ut ? ut.y : 0)
+    const cz = (min[2] + max[2]) * 0.5 + (ut ? ut.z : 0)
     const dx = max[0] - min[0], dy = max[1] - min[1], dz = max[2] - min[2]
     const radius = 0.5 * Math.hypot(dx, dy, dz)
     // Pad so corners of the bounding box (rotated by auto-rotate yaw)
@@ -2196,6 +2314,13 @@ export class ModelRenderer {
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
     this.uMainTeamColor = gl.getUniformLocation(prog, 'uTeamColor')
     this.uMainTeamColorEnable = gl.getUniformLocation(prog, 'uTeamColorEnable')
+    // Dynamic pulse-light (weapon SFX) — set each frame by the
+    // controller via setPulseLight(pos, color, range).  Defaults to
+    // zero colour so the shader's gate skips it when no weapon is
+    // firing.
+    this.uPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos')
+    this.uPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor')
+    this.uPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
   }
 
@@ -2302,6 +2427,13 @@ export class ModelRenderer {
     this.uGroundSeabedHeightMul = gl.getUniformLocation(prog, 'uSeabedHeightMul')
     this.uGroundSeabedScaleMul = gl.getUniformLocation(prog, 'uSeabedScaleMul')
     this.uGroundSeabedRockChance = gl.getUniformLocation(prog, 'uSeabedRockChance')
+    // Dynamic pulse-light — same set as the main shader, lets weapon
+    // SFX (d-gun, lasers) tint the terrain beneath them.  Set in
+    // #renderGround from this._pulseLight which the controller
+    // updates per frame via setPulseLight().
+    this.uGroundPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos')
+    this.uGroundPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor')
+    this.uGroundPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

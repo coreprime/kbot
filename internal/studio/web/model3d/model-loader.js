@@ -47,6 +47,12 @@ export class ModelLoader {
       max: [-data.bounds.min[0], data.bounds.max[1], data.bounds.max[2]],
     } : data.bounds
     const model = new Model({ name: data.name, root, bounds: flippedBounds })
+    // Pass through the server's textureSources map (texture name →
+    // GAF basename) so the studio's Textures tab can group rows by
+    // parent atlas.  Empty when the server didn't resolve a GAF
+    // (e.g. a stub texture name the engine would substitute with a
+    // fallback) — the client renders those under "(unknown)".
+    model.textureSources = data.textureSources || {}
     if (data.textures && data.textures.length) {
       // Fire-and-forget — the renderer is happy to draw fallbacks
       // until the real PNGs land.  ensure() resolves once they have.
@@ -99,6 +105,14 @@ export class ModelLoader {
     // triangle buckets so the renderer can swap modes without
     // re-uploading geometry.
     const wireframeVerts = []
+    // Per-texture wireframe — keyed by lowercased texture name so
+    // the Textures-tab hover-highlight can paint ONLY the edges
+    // belonging to primitives that use a given atlas (the combined
+    // wireframe above paints every edge in the piece, which makes
+    // a one-face logo look like the whole hull is using it).
+    // Built alongside the combined wireframe and uploaded in
+    // finalizeWireframes() below.
+    const wireframeByTex = new Map() // texKey (lower) → number[] (xyz pairs)
 
     // Coplanar-primitive detection by POSITION (not index) — TA
     // artists sometimes emit a base and a decal on the same face
@@ -253,11 +267,21 @@ export class ModelLoader {
       }
       // Wireframe edges follow the original polygon outline so quads
       // stay quads — the diagonals introduced by triangulation never
-      // become visible wireframe lines.
+      // become visible wireframe lines.  Push to BOTH the combined
+      // piece wireframe AND the per-texture bucket so the renderer
+      // can paint the whole piece OR just the matching faces.
+      // `texKey` (the bucket key) is already declared higher up;
+      // this uses the same value as the bucket key for the tris.
+      let perTexEdges = null
+      if (texKey) {
+        perTexEdges = wireframeByTex.get(texKey)
+        if (!perTexEdges) { perTexEdges = []; wireframeByTex.set(texKey, perTexEdges) }
+      }
       for (let i = 0; i < count; i++) {
         const a = positions[i]
         const b = positions[(i + 1) % count]
         wireframeVerts.push(a[0], a[1], a[2], b[0], b[1], b[2])
+        if (perTexEdges) perTexEdges.push(a[0], a[1], a[2], b[0], b[1], b[2])
       }
     }
 
@@ -344,6 +368,22 @@ export class ModelLoader {
       gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
       gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW)
       piece.wireframe = { vbo, vertexCount: arr.length / 3 }
+    }
+    // Per-texture wireframe — one buffer per atlas referenced on this
+    // piece.  Texture-hover in the Textures tab draws only these
+    // buffers for the hovered atlas so a single-face logo doesn't
+    // light up the whole hull.  Stored as a Map (lower-cased
+    // texture name → {vbo, vertexCount}).
+    if (wireframeByTex.size) {
+      piece.wireframeByTex = new Map()
+      for (const [texKey, verts2] of wireframeByTex) {
+        if (!verts2.length) continue
+        const arr2 = new Float32Array(verts2)
+        const vbo2 = gl.createBuffer()
+        gl.bindBuffer(gl.ARRAY_BUFFER, vbo2)
+        gl.bufferData(gl.ARRAY_BUFFER, arr2, gl.STATIC_DRAW)
+        piece.wireframeByTex.set(texKey, { vbo: vbo2, vertexCount: arr2.length / 3 })
+      }
     }
   }
 

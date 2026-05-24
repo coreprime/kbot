@@ -323,6 +323,53 @@ export class CobUnit {
   // debug picker that wants to enumerate every entry point.
   listScripts() { return this.scriptNames.slice() }
 
+  // runQuery executes a Query* script SYNCHRONOUSLY within the
+  // current tick — drains the thread to completion in one call and
+  // returns the value its caller-arg slot ended up with.  Used by
+  // the studio's fire scheduler to resolve QueryPrimary / Query-
+  // Secondary / QueryTertiary into the firing piece index without
+  // waiting for the next animator tick.
+  //
+  // Query scripts in TA's BOS are always trivial: read a static var
+  // (the active barrel / gun index), branch on it, and assign the
+  // matching piece constant into the `piecenum` parameter.  No
+  // sleeps, no wait-for-turn, no turns — pure data resolution.  We
+  // enforce that contract by aborting the loop the moment we see a
+  // yield-style opcode (sleep / wait-for-turn / wait-for-move /
+  // start-script / signal — anything that would suspend the thread),
+  // dropping the thread and returning null.  That keeps the
+  // synchronous contract honest: callers can rely on "result OR
+  // null", never a half-executed query that mutates the unit state
+  // weirdly.  Returns the value of `locals[0]` (the conventional
+  // out-parameter slot for Query scripts) when the script
+  // returns normally, or null when it can't be resolved
+  // synchronously / the script doesn't exist.
+  runQuery(scriptName, args = []) {
+    const idx = this._scriptByName.get(scriptName.toLowerCase())
+    if (idx === undefined) return null
+    const t = new CobThread(this, idx, args)
+    t.queryOnly = true
+    // Tight execution loop bounded by an instruction limit so a
+    // malformed loop in user scripts can't lock the renderer.
+    let stepsLeft = 1024
+    while (!t.dead && stepsLeft-- > 0) {
+      const ins = t.script.instructions[t.pc]
+      if (!ins) { t.dead = true; break }
+      t.pc++
+      // _exec returns true on yield-style ops (sleep / wait-for-turn /
+      // wait-for-move) AND on OP_RETURN at the top level — both
+      // suspend the thread under normal execution.  For our purposes
+      // OP_RETURN is success (it set t.dead = true on the way out),
+      // so consult t.dead to distinguish "completed cleanly" from
+      // "wants to suspend".  Suspension = bail to caller with null;
+      // anything else (including normal completion) falls through.
+      const yielded = this._exec(t, ins)
+      if (t.dead) break
+      if (yielded) return null
+    }
+    return (t.locals && t.locals.length > 0) ? (t.locals[0] | 0) : null
+  }
+
   // usesUnitValuePort returns true when ANY script in this unit
   // reads (OP_GET_UNIT_VALUE / OP_GET) or writes (OP_SET_VALUE)
   // the given port number.  Detection is conservative: TA scripts
@@ -653,6 +700,39 @@ export class CobUnit {
   // concurrently but never touch each other's state.
   _exec(t, ins) {
     const op = ins.op
+    // Query-only fast path — a thread spawned via runQuery() is
+    // forbidden from any operation that would yield (sleep, wait-
+    // for-turn / wait-for-move), animate a piece (move, turn, spin,
+    // visibility/cache/shadow flags), or spawn another thread
+    // (start-script, signal).  Returning true treats the op as a
+    // yield, which runQuery's loop interprets as "can't resolve
+    // synchronously" and bails.  We allow piece visibility flags
+    // (show/hide/shade/cache/shadow) through because they're
+    // accidentally common in feature-detection style scripts (a
+    // Query that toggles an indicator flag), and they don't
+    // suspend or animate.
+    if (t.queryOnly) {
+      switch (op) {
+        case OP_SLEEP:
+        case OP_WAIT_FOR_TURN:
+        case OP_WAIT_FOR_MOVE:
+        case OP_MOVE:
+        case OP_TURN:
+        case OP_SPIN:
+        case OP_STOP_SPIN:
+        case OP_START_SCRIPT:
+        case OP_SIGNAL:
+        case OP_SET_SIGNAL_MASK:
+        case OP_EMIT_SFX:
+        case OP_EXPLODE:
+        case OP_PLAY_SOUND:
+        case OP_ATTACH_UNIT:
+        case OP_DROP_UNIT:
+          return true
+        default:
+          break
+      }
+    }
     switch (op) {
       // ── Stack ──────────────────────────────────────────────
       case OP_PUSH_IMMEDIATE:

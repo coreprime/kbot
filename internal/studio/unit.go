@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -100,12 +101,69 @@ type unitMetaJSON struct {
 }
 
 type unitWeaponJSON struct {
-	Slot       string  `json:"slot"`        // "primary" / "secondary" / "tertiary"
-	Name       string  `json:"name"`        // FBI Weapon1/2/3 value (TDF section key), uppercased
-	ReloadSec  float64 `json:"reloadSec"`   // seconds between shots
-	RangeWU    float64 `json:"rangeWU"`     // engagement range in world units
-	VelocityWU float64 `json:"velocityWU"`  // projectile velocity, world units / sec
-	Ballistic  bool    `json:"ballistic"`   // ballistic arc (mortar / cannon)
+	Slot       string  `json:"slot"`       // "primary" / "secondary" / "tertiary"
+	Name       string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
+	ReloadSec  float64 `json:"reloadSec"`  // seconds between shots
+	RangeWU    float64 `json:"rangeWU"`    // engagement range in world units
+	VelocityWU float64 `json:"velocityWU"` // projectile velocity, world units / sec
+	Ballistic  bool    `json:"ballistic"`  // ballistic arc (mortar / cannon)
+	// Burst-fire support — the EMG fires 3 shots 100 ms apart, then
+	// waits the full reload between bursts; battleship cannons fire
+	// one shot per reload.  `Burst` defaults to 1 (single-shot) when
+	// the TDF doesn't specify; `BurstRateSec` is the inter-shot delay
+	// inside a burst (0 → fire all at once).
+	Burst        int     `json:"burst"`
+	BurstRateSec float64 `json:"burstRateSec"`
+	// Audio + visual identity pulled from the weapon TDF.  Studio
+	// plays SoundStart on each Fire, SoundHit on impact-detonation
+	// (when the projectile reaches its target or max range).  Empty
+	// strings when the TDF didn't ship a sound for that event.
+	SoundStart string `json:"soundStart"`
+	SoundHit   string `json:"soundHit"`
+	// Visual-class hints from the weapon TDF.  The renderer picks a
+	// projectile kind (laser beam / smoke-trailing missile / generic
+	// bullet) from these flags so weapon visuals match the in-game
+	// behaviour without name-pattern guessing.
+	//
+	//   BeamWeapon: TDF `beamweapon=1`.  Instant-hit beam (lasers, the
+	//     d-gun).  Rendered as a quick line of pulse particles from
+	//     muzzle to target instead of a slow-travelling sprite.
+	//   SmokeTrail: TDF `smoketrail=1`.  Spawns smoke puffs in the
+	//     projectile's wake (missiles, rockets).
+	//   SelfProp / Tracks: TDF `selfprop=1`, `tracks=1`.  Guided
+	//     missile flag — the trail starts to curve toward the target
+	//     when both are set.  Studio doesn't simulate tracking yet but
+	//     the bit is exposed for future use.
+	//   StartVelocityWU / AccelerationWU: TDF `startvelocity`,
+	//     `weaponacceleration`.  Missile launch profile — the
+	//     projectile leaves the rail at startvelocity and accelerates
+	//     up to weaponvelocity at this rate.  Lasers / bullets ignore
+	//     both (instant top speed).
+	//   ColorIdx / Color2Idx: TDF `color` / `color2`, palette indices
+	//     into TA's PALETTE.PAL.  Used to tint laser beams (the green
+	//     ARMCOMLASER is color=232, the red CORE laser is color=247).
+	//     The client maps these via a small palette LUT.
+	//   Model: TDF `model=`, name of the 3DO used as the projectile
+	//     mesh in the original game (e.g. `missile`, `dgun`).  We
+	//     don't ship those meshes; the name is exposed so the visual
+	//     classifier can pick a particle kind matching the family.
+	BeamWeapon      bool    `json:"beamWeapon"`
+	SmokeTrail      bool    `json:"smokeTrail"`
+	SelfProp        bool    `json:"selfProp"`
+	Tracks          bool    `json:"tracks"`
+	StartVelocityWU float64 `json:"startVelocityWU"`
+	AccelerationWU  float64 `json:"accelerationWU"`
+	ColorIdx        int     `json:"colorIdx"`
+	Color2Idx       int     `json:"color2Idx"`
+	Model           string  `json:"model"`
+	DurationSec     float64 `json:"durationSec"`
+	// CommandFire: TDF `commandfire=1`.  Weapon discharges ONLY in
+	// response to an explicit user command (the d-gun is the canonical
+	// case — D-key in TA fires once, not the auto-attack cadence the
+	// normal weapons use).  The studio's Controls treat this as a
+	// one-shot: after the first fire, the slot's target is cleared so
+	// the burst loop exits instead of re-firing on every reload.
+	CommandFire bool `json:"commandFire"`
 }
 
 func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +308,36 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			out.Weapons[i].RangeWU = sec.Float("range")
 			out.Weapons[i].VelocityWU = sec.Float("weaponvelocity")
 			out.Weapons[i].Ballistic = boolish(sec.String("ballistic"))
+			out.Weapons[i].SoundStart = strings.ToLower(strings.TrimSpace(sec.String("soundstart")))
+			out.Weapons[i].SoundHit = strings.ToLower(strings.TrimSpace(sec.String("soundhit")))
+			burst := sec.Int("burst")
+			if burst < 1 {
+				burst = 1
+			}
+			out.Weapons[i].Burst = burst
+			out.Weapons[i].BurstRateSec = sec.Float("burstrate")
+			// Visual classifiers — see the unitWeaponJSON field docs
+			// for the meaning of each.  All optional; default zero
+			// values let the client fall through to its generic-bullet
+			// path for weapons that don't ship the bit.
+			out.Weapons[i].BeamWeapon = boolish(sec.String("beamweapon"))
+			out.Weapons[i].SmokeTrail = boolish(sec.String("smoketrail"))
+			out.Weapons[i].SelfProp = boolish(sec.String("selfprop"))
+			out.Weapons[i].Tracks = boolish(sec.String("tracks"))
+			out.Weapons[i].StartVelocityWU = sec.Float("startvelocity")
+			out.Weapons[i].AccelerationWU = sec.Float("weaponacceleration")
+			// Some weapon TDFs include inline /* comments */ after
+			// integer values (e.g. `color=232; /* GREEN */`), which the
+			// generic TDF parser leaves in the raw string — sec.Int
+			// then Atoi-fails and returns 0.  intFieldClean strips the
+			// trailing comment + semicolon so the palette index makes
+			// it through.  Affects color, color2 and any future int
+			// fields that ship with annotated values.
+			out.Weapons[i].ColorIdx = intFieldClean(sec, "color")
+			out.Weapons[i].Color2Idx = intFieldClean(sec, "color2")
+			out.Weapons[i].Model = strings.ToLower(strings.TrimSpace(sec.String("model")))
+			out.Weapons[i].DurationSec = sec.Float("duration")
+			out.Weapons[i].CommandFire = boolish(sec.String("commandfire"))
 		}
 	}
 	// Sounds — SoundCategory keys into gamedata/sound.tdf.  Each
@@ -383,6 +471,27 @@ func boolish(s string) bool {
 		return true
 	}
 	return false
+}
+
+// intFieldClean reads sec.String(key), strips trailing inline /* … */
+// comments and the line-terminator semicolon, and Atoi-parses what's
+// left.  Workaround for weapon-TDF entries like `color=232; /* GREEN */`
+// where the generic TDF parser keeps the whole tail in the raw value
+// and Atoi rejects it.  Returns 0 on missing / unparseable values.
+func intFieldClean(sec *tdf.Section, key string) int {
+	raw := sec.String(key)
+	if idx := strings.Index(raw, "/*"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	raw = strings.TrimRight(strings.TrimSpace(raw), ";")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0
+	}
+	if i, err := strconv.Atoi(raw); err == nil {
+		return i
+	}
+	return 0
 }
 
 // errFBINotFound is the sentinel for the 404 path so the handler can

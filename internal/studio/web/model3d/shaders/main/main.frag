@@ -45,6 +45,14 @@ uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables h
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
+// Dynamic point light — fed each frame by the controller from the
+// strongest "light-emitting" active particle (d-gun, laser pulse).
+// Zero colour means no active light, the shader skips the path with
+// no measurable cost.  Range is the world-unit radius at which the
+// contribution falls to ~half; we use 1/(1+(d/r)²) attenuation.
+uniform vec3 uPulseLightPos;
+uniform vec3 uPulseLightColor;
+uniform float uPulseLightRange;
 
 // rgbToHsv / hsvToRgb come from the standard Sam Hocevar GLSL
 // formulation - branchless, suitable for fragment shaders.  We use
@@ -221,6 +229,36 @@ void main() {
     specular += spec2 * uLightColor2 * shadow2 * 0.45;
   }
   vec3 lighting = ambient + directLight + fillLight + backLight + rim;
+
+  // Dynamic pulse light (d-gun / laser).  Adds a per-fragment
+  // Lambert contribution from the live light's world position; falls
+  // off with inverse-square so a close shot floods the unit and a
+  // distant one barely tints it.  STRICT one-sided lighting — the
+  // primary key uses a symmetric "max(ndl, dot(-N,L)*0.4)" wash to
+  // hide TA's inconsistent face winding, but a point light demands
+  // directional contrast: a fragment whose normal faces AWAY from
+  // the light is supposed to be dark.  Skip the back-wash so the
+  // side of the unit facing the projectile glows while the opposite
+  // side stays in shadow.  3DO winding inconsistency CAN cause some
+  // facets to read "backwards" — but most of the unit's surface area
+  // honours the normal correctly, and the directional contrast reads
+  // unambiguously as a point light source instead of a global tint.
+  if (dot(uPulseLightColor, uPulseLightColor) > 0.0001 && uPulseLightRange > 0.0) {
+    vec3 pulseDir = uPulseLightPos - vWorldPos;
+    float pulseDist = length(pulseDir);
+    pulseDir = pulseDir / max(0.0001, pulseDist);
+    // Strict one-sided Lambert: only fragments whose normal faces
+    // toward the light pick it up.  Mild back-face dimming (0.12)
+    // saves inverted-winding facets from being pitch-black while
+    // still keeping the lit-side / dark-side contrast that sells the
+    // point-light feel — back of the unit is noticeably darker than
+    // the front when the projectile is to one side.
+    float ndlPulse = max(0.0, dot(N, pulseDir));
+    ndlPulse = max(ndlPulse, max(0.0, dot(-N, pulseDir)) * 0.12);
+    float r = pulseDist / uPulseLightRange;
+    float atten = 1.0 / (1.0 + r * r);
+    lighting += uPulseLightColor * ndlPulse * atten;
+  }
 
   // -- Sea bounce light --------------------------------------------
   // When the unit sits on Sea ground, the water below kicks

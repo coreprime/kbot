@@ -11666,6 +11666,8 @@ async function activateModelTab(tab) {
       statusEl: $('#status'),
       onModelLoaded: (model, cob) => {
         renderPieceTree(model)
+        renderTexturesTab(model)
+        wireMvSidebarTabs()
         // Initial lifecycle state.  Units that ship with a Create
         // script start in 'unborn' — every other action button is
         // gated off until Create finishes (matches real TA, where a
@@ -15226,6 +15228,181 @@ function renderPieceTree(model) {
     return row
   }
   host.appendChild(build(model.root))
+}
+
+// wireMvSidebarTabs wires the Pieces / Textures tab buttons once.
+// Idempotent — sets data-wired so subsequent model loads don't
+// stack handlers.  Tab click swaps which .mv-sidebar-panel is
+// visible AND nulls any active texture-hover state (a Textures
+// → Pieces switch must clear the red highlight or it sticks).
+function wireMvSidebarTabs() {
+  const bar = document.querySelector('.mv-sidebar-tabs')
+  if (!bar || bar.dataset.wired === '1') return
+  bar.dataset.wired = '1'
+  bar.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mv-tab]')
+    if (!btn) return
+    const tab = btn.dataset.mvTab
+    for (const t of bar.querySelectorAll('[data-mv-tab]')) {
+      const on = t.dataset.mvTab === tab
+      t.classList.toggle('active', on)
+      t.setAttribute('aria-selected', on ? 'true' : 'false')
+    }
+    for (const p of document.querySelectorAll('.mv-sidebar-panel')) {
+      p.classList.toggle('hidden', p.dataset.mvTabPanel !== tab)
+    }
+    // Switching tabs implicitly clears any hover-highlight state
+    // (a stuck red wireframe after leaving the textures tab
+    // would look broken).
+    modelViewerInstance?.renderer?.setHoveredTexture?.(null)
+    modelViewerInstance?.renderer?.setHoveredPieceName?.(null)
+  })
+}
+
+// renderTexturesTab builds the Textures left-panel content.  Each
+// distinct texture the unit references becomes a row showing its
+// thumbnail + name + use-count.  Rows are grouped by parent GAF
+// (server-provided via model.textureSources); groups + rows are
+// sorted by usage count descending so the biggest atlases sit at
+// the top.  Hovering a row highlights every piece whose drawGroups
+// reference that texture; the group header collapses/expands the
+// block.
+function renderTexturesTab(model) {
+  const host = document.getElementById('model-viewer-textures')
+  if (!host || !model) return
+  host.replaceChildren()
+  // Count usage per texture by walking every piece's drawGroups —
+  // this is the same source-of-truth the renderer uses for the
+  // hover-highlight check, so the user's reported count matches
+  // what they see flash red.
+  const usage = new Map()   // textureLower → count of primitives
+  const visit = (p) => {
+    if (!p) return
+    if (p.drawGroups) {
+      for (const g of p.drawGroups) {
+        // ModelLoader stores the atlas name as `textureName`; fall
+        // back to `texture` so the function survives a future rename
+        // in either direction without silent breakage.
+        const t = g.textureName || g.texture
+        if (!t) continue
+        const k = t.toLowerCase()
+        usage.set(k, (usage.get(k) || 0) + 1)
+      }
+    }
+    for (const c of p.children || []) visit(c)
+  }
+  visit(model.root)
+  if (usage.size === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'loading'
+    empty.textContent = 'No textures referenced.'
+    host.appendChild(empty)
+    return
+  }
+  // Group by source GAF — fall back to "(unknown)" when the
+  // server didn't resolve a GAF for the texture (the renderer
+  // substitutes a neutral grey fallback in that case).
+  const sources = model.textureSources || {}
+  const groups = new Map() // gafName → [{ name, count }]
+  for (const [name, count] of usage) {
+    const gaf = sources[name] || '(unknown)'
+    if (!groups.has(gaf)) groups.set(gaf, [])
+    groups.get(gaf).push({ name, count })
+  }
+  // Sort groups by TOTAL usage descending; within each group sort
+  // textures by their own count descending, ties broken by name.
+  const groupList = [...groups.entries()].map(([gaf, textures]) => {
+    const total = textures.reduce((n, t) => n + t.count, 0)
+    textures.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    return { gaf, textures, total }
+  }).sort((a, b) => b.total - a.total || a.gaf.localeCompare(b.gaf))
+  // Persist collapse state across re-renders of the same model
+  // (Set lives on the function — fresh model load resets it via
+  // the explicit clear in renderPieceTree's host.replaceChildren
+  // path; if cross-tab persistence becomes a need, lift to a
+  // module-scoped Set).
+  if (!renderTexturesTab._collapsed) renderTexturesTab._collapsed = new Set()
+  const collapsed = renderTexturesTab._collapsed
+  for (const { gaf, textures, total } of groupList) {
+    const groupEl = document.createElement('div')
+    groupEl.className = 'mv-texture-group' + (collapsed.has(gaf) ? ' collapsed' : '')
+    const hdr = document.createElement('div')
+    hdr.className = 'mv-texture-group-header'
+    const chev = document.createElement('span')
+    chev.className = 'chev'
+    chev.textContent = '▾'
+    const nameEl = document.createElement('span')
+    nameEl.className = 'mv-texture-group-name'
+    nameEl.textContent = gaf
+    const countEl = document.createElement('span')
+    countEl.className = 'mv-texture-group-count'
+    countEl.textContent = `${textures.length} tex · ${total}`
+    hdr.appendChild(chev)
+    hdr.appendChild(nameEl)
+    hdr.appendChild(countEl)
+    hdr.addEventListener('click', () => {
+      if (collapsed.has(gaf)) collapsed.delete(gaf)
+      else collapsed.add(gaf)
+      groupEl.classList.toggle('collapsed')
+    })
+    groupEl.appendChild(hdr)
+    const body = document.createElement('div')
+    body.className = 'mv-texture-group-body'
+    for (const { name, count } of textures) {
+      const row = document.createElement('div')
+      row.className = 'mv-texture-row'
+      row.dataset.texture = name
+      const img = document.createElement('img')
+      img.src = `/api/studio/texture/${encodeURIComponent(name)}.png`
+      img.alt = name
+      img.loading = 'lazy'
+      const lbl = document.createElement('span')
+      lbl.className = 'mv-texture-name'
+      lbl.textContent = name
+      const cnt = document.createElement('span')
+      cnt.className = 'mv-texture-count'
+      cnt.textContent = `×${count}`
+      row.appendChild(img)
+      row.appendChild(lbl)
+      row.appendChild(cnt)
+      row.addEventListener('mouseenter', () => {
+        modelViewerInstance?.renderer?.setHoveredTexture?.(name)
+      })
+      row.addEventListener('mouseleave', () => {
+        modelViewerInstance?.renderer?.setHoveredTexture?.(null)
+      })
+      body.appendChild(row)
+    }
+    groupEl.appendChild(body)
+    host.appendChild(groupEl)
+  }
+  // Wire the texture-filter input (idempotent — picks up the
+  // current value if the user typed something then switched tabs
+  // and came back).
+  const filter = document.getElementById('mv-texture-filter')
+  if (filter && filter.dataset.wired !== '1') {
+    filter.dataset.wired = '1'
+    filter.addEventListener('input', () => filterTexturesList(filter.value))
+  }
+  filterTexturesList(filter?.value || '')
+}
+
+// filterTexturesList hides rows whose texture name doesn't include
+// the query (case-insensitive); groups stay visible whenever any
+// descendant matches, mirroring the piece-tree filter behaviour.
+function filterTexturesList(q) {
+  q = (q || '').trim().toLowerCase()
+  const host = document.getElementById('model-viewer-textures')
+  if (!host) return
+  for (const group of host.querySelectorAll('.mv-texture-group')) {
+    let any = false
+    for (const row of group.querySelectorAll('.mv-texture-row')) {
+      const match = !q || row.dataset.texture.includes(q)
+      row.style.display = match ? '' : 'none'
+      if (match) any = true
+    }
+    group.style.display = any ? '' : 'none'
+  }
 }
 
 function selectPiece(name) {

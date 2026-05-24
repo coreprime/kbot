@@ -310,7 +310,15 @@ type modelJSON struct {
 	Pieces   []string    `json:"pieces"`   // flat list of piece names in DFS order
 	Textures []string    `json:"textures"` // unique texture names referenced
 	Decals   []string    `json:"decals"`   // subset of Textures known to carry alpha-keyed pixels (logos, glass, etc.) — clients render these last so they don't depth-occlude the opaque base when two primitives share a face
-	Bounds   *boundsJSON `json:"bounds"`   // axis-aligned bounds across the whole model in piece-local frames
+	// TextureSources maps each referenced texture name (lowercase)
+	// to the basename of the GAF file it lives in (e.g.
+	// "armhawk.gaf" or "kbot1.gaf").  Used by the Textures tab in
+	// the model viewer to group textures by their source GAF so
+	// the user can see which file each unit's atlas comes from.
+	// Empty string when the texture wasn't found in any GAF (the
+	// renderer's neutral-grey fallback will be used).
+	TextureSources map[string]string `json:"textureSources,omitempty"`
+	Bounds         *boundsJSON       `json:"bounds"` // axis-aligned bounds across the whole model in piece-local frames
 }
 
 type boundsJSON struct {
@@ -442,10 +450,24 @@ func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 		return p
 	}
 	out.Root = convert(model.Root, 0, 0, 0)
+	// Resolve GAF source per texture so the Textures tab can group
+	// by parent GAF.  Done now (one walk over the textures map)
+	// instead of from the texture endpoint so the client has the
+	// full picture in a single fetch.  Texture names not found in
+	// the index map to "" so the client can group those as
+	// "unknown / missing" — typical for stub textures the engine
+	// would substitute with the default grey.
+	texIdx := ensureTextureIndex()
+	out.TextureSources = make(map[string]string)
 	for t := range textures {
 		out.Textures = append(out.Textures, t)
 		if textureIsDecal(t) {
 			out.Decals = append(out.Decals, t)
+		}
+		if src, ok := texIdx[t]; ok {
+			out.TextureSources[t] = path.Base(src.GAFPath)
+		} else {
+			out.TextureSources[t] = ""
 		}
 	}
 	sort.Strings(out.Textures)

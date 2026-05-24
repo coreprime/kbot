@@ -3949,14 +3949,19 @@ canvas {
    the flag is "off" so disabled state reads clearly without
    competing with the active accent colour. */
 .piece-status {
-  display: inline-block;
-  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  min-width: 18px;
+  height: 16px;
   text-align: center;
   font-size: 11px;
   line-height: 1;
   background: transparent;
   border: 0;
-  padding: 0 1px;
+  padding: 0;
+  margin: 0;
   cursor: pointer;
   flex-shrink: 0;
   user-select: none;
@@ -3971,6 +3976,125 @@ canvas {
 .piece-status:hover {
   opacity: 1;
   filter: none;
+}
+/* Match the eye toggle width to the status chips so all four icons
+   line up across rows.  Without this, the eye glyph (👁) renders
+   slightly narrower than the lightbulb/floppy/moon and the row
+   shifts horizontally on hide/show.  Inline-flex + fixed width
+   keeps the grid stable. */
+.piece-eye {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  min-width: 18px;
+  height: 16px;
+}
+/* Two-tab left panel chrome — switches between Pieces and Textures
+   without consuming the panel's horizontal grid columns the way a
+   second outer tab bar would. */
+.mv-sidebar-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  flex-shrink: 0;
+}
+.mv-sidebar-tab {
+  flex: 1 1 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.mv-sidebar-tab:hover { color: var(--text); }
+.mv-sidebar-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.mv-sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.mv-sidebar-panel.hidden { display: none; }
+/* Textures tab — grouped by parent GAF.  Each group is a collapsible
+   block with a header + list of texture chips.  Chips show the
+   texture's thumbnail + name + usage count; hovering the chip
+   highlights every face that paints with that texture in the
+   scene. */
+.mv-texture-group {
+  border-bottom: 1px solid var(--border);
+}
+.mv-texture-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  background: var(--bg-1);
+  color: var(--text);
+  user-select: none;
+}
+.mv-texture-group-header:hover { background: var(--bg-2); }
+.mv-texture-group-header .chev {
+  font-size: 10px;
+  color: var(--muted);
+  width: 12px;
+}
+.mv-texture-group.collapsed .chev { transform: rotate(-90deg); display: inline-block; }
+.mv-texture-group.collapsed .mv-texture-group-body { display: none; }
+.mv-texture-group-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-texture-group-count { color: var(--muted); font-size: 10px; font-weight: 500; }
+.mv-texture-group-body {
+  padding: 4px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mv-texture-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+.mv-texture-row:hover { background: var(--bg-2); }
+.mv-texture-row img {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  image-rendering: pixelated;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+}
+.mv-texture-row .mv-texture-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text);
+}
+.mv-texture-row .mv-texture-count {
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .drawer-piece-group > .drawer-group-title { gap: 4px; }
 

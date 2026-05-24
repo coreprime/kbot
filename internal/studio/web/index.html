@@ -464,10 +464,26 @@
       </div>
 
       <aside class="sidebar">
-        <div class="filter">
-          <input type="search" id="mv-tree-filter" placeholder="Filter pieces" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <!-- Two-tab left panel: Pieces (the 3DO piece hierarchy with
+             COB-driven visibility / shade / cache / shadow toggles)
+             and Textures (every distinct atlas the unit references,
+             grouped by source GAF, with hover-to-highlight). -->
+        <div class="mv-sidebar-tabs" role="tablist">
+          <button class="mv-sidebar-tab active" role="tab" data-mv-tab="pieces" aria-selected="true">Pieces</button>
+          <button class="mv-sidebar-tab" role="tab" data-mv-tab="textures" aria-selected="false">Textures</button>
         </div>
-        <div class="drawer" id="model-viewer-tree"></div>
+        <div class="mv-sidebar-panel" data-mv-tab-panel="pieces">
+          <div class="filter">
+            <input type="search" id="mv-tree-filter" placeholder="Filter pieces" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <div class="drawer" id="model-viewer-tree"></div>
+        </div>
+        <div class="mv-sidebar-panel hidden" data-mv-tab-panel="textures">
+          <div class="filter">
+            <input type="search" id="mv-texture-filter" placeholder="Filter textures" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <div class="drawer" id="model-viewer-textures"></div>
+        </div>
       </aside>
 
       <!-- .model-viewer-stage scopes the floating inspector overlays

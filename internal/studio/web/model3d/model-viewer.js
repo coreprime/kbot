@@ -171,6 +171,10 @@ export class ModelViewer {
     this.#setStatus(`Loading ${modelName}…`)
     if (!this.renderer) {
       const palette = await TAPalette.load()
+      // Stash the palette on the viewer so external panels (the
+      // Controls module's laser-beam tint) can resolve TA palette
+      // indices to RGB without re-fetching the JSON.
+      this.palette = palette
       const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false })
       if (!gl) {
         this.#setStatus('WebGL unavailable in this browser.')
