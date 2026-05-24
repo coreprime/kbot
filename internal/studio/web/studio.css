@@ -2645,6 +2645,50 @@ canvas {
      which we already have via overflow-y:auto. */
   resize: vertical;
 }
+/* Runtime overlay — simulation speed slider sits at the very top
+   of the panel.  Mirrors the COB menu's Playback slider so the user
+   can dial speed from either place. */
+.mv-runtime-speed {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  margin-bottom: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.mv-runtime-speed-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.mv-runtime-speed-input { width: 100%; cursor: pointer; }
+.mv-runtime-speed-val {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  min-width: 44px;
+  text-align: right;
+}
+/* Per-unit row of mini-actions inside each Unit header — sits to
+   the right of the thread-count chip, before/around the kill button.
+   Each button is the same icon-sized chip the header buttons use. */
+.mv-unit-header-action {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1;
+}
+.mv-unit-header-action:hover { color: var(--accent); }
+.mv-unit-header-action.danger:hover { color: var(--danger); }
 /* Runtime overlay — dedicated control bar above the unit list.
    Pulls the heavy pause/step/stop buttons out of the title bar so
    the header reads as identity + chrome, and the operations grouping

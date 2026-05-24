@@ -494,11 +494,17 @@
           <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-scripts"
                   title="Close this panel (re-open later from the View menu).">×</button>
         </div>
-        <!-- Runtime-wide controls (pause / resume / step / stop-all)
-             sit in their own bar above the unit list so the header
-             stays focused on identity + chrome.  These act on the
-             whole runtime, NOT per-unit; the per-unit kill button is
-             rendered inside each unit's group header. -->
+        <!-- Runtime-wide controls (simulation speed + pause / resume /
+             step / stop-all) sit in their own bar above the unit list
+             so the header stays focused on identity + chrome.  These
+             act on the whole runtime; per-unit actions render inside
+             each unit's group header. -->
+        <div class="mv-runtime-speed" title="Simulation speed — scales every unit's tick clock.  Mirrors the COB menu's Playback slider.">
+          <label class="mv-runtime-speed-label">Speed</label>
+          <input type="range" min="10" max="200" value="100" id="mv-runtime-speed" class="mv-runtime-speed-input"
+                 title="Drag to slow down or speed up the simulation.  1.00× = real time." />
+          <span class="mv-runtime-speed-val" id="mv-runtime-speed-val">1.00×</span>
+        </div>
         <div class="mv-inspector-controls">
           <button class="mv-runtime-ctrl mv-threads-break" id="mv-threads-break"
                   title="Pause — freeze every unit's animators + threads on this runtime.">⏸ Pause</button>

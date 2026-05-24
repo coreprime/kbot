@@ -17,10 +17,15 @@ import { ParticlePool } from './cob-particles.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
-  // runtime: CobRuntime from cob-runtime.js
-  constructor(model, runtime) {
+  // unit:  CobUnit from cob-runtime.js (per-unit script + animator state)
+  //
+  // The host CobRuntime is reachable via `unit.runtime` and is also
+  // mirrored on `this.runtime` so callers writing world-wide controls
+  // (pause / playback / tick) don't have to walk `binding.unit.runtime`.
+  constructor(model, unit) {
     this.model = model
-    this.runtime = runtime
+    this.unit = unit
+    this.runtime = unit.runtime
     // Build a quick model.piece → cob.pieceIndex map so the per-frame
     // sync doesn't redo name lookups.  Pieces whose names don't
     // appear in the COB (rare - typically the root "base" piece
@@ -30,15 +35,15 @@ export class CobBinding {
     // pieceIndex back to the model's Piece for a world-space anchor.
     this._cobToPiece = new Map() // cobPieceIndex → Piece
     for (const p of model.flat) {
-      const idx = runtime.pieceIndexByName(p.name)
+      const idx = unit.pieceIndexByName(p.name)
       this._pieceMap.set(p, idx)
       if (idx >= 0) this._cobToPiece.set(idx, p)
     }
     this.particles = new ParticlePool(1024)
-    // Install the runtime's emit-sfx hook.  Keep any existing hook
+    // Install the unit's emit-sfx hook.  Keep any existing hook
     // intact so callers that supplied a log/getUnitValue keep them.
-    const prevEmit = runtime.hooks.emitSfx
-    runtime.hooks.emitSfx = (sfxType, pieceIdx) => {
+    const prevEmit = unit.hooks.emitSfx
+    unit.hooks.emitSfx = (sfxType, pieceIdx) => {
       this._emitSfx(sfxType, pieceIdx)
       if (prevEmit) prevEmit(sfxType, pieceIdx)
     }
@@ -48,16 +53,16 @@ export class CobBinding {
     // off in a fireball" moments, so we map every explode to a
     // sparks+smoke cluster at the piece's anchor.  Magnitude scales
     // with the bit mask (more set bits = bigger boom).
-    const prevExplode = runtime.hooks.explode
-    runtime.hooks.explode = (pieceIdx, sfxType) => {
+    const prevExplode = unit.hooks.explode
+    unit.hooks.explode = (pieceIdx, sfxType) => {
       this._emitExplode(pieceIdx, sfxType)
       if (prevExplode) prevExplode(pieceIdx, sfxType)
     }
   }
 
-  // tick advances the runtime by dtMs and pushes resulting per-piece
-  // state into the model.  Returns the instruction count from the
-  // runtime tick - useful as a runaway / metrics signal.
+  // tick advances the WHOLE runtime by dtMs (every unit, not just
+  // this binding's one) and then pushes per-piece state into THIS
+  // binding's model.  Returns the instruction count for the tick.
   tick(dtMs) {
     const count = this.runtime.tick(dtMs)
     this._sync()
@@ -67,9 +72,9 @@ export class CobBinding {
     return count
   }
 
-  // start exposes the runtime's entry-point launcher with the same
-  // name so callers can write `binding.start('Activate')` without
-  // dereferencing through `.runtime`.  Args are pushed as initial
+  // start exposes the unit's entry-point launcher with the same name
+  // so callers can write `binding.start('Activate')` without
+  // dereferencing through `.unit`.  Args are pushed as initial
   // locals exactly like Cob's START_SCRIPT.
   //
   // Fire* hook: most TA fire scripts (armstump/armham/etc) only
@@ -84,14 +89,14 @@ export class CobBinding {
     if (/^Fire(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(scriptName)) {
       this._emitFireBurst(scriptName)
     }
-    return this.runtime.start(scriptName, args)
+    return this.unit.start(scriptName, args)
   }
-  hasScript(name) { return this.runtime.hasScript(name) }
-  listScripts() { return this.runtime.listScripts() }
+  hasScript(name) { return this.unit.hasScript(name) }
+  listScripts() { return this.unit.listScripts() }
 
-  // signal forwards to the runtime so the host can fire signals
+  // signal forwards to the unit so the host can fire signals
   // outside of a running script (e.g. the UI's "Kill" button).
-  signal(n) { this.runtime.signal(n) }
+  signal(n) { this.unit.signal(n) }
 
   // _emitSfx routes a COB emit-sfx into the particle pool with a
   // world-space anchor derived from the named piece's current
@@ -247,8 +252,8 @@ export class CobBinding {
   _sync() {
     for (const [piece, idx] of this._pieceMap) {
       if (idx < 0) continue
-      const off = this.runtime.pieceOffset(idx)
-      const rot = this.runtime.pieceRotation(idx)
+      const off = this.unit.pieceOffset(idx)
+      const rot = this.unit.pieceRotation(idx)
       // Per-axis sign convention — derived from decompiled COB
       // scripts (not just visual guesswork).  TA's COB uses a
       // left-handed coord system; our renderer is right-handed with
@@ -289,7 +294,7 @@ export class CobBinding {
       piece.rotate[0] = -rot[0]
       piece.rotate[1] = -rot[1]
       piece.rotate[2] = rot[2]
-      piece.visible = this.runtime.isPieceVisible(idx)
+      piece.visible = this.unit.isPieceVisible(idx)
     }
   }
 }

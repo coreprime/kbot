@@ -847,13 +847,15 @@ export class CobUnit {
 // playbackRate, fixed-step accumulator) and a map of CobUnits.
 // One CobRuntime per studio editor tab; multiple units inside it
 // would simulate them concurrently as if they were on a battlefield.
+//
+// CobRuntime knows NOTHING about per-unit state — scripts, animators,
+// piece visibility, breakpoints, hooks etc. all live on CobUnit.
+// Callers add units explicitly with `addUnit(script, hooks)` and
+// keep the returned CobUnit handle for everything per-unit.
 // ─────────────────────────────────────────────────────────────────
 
 export class CobRuntime {
-  // Legacy single-unit constructor: `new CobRuntime(scriptJSON, hooks)`
-  // auto-creates one CobUnit so existing call sites keep working.
-  // Multi-unit usage: `new CobRuntime()` then `runtime.addUnit(...)`.
-  constructor(script, hooks = {}) {
+  constructor() {
     this._units = new Map()           // unitId → CobUnit
     this._nextUnitId = 1
     // Shared time state.  Sleeps and animators of every unit share
@@ -862,10 +864,9 @@ export class CobRuntime {
     this.paused = false
     this.playbackRate = 1
     this._tickAccumMs = 0
-    if (script) this.addUnit(script, hooks)
   }
 
-  // ── Multi-unit API ──────────────────────────────────────────
+  // ── Unit registry ───────────────────────────────────────────
 
   // addUnit creates a new CobUnit from a compiled script + per-unit
   // hooks and registers it with the runtime.  Returns the unit so
@@ -934,83 +935,13 @@ export class CobRuntime {
 
   // stepOne finds the unit that owns `threadId` and advances that
   // thread by one bytecode instruction.  Used by the debugger's
-  // single-step button.  Animators stay frozen.
+  // single-step button.  Animators stay frozen.  Returns the
+  // owning CobUnit so the caller can refresh its panel.
   stepOne(threadId) {
     for (const u of this._units.values()) {
       const t = u._threads.find((x) => x.id === threadId)
-      if (t) { u.stepOne(threadId); return }
+      if (t) { u.stepOne(threadId); return u }
     }
+    return null
   }
-
-  // ── Backward-compat proxies for legacy single-unit callers ──
-  //
-  // Every property the studio currently reads off `runtime.xxx`
-  // delegates to the first registered unit.  This keeps the
-  // single-unit studio-tab call sites working unchanged while the
-  // multi-unit API is available alongside.
-
-  get _firstUnit() {
-    const v = this._units.values().next()
-    return v.done ? null : v.value
-  }
-
-  // Per-unit data passthrough.
-  get scripts() { return this._firstUnit?.scripts || [] }
-  get scriptNames() { return this._firstUnit?.scriptNames || [] }
-  get pieceNames() { return this._firstUnit?.pieceNames || [] }
-  get staticVars() { return this._firstUnit?.staticVars || [] }
-  set staticVars(v) { if (this._firstUnit) this._firstUnit.staticVars = v }
-  get hooks() { return this._firstUnit?.hooks || {} }
-  get _threads() { return this._firstUnit?._threads || [] }
-  get _recentlyKilled() { return this._firstUnit?._recentlyKilled || [] }
-  get _moveAnims() { return this._firstUnit?._moveAnims || [] }
-  get _rotAnims() { return this._firstUnit?._rotAnims || [] }
-  get _pieceVisible() { return this._firstUnit?._pieceVisible || [] }
-  get _offsetMaps() { return this._firstUnit?._offsetMaps || [] }
-  get _scriptByName() { return this._firstUnit?._scriptByName || new Map() }
-  get _suppressed() { return this._firstUnit?._suppressed || new Set() }
-  get _breakpoints() { return this._firstUnit?._breakpoints || new Set() }
-  get _nextThreadId() { return this._firstUnit?._nextThreadId ?? 1 }
-  set _nextThreadId(v) { if (this._firstUnit) this._firstUnit._nextThreadId = v }
-
-  // Studio-side metadata fields.  Each unit stores its own copy;
-  // backward-compat proxies read/write the first unit so the
-  // debugger's existing `runtime.decompiled = …` writes still work.
-  get decompiled() { return this._firstUnit?.decompiled || '' }
-  set decompiled(v) { if (this._firstUnit) this._firstUnit.decompiled = v }
-  get _decompiledSource() { return this._firstUnit?._decompiledSource || '' }
-  set _decompiledSource(v) { if (this._firstUnit) this._firstUnit._decompiledSource = v }
-  get name() { return this._firstUnit?.name || '' }
-  set name(v) { if (this._firstUnit) this._firstUnit.name = v }
-  get scriptOriginName() { return this._firstUnit?.scriptOriginName || '' }
-  set scriptOriginName(v) { if (this._firstUnit) this._firstUnit.scriptOriginName = v }
-  get _bosMap() { return this._firstUnit?._bosMap }
-  set _bosMap(v) { if (this._firstUnit) this._firstUnit._bosMap = v }
-  get _asmToBos() { return this._firstUnit?._asmToBos }
-  set _asmToBos(v) { if (this._firstUnit) this._firstUnit._asmToBos = v }
-
-  // Per-unit method passthroughs.  All target the first unit so
-  // single-unit call sites work without modification.
-  start(scriptName, args) { return this._firstUnit?.start(scriptName, args) ?? -1 }
-  hasScript(name) { return this._firstUnit?.hasScript(name) || false }
-  listScripts() { return this._firstUnit?.listScripts() || [] }
-  suppressScript(name) { this._firstUnit?.suppressScript(name) }
-  unsuppressScript(name) { this._firstUnit?.unsuppressScript(name) }
-  isSuppressed(name) { return this._firstUnit?.isSuppressed(name) || false }
-  signal(n) { this._firstUnit?.signal(n) }
-  killThreadsByName(name) { return this._firstUnit?.killThreadsByName(name) ?? 0 }
-  killThreadById(id) { return this._firstUnit?.killThreadById(id) ?? false }
-  killAllThreads() { return this._firstUnit?.killAllThreads() ?? 0 }
-  isPieceVisible(idx) { return this._firstUnit?.isPieceVisible(idx) ?? true }
-  pieceOffset(idx) { return this._firstUnit?.pieceOffset(idx) || [0, 0, 0] }
-  pieceRotation(idx) { return this._firstUnit?.pieceRotation(idx) || [0, 0, 0] }
-  pieceIndexByName(name) { return this._firstUnit?.pieceIndexByName(name) ?? -1 }
-
-  // Breakpoint passthrough — first unit only.  Multi-unit callers
-  // should reach into unit._breakpoints directly to scope BPs per
-  // unit (so debugging unit A doesn't pause unit B).
-  addBreakpoint(scriptName, offset) { this._firstUnit?.addBreakpoint(scriptName, offset) }
-  removeBreakpoint(scriptName, offset) { this._firstUnit?.removeBreakpoint(scriptName, offset) }
-  hasBreakpoint(scriptName, offset) { return this._firstUnit?.hasBreakpoint(scriptName, offset) || false }
-  clearBreakpoints() { this._firstUnit?.clearBreakpoints() }
 }

@@ -11920,7 +11920,7 @@ function wireMvInspectors() {
       if (!cob) return
       // Force one tick even when paused.  Clear all breakpointHit
       // flags so any BP-stopped thread can take its one step.
-      for (const t of cob.runtime._threads) if (!t.dead) t.breakpointHit = false
+      for (const t of cob.unit._threads) if (!t.dead) t.breakpointHit = false
       const wasPaused = cob.runtime.paused
       cob.runtime.paused = false
       cob.tick(25)
@@ -12121,7 +12121,7 @@ function refreshMvInspectors(dtMs = 16) {
 // "Runtime".
 function renderMvScriptsPanel(body, cob) {
   body.replaceChildren()
-  if (!cob || !cob.runtime) {
+  if (!cob || !cob.unit) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
     empty.textContent = 'No COB loaded.'
@@ -12179,9 +12179,11 @@ function renderMvScriptsPanel(body, cob) {
 }
 
 // buildMvUnitGroupHeader builds a "Unit N · <scriptOriginName>"
-// section divider for the Runtime overlay.  Click → kill every
-// thread on this unit (handy in multi-unit sims).  When `empty`
-// the header renders muted to indicate the unit has no live work.
+// section divider for the Runtime overlay.  Hosts the per-unit
+// mini-actions (currently Stop + Reset) so they live next to the
+// unit they target — separate from the runtime-wide controls bar
+// at the top of the panel.  When `empty` the header renders muted
+// to indicate the unit has no live work.
 function buildMvUnitGroupHeader(unit, cob, empty) {
   const hdr = document.createElement('div')
   hdr.className = empty ? 'mv-unit-header mv-unit-header-empty' : 'mv-unit-header'
@@ -12195,11 +12197,25 @@ function buildMvUnitGroupHeader(unit, cob, empty) {
   const n = unit._threads.length
   count.textContent = n === 0 ? 'idle' : `${n} thread${n === 1 ? '' : 's'}`
   hdr.appendChild(count)
-  // Per-unit kill-all button.  Stops every thread in this unit only
-  // — leaves any other unit's threads alone.  Visible even when the
-  // unit is idle because the user might want to clear stale state.
+  // Per-unit Reset — kills threads, zeroes static vars, drops
+  // animator slots, restores piece visibility, re-engages Create
+  // gating.  Currently scoped to the binding's one unit (single-
+  // unit studio tab); the modelViewer.resetState() helper is shared
+  // with the COB-ribbon Reset button so behaviour stays in sync.
+  const resetBtn = document.createElement('button')
+  resetBtn.className = 'mv-unit-header-action'
+  resetBtn.textContent = '↺'
+  resetBtn.title = `Reset Unit ${unit.id} — kill its threads, zero static vars, snap every piece back to its rest pose, and re-engage Create gating.`
+  resetBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    mvResetUnit(unit, cob)
+  })
+  hdr.appendChild(resetBtn)
+  // Per-unit kill-all — stops every thread on this unit only.
+  // Visible even when idle because the user might want to clear
+  // stale state.
   const killBtn = document.createElement('button')
-  killBtn.className = 'mv-unit-header-killall'
+  killBtn.className = 'mv-unit-header-action danger'
   killBtn.textContent = '⏹'
   killBtn.title = `Stop every running thread on Unit ${unit.id}.  Animators keep their last pose.`
   killBtn.addEventListener('click', (e) => {
@@ -12207,8 +12223,27 @@ function buildMvUnitGroupHeader(unit, cob, empty) {
     unit.killAllThreads()
   })
   hdr.appendChild(killBtn)
-  void cob
   return hdr
+}
+
+// mvResetUnit reverts a single unit to its post-load state.  When
+// the unit belongs to the active model viewer's binding the full
+// modelViewer.resetState() runs (it also clears particles + flips
+// renderer flags); otherwise we fall back to the runtime-side
+// reset (threads, vars, animators, visibility) so future
+// multi-unit sims still have a working button.
+function mvResetUnit(unit, cob) {
+  if (cob && modelViewerInstance && modelViewerInstance.cob === cob && cob.unit === unit) {
+    modelViewerInstance.resetState()
+    return
+  }
+  unit.killAllThreads()
+  unit._threads.length = 0
+  unit._recentlyKilled.length = 0
+  for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
+  unit._moveAnims.length = 0
+  unit._rotAnims.length = 0
+  for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
 }
 
 // renderMvThreadRow builds one row for the scripts overlay.
@@ -12257,7 +12292,7 @@ function renderMvThreadRow(t, killed, cob) {
     kill.textContent = '🗑'
     kill.addEventListener('click', (e) => {
       e.stopPropagation()
-      cob.runtime.killThreadById(t.id)
+      cob.unit.killThreadById(t.id)
     })
     kill.addEventListener('pointerdown', (e) => e.stopPropagation())
     name.appendChild(kill)
@@ -12638,8 +12673,8 @@ function renderMvThreadCodeSource(state, thread) {
     src.dataset.scriptName = thread.script.name
     if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
   }
-  const pieceNames = cob.runtime.pieceNames || []
-  const scripts = cob.runtime.scripts || []
+  const pieceNames = cob.unit.pieceNames || []
+  const scripts = cob.unit.scripts || []
   const LANE_W = 10
   // outerBody hosts every script section back-to-back.  Each section
   // is its own positioning context so per-script jump arrows don't
@@ -12725,7 +12760,7 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   line.dataset.idx = String(i)
   line.dataset.offset = String(ins.offset >>> 0)
   line.dataset.script = scriptLower
-  if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
+  if (cob.unit.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
   // Line-number column (leftmost).  1-based, scoped to the script
   // section so each .script restarts at 1.  Tabular numerics keep
   // the gutter from wobbling as the digit count changes.
@@ -12745,13 +12780,13 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   bp.title = 'Click to toggle breakpoint at this instruction.'
   bp.addEventListener('click', (e) => {
     e.stopPropagation()
-    if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) {
-      cob.runtime.removeBreakpoint(scriptName, ins.offset)
+    if (cob.unit.hasBreakpoint(scriptName, ins.offset)) {
+      cob.unit.removeBreakpoint(scriptName, ins.offset)
       line.classList.remove('breakpointed')
       // Reflect on BOS side too.
       mvSyncBosBpForOffset(state, scriptLower, ins.offset >>> 0, false)
     } else {
-      cob.runtime.addBreakpoint(scriptName, ins.offset)
+      cob.unit.addBreakpoint(scriptName, ins.offset)
       line.classList.add('breakpointed')
       mvSyncBosBpForOffset(state, scriptLower, ins.offset >>> 0, true)
     }
@@ -12777,7 +12812,7 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   // Mutual hover — uses the line's data-script so it works across
   // every section in the full disassembly view.
   line.addEventListener('mouseenter', () => {
-    const bosLine = cob.runtime._asmToBos?.get(`${scriptLower}:${i}`)
+    const bosLine = cob.unit._asmToBos?.get(`${scriptLower}:${i}`)
     state.hoverAsmIdx = i
     state.hoverAsmScript = scriptLower
     state.hoverLine = (bosLine !== undefined) ? bosLine : null
@@ -12886,7 +12921,7 @@ function mvFormatOperands(ins, pieceNames) {
 function refreshMvThreadCodeHighlight(state) {
   if (!state) return
   const panel = state.panel
-  const thread = state.cob.runtime._threads.find((t) => t.id === state.threadId && !t.dead)
+  const thread = state.cob.unit._threads.find((t) => t.id === state.threadId && !t.dead)
   const statusEl = panel.querySelector('.mv-exec-status')
   const pcEl = panel.querySelector('.mv-exec-pc')
   const offsetEl = panel.querySelector('.mv-exec-offset')
@@ -12996,7 +13031,7 @@ function centerMvThreadPanesOnPc(state, thread, asmTarget) {
   // on script + idx range — the BOS pane spans all functions now so
   // we have to filter to the right script even though the asm-side
   // PC line carries data-script already.
-  const map = state.cob.runtime._bosMap
+  const map = state.cob.unit._bosMap
   if (dec && map) {
     let bestLine = -1
     const fnLower = thread.script.name.toLowerCase()
@@ -13200,10 +13235,10 @@ function mvBosStatementMatch(bosLine, instructions, cursor, pieceNames) {
 //   _asmToBos : "scriptLower:asmIdx" → bos line idx  (reverse, for
 //             mutual-hover highlighting)
 function buildMvBosMap(cob) {
-  if (cob.runtime._bosMap && cob.runtime._asmToBos) return
-  const src = cob.runtime.decompiled || cob.runtime._decompiledSource
-  cob.runtime._bosMap = new Map()
-  cob.runtime._asmToBos = new Map()
+  if (cob.unit._bosMap && cob.unit._asmToBos) return
+  const src = cob.unit.decompiled || cob.unit._decompiledSource
+  cob.unit._bosMap = new Map()
+  cob.unit._asmToBos = new Map()
   if (!src) return
   const lines = src.split('\n')
   // BOS keywords that LOOK like function calls (they have parens) but
@@ -13219,13 +13254,13 @@ function buildMvBosMap(cob) {
     const m = ln.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
     if (m && !NOT_A_FN.has(m[1].toLowerCase())) {
       currentFn = m[1]
-      const scriptIdx = cob.runtime.scriptNames.findIndex((n) => n && n.toLowerCase() === m[1].toLowerCase())
-      scriptInsts = scriptIdx >= 0 ? (cob.runtime.scripts[scriptIdx]?.instructions || null) : null
+      const scriptIdx = cob.unit.scriptNames.findIndex((n) => n && n.toLowerCase() === m[1].toLowerCase())
+      scriptInsts = scriptIdx >= 0 ? (cob.unit.scripts[scriptIdx]?.instructions || null) : null
       cursor = 0
     } else if (scriptInsts && currentFn) {
-      const match = mvBosStatementMatch(ln, scriptInsts, cursor, cob.runtime.pieceNames)
+      const match = mvBosStatementMatch(ln, scriptInsts, cursor, cob.unit.pieceNames)
       if (match) {
-        cob.runtime._bosMap.set(i, {
+        cob.unit._bosMap.set(i, {
           script: currentFn,
           startIdx: match.startIdx,
           endIdx: match.endIdx,
@@ -13233,7 +13268,7 @@ function buildMvBosMap(cob) {
         })
         const fnLower = currentFn.toLowerCase()
         for (let a = match.startIdx; a <= match.endIdx; a++) {
-          cob.runtime._asmToBos.set(`${fnLower}:${a}`, i)
+          cob.unit._asmToBos.set(`${fnLower}:${a}`, i)
         }
         cursor = match.endIdx + 1
       }
@@ -13245,7 +13280,7 @@ function renderMvThreadCodeDecompiled(state, cob) {
   const pane = state.panel.querySelector('.mv-thread-code-decompiled')
   if (!pane) return
   pane.replaceChildren()
-  const src = cob.runtime.decompiled || cob.runtime._decompiledSource
+  const src = cob.unit.decompiled || cob.unit._decompiledSource
   if (!src) {
     // Decompile isn't loaded yet (model-load fetch used
     // ?decompile=0 to skip the slow pass).  Kick off a one-shot
@@ -13253,27 +13288,27 @@ function renderMvThreadCodeDecompiled(state, cob) {
     // _decompileFetchInFlight guards against double-fetch when
     // multiple debugger panels open while one fetch is still in
     // flight.
-    const name = cob.runtime.scriptOriginName || cob.runtime.name || (modelViewerInstance?.model?.name)
+    const name = cob.unit.scriptOriginName || cob.unit.name || (modelViewerInstance?.model?.name)
     if (!name) {
       pane.textContent = '// decompile unavailable'
       return
     }
     renderMvBosSkeleton(pane)
-    if (!cob.runtime._decompileFetchInFlight) {
-      cob.runtime._decompileFetchInFlight = fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=1`)
+    if (!cob.unit._decompileFetchInFlight) {
+      cob.unit._decompileFetchInFlight = fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=1`)
         .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then((json) => {
-          cob.runtime._decompiledSource = json.decompiled || '// decompile failed'
+          cob.unit._decompiledSource = json.decompiled || '// decompile failed'
           // Bust cached map so it rebuilds against the fetched source.
-          cob.runtime._bosMap = null
-          cob.runtime._asmToBos = null
+          cob.unit._bosMap = null
+          cob.unit._asmToBos = null
         })
-        .catch((err) => { cob.runtime._decompiledSource = `// decompile fetch failed: ${err.message}` })
-        .finally(() => { cob.runtime._decompileFetchInFlight = null })
+        .catch((err) => { cob.unit._decompiledSource = `// decompile fetch failed: ${err.message}` })
+        .finally(() => { cob.unit._decompileFetchInFlight = null })
     }
     // Re-enter once the fetch settles.  Use the shared promise so
     // every open panel waits on the same fetch.
-    cob.runtime._decompileFetchInFlight.then(() => {
+    cob.unit._decompileFetchInFlight.then(() => {
       // Re-render every open panel that's pointing at this same cob —
       // when the fetch lands, every debugger's BOS pane needs to
       // refresh from the now-cached source.
@@ -13322,8 +13357,8 @@ function renderMvThreadCodeDecompiled(state, cob) {
     }
     div.insertAdjacentHTML('beforeend', highlightBosLine(ln || ' '))
     // Reflect breakpoint state on initial render.
-    const mapEntry = cob.runtime._bosMap.get(i)
-    if (mapEntry && cob.runtime.hasBreakpoint(mapEntry.script, mapEntry.startOffset)) {
+    const mapEntry = cob.unit._bosMap.get(i)
+    if (mapEntry && cob.unit.hasBreakpoint(mapEntry.script, mapEntry.startOffset)) {
       div.classList.add('bos-bp')
     }
     // Click behaviour depends on line kind:
@@ -13345,16 +13380,16 @@ function renderMvThreadCodeDecompiled(state, cob) {
       })
     } else {
       div.addEventListener('click', () => {
-        const entry = cob.runtime._bosMap.get(i)
+        const entry = cob.unit._bosMap.get(i)
         if (!entry) return
         const scriptLower = entry.script.toLowerCase()
         const asmLine = state.panel.querySelector(`.mv-thread-code-source .mv-code-line[data-script="${scriptLower}"][data-offset="${entry.startOffset}"]`)
-        if (cob.runtime.hasBreakpoint(entry.script, entry.startOffset)) {
-          cob.runtime.removeBreakpoint(entry.script, entry.startOffset)
+        if (cob.unit.hasBreakpoint(entry.script, entry.startOffset)) {
+          cob.unit.removeBreakpoint(entry.script, entry.startOffset)
           div.classList.remove('bos-bp')
           if (asmLine) asmLine.classList.remove('breakpointed')
         } else {
-          cob.runtime.addBreakpoint(entry.script, entry.startOffset)
+          cob.unit.addBreakpoint(entry.script, entry.startOffset)
           div.classList.add('bos-bp')
           if (asmLine) asmLine.classList.add('breakpointed')
         }
@@ -13409,7 +13444,7 @@ function applyMvThreadCodeCrossHover(state) {
   for (const el of src.querySelectorAll('.mv-code-line.cross-hover')) el.classList.remove('cross-hover')
   for (const el of dec.querySelectorAll('div.bos-cross-hover')) el.classList.remove('bos-cross-hover')
   if (state.hoverLine === null || state.hoverLine === undefined) return
-  const entry = state.cob.runtime._bosMap?.get(state.hoverLine)
+  const entry = state.cob.unit._bosMap?.get(state.hoverLine)
   if (!entry) return
   const scriptLower = entry.script.toLowerCase()
   for (let i = entry.startIdx; i <= entry.endIdx; i++) {
@@ -13458,7 +13493,7 @@ function wireMvThreadCodeBrackets(state) {
       if (!lineEl) return
       const lineIdx = parseInt(lineEl.dataset.line, 10)
       if (!Number.isFinite(lineIdx)) return
-      const entry = state.cob.runtime._bosMap?.get(lineIdx)
+      const entry = state.cob.unit._bosMap?.get(lineIdx)
       if (!entry) {
         if (state.hoverLine !== null) {
           state.hoverLine = null
@@ -13638,7 +13673,7 @@ function redrawMvThreadCodeBrackets(state) {
   const svg = panel.querySelector('.mv-thread-code-brackets')
   const src = panel.querySelector('.mv-thread-code-source')
   const dec = panel.querySelector('.mv-thread-code-decompiled')
-  if (!svg || !src || !dec || !state.cob.runtime._bosMap) return
+  if (!svg || !src || !dec || !state.cob.unit._bosMap) return
   const body = svg.parentElement
   const bodyRect = body.getBoundingClientRect()
   svg.setAttribute('viewBox', `0 0 ${bodyRect.width} ${bodyRect.height}`)
@@ -13658,11 +13693,11 @@ function redrawMvThreadCodeBrackets(state) {
   const endX   = srcRect.right - bodyRect.left - GUTTER_INSET   // asm side
   const startX = decRect.left  - bodyRect.left + GUTTER_INSET   // dec side
   const mid    = (startX + endX) * 0.5
-  const thread = state.cob.runtime._threads.find((t) => t.id === state.threadId && !t.dead)
+  const thread = state.cob.unit._threads.find((t) => t.id === state.threadId && !t.dead)
   const pcScript = thread?.script?.name?.toLowerCase()
   const pcIdx = thread ? thread.pc : -1
-  const bps = state.cob.runtime._breakpoints
-  const asmToBos = state.cob.runtime._asmToBos
+  const bps = state.cob.unit._breakpoints
+  const asmToBos = state.cob.unit._asmToBos
   if (!asmToBos) return
   for (const asmEl of src.querySelectorAll('.mv-code-line')) {
     const asmRect = asmEl.getBoundingClientRect()
@@ -13672,7 +13707,7 @@ function redrawMvThreadCodeBrackets(state) {
     if (!Number.isFinite(asmIdx) || !asmScript) continue
     const bosLineIdx = asmToBos.get(`${asmScript}:${asmIdx}`)
     if (bosLineIdx === undefined) continue
-    const entry = state.cob.runtime._bosMap.get(bosLineIdx)
+    const entry = state.cob.unit._bosMap.get(bosLineIdx)
     if (!entry) continue
     const bosEl = dec.querySelector(`div[data-line="${bosLineIdx}"]`)
     if (!bosEl) continue
@@ -13812,7 +13847,7 @@ function refreshMvThreadCodeDecompHighlight(state, thread) {
   for (const el of pane.querySelectorAll('.bos-current')) el.classList.remove('bos-current')
   if (!thread) return
   const fnLower = thread.script.name.toLowerCase()
-  const map = state.cob.runtime._bosMap
+  const map = state.cob.unit._bosMap
   if (!map) return
   let bestLine = -1
   for (const [lineIdx, entry] of map.entries()) {
@@ -13930,14 +13965,14 @@ function renderMvThreadCodeLocals(state, thread) {
 
 function renderMvStaticVarsPanel(body, cob) {
   body.replaceChildren()
-  if (!cob || !cob.runtime) {
+  if (!cob || !cob.unit) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
     empty.textContent = 'No COB loaded.'
     body.appendChild(empty)
     return
   }
-  const vars = cob.runtime.staticVars
+  const vars = cob.unit.staticVars
   if (vars.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
@@ -14198,7 +14233,7 @@ function renderMvActionsPanel(cob) {
   const list = document.getElementById('mv-actions-list')
   if (!list) return
   list.replaceChildren()
-  if (!cob || !cob.runtime) {
+  if (!cob || !cob.unit) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
     empty.textContent = 'No COB loaded.'
@@ -14364,17 +14399,25 @@ function wireCobAttributeSliders() {
     dmg.dataset.wired = '1'
   }
   const pb = document.getElementById('mv-cob-playback')
-  const pbVal = document.getElementById('mv-cob-playback-val')
   if (pb && pb.dataset.wired !== '1') {
     pb.addEventListener('input', () => {
-      const v = (parseInt(pb.value, 10) | 0) / 100
-      if (pbVal) pbVal.textContent = `${v.toFixed(2)}×`
-      const cob = modelViewerInstance?.cob
-      if (cob) cob.runtime.setPlaybackRate(v)
+      mvSetSimulationSpeed((parseInt(pb.value, 10) | 0) / 100)
     })
     pb.addEventListener('click', (e) => e.stopPropagation())
     pb.addEventListener('pointerdown', (e) => e.stopPropagation())
     pb.dataset.wired = '1'
+  }
+  // Runtime overlay's Speed slider — same source-of-truth as the COB
+  // ribbon's Playback slider above.  Both call mvSetSimulationSpeed,
+  // which pushes the new rate to the runtime + updates both label
+  // pairs so the two stay in lock-step regardless of which one the
+  // user dragged.
+  const speed = document.getElementById('mv-runtime-speed')
+  if (speed && speed.dataset.wired !== '1') {
+    speed.addEventListener('input', () => {
+      mvSetSimulationSpeed((parseInt(speed.value, 10) | 0) / 100)
+    })
+    speed.dataset.wired = '1'
   }
   const build = document.getElementById('mv-cob-build')
   const buildVal = document.getElementById('mv-cob-build-val')
@@ -14398,6 +14441,28 @@ function wireCobAttributeSliders() {
   }
 }
 
+// mvSetSimulationSpeed is the single entry point for changing the
+// runtime's playback rate.  Both the COB-menu Playback slider and
+// the Runtime overlay's Speed slider call this — it pushes the new
+// rate to the runtime and writes the value labels on both sliders
+// so the two UIs stay in lock-step.  rate is the multiplier (1.0 =
+// real time, 0.25 = quarter-speed, 4.0 = fast-forward).
+function mvSetSimulationSpeed(rate) {
+  const v = Math.max(0.1, Math.min(2.0, +rate || 1))
+  const cob = modelViewerInstance?.cob
+  if (cob) cob.runtime.setPlaybackRate(v)
+  // COB-menu slider + label.
+  const pb = document.getElementById('mv-cob-playback')
+  const pbVal = document.getElementById('mv-cob-playback-val')
+  if (pb) pb.value = String(Math.round(v * 100))
+  if (pbVal) pbVal.textContent = `${v.toFixed(2)}×`
+  // Runtime-overlay slider + label.
+  const speed = document.getElementById('mv-runtime-speed')
+  const speedVal = document.getElementById('mv-runtime-speed-val')
+  if (speed) speed.value = String(Math.round(v * 100))
+  if (speedVal) speedVal.textContent = `${v.toFixed(2)}×`
+}
+
 // refreshCobPanel wires the Animation→COB dropdown buttons to the
 // currently-loaded unit's runtime.  Entry-point buttons grey out
 // when the script isn't present.  The "All scripts" list at the
@@ -14414,13 +14479,10 @@ function refreshCobPanel(cob) {
     dmg.value = String(v)
     dmgVal.textContent = `${v}%`
   }
-  const pb = document.getElementById('mv-cob-playback')
-  const pbVal = document.getElementById('mv-cob-playback-val')
-  if (pb && pbVal) {
-    const v = cob ? cob.runtime.playbackRate : 1
-    pb.value = String(Math.round(v * 100))
-    pbVal.textContent = `${v.toFixed(2)}×`
-  }
+  // Push the loaded unit's playback rate through the shared helper
+  // so both the COB-menu slider AND the Runtime overlay slider land
+  // on the same value.
+  mvSetSimulationSpeed(cob ? cob.runtime.playbackRate : 1)
   const build = document.getElementById('mv-cob-build')
   const buildVal = document.getElementById('mv-cob-build-val')
   if (build && buildVal) {
@@ -14484,9 +14546,9 @@ function refreshCobPanel(cob) {
 // on a script that's already executing, and by refreshCobPanel +
 // renderMvActionsPanel to grey out the corresponding buttons.
 function isCobScriptRunning(cob, name) {
-  if (!cob || !cob.runtime) return false
+  if (!cob || !cob.unit) return false
   const lower = name.toLowerCase()
-  for (const t of cob.runtime._threads) {
+  for (const t of cob.unit._threads) {
     if (!t.dead && t.script.name.toLowerCase() === lower) return true
   }
   return false
@@ -14550,8 +14612,8 @@ function runCobEntry(cob, name) {
     // aim's hold window and yanks the turret back early — the
     // "instant snap" the user reported.  Kill any stale ones so
     // the LATEST aim gets its full timer.
-    cob.runtime.killThreadsByName('RestoreAfterDelay')
-    cob.runtime.killThreadsByName('RestorePosition')
+    cob.unit.killThreadsByName('RestoreAfterDelay')
+    cob.unit.killThreadsByName('RestorePosition')
     // Independent random heading per click - no per-weapon bias.
     // Forward hemisphere only (±90°): aiming behind a unit clips
     // through the body on most TA models and looks broken.
@@ -14625,8 +14687,20 @@ function renderPieceTree(model) {
       // Shift-click suppresses the cascade for fine-grained edits.
       const cascade = !e.shiftKey
       const target = !piece.visible
+      // Write the user's choice through to the COB unit's per-piece
+      // visibility table.  CobBinding._sync re-reads that table every
+      // render frame and writes piece.visible = isPieceVisible(idx),
+      // so without writing the override here the next sync flips the
+      // piece back to "visible" and the user can never escape the
+      // hide → re-show toggle (the bug this addresses).
+      const unit = modelViewerInstance?.cob?.unit
+      const pieceMap = modelViewerInstance?.cob?._pieceMap
       const apply = (p) => {
         p.visible = target
+        if (unit && pieceMap) {
+          const idx = pieceMap.get(p)
+          if (typeof idx === 'number' && idx >= 0) unit._pieceVisible[idx] = target
+        }
         if (cascade) for (const c of p.children) apply(c)
       }
       apply(piece)

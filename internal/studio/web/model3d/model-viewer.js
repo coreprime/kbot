@@ -94,7 +94,7 @@ export class ModelViewer {
   setDamage(percent) {
     this.cobDamage = Math.max(0, Math.min(100, +percent || 0))
     if (!this.cob || !this.cob.hasScript('SmokeUnit') || this.cobDamage <= 0) return
-    const alreadyRunning = this.cob.runtime._threads.some(
+    const alreadyRunning = this.cob.unit._threads.some(
       (t) => t.script.name.toLowerCase() === 'smokeunit',
     )
     if (!alreadyRunning) this.cob.start('SmokeUnit')
@@ -115,28 +115,31 @@ export class ModelViewer {
   // back to their original 3DO positions on the next render tick.
   resetState() {
     if (!this.cob) return
+    const unit = this.cob.unit
     const rt = this.cob.runtime
-    rt.killAllThreads()
+    unit.killAllThreads()
     // Clear thread list completely (killAllThreads only marks
     // dead; the next tick removes them, but we want it INSTANT).
-    rt._threads.length = 0
-    rt._recentlyKilled.length = 0
+    unit._threads.length = 0
+    unit._recentlyKilled.length = 0
     // Zero static vars in place so any subsequent script start
     // sees the same blank-slate state Create would have set up.
-    for (let i = 0; i < rt.staticVars.length; i++) rt.staticVars[i] = 0
+    for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
     // Drop every animator slot so pieceOffset / pieceRotation
     // return 0 immediately — the per-frame sync writes 0/0/0 into
     // piece.move/rotate and the renderer draws the rest pose.
-    rt._moveAnims.length = 0
-    rt._rotAnims.length = 0
-    // Reset playback rate + drained-tick accumulator so the next
-    // script run starts at a clean clock.
+    unit._moveAnims.length = 0
+    unit._rotAnims.length = 0
+    // Reset the runtime-wide tick accumulator so the next script
+    // run starts at a clean clock.  Playback rate is intentionally
+    // preserved — the user dialled it in and would expect Reset
+    // to keep their slow-mo / fast-forward setting.
     rt._tickAccumMs = 0
     // Restore every piece to fully visible — Create() typically
     // hides muzzle flares + decorative panels, so the visibility
     // state needs explicit reset back to the 3DO default of
     // "everything shown".
-    for (let i = 0; i < rt._pieceVisible.length; i++) rt._pieceVisible[i] = true
+    for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
     // Drop lifecycle tracking — Activate/Deactivate go back to a
     // fresh "no idea what state this is" path AND Create gating
     // re-engages (so the user has to click Create again before
@@ -207,7 +210,15 @@ export class ModelViewer {
         const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}?decompile=0`)
         if (cobResp.ok) {
           const cobJson = await cobResp.json()
-          const runtime = new CobRuntime(cobJson, {
+          // Reuse the host runtime across model loads so its time
+          // state + paused flag survive a swap.  Each model load
+          // tears down its previous unit and registers a fresh one.
+          if (!this._runtime) this._runtime = new CobRuntime()
+          if (this._unit) {
+            this._runtime.removeUnit(this._unit)
+            this._unit = null
+          }
+          const hooks = {
             // Tag log lines so they're easy to spot in the console.
             log: (msg) => console.warn(`[cob:${modelName}]`, msg),
             // Provide the unit-value port reads the bos scripts
@@ -249,14 +260,16 @@ export class ModelViewer {
                 case 20: this.cobPorts.armoured = v ? 1 : 0; break
               }
             },
-          })
-          // Cache the decompiled BOS source on the runtime so the
+          }
+          this._unit = this._runtime.addUnit(cobJson, hooks)
+          // Cache the decompiled BOS source on the unit so the
           // thread-debugger's right pane can render side-by-side
-          // without an extra fetch.  Empty string when the server
-          // didn't provide it (older endpoint or decompile error).
-          runtime.decompiled = cobJson.decompiled || ''
-          runtime.name = modelName
-          this.cob = new CobBinding(model, runtime)
+          // without an extra fetch.  Empty string when the initial
+          // ?decompile=0 fetch skipped it (debugger will fetch on
+          // open).
+          this._unit.decompiled = cobJson.decompiled || ''
+          this._unit.name = modelName
+          this.cob = new CobBinding(model, this._unit)
           this.renderer.setCobBinding(this.cob)
           // Earlier this auto-fired Create + Activate so freshly-
           // opened units stood in their idle "deployed" pose
