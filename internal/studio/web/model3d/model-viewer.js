@@ -47,6 +47,30 @@ export class ModelViewer {
     // climbs.  Defaults 100 (= fully built) so freshly opened
     // units show their normal textured appearance.
     this.cobBuildPercent = 100
+    // cobPorts mirrors the runtime's GET_UNIT_VALUE / SET_VALUE state
+    // for the ports the Ports inspector exposes.  Kept on the viewer
+    // (not on the runtime/unit) because the studio defines the user-
+    // editable defaults — scripts read THESE values, and the Ports
+    // panel writes back into THIS object.  Defaults match TA's
+    // out-of-the-box unit behaviour (active, roam, fire at will).
+    //   activation        — 0 (off) / 1 (on).  Most idle units are 1.
+    //   moveOrders        — 0 Hold position / 1 Maneuver / 2 Roam.
+    //   fireOrders        — 0 Hold fire / 1 Return fire / 2 Fire at will.
+    //   inBuildStance     — 0 / 1.  Read-only here (scripts toggle it
+    //                       via SET_VALUE; the panel displays current).
+    //   armoured          — 0 / 1.  Read-only.
+    //   yardOpen          — 0 / 1.  Set by factory scripts.
+    //   buggerOff         — 0 / 1.  Set by factory scripts.
+    // Health + build-percent are derived from cobDamage / cobBuildPercent.
+    this.cobPorts = {
+      activation: 1,
+      moveOrders: 2,
+      fireOrders: 2,
+      inBuildStance: 0,
+      armoured: 0,
+      yardOpen: 0,
+      buggerOff: 0,
+    }
     this._pointerState = null
     this._resizeObserver = null
     this._wireInputs()
@@ -114,8 +138,10 @@ export class ModelViewer {
     // "everything shown".
     for (let i = 0; i < rt._pieceVisible.length; i++) rt._pieceVisible[i] = true
     // Drop lifecycle tracking — Activate/Deactivate go back to a
-    // fresh "no idea what state this is" path.
-    this.cob._lifecycle = undefined
+    // fresh "no idea what state this is" path AND Create gating
+    // re-engages (so the user has to click Create again before
+    // any other script can fire, matching first-open behaviour).
+    this.cob._lifecycle = (this.cob.hasScript && this.cob.hasScript('Create')) ? 'unborn' : 'created'
     // Drop SFX particles so smoke + sparks from prior runs vanish.
     if (this.cob.particles) this.cob.particles.count = 0
     // Force a redraw so the user sees the snap-back even when the
@@ -173,24 +199,55 @@ export class ModelViewer {
       this.cob = null
       this.renderer.setCobBinding(null)
       try {
-        const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}`)
+        // ?decompile=0 — skip the slow BOS-decompile pass on the
+        // initial unit-load fetch.  The debugger fetches a second
+        // time (decompile=1) the first time it opens, which keeps
+        // model-load latency low for users who never crack open the
+        // thread viewer.
+        const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}?decompile=0`)
         if (cobResp.ok) {
           const cobJson = await cobResp.json()
           const runtime = new CobRuntime(cobJson, {
             // Tag log lines so they're easy to spot in the console.
             log: (msg) => console.warn(`[cob:${modelName}]`, msg),
             // Provide the unit-value port reads the bos scripts
-            // query - HEALTH, ACTIVATION etc.  Damage comes from
-            // the studio's per-unit UI; default 0 ("undamaged")
-            // until the user drags the slider.
+            // query.  Most ports read from cobPorts (which the user
+            // can edit via the Ports inspector); HEALTH and
+            // BUILD_PERCENT_LEFT derive from the cobDamage /
+            // cobBuildPercent sliders so the existing Unit Attributes
+            // UI stays the source of truth for those two.
             getUnitValue: (port) => {
-              if (port === 4 /* HEALTH */) return Math.max(0, 100 - (this.cobDamage || 0))
-              if (port === 1 /* ACTIVATION */) return 1
-              // BUILD_PERCENT_LEFT = 100 - built% so the script's
-              // common `while (get BUILD_PERCENT_LEFT)` idiom blocks
-              // until build progress hits 100 (LEFT hits 0).
-              if (port === 17 /* BUILD_PERCENT_LEFT */) return Math.max(0, 100 - (this.cobBuildPercent || 0))
-              return 0
+              switch (port) {
+                case 1:  /* ACTIVATION         */ return this.cobPorts.activation | 0
+                case 2:  /* STANDINGMOVEORDERS */ return this.cobPorts.moveOrders | 0
+                case 3:  /* STANDINGFIREORDERS */ return this.cobPorts.fireOrders | 0
+                case 4:  /* HEALTH             */ return Math.max(0, 100 - (this.cobDamage || 0))
+                case 5:  /* INBUILDSTANCE      */ return this.cobPorts.inBuildStance | 0
+                case 17: /* BUILD_PERCENT_LEFT */ return Math.max(0, 100 - (this.cobBuildPercent || 0))
+                case 18: /* YARD_OPEN          */ return this.cobPorts.yardOpen | 0
+                case 19: /* BUGGER_OFF         */ return this.cobPorts.buggerOff | 0
+                case 20: /* ARMORED            */ return this.cobPorts.armoured | 0
+                default: return 0
+              }
+            },
+            // setUnitValue is invoked by SET_VALUE opcodes (rare —
+            // mostly factory scripts toggle YARD_OPEN / BUGGER_OFF
+            // and IN_BUILD_STANCE during build cycles).  Write-back
+            // keeps the Ports panel + cobDamage/cobBuildPercent in
+            // sync with what the running scripts have done.
+            setUnitValue: (port, value) => {
+              const v = value | 0
+              switch (port) {
+                case 1:  this.cobPorts.activation = v ? 1 : 0; break
+                case 2:  this.cobPorts.moveOrders = Math.max(0, Math.min(2, v)); break
+                case 3:  this.cobPorts.fireOrders = Math.max(0, Math.min(2, v)); break
+                case 4:  this.cobDamage = Math.max(0, Math.min(100, 100 - v)); break
+                case 5:  this.cobPorts.inBuildStance = v ? 1 : 0; break
+                case 17: this.cobBuildPercent = Math.max(0, Math.min(100, 100 - v)); break
+                case 18: this.cobPorts.yardOpen = v ? 1 : 0; break
+                case 19: this.cobPorts.buggerOff = v ? 1 : 0; break
+                case 20: this.cobPorts.armoured = v ? 1 : 0; break
+              }
             },
           })
           // Cache the decompiled BOS source on the runtime so the

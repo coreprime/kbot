@@ -420,16 +420,24 @@
             </button>
             <div class="ribbon-dropdown-popup hidden" id="mv-view-dropdown-popup">
               <div class="menu-section-label">Inspectors</div>
-              <button id="mv-view-scripts" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts" title="Show / hide the Threads overlay (active COB threads + PC + signal mask).">
-                <span class="ico">📜</span><span>Threads</span><span class="menu-check">✓</span>
+              <button id="mv-view-scripts" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts"
+                      title="Toggle the Runtime overlay — every loaded unit's live COB threads, grouped by unit, with PC + signal mask + a one-click debugger jump.">
+                <span class="ico">⚙</span><span>Runtime</span><span class="menu-check">✓</span>
               </button>
-              <button id="mv-view-actions" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-actions" title="Show / hide the Actions overlay (clickable buttons for every COB script).">
-                <span class="ico">🎬</span><span>Actions</span><span class="menu-check">✓</span>
+              <button id="mv-view-actions" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-actions"
+                      title="Toggle the Actions overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).">
+                <span class="ico">▶</span><span>Actions</span><span class="menu-check">✓</span>
               </button>
-              <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars" title="Show / hide the Static Vars overlay (COB global_N values).">
+              <button id="mv-view-ports" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-ports"
+                      title="Toggle the Ports overlay — view + edit the COB unit-value ports the scripts read (Active, Move/Fire orders, Health, Build %, etc.).">
+                <span class="ico">🔌</span><span>Ports</span><span class="menu-check">✓</span>
+              </button>
+              <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
+                      title="Toggle the Static Vars overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.">
                 <span class="ico">📊</span><span>Static Vars</span><span class="menu-check">✓</span>
               </button>
-              <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera" title="Show / hide the Camera overlay (eye position, yaw / pitch / distance).">
+              <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
+                      title="Toggle the Camera overlay — live read-out of the viewer camera's eye position, yaw, pitch, distance and FOV.">
                 <span class="ico">🎥</span><span>Camera</span><span class="menu-check">✓</span>
               </button>
             </div>
@@ -477,28 +485,44 @@
            viewer's View dropdown.  Same DOM convention as the map
            editor's .dev-stats panels so the drag + persist helper
            code can be shared. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-scripts" title="Drag to move">
+      <aside class="mv-inspector hidden" id="mv-inspector-scripts" title="Drag this header to move the Runtime overlay">
         <div class="mv-inspector-header" id="mv-inspector-scripts-header">
-          <span class="minimap-grip">⠿</span>
-          <span>Threads</span>
-          <button class="minimap-toggle mv-threads-break" id="mv-threads-break" title="Break — pause the entire runtime (animators freeze).">⏸</button>
-          <button class="minimap-toggle mv-threads-continue" id="mv-threads-continue" title="Continue — resume from a break / past any current breakpoint.">▶</button>
-          <button class="minimap-toggle mv-threads-step" id="mv-threads-step" title="Step One — advance one instruction across all live threads.">⤳</button>
-          <button class="minimap-toggle mv-threads-stopall" id="mv-threads-stopall" title="Stop all running threads (animators freeze at their current pose).">⏹</button>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-scripts" title="Collapse">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-scripts" title="Close (re-open from View menu)">×</button>
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
+          <span>Runtime</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-scripts"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-scripts"
+                  title="Close this panel (re-open later from the View menu).">×</button>
+        </div>
+        <!-- Runtime-wide controls (pause / resume / step / stop-all)
+             sit in their own bar above the unit list so the header
+             stays focused on identity + chrome.  These act on the
+             whole runtime, NOT per-unit; the per-unit kill button is
+             rendered inside each unit's group header. -->
+        <div class="mv-inspector-controls">
+          <button class="mv-runtime-ctrl mv-threads-break" id="mv-threads-break"
+                  title="Pause — freeze every unit's animators + threads on this runtime.">⏸ Pause</button>
+          <button class="mv-runtime-ctrl mv-threads-continue" id="mv-threads-continue"
+                  title="Resume — un-pause the runtime and continue past any breakpoint that fired.">▶ Resume</button>
+          <button class="mv-runtime-ctrl mv-threads-step" id="mv-threads-step"
+                  title="Step — advance one fixed-rate tick (25 ms of script time) across every unit.">⤳ Step</button>
+          <button class="mv-runtime-ctrl mv-threads-stopall mv-runtime-ctrl-danger" id="mv-threads-stopall"
+                  title="Stop all threads on every unit.  Animators keep their last pose; nothing else changes.">⏹ Stop All</button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-scripts-body">
-          <div class="mv-inspector-empty">No active threads.</div>
+          <div class="mv-inspector-empty">No active threads on any unit.</div>
         </div>
       </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-actions" title="Drag to move">
+      <aside class="mv-inspector hidden" id="mv-inspector-actions" title="Drag this header to move the Actions overlay">
         <div class="mv-inspector-header" id="mv-inspector-actions-header">
-          <span class="minimap-grip">⠿</span>
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
           <span>Actions</span>
-          <button class="minimap-toggle mv-actions-reset" id="mv-actions-reset" title="Reset every piece to its original 3DO position, kill all COB threads, and zero all static vars.">↺</button>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-actions" title="Collapse">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-actions" title="Close (re-open from View menu)">×</button>
+          <button class="minimap-toggle mv-actions-reset" id="mv-actions-reset"
+                  title="Reset state — snap every piece to its original 3DO pose, kill every running thread, and zero all static vars.">↺</button>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-actions"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-actions"
+                  title="Close this panel (re-open later from the View menu).">×</button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-actions-body">
           <label class="mv-actions-filter">
@@ -510,23 +534,49 @@
           </div>
         </div>
       </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag to move">
+      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag this header to move the Static Vars overlay">
         <div class="mv-inspector-header" id="mv-inspector-staticvars-header">
-          <span class="minimap-grip">⠿</span>
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
           <span>Static Vars</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-staticvars" title="Collapse">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-staticvars" title="Close (re-open from View menu)">×</button>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-staticvars"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-staticvars"
+                  title="Close this panel (re-open later from the View menu).">×</button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-staticvars-body">
           <div class="mv-inspector-empty">No COB loaded.</div>
         </div>
       </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag to move">
+      <!-- Ports overlay — view + edit the COB unit-value ports the
+           scripts read.  Active / Move-orders / Fire-orders / Health
+           are editable; In-build-stance / Armoured are read-only.
+           Each tab gets its own panel state via the same drag/persist
+           harness as the other inspectors. -->
+      <aside class="mv-inspector hidden" id="mv-inspector-ports" title="Drag this header to move the Ports overlay">
+        <div class="mv-inspector-header" id="mv-inspector-ports-header">
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
+          <span>Ports</span>
+          <button class="minimap-toggle mv-ports-reset" id="mv-ports-reset"
+                  title="Reset every port to its default value (Active, Move=Roam, Fire=Fire-at-Will, Health 100, Build 100%).">↺</button>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-ports"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-ports"
+                  title="Close this panel (re-open later from the View menu).">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-ports-body">
+          <!-- Body is built dynamically by renderMvPortsPanel so the
+               rows stay in sync with the per-tab port state. -->
+          <div class="mv-inspector-empty">No COB loaded.</div>
+        </div>
+      </aside>
+      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag this header to move the Camera overlay">
         <div class="mv-inspector-header" id="mv-inspector-camera-header">
-          <span class="minimap-grip">⠿</span>
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
           <span>Camera</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-camera" title="Collapse">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-camera" title="Close (re-open from View menu)">×</button>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-camera"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-camera"
+                  title="Close this panel (re-open later from the View menu).">×</button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-camera-body">
           <div class="dev-stats-row"><span class="dev-stats-label">Position</span><span class="dev-stats-value" id="mv-ci-eye">—</span></div>
@@ -556,11 +606,13 @@
         <span class="minimap-grip" title="Drag to move this debugger window">⠿</span>
         <span class="mv-thread-code-title" title="Thread id and currently executing script name">Thread</span>
         <input class="mv-thread-code-search" type="search" placeholder="Search code…" autocomplete="off" spellcheck="false"
-               title="Filter both panes for lines containing this text" />
+               title="Filter both panes for lines containing this text.  Matches highlight in yellow." />
         <button class="minimap-toggle mv-thread-code-vars-side-toggle"
-                title="Collapse or expand the variables side panel (Execution/Locals/Globals/Stack)">▮</button>
+                title="Collapse or expand the variables side panel (Execution / Locals / Globals / Stack).">▮</button>
+        <button class="minimap-toggle mv-thread-code-minimize"
+                title="Minimize this debugger window to a thin header bar (click again to restore).  State preserved.">_</button>
         <button class="minimap-toggle mv-thread-code-close"
-                title="Close this debugger window">×</button>
+                title="Close this debugger window.  Re-open by clicking the thread again in the Runtime panel.">×</button>
       </div>
       <div class="mv-thread-code-body">
         <div class="mv-thread-code-source" title="Click the left gutter to toggle a breakpoint."></div>

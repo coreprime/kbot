@@ -2637,9 +2637,151 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  max-height: 260px;
+  max-height: 360px;
   overflow-y: auto;
+  /* Vertical-only user resize — drag the body's bottom-right corner
+     to grow / shrink the panel height.  The CSS spec gives no way to
+     restrict resize to a single axis without `overflow != visible`,
+     which we already have via overflow-y:auto. */
+  resize: vertical;
 }
+/* Runtime overlay — dedicated control bar above the unit list.
+   Pulls the heavy pause/step/stop buttons out of the title bar so
+   the header reads as identity + chrome, and the operations grouping
+   is visually distinct. */
+.mv-inspector-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.mv-inspector-controls .mv-runtime-ctrl {
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: var(--mono, ui-monospace, monospace);
+  cursor: pointer;
+  text-align: center;
+  transition: background 80ms ease, border-color 80ms ease, color 80ms ease;
+}
+.mv-inspector-controls .mv-runtime-ctrl:hover {
+  background: var(--bg-2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mv-inspector-controls .mv-runtime-ctrl-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.mv-inspector-controls .mv-runtime-ctrl:active { background: var(--bg-0); }
+/* Runtime overlay — per-unit grouping.  A section divider sits at
+   the top of each group; the threads (one row each) follow. */
+.mv-unit-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 4px 6px;
+  background: rgba(139, 92, 246, 0.10);
+  border: 1px solid rgba(139, 92, 246, 0.30);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.mv-unit-header:first-child { margin-top: 0; }
+.mv-unit-header-empty {
+  background: var(--bg-1);
+  border-color: var(--border);
+  color: var(--muted);
+}
+.mv-unit-header-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-unit-header-count { color: var(--muted); font-size: 9px; font-weight: 500; }
+.mv-unit-header-killall {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 11px;
+}
+.mv-unit-header-killall:hover { color: var(--danger); }
+/* Ports overlay — one row per port.  Read-only chips use .mv-port-chip,
+   editable toggles + sliders use .mv-port-control. */
+.mv-port-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 4px;
+}
+.mv-port-row > .mv-port-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.mv-port-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.mv-port-chip.yes { background: rgba(110, 231, 156, 0.20); color: #6ee79c; border: 1px solid #6ee79c; }
+.mv-port-chip.no  { background: var(--bg-2); color: var(--muted); border: 1px solid var(--border); }
+.mv-port-toggle {
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 10px;
+}
+.mv-port-toggle.on { background: rgba(110, 231, 156, 0.20); color: #6ee79c; border-color: #6ee79c; }
+.mv-port-toggle:hover { border-color: var(--accent); }
+.mv-port-choice { display: flex; gap: 2px; }
+.mv-port-choice > button {
+  flex: 1;
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.mv-port-choice > button:first-child { border-radius: 3px 0 0 3px; }
+.mv-port-choice > button:last-child  { border-radius: 0 3px 3px 0; }
+.mv-port-choice > button.active {
+  background: rgba(139, 92, 246, 0.20);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mv-port-choice > button:hover { border-color: var(--accent); }
+.mv-port-slider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mv-port-slider > input[type=range] { flex: 1; }
+.mv-port-slider > .mv-port-slider-val {
+  min-width: 38px;
+  text-align: right;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+/* Ports panel anchored on the LEFT (below the Actions panel) by
+   default so the right-edge inspector trio isn't pushed off-screen.
+   User can drag it anywhere; this only sets the first-open position. */
+#mv-inspector-ports { top: 360px; left: 12px; right: auto; max-width: 320px; min-width: 280px; }
 .mv-inspector-body .dev-stats-row {
   display: flex;
   justify-content: space-between;
@@ -2810,6 +2952,14 @@ canvas {
   -webkit-user-select: none;
 }
 .mv-thread-code-panel.hidden { display: none; }
+/* Minimised state — only the header bar shows.  Pane body + side
+   panel + resize handles all hide.  Header keeps the title + drag
+   grip + the minimize/close buttons so the user can re-expand or
+   dismiss without restoring first. */
+.mv-thread-code-panel.minimized { height: auto !important; min-height: 0; }
+.mv-thread-code-panel.minimized .mv-thread-code-body,
+.mv-thread-code-panel.minimized .mv-resize,
+.mv-thread-code-panel.minimized .mv-thread-code-search { display: none; }
 .mv-thread-code-header {
   display: flex;
   align-items: center;
@@ -2822,10 +2972,14 @@ canvas {
 .mv-thread-code-header.dragging { cursor: grabbing; }
 .mv-thread-code-header .minimap-grip { color: var(--muted); cursor: grab; }
 .mv-thread-code-title {
+  flex: 1;
   font-size: 13px;
   font-weight: 600;
   font-family: var(--mono, ui-monospace, monospace);
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .mv-thread-code-status {
   flex: 1;
@@ -2933,6 +3087,41 @@ canvas {
   padding: 0 0 0 6px;
   cursor: pointer;
 }
+/* Skeleton placeholder painted in the BOS pane while the decompile
+   fetch is in flight.  Each bar pulses with a slight stagger so the
+   pane reads as actively-loading.  Matches the BOS line height so
+   the actual source slides in without a layout jump. */
+.mv-bos-skeleton {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mv-bos-skeleton-bar {
+  height: 12px;
+  background: linear-gradient(90deg, var(--bg-2) 0%, var(--border) 50%, var(--bg-2) 100%);
+  background-size: 200% 100%;
+  border-radius: 3px;
+  animation: mv-skel-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mv-skel-pulse {
+  0%   { background-position: 100% 0; opacity: 0.5; }
+  50%  { background-position:   0% 0; opacity: 1.0; }
+  100% { background-position: 100% 0; opacity: 0.5; }
+}
+/* BOS line-number gutter — inline-block so it sits to the left of
+   the highlighted source span.  Subdued colour so the numbers don't
+   compete with the actual code. */
+.mv-thread-code-decompiled .bos-lineno {
+  display: inline-block;
+  width: 32px;
+  margin-right: 8px;
+  text-align: right;
+  color: #455a64;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.mv-thread-code-decompiled > div.bos-current .bos-lineno { color: #ffcb6b; font-weight: 600; }
 /* Function-header rows wear a fold caret + slightly heavier weight so
    the user sees them as collapsible. */
 .mv-thread-code-decompiled > div.bos-fn-header { font-weight: 600; }
@@ -2968,14 +3157,92 @@ canvas {
   background: var(--danger);
 }
 .mv-thread-code-locals-panel {
-  width: 180px;
+  width: 210px;
   border-left: 1px solid var(--border);
-  padding: 8px 10px;
+  padding: 4px;
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
   overflow-y: auto;
   background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
+/* Each side-panel section gets its own card-like background so
+   Execution / Locals / Globals / Stack read as distinct groups.
+   Subtle elevation + a label-row tint anchors each section. */
+.mv-thread-code-locals-panel .mv-section-body {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+}
+.mv-thread-code-locals-panel .mv-thread-code-locals-label {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 4px 4px 0 0;
+  padding: 4px 6px;
+  margin: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.mv-thread-code-locals-panel .mv-thread-code-locals-label:hover { color: var(--text); }
+/* Execution-section body: status rows + control buttons. */
+.mv-thread-code-execution .mv-exec-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  padding: 1px 0;
+}
+.mv-thread-code-execution .mv-exec-k {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 9px;
+}
+.mv-thread-code-execution .mv-exec-status,
+.mv-thread-code-execution .mv-exec-pc,
+.mv-thread-code-execution .mv-exec-offset {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.mv-thread-code-execution .mv-exec-status.status-sleep { color: #6ee7c1; }
+.mv-thread-code-execution .mv-exec-status.status-wait  { color: #f5b76e; }
+.mv-thread-code-execution .mv-exec-status.status-run   { color: #6ee79c; }
+.mv-thread-code-execution .mv-exec-status.status-bp    { color: var(--danger); }
+.mv-thread-code-execution .mv-exec-status.status-dead  { color: var(--muted); }
+.mv-thread-code-execution .mv-exec-controls {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.mv-thread-code-execution .mv-exec-btn {
+  flex: 1;
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.mv-thread-code-execution .mv-exec-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+.mv-thread-code-execution .mv-exec-btn:active { background: var(--bg-0); }
 .mv-thread-code-locals-label {
   font-size: 9px;
   font-weight: 600;
@@ -3011,6 +3278,7 @@ canvas {
   color: var(--muted);
   transition: transform 100ms ease;
 }
+.mv-section-body.section-hidden { display: none; }
 .mv-thread-code-locals-list.section-hidden { display: none; }
 /* Always-visible search box in the panel header.  Lights matches in
    both panes via .mv-search-match.  Sits between the status text and
@@ -3061,22 +3329,28 @@ canvas {
 .mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel > div { display: none; }
 .mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child { display: flex; }
 .mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child > span { display: none; }
-/* Resize handle — bottom-right corner.  Mouse drag updates the
-   panel's width + height inline. */
-.mv-thread-code-resize {
+/* Eight-direction resize handles (4 corners + 4 edges).  Edges are
+   thin strips along the panel sides; corners are 14×14 boxes on top.
+   Each handle has its own cursor so the user knows what will move.
+   pointer-events on the handle only — clicks elsewhere on the panel
+   stay normal. */
+.mv-resize {
   position: absolute;
-  right: 2px;
-  bottom: 2px;
-  width: 14px;
-  height: 14px;
-  cursor: nwse-resize;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
   user-select: none;
-  text-align: center;
+  z-index: 2;
 }
-.mv-thread-code-resize:hover { color: var(--accent); }
+.mv-resize-n { top: -2px;    left: 8px;    right: 8px;    height: 6px;   cursor: ns-resize; }
+.mv-resize-s { bottom: -2px; left: 8px;    right: 8px;    height: 6px;   cursor: ns-resize; }
+.mv-resize-e { right: -2px;  top: 8px;     bottom: 8px;   width: 6px;    cursor: ew-resize; }
+.mv-resize-w { left: -2px;   top: 8px;     bottom: 8px;   width: 6px;    cursor: ew-resize; }
+.mv-resize-nw { top: -2px;    left: -2px;   width: 12px;   height: 12px;  cursor: nwse-resize; }
+.mv-resize-ne { top: -2px;    right: -2px;  width: 12px;   height: 12px;  cursor: nesw-resize; }
+.mv-resize-sw { bottom: -2px; left: -2px;   width: 12px;   height: 12px;  cursor: nesw-resize; }
+.mv-resize-se {
+  bottom: 2px;  right: 2px;   width: 14px;  height: 14px;  cursor: nwse-resize;
+  color: var(--muted);  font-size: 12px;  text-align: center;  line-height: 1;
+}
+.mv-resize-se:hover { color: var(--accent); }
 /* Threads-panel debug button trio (Break / Continue / Step) — tint
    so the user discovers them as a group separate from Stop All. */
 .mv-inspector-header .mv-threads-break,
@@ -3130,17 +3404,24 @@ canvas {
   color: var(--muted);
 }
 /* Source-line rendering — each instruction on its own row.  Columns:
-   PC marker (16px) · BP dot (14px) · offset (58px) · code (1fr).
+   line-no (28px) · PC marker (16px) · BP dot (12px) · offset (52px) · code (1fr).
    PC row gets a yellow left-border + brighter background.  Hover any
    line to inspect (just a brightening). */
 .mv-code-line {
   display: grid;
-  grid-template-columns: 16px 14px 58px 1fr;
+  grid-template-columns: 28px 16px 12px 52px 1fr;
   gap: 4px;
   padding: 1px 12px 1px 4px;
   border-left: 3px solid transparent;
   white-space: pre;
 }
+.mv-code-line .mv-code-lineno {
+  color: #455a64;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+.mv-code-line.pc .mv-code-lineno { color: #ffcb6b; font-weight: 600; }
 /* PC marker — always present in column 1.  Faint ▷ hint on hover for
    non-PC lines so the user discovers click-to-set-PC; bright ▶ on
    the active line so it stands out and can be dragged. */

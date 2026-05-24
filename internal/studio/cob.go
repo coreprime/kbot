@@ -125,11 +125,24 @@ func handleCobScript(w http.ResponseWriter, r *http.Request) {
 	// disassembly above, so we DON'T error out the whole response.
 	// Surface the error as a comment in the source so the user knows
 	// why the right pane is empty.
-	if dec := decompiler.NewDecompiler(cob); dec != nil {
-		if bos, derr := dec.Decompile(); derr == nil {
-			out.Decompiled = bos
-		} else {
-			out.Decompiled = "// decompile failed: " + derr.Error()
+	//
+	// Skip the decompile entirely when ?decompile=0 (or =false /
+	// =no) is in the query string.  The studio uses that on the
+	// initial model-load fetch so the unit pops onto screen without
+	// waiting for the slow decompile pass; the debugger fetches a
+	// second time (with decompile=1) the first time it opens.
+	wantDecompile := true
+	switch strings.ToLower(r.URL.Query().Get("decompile")) {
+	case "0", "false", "no", "off":
+		wantDecompile = false
+	}
+	if wantDecompile {
+		if dec := decompiler.NewDecompiler(cob); dec != nil {
+			if bos, derr := dec.Decompile(); derr == nil {
+				out.Decompiled = bos
+			} else {
+				out.Decompiled = "// decompile failed: " + derr.Error()
+			}
 		}
 	}
 	writeJSON(w, out)

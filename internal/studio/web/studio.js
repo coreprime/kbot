@@ -732,6 +732,12 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   const outgoing = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
   const incoming = tabs[nextIdx]
 
+  // Close every open thread-debugger panel — they point at the
+  // outgoing tab's COB binding, which is either about to be
+  // replaced (switching between models) or hidden behind the map
+  // editor (switching to a map tab).  Reopening from the Threads
+  // inspector is one click.
+  closeAllMvThreadCodePanels()
   // Snapshot the outgoing MAP tab.  Model tabs hold no module-let
   // state, so the snapshot/restore dance is bypassed for them.
   if (!fresh && outgoing && outgoing.type !== 'model') snapshotActiveTabModuleLets()
@@ -11654,11 +11660,21 @@ async function activateModelTab(tab) {
       statusEl: $('#status'),
       onModelLoaded: (model, cob) => {
         renderPieceTree(model)
+        // Initial lifecycle state.  Units that ship with a Create
+        // script start in 'unborn' — every other action button is
+        // gated off until Create finishes (matches real TA, where a
+        // unit can't do anything until its Create script has built
+        // the initial pose).  Units without a Create just start
+        // 'created' so nothing is gated.
+        if (cob) cob._lifecycle = (cob.hasScript && cob.hasScript('Create')) ? 'unborn' : 'created'
         refreshCobPanel(cob)
         // The Actions inspector lists every COB entry-point — re-
         // render whenever a new unit loads so the buttons reflect
         // THIS unit's scripts (not whatever was open before).
         renderMvActionsPanel(cob)
+        // Ports panel bindings target this unit's cobPorts object;
+        // rebuild controls so they write into the right state.
+        renderMvPortsPanel(modelViewerInstance)
         // Hook the inspector refresh into the renderer's per-frame
         // callback.  Done here (not at construction) because the
         // renderer is created lazily inside ModelViewer.open(), so
@@ -11835,7 +11851,7 @@ function pieceDisplayName(piece) {
 // tail of every redraw — cheap when panels are hidden because
 // the function early-returns on each closed panel.
 
-const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars', 'mv-inspector-camera']
+const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera']
 
 function wireMvInspectors() {
   // Wire drag + collapse + close on each panel + the View menu
@@ -12075,6 +12091,13 @@ function refreshMvInspectors(dtMs = 16) {
   if (camPanel && !camPanel.classList.contains('hidden')) {
     renderMvCameraPanel(mv)
   }
+  // Ports panel — only refreshes the LIVE values (read-only chips +
+  // slider labels).  The interactive controls keep their own state
+  // via wireMvPortsPanel and aren't rebuilt every tick.
+  const portsPanel = document.getElementById('mv-inspector-ports')
+  if (portsPanel && !portsPanel.classList.contains('hidden')) {
+    refreshMvPortsLiveValues(mv)
+  }
   // Grey out action / COB-entry buttons whose script has a live
   // thread, so the user can see at a glance what's running and
   // can't double-trigger something that would jerk pieces.
@@ -12089,6 +12112,13 @@ function refreshMvInspectors(dtMs = 16) {
   }
 }
 
+// renderMvScriptsPanel renders the Runtime overlay — threads grouped
+// by the unit they belong to.  In the studio tab one unit is loaded
+// at a time so there's exactly one "Unit N" section; the grouping
+// matters once the runtime hosts multiple units (game-style sim).
+// The function keeps the historical name because every call site
+// already references it; the overlay's user-facing label is now
+// "Runtime".
 function renderMvScriptsPanel(body, cob) {
   body.replaceChildren()
   if (!cob || !cob.runtime) {
@@ -12098,32 +12128,87 @@ function renderMvScriptsPanel(body, cob) {
     body.appendChild(empty)
     return
   }
-  const live = cob.runtime._threads
-  const killed = cob.runtime._recentlyKilled || []
-  if (live.length === 0 && killed.length === 0) {
+  // Iterate the runtime's units.  Each gets its own section header
+  // + thread list + (if any) recently-killed list.  An empty runtime
+  // still shows a "no units" message rather than a blank panel so
+  // the user knows the overlay is wired correctly.
+  const units = [...cob.runtime.units()]
+  if (units.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No active scripts.'
+    empty.textContent = 'Runtime has no units loaded.'
     body.appendChild(empty)
     return
   }
-  // Render killed threads FIRST so they sit at the top while their
-  // red flash plays - draws the user's eye to which script just
-  // got cancelled.  After the CSS animation completes (~1.2s) the
-  // runtime will have evicted them from _recentlyKilled.
-  for (const k of killed) {
-    body.appendChild(renderMvThreadRow({
-      script: k.script,
-      pc: k.pc,
-      sleepMs: 0,
-      waitOn: null,
-      signalMask: k.signalMask,
-      _killedBy: k.killedBySignal,
-    }, true, null))
+  let totalShown = 0
+  for (const unit of units) {
+    const live = unit._threads
+    const killed = unit._recentlyKilled || []
+    if (live.length === 0 && killed.length === 0) {
+      // Still draw the header so the user sees the unit exists, but
+      // dim it.  Helps in multi-unit scenarios to spot "unit X is
+      // idle" without it disappearing entirely.
+      body.appendChild(buildMvUnitGroupHeader(unit, cob, /*empty*/ true))
+      continue
+    }
+    body.appendChild(buildMvUnitGroupHeader(unit, cob, /*empty*/ false))
+    // Render killed threads first so the red-flash animation sits
+    // at the top of the group while it plays.
+    for (const k of killed) {
+      body.appendChild(renderMvThreadRow({
+        script: k.script,
+        pc: k.pc,
+        sleepMs: 0,
+        waitOn: null,
+        signalMask: k.signalMask,
+        _killedBy: k.killedBySignal,
+      }, true, null))
+      totalShown++
+    }
+    for (const t of live) {
+      body.appendChild(renderMvThreadRow(t, false, cob))
+      totalShown++
+    }
   }
-  for (const t of live) {
-    body.appendChild(renderMvThreadRow(t, false, cob))
+  if (totalShown === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No active threads on any unit.'
+    body.appendChild(empty)
   }
+}
+
+// buildMvUnitGroupHeader builds a "Unit N · <scriptOriginName>"
+// section divider for the Runtime overlay.  Click → kill every
+// thread on this unit (handy in multi-unit sims).  When `empty`
+// the header renders muted to indicate the unit has no live work.
+function buildMvUnitGroupHeader(unit, cob, empty) {
+  const hdr = document.createElement('div')
+  hdr.className = empty ? 'mv-unit-header mv-unit-header-empty' : 'mv-unit-header'
+  const name = unit.name || unit.scriptOriginName || ''
+  const label = document.createElement('span')
+  label.className = 'mv-unit-header-label'
+  label.textContent = name ? `Unit ${unit.id} · ${name}` : `Unit ${unit.id}`
+  hdr.appendChild(label)
+  const count = document.createElement('span')
+  count.className = 'mv-unit-header-count'
+  const n = unit._threads.length
+  count.textContent = n === 0 ? 'idle' : `${n} thread${n === 1 ? '' : 's'}`
+  hdr.appendChild(count)
+  // Per-unit kill-all button.  Stops every thread in this unit only
+  // — leaves any other unit's threads alone.  Visible even when the
+  // unit is idle because the user might want to clear stale state.
+  const killBtn = document.createElement('button')
+  killBtn.className = 'mv-unit-header-killall'
+  killBtn.textContent = '⏹'
+  killBtn.title = `Stop every running thread on Unit ${unit.id}.  Animators keep their last pose.`
+  killBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    unit.killAllThreads()
+  })
+  hdr.appendChild(killBtn)
+  void cob
+  return hdr
 }
 
 // renderMvThreadRow builds one row for the scripts overlay.
@@ -12261,7 +12346,13 @@ function openMvThreadCodeModal(cob, thread) {
   const cascade = (slot % 8) * 30
   node.style.left = (360 + cascade) + 'px'
   node.style.top = (120 + cascade) + 'px'
-  document.body.appendChild(node)
+  // Mount inside the model viewer dialog so the panel inherits its
+  // display:none when the user switches to a non-model tab — without
+  // this, fixed-position panels stayed pinned to the viewport across
+  // map tabs.  Falls back to document.body if the dialog isn't
+  // rendered yet (defensive — shouldn't happen in normal use).
+  const host = document.getElementById('model-viewer-dialog') || document.body
+  host.appendChild(node)
   // AbortController scopes the panel's window-level drag/resize
   // listeners so closing one debugger cleanly removes its handlers
   // (rather than leaking one set per ever-opened panel).
@@ -12295,6 +12386,13 @@ function closeMvThreadCodeModal(state) {
   state.abort?.abort()
   state.panel.remove()
   _mvThreadCodePanels.delete(state.threadId)
+}
+
+// closeAllMvThreadCodePanels tears down every open debugger panel.
+// Called on tab switch so a debugger opened in tab A isn't left
+// pointing at tab A's now-stale runtime once tab B becomes active.
+function closeAllMvThreadCodePanels() {
+  for (const state of [..._mvThreadCodePanels.values()]) closeMvThreadCodeModal(state)
 }
 
 // wireMvThreadCodeChrome attaches per-panel handlers — close, pause,
@@ -12359,7 +12457,11 @@ function wireMvThreadCodeChrome(state) {
     let dragOff = null
     header.addEventListener('mousedown', (e) => {
       bringMvThreadCodePanelToFront(state)
-      if (e.target.closest('button')) return  // chrome buttons aren't drag handles
+      // Don't claim mousedown when the user is interacting with a
+      // form control or a chrome button.  Calling preventDefault on
+      // an input mousedown would block focus, which is exactly why
+      // the search box stopped accepting typing.
+      if (e.target.closest('button, input, select, textarea')) return
       e.preventDefault()
       const r = panel.getBoundingClientRect()
       dragOff = { dx: e.clientX - r.left, dy: e.clientY - r.top }
@@ -12378,25 +12480,60 @@ function wireMvThreadCodeChrome(state) {
       header.classList.remove('dragging')
     }, { signal: sig })
   }
-  // Resize handle — bottom-right corner.  Writes inline width / height
-  // on mousemove so the panel re-measures (and the source pane can
-  // scroll within the new height).
-  const resize = panel.querySelector('.mv-thread-code-resize')
-  if (resize) {
-    let rzStart = null
-    resize.addEventListener('mousedown', (e) => {
+  // Eight-direction resize: corners + edges.  Each handle's
+  // data-resize encodes which sides the drag moves (n/s/e/w).
+  // We capture the starting rect + pointer then apply per-side
+  // deltas, clamping to a sensible minimum so the panel can't
+  // collapse to nothing.
+  let rzStart = null
+  for (const handle of panel.querySelectorAll('.mv-resize')) {
+    handle.addEventListener('mousedown', (e) => {
       e.preventDefault(); e.stopPropagation()
       const r = panel.getBoundingClientRect()
-      rzStart = { x: e.clientX, y: e.clientY, w: r.width, h: r.height }
+      rzStart = {
+        dir: handle.dataset.resize || 'se',
+        x: e.clientX, y: e.clientY,
+        left: r.left, top: r.top, w: r.width, h: r.height,
+      }
     })
-    window.addEventListener('mousemove', (e) => {
-      if (!rzStart) return
-      const w = Math.max(380, rzStart.w + (e.clientX - rzStart.x))
-      const h = Math.max(220, rzStart.h + (e.clientY - rzStart.y))
-      panel.style.width = w + 'px'
-      panel.style.height = h + 'px'
-    }, { signal: sig })
-    window.addEventListener('mouseup', () => { rzStart = null }, { signal: sig })
+  }
+  window.addEventListener('mousemove', (e) => {
+    if (!rzStart) return
+    const dx = e.clientX - rzStart.x
+    const dy = e.clientY - rzStart.y
+    const minW = 380, minH = 220
+    let { left, top, w, h } = rzStart
+    if (rzStart.dir.includes('e')) w = Math.max(minW, rzStart.w + dx)
+    if (rzStart.dir.includes('s')) h = Math.max(minH, rzStart.h + dy)
+    if (rzStart.dir.includes('w')) {
+      const newW = Math.max(minW, rzStart.w - dx)
+      left = rzStart.left + (rzStart.w - newW)
+      w = newW
+    }
+    if (rzStart.dir.includes('n')) {
+      const newH = Math.max(minH, rzStart.h - dy)
+      top = rzStart.top + (rzStart.h - newH)
+      h = newH
+    }
+    panel.style.width = w + 'px'
+    panel.style.height = h + 'px'
+    if (rzStart.dir.includes('w')) panel.style.left = left + 'px'
+    if (rzStart.dir.includes('n')) panel.style.top = top + 'px'
+  }, { signal: sig })
+  window.addEventListener('mouseup', () => { rzStart = null }, { signal: sig })
+  // Minimize toggle — temporarily hides everything but the header.
+  // Useful when the user wants the unit visible behind without
+  // closing + reopening (which would lose hover/scroll state).
+  const minBtn = panel.querySelector('.mv-thread-code-minimize')
+  if (minBtn) {
+    minBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const minimized = panel.classList.toggle('minimized')
+      minBtn.textContent = minimized ? '▢' : '_'
+      minBtn.title = minimized
+        ? 'Restore this debugger window to its previous size.'
+        : 'Minimize this debugger window to a thin header bar (click again to restore).  State preserved.'
+    })
   }
   // Variables-panel collapse toggle (now in the header).
   const varsSideToggle = panel.querySelector('.mv-thread-code-vars-side-toggle')
@@ -12589,10 +12726,15 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   line.dataset.offset = String(ins.offset >>> 0)
   line.dataset.script = scriptLower
   if (cob.runtime.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
-  // PC marker column (leftmost).  Empty by default; shows ▶ when the
-  // line is the current PC and is draggable to set t.pc to another
-  // line.  pointer-events on the marker itself (not the line) so
-  // clicking elsewhere on the line stays a no-op.
+  // Line-number column (leftmost).  1-based, scoped to the script
+  // section so each .script restarts at 1.  Tabular numerics keep
+  // the gutter from wobbling as the digit count changes.
+  const lineNo = document.createElement('span')
+  lineNo.className = 'mv-code-lineno'
+  lineNo.textContent = String(i + 1)
+  line.appendChild(lineNo)
+  // PC marker column.  Empty by default; shows ▶ when the line is
+  // the current PC and is draggable to set t.pc to another line.
   const pcCol = document.createElement('span')
   pcCol.className = 'mv-code-pc-marker'
   pcCol.title = 'Drag to move the program counter to another line.'
@@ -12745,20 +12887,35 @@ function refreshMvThreadCodeHighlight(state) {
   if (!state) return
   const panel = state.panel
   const thread = state.cob.runtime._threads.find((t) => t.id === state.threadId && !t.dead)
-  const status = panel.querySelector('.mv-thread-code-status')
-  // Sync the pause icon to the runtime's actual state — covers the
+  const statusEl = panel.querySelector('.mv-exec-status')
+  const pcEl = panel.querySelector('.mv-exec-pc')
+  const offsetEl = panel.querySelector('.mv-exec-offset')
+  // Helper that picks the colour class for the status text from a
+  // short string key (run/sleep/wait/bp/dead) so the user reads the
+  // execution state at a glance.
+  const setStatus = (text, cls) => {
+    if (!statusEl) return
+    statusEl.textContent = text
+    statusEl.classList.remove('status-run', 'status-sleep', 'status-wait', 'status-bp', 'status-dead')
+    if (cls) statusEl.classList.add(cls)
+  }
+  // Sync the pause label to the runtime's actual state — covers the
   // case where a breakpoint auto-pauses the runtime (the button
-  // wasn't clicked, but the icon needs to flip to ▶).
+  // wasn't clicked, but the label needs to flip to "▶ Resume").
   const pauseBtn = panel.querySelector('.mv-thread-code-pause')
   if (pauseBtn) {
-    const wantTxt = state.cob.runtime.paused ? '▶' : '⏸'
+    const wantTxt = state.cob.runtime.paused ? '▶ Resume' : '⏸ Pause'
     if (pauseBtn.textContent !== wantTxt) {
       pauseBtn.textContent = wantTxt
-      pauseBtn.title = state.cob.runtime.paused ? 'Resume the runtime.' : 'Pause / resume the entire runtime.'
+      pauseBtn.title = state.cob.runtime.paused
+        ? 'Resume the runtime — all threads and animators resume ticking.'
+        : 'Pause or resume the entire COB runtime — animators and all threads freeze.'
     }
   }
   if (!thread) {
-    if (status) status.textContent = 'Thread terminated.'
+    setStatus('terminated', 'status-dead')
+    if (pcEl) pcEl.textContent = '—'
+    if (offsetEl) offsetEl.textContent = '—'
     // Clear PC highlight when thread dies.
     for (const el of panel.querySelectorAll('.mv-thread-code-source .mv-code-line.pc')) el.classList.remove('pc')
     renderMvThreadCodeLocals(state, null)
@@ -12773,12 +12930,25 @@ function refreshMvThreadCodeHighlight(state) {
     const title = panel.querySelector('.mv-thread-code-title')
     if (title) title.textContent = `Thread #${thread.id} · ${thread.script.name}`
   }
-  // Status line — sleep / wait / running.
-  if (status) {
-    if (thread.sleepMs > 0) status.textContent = `Sleeping ${Math.round(thread.sleepMs)}ms · pc=${thread.pc}`
-    else if (thread.waitOn) status.textContent = `Waiting for ${thread.waitOn.type} · pc=${thread.pc}`
-    else status.textContent = `Running · pc=${thread.pc}`
+  // Status row — sleep / wait / running / BP-paused (auto-pause).
+  // The runtime-wide `paused` flag set by a BP hit takes priority so
+  // the user knows execution stopped because of a breakpoint, not a
+  // sleep timer.
+  if (state.cob.runtime.paused && thread.breakpointHit) {
+    setStatus('paused at breakpoint', 'status-bp')
+  } else if (thread.sleepMs > 0) {
+    setStatus(`sleeping ${Math.round(thread.sleepMs)} ms`, 'status-sleep')
+  } else if (thread.waitOn) {
+    setStatus(`waiting for ${thread.waitOn.type}`, 'status-wait')
+  } else {
+    setStatus(state.cob.runtime.paused ? 'paused' : 'running',
+              state.cob.runtime.paused ? 'status-dead' : 'status-run')
   }
+  // PC row — instruction index + offset.  Offset reads from the
+  // current instruction (or `—` past end of script).
+  const ins = thread.script.instructions[thread.pc]
+  if (pcEl) pcEl.textContent = `#${thread.pc}`
+  if (offsetEl) offsetEl.textContent = ins ? ('0x' + (ins.offset >>> 0).toString(16).padStart(4, '0')) : '—'
   // Update PC class on lines — scoped by data-script so the same idx
   // in two different scripts doesn't both light up.
   let prevPc = null
@@ -13077,24 +13247,40 @@ function renderMvThreadCodeDecompiled(state, cob) {
   pane.replaceChildren()
   const src = cob.runtime.decompiled || cob.runtime._decompiledSource
   if (!src) {
-    // Either the server hasn't provided it (older cob.go) or the
-    // decompiler bailed.  Try fetching now and cache on the runtime.
+    // Decompile isn't loaded yet (model-load fetch used
+    // ?decompile=0 to skip the slow pass).  Kick off a one-shot
+    // fetch, show a skeleton while it runs, and re-enter on success.
+    // _decompileFetchInFlight guards against double-fetch when
+    // multiple debugger panels open while one fetch is still in
+    // flight.
     const name = cob.runtime.scriptOriginName || cob.runtime.name || (modelViewerInstance?.model?.name)
     if (!name) {
       pane.textContent = '// decompile unavailable'
       return
     }
-    fetch(`/api/studio/cob/${encodeURIComponent(name)}`)
-      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((json) => {
-        cob.runtime._decompiledSource = json.decompiled || '// decompile failed'
-        // Bust cached map so it rebuilds against the fetched source.
-        cob.runtime._bosMap = null
-        cob.runtime._asmToBos = null
-        renderMvThreadCodeDecompiled(state, cob)
-      })
-      .catch((err) => { pane.textContent = `// decompile fetch failed: ${err.message}` })
-    pane.textContent = '// loading…'
+    renderMvBosSkeleton(pane)
+    if (!cob.runtime._decompileFetchInFlight) {
+      cob.runtime._decompileFetchInFlight = fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=1`)
+        .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+        .then((json) => {
+          cob.runtime._decompiledSource = json.decompiled || '// decompile failed'
+          // Bust cached map so it rebuilds against the fetched source.
+          cob.runtime._bosMap = null
+          cob.runtime._asmToBos = null
+        })
+        .catch((err) => { cob.runtime._decompiledSource = `// decompile fetch failed: ${err.message}` })
+        .finally(() => { cob.runtime._decompileFetchInFlight = null })
+    }
+    // Re-enter once the fetch settles.  Use the shared promise so
+    // every open panel waits on the same fetch.
+    cob.runtime._decompileFetchInFlight.then(() => {
+      // Re-render every open panel that's pointing at this same cob —
+      // when the fetch lands, every debugger's BOS pane needs to
+      // refresh from the now-cached source.
+      for (const s of _mvThreadCodePanels.values()) {
+        if (s.cob === cob) renderMvThreadCodeDecompiled(s, cob)
+      }
+    })
     return
   }
   buildMvBosMap(cob)
@@ -13111,6 +13297,13 @@ function renderMvThreadCodeDecompiled(state, cob) {
     const ln = lines[i]
     const div = document.createElement('div')
     div.dataset.line = String(i)
+    // Line-number gutter — 1-based, matches what most editors show.
+    // Lives outside the syntax-highlighted span so it doesn't get
+    // selected when the user copies a chunk of source.
+    const lineNo = document.createElement('span')
+    lineNo.className = 'bos-lineno'
+    lineNo.textContent = String(i + 1)
+    div.appendChild(lineNo)
     const m = ln.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
     if (m && !NOT_A_FN.has(m[1].toLowerCase())) {
       div.dataset.fn = m[1].toLowerCase()
@@ -13174,6 +13367,33 @@ function renderMvThreadCodeDecompiled(state, cob) {
   // waiting on the decompile fetch, so don't rely on the next refresh
   // tick to bring them in.
   requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
+}
+
+// renderMvBosSkeleton paints a placeholder "loading…" pattern in
+// the BOS pane while the decompile fetch is in flight.  Each row is
+// a pulsing rectangle of varying width so the pane reads as "code
+// is incoming" rather than "panel is broken".  Cheap — replaced
+// once the fetch resolves and the real source renders.
+function renderMvBosSkeleton(pane) {
+  pane.replaceChildren()
+  const wrap = document.createElement('div')
+  wrap.className = 'mv-bos-skeleton'
+  // Repeated pattern of bar widths so it looks like indented code
+  // (function headers + bodies).  Repeats give the user enough
+  // visual context to recognise it's a code skeleton.
+  const widths = [
+    '38%','82%','64%','55%','70%','38%','58%','46%','42%','62%',
+    '34%','78%','60%','52%','68%','42%','64%','48%','40%','58%',
+  ]
+  for (let i = 0; i < widths.length; i++) {
+    const bar = document.createElement('div')
+    bar.className = 'mv-bos-skeleton-bar'
+    bar.style.width = widths[i]
+    bar.style.marginLeft = (i % 4 === 0) ? '0' : ((i % 4) * 8 + 'px')
+    bar.style.animationDelay = (i * 60) + 'ms'
+    wrap.appendChild(bar)
+  }
+  pane.appendChild(wrap)
 }
 
 // applyMvThreadCodeCrossHover sets `.cross-hover` on the asm lines
@@ -13754,6 +13974,212 @@ function renderMvCameraPanel(mv) {
   else set('mv-ci-fov', '—')
 }
 
+// renderMvPortsPanel builds the Ports overlay body.  Called once on
+// a new model load (so the controls bind to the new cobPorts object)
+// and on Reset, NOT every refresh tick — the live-only values
+// (health %, build %, chips) are patched by refreshMvPortsLiveValues
+// without rebuilding the controls.  Editing a control writes back
+// into mv.cobPorts (or mv.cobDamage / mv.cobBuildPercent for the
+// two values the COB ribbon's Unit Attributes also drives) so the
+// scripts pick up the new value on their next `get <port>`.
+function renderMvPortsPanel(mv) {
+  wireMvPortsPanel()
+  const body = document.getElementById('mv-inspector-ports-body')
+  if (!body) return
+  body.replaceChildren()
+  if (!mv || !mv.cob) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No COB loaded.'
+    body.appendChild(empty)
+    return
+  }
+  const ports = mv.cobPorts
+  body.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
+    'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
+    (on) => { ports.activation = on ? 1 : 0 }))
+  body.appendChild(buildPortChoiceRow('Move orders', 'moveOrders', ports.moveOrders,
+    [['Hold', 0, 'Hold Position — never leave the spot'],
+     ['Maneuver', 1, 'Maneuver — move only to gain line of sight'],
+     ['Roam', 2, 'Roam — chase enemies freely (default)']],
+    'GET STANDINGMOVEORDERS — patrol AI scripts read this to decide whether to step toward an enemy.',
+    (v) => { ports.moveOrders = v }))
+  body.appendChild(buildPortChoiceRow('Fire orders', 'fireOrders', ports.fireOrders,
+    [['Hold', 0, 'Hold Fire — never engage'],
+     ['Return', 1, 'Return Fire — only shoot back when attacked'],
+     ['Fire at will', 2, 'Fire at Will — engage anything in range (default)']],
+    'GET STANDINGFIREORDERS — weapon scripts read this to gate Fire* threads.',
+    (v) => { ports.fireOrders = v }))
+  body.appendChild(buildPortSliderRow('Health', 'health',
+    Math.max(0, 100 - (mv.cobDamage | 0)), 0, 100, '%',
+    'GET HEALTH returns this 0–100 value.  Drives SmokeUnit + damage-state scripts.  Synced with the COB ribbon\'s Damage slider.',
+    (v) => {
+      mv.cobDamage = Math.max(0, Math.min(100, 100 - v))
+      mvSyncCobAttrSlidersFromPorts(mv)
+    }))
+  body.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
+    'GET INBUILDSTANCE — set by factory scripts via SET_VALUE while assembling a unit.  Read-only here; toggled by the running script.'))
+  body.appendChild(buildPortSliderRow('Build % left', 'buildPercentLeft',
+    Math.max(0, 100 - (mv.cobBuildPercent | 0)), 0, 100, '%',
+    'GET BUILD_PERCENT_LEFT — 100 means nothing built yet, 0 means fully built.  Synced with the COB ribbon\'s Build slider.',
+    (v) => {
+      mv.cobBuildPercent = Math.max(0, Math.min(100, 100 - v))
+      mvSyncCobAttrSlidersFromPorts(mv)
+    }))
+  body.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
+    'GET ARMORED returns 1 when the unit\'s armour plating is engaged.  Read-only here; flipped by damage scripts via SET_VALUE.'))
+}
+
+// refreshMvPortsLiveValues updates the value-only widgets (read-only
+// chips + slider labels) without rebuilding the row controls.  Called
+// every inspector tick so scripts that call SET_VALUE (factories
+// flipping IN_BUILD_STANCE, for instance) reflect on the panel live.
+function refreshMvPortsLiveValues(mv) {
+  const body = document.getElementById('mv-inspector-ports-body')
+  if (!body || !mv?.cob) return
+  const ports = mv.cobPorts
+  const setChip = (key, on) => {
+    const chip = body.querySelector(`[data-port="${key}"] .mv-port-chip`)
+    if (!chip) return
+    chip.textContent = on ? 'Yes' : 'No'
+    chip.classList.toggle('yes', on)
+    chip.classList.toggle('no', !on)
+  }
+  setChip('inBuildStance', ports.inBuildStance === 1)
+  setChip('armoured', ports.armoured === 1)
+  // Health + build sliders reflect script-driven changes too (a
+  // damage script could SET_VALUE HEALTH).  Skip when the user is
+  // mid-drag to avoid yanking the thumb.
+  const syncSlider = (key, current) => {
+    const row = body.querySelector(`[data-port="${key}"]`)
+    if (!row) return
+    const input = row.querySelector('input[type=range]')
+    const valEl = row.querySelector('.mv-port-slider-val')
+    if (input && document.activeElement !== input && parseInt(input.value, 10) !== current) {
+      input.value = String(current)
+    }
+    if (valEl) valEl.textContent = `${current}%`
+  }
+  syncSlider('health', Math.max(0, 100 - (mv.cobDamage | 0)))
+  syncSlider('buildPercentLeft', Math.max(0, 100 - (mv.cobBuildPercent | 0)))
+  // Active toggle reflects state changes too.
+  const actBtn = body.querySelector('[data-port="activation"] .mv-port-toggle')
+  if (actBtn) {
+    const on = ports.activation === 1
+    actBtn.textContent = on ? 'On' : 'Off'
+    actBtn.classList.toggle('on', on)
+  }
+  // Move/Fire choice rows: highlight the active selection.
+  for (const key of ['moveOrders', 'fireOrders']) {
+    const cur = ports[key]
+    for (const b of body.querySelectorAll(`[data-port="${key}"] .mv-port-choice > button`)) {
+      const isActive = parseInt(b.dataset.value, 10) === cur
+      b.classList.toggle('active', isActive)
+    }
+  }
+}
+
+// ── Ports panel — row builders ────────────────────────────────────
+
+function buildPortRowShell(label, portKey) {
+  const row = document.createElement('div')
+  row.className = 'mv-port-row'
+  row.dataset.port = portKey
+  const lbl = document.createElement('span')
+  lbl.className = 'mv-port-label'
+  lbl.textContent = label
+  row.appendChild(lbl)
+  return row
+}
+
+function buildPortToggleRow(label, portKey, initialOn, tip, onChange) {
+  const row = buildPortRowShell(label, portKey)
+  const btn = document.createElement('button')
+  btn.className = initialOn ? 'mv-port-toggle on' : 'mv-port-toggle'
+  btn.textContent = initialOn ? 'On' : 'Off'
+  btn.title = tip
+  btn.addEventListener('click', () => {
+    const wantOn = !btn.classList.contains('on')
+    btn.classList.toggle('on', wantOn)
+    btn.textContent = wantOn ? 'On' : 'Off'
+    onChange(wantOn)
+  })
+  row.appendChild(btn)
+  return row
+}
+
+function buildPortChipRow(label, portKey, isYes, tip) {
+  const row = buildPortRowShell(label, portKey)
+  const chip = document.createElement('span')
+  chip.className = isYes ? 'mv-port-chip yes' : 'mv-port-chip no'
+  chip.textContent = isYes ? 'Yes' : 'No'
+  if (tip) chip.title = tip
+  row.appendChild(chip)
+  return row
+}
+
+function buildPortChoiceRow(label, portKey, current, options, tip, onChange) {
+  const row = buildPortRowShell(label, portKey)
+  const wrap = document.createElement('div')
+  wrap.className = 'mv-port-choice'
+  if (tip) wrap.title = tip
+  for (const [name, value, optTip] of options) {
+    const btn = document.createElement('button')
+    btn.textContent = name
+    btn.dataset.value = String(value)
+    btn.title = optTip || `Set ${label.toLowerCase()} to ${name}`
+    if (value === current) btn.classList.add('active')
+    btn.addEventListener('click', () => {
+      for (const sib of wrap.children) sib.classList.remove('active')
+      btn.classList.add('active')
+      onChange(value)
+    })
+    wrap.appendChild(btn)
+  }
+  row.appendChild(wrap)
+  return row
+}
+
+function buildPortSliderRow(label, portKey, current, min, max, unit, tip, onInput) {
+  const row = buildPortRowShell(label, portKey)
+  const wrap = document.createElement('div')
+  wrap.className = 'mv-port-slider'
+  const input = document.createElement('input')
+  input.type = 'range'
+  input.min = String(min); input.max = String(max)
+  input.value = String(current)
+  if (tip) input.title = tip
+  const val = document.createElement('span')
+  val.className = 'mv-port-slider-val'
+  val.textContent = `${current}${unit}`
+  input.addEventListener('input', () => {
+    const v = parseInt(input.value, 10) | 0
+    val.textContent = `${v}${unit}`
+    onInput(v)
+  })
+  wrap.appendChild(input)
+  wrap.appendChild(val)
+  row.appendChild(wrap)
+  return row
+}
+
+// mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
+// (which the Ports panel edits) back into the COB ribbon's Unit
+// Attributes sliders + their value labels.  The reverse direction
+// (ribbon slider → ports panel) is handled by refreshMvPortsLiveValues
+// which reads the same source-of-truth values.
+function mvSyncCobAttrSlidersFromPorts(mv) {
+  if (!mv) return
+  const dmg = document.getElementById('mv-cob-damage')
+  const dmgVal = document.getElementById('mv-cob-damage-val')
+  if (dmg) dmg.value = String(mv.cobDamage | 0)
+  if (dmgVal) dmgVal.textContent = `${mv.cobDamage | 0}%`
+  const build = document.getElementById('mv-cob-build')
+  const buildVal = document.getElementById('mv-cob-build-val')
+  if (build) build.value = String(mv.cobBuildPercent | 0)
+  if (buildVal) buildVal.textContent = `${mv.cobBuildPercent | 0}%`
+}
+
 // renderMvActionsPanel rebuilds the Actions inspector's button list
 // from the currently-loaded COB.  Re-run when:
 //   1) a new model loads (onModelLoaded hook in activateModelTab),
@@ -13829,23 +14255,49 @@ function renderMvActionsPanel(cob) {
 // button DOM (which would interfere with the hover state mid-click).
 function syncMvActionsRunning(cob) {
   if (!cob) return
+  // Promote 'creating' → 'created' once the Create thread has died.
+  // Cheap: just check if Create still has a live thread; if not,
+  // Create has completed.
+  if (cob._lifecycle === 'creating' && !isCobScriptRunning(cob, 'Create')) {
+    cob._lifecycle = 'created'
+  }
+  const gated = cob._lifecycle === 'unborn' || cob._lifecycle === 'creating'
   for (const btn of document.querySelectorAll('#mv-actions-list .mv-actions-btn')) {
     const name = btn.dataset.script
     if (!name) continue
     const running = isCobScriptRunning(cob, name)
-    if (btn.disabled !== running) {
-      btn.disabled = running
-      btn.title = running ? `${name} is already running` : `Run ${name}`
-    }
+    const blockedByCreate = gated && !/^Create$/i.test(name)
+    const disabled = running || blockedByCreate
+    if (btn.disabled !== disabled) btn.disabled = disabled
+    btn.title = running
+      ? `${name} is already running`
+      : blockedByCreate
+        ? `Run Create first — it must finish before other scripts can fire`
+        : `Run ${name}`
   }
 }
 function syncCobRibbonRunning(cob) {
   if (!cob) return
-  for (const btn of document.querySelectorAll('.cob-entry')) {
-    const name = btn.dataset.cobEntry
+  const gated = cob._lifecycle === 'unborn' || cob._lifecycle === 'creating'
+  // Static entry-point buttons in the ribbon (Activate / Deactivate /
+  // Fire* etc.) carry data-cob-entry; the dynamic "All scripts" list
+  // below uses data-cob-script.  Both render disabled while the
+  // matching script has a live thread so the user can't pile on a
+  // second invocation of a script that's mid-flight, AND while the
+  // unit is still pre-Create so the user only triggers Create first.
+  const sel = '.cob-entry, .cob-row[data-cob-script]'
+  for (const btn of document.querySelectorAll(sel)) {
+    const name = btn.dataset.cobEntry || btn.dataset.cobScript
     if (!name || !cob.hasScript(name)) continue
     const running = isCobScriptRunning(cob, name)
-    if (btn.disabled !== running) btn.disabled = running
+    const blockedByCreate = gated && !/^Create$/i.test(name)
+    const disabled = running || blockedByCreate
+    if (btn.disabled !== disabled) btn.disabled = disabled
+    btn.title = running
+      ? `${name} is already running`
+      : blockedByCreate
+        ? `Run Create first — it must finish before other scripts can fire`
+        : `Run ${name}`
   }
 }
 
@@ -13864,6 +14316,35 @@ function wireMvActionsPanel() {
   // drag handler or outside-click dismissers and feels jumpy.
   cb.addEventListener('click', (e) => e.stopPropagation())
   cb.addEventListener('pointerdown', (e) => e.stopPropagation())
+}
+
+// wireMvPortsPanel attaches the one-shot handlers for the Ports
+// overlay's chrome (Reset button).  The per-row controls are wired
+// at render time by buildPort*Row.  Idempotent via dataset.wired.
+function wireMvPortsPanel() {
+  const portsReset = document.getElementById('mv-ports-reset')
+  if (!portsReset || portsReset.dataset.wired === '1') return
+  portsReset.dataset.wired = '1'
+  portsReset.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const mv = modelViewerInstance
+    if (!mv) return
+    // Restore defaults — matches the cobPorts initial values from
+    // the ModelViewer constructor.
+    mv.cobPorts = {
+      activation: 1,
+      moveOrders: 2,
+      fireOrders: 2,
+      inBuildStance: 0,
+      armoured: 0,
+      yardOpen: 0,
+      buggerOff: 0,
+    }
+    mv.cobDamage = 0
+    mv.cobBuildPercent = 100
+    mvSyncCobAttrSlidersFromPorts(mv)
+    renderMvPortsPanel(mv)
+  })
 }
 
 // wireCobAttributeSliders is idempotent — safe to call on every
@@ -13985,6 +14466,13 @@ function refreshCobPanel(cob) {
     row.className = 'cob-row'
     row.textContent = name
     row.title = `Run ${name} (one-shot)`
+    // dataset.cobScript lets syncCobRibbonRunning find the script
+    // name without scraping textContent (which would include any
+    // future decoration we add to the label).
+    row.dataset.cobScript = name
+    const running = isCobScriptRunning(cob, name)
+    row.disabled = running
+    if (running) row.title = `${name} is already running`
     row.onclick = (e) => { e.stopPropagation(); runCobEntry(cob, name) }
     list.appendChild(row)
   }
@@ -14022,6 +14510,17 @@ function runCobEntry(cob, name) {
   // at their target.  For long-running loops (SmokeUnit, MotionControl)
   // this also prevents stacking N threads from N clicks.
   if (isCobScriptRunning(cob, name)) return
+  // Create-only gate: while the unit hasn't finished its Create
+  // script (state 'unborn' = never started, 'creating' = Create
+  // thread is mid-flight), suppress every other action.  Real TA
+  // does the same — a freshly-built unit only responds to its own
+  // initialisation script.  Once Create completes (handled by the
+  // 4 Hz tick below) every button unlocks.
+  const lifecycle = cob._lifecycle || 'created'
+  if ((lifecycle === 'unborn' || lifecycle === 'creating') && !/^Create$/i.test(name)) return
+  // Starting Create flips the lifecycle into 'creating' so the
+  // other buttons stay disabled while the script runs.
+  if (/^Create$/i.test(name)) cob._lifecycle = 'creating'
   // Lifecycle-state skip: when the user clicks Activate but the
   // unit is already in the activated state (and the script has
   // FINISHED its prior run), redundantly re-running activatescr
