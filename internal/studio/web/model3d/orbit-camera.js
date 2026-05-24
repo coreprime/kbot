@@ -81,6 +81,41 @@ export class OrbitCamera {
     this.target[2] -= (rz * dx - uz * dy) * speed
   }
 
+  // panAlongGround moves the camera target across the ground plane
+  // (y constant) using the camera's HEADING — the camera's forward
+  // direction projected to the ground.  Unlike panBy, this ignores
+  // pitch, so a top-down view doesn't make "forward" collapse to
+  // zero.  Used for ctrl-drag in the viewer: drag-down advances the
+  // camera in its facing direction (camera looks north → drag down
+  // goes north), drag-right strafes east relative to facing.
+  panAlongGround(dx, dy) {
+    // Speed scales with distance so the pan rate matches the visible
+    // scene scale at any zoom level.
+    const speed = this.distance * 0.0025
+    const yaw = this.yaw
+    const sinY = Math.sin(yaw)
+    const cosY = Math.cos(yaw)
+    // Camera's ground-projected forward (look-at direction with
+    // y-component dropped + renormalised on XZ).  Looking north (yaw
+    // such that -cosY is the dominant component) the forward vector
+    // points +Z... actually with the renderer's convention
+    // (target.x = target + dist*sinY, target.z = target + dist*cosY)
+    // the camera sits at (+sinY, +cosY) relative to target, so the
+    // camera-to-target vector is (-sinY, 0, -cosY).  Drag-down (dy>0)
+    // should advance the camera, so we move the TARGET further along
+    // that forward direction (target moves away, camera follows).
+    const fx = -sinY
+    const fz = -cosY
+    // Ground-plane right = forward × world-up (-Y handedness fix).
+    // For forward (-sinY, 0, -cosY) and up (0,1,0): right is
+    // (-cosY, 0, sinY).  Drag-right (dx>0) strafes camera east of
+    // facing → target moves in -right direction.
+    const rx = -cosY
+    const rz =  sinY
+    this.target[0] += (fx * dy - rx * dx) * speed
+    this.target[2] += (fz * dy - rz * dx) * speed
+  }
+
   updateMatrices(aspect, near, far) {
     Mat4.perspective(this.projMatrix, this.fov, aspect, near, far)
     const cosP = Math.cos(this.pitch), sinP = Math.sin(this.pitch)

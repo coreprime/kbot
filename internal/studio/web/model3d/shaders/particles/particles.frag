@@ -15,5 +15,9 @@ void main() {
   // to zero alpha.
   if (r > 0.5) discard;
   float alpha = vColor.a * (1.0 - r * 2.0) * (1.0 - r * 2.0);
-  gl_FragColor = vec4(vColor.rgb, alpha);
+  // Premultiply rgb by alpha so the renderer can use additive blend
+  // (gl.ONE, gl.ONE) without smoke puffs occluding lasers behind
+  // them.  Soft falloff at the edge still reads as a circular blob
+  // because the modulated alpha attenuates the colour smoothly.
+  gl_FragColor = vec4(vColor.rgb * alpha, alpha);
 }

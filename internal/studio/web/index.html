@@ -87,6 +87,33 @@
     </div>
   </div>
 
+  <!-- Weapon picker dialog.  Same .dialog-card-xwide chrome the Open
+       Unit picker uses.  The list pulls /api/studio/weapons (every TDF
+       section in the loaded VFS) and rows show the same key stats the
+       active Weapons panel surfaces — range, velocity, reload, plus
+       a colour swatch and the beam / smoke / cmd-fire chips.  The
+       weapon name (uppercased TDF section key) is used as both the
+       row label and the override value sent back when Apply is
+       clicked.  The unit name + slot index for the in-flight swap are
+       carried on the dialog's data-* attributes so the dialog can be
+       reused across all three slots without re-mounting per click. -->
+  <div id="weapon-pick-dialog" class="dialog hidden" data-unit="" data-slot="0">
+    <div class="dialog-card dialog-card-wide dialog-card-xwide">
+      <h1>Change Weapon</h1>
+      <p class="dialog-sub">Pick a different weapon for this slot.  The change is live in the studio session only — the underlying FBI on disk is not modified.  Hit "Reload Unit" to revert to the on-disk definition.</p>
+      <div class="open-filter">
+        <input type="search" id="weapon-pick-filter" placeholder="Filter by name, model, or sound" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      </div>
+      <div class="open-list" id="weapon-pick-list" tabindex="0" role="listbox" aria-label="Weapons">
+        <div class="loading">Loading weapons…</div>
+      </div>
+      <div class="dialog-actions">
+        <button id="weapon-pick-cancel" class="btn">Cancel</button>
+        <button id="weapon-pick-confirm" class="btn primary" disabled>Apply</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 3D viewer.  Full-screen modal styled to mirror the main editor:
        topbar + brand on the left, model tab bar inline (shared visual
        language with the map editor's tabs), a ribbon with horizontal
@@ -442,6 +469,10 @@
                       title="Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas's current frame rate.">
                 <span class="ico">🎥</span><span>Renderer</span><span class="menu-check">✓</span>
               </button>
+              <button id="mv-view-effects" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-effects"
+                      title="Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding's particle-pool occupancy.">
+                <span class="ico">✨</span><span>Effects</span><span class="menu-check">✓</span>
+              </button>
             </div>
           </div>
         </div>
@@ -471,6 +502,7 @@
         <div class="mv-sidebar-tabs" role="tablist">
           <button class="mv-sidebar-tab active" role="tab" data-mv-tab="pieces" aria-selected="true">Pieces</button>
           <button class="mv-sidebar-tab" role="tab" data-mv-tab="textures" aria-selected="false">Textures</button>
+          <button class="mv-sidebar-tab" role="tab" data-mv-tab="weapons" aria-selected="false">Weapons</button>
         </div>
         <div class="mv-sidebar-panel" data-mv-tab-panel="pieces">
           <div class="filter">
@@ -483,6 +515,14 @@
             <input type="search" id="mv-texture-filter" placeholder="Filter textures" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
           </div>
           <div class="drawer" id="model-viewer-textures"></div>
+        </div>
+        <!-- Weapons tab: lists the three weapon slots (Primary / Secondary
+             / Tertiary) populated from the unit FBI + each weapon's TDF
+             section.  Shows reload / range / velocity / sound / model
+             flags so the user can inspect the unit's combat profile
+             without leaving the viewer. -->
+        <div class="mv-sidebar-panel hidden" data-mv-tab-panel="weapons">
+          <div class="drawer" id="model-viewer-weapons"></div>
         </div>
       </aside>
 
@@ -599,6 +639,24 @@
         </div>
         <div class="mv-inspector-body" id="mv-inspector-staticvars-body">
           <div class="mv-inspector-empty">No COB loaded.</div>
+        </div>
+      </aside>
+      <!-- Effects overlay: live inspector of the cob particle pool.
+           Header row shows totals (alive particles, by kind); body is
+           a virtualised-feel list of currently-alive particles with
+           kind, world XYZ, velocity vector, and life-remaining.  Used
+           to debug what the SFX pipeline is doing in real time. -->
+      <aside class="mv-inspector hidden" id="mv-inspector-effects" title="Drag this header to move the Effects overlay">
+        <div class="mv-inspector-header" id="mv-inspector-effects-header">
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
+          <span>Effects</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-effects"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-effects"
+                  title="Close this panel (re-open later from the View menu).">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-effects-body">
+          <div class="mv-inspector-empty">No particles in flight.</div>
         </div>
       </aside>
       <!-- Controls overlay — drives the loaded unit.  Top section is

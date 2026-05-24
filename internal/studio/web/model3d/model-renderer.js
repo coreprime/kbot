@@ -1875,6 +1875,24 @@ export class ModelRenderer {
       gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
       gl.uniform1f(this.uPulseLightRange, 0)
     }
+    // Unit centre + radius for the pulse-light self-occlusion test.
+    // Centre = model bbox centroid translated by the unit transform
+    // (so it follows a walking unit).  Radius = bbox diagonal/2 with
+    // a small floor so vanishingly small units don't divide by zero.
+    if (this.model && this.model.bounds) {
+      const _b = this.model.bounds
+      const _ut = this._unitTransform
+      const _cx = (_b.min[0] + _b.max[0]) * 0.5 + (_ut ? _ut.x : 0)
+      const _cy = (_b.min[1] + _b.max[1]) * 0.5 + (_ut ? _ut.y : 0)
+      const _cz = (_b.min[2] + _b.max[2]) * 0.5 + (_ut ? _ut.z : 0)
+      const _dx = _b.max[0] - _b.min[0], _dy = _b.max[1] - _b.min[1], _dz = _b.max[2] - _b.min[2]
+      const _radius = Math.max(2, 0.5 * Math.hypot(_dx, _dy, _dz))
+      gl.uniform3fv(this.uUnitCenter, [_cx, _cy, _cz])
+      gl.uniform1f(this.uUnitRadius, _radius)
+    } else {
+      gl.uniform3fv(this.uUnitCenter, [0, 0, 0])
+      gl.uniform1f(this.uUnitRadius, 10)
+    }
     // Build-progress fade.  When buildPercent < 100, the textured
     // model renders at reduced alpha so the green nano-wireframe
     // overlay drawn afterwards reads cleanly; at 100 the texture
@@ -1980,6 +1998,24 @@ export class ModelRenderer {
       gl.uniform3fv(this.uPulseLightPos, [0, 0, 0])
       gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
       gl.uniform1f(this.uPulseLightRange, 0)
+    }
+    // Unit centre + radius for the pulse-light self-occlusion test.
+    // Centre = model bbox centroid translated by the unit transform
+    // (so it follows a walking unit).  Radius = bbox diagonal/2 with
+    // a small floor so vanishingly small units don't divide by zero.
+    if (this.model && this.model.bounds) {
+      const _b = this.model.bounds
+      const _ut = this._unitTransform
+      const _cx = (_b.min[0] + _b.max[0]) * 0.5 + (_ut ? _ut.x : 0)
+      const _cy = (_b.min[1] + _b.max[1]) * 0.5 + (_ut ? _ut.y : 0)
+      const _cz = (_b.min[2] + _b.max[2]) * 0.5 + (_ut ? _ut.z : 0)
+      const _dx = _b.max[0] - _b.min[0], _dy = _b.max[1] - _b.min[1], _dz = _b.max[2] - _b.min[2]
+      const _radius = Math.max(2, 0.5 * Math.hypot(_dx, _dy, _dz))
+      gl.uniform3fv(this.uUnitCenter, [_cx, _cy, _cz])
+      gl.uniform1f(this.uUnitRadius, _radius)
+    } else {
+      gl.uniform3fv(this.uUnitCenter, [0, 0, 0])
+      gl.uniform1f(this.uUnitRadius, 10)
     }
     // Build-progress fade.  When buildPercent < 100, the textured
     // model renders at reduced alpha so the green nano-wireframe
@@ -2321,6 +2357,11 @@ export class ModelRenderer {
     this.uPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos')
     this.uPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor')
     this.uPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange')
+    // Unit centre + radius — pulse light uses them for self-shadowing
+    // so the projectile light doesn't bleed through to the unit's
+    // opposite side.
+    this.uUnitCenter = gl.getUniformLocation(prog, 'uUnitCenter')
+    this.uUnitRadius = gl.getUniformLocation(prog, 'uUnitRadius')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
   }
 
@@ -2553,17 +2594,26 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uPartProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uPartView, false, this.camera.viewMatrix)
     gl.uniform2f(this.uPartViewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
-    // Regular alpha blend so dark smoke OCCLUDES (additive would
-    // brighten - wrong for damage trails).  Bright sparks still
-    // read fine because their colour values are >1, which clamps
-    // to bright pixels even through alpha blending.  Depth test
-    // on, depth write OFF so particles don't pollute the depth
-    // buffer (would interfere with the DoF post-process).
+    // Premultiplied-alpha additive blend: src * 1 + dst * 1.
+    // The shader already pre-multiplies colour by alpha (colour-
+    // values stay >1 for bright effects so they self-clamp at the
+    // tone-map).  Switching from SRC_ALPHA / ONE_MINUS_SRC_ALPHA
+    // means smoke puffs no longer OCCLUDE the bright projectile
+    // and beam particles behind them — lasers / d-gun / sparks
+    // shine through clouds the way they do in the original game.
+    // Smoke colour values are < 1 so its additive contribution
+    // just hazes the background slightly instead of going opaque.
+    // Depth test stays on, depth write OFF so particles don't
+    // pollute the depth buffer (would interfere with DoF post-FX).
     gl.enable(gl.BLEND)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.blendFunc(gl.ONE, gl.ONE)
     gl.depthMask(false)
     gl.drawArrays(gl.POINTS, 0, pool.count)
     gl.depthMask(true)
+    // Reset to the studio's default alpha blend so anything drawn
+    // after this pass (currently nothing, but defensive in case the
+    // pipeline gains a post-pass) starts from a known state.
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
   }
 
   // #initDoFProgram links the post-process DoF program + sets up the

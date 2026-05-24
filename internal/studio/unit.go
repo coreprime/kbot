@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,10 @@ import (
 func registerUnitAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/unit/", handleUnitMeta)
 	mux.HandleFunc("/api/studio/cursor/", handleCursorImage)
+	// Weapon catalogue endpoints — `/api/studio/weapons` returns the
+	// full list of weapon TDF sections in the loaded VFS (used by the
+	// "Change Weapon" picker in the Weapons panel).
+	mux.HandleFunc("/api/studio/weapons", handleWeaponsList)
 	// /api/studio/sound/ is owned by sound.go (registered in api.go) —
 	// it already serves the FBI SoundCategory sounds the Controls
 	// overlay needs.  See sound.go for the case-insensitive resolver.
@@ -101,7 +106,13 @@ type unitMetaJSON struct {
 }
 
 type unitWeaponJSON struct {
-	Slot       string  `json:"slot"`       // "primary" / "secondary" / "tertiary"
+	Slot string `json:"slot"` // "primary" / "secondary" / "tertiary"
+	// Index: 1-based slot number (1=primary, 2=secondary, 3=tertiary).
+	// Exposed so the UI can render "Weapon #N" headers without having
+	// to translate the slot name back to a number.  Also useful for the
+	// Change Weapon flow — the client passes this back so the binding
+	// knows which Weapon{N} key to override.
+	Index      int     `json:"index"`
 	Name       string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
 	ReloadSec  float64 `json:"reloadSec"`  // seconds between shots
 	RangeWU    float64 `json:"rangeWU"`    // engagement range in world units
@@ -292,52 +303,30 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// Weapons — three slots.  Each name is the section key in some
 	// weapons/*.tdf file.  loadWeaponTDF walks the weapons folder for
 	// a case-insensitive match.
+	//
+	// Query-parameter overrides (`?weapon1=NAME&weapon2=NAME&weapon3=NAME`)
+	// let the studio's "Change Weapon" picker swap one slot's data
+	// without touching the FBI on disk.  When set, the override beats
+	// the FBI value for that slot.  Empty / "NONE" / "-" clears the
+	// slot (useful to disable a weapon for testing).
 	out.Weapons = []unitWeaponJSON{
-		{Slot: "primary"},
-		{Slot: "secondary"},
-		{Slot: "tertiary"},
+		{Slot: "primary", Index: 1},
+		{Slot: "secondary", Index: 2},
+		{Slot: "tertiary", Index: 3},
 	}
+	overrideKeys := []string{"weapon1", "weapon2", "weapon3"}
 	for i, key := range []string{"Weapon1", "Weapon2", "Weapon3"} {
 		w := strings.ToUpper(strings.TrimSpace(info.String(key)))
-		if w == "" || w == "NONE" {
+		// Per-slot override from the query string — wins over FBI.
+		if ov := strings.TrimSpace(r.URL.Query().Get(overrideKeys[i])); ov != "" {
+			w = strings.ToUpper(ov)
+		}
+		if w == "" || w == "NONE" || w == "-" {
 			continue
 		}
 		out.Weapons[i].Name = w
 		if sec := loadWeaponSection(w); sec != nil {
-			out.Weapons[i].ReloadSec = sec.Float("reloadtime")
-			out.Weapons[i].RangeWU = sec.Float("range")
-			out.Weapons[i].VelocityWU = sec.Float("weaponvelocity")
-			out.Weapons[i].Ballistic = boolish(sec.String("ballistic"))
-			out.Weapons[i].SoundStart = strings.ToLower(strings.TrimSpace(sec.String("soundstart")))
-			out.Weapons[i].SoundHit = strings.ToLower(strings.TrimSpace(sec.String("soundhit")))
-			burst := sec.Int("burst")
-			if burst < 1 {
-				burst = 1
-			}
-			out.Weapons[i].Burst = burst
-			out.Weapons[i].BurstRateSec = sec.Float("burstrate")
-			// Visual classifiers — see the unitWeaponJSON field docs
-			// for the meaning of each.  All optional; default zero
-			// values let the client fall through to its generic-bullet
-			// path for weapons that don't ship the bit.
-			out.Weapons[i].BeamWeapon = boolish(sec.String("beamweapon"))
-			out.Weapons[i].SmokeTrail = boolish(sec.String("smoketrail"))
-			out.Weapons[i].SelfProp = boolish(sec.String("selfprop"))
-			out.Weapons[i].Tracks = boolish(sec.String("tracks"))
-			out.Weapons[i].StartVelocityWU = sec.Float("startvelocity")
-			out.Weapons[i].AccelerationWU = sec.Float("weaponacceleration")
-			// Some weapon TDFs include inline /* comments */ after
-			// integer values (e.g. `color=232; /* GREEN */`), which the
-			// generic TDF parser leaves in the raw string — sec.Int
-			// then Atoi-fails and returns 0.  intFieldClean strips the
-			// trailing comment + semicolon so the palette index makes
-			// it through.  Affects color, color2 and any future int
-			// fields that ship with annotated values.
-			out.Weapons[i].ColorIdx = intFieldClean(sec, "color")
-			out.Weapons[i].Color2Idx = intFieldClean(sec, "color2")
-			out.Weapons[i].Model = strings.ToLower(strings.TrimSpace(sec.String("model")))
-			out.Weapons[i].DurationSec = sec.Float("duration")
-			out.Weapons[i].CommandFire = boolish(sec.String("commandfire"))
+			populateWeaponJSON(&out.Weapons[i], sec)
 		}
 	}
 	// Sounds — SoundCategory keys into gamedata/sound.tdf.  Each
@@ -463,6 +452,93 @@ func loadWeaponSection(name string) *tdf.Section {
 		}
 	}
 	return nil
+}
+
+// populateWeaponJSON copies the parsed weapon TDF section into the
+// JSON struct.  Shared by the per-unit /api/studio/unit endpoint and
+// the catalogue /api/studio/weapons endpoint so both expose the same
+// fields with the same defaults (and the Change Weapon picker can
+// show the same stats the active panel will display after swap).
+func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
+	out.ReloadSec = sec.Float("reloadtime")
+	out.RangeWU = sec.Float("range")
+	out.VelocityWU = sec.Float("weaponvelocity")
+	out.Ballistic = boolish(sec.String("ballistic"))
+	out.SoundStart = strings.ToLower(strings.TrimSpace(sec.String("soundstart")))
+	out.SoundHit = strings.ToLower(strings.TrimSpace(sec.String("soundhit")))
+	burst := sec.Int("burst")
+	if burst < 1 {
+		burst = 1
+	}
+	out.Burst = burst
+	out.BurstRateSec = sec.Float("burstrate")
+	out.BeamWeapon = boolish(sec.String("beamweapon"))
+	out.SmokeTrail = boolish(sec.String("smoketrail"))
+	out.SelfProp = boolish(sec.String("selfprop"))
+	out.Tracks = boolish(sec.String("tracks"))
+	out.StartVelocityWU = sec.Float("startvelocity")
+	out.AccelerationWU = sec.Float("weaponacceleration")
+	out.ColorIdx = intFieldClean(sec, "color")
+	out.Color2Idx = intFieldClean(sec, "color2")
+	out.Model = strings.ToLower(strings.TrimSpace(sec.String("model")))
+	out.DurationSec = sec.Float("duration")
+	out.CommandFire = boolish(sec.String("commandfire"))
+}
+
+// weaponsListMu / weaponsListOnce / weaponsListCache cache the parsed
+// catalogue for the server lifetime — walking every weapons/*.tdf and
+// re-parsing on each picker open would be wasteful for a list that
+// doesn't change after startup.
+var (
+	weaponsListMu    sync.Mutex
+	weaponsListOnce  sync.Once
+	weaponsListCache []unitWeaponJSON
+)
+
+// buildWeaponsList walks every weapons/*.tdf in the VFS and emits one
+// JSON entry per section.  Slot / Index are left zero — the catalogue
+// is unit-agnostic; the client assigns those when the user picks one
+// for a specific slot.  Sorted alphabetically by name so the picker's
+// stable ordering doesn't depend on directory walk order.
+func buildWeaponsList() []unitWeaponJSON {
+	seen := map[string]bool{}
+	out := []unitWeaponJSON{}
+	for _, p := range vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
+			continue
+		}
+		data, err := vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		doc, err := tdf.ParseString(string(data))
+		if err != nil {
+			continue
+		}
+		for _, sec := range doc.Sections() {
+			name := strings.ToUpper(strings.TrimSpace(sec.Name()))
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			w := unitWeaponJSON{Name: name}
+			populateWeaponJSON(&w, sec)
+			out = append(out, w)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// handleWeaponsList serves the cached weapon catalogue.
+func handleWeaponsList(w http.ResponseWriter, _ *http.Request) {
+	weaponsListOnce.Do(func() {
+		weaponsListCache = buildWeaponsList()
+	})
+	weaponsListMu.Lock()
+	defer weaponsListMu.Unlock()
+	writeJSON(w, weaponsListCache)
 }
 
 func boolish(s string) bool {

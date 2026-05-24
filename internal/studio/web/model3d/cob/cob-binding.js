@@ -13,7 +13,19 @@
 // a world position by walking the model's piece tree just before
 // pushing into the pool.
 
-import { ParticlePool } from './cob-particles.js'
+import {
+  ParticlePool,
+  SFX_SMOKE_GREY,
+  SFX_SMOKE_WHITE,
+  SFX_SPARK,
+  SFX_FIRE_FLASH,
+  SFX_PROJECTILE_BULLET,
+  SFX_PROJECTILE_SHELL,
+  SFX_PROJECTILE_PLASMA,
+  SFX_PROJECTILE_DGUN,
+  SFX_PROJECTILE_LASER,
+  SFX_PROJECTILE_MISSILE,
+} from './cob-particles.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
@@ -40,6 +52,13 @@ export class CobBinding {
       if (idx >= 0) this._cobToPiece.set(idx, p)
     }
     this.particles = new ParticlePool(1024)
+    // Wire the pool's on-expire callback so projectile particles
+    // detonate visually instead of just vanishing.  This is the
+    // single point of dispatch for TA-style impact effects:
+    // bullet/laser hits get a tiny spark burst, missile hits a
+    // medium fireball + smoke, shells a heavier explosion, d-gun
+    // a violent oversized cluster matching its size in flight.
+    this.particles.onExpire = (slot, pool) => this._onParticleExpire(slot, pool)
     // Install the unit's emit-sfx hook.  Keep any existing hook
     // intact so callers that supplied a log/getUnitValue keep them.
     const prevEmit = unit.hooks.emitSfx
@@ -239,25 +258,47 @@ export class CobBinding {
   // TA fire scripts just toggle a `flare` piece visible for ~150ms
   // and don't emit any particles themselves; the brief flash is
   // easy to miss at studio camera distances.
+  //
+  // PRIMARY anchor source: the unit's QueryX BOS script — that's
+  // the canonical "which piece does this weapon fire from?"
+  // declaration in the .bos / .cob.  E.g. Commander has
+  // QueryPrimary → lfirept (laser) and QueryTertiary → rbigflash
+  // (d-gun).  Earlier this used a name-heuristic ("lfirept" as a
+  // tertiary candidate) which incorrectly put the d-gun's muzzle
+  // flash on the LASER piece because Commander has lfirept but no
+  // flare3.  Going through runQuery uses the same source-of-truth
+  // mv-controls uses for projectile anchors, so the muzzle flash
+  // and the projectile always exit from the same piece.
   _emitFireBurst(scriptName) {
     const m = /^Fire(Primary|Secondary|Tertiary|Weapon(\d+))$/i.exec(scriptName)
     if (!m) return
     const slot = (m[1] || '').toLowerCase()
     const weaponN = m[2] ? +m[2] : (slot === 'primary' ? 1 : slot === 'secondary' ? 2 : slot === 'tertiary' ? 3 : 1)
-    // Heuristic piece selection in order: explicit numbered flare
-    // (flare2 for secondary), generic flare, then alt naming TA
-    // models use (rfirept/lfirept on twin-cannon units, muzzleN,
-    // barrelN).  First hit wins; falls back to model origin.
-    const candidates = []
-    if (weaponN === 1) candidates.push('flare', 'flare1', 'rfirept', 'firept1', 'muzzle', 'muzzle1', 'barrel')
-    else candidates.push(`flare${weaponN}`, `lfirept`, `firept${weaponN}`, `muzzle${weaponN}`, `barrel${weaponN}`)
     let piece = null
-    for (const name of candidates) {
-      const p = this.model.findPiece(name)
-      if (p) { piece = p; break }
+    // Try QueryX first — the BOS-declared firing piece.
+    const queryName = m[2] ? `QueryWeapon${m[2]}` : `Query${slot[0].toUpperCase()}${slot.slice(1)}`
+    if (this.unit && typeof this.unit.runQuery === 'function' && this.unit.hasScript(queryName)) {
+      const idx = this.unit.runQuery(queryName, [0])
+      const names = this.unit.pieceNames || []
+      if (idx != null && idx >= 0 && idx < names.length) {
+        const cand = this.model.findPiece(names[idx])
+        if (cand) piece = cand
+      }
     }
-    // Last-ditch: any piece whose name matches /flare|firept|muzzl/i.
-    if (!piece) piece = this.model.flat.find((p) => /flare|firept|muzzl/i.test(p.name)) || null
+    // Heuristic fallback for units without QueryX (mostly aircraft,
+    // turrets that use legacy naming).  Order: numbered flare first,
+    // then alt naming TA models use.  First hit wins.
+    if (!piece) {
+      const candidates = []
+      if (weaponN === 1) candidates.push('flare', 'flare1', 'rfirept', 'firept1', 'muzzle', 'muzzle1', 'barrel')
+      else candidates.push(`flare${weaponN}`, `lfirept`, `firept${weaponN}`, `muzzle${weaponN}`, `barrel${weaponN}`)
+      for (const name of candidates) {
+        const p = this.model.findPiece(name)
+        if (p) { piece = p; break }
+      }
+      // Last-ditch: any piece whose name matches /flare|firept|muzzl/i.
+      if (!piece) piece = this.model.flat.find((p) => /flare|firept|muzzl/i.test(p.name)) || null
+    }
     let anchor = [0, 0, 0]
     if (piece && piece.worldMatrix) {
       const wm = piece.worldMatrix
@@ -266,6 +307,112 @@ export class CobBinding {
     this.particles.emit(4 /* muzzle flash */, anchor)
     this._emitCluster(3 /* spark */, anchor, 6, { spread: 1.2 })
     this._emitCluster(2 /* light smoke */, anchor, 4, { spread: 1.0 })
+  }
+
+  // _onParticleExpire dispatches an impact-burst when a projectile
+  // particle's lifetime hits zero.  Called by the pool's onExpire
+  // hook BEFORE the slot is freed, so pool[slot].x/y/z still hold
+  // the projectile's final position.  Different projectile kinds
+  // get different impact compositions — laser pulse fades silently
+  // (it's a beam segment, not a travelling munition), bullet hits
+  // tiny sparks, missile/shell trigger fireball + sparks + smoke,
+  // d-gun produces a violent green-tinged explosion matching the
+  // weapon's iconic "disintegration" feel.  Non-projectile kinds
+  // (smoke, sparks) just expire silently — they ARE the effect.
+  _onParticleExpire(slot, pool) {
+    const k = pool.kind[slot]
+    // Skip impact for SFX kinds that are themselves part of an
+    // explosion or wake — they shouldn't recursively spawn more.
+    if (k < SFX_PROJECTILE_BULLET) return
+    const anchor = [pool.x[slot], pool.y[slot], pool.z[slot]]
+    // Don't burst at the origin — projectiles that expired before
+    // they actually moved (very-short-life laser pulses snapped to
+    // muzzle, e.g.) shouldn't fake an explosion on top of the unit.
+    // The muzzle flash already handles the "shot fired" visual.
+    if (k === SFX_PROJECTILE_LASER) return
+    // Impact bursts.  Durations tuned to match TA's brief flash
+    // rather than linger as static glow.  Smoke kinds (SMOKE_GREY,
+    // SMOKE_WHITE) keep their KIND_DEFAULTS lifeMs (~3-4s) so the
+    // smoke wisp dissipates naturally; we just shorten the fireball
+    // flashes since those were the dominant "glow that won't fade"
+    // contributors the user noticed.
+    if (k === SFX_PROJECTILE_BULLET || k === SFX_PROJECTILE_PLASMA) {
+      this._emitCluster(SFX_SPARK,       anchor, 8,  { spread: 2.0 })
+      this._emitCluster(SFX_SMOKE_WHITE, anchor, 2,  { spread: 1.5 })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 6, lifeMs: 120 })
+      return
+    }
+    if (k === SFX_PROJECTILE_MISSILE || k === SFX_PROJECTILE_SHELL) {
+      this._emitCluster(SFX_SPARK,       anchor, 18, { spread: 4.0 })
+      this._emitCluster(SFX_SMOKE_GREY,  anchor, 6,  { spread: 3.0 })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 14, lifeMs: 180 })
+      return
+    }
+    if (k === SFX_PROJECTILE_DGUN) {
+      this._emitCluster(SFX_SPARK,       anchor, 36, { spread: 9.0 })
+      this._emitCluster(SFX_SMOKE_GREY,  anchor, 14, { spread: 8.0 })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 36, lifeMs: 300, color: [2.0, 0.7, 0.25, 1.0] })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 22, lifeMs: 400, color: [1.8, 0.4, 0.15, 0.9] })
+      return
+    }
+  }
+
+  // _emitShipWake drops a pair of foamy puffs at the ship's wake1 /
+  // wake2 pieces.  Called by the controller every ~100 ms while a
+  // ship is moving so the hull leaves a visible wake astern, as in
+  // the original game.  Earlier this also fired for kbots and tanks
+  // as a generic "engine exhaust" — that's NOT how TA renders walker
+  // motion (legs don't smoke), so the path is now ship-only.
+  //
+  // worldPos is the unit's CURRENT world XYZ (passed in by the
+  // caller from the controller's live this.pos).  We add the piece's
+  // LOCAL origin, rotated by the unit's heading, so the wake puffs
+  // stay attached to the stern as the ship turns and translates.
+  // Reading `piece.worldMatrix` directly would lag a frame behind
+  // the moving unit's transform — the matrix is only refreshed at
+  // render time, after the controller's pos/heading update — so
+  // we compute the world anchor here from authoritative state.
+  _emitShipWake(worldPos, headingRad) {
+    if (!this.model || !this.particles) return
+    const sinH = Math.sin(headingRad)
+    const cosH = Math.cos(headingRad)
+    // Where do the wake puffs sit on the hull?  TA ships ship wake1
+    // and wake2 pieces explicitly positioned at the stern in the
+    // 3DO, but many models leave them at (0,0,0) and let the engine
+    // figure out the stern from the unit's bbox.  Compute a stern
+    // anchor (rear-Z, slightly offset left + right) as a fallback
+    // when the piece's own origin is at the unit pivot.
+    const b = this.model.bounds
+    const sternZ = b ? b.min[2] : 0                  // rear edge of hull
+    const halfBeam = b ? (b.max[0] - b.min[0]) * 0.25 : 4   // quarter-beam outboard
+    const waterY = b ? b.min[1] + 1 : 0              // just above the keel
+    const emitAt = (piece, fallbackLocalX) => {
+      // Piece local origin in model space.  When it's (0,0,0)
+      // (artist left positioning to the engine), substitute the
+      // stern-offset fallback so the puff lands at the back of the
+      // hull instead of dead-centre of the pivot.
+      let ox = piece && piece.origin ? piece.origin[0] : 0
+      let oy = piece && piece.origin ? piece.origin[1] : 0
+      let oz = piece && piece.origin ? piece.origin[2] : 0
+      const hasOrigin = Math.abs(ox) + Math.abs(oy) + Math.abs(oz) > 0.1
+      if (!hasOrigin) {
+        ox = fallbackLocalX
+        oy = waterY
+        oz = sternZ
+      }
+      // Rotate local XZ by heading around Y, then translate by
+      // worldPos.  Matches the renderer's per-frame model matrix
+      // (Mat4.translate then Mat4.rotateY).
+      const wx = worldPos[0] + (ox * cosH + oz * sinH)
+      const wy = (worldPos[1] || 0) + oy
+      const wz = worldPos[2] + (-ox * sinH + oz * cosH)
+      this.particles.emit(SFX_SMOKE_WHITE, [wx, wy, wz], {
+        size: 9, lifeMs: 1400, riseSpeed: 0.3, drift: 1.2,
+        color: [0.95, 0.97, 1.0, 0.85],
+      })
+    }
+    emitAt(this.model.findPiece('wake1'), -halfBeam)
+    emitAt(this.model.findPiece('wake2'),  halfBeam)
   }
 
   // _emitCluster spawns N particles at anchor with randomised
@@ -377,16 +524,37 @@ export class CobBinding {
         piece.move[0] += (tx - piece.move[0]) * k
         piece.move[1] += (ty - piece.move[1]) * k
         piece.move[2] += (tz - piece.move[2]) * k
-        piece.rotate[0] += (trx - piece.rotate[0]) * k
-        // Wrap-aware lerp for Y rotation — turret heading sometimes
-        // crosses the ±π discontinuity (e.g. a tank aiming through
-        // its rear arc).  Unwrap the delta so the turret takes the
-        // shortest arc instead of spinning the long way around.
-        let dRy = trY - piece.rotate[1]
-        if (dRy >  Math.PI) dRy -= Math.PI * 2
-        if (dRy < -Math.PI) dRy += Math.PI * 2
-        piece.rotate[1] += dRy * k
-        piece.rotate[2] += (trz - piece.rotate[2]) * k
+        // Wrap-aware lerp on ALL THREE rotation axes — buzzsaw barrels
+        // spin around X via continuous `spin` opcodes, the COB target
+        // wraps every revolution, and the displayed value accumulates
+        // many revolutions as it chases.  Use a MODULO-based unwrap
+        // so the delta works even when `target` and `current` are
+        // several revolutions apart (earlier single-wrap fix missed
+        // this, producing a visible snap-back on every revolution
+        // once the displayed value had drifted past ±2π from target).
+        // Also normalise the displayed angle into [-π, +π] after each
+        // lerp so it stays bounded — keeps float precision intact on
+        // long-running spins and makes the next frame's shortDelta a
+        // single-wrap operation regardless of how long the spin runs.
+        const TWO_PI = Math.PI * 2
+        const shortDelta = (target, current) => {
+          // Reduce the gap modulo 2π → in (-2π, +2π).
+          let d = ((target - current) % TWO_PI + TWO_PI) % TWO_PI
+          // Then collapse the upper half into negative territory so
+          // the result is the SHORTEST signed arc in [-π, +π].
+          if (d > Math.PI) d -= TWO_PI
+          return d
+        }
+        const normalise = (a) => {
+          // Map any angle to (-π, +π] without changing its visual
+          // orientation — Mat4.rotateY(θ + 2π) renders identically
+          // to Mat4.rotateY(θ).
+          const m = ((a + Math.PI) % TWO_PI + TWO_PI) % TWO_PI - Math.PI
+          return m
+        }
+        piece.rotate[0] = normalise(piece.rotate[0] + shortDelta(trx, piece.rotate[0]) * k)
+        piece.rotate[1] = normalise(piece.rotate[1] + shortDelta(trY, piece.rotate[1]) * k)
+        piece.rotate[2] = normalise(piece.rotate[2] + shortDelta(trz, piece.rotate[2]) * k)
       }
       piece.visible = this.unit.isPieceVisible(idx)
     }

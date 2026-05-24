@@ -64,14 +64,19 @@ const KIND_DEFAULTS = {
   // medium life so it visibly drifts off the unit instead of
   // popping out instantly.
   [SFX_SMOKE_WHITE]:    { color: [0.92, 0.92, 0.96, 0.90], size: 11.0, lifeMs: 3000, riseSpeed: 2.4, drift: 1.2 },
-  [SFX_SPARK]:          { color: [1.50, 0.75, 0.25, 1.00], size: 3.0,  lifeMs: 450,  riseSpeed: -2.5, drift: 1.6 },
+  // Sparks fade fast in TA (~200ms).  Earlier 450ms left a halo of
+  // sparks lingering well after the impact concluded.
+  [SFX_SPARK]:          { color: [1.50, 0.75, 0.25, 1.00], size: 3.0,  lifeMs: 220,  riseSpeed: -2.5, drift: 1.6 },
   // FIRE_FLASH (muzzle flash): big, very bright — single bright
   // flare at the barrel tip on each fire tick.  Life nudged up
   // from a frame-blink to ~half-second so consecutive shots stack
   // into a visible overlap and the user actually sees the flash
   // (the in-script `show flare`/`hide flare` toggle is only 100-
   // 150ms and similarly easy to miss).
-  [SFX_FIRE_FLASH]:     { color: [1.80, 1.25, 0.55, 1.00], size: 14.0, lifeMs: 500,  riseSpeed: 0.0, drift: 0.0 },
+  // Earlier 500ms gave each muzzle flash a static "lantern hanging
+  // at the barrel" feel.  150ms reads as a brief muzzle pop, then
+  // gone — matching the in-game flicker.
+  [SFX_FIRE_FLASH]:     { color: [1.80, 1.25, 0.55, 1.00], size: 14.0, lifeMs: 150,  riseSpeed: 0.0, drift: 0.0 },
   [SFX_NANO_PARTICLES]: { color: [0.45, 0.95, 1.20, 0.85], size: 2.0,  lifeMs: 600,  riseSpeed: 0.8, drift: 2.4 },
   // Projectiles — the caller supplies velocity explicitly via
   // opts.velocity so rise/drift here are placeholder zeros.  Size +
@@ -103,14 +108,27 @@ const KIND_DEFAULTS = {
   [SFX_PROJECTILE_DGUN]:   { color: [2.00, 0.55, 0.20, 1.00], size: 32.0, lifeMs: 6000, riseSpeed: 0.0, drift: 0.0, lightStrength: 300.0 },
   // Laser pulse segment — fat bright spot.  Default colour is the
   // ARM-laser green (palette idx 232).  Beams are drawn by emitting
-  // ~20 of these along the line in one call (see _spawnLaserBeam)
-  // so the entire path reads as one continuous bright streak.
-  // Pulse life 500 ms makes the beam linger long enough to register
-  // at any sensible playback speed.  Size 14 wu so adjacent pulses
-  // overlap into a solid line — at TA scale a unit is ~30 wu wide,
-  // so the beam should be unmissable against any backdrop.  Colour
-  // values pre-multiplied >1 for additive blow-out.
-  [SFX_PROJECTILE_LASER]:   { color: [0.45, 2.40, 0.60, 1.00], size: 14.0, lifeMs: 500, riseSpeed: 0.0, drift: 0.0, lightStrength: 180.0 },
+  // a dense chain of these along the line in one call (see
+  // _spawnLaserBeam) so the entire path reads as one continuous
+  // unmissable streak.  Earlier passes used size 14 / 500 ms and
+  // users reported the beam still wasn't visible — the previous
+  // tweak missed because the additive-pre-multiplied alpha is
+  // tone-mapped before display; the only way to make a beam pop is
+  // to make the per-pulse blob big enough to physically overlap
+  // multiple pixels and bright enough that the tone-map doesn't
+  // crush it.  Size 28 wu (about half a kbot torso) + alpha 1.0
+  // + 1100 ms life make the beam a clear LINE rather than a sparse
+  // string of dots.  lightStrength matches D-gun's range so the
+  // beam visibly washes nearby surfaces with its tint.
+  // Pulse life was 1100ms which lingered as a static glow long after
+  // the shot itself.  TA's actual beams flash for ~150-250ms total.
+  // 220ms reads as a quick flash without disappearing mid-frame.
+  // lightStrength reduced from 280 — the point-light glow on
+  // surrounding surfaces was so intense it visually overpowered the
+  // beam line itself.  90 gives a noticeable but subtle wash that
+  // tints the unit's lit side without making the silhouette the
+  // dominant visual element of a shot.
+  [SFX_PROJECTILE_LASER]:   { color: [0.55, 2.80, 0.70, 1.00], size: 28.0, lifeMs: 220,  riseSpeed: 0.0, drift: 0.0, lightStrength: 90.0 },
   // Missile body — small orange-yellow flame.  Pairs with a per-tick
   // smoke trail spawned by the controller code so the projectile
   // visibly drags a white wake behind it.  Life is sized in opts to
@@ -152,8 +170,19 @@ export class ParticlePool {
     // contribution by 1/(1+(dist/lightStrength)²).  Zero (default)
     // skips the light path entirely.
     this.lightStrength = new Float32Array(capacity)
+    // Per-particle kind tag.  Set on emit() so the pool's onExpire
+    // hook (used by cob-binding for impact explosions, missile
+    // chain-burst, etc.) knows what KIND of particle is expiring at
+    // its last position.  Uint16 covers our SFX_* range easily.
+    this.kind = new Uint16Array(capacity)
     this.alive = new Uint8Array(capacity)
     this.count = 0
+    // onExpire(slot) — optional callback invoked when a particle's
+    // life hits zero, BEFORE the slot is freed.  Used by the binding
+    // to emit impact-clusters at the dying projectile's position.
+    // The callback reads pool.x/y/z/kind at `slot` to know where to
+    // burst and what to detonate as.
+    this.onExpire = null
   }
 
   // emit spawns one particle.  worldPos is `[x, y, z]`.  kind picks
@@ -206,6 +235,9 @@ export class ParticlePool {
     // controller to override the kind default for special weapons);
     // otherwise the kind's default (0 = not a light).
     this.lightStrength[slot] = +(opts.lightStrength ?? d.lightStrength ?? 0)
+    // Per-particle kind so onExpire can dispatch the right impact
+    // burst (small bullet hit vs. d-gun blast vs. missile detonation).
+    this.kind[slot] = kind | 0
     this.alive[slot] = 1
   }
 
@@ -217,7 +249,16 @@ export class ParticlePool {
     for (let i = 0; i < this.count; i++) {
       if (!this.alive[i]) continue
       this.life[i] -= dtMs
-      if (this.life[i] <= 0) { this.alive[i] = 0; continue }
+      if (this.life[i] <= 0) {
+        // Fire the onExpire hook BEFORE marking dead so the callback
+        // can read this slot's final position/kind to detonate an
+        // impact burst (sparks/smoke/fireball cluster at the point
+        // the projectile expired).  The hook may emit new particles;
+        // _allocSlot grows the pool if needed, so re-entry is safe.
+        if (this.onExpire) this.onExpire(i, this)
+        this.alive[i] = 0
+        continue
+      }
       this.x[i] += this.vx[i] * dt
       this.y[i] += this.vy[i] * dt
       this.z[i] += this.vz[i] * dt
@@ -261,6 +302,10 @@ export class ParticlePool {
         next.set(this[name])
         this[name] = next
       }
+      // `kind` is Uint16 so it lives separately from the Uint8 group.
+      const nextKind = new Uint16Array(nc)
+      nextKind.set(this.kind)
+      this.kind = nextKind
       this.capacity = nc
     }
     const slot = this.count
@@ -278,6 +323,7 @@ export class ParticlePool {
     this.gravity[to] = this.gravity[from]
     this.noFade[to] = this.noFade[from]
     this.lightStrength[to] = this.lightStrength[from]
+    this.kind[to] = this.kind[from]
     this.alive[to] = 1
   }
 }

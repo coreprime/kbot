@@ -404,18 +404,24 @@ export class ModelViewer {
       this._pointerState.x = e.clientX
       this._pointerState.y = e.clientY
       if (!this.camera) return
-      if (this._pointerState.button === 2 || e.shiftKey) {
-        // Shift = axis-locked pan.  Picks the dominant axis from
-        // the gesture's accumulated motion (not just this delta —
-        // a single frame's dy can flicker between zero and a few
-        // pixels) and zeroes the other so the pan reads as a
-        // clean vertical OR horizontal slide instead of drifting
-        // diagonally.  Plain right-drag still pans freely.
-        if (e.shiftKey) {
-          // Intentional camera move overrides any active follow-
-          // the-unit tracking.  Otherwise the next render frame's
-          // _followCamera would yank the target straight back to
-          // the unit and undo the pan.
+      if (this._pointerState.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey) {
+        // Shift = axis-locked pan relative to the screen plane.
+        // Ctrl (or ⌘ on macOS) = pan along the world's GROUND PLANE —
+        // drag-down advances the camera in its facing direction so
+        // you can walk the camera through the scene without tilting.
+        // Plain right-drag still pans freely (no modifier).  Both
+        // modifier modes drop tracking-follow first so the next
+        // render frame doesn't yank the target back to the unit.
+        if (e.ctrlKey || e.metaKey) {
+          if (this._mvControls?.tracking) this._mvControls.setTracking(false)
+          this.camera.panAlongGround(dx, dy)
+        } else if (e.shiftKey) {
+          // Shift = axis-locked pan.  Picks the dominant axis from
+          // the gesture's accumulated motion (not just this delta —
+          // a single frame's dy can flicker between zero and a few
+          // pixels) and zeroes the other so the pan reads as a
+          // clean vertical OR horizontal slide instead of drifting
+          // diagonally.  Plain right-drag still pans freely.
           if (this._mvControls?.tracking) this._mvControls.setTracking(false)
           const acc = this._pointerState
           acc.lockDxAccum = (acc.lockDxAccum || 0) + dx

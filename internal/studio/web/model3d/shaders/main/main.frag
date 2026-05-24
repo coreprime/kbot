@@ -53,6 +53,17 @@ uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textu
 uniform vec3 uPulseLightPos;
 uniform vec3 uPulseLightColor;
 uniform float uPulseLightRange;
+// Unit world-space centre — used by the pulse-light path to apply
+// self-occlusion: fragments whose position vector (from centre)
+// points AWAY from the light direction are inside the unit's own
+// shadow as cast by the projectile.  Without this the back of the
+// hull picks up the light through the unit's own body, washing the
+// whole silhouette uniformly.
+uniform vec3 uUnitCenter;
+// Approximate world radius of the unit's bounding sphere.  Drives
+// how sharply self-occlusion ramps in; a small unit shadows itself
+// at finer distance, a big unit needs a larger transition band.
+uniform float uUnitRadius;
 
 // rgbToHsv / hsvToRgb come from the standard Sam Hocevar GLSL
 // formulation - branchless, suitable for fragment shaders.  We use
@@ -230,34 +241,40 @@ void main() {
   }
   vec3 lighting = ambient + directLight + fillLight + backLight + rim;
 
-  // Dynamic pulse light (d-gun / laser).  Adds a per-fragment
-  // Lambert contribution from the live light's world position; falls
-  // off with inverse-square so a close shot floods the unit and a
-  // distant one barely tints it.  STRICT one-sided lighting — the
-  // primary key uses a symmetric "max(ndl, dot(-N,L)*0.4)" wash to
-  // hide TA's inconsistent face winding, but a point light demands
-  // directional contrast: a fragment whose normal faces AWAY from
-  // the light is supposed to be dark.  Skip the back-wash so the
-  // side of the unit facing the projectile glows while the opposite
-  // side stays in shadow.  3DO winding inconsistency CAN cause some
-  // facets to read "backwards" — but most of the unit's surface area
-  // honours the normal correctly, and the directional contrast reads
-  // unambiguously as a point light source instead of a global tint.
+  // Dynamic pulse light (d-gun / laser).  Two directional terms
+  // compose the shading so the unit reads as actually lit BY a
+  // point in space rather than uniformly tinted:
+  //
+  //   1. Strict one-sided Lambert.  Only fragments whose normal
+  //      faces toward the light are lit.  No symmetric back-face
+  //      wash — that hid TA's inverted-winding facets but uniformly
+  //      lit the whole unit, eliminating the directional contrast.
+  //
+  //   2. Unit self-occlusion.  The unit's own geometry should cast
+  //      a shadow on its far side relative to the projectile.  We
+  //      approximate this without shadow-map passes by comparing the
+  //      fragment's position relative to the unit centre against the
+  //      LIGHT direction relative to the centre: when the fragment
+  //      sits on the OPPOSITE side of the unit from the light, the
+  //      dot is negative and the contribution attenuates smoothly.
+  //      A 0.4-radian smoothstep band keeps the boundary feathered.
+  //
+  // Falls off with inverse-square in distance so close shots flood
+  // the unit and distant ones barely tint it.
   if (dot(uPulseLightColor, uPulseLightColor) > 0.0001 && uPulseLightRange > 0.0) {
     vec3 pulseDir = uPulseLightPos - vWorldPos;
     float pulseDist = length(pulseDir);
     pulseDir = pulseDir / max(0.0001, pulseDist);
-    // Strict one-sided Lambert: only fragments whose normal faces
-    // toward the light pick it up.  Mild back-face dimming (0.12)
-    // saves inverted-winding facets from being pitch-black while
-    // still keeping the lit-side / dark-side contrast that sells the
-    // point-light feel — back of the unit is noticeably darker than
-    // the front when the projectile is to one side.
     float ndlPulse = max(0.0, dot(N, pulseDir));
-    ndlPulse = max(ndlPulse, max(0.0, dot(-N, pulseDir)) * 0.12);
+    vec3 fromCentre = vWorldPos - uUnitCenter;
+    vec3 lightFromCentre = uPulseLightPos - uUnitCenter;
+    float fcLen = max(0.0001, length(fromCentre));
+    float lcLen = max(0.0001, length(lightFromCentre));
+    float facing = dot(fromCentre / fcLen, lightFromCentre / lcLen);
+    float selfOcclusion = smoothstep(-0.4, 0.4, facing);
     float r = pulseDist / uPulseLightRange;
     float atten = 1.0 / (1.0 + r * r);
-    lighting += uPulseLightColor * ndlPulse * atten;
+    lighting += uPulseLightColor * ndlPulse * atten * selfOcclusion;
   }
 
   // -- Sea bounce light --------------------------------------------

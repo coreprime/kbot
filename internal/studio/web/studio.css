@@ -4027,6 +4027,259 @@ canvas {
   flex: 1 1 auto;
 }
 .mv-sidebar-panel.hidden { display: none; }
+/* Weapons tab — one card per slot (primary / secondary / tertiary),
+   each card stacks header (slot label + weapon section name), a
+   2-column stat grid (reload, range, velocity, etc.) and chip row
+   of classifier flags (beam, smokeTrail, commandFire, ballistic). */
+.mv-weapon-card {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.mv-weapon-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; margin-bottom: 6px;
+}
+.mv-weapon-title {
+  font-size: 12px; font-weight: 600;
+  color: var(--text); text-transform: uppercase; letter-spacing: 0.5px;
+}
+.mv-weapon-name {
+  font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 60%;
+}
+.mv-weapon-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px;
+  margin-bottom: 6px;
+}
+.mv-weapon-stat {
+  display: flex; justify-content: space-between; gap: 6px;
+  font-size: 11px;
+}
+.mv-weapon-stat .k { color: var(--muted); }
+.mv-weapon-stat .v {
+  color: var(--text); font-family: ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 60%;
+}
+.mv-weapon-swatch {
+  display: inline-block; width: 12px; height: 12px;
+  border-radius: 2px; border: 1px solid var(--border);
+  margin-right: 4px; vertical-align: middle;
+}
+/* Weapon picker dialog floats on top of the .model-viewer-dialog
+   parent (also z-5000), which would otherwise win on equal z because
+   it sits later in DOM order.  Bump the picker above 6000 so it also
+   clears the thread debugger when both happen to be open. */
+#weapon-pick-dialog { z-index: 10000; }
+.mv-weapon-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.mv-weapon-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 10px;
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--border);
+}
+/* Slot ID badge — "#1", "#2", "#3" beside the slot label.  Subtle
+   monospace pip so the slot number is glanceable without competing
+   with the slot label or weapon name. */
+.mv-weapon-id {
+  display: inline-block; margin-left: 4px;
+  font-family: ui-monospace, monospace; font-size: 10px;
+  font-weight: 500; color: var(--muted);
+  padding: 0 4px; border: 1px solid var(--border);
+  border-radius: 3px; vertical-align: middle;
+  text-transform: none; letter-spacing: 0;
+}
+/* The weapon name in the card header carries an inline colour
+   rectangle (when the TDF ships a `color=` palette index).  Render
+   the row as flex so swatch + name align on the baseline; keeps the
+   text ellipsised when the weapon name is long. */
+.mv-weapon-name {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.mv-weapon-color-rect {
+  display: inline-block; width: 16px; height: 12px;
+  border-radius: 2px; border: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+/* Change Weapon action row — full-width button on its own line so
+   it's not lost in the stat grid. */
+.mv-weapon-actions {
+  margin: 4px 0 8px 0;
+}
+.mv-weapon-change {
+  font-size: 11px; padding: 3px 8px; width: 100%;
+}
+/* Script-presence indicator — a full-width segmented button group
+   showing Aim / Query / Fire for the slot.  Read-only (no hover or
+   click affordance, no cursor change) — purely informational.
+   Single row, no wrap; each segment fills its third of the row so
+   the visual proportion matches all three slot cards regardless of
+   the panel width. */
+.mv-weapon-scripts {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  width: 100%; margin: 0 0 6px 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  overflow: hidden;
+}
+.mv-weapon-script-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 4px; padding: 3px 6px;
+  font-size: 11px; font-family: ui-monospace, monospace;
+  border-right: 1px solid var(--border);
+  cursor: default; user-select: none;
+}
+.mv-weapon-script-chip:last-child { border-right: 0; }
+.mv-weapon-script-chip.ok {
+  color: #b2ffb0; background: rgba(60, 140, 60, 0.18);
+}
+.mv-weapon-script-chip.bad {
+  color: #ffb0b0; background: rgba(160, 60, 60, 0.18);
+}
+.mv-weapon-script-chip .mark { font-weight: 700; }
+/* Warning line shown when a required script is missing.  Subtle
+   amber so it reads as advisory not destructive. */
+.mv-weapon-warning {
+  margin: 4px 0 6px 0;
+  font-size: 11px; line-height: 1.35;
+  color: #ffd87a;
+  background: rgba(160, 110, 30, 0.12);
+  border: 1px solid rgba(220, 170, 60, 0.35);
+  border-radius: 3px;
+  padding: 4px 6px;
+}
+/* Sound rows — same layout as stat rows but with a trailing play
+   button that triggers the .wav via /api/studio/sound. */
+.mv-weapon-sound {
+  display: grid; grid-template-columns: 50px 1fr auto;
+  align-items: center; gap: 6px;
+  font-size: 11px; padding: 1px 0;
+}
+.mv-weapon-sound .k { color: var(--muted); }
+.mv-weapon-sound .v {
+  color: var(--text); font-family: ui-monospace, monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-weapon-sound-play {
+  appearance: none; background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 3px;
+  font-size: 10px; line-height: 1;
+  padding: 2px 6px; cursor: pointer;
+  font-family: ui-monospace, monospace;
+}
+.mv-weapon-sound-play:hover {
+  background: var(--bg-3, var(--bg-2)); border-color: var(--accent, var(--border));
+}
+.mv-weapon-sound-play:active { transform: translateY(1px); }
+/* Weapon picker rows — reuses .open-list-item chrome, but the
+   thumbnail slot becomes a flat colour swatch instead of an image. */
+.weapon-thumb {
+  width: 56px; height: 56px;
+  border-radius: 3px; border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.weapon-thumb-empty {
+  background: repeating-linear-gradient(
+    45deg, var(--bg-2), var(--bg-2) 4px,
+    rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 8px);
+}
+.weapon-list-item.active { outline: 2px solid var(--accent, #5da); }
+.weapon-list-item.selected { background: var(--bg-3, rgba(255,255,255,0.05)); }
+/* Effects overlay — live particle-pool inspector.  Top: per-kind
+   count chip strip.  Below: list of currently-alive particles
+   showing kind, world XYZ, velocity, life-remaining. */
+.mv-fx-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: 4px 6px; border-bottom: 1px solid var(--border);
+}
+.mv-fx-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 10px;
+  background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+}
+.mv-fx-list {
+  font-family: ui-monospace, monospace; font-size: 10px;
+  padding: 4px 6px;
+}
+/* Collapsible section headers — clickable, chevron flips when
+   the user toggles.  Hover shows the cursor pointer + faint
+   highlight so it's discoverable. */
+.mv-fx-section {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 600;
+  color: var(--text); text-transform: uppercase; letter-spacing: 0.5px;
+  padding: 5px 6px 3px; cursor: pointer;
+  border-top: 1px solid var(--border);
+  user-select: none;
+}
+.mv-fx-section:first-child { border-top: none; }
+.mv-fx-section:hover { background: var(--bg-2); }
+.mv-fx-chev { font-size: 9px; opacity: 0.7; width: 8px; }
+/* Highlight projectile chips so the user spots them at a glance. */
+.mv-fx-chip-proj {
+  background: var(--accent, #3a6); color: #fff; border-color: transparent;
+}
+/* Card grid — one card per live particle, 1 column for narrow
+   panel widths.  Each card is a self-contained block with header
+   + stat grid + life bar. */
+.mv-fx-cards {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 4px 6px;
+}
+.mv-fx-card {
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-2); padding: 4px 6px;
+}
+.mv-fx-card-head {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 3px;
+}
+.mv-fx-card-kind {
+  font-size: 11px; font-weight: 600; color: var(--text);
+  font-family: ui-monospace, monospace;
+}
+.mv-fx-card-stats {
+  display: grid; grid-template-columns: 1fr;
+  gap: 1px;
+  font-family: ui-monospace, monospace; font-size: 10px;
+}
+.mv-fx-stat {
+  display: flex; gap: 6px;
+}
+.mv-fx-stat .k {
+  color: var(--muted); width: 28px; flex-shrink: 0;
+}
+.mv-fx-stat .v {
+  color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* Life bar — sits at the bottom of each card, fills from left
+   based on remaining-life fraction. */
+.mv-fx-life-bar {
+  margin-top: 3px; height: 3px; background: var(--border);
+  border-radius: 2px; overflow: hidden;
+}
+.mv-fx-life-fill {
+  height: 100%; background: var(--accent, #3a6);
+  transition: width 80ms linear;
+}
+.mv-fx-swatch {
+  display: inline-block; width: 12px; height: 12px;
+  border-radius: 2px; border: 1px solid var(--border);
+}
+.mv-fx-kind {
+  color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-fx-cell {
+  color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-fx-life { text-align: right; }
+.mv-fx-more {
+  font-size: 10px; color: var(--muted);
+  padding: 2px 6px; font-style: italic;
+}
 /* Textures tab — grouped by parent GAF.  Each group is a collapsible
    block with a header + list of texture chips.  Chips show the
    texture's thumbnail + name + usage count; hovering the chip

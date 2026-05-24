@@ -187,14 +187,22 @@ export class MvControls {
       s.burstShotsLeft = 0
       s.nextBurstShotAtMs = 0
     }
-    // Run the unit's BOS target-cleared hook — this is the standard
-    // TA mechanism for resetting per-aim state (aimtype, bAiming,
+    // Run the unit's BOS target-cleared hook — the standard TA
+    // mechanism for resetting per-aim state (aimtype, bAiming,
     // turret rotations).  Pass weapon index 0 as the legacy `which`
-    // argument; the BOS scripts ignore it (they reset state
-    // unconditionally) but the COB runtime expects a value on the
-    // locals stack.  Skipped when the unit doesn't ship the script.
+    // argument; the BOS scripts ignore it but the COB runtime
+    // expects a value on the locals stack.  Force-restart by killing
+    // any already-running TargetCleared / RestorePosition threads
+    // first — without this the Stop button would silently no-op if
+    // the user pressed it WHILE a previous Stop's TargetCleared was
+    // still mid-animation, leaving the unit in a half-reset pose
+    // until that thread finally drained.
     const cob = this.viewer.cob
     if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
+      if (cob.unit && typeof cob.unit.killThreadsByName === 'function') {
+        cob.unit.killThreadsByName('TargetCleared')
+        cob.unit.killThreadsByName('RestorePosition')
+      }
       cob.start('TargetCleared', [0])
     }
     this._refreshButtons()
@@ -236,6 +244,28 @@ export class MvControls {
       // forever.  Auto-run Create lazily on first armed-click so the
       // unit is alive by the time the command lands.
       this._ensureCreated()
+      // Reset BOS aim-state before every new weapon target.  Without
+      // this, a previous slot's lingering `aimtype` global (e.g.
+      // Commander's AIM_DGUN after firing the d-gun) makes the next
+      // AimX script short-circuit with `return FALSE`, and the
+      // weapon silently never fires.  We can't rely on the user
+      // clicking Stop between actions — commandFire weapons clear
+      // their own target after one shot, so the path d-gun → primary
+      // never hits Stop.  Skipped for Move and for units without
+      // the script.  Also kill our local aim-thread state so the
+      // _updateWeapon loop spawns a FRESH AimX on the new target
+      // rather than re-reading the stale dead thread's returnValue=0.
+      if (slot !== 'move') {
+        const cob = this.viewer.cob
+        if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
+          cob.start('TargetCleared', [0])
+        }
+        const s = this.aimState[slot]
+        if (s.thread && !s.thread.dead) s.thread.dead = true
+        s.thread = null
+        s.burstShotsLeft = 0
+        s.nextBurstShotAtMs = 0
+      }
       if (slot === 'move') {
         this.targets.move = [ground[0], ground[2]]
         this._startMoving()
@@ -333,11 +363,37 @@ export class MvControls {
     this._updateWeapon('primary')
     this._updateWeapon('secondary')
     this._updateWeapon('tertiary')
+    this._updateShipWake(dtMs)
     // Hover-preview overlay tracks the camera (which may auto-rotate
     // or be orbited by the user), so the projected screen position
     // refreshes every frame.  Stop-button live-state too.
     this._updateHoverPreview()
     this._updateStopLive()
+  }
+
+  // _updateShipWake drops foamy puffs at the ship's wake1 / wake2
+  // pieces on a fixed cadence while the unit is in motion.  Ship-
+  // only — TA walkers and tanks do NOT emit engine smoke at their
+  // feet, so this is gated on the unit metadata's isShip / isSub
+  // flag.  The cob binding's _emitShipWake helper computes the
+  // wake-piece world positions from the controller's authoritative
+  // pos/heading (not from piece.worldMatrix, which lags one frame
+  // behind a moving unit and would smear the puffs at the previous
+  // position).  Cadence ~100 ms reads as a continuous foam trail
+  // without flooding the pool on long sea crossings.
+  _updateShipWake(dtMs) {
+    const meta = this.viewer.unitMeta
+    if (!meta || !(meta.isShip || meta.isSub) || !this.isMoving) {
+      this._wakeAccumMs = 0
+      return
+    }
+    const cob = this.viewer.cob
+    if (!cob || typeof cob._emitShipWake !== 'function') return
+    this._wakeAccumMs = (this._wakeAccumMs || 0) + dtMs
+    while (this._wakeAccumMs >= 100) {
+      this._wakeAccumMs -= 100
+      cob._emitShipWake([this.pos.x, this.alt || 0, this.pos.z], this.heading + Math.PI)
+    }
   }
 
   // dispose tears everything down — called when the viewer reloads
@@ -756,23 +812,57 @@ export class MvControls {
     if (cb && cb.checked !== next) cb.checked = next
   }
 
-  // _wireKeyboard installs a document-level T-handler that toggles
-  // tracking when the model viewer dialog is open.  Skipped while
-  // the user is typing in an input/textarea so T keys don't get
-  // swallowed (the global hot-key would otherwise eat the letter).
+  // _wireKeyboard installs a document-level key handler for the
+  // viewer hotkeys:
+  //   T  — toggle camera tracking (snap-to-unit follow)
+  //   M  — arm Move action (next canvas click sets the destination)
+  //   A  — arm Primary weapon target
+  //   F  — arm Secondary weapon target
+  //   D  — arm Tertiary weapon target
+  //   S  — Stop (clears every target + halts the unit)
+  // Hotkeys go through _armSlot / _stopAllTargets so the visual
+  // state (button highlight, armed cursor, refreshArmingClass) is
+  // identical to clicking the on-screen buttons.  Skipped while
+  // the user is typing in any input / textarea / contenteditable
+  // and skipped while a modifier (ctrl/cmd/alt) is held so they
+  // don't fight browser/page shortcuts.
   _wireKeyboard() {
     if (this._keyHandlerWired) return
     this._keyHandlerWired = true
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 't' && e.key !== 'T') return
       const dlg = document.getElementById('model-viewer-dialog')
       if (!dlg || dlg.classList.contains('hidden')) return
       const tgt = e.target
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
-      e.preventDefault()
-      this.setTracking(!this.tracking)
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const k = (e.key || '').toLowerCase()
+      if (k === 't') { e.preventDefault(); this.setTracking(!this.tracking); return }
+      if (k === 'm') { e.preventDefault(); this._armSlotHotkey('move'); return }
+      if (k === 'a') { e.preventDefault(); this._armSlotHotkey('primary'); return }
+      if (k === 'f') { e.preventDefault(); this._armSlotHotkey('secondary'); return }
+      if (k === 'd') { e.preventDefault(); this._armSlotHotkey('tertiary'); return }
+      if (k === 's') { e.preventDefault(); this._stopAllTargets(); return }
     })
+  }
+
+  // _armSlotHotkey arms the given slot — identical state mutation
+  // to clicking the slot's on-screen button.  Skipped silently if
+  // the unit doesn't support the action (no weapon in that slot,
+  // can't move, etc.) so the keypress doesn't put the user into a
+  // limbo state with armed cursor but no target ever reachable.
+  _armSlotHotkey(slot) {
+    // Look up the matching button and check its disabled state to
+    // gate the hotkey — this respects the same enable/disable
+    // logic the visible buttons use (e.g. no Weapon2 → button
+    // disabled → hotkey no-ops).
+    const btn = [...document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')]
+      .find((b) => b.dataset.ctrlAction === slot)
+    if (!btn || btn.disabled) return
+    this.armed = slot
+    this._refreshButtons()
+    this._refreshArmingClass()
+    this._updateArmedCursor()
   }
 
   _maxVelocityWUPerSec() {
@@ -1125,11 +1215,11 @@ export class MvControls {
     const len = Math.hypot(dx, dy, dz)
     if (len < 0.001) return
     const color = this._laserColor(w)
-    // One pulse per ~5 wu, between 12 and 80 dots so the streak
-    // reads as a solid line even at the long end of laser range.
-    // Tight spacing keeps overlapping pulses from showing gaps
-    // between adjacent segments.
-    const segs = Math.max(12, Math.min(80, Math.round(len / 5)))
+    // One pulse per ~4 wu — with the 28-wu pulse size each blob
+    // overlaps its neighbour by ~85%, so the chain reads as a single
+    // wide stripe rather than discrete dots.  Cap at 120 to keep the
+    // pool sane on a max-range shot (e.g. range 480 → 120 pulses).
+    const segs = Math.max(16, Math.min(120, Math.round(len / 4)))
     for (let i = 0; i <= segs; i++) {
       const t = i / segs
       const p = [anchor[0] + dx * t, anchor[1] + dy * t, anchor[2] + dz * t]

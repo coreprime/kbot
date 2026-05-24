@@ -11797,6 +11797,11 @@ async function mvFetchUnitMeta(mv) {
     // at model-load time and the gated rows never appear once the
     // async FBI fetch resolves.
     renderMvPortsPanel(mv)
+    // Populate the left-panel Weapons tab now that the FBI + weapon
+    // TDF data is in.  Empty-state shows "No weapons declared" for
+    // structures / props.  Passed the whole viewer so the renderer
+    // can read scriptNames + wire change-weapon / sound-play actions.
+    renderMvWeaponsTab(mv)
   } catch (err) {
     console.warn(`[unit-meta:${name}] fetch failed:`, err)
   }
@@ -11947,7 +11952,7 @@ function pieceDisplayName(piece) {
 // tail of every redraw — cheap when panels are hidden because
 // the function early-returns on each closed panel.
 
-const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera']
+const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera', 'mv-inspector-effects']
 
 function wireMvInspectors() {
   // Wire drag + collapse + close on each panel + the View menu
@@ -12193,6 +12198,13 @@ function refreshMvInspectors(dtMs = 16) {
   const portsPanel = document.getElementById('mv-inspector-ports')
   if (portsPanel && !portsPanel.classList.contains('hidden')) {
     refreshMvPortsLiveValues(mv)
+  }
+  // Effects panel — live read-out of the particle pool.  Cheap
+  // when no particles are alive (early-out on count = 0).
+  const fxPanel = document.getElementById('mv-inspector-effects')
+  if (fxPanel && !fxPanel.classList.contains('hidden')) {
+    const body = document.getElementById('mv-inspector-effects-body')
+    if (body) renderMvEffectsPanel(body, mv)
   }
   // Grey out action / COB-entry buttons whose script has a live
   // thread, so the user can see at a glance what's running and
@@ -14204,6 +14216,179 @@ function wireMvRuntimeVisibility() {
   })
 }
 
+// _mvFxCollapsed — module-scoped set of section labels that the
+// user has collapsed.  Persists across the inspector's 4 Hz refresh
+// so toggling doesn't snap back open.  Reset when no panel exists.
+const _mvFxCollapsed = new Set()
+
+// renderMvEffectsPanel populates the Effects overlay with a live
+// snapshot of the cob particle pool.  Layout:
+//   1. Per-kind summary chip strip (LASER ×N, SMOKE_GREY ×M, …),
+//      projectile chips highlighted ahead of SFX chips.
+//   2. PROJECTILES & BEAMS section — collapsible — bullets / shells
+//      / plasma / dgun / laser / missile (kind ≥ 200).
+//   3. OTHER EFFECTS section — collapsible — smoke / sparks / fire
+//      flash / nano / wake.  Everything else.
+// Each particle renders as a card (kind header with colour swatch,
+// then a stat grid: position, direction unit-vector, speed, life).
+// Section headers act as collapse toggles and remember their state
+// across re-renders via _mvFxCollapsed.
+function renderMvEffectsPanel(body, mv) {
+  if (!mv || !mv.cob || !mv.cob.particles) {
+    body.replaceChildren()
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No particle pool.'
+    body.appendChild(empty)
+    return
+  }
+  const pool = mv.cob.particles
+  // Kind name + classification.  Numeric ids match cob-particles.js
+  // exports; kept inline so the panel is self-contained.  Any new
+  // kind added in the future falls back to "K{n}" + the EFFECT
+  // bucket — the user still sees it, just without the friendly name.
+  const KIND_NAMES = {
+    1: 'SMOKE_GREY', 2: 'SMOKE_WHITE', 3: 'SPARK', 4: 'FIRE_FLASH',
+    16: 'NANO', 257: 'WAKE',
+    200: 'BULLET', 201: 'SHELL', 202: 'PLASMA',
+    203: 'DGUN', 204: 'LASER', 205: 'MISSILE',
+  }
+  // PROJECTILE_* kinds start at 200 — easy classifier.
+  const isProjectile = (k) => k >= 200 && k <= 299
+  body.replaceChildren()
+  if (pool.count === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No particles in flight.'
+    body.appendChild(empty)
+    return
+  }
+  // Tally per-kind.  Two passes: one to count for the chip strip,
+  // one to assign each alive slot to a section while we render.
+  const counts = new Map()
+  for (let i = 0; i < pool.count; i++) {
+    if (!pool.alive[i]) continue
+    const k = pool.kind[i] | 0
+    counts.set(k, (counts.get(k) || 0) + 1)
+  }
+  // Chip strip — projectile chips first (highlighted), then SFX.
+  const chips = document.createElement('div')
+  chips.className = 'mv-fx-chips'
+  const sortedKinds = [...counts.entries()].sort((a, b) => {
+    const aProj = isProjectile(a[0]) ? 0 : 1
+    const bProj = isProjectile(b[0]) ? 0 : 1
+    return aProj - bProj || b[1] - a[1]
+  })
+  for (const [k, n] of sortedKinds) {
+    const chip = document.createElement('span')
+    chip.className = isProjectile(k) ? 'mv-fx-chip mv-fx-chip-proj' : 'mv-fx-chip'
+    chip.textContent = `${KIND_NAMES[k] || ('K' + k)} ×${n}`
+    chips.appendChild(chip)
+  }
+  body.appendChild(chips)
+  // Two sections: projectiles + beams (priority), then other SFX.
+  // Bucket the alive slots first so each section renders contiguously
+  // and the cap can be applied per-section.
+  const projSlots = []
+  const fxSlots = []
+  for (let i = 0; i < pool.count; i++) {
+    if (!pool.alive[i]) continue
+    if (isProjectile(pool.kind[i] | 0)) projSlots.push(i)
+    else fxSlots.push(i)
+  }
+  const SECTION_CAP = 60
+  const renderSection = (label, slots) => {
+    if (slots.length === 0) return
+    const collapsed = _mvFxCollapsed.has(label)
+    // Collapsible header — click toggles.  Chevron indicates state.
+    const sh = document.createElement('div')
+    sh.className = 'mv-fx-section'
+    sh.dataset.fxSection = label
+    const chev = document.createElement('span')
+    chev.className = 'mv-fx-chev'
+    chev.textContent = collapsed ? '▸' : '▾'
+    const labelEl = document.createElement('span')
+    labelEl.textContent = `${label} (${slots.length})`
+    sh.appendChild(chev)
+    sh.appendChild(labelEl)
+    sh.addEventListener('click', () => {
+      if (_mvFxCollapsed.has(label)) _mvFxCollapsed.delete(label)
+      else _mvFxCollapsed.add(label)
+      // Force an immediate re-render — don't wait for the 4 Hz tick
+      // since the user wants instant feedback on the toggle.
+      const mv2 = modelViewerInstance
+      if (mv2) renderMvEffectsPanel(body, mv2)
+    })
+    body.appendChild(sh)
+    if (collapsed) return
+    const grid = document.createElement('div')
+    grid.className = 'mv-fx-cards'
+    const shown = Math.min(slots.length, SECTION_CAP)
+    for (let n = 0; n < shown; n++) {
+      const i = slots[n]
+      const k = pool.kind[i] | 0
+      const card = document.createElement('div')
+      card.className = 'mv-fx-card'
+      // Card header — colour swatch + kind name.
+      const head = document.createElement('div')
+      head.className = 'mv-fx-card-head'
+      const sw = document.createElement('span')
+      sw.className = 'mv-fx-swatch'
+      const sr = Math.max(0, Math.min(255, Math.round(pool.r[i] * 127)))
+      const sg = Math.max(0, Math.min(255, Math.round(pool.g[i] * 127)))
+      const sb = Math.max(0, Math.min(255, Math.round(pool.b[i] * 127)))
+      sw.style.background = `rgb(${sr},${sg},${sb})`
+      const kindEl = document.createElement('span')
+      kindEl.className = 'mv-fx-card-kind'
+      kindEl.textContent = KIND_NAMES[k] || ('K' + k)
+      head.appendChild(sw)
+      head.appendChild(kindEl)
+      card.appendChild(head)
+      // Two-column stat grid: position, direction, speed, life.
+      const stats = document.createElement('div')
+      stats.className = 'mv-fx-card-stats'
+      const vx = pool.vx[i], vy = pool.vy[i], vz = pool.vz[i]
+      const speed = Math.hypot(vx, vy, vz)
+      const dirText = speed > 0.001
+        ? `${(vx/speed).toFixed(2)}, ${(vy/speed).toFixed(2)}, ${(vz/speed).toFixed(2)}`
+        : '—'
+      const lifeFrac = pool.life0[i] > 0 ? (pool.life[i] / pool.life0[i]) : 0
+      const addStat = (k, v) => {
+        const row = document.createElement('div')
+        row.className = 'mv-fx-stat'
+        const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
+        const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
+        row.appendChild(kEl); row.appendChild(vEl)
+        stats.appendChild(row)
+      }
+      addStat('pos',  `${pool.x[i].toFixed(0)}, ${pool.y[i].toFixed(0)}, ${pool.z[i].toFixed(0)}`)
+      addStat('dir',  dirText)
+      addStat('spd',  `${speed.toFixed(0)} wu/s`)
+      addStat('life', `${(pool.life[i] / 1000).toFixed(2)}s / ${(pool.life0[i] / 1000).toFixed(1)}s`)
+      card.appendChild(stats)
+      // Life bar — visual fraction of remaining life so the user
+      // doesn't have to parse "0.18s / 0.22s" in their head.
+      const bar = document.createElement('div')
+      bar.className = 'mv-fx-life-bar'
+      const fill = document.createElement('div')
+      fill.className = 'mv-fx-life-fill'
+      fill.style.width = `${Math.max(0, Math.min(1, lifeFrac)) * 100}%`
+      bar.appendChild(fill)
+      card.appendChild(bar)
+      grid.appendChild(card)
+    }
+    body.appendChild(grid)
+    if (slots.length > shown) {
+      const more = document.createElement('div')
+      more.className = 'mv-fx-more'
+      more.textContent = `+${slots.length - shown} more…`
+      body.appendChild(more)
+    }
+  }
+  renderSection('Projectiles & beams', projSlots)
+  renderSection('Other effects',       fxSlots)
+}
+
 // renderMvCameraPanel populates the Renderer overlay — historically a
 // camera-only read-out, now also displays the GL canvas's smoothed
 // FPS so the user can spot rendering hitches.  Function name kept
@@ -15385,6 +15570,453 @@ function renderTexturesTab(model) {
     filter.addEventListener('input', () => filterTexturesList(filter.value))
   }
   filterTexturesList(filter?.value || '')
+}
+
+// renderMvWeaponsTab populates the left-panel Weapons tab from the
+// unit FBI + per-weapon TDF data on `mv.unitMeta` and the COB's
+// `scriptNames` for the script-presence indicators.  Three slot
+// cards (Primary / Secondary / Tertiary), each showing:
+//
+//   • Weapon ID (1/2/3) + slot label header
+//   • Weapon name + colour rectangle (from TDF `color=` palette idx)
+//   • Script-presence chips (Aim<X> / Fire<X> / Query<X>) green when
+//     present in the unit's COB, red when missing
+//   • A warning line when Query<X> is missing — the runtime can't
+//     resolve the firing piece without it so the weapon can't fire
+//   • Quick-stat grid (reload / range / velocity / burst / model)
+//   • Sound rows with ▶ play buttons
+//   • A "Change Weapon" button that opens the picker modal scoped to
+//     this slot — swapping in a different weapon's TDF data live
+//   • Classifier flag chips (beam / smoke / ballistic / command-fire)
+//
+// Empty slots ("Weapon2=NONE" or missing) render as a muted "—"
+// placeholder card so the slot count stays consistent across units.
+function renderMvWeaponsTab(mv) {
+  const host = document.getElementById('model-viewer-weapons')
+  if (!host) return
+  host.replaceChildren()
+  const meta = mv && mv.unitMeta
+  if (!meta || !meta.weapons) {
+    const empty = document.createElement('div')
+    empty.className = 'loading'
+    empty.textContent = 'No weapons declared.'
+    host.appendChild(empty)
+    return
+  }
+  // Script names from the COB — a Set for fast membership checks.
+  // Empty when the unit has no COB (orphan 3DOs / props).
+  const scripts = new Set((mv.cob && mv.cob.unit && mv.cob.unit.scriptNames) || [])
+  const slots = ['primary', 'secondary', 'tertiary']
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i]
+    const w = meta.weapons.find((x) => x.slot === slot) || { slot, name: '', index: i + 1 }
+    host.appendChild(buildMvWeaponCard(mv, slot, w, scripts))
+  }
+}
+
+// buildMvWeaponCard renders ONE slot card.  Split out so the
+// post-swap re-render can rebuild just the affected card in place
+// (rather than re-rendering the whole panel) — keeps scroll position
+// and avoids flicker on the unchanged slots.
+function buildMvWeaponCard(mv, slot, w, scripts) {
+  const cap = slot[0].toUpperCase() + slot.slice(1)
+  const idx = w.index || (slot === 'primary' ? 1 : slot === 'secondary' ? 2 : 3)
+  const card = document.createElement('div')
+  card.className = 'mv-weapon-card'
+  card.dataset.slot = slot
+  card.dataset.slotIndex = String(idx)
+
+  // ── Header: slot label + weapon ID + name + colour rectangle ──
+  const head = document.createElement('div')
+  head.className = 'mv-weapon-head'
+  const title = document.createElement('div')
+  title.className = 'mv-weapon-title'
+  title.textContent = cap
+  const idEl = document.createElement('span')
+  idEl.className = 'mv-weapon-id'
+  idEl.textContent = '#' + idx
+  idEl.title = `FBI Weapon${idx} slot`
+  title.appendChild(idEl)
+  const nameEl = document.createElement('div')
+  nameEl.className = 'mv-weapon-name'
+  // Colour rectangle next to the weapon name when the weapon ships a
+  // TDF `color=` (e.g. ARM laser = palette[232] = bright green).
+  // Resolved through the model viewer's TAPalette — what's drawn
+  // here is exactly what the beam will paint with.
+  if (w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
+    const c = modelViewerInstance.palette.colorFor(w.colorIdx)
+    const rect = document.createElement('span')
+    rect.className = 'mv-weapon-color-rect'
+    rect.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
+    const hex = [c[0], c[1], c[2]].map(v => Math.round(v*255).toString(16).padStart(2, '0')).join('')
+    rect.title = `palette[${w.colorIdx}] = #${hex}`
+    nameEl.appendChild(rect)
+  }
+  const nameTxt = document.createElement('span')
+  nameTxt.textContent = w.name || '—'
+  nameEl.appendChild(nameTxt)
+  head.appendChild(title)
+  head.appendChild(nameEl)
+  card.appendChild(head)
+
+  // ── Action row: Change Weapon button (always available so users
+  //    can populate empty slots too).
+  const actions = document.createElement('div')
+  actions.className = 'mv-weapon-actions'
+  const change = document.createElement('button')
+  change.className = 'btn mv-weapon-change'
+  change.textContent = w.name ? 'Change Weapon' : 'Assign Weapon'
+  change.addEventListener('click', () => openWeaponPicker(mv, idx))
+  actions.appendChild(change)
+  card.appendChild(actions)
+
+  // ── Script presence indicators (Aim / Query / Fire) ──
+  // Always rendered for every slot — even an empty slot benefits
+  // from the indicator: if the user picks "Assign Weapon", the
+  // chips tell them up front whether the unit's COB actually has
+  // the matching firing scripts (because if not, the new weapon
+  // won't fire correctly).  Compact ORDER chosen to match TA's
+  // canonical aim → query → fire script call sequence so the
+  // user reads the chain left-to-right.
+  const slotCap = cap
+  const required = [
+    { name: `Aim${slotCap}`,   short: 'Aim',   key: 'aim'   },
+    { name: `Query${slotCap}`, short: 'Query', key: 'query' },
+    { name: `Fire${slotCap}`,  short: 'Fire',  key: 'fire'  },
+  ]
+  const chips = document.createElement('div')
+  chips.className = 'mv-weapon-scripts'
+  chips.setAttribute('role', 'group')
+  chips.setAttribute('aria-label', `Required scripts for ${slot} weapon`)
+  let missingQuery = false
+  let anyMissing = false
+  for (const r of required) {
+    const present = scripts.has(r.name)
+    if (!present) {
+      anyMissing = true
+      if (r.key === 'query') missingQuery = true
+    }
+    const chip = document.createElement('span')
+    chip.className = `mv-weapon-script-chip ${present ? 'ok' : 'bad'}`
+    chip.title = present
+      ? `${r.name} is defined in the unit's COB`
+      : `${r.name} is missing from the unit's COB`
+    chip.innerHTML = `<span class="mark">${present ? '✓' : '✗'}</span><span class="lbl">${r.short}</span>`
+    chips.appendChild(chip)
+  }
+  card.appendChild(chips)
+  // The most actionable missing-script case is Query<X> — without
+  // it the runtime can't resolve the muzzle piece and emit-sfx
+  // calls fall through to a name-heuristic that frequently picks
+  // the wrong piece.  Surface a single line of guidance when the
+  // unit can't actually support this weapon — shown for every slot
+  // (including empty ones) so the user knows in advance whether
+  // assigning a weapon here would actually work.
+  if (anyMissing) {
+    const warn = document.createElement('div')
+    warn.className = 'mv-weapon-warning'
+    if (missingQuery) {
+      warn.textContent = `⚠ This unit does not have the required functions to support a weapon.  (Missing Query${slotCap}.)`
+    } else {
+      warn.textContent = `⚠ Some firing scripts are missing — animations may not play correctly.`
+    }
+    card.appendChild(warn)
+  }
+
+  // ── Stats grid (only when a weapon is assigned) ──
+  if (w.name) {
+    const fmt = (v, unit) => (v == null || v === 0) ? '—' : `${(+v).toFixed(2).replace(/\.?0+$/, '')}${unit ? ' ' + unit : ''}`
+    const stats = [
+      ['Reload',   fmt(w.reloadSec, 's')],
+      ['Range',    fmt(w.rangeWU, 'wu')],
+      ['Velocity', fmt(w.velocityWU, 'wu/s')],
+      ['Burst',    (w.burst > 1) ? `${w.burst}×${fmt(w.burstRateSec, 's')}` : '1'],
+      ['Model',    w.model || '—'],
+      ['Color',    w.colorIdx ? String(w.colorIdx) : '—'],
+    ]
+    const grid = document.createElement('div')
+    grid.className = 'mv-weapon-stats'
+    for (const [k, v] of stats) {
+      const row = document.createElement('div')
+      row.className = 'mv-weapon-stat'
+      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
+      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
+      // Color row gets an inline swatch matching the header rectangle
+      // (same palette lookup) so the "232" number has a visual anchor.
+      if (k === 'Color' && w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
+        const c = modelViewerInstance.palette.colorFor(w.colorIdx)
+        const sw = document.createElement('span')
+        sw.className = 'mv-weapon-swatch'
+        sw.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
+        sw.title = `palette[${w.colorIdx}] = #${[c[0], c[1], c[2]].map(v => Math.round(v*255).toString(16).padStart(2,'0')).join('')}`
+        row.appendChild(sw)
+      }
+      row.appendChild(kEl); row.appendChild(vEl)
+      grid.appendChild(row)
+    }
+    card.appendChild(grid)
+
+    // ── Sound rows with inline play buttons ──
+    const sounds = [
+      ['Sound', w.soundStart],
+      ['Hit',   w.soundHit],
+    ]
+    for (const [k, snd] of sounds) {
+      const row = document.createElement('div')
+      row.className = 'mv-weapon-sound'
+      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
+      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = snd || '—'
+      row.appendChild(kEl); row.appendChild(vEl)
+      if (snd) {
+        const play = document.createElement('button')
+        play.className = 'mv-weapon-sound-play'
+        play.title = `Play ${snd}.wav`
+        play.setAttribute('aria-label', `Play ${snd}`)
+        play.textContent = '▶'
+        play.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation()
+          playWeaponSound(snd)
+        })
+        row.appendChild(play)
+      }
+      card.appendChild(row)
+    }
+
+    // ── Classifier flag chips ──
+    const flags = []
+    if (w.beamWeapon)  flags.push('beam')
+    if (w.smokeTrail)  flags.push('smoke trail')
+    if (w.selfProp)    flags.push('self-prop')
+    if (w.tracks)      flags.push('tracks')
+    if (w.ballistic)   flags.push('ballistic')
+    if (w.commandFire) flags.push('command-fire')
+    if (flags.length) {
+      const fchips = document.createElement('div')
+      fchips.className = 'mv-weapon-chips'
+      for (const f of flags) {
+        const chip = document.createElement('span')
+        chip.className = 'mv-weapon-chip'
+        chip.textContent = f
+        fchips.appendChild(chip)
+      }
+      card.appendChild(fchips)
+    }
+  }
+  return card
+}
+
+// playWeaponSound triggers the named .wav via the existing
+// /api/studio/sound endpoint.  Volume is matched to the Controls
+// overlay's sample player so previews aren't louder than the
+// in-session playback.  Errors are swallowed — autoplay rejection
+// in some browsers happens on first interaction; the user just
+// re-clicks.
+function playWeaponSound(stem) {
+  if (!stem) return
+  try {
+    const audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
+    audio.volume = 0.6
+    audio.play().catch(() => {})
+  } catch (err) {
+    console.warn(`[weapon-sound:${stem}] play failed:`, err)
+  }
+}
+
+// ── Weapon picker dialog ────────────────────────────────────────
+//
+// Catalogue cache for the dialog list.  Fetched lazily on first open
+// and reused thereafter — the VFS doesn't change after startup so a
+// single fetch covers the whole session.
+let _weaponCatalogue = null
+let _weaponPickerSelected = null
+let _weaponPickerWired = false
+
+// openWeaponPicker shows the Change Weapon dialog scoped to one slot
+// of one unit.  The slot index + unit name ride on the dialog's
+// dataset so Apply can re-call /api/studio/unit/{name} with the
+// proper override query param.
+function openWeaponPicker(mv, slotIndex) {
+  const dlg = document.getElementById('weapon-pick-dialog')
+  if (!dlg || !mv) return
+  const name = mv.cob && mv.cob.unit && mv.cob.unit.name
+  if (!name) return
+  dlg.dataset.unit = name
+  dlg.dataset.slot = String(slotIndex)
+  _weaponPickerSelected = null
+  const confirm = document.getElementById('weapon-pick-confirm')
+  if (confirm) confirm.disabled = true
+  const filter = document.getElementById('weapon-pick-filter')
+  if (filter) filter.value = ''
+  wireWeaponPickerOnce(mv)
+  dlg.classList.remove('hidden')
+  loadWeaponCatalogue().then((list) => renderWeaponPickList(list, mv))
+  if (filter) filter.focus()
+}
+
+function loadWeaponCatalogue() {
+  if (_weaponCatalogue) return Promise.resolve(_weaponCatalogue)
+  return fetch('/api/studio/weapons').then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return r.json()
+  }).then((list) => {
+    _weaponCatalogue = Array.isArray(list) ? list : []
+    return _weaponCatalogue
+  }).catch((err) => {
+    console.warn('[weapon-catalogue] fetch failed:', err)
+    _weaponCatalogue = []
+    return _weaponCatalogue
+  })
+}
+
+function renderWeaponPickList(list, mv) {
+  const host = document.getElementById('weapon-pick-list')
+  if (!host) return
+  host.replaceChildren()
+  if (!list.length) {
+    const empty = document.createElement('div')
+    empty.className = 'loading'
+    empty.textContent = 'No weapons found in this VFS.'
+    host.appendChild(empty)
+    return
+  }
+  // Filter against the search input — name, model, or sound name.
+  const filter = document.getElementById('weapon-pick-filter')
+  const q = (filter && filter.value || '').trim().toLowerCase()
+  const filtered = q
+    ? list.filter((w) => (w.name + ' ' + (w.model || '') + ' ' + (w.soundStart || '')).toLowerCase().includes(q))
+    : list
+  // Current weapon name for this slot — highlight it as the active
+  // selection so the user has visual feedback for what's installed.
+  const currentSlot = parseInt(document.getElementById('weapon-pick-dialog').dataset.slot || '0', 10)
+  const currentMeta = mv && mv.unitMeta && mv.unitMeta.weapons
+  const currentName = currentMeta && currentMeta[currentSlot - 1] ? currentMeta[currentSlot - 1].name : ''
+  for (const w of filtered) {
+    host.appendChild(buildWeaponPickRow(w, w.name === currentName))
+  }
+  if (!filtered.length) {
+    const empty = document.createElement('div')
+    empty.className = 'loading'
+    empty.textContent = 'No weapons match the filter.'
+    host.appendChild(empty)
+  }
+}
+
+// buildWeaponPickRow renders one row in the picker — same .open-list-item
+// styling as the Open Unit / Open Map dialogs so chrome stays unified.
+function buildWeaponPickRow(w, isCurrent) {
+  const btn = document.createElement('button')
+  btn.className = 'open-list-item weapon-list-item' + (isCurrent ? ' active' : '')
+  btn.dataset.name = w.name
+  // Colour swatch on the left where the unit picker has its thumbnail.
+  const sw = document.createElement('div')
+  sw.className = 'thumb weapon-thumb'
+  if (w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
+    const c = modelViewerInstance.palette.colorFor(w.colorIdx)
+    sw.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
+  } else {
+    sw.classList.add('weapon-thumb-empty')
+  }
+  btn.appendChild(sw)
+  const title = document.createElement('div')
+  title.className = 'title'
+  title.textContent = w.name + (isCurrent ? '  (current)' : '')
+  btn.appendChild(title)
+  const fmt = (v, unit) => (v == null || v === 0) ? '—' : `${(+v).toFixed(2).replace(/\.?0+$/, '')}${unit ? ' ' + unit : ''}`
+  const meta1 = document.createElement('div')
+  meta1.className = 'meta'
+  meta1.textContent = `Reload ${fmt(w.reloadSec, 's')} · Range ${fmt(w.rangeWU, 'wu')} · Velocity ${fmt(w.velocityWU, 'wu/s')}`
+  btn.appendChild(meta1)
+  const meta2 = document.createElement('div')
+  meta2.className = 'meta'
+  const burst = (w.burst > 1) ? `Burst ${w.burst}×${fmt(w.burstRateSec, 's')}` : 'Single shot'
+  meta2.textContent = `${burst} · Model ${w.model || '—'}`
+  btn.appendChild(meta2)
+  // Flag chips mirror the active-panel chips — beam/smoke/etc.
+  const flags = []
+  if (w.beamWeapon)  flags.push('beam')
+  if (w.smokeTrail)  flags.push('smoke')
+  if (w.selfProp)    flags.push('self-prop')
+  if (w.tracks)      flags.push('tracks')
+  if (w.ballistic)   flags.push('ballistic')
+  if (w.commandFire) flags.push('cmd-fire')
+  if (flags.length) {
+    const chips = document.createElement('div')
+    chips.className = 'model-chips'
+    for (const f of flags) {
+      const c = document.createElement('span')
+      c.className = 'model-chip on'
+      c.textContent = f
+      chips.appendChild(c)
+    }
+    btn.appendChild(chips)
+  }
+  btn.addEventListener('click', () => {
+    _weaponPickerSelected = w.name
+    const list = document.getElementById('weapon-pick-list')
+    if (list) {
+      for (const child of list.querySelectorAll('.weapon-list-item')) {
+        child.classList.toggle('selected', child === btn)
+      }
+    }
+    const confirm = document.getElementById('weapon-pick-confirm')
+    if (confirm) confirm.disabled = false
+  })
+  btn.addEventListener('dblclick', () => {
+    _weaponPickerSelected = w.name
+    document.getElementById('weapon-pick-confirm')?.click()
+  })
+  return btn
+}
+
+// wireWeaponPickerOnce attaches Cancel/Apply/filter handlers the
+// FIRST time the picker is opened.  Subsequent opens reuse the wired
+// handlers — the unit + slot ride on dataset so a single set of
+// listeners covers every slot/unit combination.
+function wireWeaponPickerOnce(mv) {
+  if (_weaponPickerWired) return
+  _weaponPickerWired = true
+  const dlg = document.getElementById('weapon-pick-dialog')
+  const cancel = document.getElementById('weapon-pick-cancel')
+  const confirm = document.getElementById('weapon-pick-confirm')
+  const filter = document.getElementById('weapon-pick-filter')
+  cancel?.addEventListener('click', () => dlg?.classList.add('hidden'))
+  // Escape closes the dialog — matches the Open Unit dialog UX.
+  dlg?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') dlg.classList.add('hidden')
+  })
+  filter?.addEventListener('input', () => {
+    if (_weaponCatalogue) renderWeaponPickList(_weaponCatalogue, mv)
+  })
+  confirm?.addEventListener('click', async () => {
+    if (!_weaponPickerSelected) return
+    const dlg2 = document.getElementById('weapon-pick-dialog')
+    if (!dlg2) return
+    const unitName = dlg2.dataset.unit
+    const slotIdx = parseInt(dlg2.dataset.slot || '0', 10)
+    if (!unitName || slotIdx < 1 || slotIdx > 3) return
+    // Build the override URL.  Keep existing slots untouched —
+    // the server preserves any slot without an override.
+    const params = new URLSearchParams()
+    params.set(`weapon${slotIdx}`, _weaponPickerSelected)
+    // Persist any prior swaps on the other slots so re-fetching
+    // doesn't lose them.  Stored on the viewer for the session.
+    const mv2 = modelViewerInstance
+    mv2._weaponOverrides = mv2._weaponOverrides || {}
+    mv2._weaponOverrides[slotIdx] = _weaponPickerSelected
+    for (const [k, v] of Object.entries(mv2._weaponOverrides)) {
+      if (parseInt(k, 10) !== slotIdx) params.set(`weapon${k}`, v)
+    }
+    try {
+      const resp = await fetch(`/api/studio/unit/${encodeURIComponent(unitName)}?${params.toString()}`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      mv2.unitMeta = await resp.json()
+      renderMvWeaponsTab(mv2)
+      if (_mvControls) _mvControls.onMetaLoaded()
+    } catch (err) {
+      console.warn('[weapon-swap] failed:', err)
+    }
+    dlg2.classList.add('hidden')
+  })
 }
 
 // filterTexturesList hides rows whose texture name doesn't include
