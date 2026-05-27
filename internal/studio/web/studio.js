@@ -19,7 +19,6 @@ let _mvControls = null
 // or sandbox views.
 import {
   TILE_PX,
-  VOID_COLOR,
   MAX_START_POSITIONS,
   DRAWER_ITEM_HEIGHT,
   DRAWER_OBSERVER_MARGIN,
@@ -102,12 +101,7 @@ import {
 // (whenImageReady, preloadFeatureImage, renderCanvas,
 // featureAnchorOffset, featureAnchorWorld) stay in studio.js for
 // now and are wired through hostCallbacks.
-import {
-  resetGL,
-  ensureGLRenderer,
-  glClearViewport,
-  glRenderTilesAndFeatures,
-} from './ui/map-editor/canvas/webgl.js'
+import { resetGL } from './ui/map-editor/canvas/webgl.js'
 
 // Pure rotation + flip helpers shared by the 2D draw path, the GL
 // renderer, and the stamp pipeline.  No state, no DOM — just
@@ -194,7 +188,6 @@ import {
 // prefs alongside the other View toggles.
 import {
   setCameraInfoVisible,
-  updateCameraInfoPanel,
   updateCameraInfoCursor,
 } from './ui/map-editor/camera-info.js'
 
@@ -308,20 +301,15 @@ import {
   stopAllMapPan,
 } from './ui/map-editor/zoom-pan.js'
 
-// Visible-area helpers — return the tile + pixel rect of whatever
-// the user can see right now (padded by one tile so partial-edge
-// tiles still render).  Every per-cell render pass culls against
-// these so the canvas stays cheap on large maps.
-import {
-  visibleTileBounds,
-  visiblePixelBounds,
-} from './ui/map-editor/viewport.js'
+// Visible-area helpers (visibleTileBounds, visiblePixelBounds)
+// live in /ui/map-editor/viewport.js; only render.js consumes
+// them now so studio.js doesn't import them directly.
 
 // Developer stats panel + Advanced ▸ Developer dialog.  Per-frame
-// scheduling is gated on contentVersion so high-freq callers
-// (scroll, hover) skip the rAF entirely.
+// scheduleDevStatsRefresh is consumed by render.js; only the
+// developer-panel wiring + the dialog open/close stay in
+// studio.js for the ribbon + menu hooks.
 import {
-  scheduleDevStatsRefresh,
   wireDeveloperPanel,
   openDeveloperDialog,
   closeDeveloperDialog,
@@ -362,84 +350,24 @@ import {
 } from './ui/map-editor/feature-assets.js'
 
 // Heightmap drawing passes — Heightmap view's grayscale, the
-// Blended-mode overlay, and the optional contour lines.  Pure
-// state-driven helpers; both Map and Heightmap view paths call
-// them from renderCanvas.
-import {
-  drawHeightmap,
-  drawHeightmapOverlay,
-  drawHeightContours,
-} from './ui/map-editor/canvas/heightmap.js'
+// Section placement preview — tryAutoRotatePlacement is called
+// from the mouse-move handlers so the auto-rotation kicks in as
+// the preview follows the cursor.  The render passes themselves
+// (drawPlacementPreview / hideRotationBadge / drawHeightmap /
+// drawGridlines / drawVoidOverlay / drawBuildableOverlay /
+// drawSelectedFeatureOutline / drawHighlightedFeatureOutlines /
+// drawEraseBrush / drawHeightmapBrush / drawStartPositions /
+// drawRulerOverlay / drawTiles / drawFeatures / drawDropPreview /
+// drawFeatureDragPreview / drawTerrainOverlays /
+// updateFeatureInfoPanel) are now called from renderCanvas in
+// /ui/map-editor/canvas/render.js — studio.js doesn't import them
+// directly any more.
+import { tryAutoRotatePlacement } from './ui/map-editor/canvas/placement.js'
 
-// Map overlays — gridlines, voids, the buildable-cell mask, and
-// the live voids-brush footprint.  All pure state-driven ctx
-// passes; the gridline pass needs the canvas to bound its strokes.
-import {
-  drawGridlines,
-  drawVoidOverlay,
-  drawBuildableOverlay,
-} from './ui/map-editor/canvas/overlays.js'
-
-// Feature selection + hover outlines.  Live above the sprite pass
-// so they always sit on top regardless of feature draw order.
-import {
-  drawSelectedFeatureOutline,
-  drawHighlightedFeatureOutlines,
-} from './ui/map-editor/canvas/feature-overlays.js'
-
-// Erase + heightmap brush footprint previews rendered at the
-// cursor while the matching mode is active.  Drawn after the rest
-// of the overlays so the brush hint is always the topmost
-// element.
-import {
-  drawEraseBrush,
-  drawHeightmapBrush,
-} from './ui/map-editor/canvas/brush-cursors.js'
-
-// Start-position markers — the active schema's positions render
-// as labelled gold robot badges, other schemas' positions dim
-// behind them so the user sees the full layout at once.
-import { drawStartPositions } from './ui/map-editor/canvas/start-positions.js'
-
-// Ruler measure tool — dashed line + endpoint dots + floating
-// distance/height-delta label.  rulerStats walks the line so the
-// height range covers every attr cell it crosses.
-import { drawRulerOverlay } from './ui/map-editor/canvas/ruler.js'
-
-// 2D-canvas tile pass — drawTiles handles the visible-bounds main
-// loop.  drawRotatedTile (the rotation-only sibling) lives in the
-// same module but only the terrain-clipboard preview consumes it
-// now, so studio.js doesn't need to re-import it here.
-import { drawTiles } from './ui/map-editor/canvas/tiles.js'
-
-// Feature sprite passes — the main per-feature draw plus the two
-// drag-preview helpers (tile-sized drop target rectangle + the
-// translucent cursor-follow sprite).
-import {
-  drawFeatures,
-  drawDropPreview,
-  drawFeatureDragPreview,
-} from './ui/map-editor/canvas/features.js'
-
-// Section placement preview + edge-alignment ring + the auto-
-// rotate snap helper.  tryAutoRotatePlacement is also called from
-// the mouse-move handlers so the auto-rotation kicks in as the
-// preview follows the cursor.
-import {
-  drawPlacementPreview,
-  tryAutoRotatePlacement,
-  hideRotationBadge,
-} from './ui/map-editor/canvas/placement.js'
-
-// Select-Area / terrain-clipboard preview — the in-flight
-// rectangle the user is sweeping plus the floating clipboard +
-// edge-alignment hints that follow the cursor after a Select Area
-// drag.
-import { drawTerrainOverlays } from './ui/map-editor/canvas/terrain.js'
-
-// Floating Feature Info callout — populated each renderCanvas
-// tick when a single feature is selected (Place Features mode).
-import { updateFeatureInfoPanel } from './ui/map-editor/feature-info.js'
+// renderCanvas — the per-frame orchestrator that paints every
+// layer of the map editor canvas.  All sub-passes live in their
+// own modules at this point; the orchestrator is just call sites.
+import { renderCanvas } from './ui/map-editor/canvas/render.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -4213,130 +4141,8 @@ function placeFeature(ax, ay) {
   renderCanvas()
 }
 
-function renderCanvas() {
-  const canvas = $('#canvas')
-  const glCanvas = $('#canvas-gl')
-  const wantW = state.tileW * TILE_PX
-  const wantH = state.tileH * TILE_PX
-  // Reassigning canvas.width/height reallocates the pixel buffer —
-  // for a 128-tile map that's a 64 MB texture, and a 256-tile map
-  // is 256 MB.  Doing it every render (including on every scroll
-  // tick) is what made the editor feel "insanely slow".  Only pay
-  // that cost when the dimensions actually change.
-  const dimsChanged = canvas.width !== wantW || canvas.height !== wantH
-  if (dimsChanged) {
-    canvas.width = wantW
-    canvas.height = wantH
-    if (glCanvas) {
-      glCanvas.width = wantW
-      glCanvas.height = wantH
-    }
-  }
-  // Sync the CSS size on BOTH canvases regardless of whether the 2D
-  // canvas's value happened to match — the two layers must always agree
-  // on dimensions or features render outside the visible canvas.  This
-  // also catches the map-switch case where the previous map's GL canvas
-  // style was left stale because the 2D canvas's style happened to
-  // already be the new target after a dimsChanged reset.
-  const wantStyleW = wantW * state.zoom + 'px'
-  const wantStyleH = wantH * state.zoom + 'px'
-  if (canvas.style.width !== wantStyleW) canvas.style.width = wantStyleW
-  if (canvas.style.height !== wantStyleH) canvas.style.height = wantStyleH
-  if (glCanvas) {
-    if (glCanvas.style.width !== wantStyleW) glCanvas.style.width = wantStyleW
-    if (glCanvas.style.height !== wantStyleH) glCanvas.style.height = wantStyleH
-  }
-  // .canvas-stack is the normal-flow scroll content; we pad it with
-  // half a viewport on every side so the user can pan the map past
-  // any edge until that edge sits at the centre of the viewport.
-  applyOverscrollPadding()
-  const ctx = canvas.getContext('2d')
-  ctx.imageSmoothingEnabled = false
-
-  // 2D overlay layer must be transparent everywhere we don't paint
-  // an overlay, so the WebGL tile+feature layer shows through.  Clear
-  // the visible viewport instead of fill-rect-with-void-colour — the
-  // void is now drawn by the GL layer's clear().
-  const vp = visiblePixelBounds()
-  if (dimsChanged) {
-    ctx.clearRect(0, 0, wantW, wantH)
-  } else {
-    ctx.clearRect(vp.minX, vp.minY, vp.maxX - vp.minX, vp.maxY - vp.minY)
-  }
-
-  // Tiles + features render via WebGL.  Heightmap view stays on 2D
-  // (it's a one-off greyscale fill, not a per-tile drawImage hot
-  // path).  When the GL context isn't available (no WebGL support),
-  // fall back to the 2D path so the editor still works.  Note that
-  // the GL renderer iterates tile *cells* — it needs visibleTileBounds,
-  // not the pixel bounds we use for the 2D clearRect.
-  const glReady = ensureGLRenderer()
-  const tb = visibleTileBounds()
-  if (state.viewMode === 'heightmap') {
-    if (glReady) glClearViewport()
-    drawHeightmap(ctx)
-  } else {
-    if (glReady) {
-      glRenderTilesAndFeatures(tb)
-    } else {
-      ctx.fillStyle = VOID_COLOR
-      ctx.fillRect(vp.minX, vp.minY, vp.maxX - vp.minX, vp.maxY - vp.minY)
-      drawTiles(ctx)
-    }
-    if (state.viewMode === 'blended') drawHeightmapOverlay(ctx)
-    // Optional height contour overlay on Map / Blended views.  The
-    // Heightmap view always draws contours via drawHeightmap → here
-    // we re-use the same function so the on-screen lines match.
-    if (state.showContours) {
-      const attrW = state.tileW * 2
-      const attrH = state.tileH * 2
-      const cell = TILE_PX / 2
-      drawHeightContours(ctx, attrW, attrH, cell)
-    }
-  }
-
-  // Grid overlay — density adapts to zoom so you can see per-tile
-  // outlines when you're close and big 8×8 blocks when zoomed out.
-  // Major lines every 8 tiles are drawn heavier so the user keeps
-  // a sense of the larger grid even at the densest zoom.
-  if (state.showGridlines) drawGridlines(ctx, canvas)
-
-  // Features are rendered by the WebGL layer above when GL is active;
-  // fall back to the 2D path only when GL isn't available.
-  if (!glReady && state.showFeatures && state.viewMode !== 'tiles' && state.viewMode !== 'heightmap') {
-    drawFeatures(ctx)
-  }
-
-  // Drop-preview, terrain rectangle selection, terrain clipboard preview,
-  // placement preview, selected-feature highlight — each draws its own
-  // overlay so the user always sees what their next action will do.
-  drawDropPreview(ctx)
-  drawFeatureDragPreview(ctx)
-  drawTerrainOverlays(ctx)
-  drawPlacementPreview(ctx)
-  drawSelectedFeatureOutline(ctx)
-  drawHighlightedFeatureOutlines(ctx)
-  drawStartPositions(ctx)
-  drawEraseBrush(ctx)
-  drawHeightmapBrush(ctx)
-  drawVoidOverlay(ctx)
-  drawBuildableOverlay(ctx)
-  drawRulerOverlay(ctx)
-
-  // Rotation badge is an HTML overlay — hide it when there's nothing
-  // to rotate.  The drawPlacementPreview / drawTerrainClipboard
-  // functions re-show + reposition it via updateRotationBadge.
-  if (!state.placement && !state.terrainClipboard) hideRotationBadge()
-
-  // Mirror the main canvas into the floating minimap.
-  scheduleMinimapRender()
-  // Refresh the developer stats panel on the next frame too — keeps
-  // the counts in sync with whatever the user just stamped.
-  scheduleDevStatsRefresh()
-  // Keep the per-feature callout in sync with the current selection.
-  updateFeatureInfoPanel()
-  updateCameraInfoPanel()
-}
+// renderCanvas moved to /ui/map-editor/canvas/render.js —
+// imported at the top of this file.
 
 // updateFeatureInfoPanel populates the floating callout that appears
 // while the user has a single feature selected.  It shows the data
