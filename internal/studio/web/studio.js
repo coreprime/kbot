@@ -207,7 +207,7 @@ import {
 import { registerMapTabType } from './ui/map-editor/register-tab.js'
 import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
 import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
-import { getTabType } from './ui/tab-registry.js'
+import { createTab, getTabType } from './ui/tab-registry.js'
 
 // View-menu visibility toggles (minimap / features / start
 // positions / voids).  Each flips the matching state.show* flag,
@@ -641,14 +641,15 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.getActiveSandboxView = getActiveSandboxView
   hostCallbacks.openModelViewer = (name) => openModelViewer(name)
   hostCallbacks.getActiveTab = () => (tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null)
-  // getTabs / pushTab — seams the extracted /ui/sandbox/tab.js uses to
-  // walk every other tab during activation (stop renderers + detach
-  // canvases) and to push the welcome-card-created sandbox tab.
+  // getTabs / openTab — seams the extracted section modules use to
+  // (1) walk every other tab during activation to stop renderers,
+  // and (2) push a fresh tab through the registry.  openTab is the
+  // ONLY public path to add a tab — it consults the registry,
+  // builds the instance, attaches it to the host record, then
+  // switches focus.  Legacy `pushTab` (which took a pre-built
+  // record) is gone; every opener must go through here.
   hostCallbacks.getTabs = () => tabs
-  hostCallbacks.pushTab = (tab) => {
-    tabs.push(tab)
-    switchToTab(tabs.length - 1, { fresh: true, force: true })
-  }
+  hostCallbacks.openTab = (typeId, spec = {}) => openTab(typeId, spec)
   hostCallbacks.openLoadedMap = openLoadedMap
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
@@ -820,15 +821,37 @@ document.addEventListener('DOMContentLoaded', () => {
 //      so the new map renders from a clean surface.
 //   6) Render + restore scroll.
 
+// openTab — single entry point for adding a tab to the host.  Each
+// opener (openLoadedMap, openModelViewer, openSandboxStub,
+// startEditor) builds its type-specific spec and routes here.
+// The function:
+//   1. Builds the registry instance via createTab(typeId, spec).
+//   2. Pushes the host record (which carries the descriptor + spec +
+//      instance) into tabs[].
+//   3. Calls instance.attachTabRef so the descriptor can mirror
+//      legacy fields onto the host record for back-compat.
+//   4. Switches focus to the new tab (unless opts.defer is true,
+//      in which case the caller is responsible for the switch —
+//      used by openers that need to populate the spec further
+//      before the first activation).
+// Returns the freshly-attached host record.
+function openTab(typeId, spec = {}, opts = {}) {
+  const record = createTab(typeId, spec)
+  tabs.push(record)
+  if (typeof record.instance.attachTabRef === 'function') {
+    record.instance.attachTabRef(record)
+  }
+  tabState.activeIndex = tabs.length - 1
+  if (!opts.defer) void switchToTab(tabState.activeIndex, { fresh: true, force: true })
+  return record
+}
+
 // _ensureTabInstance backfills the registry-managed
 // `tab.typeId` + `tab.descriptor` + `tab.instance` fields onto tab
-// records the legacy openers (openModelViewer, openSandboxStub,
-// openLoadedMap) push with the old `{ type, name, sandbox?, map? }`
-// shape.  Idempotent so re-entry is safe.
-//
-// Once every opener migrates to call createTab(typeId, spec) +
-// instance.attachTabRef directly, this shim deletes — the registry
-// would be the only path to instance creation.
+// records the legacy openers push with the old shape.  After every
+// opener routes through openTab() this shim should be dead — keep
+// it defensive in case any external path still pushes legacy
+// records into tabs[].
 function _ensureTabInstance(tab) {
   if (!tab) return
   if (tab.instance) return
@@ -1137,8 +1160,14 @@ async function openLoadedMap(data, card) {
   // in this new MapDoc — the prior tab keeps its own state intact
   // in tabs[], reachable by clicking back.
   if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
-  tabs.push({ type: 'map', map: new MapDoc() })
-  tabState.activeIndex = tabs.length - 1
+  // Push the new map tab through the registry but DEFER activation —
+  // the load code below mutates `state` (the active MapDoc proxy)
+  // to hydrate the tile / heights / features arrays.  Activating
+  // now would mount the editor against an empty MapDoc and force a
+  // second renderCanvas pass once the hydration completes.  We
+  // explicitly switchToTab once the MapDoc is fully populated +
+  // finishEditorBoot has wired the canvas.
+  openTab('map', { map: new MapDoc() }, { defer: true })
   restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
@@ -1262,8 +1291,11 @@ async function startEditor() {
   // — otherwise the previous map's minimap leaks into the new one
   // until the next commit.
   if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
-  tabs.push({ type: 'map', map: new MapDoc() })
-  tabState.activeIndex = tabs.length - 1
+  // Push a fresh map tab through the registry with deferred
+  // activation — the hydration below mutates `state` to set up the
+  // new MapDoc's dimensions / planet / schemas, and the
+  // finishEditorBoot call further down owns the visual mount.
+  openTab('map', { map: new MapDoc() }, { defer: true })
   restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
@@ -3296,13 +3328,18 @@ function updateTopbarDocInfo(tab) {
     if (hintsEl) hintsEl.innerHTML = MAP_HINTS
     return
   }
-  if (tab.type === 'model') {
-    titleEl.textContent = tab.name
-    const parts = [tab.meta?.unitTitle, tab.meta?.side, tab.meta?.category, tab.meta?.description].filter(Boolean)
+  // Read off the registered typeId (set by openTab / _ensureTabInstance)
+  // rather than the legacy `tab.type` discriminator.  Both stay in
+  // sync for now via attachTabRef; once readers migrate the legacy
+  // field can drop.
+  if (tab.typeId === 'unit-editor' || tab.typeId === 'sandbox') {
+    titleEl.textContent = tab.instance?.displayName?.() || tab.name || ''
+    const meta = tab.spec?.meta || tab.meta
+    const parts = [meta?.unitTitle, meta?.side, meta?.category, meta?.description].filter(Boolean)
     metaEl.textContent = parts.join(' · ')
     if (hintsEl) hintsEl.innerHTML = MODEL_HINTS
   } else {
-    const m = tab.map
+    const m = tab.spec?.map || tab.map
     titleEl.textContent = mapDisplayName(m)
     const parts = [
       m?.tileW && m?.tileH ? `${m.tileW}×${m.tileH}` : null,
@@ -3393,7 +3430,7 @@ function updateTopbarDocInfo(tab) {
 // the _sandboxViewInstance live reference all moved to
 // /ui/sandbox/tab.js.  Studio.js still owns the tabs[] array +
 // switchToTab dispatcher; the extracted activator reaches both
-// through hostCallbacks.getTabs / hostCallbacks.pushTab.
+// through hostCallbacks.getTabs / hostCallbacks.openTab.
 
 // _unitEditorAutoRotate — host-side cache of the Auto-Rotate toggle
 // state shared by the React Camera dropdown, the Renderer panel, the
@@ -4128,18 +4165,23 @@ async function openModelViewer(name) {
   // automatically.
   const meta = findModelMeta(name)
   const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  if (modelOpenIntent === 'replace' && activeTab?.type === 'model') {
+  // Replace path: when the React ribbon's "Open another model..."
+  // routed through with intent='replace' AND the active tab is a
+  // unit-editor tab, mutate the existing spec/instance instead of
+  // pushing a fresh tab.  Mutating spec.name + spec.meta is enough
+  // because the descriptor's attachTabRef mirrors them back onto the
+  // legacy fields the viewer code reads.
+  if (modelOpenIntent === 'replace' && activeTab?.typeId === 'unit-editor') {
+    activeTab.spec.name = name
+    activeTab.spec.meta = meta
     activeTab.name = name
     activeTab.meta = meta
-  } else {
-    tabs.push({ type: 'model', name, meta })
-    tabState.activeIndex = tabs.length - 1
+    modelOpenIntent = 'add'
+    switchToTab(tabState.activeIndex, { fresh: false, force: true })
+    return
   }
   modelOpenIntent = 'add'
-  // Force-switch so the dialog re-opens, the topbar/footer refresh,
-  // and the viewer loads the new model even when the tab index
-  // stayed put.
-  switchToTab(tabState.activeIndex, { fresh: false, force: true })
+  openTab('unit-editor', { name, meta })
 }
 
 // closeModelViewer — replaced by the React ribbon's "Open another

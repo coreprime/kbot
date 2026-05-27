@@ -77,19 +77,14 @@ export function sharedModelViewerCanvas() {
   return _sharedModelViewerCanvas
 }
 
-// openSandboxStub — Sandbox welcome-card entry point.  Creates a
-// new 'sandbox' tab + activates it.  The activate path mounts the
-// SandboxView on the existing model-viewer canvas chrome (sky +
-// ground + camera) and exposes a floating Sandbox panel with Spawn /
-// Move / Attack actions.
+// openSandboxStub — Sandbox welcome-card entry point.  Routes
+// through the host's tab registry — openTab consults the 'sandbox'
+// descriptor (registered by /ui/sandbox/register-tab.js at boot),
+// builds an instance, pushes the host record, and switches focus.
+// No type discriminator + no legacy `sandbox: true` flag — the
+// registry handles dispatch by typeId.
 export function openSandboxStub() {
-  // Reuse the model-viewer tab type for hooking into the existing
-  // switchToTab routing; flag it as sandbox via tab.sandbox = true
-  // so activateModelTab knows to mount the multi-unit view instead
-  // of the single-unit one.  The tab name field is what the tab
-  // bar displays, so use "Sandbox" rather than the internal id.
-  const tab = { type: 'model', name: 'Sandbox', sandbox: true, displayName: 'Sandbox' }
-  hostCallbacks.pushTab?.(tab)
+  hostCallbacks.openTab?.('sandbox', { displayName: 'Sandbox' })
 }
 
 export async function activateSandboxTab(tab) {

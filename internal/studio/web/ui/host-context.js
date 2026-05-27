@@ -279,11 +279,14 @@ export const hostCallbacks = {
   // reference so a fresh push from studio.js (openModelViewer /
   // openSandboxStub) shows up in the next walk without re-importing.
   getTabs: null,                // () => Tab[]
-  // pushTab — append a new tab to studio.js's tabs[] AND flip
-  // tabState.activeIndex / switch to it.  The sandbox welcome-card
-  // entry point uses this so /ui/sandbox/tab.js doesn't have to
-  // import the tabs / switchToTab module-let pair directly.
-  pushTab: null,                // (tab) => void
+  // openTab — single registry-routed entry point for adding a tab.
+  // Replaces the older pushTab (which took a pre-built legacy
+  // record).  Each opener now calls openTab(typeId, spec) and the
+  // host's openTab helper builds the instance via createTab, pushes
+  // the record, mirrors legacy fields through attachTabRef, and
+  // switches focus.  opts.defer = true skips the auto-switch (used
+  // by openers that need to populate spec further before mount).
+  openTab: null,                // (typeId, spec?, opts?) => Tab
   // openModelViewer — pushes a model tab into the unified tab array
   // and switches to it.  Called by openModelPicker after the user
   // confirms a unit pick (non-sandbox-spawn path).  Lives in studio.js
