@@ -74,6 +74,13 @@ import {
   setPendingTransaction,
 } from './ui/map-editor/undo.js'
 
+// Paint / erase / heightmap stroke flags — shared across every
+// stamp-style mode so each mode module reads + writes the same
+// `painting` + `paintedDuringStroke` fields without per-module
+// setter plumbing.  Foundation for the per-mode extractions in
+// R40d / R40d.1 / R40e.
+import { paintState, resetPaintStroke } from './ui/map-editor/paint-state.js'
+
 // Clipboard subsystem (terrain drag-clipboard + system Ctrl+C/V/X)
 // — moved to /ui/map-editor/clipboard.js.  Same call sites as
 // before; the implementations are now in the map-editor tree.
@@ -658,8 +665,7 @@ function restoreActiveTabModuleLets() {
 function abortTransientGestureState() {
   panState = null
   spacePanHotkey = false
-  painting = false
-  paintedDuringStroke = false
+  resetPaintStroke()
   canvasHoverFeature = null
   placementMoveAnchor = null
   resetTerrainDrag()
@@ -2601,8 +2607,10 @@ function selectFeature(f) {
 // authoritative store is hostCallbacks.cursor.lastHover so the
 // extracted clipboard module can read it without an import cycle;
 // this file just writes to it from the mouse-move/leave handlers.
-let painting = false
-let paintedDuringStroke = false
+// paintState (paint+erase+heightmap stroke flags) lives in
+// /ui/map-editor/paint-state.js — imported at the top of this
+// file so the extracted mode modules can share the same object
+// (R40d.0).
 
 // Pan state — populated while the user is mid-drag panning the canvas.
 let panState = null
@@ -2803,7 +2811,7 @@ class EditorView {
       if (!state.dragging) return
       e.preventDefault()
       state.dropPreview = null
-      paintedDuringStroke = false
+      paintState.paintedDuringStroke = false
       const wasFeature = state.dragging.type === 'feature'
       if (state.dragging.type === 'section' && state.placement) {
         // Anchor the section at the drop point instead of immediately
@@ -2831,7 +2839,7 @@ class EditorView {
           beginTransaction()
           placeFeature(ax, ay)
           commitTransaction('Place feature')
-          paintedDuringStroke = true
+          paintState.paintedDuringStroke = true
         }
       } else {
         beginTransaction()
@@ -2846,7 +2854,7 @@ class EditorView {
         // they're now in the anchored / movable state.
         // (showPlacementHint was already called by beginSectionDrag.)
       }
-      paintedDuringStroke = false
+      paintState.paintedDuringStroke = false
     }, sig)
   }
 }
@@ -2920,8 +2928,8 @@ function setCanvasHoverFeature(name) {
 // ── Mouse routing ──────────────────────────────────────────────────────────
 
 function onCanvasMouseDown(e) {
-  paintedDuringStroke = false
-  painting = true
+  paintState.paintedDuringStroke = false
+  paintState.painting = true
 
   if (shouldPan(e)) {
     // Auto-switch on an unambiguous left-click: a clean click on a
@@ -2947,7 +2955,7 @@ function onCanvasMouseDown(e) {
     const { tx, ty } = pickCell(e)
     if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
       eraseAt(tx, ty)
-      paintedDuringStroke = true
+      paintState.paintedDuringStroke = true
     }
   } else if (state.mode === 'select-terrain') {
     onTerrainMouseDown(e)
@@ -2993,7 +3001,7 @@ function onCanvasMouseMove(e) {
       }
     } else if (state.placement && !state.placement.anchored) {
       updatePlacementHover(e)
-    } else if (painting) handlePaint(e)
+    } else if (paintState.painting) handlePaint(e)
   } else if (state.mode === 'erase') {
     const { tx, ty } = pickCell(e)
     // Track the cursor cell so the brush outline follows the mouse,
@@ -3002,10 +3010,10 @@ function onCanvasMouseMove(e) {
       state.eraseCursor = { tx, ty }
       renderCanvas()
     }
-    if (painting) {
+    if (paintState.painting) {
       if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
         eraseAt(tx, ty)
-        paintedDuringStroke = true
+        paintState.paintedDuringStroke = true
       }
     }
   } else if (state.mode === 'select-terrain') {
@@ -3045,15 +3053,15 @@ function onCanvasMouseUp(e) {
         setMode('select-terrain')
       }
       placementMoveAnchor = null
-    } else if (painting && paintedDuringStroke && !state.placement) {
+    } else if (paintState.painting && paintState.paintedDuringStroke && !state.placement) {
       commitTransaction('Paint')
       if (state.selected?.type !== 'feature') clearStampSelection()
-    } else if (painting && !paintedDuringStroke) {
+    } else if (paintState.painting && !paintState.paintedDuringStroke) {
       abortTransaction()
     }
   } else if (state.mode === 'erase') {
-    if (painting && paintedDuringStroke) commitTransaction('Erase')
-    else if (painting) abortTransaction()
+    if (paintState.painting && paintState.paintedDuringStroke) commitTransaction('Erase')
+    else if (paintState.painting) abortTransaction()
   } else if (state.mode === 'select-terrain') {
     onTerrainMouseUp(e)
   } else if (state.mode === 'select-features') {
@@ -3067,8 +3075,7 @@ function onCanvasMouseUp(e) {
   } else if (state.mode === 'heightmap') {
     onHeightmapMouseUp(e)
   }
-  painting = false
-  paintedDuringStroke = false
+  resetPaintStroke()
 }
 
 // shouldPan inspects the mousedown event and current editor state to
@@ -3192,8 +3199,7 @@ function updatePan(e) {
 function endPan() {
   panState = null
   document.body.style.cursor = spacePanHotkey ? 'grab' : ''
-  painting = false
-  paintedDuringStroke = false
+  resetPaintStroke()
 }
 
 // placementAnchor returns the top-left tile coordinate where the section
@@ -3321,7 +3327,7 @@ function stampSectionWithRotation(tx, ty, sectionPath, origW, origH, rotation, f
       if (sec) copyTileHeights(sec, src.sx, src.sy, mx, my, rotation, origW, origH, flipH, flipV)
     }
   }
-  paintedDuringStroke = true
+  paintState.paintedDuringStroke = true
   renderCanvas()
 }
 
@@ -3527,16 +3533,16 @@ function onHeightmapMouseDown(e) {
     state.hmLevelHeight = state.heights[ay * aw + ax] | 0
   }
   paintHeightAt(ax, ay)
-  paintedDuringStroke = true
+  paintState.paintedDuringStroke = true
   renderCanvas()
   // Auto-repeat: keep applying the brush at the most-recent cursor
   // cell until the user releases the button.  Smooth + level are
   // idempotent at the same cell so this is safe to do.
   if (hmHoldTimer) clearInterval(hmHoldTimer)
   hmHoldTimer = setInterval(() => {
-    if (!painting || !state.hmCursor) return
+    if (!paintState.painting || !state.hmCursor) return
     paintHeightAt(state.hmCursor.ax, state.hmCursor.ay)
-    paintedDuringStroke = true
+    paintState.paintedDuringStroke = true
     renderCanvas()
   }, HM_HOLD_INTERVAL_MS)
 }
@@ -3547,16 +3553,16 @@ function onHeightmapMouseMove(e) {
     state.hmCursor = { ax, ay }
     renderCanvas()
   }
-  if (painting) {
+  if (paintState.painting) {
     paintHeightAt(ax, ay)
-    paintedDuringStroke = true
+    paintState.paintedDuringStroke = true
   }
 }
 
 function onHeightmapMouseUp(_e) {
   if (hmHoldTimer) { clearInterval(hmHoldTimer); hmHoldTimer = null }
-  if (painting && paintedDuringStroke) commitTransaction(`Heightmap ${state.hmTool}`)
-  else if (painting) abortTransaction()
+  if (paintState.painting && paintState.paintedDuringStroke) commitTransaction(`Heightmap ${state.hmTool}`)
+  else if (paintState.painting) abortTransaction()
   invalidateMinimapBase()
   renderCanvas()
 }
@@ -3627,17 +3633,17 @@ function handlePaint(e) {
   // Shift held in Paint mode still acts as a quick-erase modifier.
   if (e.shiftKey) {
     eraseAt(tx, ty)
-    paintedDuringStroke = true
+    paintState.paintedDuringStroke = true
     return
   }
   if (!state.selected) return
   if (state.selected.type === 'section' && state.mode === 'paint') {
     stampSection(tx, ty)
-    paintedDuringStroke = true
+    paintState.paintedDuringStroke = true
   } else if (state.selected.type === 'feature') {
     const { ax, ay } = pickFeatureAttrCell(e, state.selected)
     placeFeature(ax, ay)
-    paintedDuringStroke = true
+    paintState.paintedDuringStroke = true
   }
 }
 
