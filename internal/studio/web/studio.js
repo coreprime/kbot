@@ -393,6 +393,16 @@ import {
   onRulerMouseMove,
 } from './ui/map-editor/canvas/ruler.js'
 
+// Voids-mode mouse handlers — paint the impassable attribute
+// cells.  resetVoidsDrag clears the in-flight drag state when the
+// user switches modes mid-drag.
+import {
+  onVoidsMouseDown,
+  onVoidsMouseMove,
+  onVoidsMouseUp,
+  resetVoidsDrag,
+} from './ui/map-editor/modes/voids.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -1407,7 +1417,7 @@ function setMode(mode) {
     state.ruler = null
   }
   if (mode !== 'voids') {
-    voidsDragState = null
+    resetVoidsDrag()
   } else {
     // Force Map view in Voids mode so the red overlay paints on top of
     // the terrain instead of getting hidden behind the Heightmap view.
@@ -3637,72 +3647,9 @@ function onPickerMouseUp(_e) {
 }
 
 // ── Voids mode ──────────────────────────────────────────────────────────
-// Painting impassable / no-build cells.  The first cell clicked sets the
-// brush state (toggle of whatever was there); the rest of the drag
-// applies that same target state to every attribute cell inside the
-// rectangle spanned by the cursor.  Mouseup commits as a single undo.
-
-// voidsDragState records the toggle target chosen on mousedown so the
-// whole drag uses the same paint vs. erase mode (matches the previous
-// rectangle-paint behaviour).
-let voidsDragState = null // { target } while dragging
-
-function onVoidsMouseDown(e) {
-  const { ax, ay } = pickAttrCellForVoid(e)
-  if (ax < 0 || ay < 0 || ax >= state.tileW * 2 || ay >= state.tileH * 2) return
-  const aw = state.tileW * 2
-  const prev = state.voids[ay * aw + ax] | 0
-  beginTransaction()
-  voidsDragState = { target: prev ? 0 : 1 }
-  paintVoidBrush(ax, ay, voidsDragState.target)
-  renderCanvas()
-}
-
-function onVoidsMouseMove(e) {
-  const { ax, ay } = pickAttrCellForVoid(e)
-  // Track cursor for the brush outline overlay even when not painting.
-  if (!state.voidsCursor || state.voidsCursor.ax !== ax || state.voidsCursor.ay !== ay) {
-    state.voidsCursor = { ax, ay }
-    renderCanvas()
-  }
-  if (!voidsDragState) return
-  paintVoidBrush(ax, ay, voidsDragState.target)
-  renderCanvas()
-}
-
-function onVoidsMouseUp(_e) {
-  if (!voidsDragState) return
-  voidsDragState = null
-  commitTransaction('Paint voids')
-  invalidateMinimapBase()
-  renderCanvas()
-}
-
-// paintVoidBrush stamps a size×size block centred on (ax, ay) with the
-// given target value (1=void, 0=passable).  Centring matches the
-// erase brush so a "1×1" stamp is exactly one cell under the cursor
-// and even sizes lean toward the top-left of the cursor cell.
-function paintVoidBrush(ax, ay, target) {
-  const size = Math.max(1, state.voidsBrushSize || 1)
-  const off = Math.floor(size / 2)
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  const x0 = ax - off
-  const y0 = ay - off
-  for (let dy = 0; dy < size; dy++) {
-    const cy = y0 + dy
-    if (cy < 0 || cy >= ah) continue
-    for (let dx = 0; dx < size; dx++) {
-      const cx = x0 + dx
-      if (cx < 0 || cx >= aw) continue
-      state.voids[cy * aw + cx] = target
-    }
-  }
-}
-
-// pickAttrCellForVoid converts a MouseEvent into the attribute cell
-// directly under the cursor, ignoring the feature-anchor / Height/2
-// adjustment pickFeatureAttrCell applies — voids are flat-grid edits.
+// onVoidsMouseDown / Move / Up + the paint-brush helper +
+// voidsDragState all moved to /ui/map-editor/modes/voids.js —
+// imported at the top of this file.
 // onFillMouseDown floods the connected region of tiles matching the
 // tile under the cursor with the active section's (0,0) source.  4-way
 // connectivity; bounded by the map.
