@@ -286,6 +286,13 @@ export const hostCallbacks = {
   // the camera-info panel to publish the current centre; defined
   // in studio.js because it touches the live canvas-scroll wrapper.
   viewportCellCenter: null,     // () => { tx, ty }
+  // rAF-batched re-render queues.  scheduleRenderCanvas defers a
+  // main-canvas repaint to the next animation frame so a burst of
+  // scroll events doesn't fan out into dozens of renders; the
+  // minimap variant does the same for the floating minimap panel.
+  // Both no-op safely when the editor view hasn't mounted yet.
+  scheduleRenderCanvas: null,   // () => void
+  scheduleMinimapRender: null,  // () => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
