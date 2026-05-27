@@ -3436,71 +3436,32 @@ function updateTopbarDocInfo(tab) {
 
 
 
-// _mvCollapsedUnits + renderMvScriptsPanel + buildMvUnitGroupHeader +
-// mvResetUnit + renderMvThreadRow + applyMvUnitCollapseState —
-// replaced by the Preact RuntimePanel component in
-// /ui/panels/runtime-panel.js (round 18).  Per-unit Reset routes through
-// hostBridge.resetUnit; click-to-debug routes through
-// hostBridge.openThreadCodeModal.
+// ── Archaeology: panel renderers that moved to React ───────────────
+// All of the per-panel render / wire / refresh functions that used to
+// live in this section migrated to focused Preact components under
+// /ui/panels/ (rounds 14–18).  External callers route through
+// hostCallbacks / hostBridge / the inspector-store signals, so the
+// migration was transparent from the rest of studio.js.  Mapping:
+//   RuntimePanel              → /ui/panels/runtime-panel.js
+//   StaticVarsPanel           → /ui/panels/static-vars-panel.js
+//   EffectsPanel              → /ui/panels/effects-panel.js
+//   AudioPanel                → /ui/panels/audio-panel.js
+//   RendererPanel             → /ui/panels/renderer-panel.js
+//   ControlsPanel             → /ui/panels/controls-panel.js
+//   ScriptCommandsPanel       → /ui/panels/script-commands-panel.js
+//   port-rows                 → /ui/unit-editor/panels/port-rows.js
+// The thread code-view debugger ported to React in R44; the host
+// bridge `openThreadCodeModal` opens a ThreadDebugger React mount
+// (see /ui/unit-editor/debugger/thread-debugger.js).
 
-// ── Thread code-view modal ─────────────────────────────────────────────
-// Pops over the model viewer when the user clicks a Threads-panel row.
-// Renders the thread's script disassembly (each instruction on a line
-// with offset + opcode-category colour) and highlights the row at the
-// current PC.  Locals + stack tray on the right.  Refreshes via the
-// same 4 Hz `refreshMvInspectors` tick so the highlight tracks live
-// execution.  Tracking by thread id so the modal stays bound to the
-// specific thread (not just "the next thread named Foo").
-
-
-
-
-
-// renderMvStaticVarsPanel — replaced by the Preact StaticVarsPanel
-// component in /ui/panels/static-vars-panel.js (round 14).  The React tree
-// subscribes to the inspector-store signals and rebuilds when the
-// active mv / sandbox selection size changes.
-
-
-// Particle / audio aggregation across every sandbox binding lives in
-// sandbox-view.js where the cardinality concern belongs.  studio.js
-// just consumes the result through SandboxView.getInspectorMv() and
-// no longer needs the scratch buffers + concat helpers here.
-
-// renderMvEffectsPanel — replaced by the Preact EffectsPanel
-// component in /ui/panels/effects-panel.js (round 14).  Section-collapse
-// state moved into a module-scoped signal in that file; the body
-// re-renders off the inspector-store signals on every refresh tick.
-//
-// renderMvAudioPanel — replaced by the Preact AudioPanel component
-// in /ui/panels/audio-panel.js (round 14).  Body reads off the live
-// AudioPool through the inspector-store signals.
-
-// renderMvCameraPanel + wireMvRendererPanel — replaced by the Preact
-// RendererPanel component in /ui/panels/renderer-panel.js (round 16).  The
-// Tracking + Auto-Rotate toggles route through the host bridge's
-// setTracking / setAutoRotate, both of which call into the active
-// view via _activeRendererView().
-
-// renderMvPortsPanel + refreshMvPortsLiveValues + refreshMvControlsGating
-// — replaced by the Preact ControlsPanel component in
-// /ui/panels/controls-panel.js (round 17).  All three render off the
-// inspector-store signals; the action grid keeps its MvControls /
-// sandbox-intercept click listeners via dangerouslySetInnerHTML.
-
-// refreshMvRuntimeStats — replaced by the StatsBlock subcomponent
-// inside /ui/panels/runtime-panel.js (round 18).  Stats are read directly
-// off the runtime via runtimeTick subscription, no DOM writes.
-
-// build*Row port-row builders — replaced by the Preact components in
-// /ui/unit-editor/panels/port-rows.js (round 17; relocated in R48b).
 
 // COB-state-to-React sync helpers (mvSyncCobAttrSlidersFromPorts,
 // syncMvActionsRunning, syncCobRibbonRunning, _collectRunningCobScripts,
 // refreshCobPanel, isCobScriptRunning) moved to
-// /ui/unit-editor/cob-sync.js; the hostCallbacks registrations above
-// preserve the call surface for the refresh tick, tab.js, and
-// runtime.js.
+// /ui/unit-editor/cob-sync.js (see archaeology block above).
+// Particle / audio aggregation across sandbox bindings lives in
+// sandbox-view.js — studio.js just consumes the proxy through
+// SandboxView.getInspectorMv().
 
 // runCobEntry invokes a script by name, randomising any required
 // inputs.  AimWeapon-class scripts expect (heading, pitch) on the
@@ -4055,33 +4016,14 @@ function wireModelViewerRibbon() {
   }
 }
 
-// handleSandboxDevToggle removed — the React sandbox ribbon's
-// Developer Controls row routes directly through
-// setControlsDevSectionVisible (the inspector-store signal).
-
-// controlsDevSectionVisible — the persisted preference now lives
-// inside the inspector-store signal exported from /ui/common/
-// inspector-store.js; both the React Controls panel and the React
-// sandbox ribbon read it from there.  The legacy host getter is gone.
-
-// setControlsDevSectionVisible — the React sandbox ribbon flips the
-// inspector-store signal directly, so the host's vanilla wrapper is
-// gone.  applyControlsDevSectionVisibility still runs to keep the
-// (legacy) DOM mirror in sync where it matters.
-
-// applyControlsDevSectionVisibility removed — the React sandbox
-// ribbon's Developer Controls row subscribes to the inspector-store
-// signal directly, so its check-mark + active state flip the instant
-// the value changes (no manual DOM mirror needed).
-
-// syncPanelToggleRows — removed.  Both the unit-editor View dropdown
-// + the sandbox Developer Tools dropdown are React-managed now and
-// subscribe to the panel-store's visible signal directly, so changing
-// a panel's visibility re-renders the row check automatically without
-// an extra cross-channel sync.
-//
-// syncSandboxDevtoolsDropdown removed for the same reason.
-
+// ── Archaeology: dropdown sync helpers that moved to React ─────────
+// The sandbox ribbon's Developer Controls row + the unit-editor View
+// dropdown both read the persisted preferences directly off the
+// inspector-store + panel-store signals now, so the cross-channel
+// sync helpers (handleSandboxDevToggle, setControlsDevSectionVisible,
+// applyControlsDevSectionVisibility, syncPanelToggleRows,
+// syncSandboxDevtoolsDropdown) are gone — flipping the matching
+// signal is enough to re-render every subscriber.
 
 // _activeRendererView — which view currently owns the canvas.  The
 // React Renderer panel's Tracking + Auto-Rotate toggles route through
