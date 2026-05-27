@@ -1358,10 +1358,21 @@ export class ModelRenderer {
 
   requestRedraw() {
     if (this.running) return
+    // Skip if this renderer was disposed — the camera-controls wheel
+    // handler still has a reference to us if the owning view didn't
+    // detach its inputs.  Trying to draw with deleted GL programs
+    // spams the console with INVALID_OPERATION warnings.
+    if (this._disposed) return
     requestAnimationFrame(() => this.draw())
   }
 
   draw() {
+    // Same guard as requestRedraw — the RAF loop can fire one more
+    // frame between the dispose call and the stop() taking effect.
+    // Also covers the WebGL context-lost case, where the browser
+    // evicts our GL context (too many open contexts across tabs) and
+    // every subsequent useProgram / bindFramebuffer call would warn.
+    if (this._disposed || this.gl?.isContextLost?.()) return
     const gl = this.gl
     // Shader programs are loaded asynchronously by init(); until they
     // resolve there's nothing to draw.  When init completes it calls
@@ -1786,6 +1797,11 @@ export class ModelRenderer {
 
   dispose() {
     this.stop()
+    // Mark disposed BEFORE freeing GL objects so any stray
+    // requestRedraw / draw call (e.g. from a still-attached
+    // camera-controls wheel handler whose owner forgot to detach)
+    // bails out instead of trying to useProgram a deleted handle.
+    this._disposed = true
     const gl = this.gl
     if (this.model) this.model.dispose(gl)
     if (this.programMain) gl.deleteProgram(this.programMain)
@@ -1799,6 +1815,19 @@ export class ModelRenderer {
     if (this._skyVBO) gl.deleteBuffer(this._skyVBO)
     if (this._groundVBO) gl.deleteBuffer(this._groundVBO)
     if (this.textureCache) this.textureCache.dispose()
+    // Null the program/buffer references so any internal code that
+    // bypasses the requestRedraw/draw guards above (e.g. a sub-pass
+    // calling gl.useProgram directly) has a clear "this is gone" sentinel.
+    this.programMain = null
+    this.programShadow = null
+    this.programSky = null
+    this.programGround = null
+    this.programWire = null
+    this._shadowFBO = null
+    this._shadowTex = null
+    this._terrainTex = null
+    this._skyVBO = null
+    this._groundVBO = null
   }
 
   // ── Frame: shadow pass ──────────────────────────────────────────────

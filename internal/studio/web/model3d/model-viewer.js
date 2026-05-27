@@ -380,6 +380,14 @@ export class ModelViewer {
   }
 
   dispose() {
+    // Detach the orbit-controls wheel / pointer / key listeners FIRST
+    // — they captured the renderer in closure, so once the renderer
+    // is disposed below those listeners would otherwise try to fire
+    // requestRedraw against a dead GL context.
+    if (typeof this._detachInputs === 'function') {
+      try { this._detachInputs() } catch { /* ignore */ }
+      this._detachInputs = null
+    }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
     if (this.renderer) {

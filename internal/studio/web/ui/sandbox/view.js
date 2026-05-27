@@ -1909,6 +1909,14 @@ export class SandboxView {
   }
 
   dispose() {
+    // Detach the orbit-controls listeners (wheel / pointer / key)
+    // FIRST so any in-flight wheel event between dispose start and
+    // canvas teardown can't fire requestRedraw against the about-to-
+    // be-deleted GL context.
+    if (typeof this._detachCamera === 'function') {
+      try { this._detachCamera() } catch { /* ignore */ }
+      this._detachCamera = null
+    }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
     // Pause + silence the engine first so the cleanup below can't
