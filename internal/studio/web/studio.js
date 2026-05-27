@@ -173,6 +173,15 @@ import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
 // state.  Auto-focuses the New card on every re-show.
 import { wireWelcomeKeyboard } from './ui/screens/welcome/keyboard.js'
 
+// Open-map picker flow.  Owns its own catalogue polling state
+// (availableMaps / mapsLoading / mapsPollTimer / selectedMapPath
+// / openMapSource); routes the chosen map through the
+// openLoadedMap host callback.
+import {
+  openMapDialog,
+  closeOpenDialog,
+} from './ui/pickers/open-map.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -232,6 +241,8 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.preloadFeatureImage = preloadFeatureImage
   hostCallbacks.featureAnchorOffset = featureAnchorOffset
   hostCallbacks.featureAnchorWorld = featureAnchorWorld
+  hostCallbacks.configureReactUi = configureReactUi
+  hostCallbacks.openLoadedMap = openLoadedMap
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -815,119 +826,12 @@ function pickMapByName(entries, wanted) {
 // pacing from state.settings so the Settings dialog still tunes it.
 
 // ── Open Existing Map flow ────────────────────────────────────────────────
-
-let availableMaps = []
-let mapsLoading = false
-let mapsPollTimer = null
-let selectedMapPath = null
-let openMapSource = 'welcome' // 'welcome' or 'editor' — controls where Back returns to
-let sizeDialogSource = 'welcome' // same idea for the New-map size dialog
-
-async function openMapDialog(source = 'welcome') {
-  openMapSource = source
-  // Hide every surface that might be in front of the picker — the
-  // welcome screen on first boot, the 3DO viewer dialog when the
-  // user clicks "Open Map" from a model tab.  Without this the
-  // open list would render behind a higher-z-index dialog and look
-  // like the click did nothing.
-  $('#welcome-dialog').classList.add('hidden')
-  $('#model-viewer-dialog').classList.add('hidden')
-  selectedMapPath = null
-  if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
-  if (availableMaps.length === 0) mapsLoading = true
-  // React-managed dialog — see /ui/pickers/open-map-dialog.js.  We
-  // start polling fetchMaps() AND open the dialog in parallel so the
-  // user sees skeleton tiles immediately while the catalogue
-  // streams in.  Each poll cycle pushes fresh data via
-  // updateMapDialog().  On resolve we either route into
-  // confirmOpenMap (which loads + opens the map) or restore the
-  // editor surface the user came from.
-  ;(async () => {
-    const ui = _reactUi || await configureReactUi()
-    if (!ui || typeof ui.openMapDialog !== 'function') return
-    fetchMaps()
-    const picked = await ui.openMapDialog({
-      items: availableMaps,
-      loading: mapsLoading,
-      query: '',
-      selectedPath: null,
-    })
-    if (!picked) {
-      closeOpenDialog()
-      return
-    }
-    selectedMapPath = picked.path
-    confirmOpenMap()
-  })()
-}
-
-async function fetchMaps() {
-  try {
-    const resp = await fetch('/api/studio/maps')
-    const data = await resp.json()
-    availableMaps = data.maps || []
-    mapsLoading = !!data.loading
-  } catch {
-    availableMaps = []
-    mapsLoading = false
-    if (_reactUi && typeof _reactUi.updateMapDialog === 'function') {
-      _reactUi.updateMapDialog({ items: [], loading: false })
-    }
-    return
-  }
-  // Push the fresh catalog into the React picker (no-op when the
-  // picker isn't open).  The picker re-renders on its own state
-  // signal so we don't need to touch any DOM here.
-  if (_reactUi && typeof _reactUi.updateMapDialog === 'function') {
-    _reactUi.updateMapDialog({ items: availableMaps, loading: mapsLoading })
-  }
-  if (mapsLoading) {
-    mapsPollTimer = setTimeout(fetchMaps, 500)
-  }
-}
-
-// closeOpenDialog returns the user to whichever surface they came from —
-// the Welcome modal on first boot, the 3DO viewer if the active tab is a
-// model, or back to the map editor when they hit File → Open mid-session.
-function closeOpenDialog() {
-  if (_reactUi && typeof _reactUi.closeMapDialog === 'function') {
-    _reactUi.closeMapDialog()
-  }
-  if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
-  if (openMapSource === 'welcome') {
-    $('#welcome-dialog').classList.remove('hidden')
-    return
-  }
-  // Dialog opened from the editor / tabbar — pop back to whatever was
-  // in front before.  Without this an active model tab leaves the
-  // editor's .app on screen with no map loaded, which the user reads
-  // as "the viewer broke".
-  const active = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  if (active?.type === 'model') {
-    $('#model-viewer-dialog').classList.remove('hidden')
-  } else if (active?.type === 'map') {
-    $('#app')?.classList.remove('hidden')
-  }
-}
-
-
-async function confirmOpenMap() {
-  if (!selectedMapPath) return
-  const card = availableMaps.find((x) => x.path === selectedMapPath)
-  const confirmBtn = $('#open-confirm')
-  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Loading…' }
-  try {
-    const resp = await fetch('/api/studio/load?path=' + encodeURIComponent(selectedMapPath))
-    if (!resp.ok) throw new Error(await resp.text() || `HTTP ${resp.status}`)
-    const data = await resp.json()
-    await openLoadedMap(data, card)
-  } catch (err) {
-    setStatus(`Failed to open ${card?.name || selectedMapPath}: ${err.message || err}`)
-    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = 'Open' }
-    return
-  }
-  if (confirmBtn) confirmBtn.textContent = 'Open'
-}
+//
+// openMapDialog / fetchMaps / closeOpenDialog / confirmOpenMap and
+// their module-level catalogue-polling state moved to
+// /ui/pickers/open-map.js.  Studio.js still owns sizeDialogSource
+// because openSizeDialog (still in this file) reads it.
+let sizeDialogSource = 'welcome' // 'welcome' or 'tabbar' — controls where the size dialog routes back to
 
 // wireOpenDialogKeyboard makes the open-map list keyboard-navigable:
 // Tab from the filter lands on the list, arrow keys move the

@@ -258,6 +258,16 @@ export const hostCallbacks = {
   // bridge, …) reach the API through getReactUi() so they tolerate
   // the bridge not being mounted yet (early boot, headless harness).
   reactUi: null,                // module exports of /ui/mount.js, or null
+  // Boots the React UI bridge.  Returns a Promise<reactUi> that
+  // resolves once /ui/mount.js has loaded + configureUi has run.
+  // Called from openMapDialog / wireMapTabBar / debugger modals
+  // when they need the bridge before its first natural use.
+  configureReactUi: null,       // () => Promise<reactUi>
+  // openLoadedMap hydrates editor state from a /api/studio/load
+  // response and switches into the editor.  Called by the open-map
+  // dialog flow + the drag-drop handler + the ?initial_map=… URL
+  // shortcut.
+  openLoadedMap: null,          // (data, card) => Promise<void>
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
