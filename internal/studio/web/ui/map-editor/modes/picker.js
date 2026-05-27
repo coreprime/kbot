@@ -17,7 +17,7 @@
 //   - renderCanvas() — schedule a repaint after every selection
 //     change (highlight + rect outline).
 
-import { state, setStatus, hostCallbacks } from '../host-context.js'
+import { state, setStatus, hostCallbacks } from '../../host-context.js'
 import { pickCell, findFeatureAt } from '../mouse-coords.js'
 import { normalizedRect } from '../helpers.js'
 

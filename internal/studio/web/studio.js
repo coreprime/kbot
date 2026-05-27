@@ -19,7 +19,6 @@ let _mvControls = null
 // or sandbox views.
 import {
   TILE_PX,
-  MAX_START_POSITIONS,
   DRAWER_ITEM_HEIGHT,
   DRAWER_OBSERVER_MARGIN,
   HM_HOLD_INTERVAL_MS,
@@ -34,7 +33,6 @@ import {
   defaultOTAState,
   playerCountLabel,
   gameToCanvas,
-  canvasToGame,
 } from './ui/map-editor/helpers.js'
 
 // Host context — shared module-level state for every /ui/* subsystem.
@@ -413,6 +411,20 @@ import {
   resetPickerDrag,
 } from './ui/map-editor/modes/picker.js'
 
+// Start-points mode handlers — select / drag existing markers,
+// click empty space to place the next sequential marker.
+// resetStartPosDrag is used by abortTransientGestureState +
+// setMode swaps; beginStartPosDragFromAutoSwitch lets the
+// auto-switch path seed the drag state when a click in another
+// mode lands on a marker (R40a).
+import {
+  onStartPosMouseDown,
+  onStartPosMouseMove,
+  onStartPosMouseUp,
+  resetStartPosDrag,
+  beginStartPosDragFromAutoSwitch,
+} from './ui/map-editor/modes/start-points.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -496,6 +508,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.viewportCellCenter = viewportCellCenter
   hostCallbacks.scheduleRenderCanvas = scheduleRenderCanvas
   hostCallbacks.scheduleMinimapRender = scheduleMinimapRender
+  hostCallbacks.tryAutoSwitchAt = tryAutoSwitchAt
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -629,8 +642,7 @@ function abortTransientGestureState() {
   terrainMoveAnchor = null
   featureDragging = false
   featureDragOffset = null
-  startPosDragging = false
-  startPosDragOffset = null
+  resetStartPosDrag()
   resetPickerDrag()
 }
 
@@ -2894,7 +2906,7 @@ function onCanvasMouseDown(e) {
     // start position or placed feature in a passive mode (where the
     // click would otherwise just pan) jumps into the matching mode
     // and arms a drag.  Middle-click and space-pan still pan as usual.
-    if (e.button === 0 && !spacePanHotkey && tryAutoSwitchAt(e)) return
+    if (e.button === 0 && tryAutoSwitchAt(e)) return
     beginPan(e)
     return
   }
@@ -3065,6 +3077,14 @@ function selectAllContent() {
 // When the current mode already owns the clicked object type, we let
 // that mode's native handler deal with the click (no redundant switch).
 function tryAutoSwitchAt(e) {
+  // Space-pan hotkey suppresses the auto-mode-swap so the user can
+  // hold space + drag without accidentally selecting a marker or
+  // feature on the way past.  All four mode-handler call sites used
+  // to repeat this guard at the call site; folding it in here keeps
+  // them one-liners + lets the extracted modes/start-points.js
+  // dispatch through hostCallbacks.tryAutoSwitchAt without leaking
+  // a separate spacePanHotkey getter.
+  if (spacePanHotkey) return false
   const canvas = $('#canvas')
   if (!canvas) return false
   const rect = canvas.getBoundingClientRect()
@@ -3081,8 +3101,7 @@ function tryAutoSwitchAt(e) {
       state.selectedStartPos = hit
       const sp = schema.startPositions[hit]
       const { px, py } = gameToCanvas(sp.x, sp.z)
-      startPosDragOffset = { dx: px - cpx, dy: py - cpy }
-      startPosDragging = true
+      beginStartPosDragFromAutoSwitch(px - cpx, py - cpy)
       beginTransaction()
       renderCanvas()
       setStatus(`Picked start position ${sp.number} — drag to reposition, Delete to remove.`)
@@ -3343,7 +3362,7 @@ function onTerrainMouseDown(e) {
   // Direct click on a placed feature or start position takes precedence
   // over starting a rectangle selection — it switches to the matching
   // edit mode with that object picked.
-  if (e.button === 0 && !spacePanHotkey && tryAutoSwitchAt(e)) return
+  if (e.button === 0 && tryAutoSwitchAt(e)) return
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
   terrainDragging = true
   terrainDragStart = { tx, ty }
@@ -3418,7 +3437,7 @@ let featureDragOffset = null
 
 function onFeatureMouseDown(e) {
   // Start-position click in features mode jumps to start-points mode.
-  if (e.button === 0 && !spacePanHotkey && tryAutoSwitchAt(e)) return
+  if (e.button === 0 && tryAutoSwitchAt(e)) return
   // Hit-test against the actual cursor pixel — the previous tile-centre
   // shortcut missed 1×1 features whose anchor offset pushed the sprite
   // rect off the tile-centre point.
@@ -3500,84 +3519,11 @@ function activeSchema() {
   return state.ota.schemas[state.activeSchema]
 }
 
-let startPosDragging = false
-let startPosDragOffset = null // { dx, dy } in canvas px
-
-function onStartPosMouseDown(e) {
-  // Feature click in start-points mode jumps to features mode.
-  if (e.button === 0 && !spacePanHotkey && tryAutoSwitchAt(e)) return
-  const schema = activeSchema()
-  if (!schema) return
-  const canvas = $('#canvas')
-  const rect = canvas.getBoundingClientRect()
-  const cx = (e.clientX - rect.left) / rect.width * canvas.width
-  const cy = (e.clientY - rect.top) / rect.height * canvas.height
-  const hit = findStartPositionAt(schema, cx, cy)
-  if (hit >= 0) {
-    // Re-clicking the just-moved start position clears the selection
-    // (treat as confirming the move is done).
-    if (state.startPosJustMoved === hit) {
-      state.startPosJustMoved = -1
-      state.selectedStartPos = -1
-      renderCanvas()
-      return
-    }
-    state.selectedStartPos = hit
-    const sp = schema.startPositions[hit]
-    const { px, py } = gameToCanvas(sp.x, sp.z)
-    startPosDragOffset = { dx: px - cx, dy: py - cy }
-    startPosDragging = true
-    state.startPosJustMoved = -1
-    beginTransaction()
-    renderCanvas()
-    return
-  }
-  // Empty space — place the next available start position.  Numbering
-  // is dense and 1-based: the new marker takes (existing count + 1),
-  // capped at MAX_START_POSITIONS (the game-wide multiplayer ceiling).
-  // Deleting a marker compacts the list so numbers stay contiguous —
-  // see handleDeleteKey.
-  const cap = MAX_START_POSITIONS
-  if (schema.startPositions.length >= cap) {
-    setStatus(`This schema is full — all ${cap} start position${cap === 1 ? '' : 's'} are placed.  Drag a marker or Delete one to free a slot.`)
-    return
-  }
-  const nextNum = schema.startPositions.length + 1
-  const { gx, gz } = canvasToGame(cx, cy)
-  beginTransaction()
-  schema.startPositions.push({ number: nextNum, x: gx, z: gz })
-  state.selectedStartPos = schema.startPositions.length - 1
-  commitTransaction(`Place start position ${nextNum}`)
-  renderCanvas()
-}
-
-function onStartPosMouseMove(e) {
-  if (!startPosDragging || state.selectedStartPos < 0) return
-  const schema = activeSchema()
-  if (!schema) return
-  const canvas = $('#canvas')
-  const rect = canvas.getBoundingClientRect()
-  const cx = (e.clientX - rect.left) / rect.width * canvas.width
-  const cy = (e.clientY - rect.top) / rect.height * canvas.height
-  const targetPx = cx + (startPosDragOffset?.dx || 0)
-  const targetPy = cy + (startPosDragOffset?.dy || 0)
-  const { gx, gz } = canvasToGame(targetPx, targetPy)
-  const sp = schema.startPositions[state.selectedStartPos]
-  if (sp) {
-    sp.x = clamp(gx, 0, state.tileW * 32)
-    sp.z = clamp(gz, 0, state.tileH * 32)
-    state.startPosJustMoved = state.selectedStartPos
-    renderCanvas()
-  }
-}
-
-function onStartPosMouseUp(_e) {
-  if (startPosDragging) {
-    commitTransaction('Move start position')
-    startPosDragging = false
-    startPosDragOffset = null
-  }
-}
+// onStartPosMouseDown / Move / Up + the in-flight drag state moved
+// to /ui/map-editor/modes/start-points.js (R40a) — imported at the
+// top of this file.  tryAutoSwitchAt above seeds the drag through
+// beginStartPosDragFromAutoSwitch so an auto-mode-switch click
+// flows into a drag without a second mousedown.
 
 // drawStartPositions moved to /ui/map-editor/canvas/start-positions.js.
 // drawEraseBrush + drawHeightmapBrush moved to

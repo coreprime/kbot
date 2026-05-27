@@ -14,7 +14,7 @@
 // Cross-module deps via hostCallbacks:
 //   - renderCanvas() — schedule a repaint after every brush stamp.
 
-import { state, hostCallbacks } from '../host-context.js'
+import { state, hostCallbacks } from '../../host-context.js'
 import { pickAttrCellForVoid } from '../mouse-coords.js'
 import { beginTransaction, commitTransaction } from '../undo.js'
 import { invalidateMinimapBase } from '../minimap.js'

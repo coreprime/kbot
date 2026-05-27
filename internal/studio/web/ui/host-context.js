@@ -293,6 +293,15 @@ export const hostCallbacks = {
   // Both no-op safely when the editor view hasn't mounted yet.
   scheduleRenderCanvas: null,   // () => void
   scheduleMinimapRender: null,  // () => void
+  // Auto-mode-switch helper.  On a left-click in any non-matching
+  // mode, the studio's `tryAutoSwitchAt` decides whether the click
+  // should swap into start-points or select-features mode (e.g.
+  // clicking a start-position marker while in terrain-select).
+  // Returns true when it consumed the click — extracted mode
+  // handlers early-return on that signal.  Wires in studio.js's
+  // implementation, which already encodes the space-pan + visibility
+  // checks; mode modules don't reproduce that logic locally.
+  tryAutoSwitchAt: null,        // (e) => boolean
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
