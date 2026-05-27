@@ -861,7 +861,49 @@ export class MvControls {
       if (k === 'f') { e.preventDefault(); this._armSlotHotkey('secondary'); return }
       if (k === 'd') { e.preventDefault(); this._armSlotHotkey('tertiary'); return }
       if (k === 's') { e.preventDefault(); this._stopAllTargets(); return }
+      // Spacebar — toggle the runtime between paused and running.
+      // Mirrors the merged Pause/Resume button so power-users can
+      // drive the simulation without leaving the canvas.  e.key for
+      // space is " " (single space) so we match that exactly rather
+      // than the lowercased generic key code.
+      if (e.key === ' ') {
+        e.preventDefault()
+        if (typeof window.mvToggleRuntimePaused === 'function') {
+          window.mvToggleRuntimePaused()
+        }
+        return
+      }
+      // +/- — step the sim speed by 10% increments.  If the current
+      // speed isn't aligned to a 10% grid, snap to the next 10%
+      // increment in the direction of travel (so 1.27× + "+" snaps
+      // to 1.30× rather than jumping straight to 1.40×).  Honours
+      // shift for "+" (which is shift-= on US keyboards) and the
+      // bare "=" / "-" keys.
+      if (e.key === '+' || e.key === '=') { e.preventDefault(); this._stepSimSpeed(+1); return }
+      if (e.key === '-' || e.key === '_') { e.preventDefault(); this._stepSimSpeed(-1); return }
     })
+  }
+
+  // _stepSimSpeed adjusts the runtime's playbackRate by one 10%
+  // increment in the requested direction.  Misaligned current speeds
+  // snap to the next 10% boundary in the travel direction before
+  // applying the step — feels closer to "click the slider's next
+  // tick mark" than to "round + jump".
+  _stepSimSpeed(dir) {
+    const rt = this.viewer?.cob?.runtime
+    if (!rt) return
+    const cur = rt.playbackRate || 1
+    const tenths = cur * 10
+    const aligned = Math.abs(tenths - Math.round(tenths)) < 1e-6
+    let next
+    if (aligned) {
+      next = (Math.round(tenths) + dir) / 10
+    } else {
+      next = (dir > 0 ? Math.ceil(tenths) : Math.floor(tenths)) / 10
+    }
+    if (typeof window.mvSetSimulationSpeed === 'function') {
+      window.mvSetSimulationSpeed(next)
+    }
   }
 
   // _armSlotHotkey arms the given slot — identical state mutation

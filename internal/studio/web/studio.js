@@ -403,6 +403,9 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel))
 // ── Boot ───────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Cross-module helpers — keyboard shortcuts in mv-controls call
+  // these via window.* to avoid an ES-module circular import.
+  _wireRuntimeHelpersToWindow()
   // Size dialog (New flow).
   $('#size-confirm').addEventListener('click', startEditor)
   $('#size-w').addEventListener('keydown', confirmOnEnter)
@@ -14980,6 +14983,16 @@ function wireCobAttributeSliders() {
     })
     reset.dataset.wired = '1'
   }
+}
+
+// Expose the two runtime-control helpers on `window` so cross-module
+// callers (the mv-controls keyboard handler) can drive Space + +/-
+// hotkeys without having to import the studio module's bundle.
+// Set after the function definitions below so the assignment sees
+// the live function reference.
+function _wireRuntimeHelpersToWindow() {
+  window.mvToggleRuntimePaused = mvToggleRuntimePaused
+  window.mvSetSimulationSpeed = mvSetSimulationSpeed
 }
 
 // mvToggleRuntimePaused flips the runtime's paused state and
