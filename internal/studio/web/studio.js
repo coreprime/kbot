@@ -16804,6 +16804,18 @@ async function activateSandboxTab(_tab) {
     })
   }
   await sandboxViewInstance.open()
+  // Wrap the sandbox view's onAfterFrame so the inspector refresh +
+  // animation-advance pipeline runs on the sandbox renderer's frames
+  // too.  The sandbox view sets its own onAfterFrame (scene tick +
+  // entity refresh); we wrap it here to ADD the inspector tick so
+  // Renderer + Runtime overlays receive their per-frame data.
+  if (sandboxViewInstance.renderer) {
+    const innerHook = sandboxViewInstance.renderer.onAfterFrame
+    sandboxViewInstance.renderer.onAfterFrame = (dtMs) => {
+      if (innerHook) innerHook(dtMs)
+      refreshMvInspectors(dtMs)
+    }
+  }
   // Hide the left sidebar (Pieces / Textures / Weapons — all
   // single-unit inspectors) by tagging the model-viewer-dialog as
   // sandbox-mode; the CSS rule below collapses .sidebar in this
