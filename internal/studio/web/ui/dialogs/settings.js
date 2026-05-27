@@ -15,13 +15,13 @@
 //   - reactUi.openSettingsDialog / closeSettingsDialog
 //   - setCameraInfoVisible(visible) — camera-info panel toggle
 //   - renderCanvas()                — repaint after Apply
-// Plus direct imports of setMinimapVisible (already in
-// /ui/map-editor/view-toggles.js) and syncDomFromPrefs +
-// persistPrefs (in /ui/common/prefs.js).
+//   - getWorldOptions()             — environment-dropdown options
+//                                     (map editor registers this at boot)
+//   - setMinimapVisible(visible)    — minimap-panel toggle
+//                                     (map editor registers this at boot)
+// Plus syncDomFromPrefs + persistPrefs from /ui/common/prefs.js.
 
 import { state, tabs, tabState, clamp, setStatus, hostCallbacks, getReactUi } from '../host-context.js'
-import { WORLDS } from '../map-editor/constants.js'
-import { setMinimapVisible } from '../map-editor/view-toggles.js'
 import { syncDomFromPrefs, persistPrefs } from '../common/prefs.js'
 
 export const DEFAULT_SETTINGS = {
@@ -60,7 +60,7 @@ export function openSettingsDialog() {
   // force-target.js's forceTargetEnabled() default.
   let forceTargetGround = false
   try { forceTargetGround = (localStorage.getItem('studio.forceTargetGround') === 'on') } catch { /* ignore */ }
-  const envOptions = WORLDS.map((w) => ({ key: w.slug, label: w.label }))
+  const envOptions = hostCallbacks.getWorldOptions?.() || []
   const initial = {
     zoomStep:                  s.zoomStep ?? 1.25,
     defaultEraseSize:          s.defaultEraseSize ?? 1,
@@ -107,7 +107,7 @@ export function openSettingsDialog() {
       next.unitDefaultGodBeams          = !!v.unitDefaultGodBeams
       state.settings = next
       try { localStorage.setItem('studio.forceTargetGround', v.forceTargetGround ? 'on' : 'off') } catch { /* ignore */ }
-      setMinimapVisible(!!v.showMinimap)
+      hostCallbacks.setMinimapVisible?.(!!v.showMinimap)
       hostCallbacks.setCameraInfoVisible?.(!!v.showCameraInfo)
       state.showGridlines       = !!v.showGridlines
       state.animateFeatures     = !!v.animateFeatures

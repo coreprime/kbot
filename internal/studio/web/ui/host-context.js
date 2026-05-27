@@ -481,6 +481,13 @@ export const hostCallbacks = {
   unsavedChangesDialog: null,          // ({ mapName }) => Promise<choice>
   // save persists the active map.  Returns true on success.
   saveActiveMap: null,                 // () => Promise<boolean>
+  // ── Settings-dialog seams used by /ui/dialogs/settings.js so the
+  // dialog doesn't have to peer-import /ui/map-editor/.  The
+  // map-editor section installs both at boot.  Other sections
+  // could register their own settings inputs the same way once the
+  // settings-section registrar pattern lands.
+  getWorldOptions: null,               // () => [{ key, label }]
+  setMinimapVisible: null,             // (visible: boolean) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

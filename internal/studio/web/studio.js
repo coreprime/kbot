@@ -12,6 +12,7 @@ let _mvControls = null
 import {
   TILE_PX,
   SCHEMA_PLAYER_COUNTS,
+  WORLDS,
 } from './ui/map-editor/constants.js'
 import {
   defaultOTAState,
@@ -479,7 +480,7 @@ import {
 import {
   wireMvInspectors,
   setMvInspectorVisible,
-} from './ui/unit-editor/inspectors.js'
+} from './ui/common/inspectors.js'
 
 // Thread-debugger modal lifecycle + chrome.  The asm renderer +
 // bracket overlay + per-tick PC highlight still live in this file
@@ -528,13 +529,13 @@ import {
   mvRefreshRuntimeToggle,
   wireMvRuntimeVisibility,
   _wireRuntimeHelpersToWindow,
-} from './ui/unit-editor/sim-controls.js'
+} from './ui/common/sim-controls.js'
 
 // Per-tick inspector publish + debugger repaint.  Called from each
 // view's renderer.onAfterFrame hook (both ModelViewer and SandboxView)
 // to publish the active inspector mv proxy + iterate every open
 // debugger panel.  Throttled to 4 Hz internally.
-import { refreshMvInspectors } from './ui/unit-editor/refresh-tick.js'
+import { refreshMvInspectors } from './ui/common/refresh-tick.js'
 
 // COB-state-to-React sync cluster.  These all push live cob /
 // runtime / lifecycle state into the React COB-dropdown ribbon +
@@ -728,6 +729,13 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.updateTopbarDocInfo = updateTopbarDocInfo
   hostCallbacks.unsavedChangesDialog = (opts) => unsavedChangesDialog(opts)
   hostCallbacks.saveActiveMap = () => save()
+  // Settings-dialog seams.  The map editor "section" is the canonical
+  // owner of WORLDS + the minimap visibility toggle, so wiring these
+  // here keeps /ui/dialogs/settings.js from peer-importing
+  // /ui/map-editor/.  When a settings-section registrar lands these
+  // move into the map editor's register-section call.
+  hostCallbacks.getWorldOptions = () => WORLDS.map((w) => ({ key: w.slug, label: w.label }))
+  hostCallbacks.setMinimapVisible = (v) => setMinimapVisible(!!v)
   // Register every tab type with the central registry.  Order
   // doesn't matter — the registry is data-only — but doing it after
   // the hostCallbacks block guarantees descriptor activate() hooks

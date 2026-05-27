@@ -39,12 +39,12 @@
 // resumeIncomingTabRuntime, refreshMvInspectors) through hostCallbacks.
 
 import { $, hostCallbacks } from '../host-context.js'
-import { mvSetSimulationSpeed } from '../unit-editor/sim-controls.js'
-import { setMvInspectorVisible } from '../unit-editor/inspectors.js'
+import { mvSetSimulationSpeed } from '../common/sim-controls.js'
+import { setMvInspectorVisible } from '../common/inspectors.js'
 import { ensureSandboxPanel, showSandboxPanel } from './spawn-picker.js'
 import { wireSandboxRibbon } from './ribbon-bridge.js'
 import { wireSandboxControlsIntercept } from './controls-intercept.js'
-import { resetSandboxFocusedUnit } from '../unit-editor/refresh-tick.js'
+import { resetSandboxFocusedUnit } from '../common/refresh-tick.js'
 
 // `_sandboxViewInstance` tracks the CURRENTLY ACTIVE sandbox tab's
 // SandboxView.  Each sandbox tab owns its own SandboxView (stored on

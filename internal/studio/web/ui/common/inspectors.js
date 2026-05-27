@@ -1,10 +1,17 @@
 // inspectors.js
 //
-// Floating-panel chrome for the unit editor's inspector overlays —
-// Scripts, Actions, Ports, Static Vars, Camera, Effects, Audio.  Each
-// panel has the same drag/collapse/close/clamp + visibility-persist
-// boilerplate, factored here so studio.js doesn't carry 280+ lines of
-// vanilla DOM wiring.
+// Floating-panel chrome for the studio's inspector overlays — Scripts,
+// Actions, Ports, Static Vars, Camera, Effects, Audio.  Each panel has
+// the same drag/collapse/close/clamp + visibility-persist boilerplate,
+// factored here so studio.js doesn't carry 280+ lines of vanilla DOM
+// wiring.
+//
+// Lives in /ui/common/ because both the unit editor and the sandbox
+// reach into the same panel set — the file used to live under
+// /ui/unit-editor/ and was imported across the section boundary,
+// which violated the no-peer-imports rule.  The `Mv` prefix in the
+// export names is a historical relic from when the only consumer
+// was the model viewer; the chrome itself is section-agnostic.
 //
 // What lives here:
 //
@@ -31,7 +38,7 @@
 // React bridge accessor).  No imports from studio.js itself.
 
 import { state, clamp, hostCallbacks, getReactUi } from '../host-context.js'
-import { persistPrefs } from '../common/prefs.js'
+import { persistPrefs } from './prefs.js'
 
 export const MV_INSPECTOR_IDS = [
   'mv-inspector-scripts',

@@ -41,7 +41,7 @@
 // same as before this extraction.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-import { mvSetSimulationSpeed } from './sim-controls.js'
+import { mvSetSimulationSpeed } from '../common/sim-controls.js'
 
 // mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
 // off the ModelViewer proxy onto the React COB ribbon's slider

@@ -27,7 +27,7 @@ import { FloatingPanel } from '/ui/common/floating-panel.js'
 import { panelSignals } from '/ui/common/panel-store.js'
 import { mv, sandboxActive, sandboxSelSize, runtimeTick, controlsDevSectionVisible } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
-import { PortChoiceRow, PortToggleRow, PortChipRow, PortSliderRow } from '/ui/unit-editor/panels/port-rows.js'
+import { PortChoiceRow, PortToggleRow, PortChipRow, PortSliderRow } from '/ui/panels/port-rows.js'
 
 const PANEL_ID = 'mv-inspector-ports'
 

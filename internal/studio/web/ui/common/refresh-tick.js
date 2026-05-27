@@ -35,12 +35,19 @@
 // the relevant refresh function directly instead.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-import { refreshMvWeaponsLive, refreshPieceTreeEyes } from './sidebar.js'
+// Residual peer imports into the unit editor — the per-frame tick
+// still calls into unit-editor-specific sidebar refreshes (Weapons
+// reload bars + piece-tree eyes) and the thread-debugger overlay.
+// Phase B follow-up: invert these into an event subscription so
+// refresh-tick fires a generic "tick" signal and the unit editor
+// listens; that would let map / sandbox tabs use refresh-tick
+// without dragging the debugger + sidebar along.
+import { refreshMvWeaponsLive, refreshPieceTreeEyes } from '../unit-editor/sidebar.js'
 import {
   refreshMvThreadCodeHighlight,
   redrawMvThreadCodeBrackets,
-} from './debugger/asm.js'
-import { _mvThreadCodePanels } from './debugger/modal.js'
+} from '../unit-editor/debugger/asm.js'
+import { _mvThreadCodePanels } from '../unit-editor/debugger/modal.js'
 
 // Cumulative dt since the last publish (in ms).  Cleared on every
 // publish so the next publish is exactly 250 ms later.

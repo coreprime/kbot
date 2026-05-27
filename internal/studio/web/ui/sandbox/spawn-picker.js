@@ -23,7 +23,7 @@
 // later rounds.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-import { setMvInspectorVisible } from '../unit-editor/inspectors.js'
+import { setMvInspectorVisible } from '../common/inspectors.js'
 
 // 8 team-colour swatches.  Same palette as TEAM_SIDES in
 // model3d/team-colors.js — inlined here so this module doesn't have

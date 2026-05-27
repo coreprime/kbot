@@ -40,7 +40,14 @@
 // can drive Space + +/- without an ES-module circular import.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-import { startMvAutoBuild } from './runtime.js'
+// startMvAutoBuild is a unit-editor build-ramp helper that only the
+// `_wireRuntimeHelpersToWindow` shim below references (it dumps it on
+// window for mv-controls' keyboard shortcuts).  The import is the
+// last residual coupling between this section-agnostic sim-controls
+// file and the unit editor — _wireRuntimeHelpersToWindow itself
+// should move into ui/unit-editor/ in a follow-up so the upward
+// peer import goes away.
+import { startMvAutoBuild } from '../unit-editor/runtime.js'
 
 // _activeRuntime — pick the runtime the Runtime overlay's Pause /
 // Step / Stop All controls should target.  Sandbox tab → that tab's
