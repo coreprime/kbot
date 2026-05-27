@@ -12110,19 +12110,6 @@ function wireMvInspectors() {
     stepBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
     stepBtn.addEventListener('mousedown', (e) => e.stopPropagation())
   }
-  // Actions panel's "Reset State" header button — full COB reset:
-  // threads, static vars, animator slots, lifecycle, particles.
-  // Same drag-suppression rules as Stop All.
-  const actionsReset = document.getElementById('mv-actions-reset')
-  if (actionsReset && actionsReset.dataset.wired !== '1') {
-    actionsReset.dataset.wired = '1'
-    actionsReset.addEventListener('click', (e) => {
-      e.stopPropagation()
-      modelViewerInstance?.resetState?.()
-    })
-    actionsReset.addEventListener('pointerdown', (e) => e.stopPropagation())
-    actionsReset.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
   // Controls panel "Create Unit" button — shown only when the unit
   // has a Create script that hasn't run yet (gating set by
   // refreshMvControlsGating).  Clicking starts the script + flips
@@ -15235,33 +15222,13 @@ function wireMvActionsPanel() {
   cb.addEventListener('pointerdown', (e) => e.stopPropagation())
 }
 
-// wireMvPortsPanel attaches the one-shot handlers for the Ports
-// overlay's chrome (Reset button).  The per-row controls are wired
-// at render time by buildPort*Row.  Idempotent via dataset.wired.
+// wireMvPortsPanel was the host for the panel-header Reset button,
+// since removed in favour of the unified "Reset" action-grid button
+// next to Stop (in mv-controls-actions).  The function is kept as a
+// no-op so existing renderMvPortsPanel / refreshMvControlsGating
+// call sites don't need to learn about its removal.
 function wireMvPortsPanel() {
-  const portsReset = document.getElementById('mv-ports-reset')
-  if (!portsReset || portsReset.dataset.wired === '1') return
-  portsReset.dataset.wired = '1'
-  portsReset.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const mv = modelViewerInstance
-    if (!mv) return
-    // Restore defaults — matches the cobPorts initial values from
-    // the ModelViewer constructor.
-    mv.cobPorts = {
-      activation: 1,
-      moveOrders: 2,
-      fireOrders: 2,
-      inBuildStance: 0,
-      armoured: 0,
-      yardOpen: 0,
-      buggerOff: 0,
-    }
-    mv.cobDamage = 0
-    mv.cobBuildPercent = 100
-    mvSyncCobAttrSlidersFromPorts(mv)
-    renderMvPortsPanel(mv)
-  })
+  // intentionally empty
 }
 
 // wireCobAttributeSliders is idempotent — safe to call on every
