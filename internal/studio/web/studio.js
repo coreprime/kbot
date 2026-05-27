@@ -169,6 +169,10 @@ import { wireWelcomeNanoFX } from './ui/screens/welcome/fx/nano-fx.js'
 import { wireWelcomeAmbient } from './ui/screens/welcome/fx/ambient.js'
 import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
 
+// Welcome-screen arrow-key + Enter navigation.  Pure DOM, no host
+// state.  Auto-focuses the New card on every re-show.
+import { wireWelcomeKeyboard } from './ui/screens/welcome/keyboard.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -932,61 +936,9 @@ async function confirmOpenMap() {
 // current selection.  Falls back gracefully when no cards are
 // rendered (skeleton / empty state).
 
-// openLoadedMap hydrates editor state from a /api/studio/load response
-// and jumps straight into the editor (skipping the New-map size
-// dialog).  The TNT's tile pool is fetched as a synthetic "section"
-// keyed `tnt:<path>` — the rest of the render/save path treats it like
-// any other section thanks to the `tnt:` prefix branch in builder.go.
-// wireWelcomeKeyboard makes the welcome dialog navigable from the
-// keyboard.  ArrowLeft / ArrowRight toggle focus between the New
-// and Open cards; Enter activates whichever is focused.  Focus
-// lands on New the first time the dialog becomes visible, so the
-// user can drive the whole picker without touching the mouse.
-// Ctrl+Up / Ctrl+Left/Right are reserved for future tab switching
-// (Mapping / Modelling / Scripting / Other) — not wired yet.
-function wireWelcomeKeyboard() {
-  const wel = $('#welcome-dialog')
-  const cards = [$('#welcome-new'), $('#welcome-open')]
-  if (!wel || cards.some((c) => !c)) return
-  const focusCard = (i) => {
-    const idx = ((i % cards.length) + cards.length) % cards.length
-    cards[idx].focus()
-  }
-  wel.addEventListener('keydown', (e) => {
-    if (wel.classList.contains('hidden')) return
-    const i = cards.indexOf(document.activeElement)
-    if (e.key === 'ArrowLeft') {
-      e.preventDefault()
-      focusCard(i < 0 ? 0 : i - 1)
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault()
-      focusCard(i < 0 ? 0 : i + 1)
-    } else if (e.key === 'Enter') {
-      // Enter is already native button activation when a card has
-      // focus.  We only intercept when nothing's focused so the
-      // user gets a sensible default (the New card).
-      if (i < 0) {
-        e.preventDefault()
-        cards[0].click()
-      }
-    }
-  })
-  // Focus New on first show.  MutationObserver fires whenever the
-  // welcome dialog's class list changes so re-shows (closing a map
-  // back to welcome) re-focus too.
-  const sync = () => {
-    if (wel.classList.contains('hidden')) return
-    // rAF defers the focus call until the dialog is actually
-    // displayed — Chrome ignores focus() on a hidden ancestor.
-    requestAnimationFrame(() => {
-      if (!wel.classList.contains('hidden')) cards[0].focus()
-    })
-  }
-  new MutationObserver(sync).observe(wel, { attributes: true, attributeFilter: ['class'] })
-  sync()
-}
-
-// wireWelcomeDropZone binds dragover/drop on the welcome modal so the
+// wireWelcomeKeyboard (arrow + Enter navigation on the welcome
+// cards) moved to /ui/screens/welcome/keyboard.js.  Pure DOM, no
+// host state — auto-focuses the New card on every re-show.
 // ── Welcome dialog FX ─────────────────────────────────────────────────
 //
 // All three welcome-screen visual / audio subsystems moved to
