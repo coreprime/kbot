@@ -508,6 +508,65 @@
         </div>
       </div>
 
+      <!-- Sandbox-mode ribbon.  Sits next to the unit-editor ribbon
+           in the same grid-area; CSS swaps which is visible via
+           .sandbox-mode on the dialog root.  Sandbox actions live
+           here (spawn / move / attack / stop / camera-reset / clear
+           field / settings) so the toolbar reflects what the user
+           can do in the sandbox rather than borrowing the model
+           viewer's chrome. -->
+      <div class="ribbon sandbox-ribbon" id="sandbox-ribbon">
+        <div class="ribbon-section">
+          <div class="ribbon-label">Spawn</div>
+          <div class="ribbon-group">
+            <button class="tool-btn" id="sandbox-rb-spawn" title="Spawn Unit — pick a unit and drop it on the battlefield with a click.">
+              <span class="ico">🛠</span><span class="lbl">Spawn</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Orders</div>
+          <div class="ribbon-group">
+            <button class="tool-btn" id="sandbox-rb-move" title="Move — arm the next ground click as a move order for the current selection (right-click works without arming).">
+              <span class="ico">🚶</span><span class="lbl">Move</span>
+            </button>
+            <button class="tool-btn" id="sandbox-rb-attack" title="Attack — arm the next unit click as an attack order for the current selection (right-click an enemy works without arming).">
+              <span class="ico">🎯</span><span class="lbl">Attack</span>
+            </button>
+            <button class="tool-btn" id="sandbox-rb-stop" title="Stop — clear move + attack orders on every selected unit.">
+              <span class="ico">✋</span><span class="lbl">Stop</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Selection</div>
+          <div class="ribbon-group">
+            <button class="tool-btn" id="sandbox-rb-select-all" title="Select All — pick every living unit on the field.">
+              <span class="ico">☑</span><span class="lbl">All</span>
+            </button>
+            <button class="tool-btn" id="sandbox-rb-deselect" title="Deselect — clear the current selection.">
+              <span class="ico">☐</span><span class="lbl">None</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Field</div>
+          <div class="ribbon-group">
+            <button class="tool-btn" id="sandbox-rb-clear" title="Clear Field — remove every unit from the sandbox.">
+              <span class="ico">🧹</span><span class="lbl">Clear</span>
+            </button>
+          </div>
+        </div>
+        <div class="ribbon-section">
+          <div class="ribbon-label">Camera</div>
+          <div class="ribbon-group">
+            <button class="tool-btn" id="sandbox-rb-reset-cam" title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom.">
+              <span class="ico">📷</span><span class="lbl">Reset</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <aside class="sidebar">
         <!-- Two-tab left panel: Pieces (the 3DO piece hierarchy with
              COB-driven visibility / shade / cache / shadow toggles)

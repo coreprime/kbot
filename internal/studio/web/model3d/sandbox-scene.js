@@ -173,17 +173,24 @@ export class SandboxScene {
             u._nextFireSimMs = u._nextFireSimMs || 0
             if (simNowMs >= u._nextFireSimMs) {
               u._nextFireSimMs = simNowMs + cadenceMs
-              // Trigger the COB Fire script (if present) so the
-              // muzzle-flash hook fires + scripts that animate the
-              // turret recoil run.  Errors are silent — a unit
-              // without FirePrimary still applies damage below.
-              if (u.cobUnit && u.cobUnit.scriptNames) {
-                if (u.cobUnit.scriptNames.includes('FirePrimary')) {
-                  try { u.cobUnit.start('FirePrimary') } catch { /* ignore */ }
-                } else if (u.binding && u.binding.particles) {
-                  // No COB Fire script → emit a bare muzzle-flash at
-                  // the unit's position so the user still sees that
-                  // something happened.
+              // Aim + fire — call AimPrimary first (turns turret +
+              // returns TRUE when on-target).  Many TA Fire scripts
+              // are no-ops until AimPrimary has fired at least once,
+              // because they read the aim-state static the Aim
+              // script sets.  Args are heading + pitch in TA's
+              // 65536-per-revolution fixed-point — pitch 0 = level.
+              if (u.binding) {
+                const aimHeadingTA = Math.round((u.heading) * 65536 / (Math.PI * 2)) & 0xffff
+                if (u.binding.hasScript('AimPrimary')) {
+                  try { u.binding.start('AimPrimary', [aimHeadingTA, 0]) } catch { /* ignore */ }
+                }
+                // Fire after aim so the muzzle-flash hook (start()
+                // in cob-binding) lights up.  Even if FirePrimary
+                // isn't defined we fall through to a synthetic flash
+                // below so the user sees the shot.
+                if (u.binding.hasScript('FirePrimary')) {
+                  try { u.binding.start('FirePrimary') } catch { /* ignore */ }
+                } else if (u.binding.particles) {
                   u.binding.particles.emit(4 /* SFX_FIRE_FLASH */, [u.pos.x, u.pos.y + 14, u.pos.z], { size: 10, lifeMs: 140 })
                 }
               }
@@ -207,6 +214,7 @@ export class SandboxScene {
         }
       }
       // ── Movement integration ────────────────────────────────
+      const wasMoving = !!u.isMoving
       if (u.moveTarget) {
         const dx = u.moveTarget.x - u.pos.x
         const dz = u.moveTarget.z - u.pos.z
@@ -228,6 +236,20 @@ export class SandboxScene {
         }
       } else {
         u.isMoving = false
+      }
+      // Edge-triggered StartMoving / StopMoving — mirrors the single-
+      // unit viewer's MvControls walking pattern.  Most TA kbot/tank
+      // BOS scripts use these as the on/off switch for their leg
+      // animation loop; without firing them the unit just slides
+      // across the ground with no walk cycle.
+      if (u.isMoving && !wasMoving && u.binding) {
+        if (u.binding.hasScript('StartMoving')) {
+          try { u.binding.start('StartMoving') } catch { /* ignore */ }
+        }
+      } else if (!u.isMoving && wasMoving && u.binding) {
+        if (u.binding.hasScript('StopMoving')) {
+          try { u.binding.start('StopMoving') } catch { /* ignore */ }
+        }
       }
       // ── Particle + audio + piece-sync per-binding ───────────
       // We synthesise a binding tick by calling its underlying

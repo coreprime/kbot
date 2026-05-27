@@ -12408,6 +12408,25 @@ function refreshMvInspectors(dtMs = 16) {
       _mvSandboxFocusedUnitId = focusedId
       renderMvActionsPanel(focused)
     }
+    // Enable the Controls panel's action buttons based on the focused
+    // unit's COB.  MvControls usually drives this in single-unit
+    // mode; in sandbox MvControls is dormant so we mirror its
+    // _refreshButtons logic here.  Move enables whenever there's a
+    // focused unit (sandbox doesn't gate on FBI canMove because the
+    // user can drag any spawned unit around the field); weapon slots
+    // enable when the unit ships matching Aim* / Fire* / Query*
+    // scripts.  Stop is always enabled.
+    const ctrlEnabled = {
+      move: !!focused,
+      primary: !!(focused && (focused.hasScript('AimPrimary') || focused.hasScript('FirePrimary') || focused.hasScript('QueryPrimary'))),
+      secondary: !!(focused && (focused.hasScript('AimSecondary') || focused.hasScript('FireSecondary') || focused.hasScript('QuerySecondary'))),
+      tertiary: !!(focused && (focused.hasScript('AimTertiary') || focused.hasScript('FireTertiary') || focused.hasScript('QueryTertiary'))),
+    }
+    for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
+      const action = btn.dataset.ctrlAction
+      if (action === 'stop' || action === 'reset') continue
+      btn.disabled = !ctrlEnabled[action]
+    }
   }
   if (!mv) return
   // COB Scripts panel
@@ -14940,6 +14959,13 @@ function refreshMvPortsLiveValues(mv) {
   const body = document.getElementById('mv-inspector-ports-body')
   if (!body || !mv?.cob) return
   const ports = mv.cobPorts
+  // The sandbox proxy mv has no cobPorts (those live on the single-
+  // unit ModelViewer instance and drive the FBI-derived port sliders).
+  // Bail out cleanly here so the rest of refreshMvInspectors keeps
+  // running — without this guard the first `ports.inBuildStance` deref
+  // throws and aborts every panel update after this one (notably the
+  // Controls-button enable code that comes later in the chain).
+  if (!ports) return
   const setChip = (key, on) => {
     const chip = body.querySelector(`[data-port="${key}"] .mv-port-chip`)
     if (!chip) return
@@ -16902,24 +16928,35 @@ async function activateSandboxTab(_tab) {
   showSandboxPanel(true)
   // Force-show the inspector panels meaningful in multi-unit mode:
   // Renderer (camera info) + Scripts (runtime telemetry) for the
-  // scene as a whole, Actions + Static Vars for the focused unit
-  // (panels render against the currently-selected sandbox unit, or
-  // an empty state when nothing's selected — see refreshMvInspectors).
-  // Hide Ports (interactive sliders bound to single-unit state) +
-  // Effects/Audio (per-binding pools that don't have a single owner
-  // in multi-unit) until those are re-wired for sandbox.
-  for (const id of ['mv-inspector-ports', 'mv-inspector-effects', 'mv-inspector-audio']) {
+  // scene as a whole, Actions + Static Vars + Controls for the
+  // focused unit (panels render against the currently-selected
+  // sandbox unit, or an empty state when nothing's selected — see
+  // refreshMvInspectors).  Hide Effects/Audio (per-binding pools
+  // that don't have a single owner in multi-unit) until those are
+  // re-wired for sandbox.
+  for (const id of ['mv-inspector-effects', 'mv-inspector-audio']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
   }
-  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars']) {
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars', 'mv-inspector-ports']) {
     const p = document.getElementById(id)
     if (p) p.classList.remove('hidden')
   }
+  // The Controls panel's action buttons (Move / Primary / Secondary /
+  // Tertiary / Stop) are wired into MvControls — which operates on
+  // the single-unit ModelViewer.  In sandbox we intercept those
+  // clicks in the capture phase and route them through the sandbox
+  // command pipeline instead, so the same Controls panel drives the
+  // currently-selected sandbox unit.  Idempotent guard so repeated
+  // tab activations don't stack listeners.
+  wireSandboxControlsIntercept()
   // Reset the focused-unit sentinel so the next refresh tick re-runs
   // renderMvActionsPanel for whatever's selected (or "No COB loaded"
   // for an empty selection).
   _mvSandboxFocusedUnitId = -1
+  // Wire sandbox ribbon buttons.  Idempotent guard so repeated tab
+  // switches don't stack listeners.
+  wireSandboxRibbon()
   // Patch the global modelViewerInstance proxy so refreshMvRuntimeStats
   // + refreshMvCameraPanel (both read mv.cob.runtime / mv.camera /
   // mv.renderer) see the sandbox view's runtime + camera instead of
@@ -16930,6 +16967,107 @@ async function activateSandboxTab(_tab) {
     window.__sandboxView = sandboxViewInstance
     window.__activeViewer = sandboxViewInstance
   }
+}
+
+// wireSandboxControlsIntercept — when sandbox is active, the
+// Controls panel's action buttons (Move / Primary / Secondary /
+// Tertiary / Stop) should drive the currently-selected sandbox unit
+// rather than the single-unit MvControls singleton.  We attach a
+// capture-phase click listener that — only when the dialog is in
+// sandbox-mode — translates each ctrl-action into the sandbox
+// command pipeline (setPendingCommand + per-unit order writes) and
+// stops the event so the underlying MvControls handler doesn't run
+// against the now-dormant single-unit viewer.  Idempotent guard via
+// a dataset flag.
+function wireSandboxControlsIntercept() {
+  const grid = document.getElementById('mv-controls-actions')
+  if (!grid || grid.dataset.sandboxWired === '1') return
+  grid.dataset.sandboxWired = '1'
+  grid.addEventListener('click', (e) => {
+    const dlg = document.getElementById('model-viewer-dialog')
+    if (!dlg || !dlg.classList.contains('sandbox-mode')) return
+    const btn = e.target.closest('.mv-ctrl-action')
+    if (!btn) return
+    const action = btn.dataset.ctrlAction
+    if (!action) return
+    e.stopPropagation()
+    e.preventDefault()
+    const sb = sandboxViewInstance
+    if (!sb || !sb.scene) return
+    if (action === 'stop') {
+      for (const id of sb.scene.selected) {
+        const u = sb.scene.unitById(id)
+        if (u) {
+          u.moveTarget = null
+          u.attackTarget = null
+          // Mirror Stop's TA semantics — fire StopMoving (kbots /
+          // tanks read it as "halt the walk loop") + TargetCleared
+          // (turret-aim scripts reset their internal aim state).
+          if (u.binding && u.binding.hasScript('StopMoving')) {
+            try { u.binding.start('StopMoving') } catch { /* ignore */ }
+          }
+          if (u.binding && u.binding.hasScript('TargetCleared')) {
+            try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
+          }
+        }
+      }
+      return
+    }
+    // Move arms the next ground click as a move target; the three
+    // weapon slots all map to attack in sandbox (we don't currently
+    // distinguish per-slot targets here — that's task #211's longer
+    // refactor).  Each Aim/Fire script is still triggered per shot
+    // by the scene tick, so the visual difference is preserved.
+    if (action === 'move') sb.setPendingCommand('move')
+    else if (action === 'primary' || action === 'secondary' || action === 'tertiary') sb.setPendingCommand('attack')
+  }, /* capture = */ true)
+}
+
+// wireSandboxRibbon — attaches handlers to the sandbox-specific
+// ribbon buttons.  Guarded with a dataset flag so repeated calls
+// (every sandbox activation) don't pile up listeners.  All actions
+// no-op safely when sandboxViewInstance hasn't finished initialising.
+function wireSandboxRibbon() {
+  const ribbon = document.getElementById('sandbox-ribbon')
+  if (!ribbon || ribbon.dataset.wired === '1') return
+  ribbon.dataset.wired = '1'
+  const sb = () => sandboxViewInstance
+  const wire = (id, fn) => {
+    const el = document.getElementById(id)
+    if (el) el.addEventListener('click', fn)
+  }
+  wire('sandbox-rb-spawn', () => openSandboxSpawnPicker())
+  wire('sandbox-rb-move', () => sb()?.setPendingCommand('move'))
+  wire('sandbox-rb-attack', () => sb()?.setPendingCommand('attack'))
+  wire('sandbox-rb-stop', () => {
+    const scene = sb()?.scene
+    if (!scene) return
+    for (const id of scene.selected) {
+      const u = scene.unitById(id)
+      if (u) { u.moveTarget = null; u.attackTarget = null }
+    }
+  })
+  wire('sandbox-rb-select-all', () => {
+    const scene = sb()?.scene
+    if (!scene) return
+    scene.selectClear()
+    for (const u of scene.units()) if (!u.dead) scene.selectAdd(u.id)
+  })
+  wire('sandbox-rb-deselect', () => sb()?.scene?.selectClear())
+  wire('sandbox-rb-clear', () => {
+    const scene = sb()?.scene
+    if (!scene) return
+    const ids = [...scene.units()].map(u => u.id)
+    for (const id of ids) scene.removeUnit(id)
+  })
+  wire('sandbox-rb-reset-cam', () => {
+    const view = sb()
+    if (!view || !view.camera) return
+    view.camera.target = [0, 10, 0]
+    view.camera.distance = 951.5
+    view.camera.yaw = 215 * Math.PI / 180
+    view.camera.pitch = 28 * Math.PI / 180
+  })
 }
 
 // ensureSandboxPanel — creates the floating Sandbox panel the first

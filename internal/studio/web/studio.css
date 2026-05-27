@@ -2524,6 +2524,14 @@ canvas {
 }
 .model-viewer-shell > .ribbon { grid-area: ribbon; }
 .model-viewer-shell > .sidebar { grid-area: side; }
+/* The sandbox ribbon shares the ribbon grid-area with the unit-editor
+   ribbon — only one of them is visible at any time.  Default state:
+   sandbox ribbon hidden (single-unit / map / welcome modes), unit-
+   editor ribbon visible.  When .sandbox-mode is on the dialog, the
+   CSS rules in the sandbox section below flip both. */
+.model-viewer-shell > .sandbox-ribbon { display: none; }
+#model-viewer-dialog.sandbox-mode .model-viewer-shell > .ribbon:not(.sandbox-ribbon) { display: none; }
+#model-viewer-dialog.sandbox-mode .model-viewer-shell > .sandbox-ribbon { display: flex; }
 /* Topbar doc-info badge — replaces the old per-viewer unit pill.
    Populated by JS on tab switch (unit title for 3DO tabs, map
    title for map tabs). */
