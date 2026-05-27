@@ -78,6 +78,23 @@ export function featureAnchorOffset(f, img) {
   return { dx: img.naturalWidth / 2, dy: img.naturalHeight }
 }
 
+// featureRenderRect returns the on-canvas rectangle covered by a
+// feature sprite drawn at world position (px, py).  When the
+// sprite image is loaded and we know the GAF origin, we use the
+// actual frame geometry; otherwise we fall back to a bottom-
+// centred footprint box so the click target is still roughly
+// right.
+export function featureRenderRect(f, px, py) {
+  const img = f.previewUrl ? state.featureImages.get((f.name || '').toLowerCase()) : null
+  if (img && img.complete && img.naturalWidth > 0) {
+    const { dx, dy } = featureAnchorOffset(f, img)
+    return { x: px - dx, y: py - dy, w: img.naturalWidth, h: img.naturalHeight }
+  }
+  const fw = (f.footprintX || 1) * (TILE_PX / 2)
+  const fh = (f.footprintZ || 1) * (TILE_PX / 2)
+  return { x: px - fw / 2, y: py - fh, w: fw, h: fh }
+}
+
 export function featureAnchorWorld(f, heightOverride) {
   const fw = f.footprintX || 1
   const fh = f.footprintZ || 1

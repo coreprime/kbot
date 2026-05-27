@@ -24,7 +24,6 @@ import {
   DRAWER_ITEM_HEIGHT,
   DRAWER_OBSERVER_MARGIN,
   FEATURE_HIT_SEARCH_TILES,
-  FEATURE_HIGHLIGHT_LIMIT,
   START_POS_RADIUS,
   HM_HOLD_INTERVAL_MS,
   SCHEMA_PLAYER_COUNTS,
@@ -290,7 +289,6 @@ import { save, saveLoose } from './ui/map-editor/save.js'
 import {
   bumpContentVersion,
   featuresNear,
-  getFeaturesByName,
 } from './ui/map-editor/content-cache.js'
 
 // Zoom + scroll-pan controls.  setZoom / zoomAtPointer / fitZoom
@@ -361,6 +359,7 @@ import {
   featureAnchorOffset,
   featureAnchorWorld,
   featureGroundHeight,
+  featureRenderRect,
 } from './ui/map-editor/feature-assets.js'
 
 // Heightmap drawing passes — Heightmap view's grayscale, the
@@ -381,6 +380,13 @@ import {
   drawVoidOverlay,
   drawBuildableOverlay,
 } from './ui/map-editor/canvas/overlays.js'
+
+// Feature selection + hover outlines.  Live above the sprite pass
+// so they always sit on top regardless of feature draw order.
+import {
+  drawSelectedFeatureOutline,
+  drawHighlightedFeatureOutlines,
+} from './ui/map-editor/canvas/feature-overlays.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -3565,21 +3571,7 @@ function findFeatureAt(e) {
   return -1
 }
 
-// featureRenderRect returns the on-canvas rectangle covered by a
-// feature sprite drawn at world position (px, py).  When the sprite
-// image is loaded and we know the GAF origin, we use the actual frame
-// geometry; otherwise we fall back to a bottom-centred footprint box
-// so the click target is still roughly right.
-function featureRenderRect(f, px, py) {
-  const img = f.previewUrl ? state.featureImages.get((f.name || '').toLowerCase()) : null
-  if (img && img.complete && img.naturalWidth > 0) {
-    const { dx, dy } = featureAnchorOffset(f, img)
-    return { x: px - dx, y: py - dy, w: img.naturalWidth, h: img.naturalHeight }
-  }
-  const fw = (f.footprintX || 1) * (TILE_PX / 2)
-  const fh = (f.footprintZ || 1) * (TILE_PX / 2)
-  return { x: px - fw / 2, y: py - fh, w: fw, h: fh }
-}
+// featureRenderRect moved to /ui/map-editor/feature-assets.js.
 
 // ── Start positions ────────────────────────────────────────────────────────
 // Game pixel coords use 32 game-px per tile.  We convert between game
@@ -5285,82 +5277,11 @@ function drawTerrainEdgeHints(ctx, c) {
 // /ui/map-editor/canvas/overlays.js — imported at the top of
 // this file.
 
-function drawSelectedFeatureOutline(ctx) {
-  // Single-pick (Place Features) — dashed white box around the feature's
-  // footprint cells, so the user sees the area the feature actually
-  // occupies on the attribute grid rather than just an anchor circle.
-  // Lifted by Height/2 to mirror the same terrain-elevation offset
-  // featureAnchorWorld applies, so the box hugs the rendered sprite
-  // instead of floating one-to-two tiles below it.
-  if (state.selectedFeature >= 0 && state.selectedFeature < state.features.length) {
-    const f = state.features[state.selectedFeature]
-    const fw = (f.footprintX || 1) * (TILE_PX / 2)
-    const fh = (f.footprintZ || 1) * (TILE_PX / 2)
-    const x = f.ax * (TILE_PX / 2)
-    const y = f.ay * (TILE_PX / 2) - (featureGroundHeight(f) >> 1)
-    ctx.save()
-    ctx.strokeStyle = '#ffffff'
-    ctx.lineWidth = 2
-    ctx.setLineDash([6, 4])
-    ctx.strokeRect(x + 0.5, y + 0.5, fw - 1, fh - 1)
-    ctx.setLineDash([])
-    ctx.restore()
-  }
-  // Multi-select (Picker mode) — accent-coloured ring around every
-  // selected placement, plus the in-flight rectangle while sweeping.
-  if (state.selectedFeatures.size > 0) {
-    ctx.strokeStyle = 'rgba(139, 92, 246, 0.95)'
-    ctx.lineWidth = 2
-    for (const i of state.selectedFeatures) {
-      if (i < 0 || i >= state.features.length) continue
-      const f = state.features[i]
-      const { px, py } = featureAnchorWorld(f)
-      ctx.beginPath()
-      ctx.arc(px, py, 13, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-  }
-  if (state.pickerRect) {
-    const r = normalizedRect(state.pickerRect)
-    ctx.fillStyle = 'rgba(139, 92, 246, 0.12)'
-    ctx.fillRect(r.x * TILE_PX, r.y * TILE_PX, r.w * TILE_PX, r.h * TILE_PX)
-    ctx.strokeStyle = 'rgba(139, 92, 246, 0.95)'
-    ctx.setLineDash([6, 4])
-    ctx.lineWidth = 2
-    ctx.strokeRect(r.x * TILE_PX + 1, r.y * TILE_PX + 1, r.w * TILE_PX - 2, r.h * TILE_PX - 2)
-    ctx.setLineDash([])
-  }
-}
-
-// FEATURE_HIGHLIGHT_LIMIT lives in /ui/map-editor/constants.js so the
-// canvas hover outline pass below and the minimap dot pass agree on
-// the same cutoff.
-
-// drawHighlightedFeatureOutlines draws a red rectangle around every
-// placement of the currently-hovered drawer feature.  The rectangle
-// follows the feature's footprint so the user can see *exactly* which
-// cells are occupied.  Skipped entirely once state.features grows
-// past FEATURE_HIGHLIGHT_LIMIT — for huge maps the highlight makes
-// every hover feel sluggish and the user can still pick out the
-// hovered type via the drawer thumbnail.
-function drawHighlightedFeatureOutlines(ctx) {
-  if (!state.highlightFeatureName) return
-  if ((state.features || []).length > FEATURE_HIGHLIGHT_LIMIT) return
-  const indices = getFeaturesByName(state.highlightFeatureName)
-  if (!indices.length) return
-  const vp = visiblePixelBounds()
-  ctx.strokeStyle = '#f85149'
-  ctx.lineWidth = 2
-  ctx.setLineDash([4, 3])
-  for (const idx of indices) {
-    const f = state.features[idx]
-    const { px, py } = featureAnchorWorld(f)
-    const r = featureRenderRect(f, px, py)
-    if (r.x + r.w < vp.minX || r.x > vp.maxX || r.y + r.h < vp.minY || r.y > vp.maxY) continue
-    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
-  }
-  ctx.setLineDash([])
-}
+// drawSelectedFeatureOutline + drawHighlightedFeatureOutlines
+// moved to /ui/map-editor/canvas/feature-overlays.js — imported
+// at the top of this file.  FEATURE_HIGHLIGHT_LIMIT and the
+// shared featureRenderRect helper live in constants.js +
+// feature-assets.js respectively.
 
 // normalizedRect lives in ./ui/map-editor/helpers.js.
 
