@@ -343,6 +343,15 @@ export const hostCallbacks = {
   // whether a click landed on a placed start-position marker —
   // OTA / schema lookups still live studio-side.
   activeSchema: null,           // () => Schema | null
+  // Drawer interaction bridge — the extracted drawer module owns
+  // the rendering side, but selection + drag-from-row + the world
+  // pill click all run through studio.js because they touch
+  // mode dispatch + placement state + asset preloads.
+  selectSection: null,          // (section) => void  (sets state.selected + placement, switches to paint mode)
+  selectFeature: null,          // (feature) => void  (sets state.selected, switches to select-features mode)
+  beginSectionDrag: null,       // (e, section) => void  (dragstart handler)
+  beginFeatureDrag: null,       // (e, feature) => void   (dragstart handler)
+  setActiveWorld: null,         // (worldRec) => void  (drawer-pill click → state.planet)
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
