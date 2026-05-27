@@ -141,6 +141,11 @@ import {
 // /ui/dialogs/ alongside the React component.
 import { confirmDialog } from './ui/dialogs/confirm.js'
 
+// Help dialog — imperative show / hide pair.  The tab strip + Close
+// button wiring stays with the other dialog-button wiring in
+// wireDeveloperDialog below.
+import { openHelpDialog, closeHelpDialog } from './ui/dialogs/help.js'
+
 // Welcome dialog visual + audio FX — all three are pure
 // self-contained subsystems that observe #welcome-dialog's hidden
 // class via MutationObserver to suspend / resume on dialog close.
@@ -4264,17 +4269,7 @@ function wireDeveloperDialog() {
   })
 }
 
-function openHelpDialog() {
-  const dlg = $('#help-dialog')
-  if (!dlg) return
-  dlg.classList.remove('hidden')
-  // Focus the Close button so Enter / Space dismiss matches Escape.
-  $('#help-close')?.focus()
-}
-
-function closeHelpDialog() {
-  $('#help-dialog')?.classList.add('hidden')
-}
+// openHelpDialog / closeHelpDialog moved to /ui/dialogs/help.js.
 
 // Settings dialog (DEFAULT_SETTINGS + open/close) moved to
 // /ui/dialogs/settings.js — imported at the top of this file.
