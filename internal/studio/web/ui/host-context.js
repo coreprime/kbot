@@ -452,6 +452,32 @@ export const hostCallbacks = {
   // helpers that haven't been factored out yet.
   syncMvActionsRunning: null,  // (cob) => void
   syncCobRibbonRunning: null,  // (cob) => void
+  // ── Map-editor seams used by /ui/map-editor/register-tab.js.
+  // Module-let snapshot / restore is host-side because the doc
+  // model (undoStack / redoStack / pendingTransaction / minimap
+  // base / scroll position) lives in studio.js's module scope.  The
+  // map descriptor calls these from its activate / deactivate
+  // hooks so the host's switchToTab dispatcher stays type-agnostic.
+  snapshotActiveTabModuleLets: null,  // () => void
+  restoreActiveTabModuleLets: null,   // () => void
+  // updateUndoButtons drives the React ribbon's undo/redo enabled
+  // state from the live host stacks.  The map descriptor calls this
+  // after restore so the right buttons light up.
+  updateUndoButtons: null,             // () => void
+  // mapDisplayName returns the user-facing label for a MapDoc.
+  // Used by the map descriptor's displayName() + the dirty-prompt
+  // dialog headline.
+  mapDisplayName: null,                // (mapDoc) => string
+  // updateTopbarDocInfo refreshes the doc-info pill in the shared
+  // topbar (current tab's display name + dirty marker).  Called by
+  // every tab's activate() so the title bar tracks focus.
+  updateTopbarDocInfo: null,           // (tab) => void
+  // unsavedChangesDialog is the React confirm modal the close path
+  // shows when the active tab is dirty.  Resolves to
+  // 'save' | 'discard' | 'cancel'.
+  unsavedChangesDialog: null,          // ({ mapName }) => Promise<choice>
+  // save persists the active map.  Returns true on success.
+  saveActiveMap: null,                 // () => Promise<boolean>
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

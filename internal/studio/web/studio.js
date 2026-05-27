@@ -30,7 +30,6 @@ import {
   MapDoc,
   tabs,
   tabState,
-  activeMap,
   state,
   hostCallbacks,
   setReactUi,
@@ -196,11 +195,19 @@ import { openModelPicker } from './ui/pickers/open-unit-flow.js'
 // /ui/sandbox/.
 import {
   openSandboxStub,
-  activateSandboxTab,
   sharedModelViewerCanvas,
   getActiveSandboxView,
-  clearActiveSandboxView,
 } from './ui/sandbox/tab.js'
+
+// Tab registrar (Phase A).  Each section ships a register-tab.js
+// that installs its TabType descriptor; studio.js dispatches focus
+// + close through the registry instead of branching by type.  The
+// host imports the registration functions here so the registrar is
+// populated synchronously during boot, BEFORE any tab is opened.
+import { registerMapTabType } from './ui/map-editor/register-tab.js'
+import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
+import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
+import { getTabType } from './ui/tab-registry.js'
 
 // View-menu visibility toggles (minimap / features / start
 // positions / voids).  Each flips the matching state.show* flag,
@@ -458,12 +465,10 @@ import {
   closeSettingsDialog,
 } from './ui/dialogs/settings.js'
 
-// Per-tab unit-editor lifecycle — activateModelTab promotes one tab's
-// ModelViewer + MvControls into the active slot the rest of the studio
-// reads from.  The active-instance lets remain in studio.js (this file
-// reads them in dozens of places) and the module flips them through
-// hostCallbacks.setActiveModelViewer / setActiveMvControls below.
-import { activateModelTab } from './ui/unit-editor/tab.js'
+// Per-tab unit-editor lifecycle — activateModelTab lives in
+// /ui/unit-editor/tab.js and is called by the unit-editor tab
+// descriptor's activate() (registered through tab-registry).
+// Studio.js doesn't call it directly anymore.
 
 // Floating inspector chrome (drag/collapse/close/clamp + visibility
 // persistence) for the unit-editor's Scripts/Actions/Ports/StaticVars/
@@ -709,6 +714,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // asm.js' refreshMvThreadCodeHighlight calls this back to repaint
   // the Locals/Globals/Stack tray (R43g moves the var-row factories).
   hostCallbacks.renderMvThreadCodeLocals = renderMvThreadCodeLocals
+  // ── Tab registrar seams (Phase A).  Map descriptor reads these
+  // from its activate / deactivate / canClose hooks.  Other tab
+  // types route through `getActiveModelViewer` + the per-tab
+  // viewer's own dispose() instead.
+  hostCallbacks.snapshotActiveTabModuleLets = snapshotActiveTabModuleLets
+  hostCallbacks.restoreActiveTabModuleLets = restoreActiveTabModuleLets
+  hostCallbacks.updateUndoButtons = () => {
+    if (typeof updateUndoButtons === 'function') updateUndoButtons()
+  }
+  hostCallbacks.mapDisplayName = mapDisplayName
+  hostCallbacks.updateTopbarDocInfo = updateTopbarDocInfo
+  hostCallbacks.unsavedChangesDialog = (opts) => unsavedChangesDialog(opts)
+  hostCallbacks.saveActiveMap = () => save()
+  // Register every tab type with the central registry.  Order
+  // doesn't matter — the registry is data-only — but doing it after
+  // the hostCallbacks block guarantees descriptor activate() hooks
+  // see a populated host surface on the very first activation.
+  registerMapTabType()
+  registerUnitEditorTabType()
+  registerSandboxTabType()
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -795,6 +820,49 @@ document.addEventListener('DOMContentLoaded', () => {
 //      so the new map renders from a clean surface.
 //   6) Render + restore scroll.
 
+// _ensureTabInstance backfills the registry-managed
+// `tab.typeId` + `tab.descriptor` + `tab.instance` fields onto tab
+// records the legacy openers (openModelViewer, openSandboxStub,
+// openLoadedMap) push with the old `{ type, name, sandbox?, map? }`
+// shape.  Idempotent so re-entry is safe.
+//
+// Once every opener migrates to call createTab(typeId, spec) +
+// instance.attachTabRef directly, this shim deletes — the registry
+// would be the only path to instance creation.
+function _ensureTabInstance(tab) {
+  if (!tab) return
+  if (tab.instance) return
+  // Map legacy discriminator -> typeId.  'model' tabs split into
+  // 'sandbox' or 'unit-editor' based on the sandbox flag.
+  let typeId = tab.typeId
+  if (!typeId) {
+    if (tab.type === 'model') typeId = tab.sandbox ? 'sandbox' : 'unit-editor'
+    else if (tab.type === 'map') typeId = 'map'
+  }
+  if (!typeId) return
+  const desc = getTabType(typeId)
+  if (!desc) return
+  // Build the descriptor's spec from whatever legacy fields the
+  // opener stashed onto the tab record.  This is the only place
+  // legacy-field reads survive in the new dispatch — once openers
+  // migrate, spec is what they pass to createTab.
+  let spec
+  if (typeId === 'map') {
+    spec = { map: tab.map }
+  } else if (typeId === 'unit-editor') {
+    spec = { name: tab.name, meta: tab.meta, displayName: tab.displayName }
+  } else if (typeId === 'sandbox') {
+    spec = { displayName: tab.displayName || tab.name || 'Sandbox' }
+  } else {
+    spec = {}
+  }
+  const instance = desc.create(spec)
+  if (typeof instance.attachTabRef === 'function') instance.attachTabRef(tab)
+  tab.typeId = typeId
+  tab.descriptor = desc
+  tab.instance = instance
+}
+
 function snapshotActiveTabModuleLets() {
   if (tabState.activeIndex < 0) return
   const tab = tabs[tabState.activeIndex]
@@ -843,94 +911,42 @@ function abortTransientGestureState() {
 
 // unsavedChangesDialog moved to /ui/dialogs/unsaved-changes.js.
 
+// closeTab routes through the tab registry.  Each tab type's
+// instance owns its canClose (dirty prompt) and dispose semantics —
+// the host's only responsibilities are bringing focus to the
+// closing tab BEFORE the prompt (so the user sees what they're
+// about to discard), and re-activating the next tab in line once
+// the splice is done.
 async function closeTab(idx) {
   if (idx < 0 || idx >= tabs.length) return
   const tab = tabs[idx]
-  // Model tabs have no dirty/save concept — but their viewer (the
-  // per-tab SandboxView for sandbox tabs, or the shared modelViewer-
-  // Instance for unit tabs) owns a live renderer + audio pool + COB
-  // runtime + engine.  Closing the tab must tear those down or
-  // backgrounded sounds + weapons keep ticking after the user
-  // dismissed them (the renderer keeps RAFing, audio keeps playing,
-  // projectiles keep flying — the engine has no idea its tab is
-  // gone).  Per-tab sandboxes own their own SandboxView; dispose() is
-  // a hard tear-down.  Unit tabs all share modelViewerInstance, so we
-  // only dispose that when the LAST unit tab closes (next user click
-  // will lazy-rebuild it).
-  if (tab.type === 'model') {
-    if (tab.viewer && typeof tab.viewer.dispose === 'function') {
-      // Tear the per-tab viewer down hard: pause its runtime,
-      // silence audio, dispose every binding's audio pool, then
-      // dispose the renderer.  Both ModelViewer and SandboxView
-      // implement dispose() identically enough that the same call
-      // covers both.  Unit-tab viewers also own a per-tab
-      // MvControls — dispose it explicitly so its TA-cursor host
-      // doesn't outlive the canvas.
-      try {
-        const rt = tab.viewer.cob && tab.viewer.cob.runtime
-        if (rt && typeof rt.setPaused === 'function') rt.setPaused(true)
-        if (tab.viewer.cob && tab.viewer.cob.audio
-            && typeof tab.viewer.cob.audio.dispose === 'function') {
-          tab.viewer.cob.audio.dispose()
-        }
-        if (typeof tab.viewer.setSilenced === 'function') tab.viewer.setSilenced(true)
-        if (tab.viewer._mvControls && typeof tab.viewer._mvControls.dispose === 'function') {
-          tab.viewer._mvControls.dispose()
-          tab.viewer._mvControls = null
-        }
-        tab.viewer.dispose()
-      } catch { /* ignore */ }
-      // Drop the global aliases when the closed tab WAS the active
-      // viewer — switchToTab below will promote a different tab's
-      // viewer into the alias slot.  Clearing first avoids a brief
-      // window where modelViewerInstance / _mvControls point at a
-      // disposed corpse.
-      if (getActiveSandboxView() === tab.viewer) clearActiveSandboxView()
-      if (modelViewerInstance === tab.viewer) {
-        modelViewerInstance = null
-        _mvControls = null
-      }
-      tab.viewer = null
-    }
-    tabs.splice(idx, 1)
-    if (tabs.length === 0) {
-      tabState.activeIndex = -1
-      $('#model-viewer-dialog').classList.add('hidden')
-      showWelcomeAfterLastTabClose()
-      return
-    }
-    if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
-    switchToTab(tabState.activeIndex, { fresh: false, force: true })
-    return
+  _ensureTabInstance(tab)
+  // Bring focus to the closing tab first so the dirty-confirm modal
+  // shows the right canvas behind it AND the save() inside
+  // canClose() operates on the right active state.
+  if (idx !== tabState.activeIndex) {
+    await switchToTab(idx, { force: true })
   }
-  // Prompt before closing a dirty tab.  Move focus to that tab first
-  // so the user can see what they're about to lose AND so a 'Save'
-  // choice operates on this tab's data (save() reads state).
-  if (tab.map.dirty) {
-    if (idx !== tabState.activeIndex) switchToTab(idx, { force: true })
-    const choice = await unsavedChangesDialog({ mapName: mapDisplayName(tab.map) })
-    if (choice === 'cancel') return
-    if (choice === 'save') {
-      const ok = await save()
-      if (!ok) return // save failed — leave tab open so the user can retry
-    }
-  }
-  // If the user is closing the currently-active tab, snapshot in-flight
-  // module-let state into a doomed MapDoc anyway so the closing tab's
-  // last edit can't taint the next tab's restore.
-  if (idx === tabState.activeIndex) snapshotActiveTabModuleLets()
+  const ok = await tab.instance.canClose({})
+  if (!ok) return
+  // Deactivate before dispose so the per-tab renderer / runtime
+  // releases its hold cleanly before dispose tears down GPU buffers.
+  if (idx === tabState.activeIndex) tab.instance.deactivate({})
+  tab.instance.dispose({})
   tabs.splice(idx, 1)
   if (tabs.length === 0) {
     tabState.activeIndex = -1
+    $('#model-viewer-dialog')?.classList.add('hidden')
     showWelcomeAfterLastTabClose()
     return
   }
-  // Pick the previous tab if we closed the active one; otherwise stay
-  // on the same active map.
-  if (idx <= tabState.activeIndex) tabState.activeIndex = Math.max(0, tabState.activeIndex - (idx === tabState.activeIndex ? 0 : 0))
+  // Pick the previous tab if we closed the active one; otherwise
+  // stay on the same active tab (its index shifts left when the
+  // closed one was to its left).
+  if (idx < tabState.activeIndex) tabState.activeIndex -= 1
   if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
-  // Re-activate with restore semantics so the now-front tab repaints.
-  switchToTab(tabState.activeIndex, { fresh: false, force: true })
+  if (tabState.activeIndex < 0) tabState.activeIndex = 0
+  await switchToTab(tabState.activeIndex, { fresh: false, force: true })
 }
 
 function showWelcomeAfterLastTabClose() {
@@ -942,11 +958,22 @@ function showWelcomeAfterLastTabClose() {
   renderMapTabs()
 }
 
-function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
+// switchToTab routes focus through the tab registry.  The dispatcher
+// is type-agnostic — every per-type decision (DOM toggles, renderer
+// start/stop, audio silence, panel show/hide, module-let snapshot /
+// restore) lives in the tab descriptor's activate / deactivate.
+//
+// Lifecycle guarantee: when this returns, exactly one tab's
+// instance.activate has been called and every other tab's
+// instance.deactivate is in a quiescent state.  Deactivate is
+// idempotent + cheap so the framework can call it across every
+// non-active tab on each swap to enforce that invariant.
+async function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   if (nextIdx < 0 || nextIdx >= tabs.length) return
   if (!force && nextIdx === tabState.activeIndex) return
   const outgoing = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   const incoming = tabs[nextIdx]
+  _ensureTabInstance(incoming)
 
   // Close every open thread-debugger panel — they point at the
   // outgoing tab's COB binding, which is either about to be
@@ -954,174 +981,37 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // editor (switching to a map tab).  Reopening from the Threads
   // inspector is one click.
   closeAllMvThreadCodePanels()
-  // Snapshot the outgoing MAP tab.  Model tabs hold no module-let
-  // state, so the snapshot/restore dance is bypassed for them.
-  if (!fresh && outgoing && outgoing.type !== 'model') snapshotActiveTabModuleLets()
-  // Pause the outgoing tab's simulation so its weapons / scripts /
-  // particles / sounds freeze instead of churning in the background.
-  // We REMEMBER the prior paused state on the tab itself so a user
-  // who explicitly paused (Pause button) keeps that intent; one who
-  // had it running comes back to a running tab.  The shared
-  // modelViewerInstance applies for non-sandbox unit tabs; sandbox
-  // tabs each own their own SandboxView's scene/runtime.
-  if (!fresh && outgoing && outgoing.type === 'model') {
-    pauseOutgoingTabRuntime(outgoing)
+
+  const ctx = {
+    fromTypeId: outgoing?.typeId || null,
+    toTypeId: incoming?.typeId || null,
+    isFresh: !!fresh,
   }
+
+  // Deactivate EVERY non-incoming tab so the framework can
+  // guarantee only the incoming holds the canvas / audio / RAF
+  // loop on the way out.  Deactivate is idempotent.
+  for (const t of tabs) {
+    if (t === incoming) continue
+    _ensureTabInstance(t)
+    try { t.instance.deactivate(ctx) } catch { /* ignore */ }
+  }
+
   abortTransientGestureState()
   tabState.activeIndex = nextIdx
-
-  // Route on tab type.  Model tabs slot the viewer overlay over
-  // the editor's content area while leaving the shared topbar +
-  // tabs + footer visible; map tabs hide the overlay and bring the
-  // map editor back to front.
-  if (incoming.type === 'model') {
-    renderMapTabs()
-    // .app stays VISIBLE so its topbar / tab bar / statusbar keep
-    // showing — the model viewer dialog overlays only the middle.
-    $('#app')?.classList.remove('hidden')
-    $('#welcome-dialog')?.classList.add('hidden')
-    $('#model-open-dialog')?.classList.add('hidden')
-    $('#model-viewer-dialog').classList.remove('hidden')
-    updateTopbarDocInfo(incoming)
-    if (incoming.sandbox) {
-      void activateSandboxTab(incoming)
-    } else {
-      // Hide the sandbox panel when switching back to a regular
-      // model tab so its overlay doesn't shadow the single-unit
-      // inspectors.  Also drop the sandbox-mode class so the
-      // left sidebar (Pieces / Textures / Weapons) comes back.
-      const sp = document.getElementById('sandbox-panel')
-      if (sp) sp.classList.add('hidden')
-      $('#model-viewer-dialog')?.classList.remove('sandbox-mode')
-      // Silence audio on every backgrounded viewer (unit + sandbox).
-      // activateModelTab re-un-silences the incoming tab below.
-      for (const t of tabs) {
-        const v = t && t.viewer
-        if (v && typeof v.setSilenced === 'function') {
-          try { v.setSilenced(true) } catch { /* ignore */ }
-        }
-      }
-      // Stop the currently-active sandbox renderer (if any) so the
-      // RAF loop releases the canvas slot for the incoming unit tab.
-      const outgoingSandbox = getActiveSandboxView()
-      if (outgoingSandbox && outgoingSandbox.renderer) {
-        try {
-          outgoingSandbox.renderer.stop?.()
-          outgoingSandbox.renderer.clearCanvas?.()
-        } catch { /* ignore */ }
-      }
-      // activateModelTab handles canvas attach / detach itself
-      // (per-tab ModelViewer + canvas, round 34).  No legacy
-      // shared-canvas reattach needed.
-      void activateModelTab(incoming)
-    }
-    return
-  }
-
-  // Map tab: tear down any visible model overlay before the editor
-  // takes the screen.  Stop BOTH the single-unit and the sandbox
-  // renderers — neither is visible while the map editor owns the
-  // viewport, and leaving their RAF loops running wastes CPU + can
-  // bleed canvas state through during fast tab switches before the
-  // dialog's display:none takes effect on the next compositor pass.
-  $('#model-viewer-dialog')?.classList.add('hidden')
-  // Stop BOTH renderers (single-unit + every sandbox tab) so neither
-  // burns CPU on a hidden surface, and clear the canvas so the last
-  // rendered frame doesn't bleed through when the user later returns
-  // to a model tab.  Silence audio on every view too — the map editor
-  // doesn't speak weapon sounds and a backgrounded sandbox shouldn't
-  // either.
-  if (modelViewerInstance && modelViewerInstance.renderer) {
-    try {
-      modelViewerInstance.renderer.stop?.()
-      modelViewerInstance.renderer.clearCanvas?.()
-    } catch { /* ignore */ }
-  }
-  if (modelViewerInstance && modelViewerInstance._mvControls
-      && typeof modelViewerInstance._mvControls.setSilenced === 'function') {
-    try { modelViewerInstance._mvControls.setSilenced(true) } catch { /* ignore */ }
-  }
-  for (const t of tabs) {
-    const v = t && t.viewer
-    if (v && v.renderer && v.renderer.stop) {
-      try {
-        v.renderer.stop()
-        v.renderer.clearCanvas?.()
-      } catch { /* ignore */ }
-    }
-    if (v && typeof v.setSilenced === 'function') {
-      try { v.setSilenced(true) } catch { /* ignore */ }
-    }
-  }
-
-  restoreActiveTabModuleLets()
   renderMapTabs()
-  updateTopbarDocInfo(incoming)
-  // recreateEditorView() needs an active app surface to mount into.
-  $('#app')?.classList.remove('hidden')
-  recreateEditorView()
-  // Sync drawer / view / mode UI to the new tab's state.
-  if (typeof updateUndoButtons === 'function') updateUndoButtons()
-  bumpContentVersion()
-  // Reflect the new tab's drawer filter in the sidebar input.
-  const filterInput = document.querySelector('#filter')
-  if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
-  if (typeof renderDrawer === 'function') renderDrawer()
-  if (typeof setMode === 'function') setMode(activeMap()?.mode || 'select-terrain')
-  if (typeof renderCanvas === 'function') renderCanvas()
-  // Restore scroll AFTER the new canvases are sized; canvas-scroll's
-  // scrollLeft/Top is clamped to the live scrollWidth/Height, which
-  // wouldn't exist before mount.
-  const tab = tabs[tabState.activeIndex]
-  if (tab) {
-    const scroll = document.querySelector('#canvas-scroll')
-    if (scroll) {
-      scroll.scrollLeft = tab.map.scrollLeft || 0
-      scroll.scrollTop = tab.map.scrollTop || 0
-    }
-  }
+
+  // Per-descriptor activation does its own DOM + renderer + audio
+  // wiring.  Errors here are intentionally allowed to surface so a
+  // broken tab doesn't silently fail to mount.
+  await incoming.instance.activate(ctx)
 }
 
-// pauseOutgoingTabRuntime freezes the simulation on a model / sandbox
-// tab the user is leaving.  Pausing the runtime is the canonical
-// way to stop every downstream tick the engine drives — weapon
-// state machines, projectile movement, particle pools, AudioPool
-// (gated on runtime.paused via the engine's per-binding tick), and
-// the cob bytecode interpreter itself.  Without this the renderer's
-// RAF is stopped on switch but the engine kept running through the
-// next requestAnimationFrame the host inevitably schedules, so the
-// user heard weapons + acks fire in a backgrounded tab.
-//
-// `_pausedBeforeSwitch` is stashed on the tab itself: a user who had
-// explicitly clicked Pause should still see "paused" when they
-// return, and a tab that was running should resume on the way back.
-function pauseOutgoingTabRuntime(tab) {
-  if (!tab || tab.type !== 'model') return
-  // Sandbox tabs each have their own SandboxView with its own
-  // engine + runtime.  Unit tabs (round 34) each have their own
-  // ModelViewer + runtime.  Pausing the per-tab runtime is enough —
-  // the per-binding tick reads `runtime.paused` and skips weapons,
-  // scripts, and movement when set.  No cross-tab trampling.
-  const rt = tab.sandbox
-    ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
-    : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
-  if (!rt || typeof rt.setPaused !== 'function') return
-  tab._pausedBeforeSwitch = !!rt.paused
-  if (!rt.paused) rt.setPaused(true)
-  // Also silence the viewer's audio on the way out so paused-but-
-  // playing audio elements don't sit half-decoded in the browser.
-  // For sandboxes this is engine-wide via setSilenced; for unit
-  // tabs the ModelViewer.setSilenced helper does the right thing.
-  if (tab.viewer && typeof tab.viewer.setSilenced === 'function') {
-    try { tab.viewer.setSilenced(true) } catch { /* ignore */ }
-  }
-  // Stop the outgoing tab's renderer so its RAF loop releases the
-  // canvas and doesn't fight the incoming tab for the GL slot.
-  // renderer.stop() is idempotent + cheap.
-  if (tab.viewer && tab.viewer.renderer && typeof tab.viewer.renderer.stop === 'function') {
-    try { tab.viewer.renderer.stop() } catch { /* ignore */ }
-  }
-}
+// pauseOutgoingTabRuntime — replaced by each tab descriptor's
+// deactivate() (Phase A).  Studio.js's switchToTab no longer
+// branches by type; the framework calls instance.deactivate() on
+// every non-incoming tab on every swap, and each instance owns the
+// pause / silence / renderer-stop sequence.
 
 // resumeIncomingTabRuntime restores the paused state the user had
 // before they switched away.  Called from activateModelTab /

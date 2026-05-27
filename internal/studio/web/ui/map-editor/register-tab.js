@@ -1,0 +1,126 @@
+// register-tab.js
+//
+// Registers the 'map' tab type with the central tab registry.
+// Map tabs are special among the three sections: the editor's
+// state lives in module-level lets on the host (undoStack /
+// redoStack / pendingTransaction / minimap base + scroll position),
+// so the instance has to snapshot those lets into spec on focus
+// loss and restore them on focus gain.  Every other state field is
+// already per-tab via the MapDoc proxy.
+
+import { registerTabType } from '../tab-registry.js'
+import { $, state, hostCallbacks } from '../host-context.js'
+
+class MapEditorTabInstance {
+  constructor(spec) {
+    // spec: { map }  — `map` is the MapDoc this tab edits.  The
+    // MapDoc itself holds all per-tab state (tiles, features,
+    // schemas, scroll position, undo stack snapshot, etc).
+    this.spec = spec
+    this._tabRef = null
+  }
+
+  // Mirror map onto the legacy tab record so existing code paths
+  // that walk tabs[].map keep working until they migrate.
+  attachTabRef(tab) {
+    this._tabRef = tab
+    tab.map = this.spec.map
+    tab.displayName = this.displayName()
+  }
+
+  displayName() {
+    const name = hostCallbacks.mapDisplayName?.(this.spec.map)
+    return name || 'Map'
+  }
+
+  // dirty drives the × indicator AND the canClose prompt.  Reads
+  // the MapDoc directly so a save() that mutates `dirty = false`
+  // shows up on the next signal commit.
+  dirty() { return !!this.spec.map?.dirty }
+
+  // Focus gained — hide the model overlay, run the map editor's
+  // mount path (canvas + drawer + ribbon + scroll restore).  Every
+  // other tab's deactivate has already shut down its renderer and
+  // silenced its audio; this path just brings the editor surface
+  // up and pulls the active-tab module-let state out of the MapDoc.
+  async activate(_ctx) {
+    $('#model-viewer-dialog')?.classList.add('hidden')
+    $('#welcome-dialog')?.classList.add('hidden')
+    $('#model-open-dialog')?.classList.add('hidden')
+    // Pull the per-tab module-let state (undo/redo/minimap/scroll)
+    // out of the MapDoc.  Without this the previous tab's stacks
+    // would still be in scope after the swap.
+    hostCallbacks.restoreActiveTabModuleLets?.()
+    // The .app container holds the editor surface.  Make sure it's
+    // visible before recreateEditorView mounts into it.
+    $('#app')?.classList.remove('hidden')
+    hostCallbacks.updateTopbarDocInfo?.(this._tabRef)
+    hostCallbacks.recreateEditorView?.()
+    hostCallbacks.updateUndoButtons?.()
+    hostCallbacks.bumpContentVersion?.()
+    // Sync the React drawer filter input + drawer body to the
+    // restored MapDoc's drawer/filter state.
+    const filterInput = document.querySelector('#filter')
+    if (filterInput) {
+      const drawer = state.drawer
+      filterInput.value = state.drawerFilters?.[drawer] || ''
+    }
+    hostCallbacks.renderDrawer?.()
+    // Restore the saved mode (paint / select-features / heightmap /
+    // voids / etc).  Reads off the activeMap() result so the
+    // dropdown reflects this tab's choice.
+    hostCallbacks.setMode?.(this.spec.map?.mode || 'select-terrain')
+    hostCallbacks.renderCanvas?.()
+    // Scroll restored AFTER recreateEditorView so the canvas
+    // wrapper's scrollWidth/Height has been laid out (clamping
+    // depends on the live dimensions).
+    const scroll = document.querySelector('#canvas-scroll')
+    if (scroll) {
+      scroll.scrollLeft = this.spec.map?.scrollLeft || 0
+      scroll.scrollTop = this.spec.map?.scrollTop || 0
+    }
+  }
+
+  // Focus lost — snapshot the live module-let state INTO the
+  // MapDoc so the next activate's restore picks up exactly where
+  // the user left off (undo history, pending transaction, etc).
+  // The framework calls this on every focus loss so we don't need
+  // to gate on outgoing vs incoming.
+  deactivate(_ctx) {
+    hostCallbacks.snapshotActiveTabModuleLets?.()
+  }
+
+  // Dirty tabs prompt the user before they close.  React modal
+  // resolves to 'save' | 'discard' | 'cancel'; 'cancel' aborts
+  // the close.
+  async canClose(_ctx) {
+    if (!this.dirty()) return true
+    const choice = await hostCallbacks.unsavedChangesDialog?.({
+      mapName: this.displayName(),
+    })
+    if (choice === 'cancel') return false
+    if (choice === 'save') {
+      const ok = await hostCallbacks.saveActiveMap?.()
+      // Failed save leaves the tab open so the user can retry.
+      if (!ok) return false
+    }
+    return true
+  }
+
+  // Map tabs have no GPU resources to release — the MapDoc itself
+  // is plain data the host can garbage-collect.  The active MapDoc
+  // gets snapshot one last time so a re-open from history would
+  // see the final state.
+  dispose(_ctx) {
+    // Nothing to dispose — the MapDoc is plain data.
+  }
+}
+
+export function registerMapTabType() {
+  registerTabType({
+    typeId: 'map',
+    label: 'Map',
+    glyph: '🗺',
+    create(spec) { return new MapEditorTabInstance(spec) },
+  })
+}
