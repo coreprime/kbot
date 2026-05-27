@@ -139,3 +139,107 @@ export function isCobScriptRunning(cob, name) {
   }
   return false
 }
+
+// runCobEntry invokes a script by name, randomising any required
+// inputs.  AimWeapon-class scripts expect (heading, pitch) on the
+// stack in TA's fixed-point angle units (65536 = 360°); we pick a
+// fully random target in the unit's forward hemisphere so every
+// click visibly retargets to a fresh spot.  Primary and secondary
+// can run concurrently — the runtime supports independent threads
+// per weapon (they signal-mask different bits so retargeting one
+// weapon does NOT interrupt the other).
+//
+// Lifecycle + audio-side-effects:
+//   - Activate gate: a freshly-built unit only responds to its own
+//     Create script.  Once Create completes the Script Commands
+//     panel unlocks every entry-point button.
+//   - Activate / Deactivate: skip a redundant call when the unit
+//     is already in the target state — re-running activatescr
+//     would replay the entire opening sequence and a re-Deactivate
+//     pops the unit open then closed.
+//   - SoundCategory fallbacks: each lifecycle event plays the FBI
+//     `activate` / `deactivate` event when present, falling back to
+//     `select*` / `build` / `unitcomplete` so the user always hears
+//     SOMETHING when they command an open / yard-up.
+//   - Aim* scripts: kill stale RestoreAfterDelay threads so the
+//     latest aim gets its full reload timer, then push (heading,
+//     pitch) onto the new thread.  Pitch is biased to "look at a
+//     same-altitude target ≥10× the unit's bbox away" so the gun
+//     doesn't tip down through the unit's own hull.
+export function runCobEntry(cob, name) {
+  if (!cob || !cob.hasScript(name)) return
+  // Don't re-start a script that already has a thread alive.  The
+  // first line of activatescr-style helpers is usually
+  // `turn <piece> to <axis> <0> now` which INSTANTLY snaps the
+  // piece back to origin before animating to the open position —
+  // re-triggering caused a visible jerk while pieces were already
+  // at their target.  For long-running loops (SmokeUnit, MotionControl)
+  // this also prevents stacking N threads from N clicks.
+  if (isCobScriptRunning(cob, name)) return
+  // Create-only gate: while the unit hasn't finished its Create
+  // script (state 'unborn' = never started, 'creating' = Create
+  // thread is mid-flight), suppress every other action.  Real TA
+  // does the same — a freshly-built unit only responds to its own
+  // initialisation script.
+  const lifecycle = cob._lifecycle || 'created'
+  if ((lifecycle === 'unborn' || lifecycle === 'creating') && !/^Create$/i.test(name)) return
+  // Starting Create flips the lifecycle into 'creating' so the
+  // other buttons stay disabled while the script runs.
+  if (/^Create$/i.test(name)) cob._lifecycle = 'creating'
+  const mvControls = hostCallbacks.getActiveMvControls?.()
+  if (/^Activate$/i.test(name)) {
+    if (cob._lifecycle === 'activated') return
+    cob._lifecycle = 'activated'
+    if (cob.hasScript('activatescr') && !isCobScriptRunning(cob, 'activatescr')) cob.start('activatescr')
+    if (cob.hasScript('OpenYard') && !isCobScriptRunning(cob, 'OpenYard')) cob.start('OpenYard')
+    mvControls?._playSoundRandom?.(['activate', 'select1', 'select2', 'select3', 'build', 'unitcomplete'])
+  }
+  if (/^Deactivate$/i.test(name)) {
+    if (cob._lifecycle === 'deactivated') return
+    cob._lifecycle = 'deactivated'
+    if (cob.hasScript('deactivatescr') && !isCobScriptRunning(cob, 'deactivatescr')) cob.start('deactivatescr')
+    if (cob.hasScript('CloseYard') && !isCobScriptRunning(cob, 'CloseYard')) cob.start('CloseYard')
+    // Same fallback chain as Activate, biased toward the second
+    // acknowledge voice so Activate / Deactivate sound distinct
+    // even when both fall back to the select bank.
+    mvControls?._playSoundRandom?.(['deactivate', 'select2', 'select3', 'select1', 'cant1'])
+  }
+  // Create script kicks the unit "online" — play the select voice
+  // so the user hears the unit acknowledge itself when they bring
+  // it to life.  Skipped when the unit has no Create.
+  if (/^Create$/i.test(name)) {
+    mvControls?._playSoundRandom?.(['select1', 'select2', 'select3', 'unitcomplete'])
+  }
+  if (/^Aim(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(name)) {
+    cob.unit.killThreadsByName('RestoreAfterDelay')
+    cob.unit.killThreadsByName('RestorePosition')
+    // Independent random heading per click - no per-weapon bias.
+    // Forward hemisphere only (±90°): aiming behind a unit clips
+    // through the body on most TA models and looks broken.
+    const TURNS = 65536
+    const heading = Math.floor((Math.random() - 0.5) * TURNS * 0.5)
+    const mv = hostCallbacks.getActiveModelViewer?.()
+    const m = mv?.model
+    let pitch = 0
+    if (m && m.bounds && m.bounds.min && m.bounds.max) {
+      const ext = [
+        m.bounds.max[0] - m.bounds.min[0],
+        m.bounds.max[1] - m.bounds.min[1],
+        m.bounds.max[2] - m.bounds.min[2],
+      ]
+      // Unit size = largest horizontal extent; height feeds the
+      // turret-mount offset, not the distance, so the aim line
+      // stays roughly flat regardless of how tall the unit is.
+      const unitSize = Math.max(ext[0], ext[2]) || ext[1] || 1
+      const distance = 10 * unitSize
+      const turretY = m.bounds.max[1]
+      const targetY = (m.bounds.min[1] + m.bounds.max[1]) * 0.5
+      const dy = targetY - turretY // negative → looking down
+      const pitchRad = Math.atan2(dy, distance)
+      pitch = Math.round(pitchRad * TURNS / (2 * Math.PI))
+    }
+    cob.start(name, [heading, pitch])
+    return
+  }
+  cob.start(name)
+}

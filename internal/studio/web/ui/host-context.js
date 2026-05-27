@@ -282,6 +282,11 @@ export const hostCallbacks = {
   // or null when no tab is active.  Used by close handlers that need
   // to restore the right editor surface after a modal closes.
   getActiveTab: null,           // () => Tab | null
+  // getActiveMvControls — currently-active MvControls singleton (the
+  // input + drag + sound handler attached to the model viewer).
+  // Setter is `setActiveMvControls` elsewhere; this getter lets
+  // extracted modules reach the same instance the host caches.
+  getActiveMvControls: null,    // () => MvControls | null
   // openLoadedMap hydrates editor state from a /api/studio/load
   // response and switches into the editor.  Called by the open-map
   // dialog flow + the drag-drop handler + the ?initial_map=… URL
