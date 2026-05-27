@@ -81,11 +81,9 @@ import {
 import { resetGL } from './ui/map-editor/canvas/webgl.js'
 
 // Pure rotation + flip helpers shared by the 2D draw path, the GL
-// renderer, and the stamp pipeline.  No state, no DOM — just
-// algebra over (origW, origH, rotation, flipH, flipV).
-import {
-  rotatedFootprint,
-} from './ui/map-editor/rotation.js'
+// renderer, and the stamp pipeline live in /ui/map-editor/rotation.js;
+// studio.js no longer imports them directly (the placementAnchor
+// consumer moved to /ui/map-editor/wire-toolbar.js).
 
 // Persisted UI prefs — drawer filters, view-menu toggles, inspector
 // panel visibility, the Settings dialog's tunables.  Moved to
@@ -107,7 +105,6 @@ import { startServerHeartbeat, isConnected } from './ui/common/heartbeat.js'
 // managed panels (Stats / Minimap / Camera) own their own position
 // via panel-store + FloatingPanel, and applyPanelLayout skips them.
 import {
-  makePanelDraggable,
   applyPanelLayout,
 } from './ui/common/panel-layout.js'
 
@@ -246,30 +243,21 @@ import {
   exportMapImage,
   exportBuildmap,
   exportVoidmap,
-  onImportHeightmapFile,
 } from './ui/map-editor/exports.js'
 
-// Symmetry helpers (Vertical / Horizontal / Both) — pure mate
-// generators used by every brush + stamp tool to mirror strokes
-// onto the matching half of the map.  The DOM wiring
+// Symmetry helpers live in /ui/map-editor/symmetry.js; studio.js no
+// longer imports them directly — placeFeature (the last consumer) is
+// now in /ui/map-editor/wire-toolbar.js.  The DOM wiring
 // (wireSymmetryGroup) moved to /ui/map-editor/ribbon/legacy-popups.js.
-import {
-  symmetryMatesAttr,
-} from './ui/map-editor/symmetry.js'
 
-// Legacy (pre-React) ribbon popup chrome — the imperative
-// "current Mode" dropdown badge, the hover-to-the-right submenu
-// positioner, the Symmetry tick row, the Voids / Heightmap / Erase
-// brush groups, and the Undo / Redo history flyouts.  All still
-// drive the static popup DOM left behind by the legacy ribbon HTML.
+// Legacy (pre-React) ribbon popup chrome — closeAllRibbonDropdowns +
+// positionRibbonPopup are reached from the local wireSchemaSelector
+// below.  The rest of the legacy-popup helpers (wireSymmetry/Brush/
+// Voids/Heightmap, wireHistoryFlyout) are consumed by
+// /ui/map-editor/wire-toolbar.js directly.
 import {
   closeAllRibbonDropdowns,
   positionRibbonPopup,
-  wireHistoryFlyout,
-  wireSymmetryGroup,
-  wireVoidsBrushGroup,
-  wireHeightmapBrushGroup,
-  wireBrushSizeGroup,
 } from './ui/map-editor/ribbon/legacy-popups.js'
 
 // Mode dispatch + the cluster of helpers that change with the active
@@ -300,8 +288,6 @@ import { wireKeyboard } from './ui/map-editor/keyboard.js'
 // dialog chrome is mounted separately.
 import {
   openScatterDialog,
-  closeScatterDialog,
-  applyScatter,
 } from './ui/map-editor/dialogs/scatter.js'
 
 // Map Properties (.ota) dialog — mission name, planet, wind, tidal,
@@ -309,7 +295,6 @@ import {
 // undo transaction and mirrors mission name + planet onto state.
 import {
   openOTADialog,
-  wireOTADialog,
 } from './ui/map-editor/dialogs/ota.js'
 
 // Per-schema editor — opened by the gear icon on each schema row in
@@ -317,7 +302,6 @@ import {
 // a single undo transaction.
 import {
   openSchemaEditor,
-  wireSchemaEditor,
 } from './ui/map-editor/dialogs/schema-editor.js'
 
 // Resize-map dialog — anchor-grid + Crop-to-content path.  Rebuilds
@@ -325,7 +309,6 @@ import {
 // the canvas DOM so no stale GL buffers survive.
 import {
   openResizeDialog,
-  wireResizeDialog,
 } from './ui/map-editor/dialogs/resize.js'
 
 // Pre-save Quality Checker dialog — POSTs the payload to
@@ -471,6 +454,24 @@ import {
   viewportCellCenter,
   setActiveWorld,
 } from './ui/map-editor/drawer-actions.js'
+
+// Legacy DOM toolbar wirers + the small cluster of helpers that ride
+// alongside them (drawer tab switcher, placement anchor, feature
+// placement, active-schema lookup).  All five `wire*` functions are
+// called from finishEditorBoot; the helpers are routed back through
+// hostCallbacks so other modules reach them through the same seam
+// they used pre-extraction.
+import {
+  wireToolbar,
+  wireZoomButtons,
+  wireTabs,
+  wireModeToolbar,
+  wireViewMenu,
+  switchTab,
+  placementAnchor,
+  placeFeature,
+  activeSchema,
+} from './ui/map-editor/wire-toolbar.js'
 
 // EditorView lifecycle — the two stacked <canvas> elements, every
 // mouse / wheel / drag listener bound to them, and the
@@ -641,7 +642,11 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.renderMapTabs = renderMapTabs
   hostCallbacks.recreateEditorView = recreateEditorView
   hostCallbacks.refreshSchemaSelector = refreshSchemaSelector
+  hostCallbacks.wireSchemaSelector = wireSchemaSelector
   hostCallbacks.publishMapRibbonState = publishMapRibbonState
+  hostCallbacks.publishMapSidebarState = publishMapSidebarState
+  hostCallbacks.startNewMapFromEditor = () => startNewMapFromEditor()
+  hostCallbacks.openExistingMapFromEditor = () => openExistingMapFromEditor()
   hostCallbacks.setMode = setMode
   hostCallbacks.invalidateMinimapBase = invalidateMinimapBase
   hostCallbacks.whenImageReady = whenImageReady
@@ -1444,70 +1449,13 @@ async function finishEditorBoot() {
 
 // ── Sidebar drawer ─────────────────────────────────────────────────────────
 
-function wireTabs() {
-  // Sidebar tabs + filter row are React-managed now (see
-  // /ui/map-editor/tabs/sidebar.js).  Click / input handlers route
-  // through configureSidebarBridge, which the React tree installs.
-  // Nothing left to wire here, but the publishMapSidebarState call
-  // ensures the React signals reflect the live state every time we
-  // re-enter the editor (File → New / Open / etc.).
-  publishMapSidebarState()
-}
-
-// ── Mode toolbar + View menu wiring ────────────────────────────────────────
-
-function wireModeToolbar() {
-  // The Mode dropdown is React-managed (see
-  // /ui/map-editor/ribbon/map-ribbon.js).  Mode picks fire through
-  // the map-ribbon bridge's setMode action; the React tree reads the
-  // active mode off ribbonState.mode each publish.  Nothing to wire
-  // here, but publishing the initial mode keeps the dropdown badge in
-  // lockstep on first paint.
-  publishMapRibbonState()
-}
-
-// setMode / modeHint / syncDrawerToMode moved to
-// /ui/map-editor/mode.js — imported at the top of this file.
-
-function wireViewMenu() {
-  // The View dropdown + every toggle row + the display-mode picker
-  // are React-managed now (see /ui/map-editor/ribbon/map-ribbon.js).
-  // The host bridge installed in configureReactUi routes the clicks
-  // through to setMinimapVisible / setVoidsVisible / setFeaturesVisible
-  // / etc.  Only the feature-info-panel's draggable wiring stays
-  // here — it's the one floating panel we didn't migrate this round.
-  makePanelDraggable($('#feature-info-panel'), $('#feature-info-header'))
-  // Push the initial View toggles into the React store so the menu's
-  // check-glyphs reflect persisted state on first paint.
-  publishMapRibbonState()
-}
-
-// wireKeyboard moved to /ui/map-editor/keyboard.js.
-// handleDeleteKey / rotateActive / flipActive moved to
-// /ui/map-editor/mode.js.  All four are imported at the top of this
-// file.
-
-function switchTab(tab) {
-  state.drawer = tab
-  // React MapSidebar reads drawer / filter / checkbox visibility off
-  // signals — publishMapSidebarState pushes the new tab + restored
-  // per-tab filter into the React tree.  Sections-vs-Features-only
-  // checkbox visibility is computed inside publishMapSidebarState
-  // (showUsed / showWreckage flip off on Sections).
-  publishMapSidebarState()
-  // Placeholder text — the React input doesn't currently bind it, so
-  // poke the DOM input directly when present.  Falls through cleanly
-  // when the input hasn't mounted yet (early boot).
-  const filterInput = document.getElementById('filter')
-  if (filterInput) {
-    filterInput.placeholder = tab === 'features'
-      ? 'Filter features by name, world, category'
-      : 'Filter sections by name, world, group'
-  }
-  renderDrawer()
-}
-
-// isWreckageFeature now lives in ./ui/map-editor/helpers.js.
+// wireTabs / wireModeToolbar / wireViewMenu / switchTab moved to
+// /ui/map-editor/wire-toolbar.js (Phase 4) — imported at the top of
+// this file.  setMode / modeHint / syncDrawerToMode live in
+// /ui/map-editor/mode.js.  wireKeyboard / handleDeleteKey /
+// rotateActive / flipActive live in /ui/map-editor/keyboard.js +
+// /ui/map-editor/mode.js.  isWreckageFeature lives in
+// /ui/map-editor/helpers.js.
 
 // loadSections / loadFeatures fetch the per-tileset catalog of
 // stampable sections + the master feature list, then re-render the
@@ -1610,14 +1558,7 @@ function applyFeatureOrigins(map) {
 // for callers that snapshot OTA into a tab swap).
 
 
-// wireZoomButtons binds the three Zoom ribbon buttons.  Lives outside
-// EditorView because the buttons sit in the toolbar (which is mounted
-// once for the session) rather than the canvas stack.
-function wireZoomButtons() {
-  $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)))
-  $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)))
-  $('#zoom-fit').addEventListener('click', fitZoom)
-}
+// wireZoomButtons moved to /ui/map-editor/wire-toolbar.js (Phase 4).
 
 // pickCell + pickFeatureAttrCell + pickAttrCellForVoid moved to
 // /ui/map-editor/mouse-coords.js — imported at the top of this
@@ -1649,14 +1590,9 @@ function wireZoomButtons() {
 // to /ui/map-editor/cursor.js (R40g) — imported at the top of
 // this file.
 
-// placementAnchor returns the top-left tile coordinate where the section
-// should land so that the cursor cell ends up at the centre of the
-// section's footprint.  For a W×H section, the cursor at (cx, cy) maps
-// to a top-left at (cx - floor(W/2), cy - floor(H/2)).
-function placementAnchor(cursorTX, cursorTY, p) {
-  const { w: fw, h: fh } = rotatedFootprint(p.origW, p.origH, p.rotation)
-  return { tx: cursorTX - Math.floor(fw / 2), ty: cursorTY - Math.floor(fh / 2) }
-}
+// placementAnchor moved to /ui/map-editor/wire-toolbar.js (Phase 4) —
+// imported at the top of this file and re-registered on hostCallbacks
+// in the boot block so the drag-drop + paste paths still resolve.
 
 // updatePlacementHover, handlePaintModeClick, commitAnchoredPlacement,
 // stampSectionWithRotation + copyTileHeights moved to
@@ -1705,10 +1641,10 @@ function placementAnchor(cursorTX, cursorTY, p) {
 // gameToCanvas / canvasToGame live in /ui/map-editor/helpers.js —
 // imported at the top of this file.
 
-function activeSchema() {
-  if (!state.ota || !state.ota.schemas[state.activeSchema]) return null
-  return state.ota.schemas[state.activeSchema]
-}
+// activeSchema moved to /ui/map-editor/wire-toolbar.js (Phase 4) —
+// imported at the top of this file.  The hostCallbacks registration
+// below points at the imported function so mode.js's start-position
+// delete path still resolves through the bridge.
 
 // onStartPosMouseDown / Move / Up + the in-flight drag state moved
 // to /ui/map-editor/modes/start-points.js (R40a) — imported at the
@@ -1769,29 +1705,10 @@ function activeSchema() {
 // the symmetry-aware per-tile section stamp now lives next to its
 // only consumer (handlePaint).
 
-function placeFeature(ax, ay) {
-  const sel = state.selected
-  // Features sit on the 16-px attribute grid.  Earlier the placement
-  // snapped to tile centres (`tx*2+1`) which made the cursor feel coarse
-  // and disagreed with what TA stores in the TNT.  Now the caller passes
-  // the actual attribute cell under the cursor.
-  const points = [{ ax, ay }, ...symmetryMatesAttr(ax, ay)]
-  for (const p of points) {
-    state.features = state.features.filter((f) => !(f.ax === p.ax && f.ay === p.ay))
-    state.features.push({
-      name: sel.name,
-      ax: p.ax,
-      ay: p.ay,
-      footprintX: sel.footprintX || 1,
-      footprintZ: sel.footprintZ || 1,
-      previewUrl: sel.previewUrl || null,
-      originX: sel.originX || 0,
-      originY: sel.originY || 0,
-    })
-  }
-  bumpContentVersion()
-  renderCanvas()
-}
+// placeFeature moved to /ui/map-editor/wire-toolbar.js (Phase 4) —
+// imported at the top of this file.  The hostCallbacks registration
+// below points at the imported function so feature-select.js's drop
+// path still resolves through the bridge.
 
 // renderCanvas moved to /ui/map-editor/canvas/render.js —
 // imported at the top of this file.
@@ -1928,139 +1845,11 @@ function wireDeveloperDialog() {
 // for the read sites (visible-bounds, minimap, mouse routing).
 
 // ── Toolbar ────────────────────────────────────────────────────────────────
-
-function wireToolbar() {
-  // Most of the ribbon-side buttons (#btn-save, #btn-undo, the
-  // Edit / Mode / View / Advanced dropdowns, etc.) are React-managed
-  // now — the migration moves them into MapRibbon and the host bridge
-  // routes the clicks through to the legacy handlers below.  The
-  // optional-chaining guards below short-circuit when those static
-  // elements are absent (the ribbon's hidden template still ships
-  // them so they're harmless when present).
-  $('#btn-save')?.addEventListener('click', save)
-  $('#btn-save-loose')?.addEventListener('click', saveLoose)
-  $('#btn-resize')?.addEventListener('click', openResizeDialog)
-  $('#btn-scatter')?.addEventListener('click', openScatterDialog)
-  $('#scatter-cancel')?.addEventListener('click', closeScatterDialog)
-  $('#scatter-apply')?.addEventListener('click', applyScatter)
-  $('#btn-export-heightmap')?.addEventListener('click', exportHeightmap)
-  $('#btn-export-minimap')?.addEventListener('click', exportMinimap)
-  $('#btn-export-full-render')?.addEventListener('click', exportFullRender)
-  $('#btn-export-map-image')?.addEventListener('click', exportMapImage)
-  $('#btn-export-buildmap')?.addEventListener('click', exportBuildmap)
-  $('#btn-export-voidmap')?.addEventListener('click', exportVoidmap)
-  $('#btn-quality-audit')?.addEventListener('click', () => {
-    // Advanced › Quality Check… — standalone audit, no save afterward.
-    runQualityChecker(buildSavePayload(), { mode: 'audit' })
-  })
-  $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file')?.click())
-  // The import-heightmap-file <input> stays as a real DOM element
-  // (kept outside the ribbon template precisely because the React
-  // ribbon's importHeightmap bridge action synthesises a click on it).
-  $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
-  $('#btn-undo')?.addEventListener('click', undo)
-  $('#btn-redo')?.addEventListener('click', redo)
-  wireHistoryFlyout($('#btn-undo'), $('#undo-history-popup'))
-  wireHistoryFlyout($('#btn-redo'), $('#redo-history-popup'))
-  $('#btn-new')?.addEventListener('click', startNewMapFromEditor)
-  $('#btn-open')?.addEventListener('click', openExistingMapFromEditor)
-  // Edit dropdown clipboard entries — share the same handlers as the
-  // Ctrl+C / Ctrl+V hotkeys so a user who reaches for the menu gets
-  // the same behaviour.
-  $('#btn-cut')?.addEventListener('click', cutSelection)
-  $('#btn-copy')?.addEventListener('click', copyToClipboard)
-  $('#btn-paste')?.addEventListener('click', () => pasteFromClipboard('all'))
-  $('#btn-paste-features')?.addEventListener('click', () => pasteFromClipboard('features'))
-  $('#btn-paste-tiles')?.addEventListener('click', () => pasteFromClipboard('tiles'))
-  $('#btn-clear-region')?.addEventListener('click', clearRegion)
-  $('#btn-clear-features-selection')?.addEventListener('click', clearFeaturesInSelection)
-  $('#btn-clear-all-features')?.addEventListener('click', clearAllFeatures)
-  // New Window opens the studio in a fresh tab — the user can run two
-  // copies side by side and compare/edit different maps without
-  // discarding the current session.
-  $('#btn-new-window')?.addEventListener('click', () => {
-    window.open(location.origin + '/', '_blank', 'noopener')
-  })
-  $('#btn-ota')?.addEventListener('click', openOTADialog)
-
-  // Actions dropdown.
-  const actBtn = $('#actions-dropdown-btn')
-  const actPopup = $('#actions-dropdown-popup')
-  if (actBtn && actPopup) {
-    actBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      closeAllRibbonDropdowns(actPopup)
-      positionRibbonPopup(actBtn, actPopup)
-      actPopup.classList.toggle('hidden')
-    })
-  }
-
-  // File dropdown — nests New / Open / Save behind one button so the
-  // ribbon stays narrow.  Menu rows close the popup automatically on
-  // click (matches the Actions dropdown pattern).
-  const fileBtn = $('#file-dropdown-btn')
-  const filePopup = $('#file-dropdown-popup')
-  if (fileBtn && filePopup) {
-    fileBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      closeAllRibbonDropdowns(filePopup)
-      positionRibbonPopup(fileBtn, filePopup)
-      filePopup.classList.toggle('hidden')
-    })
-    for (const row of filePopup.querySelectorAll('.menu-row')) {
-      row.addEventListener('click', () => filePopup.classList.add('hidden'))
-    }
-  }
-
-  // Edit dropdown — clipboard operations.  Same toggle pattern as the
-  // File menu; menu rows close on click.
-  const editBtn = $('#edit-dropdown-btn')
-  const editPopup = $('#edit-dropdown-popup')
-  if (editBtn && editPopup) {
-    editBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      closeAllRibbonDropdowns(editPopup)
-      positionRibbonPopup(editBtn, editPopup)
-      editPopup.classList.toggle('hidden')
-    })
-    for (const row of editPopup.querySelectorAll('.menu-row')) {
-      row.addEventListener('click', () => editPopup.classList.add('hidden'))
-    }
-  }
-
-  // Advanced dropdown — exports and diagnostics today; future home for
-  // power-user tools.  Same click-toggle pattern as File / Edit.
-  const advBtn = $('#advanced-dropdown-btn')
-  const advPopup = $('#advanced-dropdown-popup')
-  if (advBtn && advPopup) {
-    advBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      closeAllRibbonDropdowns(advPopup)
-      positionRibbonPopup(advBtn, advPopup)
-      advPopup.classList.toggle('hidden')
-    })
-    for (const row of advPopup.querySelectorAll('.menu-row')) {
-      row.addEventListener('click', () => advPopup.classList.add('hidden'))
-    }
-  }
-
-  // Outside-click closes any open ribbon dropdown.
-  document.addEventListener('click', (e) => {
-    if (e.target.closest('.ribbon-dropdown')) return
-    closeAllRibbonDropdowns(null)
-  })
-
-  wireResizeDialog()
-  wireSchemaSelector()
-  wireOTADialog()
-  wireSchemaEditor()
-  wireBrushSizeGroup()
-  wireHeightmapBrushGroup()
-  wireVoidsBrushGroup()
-  wireSymmetryGroup()
-  refreshSchemaSelector()
-  updateUndoButtons()
-}
+// wireToolbar moved to /ui/map-editor/wire-toolbar.js (Phase 4) —
+// imported at the top of this file.  The wirer reaches the schema-
+// dropdown wiring (wireSchemaSelector / refreshSchemaSelector) and the
+// File-menu New / Open handlers through hostCallbacks because those
+// pieces still live in studio.js.
 
 // Schemas are addressed by their player count (the "Network N" the
 // schema's Type ends in).  Treating count as the identity keeps the
