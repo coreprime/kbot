@@ -64,6 +64,7 @@ import {
   activeMap,
   state,
   hostCallbacks,
+  setReactUi,
   $,
   $$,
   setStatus,
@@ -153,6 +154,12 @@ import {
   persistPanelCollapsed,
   applyPanelLayout,
 } from './ui/common/panel-layout.js'
+
+// confirmDialog — imperative wrapper around the React confirm modal.
+// Delegates to reactUi.confirmDialog when the bridge has loaded,
+// falls back to native window.confirm before then.  Lives in
+// /ui/dialogs/ alongside the React component.
+import { confirmDialog } from './ui/dialogs/confirm.js'
 
 // KBot Studio — browser-side editor.
 //
@@ -8195,21 +8202,10 @@ async function openExistingMapFromEditor() {
   openMapDialog('tabbar')
 }
 
-// confirmDialog shows the in-app confirm modal and resolves with the
-// user's choice.  Replaces the native window.confirm() so the prompt
-// looks like the rest of the editor and isn't a browser-skinned
-// blocker.  The modal is now a React component (see /ui/dialogs/confirm-dialog.js
-// and the re-export through /ui/mount.js); this wrapper just delegates
-// to it.  Sync-callable: returns the React-resolved Promise<boolean>
-// immediately, falling back to window.confirm only if the React UI
-// island isn't loaded yet (very early-boot calls; in practice every
-// user-driven confirm fires long after configureReactUi resolved).
-function confirmDialog(opts = {}) {
-  if (_reactUi && typeof _reactUi.confirmDialog === 'function') {
-    return _reactUi.confirmDialog(opts)
-  }
-  return Promise.resolve(window.confirm(`${opts.title || 'Confirm'}\n\n${opts.message || ''}`))
-}
+// confirmDialog moved to /ui/dialogs/confirm.js — imported at the
+// top of this file.  Same imperative API, now routes through
+// getReactUi() from host-context so callers in other extracted
+// modules can use it without a studio.js back-reference.
 
 // Resize dialog state — anchor index in [0..2] for row/col.
 const resizeState = { anchorRow: 1, anchorCol: 1 }
@@ -12962,6 +12958,11 @@ function configureReactUi() {
   if (_reactUiPromise) return _reactUiPromise
   _reactUiPromise = import('/ui/mount.js').then((ui) => {
     _reactUi = ui
+    // Mirror the bridge onto host-context so the extracted /ui/*
+    // modules (open-map dialog, confirm dialog, ribbon bridges,
+    // future ones) can reach the React API without a back-reference
+    // into studio.js.
+    setReactUi(ui)
     ui.configureUi({
       loadPos:       (id) => (state.mvInspectorPos       || {})[id] || null,
       savePos:       (id, pos) => {

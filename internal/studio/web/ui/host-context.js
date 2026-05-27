@@ -252,7 +252,23 @@ export const hostCallbacks = {
   // clipboard at the user's last hover point.  An object instead of
   // a plain `let` so subsystems can both read and write it.
   cursor: { lastHover: null },  // { lastHover: { tx, ty } | null }
+  // React/Preact UI bridge exports (from /ui/mount.js) — populated
+  // by configureReactUi() once the dynamic import resolves.  Modules
+  // that talk to React (open-map dialog, confirm dialog, ribbon
+  // bridge, …) reach the API through getReactUi() so they tolerate
+  // the bridge not being mounted yet (early boot, headless harness).
+  reactUi: null,                // module exports of /ui/mount.js, or null
 }
+
+// ── React UI bridge accessor ────────────────────────────────────────
+//
+// Subsystem modules that need to talk to React (open-map dialog,
+// confirm dialog, ribbon bridges) call `getReactUi()` rather than
+// reaching for a global.  Returns null when the React island hasn't
+// loaded yet — every caller must tolerate that and either no-op or
+// await configureReactUi().
+export function getReactUi() { return hostCallbacks.reactUi }
+export function setReactUi(ui) { hostCallbacks.reactUi = ui }
 
 // ── DOM helpers ─────────────────────────────────────────────────────
 
