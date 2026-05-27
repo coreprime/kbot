@@ -11009,6 +11009,12 @@ function wireWelcomeTabs() {
 function wireModelDialogs() {
   const openBtn = $('#welcome-model-open')
   if (openBtn) openBtn.addEventListener('click', openModelPicker)
+  // Sandbox welcome card — for now opens an info dialog explaining
+  // the Phase-1 state of the feature so the user knows it's wired
+  // but not yet feature-complete.  Subsequent commits will replace
+  // this with the actual sandbox tab launch.
+  const sandboxBtn = $('#welcome-sandbox')
+  if (sandboxBtn) sandboxBtn.addEventListener('click', openSandboxStub)
   const back = $('#model-open-back')
   if (back) back.addEventListener('click', closeModelPicker)
   const filter = $('#model-filter')
@@ -16710,6 +16716,33 @@ function closeModelPicker() {
   } else {
     $('#welcome-dialog').classList.remove('hidden')
   }
+}
+
+// openSandboxStub is the Phase-1 entry point for the Sandbox welcome
+// card.  The full multi-unit RTS layer (tab routing, multi-unit
+// renderer pass, click + drag-rect selection, Move / Attack
+// commands, projectile hit-detection + damage) is a multi-commit
+// build-out — this stub explains the current state so the user
+// knows the card is wired even though the experience isn't
+// feature-complete yet.  Once Phase 2 lands, this becomes a real
+// `openSandboxTab()` that creates a 'sandbox' tab type and routes
+// to the multi-unit scene.
+function openSandboxStub() {
+  const msg = [
+    'Sandbox mode is under construction.',
+    '',
+    'The data layer is in place: a shared CobRuntime drives multiple',
+    'units, each with its own COB script state, particles, audio,',
+    'health and build %.  Selection state lives on the scene.',
+    '',
+    'The remaining work — multi-unit rendering, click + drag-rect',
+    'selection, Move / Attack commands, and projectile-vs-bounding-',
+    'sphere damage — lands in subsequent commits.',
+  ].join('\n')
+  // Reuse the browser's native alert for the stub message — small,
+  // dismissible, doesn't need wiring + DOM machinery for a one-line
+  // notice that's going to be replaced shortly.
+  if (typeof window !== 'undefined' && window.alert) window.alert(msg)
 }
 
 async function fetchModels() {
