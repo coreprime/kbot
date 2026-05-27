@@ -37,6 +37,7 @@
         <button class="welcome-tab" role="tab" aria-selected="false" data-welcome-tab="modelling">Modelling</button>
         <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: COB / scripting editor.">Scripting</button>
         <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="More workflows on the roadmap.">Other</button>
+        <button class="welcome-tab" role="tab" aria-selected="false" data-welcome-tab="sandbox">Sandbox Mode</button>
       </div>
       <div class="welcome-tab-panel" data-welcome-tab-panel="mapping">
         <div class="welcome-options">
@@ -60,10 +61,14 @@
             <span class="welcome-card-title">Open Unit</span>
             <span class="welcome-card-sub">Browse every TA unit in the mounted assets — view the 3DO geometry, drive its COB animation scripts, fire its weapons, and edit its runtime ports.</span>
           </button>
+        </div>
+      </div>
+      <div class="welcome-tab-panel hidden" data-welcome-tab-panel="sandbox">
+        <div class="welcome-options">
           <button class="welcome-card" id="welcome-sandbox">
             <span class="welcome-card-ico">🪖</span>
-            <span class="welcome-card-title">Sandbox</span>
-            <span class="welcome-card-sub">Spawn units onto a blank battlefield, select them (click or drag-rect), and issue Move / Attack orders.  Weapons inflict real damage on hit.</span>
+            <span class="welcome-card-title">Open Sandbox</span>
+            <span class="welcome-card-sub">Drop units onto a blank battlefield, select them (click or drag-rect), and issue Move / Attack orders.  Weapons inflict real damage on hit, COB scripts drive movement and turret aim, and the runtime overlay shows everything that's ticking.</span>
           </button>
         </div>
       </div>

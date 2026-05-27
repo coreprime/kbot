@@ -1519,6 +1519,22 @@ export class ModelRenderer {
         if (t.headingRad !== 0) {
           Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
         }
+        // Ghost entities (sandbox placement preview) render as a
+        // pulsing green wireframe instead of the solid main pass — no
+        // shadow, no fill, just an outline so the user sees the unit's
+        // silhouette under the cursor before committing to the spawn.
+        if (ent.ghost) {
+          const pulse = 0.55 + 0.45 * Math.sin((performance.now() - this._t0) * 0.006)
+          gl.enable(gl.BLEND)
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+          gl.depthMask(false)
+          const prevWidth = this.wireframeWidth
+          this.wireframeWidth = 2
+          this.#renderWireframe([0.3, 1.0, 0.45, 0.85 * pulse])
+          this.wireframeWidth = prevWidth
+          gl.depthMask(true)
+          continue
+        }
         this.#renderMain(this.renderMode === 'flat')
       }
       // Restore globals for subsequent passes (wireframe overlay,

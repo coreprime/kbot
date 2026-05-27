@@ -41,6 +41,12 @@ export class SandboxView {
     // buttons; the next canvas click consumes it as the target.
     // Stays as 'move' or 'attack'; reset to null after the command.
     this._pendingCmd = null
+    // Pending placement — set when the user picks a unit in the spawn
+    // dialog.  Holds the loaded model + (optional) preloaded COB so
+    // a mouse-driven ghost preview can follow the cursor on the
+    // ground plane.  Click confirms the spawn at the current ghost
+    // pos; Escape / right-click cancels.
+    this._placement = null  // { name, model, cobScript, pos: {x, z} }
   }
 
   async open() {
@@ -118,6 +124,46 @@ export class SandboxView {
     }
   }
 
+  // beginPlacement loads the unit's geometry + COB up front (so the
+  // ghost preview snaps in without a network round-trip on every
+  // mouse move) and enters placement mode.  The next canvas click on
+  // the ground plane commits the spawn at the cursor; Escape or
+  // right-click cancels.  Calling this with a unit that's already
+  // pending placement is a no-op.
+  async beginPlacement(name) {
+    if (!this.loader || !this.scene) return false
+    if (this._placement && this._placement.name === name) return true
+    this.#setStatus(`Loading ${name}…`)
+    try {
+      const model = await this.loader.load(name)
+      let cobScript = null
+      try {
+        const r = await fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=0`)
+        if (r.ok) cobScript = await r.json()
+      } catch { /* no COB — the spawn still works, the unit just won't animate */ }
+      // Initial position — drop the ghost on whatever the camera is
+      // currently looking at so it's immediately visible.  Mouse-move
+      // takes over from the first event onwards.
+      const tx = (this.camera && this.camera.target) ? this.camera.target[0] : 0
+      const tz = (this.camera && this.camera.target) ? this.camera.target[2] : 0
+      this._placement = { name, model, cobScript, pos: { x: tx, z: tz } }
+      this.#refreshEntities()
+      this.#setStatus(`Placing ${name} — click to confirm, Esc to cancel.`)
+      return true
+    } catch (err) {
+      this.#setStatus(`Load failed: ${err.message || err}`)
+      return false
+    }
+  }
+
+  // cancelPlacement drops the ghost without spawning.
+  cancelPlacement() {
+    if (!this._placement) return
+    this._placement = null
+    this.#refreshEntities()
+    this.#setStatus('Placement cancelled.')
+  }
+
   // setPendingCommand — called by the controls UI when the user
   // clicks Move / Attack.  Next canvas click consumes it.
   setPendingCommand(cmd) {
@@ -145,6 +191,18 @@ export class SandboxView {
         selected: this.scene.isSelected(u.id),
       })
     }
+    // Placement ghost — appended LAST so it draws over the live units
+    // (renderer iterates entities in order).  The renderer checks
+    // ent.ghost and emits a translucent green wireframe instead of a
+    // solid main pass.
+    if (this._placement && this._placement.model) {
+      const p = this._placement
+      entities.push({
+        model: p.model,
+        transform: { x: p.pos.x, y: 0, z: p.pos.z, headingRad: 0 },
+        ghost: true,
+      })
+    }
     this.renderer.setEntities(entities)
   }
 
@@ -153,6 +211,70 @@ export class SandboxView {
     this._pointerWired = true
     const canvas = this.canvas
     canvas.addEventListener('click', (e) => this.#onClick(e))
+    canvas.addEventListener('contextmenu', (e) => this.#onContextMenu(e))
+    canvas.addEventListener('mousemove', (e) => this.#onMouseMove(e))
+    // Esc cancels placement.  Bound on window because the canvas
+    // doesn't take focus by default (would need tabindex), and Esc
+    // there feels more "global cancel" anyway.
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this._placement) {
+        this.cancelPlacement()
+      }
+    })
+  }
+
+  // #onMouseMove updates the ghost preview's position to follow the
+  // cursor on the ground plane.  Cheap: just a screen-to-ground
+  // unproject; the renderer re-builds the entity transforms each
+  // frame anyway.
+  #onMouseMove(e) {
+    if (!this._placement) return
+    const rect = this.canvas.getBoundingClientRect()
+    const sx = e.clientX - rect.left
+    const sy = e.clientY - rect.top
+    const world = this.#screenToGround(sx, sy)
+    if (!world) return
+    this._placement.pos.x = world[0]
+    this._placement.pos.z = world[2]
+    this.#refreshEntities()
+  }
+
+  // #onContextMenu — right-click.  In placement mode it cancels the
+  // ghost.  Otherwise (selection present) it issues a Move / Attack
+  // command directly without needing to click the toolbar button —
+  // classic RTS gesture.
+  #onContextMenu(e) {
+    e.preventDefault()
+    if (this._placement) {
+      this.cancelPlacement()
+      return
+    }
+    if (!this.scene || this.scene.selected.size === 0) return
+    const rect = this.canvas.getBoundingClientRect()
+    const sx = e.clientX - rect.left
+    const sy = e.clientY - rect.top
+    // Hit-test for unit under cursor first.  If we hit a unit that's
+    // NOT in the selection set, it's an attack target.  Otherwise we
+    // fall through to a ground-move at the click location.
+    const hit = this.#pickUnitAt(sx, sy)
+    if (hit && !this.scene.selected.has(hit.id)) {
+      let n = 0
+      for (const id of this.scene.selected) {
+        if (id === hit.id) continue
+        const u = this.scene.unitById(id)
+        if (u) { u.attackTarget = hit; n++ }
+      }
+      this.#setStatus(`Attack — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
+      return
+    }
+    const world = this.#screenToGround(sx, sy)
+    if (!world) return
+    let n = 0
+    for (const id of this.scene.selected) {
+      const u = this.scene.unitById(id)
+      if (u) { u.moveTarget = { x: world[0], z: world[2] }; u.attackTarget = null; n++ }
+    }
+    this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
   }
 
   #onClick(e) {
@@ -160,6 +282,34 @@ export class SandboxView {
     const rect = this.canvas.getBoundingClientRect()
     const sx = e.clientX - rect.left
     const sy = e.clientY - rect.top
+    // Placement mode — left-click commits the spawn at the current
+    // ghost position.  The model + COB have already been loaded by
+    // beginPlacement, so this lands instantly without a network
+    // hitch.  Spawn count + tag are passed through to addUnit so the
+    // roster + Runtime panels pick it up on the next refresh tick.
+    if (this._placement) {
+      const p = this._placement
+      const world = this.#screenToGround(sx, sy)
+      const x = world ? world[0] : p.pos.x
+      const z = world ? world[2] : p.pos.z
+      const inst = this.scene.addUnit({
+        name: p.name,
+        model: p.model,
+        cobScript: p.cobScript,
+        x, z,
+        headingRad: 0,
+      })
+      // Auto-run Create on spawn so the unit immediately settles into
+      // its idle pose (flares hidden, panels at rest).
+      if (inst && inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
+        try { inst.cobUnit.start('Create') } catch { /* ignore */ }
+      }
+      this.#setStatus(`Spawned ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
+      // Keep placement active so the user can drop multiple copies of
+      // the same unit in quick succession.  Esc / right-click cancels.
+      this.#refreshEntities()
+      return
+    }
     // Project the click into world coords on the ground plane via
     // the camera's screen-to-world helper (if available).  Fall back
     // to selecting the nearest unit by screen-projected distance.

@@ -137,8 +137,75 @@ export class SandboxScene {
   tick(dtMs) {
     const insts = this.runtime.tick(dtMs)
     const dtSec = (dtMs * (this.runtime.playbackRate || 1)) / 1000
+    const simNowMs = this.runtime.simTimeMs || 0
     for (const u of this._units.values()) {
       if (u.dead) continue
+      // ── Attack resolution ───────────────────────────────────
+      // When a unit has an attack target, we want it to face the
+      // target, walk into range, and fire its primary weapon on a
+      // fixed cadence.  We synthesise a hit-scan: each shot subtracts
+      // a fixed amount of HP from the target and emits a muzzle
+      // flash for the firer.  Travel-time projectile graphics are
+      // intentionally skipped to keep sandbox attack predictable —
+      // the user immediately sees damage land, the firer animates,
+      // and the target's HP counts down in the roster.
+      if (u.attackTarget) {
+        const t = u.attackTarget
+        if (!t || t.dead || !this._units.has(t.id)) {
+          u.attackTarget = null
+        } else {
+          const dxA = t.pos.x - u.pos.x
+          const dzA = t.pos.z - u.pos.z
+          const distA = Math.hypot(dxA, dzA)
+          u.heading = Math.atan2(dxA, dzA)
+          // Effective range: prefer FBI/weapon range, else a sandbox
+          // default of 220 wu so weapons-less spawns still skirmish.
+          const range = (u.meta && u.meta.weaponRange) || 220
+          if (distA > range) {
+            // Walk into range on the same channel as a Move order so
+            // the existing movement code drives it; we just rewrite
+            // the target each frame as the prey shifts.
+            u.moveTarget = { x: t.pos.x, z: t.pos.z }
+          } else {
+            // In range — stop and pour fire on the target.
+            u.moveTarget = null
+            const cadenceMs = 1000
+            u._nextFireSimMs = u._nextFireSimMs || 0
+            if (simNowMs >= u._nextFireSimMs) {
+              u._nextFireSimMs = simNowMs + cadenceMs
+              // Trigger the COB Fire script (if present) so the
+              // muzzle-flash hook fires + scripts that animate the
+              // turret recoil run.  Errors are silent — a unit
+              // without FirePrimary still applies damage below.
+              if (u.cobUnit && u.cobUnit.scriptNames) {
+                if (u.cobUnit.scriptNames.includes('FirePrimary')) {
+                  try { u.cobUnit.start('FirePrimary') } catch { /* ignore */ }
+                } else if (u.binding && u.binding.particles) {
+                  // No COB Fire script → emit a bare muzzle-flash at
+                  // the unit's position so the user still sees that
+                  // something happened.
+                  u.binding.particles.emit(4 /* SFX_FIRE_FLASH */, [u.pos.x, u.pos.y + 14, u.pos.z], { size: 10, lifeMs: 140 })
+                }
+              }
+              // Hit-scan damage — fixed at 12 HP/shot, scaled by the
+              // FBI weapondamage if known.  Kills the target when
+              // HP would go negative; further shots no-op since we
+              // null attackTarget above on dead.
+              const dmg = (u.meta && u.meta.weaponDamage) || 12
+              t.health = Math.max(0, t.health - dmg)
+              if (t.health <= 0) {
+                t.dead = true
+                t.moveTarget = null
+                t.attackTarget = null
+                // Death puff so the kill reads visually.
+                if (t.binding && t.binding.particles) {
+                  t.binding.particles.emit(4 /* SFX_FIRE_FLASH */, [t.pos.x, t.pos.y + 18, t.pos.z], { size: 32, lifeMs: 600, color: [1.6, 0.6, 0.2, 1.0] })
+                }
+              }
+            }
+          }
+        }
+      }
       // ── Movement integration ────────────────────────────────
       if (u.moveTarget) {
         const dx = u.moveTarget.x - u.pos.x

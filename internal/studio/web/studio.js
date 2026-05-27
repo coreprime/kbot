@@ -11041,22 +11041,18 @@ function wireModelDialogs() {
   if (confirm) confirm.addEventListener('click', () => {
     if (!selectedModelName) return
     // Sandbox spawn path — when the user clicked "Spawn Unit" inside
-    // the sandbox panel, the picker confirm should ADD the unit to
-    // the scene at a fresh ground position instead of opening a
-    // model viewer tab.  Offsets per spawn so multiple units don't
-    // overlap on the first tick.
+    // the sandbox panel, the picker confirm starts MOUSE PLACEMENT:
+    // the picked unit's geometry + COB load up front and a translucent
+    // green wireframe ghost follows the cursor on the ground plane.
+    // Click commits the spawn at the cursor; Esc / right-click
+    // cancels.  beginPlacement keeps the ghost active after a commit
+    // so the user can drop several copies of the same unit in quick
+    // succession.
     if (window.__sandboxSpawnPending && sandboxViewInstance) {
       window.__sandboxSpawnPending = false
-      // Close the picker dialog manually (skip the normal close
-      // path which restores the welcome dialog or active tab).
       $('#model-open-dialog')?.classList.add('hidden')
       $('#model-viewer-dialog')?.classList.remove('hidden')
-      const n = sandboxViewInstance.scene ? sandboxViewInstance.scene.unitCount() : 0
-      const ang = n * 0.9
-      const r = 30 + n * 8
-      const x = Math.cos(ang) * r
-      const z = Math.sin(ang) * r
-      void sandboxViewInstance.spawn(selectedModelName, { x, z })
+      void sandboxViewInstance.beginPlacement(selectedModelName)
       return
     }
     openModelViewer(selectedModelName)
