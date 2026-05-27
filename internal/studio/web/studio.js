@@ -4662,13 +4662,18 @@ async function activateSandboxTab(tab) {
   //
   // Hide Script Commands (per-script COB buttons — too granular for
   // a strategic view; the unit editor remains the place for that).
+  // Route through setMvInspectorVisible (NOT a direct DOM class
+  // toggle) so the React panel-store's visible signal flips in
+  // lockstep — the Runtime panel's per-tick ThreadsBody is gated on
+  // that signal and would render empty if we let the chrome go
+  // visible while the signal said hidden.  `persist: false` keeps
+  // the user's saved choice from being clobbered by sandbox-mode's
+  // forced show.
   for (const id of ['mv-inspector-actions']) {
-    const p = document.getElementById(id)
-    if (p) p.classList.add('hidden')
+    setMvInspectorVisible(id, false, { persist: false })
   }
   for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports', 'mv-inspector-effects', 'mv-inspector-audio']) {
-    const p = document.getElementById(id)
-    if (p) p.classList.remove('hidden')
+    setMvInspectorVisible(id, true, { persist: false })
   }
   // The Controls panel's action buttons (Move / Primary / Secondary /
   // Tertiary / Stop) are wired into MvControls — which operates on
