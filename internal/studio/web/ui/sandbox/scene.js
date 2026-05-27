@@ -17,7 +17,7 @@
 // (the host view) attach via engine.on(...) to react to fire / hit /
 // death events with particles + sound + projectile spawn.
 
-import { GameEngine } from './game-engine.js'
+import { GameEngine } from '../../model3d/game-engine.js'
 
 export class SandboxScene {
   constructor({ palette = null } = {}) {

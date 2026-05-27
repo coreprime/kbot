@@ -146,7 +146,7 @@ export async function activateSandboxTab(tab) {
     }
   }
   if (!tab.viewer) {
-    const mod = await import('../../model3d/sandbox-view.js')
+    const mod = await import('./view.js')
     tab.viewer = new mod.SandboxView({
       statusEl: $('#status'),
     })

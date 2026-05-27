@@ -15,17 +15,22 @@
 // stop / toggleTracking), engine event sub bookkeeping, smoke-trail
 // lifecycle, hotkey wiring, and the getInspectorMv() panel adapter.
 
-import { ModelLoader } from './model-loader.js'
-import { ModelRenderer } from './model-renderer.js'
-import { OrbitCamera } from './orbit-camera.js'
-import { TextureCache } from './texture-cache.js'
-import { TAPalette } from './palette.js'
-import { SandboxScene } from './sandbox-scene.js'
-import { attachOrbitControls } from './camera-controls.js'
-import { ArmedCursor } from './armed-cursor.js'
-import { spawnProjectile, SFX_FIRE_FLASH } from './weapon-driver.js'
-import { teamColorForSide } from './team-colors.js'
-import { BaseView } from './view-base.js'
+import { ModelLoader } from '../../model3d/model-loader.js'
+import { ModelRenderer } from '../../model3d/model-renderer.js'
+import { OrbitCamera } from '../../model3d/orbit-camera.js'
+import { TextureCache } from '../../model3d/texture-cache.js'
+import { TAPalette } from '../../model3d/palette.js'
+import { SandboxScene } from './scene.js'
+import { attachOrbitControls } from '../../model3d/camera-controls.js'
+import { ArmedCursor } from '../../model3d/armed-cursor.js'
+import { spawnProjectile, SFX_FIRE_FLASH } from '../../model3d/weapon-driver.js'
+import { teamColorForSide } from '../../model3d/team-colors.js'
+// BaseView still lives in model3d/ for now — it's the shared base
+// for the unit editor's MvControls AND this view.  Deleting the
+// shared base (per the architectural plan) is a Phase C follow-up
+// that requires either duplicating the helpers into each subclass
+// or splitting them into ui/common/ free functions.
+import { BaseView } from '../../model3d/view-base.js'
 
 export class SandboxView extends BaseView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
