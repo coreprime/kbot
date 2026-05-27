@@ -26,12 +26,10 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
   handlers.down = (e) => {
     canvas.setPointerCapture(e.pointerId)
     pointer = { x: e.clientX, y: e.clientY, button: e.button, lockDxAccum: 0, lockDyAccum: 0 }
-    // Any user grab drops auto-rotate.  The common case for stopping
-    // the turntable is "I want to look at this manually."
-    if (renderer && typeof renderer.setAutoRotate === 'function') {
-      renderer.setAutoRotate(false)
-    }
-    if (typeof onUserInteract === 'function') onUserInteract('pointerdown')
+    // NOTE: auto-rotate is preserved on pointerdown.  Only pan
+    // gestures (shift / ctrl / right-drag) drop it — see `move`
+    // below.  This lets the user orbit-drag around an auto-rotating
+    // unit to inspect a side without the turntable stopping.
   }
 
   handlers.move = (e) => {
@@ -41,6 +39,14 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
     pointer.x = e.clientX
     pointer.y = e.clientY
     if (pointer.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey) {
+      // Pan moves the camera target — auto-rotate around a moving
+      // target reads as "the world is sliding" instead of "the camera
+      // is spinning", so we drop the turntable + any unit-tracking
+      // flag the host carries.  Plain orbit-drag (the else branch
+      // below) keeps both because rotateBy preserves the target.
+      if (renderer && typeof renderer.setAutoRotate === 'function') {
+        renderer.setAutoRotate(false)
+      }
       if (e.ctrlKey || e.metaKey) {
         if (typeof onUserInteract === 'function') onUserInteract('pan')
         if (typeof camera.panAlongGround === 'function') camera.panAlongGround(dx, dy)
@@ -63,7 +69,10 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
     } else {
       // Plain drag → orbit.  0.35 scaling matches the unit editor's
       // historical feel — comfortable for both fine inspection and
-      // sweeping turns without needing two gears.
+      // sweeping turns without needing two gears.  Auto-rotate +
+      // tracking are intentionally PRESERVED — the user is just
+      // looking at the scene from a different angle, not redirecting
+      // the camera's pivot.
       camera.rotateBy(dx * 0.35, dy * 0.35)
     }
     if (renderer && !renderer.running) renderer.requestRedraw?.()
@@ -79,10 +88,9 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
 
   handlers.wheel = (e) => {
     e.preventDefault()
-    if (renderer && typeof renderer.setAutoRotate === 'function') {
-      renderer.setAutoRotate(false)
-    }
-    if (typeof onUserInteract === 'function') onUserInteract('wheel')
+    // Wheel zooms in/out from the current target — the orbit point
+    // doesn't move, so auto-rotate + tracking stay sensible.  We
+    // intentionally do NOT drop either flag here.
     const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1
     if (typeof camera.zoomBy === 'function') camera.zoomBy(factor)
     if (renderer && !renderer.running) renderer.requestRedraw?.()

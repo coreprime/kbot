@@ -1322,6 +1322,23 @@ export class ModelRenderer {
     this.rafId = 0
   }
 
+  // clearCanvas paints the canvas with the sky-bottom colour and
+  // wipes the depth buffer.  Called by the host on tab switch so a
+  // tab that's about to lose the screen doesn't leave its last
+  // rendered frame visible while the incoming tab's first paint is
+  // pending.  Cheap — one viewport / clearColor / clear call.
+  // Multiple renderers share the same gl context (per canvas) so any
+  // renderer can invoke this and it clears the shared surface.
+  clearCanvas() {
+    const gl = this.gl
+    if (!gl) return
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    const c = this.skyBottom || [0.05, 0.07, 0.12]
+    gl.clearColor(c[0], c[1], c[2], 1)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+  }
+
   // getFPS returns the smoothed frames-per-second over the last
   // ~60 frames of the render loop.  Returns 0 when the loop isn't
   // running yet (no model loaded) so the Renderer overlay can
@@ -2467,26 +2484,64 @@ export class ModelRenderer {
   // back along the light direction; ortho extents follow the model's
   // bounding sphere.
   #updateLightMatrices() {
-    const min = this.model.bounds.min
-    const max = this.model.bounds.max
-    // Centre the shadow frustum on the unit's CURRENT world
-    // position, not its model-local bounding box.  When the unit
-    // walks via _unitTransform, the model vertices are translated
-    // into world space at draw time but the shadow frustum has to
-    // follow — otherwise a unit that walks ~50 wu from spawn ends
-    // up outside the light's ortho frame and its shadow vanishes
-    // (or, worse, gets pinned to the spawn point).  Adding
-    // _unitTransform.{x,y,z} to the model-local centroid lands the
-    // frustum on the unit no matter where it's walked to.
-    const ut = this._unitTransform
-    const cx = (min[0] + max[0]) * 0.5 + (ut ? ut.x : 0)
-    const cy = (min[1] + max[1]) * 0.5 + (ut ? ut.y : 0)
-    const cz = (min[2] + max[2]) * 0.5 + (ut ? ut.z : 0)
-    const dx = max[0] - min[0], dy = max[1] - min[1], dz = max[2] - min[2]
-    const radius = 0.5 * Math.hypot(dx, dy, dz)
-    // Pad so corners of the bounding box (rotated by auto-rotate yaw)
-    // never fall outside the light's frustum.
-    const r = Math.max(2, radius * 1.6)
+    let cx, cy, cz, r
+    if (this._entities && this._entities.length > 0) {
+      // Multi-entity (sandbox) — compute the bounding sphere of all
+      // entities' world positions PLUS each unit's per-model bounds
+      // radius.  Without this the frustum stays sized for the first
+      // entity, so units placed further out cast no shadow (their
+      // geometry falls outside the shadow-map's ortho frame).  Pads
+      // each unit's bounds by the same 1.6× the single-unit path
+      // uses so rotated kbots don't clip at the frustum corners.
+      let minX = Infinity, minY = Infinity, minZ = Infinity
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+      let maxUnitRadius = 4
+      for (const ent of this._entities) {
+        if (!ent.model || !ent.model.bounds) continue
+        const t = ent.transform || { x: 0, y: 0, z: 0 }
+        const bmin = ent.model.bounds.min
+        const bmax = ent.model.bounds.max
+        const ux = t.x + (bmin[0] + bmax[0]) * 0.5
+        const uy = t.y + (bmin[1] + bmax[1]) * 0.5
+        const uz = t.z + (bmin[2] + bmax[2]) * 0.5
+        const ur = 0.5 * Math.hypot(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2])
+        if (ur > maxUnitRadius) maxUnitRadius = ur
+        if (ux - ur < minX) minX = ux - ur
+        if (uy - ur < minY) minY = uy - ur
+        if (uz - ur < minZ) minZ = uz - ur
+        if (ux + ur > maxX) maxX = ux + ur
+        if (uy + ur > maxY) maxY = uy + ur
+        if (uz + ur > maxZ) maxZ = uz + ur
+      }
+      cx = (minX + maxX) * 0.5
+      cy = (minY + maxY) * 0.5
+      cz = (minZ + maxZ) * 0.5
+      const halfX = (maxX - minX) * 0.5
+      const halfY = (maxY - minY) * 0.5
+      const halfZ = (maxZ - minZ) * 0.5
+      r = Math.max(2, Math.hypot(halfX, halfY, halfZ) * 1.6)
+    } else {
+      const min = this.model.bounds.min
+      const max = this.model.bounds.max
+      // Centre the shadow frustum on the unit's CURRENT world
+      // position, not its model-local bounding box.  When the unit
+      // walks via _unitTransform, the model vertices are translated
+      // into world space at draw time but the shadow frustum has to
+      // follow — otherwise a unit that walks ~50 wu from spawn ends
+      // up outside the light's ortho frame and its shadow vanishes
+      // (or, worse, gets pinned to the spawn point).  Adding
+      // _unitTransform.{x,y,z} to the model-local centroid lands the
+      // frustum on the unit no matter where it's walked to.
+      const ut = this._unitTransform
+      cx = (min[0] + max[0]) * 0.5 + (ut ? ut.x : 0)
+      cy = (min[1] + max[1]) * 0.5 + (ut ? ut.y : 0)
+      cz = (min[2] + max[2]) * 0.5 + (ut ? ut.z : 0)
+      const dx = max[0] - min[0], dy = max[1] - min[1], dz = max[2] - min[2]
+      const radius = 0.5 * Math.hypot(dx, dy, dz)
+      // Pad so corners of the bounding box (rotated by auto-rotate yaw)
+      // never fall outside the light's frustum.
+      r = Math.max(2, radius * 1.6)
+    }
     const dist = Math.max(r * 3, r + 5)
     const eye = [cx + this.lightDir[0] * dist, cy + this.lightDir[1] * dist, cz + this.lightDir[2] * dist]
     Mat4.lookAt(this._lightView, eye, [cx, cy, cz], [0, 1, 0])

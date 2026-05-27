@@ -257,6 +257,16 @@ export class SandboxScene {
       // re-runs the runtime which would double-step every unit.
       const b = u.binding
       if (b) {
+        // Push the unit's current world pos into the binding so
+        // particle anchors (muzzle flash, SFX emits, explosions)
+        // land at the unit's actual position, not at the model-
+        // local origin all units share.  Cheap — just three field
+        // writes per frame.
+        if (b.worldOffset) {
+          b.worldOffset.x = u.pos.x
+          b.worldOffset.y = u.pos.y
+          b.worldOffset.z = u.pos.z
+        }
         // Replicate the binding tick's post-runtime work directly:
         // sync piece transforms + advance particles + audio.
         b._sync && b._sync(dtMs)

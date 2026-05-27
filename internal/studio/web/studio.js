@@ -780,8 +780,13 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       // owns the screen — no point burning frames on a hidden scene,
       // and the shared canvas would otherwise see two RAF loops racing
       // on it.  Renderer resumes on the next sandbox-tab activation.
+      // Also wipe the canvas so the previous tab's last frame doesn't
+      // bleed through while the incoming tab paints its first frame.
       if (sandboxViewInstance && sandboxViewInstance.renderer) {
-        try { sandboxViewInstance.renderer.stop?.() } catch { /* ignore */ }
+        try {
+          sandboxViewInstance.renderer.stop?.()
+          sandboxViewInstance.renderer.clearCanvas?.()
+        } catch { /* ignore */ }
       }
       void activateModelTab(incoming)
     }
@@ -795,11 +800,24 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // bleed canvas state through during fast tab switches before the
   // dialog's display:none takes effect on the next compositor pass.
   $('#model-viewer-dialog')?.classList.add('hidden')
+  // Stop BOTH renderers (single-unit + every sandbox tab) so neither
+  // burns CPU on a hidden surface, and clear the canvas so the last
+  // rendered frame doesn't bleed through when the user later returns
+  // to a model tab.
   if (modelViewerInstance && modelViewerInstance.renderer) {
-    try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
+    try {
+      modelViewerInstance.renderer.stop?.()
+      modelViewerInstance.renderer.clearCanvas?.()
+    } catch { /* ignore */ }
   }
-  if (sandboxViewInstance && sandboxViewInstance.renderer) {
-    try { sandboxViewInstance.renderer.stop?.() } catch { /* ignore */ }
+  for (const t of tabs) {
+    const v = t && t.viewer
+    if (v && v.renderer && v.renderer.stop) {
+      try {
+        v.renderer.stop()
+        v.renderer.clearCanvas?.()
+      } catch { /* ignore */ }
+    }
   }
 
   restoreActiveTabModuleLets()
@@ -16952,12 +16970,16 @@ async function activateSandboxTab(tab) {
   // each have their own SandboxView, and only the active one should
   // own the canvas / RAF loop.  Without this, an inactive sandbox
   // tab's renderer kept ticking + drew its scene over the canvas
-  // each frame.
+  // each frame.  Clear the canvas after stopping so the new tab's
+  // first paint doesn't get layered over the previous tab's frame.
   for (const t of tabs) {
     if (t === tab) continue
     const v = t.viewer
     if (v && v.renderer && v.renderer.stop) {
-      try { v.renderer.stop() } catch { /* ignore */ }
+      try {
+        v.renderer.stop()
+        v.renderer.clearCanvas?.()
+      } catch { /* ignore */ }
     }
   }
   // Per-tab SandboxView — each sandbox tab owns its own scene,
