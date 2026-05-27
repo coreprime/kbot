@@ -230,6 +230,16 @@ import {
   onImportHeightmapFile,
 } from './ui/map-editor/exports.js'
 
+// Symmetry helpers (Vertical / Horizontal / Both) — pure mate
+// generators used by every brush + stamp tool to mirror strokes
+// onto the matching half of the map.  The DOM wiring
+// (wireSymmetryGroup) stays in studio.js for now.
+import {
+  SYMMETRY_LABELS,
+  symmetryMatesTile,
+  symmetryMatesAttr,
+} from './ui/map-editor/symmetry.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -6780,7 +6790,8 @@ function wireToolbar() {
 // submenu to the right with the four choices.  The row itself shows
 // the active label + a tick when symmetry is non-off, matching the
 // gridlines / animation toggle rows in the View menu.
-const SYMMETRY_LABELS = { off: 'Off', x: 'Vertical', y: 'Horizontal', xy: 'Both' }
+// SYMMETRY_LABELS + the pure symmetryMatesTile / symmetryMatesAttr
+// helpers moved to /ui/map-editor/symmetry.js — imported above.
 
 function wireSymmetryGroup() {
   const row = $('#mode-row-symmetry')
@@ -6824,37 +6835,8 @@ function refreshSymmetryRow() {
   })
 }
 
-// symmetryMatesTile returns the tile coords each stroke should also
-// touch when symmetry is on.  The original (tx, ty) is implicit and
-// not included.  Each mate carries its own (dx, dy) flip flags so
-// callers can apply matching tile rotations.
-function symmetryMatesTile(tx, ty, footW = 1, footH = 1) {
-  if (state.symmetry === 'off') return []
-  const W = state.tileW
-  const H = state.tileH
-  // The mirrored top-left for a footprint is the reflection of the *far*
-  // edge so the footprint's body lands inside the canvas.
-  const mx = W - tx - footW
-  const my = H - ty - footH
-  const mates = []
-  if (state.symmetry === 'x' || state.symmetry === 'xy') mates.push({ tx: mx, ty, fx: true, fy: false })
-  if (state.symmetry === 'y' || state.symmetry === 'xy') mates.push({ tx, ty: my, fx: false, fy: true })
-  if (state.symmetry === 'xy') mates.push({ tx: mx, ty: my, fx: true, fy: true })
-  return mates
-}
-
-function symmetryMatesAttr(ax, ay) {
-  if (state.symmetry === 'off') return []
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  const mx = aw - 1 - ax
-  const my = ah - 1 - ay
-  const mates = []
-  if (state.symmetry === 'x' || state.symmetry === 'xy') mates.push({ ax: mx, ay })
-  if (state.symmetry === 'y' || state.symmetry === 'xy') mates.push({ ax, ay: my })
-  if (state.symmetry === 'xy') mates.push({ ax: mx, ay: my })
-  return mates
-}
+// symmetryMatesTile + symmetryMatesAttr moved to
+// /ui/map-editor/symmetry.js — imported at the top of this file.
 
 // positionSubmenuRight places `popup` to the right of `parentRow`,
 // flipping to the left if there isn't horizontal room, and clamping
