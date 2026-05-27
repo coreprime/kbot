@@ -29,7 +29,7 @@
 // BOS-fold redraws brackets) reach studio.js via hostCallbacks.
 
 import { hostCallbacks } from '../../host-context.js'
-import { highlightBosLine } from '../../../cob-highlight.js'
+import { highlightBosLine } from './cob-highlight.js'
 import { _mvThreadCodePanels } from './modal.js'
 
 // mvBosStatementMatch tries to find the assembly instruction range

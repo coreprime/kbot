@@ -35,7 +35,7 @@
 // sibling bos.js (applyMvThreadCodeCrossHover, refreshMvThreadCodeDecompHighlight).
 
 import { hostCallbacks } from '../../host-context.js'
-import { cobaOpCategory, computeJumps as sharedComputeJumps } from '../../../cob-highlight.js'
+import { cobaOpCategory, computeJumps as sharedComputeJumps } from './cob-highlight.js'
 import {
   applyMvThreadCodeCrossHover,
   refreshMvThreadCodeDecompHighlight,
