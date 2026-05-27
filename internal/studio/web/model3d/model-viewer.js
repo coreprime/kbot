@@ -15,6 +15,7 @@ import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
 import { CobRuntime } from './cob/cob-runtime.js'
 import { CobBinding } from './cob/cob-binding.js'
+import { attachOrbitControls } from './camera-controls.js'
 
 export class ModelViewer {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -401,84 +402,24 @@ export class ModelViewer {
   }
 
   _wireInputs() {
-    const cv = this.canvas
-    cv.addEventListener('pointerdown', (e) => {
-      cv.setPointerCapture(e.pointerId)
-      this._pointerState = { x: e.clientX, y: e.clientY, button: e.button }
-      // Stop the turntable as soon as the user grabs the camera — the
-      // common case for stopping auto-rotate is "I want to look at
-      // this piece manually".
-      if (this.renderer) this.renderer.setAutoRotate(false)
-    })
-    cv.addEventListener('pointermove', (e) => {
-      if (!this._pointerState) return
-      const dx = e.clientX - this._pointerState.x
-      const dy = e.clientY - this._pointerState.y
-      this._pointerState.x = e.clientX
-      this._pointerState.y = e.clientY
-      if (!this.camera) return
-      if (this._pointerState.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey) {
-        // Shift = axis-locked pan relative to the screen plane.
-        // Ctrl (or ⌘ on macOS) = pan along the world's GROUND PLANE —
-        // drag-down advances the camera in its facing direction so
-        // you can walk the camera through the scene without tilting.
-        // Plain right-drag still pans freely (no modifier).  Both
-        // modifier modes drop tracking-follow first so the next
-        // render frame doesn't yank the target back to the unit.
-        if (e.ctrlKey || e.metaKey) {
-          if (this._mvControls?.tracking) this._mvControls.setTracking(false)
-          this.camera.panAlongGround(dx, dy)
-        } else if (e.shiftKey) {
-          // Shift = axis-locked pan.  Picks the dominant axis from
-          // the gesture's accumulated motion (not just this delta —
-          // a single frame's dy can flicker between zero and a few
-          // pixels) and zeroes the other so the pan reads as a
-          // clean vertical OR horizontal slide instead of drifting
-          // diagonally.  Plain right-drag still pans freely.
-          if (this._mvControls?.tracking) this._mvControls.setTracking(false)
-          const acc = this._pointerState
-          acc.lockDxAccum = (acc.lockDxAccum || 0) + dx
-          acc.lockDyAccum = (acc.lockDyAccum || 0) + dy
-          if (Math.abs(acc.lockDxAccum) > Math.abs(acc.lockDyAccum)) {
-            this.camera.panBy(dx, 0)
-          } else {
-            this.camera.panBy(0, dy)
-          }
-        } else {
-          this.camera.panBy(dx, dy)
+    // Orbit / pan / zoom gestures live in a shared module so the
+    // single-unit editor + the multi-unit Sandbox feel identical.
+    // The onUserInteract callback drops view-side state (Tracking
+    // checkbox, auto-rotate UI mirror) the camera-controls module
+    // can't reach on its own.
+    this._detachInputs = attachOrbitControls({
+      canvas: this.canvas,
+      renderer: this.renderer,
+      camera: this.camera,
+      onUserInteract: (kind) => {
+        if (kind === 'pan' && this._mvControls?.tracking) {
+          this._mvControls.setTracking(false)
         }
-      } else {
-        // Dragging up tilts the camera up (eye orbits over the top,
-        // scene's underside comes into view).  With the new "positive
-        // pitch = looking down" convention dragging up = increasing
-        // pitch, so dy stays positive.
-        this.camera.rotateBy(dx * 0.35, dy * 0.35)
-      }
-      if (this.renderer && !this.renderer.running) this.renderer.requestRedraw()
+        if (kind === 'wheel') {
+          const btn = document.querySelector('#mv-act-autorotate')
+          if (btn) { btn.dataset.on = '0'; btn.classList.remove('active') }
+        }
+      },
     })
-    const release = (e) => {
-      if (this._pointerState && cv.hasPointerCapture(e.pointerId)) {
-        cv.releasePointerCapture(e.pointerId)
-      }
-      this._pointerState = null
-    }
-    cv.addEventListener('pointerup', release)
-    cv.addEventListener('pointercancel', release)
-    cv.addEventListener('wheel', (e) => {
-      e.preventDefault()
-      if (!this.camera) return
-      // Wheel zoom is a user gesture — disable auto-rotate so the
-      // unit holds the angle the user is investigating.  Same rule
-      // as the pointer-down drag handler.
-      if (this.renderer) {
-        this.renderer.setAutoRotate(false)
-        const btn = document.querySelector('#mv-act-autorotate')
-        if (btn) { btn.dataset.on = '0'; btn.classList.remove('active') }
-      }
-      const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1
-      this.camera.zoomBy(factor)
-      if (this.renderer && !this.renderer.running) this.renderer.requestRedraw()
-    }, { passive: false })
-    cv.addEventListener('contextmenu', (e) => e.preventDefault())
   }
 }

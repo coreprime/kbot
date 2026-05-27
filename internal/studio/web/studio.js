@@ -16928,17 +16928,18 @@ async function activateSandboxTab(_tab) {
   showSandboxPanel(true)
   // Force-show the inspector panels meaningful in multi-unit mode:
   // Renderer (camera info) + Scripts (runtime telemetry) for the
-  // scene as a whole, Actions + Static Vars + Controls for the
-  // focused unit (panels render against the currently-selected
-  // sandbox unit, or an empty state when nothing's selected — see
-  // refreshMvInspectors).  Hide Effects/Audio (per-binding pools
-  // that don't have a single owner in multi-unit) until those are
-  // re-wired for sandbox.
-  for (const id of ['mv-inspector-effects', 'mv-inspector-audio']) {
+  // scene as a whole, Static Vars + Controls for the focused unit
+  // (panels render against the currently-selected sandbox unit, or
+  // an empty state when nothing's selected — see refreshMvInspectors).
+  // Hide Actions (per-script COB buttons — too granular for a
+  // strategic view; the unit editor remains the place for that),
+  // Effects/Audio (per-binding pools that don't have a single owner
+  // in multi-unit).
+  for (const id of ['mv-inspector-actions', 'mv-inspector-effects', 'mv-inspector-audio']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
   }
-  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars', 'mv-inspector-ports']) {
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports']) {
     const p = document.getElementById(id)
     if (p) p.classList.remove('hidden')
   }
@@ -17083,6 +17084,12 @@ function ensureSandboxPanel() {
   const aside = document.createElement('aside')
   aside.id = 'sandbox-panel'
   aside.className = 'mv-inspector'
+  // Floating panel: a single Spawn button + the unit roster.  All
+  // command actions (Move / Attack / Stop / Selection / Field /
+  // Camera) live in the sandbox ribbon at the top of the dialog, so
+  // this panel is now just a roster surface — clicking a unit row
+  // selects that unit (which routes Static Vars + Controls panel +
+  // hover state through the standard inspector pipeline).
   aside.innerHTML = `
     <div class="mv-inspector-header" id="sandbox-panel-header">
       <span class="minimap-grip" title="Drag to move">⠿</span>
@@ -17090,13 +17097,10 @@ function ensureSandboxPanel() {
       <button class="minimap-toggle mv-inspector-toggle" data-panel="sandbox-panel" title="Collapse">−</button>
     </div>
     <div class="mv-inspector-body">
-      <div class="mv-controls-actions" style="grid-template-columns: 1fr 1fr;">
+      <div class="mv-controls-actions" style="grid-template-columns: 1fr;">
         <button class="mv-ctrl-action" id="sandbox-spawn"><span class="ico">🛠</span><span class="lbl">Spawn Unit</span></button>
-        <button class="mv-ctrl-action" id="sandbox-move"><span class="ico">🚶</span><span class="lbl">Move</span></button>
-        <button class="mv-ctrl-action" id="sandbox-attack"><span class="ico">🎯</span><span class="lbl">Attack</span></button>
-        <button class="mv-ctrl-action mv-ctrl-action-stop" id="sandbox-stop"><span class="ico">✋</span><span class="lbl">Stop</span></button>
       </div>
-      <div id="sandbox-roster" style="max-height:240px;overflow:auto;padding:4px 6px;font-size:11px;font-family:ui-monospace,monospace"></div>
+      <div id="sandbox-roster" style="max-height:320px;overflow:auto;padding:4px 6px;font-size:11px;font-family:ui-monospace,monospace"></div>
     </div>
   `
   host.appendChild(aside)
@@ -17105,17 +17109,8 @@ function ensureSandboxPanel() {
   // doesn't recognise the id — it just attaches handlers on whatever
   // .mv-inspector-toggle / *-header it finds inside the panel.
   try { wireMvInspector('sandbox-panel') } catch { /* ignore */ }
-  // Wire buttons.
+  // Wire Spawn button — everything else moved to the ribbon.
   document.getElementById('sandbox-spawn').addEventListener('click', () => openSandboxSpawnPicker())
-  document.getElementById('sandbox-move').addEventListener('click', () => sandboxViewInstance?.setPendingCommand('move'))
-  document.getElementById('sandbox-attack').addEventListener('click', () => sandboxViewInstance?.setPendingCommand('attack'))
-  document.getElementById('sandbox-stop').addEventListener('click', () => {
-    if (!sandboxViewInstance?.scene) return
-    for (const id of sandboxViewInstance.scene.selected) {
-      const u = sandboxViewInstance.scene.unitById(id)
-      if (u) { u.moveTarget = null; u.attackTarget = null }
-    }
-  })
   // Refresh the roster every 250ms so spawn / health-change is
   // visible without per-frame work.
   setInterval(() => refreshSandboxRoster(), 250)

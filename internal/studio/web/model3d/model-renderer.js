@@ -1372,9 +1372,16 @@ export class ModelRenderer {
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
       if (this.groundMode !== 'off' && this._groundVBO && this.camera) {
         const _savedModel = this.model
+        const _savedEntities = this._entities
+        // Pretend we're in multi-entity mode so #renderGround takes the
+        // camera-target-anchored branch with a generous radius — the
+        // synthesised single-pixel bounds would otherwise feather the
+        // ground out before it reached the visible horizon.
+        this._entities = this._entities || [{}]
         this.model = { bounds: { min: [-4, 0, -4], max: [4, 0, 4] } }
         try { this.#renderGround() } catch { /* shader may not be ready yet */ }
         this.model = _savedModel
+        this._entities = _savedEntities
       }
       return
     }
@@ -1745,7 +1752,38 @@ export class ModelRenderer {
 
     gl.useProgram(this.programShadow)
     gl.uniformMatrix4fv(this.uShadowLightSpace, false, space)
-    this.#drawGeometry(this.model.root, this._modelMatrix, true)
+    // Multi-entity mode (sandbox) — each entity contributes its own
+    // shadow at its CURRENT world position, not the first entity's
+    // bounds-center.  Without this loop the renderer's per-entity main
+    // pass below paints every unit correctly but every shadow stayed
+    // glued to wherever the first spawn landed.  We mutate this.model
+    // + this._modelMatrix per entity, draw geometry, then restore the
+    // outer-scope state so the post-shadow main pass picks up where
+    // this loop leaves it.
+    if (this._entities && this._entities.length > 0) {
+      const savedModel = this.model
+      const savedMatrix = new Float32Array(this._modelMatrix)
+      for (const ent of this._entities) {
+        // Ghost entities (placement preview) have no live unit so
+        // no shadow — matches the "this isn't a real spawn yet" read
+        // of the wireframe ghost.
+        if (ent.ghost || !ent.model) continue
+        this.model = ent.model
+        const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
+        Mat4.identity(this._modelMatrix)
+        if (t.x !== 0 || t.y !== 0 || t.z !== 0) {
+          Mat4.translate(this._modelMatrix, this._modelMatrix, t.x, t.y, t.z)
+        }
+        if (t.headingRad !== 0) {
+          Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
+        }
+        this.#drawGeometry(this.model.root, this._modelMatrix, true)
+      }
+      this.model = savedModel
+      this._modelMatrix.set(savedMatrix)
+    } else {
+      this.#drawGeometry(this.model.root, this._modelMatrix, true)
+    }
 
     gl.disable(gl.CULL_FACE)
   }
@@ -1813,11 +1851,28 @@ export class ModelRenderer {
     // level and subs end up under the surface — _getWaterY()
     // bakes that adjustment in.
     const groundY = this.groundMode === 'sea' ? this._getWaterY() : (this.model.bounds.min[1] - 0.05)
-    const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
-    const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
-    const span = Math.hypot(this.model.bounds.max[0] - this.model.bounds.min[0], this.model.bounds.max[2] - this.model.bounds.min[2])
+    // Multi-entity mode (sandbox) anchors the ground footprint on the
+    // camera target with a radius scaled to the current zoom — single
+    // unit-sized pad would feather out a few feet from the model and
+    // leave the rest of the canvas a blue void.  Single-unit mode
+    // keeps the original behaviour: pad centred on the model, sized to
+    // its bounds (so the grid hugs the unit's footprint).
+    let cx, cz, radius
+    if (this._entities && this._entities.length > 0 && this.camera && this.camera.target) {
+      cx = this.camera.target[0]
+      cz = this.camera.target[2]
+      // Cover roughly twice the camera distance so panning + zooming
+      // out still find ground under the cursor.  Clamped to a sane
+      // floor for very close zooms.
+      radius = Math.max(200, (this.camera.distance || 200) * 2)
+    } else {
+      cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
+      cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
+      const span = Math.hypot(this.model.bounds.max[0] - this.model.bounds.min[0], this.model.bounds.max[2] - this.model.bounds.min[2])
+      radius = Math.max(span * 0.6, 4)
+    }
     gl.uniform3fv(this.uGroundCenter, [cx, groundY, cz])
-    gl.uniform1f(this.uGroundRadius, Math.max(span * 0.6, 4))
+    gl.uniform1f(this.uGroundRadius, radius)
     gl.uniform1f(this.uGroundY, groundY)
     gl.uniform1f(this.uGroundShadowEnabled, (this._shadowFBO && this.renderMode === 'full') ? 1 : 0)
     // Shadow opacity tracks construction progress — translucent at low
@@ -1897,10 +1952,20 @@ export class ModelRenderer {
     const bgActive = this.optBgTerrain && this.groundMode !== 'sea' && this.groundMode !== 'off'
     gl.uniform1f(this.uGroundMountainActive, bgActive ? 1 : 0)
     if (bgActive) {
-      const clearR = Math.max(span * 3.5, 120)
+      // Mountain-ring clearing scales with whatever sits at the
+      // ground centre: a single unit's bounding span in single-unit
+      // mode, or a generous sandbox-sized constant in multi-entity
+      // mode (where `span` from a synthesised bounds would be tiny).
+      const bgSpan = (this._entities && this._entities.length > 0)
+        ? Math.max(200, (this.camera?.distance || 200) * 0.6)
+        : Math.hypot(
+            this.model.bounds.max[0] - this.model.bounds.min[0],
+            this.model.bounds.max[2] - this.model.bounds.min[2],
+          )
+      const clearR = Math.max(bgSpan * 3.5, 120)
       gl.uniform3fv(this.uGroundClearCenter, [cx, groundY, cz])
       gl.uniform1f(this.uGroundClearRadius, clearR)
-      gl.uniform1f(this.uGroundClearFalloff, Math.max(span * 2.5, 80))
+      gl.uniform1f(this.uGroundClearFalloff, Math.max(bgSpan * 2.5, 80))
       gl.uniform1f(this.uGroundMountainHeight, (env.mountainHeight || 62) * this.bgTerrainHeightMul)
       gl.uniform1f(this.uGroundMountainScale, (env.mountainScale || 1) * this.bgTerrainScaleMul)
       gl.uniform1i(this.uGroundMountainStyle, env.mountainStyle ?? this.bgTerrainStyle)

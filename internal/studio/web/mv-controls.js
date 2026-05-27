@@ -16,6 +16,7 @@
 // already in this frame.
 
 import { SFX_PROJECTILE_BULLET, SFX_PROJECTILE_SHELL, SFX_PROJECTILE_PLASMA, SFX_PROJECTILE_DGUN, SFX_PROJECTILE_LASER, SFX_PROJECTILE_MISSILE, SFX_SMOKE_WHITE } from './model3d/cob/cob-particles.js'
+import { ArmedCursor } from './model3d/armed-cursor.js'
 
 const TA_TICK_HZ = 30                       // FBI rates are per-frame at 30 Hz.
 const TA_TURN_FULL = 65536                  // Full turn in TA angle units.
@@ -291,73 +292,29 @@ export class MvControls {
       this._refreshArmingClass()
       this._updateArmedCursor()
     }
-    // Mousemove → track armed cursor.  Browsers don't animate
-    // `cursor: url(...)` (it renders only the first APNG frame),
-    // so when armed we hide the native cursor and float an
-    // <img> overlay above the pointer — the same animated GAF that
-    // appears on the hover-preview overlay.  Position uses
-    // pageX/pageY so it works for both windowed + scrolled viewports.
-    this._canvasHandlers.mousemove = (e) => {
-      this._armedCursorX = e.clientX
-      this._armedCursorY = e.clientY
-      this._updateArmedCursor()
-    }
-    this._canvasHandlers.mouseleave = () => {
-      // Hide the overlay when the pointer leaves the canvas so the
-      // animated glyph doesn't appear to "stick" in place when the
-      // user moves over to the Controls panel to disarm.
-      this._armedCursorInside = false
-      this._updateArmedCursor()
-    }
-    this._canvasHandlers.mouseenter = () => {
-      this._armedCursorInside = true
-      this._updateArmedCursor()
-    }
+    // Cursor pointer-tracking lives inside the shared ArmedCursor
+    // helper now — no per-event listener needed here.  _updateArmedCursor()
+    // lazily constructs the ArmedCursor on the first arm and the
+    // overlay wires its own mousemove/leave/enter.
     canvas.addEventListener('click', this._canvasHandlers.click)
-    canvas.addEventListener('mousemove', this._canvasHandlers.mousemove)
-    canvas.addEventListener('mouseleave', this._canvasHandlers.mouseleave)
-    canvas.addEventListener('mouseenter', this._canvasHandlers.mouseenter)
     // Remember the canvas we attached to so dispose() can detach from
     // the SAME element even if the viewer hands us a new one later.
     this._wiredCanvas = canvas
   }
 
-  // _updateArmedCursor renders/moves/hides the animated cursor
-  // overlay.  Active only when an action is armed AND the pointer
-  // is inside the canvas.  Mirrors the hover-preview overlay's
-  // pattern: lazy-create the <img>, position it on the pointer,
-  // swap src when the armed slot changes, set canvas cursor to
-  // 'none' so we don't get a duplicate.
+  // _updateArmedCursor delegates to the shared ArmedCursor helper
+  // (model3d/armed-cursor.js) so both the single-unit editor and the
+  // multi-unit Sandbox show the same TA cursor PNGs on the same
+  // gestures.  Lazily created on first arm so a viewer that never
+  // gets to a command click pays no DOM cost.
   _updateArmedCursor() {
-    const slot = this.armed
-    const inside = this._armedCursorInside !== false
-    const canvas = this.viewer.canvas
-    if (!slot || !inside) {
-      if (this._armedCursorOverlay) this._armedCursorOverlay.style.display = 'none'
-      if (canvas) canvas.style.cursor = ''
-      return
+    if (!this._armedCursor) {
+      this._armedCursor = new ArmedCursor({
+        canvas: this.viewer.canvas,
+        host: document.getElementById('model-viewer-dialog') || document.body,
+      })
     }
-    if (!this._armedCursorOverlay) {
-      const img = document.createElement('img')
-      img.className = 'mv-ctrl-armed-cursor'
-      const host = document.getElementById('model-viewer-dialog') || document.body
-      host.appendChild(img)
-      this._armedCursorOverlay = img
-    }
-    const img = this._armedCursorOverlay
-    const srcName = (slot === 'move') ? 'cursormove' : 'cursorattack'
-    const wantSrc = `/api/studio/cursor/${srcName}`
-    if (img.dataset.src !== wantSrc) {
-      img.dataset.src = wantSrc
-      img.src = wantSrc
-    }
-    img.style.display = ''
-    img.style.left = (this._armedCursorX || 0) + 'px'
-    img.style.top  = (this._armedCursorY || 0) + 'px'
-    // Hide the native cursor so the user only sees the animated
-    // overlay — without this they'd see both glued together (the
-    // CSS arming-class cursor + our overlay at the same spot).
-    if (canvas) canvas.style.cursor = 'none'
+    this._armedCursor.setSlot(this.armed)
   }
 
   // ── External hooks ──────────────────────────────────────────────
@@ -441,10 +398,7 @@ export class MvControls {
     // (referencing the disposed `this`) wins and Move / Fire clicks
     // silently miss for every unit opened after the first.
     if (this._wiredCanvas && this._canvasHandlers) {
-      this._wiredCanvas.removeEventListener('click',      this._canvasHandlers.click)
-      this._wiredCanvas.removeEventListener('mousemove',  this._canvasHandlers.mousemove)
-      this._wiredCanvas.removeEventListener('mouseleave', this._canvasHandlers.mouseleave)
-      this._wiredCanvas.removeEventListener('mouseenter', this._canvasHandlers.mouseenter)
+      this._wiredCanvas.removeEventListener('click', this._canvasHandlers.click)
       this._wiredCanvas = null
       this._canvasHandlers = null
     }
@@ -457,9 +411,9 @@ export class MvControls {
       this._previewOverlay.remove()
       this._previewOverlay = null
     }
-    if (this._armedCursorOverlay) {
-      this._armedCursorOverlay.remove()
-      this._armedCursorOverlay = null
+    if (this._armedCursor) {
+      this._armedCursor.dispose()
+      this._armedCursor = null
     }
     if (this.viewer.canvas) this.viewer.canvas.style.cursor = ''
     this._refreshArmingClass()

@@ -19,6 +19,8 @@ import { OrbitCamera } from './orbit-camera.js'
 import { TextureCache } from './texture-cache.js'
 import { TAPalette } from './palette.js'
 import { SandboxScene } from './sandbox-scene.js'
+import { attachOrbitControls } from './camera-controls.js'
+import { ArmedCursor } from './armed-cursor.js'
 
 export class SandboxView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -67,6 +69,24 @@ export class SandboxView {
       this.#observeResize()
       await this.renderer.init()
       this.renderer.start()
+      // Orbit / pan / zoom gestures come from the same shared module
+      // the unit editor uses (camera-controls.js) so left-drag-orbit,
+      // wheel-zoom, shift-pan, ctrl-pan, right-drag-pan all behave
+      // identically across both views.  Returns a detach() closure
+      // that dispose() invokes to release the canvas listeners.
+      this._detachCamera = attachOrbitControls({
+        canvas: this.canvas,
+        renderer: this.renderer,
+        camera: this.camera,
+      })
+      // Armed cursor (Move / Attack glyph) uses the shared ArmedCursor
+      // helper — same animated TA cursor PNGs the unit editor shows
+      // when the user clicks Move / Primary / etc, so both views feel
+      // like the same product.
+      this._armedCursor = new ArmedCursor({
+        canvas: this.canvas,
+        host: document.getElementById('model-viewer-dialog') || document.body,
+      })
     }
     if (!this.scene) this.scene = new SandboxScene()
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
@@ -186,17 +206,12 @@ export class SandboxView {
   }
 
   // setPendingCommand — called by the controls UI when the user
-  // clicks Move / Attack.  Next canvas click consumes it.  Also
-  // flips the canvas cursor so the user has an unambiguous visual
-  // signal that an action is armed (the unit-editor uses a custom
-  // animated TA cursor for the same purpose; sandbox falls back to
-  // a CSS crosshair so we don't need to plumb MvControls' overlay
-  // <img> machinery through the multi-unit pipeline).
+  // clicks Move / Attack.  Next canvas click consumes it.  Drives
+  // the shared ArmedCursor overlay so the cursor visually matches
+  // what the unit editor shows for the same gesture.
   setPendingCommand(cmd) {
     this._pendingCmd = (cmd === 'move' || cmd === 'attack') ? cmd : null
-    if (this.canvas) {
-      this.canvas.style.cursor = this._pendingCmd ? 'crosshair' : ''
-    }
+    if (this._armedCursor) this._armedCursor.setSlot(this._pendingCmd)
     if (this._pendingCmd) {
       this.#setStatus(`${cmd[0].toUpperCase() + cmd.slice(1)} — click a ${cmd === 'attack' ? 'target unit' : 'destination'}.`)
     }
@@ -366,7 +381,7 @@ export class SandboxView {
         if (u) u.moveTarget = { x: world[0], z: world[2] }
       }
       this._pendingCmd = null
-      if (this.canvas) this.canvas.style.cursor = ''
+      if (this._armedCursor) this._armedCursor.setSlot(null)
       this.#setStatus(`Move order issued to ${this.scene.selected.size} unit(s).`)
       return
     }
@@ -383,7 +398,7 @@ export class SandboxView {
         this.#setStatus('Attack — click cancelled (no unit under cursor).')
       }
       this._pendingCmd = null
-      if (this.canvas) this.canvas.style.cursor = ''
+      if (this._armedCursor) this._armedCursor.setSlot(null)
       return
     }
     // Default click — selection.  Click on a unit selects only it;
