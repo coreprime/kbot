@@ -3592,6 +3592,20 @@ canvas {
   background: rgba(255, 203, 107, 0.30);
   outline: 1px solid rgba(255, 203, 107, 0.55);
 }
+
+/* Coverage-dim — lines whose offset has never been executed since
+   the unit was created get a muted tone so the user can see at a
+   glance which BPs are on dormant code (post-JUMP dead code, an
+   uncalled walk() handler, init that already finished, etc).
+   The runtime stamps offsets as it runs them; the refresh tick
+   strips the class once an offset becomes "warm".  PC + BP styling
+   keeps full opacity so the user's active context stays prominent. */
+.mv-thread-code-source .mv-code-line.mv-code-unexecuted { opacity: 0.40; }
+.mv-thread-code-source .mv-code-line.mv-code-unexecuted.pc,
+.mv-thread-code-source .mv-code-line.mv-code-unexecuted.breakpointed { opacity: 1; }
+.mv-thread-code-decompiled > div.bos-unexecuted { opacity: 0.40; }
+.mv-thread-code-decompiled > div.bos-unexecuted.bos-current,
+.mv-thread-code-decompiled > div.bos-unexecuted.bos-bp { opacity: 1; }
 /* Editable value cells.  contenteditable spans get a subtle hover
    ring so the user discovers they're editable, plus a focused
    outline when actively typing.  Generic-class version (targets the

@@ -195,6 +195,12 @@ export class ModelViewer {
     // re-engages (so the user has to click Create again before
     // any other script can fire, matching first-open behaviour).
     this.cob._lifecycle = (this.cob.hasScript && this.cob.hasScript('Create')) ? 'unborn' : 'created'
+    // Wipe the debugger's per-unit coverage hints so the next run
+    // paints a clean dim/lit map.  Without this, lines that ran
+    // before Reset stay lit even though execution starts over from
+    // scratch — confusing when the user is using the dim hint to
+    // figure out which BPs will fire.
+    if (typeof unit.clearExecutedOffsets === 'function') unit.clearExecutedOffsets()
     // Drop SFX particles so smoke + sparks from prior runs vanish.
     if (this.cob.particles) this.cob.particles.count = 0
     // Stop any in-flight audio so a Reset doesn't leave the previous

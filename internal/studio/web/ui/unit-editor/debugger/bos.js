@@ -407,6 +407,22 @@ export function renderMvThreadCodeDecompiled(state, cob) {
     if (mapEntry && cob.unit.hasBreakpoint(mapEntry.script, mapEntry.startOffset)) {
       div.classList.add('bos-bp')
     }
+    // Stamp the mapped (script, startOffset) on the BOS row so the
+    // refresh-tick coverage sweep can look the offset up in
+    // _executedOffsets without re-walking _bosMap.  Also dim the row
+    // initially if the asm range hasn't been executed yet — the
+    // refresh tick will undim it once the runtime stamps the
+    // offset.  Unmapped lines (blanks, comments, braces) stay at
+    // normal opacity since they have no asm to gate them.
+    if (mapEntry) {
+      const scriptLower = mapEntry.script.toLowerCase()
+      div.dataset.bosScript = scriptLower
+      div.dataset.bosOffset = String(mapEntry.startOffset >>> 0)
+      const cov = cob.unit._executedOffsets?.get(scriptLower)
+      if (!cov || !cov.has(mapEntry.startOffset >>> 0)) {
+        div.classList.add('bos-unexecuted')
+      }
+    }
     // Click behaviour depends on line kind:
     //  · function header → fold/expand the function body
     //  · mapped statement → toggle a breakpoint at its first asm instr

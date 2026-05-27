@@ -173,5 +173,42 @@ export function refreshMvInspectors(dtMs = 16) {
   for (const state of _mvThreadCodePanels.values()) {
     refreshMvThreadCodeHighlight(state)
     redrawMvThreadCodeBrackets(state)
+    _refreshCoverageDim(state)
+  }
+}
+
+// _refreshCoverageDim — strip the .mv-code-unexecuted class from any
+// asm line whose offset has been executed since the debugger opened.
+// Cheap: only touches the lines we previously dimmed (querySelectorAll
+// over `.mv-code-unexecuted` is bounded by the unexecuted set, which
+// shrinks toward zero as the script's hot paths run).  When a
+// previously-dormant function (walk, FireWeapon1, ...) finally gets
+// called, its lines brighten on the next 4 Hz tick so the user can
+// see at a glance "this code is reachable now."
+function _refreshCoverageDim(state) {
+  const panel = state.panel
+  if (!panel) return
+  const cov = state.cob?.unit?._executedOffsets
+  if (!cov || cov.size === 0) return
+  // Asm pane — strip the dim class from any line whose offset got
+  // stamped since the last sweep.
+  const dimAsm = panel.querySelectorAll('.mv-thread-code-source .mv-code-line.mv-code-unexecuted')
+  for (const line of dimAsm) {
+    const scr = line.dataset.script
+    const off = parseInt(line.dataset.offset, 10)
+    if (!scr || !Number.isFinite(off)) continue
+    const s = cov.get(scr)
+    if (s && s.has(off >>> 0)) line.classList.remove('mv-code-unexecuted')
+  }
+  // BOS pane — same pass against the (script, startOffset) pair the
+  // BOS renderer stamped on each mapped row.  Unmapped rows have no
+  // dataset.bosScript so the loop skips them silently.
+  const dimBos = panel.querySelectorAll('.mv-thread-code-decompiled > div.bos-unexecuted')
+  for (const line of dimBos) {
+    const scr = line.dataset.bosScript
+    const off = parseInt(line.dataset.bosOffset, 10)
+    if (!scr || !Number.isFinite(off)) continue
+    const s = cov.get(scr)
+    if (s && s.has(off >>> 0)) line.classList.remove('bos-unexecuted')
   }
 }

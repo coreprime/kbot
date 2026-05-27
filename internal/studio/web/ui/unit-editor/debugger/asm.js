@@ -154,6 +154,14 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   line.dataset.offset = String(ins.offset >>> 0)
   line.dataset.script = scriptLower
   if (cob.unit.hasBreakpoint(scriptName, ins.offset)) line.classList.add('breakpointed')
+  // Coverage hint — dim lines that have never executed since the
+  // unit was created.  Helps users understand why a breakpoint set
+  // on dead-after-JUMP code or a not-yet-called handler (walk(),
+  // FireWeapon1(), etc.) doesn't fire — the line is dormant.  The
+  // class is removed on the next refresh tick once the runtime
+  // stamps the offset as executed (see refresh-tick.js).
+  const cov = cob.unit._executedOffsets?.get(scriptLower)
+  if (!cov || !cov.has(ins.offset >>> 0)) line.classList.add('mv-code-unexecuted')
   // Line-number column (leftmost).  1-based, scoped to the script
   // section so each .script restarts at 1.  Tabular numerics keep
   // the gutter from wobbling as the digit count changes.

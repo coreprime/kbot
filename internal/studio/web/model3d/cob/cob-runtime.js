@@ -288,6 +288,15 @@ export class CobUnit {
     // same op).  In single-unit studio usage this matches the legacy
     // runtime-level behaviour exactly.
     this._breakpoints = new Set()
+    // Per-unit coverage tracking — Map<scriptNameLower, Set<offset>>.
+    // Populated by _runThread as each instruction executes so the
+    // debugger can dim lines that haven't been reached yet.  Helps
+    // users understand why a breakpoint on a never-run line (dead
+    // code after a JUMP-back loop, an as-yet-uncalled handler like
+    // walk(), the init block of a long-running script) doesn't fire
+    // — the line is dormant, not the BP mechanism.  Cleared on
+    // Reset State / killAllThreads via resetState() below.
+    this._executedOffsets = new Map()
   }
 
   // ── Public unit API ──────────────────────────────────────────
@@ -458,8 +467,15 @@ export class CobUnit {
     this._rotAnims.length = 0
     this._suppressed.clear()
     this._breakpoints.clear()
+    this._executedOffsets.clear()
     this.hooks = {}
   }
+
+  // clearExecutedOffsets — wipe the per-script coverage map.  Used
+  // when the host wants the debugger's "executed" hint to reset
+  // (e.g., the user clicked Reset State and wants a clean view of
+  // which lines run from a fresh start).
+  clearExecutedOffsets() { this._executedOffsets.clear() }
 
   // ── Breakpoint API (per-unit) ────────────────────────────────
   addBreakpoint(scriptName, offset) {
@@ -684,6 +700,16 @@ export class CobUnit {
         }
       }
       allowFirstBreakpoint = true
+      // Coverage: stamp this offset as executed for the current
+      // script so the debugger's asm/BOS panes can dim lines that
+      // haven't been reached yet.  Cheap — Set.add is O(1) and the
+      // hot-path overhead is one Map lookup + Set add per op.
+      {
+        const sk = t.script.name.toLowerCase()
+        let s = this._executedOffsets.get(sk)
+        if (!s) { s = new Set(); this._executedOffsets.set(sk, s) }
+        s.add(ins.offset >>> 0)
+      }
       t.pc++
       count++
       if (this._exec(t, ins)) break // exec returned `true` → yielded

@@ -4506,6 +4506,10 @@ function configureReactUi() {
         unit._moveAnims.length = 0
         unit._rotAnims.length = 0
         for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
+        // Wipe the debugger's coverage hints so the next run paints
+        // a clean dim/lit map.  Without this, lines that ran before
+        // the reset stay lit even though execution starts over.
+        if (typeof unit.clearExecutedOffsets === 'function') unit.clearExecutedOffsets()
       },
       openThreadCodeModal: (cob, thread) => openMvThreadCodeModal(cob, thread),
     })
