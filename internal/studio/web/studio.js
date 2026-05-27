@@ -477,6 +477,24 @@ import {
   redrawMvThreadCodeBrackets,
 } from './ui/unit-editor/debugger/asm.js'
 
+// Unit-editor sidebar — the React-managed Pieces / Textures / Weapons
+// tab bridges + the host-side helpers (selectPiece, filterPieceTree,
+// playWeaponSound) the legacy DOM still triggers.  Weapon picker +
+// catalogue cache live here too since they're scoped to the unit
+// editor's sidebar.
+import {
+  refreshPieceTreeEyes,
+  renderPieceTree,
+  renderTexturesTab,
+  renderMvWeaponsTab,
+  refreshMvWeaponsLive,
+  wireMvSidebarTabs,
+  playWeaponSound,
+  openWeaponPicker,
+  selectPiece,
+  filterPieceTree,
+} from './ui/unit-editor/sidebar.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -3432,12 +3450,6 @@ function applyDefaultGroundFor(meta) {
   }
 }
 
-// refreshPieceTreeEyes — no-op now that the piece tree is React-managed.
-// The React component (see /ui/unit-editor/tabs/piece-tree.js) subscribes
-// to runtimeTick + reads piece.visible directly on each render, so the
-// inspector's 4 Hz publish already keeps icons in sync.  Kept as a
-// stub so call sites in studio.js (and anywhere external) don't break.
-function refreshPieceTreeEyes() { /* React subscribes to runtimeTick */ }
 
 // refreshPieceTreeStatus + pieceDisplayName — both moved into the
 // React piece-tree component (see /ui/unit-editor/tabs/piece-tree.js).
@@ -4185,242 +4197,6 @@ function runCobEntry(cob, name) {
   cob.start(name)
 }
 
-function renderPieceTree(model) {
-  // React-managed now (see /ui/unit-editor/tabs/piece-tree.js).  The
-  // host hands the model to the React component via setPieceTreeModel;
-  // the tree subscribes to runtimeTick + inspector-store.mv so the
-  // eye/shade/cache/shadow icons, hover-highlight, and selectPiece
-  // routing all flow through React.
-  if (_reactUi && typeof _reactUi.setPieceTreeModel === 'function') {
-    _reactUi.setPieceTreeModel(model)
-  }
-  return
-}
-
-// wireMvSidebarTabs wires the Pieces / Textures tab buttons once.
-// Idempotent — sets data-wired so subsequent model loads don't
-// stack handlers.  Tab click swaps which .mv-sidebar-panel is
-// visible AND nulls any active texture-hover state (a Textures
-// → Pieces switch must clear the red highlight or it sticks).
-function wireMvSidebarTabs() {
-  const bar = document.querySelector('.mv-sidebar-tabs')
-  if (!bar || bar.dataset.wired === '1') return
-  bar.dataset.wired = '1'
-  bar.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-mv-tab]')
-    if (!btn) return
-    const tab = btn.dataset.mvTab
-    for (const t of bar.querySelectorAll('[data-mv-tab]')) {
-      const on = t.dataset.mvTab === tab
-      t.classList.toggle('active', on)
-      t.setAttribute('aria-selected', on ? 'true' : 'false')
-    }
-    for (const p of document.querySelectorAll('.mv-sidebar-panel')) {
-      p.classList.toggle('hidden', p.dataset.mvTabPanel !== tab)
-    }
-    // Switching tabs implicitly clears any hover-highlight state
-    // (a stuck red wireframe after leaving the textures tab
-    // would look broken).
-    modelViewerInstance?.renderer?.setHoveredTexture?.(null)
-    modelViewerInstance?.renderer?.setHoveredPieceName?.(null)
-  })
-}
-
-// renderTexturesTab builds the Textures left-panel content.  Each
-// distinct texture the unit references becomes a row showing its
-// thumbnail + name + use-count.  Rows are grouped by parent GAF
-// (server-provided via model.textureSources); groups + rows are
-// sorted by usage count descending so the biggest atlases sit at
-// the top.  Hovering a row highlights every piece whose drawGroups
-// reference that texture; the group header collapses/expands the
-// block.
-function renderTexturesTab(model) {
-  // React-managed now (see /ui/unit-editor/tabs/textures-tab.js).
-  if (_reactUi && typeof _reactUi.setTexturesModel === "function") {
-    _reactUi.setTexturesModel(model)
-  }
-}
-
-// renderMvWeaponsTab populates the left-panel Weapons tab from the
-// unit FBI + per-weapon TDF data on `mv.unitMeta` and the COB's
-// `scriptNames` for the script-presence indicators.  Three slot
-// cards (Primary / Secondary / Tertiary), each showing:
-//
-//   • Weapon ID (1/2/3) + slot label header
-//   • Weapon name + colour rectangle (from TDF `color=` palette idx)
-//   • Script-presence chips (Aim<X> / Fire<X> / Query<X>) green when
-//     present in the unit's COB, red when missing
-//   • A warning line when Query<X> is missing — the runtime can't
-//     resolve the firing piece without it so the weapon can't fire
-//   • Quick-stat grid (reload / range / velocity / burst / model)
-//   • Sound rows with ▶ play buttons
-//   • A "Change Weapon" button that opens the picker modal scoped to
-//     this slot — swapping in a different weapon's TDF data live
-//   • Classifier flag chips (beam / smoke / ballistic / command-fire)
-//
-// Empty slots ("Weapon2=NONE" or missing) render as a muted "—"
-// placeholder card so the slot count stays consistent across units.
-// Per-slot collapse + the master Show Projectiles toggle persist
-// inside the React tab module itself now (see
-// /ui/unit-editor/tabs/weapons-tab.js).
-
-function renderMvWeaponsTab(_mv) {
-  // React-managed now (see /ui/unit-editor/tabs/weapons-tab.js).
-  // The React tab reads inspector-store.mv directly, so the host
-  // does not need to push anything explicitly.  Keeping the function
-  // for call-site compatibility (mv-controls re-render after weapon
-  // swap, etc.); a runtime-tick bump nudges the React tree to repaint.
-  if (_reactUi && typeof _reactUi.bumpRuntimeTick === "function") {
-    _reactUi.bumpRuntimeTick()
-  }
-}
-// how to refresh themselves via a closure stashed on dataset.
-function refreshMvWeaponsLive() {
-  // No-op — the React Weapons tab subscribes to runtimeTick.
-}
-function playWeaponSound(stem) {
-  if (!stem) return
-  const mv = modelViewerInstance
-  const pool = mv && mv.cob && mv.cob.audio
-  if (!pool) return
-  // Position from the controls overlay (authoritative live unit pos)
-  // if available, otherwise origin.
-  const ctrl = mv._mvControls
-  const pos = ctrl ? [ctrl.pos.x, ctrl.alt || 0, ctrl.pos.z] : null
-  pool.play(stem, { vol: 0.6, kind: 'ui', source: `Preview: ${stem}`, pos })
-}
-
-// ── Weapon picker dialog ────────────────────────────────────────
-//
-// Catalogue cache for the dialog list.  Fetched lazily on first open
-// and reused thereafter — the VFS doesn't change after startup so a
-// single fetch covers the whole session.
-let _weaponCatalogue = null
-// _weaponPickerSelected / _weaponPickerWired — were used by the
-// legacy vanilla picker chrome; the React picker owns selection in
-// its own signal now, so these are gone.
-
-// openWeaponPicker shows the Change Weapon dialog scoped to one slot
-// of one unit.  React-managed now (see /ui/pickers/weapon-picker-dialog.js);
-// we resolve the slot's current weapon name + the catalogue, then
-// hand them to the React opener.  On Apply we re-call /api/studio/unit/{name}
-// with the override query param and re-render the Weapons panel.
-async function openWeaponPicker(mv, slotIndex) {
-  if (!mv) return
-  const name = mv.cob && mv.cob.unit && mv.cob.unit.name
-  if (!name) return
-  const ui = _reactUi || await configureReactUi()
-  if (!ui || typeof ui.openWeaponPicker !== 'function') return
-  // Current weapon name for this slot — surfaces as "(current)" + the
-  // .active row highlight in the picker so the user sees what's
-  // already installed before swapping.
-  const currentMeta = mv.unitMeta && mv.unitMeta.weapons
-  const currentName = currentMeta && currentMeta[slotIndex - 1]
-    ? currentMeta[slotIndex - 1].name
-    : ''
-  // Slot label for the dialog title.  Picker is one dialog reused
-  // across all three slots so the title carries the slot context.
-  const slotLabel = slotIndex === 1 ? 'Primary'
-    : slotIndex === 2 ? 'Secondary'
-    : slotIndex === 3 ? 'Tertiary'
-    : `Slot ${slotIndex}`
-  // Open with a loading hint first; push the catalogue in once it
-  // arrives.  In practice the catalogue is cached after the first
-  // open so this path resolves immediately on repeat opens.
-  const inFlight = ui.openWeaponPicker({
-    items: _weaponCatalogue || [],
-    loading: !_weaponCatalogue,
-    query: '',
-    currentName,
-    slotLabel,
-    paletteColor: (idx) => {
-      const pal = modelViewerInstance && modelViewerInstance.palette
-      if (!pal || idx <= 0) return null
-      return pal.colorFor(idx)
-    },
-  })
-  if (!_weaponCatalogue) {
-    loadWeaponCatalogue().then((list) => {
-      if (typeof ui.updateWeaponPicker === 'function') {
-        ui.updateWeaponPicker({ items: list, loading: false })
-      }
-    })
-  }
-  const picked = await inFlight
-  if (!picked) return
-  // Build the override URL + remember the swap on the viewer so a
-  // re-fetch doesn't lose it.
-  const params = new URLSearchParams()
-  params.set(`weapon${slotIndex}`, picked)
-  const mv2 = modelViewerInstance
-  mv2._weaponOverrides = mv2._weaponOverrides || {}
-  mv2._weaponOverrides[slotIndex] = picked
-  for (const [k, v] of Object.entries(mv2._weaponOverrides)) {
-    if (parseInt(k, 10) !== slotIndex) params.set(`weapon${k}`, v)
-  }
-  try {
-    const resp = await fetch(`/api/studio/unit/${encodeURIComponent(name)}?${params.toString()}`)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    mv2.unitMeta = await resp.json()
-    renderMvWeaponsTab(mv2)
-    if (_mvControls) _mvControls.onMetaLoaded()
-  } catch (err) {
-    console.warn('[weapon-swap] failed:', err)
-  }
-}
-
-function loadWeaponCatalogue() {
-  if (_weaponCatalogue) return Promise.resolve(_weaponCatalogue)
-  return fetch('/api/studio/weapons').then((r) => {
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
-    return r.json()
-  }).then((list) => {
-    _weaponCatalogue = Array.isArray(list) ? list : []
-    return _weaponCatalogue
-  }).catch((err) => {
-    console.warn('[weapon-catalogue] fetch failed:', err)
-    _weaponCatalogue = []
-    return _weaponCatalogue
-  })
-}
-
-
-// wireWeaponPickerOnce removed — the weapon picker is React-managed
-// now (see /ui/pickers/weapon-picker-dialog.js).  The Apply path
-// lives in openWeaponPicker() above; cancel + filter are handled by
-// the React DialogModal chrome.
-
-// filterTexturesList replaced by the React Textures tab's own
-// filter signal — see /ui/unit-editor/tabs/textures-tab.js
-// (setTexturesFilter).
-
-function selectPiece(name) {
-  if (!modelViewerInstance) return
-  modelViewerInstance.jumpToPiece(name)
-  $$('#model-viewer-tree .drawer-item-piece, #model-viewer-tree .drawer-piece-group').forEach((el) => {
-    el.classList.toggle('selected', el.dataset.piece === name)
-  })
-}
-
-// filterPieceTree hides rows whose piece name (lowercase) doesn't
-// contain `q`.  Groups stay visible whenever any descendant matches —
-// so typing "nano" still surfaces the parent assembly.
-function filterPieceTree(q) {
-  q = (q || '').trim().toLowerCase()
-  const host = $('#model-viewer-tree')
-  if (!host) return
-  const matches = (el) => {
-    const name = (el.dataset.piece || '').toLowerCase()
-    if (!q) return true
-    if (name.includes(q)) return true
-    // For groups, recurse into children — if any matches, keep us
-    // visible so the user sees the path through the hierarchy.
-    return Array.from(el.querySelectorAll('[data-piece]')).some((c) => c.dataset.piece.toLowerCase().includes(q))
-  }
-  host.querySelectorAll('[data-piece]').forEach((el) => {
-    el.style.display = matches(el) ? '' : 'none'
-  })
-}
 
 async function openModelPicker() {
   // The picker is React-managed now (see /ui/pickers/open-unit-dialog.js).
