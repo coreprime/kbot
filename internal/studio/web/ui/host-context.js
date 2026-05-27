@@ -352,6 +352,40 @@ export const hostCallbacks = {
   beginSectionDrag: null,       // (e, section) => void  (dragstart handler)
   beginFeatureDrag: null,       // (e, feature) => void   (dragstart handler)
   setActiveWorld: null,         // (worldRec) => void  (drawer-pill click → state.planet)
+  // ── Unit-editor tab lifecycle (used by /ui/unit-editor/tab.js).
+  // activateModelTab promotes one tab's per-tab ModelViewer +
+  // MvControls into the "active" slot the rest of the studio reads
+  // from (inspector refresh, ribbon bridge, sidebar paints).
+  // Studio.js still owns the `modelViewerInstance` / `_mvControls`
+  // module-level lets because they're read from dozens of places;
+  // the callbacks below are the seams the extracted activator uses
+  // to flip them.
+  getActiveModelViewer: null,   // () => ModelViewer | null
+  setActiveModelViewer: null,   // (viewer) => void
+  setActiveMvControls: null,    // (ctrls) => void
+  // Per-frame work the extracted activator schedules on the
+  // viewer's renderer.onAfterFrame.  Both still live in studio.js
+  // (advanceMvAutoBuild runs the build-percentage ramp; refresh
+  // re-renders every visible React inspector panel).
+  advanceMvAutoBuild: null,     // (dtMs) => void
+  refreshMvInspectors: null,    // (dtMs) => void
+  // Per-tab sidebar paints called from the onModelLoaded closure
+  // the first time a unit is loaded into its tab.
+  renderPieceTree: null,        // (model) => void
+  renderTexturesTab: null,      // (model) => void
+  wireMvSidebarTabs: null,      // () => void
+  refreshCobPanel: null,        // (cob) => void
+  // Pre-switch pause restore — runs after the renderer re-starts so
+  // the incoming tab lands in the same paused/running state the user
+  // had when they switched away.
+  resumeIncomingTabRuntime: null, // (tab) => void
+  // FBI / settings glue still owned by studio.js.
+  mvFetchUnitMeta: null,        // (viewer) => Promise<void>
+  applyDefaultGroundFor: null,  // (meta) => void
+  applyUnitEditorDefaults: null,// () => void
+  // Auto-rotate persistence + legacy shared canvas accessor.
+  getUnitEditorAutoRotate: null,// () => boolean
+  sharedModelViewerCanvas: null,// () => HTMLCanvasElement | null
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
