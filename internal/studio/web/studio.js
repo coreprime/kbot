@@ -1,7 +1,12 @@
 // Controls overlay — Move + Aim/Fire scheduler.  The MvControls class
 // is constructed by /ui/unit-editor/tab.js' onModelLoaded closure now;
 // studio.js only tracks the active tab's instance for the inspector
-// gating + ribbon bridge to read from.
+// gating + ribbon bridge to read from.  The active modelViewerInstance
+// + the Auto-Rotate cache + TEAM_COLOURS + modelOpenIntent now live in
+// /ui/unit-editor/host-state.js so the rest of the unit-editor section
+// can read them through plain getters; the host's _mvControls alias
+// stays here because dozens of map-editor + sandbox call sites still
+// reach for it through hostCallbacks.
 let _mvControls = null
 
 // Map-editor-only literals + pure helpers — extracted into the
@@ -83,11 +88,10 @@ import { startServerHeartbeat } from './ui/common/heartbeat.js'
 // applyPanelLayout directly — /ui/map-editor/boot.js's
 // finishEditorBoot calls it after recreateEditorView.
 
-// confirmDialog — imperative wrapper around the React confirm modal.
-// Delegates to reactUi.confirmDialog when the bridge has loaded,
-// falls back to native window.confirm before then.  Lives in
-// /ui/dialogs/ alongside the React component.
-import { confirmDialog } from './ui/dialogs/confirm.js'
+// confirmDialog moved to /ui/dialogs/confirm.js — studio.js no longer
+// imports it directly (the unit-editor host bridge's stopAllThreads
+// callback is the last consumer, and that bridge now lives in
+// /ui/unit-editor/ribbon/bridge.js).
 
 // Help dialog — imperative show / hide pair.  The tab strip + Close
 // button wiring stays with the other dialog-button wiring in
@@ -138,11 +142,10 @@ import {
 import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
 
 // Model catalogue — shared cache + fetcher for /api/studio/models.
-// openModelPicker (now in open-unit-flow.js) drains via fetchModels
-// then reads the React dialog's items from availableModels();
-// openModelViewer below looks up the picked unit's meta through
-// findModelMeta.
-import { findModelMeta } from './ui/pickers/model-catalog.js'
+// openModelPicker (in open-unit-flow.js) drains via fetchModels then
+// reads the React dialog's items from availableModels(); openModelViewer
+// (in /ui/unit-editor/tab.js) looks up the picked unit's meta through
+// findModelMeta.  studio.js no longer imports either directly.
 
 // Open Unit dialog flow controller — opens the React picker (after
 // awaiting the catalogue + UI island) and routes the user's pick
@@ -452,16 +455,14 @@ import {
 // (refreshMvInspectors etc.) still lives in this file — moves out in
 // a follow-up round once the debugger code it shares state with
 // (R43c–e) has also been pulled.
-import {
-  wireMvInspectors,
-  setMvInspectorVisible,
-} from './ui/common/inspectors.js'
+// wireMvInspectors + setMvInspectorVisible moved out of studio.js.
+// wireMvInspectors is called from /ui/unit-editor/wire-dialogs.js;
+// setMvInspectorVisible from the ribbon bridge.
 
-// Thread-debugger modal lifecycle + chrome.  The asm renderer +
-// bracket overlay + per-tick PC highlight still live in this file
-// (R43e); the modal reaches them through host-callback seams below.
+// Thread-debugger modal lifecycle + chrome.  closeAllMvThreadCodePanels
+// is still consumed by switchToTab below; openMvThreadCodeModal moved
+// into the unit-editor ribbon's host-bridge module.
 import {
-  openMvThreadCodeModal,
   closeAllMvThreadCodePanels,
 } from './ui/unit-editor/debugger/modal.js'
 
@@ -475,20 +476,16 @@ import {
   applyUnitEditorDefaults,
   applyDefaultGroundFor,
   mvFetchUnitMeta,
-  startMvAutoBuild,
   advanceMvAutoBuild,
 } from './ui/unit-editor/runtime.js'
 
-// Sim-clock controls — _activeRuntime dispatch, sim-speed slider,
-// Pause toggle + caption sync, background-tab auto-pause, and the
-// `window.*` hotkey aliases.  React-bridge host-bridge entries
-// (setSimSpeed / toggleRuntimePaused / stepRuntime) all forward
-// into these.
+// Sim-clock controls — background-tab auto-pause + `window.*` hotkey
+// aliases.  React-bridge host-bridge entries (setSimSpeed /
+// toggleRuntimePaused / stepRuntime) reach the per-runtime helpers
+// directly from /ui/unit-editor/ribbon/bridge.js now; studio.js only
+// needs the wireMvRuntimeVisibility + _wireRuntimeHelpersToWindow
+// boot-time installers.
 import {
-  _activeRuntime,
-  mvSetSimulationSpeed,
-  mvToggleRuntimePaused,
-  mvRefreshRuntimeToggle,
   wireMvRuntimeVisibility,
   _wireRuntimeHelpersToWindow,
 } from './ui/common/sim-controls.js'
@@ -510,9 +507,37 @@ import {
   syncMvActionsRunning,
   syncCobRibbonRunning,
   refreshCobPanel,
-  isCobScriptRunning,
-  runCobEntry,
 } from './ui/unit-editor/cob-sync.js'
+
+// Unit-editor host state — modelViewerInstance + Auto-Rotate cache +
+// modelOpenIntent + TEAM_COLOURS all live in /ui/unit-editor/host-state.js
+// now.  Studio.js routes the same callbacks through hostCallbacks so
+// other sections keep working unchanged.
+import {
+  getActiveModelViewer,
+  setActiveModelViewer,
+  getUnitEditorAutoRotate,
+  setModelOpenIntent,
+} from './ui/unit-editor/host-state.js'
+
+// Unit-editor tab opener + the per-tab runtime resumption helper.
+// The opener consults host-state.js's modelOpenIntent + the model
+// catalogue, then dispatches through the same openTab seam every
+// other tab type uses.
+import { resumeIncomingTabRuntime, openModelViewer } from './ui/unit-editor/tab.js'
+
+// configureHostBridge bundle + the unit-editor ribbon mount/wire
+// pair.  configureReactUi calls wireUnitEditorHostBridge once the
+// React island has loaded; wireModelViewerRibbon mounts the ribbon
+// + its bridge in the same callback.
+import {
+  wireModelViewerRibbon,
+  wireUnitEditorHostBridge,
+} from './ui/unit-editor/ribbon/bridge.js'
+
+// Cold-boot wiring for the unit editor's legacy DOM chrome (piece-
+// tree filter + inspectors + the React UI island).
+import { wireModelDialogs } from './ui/unit-editor/wire-dialogs.js'
 
 // Unit-editor sidebar — the React-managed Pieces / Textures / Weapons
 // tab bridges + the host-side helpers (selectPiece, filterPieceTree,
@@ -526,7 +551,6 @@ import {
   playWeaponSound,
   openWeaponPicker,
   selectPiece,
-  filterPieceTree,
 } from './ui/unit-editor/sidebar.js'
 
 // KBot Studio — browser-side editor.
@@ -600,6 +624,10 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.openModelPicker = openModelPicker
   hostCallbacks.getActiveSandboxView = getActiveSandboxView
   hostCallbacks.openModelViewer = (name) => openModelViewer(name)
+  // switchToTab seam so /ui/unit-editor/tab.js's openModelViewer can
+  // re-activate the current tab in 'replace' mode without importing
+  // studio.js.
+  hostCallbacks.switchToTab = (idx, opts) => switchToTab(idx, opts)
   hostCallbacks.getActiveTab = () => (tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null)
   // getTabs / openTab — seams the extracted section modules use to
   // (1) walk every other tab during activation to stop renderers,
@@ -644,13 +672,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // works without dragging selectSection into the extract.
   hostCallbacks.pageSectionSibling = pageSectionSibling
   // Unit-editor seams — /ui/unit-editor/tab.js calls these to flip
-  // the host-owned modelViewerInstance / _mvControls aliases when
-  // activating a tab.
-  hostCallbacks.getActiveModelViewer = () => modelViewerInstance
-  hostCallbacks.setActiveModelViewer = (v) => {
-    modelViewerInstance = v
-    window.__modelViewer = v
-  }
+  // the host-state.js-owned modelViewerInstance + the host-owned
+  // _mvControls alias when activating a tab.  Auto-Rotate state +
+  // modelViewerInstance now live in /ui/unit-editor/host-state.js
+  // (the setter there mirrors window.__modelViewer for the debug
+  // global); _mvControls remains studio-side because both the
+  // sandbox + unit-editor host bridges + the inspector gating still
+  // read through hostCallbacks.getActiveMvControls.
+  hostCallbacks.getActiveModelViewer = getActiveModelViewer
+  hostCallbacks.setActiveModelViewer = setActiveModelViewer
   hostCallbacks.setActiveMvControls = (c) => { _mvControls = c }
   hostCallbacks.getActiveMvControls = () => _mvControls
   hostCallbacks.advanceMvAutoBuild = advanceMvAutoBuild
@@ -660,6 +690,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.wireMvSidebarTabs = wireMvSidebarTabs
   hostCallbacks.refreshCobPanel = refreshCobPanel
   hostCallbacks.resumeIncomingTabRuntime = resumeIncomingTabRuntime
+  hostCallbacks.getUnitEditorAutoRotate = getUnitEditorAutoRotate
   hostCallbacks.mvFetchUnitMeta = mvFetchUnitMeta
   hostCallbacks.applyDefaultGroundFor = applyDefaultGroundFor
   hostCallbacks.applyUnitEditorDefaults = applyUnitEditorDefaults
@@ -670,7 +701,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // helpers each publish (lifecycle promote + COB-ribbon push).
   hostCallbacks.syncMvActionsRunning = syncMvActionsRunning
   hostCallbacks.syncCobRibbonRunning = syncCobRibbonRunning
-  hostCallbacks.getUnitEditorAutoRotate = () => _unitEditorAutoRotate
   hostCallbacks.sharedModelViewerCanvas = sharedModelViewerCanvas
   // ── Tab registrar seams (Phase A).  Map descriptor reads these
   // from its activate / deactivate / canClose hooks.  Other tab
@@ -960,25 +990,9 @@ async function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
 // every non-incoming tab on every swap, and each instance owns the
 // pause / silence / renderer-stop sequence.
 
-// resumeIncomingTabRuntime restores the paused state the user had
-// before they switched away.  Called from activateModelTab /
-// activateSandboxTab after the renderer is re-started so the very
-// next tick lands the right paused/running state.  Safe to call
-// when no prior snapshot exists (fresh tab) — leaves runtime as-is.
-function resumeIncomingTabRuntime(tab) {
-  if (!tab || tab.type !== 'model') return
-  const wasPaused = tab._pausedBeforeSwitch
-  tab._pausedBeforeSwitch = undefined
-  const rt = tab.sandbox
-    ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
-    : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
-  if (!rt || typeof rt.setPaused !== 'function') return
-  // If the user had it running before, un-pause now.  Explicitly
-  // skipping the call when `wasPaused === undefined` keeps a freshly
-  // loaded tab's default paused=false intact.
-  if (wasPaused === false && rt.paused) rt.setPaused(false)
-  else if (wasPaused === true && !rt.paused) rt.setPaused(true)
-}
+// resumeIncomingTabRuntime moved to /ui/unit-editor/tab.js.  Unit-
+// editor specific (early-returns on tab.type !== 'model') so it
+// lives next to the activator that consumes it.
 
 // mapDisplayName returns the friendly label for a MapDoc — prefers the
 // OTA mission name (the human-readable title the player sees in the
@@ -1020,7 +1034,7 @@ function wireMapTabBar() {
         onClose:    (i) => closeTab(i),
         onNewMap:   () => { setSizeDialogSource('tabbar'); openSizeDialog() },
         onOpenMap:  () => openMapDialog('tabbar'),
-        onOpenUnit: () => { modelOpenIntent = 'add'; openModelPicker() },
+        onOpenUnit: () => { setModelOpenIntent('add'); openModelPicker() },
         onSandbox:  () => openSandboxStub(),
       })
     }
@@ -1471,58 +1485,24 @@ function wireDeveloperDialog() {
 // browser presents a familiar list-with-filter (same shape as the map
 // picker), and the chosen model opens in a full-screen WebGL viewer.
 
-let modelViewerInstance = null
-// selectedModelName was the module-scoped staging slot the legacy
-// Open Unit dialog wrote into before openModelViewer fired.  Picker
-// is React now and resolves with { name, sandboxIntent } directly so
-// the staging slot is gone.
-
-
-function wireModelDialogs() {
-  // The welcome-card buttons (#welcome-model-open, #welcome-sandbox)
-  // are React-managed now via mountWelcomeScreen()'s onOpenUnit /
-  // onOpenSandbox callbacks.  The Open Unit picker dialog itself is
-  // also React-owned (see /ui/pickers/open-unit-dialog.js), so the
-  // legacy #model-filter / #model-open-back / #model-open-confirm
-  // wiring is gone too — those static elements are no longer driven.
-  // No "Close" button on the viewer overlay any more — the user
-  // closes the model tab via the × in the shared tab bar, same
-  // gesture they use for maps.
-  //
-  // The unit-editor ribbon (Model / Camera / Rendering / Scene / Studio
-  // Options / Animation / View / Configure / Help) is React-managed
-  // now (see /ui/unit-editor/ribbon/model-viewer-ribbon.js).  Mount +
-  // bridge wiring lives in wireModelViewerRibbon() which is called
-  // once the React UI island has finished loading.
-  //
-  // Tree filter — typing narrows the visible pieces to those whose
-  // name matches.  Match is case-insensitive substring, applied to
-  // both group and leaf rows.
-  const treeFilter = $('#mv-tree-filter')
-  if (treeFilter) treeFilter.addEventListener('input', () => filterPieceTree(treeFilter.value))
-  wireMvInspectors()
-  // Bring the Preact UI island online once at boot.  Persistence
-  // callbacks bridge the panel-store's signals into the existing
-  // prefs system so a React panel's saved position / collapsed /
-  // visible state ends up in the same localStorage blob the legacy
-  // panels write to, and the View menu + Developer Tools dropdown
-  // mirrors stay in lockstep without an extra cross-channel.
-  configureReactUi()
-}
-
+// modelViewerInstance + modelOpenIntent moved to
+// /ui/unit-editor/host-state.js.  Studio.js no longer owns either —
+// the host bridge for getActiveModelViewer / setActiveModelViewer is
+// now backed by the host-state.js getters/setters (registered into
+// hostCallbacks in the boot block above).
+//
+// wireModelDialogs moved to /ui/unit-editor/wire-dialogs.js.  Same
+// boot-block call site; the helper is responsible for the piece-tree
+// filter input, wireMvInspectors, and kicking configureReactUi.
+//
 // rowNameText / wireToggleSubmenu / wireSliderInput /
 // wireModelRibbonDropdown / setModelViewerStatus / wireModelViewMenu /
 // wireModelChromeButtons / wireModelTabBar — all replaced by the React
 // model-viewer ribbon (/ui/unit-editor/ribbon/model-viewer-ribbon.js).
-// Bridge wiring lives in wireModelViewerRibbon() further down in this
-// file; the model name + tri count status line moved into the React
-// dropdown body via the bridge.showStats callback.
-
-// modelOpenIntent: tells openModelViewer how to handle the next
-// load — 'add' pushes a new tab, 'replace' overwrites the current
-// active tab (only meaningful when the active tab is already a
-// model tab).
-let modelOpenIntent = 'add'
+// Bridge wiring lives in wireModelViewerRibbon() (in
+// /ui/unit-editor/ribbon/bridge.js); the model name + tri count
+// status line moved into the React dropdown body via the
+// bridge.showStats callback.
 
 // updateTopbarDocInfo populates the shared topbar's doc-info pill
 // AND the shared footer's hints from whichever tab is now active.
@@ -1644,152 +1624,18 @@ function updateTopbarDocInfo(tab) {
 // switchToTab dispatcher; the extracted activator reaches both
 // through hostCallbacks.getTabs / hostCallbacks.openTab.
 
-// _unitEditorAutoRotate — host-side cache of the Auto-Rotate toggle
-// state shared by the React Camera dropdown, the Renderer panel, the
-// R hotkey, and freshly-opened model tabs.  Mutated through the React
-// ribbon's bridge (which writes both this var and the renderer) and
-// the configureHostBridge.setAutoRotate callback (which mirrors back
-// into the React state signal).  Default matches the React signal's
-// initial `autoRotate: true` so an early open before the user touches
-// the toggle paints the same default both surfaces show.
-let _unitEditorAutoRotate = true
+// _unitEditorAutoRotate + __mvNotifyAutoRotateOff + TEAM_COLOURS all
+// moved to /ui/unit-editor/host-state.js.  The host cache is shared
+// across the React Camera dropdown, the Renderer panel, the R hotkey,
+// and freshly-opened model tabs; getters / setter live there and the
+// orbit-controls wheel-zoom hook flips the cache + the React signal
+// in one place.
 
-// __mvNotifyAutoRotateOff — model-viewer.js's orbit-controls fire
-// this when a wheel-zoom interrupts an active auto-rotate.  We flip
-// the host cache + the React Camera dropdown's check-mark in one
-// place; the renderer's own state was already updated by the orbit
-// controller, so we don't double-dispatch into setAutoRotate(false).
-if (typeof window !== 'undefined') {
-  window.__mvNotifyAutoRotateOff = () => {
-    _unitEditorAutoRotate = false
-    if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-      _reactUi.setModelViewerRibbonState({ autoRotate: false })
-    }
-  }
-}
-
-// TEAM_COLOURS — hue-shift RGB triplets the renderer's setTeamColor
-// applies to the unit's team-colour palette indices.  `blue` is the
-// ARM default and intentionally null so picking it disables the
-// shader's recolour entirely (matching the original game's "Blue
-// (default)" semantics).  Kept at module scope so the React ribbon's
-// bridge can look up a colour without re-importing model3d's tables.
-const TEAM_COLOURS = {
-  blue:   null,
-  red:    [0.92, 0.18, 0.16],
-  green:  [0.20, 0.78, 0.28],
-  yellow: [0.95, 0.85, 0.20],
-  purple: [0.62, 0.30, 0.85],
-  cyan:   [0.20, 0.80, 0.92],
-  orange: [0.98, 0.55, 0.18],
-  white:  [0.95, 0.95, 0.95],
-  black:  [0.10, 0.10, 0.12],
-}
-
-// wireModelViewerRibbon — install the React unit-editor ribbon bridge
-// + mount the React tree into #model-viewer-ribbon-mount.  Called
-// once configureReactUi has resolved.  Idempotent: the bridge is
-// stub-merged on every call, the mount is a no-op when the React
-// tree already lives in the slot.
-//
-// Every action callback resolves modelViewerInstance / its renderer
-// at call time so a tab swap from one unit to another reaches the
-// right renderer (the React state lives on its own signal — when the
-// renderer changes the host pushes fresh defaults via
-// applyUnitEditorDefaults, so the toggle row check-marks reflect
-// the new unit's renderer state).
-function wireModelViewerRibbon() {
-  if (!_reactUi) return
-  if (typeof _reactUi.configureModelViewerRibbonBridge === 'function') {
-    _reactUi.configureModelViewerRibbonBridge({
-      openAnother: () => { modelOpenIntent = 'add'; openModelPicker() },
-      showStats:   () => {
-        const mv = modelViewerInstance
-        if (!mv || !mv.model) return
-        const m = mv.model
-        const triCount = m.flat.reduce((n, p) => n + p.drawGroups.reduce(
-          (s, g) => s + (g.mode === mv.renderer.gl.TRIANGLES ? g.vertexCount / 3 : 0), 0), 0)
-        const msg = `${m.name} · ${m.flat.length} pieces · ${Math.round(triCount)} triangles`
-        const el = $('#status')
-        if (el) el.textContent = msg
-      },
-
-      resetCamera: () => {
-        const mv = modelViewerInstance
-        if (!mv || !mv.model) return
-        const cam = mv.camera
-        cam.frameBounds(mv.model.bounds.min, mv.model.bounds.max)
-        // Restore the entry-view angle the auto-rotate sweep has
-        // walked away from.
-        cam.yaw = 215 * Math.PI / 180
-        cam.pitch = 18 * Math.PI / 180
-        cam.distance *= 1.25
-        mv.renderer.requestRedraw()
-      },
-      setAutoRotate: (on) => {
-        _unitEditorAutoRotate = !!on
-        modelViewerInstance?.setAutoRotate(!!on)
-      },
-
-      setRenderMode:   (mode) => modelViewerInstance?.renderer?.setRenderMode(mode),
-      setWireOverlay:  (on)   => modelViewerInstance?.renderer?.setWireframeOverlay(!!on),
-      setWireWidth:    (px)   => modelViewerInstance?.renderer?.setWireframeWidth(px),
-
-      setGround:       (mode) => modelViewerInstance?.renderer?.setGroundMode(mode),
-
-      setEnvironment:  (env, _opts) => {
-        modelViewerInstance?.renderer?.setEnvironment(env)
-      },
-      setTeamColor:    (key, _opts) => {
-        modelViewerInstance?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
-      },
-
-      setReflections:       (on) => modelViewerInstance?.renderer?.setReflectionsEnabled(!!on),
-      setSpecular:          (on) => modelViewerInstance?.renderer?.setSpecularEnabled(!!on),
-      setGodBeams:          (on) => modelViewerInstance?.renderer?.setGodBeamsEnabled(!!on),
-      setDoF:               (on) => modelViewerInstance?.renderer?.setDoFEnabled(!!on),
-      setWaterReflections:  (on) => modelViewerInstance?.renderer?.setWaterReflectionsEnabled(!!on),
-
-      setBob:               (on) => modelViewerInstance?.renderer?.setBobEnabled(!!on),
-      setBobAmount:         (v)  => modelViewerInstance?.renderer?.setBobAmount(v),
-      setBobSpeed:          (v)  => modelViewerInstance?.renderer?.setBobSpeed(v),
-      setWaves:             (on) => modelViewerInstance?.renderer?.setWavesEnabled(!!on),
-      setWavesIntensity:    (v)  => modelViewerInstance?.renderer?.setWavesIntensity(v),
-      setBgTerrain:         (on) => modelViewerInstance?.renderer?.setBgTerrainEnabled(!!on),
-      setBgTerrainHeight:   (v)  => modelViewerInstance?.renderer?.setBgTerrainHeight(v),
-      setBgTerrainScale:    (v)  => modelViewerInstance?.renderer?.setBgTerrainScale(v),
-      setSeabedHeight:      (v)  => modelViewerInstance?.renderer?.setSeabedHeight(v),
-      setSeabedScale:       (v)  => modelViewerInstance?.renderer?.setSeabedScale(v),
-      setSeabedRocks:       (v)  => modelViewerInstance?.renderer?.setSeabedRockChance(v),
-
-      runCobEntry: (name) => {
-        const cob = modelViewerInstance?.cob
-        if (cob) runCobEntry(cob, name)
-      },
-      setCobDamage: (v) => modelViewerInstance?.setDamage?.(v | 0),
-      setCobBuild:  (v) => {
-        if (modelViewerInstance) modelViewerInstance._autoBuild = null
-        modelViewerInstance?.setBuildPercent?.(v | 0)
-      },
-      setCobPlayback: (pct) => mvSetSimulationSpeed((pct | 0) / 100),
-      resetCob:       () => modelViewerInstance?.resetState?.(),
-
-      setPanelVisible: (panelId, on) => setMvInspectorVisible(panelId, !!on),
-
-      openSettings: () => {
-        if (typeof openSettingsDialog === 'function') openSettingsDialog()
-        else $('#btn-settings')?.click()
-      },
-      openHelp: () => {
-        if (typeof openHelpDialog === 'function') openHelpDialog()
-        else $('#btn-help')?.click()
-      },
-    })
-  }
-  if (typeof _reactUi.mountModelViewerRibbon === 'function') {
-    _reactUi.mountModelViewerRibbon()
-  }
-}
+// wireModelViewerRibbon moved to /ui/unit-editor/ribbon/bridge.js
+// alongside wireUnitEditorHostBridge.  The unit-editor's React ribbon
+// mount + bridge install both run from the bridge module's helper now;
+// configureReactUi() below calls into it after the React island has
+// resolved.
 
 // ── Archaeology: dropdown sync helpers that moved to React ─────────
 // The sandbox ribbon's Developer Controls row + the unit-editor View
@@ -1800,18 +1646,10 @@ function wireModelViewerRibbon() {
 // syncSandboxDevtoolsDropdown) are gone — flipping the matching
 // signal is enough to re-render every subscriber.
 
-// _activeRendererView — which view currently owns the canvas.  The
-// React Renderer panel's Tracking + Auto-Rotate toggles route through
-// the host bridge here so they hit the right view's setTracking /
-// renderer.setAutoRotate, mirroring the legacy wireMvRendererPanel
-// `activeView()` helper.
-function _activeRendererView() {
-  const dlg = document.getElementById('model-viewer-dialog')
-  const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
-  return sandboxActive
-    ? (hostCallbacks.getActiveSandboxView?.() || null)
-    : modelViewerInstance
-}
+// activeRendererView moved to /ui/common/active-renderer-view.js.
+// Shared by both the unit-editor host bridge and the sandbox code
+// path, so it lives in /ui/common rather than under either section
+// subfolder.
 
 // _reactUi — lazy-loaded handle to the Preact UI island.  Imported
 // dynamically the first time configureReactUi runs so the studio's
@@ -1879,165 +1717,12 @@ function configureReactUi() {
       const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
       ui.setPanelVisible(id, wasSet ? !!vis[id] : true)
     }
-    // Bridge the host's COB + camera callbacks into the React island.
-    // The actual targets (active view, MvControls singleton, runCobEntry)
-    // are read at call time so a sandbox / unit-editor swap reaches the
-    // right place even though configure runs only once.
-    ui.configureHostBridge({
-      setTracking:   (on) => {
-        const v = _activeRendererView()
-        if (v && typeof v.setTracking === 'function') v.setTracking(on)
-        else if (_mvControls && typeof _mvControls.setTracking === 'function') {
-          _mvControls.setTracking(on)
-        }
-      },
-      setAutoRotate: (on) => {
-        _unitEditorAutoRotate = !!on
-        const v = _activeRendererView()
-        const r = v && v.renderer
-        if (r && typeof r.setAutoRotate === 'function') r.setAutoRotate(on)
-        // Mirror to the React unit-editor ribbon's Camera dropdown so
-        // the Auto-Rotate toggle row's check flips in lockstep.
-        if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-          _reactUi.setModelViewerRibbonState({ autoRotate: !!on })
-        }
-      },
-      runCobEntry:        (cob, name) => runCobEntry(cob, name),
-      isCobScriptRunning: (cob, name) => isCobScriptRunning(cob, name),
-      runControlsCreate:  () => {
-        // Mirror of the old #mv-controls-create-btn click handler:
-        // launch Create, flip lifecycle to 'creating' so the action
-        // grid stays gated, then kick the visual build ramp so the
-        // user sees the construction-stripe wireframe phase in.
-        const mvi = modelViewerInstance
-        const cob = mvi && mvi.cob
-        if (!cob || !cob.hasScript || !cob.hasScript('Create')) return
-        cob.start('Create')
-        cob._lifecycle = 'creating'
-        startMvAutoBuild(mvi)
-      },
-      // Runtime overlay controls.  setSimSpeed routes through the
-      // same mvSetSimulationSpeed entry point the COB-menu Playback
-      // slider uses, so dragging either keeps both labels + sandbox
-      // runtime in sync.  toggle/step/stopAll target whichever
-      // runtime is active (unit-editor viewer first, then sandbox).
-      setSimSpeed: (rate) => mvSetSimulationSpeed(rate),
-      toggleRuntimePaused: () => mvToggleRuntimePaused(),
-      stepRuntime: () => {
-        const rt = _activeRuntime()
-        if (!rt) return
-        // Force one fixed 25 ms TA tick across the WHOLE per-frame
-        // pipeline, not just the COB scripts.  rt.tick(25) alone only
-        // advances bytecode — weapons, movement, particles, audio,
-        // and smoke trails are driven elsewhere (engine.tick + the
-        // per-view onAfterFrame hook), so a script-only step looked
-        // like "the panel stats tick but nothing in the world moves."
-        //
-        // Unpause briefly, drive the same calls a real frame makes,
-        // then re-pause.  Leave each thread's breakpointHit flag
-        // ALONE — _runThread treats a set flag as "skip the BP check
-        // on the first instruction this tick" so the BP'd line
-        // executes once, the PC moves past it, and subsequent ops
-        // re-engage BP checking.  Clearing the flag here would let
-        // the BP at the same PC re-fire immediately and Step would
-        // be stuck pacing the same line forever.
-        const dlg = document.getElementById('model-viewer-dialog')
-        const sandboxOn = dlg && dlg.classList.contains('sandbox-mode')
-        const wasPaused = rt.paused
-        rt.paused = false
-        if (sandboxOn) {
-          // Sandbox per-frame: scene.tick → engine.tick (runtime +
-          // movement + attack + weapons + particles + audio via
-          // syncBinding) + the shared smoke-trail advance through
-          // the SmokeTrailManager that view-helpers stashed on
-          // sv._smokeTrails.
-          const sv = hostCallbacks.getActiveSandboxView?.() || null
-          if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(25)
-          if (sv && sv._smokeTrails) {
-            const rt = sv.runtime
-            const rate = !rt ? 1 : (rt.paused ? 0 : (rt.playbackRate || 1))
-            try { sv._smokeTrails.tick(25 * rate) } catch { /* ignore */ }
-          }
-        } else {
-          // Viewer per-frame: binding.tick (runtime + particles +
-          // audio) + MvControls.tick (movement + weapons via
-          // engine.tick(skipRuntime, skipMovement, skipSync), plus
-          // its own tickSmokeTrails inside).
-          const cob = modelViewerInstance && modelViewerInstance.cob
-          if (cob && typeof cob.tick === 'function') cob.tick(25)
-          if (_mvControls && typeof _mvControls.tick === 'function') _mvControls.tick(25)
-        }
-        // Always leave the runtime paused after a step so the user
-        // can keep stepping (`wasPaused || true === true`).
-        rt.paused = wasPaused || true
-        mvRefreshRuntimeToggle()
-        // Snap the React panels to the post-step state immediately
-        // instead of waiting for the next 4 Hz publish — the stats
-        // row, the thread list, and the Pause/Resume label all read
-        // through mutable refs that need a tick to re-paint.
-        if (_reactUi && typeof _reactUi.bumpRuntimeTick === 'function') {
-          _reactUi.bumpRuntimeTick()
-        }
-      },
-      stopAllThreads: async () => {
-        const rt = _activeRuntime()
-        if (!rt || typeof rt.killAllThreads !== 'function') return
-        // Confirm before tearing every COB thread down — motion
-        // controllers, smoke loops, the unit's idle background scripts
-        // all die.  Users almost always WANT this when they click
-        // Terminate All Scripts, but the action is irreversible (the
-        // dead threads' state is gone), so the in-app confirm modal
-        // routes the click through a yes/no prompt.
-        const ok = await confirmDialog({
-          title: 'Terminate All Scripts',
-          message: 'This will stop all unit scripts, including motion controllers, smoke and other background threads.  Proceed?',
-          okLabel: 'Terminate All',
-          cancelLabel: 'Cancel',
-          okDanger: true,
-        })
-        if (!ok) return
-        rt.killAllThreads()
-        // Repaint the thread list NOW so the user sees the empty /
-        // "killed" state without a 250 ms publish lag.
-        if (_reactUi && typeof _reactUi.bumpRuntimeTick === 'function') {
-          _reactUi.bumpRuntimeTick()
-        }
-      },
-      resetUnit: (unit, cob) => {
-        if (cob && modelViewerInstance && modelViewerInstance.cob === cob && cob.unit === unit) {
-          modelViewerInstance.resetState()
-          return
-        }
-        if (typeof unit.killAllThreads === 'function') unit.killAllThreads()
-        unit._threads.length = 0
-        unit._recentlyKilled.length = 0
-        for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
-        unit._moveAnims.length = 0
-        unit._rotAnims.length = 0
-        for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
-        // Wipe the debugger's coverage hints so the next run paints
-        // a clean dim/lit map.  Without this, lines that ran before
-        // the reset stay lit even though execution starts over.
-        if (typeof unit.clearExecutedOffsets === 'function') unit.clearExecutedOffsets()
-      },
-      openThreadCodeModal: (cob, thread) => openMvThreadCodeModal(cob, thread),
-    })
-    // Bridge the Include-Private toggle into the prefs system so the
-    // React Script Commands panel signal + persisted
-    // state.mvActionsIncludePrivate stay in lockstep.  Pref key keeps
-    // the legacy 'mvActions' prefix so saved preferences survive the
-    // Actions → Script Commands rename.
-    ui.configureActionsIncludePrivate(
-      () => !!state.mvActionsIncludePrivate,
-      (on) => { state.mvActionsIncludePrivate = !!on; persistPrefs() },
-    )
-    // Bridge the Developer Controls toggle so the React Controls
-    // panel reads + writes the same persisted preference the
-    // Developer Tools dropdown row in the sandbox ribbon uses.
-    ui.configureControlsDevSectionVisible(
-      () => state.mvControlsDevVisible === undefined ? true : !!state.mvControlsDevVisible,
-      (on) => { state.mvControlsDevVisible = !!on; persistPrefs() },
-    )
+    // Install the unit-editor host bridge bundle (camera + cob +
+    // runtime + reset + thread-debugger opener) + the Include-Private
+    // + Developer-Controls preference bridges in one shot.  Lives in
+    // /ui/unit-editor/ribbon/bridge.js so the cluster of unit-editor-
+    // specific callbacks is co-located with the ribbon mount.
+    wireUnitEditorHostBridge(ui)
     // Bring the inspector panel tree online — sandbox panel is mounted
     // lazily on first sandbox tab activation (it needs the onSpawn
     // callback closure); the always-on inspectors come up at boot so
@@ -2070,32 +1755,34 @@ function configureReactUi() {
       })
     }
     // Bridge the unit-editor sidebar tabs to the live renderer /
-    // viewer / weapon-picker / audio so the tab components don't
-    // reach into modelViewerInstance globals directly.
+    // viewer / weapon-picker / audio so the tab components reach the
+    // active ModelViewer through getActiveModelViewer() rather than a
+    // module-let reference.
     if (typeof ui.configureTexturesBridge === 'function') {
       ui.configureTexturesBridge({
         setHoveredTexture: (name) => {
-          modelViewerInstance?.renderer?.setHoveredTexture?.(name)
+          getActiveModelViewer()?.renderer?.setHoveredTexture?.(name)
         },
       })
     }
     if (typeof ui.configurePieceTreeBridge === 'function') {
       ui.configurePieceTreeBridge({
         setHoveredPieceName: (name) => {
-          modelViewerInstance?.renderer?.setHoveredPieceName?.(name)
+          getActiveModelViewer()?.renderer?.setHoveredPieceName?.(name)
         },
         selectPiece: (name) => selectPiece(name),
-        requestRedraw: () => modelViewerInstance?.renderer?.requestRedraw?.(),
+        requestRedraw: () => getActiveModelViewer()?.renderer?.requestRedraw?.(),
       })
     }
     if (typeof ui.configureWeaponsTabBridge === 'function') {
       ui.configureWeaponsTabBridge({
         paletteColor: (idx) => {
-          const pal = modelViewerInstance && modelViewerInstance.palette
+          const mv = getActiveModelViewer()
+          const pal = mv && mv.palette
           if (!pal || idx <= 0) return null
           return pal.colorFor(idx)
         },
-        openWeaponPicker: (slotIndex) => openWeaponPicker(modelViewerInstance, slotIndex),
+        openWeaponPicker: (slotIndex) => openWeaponPicker(getActiveModelViewer(), slotIndex),
         playSound: (stem) => playWeaponSound(stem),
       })
     }
@@ -2134,32 +1821,10 @@ function configureReactUi() {
   return _reactUiPromise
 }
 
-async function openModelViewer(name) {
-  $('#model-open-dialog').classList.add('hidden')
-  // Push a new model tab into the unified tab array so the map
-  // editor's tab bar (and the viewer's mirrored tab bar) both show
-  // the new entry.  switchToTab routes by type so the dialog mounts
-  // automatically.
-  const meta = findModelMeta(name)
-  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  // Replace path: when the React ribbon's "Open another model..."
-  // routed through with intent='replace' AND the active tab is a
-  // unit-editor tab, mutate the existing spec/instance instead of
-  // pushing a fresh tab.  Mutating spec.name + spec.meta is enough
-  // because the descriptor's attachTabRef mirrors them back onto the
-  // legacy fields the viewer code reads.
-  if (modelOpenIntent === 'replace' && activeTab?.typeId === 'unit-editor') {
-    activeTab.spec.name = name
-    activeTab.spec.meta = meta
-    activeTab.name = name
-    activeTab.meta = meta
-    modelOpenIntent = 'add'
-    switchToTab(tabState.activeIndex, { fresh: false, force: true })
-    return
-  }
-  modelOpenIntent = 'add'
-  openTab('unit-editor', { name, meta })
-}
+// openModelViewer moved to /ui/unit-editor/tab.js.  The descriptor's
+// attachTabRef still mirrors spec.name + spec.meta onto the legacy
+// fields the viewer code reads, so studio.js's openTab seam keeps
+// working through hostCallbacks.openTab.
 
 // closeModelViewer — replaced by the React ribbon's "Open another
 // model…" routing through openModelPicker (intent=add), which pushes

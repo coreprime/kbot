@@ -17,8 +17,10 @@
 // still ticks the viewer's _mvControls even when backgrounded
 // so weapon SM + audio scheduling stay coherent.
 
-import { tabs, $, hostCallbacks } from '../host-context.js'
+import { tabs, tabState, $, hostCallbacks } from '../host-context.js'
 import { MvControls } from './mv-controls.js'
+import { findModelMeta } from '../pickers/model-catalog.js'
+import { getModelOpenIntent, setModelOpenIntent } from './host-state.js'
 
 export async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a
@@ -168,4 +170,63 @@ export async function activateModelTab(tab) {
     // first time we load this tab's unit.
     hostCallbacks.applyUnitEditorDefaults?.()
   }
+}
+
+// resumeIncomingTabRuntime restores the paused state the user had
+// before they switched away.  Called from activateModelTab /
+// activateSandboxTab after the renderer is re-started so the very
+// next tick lands the right paused/running state.  Safe to call
+// when no prior snapshot exists (fresh tab) — leaves runtime as-is.
+//
+// Unit-editor specific: explicitly tests `tab.type !== 'model'` so
+// map tabs no-op and the helper never reaches into a MapDoc.  Sandbox
+// tabs share the legacy 'model' type discriminator so they pass the
+// guard and route to the scene's runtime instead of the viewer's.
+export function resumeIncomingTabRuntime(tab) {
+  if (!tab || tab.type !== 'model') return
+  const wasPaused = tab._pausedBeforeSwitch
+  tab._pausedBeforeSwitch = undefined
+  const rt = tab.sandbox
+    ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
+    : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
+  if (!rt || typeof rt.setPaused !== 'function') return
+  // If the user had it running before, un-pause now.  Explicitly
+  // skipping the call when `wasPaused === undefined` keeps a freshly
+  // loaded tab's default paused=false intact.
+  if (wasPaused === false && rt.paused) rt.setPaused(false)
+  else if (wasPaused === true && !rt.paused) rt.setPaused(true)
+}
+
+// openModelViewer pushes a model tab into the unified tab array (or
+// mutates the active tab in-place when the React ribbon's "Open
+// another model…" was routed with intent='replace' against a unit-
+// editor tab).  Reads the FBI meta from the catalogue so the new
+// tab carries the same metadata the picker grid showed; the
+// descriptor's attachTabRef mirrors spec.name + spec.meta onto the
+// legacy fields the viewer code reads.
+export async function openModelViewer(name) {
+  $('#model-open-dialog').classList.add('hidden')
+  // Push a new model tab into the unified tab array so the map
+  // editor's tab bar (and the viewer's mirrored tab bar) both show
+  // the new entry.  switchToTab routes by type so the dialog mounts
+  // automatically.
+  const meta = findModelMeta(name)
+  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
+  // Replace path: when the React ribbon's "Open another model..."
+  // routed through with intent='replace' AND the active tab is a
+  // unit-editor tab, mutate the existing spec/instance instead of
+  // pushing a fresh tab.  Mutating spec.name + spec.meta is enough
+  // because the descriptor's attachTabRef mirrors them back onto the
+  // legacy fields the viewer code reads.
+  if (getModelOpenIntent() === 'replace' && activeTab?.typeId === 'unit-editor') {
+    activeTab.spec.name = name
+    activeTab.spec.meta = meta
+    activeTab.name = name
+    activeTab.meta = meta
+    setModelOpenIntent('add')
+    hostCallbacks.switchToTab?.(tabState.activeIndex, { fresh: false, force: true })
+    return
+  }
+  setModelOpenIntent('add')
+  hostCallbacks.openTab?.('unit-editor', { name, meta })
 }
