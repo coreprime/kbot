@@ -782,6 +782,16 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       // on it.  Renderer resumes on the next sandbox-tab activation.
       // Also wipe the canvas so the previous tab's last frame doesn't
       // bleed through while the incoming tab paints its first frame.
+      // Silence audio across EVERY sandbox tab so a backgrounded
+      // sandbox's firing sounds don't keep playing while the unit
+      // editor owns the screen.  The sim itself keeps ticking — only
+      // the audio output mutes.
+      for (const t of tabs) {
+        const v = t && t.viewer
+        if (v && typeof v.setSilenced === 'function') {
+          try { v.setSilenced(true) } catch { /* ignore */ }
+        }
+      }
       if (sandboxViewInstance && sandboxViewInstance.renderer) {
         try {
           sandboxViewInstance.renderer.stop?.()
@@ -819,12 +829,18 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // Stop BOTH renderers (single-unit + every sandbox tab) so neither
   // burns CPU on a hidden surface, and clear the canvas so the last
   // rendered frame doesn't bleed through when the user later returns
-  // to a model tab.
+  // to a model tab.  Silence audio on every view too — the map editor
+  // doesn't speak weapon sounds and a backgrounded sandbox shouldn't
+  // either.
   if (modelViewerInstance && modelViewerInstance.renderer) {
     try {
       modelViewerInstance.renderer.stop?.()
       modelViewerInstance.renderer.clearCanvas?.()
     } catch { /* ignore */ }
+  }
+  if (modelViewerInstance && modelViewerInstance._mvControls
+      && typeof modelViewerInstance._mvControls.setSilenced === 'function') {
+    try { modelViewerInstance._mvControls.setSilenced(true) } catch { /* ignore */ }
   }
   for (const t of tabs) {
     const v = t && t.viewer
@@ -833,6 +849,9 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
         v.renderer.stop()
         v.renderer.clearCanvas?.()
       } catch { /* ignore */ }
+    }
+    if (v && typeof v.setSilenced === 'function') {
+      try { v.setSilenced(true) } catch { /* ignore */ }
     }
   }
 
@@ -8995,6 +9014,13 @@ function openSettingsDialog() {
   if ($('#set-unit-water-reflections')) $('#set-unit-water-reflections').checked = s.unitDefaultWaterReflections !== false
   if ($('#set-unit-specular')) $('#set-unit-specular').checked = s.unitDefaultSpecular !== false
   if ($('#set-unit-godbeams')) $('#set-unit-godbeams').checked = s.unitDefaultGodBeams !== false
+  // Force-target-ground gesture — flag persisted by the shared
+  // force-target.js module (localStorage; default ON when absent).
+  // Read straight from the source of truth so the checkbox always
+  // reflects the module's view, even if the user toggled it elsewhere.
+  if ($('#set-force-target-ground')) {
+    try { $('#set-force-target-ground').checked = (localStorage.getItem('studio.forceTargetGround') !== 'off') } catch { /* ignore */ }
+  }
   // Smart-default the active tab to whatever workspace the user is
   // currently in.  Model tab open → Unit Editor; map tab → Map
   // Editor; nothing open → General.
@@ -9042,6 +9068,12 @@ function applySettingsDialog() {
   if ($('#set-unit-water-reflections')) s.unitDefaultWaterReflections = $('#set-unit-water-reflections').checked
   if ($('#set-unit-specular')) s.unitDefaultSpecular = $('#set-unit-specular').checked
   if ($('#set-unit-godbeams')) s.unitDefaultGodBeams = $('#set-unit-godbeams').checked
+  // Force-target-ground gesture — write straight to localStorage so
+  // the shared force-target.js module sees the new value on its next
+  // read.  No need to round-trip through state.settings.
+  if ($('#set-force-target-ground')) {
+    try { localStorage.setItem('studio.forceTargetGround', $('#set-force-target-ground').checked ? 'on' : 'off') } catch { /* ignore */ }
+  }
   state.settings = s
   // Visibility flags: push through the existing setters so the View
   // menu rows + canvas re-render in step.
@@ -11101,9 +11133,11 @@ function wireModelDialogs() {
     // succession.
     if (window.__sandboxSpawnPending && sandboxViewInstance) {
       window.__sandboxSpawnPending = false
+      const pendingSide = (window.__sandboxSpawnPendingSide | 0) || 0
+      window.__sandboxSpawnPendingSide = 0
       $('#model-open-dialog')?.classList.add('hidden')
       $('#model-viewer-dialog')?.classList.remove('hidden')
-      void sandboxViewInstance.beginPlacement(selectedModelName)
+      void sandboxViewInstance.beginPlacement(selectedModelName, { side: pendingSide })
       return
     }
     openModelViewer(selectedModelName)
@@ -11829,6 +11863,11 @@ async function activateModelTab(tab) {
   // a map tab or sandbox tab takes the screen so we don't burn frames
   // on hidden surfaces.  renderer.start() is idempotent.
   try { modelViewerInstance.renderer?.start?.() } catch { /* ignore */ }
+  // Un-silence the viewer's audio — switchToTab muted us on the way
+  // out; coming back resets so weapon sounds + select acks play again.
+  if (_mvControls && typeof _mvControls.setSilenced === 'function') {
+    try { _mvControls.setSilenced(false) } catch { /* ignore */ }
+  }
   applyDefaultGroundFor(tab.meta)
   // Apply Unit Editor defaults from the persisted Settings — the user's
   // chosen environment + effect toggles, picked up here once the
@@ -12429,6 +12468,17 @@ function refreshMvInspectors(dtMs = 16) {
         _lifecycle: 'created',
       },
     }
+    // Effects + Audio panels are SCENE-WIDE in sandbox.  Each unit
+    // owns its own ParticlePool + AudioPool (per-binding state), so
+    // the focused-binding path above would either show only the
+    // selected unit's effects OR — with 0/multi selection — show
+    // nothing (the stub cob above has no particles/audio).  Both
+    // experiences read as "the panels are broken in sandbox".  Swap
+    // mv.cob's particles/audio for a virtual pool that spans every
+    // live binding — built lazily each tick so newly-spawned units
+    // contribute immediately.
+    mv.cob.particles = aggregateSandboxParticlePool(sandbox.scene)
+    mv.cob.audio = aggregateSandboxAudioPool(sandbox.scene)
     // The focused binding has no _lifecycle field by default — the
     // single-unit viewer's gating reads it to greys out controls
     // pre-Create.  In sandbox we always spawn pre-Create'd so mark
@@ -14536,6 +14586,128 @@ function wireMvRuntimeVisibility() {
 // so toggling doesn't snap back open.  Reset when no panel exists.
 const _mvFxCollapsed = new Set()
 
+// Reusable scratch arrays for the sandbox particle-pool aggregator.
+// Each tick we re-fill the alive slots — keeping the buffers resident
+// avoids allocator pressure when the panel is open through a long
+// firefight.  Auto-grows when total alive particles exceed capacity
+// (doubling for amortised O(1) growth).
+const _mvFxAggBufs = {
+  capacity: 0,
+  alive: null, kind: null,
+  r: null, g: null, b: null,
+  x: null, y: null, z: null,
+  vx: null, vy: null, vz: null,
+  life: null, life0: null,
+}
+
+// aggregateSandboxParticlePool returns a virtual ParticlePool that
+// exposes the same property surface (count + flat per-attribute
+// arrays indexed 0..count) the Effects panel reads.  Internally
+// concatenates every binding's alive slots into shared scratch
+// arrays.  Cost: O(total alive) copy per refresh tick (4 Hz) — for a
+// sandbox with a few hundred particles that's negligible.
+//
+// Only ALIVE source-slots are copied, so the returned `alive` array
+// is all-1s.  The Effects renderer's `if (!pool.alive[i]) continue`
+// short-circuit then becomes a no-op, but the field is still present
+// so we don't have to fork the renderer for sandbox mode.
+function aggregateSandboxParticlePool(scene) {
+  if (!scene || typeof scene.units !== 'function') {
+    return { count: 0 }
+  }
+  // First pass — sum alive across every unit's binding so we know
+  // how big the scratch arrays need to be.
+  let total = 0
+  for (const u of scene.units()) {
+    const p = u.binding && u.binding.particles
+    if (!p) continue
+    for (let i = 0; i < p.count; i++) if (p.alive[i]) total++
+  }
+  if (total === 0) {
+    return { count: 0 }
+  }
+  // Grow scratch buffers when the population exceeds current
+  // capacity.  Double so we don't grow every frame in a steady fight.
+  const bufs = _mvFxAggBufs
+  if (total > bufs.capacity) {
+    let cap = Math.max(64, bufs.capacity || 64)
+    while (cap < total) cap *= 2
+    bufs.capacity = cap
+    bufs.alive = new Uint8Array(cap)
+    bufs.kind  = new Uint16Array(cap)
+    bufs.r     = new Float32Array(cap)
+    bufs.g     = new Float32Array(cap)
+    bufs.b     = new Float32Array(cap)
+    bufs.x     = new Float32Array(cap)
+    bufs.y     = new Float32Array(cap)
+    bufs.z     = new Float32Array(cap)
+    bufs.vx    = new Float32Array(cap)
+    bufs.vy    = new Float32Array(cap)
+    bufs.vz    = new Float32Array(cap)
+    bufs.life  = new Float32Array(cap)
+    bufs.life0 = new Float32Array(cap)
+  }
+  // Second pass — copy alive slots into the flat layout.
+  let w = 0
+  for (const u of scene.units()) {
+    const p = u.binding && u.binding.particles
+    if (!p) continue
+    for (let i = 0; i < p.count; i++) {
+      if (!p.alive[i]) continue
+      bufs.alive[w] = 1
+      bufs.kind[w]  = p.kind[i] | 0
+      bufs.r[w]     = p.r[i];  bufs.g[w]  = p.g[i];  bufs.b[w]  = p.b[i]
+      bufs.x[w]     = p.x[i];  bufs.y[w]  = p.y[i];  bufs.z[w]  = p.z[i]
+      bufs.vx[w]    = p.vx[i]; bufs.vy[w] = p.vy[i]; bufs.vz[w] = p.vz[i]
+      bufs.life[w]  = p.life[i]
+      bufs.life0[w] = p.life0[i]
+      w++
+    }
+  }
+  // Return a thin facade that reuses the scratch buffers by ref.
+  // The Effects panel reads `count` once at the top and indexes the
+  // arrays per-slot, so the same buffer-by-reference contract works.
+  return {
+    count: w,
+    alive: bufs.alive,
+    kind:  bufs.kind,
+    r: bufs.r, g: bufs.g, b: bufs.b,
+    x: bufs.x, y: bufs.y, z: bufs.z,
+    vx: bufs.vx, vy: bufs.vy, vz: bufs.vz,
+    life: bufs.life, life0: bufs.life0,
+  }
+}
+
+// aggregateSandboxAudioPool returns a virtual AudioPool that exposes
+// the count() + each(cb) surface the Audio panel uses, fanning the
+// iteration over every binding's pool.  Each cb invocation receives
+// the source pool's live entry directly (no copy) so progress bars
+// keep ticking against the actual <audio> element's currentTime.
+function aggregateSandboxAudioPool(scene) {
+  if (!scene || typeof scene.units !== 'function') {
+    return { count: () => 0, each: () => {} }
+  }
+  // Snapshot the pools at call time so the panel's count() / each()
+  // see a consistent set even if a unit is added or removed between
+  // the two reads.  Pool refs are stable across ticks; new units
+  // appearing between refreshes get picked up on the NEXT refresh,
+  // which matches the panel's 4 Hz cadence.
+  const pools = []
+  for (const u of scene.units()) {
+    if (u.binding && u.binding.audio) pools.push(u.binding.audio)
+  }
+  return {
+    count: () => {
+      let n = 0
+      for (const p of pools) n += p.count()
+      return n
+    },
+    each: (fn) => {
+      for (const p of pools) p.each(fn)
+    },
+  }
+}
+
 // renderMvEffectsPanel populates the Effects overlay with a live
 // snapshot of the cob particle pool.  Layout:
 //   1. Per-kind summary chip strip (LASER ×N, SMOKE_GREY ×M, …),
@@ -15640,6 +15812,13 @@ function mvSetSimulationSpeed(rate) {
   const v = Math.max(0.01, Math.min(10, Number.isFinite(n) ? n : 1))
   const cob = modelViewerInstance?.cob
   if (cob) cob.runtime.setPlaybackRate(v)
+  // Sandbox tabs have their own per-tab CobRuntime inside their
+  // GameEngine — the unit editor's runtime is unrelated.  Dispatch
+  // the rate to the active sandbox view's runtime too so dragging
+  // the slider while a sandbox is in front actually slows / speeds
+  // its sim.  No-op when no sandbox is open.
+  const sbRt = sandboxViewInstance?.scene?.runtime
+  if (sbRt && typeof sbRt.setPlaybackRate === 'function') sbRt.setPlaybackRate(v)
   // Slider values are percent units (1-1000 = 0.01× - 10×).  Label
   // uses 2 decimals so 0.05× and 0.25× both read cleanly; high end
   // (10.00×) doesn't lose precision.
@@ -17018,9 +17197,15 @@ async function activateSandboxTab(tab) {
   // dialog so the canvas + ribbon are already mounted.
   $('#model-viewer-dialog')?.classList.remove('hidden')
   // Stop the regular ModelViewer's renderer if it's running so we
-  // don't have two RAF loops fighting over the canvas.
+  // don't have two RAF loops fighting over the canvas.  Also silence
+  // its audio so the unit editor's COB sounds don't bleed into the
+  // sandbox while it owns the screen.
   if (modelViewerInstance && modelViewerInstance.renderer) {
     try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
+  }
+  if (modelViewerInstance && modelViewerInstance._mvControls
+      && typeof modelViewerInstance._mvControls.setSilenced === 'function') {
+    try { modelViewerInstance._mvControls.setSilenced(true) } catch { /* ignore */ }
   }
   // Stop every OTHER sandbox tab's renderer too — two sandbox tabs
   // each have their own SandboxView, and only the active one should
@@ -17073,10 +17258,31 @@ async function activateSandboxTab(tab) {
   // from this tab's view.
   sandboxViewInstance = tab.viewer
   await sandboxViewInstance.open()
+  // Push the current Runtime-overlay slider rate into the new
+  // sandbox's runtime so it starts at the user's chosen speed instead
+  // of the default 1.0×.  Each sandbox tab owns its own CobRuntime,
+  // so the value WOULD be reset on every tab switch / new spawn
+  // without this — manifests as "projectiles still move at full
+  // speed even though the slider is at 0.1×" because the slider
+  // updates were only ever forwarded to the unit-editor runtime + the
+  // PREVIOUSLY active sandbox.  Read the live slider value to avoid
+  // depending on cached state.
+  try {
+    const speedEl = document.getElementById('mv-runtime-speed')
+    if (speedEl && typeof mvSetSimulationSpeed === 'function') {
+      mvSetSimulationSpeed((parseInt(speedEl.value, 10) | 0) / 100)
+    }
+  } catch { /* ignore */ }
   // Make sure the RAF loop is live — switchToTab stops it on the way
   // to a map tab so we don't burn frames behind the editor.  Renderer
   // .start() is idempotent.
   try { sandboxViewInstance.renderer?.start?.() } catch { /* ignore */ }
+  // Un-silence audio on the incoming sandbox — outgoing tab's switch
+  // muted every viewer; the active one comes back un-muted so weapon
+  // fire / unit acks / death sounds play normally.
+  if (typeof sandboxViewInstance.setSilenced === 'function') {
+    try { sandboxViewInstance.setSilenced(false) } catch { /* ignore */ }
+  }
   // Wrap the sandbox view's onAfterFrame so the inspector refresh +
   // animation-advance pipeline runs on the sandbox renderer's frames
   // too.  The sandbox view sets its own onAfterFrame (scene tick +
@@ -17101,18 +17307,20 @@ async function activateSandboxTab(tab) {
   showSandboxPanel(true)
   // Force-show the inspector panels meaningful in multi-unit mode:
   // Renderer (camera info) + Scripts (runtime telemetry) for the
-  // scene as a whole, Static Vars + Controls for the focused unit
-  // (panels render against the currently-selected sandbox unit, or
-  // an empty state when nothing's selected — see refreshMvInspectors).
+  // scene as a whole; Static Vars + Controls + Effects + Audio for
+  // the focused unit (these render against the currently-selected
+  // sandbox unit's binding — when exactly one unit is selected the
+  // refreshMvInspectors proxy promotes its binding to mv.cob, which
+  // owns .particles + .audio + static vars; with zero or multiple
+  // units selected the panels show an empty state).
+  //
   // Hide Actions (per-script COB buttons — too granular for a
-  // strategic view; the unit editor remains the place for that),
-  // Effects/Audio (per-binding pools that don't have a single owner
-  // in multi-unit).
-  for (const id of ['mv-inspector-actions', 'mv-inspector-effects', 'mv-inspector-audio']) {
+  // strategic view; the unit editor remains the place for that).
+  for (const id of ['mv-inspector-actions']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
   }
-  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports']) {
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports', 'mv-inspector-effects', 'mv-inspector-audio']) {
     const p = document.getElementById(id)
     if (p) p.classList.remove('hidden')
   }
@@ -17169,20 +17377,32 @@ function wireSandboxControlsIntercept() {
     const sb = sandboxViewInstance
     if (!sb || !sb.scene) return
     if (action === 'stop') {
+      // Stop = halt every selected unit completely: drop move + attack
+      // intent, AND clear the engine weapon SM's slot targets (otherwise
+      // the per-tick #stepWeapon keeps cycling reloads + spawning aim
+      // threads at a phantom target so the unit visibly keeps firing
+      // after Stop).  Then run the BOS hooks that flush per-script
+      // animation state.
+      const engine = sb.scene.engine
       for (const id of sb.scene.selected) {
         const u = sb.scene.unitById(id)
-        if (u) {
-          u.moveTarget = null
-          u.attackTarget = null
-          // Mirror Stop's TA semantics — fire StopMoving (kbots /
-          // tanks read it as "halt the walk loop") + TargetCleared
-          // (turret-aim scripts reset their internal aim state).
-          if (u.binding && u.binding.hasScript('StopMoving')) {
-            try { u.binding.start('StopMoving') } catch { /* ignore */ }
-          }
-          if (u.binding && u.binding.hasScript('TargetCleared')) {
-            try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
-          }
+        if (!u) continue
+        u.moveTarget = null
+        u.attackTarget = null
+        // Clear all three weapon slots through the engine — the SM
+        // kills any in-flight aim thread + resets burst state, then
+        // ignores the slot until the user picks a new target.
+        for (let slot = 0; slot < 3; slot++) {
+          engine.setWeaponTarget(u.id, slot, null)
+        }
+        // Mirror Stop's TA semantics — fire StopMoving (kbots / tanks
+        // read it as "halt the walk loop") + TargetCleared (turret-aim
+        // scripts reset their internal aim state).
+        if (u.binding && u.binding.hasScript('StopMoving')) {
+          try { u.binding.start('StopMoving') } catch { /* ignore */ }
+        }
+        if (u.binding && u.binding.hasScript('TargetCleared')) {
+          try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
         }
       }
       return
@@ -17318,14 +17538,95 @@ function refreshSandboxRoster() {
   }
 }
 
-// openSandboxSpawnPicker — opens the existing Open Unit dialog but
-// the confirm button spawns into the sandbox scene instead of
-// opening a model viewer tab.
+// openSandboxSpawnPicker — opens a small side-colour popout anchored
+// at the Spawn button.  When the user picks a side, the existing
+// Open Unit dialog opens with the picked side stashed on
+// window.__sandboxSpawnPendingSide; the confirm handler then
+// passes that side into sandboxView.beginPlacement so the unit
+// spawns with the appropriate team-colour recolour.
+//
+// Lazy-creates the popout on first call; subsequent calls just
+// position + show it.  Click-outside dismisses without choosing.
 function openSandboxSpawnPicker() {
-  // Reuse the model-open dialog; flip a flag so the confirm handler
-  // knows to spawn instead of replace the active tab.
-  window.__sandboxSpawnPending = true
-  openModelPicker()
+  let popout = document.getElementById('sandbox-side-popout')
+  if (!popout) {
+    popout = document.createElement('div')
+    popout.id = 'sandbox-side-popout'
+    popout.style.cssText = [
+      'position: absolute',
+      'z-index: 10000',
+      'background: rgba(20, 24, 32, 0.96)',
+      'border: 1px solid rgba(140, 220, 255, 0.40)',
+      'border-radius: 8px',
+      'padding: 8px',
+      'display: flex',
+      'gap: 6px',
+      'box-shadow: 0 6px 20px rgba(0,0,0,0.45)',
+    ].join('; ')
+    // 8 side swatches plus a label.  Same colours as TEAM_SIDES in
+    // model3d/team-colors.js; inlined here so studio.js doesn't have
+    // to import an ES module at this scope.
+    const SIDES = [
+      { side: 0, key: 'blue',   css: '#3a6cd6', label: 'Blue (ARM)' },
+      { side: 1, key: 'red',    css: '#eb2e29', label: 'Red (CORE)' },
+      { side: 2, key: 'green',  css: '#34c747', label: 'Green' },
+      { side: 3, key: 'yellow', css: '#f3d933', label: 'Yellow' },
+      { side: 4, key: 'purple', css: '#9e4dd9', label: 'Purple' },
+      { side: 5, key: 'cyan',   css: '#34ccea', label: 'Cyan' },
+      { side: 6, key: 'orange', css: '#fa8d2e', label: 'Orange' },
+      { side: 7, key: 'black',  css: '#1a1a1f', label: 'Black' },
+    ]
+    for (const s of SIDES) {
+      const sw = document.createElement('button')
+      sw.type = 'button'
+      sw.className = 'sandbox-side-swatch'
+      sw.dataset.side = String(s.side)
+      sw.title = s.label
+      sw.style.cssText = [
+        'width: 28px', 'height: 28px',
+        'border-radius: 4px',
+        'border: 2px solid rgba(255,255,255,0.15)',
+        'cursor: pointer',
+        'padding: 0',
+        `background: ${s.css}`,
+      ].join('; ')
+      sw.addEventListener('click', () => {
+        window.__sandboxSpawnPendingSide = s.side
+        window.__sandboxSpawnPending = true
+        popout.style.display = 'none'
+        openModelPicker()
+      })
+      popout.appendChild(sw)
+    }
+    document.body.appendChild(popout)
+    // Click-outside dismiss — bound on document with capture so it
+    // fires before the swatch's own click handler when the user
+    // releases on a swatch (the swatch's click runs first because
+    // it's inside the popout subtree, and then capture re-fires
+    // here; we only hide when the target is outside the popout).
+    document.addEventListener('mousedown', (e) => {
+      if (popout.style.display === 'none') return
+      if (popout.contains(e.target)) return
+      // Don't dismiss when re-clicking the spawn button — the same
+      // gesture would toggle off then on if we did.
+      const spawnBtn = document.getElementById('sandbox-rb-spawn')
+      const sandboxBtn = document.getElementById('sandbox-spawn')
+      if (spawnBtn && spawnBtn.contains(e.target)) return
+      if (sandboxBtn && sandboxBtn.contains(e.target)) return
+      popout.style.display = 'none'
+    }, true)
+  }
+  // Anchor under the ribbon Spawn button if it's visible, else under
+  // the floating Sandbox panel's Spawn button.  Pixel-position the
+  // popout right below the button with a small gap.
+  const anchor = document.getElementById('sandbox-rb-spawn')
+    || document.getElementById('sandbox-spawn')
+  if (anchor) {
+    const r = anchor.getBoundingClientRect()
+    popout.style.left = `${Math.round(r.left)}px`
+    popout.style.top  = `${Math.round(r.bottom + 6)}px`
+  }
+  popout.style.display = 'flex'
 }
 
 async function fetchModels() {

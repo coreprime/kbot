@@ -18,12 +18,80 @@
 // clear external state (e.g. the "Tracking" checkbox the Renderer
 // panel exposes) when the user starts driving the camera manually.
 
-export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId }) {
+// onLeftDragStart (optional) — when supplied, plain left-drags
+// (no modifier, no right-button) hand off to the host instead of
+// orbiting the camera.  The host receives the live pointer events
+// directly and decides what the drag means (e.g. Sandbox draws a
+// rectangle-select).  The orbit handler still runs for non-left
+// drags (right-drag pan, shift/ctrl modifiers).
+export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart }) {
   if (!canvas || !camera) return () => {}
   let pointer = null
+  // Host-claimed flag — set when onLeftDragStart returns truthy to
+  // mark this gesture as owned by the host (drag-select).  Skips
+  // the orbit math entirely while still releasing pointer capture
+  // on the matching up/cancel event so a follow-up gesture is
+  // recognised.
+  let hostClaim = false
   const handlers = {}
+  // ── Arrow-key smooth scroll ─────────────────────────────────────
+  //
+  // Arrow presses don't pan instantly — they ADD to a pending screen-
+  // delta accumulator, and a RAF loop ease-outs the accumulator into
+  // panAlongGround() calls per frame.  Repeated presses pile distance
+  // on top of in-flight motion, so the camera glides toward the
+  // user's intended destination without jerky single-frame jumps.
+  // Shift quintuples the per-press delta for fast scrolling.
+  //
+  // Tolerance: when both axes are < TOLERANCE pixels of pending pan
+  // we drop the accumulator and stop the RAF loop entirely — no
+  // sub-pixel chatter, no idle CPU burn.
+  const SCROLL_STEP = 48
+  const SCROLL_SHIFT_MULT = 5
+  const SCROLL_DECAY = 0.18  // fraction of pending applied per frame
+  const SCROLL_TOLERANCE = 0.5
+  const scroll = { dx: 0, dy: 0, raf: 0 }
+  const scrollStep = () => {
+    scroll.raf = 0
+    const ax = Math.abs(scroll.dx)
+    const ay = Math.abs(scroll.dy)
+    if (ax < SCROLL_TOLERANCE && ay < SCROLL_TOLERANCE) {
+      // Below tolerance — discard accumulator + stop the loop.
+      scroll.dx = 0
+      scroll.dy = 0
+      return
+    }
+    // Ease-out: apply DECAY × accumulator, subtract from pending.
+    // The applied delta gets smaller each frame so motion glides to
+    // a halt instead of a hard stop.
+    const stepX = scroll.dx * SCROLL_DECAY
+    const stepY = scroll.dy * SCROLL_DECAY
+    scroll.dx -= stepX
+    scroll.dy -= stepY
+    if (typeof camera.panAlongGround === 'function') {
+      camera.panAlongGround(stepX, stepY)
+    }
+    if (renderer && !renderer.running) renderer.requestRedraw?.()
+    scroll.raf = requestAnimationFrame(scrollStep)
+  }
+  const queueScroll = (dx, dy) => {
+    scroll.dx += dx
+    scroll.dy += dy
+    if (!scroll.raf) scroll.raf = requestAnimationFrame(scrollStep)
+  }
 
   handlers.down = (e) => {
+    // Host first-pass — if onLeftDragStart is supplied AND this is a
+    // plain left-button-no-modifier press, let the host decide.  The
+    // host returns truthy to claim the gesture (sandbox drag-select);
+    // we then skip camera input until pointer-up so the orbit pivot
+    // stays put while the host's rectangle drags.
+    hostClaim = false
+    if (typeof onLeftDragStart === 'function'
+        && e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      try { hostClaim = !!onLeftDragStart(e) } catch { hostClaim = false }
+    }
+    if (hostClaim) return
     canvas.setPointerCapture(e.pointerId)
     pointer = { x: e.clientX, y: e.clientY, button: e.button, lockDxAccum: 0, lockDyAccum: 0 }
     // NOTE: auto-rotate is preserved on pointerdown.  Only pan
@@ -53,15 +121,23 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
         else if (typeof camera.panBy === 'function') camera.panBy(dx, dy)
       } else if (e.shiftKey) {
         if (typeof onUserInteract === 'function') onUserInteract('pan')
-        // Shift = axis-locked pan.  Pick the dominant axis from the
-        // gesture's accumulated motion so a single jittery frame
-        // can't flip the lock back and forth.
+        // Shift = axis-locked GROUND-plane pan.  Picks the dominant
+        // axis from the gesture's accumulated motion so a single
+        // jittery frame can't flip the lock back and forth.  Uses
+        // panAlongGround (NOT panBy) so vertical drags slide the
+        // camera through the scene along its ground-projected
+        // forward, instead of along camera-relative UP — at steep
+        // top-down pitches the latter reads as zoom because UP has a
+        // strong Y component.  In-plane motion gives consistent feel
+        // in both the unit editor (~30° pitch) and the sandbox (~50°
+        // overhead).
         pointer.lockDxAccum += dx
         pointer.lockDyAccum += dy
+        const pan = (typeof camera.panAlongGround === 'function') ? camera.panAlongGround.bind(camera) : camera.panBy.bind(camera)
         if (Math.abs(pointer.lockDxAccum) > Math.abs(pointer.lockDyAccum)) {
-          camera.panBy(dx, 0)
+          pan(dx, 0)
         } else {
-          camera.panBy(0, dy)
+          pan(0, dy)
         }
       } else {
         camera.panBy(dx, dy)
@@ -83,6 +159,7 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
       canvas.releasePointerCapture(e.pointerId)
     }
     pointer = null
+    hostClaim = false
   }
   handlers.cancel = handlers.up
 
@@ -120,6 +197,35 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
       if (renderer && typeof renderer.setAutoRotate === 'function') {
         renderer.setAutoRotate(!renderer.autoRotate)
       }
+      return
+    }
+    // Arrow keys pan the camera along the ground plane — same gesture
+    // as ctrl-drag, just keyboard-driven and SMOOTHED via the scroll
+    // accumulator above.  Each press adds SCROLL_STEP (or ×5 with
+    // Shift) to the pending delta; a RAF loop ease-outs it into
+    // panAlongGround() calls each frame so the camera glides instead
+    // of teleporting.  Auto-rotate is dropped on the FIRST press (the
+    // user is moving the orbit target, not looking around it).
+    //
+    // Up/Down direction follows panAlongGround's drag convention:
+    // dy>0 advances the camera target in its facing direction (the
+    // user's "look forward" expectation), dy<0 retreats.  Earlier
+    // versions of this handler inverted the Y axis — the prior
+    // mapping (Up = dy<0) read as backwards because mouse drag-down
+    // (dy>0) is what visually advances the scene.
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      if (typeof camera.panAlongGround !== 'function') return
+      e.preventDefault()
+      const mult = e.shiftKey ? SCROLL_SHIFT_MULT : 1
+      const step = SCROLL_STEP * mult
+      let dx = 0, dy = 0
+      if (e.key === 'ArrowLeft')  dx = -step
+      if (e.key === 'ArrowRight') dx =  step
+      if (e.key === 'ArrowUp')    dy =  step  // advance forward
+      if (e.key === 'ArrowDown')  dy = -step  // retreat
+      if (renderer && typeof renderer.setAutoRotate === 'function') renderer.setAutoRotate(false)
+      if (typeof onUserInteract === 'function') onUserInteract('pan')
+      queueScroll(dx, dy)
     }
   }
 
@@ -132,7 +238,8 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
   window.addEventListener('keydown', handlers.key)
 
   // Detach returns the resources back to the host so a viewer swap
-  // doesn't leak listeners onto the shared canvas.
+  // doesn't leak listeners onto the shared canvas — including the
+  // arrow-key scroll RAF loop if one is in flight.
   return function detach() {
     canvas.removeEventListener('pointerdown', handlers.down)
     canvas.removeEventListener('pointermove', handlers.move)
@@ -141,5 +248,7 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
     canvas.removeEventListener('wheel', handlers.wheel)
     canvas.removeEventListener('contextmenu', handlers.context)
     window.removeEventListener('keydown', handlers.key)
+    if (scroll.raf) { cancelAnimationFrame(scroll.raf); scroll.raf = 0 }
+    scroll.dx = 0; scroll.dy = 0
   }
 }

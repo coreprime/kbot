@@ -81,6 +81,37 @@ export class Piece {
     }
   }
 
+  // cloneForInstance returns a new Piece that mirrors this piece's
+  // static shape but carries its own animated state.  GPU-backed
+  // immutable data — drawGroups + wireframe + per-texture wireframe
+  // variants — is shared by reference so spawning N units doesn't
+  // re-upload geometry.  ONLY the per-instance fields (move, rotate,
+  // visible, worldMatrix, userData) get fresh copies, so independent
+  // CobBindings can write their own pose without colliding on a
+  // shared tree.  Used by Model.cloneForInstance — see commentary
+  // there for the multi-unit sandbox rationale.
+  cloneForInstance() {
+    const c = new Piece({
+      name: this.name,
+      originX: this.origin[0],
+      originY: this.origin[1],
+      originZ: this.origin[2],
+      selectionPrim: this.selectionPrim,
+      isEmitterPoint: this.isEmitterPoint,
+    })
+    // Static / immutable buffers — shared by reference.  These outer
+    // arrays/objects are never mutated after the loader builds them,
+    // so aliasing is safe and saves memory + GPU re-upload.
+    c.drawGroups = this.drawGroups
+    c.wireframe = this.wireframe
+    if (this.wireframeByTex) c.wireframeByTex = this.wireframeByTex
+    // Recurse on children, preserving parent linkage via addChild.
+    for (const ch of this.children) {
+      c.addChild(ch.cloneForInstance())
+    }
+    return c
+  }
+
   // computeWorldMatrix multiplies parentWorld × local(origin + move +
   // rotate) into this.worldMatrix.  Called each frame by the renderer.
   computeWorldMatrix(parentWorld, scratch) {

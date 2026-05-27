@@ -15,8 +15,13 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { SFX_PROJECTILE_BULLET, SFX_PROJECTILE_SHELL, SFX_PROJECTILE_PLASMA, SFX_PROJECTILE_DGUN, SFX_PROJECTILE_LASER, SFX_PROJECTILE_MISSILE, SFX_SMOKE_WHITE } from './model3d/cob/cob-particles.js'
+import { spawnProjectile, SmokeTrailManager } from './model3d/weapon-driver.js'
 import { ArmedCursor } from './model3d/armed-cursor.js'
+import { shouldForceTarget } from './model3d/force-target.js'
+import { GameEngine } from './model3d/game-engine.js'
+
+const SLOT_INDEX = { primary: 0, secondary: 1, tertiary: 2 }
+const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
 
 const TA_TICK_HZ = 30                       // FBI rates are per-frame at 30 Hz.
 const TA_TURN_FULL = 65536                  // Full turn in TA angle units.
@@ -81,6 +86,12 @@ export class MvControls {
     // pruning keeps the typical count to whatever's actually visible
     // in the scene at that moment.
     this.activeProjectiles = { primary: [], secondary: [], tertiary: [] }
+    // Missile smoke-trail emitter — shared with Sandbox (weapon-driver
+    // SmokeTrailManager).  spawnProjectile registers a trail when it
+    // spawns a missile-kind shot; tick() advances all live trails at
+    // sim-time scaled rate so the wake matches the projectile's
+    // actual flight path through slow-mo / pause.
+    this._smokeTrails = new SmokeTrailManager()
     this.aimState = {
       primary:   slotInit(),
       secondary: slotInit(),
@@ -202,6 +213,10 @@ export class MvControls {
       s.burstShotsLeft = 0
       s.nextBurstShotAtMs = 0
     }
+    // Drop every slot's engine weapon target so the SM stops cycling
+    // reloads against a phantom target.  Done before TargetCleared
+    // so the engine doesn't observe the BOS reset mid-fire.
+    for (const slot of SLOT_NAMES) this._setEngineWeaponTarget(slot, null)
     // Run the unit's BOS target-cleared hook — the standard TA
     // mechanism for resetting per-aim state (aimtype, bAiming,
     // turret rotations).  Pass weapon index 0 as the legacy `which`
@@ -237,6 +252,46 @@ export class MvControls {
     // after the first.  Store handler refs so dispose() can detach.
     this._canvasHandlers = this._canvasHandlers || {}
     this._canvasHandlers.click = (e) => {
+      // Force-target ground (opt-in) — when the user hasn't armed a
+      // slot, a plain left-click on the ground targets the primary
+      // weapon at that point.  No Shift required in the viewer (there's
+      // only one unit on stage, so the click is unambiguous).  Routes
+      // through the same `targets.primary` field the armed-then-click
+      // path uses, so the existing _updateWeapon SM picks it up next
+      // tick — no duplicate code path.  Gated on the persisted opt-in
+      // flag (Settings → Unit Editor → "Force-target ground on click");
+      // when off, plain canvas clicks pass through to the orbit camera
+      // as before.
+      if (!this.armed
+          && shouldForceTarget({ shiftKey: e.shiftKey, requireShift: false })) {
+        const r = canvas.getBoundingClientRect()
+        const cx = (e.clientX - r.left) * (canvas.width / r.width)
+        const cy = (e.clientY - r.top)  * (canvas.height / r.height)
+        const ground = this.viewer.renderer?.canvasToGroundPoint(cx, cy)
+        if (!ground) return
+        this._ensureCreated()
+        const cob = this.viewer.cob
+        if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
+          cob.start('TargetCleared', [0])
+        }
+        // Reset slot 0's aim-state so a fresh AimPrimary thread runs
+        // against the new target — matches the armed-click path so
+        // commandFire-after-fire and laser-after-target-change behave
+        // identically.
+        const s = this.aimState.primary
+        if (s.thread && !s.thread.dead) s.thread.dead = true
+        s.thread = null
+        s.burstShotsLeft = 0
+        s.nextBurstShotAtMs = 0
+        this.targets.primary = [ground[0], ground[1], ground[2]]
+        // Hand the target to the engine SM — engine.setWeaponTarget
+        // drops the prior aim thread + resets burst + runs
+        // TargetCleared, then the per-tick #stepWeapon spawns aim,
+        // cycles reload + burst, and fires on the cadence the weapon
+        // TDF defines.  One source of truth across sandbox + viewer.
+        this._setEngineWeaponTarget('primary', [ground[0], ground[1], ground[2]])
+        return
+      }
       if (!this.armed) return
       // Allow normal canvas drag (orbit) when un-armed; only consume
       // the click when arming is active.
@@ -286,6 +341,11 @@ export class MvControls {
         this._startMoving()
       } else {
         this.targets[slot] = [ground[0], ground[1], ground[2]]
+        // Engine-routed firing — see _setEngineWeaponTarget for the
+        // commentary.  Same target push the force-target-ground path
+        // uses; the engine SM owns reload / burst / commandFire for
+        // every weapon-fire gesture in both views.
+        this._setEngineWeaponTarget(slot, [ground[0], ground[1], ground[2]])
       }
       this.armed = null
       this._refreshButtons()
@@ -322,7 +382,126 @@ export class MvControls {
   // onMetaLoaded is called by the host once the unit's FBI metadata
   // (movement + weapon refs) is in.  Enables / disables buttons
   // based on what the unit actually supports.
-  onMetaLoaded() { this._refreshButtons() }
+  onMetaLoaded() {
+    this._refreshButtons()
+    // Refresh the engine unit's meta ref so the weapon SM picks up
+    // newly-loaded weaponSlots[].  Cheap; no-op when no engine yet.
+    if (this._engineUnit) this._engineUnit.meta = this.viewer.unitMeta
+  }
+
+  // _ensureEngine lazily builds a GameEngine that ADOPTS the viewer's
+  // existing CobUnit + binding (rather than creating a parallel set).
+  // Done once the viewer's COB is alive — the engine then owns the
+  // per-slot weapon SM, the click handlers route through it via
+  // setWeaponTarget(), and a 'fire' event subscriber spawns the
+  // visible projectile via the shared weapon-driver.
+  //
+  // The engine here runs in "viewer-embedded" mode — its tick is
+  // called with skipRuntime/skipMovement/skipSync because the renderer
+  // ticks the binding (which advances the runtime) and MvControls
+  // owns this viewer's movement + altitude + ground walk.  The engine
+  // is along for the ride only to drive the weapon SM + ballistic
+  // aim solver + firing-piece anchor — every weapon-related thing
+  // that used to be duplicated.
+  _ensureEngine() {
+    if (this._engine) return this._engine
+    const cob = this.viewer.cob
+    if (!cob || !cob.unit || !cob.runtime) return null
+    // Share the viewer's runtime so engine.runtime.simTimeMs reads the
+    // same clock the binding's tick advances (otherwise reload + burst
+    // gates would diverge from the rest of the sim).
+    this._engine = new GameEngine({
+      runtime: cob.runtime,
+      gravity: this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function'
+        ? this.viewer.renderer.getGravity() : 80,
+    })
+    this._engineUnit = this._engine.adoptUnit({
+      name: this.viewer.cob?.unit?.name || 'viewer-unit',
+      model: this.viewer.model,
+      cobUnit: cob.unit,
+      binding: cob,
+      meta: this.viewer.unitMeta,
+      x: this.pos.x, z: this.pos.z,
+      headingRad: this.heading,
+    })
+    // Subscribe to 'fire' so each shot spawns a visible projectile.
+    // The engine has already done the heavy lifting before emitting:
+    //   ev.anchor — firing-piece world XYZ (via engine.#firingPieceFor
+    //               which runs QueryX → cobUnit.pieceNames → model)
+    //   ev.target — the SM's aim point (unit pos or static point)
+    //   ev.weapon — the FBI weapon record
+    // So the subscriber is just "hand all that to the shared
+    // weapon-driver, and record the shot for the Weapons panel".
+    // No duplicate firing-piece resolution or ballistic recompute
+    // lives here any more — task #249 consolidated both into the
+    // engine.
+    this._engineSubs = []
+    this._engineSubs.push(this._engine.on('fire', (ev) => {
+      if (!ev.weapon || !ev.weapon.name) return
+      const gravity = (this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function')
+        ? this.viewer.renderer.getGravity() : 80
+      let result = null
+      try {
+        result = spawnProjectile({
+          binding: this.viewer.cob,
+          weapon: ev.weapon,
+          anchor: ev.anchor,
+          target: ev.target,
+          palette: this.viewer.palette,
+          gravity,
+          smokeTrails: this._smokeTrails,
+        })
+      } catch { /* ignore */ }
+      // Push the in-flight shot onto the Weapons panel's per-slot
+      // list so the panel can show what's currently visible in the
+      // scene.  No-op for beams (lifeMs ~200 ms — ticks by quickly).
+      if (result) {
+        const slotKey = SLOT_NAMES[ev.slot]
+        this._recordShot(slotKey, result.anchor, result.velocity, result.lifeMs)
+      }
+    }))
+    return this._engine
+  }
+
+  // _syncEngineUnit pushes the viewer's MvControls-authoritative pos /
+  // heading / meta onto the adopted engine unit so the weapon SM's
+  // ballistic aim solver + firing-piece resolver work off live values.
+  // Called once per tick before engine.tick.  Cheap.
+  _syncEngineUnit() {
+    if (!this._engineUnit) return
+    this._engineUnit.pos.x = this.pos.x
+    this._engineUnit.pos.y = this.alt || 0
+    this._engineUnit.pos.z = this.pos.z
+    this._engineUnit.heading = this.heading
+    this._engineUnit.meta = this.viewer.unitMeta
+  }
+
+  // setSilenced silences this viewer's audio.  Called from
+  // switchToTab on the outgoing tab so backgrounded viewers go quiet
+  // without freezing their sim.  Delegates to the engine which mutes
+  // every adopted unit's AudioPool.
+  setSilenced(s) {
+    if (this._engine && typeof this._engine.setSilenced === 'function') {
+      this._engine.setSilenced(!!s)
+    }
+  }
+
+  // _setEngineWeaponTarget pushes a slot's MvControls target into the
+  // engine SM.  Used by the click handler so the engine starts driving
+  // aim + reload + burst the moment the user picks a target.  Null
+  // clears the slot — same behaviour as engine.clearWeaponTarget.
+  _setEngineWeaponTarget(slotKey, point) {
+    if (!this._ensureEngine()) return
+    const slotIdx = SLOT_INDEX[slotKey]
+    if (slotIdx === undefined) return
+    if (point == null) {
+      this._engine.setWeaponTarget(this._engineUnit.id, slotIdx, null)
+    } else {
+      this._engine.setWeaponTarget(this._engineUnit.id, slotIdx,
+        { point: [point[0], point[1] || 0, point[2]] },
+        { source: 'manual' })
+    }
+  }
 
   // tick is called from the renderer's per-frame callback.  dtMs is
   // wall-clock, scaled by runtime.playbackRate so slow-mo applies.
@@ -336,11 +515,19 @@ export class MvControls {
     const dtSimMs = dtMs * rate
     this._updateMove(dtSec)
     this._updateAltitude(dtSec)
-    this._updateWeapon('primary')
-    this._updateWeapon('secondary')
-    this._updateWeapon('tertiary')
+    // Push current pos / heading / meta into the adopted engine unit
+    // BEFORE ticking it so the weapon SM's ballistic solver + firing-
+    // piece resolver work off fresh values.  Then tick the engine in
+    // viewer-embedded mode (no runtime advance — the renderer's
+    // binding.tick already drove the runtime this frame; no movement
+    // — MvControls owns the viewer's bespoke aircraft/ship/ground
+    // model; no sync — the renderer pushes worldOffset itself).
+    this._syncEngineUnit()
+    if (this._engine) {
+      this._engine.tick(dtMs, { skipRuntime: true, skipMovement: true, skipSync: true })
+    }
     // Drop any projectile whose flight time has elapsed.  Done after
-    // _updateWeapon so a brand-new entry from this tick isn't pruned
+    // the engine tick so a brand-new entry from this tick isn't pruned
     // until at least one tick later.
     this._pruneActiveProjectiles()
     this._updateShipWake(dtSimMs)
@@ -349,7 +536,7 @@ export class MvControls {
     // At 0.01× a slow-flying laser leaves puffs every 4 s wall ≈
     // 40 ms sim, matching what the projectile's slowed velocity
     // actually traces out.
-    this._tickSmokeTrails(dtSimMs)
+    this._smokeTrails.tick(dtSimMs)
     // Hover-preview overlay tracks the camera (which may auto-rotate
     // or be orbited by the user), so the projected screen position
     // refreshes every frame.  Stop-button live-state too.
@@ -406,7 +593,7 @@ export class MvControls {
     // them emitting puffs into the next unit's pool.  No interval
     // handles to clear — trails are ticked from this.tick() and the
     // tick won't run after disposal anyway.
-    if (this._trails) this._trails.length = 0
+    if (this._smokeTrails) this._smokeTrails.clear()
     if (this._previewOverlay) {
       this._previewOverlay.remove()
       this._previewOverlay = null
@@ -923,206 +1110,6 @@ export class MvControls {
     return (t / TA_TURN_FULL) * Math.PI * 2 * TA_TICK_HZ
   }
 
-  // ── Per-frame aim + fire ────────────────────────────────────────
-
-  _updateWeapon(slot) {
-    const target = this.targets[slot]
-    if (!target) return
-    const cob = this.viewer.cob
-    if (!cob) return
-    // Don't drive aim/fire scripts before the unit has been Created.
-    // The runtime is happy to take Aim/Fire calls at any time, but
-    // the COB's static-vars typically aren't initialised until Create
-    // has run — firing pre-Create produces wrong piece queries and
-    // animator stuck-states.  Matches the Controls panel's UI gate
-    // so the runtime + the visible affordance agree.
-    if (cob._lifecycle === 'unborn' || cob._lifecycle === 'creating') return
-    const state = this.aimState[slot]
-    const aimScript = 'Aim' + capitalise(slot)
-    const fireScript = 'Fire' + capitalise(slot)
-    const hasAim = cob.hasScript(aimScript)
-    const hasFire = cob.hasScript(fireScript)
-    // Sim-time clock — at 0.5× playback `now` advances at half wall
-    // rate, so a 2 s reload waits 4 s of wall time but stays 2 s in
-    // sim time.  When the user pauses the runtime, simTimeMs freezes
-    // and the weapon's reload + burst gates freeze with it, matching
-    // the rest of the simulation.
-    const now = cob.runtime.simTimeMs
-    const reloadMs = this._reloadMs(slot)
-    const sinceLastFire = now - (state.lastFireMs ?? -Infinity)
-    const reloadReady = sinceLastFire >= reloadMs
-    // Aim-completion state.  When AimX returns 1, the thread dies
-    // with returnValue=1 — that's our "you may fire" signal.  Units
-    // without an AimX script (aircraft, mostly) get an implicit
-    // "always ready" via hasAim=false.
-    const aimDoneOk = !hasAim || (state.thread && state.thread.dead && state.thread.returnValue === 1)
-    // Stuck-aim detection — if AimX has been running for longer
-    // than 2× reload without dying, the unit's walk animation is
-    // probably wrestling with our turret pieces (PeeWee's walklegs
-    // keeps the upper arms swinging, so AimPrimary's
-    // wait-for-turn on lloarm/luparm never settles).  Treat the
-    // aim as done so the user still sees the weapon discharge —
-    // matches TA's behaviour of firing on the reload cadence even
-    // when the turret isn't perfectly aligned with the target.
-    const aimAgeMs = state.threadStartMs ? (now - state.threadStartMs) : 0
-    const aimStuck = hasAim && state.thread && !state.thread.dead && aimAgeMs > reloadMs * 2
-    // Fire when the reload's elapsed AND we're either aim-ready
-    // or aim has been stuck too long.
-    // Burst-fire support — TDF `burst` declares how many shots per
-    // burst (EMG = 3) and `burstrate` the inter-shot delay (EMG =
-    // 0.1 s).  Reload only starts after the full burst has been
-    // emitted.  burstShotsLeft holds the in-flight burst counter:
-    // 0 = ready to start a new burst (gated on reloadReady),
-    // >0 = mid-burst (gated on the intra-burst timer).
-    const w = this._weaponForSlot(slot)
-    const burstSize = (w && w.burst > 1) ? w.burst : 1
-    const burstGapMs = (w && w.burstRateSec > 0) ? w.burstRateSec * 1000 : 0
-    const inBurst = state.burstShotsLeft > 0
-    const burstReady = inBurst && now >= state.nextBurstShotAtMs
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck)
-    if (startBurst || burstReady) {
-      state.lastFireMs = now
-      if (startBurst) {
-        // Initialise the burst counter to (burstSize - 1) because
-        // we're about to fire shot #1 right now.  Subsequent shots
-        // tick the counter down each pass.
-        state.burstShotsLeft = burstSize - 1
-      } else {
-        state.burstShotsLeft -= 1
-      }
-      // Schedule the next intra-burst shot.  Zero burstGap collapses
-      // to "next tick" which fires every frame (≤ 16 ms) — fine for
-      // weapons that don't bother with the field.
-      state.nextBurstShotAtMs = now + burstGapMs
-      if (hasFire) {
-        // Standard path: start the Fire* script — the cob-binding's
-        // start() hook auto-injects a muzzle burst at the flare
-        // piece so the user sees the shot.
-        cob.start(fireScript)
-      } else if (cob._emitFireBurst) {
-        // Aircraft fallback — the BOS ships QueryPrimary (returning
-        // the projectile spawn piece) but no Fire script, since the
-        // game engine auto-fires aircraft.  Synthesise the visual
-        // by hand: emit a muzzle flash at the flare/query piece so
-        // the studio user sees the weapon "fire" even though no
-        // script ran.  Reuses the binding's existing burst helper.
-        cob._emitFireBurst(fireScript)
-      }
-      // Travelling projectile + weapon sound — spawned for every
-      // shot in the burst regardless of which path above ran, so
-      // the user sees a shell/bullet/plasma bolt fly from the firing
-      // piece toward the target and hears the weapon's TDF-defined
-      // soundstart.
-      this._spawnProjectile(slot, target)
-      // Kill the stale aim thread only on the FIRST shot of a burst
-      // — keeping it alive across the burst lets the turret track
-      // the target while shots are still cycling out.  The reload
-      // gate above only fires once per burst, so subsequent burst
-      // shots don't trigger a new aim thread anyway.
-      if (startBurst) {
-        if (state.thread && !state.thread.dead) state.thread.dead = true
-        state.thread = null
-        state.threadStartMs = null
-      }
-      // commandfire=1 (d-gun, etc.) — TA's "fire once on explicit
-      // command" flag.  After the burst's first shot lands, drop the
-      // target so the slot doesn't re-fire on the next reload.  The
-      // user re-arms + clicks Tertiary again for a second shot, which
-      // matches the in-game D-key behaviour.  Burst-mid shots still
-      // run (matters when a hypothetical commandfire weapon ships
-      // burst>1; vanilla d-gun is single-shot).
-      if (w && w.commandFire && state.burstShotsLeft === 0) {
-        this.targets[slot] = null
-      }
-    }
-    // Always keep an aim thread in flight so the turret tracks the
-    // target — without this, after firing we'd have no aim running
-    // and the turret would just sit at its last position.  Spawn a
-    // fresh one if none alive (covers both the just-fired case and
-    // the "AimPrimary returned 1 mid-tick" case).
-    if (hasAim && (!state.thread || state.thread.dead)) {
-      const { heading, pitch } = this._aimAnglesFor(target, slot)
-      state.thread = cob.unit.startThread(aimScript, [heading | 0, pitch | 0])
-      state.threadStartMs = now
-    } else if (!hasAim && !state.thread) {
-      // No aim script — synthesise a "always ready" pseudo-thread.
-      state.thread = { dead: true, returnValue: 1 }
-    }
-  }
-
-  _aimAnglesFor(target, slot) {
-    // Compute the turret-local heading + pitch that points at `target`.
-    //
-    // Coordinate-system bookkeeping (the part that bit me before):
-    //   worldHeading + this.heading are angles measured CCW from +Z
-    //     (the renderer / OpenGL right-handed convention).
-    //   `rel` = worldHeading - this.heading = the angle the body
-    //     would need to rotate CCW to face the target.
-    //   TA's AimWeapon, however, expects CW-positive heading from
-    //     the body's forward (left-handed TA convention).  So `rel`
-    //     and the TA value differ in SIGN.
-    //   The cob-binding compensates with `piece.rotate[1] = -rot[1]`
-    //     when it pushes the animator's value into the render piece,
-    //     which means we negate the TA value here so the
-    //     animator → binding → renderer chain composes to land the
-    //     turret on the target.  Without the negation the turret
-    //     ends up mirrored across the body's forward axis.
-    const dx = target[0] - this.pos.x
-    const dz = target[2] - this.pos.z
-    const horizDist = Math.hypot(dx, dz)
-    const worldHeading = Math.atan2(dx, dz)
-    let rel = worldHeading - this.heading
-    while (rel >  Math.PI) rel -= Math.PI * 2
-    while (rel < -Math.PI) rel += Math.PI * 2
-    const headingTA = -(rel / (Math.PI * 2)) * TA_TURN_FULL
-    // Pitch — three flavours:
-    //   * ballistic weapon (FBI weapon.ballistic = true):  solve the
-    //     projectile-motion quadratic for the low-arc launch angle so
-    //     the shell drops onto the target after the right time of flight.
-    //     Gravity comes from the active environment (Lunar gives a
-    //     visibly flatter arc).  Out-of-range targets fall back to 45°.
-    //   * non-ballistic (laser / missile):  aim along the direct line
-    //     of sight, atan2(verticalOffset, horizontalDist).
-    //   * no slot info or no weapon data:  pitch=0 (treat as
-    //     line-of-sight aimed horizontally — preserves the old
-    //     studio-default behaviour for ad-hoc Aim calls).
-    let pitchRad = 0
-    const w = this._weaponForSlot(slot)
-    // `target[1]` is the world-Y of the resolved click (water/ground).
-    // The unit itself can be at altitude (aircraft), so subtract its
-    // current alt to get the vertical delta the projectile must cover.
-    // 2-element move targets (no Y) fall back to ground = 0.
-    const targetY = target.length >= 3 ? target[1] : 0
-    const vDelta = targetY - (this.alt || 0)
-    if (horizDist > 0.0001 && w && w.ballistic && w.velocityWU > 0) {
-      const v = w.velocityWU
-      const g = this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function'
-        ? this.viewer.renderer.getGravity()
-        : 80
-      // Standard ballistic-launch-angle quadratic:
-      //   tan(θ) = ( v² ± √( v⁴ - g(g·d² + 2·h·v²) ) ) / (g·d)
-      // Take the MINUS root for the low / direct-fire arc (the PLUS root
-      // is the high / mortar arc — also valid but visually less
-      // representative of what TA cannons do).
-      const v2 = v * v
-      const d  = horizDist
-      const disc = v2 * v2 - g * (g * d * d + 2 * vDelta * v2)
-      if (disc >= 0) {
-        const root = Math.sqrt(disc)
-        const tanLow = (v2 - root) / (g * d)
-        pitchRad = Math.atan(tanLow)
-      } else {
-        // Target out of range — pin the barrel at 45°, the maximum-
-        // range launch angle, so the user at least sees the cannon
-        // try.  Real TA refuses to fire in this case.
-        pitchRad = Math.PI / 4
-      }
-    } else if (horizDist > 0.0001) {
-      pitchRad = Math.atan2(vDelta, horizDist)
-    }
-    const pitchTA = (pitchRad / (Math.PI * 2)) * TA_TURN_FULL
-    return { heading: headingTA, pitch: pitchTA }
-  }
 
   // _recordShot pushes a fresh projectile onto the slot's active-
   // projectiles list for the Weapons panel.  lifeMs is the expected
@@ -1165,376 +1152,6 @@ export class MvControls {
       }
       list.length = writeIdx
     }
-  }
-
-  // _spawnProjectile spawns a travelling particle from the slot's
-  // firing piece (QueryPrimary/Secondary/Tertiary on the model)
-  // heading toward `target` at the FBI-defined `weaponvelocity`.
-  // Ballistic weapons get gravity from the active environment so
-  // shells arc visibly; non-ballistic travel in a straight line.
-  // Lifetime is sized so the projectile expires at roughly its
-  // weapon range — matches TA's behaviour of "fire and forget"
-  // ammo that disappears once it would have flown past max range.
-  // Also plays the weapon's TDF soundstart (cannhvy1 for ARM_BATS
-  // etc.) when defined.
-  _spawnProjectile(slot, target) {
-    const mv = this.viewer
-    const cob = mv.cob
-    if (!cob || !cob.particles || !mv.model) return
-    const w = this._weaponForSlot(slot)
-    if (!w) return
-    // Resolve the firing piece (flare / barrel / firept).  Reuse
-    // the same name-list cob-binding._emitFireBurst uses so the
-    // bullet exits exactly where the muzzle flash lights up.
-    const firePiece = this._firingPieceFor(slot)
-    const anchor = this._pieceWorldPos(firePiece)
-    if (!anchor) return
-    // Aim vector: target − firingPiece, normalised.  Non-ballistic
-    // weapons fly straight at this; ballistic ones launch at the
-    // pitch the solver computed for the AimX call so the trajectory
-    // actually intersects the target.
-    const dx = target[0] - anchor[0]
-    const dy = (target.length >= 3 ? target[1] : 0) - anchor[1]
-    const dz = target[2] - anchor[2]
-    const horiz = Math.hypot(dx, dz)
-    if (horiz < 0.001) return
-    // Beam weapons (lasers, the d-gun's TDF also sets it but we
-    // routed dgun separately above for the giant green orb).  Real
-    // TA draws a brief coloured line from muzzle to target — we fake
-    // it by lighting up a chain of static pulse particles along the
-    // line, which read as a continuous beam for the few frames they
-    // live.  No travel time, no gravity, no projectile sound past
-    // the start.  Skip the standard projectile path.
-    if (w.beamWeapon && !/disintegrator|dgun|d_gun/i.test(w.name)) {
-      // Beam weapons don't have a travelling projectile, so synthesise
-      // a "velocity" along the beam axis at the weapon's nominal
-      // weaponvelocity for the panel's speed read-out — even instant
-      // beams come from a weapon definition with a speed value.
-      const tgt = [target[0], (target.length >= 3 ? target[1] : 0), target[2]]
-      const bdx = tgt[0] - anchor[0], bdy = tgt[1] - anchor[1], bdz = tgt[2] - anchor[2]
-      const blen = Math.hypot(bdx, bdy, bdz) || 1
-      const bv = +w.velocityWU || 0
-      // Beam weapons are instant-hit; the projectile-list entry
-      // exists just long enough for the user to see the discharge
-      // tick by, so use a short fixed lifeMs rather than range/vel.
-      this._recordShot(slot, anchor, [bdx / blen * bv, bdy / blen * bv, bdz / blen * bv], 200)
-      this._spawnLaserBeam(w, anchor, tgt)
-      if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
-      return
-    }
-    const v = +w.velocityWU || 200
-    let vx, vy, vz
-    if (w.ballistic) {
-      // Re-run the ballistic solver to keep the projectile + the
-      // turret in agreement.  Pitch comes from the same launch-
-      // angle formula used in _aimAnglesFor (in radians here, not
-      // TA-angle units).
-      const g = (mv.renderer && typeof mv.renderer.getGravity === 'function')
-        ? mv.renderer.getGravity() : 80
-      const v2 = v * v
-      const disc = v2 * v2 - g * (g * horiz * horiz + 2 * dy * v2)
-      let pitchRad
-      if (disc >= 0) {
-        pitchRad = Math.atan((v2 - Math.sqrt(disc)) / (g * horiz))
-      } else {
-        pitchRad = Math.PI / 4  // out of range, max-range launch
-      }
-      const horizDir = [dx / horiz, dz / horiz]
-      const cosP = Math.cos(pitchRad)
-      vx = horizDir[0] * v * cosP
-      vz = horizDir[1] * v * cosP
-      vy = v * Math.sin(pitchRad)
-    } else {
-      const len = Math.hypot(dx, dy, dz)
-      vx = (dx / len) * v
-      vy = (dy / len) * v
-      vz = (dz / len) * v
-    }
-    // Lifetime: range / velocity gives the time-of-flight at top
-    // speed.  Multiply by 1.5 for ballistic arcs (which travel a
-    // longer path along the arc) so the shell doesn't vanish
-    // mid-flight on a long shot.  Clamp the floor so super-fast
-    // weapons don't blink out.
-    const range = +w.rangeWU || (v * 3)
-    const lifeFactor = w.ballistic ? 1.5 : 1.0
-    const lifeMs = Math.max(300, (range / v) * 1000 * lifeFactor)
-    // Pick a visual kind for the projectile.  Heuristics on weapon
-    // name + ballistic flag — TA has dozens of weapons and we
-    // don't ship per-weapon visuals, so this groups them into a
-    // handful of distinct looks (cannon shells, kbot bullets,
-    // missiles + plasma).  Caller can extend later.
-    let kind = SFX_PROJECTILE_BULLET
-    // D-Gun first — disintegrator / dgun names map to the big green
-    // orb regardless of any laser/plasma keyword that might appear in
-    // a variant's name.  Checked BEFORE the laser/plasma fallback so
-    // a hypothetical "PLASMA_DISINTEGRATOR" still reads as the d-gun.
-    // Missile next — TDF's `smoketrail` / `selfprop` flags + the
-    // `model=missile|rocket` name are the canonical way TA marks a
-    // self-propelled smoke-trailing projectile.  Picking these BEFORE
-    // the ballistic check lets the AAS missile (ballistic in the
-    // tracking sense, but not arc-cannon ballistic) take the missile
-    // visual instead of the artillery-shell one.
-    if (/disintegrator|dgun|d_gun/i.test(w.name)) kind = SFX_PROJECTILE_DGUN
-    else if (w.smokeTrail || w.selfProp || /missile|rocket/i.test(w.model || '')) kind = SFX_PROJECTILE_MISSILE
-    else if (w.ballistic) kind = SFX_PROJECTILE_SHELL
-    else if (/laser|plasma|emg|emp|beam/i.test(w.name)) kind = SFX_PROJECTILE_PLASMA
-    const emitOpts = {
-      velocity: [vx, vy, vz],
-      gravity: w.ballistic ? (mv.renderer?.getGravity?.() || 80) : 0,
-      lifeMs,
-      noFade: true,
-    }
-    cob.particles.emit(kind, anchor, emitOpts)
-    // Record this shot in the slot's active-projectiles list.  lifeMs
-    // matches the particle's actual lifetime so the panel entry is
-    // pruned exactly when the projectile expires (impact / max range).
-    this._recordShot(slot, anchor, [vx, vy, vz], lifeMs)
-    // Smoke trail — for missile-class projectiles, register a tick
-    // hook that drops a smoke puff at the projectile's CURRENT world
-    // position every ~40 ms while it's alive, so the user sees a
-    // visible wake instead of a lone dot.  We don't track the actual
-    // particle slot (the pool compacts dead entries, invalidating
-    // indexes); instead the hook recomputes the position from launch
-    // + velocity + elapsed time and decays itself when the projectile
-    // would have expired.
-    if (kind === SFX_PROJECTILE_MISSILE) {
-      this._scheduleSmokeTrail(anchor, [vx, vy, vz], emitOpts.gravity, lifeMs)
-    }
-    // Weapon-start sound.  Falls back gracefully via /api/studio/sound
-    // — if the .wav isn't in the VFS the audio fetch 404s silently
-    // and we just play nothing for that shot.
-    if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
-  }
-
-  // _spawnLaserBeam draws a single-frame beam from `anchor` to
-  // `target` by emitting a chain of bright pulse particles along the
-  // line.  TDF `beamweapon=1` is the canonical "instant-hit" flag —
-  // real TA renders a coloured beam visible for one or two frames,
-  // never a travelling sprite.  Our pool doesn't render lines, so we
-  // approximate with ~one particle per 8 wu of beam length (capped),
-  // each living ~160 ms so the whole streak flashes briefly then
-  // fades.  The tint comes from the TDF `color` palette index (or
-  // `color2` as a fallback) resolved through the model viewer's
-  // palette; weapons without a palette ref fall back to a default
-  // yellow-green pulse that's clearly readable on any backdrop.
-  _spawnLaserBeam(w, anchor, target) {
-    const cob = this.viewer.cob
-    if (!cob || !cob.particles) return
-    const dx = target[0] - anchor[0]
-    const dy = target[1] - anchor[1]
-    const dz = target[2] - anchor[2]
-    const len = Math.hypot(dx, dy, dz)
-    if (len < 0.001) return
-    const color = this._laserColor(w)
-    // One pulse per ~4 wu — with the 28-wu pulse size each blob
-    // overlaps its neighbour by ~85%, so the chain reads as a single
-    // wide stripe rather than discrete dots.  Cap at 120 to keep the
-    // pool sane on a max-range shot (e.g. range 480 → 120 pulses).
-    const segs = Math.max(16, Math.min(120, Math.round(len / 4)))
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs
-      const p = [anchor[0] + dx * t, anchor[1] + dy * t, anchor[2] + dz * t]
-      cob.particles.emit(SFX_PROJECTILE_LASER, p, {
-        color,
-        velocity: [0, 0, 0],
-        gravity: 0,
-        noFade: false,
-      })
-    }
-  }
-
-  // _laserColor returns the laser tint [r,g,b,a] in 0..1 floats from
-  // the weapon's TDF palette indices.  TA's `color=` is the brightest
-  // shade (used for the beam core); `color2=` is the darker rim — we
-  // just use `color` since our beam is a single colour.  The model
-  // viewer's palette is loaded once on first model load; if it isn't
-  // ready yet we fall back to a TA-green default so the beam still
-  // appears (cosmetic-only, no functional regression).
-  _laserColor(w) {
-    const pal = this.viewer.palette
-    const idx = (w.colorIdx > 0) ? w.colorIdx : (w.color2Idx > 0 ? w.color2Idx : 0)
-    if (pal && idx > 0) {
-      const c = pal.colorFor(idx)
-      // Boost above 1.0 so the additive blend produces the bright
-      // saturated beam look TA's hand-drawn sprites give.  Capped at
-      // 2.0 to stay readable when overlapping multiple shots.
-      return [Math.min(2, c[0] * 1.8), Math.min(2, c[1] * 1.8), Math.min(2, c[2] * 1.8), 1]
-    }
-    return [0.45, 1.80, 0.45, 1]
-  }
-
-  // _scheduleSmokeTrail registers a smoke-trail emitter for a
-  // projectile.  Each frame, _tickSmokeTrails() advances the trail's
-  // sim-time clock and drops puffs at 40 ms sim-intervals — at 0.1×
-  // playback that's 400 ms wall, matching the projectile's slowed
-  // velocity so puffs trace the actual flight path.  Used for
-  // missiles (TDF `smoketrail=1`).  Stored on `this._trails` so
-  // dispose() can drop them when the unit unloads.
-  //
-  // Was an interval-driven emitter; moved to per-frame so trail
-  // cadence scales with runtime.playbackRate (slow-mo doesn't pile
-  // puffs into a tight clump at the projectile's slow position).
-  _scheduleSmokeTrail(anchor, velocity, gravity, lifeMs) {
-    const cob = this.viewer.cob
-    if (!cob || !cob.particles) return
-    if (!this._trails) this._trails = []
-    this._trails.push({
-      anchor:   [anchor[0], anchor[1], anchor[2]],
-      velocity: [velocity[0], velocity[1], velocity[2]],
-      gravity,
-      lifeMs,
-      ageMs: 0,
-      nextEmitMs: 0,
-    })
-  }
-
-  // _tickSmokeTrails advances every live trail by dtSimMs and emits
-  // puffs at 40 ms sim-intervals.  Trails older than their declared
-  // lifeMs are pruned in-place.  Called from the per-frame tick.
-  _tickSmokeTrails(dtSimMs) {
-    if (!this._trails || !this._trails.length) return
-    const cob = this.viewer.cob
-    if (!cob || !cob.particles) return
-    const INTERVAL_MS = 40
-    let writeIdx = 0
-    for (let i = 0; i < this._trails.length; i++) {
-      const t = this._trails[i]
-      t.ageMs += dtSimMs
-      if (t.ageMs >= t.lifeMs) continue  // drop expired
-      while (t.ageMs >= t.nextEmitMs) {
-        t.nextEmitMs += INTERVAL_MS
-        const elapsed = Math.min(t.ageMs, t.lifeMs) / 1000
-        const px = t.anchor[0] + t.velocity[0] * elapsed
-        const py = t.anchor[1] + t.velocity[1] * elapsed - 0.5 * t.gravity * elapsed * elapsed
-        const pz = t.anchor[2] + t.velocity[2] * elapsed
-        cob.particles.emit(SFX_SMOKE_WHITE, [px, py, pz], {
-          size: 4,
-          lifeMs: 800,
-          riseSpeed: 1.5,
-          drift: 0.8,
-        })
-      }
-      this._trails[writeIdx++] = t
-    }
-    this._trails.length = writeIdx
-  }
-
-  // _firingPieceFor picks the model piece a slot's projectile should
-  // exit from.  PRIMARY path: invoke the unit's QueryX script in
-  // synchronous "query mode" — runQuery executes the script start-
-  // to-finish in the current frame (no sleep / wait / turn allowed)
-  // and returns whatever piece index ended up in locals[0], which
-  // is the BOS-convention out-parameter slot for Query scripts:
-  //
-  //     QueryPrimary(piecenum) { piecenum = rfire; }
-  //
-  // PeeWee toggles between rfire/lfire via the `gun` static var, so
-  // each shot's query call alternates barrels exactly like the in-
-  // game engine does.  Fallback (no QueryX, or query refused to run
-  // because it tried to yield) is the legacy name-heuristic scan.
-  _firingPieceFor(slot) {
-    const model = this.viewer.model
-    const cob = this.viewer.cob
-    if (!model) return null
-    // Synchronous QueryX — single source of truth for the firing
-    // piece when the unit ships one (almost every TA weapon-bearing
-    // unit does).  runQuery returns null when the unit has no such
-    // script OR when the script can't resolve in one tick — fall
-    // through to the name heuristics in either case.
-    const queryName = 'Query' + slot.charAt(0).toUpperCase() + slot.slice(1)
-    if (cob && cob.unit && cob.hasScript(queryName)) {
-      // Pass a single 0-arg so the script's `piecenum` parameter
-      // (always declared as arg 0 in TA BOS) gets a stable starting
-      // value.  Whatever the script writes to it propagates back
-      // through locals[0].
-      const pieceIdx = cob.unit.runQuery(queryName, [0])
-      // pieceIdx indexes the COB header's piece-name table (the
-      // order pieces are declared in the BOS `piece` statement) —
-      // NOT the 3DO DFS-flat order.  PeeWee's COB declares
-      // torso,ruparm,luparm,rfire,lfire,rloarm,lloarm so rfire=3,
-      // but the 3DO DFS flat[3] is rleg.  Resolve the index through
-      // the COB piece-name table, then look the piece up on the
-      // model by name so renderer + COB stay in sync.
-      const names = cob.unit.pieceNames || []
-      if (pieceIdx != null && pieceIdx >= 0 && pieceIdx < names.length) {
-        const p = model.findPiece(names[pieceIdx])
-        if (p) return p
-      }
-    }
-    // Fallback name-heuristic (used by units without a QueryX or
-    // when a query script tried to yield).  Same logic the muzzle
-    // burst helper uses so the projectile + flash share an anchor.
-    const idx = { primary: 1, secondary: 2, tertiary: 3 }[slot] || 1
-    const exact = (idx === 1)
-      ? ['flare', 'flare1', 'rfire', 'rfirept', 'firept1', 'muzzle', 'muzzle1', 'barrel']
-      : (idx === 2)
-        ? ['flare2', 'lfire', 'lfirept', 'firept2', 'muzzle2', 'barrel2']
-        : [`flare${idx}`, `firept${idx}`, `muzzle${idx}`, `barrel${idx}`]
-    for (const name of exact) {
-      const p = model.findPiece(name)
-      if (p) return p
-    }
-    const re = (idx === 1)
-      ? /^(flare1?|rfire|firept1|muzzl(e|e1)|barrel1?)/i
-      : (idx === 2)
-        ? /^(flare2|lfire|firept2|muzzle2|barrel2)/i
-        : new RegExp(`^(flare${idx}|firept${idx}|muzzle${idx}|barrel${idx})`, 'i')
-    const m = model.flat.find((p) => re.test(p.name))
-    if (m) return m
-    return model.flat.find((p) => /flare|firept|muzzl|fire/i.test(p.name)) || null
-  }
-
-  // _pieceWorldPos extracts the world-space (post-COB-anim) position
-  // of a piece by reading the translation column of its worldMatrix.
-  // computeWorldMatrix is called on every render frame by the
-  // hover-highlight + reflection passes, so by the time this fires
-  // the matrix is fresh.  Falls back to the unit's own world XYZ
-  // when the piece is null / has no world matrix yet.
-  _pieceWorldPos(piece) {
-    if (piece && piece.worldMatrix) {
-      const m = piece.worldMatrix
-      return [m[12], m[13], m[14]]
-    }
-    return [this.pos.x, this.alt, this.pos.z]
-  }
-
-  // _playWeaponSound routes a weapon's per-shot sound through the
-  // central AudioPool.  Source pos is the muzzle anchor (firing
-  // piece world XYZ) — captured at fire time so the Audio inspector
-  // panel can show the discharge location even after the projectile
-  // moves on.  weaponName is the FBI section key for grouping rows.
-  _playWeaponSound(stem, weaponName, anchor) {
-    if (!stem) return
-    const pool = this.viewer.cob && this.viewer.cob.audio
-    if (!pool) return
-    pool.play(stem, {
-      vol: 0.7,
-      kind: 'weapon-fire',
-      source: weaponName ? `${weaponName}: fire` : 'Weapon fire',
-      pos: anchor,
-    })
-  }
-
-  // _weaponForSlot returns the FBI weapon record for a slot string.
-  // Used by the aim solver to decide whether to compute a ballistic
-  // launch angle.  Returns null when the FBI hasn't loaded yet or
-  // the slot has no weapon.
-  _weaponForSlot(slot) {
-    const m = this.viewer.unitMeta
-    if (!m || !m.weapons) return null
-    const idx = { primary: 0, secondary: 1, tertiary: 2 }[slot]
-    if (idx === undefined) return null
-    const w = m.weapons[idx]
-    return (w && w.name) ? w : null
-  }
-
-  _reloadMs(slot) {
-    const m = this.viewer.unitMeta
-    if (!m || !m.weapons) return 1500
-    const idx = { primary: 0, secondary: 1, tertiary: 2 }[slot]
-    const w = m.weapons[idx]
-    if (!w || !w.reloadSec) return 1500
-    return Math.max(100, w.reloadSec * 1000)
   }
 
   // ── Button state refresh ────────────────────────────────────────
@@ -1632,5 +1249,3 @@ export class MvControls {
     img.style.top  = (rect.top  + screen.y) + 'px'
   }
 }
-
-function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1) }

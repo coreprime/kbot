@@ -95,6 +95,89 @@ export function playWeaponSound({ binding, weapon, anchor }) {
   })
 }
 
+// SmokeTrailManager owns the per-frame "drop a puff at the missile's
+// current position every 40 ms of sim-time" emitter.  Both the
+// single-unit viewer and the multi-unit Sandbox need this, and the
+// math is non-trivial enough (recompute the projectile's parametric
+// position from launch + velocity + gravity·t²/2 because the pool
+// compacts dead slots and we can't track an index) that having two
+// copies invited drift.  One implementation, both views import it.
+//
+// Usage:
+//   const trails = new SmokeTrailManager()
+//   // when a missile fires (typically from a 'fire' event subscriber):
+//   trails.schedule(binding, anchor, velocity, gravity, lifeMs)
+//   // every frame, with sim-time scaled dtMs (so slow-mo + pause work):
+//   trails.tick(dtSimMs)
+//   // on view dispose:
+//   trails.clear()
+//
+// Per-frame ticking lets the trail cadence scale with playback rate
+// — at 0.1× sim a slow missile leaves puffs every 400 ms wall ≈
+// 40 ms sim, matching what its slowed velocity actually traces.
+export class SmokeTrailManager {
+  constructor() {
+    this._trails = []
+  }
+
+  // schedule registers a new missile trail.  Captures the launch
+  // anchor + velocity + gravity so puffs can be re-derived from
+  // (anchor + velocity·t - ½·gravity·t²) without needing a live ref
+  // to the projectile particle (which the pool may compact away).
+  // Binding ref is held weakly via the trail record — when the unit
+  // disposes, the binding's particle pool stops accepting emits and
+  // the trail effectively becomes a no-op until it expires.
+  schedule(binding, anchor, velocity, gravity, lifeMs) {
+    if (!binding || !binding.particles) return
+    this._trails.push({
+      binding,
+      anchor:   [anchor[0], anchor[1], anchor[2]],
+      velocity: [velocity[0], velocity[1], velocity[2]],
+      gravity:  gravity || 0,
+      lifeMs:   Math.max(50, lifeMs || 0),
+      ageMs: 0,
+      nextEmitMs: 0,
+    })
+  }
+
+  // tick advances every live trail by dtSimMs and drops puffs at
+  // 40 ms sim-intervals.  Trails older than their declared lifeMs
+  // are pruned in-place (the projectile is past its max range or
+  // would have hit by now).
+  tick(dtSimMs) {
+    if (!this._trails.length) return
+    const INTERVAL_MS = 40
+    let writeIdx = 0
+    for (let i = 0; i < this._trails.length; i++) {
+      const t = this._trails[i]
+      t.ageMs += dtSimMs
+      if (t.ageMs >= t.lifeMs) continue
+      const b = t.binding
+      if (!b || !b.particles) continue
+      while (t.ageMs >= t.nextEmitMs) {
+        t.nextEmitMs += INTERVAL_MS
+        const elapsed = Math.min(t.ageMs, t.lifeMs) / 1000
+        const px = t.anchor[0] + t.velocity[0] * elapsed
+        const py = t.anchor[1] + t.velocity[1] * elapsed - 0.5 * t.gravity * elapsed * elapsed
+        const pz = t.anchor[2] + t.velocity[2] * elapsed
+        b.particles.emit(SFX_SMOKE_WHITE, [px, py, pz], {
+          size: 4,
+          lifeMs: 800,
+          riseSpeed: 1.5,
+          drift: 0.8,
+        })
+      }
+      this._trails[writeIdx++] = t
+    }
+    this._trails.length = writeIdx
+  }
+
+  // clear drops every in-flight trail.  Called on view dispose so a
+  // re-open doesn't inherit stale missile wakes from the previous
+  // session.
+  clear() { this._trails.length = 0 }
+}
+
 // spawnProjectile emits a TA-style projectile from `anchor` toward
 // `target` at the weapon's FBI velocity.  Handles three categories:
 //
@@ -108,12 +191,16 @@ export function playWeaponSound({ binding, weapon, anchor }) {
 //
 // Common to non-beam paths: lifeMs sized to (range / velocity) ×
 // arc-factor so the projectile expires roughly at the target.
-// Smoke trails for missile-class projectiles are NOT scheduled here
-// — that needs a per-frame tick which only the host can drive — but
-// the caller can detect SFX_PROJECTILE_MISSILE and wire its own
-// trail emitter.  Returns the kind + lifeMs + velocity vector so the
-// caller can chain follow-up effects.
-export function spawnProjectile({ binding, weapon, anchor, target, palette, gravity = 80 }) {
+//
+// When opts.smokeTrails (a SmokeTrailManager) is supplied AND the
+// chosen visual kind is SFX_PROJECTILE_MISSILE, the trail is
+// scheduled inline — saves callers from duplicating the
+// "if (result.kind === MISSILE) trails.schedule(...)" dance and
+// keeps the missile-vs-bullet decision behind a single classifier.
+//
+// Returns { kind, lifeMs, velocity, anchor } so callers can chain
+// follow-up effects (e.g. the Weapons-panel projectile recorder).
+export function spawnProjectile({ binding, weapon, anchor, target, palette, gravity = 80, smokeTrails = null }) {
   if (!binding || !binding.particles || !weapon) return null
   const dx = target[0] - anchor[0]
   const dy = (target.length >= 3 ? target[1] : 0) - anchor[1]
@@ -173,6 +260,15 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   }
   binding.particles.emit(kind, anchor, emitOpts)
   playWeaponSound({ binding, weapon, anchor })
+  // Missiles trail smoke along their flight path.  Caller passes a
+  // SmokeTrailManager via opts.smokeTrails when it wants this — the
+  // viewer's MvControls holds one for the active unit; the Sandbox
+  // holds one shared across every spawned unit's bindings.  No-ops
+  // cleanly when the manager isn't supplied or the kind isn't a
+  // missile.
+  if (smokeTrails && kind === SFX_PROJECTILE_MISSILE) {
+    smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs)
+  }
   return { kind, lifeMs, velocity: [vx, vy, vz], anchor: [anchor[0], anchor[1], anchor[2]] }
 }
 

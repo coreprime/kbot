@@ -327,18 +327,25 @@ export class CobBinding {
     }
     let anchor = [0, 0, 0]
     if (piece && piece.worldMatrix) {
+      // piece.worldMatrix is already in WORLD space — the renderer
+      // composes the unit-transform into its _modelMatrix per-entity
+      // before walking the piece tree, so worldMatrix[12..14] is the
+      // piece's world position with the unit transform already baked
+      // in.  Adding `worldOffset` here would double the unit pos in
+      // sandbox (where worldOffset is non-zero), making muzzle flashes
+      // appear at 2× the firing unit's world coords.  Single-unit
+      // viewer renders at origin so the old +worldOffset was a no-op;
+      // sandbox is where the bug showed up.
       const wm = piece.worldMatrix
       anchor = [wm[12], wm[13], wm[14]]
-    }
-    // Translate the model-local anchor into world space.  Single-unit
-    // hosts render at world origin so worldOffset is {0,0,0} and this
-    // is a no-op.  Sandbox sets worldOffset per-unit each tick so the
-    // muzzle flash lands at the firing piece's actual world position,
-    // not at the world origin shared by every unit's model-local
-    // frame.
-    const wo = this.worldOffset
-    if (wo && (wo.x || wo.y || wo.z)) {
-      anchor = [anchor[0] + wo.x, anchor[1] + wo.y, anchor[2] + wo.z]
+    } else {
+      // No piece resolved — fall back to the unit's worldOffset as
+      // the spawn anchor.  Reaches here for units whose model has no
+      // flare / firept / muzzle piece (e.g. weaponless support
+      // structures).  worldOffset IS the unit's world position, set
+      // per-tick by the engine.
+      const wo = this.worldOffset
+      if (wo) anchor = [wo.x, wo.y, wo.z]
     }
     this.particles.emit(4 /* muzzle flash */, anchor)
     this._emitCluster(3 /* spark */, anchor, 6, { spread: 1.2 })
@@ -572,17 +579,19 @@ export class CobBinding {
     const piece = this._cobToPiece.get(pieceIdx)
     const wo = this.worldOffset || { x: 0, y: 0, z: 0 }
     if (!piece) return [wo.x, wo.y, wo.z]
-    // The renderer recomputes worldMatrix on every frame; we just
-    // read the translation column for the anchor.  Slightly stale
-    // (last frame's transform) but the particle lifetime is so
-    // long compared to the per-frame budget that no one will see
-    // it.  Indices 12/13/14 are the translation row of a 4×4
-    // column-major matrix in our Mat4 representation.  The
-    // worldOffset shift places the model-local anchor into world
-    // space for multi-unit hosts (sandbox).  See `worldOffset`
-    // field comment in the constructor.
+    // piece.worldMatrix is already in WORLD space — the renderer
+    // bakes the unit transform into its _modelMatrix per-entity (or
+    // via setUnitTransform for the single-unit viewer) before walking
+    // the piece tree, so worldMatrix[12..14] is the absolute world
+    // position.  Adding worldOffset here would double the unit's pos
+    // in sandbox.  The renderer recomputes worldMatrix on every
+    // frame; we read the translation column directly.  Slightly
+    // stale (last frame's transform) but the particle lifetime is
+    // so long compared to the per-frame budget that no one will see
+    // it.  Indices 12/13/14 are the translation column of a 4×4
+    // column-major Mat4.
     const m = piece.worldMatrix
-    return [m[12] + wo.x, m[13] + wo.y, m[14] + wo.z]
+    return [m[12], m[13], m[14]]
   }
 
   _sync(dtMs) {

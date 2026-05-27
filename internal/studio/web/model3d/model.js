@@ -23,10 +23,30 @@ export class Model {
     return this.root ? this.root.findByName(name) : null
   }
 
+  // cloneForInstance returns a new Model wrapping a freshly-cloned
+  // piece tree (every Piece duplicated via Piece.cloneForInstance) so
+  // the caller can spawn N sandbox unit instances of the same type
+  // without them stomping each other's animated pose.  All GPU-backed
+  // immutable buffers (drawGroups + wireframe) stay shared by
+  // reference; the clone is marked isInstance so dispose() skips GPU
+  // teardown (releasing those shared VBOs would invalidate the source
+  // model's draws).  Bounds are shared by reference — they're a plain
+  // {min, max} that the renderer + camera read but never mutate.
+  cloneForInstance() {
+    const cloneRoot = this.root ? this.root.cloneForInstance() : null
+    const m = new Model({ name: this.name, root: cloneRoot, bounds: this.bounds })
+    m.isInstance = true
+    return m
+  }
+
   // dispose releases every piece's GPU buffers — must be called when the
   // user closes the viewer so the WebGL context can be reused for the
   // next model without leaks.
   dispose(gl) {
+    // Instance clones share the source model's VBOs — deleting them
+    // here would break every other live unit sharing the geometry.
+    // Only the canonical loader-cached model owns the buffers.
+    if (this.isInstance) return
     for (const p of this.flat) {
       for (const g of p.drawGroups) {
         if (g.vbo) gl.deleteBuffer(g.vbo)

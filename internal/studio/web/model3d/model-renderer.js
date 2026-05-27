@@ -1547,9 +1547,31 @@ export class ModelRenderer {
       // mutated _modelMatrix, so each entity renders correctly.
       const savedBp = this.buildPercent
       const savedUt = { x: this._unitTransform.x, y: this._unitTransform.y, z: this._unitTransform.z, headingRad: this._unitTransform.headingRad }
+      // Save the renderer's team-colour fields so the per-entity loop
+      // can swap them per unit and restore on the way out — entities
+      // can carry their own team colour (sandbox sides) without
+      // leaking into the post-loop passes (wireframe overlay, ghost
+      // placement preview, etc.).
+      const savedTC = this.teamColor
+      const savedTCe = this.teamColorEnable
       for (const ent of this._entities) {
         this.model = ent.model
         if (typeof ent.buildPercent === 'number') this.buildPercent = ent.buildPercent
+        // Per-entity team colour — sandbox passes ent.teamColor as
+        // either an [r,g,b] tuple (recolour) or null (use the model's
+        // authored ARM-blue pixels untouched).  Unset entry = inherit
+        // the renderer's currently-committed team colour (the single-
+        // unit picker's selection), preserving existing behaviour for
+        // entities that don't opt in.
+        if (Object.prototype.hasOwnProperty.call(ent, 'teamColor')) {
+          if (ent.teamColor) {
+            this.teamColor = [ent.teamColor[0], ent.teamColor[1], ent.teamColor[2]]
+            this.teamColorEnable = true
+          } else {
+            this.teamColor = null
+            this.teamColorEnable = false
+          }
+        }
         const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
         this._unitTransform.x = +t.x || 0
         this._unitTransform.y = +t.y || 0
@@ -1583,11 +1605,23 @@ export class ModelRenderer {
       // Restore globals for subsequent passes (wireframe overlay,
       // particles, etc.) and for any post-frame code that reads
       // unitWorldXZ / buildPercent expecting the "primary" unit.
+      // Team colour is restored too so the wireframe overlay /
+      // ghost-placement pulse don't inherit the last drawn entity's
+      // recoloured palette.
       this.buildPercent = savedBp
       this._unitTransform.x = savedUt.x
       this._unitTransform.y = savedUt.y
       this._unitTransform.z = savedUt.z
       this._unitTransform.headingRad = savedUt.headingRad
+      this.teamColor = savedTC
+      this.teamColorEnable = savedTCe
+      // Selection rings — ground-aligned green hairline squares per
+      // entity with `selected: true`.  Drawn AFTER the entity loop so
+      // the ring composites on top of the unit when the camera looks
+      // down from above (depth still respected so rings clip behind
+      // taller foreground geometry).  Sandbox is the only consumer
+      // today; viewer never sets `selected` on its single entity.
+      this.#renderSelectionRings(this._entities)
     } else {
       this.#renderMain(this.renderMode === 'flat')
       if (this.wireframeOverlay) {
@@ -2801,6 +2835,95 @@ export class ModelRenderer {
   // frame dt + uploads the alive prefix to the GPU and draws.
   // Detach by passing null when the unit changes.
   setParticlePool(pool) { this._particlePool = pool || null }
+
+  // #renderSelectionRings draws a unit-square line-loop on the ground
+  // plane per entity flagged `selected: true`.  Square scales with the
+  // unit's XZ bounding-box radius + a small pad so the outline reads
+  // as "this is the unit you've clicked".  The square ROTATES with
+  // the unit (entity.transform.headingRad) so its near edge always
+  // faces the unit's forward — a directional cue that the user has
+  // selected a unit pointing this way.  GL_LINE_LOOP, single uWireWorld
+  // per entity, no pixel-thickening pass (hairline by design).
+  //
+  // Cheap: 4 vertices × N selected units × one uniform write each.
+  // For 50 units that's 200 verts, well under the cost of one main
+  // pass on a single unit.
+  #renderSelectionRings(entities) {
+    if (!entities || !entities.length) return
+    if (!this.programWire) return
+    const gl = this.gl
+    // Lazy-build the unit-square VBO (4 corners on the ground plane,
+    // ±0.5 wu — actual unit footprint comes from per-entity scale in
+    // the uWireWorld matrix).  Re-used every frame; cheap to keep
+    // resident.
+    if (!this._selRingVBO) {
+      const v = new Float32Array([
+        -0.5, 0, -0.5,
+         0.5, 0, -0.5,
+         0.5, 0,  0.5,
+        -0.5, 0,  0.5,
+      ])
+      this._selRingVBO = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._selRingVBO)
+      gl.bufferData(gl.ARRAY_BUFFER, v, gl.STATIC_DRAW)
+    }
+    // Identify selected, non-ghost entries.  Skip the work entirely
+    // when none match — avoids program switch + buffer bind for the
+    // common "no selection" case.
+    let count = 0
+    for (const ent of entities) {
+      if (ent.selected && !ent.ghost) count++
+    }
+    if (count === 0) return
+    gl.useProgram(this.programWire)
+    gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    gl.uniform2f(this.uWirePixelOffset, 0, 0)
+    // ARM-green hairline.  Slight transparency keeps the ring from
+    // drowning out the unit underneath; depth still on so taller
+    // foreground geometry (cliffs, other units) properly occludes.
+    gl.uniform4f(this.uWireColor, 0.25, 1.0, 0.40, 0.95)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._selRingVBO)
+    gl.enableVertexAttribArray(this.aWirePos)
+    gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+    // Reusable scratch matrix — populated per-entity by ring math.
+    if (!this._selRingMat) this._selRingMat = Mat4.identity(Mat4.create())
+    const mat = this._selRingMat
+    for (const ent of entities) {
+      if (!ent.selected || ent.ghost) continue
+      const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
+      // Ring radius — derived from the model's XZ bounding box plus
+      // a small absolute pad so even tiny units (PeeWees) get a
+      // visible ring instead of a single pixel.  Falls back to a
+      // sensible default when the model has no bounds yet.
+      const b = ent.model && ent.model.bounds
+      let radius = 12
+      if (b && b.min && b.max) {
+        const dx = b.max[0] - b.min[0]
+        const dz = b.max[2] - b.min[2]
+        radius = 0.5 * Math.max(dx, dz) + 4
+      }
+      // World matrix built inline as translate × rotateY × scale.
+      // Column-major layout (glMatrix convention): the upper-left 3×3
+      // holds rotateY composed with non-uniform scale (2r on X/Z, 1
+      // on Y so the ground square keeps height 0); the last column
+      // holds the world-space translation.  Y nudged slightly above
+      // the ground plane so the line clears the grid texture without
+      // z-fighting.  Mat4 doesn't ship a scale() helper, and chaining
+      // identity → translate → rotateY → manual-scale would duplicate
+      // matrix multiplies for what amounts to four scalar writes —
+      // worth inlining at the cost of one comment block.
+      const heading = +t.headingRad || 0
+      const s = Math.sin(heading), c = Math.cos(heading)
+      const r2 = radius * 2
+      mat[0] =  c * r2; mat[1] = 0;  mat[2]  = -s * r2; mat[3]  = 0
+      mat[4] =  0;      mat[5] = 1;  mat[6]  =  0;      mat[7]  = 0
+      mat[8] =  s * r2; mat[9] = 0;  mat[10] =  c * r2; mat[11] = 0
+      mat[12] = +t.x || 0; mat[13] = 0.25; mat[14] = +t.z || 0; mat[15] = 1
+      gl.uniformMatrix4fv(this.uWireWorld, false, mat)
+      gl.drawArrays(gl.LINE_LOOP, 0, 4)
+    }
+  }
 
   // #renderParticles emits the alive prefix of the pool as a single
   // additive-blended GL_POINTS draw.  Called after the main scene

@@ -27,6 +27,11 @@ export class ArmedCursor {
     this.host = host || document.body
     this._overlay = null
     this._slot = null
+    // _armed wins over _ambient when both are set — see setArmed /
+    // setAmbient.  Single-slot callers (the unit editor) just use
+    // setSlot which leaves both null and drives _slot directly.
+    this._armed = null
+    this._ambient = null
     this._inside = true
     this._x = 0
     this._y = 0
@@ -36,19 +41,59 @@ export class ArmedCursor {
   }
 
   // setSlot arms ('move' | 'primary' | 'secondary' | 'tertiary' |
-  // 'attack') or disarms (null).  Slot mapping:
+  // 'attack' | 'select' | 'normal') or disarms (null).  Slot mapping:
   //   move                        → cursormove
   //   primary/secondary/tertiary/ → cursorattack
   //   attack                        (anything weapon-related uses
   //                                  the attack glyph)
+  //   select                      → cursorselect (hover-a-unit glyph)
+  //   normal                      → cursornormal (idle TA cursor)
+  //
+  // The 'select' / 'normal' slots are AMBIENT cursors — the host can
+  // leave them set permanently and they'll show whenever no armed
+  // slot is active.  Armed slots (move/attack/*) take priority over
+  // ambient via setAmbient + setArmed below.  For back-compat
+  // setSlot() still works as a single-slot setter.
   setSlot(slot) {
-    const want = (slot === 'move' || slot === 'attack' ||
-                  slot === 'primary' || slot === 'secondary' || slot === 'tertiary')
-      ? slot
-      : null
+    const want = this.#normalizeSlot(slot)
     if (this._slot === want) return
     this._slot = want
+    this._armed = null
+    this._ambient = null
     this.#refresh()
+  }
+
+  // setArmed sets the armed (high-priority) slot.  When null, the
+  // ambient slot (see setAmbient) takes over.  Use for command
+  // arming — Move / Primary / etc — that should clearly trump the
+  // idle hover cursor.
+  setArmed(slot) {
+    const want = this.#normalizeSlot(slot)
+    if (this._armed === want) return
+    this._armed = want
+    this._slot = this._armed || this._ambient
+    this.#refresh()
+  }
+
+  // setAmbient sets the ambient (low-priority) slot.  Replaced by
+  // setArmed when armed is non-null; shown otherwise.  Use for the
+  // idle / hover cursor (normal vs select-on-unit-hover) that the
+  // sandbox wants always-on while no command is armed.
+  setAmbient(slot) {
+    const want = this.#normalizeSlot(slot)
+    if (this._ambient === want) return
+    this._ambient = want
+    this._slot = this._armed || this._ambient
+    this.#refresh()
+  }
+
+  // #normalizeSlot returns one of the known names or null.  Centralised
+  // so setSlot / setArmed / setAmbient share the validation.
+  #normalizeSlot(slot) {
+    if (slot === 'move' || slot === 'attack' ||
+        slot === 'primary' || slot === 'secondary' || slot === 'tertiary' ||
+        slot === 'select' || slot === 'normal') return slot
+    return null
   }
 
   // dispose removes the overlay + detaches listeners.  Called on
@@ -95,7 +140,14 @@ export class ArmedCursor {
       this._overlay = img
     }
     const img = this._overlay
-    const srcName = (this._slot === 'move') ? 'cursormove' : 'cursorattack'
+    let srcName
+    switch (this._slot) {
+      case 'move':   srcName = 'cursormove'; break
+      case 'select': srcName = 'cursorselect'; break
+      case 'normal': srcName = 'cursornormal'; break
+      // primary / secondary / tertiary / attack all share the attack glyph
+      default:       srcName = 'cursorattack'; break
+    }
     const want = `/api/studio/cursor/${srcName}`
     if (img.dataset.src !== want) {
       img.dataset.src = want
