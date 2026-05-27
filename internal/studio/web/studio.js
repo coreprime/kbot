@@ -140,7 +140,6 @@ import { startServerHeartbeat, isConnected } from './ui/common/heartbeat.js'
 // via panel-store + FloatingPanel, and applyPanelLayout skips them.
 import {
   makePanelDraggable,
-  persistPanelCollapsed,
   applyPanelLayout,
 } from './ui/common/panel-layout.js'
 
@@ -290,7 +289,6 @@ import { save, saveLoose } from './ui/map-editor/save.js'
 // spatial bucket (featuresNear) + name index (getFeaturesByName).
 // Both invalidate together when bumpContentVersion ticks.
 import {
-  getContentVersion,
   bumpContentVersion,
   featuresNear,
   getFeaturesByName,
@@ -321,6 +319,16 @@ import {
   visibleTileBounds,
   visiblePixelBounds,
 } from './ui/map-editor/viewport.js'
+
+// Developer stats panel + Advanced ▸ Developer dialog.  Per-frame
+// scheduling is gated on contentVersion so high-freq callers
+// (scroll, hover) skip the rAF entirely.
+import {
+  scheduleDevStatsRefresh,
+  wireDeveloperPanel,
+  openDeveloperDialog,
+  closeDeveloperDialog,
+} from './ui/map-editor/dev-stats.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -6040,166 +6048,11 @@ function wireMinimap() {
 // button in the ribbon opens a richer dialog that shows the same counts
 // plus a thumbnail grid of every distinct tile stamped on the map.
 
-// distinctTileKey identifies a stamp's visible appearance — the source
-// tile (sectionPath, sx, sy) and the rotation/flip applied to it.  This
-// matches what builder.go bakes into the saved TNT's tile pool.
-function distinctTileKey(stamp) {
-  if (!stamp || !stamp.sectionPath) return null
-  return `${stamp.sectionPath}|${stamp.sx}|${stamp.sy}|${stamp.rotation || 0}|${stamp.flipH ? 1 : 0}|${stamp.flipV ? 1 : 0}`
-}
-
-function computeDevStats() {
-  const tileKeys = new Map() // key → { stamp, count }
-  let occupied = 0
-  for (const stamp of state.tiles || []) {
-    const k = distinctTileKey(stamp)
-    if (!k) continue
-    occupied++
-    const entry = tileKeys.get(k)
-    if (entry) entry.count++
-    else tileKeys.set(k, { stamp, count: 1 })
-  }
-  const featureNames = new Set()
-  for (const f of state.features || []) {
-    featureNames.add((f.name || '').toLowerCase())
-  }
-  const sectionPaths = new Set()
-  for (const v of tileKeys.values()) sectionPaths.add(v.stamp.sectionPath)
-  const total = (state.tileW || 0) * (state.tileH || 0)
-  const compression = (occupied > 0) ? (occupied / tileKeys.size) : 0
-  return {
-    distinctTiles: tileKeys.size,
-    distinctFeatures: featureNames.size,
-    totalFeatures: (state.features || []).length,
-    sectionsUsed: sectionPaths.size,
-    occupiedTiles: occupied,
-    totalTiles: total,
-    compressionRatio: compression,
-    tileEntries: tileKeys, // for the dialog grid
-  }
-}
-
-let devStatsRefreshQueued = false
-let lastDevStatsVersion = -1
-function scheduleDevStatsRefresh() {
-  // Cheap no-op when the underlying data hasn't changed — high-freq
-  // renders (scroll, hover, drag preview) skip the rAF entirely.
-  // The dialog's open() call refreshes directly, so we don't have to
-  // poll for it here.
-  if (lastDevStatsVersion === getContentVersion()) return
-  if (devStatsRefreshQueued) return
-  devStatsRefreshQueued = true
-  requestAnimationFrame(() => {
-    devStatsRefreshQueued = false
-    lastDevStatsVersion = getContentVersion()
-    refreshDevStats()
-  })
-}
-
-// devStatsCache memoises the last computeDevStats result and the
-// content-version it was built for.  On a 256×256 map with thousands
-// of features computeDevStats is the heaviest per-render work; gating
-// it on contentVersion keeps scroll/hover from recomputing.
-let devStatsCache = null
-let devStatsCacheVersion = -1
-function getDevStats() {
-  if (devStatsCache && devStatsCacheVersion === getContentVersion()) return devStatsCache
-  devStatsCache = computeDevStats()
-  devStatsCacheVersion = getContentVersion()
-  return devStatsCache
-}
-function refreshDevStats() {
-  const dlgOpen = !$('#developer-dialog')?.classList.contains('hidden')
-  // Skip the full compute when content hasn't changed AND the dialog
-  // isn't open (its tile grid is the only reader that NEEDS the live
-  // tileEntries map; the panel just shows the three counts).
-  const stats = getDevStats()
-  // Publish to the React Map Stats panel via the inspector store.
-  if (_reactUi && typeof _reactUi.publishMapStats === 'function') {
-    _reactUi.publishMapStats(stats)
-  }
-  const set = (id, v) => { const el = $('#' + id); if (el) el.textContent = String(v) }
-  // Legacy DOM lookup retained for the Developer dialog's table cells
-  // — those still live inside the dev-dialog markup and want refresh
-  // via the same compute call.
-  set('dev-stats-distinct-tiles', stats.distinctTiles)
-  set('dev-stats-distinct-features', stats.distinctFeatures)
-  set('dev-stats-total-features', stats.totalFeatures)
-  if (dlgOpen) {
-    set('dev-dlg-distinct-tiles', stats.distinctTiles)
-    set('dev-dlg-sections-used', stats.sectionsUsed)
-    set('dev-dlg-occupied', `${stats.occupiedTiles} / ${stats.totalTiles}`)
-    set('dev-dlg-compression', stats.compressionRatio > 0 ? `${stats.compressionRatio.toFixed(2)}×` : '—')
-    renderDevTilesGrid(stats.tileEntries)
-    renderDevDiagnostics()
-  }
-}
-
-// renderDevDiagnostics fills the Camera & Canvas tab with live numbers
-// pulled straight from the rendering DOM so the user can see exactly
-// what state the renderer is reading.  Read-only — purely for debugging.
-function renderDevDiagnostics() {
-  const tbody = $('#dev-diag-table tbody')
-  if (!tbody) return
-  const canvas = $('#canvas')
-  const glCanvas = $('#canvas-gl')
-  const wrap = $('#canvas-scroll')
-  const stack = $('#canvas-stack')
-  const num = (v, suffix = '') => (v == null ? '—' : `${v}${suffix}`)
-  const tb = visibleTileBounds()
-  const vp = visiblePixelBounds()
-  const rows = [
-    ['Mode', state.mode || '—'],
-    ['View mode', state.viewMode || '—'],
-    ['Zoom', `${(state.zoom * 100).toFixed(1)}%  (raw ${state.zoom.toFixed(4)})`],
-    ['Map size (tiles)', `${state.tileW} × ${state.tileH}  (attr ${state.tileW * 2} × ${state.tileH * 2})`],
-    ['Map size (game-px)', `${state.tileW * TILE_PX} × ${state.tileH * TILE_PX}`],
-    ['2D canvas backing buffer', canvas ? `${canvas.width} × ${canvas.height}` : '—'],
-    ['2D canvas CSS size', canvas ? `${parseFloat(canvas.style.width || 0).toFixed(1)} × ${parseFloat(canvas.style.height || 0).toFixed(1)}` : '—'],
-    ['GL canvas backing buffer', glCanvas ? `${glCanvas.width} × ${glCanvas.height}` : '—'],
-    ['GL canvas CSS size', glCanvas ? `${parseFloat(glCanvas.style.width || 0).toFixed(1)} × ${parseFloat(glCanvas.style.height || 0).toFixed(1)}` : '—'],
-    ['Scroll viewport (canvas-scroll)', wrap ? `${wrap.clientWidth} × ${wrap.clientHeight}` : '—'],
-    ['Scroll position', wrap ? `(${wrap.scrollLeft}, ${wrap.scrollTop})` : '—'],
-    ['Stack size (canvas-stack)', stack ? `${parseFloat(stack.style.width || 0).toFixed(0)} × ${parseFloat(stack.style.height || 0).toFixed(0)}` : '—'],
-    ['Overscroll padding', `(${overscrollPadding.x}, ${overscrollPadding.y})`],
-    ['Canvas offset (left, top)', canvas ? `(${parseFloat(canvas.style.left || 0).toFixed(0)}, ${parseFloat(canvas.style.top || 0).toFixed(0)})` : '—'],
-    ['Visible tile bounds', tb ? `tx [${tb.minTX}..${tb.maxTX}]  ty [${tb.minTY}..${tb.maxTY}]` : '—'],
-    ['Visible pixel bounds', vp ? `x [${vp.minX}..${vp.maxX}]  y [${vp.minY}..${vp.maxY}]` : '—'],
-    ['Content version', num(getContentVersion())],
-    ['Tile / feature counts', `${(state.tiles || []).filter(Boolean).length} tile cells • ${(state.features || []).length} features`],
-    ['Renderer', (typeof ensureGLRenderer === 'function' && ensureGLRenderer()) ? 'WebGL2 (tiles+features)' : '2D fallback'],
-    ['devicePixelRatio', String(window.devicePixelRatio || 1)],
-  ]
-  // Re-build the table contents from scratch — small enough that the
-  // cost is negligible and avoids per-row id juggling.
-  tbody.replaceChildren(...rows.map(([label, value]) => {
-    const tr = document.createElement('tr')
-    const th = document.createElement('th'); th.textContent = label
-    const td = document.createElement('td'); td.textContent = value
-    tr.appendChild(th); tr.appendChild(td)
-    return tr
-  }))
-}
-
-function wireDeveloperPanel() {
-  const panel = $('#dev-stats-panel')
-  const toggle = $('#dev-stats-toggle')
-  const header = $('#dev-stats-header')
-  if (!panel || !toggle || !header) return
-  toggle.addEventListener('click', () => {
-    panel.classList.toggle('collapsed')
-    toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
-    persistPanelCollapsed('dev-stats-panel', panel.classList.contains('collapsed'))
-  })
-  makePanelDraggable(panel, header)
-}
-
-// makePanelDraggable wires a header element to drag its panel within
-// makePanelDraggable / persistPanelLayout / persistPanelCollapsed /
-// applyPanelLayout moved to /ui/common/panel-layout.js — imported
-// at the top of this file.  Used by the dev-stats and camera-info
-// panels (the React-managed Stats / Minimap / Camera panels own
-// their own position via the panel-store + FloatingPanel).
+// Dev-stats helpers (computeDevStats, scheduleDevStatsRefresh,
+// refreshDevStats, renderDevDiagnostics, renderDevTilesGrid,
+// wireDeveloperPanel, openDeveloperDialog, closeDeveloperDialog)
+// moved to /ui/map-editor/dev-stats.js — imported at the top of
+// this file.
 
 function wireDeveloperDialog() {
   $('#btn-developer')?.addEventListener('click', openDeveloperDialog)
@@ -6235,20 +6088,6 @@ function wireDeveloperDialog() {
   })
 }
 
-function openDeveloperDialog() {
-  const dlg = $('#developer-dialog')
-  if (!dlg) return
-  dlg.classList.remove('hidden')
-  // Default to the Distinct Tiles tab.
-  $$('#developer-dialog .dev-tab').forEach((t, i) => t.classList.toggle('active', i === 0))
-  $$('#developer-dialog .dev-tab-body').forEach((b, i) => b.classList.toggle('active', i === 0))
-  refreshDevStats()
-}
-
-function closeDeveloperDialog() {
-  $('#developer-dialog')?.classList.add('hidden')
-}
-
 function openHelpDialog() {
   const dlg = $('#help-dialog')
   if (!dlg) return
@@ -6263,49 +6102,6 @@ function closeHelpDialog() {
 
 // Settings dialog (DEFAULT_SETTINGS + open/close) moved to
 // /ui/dialogs/settings.js — imported at the top of this file.
-
-// renderDevTilesGrid paints a thumbnail per distinct tile + occurrence
-// count.  Each thumbnail is a tiny canvas that copies the right 32x32
-// region of the source section image and applies the same rotation /
-// flip the stamp uses — so the user sees the tile exactly as it appears
-// on the map.
-function renderDevTilesGrid(tileEntries) {
-  const grid = $('#dev-tiles-grid')
-  if (!grid) return
-  // Sort by descending count so the most-used tiles show first.
-  const rows = Array.from(tileEntries.values()).sort((a, b) => b.count - a.count)
-  const frag = document.createDocumentFragment()
-  for (const { stamp, count } of rows) {
-    const cell = document.createElement('div')
-    cell.className = 'dev-tile-cell'
-    const cnv = document.createElement('canvas')
-    cnv.width = 32; cnv.height = 32
-    cnv.style.width = '56px'
-    cnv.style.height = '56px'
-    cnv.style.imageRendering = 'pixelated'
-    const cctx = cnv.getContext('2d')
-    cctx.imageSmoothingEnabled = false
-    const img = state.sectionImages.get(stamp.sectionPath)
-    if (img && img.complete && img.naturalWidth > 0) {
-      // drawTransformedTile draws into a 32-px target slot starting at
-      // (dx, dy); pass TILE_PX-sized coords by temporarily overriding
-      // since the canvas is exactly TILE_PX (32) wide.
-      drawTransformedTile(cctx, img, stamp.sx, stamp.sy, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV, 0, 0)
-    } else {
-      cctx.fillStyle = '#3a4d61'
-      cctx.fillRect(0, 0, 32, 32)
-      whenImageReady(img, 'dev-stats', refreshDevStats)
-    }
-    cell.appendChild(cnv)
-    const tag = document.createElement('div')
-    tag.className = 'dev-tile-count'
-    tag.textContent = String(count)
-    cell.appendChild(tag)
-    cell.title = `${stamp.sectionPath} · (${stamp.sx},${stamp.sy})  rot=${stamp.rotation || 0}${stamp.flipH ? ' H' : ''}${stamp.flipV ? ' V' : ''}\n${count}× on map`
-    frag.appendChild(cell)
-  }
-  grid.replaceChildren(frag)
-}
 
 // Zoom + scroll-pan controls (setZoom / applyOverscrollPadding /
 // zoomAtPointer / fitZoom + the continuous-pan loop) moved to
