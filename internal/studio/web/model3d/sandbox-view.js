@@ -807,14 +807,19 @@ export class SandboxView extends BaseView {
               const pz = fromZ + dz * t
               const ps = projW(px, 0, pz)
               if (!ps) continue
-              const dot = ensureEl('cursormove')
+              // Trail dots use the dedicated `pathicon` GAF glyph —
+              // smaller + distinct from the destination marker so the
+              // path is legible at a glance ("walking to the cursormove
+              // marker via the pathicon dots") instead of looking like
+              // a smear of identical move icons.
+              const dot = ensureEl('pathicon')
               dot.style.left = ps[0] + 'px'
               dot.style.top  = ps[1] + 'px'
-              dot.style.opacity = String(0.25 + 0.55 * t)
-              dot.style.width = '20px'
-              dot.style.height = '20px'
-              dot.style.marginLeft = '-10px'
-              dot.style.marginTop = '-10px'
+              dot.style.opacity = String(0.35 + 0.55 * t)
+              dot.style.width = '16px'
+              dot.style.height = '16px'
+              dot.style.marginLeft = '-8px'
+              dot.style.marginTop = '-8px'
             }
           }
         }

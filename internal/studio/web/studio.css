@@ -191,25 +191,33 @@ kbd {
   cursor: pointer;
 }
 .welcome-tab:hover:not([disabled]) { color: var(--text); }
+.welcome-tab {
+  /* Needed so the ::after mask below (which targets EVERY tab) is
+     positioned relative to the tab.  The .active rule below adds
+     `position: relative` too — that's redundant but harmless. */
+  position: relative;
+}
 .welcome-tab.active {
   /* Folder-tab look — top + sides framed in bright white, bottom is
      open so the tab visually pours into the panel below.  The panel
-     keeps its border-top (so the line continues to either side of
-     the tab); we mask the segment immediately under the tab via an
-     opaque ::after strip so it doesn't cross through. */
+     keeps its border-top (so the line continues between tabs); the
+     ::after rule below masks the segment of border-top directly
+     under THIS tab so it doesn't pass through the tab name. */
   background: rgba(22, 26, 33, 0.25);
   border-color: rgba(255, 255, 255, 0.9);
   color: var(--text);
   font-weight: 600;
-  position: relative;
   z-index: 1;
 }
-.welcome-tab.active::after {
+/* Apply the border-top mask to EVERY tab — not just the active one.
+   The panel's border-top stays visible in the GAPS between tabs but
+   never cuts across a tab name, active or otherwise.  The mask sits
+   at top:100% (bottom edge of the tab) and extends 1px past each side
+   so it covers the full outer footprint of the tab where the panel
+   border line would otherwise show through. */
+.welcome-tab::after {
   content: '';
   position: absolute;
-  /* -1px / -1px so the strip extends through the tab's left + right
-     borders and covers the full outer footprint where the panel
-     border-top sits.  top: 100% places it at the tab's bottom edge. */
   left: -1px;
   right: -1px;
   top: 100%;
@@ -233,6 +241,13 @@ kbd {
   border-radius: 0 8px 8px 8px;
   background: rgba(22, 26, 33, 0.25);
   padding: 18px 20px 16px;
+  /* Stable height: the panel always reserves enough vertical space
+     for a 3 × 2 card grid (the largest tab content).  Without this
+     the dialog jumps when the user clicks between Sandbox (2 cards)
+     and Scripting (3 cards) because each tab's natural height
+     differs.  The min-height matches roughly 2 × 180px card height +
+     16px gap + 34px vertical padding. */
+  min-height: 400px;
 }
 .dialog-card {
   background: var(--bg-1);
@@ -431,8 +446,19 @@ kbd {
 
 /* ── Welcome modal ─────────────────────────────────────────────────── */
 .welcome-options {
+  /* Fixed 3 × 2 grid — every tab paints into the same 6-slot footprint
+     regardless of how many cards it has (Sandbox / Unit Creator use 2,
+     Map Creator + Scripting use 3, etc.).  The fixed row height keeps
+     the grid the same total size on every tab, so switching tabs
+     doesn't make the panel jump.  Cards land in row-major order;
+     tabs with fewer than 6 cards leave the trailing cells empty (the
+     grid still reserves their space). */
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
+  /* 175px per row × 2 rows + 16px gap = 366px of card area; combined
+     with the panel padding (18px top + 16px bottom) the panel lands at
+     ~400px regardless of which tab is active. */
+  grid-template-rows: repeat(2, 175px);
   gap: 16px;
   margin-top: 18px;
 }
@@ -461,6 +487,25 @@ kbd {
   transform: translateY(-1px);
 }
 .welcome-card:focus-visible { outline: none; }
+/* Disabled / placeholder cards — render with the same shape so the
+   user can read the roadmap, but de-emphasise via reduced contrast
+   and a not-allowed cursor.  No hover lift either; the :hover rule
+   above would otherwise still light them up. */
+.welcome-card-disabled,
+.welcome-card[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.welcome-card-disabled:hover,
+.welcome-card[disabled]:hover,
+.welcome-card-disabled:focus-visible,
+.welcome-card[disabled]:focus-visible {
+  background: var(--bg-2);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  transform: none;
+}
 .welcome-card-ico { font-size: 40px; line-height: 1; }
 .welcome-card-title {
   font-size: 17px;
@@ -1007,24 +1052,41 @@ kbd {
   cursor: pointer;
 }
 .map-tab-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
+/* Slim "+"-only tab-bar button.  The double-class selector outweighs
+   the bare `.ribbon-dropdown-btn` base (specificity 2 vs 1) so the
+   min-width / padding / width overrides apply when the React TabBar
+   composes both classes.  Without this the base's `min-width: 130px`
+   wins and the "+" becomes a label-sized gap. */
+.ribbon-dropdown-btn.map-tab-add,
 .map-tab-add {
   border: 1px dashed var(--border);
   background: transparent;
   color: var(--muted);
   height: 30px;
+  min-width: 0;
   width: 28px;
+  padding: 0;
   border-radius: 6px 6px 0 0;
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
+  justify-content: center;
 }
+.map-tab-add .ico { font-size: 16px; }
 .map-tab-add:hover { background: var(--bg-2); color: var(--text); }
+/* Tab-bar "+" popup.  Composes with `.ribbon-dropdown-popup` (the
+   React Dropdown primitive sets both classes), and the base rule's
+   `z-index: 1500` ships AFTER this block in the cascade — so a bare
+   `.map-tab-add-popup { z-index: 6000 }` would lose the tie-break and
+   render BELOW the .dialog overlay (z-index 5000), making the popup
+   invisible whenever the unit-editor / sandbox dialog is up.  Double-
+   class the selector so this rule outweighs the base (specificity 2
+   vs 1) and stays above the dialog stack regardless of CSS order. */
+.ribbon-dropdown-popup.map-tab-add-popup,
 .map-tab-add-popup {
   /* Fixed (not absolute) so #map-tabs' overflow-x clip doesn't hide
      us — the JS positioner sets top/left from the "+" button's
-     bounding rect each time the popup opens.  z-index sits ABOVE
-     the .dialog stack (5000) so the popup reaches the user even
-     when the 3DO viewer dialog overlays the editor. */
+     bounding rect each time the popup opens. */
   position: fixed;
   top: 0;
   left: 0;
@@ -2522,16 +2584,20 @@ canvas {
   background: var(--bg-0);
   overflow: hidden;
 }
-.model-viewer-shell > .ribbon { grid-area: ribbon; }
+/* Ribbon + sidebar live in their named grid-areas.  The selectors are
+   descendant (` `, not `>`) so the React mount slots (which wrap the
+   real `.ribbon` element with `display: contents`) don't break the
+   match — the inner React `.ribbon` is what gets the grid placement. */
+.model-viewer-shell .ribbon { grid-area: ribbon; }
 .model-viewer-shell > .sidebar { grid-area: side; }
 /* The sandbox ribbon shares the ribbon grid-area with the unit-editor
    ribbon — only one of them is visible at any time.  Default state:
    sandbox ribbon hidden (single-unit / map / welcome modes), unit-
    editor ribbon visible.  When .sandbox-mode is on the dialog, the
    CSS rules in the sandbox section below flip both. */
-.model-viewer-shell > .sandbox-ribbon { display: none; }
-#model-viewer-dialog.sandbox-mode .model-viewer-shell > .ribbon:not(.sandbox-ribbon) { display: none; }
-#model-viewer-dialog.sandbox-mode .model-viewer-shell > .sandbox-ribbon { display: flex; }
+.model-viewer-shell .sandbox-ribbon { display: none; }
+#model-viewer-dialog.sandbox-mode .model-viewer-shell .ribbon:not(.sandbox-ribbon) { display: none; }
+#model-viewer-dialog.sandbox-mode .model-viewer-shell .sandbox-ribbon { display: flex; }
 /* Topbar doc-info badge — replaces the old per-viewer unit pill.
    Populated by JS on tab switch (unit title for 3DO tabs, map
    title for map tabs). */
@@ -2649,10 +2715,11 @@ canvas {
 #mv-inspector-camera     { top: 12px;  right: 12px; left: auto; }
 #mv-inspector-scripts    { top: 50%;   right: 12px; left: auto; transform: translateY(-50%); }
 #mv-inspector-staticvars { bottom: 12px; right: 12px; top: auto; left: auto; }
-/* Actions panel defaults to top-LEFT so it doesn't stack with the
-   right-column inspector trio (Camera/Threads/StaticVars) — gives the
-   user one-click access to every COB entry point without obscuring
-   the model state they're trying to drive. */
+/* Script Commands panel (id retained as mv-inspector-actions to keep
+   persisted prefs working) defaults to top-LEFT so it doesn't stack
+   with the right-column inspector trio (Camera/Threads/StaticVars) —
+   gives the user one-click access to every COB entry point without
+   obscuring the model state they're trying to drive. */
 #mv-inspector-actions    { top: 12px;  left: 12px; right: auto; max-width: 340px; min-width: 280px; }
 .mv-inspector.hidden { display: none; }
 .mv-inspector.collapsed { width: auto; }
@@ -2803,12 +2870,16 @@ canvas {
 .mv-unit-header-action:hover { color: var(--accent); }
 .mv-unit-header-action.danger:hover { color: var(--danger); }
 /* Controls overlay — gated state.  Until the unit's Create script
-   completes, the action button row + port table render dimmed and
-   ignore clicks.  The header (drag handle + collapse + close) is
-   excluded so the user can still move/dismiss the panel while
-   they're queueing up Create from the Actions overlay. */
+   completes, the action button row + per-port editor table render
+   dimmed and ignore clicks.  The header (drag handle + collapse +
+   close) and the Create banner are excluded so the user can still
+   move/dismiss the panel AND fire the Create script that lifts the
+   gate.  Per-port editors live in `.mv-controls-port-body` rather
+   than `.mv-inspector-body` so this rule doesn't accidentally dim
+   the Create banner (which sits inside the FloatingPanel's outer
+   `.mv-inspector-body` wrapper alongside the grid). */
 .mv-inspector.mv-controls-gated #mv-controls-actions,
-.mv-inspector.mv-controls-gated .mv-inspector-body {
+.mv-inspector.mv-controls-gated .mv-controls-port-body {
   opacity: 0.40;
   pointer-events: none;
   filter: grayscale(0.5);
@@ -2850,10 +2921,22 @@ canvas {
   border-color: var(--accent);
   color: var(--accent);
 }
-.mv-inspector-controls .mv-runtime-ctrl-danger:hover {
+.mv-inspector-controls .mv-runtime-ctrl-danger {
+  /* Resting state keeps the red outline on so the "destructive — will
+     ask to confirm" affordance is visible without a hover.  Hover
+     adds a subtle fill so the click affordance stays. */
   border-color: var(--danger);
   color: var(--danger);
 }
+.mv-inspector-controls .mv-runtime-ctrl-danger:hover {
+  background: rgba(220, 60, 60, 0.10);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* Full-width row inside the 2-col grid — used by Terminate All Scripts
+   so it stands alone under the Pause + Step pair instead of being
+   crammed into the third slot. */
+.mv-inspector-controls .mv-runtime-ctrl-wide { grid-column: 1 / -1; }
 .mv-inspector-controls .mv-runtime-ctrl:active { background: var(--bg-0); }
 /* Runtime overlay — per-unit grouping.  A section divider sits at
    the top of each group; the threads (one row each) follow. */
@@ -3165,7 +3248,7 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 .mv-inspector-empty { color: var(--muted); font-style: italic; padding: 4px; font-family: var(--mono, ui-monospace, monospace); font-size: 11px; }
-/* Actions overlay — the Include-Private checkbox + per-script
+/* Script Commands overlay — the Include-Private checkbox + per-script
    buttons.  The list is a vertical column of mono-font buttons that
    highlight on hover.  `private` flag (lowercase first letter) styles
    the row faintly so the user can spot the internal helpers at a
@@ -3278,7 +3361,7 @@ canvas {
   font-size: 12px;
 }
 .mv-inspector-header .mv-threads-stopall:hover { color: var(--danger); background: var(--bg-2); }
-/* Actions-panel reset header button — same chrome as Stop All
+/* Script Commands panel reset header button — same chrome as Stop All
    but tints toward the accent (not danger) since reset is a
    workflow control, not a destructive cancel. */
 .mv-inspector-header .mv-actions-reset {

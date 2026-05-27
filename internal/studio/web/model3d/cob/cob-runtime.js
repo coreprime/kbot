@@ -1109,6 +1109,32 @@ export class CobRuntime {
     this.playbackRate = Math.max(0.01, Math.min(10, +rate || 1))
   }
 
+  // killAllThreads runtime-wide: iterates every registered unit and
+  // marks every live thread dead.  Used by the Runtime overlay's
+  // "Terminate All Scripts" button (and any other host-level kill
+  // sweep that doesn't want to dig into the unit registry itself).
+  // Returns the total count of threads killed across all units.
+  killAllThreads() {
+    let killed = 0
+    for (const u of this._units.values()) {
+      if (typeof u.killAllThreads === 'function') killed += u.killAllThreads()
+    }
+    return killed
+  }
+
+  // findThreadById walks every unit's live thread list and returns
+  // the matching CobThread + its owning CobUnit, or null when the
+  // id isn't live.  Used by host code that has a thread id snapshot
+  // (debugger panels, kill-by-id buttons) and needs to locate the
+  // backing object without knowing which unit owns it.
+  findThreadById(threadId) {
+    for (const u of this._units.values()) {
+      const t = (u._threads || []).find((x) => x.id === threadId && !x.dead)
+      if (t) return { thread: t, unit: u }
+    }
+    return null
+  }
+
   // tick advances every unit by `dtMs` of wall-clock time.  Call
   // once per render frame.  The wall-clock dt is accumulated and
   // drained in fixed TA_TICK_MS (25 ms) steps so every unit's

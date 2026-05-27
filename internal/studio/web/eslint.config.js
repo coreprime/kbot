@@ -3,7 +3,9 @@ import globals from 'globals'
 
 export default [
   {
-    ignores: ['node_modules/**'],
+    // Vendor is third-party minified bundles (Preact / signals / htm)
+    // — they fail any lint rule that looks at code shape, so we skip.
+    ignores: ['node_modules/**', 'vendor/**'],
   },
   js.configs.recommended,
   {

@@ -424,9 +424,15 @@ export class ModelViewer {
         if (kind === 'pan' && this._mvControls?.tracking) {
           this._mvControls.setTracking(false)
         }
-        if (kind === 'wheel') {
-          const btn = document.querySelector('#mv-act-autorotate')
-          if (btn) { btn.dataset.on = '0'; btn.classList.remove('active') }
+        // Wheel-during-auto-rotate stops the rotation visually at the
+        // renderer; the host's window-level notifier flips the React
+        // Camera dropdown's check-mark + persisted cache through one
+        // entry point so a future click re-arms cleanly.  Optional —
+        // missing in test harnesses, in which case the rotation just
+        // stops without the UI mirror.
+        if (kind === 'wheel' && typeof window !== 'undefined' &&
+            typeof window.__mvNotifyAutoRotateOff === 'function') {
+          try { window.__mvNotifyAutoRotateOff() } catch { /* ignore */ }
         }
       },
     })

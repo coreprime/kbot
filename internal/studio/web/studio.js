@@ -423,7 +423,9 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeNanoFX()
   wireWelcomeGlamour()
   wireWelcomeAmbient()
-  wireWelcomeTabs()
+  // Welcome tabs are React-rendered (see /ui/screens/welcome/welcome-screen.js);
+  // the host mounts the card body via mountWelcomeScreen() inside
+  // configureReactUi().  No vanilla tab wiring needed any more.
   wireMvRuntimeVisibility()
   // Hydrate persisted UI prefs FIRST — the wire* helpers below read
   // from state during setup (e.g. wireMvInspectors decides each
@@ -440,11 +442,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Multi-tab management — the tab bar + "+" popout above the toolbar.
   wireMapTabBar()
   $('#size-cancel').addEventListener('click', closeSizeDialog)
-  // Open-map dialog.
-  $('#open-back').addEventListener('click', closeOpenDialog)
-  $('#open-filter').addEventListener('input', () => renderOpenList())
-  $('#open-confirm').addEventListener('click', confirmOpenMap)
-  wireOpenDialogKeyboard()
+  // Open-map dialog is React-managed now (see /ui/pickers/open-map-dialog.js).
+  // The static #open-dialog markup in index.html is no longer driven;
+  // the React picker mounts its own DOM via mountDialogs().
   const yr = $('#copyright-year')
   if (yr) yr.textContent = new Date().getFullYear()
   // Paint the dice-face player-count picker so the size dialog is ready
@@ -482,9 +482,10 @@ const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   // the signal the "default visible" logic uses to decide whether
   // to auto-show next time.
   'mvInspectorVisible', 'mvInspectorCollapsed', 'mvInspectorPos',
-  // Actions inspector's "Include Private" filter — preserved across
-  // sessions so a user debugging internal helpers doesn't have to
-  // re-tick the box on every reload.
+  // Script Commands inspector's "Include Private" filter — preserved
+  // across sessions so a user debugging internal helpers doesn't have
+  // to re-tick the box on every reload.  Pref key keeps the legacy
+  // 'mvActions' prefix so saved preferences survive the rename.
   'mvActionsIncludePrivate',
   // Sandbox Developer Controls toggle — persists the "hide developer
   // editors at the bottom of the Controls panel" preference so a user
@@ -898,131 +899,45 @@ function mapDisplayName(m) {
 }
 
 function renderMapTabs() {
-  // Single tab bar now — the .app's .map-tabs is shared between the
-  // map editor and the 3DO viewer (the viewer's overlay sits under
-  // the tabs row).
-  const list = document.querySelector('#map-tabs-list')
-  if (!list) return
-  list.replaceChildren()
-  for (let i = 0; i < tabs.length; i++) {
-    list.appendChild(buildTabElement(tabs[i], i))
+  // Tab strip is React-managed (see /ui/common/tab-bar.js).  Push the
+  // current tabs[] + activeTabIndex into the React state signal each
+  // time the host's tab list mutates (open / close / switch).  No-op
+  // when the React UI hasn't loaded yet (the next setTabs after boot
+  // catches up).
+  if (_reactUi && typeof _reactUi.setTabs === 'function') {
+    _reactUi.setTabs(tabs, activeTabIndex)
   }
 }
 
-function buildTabElement(tab, i) {
-  const el = document.createElement('button')
-  el.type = 'button'
-  el.dataset.tabIndex = String(i)
-  el.setAttribute('role', 'tab')
-
-  let display
-  let title
-  let dirty = false
-  let closeTitle
-  if (tab.type === 'model') {
-    display = tab.meta?.unitTitle || tab.name || '(model)'
-    const metaBits = [tab.meta?.unitName?.toUpperCase(), tab.meta?.side, tab.meta?.category].filter(Boolean).join(' · ')
-    title = `${display}${metaBits ? ` · ${metaBits}` : ''}`
-    closeTitle = 'Close this model'
-  } else {
-    const m = tab.map
-    display = mapDisplayName(m)
-    dirty = !!m?.dirty
-    title = `${display}${dirty ? ' (unsaved changes)' : ''} · ${m?.name || '(no file)'} · ${m?.tileW}×${m?.tileH}`
-    closeTitle = 'Close this map'
-  }
-
-  el.className = 'map-tab'
-    + (i === activeTabIndex ? ' active' : '')
-    + (dirty ? ' dirty' : '')
-    + (tab.type === 'model' ? ' map-tab-model' : '')
-  el.title = title
-
-  // Type icon: 3DO tabs get a tool glyph so map and model tabs are
-  // distinguishable at a glance.
-  if (tab.type === 'model') {
-    const ico = document.createElement('span')
-    ico.className = 'map-tab-icon'
-    ico.textContent = '🛠'
-    el.appendChild(ico)
-  }
-  const lbl = document.createElement('span')
-  lbl.className = 'map-tab-label'
-  lbl.textContent = dirty ? `${display}*` : display
-  el.appendChild(lbl)
-  const close = document.createElement('button')
-  close.type = 'button'
-  close.className = 'map-tab-close'
-  close.textContent = '×'
-  close.title = closeTitle
-  close.addEventListener('click', (e) => { e.stopPropagation(); closeTab(i) })
-  el.appendChild(close)
-  el.addEventListener('click', () => switchToTab(i))
-  return el
-}
+// buildTabElement removed — tab rendering now lives entirely in the
+// React TabBar component.  Per-tab formatting (model glyph, dirty
+// marker, title metadata) is data-driven from the tab record.
 
 function wireMapTabBar() {
-  const popup = document.querySelector('#map-tab-add-popup')
-  if (!popup) return
-  // The shared tab bar's "+" anchors the popup below it.  Position
-  // uses fixed coords so the popup escapes its host bar's
-  // overflow clip and overlays the model viewer dialog when that's
-  // on top.
-  const anchorPopup = (anchor) => {
-    const r = anchor.getBoundingClientRect()
-    popup.style.top = `${Math.round(r.bottom + 2)}px`
-    popup.style.left = `${Math.round(r.left)}px`
-  }
-  const wireAddButton = (id) => {
-    const btn = document.querySelector(id)
-    if (!btn) return
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const willShow = popup.classList.contains('hidden')
-      if (willShow) anchorPopup(btn)
-      popup.classList.toggle('hidden')
-    })
-  }
-  wireAddButton('#map-tab-add')
-
-  document.querySelector('#map-tab-add-new')?.addEventListener('click', () => {
-    popup.classList.add('hidden')
-    // Open the size dialog in "append a tab" mode.  When the user
-    // confirms, startEditor() pushes a brand-new tab.
-    sizeDialogSource = 'tabbar'
-    openSizeDialog()
-  })
-  document.querySelector('#map-tab-add-open')?.addEventListener('click', () => {
-    popup.classList.add('hidden')
-    openMapDialog('tabbar')
-  })
-  document.querySelector('#map-tab-add-model')?.addEventListener('click', () => {
-    popup.classList.add('hidden')
-    // 'add' so openModelViewer pushes a fresh model tab instead of
-    // overwriting the active one — works from either tab bar.
-    modelOpenIntent = 'add'
-    openModelPicker()
-  })
-  // "New 3DO" is intentionally disabled today — the placeholder is
-  // a click-through to nothing.  Wire it as a defensive no-op so
-  // accidental clicks don't leave the popup open.
-  document.querySelector('#map-tab-add-new-model')?.addEventListener('click', () => {
-    popup.classList.add('hidden')
-  })
-  // Sandbox launcher from the new-tab popup — same entry-point as
-  // the welcome card so the user can open more sandbox tabs without
-  // leaving the editor.
-  document.querySelector('#map-tab-add-sandbox')?.addEventListener('click', () => {
-    popup.classList.add('hidden')
-    openSandboxStub()
-  })
-  document.addEventListener('click', (e) => {
-    if (popup.classList.contains('hidden')) return
-    const addBtns = ['#map-tab-add'].map((id) => document.querySelector(id)).filter(Boolean)
-    if (addBtns.some((b) => e.target === b || b.contains(e.target))) return
-    if (popup.contains(e.target)) return
-    popup.classList.add('hidden')
-  })
+  // Tab bar + its "+" popup are React-managed.  configureReactUi
+  // resolves asynchronously (dynamic import), so we may run before
+  // the React island is loaded — `await` the promise so the bridge +
+  // mount fire as soon as the module lands.  configureReactUi caches
+  // its promise so this never starts a second import.
+  ;(async () => {
+    const ui = _reactUi || await configureReactUi()
+    if (!ui) return
+    if (typeof ui.configureTabBarBridge === 'function') {
+      ui.configureTabBarBridge({
+        onSwitch:   (i) => switchToTab(i),
+        onClose:    (i) => closeTab(i),
+        onNewMap:   () => { sizeDialogSource = 'tabbar'; openSizeDialog() },
+        onOpenMap:  () => openMapDialog('tabbar'),
+        onOpenUnit: () => { modelOpenIntent = 'add'; openModelPicker() },
+        onSandbox:  () => openSandboxStub(),
+      })
+    }
+    if (typeof ui.mountTabBar === 'function') ui.mountTabBar()
+    // Push the current tab list into the React state so the bar paints
+    // its initial render with whatever was already open (e.g. when this
+    // runs after a tab has already been added at boot).
+    if (typeof ui.setTabs === 'function') ui.setTabs(tabs, activeTabIndex)
+  })()
 }
 
 async function maybeAutoOpenFromQuery() {
@@ -1179,26 +1094,33 @@ async function openMapDialog(source = 'welcome') {
   // like the click did nothing.
   $('#welcome-dialog').classList.add('hidden')
   $('#model-viewer-dialog').classList.add('hidden')
-  $('#open-dialog').classList.remove('hidden')
-  $('#open-confirm').disabled = true
   selectedMapPath = null
-  // Clear any text the user typed in a previous session — the filter
-  // is session-scoped, not persisted, so each open is a clean start.
-  const filter = $('#open-filter')
-  if (filter) filter.value = ''
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
-  // Show skeleton immediately so the dialog never appears empty, then
-  // start fetching.  fetchMaps polls until the server marks the catalog
-  // as fully loaded.
   if (availableMaps.length === 0) mapsLoading = true
-  renderOpenList()
-  fetchMaps()
-  // Cursor lands in the filter every open so the user can start
-  // typing immediately — keeps the keyboard-driven flow alive.
-  // A requestAnimationFrame deferral lets the dialog actually become
-  // visible before we steal focus (Chrome ignores focus() on a
-  // display:none ancestor).
-  requestAnimationFrame(() => $('#open-filter')?.focus())
+  // React-managed dialog — see /ui/pickers/open-map-dialog.js.  We
+  // start polling fetchMaps() AND open the dialog in parallel so the
+  // user sees skeleton tiles immediately while the catalogue
+  // streams in.  Each poll cycle pushes fresh data via
+  // updateMapDialog().  On resolve we either route into
+  // confirmOpenMap (which loads + opens the map) or restore the
+  // editor surface the user came from.
+  ;(async () => {
+    const ui = _reactUi || await configureReactUi()
+    if (!ui || typeof ui.openMapDialog !== 'function') return
+    fetchMaps()
+    const picked = await ui.openMapDialog({
+      items: availableMaps,
+      loading: mapsLoading,
+      query: '',
+      selectedPath: null,
+    })
+    if (!picked) {
+      closeOpenDialog()
+      return
+    }
+    selectedMapPath = picked.path
+    confirmOpenMap()
+  })()
 }
 
 async function fetchMaps() {
@@ -1207,13 +1129,20 @@ async function fetchMaps() {
     const data = await resp.json()
     availableMaps = data.maps || []
     mapsLoading = !!data.loading
-  } catch (err) {
+  } catch {
     availableMaps = []
     mapsLoading = false
-    $('#open-list').innerHTML = `<div class="loading">Failed to load maps: ${escapeHTML(String(err))}</div>`
+    if (_reactUi && typeof _reactUi.updateMapDialog === 'function') {
+      _reactUi.updateMapDialog({ items: [], loading: false })
+    }
     return
   }
-  renderOpenList()
+  // Push the fresh catalog into the React picker (no-op when the
+  // picker isn't open).  The picker re-renders on its own state
+  // signal so we don't need to touch any DOM here.
+  if (_reactUi && typeof _reactUi.updateMapDialog === 'function') {
+    _reactUi.updateMapDialog({ items: availableMaps, loading: mapsLoading })
+  }
   if (mapsLoading) {
     mapsPollTimer = setTimeout(fetchMaps, 500)
   }
@@ -1223,7 +1152,9 @@ async function fetchMaps() {
 // the Welcome modal on first boot, the 3DO viewer if the active tab is a
 // model, or back to the map editor when they hit File → Open mid-session.
 function closeOpenDialog() {
-  $('#open-dialog').classList.add('hidden')
+  if (_reactUi && typeof _reactUi.closeMapDialog === 'function') {
+    _reactUi.closeMapDialog()
+  }
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
   if (openMapSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
@@ -1241,57 +1172,6 @@ function closeOpenDialog() {
   }
 }
 
-function renderOpenList() {
-  const list = $('#open-list')
-  const q = ($('#open-filter').value || '').trim().toLowerCase()
-  const filtered = availableMaps.filter((m) => {
-    if (!q) return true
-    const hay = `${m.name} ${m.missionName || ''} ${m.planet || ''} ${m.numPlayers || ''}`.toLowerCase()
-    return hay.includes(q)
-  })
-  if (filtered.length === 0) {
-    // While the catalog is still loading, paint skeleton tiles instead
-    // of "no matches" — even when the user is mid-type — so the filter
-    // result doesn't lie about the empty result.
-    if (mapsLoading) {
-      const frag = document.createDocumentFragment()
-      for (let i = 0; i < 8; i++) {
-        const sk = document.createElement('div')
-        sk.className = 'open-list-skeleton'
-        sk.innerHTML = '<div class="thumb"></div><div class="line"></div><div class="line short"></div>'
-        frag.appendChild(sk)
-      }
-      list.replaceChildren(frag)
-      return
-    }
-    list.innerHTML = '<div class="loading">No maps in this context match.</div>'
-    return
-  }
-  const frag = document.createDocumentFragment()
-  for (const m of filtered) {
-    const card = document.createElement('button')
-    card.className = 'open-list-item'
-    card.dataset.path = m.path
-    if (m.path === selectedMapPath) card.classList.add('selected')
-    const title = m.missionName || m.name
-    const meta = [
-      m.tileW && m.tileH ? `${m.tileW}×${m.tileH}` : null,
-      m.planet || null,
-      m.numPlayers ? `${m.numPlayers} players` : null,
-    ].filter(Boolean).join(' · ')
-    const thumb = m.minimapUrl
-      ? `<img class="thumb" src="${m.minimapUrl}" alt="" loading="lazy" />`
-      : `<div class="thumb"></div>`
-    card.innerHTML = `${thumb}<div class="title">${escapeHTML(title)}</div><div class="meta">${escapeHTML(meta)}</div>`
-    card.addEventListener('click', () => {
-      selectedMapPath = m.path
-      $$('.open-list-item').forEach((el) => el.classList.toggle('selected', el.dataset.path === m.path))
-      $('#open-confirm').disabled = false
-    })
-    frag.appendChild(card)
-  }
-  list.replaceChildren(frag)
-}
 
 async function confirmOpenMap() {
   if (!selectedMapPath) return
@@ -1317,152 +1197,6 @@ async function confirmOpenMap() {
 // — that would scroll the dialog while typing), Enter loads the
 // current selection.  Falls back gracefully when no cards are
 // rendered (skeleton / empty state).
-function wireOpenDialogKeyboard() {
-  const filter = $('#open-filter')
-  const list = $('#open-list')
-  const dlg = $('#open-dialog')
-  if (!filter || !list || !dlg) return
-  // Escape dismisses the dialog from any focus location inside it.
-  // The main editor-mode Escape handler in wireKeyboard() only mounts
-  // after finishEditorBoot, so on the welcome → Open flow that path
-  // isn't wired yet — handle it here so Esc works either way.
-  // Capture phase ensures we beat the search-input's native
-  // clear-on-escape behaviour.
-  dlg.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return
-    if (dlg.classList.contains('hidden')) return
-    e.preventDefault()
-    e.stopPropagation()
-    closeOpenDialog()
-  }, true)
-
-  function visibleCards() {
-    return Array.from(list.querySelectorAll('.open-list-item'))
-  }
-  function setKbdFocus(idx) {
-    const cards = visibleCards()
-    if (cards.length === 0) return
-    const wrapped = ((idx % cards.length) + cards.length) % cards.length
-    cards.forEach((c, i) => c.classList.toggle('kbd-focus', i === wrapped))
-    const target = cards[wrapped]
-    // selectedMapPath also tracks the kbd cursor so Open Selected lights up.
-    selectedMapPath = target.dataset.path
-    cards.forEach((c) => c.classList.toggle('selected', c.dataset.path === selectedMapPath))
-    $('#open-confirm').disabled = false
-    target.scrollIntoView({ block: 'nearest' })
-  }
-  function currentIdx() {
-    const cards = visibleCards()
-    const i = cards.findIndex((c) => c.classList.contains('kbd-focus'))
-    if (i >= 0) return i
-    return cards.findIndex((c) => c.dataset.path === selectedMapPath)
-  }
-  // When focus first lands on the list (Tab from filter, or click on
-  // empty list area), light up the first card so arrow keys have an
-  // anchor immediately.  Without this the user would have to press
-  // Arrow once "blind" to make the first selection visible.
-  list.addEventListener('focus', () => {
-    if (currentIdx() < 0) {
-      const cards = visibleCards()
-      if (cards.length > 0) setKbdFocus(0)
-    }
-  })
-  // Type-ahead jump.  Letters / digits typed while the list has focus
-  // accumulate into a small buffer and the first card whose visible
-  // title starts with that buffer (case-insensitive) is highlighted.
-  // Arrow keys clear the buffer so a "ME → ↑K" sequence ends up at
-  // K, not "MEK".  TYPEAHEAD_TIMEOUT_MS also resets the buffer once
-  // the user has paused — typical OS picker behaviour.
-  const TYPEAHEAD_TIMEOUT_MS = 1000
-  let typeaheadBuf = ''
-  let typeaheadTimer = 0
-  function resetTypeahead() {
-    typeaheadBuf = ''
-    if (typeaheadTimer) { clearTimeout(typeaheadTimer); typeaheadTimer = 0 }
-  }
-  function cardTitle(card) {
-    // .title element holds the rendered name (mission or filename).
-    return (card.querySelector('.title')?.textContent || '').toLowerCase()
-  }
-  function jumpToPrefix(buf) {
-    const needle = buf.toLowerCase()
-    const cards = visibleCards()
-    const hit = cards.findIndex((c) => cardTitle(c).startsWith(needle))
-    if (hit >= 0) setKbdFocus(hit)
-  }
-  // Arrow + Enter on the list itself.
-  list.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      if (selectedMapPath) { e.preventDefault(); confirmOpenMap() }
-      return
-    }
-    const cards = visibleCards()
-    if (cards.length === 0) return
-    const cols = 4 // matches .open-list grid-template-columns
-    const cur = currentIdx()
-    let next
-    if (e.key === 'ArrowDown')      next = cur < 0 ? 0 : cur + cols
-    else if (e.key === 'ArrowUp')   next = cur < 0 ? 0 : cur - cols
-    else if (e.key === 'ArrowRight')next = cur < 0 ? 0 : cur + 1
-    else if (e.key === 'ArrowLeft') next = cur < 0 ? 0 : cur - 1
-    else if (e.key === 'Home')      next = 0
-    else if (e.key === 'End')       next = cards.length - 1
-    else {
-      // Type-ahead: any single printable character feeds the prefix
-      // buffer.  Filtering modifier+key combos (Ctrl+A, Alt+X) keeps
-      // the dialog's other shortcuts working.
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && /[a-z0-9 \-_]/i.test(e.key)) {
-        e.preventDefault()
-        typeaheadBuf += e.key
-        jumpToPrefix(typeaheadBuf)
-        if (typeaheadTimer) clearTimeout(typeaheadTimer)
-        typeaheadTimer = setTimeout(resetTypeahead, TYPEAHEAD_TIMEOUT_MS)
-      } else if (e.key === 'Backspace') {
-        // Shorten the buffer one char at a time so the user can fix
-        // a typo without starting over.
-        e.preventDefault()
-        typeaheadBuf = typeaheadBuf.slice(0, -1)
-        if (typeaheadBuf) {
-          jumpToPrefix(typeaheadBuf)
-          if (typeaheadTimer) clearTimeout(typeaheadTimer)
-          typeaheadTimer = setTimeout(resetTypeahead, TYPEAHEAD_TIMEOUT_MS)
-        } else {
-          resetTypeahead()
-        }
-      }
-      return
-    }
-    e.preventDefault()
-    // Any arrow key clears the type-ahead — "ME ↑ K" ends at K.
-    resetTypeahead()
-    setKbdFocus(next)
-  })
-  // Enter on the filter — if the current filter narrows to one map,
-  // pressing Enter opens it.  Saves a Tab → Enter round-trip when
-  // the user already knows what they want.
-  filter.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return
-    const cards = visibleCards()
-    if (cards.length === 0) return
-    // Pick the kbd-focused card if any, else the first.
-    const cur = currentIdx()
-    const idx = cur >= 0 ? cur : 0
-    e.preventDefault()
-    setKbdFocus(idx)
-    confirmOpenMap()
-  })
-  // Arrow down from the filter jumps into the list with the first
-  // card focused — quicker than Tab for keyboard-only users.
-  filter.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') {
-      const cards = visibleCards()
-      if (cards.length === 0) return
-      e.preventDefault()
-      list.focus()
-      setKbdFocus(currentIdx() >= 0 ? currentIdx() : 0)
-    }
-  })
-}
 
 // openLoadedMap hydrates editor state from a /api/studio/load response
 // and jumps straight into the editor (skipping the New-map size
@@ -8900,35 +8634,11 @@ function wireDeveloperDialog() {
     })
   })
   $('#btn-settings')?.addEventListener('click', openSettingsDialog)
-  // Close button on the settings dialog now also saves — the dialog
-  // is small enough that a separate Apply offered no value, just a
-  // surface for "I clicked Close but my changes vanished" confusion.
-  $('#settings-apply')?.addEventListener('click', applySettingsDialog)
-  $('#settings-reset')?.addEventListener('click', resetSettingsDialog)
-  // ESC closes the settings dialog (saves nothing — same as before).
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return
-    const dlg = $('#settings-dialog')
-    if (dlg && !dlg.classList.contains('hidden')) {
-      e.stopPropagation()
-      closeSettingsDialog()
-    }
-  })
-  // Settings dialog tab strip — same pattern as the Help dialog's
-  // tabs.  Clicking a tab activates the matching body pane.
-  $$('#settings-dialog .settings-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const key = tab.dataset.settingsTab
-      $$('#settings-dialog .settings-tab').forEach((t) => {
-        const on = t.dataset.settingsTab === key
-        t.classList.toggle('active', on)
-        t.setAttribute('aria-selected', on ? 'true' : 'false')
-      })
-      $$('#settings-dialog .settings-tab-body').forEach((b) => {
-        b.classList.toggle('active', b.dataset.settingsTabBody === key)
-      })
-    })
-  })
+  // Apply / Reset / Escape are handled by the React Settings dialog
+  // itself (see /ui/dialogs/settings-dialog.js).  The legacy static
+  // #settings-apply / #settings-reset / #settings-cancel buttons in
+  // the static HTML are no longer driven.
+  // Settings dialog tab strip is React-managed now.
   $$('#developer-dialog .dev-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       const key = tab.dataset.devTab
@@ -8989,119 +8699,114 @@ const DEFAULT_SETTINGS = {
   unitDefaultGodBeams: true,
 }
 
+// openSettingsDialog — React-managed now (see /ui/dialogs/settings-dialog.js).
+// Snapshots the current state into the initial form values, then hands
+// the dialog the apply + reset callbacks.  Apply pushes back into the
+// host's state.settings + flushes downstream effects (minimap toggle,
+// View-menu flags, canvas re-render, prefs persist).
 function openSettingsDialog() {
-  const dlg = $('#settings-dialog')
-  if (!dlg) return
+  if (!_reactUi || typeof _reactUi.openSettingsDialog !== 'function') return
   const s = state.settings || DEFAULT_SETTINGS
-  $('#set-zoom-step').value = s.zoomStep ?? 1.25
-  $('#set-erase-size').value = s.defaultEraseSize ?? 1
-  $('#set-voids-size').value = s.defaultVoidsSize ?? 1
-  $('#set-hm-radius').value = s.defaultHmRadius ?? 4
-  $('#set-hm-strength').value = s.defaultHmStrength ?? 4
-  $('#set-hb-idle').value = s.heartbeatIdleMs ?? 5000
-  $('#set-hb-retry').value = s.heartbeatReconnectMs ?? 1000
-  // Visibility defaults read from the live state booleans (they're
-  // the same flags the View menu toggles).
-  $('#set-show-minimap').checked = !!state.showMinimap
-  $('#set-show-camera-info').checked = !!state.showCameraInfo
-  $('#set-show-gridlines').checked = !!state.showGridlines
-  $('#set-animate-features').checked = !!state.animateFeatures
-  $('#set-show-voids').checked = !!state.showVoids
-  $('#set-show-contours').checked = !!state.showContours
-  $('#set-show-buildable').checked = !!state.showBuildable
-  $('#set-show-features').checked = !!state.showFeatures
-  $('#set-show-startpos').checked = !!state.showStartPositions
-  // Unit Editor tab — defaults for newly-opened model tabs.
-  if ($('#set-unit-env')) $('#set-unit-env').value = s.unitDefaultEnv ?? 'greenworld'
-  if ($('#set-unit-reflections')) $('#set-unit-reflections').checked = s.unitDefaultReflections !== false
-  if ($('#set-unit-bob')) $('#set-unit-bob').checked = s.unitDefaultBob !== false
-  if ($('#set-unit-water-reflections')) $('#set-unit-water-reflections').checked = s.unitDefaultWaterReflections !== false
-  if ($('#set-unit-specular')) $('#set-unit-specular').checked = s.unitDefaultSpecular !== false
-  if ($('#set-unit-godbeams')) $('#set-unit-godbeams').checked = s.unitDefaultGodBeams !== false
-  // Force-target-ground gesture — flag persisted by the shared
-  // force-target.js module (localStorage; default ON when absent).
-  // Read straight from the source of truth so the checkbox always
-  // reflects the module's view, even if the user toggled it elsewhere.
-  if ($('#set-force-target-ground')) {
-    try { $('#set-force-target-ground').checked = (localStorage.getItem('studio.forceTargetGround') !== 'off') } catch { /* ignore */ }
-  }
-  // Smart-default the active tab to whatever workspace the user is
-  // currently in.  Model tab open → Unit Editor; map tab → Map
-  // Editor; nothing open → General.
   const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
-  const wantTab = activeTab?.type === 'model' ? 'unit'
+  const defaultTab = activeTab?.type === 'model' ? 'unit'
     : activeTab?.type === 'map' ? 'map'
     : 'general'
-  $$('#settings-dialog .settings-tab').forEach((t) => {
-    const on = t.dataset.settingsTab === wantTab
-    t.classList.toggle('active', on)
-    t.setAttribute('aria-selected', on ? 'true' : 'false')
+  // forceTargetGround lives in localStorage (force-target.js owns it).
+  // Default OFF — the unit viewer's plain canvas click should orbit the
+  // camera, not fire the primary weapon at whatever the ground raycast
+  // hits.  Mirrors force-target.js's forceTargetEnabled() default.
+  let forceTargetGround = false
+  try { forceTargetGround = (localStorage.getItem('studio.forceTargetGround') === 'on') } catch { /* ignore */ }
+  const envOptions = WORLDS.map((w) => ({ key: w.slug, label: w.label }))
+  const initial = {
+    zoomStep:                  s.zoomStep ?? 1.25,
+    defaultEraseSize:          s.defaultEraseSize ?? 1,
+    defaultVoidsSize:          s.defaultVoidsSize ?? 1,
+    defaultHmRadius:           s.defaultHmRadius ?? 4,
+    defaultHmStrength:         s.defaultHmStrength ?? 4,
+    heartbeatIdleMs:           s.heartbeatIdleMs ?? 5000,
+    heartbeatReconnectMs:      s.heartbeatReconnectMs ?? 1000,
+    showMinimap:               !!state.showMinimap,
+    showCameraInfo:            !!state.showCameraInfo,
+    showGridlines:             !!state.showGridlines,
+    animateFeatures:           !!state.animateFeatures,
+    showVoids:                 !!state.showVoids,
+    showContours:              !!state.showContours,
+    showBuildable:             !!state.showBuildable,
+    showFeatures:              !!state.showFeatures,
+    showStartPositions:        !!state.showStartPositions,
+    unitDefaultEnv:            s.unitDefaultEnv ?? 'greenworld',
+    unitDefaultReflections:    s.unitDefaultReflections !== false,
+    unitDefaultBob:            s.unitDefaultBob !== false,
+    unitDefaultWaterReflections: s.unitDefaultWaterReflections !== false,
+    unitDefaultSpecular:       s.unitDefaultSpecular !== false,
+    unitDefaultGodBeams:       s.unitDefaultGodBeams !== false,
+    forceTargetGround,
+  }
+  void _reactUi.openSettingsDialog({
+    initial,
+    envOptions,
+    defaultTab,
+    onApply: (v) => {
+      const next = { ...DEFAULT_SETTINGS, ...(state.settings || {}) }
+      next.zoomStep             = clamp(+v.zoomStep || 1.25, 1.05, 2)
+      next.defaultEraseSize     = clamp(Math.round(+v.defaultEraseSize || 1), 1, 16)
+      next.defaultVoidsSize     = clamp(Math.round(+v.defaultVoidsSize || 1), 1, 32)
+      next.defaultHmRadius      = clamp(Math.round(+v.defaultHmRadius || 4), 1, 32)
+      next.defaultHmStrength    = clamp(Math.round(+v.defaultHmStrength || 4), 1, 32)
+      next.heartbeatIdleMs      = clamp(Math.round(+v.heartbeatIdleMs || 5000), 500, 60000)
+      next.heartbeatReconnectMs = clamp(Math.round(+v.heartbeatReconnectMs || 1000), 200, 10000)
+      next.unitDefaultEnv               = v.unitDefaultEnv || 'greenworld'
+      next.unitDefaultReflections       = !!v.unitDefaultReflections
+      next.unitDefaultBob               = !!v.unitDefaultBob
+      next.unitDefaultWaterReflections  = !!v.unitDefaultWaterReflections
+      next.unitDefaultSpecular          = !!v.unitDefaultSpecular
+      next.unitDefaultGodBeams          = !!v.unitDefaultGodBeams
+      state.settings = next
+      try { localStorage.setItem('studio.forceTargetGround', v.forceTargetGround ? 'on' : 'off') } catch { /* ignore */ }
+      setMinimapVisible(!!v.showMinimap)
+      setCameraInfoVisible(!!v.showCameraInfo)
+      state.showGridlines       = !!v.showGridlines
+      state.animateFeatures     = !!v.animateFeatures
+      state.showVoids           = !!v.showVoids
+      state.showContours        = !!v.showContours
+      state.showBuildable       = !!v.showBuildable
+      state.showFeatures        = !!v.showFeatures
+      state.showStartPositions  = !!v.showStartPositions
+      syncDomFromPrefs()
+      persistPrefs()
+      renderCanvas()
+      setStatus('Settings applied and saved.')
+    },
+    onReset: () => {
+      // Restore SHIPPED defaults into the form (the React component
+      // re-seeds its local state from whatever this returns).  Doesn't
+      // commit — the user still has to hit Apply.
+      state.settings = { ...DEFAULT_SETTINGS }
+      return {
+        ...initial,
+        zoomStep:                  DEFAULT_SETTINGS.zoomStep,
+        defaultEraseSize:          DEFAULT_SETTINGS.defaultEraseSize,
+        defaultVoidsSize:          DEFAULT_SETTINGS.defaultVoidsSize,
+        defaultHmRadius:           DEFAULT_SETTINGS.defaultHmRadius,
+        defaultHmStrength:         DEFAULT_SETTINGS.defaultHmStrength,
+        heartbeatIdleMs:           DEFAULT_SETTINGS.heartbeatIdleMs,
+        heartbeatReconnectMs:      DEFAULT_SETTINGS.heartbeatReconnectMs,
+        unitDefaultEnv:            DEFAULT_SETTINGS.unitDefaultEnv,
+        unitDefaultReflections:    DEFAULT_SETTINGS.unitDefaultReflections,
+        unitDefaultBob:            DEFAULT_SETTINGS.unitDefaultBob,
+        unitDefaultWaterReflections: DEFAULT_SETTINGS.unitDefaultWaterReflections,
+        unitDefaultSpecular:       DEFAULT_SETTINGS.unitDefaultSpecular,
+        unitDefaultGodBeams:       DEFAULT_SETTINGS.unitDefaultGodBeams,
+      }
+    },
   })
-  $$('#settings-dialog .settings-tab-body').forEach((b) => {
-    b.classList.toggle('active', b.dataset.settingsTabBody === wantTab)
-  })
-  dlg.classList.remove('hidden')
-  // Focus the first input in the active tab body so keyboard users
-  // can start typing right away.  Falls back to the first body's
-  // input if the matcher misses (defensive).
-  const firstInput = dlg.querySelector('.settings-tab-body.active input, .settings-tab-body.active select')
-  if (firstInput) firstInput.focus()
 }
 
 function closeSettingsDialog() {
-  $('#settings-dialog')?.classList.add('hidden')
-}
-
-function applySettingsDialog() {
-  const num = (id, fb) => {
-    const v = parseFloat($(id).value)
-    return Number.isFinite(v) ? v : fb
+  if (_reactUi && typeof _reactUi.closeSettingsDialog === 'function') {
+    _reactUi.closeSettingsDialog()
   }
-  const s = { ...DEFAULT_SETTINGS, ...(state.settings || {}) }
-  s.zoomStep = clamp(num('#set-zoom-step', 1.25), 1.05, 2)
-  s.defaultEraseSize = clamp(Math.round(num('#set-erase-size', 1)), 1, 16)
-  s.defaultVoidsSize = clamp(Math.round(num('#set-voids-size', 1)), 1, 32)
-  s.defaultHmRadius = clamp(Math.round(num('#set-hm-radius', 4)), 1, 32)
-  s.defaultHmStrength = clamp(Math.round(num('#set-hm-strength', 4)), 1, 32)
-  s.heartbeatIdleMs = clamp(Math.round(num('#set-hb-idle', 5000)), 500, 60000)
-  s.heartbeatReconnectMs = clamp(Math.round(num('#set-hb-retry', 1000)), 200, 10000)
-  // Unit Editor defaults — picked up by the next openModelViewer().
-  if ($('#set-unit-env')) s.unitDefaultEnv = $('#set-unit-env').value
-  if ($('#set-unit-reflections')) s.unitDefaultReflections = $('#set-unit-reflections').checked
-  if ($('#set-unit-bob')) s.unitDefaultBob = $('#set-unit-bob').checked
-  if ($('#set-unit-water-reflections')) s.unitDefaultWaterReflections = $('#set-unit-water-reflections').checked
-  if ($('#set-unit-specular')) s.unitDefaultSpecular = $('#set-unit-specular').checked
-  if ($('#set-unit-godbeams')) s.unitDefaultGodBeams = $('#set-unit-godbeams').checked
-  // Force-target-ground gesture — write straight to localStorage so
-  // the shared force-target.js module sees the new value on its next
-  // read.  No need to round-trip through state.settings.
-  if ($('#set-force-target-ground')) {
-    try { localStorage.setItem('studio.forceTargetGround', $('#set-force-target-ground').checked ? 'on' : 'off') } catch { /* ignore */ }
-  }
-  state.settings = s
-  // Visibility flags: push through the existing setters so the View
-  // menu rows + canvas re-render in step.
-  setMinimapVisible($('#set-show-minimap').checked)
-  setCameraInfoVisible($('#set-show-camera-info').checked)
-  state.showGridlines = $('#set-show-gridlines').checked
-  state.animateFeatures = $('#set-animate-features').checked
-  state.showVoids = $('#set-show-voids').checked
-  state.showContours = $('#set-show-contours').checked
-  state.showBuildable = $('#set-show-buildable').checked
-  state.showFeatures = $('#set-show-features').checked
-  state.showStartPositions = $('#set-show-startpos').checked
-  syncDomFromPrefs()
-  persistPrefs()
-  renderCanvas()
-  closeSettingsDialog()
-  setStatus('Settings applied and saved.')
-}
-
-function resetSettingsDialog() {
-  state.settings = { ...DEFAULT_SETTINGS }
-  // Re-open so the form repaints with the defaults — saves the user
-  // a second click to verify what changed.
-  openSettingsDialog()
 }
 
 // renderDevTilesGrid paints a thumbnail per distinct tile + occurrence
@@ -10074,43 +9779,18 @@ async function openExistingMapFromEditor() {
 
 // confirmDialog shows the in-app confirm modal and resolves with the
 // user's choice.  Replaces the native window.confirm() so the prompt
-// looks like the rest of the editor and isn't a browser-skinned blocker.
-function confirmDialog({ title = 'Confirm', message = '', okLabel = 'OK', cancelLabel = 'Cancel', okDanger = false } = {}) {
-  return new Promise((resolve) => {
-    const dialog = $('#confirm-dialog')
-    const titleEl = $('#confirm-title')
-    const msgEl = $('#confirm-message')
-    const okBtn = $('#confirm-ok')
-    const cancelBtn = $('#confirm-cancel')
-    if (!dialog || !titleEl || !msgEl || !okBtn || !cancelBtn) {
-      resolve(window.confirm(`${title}\n\n${message}`))
-      return
-    }
-    titleEl.textContent = title
-    msgEl.textContent = message
-    okBtn.textContent = okLabel
-    cancelBtn.textContent = cancelLabel
-    okBtn.classList.toggle('danger', !!okDanger)
-    dialog.classList.remove('hidden')
-    const cleanup = (result) => {
-      dialog.classList.add('hidden')
-      okBtn.classList.remove('danger')
-      okBtn.removeEventListener('click', onOK)
-      cancelBtn.removeEventListener('click', onCancel)
-      document.removeEventListener('keydown', onKey, true)
-      resolve(result)
-    }
-    const onOK = () => cleanup(true)
-    const onCancel = () => cleanup(false)
-    const onKey = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cleanup(false) }
-      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); cleanup(true) }
-    }
-    okBtn.addEventListener('click', onOK)
-    cancelBtn.addEventListener('click', onCancel)
-    document.addEventListener('keydown', onKey, true)
-    okBtn.focus()
-  })
+// looks like the rest of the editor and isn't a browser-skinned
+// blocker.  The modal is now a React component (see /ui/dialogs/confirm-dialog.js
+// and the re-export through /ui/mount.js); this wrapper just delegates
+// to it.  Sync-callable: returns the React-resolved Promise<boolean>
+// immediately, falling back to window.confirm only if the React UI
+// island isn't loaded yet (very early-boot calls; in practice every
+// user-driven confirm fires long after configureReactUi resolved).
+function confirmDialog(opts = {}) {
+  if (_reactUi && typeof _reactUi.confirmDialog === 'function') {
+    return _reactUi.confirmDialog(opts)
+  }
+  return Promise.resolve(window.confirm(`${opts.title || 'Confirm'}\n\n${opts.message || ''}`))
 }
 
 // Resize dialog state — anchor index in [0..2] for row/col.
@@ -11089,660 +10769,51 @@ async function runQualityChecker(payload, { mode = 'save' } = {}) {
 let modelViewerInstance = null
 let availableModels = []
 let modelsLoaded = false
-let selectedModelName = null
+// selectedModelName was the module-scoped staging slot the legacy
+// Open Unit dialog wrote into before openModelViewer fired.  Picker
+// is React now and resolves with { name, sandboxIntent } directly so
+// the staging slot is gone.
 
-function wireWelcomeTabs() {
-  const tabs = $$('.welcome-tab')
-  const panels = $$('.welcome-tab-panel')
-  if (!tabs.length || !panels.length) return
-  for (const tab of tabs) {
-    if (tab.disabled) continue
-    tab.addEventListener('click', () => {
-      const key = tab.dataset.welcomeTab
-      if (!key) return
-      for (const t of tabs) {
-        t.classList.toggle('active', t === tab)
-        t.setAttribute('aria-selected', t === tab ? 'true' : 'false')
-      }
-      for (const p of panels) {
-        p.classList.toggle('hidden', p.dataset.welcomeTabPanel !== key)
-      }
-    })
-  }
-}
 
 function wireModelDialogs() {
-  const openBtn = $('#welcome-model-open')
-  if (openBtn) openBtn.addEventListener('click', openModelPicker)
-  // Sandbox welcome card — for now opens an info dialog explaining
-  // the Phase-1 state of the feature so the user knows it's wired
-  // but not yet feature-complete.  Subsequent commits will replace
-  // this with the actual sandbox tab launch.
-  const sandboxBtn = $('#welcome-sandbox')
-  if (sandboxBtn) sandboxBtn.addEventListener('click', openSandboxStub)
-  const back = $('#model-open-back')
-  if (back) back.addEventListener('click', closeModelPicker)
-  const filter = $('#model-filter')
-  if (filter) filter.addEventListener('input', renderModelList)
-  const confirm = $('#model-open-confirm')
-  if (confirm) confirm.addEventListener('click', () => {
-    if (!selectedModelName) return
-    // Sandbox spawn path — when the user clicked "Spawn Unit" inside
-    // the sandbox panel, the picker confirm starts MOUSE PLACEMENT:
-    // the picked unit's geometry + COB load up front and a translucent
-    // green wireframe ghost follows the cursor on the ground plane.
-    // Click commits the spawn at the cursor; Esc / right-click
-    // cancels.  beginPlacement keeps the ghost active after a commit
-    // so the user can drop several copies of the same unit in quick
-    // succession.
-    if (window.__sandboxSpawnPending && sandboxViewInstance) {
-      window.__sandboxSpawnPending = false
-      const pendingSide = (window.__sandboxSpawnPendingSide | 0) || 0
-      window.__sandboxSpawnPendingSide = 0
-      $('#model-open-dialog')?.classList.add('hidden')
-      $('#model-viewer-dialog')?.classList.remove('hidden')
-      void sandboxViewInstance.beginPlacement(selectedModelName, { side: pendingSide })
-      return
-    }
-    openModelViewer(selectedModelName)
-  })
+  // The welcome-card buttons (#welcome-model-open, #welcome-sandbox)
+  // are React-managed now via mountWelcomeScreen()'s onOpenUnit /
+  // onOpenSandbox callbacks.  The Open Unit picker dialog itself is
+  // also React-owned (see /ui/pickers/open-unit-dialog.js), so the
+  // legacy #model-filter / #model-open-back / #model-open-confirm
+  // wiring is gone too — those static elements are no longer driven.
   // No "Close" button on the viewer overlay any more — the user
   // closes the model tab via the × in the shared tab bar, same
   // gesture they use for maps.
-  // Camera dropdown: reset + auto-rotate toggle.
-  const reset = $('#mv-act-reset')
-  if (reset) reset.addEventListener('click', () => {
-    if (modelViewerInstance && modelViewerInstance.model) {
-      const cam = modelViewerInstance.camera
-      cam.frameBounds(
-        modelViewerInstance.model.bounds.min,
-        modelViewerInstance.model.bounds.max,
-      )
-      // Restore default angle too — auto-rotate may have walked
-      // yaw around the unit; reset means "back to the entry view".
-      cam.yaw = 215 * Math.PI / 180
-      cam.pitch = 18 * Math.PI / 180
-      cam.distance *= 1.25
-      modelViewerInstance.renderer.requestRedraw()
-    }
-  })
-  const auto = $('#mv-act-autorotate')
-  if (auto) auto.addEventListener('click', (e) => {
-    // Auto-Rotate now lives inside the Camera dropdown.  Stop the
-    // click from bubbling out to the dropdown's outside-click
-    // handler, otherwise the dropdown closes the instant the user
-    // toggles the row.
-    e.stopPropagation()
-    const on = auto.dataset.on !== '1'
-    auto.dataset.on = on ? '1' : '0'
-    auto.classList.toggle('active', on)
-    if (modelViewerInstance) modelViewerInstance.setAutoRotate(on)
-  })
+  //
+  // The unit-editor ribbon (Model / Camera / Rendering / Scene / Studio
+  // Options / Animation / View / Configure / Help) is React-managed
+  // now (see /ui/unit-editor/ribbon/model-viewer-ribbon.js).  Mount +
+  // bridge wiring lives in wireModelViewerRibbon() which is called
+  // once the React UI island has finished loading.
+  //
   // Tree filter — typing narrows the visible pieces to those whose
   // name matches.  Match is case-insensitive substring, applied to
   // both group and leaf rows.
   const treeFilter = $('#mv-tree-filter')
   if (treeFilter) treeFilter.addEventListener('input', () => filterPieceTree(treeFilter.value))
-  // Model dropdown actions.
-  wireModelRibbonDropdown('mv-model-dropdown')
-  wireModelRibbonDropdown('mv-anim-dropdown')
-  wireModelRibbonDropdown('mv-camera-dropdown')
-  wireModelRibbonDropdown('mv-render-dropdown')
-  wireModelRibbonDropdown('mv-ground-dropdown')
-  wireModelRibbonDropdown('mv-options-dropdown')
-  wireModelRibbonDropdown('mv-view-dropdown')
   wireMvInspectors()
-  wireModelViewMenu()
-  wireModelTabBar()
-  wireModelChromeButtons()
-  // Copyright year now lives in the shared #copyright-year in the
-  // editor's footer — no per-viewer year stamp needed.
-  const openAgain = $('#mv-act-open')
-  if (openAgain) openAgain.addEventListener('click', () => {
-    closeModelViewer()
-  })
-  const showStats = $('#mv-act-pieces')
-  if (showStats) showStats.addEventListener('click', () => {
-    if (!modelViewerInstance || !modelViewerInstance.model) return
-    const m = modelViewerInstance.model
-    const triCount = m.flat.reduce((n, p) => n + p.drawGroups.reduce((s, g) => s + (g.mode === modelViewerInstance.renderer.gl.TRIANGLES ? g.vertexCount / 3 : 0), 0), 0)
-    setModelViewerStatus(`${m.name} · ${m.flat.length} pieces · ${Math.round(triCount)} triangles`)
-  })
+  // Bring the Preact UI island online once at boot.  Persistence
+  // callbacks bridge the panel-store's signals into the existing
+  // prefs system so a React panel's saved position / collapsed /
+  // visible state ends up in the same localStorage blob the legacy
+  // panels write to, and the View menu + Developer Tools dropdown
+  // mirrors stay in lockstep without an extra cross-channel.
+  configureReactUi()
 }
 
-// rowNameText pulls just the human-readable name out of a menu-row.
-// The row's structure is <span ico><span name><span check><span chev>;
-// row.textContent concatenates all of them, so a naive textContent
-// read picks up the icon emoji + the check glyph and ends up
-// painting "🌊🌊Sea" on the dropdown button.  This helper grabs
-// just the children that aren't icon / check / chev / lbl spans.
-function rowNameText(row) {
-  if (!row) return ''
-  const parts = [...row.children].filter((c) => (
-    c.tagName === 'SPAN' &&
-    !c.classList.contains('ico') &&
-    !c.classList.contains('menu-check') &&
-    !c.classList.contains('chev-right') &&
-    !c.classList.contains('chev-down') &&
-    !c.classList.contains('lbl') &&
-    !c.classList.contains('env-current-lbl')
-  ))
-  if (parts.length === 0) return row.textContent.trim()
-  return parts.map((c) => c.textContent).join(' ').trim()
-}
-
-// wireToggleSubmenu wires a menu row that does both:
-//   * Body click → toggles a boolean effect on/off (the menu-check
-//     glyph shows the state)
-//   * Hover or click on the row → reveals a submenu of sliders
-// The Waves and Bobbing/Swaying rows in Studio Options use this.
-function wireToggleSubmenu({ rowId, submenuId, onToggle }) {
-  const row = document.getElementById(rowId)
-  const sub = document.getElementById(submenuId)
-  if (!row || !sub) return
-  // Default state — start with toggle on (data-on already "1" in HTML).
-  row.dataset.on = row.dataset.on || '1'
-  row.classList.toggle('active', row.dataset.on === '1')
-  let suppress = false
-  row.addEventListener('click', (e) => {
-    e.stopPropagation()
-    // Clicks on the slider thumb itself bubble up — ignore so dragging
-    // doesn't flip the toggle.
-    if (e.target.tagName === 'INPUT') return
-    if (suppress) { suppress = false; return }
-    const on = row.dataset.on !== '1'
-    row.dataset.on = on ? '1' : '0'
-    row.classList.toggle('active', on)
-    onToggle(on)
-  })
-  // Mouse over the chev opens the submenu without firing the toggle.
-  // Use mouseenter on the row to reveal; mouseleave hides.  This
-  // matches the Environment row's hover behaviour.
-  row.addEventListener('mouseenter', () => sub.classList.remove('hidden'))
-  row.addEventListener('mouseleave', (e) => {
-    // Keep open if the cursor moved onto the submenu itself.
-    if (e.relatedTarget && sub.contains(e.relatedTarget)) return
-    sub.classList.add('hidden')
-  })
-  sub.addEventListener('mouseleave', () => sub.classList.add('hidden'))
-  // Stop submenu clicks from closing the parent dropdown.
-  sub.addEventListener('click', (e) => e.stopPropagation())
-}
-
-// wireSliderInput hooks a range input + value label.  The input
-// value is divided by 100 before being handed to the callback so
-// HTML can use integer steps for cleaner scrub behaviour and the
-// renderer still gets a smooth float multiplier.  An optional
-// formatter overrides the default "1.0×" label - used by sliders
-// that want a "12%" or other-unit display.  The formatter receives
-// the post-scaling float so 12 (% step) reads as 0.12 to the
-// callback but 12% to the user.
-function wireSliderInput(inputId, valueId, cb, format) {
-  const inp = document.getElementById(inputId)
-  const lbl = document.getElementById(valueId)
-  if (!inp) return
-  const update = () => {
-    const v = parseInt(inp.value, 10) / 100
-    if (lbl) lbl.textContent = format ? format(parseInt(inp.value, 10), v) : (v.toFixed(1) + '×')
-    cb(v)
-  }
-  inp.addEventListener('input', update)
-  // Stop clicks on the slider from bubbling to the parent row's
-  // toggle handler.
-  inp.addEventListener('click', (e) => e.stopPropagation())
-  inp.addEventListener('pointerdown', (e) => e.stopPropagation())
-}
-
-// wireModelRibbonDropdown opens / closes a ribbon-style popup,
-// positioning it below the button.  Mirrors the editor's ribbon
-// behaviour without re-using its handlers (the editor's wireRibbon()
-// is bound to its own button IDs).
-function wireModelRibbonDropdown(id) {
-  const root = document.getElementById(id)
-  if (!root) return
-  const btn = root.querySelector('.ribbon-dropdown-btn')
-  const popup = root.querySelector('.ribbon-dropdown-popup')
-  if (!btn || !popup) return
-  const close = () => popup.classList.add('hidden')
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const wasOpen = !popup.classList.contains('hidden')
-    document.querySelectorAll('#model-viewer-dialog .ribbon-dropdown-popup').forEach((p) => p.classList.add('hidden'))
-    if (wasOpen) return
-    const r = btn.getBoundingClientRect()
-    popup.style.top = `${r.bottom + 4}px`
-    popup.style.left = `${r.left}px`
-    popup.classList.remove('hidden')
-  })
-  document.addEventListener('click', (e) => {
-    if (!root.contains(e.target)) close()
-  })
-  popup.addEventListener('click', (e) => {
-    // Close after a click on a menu-row that finishes the user's
-    // intent (mode pick, ground pick, env pick, COB action).  Skip
-    // close for toggle rows + submenu wrappers — those are sticky
-    // controls the user often flips repeatedly without wanting the
-    // dropdown to vanish between flips.
-    const row = e.target.closest('.menu-row')
-    if (!row || row.disabled) return
-    if (row.classList.contains('toggle-row')) return
-    if (row.classList.contains('menu-row-submenu')) return
-    if (row.classList.contains('menu-row-slider')) return
-    close()
-  })
-}
-
-function setModelViewerStatus(msg) {
-  // Shared statusbar — same element the map editor's setStatus
-  // writes to.  Lets the viewer report "armack · 16 pieces" or
-  // "Loading…" in the very same spot the editor uses for tile
-  // commits.
-  const el = $('#status')
-  if (el) el.textContent = msg
-}
-
-// wireModelViewMenu binds the model viewer's Rendering and Camera
-// dropdown menus + the Ground segmented control.  Selecting a Mode
-// row updates both the renderer and the parent button's label so
-// the closed dropdown shows the current choice (matches the map
-// editor's "Display mode" dropdown).
-function wireModelViewMenu() {
-  const applyMode = (mode) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setRenderMode(mode)
-  }
-  const applyOverlay = (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeOverlay(on)
-  }
-  const applyGround = (mode) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setGroundMode(mode)
-  }
-  const applyWireWidth = (px) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWireframeWidth(px)
-  }
-  const modeLabel = $('#mv-render-current-lbl')
-  const modeIco = $('#mv-render-current-ico')
-  const wireOverlay = $('#mv-act-wire-overlay')
-  // applyWireOverlayLock: in Wireframe Only mode the wireframe IS the
-  // image — the Show Wireframe toggle must be on (and locked) so the
-  // user can't render an empty frame.  Switching out of wireframe
-  // automatically clears the overlay so the deck of cards lines
-  // don't keep cluttering the Full/Flat render the user just picked.
-  const applyWireOverlayLock = (mode) => {
-    if (!wireOverlay) return
-    if (mode === 'wireframe') {
-      wireOverlay.dataset.on = '1'
-      wireOverlay.classList.add('active', 'disabled-locked')
-      wireOverlay.setAttribute('aria-disabled', 'true')
-      applyOverlay(true)
-    } else {
-      wireOverlay.classList.remove('disabled-locked')
-      wireOverlay.removeAttribute('aria-disabled')
-      // Clear the overlay when leaving wireframe so the freshly-
-      // selected mode renders cleanly.  If the user wants overlay
-      // on top of Studio Mode they re-tick the toggle themselves.
-      wireOverlay.dataset.on = '0'
-      wireOverlay.classList.remove('active')
-      applyOverlay(false)
-    }
-  }
-  for (const row of $$('.mv-mode-row')) {
-    row.addEventListener('click', () => {
-      const mode = row.dataset.mvMode
-      if (!mode) return
-      $$('.mv-mode-row').forEach((r) => r.classList.toggle('active', r === row))
-      if (modeLabel) modeLabel.textContent = rowNameText(row)
-      // Mirror the row's icon onto the dropdown button so the
-      // closed dropdown shows the picked mode at a glance.
-      const rowIco = row.querySelector('.ico')
-      if (modeIco && rowIco) modeIco.textContent = rowIco.textContent
-      applyMode(mode)
-      applyWireOverlayLock(mode)
-    })
-  }
-  const groundLabel = $('#mv-ground-current-lbl')
-  const groundIco = $('#mv-ground-current-ico')
-  for (const row of $$('.mv-ground-row')) {
-    row.addEventListener('click', () => {
-      const mode = row.dataset.mvGround
-      if (!mode) return
-      $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === row))
-      // Update the dropdown button face so the closed menu shows
-      // the current ground at a glance, matching Rendering's pattern.
-      const ico = row.querySelector('.ico')
-      if (groundLabel) groundLabel.textContent = rowNameText(row)
-      if (groundIco && ico) groundIco.textContent = ico.textContent
-      applyGround(mode)
-    })
-  }
-  // Studio Options toggles — each one drives a ModelRenderer setter.
-  const wireToggleRow = (id, applyFn) => {
-    const el = $('#' + id)
-    if (!el) return
-    el.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const on = el.dataset.on !== '1'
-      el.dataset.on = on ? '1' : '0'
-      el.classList.toggle('active', on)
-      applyFn(on)
-    })
-  }
-  wireToggleRow('mv-opt-reflections', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setReflectionsEnabled(on)
-  })
-  // Bobbing/Swaying — body click toggles on/off; chev opens slider
-  // submenu.  Same pattern is used for the Waves row.  wireToggleSubmenu
-  // factors out the duplicated wiring for both.
-  wireToggleSubmenu({
-    rowId: 'mv-opt-bob-row',
-    submenuId: 'mv-bob-submenu',
-    onToggle: (on) => {
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobEnabled(on)
-    },
-  })
-  wireSliderInput('mv-bob-amount', 'mv-bob-amount-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobAmount(v)
-  })
-  wireSliderInput('mv-bob-speed', 'mv-bob-speed-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBobSpeed(v)
-  })
-  // Waves — toggles wave animation on/off; slider scales amplitude.
-  wireToggleSubmenu({
-    rowId: 'mv-opt-waves-row',
-    submenuId: 'mv-waves-submenu',
-    onToggle: (on) => {
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWavesEnabled(on)
-    },
-  })
-  wireSliderInput('mv-waves-intensity', 'mv-waves-intensity-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWavesIntensity(v)
-  })
-  // Background terrain — the procedural mountain ring on non-sea
-  // worlds.  Toggle controls visibility; sliders feed scalars
-  // through to the env preset's mountainHeight / mountainScale.
-  wireToggleSubmenu({
-    rowId: 'mv-opt-bgterrain-row',
-    submenuId: 'mv-bgterrain-submenu',
-    onToggle: (on) => {
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainEnabled(on)
-    },
-  })
-  wireSliderInput('mv-bgterrain-height', 'mv-bgterrain-height-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainHeight(v)
-  })
-  wireSliderInput('mv-bgterrain-scale', 'mv-bgterrain-scale-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setBgTerrainScale(v)
-  })
-  // Seabed features — same idea for the underwater rocks + dunes.
-  // No on/off toggle here (seabed always exists in Sea mode); just
-  // height / scale / rock-density sliders.  The parent row is
-  // hover-driven via the env-style mouseenter pattern.
-  const seabedParent = document.querySelector('#mv-opt-seabed-row')
-  const seabedSubmenu = document.querySelector('#mv-seabed-submenu')
-  if (seabedParent && seabedSubmenu) {
-    seabedParent.addEventListener('mouseenter', () => {
-      seabedSubmenu.classList.remove('hidden')
-      seabedParent.classList.add('open')
-    })
-    seabedParent.addEventListener('mouseleave', (e) => {
-      if (e.relatedTarget && seabedSubmenu.contains(e.relatedTarget)) return
-      seabedSubmenu.classList.add('hidden')
-      seabedParent.classList.remove('open')
-    })
-    seabedSubmenu.addEventListener('mouseleave', () => {
-      seabedSubmenu.classList.add('hidden')
-      seabedParent.classList.remove('open')
-    })
-  }
-  wireSliderInput('mv-seabed-height', 'mv-seabed-height-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedHeight(v)
-  })
-  wireSliderInput('mv-seabed-scale', 'mv-seabed-scale-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedScale(v)
-  })
-  // Rocks slider's raw value (0..100) is the probability percent;
-  // wireSliderInput divides by 100 before calling the callback, so
-  // `v` here is already 0..1 - exactly what setSeabedRockChance
-  // wants.  Custom formatter shows the raw int with a % suffix.
-  wireSliderInput('mv-seabed-rocks', 'mv-seabed-rocks-val', (v) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSeabedRockChance(v)
-  }, (raw) => `${raw}%`)
-  wireToggleRow('mv-opt-water-reflections', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setWaterReflectionsEnabled(on)
-  })
-  wireToggleRow('mv-opt-specular', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setSpecularEnabled(on)
-  })
-  wireToggleRow('mv-opt-godbeams', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setGodBeamsEnabled(on)
-  })
-  wireToggleRow('mv-opt-dof', (on) => {
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setDoFEnabled(on)
-  })
-  // Environment parent row — click toggles the .open class on the
-  // row, which CSS uses to show/hide the submenu.  Clicking again
-  // (or clicking outside the dropdown) closes it.  Snapshot the
-  // currently-committed environment so the hover-preview can revert
-  // to it if the user dismisses the submenu without a click.
-  const envParent = $('#mv-opt-env-row')
-  const envSubmenu = $('#mv-env-submenu')
-  // Track whether we're hover-previewing.  The committed env is the
-  // .active row's data-mv-env value — that survives across helpers
-  // (applyUnitEditorDefaults flips .active too) so we always have a
-  // canonical "what should the scene revert to" reference.
-  let envPreviewing = false
-  const getCommittedEnv = () => {
-    const r = [...$$('.mv-env-row')].find((row) => row.classList.contains('active'))
-    return r?.dataset.mvEnv || 'earth'
-  }
-  const revertEnvIfPreviewing = () => {
-    if (!envPreviewing) return
-    envPreviewing = false
-    if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(getCommittedEnv())
-  }
-  if (envSubmenu) {
-    // Mouse out of the submenu without clicking a row → revert any
-    // active preview so the scene snaps back to the committed env.
-    envSubmenu.addEventListener('mouseleave', () => revertEnvIfPreviewing())
-  }
-  if (envParent && envSubmenu) {
-    // Hover the env row → submenu pops out automatically.  No
-    // click required; the user is already deep in a dropdown so
-    // saving them a click is a clear win.
-    envParent.addEventListener('mouseenter', () => {
-      envSubmenu.classList.remove('hidden')
-      envParent.classList.add('open')
-    })
-    // Cursor moves out of the row AND off the submenu → close it.
-    envParent.addEventListener('mouseleave', (e) => {
-      if (e.relatedTarget && envSubmenu.contains(e.relatedTarget)) return
-      envSubmenu.classList.add('hidden')
-      envParent.classList.remove('open')
-      revertEnvIfPreviewing()
-    })
-    // Click is still accepted as a fallback (e.g. keyboard / touch).
-    envParent.addEventListener('click', (e) => {
-      if (e.target.closest('.mv-env-row')) return
-      e.stopPropagation()
-      const wasHidden = envSubmenu.classList.contains('hidden')
-      envSubmenu.classList.toggle('hidden', !wasHidden)
-      envParent.classList.toggle('open', wasHidden)
-      if (!wasHidden) revertEnvIfPreviewing()
-    })
-    // Closing the parent dropdown popup also dismisses the submenu —
-    // listen for that on the popup element via mouseleave.  Anything
-    // that hides the popup without picking an env should revert.
-    const popup = document.querySelector('#mv-options-dropdown-popup')
-    if (popup) {
-      const obs = new MutationObserver(() => {
-        if (popup.classList.contains('hidden') && envPreviewing) {
-          // Popup got closed (e.g. user clicked outside) — revert.
-          revertEnvIfPreviewing()
-          envSubmenu.classList.add('hidden')
-          envParent.classList.remove('open')
-        }
-      })
-      obs.observe(popup, { attributes: true, attributeFilter: ['class'] })
-    }
-  }
-  // Environment submenu rows — hover previews live, click commits.
-  const envLabel = $('#mv-env-current-lbl')
-  const envIco = $('#mv-env-current-ico')
-  for (const row of $$('.mv-env-row')) {
-    row.addEventListener('mouseenter', () => {
-      const env = row.dataset.mvEnv
-      if (!env) return
-      envPreviewing = (env !== getCommittedEnv())
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
-    })
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const env = row.dataset.mvEnv
-      if (!env) return
-      $$('.mv-env-row').forEach((r) => r.classList.toggle('active', r === row))
-      if (envLabel) envLabel.textContent = rowNameText(row)
-      const rowIco = row.querySelector('.ico')
-      if (envIco && rowIco) envIco.textContent = rowIco.textContent
-      envPreviewing = false
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.setEnvironment(env)
-      if (envParent) envParent.classList.remove('open')
-      if (envSubmenu) envSubmenu.classList.add('hidden')
-    })
-  }
-
-  // ── Team Colour picker ───────────────────────────────────────────
-  // Mirrors the env-row mechanism: hover opens the submenu, hover on
-  // a row previews via setTeamColor, click commits, mouseleave on the
-  // submenu reverts to whichever row is .active.  Blue is the ARM
-  // default — picking it disables the shader's hue shift entirely.
-  const TEAM_COLOURS = {
-    blue:   null, // sentinel — original blue, no recolour
-    red:    [0.92, 0.18, 0.16],
-    green:  [0.20, 0.78, 0.28],
-    yellow: [0.95, 0.85, 0.20],
-    purple: [0.62, 0.30, 0.85],
-    cyan:   [0.20, 0.80, 0.92],
-    orange: [0.98, 0.55, 0.18],
-    white:  [0.95, 0.95, 0.95],
-    black:  [0.10, 0.10, 0.12],
-  }
-  const teamParent = $('#mv-opt-team-row')
-  const teamSubmenu = $('#mv-team-submenu')
-  const teamLabel = $('#mv-team-current-lbl')
-  const teamIco = $('#mv-team-current-ico')
-  let teamPreviewing = false
-  const getCommittedTeam = () => {
-    const r = [...$$('.mv-team-row')].find((row) => row.classList.contains('active'))
-    return r?.dataset.mvTeam || 'blue'
-  }
-  const applyTeam = (key) => {
-    if (!modelViewerInstance?.renderer) return
-    modelViewerInstance.renderer.setTeamColor(TEAM_COLOURS[key] ?? null)
-  }
-  const revertTeamIfPreviewing = () => {
-    if (!teamPreviewing) return
-    teamPreviewing = false
-    applyTeam(getCommittedTeam())
-  }
-  if (teamSubmenu) {
-    teamSubmenu.addEventListener('mouseleave', () => revertTeamIfPreviewing())
-  }
-  if (teamParent && teamSubmenu) {
-    teamParent.addEventListener('mouseenter', () => {
-      teamSubmenu.classList.remove('hidden')
-      teamParent.classList.add('open')
-    })
-    teamParent.addEventListener('mouseleave', (e) => {
-      if (e.relatedTarget && teamSubmenu.contains(e.relatedTarget)) return
-      teamSubmenu.classList.add('hidden')
-      teamParent.classList.remove('open')
-      revertTeamIfPreviewing()
-    })
-    teamParent.addEventListener('click', (e) => {
-      if (e.target.closest('.mv-team-row')) return
-      e.stopPropagation()
-      const wasHidden = teamSubmenu.classList.contains('hidden')
-      teamSubmenu.classList.toggle('hidden', !wasHidden)
-      teamParent.classList.toggle('open', wasHidden)
-      if (!wasHidden) revertTeamIfPreviewing()
-    })
-  }
-  for (const row of $$('.mv-team-row')) {
-    row.addEventListener('mouseenter', () => {
-      const key = row.dataset.mvTeam
-      if (!key) return
-      teamPreviewing = (key !== getCommittedTeam())
-      applyTeam(key)
-    })
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const key = row.dataset.mvTeam
-      if (!key) return
-      $$('.mv-team-row').forEach((r) => r.classList.toggle('active', r === row))
-      if (teamLabel) teamLabel.textContent = rowNameText(row)
-      const rowIco = row.querySelector('.ico')
-      if (teamIco && rowIco) teamIco.textContent = rowIco.textContent
-      teamPreviewing = false
-      applyTeam(key)
-      if (teamParent) teamParent.classList.remove('open')
-      if (teamSubmenu) teamSubmenu.classList.add('hidden')
-    })
-  }
-  const overlay = $('#mv-act-wire-overlay')
-  if (overlay) {
-    overlay.addEventListener('click', (e) => {
-      e.stopPropagation()
-      // When locked-on by Wireframe Only mode, ignore clicks — the
-      // overlay HAS to be on for that mode to render anything.
-      if (overlay.classList.contains('disabled-locked')) return
-      const on = overlay.dataset.on !== '1'
-      overlay.dataset.on = on ? '1' : '0'
-      overlay.classList.toggle('active', on)
-      applyOverlay(on)
-    })
-  }
-  // Wireframe thickness slider — live-updates as the user drags so
-  // they see the effect immediately.  Range 1–6 px (clamped by the
-  // GPU to its supported width range; most drivers cap at 1 px for
-  // standard line rendering, which is why we offer thickness only
-  // as a hint and the renderer fakes thicker lines via a second
-  // overlay pass on top of the first).
-  const slider = $('#mv-wire-thickness')
-  const sliderVal = $('#mv-wire-thickness-val')
-  if (slider) {
-    slider.addEventListener('input', (e) => {
-      e.stopPropagation()
-      const v = parseInt(slider.value, 10)
-      if (sliderVal) sliderVal.textContent = String(v)
-      applyWireWidth(v)
-    })
-  }
-}
-
-// wireModelChromeButtons wires the Settings + Help buttons in the
-// model viewer's right-ribbon to the same dialogs the map editor's
-// chrome opens — sharing dialogs keeps the user out of two parallel
-// UIs and lets them tune brushes / shortcuts in one place.
-function wireModelChromeButtons() {
-  $('#mv-btn-settings')?.addEventListener('click', () => {
-    // openSettingsDialog is defined in the main settings module; if
-    // not yet, click the editor's hidden button as a fallback so the
-    // dialog always reaches whatever wiring lives elsewhere.
-    if (typeof openSettingsDialog === 'function') openSettingsDialog()
-    else $('#btn-settings')?.click()
-  })
-  $('#mv-btn-help')?.addEventListener('click', () => {
-    if (typeof openHelpDialog === 'function') openHelpDialog()
-    else $('#btn-help')?.click()
-  })
-}
-
-// wireModelTabBar — only one tab bar exists now (the shared
-// .map-tabs in the .app shell, populated by renderMapTabs).  Kept
-// as a no-op so the boot sequence stays explicit about which
-// surfaces have tab bars wired.
-function wireModelTabBar() {
-  // intentionally empty — see wireMapTabBar
-}
+// rowNameText / wireToggleSubmenu / wireSliderInput /
+// wireModelRibbonDropdown / setModelViewerStatus / wireModelViewMenu /
+// wireModelChromeButtons / wireModelTabBar — all replaced by the React
+// model-viewer ribbon (/ui/unit-editor/ribbon/model-viewer-ribbon.js).
+// Bridge wiring lives in wireModelViewerRibbon() further down in this
+// file; the model name + tri count status line moved into the React
+// dropdown body via the bridge.showStats callback.
 
 // modelOpenIntent: tells openModelViewer how to handle the next
 // load — 'add' pushes a new tab, 'replace' overwrites the current
@@ -11814,13 +10885,17 @@ async function activateModelTab(tab) {
         // build ramp kicks in only when the user clicks "Create Unit"
         // (the explicit user gesture).
         refreshCobPanel(cob)
-        // The Actions inspector lists every COB entry-point — re-
-        // render whenever a new unit loads so the buttons reflect
-        // THIS unit's scripts (not whatever was open before).
-        renderMvActionsPanel(cob)
-        // Ports panel bindings target this unit's cobPorts object;
-        // rebuild controls so they write into the right state.
-        renderMvPortsPanel(modelViewerInstance)
+        // The Script Commands inspector is React-managed (see
+        // /ui/panels/script-commands-panel.js) and re-renders off the
+        // inspector-store mv signal — publishing the new proxy via
+        // refreshMvInspectors picks up the unit swap automatically,
+        // so no per-load imperative render is needed here.
+        // Controls/Ports panel is React-managed
+        // (/ui/panels/controls-panel.js).  The component reads
+        // modelViewerInstance.cobPorts via the inspector-store mv
+        // signal — refreshMvInspectors's next publish picks up the
+        // new unit's port object automatically, no imperative
+        // rebuild needed here.
         // Controls overlay (Move + Aim/Fire).  Spin up a fresh
         // instance per model load and kick off the unit-meta fetch
         // so the action buttons enable/disable correctly.
@@ -11857,16 +10932,15 @@ async function activateModelTab(tab) {
       _mvControls?.tick(dtMs)
     }
   }
-  const autoBtn = $('#mv-act-autorotate')
-  if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')
-  // Invalidate the Controls panel render sentinel + clear any stale
-  // body content from the previous tab.  Mirror of the wipe in
-  // activateSandboxTab — when the user swaps sandbox → viewer the
-  // body would otherwise keep the sandbox unit's rows until the
-  // next 250 ms refresh tick repopulates them.
-  _mvPortsRenderedKey = null
-  const portsBodyEl = document.getElementById('mv-inspector-ports-body')
-  if (portsBodyEl) portsBodyEl.replaceChildren()
+  // Carry the unit editor's persisted Auto-Rotate state into the
+  // freshly-opened model.  The state lives on a host-side cache so
+  // the React Camera dropdown + the Renderer panel + the R hotkey can
+  // all share one source of truth without polling the DOM.
+  modelViewerInstance.setAutoRotate(_unitEditorAutoRotate)
+  // Controls panel body is React-managed now; its re-render is
+  // driven by the inspector-store mv signal so swapping tabs picks
+  // up the new view's data automatically without an imperative
+  // sentinel + DOM wipe.
   // open() lazily constructs the renderer the first time, then loads
   // geometry.  Wait for that before applying the ground hint so
   // setGroundMode lands on a live renderer.
@@ -11889,39 +10963,31 @@ async function activateModelTab(tab) {
 }
 
 // applyUnitEditorDefaults pushes settings.unitDefault* through the
-// renderer's setters + ticks the matching menu rows so the Studio
-// Options dropdown reflects the actual state.
+// renderer's setters + into the React ribbon's state signal so the
+// Studio Options dropdown's check-marks + Environment chip reflect
+// the freshly-applied defaults.
 function applyUnitEditorDefaults() {
   if (!modelViewerInstance?.renderer) return
   const s = state.settings || DEFAULT_SETTINGS
   const r = modelViewerInstance.renderer
+  const env = s.unitDefaultEnv || 'greenworld'
+  const reflections = s.unitDefaultReflections !== false
+  const bob = s.unitDefaultBob !== false
+  const waterReflections = s.unitDefaultWaterReflections !== false
+  const specular = s.unitDefaultSpecular !== false
+  const godbeams = s.unitDefaultGodBeams !== false
   // Environment first because it swaps the sky scheme; the toggles
   // below operate on flags the env doesn't touch.
-  r.setEnvironment(s.unitDefaultEnv || 'greenworld')
-  const env = s.unitDefaultEnv || 'greenworld'
-  const envRow = [...$$('.mv-env-row')].find((row) => row.dataset.mvEnv === env)
-  if (envRow) {
-    $$('.mv-env-row').forEach((row) => row.classList.toggle('active', row === envRow))
-    const envLbl = $('#mv-env-current-lbl')
-    const envIco2 = $('#mv-env-current-ico')
-    if (envLbl) envLbl.textContent = rowNameText(envRow)
-    const rIco = envRow.querySelector('.ico')
-    if (envIco2 && rIco) envIco2.textContent = rIco.textContent
-  }
-  const togglePairs = [
-    ['mv-opt-reflections', s.unitDefaultReflections !== false, (v) => r.setReflectionsEnabled(v)],
-    ['mv-opt-bob-row', s.unitDefaultBob !== false, (v) => r.setBobEnabled(v)],
-    ['mv-opt-water-reflections', s.unitDefaultWaterReflections !== false, (v) => r.setWaterReflectionsEnabled(v)],
-    ['mv-opt-specular', s.unitDefaultSpecular !== false, (v) => r.setSpecularEnabled(v)],
-    ['mv-opt-godbeams', s.unitDefaultGodBeams !== false, (v) => r.setGodBeamsEnabled(v)],
-  ]
-  for (const [id, on, apply] of togglePairs) {
-    const el = $('#' + id)
-    if (el) {
-      el.dataset.on = on ? '1' : '0'
-      el.classList.toggle('active', on)
-    }
-    apply(on)
+  r.setEnvironment(env)
+  r.setReflectionsEnabled(reflections)
+  r.setBobEnabled(bob)
+  r.setWaterReflectionsEnabled(waterReflections)
+  r.setSpecularEnabled(specular)
+  r.setGodBeamsEnabled(godbeams)
+  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+    _reactUi.setModelViewerRibbonState({
+      env, reflections, bob, waterReflections, specular, godbeams,
+    })
   }
 }
 
@@ -11948,12 +11014,10 @@ async function mvFetchUnitMeta(mv) {
     if (!resp.ok) return
     mv.unitMeta = await resp.json()
     if (_mvControls) _mvControls.onMetaLoaded()
-    // Re-render the Controls panel so its per-port visibility picks
-    // up the freshly-loaded capability flags (canMove, isBuilder,
-    // onoffable).  Otherwise the panel renders with empty unitMeta
-    // at model-load time and the gated rows never appear once the
-    // async FBI fetch resolves.
-    renderMvPortsPanel(mv)
+    // Controls/Ports panel re-renders off the inspector-store
+    // signals; once unitMeta is set the next publish updates the
+    // panel's per-port visibility (canMove, isBuilder, onoffable
+    // gating) automatically — no imperative call needed.
     // Populate the left-panel Weapons tab now that the FBI + weapon
     // TDF data is in.  Empty-state shows "No weapons declared" for
     // structures / props.  Passed the whole viewer so the renderer
@@ -12005,93 +11069,26 @@ function applyDefaultGroundFor(meta) {
     cam.pitch = Math.asin(sinP)
     r.requestRedraw()
   }
-  const activeRow = [...$$('.mv-ground-row')].find((r) => r.dataset.mvGround === want)
-  $$('.mv-ground-row').forEach((r) => r.classList.toggle('active', r === activeRow))
-  // Sync the dropdown button face so the closed dropdown shows
-  // what's actually applied (ship default sets Sea programmatically;
-  // the user never clicked the row so the label wouldn't otherwise
-  // update).
-  const groundLabel = $('#mv-ground-current-lbl')
-  const groundIco = $('#mv-ground-current-ico')
-  if (activeRow) {
-    const ico = activeRow.querySelector('.ico')
-    // rowNameText strips the .ico / .menu-check / .chev-right spans
-    // so the button face shows "Terrain" not "🌱 Terrain 🌱 Terrain" -
-    // the raw textContent of the row included the icon emoji and we
-    // were already painting the icon separately into groundIco.
-    if (groundLabel) groundLabel.textContent = rowNameText(activeRow)
-    if (groundIco && ico) groundIco.textContent = ico.textContent
+  // Sync the React Scene/Ground dropdown's selection chip so the
+  // closed dropdown shows what's actually applied (ship default sets
+  // Sea programmatically; the user never clicked the row so the
+  // signal wouldn't otherwise update).
+  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+    _reactUi.setModelViewerRibbonState({ ground: want })
   }
 }
 
-// refreshPieceTreeEyes resyncs every eye-toggle button in the piece
-// tree from its piece's current `visible` flag.  Called after a
-// cascading hide/show so all descendant rows reflect the new state
-// without rebuilding the entire tree DOM.
-function refreshPieceTreeEyes() {
-  document.querySelectorAll('#model-viewer-tree .piece-eye').forEach((btn) => {
-    const piece = btn._piece
-    if (!piece) return
-    btn.classList.toggle('off', !piece.visible)
-    btn.title = piece.visible ? 'Hide piece (Shift: this piece only)' : 'Show piece (Shift: this piece only)'
-    btn.textContent = piece.visible ? '👁' : '⊘'
-  })
-  refreshPieceTreeStatus()
-}
+// refreshPieceTreeEyes — no-op now that the piece tree is React-managed.
+// The React component (see /ui/unit-editor/tabs/piece-tree.js) subscribes
+// to runtimeTick + reads piece.visible directly on each render, so the
+// inspector's 4 Hz publish already keeps icons in sync.  Kept as a
+// stub so call sites in studio.js (and anywhere external) don't break.
+function refreshPieceTreeEyes() { /* React subscribes to runtimeTick */ }
 
-// refreshPieceTreeStatus syncs the per-piece status indicators
-// (shade / cache / shadow) from the live COB runtime state.  Each
-// icon's `data-flag` says which flag it reflects.  Called on every
-// inspector refresh tick so the icons update as scripts call
-// shade / dont-shade / cache / dont-cache / dont-shadow.
-//
-// Glyphs chosen so each flag reads instantly without text:
-//   * 💡 lightbulb — shade ON (lit, scene light affects the piece)
-//     ; greyed bulb when `dont-shade` flips it
-//   * 💾 floppy — cache ON (transform baked / frozen)
-//   * 🌗 half-moon — shadow ON (piece is in the lit half, casting
-//     a shadow); greyed when `dont-shadow` opts out
-function refreshPieceTreeStatus() {
-  const cob = modelViewerInstance?.cob
-  const pieceMap = cob?._pieceMap
-  const unit = cob?.unit
-  if (!unit) return
-  document.querySelectorAll('#model-viewer-tree .piece-status').forEach((btn) => {
-    const piece = btn._piece
-    if (!piece || !pieceMap) return
-    const idx = pieceMap.get(piece)
-    if (typeof idx !== 'number' || idx < 0) return
-    const flag = btn.dataset.flag
-    let on, label, glyph
-    if (flag === 'shade') {
-      on = unit.isPieceShade(idx)
-      glyph = '💡'
-      label = on ? 'Shaded (click to dont-shade — cascades; ⇧ = this piece only)' : 'Unshaded (click to shade — cascades; ⇧ = this piece only)'
-    } else if (flag === 'cache') {
-      on = unit.isPieceCache(idx)
-      glyph = '💾'
-      label = on ? 'Cached (click to dont-cache — cascades; ⇧ = this piece only)' : 'Not cached (click to cache — cascades; ⇧ = this piece only)'
-    } else if (flag === 'shadow') {
-      on = unit.isPieceShadow(idx)
-      glyph = '🌗'
-      label = on ? 'Casts shadow (click to dont-shadow — cascades; ⇧ = this piece only)' : 'No shadow (click to enable — cascades; ⇧ = this piece only)'
-    } else return
-    btn.classList.toggle('on', on)
-    btn.classList.toggle('off', !on)
-    if (btn.textContent !== glyph) btn.textContent = glyph
-    btn.title = label
-  })
-}
-
-// pieceDisplayName humanises piece names that follow TA conventions
-// the user won't recognise out of context.  "GP" is the universal
-// "Ground Plate" — the flat shadow polygon every TA model carries
-// for its projected ground shadow — so we expand it inline.
-function pieceDisplayName(piece) {
-  const name = piece.name || '<unnamed>'
-  if (name === 'GP' || name === 'gp') return 'Ground Plate (GP)'
-  return name
-}
+// refreshPieceTreeStatus + pieceDisplayName — both moved into the
+// React piece-tree component (see /ui/unit-editor/tabs/piece-tree.js).
+// The component owns the per-piece flag rendering + the GP →
+// "Ground Plate (GP)" name humanisation directly.
 
 // renderPieceTree replaces the sidebar drawer with a hierarchical
 // representation of the model's pieces — each piece becomes either a
@@ -12223,97 +11220,28 @@ function wireMvInspectors() {
     // on hidden panels.
     requestAnimationFrame(clampAllMvInspectors)
   })
-  for (const btn of document.querySelectorAll('#mv-view-dropdown-popup .toggle-row')) {
-    const panelId = btn.dataset.panel
-    if (!panelId) continue
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const panel = document.getElementById(panelId)
-      if (!panel) return
-      const next = panel.classList.contains('hidden')
-      setMvInspectorVisible(panelId, next)
-    })
-  }
-  // Threads panel's "Stop All" header button — wired ONCE at boot.
-  // stopPropagation so a click inside the draggable header doesn't
-  // start a drag gesture or fire the collapse/close buttons.
-  const stopAll = document.getElementById('mv-threads-stopall')
-  if (stopAll && stopAll.dataset.wired !== '1') {
-    stopAll.dataset.wired = '1'
-    stopAll.addEventListener('click', (e) => {
-      e.stopPropagation()
-      modelViewerInstance?.cob?.runtime?.killAllThreads?.()
-    })
-    stopAll.addEventListener('pointerdown', (e) => e.stopPropagation())
-    stopAll.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
-  // Threads-panel debug controls: Pause/Resume toggle + Step One.
-  // Same drag-suppression pattern as Stop All.  Merged from two
-  // separate Pause + Resume buttons so the toggle action takes one
-  // click and the user (or the Space hotkey) doesn't have to pick
-  // the matching button each time.
-  const toggleBtn = document.getElementById('mv-threads-toggle')
-  if (toggleBtn && toggleBtn.dataset.wired !== '1') {
-    toggleBtn.dataset.wired = '1'
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      mvToggleRuntimePaused()
-    })
-    toggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-    toggleBtn.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
-  const stepBtn = document.getElementById('mv-threads-step')
-  if (stepBtn && stepBtn.dataset.wired !== '1') {
-    stepBtn.dataset.wired = '1'
-    stepBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const cob = modelViewerInstance?.cob
-      if (!cob) return
-      // Force one tick even when paused.  Clear all breakpointHit
-      // flags so any BP-stopped thread can take its one step.
-      for (const t of cob.unit._threads) if (!t.dead) t.breakpointHit = false
-      const wasPaused = cob.runtime.paused
-      cob.runtime.paused = false
-      cob.tick(25)
-      cob.runtime.paused = wasPaused || true  // step always leaves runtime paused
-    })
-    stepBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-    stepBtn.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
-  // Controls panel "Create Unit" button — shown only when the unit
-  // has a Create script that hasn't run yet (gating set by
-  // refreshMvControlsGating).  Clicking starts the script + flips
-  // lifecycle to 'creating'; the existing syncMvActionsRunning sweep
-  // promotes to 'created' once Create's thread dies, at which point
-  // refreshMvControlsGating hides this row + reveals the action grid.
-  const createBtn = document.getElementById('mv-controls-create-btn')
-  if (createBtn && createBtn.dataset.wired !== '1') {
-    createBtn.dataset.wired = '1'
-    createBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const mv = modelViewerInstance
-      const cob = mv?.cob
-      if (!cob || !cob.hasScript || !cob.hasScript('Create')) return
-      // Kick the Create script off IMMEDIATELY so any pose-setup
-      // it does (hide flares, set pieces to their initial offsets,
-      // etc.) lands before the first sparkle frame — keeps the
-      // build animation visually consistent with the final pose.
-      cob.start('Create')
-      cob._lifecycle = 'creating'
-      // Now start the construction ramp.  Build% snaps to 0 and
-      // ramps to 100 over ~5 sim seconds, with green transporter
-      // sparkles emitted from random model vertices each frame
-      // (cob-binding's _emitBuildSparkles handles the visuals).
-      startMvAutoBuild(mv)
-      refreshMvControlsGating(mv)
-    })
-    createBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-    createBtn.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
+  // View dropdown toggle rows are React-managed now — see the
+  // ModelViewerRibbon's ViewDropdown which subscribes to panel-store
+  // signals directly, so the row's onChange routes through
+  // _bridge.setPanelVisible → setMvInspectorVisible without an
+  // intermediate DOM click handler.
+  // Runtime panel's Pause / Step / Terminate All Scripts controls used
+  // to be vanilla DOM buttons (#mv-threads-stopall, #mv-threads-toggle,
+  // #mv-threads-step) wired up here.  The React RuntimePanel now owns
+  // them via host-bridge callbacks (configureReactUi → toggleRuntimePaused
+  // / stepRuntime / stopAllThreads).  The legacy IDs no longer exist in
+  // the DOM, so the old getElementById-and-attach handlers were dead
+  // code — and they also referenced rt._threads / single-unit semantics
+  // that broke when the runtime went multi-unit.  Removed wholesale.
+  // Controls panel "Create Unit" button is React-managed now (see
+  // /ui/panels/controls-panel.js).  Click handler routes through the host
+  // bridge's runControlsCreate, which is configured in
+  // configureReactUi to fire the same start('Create') +
+  // startMvAutoBuild sequence the legacy wired-once handler did.
   // Controls panel "Reset" button — sibling of the Stop action.
-  // Same handler as the Actions panel reset (full COB + controller
-  // reset) but exposed beside Stop so the user can revert without
-  // opening another inspector.
+  // Same handler as the historic Script Commands panel reset (full
+  // COB + controller reset) but exposed beside Stop so the user can
+  // revert without opening another inspector.
   const ctrlsReset = document.getElementById('mv-controls-reset-btn')
   if (ctrlsReset && ctrlsReset.dataset.wired !== '1') {
     ctrlsReset.dataset.wired = '1'
@@ -12449,30 +11377,31 @@ function wireMvInspector(panelId) {
 }
 
 function setMvInspectorVisible(panelId, visible, opts = {}) {
-  const panel = document.getElementById(panelId)
-  if (!panel) return
-  panel.classList.toggle('hidden', !visible)
-  // If we're SHOWING a panel whose persisted position fell off-screen
-  // (e.g. saved at 1920×1080, reopened at 1280×720), rescue it now so
-  // the user doesn't have to wait for the next resize event to drag
-  // it back.  Run after the next paint so the panel's bounding rect
-  // reflects its visible dimensions.
-  if (visible) requestAnimationFrame(() => clampMvInspectorIntoStage(panel))
-  // Mirror the toggle state into the View menu button.
-  const btn = document.querySelector(`#mv-view-dropdown-popup [data-panel="${panelId}"]`)
-  if (btn) {
-    btn.dataset.on = visible ? '1' : '0'
-    btn.classList.toggle('active', visible)
+  // React-managed panels route through the panel-store so the Preact
+  // tree re-renders with the right .hidden class.  Writing straight
+  // into the DOM here would survive only until the next Preact diff
+  // and then snap back to whatever the store says.  Legacy panels
+  // still take the direct-DOM path below.
+  if (_reactUi && _reactUi.isInspectorMounted && _reactUi.isInspectorMounted(panelId)) {
+    _reactUi.setPanelVisible(panelId, !!visible)
+  } else {
+    const panel = document.getElementById(panelId)
+    if (!panel) return
+    panel.classList.toggle('hidden', !visible)
+    // If we're SHOWING a panel whose persisted position fell off-screen
+    // (e.g. saved at 1920×1080, reopened at 1280×720), rescue it now so
+    // the user doesn't have to wait for the next resize event to drag
+    // it back.  Run after the next paint so the panel's bounding rect
+    // reflects its visible dimensions.
+    if (visible) requestAnimationFrame(() => clampMvInspectorIntoStage(panel))
   }
-  // Mirror into the sandbox Developer Tools dropdown row, if present.
-  // The sandbox menu lists the same panel IDs (Runtime / Effects /
-  // Audio / Renderer / Unit Variables), so closing a panel via its ✕
-  // button updates both menus in lockstep.
-  const sbRow = document.querySelector(`#sandbox-rb-devtools-popup [data-panel="${panelId}"]`)
-  if (sbRow && !sbRow.disabled) {
-    sbRow.dataset.on = visible ? '1' : '0'
-    sbRow.classList.toggle('active', visible)
-  }
+  // Mirror the toggle state into BOTH the unit-editor View menu and
+  // the sandbox Developer Tools dropdown — the two menus list the
+  // same panel IDs, so toggling visibility from any source updates
+  // The View dropdown + sandbox Developer Tools dropdown are React
+  // now and subscribe to panel-store signals directly, so a panel
+  // visibility flip re-renders both check-marks automatically — no
+  // extra sync call needed.
   if (opts.persist !== false) {
     state.mvInspectorVisible = state.mvInspectorVisible || {}
     state.mvInspectorVisible[panelId] = !!visible
@@ -12485,19 +11414,12 @@ function setMvInspectorVisible(panelId, visible, opts = {}) {
 // hidden flag and bails early.  Throttled to 4 Hz so an
 // auto-rotating camera doesn't burn DOM ops every animation tick.
 let _mvInspectorThrottleMs = 0
-// Sandbox-only sentinel — tracks which unit's Actions panel is
-// currently rendered.  refreshMvInspectors rebuilds the panel only
+// Sandbox-only sentinel — tracks which unit's Script Commands panel
+// is currently rendered.  refreshMvInspectors rebuilds the panel only
 // when this changes so the per-tick refresh doesn't flicker the
 // button list mid-hover.  null = no unit focused (zero or multi-
 // select; the panel shows "No COB loaded.").
 let _mvSandboxFocusedUnitId = -1
-// Sentinel for the Controls panel body — tracks which view + focused-
-// unit combination is currently rendered into #mv-inspector-ports-body.
-// A change (tab swap viewer↔sandbox, focused-unit swap in sandbox, or
-// a fresh model load in the viewer) re-invokes renderMvPortsPanel so
-// the row set + slider write-handlers bind to the active view's data
-// instead of leaking the previous tab's content into the new one.
-let _mvPortsRenderedKey = null
 function refreshMvInspectors(dtMs = 16) {
   _mvInspectorThrottleMs += dtMs
   if (_mvInspectorThrottleMs < 250) return
@@ -12533,14 +11455,13 @@ function refreshMvInspectors(dtMs = 16) {
     // gating + the Controls button enable map below can read it.
     // The view stashed it on mv._focusedUnitId.
     const focusedId = mv && mv._focusedUnitId != null ? mv._focusedUnitId : null
-    const focused = (mv && mv.cob && mv.cob.unit) ? mv.cob : null
-    // Rebuild the Actions panel only when the focused unit changes —
-    // the inner buttons retain their own hover/disabled state so we
-    // avoid the per-tick flicker of a full rebuild.  Tracked on a
-    // module-scoped sentinel keyed to the scene's unit id.
+    // Focused-unit sentinel — kept here so other per-tick code that
+    // wants to know "did the selection change this tick?" can read
+    // it off _mvSandboxFocusedUnitId.  The Script Commands panel
+    // itself now re-renders off the inspector-store mv signal
+    // published below (no imperative render here).
     if (focusedId !== _mvSandboxFocusedUnitId) {
       _mvSandboxFocusedUnitId = focusedId
-      renderMvActionsPanel(focused)
     }
     // Enable the Controls panel's action buttons based on what the
     // selection as a whole supports.  Single-unit selection mirrors
@@ -12570,94 +11491,56 @@ function refreshMvInspectors(dtMs = 16) {
     }
   }
   if (!mv) return
-  // COB Scripts panel
-  const scriptsPanel = document.getElementById('mv-inspector-scripts')
-  if (scriptsPanel && !scriptsPanel.classList.contains('hidden')) {
-    const body = document.getElementById('mv-inspector-scripts-body')
-    if (body) renderMvScriptsPanel(body, mv.cob)
+  // Publish the freshly-computed proxy + sandbox flags to the React
+  // inspector store.  Every migrated panel (Static Vars, Audio) is
+  // subscribed to these signals via @preact/signals and re-renders
+  // automatically when its inputs change.  Skipping the per-panel
+  // imperative renderMvXxxPanel call below for migrated panels is
+  // intentional — the React tree owns those bodies now.
+  if (_reactUi && typeof _reactUi.publishInspectorState === 'function') {
+    const selSize = (sandbox && sandbox.scene && sandbox.scene.selected)
+      ? sandbox.scene.selected.size
+      : 0
+    _reactUi.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
   }
-  // Static Vars panel.  In sandbox mode the empty-state message
-  // distinguishes "nothing picked" from "too many picked" — the
-  // user might be wondering why a freshly-selected group doesn't
-  // show vars.  The proxy mv.cob only has a .unit when EXACTLY ONE
-  // unit is selected (sandbox.getInspectorMv synthesises a stub for
-  // 0 or N).  We sniff the live selection size to pick the right
-  // message; static vars are per-unit COB state so merging them
-  // across a multi-unit selection is meaningless.
-  const svPanel = document.getElementById('mv-inspector-staticvars')
-  if (svPanel && !svPanel.classList.contains('hidden')) {
-    const body = document.getElementById('mv-inspector-staticvars-body')
-    let svOpts = {}
-    if (sandboxActive) {
-      const selSize = (sandbox && sandbox.scene && sandbox.scene.selected) ? sandbox.scene.selected.size : 0
-      svOpts = { emptyMessage: selSize > 1
-        ? 'Multiple units selected, variables unavailable.'
-        : 'No Unit Selected' }
-    }
-    if (body) renderMvStaticVarsPanel(body, mv.cob, svOpts)
-  }
-  // Camera panel
-  const camPanel = document.getElementById('mv-inspector-camera')
-  if (camPanel && !camPanel.classList.contains('hidden')) {
-    renderMvCameraPanel(mv)
-  }
+  // Runtime/Scripts panel — React-managed (see /ui/panels/runtime-panel.js).
+  // Stats + Speed + Pause/Step/Stop All + per-unit thread list all
+  // re-render off the inspector-store mv signal + the runtimeTick
+  // counter; no per-tick imperative render here.
+  // Static Vars + Renderer panels — React-managed (see
+  // /ui/panels/static-vars-panel.js, /ui/panels/renderer-panel.js).  Bodies
+  // re-render off the inspector-store signals published above;
+  // no per-tick imperative calls needed here.
   // Ports panel — re-render the row controls whenever the active view
-  // OR the focused sandbox unit changes; otherwise just refresh the
-  // LIVE values (read-only chips + slider labels) without rebuilding.
-  // The re-render key captures everything that would change the row
-  // SET (sandbox vs viewer mode, focused unit, viewer's loaded unit)
-  // so a stale viewer layout doesn't leak into a fresh sandbox view
-  // and vice versa.
-  const portsPanel = document.getElementById('mv-inspector-ports')
-  if (portsPanel && !portsPanel.classList.contains('hidden')) {
-    const portsKey = sandboxActive
-      ? `sb:${mv?._focusedUnitId ?? 'none'}`
-      : `mv:${(modelViewerInstance?.cob?.unit?.name) || (modelViewerInstance?.model?.name) || 'none'}`
-    if (portsKey !== _mvPortsRenderedKey) {
-      _mvPortsRenderedKey = portsKey
-      renderMvPortsPanel(mv, { sandboxMode: sandboxActive })
-    }
-    refreshMvPortsLiveValues(mv)
-  }
-  // Effects panel — live read-out of the particle pool.  Cheap
-  // when no particles are alive (early-out on count = 0).
-  const fxPanel = document.getElementById('mv-inspector-effects')
-  if (fxPanel && !fxPanel.classList.contains('hidden')) {
-    const body = document.getElementById('mv-inspector-effects-body')
-    if (body) renderMvEffectsPanel(body, mv)
-  }
-  // Audio panel — live read-out of the AudioPool.  Same 4 Hz
-  // cadence as Effects so per-sound progress bars step in ~250 ms
-  // increments — fine for visual feedback, cheap on the DOM.
-  const auPanel = document.getElementById('mv-inspector-audio')
-  if (auPanel && !auPanel.classList.contains('hidden')) {
-    const body = document.getElementById('mv-inspector-audio-body')
-    if (body) renderMvAudioPanel(body, mv)
-  }
+  // Controls / Ports panel — React-managed (see /ui/panels/controls-panel.js).
+  // The component reads cobPorts / cobDamage / cobBuildPercent off
+  // the inspector-store mv signal and re-renders per publish, so
+  // there's no need for an imperative render or live-values refresh
+  // here.  The per-tick syncMvActionsRunning call below still
+  // promotes 'creating' → 'created', which the React panel's class-
+  // name computation picks up on the next render.
+  // Effects + Audio panels — both React-managed.  See
+  // /ui/panels/effects-panel.js and /ui/panels/audio-panel.js.  Bodies re-render
+  // off the inspector-store signals published above; the
+  // FloatingPanel visibility signal gates the heavy pool walks so a
+  // hidden / collapsed panel does no per-tick work.
   // Weapons-tab live bits — reload bars + recent-projectiles lists.
   // Cheap: the panel is in the left sidebar (not an inspector), so
   // we don't gate on hidden-class.  Each card's __mvLiveRefresh
   // closure no-ops when the card has no reload bar / projlist.
   refreshMvWeaponsLive(mv)
-  // Grey out action / COB-entry buttons whose script has a live
-  // thread, so the user can see at a glance what's running and
-  // can't double-trigger something that would jerk pieces.
-  // Called BEFORE refreshMvControlsGating because syncMvActionsRunning
-  // is the function that promotes cob._lifecycle from 'creating' to
-  // 'created' once the Create thread dies — running it first lets
-  // the gating react on the SAME tick instead of one frame later.
+  // Promote 'creating' → 'created' once the Create thread has died.
+  // The React Controls + Script Commands panels read cob._lifecycle
+  // and render the right gated state next refresh, so this is the
+  // only imperative bit the host still needs to do.  The ribbon's
+  // COB section is still vanilla and gates its own button rows.
   syncMvActionsRunning(mv.cob)
   syncCobRibbonRunning(mv.cob)
-  // Whole-Controls-panel gating — disable EVERY input under the
-  // overlay until the unit's Create script has completed.  Mirrors
-  // the Actions panel's button gating (real TA blocks all unit
-  // commands until Create finishes).  Cheap enough to run every
-  // refresh tick — toggles a single class on the panel root.
-  refreshMvControlsGating(mv)
-  // Runtime stats — tick counter, last-tick ms, units, threads.
-  // Pulled straight off the runtime object so the numbers reflect
-  // the live state, not whatever snapshot the panel was built with.
-  refreshMvRuntimeStats(mv)
+  // Runtime stats — rendered by the React RuntimePanel (subscribes
+  // to runtimeTick to re-read tick/lastMs/units/threads each publish).
+  // The legacy refreshMvRuntimeStats sweep is gone; mvRefreshRuntimeToggle
+  // is still called from the toggle-paused handler so spacebar /
+  // programmatic pause keep the button label in sync.
   // Piece-tree status icons (eye / shade / cache / shadow) — mirror
   // the live COB-driven per-piece state.  Cheap query-and-toggle
   // per row so a Create-script hide / dont-shade lights up in the
@@ -12672,301 +11555,12 @@ function refreshMvInspectors(dtMs = 16) {
   }
 }
 
-// _mvCollapsedUnits — module-scoped Set of unit IDs the user has
-// collapsed in the Runtime overlay.  Survives the inspector's 4 Hz
-// re-render so collapse state persists.  Cleared explicitly when
-// the model viewer disposes its runtime (each new tab gets a fresh
-// runtime, so the IDs don't collide).
-const _mvCollapsedUnits = new Set()
-
-// applyMvUnitCollapseState walks the Runtime overlay's body and
-// shows / hides each thread row based on the unit it belongs to.
-// Called after every renderMvScriptsPanel + after a chevron click.
-// Also updates the chevron glyph on each unit header to reflect
-// the current state (+ vs −).
-function applyMvUnitCollapseState() {
-  const body = document.getElementById('mv-inspector-scripts-body')
-  if (!body) return
-  for (const row of body.querySelectorAll('.mv-cob-thread-row[data-unit-id]')) {
-    const id = parseInt(row.dataset.unitId, 10)
-    row.classList.toggle('mv-thread-collapsed', _mvCollapsedUnits.has(id))
-  }
-  for (const hdr of body.querySelectorAll('.mv-unit-header[data-unit-id]')) {
-    const id = parseInt(hdr.dataset.unitId, 10)
-    const chev = hdr.querySelector('.mv-unit-header-collapse')
-    if (!chev) continue
-    const collapsed = _mvCollapsedUnits.has(id)
-    chev.textContent = collapsed ? '+' : '−'
-    chev.title = collapsed ? `Expand Unit ${id}` : `Collapse Unit ${id}`
-  }
-}
-
-// renderMvScriptsPanel renders the Runtime overlay — threads grouped
-// by the unit they belong to.  In the studio tab one unit is loaded
-// at a time so there's exactly one "Unit N" section; the grouping
-// matters once the runtime hosts multiple units (game-style sim).
-// The function keeps the historical name because every call site
-// already references it; the overlay's user-facing label is now
-// "Runtime".
-function renderMvScriptsPanel(body, cob) {
-  body.replaceChildren()
-  // We only need a runtime here.  Single-unit (model) tabs set
-  // cob.unit; multi-unit (sandbox) tabs leave it null but still
-  // expose cob.runtime — the loop below walks every registered unit
-  // regardless of which one (if any) is "focused".
-  if (!cob || !cob.runtime) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No COB loaded.'
-    body.appendChild(empty)
-    return
-  }
-  // Iterate the runtime's units.  Each gets its own section header
-  // + thread list + (if any) recently-killed list.  An empty runtime
-  // still shows a "no units" message rather than a blank panel so
-  // the user knows the overlay is wired correctly.
-  const units = [...cob.runtime.units()]
-  if (units.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'Runtime has no units loaded.'
-    body.appendChild(empty)
-    return
-  }
-  let totalShown = 0
-  for (const unit of units) {
-    const live = unit._threads
-    const killed = unit._recentlyKilled || []
-    if (live.length === 0 && killed.length === 0) {
-      // Still draw the header so the user sees the unit exists, but
-      // dim it.  Helps in multi-unit scenarios to spot "unit X is
-      // idle" without it disappearing entirely.
-      body.appendChild(buildMvUnitGroupHeader(unit, cob, /*empty*/ true))
-      continue
-    }
-    body.appendChild(buildMvUnitGroupHeader(unit, cob, /*empty*/ false))
-    // Render killed threads first so the red-flash animation sits
-    // at the top of the group while it plays.  Each row is tagged
-    // with the owning unit's id so the collapse handler can hide
-    // every row belonging to a single group with one query.
-    for (const k of killed) {
-      const row = renderMvThreadRow({
-        script: k.script,
-        pc: k.pc,
-        sleepMs: 0,
-        waitOn: null,
-        signalMask: k.signalMask,
-        _killedBy: k.killedBySignal,
-      }, true, null)
-      row.dataset.unitId = String(unit.id)
-      body.appendChild(row)
-      totalShown++
-    }
-    for (const t of live) {
-      const row = renderMvThreadRow(t, false, cob)
-      row.dataset.unitId = String(unit.id)
-      body.appendChild(row)
-      totalShown++
-    }
-  }
-  // Re-apply the per-unit collapse state to the newly-rendered rows.
-  // The Set survives panel rebuilds (which happen every 250ms via
-  // the inspector throttle); without re-applying, an expanded panel
-  // would forget which units the user had collapsed.
-  applyMvUnitCollapseState()
-  if (totalShown === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No active threads on any unit.'
-    body.appendChild(empty)
-  }
-}
-
-// buildMvUnitGroupHeader builds a "Unit N · <scriptOriginName>"
-// section divider for the Runtime overlay.  Hosts the per-unit
-// mini-actions (currently Stop + Reset) so they live next to the
-// unit they target — separate from the runtime-wide controls bar
-// at the top of the panel.  When `empty` the header renders muted
-// to indicate the unit has no live work.
-function buildMvUnitGroupHeader(unit, cob, empty) {
-  const hdr = document.createElement('div')
-  hdr.className = empty ? 'mv-unit-header mv-unit-header-empty' : 'mv-unit-header'
-  hdr.dataset.unitId = String(unit.id)
-  // Collapse chevron — first element so it reads as the "twirl
-  // arrow" pattern users expect from tree controls.  Persistence
-  // lives in the module-scoped _mvCollapsedUnits Set so the state
-  // survives panel re-renders (every 4 Hz tick) and tab switches
-  // within a runtime.  Clicking flips the state + immediately
-  // hides/shows the unit's thread rows below.
-  const collapsed = _mvCollapsedUnits.has(unit.id)
-  const chev = document.createElement('button')
-  chev.className = 'mv-unit-header-collapse'
-  chev.textContent = collapsed ? '+' : '−'
-  chev.title = collapsed ? `Expand Unit ${unit.id}` : `Collapse Unit ${unit.id}`
-  chev.addEventListener('click', (e) => {
-    e.stopPropagation()
-    if (_mvCollapsedUnits.has(unit.id)) _mvCollapsedUnits.delete(unit.id)
-    else _mvCollapsedUnits.add(unit.id)
-    applyMvUnitCollapseState()
-  })
-  hdr.appendChild(chev)
-  const name = unit.name || unit.scriptOriginName || ''
-  const label = document.createElement('span')
-  label.className = 'mv-unit-header-label'
-  label.textContent = name ? `Unit ${unit.id} · ${name}` : `Unit ${unit.id}`
-  hdr.appendChild(label)
-  const count = document.createElement('span')
-  count.className = 'mv-unit-header-count'
-  const n = unit._threads.length
-  count.textContent = n === 0 ? 'idle' : `${n} thread${n === 1 ? '' : 's'}`
-  hdr.appendChild(count)
-  // Per-unit Reset — kills threads, zeroes static vars, drops
-  // animator slots, restores piece visibility, re-engages Create
-  // gating.  Currently scoped to the binding's one unit (single-
-  // unit studio tab); the modelViewer.resetState() helper is shared
-  // with the COB-ribbon Reset button so behaviour stays in sync.
-  const resetBtn = document.createElement('button')
-  resetBtn.className = 'mv-unit-header-action'
-  resetBtn.textContent = '↺'
-  resetBtn.title = `Reset Unit ${unit.id} — kill its threads, zero static vars, snap every piece back to its rest pose, and re-engage Create gating.`
-  resetBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    mvResetUnit(unit, cob)
-  })
-  hdr.appendChild(resetBtn)
-  // Per-unit kill-all — stops every thread on this unit only.
-  // Visible even when idle because the user might want to clear
-  // stale state.
-  const killBtn = document.createElement('button')
-  killBtn.className = 'mv-unit-header-action danger'
-  killBtn.textContent = '⏹'
-  killBtn.title = `Stop every running thread on Unit ${unit.id}.  Animators keep their last pose.`
-  killBtn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    unit.killAllThreads()
-  })
-  hdr.appendChild(killBtn)
-  return hdr
-}
-
-// mvResetUnit reverts a single unit to its post-load state.  When
-// the unit belongs to the active model viewer's binding the full
-// modelViewer.resetState() runs (it also clears particles + flips
-// renderer flags); otherwise we fall back to the runtime-side
-// reset (threads, vars, animators, visibility) so future
-// multi-unit sims still have a working button.
-function mvResetUnit(unit, cob) {
-  if (cob && modelViewerInstance && modelViewerInstance.cob === cob && cob.unit === unit) {
-    modelViewerInstance.resetState()
-    return
-  }
-  unit.killAllThreads()
-  unit._threads.length = 0
-  unit._recentlyKilled.length = 0
-  for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
-  unit._moveAnims.length = 0
-  unit._rotAnims.length = 0
-  for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
-}
-
-// renderMvThreadRow builds one row for the scripts overlay.
-// `killed=true` adds the .killed class which triggers the red
-// flash animation.  Signal chips matching the killing mask get
-// their own `.killed` class so the user can spot which bit took
-// the row down.  Each thread renders THREE lines:
-//   1. script name + PC + byte offset
-//   2. waiting/sleeping/running status, indented
-//   3. signal mask, indented
-function renderMvThreadRow(t, killed, cob) {
-  const row = document.createElement('div')
-  row.className = killed ? 'mv-cob-thread-row killed' : 'mv-cob-thread-row'
-  // Clicking anywhere on the row (except the kill button) opens
-  // the code-view modal for live execution inspection.  Killed
-  // rows skip this since their thread object is a snapshot — no
-  // live PC to track.
-  if (cob && !killed) {
-    row.addEventListener('click', (e) => {
-      // Trash icon's stopPropagation handles its own click; defensively
-      // skip when the click landed on the kill button anyway.
-      if (e.target.closest('.mv-cob-thread-kill')) return
-      openMvThreadCodeModal(cob, t)
-    })
-  }
-  const name = document.createElement('div')
-  name.className = 'mv-cob-thread-name'
-  const left = document.createElement('span')
-  left.textContent = t.script.name
-  const pc = document.createElement('span')
-  pc.className = 'mv-cob-thread-pc'
-  const inst = t.script.instructions[t.pc] || t.script.instructions[t.script.instructions.length - 1]
-  const off = inst ? `0x${inst.offset.toString(16)}` : '—'
-  pc.textContent = `#${t.pc} @ ${off}`
-  name.appendChild(left)
-  name.appendChild(pc)
-  // Per-row trash-can — only on LIVE rows (kill replays already
-  // dead).  Click drops just this thread; killed status flashes
-  // red briefly via the existing _recentlyKilled buffer on the
-  // next render tick.  stopPropagation so clicking inside the
-  // (potentially draggable) panel header doesn't start a drag.
-  if (cob && !killed) {
-    const kill = document.createElement('button')
-    kill.className = 'mv-cob-thread-kill'
-    kill.title = `Terminate this ${t.script.name} thread`
-    kill.textContent = '🗑'
-    kill.addEventListener('click', (e) => {
-      e.stopPropagation()
-      cob.unit.killThreadById(t.id)
-    })
-    kill.addEventListener('pointerdown', (e) => e.stopPropagation())
-    name.appendChild(kill)
-  }
-  row.appendChild(name)
-  // Status line — sleep / wait / running, in a sentence the user
-  // can read at a glance.  Indented (CSS padding-left on
-  // .mv-cob-thread-detail) so it visually groups under the name.
-  const statusDetail = document.createElement('div')
-  statusDetail.className = 'mv-cob-thread-detail'
-  let statusText
-  if (killed) {
-    statusText = `killed by signal ${t._killedBy}`
-  } else if (t.sleepMs > 0) {
-    // Show whole-second precision when long; ms when short.  The
-    // user wanted to "see it's waiting" — give a concrete value.
-    statusText = t.sleepMs >= 1000
-      ? `Sleeping ${(t.sleepMs / 1000).toFixed(1)}s remaining`
-      : `Sleeping ${t.sleepMs | 0}ms remaining`
-  } else if (t.waitOn) {
-    // waitOn.type is 'turn' or 'move'.  We translate to a human
-    // sentence; piece + axis would be ideal but the runtime
-    // doesn't store them post-wait.  TODO if anyone wants that.
-    statusText = t.waitOn.type === 'turn'
-      ? 'Waiting for turn to complete'
-      : 'Waiting for move to complete'
-  } else {
-    statusText = 'Running'
-  }
-  statusDetail.textContent = `status: ${statusText}`
-  row.appendChild(statusDetail)
-  // Signal mask line (also indented).
-  const sigDetail = document.createElement('div')
-  sigDetail.className = 'mv-cob-thread-detail'
-  if (t.signalMask !== 0) {
-    sigDetail.appendChild(document.createTextNode('signals: '))
-    for (let b = 0; b < 16; b++) {
-      const bit = 1 << b
-      if (t.signalMask & bit) {
-        const chip = document.createElement('span')
-        chip.className = killed && (t._killedBy & bit) ? 'mv-sig-bit killed' : 'mv-sig-bit'
-        chip.textContent = String(bit)
-        sigDetail.appendChild(chip)
-      }
-    }
-  } else {
-    sigDetail.textContent = 'signals: —'
-  }
-  row.appendChild(sigDetail)
-  return row
-}
+// _mvCollapsedUnits + renderMvScriptsPanel + buildMvUnitGroupHeader +
+// mvResetUnit + renderMvThreadRow + applyMvUnitCollapseState —
+// replaced by the Preact RuntimePanel component in
+// /ui/panels/runtime-panel.js (round 18).  Per-unit Reset routes through
+// hostBridge.resetUnit; click-to-debug routes through
+// hostBridge.openThreadCodeModal.
 
 // ── Thread code-view modal ─────────────────────────────────────────────
 // Pops over the model viewer when the user clicks a Threads-panel row.
@@ -13084,9 +11678,10 @@ function wireMvThreadCodeChrome(state) {
   if (stepBtn) {
     stepBtn.addEventListener('click', () => {
       const rt = state.cob?.runtime
-      if (!rt) return
-      const t = rt._threads.find((x) => x.id === state.threadId && !x.dead)
-      if (!t) return
+      if (!rt || typeof rt.findThreadById !== 'function') return
+      const found = rt.findThreadById(state.threadId)
+      if (!found) return
+      const t = found.thread
       // Clear any pending sleep/wait so the next instruction runs
       // (the user pressed Step — they don't want to wait out timers).
       if (t.sleepMs > 0) t.sleepMs = 0
@@ -14442,16 +13037,22 @@ function wireMvPcDrag(state) {
 
 // mvSetThreadPc writes (script, pc) → thread, clears any sleep/wait
 // so execution can resume from the new spot, and refreshes the panel.
+// Looks the thread up via CobRuntime.findThreadById — the runtime is
+// now multi-unit, so a flat rt._threads.find no longer works (threads
+// live on the unit, not the runtime).  Script tables (scriptNames /
+// scripts) also live on the owning unit.
 function mvSetThreadPc(state, lineEl) {
   const newIdx = parseInt(lineEl.dataset.idx, 10)
   const newScript = lineEl.dataset.script
   if (!Number.isFinite(newIdx) || !newScript) return
   const rt = state.cob?.runtime
-  const t = rt?._threads.find((x) => x.id === state.threadId && !x.dead)
-  if (!t) return
+  if (!rt || typeof rt.findThreadById !== 'function') return
+  const found = rt.findThreadById(state.threadId)
+  if (!found) return
+  const { thread: t, unit: u } = found
   if (newScript !== t.script.name.toLowerCase()) {
-    const sIdx = rt.scriptNames.findIndex((n) => n && n.toLowerCase() === newScript)
-    if (sIdx >= 0 && rt.scripts[sIdx]) t.script = rt.scripts[sIdx]
+    const sIdx = u.scriptNames.findIndex((n) => n && n.toLowerCase() === newScript)
+    if (sIdx >= 0 && u.scripts[sIdx]) t.script = u.scripts[sIdx]
   }
   t.pc = newIdx
   t.sleepMs = 0
@@ -14586,42 +13187,10 @@ function renderMvThreadCodeLocals(state, thread) {
   }
 }
 
-function renderMvStaticVarsPanel(body, cob, opts = {}) {
-  body.replaceChildren()
-  if (!cob || !cob.unit) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    // Caller can override the empty-state message — sandbox uses
-    // "No Unit Selected" because the proxy cob never has a .unit
-    // (it represents the scene runtime, not any single unit) until
-    // exactly one unit is selected and the scene promotes its
-    // binding.
-    empty.textContent = opts.emptyMessage || 'No COB loaded.'
-    body.appendChild(empty)
-    return
-  }
-  const vars = cob.unit.staticVars
-  if (vars.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No static vars.'
-    body.appendChild(empty)
-    return
-  }
-  for (let i = 0; i < vars.length; i++) {
-    const row = document.createElement('div')
-    row.className = 'mv-staticvar-row'
-    const name = document.createElement('span')
-    name.className = 'mv-sv-name'
-    name.textContent = `global_${i}`
-    const val = document.createElement('span')
-    val.className = 'mv-sv-value'
-    val.textContent = String(vars[i] | 0)
-    row.appendChild(name)
-    row.appendChild(val)
-    body.appendChild(row)
-  }
-}
+// renderMvStaticVarsPanel — replaced by the Preact StaticVarsPanel
+// component in /ui/panels/static-vars-panel.js (round 14).  The React tree
+// subscribes to the inspector-store signals and rebuilds when the
+// active mv / sandbox selection size changes.
 
 // wireMvRuntimeVisibility pauses the COB runtime whenever the browser
 // tab goes background (visibilitychange → hidden) and resumes it
@@ -14658,612 +13227,51 @@ function wireMvRuntimeVisibility() {
   })
 }
 
-// _mvFxCollapsed — module-scoped set of section labels that the
-// user has collapsed.  Persists across the inspector's 4 Hz refresh
-// so toggling doesn't snap back open.  Reset when no panel exists.
-const _mvFxCollapsed = new Set()
-
-// Particle / audio aggregation across every sandbox binding moved to
+// Particle / audio aggregation across every sandbox binding lives in
 // sandbox-view.js where the cardinality concern belongs.  studio.js
 // just consumes the result through SandboxView.getInspectorMv() and
 // no longer needs the scratch buffers + concat helpers here.
 
-// renderMvEffectsPanel populates the Effects overlay with a live
-// snapshot of the cob particle pool.  Layout:
-//   1. Per-kind summary chip strip (LASER ×N, SMOKE_GREY ×M, …),
-//      projectile chips highlighted ahead of SFX chips.
-//   2. PROJECTILES & BEAMS section — collapsible — bullets / shells
-//      / plasma / dgun / laser / missile (kind ≥ 200).
-//   3. OTHER EFFECTS section — collapsible — smoke / sparks / fire
-//      flash / nano / wake.  Everything else.
-// Each particle renders as a card (kind header with colour swatch,
-// then a stat grid: position, direction unit-vector, speed, life).
-// Section headers act as collapse toggles and remember their state
-// across re-renders via _mvFxCollapsed.
-function renderMvEffectsPanel(body, mv) {
-  if (!mv || !mv.cob || !mv.cob.particles) {
-    body.replaceChildren()
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No particle pool.'
-    body.appendChild(empty)
-    return
-  }
-  const pool = mv.cob.particles
-  // Kind name + classification.  Numeric ids match cob-particles.js
-  // exports; kept inline so the panel is self-contained.  Any new
-  // kind added in the future falls back to "K{n}" + the EFFECT
-  // bucket — the user still sees it, just without the friendly name.
-  const KIND_NAMES = {
-    1: 'SMOKE_GREY', 2: 'SMOKE_WHITE', 3: 'SPARK', 4: 'FIRE_FLASH',
-    16: 'NANO', 257: 'WAKE',
-    200: 'BULLET', 201: 'SHELL', 202: 'PLASMA',
-    203: 'DGUN', 204: 'LASER', 205: 'MISSILE',
-  }
-  // PROJECTILE_* kinds start at 200 — easy classifier.
-  const isProjectile = (k) => k >= 200 && k <= 299
-  body.replaceChildren()
-  if (pool.count === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No particles in flight.'
-    body.appendChild(empty)
-    return
-  }
-  // Tally per-kind.  Two passes: one to count for the chip strip,
-  // one to assign each alive slot to a section while we render.
-  const counts = new Map()
-  for (let i = 0; i < pool.count; i++) {
-    if (!pool.alive[i]) continue
-    const k = pool.kind[i] | 0
-    counts.set(k, (counts.get(k) || 0) + 1)
-  }
-  // Chip strip — projectile chips first (highlighted), then SFX.
-  const chips = document.createElement('div')
-  chips.className = 'mv-fx-chips'
-  const sortedKinds = [...counts.entries()].sort((a, b) => {
-    const aProj = isProjectile(a[0]) ? 0 : 1
-    const bProj = isProjectile(b[0]) ? 0 : 1
-    return aProj - bProj || b[1] - a[1]
-  })
-  for (const [k, n] of sortedKinds) {
-    const chip = document.createElement('span')
-    chip.className = isProjectile(k) ? 'mv-fx-chip mv-fx-chip-proj' : 'mv-fx-chip'
-    chip.textContent = `${KIND_NAMES[k] || ('K' + k)} ×${n}`
-    chips.appendChild(chip)
-  }
-  body.appendChild(chips)
-  // Two sections: projectiles + beams (priority), then other SFX.
-  // Bucket the alive slots first so each section renders contiguously
-  // and the cap can be applied per-section.
-  const projSlots = []
-  const fxSlots = []
-  for (let i = 0; i < pool.count; i++) {
-    if (!pool.alive[i]) continue
-    if (isProjectile(pool.kind[i] | 0)) projSlots.push(i)
-    else fxSlots.push(i)
-  }
-  const SECTION_CAP = 60
-  const renderSection = (label, slots) => {
-    if (slots.length === 0) return
-    const collapsed = _mvFxCollapsed.has(label)
-    // Collapsible header — click toggles.  Chevron indicates state.
-    const sh = document.createElement('div')
-    sh.className = 'mv-fx-section'
-    sh.dataset.fxSection = label
-    const chev = document.createElement('span')
-    chev.className = 'mv-fx-chev'
-    chev.textContent = collapsed ? '▸' : '▾'
-    const labelEl = document.createElement('span')
-    labelEl.textContent = `${label} (${slots.length})`
-    sh.appendChild(chev)
-    sh.appendChild(labelEl)
-    sh.addEventListener('click', () => {
-      if (_mvFxCollapsed.has(label)) _mvFxCollapsed.delete(label)
-      else _mvFxCollapsed.add(label)
-      // Force an immediate re-render — don't wait for the 4 Hz tick
-      // since the user wants instant feedback on the toggle.
-      const mv2 = modelViewerInstance
-      if (mv2) renderMvEffectsPanel(body, mv2)
-    })
-    body.appendChild(sh)
-    if (collapsed) return
-    const grid = document.createElement('div')
-    grid.className = 'mv-fx-cards'
-    const shown = Math.min(slots.length, SECTION_CAP)
-    for (let n = 0; n < shown; n++) {
-      const i = slots[n]
-      const k = pool.kind[i] | 0
-      const card = document.createElement('div')
-      card.className = 'mv-fx-card'
-      // Card header — colour swatch + kind name.
-      const head = document.createElement('div')
-      head.className = 'mv-fx-card-head'
-      const sw = document.createElement('span')
-      sw.className = 'mv-fx-swatch'
-      const sr = Math.max(0, Math.min(255, Math.round(pool.r[i] * 127)))
-      const sg = Math.max(0, Math.min(255, Math.round(pool.g[i] * 127)))
-      const sb = Math.max(0, Math.min(255, Math.round(pool.b[i] * 127)))
-      sw.style.background = `rgb(${sr},${sg},${sb})`
-      const kindEl = document.createElement('span')
-      kindEl.className = 'mv-fx-card-kind'
-      kindEl.textContent = KIND_NAMES[k] || ('K' + k)
-      head.appendChild(sw)
-      head.appendChild(kindEl)
-      card.appendChild(head)
-      // Two-column stat grid: position, direction, speed, life.
-      const stats = document.createElement('div')
-      stats.className = 'mv-fx-card-stats'
-      const vx = pool.vx[i], vy = pool.vy[i], vz = pool.vz[i]
-      const speed = Math.hypot(vx, vy, vz)
-      const dirText = speed > 0.001
-        ? `${(vx/speed).toFixed(2)}, ${(vy/speed).toFixed(2)}, ${(vz/speed).toFixed(2)}`
-        : '—'
-      const lifeFrac = pool.life0[i] > 0 ? (pool.life[i] / pool.life0[i]) : 0
-      const addStat = (k, v) => {
-        const row = document.createElement('div')
-        row.className = 'mv-fx-stat'
-        const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
-        const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
-        row.appendChild(kEl); row.appendChild(vEl)
-        stats.appendChild(row)
-      }
-      addStat('pos',  `${pool.x[i].toFixed(0)}, ${pool.y[i].toFixed(0)}, ${pool.z[i].toFixed(0)}`)
-      addStat('dir',  dirText)
-      addStat('spd',  `${speed.toFixed(0)} wu/s`)
-      addStat('life', `${(pool.life[i] / 1000).toFixed(2)}s / ${(pool.life0[i] / 1000).toFixed(1)}s`)
-      card.appendChild(stats)
-      // Life bar — visual fraction of remaining life so the user
-      // doesn't have to parse "0.18s / 0.22s" in their head.
-      const bar = document.createElement('div')
-      bar.className = 'mv-fx-life-bar'
-      const fill = document.createElement('div')
-      fill.className = 'mv-fx-life-fill'
-      fill.style.width = `${Math.max(0, Math.min(1, lifeFrac)) * 100}%`
-      bar.appendChild(fill)
-      card.appendChild(bar)
-      grid.appendChild(card)
-    }
-    body.appendChild(grid)
-    if (slots.length > shown) {
-      const more = document.createElement('div')
-      more.className = 'mv-fx-more'
-      more.textContent = `+${slots.length - shown} more…`
-      body.appendChild(more)
-    }
-  }
-  renderSection('Projectiles & beams', projSlots)
-  renderSection('Other effects',       fxSlots)
-}
-
-// renderMvAudioPanel populates the Audio overlay with a live snapshot
-// of every entry in the binding's AudioPool.  Layout mirrors the
-// Effects panel: per-kind summary chip strip on top, then a card per
-// live sound showing stem, source label, world XYZ (if any), volume,
-// and a progress bar (filled by entry.audio.currentTime / duration).
+// renderMvEffectsPanel — replaced by the Preact EffectsPanel
+// component in /ui/panels/effects-panel.js (round 14).  Section-collapse
+// state moved into a module-scoped signal in that file; the body
+// re-renders off the inspector-store signals on every refresh tick.
 //
-// Group kinds by category — UNIT acknowledgements, WEAPON-FIRE shots,
-// UI previews, COB-driven sounds — so a row of acks doesn't drown out
-// a single weapon-fire entry the user is hunting.
-function renderMvAudioPanel(body, mv) {
-  const pool = mv && mv.cob && mv.cob.audio
-  if (!pool) {
-    body.replaceChildren()
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No audio pool.'
-    body.appendChild(empty)
-    return
-  }
-  body.replaceChildren()
-  if (pool.count() === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No sounds playing.'
-    body.appendChild(empty)
-    return
-  }
-  // Tally per-kind for the chip strip.  Kind names are friendly so
-  // a glance at the chips tells the user "5 unit acks + 1 weapon"
-  // without having to scroll.
-  const KIND_NAMES = {
-    'unit':        'UNIT',
-    'weapon-fire': 'WEAPON',
-    'weapon-hit':  'HIT',
-    'ui':          'UI',
-    'cob':         'COB',
-  }
-  const counts = new Map()
-  pool.each((e) => counts.set(e.kind, (counts.get(e.kind) || 0) + 1))
-  const chips = document.createElement('div')
-  chips.className = 'mv-fx-chips'
-  for (const [kind, n] of counts) {
-    const c = document.createElement('span')
-    c.className = 'mv-fx-chip'
-    c.textContent = `${KIND_NAMES[kind] || kind.toUpperCase()} ×${n}`
-    chips.appendChild(c)
-  }
-  body.appendChild(chips)
-  // Per-entry cards in insertion order (oldest first, newest at the
-  // bottom — same as the in-flight projectile list in Effects, so
-  // the user reads "most recent sound" off the same edge of the
-  // panel for both inspectors).
-  const fmt = (v, unit) => `${(+v).toFixed(1)}${unit ? ' ' + unit : ''}`
-  pool.each((e) => {
-    const card = document.createElement('div')
-    card.className = 'mv-au-card'
-    // Header: kind tag + stem name
-    const head = document.createElement('div')
-    head.className = 'mv-au-card-head'
-    const tag = document.createElement('span')
-    tag.className = `mv-au-kind kind-${e.kind}`
-    tag.textContent = (KIND_NAMES[e.kind] || e.kind.toUpperCase())
-    head.appendChild(tag)
-    const stem = document.createElement('span')
-    stem.className = 'mv-au-stem'
-    stem.textContent = e.stem
-    head.appendChild(stem)
-    card.appendChild(head)
-    // Source label — second line because source strings can be long
-    // ("ARMCOMLASER: fire" or "Commander: ok1") and we want them on
-    // their own row rather than wrapping the header.
-    const src = document.createElement('div')
-    src.className = 'mv-au-source'
-    src.textContent = e.source || '—'
-    card.appendChild(src)
-    // Stat grid — position (when known), volume, length/progress.
-    const stats = document.createElement('div')
-    stats.className = 'mv-au-card-stats'
-    const addStat = (k, v) => {
-      const row = document.createElement('div')
-      row.className = 'mv-au-stat'
-      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
-      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
-      row.appendChild(kEl); row.appendChild(vEl)
-      stats.appendChild(row)
-    }
-    if (e.x != null) {
-      addStat('Pos', `${fmt(e.x)}, ${fmt(e.y)}, ${fmt(e.z)}`)
-    }
-    addStat('Vol', `${(e.vol * 100).toFixed(0)}%`)
-    // Live currentTime / duration read each refresh — avoids having
-    // to subscribe to timeupdate (which fires too often).  Bar fill
-    // is computed from these so playback rate changes show up the
-    // moment the user drags the sim-speed slider.
-    const audio = e.audio
-    const dur = e.durationMs && e.durationMs > 0
-      ? e.durationMs
-      : (audio.duration > 0 ? audio.duration * 1000 : null)
-    const cur = audio.currentTime * 1000
-    if (dur) {
-      addStat('Time', `${(cur / 1000).toFixed(2)}s / ${(dur / 1000).toFixed(2)}s`)
-    } else {
-      addStat('Time', `${(cur / 1000).toFixed(2)}s`)
-    }
-    card.appendChild(stats)
-    // Progress bar — same dimensions as the Effects panel's life bar
-    // so the two panels read visually identical.  Indeterminate (zero
-    // width) when duration is unknown.
-    const bar = document.createElement('div')
-    bar.className = 'mv-au-life-bar'
-    const fill = document.createElement('div')
-    fill.className = 'mv-au-life-fill'
-    const pct = dur ? Math.max(0, Math.min(100, (cur / dur) * 100)) : 0
-    fill.style.width = `${pct.toFixed(1)}%`
-    bar.appendChild(fill)
-    card.appendChild(bar)
-    body.appendChild(card)
-  })
-}
+// renderMvAudioPanel — replaced by the Preact AudioPanel component
+// in /ui/panels/audio-panel.js (round 14).  Body reads off the live
+// AudioPool through the inspector-store signals.
 
+// renderMvCameraPanel + wireMvRendererPanel — replaced by the Preact
+// RendererPanel component in /ui/panels/renderer-panel.js (round 16).  The
+// Tracking + Auto-Rotate toggles route through the host bridge's
+// setTracking / setAutoRotate, both of which call into the active
+// view via _activeRendererView().
 
-// renderMvCameraPanel populates the Renderer overlay — historically a
-// camera-only read-out, now also displays the GL canvas's smoothed
-// FPS so the user can spot rendering hitches.  Function name kept
-// because every call site already references it; the panel's
-// user-facing label is "Renderer".
-function renderMvCameraPanel(mv) {
-  wireMvRendererPanel()
-  const cam = mv.camera
-  if (!cam) return
-  const fmt = (a, p = 2) => Array.isArray(a) ? `(${a.map(v => v.toFixed(p)).join(', ')})` : a.toFixed(p)
-  const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text }
-  // FPS is computed from the render loop's per-frame timestamps —
-  // see model-renderer.js for the rolling-window average that
-  // backs `getFPS()`.  Returns 0 when the loop isn't running
-  // (paused, no model), so we show "—" in that case.
-  const fps = mv.renderer && typeof mv.renderer.getFPS === 'function' ? mv.renderer.getFPS() : 0
-  set('mv-ci-fps', fps > 0 ? fps.toFixed(0) + ' fps' : '—')
-  set('mv-ci-eye', fmt(cam.eye, 1))
-  set('mv-ci-target', fmt(cam.target, 1))
-  set('mv-ci-yaw', `${(cam.yaw * 180 / Math.PI).toFixed(1)}°`)
-  set('mv-ci-pitch', `${(cam.pitch * 180 / Math.PI).toFixed(1)}°`)
-  set('mv-ci-dist', cam.distance.toFixed(1) + ' wu')
-  if (cam.fov !== undefined) set('mv-ci-fov', `${(cam.fov * 180 / Math.PI).toFixed(0)}°`)
-  else set('mv-ci-fov', '—')
-  // Track checkbox — mirror the live state.  Single-unit mode uses
-  // _mvControls.tracking; sandbox / any view exposes the same fact
-  // via cam.trackedTarget (camera.applyTracking is the source of
-  // truth in either case), so reading from the camera is the
-  // single-source-of-truth path that works for both views.
-  const trackCb = document.getElementById('mv-ci-track')
-  const isTracking = !!cam.trackedTarget || !!(_mvControls && _mvControls.tracking)
-  if (trackCb && trackCb.checked !== isTracking) trackCb.checked = isTracking
-  // Auto-Rotate checkbox — read the LIVE renderer state, not a
-  // remembered flag.  Drag / wheel / pan all drop auto-rotate inside
-  // camera-controls.js, so the checkbox unticks itself the moment
-  // the user grabs the canvas (no extra wiring needed beyond this
-  // refresh poll).
-  const arCb = document.getElementById('mv-ci-autorotate')
-  const arOn = !!(mv.renderer && mv.renderer.autoRotate)
-  if (arCb && arCb.checked !== arOn) arCb.checked = arOn
-  // "Following: <name>" row — surfaces which unit the camera is
-  // locked onto.  Hidden when nothing's tracked so the panel doesn't
-  // grow a stale empty row.
-  const followRow = document.getElementById('mv-ci-following-row')
-  const followEl = document.getElementById('mv-ci-following')
-  if (followRow && followEl) {
-    if (isTracking) {
-      followRow.style.display = ''
-      followEl.textContent = cam.trackedName || 'Unit'
-    } else {
-      followRow.style.display = 'none'
-    }
-  }
-}
+// renderMvPortsPanel + refreshMvPortsLiveValues + refreshMvControlsGating
+// — replaced by the Preact ControlsPanel component in
+// /ui/panels/controls-panel.js (round 17).  All three render off the
+// inspector-store signals; the action grid keeps its MvControls /
+// sandbox-intercept click listeners via dangerouslySetInnerHTML.
 
-// wireMvRendererPanel attaches the Tracking checkbox change handler
-// once on first render of the Renderer panel.  Wired separately
-// from the value-only refresh path so we don't re-bind on every
-// 4 Hz tick.  Also seeds the checkbox to the live MvControls state
-// on first wire so the default-on tracking doesn't render as a
-// blank checkbox until the user opens the panel.
-function wireMvRendererPanel() {
-  // Helper: figure out which view is currently driving the canvas so
-  // both checkbox handlers route to the right place.  Sandbox tab →
-  // sandbox view; single-unit tab → modelViewerInstance.
-  const activeView = () => {
-    const dlg = document.getElementById('model-viewer-dialog')
-    const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
-    return sandboxActive ? (typeof window !== 'undefined' ? window.__sandboxView : null) : modelViewerInstance
-  }
-  // ── Tracking checkbox ────────────────────────────────────────────
-  const cb = document.getElementById('mv-ci-track')
-  if (cb && cb.dataset.wired !== '1') {
-    cb.dataset.wired = '1'
-    cb.addEventListener('change', () => {
-      const v = activeView()
-      // Sandbox owns its own setTracking; single-unit routes through
-      // MvControls.  Both end up calling camera.setTrackedTarget so
-      // applyTracking() picks it up next frame.
-      if (v && typeof v.setTracking === 'function') v.setTracking(cb.checked)
-      else if (_mvControls) _mvControls.setTracking(cb.checked)
+// refreshMvRuntimeStats — replaced by the StatsBlock subcomponent
+// inside /ui/panels/runtime-panel.js (round 18).  Stats are read directly
+// off the runtime via runtimeTick subscription, no DOM writes.
+
+// build*Row port-row builders — replaced by the Preact components in
+// /ui/common/port-rows.js (round 17).
+
+// mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
+// (which the Ports panel edits) back into the React COB ribbon's Unit
+// Attributes sliders.  The reverse direction (ribbon slider → ports
+// panel) is handled by refreshMvPortsLiveValues which reads the same
+// source-of-truth values.
+function mvSyncCobAttrSlidersFromPorts(mv) {
+  if (!mv) return
+  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+    _reactUi.setModelViewerRibbonState({
+      cobDamage: mv.cobDamage | 0,
+      cobBuild: mv.cobBuildPercent | 0,
     })
-    cb.addEventListener('pointerdown', (e) => e.stopPropagation())
-    cb.addEventListener('mousedown', (e) => e.stopPropagation())
-  } else if (cb && _mvControls && cb.checked !== _mvControls.tracking) {
-    cb.checked = _mvControls.tracking
-  }
-  // ── Auto-Rotate checkbox ─────────────────────────────────────────
-  // Toggles renderer.autoRotate on whichever view is active.  The
-  // existing camera-controls module already drops auto-rotate on any
-  // user gesture, so the checkbox re-syncs on each refresh tick via
-  // renderMvCameraPanel — the user sees it click off the moment they
-  // grab the canvas, which matches the gesture's effect.
-  const arCb = document.getElementById('mv-ci-autorotate')
-  if (arCb && arCb.dataset.wired !== '1') {
-    arCb.dataset.wired = '1'
-    arCb.addEventListener('change', () => {
-      const v = activeView()
-      const r = v && v.renderer
-      if (r && typeof r.setAutoRotate === 'function') r.setAutoRotate(arCb.checked)
-      // Mirror to the unit-editor's ribbon Auto-Rotate button so the
-      // two surfaces stay in lockstep.
-      const ribbonBtn = document.querySelector('#mv-act-autorotate')
-      if (ribbonBtn) {
-        ribbonBtn.dataset.on = arCb.checked ? '1' : '0'
-        ribbonBtn.classList.toggle('active', arCb.checked)
-      }
-    })
-    arCb.addEventListener('pointerdown', (e) => e.stopPropagation())
-    arCb.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
-}
-
-// renderMvPortsPanel builds the Ports overlay body.  Called whenever
-// the active view / focused unit changes — refreshMvInspectors tracks
-// a render key and re-invokes us on miss; per-tick live updates run
-// through refreshMvPortsLiveValues instead.  Editing a control writes
-// back into mv.cobPorts (or mv.cobDamage / mv.cobBuildPercent for the
-// two values the COB ribbon's Unit Attributes also drives) so the
-// scripts pick up the new value on their next `get <port>`.
-//
-// opts.sandboxMode — when true, the panel is being rendered for a
-//   sandbox tab.  Replaces the "No COB loaded" empty message with a
-//   sandbox-appropriate placeholder (or nothing — refreshMvControlsGating
-//   hides the body entirely when no unit is selected).  Sandbox units
-//   share the same row builders as the unit editor; the synthesised
-//   sandbox proxy (BaseView.synthSandboxPorts) exposes cobPorts /
-//   cobDamage / cobBuildPercent getters that delegate to the focused
-//   UnitInstance so slider edits reach the live sim.
-function renderMvPortsPanel(mv, opts = {}) {
-  wireMvPortsPanel()
-  const body = document.getElementById('mv-inspector-ports-body')
-  if (!body) return
-  body.replaceChildren()
-  const sandboxMode = !!opts.sandboxMode
-  if (!mv || !mv.cob) {
-    // Sandbox mode never shows "No COB loaded" — every spawnable unit
-    // in the sandbox has a COB by definition, so the message is just
-    // noise.  The empty-state row (refreshMvControlsGating) covers
-    // the "no unit selected" case for sandbox.  Leave the body empty.
-    if (sandboxMode) return
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No COB loaded.'
-    body.appendChild(empty)
-    return
-  }
-  const ports = mv.cobPorts
-  // Sandbox proxy ships with no cobPorts when no unit is focused;
-  // bail before the per-port deref crashes.  refreshMvControlsGating
-  // hides the body entirely in this state, so the user sees the
-  // "No Units Selected" row above instead of an empty space.
-  if (!ports) return
-  // Per-port capability gating.  The TA UnitValue ports are a long
-  // list but the studio surfaces only the subset that's meaningful
-  // for THIS unit — driven by a mix of FBI hints and COB usage
-  // detection.  Rendering the un-applicable rows just clutters the
-  // panel + invites the user to flip a value the unit will ignore.
-  //
-  //   activation        - onoffable=1 in FBI, OR the COB ships an
-  //                       Activate/Deactivate script (which gives
-  //                       the user something to drive ON/OFF).
-  //   moveOrders/fire   - unit can move (CanMove from FBI) OR is a
-  //                       factory (Builder=1 — produced units inherit
-  //                       the factory's standing orders).
-  //   inBuildStance     - Builder=1 (factories + construction units
-  //                       flip this while assembling).
-  //   health/build%     - always shown.  Every unit has HP + build
-  //                       progress in TA.
-  //   armoured          - COB references the ARMORED port (port 20)
-  //                       via GET/SET — caught by scanning the
-  //                       compiled instruction stream.  Solar panels
-  //                       are the canonical example.
-  const um = mv.unitMeta || {}
-  const cob = mv.cob
-  // ACTIVATION port is shown ONLY when the FBI explicitly flags the
-  // unit as player-toggleable (onoffable=1).  Aircraft like the
-  // Hawk ship Activate/Deactivate scripts — but those are engine-
-  // driven for the take-off / landing sequence, NOT player commands;
-  // in the game UI a Hawk has no on/off button.  Earlier the check
-  // also OR'd on Activate-script presence, which mis-classified
-  // every aircraft as "toggleable".  onoffable=1 is the canonical
-  // signal (Radar, Solar, Adv Fusion etc).
-  const showActive = (um.onoffable === true || um.onoffable === 1)
-  const showMoveFire = !!(um.canMove || um.isBuilder)
-  const showBuildStance = !!um.isBuilder
-  const showArmoured = !!(cob.unit && cob.unit.usesUnitValuePort && cob.unit.usesUnitValuePort(20 /* UV_ARMORED */))
-  // Standing-orders section (Move + Fire orders).  NOT considered
-  // developer-level — the user sees these flip during normal play —
-  // so they sit OUTSIDE the dev wrapper and stay visible regardless
-  // of the Developer Controls toggle.
-  if (showMoveFire) {
-    body.appendChild(buildPortChoiceRow('Move orders', 'moveOrders', ports.moveOrders,
-      [['Hold', 0, 'Hold Position — never leave the spot'],
-       ['Maneuver', 1, 'Maneuver — move only to gain line of sight'],
-       ['Roam', 2, 'Roam — chase enemies freely (default)']],
-      'GET STANDINGMOVEORDERS — patrol AI scripts read this to decide whether to step toward an enemy.  Factories pass the value to units they produce.',
-      (v) => { ports.moveOrders = v }))
-    body.appendChild(buildPortChoiceRow('Fire orders', 'fireOrders', ports.fireOrders,
-      [['Hold', 0, 'Hold Fire — never engage'],
-       ['Return', 1, 'Return Fire — only shoot back when attacked'],
-       ['Fire at will', 2, 'Fire at Will — engage anything in range (default)']],
-      'GET STANDINGFIREORDERS — weapon scripts read this to gate Fire* threads.  Factories pass the value to units they produce.',
-      (v) => { ports.fireOrders = v }))
-  }
-  // Developer section — everything the user can poke to put the unit
-  // into states the running sim wouldn't normally reach (full health
-  // → low HP, freshly-built → mid-build, off → on).  Wrapped in a
-  // dedicated div so the Developer Controls menu toggle can hide the
-  // lot in one CSS rule (.mv-controls-no-dev .mv-port-dev-section).
-  const devSection = document.createElement('div')
-  devSection.className = 'mv-port-dev-section'
-  if (showActive) {
-    devSection.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
-      'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
-      (on) => { ports.activation = on ? 1 : 0 }))
-  }
-  devSection.appendChild(buildPortSliderRow('Health', 'health',
-    Math.max(0, 100 - (mv.cobDamage | 0)), 0, 100, '%',
-    'GET HEALTH returns this 0–100 value.  Drives SmokeUnit + damage-state scripts.  Synced with the COB ribbon\'s Damage slider.',
-    (v) => {
-      mv.cobDamage = Math.max(0, Math.min(100, 100 - v))
-      mvSyncCobAttrSlidersFromPorts(mv)
-    }))
-  if (showBuildStance) {
-    devSection.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
-      'GET INBUILDSTANCE — set by factory scripts via SET_VALUE while assembling a unit.  Read-only here; toggled by the running script.'))
-  }
-  devSection.appendChild(buildPortSliderRow('Build % left', 'buildPercentLeft',
-    Math.max(0, 100 - (mv.cobBuildPercent | 0)), 0, 100, '%',
-    'GET BUILD_PERCENT_LEFT — 100 means nothing built yet, 0 means fully built.  Synced with the COB ribbon\'s Build slider.',
-    (v) => {
-      // Route through setBuildPercent so the renderer's build-%
-      // shader uniform updates + a redraw is requested.  Old code
-      // wrote straight to mv.cobBuildPercent which kept the slider
-      // value in sync but never repainted the unit.  Also cancels
-      // any in-flight auto-build ramp so the user's manual drag
-      // takes over without being fought by the timer.
-      if (mv._autoBuild) mv._autoBuild = null
-      const pct = Math.max(0, Math.min(100, 100 - v))
-      if (typeof mv.setBuildPercent === 'function') {
-        mv.setBuildPercent(pct)
-      } else {
-        mv.cobBuildPercent = pct
-      }
-      mvSyncCobAttrSlidersFromPorts(mv)
-    }))
-  if (showArmoured) {
-    devSection.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
-      'GET ARMORED returns 1 when the unit\'s armour plating is engaged.  Read-only here; flipped by damage scripts via SET_VALUE.'))
-  }
-  body.appendChild(devSection)
-}
-
-// refreshMvPortsLiveValues updates the value-only widgets (read-only
-// chips + slider labels) without rebuilding the row controls.  Called
-// every inspector tick so scripts that call SET_VALUE (factories
-// flipping IN_BUILD_STANCE, for instance) reflect on the panel live.
-function refreshMvPortsLiveValues(mv) {
-  const body = document.getElementById('mv-inspector-ports-body')
-  if (!body || !mv?.cob) return
-  const ports = mv.cobPorts
-  // The sandbox proxy mv has no cobPorts (those live on the single-
-  // unit ModelViewer instance and drive the FBI-derived port sliders).
-  // Bail out cleanly here so the rest of refreshMvInspectors keeps
-  // running — without this guard the first `ports.inBuildStance` deref
-  // throws and aborts every panel update after this one (notably the
-  // Controls-button enable code that comes later in the chain).
-  if (!ports) return
-  const setChip = (key, on) => {
-    const chip = body.querySelector(`[data-port="${key}"] .mv-port-chip`)
-    if (!chip) return
-    chip.textContent = on ? 'Yes' : 'No'
-    chip.classList.toggle('yes', on)
-    chip.classList.toggle('no', !on)
-  }
-  setChip('inBuildStance', ports.inBuildStance === 1)
-  setChip('armoured', ports.armoured === 1)
-  // Health + build sliders reflect script-driven changes too (a
-  // damage script could SET_VALUE HEALTH).  Skip when the user is
-  // mid-drag to avoid yanking the thumb.
-  const syncSlider = (key, current) => {
-    const row = body.querySelector(`[data-port="${key}"]`)
-    if (!row) return
-    const input = row.querySelector('input[type=range]')
-    const valEl = row.querySelector('.mv-port-slider-val')
-    if (input && document.activeElement !== input && parseInt(input.value, 10) !== current) {
-      input.value = String(current)
-    }
-    if (valEl) valEl.textContent = `${current}%`
-  }
-  syncSlider('health', Math.max(0, 100 - (mv.cobDamage | 0)))
-  syncSlider('buildPercentLeft', Math.max(0, 100 - (mv.cobBuildPercent | 0)))
-  // Active toggle reflects state changes too.
-  const actBtn = body.querySelector('[data-port="activation"] .mv-port-toggle')
-  if (actBtn) {
-    const on = ports.activation === 1
-    actBtn.textContent = on ? 'On' : 'Off'
-    actBtn.classList.toggle('on', on)
-  }
-  // Move/Fire choice rows: highlight the active selection.
-  for (const key of ['moveOrders', 'fireOrders']) {
-    const cur = ports[key]
-    for (const b of body.querySelectorAll(`[data-port="${key}"] .mv-port-choice > button`)) {
-      const isActive = parseInt(b.dataset.value, 10) === cur
-      b.classList.toggle('active', isActive)
-    }
   }
 }
 
@@ -15299,452 +13307,82 @@ function advanceMvAutoBuild(dtMs) {
   const pct = Math.max(0, Math.min(100, (state.elapsedMs / state.durationMs) * 100))
   if (typeof mv.setBuildPercent === 'function') mv.setBuildPercent(pct)
   else mv.cobBuildPercent = pct
-  // Keep both sliders' labels in sync as the ramp advances so the
-  // user can watch the percentage tick up rather than only seeing
-  // the visual wireframe phase in.
+  // Keep the React ribbon's Damage + Build sliders + the Ports panel
+  // in sync as the ramp advances so the user can watch the percentage
+  // tick up rather than only seeing the visual wireframe phase in.
+  // Both surfaces read off mv.cobBuildPercent so a single push covers
+  // them (the Ports panel re-renders off the inspector-store mv signal
+  // each publish).
   mvSyncCobAttrSlidersFromPorts(mv)
-  const cob = document.getElementById('mv-cob-build')
-  const cobVal = document.getElementById('mv-cob-build-val')
-  if (cob) cob.value = String(pct | 0)
-  if (cobVal) cobVal.textContent = `${pct | 0}%`
   if (state.elapsedMs >= state.durationMs) {
     mv._autoBuild = null  // ramp complete — release the slot
   }
 }
 
-// refreshMvControlsGating disables the entire Controls overlay
-// (action buttons + every port input) until the unit's Create
-// script has finished.  The Actions panel + COB ribbon already
-// gate their individual buttons; this mirrors the same rule for
-// the Controls panel as a single class on the root so the user
-// can see at a glance that nothing in there responds yet.
+// renderMvActionsPanel + wireMvActionsPanel — replaced by the Preact
+// ScriptCommandsPanel component in /ui/panels/script-commands-panel.js
+// (round 16; renamed from ActionsPanel in round 28).  Per-button
+// running state is read live via the host bridge's isCobScriptRunning;
+// the Include-Private filter is bound to the actionsIncludePrivate
+// signal in the inspector store.
 //
-// 'unborn' (Create never started) and 'creating' (Create thread
-// is mid-flight) both block input.  Anything else — 'created',
-// 'activated', 'deactivated' — lets the user drive.  When there's
-// no COB at all the panel stays disabled (no scripts to wire to).
-function refreshMvControlsGating(mv) {
-  const panel = document.getElementById('mv-inspector-ports')
-  if (!panel) return
-  const cob = mv?.cob
-  const lifecycle = cob?._lifecycle
-  const hasCreate = !!(cob && cob.hasScript && cob.hasScript('Create'))
-  const blocked = !cob || lifecycle === 'unborn' || lifecycle === 'creating'
-  // .mv-controls-gated drops opacity and disables pointer events on
-  // the action-button row + the port-rows body via CSS — the panel
-  // header (drag grip + collapse + close) stays interactive so the
-  // user can still move/dismiss the overlay while waiting for Create.
-  // Per-button capability gating done by _refreshButtons stays
-  // untouched: when Create completes, the class drops and each
-  // button's own disabled state takes over again.
-  panel.classList.toggle('mv-controls-gated', blocked)
-  // Swap the action-grid for the Create-Unit banner when the unit's
-  // Create script hasn't run yet.  The banner replaces the grid
-  // instead of just disabling it so the user has an obvious next
-  // step.  Reset button stays in the grid so it's reachable even
-  // pre-Create (it's a no-op if there's nothing to reset).
-  const createRow = document.getElementById('mv-controls-create-row')
-  const actions   = panel.querySelector('#mv-controls-actions')
-  const emptyRow  = document.getElementById('mv-controls-empty-row')
-  const showCreate = !!cob && hasCreate && lifecycle === 'unborn'
-  // Sandbox empty-state: when in sandbox mode AND ZERO units are
-  // selected, swap the action grid for the "No Units Selected"
-  // row.  Previously we keyed this off `cob.unit` being null, but
-  // the sandbox proxy returns a runtime stub (no .unit) for any
-  // selection size != 1 — including multi-select.  That meant a
-  // 5-unit selection got the empty row instead of the (per-round-
-  // 13) intersected action grid.  Sniff the LIVE selection size
-  // from the sandbox view to draw the right distinction.  Single-
-  // unit mode never reaches this branch — there's always exactly
-  // one viewed unit, and sandboxActive is false anyway.
-  const dlg = document.getElementById('model-viewer-dialog')
-  const sandboxActive = !!(dlg && dlg.classList.contains('sandbox-mode'))
-  const sbView = (typeof window !== 'undefined') ? window.__sandboxView : null
-  const sandboxSelSize = (sandboxActive && sbView && sbView.scene && sbView.scene.selected)
-    ? sbView.scene.selected.size
-    : 0
-  const sandboxNoSel = sandboxActive && sandboxSelSize === 0
-  if (createRow) createRow.style.display = showCreate ? '' : 'none'
-  if (emptyRow)  emptyRow.style.display  = (!showCreate && sandboxNoSel) ? '' : 'none'
-  if (actions)   actions.style.display   = (showCreate || sandboxNoSel) ? 'none' : ''
-  // Hide the per-port body (health / build sliders / chip rows) in
-  // sandbox's empty state too — those sliders write into the focused
-  // unit's cobPorts; without a focus there's nothing to drive.
-  // Also hide on multi-select since the body only renders per-unit
-  // editors for exactly-one focused unit (the bound mv.cobPorts).
-  const portsBody = document.getElementById('mv-inspector-ports-body')
-  if (portsBody) portsBody.style.display = (sandboxActive && sandboxSelSize !== 1) ? 'none' : ''
-  // Reset is only meaningful AFTER the unit has been created — it
-  // reverts to the pre-creation state and re-arms the build ramp.
-  // Pre-Create / mid-Create there's nothing to revert, so disable
-  // the button explicitly (rather than rely on the .mv-controls-
-  // gated class) so its visual state reads as "not yet usable"
-  // even when the action grid is otherwise interactive.
-  const resetBtn = document.getElementById('mv-controls-reset-btn')
-  if (resetBtn) {
-    const canReset = !!cob && lifecycle === 'created'
-    resetBtn.disabled = !canReset
-    resetBtn.title = canReset
-      ? 'Reset State — revert the unit to its pre-Create state: clear threads, animators, particles, audio, weapon history, and replay the build animation.'
-      : 'Reset is only available after the unit has been created.'
-  }
-  // Tooltip on the action row explains WHY the panel is unresponsive
-  // (only meaningful when the grid IS visible — i.e. during the
-  // 'creating' phase between Create-click and Create-thread-death).
-  if (actions) {
-    if (blocked && !showCreate) {
-      actions.title = 'Create script running — controls activate once it finishes.'
-    } else {
-      actions.removeAttribute('title')
-    }
-  }
-}
-
-// refreshMvRuntimeStats updates the four telemetry spans in the
-// Runtime overlay header.  Reads directly off the runtime object
-// — tickCount + lastTickMs are written by CobRuntime.tick(),
-// unitCount() + threadCount() walk the unit map each call (cheap
-// at studio scale).  When no runtime exists the spans show 0/—.
-function refreshMvRuntimeStats(mv) {
-  const panel = document.getElementById('mv-inspector-scripts')
-  if (!panel || panel.classList.contains('hidden')) return
-  const rt = mv?.cob?.runtime || mv?._runtime
-  const tickEl    = document.getElementById('mv-runtime-stat-tick')
-  const lastEl    = document.getElementById('mv-runtime-stat-last')
-  const unitsEl   = document.getElementById('mv-runtime-stat-units')
-  const threadsEl = document.getElementById('mv-runtime-stat-threads')
-  const instEl    = document.getElementById('mv-runtime-stat-inst')
-  if (!tickEl || !lastEl || !unitsEl || !threadsEl || !instEl) return
-  if (!rt) {
-    tickEl.textContent = '0'
-    lastEl.textContent = '— ms'
-    unitsEl.textContent = '0'
-    threadsEl.textContent = '0'
-    instEl.textContent = '0'
-    return
-  }
-  tickEl.textContent = String(rt.tickCount | 0)
-  lastEl.textContent = `${(rt.lastTickMs || 0).toFixed(1)} ms`
-  unitsEl.textContent = String(rt.unitCount ? rt.unitCount() : 0)
-  threadsEl.textContent = String(rt.threadCount ? rt.threadCount() : 0)
-  instEl.textContent = String(rt.lastInstCount | 0)
-  // Keep the Pause/Resume toggle label honest — the Step button
-  // toggles paused on each press, and a hot-reload may rebuild the
-  // panel mid-pause.  Sync every refresh so the caption can never
-  // drift from the runtime's actual state.
-  mvRefreshRuntimeToggle()
-}
-
-// ── Ports panel — row builders ────────────────────────────────────
-
-function buildPortRowShell(label, portKey) {
-  const row = document.createElement('div')
-  row.className = 'mv-port-row'
-  row.dataset.port = portKey
-  const lbl = document.createElement('span')
-  lbl.className = 'mv-port-label'
-  lbl.textContent = label
-  row.appendChild(lbl)
-  return row
-}
-
-function buildPortToggleRow(label, portKey, initialOn, tip, onChange) {
-  const row = buildPortRowShell(label, portKey)
-  const btn = document.createElement('button')
-  btn.className = initialOn ? 'mv-port-toggle on' : 'mv-port-toggle'
-  btn.textContent = initialOn ? 'On' : 'Off'
-  btn.title = tip
-  btn.addEventListener('click', () => {
-    const wantOn = !btn.classList.contains('on')
-    btn.classList.toggle('on', wantOn)
-    btn.textContent = wantOn ? 'On' : 'Off'
-    onChange(wantOn)
-  })
-  row.appendChild(btn)
-  return row
-}
-
-function buildPortChipRow(label, portKey, isYes, tip) {
-  const row = buildPortRowShell(label, portKey)
-  const chip = document.createElement('span')
-  chip.className = isYes ? 'mv-port-chip yes' : 'mv-port-chip no'
-  chip.textContent = isYes ? 'Yes' : 'No'
-  if (tip) chip.title = tip
-  row.appendChild(chip)
-  return row
-}
-
-function buildPortChoiceRow(label, portKey, current, options, tip, onChange) {
-  const row = buildPortRowShell(label, portKey)
-  const wrap = document.createElement('div')
-  wrap.className = 'mv-port-choice'
-  if (tip) wrap.title = tip
-  for (const [name, value, optTip] of options) {
-    const btn = document.createElement('button')
-    btn.textContent = name
-    btn.dataset.value = String(value)
-    btn.title = optTip || `Set ${label.toLowerCase()} to ${name}`
-    if (value === current) btn.classList.add('active')
-    btn.addEventListener('click', () => {
-      for (const sib of wrap.children) sib.classList.remove('active')
-      btn.classList.add('active')
-      onChange(value)
-    })
-    wrap.appendChild(btn)
-  }
-  row.appendChild(wrap)
-  return row
-}
-
-function buildPortSliderRow(label, portKey, current, min, max, unit, tip, onInput) {
-  const row = buildPortRowShell(label, portKey)
-  const wrap = document.createElement('div')
-  wrap.className = 'mv-port-slider'
-  const input = document.createElement('input')
-  input.type = 'range'
-  input.min = String(min); input.max = String(max)
-  input.value = String(current)
-  if (tip) input.title = tip
-  const val = document.createElement('span')
-  val.className = 'mv-port-slider-val'
-  val.textContent = `${current}${unit}`
-  input.addEventListener('input', () => {
-    const v = parseInt(input.value, 10) | 0
-    val.textContent = `${v}${unit}`
-    onInput(v)
-  })
-  wrap.appendChild(input)
-  wrap.appendChild(val)
-  row.appendChild(wrap)
-  return row
-}
-
-// mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
-// (which the Ports panel edits) back into the COB ribbon's Unit
-// Attributes sliders + their value labels.  The reverse direction
-// (ribbon slider → ports panel) is handled by refreshMvPortsLiveValues
-// which reads the same source-of-truth values.
-function mvSyncCobAttrSlidersFromPorts(mv) {
-  if (!mv) return
-  const dmg = document.getElementById('mv-cob-damage')
-  const dmgVal = document.getElementById('mv-cob-damage-val')
-  if (dmg) dmg.value = String(mv.cobDamage | 0)
-  if (dmgVal) dmgVal.textContent = `${mv.cobDamage | 0}%`
-  const build = document.getElementById('mv-cob-build')
-  const buildVal = document.getElementById('mv-cob-build-val')
-  if (build) build.value = String(mv.cobBuildPercent | 0)
-  if (buildVal) buildVal.textContent = `${mv.cobBuildPercent | 0}%`
-}
-
-// renderMvActionsPanel rebuilds the Actions inspector's button list
-// from the currently-loaded COB.  Re-run when:
-//   1) a new model loads (onModelLoaded hook in activateModelTab),
-//   2) the Include-Private checkbox toggles (handler set by
-//      wireMvActionsPanel below).
-// Private filter is name-first-char-isLowercase — TA convention is
-// CamelCase for public entry points (Create, Activate, FirePrimary)
-// and lowercase for internal helpers (activatescr, deactivatescr,
-// initstate).  Re-uses runCobEntry so the action buttons pass the
-// same argument-injection logic the ribbon dropdown does — random
-// heading/level pitch for Aim*, factory-redirect for Activate, etc.
-function renderMvActionsPanel(cob) {
-  // Wire the checkbox handler once.  Idempotent guard via dataset
-  // flag avoids stacking listeners on each model reload.
-  wireMvActionsPanel()
-  const list = document.getElementById('mv-actions-list')
-  if (!list) return
-  list.replaceChildren()
-  if (!cob || !cob.unit) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No COB loaded.'
-    list.appendChild(empty)
-    return
-  }
-  const includePrivate = !!state.mvActionsIncludePrivate
-  const names = cob.listScripts()
-  // Alphabetical sort — case-insensitive so the lowercase private
-  // helpers (activatescr, deactivatescr) interleave with their
-  // CamelCase neighbours instead of clumping together at the end of
-  // an ASCII-sorted list (where 'a' > 'Z').
-  const visible = names
-    .filter((n) => {
-      const first = n.charAt(0)
-      const isPrivate = first === first.toLowerCase() && first !== first.toUpperCase()
-      return includePrivate || !isPrivate
-    })
-    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-  if (visible.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'mv-inspector-empty'
-    empty.textContent = includePrivate ? 'COB has no scripts.' : 'Only private helpers — tick Include Private.'
-    list.appendChild(empty)
-    return
-  }
-  for (const name of visible) {
-    const first = name.charAt(0)
-    const isPrivate = first === first.toLowerCase() && first !== first.toUpperCase()
-    const btn = document.createElement('button')
-    btn.className = isPrivate ? 'mv-actions-btn private' : 'mv-actions-btn'
-    btn.textContent = name
-    btn.dataset.script = name
-    // Tooltip / disabled state get refreshed every inspector tick
-    // by syncMvActionsRunning — what we set here is the initial
-    // state at render time.
-    const running = isCobScriptRunning(cob, name)
-    btn.disabled = running
-    btn.title = running
-      ? `${name} is already running`
-      : (isPrivate ? `Run ${name} (internal helper)` : `Run ${name} (one-shot)`)
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      runCobEntry(cob, name)
-    })
-    list.appendChild(btn)
-  }
-}
-
-// syncMvActionsRunning + syncCobRibbonRunning toggle the disabled
-// attribute on action buttons based on which scripts currently have
-// a live thread.  Called from refreshMvInspectors' 4 Hz tick so the
-// greyed state tracks the runtime without us rebuilding the whole
-// button DOM (which would interfere with the hover state mid-click).
+// syncMvActionsRunning is now folded into the React tree's per-tick
+// re-read of cob._lifecycle, so the only sync helper retained here
+// is syncCobRibbonRunning (drives the ribbon row, not the panel).
 function syncMvActionsRunning(cob) {
   if (!cob) return
   // Promote 'creating' → 'created' once the Create thread has died.
-  // Cheap: just check if Create still has a live thread; if not,
-  // Create has completed.
+  // The React Script Commands panel reads cob._lifecycle every tick
+  // so this promotion takes effect on the next publish without an
+  // explicit re-render call.
   if (cob._lifecycle === 'creating' && !isCobScriptRunning(cob, 'Create')) {
     cob._lifecycle = 'created'
-  }
-  const gated = cob._lifecycle === 'unborn' || cob._lifecycle === 'creating'
-  for (const btn of document.querySelectorAll('#mv-actions-list .mv-actions-btn')) {
-    const name = btn.dataset.script
-    if (!name) continue
-    const running = isCobScriptRunning(cob, name)
-    const blockedByCreate = gated && !/^Create$/i.test(name)
-    const disabled = running || blockedByCreate
-    if (btn.disabled !== disabled) btn.disabled = disabled
-    btn.title = running
-      ? `${name} is already running`
-      : blockedByCreate
-        ? `Run Create first — it must finish before other scripts can fire`
-        : `Run ${name}`
   }
 }
 function syncCobRibbonRunning(cob) {
   if (!cob) return
-  const gated = cob._lifecycle === 'unborn' || cob._lifecycle === 'creating'
-  // Static entry-point buttons in the ribbon (Activate / Deactivate /
-  // Fire* etc.) carry data-cob-entry; the dynamic "All scripts" list
-  // below uses data-cob-script.  Both render disabled while the
-  // matching script has a live thread so the user can't pile on a
-  // second invocation of a script that's mid-flight, AND while the
-  // unit is still pre-Create so the user only triggers Create first.
-  const sel = '.cob-entry, .cob-row[data-cob-script]'
-  const has = typeof cob.hasScript === 'function' ? (n) => cob.hasScript(n) : () => false
-  for (const btn of document.querySelectorAll(sel)) {
-    const name = btn.dataset.cobEntry || btn.dataset.cobScript
-    if (!name || !has(name)) continue
-    const running = isCobScriptRunning(cob, name)
-    const blockedByCreate = gated && !/^Create$/i.test(name)
-    const disabled = running || blockedByCreate
-    if (btn.disabled !== disabled) btn.disabled = disabled
-    btn.title = running
-      ? `${name} is already running`
-      : blockedByCreate
-        ? `Run Create first — it must finish before other scripts can fire`
-        : `Run ${name}`
-  }
-}
-
-function wireMvActionsPanel() {
-  const cb = document.getElementById('mv-actions-private')
-  if (!cb || cb.dataset.wired === '1') return
-  cb.dataset.wired = '1'
-  cb.checked = !!state.mvActionsIncludePrivate
-  cb.addEventListener('change', () => {
-    state.mvActionsIncludePrivate = !!cb.checked
-    persistPrefs()
-    renderMvActionsPanel(modelViewerInstance?.cob)
+  if (!_reactUi || typeof _reactUi.setModelViewerCobState !== 'function') return
+  // Push the live running-scripts set + lifecycle into the React COB
+  // dropdown's signal so the entry buttons + "All scripts" rows flip
+  // between disabled / enabled the instant a thread starts or dies.
+  // Lower-cased keys mirror the runtime's case-insensitive lookup so
+  // the React side can check `runningScripts.has(name.toLowerCase())`.
+  _reactUi.setModelViewerCobState({
+    runningScripts: _collectRunningCobScripts(cob),
+    lifecycle: cob._lifecycle || 'created',
   })
-  // Stop the click from bubbling out — without this, clicking the
-  // checkbox inside the panel header bubbles up to the (potential)
-  // drag handler or outside-click dismissers and feels jumpy.
-  cb.addEventListener('click', (e) => e.stopPropagation())
-  cb.addEventListener('pointerdown', (e) => e.stopPropagation())
 }
 
-// wireMvPortsPanel was the host for the panel-header Reset button,
-// since removed in favour of the unified "Reset" action-grid button
-// next to Stop (in mv-controls-actions).  The function is kept as a
-// no-op so existing renderMvPortsPanel / refreshMvControlsGating
-// call sites don't need to learn about its removal.
-function wireMvPortsPanel() {
-  // intentionally empty
+// _collectRunningCobScripts — Set of lower-cased script names that
+// currently have at least one live thread.  Shared between the
+// per-tick syncCobRibbonRunning fire and refreshCobPanel's per-unit
+// reset; centralising avoids two slightly-different walkers drifting
+// apart on what counts as "running."
+function _collectRunningCobScripts(cob) {
+  const set = new Set()
+  if (cob && cob.unit && cob.unit._threads) {
+    for (const t of cob.unit._threads) {
+      if (!t.dead) set.add(t.script.name.toLowerCase())
+    }
+  }
+  return set
 }
 
-// wireCobAttributeSliders is idempotent — safe to call on every
-// refreshCobPanel without rebinding handlers.  Uses an existence
-// guard via a dataset flag so repeated invocations are no-ops.
-function wireCobAttributeSliders() {
-  const dmg = document.getElementById('mv-cob-damage')
-  const dmgVal = document.getElementById('mv-cob-damage-val')
-  if (dmg && dmg.dataset.wired !== '1') {
-    dmg.addEventListener('input', () => {
-      const v = parseInt(dmg.value, 10) | 0
-      if (dmgVal) dmgVal.textContent = `${v}%`
-      modelViewerInstance?.setDamage(v)
-    })
-    dmg.addEventListener('click', (e) => e.stopPropagation())
-    dmg.addEventListener('pointerdown', (e) => e.stopPropagation())
-    dmg.dataset.wired = '1'
-  }
-  const pb = document.getElementById('mv-cob-playback')
-  if (pb && pb.dataset.wired !== '1') {
-    pb.addEventListener('input', () => {
-      mvSetSimulationSpeed((parseInt(pb.value, 10) | 0) / 100)
-    })
-    pb.addEventListener('click', (e) => e.stopPropagation())
-    pb.addEventListener('pointerdown', (e) => e.stopPropagation())
-    pb.dataset.wired = '1'
-  }
-  // Runtime overlay's Speed slider — same source-of-truth as the COB
-  // ribbon's Playback slider above.  Both call mvSetSimulationSpeed,
-  // which pushes the new rate to the runtime + updates both label
-  // pairs so the two stay in lock-step regardless of which one the
-  // user dragged.
-  const speed = document.getElementById('mv-runtime-speed')
-  if (speed && speed.dataset.wired !== '1') {
-    speed.addEventListener('input', () => {
-      mvSetSimulationSpeed((parseInt(speed.value, 10) | 0) / 100)
-    })
-    speed.dataset.wired = '1'
-  }
-  const build = document.getElementById('mv-cob-build')
-  const buildVal = document.getElementById('mv-cob-build-val')
-  if (build && build.dataset.wired !== '1') {
-    build.addEventListener('input', () => {
-      const v = parseInt(build.value, 10) | 0
-      if (buildVal) buildVal.textContent = `${v}%`
-      // User-driven drag — cancel any in-flight auto-build ramp so
-      // the timer doesn't fight the slider.  Manual control wins.
-      if (modelViewerInstance) modelViewerInstance._autoBuild = null
-      modelViewerInstance?.setBuildPercent(v)
-    })
-    build.addEventListener('click', (e) => e.stopPropagation())
-    build.addEventListener('pointerdown', (e) => e.stopPropagation())
-    build.dataset.wired = '1'
-  }
-  const reset = document.getElementById('mv-cob-reset')
-  if (reset && reset.dataset.wired !== '1') {
-    reset.addEventListener('click', (e) => {
-      e.stopPropagation()
-      modelViewerInstance?.resetState()
-    })
-    reset.dataset.wired = '1'
-  }
-}
+// wireMvActionsPanel — replaced by the Preact ScriptCommandsPanel +
+// inspector-store's actionsIncludePrivate signal in round 16.
+
+// wireMvPortsPanel — port row builders + the panel-header Reset host
+// are both gone in round 17; the React ControlsPanel renders rows + a
+// React-owned Reset attribute via /ui/common/port-rows.js + /ui/panels/controls-panel.js.
+
+// wireCobAttributeSliders — the COB-menu Damage / Build / Playback
+// sliders + Reset button are React-managed now (see the model viewer
+// ribbon's CobDropdown).  The Runtime overlay's Speed slider is also
+// React (RuntimePanel.SpeedSlider).  Click handlers route through the
+// configureModelViewerRibbonBridge installation below so this helper
+// became a vestigial stub — kept only to preserve the per-tick call
+// shape refreshCobPanel and friends use; safe to delete once nothing
+// references it externally.
 
 // Expose the two runtime-control helpers on `window` so cross-module
 // callers (the mv-controls keyboard handler) can drive Space + +/-
@@ -15760,25 +13398,37 @@ function _wireRuntimeHelpersToWindow() {
   window.startMvAutoBuild = startMvAutoBuild
 }
 
-// mvToggleRuntimePaused flips the runtime's paused state and
+// mvToggleRuntimePaused flips the active runtime's paused state and
 // refreshes the merged Pause/Resume button's label + tooltip so the
-// caption always reflects what the NEXT click will do.  When un-
-// pausing, also clears every thread's breakpointHit flag so threads
-// stopped on a BP advance off the line (was the Resume button's
-// behaviour before the merge — preserved here so debugger workflows
-// still work).
+// caption always reflects what the NEXT click will do.  Routes through
+// _activeRuntime so the Spacebar hotkey and the Runtime overlay's
+// Pause button drive whichever runtime the user is actually looking
+// at (sandbox engine OR unit-editor viewer).
+//
+// On Resume: we DELIBERATELY leave each thread's breakpointHit flag
+// alone.  _runThread reads `allowFirstBreakpoint = !breakpointHit` —
+// when breakpointHit is true (the thread is paused on a BP), the
+// first instruction this tick skips the BP check, executes the BP'd
+// line once, then re-engages BP checking for subsequent ops.  If we
+// cleared the flag here the BP at the same PC would re-fire
+// immediately, paused would flip back to true, and the sim would
+// look like it "stepped one tick and re-paused" — which is exactly
+// the bug Resume used to ship.
 function mvToggleRuntimePaused() {
-  const rt = modelViewerInstance?.cob?.runtime
+  const rt = _activeRuntime()
   if (!rt) return
   const willPause = !rt.paused
-  if (!willPause) {
-    // Resuming — sweep BPs the same way the old Resume button did.
-    for (const u of rt.units()) {
-      for (const t of u._threads.values()) if (!t.dead) t.breakpointHit = false
-    }
-  }
   rt.setPaused(willPause)
   mvRefreshRuntimeToggle()
+  // Kick the React inspector tree so the Pause/Resume button label
+  // (and any other panel that reads rt.paused) flips RIGHT NOW
+  // instead of after the next 4 Hz publish.  Without this nudge the
+  // click → label-change latency was 250 ms, which read as "did the
+  // click register?" — bad for a control whose feedback is the label
+  // itself.  Cheap: just increments the runtimeTick signal.
+  if (_reactUi && typeof _reactUi.bumpRuntimeTick === 'function') {
+    _reactUi.bumpRuntimeTick()
+  }
 }
 
 // mvRefreshRuntimeToggle syncs the merged button's caption + title
@@ -15821,18 +13471,13 @@ function mvSetSimulationSpeed(rate) {
   // its sim.  No-op when no sandbox is open.
   const sbRt = sandboxViewInstance?.scene?.runtime
   if (sbRt && typeof sbRt.setPlaybackRate === 'function') sbRt.setPlaybackRate(v)
-  // Slider values are percent units (1-1000 = 0.01× - 10×).  Label
-  // uses 2 decimals so 0.05× and 0.25× both read cleanly; high end
-  // (10.00×) doesn't lose precision.
-  const pb = document.getElementById('mv-cob-playback')
-  const pbVal = document.getElementById('mv-cob-playback-val')
-  if (pb) pb.value = String(Math.round(v * 100))
-  if (pbVal) pbVal.textContent = `${v.toFixed(2)}×`
-  // Runtime-overlay slider + label.
-  const speed = document.getElementById('mv-runtime-speed')
-  const speedVal = document.getElementById('mv-runtime-speed-val')
-  if (speed) speed.value = String(Math.round(v * 100))
-  if (speedVal) speedVal.textContent = `${v.toFixed(2)}×`
+  // React COB ribbon's Playback slider — pushed via state signal.
+  // The Runtime overlay's SpeedSlider component reads rt.playbackRate
+  // directly (subscribed via runtimeTick), so it picks up the new rate
+  // on the next publish without an explicit push here.
+  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+    _reactUi.setModelViewerRibbonState({ cobPlayback: Math.round(v * 100) })
+  }
 }
 
 // refreshCobPanel wires the Animation→COB dropdown buttons to the
@@ -15842,73 +13487,24 @@ function mvSetSimulationSpeed(rate) {
 // for AimFromPrimary / QueryPrimary / RestoreAfterDelay and other
 // less-common scripts the static button row doesn't enumerate.
 function refreshCobPanel(cob) {
-  wireCobAttributeSliders()
-  // Sync slider displays to the new unit's state.
-  const dmg = document.getElementById('mv-cob-damage')
-  const dmgVal = document.getElementById('mv-cob-damage-val')
-  if (dmg && dmgVal) {
-    const v = modelViewerInstance?.cobDamage || 0
-    dmg.value = String(v)
-    dmgVal.textContent = `${v}%`
-  }
-  // Push the loaded unit's playback rate through the shared helper
-  // so both the COB-menu slider AND the Runtime overlay slider land
-  // on the same value.
+  // Push the loaded unit's playback rate through the shared helper so
+  // the React Runtime panel + the sandbox runtime (if any) all land
+  // on the same value.  mvSetSimulationSpeed also writes through to
+  // the React COB ribbon's cobPlayback state.
   mvSetSimulationSpeed(cob ? cob.runtime.playbackRate : 1)
-  const build = document.getElementById('mv-cob-build')
-  const buildVal = document.getElementById('mv-cob-build-val')
-  if (build && buildVal) {
-    const v = modelViewerInstance?.cobBuildPercent ?? 100
-    build.value = String(v)
-    buildVal.textContent = `${v}%`
+  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+    _reactUi.setModelViewerRibbonState({
+      cobDamage: modelViewerInstance?.cobDamage || 0,
+      cobBuild: modelViewerInstance?.cobBuildPercent ?? 100,
+    })
   }
-  for (const btn of $$('.cob-entry')) {
-    const name = btn.dataset.cobEntry
-    const has = cob && cob.hasScript(name)
-    // Hide rows the loaded COB doesn't define instead of greying
-    // them out — a row of disabled buttons in the dropdown adds
-    // noise without telling the user anything useful.  When no
-    // COB is loaded at all, show every row (the global empty
-    // state is communicated by the script list below).
-    btn.classList.toggle('hidden', !!cob && !has)
-    btn.disabled = false
-    btn.onclick = has ? (e) => {
-      e.stopPropagation()
-      runCobEntry(cob, name)
-    } : null
-  }
-  const list = $('#mv-cob-script-list')
-  if (!list) return
-  list.replaceChildren()
-  if (!cob) {
-    const empty = document.createElement('div')
-    empty.className = 'cob-empty'
-    empty.textContent = 'No COB attached.'
-    list.appendChild(empty)
-    return
-  }
-  const names = cob.listScripts()
-  if (!names.length) {
-    const empty = document.createElement('div')
-    empty.className = 'cob-empty'
-    empty.textContent = 'COB has no scripts.'
-    list.appendChild(empty)
-    return
-  }
-  for (const name of names) {
-    const row = document.createElement('button')
-    row.className = 'cob-row'
-    row.textContent = name
-    row.title = `Run ${name} (one-shot)`
-    // dataset.cobScript lets syncCobRibbonRunning find the script
-    // name without scraping textContent (which would include any
-    // future decoration we add to the label).
-    row.dataset.cobScript = name
-    const running = isCobScriptRunning(cob, name)
-    row.disabled = running
-    if (running) row.title = `${name} is already running`
-    row.onclick = (e) => { e.stopPropagation(); runCobEntry(cob, name) }
-    list.appendChild(row)
+  if (_reactUi && typeof _reactUi.setModelViewerCobState === 'function') {
+    _reactUi.setModelViewerCobState({
+      hasCob: !!cob,
+      scriptNames: cob ? cob.listScripts() : [],
+      runningScripts: _collectRunningCobScripts(cob),
+      lifecycle: cob?._lifecycle || 'created',
+    })
   }
 }
 
@@ -15916,7 +13512,7 @@ function refreshCobPanel(cob) {
 // one live thread.  Case-insensitive, matches the runtime's own
 // script lookup semantics.  Used by runCobEntry to no-op a click
 // on a script that's already executing, and by refreshCobPanel +
-// renderMvActionsPanel to grey out the corresponding buttons.
+// the Script Commands panel to grey out the corresponding buttons.
 function isCobScriptRunning(cob, name) {
   if (!cob || !cob.unit) return false
   const lower = name.toLowerCase()
@@ -16048,194 +13644,15 @@ function runCobEntry(cob, name) {
 }
 
 function renderPieceTree(model) {
-  const host = $('#model-viewer-tree')
-  if (!host || !model) return
-  host.replaceChildren()
-  const gl = modelViewerInstance?.renderer?.gl
-  const triMode = gl?.TRIANGLES
-  const lineMode = gl?.LINES
-  const collapsed = new Set()
-
-  // Wire hover-to-highlight on the renderer.  Any row that carries
-  // data-piece can light the model's wireframe in red so the user
-  // can match abstract names back to geometry.
-  const setHover = (name) => {
-    if (modelViewerInstance?.renderer) {
-      modelViewerInstance.renderer.setHoveredPieceName(name)
-    }
+  // React-managed now (see /ui/unit-editor/tabs/piece-tree.js).  The
+  // host hands the model to the React component via setPieceTreeModel;
+  // the tree subscribes to runtimeTick + inspector-store.mv so the
+  // eye/shade/cache/shadow icons, hover-highlight, and selectPiece
+  // routing all flow through React.
+  if (_reactUi && typeof _reactUi.setPieceTreeModel === 'function') {
+    _reactUi.setPieceTreeModel(model)
   }
-
-  // makeStatusIcon — clickable chip representing one of the
-  // COB-driven render flags for a piece (shade / cache / shadow).
-  // The icon glyph + .on/.off class are refreshed each inspector
-  // tick from the live COB state (refreshPieceTreeStatus).  Click
-  // flips that state — cascades through descendants by default,
-  // shift-click suppresses the cascade.  Writing through to the
-  // CobUnit's flag array means the next render frame + every
-  // future runtime query sees the new value, matching how the
-  // eye toggle behaves.
-  const FLAG_FIELDS = {
-    shade:  '_pieceShade',
-    cache:  '_pieceCache',
-    shadow: '_pieceShadow',
-  }
-  const makeStatusIcon = (piece, flag, _onTitle, _offTitle) => {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'piece-status'
-    btn.dataset.flag = flag
-    btn._piece = piece
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const unit = modelViewerInstance?.cob?.unit
-      const pieceMap = modelViewerInstance?.cob?._pieceMap
-      const field = FLAG_FIELDS[flag]
-      if (!unit || !pieceMap || !field) return
-      // Read current state from the unit, then flip + apply with
-      // the same cascade rules as the eye toggle: shift-click =
-      // this piece only, plain click = this piece + all descendants.
-      const myIdx = pieceMap.get(piece)
-      if (typeof myIdx !== 'number' || myIdx < 0) return
-      // Cache uses default-off, shade + shadow default-on.  Whatever
-      // the new target value is, every cascaded piece gets the same.
-      const target = !unit[field][myIdx]
-      const cascade = !e.shiftKey
-      const apply = (p) => {
-        const idx = pieceMap.get(p)
-        if (typeof idx === 'number' && idx >= 0) unit[field][idx] = target
-        if (cascade) for (const c of p.children) apply(c)
-      }
-      apply(piece)
-      refreshPieceTreeStatus()
-    })
-    return btn
-  }
-  const makeEyeToggle = (piece) => {
-    const eye = document.createElement('button')
-    eye.type = 'button'
-    eye.className = 'piece-eye' + (piece.visible ? '' : ' off')
-    eye.title = piece.visible ? 'Hide piece (Shift: this piece only)' : 'Show piece (Shift: this piece only)'
-    eye.textContent = piece.visible ? '👁' : '⊘'
-    eye.addEventListener('click', (e) => {
-      e.stopPropagation()
-      // Default behaviour: toggle this piece AND every descendant so
-      // hiding e.g. the torso also hides the gun arms attached to it.
-      // Shift-click suppresses the cascade for fine-grained edits.
-      const cascade = !e.shiftKey
-      const target = !piece.visible
-      // Write the user's choice through to the COB unit's per-piece
-      // visibility table.  CobBinding._sync re-reads that table every
-      // render frame and writes piece.visible = isPieceVisible(idx),
-      // so without writing the override here the next sync flips the
-      // piece back to "visible" and the user can never escape the
-      // hide → re-show toggle (the bug this addresses).
-      const unit = modelViewerInstance?.cob?.unit
-      const pieceMap = modelViewerInstance?.cob?._pieceMap
-      const apply = (p) => {
-        p.visible = target
-        if (unit && pieceMap) {
-          const idx = pieceMap.get(p)
-          if (typeof idx === 'number' && idx >= 0) unit._pieceVisible[idx] = target
-        }
-        if (cascade) for (const c of p.children) apply(c)
-      }
-      apply(piece)
-      // Refresh all eye icons in the tree so cascading hides flip
-      // every affected row's glyph in one go.
-      refreshPieceTreeEyes()
-      if (modelViewerInstance?.renderer) modelViewerInstance.renderer.requestRedraw()
-    })
-    eye._piece = piece
-    return eye
-  }
-
-  const build = (piece) => {
-    const primCount = piece.drawGroups.reduce((n, g) => {
-      if (g.mode === triMode) return n + g.vertexCount / 3
-      if (g.mode === lineMode) return n + g.vertexCount / 2
-      return n + g.vertexCount
-    }, 0)
-    const hasKids = piece.children.length > 0
-    const displayName = pieceDisplayName(piece)
-    if (hasKids) {
-      const groupEl = document.createElement('div')
-      groupEl.className = 'drawer-group drawer-piece-group'
-      groupEl.dataset.piece = piece.name
-      const title = document.createElement('div')
-      title.className = 'drawer-group-title'
-      const chev = document.createElement('span')
-      chev.className = 'chev'
-      chev.textContent = '▾'
-      const name = document.createElement('span')
-      name.className = 'piece-name'
-      name.textContent = displayName
-      const stat = document.createElement('span')
-      stat.className = 'drawer-group-count'
-      stat.textContent = `${Math.round(primCount)} prim`
-      title.appendChild(chev)
-      title.appendChild(name)
-      if (piece.isEmitterPoint) {
-        const ico = document.createElement('span')
-        ico.className = 'piece-emitter'
-        ico.textContent = '✦'
-        ico.title = 'Vertex-only piece (smoke / explosion anchor)'
-        title.appendChild(ico)
-      }
-      title.appendChild(stat)
-      title.appendChild(makeEyeToggle(piece))
-      title.appendChild(makeStatusIcon(piece, 'shade',  'Shaded',       'Unshaded (dont-shade)'))
-      title.appendChild(makeStatusIcon(piece, 'cache',  'Cached',       'Not cached'))
-      title.appendChild(makeStatusIcon(piece, 'shadow', 'Casts shadow', 'No shadow (dont-shadow)'))
-      // Chevron collapses; everything else jumps the camera.
-      chev.addEventListener('click', (e) => {
-        e.stopPropagation()
-        const id = piece.name
-        if (collapsed.has(id)) {
-          collapsed.delete(id)
-          groupEl.classList.remove('collapsed')
-        } else {
-          collapsed.add(id)
-          groupEl.classList.add('collapsed')
-        }
-      })
-      title.addEventListener('click', () => selectPiece(piece.name))
-      title.addEventListener('mouseenter', () => setHover(piece.name))
-      title.addEventListener('mouseleave', () => setHover(null))
-      groupEl.appendChild(title)
-      const body = document.createElement('div')
-      body.className = 'drawer-group-body'
-      for (const c of piece.children) body.appendChild(build(c))
-      groupEl.appendChild(body)
-      return groupEl
-    }
-    const row = document.createElement('div')
-    row.className = 'drawer-item-piece'
-    row.dataset.piece = piece.name
-    const name = document.createElement('span')
-    name.className = 'piece-name'
-    name.textContent = displayName
-    row.appendChild(name)
-    if (piece.isEmitterPoint) {
-      const ico = document.createElement('span')
-      ico.className = 'piece-emitter'
-      ico.textContent = '✦'
-      ico.title = 'Vertex-only piece (smoke / explosion anchor)'
-      row.appendChild(ico)
-    }
-    const stat = document.createElement('span')
-    stat.className = 'piece-stat'
-    stat.textContent = `${Math.round(primCount)} prim`
-    row.appendChild(stat)
-    row.appendChild(makeEyeToggle(piece))
-    row.appendChild(makeStatusIcon(piece, 'shade',  'Shaded',       'Unshaded (dont-shade)'))
-    row.appendChild(makeStatusIcon(piece, 'cache',  'Cached',       'Not cached'))
-    row.appendChild(makeStatusIcon(piece, 'shadow', 'Casts shadow', 'No shadow (dont-shadow)'))
-    row.addEventListener('click', () => selectPiece(piece.name))
-    row.addEventListener('mouseenter', () => setHover(piece.name))
-    row.addEventListener('mouseleave', () => setHover(null))
-    return row
-  }
-  host.appendChild(build(model.root))
+  return
 }
 
 // wireMvSidebarTabs wires the Pieces / Textures tab buttons once.
@@ -16276,123 +13693,10 @@ function wireMvSidebarTabs() {
 // reference that texture; the group header collapses/expands the
 // block.
 function renderTexturesTab(model) {
-  const host = document.getElementById('model-viewer-textures')
-  if (!host || !model) return
-  host.replaceChildren()
-  // Count usage per texture by walking every piece's drawGroups —
-  // this is the same source-of-truth the renderer uses for the
-  // hover-highlight check, so the user's reported count matches
-  // what they see flash red.
-  const usage = new Map()   // textureLower → count of primitives
-  const visit = (p) => {
-    if (!p) return
-    if (p.drawGroups) {
-      for (const g of p.drawGroups) {
-        // ModelLoader stores the atlas name as `textureName`; fall
-        // back to `texture` so the function survives a future rename
-        // in either direction without silent breakage.
-        const t = g.textureName || g.texture
-        if (!t) continue
-        const k = t.toLowerCase()
-        usage.set(k, (usage.get(k) || 0) + 1)
-      }
-    }
-    for (const c of p.children || []) visit(c)
+  // React-managed now (see /ui/unit-editor/tabs/textures-tab.js).
+  if (_reactUi && typeof _reactUi.setTexturesModel === "function") {
+    _reactUi.setTexturesModel(model)
   }
-  visit(model.root)
-  if (usage.size === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'loading'
-    empty.textContent = 'No textures referenced.'
-    host.appendChild(empty)
-    return
-  }
-  // Group by source GAF — fall back to "(unknown)" when the
-  // server didn't resolve a GAF for the texture (the renderer
-  // substitutes a neutral grey fallback in that case).
-  const sources = model.textureSources || {}
-  const groups = new Map() // gafName → [{ name, count }]
-  for (const [name, count] of usage) {
-    const gaf = sources[name] || '(unknown)'
-    if (!groups.has(gaf)) groups.set(gaf, [])
-    groups.get(gaf).push({ name, count })
-  }
-  // Sort groups by TOTAL usage descending; within each group sort
-  // textures by their own count descending, ties broken by name.
-  const groupList = [...groups.entries()].map(([gaf, textures]) => {
-    const total = textures.reduce((n, t) => n + t.count, 0)
-    textures.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-    return { gaf, textures, total }
-  }).sort((a, b) => b.total - a.total || a.gaf.localeCompare(b.gaf))
-  // Persist collapse state across re-renders of the same model
-  // (Set lives on the function — fresh model load resets it via
-  // the explicit clear in renderPieceTree's host.replaceChildren
-  // path; if cross-tab persistence becomes a need, lift to a
-  // module-scoped Set).
-  if (!renderTexturesTab._collapsed) renderTexturesTab._collapsed = new Set()
-  const collapsed = renderTexturesTab._collapsed
-  for (const { gaf, textures, total } of groupList) {
-    const groupEl = document.createElement('div')
-    groupEl.className = 'mv-texture-group' + (collapsed.has(gaf) ? ' collapsed' : '')
-    const hdr = document.createElement('div')
-    hdr.className = 'mv-texture-group-header'
-    const chev = document.createElement('span')
-    chev.className = 'chev'
-    chev.textContent = '▾'
-    const nameEl = document.createElement('span')
-    nameEl.className = 'mv-texture-group-name'
-    nameEl.textContent = gaf
-    const countEl = document.createElement('span')
-    countEl.className = 'mv-texture-group-count'
-    countEl.textContent = `${textures.length} tex · ${total}`
-    hdr.appendChild(chev)
-    hdr.appendChild(nameEl)
-    hdr.appendChild(countEl)
-    hdr.addEventListener('click', () => {
-      if (collapsed.has(gaf)) collapsed.delete(gaf)
-      else collapsed.add(gaf)
-      groupEl.classList.toggle('collapsed')
-    })
-    groupEl.appendChild(hdr)
-    const body = document.createElement('div')
-    body.className = 'mv-texture-group-body'
-    for (const { name, count } of textures) {
-      const row = document.createElement('div')
-      row.className = 'mv-texture-row'
-      row.dataset.texture = name
-      const img = document.createElement('img')
-      img.src = `/api/studio/texture/${encodeURIComponent(name)}.png`
-      img.alt = name
-      img.loading = 'lazy'
-      const lbl = document.createElement('span')
-      lbl.className = 'mv-texture-name'
-      lbl.textContent = name
-      const cnt = document.createElement('span')
-      cnt.className = 'mv-texture-count'
-      cnt.textContent = `×${count}`
-      row.appendChild(img)
-      row.appendChild(lbl)
-      row.appendChild(cnt)
-      row.addEventListener('mouseenter', () => {
-        modelViewerInstance?.renderer?.setHoveredTexture?.(name)
-      })
-      row.addEventListener('mouseleave', () => {
-        modelViewerInstance?.renderer?.setHoveredTexture?.(null)
-      })
-      body.appendChild(row)
-    }
-    groupEl.appendChild(body)
-    host.appendChild(groupEl)
-  }
-  // Wire the texture-filter input (idempotent — picks up the
-  // current value if the user typed something then switched tabs
-  // and came back).
-  const filter = document.getElementById('mv-texture-filter')
-  if (filter && filter.dataset.wired !== '1') {
-    filter.dataset.wired = '1'
-    filter.addEventListener('input', () => filterTexturesList(filter.value))
-  }
-  filterTexturesList(filter?.value || '')
 }
 
 // renderMvWeaponsTab populates the left-panel Weapons tab from the
@@ -16414,458 +13718,24 @@ function renderTexturesTab(model) {
 //
 // Empty slots ("Weapon2=NONE" or missing) render as a muted "—"
 // placeholder card so the slot count stays consistent across units.
-// _mvWeaponCollapsed — module-scoped set of slot names whose card the
-// user has collapsed.  Persists across re-renders + unit-swaps within
-// the session so toggling "Primary" closed once stays closed when the
-// panel rebuilds.
-const _mvWeaponCollapsed = new Set()
-// _mvWeaponShowProjectiles — top-level toggle for the per-weapon
-// recent-projectiles list.  Default ON so the user discovers the
-// feature; persisted to the same state.mvWeaponPrefs blob as the
-// collapsed set on the next prefs flush.
-let _mvWeaponShowProjectiles = true
+// Per-slot collapse + the master Show Projectiles toggle persist
+// inside the React tab module itself now (see
+// /ui/unit-editor/tabs/weapons-tab.js).
 
-function renderMvWeaponsTab(mv) {
-  const host = document.getElementById('model-viewer-weapons')
-  if (!host) return
-  host.replaceChildren()
-  const meta = mv && mv.unitMeta
-  if (!meta || !meta.weapons) {
-    const empty = document.createElement('div')
-    empty.className = 'loading'
-    empty.textContent = 'No weapons declared.'
-    host.appendChild(empty)
-    return
-  }
-  // Top-of-panel toggle row — "Show Projectiles".  Persists across
-  // re-renders via the module-scoped flag.  Wired with a stop-prop
-  // so a click inside the row doesn't bubble into anything that
-  // would re-trigger a tab change.
-  const toggle = document.createElement('label')
-  toggle.className = 'mv-weapon-show-proj'
-  toggle.title = 'Toggle the "recent projectiles" list below each weapon card.'
-  const tcb = document.createElement('input')
-  tcb.type = 'checkbox'
-  tcb.checked = _mvWeaponShowProjectiles
-  tcb.addEventListener('change', () => {
-    _mvWeaponShowProjectiles = tcb.checked
-    renderMvWeaponsTab(mv)
-  })
-  const tlbl = document.createElement('span')
-  tlbl.textContent = 'Show Projectiles'
-  toggle.appendChild(tcb)
-  toggle.appendChild(tlbl)
-  host.appendChild(toggle)
-  // Script names from the COB — a Set for fast membership checks.
-  // Empty when the unit has no COB (orphan 3DOs / props).
-  const scripts = new Set((mv.cob && mv.cob.unit && mv.cob.unit.scriptNames) || [])
-  const slots = ['primary', 'secondary', 'tertiary']
-  for (let i = 0; i < slots.length; i++) {
-    const slot = slots[i]
-    const w = meta.weapons.find((x) => x.slot === slot) || { slot, name: '', index: i + 1 }
-    host.appendChild(buildMvWeaponCard(mv, slot, w, scripts))
+function renderMvWeaponsTab(_mv) {
+  // React-managed now (see /ui/unit-editor/tabs/weapons-tab.js).
+  // The React tab reads inspector-store.mv directly, so the host
+  // does not need to push anything explicitly.  Keeping the function
+  // for call-site compatibility (mv-controls re-render after weapon
+  // swap, etc.); a runtime-tick bump nudges the React tree to repaint.
+  if (_reactUi && typeof _reactUi.bumpRuntimeTick === "function") {
+    _reactUi.bumpRuntimeTick()
   }
 }
-
-// refreshMvWeaponsLive updates the per-card LIVE bits (reload bar +
-// timer text + recent-projectiles list) without rebuilding the whole
-// card tree — called on every refreshMvInspectors tick.  Cards know
 // how to refresh themselves via a closure stashed on dataset.
-function refreshMvWeaponsLive(mv) {
-  if (!mv || !mv.unitMeta) return
-  const host = document.getElementById('model-viewer-weapons')
-  if (!host) return
-  for (const card of host.querySelectorAll('.mv-weapon-card')) {
-    const fn = card.__mvLiveRefresh
-    if (typeof fn === 'function') fn(mv)
-  }
+function refreshMvWeaponsLive() {
+  // No-op — the React Weapons tab subscribes to runtimeTick.
 }
-
-// buildMvWeaponCard renders ONE slot card.  Split out so the
-// post-swap re-render can rebuild just the affected card in place
-// (rather than re-rendering the whole panel) — keeps scroll position
-// and avoids flicker on the unchanged slots.
-function buildMvWeaponCard(mv, slot, w, scripts) {
-  const cap = slot[0].toUpperCase() + slot.slice(1)
-  const idx = w.index || (slot === 'primary' ? 1 : slot === 'secondary' ? 2 : 3)
-  const card = document.createElement('div')
-  card.className = 'mv-weapon-card'
-  card.dataset.slot = slot
-  card.dataset.slotIndex = String(idx)
-
-  // Initial collapse state — module-scoped Set so toggles persist
-  // across panel re-renders.  Cards with no weapon stay expanded by
-  // default (so the "Assign Weapon" affordance is obvious).
-  if (_mvWeaponCollapsed.has(slot)) card.classList.add('mv-weapon-collapsed')
-
-  // ── Header — two-row layout for visual distinction:
-  //   Row 1: [SLOT LABEL ───────────────── CHEVRON]
-  //   Row 2: [colour swatch] WEAPON NAME  (TDF id=42)
-  // The whole header is the collapse toggle; child buttons/inputs
-  // stop propagation so they don't accidentally fire collapse.
-  const head = document.createElement('div')
-  head.className = 'mv-weapon-head'
-  head.title = 'Click to collapse / expand this weapon card.'
-  head.addEventListener('click', (e) => {
-    if (e.target.closest('button, input, label')) return
-    const nowCollapsed = card.classList.toggle('mv-weapon-collapsed')
-    if (nowCollapsed) _mvWeaponCollapsed.add(slot)
-    else _mvWeaponCollapsed.delete(slot)
-  })
-  // Row 1 — slot label left, chevron right.  Chevron rotates -90°
-  // when collapsed via CSS, signalling expand affordance.
-  const headRow1 = document.createElement('div')
-  headRow1.className = 'mv-weapon-head-row mv-weapon-head-slot-row'
-  const slotEl = document.createElement('div')
-  slotEl.className = 'mv-weapon-slot'
-  slotEl.textContent = cap
-  headRow1.appendChild(slotEl)
-  const chev = document.createElement('span')
-  chev.className = 'mv-weapon-chev'
-  chev.textContent = '▾'
-  chev.title = 'Collapse / expand this card'
-  headRow1.appendChild(chev)
-  head.appendChild(headRow1)
-  // Row 2 — colour swatch, weapon name, and the TDF `id=` value.
-  // The id is the engine-internal weapon-table index — the user
-  // requested this in place of the slot ordinal so the panel reads
-  // weapon-centric rather than slot-centric.
-  const headRow2 = document.createElement('div')
-  headRow2.className = 'mv-weapon-head-row mv-weapon-head-name-row'
-  if (w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
-    const c = modelViewerInstance.palette.colorFor(w.colorIdx)
-    const rect = document.createElement('span')
-    rect.className = 'mv-weapon-color-rect'
-    rect.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
-    const hex = [c[0], c[1], c[2]].map(v => Math.round(v*255).toString(16).padStart(2, '0')).join('')
-    rect.title = `palette[${w.colorIdx}] = #${hex}`
-    headRow2.appendChild(rect)
-  }
-  const nameTxt = document.createElement('span')
-  nameTxt.className = 'mv-weapon-name'
-  nameTxt.textContent = w.name || '—'
-  headRow2.appendChild(nameTxt)
-  // TDF weapon id chip — right of the name.  Shows the actual `id=`
-  // field from the weapon TDF (e.g. ARMCOMLASER id=84), NOT the
-  // unit's slot ordinal.  Suppressed when the weapon has no id
-  // declared (some mod weapons omit it) so the chip isn't a noisy
-  // "id=0" for every such weapon.
-  if (w.weaponId && w.weaponId > 0) {
-    const idEl = document.createElement('span')
-    idEl.className = 'mv-weapon-id'
-    idEl.textContent = 'id=' + w.weaponId
-    idEl.title = `Weapon TDF id=${w.weaponId} — engine-internal weapon table index`
-    headRow2.appendChild(idEl)
-  }
-  head.appendChild(headRow2)
-  card.appendChild(head)
-
-  // Wrap everything below the head in a .mv-weapon-body so the
-  // collapse class can hide it with a single rule.  All subsequent
-  // appends go into `body` instead of `card`.
-  const body = document.createElement('div')
-  body.className = 'mv-weapon-body'
-
-  // ── Action row: Change Weapon button (always available so users
-  //    can populate empty slots too).
-  const actions = document.createElement('div')
-  actions.className = 'mv-weapon-actions'
-  const change = document.createElement('button')
-  change.className = 'btn mv-weapon-change'
-  change.textContent = w.name ? 'Change Weapon' : 'Assign Weapon'
-  change.addEventListener('click', () => openWeaponPicker(mv, idx))
-  actions.appendChild(change)
-  body.appendChild(actions)
-
-  // ── Script presence indicators (Aim / Query / Fire) ──
-  // Always rendered for every slot — even an empty slot benefits
-  // from the indicator: if the user picks "Assign Weapon", the
-  // chips tell them up front whether the unit's COB actually has
-  // the matching firing scripts (because if not, the new weapon
-  // won't fire correctly).  Compact ORDER chosen to match TA's
-  // canonical aim → query → fire script call sequence so the
-  // user reads the chain left-to-right.
-  const slotCap = cap
-  const required = [
-    { name: `Aim${slotCap}`,   short: 'Aim',   key: 'aim'   },
-    { name: `Query${slotCap}`, short: 'Query', key: 'query' },
-    { name: `Fire${slotCap}`,  short: 'Fire',  key: 'fire'  },
-  ]
-  const chips = document.createElement('div')
-  chips.className = 'mv-weapon-scripts'
-  chips.setAttribute('role', 'group')
-  chips.setAttribute('aria-label', `Required scripts for ${slot} weapon`)
-  let missingQuery = false
-  let anyMissing = false
-  for (const r of required) {
-    const present = scripts.has(r.name)
-    if (!present) {
-      anyMissing = true
-      if (r.key === 'query') missingQuery = true
-    }
-    const chip = document.createElement('span')
-    chip.className = `mv-weapon-script-chip ${present ? 'ok' : 'bad'}`
-    chip.title = present
-      ? `${r.name} is defined in the unit's COB`
-      : `${r.name} is missing from the unit's COB`
-    chip.innerHTML = `<span class="mark">${present ? '✓' : '✗'}</span><span class="lbl">${r.short}</span>`
-    chips.appendChild(chip)
-  }
-  body.appendChild(chips)
-  // The most actionable missing-script case is Query<X> — without
-  // it the runtime can't resolve the muzzle piece and emit-sfx
-  // calls fall through to a name-heuristic that frequently picks
-  // the wrong piece.  Surface a single line of guidance when the
-  // unit can't actually support this weapon — shown for every slot
-  // (including empty ones) so the user knows in advance whether
-  // assigning a weapon here would actually work.
-  if (anyMissing) {
-    const warn = document.createElement('div')
-    warn.className = 'mv-weapon-warning'
-    if (missingQuery) {
-      warn.textContent = `⚠ This unit does not have the required functions to support a weapon.  (Missing Query${slotCap}.)`
-    } else {
-      warn.textContent = `⚠ Some firing scripts are missing — animations may not play correctly.`
-    }
-    body.appendChild(warn)
-  }
-
-  // ── Reload countdown bar — shows the time remaining until the
-  //    weapon's next shot.  Bar fills back up to full as the reload
-  //    timer counts down toward zero.  Updates live via the
-  //    refreshMvWeaponsLive 4Hz tick.
-  let reloadBar = null
-  let reloadFill = null
-  let reloadLabel = null
-  if (w.name && w.reloadSec > 0) {
-    const wrap = document.createElement('div')
-    wrap.className = 'mv-weapon-reload'
-    wrap.title = 'Time until this weapon can fire again — counts down on the runtime sim clock so slow-mo stretches it.'
-    const head2 = document.createElement('div')
-    head2.className = 'mv-weapon-reload-head'
-    const klabel = document.createElement('span'); klabel.className = 'mv-weapon-reload-k'; klabel.textContent = 'Reload'
-    reloadLabel = document.createElement('span'); reloadLabel.className = 'mv-weapon-reload-v'; reloadLabel.textContent = 'ready'
-    head2.appendChild(klabel); head2.appendChild(reloadLabel)
-    reloadBar = document.createElement('div')
-    reloadBar.className = 'mv-weapon-reload-bar'
-    reloadFill = document.createElement('div')
-    reloadFill.className = 'mv-weapon-reload-fill'
-    reloadFill.style.width = '100%'
-    reloadBar.appendChild(reloadFill)
-    wrap.appendChild(head2)
-    wrap.appendChild(reloadBar)
-    body.appendChild(wrap)
-  }
-
-  // ── Stats grid (only when a weapon is assigned) ──
-  if (w.name) {
-    const fmt = (v, unit) => (v == null || v === 0) ? '—' : `${(+v).toFixed(2).replace(/\.?0+$/, '')}${unit ? ' ' + unit : ''}`
-    const stats = [
-      ['Reload',   fmt(w.reloadSec, 's')],
-      ['Range',    fmt(w.rangeWU, 'wu')],
-      ['Velocity', fmt(w.velocityWU, 'wu/s')],
-      ['Burst',    (w.burst > 1) ? `${w.burst}×${fmt(w.burstRateSec, 's')}` : '1'],
-      ['Model',    w.model || '—'],
-      ['Color',    w.colorIdx ? String(w.colorIdx) : '—'],
-    ]
-    const grid = document.createElement('div')
-    grid.className = 'mv-weapon-stats'
-    for (const [k, v] of stats) {
-      const row = document.createElement('div')
-      row.className = 'mv-weapon-stat'
-      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
-      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
-      // Color row gets an inline swatch matching the header rectangle
-      // (same palette lookup) so the "232" number has a visual anchor.
-      if (k === 'Color' && w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
-        const c = modelViewerInstance.palette.colorFor(w.colorIdx)
-        const sw = document.createElement('span')
-        sw.className = 'mv-weapon-swatch'
-        sw.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
-        sw.title = `palette[${w.colorIdx}] = #${[c[0], c[1], c[2]].map(v => Math.round(v*255).toString(16).padStart(2,'0')).join('')}`
-        row.appendChild(sw)
-      }
-      row.appendChild(kEl); row.appendChild(vEl)
-      grid.appendChild(row)
-    }
-    body.appendChild(grid)
-
-    // ── Sound rows with inline play buttons ──
-    const sounds = [
-      ['Sound', w.soundStart],
-      ['Hit',   w.soundHit],
-    ]
-    for (const [k, snd] of sounds) {
-      const row = document.createElement('div')
-      row.className = 'mv-weapon-sound'
-      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
-      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = snd || '—'
-      row.appendChild(kEl); row.appendChild(vEl)
-      if (snd) {
-        const play = document.createElement('button')
-        play.className = 'mv-weapon-sound-play'
-        play.title = `Play ${snd}.wav`
-        play.setAttribute('aria-label', `Play ${snd}`)
-        play.textContent = '▶'
-        play.addEventListener('click', (e) => {
-          e.preventDefault(); e.stopPropagation()
-          playWeaponSound(snd)
-        })
-        row.appendChild(play)
-      }
-      body.appendChild(row)
-    }
-
-    // ── Classifier flag chips ──
-    const flags = []
-    if (w.beamWeapon)  flags.push('beam')
-    if (w.smokeTrail)  flags.push('smoke trail')
-    if (w.selfProp)    flags.push('self-prop')
-    if (w.tracks)      flags.push('tracks')
-    if (w.ballistic)   flags.push('ballistic')
-    if (w.commandFire) flags.push('command-fire')
-    if (flags.length) {
-      const fchips = document.createElement('div')
-      fchips.className = 'mv-weapon-chips'
-      for (const f of flags) {
-        const chip = document.createElement('span')
-        chip.className = 'mv-weapon-chip'
-        chip.textContent = f
-        fchips.appendChild(chip)
-      }
-      body.appendChild(fchips)
-    }
-  }
-
-  // ── Active projectiles list — every projectile currently in
-  //    flight from this slot, with its age.  Pruned in mv-controls
-  //    when age >= lifeMs, so the list naturally drains between
-  //    shots and stays short even for high-fire-rate weapons (no
-  //    accumulating clutter from old shots like the previous
-  //    "last 5 fired" history did).  Hidden via class when the
-  //    master "Show Projectiles" toggle is off.
-  let projList = null
-  let projHeadLabel = null
-  if (w.name) {
-    const wrap = document.createElement('div')
-    wrap.className = 'mv-weapon-projlist'
-    if (!_mvWeaponShowProjectiles) wrap.classList.add('mv-weapon-projlist-hidden')
-    const hdr = document.createElement('div')
-    hdr.className = 'mv-weapon-projlist-head'
-    projHeadLabel = document.createElement('span')
-    projHeadLabel.textContent = 'In flight (0)'
-    hdr.appendChild(projHeadLabel)
-    wrap.appendChild(hdr)
-    projList = document.createElement('div')
-    projList.className = 'mv-weapon-projlist-rows'
-    const empty = document.createElement('div')
-    empty.className = 'mv-weapon-projlist-empty'
-    empty.textContent = 'No projectiles in flight.'
-    projList.appendChild(empty)
-    wrap.appendChild(projList)
-    body.appendChild(wrap)
-  }
-
-  card.appendChild(body)
-
-  // ── Live-refresh closure — stashed on the card so the panel's
-  //    per-tick refresh can update the reload bar + recent-shot
-  //    list without rebuilding the whole DOM tree.  Closure captures
-  //    `reloadBar / reloadLabel / projList / w / slot` so it can read
-  //    fresh state every tick.
-  card.__mvLiveRefresh = (mvLive) => {
-    const rt = mvLive?.cob?.runtime
-    const ctrl = mvLive?._mvControls
-    // Reload bar — read aim state (sim-time clock) and weapon reload
-    // window.  When the weapon hasn't fired yet (lastFireMs = -Infinity)
-    // the bar is full + label says "ready".
-    if (reloadBar && reloadFill && reloadLabel && rt && ctrl) {
-      const state = ctrl.aimState && ctrl.aimState[slot]
-      const reloadMs = (w.reloadSec || 0) * 1000
-      if (state && reloadMs > 0 && state.lastFireMs > -Infinity) {
-        const since = rt.simTimeMs - state.lastFireMs
-        const remaining = Math.max(0, reloadMs - since)
-        const pct = Math.max(0, Math.min(100, (1 - remaining / reloadMs) * 100))
-        reloadFill.style.width = pct.toFixed(1) + '%'
-        if (remaining <= 0) {
-          reloadLabel.textContent = 'ready'
-          reloadFill.classList.add('mv-weapon-reload-fill-ready')
-        } else {
-          reloadLabel.textContent = (remaining / 1000).toFixed(2) + ' s'
-          reloadFill.classList.remove('mv-weapon-reload-fill-ready')
-        }
-      } else {
-        reloadFill.style.width = '100%'
-        reloadLabel.textContent = 'ready'
-        reloadFill.classList.add('mv-weapon-reload-fill-ready')
-      }
-    }
-    // Projectile list visibility toggle from the master switch.  The
-    // class is recomputed each tick so the user can flip the toggle
-    // mid-refresh without waiting for a full panel re-render (the
-    // toggle handler already calls renderMvWeaponsTab, but defending
-    // here keeps the refresh idempotent).
-    const wrap = projList ? projList.parentElement : null
-    if (wrap) wrap.classList.toggle('mv-weapon-projlist-hidden', !_mvWeaponShowProjectiles)
-    // Active projectiles — re-render from the live in-flight list.
-    // Cheap: pruning in mv-controls keeps this short (typically the
-    // burst size + 1 or 2; high-rate weapons drain fast because each
-    // shot has its own lifeMs and is dropped at TTL).  Oldest at the
-    // top (longest in flight); newest at the bottom (just fired).
-    if (projList && ctrl && rt) {
-      const list = ctrl.activeProjectiles && ctrl.activeProjectiles[slot]
-      if (projHeadLabel) projHeadLabel.textContent = `In flight (${list ? list.length : 0})`
-      projList.replaceChildren()
-      if (!list || list.length === 0) {
-        const empty = document.createElement('div')
-        empty.className = 'mv-weapon-projlist-empty'
-        empty.textContent = 'No projectiles in flight.'
-        projList.appendChild(empty)
-      } else {
-        const now = rt.simTimeMs
-        for (let i = 0; i < list.length; i++) {
-          const s = list[i]
-          const ageMs = Math.max(0, now - s.spawnSimMs)
-          // Compute the projectile's CURRENT estimated position from
-          // its launch anchor + velocity + sim age, so the row shows
-          // where the round is RIGHT NOW (not where it was fired
-          // from).  Better matches what the user is looking at in
-          // the scene.  Ignores gravity for the readout — the row
-          // is informative, not authoritative.
-          const ageSec = ageMs / 1000
-          const px = s.anchor[0] + s.velocity[0] * ageSec
-          const py = s.anchor[1] + s.velocity[1] * ageSec
-          const pz = s.anchor[2] + s.velocity[2] * ageSec
-          const row = document.createElement('div')
-          row.className = 'mv-weapon-projlist-row'
-          const ageEl = document.createElement('span')
-          ageEl.className = 'mv-weapon-projlist-age'
-          ageEl.textContent = ageSec.toFixed(2) + 's'
-          ageEl.title = `Spawned ${ageSec.toFixed(2)} s ago — expires in ${((s.lifeMs - ageMs) / 1000).toFixed(2)} s`
-          const posEl = document.createElement('span')
-          posEl.className = 'mv-weapon-projlist-pos'
-          posEl.textContent = `${px.toFixed(1)}, ${py.toFixed(1)}, ${pz.toFixed(1)}`
-          const spdEl = document.createElement('span')
-          spdEl.className = 'mv-weapon-projlist-spd'
-          spdEl.textContent = s.speed.toFixed(0) + ' wu/s'
-          row.appendChild(ageEl); row.appendChild(posEl); row.appendChild(spdEl)
-          projList.appendChild(row)
-        }
-      }
-    }
-  }
-  // Run the closure once immediately so the card isn't blank for the
-  // first 250 ms before the inspector throttle fires.
-  card.__mvLiveRefresh(mv)
-  return card
-}
-
-// playWeaponSound triggers the named .wav via the studio's central
-// AudioPool — so the preview shows up in the Audio inspector panel
-// and respects the runtime sim-speed / pause state.  Source pos is
-// the unit's world location so the panel can still show a position
-// for a "preview" sound (matches what the inspector shows for the
-// real in-flight weapon sound).
 function playWeaponSound(stem) {
   if (!stem) return
   const mv = modelViewerInstance
@@ -16884,29 +13754,77 @@ function playWeaponSound(stem) {
 // and reused thereafter — the VFS doesn't change after startup so a
 // single fetch covers the whole session.
 let _weaponCatalogue = null
-let _weaponPickerSelected = null
-let _weaponPickerWired = false
+// _weaponPickerSelected / _weaponPickerWired — were used by the
+// legacy vanilla picker chrome; the React picker owns selection in
+// its own signal now, so these are gone.
 
 // openWeaponPicker shows the Change Weapon dialog scoped to one slot
-// of one unit.  The slot index + unit name ride on the dialog's
-// dataset so Apply can re-call /api/studio/unit/{name} with the
-// proper override query param.
-function openWeaponPicker(mv, slotIndex) {
-  const dlg = document.getElementById('weapon-pick-dialog')
-  if (!dlg || !mv) return
+// of one unit.  React-managed now (see /ui/pickers/weapon-picker-dialog.js);
+// we resolve the slot's current weapon name + the catalogue, then
+// hand them to the React opener.  On Apply we re-call /api/studio/unit/{name}
+// with the override query param and re-render the Weapons panel.
+async function openWeaponPicker(mv, slotIndex) {
+  if (!mv) return
   const name = mv.cob && mv.cob.unit && mv.cob.unit.name
   if (!name) return
-  dlg.dataset.unit = name
-  dlg.dataset.slot = String(slotIndex)
-  _weaponPickerSelected = null
-  const confirm = document.getElementById('weapon-pick-confirm')
-  if (confirm) confirm.disabled = true
-  const filter = document.getElementById('weapon-pick-filter')
-  if (filter) filter.value = ''
-  wireWeaponPickerOnce(mv)
-  dlg.classList.remove('hidden')
-  loadWeaponCatalogue().then((list) => renderWeaponPickList(list, mv))
-  if (filter) filter.focus()
+  const ui = _reactUi || await configureReactUi()
+  if (!ui || typeof ui.openWeaponPicker !== 'function') return
+  // Current weapon name for this slot — surfaces as "(current)" + the
+  // .active row highlight in the picker so the user sees what's
+  // already installed before swapping.
+  const currentMeta = mv.unitMeta && mv.unitMeta.weapons
+  const currentName = currentMeta && currentMeta[slotIndex - 1]
+    ? currentMeta[slotIndex - 1].name
+    : ''
+  // Slot label for the dialog title.  Picker is one dialog reused
+  // across all three slots so the title carries the slot context.
+  const slotLabel = slotIndex === 1 ? 'Primary'
+    : slotIndex === 2 ? 'Secondary'
+    : slotIndex === 3 ? 'Tertiary'
+    : `Slot ${slotIndex}`
+  // Open with a loading hint first; push the catalogue in once it
+  // arrives.  In practice the catalogue is cached after the first
+  // open so this path resolves immediately on repeat opens.
+  const inFlight = ui.openWeaponPicker({
+    items: _weaponCatalogue || [],
+    loading: !_weaponCatalogue,
+    query: '',
+    currentName,
+    slotLabel,
+    paletteColor: (idx) => {
+      const pal = modelViewerInstance && modelViewerInstance.palette
+      if (!pal || idx <= 0) return null
+      return pal.colorFor(idx)
+    },
+  })
+  if (!_weaponCatalogue) {
+    loadWeaponCatalogue().then((list) => {
+      if (typeof ui.updateWeaponPicker === 'function') {
+        ui.updateWeaponPicker({ items: list, loading: false })
+      }
+    })
+  }
+  const picked = await inFlight
+  if (!picked) return
+  // Build the override URL + remember the swap on the viewer so a
+  // re-fetch doesn't lose it.
+  const params = new URLSearchParams()
+  params.set(`weapon${slotIndex}`, picked)
+  const mv2 = modelViewerInstance
+  mv2._weaponOverrides = mv2._weaponOverrides || {}
+  mv2._weaponOverrides[slotIndex] = picked
+  for (const [k, v] of Object.entries(mv2._weaponOverrides)) {
+    if (parseInt(k, 10) !== slotIndex) params.set(`weapon${k}`, v)
+  }
+  try {
+    const resp = await fetch(`/api/studio/unit/${encodeURIComponent(name)}?${params.toString()}`)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    mv2.unitMeta = await resp.json()
+    renderMvWeaponsTab(mv2)
+    if (_mvControls) _mvControls.onMetaLoaded()
+  } catch (err) {
+    console.warn('[weapon-swap] failed:', err)
+  }
 }
 
 function loadWeaponCatalogue() {
@@ -16924,174 +13842,15 @@ function loadWeaponCatalogue() {
   })
 }
 
-function renderWeaponPickList(list, mv) {
-  const host = document.getElementById('weapon-pick-list')
-  if (!host) return
-  host.replaceChildren()
-  if (!list.length) {
-    const empty = document.createElement('div')
-    empty.className = 'loading'
-    empty.textContent = 'No weapons found in this VFS.'
-    host.appendChild(empty)
-    return
-  }
-  // Filter against the search input — name, model, or sound name.
-  const filter = document.getElementById('weapon-pick-filter')
-  const q = (filter && filter.value || '').trim().toLowerCase()
-  const filtered = q
-    ? list.filter((w) => (w.name + ' ' + (w.model || '') + ' ' + (w.soundStart || '')).toLowerCase().includes(q))
-    : list
-  // Current weapon name for this slot — highlight it as the active
-  // selection so the user has visual feedback for what's installed.
-  const currentSlot = parseInt(document.getElementById('weapon-pick-dialog').dataset.slot || '0', 10)
-  const currentMeta = mv && mv.unitMeta && mv.unitMeta.weapons
-  const currentName = currentMeta && currentMeta[currentSlot - 1] ? currentMeta[currentSlot - 1].name : ''
-  for (const w of filtered) {
-    host.appendChild(buildWeaponPickRow(w, w.name === currentName))
-  }
-  if (!filtered.length) {
-    const empty = document.createElement('div')
-    empty.className = 'loading'
-    empty.textContent = 'No weapons match the filter.'
-    host.appendChild(empty)
-  }
-}
 
-// buildWeaponPickRow renders one row in the picker — same .open-list-item
-// styling as the Open Unit / Open Map dialogs so chrome stays unified.
-function buildWeaponPickRow(w, isCurrent) {
-  const btn = document.createElement('button')
-  btn.className = 'open-list-item weapon-list-item' + (isCurrent ? ' active' : '')
-  btn.dataset.name = w.name
-  // Colour swatch on the left where the unit picker has its thumbnail.
-  const sw = document.createElement('div')
-  sw.className = 'thumb weapon-thumb'
-  if (w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
-    const c = modelViewerInstance.palette.colorFor(w.colorIdx)
-    sw.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
-  } else {
-    sw.classList.add('weapon-thumb-empty')
-  }
-  btn.appendChild(sw)
-  const title = document.createElement('div')
-  title.className = 'title'
-  title.textContent = w.name + (isCurrent ? '  (current)' : '')
-  btn.appendChild(title)
-  const fmt = (v, unit) => (v == null || v === 0) ? '—' : `${(+v).toFixed(2).replace(/\.?0+$/, '')}${unit ? ' ' + unit : ''}`
-  const meta1 = document.createElement('div')
-  meta1.className = 'meta'
-  meta1.textContent = `Reload ${fmt(w.reloadSec, 's')} · Range ${fmt(w.rangeWU, 'wu')} · Velocity ${fmt(w.velocityWU, 'wu/s')}`
-  btn.appendChild(meta1)
-  const meta2 = document.createElement('div')
-  meta2.className = 'meta'
-  const burst = (w.burst > 1) ? `Burst ${w.burst}×${fmt(w.burstRateSec, 's')}` : 'Single shot'
-  meta2.textContent = `${burst} · Model ${w.model || '—'}`
-  btn.appendChild(meta2)
-  // Flag chips mirror the active-panel chips — beam/smoke/etc.
-  const flags = []
-  if (w.beamWeapon)  flags.push('beam')
-  if (w.smokeTrail)  flags.push('smoke')
-  if (w.selfProp)    flags.push('self-prop')
-  if (w.tracks)      flags.push('tracks')
-  if (w.ballistic)   flags.push('ballistic')
-  if (w.commandFire) flags.push('cmd-fire')
-  if (flags.length) {
-    const chips = document.createElement('div')
-    chips.className = 'model-chips'
-    for (const f of flags) {
-      const c = document.createElement('span')
-      c.className = 'model-chip on'
-      c.textContent = f
-      chips.appendChild(c)
-    }
-    btn.appendChild(chips)
-  }
-  btn.addEventListener('click', () => {
-    _weaponPickerSelected = w.name
-    const list = document.getElementById('weapon-pick-list')
-    if (list) {
-      for (const child of list.querySelectorAll('.weapon-list-item')) {
-        child.classList.toggle('selected', child === btn)
-      }
-    }
-    const confirm = document.getElementById('weapon-pick-confirm')
-    if (confirm) confirm.disabled = false
-  })
-  btn.addEventListener('dblclick', () => {
-    _weaponPickerSelected = w.name
-    document.getElementById('weapon-pick-confirm')?.click()
-  })
-  return btn
-}
+// wireWeaponPickerOnce removed — the weapon picker is React-managed
+// now (see /ui/pickers/weapon-picker-dialog.js).  The Apply path
+// lives in openWeaponPicker() above; cancel + filter are handled by
+// the React DialogModal chrome.
 
-// wireWeaponPickerOnce attaches Cancel/Apply/filter handlers the
-// FIRST time the picker is opened.  Subsequent opens reuse the wired
-// handlers — the unit + slot ride on dataset so a single set of
-// listeners covers every slot/unit combination.
-function wireWeaponPickerOnce(mv) {
-  if (_weaponPickerWired) return
-  _weaponPickerWired = true
-  const dlg = document.getElementById('weapon-pick-dialog')
-  const cancel = document.getElementById('weapon-pick-cancel')
-  const confirm = document.getElementById('weapon-pick-confirm')
-  const filter = document.getElementById('weapon-pick-filter')
-  cancel?.addEventListener('click', () => dlg?.classList.add('hidden'))
-  // Escape closes the dialog — matches the Open Unit dialog UX.
-  dlg?.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') dlg.classList.add('hidden')
-  })
-  filter?.addEventListener('input', () => {
-    if (_weaponCatalogue) renderWeaponPickList(_weaponCatalogue, mv)
-  })
-  confirm?.addEventListener('click', async () => {
-    if (!_weaponPickerSelected) return
-    const dlg2 = document.getElementById('weapon-pick-dialog')
-    if (!dlg2) return
-    const unitName = dlg2.dataset.unit
-    const slotIdx = parseInt(dlg2.dataset.slot || '0', 10)
-    if (!unitName || slotIdx < 1 || slotIdx > 3) return
-    // Build the override URL.  Keep existing slots untouched —
-    // the server preserves any slot without an override.
-    const params = new URLSearchParams()
-    params.set(`weapon${slotIdx}`, _weaponPickerSelected)
-    // Persist any prior swaps on the other slots so re-fetching
-    // doesn't lose them.  Stored on the viewer for the session.
-    const mv2 = modelViewerInstance
-    mv2._weaponOverrides = mv2._weaponOverrides || {}
-    mv2._weaponOverrides[slotIdx] = _weaponPickerSelected
-    for (const [k, v] of Object.entries(mv2._weaponOverrides)) {
-      if (parseInt(k, 10) !== slotIdx) params.set(`weapon${k}`, v)
-    }
-    try {
-      const resp = await fetch(`/api/studio/unit/${encodeURIComponent(unitName)}?${params.toString()}`)
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      mv2.unitMeta = await resp.json()
-      renderMvWeaponsTab(mv2)
-      if (_mvControls) _mvControls.onMetaLoaded()
-    } catch (err) {
-      console.warn('[weapon-swap] failed:', err)
-    }
-    dlg2.classList.add('hidden')
-  })
-}
-
-// filterTexturesList hides rows whose texture name doesn't include
-// the query (case-insensitive); groups stay visible whenever any
-// descendant matches, mirroring the piece-tree filter behaviour.
-function filterTexturesList(q) {
-  q = (q || '').trim().toLowerCase()
-  const host = document.getElementById('model-viewer-textures')
-  if (!host) return
-  for (const group of host.querySelectorAll('.mv-texture-group')) {
-    let any = false
-    for (const row of group.querySelectorAll('.mv-texture-row')) {
-      const match = !q || row.dataset.texture.includes(q)
-      row.style.display = match ? '' : 'none'
-      if (match) any = true
-    }
-    group.style.display = any ? '' : 'none'
-  }
-}
+// filterTexturesList replaced by the React Textures tab's own
+// filter signal — see /ui/unit-editor/tabs/textures-tab.js
+// (setTexturesFilter).
 
 function selectPiece(name) {
   if (!modelViewerInstance) return
@@ -17122,28 +13881,55 @@ function filterPieceTree(q) {
 }
 
 async function openModelPicker() {
-  // Hide whichever surface was on top — the picker is its own
-  // dialog and the user shouldn't see a half-z-fight between the
-  // viewer + picker stacks while it's up.
+  // The picker is React-managed now (see /ui/pickers/open-unit-dialog.js).
+  // Hide whichever editor surface was on top so the modal isn't
+  // fighting another dialog stack for the user's eye, then open the
+  // React picker.  The legacy #model-open-dialog static markup in
+  // index.html is no longer used — React mounts its own dialog DOM
+  // on demand.
   $('#welcome-dialog').classList.add('hidden')
   $('#model-viewer-dialog').classList.add('hidden')
-  $('#model-open-dialog').classList.remove('hidden')
-  $('#model-open-confirm').disabled = true
-  selectedModelName = null
-  const filter = $('#model-filter')
-  if (filter) filter.value = ''
-  if (!modelsLoaded) {
-    await fetchModels()
+  // Bring the React UI up if it hasn't loaded yet (cold-boot path).
+  const ui = _reactUi || await configureReactUi()
+  if (!modelsLoaded) await fetchModels()
+  // The picker spawns into the React tree; await its resolution and
+  // route based on the host's pending intent (sandbox spawn vs.
+  // open viewer).  Polling via updateUnitDialog isn't needed here
+  // because fetchModels has already drained the catalog above.
+  const sandboxIntent = !!window.__sandboxSpawnPending
+  const result = ui && typeof ui.openUnitDialog === 'function'
+    ? await ui.openUnitDialog({
+        items: availableModels,
+        loading: !modelsLoaded,
+        query: '',
+        selectedName: null,
+        sandboxIntent,
+      })
+    : null
+  if (!result) {
+    closeModelPicker()
+    return
   }
-  renderModelList()
-  requestAnimationFrame(() => $('#model-filter')?.focus())
+  if (result.sandboxIntent && sandboxViewInstance) {
+    window.__sandboxSpawnPending = false
+    const pendingSide = (window.__sandboxSpawnPendingSide | 0) || 0
+    window.__sandboxSpawnPendingSide = 0
+    $('#model-viewer-dialog')?.classList.remove('hidden')
+    void sandboxViewInstance.beginPlacement(result.name, { side: pendingSide })
+    return
+  }
+  openModelViewer(result.name)
 }
 
 function closeModelPicker() {
-  $('#model-open-dialog').classList.add('hidden')
-  // Return to whichever surface the user came from: an active model
-  // tab restores the viewer, an active map tab restores the editor,
-  // otherwise the welcome dialog reappears.
+  // React owns the dialog DOM, so dismissing is "close the open-state
+  // signal".  When the user cancelled via Esc / Cancel the React
+  // dialog has already cleared itself, so this is mainly the post-
+  // confirm cleanup path: restore whichever editor surface was on
+  // top before the picker opened.
+  if (_reactUi && typeof _reactUi.closeUnitDialog === 'function') {
+    _reactUi.closeUnitDialog()
+  }
   const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
   if (activeTab?.type === 'model') {
     $('#model-viewer-dialog').classList.remove('hidden')
@@ -17269,10 +14055,14 @@ async function activateSandboxTab(tab) {
   // updates were only ever forwarded to the unit-editor runtime + the
   // PREVIOUSLY active sandbox.  Read the live slider value to avoid
   // depending on cached state.
+  // Read the runtime's current playback rate from whichever cob is
+  // alive on the unit-editor's modelViewerInstance (the React Runtime
+  // panel's Speed slider routes through mvSetSimulationSpeed which
+  // commits to that runtime).  Falls back to 1× when no unit is open.
   try {
-    const speedEl = document.getElementById('mv-runtime-speed')
-    if (speedEl && typeof mvSetSimulationSpeed === 'function') {
-      mvSetSimulationSpeed((parseInt(speedEl.value, 10) | 0) / 100)
+    const editorRate = modelViewerInstance?.cob?.runtime?.playbackRate
+    if (typeof mvSetSimulationSpeed === 'function') {
+      mvSetSimulationSpeed(typeof editorRate === 'number' ? editorRate : 1)
     }
   } catch { /* ignore */ }
   // Make sure the RAF loop is live — switchToTab stops it on the way
@@ -17304,8 +14094,11 @@ async function activateSandboxTab(tab) {
   const dlg = $('#model-viewer-dialog')
   if (dlg) dlg.classList.add('sandbox-mode')
   // Show the Sandbox floating panel; it offers Spawn / Move / Attack
-  // / Stop buttons + a unit roster.  Lazy-created on first show.
-  ensureSandboxPanel()
+  // / Stop buttons + a unit roster.  Lazy-created on first show via
+  // the React UI island — the mount is idempotent so awaiting the
+  // dynamic import on every activation is cheap (one network round-
+  // trip the first time, cached + immediate after).
+  await ensureSandboxPanel()
   showSandboxPanel(true)
   // Force-show the inspector panels meaningful in multi-unit mode:
   // Renderer (camera info) + Scripts (runtime telemetry) for the
@@ -17316,8 +14109,8 @@ async function activateSandboxTab(tab) {
   // owns .particles + .audio + static vars; with zero or multiple
   // units selected the panels show an empty state).
   //
-  // Hide Actions (per-script COB buttons — too granular for a
-  // strategic view; the unit editor remains the place for that).
+  // Hide Script Commands (per-script COB buttons — too granular for
+  // a strategic view; the unit editor remains the place for that).
   for (const id of ['mv-inspector-actions']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
@@ -17335,19 +14128,13 @@ async function activateSandboxTab(tab) {
   // tab activations don't stack listeners.
   wireSandboxControlsIntercept()
   // Reset the focused-unit sentinel so the next refresh tick re-runs
-  // renderMvActionsPanel for whatever's selected (or "No COB loaded"
-  // for an empty selection).
+  // the Script Commands panel for whatever's selected (or "No COB
+  // loaded" for an empty selection).
   _mvSandboxFocusedUnitId = -1
-  // Invalidate the Controls panel render sentinel + clear any stale
-  // body content from the previous tab.  Without this the next refresh
-  // tick would see the previous viewer's ports rows lingering in the
-  // DOM until the 250 ms throttle fires — the user sees viewer-state
-  // bleed-through (the bug round 13 explicitly targets).  Forcing
-  // both the key and the body here makes the swap atomic with the
-  // tab activation rather than eventually-consistent.
-  _mvPortsRenderedKey = null
-  const portsBodyEl = document.getElementById('mv-inspector-ports-body')
-  if (portsBodyEl) portsBodyEl.replaceChildren()
+  // Controls panel body is React-managed (see /ui/panels/controls-panel.js);
+  // the inspector-store mv signal already carries the active view's
+  // proxy so a tab swap re-renders the panel automatically without
+  // the old DOM-wipe + sentinel-reset dance.
   // Wire sandbox ribbon buttons.  Idempotent guard so repeated tab
   // switches don't stack listeners.
   wireSandboxRibbon()
@@ -17408,259 +14195,588 @@ function wireSandboxControlsIntercept() {
   }, /* capture = */ true)
 }
 
-// wireSandboxRibbon — attaches handlers to the sandbox-specific
-// ribbon buttons.  Guarded with a dataset flag so repeated calls
-// (every sandbox activation) don't pile up listeners.  All actions
-// no-op safely when sandboxViewInstance hasn't finished initialising.
-function wireSandboxRibbon() {
-  const ribbon = document.getElementById('sandbox-ribbon')
-  if (!ribbon || ribbon.dataset.wired === '1') return
-  ribbon.dataset.wired = '1'
-  const sb = () => sandboxViewInstance
-  const wire = (id, fn) => {
-    const el = document.getElementById(id)
-    if (el) el.addEventListener('click', fn)
-  }
-  // Sandbox dropdown — open/close via the shared ribbon helper.  The
-  // two menu rows (Spawn Unit + Clear Field) live inside the popup;
-  // we wire them individually below so each runs its own action.
-  wireModelRibbonDropdown('sandbox-rb-sandbox-dropdown')
-  // Spawn Unit row — anchors the side picker against the Sandbox
-  // button so the popout lands adjacent to the gesture rather than
-  // somewhere off in the ribbon.  Same handler shape as the old
-  // standalone Spawn button.
-  wire('sandbox-rb-spawn', () => {
-    const anchor = document.getElementById('sandbox-rb-sandbox-btn')
-      || document.getElementById('sandbox-rb-spawn')
-    openSandboxSpawnPicker(anchor)
-  })
-  wire('sandbox-rb-move', () => sb()?.setPendingCommand('move'))
-  wire('sandbox-rb-attack', () => sb()?.setPendingCommand('attack'))
-  wire('sandbox-rb-stop', () => {
-    const scene = sb()?.scene
-    if (!scene) return
-    for (const id of scene.selected) {
-      const u = scene.unitById(id)
-      if (u) { u.moveTarget = null; u.attackTarget = null }
+// _unitEditorAutoRotate — host-side cache of the Auto-Rotate toggle
+// state shared by the React Camera dropdown, the Renderer panel, the
+// R hotkey, and freshly-opened model tabs.  Mutated through the React
+// ribbon's bridge (which writes both this var and the renderer) and
+// the configureHostBridge.setAutoRotate callback (which mirrors back
+// into the React state signal).  Default matches the React signal's
+// initial `autoRotate: true` so an early open before the user touches
+// the toggle paints the same default both surfaces show.
+let _unitEditorAutoRotate = true
+
+// __mvNotifyAutoRotateOff — model-viewer.js's orbit-controls fire
+// this when a wheel-zoom interrupts an active auto-rotate.  We flip
+// the host cache + the React Camera dropdown's check-mark in one
+// place; the renderer's own state was already updated by the orbit
+// controller, so we don't double-dispatch into setAutoRotate(false).
+if (typeof window !== 'undefined') {
+  window.__mvNotifyAutoRotateOff = () => {
+    _unitEditorAutoRotate = false
+    if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+      _reactUi.setModelViewerRibbonState({ autoRotate: false })
     }
-  })
-  wire('sandbox-rb-select-all', () => {
-    const scene = sb()?.scene
-    if (!scene) return
-    scene.selectClear()
-    for (const u of scene.units()) if (!u.dead) scene.selectAdd(u.id)
-  })
-  wire('sandbox-rb-deselect', () => sb()?.scene?.selectClear())
-  // Clear Field — destructive, so route through the shared in-app
-  // confirm modal (NEVER the browser's window.confirm) before tearing
-  // down units.  Only the live UnitInstances are removed; grid +
-  // camera + selection-mode + every floating panel is intentionally
-  // untouched so the user lands back at "empty battlefield" instead
-  // of "fresh sandbox tab" state.
-  wire('sandbox-rb-clear', async () => {
-    const scene = sb()?.scene
-    if (!scene) return
-    const count = [...scene.units()].length
-    if (count === 0) return  // nothing to clear — skip the prompt
-    const ok = await confirmDialog({
-      title: 'Clear Field',
-      message: count === 1
-        ? 'Remove the unit currently on the battlefield?'
-        : `Remove all ${count} units currently on the battlefield?`,
-      okLabel: 'Clear Field',
-      cancelLabel: 'Cancel',
-      okDanger: true,
+  }
+}
+
+// TEAM_COLOURS — hue-shift RGB triplets the renderer's setTeamColor
+// applies to the unit's team-colour palette indices.  `blue` is the
+// ARM default and intentionally null so picking it disables the
+// shader's recolour entirely (matching the original game's "Blue
+// (default)" semantics).  Kept at module scope so the React ribbon's
+// bridge can look up a colour without re-importing model3d's tables.
+const TEAM_COLOURS = {
+  blue:   null,
+  red:    [0.92, 0.18, 0.16],
+  green:  [0.20, 0.78, 0.28],
+  yellow: [0.95, 0.85, 0.20],
+  purple: [0.62, 0.30, 0.85],
+  cyan:   [0.20, 0.80, 0.92],
+  orange: [0.98, 0.55, 0.18],
+  white:  [0.95, 0.95, 0.95],
+  black:  [0.10, 0.10, 0.12],
+}
+
+// wireModelViewerRibbon — install the React unit-editor ribbon bridge
+// + mount the React tree into #model-viewer-ribbon-mount.  Called
+// once configureReactUi has resolved.  Idempotent: the bridge is
+// stub-merged on every call, the mount is a no-op when the React
+// tree already lives in the slot.
+//
+// Every action callback resolves modelViewerInstance / its renderer
+// at call time so a tab swap from one unit to another reaches the
+// right renderer (the React state lives on its own signal — when the
+// renderer changes the host pushes fresh defaults via
+// applyUnitEditorDefaults, so the toggle row check-marks reflect
+// the new unit's renderer state).
+function wireModelViewerRibbon() {
+  if (!_reactUi) return
+  if (typeof _reactUi.configureModelViewerRibbonBridge === 'function') {
+    _reactUi.configureModelViewerRibbonBridge({
+      openAnother: () => { modelOpenIntent = 'add'; openModelPicker() },
+      showStats:   () => {
+        const mv = modelViewerInstance
+        if (!mv || !mv.model) return
+        const m = mv.model
+        const triCount = m.flat.reduce((n, p) => n + p.drawGroups.reduce(
+          (s, g) => s + (g.mode === mv.renderer.gl.TRIANGLES ? g.vertexCount / 3 : 0), 0), 0)
+        const msg = `${m.name} · ${m.flat.length} pieces · ${Math.round(triCount)} triangles`
+        const el = $('#status')
+        if (el) el.textContent = msg
+      },
+
+      resetCamera: () => {
+        const mv = modelViewerInstance
+        if (!mv || !mv.model) return
+        const cam = mv.camera
+        cam.frameBounds(mv.model.bounds.min, mv.model.bounds.max)
+        // Restore the entry-view angle the auto-rotate sweep has
+        // walked away from.
+        cam.yaw = 215 * Math.PI / 180
+        cam.pitch = 18 * Math.PI / 180
+        cam.distance *= 1.25
+        mv.renderer.requestRedraw()
+      },
+      setAutoRotate: (on) => {
+        _unitEditorAutoRotate = !!on
+        modelViewerInstance?.setAutoRotate(!!on)
+      },
+
+      setRenderMode:   (mode) => modelViewerInstance?.renderer?.setRenderMode(mode),
+      setWireOverlay:  (on)   => modelViewerInstance?.renderer?.setWireframeOverlay(!!on),
+      setWireWidth:    (px)   => modelViewerInstance?.renderer?.setWireframeWidth(px),
+
+      setGround:       (mode) => modelViewerInstance?.renderer?.setGroundMode(mode),
+
+      setEnvironment:  (env, _opts) => {
+        modelViewerInstance?.renderer?.setEnvironment(env)
+      },
+      setTeamColor:    (key, _opts) => {
+        modelViewerInstance?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
+      },
+
+      setReflections:       (on) => modelViewerInstance?.renderer?.setReflectionsEnabled(!!on),
+      setSpecular:          (on) => modelViewerInstance?.renderer?.setSpecularEnabled(!!on),
+      setGodBeams:          (on) => modelViewerInstance?.renderer?.setGodBeamsEnabled(!!on),
+      setDoF:               (on) => modelViewerInstance?.renderer?.setDoFEnabled(!!on),
+      setWaterReflections:  (on) => modelViewerInstance?.renderer?.setWaterReflectionsEnabled(!!on),
+
+      setBob:               (on) => modelViewerInstance?.renderer?.setBobEnabled(!!on),
+      setBobAmount:         (v)  => modelViewerInstance?.renderer?.setBobAmount(v),
+      setBobSpeed:          (v)  => modelViewerInstance?.renderer?.setBobSpeed(v),
+      setWaves:             (on) => modelViewerInstance?.renderer?.setWavesEnabled(!!on),
+      setWavesIntensity:    (v)  => modelViewerInstance?.renderer?.setWavesIntensity(v),
+      setBgTerrain:         (on) => modelViewerInstance?.renderer?.setBgTerrainEnabled(!!on),
+      setBgTerrainHeight:   (v)  => modelViewerInstance?.renderer?.setBgTerrainHeight(v),
+      setBgTerrainScale:    (v)  => modelViewerInstance?.renderer?.setBgTerrainScale(v),
+      setSeabedHeight:      (v)  => modelViewerInstance?.renderer?.setSeabedHeight(v),
+      setSeabedScale:       (v)  => modelViewerInstance?.renderer?.setSeabedScale(v),
+      setSeabedRocks:       (v)  => modelViewerInstance?.renderer?.setSeabedRockChance(v),
+
+      runCobEntry: (name) => {
+        const cob = modelViewerInstance?.cob
+        if (cob) runCobEntry(cob, name)
+      },
+      setCobDamage: (v) => modelViewerInstance?.setDamage?.(v | 0),
+      setCobBuild:  (v) => {
+        if (modelViewerInstance) modelViewerInstance._autoBuild = null
+        modelViewerInstance?.setBuildPercent?.(v | 0)
+      },
+      setCobPlayback: (pct) => mvSetSimulationSpeed((pct | 0) / 100),
+      resetCob:       () => modelViewerInstance?.resetState?.(),
+
+      setPanelVisible: (panelId, on) => setMvInspectorVisible(panelId, !!on),
+
+      openSettings: () => {
+        if (typeof openSettingsDialog === 'function') openSettingsDialog()
+        else $('#btn-settings')?.click()
+      },
+      openHelp: () => {
+        if (typeof openHelpDialog === 'function') openHelpDialog()
+        else $('#btn-help')?.click()
+      },
     })
-    if (!ok) return
-    const ids = [...scene.units()].map(u => u.id)
-    for (const id of ids) scene.removeUnit(id)
-  })
-  wire('sandbox-rb-reset-cam', () => {
-    const view = sb()
-    if (!view || !view.camera) return
-    view.camera.target = [0, 10, 0]
-    view.camera.distance = 951.5
-    view.camera.yaw = 215 * Math.PI / 180
-    view.camera.pitch = 28 * Math.PI / 180
-  })
-  // Developer Tools dropdown — toggle visibility of floating panels.
-  // Driven by the same wireModelRibbonDropdown helper the unit-editor
-  // ribbon uses, plus per-row click handlers that flip the matching
-  // floating panel via setSandboxPanelVisibility.  The Controls row is
-  // disabled in markup (always visible) and is skipped in the loop.
-  wireModelRibbonDropdown('sandbox-rb-devtools-dropdown')
-  const devtoolsPopup = document.getElementById('sandbox-rb-devtools-popup')
-  if (devtoolsPopup && devtoolsPopup.dataset.wired !== '1') {
-    devtoolsPopup.dataset.wired = '1'
-    for (const row of devtoolsPopup.querySelectorAll('.toggle-row')) {
-      if (row.disabled) continue
-      row.addEventListener('click', (e) => {
-        e.stopPropagation()
-        // Two row flavours live in this dropdown.  data-panel rows
-        // toggle a whole floating panel via the shared visibility
-        // helper.  data-dev-toggle rows flip a CSS class on a target
-        // element (e.g. the developer-only section at the bottom of
-        // the Controls panel body) without affecting the panel as a
-        // whole — that's the difference between "hide the Renderer
-        // overlay" and "hide the Health / Build sliders".
-        if (row.dataset.devToggle) {
-          handleSandboxDevToggle(row)
-          return
+  }
+  if (typeof _reactUi.mountModelViewerRibbon === 'function') {
+    _reactUi.mountModelViewerRibbon()
+  }
+}
+
+// wireSandboxRibbon — React-managed now (see /ui/sandbox/sandbox-ribbon.js).
+// Mounts the React tree into #sandbox-ribbon-mount + installs the host
+// bridge that ferries the per-button actions back into the sandbox view.
+function wireSandboxRibbon() {
+  if (!_reactUi) return
+  const sb = () => sandboxViewInstance
+  if (typeof _reactUi.configureSandboxRibbonBridge === 'function') {
+    _reactUi.configureSandboxRibbonBridge({
+      openSpawnPicker: (anchorEl) => openSandboxSpawnPicker(anchorEl),
+      setPendingCommand: (cmd) => sb()?.setPendingCommand(cmd),
+      stopSelected: () => {
+        const scene = sb()?.scene
+        if (!scene) return
+        for (const id of scene.selected) {
+          const u = scene.unitById(id)
+          if (u) { u.moveTarget = null; u.attackTarget = null }
         }
-        const panelId = row.dataset.panel
-        if (!panelId) return
-        const panel = document.getElementById(panelId)
-        if (!panel) return
-        const next = panel.classList.contains('hidden')
-        setSandboxPanelVisible(panelId, next)
-      })
-    }
-    // Initial sync — reflect each panel's current .hidden state in the
-    // dropdown rows so the user sees an accurate snapshot the first
-    // time they open the menu (panels default to visible on first run,
-    // but a previously-closed panel persists hidden across reloads).
-    syncSandboxDevtoolsDropdown()
-    // Apply the persisted developer-section visibility so a previous
-    // "hidden" choice survives a reload.  Defaults to visible on a
-    // fresh install — the developer rows are the panel's point in
-    // sandbox so leaving them off by default would surprise the user.
-    applyControlsDevSectionVisibility()
+      },
+      selectAll: () => {
+        const scene = sb()?.scene
+        if (!scene) return
+        scene.selectClear()
+        for (const u of scene.units()) if (!u.dead) scene.selectAdd(u.id)
+      },
+      deselectAll: () => sb()?.scene?.selectClear(),
+      clearField: async () => {
+        const scene = sb()?.scene
+        if (!scene) return
+        const count = [...scene.units()].length
+        if (count === 0) return
+        const ok = await confirmDialog({
+          title: 'Clear Field',
+          message: count === 1
+            ? 'Remove the unit currently on the battlefield?'
+            : `Remove all ${count} units currently on the battlefield?`,
+          okLabel: 'Clear Field',
+          cancelLabel: 'Cancel',
+          okDanger: true,
+        })
+        if (!ok) return
+        const ids = [...scene.units()].map((u) => u.id)
+        for (const id of ids) scene.removeUnit(id)
+      },
+      resetCamera: () => {
+        const view = sb()
+        if (!view || !view.camera) return
+        view.camera.target = [0, 10, 0]
+        view.camera.distance = 951.5
+        view.camera.yaw = 215 * Math.PI / 180
+        view.camera.pitch = 28 * Math.PI / 180
+      },
+      setPanelVisible: (panelId, visible) => setSandboxPanelVisible(panelId, visible),
+    })
   }
+  if (typeof _reactUi.mountSandboxRibbon === 'function') _reactUi.mountSandboxRibbon()
 }
 
-// handleSandboxDevToggle — flips the developer-section class on the
-// target element and mirrors the new state into the dropdown row +
-// persisted prefs.  Currently only one dev-toggle key is wired
-// (controls-dev-section), but the data-driven shape leaves room to
-// add more (e.g. piece-tree internals, scene grid overlay) without
-// growing a switch statement here.
-function handleSandboxDevToggle(row) {
-  const key = row.dataset.devToggle
-  if (key === 'controls-dev-section') {
-    const next = !controlsDevSectionVisible()
-    setControlsDevSectionVisible(next)
-  }
-}
+// handleSandboxDevToggle removed — the React sandbox ribbon's
+// Developer Controls row routes directly through
+// setControlsDevSectionVisible (the inspector-store signal).
 
-// controlsDevSectionVisible — read the persisted preference (true by
-// default).  The class lives on #mv-inspector-ports; absence means
-// visible, presence means hidden, matching the negation pattern the
-// rest of the studio uses for opt-out overrides.
-function controlsDevSectionVisible() {
-  const v = state.mvControlsDevVisible
-  return v === undefined ? true : !!v
-}
+// controlsDevSectionVisible — the persisted preference now lives
+// inside the inspector-store signal exported from /ui/common/
+// inspector-store.js; both the React Controls panel and the React
+// sandbox ribbon read it from there.  The legacy host getter is gone.
 
-function setControlsDevSectionVisible(visible) {
-  state.mvControlsDevVisible = !!visible
-  persistPrefs()
-  applyControlsDevSectionVisibility()
-}
+// setControlsDevSectionVisible — the React sandbox ribbon flips the
+// inspector-store signal directly, so the host's vanilla wrapper is
+// gone.  applyControlsDevSectionVisibility still runs to keep the
+// (legacy) DOM mirror in sync where it matters.
 
-// applyControlsDevSectionVisibility — push the saved preference into
-// both the DOM (the Controls panel's .mv-controls-no-dev class drives
-// the CSS rule that hides the developer rows) and the dropdown row's
-// data-on / .active state (so the check-mark + accent colour reflect
-// the live state without an extra refresh tick).
-function applyControlsDevSectionVisibility() {
-  const visible = controlsDevSectionVisible()
-  const panel = document.getElementById('mv-inspector-ports')
-  if (panel) panel.classList.toggle('mv-controls-no-dev', !visible)
-  const row = document.querySelector('#sandbox-rb-devtools-popup [data-dev-toggle="controls-dev-section"]')
-  if (row) {
-    row.dataset.on = visible ? '1' : '0'
-    row.classList.toggle('active', visible)
-  }
-}
+// applyControlsDevSectionVisibility removed — the React sandbox
+// ribbon's Developer Controls row subscribes to the inspector-store
+// signal directly, so its check-mark + active state flip the instant
+// the value changes (no manual DOM mirror needed).
 
 // setSandboxPanelVisible — uniform visibility toggle that handles both
 // the standard mv-inspector panels (which route through
 // setMvInspectorVisible so the unit-editor View menu stays in sync)
 // AND the bespoke #sandbox-panel (Spawn floating panel) which lives
-// outside the MV_INSPECTOR_IDS list.  Either way, the corresponding
-// row in the sandbox Developer Tools dropdown is updated.
+// outside the MV_INSPECTOR_IDS list.  syncPanelToggleRows fires through
+// the panel-store's saveVisible callback so we don't need to mirror
+// the dropdown rows here.
 function setSandboxPanelVisible(panelId, visible) {
-  const panel = document.getElementById(panelId)
-  if (!panel) return
   if (panelId === 'sandbox-panel') {
-    panel.classList.toggle('hidden', !visible)
-  } else {
-    setMvInspectorVisible(panelId, visible)
+    // Route through showSandboxPanel — when the React UI island has
+    // loaded this updates the panel-store's visible signal so the
+    // Preact tree re-renders with the right .hidden class.  Before
+    // the island is up it falls back to a direct DOM toggle so the
+    // toggle still feels responsive on cold starts.
+    showSandboxPanel(visible)
+    return
   }
-  syncSandboxDevtoolsRow(panelId)
-}
-
-// syncSandboxDevtoolsRow — mirror a single panel's current .hidden
-// state into the matching dropdown row (data-on attribute + the
-// check-mark visible state).  Cheap; called whenever visibility
-// changes through any path (dropdown click, ✕ button on panel,
-// resize-clamp, etc.).
-function syncSandboxDevtoolsRow(panelId) {
-  const row = document.querySelector(`#sandbox-rb-devtools-popup [data-panel="${panelId}"]`)
-  if (!row) return
   const panel = document.getElementById(panelId)
   if (!panel) return
-  const visible = !panel.classList.contains('hidden')
-  row.dataset.on = visible ? '1' : '0'
-  if (!row.disabled) row.classList.toggle('active', visible)
+  setMvInspectorVisible(panelId, visible)
 }
 
-// syncSandboxDevtoolsDropdown — sweep every row in the dropdown and
-// pull its state from the live panel.  Called once at wire-time and
-// any time the panel set could have changed visibility en masse
-// (e.g. after MV inspector restore-from-prefs).
-function syncSandboxDevtoolsDropdown() {
-  const popup = document.getElementById('sandbox-rb-devtools-popup')
-  if (!popup) return
-  for (const row of popup.querySelectorAll('.toggle-row')) {
-    const id = row.dataset.panel
-    if (id) syncSandboxDevtoolsRow(id)
+// syncPanelToggleRows — removed.  Both the unit-editor View dropdown
+// + the sandbox Developer Tools dropdown are React-managed now and
+// subscribe to the panel-store's visible signal directly, so changing
+// a panel's visibility re-renders the row check automatically without
+// an extra cross-channel sync.
+//
+// syncSandboxDevtoolsDropdown removed for the same reason.
+
+// _activeRuntime — pick the runtime the Runtime overlay's Pause /
+// Step / Stop All controls should target.  Sandbox tab → that tab's
+// engine runtime; otherwise the single-unit model viewer's runtime.
+// Returns null when neither is live yet (boot races).
+function _activeRuntime() {
+  const dlg = document.getElementById('model-viewer-dialog')
+  const sandboxOn = dlg && dlg.classList.contains('sandbox-mode')
+  if (sandboxOn && typeof window !== 'undefined' && window.__sandboxView) {
+    return window.__sandboxView.runtime || null
   }
+  return (modelViewerInstance && modelViewerInstance.cob && modelViewerInstance.cob.runtime) || null
 }
 
-// ensureSandboxPanel — creates the floating Sandbox panel the first
-// time the user enters sandbox mode.  Mounted INSIDE the model-
-// viewer-stage so it inherits the same drag/clamp positioning context
-// the other inspector overlays (Renderer / Runtime / Audio / etc.)
-// use — that keeps it from drifting over the ribbon and lets a
-// previously-dragged inspector cover it when the user wants.
-function ensureSandboxPanel() {
-  if (document.getElementById('sandbox-panel')) return
-  const stage = document.querySelector('.model-viewer-stage')
-  const host = stage || document.body
-  const aside = document.createElement('aside')
-  aside.id = 'sandbox-panel'
-  aside.className = 'mv-inspector'
-  // Floating panel: just the Spawn button now.  The unit roster
-  // that used to live below it was removed — selection happens on
-  // the canvas (click-select + shift-drag rect), and the per-unit
-  // health / status surface belongs in the Controls + Static Vars
-  // inspectors, not a second list view.  Every Move / Attack /
-  // Stop / Selection / Field / Camera action lives in the sandbox
-  // ribbon at the top of the dialog.
-  aside.innerHTML = `
-    <div class="mv-inspector-header" id="sandbox-panel-header">
-      <span class="minimap-grip" title="Drag to move">⠿</span>
-      <span>Sandbox</span>
-      <button class="minimap-toggle mv-inspector-toggle" data-panel="sandbox-panel" title="Collapse">−</button>
-    </div>
-    <div class="mv-inspector-body">
-      <div class="mv-controls-actions" style="grid-template-columns: 1fr;">
-        <button class="mv-ctrl-action" id="sandbox-spawn"><span class="ico">🛠</span><span class="lbl">Spawn Unit</span></button>
-      </div>
-    </div>
-  `
-  host.appendChild(aside)
-  // Wire drag + collapse + persisted position via the same helper the
-  // other floating inspectors use.  No-op safely if wireMvInspector
-  // doesn't recognise the id — it just attaches handlers on whatever
-  // .mv-inspector-toggle / *-header it finds inside the panel.
-  try { wireMvInspector('sandbox-panel') } catch { /* ignore */ }
-  // Wire Spawn button — everything else moved to the ribbon.
-  document.getElementById('sandbox-spawn').addEventListener('click', (ev) => openSandboxSpawnPicker(ev.currentTarget))
+// _activeRendererView — which view currently owns the canvas.  The
+// React Renderer panel's Tracking + Auto-Rotate toggles route through
+// the host bridge here so they hit the right view's setTracking /
+// renderer.setAutoRotate, mirroring the legacy wireMvRendererPanel
+// `activeView()` helper.
+function _activeRendererView() {
+  const dlg = document.getElementById('model-viewer-dialog')
+  const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
+  return sandboxActive
+    ? (typeof window !== 'undefined' ? window.__sandboxView : null)
+    : modelViewerInstance
+}
+
+// _reactUi — lazy-loaded handle to the Preact UI island.  Imported
+// dynamically the first time configureReactUi runs so the studio's
+// initial paint isn't blocked on the framework's parse / compile
+// even on cold loads.  Resolves to the module exports from
+// /ui/mount.js (configureUi, mountSandboxPanel, showSandboxPanel,
+// rescuePanelIntoStage).
+let _reactUi = null
+let _reactUiPromise = null
+
+// configureReactUi — boot the React/Preact island and install the
+// persistence bridge.  Idempotent: repeated calls return the same
+// Promise so multiple init paths (initial boot, hot-reload, tab
+// activation before the first import has resolved) all wait on the
+// same module load.  The persistence hooks route panel-store
+// mutations into the existing state.mvInspectorPos / Collapsed /
+// Visible maps + persistPrefs so React panels share saved state
+// with the legacy panels and stay in lockstep across reloads.
+function configureReactUi() {
+  if (_reactUiPromise) return _reactUiPromise
+  _reactUiPromise = import('/ui/mount.js').then((ui) => {
+    _reactUi = ui
+    ui.configureUi({
+      loadPos:       (id) => (state.mvInspectorPos       || {})[id] || null,
+      savePos:       (id, pos) => {
+        state.mvInspectorPos = state.mvInspectorPos || {}
+        state.mvInspectorPos[id] = { top: pos.top, left: pos.left }
+        persistPrefs()
+      },
+      loadCollapsed: (id) => !!(state.mvInspectorCollapsed || {})[id],
+      saveCollapsed: (id, on) => {
+        state.mvInspectorCollapsed = state.mvInspectorCollapsed || {}
+        state.mvInspectorCollapsed[id] = !!on
+        persistPrefs()
+      },
+      loadVisible:   (id, def) => {
+        const vis = state.mvInspectorVisible || {}
+        return Object.prototype.hasOwnProperty.call(vis, id) ? !!vis[id] : !!def
+      },
+      saveVisible:   (id, on) => {
+        state.mvInspectorVisible = state.mvInspectorVisible || {}
+        state.mvInspectorVisible[id] = !!on
+        persistPrefs()
+        // Both dropdown rows (unit-editor View + sandbox Developer
+        // Tools) are React-managed now and subscribe to the panel-
+        // store's visible signal directly, so writing through here is
+        // enough — the rows re-render on the next signal commit.
+      },
+    })
+    // Seed each migrated inspector panel from the persisted visibility
+    // BEFORE the first mount so the Preact tree doesn't flash visible
+    // and then hide.  Defaults match the legacy wireMvInspectors path
+    // (true unless explicitly closed at some prior session).
+    for (const id of [
+      'mv-inspector-staticvars', 'mv-inspector-audio', 'mv-inspector-effects',
+      'mv-inspector-camera', 'mv-inspector-actions', 'mv-inspector-ports',
+      'mv-inspector-scripts',
+    ]) {
+      const vis = state.mvInspectorVisible || {}
+      const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
+      ui.setPanelVisible(id, wasSet ? !!vis[id] : true)
+    }
+    // Bridge the host's COB + camera callbacks into the React island.
+    // The actual targets (active view, MvControls singleton, runCobEntry)
+    // are read at call time so a sandbox / unit-editor swap reaches the
+    // right place even though configure runs only once.
+    ui.configureHostBridge({
+      setTracking:   (on) => {
+        const v = _activeRendererView()
+        if (v && typeof v.setTracking === 'function') v.setTracking(on)
+        else if (_mvControls && typeof _mvControls.setTracking === 'function') {
+          _mvControls.setTracking(on)
+        }
+      },
+      setAutoRotate: (on) => {
+        _unitEditorAutoRotate = !!on
+        const v = _activeRendererView()
+        const r = v && v.renderer
+        if (r && typeof r.setAutoRotate === 'function') r.setAutoRotate(on)
+        // Mirror to the React unit-editor ribbon's Camera dropdown so
+        // the Auto-Rotate toggle row's check flips in lockstep.
+        if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
+          _reactUi.setModelViewerRibbonState({ autoRotate: !!on })
+        }
+      },
+      runCobEntry:        (cob, name) => runCobEntry(cob, name),
+      isCobScriptRunning: (cob, name) => isCobScriptRunning(cob, name),
+      runControlsCreate:  () => {
+        // Mirror of the old #mv-controls-create-btn click handler:
+        // launch Create, flip lifecycle to 'creating' so the action
+        // grid stays gated, then kick the visual build ramp so the
+        // user sees the construction-stripe wireframe phase in.
+        const mvi = modelViewerInstance
+        const cob = mvi && mvi.cob
+        if (!cob || !cob.hasScript || !cob.hasScript('Create')) return
+        cob.start('Create')
+        cob._lifecycle = 'creating'
+        startMvAutoBuild(mvi)
+      },
+      // Runtime overlay controls.  setSimSpeed routes through the
+      // same mvSetSimulationSpeed entry point the COB-menu Playback
+      // slider uses, so dragging either keeps both labels + sandbox
+      // runtime in sync.  toggle/step/stopAll target whichever
+      // runtime is active (unit-editor viewer first, then sandbox).
+      setSimSpeed: (rate) => mvSetSimulationSpeed(rate),
+      toggleRuntimePaused: () => mvToggleRuntimePaused(),
+      stepRuntime: () => {
+        const rt = _activeRuntime()
+        if (!rt) return
+        // Force one fixed 25 ms TA tick across the WHOLE per-frame
+        // pipeline, not just the COB scripts.  rt.tick(25) alone only
+        // advances bytecode — weapons, movement, particles, audio,
+        // and smoke trails are driven elsewhere (engine.tick + the
+        // per-view onAfterFrame hook), so a script-only step looked
+        // like "the panel stats tick but nothing in the world moves."
+        //
+        // Unpause briefly, drive the same calls a real frame makes,
+        // then re-pause.  Leave each thread's breakpointHit flag
+        // ALONE — _runThread treats a set flag as "skip the BP check
+        // on the first instruction this tick" so the BP'd line
+        // executes once, the PC moves past it, and subsequent ops
+        // re-engage BP checking.  Clearing the flag here would let
+        // the BP at the same PC re-fire immediately and Step would
+        // be stuck pacing the same line forever.
+        const dlg = document.getElementById('model-viewer-dialog')
+        const sandboxOn = dlg && dlg.classList.contains('sandbox-mode')
+        const wasPaused = rt.paused
+        rt.paused = false
+        if (sandboxOn) {
+          // Sandbox per-frame: scene.tick → engine.tick (runtime +
+          // movement + attack + weapons + particles + audio via
+          // syncBinding) + the BaseView smoke-trail advance.
+          const sv = (typeof window !== 'undefined') ? window.__sandboxView : null
+          if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(25)
+          if (sv && typeof sv.tickSmokeTrails === 'function') sv.tickSmokeTrails(25)
+        } else {
+          // Viewer per-frame: binding.tick (runtime + particles +
+          // audio) + MvControls.tick (movement + weapons via
+          // engine.tick(skipRuntime, skipMovement, skipSync), plus
+          // its own tickSmokeTrails inside).
+          const cob = modelViewerInstance && modelViewerInstance.cob
+          if (cob && typeof cob.tick === 'function') cob.tick(25)
+          if (_mvControls && typeof _mvControls.tick === 'function') _mvControls.tick(25)
+        }
+        // Always leave the runtime paused after a step so the user
+        // can keep stepping (`wasPaused || true === true`).
+        rt.paused = wasPaused || true
+        mvRefreshRuntimeToggle()
+        // Snap the React panels to the post-step state immediately
+        // instead of waiting for the next 4 Hz publish — the stats
+        // row, the thread list, and the Pause/Resume label all read
+        // through mutable refs that need a tick to re-paint.
+        if (_reactUi && typeof _reactUi.bumpRuntimeTick === 'function') {
+          _reactUi.bumpRuntimeTick()
+        }
+      },
+      stopAllThreads: async () => {
+        const rt = _activeRuntime()
+        if (!rt || typeof rt.killAllThreads !== 'function') return
+        // Confirm before tearing every COB thread down — motion
+        // controllers, smoke loops, the unit's idle background scripts
+        // all die.  Users almost always WANT this when they click
+        // Terminate All Scripts, but the action is irreversible (the
+        // dead threads' state is gone), so the in-app confirm modal
+        // routes the click through a yes/no prompt.
+        const ok = await confirmDialog({
+          title: 'Terminate All Scripts',
+          message: 'This will stop all unit scripts, including motion controllers, smoke and other background threads.  Proceed?',
+          okLabel: 'Terminate All',
+          cancelLabel: 'Cancel',
+          okDanger: true,
+        })
+        if (!ok) return
+        rt.killAllThreads()
+        // Repaint the thread list NOW so the user sees the empty /
+        // "killed" state without a 250 ms publish lag.
+        if (_reactUi && typeof _reactUi.bumpRuntimeTick === 'function') {
+          _reactUi.bumpRuntimeTick()
+        }
+      },
+      resetUnit: (unit, cob) => {
+        if (cob && modelViewerInstance && modelViewerInstance.cob === cob && cob.unit === unit) {
+          modelViewerInstance.resetState()
+          return
+        }
+        if (typeof unit.killAllThreads === 'function') unit.killAllThreads()
+        unit._threads.length = 0
+        unit._recentlyKilled.length = 0
+        for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
+        unit._moveAnims.length = 0
+        unit._rotAnims.length = 0
+        for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
+      },
+      openThreadCodeModal: (cob, thread) => openMvThreadCodeModal(cob, thread),
+    })
+    // Bridge the Include-Private toggle into the prefs system so the
+    // React Script Commands panel signal + persisted
+    // state.mvActionsIncludePrivate stay in lockstep.  Pref key keeps
+    // the legacy 'mvActions' prefix so saved preferences survive the
+    // Actions → Script Commands rename.
+    ui.configureActionsIncludePrivate(
+      () => !!state.mvActionsIncludePrivate,
+      (on) => { state.mvActionsIncludePrivate = !!on; persistPrefs() },
+    )
+    // Bridge the Developer Controls toggle so the React Controls
+    // panel reads + writes the same persisted preference the
+    // Developer Tools dropdown row in the sandbox ribbon uses.
+    ui.configureControlsDevSectionVisible(
+      () => state.mvControlsDevVisible === undefined ? true : !!state.mvControlsDevVisible,
+      (on) => { state.mvControlsDevVisible = !!on; persistPrefs() },
+    )
+    // Bring the inspector panel tree online — sandbox panel is mounted
+    // lazily on first sandbox tab activation (it needs the onSpawn
+    // callback closure); the always-on inspectors come up at boot so
+    // they're ready when the user opens any tab.
+    ui.mountInspectorPanels()
+    // Mount the React-managed modal dialogs (confirm, Open Unit, Open
+    // Map, weapon picker) so their open-state signals are wired and
+    // the first opener call paints instantly.
+    if (typeof ui.mountDialogs === 'function') ui.mountDialogs()
+    // Mount the unit-editor sidebar tab components (Pieces, Textures,
+    // Weapons).  Each one renders empty until the host pushes a model
+    // via setPieceTreeModel / setTexturesModel — but mounting at boot
+    // keeps Preact's reconciler attached so subsequent updates flow
+    // straight to the existing DOM instead of replaceChildren-churn.
+    if (typeof ui.mountSidebarTabs === 'function') ui.mountSidebarTabs()
+    // Mount the React unit-editor ribbon + install its bridge.  The
+    // bridge resolves modelViewerInstance / renderer at call time so
+    // a tab swap automatically routes to the right one — no per-open
+    // re-wiring needed.  Idempotent on subsequent calls.
+    wireModelViewerRibbon()
+    // Mount the React welcome card body, wiring its tab card buttons
+    // into the existing host helpers (showSizeDialog / openOpenDialog
+    // / openModelPicker / openSandboxStub).
+    if (typeof ui.mountWelcomeScreen === 'function') {
+      ui.mountWelcomeScreen({
+        onNewMap:     () => openSizeDialog(),
+        onOpenMap:    () => openMapDialog('welcome'),
+        onOpenUnit:   () => openModelPicker(),
+        onOpenSandbox: () => openSandboxStub(),
+      })
+    }
+    // Bridge the unit-editor sidebar tabs to the live renderer /
+    // viewer / weapon-picker / audio so the tab components don't
+    // reach into modelViewerInstance globals directly.
+    if (typeof ui.configureTexturesBridge === 'function') {
+      ui.configureTexturesBridge({
+        setHoveredTexture: (name) => {
+          modelViewerInstance?.renderer?.setHoveredTexture?.(name)
+        },
+      })
+    }
+    if (typeof ui.configurePieceTreeBridge === 'function') {
+      ui.configurePieceTreeBridge({
+        setHoveredPieceName: (name) => {
+          modelViewerInstance?.renderer?.setHoveredPieceName?.(name)
+        },
+        selectPiece: (name) => selectPiece(name),
+        requestRedraw: () => modelViewerInstance?.renderer?.requestRedraw?.(),
+      })
+    }
+    if (typeof ui.configureWeaponsTabBridge === 'function') {
+      ui.configureWeaponsTabBridge({
+        paletteColor: (idx) => {
+          const pal = modelViewerInstance && modelViewerInstance.palette
+          if (!pal || idx <= 0) return null
+          return pal.colorFor(idx)
+        },
+        openWeaponPicker: (slotIndex) => openWeaponPicker(modelViewerInstance, slotIndex),
+        playSound: (stem) => playWeaponSound(stem),
+      })
+    }
+    return ui
+  }).catch((err) => {
+    console.error('[studio] React UI island failed to load:', err)
+    _reactUiPromise = null
+    return null
+  })
+  return _reactUiPromise
+}
+
+// ensureSandboxPanel — bring up the React-rendered sandbox panel the
+// first time the user enters sandbox mode.  The Preact island owns
+// the DOM (drag / collapse / close / clamp); we just hand it the
+// Spawn callback that opens the side picker anchored at the clicked
+// button.  Mount is idempotent — re-entering sandbox mode re-renders
+// into the same root rather than stacking panels.
+async function ensureSandboxPanel() {
+  const ui = _reactUi || await configureReactUi()
+  if (!ui) return
+  ui.mountSandboxPanel({
+    onSpawn: (sourceEl) => openSandboxSpawnPicker(sourceEl),
+  })
 }
 
 function showSandboxPanel(show) {
+  // Route through the panel-store so the React tree re-renders and
+  // the persisted visibility flag stays in sync.  Falls back to a
+  // plain DOM toggle when the UI island hasn't loaded yet (very
+  // early boot before configureReactUi resolved).
+  if (_reactUi && typeof _reactUi.showSandboxPanel === 'function') {
+    _reactUi.showSandboxPanel(!!show)
+    return
+  }
   const p = document.getElementById('sandbox-panel')
   if (p) p.classList.toggle('hidden', !show)
 }
@@ -17786,67 +14902,6 @@ async function fetchModels() {
   }
 }
 
-function renderModelList() {
-  const list = $('#model-list')
-  if (!list) return
-  const q = ($('#model-filter')?.value || '').trim().toLowerCase()
-  const filtered = availableModels.filter((m) => {
-    if (!q) return true
-    const hay = `${m.name} ${m.unitName || ''} ${m.unitTitle || ''} ${m.side || ''} ${m.category || ''} ${m.description || ''}`.toLowerCase()
-    return hay.includes(q)
-  })
-  if (filtered.length === 0) {
-    list.innerHTML = modelsLoaded
-      ? '<div class="loading">No models match.</div>'
-      : '<div class="loading">Loading models…</div>'
-    return
-  }
-  const frag = document.createDocumentFragment()
-  for (const m of filtered) {
-    const card = document.createElement('button')
-    card.className = 'open-list-item model-list-item'
-    card.dataset.name = m.name
-    // Units missing the 3DO can't be viewed in 3D — gate selection
-    // visually and via the confirm button.
-    if (!m.has3DO) card.classList.add('disabled-entry')
-    if (m.name === selectedModelName) card.classList.add('selected')
-    const title = m.unitTitle || m.unitName || m.name
-    const meta = [
-      m.unitName ? m.unitName.toUpperCase() : m.name.toUpperCase(),
-      m.side || null,
-      m.category || null,
-    ].filter(Boolean).join(' · ')
-    const sub = m.description || ''
-    // Build-picture thumbnail: only request when the index says one
-    // exists (avoids a wave of 404s from <img> elements pointing at
-    // missing pics).  Fallback is a muted blank tile.
-    const thumb = m.hasBuildPic
-      ? `<div class="thumb model-thumb"><img loading="lazy" alt="" src="/api/studio/buildpic/${encodeURIComponent(m.name)}"></div>`
-      : '<div class="thumb model-thumb model-thumb-empty" title="No build picture in this VFS"></div>'
-    // Presence chips — three small dots per row.  Each is colour-coded
-    // and titled so a hover tells the user exactly what's missing.
-    const chip = (on, label, longTitle) =>
-      `<span class="model-chip ${on ? 'on' : 'off'}" title="${escapeHTML(longTitle)}">${escapeHTML(label)}</span>`
-    const chips =
-      chip(m.hasFBI, 'FBI', m.hasFBI ? 'unit definition (FBI) found in the VFS' : 'no FBI — this is an orphan 3DO (prop / feature / debug geometry)') +
-      chip(m.has3DO, '3DO', m.has3DO ? 'unit geometry (3DO) found' : 'no 3DO — this unit cannot be opened in the 3D viewer') +
-      chip(m.hasCOB, 'COB', m.hasCOB ? 'animation script (COB) found' : 'no COB — the unit will display statically with no animator')
-    card.innerHTML = thumb +
-      `<div class="title">${escapeHTML(title)}</div>` +
-      `<div class="meta">${escapeHTML(meta)}</div>` +
-      (sub ? `<div class="meta">${escapeHTML(sub)}</div>` : '') +
-      `<div class="model-chips">${chips}</div>`
-    card.addEventListener('click', () => {
-      if (!m.has3DO) return  // can't open without geometry
-      selectedModelName = m.name
-      $$('.model-list-item').forEach((el) => el.classList.toggle('selected', el.dataset.name === m.name))
-      $('#model-open-confirm').disabled = false
-    })
-    card.addEventListener('dblclick', () => { if (m.has3DO) openModelViewer(m.name) })
-    frag.appendChild(card)
-  }
-  list.replaceChildren(frag)
-}
 
 async function openModelViewer(name) {
   $('#model-open-dialog').classList.add('hidden')
@@ -17870,17 +14925,11 @@ async function openModelViewer(name) {
   switchToTab(activeTabIndex, { fresh: false, force: true })
 }
 
-function closeModelViewer() {
-  // The viewer's "Close" button drops the currently-active model
-  // tab — same gesture as the × on the tab itself.  If the user
-  // had a map open too, switchToTab returns them to it; otherwise
-  // the welcome dialog shows.
-  if (activeTabIndex >= 0 && tabs[activeTabIndex]?.type === 'model') {
-    closeTab(activeTabIndex)
-  } else {
-    $('#model-viewer-dialog').classList.add('hidden')
-  }
-}
+// closeModelViewer — replaced by the React ribbon's "Open another
+// model…" routing through openModelPicker (intent=add), which pushes
+// the new unit into a fresh tab instead of dropping the current one.
+// Tab close gestures (× on the tab strip + the tab bar's keyboard
+// shortcut) still flow through closeTab directly.
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 

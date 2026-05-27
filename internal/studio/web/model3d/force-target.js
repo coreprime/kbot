@@ -22,19 +22,21 @@
 // gesture without that refactor blocking it.
 
 // Persisted flag key.  Plain "on" / "off" so the localStorage UI is
-// human-readable.  Default: ON when the key is absent — the gesture is
-// the natural way to test weapons in both views (Sandbox: shift-click
-// ground, Viewer: plain click), and gating it behind a Settings
-// checkbox before it works at all was a discoverability trap.  Users
-// who don't want the gesture can opt OUT via Settings → Unit Editor.
+// human-readable.  Default: OFF when the key is absent.  A plain
+// canvas click in the unit viewer used to default to "fire primary at
+// the clicked ground point", which surprised users who'd just loaded
+// a unit (e.g. ARMBATs tries to shoot itself from a stray click on
+// the model).  Off-by-default keeps clicks as pure orbit-camera until
+// the user explicitly arms a slot from the Actions panel; opting IN
+// via Settings → Unit Editor restores the legacy fast-fire gesture.
 const FLAG_KEY = 'studio.forceTargetGround'
 
 export function forceTargetEnabled() {
   try {
-    // Key absent → default ON.  Only an explicit "off" disables the
-    // gesture so first-time users get working weapons immediately.
-    return localStorage.getItem(FLAG_KEY) !== 'off'
-  } catch { return true }
+    // Key absent → default OFF.  Only an explicit "on" enables the
+    // gesture so a fresh-loaded unit doesn't fire at the first click.
+    return localStorage.getItem(FLAG_KEY) === 'on'
+  } catch { return false }
 }
 
 export function setForceTargetEnabled(on) {

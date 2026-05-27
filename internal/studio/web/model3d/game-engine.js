@@ -543,15 +543,20 @@ export class GameEngine {
   //                  and pushes its own worldOffset.
   tick(dtMs, { skipRuntime = false, skipMovement = false, skipSync = false } = {}) {
     const insts = skipRuntime ? null : this.runtime.tick(dtMs)
+    const paused = !!this.runtime.paused
     const dtSec = (dtMs * (this.runtime.playbackRate || 1)) / 1000
     const simNowMs = this.runtime.simTimeMs || 0
     for (const u of this._units.values()) {
       if (u.dead) continue
-      if (!skipMovement) {
+      // Pause gates EVERY autonomous-sim phase, not just runtime.tick.
+      // Without this the COB scripts freeze but units keep walking +
+      // firing because #stepMovement / #stepWeapons / #stepAttack all
+      // use wall-clock dt.  Pause should look like a freeze frame.
+      if (!skipMovement && !paused) {
         this.#stepAttack(u, simNowMs)
         this.#stepMovement(u, dtSec)
       }
-      this.#stepWeapons(u, simNowMs)
+      if (!paused) this.#stepWeapons(u, simNowMs)
       if (!skipSync) this.#syncBinding(u, dtMs)
     }
     // Cross-unit dynamic-light aggregation.  Only when a renderer is
@@ -673,7 +678,18 @@ export class GameEngine {
   // transitions so kbot/tank leg loops kick in/out properly.
   #stepMovement(u, dtSec) {
     const wasMoving = !!u.isMoving
-    if (u.moveTarget) {
+    // Structures with no MaxVelocity in their FBI are explicitly
+    // immobile — the FBI omits the field for factories (Adv. Aircraft
+    // Plant, ARMLAB), power plants, and other buildings.  TA UX still
+    // permits the player to drop a "move waypoint" on a factory so the
+    // units it BUILDS inherit that order, but the factory itself does
+    // not relocate.  Honour that: a u.moveTarget on a non-movable unit
+    // is allowed as a stored waypoint (other systems may consume it),
+    // we just don't apply per-tick translation here.  Without this
+    // guard the `else 30` fallback below was treating a missing speed
+    // as 30 wu/sec and walking factories across the field.
+    const canMove = !u.meta || u.meta.canMove !== false
+    if (u.moveTarget && canMove) {
       const dx = u.moveTarget.x - u.pos.x
       const dz = u.moveTarget.z - u.pos.z
       const dist = Math.hypot(dx, dz)
@@ -698,6 +714,10 @@ export class GameEngine {
           aligned = true
         }
         if (aligned) {
+          // maxVelocity = 0 should have been caught by the canMove gate
+          // above; the `|| 30` arm survives only as a safety net for
+          // mod units that ship a non-zero meta but somehow zero
+          // maxVelocity.
           const speed = (u.meta && u.meta.maxVelocity > 0)
             ? u.meta.maxVelocity * 30 /* FBI units/frame × 30Hz → wu/sec */
             : 30

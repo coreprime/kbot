@@ -111,13 +111,20 @@ export class CobBinding {
     const count = this.runtime.tick(dtMs)
     this._sync(dtMs)
     // Particles share the runtime's playback rate so slow-mo
-    // applies uniformly to script + SFX.
-    this.particles.tick(dtMs * this.runtime.playbackRate)
+    // applies uniformly to script + SFX.  Pause sets rate to 0 so
+    // projectiles + effects freeze in place along with the scripts —
+    // without this gate `dtMs * playbackRate` kept advancing them on
+    // wall-clock time because playbackRate stays at 1 when paused
+    // (only `paused` flips).  Mirrors the gate game-engine.js uses
+    // in its own #syncBinding so sandbox + viewer behave identically.
+    const partRate = this.runtime.paused ? 0 : (this.runtime.playbackRate || 1)
+    this.particles.tick(dtMs * partRate)
     // Build-time transporter sparkles — emit a smattering of green
     // pulses across the unit's geometry while the build ramp is
-    // in flight.  No-op once build% reaches 100, so cost is zero
-    // for fully-built units.
-    this._emitBuildSparkles(dtMs)
+    // in flight.  Skip while paused so a frozen unit doesn't keep
+    // accumulating motionless sparkles (the particle pool's tick is
+    // gated above; emitted sparkles would never decay).
+    if (!this.runtime.paused) this._emitBuildSparkles(dtMs)
     // Audio pool — propagate the runtime's playbackRate + paused
     // state to every live <audio> element each frame so sounds
     // slow-mo / fast-forward / pause with the rest of the sim.

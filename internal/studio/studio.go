@@ -22,7 +22,7 @@ import (
 // Embed the studio web assets explicitly so a stray node_modules / dotfile
 // added during local development doesn't bloat the binary.
 //
-//go:embed web/index.html web/studio.css web/studio.js web/cob-highlight.js web/mv-controls.js web/model3d
+//go:embed web/index.html web/studio.css web/studio.js web/cob-highlight.js web/mv-controls.js web/model3d web/ui web/vendor
 var webFS embed.FS
 
 var (
@@ -199,7 +199,12 @@ func contentTypeFor(name string) string {
 	switch filepath.Ext(name) {
 	case ".html":
 		return "text/html; charset=utf-8"
-	case ".js":
+	case ".js", ".mjs":
+		// .mjs is the canonical ESM extension; browsers enforce strict
+		// MIME checking on <script type="module"> imports and reject
+		// anything other than a JS MIME (chrome treats application/
+		// octet-stream as "not a module").  Both extensions go through
+		// the same handler since the JS itself is identical.
 		return "application/javascript"
 	case ".css":
 		return "text/css"

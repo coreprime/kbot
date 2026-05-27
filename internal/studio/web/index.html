@@ -142,371 +142,17 @@
          button (tab × closes the model tab the same way it closes
          a map tab). -->
     <div class="model-viewer-shell">
-      <div class="ribbon">
-        <div class="ribbon-section">
-          <div class="ribbon-label">Model</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-model-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-model-dropdown-btn" title="Model file actions">
-              <span class="ico">🛠</span><span class="lbl">Model</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-model-dropdown-popup">
-              <button id="mv-act-open" class="menu-row" title="Browse another unit from the loaded VFS (FBI-derived list with build pictures and FBI / 3DO / COB presence chips)">
-                <span class="ico">📂</span><span>Open another model…</span>
-              </button>
-              <button class="menu-row" disabled title="Coming soon: export as glTF / OBJ.">
-                <span class="ico">📤</span><span>Export as glTF…</span>
-              </button>
-              <button class="menu-row" disabled title="Coming soon: convert and save as .3do.">
-                <span class="ico">💾</span><span>Save as .3do…</span>
-              </button>
-              <div class="menu-section-label">Info</div>
-              <button id="mv-act-pieces" class="menu-row" title="Show piece counts and texture refs in the status bar">
-                <span class="ico">ℹ️</span><span>Show model stats</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Camera</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-camera-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-camera-dropdown-btn" title="Camera controls">
-              <span class="ico">📷</span><span class="lbl">Camera</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-camera-dropdown-popup">
-              <button id="mv-act-reset" class="menu-row" title="Reset camera framing to the unit's bounding box">
-                <span class="ico">🎯</span><span>Reset Camera</span>
-              </button>
-              <button id="mv-act-autorotate" class="menu-row toggle-row" data-on="1" title="Slow turntable around the model">
-                <span class="ico">🔄</span><span>Auto-Rotate</span><span class="menu-check">✓</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Rendering</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-render-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-render-dropdown-btn" title="Pick the render mode + wireframe overlay">
-              <span class="ico" id="mv-render-current-ico">🧱</span><span class="lbl" id="mv-render-current-lbl">Studio Mode</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-render-dropdown-popup">
-              <div class="menu-section-label">Mode</div>
-              <button class="menu-row mv-mode-row active" data-mv-mode="full" title="Full lit + textured render — the showroom look">
-                <span class="ico">🧱</span><span>Studio Mode</span><span class="menu-check">✓</span>
-              </button>
-              <button class="menu-row mv-mode-row" data-mv-mode="flat" title="Textured but flat-shaded — no directional lighting or shadows">
-                <span class="ico">⬜</span><span>Flat Shading</span><span class="menu-check">✓</span>
-              </button>
-              <button class="menu-row mv-mode-row" data-mv-mode="wireframe" title="Polygon outlines only, no surface texturing">
-                <span class="ico">📐</span><span>Wireframe Only</span><span class="menu-check">✓</span>
-              </button>
-              <div class="menu-section-label">Wireframe</div>
-              <button id="mv-act-wire-overlay" class="menu-row toggle-row" data-on="0" title="Overlay polygon edges on top of the current mode">
-                <span class="ico">🪡</span><span>Show Wireframe</span><span class="menu-check">✓</span>
-              </button>
-              <div class="menu-row menu-row-slider">
-                <span class="ico">📏</span>
-                <span>Edge thickness</span>
-                <input id="mv-wire-thickness" type="range" min="1" max="6" step="1" value="1" />
-                <span class="menu-row-value" id="mv-wire-thickness-val">1</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Scene</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-ground-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-ground-dropdown-btn" title="Pick what the unit stands on">
-              <span class="ico" id="mv-ground-current-ico">🌱</span><span class="lbl" id="mv-ground-current-lbl">Terrain</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-ground-dropdown-popup">
-              <button class="menu-row mv-ground-row" data-mv-ground="grid" title="Light-green grid sized to one TA map tile">
-                <span class="ico">⊞</span><span>Grid</span><span class="menu-check">✓</span>
-              </button>
-              <button class="menu-row mv-ground-row active" data-mv-ground="terrain" title="Tiled tileset under the unit (changes with Environment)">
-                <span class="ico">🌱</span><span>Terrain</span><span class="menu-check">✓</span>
-              </button>
-              <button class="menu-row mv-ground-row" data-mv-ground="sea" title="Procedural animated water under the unit">
-                <span class="ico">🌊</span><span>Sea</span><span class="menu-check">✓</span>
-              </button>
-              <button class="menu-row mv-ground-row" data-mv-ground="off" title="Hide the ground plane entirely">
-                <span class="ico">🚫</span><span>Off</span><span class="menu-check">✓</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Studio Options</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-options-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-options-dropdown-btn" title="Toggle studio effects + pick the world look">
-              <span class="lbl">Options</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-options-dropdown-popup">
-              <div class="menu-section-label">Environment</div>
-              <div class="menu-row menu-row-submenu" id="mv-opt-env-row" role="button" tabindex="0" title="Pick the world look">
-                <span class="ico" id="mv-env-current-ico">🌳</span><span class="env-current-lbl" id="mv-env-current-lbl">Greenworld</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-env-submenu">
-                  <button class="menu-row mv-env-row active" data-mv-env="greenworld" title="Greenworld — lush forest, deeper-blue ocean (TA default)">
-                    <span class="ico">🌳</span><span>Greenworld</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="archipelago" title="Archipelago — tropical white-sand seabed, crystal blue translucent water">
-                    <span class="ico">🏝️</span><span>Archipelago</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="metal" title="Metal world — cloudless industrial sky, thick oily coolant">
-                    <span class="ico">⚙️</span><span>Metal</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="desert" title="Desert — sandy terrain, acid-green lake">
-                    <span class="ico">🏜️</span><span>Desert</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="lava" title="Lava world — red sky, glowing molten lakes">
-                    <span class="ico">🌋</span><span>Lava</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="marsh" title="Marsh — hazy sky, tannin-stained swamp water">
-                    <span class="ico">🪷</span><span>Marsh</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="slate" title="Slate — overcast sky, cold grey quarry water">
-                    <span class="ico">⛰️</span><span>Slate</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="moon" title="Lunar — airless black sky, highly translucent water">
-                    <span class="ico">🌙</span><span>Lunar</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="mars" title="Mars — orange dusty sky, purple water">
-                    <span class="ico">🔴</span><span>Mars</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="sunset" title="Greenworld at sunset — warm sky, muted water">
-                    <span class="ico">🌇</span><span>Sunset</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="night" title="Greenworld at night — dark sky, moonlit water">
-                    <span class="ico">🌌</span><span>Night</span>
-                  </button>
-                  <button class="menu-row mv-env-row" data-mv-env="alienTwin" title="Alien — twin suns, purple sky, bioluminescent water">
-                    <span class="ico">👽</span><span>Alien (twin suns)</span>
-                  </button>
-                </div>
-              </div>
-              <div class="menu-row menu-row-submenu" id="mv-opt-team-row" role="button" tabindex="0" title="Recolour the unit's team-colour panels">
-                <span class="ico" id="mv-team-current-ico">🔵</span><span class="env-current-lbl" id="mv-team-current-lbl">Blue (default)</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-team-submenu">
-                  <button class="menu-row mv-team-row active" data-mv-team="blue" title="ARM blue — the original game default, no recolouring applied">
-                    <span class="ico">🔵</span><span>Blue (default)</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="red" title="CORE red">
-                    <span class="ico">🔴</span><span>Red</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="green" title="Green team">
-                    <span class="ico">🟢</span><span>Green</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="yellow" title="Yellow team">
-                    <span class="ico">🟡</span><span>Yellow</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="purple" title="Purple team">
-                    <span class="ico">🟣</span><span>Purple</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="cyan" title="Cyan team">
-                    <span class="ico">🩵</span><span>Cyan</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="orange" title="Orange team">
-                    <span class="ico">🟠</span><span>Orange</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="white" title="White team">
-                    <span class="ico">⚪</span><span>White</span>
-                  </button>
-                  <button class="menu-row mv-team-row" data-mv-team="black" title="Black team">
-                    <span class="ico">⚫</span><span>Black</span>
-                  </button>
-                </div>
-              </div>
-              <div class="menu-section-label">General Effects</div>
-              <button id="mv-opt-reflections" class="menu-row toggle-row" data-on="1" title="The unit reflects on the water (and other reflective surfaces).">
-                <span class="ico">🪞</span><span>Reflections</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-opt-specular" class="menu-row toggle-row" data-on="1" title="Bright sun highlights on the water surface">
-                <span class="ico">💎</span><span>Specular Highlights</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-opt-godbeams" class="menu-row toggle-row" data-on="1" title="Crepuscular light shafts from the sun through clouds">
-                <span class="ico">🌟</span><span>God Beams</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-opt-dof" class="menu-row toggle-row" data-on="0" title="Cinematic depth of field — unit stays sharp, background softens">
-                <span class="ico">🎞️</span><span>Depth of Field</span><span class="menu-check">✓</span>
-              </button>
-              <div class="menu-section-label">Background Terrain</div>
-              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-bgterrain-row" role="button" tabindex="0" title="Procedural mountains in the background of non-sea worlds — hover for height + scale">
-                <span class="ico">🏔️</span><span>Background Mountains</span><span class="menu-check" id="mv-bgterrain-check">✓</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-bgterrain-submenu">
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Height</span>
-                    <input id="mv-bgterrain-height" type="range" min="0" max="200" step="5" value="100" />
-                    <span class="slider-val" id="mv-bgterrain-height-val">1.0×</span>
-                  </div>
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Scale</span>
-                    <input id="mv-bgterrain-scale" type="range" min="30" max="300" step="5" value="100" />
-                    <span class="slider-val" id="mv-bgterrain-scale-val">1.0×</span>
-                  </div>
-                </div>
-              </div>
-              <div class="menu-row menu-row-submenu" id="mv-opt-seabed-row" role="button" tabindex="0" title="Sea-floor rocks + dunes — height, scale, density">
-                <span class="ico">🪨</span><span>Seabed Features</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-seabed-submenu">
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Height</span>
-                    <input id="mv-seabed-height" type="range" min="0" max="300" step="5" value="100" />
-                    <span class="slider-val" id="mv-seabed-height-val">1.0×</span>
-                  </div>
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Scale</span>
-                    <input id="mv-seabed-scale" type="range" min="30" max="300" step="5" value="100" />
-                    <span class="slider-val" id="mv-seabed-scale-val">1.0×</span>
-                  </div>
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Rocks</span>
-                    <input id="mv-seabed-rocks" type="range" min="0" max="100" step="2" value="12" />
-                    <span class="slider-val" id="mv-seabed-rocks-val">12%</span>
-                  </div>
-                </div>
-              </div>
-              <div class="menu-section-label">Liquid Simulation</div>
-              <button id="mv-opt-water-reflections" class="menu-row toggle-row" data-on="1" title="Water reflects onto the unit's hull — caustic bounce + sun shimmer on side plates">
-                <span class="ico">🌅</span><span>Water Surface Reflections</span><span class="menu-check">✓</span>
-              </button>
-              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-waves-row" role="button" tabindex="0" title="Animate the water surface — hover for intensity">
-                <span class="ico">🌊</span><span>Waves</span><span class="menu-check" id="mv-waves-check">✓</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-waves-submenu">
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Intensity</span>
-                    <input id="mv-waves-intensity" type="range" min="0" max="200" step="5" value="100" />
-                    <span class="slider-val" id="mv-waves-intensity-val">1.0×</span>
-                  </div>
-                </div>
-              </div>
-              <div class="menu-row menu-row-submenu menu-row-toggle-submenu" id="mv-opt-bob-row" role="button" tabindex="0" title="Unit bobs + sways with the swell — hover for amount + speed">
-                <span class="ico">🚤</span><span>Bobbing / Swaying</span><span class="menu-check" id="mv-bob-check">✓</span><span class="chev-right">▸</span>
-                <div class="ribbon-submenu hidden" id="mv-bob-submenu">
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Amount</span>
-                    <input id="mv-bob-amount" type="range" min="0" max="200" step="5" value="100" />
-                    <span class="slider-val" id="mv-bob-amount-val">1.0×</span>
-                  </div>
-                  <div class="submenu-slider-row">
-                    <span class="slider-lbl">Speed</span>
-                    <input id="mv-bob-speed" type="range" min="0" max="200" step="5" value="100" />
-                    <span class="slider-val" id="mv-bob-speed-val">1.0×</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Animation</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-anim-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-anim-dropdown-btn" title="COB-driven animation: trigger the unit's standard entry points.">
-              <span class="ico">🎬</span><span class="lbl">COB</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-anim-dropdown-popup">
-              <div class="menu-section-label">Lifecycle</div>
-              <button class="menu-row cob-entry" data-cob-entry="Create" title="Initial setup script that runs on unit spawn (hides flares, sets piece offsets)."><span class="ico">🪄</span><span>Create</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="Activate" title="Powers on the unit — radar dishes spin, hatches open, etc."><span class="ico">⚡</span><span>Activate</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="Deactivate" title="Powers off — folds antennas, closes hatches."><span class="ico">🔌</span><span>Deactivate</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="Killed" title="Death animation — body parts fly off, smoke trails."><span class="ico">💀</span><span>Killed</span></button>
-              <div class="menu-section-label">Movement</div>
-              <button class="menu-row cob-entry" data-cob-entry="StartMoving" title="Start walking / driving animation."><span class="ico">🚶</span><span>StartMoving</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="StopMoving" title="Stop walking / driving animation."><span class="ico">🛑</span><span>StopMoving</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="StartBuilding" title="Begin construction animation (cranes extending)."><span class="ico">🏗️</span><span>StartBuilding</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="StopBuilding" title="End construction animation."><span class="ico">✋</span><span>StopBuilding</span></button>
-              <div class="menu-section-label">Weapons</div>
-              <button class="menu-row cob-entry" data-cob-entry="AimPrimary" title="Aim primary weapon at a random heading + elevation in the unit's FOV."><span class="ico">🎯</span><span>AimPrimary</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="FirePrimary" title="Fire primary weapon (recoil + muzzle flash)."><span class="ico">💥</span><span>FirePrimary</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="AimSecondary" title="Aim secondary weapon at a random target."><span class="ico">🎯</span><span>AimSecondary</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="FireSecondary" title="Fire secondary weapon."><span class="ico">💥</span><span>FireSecondary</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="AimTertiary" title="Aim tertiary weapon."><span class="ico">🎯</span><span>AimTertiary</span></button>
-              <button class="menu-row cob-entry" data-cob-entry="FireTertiary" title="Fire tertiary weapon."><span class="ico">💥</span><span>FireTertiary</span></button>
-              <div class="menu-section-label">Unit attributes</div>
-              <div class="submenu-slider-row" title="Unit damage % - low health triggers SmokeUnit which emits damage smoke from the hull.">
-                <span class="slider-lbl">Damage</span>
-                <input id="mv-cob-damage" type="range" min="0" max="100" step="5" value="0" />
-                <span class="slider-val" id="mv-cob-damage-val">0%</span>
-              </div>
-              <div class="submenu-slider-row" title="Build progress 0-100%.  Under 100% renders the unit as a pulsing green nano-frame; at 100% the textures fade in fully.  Returned by GET BUILD_PERCENT_LEFT for scripts that poll it (SmokeUnit's intro check, factory nano-spray).">
-                <span class="slider-lbl">Build</span>
-                <input id="mv-cob-build" type="range" min="0" max="100" step="5" value="100" />
-                <span class="slider-val" id="mv-cob-build-val">100%</span>
-              </div>
-              <div class="submenu-slider-row" title="Playback speed for COB animations.  0.25x = quarter speed (slow-motion inspection).  1.0x = real-time TA pacing.  2x = double speed.">
-                <span class="slider-lbl">Playback</span>
-                <input id="mv-cob-playback" type="range" min="1" max="1000" step="1" value="100" />
-                <span class="slider-val" id="mv-cob-playback-val">1.0×</span>
-              </div>
-              <button class="menu-row" id="mv-cob-reset" title="Reset every piece to its original 3DO position, kill all COB threads, and zero all static vars.  The unit returns to its raw rest state — exactly as it would look just after Open with no scripts run."><span class="ico">↺</span><span>Reset State</span></button>
-              <div class="menu-section-label">All scripts</div>
-              <div id="mv-cob-script-list" class="cob-script-list">
-                <div class="cob-empty">No COB attached.</div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section ribbon-section-right">
-          <div class="ribbon-label">View</div>
-          <div class="ribbon-group ribbon-dropdown" id="mv-view-dropdown">
-            <button class="tool-btn ribbon-dropdown-btn" id="mv-view-dropdown-btn" title="Toggle floating inspector overlays.">
-              <span class="ico">👁</span><span class="lbl">View</span>
-              <span class="chev-down">▾</span>
-            </button>
-            <div class="ribbon-dropdown-popup hidden" id="mv-view-dropdown-popup">
-              <div class="menu-section-label">Inspectors</div>
-              <button id="mv-view-scripts" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts"
-                      title="Toggle the Runtime overlay — every loaded unit's live COB threads, grouped by unit, with PC + signal mask + a one-click debugger jump.">
-                <span class="ico">⚙</span><span>Runtime</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-actions" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-actions"
-                      title="Toggle the Actions overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).">
-                <span class="ico">▶</span><span>Actions</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-ports" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-ports"
-                      title="Toggle the Controls overlay — drive the unit (Move, Aim+Fire Primary/Secondary/Tertiary) AND view+edit its COB unit-value ports (Active, Move/Fire orders, Health, Build %, etc.).">
-                <span class="ico">🎮</span><span>Controls</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
-                      title="Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.">
-                <span class="ico">📊</span><span>Unit Variables</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
-                      title="Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas's current frame rate.">
-                <span class="ico">🎥</span><span>Renderer</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-effects" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-effects"
-                      title="Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding's particle-pool occupancy.">
-                <span class="ico">✨</span><span>Effects</span><span class="menu-check">✓</span>
-              </button>
-              <button id="mv-view-audio" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-audio"
-                      title="Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).">
-                <span class="ico">🔊</span><span>Audio</span><span class="menu-check">✓</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section ribbon-section-right">
-          <div class="ribbon-label">Configure</div>
-          <div class="ribbon-group">
-            <button id="mv-btn-settings" class="tool-btn" title="KBot Studio settings">
-              <span class="ico">⚙</span><span class="lbl">Settings</span>
-            </button>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Help</div>
-          <div class="ribbon-group">
-            <button id="mv-btn-help" class="tool-btn" title="Keyboard shortcuts &amp; tips">
-              <span class="ico">❓</span><span class="lbl">Help</span>
-            </button>
-          </div>
-        </div>
-      </div>
+      <!-- Unit-editor ribbon (Model / Camera / Rendering / Scene / Studio Options /
+           Animation / View / Configure / Help) — React-managed now
+           (see /ui/unit-editor/ribbon/model-viewer-ribbon.js).  Composes
+           the shared Ribbon primitives from /ui/common/ribbon.js.  The
+           mount slot uses `display: contents` so the React-rendered
+           `.ribbon` element is treated as a direct grid child of
+           `.model-viewer-shell` — keeps existing CSS rules
+           (`.model-viewer-shell > .ribbon { grid-area: ribbon }` and
+           the sandbox-mode visibility flip) matching unchanged. -->
+      <div id="model-viewer-ribbon-mount" style="display: contents"></div>
+
 
       <!-- Sandbox-mode ribbon.  Sits next to the unit-editor ribbon
            in the same grid-area; CSS swaps which is visible via
@@ -515,126 +161,12 @@
            field / settings) so the toolbar reflects what the user
            can do in the sandbox rather than borrowing the model
            viewer's chrome. -->
-      <div class="ribbon sandbox-ribbon" id="sandbox-ribbon">
-        <!-- Sandbox section — replaces the standalone Spawn + Clear
-             buttons.  The dropdown pattern mirrors the unit-editor's
-             ribbon menus (wireModelRibbonDropdown handles open/close +
-             positioning) so the two ribbons feel consistent.  Two
-             actions live here: Spawn Unit (opens the side picker, then
-             the unit-picker dialog) and Clear Field (confirms then
-             removes every unit). -->
-        <div class="ribbon-section">
-          <div class="ribbon-label">Sandbox</div>
-          <div class="ribbon-group">
-            <div class="ribbon-dropdown" id="sandbox-rb-sandbox-dropdown">
-              <button class="tool-btn ribbon-dropdown-btn" id="sandbox-rb-sandbox-btn"
-                      title="Sandbox actions — spawn a unit or clear the battlefield.">
-                <span class="ico">🛠</span><span class="lbl">Sandbox</span><span class="chev-down">▾</span>
-              </button>
-              <div class="ribbon-dropdown-popup hidden" id="sandbox-rb-sandbox-popup">
-                <button class="menu-row" id="sandbox-rb-spawn"
-                        title="Spawn Unit — pick a unit and drop it on the battlefield with a click.">
-                  <span class="ico">🛠</span><span>Spawn Unit</span>
-                </button>
-                <button class="menu-row" id="sandbox-rb-clear"
-                        title="Clear Field — remove every unit from the battlefield.  Asks for confirmation first.">
-                  <span class="ico">🧹</span><span>Clear Field</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Orders</div>
-          <div class="ribbon-group">
-            <button class="tool-btn" id="sandbox-rb-move" title="Move — arm the next ground click as a move order for the current selection (right-click works without arming).">
-              <span class="ico">🚶</span><span class="lbl">Move</span>
-            </button>
-            <button class="tool-btn" id="sandbox-rb-attack" title="Attack — arm the next unit click as an attack order for the current selection (right-click an enemy works without arming).">
-              <span class="ico">🎯</span><span class="lbl">Attack</span>
-            </button>
-            <button class="tool-btn" id="sandbox-rb-stop" title="Stop — clear move + attack orders on every selected unit.">
-              <span class="ico">✋</span><span class="lbl">Stop</span>
-            </button>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Selection</div>
-          <div class="ribbon-group">
-            <button class="tool-btn" id="sandbox-rb-select-all" title="Select All — pick every living unit on the field.">
-              <span class="ico">☑</span><span class="lbl">All</span>
-            </button>
-            <button class="tool-btn" id="sandbox-rb-deselect" title="Deselect — clear the current selection.">
-              <span class="ico">☐</span><span class="lbl">None</span>
-            </button>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Camera</div>
-          <div class="ribbon-group">
-            <button class="tool-btn" id="sandbox-rb-reset-cam" title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom.">
-              <span class="ico">📷</span><span class="lbl">Reset</span>
-            </button>
-          </div>
-        </div>
-        <!-- Right-aligned Developer Tools dropdown — visibility toggles
-             for the floating inspector panels.  Pushed to the far end
-             of the ribbon via margin-left:auto in the CSS so it always
-             sits opposite the leftmost (Spawn) section. -->
-        <div class="ribbon-section ribbon-section-right sandbox-rb-devtools-section">
-          <div class="ribbon-label">Developer Tools</div>
-          <div class="ribbon-group">
-            <!-- Matches the unit-editor's ribbon-dropdown structure
-                 so wireModelRibbonDropdown can drive it:
-                 .ribbon-dropdown > [.ribbon-dropdown-btn + .ribbon-dropdown-popup].
-                 The popup is fixed-positioned by JS below the button,
-                 escaping the ribbon's overflow clip. -->
-            <div class="ribbon-dropdown" id="sandbox-rb-devtools-dropdown">
-              <button class="tool-btn ribbon-dropdown-btn" id="sandbox-rb-devtools-btn"
-                      title="Toggle visibility of the floating inspector panels.">
-                <span class="ico">🛠</span><span class="lbl">Panels</span><span class="chev-down">▾</span>
-              </button>
-              <div class="ribbon-dropdown-popup hidden" id="sandbox-rb-devtools-popup">
-                <!-- Developer Controls — toggles the per-unit developer
-                     editors at the bottom of the Controls panel
-                     (Active toggle, Health, Build %, Build stance,
-                     Armoured).  Move / Fire orders are NOT developer-
-                     level and stay visible regardless.  data-dev-toggle
-                     selects this row in the click handler so it bypasses
-                     the standard panel show/hide logic. -->
-                <button class="menu-row toggle-row" data-on="1" data-dev-toggle="controls-dev-section"
-                        title="Developer Controls — show / hide the editors at the bottom of the Controls panel that let you set Health, Build %, Build stance, and the other per-unit COB ports.">
-                  <span class="ico">🎮</span><span>Developer Controls</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts"
-                        title="Runtime overlay — active script threads, instruction counters, sim ticks.">
-                  <span class="ico">⏱</span><span>Runtime</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-effects"
-                        title="Effects overlay — every live particle across every binding (projectiles, smoke, sparks).">
-                  <span class="ico">✨</span><span>Effects</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-audio"
-                        title="Audio overlay — every sound currently playing across every unit.">
-                  <span class="ico">🔊</span><span>Audio</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="sandbox-panel"
-                        title="Sandbox Controls — the floating Spawn panel.">
-                  <span class="ico">🛠</span><span>Sandbox Controls</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
-                        title="Renderer overlay — camera pose, FPS, tracking checkbox.">
-                  <span class="ico">🎥</span><span>Renderer</span><span class="menu-check">✓</span>
-                </button>
-                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
-                        title="Unit Variables overlay — current value of every COB `static-var` the scripts share.">
-                  <span class="ico">📊</span><span>Unit Variables</span><span class="menu-check">✓</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Sandbox-mode ribbon — React-managed now (see /ui/sandbox/sandbox-ribbon.js).
+           Composes the shared Ribbon primitives from /ui/common/ribbon.js.
+           Mount slot uses `display: contents` so the inner `.ribbon.sandbox-ribbon`
+           is treated as a direct child of `.model-viewer-shell` for the
+           grid-area + sandbox-mode visibility CSS. -->
+      <div id="sandbox-ribbon-mount" style="display: contents"></div>
 
       <aside class="sidebar">
         <!-- Two-tab left panel: Pieces (the 3DO piece hierarchy with
@@ -685,118 +217,29 @@
            viewer's View dropdown.  Same DOM convention as the map
            editor's .dev-stats panels so the drag + persist helper
            code can be shared. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-scripts" title="Drag this header to move the Runtime overlay">
-        <div class="mv-inspector-header" id="mv-inspector-scripts-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Runtime</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-scripts"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-scripts"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <!-- Runtime-wide controls (simulation speed + pause / resume /
-             step / stop-all) sit in their own bar above the unit list
-             so the header stays focused on identity + chrome.  These
-             act on the whole runtime; per-unit actions render inside
-             each unit's group header. -->
-        <!-- Stats block — two lines of live telemetry sit above the
-             Speed slider so the user can monitor the runtime's
-             throughput at a glance.  Refreshed by the inspector
-             throttle (4 Hz). -->
-        <div class="mv-runtime-stats" title="Live runtime telemetry — refreshed 4× per second.">
-          <div class="mv-runtime-stats-row mv-runtime-stats-row-3">
-            <span class="mv-runtime-stat" title="Total fixed 25 ms ticks executed since the runtime started.">
-              <span class="mv-runtime-stat-label">Tick</span>
-              <span class="mv-runtime-stat-value" id="mv-runtime-stat-tick">0</span>
-            </span>
-            <span class="mv-runtime-stat" title="COB bytecode operations executed during the most recent tick() call (sums every fixed sub-step the call drained).">
-              <span class="mv-runtime-stat-label">Ops</span>
-              <span class="mv-runtime-stat-value" id="mv-runtime-stat-inst">0</span>
-            </span>
-            <span class="mv-runtime-stat" title="Wall-clock duration of the most recent tick() call (may drain several fixed sub-steps).">
-              <span class="mv-runtime-stat-label">Last</span>
-              <span class="mv-runtime-stat-value" id="mv-runtime-stat-last">0.0 ms</span>
-            </span>
-          </div>
-          <div class="mv-runtime-stats-row">
-            <span class="mv-runtime-stat" title="Number of units currently registered with the runtime.">
-              <span class="mv-runtime-stat-label">Units</span>
-              <span class="mv-runtime-stat-value" id="mv-runtime-stat-units">0</span>
-            </span>
-            <span class="mv-runtime-stat" title="Total live threads across every unit.">
-              <span class="mv-runtime-stat-label">Threads</span>
-              <span class="mv-runtime-stat-value" id="mv-runtime-stat-threads">0</span>
-            </span>
-          </div>
-        </div>
-        <div class="mv-runtime-speed" title="Simulation speed — scales every unit's tick clock.  Mirrors the COB menu's Playback slider.">
-          <label class="mv-runtime-speed-label">Speed</label>
-          <input type="range" min="1" max="1000" value="100" step="1" id="mv-runtime-speed" class="mv-runtime-speed-input"
-                 title="Drag to slow down or speed up the simulation.  Range 0.01× to 10×; 1.00× = real time.  Hit + / − to step in 10% increments." />
-          <span class="mv-runtime-speed-val" id="mv-runtime-speed-val">1.00×</span>
-        </div>
-        <div class="mv-inspector-controls">
-          <button class="mv-runtime-ctrl mv-threads-toggle" id="mv-threads-toggle"
-                  title="Pause / Resume — toggle the runtime between paused and running.  Spacebar does the same thing.">⏸ Pause</button>
-          <button class="mv-runtime-ctrl mv-threads-step" id="mv-threads-step"
-                  title="Step — advance one fixed-rate tick (25 ms of script time) across every unit.">⤳ Step</button>
-          <button class="mv-runtime-ctrl mv-threads-stopall mv-runtime-ctrl-danger" id="mv-threads-stopall"
-                  title="Stop all threads on every unit.  Animators keep their last pose; nothing else changes.">⏹ Stop All</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-scripts-body">
-          <div class="mv-inspector-empty">No active threads on any unit.</div>
-        </div>
-      </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-actions" title="Drag this header to move the Actions overlay">
-        <div class="mv-inspector-header" id="mv-inspector-actions-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Actions</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-actions"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-actions"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-actions-body">
-          <label class="mv-actions-filter">
-            <input type="checkbox" id="mv-actions-private" />
-            <span>Include Private</span>
-          </label>
-          <div class="mv-actions-list" id="mv-actions-list">
-            <div class="mv-inspector-empty">No COB loaded.</div>
-          </div>
-        </div>
-      </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag this header to move the Unit Variables overlay">
-        <div class="mv-inspector-header" id="mv-inspector-staticvars-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Unit Variables</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-staticvars"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-staticvars"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-staticvars-body">
-          <div class="mv-inspector-empty">No COB loaded.</div>
-        </div>
-      </aside>
+      <!-- Runtime overlay rendered by Preact — see /ui/panels/runtime-panel.js.
+           Stats + Speed slider + Pause/Step/Stop All controls + the
+           per-unit thread list all live in the React tree now.  Clicking
+           a thread row still opens the (vanilla) debugger modal via the
+           host bridge's openThreadCodeModal callback. -->
+      <!-- Script Commands overlay rendered by Preact — see /ui/panels/script-commands-panel.js.
+           Mount point + chrome are injected by mountInspectorPanels()
+           into the .model-viewer-stage so this slot stays empty in the
+           source HTML. -->
+      <!-- Unit Variables (staticvars) overlay rendered by Preact —
+           see /ui/panels/static-vars-panel.js.  Mount point + chrome are
+           injected by mountInspectorPanels() into the
+           .model-viewer-stage so this slot stays empty in the
+           source HTML. -->
       <!-- Effects overlay: live inspector of the cob particle pool.
            Header row shows totals (alive particles, by kind); body is
            a virtualised-feel list of currently-alive particles with
            kind, world XYZ, velocity vector, and life-remaining.  Used
            to debug what the SFX pipeline is doing in real time. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-effects" title="Drag this header to move the Effects overlay">
-        <div class="mv-inspector-header" id="mv-inspector-effects-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Effects</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-effects"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-effects"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-effects-body">
-          <div class="mv-inspector-empty">No particles in flight.</div>
-        </div>
-      </aside>
+      <!-- Effects overlay rendered by Preact — see /ui/panels/effects-panel.js.
+           Mount point + chrome are injected by mountInspectorPanels()
+           into the .model-viewer-stage so this slot stays empty in the
+           source HTML. -->
       <!-- Audio overlay — live debugger for the AudioPool.  Lists
            every sound currently playing with its stem, source label
            (unit + event name, or "Weapon: fire"), the world XYZ the
@@ -804,134 +247,26 @@
            piece anchor for weapons), volume, and a progress bar from
            startMs / durationMs.  Same chrome as the Effects panel
            so the user can drag, collapse, and close consistently. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-audio" title="Drag this header to move the Audio overlay">
-        <div class="mv-inspector-header" id="mv-inspector-audio-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Audio</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-audio"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-audio"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-audio-body">
-          <div class="mv-inspector-empty">No sounds playing.</div>
-        </div>
-      </aside>
+      <!-- Audio overlay rendered by Preact — see /ui/panels/audio-panel.js.
+           Mount point + chrome are injected by mountInspectorPanels()
+           into the .model-viewer-stage so this slot stays empty in the
+           source HTML. -->
       <!-- Controls overlay — drives the loaded unit.  Top section is
            a row of action buttons (Move, Primary, Secondary, Tertiary)
            that arm a click-to-target gesture on the canvas; bottom
            section is the original Ports table (Active / Move orders /
            Fire orders / Health / Build %).  Each studio tab gets its
            own panel state via the shared drag/persist harness. -->
-      <aside class="mv-inspector hidden" id="mv-inspector-ports" title="Drag this header to move the Controls overlay">
-        <div class="mv-inspector-header" id="mv-inspector-ports-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Controls</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-ports"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-ports"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <!-- Action button row.  Buttons render disabled when the unit
-             doesn't support the action (no MaxVelocity, missing
-             AimWeapon script).  Click → arms the next scene click as
-             "set this target".  No toggle: re-clicking a button just
-             re-arms (with the previous arm cancelled).  Use Stop to
-             clear targets + halt the unit. -->
-        <!-- Pre-Create banner — shown when the unit's COB has a Create
-             script that hasn't been run yet.  Replaces the action grid
-             until the user clicks Create Unit (or canvas click auto-
-             triggers it).  Once Create completes, refreshMvControlsGating
-             hides this row and reveals the action grid. -->
-        <div class="mv-controls-create-row" id="mv-controls-create-row" style="display:none">
-          <button class="btn primary mv-controls-create-btn" id="mv-controls-create-btn"
-                  title="Run the unit's Create script — initialises piece visibility / poses and unlocks the Move / Aim / Fire controls.">
-            ⚙ Create Unit
-          </button>
-        </div>
-        <!-- Sandbox empty-state row.  Sits in the same slot as the
-             action grid; refreshMvControlsGating flips between them
-             based on whether anything is selected.  Single-unit
-             mode never reaches this — there's always exactly one
-             viewed unit. -->
-        <div class="mv-controls-empty-row" id="mv-controls-empty-row" style="display:none">
-          <div class="mv-inspector-empty">No Units Selected</div>
-        </div>
-        <div class="mv-controls-actions" id="mv-controls-actions">
-          <button class="mv-ctrl-action" data-ctrl-action="move" disabled
-                  title="Move — click here, then click in the scene to walk the unit there at its FBI-defined speed.  StartMoving / StopMoving scripts fire when those exist.">
-            <span class="ico">🚶</span><span class="lbl">Move</span>
-          </button>
-          <button class="mv-ctrl-action" data-ctrl-action="primary" disabled
-                  title="Primary weapon — click here, then click in the scene to lock the primary aim.  AimPrimary fires each tick; when it returns 1 FirePrimary fires at the weapon's reload rate.">
-            <span class="ico">🎯</span><span class="lbl">Primary</span>
-          </button>
-          <button class="mv-ctrl-action" data-ctrl-action="secondary" disabled
-                  title="Secondary weapon — click here, then click in the scene to lock the secondary aim.  Stored target is independent of Primary's.">
-            <span class="ico">🎯</span><span class="lbl">Secondary</span>
-          </button>
-          <button class="mv-ctrl-action" data-ctrl-action="tertiary" disabled
-                  title="Tertiary weapon — click here, then click in the scene to lock the tertiary aim.  Stored target is independent of the other two.">
-            <span class="ico">🎯</span><span class="lbl">Tertiary</span>
-          </button>
-          <button class="mv-ctrl-action mv-ctrl-action-stop" data-ctrl-action="stop"
-                  title="Stop — clear every move + aim target on this unit.  The walk loop halts (StopMoving fires when defined) and Aim*/Fire* schedulers drop their targets.">
-            <span class="ico">✋</span><span class="lbl">Stop</span>
-          </button>
-          <button class="mv-ctrl-action mv-ctrl-action-reset" id="mv-controls-reset-btn" disabled
-                  title="Reset is only available after the unit has been created.">
-            <span class="ico">↺</span><span class="lbl">Reset</span>
-          </button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-ports-body">
-          <!-- Body is built dynamically by renderMvPortsPanel so the
-               rows stay in sync with the per-tab port state. -->
-          <div class="mv-inspector-empty">No COB loaded.</div>
-        </div>
-      </aside>
-      <!-- Renderer overlay (historically "Camera") — surfaces both the
-           orbit camera's pose AND the GL canvas's frame rate.  DOM id
-           kept as mv-inspector-camera so saved layout positions don't
-           orphan; user-facing label is "Renderer". -->
-      <aside class="mv-inspector hidden" id="mv-inspector-camera" title="Drag this header to move the Renderer overlay">
-        <div class="mv-inspector-header" id="mv-inspector-camera-header">
-          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Renderer</span>
-          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-camera"
-                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
-          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-camera"
-                  title="Close this panel (re-open later from the View menu).">×</button>
-        </div>
-        <div class="mv-inspector-body" id="mv-inspector-camera-body">
-          <div class="dev-stats-row" title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames."><span class="dev-stats-label">FPS</span><span class="dev-stats-value" id="mv-ci-fps">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Position</span><span class="dev-stats-value" id="mv-ci-eye">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Target</span><span class="dev-stats-value" id="mv-ci-target">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Yaw</span><span class="dev-stats-value" id="mv-ci-yaw">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Pitch</span><span class="dev-stats-value" id="mv-ci-pitch">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Distance</span><span class="dev-stats-value" id="mv-ci-dist">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">FOV</span><span class="dev-stats-value" id="mv-ci-fov">—</span></div>
-          <!-- Tracking toggle — when on, the camera target snaps to
-               the unit's XZ every frame so a walking / flying unit
-               stays centred.  Mirrored by the T hot-key; cleared
-               automatically when the user does a shift-pan. -->
-          <label class="dev-stats-row mv-ci-track-row" title="Spin the camera around the scene.  Stops automatically on any user gesture (drag, wheel, pan).">
-            <span class="dev-stats-label">Auto-Rotate</span>
-            <input type="checkbox" id="mv-ci-autorotate" class="mv-ci-track-cb" />
-          </label>
-          <label class="dev-stats-row mv-ci-track-row" title="Track the unit's position with the camera.  Toggle with the T key.  Shift-pan clears this automatically.">
-            <span class="dev-stats-label">Tracking</span>
-            <input type="checkbox" id="mv-ci-track" class="mv-ci-track-cb" />
-          </label>
-          <!-- "Following: <name>" — shows the unit the camera is
-               currently locked onto, hidden when tracking is off.
-               Surfaces OrbitCamera.trackedName so the user can see
-               which of N selected units in sandbox the T-key picked. -->
-          <div class="dev-stats-row mv-ci-following-row" id="mv-ci-following-row" style="display:none">
-            <span class="dev-stats-label">Following</span>
-            <span class="dev-stats-value" id="mv-ci-following">—</span>
-          </div>
-        </div>
-      </aside>
+      <!-- Controls overlay rendered by Preact — see /ui/panels/controls-panel.js.
+           Mount point + chrome + action grid + port body all live in
+           the React tree now.  The action grid uses
+           dangerouslySetInnerHTML so MvControls + the sandbox
+           controls-intercept can still attach listeners by class
+           selector without React re-renders wiping them. -->
+      <!-- Renderer overlay rendered by Preact — see /ui/panels/renderer-panel.js.
+           Mount point + chrome are injected by mountInspectorPanels()
+           into the .model-viewer-stage so this slot stays empty in the
+           source HTML. -->
       </div>
     </div>
   </div>
@@ -1097,177 +432,19 @@
     </div>
   </div>
 
-  <div id="confirm-dialog" class="dialog hidden">
-    <div class="dialog-card dialog-card-narrow">
-      <h1 id="confirm-title">Confirm</h1>
-      <p class="dialog-sub" id="confirm-message"></p>
-      <div class="dialog-actions">
-        <button id="confirm-cancel" class="btn">Cancel</button>
-        <button id="confirm-ok" class="btn primary">OK</button>
-      </div>
-    </div>
-  </div>
+  <!-- The confirm modal (legacy #confirm-dialog) is now rendered by
+       React on demand into a #confirm-dialog-mount node appended at
+       body-end.  See /ui/dialogs/confirm-dialog.js — the lazy mount + signal-
+       driven open state means the markup only exists while a confirm
+       is in flight, with no static placeholder for the React tree to
+       fight with. -->
 
   <!-- Settings — centralised tunables that persist via PrefsStore.  All
        values live on state.settings; the dialog pushes edits back and
        saves on Apply.  Reset restores the shipped defaults. -->
-  <div id="settings-dialog" class="dialog hidden">
-    <div class="dialog-card dialog-card-wide">
-      <h1>Settings</h1>
-      <p class="dialog-sub">User preferences — saved automatically and remembered across sessions.</p>
-      <div class="settings-tabs" role="tablist">
-        <button class="settings-tab active" data-settings-tab="general" role="tab" aria-selected="true">General</button>
-        <button class="settings-tab" data-settings-tab="map" role="tab" aria-selected="false">Map Editor</button>
-        <button class="settings-tab" data-settings-tab="unit" role="tab" aria-selected="false">Unit Editor</button>
-      </div>
-      <div class="settings-tab-body active" data-settings-tab-body="general">
-        <div class="settings-grid">
-          <section class="settings-section">
-            <h2>Heartbeat</h2>
-            <label class="field">
-              <span>Idle poll interval (ms)</span>
-              <input type="number" id="set-hb-idle" min="500" max="60000" step="500" />
-            </label>
-            <label class="field">
-              <span>Reconnect retry interval (ms)</span>
-              <input type="number" id="set-hb-retry" min="200" max="10000" step="100" />
-            </label>
-            <p class="field-help">Once the studio loses contact with the kbot server, it polls more aggressively.  Both intervals take effect on the next tick.</p>
-          </section>
-        </div>
-      </div>
-      <div class="settings-tab-body" data-settings-tab-body="map">
-        <div class="settings-grid">
-          <section class="settings-section">
-            <h2>Zoom</h2>
-            <label class="field">
-              <span>Zoom step (per +/− press)</span>
-              <input type="number" id="set-zoom-step" min="1.05" max="2" step="0.05" />
-            </label>
-            <p class="field-help">Each click of the Zoom + or − button multiplies / divides the zoom by this factor.  Default 1.25.</p>
-          </section>
-          <section class="settings-section">
-            <h2>Brush defaults</h2>
-            <label class="field">
-              <span>Erase brush size (tiles)</span>
-              <input type="number" id="set-erase-size" min="1" max="16" step="1" />
-            </label>
-            <label class="field">
-              <span>Voids brush size (attr cells)</span>
-              <input type="number" id="set-voids-size" min="1" max="32" step="1" />
-            </label>
-            <label class="field">
-              <span>Heightmap brush radius (attr cells)</span>
-              <input type="number" id="set-hm-radius" min="1" max="32" step="1" />
-            </label>
-            <label class="field">
-              <span>Heightmap brush strength</span>
-              <input type="number" id="set-hm-strength" min="1" max="32" step="1" />
-            </label>
-          </section>
-          <section class="settings-section">
-            <h2>Panel visibility defaults</h2>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-minimap" />
-              <span>Minimap</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-camera-info" />
-              <span>Camera &amp; Cursor</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-gridlines" />
-              <span>Gridlines</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-animate-features" />
-              <span>Animate features</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-voids" />
-              <span>Show voids overlay</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-contours" />
-              <span>Show contour lines</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-buildable" />
-              <span>Show buildable area</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-features" />
-              <span>Show features</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-show-startpos" />
-              <span>Show start positions</span>
-            </label>
-          </section>
-        </div>
-      </div>
-      <div class="settings-tab-body" data-settings-tab-body="unit">
-        <div class="settings-grid">
-          <section class="settings-section">
-            <h2>Default Environment</h2>
-            <label class="field">
-              <span>World look for new model tabs</span>
-              <select id="set-unit-env">
-                <option value="greenworld">Greenworld</option>
-                <option value="archipelago">Archipelago</option>
-                <option value="metal">Metal</option>
-                <option value="desert">Desert</option>
-                <option value="lava">Lava</option>
-                <option value="marsh">Marsh</option>
-                <option value="slate">Slate</option>
-                <option value="moon">Lunar</option>
-                <option value="mars">Mars</option>
-                <option value="sunset">Sunset</option>
-                <option value="night">Night</option>
-                <option value="alienTwin">Alien (twin suns)</option>
-              </select>
-            </label>
-            <p class="field-help">The Studio Options &gt; Environment picker still lets you switch per-tab.  This just sets what every newly-opened model starts on.</p>
-          </section>
-          <section class="settings-section">
-            <h2>Effect defaults</h2>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-unit-reflections" />
-              <span>Reflections</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-unit-bob" />
-              <span>Bobbing / Swaying</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-unit-water-reflections" />
-              <span>Water Surface Reflections</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-unit-specular" />
-              <span>Specular Highlights</span>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-unit-godbeams" />
-              <span>God Beams</span>
-            </label>
-          </section>
-          <section class="settings-section">
-            <h2>Gestures</h2>
-            <label class="checkbox-row">
-              <input type="checkbox" id="set-force-target-ground" />
-              <span>Force-target ground on click</span>
-            </label>
-            <p class="field-help">When enabled, clicking the ground fires the primary weapon at that point.  In the Sandbox you must hold <kbd>Shift</kbd> to disambiguate from a plain selection click; in the Unit Viewer plain click is enough.  Default off.</p>
-          </section>
-        </div>
-      </div>
-      <div class="dialog-actions">
-        <button id="settings-reset" class="btn" title="Restore shipped defaults">Reset to defaults</button>
-        <button id="settings-apply" class="btn primary" title="Save changes and close">Close</button>
-      </div>
-    </div>
-  </div>
+  <!-- Settings dialog is React-managed now (see /ui/dialogs/settings-dialog.js).
+       The static markup that used to live here is gone; React mounts its
+       own DOM into a #dialogs-settings-mount node on demand. -->
 
   <!-- Help / keyboard cheat-sheet.  Opens on ? or via the Help ribbon
        button; Escape (or clicking Close) dismisses.  Sections are
@@ -1641,10 +818,13 @@
          button at the end opens the popout (which now lives outside
          .app so it stays visible when the 3DO viewer dialog overlays
          the editor and hides .app). -->
-    <nav class="map-tabs" id="map-tabs" role="tablist" aria-label="Open documents">
-      <div class="map-tabs-list" id="map-tabs-list"></div>
-      <button id="map-tab-add" class="map-tab-add" type="button" title="Open another document">+</button>
-    </nav>
+    <!-- Tab strip is React-managed (see /ui/common/tab-bar.js).  Hosts
+         both map tabs (when the user has a map open) and unit /
+         sandbox tabs.  The host pushes tabs[] + activeTabIndex via
+         setTabs() on each switch/open/close.  Mount slot uses
+         `display: contents` so the inner `<nav class="map-tabs">`
+         lands as a direct grid child of `.app` for `grid-area: tabs`. -->
+    <div id="map-tabs-mount" style="display: contents"></div>
 
     <div class="ribbon" id="ribbon">
       <div class="ribbon-section">
@@ -2109,30 +1289,30 @@
     </div>
   </div>
 
-  <!-- Tab-bar "+" popup.  Lifted to body-level so it stays visible
-       and clickable whether the map editor (.app) or the 3DO viewer
-       dialog is on top — both surfaces have a "+" button that
-       anchors this same popup. -->
-  <div class="map-tab-add-popup hidden" id="map-tab-add-popup">
-    <div class="menu-section-label">Map Editing</div>
-    <button id="map-tab-add-new" class="menu-row" title="Start a new map in a fresh tab">
-      <span class="ico">✨</span><span>New Map</span>
-    </button>
-    <button id="map-tab-add-open" class="menu-row" title="Open an existing map in a fresh tab">
-      <span class="ico">📂</span><span>Open Existing Map</span>
-    </button>
-    <div class="menu-section-label">Unit Editing</div>
-    <button id="map-tab-add-new-model" class="menu-row" disabled title="Coming soon: start a new unit from scratch (3DO geometry + FBI metadata + COB script)">
-      <span class="ico">✨</span><span>New Unit</span>
-    </button>
-    <button id="map-tab-add-model" class="menu-row" title="Browse the loaded VFS for a TA unit (FBI / 3DO / COB) and open it in a fresh tab alongside any maps you have open">
-      <span class="ico">🛠</span><span>Open Unit</span>
-    </button>
-    <button id="map-tab-add-sandbox" class="menu-row" title="Open a fresh Sandbox tab — blank battlefield where you can spawn multiple units and issue orders.">
-      <span class="ico">🪖</span><span>Sandbox</span>
-    </button>
-  </div>
+  <!-- Tab-bar "+" popup — React-managed now (see /ui/common/tab-bar.js
+       and /ui/common/ribbon.js Dropdown).  Hangs off the TabBar's "+"
+       trigger via the same single-open Dropdown signal the ribbon
+       dropdowns use.  Legacy static markup gone. -->
 
+  <!-- Import map for the vendored Preact + signals + htm ESM modules.
+       MUST come before any <script type="module"> so the browser knows
+       how to resolve the bare specifiers ("preact", "preact/hooks",
+       "@preact/signals", "htm") that the vendored bundles + our own
+       /ui modules import.  Vendor licenses are preserved alongside
+       each module in /vendor — preact + @preact/signals are MIT,
+       htm is Apache 2.0 (both permissive, both compatible with the
+       project's MIT license). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "preact": "/vendor/preact/preact.mjs",
+      "preact/hooks": "/vendor/preact/hooks/hooks.mjs",
+      "@preact/signals-core": "/vendor/preact-signals-core/signals-core.mjs",
+      "@preact/signals": "/vendor/preact-signals/signals.mjs",
+      "htm": "/vendor/htm/htm.mjs"
+    }
+  }
+  </script>
   <script type="module" src="/studio.js"></script>
 </body>
 </html>
