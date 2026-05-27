@@ -161,11 +161,13 @@ import {
 // /ui/dialogs/ alongside the React component.
 import { confirmDialog } from './ui/dialogs/confirm.js'
 
-// Welcome dialog nanolathe particle FX — pure canvas animation,
-// no host state or React touch.  Mounts on #welcome-nanofx and
-// observes #welcome-dialog's hidden class to suspend itself when
-// the user clicks through into the editor.
+// Welcome dialog visual + audio FX — all three are pure
+// self-contained subsystems that observe #welcome-dialog's hidden
+// class via MutationObserver to suspend / resume on dialog close.
+// No host state, no React touch.
 import { wireWelcomeNanoFX } from './ui/screens/welcome/fx/nano-fx.js'
+import { wireWelcomeAmbient } from './ui/screens/welcome/fx/ambient.js'
+import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
 
 // KBot Studio — browser-side editor.
 //
@@ -985,194 +987,22 @@ function wireWelcomeKeyboard() {
 }
 
 // wireWelcomeDropZone binds dragover/drop on the welcome modal so the
-// user can drop a .tnt (+ optional .ota sibling) from their desktop
-// ── Welcome dialog nanolathe FX ───────────────────────────────────────
+// ── Welcome dialog FX ─────────────────────────────────────────────────
 //
-// wireWelcomeNanoFX moved to /ui/screens/welcome/fx/nano-fx.js.
-// Pure canvas animation — observed the #welcome-dialog hidden class
-// to suspend itself while the user is in the editor.
+// All three welcome-screen visual / audio subsystems moved to
+// /ui/screens/welcome/fx/:
+//   - nano-fx.js  — particle nanolathe spray
+//   - ambient.js  — one-shot Web Audio construction cue
+//   - glamour.js  — cross-fading splash slideshow
+// Each observes #welcome-dialog's hidden class via MutationObserver
+// so its RAF / timer / audio stops cleanly when the user clicks
+// through into the editor.
 
-
-// Welcome glamour slideshow — TA ships ~50 splash PCXs under
-// bitmaps/glamour/.  We fade through them behind the welcome card,
-// rotating every WELCOME_GLAMOUR_INTERVAL_MS.  The next image is
-// fetched into a hidden <img> first; only after `decode()` resolves
-// do we cross-fade, so the user never sees a partial paint.
-const WELCOME_GLAMOUR_INTERVAL_MS = 15000
-
-// One-shot "construction" cue on the welcome screen.  Plays once
-// when the user first interacts with the page (autoplay gate), then
-// stays silent — the looping ambient was too persistent so we
-// reduced it to a single bookend that lines up with the dialog's
-// "particles constructing the display" theme.
-//
-// Implementation goes through Web Audio (not HTMLAudioElement) for
-// two reasons: TA's WAVs are 8-bit PCM at 11025 Hz and Chrome's
-// <audio> element handles those unreliably (silent-decode bugs that
-// vary by version); and AudioContext.resume() is the
-// canonical way to satisfy the autoplay gate via a user gesture.
-const WELCOME_AMBIENT_VOLUME = 0.18
-
-function wireWelcomeAmbient() {
-  const wel = $('#welcome-dialog')
-  if (!wel) return
-  const AudioCtor = window.AudioContext || window.webkitAudioContext
-  if (!AudioCtor) return // older browsers — silently skip
-  let ctx = null
-  let buffer = null
-  let activeSrc = null
-  let kicked = false
-  let visible = !wel.classList.contains('hidden')
-
-  // Fetch + decode at boot so playback on first gesture is instant.
-  async function loadBuffer() {
-    try {
-      const resp = await fetch('/api/studio/sound/build1')
-      if (!resp.ok) return
-      const data = await resp.arrayBuffer()
-      ctx = ctx || new AudioCtor()
-      buffer = await new Promise((resolve, reject) => {
-        // Use the callback form — Safari historically didn't return a
-        // Promise from decodeAudioData even though the modern signature
-        // does.  Either form works in Chrome / Firefox.
-        ctx.decodeAudioData(data, resolve, reject)
-      })
-    } catch { /* decode failed — silently no-op */ }
-  }
-  loadBuffer()
-
-  function tryPlay() {
-    if (!buffer || !ctx) return
-    if (ctx.state === 'suspended') ctx.resume()
-    const src = ctx.createBufferSource()
-    const gain = ctx.createGain()
-    src.buffer = buffer
-    gain.gain.value = WELCOME_AMBIENT_VOLUME
-    src.connect(gain).connect(ctx.destination)
-    src.start()
-    activeSrc = src
-    src.addEventListener('ended', () => { if (activeSrc === src) activeSrc = null })
-  }
-  function stop() {
-    if (!activeSrc) return
-    try { activeSrc.stop() } catch { /* already stopped */ }
-    activeSrc = null
-  }
-
-  const onGesture = () => {
-    if (kicked) return
-    kicked = true
-    if (visible) tryPlay()
-  }
-  // First user input anywhere in the page satisfies the autoplay gate.
-  for (const ev of ['pointerdown', 'pointermove', 'keydown']) {
-    document.addEventListener(ev, onGesture, { once: true, passive: true })
-  }
-
-  // Stop on dialog hide so closing the welcome screen mid-play
-  // cuts the sound cleanly.  No restart on re-show — it's a one-
-  // shot bookend, not an ambient loop.
-  const obs = new MutationObserver(() => {
-    visible = !wel.classList.contains('hidden')
-    if (!visible) stop()
-  })
-  obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
-}
-
-function wireWelcomeGlamour() {
-  const wel = $('#welcome-dialog')
-  const imgA = $('#welcome-glamour-a')
-  const imgB = $('#welcome-glamour-b')
-  if (!wel || !imgA || !imgB) return
-  let slugs = []
-  let order = []          // shuffled index list — exhausted before reshuffle so we cycle without repeats
-  let active = imgA       // currently-visible <img>
-  let standby = imgB      // the one we paint into next
-  let timer = 0
-  let started = false
-
-  const shuffle = (arr) => {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[arr[i], arr[j]] = [arr[j], arr[i]]
-    }
-    return arr
-  }
-  const nextSlug = () => {
-    if (slugs.length === 0) return null
-    if (order.length === 0) {
-      order = shuffle([...slugs.keys()])
-      // Avoid repeating the just-shown slug back-to-back when the
-      // reshuffle happens to put it first.
-      const lastSrc = active.src
-      if (slugs.length > 1 && order.length > 0) {
-        const top = slugs[order[0]]
-        if (top && lastSrc.endsWith('/' + top)) {
-          // Rotate one off the front to break the repeat.
-          order.push(order.shift())
-        }
-      }
-    }
-    return slugs[order.shift()]
-  }
-  const swap = () => {
-    const tmp = active
-    active = standby
-    standby = tmp
-  }
-  async function loadInto(img, slug) {
-    img.src = `/api/studio/glamour/image/${encodeURIComponent(slug)}`
-    if (typeof img.decode === 'function') {
-      try { await img.decode() } catch { /* fall back to natural load */ }
-    } else {
-      await new Promise((r) => { img.onload = r; img.onerror = r })
-    }
-  }
-  async function tick() {
-    const slug = nextSlug()
-    if (!slug) return
-    await loadInto(standby, slug)
-    if (wel.classList.contains('hidden')) return // dialog closed mid-load
-    standby.classList.add('visible')
-    active.classList.remove('visible')
-    swap()
-  }
-  async function start() {
-    if (started) return
-    started = true
-    try {
-      const resp = await fetch('/api/studio/glamour/list')
-      if (!resp.ok) return
-      const data = await resp.json()
-      slugs = Array.isArray(data.images) ? data.images : []
-    } catch { return }
-    if (slugs.length === 0) return
-    // First image: load, then fade in.
-    const slug = nextSlug()
-    if (!slug) return
-    await loadInto(active, slug)
-    if (wel.classList.contains('hidden')) return
-    active.classList.add('visible')
-    timer = setInterval(tick, WELCOME_GLAMOUR_INTERVAL_MS)
-  }
-  function stop() {
-    if (timer) { clearInterval(timer); timer = 0 }
-  }
-  // Drive start/stop off the dialog's `hidden` class — same pattern
-  // the nanofx loop uses.  The slideshow only fires while the user
-  // is actually looking at the welcome screen.
-  const sync = () => {
-    if (wel.classList.contains('hidden')) stop()
-    else start()
-  }
-  const obs = new MutationObserver(sync)
-  obs.observe(wel, { attributes: true, attributeFilter: ['class'] })
-  sync()
-}
-
+// wireWelcomeDropZone lets the welcome screen accept a drag-drop
+// of a .tnt file (+ optional .ota sibling) from the user's desktop
 // and have the editor load it without going through VFS.  The drop
-// targets are the welcome-options grid; the body is a fallback so the
-// page doesn't navigate away when a file misses the modal.
+// targets are the welcome-options grid; the body is a fallback so
+// the page doesn't navigate away when a file misses the modal.
 function wireWelcomeDropZone() {
   const wel = $('#welcome-dialog')
   if (!wel) return
