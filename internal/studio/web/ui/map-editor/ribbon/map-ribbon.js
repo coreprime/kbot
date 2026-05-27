@@ -116,12 +116,6 @@ function FileDropdown() {
         label="File"
         title="File actions" />
       <${Dropdown} id="file-dropdown" anchorId="file-dropdown-btn">
-        <${MenuRow} icon="📄" label="New" dropdownId="file-dropdown"
-          title="Start a new map (discards the current one)"
-          onClick=${() => mapRibbonBridge.fileNew()} />
-        <${MenuRow} icon="🪟" label="New Window" dropdownId="file-dropdown"
-          title="Open another KBot Studio in a new browser tab so you can work on two maps side by side"
-          onClick=${() => mapRibbonBridge.fileNewWindow()} />
         <${MenuRow} icon="📂" label="Open" dropdownId="file-dropdown"
           title="Open an existing map from the loaded game data"
           onClick=${() => mapRibbonBridge.fileOpen()} />

@@ -127,7 +127,14 @@ export class ArmedCursor {
   }
 
   #refresh() {
-    const visible = this._slot && this._inside
+    // Hide the overlay when our owning canvas has been pulled out of
+    // the DOM — tab swaps detach the inactive tab's canvas but leave
+    // its ArmedCursor alive, so without this gate a setSlot() called
+    // by the still-alive MvControls (e.g. on a Controls panel mode
+    // flip) would render the cursor overlay frozen at whatever x/y
+    // the mousemove last captured before the canvas was detached.
+    const canvasDetached = this.canvas && !this.canvas.isConnected
+    const visible = this._slot && this._inside && !canvasDetached
     if (!visible) {
       if (this._overlay) this._overlay.style.display = 'none'
       if (this.canvas) this.canvas.style.cursor = ''

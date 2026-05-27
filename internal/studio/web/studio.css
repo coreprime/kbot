@@ -16,6 +16,13 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
+/* Lock the document to the viewport — without this, a floating panel
+   dragged to (or saved at) coordinates beyond the window edge will
+   extend the document and let the user scroll the ribbon + canvas out
+   of view.  The studio's own scroll surfaces (canvas, drawer, panels)
+   all live inside their own overflow:auto containers, so the body
+   itself never needs to scroll. */
+html, body { overflow: hidden; }
 body {
   font-family: var(--sans);
   background: var(--bg-0);

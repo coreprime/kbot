@@ -77,6 +77,10 @@ export function sharedModelViewerCanvas() {
   return _sharedModelViewerCanvas
 }
 
+// _sandboxLabelCounter — per-page-session counter so the first Sandbox
+// gets "Sandbox 1", the next "Sandbox 2", etc.  Resets on page reload.
+let _sandboxLabelCounter = 0
+
 // openSandboxStub — Sandbox welcome-card entry point.  Routes
 // through the host's tab registry — openTab consults the 'sandbox'
 // descriptor (registered by /ui/sandbox/register-tab.js at boot),
@@ -84,7 +88,8 @@ export function sharedModelViewerCanvas() {
 // No type discriminator + no legacy `sandbox: true` flag — the
 // registry handles dispatch by typeId.
 export function openSandboxStub() {
-  hostCallbacks.openTab?.('sandbox', { displayName: 'Sandbox' })
+  _sandboxLabelCounter += 1
+  hostCallbacks.openTab?.('sandbox', { displayName: `Sandbox ${_sandboxLabelCounter}` })
 }
 
 export async function activateSandboxTab(tab) {
