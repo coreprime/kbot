@@ -29,6 +29,7 @@
 
 import { state, $, hostCallbacks } from '../../host-context.js'
 import { TILE_PX } from '../constants.js'
+import { transformedSourceCell } from '../rotation.js'
 
 // gl owns every WebGL resource the renderer needs.  Re-initialised
 // from scratch by resetGL on map / view swap so the next
@@ -293,8 +294,7 @@ export function buildTileBatch(list, imgW, imgH) {
     const dx0 = tx * TILE_PX, dy0 = ty * TILE_PX
     const dx1 = dx0 + TILE_PX, dy1 = dy0 + TILE_PX
     const src = stamp.sectionPath
-      ? (hostCallbacks.transformedSourceCell?.(0, 0, 1, 1, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV)
-        || { sx: stamp.sx, sy: stamp.sy })
+      ? transformedSourceCell(0, 0, 1, 1, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV)
       : { sx: stamp.sx, sy: stamp.sy }
     // The source cell from the stamp is already pre-rotated (it was
     // baked at stamp-time), but the per-tile rotation/flip still

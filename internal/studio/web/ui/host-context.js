@@ -241,9 +241,6 @@ export const hostCallbacks = {
   // populates them.
   whenImageReady: null,         // (img, kind, cb) => void
   preloadFeatureImage: null,    // (feature) => void
-  // Tile rotation helper — translates (rotation, flipH, flipV) into
-  // the source-cell coordinates used by both the 2D and GL paths.
-  transformedSourceCell: null,  // (rx, ry, origW, origH, rotation, flipH, flipV) => { sx, sy }
   // Feature anchor helpers — the GL renderer needs these to project
   // a feature's attribute-grid coords to world pixels and its sprite
   // origin pixel offset.  Same implementations are still called from
