@@ -15041,7 +15041,12 @@ function mvRefreshRuntimeToggle() {
 // real time, 0.01 = 1/100 speed, 10.0 = 10× fast-forward).  Slider
 // max range matches CobRuntime.setPlaybackRate clamping (0.01 → 10).
 function mvSetSimulationSpeed(rate) {
-  const v = Math.max(0.01, Math.min(10, +rate || 1))
+  // Resolve `rate` to a number, defaulting to 1 only when the caller
+  // passes NaN/undefined/null — `+0` is a valid input that should
+  // clamp UP to 0.01, NOT silently fall back to 1.  Old `|| 1`
+  // version mis-handled the "+/- key stepped past zero" path.
+  const n = Number(rate)
+  const v = Math.max(0.01, Math.min(10, Number.isFinite(n) ? n : 1))
   const cob = modelViewerInstance?.cob
   if (cob) cob.runtime.setPlaybackRate(v)
   // Slider values are percent units (1-1000 = 0.01× - 10×).  Label
