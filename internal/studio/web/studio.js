@@ -409,6 +409,14 @@ import { drawStartPositions } from './ui/map-editor/canvas/start-positions.js'
 // height range covers every attr cell it crosses.
 import { drawRulerOverlay } from './ui/map-editor/canvas/ruler.js'
 
+// 2D-canvas tile pass — drawTiles handles the visible-bounds main
+// loop, drawRotatedTile is the simpler rotation-only sibling used
+// by the terrain-clipboard preview.
+import {
+  drawTiles,
+  drawRotatedTile,
+} from './ui/map-editor/canvas/tiles.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -4354,49 +4362,13 @@ function updateFeatureInfoPanel() {
 // block above.
 
 // ── View-mode renderers ────────────────────────────────────────────────────
-
-// drawTiles renders the stamped section pixels, with rotation, into the
-// editor canvas.  Falls back to a placeholder swatch for cells whose
-// section image hasn't decoded yet (and registers an onload so the
-// canvas re-renders when it does).
-function drawTiles(ctx) {
-  const vb = visibleTileBounds()
-  for (let ty = vb.minTY; ty <= vb.maxTY; ty++) {
-    for (let tx = vb.minTX; tx <= vb.maxTX; tx++) {
-      const stamp = state.tiles[ty * state.tileW + tx]
-      if (!stamp) continue
-      const img = state.sectionImages.get(stamp.sectionPath)
-      if (!img || !img.complete || img.naturalWidth === 0) {
-        ctx.fillStyle = '#3a4d61'
-        ctx.fillRect(tx * TILE_PX, ty * TILE_PX, TILE_PX, TILE_PX)
-        whenImageReady(img, 'render', renderCanvas)
-        continue
-      }
-      drawTransformedTile(ctx, img, stamp.sx, stamp.sy, stamp.rotation || 0, !!stamp.flipH, !!stamp.flipV, tx * TILE_PX, ty * TILE_PX)
-    }
-  }
-}
-
-// visibleTileBounds / visiblePixelBounds moved to
-// /ui/map-editor/viewport.js — imported at the top of this file.
-
-// drawRotatedTile copies one 32×32 source tile from a section image to
-// the destination canvas, rotated by `rotation` quarter-turns clockwise.
-function drawRotatedTile(ctx, img, sx, sy, rotation, dx, dy) {
-  if ((rotation & 3) === 0) {
-    ctx.drawImage(img, sx * 32, sy * 32, 32, 32, dx, dy, TILE_PX, TILE_PX)
-    return
-  }
-  ctx.save()
-  ctx.translate(dx + TILE_PX / 2, dy + TILE_PX / 2)
-  ctx.rotate((rotation & 3) * Math.PI / 2)
-  ctx.drawImage(img, sx * 32, sy * 32, 32, 32, -TILE_PX / 2, -TILE_PX / 2, TILE_PX, TILE_PX)
-  ctx.restore()
-}
-
-// drawHeightmap / drawHeightContours / drawHeightmapOverlay moved
-// to /ui/map-editor/canvas/heightmap.js — imported at the top of
-// this file.
+//
+// drawTiles + drawRotatedTile moved to
+// /ui/map-editor/canvas/tiles.js.  visibleTileBounds /
+// visiblePixelBounds live in /ui/map-editor/viewport.js.
+// drawHeightmap / drawHeightContours / drawHeightmapOverlay live
+// in /ui/map-editor/canvas/heightmap.js.  All imported at the top
+// of this file.
 
 function drawFeatures(ctx) {
   ctx.font = '14px ' + getComputedStyle(document.body).fontFamily
