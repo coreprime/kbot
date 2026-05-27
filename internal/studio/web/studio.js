@@ -64,7 +64,6 @@ import {
   redoStack,
   beginTransaction,
   commitTransaction,
-  abortTransaction,
   undo,
   redo,
   updateUndoButtons,
@@ -383,107 +382,44 @@ import {
 // directly any more.
 import { tryAutoRotatePlacement } from './ui/map-editor/canvas/placement.js'
 
-// Ruler-mode mouse handlers (the dashed-line measure tool).  The
-// matching draw pass moves with renderCanvas via render.js; the
-// mode handlers ride alongside in ruler.js so the click-drop +
-// click-lock interaction stays close to the data it mutates
-// (state.ruler).
+// Per-mode handler modules — the canvas mouse-router (imported
+// further below) owns the actual mousedown/move/up dispatch.
+// Studio.js only pulls in the cleanup hooks the abort path needs
+// (each mode's reset for in-flight drag state) + the auto-switch
+// seeders that tryAutoSwitchAt below pokes when a click in one
+// mode lands on a different mode's pickable.
+import { resetVoidsDrag } from './ui/map-editor/modes/voids.js'
+import { resetPickerDrag } from './ui/map-editor/modes/picker.js'
 import {
-  onRulerMouseDown,
-  onRulerMouseMove,
-} from './ui/map-editor/canvas/ruler.js'
-
-// Voids-mode mouse handlers — paint the impassable attribute
-// cells.  resetVoidsDrag clears the in-flight drag state when the
-// user switches modes mid-drag.
-import {
-  onVoidsMouseDown,
-  onVoidsMouseMove,
-  onVoidsMouseUp,
-  resetVoidsDrag,
-} from './ui/map-editor/modes/voids.js'
-
-// Picker-mode mouse handlers — feature selection via click /
-// shift+click / rect-sweep.  resetPickerDrag clears the in-flight
-// rectangle when abortTransientGestureState fires.
-import {
-  onPickerMouseDown,
-  onPickerMouseMove,
-  onPickerMouseUp,
-  resetPickerDrag,
-} from './ui/map-editor/modes/picker.js'
-
-// Start-points mode handlers — select / drag existing markers,
-// click empty space to place the next sequential marker.
-// resetStartPosDrag is used by abortTransientGestureState +
-// setMode swaps; beginStartPosDragFromAutoSwitch lets the
-// auto-switch path seed the drag state when a click in another
-// mode lands on a marker (R40a).
-import {
-  onStartPosMouseDown,
-  onStartPosMouseMove,
-  onStartPosMouseUp,
   resetStartPosDrag,
   beginStartPosDragFromAutoSwitch,
 } from './ui/map-editor/modes/start-points.js'
-
-// Terrain-select mode handlers — rectangle-sweep capture into the
-// terrain clipboard, drag the floating clipboard, click outside to
-// drop.  resetTerrainDrag clears the in-flight sweep / move when
-// abortTransientGestureState fires (R40b).
+import { resetTerrainDrag } from './ui/map-editor/modes/terrain-select.js'
 import {
-  onTerrainMouseDown,
-  onTerrainMouseMove,
-  onTerrainMouseUp,
-  resetTerrainDrag,
-} from './ui/map-editor/modes/terrain-select.js'
-
-// Feature-select mode handlers — click to grab + drag a placed
-// feature, click empty space with an armed drawer selection to
-// drop a copy.  resetFeatureDrag clears the in-flight drag from
-// abortTransientGestureState; beginFeatureDragFromAutoSwitch lets
-// tryAutoSwitchAt seed the drag state when a click in another
-// mode lands on a feature (R40c).
-import {
-  onFeatureMouseDown,
-  onFeatureMouseMove,
-  onFeatureMouseUp,
   resetFeatureDrag,
   beginFeatureDragFromAutoSwitch,
 } from './ui/map-editor/modes/feature-select.js'
+import { resetHmHoldTimer } from './ui/map-editor/modes/heightmap.js'
 
-// Erase-mode brush stamps — symmetry-aware (eraseAt) + single
-// position (eraseAtSingle).  Called from the paint mouse handlers
-// when state.mode === 'erase' (R40d.1).
-import { eraseAt } from './ui/map-editor/modes/erase.js'
-
-// Heightmap-mode handlers + the brush stamp.  resetHmHoldTimer
-// cancels the in-flight auto-repeat interval from
-// abortTransientGestureState (R40e).
+// Paint mode — handlePaint is still consumed by the drawer's
+// drag-drop fallback below.  resetPaintPlacement clears the
+// in-flight anchored-preview drag from abortTransientGestureState
+// (R40d).
 import {
-  onHeightmapMouseDown,
-  onHeightmapMouseMove,
-  onHeightmapMouseUp,
-  resetHmHoldTimer,
-} from './ui/map-editor/modes/heightmap.js'
-
-// Fill-mode handler — 4-way connected flood (plain click) +
-// global replace (shift+click).  Single mouse handler, no
-// drag state (R40e.1).
-import { onFillMouseDown } from './ui/map-editor/modes/fill.js'
-
-// Paint mode — three mouse-router entry points + the stamp
-// pipeline.  Owns the anchored-preview drag state internally;
-// resetPaintPlacement clears it on abort.  handlePaint is
-// exported so the drawer drag-drop fallback in this file can
-// route plain drops through the same code path (R40d).
-import {
-  onPaintMouseDown,
-  onPaintMouseMove,
-  onPaintMouseUp,
   resetPaintPlacement,
   handlePaint,
 } from './ui/map-editor/modes/paint.js'
+
+// Mouse router — single canvas-mouse dispatcher.  Reads state.mode
+// and looks up the matching mode handlers from a Map.  Pan
+// short-circuit + cursor cache + paint-state priming live here so
+// no individual mode module reproduces the cross-mode bookkeeping
+// (R40f).
+import {
+  onCanvasMouseDown,
+  onCanvasMouseMove,
+  onCanvasMouseUp,
+} from './ui/map-editor/mouse-router.js'
 
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
@@ -573,6 +509,12 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.placementAnchor = placementAnchor
   hostCallbacks.clearStampSelection = clearStampSelection
   hostCallbacks.renderDrawer = renderDrawer
+  hostCallbacks.shouldPan = shouldPan
+  hostCallbacks.beginPan = beginPan
+  hostCallbacks.updatePan = updatePan
+  hostCallbacks.endPan = endPan
+  hostCallbacks.isPanning = () => panState !== null
+  hostCallbacks.updateHoverLabel = updateHoverLabel
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -2959,115 +2901,13 @@ function setCanvasHoverFeature(name) {
 }
 
 // ── Mouse routing ──────────────────────────────────────────────────────────
-
-function onCanvasMouseDown(e) {
-  paintState.paintedDuringStroke = false
-  paintState.painting = true
-
-  if (shouldPan(e)) {
-    // Auto-switch on an unambiguous left-click: a clean click on a
-    // start position or placed feature in a passive mode (where the
-    // click would otherwise just pan) jumps into the matching mode
-    // and arms a drag.  Middle-click and space-pan still pan as usual.
-    if (e.button === 0 && tryAutoSwitchAt(e)) return
-    beginPan(e)
-    return
-  }
-
-  if (state.mode === 'paint') {
-    onPaintMouseDown(e)
-  } else if (state.mode === 'erase') {
-    // Erase mode runs as a paint stroke — each stamp during the drag
-    // calls eraseAt; mouseup commits the whole stroke as one undo step.
-    beginTransaction()
-    const { tx, ty } = pickCell(e)
-    if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
-      eraseAt(tx, ty)
-      paintState.paintedDuringStroke = true
-    }
-  } else if (state.mode === 'select-terrain') {
-    onTerrainMouseDown(e)
-  } else if (state.mode === 'select-features') {
-    onFeatureMouseDown(e)
-  } else if (state.mode === 'picker') {
-    onPickerMouseDown(e)
-  } else if (state.mode === 'start-points') {
-    onStartPosMouseDown(e)
-  } else if (state.mode === 'voids') {
-    onVoidsMouseDown(e)
-  } else if (state.mode === 'heightmap') {
-    onHeightmapMouseDown(e)
-  } else if (state.mode === 'fill') {
-    onFillMouseDown(e)
-  } else if (state.mode === 'ruler') {
-    onRulerMouseDown(e)
-  }
-}
-
-function onCanvasMouseMove(e) {
-  if (panState) { updatePan(e); return }
-  updateHoverLabel(e)
-  // Track the cursor cell so Ctrl+V can paste at the user's last hover
-  // point.  Reset on mouseleave (handled by the canvas leave listener).
-  const cell = pickCell(e)
-  if (cell.tx >= 0 && cell.tx < state.tileW && cell.ty >= 0 && cell.ty < state.tileH) {
-    hostCallbacks.cursor.lastHover = cell
-  }
-  if (state.mode === 'paint') {
-    onPaintMouseMove(e)
-  } else if (state.mode === 'erase') {
-    const { tx, ty } = pickCell(e)
-    // Track the cursor cell so the brush outline follows the mouse,
-    // and erase under it if the user is dragging.
-    if (!state.eraseCursor || state.eraseCursor.tx !== tx || state.eraseCursor.ty !== ty) {
-      state.eraseCursor = { tx, ty }
-      renderCanvas()
-    }
-    if (paintState.painting) {
-      if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
-        eraseAt(tx, ty)
-        paintState.paintedDuringStroke = true
-      }
-    }
-  } else if (state.mode === 'select-terrain') {
-    onTerrainMouseMove(e)
-  } else if (state.mode === 'select-features') {
-    onFeatureMouseMove(e)
-  } else if (state.mode === 'picker') {
-    onPickerMouseMove(e)
-  } else if (state.mode === 'start-points') {
-    onStartPosMouseMove(e)
-  } else if (state.mode === 'voids') {
-    onVoidsMouseMove(e)
-  } else if (state.mode === 'heightmap') {
-    onHeightmapMouseMove(e)
-  } else if (state.mode === 'ruler') {
-    onRulerMouseMove(e)
-  }
-}
-
-function onCanvasMouseUp(e) {
-  if (panState) { endPan(); return }
-  if (state.mode === 'paint') {
-    onPaintMouseUp(e)
-  } else if (state.mode === 'erase') {
-    if (paintState.painting && paintState.paintedDuringStroke) commitTransaction('Erase')
-    else if (paintState.painting) abortTransaction()
-  } else if (state.mode === 'select-terrain') {
-    onTerrainMouseUp(e)
-  } else if (state.mode === 'select-features') {
-    onFeatureMouseUp(e)
-  } else if (state.mode === 'picker') {
-    onPickerMouseUp(e)
-  } else if (state.mode === 'start-points') {
-    onStartPosMouseUp(e)
-  } else if (state.mode === 'voids') {
-    onVoidsMouseUp(e)
-  } else if (state.mode === 'heightmap') {
-    onHeightmapMouseUp(e)
-  }
-  resetPaintStroke()
-}
+// onCanvasMouseDown / Move / Up moved to
+// /ui/map-editor/mouse-router.js (R40f).  The dispatcher consults
+// a Map<mode, { down, move, up }> and the pan / hover / cursor
+// bookkeeping is folded in there; studio.js exposes shouldPan +
+// beginPan + endPan + isPanning + updateHoverLabel through
+// hostCallbacks so the router can short-circuit before the
+// per-mode dispatch.
 
 // shouldPan inspects the mousedown event and current editor state to
 // decide whether this drag should pan the view instead of running the

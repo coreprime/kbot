@@ -327,6 +327,17 @@ export const hostCallbacks = {
   // the paint module calls it after dropping the selection so
   // the row de-highlights immediately.
   renderDrawer: null,           // () => void
+  // Mouse-router pan bridge — the extracted dispatcher uses these
+  // to short-circuit pan gestures before consulting the per-mode
+  // handler map.  Lives in studio.js because pan state still
+  // shares space with the active scroll element + cursor style;
+  // the router calls into it without owning that state.
+  shouldPan: null,              // (e) => boolean
+  beginPan: null,               // (e) => void
+  updatePan: null,              // (e) => void
+  endPan: null,                 // () => void
+  isPanning: null,              // () => boolean
+  updateHoverLabel: null,       // (e) => void  (status-bar live cursor read-out)
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

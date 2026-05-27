@@ -22,6 +22,49 @@ import { state, hostCallbacks } from '../../host-context.js'
 import { symmetryMatesTile } from '../symmetry.js'
 import { patchMinimapTile } from '../minimap.js'
 import { bumpContentVersion } from '../content-cache.js'
+import { pickCell } from '../mouse-coords.js'
+import {
+  beginTransaction, commitTransaction, abortTransaction,
+} from '../undo.js'
+import { paintState } from '../paint-state.js'
+
+// onEraseMouseDown / Move / Up — the three mouse-router entry
+// points that drive an erase stroke.  Wrap each stamp the way
+// paint mode does: a single transaction per stroke, commit if at
+// least one cell got cleared, abort otherwise so undo isn't
+// polluted with empty entries.
+
+export function onEraseMouseDown(e) {
+  // Erase mode runs as a paint stroke — each stamp during the drag
+  // calls eraseAt; mouseup commits the whole stroke as one undo step.
+  beginTransaction()
+  const { tx, ty } = pickCell(e)
+  if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
+    eraseAt(tx, ty)
+    paintState.paintedDuringStroke = true
+  }
+}
+
+export function onEraseMouseMove(e) {
+  const { tx, ty } = pickCell(e)
+  // Track the cursor cell so the brush outline follows the mouse,
+  // and erase under it if the user is dragging.
+  if (!state.eraseCursor || state.eraseCursor.tx !== tx || state.eraseCursor.ty !== ty) {
+    state.eraseCursor = { tx, ty }
+    hostCallbacks.renderCanvas?.()
+  }
+  if (paintState.painting) {
+    if (tx >= 0 && tx < state.tileW && ty >= 0 && ty < state.tileH) {
+      eraseAt(tx, ty)
+      paintState.paintedDuringStroke = true
+    }
+  }
+}
+
+export function onEraseMouseUp(_e) {
+  if (paintState.painting && paintState.paintedDuringStroke) commitTransaction('Erase')
+  else if (paintState.painting) abortTransaction()
+}
 
 export function eraseAt(tx, ty) {
   eraseAtSingle(tx, ty)
