@@ -187,6 +187,11 @@ import {
   closeOpenDialog,
 } from './ui/pickers/open-map.js'
 
+// ?initial_map=<name> URL shortcut — polls the catalogue then
+// routes through the same openLoadedMap host callback as the
+// picker.  Called from the boot block.
+import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -776,53 +781,8 @@ function wireMapTabBar() {
   })()
 }
 
-async function maybeAutoOpenFromQuery() {
-  let target
-  try {
-    target = new URLSearchParams(window.location.search).get('initial_map')
-  } catch { return }
-  if (!target) return
-  const wanted = target.trim().toLowerCase()
-  if (!wanted) return
-  try {
-    // Poll until the server's map catalogue has finished preloading —
-    // the entry we're looking for may not be in the partial response
-    // delivered before /api/studio/maps flips loading=false.
-    let entries = []
-    for (let i = 0; i < 30; i++) {
-      const resp = await fetch('/api/studio/maps')
-      const data = await resp.json()
-      entries = data.maps || []
-      const match = pickMapByName(entries, wanted)
-      if (match) {
-        const loadResp = await fetch('/api/studio/load?path=' + encodeURIComponent(match.path))
-        if (!loadResp.ok) throw new Error(await loadResp.text() || `HTTP ${loadResp.status}`)
-        const loaded = await loadResp.json()
-        await openLoadedMap(loaded, match)
-        return
-      }
-      if (!data.loading) break
-      await new Promise(r => setTimeout(r, 250))
-    }
-    setStatus(`initial_map="${target}" not found in this kbot context.`)
-  } catch (err) {
-    setStatus(`Failed to auto-open ${target}: ${err.message || err}`)
-  }
-}
-
-function pickMapByName(entries, wanted) {
-  for (const m of entries) {
-    if ((m.name || '').toLowerCase() === wanted) return m
-    if ((m.missionName || '').toLowerCase() === wanted) return m
-  }
-  // Substring fallback so partial names like "metal heck" still match
-  // a fuller "Metal Heck (Free)" if the catalogue carries the suffix.
-  for (const m of entries) {
-    const hay = `${m.name || ''} ${m.missionName || ''}`.toLowerCase()
-    if (hay.includes(wanted)) return m
-  }
-  return null
-}
+// maybeAutoOpenFromQuery + pickMapByName moved to
+// /ui/pickers/auto-open.js — imported at the top of this file.
 
 // Server heartbeat moved to /ui/common/heartbeat.js — imported at
 // the top of this file.  startServerHeartbeat() is called from
