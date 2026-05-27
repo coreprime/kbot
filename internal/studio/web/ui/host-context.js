@@ -268,6 +268,11 @@ export const hostCallbacks = {
   // dialog flow + the drag-drop handler + the ?initial_map=… URL
   // shortcut.
   openLoadedMap: null,          // (data, card) => Promise<void>
+  // Forces a synchronous minimap repaint.  Used by exportMinimap
+  // to guarantee the exported PNG matches the current map state
+  // even when the visible minimap was awaiting a debounced
+  // redraw.
+  renderMinimap: null,          // () => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

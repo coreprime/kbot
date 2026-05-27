@@ -210,6 +210,26 @@ import {
   renderDiceGrid,
 } from './ui/map-editor/dialogs/dice-picker.js'
 
+// Save-payload builder.  Pure snapshot of the current map state
+// in the shape /api/studio/save / /api/studio/export-* /
+// /api/studio/quality-check all accept.  Used by save / saveLoose
+// (still in studio.js) AND by every backend-rendered export.
+import { buildSavePayload } from './ui/map-editor/save-payload.js'
+
+// PNG export + heightmap import handlers.  exportHeightmap and
+// exportMinimap render client-side from state; the *FullRender /
+// MapImage / Buildmap / Voidmap variants POST the save payload to
+// the matching /api/studio/export-* endpoint.
+import {
+  exportHeightmap,
+  exportMinimap,
+  exportFullRender,
+  exportMapImage,
+  exportBuildmap,
+  exportVoidmap,
+  onImportHeightmapFile,
+} from './ui/map-editor/exports.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -271,6 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.featureAnchorWorld = featureAnchorWorld
   hostCallbacks.configureReactUi = configureReactUi
   hostCallbacks.openLoadedMap = openLoadedMap
+  hostCallbacks.renderMinimap = renderMinimap
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -7763,181 +7784,11 @@ function applyScatter() {
   setStatus(`Scattered ${placed} feature${placed === 1 ? '' : 's'} (seed ${seed}).`)
 }
 
-function exportHeightmap() {
-  const attrW = state.tileW * 2
-  const attrH = state.tileH * 2
-  const c = document.createElement('canvas')
-  c.width = attrW; c.height = attrH
-  const ctx = c.getContext('2d')
-  const img = ctx.createImageData(attrW, attrH)
-  for (let i = 0; i < attrW * attrH; i++) {
-    const h = clamp(state.heights[i] | 0, 0, 255)
-    img.data[i * 4 + 0] = h
-    img.data[i * 4 + 1] = h
-    img.data[i * 4 + 2] = h
-    img.data[i * 4 + 3] = 255
-  }
-  ctx.putImageData(img, 0, 0)
-  c.toBlob((blob) => {
-    if (!blob) { setStatus('Heightmap export failed.'); return }
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitiseFilename(state.name)}-heightmap.png`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
-    setStatus(`Exported ${attrW}×${attrH} heightmap PNG.`)
-  }, 'image/png')
-}
-
-function exportMinimap() {
-  // Ensure the visible minimap canvas is in sync with the latest map
-  // state before exporting — renderMinimap is idempotent, so re-running
-  // it here is cheap and avoids exporting a stale frame.
-  renderMinimap()
-  const mini = $('#minimap')
-  if (!mini) { setStatus('Minimap not available to export.'); return }
-  mini.toBlob((blob) => {
-    if (!blob) { setStatus('Minimap export failed.'); return }
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitiseFilename(state.name)}-minimap.png`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
-    setStatus(`Exported ${mini.width}×${mini.height} minimap PNG.`)
-  }, 'image/png')
-}
-
-// exportFromBackend POSTs the current map state to one of the
-// /api/studio/export-* endpoints and triggers a download of the
-// returned PNG.  The endpoints share their request shape with
-// /api/studio/save (saveRequest), so we can reuse buildSavePayload()
-// for all of them — same data, three different renderers on the
-// server side.
-async function exportFromBackend(endpoint, suffix, label) {
-  setStatus(`Rendering ${label}…`)
-  try {
-    const resp = await fetch(`/api/studio/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildSavePayload()),
-    })
-    if (!resp.ok) {
-      const text = await resp.text()
-      throw new Error(text || `HTTP ${resp.status}`)
-    }
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitiseFilename(state.name)}-${suffix}.png`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
-    setStatus(`Exported ${label} PNG.`)
-  } catch (err) {
-    setStatus(`${label} export failed: ${err.message || err}`)
-  }
-}
-
-// confirmLargeRender warns the user that a 1:1 PNG render of a big map
-// could chew memory and produce a huge file.  Shared by both the full
-// render (with features + markers) and the bare map image — both ship
-// the same per-pixel payload, only their compositing differs.
-function confirmLargeRender(label) {
-  const pxW = state.tileW * 32
-  const pxH = state.tileH * 32
-  if (pxW * pxH > 6000 * 6000) {
-    const ok = window.confirm(
-      `${label} is ${pxW}×${pxH} pixels.  This can take a while and the PNG file may be very large.  Continue?`,
-    )
-    if (!ok) { setStatus(`${label} cancelled.`); return false }
-  }
-  return true
-}
-
-function exportFullRender() {
-  if (!confirmLargeRender('Full render')) return
-  exportFromBackend('export-render', 'render', 'full render')
-}
-
-function exportMapImage() {
-  if (!confirmLargeRender('Map image')) return
-  exportFromBackend('export-map-image', 'map', 'map image')
-}
-
-function exportBuildmap() {
-  exportFromBackend('export-buildmap', 'buildmap', 'buildmap')
-}
-
-function exportVoidmap() {
-  exportFromBackend('export-voidmap', 'voidmap', 'voidmap')
-}
-
-async function onImportHeightmapFile(e) {
-  const file = e.target.files && e.target.files[0]
-  e.target.value = ''
-  if (!file) return
-  const attrW = state.tileW * 2
-  const attrH = state.tileH * 2
-  const img = new Image()
-  const url = URL.createObjectURL(file)
-  try {
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = () => reject(new Error('decode failed'))
-      img.src = url
-    })
-    const c = document.createElement('canvas')
-    c.width = attrW; c.height = attrH
-    const ctx = c.getContext('2d')
-    // Nearest-neighbour-ish: disable smoothing so a same-size import is
-    // exact, and a different-size import is sampled rather than blurred.
-    ctx.imageSmoothingEnabled = false
-    ctx.drawImage(img, 0, 0, attrW, attrH)
-    const data = ctx.getImageData(0, 0, attrW, attrH).data
-    beginTransaction()
-    for (let i = 0; i < attrW * attrH; i++) {
-      // Use luminance so colour PNGs still produce sensible heights.
-      const r = data[i * 4 + 0]
-      const g = data[i * 4 + 1]
-      const b = data[i * 4 + 2]
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b) | 0
-      state.heights[i] = clamp(lum, 0, 255)
-    }
-    commitTransaction('Import heightmap')
-    renderCanvas()
-    setStatus(`Imported heightmap from ${file.name} (${img.naturalWidth}×${img.naturalHeight} → ${attrW}×${attrH}).`)
-  } catch (err) {
-    setStatus(`Heightmap import failed: ${err.message}`)
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
-
-// buildSavePayload snapshots the current per-map state into the shape
-// the save / quality-check endpoints accept.  Splitting it out lets
-// the Quality Checker re-send the same payload across multiple fix
-// iterations without rebuilding it each time — and keeps save() /
-// saveLoose() honest about what they ship.
-function buildSavePayload() {
-  if (state.terrainClipboard) dropTerrainClipboard()
-  cancelPlacement()
-  return {
-    mapName: state.name,
-    displayName: state.ota?.missionName || state.name,
-    tileW: state.tileW,
-    tileH: state.tileH,
-    planet: state.planet,
-    tiles: state.tiles,
-    heights: state.heights,
-    voids: state.voids,
-    features: state.features.map((f) => ({ name: f.name, ax: f.ax, ay: f.ay })),
-    seaLevel: state.ota?.seaLevel ?? 0,
-    ota: state.ota,
-    activeSchema: state.activeSchema | 0,
-  }
-}
+// PNG export handlers (heightmap / minimap / full render / map
+// image / buildmap / voidmap) + the heightmap import counterpart
+// moved to /ui/map-editor/exports.js.  buildSavePayload — the
+// shared JSON snapshot — lives in /ui/map-editor/save-payload.js.
+// Both imported at the top of this file.
 
 async function saveLoose() {
   const payload = buildSavePayload()
