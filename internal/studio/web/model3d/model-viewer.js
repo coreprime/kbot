@@ -85,8 +85,8 @@ export class ModelViewer {
   // unit tab owns its own ModelViewer + canvas; attach() / detach()
   // swap the active tab's canvas into the shared `.model-viewer-stage`
   // so an inactive tab's GL surface is OUT of the DOM tree (can't
-  // bleed through, doesn't compete for the framebuffer).  Mirrors
-  // SandboxView's same-named helpers so the studio's tab-switch
+  // bleed through, doesn't compete for the framebuffer).  Mirrors the
+  // same-named helpers on the multi-entity host so the tab-switch
   // logic can treat both view types uniformly.
   attach(stage) {
     if (!stage || !this.canvas) return
@@ -100,12 +100,12 @@ export class ModelViewer {
     }
   }
 
-  // setSilenced flips this viewer's MvControls (and any audio it
+  // setSilenced flips this viewer's controller (and any audio it
   // owns) to muted/un-muted.  Used by switchToTab on the outgoing
   // tab so weapon sounds + acks don't keep firing in the background.
-  // Defined here (rather than only on MvControls) so the studio's
-  // tab-switch loop can treat ModelViewer and SandboxView the same
-  // way — both expose a `setSilenced(bool)` entry point.
+  // Defined here (rather than only on the controller) so the
+  // tab-switch loop can treat every view type the same way — they
+  // all expose a `setSilenced(bool)` entry point.
   setSilenced(s) {
     if (this._mvControls && typeof this._mvControls.setSilenced === 'function') {
       try { this._mvControls.setSilenced(!!s) } catch { /* ignore */ }
@@ -455,9 +455,9 @@ export class ModelViewer {
   }
 
   _wireInputs() {
-    // Orbit / pan / zoom gestures live in a shared module so the
-    // single-unit editor + the multi-unit Sandbox feel identical.
-    // The onUserInteract callback drops view-side state (Tracking
+    // Orbit / pan / zoom gestures live in a shared module so single-
+    // entity and multi-entity host views feel identical.  The
+    // onUserInteract callback drops view-side state (Tracking
     // checkbox, auto-rotate UI mirror) the camera-controls module
     // can't reach on its own.
     this._detachInputs = attachOrbitControls({

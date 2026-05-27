@@ -763,14 +763,14 @@ export class ModelRenderer {
     if (this.textureCache) this.textureCache.onAnyTextureReady = () => this.requestRedraw()
 
     // Kick off the terrain texture fetch eagerly — the user's first
-    // sight of the viewer should already have grass, not the
+    // sight of the scene should already have grass, not the
     // procedural fallback ground.
     if (this.groundMode === 'terrain') this.#loadTerrainTexture()
   }
 
   // init fetches every shader from shaders/ + links the GPU programs.
   // Must be awaited before the renderer is asked to draw a frame; the
-  // viewer wires this into open() before calling start().  Safe to
+  // caller wires this into open() before calling start().  Safe to
   // call more than once - subsequent calls return the same Promise so
   // multiple async callers can join on a single init.
   init() {
@@ -809,7 +809,7 @@ export class ModelRenderer {
     this.cobBinding = binding || null
     // Hand the binding a back-reference to THIS renderer so per-tick
     // hooks (the dynamic pulse-light from active particles) can push
-    // state into our uniforms without chasing the viewer's closures.
+    // state into our uniforms without chasing the caller's closures.
     if (binding) binding.renderer = this
     // Forward the binding's particle pool to the renderer's SFX
     // pass.  Detaching the binding also detaches the pool so the
@@ -880,9 +880,9 @@ export class ModelRenderer {
 
   // setHoveredTexture flags every piece whose drawGroups reference
   // the given texture name for the red-wireframe overlay.  Pair
-  // with the Textures tab in the model-viewer's left panel — the
-  // user hovers a texture row and every face painted with that
-  // atlas lights up.  null clears the highlight.
+  // with a texture list in the host UI — the user hovers a texture
+  // row and every face painted with that atlas lights up.  null
+  // clears the highlight.
   setHoveredTexture(name) {
     const next = (typeof name === 'string' && name) ? name.toLowerCase() : null
     if (next === this._hoveredTexture) return
@@ -1378,8 +1378,8 @@ export class ModelRenderer {
     // required.
     const haveModel = !!this.model || (this._entities && this._entities.length > 0)
     if (!this.camera || !haveModel) {
-      // Empty-scene fallback (sandbox with nothing spawned, or
-      // single-unit between model loads).  We still want a usable
+      // Empty-scene fallback (multi-entity mode with nothing spawned,
+      // or single-entity mode between model loads).  We still want a usable
       // backdrop: refresh the camera matrices + paint the sky AND
       // draw the ground plane so the user sees the grid / terrain /
       // sea immediately rather than a flat blue void.
@@ -1549,7 +1549,7 @@ export class ModelRenderer {
       const savedUt = { x: this._unitTransform.x, y: this._unitTransform.y, z: this._unitTransform.z, headingRad: this._unitTransform.headingRad }
       // Save the renderer's team-colour fields so the per-entity loop
       // can swap them per unit and restore on the way out — entities
-      // can carry their own team colour (sandbox sides) without
+      // can carry their own team colour (per-entity sides) without
       // leaking into the post-loop passes (wireframe overlay, ghost
       // placement preview, etc.).
       const savedTC = this.teamColor
@@ -1557,12 +1557,11 @@ export class ModelRenderer {
       for (const ent of this._entities) {
         this.model = ent.model
         if (typeof ent.buildPercent === 'number') this.buildPercent = ent.buildPercent
-        // Per-entity team colour — sandbox passes ent.teamColor as
+        // Per-entity team colour — caller passes ent.teamColor as
         // either an [r,g,b] tuple (recolour) or null (use the model's
         // authored ARM-blue pixels untouched).  Unset entry = inherit
-        // the renderer's currently-committed team colour (the single-
-        // unit picker's selection), preserving existing behaviour for
-        // entities that don't opt in.
+        // the renderer's currently-committed team colour, preserving
+        // existing behaviour for entities that don't opt in.
         if (Object.prototype.hasOwnProperty.call(ent, 'teamColor')) {
           if (ent.teamColor) {
             this.teamColor = [ent.teamColor[0], ent.teamColor[1], ent.teamColor[2]]
@@ -1584,9 +1583,9 @@ export class ModelRenderer {
         if (t.headingRad !== 0) {
           Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
         }
-        // Ghost entities (sandbox placement preview) render as a
-        // pulsing green wireframe instead of the solid main pass — no
-        // shadow, no fill, just an outline so the user sees the unit's
+        // Ghost entities (placement preview) render as a pulsing
+        // green wireframe instead of the solid main pass — no shadow,
+        // no fill, just an outline so the user sees the entity's
         // silhouette under the cursor before committing to the spawn.
         if (ent.ghost) {
           const pulse = 0.55 + 0.45 * Math.sin((performance.now() - this._t0) * 0.006)
@@ -1619,8 +1618,8 @@ export class ModelRenderer {
       // entity with `selected: true`.  Drawn AFTER the entity loop so
       // the ring composites on top of the unit when the camera looks
       // down from above (depth still respected so rings clip behind
-      // taller foreground geometry).  Sandbox is the only consumer
-      // today; viewer never sets `selected` on its single entity.
+      // taller foreground geometry).  Only meaningful in multi-entity
+      // mode — single-entity mode never sets `selected`.
       this.#renderSelectionRings(this._entities)
     } else {
       this.#renderMain(this.renderMode === 'flat')
@@ -1690,17 +1689,17 @@ export class ModelRenderer {
     // composite to the default framebuffer via the post-process pass.
     if (useScenePass) this.#compositeDoF()
 
-    // Restore single-unit `this.model` after multi-entity rendering
-    // so callers reading mv.model (the inspectors, the piece tree)
-    // don't see the LAST entity in the loop as the active unit.
+    // Restore single-entity `this.model` after multi-entity rendering
+    // so callers reading the renderer's `model` (inspectors, piece
+    // tree) don't see the LAST entity in the loop as the active unit.
     // Unconditional restore when entities were present — the prior
-    // `_savedModel !== null` guard skipped the restore for the sandbox
-    // (which legitimately starts with this.model === null), leaving the
-    // last entity's model leaked onto this.model.  The next frame's
-    // empty-scene fallback then saw `!!this.model` as truthy and went
-    // down the unit-bounds-anchored ground path, which shrunk the grid
-    // footprint down to a tiny pad around the leaked model's centre —
-    // the "grid disappears on Clear Field" symptom.
+    // `_savedModel !== null` guard skipped the restore for the multi-
+    // entity path (which legitimately starts with this.model === null),
+    // leaving the last entity's model leaked onto this.model.  The next
+    // frame's empty-scene fallback then saw `!!this.model` as truthy
+    // and went down the unit-bounds-anchored ground path, which shrunk
+    // the grid footprint down to a tiny pad around the leaked model's
+    // centre — the "grid disappears on Clear Field" symptom.
     if (this._entities) {
       this.model = _savedModel
     }
@@ -1819,7 +1818,7 @@ export class ModelRenderer {
 
     gl.useProgram(this.programShadow)
     gl.uniformMatrix4fv(this.uShadowLightSpace, false, space)
-    // Multi-entity mode (sandbox) — each entity contributes its own
+    // Multi-entity mode — each entity contributes its own
     // shadow at its CURRENT world position, not the first entity's
     // bounds-center.  Without this loop the renderer's per-entity main
     // pass below paints every unit correctly but every shadow stayed
@@ -1918,12 +1917,12 @@ export class ModelRenderer {
     // level and subs end up under the surface — _getWaterY()
     // bakes that adjustment in.
     const groundY = this.groundMode === 'sea' ? this._getWaterY() : (this.model.bounds.min[1] - 0.05)
-    // Multi-entity mode (sandbox) anchors the ground footprint on the
-    // camera target with a radius scaled to the current zoom — single
-    // unit-sized pad would feather out a few feet from the model and
-    // leave the rest of the canvas a blue void.  Single-unit mode
-    // keeps the original behaviour: pad centred on the model, sized to
-    // its bounds (so the grid hugs the unit's footprint).
+    // Multi-entity mode anchors the ground footprint on the
+    // camera target with a radius scaled to the current zoom — a
+    // single unit-sized pad would feather out a few feet from the
+    // model and leave the rest of the canvas a blue void.  Single-
+    // entity mode keeps the original behaviour: pad centred on the
+    // model, sized to its bounds (so the grid hugs the unit's footprint).
     let cx, cz, radius
     if (this._entities && this._entities.length > 0 && this.camera && this.camera.target) {
       cx = this.camera.target[0]
@@ -2020,8 +2019,8 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundMountainActive, bgActive ? 1 : 0)
     if (bgActive) {
       // Mountain-ring clearing scales with whatever sits at the
-      // ground centre: a single unit's bounding span in single-unit
-      // mode, or a generous sandbox-sized constant in multi-entity
+      // ground centre: a single unit's bounding span in single-entity
+      // mode, or a generous battlefield-sized constant in multi-entity
       // mode (where `span` from a synthesised bounds would be tiny).
       const bgSpan = (this._entities && this._entities.length > 0)
         ? Math.max(200, (this.camera?.distance || 200) * 0.6)
@@ -2528,7 +2527,7 @@ export class ModelRenderer {
   #updateLightMatrices() {
     let cx, cy, cz, r
     if (this._entities && this._entities.length > 0) {
-      // Multi-entity (sandbox) — compute the bounding sphere of all
+      // Multi-entity mode — compute the bounding sphere of all
       // entities' world positions PLUS each unit's per-model bounds
       // radius.  Without this the frustum stays sized for the first
       // entity, so units placed further out cast no shadow (their

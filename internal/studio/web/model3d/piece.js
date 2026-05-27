@@ -89,7 +89,7 @@ export class Piece {
   // visible, worldMatrix, userData) get fresh copies, so independent
   // CobBindings can write their own pose without colliding on a
   // shared tree.  Used by Model.cloneForInstance — see commentary
-  // there for the multi-unit sandbox rationale.
+  // there for the multi-entity rationale.
   cloneForInstance() {
     const c = new Piece({
       name: this.name,

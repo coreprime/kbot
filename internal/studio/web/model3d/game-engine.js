@@ -76,7 +76,7 @@ import { CobBinding } from './cob/cob-binding.js'
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
 
-// Default damage per shot for sandbox hit-scan combat.  The FBI weapon
+// Default damage per shot for hit-scan combat.  The FBI weapon
 // JSON doesn't currently expose the TDF damage= field, so every shot
 // applies this constant when the target is a live unit.  When the API
 // starts surfacing per-weapon damage we'll switch to w.weaponDamage
@@ -125,19 +125,19 @@ export class GameEngine {
     // not the common path.
     this.runtime = runtime || new CobRuntime()
     // World gravity (wu/s²) for the ballistic aim solver.  The
-    // renderer's environment owns the authoritative value; sandbox /
-    // viewer setters push updates via setGravity() when the env
-    // changes.  Default matches the studio's ground-world preset.
+    // renderer's environment owns the authoritative value; callers
+    // push updates via setGravity() when the env changes.  Default
+    // matches the studio's ground-world preset.
     this.gravity = gravity
     // Optional renderer ref for cross-unit dynamic light aggregation
     // (laser beams, d-gun orbs, missile exhaust illuminating nearby
     // units).  When set, the engine scans every unit's particle pool
     // each tick and pushes the globally-brightest light-emitter to
-    // renderer.setPulseLight.  Without this the multi-unit Sandbox
+    // renderer.setPulseLight.  Without this the multi-unit path
     // would either get NO dynamic lights (binding.tick is what calls
-    // _pushPulseLight in the Viewer path, and the engine doesn't call
-    // binding.tick — it calls binding._sync directly) or one-light-
-    // per-binding fighting over the renderer's single slot.
+    // _pushPulseLight in the single-unit path, and the engine doesn't
+    // call binding.tick — it calls binding._sync directly) or one-
+    // light-per-binding fighting over the renderer's single slot.
     this._renderer = null
     // Audio silencing flag — when set, every per-unit AudioPool gets
     // its setPaused(true) called each #syncBinding so a backgrounded
@@ -190,9 +190,9 @@ export class GameEngine {
   // for the brightest live light-emitter (laser pulse, d-gun ball,
   // missile exhaust) and calls renderer.setPulseLight with it.  Pass
   // null to detach (e.g. the host view is disposing).  Optional —
-  // engines that don't need cross-unit lighting (the headless viewer
-  // path, where binding.tick already handles it for the single unit)
-  // can ignore this entirely.
+  // engines that don't need cross-unit lighting (single-unit paths,
+  // where binding.tick already handles it for the one unit) can ignore
+  // this entirely.
   setRenderer(r) { this._renderer = r || null }
 
   // setSilenced toggles AudioPool muting across every unit's binding.
@@ -225,13 +225,12 @@ export class GameEngine {
   addUnit({ name, model, cobScript, x = 0, z = 0, headingRad = 0, meta = null, side = 0 }) {
     const id = _nextEngineUnitId++
     // Multi-unit instance isolation — the loader caches one Model per
-    // unit type, so spawning N of the same unit (sandbox) would have
-    // them share Piece.move/rotate/visible and stomp each other's
-    // pose every frame (only the LAST tick wins).  Clone the piece
-    // tree into a per-instance Model that aliases the same GPU
-    // buffers but owns its own animated state.  Models created via
-    // adoptUnit (the unit editor, which has exactly one unit) skip
-    // this path entirely.
+    // unit type, so spawning N of the same unit would have them share
+    // Piece.move/rotate/visible and stomp each other's pose every
+    // frame (only the LAST tick wins).  Clone the piece tree into a
+    // per-instance Model that aliases the same GPU buffers but owns
+    // its own animated state.  Models created via adoptUnit (single-
+    // unit callers) skip this path entirely.
     const instModel = (model && typeof model.cloneForInstance === 'function')
       ? model.cloneForInstance()
       : model
@@ -260,13 +259,12 @@ export class GameEngine {
       dead: false,
       buildPercent: 100,
       meta,
-      // Per-unit COB port state.  Sandbox units used to share a single
-      // global port object on the viewer, which made per-unit edits in
-      // the Controls panel impossible (everything routed to one bucket).
-      // Each engine unit now owns its own, mirroring the viewer's
-      // ModelViewer.cobPorts shape so the inspector renderer doesn't
-      // need to special-case.  Defaults match the viewer's defaults so
-      // standing-orders + activation behave identically in both modes.
+      // Per-unit COB port state.  Engine units used to share a single
+      // global port object, which made per-unit edits in the Controls
+      // panel impossible (everything routed to one bucket).  Each
+      // engine unit now owns its own with the inspector renderer's
+      // expected shape.  Defaults match the historical values so
+      // standing-orders + activation behave identically across callers.
       cobPorts: {
         activation: 1,
         moveOrders: 2,
@@ -281,8 +279,8 @@ export class GameEngine {
     }
     // Wire the COB's GET_UNIT_VALUE hook so HEALTH / BUILD_PERCENT
     // and the per-unit port state read off this instance.  Matches the
-    // port indices the unit editor's model-viewer.js uses so the COB
-    // scripts behave identically across modes.
+    // historical port indices so COB scripts behave identically across
+    // modes.
     if (cobUnit) {
       cobUnit.hooks.getUnitValue = (port) => {
         const p = unit.cobPorts
@@ -300,8 +298,8 @@ export class GameEngine {
         }
       }
       // SET_UNIT_VALUE writes from scripts (factories flipping IN_BUILD_STANCE,
-      // damage scripts toggling ARMORED).  Mirrors the model-viewer's
-      // setUnitValue hook so script semantics stay consistent.
+      // damage scripts toggling ARMORED).  Standard setUnitValue hook
+      // so script semantics stay consistent.
       cobUnit.hooks.setUnitValue = (port, value) => {
         const v = value | 0
         const p = unit.cobPorts
@@ -323,13 +321,14 @@ export class GameEngine {
   }
 
   // adoptUnit registers an existing CobUnit + binding + model as a
-  // unit instance WITHOUT creating new ones.  Used by the Unit Viewer
-  // to share its already-loaded unit with an engine instance for the
-  // sole purpose of running the weapon SM through the engine — the
-  // viewer's CobRuntime + binding + model already exist (the renderer
-  // creates them on model load), so the engine should attach to them
-  // rather than instantiate a parallel set.  Same fields as addUnit
-  // populates, just sourced from outside.  Returns the UnitInstance.
+  // unit instance WITHOUT creating new ones.  Used by single-unit
+  // callers to share their already-loaded unit with an engine
+  // instance for the sole purpose of running the weapon SM through
+  // the engine — the caller's CobRuntime + binding + model already
+  // exist (the renderer creates them on model load), so the engine
+  // should attach to them rather than instantiate a parallel set.
+  // Same fields as addUnit populates, just sourced from outside.
+  // Returns the UnitInstance.
   adoptUnit({ name, model, cobUnit, binding, meta = null, x = 0, z = 0, headingRad = 0, side = 0 }) {
     const id = _nextEngineUnitId++
     const unit = {
@@ -347,8 +346,8 @@ export class GameEngine {
       meta,
       weaponSlots: [_makeSlotState(), _makeSlotState(), _makeSlotState()],
     }
-    // We don't wire the getUnitValue hook here — the host (viewer) is
-    // expected to manage its own HEALTH / BUILD port wiring through its
+    // We don't wire the getUnitValue hook here — the host is expected
+    // to manage its own HEALTH / BUILD port wiring through its
     // existing channels.  Adoption is strictly "make this binding
     // addressable by the engine's weapon SM" — not "take over its COB
     // hook surface".
@@ -408,10 +407,8 @@ export class GameEngine {
     }
     if (u.binding && u.binding.hasScript('TargetCleared')) {
       // Force-restart TargetCleared so a held Stop with a previous
-      // run mid-flight gets the latest reset.  Symmetric with the
-      // Viewer-side Stop handler that already does this; pulling the
-      // logic into the engine lets every caller (Viewer + Sandbox +
-      // studio's Controls grid handler) share one source of truth.
+      // run mid-flight gets the latest reset.  Pulling this logic into
+      // the engine lets every caller share one source of truth.
       const cu = u.cobUnit
       if (cu && typeof cu.killThreadsByName === 'function') {
         cu.killThreadsByName('TargetCleared')
@@ -423,8 +420,7 @@ export class GameEngine {
 
   // stopUnit is the canonical "halt this unit completely" entry point.
   // Mirrors clearOrders semantics — name kept for back-compat — but is
-  // the documented name callers (BaseView.stop, studio.js Controls
-  // grid handler, sandbox-view #stopSelected) should reach for.
+  // the documented name callers should reach for.
   stopUnit(unitId) { this.clearOrders(unitId) }
 
   // stopUnits drops orders on every unit in the iterable.  Returns
@@ -530,16 +526,16 @@ export class GameEngine {
   // tick advances the runtime + every per-unit phase by dtMs.  Options
   // let an embedding host suppress phases it owns itself:
   //
-  //   skipRuntime  — don't advance runtime.tick(dtMs).  The Unit Viewer
-  //                  passes this because its renderer ticks the binding
-  //                  (and therefore the runtime) per-frame; the engine
-  //                  is along for the ride only to drive weapon SMs.
-  //   skipMovement — don't run #stepMovement / #stepAttack.  The Viewer
-  //                  passes this because MvControls owns the viewer's
-  //                  movement (with aircraft altitude + ship wakes +
-  //                  manual ground walk the engine doesn't model).
-  //   skipSync     — don't run #syncBinding.  The Viewer passes this
-  //                  because its renderer ticks the binding directly
+  //   skipRuntime  — don't advance runtime.tick(dtMs).  Single-unit
+  //                  callers pass this when their renderer ticks the
+  //                  binding (and therefore the runtime) per-frame; the
+  //                  engine is along for the ride only to drive weapon SMs.
+  //   skipMovement — don't run #stepMovement / #stepAttack.  Single-unit
+  //                  callers pass this when the host owns movement
+  //                  (with aircraft altitude + ship wakes + manual ground
+  //                  walk the engine doesn't model).
+  //   skipSync     — don't run #syncBinding.  Single-unit callers pass
+  //                  this when their renderer ticks the binding directly
   //                  and pushes its own worldOffset.
   tick(dtMs, { skipRuntime = false, skipMovement = false, skipSync = false } = {}) {
     const insts = skipRuntime ? null : this.runtime.tick(dtMs)
@@ -560,9 +556,9 @@ export class GameEngine {
       if (!skipSync) this.#syncBinding(u, dtMs)
     }
     // Cross-unit dynamic-light aggregation.  Only when a renderer is
-    // attached AND we're driving the sync pass (the headless viewer
-    // path skips sync because its binding.tick already handles
-    // _pushPulseLight for the single unit).
+    // attached AND we're driving the sync pass (single-unit paths skip
+    // sync because the binding.tick already handles _pushPulseLight
+    // for the one unit).
     if (!skipSync && this._renderer) this.#pushSceneLight()
     return insts
   }
@@ -572,7 +568,7 @@ export class GameEngine {
   // single dynamic-light slot.  Cross-unit by design — without this,
   // each unit's binding._pushPulseLight would overwrite the previous
   // unit's contribution and only the last-iterated binding's light
-  // would survive (or, more often in Sandbox mode where binding.tick
+  // would survive (or, more often in multi-unit mode where binding.tick
   // isn't called per-unit at all, no light would surface).  Score =
   // lightStrength · max(r,g,b) · alpha/alpha0 — same formula
   // cob-binding uses for the single-unit case so behaviour matches.
@@ -601,9 +597,10 @@ export class GameEngine {
       return
     }
     const p = bestUnit.binding.particles
-    // Particle positions are in WORLD coords for sandbox (the binding's
-    // worldOffset has already been baked in by the spawn helper) — so
-    // pass straight through without re-adding the unit position.
+    // Particle positions are in WORLD coords for multi-entity mode
+    // (the binding's worldOffset has already been baked in by the
+    // spawn helper) — so pass straight through without re-adding the
+    // unit position.
     r.setPulseLight(
       [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
       [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
@@ -753,8 +750,7 @@ export class GameEngine {
     }
   }
 
-  // #stepWeapon — port of MvControls._updateWeapon, generalised.
-  // Drives the aim thread lifecycle, reload timing, and burst cycling
+  // #stepWeapon drives the aim thread lifecycle, reload timing, and burst cycling
   // for ONE slot.  When the gates align, emits the 'fire' event so the
   // rendering layer spawns the visible projectile / beam / smoke trail
   // / sound, and applies hit-scan damage when the target is a live
@@ -779,11 +775,10 @@ export class GameEngine {
     }
     const binding = u.binding
     if (!binding) return
-    // Pre-Create gate matches the viewer SM: firing during the Create
-    // script causes static-var reads before Create has initialised
-    // them.  Only consulted when _lifecycle is set (the viewer's
-    // MvControls writes it; sandbox auto-Create never does, so the
-    // gate silently passes through).
+    // Pre-Create gate: firing during the Create script causes static-
+    // var reads before Create has initialised them.  Only consulted
+    // when _lifecycle is set (single-unit callers write it; multi-
+    // entity auto-Create never does, so the gate silently passes through).
     if (binding._lifecycle === 'unborn' || binding._lifecycle === 'creating') return
     const slotName = SLOT_NAMES[slot]
     const aimScript = 'Aim' + slotName
@@ -852,7 +847,7 @@ export class GameEngine {
         anchor,
         target,
       })
-      // Hit-scan damage for unit-vs-unit fire (sandbox skirmishes).
+      // Hit-scan damage for unit-vs-unit fire.
       // Real game models per-projectile flight-time damage; the engine
       // doesn't yet, so apply on fire when the target is a live unit
       // ref.  Point targets (manual fire-at-ground) don't damage anything.
@@ -923,7 +918,7 @@ export class GameEngine {
   }
 
   // #weaponRangeFor returns slot N's engagement range (wu).  Used by
-  // #stepAttack to decide walk-or-fire.  Falls back to a sandbox
+  // #stepAttack to decide walk-or-fire.  Falls back to a generous
   // default when the unit has no weapon meta yet (FBI fetch races
   // the first attack order on freshly-spawned units).
   #weaponRangeFor(u, slot) {
@@ -1066,17 +1061,17 @@ export class GameEngine {
   // #pieceWorldPos reads the post-COB-anim WORLD position of a piece.
   //
   // `piece.worldMatrix` is computed by Piece.computeWorldMatrix with
-  // the renderer's `_modelMatrix` as the root parent.  In single-unit
-  // viewer mode the renderer sets `_modelMatrix` from setUnitTransform
-  // (typically identity since the studio unit sits at origin); in
-  // multi-unit sandbox mode it sets `_modelMatrix` from entity.transform
+  // the renderer's `_modelMatrix` as the root parent.  In single-
+  // entity mode the renderer sets `_modelMatrix` from setUnitTransform
+  // (typically identity since a single unit sits at origin); in
+  // multi-entity mode it sets `_modelMatrix` from entity.transform
   // per-entity (translate by unit world pos, rotate by heading).
   // Either way, by the time we read piece.worldMatrix[12,13,14] it's
   // already in WORLD space — the unit's translation is baked in.
   //
-  // Sandbox previously appeared to spawn particles at the wrong
-  // offset.  That symptom was real but the cause turned out to be a
-  // stale piece.worldMatrix (computed against an old _modelMatrix
+  // Multi-entity mode previously appeared to spawn particles at the
+  // wrong offset.  That symptom was real but the cause turned out to
+  // be a stale piece.worldMatrix (computed against an old _modelMatrix
   // from the previous tab's renderer state), not double-translation.
   //
   // Renderer calls computeWorldMatrix every frame; engine tick runs
@@ -1091,8 +1086,8 @@ export class GameEngine {
     return [u.pos.x, u.pos.y + 14, u.pos.z]
   }
 
-  // #aimAnglesFor — port of MvControls._aimAnglesFor.  Returns TA-unit
-  // heading + pitch for the slot's AimX(heading, pitch) call.
+  // #aimAnglesFor returns TA-unit heading + pitch for the slot's
+  // AimX(heading, pitch) call.
   //
   // Coordinate-system bookkeeping:
   //   worldHeading + u.heading are angles measured CCW from +Z (the

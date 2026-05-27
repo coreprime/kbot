@@ -25,8 +25,8 @@ export class Model {
 
   // cloneForInstance returns a new Model wrapping a freshly-cloned
   // piece tree (every Piece duplicated via Piece.cloneForInstance) so
-  // the caller can spawn N sandbox unit instances of the same type
-  // without them stomping each other's animated pose.  All GPU-backed
+  // the caller can spawn N unit instances of the same type without
+  // them stomping each other's animated pose.  All GPU-backed
   // immutable buffers (drawGroups + wireframe) stay shared by
   // reference; the clone is marked isInstance so dispose() skips GPU
   // teardown (releasing those shared VBOs would invalidate the source
@@ -40,8 +40,8 @@ export class Model {
   }
 
   // dispose releases every piece's GPU buffers — must be called when the
-  // user closes the viewer so the WebGL context can be reused for the
-  // next model without leaks.
+  // host closes so the WebGL context can be reused for the next model
+  // without leaks.
   dispose(gl) {
     // Instance clones share the source model's VBOs — deleting them
     // here would break every other live unit sharing the geometry.

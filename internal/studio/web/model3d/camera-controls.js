@@ -1,8 +1,8 @@
 // camera-controls.js
 //
-// Reusable orbit-camera input wiring shared by the single-unit editor
-// (ModelViewer) and the multi-unit Sandbox.  Pulls the pointer / wheel
-// gestures into one place so both views feel identical:
+// Reusable orbit-camera input wiring shared by single-entity and
+// multi-entity host views.  Pulls the pointer / wheel gestures into
+// one place so both views feel identical:
 //
 //   left-drag           orbit (yaw + pitch)
 //   right-drag          pan freely
@@ -21,7 +21,7 @@
 // onLeftDragStart (optional) — when supplied, plain left-drags
 // (no modifier, no right-button) hand off to the host instead of
 // orbiting the camera.  The host receives the live pointer events
-// directly and decides what the drag means (e.g. Sandbox draws a
+// directly and decides what the drag means (e.g. drawing a
 // rectangle-select).  The orbit handler still runs for non-left
 // drags (right-drag pan, shift/ctrl modifiers).
 export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart }) {
@@ -82,7 +82,7 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
 
   handlers.down = (e) => {
     // Host first-pass — let the host inspect every plain-left or
-    // shift-left press.  Shift is a host modifier now (sandbox uses
+    // shift-left press.  Shift is a host modifier now (hosts may use
     // it for drag-select rectangle); ctrl/cmd remain camera-only
     // (ground-plane pan).  The host returns truthy to claim the
     // gesture; we then skip camera input until pointer-up so the
@@ -107,10 +107,10 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
     const dy = e.clientY - pointer.y
     pointer.x = e.clientX
     pointer.y = e.clientY
-    // Shift is intentionally NOT a camera modifier here — both views
-    // claim it for unit-orders gestures (sandbox: drag-select;
-    // viewer: future per-mode hooks), so the camera leaves it alone
-    // and the gesture falls through to the host via onLeftDragStart.
+    // Shift is intentionally NOT a camera modifier here — hosts
+    // claim it for unit-orders gestures (e.g. drag-select), so the
+    // camera leaves it alone and the gesture falls through to the
+    // host via onLeftDragStart.
     // Ctrl/Cmd + drag stays as the ground-plane pan (the canonical
     // "scroll across the battlefield" gesture); right-drag stays as
     // camera-relative pan (TA convention).
@@ -131,8 +131,8 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
         camera.panBy(dx, dy)
       }
     } else {
-      // Plain drag → orbit.  0.35 scaling matches the unit editor's
-      // historical feel — comfortable for both fine inspection and
+      // Plain drag → orbit.  0.35 scaling matches the historical
+      // single-entity feel — comfortable for both fine inspection and
       // sweeping turns without needing two gears.  Auto-rotate +
       // tracking are intentionally PRESERVED — the user is just
       // looking at the scene from a different angle, not redirecting
@@ -165,18 +165,18 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
   // pan, not a menu trigger.
   handlers.context = (e) => e.preventDefault()
 
-  // R-key toggles auto-rotate.  Shared across views so the same
-  // muscle memory works in unit editor + sandbox.  Gated on the
-  // owning dialog being visible (caller passes dialogId) so the
-  // shortcut doesn't fire while a different tab type owns the
-  // screen.  Skipped while the user is typing in any form control.
+  // R-key toggles auto-rotate.  Shared across host views so the same
+  // muscle memory works everywhere.  Gated on the owning dialog being
+  // visible (caller passes dialogId) so the shortcut doesn't fire while
+  // a different tab type owns the screen.  Skipped while the user is
+  // typing in any form control.
   handlers.key = (e) => {
     if (dialogId) {
       const dlg = document.getElementById(dialogId)
       if (!dlg || dlg.classList.contains('hidden')) return
     }
-    // Per-tab gate (round 35): when multiple unit / sandbox tabs are
-    // open, each calls attachOrbitControls and adds its own window-
+    // Per-tab gate: when multiple host-view tabs are open, each calls
+    // attachOrbitControls and adds its own window-
     // level keydown listener.  Only the foreground tab's canvas is
     // attached to the DOM (per-tab attach/detach moves canvases in /
     // out of the stage), so `canvas.isConnected` distinguishes the
@@ -234,7 +234,7 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
   canvas.addEventListener('contextmenu', handlers.context)
   window.addEventListener('keydown', handlers.key)
 
-  // Detach returns the resources back to the host so a viewer swap
+  // Detach returns the resources back to the host so a view swap
   // doesn't leak listeners onto the shared canvas — including the
   // arrow-key scroll RAF loop if one is in flight.
   return function detach() {

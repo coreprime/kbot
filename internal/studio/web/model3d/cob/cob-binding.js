@@ -54,11 +54,11 @@ export class CobBinding {
     }
     this.particles = new ParticlePool(1024)
     // worldOffset — applied to every piece-anchored SFX emit so that
-    // multi-unit hosts (the Sandbox) can place each unit at a
-    // different world position while reusing the same binding code.
-    // Single-unit hosts that render their unit at the world origin
-    // (the unit editor) leave this at {0,0,0}.  Sandbox sets it on
-    // every tick from each unit's pos.
+    // multi-entity hosts can place each unit at a different world
+    // position while reusing the same binding code.  Single-entity
+    // hosts that render their unit at the world origin leave this
+    // at {0,0,0}.  Multi-entity hosts set it on every tick from each
+    // unit's pos.
     this.worldOffset = { x: 0, y: 0, z: 0 }
     // Audio pool — central registry for every sound the studio plays
     // (unit acks, weapon fire, hits, UI previews).  Lives on the
@@ -116,7 +116,7 @@ export class CobBinding {
     // without this gate `dtMs * playbackRate` kept advancing them on
     // wall-clock time because playbackRate stays at 1 when paused
     // (only `paused` flips).  Mirrors the gate game-engine.js uses
-    // in its own #syncBinding so sandbox + viewer behave identically.
+    // in its own #syncBinding so both hosts behave identically.
     const partRate = this.runtime.paused ? 0 : (this.runtime.playbackRate || 1)
     this.particles.tick(dtMs * partRate)
     // Build-time transporter sparkles — emit a smattering of green
@@ -339,10 +339,10 @@ export class CobBinding {
       // before walking the piece tree, so worldMatrix[12..14] is the
       // piece's world position with the unit transform already baked
       // in.  Adding `worldOffset` here would double the unit pos in
-      // sandbox (where worldOffset is non-zero), making muzzle flashes
-      // appear at 2× the firing unit's world coords.  Single-unit
-      // viewer renders at origin so the old +worldOffset was a no-op;
-      // sandbox is where the bug showed up.
+      // multi-entity mode (where worldOffset is non-zero), making
+      // muzzle flashes appear at 2× the firing unit's world coords.
+      // Single-entity mode renders at origin so the old +worldOffset
+      // was a no-op; multi-entity mode is where the bug showed up.
       const wm = piece.worldMatrix
       anchor = [wm[12], wm[13], wm[14]]
     } else {
@@ -440,11 +440,11 @@ export class CobBinding {
   // controller's unit position + heading via the per-piece world
   // matrices, so the effect tracks a moving unit naturally.
   _emitBuildSparkles(dtMs) {
-    // Build% lives on the viewer (window.__modelViewer.cobBuildPercent
+    // Build% lives on the active host (window.__modelViewer.cobBuildPercent
     // is the authoritative field, mirrored on the renderer's shader
     // uniform via setBuildPercent).  Read it directly — the binding
-    // doesn't carry a viewer reference but is always coupled to the
-    // one active viewer in the studio.
+    // doesn't carry a host reference but is always coupled to the
+    // one active host in the studio.
     const viewer = (typeof window !== 'undefined') ? window.__modelViewer : null
     if (!viewer) return
     const buildPct = viewer.cobBuildPercent
@@ -588,10 +588,10 @@ export class CobBinding {
     if (!piece) return [wo.x, wo.y, wo.z]
     // piece.worldMatrix is already in WORLD space — the renderer
     // bakes the unit transform into its _modelMatrix per-entity (or
-    // via setUnitTransform for the single-unit viewer) before walking
+    // via setUnitTransform for the single-entity path) before walking
     // the piece tree, so worldMatrix[12..14] is the absolute world
     // position.  Adding worldOffset here would double the unit's pos
-    // in sandbox.  The renderer recomputes worldMatrix on every
+    // in multi-entity mode.  The renderer recomputes worldMatrix on every
     // frame; we read the translation column directly.  Slightly
     // stale (last frame's transform) but the particle lifetime is
     // so long compared to the per-frame budget that no one will see

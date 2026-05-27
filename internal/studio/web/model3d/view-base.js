@@ -1,8 +1,7 @@
 // view-base.js
 //
-// Shared base for the Unit Editor (MvControls) and the Sandbox
-// (SandboxView).  Owns the scaffolding both views were reimplementing
-// independently:
+// Shared base for single-entity and multi-entity host views.  Owns
+// the scaffolding both views were reimplementing independently:
 //
 //   - Status-line text helper
 //   - Engine event subscription bookkeeping (auto-cleanup on dispose)
@@ -26,15 +25,15 @@
 //   getSelectedUnits()  — Array<UnitInstance> currently selected.
 //                         Single-unit views return their one unit.
 //                         Multi-unit views map their selection set.
-//   getInspectorMv()    — return the shape studio.js's panel
+//   getInspectorMv()    — return the shape the host UI's panel
 //                         renderers consume:
 //                           { camera, renderer, cob: { runtime, unit?,
 //                             particles?, audio?, hasScript?, ... } }
 //
 // Subclasses MUST call super() in their constructor.  No required
 // constructor arguments — config flows through the getters above so
-// SandboxView and MvControls can hand back their own state structures
-// (this.scene, this.viewer) without contorting a base-class signature.
+// subclasses can hand back their own state structures without
+// contorting a base-class signature.
 
 import { SmokeTrailManager } from './weapon-driver.js'
 import { attachUnitHotkeys } from './unit-hotkeys.js'
@@ -49,9 +48,8 @@ export class BaseView {
     // SmokeTrailManager — lazy.  initSmokeTrails() builds one on
     // demand; subclass per-frame tick code calls tickSmokeTrails().
     this._smokeTrails = null
-    // Status DOM element — subclasses point this at their own DOM
-    // (sandbox has a per-tab statusEl; viewer has a single shared one
-    // off ModelViewer).  setStatus() is a no-op when unset.
+    // Status DOM element — subclasses point this at their own DOM.
+    // setStatus() is a no-op when unset.
     this._statusEl = null
     // Detach closure returned by attachUnitHotkeys; cleared in
     // disposeBase().
@@ -61,9 +59,9 @@ export class BaseView {
   // ── Subclass surface (NOT defined as getters here) ────────────────
   //
   // Subclasses expose engine / runtime / camera in whichever shape
-  // fits — SandboxView assigns them as plain instance fields in
-  // open(); MvControls returns them through getters that delegate
-  // into this.viewer.cob / this.viewer.renderer.  Defining them as
+  // fits — some assign them as plain instance fields in open(); others
+  // return them through getters that delegate into their host's
+  // sub-objects.  Defining them as
   // getters on BaseView would shadow a subclass field-assignment
   // ("Cannot set property camera of #<BaseView> which has only a
   // getter"), so we just document the contract here and let the
@@ -142,10 +140,9 @@ export class BaseView {
   // ── Hotkey wiring ─────────────────────────────────────────────────
 
   // wireHotkeys attaches the shared unit-hotkey keymap.  Callers
-  // pass adapter callbacks because viewer and sandbox route commands
-  // differently (sandbox.setPendingCommand vs viewer._armSlotHotkey).
-  // Replaces any previously-wired detach.  See unit-hotkeys.js for
-  // the keymap definition.
+  // pass adapter callbacks because host views route commands through
+  // whichever arming primitives they expose.  Replaces any previously-
+  // wired detach.  See unit-hotkeys.js for the keymap definition.
   wireHotkeys(opts) {
     if (this._hotkeysDetach) {
       try { this._hotkeysDetach() } catch { /* ignore */ }
@@ -300,11 +297,11 @@ export class BaseView {
   // Both views' Effects + Audio panels show EVERY live binding's
   // particle pool / audio entries — not just the focused unit's.
   // The aggregators walk engine.units() and concatenate.  Lives on
-  // BaseView so both viewer + sandbox use one implementation.
+  // BaseView so every host uses one implementation.
   //
   // Cost: O(total alive particles) per refresh tick (4 Hz inspector
-  // throttle) — negligible for sandbox-scale fights and trivial for
-  // the single-unit viewer.
+  // throttle) — negligible for multi-entity skirmishes and trivial for
+  // the single-entity case.
 
   // _baseFxBufs — scratch arrays reused across refresh ticks so the
   // panel-open path doesn't allocate every 250 ms.  Auto-grows
@@ -424,9 +421,10 @@ export class BaseView {
     proxy.particles = this.aggregateParticlePool()
     proxy.audio = this.aggregateAudioPool()
     // _lifecycle default — the inspector's per-unit panels read this
-    // to gate buttons pre-Create.  Sandbox / aircraft-Create paths
-    // set it on the real binding; the proxy needs a sensible default
-    // for the "no binding" stub-cob path that doesn't ship the field.
+    // to gate buttons pre-Create.  Multi-entity / aircraft-Create
+    // paths set it on the real binding; the proxy needs a sensible
+    // default for the "no binding" stub-cob path that doesn't ship
+    // the field.
     if (!proxy._lifecycle && !cob._lifecycle) proxy._lifecycle = 'created'
     return proxy
   }

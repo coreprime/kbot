@@ -1,8 +1,8 @@
 // armed-cursor.js
 //
-// Reusable "armed action" cursor overlay shared by the single-unit
-// editor (MvControls) and the multi-unit Sandbox.  When the user
-// arms a command (Move / Attack / Primary / Secondary / Tertiary)
+// Reusable "armed action" cursor overlay shared by single-entity
+// and multi-entity host views.  When the user arms a command
+// (Move / Attack / Primary / Secondary / Tertiary)
 // the canvas's native cursor is hidden and an absolutely-positioned
 // <img> tracks the pointer with the TA-style animated GAF for that
 // action.  Same visual the live game uses for its order cursors.
@@ -28,8 +28,8 @@ export class ArmedCursor {
     this._overlay = null
     this._slot = null
     // _armed wins over _ambient when both are set — see setArmed /
-    // setAmbient.  Single-slot callers (the unit editor) just use
-    // setSlot which leaves both null and drives _slot directly.
+    // setAmbient.  Single-slot callers just use setSlot which leaves
+    // both null and drives _slot directly.
     this._armed = null
     this._ambient = null
     this._inside = true
@@ -77,8 +77,8 @@ export class ArmedCursor {
 
   // setAmbient sets the ambient (low-priority) slot.  Replaced by
   // setArmed when armed is non-null; shown otherwise.  Use for the
-  // idle / hover cursor (normal vs select-on-unit-hover) that the
-  // sandbox wants always-on while no command is armed.
+  // idle / hover cursor (normal vs select-on-unit-hover) that hosts
+  // want always-on while no command is armed.
   setAmbient(slot) {
     const want = this.#normalizeSlot(slot)
     if (this._ambient === want) return
@@ -97,7 +97,7 @@ export class ArmedCursor {
   }
 
   // dispose removes the overlay + detaches listeners.  Called on
-  // viewer tear-down so we don't leak per-mode singletons.
+  // view tear-down so we don't leak per-mode singletons.
   dispose() {
     if (this._overlay) {
       this._overlay.remove()

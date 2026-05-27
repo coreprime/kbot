@@ -51,8 +51,8 @@ export class OrbitCamera {
   applyTracking() {
     const t = this.trackedTarget
     if (!t) return
-    // Tolerate refs that aren't laid out exactly the way the
-    // single-unit / sandbox UnitInstance is — fall back to the unit
+    // Tolerate refs that aren't laid out exactly the way a
+    // UnitInstance is — fall back to the unit
     // pos when bounds aren't available, fall back to origin when
     // pos is missing too.  Keeps the camera following SOMETHING
     // sensible even with weird refs (e.g. between model load and
@@ -75,7 +75,7 @@ export class OrbitCamera {
   // frameBounds positions the camera so the given min/max box fills
   // most of the view.  Targets the bounding-box centroid directly —
   // the visual mass of TA units sits roughly at the geometric
-  // centre once the viewer's ground plane is in play (the legs no
+  // centre once the scene's ground plane is in play (the legs no
   // longer dangle into empty space; the ground catches the eye).
   frameBounds(min, max, paddingFactor = 1.5) {
     const cx = (min[0] + max[0]) * 0.5
@@ -134,9 +134,9 @@ export class OrbitCamera {
   // (y constant) using the camera's HEADING — the camera's forward
   // direction projected to the ground.  Unlike panBy, this ignores
   // pitch, so a top-down view doesn't make "forward" collapse to
-  // zero.  Used for ctrl-drag in the viewer: drag-down advances the
-  // camera in its facing direction (camera looks north → drag down
-  // goes north), drag-right strafes east relative to facing.
+  // zero.  Used for ctrl-drag: drag-down advances the camera in its
+  // facing direction (camera looks north → drag down goes north),
+  // drag-right strafes east relative to facing.
   panAlongGround(dx, dy) {
     // Speed scales with distance so the pan rate matches the visible
     // scene scale at any zoom level.
@@ -175,16 +175,16 @@ export class OrbitCamera {
     this.eye[0] = ex; this.eye[1] = ey; this.eye[2] = ez
     Mat4.lookAt(this.viewMatrix, this.eye, this.target, [0, 1, 0])
     // Invalidate the cached inv-view-proj so the next caller
-    // (sandbox screen-to-ground) recomputes against the fresh
+    // (screen-to-ground unprojection) recomputes against the fresh
     // view/proj matrices.
     this._invViewProjDirty = true
   }
 
-  // invViewProj returns the inverse of (proj * view) — used by the
-  // sandbox to unproject a screen-space click into a world-space ray
-  // for ground intersection.  Cached and recomputed only when
-  // updateMatrices marks the cache dirty so we don't redo the 4x4
-  // multiply + invert on every pointer event.
+  // invViewProj returns the inverse of (proj * view) — used to
+  // unproject a screen-space click into a world-space ray for ground
+  // intersection.  Cached and recomputed only when updateMatrices
+  // marks the cache dirty so we don't redo the 4x4 multiply + invert
+  // on every pointer event.
   invViewProj() {
     if (!this._invViewProj) this._invViewProj = Mat4.create()
     if (!this._viewProj) this._viewProj = Mat4.create()

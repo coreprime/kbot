@@ -1,11 +1,11 @@
 // unit-hotkeys.js
 //
-// Shared "issue an order via the keyboard" keymap used by both the
-// Unit Editor (MvControls) and the Sandbox (SandboxView).  The two
-// views had identical M/A/F/D/S/T handlers wired in their own
-// keydown listeners — same modifier gating, same input-field skip,
-// same routing — so the keymap lives here once and both views attach
-// it with their own command callbacks.
+// Shared "issue an order via the keyboard" keymap used by both
+// single-entity and multi-entity host views.  The hosts had identical
+// M/A/F/D/S/T handlers wired in their own keydown listeners — same
+// modifier gating, same input-field skip, same routing — so the
+// keymap lives here once and each host attaches it with its own
+// command callbacks.
 //
 // Keys (no modifier; modifier chords skip so they don't fight
 // browser shortcuts):
@@ -17,22 +17,20 @@
 //   T  → onTrack()                 Toggle camera tracking
 //
 // The host passes:
-//   dialogId   — only fire when this dialog is on-screen.  Both views
-//                use 'model-viewer-dialog' but with different
-//                child classes ('sandbox-mode' or not); the dialog
-//                being visible is the cross-view "this view is alive"
-//                signal.
+//   dialogId   — only fire when this dialog is on-screen.  The hosts
+//                pick a dialog id whose visibility is the cross-view
+//                "this view is alive" signal.
 //   onCommand  — receives one of 'move' | 'primary' | 'secondary' |
-//                'tertiary'.  Hosts route this to setPendingCommand
-//                (sandbox) or _armSlotHotkey (viewer).
+//                'tertiary'.  Hosts route this to whichever arming
+//                primitive they expose.
 //   onStop     — fired on S.
 //   onTrack    — fired on T.
-//   allowed    — optional () => bool gate.  Used by Sandbox to skip
+//   allowed    — optional () => bool gate.  Hosts use this to skip
 //                hotkeys when nothing is selected (so a stray keystroke
 //                doesn't arm a cursor with no unit to dispatch to).
-//                Viewer-side gating happens INSIDE the callback
-//                (button.disabled check), so its allowed() always
-//                returns true.
+//                Hosts that always have a target gate inside the
+//                callback (button.disabled check), so their allowed()
+//                always returns true.
 //
 // Returns a detach() closure the caller invokes on view dispose so
 // listeners don't pile up across tab switches.
@@ -61,7 +59,7 @@ export function attachUnitHotkeys({
     if (e.ctrlKey || e.metaKey || e.altKey) return
     const k = (e.key || '').toLowerCase()
     // Order keys — gated on `allowed()` when supplied so hosts can
-    // refuse the keystroke (no selection in sandbox, e.g.) without
+    // refuse the keystroke (e.g. no current selection) without
     // engaging the cursor.
     if (k === 'm' || k === 'a' || k === 'f' || k === 'd') {
       if (allowed && !allowed()) return

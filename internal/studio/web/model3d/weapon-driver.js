@@ -1,17 +1,17 @@
 // weapon-driver.js
 //
-// Shared weapon-firing primitives used by both the single-unit editor
-// (MvControls) and the multi-unit Sandbox.  A weapon "shot" needs the
-// same things in both modes: a particle of the right visual kind,
-// optional smoke trail, an instant-hit laser beam (for beamweapons),
-// and the weapon's start sound.  Each path also needs a binding so
-// the particle / audio pools live with the firing unit, plus the
-// FBI weapon metadata (range / velocity / ballistic / etc.) and a
-// palette so laser beams render in TA-accurate colours.
+// Shared weapon-firing primitives used by single-entity and
+// multi-entity host views.  A weapon "shot" needs the same things in
+// both modes: a particle of the right visual kind, optional smoke
+// trail, an instant-hit laser beam (for beamweapons), and the weapon's
+// start sound.  Each path also needs a binding so the particle / audio
+// pools live with the firing unit, plus the FBI weapon metadata
+// (range / velocity / ballistic / etc.) and a palette so laser beams
+// render in TA-accurate colours.
 //
 // The functions here are pure helpers — they don't keep any state.
 // Each call decides the visual kind from the weapon metadata + the
-// weapon's name (heuristic carry-over from MvControls' original
+// weapon's name (carried over from the original heuristic-based
 // implementation), then routes the emit through the binding's pool.
 
 import {
@@ -43,8 +43,8 @@ export function laserColor(weapon, palette) {
 }
 
 // pickProjectileKind decides which particle kind to emit based on
-// weapon metadata + name heuristic.  Same priority order MvControls
-// used so visuals stay consistent across both views.
+// weapon metadata + name heuristic.  Same priority order the original
+// implementation used so visuals stay consistent across host views.
 export function pickProjectileKind(weapon) {
   if (/disintegrator|dgun|d_gun/i.test(weapon.name)) return SFX_PROJECTILE_DGUN
   if (weapon.smokeTrail || weapon.selfProp || /missile|rocket/i.test(weapon.model || '')) return SFX_PROJECTILE_MISSILE
@@ -96,12 +96,12 @@ export function playWeaponSound({ binding, weapon, anchor }) {
 }
 
 // SmokeTrailManager owns the per-frame "drop a puff at the missile's
-// current position every 40 ms of sim-time" emitter.  Both the
-// single-unit viewer and the multi-unit Sandbox need this, and the
-// math is non-trivial enough (recompute the projectile's parametric
-// position from launch + velocity + gravity·t²/2 because the pool
-// compacts dead slots and we can't track an index) that having two
-// copies invited drift.  One implementation, both views import it.
+// current position every 40 ms of sim-time" emitter.  Both single-
+// entity and multi-entity host paths need this, and the math is
+// non-trivial enough (recompute the projectile's parametric position
+// from launch + velocity + gravity·t²/2 because the pool compacts
+// dead slots and we can't track an index) that having two copies
+// invited drift.  One implementation, every host imports it.
 //
 // Usage:
 //   const trails = new SmokeTrailManager()
@@ -261,11 +261,10 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   binding.particles.emit(kind, anchor, emitOpts)
   playWeaponSound({ binding, weapon, anchor })
   // Missiles trail smoke along their flight path.  Caller passes a
-  // SmokeTrailManager via opts.smokeTrails when it wants this — the
-  // viewer's MvControls holds one for the active unit; the Sandbox
-  // holds one shared across every spawned unit's bindings.  No-ops
-  // cleanly when the manager isn't supplied or the kind isn't a
-  // missile.
+  // SmokeTrailManager via opts.smokeTrails when it wants this — hosts
+  // either hold one per active unit or one shared across every
+  // spawned unit's bindings.  No-ops cleanly when the manager isn't
+  // supplied or the kind isn't a missile.
   if (smokeTrails && kind === SFX_PROJECTILE_MISSILE) {
     smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs)
   }
