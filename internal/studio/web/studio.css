@@ -3797,8 +3797,15 @@ canvas {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
+  overflow: hidden;
 }
-.mv-panel-row > .mv-inspector-body {
+/* Any body slot inside the two-pane layout should obey the flex
+   parent's width — without min-width:0 the body's content (long
+   asm lines, the BOS pane's wide table) blows past the sidebar
+   pushing the sidebar off-screen.  The selector matches whichever
+   bodyClass the caller chose (.mv-inspector-body, .mv-thread-code-body
+   for the debugger, etc). */
+.mv-panel-row > :not(.mv-panel-sidebar) {
   flex: 1 1 auto;
   min-width: 0;
 }
