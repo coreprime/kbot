@@ -790,13 +790,16 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       }
       // Detach EVERY sandbox tab's canvas from the stage and pull
       // the shared single-unit canvas back in so the unit editor
-      // has a surface to draw onto.
+      // has a surface to draw onto.  Use the cached reference —
+      // once a sandbox tab has detached the shared canvas,
+      // document.getElementById no longer finds it (it's out of
+      // the document tree), and the re-mount would silently no-op.
       const stage = document.querySelector('.model-viewer-stage')
       if (stage) {
         for (const t of tabs) {
           if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
         }
-        const sharedCanvas = document.getElementById('model-viewer-canvas')
+        const sharedCanvas = sharedModelViewerCanvas()
         if (sharedCanvas && sharedCanvas.parentNode !== stage) {
           stage.appendChild(sharedCanvas)
         }
@@ -16969,6 +16972,21 @@ function openSandboxStub() {
 // sandbox tabs no longer share units / runtime / selection.
 let sandboxViewInstance = null
 
+// Captured at first activation — the shared `#model-viewer-canvas`
+// element used by the single-unit ModelViewer.  Once a sandbox tab
+// detaches it from the stage to mount its own per-tab canvas,
+// getElementById('model-viewer-canvas') returns null because the
+// element is no longer in the document tree.  Holding a reference
+// here keeps the re-mount path on the way back to a unit-editor tab
+// alive instead of silently appending nothing.
+let _sharedModelViewerCanvas = null
+function sharedModelViewerCanvas() {
+  if (!_sharedModelViewerCanvas) {
+    _sharedModelViewerCanvas = document.getElementById('model-viewer-canvas')
+  }
+  return _sharedModelViewerCanvas
+}
+
 async function activateSandboxTab(tab) {
   // Hide the model-viewer dialog if visible — sandbox lives on the
   // same canvas but with its own chrome.  Reuse the model-viewer
@@ -17013,7 +17031,7 @@ async function activateSandboxTab(tab) {
       if (t === tab) continue
       if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
     }
-    const sharedCanvas = document.getElementById('model-viewer-canvas')
+    const sharedCanvas = sharedModelViewerCanvas()
     if (sharedCanvas && sharedCanvas.parentNode === stage) {
       sharedCanvas.parentNode.removeChild(sharedCanvas)
     }
@@ -17144,13 +17162,39 @@ function wireSandboxControlsIntercept() {
       }
       return
     }
-    // Move arms the next ground click as a move target; the three
-    // weapon slots all map to attack in sandbox (we don't currently
-    // distinguish per-slot targets here — that's task #211's longer
-    // refactor).  Each Aim/Fire script is still triggered per shot
-    // by the scene tick, so the visual difference is preserved.
-    if (action === 'move') sb.setPendingCommand('move')
-    else if (action === 'primary' || action === 'secondary' || action === 'tertiary') sb.setPendingCommand('attack')
+    // Move arms the next ground click as a move target.
+    if (action === 'move') { sb.setPendingCommand('move'); return }
+    // Fire-immediately for Primary/Secondary/Tertiary — runs Aim*
+    // then Fire* on each currently-selected unit using the unit's
+    // present heading (no target-click required).  Matches the
+    // unit editor's behaviour where the Fire button on a single
+    // unit fires straight away at whatever the turret's aimed at.
+    if (action === 'primary' || action === 'secondary' || action === 'tertiary') {
+      const slot = action[0].toUpperCase() + action.slice(1)
+      const aimName = 'Aim' + slot
+      const fireName = 'Fire' + slot
+      let fired = 0
+      for (const id of sb.scene.selected) {
+        const u = sb.scene.unitById(id)
+        if (!u || !u.binding) continue
+        const aimHeadingTA = Math.round((u.heading) * 65536 / (Math.PI * 2)) & 0xffff
+        if (u.binding.hasScript(aimName)) {
+          try { u.binding.start(aimName, [aimHeadingTA, 0]) } catch { /* ignore */ }
+        }
+        if (u.binding.hasScript(fireName)) {
+          try { u.binding.start(fireName) } catch { /* ignore */ }
+          fired++
+        }
+      }
+      const sl = action === 'primary' ? 'Primary' : action === 'secondary' ? 'Secondary' : 'Tertiary'
+      if (typeof sb._setStatus === 'function') {
+        // _setStatus is private; use the status element directly
+      }
+      const stat = document.getElementById('status')
+      if (stat) stat.textContent = fired
+        ? `${sl} fired on ${fired} unit${fired === 1 ? '' : 's'}.`
+        : `${sl} — no selected unit has ${fireName}.`
+    }
   }, /* capture = */ true)
 }
 
