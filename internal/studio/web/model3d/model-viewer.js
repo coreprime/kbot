@@ -419,6 +419,7 @@ export class ModelViewer {
       canvas: this.canvas,
       renderer: this.renderer,
       camera: this.camera,
+      dialogId: 'model-viewer-dialog',
       onUserInteract: (kind) => {
         if (kind === 'pan' && this._mvControls?.tracking) {
           this._mvControls.setTracking(false)

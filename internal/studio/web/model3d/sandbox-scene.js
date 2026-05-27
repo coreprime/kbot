@@ -214,6 +214,13 @@ export class SandboxScene {
         }
       }
       // ── Movement integration ────────────────────────────────
+      // Mirrors the single-unit viewer's MvControls movement (see
+      // mv-controls.js _updateMove): turn toward target at FBI
+      // TurnRate (shortest-arc unwrap), advance forward at FBI
+      // MaxVelocity, snap to target inside arrive threshold.  Kbots
+      // and tanks pivot in place then walk; that keeps the heading
+      // animation readable instead of snapping which previously made
+      // units teleport-spin to face a new move order.
       const wasMoving = !!u.isMoving
       if (u.moveTarget) {
         const dx = u.moveTarget.x - u.pos.x
@@ -223,15 +230,41 @@ export class SandboxScene {
           u.moveTarget = null
           u.isMoving = false
         } else {
-          // Use FBI MaxVelocity if available, else a sane default
-          // (30 wu/sec ≈ a kbot's walking speed).
-          const speed = (u.meta && u.meta.maxVelocity > 0)
-            ? u.meta.maxVelocity * 30 /* FBI units/frame × 30Hz → wu/sec */
-            : 30
-          const step = Math.min(dist, speed * dtSec)
-          u.pos.x += (dx / dist) * step
-          u.pos.z += (dz / dist) * step
-          u.heading = Math.atan2(dx, dz)
+          // Desired heading: atan2 with the renderer's +Z-forward
+          // convention.  Shortest-arc unwrap so a 350° target from
+          // heading 10° turns 20° clockwise instead of 340° the long
+          // way around.
+          const want = Math.atan2(dx, dz)
+          // FBI TurnRate: TA-angle units per frame.  Convert to
+          // rad/sec = (TA/frame) × (2π / 65536) × 30 Hz.  600 is the
+          // unit-editor default fallback.
+          const turnRateTA = (u.meta && u.meta.turnRate) ? u.meta.turnRate : 600
+          const turnRate = (turnRateTA / 65536) * Math.PI * 2 * 30
+          let dh = want - u.heading
+          while (dh > Math.PI) dh -= Math.PI * 2
+          while (dh < -Math.PI) dh += Math.PI * 2
+          const turnStep = turnRate * dtSec
+          let aligned
+          if (Math.abs(dh) > turnStep) {
+            u.heading += Math.sign(dh) * turnStep
+            aligned = false
+          } else {
+            u.heading = want
+            aligned = true
+          }
+          // Walk forward only once aligned — matches the kbot/tank
+          // pivot-then-walk feel of the unit viewer.  Ships + hovers
+          // would walk-while-turning; sandbox doesn't currently track
+          // unit-type meta deep enough to gate that, so we keep the
+          // pivot-first model uniform.
+          if (aligned) {
+            const speed = (u.meta && u.meta.maxVelocity > 0)
+              ? u.meta.maxVelocity * 30 /* FBI units/frame × 30Hz → wu/sec */
+              : 30
+            const step = Math.min(dist, speed * dtSec)
+            u.pos.x += Math.sin(u.heading) * step
+            u.pos.z += Math.cos(u.heading) * step
+          }
           u.isMoving = true
         }
       } else {

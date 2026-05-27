@@ -788,6 +788,19 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
           sandboxViewInstance.renderer.clearCanvas?.()
         } catch { /* ignore */ }
       }
+      // Detach EVERY sandbox tab's canvas from the stage and pull
+      // the shared single-unit canvas back in so the unit editor
+      // has a surface to draw onto.
+      const stage = document.querySelector('.model-viewer-stage')
+      if (stage) {
+        for (const t of tabs) {
+          if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
+        }
+        const sharedCanvas = document.getElementById('model-viewer-canvas')
+        if (sharedCanvas && sharedCanvas.parentNode !== stage) {
+          stage.appendChild(sharedCanvas)
+        }
+      }
       void activateModelTab(incoming)
     }
     return
@@ -16983,16 +16996,35 @@ async function activateSandboxTab(tab) {
     }
   }
   // Per-tab SandboxView — each sandbox tab owns its own scene,
-  // runtime, selection set, camera state.  Lazy-constructed on
-  // first activation; reused across re-activations of the SAME tab
-  // so units / camera framing survive.
+  // runtime, selection set, camera state, AND canvas.  Lazy-
+  // constructed on first activation; reused across re-activations
+  // of the SAME tab so units / camera framing survive.  The canvas
+  // gets attached into the stage on activation and detached on the
+  // way out so an inactive tab's GL surface is not in the DOM and
+  // can't bleed through into the active tab's frame.
+  const stage = document.querySelector('.model-viewer-stage')
+  // Detach every OTHER tab's canvas (sandbox + single-unit) from
+  // the stage so the incoming tab's canvas is the only one in the
+  // DOM tree.  Single-unit ModelViewer still uses the shared HTML
+  // canvas (#model-viewer-canvas); keep it parked off-stage when a
+  // sandbox tab takes over.
+  if (stage) {
+    for (const t of tabs) {
+      if (t === tab) continue
+      if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
+    }
+    const sharedCanvas = document.getElementById('model-viewer-canvas')
+    if (sharedCanvas && sharedCanvas.parentNode === stage) {
+      sharedCanvas.parentNode.removeChild(sharedCanvas)
+    }
+  }
   if (!tab.viewer) {
     const mod = await import('./model3d/sandbox-view.js')
     tab.viewer = new mod.SandboxView({
-      canvas: $('#model-viewer-canvas'),
       statusEl: $('#status'),
     })
   }
+  if (typeof tab.viewer.attach === 'function' && stage) tab.viewer.attach(stage)
   // Swap the global to whichever tab is now active so the rest of
   // the studio (panels, ribbon handlers, refreshMvInspectors) reads
   // from this tab's view.

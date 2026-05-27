@@ -24,7 +24,19 @@ import { ArmedCursor } from './armed-cursor.js'
 
 export class SandboxView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
-    this.canvas = canvas
+    // Per-tab canvas — caller (studio.js activateSandboxTab) creates
+    // a fresh <canvas> element for each tab and passes it in here.
+    // The canvas is appended into a host stage by attach() and pulled
+    // out by detach(), so an inactive tab's GL context lives on but
+    // its surface is no longer in the DOM tree (no draw-through, no
+    // bleed into the active tab's frame).  Falls back to creating
+    // its own canvas if the caller didn't pass one — preserves the
+    // single-canvas legacy path.
+    this.canvas = canvas || (() => {
+      const c = document.createElement('canvas')
+      c.className = 'model-viewer-canvas'
+      return c
+    })()
     this.statusEl = statusEl
     this.onModelLoaded = onModelLoaded
     this.renderer = null
@@ -49,6 +61,23 @@ export class SandboxView {
     // ground plane.  Click confirms the spawn at the current ghost
     // pos; Escape / right-click cancels.
     this._placement = null  // { name, model, cobScript, pos: {x, z} }
+  }
+
+  // attach mounts this tab's canvas into the given stage element.
+  // Idempotent — if the canvas is already the only child it's a
+  // no-op.  Called on tab activation; detach() pulls it back out
+  // on the way to the next tab so the inactive viewer's canvas is
+  // OUT of the DOM and can't bleed through.
+  attach(stage) {
+    if (!stage || !this.canvas) return
+    if (this.canvas.parentNode === stage) return
+    stage.appendChild(this.canvas)
+  }
+
+  detach() {
+    if (this.canvas && this.canvas.parentNode) {
+      this.canvas.parentNode.removeChild(this.canvas)
+    }
   }
 
   async open() {
@@ -78,6 +107,7 @@ export class SandboxView {
         canvas: this.canvas,
         renderer: this.renderer,
         camera: this.camera,
+        dialogId: 'model-viewer-dialog',
       })
       // Armed cursor (Move / Attack glyph) uses the shared ArmedCursor
       // helper — same animated TA cursor PNGs the unit editor shows

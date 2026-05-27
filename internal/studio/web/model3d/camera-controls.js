@@ -10,15 +10,15 @@
 //   ctrl/cmd + drag     pan along the world's GROUND PLANE — walks
 //                       the camera through the scene without tilting
 //   wheel               zoom (in on scroll-up, out on scroll-down)
+//   R                   toggle auto-rotate
 //
-// Auto-rotate is dropped on any user gesture so the camera holds the
-// angle the user just chose — matches the live game's instinct that
-// "if I touched it, stop moving it."  The optional `onUserInteract`
-// hook lets the host clear external state (e.g. the "Tracking"
-// checkbox the Renderer panel exposes) when the user starts driving
-// the camera manually.
+// Auto-rotate is dropped on PAN gestures only (shift/ctrl/right-drag)
+// — orbit-drag and wheel-zoom keep it on since neither moves the
+// orbit pivot.  The optional `onUserInteract` hook lets the host
+// clear external state (e.g. the "Tracking" checkbox the Renderer
+// panel exposes) when the user starts driving the camera manually.
 
-export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }) {
+export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId }) {
   if (!canvas || !camera) return () => {}
   let pointer = null
   const handlers = {}
@@ -100,12 +100,36 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
   // pan, not a menu trigger.
   handlers.context = (e) => e.preventDefault()
 
+  // R-key toggles auto-rotate.  Shared across views so the same
+  // muscle memory works in unit editor + sandbox.  Gated on the
+  // owning dialog being visible (caller passes dialogId) so the
+  // shortcut doesn't fire while a different tab type owns the
+  // screen.  Skipped while the user is typing in any form control.
+  handlers.key = (e) => {
+    if (dialogId) {
+      const dlg = document.getElementById(dialogId)
+      if (!dlg || dlg.classList.contains('hidden')) return
+    }
+    const t = e.target
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return
+    if (t && t.isContentEditable) return
+    if (e.ctrlKey || e.metaKey || e.altKey) return
+    const k = (e.key || '').toLowerCase()
+    if (k === 'r') {
+      e.preventDefault()
+      if (renderer && typeof renderer.setAutoRotate === 'function') {
+        renderer.setAutoRotate(!renderer.autoRotate)
+      }
+    }
+  }
+
   canvas.addEventListener('pointerdown', handlers.down)
   canvas.addEventListener('pointermove', handlers.move)
   canvas.addEventListener('pointerup', handlers.up)
   canvas.addEventListener('pointercancel', handlers.cancel)
   canvas.addEventListener('wheel', handlers.wheel, { passive: false })
   canvas.addEventListener('contextmenu', handlers.context)
+  window.addEventListener('keydown', handlers.key)
 
   // Detach returns the resources back to the host so a viewer swap
   // doesn't leak listeners onto the shared canvas.
@@ -116,5 +140,6 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract }
     canvas.removeEventListener('pointercancel', handlers.cancel)
     canvas.removeEventListener('wheel', handlers.wheel)
     canvas.removeEventListener('contextmenu', handlers.context)
+    window.removeEventListener('keydown', handlers.key)
   }
 }
