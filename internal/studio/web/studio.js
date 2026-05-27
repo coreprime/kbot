@@ -452,7 +452,6 @@ import {
 // bracket overlay + per-tick PC highlight still live in this file
 // (R43e); the modal reaches them through host-callback seams below.
 import {
-  _mvThreadCodePanels,
   openMvThreadCodeModal,
   closeAllMvThreadCodePanels,
 } from './ui/unit-editor/debugger/modal.js'
@@ -498,6 +497,15 @@ import {
   _wireRuntimeHelpersToWindow,
 } from './ui/unit-editor/sim-controls.js'
 
+// Per-tick inspector publish + debugger repaint.  Called from each
+// view's renderer.onAfterFrame hook (both ModelViewer and SandboxView)
+// to publish the active inspector mv proxy + iterate every open
+// debugger panel.  Throttled to 4 Hz internally.
+import {
+  refreshMvInspectors,
+  resetSandboxFocusedUnit,
+} from './ui/unit-editor/refresh-tick.js'
+
 // Asm-pane renderer + bracket overlay + lockstep scroll sync +
 // PC-drag editor.  Re-exported through hostCallbacks below so the
 // modal lifecycle in debugger/modal.js can still call them via the
@@ -515,10 +523,8 @@ import {
 // catalogue cache live here too since they're scoped to the unit
 // editor's sidebar.
 import {
-  refreshPieceTreeEyes,
   renderPieceTree,
   renderTexturesTab,
-  refreshMvWeaponsLive,
   wireMvSidebarTabs,
   playWeaponSound,
   openWeaponPicker,
@@ -632,6 +638,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // Auto-build ramp in runtime.js reaches this slider sync helper
   // through hostCallbacks so it doesn't have to import studio.js.
   hostCallbacks.mvSyncCobAttrSlidersFromPorts = mvSyncCobAttrSlidersFromPorts
+  // Per-tick refresh in refresh-tick.js pings these two studio-side
+  // helpers each publish (lifecycle promote + COB-ribbon push).
+  hostCallbacks.syncMvActionsRunning = syncMvActionsRunning
+  hostCallbacks.syncCobRibbonRunning = syncCobRibbonRunning
   hostCallbacks.getUnitEditorAutoRotate = () => _unitEditorAutoRotate
   hostCallbacks.sharedModelViewerCanvas = sharedModelViewerCanvas
   // Thread-debugger render hooks — extracted modal.js calls these
@@ -3398,151 +3408,6 @@ function updateTopbarDocInfo(tab) {
 // which moves in R43c–e.
 
 
-// refreshMvInspectors is called from the model renderer's draw loop
-// each frame.  Cheap when nothing is visible — checks each panel's
-// hidden flag and bails early.  Throttled to 4 Hz so an
-// auto-rotating camera doesn't burn DOM ops every animation tick.
-let _mvInspectorThrottleMs = 0
-// Sandbox-only sentinel — tracks which unit's Script Commands panel
-// is currently rendered.  refreshMvInspectors rebuilds the panel only
-// when this changes so the per-tick refresh doesn't flicker the
-// button list mid-hover.  null = no unit focused (zero or multi-
-// select; the panel shows "No COB loaded.").
-let _mvSandboxFocusedUnitId = -1
-function refreshMvInspectors(dtMs = 16) {
-  _mvInspectorThrottleMs += dtMs
-  if (_mvInspectorThrottleMs < 250) return
-  _mvInspectorThrottleMs = 0
-  // Pick the viewer to source inspector data from — when a sandbox
-  // tab is active we want the sandbox view's camera + runtime, not
-  // the (possibly stale) single-unit viewer.  Both view classes
-  // expose .camera, .renderer, and a .cob-like surface, so the
-  // existing panel renderers don't have to know which kind it is.
-  const sandbox = (typeof window !== 'undefined') ? window.__sandboxView : null
-  const sandboxActive = sandbox && document.getElementById('model-viewer-dialog')?.classList?.contains('sandbox-mode')
-  // Build the proxy mv.  When exactly ONE unit is selected in
-  // sandbox we promote its CobBinding to mv.cob — the single-unit
-  // inspector renderers (Actions / Static Vars / Threads) then
-  // populate against the selected unit, mirroring the experience in
-  // the Unit Editor.  With zero or multiple units selected we fall
-  // back to the runtime-only proxy so the runtime / runtime-list
-  // panels still tick but the per-unit panels show "select a unit".
-  // mv proxy comes from view.getInspectorMv() now — viewer and
-  // sandbox each implement the method (BaseView contract) and return
-  // the shape the inspector panel renderers below consume.  This
-  // collapses what used to be a ~50-line sandbox-vs-viewer branch
-  // here into one method call, and pushes the "aggregate scene
-  // particles", "synthesise stub cob when 0/multi selected", and
-  // "lifecycle backfill" responsibilities home to the views.
-  let mv = sandboxActive
-    ? (sandbox && typeof sandbox.getInspectorMv === 'function' ? sandbox.getInspectorMv() : null)
-    : (modelViewerInstance && typeof modelViewerInstance.getInspectorMv === 'function'
-        ? modelViewerInstance.getInspectorMv()
-        : modelViewerInstance)
-  if (sandboxActive) {
-    // Pull focused-unit id back out so the Actions-panel rebuild
-    // gating + the Controls button enable map below can read it.
-    // The view stashed it on mv._focusedUnitId.
-    const focusedId = mv && mv._focusedUnitId != null ? mv._focusedUnitId : null
-    // Focused-unit sentinel — kept here so other per-tick code that
-    // wants to know "did the selection change this tick?" can read
-    // it off _mvSandboxFocusedUnitId.  The Script Commands panel
-    // itself now re-renders off the inspector-store mv signal
-    // published below (no imperative render here).
-    if (focusedId !== _mvSandboxFocusedUnitId) {
-      _mvSandboxFocusedUnitId = focusedId
-    }
-    // Enable the Controls panel's action buttons based on what the
-    // selection as a whole supports.  Single-unit selection mirrors
-    // the unit-editor's MvControls _refreshButtons logic.  Multi-
-    // unit selection takes the INTERSECTION of capabilities — a
-    // button only enables when EVERY selected unit's COB carries the
-    // matching Aim* / Fire* / Query* scripts, so a Move-and-Primary
-    // selection that includes a unit without Tertiary will grey out
-    // Tertiary.  Move + Stop are always enabled when there's at
-    // least one selected unit (anything that walked into the
-    // selection set is moveable / stoppable by definition).
-    const selectedUnits = (sandbox && typeof sandbox.getSelectedUnits === 'function')
-      ? sandbox.getSelectedUnits().filter((u) => u && u.binding && u.binding.hasScript)
-      : []
-    const everyHasAny = (names) => selectedUnits.length > 0
-      && selectedUnits.every((u) => names.some((n) => u.binding.hasScript(n)))
-    const ctrlEnabled = {
-      move: selectedUnits.length > 0,
-      primary:   everyHasAny(['AimPrimary',   'FirePrimary',   'QueryPrimary']),
-      secondary: everyHasAny(['AimSecondary', 'FireSecondary', 'QuerySecondary']),
-      tertiary:  everyHasAny(['AimTertiary',  'FireTertiary',  'QueryTertiary']),
-    }
-    for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
-      const action = btn.dataset.ctrlAction
-      if (action === 'stop' || action === 'reset') continue
-      btn.disabled = !ctrlEnabled[action]
-    }
-  }
-  if (!mv) return
-  // Publish the freshly-computed proxy + sandbox flags to the React
-  // inspector store.  Every migrated panel (Static Vars, Audio) is
-  // subscribed to these signals via @preact/signals and re-renders
-  // automatically when its inputs change.  Skipping the per-panel
-  // imperative renderMvXxxPanel call below for migrated panels is
-  // intentional — the React tree owns those bodies now.
-  if (_reactUi && typeof _reactUi.publishInspectorState === 'function') {
-    const selSize = (sandbox && sandbox.scene && sandbox.scene.selected)
-      ? sandbox.scene.selected.size
-      : 0
-    _reactUi.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
-  }
-  // Runtime/Scripts panel — React-managed (see /ui/panels/runtime-panel.js).
-  // Stats + Speed + Pause/Step/Stop All + per-unit thread list all
-  // re-render off the inspector-store mv signal + the runtimeTick
-  // counter; no per-tick imperative render here.
-  // Static Vars + Renderer panels — React-managed (see
-  // /ui/panels/static-vars-panel.js, /ui/panels/renderer-panel.js).  Bodies
-  // re-render off the inspector-store signals published above;
-  // no per-tick imperative calls needed here.
-  // Ports panel — re-render the row controls whenever the active view
-  // Controls / Ports panel — React-managed (see /ui/panels/controls-panel.js).
-  // The component reads cobPorts / cobDamage / cobBuildPercent off
-  // the inspector-store mv signal and re-renders per publish, so
-  // there's no need for an imperative render or live-values refresh
-  // here.  The per-tick syncMvActionsRunning call below still
-  // promotes 'creating' → 'created', which the React panel's class-
-  // name computation picks up on the next render.
-  // Effects + Audio panels — both React-managed.  See
-  // /ui/panels/effects-panel.js and /ui/panels/audio-panel.js.  Bodies re-render
-  // off the inspector-store signals published above; the
-  // FloatingPanel visibility signal gates the heavy pool walks so a
-  // hidden / collapsed panel does no per-tick work.
-  // Weapons-tab live bits — reload bars + recent-projectiles lists.
-  // Cheap: the panel is in the left sidebar (not an inspector), so
-  // we don't gate on hidden-class.  Each card's __mvLiveRefresh
-  // closure no-ops when the card has no reload bar / projlist.
-  refreshMvWeaponsLive(mv)
-  // Promote 'creating' → 'created' once the Create thread has died.
-  // The React Controls + Script Commands panels read cob._lifecycle
-  // and render the right gated state next refresh, so this is the
-  // only imperative bit the host still needs to do.  The ribbon's
-  // COB section is still vanilla and gates its own button rows.
-  syncMvActionsRunning(mv.cob)
-  syncCobRibbonRunning(mv.cob)
-  // Runtime stats — rendered by the React RuntimePanel (subscribes
-  // to runtimeTick to re-read tick/lastMs/units/threads each publish).
-  // The legacy refreshMvRuntimeStats sweep is gone; mvRefreshRuntimeToggle
-  // is still called from the toggle-paused handler so spacebar /
-  // programmatic pause keep the button label in sync.
-  // Piece-tree status icons (eye / shade / cache / shadow) — mirror
-  // the live COB-driven per-piece state.  Cheap query-and-toggle
-  // per row so a Create-script hide / dont-shade lights up in the
-  // tree the same tick the opcode runs.
-  refreshPieceTreeEyes()
-  // Thread code-view modals — refresh every open debugger panel.
-  // Each panel tracks its own thread, hover state, and DOM scope so
-  // multiple debuggers can run side-by-side.
-  for (const state of _mvThreadCodePanels.values()) {
-    refreshMvThreadCodeHighlight(state)
-    redrawMvThreadCodeBrackets(state)
-  }
-}
 
 // _mvCollapsedUnits + renderMvScriptsPanel + buildMvUnitGroupHeader +
 // mvResetUnit + renderMvThreadRow + applyMvUnitCollapseState —
@@ -4113,7 +3978,7 @@ async function activateSandboxTab(tab) {
   // Reset the focused-unit sentinel so the next refresh tick re-runs
   // the Script Commands panel for whatever's selected (or "No COB
   // loaded" for an empty selection).
-  _mvSandboxFocusedUnitId = -1
+  resetSandboxFocusedUnit()
   // Controls panel body is React-managed (see /ui/panels/controls-panel.js);
   // the inspector-store mv signal already carries the active view's
   // proxy so a tab swap re-renders the panel automatically without

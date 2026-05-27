@@ -408,6 +408,15 @@ export const hostCallbacks = {
   // Ports panel) read off mv.cobBuildPercent so a single push covers
   // them per tick.
   mvSyncCobAttrSlidersFromPorts: null, // (mv) => void
+  // The per-tick refresh in /ui/unit-editor/refresh-tick.js pings
+  // these two studio-side helpers each publish — the first promotes
+  // 'creating' → 'created' once the Create thread has died, the
+  // second pushes the running-scripts set + lifecycle into the
+  // React COB-ribbon's signal.  Both still belong studio-side
+  // because they share isCobScriptRunning / _collectRunningCobScripts
+  // helpers that haven't been factored out yet.
+  syncMvActionsRunning: null,  // (cob) => void
+  syncCobRibbonRunning: null,  // (cob) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
