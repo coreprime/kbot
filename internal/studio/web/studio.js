@@ -517,6 +517,20 @@ import {
   resetSandboxFocusedUnit,
 } from './ui/unit-editor/refresh-tick.js'
 
+// COB-state-to-React sync cluster.  These all push live cob /
+// runtime / lifecycle state into the React COB-dropdown ribbon +
+// Script Commands panel signals so the UI tracks thread starts /
+// deaths and lifecycle transitions.  External callers (refresh
+// tick, runtime.js, tab.js) still route through `hostCallbacks` —
+// the registrations below preserve that surface.
+import {
+  mvSyncCobAttrSlidersFromPorts,
+  syncMvActionsRunning,
+  syncCobRibbonRunning,
+  refreshCobPanel,
+  isCobScriptRunning,
+} from './ui/unit-editor/cob-sync.js'
+
 // Asm-pane renderer + bracket overlay + lockstep scroll sync +
 // PC-drag editor.  Re-exported through hostCallbacks below so the
 // modal lifecycle in debugger/modal.js can still call them via the
@@ -3481,129 +3495,12 @@ function updateTopbarDocInfo(tab) {
 // build*Row port-row builders — replaced by the Preact components in
 // /ui/unit-editor/panels/port-rows.js (round 17; relocated in R48b).
 
-// mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
-// (which the Ports panel edits) back into the React COB ribbon's Unit
-// Attributes sliders.  The reverse direction (ribbon slider → ports
-// panel) is handled by refreshMvPortsLiveValues which reads the same
-// source-of-truth values.
-function mvSyncCobAttrSlidersFromPorts(mv) {
-  if (!mv) return
-  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-    _reactUi.setModelViewerRibbonState({
-      cobDamage: mv.cobDamage | 0,
-      cobBuild: mv.cobBuildPercent | 0,
-    })
-  }
-}
-
-
-// renderMvActionsPanel + wireMvActionsPanel — replaced by the Preact
-// ScriptCommandsPanel component in /ui/panels/script-commands-panel.js
-// (round 16; renamed from ActionsPanel in round 28).  Per-button
-// running state is read live via the host bridge's isCobScriptRunning;
-// the Include-Private filter is bound to the actionsIncludePrivate
-// signal in the inspector store.
-//
-// syncMvActionsRunning is now folded into the React tree's per-tick
-// re-read of cob._lifecycle, so the only sync helper retained here
-// is syncCobRibbonRunning (drives the ribbon row, not the panel).
-function syncMvActionsRunning(cob) {
-  if (!cob) return
-  // Promote 'creating' → 'created' once the Create thread has died.
-  // The React Script Commands panel reads cob._lifecycle every tick
-  // so this promotion takes effect on the next publish without an
-  // explicit re-render call.
-  if (cob._lifecycle === 'creating' && !isCobScriptRunning(cob, 'Create')) {
-    cob._lifecycle = 'created'
-  }
-}
-function syncCobRibbonRunning(cob) {
-  if (!cob) return
-  if (!_reactUi || typeof _reactUi.setModelViewerCobState !== 'function') return
-  // Push the live running-scripts set + lifecycle into the React COB
-  // dropdown's signal so the entry buttons + "All scripts" rows flip
-  // between disabled / enabled the instant a thread starts or dies.
-  // Lower-cased keys mirror the runtime's case-insensitive lookup so
-  // the React side can check `runningScripts.has(name.toLowerCase())`.
-  _reactUi.setModelViewerCobState({
-    runningScripts: _collectRunningCobScripts(cob),
-    lifecycle: cob._lifecycle || 'created',
-  })
-}
-
-// _collectRunningCobScripts — Set of lower-cased script names that
-// currently have at least one live thread.  Shared between the
-// per-tick syncCobRibbonRunning fire and refreshCobPanel's per-unit
-// reset; centralising avoids two slightly-different walkers drifting
-// apart on what counts as "running."
-function _collectRunningCobScripts(cob) {
-  const set = new Set()
-  if (cob && cob.unit && cob.unit._threads) {
-    for (const t of cob.unit._threads) {
-      if (!t.dead) set.add(t.script.name.toLowerCase())
-    }
-  }
-  return set
-}
-
-// wireMvActionsPanel — replaced by the Preact ScriptCommandsPanel +
-// inspector-store's actionsIncludePrivate signal in round 16.
-
-// wireMvPortsPanel — port row builders + the panel-header Reset host
-// are both gone in round 17; the React ControlsPanel renders rows + a
-// React-owned Reset attribute via /ui/unit-editor/panels/port-rows.js + /ui/panels/controls-panel.js.
-
-// wireCobAttributeSliders — the COB-menu Damage / Build / Playback
-// sliders + Reset button are React-managed now (see the model viewer
-// ribbon's CobDropdown).  The Runtime overlay's Speed slider is also
-// React (RuntimePanel.SpeedSlider).  Click handlers route through the
-// configureModelViewerRibbonBridge installation below so this helper
-// became a vestigial stub — kept only to preserve the per-tick call
-// shape refreshCobPanel and friends use; safe to delete once nothing
-// references it externally.
-
-
-// refreshCobPanel wires the Animation→COB dropdown buttons to the
-// currently-loaded unit's runtime.  Entry-point buttons grey out
-// when the script isn't present.  The "All scripts" list at the
-// bottom enumerates every entry point the COB carries — useful
-// for AimFromPrimary / QueryPrimary / RestoreAfterDelay and other
-// less-common scripts the static button row doesn't enumerate.
-function refreshCobPanel(cob) {
-  // Push the loaded unit's playback rate through the shared helper so
-  // the React Runtime panel + the sandbox runtime (if any) all land
-  // on the same value.  mvSetSimulationSpeed also writes through to
-  // the React COB ribbon's cobPlayback state.
-  mvSetSimulationSpeed(cob ? cob.runtime.playbackRate : 1)
-  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-    _reactUi.setModelViewerRibbonState({
-      cobDamage: modelViewerInstance?.cobDamage || 0,
-      cobBuild: modelViewerInstance?.cobBuildPercent ?? 100,
-    })
-  }
-  if (_reactUi && typeof _reactUi.setModelViewerCobState === 'function') {
-    _reactUi.setModelViewerCobState({
-      hasCob: !!cob,
-      scriptNames: cob ? cob.listScripts() : [],
-      runningScripts: _collectRunningCobScripts(cob),
-      lifecycle: cob?._lifecycle || 'created',
-    })
-  }
-}
-
-// isCobScriptRunning reports whether the named script has at least
-// one live thread.  Case-insensitive, matches the runtime's own
-// script lookup semantics.  Used by runCobEntry to no-op a click
-// on a script that's already executing, and by refreshCobPanel +
-// the Script Commands panel to grey out the corresponding buttons.
-function isCobScriptRunning(cob, name) {
-  if (!cob || !cob.unit) return false
-  const lower = name.toLowerCase()
-  for (const t of cob.unit._threads) {
-    if (!t.dead && t.script.name.toLowerCase() === lower) return true
-  }
-  return false
-}
+// COB-state-to-React sync helpers (mvSyncCobAttrSlidersFromPorts,
+// syncMvActionsRunning, syncCobRibbonRunning, _collectRunningCobScripts,
+// refreshCobPanel, isCobScriptRunning) moved to
+// /ui/unit-editor/cob-sync.js; the hostCallbacks registrations above
+// preserve the call surface for the refresh tick, tab.js, and
+// runtime.js.
 
 // runCobEntry invokes a script by name, randomising any required
 // inputs.  AimWeapon-class scripts expect (heading, pitch) on the
