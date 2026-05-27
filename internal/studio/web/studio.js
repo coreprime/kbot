@@ -11984,33 +11984,20 @@ function wireMvInspectors() {
     stopAll.addEventListener('pointerdown', (e) => e.stopPropagation())
     stopAll.addEventListener('mousedown', (e) => e.stopPropagation())
   }
-  // Threads-panel debug controls: Break / Continue / Step One.
-  // Same drag-suppression pattern as Stop All.
-  const breakBtn = document.getElementById('mv-threads-break')
-  if (breakBtn && breakBtn.dataset.wired !== '1') {
-    breakBtn.dataset.wired = '1'
-    breakBtn.addEventListener('click', (e) => {
+  // Threads-panel debug controls: Pause/Resume toggle + Step One.
+  // Same drag-suppression pattern as Stop All.  Merged from two
+  // separate Pause + Resume buttons so the toggle action takes one
+  // click and the user (or the Space hotkey) doesn't have to pick
+  // the matching button each time.
+  const toggleBtn = document.getElementById('mv-threads-toggle')
+  if (toggleBtn && toggleBtn.dataset.wired !== '1') {
+    toggleBtn.dataset.wired = '1'
+    toggleBtn.addEventListener('click', (e) => {
       e.stopPropagation()
-      const rt = modelViewerInstance?.cob?.runtime
-      if (rt) rt.setPaused(true)
+      mvToggleRuntimePaused()
     })
-    breakBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-    breakBtn.addEventListener('mousedown', (e) => e.stopPropagation())
-  }
-  const contBtn = document.getElementById('mv-threads-continue')
-  if (contBtn && contBtn.dataset.wired !== '1') {
-    contBtn.dataset.wired = '1'
-    contBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const rt = modelViewerInstance?.cob?.runtime
-      if (!rt) return
-      // Resume from paused state AND clear any thread's breakpointHit
-      // so threads stopped on a BP advance off the line.
-      for (const t of rt._threads) if (!t.dead) t.breakpointHit = false
-      rt.setPaused(false)
-    })
-    contBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
-    contBtn.addEventListener('mousedown', (e) => e.stopPropagation())
+    toggleBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+    toggleBtn.addEventListener('mousedown', (e) => e.stopPropagation())
   }
   const stepBtn = document.getElementById('mv-threads-step')
   if (stepBtn && stepBtn.dataset.wired !== '1') {
@@ -14661,6 +14648,11 @@ function refreshMvRuntimeStats(mv) {
   unitsEl.textContent = String(rt.unitCount ? rt.unitCount() : 0)
   threadsEl.textContent = String(rt.threadCount ? rt.threadCount() : 0)
   instEl.textContent = String(rt.lastInstCount | 0)
+  // Keep the Pause/Resume toggle label honest — the Step button
+  // toggles paused on each press, and a hot-reload may rebuild the
+  // panel mid-pause.  Sync every refresh so the caption can never
+  // drift from the runtime's actual state.
+  mvRefreshRuntimeToggle()
 }
 
 // ── Ports panel — row builders ────────────────────────────────────
@@ -14987,6 +14979,44 @@ function wireCobAttributeSliders() {
       modelViewerInstance?.resetState()
     })
     reset.dataset.wired = '1'
+  }
+}
+
+// mvToggleRuntimePaused flips the runtime's paused state and
+// refreshes the merged Pause/Resume button's label + tooltip so the
+// caption always reflects what the NEXT click will do.  When un-
+// pausing, also clears every thread's breakpointHit flag so threads
+// stopped on a BP advance off the line (was the Resume button's
+// behaviour before the merge — preserved here so debugger workflows
+// still work).
+function mvToggleRuntimePaused() {
+  const rt = modelViewerInstance?.cob?.runtime
+  if (!rt) return
+  const willPause = !rt.paused
+  if (!willPause) {
+    // Resuming — sweep BPs the same way the old Resume button did.
+    for (const u of rt.units()) {
+      for (const t of u._threads.values()) if (!t.dead) t.breakpointHit = false
+    }
+  }
+  rt.setPaused(willPause)
+  mvRefreshRuntimeToggle()
+}
+
+// mvRefreshRuntimeToggle syncs the merged button's caption + title
+// to the runtime's current paused state.  Called after every state
+// flip (button click, Space hotkey, programmatic pause).  Safe to
+// call when the button isn't in the DOM yet.
+function mvRefreshRuntimeToggle() {
+  const btn = document.getElementById('mv-threads-toggle')
+  if (!btn) return
+  const paused = !!modelViewerInstance?.cob?.runtime?.paused
+  if (paused) {
+    btn.textContent = '▶ Resume'
+    btn.title = 'Resume — un-pause the runtime and continue past any breakpoint that fired.  Spacebar does the same thing.'
+  } else {
+    btn.textContent = '⏸ Pause'
+    btn.title = 'Pause — freeze every unit’s animators + threads on this runtime.  Spacebar does the same thing.'
   }
 }
 
