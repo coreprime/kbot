@@ -174,6 +174,16 @@ import {
 // picker.  Called from the boot block.
 import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
 
+// Sandbox panel + side-colour spawn picker — first leaf-helper
+// extraction of R44 (sandbox split).  The bigger sandbox surface
+// (activateSandboxTab, the ribbon / controls intercept wiring)
+// still lives here and moves in later rounds.
+import {
+  ensureSandboxPanel,
+  showSandboxPanel,
+  openSandboxSpawnPicker,
+} from './ui/sandbox/spawn-picker.js'
+
 // View-menu visibility toggles (minimap / features / start
 // positions / voids).  Each flips the matching state.show* flag,
 // persists prefs, republishes the ribbon, and drops out of any
@@ -592,6 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.featureAnchorOffset = featureAnchorOffset
   hostCallbacks.featureAnchorWorld = featureAnchorWorld
   hostCallbacks.configureReactUi = configureReactUi
+  hostCallbacks.openModelPicker = openModelPicker
   hostCallbacks.openLoadedMap = openLoadedMap
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
@@ -4864,141 +4875,6 @@ function _doMinimapPan(clientX, clientY, canvasEl) {
   const fullH = canvas.height * state.zoom
   wrap.scrollLeft = cx * fullW - wrap.clientWidth  / 2 + overscrollPadding.x
   wrap.scrollTop  = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
-}
-
-// ensureSandboxPanel — bring up the React-rendered sandbox panel the
-// first time the user enters sandbox mode.  The Preact island owns
-// the DOM (drag / collapse / close / clamp); we just hand it the
-// Spawn callback that opens the side picker anchored at the clicked
-// button.  Mount is idempotent — re-entering sandbox mode re-renders
-// into the same root rather than stacking panels.
-async function ensureSandboxPanel() {
-  const ui = _reactUi || await configureReactUi()
-  if (!ui) return
-  ui.mountSandboxPanel({
-    onSpawn: (sourceEl) => openSandboxSpawnPicker(sourceEl),
-  })
-}
-
-function showSandboxPanel(show) {
-  // Route through the panel-store so the React tree re-renders and
-  // the persisted visibility flag stays in sync.  Falls back to a
-  // plain DOM toggle when the UI island hasn't loaded yet (very
-  // early boot before configureReactUi resolved).
-  if (_reactUi && typeof _reactUi.showSandboxPanel === 'function') {
-    _reactUi.showSandboxPanel(!!show)
-    return
-  }
-  const p = document.getElementById('sandbox-panel')
-  if (p) p.classList.toggle('hidden', !show)
-}
-
-// openSandboxSpawnPicker — opens a small side-colour popout
-// anchored against the source element the user pressed.  When the
-// user picks a side, the existing Open Unit dialog opens with the
-// picked side stashed on window.__sandboxSpawnPendingSide; the
-// confirm handler then passes that side into
-// sandboxView.beginPlacement so the unit spawns with the
-// appropriate team-colour recolour.
-//
-// `sourceEl` (optional) is the button the user clicked — the
-// popout anchors directly below it.  Callers pass their own button
-// (ribbon Spawn, floating-panel Spawn) so the popout always lands
-// adjacent to the gesture.  Falls back to the ribbon button if
-// nothing's supplied (keeps existing keyboard-driven callers
-// working).
-//
-// Lazy-creates the popout on first call; subsequent calls just
-// re-position + show it.  Click-outside dismisses without choosing.
-function openSandboxSpawnPicker(sourceEl = null) {
-  let popout = document.getElementById('sandbox-side-popout')
-  if (!popout) {
-    popout = document.createElement('div')
-    popout.id = 'sandbox-side-popout'
-    popout.style.cssText = [
-      'position: absolute',
-      'z-index: 10000',
-      'background: rgba(20, 24, 32, 0.96)',
-      'border: 1px solid rgba(140, 220, 255, 0.40)',
-      'border-radius: 8px',
-      'padding: 8px',
-      'display: flex',
-      'gap: 6px',
-      'box-shadow: 0 6px 20px rgba(0,0,0,0.45)',
-    ].join('; ')
-    // 8 side swatches plus a label.  Same colours as TEAM_SIDES in
-    // model3d/team-colors.js; inlined here so studio.js doesn't have
-    // to import an ES module at this scope.
-    const SIDES = [
-      { side: 0, key: 'blue',   css: '#3a6cd6', label: 'Blue (ARM)' },
-      { side: 1, key: 'red',    css: '#eb2e29', label: 'Red (CORE)' },
-      { side: 2, key: 'green',  css: '#34c747', label: 'Green' },
-      { side: 3, key: 'yellow', css: '#f3d933', label: 'Yellow' },
-      { side: 4, key: 'purple', css: '#9e4dd9', label: 'Purple' },
-      { side: 5, key: 'cyan',   css: '#34ccea', label: 'Cyan' },
-      { side: 6, key: 'orange', css: '#fa8d2e', label: 'Orange' },
-      { side: 7, key: 'black',  css: '#1a1a1f', label: 'Black' },
-    ]
-    for (const s of SIDES) {
-      const sw = document.createElement('button')
-      sw.type = 'button'
-      sw.className = 'sandbox-side-swatch'
-      sw.dataset.side = String(s.side)
-      sw.title = s.label
-      sw.style.cssText = [
-        'width: 28px', 'height: 28px',
-        'border-radius: 4px',
-        'border: 2px solid rgba(255,255,255,0.15)',
-        'cursor: pointer',
-        'padding: 0',
-        `background: ${s.css}`,
-      ].join('; ')
-      sw.addEventListener('click', () => {
-        window.__sandboxSpawnPendingSide = s.side
-        window.__sandboxSpawnPending = true
-        popout.style.display = 'none'
-        openModelPicker()
-      })
-      popout.appendChild(sw)
-    }
-    document.body.appendChild(popout)
-    // Click-outside dismiss — bound on document with capture so it
-    // fires before the swatch's own click handler when the user
-    // releases on a swatch (the swatch's click runs first because
-    // it's inside the popout subtree, and then capture re-fires
-    // here; we only hide when the target is outside the popout).
-    document.addEventListener('mousedown', (e) => {
-      if (popout.style.display === 'none') return
-      if (popout.contains(e.target)) return
-      // Don't dismiss when re-clicking the spawn-triggering buttons —
-      // the same gesture would toggle off then on if we did.  The
-      // ribbon's outer Sandbox button is the typical anchor (rounds
-      // 13+); the inline Spawn Unit menu row + the floating panel's
-      // Spawn button cover the legacy callers.
-      const sandboxRbBtn = document.getElementById('sandbox-rb-sandbox-btn')
-      const spawnRow = document.getElementById('sandbox-rb-spawn')
-      const sandboxPanelBtn = document.getElementById('sandbox-spawn')
-      if (sandboxRbBtn && sandboxRbBtn.contains(e.target)) return
-      if (spawnRow && spawnRow.contains(e.target)) return
-      if (sandboxPanelBtn && sandboxPanelBtn.contains(e.target)) return
-      popout.style.display = 'none'
-    }, true)
-  }
-  // Anchor under the source element the caller passed (the button
-  // the user actually pressed); fall back to the ribbon's Sandbox
-  // dropdown button when no source is supplied, then the legacy
-  // ribbon Spawn row and finally the floating-panel Spawn button.
-  // Pixel-position the popout right below the anchor with a small gap.
-  const anchor = sourceEl
-    || document.getElementById('sandbox-rb-sandbox-btn')
-    || document.getElementById('sandbox-rb-spawn')
-    || document.getElementById('sandbox-spawn')
-  if (anchor) {
-    const r = anchor.getBoundingClientRect()
-    popout.style.left = `${Math.round(r.left)}px`
-    popout.style.top  = `${Math.round(r.bottom + 6)}px`
-  }
-  popout.style.display = 'flex'
 }
 
 async function fetchModels() {

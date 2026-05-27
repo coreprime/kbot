@@ -263,6 +263,11 @@ export const hostCallbacks = {
   // Called from openMapDialog / wireMapTabBar / debugger modals
   // when they need the bridge before its first natural use.
   configureReactUi: null,       // () => Promise<reactUi>
+  // openModelPicker — opens the Open Unit dialog used by the sandbox
+  // spawn-picker after the user picks a side.  Lives in studio.js
+  // for now; the spawn picker module reaches for it via this
+  // callback so the picker doesn't have to import studio.js.
+  openModelPicker: null,        // () => void
   // openLoadedMap hydrates editor state from a /api/studio/load
   // response and switches into the editor.  Called by the open-map
   // dialog flow + the drag-drop handler + the ?initial_map=… URL
