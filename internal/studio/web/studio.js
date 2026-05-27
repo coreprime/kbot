@@ -70,7 +70,7 @@ import {
 // `painting` + `paintedDuringStroke` fields without per-module
 // setter plumbing.  Foundation for the per-mode extractions in
 // R40d / R40d.1 / R40e.
-import { paintState, resetPaintStroke } from './ui/map-editor/paint-state.js'
+import { resetPaintStroke } from './ui/map-editor/paint-state.js'
 
 // Clipboard subsystem (terrain drag-clipboard + system Ctrl+C/V/X)
 // — moved to /ui/map-editor/clipboard.js.  Same call sites as
@@ -148,10 +148,8 @@ import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 // attribute grid.  findFeatureAt / findStartPositionAt hit-test
 // the cursor against placed features + the active schema's start
 // markers respectively.
-import {
-  pickCell,
-  pickFeatureAttrCell,
-} from './ui/map-editor/mouse-coords.js'
+// pickCell + pickFeatureAttrCell moved out of studio.js with the
+// extracted mode handlers + editor-view (R40* / R41b).
 
 // Welcome dialog visual + audio FX — all three are pure
 // self-contained subsystems that observe #welcome-dialog's hidden
@@ -200,7 +198,6 @@ import {
 // prefs alongside the other View toggles.
 import {
   setCameraInfoVisible,
-  updateCameraInfoCursor,
 } from './ui/map-editor/camera-info.js'
 
 // Dice-face player-count picker for the New-map size dialog.
@@ -302,9 +299,7 @@ import {
 // continuous arrow-key scroll loop.
 import {
   setZoom,
-  zoomAtPointer,
   fitZoom,
-  applyOverscrollPadding,
   overscrollPadding,
   startMapPan,
   stopMapPan,
@@ -389,21 +384,11 @@ import { resetHmHoldTimer } from './ui/map-editor/modes/heightmap.js'
 // drag-drop fallback below.  resetPaintPlacement clears the
 // in-flight anchored-preview drag from abortTransientGestureState
 // (R40d).
-import {
-  resetPaintPlacement,
-  handlePaint,
-} from './ui/map-editor/modes/paint.js'
+import { resetPaintPlacement } from './ui/map-editor/modes/paint.js'
 
-// Mouse router — single canvas-mouse dispatcher.  Reads state.mode
-// and looks up the matching mode handlers from a Map.  Pan
-// short-circuit + cursor cache + paint-state priming live here so
-// no individual mode module reproduces the cross-mode bookkeeping
-// (R40f).
-import {
-  onCanvasMouseDown,
-  onCanvasMouseMove,
-  onCanvasMouseUp,
-} from './ui/map-editor/mouse-router.js'
+// Mouse router moved entirely into editor-view.js's listener
+// bindings (R41b); studio.js no longer imports the three
+// dispatchers directly.
 
 // Pan + cursor helpers — pan state, space-pan hotkey, shouldPan
 // heuristic, tryAutoSwitchAt auto-mode-swap, updateHoverLabel
@@ -422,6 +407,21 @@ import {
 // + drag + active-world side effects; the module reaches those
 // through hostCallbacks (R41a).
 import { renderDrawer } from './ui/map-editor/drawer.js'
+
+// EditorView lifecycle — the two stacked <canvas> elements, every
+// mouse / wheel / drag listener bound to them, and the
+// ResizeObserver that keeps overscroll padding in sync.
+// recreateEditorView() is called on every map open / new + resize
+// commit; the module owns the singleton + the AbortController-based
+// listener teardown.  prepareCanvasDimensions + centerViewOnMap
+// ride alongside because finishEditorBoot needs them before the
+// first paint (R41b).
+import {
+  recreateEditorView,
+  prepareCanvasDimensions,
+  centerViewOnMap,
+  destroyEditorView,
+} from './ui/map-editor/editor-view.js'
 
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
@@ -752,7 +752,7 @@ function showWelcomeAfterLastTabClose() {
   $('#app')?.classList.add('hidden')
   const wel = $('#welcome-dialog')
   if (wel) wel.classList.remove('hidden')
-  if (editorView) { editorView.destroy(); editorView = null }
+  destroyEditorView()
   renderMapTabs()
 }
 
@@ -1316,53 +1316,6 @@ async function finishEditorBoot() {
   })
 }
 
-// prepareCanvasDimensions resizes the 2D and GL canvases (backing
-// buffers + CSS sizes) and runs applyOverscrollPadding to set the
-// surrounding canvas-stack dimensions.  Extracted from renderCanvas so
-// finishEditorBoot can size everything before the first paint runs,
-// which lets centerViewOnMap position scrollLeft / scrollTop against
-// the FINAL dimensions instead of the previous map's leftovers.
-function prepareCanvasDimensions() {
-  const canvas = $('#canvas')
-  const glCanvas = $('#canvas-gl')
-  if (!canvas) return
-  const wantW = state.tileW * TILE_PX
-  const wantH = state.tileH * TILE_PX
-  if (canvas.width !== wantW || canvas.height !== wantH) {
-    canvas.width = wantW
-    canvas.height = wantH
-    if (glCanvas) {
-      glCanvas.width = wantW
-      glCanvas.height = wantH
-    }
-  }
-  const wantStyleW = wantW * state.zoom + 'px'
-  const wantStyleH = wantH * state.zoom + 'px'
-  if (canvas.style.width !== wantStyleW) canvas.style.width = wantStyleW
-  if (canvas.style.height !== wantStyleH) canvas.style.height = wantStyleH
-  if (glCanvas) {
-    if (glCanvas.style.width !== wantStyleW) glCanvas.style.width = wantStyleW
-    if (glCanvas.style.height !== wantStyleH) glCanvas.style.height = wantStyleH
-  }
-  applyOverscrollPadding()
-}
-
-// centerViewOnMap places the centre of the map at the centre of the
-// scroll viewport.  Called on every map load (initial and switch) so
-// the user always lands looking at the middle of the map, not the
-// top-left corner.  Works in stack-pixel space — the canvas sits at
-// overscrollPadding.{x,y} inside .canvas-stack, so the world centre's
-// stack-pixel position is overscrollPadding + (mapPixels * zoom / 2).
-function centerViewOnMap() {
-  const wrap = $('#canvas-scroll')
-  const canvas = $('#canvas')
-  if (!wrap || !canvas) return
-  const z = state.zoom || 1
-  const midX = overscrollPadding.x + (canvas.width * z) / 2
-  const midY = overscrollPadding.y + (canvas.height * z) / 2
-  wrap.scrollLeft = midX - wrap.clientWidth / 2
-  wrap.scrollTop = midY - wrap.clientHeight / 2
-}
 
 // ── Sidebar drawer ─────────────────────────────────────────────────────────
 
@@ -2201,250 +2154,6 @@ function selectFeature(f) {
 // `captureSnapshot` / `restoreSnapshot` / `cloneOTA` (re-exported
 // for callers that snapshot OTA into a tab swap).
 
-// ── EditorView ─────────────────────────────────────────────────────────────
-//
-// EditorView owns the editing window's mutable DOM: the 2D #canvas, the
-// WebGL #canvas-gl, the per-canvas event listeners, and the
-// ResizeObserver watching the scroll wrap.  Each map load (New, Open,
-// Resize) calls recreateEditorView(), which destroys the previous view
-// — removing the canvas elements, aborting their listeners, and losing
-// the GL context — and mounts a fresh one.  No DOM, no event listeners,
-// and no GL state from the previous map can leak into the next.
-
-// Module-level singleton.  Reassigned by recreateEditorView().
-let editorView = null
-
-class EditorView {
-  constructor() {
-    this.stack = document.querySelector('#canvas-stack')
-    this.scroll = document.querySelector('#canvas-scroll')
-    this.canvas = null
-    this.glCanvas = null
-    this.abort = null
-    this.resizeObserver = null
-  }
-
-  mount() {
-    if (!this.stack) return
-    // Wipe any pre-existing canvases (initial HTML markup or a stale
-    // mount that destroy() somehow missed).
-    for (const c of Array.from(this.stack.querySelectorAll('canvas'))) {
-      this.stack.removeChild(c)
-    }
-    // glCanvas first (sits under the 2D overlay).
-    const glCanvas = document.createElement('canvas')
-    glCanvas.id = 'canvas-gl'
-    const canvas = document.createElement('canvas')
-    canvas.id = 'canvas'
-    this.stack.append(glCanvas, canvas)
-    this.glCanvas = glCanvas
-    this.canvas = canvas
-
-    canvas.width = state.tileW * TILE_PX
-    canvas.height = state.tileH * TILE_PX
-    canvas.style.width = canvas.width * state.zoom + 'px'
-    canvas.style.height = canvas.height * state.zoom + 'px'
-    glCanvas.width = canvas.width
-    glCanvas.height = canvas.height
-    glCanvas.style.width = canvas.style.width
-    glCanvas.style.height = canvas.style.height
-
-    applyOverscrollPadding()
-    this.abort = new AbortController()
-    this._bindCanvasListeners()
-    this._bindResizeObserver()
-  }
-
-  destroy() {
-    if (this.abort) { this.abort.abort(); this.abort = null }
-    if (this.resizeObserver) { this.resizeObserver.disconnect(); this.resizeObserver = null }
-    resetGL()
-    if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas)
-    if (this.glCanvas?.parentNode) this.glCanvas.parentNode.removeChild(this.glCanvas)
-    this.canvas = null
-    this.glCanvas = null
-  }
-
-  _bindResizeObserver() {
-    if (typeof ResizeObserver === 'undefined' || !this.scroll) return
-    this.resizeObserver = new ResizeObserver(() => {
-      applyOverscrollPadding()
-      scheduleRenderCanvas()
-      scheduleMinimapRender()
-    })
-    this.resizeObserver.observe(this.scroll)
-  }
-
-  _bindCanvasListeners() {
-    const { canvas, scroll, abort } = this
-    if (!canvas || !abort) return
-    const sig = { signal: abort.signal }
-    canvas.addEventListener('mousedown', (e) => onCanvasMouseDown(e), sig)
-    window.addEventListener('mouseup', (e) => onCanvasMouseUp(e), sig)
-    canvas.addEventListener('mousemove', (e) => onCanvasMouseMove(e), sig)
-    canvas.addEventListener('mouseleave', () => {
-      // #hover-cell (legacy canvas-toolbar) is gone — the Camera &
-      // Cursor floating panel shows the hover info now.  Guarded
-      // lookup so dev tools that still poke at the old span keep
-      // working without throwing.
-      const hc = document.getElementById('hover-cell')
-      if (hc) hc.textContent = '—'
-      updateCameraInfoCursor(null)
-      if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
-      hostCallbacks.cursor.lastHover = null
-    }, sig)
-
-    // Wheel/trackpad routing:
-    //   - Ctrl/Cmd + wheel → zoom (covers Mac pinch — Safari sends pinch
-    //     as wheel-with-ctrlKey).
-    //   - Any horizontal delta (deltaX) → pan horizontally.
-    //   - Shift + wheel → pan vertically.
-    //   - Otherwise → zoom anchored to the cursor.
-    if (scroll) {
-      scroll.addEventListener('wheel', (e) => {
-        // Ignore wheel events while any modal dialog is showing — they
-        // were sneaking past the dialog overlay and nudging zoom while
-        // the user was scrolling dialog content.  Symptom: map switches
-        // landed at zoom 1.0015 instead of 1.0.
-        if (document.querySelector('.dialog:not(.hidden)')) return
-        if (e.ctrlKey || e.metaKey) {
-          e.preventDefault()
-          zoomAtPointer(e.clientX, e.clientY, e.deltaY)
-          return
-        }
-        if (e.deltaX !== 0) {
-          e.preventDefault()
-          scroll.scrollLeft += e.deltaX
-          if (e.deltaY !== 0) scroll.scrollTop += e.deltaY
-          return
-        }
-        if (e.shiftKey) {
-          e.preventDefault()
-          scroll.scrollTop += e.deltaY
-          return
-        }
-        e.preventDefault()
-        zoomAtPointer(e.clientX, e.clientY, e.deltaY)
-      }, { passive: false, signal: abort.signal })
-    }
-
-    // Drag-and-drop from the sidebar drawer.  `dragover` only updates the
-    // hover highlight; the actual stamp is committed once on `drop`.  This
-    // avoids smearing the drag path across every cell the cursor passed.
-    canvas.addEventListener('dragenter', (e) => { e.preventDefault() }, sig)
-    canvas.addEventListener('dragover', (e) => {
-      if (!state.dragging) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
-      updateHoverLabel(e)
-      const { tx, ty } = pickCell(e)
-      let dirty = false
-      if (state.dropPreview?.tx !== tx || state.dropPreview?.ty !== ty) {
-        state.dropPreview = { tx, ty }
-        dirty = true
-      }
-      // While dragging a section, also engage a full placement preview so
-      // the user sees the section's pixels + rotation badge + edge hints
-      // exactly like a click-to-place flow.  The section is centred on
-      // the cursor (rather than top-left anchored) — matches what
-      // setDragImage does for the drag ghost.
-      if (state.dragging.type === 'section' && state.selected?.type === 'section') {
-        if (!state.placement || state.placement.sectionPath !== state.selected.path) {
-          state.placement = {
-            sectionPath: state.selected.path,
-            origW: state.selected.tileW,
-            origH: state.selected.tileH,
-            rotation: state.selected.rotation || 0,
-            tx, ty,
-          }
-        }
-        // selectSection seeds the placement with dormant=true so the
-        // first cursor-follow paint waits until the cursor enters the
-        // canvas.  When the user re-drags the SAME row immediately
-        // after clicking it, the dragover handler above reuses that
-        // existing placement — without this wake the dragover-driven
-        // preview never paints because drawPlacementPreview early-
-        // returns on the stale dormant flag, and the user only sees
-        // the tile after the drop / final click.
-        if (state.placement.dormant) {
-          state.placement.dormant = false
-          dirty = true
-        }
-        const anchor = placementAnchor(tx, ty, state.placement)
-        if (state.placement.tx !== anchor.tx || state.placement.ty !== anchor.ty) {
-          state.placement.tx = anchor.tx
-          state.placement.ty = anchor.ty
-          tryAutoRotatePlacement(state.placement)
-          dirty = true
-        }
-      }
-      if (dirty) renderCanvas()
-    }, sig)
-    canvas.addEventListener('dragleave', () => {
-      state.dropPreview = null
-      renderCanvas()
-    }, sig)
-    canvas.addEventListener('drop', (e) => {
-      if (!state.dragging) return
-      e.preventDefault()
-      state.dropPreview = null
-      paintState.paintedDuringStroke = false
-      const wasFeature = state.dragging.type === 'feature'
-      if (state.dragging.type === 'section' && state.placement) {
-        // Anchor the section at the drop point instead of immediately
-        // overwriting the tiles underneath — the user can then drag /
-        // rotate it and only commit on the next click outside the
-        // footprint (or Esc to cancel).  This way the original tiles at
-        // the drop point are preserved until the user is happy.
-        const { tx: cx, ty: cy } = pickCell(e)
-        if (cx >= 0 && cx < state.tileW && cy >= 0 && cy < state.tileH) {
-          // Force Paint mode so the anchored placement is interactive
-          // regardless of what mode the drag started from (e.g., View).
-          if (state.mode !== 'paint') setMode('paint')
-          const anchor = placementAnchor(cx, cy, state.placement)
-          state.placement.tx = anchor.tx
-          state.placement.ty = anchor.ty
-          state.placement.anchored = true
-          setStatus('Section anchored — drag inside to reposition, Q / E to rotate, click outside to confirm, Esc to cancel.')
-          renderCanvas()
-        }
-      } else if (wasFeature && state.selected?.type === 'feature') {
-        // Features remain a one-shot drop — they have no anchored state
-        // and the user can re-drag them in Place Features mode after.
-        const { ax, ay } = pickFeatureAttrCell(e, state.selected)
-        if (ax >= 0 && ax < state.tileW * 2 && ay >= 0 && ay < state.tileH * 2) {
-          beginTransaction()
-          placeFeature(ax, ay)
-          commitTransaction('Place feature')
-          paintState.paintedDuringStroke = true
-        }
-      } else {
-        beginTransaction()
-        handlePaint(e)
-        commitTransaction('Place')
-      }
-      state.dragging = null
-      if (wasFeature && state.selected?.type === 'feature') {
-        showPlacementHint(`Placing ${state.selected.name}`, 'feature')
-      } else if (!wasFeature) {
-        // Keep the section placement hint visible so the user knows
-        // they're now in the anchored / movable state.
-        // (showPlacementHint was already called by beginSectionDrag.)
-      }
-      paintState.paintedDuringStroke = false
-    }, sig)
-  }
-}
-
-// recreateEditorView tears down any previously-mounted EditorView and
-// mounts a fresh one.  Called from finishEditorBoot (on every map open
-// or new) and applyResize so no DOM nodes, event listeners, or GL
-// state from the previous map survive the switch.
-function recreateEditorView() {
-  if (editorView) editorView.destroy()
-  editorView = new EditorView()
-  editorView.mount()
-}
 
 // wireZoomButtons binds the three Zoom ribbon buttons.  Lives outside
 // EditorView because the buttons sit in the toolbar (which is mounted
