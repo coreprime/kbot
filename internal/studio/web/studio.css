@@ -2997,12 +2997,41 @@ canvas {
    when there's something to stop (move target or any aim target),
    so the user sees at a glance whether Stop will do anything. */
 .mv-ctrl-action-stop {
-  grid-column: 1 / -1;
+  grid-column: 1 / 4;
   justify-content: center;
   background: var(--bg-1);
   color: var(--muted);
   border-color: var(--border);
   cursor: pointer;
+}
+/* Reset button — shares the row with Stop on the right.  Idle
+   look mirrors Stop's muted style; warm-amber hover to signal
+   "revert" rather than "stop". */
+.mv-ctrl-action-reset {
+  grid-column: 4 / -1;
+  justify-content: center;
+  background: var(--bg-1);
+  color: var(--muted);
+  border-color: var(--border);
+  cursor: pointer;
+}
+.mv-ctrl-action-reset:hover:not(:disabled) {
+  background: rgba(220, 170, 60, 0.18);
+  border-color: rgba(220, 170, 60, 0.7);
+  color: #ffd87a;
+}
+.mv-ctrl-action-reset:active:not(:disabled) {
+  background: rgba(220, 170, 60, 0.32);
+}
+/* Pre-Create banner — replaces the action grid until the user
+   clicks Create Unit.  Centred full-width primary button. */
+.mv-controls-create-row {
+  padding: 8px 10px;
+}
+.mv-controls-create-btn {
+  width: 100%;
+  font-size: 12px;
+  padding: 6px 10px;
 }
 .mv-ctrl-action-stop:hover:not(:disabled) {
   background: rgba(248, 81, 73, 0.18);

@@ -11678,6 +11678,12 @@ async function activateModelTab(tab) {
         // the initial pose).  Units without a Create just start
         // 'created' so nothing is gated.
         if (cob) cob._lifecycle = (cob.hasScript && cob.hasScript('Create')) ? 'unborn' : 'created'
+        // Kick off the auto-build ramp — phases the unit in from 0%
+        // (wireframe construction stripes) to 100% over ~5 sim
+        // seconds.  Cancelled if the user drags either Build slider
+        // or clicks Create Unit; otherwise runs to completion in
+        // the background while the user reads the panels.
+        startMvAutoBuild(modelViewerInstance)
         refreshCobPanel(cob)
         // The Actions inspector lists every COB entry-point — re-
         // render whenever a new unit loads so the buttons reflect
@@ -11701,6 +11707,7 @@ async function activateModelTab(tab) {
         // Idempotent — reassignment is cheap.
         if (modelViewerInstance.renderer) {
           modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+            advanceMvAutoBuild(dtMs)
             refreshMvInspectors(dtMs)
             _mvControls?.tick(dtMs)
           }
@@ -11716,6 +11723,7 @@ async function activateModelTab(tab) {
   // the renderer is alive.  Idempotent — re-assignment is cheap.
   if (modelViewerInstance.renderer && !modelViewerInstance.renderer.onAfterFrame) {
     modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+      advanceMvAutoBuild(dtMs)
       refreshMvInspectors(dtMs)
       _mvControls?.tick(dtMs)
     }
@@ -12114,6 +12122,46 @@ function wireMvInspectors() {
     })
     actionsReset.addEventListener('pointerdown', (e) => e.stopPropagation())
     actionsReset.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
+  // Controls panel "Create Unit" button — shown only when the unit
+  // has a Create script that hasn't run yet (gating set by
+  // refreshMvControlsGating).  Clicking starts the script + flips
+  // lifecycle to 'creating'; the existing syncMvActionsRunning sweep
+  // promotes to 'created' once Create's thread dies, at which point
+  // refreshMvControlsGating hides this row + reveals the action grid.
+  const createBtn = document.getElementById('mv-controls-create-btn')
+  if (createBtn && createBtn.dataset.wired !== '1') {
+    createBtn.dataset.wired = '1'
+    createBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const mv = modelViewerInstance
+      const cob = mv?.cob
+      if (!cob || !cob.hasScript || !cob.hasScript('Create')) return
+      // Cancel any in-flight auto-build ramp so the user-driven flow
+      // takes over.  The Create script kicks off the actual unit
+      // setup; refreshMvControlsGating handles the row swap once
+      // the lifecycle transitions.
+      if (mv._autoBuild) mv._autoBuild = null
+      cob.start('Create')
+      cob._lifecycle = 'creating'
+      refreshMvControlsGating(mv)
+    })
+    createBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+    createBtn.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
+  // Controls panel "Reset" button — sibling of the Stop action.
+  // Same handler as the Actions panel reset (full COB + controller
+  // reset) but exposed beside Stop so the user can revert without
+  // opening another inspector.
+  const ctrlsReset = document.getElementById('mv-controls-reset-btn')
+  if (ctrlsReset && ctrlsReset.dataset.wired !== '1') {
+    ctrlsReset.dataset.wired = '1'
+    ctrlsReset.addEventListener('click', (e) => {
+      e.stopPropagation()
+      modelViewerInstance?.resetState?.()
+    })
+    ctrlsReset.addEventListener('pointerdown', (e) => e.stopPropagation())
+    ctrlsReset.addEventListener('mousedown', (e) => e.stopPropagation())
   }
   // Restore visibility prefs.  Default each panel to VISIBLE on
   // first open — the inspectors are the main way to inspect a
@@ -14750,7 +14798,19 @@ function renderMvPortsPanel(mv) {
     Math.max(0, 100 - (mv.cobBuildPercent | 0)), 0, 100, '%',
     'GET BUILD_PERCENT_LEFT — 100 means nothing built yet, 0 means fully built.  Synced with the COB ribbon\'s Build slider.',
     (v) => {
-      mv.cobBuildPercent = Math.max(0, Math.min(100, 100 - v))
+      // Route through setBuildPercent so the renderer's build-%
+      // shader uniform updates + a redraw is requested.  Old code
+      // wrote straight to mv.cobBuildPercent which kept the slider
+      // value in sync but never repainted the unit.  Also cancels
+      // any in-flight auto-build ramp so the user's manual drag
+      // takes over without being fought by the timer.
+      if (mv._autoBuild) mv._autoBuild = null
+      const pct = Math.max(0, Math.min(100, 100 - v))
+      if (typeof mv.setBuildPercent === 'function') {
+        mv.setBuildPercent(pct)
+      } else {
+        mv.cobBuildPercent = pct
+      }
       mvSyncCobAttrSlidersFromPorts(mv)
     }))
   if (showArmoured) {
@@ -14808,6 +14868,51 @@ function refreshMvPortsLiveValues(mv) {
   }
 }
 
+// ── Auto-build ramp ──────────────────────────────────────────────
+//
+// When a unit first loads, we ramp BUILD_PERCENT from 0 → 100 over
+// ~5 sim-seconds so the user sees the construction-stripe wireframe
+// phase out into the finished model.  Using SIM time (not wall) so
+// slow-mo + pause both apply, matching every other timing in the
+// studio.  The ramp aborts the moment the user drags either Build
+// slider or clicks Create Unit — manual control wins.
+//
+// State lives on the viewer (mv._autoBuild) so a tab swap to a fresh
+// unit naturally re-arms the ramp; setting it to null cancels.
+const AUTO_BUILD_DURATION_MS = 5000
+
+function startMvAutoBuild(mv) {
+  if (!mv) return
+  // Snap to 0% so the ramp begins from the construction-stripe
+  // wireframe and phases the unit in.
+  if (typeof mv.setBuildPercent === 'function') mv.setBuildPercent(0)
+  else mv.cobBuildPercent = 0
+  mv._autoBuild = { elapsedMs: 0, durationMs: AUTO_BUILD_DURATION_MS }
+}
+
+function advanceMvAutoBuild(dtMs) {
+  const mv = modelViewerInstance
+  if (!mv || !mv._autoBuild) return
+  const rate = mv.cob?.runtime?.playbackRate ?? 1
+  const dtSim = Math.max(0, dtMs) * rate
+  const state = mv._autoBuild
+  state.elapsedMs += dtSim
+  const pct = Math.max(0, Math.min(100, (state.elapsedMs / state.durationMs) * 100))
+  if (typeof mv.setBuildPercent === 'function') mv.setBuildPercent(pct)
+  else mv.cobBuildPercent = pct
+  // Keep both sliders' labels in sync as the ramp advances so the
+  // user can watch the percentage tick up rather than only seeing
+  // the visual wireframe phase in.
+  mvSyncCobAttrSlidersFromPorts(mv)
+  const cob = document.getElementById('mv-cob-build')
+  const cobVal = document.getElementById('mv-cob-build-val')
+  if (cob) cob.value = String(pct | 0)
+  if (cobVal) cobVal.textContent = `${pct | 0}%`
+  if (state.elapsedMs >= state.durationMs) {
+    mv._autoBuild = null  // ramp complete — release the slot
+  }
+}
+
 // refreshMvControlsGating disables the entire Controls overlay
 // (action buttons + every port input) until the unit's Create
 // script has finished.  The Actions panel + COB ribbon already
@@ -14824,6 +14929,7 @@ function refreshMvControlsGating(mv) {
   if (!panel) return
   const cob = mv?.cob
   const lifecycle = cob?._lifecycle
+  const hasCreate = !!(cob && cob.hasScript && cob.hasScript('Create'))
   const blocked = !cob || lifecycle === 'unborn' || lifecycle === 'creating'
   // .mv-controls-gated drops opacity and disables pointer events on
   // the action-button row + the port-rows body via CSS — the panel
@@ -14833,12 +14939,22 @@ function refreshMvControlsGating(mv) {
   // untouched: when Create completes, the class drops and each
   // button's own disabled state takes over again.
   panel.classList.toggle('mv-controls-gated', blocked)
-  // Tooltip on the action row explains WHY the panel is unresponsive,
-  // so the user doesn't think the buttons are broken.
-  const actions = panel.querySelector('#mv-controls-actions')
+  // Swap the action-grid for the Create-Unit banner when the unit's
+  // Create script hasn't run yet.  The banner replaces the grid
+  // instead of just disabling it so the user has an obvious next
+  // step.  Reset button stays in the grid so it's reachable even
+  // pre-Create (it's a no-op if there's nothing to reset).
+  const createRow = document.getElementById('mv-controls-create-row')
+  const actions   = panel.querySelector('#mv-controls-actions')
+  const showCreate = !!cob && hasCreate && lifecycle === 'unborn'
+  if (createRow) createRow.style.display = showCreate ? '' : 'none'
+  if (actions)   actions.style.display   = showCreate ? 'none' : ''
+  // Tooltip on the action row explains WHY the panel is unresponsive
+  // (only meaningful when the grid IS visible — i.e. during the
+  // 'creating' phase between Create-click and Create-thread-death).
   if (actions) {
-    if (blocked) {
-      actions.title = 'Run Create first — these controls activate once the unit\'s Create script has finished.'
+    if (blocked && !showCreate) {
+      actions.title = 'Create script running — controls activate once it finishes.'
     } else {
       actions.removeAttribute('title')
     }
@@ -15191,6 +15307,9 @@ function wireCobAttributeSliders() {
     build.addEventListener('input', () => {
       const v = parseInt(build.value, 10) | 0
       if (buildVal) buildVal.textContent = `${v}%`
+      // User-driven drag — cancel any in-flight auto-build ramp so
+      // the timer doesn't fight the slider.  Manual control wins.
+      if (modelViewerInstance) modelViewerInstance._autoBuild = null
       modelViewerInstance?.setBuildPercent(v)
     })
     build.addEventListener('click', (e) => e.stopPropagation())
@@ -15215,6 +15334,10 @@ function wireCobAttributeSliders() {
 function _wireRuntimeHelpersToWindow() {
   window.mvToggleRuntimePaused = mvToggleRuntimePaused
   window.mvSetSimulationSpeed = mvSetSimulationSpeed
+  // ModelViewer.resetState lives in its own module and needs to
+  // re-arm the auto-build ramp; expose the helper so it can call
+  // through without an ES-module circular import.
+  window.startMvAutoBuild = startMvAutoBuild
 }
 
 // mvToggleRuntimePaused flips the runtime's paused state and

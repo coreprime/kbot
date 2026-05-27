@@ -500,8 +500,17 @@ export class MvControls {
     if (!cob) return
     if (cob._lifecycle && cob._lifecycle !== 'unborn') return
     if (cob.hasScript && cob.hasScript('Create')) {
+      // Cancel any in-flight auto-build ramp — the user has taken
+      // explicit control via a canvas click that's auto-triggering
+      // Create, and we don't want the ramp to keep advancing on
+      // top of the script's setup.
+      if (this.viewer._autoBuild) this.viewer._autoBuild = null
       cob.start('Create')
-      cob._lifecycle = 'created'
+      // 'creating' (NOT 'created') so syncMvActionsRunning's tick
+      // sweep can promote to 'created' once the Create thread dies.
+      // Setting 'created' here would skip the promotion path and
+      // leave Activate/Deactivate gating mis-aligned.
+      cob._lifecycle = 'creating'
     } else {
       cob._lifecycle = 'created'
     }
@@ -965,6 +974,13 @@ export class MvControls {
     if (!target) return
     const cob = this.viewer.cob
     if (!cob) return
+    // Don't drive aim/fire scripts before the unit has been Created.
+    // The runtime is happy to take Aim/Fire calls at any time, but
+    // the COB's static-vars typically aren't initialised until Create
+    // has run — firing pre-Create produces wrong piece queries and
+    // animator stuck-states.  Matches the Controls panel's UI gate
+    // so the runtime + the visible affordance agree.
+    if (cob._lifecycle === 'unborn' || cob._lifecycle === 'creating') return
     const state = this.aimState[slot]
     const aimScript = 'Aim' + capitalise(slot)
     const fireScript = 'Fire' + capitalise(slot)

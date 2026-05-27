@@ -162,6 +162,16 @@ export class ModelViewer {
     if (this._mvControls && typeof this._mvControls.resetState === 'function') {
       this._mvControls.resetState()
     }
+    // Re-arm the auto-build ramp so Reset visibly replays the
+    // construction-phase-in animation — matches "treat this as a
+    // freshly-loaded unit", which the user expects.  Cleared first
+    // so the global advance loop doesn't keep advancing a stale ramp.
+    this._autoBuild = null
+    if (typeof window.startMvAutoBuild === 'function') {
+      window.startMvAutoBuild(this)
+    } else if (typeof this.setBuildPercent === 'function') {
+      this.setBuildPercent(0)
+    }
     // Force a redraw so the user sees the snap-back even when the
     // renderer's idle (no auto-rotate, no pending animations).
     if (this.renderer) this.renderer.requestRedraw()

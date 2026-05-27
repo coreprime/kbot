@@ -704,6 +704,17 @@
              "set this target".  No toggle: re-clicking a button just
              re-arms (with the previous arm cancelled).  Use Stop to
              clear targets + halt the unit. -->
+        <!-- Pre-Create banner — shown when the unit's COB has a Create
+             script that hasn't been run yet.  Replaces the action grid
+             until the user clicks Create Unit (or canvas click auto-
+             triggers it).  Once Create completes, refreshMvControlsGating
+             hides this row and reveals the action grid. -->
+        <div class="mv-controls-create-row" id="mv-controls-create-row" style="display:none">
+          <button class="btn primary mv-controls-create-btn" id="mv-controls-create-btn"
+                  title="Run the unit's Create script — initialises piece visibility / poses and unlocks the Move / Aim / Fire controls.">
+            ⚙ Create Unit
+          </button>
+        </div>
         <div class="mv-controls-actions" id="mv-controls-actions">
           <button class="mv-ctrl-action" data-ctrl-action="move" disabled
                   title="Move — click here, then click in the scene to walk the unit there at its FBI-defined speed.  StartMoving / StopMoving scripts fire when those exist.">
@@ -724,6 +735,10 @@
           <button class="mv-ctrl-action mv-ctrl-action-stop" data-ctrl-action="stop"
                   title="Stop — clear every move + aim target on this unit.  The walk loop halts (StopMoving fires when defined) and Aim*/Fire* schedulers drop their targets.">
             <span class="ico">✋</span><span class="lbl">Stop</span>
+          </button>
+          <button class="mv-ctrl-action mv-ctrl-action-reset" id="mv-controls-reset-btn"
+                  title="Reset State — revert the unit to its pre-Create state: clear threads, animators, particles, audio, weapon history, and snap position / build% back to origin.">
+            <span class="ico">↺</span><span class="lbl">Reset</span>
           </button>
         </div>
         <div class="mv-inspector-body" id="mv-inspector-ports-body">
