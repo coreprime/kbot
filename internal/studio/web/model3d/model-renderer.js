@@ -743,6 +743,13 @@ export class ModelRenderer {
     // the surface, not below.  Defaults are zero so legacy call
     // sites that never set this see the unit at world origin.
     this._unitTransform = { x: 0, y: 0, z: 0, headingRad: 0 }
+    // Multi-entity mode — when an array is set here, draw() iterates
+    // over each entity and renders its model independently after the
+    // shared sky/ground pass.  Each entity is
+    // { model, transform: {x,y,z,headingRad}, binding, buildPercent,
+    //   particles, selected }.  When null, the renderer falls back
+    //  to single-unit mode driven by `this.model` + _unitTransform.
+    this._entities = null
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -915,6 +922,17 @@ export class ModelRenderer {
   unitWorldXZ() { return [this._unitTransform.x, this._unitTransform.z] }
   unitWorldY() { return this._unitTransform.y }
   unitHeading() { return this._unitTransform.headingRad }
+
+  // setEntities switches the renderer into multi-entity mode.  When
+  // entities are present, draw() draws each entity's model after the
+  // shared sky / ground pass instead of the single `this.model`.
+  // Pass null to return to single-unit mode.  Each entity:
+  //   { model, transform: {x, y, z, headingRad},
+  //     particles?, buildPercent?, selected?, teamColor? }
+  setEntities(entitiesArr) {
+    this._entities = (Array.isArray(entitiesArr) && entitiesArr.length > 0) ? entitiesArr : null
+    this.requestRedraw()
+  }
 
   // worldToCanvas projects a world-space (x, y, z) point onto the
   // canvas's CSS pixel grid using the camera's live VP matrix.  The
@@ -1330,13 +1348,26 @@ export class ModelRenderer {
     if (!this._programsReady) return
     this.resize()
 
-    if (!this.camera || !this.model) {
+    // In multi-entity mode we proceed even with no `this.model` since
+    // the entities array supplies models per-pass.  Camera is always
+    // required.
+    const haveModel = !!this.model || (this._entities && this._entities.length > 0)
+    if (!this.camera || !haveModel) {
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
       gl.clearColor(this.skyBottom[0], this.skyBottom[1], this.skyBottom[2], 1)
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
       return
     }
 
+    // Multi-entity mode: for the shared setup (camera + sky + ground
+    // + shadow) we adopt the FIRST entity's model as `this.model` so
+    // the existing bounds-based computations still work.  Per-entity
+    // model matrices are built inside the per-entity loop below.
+    let _savedModel = null
+    if (this._entities) {
+      _savedModel = this.model
+      this.model = this._entities[0].model
+    }
     // In Sea mode the unit bobs on the swell — height + pitch + roll
     // come from sampling the same wave function the surface uses, so
     // the hull rides exactly the visible water under it.  Other
@@ -1456,6 +1487,39 @@ export class ModelRenderer {
 
     if (this.renderMode === 'wireframe') {
       this.#renderWireframe([0.85, 0.92, 1.0, 1.0])
+    } else if (this._entities) {
+      // Multi-entity main pass — iterate each entity, swap this.model
+      // + _modelMatrix to point at it, then run the standard single-
+      // entity main pass.  Build% / unit-centre / pulse-light all
+      // get recomputed inside #renderMain from this.model + the
+      // mutated _modelMatrix, so each entity renders correctly.
+      const savedBp = this.buildPercent
+      const savedUt = { x: this._unitTransform.x, y: this._unitTransform.y, z: this._unitTransform.z, headingRad: this._unitTransform.headingRad }
+      for (const ent of this._entities) {
+        this.model = ent.model
+        if (typeof ent.buildPercent === 'number') this.buildPercent = ent.buildPercent
+        const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
+        this._unitTransform.x = +t.x || 0
+        this._unitTransform.y = +t.y || 0
+        this._unitTransform.z = +t.z || 0
+        this._unitTransform.headingRad = +t.headingRad || 0
+        Mat4.identity(this._modelMatrix)
+        if (t.x !== 0 || t.y !== 0 || t.z !== 0) {
+          Mat4.translate(this._modelMatrix, this._modelMatrix, t.x, t.y, t.z)
+        }
+        if (t.headingRad !== 0) {
+          Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
+        }
+        this.#renderMain(this.renderMode === 'flat')
+      }
+      // Restore globals for subsequent passes (wireframe overlay,
+      // particles, etc.) and for any post-frame code that reads
+      // unitWorldXZ / buildPercent expecting the "primary" unit.
+      this.buildPercent = savedBp
+      this._unitTransform.x = savedUt.x
+      this._unitTransform.y = savedUt.y
+      this._unitTransform.z = savedUt.z
+      this._unitTransform.headingRad = savedUt.headingRad
     } else {
       this.#renderMain(this.renderMode === 'flat')
       if (this.wireframeOverlay) {
@@ -1502,12 +1566,34 @@ export class ModelRenderer {
 
     // COB SFX particles — drawn after the unit so smoke + sparks
     // composite over the hull.  Inside the scene FBO when DoF is
-    // active so the post-process catches them too.
-    this.#renderParticles()
+    // active so the post-process catches them too.  In multi-entity
+    // mode we render each entity's own particle pool in turn (each
+    // CobBinding owns its own pool) by swapping the pool ref before
+    // each call.
+    if (this._entities) {
+      const savedPool = this._particlePool
+      for (const ent of this._entities) {
+        const pool = ent.binding && ent.binding.particles
+        if (pool && pool.count > 0) {
+          this._particlePool = pool
+          this.#renderParticles()
+        }
+      }
+      this._particlePool = savedPool
+    } else {
+      this.#renderParticles()
+    }
 
     // When the scene rendered into our offscreen FBO (DoF enabled),
     // composite to the default framebuffer via the post-process pass.
     if (useScenePass) this.#compositeDoF()
+
+    // Restore single-unit `this.model` after multi-entity rendering
+    // so callers reading mv.model (the inspectors, the piece tree)
+    // don't see the LAST entity in the loop as the active unit.
+    if (this._entities && _savedModel !== null) {
+      this.model = _savedModel
+    }
   }
 
   #renderHoverHighlight() {
