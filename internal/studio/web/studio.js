@@ -150,6 +150,16 @@ import { openHelpDialog, closeHelpDialog } from './ui/dialogs/help.js'
 // closeTab when a dirty map is being closed.
 import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 
+// Mouse → grid coordinate converters used by the per-mode mouse
+// handlers below.  pickCell → tile grid; pickAttrCellForVoid →
+// attribute grid; pickFeatureAttrCell → feature-anchor-aware
+// attribute grid.
+import {
+  pickCell,
+  pickAttrCellForVoid,
+  pickFeatureAttrCell,
+} from './ui/map-editor/mouse-coords.js'
+
 // Welcome dialog visual + audio FX — all three are pure
 // self-contained subsystems that observe #welcome-dialog's hidden
 // class via MutationObserver to suspend / resume on dialog close.
@@ -2796,58 +2806,9 @@ function wireZoomButtons() {
   $('#zoom-fit').addEventListener('click', fitZoom)
 }
 
-function pickCell(e) {
-  const canvas = $('#canvas')
-  const rect = canvas.getBoundingClientRect()
-  const x = (e.clientX - rect.left) / rect.width * state.tileW
-  const y = (e.clientY - rect.top) / rect.height * state.tileH
-  return { tx: Math.floor(x), ty: Math.floor(y) }
-}
-
-// pickFeatureAttrCell returns the (ax, ay) attribute cell to assign to
-// a feature placed under the cursor.  It inverts the same offset
-// featureAnchorWorld applies on the way out — Footprint*8 in X plus
-// Footprint*8 - Height/2 in Y — so the rendered anchor visually lines
-// up with the cursor (modulo the unavoidable ±8 px snap to the 16-px
-// attribute grid).  Height is sampled at the cursor's plain cell as a
-// one-step estimate; the stored ax/ay round-trips through load/save
-// unchanged.
-function pickFeatureAttrCell(e, sel) {
-  const canvas = $('#canvas')
-  const rect = canvas.getBoundingClientRect()
-  const cx = (e.clientX - rect.left) / rect.width * canvas.width
-  const cy = (e.clientY - rect.top) / rect.height * canvas.height
-  const fw = (sel && sel.footprintX) || 1
-  const fh = (sel && sel.footprintZ) || 1
-  const cellPx = TILE_PX / 2 // 16
-  const anchorPx = TILE_PX / 4 // 8
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  const heights = state.heights
-  const sampleH = (ax, ay) => {
-    if (!heights || !heights.length) return 0
-    if (ax < 0 || ay < 0 || ax >= aw || ay >= ah) return 0
-    return heights[ay * aw + ax] | 0
-  }
-  const ax = clamp(Math.floor((cx - fw * anchorPx) / cellPx), 0, aw - 1)
-  // Tentative ay using the cursor cell's height — then iterate so the
-  // height we use to compute ay matches the height at the cell ay
-  // actually lands in.  Without this, releasing a feature near a
-  // slope makes the renderer (which reads state.heights at the final
-  // ax/ay) disagree with the picker (which read state.heights at the
-  // cursor cell), and the feature visibly snaps to a different
-  // position after the drop completes.
-  const cursorAy = clamp(Math.floor(cy / cellPx), 0, ah - 1)
-  let h = sampleH(ax, cursorAy)
-  let ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
-  for (let i = 0; i < 3; i++) {
-    const nextH = sampleH(ax, ay)
-    if (nextH === h) break
-    h = nextH
-    ay = clamp(Math.floor((cy + (h >> 1) - fh * anchorPx) / cellPx), 0, ah - 1)
-  }
-  return { ax, ay }
-}
+// pickCell + pickFeatureAttrCell + pickAttrCellForVoid moved to
+// /ui/map-editor/mouse-coords.js — imported at the top of this
+// file.
 
 function updateHoverLabel(e) {
   const { tx, ty } = pickCell(e)
@@ -3774,14 +3735,6 @@ function paintVoidBrush(ax, ay, target) {
 // pickAttrCellForVoid converts a MouseEvent into the attribute cell
 // directly under the cursor, ignoring the feature-anchor / Height/2
 // adjustment pickFeatureAttrCell applies — voids are flat-grid edits.
-function pickAttrCellForVoid(e) {
-  const canvas = $('#canvas')
-  const rect = canvas.getBoundingClientRect()
-  const ax = Math.floor((e.clientX - rect.left) / rect.width * state.tileW * 2)
-  const ay = Math.floor((e.clientY - rect.top) / rect.height * state.tileH * 2)
-  return { ax, ay }
-}
-
 // onFillMouseDown floods the connected region of tiles matching the
 // tile under the cursor with the active section's (0,0) source.  4-way
 // connectivity; bounded by the map.
