@@ -344,6 +344,14 @@ import {
   setMinimapBaseSnapshot,
 } from './ui/map-editor/minimap.js'
 
+// rAF-batched re-render queues for the main map canvas + minimap.
+// Both schedulers dedupe within a single animation frame so a
+// burst of scroll events doesn't fan out into dozens of renders.
+import {
+  scheduleRenderCanvas,
+  scheduleMinimapRender,
+} from './ui/map-editor/render-queue.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -5754,27 +5762,8 @@ function drawHighlightedFeatureOutlines(ctx) {
 // updateMinimapViewport + wireMinimap) moved to
 // /ui/map-editor/minimap.js — imported at the top of this file.
 
-let minimapRenderQueued = false
-function scheduleMinimapRender() {
-  if (minimapRenderQueued) return
-  minimapRenderQueued = true
-  requestAnimationFrame(() => {
-    minimapRenderQueued = false
-    renderMinimap()
-  })
-}
-
-// scheduleRenderCanvas batches main-canvas redraws into one rAF tick so
-// rapid scroll events don't fire dozens of renders per frame.
-let canvasRenderQueued = false
-function scheduleRenderCanvas() {
-  if (canvasRenderQueued) return
-  canvasRenderQueued = true
-  requestAnimationFrame(() => {
-    canvasRenderQueued = false
-    renderCanvas()
-  })
-}
+// scheduleMinimapRender / scheduleRenderCanvas moved to
+// /ui/map-editor/render-queue.js — imported at the top of this file.
 
 
 // setMinimapVisible / setFeaturesVisible / setStartPositionsVisible /
