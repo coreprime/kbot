@@ -282,6 +282,10 @@ export const hostCallbacks = {
   // it through this callback because the panel itself is still
   // legacy (non-React) — once it migrates the callback can drop.
   setCameraInfoVisible: null,   // (visible: boolean) => void
+  // Viewport-centre tile coord (honouring scroll + zoom).  Used by
+  // the camera-info panel to publish the current centre; defined
+  // in studio.js because it touches the live canvas-scroll wrapper.
+  viewportCellCenter: null,     // () => { tx, ty }
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

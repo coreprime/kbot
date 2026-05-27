@@ -198,6 +198,15 @@ import {
   setVoidsVisible,
 } from './ui/map-editor/view-toggles.js'
 
+// Camera & Cursor panel — visibility toggle + the two publish-to-
+// React-store helpers that feed it.  Visibility flag persists via
+// prefs alongside the other View toggles.
+import {
+  setCameraInfoVisible,
+  updateCameraInfoPanel,
+  updateCameraInfoCursor,
+} from './ui/map-editor/camera-info.js'
+
 // Dice-face player-count picker for the New-map size dialog.
 // Owns its own dicePicked Set; pickedPlayerCounts() reads it at
 // startEditor() time to seed N-player schemas.
@@ -321,6 +330,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
   hostCallbacks.setCameraInfoVisible = setCameraInfoVisible
+  hostCallbacks.viewportCellCenter = viewportCellCenter
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -4412,57 +4422,6 @@ function renderCanvas() {
   // Keep the per-feature callout in sync with the current selection.
   updateFeatureInfoPanel()
   updateCameraInfoPanel()
-}
-
-// setCameraInfoVisible toggles the Camera & Cursor panel.  Mirrors the
-// View-menu Minimap toggle so users get a familiar pattern.
-function setCameraInfoVisible(visible) {
-  state.showCameraInfo = !!visible
-  if (_reactUi && typeof _reactUi.setPanelVisible === 'function') {
-    _reactUi.setPanelVisible('camera-info-panel', !!visible)
-  }
-  if (visible) updateCameraInfoPanel()
-  persistPrefs()
-  publishMapRibbonState()
-}
-
-// updateCameraInfoPanel publishes the viewport-centre tile + zoom to
-// the React store.  Called from renderCanvas after a pan / zoom; the
-// React CameraCursorPanel re-renders on the next signal commit.
-function updateCameraInfoPanel() {
-  if (!_reactUi || typeof _reactUi.publishMapCameraInfo !== 'function') return
-  const cam = viewportCellCenter()
-  _reactUi.publishMapCameraInfo({
-    cameraTx: cam.tx,
-    cameraTy: cam.ty,
-    zoomPct: Math.round((state.zoom || 1) * 100),
-  })
-}
-
-// updateCameraInfoCursor publishes the cursor tile + sub-tile + the
-// height byte at the precise attribute cell under the cursor.  Called
-// from updateHoverLabel; null tx clears the readout when the mouse
-// leaves the canvas.
-function updateCameraInfoCursor(tx, ty, ax, ay) {
-  if (!_reactUi || typeof _reactUi.publishMapCameraInfo !== 'function') return
-  if (tx == null) {
-    _reactUi.publishMapCameraInfo({
-      cursorTx: null, cursorTy: null,
-      subTx: null, subTy: null,
-      height: null,
-    })
-    return
-  }
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  const height = (ax >= 0 && ay >= 0 && ax < aw && ay < ah && state.heights)
-    ? (state.heights[ay * aw + ax] | 0)
-    : null
-  _reactUi.publishMapCameraInfo({
-    cursorTx: tx, cursorTy: ty,
-    subTx: ax & 1, subTy: ay & 1,
-    height,
-  })
 }
 
 // updateFeatureInfoPanel populates the floating callout that appears
