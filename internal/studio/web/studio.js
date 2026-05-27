@@ -771,9 +771,11 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
     } else {
       // Hide the sandbox panel when switching back to a regular
       // model tab so its overlay doesn't shadow the single-unit
-      // inspectors.
+      // inspectors.  Also drop the sandbox-mode class so the
+      // left sidebar (Pieces / Textures / Weapons) comes back.
       const sp = document.getElementById('sandbox-panel')
       if (sp) sp.classList.add('hidden')
+      $('#model-viewer-dialog')?.classList.remove('sandbox-mode')
       void activateModelTab(incoming)
     }
     return
@@ -932,6 +934,13 @@ function wireMapTabBar() {
   // accidental clicks don't leave the popup open.
   document.querySelector('#map-tab-add-new-model')?.addEventListener('click', () => {
     popup.classList.add('hidden')
+  })
+  // Sandbox launcher from the new-tab popup — same entry-point as
+  // the welcome card so the user can open more sandbox tabs without
+  // leaving the editor.
+  document.querySelector('#map-tab-add-sandbox')?.addEventListener('click', () => {
+    popup.classList.add('hidden')
+    openSandboxStub()
   })
   document.addEventListener('click', (e) => {
     if (popup.classList.contains('hidden')) return
@@ -12325,7 +12334,16 @@ function refreshMvInspectors(dtMs = 16) {
   _mvInspectorThrottleMs += dtMs
   if (_mvInspectorThrottleMs < 250) return
   _mvInspectorThrottleMs = 0
-  const mv = modelViewerInstance
+  // Pick the viewer to source inspector data from — when a sandbox
+  // tab is active we want the sandbox view's camera + runtime, not
+  // the (possibly stale) single-unit viewer.  Both view classes
+  // expose .camera, .renderer, and a .cob-like surface, so the
+  // existing panel renderers don't have to know which kind it is.
+  const sandbox = (typeof window !== 'undefined') ? window.__sandboxView : null
+  const sandboxActive = sandbox && document.getElementById('model-viewer-dialog')?.classList?.contains('sandbox-mode')
+  const mv = sandboxActive
+    ? { camera: sandbox.camera, renderer: sandbox.renderer, cob: { runtime: sandbox.scene?.runtime, unit: null } }
+    : modelViewerInstance
   if (!mv) return
   // COB Scripts panel
   const scriptsPanel = document.getElementById('mv-inspector-scripts')
@@ -16756,8 +16774,9 @@ function openSandboxStub() {
   // Reuse the model-viewer tab type for hooking into the existing
   // switchToTab routing; flag it as sandbox via tab.sandbox = true
   // so activateModelTab knows to mount the multi-unit view instead
-  // of the single-unit one.
-  const tab = { type: 'model', name: '__sandbox__', sandbox: true, displayName: 'Sandbox' }
+  // of the single-unit one.  The tab name field is what the tab
+  // bar displays, so use "Sandbox" rather than the internal id.
+  const tab = { type: 'model', name: 'Sandbox', sandbox: true, displayName: 'Sandbox' }
   tabs.push(tab)
   switchToTab(tabs.length - 1, { fresh: true, force: true })
 }
@@ -16772,13 +16791,9 @@ async function activateSandboxTab(_tab) {
   // same canvas but with its own chrome.  Reuse the model-viewer
   // dialog so the canvas + ribbon are already mounted.
   $('#model-viewer-dialog')?.classList.remove('hidden')
-  // If the regular ModelViewer instance is alive, pause its renderer
-  // so it doesn't redraw the (now-stale) single-unit scene on top of
-  // the sandbox scene.  We'll re-init the sandbox view's renderer
-  // fresh below if needed.
+  // Stop the regular ModelViewer's renderer if it's running so we
+  // don't have two RAF loops fighting over the canvas.
   if (modelViewerInstance && modelViewerInstance.renderer) {
-    // The renderer instance is shared in practice — we want one
-    // renderer at a time on the single canvas.  Tear it down.
     try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
   }
   if (!sandboxViewInstance) {
@@ -16789,19 +16804,42 @@ async function activateSandboxTab(_tab) {
     })
   }
   await sandboxViewInstance.open()
+  // Hide the left sidebar (Pieces / Textures / Weapons — all
+  // single-unit inspectors) by tagging the model-viewer-dialog as
+  // sandbox-mode; the CSS rule below collapses .sidebar in this
+  // mode so the canvas expands to fill the editor width.
+  const dlg = $('#model-viewer-dialog')
+  if (dlg) dlg.classList.add('sandbox-mode')
   // Show the Sandbox floating panel; it offers Spawn / Move / Attack
   // / Stop buttons + a unit roster.  Lazy-created on first show.
   ensureSandboxPanel()
   showSandboxPanel(true)
-  // Hide the standard inspectors that don't apply to multi-unit mode
-  // (Pieces / Textures / Weapons / Threads — all single-unit).  The
-  // Sandbox panel takes their place.
-  for (const id of ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-effects', 'mv-inspector-audio']) {
+  // Hide ONLY the single-unit-specific inspectors (Actions / Ports /
+  // Static Vars / Effects / Audio).  Keep Renderer (camera info) +
+  // Scripts (runtime telemetry) — both are scene-wide and still
+  // meaningful in multi-unit mode.  refreshMvRuntimeStats already
+  // reads from the live runtime so the Scripts panel will tick the
+  // sandbox runtime correctly.
+  for (const id of ['mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-effects', 'mv-inspector-audio']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
   }
-  // Expose on window for the preview eval harness.
-  if (typeof window !== 'undefined') window.__sandboxView = sandboxViewInstance
+  // Force-show Renderer + Scripts so they're visible immediately
+  // even if the user previously closed them in a single-unit tab.
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts']) {
+    const p = document.getElementById(id)
+    if (p) p.classList.remove('hidden')
+  }
+  // Patch the global modelViewerInstance proxy so refreshMvRuntimeStats
+  // + refreshMvCameraPanel (both read mv.cob.runtime / mv.camera /
+  // mv.renderer) see the sandbox view's runtime + camera instead of
+  // the stale single-unit one.  Stashed on a separate global so the
+  // single-unit instance state isn't trashed when the user returns
+  // to a unit tab.
+  if (typeof window !== 'undefined') {
+    window.__sandboxView = sandboxViewInstance
+    window.__activeViewer = sandboxViewInstance
+  }
 }
 
 // ensureSandboxPanel — creates the floating Sandbox panel the first

@@ -4137,6 +4137,17 @@ canvas {
    it sits later in DOM order.  Bump the picker above 6000 so it also
    clears the thread debugger when both happen to be open. */
 #weapon-pick-dialog { z-index: 10000; }
+/* Sandbox floating panel — sits above the standard inspectors (z 50)
+   and above the .mv-thread-code-panel (6000) so it stays reachable
+   when other panels are open.  Below the modal weapon-pick-dialog
+   (10000) so picker selections still receive clicks. */
+#sandbox-panel {
+  z-index: 7500;
+}
+/* Sandbox mode — hide the left sidebar (Pieces / Textures / Weapons)
+   since those panels are single-unit and don't apply to the multi-
+   unit sandbox.  Lets the canvas expand to use the full width. */
+#model-viewer-dialog.sandbox-mode .sidebar { display: none; }
 /* Master "Show Projectiles" toggle at the top of the Weapons tab. */
 .mv-weapon-show-proj {
   display: flex; align-items: center; gap: 6px;
