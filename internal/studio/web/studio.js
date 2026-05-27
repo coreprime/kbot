@@ -435,6 +435,20 @@ import {
   resetTerrainDrag,
 } from './ui/map-editor/modes/terrain-select.js'
 
+// Feature-select mode handlers — click to grab + drag a placed
+// feature, click empty space with an armed drawer selection to
+// drop a copy.  resetFeatureDrag clears the in-flight drag from
+// abortTransientGestureState; beginFeatureDragFromAutoSwitch lets
+// tryAutoSwitchAt seed the drag state when a click in another
+// mode lands on a feature (R40c).
+import {
+  onFeatureMouseDown,
+  onFeatureMouseMove,
+  onFeatureMouseUp,
+  resetFeatureDrag,
+  beginFeatureDragFromAutoSwitch,
+} from './ui/map-editor/modes/feature-select.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -519,6 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.scheduleRenderCanvas = scheduleRenderCanvas
   hostCallbacks.scheduleMinimapRender = scheduleMinimapRender
   hostCallbacks.tryAutoSwitchAt = tryAutoSwitchAt
+  hostCallbacks.placeFeature = placeFeature
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -648,8 +663,7 @@ function abortTransientGestureState() {
   canvasHoverFeature = null
   placementMoveAnchor = null
   resetTerrainDrag()
-  featureDragging = false
-  featureDragOffset = null
+  resetFeatureDrag()
   resetStartPosDrag()
   resetPickerDrag()
 }
@@ -3127,11 +3141,10 @@ function tryAutoSwitchAt(e) {
       if (fhit >= 0) {
         setMode('select-features')
         state.selectedFeature = fhit
-        featureDragging = true
         beginTransaction()
         const f = state.features[fhit]
         const cur = pickFeatureAttrCell(e, f)
-        featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
+        beginFeatureDragFromAutoSwitch(f.ax - cur.ax, f.ay - cur.ay)
         state.featureJustMoved = -1
         renderCanvas()
         setStatus(`Picked ${f.name} — drag to reposition, Delete to remove.`)
@@ -3357,68 +3370,11 @@ function copyTileHeights(sec, ssx, ssy, mtx, mty, rotation, origW, _origH, flipH
 // hand-off to those functions unchanged.
 
 // ── Select Features mode ───────────────────────────────────────────────────
-
-let featureDragging = false
-let featureDragOffset = null
-
-function onFeatureMouseDown(e) {
-  // Start-position click in features mode jumps to start-points mode.
-  if (e.button === 0 && tryAutoSwitchAt(e)) return
-  // Hit-test against the actual cursor pixel — the previous tile-centre
-  // shortcut missed 1×1 features whose anchor offset pushed the sprite
-  // rect off the tile-centre point.
-  const hit = findFeatureAt(e)
-  if (hit >= 0) {
-    // Treat a click on the just-moved selection as "I'm done with that
-    // operation" and clear the selection instead of re-grabbing it.
-    if (state.featureJustMoved === hit) {
-      state.featureJustMoved = -1
-      state.selectedFeature = -1
-      renderCanvas()
-      return
-    }
-    state.selectedFeature = hit
-    featureDragging = true
-    beginTransaction()
-    const f = state.features[hit]
-    const cur = pickFeatureAttrCell(e, f)
-    featureDragOffset = { ax: f.ax - cur.ax, ay: f.ay - cur.ay }
-    state.featureJustMoved = -1
-    renderCanvas()
-    return
-  }
-  // Empty space + a feature in the drawer → drop a copy here.  This is
-  // how the user places multiple features without leaving the mode.
-  if (state.selected?.type === 'feature') {
-    const { ax, ay } = pickFeatureAttrCell(e, state.selected)
-    beginTransaction()
-    placeFeature(ax, ay)
-    commitTransaction('Place feature')
-    return
-  }
-  // Empty space + nothing armed → deselect any prior pick.
-  state.selectedFeature = -1
-  renderCanvas()
-}
-
-function onFeatureMouseMove(e) {
-  if (!featureDragging || state.selectedFeature < 0) return
-  const f = state.features[state.selectedFeature]
-  const { ax, ay } = pickFeatureAttrCell(e, f)
-  f.ax = clamp(ax + (featureDragOffset?.ax || 0), 0, state.tileW * 2 - 1)
-  f.ay = clamp(ay + (featureDragOffset?.ay || 0), 0, state.tileH * 2 - 1)
-  bumpContentVersion()
-  // Remember that this selection was just moved — a subsequent click on
-  // the same feature clears the selection (treats the click as "done").
-  state.featureJustMoved = state.selectedFeature
-  renderCanvas()
-}
-
-function onFeatureMouseUp(_e) {
-  if (featureDragging) commitTransaction('Move feature')
-  featureDragging = false
-  featureDragOffset = null
-}
+// onFeatureMouseDown / Move / Up + the in-flight drag state moved
+// to /ui/map-editor/modes/feature-select.js (R40c) — imported at
+// the top of this file.  tryAutoSwitchAt above seeds the drag
+// through beginFeatureDragFromAutoSwitch so an auto-mode-switch
+// click flows into a drag without a second mousedown.
 
 // findFeatureAt hit-tests in canvas-pixel space against the feature's
 // drawn footprint, accounting for the GAF hotspot offset so the

@@ -302,6 +302,12 @@ export const hostCallbacks = {
   // implementation, which already encodes the space-pan + visibility
   // checks; mode modules don't reproduce that logic locally.
   tryAutoSwitchAt: null,        // (e) => boolean
+  // Drop a copy of state.selected at the given attribute cell, with
+  // symmetry mates.  Shared between feature-select mouse-drop and
+  // the paint-mode auto-stamp so the feature factory + symmetry
+  // expansion live in one place (studio.js for now — moves with
+  // paint mode in a later round).
+  placeFeature: null,           // (ax, ay) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
