@@ -1,16 +1,21 @@
-// map-editor-store.js
+// store.js
 //
-// Signals + setters for the React-managed map editor surface (sidebar
-// tabs, floating panels, ribbon).  Mirrors the same pattern the
-// model-viewer migration uses (inspector-store): the host publishes
-// snapshots through small setters; React components subscribe to the
-// signals via `.value` reads inside their render bodies.
+// Signals + setters for the React-managed map editor surface
+// (sidebar tabs, floating panels, ribbon).  Mirrors the same
+// pattern the unit-editor uses (inspector-store): the host
+// publishes snapshots through small setters; React components
+// subscribe to the signals via `.value` reads inside their render
+// bodies.
 //
-// Why a separate store: the map editor's per-tick read-outs (stats,
-// camera/cursor pose, minimap tick) live on a totally different cadence
-// than the unit-editor's mv signal.  Sharing inspector-store would mean
-// every map-editor publish ticks the unit-editor's per-frame
-// subscribers (and vice versa).
+// Why a separate store from inspector-store: the map editor's
+// per-tick read-outs (stats, camera/cursor pose, minimap tick)
+// live on a totally different cadence than the unit-editor's mv
+// signal.  Sharing inspector-store would mean every map-editor
+// publish ticks the unit-editor's per-frame subscribers (and vice
+// versa).
+//
+// Lives under /ui/map-editor/ because it's map-specific — common/
+// is reserved for view-agnostic infrastructure.
 
 import { signal } from '@preact/signals'
 

@@ -17,7 +17,7 @@
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { cameraInfo } from '/ui/common/map-editor-store.js'
+import { cameraInfo } from '/ui/map-editor/store.js'
 
 const PANEL_ID = 'camera-info-panel'
 

@@ -21,7 +21,7 @@ import {
   MenuRow, MenuToggleRow, MenuSectionLabel, MenuSubmenuRow,
   closeAllDropdowns, closeDropdownById,
 } from '/ui/common/ribbon.js'
-import { ribbonState, mapRibbonBridge } from '/ui/common/map-editor-store.js'
+import { ribbonState, mapRibbonBridge } from '/ui/map-editor/store.js'
 
 // _MODES — single source of truth for the Mode dropdown.  Order +
 // labels mirror the legacy HTML byte-for-byte so the keyboard

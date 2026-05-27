@@ -20,7 +20,7 @@
 import { useEffect, useRef } from 'preact/hooks'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { mapRibbonBridge, minimapTick } from '/ui/common/map-editor-store.js'
+import { mapRibbonBridge, minimapTick } from '/ui/map-editor/store.js'
 
 const PANEL_ID = 'minimap-panel'
 

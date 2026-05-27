@@ -24,7 +24,7 @@ import {
   sidebarDrawer, sidebarFilter, sidebarUsedOnly, sidebarWreckage,
   sidebarUsedOnlyVisible, sidebarWreckageVisible,
   sidebarBridge,
-} from '/ui/common/map-editor-store.js'
+} from '/ui/map-editor/store.js'
 
 const _TABS = [
   { key: 'sections', label: 'Sections' },

@@ -71,7 +71,7 @@ import {
   sidebarUsedOnlyVisible, sidebarWreckageVisible,
   configureSidebarBridge,
   publishRibbonState, configureMapRibbonBridge,
-} from '/ui/common/map-editor-store.js'
+} from '/ui/map-editor/store.js'
 import {
   publishInspectorState,
   bumpRuntimeTick,

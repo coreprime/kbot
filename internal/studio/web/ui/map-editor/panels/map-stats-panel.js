@@ -14,7 +14,7 @@
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { mapStats } from '/ui/common/map-editor-store.js'
+import { mapStats } from '/ui/map-editor/store.js'
 
 // PANEL_ID — historic-id alignment.  The legacy panel used
 // `dev-stats-panel`; the migration renames it to `map-stats-panel`
