@@ -15,11 +15,11 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { spawnProjectile } from './model3d/weapon-driver.js'
-import { ArmedCursor } from './model3d/armed-cursor.js'
-import { shouldForceTarget } from './model3d/force-target.js'
-import { GameEngine } from './model3d/game-engine.js'
-import { hostCallbacks } from './ui/host-context.js'
+import { spawnProjectile } from '../../model3d/weapon-driver.js'
+import { ArmedCursor } from '../../model3d/armed-cursor.js'
+import { shouldForceTarget } from '../../model3d/force-target.js'
+import { GameEngine } from '../../model3d/game-engine.js'
+import { hostCallbacks } from '../host-context.js'
 import {
   initSmokeTrails,
   tickSmokeTrails,
@@ -28,7 +28,7 @@ import {
   wireHotkeys,
   wrapCobWithAggregate,
   disposeView,
-} from './ui/common/view-helpers.js'
+} from '../common/view-helpers.js'
 
 const SLOT_INDEX = { primary: 0, secondary: 1, tertiary: 2 }
 const SLOT_NAMES = ['primary', 'secondary', 'tertiary']

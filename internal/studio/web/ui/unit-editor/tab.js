@@ -18,7 +18,7 @@
 // so weapon SM + audio scheduling stay coherent.
 
 import { tabs, $, hostCallbacks } from '../host-context.js'
-import { MvControls } from '../../mv-controls.js'
+import { MvControls } from './mv-controls.js'
 
 export async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a
