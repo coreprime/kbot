@@ -3364,12 +3364,14 @@ canvas {
    the canvas but doesn't block pointer events outside its own rect,
    so the user keeps orbiting / clicking the model behind.  z-index
    sits above the inspector overlays so the debugger drags on top. */
+/* position: absolute so the panel anchors inside .model-viewer-stage
+   (the same containing block every other FloatingPanel uses).  This
+   keeps the FloatingPanel drag clamp working — it reads the stage
+   rect and constrains the title bar to stay inside it.  width /
+   height defaults are set by FloatingPanel via the `defaultSize`
+   prop, not here. */
 .mv-thread-code-panel {
-  position: fixed;
-  top: 120px;
-  left: 360px;
-  width: min(70vw, 920px);
-  height: min(70vh, 560px);
+  position: absolute;
   z-index: 6000;
   display: flex;
   flex-direction: column;
@@ -3383,41 +3385,12 @@ canvas {
   -webkit-user-select: none;
 }
 .mv-thread-code-panel.hidden { display: none; }
-/* Minimised state — only the header bar shows.  Pane body + side
-   panel + resize handles all hide.  Header keeps the title + drag
-   grip + the minimize/close buttons so the user can re-expand or
-   dismiss without restoring first. */
-.mv-thread-code-panel.minimized { height: auto !important; min-height: 0; }
-.mv-thread-code-panel.minimized .mv-thread-code-body,
-.mv-thread-code-panel.minimized .mv-resize,
-.mv-thread-code-panel.minimized .mv-thread-code-search { display: none; }
-.mv-thread-code-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-1);
-  cursor: grab;
-}
-.mv-thread-code-header.dragging { cursor: grabbing; }
-.mv-thread-code-header .minimap-grip { color: var(--muted); cursor: grab; }
-.mv-thread-code-title {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 600;
-  font-family: var(--mono, ui-monospace, monospace);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mv-thread-code-status {
-  flex: 1;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: var(--mono, ui-monospace, monospace);
-}
+/* Minimised state handled by the generic `.minimized > *` rule
+   alongside .mv-panel-resize earlier in this stylesheet. */
+/* The debugger now uses the shared .mv-inspector-header chrome so
+   the title styling matches every other floating panel.  The
+   bespoke .mv-thread-code-header / .mv-thread-code-title /
+   .mv-thread-code-status rules are dead. */
 .mv-thread-code-body {
   display: flex;
   flex: 1;
@@ -3587,130 +3560,17 @@ canvas {
   border-radius: 50%;
   background: var(--danger);
 }
+/* The right-rail container that wraps the four debugger sections.
+   The card chrome is owned by .mv-collapsible (generic), so this
+   wrapper only handles row layout + mono font.  Width is set by the
+   FloatingPanel sidebar itself (.mv-panel-sidebar), not here. */
 .mv-thread-code-locals-panel {
-  width: 210px;
-  border-left: 1px solid var(--border);
-  padding: 4px;
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px;
-  overflow-y: auto;
-  background: var(--bg-1);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-/* Each side-panel section gets its own card-like background so
-   Execution / Locals / Globals / Stack read as distinct groups.
-   Subtle elevation + a label-row tint anchors each section. */
-.mv-thread-code-locals-panel .mv-section-body {
-  background: var(--bg-0);
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 4px 4px;
-  padding: 6px 8px;
-  margin-bottom: 4px;
-}
-.mv-thread-code-locals-panel .mv-thread-code-locals-label {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: 4px 4px 0 0;
-  padding: 4px 6px;
-  margin: 0;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.mv-thread-code-locals-panel .mv-thread-code-locals-label:hover { color: var(--text); }
-/* Execution-section body: status rows + control buttons. */
-.mv-thread-code-execution .mv-exec-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 10px;
-  padding: 1px 0;
-}
-.mv-thread-code-execution .mv-exec-k {
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-size: 9px;
-}
-.mv-thread-code-execution .mv-exec-status,
-.mv-thread-code-execution .mv-exec-pc,
-.mv-thread-code-execution .mv-exec-offset {
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.mv-thread-code-execution .mv-exec-status.status-sleep { color: #6ee7c1; }
-.mv-thread-code-execution .mv-exec-status.status-wait  { color: #f5b76e; }
-.mv-thread-code-execution .mv-exec-status.status-run   { color: #6ee79c; }
-.mv-thread-code-execution .mv-exec-status.status-bp    { color: var(--danger); }
-.mv-thread-code-execution .mv-exec-status.status-dead  { color: var(--muted); }
-.mv-thread-code-execution .mv-exec-controls {
-  display: flex;
-  gap: 4px;
-  margin-top: 6px;
-}
-.mv-thread-code-execution .mv-exec-btn {
-  flex: 1;
-  background: var(--bg-1);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 4px 6px;
-  cursor: pointer;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 10px;
-  transition: background 80ms ease, border-color 80ms ease;
-}
-.mv-thread-code-execution .mv-exec-btn:hover {
-  background: var(--bg-2);
-  border-color: var(--accent);
-}
-.mv-thread-code-execution .mv-exec-btn:active { background: var(--bg-0); }
-.mv-thread-code-locals-label {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin: 6px 0 4px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.mv-thread-code-locals-label .minimap-toggle {
-  font-size: 11px;
-  padding: 0 4px;
-  background: transparent;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-}
-.mv-thread-code-locals-label .minimap-toggle:hover { color: var(--accent); }
-/* Make section headers (Locals/Globals/Stack) click-to-collapse — the
-   ▾/▸ caret indicates state.  Body class `section-collapsed` hides the
-   list that follows the header. */
-.mv-thread-code-locals-label.mv-section-toggle {
-  cursor: pointer;
-  user-select: none;
-}
-.mv-thread-code-locals-label.mv-section-toggle:hover { color: var(--text); }
-.mv-thread-code-locals-label .mv-section-caret {
-  display: inline-block;
-  width: 10px;
-  margin-right: 2px;
-  color: var(--muted);
-  transition: transform 100ms ease;
-}
-.mv-section-body.section-hidden { display: none; }
-.mv-thread-code-locals-list.section-hidden { display: none; }
 /* Always-visible search box in the panel header.  Lights matches in
    both panes via .mv-search-match.  Sits between the status text and
    the chrome buttons. */
@@ -3734,32 +3594,35 @@ canvas {
 }
 /* Editable value cells.  contenteditable spans get a subtle hover
    ring so the user discovers they're editable, plus a focused
-   outline when actively typing. */
-.mv-thread-code-locals-list > div > span:last-child[contenteditable] {
+   outline when actively typing.  Generic-class version (targets the
+   three CollapsibleSection bodies the debugger uses). */
+.mv-thread-code-locals > div > span:last-child[contenteditable],
+.mv-thread-code-globals > div > span:last-child[contenteditable],
+.mv-thread-code-stack > div > span:last-child[contenteditable] {
   cursor: text;
   padding: 0 4px;
   border-radius: 2px;
   outline: 1px solid transparent;
   transition: outline-color 80ms ease, background 80ms ease;
 }
-.mv-thread-code-locals-list > div > span:last-child[contenteditable]:hover {
+.mv-thread-code-locals > div > span:last-child[contenteditable]:hover,
+.mv-thread-code-globals > div > span:last-child[contenteditable]:hover,
+.mv-thread-code-stack > div > span:last-child[contenteditable]:hover {
   outline-color: var(--border);
   background: var(--bg-0);
 }
-.mv-thread-code-locals-list > div > span:last-child[contenteditable]:focus {
+.mv-thread-code-locals > div > span:last-child[contenteditable]:focus,
+.mv-thread-code-globals > div > span:last-child[contenteditable]:focus,
+.mv-thread-code-stack > div > span:last-child[contenteditable]:focus {
   outline-color: var(--accent);
   background: var(--bg-0);
 }
 /* Collapsed variables panel — shrink to a thin sliver showing only
    the toggle button, freeing the source area for wider code. */
-.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel {
-  width: 24px;
-  padding: 8px 4px;
-  overflow: hidden;
-}
-.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel > div { display: none; }
-.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child { display: flex; }
-.mv-thread-code-panel.vars-collapsed .mv-thread-code-locals-panel .mv-thread-code-locals-label:first-child > span { display: none; }
+/* The sidebar collapse state lives on the panel root now
+   (`.sidebar-collapsed`) and is handled by the generic
+   `.has-sidebar.sidebar-collapsed .mv-panel-sidebar` rule earlier
+   in this stylesheet.  The .vars-collapsed class is dead. */
 /* Eight-direction resize handles (4 corners + 4 edges).  Edges are
    thin strips along the panel sides; corners are 14×14 boxes on top.
    Each handle has its own cursor so the user knows what will move.
@@ -3842,37 +3705,147 @@ canvas {
 
 /* Header extras + title spacing.  The title gets its own class so
    custom widgets (a search input) can sit beside it without the
-   bare-span style cascading layout-breaking margins. */
+   bare-span style cascading layout-breaking margins.  The header
+   extras slot uses `margin-left: auto` to push past the title and
+   sit flush against the chrome buttons on the right edge. */
 .mv-inspector-header .mv-panel-title { flex: 0 0 auto; }
+/* The debugger's search input lives in the header extras slot and
+   is shoved to the right edge via margin-left:auto so it sits flush
+   against the chrome buttons.  Same selector still matches when
+   future panels drop their own search inputs into headerExtras. */
+.mv-inspector-header .mv-thread-code-search {
+  margin-left: auto;
+}
 .mv-inspector-header .mv-panel-sidebar-toggle,
 .mv-inspector-header .mv-panel-minimize { margin-left: 2px; }
 
-/* Minimized state — collapses the whole panel to just its header. */
-.minimized > :not(.mv-inspector-header):not(.mv-panel-resize) { display: none; }
+/* Minimized state — collapses the whole panel to just its header
+   plus the resize handles.  Uses :first-child rather than depending
+   on `.mv-inspector-header` so panels with a custom header class
+   (debugger uses .mv-thread-code-header in some configs) still
+   collapse cleanly. */
+.minimized > *:not(:first-child):not(.mv-panel-resize) { display: none; }
 .minimized { height: auto !important; min-height: 0; }
 
 /* CollapsibleSection chrome — the per-section header row inside any
-   panel sidebar.  Clickable, with a caret that flips, and an extras
-   slot for inline action buttons (Clear, refresh, etc.). */
-.mv-collapsible { display: flex; flex-direction: column; margin-bottom: 4px; }
+   panel sidebar.  Styled as a CARD: a tinted header strip sits on
+   top of a bordered body so each section reads as a distinct group
+   (matches the legacy debugger's Locals/Globals/Stack tiles).
+   Clickable header with a caret that flips, plus an extras slot
+   for inline action buttons (Clear, refresh, etc.). */
+.mv-collapsible {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 6px;
+}
 .mv-collapsible-header {
   display: flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
-  padding: 3px 4px;
-  border-radius: 3px;
-  font-size: 11px;
+  padding: 4px 6px;
+  font-size: 9px;
+  font-weight: 700;
   color: var(--muted, #98a2b3);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.6px;
   user-select: none;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
 }
-.mv-collapsible-header:hover { background: rgba(255, 255, 255, 0.04); }
+.mv-collapsible-header:hover { color: var(--text); }
+.mv-collapsible.collapsed .mv-collapsible-header {
+  border-radius: 4px;  /* Lose the bottom-flat corners when no body */
+}
 .mv-collapsible-caret { width: 10px; text-align: center; color: var(--accent, #8be9fd); }
 .mv-collapsible-title { flex: 1 1 auto; }
 .mv-collapsible-extras { display: inline-flex; gap: 4px; }
-.mv-collapsible-body { padding: 2px 4px 6px 14px; font-size: 12px; }
+.mv-collapsible-body {
+  padding: 6px 8px;
+  font-size: 11px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+/* Generic key-left value-right var row.  The debugger's
+   Locals / Globals / Stack lists use this — children of
+   .mv-thread-code-locals / .mv-thread-code-globals /
+   .mv-thread-code-stack each render as one row.  Two spans (key +
+   value) flex apart so the column reads as a clean watch list. */
+.mv-thread-code-locals > div,
+.mv-thread-code-globals > div,
+.mv-thread-code-stack > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 1px 0;
+}
+.mv-thread-code-locals > div > span:first-child,
+.mv-thread-code-globals > div > span:first-child,
+.mv-thread-code-stack > div > span:first-child {
+  color: var(--muted);
+}
+.mv-thread-code-locals > div > span:last-child,
+.mv-thread-code-globals > div > span:last-child,
+.mv-thread-code-stack > div > span:last-child {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Execution card — special-cased because it pairs status read-outs
+   with the Pause / Step action buttons.  Inherits the card border
+   from .mv-collapsible-body, then layers row + button styling on
+   top. */
+.mv-thread-code-execution .mv-exec-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  padding: 1px 0;
+}
+.mv-thread-code-execution .mv-exec-k {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 9px;
+}
+.mv-thread-code-execution .mv-exec-status,
+.mv-thread-code-execution .mv-exec-pc,
+.mv-thread-code-execution .mv-exec-offset {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.mv-thread-code-execution .mv-exec-status.status-sleep { color: #6ee7c1; }
+.mv-thread-code-execution .mv-exec-status.status-wait  { color: #f5b76e; }
+.mv-thread-code-execution .mv-exec-status.status-run   { color: #6ee79c; }
+.mv-thread-code-execution .mv-exec-status.status-bp    { color: var(--danger); }
+.mv-thread-code-execution .mv-exec-status.status-dead  { color: var(--muted); }
+.mv-thread-code-execution .mv-exec-controls {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.mv-thread-code-execution .mv-exec-btn {
+  flex: 1;
+  background: var(--bg-1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.mv-thread-code-execution .mv-exec-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+.mv-thread-code-execution .mv-exec-btn:active { background: var(--bg-0); }
 
 /* Threads-panel debug button trio (Break / Continue / Step) — tint
    so the user discovers them as a group separate from Stop All. */
@@ -3885,22 +3858,11 @@ canvas {
 .mv-inspector-header .mv-threads-break:hover    { color: #ffd866; background: var(--bg-2); }
 .mv-inspector-header .mv-threads-continue:hover { color: #66ff97; background: var(--bg-2); }
 .mv-inspector-header .mv-threads-step:hover     { color: var(--accent); background: var(--bg-2); }
-.mv-thread-code-locals-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.mv-thread-code-locals-list > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 1px 0;
-}
-.mv-thread-code-locals-list > div > span:first-child { color: var(--muted); }
-.mv-thread-code-locals-list > div > span:last-child {
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
+/* Row chrome for the watch-list bodies lives in the generic
+   `.mv-thread-code-locals > div` / `.mv-thread-code-globals > div`
+   / `.mv-thread-code-stack > div` block earlier in the file (the
+   one the CollapsibleSection cards consume).  No per-section
+   wrapper class is needed any more. */
 /* All-scripts disassembly: each script wraps its body in a section so
    per-script jump arrows live in their own positioning context.
    Headers are clickable to fold the script body. */

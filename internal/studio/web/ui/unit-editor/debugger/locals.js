@@ -60,7 +60,12 @@ export function renderMvThreadCodeLocals(state, thread) {
       locals.replaceChildren()
       if (thread && thread.locals && thread.locals.length) {
         for (let i = 0; i < thread.locals.length; i++) {
-          const { row } = mvBuildVarRow(`L${i}`,
+          // Use `local_N` so the label matches the names the
+          // decompiled BOS source + the asm-pane operand formatter
+          // use (PUSH_LOCAL L1 still shows the operand short-form
+          // in the asm gutter, but the side-panel reads more like
+          // a debugger watch list with the long form).
+          const { row } = mvBuildVarRow(`local_${i}`,
             () => thread.locals[i],
             (n) => { thread.locals[i] = n | 0 })
           locals.appendChild(row)

@@ -62,14 +62,20 @@ export function openMvThreadCodeModal(cob, thread) {
     setPanelVisible(`mv-thread-code-${thread.id}`, true)
     return
   }
-  // Per-thread mount host — appended inside the model-viewer dialog
-  // so the panel inherits its display:none when the user switches
-  // to a non-model tab (matches legacy behaviour).
-  const dialog = document.getElementById('model-viewer-dialog') || document.body
+  // Per-thread mount host — appended inside `.model-viewer-stage`
+  // so (a) the panel inherits the dialog's display:none on tab
+  // switch and (b) the FloatingPanel drag clamp (which reads
+  // .model-viewer-stage's rect) keeps the header inside the
+  // rendering area.  Falls back to model-viewer-dialog and then
+  // document.body if the stage isn't laid out yet (defensive — the
+  // dialog template always provides it in practice).
+  const stage = document.querySelector('.model-viewer-stage')
+    || document.getElementById('model-viewer-dialog')
+    || document.body
   const host = document.createElement('div')
   host.className = 'mv-thread-code-mount'
   host.dataset.threadId = String(thread.id)
-  dialog.appendChild(host)
+  stage.appendChild(host)
   const panelId = `mv-thread-code-${thread.id}`
   const cascadeOffset = (_cascadeCount % 8) * 30
   _cascadeCount++
