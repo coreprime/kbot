@@ -64,7 +64,6 @@ import {
   setStatus,
   clamp,
   escapeHTML,
-  sanitiseFilename,
 } from './ui/host-context.js'
 
 // Undo / redo + transaction wrapper for map edits — moved to
@@ -284,6 +283,11 @@ import {
 // /api/studio/quality-check, paces the per-check reveal, resolves
 // with either an array of fix ids or null on cancel.
 import { runQualityChecker } from './ui/map-editor/dialogs/quality-checker.js'
+
+// Save handlers — packaged HPI download (save) or raw .tnt + .ota
+// loose-file downloads (saveLoose).  Both gate behind the Quality
+// Checker and flip the active map's dirty flag on success.
+import { save, saveLoose } from './ui/map-editor/save.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -7176,76 +7180,6 @@ async function openExistingMapFromEditor() {
 // moved to /ui/map-editor/exports.js.  buildSavePayload — the
 // shared JSON snapshot — lives in /ui/map-editor/save-payload.js.
 // Both imported at the top of this file.
-
-async function saveLoose() {
-  const payload = buildSavePayload()
-  const fixes = await runQualityChecker(payload)
-  if (!fixes) return false
-  payload.fixes = fixes
-  setStatus('Building TNT + OTA…')
-  for (const which of ['tnt', 'ota']) {
-    try {
-      const resp = await fetch(`/api/studio/save-loose?which=${which}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!resp.ok) {
-        const text = await resp.text()
-        throw new Error(text || `HTTP ${resp.status}`)
-      }
-      const blob = await resp.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${sanitiseFilename(state.name)}.${which}`
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-    } catch (err) {
-      setStatus(`Loose save failed (${which}): ${err.message}`)
-      return false
-    }
-  }
-  setStatus('Saved loose .tnt + .ota.')
-  const m = activeMap()
-  if (m) { m.dirty = false; renderMapTabs() }
-  return true
-}
-
-async function save() {
-  const payload = buildSavePayload()
-  const fixes = await runQualityChecker(payload)
-  if (!fixes) return false
-  payload.fixes = fixes
-  setStatus('Building HPI archive…')
-  try {
-    const resp = await fetch('/api/studio/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!resp.ok) {
-      const text = await resp.text()
-      throw new Error(text || `HTTP ${resp.status}`)
-    }
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitiseFilename(state.name)}.hpi`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-    setStatus(`Saved ${a.download}.`)
-    const m = activeMap()
-    if (m) { m.dirty = false; renderMapTabs() }
-    return true
-  } catch (err) {
-    setStatus(`Save failed: ${err.message}`)
-    return false
-  }
-}
 
 // Quality Checker moved to /ui/map-editor/dialogs/quality-checker.js.
 // ── Modelling tab ──────────────────────────────────────────────────────────
