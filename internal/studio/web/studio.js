@@ -388,6 +388,15 @@ import {
   drawHighlightedFeatureOutlines,
 } from './ui/map-editor/canvas/feature-overlays.js'
 
+// Erase + heightmap brush footprint previews rendered at the
+// cursor while the matching mode is active.  Drawn after the rest
+// of the overlays so the brush hint is always the topmost
+// element.
+import {
+  drawEraseBrush,
+  drawHeightmapBrush,
+} from './ui/map-editor/canvas/brush-cursors.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -3684,51 +3693,9 @@ function onStartPosMouseUp(_e) {
 // drawStartPositions renders the active schema's start positions as
 // labelled robot markers.  Other schemas' positions are dimmed so the
 // user can see them as reference but the active set is unambiguous.
-// drawEraseBrush renders an N×N outline + shading at the cursor while
-// in Erase mode, so the user can see what the next click/drag will
-// remove.  Drawn after the other overlays so it's the topmost hint.
-function drawEraseBrush(ctx) {
-  if (state.mode !== 'erase' || !state.eraseCursor) return
-  const { tx, ty } = state.eraseCursor
-  const size = Math.max(1, state.eraseSize || 1)
-  const off = Math.floor(size / 2)
-  const x0 = (tx - off) * TILE_PX
-  const y0 = (ty - off) * TILE_PX
-  const w = size * TILE_PX
-  const h = size * TILE_PX
-  ctx.save()
-  ctx.fillStyle = 'rgba(248, 81, 73, 0.20)'
-  ctx.fillRect(x0, y0, w, h)
-  ctx.strokeStyle = 'rgba(248, 81, 73, 0.95)'
-  ctx.lineWidth = 2
-  ctx.setLineDash([6, 4])
-  ctx.strokeRect(x0 + 1, y0 + 1, w - 2, h - 2)
-  ctx.setLineDash([])
-  ctx.restore()
-}
-
-// drawHeightmapBrush renders a circular outline at the cursor while in
-// Heightmap mode, sized to state.hmRadius (in attribute cells).  Drawn
-// in the canvas's tile-pixel coordinate space, so the circle stays the
-// same size regardless of zoom.
-function drawHeightmapBrush(ctx) {
-  if (state.mode !== 'heightmap' || !state.hmCursor) return
-  const { ax, ay } = state.hmCursor
-  const cellPx = TILE_PX / 2 // one attribute cell = 16px in a 32px tile
-  const cx = (ax + 0.5) * cellPx
-  const cy = (ay + 0.5) * cellPx
-  const r = Math.max(1, state.hmRadius | 0) * cellPx
-  const colour = state.hmTool === 'lower' ? 'rgba(56, 132, 255, ' : 'rgba(82, 196, 26, '
-  ctx.save()
-  ctx.fillStyle = colour + '0.10)'
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill()
-  ctx.strokeStyle = colour + '0.95)'
-  ctx.lineWidth = 2
-  ctx.setLineDash([6, 4])
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
-  ctx.setLineDash([])
-  ctx.restore()
-}
+// drawEraseBrush + drawHeightmapBrush moved to
+// /ui/map-editor/canvas/brush-cursors.js — imported at the top of
+// this file.
 
 function drawStartPositions(ctx) {
   if (!state.ota) return
