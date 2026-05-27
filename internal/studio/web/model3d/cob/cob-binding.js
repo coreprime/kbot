@@ -438,31 +438,46 @@ export class CobBinding {
     // taper means rateHz peaks around 90 — at 60fps that's ~1.5/frame,
     // but a missed frame could batch dozens).
     if (toEmit > 12) toEmit = 12
-    const pieces = this.model.flat
+    // Only pick from pieces that actually have surface triangles —
+    // empty pieces (pivots / emitter anchors) shouldn't host sparkles
+    // because they have no surface to land on.  Cache the candidate
+    // list on first call; rebuilt on unit-swap because the binding
+    // itself is replaced for every new model.
+    if (!this._sparklePieces) {
+      this._sparklePieces = this.model.flat.filter(p => p._tris && p._tris.length >= 9)
+    }
+    const pieces = this._sparklePieces
     if (!pieces || pieces.length === 0) return
-    // Pick `toEmit` random pieces from the flat list (with replacement
-    // — fine for visual density; the same piece getting two sparkles
-    // in a frame just makes that piece sparkle harder).
+    // Pick `toEmit` random pieces with replacement.  For each, pick a
+    // random triangle from the piece's CPU triangle cache and emit a
+    // sparkle at a random barycentric point on that triangle (local
+    // coords) transformed into world space by the piece's worldMatrix.
+    // This puts the sparkle ON the actual polygon surface, not in a
+    // sphere around the piece pivot.
     for (let i = 0; i < toEmit; i++) {
       const piece = pieces[(Math.random() * pieces.length) | 0]
       if (!piece || !piece.visible || !piece.worldMatrix) continue
-      // World position from the matrix's translation column.  This is
-      // the piece's origin in world space — close enough to "on the
-      // model" for a sparkle cloud; the random offset below scatters
-      // a few wu around it to give the sparkles surface coverage.
+      const tris = piece._tris
+      const triCount = (tris.length / 9) | 0
+      if (triCount === 0) continue
+      // Random triangle (9 floats per: ax,ay,az, bx,by,bz, cx,cy,cz).
+      const tBase = ((Math.random() * triCount) | 0) * 9
+      // Random barycentric coords (u, v) with the standard sqrt-trick
+      // to get a uniform distribution over the triangle area; the
+      // third weight w = 1 - u - v.
+      let u = Math.random()
+      let v = Math.random()
+      if (u + v > 1) { u = 1 - u; v = 1 - v }
+      const w = 1 - u - v
+      const lx = tris[tBase]     * w + tris[tBase + 3] * u + tris[tBase + 6] * v
+      const ly = tris[tBase + 1] * w + tris[tBase + 4] * u + tris[tBase + 7] * v
+      const lz = tris[tBase + 2] * w + tris[tBase + 5] * u + tris[tBase + 8] * v
+      // Transform local point by piece.worldMatrix (column-major 4x4).
       const m = piece.worldMatrix
-      const px = m[12], py = m[13], pz = m[14]
-      // Random offset on a unit sphere, scaled by a few wu so the
-      // sparkles cluster around the piece without being glued to its
-      // pivot point.  TA pieces are typically 10-50 wu — 8 wu radius
-      // covers small pieces while staying contained on larger ones.
-      const u = Math.random() * Math.PI * 2
-      const v = Math.acos(2 * Math.random() - 1)
-      const r = 4 + Math.random() * 6
-      const ox = r * Math.sin(v) * Math.cos(u)
-      const oy = r * Math.sin(v) * Math.sin(u)
-      const oz = r * Math.cos(v)
-      this.particles.emit(SFX_SPARK, [px + ox, py + oy, pz + oz], {
+      const wx = m[0] * lx + m[4] * ly + m[8]  * lz + m[12]
+      const wy = m[1] * lx + m[5] * ly + m[9]  * lz + m[13]
+      const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14]
+      this.particles.emit(SFX_SPARK, [wx, wy, wz], {
         // Bright green with a hint of cyan — Star Trek transporter
         // glow.  Pre-multiplied additive blending in the particle
         // shader takes alpha=1 as "fully add to background", giving

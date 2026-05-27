@@ -264,6 +264,20 @@ export class ModelLoader {
           const uv = uvs[k]
           bucket.interleaved.push(p[0], p[1], p[2], normal[0], normal[1], normal[2], uv[0], uv[1], 1)
         }
+        // Also stash the triangle's three vertex positions on the
+        // piece for CPU-side surface sampling — e.g. the build-time
+        // transporter sparkle effect that needs to emit particles ON
+        // the polygons (not in the bounding sphere around them).  The
+        // VBO can't be read back cheaply from the GPU, so we keep a
+        // parallel CPU copy here.  Memory cost is ~36 bytes per
+        // triangle; a 20-piece × 100-tri unit costs ~72 KB which is
+        // negligible at studio scale.
+        if (!piece._tris) piece._tris = []
+        piece._tris.push(
+          positions[0][0], positions[0][1], positions[0][2],
+          positions[i][0], positions[i][1], positions[i][2],
+          positions[i + 1][0], positions[i + 1][1], positions[i + 1][2],
+        )
       }
       // Wireframe edges follow the original polygon outline so quads
       // stay quads — the diagonals introduced by triangulation never
