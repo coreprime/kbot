@@ -13,7 +13,6 @@ import {
   WORLDS,
 } from './ui/map-editor/constants.js'
 import {
-  defaultOTAState,
   playerCountLabel,
 } from './ui/map-editor/helpers.js'
 
@@ -26,7 +25,6 @@ import {
 // object (`tabState.activeIndex`) because ES-module `let` exports
 // are read-only on the import side.
 import {
-  MapDoc,
   tabs,
   tabState,
   state,
@@ -34,8 +32,6 @@ import {
   setReactUi,
   $,
   $$,
-  setStatus,
-  clamp,
 } from './ui/host-context.js'
 
 // Undo / redo + transaction wrapper for map edits — moved to
@@ -47,16 +43,12 @@ import {
   undo,
   redo,
   updateUndoButtons,
-  getPendingTransaction,
-  setPendingTransaction,
 } from './ui/map-editor/undo.js'
 
-// Paint / erase / heightmap stroke flags — shared across every
-// stamp-style mode so each mode module reads + writes the same
-// `painting` + `paintedDuringStroke` fields without per-module
-// setter plumbing.  Foundation for the per-mode extractions in
-// R40d / R40d.1 / R40e.
-import { resetPaintStroke } from './ui/map-editor/paint-state.js'
+// Paint / erase / heightmap stroke flags moved to
+// /ui/map-editor/paint-state.js; studio.js no longer imports them
+// directly — resetPaintStroke is reached through
+// /ui/map-editor/boot.js's abortTransientGestureState.
 
 // Clipboard subsystem (terrain drag-clipboard + system Ctrl+C/V/X)
 // — moved to /ui/map-editor/clipboard.js.  Same call sites as
@@ -74,8 +66,8 @@ import {
 // /ui/map-editor/canvas/webgl.js.  Forward-reference helpers
 // (whenImageReady, preloadFeatureImage, renderCanvas,
 // featureAnchorOffset, featureAnchorWorld) stay in studio.js for
-// now and are wired through hostCallbacks.
-import { resetGL } from './ui/map-editor/canvas/webgl.js'
+// now and are wired through hostCallbacks.  resetGL is reached
+// through /ui/map-editor/boot.js's openLoadedMap path.
 
 // Pure rotation + flip helpers shared by the 2D draw path, the GL
 // renderer, and the stamp pipeline live in /ui/map-editor/rotation.js;
@@ -100,10 +92,9 @@ import { startServerHeartbeat, isConnected } from './ui/common/heartbeat.js'
 // Floating-panel layout (drag + collapse + persist) for the legacy
 // non-React panels — dev stats panel, camera-info panel.  React-
 // managed panels (Stats / Minimap / Camera) own their own position
-// via panel-store + FloatingPanel, and applyPanelLayout skips them.
-import {
-  applyPanelLayout,
-} from './ui/common/panel-layout.js'
+// via panel-store + FloatingPanel.  studio.js no longer imports
+// applyPanelLayout directly — /ui/map-editor/boot.js's
+// finishEditorBoot calls it after recreateEditorView.
 
 // confirmDialog — imperative wrapper around the React confirm modal.
 // Delegates to reactUi.confirmDialog when the bridge has loaded,
@@ -274,9 +265,9 @@ import {
 
 // Global keyboard handler — Esc dialog dismiss, mode hotkeys, undo /
 // redo + clipboard, zoom + pan + arrow-key scroll, delete dispatch.
-// Called from finishEditorBoot the first time the editor surface
-// boots.
-import { wireKeyboard } from './ui/map-editor/keyboard.js'
+// /ui/map-editor/boot.js's finishEditorBoot calls wireKeyboard the
+// first time the editor surface boots; studio.js no longer
+// imports it directly.
 
 // Scatter dialog — drops N features into the map honouring a
 // minimum spacing halo.  Self-contained subsystem; the React
@@ -315,8 +306,8 @@ import {
 } from './ui/map-editor/schema-selector.js'
 
 // New-map size dialog + the in-editor File → New / File → Open
-// entry points.  startEditor (the size-dialog Confirm handler) still
-// lives in studio.js this round and is exposed through the
+// entry points.  The size-dialog Confirm handler (startEditor) now
+// lives in /ui/map-editor/boot.js; it's exposed through the
 // hostCallbacks.startEditor seam so confirmOnEnter can fire it.
 import {
   openSizeDialog,
@@ -326,6 +317,20 @@ import {
   confirmOnEnter,
   setSizeDialogSource,
 } from './ui/map-editor/dialogs/size.js'
+
+// Map-editor lifecycle hub — the entry-point pair that mounts a map
+// tab onto the editor surface (openLoadedMap + startEditor), the
+// one-shot finishEditorBoot wire chain that runs the first time any
+// map tab opens, the catalog loaders that hydrate the drawer
+// panels, and the per-tab state-snapshot + transient-gesture helpers
+// the multi-tab framework uses on a tab swap.
+import {
+  openLoadedMap,
+  startEditor,
+  snapshotActiveTabModuleLets,
+  restoreActiveTabModuleLets,
+  abortTransientGestureState,
+} from './ui/map-editor/boot.js'
 
 // Resize-map dialog — anchor-grid + Crop-to-content path.  Rebuilds
 // tiles / heights / voids / features at the new size and tears out
@@ -369,10 +374,10 @@ import {
 
 // Developer stats panel + Advanced ▸ Developer dialog.  Per-frame
 // scheduleDevStatsRefresh is consumed by render.js; only the
-// developer-panel wiring + the dialog open/close stay in
-// studio.js for the ribbon + menu hooks.
+// dialog open/close stay in studio.js for the ribbon + menu hooks.
+// wireDeveloperPanel is called from /ui/map-editor/boot.js's
+// finishEditorBoot.
 import {
-  wireDeveloperPanel,
   openDeveloperDialog,
   closeDeveloperDialog,
 } from './ui/map-editor/dev-stats.js'
@@ -380,13 +385,12 @@ import {
 // Minimap pipeline — cached one-pixel-per-tile base canvas +
 // hover-feature dots + start-position markers + viewport rect.
 // invalidateMinimapBase / patchMinimapTile let tile edits update
-// the base without forcing a full rebuild.
+// the base without forcing a full rebuild.  wireMinimap +
+// getMinimapBaseSnapshot / setMinimapBaseSnapshot are consumed
+// by /ui/map-editor/boot.js (the wire chain + snapshot helpers).
 import {
   renderMinimap,
   invalidateMinimapBase,
-  wireMinimap,
-  getMinimapBaseSnapshot,
-  setMinimapBaseSnapshot,
 } from './ui/map-editor/minimap.js'
 
 // rAF-batched re-render queues for the main map canvas + minimap.
@@ -424,23 +428,11 @@ import {
 // directly any more.  tryAutoRotatePlacement moved with selectSection
 // / ensureSectionAssets into /ui/map-editor/drawer-actions.js.
 
-// Per-mode handler modules — the canvas mouse-router (imported
-// further below) owns the actual mousedown/move/up dispatch.
-// Studio.js only pulls in the cleanup hooks the abort path needs
-// (each mode's reset for in-flight drag state) + the auto-switch
-// seeders that tryAutoSwitchAt below pokes when a click in one
-// mode lands on a different mode's pickable.
-import { resetPickerDrag } from './ui/map-editor/modes/picker.js'
-import { resetStartPosDrag } from './ui/map-editor/modes/start-points.js'
-import { resetTerrainDrag } from './ui/map-editor/modes/terrain-select.js'
-import { resetFeatureDrag } from './ui/map-editor/modes/feature-select.js'
-import { resetHmHoldTimer } from './ui/map-editor/modes/heightmap.js'
-
-// Paint mode — handlePaint is still consumed by the drawer's
-// drag-drop fallback below.  resetPaintPlacement clears the
-// in-flight anchored-preview drag from abortTransientGestureState
-// (R40d).
-import { resetPaintPlacement } from './ui/map-editor/modes/paint.js'
+// Per-mode handler modules — the canvas mouse-router owns the actual
+// mousedown/move/up dispatch (R41b).  studio.js no longer imports
+// the per-mode reset hooks directly; they're called from
+// /ui/map-editor/boot.js's abortTransientGestureState on each tab
+// swap (R40d / R40d.1 / R40e).
 
 // Mouse router moved entirely into editor-view.js's listener
 // bindings (R41b); studio.js no longer imports the three
@@ -453,7 +445,7 @@ import { resetPaintPlacement } from './ui/map-editor/modes/paint.js'
 // state and space-hotkey flag privately so studio.js no longer
 // holds module-level mutable copies (R40g).
 import {
-  shouldPan, beginPan, updatePan, endPan, isPanning, cancelPan,
+  shouldPan, beginPan, updatePan, endPan, isPanning,
   updateHoverLabel, tryAutoSwitchAt,
 } from './ui/map-editor/cursor.js'
 
@@ -485,11 +477,6 @@ import {
 // hostCallbacks so other modules reach them through the same seam
 // they used pre-extraction.
 import {
-  wireToolbar,
-  wireZoomButtons,
-  wireTabs,
-  wireModeToolbar,
-  wireViewMenu,
   switchTab,
   placementAnchor,
   placeFeature,
@@ -502,12 +489,9 @@ import {
 // recreateEditorView() is called on every map open / new + resize
 // commit; the module owns the singleton + the AbortController-based
 // listener teardown.  prepareCanvasDimensions + centerViewOnMap
-// ride alongside because finishEditorBoot needs them before the
-// first paint (R41b).
+// stay in /ui/map-editor/boot.js's finishEditorBoot path (R41b).
 import {
   recreateEditorView,
-  prepareCanvasDimensions,
-  centerViewOnMap,
   destroyEditorView,
 } from './ui/map-editor/editor-view.js'
 
@@ -693,7 +677,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // switches focus.  Legacy `pushTab` (which took a pre-built
   // record) is gone; every opener must go through here.
   hostCallbacks.getTabs = () => tabs
-  hostCallbacks.openTab = (typeId, spec = {}) => openTab(typeId, spec)
+  hostCallbacks.openTab = (typeId, spec = {}, opts = {}) => openTab(typeId, spec, opts)
   hostCallbacks.openLoadedMap = openLoadedMap
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
@@ -934,51 +918,11 @@ function _ensureTabInstance(tab) {
   tab.instance = instance
 }
 
-function snapshotActiveTabModuleLets() {
-  if (tabState.activeIndex < 0) return
-  const tab = tabs[tabState.activeIndex]
-  // Model tabs have no .map / undo stack — bail out so we don't
-  // throw on `m.undoStack = ...` when the outgoing tab is a 3DO.
-  if (!tab || !tab.map) return
-  const m = tab.map
-  m.undoStack = undoStack.slice()
-  m.redoStack = redoStack.slice()
-  m.pendingTransaction = getPendingTransaction()
-  const snap = getMinimapBaseSnapshot()
-  m.minimapBase = snap.canvas
-  m.minimapBaseStale = snap.stale
-  const scroll = document.querySelector('#canvas-scroll')
-  if (scroll) {
-    m.scrollLeft = scroll.scrollLeft
-    m.scrollTop = scroll.scrollTop
-  }
-}
-
-function restoreActiveTabModuleLets() {
-  if (tabState.activeIndex < 0) return
-  const tab = tabs[tabState.activeIndex]
-  // Same guard as snapshot — model tabs carry no map state.
-  if (!tab || !tab.map) return
-  const m = tab.map
-  undoStack.length = 0
-  for (const x of m.undoStack) undoStack.push(x)
-  redoStack.length = 0
-  for (const x of m.redoStack) redoStack.push(x)
-  setPendingTransaction(m.pendingTransaction)
-  setMinimapBaseSnapshot({ canvas: m.minimapBase, stale: m.minimapBaseStale })
-  // Scroll restored AFTER the new canvases are sized — see switchToTab.
-}
-
-function abortTransientGestureState() {
-  cancelPan()
-  resetPaintStroke()
-  resetHmHoldTimer()
-  resetPaintPlacement()
-  resetTerrainDrag()
-  resetFeatureDrag()
-  resetStartPosDrag()
-  resetPickerDrag()
-}
+// snapshotActiveTabModuleLets / restoreActiveTabModuleLets and
+// abortTransientGestureState moved to /ui/map-editor/boot.js —
+// imported at the top of this file.  Same hostCallback seams as
+// before (the tab descriptor still reaches snapshot / restore
+// through hostCallbacks).
 
 // unsavedChangesDialog moved to /ui/dialogs/unsaved-changes.js.
 
@@ -1201,277 +1145,19 @@ function wireMapTabBar() {
 // Routes successful uploads through the openLoadedMap host
 // callback registered above.
 
-async function openLoadedMap(data, card) {
-  const w = data.tileW || 128
-  const h = data.tileH || 128
-  // Push a brand-new MapDoc as the active tab.  Snapshot the
-  // outgoing tab first so its undo stack / minimap cache survive,
-  // then restore from the fresh MapDoc so the previous map's
-  // minimap doesn't leak across.  Subsequent state.X writes land
-  // in this new MapDoc — the prior tab keeps its own state intact
-  // in tabs[], reachable by clicking back.
-  if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
-  // Push the new map tab through the registry but DEFER activation —
-  // the load code below mutates `state` (the active MapDoc proxy)
-  // to hydrate the tile / heights / features arrays.  Activating
-  // now would mount the editor against an empty MapDoc and force a
-  // second renderCanvas pass once the hydration completes.  We
-  // explicitly switchToTab once the MapDoc is fully populated +
-  // finishEditorBoot has wired the canvas.
-  openTab('map', { map: new MapDoc() }, { defer: true })
-  restoreActiveTabModuleLets()
-  state.tileW = w
-  state.tileH = h
-  state.name = data.name || (card && card.name) || 'newmap'
-  state.planet = (data.planet || data.ota?.planet || '').toLowerCase() || 'green'
-
-  // Rebuild the per-cell tile stamps with the synthetic section key.
-  state.tiles = new Array(w * h).fill(null)
-  for (let i = 0; i < data.tiles.length && i < w * h; i++) {
-    const t = data.tiles[i]
-    state.tiles[i] = { sectionPath: data.tilePoolKey, sx: t.sx, sy: t.sy, rotation: 0, flipH: false, flipV: false }
-  }
-  invalidateMinimapBase()
-  // Heights are byte values from the TNT; pad to the editor's default
-  // (sky) if the response somehow comes up short.
-  state.heights = new Array(w * 2 * h * 2).fill(80)
-  for (let i = 0; i < data.heights.length && i < state.heights.length; i++) {
-    state.heights[i] = data.heights[i] | 0
-  }
-  state.voids = new Array(w * 2 * h * 2).fill(0)
-  if (Array.isArray(data.voids)) {
-    for (let i = 0; i < data.voids.length && i < state.voids.length; i++) {
-      state.voids[i] = data.voids[i] ? 1 : 0
-    }
-  }
-  // Clear features SYNCHRONOUSLY before the upcoming async features-
-  // catalog fetch.  Otherwise the previous map's features briefly
-  // render against the new map's heights array — and since their ax/ay
-  // coords mean different cells in the new heights grid, they appear
-  // visibly shifted for a few frames until the catalog fetch finishes.
-  state.features = []
-  // Features come back as bare { name, ax, ay }; flesh them out with
-  // the cataloged features metadata so the canvas can draw previews.
-  const featuresByName = new Map()
-  try {
-    const fresp = await fetch('/api/studio/features')
-    const fdata = await fresp.json()
-    for (const f of (fdata.features || [])) {
-      featuresByName.set((f.name || '').toLowerCase(), f)
-    }
-    state.featuresList = fdata.features || []
-  } catch { /* features list will be loaded again later if needed */ }
-  state.features = []
-  for (const fp of (data.features || [])) {
-    const cat = featuresByName.get((fp.name || '').toLowerCase())
-    state.features.push({
-      name: fp.name,
-      ax: fp.ax,
-      ay: fp.ay,
-      footprintX: cat?.footprintX || 1,
-      footprintZ: cat?.footprintZ || 1,
-      previewUrl: cat?.previewUrl || null,
-      world: cat?.world,
-      category: cat?.category,
-      description: cat?.description,
-      originX: cat?.originX || 0,
-      originY: cat?.originY || 0,
-    })
-  }
-  state.ota = data.ota || defaultOTAState(state.name, state.planet, w, h)
-  state.activeSchema = 0
-  // Bump again now that features are populated — the spatial /
-  // name indices need to rebuild after the bulk load.
-  bumpContentVersion()
-
-  // Preload the tile pool atlas as a section image so the existing
-  // drawSectionTiles path can render the loaded map at full fidelity.
-  const img = new Image()
-  const ready = new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }) })
-  img.src = data.tilePoolUrl
-  state.sectionImages.set(data.tilePoolKey, img)
-  await ready
-
-  $('#open-dialog').classList.add('hidden')
-  $('#welcome-dialog').classList.add('hidden')
-  // If the user came from a model tab, the 3DO viewer was the
-  // surface in front — hide it so the map editor takes the screen.
-  $('#model-viewer-dialog')?.classList.add('hidden')
-  $('#app').classList.remove('hidden')
-  renderMapTabs()
-  // Refresh the shared topbar + footer hints from this new map tab,
-  // otherwise they keep the previous (model) tab's strings.
-  updateTopbarDocInfo(tabs[tabState.activeIndex])
-
-  // Wire up the canvas + drawer just like startEditor would have done
-  // for a fresh map.
-  await finishEditorBoot()
-  // Belt-and-braces: snap state.zoom back to 1.0 in case any wheel
-  // event leaked between map loads (e.g. while the user was clicking
-  // through the Open dialog), then force one more GL render with the
-  // clean state so the new map's atlas texture is guaranteed to be
-  // uploaded before the user looks at it.
-  if (Math.abs((state.zoom || 1) - 1) < 0.05) state.zoom = 1
-  // Drop any GPU textures the previous map left behind so the new
-  // map starts with a clean texture cache.  resetGL handles both
-  // the texture map and the context teardown that ensureGLRenderer
-  // will rebuild on the next renderCanvas tick.
-  resetGL()
-  renderCanvas()
-  setStatus(`Opened ${state.name} (${w}×${h}).`)
-}
-
-async function startEditor() {
-  const w = clamp(parseInt($('#size-w').value, 10) || 128, 16, 256)
-  const h = clamp(parseInt($('#size-h').value, 10) || 128, 16, 256)
-  const name = ($('#size-name').value || 'newmap').trim() || 'newmap'
-  const planet = $('#size-planet').value
-  // Pull the multi-selected player counts off the dice picker.  Falls
-  // back to a single 4-player schema if the user somehow deselected
-  // everything (the picker's clamp prevents this from the UI side).
-  const counts = pickedPlayerCounts()
-  // Push a brand-new MapDoc as the active tab; existing tabs stay in
-  // tabs[] and can be reached by clicking them.  Snapshot the
-  // outgoing tab first so its undo stack / minimap cache survive the
-  // round trip, then restore from the fresh MapDoc so module-level
-  // state (minimapBase especially) resets to the new tab's defaults
-  // — otherwise the previous map's minimap leaks into the new one
-  // until the next commit.
-  if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
-  // Push a fresh map tab through the registry with deferred
-  // activation — the hydration below mutates `state` to set up the
-  // new MapDoc's dimensions / planet / schemas, and the
-  // finishEditorBoot call further down owns the visual mount.
-  openTab('map', { map: new MapDoc() }, { defer: true })
-  restoreActiveTabModuleLets()
-  state.tileW = w
-  state.tileH = h
-  state.name = name
-  state.planet = planet
-  state.tiles = new Array(w * h).fill(null)
-  state.heights = new Array(w * 2 * h * 2).fill(80)
-  state.voids = new Array(w * 2 * h * 2).fill(0)
-  state.features = []
-  bumpContentVersion()
-  state.ota = defaultOTAState(name, planet, w, h)
-  // Replace the placeholder schema list with one Network-N schema
-  // per selected player count.
-  state.ota.schemas = counts.map((n) => ({
-    name: `Network ${n}`,
-    type: `Network ${n}`,
-    aiProfile: 'DEFAULT',
-    surfaceMetal: 3,
-    mohoMetal: 30,
-    humanMetal: 1000,
-    computerMetal: 1000,
-    humanEnergy: 1000,
-    computerEnergy: 1000,
-    meteorWeapon: '',
-    meteorRadius: 0,
-    meteorDensity: 0,
-    meteorDuration: 0,
-    meteorInterval: 0,
-    // No default start positions — the user places them via Start
-    // Points mode, gap-filling 1..N as they click.
-    startPositions: [],
-  }))
-  state.activeSchema = 0
-
-  $('#size-dialog').classList.add('hidden')
-  $('#welcome-dialog').classList.add('hidden')
-  $('#model-viewer-dialog')?.classList.add('hidden')
-  $('#app').classList.remove('hidden')
-  renderMapTabs()
-  updateTopbarDocInfo(tabs[tabState.activeIndex])
-
-  await finishEditorBoot()
-}
+// openLoadedMap (the main map open path) and startEditor (the size-
+// dialog Confirm handler) both moved to /ui/map-editor/boot.js —
+// imported at the top of this file.  Same hostCallback seams as
+// before (openTab / renderMapTabs / updateTopbarDocInfo all reached
+// through hostCallbacks from boot.js side).
 
 // Dice-face player-count picker for the New-map size dialog moved
 // to /ui/map-editor/dialogs/dice-picker.js — imported at the top
 // of this file.  Owns its own dicePicked Set state.
 
-// finishEditorBoot wires the toolbar / canvas / drawer and loads the
-// section + feature catalogs.  Called from both the New-map and
-// Open-map paths once state has been seeded; subsequent calls are
-// idempotent so File → New / File → Open mid-session re-renders
-// without doubling up event listeners.
-let editorWired = false
-async function finishEditorBoot() {
-  if (!editorWired) {
-    wireToolbar()
-    wireZoomButtons()
-    wireTabs()
-    wireMinimap()
-    wireDeveloperPanel()
-    // wireDeveloperDialog now runs at DOMContentLoaded so the
-    // Settings / Help / Developer buttons work even when the user
-    // opens the studio straight into a model tab.
-    wireModeToolbar()
-    wireViewMenu()
-    wireKeyboard()
-    editorWired = true
-  }
-  // Tear down the previous editing window's canvas DOM + GL state and
-  // mount a fresh pair of canvases.  Done every call so File → New,
-  // Open, and Resize all start from a guaranteed-clean editing surface
-  // — no stale listeners, no carried-over GL textures, no orphaned
-  // ResizeObservers.
-  recreateEditorView()
-  // Reflect the active map's drawer filter in the sidebar input.  Per-tab
-  // filters live on MapDoc, so the previous tab's "tree-A" must not leak
-  // into the new map's empty filter (#36).  The React MapSidebar reads
-  // the live filter off sidebarFilter; publishMapSidebarState pushes
-  // the new tab's value into the signal so the input flips on the next
-  // commit.  Direct DOM writes also retained for backwards compat with
-  // any external instrumentation that scrapes the input's `.value`.
-  publishMapSidebarState()
-  const filterInput = document.querySelector('#filter')
-  if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
-  // Don't poke canvas.width here on a mid-session swap.  renderCanvas
-  // owns the canvas/glCanvas/.canvas-stack dimensions and skips work
-  // when they already match — pre-setting only the 2D canvas hides the
-  // dim change from it, leaving glCanvas stuck at the previous map's
-  // size.  That stale GL buffer is what made the tile layer render
-  // garbage after a map switch.
-
-  // Hide the canvas-stack while the boot async chain is in flight.
-  // Layout still happens (so clientWidth/Height stay meaningful), but
-  // the user doesn't see the top-left of the canvas while sections /
-  // features stream in.
-  const stack = $('#canvas-stack')
-  if (stack) stack.classList.add('booting')
-  await Promise.all([loadSections(), loadFeatures()])
-  // Size the canvases + overscroll padding before the first paint, so
-  // centerViewOnMap can position scroll BEFORE the user ever sees the
-  // top-left of the freshly loaded canvas.
-  prepareCanvasDimensions()
-  // Force a layout read so wrap.clientHeight reflects the post-show
-  // dimensions of #app — without this, the very first new-map load
-  // can grab a stale (or zero) clientHeight and the resulting
-  // scrollTop puts the map's centre in the top portion of the
-  // viewport instead of the true visual centre.
-  const wrap = $('#canvas-scroll')
-  if (wrap) void wrap.getBoundingClientRect()
-  centerViewOnMap()
-  // Restore saved floating-panel positions/collapsed-state BEFORE
-  // un-booting so the user sees the panels in their final spots on
-  // the very first painted frame.
-  applyPanelLayout()
-  renderCanvas()
-  // Reveal after the first paint has the centred scroll position
-  // committed.
-  if (stack) stack.classList.remove('booting')
-  // A second pass on the next frame catches any reflow-timing edge
-  // case where the post-centerViewOnMap render ran before the browser
-  // had finished resizing the canvas-stack — also re-runs the
-  // centring math against the now-settled clientHeight.
-  requestAnimationFrame(() => {
-    centerViewOnMap()
-    renderCanvas()
-  })
-}
-
+// finishEditorBoot + the editorWired one-shot flag moved to
+// /ui/map-editor/boot.js — imported at the top of this file
+// (through the openLoadedMap / startEditor exports it backs).
 
 // ── Sidebar drawer ─────────────────────────────────────────────────────────
 
@@ -1483,65 +1169,10 @@ async function finishEditorBoot() {
 // /ui/map-editor/mode.js.  isWreckageFeature lives in
 // /ui/map-editor/helpers.js.
 
-// loadSections / loadFeatures fetch the per-tileset catalog of
-// stampable sections + the master feature list, then re-render the
-// drawer if it's currently showing that side.  loadFeatures also
-// awaits the GAF hotspot fetch so the very first render shows the
-// correct sub-tile origins instead of the bottom-centred fallback.
-
-async function loadSections() {
-  const resp = await fetch('/api/studio/sections')
-  const data = await resp.json()
-  state.sectionsList = data.sections || []
-  if (state.drawer === 'sections') renderDrawer()
-}
-
-async function loadFeatures() {
-  const resp = await fetch('/api/studio/features')
-  const data = await resp.json()
-  state.featuresList = data.features || []
-  if (state.drawer === 'features') renderDrawer()
-  // GAF hotspot offsets come from a separate endpoint so the cheap
-  // features list isn't blocked by parsing every GAF on the server.
-  // We DO await it here on the very first map load so the first
-  // render uses correct sub-tile hotspots instead of the bottom-
-  // centred fallback (which "snaps" placed features to whole tiles
-  // for the few seconds before origins arrive).  Subsequent map
-  // switches reuse the cached origins map and complete instantly.
-  await fetchFeatureOrigins()
-}
-
-let featureOriginsCache = null
-
-async function fetchFeatureOrigins() {
-  try {
-    if (!featureOriginsCache) {
-      const resp = await fetch('/api/studio/feature-origins')
-      if (!resp.ok) return
-      const data = await resp.json()
-      featureOriginsCache = new Map()
-      for (const o of (data.origins || [])) {
-        featureOriginsCache.set((o.name || '').toLowerCase(), o)
-      }
-    }
-    applyFeatureOrigins(featureOriginsCache)
-    renderCanvas()
-  } catch { /* ignore — drawing falls back to bottom-centre */ }
-}
-
-function applyFeatureOrigins(map) {
-  // Patch the drawer catalog so newly-rendered items pick up the
-  // right anchor.
-  for (const f of state.featuresList) {
-    const o = map.get((f.name || '').toLowerCase())
-    if (o) { f.originX = o.originX; f.originY = o.originY }
-  }
-  // Same patch on placed features so the canvas re-anchors them.
-  for (const f of state.features || []) {
-    const o = map.get((f.name || '').toLowerCase())
-    if (o) { f.originX = o.originX; f.originY = o.originY }
-  }
-}
+// loadSections / loadFeatures / fetchFeatureOrigins /
+// applyFeatureOrigins moved to /ui/map-editor/boot.js — imported at
+// the top of this file (through the openLoadedMap / finishEditorBoot
+// exports they back).
 
 // featureUsage + the full drawer rendering pipeline (renderDrawer,
 // renderSectionsDrawer, renderFeaturesDrawer, virtualisedDrawerBody,
