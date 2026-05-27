@@ -1,0 +1,141 @@
+// sandbox-scene.js
+//
+// Multi-unit scene container.  Owns:
+//
+//   - A shared CobRuntime (already multi-unit capable — addUnit / units()
+//     / tick walk every registered unit).
+//   - A list of UnitInstance entries, each pairing a Model + CobUnit +
+//     CobBinding + per-unit state (world pos, heading, damage, etc.)
+//   - A shared particle pool (one per scene rather than per unit so
+//     projectiles fired by unit A can hit unit B without the per-binding
+//     pools getting in each other's way).
+//   - A shared audio pool — sounds from any unit play through one pool
+//     for sane sim-speed + pause handling.
+//   - Selection state — Set of unit ids that the user has selected.
+//
+// The renderer is OUT of scope here — sandbox-scene is pure data +
+// per-frame tick.  The viewer drives rendering by iterating
+// scene.units() and asking the renderer to draw each in turn.
+
+import { CobRuntime } from './cob/cob-runtime.js'
+import { CobBinding } from './cob/cob-binding.js'
+
+let _nextScenePieceId = 1
+
+export class SandboxScene {
+  constructor() {
+    this.runtime = new CobRuntime()
+    // Map<unitId, UnitInstance>.  Iteration order is insertion order
+    // (Map semantics) which matches the order units were spawned —
+    // gives the user a predictable Z-order in the inspector when
+    // multiple units sit at the same height.
+    this._units = new Map()
+    // Selected unit ids.  Empty set when nothing's selected.  The
+    // controls layer uses this to decide which units take a command.
+    this.selected = new Set()
+    // Telemetry counter — strictly monotonic so the inspector can
+    // diff "are there new units this frame".
+    this._spawnCount = 0
+  }
+
+  // ── Unit lifecycle ──────────────────────────────────────────────
+
+  // addUnit spawns a new unit at (x, z) on the ground plane.  Caller
+  // provides the loaded Model + parsed CobScript; the scene builds
+  // the CobUnit + CobBinding internally.  Returns the UnitInstance.
+  addUnit({ name, model, cobScript, x = 0, z = 0, headingRad = 0 }) {
+    const id = _nextScenePieceId++
+    // Spawn a fresh CobUnit on the shared runtime — addUnit returns
+    // the live CobUnit object with its own thread list / static vars /
+    // animator state.  Hooks default to no-op; the binding wires up
+    // the SFX-emit hook below.
+    const cobUnit = cobScript ? this.runtime.addUnit(cobScript, {}) : null
+    const binding = (cobUnit && model) ? new CobBinding(model, cobUnit) : null
+    const inst = {
+      id, name,
+      model, cobUnit, binding,
+      // World-space placement.  Heading is body yaw in radians; 0 =
+      // facing -Z (3DO authoring convention).
+      pos: { x, y: 0, z },
+      heading: headingRad,
+      isMoving: false,
+      // Movement target — null when idle.  When set, the per-tick
+      // mover walks the unit toward it at FBI MaxVelocity.
+      moveTarget: null,
+      // Attack target — an enemy UnitInstance.  When set, the unit
+      // chases / fires at the target until it dies or the user stops
+      // it.  Null = no attack order.
+      attackTarget: null,
+      // Health, in TA's percent units.  100 = full, 0 = dead.  Damage
+      // events accumulate here; the COB's GET HEALTH hook reads it
+      // straight off this field so SmokeUnit / Killed scripts see
+      // the live value.
+      health: 100,
+      dead: false,
+      // Build %: 100 = fully built, 0 = construction wireframe.  We
+      // skip the build ramp for sandbox spawns — units enter
+      // pre-built so the user can immediately move + fight them.
+      buildPercent: 100,
+      meta: null,  // populated by the caller after FBI fetch
+    }
+    // Wire the COB's GET_UNIT_VALUE hook so HEALTH / BUILD_PERCENT
+    // reads off this instance's live state — matches what
+    // ModelViewer.open() does for the single-unit case.
+    if (cobUnit) {
+      cobUnit.hooks.getUnitValue = (port) => {
+        switch (port) {
+          case 4:  return Math.max(0, 100 - (100 - inst.health) | 0)  // HEALTH
+          case 6:  return Math.max(0, 100 - (inst.buildPercent | 0))  // BUILD_PERCENT_LEFT
+          default: return 0
+        }
+      }
+    }
+    this._units.set(id, inst)
+    this._spawnCount++
+    return inst
+  }
+
+  removeUnit(id) {
+    const inst = this._units.get(id)
+    if (!inst) return
+    if (inst.cobUnit) this.runtime.removeUnit(inst.cobUnit.id)
+    if (inst.binding && inst.binding.audio) inst.binding.audio.dispose()
+    this._units.delete(id)
+    this.selected.delete(id)
+  }
+
+  // units returns an iterable of every live UnitInstance.  Caller
+  // typically iterates this from a render loop to draw / tick each.
+  units() { return this._units.values() }
+  unitById(id) { return this._units.get(id) }
+  unitCount() { return this._units.size }
+
+  // ── Selection ──────────────────────────────────────────────────
+
+  selectOnly(id) {
+    this.selected.clear()
+    if (id != null && this._units.has(id)) this.selected.add(id)
+  }
+  selectAdd(id) {
+    if (id != null && this._units.has(id)) this.selected.add(id)
+  }
+  selectClear() { this.selected.clear() }
+  isSelected(id) { return this.selected.has(id) }
+
+  // ── Per-frame tick ─────────────────────────────────────────────
+
+  // tick advances the shared runtime (drains all scripts on all units
+  // in one fixed-step pass), then walks units to apply per-instance
+  // movement + attack logic.  Returns the runtime's instruction count
+  // for the inspector telemetry.
+  tick(dtMs) {
+    const insts = this.runtime.tick(dtMs)
+    // Per-unit binding tick — particles + audio + piece sync.  Done
+    // AFTER runtime.tick so the COB-driven piece moves are visible
+    // before the binding pushes them to the model.
+    for (const u of this._units.values()) {
+      if (u.binding) u.binding.tick(dtMs)
+    }
+    return insts
+  }
+}
