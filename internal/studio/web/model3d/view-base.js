@@ -162,14 +162,30 @@ export class BaseView {
   // ing — TA muscle-memory).  Plays the ok1-bank ack on the first
   // unit (single voice so a 10-unit selection doesn't fire a chorus).
   // Returns the number of units updated.
+  //
+  // Formation move: when multiple units are selected, each unit walks
+  // to (point + (unit.pos - centroid)) instead of stacking onto a
+  // single tile.  That preserves the group's relative layout — a row
+  // of three units stays a row at the destination, not a clump.  We
+  // compute the centroid in one pass over the living selection so a
+  // dead unit in the set doesn't skew the formation centre.  Single-
+  // unit selection trivially has offset = 0 so the destination is
+  // exactly the clicked point.
   issueMove(point) {
     const engine = this.engine
     const units = this.getSelectedUnits()
     if (!engine || !units.length || !point) return 0
+    const live = units.filter((u) => u && !u.dead)
+    if (!live.length) return 0
+    let cx = 0, cz = 0
+    for (const u of live) { cx += u.pos.x; cz += u.pos.z }
+    cx /= live.length
+    cz /= live.length
     let n = 0
-    for (const u of units) {
-      if (!u || u.dead) continue
-      u.moveTarget = { x: point[0], z: point[2] }
+    for (const u of live) {
+      const offX = u.pos.x - cx
+      const offZ = u.pos.z - cz
+      u.moveTarget = { x: point[0] + offX, z: point[2] + offZ }
       u.attackTarget = null
       if (u.weaponSlots) {
         for (let slot = 0; slot < 3; slot++) {
@@ -181,7 +197,7 @@ export class BaseView {
       }
       n++
     }
-    if (n > 0) this.playUnitSoundRandom(units[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    if (n > 0) this.playUnitSoundRandom(live[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return n
   }
 

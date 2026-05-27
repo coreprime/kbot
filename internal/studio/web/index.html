@@ -516,12 +516,32 @@
            can do in the sandbox rather than borrowing the model
            viewer's chrome. -->
       <div class="ribbon sandbox-ribbon" id="sandbox-ribbon">
+        <!-- Sandbox section — replaces the standalone Spawn + Clear
+             buttons.  The dropdown pattern mirrors the unit-editor's
+             ribbon menus (wireModelRibbonDropdown handles open/close +
+             positioning) so the two ribbons feel consistent.  Two
+             actions live here: Spawn Unit (opens the side picker, then
+             the unit-picker dialog) and Clear Field (confirms then
+             removes every unit). -->
         <div class="ribbon-section">
-          <div class="ribbon-label">Spawn</div>
+          <div class="ribbon-label">Sandbox</div>
           <div class="ribbon-group">
-            <button class="tool-btn" id="sandbox-rb-spawn" title="Spawn Unit — pick a unit and drop it on the battlefield with a click.">
-              <span class="ico">🛠</span><span class="lbl">Spawn</span>
-            </button>
+            <div class="ribbon-dropdown" id="sandbox-rb-sandbox-dropdown">
+              <button class="tool-btn ribbon-dropdown-btn" id="sandbox-rb-sandbox-btn"
+                      title="Sandbox actions — spawn a unit or clear the battlefield.">
+                <span class="ico">🛠</span><span class="lbl">Sandbox</span><span class="chev-down">▾</span>
+              </button>
+              <div class="ribbon-dropdown-popup hidden" id="sandbox-rb-sandbox-popup">
+                <button class="menu-row" id="sandbox-rb-spawn"
+                        title="Spawn Unit — pick a unit and drop it on the battlefield with a click.">
+                  <span class="ico">🛠</span><span>Spawn Unit</span>
+                </button>
+                <button class="menu-row" id="sandbox-rb-clear"
+                        title="Clear Field — remove every unit from the battlefield.  Asks for confirmation first.">
+                  <span class="ico">🧹</span><span>Clear Field</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="ribbon-section">
@@ -546,14 +566,6 @@
             </button>
             <button class="tool-btn" id="sandbox-rb-deselect" title="Deselect — clear the current selection.">
               <span class="ico">☐</span><span class="lbl">None</span>
-            </button>
-          </div>
-        </div>
-        <div class="ribbon-section">
-          <div class="ribbon-label">Field</div>
-          <div class="ribbon-group">
-            <button class="tool-btn" id="sandbox-rb-clear" title="Clear Field — remove every unit from the sandbox.">
-              <span class="ico">🧹</span><span class="lbl">Clear</span>
             </button>
           </div>
         </div>

@@ -183,18 +183,40 @@ void main() {
   float shadow = sampleShadow();
 
   if (uGroundMode == 0) {
-    // Grid mode: light-green lattice over a dark-green fill, sized
-    // to one TA map tile (uTileSize world units per cell).  fwidth
-    // would give crisper sub-pixel lines but isn't available in
-    // WebGL1 by default - a small constant line width works fine.
+    // Grid mode: Tron-style — a near-black floor with a faint green
+    // tint and bright cyan-green tile lines that glow.  fwidth would
+    // give crisper sub-pixel lines but isn't available in WebGL1 by
+    // default - a small constant line width works fine.
+    //
+    // The two-tier line strength (thin sharp lattice plus a wider
+    // bloom-ish falloff) reads as a glowing wire over a dark deck:
+    // the wide falloff fakes a bloom halo around each line, the
+    // sharp inner core keeps the geometry crisp.
     vec2 tile = fract(vWorldPos.xz / uTileSize);
+    // Crisp inner line (~4% of a tile from each edge).
     float lineX = smoothstep(0.0, 0.04, tile.x) * (1.0 - smoothstep(0.96, 1.0, tile.x));
     float lineY = smoothstep(0.0, 0.04, tile.y) * (1.0 - smoothstep(0.96, 1.0, tile.y));
     float onLine = 1.0 - lineX * lineY;
-    vec3 fill = vec3(0.04, 0.10, 0.06);
-    vec3 line = vec3(0.30, 0.65, 0.34);
+    // Wider glow band (~14% from each edge) - read as a soft halo
+    // around the crisp inner stroke, summed at reduced intensity.
+    float gloX = smoothstep(0.0, 0.14, tile.x) * (1.0 - smoothstep(0.86, 1.0, tile.x));
+    float gloY = smoothstep(0.0, 0.14, tile.y) * (1.0 - smoothstep(0.86, 1.0, tile.y));
+    float onGlow = 1.0 - gloX * gloY;
+    // Near-black deck with the faintest green undertone the user
+    // wanted - reads as "Tron grid" instead of straight black so a
+    // unit without a strong fill colour still reads against it.
+    vec3 fill = vec3(0.005, 0.025, 0.012);
+    // Cyan-green emissive line colour (over-bright in linear space
+    // so the additive halo composites with feel-good intensity even
+    // after the shadow multiply below).
+    vec3 line = vec3(0.20, 1.20, 0.55);
     vec3 base = mix(fill, line, onLine);
     base *= mix(1.0, shadow, 0.85 * fade);
+    // Halo - additive on top of the shadowed base so it doesn't get
+    // muted in the shadow pass.  Capped at ~45% intensity so the
+    // glow stays subtle (no nuclear-greenhouse bloom around every
+    // tile).
+    base += line * onGlow * 0.18;
     base += pulseLightContribution(vWorldPos);
     gl_FragColor = vec4(base, fade);
     return;

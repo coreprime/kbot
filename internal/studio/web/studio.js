@@ -12111,15 +12111,35 @@ function pieceDisplayName(piece) {
 
 const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera', 'mv-inspector-effects', 'mv-inspector-audio']
 
+// _mvInspectorHeaderHeight — returns the live height of the panel's
+// drag-handle header (the .mv-inspector-header bar).  Used by both the
+// drag clamp and the rescue clamp to enforce the "title bar must stay
+// visible" rule independently of the panel's body height — the body
+// can scroll off the bottom of the viewport, but the user has to be
+// able to grab the title to drag the panel back.  Falls back to 32 px
+// when the header element isn't there yet (panels in the middle of
+// construction).
+function _mvInspectorHeaderHeight(panel) {
+  const hdr = panel?.querySelector?.('.mv-inspector-header')
+  if (hdr) {
+    const h = hdr.offsetHeight || hdr.getBoundingClientRect().height
+    if (h > 0) return h
+  }
+  return 32
+}
+
 // clampMvInspectorIntoStage forces a panel back into the model-viewer
-// stage when a resize (window or stage) has pushed any of it off the
-// edge.  Guarantee: the top-left corner (with its drag grip) stays
-// inside the viewport AND at least 5% of the panel's width / height
-// remains visible — so the user can always grab the panel back even
-// when the rest of it has gone past the edge.  Stricter than the
-// drag-time clamp (which keeps the whole panel inside) — this one
-// is a rescue, not a constraint, so it doesn't aggressively re-flow
-// a panel the user has intentionally pushed near the edge.
+// stage when a resize (window or stage) has pushed it off the edge.
+// Guarantee: the panel's ENTIRE title bar (drag grip + name + collapse
+// + close buttons) stays inside the viewport.  The body is allowed to
+// overflow the bottom of the stage — the user can still grab the
+// header to drag the panel back up.  Horizontal clamp keeps the whole
+// panel width inside since the title bar spans the panel.
+//
+// Reload + resize semantics: load restores the panel's persisted
+// top/left and immediately runs this rescue, so a layout previously
+// saved at 1920×1080 doesn't strand the panel off-screen on a smaller
+// viewport.  Resize re-runs the clamp on every dimension change.
 function clampMvInspectorIntoStage(panel) {
   if (!panel || panel.classList.contains('hidden')) return
   const stage = document.querySelector('.model-viewer-stage')
@@ -12127,20 +12147,19 @@ function clampMvInspectorIntoStage(panel) {
   const sr = stage.getBoundingClientRect()
   const pr = panel.getBoundingClientRect()
   const w = pr.width  || panel.offsetWidth  || 220
-  const h = pr.height || panel.offsetHeight || 100
   // Style left/top is relative to the stage (the positioning context).
   // Compute current position by subtracting the stage's top-left
   // from the panel's bounding-rect — works whether the panel's CSS
   // is using top/left or right/bottom defaults.
   let left = pr.left - sr.left
   let top  = pr.top  - sr.top
-  // Minimum visible fraction along each axis.  At 5% the panel reads
-  // clearly as "still on screen" rather than a 1px sliver — and the
-  // top-left lower bound (>=0) keeps the drag grip + close button
-  // unconditionally reachable.
-  const MIN_VIS = 0.05
-  const maxLeft = Math.max(0, sr.width  - MIN_VIS * w)
-  const maxTop  = Math.max(0, sr.height - MIN_VIS * h)
+  const headerH = _mvInspectorHeaderHeight(panel)
+  // Horizontal: the title bar spans the panel width, so the whole
+  // panel has to fit horizontally for the entire bar to be on-screen.
+  // Vertical: only the header has to fit; the body is free to spill
+  // off the bottom (and the user can drag the title back up).
+  const maxLeft = Math.max(0, sr.width  - w)
+  const maxTop  = Math.max(0, sr.height - headerH)
   const clLeft = Math.max(0, Math.min(left, maxLeft))
   const clTop  = Math.max(0, Math.min(top,  maxTop))
   if (clLeft === left && clTop === top) return  // already inside — no-op
@@ -12158,13 +12177,18 @@ function clampMvInspectorIntoStage(panel) {
   persistPrefs()
 }
 
-// clampAllMvInspectors — bulk-apply the rescue clamp to every wired
-// inspector panel.  Called from the stage ResizeObserver and window
-// resize hook.  Hidden panels are skipped (the per-panel guard
-// inside clampMvInspectorIntoStage handles this).
+// clampAllMvInspectors — bulk-apply the rescue clamp to every floating
+// panel currently mounted in the stage.  Queried by .mv-inspector
+// class rather than the MV_INSPECTOR_IDS list so the sandbox panel
+// (which lives outside that list) and any other future panels picked
+// up automatically.  Hidden panels are skipped (the per-panel guard
+// inside clampMvInspectorIntoStage handles this).  Called from the
+// stage ResizeObserver, the window resize hook, and once on initial
+// load so a layout previously saved at a larger viewport doesn't
+// strand panels off-screen on a smaller one.
 function clampAllMvInspectors() {
-  for (const id of MV_INSPECTOR_IDS) {
-    clampMvInspectorIntoStage(document.getElementById(id))
+  for (const panel of document.querySelectorAll('.mv-inspector')) {
+    clampMvInspectorIntoStage(panel)
   }
 }
 
@@ -12313,6 +12337,12 @@ function wireMvInspectors() {
     const visible = wasSet ? !!vis[id] : true
     setMvInspectorVisible(id, visible, { persist: false })
   }
+  // Re-clamp after the visibility restore so a position saved at a
+  // larger viewport (or under a now-narrower stage) doesn't strand
+  // any panel off-screen on load.  Two RAFs deep — the first lets
+  // the just-shown panels finish their layout pass so the rescue
+  // clamp sees accurate offsetWidth / header height.
+  requestAnimationFrame(() => requestAnimationFrame(clampAllMvInspectors))
 }
 
 function wireMvInspector(panelId) {
@@ -12372,13 +12402,20 @@ function wireMvInspector(panelId) {
       // would overlap the toolbar.  Stage is also the panel's
       // positioning context, so its rect's top/left match the
       // coordinate origin we're writing into style.top / style.left.
+      //
+      // Vertical bound matches the rescue clamp: only the title bar
+      // has to stay on-screen, so the panel's bottom can run off the
+      // stage edge.  Useful for tall inspectors (Threads, Effects)
+      // where the user wants the header parked near the bottom of
+      // the canvas but doesn't care about the lower rows being
+      // visible — they can drag the bar back up to peek at them.
       const stage = document.querySelector('.model-viewer-stage')
       if (!stage) return
       const sr = stage.getBoundingClientRect()
       const w = panel.offsetWidth || 220
-      const h = panel.offsetHeight || 100
+      const headerH = _mvInspectorHeaderHeight(panel)
       const left = clamp(e.clientX - dragOff.dx - sr.left, 4, Math.max(4, sr.width - w - 4))
-      const top = clamp(e.clientY - dragOff.dy - sr.top, 4, Math.max(4, sr.height - h - 4))
+      const top = clamp(e.clientY - dragOff.dy - sr.top, 4, Math.max(4, sr.height - headerH - 4))
       panel.style.left = left + 'px'
       panel.style.top = top + 'px'
       // Clear right/bottom/transform — panels whose default position
@@ -12402,6 +12439,13 @@ function wireMvInspector(panelId) {
       persistPrefs()
     })
   }
+  // Post-restore rescue clamp.  Panels wired AFTER the wireMvInspectors
+  // bulk sweep (e.g. the sandbox panel, created on first sandbox tab
+  // activation) wouldn't otherwise get a load-time clamp pass — a
+  // saved layout from a wider stage could strand them off-screen.
+  // Two RAFs deep so the just-shown panel has a chance to lay out its
+  // header before the clamp reads its offsetWidth.
+  requestAnimationFrame(() => requestAnimationFrame(() => clampMvInspectorIntoStage(panel)))
 }
 
 function setMvInspectorVisible(panelId, visible, opts = {}) {
@@ -12498,19 +12542,26 @@ function refreshMvInspectors(dtMs = 16) {
       _mvSandboxFocusedUnitId = focusedId
       renderMvActionsPanel(focused)
     }
-    // Enable the Controls panel's action buttons based on the focused
-    // unit's COB.  MvControls usually drives this in single-unit
-    // mode; in sandbox MvControls is dormant so we mirror its
-    // _refreshButtons logic here.  Move enables whenever there's a
-    // focused unit (sandbox doesn't gate on FBI canMove because the
-    // user can drag any spawned unit around the field); weapon slots
-    // enable when the unit ships matching Aim* / Fire* / Query*
-    // scripts.  Stop is always enabled.
+    // Enable the Controls panel's action buttons based on what the
+    // selection as a whole supports.  Single-unit selection mirrors
+    // the unit-editor's MvControls _refreshButtons logic.  Multi-
+    // unit selection takes the INTERSECTION of capabilities — a
+    // button only enables when EVERY selected unit's COB carries the
+    // matching Aim* / Fire* / Query* scripts, so a Move-and-Primary
+    // selection that includes a unit without Tertiary will grey out
+    // Tertiary.  Move + Stop are always enabled when there's at
+    // least one selected unit (anything that walked into the
+    // selection set is moveable / stoppable by definition).
+    const selectedUnits = (sandbox && typeof sandbox.getSelectedUnits === 'function')
+      ? sandbox.getSelectedUnits().filter((u) => u && u.binding && u.binding.hasScript)
+      : []
+    const everyHasAny = (names) => selectedUnits.length > 0
+      && selectedUnits.every((u) => names.some((n) => u.binding.hasScript(n)))
     const ctrlEnabled = {
-      move: !!focused,
-      primary: !!(focused && (focused.hasScript('AimPrimary') || focused.hasScript('FirePrimary') || focused.hasScript('QueryPrimary'))),
-      secondary: !!(focused && (focused.hasScript('AimSecondary') || focused.hasScript('FireSecondary') || focused.hasScript('QuerySecondary'))),
-      tertiary: !!(focused && (focused.hasScript('AimTertiary') || focused.hasScript('FireTertiary') || focused.hasScript('QueryTertiary'))),
+      move: selectedUnits.length > 0,
+      primary:   everyHasAny(['AimPrimary',   'FirePrimary',   'QueryPrimary']),
+      secondary: everyHasAny(['AimSecondary', 'FireSecondary', 'QuerySecondary']),
+      tertiary:  everyHasAny(['AimTertiary',  'FireTertiary',  'QueryTertiary']),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction
@@ -12525,16 +12576,25 @@ function refreshMvInspectors(dtMs = 16) {
     const body = document.getElementById('mv-inspector-scripts-body')
     if (body) renderMvScriptsPanel(body, mv.cob)
   }
-  // Static Vars panel.  In sandbox mode the panel shows "No Unit
-  // Selected" whenever the selection is empty OR multiple units are
-  // selected (statics are per-unit and meaningless to merge across N
-  // units).  The proxy mv.cob only has a .unit when exactly one unit
-  // is selected, so the existing !cob.unit gate hits the empty path
-  // and we just hand it the sandbox-specific message.
+  // Static Vars panel.  In sandbox mode the empty-state message
+  // distinguishes "nothing picked" from "too many picked" — the
+  // user might be wondering why a freshly-selected group doesn't
+  // show vars.  The proxy mv.cob only has a .unit when EXACTLY ONE
+  // unit is selected (sandbox.getInspectorMv synthesises a stub for
+  // 0 or N).  We sniff the live selection size to pick the right
+  // message; static vars are per-unit COB state so merging them
+  // across a multi-unit selection is meaningless.
   const svPanel = document.getElementById('mv-inspector-staticvars')
   if (svPanel && !svPanel.classList.contains('hidden')) {
     const body = document.getElementById('mv-inspector-staticvars-body')
-    if (body) renderMvStaticVarsPanel(body, mv.cob, sandboxActive ? { emptyMessage: 'No Unit Selected' } : {})
+    let svOpts = {}
+    if (sandboxActive) {
+      const selSize = (sandbox && sandbox.scene && sandbox.scene.selected) ? sandbox.scene.selected.size : 0
+      svOpts = { emptyMessage: selSize > 1
+        ? 'Multiple units selected, variables unavailable.'
+        : 'No Unit Selected' }
+    }
+    if (body) renderMvStaticVarsPanel(body, mv.cob, svOpts)
   }
   // Camera panel
   const camPanel = document.getElementById('mv-inspector-camera')
@@ -15287,22 +15347,33 @@ function refreshMvControlsGating(mv) {
   const actions   = panel.querySelector('#mv-controls-actions')
   const emptyRow  = document.getElementById('mv-controls-empty-row')
   const showCreate = !!cob && hasCreate && lifecycle === 'unborn'
-  // Sandbox empty-state: when in sandbox mode AND no unit is selected
-  // (proxy mv.cob has no .unit), swap the action grid for the "No
-  // Units Selected" row so the panel isn't a wall of disabled
-  // buttons.  Single-unit mode never reaches this branch — there's
-  // always exactly one viewed unit so cob.unit is always set.
+  // Sandbox empty-state: when in sandbox mode AND ZERO units are
+  // selected, swap the action grid for the "No Units Selected"
+  // row.  Previously we keyed this off `cob.unit` being null, but
+  // the sandbox proxy returns a runtime stub (no .unit) for any
+  // selection size != 1 — including multi-select.  That meant a
+  // 5-unit selection got the empty row instead of the (per-round-
+  // 13) intersected action grid.  Sniff the LIVE selection size
+  // from the sandbox view to draw the right distinction.  Single-
+  // unit mode never reaches this branch — there's always exactly
+  // one viewed unit, and sandboxActive is false anyway.
   const dlg = document.getElementById('model-viewer-dialog')
   const sandboxActive = !!(dlg && dlg.classList.contains('sandbox-mode'))
-  const sandboxNoSel = sandboxActive && !(cob && cob.unit)
+  const sbView = (typeof window !== 'undefined') ? window.__sandboxView : null
+  const sandboxSelSize = (sandboxActive && sbView && sbView.scene && sbView.scene.selected)
+    ? sbView.scene.selected.size
+    : 0
+  const sandboxNoSel = sandboxActive && sandboxSelSize === 0
   if (createRow) createRow.style.display = showCreate ? '' : 'none'
   if (emptyRow)  emptyRow.style.display  = (!showCreate && sandboxNoSel) ? '' : 'none'
   if (actions)   actions.style.display   = (showCreate || sandboxNoSel) ? 'none' : ''
   // Hide the per-port body (health / build sliders / chip rows) in
   // sandbox's empty state too — those sliders write into the focused
   // unit's cobPorts; without a focus there's nothing to drive.
+  // Also hide on multi-select since the body only renders per-unit
+  // editors for exactly-one focused unit (the bound mv.cobPorts).
   const portsBody = document.getElementById('mv-inspector-ports-body')
-  if (portsBody) portsBody.style.display = sandboxNoSel ? 'none' : ''
+  if (portsBody) portsBody.style.display = (sandboxActive && sandboxSelSize !== 1) ? 'none' : ''
   // Reset is only meaningful AFTER the unit has been created — it
   // reverts to the pre-creation state and re-arms the build ramp.
   // Pre-Create / mid-Create there's nothing to revert, so disable
@@ -17350,7 +17421,19 @@ function wireSandboxRibbon() {
     const el = document.getElementById(id)
     if (el) el.addEventListener('click', fn)
   }
-  wire('sandbox-rb-spawn', (ev) => openSandboxSpawnPicker(ev.currentTarget))
+  // Sandbox dropdown — open/close via the shared ribbon helper.  The
+  // two menu rows (Spawn Unit + Clear Field) live inside the popup;
+  // we wire them individually below so each runs its own action.
+  wireModelRibbonDropdown('sandbox-rb-sandbox-dropdown')
+  // Spawn Unit row — anchors the side picker against the Sandbox
+  // button so the popout lands adjacent to the gesture rather than
+  // somewhere off in the ribbon.  Same handler shape as the old
+  // standalone Spawn button.
+  wire('sandbox-rb-spawn', () => {
+    const anchor = document.getElementById('sandbox-rb-sandbox-btn')
+      || document.getElementById('sandbox-rb-spawn')
+    openSandboxSpawnPicker(anchor)
+  })
   wire('sandbox-rb-move', () => sb()?.setPendingCommand('move'))
   wire('sandbox-rb-attack', () => sb()?.setPendingCommand('attack'))
   wire('sandbox-rb-stop', () => {
@@ -17368,9 +17451,27 @@ function wireSandboxRibbon() {
     for (const u of scene.units()) if (!u.dead) scene.selectAdd(u.id)
   })
   wire('sandbox-rb-deselect', () => sb()?.scene?.selectClear())
-  wire('sandbox-rb-clear', () => {
+  // Clear Field — destructive, so route through the shared in-app
+  // confirm modal (NEVER the browser's window.confirm) before tearing
+  // down units.  Only the live UnitInstances are removed; grid +
+  // camera + selection-mode + every floating panel is intentionally
+  // untouched so the user lands back at "empty battlefield" instead
+  // of "fresh sandbox tab" state.
+  wire('sandbox-rb-clear', async () => {
     const scene = sb()?.scene
     if (!scene) return
+    const count = [...scene.units()].length
+    if (count === 0) return  // nothing to clear — skip the prompt
+    const ok = await confirmDialog({
+      title: 'Clear Field',
+      message: count === 1
+        ? 'Remove the unit currently on the battlefield?'
+        : `Remove all ${count} units currently on the battlefield?`,
+      okLabel: 'Clear Field',
+      cancelLabel: 'Cancel',
+      okDanger: true,
+    })
+    if (!ok) return
     const ids = [...scene.units()].map(u => u.id)
     for (const id of ids) scene.removeUnit(id)
   })
@@ -17641,21 +17742,27 @@ function openSandboxSpawnPicker(sourceEl = null) {
     document.addEventListener('mousedown', (e) => {
       if (popout.style.display === 'none') return
       if (popout.contains(e.target)) return
-      // Don't dismiss when re-clicking the spawn button — the same
-      // gesture would toggle off then on if we did.
-      const spawnBtn = document.getElementById('sandbox-rb-spawn')
-      const sandboxBtn = document.getElementById('sandbox-spawn')
-      if (spawnBtn && spawnBtn.contains(e.target)) return
-      if (sandboxBtn && sandboxBtn.contains(e.target)) return
+      // Don't dismiss when re-clicking the spawn-triggering buttons —
+      // the same gesture would toggle off then on if we did.  The
+      // ribbon's outer Sandbox button is the typical anchor (rounds
+      // 13+); the inline Spawn Unit menu row + the floating panel's
+      // Spawn button cover the legacy callers.
+      const sandboxRbBtn = document.getElementById('sandbox-rb-sandbox-btn')
+      const spawnRow = document.getElementById('sandbox-rb-spawn')
+      const sandboxPanelBtn = document.getElementById('sandbox-spawn')
+      if (sandboxRbBtn && sandboxRbBtn.contains(e.target)) return
+      if (spawnRow && spawnRow.contains(e.target)) return
+      if (sandboxPanelBtn && sandboxPanelBtn.contains(e.target)) return
       popout.style.display = 'none'
     }, true)
   }
   // Anchor under the source element the caller passed (the button
-  // the user actually pressed); fall back to the ribbon Spawn
-  // button when no source is supplied, then the floating-panel
-  // Spawn button.  Pixel-position the popout right below the
-  // button with a small gap.
+  // the user actually pressed); fall back to the ribbon's Sandbox
+  // dropdown button when no source is supplied, then the legacy
+  // ribbon Spawn row and finally the floating-panel Spawn button.
+  // Pixel-position the popout right below the anchor with a small gap.
   const anchor = sourceEl
+    || document.getElementById('sandbox-rb-sandbox-btn')
     || document.getElementById('sandbox-rb-spawn')
     || document.getElementById('sandbox-spawn')
   if (anchor) {

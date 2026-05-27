@@ -1693,7 +1693,15 @@ export class ModelRenderer {
     // Restore single-unit `this.model` after multi-entity rendering
     // so callers reading mv.model (the inspectors, the piece tree)
     // don't see the LAST entity in the loop as the active unit.
-    if (this._entities && _savedModel !== null) {
+    // Unconditional restore when entities were present — the prior
+    // `_savedModel !== null` guard skipped the restore for the sandbox
+    // (which legitimately starts with this.model === null), leaving the
+    // last entity's model leaked onto this.model.  The next frame's
+    // empty-scene fallback then saw `!!this.model` as truthy and went
+    // down the unit-bounds-anchored ground path, which shrunk the grid
+    // footprint down to a tiny pad around the leaked model's centre —
+    // the "grid disappears on Clear Field" symptom.
+    if (this._entities) {
       this.model = _savedModel
     }
   }
