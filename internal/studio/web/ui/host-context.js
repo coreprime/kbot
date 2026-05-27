@@ -273,6 +273,15 @@ export const hostCallbacks = {
   // foregrounded).  Used by the sandbox-ribbon bridge so each
   // ribbon button action targets the right view's scene + camera.
   getActiveSandboxView: null,   // () => SandboxView | null
+  // openModelViewer — pushes a model tab into the unified tab array
+  // and switches to it.  Called by openModelPicker after the user
+  // confirms a unit pick (non-sandbox-spawn path).  Lives in studio.js
+  // because it touches the tab-state machinery.
+  openModelViewer: null,        // (name: string) => void
+  // getActiveTab — current tab object (tabs[tabState.activeIndex])
+  // or null when no tab is active.  Used by close handlers that need
+  // to restore the right editor surface after a modal closes.
+  getActiveTab: null,           // () => Tab | null
   // openLoadedMap hydrates editor state from a /api/studio/load
   // response and switches into the editor.  Called by the open-map
   // dialog flow + the drag-drop handler + the ?initial_map=… URL

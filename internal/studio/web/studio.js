@@ -174,16 +174,19 @@ import {
 import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
 
 // Model catalogue — shared cache + fetcher for /api/studio/models.
-// Replaces the legacy availableModels / modelsLoaded module-lets;
-// openModelPicker drains via fetchModels then reads the React
-// dialog's items from availableModels(), openModelViewer looks up
-// the picked unit's meta through findModelMeta.
-import {
-  fetchModels,
-  availableModels,
-  isLoaded as modelsLoaded,
-  findModelMeta,
-} from './ui/pickers/model-catalog.js'
+// openModelPicker (now in open-unit-flow.js) drains via fetchModels
+// then reads the React dialog's items from availableModels();
+// openModelViewer below looks up the picked unit's meta through
+// findModelMeta.
+import { findModelMeta } from './ui/pickers/model-catalog.js'
+
+// Open Unit dialog flow controller — opens the React picker (after
+// awaiting the catalogue + UI island) and routes the user's pick
+// either into the SandboxView's spawn placement loop or into a
+// fresh model tab via the openModelViewer host callback registered
+// below.  closeModelPicker restores whichever editor surface owned
+// the screen before the dialog opened (read through getActiveTab).
+import { openModelPicker } from './ui/pickers/open-unit-flow.js'
 
 // Sandbox panel + side-colour spawn picker — first leaf-helper
 // extraction of R44 (sandbox split).  The bigger sandbox surface
@@ -630,6 +633,8 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.configureReactUi = configureReactUi
   hostCallbacks.openModelPicker = openModelPicker
   hostCallbacks.getActiveSandboxView = () => sandboxViewInstance
+  hostCallbacks.openModelViewer = (name) => openModelViewer(name)
+  hostCallbacks.getActiveTab = () => (tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null)
   hostCallbacks.openLoadedMap = openLoadedMap
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
@@ -3594,65 +3599,12 @@ function runCobEntry(cob, name) {
 }
 
 
-async function openModelPicker() {
-  // The picker is React-managed now (see /ui/pickers/open-unit-dialog.js).
-  // Hide whichever editor surface was on top so the modal isn't
-  // fighting another dialog stack for the user's eye, then open the
-  // React picker.  The legacy #model-open-dialog static markup in
-  // index.html is no longer used — React mounts its own dialog DOM
-  // on demand.
-  $('#welcome-dialog').classList.add('hidden')
-  $('#model-viewer-dialog').classList.add('hidden')
-  // Bring the React UI up if it hasn't loaded yet (cold-boot path).
-  const ui = _reactUi || await configureReactUi()
-  if (!modelsLoaded()) await fetchModels()
-  // The picker spawns into the React tree; await its resolution and
-  // route based on the host's pending intent (sandbox spawn vs.
-  // open viewer).  Polling via updateUnitDialog isn't needed here
-  // because fetchModels has already drained the catalog above.
-  const sandboxIntent = !!window.__sandboxSpawnPending
-  const result = ui && typeof ui.openUnitDialog === 'function'
-    ? await ui.openUnitDialog({
-        items: availableModels(),
-        loading: !modelsLoaded(),
-        query: '',
-        selectedName: null,
-        sandboxIntent,
-      })
-    : null
-  if (!result) {
-    closeModelPicker()
-    return
-  }
-  if (result.sandboxIntent && sandboxViewInstance) {
-    window.__sandboxSpawnPending = false
-    const pendingSide = (window.__sandboxSpawnPendingSide | 0) || 0
-    window.__sandboxSpawnPendingSide = 0
-    $('#model-viewer-dialog')?.classList.remove('hidden')
-    void sandboxViewInstance.beginPlacement(result.name, { side: pendingSide })
-    return
-  }
-  openModelViewer(result.name)
-}
-
-function closeModelPicker() {
-  // React owns the dialog DOM, so dismissing is "close the open-state
-  // signal".  When the user cancelled via Esc / Cancel the React
-  // dialog has already cleared itself, so this is mainly the post-
-  // confirm cleanup path: restore whichever editor surface was on
-  // top before the picker opened.
-  if (_reactUi && typeof _reactUi.closeUnitDialog === 'function') {
-    _reactUi.closeUnitDialog()
-  }
-  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  if (activeTab?.type === 'model') {
-    $('#model-viewer-dialog').classList.remove('hidden')
-  } else if (activeTab?.type === 'map') {
-    $('#app')?.classList.remove('hidden')
-  } else {
-    $('#welcome-dialog').classList.remove('hidden')
-  }
-}
+// openModelPicker / closeModelPicker moved to /ui/pickers/open-unit-flow.js.
+// External callers (configureReactUi's host bridge for "Open another
+// model…", the sandbox spawn-picker swatch click, the welcome card)
+// either import them directly or reach for `hostCallbacks.openModelPicker`.
+// openModelViewer below + getActiveTab are registered into hostCallbacks
+// at boot so the new module can dispatch the user's pick.
 
 // openSandboxStub — Sandbox welcome-card entry point.  Creates a
 // new 'sandbox' tab + activates it.  The activate path mounts the
