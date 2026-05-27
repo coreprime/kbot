@@ -23,6 +23,7 @@
 // later rounds.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
+import { setMvInspectorVisible } from '../unit-editor/inspectors.js'
 
 // 8 team-colour swatches.  Same palette as TEAM_SIDES in
 // model3d/team-colors.js — inlined here so this module doesn't have
@@ -67,6 +68,30 @@ export function showSandboxPanel(show) {
   }
   const p = document.getElementById('sandbox-panel')
   if (p) p.classList.toggle('hidden', !show)
+}
+
+// setSandboxPanelVisible — uniform visibility toggle that handles
+// both the standard mv-inspector panels (which route through
+// setMvInspectorVisible so the unit-editor View menu stays in sync)
+// AND the bespoke #sandbox-panel (Spawn floating panel) which lives
+// outside the MV_INSPECTOR_IDS list.  The panel-store's saveVisible
+// callback fires from setMvInspectorVisible so we don't need to
+// mirror the dropdown rows here — the React Developer Tools
+// dropdown subscribes to the panel-store's visible signal directly
+// and re-renders its check on the next tick.
+export function setSandboxPanelVisible(panelId, visible) {
+  if (panelId === 'sandbox-panel') {
+    // Route through showSandboxPanel — when the React UI island has
+    // loaded this updates the panel-store's visible signal so the
+    // Preact tree re-renders with the right .hidden class.  Before
+    // the island is up it falls back to a direct DOM toggle so the
+    // toggle still feels responsive on cold starts.
+    showSandboxPanel(visible)
+    return
+  }
+  const panel = document.getElementById(panelId)
+  if (!panel) return
+  setMvInspectorVisible(panelId, visible)
 }
 
 // openSandboxSpawnPicker — opens a small side-colour popout

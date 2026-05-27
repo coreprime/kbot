@@ -182,6 +182,7 @@ import {
   ensureSandboxPanel,
   showSandboxPanel,
   openSandboxSpawnPicker,
+  setSandboxPanelVisible,
 } from './ui/sandbox/spawn-picker.js'
 
 // View-menu visibility toggles (minimap / features / start
@@ -4276,28 +4277,6 @@ function wireSandboxRibbon() {
 // ribbon's Developer Controls row subscribes to the inspector-store
 // signal directly, so its check-mark + active state flip the instant
 // the value changes (no manual DOM mirror needed).
-
-// setSandboxPanelVisible — uniform visibility toggle that handles both
-// the standard mv-inspector panels (which route through
-// setMvInspectorVisible so the unit-editor View menu stays in sync)
-// AND the bespoke #sandbox-panel (Spawn floating panel) which lives
-// outside the MV_INSPECTOR_IDS list.  syncPanelToggleRows fires through
-// the panel-store's saveVisible callback so we don't need to mirror
-// the dropdown rows here.
-function setSandboxPanelVisible(panelId, visible) {
-  if (panelId === 'sandbox-panel') {
-    // Route through showSandboxPanel — when the React UI island has
-    // loaded this updates the panel-store's visible signal so the
-    // Preact tree re-renders with the right .hidden class.  Before
-    // the island is up it falls back to a direct DOM toggle so the
-    // toggle still feels responsive on cold starts.
-    showSandboxPanel(visible)
-    return
-  }
-  const panel = document.getElementById(panelId)
-  if (!panel) return
-  setMvInspectorVisible(panelId, visible)
-}
 
 // syncPanelToggleRows — removed.  Both the unit-editor View dropdown
 // + the sandbox Developer Tools dropdown are React-managed now and
