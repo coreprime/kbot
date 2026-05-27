@@ -14936,6 +14936,20 @@ function refreshMvControlsGating(mv) {
   const showCreate = !!cob && hasCreate && lifecycle === 'unborn'
   if (createRow) createRow.style.display = showCreate ? '' : 'none'
   if (actions)   actions.style.display   = showCreate ? 'none' : ''
+  // Reset is only meaningful AFTER the unit has been created — it
+  // reverts to the pre-creation state and re-arms the build ramp.
+  // Pre-Create / mid-Create there's nothing to revert, so disable
+  // the button explicitly (rather than rely on the .mv-controls-
+  // gated class) so its visual state reads as "not yet usable"
+  // even when the action grid is otherwise interactive.
+  const resetBtn = document.getElementById('mv-controls-reset-btn')
+  if (resetBtn) {
+    const canReset = !!cob && lifecycle === 'created'
+    resetBtn.disabled = !canReset
+    resetBtn.title = canReset
+      ? 'Reset State — revert the unit to its pre-Create state: clear threads, animators, particles, audio, weapon history, and replay the build animation.'
+      : 'Reset is only available after the unit has been created.'
+  }
   // Tooltip on the action row explains WHY the panel is unresponsive
   // (only meaningful when the grid IS visible — i.e. during the
   // 'creating' phase between Create-click and Create-thread-death).
