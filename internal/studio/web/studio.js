@@ -352,6 +352,19 @@ import {
   scheduleMinimapRender,
 } from './ui/map-editor/render-queue.js'
 
+// Feature sprite cache + world-anchor projection helpers.
+// whenImageReady dedupes load listeners; preloadFeatureImage
+// stages the static-frame PNG; featureAnchorOffset /
+// featureAnchorWorld convert TA's top-left attribute cell into the
+// rendered world-pixel anchor.
+import {
+  whenImageReady,
+  preloadFeatureImage,
+  featureAnchorOffset,
+  featureAnchorWorld,
+  featureGroundHeight,
+} from './ui/map-editor/feature-assets.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -2526,44 +2539,9 @@ function selectFeature(f) {
   setStatus(`Placing ${f.name} — click anywhere to drop a copy.  Pick a different feature or hit Esc to stop.`)
 }
 
-// whenImageReady fires `cb` the first time `img` finishes loading,
-// dedupes by (img, kind) so callers in tight render loops don't pile
-// up a thousand listeners on the same Image while it decodes.  Every
-// repaint of a frame that touches a not-yet-loaded section atlas used
-// to attach a new 'load' handler — when the atlas finally decoded all
-// those handlers fired in a single tick, each invoking renderCanvas()
-// and burning 99% of JS time in the listener add path.
-const imageReadyCallbacks = new WeakMap()
-function whenImageReady(img, kind, cb) {
-  if (!img) return
-  let registry = imageReadyCallbacks.get(img)
-  if (!registry) {
-    registry = new Set()
-    imageReadyCallbacks.set(img, registry)
-  }
-  if (registry.has(kind)) return
-  registry.add(kind)
-  img.addEventListener('load', () => {
-    const r = imageReadyCallbacks.get(img)
-    if (r) r.delete(kind)
-    cb()
-  }, { once: true })
-}
-
-function preloadFeatureImage(f) {
-  if (!f.previewUrl) return
-  const key = f.name.toLowerCase()
-  if (state.featureImages.has(key)) return
-  // Canvas placements always use the static first-frame PNG.  The
-  // animated APNG canvas is padded to the bounding box of all frames,
-  // which shifts the in-image hotspot away from (OriginX, OriginY) and
-  // breaks placement on multi-frame features.  Drawer thumbnails still
-  // animate via their own <img> elements (see renderFeatureGroup).
-  const img = new Image()
-  img.src = f.previewUrl + '?static=1'
-  img.onload = () => renderCanvas()
-  state.featureImages.set(key, img)
-}
+// whenImageReady + preloadFeatureImage moved to
+// /ui/map-editor/feature-assets.js — imported at the top of this
+// file.
 
 // ── Canvas ─────────────────────────────────────────────────────────────────
 
@@ -4791,48 +4769,9 @@ function drawFeatures(ctx) {
   }
 }
 
-// featureAnchorOffset returns the (dx, dy) inside the sprite image that
-// corresponds to the feature's world anchor point.  Uses the GAF
-// hotspot when the backend supplied it, otherwise falls back to a
-// bottom-centred anchor (matches the historical placement until the
-// origin metadata arrives over the wire).
-function featureAnchorOffset(f, img) {
-  if (typeof f.originX === 'number' && typeof f.originY === 'number' && (f.originX !== 0 || f.originY !== 0)) {
-    return { dx: f.originX, dy: f.originY }
-  }
-  return { dx: img.naturalWidth / 2, dy: img.naturalHeight }
-}
-
-// featureAnchorWorld returns the world-pixel position the feature is
-// anchored at.  TA stores f.ax / f.ay as the *top-left* attribute cell
-// of the feature's footprint, but the rendered anchor lives at the
-// CENTRE of the footprint, shifted UP by Height/2 to account for the
-// underlying terrain elevation — see Kinboat's classTAMap.cls:3340:
-//   FeatureTop = IndexY*16 - Height/2 - PositionY + FootprintY*8
-// Without the Height/2 term, TA's default ground (height ≈ 64) made
-// every feature render one tile too low.
-function featureAnchorWorld(f, heightOverride) {
-  const fw = f.footprintX || 1
-  const fh = f.footprintZ || 1
-  const px = f.ax * (TILE_PX / 2) + fw * (TILE_PX / 4)
-  const h = heightOverride != null ? heightOverride : featureGroundHeight(f)
-  const py = f.ay * (TILE_PX / 2) + fh * (TILE_PX / 4) - (h >> 1)
-  return { px, py }
-}
-
-// featureGroundHeight reads the height byte from the attribute grid at
-// the feature's anchor cell.  Heights live one byte per 16-px attr cell
-// in state.heights, sized state.tileW*2 × state.tileH*2.  Out-of-range
-// (e.g. orphaned features) returns 0 so the feature falls back to its
-// cell centre without any elevation kick.
-function featureGroundHeight(f) {
-  if (!state.heights || !state.tileW) return 0
-  const aw = state.tileW * 2
-  const ah = state.tileH * 2
-  if (f.ax < 0 || f.ay < 0 || f.ax >= aw || f.ay >= ah) return 0
-  const idx = f.ay * aw + f.ax
-  return state.heights[idx] | 0
-}
+// featureAnchorOffset / featureAnchorWorld / featureGroundHeight
+// moved to /ui/map-editor/feature-assets.js — imported at the top
+// of this file.
 
 function drawDropPreview(ctx) {
   // Sections render a full placement preview separately; this is only
