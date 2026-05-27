@@ -210,6 +210,37 @@ export const state = new Proxy(sessionState, {
   },
 })
 
+// ── Cross-module callback registry ──────────────────────────────────
+//
+// During the multi-round extraction of studio.js, some extracted
+// modules need to call host functions that haven't moved yet (and
+// vice versa).  Rather than risk circular ES-module imports, the
+// host registers its callbacks here at boot and extracted modules
+// look them up via `hostCallbacks.foo?.()`.  Every entry is optional:
+// the caller MUST tolerate a missing callback (early boot, headless
+// runs) by no-op'ing when the registered value is null.
+//
+// Once everything has moved out of studio.js this registry becomes
+// the API surface; until then it's a transition aid.
+export const hostCallbacks = {
+  // Map editor — set by studio.js after the editor wiring runs.
+  cancelPlacement: null,        // () => void
+  showPlacementHint: null,      // (label, kind) => void
+  hidePlacementHint: null,      // () => void
+  renderCanvas: null,           // () => void
+  renderMapTabs: null,          // () => void
+  recreateEditorView: null,     // () => void
+  refreshSchemaSelector: null,  // () => void
+  publishMapRibbonState: null,  // () => void
+  setMode: null,                // (mode) => void
+  invalidateMinimapBase: null,  // () => void
+  // Latest mouse-hover cell in tile coords — null when the cursor is
+  // outside the canvas.  Paste uses this to anchor the dropped
+  // clipboard at the user's last hover point.  An object instead of
+  // a plain `let` so subsystems can both read and write it.
+  cursor: { lastHover: null },  // { lastHover: { tx, ty } | null }
+}
+
 // ── DOM helpers ─────────────────────────────────────────────────────
 
 export const $ = (sel) => document.querySelector(sel)

@@ -31,9 +31,6 @@ import {
   WORLDS,
   DRAWER_ITEM_HEIGHT,
   DRAWER_OBSERVER_MARGIN,
-  UNDO_MAX,
-  HISTORY_FLYOUT_N,
-  CLIP_PREFIX,
   FEATURE_HIT_SEARCH_TILES,
   START_POS_RADIUS,
   HM_HOLD_INTERVAL_MS,
@@ -66,6 +63,7 @@ import {
   tabState,
   activeMap,
   state,
+  hostCallbacks,
   $,
   $$,
   setStatus,
@@ -73,6 +71,40 @@ import {
   escapeHTML,
   sanitiseFilename,
 } from './ui/host-context.js'
+
+// Undo / redo + transaction wrapper for map edits — moved to
+// /ui/map-editor/undo.js.  studio.js still calls these directly
+// from the keyboard handler, the ribbon, and every mode tool.
+import {
+  undoStack,
+  redoStack,
+  beginTransaction,
+  commitTransaction,
+  abortTransaction,
+  undo,
+  redo,
+  updateUndoButtons,
+  refreshHistoryFlyouts,
+  getPendingTransaction,
+  setPendingTransaction,
+} from './ui/map-editor/undo.js'
+
+// Clipboard subsystem (terrain drag-clipboard + system Ctrl+C/V/X)
+// — moved to /ui/map-editor/clipboard.js.  Same call sites as
+// before; the implementations are now in the map-editor tree.
+import {
+  shrinkRectToContent,
+  captureTerrain,
+  rotateTerrainClipboard,
+  dropTerrainClipboard,
+  cancelTerrainClipboard,
+  clearRegion,
+  cutSelection,
+  clearAllFeatures,
+  clearFeaturesInSelection,
+  copyToClipboard,
+  pasteFromClipboard,
+} from './ui/map-editor/clipboard.js'
 
 // KBot Studio — browser-side editor.
 //
@@ -113,6 +145,22 @@ import {
 // ── Boot ───────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Wire host-context callbacks so the extracted subsystems
+  // (/ui/map-editor/undo.js, /ui/map-editor/clipboard.js, ...) can
+  // call back into studio.js for functions that haven't moved yet.
+  // Every value is a plain function pointer — subsystems look up
+  // via `hostCallbacks.foo?.()` and tolerate a missing entry, so
+  // ordering with the rest of boot is forgiving.
+  hostCallbacks.cancelPlacement = cancelPlacement
+  hostCallbacks.showPlacementHint = showPlacementHint
+  hostCallbacks.hidePlacementHint = hidePlacementHint
+  hostCallbacks.renderCanvas = () => renderCanvas()
+  hostCallbacks.renderMapTabs = renderMapTabs
+  hostCallbacks.recreateEditorView = recreateEditorView
+  hostCallbacks.refreshSchemaSelector = refreshSchemaSelector
+  hostCallbacks.publishMapRibbonState = publishMapRibbonState
+  hostCallbacks.setMode = setMode
+  hostCallbacks.invalidateMinimapBase = invalidateMinimapBase
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -311,7 +359,7 @@ function snapshotActiveTabModuleLets() {
   const m = tab.map
   m.undoStack = undoStack.slice()
   m.redoStack = redoStack.slice()
-  m.pendingTransaction = pendingTransaction
+  m.pendingTransaction = getPendingTransaction()
   m.minimapBase = minimapBase
   m.minimapBaseStale = minimapBaseStale
   const scroll = document.querySelector('#canvas-scroll')
@@ -331,7 +379,7 @@ function restoreActiveTabModuleLets() {
   for (const x of m.undoStack) undoStack.push(x)
   redoStack.length = 0
   for (const x of m.redoStack) redoStack.push(x)
-  pendingTransaction = m.pendingTransaction
+  setPendingTransaction(m.pendingTransaction)
   minimapBase = m.minimapBase
   minimapBaseStale = m.minimapBaseStale
   // Scroll restored AFTER the new canvases are sized — see switchToTab.
@@ -3222,11 +3270,12 @@ function preloadFeatureImage(f) {
 
 // ── Canvas ─────────────────────────────────────────────────────────────────
 
-// Tracks the cell under the cursor for hotkey actions that don't fire
-// from a mouse event (notably Ctrl+V paste, which wants to drop the
-// pasted rectangle at the user's last hover point).  Null while the
-// cursor is outside the canvas.
-let lastHoverCell = null
+// Tracks the cell under the cursor for hotkey actions that don't
+// fire from a mouse event (notably Ctrl+V paste, which wants to
+// drop the pasted rectangle at the user's last hover point).  The
+// authoritative store is hostCallbacks.cursor.lastHover so the
+// extracted clipboard module can read it without an import cycle;
+// this file just writes to it from the mouse-move/leave handlers.
 let painting = false
 let paintedDuringStroke = false
 
@@ -3235,212 +3284,12 @@ let panState = null
 // True while the spacebar is held; engages pan mode regardless of tool.
 let spacePanHotkey = false
 
-// ── Undo / redo ────────────────────────────────────────────────────────────
-//
-// History is captured as snapshot pairs (before/after) of the parts of
-// state that the user can mutate: tile stamps, attribute heights, and
-// feature placements, plus the map dimensions in case a resize happened.
-// We share tile-entry references between snapshots because tile entries
-// are always *replaced*, never mutated in place; feature entries are
-// deep-cloned because drag-move edits ax/ay directly.
-
-// UNDO_MAX moved to ./ui/map-editor/constants.js.  The stacks
-// themselves remain here because they hold live editing state that
-// the rest of studio.js mutates directly.
-const undoStack = []
-const redoStack = []
-let pendingTransaction = null
-
-function captureSnapshot() {
-  return {
-    tiles: state.tiles.slice(),
-    heights: state.heights.slice(),
-    voids: state.voids.slice(),
-    features: state.features.map((f) => ({ ...f })),
-    tileW: state.tileW,
-    tileH: state.tileH,
-    name: state.name,
-    planet: state.planet,
-    activeSchema: state.activeSchema,
-    ota: cloneOTA(state.ota),
-  }
-}
-
-// cloneOTA deep-clones the OTA state.  Required for undo snapshots —
-// captureSnapshot freezes a moment in time, and the OTA object's
-// schemas + startPositions are mutated in place by the editor, so a
-// shallow copy would let the snapshot drift.
-function cloneOTA(ota) {
-  if (!ota) return null
-  return {
-    ...ota,
-    schemas: (ota.schemas || []).map((s) => ({
-      ...s,
-      startPositions: (s.startPositions || []).map((sp) => ({ ...sp })),
-    })),
-  }
-}
-
-function restoreSnapshot(snap) {
-  if (typeof invalidateMinimapBase === 'function') invalidateMinimapBase()
-  state.tiles = snap.tiles.slice()
-  state.heights = snap.heights.slice()
-  state.voids = (snap.voids || []).slice()
-  state.features = snap.features.map((f) => ({ ...f }))
-  if (snap.tileW !== state.tileW || snap.tileH !== state.tileH) {
-    state.tileW = snap.tileW
-    state.tileH = snap.tileH
-    // Undo across a resize: rebuild the canvas stack at the restored
-    // dimensions.  EditorView's destroy+mount path handles all the GL
-    // teardown that the old in-place resize code used to do by hand.
-    recreateEditorView()
-  }
-  if (snap.ota) {
-    state.ota = cloneOTA(snap.ota)
-    state.activeSchema = clamp(snap.activeSchema || 0, 0, state.ota.schemas.length - 1)
-    refreshSchemaSelector()
-  }
-  if (typeof snap.name === 'string') state.name = snap.name
-  if (typeof snap.planet === 'string') state.planet = snap.planet
-  renderMapTabs()
-}
-
-// beginTransaction snapshots the current state before the caller mutates
-// it.  Re-entrant — nested begins are ignored so callers can layer.
-function beginTransaction() {
-  if (pendingTransaction) return
-  pendingTransaction = captureSnapshot()
-}
-
-// commitTransaction pushes a {before, after} pair onto the undo stack if
-// the snapshots differ.  Clears the redo stack — any in-progress
-// alternate future is invalidated by the new edit.
-function commitTransaction(label) {
-  if (!pendingTransaction) return
-  const before = pendingTransaction
-  pendingTransaction = null
-  const after = captureSnapshot()
-  if (snapshotsEqual(before, after)) return
-  undoStack.push({ before, after, label: label || 'Edit' })
-  while (undoStack.length > UNDO_MAX) undoStack.shift()
-  redoStack.length = 0
-  updateUndoButtons()
-  // The active tab now diverges from its last saved state; the tab
-  // chip's close button will pop the unsaved-changes prompt.
-  const m = activeMap()
-  if (m) m.dirty = true
-  renderMapTabs()
-  // Any committed edit can change the tile data → the cached minimap
-  // base needs to be rebuilt on the next render.
-  if (typeof invalidateMinimapBase === 'function') invalidateMinimapBase()
-}
-
-function abortTransaction() {
-  pendingTransaction = null
-}
-
-function snapshotsEqual(a, b) {
-  if (a.tileW !== b.tileW || a.tileH !== b.tileH) return false
-  if (a.tiles.length !== b.tiles.length) return false
-  if (a.features.length !== b.features.length) return false
-  for (let i = 0; i < a.tiles.length; i++) if (a.tiles[i] !== b.tiles[i]) return false
-  for (let i = 0; i < a.heights.length; i++) if (a.heights[i] !== b.heights[i]) return false
-  // Features are deep-cloned, so reference equality won't work — compare
-  // by structural fingerprint.
-  for (let i = 0; i < a.features.length; i++) {
-    const af = a.features[i], bf = b.features[i]
-    if (af.name !== bf.name || af.ax !== bf.ax || af.ay !== bf.ay) return false
-  }
-  if (a.name !== b.name || a.planet !== b.planet) return false
-  if (a.activeSchema !== b.activeSchema) return false
-  // OTA: deep-clone makes reference equality useless.  Stringify is a
-  // simple and correct enough comparison since the shape is small.
-  if (otaSignature(a.ota) !== otaSignature(b.ota)) return false
-  return true
-}
-
-function otaSignature(o) { return o ? JSON.stringify(o) : '' }
-
-function undo() {
-  if (undoStack.length === 0) return
-  cancelPlacement()
-  if (state.terrainClipboard) state.terrainClipboard = null
-  state.selectedFeature = -1
-  const entry = undoStack.pop()
-  redoStack.push(entry)
-  restoreSnapshot(entry.before)
-  renderCanvas()
-  updateUndoButtons()
-  setStatus(`Undone: ${entry.label}`)
-}
-
-function redo() {
-  if (redoStack.length === 0) return
-  cancelPlacement()
-  state.selectedFeature = -1
-  const entry = redoStack.pop()
-  undoStack.push(entry)
-  restoreSnapshot(entry.after)
-  renderCanvas()
-  updateUndoButtons()
-  setStatus(`Redone: ${entry.label}`)
-}
-
-function updateUndoButtons() {
-  // Legacy template DOM still has these ids — the queries no-op when
-  // the elements aren't in the live tree.  The canonical undo / redo
-  // enabled flags flow through publishMapRibbonState into the React
-  // ribbon's Editing Tools dropdown.
-  const u = $('#btn-undo')
-  const r = $('#btn-redo')
-  if (u) {
-    u.disabled = undoStack.length === 0
-    u.title = undoStack.length ? `Undo: ${undoStack[undoStack.length - 1].label} (Ctrl+Z)` : 'Nothing to undo'
-  }
-  if (r) {
-    r.disabled = redoStack.length === 0
-    r.title = redoStack.length ? `Redo: ${redoStack[redoStack.length - 1].label} (Ctrl+Shift+Z)` : 'Nothing to redo'
-  }
-  refreshHistoryFlyouts()
-  publishMapRibbonState()
-}
-
-// refreshHistoryFlyouts populates the undo / redo hover flyouts with
-// the next HISTORY_FLYOUT_N labels from each stack.  Top of undoStack
-// is the next undo (LIFO), top of redoStack is the next redo.
-// HISTORY_FLYOUT_N is imported from ./ui/map-editor/constants.js.
-function refreshHistoryFlyouts() {
-  const fillList = (containerId, source, emptyText) => {
-    const el = $('#' + containerId)
-    if (!el) return
-    el.innerHTML = ''
-    if (source.length === 0) {
-      const row = document.createElement('div')
-      row.className = 'menu-row history-empty'
-      row.textContent = emptyText
-      el.appendChild(row)
-      return
-    }
-    // Walk back from the top of the stack so the first row is the
-    // very next action that would fire.
-    const start = source.length - 1
-    const end = Math.max(-1, start - HISTORY_FLYOUT_N)
-    for (let i = start; i > end; i--) {
-      const row = document.createElement('div')
-      row.className = 'menu-row history-row'
-      const step = document.createElement('span')
-      step.className = 'history-step'
-      step.textContent = String(start - i + 1)
-      const label = document.createElement('span')
-      label.textContent = source[i].label
-      row.appendChild(step)
-      row.appendChild(label)
-      el.appendChild(row)
-    }
-  }
-  fillList('undo-history-list', undoStack, 'Nothing to undo')
-  fillList('redo-history-list', redoStack, 'Nothing to redo')
-}
+// Undo / redo + transaction wrapper now live in
+// ./ui/map-editor/undo.js — imports at the top of this file pull
+// `undoStack`, `redoStack`, `begin/commit/abortTransaction`, `undo`,
+// `redo`, `updateUndoButtons`, `refreshHistoryFlyouts`, plus
+// `captureSnapshot` / `restoreSnapshot` / `cloneOTA` (re-exported
+// for callers that snapshot OTA into a tab swap).
 
 // ── EditorView ─────────────────────────────────────────────────────────────
 //
@@ -3532,7 +3381,7 @@ class EditorView {
       if (hc) hc.textContent = '—'
       updateCameraInfoCursor(null)
       if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
-      lastHoverCell = null
+      hostCallbacks.cursor.lastHover = null
     }, sig)
 
     // Wheel/trackpad routing:
@@ -3850,7 +3699,7 @@ function onCanvasMouseMove(e) {
   // point.  Reset on mouseleave (handled by the canvas leave listener).
   const cell = pickCell(e)
   if (cell.tx >= 0 && cell.tx < state.tileW && cell.ty >= 0 && cell.ty < state.tileH) {
-    lastHoverCell = cell
+    hostCallbacks.cursor.lastHover = cell
   }
   if (state.mode === 'paint') {
     if (placementMoveAnchor && state.placement) {
@@ -4356,491 +4205,12 @@ function onTerrainMouseUp(_e) {
   commitTransaction('Capture terrain')
 }
 
-// shrinkRectToContent returns the tightest tile-grid bounding box of
-// any stamped tile or placed feature inside the given rectangle.  When
-// the rectangle is empty (nothing inside it) we return null so the
-// caller can no-op the capture.
-function shrinkRectToContent(x, y, w, h) {
-  let minTX = Infinity, maxTX = -Infinity
-  let minTY = Infinity, maxTY = -Infinity
-  let found = false
-
-  const x2 = x + w, y2 = y + h
-  for (let ty = y; ty < y2; ty++) {
-    if (ty < 0 || ty >= state.tileH) continue
-    for (let tx = x; tx < x2; tx++) {
-      if (tx < 0 || tx >= state.tileW) continue
-      if (state.tiles[ty * state.tileW + tx]) {
-        if (tx < minTX) minTX = tx
-        if (tx > maxTX) maxTX = tx
-        if (ty < minTY) minTY = ty
-        if (ty > maxTY) maxTY = ty
-        found = true
-      }
-    }
-  }
-
-  // Features live on the 16-px attribute grid.  Convert to tile coords
-  // via floor(ax/2), floor(ay/2) and fold them into the bounding box.
-  const minAX = x * 2, maxAX = x2 * 2
-  const minAY = y * 2, maxAY = y2 * 2
-  for (const f of state.features) {
-    if (f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY) {
-      const fTX = Math.floor(f.ax / 2)
-      const fTY = Math.floor(f.ay / 2)
-      if (fTX < minTX) minTX = fTX
-      if (fTX > maxTX) maxTX = fTX
-      if (fTY < minTY) minTY = fTY
-      if (fTY > maxTY) maxTY = fTY
-      found = true
-    }
-  }
-  if (!found) return null
-  return { x: minTX, y: minTY, w: maxTX - minTX + 1, h: maxTY - minTY + 1 }
-}
-
-// captureTerrain pulls a rectangle of tiles + heights into a floating
-// "clipboard" the user can drag around the map.  The source region on
-// the map is cleared (so the drag visibly lifts the terrain off).
-//
-// Features whose attribute position falls inside the rectangle are
-// also lifted off the map and stored with positions relative to the
-// rectangle's top-left, so rotation/move acts on them as a group.
-function captureTerrain(x, y, w, h) {
-  const tiles = new Array(w * h).fill(null)
-  const heights = new Array(w * 2 * h * 2).fill(80)
-  const mapAttrW = state.tileW * 2
-  for (let dy = 0; dy < h; dy++) {
-    for (let dx = 0; dx < w; dx++) {
-      const mx = x + dx, my = y + dy
-      const cell = state.tiles[my * state.tileW + mx]
-      if (cell) tiles[dy * w + dx] = { ...cell }
-      state.tiles[my * state.tileW + mx] = null
-      for (let qy = 0; qy < 2; qy++) {
-        for (let qx = 0; qx < 2; qx++) {
-          const srcAY = my * 2 + qy
-          const srcAX = mx * 2 + qx
-          heights[(dy * 2 + qy) * (w * 2) + (dx * 2 + qx)] = state.heights[srcAY * mapAttrW + srcAX]
-          state.heights[srcAY * mapAttrW + srcAX] = 80
-        }
-      }
-    }
-  }
-
-  // Pick up features inside the rectangle (attribute coords).
-  const minAX = x * 2, maxAX = (x + w) * 2 // exclusive on the upper end
-  const minAY = y * 2, maxAY = (y + h) * 2
-  const features = []
-  state.features = state.features.filter((f) => {
-    if (f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY) {
-      features.push({ ...f, ax: f.ax - minAX, ay: f.ay - minAY })
-      return false
-    }
-    return true
-  })
-
-  state.terrainClipboard = { tx: x, ty: y, w, h, tiles, heights, features, rotation: 0 }
-  // The placement hint pill normally hides the rotation row for
-  // features — explicitly pass 'section' so the Q/E hint stays visible
-  // for terrain selections too.
-  showPlacementHint(`Moving ${w}×${h} terrain selection`, 'section')
-  const fNote = features.length > 0 ? ` plus ${features.length} feature${features.length === 1 ? '' : 's'}` : ''
-  setStatus(`Captured ${w}×${h} terrain${fNote}.  Drag to move, Q/E to rotate, click outside to drop, Esc to put back.`)
-  renderCanvas()
-}
-
-// rotateTerrainClipboard rotates the captured rectangle in place by ±90°.
-// Each cell's stored rotation is also updated so the section graphics
-// still face the right way after the rectangle is dropped.
-function rotateTerrainClipboard(dir) {
-  const c = state.terrainClipboard
-  if (!c) return
-  const oldW = c.w, oldH = c.h
-  const newW = oldH, newH = oldW
-  const newTiles = new Array(newW * newH).fill(null)
-  const newHeights = new Array(newW * 2 * newH * 2).fill(80)
-  const oldAttrW = oldW * 2
-  const newAttrW = newW * 2
-
-  for (let ry = 0; ry < newH; ry++) {
-    for (let rx = 0; rx < newW; rx++) {
-      // 90° CW: new(rx, ry) ← old(oy=oldH-1-rx, ox=ry) — equivalently
-      // ox=ry, oy=oldW-1-rx.  CCW is its inverse.
-      const ox = dir > 0 ? ry : (oldH - 1 - ry)
-      const oy = dir > 0 ? (oldW - 1 - rx) : rx
-      const cell = c.tiles[oy * oldW + ox]
-      if (cell) {
-        newTiles[ry * newW + rx] = {
-          ...cell,
-          rotation: ((cell.rotation || 0) + (dir > 0 ? 1 : 3)) & 3,
-        }
-      }
-      // Rotate the 2×2 attribute sub-cells along with the tile so the
-      // alignment hints stay accurate after the rotation.
-      for (let qy = 0; qy < 2; qy++) {
-        for (let qx = 0; qx < 2; qx++) {
-          let sqx, sqy
-          if (dir > 0) { sqx = qy; sqy = 1 - qx }
-          else { sqx = 1 - qy; sqy = qx }
-          const srcAY = oy * 2 + sqy
-          const srcAX = ox * 2 + sqx
-          if (srcAX >= 0 && srcAY >= 0 && srcAY * oldAttrW + srcAX < c.heights.length) {
-            newHeights[(ry * 2 + qy) * newAttrW + (rx * 2 + qx)] = c.heights[srcAY * oldAttrW + srcAX]
-          }
-        }
-      }
-    }
-  }
-  c.tiles = newTiles
-  c.heights = newHeights
-
-  // Rotate the carried features' attribute positions so they stay
-  // aligned with the tiles they were sitting on.  Coordinates are
-  // (ax, ay) in attr cells, range [0..oldW*2) × [0..oldH*2).
-  if (c.features && c.features.length) {
-    const oldAW = oldW * 2
-    const oldAH = oldH * 2
-    c.features = c.features.map((f) => {
-      let nax, nay
-      if (dir > 0) {
-        // 90° CW: (ax, ay) → ((oldAH-1) - ay, ax)
-        nax = (oldAH - 1) - f.ay
-        nay = f.ax
-      } else {
-        // 90° CCW: (ax, ay) → (ay, (oldAW-1) - ax)
-        nax = f.ay
-        nay = (oldAW - 1) - f.ax
-      }
-      // Asymmetric footprints rotate too — swap the X/Z extents.
-      const newFootprintX = f.footprintZ || 1
-      const newFootprintZ = f.footprintX || 1
-      return {
-        ...f,
-        ax: nax,
-        ay: nay,
-        footprintX: newFootprintX,
-        footprintZ: newFootprintZ,
-      }
-    })
-  }
-
-  c.w = newW
-  c.h = newH
-  c.rotation = ((c.rotation || 0) + (dir > 0 ? 1 : 3)) & 3
-}
-
-// dropTerrainClipboard pastes the floating selection back into the map
-// at its current (tx, ty) position, clipping anything that hangs off
-// the edge.
-function dropTerrainClipboard() {
-  const c = state.terrainClipboard
-  if (!c) return
-  const mapAttrW = state.tileW * 2
-  const mapAttrH = state.tileH * 2
-  // A "paste features only" clipboard intentionally carries no tile or
-  // heightmap data; skip the tile overlay so the existing map under the
-  // dropped rectangle stays intact.  Features still re-attach below.
-  if (!c.skipTiles) {
-    for (let dy = 0; dy < c.h; dy++) {
-      for (let dx = 0; dx < c.w; dx++) {
-        const mx = c.tx + dx, my = c.ty + dy
-        if (mx < 0 || my < 0 || mx >= state.tileW || my >= state.tileH) continue
-        const cell = c.tiles[dy * c.w + dx]
-        if (cell) state.tiles[my * state.tileW + mx] = { ...cell }
-        for (let qy = 0; qy < 2; qy++) {
-          for (let qx = 0; qx < 2; qx++) {
-            const h = c.heights[(dy * 2 + qy) * (c.w * 2) + (dx * 2 + qx)]
-            state.heights[(my * 2 + qy) * mapAttrW + (mx * 2 + qx)] = h
-          }
-        }
-      }
-    }
-  }
-  // Re-attach the carried features.  Features whose anchor lands off-map
-  // after the move are dropped on the floor so they don't pollute the
-  // saved file.
-  if (c.features) {
-    for (const f of c.features) {
-      const nax = c.tx * 2 + f.ax
-      const nay = c.ty * 2 + f.ay
-      if (nax < 0 || nay < 0 || nax >= mapAttrW || nay >= mapAttrH) continue
-      state.features.push({ ...f, ax: nax, ay: nay })
-    }
-  }
-  state.terrainClipboard = null
-  hidePlacementHint()
-  setStatus('Terrain dropped.')
-  renderCanvas()
-}
-
-function cancelTerrainClipboard() {
-  if (!state.terrainClipboard) return
-  // We don't track the original capture origin, so cancelling just
-  // drops the clipboard back at its current position.
-  dropTerrainClipboard()
-}
-
-// ── System clipboard (Ctrl+C / Ctrl+V) ────────────────────────────────
-//
-// Serialises a terrain-rectangle selection to the OS clipboard so the
-// user can paste it back in the same tab — or in another KBot Studio
-// tab inside the same Chrome session — via Ctrl+V.  The payload is a
-// magic-prefixed JSON string (CLIP_PREFIX — see
-// ./ui/map-editor/constants.js); non-KBot clipboard contents are
-// ignored on paste.
-
-// extractTerrainRect pulls a non-destructive copy of a tile rectangle
-// + its attribute-cell heights + any features whose anchor lies inside
-// it.  Used by copyToClipboard so a Ctrl+C doesn't disturb the map the
-// way captureTerrain() (drag-to-move) does.
-function extractTerrainRect(x, y, w, h) {
-  const tiles = new Array(w * h).fill(null)
-  const heights = new Array(w * 2 * h * 2).fill(80)
-  const mapAttrW = state.tileW * 2
-  for (let dy = 0; dy < h; dy++) {
-    for (let dx = 0; dx < w; dx++) {
-      const mx = x + dx, my = y + dy
-      const cell = state.tiles[my * state.tileW + mx]
-      if (cell) tiles[dy * w + dx] = { ...cell }
-      for (let qy = 0; qy < 2; qy++) {
-        for (let qx = 0; qx < 2; qx++) {
-          const srcAY = my * 2 + qy
-          const srcAX = mx * 2 + qx
-          heights[(dy * 2 + qy) * (w * 2) + (dx * 2 + qx)] = state.heights[srcAY * mapAttrW + srcAX]
-        }
-      }
-    }
-  }
-  const minAX = x * 2, maxAX = (x + w) * 2
-  const minAY = y * 2, maxAY = (y + h) * 2
-  const features = []
-  for (const f of state.features) {
-    if (f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY) {
-      features.push({ ...f, ax: f.ax - minAX, ay: f.ay - minAY })
-    }
-  }
-  return { w, h, tiles, heights, features }
-}
-
-// clearRegion wipes tiles + heights + features inside the current
-// Select-Terrain rectangle.  Different from the Erase brush: this
-// clears the entire selection in one transactional shot, with a
-// status update and undo support.  No-op when nothing is selected.
-function clearRegion() {
-  const r = state.rectSelection
-  if (!r || r.w <= 0 || r.h <= 0) {
-    setStatus('Nothing to clear — make a Select-Terrain rectangle first.')
-    return
-  }
-  beginTransaction()
-  const mapAttrW = state.tileW * 2
-  let tilesCleared = 0
-  let heightsTouched = 0
-  for (let dy = 0; dy < r.h; dy++) {
-    for (let dx = 0; dx < r.w; dx++) {
-      const mx = r.x + dx, my = r.y + dy
-      const idx = my * state.tileW + mx
-      if (state.tiles[idx]) { state.tiles[idx] = null; tilesCleared++ }
-      for (let qy = 0; qy < 2; qy++) {
-        for (let qx = 0; qx < 2; qx++) {
-          const ay = my * 2 + qy
-          const ax = mx * 2 + qx
-          const ai = ay * mapAttrW + ax
-          if (state.heights[ai] !== 80) { state.heights[ai] = 80; heightsTouched++ }
-        }
-      }
-    }
-  }
-  const minAX = r.x * 2, maxAX = (r.x + r.w) * 2
-  const minAY = r.y * 2, maxAY = (r.y + r.h) * 2
-  const before = state.features.length
-  state.features = state.features.filter((f) => !(f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY))
-  const featuresRemoved = before - state.features.length
-  // Reset feature selection if any of its members disappeared.
-  if (state.selectedFeature >= 0 && state.selectedFeature >= state.features.length) state.selectedFeature = -1
-  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
-  commitTransaction(`Clear ${r.w}×${r.h} region`)
-  setStatus(`Cleared ${r.w}×${r.h} region — ${tilesCleared} tile(s), ${heightsTouched} height cell(s), ${featuresRemoved} feature(s).`)
-  renderCanvas()
-}
-
-// cutSelection = Copy + Clear region, all in one transactional shot.
-// Falls through cleanly if there's nothing to act on.
-async function cutSelection() {
-  // Build the clipboard payload synchronously so it survives any
-  // events that fire during the async clipboard write below.  Doing
-  // it in this order also means an aborted clipboard write doesn't
-  // leave the user with an unexpected "selection cleared but no
-  // paste available" state — the clear only happens once the payload
-  // is locked in.
-  let payload = null
-  if (state.terrainClipboard) {
-    const c = state.terrainClipboard
-    payload = { w: c.w, h: c.h, tiles: c.tiles, heights: c.heights, features: c.features }
-  } else if (state.rectSelection) {
-    const r = state.rectSelection
-    payload = extractTerrainRect(r.x, r.y, r.w, r.h)
-  }
-  if (!payload) {
-    setStatus('Nothing to cut — make a Select-Terrain rectangle first.')
-    return
-  }
-  // Clear synchronously *before* the clipboard write.  This way, an
-  // event firing during the await can't sneak in and lose
-  // state.rectSelection out from under clearRegion().  When the
-  // selection was already a terrainClipboard (drag-lifted), the
-  // source cells are already empty so no extra clear is needed.
-  const hadRectSelection = !!state.rectSelection
-  if (hadRectSelection) {
-    clearRegion()
-  } else if (state.terrainClipboard) {
-    // Drag-lifted content already has its source cells cleared (the
-    // captureTerrain that lifted it did that).  Cut should discard
-    // the lifted clipboard *without* re-pasting it — that's the
-    // point of cut vs. cancel.  Run inside a transaction so the
-    // operation is undoable.
-    beginTransaction()
-    state.terrainClipboard = null
-    hidePlacementHint()
-    commitTransaction(`Cut ${payload.w}×${payload.h} terrain`)
-    renderCanvas()
-  }
-  try {
-    await navigator.clipboard.writeText(CLIP_PREFIX + JSON.stringify(payload))
-    setStatus(`Cut ${payload.w}×${payload.h} terrain rectangle to clipboard.`)
-  } catch (err) {
-    // Clipboard permissions can deny the write (no document focus,
-    // sandbox, etc.).  The local clear already happened — flag it so
-    // the user knows their content isn't on the system clipboard.
-    setStatus(`Cut cleared the selection, but clipboard write failed: ${err.message || err}`)
-  }
-}
-
-// clearAllFeatures wipes every placed feature from the map.  Voids,
-// tiles and heights are left alone.  Annihilator names this
-// "Features → Clear All".
-function clearAllFeatures() {
-  if (!state.features || state.features.length === 0) {
-    setStatus('No features placed.')
-    return
-  }
-  beginTransaction()
-  const removed = state.features.length
-  state.features = []
-  state.selectedFeature = -1
-  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
-  commitTransaction(`Clear ${removed} feature(s)`)
-  setStatus(`Removed ${removed} feature(s) from the map.`)
-  renderCanvas()
-}
-
-// clearFeaturesInSelection removes only the features whose anchor
-// lies inside the current Select-Terrain rectangle.  Tiles + heights
-// untouched.  Annihilator's "Features → Clear Selection".
-function clearFeaturesInSelection() {
-  const r = state.rectSelection
-  if (!r || r.w <= 0 || r.h <= 0) {
-    setStatus('Nothing to clear — make a Select-Terrain rectangle first.')
-    return
-  }
-  const minAX = r.x * 2, maxAX = (r.x + r.w) * 2
-  const minAY = r.y * 2, maxAY = (r.y + r.h) * 2
-  const inside = state.features.filter((f) => f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY)
-  if (inside.length === 0) {
-    setStatus('No features inside the current selection.')
-    return
-  }
-  beginTransaction()
-  state.features = state.features.filter((f) => !(f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY))
-  state.selectedFeature = -1
-  if (state.selectedFeatures?.size) state.selectedFeatures.clear()
-  commitTransaction(`Clear ${inside.length} feature(s) in selection`)
-  setStatus(`Removed ${inside.length} feature(s) inside the selection.`)
-  renderCanvas()
-}
-
-async function copyToClipboard() {
-  let payload = null
-  if (state.terrainClipboard) {
-    const c = state.terrainClipboard
-    payload = { w: c.w, h: c.h, tiles: c.tiles, heights: c.heights, features: c.features }
-  } else if (state.rectSelection) {
-    const r = state.rectSelection
-    payload = extractTerrainRect(r.x, r.y, r.w, r.h)
-  }
-  if (!payload) {
-    setStatus('Nothing to copy — make a Select-Terrain rectangle first.')
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(CLIP_PREFIX + JSON.stringify(payload))
-    setStatus(`Copied ${payload.w}×${payload.h} terrain rectangle to clipboard.`)
-  } catch (err) {
-    setStatus(`Copy failed: ${err.message || err}`)
-  }
-}
-
-// pasteFromClipboard stages the clipboard payload as a terrainClipboard
-// the user can position then drop.  `mode` filters what comes along:
-//   'all'      — tiles + heights + features (default)
-//   'tiles'    — tiles + heights only; features dropped on the floor
-//   'features' — features only; tiles and heightmap left blank so a
-//                drop overlays the existing map without disturbing it
-async function pasteFromClipboard(mode = 'all') {
-  let text
-  try { text = await navigator.clipboard.readText() }
-  catch (err) { setStatus(`Paste failed: ${err.message || err}`); return }
-  if (!text || !text.startsWith(CLIP_PREFIX)) {
-    setStatus('Clipboard does not contain a KBot Studio selection.')
-    return
-  }
-  let payload
-  try { payload = JSON.parse(text.slice(CLIP_PREFIX.length)) }
-  catch { setStatus('Clipboard data is corrupted.'); return }
-  if (!payload || !Number.isInteger(payload.w) || !Number.isInteger(payload.h) || payload.w <= 0 || payload.h <= 0) {
-    setStatus('Clipboard data is invalid.')
-    return
-  }
-  // Drop any in-flight selection / placement so the pasted clipboard
-  // is the only thing the user has to drag around.
-  if (state.terrainClipboard) cancelTerrainClipboard()
-  cancelPlacement()
-  state.rectSelection = null
-  // Anchor at the cursor's last hover cell when available, else the
-  // map centre.  The user can drag from there before clicking outside
-  // to commit.
-  const w = payload.w, h = payload.h
-  let tx, ty
-  if (lastHoverCell) {
-    tx = clamp(lastHoverCell.tx - Math.floor(w / 2), 0, Math.max(0, state.tileW - w))
-    ty = clamp(lastHoverCell.ty - Math.floor(h / 2), 0, Math.max(0, state.tileH - h))
-  } else {
-    tx = Math.max(0, Math.floor((state.tileW - w) / 2))
-    ty = Math.max(0, Math.floor((state.tileH - h) / 2))
-  }
-  const includeTiles = mode === 'all' || mode === 'tiles'
-  const includeFeatures = mode === 'all' || mode === 'features'
-  state.terrainClipboard = {
-    tx, ty, w, h,
-    tiles: includeTiles
-      ? (payload.tiles || new Array(w * h).fill(null))
-      : new Array(w * h).fill(null),
-    heights: includeTiles
-      ? (payload.heights || new Array(w * 2 * h * 2).fill(80))
-      : new Array(w * 2 * h * 2).fill(80),
-    features: includeFeatures ? (payload.features || []) : [],
-    rotation: 0,
-    // When pasting tiles-only or features-only, mark the clipboard so
-    // dropTerrainClipboard can skip overlaying the empty layer the user
-    // didn't ask for.
-    skipTiles: !includeTiles,
-  }
-  if (state.mode !== 'select-terrain') setMode('select-terrain')
-  const what = mode === 'tiles' ? 'tiles' : mode === 'features' ? 'features' : 'terrain'
-  showPlacementHint(`Pasting ${w}×${h} ${what} rectangle`, 'section')
-  setStatus(`Pasted ${w}×${h} ${what}.  Drag to move, Q/E to rotate, click outside to drop, Esc to cancel.`)
-  renderCanvas()
-}
+// Terrain clipboard (capture / rotate / drop / cancel) and system
+// clipboard (Ctrl+C / Ctrl+V / Ctrl+X) + the region-clear helpers
+// (clearRegion, clearAllFeatures, clearFeaturesInSelection) now
+// live in ./ui/map-editor/clipboard.js — imported at the top of
+// this file.  Call sites in mouse routing / ribbon / keyboard
+// hand-off to those functions unchanged.
 
 // ── Select Features mode ───────────────────────────────────────────────────
 
