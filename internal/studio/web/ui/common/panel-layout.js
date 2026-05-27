@@ -26,7 +26,24 @@ import { persistPrefs } from './prefs.js'
 // panel-store + FloatingPanel's useLayoutEffect — skip them in
 // applyPanelLayout so the legacy panelLayout map doesn't trample
 // on the panel-store's restored coordinates.
-const REACT_MANAGED = new Set(['map-stats-panel', 'minimap-panel', 'camera-info-panel'])
+//
+// The set is populated at boot by the React mount layer
+// (registerReactPanels), not hard-coded here — common/ shouldn't
+// know which view owns which panel.  Each view's mount function
+// declares the ids it manages at React-mount time; this module
+// just consults the registry when restoring legacy layouts.
+const _reactManaged = new Set()
+
+export function registerReactPanels(ids) {
+  if (!ids) return
+  for (const id of ids) {
+    if (id) _reactManaged.add(id)
+  }
+}
+
+export function isReactManagedPanel(id) {
+  return _reactManaged.has(id)
+}
 
 // makePanelDraggable wires header → window mouse listeners so the
 // panel follows the cursor while clamped inside the canvas wrap.
@@ -118,7 +135,7 @@ export function applyPanelLayout() {
   if (!wrap) return
   const wr = wrap.getBoundingClientRect()
   for (const id of Object.keys(map)) {
-    if (REACT_MANAGED.has(id)) continue
+    if (_reactManaged.has(id)) continue
     const panel = document.getElementById(id)
     if (!panel) continue
     const saved = map[id]

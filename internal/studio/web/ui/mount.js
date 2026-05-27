@@ -16,6 +16,7 @@
 import { render } from 'preact'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { configurePanelPersistence, setPanelVisible } from '/ui/common/panel-store.js'
+import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
 import {
   SandboxRibbon, configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
@@ -268,6 +269,15 @@ export function mountMapEditor() {
   // Three floating panels.  Mount roots are siblings of `.canvas-wrap`'s
   // direct children so the existing `.minimap` / `.dev-stats` positioning
   // CSS works unchanged.
+  //
+  // The id list is also registered with the shared panel-layout module
+  // so its applyPanelLayout pass skips these three when it restores
+  // legacy positions — the React FloatingPanel layer owns their
+  // coordinates instead.  Keeping the registration adjacent to the
+  // mount call ensures the source of truth for "which panels are
+  // React-managed" lives where the panels are actually created.
+  const mapPanelIds = ['map-stats-panel', 'camera-info-panel', 'minimap-panel']
+  registerReactPanels(mapPanelIds)
   const wrap = document.querySelector('.canvas-wrap')
   if (wrap) {
     _mountInto('map-stats-panel',     () => html`<${MapStatsPanel} />`,     wrap)
