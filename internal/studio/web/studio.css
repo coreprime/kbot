@@ -1768,57 +1768,38 @@ kbd {
 }
 
 /* ── Placement hint overlay ────────────────────────────────────────── */
+/* Anchored to the bottom-right of the viewport (NOT inside the
+   scroll container) so it floats above every other UI element — the
+   ribbon, the floating panels, the canvas itself.  z-index sits
+   above the floating inspectors so the user always sees the
+   Q/E/F/G/Esc affordances while a placement is in flight. */
 .placement-hint {
-  position: sticky;
-  top: 12px;
-  left: 12px;
+  position: fixed;
+  bottom: 24px; /* anchored to the bottom-right corner */
+  right: 24px;
   display: inline-flex;
   align-items: center;
   gap: 12px;
   padding: 8px 14px;
-  background: rgba(20, 24, 32, 0.92);
+  background: rgba(20, 24, 32, 0.96);
   border: 1px solid var(--accent);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 40;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 9000;
   font-size: 13px;
-  margin: 12px;
   width: max-content;
-  backdrop-filter: blur(6px);
+  max-width: min(380px, calc(100vw - 48px));
+  backdrop-filter: blur(8px);
   pointer-events: none;
 }
 .placement-hint.hidden { display: none; }
 
 /* ── Rotation badge ───────────────────────────────────────────────── */
-/* Lives inside the scroll container but is *not* drawn on the canvas
-   itself — it's an HTML overlay so it stays a fixed CSS size
-   regardless of zoom.  Position is set in JS from the placement's
-   tx/ty scaled by state.zoom. */
-.rotation-badge {
-  position: absolute;
-  background: rgba(20, 24, 32, 0.95);
-  border: 2px solid rgba(139, 92, 246, 0.95);
-  border-radius: 6px;
-  padding: 6px 12px;
-  z-index: 40;
-  pointer-events: none;
-  white-space: nowrap;
-  font-family: var(--sans);
-  color: #e0d7ff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-}
-.rotation-badge.hidden { display: none; }
-.rotation-badge .rb-title {
-  font-weight: 600;
-  font-size: 16px;
-  line-height: 1.1;
-}
-.rotation-badge .rb-arrow { font-size: 18px; }
-.rotation-badge .rb-sub {
-  font-size: 11px;
-  color: rgba(220, 220, 220, 0.8);
-  margin-top: 2px;
-}
+/* Retired in round 33 — the placement-hint pill already shows the
+   Q/E/F/G affordances and the canvas preview itself is the live
+   rotation indicator.  Rule kept (deprecated) in case any third-
+   party extension re-injects the badge. */
+.rotation-badge { display: none; }
 .placement-hint .hint-keys {
   display: inline-flex;
   flex-direction: column;
@@ -2121,14 +2102,12 @@ kbd {
   min-width: 0;
   position: relative;
 }
+/* .canvas-toolbar — retired in round 30.  The strip used to host
+   #hover-cell above the canvas; that readout is now in the Camera &
+   Cursor floating panel.  Rule kept (deprecated) in case any
+   third-party extension re-injects the toolbar. */
 .canvas-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
+  display: none;
 }
 .btn[disabled] {
   opacity: 0.4;
@@ -2192,7 +2171,7 @@ canvas {
      so it overlays the scrolling canvas and stays put while the user
      pans/zooms. */
   position: absolute;
-  top: 48px; /* below the canvas-toolbar */
+  top: 12px; /* nestled in the top-right of .canvas-wrap */
   right: 12px;
   width: 216px;
   background: rgba(20, 24, 32, 0.92);
@@ -2269,7 +2248,7 @@ canvas {
 .dev-stats {
   /* Same visual language as the minimap so the two read as a pair. */
   position: absolute;
-  top: 272px; /* below the minimap (48 + 216 + a margin) */
+  top: 236px; /* below the minimap (12 + 216 + an 8px margin) */
   right: 12px;
   width: 216px;
   background: rgba(20, 24, 32, 0.92);
@@ -2326,7 +2305,7 @@ canvas {
 /* Feature info callout — pinned below the Stats panel using the same
    visual vocabulary so the three side panels read as a stack. */
 .feature-info {
-  top: 460px; /* below #dev-stats-panel (272 + ~180 body) */
+  top: 424px; /* below the map-stats-panel (236 + ~180 body + an 8px margin) */
   width: 232px;
 }
 .feature-info .dev-stats-header {
@@ -2336,11 +2315,11 @@ canvas {
    the Feature-info panel is hidden (no selection) this one shifts up
    to sit directly below Stats. */
 .camera-info {
-  top: 460px;
+  top: 424px;
   width: 232px;
 }
 #feature-info-panel:not(.hidden) ~ .camera-info {
-  top: 660px;
+  top: 624px;
 }
 
 /* ── Developer information dialog ──────────────────────────────────── */
@@ -3177,14 +3156,14 @@ canvas {
    list) renders an approximation if the GAF isn't shipped with the
    user's game data.  Hotspot 16 16 lines up with the GAF cursor's
    centre. */
-.mv-controls-arming-move #model-viewer-canvas {
+.mv-controls-arming-move .model-viewer-canvas {
   cursor: url('/api/studio/cursor/cursormove') 16 16,
           url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="11" fill="none" stroke="%2300dd33" stroke-width="2"/><line x1="16" y1="2" x2="16" y2="11" stroke="%2300dd33" stroke-width="2"/><line x1="16" y1="21" x2="16" y2="30" stroke="%2300dd33" stroke-width="2"/><line x1="2" y1="16" x2="11" y2="16" stroke="%2300dd33" stroke-width="2"/><line x1="21" y1="16" x2="30" y2="16" stroke="%2300dd33" stroke-width="2"/><circle cx="16" cy="16" r="2" fill="%2300dd33"/></svg>') 16 16,
           crosshair;
 }
-.mv-controls-arming-primary #model-viewer-canvas,
-.mv-controls-arming-secondary #model-viewer-canvas,
-.mv-controls-arming-tertiary  #model-viewer-canvas {
+.mv-controls-arming-primary .model-viewer-canvas,
+.mv-controls-arming-secondary .model-viewer-canvas,
+.mv-controls-arming-tertiary  .model-viewer-canvas {
   cursor: url('/api/studio/cursor/cursorattack') 16 16,
           url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"><path d="M4 4 L12 4 L12 6 L6 6 L6 12 L4 12 Z" fill="%23ff2222"/><path d="M28 4 L20 4 L20 6 L26 6 L26 12 L28 12 Z" fill="%23ff2222"/><path d="M4 28 L12 28 L12 26 L6 26 L6 20 L4 20 Z" fill="%23ff2222"/><path d="M28 28 L20 28 L20 26 L26 26 L26 20 L28 20 Z" fill="%23ff2222"/><circle cx="16" cy="16" r="2" fill="%23ff2222"/></svg>') 16 16,
           crosshair;

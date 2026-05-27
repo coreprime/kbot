@@ -826,7 +826,20 @@
          lands as a direct grid child of `.app` for `grid-area: tabs`. -->
     <div id="map-tabs-mount" style="display: contents"></div>
 
-    <div class="ribbon" id="ribbon">
+    <!-- Map editor ribbon is React-managed (see
+         /ui/map-editor/ribbon/map-ribbon.js).  The mount slot uses
+         `display: contents` so the inner `<div class="ribbon">` lands
+         as the immediate child of `.app` for grid-area: ribbon.  Host
+         calls configureMapRibbonBridge + publishRibbonState through
+         the React island. -->
+    <div id="ribbon-mount" style="display: contents"></div>
+    <!-- Legacy ribbon HTML retained ONLY inside a hidden template so
+         a few helpers that still querySelector the popup ids (the
+         resize / scatter / size dialogs poke at fields outside the
+         ribbon) don't break.  React's MapRibbon renders the live
+         ribbon above; this template stays inert. -->
+    <template id="legacy-ribbon-template">
+    <div class="ribbon" id="ribbon-legacy-template">
       <div class="ribbon-section">
         <div class="ribbon-label">File</div>
         <div class="ribbon-group ribbon-dropdown" id="file-dropdown">
@@ -1163,42 +1176,40 @@
         </div>
       </div>
     </div>
+    </template>
 
+    <!-- Sidebar — React-managed (see /ui/map-editor/tabs/sidebar.js).
+         The React MapSidebar mounts into #sidebar-tabs-mount and
+         renders only the tabs strip + filter row.  The #drawer is
+         kept as a sibling under the React mount slot — that way the
+         legacy renderDrawer pipeline keeps painting tile / feature
+         buttons into it without React's diff clobbering them on
+         every signal change. -->
     <aside class="sidebar">
-      <div class="tabs">
-        <button data-tab="sections" class="tab active">Sections</button>
-        <button data-tab="features" class="tab">Features</button>
-      </div>
-      <div class="filter">
-        <input type="search" id="filter" placeholder="Filter by name, world, group" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
-        <div class="filter-row">
-          <label class="filter-toggle hidden" id="filter-used-wrap" title="Only show features currently placed on the map">
-            <input type="checkbox" id="filter-used" />
-            <span>Used only</span>
-          </label>
-          <label class="filter-toggle hidden" id="filter-wreckage-wrap" title="Wreckage / corpses are filtered out by default">
-            <input type="checkbox" id="filter-wreckage" />
-            <span>Include wreckage</span>
-          </label>
-        </div>
-      </div>
+      <div id="sidebar-tabs-mount" style="display: contents"></div>
       <div id="drawer" class="drawer">
         <div class="loading">Loading sections…</div>
       </div>
     </aside>
 
     <main class="canvas-wrap">
-      <div class="canvas-toolbar">
-        <span id="hover-cell" class="muted">—</span>
-      </div>
+      <!-- The legacy `.canvas-toolbar` strip + #hover-cell readout
+           are gone — the Camera & Cursor floating panel (see
+           /ui/map-editor/panels/camera-cursor-panel.js) shows the
+           hovered tile + sub-tile + height + zoom in one place, so
+           the empty bar with just an em-dash above the canvas is
+           noise. -->
       <div class="canvas-scroll" id="canvas-scroll">
         <!-- canvas-stack starts empty; EditorView.mount() creates the
              #canvas-gl + #canvas elements on every map open/resize. -->
         <div class="canvas-stack" id="canvas-stack"></div>
-        <div class="rotation-badge hidden" id="rotation-badge">
-          <div class="rb-title"><span class="rb-arrow">↻</span> <span id="rb-angle">0°</span><span id="rb-flip"></span></div>
-          <div class="rb-sub">Q / E rotate · F / G flip</div>
-        </div>
+        <!-- The legacy `#rotation-badge` pill (showing "↻ 0° · Q / E
+             rotate · F / G flip") is gone in round 33 — its hint
+             text duplicates the placement-hint pill below it, and
+             the angle / flip indicators were redundant with the
+             live rotating preview on the canvas.  Rotation state
+             still tracks via state.placement.rotation; we just no
+             longer paint a separate badge for it. -->
         <div class="placement-hint hidden" id="placement-hint">
           <span id="placement-hint-label">Placing section</span>
           <span class="hint-keys" id="placement-hint-keys">
@@ -1216,30 +1227,11 @@
           </span>
         </div>
       </div>
-      <aside class="minimap" id="minimap-panel">
-        <div class="minimap-header" id="minimap-header" title="Drag to move">
-          <span class="minimap-grip">⠿</span>
-          <span>Map preview</span>
-          <button id="minimap-toggle" class="minimap-toggle" title="Collapse">−</button>
-          <button id="minimap-close" class="minimap-toggle" title="Close (toggle from View menu to bring back)">×</button>
-        </div>
-        <div class="minimap-body">
-          <canvas id="minimap" width="200" height="200"></canvas>
-          <div class="minimap-viewport" id="minimap-viewport"></div>
-        </div>
-      </aside>
-      <aside class="dev-stats" id="dev-stats-panel" title="Drag to move">
-        <div class="dev-stats-header" id="dev-stats-header">
-          <span class="minimap-grip">⠿</span>
-          <span>Stats</span>
-          <button id="dev-stats-toggle" class="minimap-toggle" title="Collapse">−</button>
-        </div>
-        <div class="dev-stats-body">
-          <div class="dev-stats-row"><span class="dev-stats-label">Distinct tiles</span><span class="dev-stats-value" id="dev-stats-distinct-tiles">0</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Distinct features</span><span class="dev-stats-value" id="dev-stats-distinct-features">0</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Total features</span><span class="dev-stats-value" id="dev-stats-total-features">0</span></div>
-        </div>
-      </aside>
+      <!-- Map preview (minimap), Stats, and Camera & Cursor panels
+           are React-managed (see /ui/map-editor/panels/).  The
+           floating Feature info callout below is still vanilla — it
+           tracks selection through updateFeatureInfoPanel() and
+           hasn't been migrated yet. -->
       <aside class="dev-stats feature-info hidden" id="feature-info-panel" title="Drag to move">
         <div class="dev-stats-header" id="feature-info-header">
           <span class="minimap-grip">⠿</span>
@@ -1253,20 +1245,6 @@
           <div class="dev-stats-row"><span class="dev-stats-label">Height</span><span class="dev-stats-value" id="fi-height">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Footprint</span><span class="dev-stats-value" id="fi-footprint">—</span></div>
           <div class="dev-stats-row"><span class="dev-stats-label">Category</span><span class="dev-stats-value" id="fi-category">—</span></div>
-        </div>
-      </aside>
-      <aside class="dev-stats camera-info" id="camera-info-panel" title="Drag to move">
-        <div class="dev-stats-header" id="camera-info-header">
-          <span class="minimap-grip">⠿</span>
-          <span>Camera &amp; Cursor</span>
-          <button id="camera-info-toggle" class="minimap-toggle" title="Collapse">−</button>
-        </div>
-        <div class="dev-stats-body">
-          <div class="dev-stats-row"><span class="dev-stats-label">Camera</span><span class="dev-stats-value" id="ci-camera">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Cursor</span><span class="dev-stats-value" id="ci-cursor">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Sub-tile</span><span class="dev-stats-value" id="ci-subtile">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Height</span><span class="dev-stats-value" id="ci-height">—</span></div>
-          <div class="dev-stats-row"><span class="dev-stats-label">Zoom</span><span class="dev-stats-value" id="ci-zoom">100%</span></div>
         </div>
       </aside>
     </main>

@@ -12,6 +12,68 @@ import {
 import { MvControls } from './mv-controls.js'
 let _mvControls = null
 
+// Map-editor-only literals + pure helpers — extracted into the
+// /ui/map-editor/ subfolder so other React components can pick them
+// up without dragging studio.js's runtime state along.  These are
+// strictly map-scoped: nothing here is referenced by the unit editor
+// or sandbox views.
+import {
+  TILE_PX,
+  VOID_COLOR,
+  MAX_START_POSITIONS,
+  QUALITY_CHECK_MIN_MS,
+  QUALITY_WINDOW_MIN_MS,
+  BUILDABLE_MAX_SLOPE,
+  BUILDABLE_FILL,
+  MAP_PAN_RATE_PX_S,
+  MAP_PAN_ACCEL_MAX_MULT,
+  MAP_PAN_ACCEL_TIME_MS,
+  WORLDS,
+  DRAWER_ITEM_HEIGHT,
+  DRAWER_OBSERVER_MARGIN,
+  UNDO_MAX,
+  HISTORY_FLYOUT_N,
+  CLIP_PREFIX,
+  FEATURE_HIT_SEARCH_TILES,
+  START_POS_RADIUS,
+  HM_HOLD_INTERVAL_MS,
+  DICE_PLAYER_COUNTS,
+  DICE_PIP_POSITIONS,
+  SCHEMA_PLAYER_COUNTS,
+} from './ui/map-editor/constants.js'
+import {
+  worldFor,
+  activeWorldsFor,
+  featureWorldMatches,
+  isWreckageFeature,
+  normalizedRect,
+  mulberry32,
+  defaultOTAState,
+  playerCountLabel,
+} from './ui/map-editor/helpers.js'
+
+// Host context — shared module-level state for every /ui/* subsystem.
+// MapDoc, the `state` Proxy, the tab registry, the DOM helpers and
+// the tiny utilities (setStatus / clamp / escapeHTML / …) all live
+// in one module so map-editor / unit-editor / sandbox code can import
+// them without dragging studio.js along.  See ./ui/host-context.js
+// for the rules — anything mutable across modules goes on a plain
+// object (`tabState.activeIndex`) because ES-module `let` exports
+// are read-only on the import side.
+import {
+  MapDoc,
+  tabs,
+  tabState,
+  activeMap,
+  state,
+  $,
+  $$,
+  setStatus,
+  clamp,
+  escapeHTML,
+  sanitiseFilename,
+} from './ui/host-context.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -28,377 +90,25 @@ let _mvControls = null
 // user stamps a section onto the map, we slice the corresponding 32×32
 // tile out of the section's tile-grid image at draw time.
 
-const TILE_PX = 32 // map render resolution (1 map tile = 32×32 css px)
-const VOID_COLOR = '#1d3045' // colour shown for unstamped cells
+// The numeric / string literal map-editor constants (TILE_PX,
+// VOID_COLOR, MAX_START_POSITIONS, the WORLDS table, ...) and the
+// pure helpers that consume them (worldFor, activeWorldsFor, ...)
+// live in ./ui/map-editor/{constants,helpers}.js and are imported at
+// the top of this file.  Keeping them out of studio.js lets the
+// React /ui tree share the same source of truth without a circular
+// dependency on the legacy host.
 
-// MAX_START_POSITIONS — the hard upper bound on how many StartPos entries
-// a schema can hold.  TA caps multiplayer at 10 players so the editor
-// never lets you place more than this.  Bump here if a future spinoff
-// supports more than 10.
-const MAX_START_POSITIONS = 10
+// Per-map state (MapDoc + PER_MAP_FIELDS + the `state` Proxy + the
+// tab registry + DOM helpers + the tiny string/clamp utilities) is
+// now exported from ./ui/host-context.js — see the import block at
+// the top of this file.  The single-source-of-truth lives there so
+// subsystem modules can mutate it without going through studio.js.
 
-// Quality Checker pacing.  The server can finish every check in tens of
-// ms which makes the dialog feel like a placebo — the user clicks Save
-// and the window flashes once.  These two minimums give every check
-// visible breathing room (250ms of "running" before its result is
-// revealed) and guarantee the window itself sticks around long enough
-// to read (1.5s total).  Bump if the dialog still feels rushed.
-const QUALITY_CHECK_MIN_MS = 250
-const QUALITY_WINDOW_MIN_MS = 1500
-
-// Buildable-area overlay tuning.  Matches TA's per-attribute-cell
-// build-grid rules well enough for an editor preview:
-//   - The cell can't be a void.
-//   - The cell can't be submerged below sea level (land structures
-//     are the common case; ship-pad cells light up only when the
-//     map has no impassible water, which the editor doesn't model
-//     here — close enough for a quick overlay).
-//   - The slope into every cardinal neighbour must stay within
-//     BUILDABLE_MAX_SLOPE height units.  12 is the middle of the
-//     stock TA structure MaxSlope range (3 for tank pads, 25 for
-//     KBot factories) and gives a generic "any builder could plant
-//     a factory here" answer.
-const BUILDABLE_MAX_SLOPE = 12
-const BUILDABLE_FILL = 'rgba(96, 180, 255, 0.34)'
-
-// Keyboard map navigation.  Held arrow keys pan continuously via a
-// requestAnimationFrame loop with a linear acceleration ramp from
-// 1× to MAP_PAN_ACCEL_MAX_MULT over MAP_PAN_ACCEL_TIME_MS — quick
-// taps stay precise, long holds race across big maps.  Speed is in
-// canvas-pixel space (i.e. pre-zoom) so the on-screen panning rate
-// stays constant regardless of zoom level.  Zoom step matches the
-// +/- toolbar buttons via state.settings.zoomStep.
-const MAP_PAN_RATE_PX_S = 720
-const MAP_PAN_ACCEL_MAX_MULT = 3
-const MAP_PAN_ACCEL_TIME_MS = 2000
-
-// ── Worlds ─────────────────────────────────────────────────────────────────
-// WORLDS is the single source of truth for the distinct worlds the editor
-// recognises.  One entry per world — Mars and Moon are their own rows
-// rather than being collapsed into "Mars / Desert" or "Moon / Lunar"
-// pairs.  Used to populate the New-map + OTA Properties planet pickers
-// AND to translate "Set as active" clicks on the sections drawer into a
-// state.planet value.
-//   slug:           matches the section drawer's world folder + the
-//                   value stored in state.planet (lowercased).
-//   label:          shown in pickers + drawer pills.
-//   defaultTileset: the canonical value written to the .ota's planet
-//                   field for this world (TA's stock OTAs use these
-//                   display-cased names).
-//   aliases:        additional strings (beyond slug + defaultTileset)
-//                   that should still resolve to this world on read.
-const WORLDS = [
-  { slug: 'greenworld',  label: 'Green',       defaultTileset: 'Green',  aliases: [] },
-  { slug: 'metal',       label: 'Metal',       defaultTileset: 'Metal',  aliases: [] },
-  { slug: 'mars',        label: 'Mars',        defaultTileset: 'Desert', aliases: [] },
-  { slug: 'moon',        label: 'Moon',        defaultTileset: 'Lunar',  aliases: [] },
-  { slug: 'archipelago', label: 'Archipelago', defaultTileset: 'Water',  aliases: [] },
-  { slug: 'lava',        label: 'Lava',        defaultTileset: 'Lava',   aliases: [] },
-  { slug: 'acid',        label: 'Acid',        defaultTileset: 'Acid',   aliases: [] },
-  { slug: 'slate',       label: 'Slate',       defaultTileset: 'Slate',  aliases: [] },
-]
-
-// worldFor resolves a world string (a slug, a default-tileset name, or
-// an alias) to its WORLDS entry.  Returns null when nothing matches.
-// Normalises whitespace/dashes so "Green World" → "greenworld".
-function worldFor(name) {
-  const w = (name || '').toLowerCase().replace(/[\s_-]+/g, '')
-  if (!w) return null
-  for (const t of WORLDS) {
-    if (t.slug === w) return t
-    if (t.defaultTileset.toLowerCase() === w) return t
-    for (const a of t.aliases) if (a.toLowerCase() === w) return t
-  }
-  return null
-}
-
-// ── Per-map state model ────────────────────────────────────────────────
-//
-// MapDoc owns one map's per-map state.  The editor maintains an array
-// of these (one per open tab); the active tab's MapDoc backs every
-// `state.X` read for any X in PER_MAP_FIELDS.  Switching tabs swaps
-// which MapDoc the Proxy points to — no data movement, just a pointer
-// flip — so nothing per-map can survive a tab change.
-//
-// Module-level lets that hold per-map editing state (undoStack /
-// redoStack / pendingTransaction / minimapBase, the scroll position)
-// snapshot to / restore from the MapDoc on every tab swap, since they
-// can't be expressed through the Proxy.
-
-const PER_MAP_FIELDS = new Set([
-  'tileW', 'tileH', 'name', 'planet',
-  'tiles', 'heights', 'voids', 'features',
-  'zoom', 'mode',
-  'ota', 'activeSchema',
-  'selected', 'placement', 'terrainClipboard', 'dragging', 'dropPreview',
-  'selectedFeature', 'selectedFeatures', 'selectedStartPos',
-  'rectSelection', 'pickerRect',
-  'featureJustMoved', 'startPosJustMoved',
-  'highlightFeatureName', 'hoveredFeatureName',
-  'eraseCursor', 'hmCursor', 'voidsCursor',
-  'hmLevelHeight',
-  // Sidebar drawer filter strings — typing "tree" while editing TabOne
-  // shouldn't carry over to TabTwo (#36).
-  'drawerFilters',
-  // Ruler measurement (per tab so the line doesn't follow you between
-  // maps).
-  'ruler',
-])
-
-class MapDoc {
-  constructor() {
-    this.tileW = 128
-    this.tileH = 128
-    this.name = 'newmap'
-    this.planet = 'Green'
-    this.tiles = []
-    this.heights = []
-    this.voids = []
-    this.features = []
-    this.zoom = 1
-    this.mode = 'select-terrain'
-    this.ota = null
-    this.activeSchema = 0
-    this.selected = null
-    this.placement = null
-    this.terrainClipboard = null
-    this.dragging = null
-    this.dropPreview = null
-    this.selectedFeature = -1
-    this.selectedFeatures = new Set()
-    this.selectedStartPos = -1
-    this.rectSelection = null
-    this.pickerRect = null
-    this.featureJustMoved = -1
-    this.startPosJustMoved = -1
-    this.highlightFeatureName = null
-    this.hoveredFeatureName = null
-    this.eraseCursor = null
-    this.hmCursor = null
-    this.voidsCursor = null
-    this.hmLevelHeight = 80
-    this.drawerFilters = { sections: '', features: '' }
-    // Ruler tool state — { a: {tx, ty}, b: {tx, ty}, locked }.  When
-    // null, no measurement is on screen.  Cleared on Escape.
-    this.ruler = null
-    // dirty flips to true on every commitTransaction and resets after a
-    // successful Save / Save-loose.  Closing a dirty tab triggers the
-    // unsaved-changes prompt (#40).
-    this.dirty = false
-    // Quality Checker fixes the user has already accepted for this map.
-    // Seeded into runQualityChecker() so subsequent saves don't keep
-    // re-prompting for the same approvals — once "Fix" sticks, the
-    // dialog auto-passes those checks and closes through to the save.
-    this.appliedFixes = new Set()
-    // Snapshotted module-level lets — see snapshot/restore helpers.
-    this.undoStack = []
-    this.redoStack = []
-    this.pendingTransaction = null
-    this.minimapBase = null
-    this.minimapBaseStale = true
-    this.scrollLeft = 0
-    this.scrollTop = 0
-  }
-}
-
-// Tabs[] holds one entry per open map.  activeTabIndex picks which is
-// currently shown / edited.  activeMap() is the only legitimate way to
-// reach the active per-map state inside this module.
-const tabs = []
-let activeTabIndex = -1
-function activeMap() {
-  const t = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
-  // Model tabs deliberately have no .map — callers all gracefully
-  // handle the null so the editor's map-only state stays inert when
-  // a 3DO tab is on top.
-  return t && t.type !== 'model' ? t.map : null
-}
-
-// Session-level state lives here.  These fields are shared across all
-// tabs: drawer filters, view-menu toggles, panel layout, the section /
-// feature catalogs and their image caches, and the user prefs the
-// PrefsStore persists.  PER_MAP_FIELDS are NOT on this object — the
-// Proxy below forwards them to activeMap().
-const sessionState = {
-  drawer: 'sections',
-  sectionsList: [],
-  featuresList: [],
-  sectionImages: new Map(),         // path → HTMLImageElement (raw, rotation=0)
-  sectionImagesRotated: new Map(),  // `${path}|${rot}` → HTMLCanvasElement
-  sectionHeights: new Map(),        // path → { w, h, heights[(w*2)*(h*2)] }
-  featureImages: new Map(),         // lowercased name → HTMLImageElement (animated)
-  collapsedGroups: new Set(),
-  usedOnly: false,
-  includeWreckage: false,
-  viewMode: 'map',
-  showGridlines: true,
-  animateFeatures: true,
-  showFeatures: true,
-  showMinimap: true,
-  showVoids: true,
-  showContours: false,
-  showBuildable: false,
-  showStartPositions: true,
-  showCameraInfo: true,
-  minimapPos: null,
-  panelLayout: {},
-  eraseSize: 1,
-  eraseScope: 'all',
-  hmTool: 'raise',
-  hmRadius: 4,
-  hmStrength: 4,
-  voidsBrushSize: 1,
-  symmetry: 'off',
-  // Centralised user-tunable settings.  Surfaced in the Settings
-  // dialog; persisted via PrefsStore alongside the visibility toggles.
-  settings: {
-    zoomStep: 1.25,
-    heartbeatIdleMs: 5000,
-    heartbeatReconnectMs: 1000,
-    defaultEraseSize: 1,
-    defaultVoidsSize: 1,
-    defaultHmRadius: 4,
-    defaultHmStrength: 4,
-  },
-}
-
-// `state` Proxy: per-map fields forward to activeMap(); everything else
-// reads/writes sessionState.  Keeps every existing `state.X` call site
-// working without rewriting it — the data has moved into MapDoc, but
-// the access surface is unchanged.
-const state = new Proxy(sessionState, {
-  get(target, prop) {
-    if (PER_MAP_FIELDS.has(prop)) return activeMap()?.[prop]
-    return target[prop]
-  },
-  set(target, prop, value) {
-    if (PER_MAP_FIELDS.has(prop)) {
-      const m = activeMap()
-      if (m) m[prop] = value
-      // Silently drop writes when no tab is active (boot / welcome screen).
-      return true
-    }
-    target[prop] = value
-    return true
-  },
-  has(target, prop) {
-    return PER_MAP_FIELDS.has(prop) || prop in target
-  },
-})
-
-// ── OTA defaults ───────────────────────────────────────────────────────────
-//
-// The OTA (Online Total Annihilation map metadata) ships alongside the
-// TNT in the saved .hpi.  We mirror the fields the in-game lobby reads
-// (mission name + planet + multiplayer schemas + start positions) so
-// the user has full control without hand-editing the file.
-
-function defaultOTAState(mapName, planet, tileW, tileH) {
-  return {
-    missionName: mapName || 'newmap',
-    missionDescription: 'Created with KBot Studio.',
-    missionHint: '',
-    brief: '',
-    narration: '',
-    glamour: '',
-    planet: planet || 'Green',
-    numPlayers: '2, 3, 4',
-    size: `${Math.max(1, Math.round(tileW / 16))} x ${Math.max(1, Math.round(tileH / 16))}`,
-    memory: '8 mb',
-    lineOfSight: 0,
-    mapping: 0,
-    tidalStrength: 20,
-    solarStrength: 20,
-    lavaWorld: planet?.toLowerCase() === 'lava' ? 1 : 0,
-    killmul: 50,
-    timemul: 0,
-    minWindSpeed: 200,
-    maxWindSpeed: 2500,
-    gravity: 112,
-    seaLevel: 63,
-    impassibleWater: 0,
-    waterDoesDamage: 0,
-    schemas: [defaultSchema('Default', 'Network 1', tileW, tileH)],
-  }
-}
-
-function defaultSchema(name, type, tileW, tileH) {
-  return {
-    name,
-    type,
-    aiProfile: 'DEFAULT',
-    surfaceMetal: 3,
-    mohoMetal: 30,
-    humanMetal: 1000,
-    computerMetal: 1000,
-    humanEnergy: 1000,
-    computerEnergy: 1000,
-    meteorWeapon: '',
-    meteorRadius: 0,
-    meteorDensity: 0,
-    meteorDuration: 0,
-    meteorInterval: 0,
-    startPositions: defaultStartPositionsForSchema(tileW, tileH),
-  }
-}
-
-// 10 default start spots spread around the map (corners → edge midpoints
-// → centre fills).  Game pixel coords: 1 tile = 32 game-px.
-function defaultStartPositionsForSchema(tileW, tileH) {
-  const px = tileW * 32
-  const py = tileH * 32
-  const margin = Math.max(64, Math.min(px, py) / 8)
-  return [
-    { number: 1, x: Math.round(margin), z: Math.round(margin) },
-    { number: 2, x: Math.round(px - margin), z: Math.round(py - margin) },
-    { number: 3, x: Math.round(px - margin), z: Math.round(margin) },
-    { number: 4, x: Math.round(margin), z: Math.round(py - margin) },
-    { number: 5, x: Math.round(px / 2), z: Math.round(margin) },
-    { number: 6, x: Math.round(px / 2), z: Math.round(py - margin) },
-    { number: 7, x: Math.round(margin), z: Math.round(py / 2) },
-    { number: 8, x: Math.round(px - margin), z: Math.round(py / 2) },
-    { number: 9, x: Math.round(px / 3), z: Math.round(py / 2) },
-    { number: 10, x: Math.round(px * 2 / 3), z: Math.round(py / 2) },
-  ]
-}
-
-// activeWorldsFor resolves a planet/tileset string to the list of
-// section worlds that count as "matching".  state.planet can hold
-// either a slug ("mars") or a default-tileset name ("Desert"); WORLDS
-// covers both so we route through worldFor.
-function activeWorldsFor(planet) {
-  const t = worldFor(planet)
-  if (t) return [t.slug]
-  const p = (planet || '').toLowerCase()
-  return p ? [p] : []
-}
-
-// featureWorldMatches returns true when a feature's world string should
-// count as part of the active tileset.  Feature TDFs use slightly different
-// world names (e.g. "Green World", "All Worlds") than the section folder
-// layout, so we normalise both sides before comparing and consult WORLDS
-// for the default-tileset + alias spellings of each active slug.
-function featureWorldMatches(featureWorld, activeWorlds) {
-  if (!activeWorlds.length) return true
-  const w = (featureWorld || '').toLowerCase().replace(/[\s_-]+/g, '')
-  if (w.includes('allworlds')) return true
-  for (const a of activeWorlds) {
-    const norm = a.toLowerCase().replace(/[\s_-]+/g, '')
-    if (w.includes(norm)) return true
-    const t = worldFor(norm)
-    if (!t) continue
-    if (w.includes(t.defaultTileset.toLowerCase())) return true
-    for (const alias of t.aliases) {
-      if (w.includes(alias.toLowerCase())) return true
-    }
-  }
-  return false
-}
-
-// ── DOM helpers ────────────────────────────────────────────────────────────
-
-const $ = (sel) => document.querySelector(sel)
-const $$ = (sel) => Array.from(document.querySelectorAll(sel))
+// OTA defaults (defaultOTAState / defaultSchema /
+// defaultStartPositionsForSchema) and world-resolution helpers
+// (activeWorldsFor, featureWorldMatches) now live in
+// ./ui/map-editor/helpers.js — see the import block at the top of
+// this file.
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 
@@ -576,9 +286,9 @@ function persistPrefs() {
 // ── Multi-tab management ────────────────────────────────────────────
 //
 // Each open map has one entry in `tabs` ({ map: MapDoc }) and one
-// chip in the #map-tabs row.  activeTabIndex picks which is currently
+// chip in the #map-tabs row.  tabState.activeIndex picks which is currently
 // shown; the state Proxy forwards per-map field reads/writes to
-// tabs[activeTabIndex].map.
+// tabs[tabState.activeIndex].map.
 //
 // On a tab swap we:
 //   1) Snapshot module-level lets (undoStack/redoStack/pending
@@ -586,15 +296,15 @@ function persistPrefs() {
 //      into the outgoing tab.
 //   2) Abort transient gesture state (panning, painting in progress,
 //      drag offsets) — switching tabs always cancels mid-gesture work.
-//   3) Move activeTabIndex.
+//   3) Move tabState.activeIndex.
 //   4) Restore the new tab's module-level lets.
 //   5) Recreate the canvas DOM + GL context via recreateEditorView()
 //      so the new map renders from a clean surface.
 //   6) Render + restore scroll.
 
 function snapshotActiveTabModuleLets() {
-  if (activeTabIndex < 0) return
-  const tab = tabs[activeTabIndex]
+  if (tabState.activeIndex < 0) return
+  const tab = tabs[tabState.activeIndex]
   // Model tabs have no .map / undo stack — bail out so we don't
   // throw on `m.undoStack = ...` when the outgoing tab is a 3DO.
   if (!tab || !tab.map) return
@@ -612,8 +322,8 @@ function snapshotActiveTabModuleLets() {
 }
 
 function restoreActiveTabModuleLets() {
-  if (activeTabIndex < 0) return
-  const tab = tabs[activeTabIndex]
+  if (tabState.activeIndex < 0) return
+  const tab = tabs[tabState.activeIndex]
   // Same guard as snapshot — model tabs carry no map state.
   if (!tab || !tab.map) return
   const m = tab.map
@@ -686,26 +396,68 @@ function unsavedChangesDialog({ mapName } = {}) {
 async function closeTab(idx) {
   if (idx < 0 || idx >= tabs.length) return
   const tab = tabs[idx]
-  // Model tabs have no dirty/save concept — just unhook GPU buffers
-  // (the model3d module handles disposal when the next open() runs
-  // or on viewer dispose) and drop the entry.
+  // Model tabs have no dirty/save concept — but their viewer (the
+  // per-tab SandboxView for sandbox tabs, or the shared modelViewer-
+  // Instance for unit tabs) owns a live renderer + audio pool + COB
+  // runtime + engine.  Closing the tab must tear those down or
+  // backgrounded sounds + weapons keep ticking after the user
+  // dismissed them (the renderer keeps RAFing, audio keeps playing,
+  // projectiles keep flying — the engine has no idea its tab is
+  // gone).  Per-tab sandboxes own their own SandboxView; dispose() is
+  // a hard tear-down.  Unit tabs all share modelViewerInstance, so we
+  // only dispose that when the LAST unit tab closes (next user click
+  // will lazy-rebuild it).
   if (tab.type === 'model') {
+    if (tab.viewer && typeof tab.viewer.dispose === 'function') {
+      // Tear the per-tab viewer down hard: pause its runtime,
+      // silence audio, dispose every binding's audio pool, then
+      // dispose the renderer.  Both ModelViewer and SandboxView
+      // implement dispose() identically enough that the same call
+      // covers both.  Unit-tab viewers also own a per-tab
+      // MvControls — dispose it explicitly so its TA-cursor host
+      // doesn't outlive the canvas.
+      try {
+        const rt = tab.viewer.cob && tab.viewer.cob.runtime
+        if (rt && typeof rt.setPaused === 'function') rt.setPaused(true)
+        if (tab.viewer.cob && tab.viewer.cob.audio
+            && typeof tab.viewer.cob.audio.dispose === 'function') {
+          tab.viewer.cob.audio.dispose()
+        }
+        if (typeof tab.viewer.setSilenced === 'function') tab.viewer.setSilenced(true)
+        if (tab.viewer._mvControls && typeof tab.viewer._mvControls.dispose === 'function') {
+          tab.viewer._mvControls.dispose()
+          tab.viewer._mvControls = null
+        }
+        tab.viewer.dispose()
+      } catch { /* ignore */ }
+      // Drop the global aliases when the closed tab WAS the active
+      // viewer — switchToTab below will promote a different tab's
+      // viewer into the alias slot.  Clearing first avoids a brief
+      // window where modelViewerInstance / _mvControls point at a
+      // disposed corpse.
+      if (sandboxViewInstance === tab.viewer) sandboxViewInstance = null
+      if (modelViewerInstance === tab.viewer) {
+        modelViewerInstance = null
+        _mvControls = null
+      }
+      tab.viewer = null
+    }
     tabs.splice(idx, 1)
     if (tabs.length === 0) {
-      activeTabIndex = -1
+      tabState.activeIndex = -1
       $('#model-viewer-dialog').classList.add('hidden')
       showWelcomeAfterLastTabClose()
       return
     }
-    if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1
-    switchToTab(activeTabIndex, { fresh: false, force: true })
+    if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
+    switchToTab(tabState.activeIndex, { fresh: false, force: true })
     return
   }
   // Prompt before closing a dirty tab.  Move focus to that tab first
   // so the user can see what they're about to lose AND so a 'Save'
   // choice operates on this tab's data (save() reads state).
   if (tab.map.dirty) {
-    if (idx !== activeTabIndex) switchToTab(idx, { force: true })
+    if (idx !== tabState.activeIndex) switchToTab(idx, { force: true })
     const choice = await unsavedChangesDialog({ mapName: mapDisplayName(tab.map) })
     if (choice === 'cancel') return
     if (choice === 'save') {
@@ -716,19 +468,19 @@ async function closeTab(idx) {
   // If the user is closing the currently-active tab, snapshot in-flight
   // module-let state into a doomed MapDoc anyway so the closing tab's
   // last edit can't taint the next tab's restore.
-  if (idx === activeTabIndex) snapshotActiveTabModuleLets()
+  if (idx === tabState.activeIndex) snapshotActiveTabModuleLets()
   tabs.splice(idx, 1)
   if (tabs.length === 0) {
-    activeTabIndex = -1
+    tabState.activeIndex = -1
     showWelcomeAfterLastTabClose()
     return
   }
   // Pick the previous tab if we closed the active one; otherwise stay
   // on the same active map.
-  if (idx <= activeTabIndex) activeTabIndex = Math.max(0, activeTabIndex - (idx === activeTabIndex ? 0 : 0))
-  if (activeTabIndex >= tabs.length) activeTabIndex = tabs.length - 1
+  if (idx <= tabState.activeIndex) tabState.activeIndex = Math.max(0, tabState.activeIndex - (idx === tabState.activeIndex ? 0 : 0))
+  if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
   // Re-activate with restore semantics so the now-front tab repaints.
-  switchToTab(activeTabIndex, { fresh: false, force: true })
+  switchToTab(tabState.activeIndex, { fresh: false, force: true })
 }
 
 function showWelcomeAfterLastTabClose() {
@@ -742,8 +494,8 @@ function showWelcomeAfterLastTabClose() {
 
 function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   if (nextIdx < 0 || nextIdx >= tabs.length) return
-  if (!force && nextIdx === activeTabIndex) return
-  const outgoing = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  if (!force && nextIdx === tabState.activeIndex) return
+  const outgoing = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   const incoming = tabs[nextIdx]
 
   // Close every open thread-debugger panel — they point at the
@@ -755,8 +507,18 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // Snapshot the outgoing MAP tab.  Model tabs hold no module-let
   // state, so the snapshot/restore dance is bypassed for them.
   if (!fresh && outgoing && outgoing.type !== 'model') snapshotActiveTabModuleLets()
+  // Pause the outgoing tab's simulation so its weapons / scripts /
+  // particles / sounds freeze instead of churning in the background.
+  // We REMEMBER the prior paused state on the tab itself so a user
+  // who explicitly paused (Pause button) keeps that intent; one who
+  // had it running comes back to a running tab.  The shared
+  // modelViewerInstance applies for non-sandbox unit tabs; sandbox
+  // tabs each own their own SandboxView's scene/runtime.
+  if (!fresh && outgoing && outgoing.type === 'model') {
+    pauseOutgoingTabRuntime(outgoing)
+  }
   abortTransientGestureState()
-  activeTabIndex = nextIdx
+  tabState.activeIndex = nextIdx
 
   // Route on tab type.  Model tabs slot the viewer overlay over
   // the editor's content area while leaving the shared topbar +
@@ -781,44 +543,25 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       const sp = document.getElementById('sandbox-panel')
       if (sp) sp.classList.add('hidden')
       $('#model-viewer-dialog')?.classList.remove('sandbox-mode')
-      // Stop the sandbox renderer's RAF loop while a single-unit tab
-      // owns the screen — no point burning frames on a hidden scene,
-      // and the shared canvas would otherwise see two RAF loops racing
-      // on it.  Renderer resumes on the next sandbox-tab activation.
-      // Also wipe the canvas so the previous tab's last frame doesn't
-      // bleed through while the incoming tab paints its first frame.
-      // Silence audio across EVERY sandbox tab so a backgrounded
-      // sandbox's firing sounds don't keep playing while the unit
-      // editor owns the screen.  The sim itself keeps ticking — only
-      // the audio output mutes.
+      // Silence audio on every backgrounded viewer (unit + sandbox).
+      // activateModelTab re-un-silences the incoming tab below.
       for (const t of tabs) {
         const v = t && t.viewer
         if (v && typeof v.setSilenced === 'function') {
           try { v.setSilenced(true) } catch { /* ignore */ }
         }
       }
+      // Stop the currently-active sandbox renderer (if any) so the
+      // RAF loop releases the canvas slot for the incoming unit tab.
       if (sandboxViewInstance && sandboxViewInstance.renderer) {
         try {
           sandboxViewInstance.renderer.stop?.()
           sandboxViewInstance.renderer.clearCanvas?.()
         } catch { /* ignore */ }
       }
-      // Detach EVERY sandbox tab's canvas from the stage and pull
-      // the shared single-unit canvas back in so the unit editor
-      // has a surface to draw onto.  Use the cached reference —
-      // once a sandbox tab has detached the shared canvas,
-      // document.getElementById no longer finds it (it's out of
-      // the document tree), and the re-mount would silently no-op.
-      const stage = document.querySelector('.model-viewer-stage')
-      if (stage) {
-        for (const t of tabs) {
-          if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
-        }
-        const sharedCanvas = sharedModelViewerCanvas()
-        if (sharedCanvas && sharedCanvas.parentNode !== stage) {
-          stage.appendChild(sharedCanvas)
-        }
-      }
+      // activateModelTab handles canvas attach / detach itself
+      // (per-tab ModelViewer + canvas, round 34).  No legacy
+      // shared-canvas reattach needed.
       void activateModelTab(incoming)
     }
     return
@@ -878,7 +621,7 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   // Restore scroll AFTER the new canvases are sized; canvas-scroll's
   // scrollLeft/Top is clamped to the live scrollWidth/Height, which
   // wouldn't exist before mount.
-  const tab = tabs[activeTabIndex]
+  const tab = tabs[tabState.activeIndex]
   if (tab) {
     const scroll = document.querySelector('#canvas-scroll')
     if (scroll) {
@@ -886,6 +629,67 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       scroll.scrollTop = tab.map.scrollTop || 0
     }
   }
+}
+
+// pauseOutgoingTabRuntime freezes the simulation on a model / sandbox
+// tab the user is leaving.  Pausing the runtime is the canonical
+// way to stop every downstream tick the engine drives — weapon
+// state machines, projectile movement, particle pools, AudioPool
+// (gated on runtime.paused via the engine's per-binding tick), and
+// the cob bytecode interpreter itself.  Without this the renderer's
+// RAF is stopped on switch but the engine kept running through the
+// next requestAnimationFrame the host inevitably schedules, so the
+// user heard weapons + acks fire in a backgrounded tab.
+//
+// `_pausedBeforeSwitch` is stashed on the tab itself: a user who had
+// explicitly clicked Pause should still see "paused" when they
+// return, and a tab that was running should resume on the way back.
+function pauseOutgoingTabRuntime(tab) {
+  if (!tab || tab.type !== 'model') return
+  // Sandbox tabs each have their own SandboxView with its own
+  // engine + runtime.  Unit tabs (round 34) each have their own
+  // ModelViewer + runtime.  Pausing the per-tab runtime is enough —
+  // the per-binding tick reads `runtime.paused` and skips weapons,
+  // scripts, and movement when set.  No cross-tab trampling.
+  const rt = tab.sandbox
+    ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
+    : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
+  if (!rt || typeof rt.setPaused !== 'function') return
+  tab._pausedBeforeSwitch = !!rt.paused
+  if (!rt.paused) rt.setPaused(true)
+  // Also silence the viewer's audio on the way out so paused-but-
+  // playing audio elements don't sit half-decoded in the browser.
+  // For sandboxes this is engine-wide via setSilenced; for unit
+  // tabs the ModelViewer.setSilenced helper does the right thing.
+  if (tab.viewer && typeof tab.viewer.setSilenced === 'function') {
+    try { tab.viewer.setSilenced(true) } catch { /* ignore */ }
+  }
+  // Stop the outgoing tab's renderer so its RAF loop releases the
+  // canvas and doesn't fight the incoming tab for the GL slot.
+  // renderer.stop() is idempotent + cheap.
+  if (tab.viewer && tab.viewer.renderer && typeof tab.viewer.renderer.stop === 'function') {
+    try { tab.viewer.renderer.stop() } catch { /* ignore */ }
+  }
+}
+
+// resumeIncomingTabRuntime restores the paused state the user had
+// before they switched away.  Called from activateModelTab /
+// activateSandboxTab after the renderer is re-started so the very
+// next tick lands the right paused/running state.  Safe to call
+// when no prior snapshot exists (fresh tab) — leaves runtime as-is.
+function resumeIncomingTabRuntime(tab) {
+  if (!tab || tab.type !== 'model') return
+  const wasPaused = tab._pausedBeforeSwitch
+  tab._pausedBeforeSwitch = undefined
+  const rt = tab.sandbox
+    ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
+    : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
+  if (!rt || typeof rt.setPaused !== 'function') return
+  // If the user had it running before, un-pause now.  Explicitly
+  // skipping the call when `wasPaused === undefined` keeps a freshly
+  // loaded tab's default paused=false intact.
+  if (wasPaused === false && rt.paused) rt.setPaused(false)
+  else if (wasPaused === true && !rt.paused) rt.setPaused(true)
 }
 
 // mapDisplayName returns the friendly label for a MapDoc — prefers the
@@ -900,12 +704,12 @@ function mapDisplayName(m) {
 
 function renderMapTabs() {
   // Tab strip is React-managed (see /ui/common/tab-bar.js).  Push the
-  // current tabs[] + activeTabIndex into the React state signal each
+  // current tabs[] + tabState.activeIndex into the React state signal each
   // time the host's tab list mutates (open / close / switch).  No-op
   // when the React UI hasn't loaded yet (the next setTabs after boot
   // catches up).
   if (_reactUi && typeof _reactUi.setTabs === 'function') {
-    _reactUi.setTabs(tabs, activeTabIndex)
+    _reactUi.setTabs(tabs, tabState.activeIndex)
   }
 }
 
@@ -936,7 +740,7 @@ function wireMapTabBar() {
     // Push the current tab list into the React state so the bar paints
     // its initial render with whatever was already open (e.g. when this
     // runs after a tab has already been added at boot).
-    if (typeof ui.setTabs === 'function') ui.setTabs(tabs, activeTabIndex)
+    if (typeof ui.setTabs === 'function') ui.setTabs(tabs, tabState.activeIndex)
   })()
 }
 
@@ -1164,7 +968,7 @@ function closeOpenDialog() {
   // in front before.  Without this an active model tab leaves the
   // editor's .app on screen with no map loaded, which the user reads
   // as "the viewer broke".
-  const active = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const active = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   if (active?.type === 'model') {
     $('#model-viewer-dialog').classList.remove('hidden')
   } else if (active?.type === 'map') {
@@ -1781,9 +1585,9 @@ async function openLoadedMap(data, card) {
   // minimap doesn't leak across.  Subsequent state.X writes land
   // in this new MapDoc — the prior tab keeps its own state intact
   // in tabs[], reachable by clicking back.
-  if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
+  if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
   tabs.push({ type: 'map', map: new MapDoc() })
-  activeTabIndex = tabs.length - 1
+  tabState.activeIndex = tabs.length - 1
   restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
@@ -1866,7 +1670,7 @@ async function openLoadedMap(data, card) {
   renderMapTabs()
   // Refresh the shared topbar + footer hints from this new map tab,
   // otherwise they keep the previous (model) tab's strings.
-  updateTopbarDocInfo(tabs[activeTabIndex])
+  updateTopbarDocInfo(tabs[tabState.activeIndex])
 
   // Wire up the canvas + drawer just like startEditor would have done
   // for a fresh map.
@@ -1907,9 +1711,9 @@ async function startEditor() {
   // state (minimapBase especially) resets to the new tab's defaults
   // — otherwise the previous map's minimap leaks into the new one
   // until the next commit.
-  if (activeTabIndex >= 0) snapshotActiveTabModuleLets()
+  if (tabState.activeIndex >= 0) snapshotActiveTabModuleLets()
   tabs.push({ type: 'map', map: new MapDoc() })
-  activeTabIndex = tabs.length - 1
+  tabState.activeIndex = tabs.length - 1
   restoreActiveTabModuleLets()
   state.tileW = w
   state.tileH = h
@@ -1949,7 +1753,7 @@ async function startEditor() {
   $('#model-viewer-dialog')?.classList.add('hidden')
   $('#app').classList.remove('hidden')
   renderMapTabs()
-  updateTopbarDocInfo(tabs[activeTabIndex])
+  updateTopbarDocInfo(tabs[tabState.activeIndex])
 
   await finishEditorBoot()
 }
@@ -1960,28 +1764,15 @@ async function startEditor() {
 // Network N schemas when the editor starts.  At least one count must
 // stay selected so the editor always has a schema to render.
 
-const DICE_PLAYER_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+// DICE_PLAYER_COUNTS + PLAYER_COUNT_NAMES + playerCountLabel are
+// imported from ./ui/map-editor/.  dicePicked is module-local
+// editing state for the size dialog, so it stays here.
 const dicePicked = new Set([8]) // sensible default — a single 8-player schema
 
 function pickedPlayerCounts() {
   const sorted = Array.from(dicePicked).sort((a, b) => a - b)
   return sorted.length > 0 ? sorted : [4]
 }
-
-// PLAYER_COUNT_NAMES — used for both the dice picker caption and the
-// schema row labels so the wording stays consistent everywhere.
-const PLAYER_COUNT_NAMES = {
-  2: 'Two Players',
-  3: 'Three Players',
-  4: 'Four Players',
-  5: 'Five Players',
-  6: 'Six Players',
-  7: 'Seven Players',
-  8: 'Eight Players',
-  9: 'Nine Players',
-  10: 'Ten Players',
-}
-function playerCountLabel(n) { return PLAYER_COUNT_NAMES[n] || `${n} Players` }
 
 // populateWorldSelect rewrites a <select>'s options from the WORLDS
 // table.  `valueKind` picks whether the option value is the slug
@@ -2047,23 +1838,7 @@ function buildDicePips(n) {
   return wrap
 }
 
-// DICE_PIP_POSITIONS — each entry is a list of [x, y] normalised to
-// the pip area (0..1).  Faces 1..6 are the canonical d6 layouts; 7..10
-// extend the pattern dominos-style (3-1-3, 3-2-3, 3-3-3, 4-2-4).  The
-// arrays here are what's actually rendered, so the dot count matches
-// the player count by construction.
-const DICE_PIP_POSITIONS = {
-  1:  [[0.50, 0.50]],
-  2:  [[0.25, 0.25], [0.75, 0.75]],
-  3:  [[0.22, 0.22], [0.50, 0.50], [0.78, 0.78]],
-  4:  [[0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]],
-  5:  [[0.22, 0.22], [0.78, 0.22], [0.50, 0.50], [0.22, 0.78], [0.78, 0.78]],
-  6:  [[0.25, 0.18], [0.75, 0.18], [0.25, 0.50], [0.75, 0.50], [0.25, 0.82], [0.75, 0.82]],
-  7:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.50, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
-  8:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.22, 0.50], [0.78, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
-  9:  [[0.22, 0.18], [0.50, 0.18], [0.78, 0.18], [0.22, 0.50], [0.50, 0.50], [0.78, 0.50], [0.22, 0.82], [0.50, 0.82], [0.78, 0.82]],
-  10: [[0.18, 0.18], [0.39, 0.18], [0.61, 0.18], [0.82, 0.18], [0.32, 0.50], [0.68, 0.50], [0.18, 0.82], [0.39, 0.82], [0.61, 0.82], [0.82, 0.82]],
-}
+// DICE_PIP_POSITIONS lives in ./ui/map-editor/constants.js.
 
 // finishEditorBoot wires the toolbar / canvas / drawer and loads the
 // section + feature catalogs.  Called from both the New-map and
@@ -2094,7 +1869,12 @@ async function finishEditorBoot() {
   recreateEditorView()
   // Reflect the active map's drawer filter in the sidebar input.  Per-tab
   // filters live on MapDoc, so the previous tab's "tree-A" must not leak
-  // into the new map's empty filter (#36).
+  // into the new map's empty filter (#36).  The React MapSidebar reads
+  // the live filter off sidebarFilter; publishMapSidebarState pushes
+  // the new tab's value into the signal so the input flips on the next
+  // commit.  Direct DOM writes also retained for backwards compat with
+  // any external instrumentation that scrapes the input's `.value`.
+  publishMapSidebarState()
   const filterInput = document.querySelector('#filter')
   if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
   // Don't poke canvas.width here on a mid-session swap.  renderCanvas
@@ -2192,48 +1972,25 @@ function centerViewOnMap() {
 // ── Sidebar drawer ─────────────────────────────────────────────────────────
 
 function wireTabs() {
-  $$('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => switchTab(btn.dataset.tab))
-  })
-  $('#filter').addEventListener('input', (e) => {
-    // Remember the filter per-tab — typing on Sections shouldn't
-    // narrow what's visible on Features when the user switches.
-    state.drawerFilters[state.drawer] = e.target.value
-    renderDrawer()
-    persistPrefs()
-  })
-  $('#filter-used').addEventListener('change', (e) => {
-    state.usedOnly = e.target.checked
-    renderDrawer()
-    persistPrefs()
-  })
-  $('#filter-wreckage').addEventListener('change', (e) => {
-    state.includeWreckage = e.target.checked
-    renderDrawer()
-    persistPrefs()
-  })
+  // Sidebar tabs + filter row are React-managed now (see
+  // /ui/map-editor/tabs/sidebar.js).  Click / input handlers route
+  // through configureSidebarBridge, which the React tree installs.
+  // Nothing left to wire here, but the publishMapSidebarState call
+  // ensures the React signals reflect the live state every time we
+  // re-enter the editor (File → New / Open / etc.).
+  publishMapSidebarState()
 }
 
 // ── Mode toolbar + View menu wiring ────────────────────────────────────────
 
 function wireModeToolbar() {
-  // Mode is now a dropdown — the popup hosts the menu rows, and the
-  // visible button shows the current selection.
-  const btn = $('#mode-dropdown-btn')
-  const popup = $('#mode-dropdown-popup')
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    closeAllRibbonDropdowns(popup)
-    positionRibbonPopup(btn, popup)
-    popup.classList.toggle('hidden')
-  })
-  $$('#mode-dropdown-popup .menu-row').forEach((row) => {
-    row.addEventListener('click', () => {
-      setMode(row.dataset.mode)
-      popup.classList.add('hidden')
-    })
-  })
-  refreshModeDropdown()
+  // The Mode dropdown is React-managed (see
+  // /ui/map-editor/ribbon/map-ribbon.js).  Mode picks fire through
+  // the map-ribbon bridge's setMode action; the React tree reads the
+  // active mode off ribbonState.mode each publish.  Nothing to wire
+  // here, but publishing the initial mode keeps the dropdown badge in
+  // lockstep on first paint.
+  publishMapRibbonState()
 }
 
 function refreshModeDropdown() {
@@ -2347,6 +2104,10 @@ function setMode(mode) {
   syncDrawerToMode(mode)
   renderCanvas()
   setStatus(modeHint(mode))
+  // Mirror the new mode into the React ribbon so the dropdown row's
+  // `.active` highlight + the toolbar button's label/icon flip in
+  // lockstep with the legacy state.
+  publishMapRibbonState()
 }
 
 function modeHint(mode) {
@@ -2364,93 +2125,16 @@ function modeHint(mode) {
 }
 
 function wireViewMenu() {
-  const btn = $('#view-dropdown-btn')
-  const popup = $('#view-dropdown-popup')
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    closeAllRibbonDropdowns(popup)
-    positionRibbonPopup(btn, popup)
-    popup.classList.toggle('hidden')
-  })
-  const gridBtn = $('#opt-gridlines')
-  const animBtn = $('#opt-animate')
-  gridBtn.addEventListener('click', () => {
-    state.showGridlines = !state.showGridlines
-    gridBtn.dataset.on = state.showGridlines ? '1' : '0'
-    renderCanvas()
-    persistPrefs()
-  })
-  animBtn.addEventListener('click', () => {
-    state.animateFeatures = !state.animateFeatures
-    animBtn.dataset.on = state.animateFeatures ? '1' : '0'
-    renderDrawer()
-    renderCanvas()
-    persistPrefs()
-  })
-  const miniBtn = $('#opt-minimap')
-  if (miniBtn) {
-    miniBtn.addEventListener('click', () => {
-      setMinimapVisible(!state.showMinimap)
-    })
-  }
-  const camBtn = $('#opt-camera-info')
-  if (camBtn) {
-    camBtn.addEventListener('click', () => {
-      setCameraInfoVisible(!state.showCameraInfo)
-    })
-  }
-  const voidsBtn = $('#opt-voids')
-  if (voidsBtn) {
-    voidsBtn.addEventListener('click', () => {
-      setVoidsVisible(!state.showVoids)
-    })
-  }
-  const contoursBtn = $('#opt-contours')
-  if (contoursBtn) {
-    contoursBtn.addEventListener('click', () => {
-      state.showContours = !state.showContours
-      contoursBtn.dataset.on = state.showContours ? '1' : '0'
-      persistPrefs()
-      renderCanvas()
-    })
-  }
-  const buildableBtn = $('#opt-buildable')
-  if (buildableBtn) {
-    buildableBtn.addEventListener('click', () => {
-      state.showBuildable = !state.showBuildable
-      buildableBtn.dataset.on = state.showBuildable ? '1' : '0'
-      persistPrefs()
-      renderCanvas()
-    })
-  }
-  $('#opt-features')?.addEventListener('click', () => setFeaturesVisible(!state.showFeatures))
-  $('#opt-startpoints')?.addEventListener('click', () => setStartPositionsVisible(!state.showStartPositions))
-  const camToggle = $('#camera-info-toggle')
-  if (camToggle) {
-    camToggle.addEventListener('click', () => {
-      const panel = $('#camera-info-panel')
-      if (!panel) return
-      panel.classList.toggle('collapsed')
-      camToggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
-      persistPanelCollapsed('camera-info-panel', panel.classList.contains('collapsed'))
-    })
-  }
-  // Drag handle on the camera-info panel header — mirrors the dev-stats
-  // and minimap panels so all three behave the same way.
-  makePanelDraggable($('#camera-info-panel'), $('#camera-info-header'))
-  // Same drag handle on the feature-info panel so the user can move
-  // the callout away from whatever they're working on.
+  // The View dropdown + every toggle row + the display-mode picker
+  // are React-managed now (see /ui/map-editor/ribbon/map-ribbon.js).
+  // The host bridge installed in configureReactUi routes the clicks
+  // through to setMinimapVisible / setVoidsVisible / setFeaturesVisible
+  // / etc.  Only the feature-info-panel's draggable wiring stays
+  // here — it's the one floating panel we didn't migrate this round.
   makePanelDraggable($('#feature-info-panel'), $('#feature-info-header'))
-  $$('#display-mode-group .menu-row').forEach((row) => {
-    row.addEventListener('click', () => {
-      state.viewMode = row.dataset.display
-      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r === row))
-      const lbl = $('#view-current-lbl')
-      if (lbl) lbl.textContent = row.querySelector('span:not(.ico)').textContent
-      renderCanvas()
-      persistPrefs()
-    })
-  })
+  // Push the initial View toggles into the React store so the menu's
+  // check-glyphs reflect persisted state on first paint.
+  publishMapRibbonState()
 }
 
 function wireKeyboard() {
@@ -2724,6 +2408,12 @@ function rotateActive(dir) {
     // Manual Q/E rotation pins the orientation — auto-fit must not
     // fight the user's intent once they've taken control.
     state.placement.userRotated = true
+    // Wake a dormant placement so the user sees the rotation in the
+    // preview immediately.  selectSection seeds dormant=true so the
+    // ghost waits for the cursor to enter the canvas before painting;
+    // an explicit rotate key is enough engagement to count as
+    // "engaged" — pressing Q with no visible preview was confusing.
+    if (state.placement.dormant) state.placement.dormant = false
     setStatus(`Rotation ${state.placement.rotation * 90}°.  Click on the canvas to stamp.`)
     renderCanvas()
     return
@@ -2750,6 +2440,10 @@ function flipActive(axis) {
     if (axis === 'h') state.placement.flipH = !state.placement.flipH
     else state.placement.flipV = !state.placement.flipV
     state.placement.userRotated = true
+    // Same dormant-wake as rotateActive — pressing F/G during the
+    // cursor-follow phase counts as engagement, so the preview
+    // shouldn't keep waiting for the cursor to enter the canvas.
+    if (state.placement.dormant) state.placement.dormant = false
     const fh = state.placement.flipH ? 'on' : 'off'
     const fv = state.placement.flipV ? 'on' : 'off'
     setStatus(`Flip H ${fh}, V ${fv}.  Click on the canvas to stamp.`)
@@ -2764,35 +2458,25 @@ function flipActive(axis) {
 
 function switchTab(tab) {
   state.drawer = tab
-  $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab))
-  // The "Used only" and wreckage toggles are only meaningful on the features tab.
-  const isFeatures = tab === 'features'
-  $('#filter-used-wrap').classList.toggle('hidden', !isFeatures)
-  $('#filter-wreckage-wrap').classList.toggle('hidden', !isFeatures)
-  // Restore this tab's remembered filter so each tab keeps its own
-  // search context.
-  const filterInput = $('#filter')
-  if (filterInput) filterInput.value = state.drawerFilters[tab] || ''
-  filterInput.placeholder = tab === 'features'
-    ? 'Filter features by name, world, category'
-    : 'Filter sections by name, world, group'
+  // React MapSidebar reads drawer / filter / checkbox visibility off
+  // signals — publishMapSidebarState pushes the new tab + restored
+  // per-tab filter into the React tree.  Sections-vs-Features-only
+  // checkbox visibility is computed inside publishMapSidebarState
+  // (showUsed / showWreckage flip off on Sections).
+  publishMapSidebarState()
+  // Placeholder text — the React input doesn't currently bind it, so
+  // poke the DOM input directly when present.  Falls through cleanly
+  // when the input hasn't mounted yet (early boot).
+  const filterInput = document.getElementById('filter')
+  if (filterInput) {
+    filterInput.placeholder = tab === 'features'
+      ? 'Filter features by name, world, category'
+      : 'Filter sections by name, world, group'
+  }
   renderDrawer()
 }
 
-// isWreckageFeature returns true for corpses/wreckage entries we'd
-// rather hide by default.  TA's TDFs flag these in two ways: the
-// category ends in "_corpses" (case-insensitive), or the feature
-// declares a "Wreckage" description.  Some unit-corpse names also end
-// in "_dead" — catch those as a final safety net.
-function isWreckageFeature(f) {
-  const cat = (f.category || '').toLowerCase()
-  if (cat.includes('corpse') || cat.includes('wreck')) return true
-  const desc = (f.description || '').toLowerCase()
-  if (desc === 'wreckage' || desc.includes('wreckage')) return true
-  const name = (f.name || '').toLowerCase()
-  if (name.endsWith('_dead') || name.endsWith('dead')) return true
-  return false
-}
+// isWreckageFeature now lives in ./ui/map-editor/helpers.js.
 
 // featureUsage returns a Map<lowercase name → count> derived from the
 // current state.features array, so the drawer can show usage badges and
@@ -2860,11 +2544,9 @@ function applyFeatureOrigins(map) {
   }
 }
 
-// Per-row height (in CSS px) used when reserving space for groups whose
-// items haven't been materialised yet.  Keeps the drawer's scrollbar
-// honest while items render lazily — see virtualisedDrawerBody.
-const DRAWER_ITEM_HEIGHT = 60
-const DRAWER_OBSERVER_MARGIN = '400px 0px'
+// DRAWER_ITEM_HEIGHT + DRAWER_OBSERVER_MARGIN live in
+// ./ui/map-editor/constants.js (per-row CSS height + IntersectionObserver
+// pre-fetch margin for virtualised drawer rendering).
 
 let drawerObserver = null
 function ensureDrawerObserver() {
@@ -3562,7 +3244,9 @@ let spacePanHotkey = false
 // are always *replaced*, never mutated in place; feature entries are
 // deep-cloned because drag-move edits ax/ay directly.
 
-const UNDO_MAX = 50
+// UNDO_MAX moved to ./ui/map-editor/constants.js.  The stacks
+// themselves remain here because they hold live editing state that
+// the rest of studio.js mutates directly.
 const undoStack = []
 const redoStack = []
 let pendingTransaction = null
@@ -3703,6 +3387,10 @@ function redo() {
 }
 
 function updateUndoButtons() {
+  // Legacy template DOM still has these ids — the queries no-op when
+  // the elements aren't in the live tree.  The canonical undo / redo
+  // enabled flags flow through publishMapRibbonState into the React
+  // ribbon's Editing Tools dropdown.
   const u = $('#btn-undo')
   const r = $('#btn-redo')
   if (u) {
@@ -3714,12 +3402,13 @@ function updateUndoButtons() {
     r.title = redoStack.length ? `Redo: ${redoStack[redoStack.length - 1].label} (Ctrl+Shift+Z)` : 'Nothing to redo'
   }
   refreshHistoryFlyouts()
+  publishMapRibbonState()
 }
 
 // refreshHistoryFlyouts populates the undo / redo hover flyouts with
 // the next HISTORY_FLYOUT_N labels from each stack.  Top of undoStack
 // is the next undo (LIFO), top of redoStack is the next redo.
-const HISTORY_FLYOUT_N = 5
+// HISTORY_FLYOUT_N is imported from ./ui/map-editor/constants.js.
 function refreshHistoryFlyouts() {
   const fillList = (containerId, source, emptyText) => {
     const el = $('#' + containerId)
@@ -3835,7 +3524,12 @@ class EditorView {
     window.addEventListener('mouseup', (e) => onCanvasMouseUp(e), sig)
     canvas.addEventListener('mousemove', (e) => onCanvasMouseMove(e), sig)
     canvas.addEventListener('mouseleave', () => {
-      $('#hover-cell').textContent = '—'
+      // #hover-cell (legacy canvas-toolbar) is gone — the Camera &
+      // Cursor floating panel shows the hover info now.  Guarded
+      // lookup so dev tools that still poke at the old span keep
+      // working without throwing.
+      const hc = document.getElementById('hover-cell')
+      if (hc) hc.textContent = '—'
       updateCameraInfoCursor(null)
       if (state.eraseCursor) { state.eraseCursor = null; renderCanvas() }
       lastHoverCell = null
@@ -3904,6 +3598,18 @@ class EditorView {
             rotation: state.selected.rotation || 0,
             tx, ty,
           }
+        }
+        // selectSection seeds the placement with dormant=true so the
+        // first cursor-follow paint waits until the cursor enters the
+        // canvas.  When the user re-drags the SAME row immediately
+        // after clicking it, the dragover handler above reuses that
+        // existing placement — without this wake the dragover-driven
+        // preview never paints because drawPlacementPreview early-
+        // returns on the stale dormant flag, and the user only sees
+        // the tile after the drop / final click.
+        if (state.placement.dormant) {
+          state.placement.dormant = false
+          dirty = true
         }
         const anchor = placementAnchor(tx, ty, state.placement)
         if (state.placement.tx !== anchor.tx || state.placement.ty !== anchor.ty) {
@@ -4045,13 +3751,19 @@ function pickFeatureAttrCell(e, sel) {
 
 function updateHoverLabel(e) {
   const { tx, ty } = pickCell(e)
+  // #hover-cell (legacy canvas-toolbar) is gone — the Camera & Cursor
+  // floating panel renders the hovered tile + sub-tile + height + zoom
+  // in one place via updateCameraInfoCursor below.  We still touch the
+  // legacy span when something else (a probe, a third-party extension)
+  // happens to have re-inserted it.
+  const hc = document.getElementById('hover-cell')
   if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) {
-    $('#hover-cell').textContent = '—'
+    if (hc) hc.textContent = '—'
     setCanvasHoverFeature(null)
     updateCameraInfoCursor(null)
     return
   }
-  $('#hover-cell').textContent = `(${tx}, ${ty})`
+  if (hc) hc.textContent = `(${tx}, ${ty})`
   // Highlight the feature under the cursor (if any) so the minimap can
   // narrow its dot view to that type — see renderMinimap.
   const hit = findFeatureAt(e)
@@ -4873,10 +4585,9 @@ function cancelTerrainClipboard() {
 // Serialises a terrain-rectangle selection to the OS clipboard so the
 // user can paste it back in the same tab — or in another KBot Studio
 // tab inside the same Chrome session — via Ctrl+V.  The payload is a
-// magic-prefixed JSON string; non-KBot clipboard contents are ignored
-// on paste.
-
-const CLIP_PREFIX = 'KBOTSTUDIO_CLIP_V1:'
+// magic-prefixed JSON string (CLIP_PREFIX — see
+// ./ui/map-editor/constants.js); non-KBot clipboard contents are
+// ignored on paste.
 
 // extractTerrainRect pulls a non-destructive copy of a tile rectangle
 // + its attribute-cell heights + any features whose anchor lies inside
@@ -5200,10 +4911,8 @@ function onFeatureMouseUp(_e) {
 // hit-box matches the sprite as drawn (not bottom-centred).  We
 // re-iterate in z-order (drawn last = on top) so the topmost feature
 // wins overlaps.
-// FEATURE_HIT_SEARCH_TILES — how far from the click tile we look for
-// candidate features.  Sprites can extend off their anchor; this is
-// the upper bound for typical TA sprites (5 tiles ≈ 160 game pixels).
-const FEATURE_HIT_SEARCH_TILES = 6
+// FEATURE_HIT_SEARCH_TILES lives in ./ui/map-editor/constants.js
+// (how far from the click tile we scan for candidate features).
 
 // findFeatureAt hit-tests the actual canvas-pixel cursor position
 // against every feature's drawn rectangle.  The old version reduced
@@ -5256,8 +4965,7 @@ function featureRenderRect(f, px, py) {
 // ── Start positions ────────────────────────────────────────────────────────
 // Game pixel coords use 32 game-px per tile.  We convert between game
 // pixels and canvas pixels via the TILE_PX scale.
-
-const START_POS_RADIUS = 26 // canvas-px hit radius when picking a start
+// START_POS_RADIUS lives in ./ui/map-editor/constants.js.
 
 function gameToCanvas(gx, gz) {
   return { px: gx * TILE_PX / 32, py: gz * TILE_PX / 32 }
@@ -5847,8 +5555,9 @@ function drawRulerOverlay(ctx) {
 // hmHoldTimer keeps the brush firing while the user holds the mouse
 // button still — raise / lower / smooth all need continuous application
 // to sculpt large changes without the user having to wiggle the cursor.
+// HM_HOLD_INTERVAL_MS (60 ms tick) lives in
+// ./ui/map-editor/constants.js.
 let hmHoldTimer = null
-const HM_HOLD_INTERVAL_MS = 60
 
 function onHeightmapMouseDown(e) {
   const { ax, ay } = pickAttrCellForVoid(e)
@@ -6194,60 +5903,51 @@ function renderCanvas() {
 // View-menu Minimap toggle so users get a familiar pattern.
 function setCameraInfoVisible(visible) {
   state.showCameraInfo = !!visible
-  const panel = $('#camera-info-panel')
-  if (panel) panel.classList.toggle('hidden', !visible)
-  const btn = $('#opt-camera-info')
-  if (btn) btn.dataset.on = visible ? '1' : '0'
+  if (_reactUi && typeof _reactUi.setPanelVisible === 'function') {
+    _reactUi.setPanelVisible('camera-info-panel', !!visible)
+  }
   if (visible) updateCameraInfoPanel()
   persistPrefs()
+  publishMapRibbonState()
 }
 
-// updateCameraInfoPanel populates the panel with the current camera
-// (viewport-centre) tile, the cursor's tile + sub-tile when the mouse
-// is over the canvas, and the zoom level as a percentage.  Called from
-// renderCanvas (camera + zoom) and from updateHoverLabel (cursor).
+// updateCameraInfoPanel publishes the viewport-centre tile + zoom to
+// the React store.  Called from renderCanvas after a pan / zoom; the
+// React CameraCursorPanel re-renders on the next signal commit.
 function updateCameraInfoPanel() {
-  const panel = $('#camera-info-panel')
-  if (!panel || panel.classList.contains('hidden')) return
-  // Camera centre — viewportCellCenter returns the tile at the centre
-  // of the visible viewport, taking overscroll padding + zoom into
-  // account.  Out-of-range falls back to the map centre.
+  if (!_reactUi || typeof _reactUi.publishMapCameraInfo !== 'function') return
   const cam = viewportCellCenter()
-  const camEl = $('#ci-camera')
-  if (camEl) camEl.textContent = `${cam.tx}, ${cam.ty}`
-  const zEl = $('#ci-zoom')
-  if (zEl) zEl.textContent = `${Math.round((state.zoom || 1) * 100)}%`
-  // Cursor info is populated by setCanvasHoverFeature / updateHoverLabel
-  // when the mouse moves over the canvas; this function just keeps the
-  // camera + zoom rows in sync after pan/zoom.
+  _reactUi.publishMapCameraInfo({
+    cameraTx: cam.tx,
+    cameraTy: cam.ty,
+    zoomPct: Math.round((state.zoom || 1) * 100),
+  })
 }
 
-// updateCameraInfoCursor writes the cursor tile + sub-tile fields when
-// the user is hovering the canvas.  Called from updateHoverLabel.
+// updateCameraInfoCursor publishes the cursor tile + sub-tile + the
+// height byte at the precise attribute cell under the cursor.  Called
+// from updateHoverLabel; null tx clears the readout when the mouse
+// leaves the canvas.
 function updateCameraInfoCursor(tx, ty, ax, ay) {
-  const panel = $('#camera-info-panel')
-  if (!panel || panel.classList.contains('hidden')) return
-  const cursorEl = $('#ci-cursor')
-  const subEl = $('#ci-subtile')
-  const hEl = $('#ci-height')
+  if (!_reactUi || typeof _reactUi.publishMapCameraInfo !== 'function') return
   if (tx == null) {
-    if (cursorEl) cursorEl.textContent = '—'
-    if (subEl) subEl.textContent = '—'
-    if (hEl) hEl.textContent = '—'
+    _reactUi.publishMapCameraInfo({
+      cursorTx: null, cursorTy: null,
+      subTx: null, subTy: null,
+      height: null,
+    })
     return
   }
-  if (cursorEl) cursorEl.textContent = `${tx}, ${ty}`
-  if (subEl) subEl.textContent = `${ax & 1}, ${ay & 1}`
-  // Height byte at the precise attribute cell under the cursor.
-  if (hEl) {
-    const aw = state.tileW * 2
-    const ah = state.tileH * 2
-    if (ax >= 0 && ay >= 0 && ax < aw && ay < ah && state.heights) {
-      hEl.textContent = String(state.heights[ay * aw + ax] | 0)
-    } else {
-      hEl.textContent = '—'
-    }
-  }
+  const aw = state.tileW * 2
+  const ah = state.tileH * 2
+  const height = (ax >= 0 && ay >= 0 && ax < aw && ay < ah && state.heights)
+    ? (state.heights[ay * aw + ax] | 0)
+    : null
+  _reactUi.publishMapCameraInfo({
+    cursorTx: tx, cursorTy: ty,
+    subTx: ax & 1, subTy: ay & 1,
+    height,
+  })
 }
 
 // updateFeatureInfoPanel populates the floating callout that appears
@@ -7016,31 +6716,24 @@ function drawRotationBadge(_ctx, tx, ty, fw, fh, rotation, flipH = false, flipV 
   updateRotationBadge(tx, ty, fw, fh, rotation, flipH, flipV)
 }
 
-function updateRotationBadge(tx, ty, fw, fh, rotation, flipH = false, flipV = false) {
-  const badge = $('#rotation-badge')
-  if (!badge) return
-  badge.classList.remove('hidden')
-  const angleEl = $('#rb-angle')
-  if (angleEl) angleEl.textContent = ((rotation & 3) * 90) + '°'
-  const flipEl = $('#rb-flip')
-  if (flipEl) {
-    const tags = []
-    if (flipH) tags.push('⇋H')
-    if (flipV) tags.push('⥯V')
-    flipEl.textContent = tags.length ? ' · ' + tags.join(' ') : ''
-  }
-  // Position in scroll-content coords: the canvas-style is scaled by
-  // state.zoom, and the badge is a sibling absolutely positioned in
-  // the same scroll container, so multiply by zoom to match.
-  const z = state.zoom
-  const left = (tx + fw) * TILE_PX * z + 8
-  const top = ty * TILE_PX * z
-  badge.style.left = left + 'px'
-  badge.style.top = top + 'px'
+function updateRotationBadge(_tx, _ty, _fw, _fh, _rotation, _flipH = false, _flipV = false) {
+  // The rotation-badge pill is gone (round 33) — its hints
+  // duplicated the placement-hint pill and its angle / flip
+  // readout was already conveyed by the rotating live preview on
+  // the canvas.  Lookup is guarded in case a third-party
+  // extension re-injects the legacy badge id; otherwise this is a
+  // no-op.  Kept callable so the placement / terrain-clipboard
+  // render paths don't need to drop their drawRotationBadge call
+  // sites.
+  const badge = document.getElementById('rotation-badge')
+  if (badge) badge.classList.add('hidden')
 }
 
 function hideRotationBadge() {
-  const badge = $('#rotation-badge')
+  // Same deprecation story as updateRotationBadge — no live badge
+  // to hide, but the guarded lookup keeps third-party extensions
+  // happy.
+  const badge = document.getElementById('rotation-badge')
   if (badge) badge.classList.add('hidden')
 }
 
@@ -7844,17 +7537,7 @@ function drawHighlightedFeatureOutlines(ctx) {
   ctx.setLineDash([])
 }
 
-function normalizedRect(r) {
-  const x = Math.min(r.x, r.x + r.w - 1)
-  const y = Math.min(r.y, r.y + r.h - 1)
-  return {
-    x: Math.min(r.x, r.x + r.w - 1),
-    y: Math.min(r.y, r.y + r.h - 1),
-    w: Math.abs(r.w),
-    h: Math.abs(r.h),
-    _: x + y, // silence "unused" if linter quibbles
-  }
-}
+// normalizedRect lives in ./ui/map-editor/helpers.js.
 
 // ── Minimap ────────────────────────────────────────────────────────────────
 //
@@ -8201,95 +7884,33 @@ function updateMinimapViewport(ox, oy, dw, dh) {
 }
 
 function wireMinimap() {
-  const mini = $('#minimap')
-  const toggle = $('#minimap-toggle')
-  const panel = $('#minimap-panel')
+  // The minimap panel is React-managed (see
+  // /ui/map-editor/panels/minimap-panel.js).  Mouse panning routes
+  // through the map-ribbon bridge's minimapBeginPan / Pan / EndPan
+  // actions, which the host translates via _doMinimapPan.  FloatingPanel
+  // owns drag / collapse / close / position persistence — no per-id
+  // wiring left to do here.  Scroll-driven re-renders still need to
+  // bump scheduleMinimapRender so the viewport overlay tracks scroll.
   const wrap = $('#canvas-scroll')
-  if (!mini || !toggle || !panel || !wrap) return
-
-  // Click/drag on the minimap pans the main canvas.
-  let panning = false
-  const panTo = (e) => {
-    const rect = mini.getBoundingClientRect()
-    const cx = (e.clientX - rect.left) / rect.width
-    const cy = (e.clientY - rect.top) / rect.height
-    const canvas = $('#canvas')
-    const fullW = canvas.width * state.zoom
-    const fullH = canvas.height * state.zoom
-    // Convert minimap fraction → map-pixel → stack-pixel by adding the
-    // overscroll padding (the canvas's offset within .canvas-stack).
-    wrap.scrollLeft = cx * fullW - wrap.clientWidth / 2 + overscrollPadding.x
-    wrap.scrollTop = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
-  }
-  mini.addEventListener('mousedown', (e) => { panning = true; panTo(e) })
-  window.addEventListener('mousemove', (e) => { if (panning) panTo(e) })
-  window.addEventListener('mouseup', () => { panning = false })
-
-  // Re-position the viewport overlay as the user scrolls.
-  wrap.addEventListener('scroll', () => {
-    // Newly-visible tiles need to be drawn (the main canvas is now
-    // viewport-culled, so off-viewport content is blank until rendered).
-    scheduleRenderCanvas()
-    scheduleMinimapRender()
-  })
-
-  toggle.addEventListener('click', () => {
-    panel.classList.toggle('collapsed')
-    toggle.textContent = panel.classList.contains('collapsed') ? '+' : '−'
-    persistPanelCollapsed('minimap-panel', panel.classList.contains('collapsed'))
-  })
-
-  // Close button — fully hides the panel.  The user gets it back via
-  // the Minimap toggle in the View dropdown.
-  const closeBtn = $('#minimap-close')
-  if (closeBtn) {
-    closeBtn.addEventListener('click', () => setMinimapVisible(false))
-  }
-
-  // Drag to reposition.  We grab via the header (which already has
-  // `cursor: grab`) and update top/left in pixels.  Positions are
-  // clamped to the canvas-wrap so the panel can't be flung off-screen.
-  const header = $('#minimap-header')
-  if (header) {
-    let dragOffset = null
-    header.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button')) return // ignore clicks on the toggle/close buttons
-      e.preventDefault()
-      const panelRect = panel.getBoundingClientRect()
-      dragOffset = { dx: e.clientX - panelRect.left, dy: e.clientY - panelRect.top }
-      header.classList.add('dragging')
-    })
-    window.addEventListener('mousemove', (e) => {
-      if (!dragOffset) return
-      const wrapWrap = $('.canvas-wrap')
-      if (!wrapWrap) return
-      const wrapRect = wrapWrap.getBoundingClientRect()
-      const w = panel.offsetWidth || 216
-      const h = panel.offsetHeight || 240
-      const left = clamp(e.clientX - dragOffset.dx - wrapRect.left, 4, Math.max(4, wrapRect.width - w - 4))
-      const top = clamp(e.clientY - dragOffset.dy - wrapRect.top, 4, Math.max(4, wrapRect.height - h - 4))
-      state.minimapPos = { top, left }
-      applyMinimapPosition()
-    })
-    window.addEventListener('mouseup', () => {
-      if (dragOffset) {
-        dragOffset = null
-        header.classList.remove('dragging')
-        // Persist via the same shared layout map the other panels
-        // use, so the minimap reopens in the same spot next session.
-        persistPanelLayout(panel)
-      }
+  if (wrap) {
+    wrap.addEventListener('scroll', () => {
+      scheduleRenderCanvas()
+      scheduleMinimapRender()
     })
   }
 }
 
 function setMinimapVisible(visible) {
-  state.showMinimap = visible
-  const panel = $('#minimap-panel')
-  if (panel) panel.classList.toggle('hidden', !visible)
-  const toggle = $('#opt-minimap')
-  if (toggle) toggle.dataset.on = visible ? '1' : '0'
+  state.showMinimap = !!visible
+  // React MinimapPanel reads visibility from the shared panel-store;
+  // routing through ui.setPanelVisible flips the signal AND writes
+  // through the persistence bridge (which keeps state.mvInspectorVisible
+  // + persistPrefs in lockstep).
+  if (_reactUi && typeof _reactUi.setPanelVisible === 'function') {
+    _reactUi.setPanelVisible('minimap-panel', !!visible)
+  }
   persistPrefs()
+  publishMapRibbonState()
 }
 
 // setFeaturesVisible / setStartPositionsVisible mirror setMinimapVisible
@@ -8299,9 +7920,8 @@ function setMinimapVisible(visible) {
 // useless.  Same for start-positions mode.
 function setFeaturesVisible(visible) {
   state.showFeatures = visible
-  const t = $('#opt-features')
-  if (t) t.dataset.on = visible ? '1' : '0'
   persistPrefs()
+  publishMapRibbonState()
   if (!visible && (state.mode === 'select-features' || state.mode === 'picker')) {
     setMode('select-terrain')
   } else {
@@ -8311,9 +7931,8 @@ function setFeaturesVisible(visible) {
 
 function setStartPositionsVisible(visible) {
   state.showStartPositions = visible
-  const t = $('#opt-startpoints')
-  if (t) t.dataset.on = visible ? '1' : '0'
   persistPrefs()
+  publishMapRibbonState()
   if (!visible && state.mode === 'start-points') {
     setMode('select-terrain')
   } else {
@@ -8326,9 +7945,8 @@ function setStartPositionsVisible(visible) {
 // user in Voids mode still sees what they're painting.
 function setVoidsVisible(visible) {
   state.showVoids = visible
-  const toggle = $('#opt-voids')
-  if (toggle) toggle.dataset.on = visible ? '1' : '0'
   persistPrefs()
+  publishMapRibbonState()
   // Hiding voids while the user is still in Voids paint mode would
   // leave them with an invisible tool — drop back to Select so the
   // editor stays in a coherent state.
@@ -8339,13 +7957,18 @@ function setVoidsVisible(visible) {
   }
 }
 
+// applyMinimapPosition — vestigial helper.  The legacy code wrote
+// directly to the #minimap-panel inline style after a drag; the
+// React MinimapPanel now manages its own position via the panel-
+// store + FloatingPanel persistence, so this is a no-op.  Kept (and
+// referenced once below) for backward-compatible signature.
 function applyMinimapPosition() {
-  const panel = $('#minimap-panel')
-  if (!panel || !state.minimapPos) return
-  panel.style.top = state.minimapPos.top + 'px'
-  panel.style.left = state.minimapPos.left + 'px'
-  panel.style.right = 'auto'
+  return
 }
+// Silence the unused-function warning — the export shape is part of
+// the legacy host API and may be reintroduced if we need imperative
+// repositioning from outside the panel-store.
+void applyMinimapPosition
 
 // ── Developer stats panel + dialog ────────────────────────────────────────
 //
@@ -8428,7 +8051,14 @@ function refreshDevStats() {
   // isn't open (its tile grid is the only reader that NEEDS the live
   // tileEntries map; the panel just shows the three counts).
   const stats = getDevStats()
+  // Publish to the React Map Stats panel via the inspector store.
+  if (_reactUi && typeof _reactUi.publishMapStats === 'function') {
+    _reactUi.publishMapStats(stats)
+  }
   const set = (id, v) => { const el = $('#' + id); if (el) el.textContent = String(v) }
+  // Legacy DOM lookup retained for the Developer dialog's table cells
+  // — those still live inside the dev-dialog markup and want refresh
+  // via the same compute call.
   set('dev-stats-distinct-tiles', stats.distinctTiles)
   set('dev-stats-distinct-features', stats.distinctFeatures)
   set('dev-stats-total-features', stats.totalFeatures)
@@ -8587,7 +8217,13 @@ function applyPanelLayout() {
   const wrap = $('.canvas-wrap')
   if (!wrap) return
   const wr = wrap.getBoundingClientRect()
+  // React-managed floating panels (Stats / Camera / Minimap) own
+  // their position via the shared panel-store + FloatingPanel's
+  // useLayoutEffect — skip them here so the legacy panelLayout map
+  // doesn't trample on the panel-store's restored coordinates.
+  const REACT_MANAGED = new Set(['map-stats-panel', 'minimap-panel', 'camera-info-panel'])
   for (const id of Object.keys(map)) {
+    if (REACT_MANAGED.has(id)) continue
     const panel = document.getElementById(id)
     if (!panel) continue
     const saved = map[id]
@@ -8707,7 +8343,7 @@ const DEFAULT_SETTINGS = {
 function openSettingsDialog() {
   if (!_reactUi || typeof _reactUi.openSettingsDialog !== 'function') return
   const s = state.settings || DEFAULT_SETTINGS
-  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   const defaultTab = activeTab?.type === 'model' ? 'unit'
     : activeTab?.type === 'map' ? 'map'
     : 'general'
@@ -9013,9 +8649,16 @@ function stopAllMapPan() {
 // ── Toolbar ────────────────────────────────────────────────────────────────
 
 function wireToolbar() {
-  $('#btn-save').addEventListener('click', save)
+  // Most of the ribbon-side buttons (#btn-save, #btn-undo, the
+  // Edit / Mode / View / Advanced dropdowns, etc.) are React-managed
+  // now — the migration moves them into MapRibbon and the host bridge
+  // routes the clicks through to the legacy handlers below.  The
+  // optional-chaining guards below short-circuit when those static
+  // elements are absent (the ribbon's hidden template still ships
+  // them so they're harmless when present).
+  $('#btn-save')?.addEventListener('click', save)
   $('#btn-save-loose')?.addEventListener('click', saveLoose)
-  $('#btn-resize').addEventListener('click', openResizeDialog)
+  $('#btn-resize')?.addEventListener('click', openResizeDialog)
   $('#btn-scatter')?.addEventListener('click', openScatterDialog)
   $('#scatter-cancel')?.addEventListener('click', closeScatterDialog)
   $('#scatter-apply')?.addEventListener('click', applyScatter)
@@ -9029,14 +8672,17 @@ function wireToolbar() {
     // Advanced › Quality Check… — standalone audit, no save afterward.
     runQualityChecker(buildSavePayload(), { mode: 'audit' })
   })
-  $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file').click())
+  $('#btn-import-heightmap')?.addEventListener('click', () => $('#import-heightmap-file')?.click())
+  // The import-heightmap-file <input> stays as a real DOM element
+  // (kept outside the ribbon template precisely because the React
+  // ribbon's importHeightmap bridge action synthesises a click on it).
   $('#import-heightmap-file')?.addEventListener('change', onImportHeightmapFile)
-  $('#btn-undo').addEventListener('click', undo)
-  $('#btn-redo').addEventListener('click', redo)
+  $('#btn-undo')?.addEventListener('click', undo)
+  $('#btn-redo')?.addEventListener('click', redo)
   wireHistoryFlyout($('#btn-undo'), $('#undo-history-popup'))
   wireHistoryFlyout($('#btn-redo'), $('#redo-history-popup'))
-  $('#btn-new').addEventListener('click', startNewMapFromEditor)
-  $('#btn-open').addEventListener('click', openExistingMapFromEditor)
+  $('#btn-new')?.addEventListener('click', startNewMapFromEditor)
+  $('#btn-open')?.addEventListener('click', openExistingMapFromEditor)
   // Edit dropdown clipboard entries — share the same handlers as the
   // Ctrl+C / Ctrl+V hotkeys so a user who reaches for the menu gets
   // the same behaviour.
@@ -9054,7 +8700,7 @@ function wireToolbar() {
   $('#btn-new-window')?.addEventListener('click', () => {
     window.open(location.origin + '/', '_blank', 'noopener')
   })
-  $('#btn-ota').addEventListener('click', openOTADialog)
+  $('#btn-ota')?.addEventListener('click', openOTADialog)
 
   // Actions dropdown.
   const actBtn = $('#actions-dropdown-btn')
@@ -9412,8 +9058,8 @@ function wireBrushSizeGroup() {
 // Schemas are addressed by their player count (the "Network N" the
 // schema's Type ends in).  Treating count as the identity keeps the
 // add-grid in sync — counts already present are disabled, the rest can
-// be added with one click.
-const SCHEMA_PLAYER_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+// be added with one click.  SCHEMA_PLAYER_COUNTS lives in
+// ./ui/map-editor/constants.js.
 
 function schemaPlayerCount(schema) {
   if (!schema) return 0
@@ -9458,6 +9104,11 @@ function wireSchemaSelector() {
 }
 
 function refreshSchemaSelector() {
+  // React MapRibbon's Map Settings dropdown reads its schema list +
+  // active label off the publishRibbonState snapshot — push every
+  // refresh through so the dropdown stays in lockstep with the legacy
+  // (now-templated) DOM render below.
+  publishMapRibbonState()
   const lbl = $('#schema-current-lbl')
   if (lbl && state.ota) {
     const active = state.ota.schemas[state.activeSchema]
@@ -9745,7 +9396,7 @@ function closeSizeDialog() {
   // Restore the surface that was visible before the size dialog
   // appeared.  When the user came from a model tab via the "+"
   // popup the 3DO viewer was hidden; bring it back.
-  const active = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const active = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   if (active?.type === 'model') {
     $('#model-viewer-dialog').classList.remove('hidden')
   }
@@ -10032,16 +9683,8 @@ function closeScatterDialog() {
   $('#scatter-dialog').classList.add('hidden')
 }
 
-// mulberry32: tiny seeded PRNG so users can reproduce a scatter.
-function mulberry32(a) {
-  return function () {
-    a = (a + 0x6D2B79F5) | 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
+// mulberry32 (the seeded PRNG that powers Scatter) lives in
+// ./ui/map-editor/helpers.js.
 
 function applyScatter() {
   const namesIn = $('#scatter-names').value.trim()
@@ -10855,111 +10498,159 @@ function updateTopbarDocInfo(tab) {
 }
 
 // activateModelTab makes a model tab the visible one — refreshes
-// the shared topbar info and asks the viewer to load that 3DO.
+// the shared topbar info and asks the per-tab viewer to load (or
+// re-show) that 3DO.  Each unit tab owns its own ModelViewer +
+// canvas + runtime + MvControls so swapping between unit tabs
+// preserves per-unit state (live threads, weapon mid-fire, build
+// progress, etc.).  modelViewerInstance + _mvControls are aliases
+// that always point at the active tab's instances — host code that
+// reads either gets the right tab's data.
 async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a
   // model tab don't pay for the shader / matrix code.
   const mod = await import('./model3d/index.js')
-  if (!modelViewerInstance) {
-    modelViewerInstance = new mod.ModelViewer({
-      canvas: $('#model-viewer-canvas'),
-      // The shared statusbar's #status element now hosts model
-      // viewer messages too — same DOM element the map editor
-      // writes into.
+  // Stage all OTHER tabs' canvases out of the DOM so the GL surface
+  // for an inactive tab can't bleed through to the active frame.
+  // Same pattern activateSandboxTab uses; treats unit + sandbox
+  // viewers uniformly.
+  const stage = document.querySelector('.model-viewer-stage')
+  if (stage) {
+    for (const t of tabs) {
+      if (t === tab) continue
+      if (t.viewer && typeof t.viewer.detach === 'function') {
+        try { t.viewer.detach() } catch { /* ignore */ }
+      }
+    }
+    // The legacy shared `#model-viewer-canvas` from index.html is no
+    // longer used by any tab — pull it out of the stage so it can't
+    // overlay the active tab's per-tab canvas.
+    const legacyCanvas = sharedModelViewerCanvas()
+    if (legacyCanvas && legacyCanvas.parentNode === stage) {
+      stage.removeChild(legacyCanvas)
+    }
+  }
+  // Lazy-create this tab's viewer + canvas on first activation.
+  // Subsequent activations just re-attach the existing canvas.
+  if (!tab.viewer) {
+    const canvas = document.createElement('canvas')
+    canvas.className = 'model-viewer-canvas'
+    // Each viewer captures `viewer` in its onModelLoaded closure so
+    // the per-load setup writes through the LOCAL instance rather
+    // than the global alias — important when the model finishes
+    // loading while a different tab is already active (rare but
+    // possible if the user clicks fast).
+    let viewer  // forward-declared so the closure binds to the const below
+    viewer = new mod.ModelViewer({
+      canvas,
       statusEl: $('#status'),
       onModelLoaded: (model, cob) => {
-        renderPieceTree(model)
-        renderTexturesTab(model)
-        wireMvSidebarTabs()
-        // Initial lifecycle state.  Units that ship with a Create
-        // script start in 'unborn' — every other action button is
-        // gated off until Create finishes (matches real TA, where a
-        // unit can't do anything until its Create script has built
-        // the initial pose).  Units without a Create just start
-        // 'created' so nothing is gated.
+        // Initial lifecycle state — units with a Create script
+        // start 'unborn' (Action buttons gated until Create runs);
+        // others start 'created'.
         if (cob) cob._lifecycle = (cob.hasScript && cob.hasScript('Create')) ? 'unborn' : 'created'
-        // Initial load shows the unit fully built — Create script
-        // hasn't run yet but the geometry is already in its rest
-        // pose, which reads cleaner than starting with construction-
-        // wireframe stripes the user hasn't asked for.  The auto-
-        // build ramp kicks in only when the user clicks "Create Unit"
-        // (the explicit user gesture).
-        refreshCobPanel(cob)
-        // The Script Commands inspector is React-managed (see
-        // /ui/panels/script-commands-panel.js) and re-renders off the
-        // inspector-store mv signal — publishing the new proxy via
-        // refreshMvInspectors picks up the unit swap automatically,
-        // so no per-load imperative render is needed here.
-        // Controls/Ports panel is React-managed
-        // (/ui/panels/controls-panel.js).  The component reads
-        // modelViewerInstance.cobPorts via the inspector-store mv
-        // signal — refreshMvInspectors's next publish picks up the
-        // new unit's port object automatically, no imperative
-        // rebuild needed here.
-        // Controls overlay (Move + Aim/Fire).  Spin up a fresh
-        // instance per model load and kick off the unit-meta fetch
-        // so the action buttons enable/disable correctly.
-        if (_mvControls) _mvControls.dispose()
-        _mvControls = new MvControls(modelViewerInstance)
-        modelViewerInstance._mvControls = _mvControls
-        mvFetchUnitMeta(modelViewerInstance)
-        // Hook the inspector refresh into the renderer's per-frame
-        // callback.  Done here (not at construction) because the
-        // renderer is created lazily inside ModelViewer.open(), so
-        // it doesn't exist when activateModelTab first runs.  By
-        // the time onModelLoaded fires the renderer is live.
-        // Idempotent — reassignment is cheap.
-        if (modelViewerInstance.renderer) {
-          modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+        // Per-viewer MvControls.  Dispose any previous instance
+        // attached to THIS viewer (e.g. on a second open of the
+        // same tab with a different unit).  Each unit tab keeps
+        // its own MvControls so aim/move targets survive a tab
+        // swap.
+        if (viewer._mvControls) viewer._mvControls.dispose()
+        const ctrls = new MvControls(viewer)
+        viewer._mvControls = ctrls
+        mvFetchUnitMeta(viewer)
+        // Wire the per-frame inspector + auto-build hook.  Bind to
+        // the viewer's controls explicitly so the closure stays
+        // accurate even when a tab swap retargets _mvControls.
+        if (viewer.renderer) {
+          viewer.renderer.onAfterFrame = (dtMs) => {
             advanceMvAutoBuild(dtMs)
-            refreshMvInspectors(dtMs)
-            _mvControls?.tick(dtMs)
+            // Only refresh inspectors when THIS viewer is the
+            // active one — backgrounded tabs shouldn't shove their
+            // signal updates into the React tree.
+            if (modelViewerInstance === viewer) refreshMvInspectors(dtMs)
+            ctrls.tick(dtMs)
           }
+        }
+        // Per-tab sidebar + COB panel only refresh when THIS viewer
+        // is the front one.  Otherwise a delayed load (the user
+        // clicked away mid-fetch) would clobber the active tab's
+        // piece tree / textures / etc.
+        if (modelViewerInstance === viewer) {
+          renderPieceTree(model)
+          renderTexturesTab(model)
+          wireMvSidebarTabs()
+          refreshCobPanel(cob)
+          _mvControls = ctrls
         }
       },
     })
-    // Expose the viewer + its renderer/camera on window so external
-    // tooling (the preview eval harness, dev console) can poke camera
-    // angles or sky presets without having to chase closures.
-    window.__modelViewer = modelViewerInstance
+    tab.viewer = viewer
   }
+  // Promote this tab's viewer to the global aliases the rest of the
+  // studio reads (host bridges, panels, ribbon handlers, inspector
+  // refresh).  Mirrors how sandboxViewInstance flips on each
+  // activateSandboxTab.
+  modelViewerInstance = tab.viewer
+  _mvControls = tab.viewer._mvControls || null
+  // Debug shim — keep window.__modelViewer pointing at the active
+  // viewer so dev-console scripts see the right unit.
+  window.__modelViewer = tab.viewer
+  // Attach this tab's canvas into the stage so it's the visible
+  // surface again.  Idempotent — re-attaching to the same parent
+  // is a no-op.
+  if (stage && typeof tab.viewer.attach === 'function') tab.viewer.attach(stage)
   // Wire the per-frame inspector refresh callback the first time
-  // the renderer is alive.  Idempotent — re-assignment is cheap.
-  if (modelViewerInstance.renderer && !modelViewerInstance.renderer.onAfterFrame) {
-    modelViewerInstance.renderer.onAfterFrame = (dtMs) => {
+  // the renderer is alive (it might not be on the very first
+  // activation if the network fetch lost a race).  Idempotent.
+  if (tab.viewer.renderer && !tab.viewer.renderer.onAfterFrame) {
+    tab.viewer.renderer.onAfterFrame = (dtMs) => {
       advanceMvAutoBuild(dtMs)
-      refreshMvInspectors(dtMs)
-      _mvControls?.tick(dtMs)
+      if (modelViewerInstance === tab.viewer) refreshMvInspectors(dtMs)
+      tab.viewer._mvControls?.tick(dtMs)
     }
   }
-  // Carry the unit editor's persisted Auto-Rotate state into the
-  // freshly-opened model.  The state lives on a host-side cache so
-  // the React Camera dropdown + the Renderer panel + the R hotkey can
-  // all share one source of truth without polling the DOM.
-  modelViewerInstance.setAutoRotate(_unitEditorAutoRotate)
-  // Controls panel body is React-managed now; its re-render is
-  // driven by the inspector-store mv signal so swapping tabs picks
-  // up the new view's data automatically without an imperative
-  // sentinel + DOM wipe.
-  // open() lazily constructs the renderer the first time, then loads
-  // geometry.  Wait for that before applying the ground hint so
-  // setGroundMode lands on a live renderer.
-  await modelViewerInstance.open(tab.name)
-  // Make sure the RAF loop is running — switchToTab stops it whenever
-  // a map tab or sandbox tab takes the screen so we don't burn frames
-  // on hidden surfaces.  renderer.start() is idempotent.
-  try { modelViewerInstance.renderer?.start?.() } catch { /* ignore */ }
-  // Un-silence the viewer's audio — switchToTab muted us on the way
-  // out; coming back resets so weapon sounds + select acks play again.
-  if (_mvControls && typeof _mvControls.setSilenced === 'function') {
-    try { _mvControls.setSilenced(false) } catch { /* ignore */ }
+  // Carry the unit editor's persisted Auto-Rotate state into this
+  // tab's viewer.  Per-tab — each tab can have its own rotate
+  // state if you wanted, but the global cache means all tabs share
+  // the user's last pick by default.
+  tab.viewer.setAutoRotate(_unitEditorAutoRotate)
+  // Open the unit IF this tab has never loaded one (first
+  // activation).  Subsequent activations of the SAME tab skip the
+  // load — the per-tab viewer already holds the model + cob and
+  // restoring the paused state below is enough to bring it back
+  // exactly as the user left it.  Different units in different
+  // tabs each go through their own first-load path on their own
+  // viewer; there's no shared open() destroying anything.
+  const alreadyLoaded = (tab.viewer.model
+    && tab.viewer.model.name === tab.name
+    && tab.viewer.cob && tab.viewer.cob.unit)
+  if (!alreadyLoaded) {
+    await tab.viewer.open(tab.name)
+    // Re-grab _mvControls — the onModelLoaded callback set
+    // viewer._mvControls and the global alias only if the viewer
+    // was already active when the await resolved.  If a fast tab
+    // swap interleaved, mop up here.
+    if (modelViewerInstance === tab.viewer && tab.viewer._mvControls) {
+      _mvControls = tab.viewer._mvControls
+    }
   }
-  applyDefaultGroundFor(tab.meta)
-  // Apply Unit Editor defaults from the persisted Settings — the user's
-  // chosen environment + effect toggles, picked up here once the
-  // renderer is live.  Keeps each freshly opened model consistent
-  // with what they set in Settings → Unit Editor.
-  applyUnitEditorDefaults()
+  // Make sure the RAF loop is running — switchToTab stops it on the
+  // way to map / sandbox tabs.  Renderer .start() is idempotent.
+  try { tab.viewer.renderer?.start?.() } catch { /* ignore */ }
+  // Un-silence the viewer's audio — switchToTab muted us on the way
+  // out; coming back resets so weapon sounds + select acks play.
+  if (tab.viewer._mvControls && typeof tab.viewer._mvControls.setSilenced === 'function') {
+    try { tab.viewer._mvControls.setSilenced(false) } catch { /* ignore */ }
+  }
+  // Restore the runtime's pre-switch paused state.  Per-tab viewer
+  // means per-tab runtime, so the resume is unconditionally tied
+  // to this tab's _pausedBeforeSwitch.
+  resumeIncomingTabRuntime(tab)
+  if (!alreadyLoaded) {
+    applyDefaultGroundFor(tab.meta)
+    // Apply Unit Editor defaults from the persisted Settings the
+    // first time we load this tab's unit.
+    applyUnitEditorDefaults()
+  }
 }
 
 // applyUnitEditorDefaults pushes settings.unitDefault* through the
@@ -13930,7 +13621,7 @@ function closeModelPicker() {
   if (_reactUi && typeof _reactUi.closeUnitDialog === 'function') {
     _reactUi.closeUnitDialog()
   }
-  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   if (activeTab?.type === 'model') {
     $('#model-viewer-dialog').classList.remove('hidden')
   } else if (activeTab?.type === 'map') {
@@ -14019,19 +13710,20 @@ async function activateSandboxTab(tab) {
   // way out so an inactive tab's GL surface is not in the DOM and
   // can't bleed through into the active tab's frame.
   const stage = document.querySelector('.model-viewer-stage')
-  // Detach every OTHER tab's canvas (sandbox + single-unit) from
-  // the stage so the incoming tab's canvas is the only one in the
-  // DOM tree.  Single-unit ModelViewer still uses the shared HTML
-  // canvas (#model-viewer-canvas); keep it parked off-stage when a
-  // sandbox tab takes over.
+  // Detach every OTHER tab's canvas (sandbox + unit) from the stage
+  // so the incoming sandbox's canvas is the only one in the DOM
+  // tree.  Both ModelViewer and SandboxView implement detach()
+  // identically.  Also drop the legacy boot-time #model-viewer-canvas
+  // (if still in the stage from page load) — every tab owns its own
+  // per-tab canvas now and the legacy one is never re-attached.
   if (stage) {
     for (const t of tabs) {
       if (t === tab) continue
       if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
     }
-    const sharedCanvas = sharedModelViewerCanvas()
-    if (sharedCanvas && sharedCanvas.parentNode === stage) {
-      sharedCanvas.parentNode.removeChild(sharedCanvas)
+    const legacyCanvas = sharedModelViewerCanvas()
+    if (legacyCanvas && legacyCanvas.parentNode === stage) {
+      stage.removeChild(legacyCanvas)
     }
   }
   if (!tab.viewer) {
@@ -14075,6 +13767,14 @@ async function activateSandboxTab(tab) {
   if (typeof sandboxViewInstance.setSilenced === 'function') {
     try { sandboxViewInstance.setSilenced(false) } catch { /* ignore */ }
   }
+  // Restore the sandbox's runtime to the paused/running state it was
+  // in before the user switched away.  switchToTab's
+  // pauseOutgoingTabRuntime stashed the pre-switch flag on the tab;
+  // a fresh sandbox (no snapshot) defaults to running — its
+  // weapons/scripts/particles resume ticking exactly where they
+  // stopped, instead of the engine racing ahead while the tab was
+  // hidden.
+  resumeIncomingTabRuntime(tab)
   // Wrap the sandbox view's onAfterFrame so the inspector refresh +
   // animation-advance pipeline runs on the sandbox renderer's frames
   // too.  The sandbox view sets its own onAfterFrame (scene tick +
@@ -14745,6 +14445,149 @@ function configureReactUi() {
         playSound: (stem) => playWeaponSound(stem),
       })
     }
+    // ── Map editor surface ───────────────────────────────────────
+    // Mount the React-rendered ribbon, sidebar, and three floating
+    // panels (Stats, Camera & Cursor, Minimap).  Idempotent — re-
+    // mount during File → New / Open is a re-render into the same
+    // roots.  The host wiring below routes every button press
+    // through the existing studio.js functions (setMode, undo, etc.)
+    // so we don't duplicate behaviour.
+    if (typeof ui.mountMapEditor === 'function') ui.mountMapEditor()
+    if (typeof ui.configureSidebarBridge === 'function') {
+      ui.configureSidebarBridge({
+        onTabChange:     (tab) => { switchTab(tab) },
+        onFilterChange:  (text) => {
+          if (!state.drawerFilters) state.drawerFilters = { sections: '', features: '' }
+          state.drawerFilters[state.drawer] = text
+          renderDrawer()
+          persistPrefs()
+        },
+        onUsedOnlyChange:    (on) => { state.usedOnly = !!on; renderDrawer(); persistPrefs() },
+        onWreckageChange:    (on) => { state.includeWreckage = !!on; renderDrawer(); persistPrefs() },
+      })
+    }
+    if (typeof ui.configureMapRibbonBridge === 'function') {
+      ui.configureMapRibbonBridge({
+        // File
+        fileNew:        () => startNewMapFromEditor(),
+        fileNewWindow:  () => window.open(location.origin + '/', '_blank', 'noopener'),
+        fileOpen:       () => openExistingMapFromEditor(),
+        fileSave:       () => save(),
+        fileSaveLoose:  () => saveLoose(),
+        // Edit
+        editCut:                  () => cutSelection(),
+        editCopy:                 () => copyToClipboard(),
+        editPaste:                () => pasteFromClipboard('all'),
+        editPasteFeatures:        () => pasteFromClipboard('features'),
+        editPasteTiles:           () => pasteFromClipboard('tiles'),
+        editClearRegion:          () => clearRegion(),
+        editClearFeaturesInSel:   () => clearFeaturesInSelection(),
+        editClearAllFeatures:     () => clearAllFeatures(),
+        // Mode
+        setMode:           (m) => { setMode(m); publishMapRibbonState() },
+        setSymmetry:       (s) => {
+          state.symmetry = s
+          persistPrefs()
+          publishMapRibbonState()
+        },
+        setVoidsBrush:     (n) => { state.voidsBrushSize = n; persistPrefs(); publishMapRibbonState() },
+        setEraseScope:     (sc) => { state.eraseScope = sc; persistPrefs(); publishMapRibbonState() },
+        setEraseSize:      (n) => { state.eraseSize = n; persistPrefs(); publishMapRibbonState() },
+        setHmTool:         (t) => { state.hmTool = t; persistPrefs(); publishMapRibbonState() },
+        setHmRadius:       (n) => { state.hmRadius = n; persistPrefs(); publishMapRibbonState() },
+        setHmStrength:     (n) => { state.hmStrength = n; persistPrefs(); publishMapRibbonState() },
+        // Actions
+        undo:                  () => undo(),
+        redo:                  () => redo(),
+        jumpUndoTo:            (n) => { for (let i = 0; i < n; i++) undo() },
+        jumpRedoTo:            (n) => { for (let i = 0; i < n; i++) redo() },
+        openResize:            () => openResizeDialog(),
+        openScatter:           () => openScatterDialog(),
+        exportHeightmap:       () => exportHeightmap(),
+        importHeightmap:       () => {
+          // The file <input id="import-heightmap-file"> is rendered
+          // by the legacy template (kept in index.html so the
+          // existing change-handler wiring inside wireToolbar still
+          // attaches).  Synthesise a click on it to open the OS
+          // picker — works even though the surrounding ribbon row
+          // is now React-managed.
+          const f = document.getElementById('import-heightmap-file')
+          if (f) f.click()
+        },
+        // Zoom
+        zoomIn:    () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)),
+        zoomOut:   () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)),
+        zoomFit:   () => fitZoom(),
+        // View
+        setDisplayMode:    (m) => { state.viewMode = m; renderCanvas(); persistPrefs(); publishMapRibbonState() },
+        toggleGridlines:   () => { state.showGridlines = !state.showGridlines; renderCanvas(); persistPrefs(); publishMapRibbonState() },
+        toggleAnimate:     () => { state.animateFeatures = !state.animateFeatures; renderDrawer(); renderCanvas(); persistPrefs(); publishMapRibbonState() },
+        toggleMinimap:     () => setMinimapVisible(!state.showMinimap),
+        toggleCameraInfo:  () => setCameraInfoVisible(!state.showCameraInfo),
+        toggleVoids:       () => setVoidsVisible(!state.showVoids),
+        toggleContours:    () => { state.showContours = !state.showContours; persistPrefs(); renderCanvas(); publishMapRibbonState() },
+        toggleBuildable:   () => { state.showBuildable = !state.showBuildable; persistPrefs(); renderCanvas(); publishMapRibbonState() },
+        toggleFeatures:    () => setFeaturesVisible(!state.showFeatures),
+        toggleStartPos:    () => setStartPositionsVisible(!state.showStartPositions),
+        // Map Settings
+        openOTA:              () => openOTADialog(),
+        pickSchema:           (idx) => {
+          state.activeSchema = idx
+          renderCanvas()
+          persistPrefs()
+          publishMapRibbonState()
+        },
+        deleteSchema:         (idx) => deleteSchema(idx),
+        addSchema:            (count) => addSchemaWithPlayers(count),
+        openSchemaEditor:     (idx) => openSchemaEditor(idx),
+        // Configure
+        openSettings:    () => openSettingsDialog(),
+        // Advanced — call the existing export / quality helpers
+        // directly.  The matching legacy buttons live inside the
+        // hidden ribbon template, but the helper functions are all
+        // top-level so they don't need a synthetic click chain.
+        exportMinimap:      () => exportMinimap(),
+        exportFullRender:   () => exportFullRender(),
+        exportMapImage:     () => exportMapImage(),
+        exportBuildmap:     () => exportBuildmap(),
+        exportVoidmap:      () => exportVoidmap(),
+        runQualityCheck:    () => runQualityChecker(buildSavePayload(), { mode: 'audit' }),
+        openDeveloper:      () => openDeveloperDialog(),
+        // Help
+        openHelp:    () => openHelpDialog(),
+        // Minimap pan — re-implements the legacy wireMinimap pan
+        // logic via the shared bridge.  React fires
+        // minimapBeginPan/Pan/EndPan; the host translates the
+        // coordinates into a canvas-scroll position.
+        minimapBeginPan: (clientX, clientY, canvasEl) => {
+          _miniPanActive = true
+          _doMinimapPan(clientX, clientY, canvasEl)
+        },
+        minimapPan: (clientX, clientY, canvasEl) => {
+          if (!_miniPanActive) return
+          _doMinimapPan(clientX, clientY, canvasEl)
+        },
+        minimapEndPan: () => { _miniPanActive = false },
+        scheduleMinimapRender: () => scheduleMinimapRender(),
+      })
+    }
+    // Seed default visibility for the map panels so their first
+    // mount reads the persisted state (or defaults to visible) and
+    // the React tree doesn't flash hidden then show.
+    for (const id of ['map-stats-panel', 'minimap-panel', 'camera-info-panel']) {
+      const vis = state.mvInspectorVisible || {}
+      const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
+      // Stats panel defaults to visible; camera/minimap honour the
+      // legacy state.showCameraInfo / state.showMinimap flags so an
+      // upgrading user keeps their View-menu choices.
+      let def = true
+      if (id === 'minimap-panel')     def = state.showMinimap !== false
+      if (id === 'camera-info-panel') def = state.showCameraInfo !== false
+      ui.setPanelVisible(id, wasSet ? !!vis[id] : def)
+    }
+    // Publish the initial ribbon state so the React ribbon has the
+    // right mode label + view toggles on its first paint.
+    publishMapRibbonState()
     return ui
   }).catch((err) => {
     console.error('[studio] React UI island failed to load:', err)
@@ -14752,6 +14595,130 @@ function configureReactUi() {
     return null
   })
   return _reactUiPromise
+}
+
+// publishMapRibbonState — push every map-editor ribbon-relevant
+// flag/label into the React store so the migrated ribbon re-renders
+// on the next signal commit.  Cheap when the React UI hasn't loaded
+// (early no-op) so calling unconditionally is safe.
+function publishMapRibbonState() {
+  if (!_reactUi || typeof _reactUi.publishRibbonState !== 'function') return
+  // Schema dropdown — flatten the OTA's schema array into the shape
+  // the React ribbon expects.  Player-count labels mirror what the
+  // legacy refreshSchemaSelector produced.
+  const ota = state.ota
+  const schemas = (ota && Array.isArray(ota.schemas)) ? ota.schemas : []
+  const activeIdx = state.activeSchema | 0
+  const schemaList = schemas.map((s, i) => ({
+    index: i,
+    label: schemaPickerLabel(s),
+    active: i === activeIdx,
+    tooltip: s ? `${s.name || `Schema ${i + 1}`} (${playerCountLabel(schemaPlayerCount(s))})` : null,
+  }))
+  const schemaName = schemas.length > 0
+    ? schemaPickerLabel(schemas[activeIdx] || schemas[0])
+    : 'Schema'
+  // Add-grid — same player counts the legacy renderDiceGrid populated.
+  const addCounts = pickedPlayerCounts().map((n) => ({
+    count: n,
+    label: String(n),
+    label2: playerCountLabel(n),
+  }))
+  // Undo / redo history lists.  Each entry is the {label, kind} pair
+  // that captureSnapshot stashed at commit time.  We expose only the
+  // labels here — the popout list shows them as menu rows the user
+  // can click to jump multiple steps in one gesture.
+  const undoHistory = (undoStack || []).slice().reverse().slice(0, 16).map((entry, idx) => ({
+    label: (entry && entry.label) || 'Edit',
+    depth: idx + 1,
+  }))
+  const redoHistory = (redoStack || []).slice().reverse().slice(0, 16).map((entry, idx) => ({
+    label: (entry && entry.label) || 'Edit',
+    depth: idx + 1,
+  }))
+  _reactUi.publishRibbonState({
+    mode: state.mode || 'select-terrain',
+    viewMode: state.viewMode || 'map',
+    showGridlines: !!state.showGridlines,
+    animateFeatures: !!state.animateFeatures,
+    showMinimap: !!state.showMinimap,
+    showCameraInfo: state.showCameraInfo !== false,
+    showVoids: state.showVoids !== false,
+    showContours: !!state.showContours,
+    showBuildable: !!state.showBuildable,
+    showFeatures: state.showFeatures !== false,
+    showStartPositions: state.showStartPositions !== false,
+    symmetry: state.symmetry || 'off',
+    voidsBrushSize: state.voidsBrushSize || 1,
+    eraseSize: state.eraseSize || 1,
+    eraseScope: state.eraseScope || 'all',
+    hmTool: state.hmTool || 'raise',
+    hmRadius: state.hmRadius || 4,
+    hmStrength: state.hmStrength || 4,
+    undoLabel: undoStack && undoStack.length > 0
+      ? `Undo ${(undoStack[undoStack.length - 1] || {}).label || 'edit'}`
+      : 'Undo',
+    undoEnabled: !!(undoStack && undoStack.length > 0),
+    redoLabel: redoStack && redoStack.length > 0
+      ? `Redo ${(redoStack[redoStack.length - 1] || {}).label || 'edit'}`
+      : 'Redo',
+    redoEnabled: !!(redoStack && redoStack.length > 0),
+    undoHistory,
+    redoHistory,
+    schemaName,
+    schemaList,
+    schemaAddCounts: addCounts,
+    connected: heartbeatState !== 'disconnected',
+  })
+}
+
+// Sidebar signal mirror — the React sidebar component reads its own
+// active drawer / filter / used+wreckage state off signals.  We
+// publish them on every switchTab + persistPrefs change so the
+// initial paint + tab swaps land on the right values.
+function publishMapSidebarState() {
+  if (!_reactUi) return
+  if (typeof _reactUi.setSidebarDrawer === 'function') {
+    _reactUi.setSidebarDrawer(state.drawer || 'sections')
+  }
+  if (typeof _reactUi.setSidebarFilter === 'function') {
+    _reactUi.setSidebarFilter((state.drawerFilters || {})[state.drawer] || '')
+  }
+  if (typeof _reactUi.setSidebarUsedOnly === 'function') {
+    _reactUi.setSidebarUsedOnly(!!state.usedOnly)
+  }
+  if (typeof _reactUi.setSidebarWreckage === 'function') {
+    _reactUi.setSidebarWreckage(!!state.includeWreckage)
+  }
+  if (typeof _reactUi.setSidebarUsedOnlyVisible === 'function') {
+    _reactUi.setSidebarUsedOnlyVisible(state.drawer === 'features')
+  }
+  if (typeof _reactUi.setSidebarWreckageVisible === 'function') {
+    _reactUi.setSidebarWreckageVisible(state.drawer === 'features')
+  }
+}
+
+// ── Minimap pan bridge ─────────────────────────────────────────────
+// React MinimapPanel fires minimapBeginPan / Pan / EndPan through the
+// map-ribbon bridge; the host translates the click coordinates into
+// a canvas-scroll position using the live zoom + overscroll padding.
+// Mirrors the legacy wireMinimap pan logic, just driven from the
+// React component's own listeners.
+
+let _miniPanActive = false
+function _doMinimapPan(clientX, clientY, canvasEl) {
+  const mini = canvasEl || document.getElementById('minimap')
+  const wrap = document.getElementById('canvas-scroll')
+  const canvas = document.getElementById('canvas')
+  if (!mini || !wrap || !canvas) return
+  const rect = mini.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) return
+  const cx = (clientX - rect.left) / rect.width
+  const cy = (clientY  - rect.top)  / rect.height
+  const fullW = canvas.width  * state.zoom
+  const fullH = canvas.height * state.zoom
+  wrap.scrollLeft = cx * fullW - wrap.clientWidth  / 2 + overscrollPadding.x
+  wrap.scrollTop  = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
 }
 
 // ensureSandboxPanel — bring up the React-rendered sandbox panel the
@@ -14910,19 +14877,19 @@ async function openModelViewer(name) {
   // the new entry.  switchToTab routes by type so the dialog mounts
   // automatically.
   const meta = availableModels.find((m) => m.name === name)
-  const activeTab = activeTabIndex >= 0 ? tabs[activeTabIndex] : null
+  const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   if (modelOpenIntent === 'replace' && activeTab?.type === 'model') {
     activeTab.name = name
     activeTab.meta = meta
   } else {
     tabs.push({ type: 'model', name, meta })
-    activeTabIndex = tabs.length - 1
+    tabState.activeIndex = tabs.length - 1
   }
   modelOpenIntent = 'add'
   // Force-switch so the dialog re-opens, the topbar/footer refresh,
   // and the viewer loads the new model even when the tab index
   // stayed put.
-  switchToTab(activeTabIndex, { fresh: false, force: true })
+  switchToTab(tabState.activeIndex, { fresh: false, force: true })
 }
 
 // closeModelViewer — replaced by the React ribbon's "Open another
@@ -14931,15 +14898,6 @@ async function openModelViewer(name) {
 // Tab close gestures (× on the tab strip + the tab bar's keyboard
 // shortcut) still flow through closeTab directly.
 
-// ── Utilities ──────────────────────────────────────────────────────────────
-
-function setStatus(msg) { $('#status').textContent = msg }
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
-function escapeHTML(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]))
-}
-function sanitiseFilename(s) {
-  return s.replace(/[^a-zA-Z0-9_ -]+/g, '').trim() || 'newmap'
-}
+// setStatus / clamp / escapeHTML / sanitiseFilename now live in
+// ./ui/host-context.js so subsystem modules can pull them in
+// without re-importing studio.js.

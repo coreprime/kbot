@@ -191,11 +191,31 @@ export class MvControls extends BaseView {
 
   // ── Wiring ──────────────────────────────────────────────────────
 
+  // _isActive — true when THIS MvControls instance belongs to the
+  // unit-editor tab the user is currently viewing.  Every unit tab
+  // owns its own MvControls (round 34), but the action-grid buttons
+  // (#mv-controls-actions) and document-level Space / +/- keys live
+  // in shared DOM that doesn't change per tab.  Without this gate
+  // every per-tab MvControls instance would process every click /
+  // keypress, causing a click on tab B's Stop button to fire tab A's
+  // Stop handler too (and the React Create banner's lifecycle would
+  // bleed via the duplicated tick-side effects).  Reading the global
+  // alias via window.__modelViewer keeps mv-controls.js decoupled
+  // from studio.js's module scope.
+  _isActive() {
+    const active = (typeof window !== 'undefined' ? window.__modelViewer : null)
+    return !!active && active === this.viewer
+  }
+
   _wireButtons() {
     const buttons = document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')
     for (const btn of buttons) {
       const action = btn.dataset.ctrlAction
       btn.addEventListener('click', (e) => {
+        // Skip when this MvControls isn't bound to the active tab —
+        // every per-tab instance is listening on the same buttons,
+        // and only the foreground one should react to the click.
+        if (!this._isActive()) return
         e.stopPropagation()
         if (btn.disabled) return
         if (action === 'stop') {
@@ -219,8 +239,14 @@ export class MvControls extends BaseView {
       // the user can see WHERE they previously committed.  Doesn't
       // apply to Stop (no target concept).
       if (action !== 'stop') {
-        btn.addEventListener('mouseenter', () => { this._hoverPreview = action; this._updateHoverPreview() })
-        btn.addEventListener('mouseleave', () => { if (this._hoverPreview === action) { this._hoverPreview = null; this._updateHoverPreview() } })
+        btn.addEventListener('mouseenter', () => {
+          if (!this._isActive()) return
+          this._hoverPreview = action; this._updateHoverPreview()
+        })
+        btn.addEventListener('mouseleave', () => {
+          if (!this._isActive()) return
+          if (this._hoverPreview === action) { this._hoverPreview = null; this._updateHoverPreview() }
+        })
       }
     }
   }
@@ -1057,7 +1083,11 @@ export class MvControls extends BaseView {
     // inside _armSlotHotkey).
     this.wireHotkeys({
       dialogId: 'model-viewer-dialog',
-      allowed: () => true,
+      // Round 35: gate the unit-hotkey allowed() check on per-tab
+      // activeness — every per-tab MvControls subscribes the same
+      // document keymap; the foreground one should be the only
+      // listener that takes the hotkey.
+      allowed: () => this._isActive(),
       onCommand: (cmd) => this._armSlotHotkey(cmd),
       onStop:    () => this._stopAllTargets(),
       onTrack:   () => this.setTracking(!this.tracking),
@@ -1065,6 +1095,10 @@ export class MvControls extends BaseView {
     // Runtime-control keys (Space, +/-) stay viewer-specific — they
     // drive sim playback rate / paused state, not unit orders.
     document.addEventListener('keydown', (e) => {
+      // Same per-tab gate as wireHotkeys above — without it the
+      // backgrounded tab's MvControls also reacts to Space / +/-
+      // and double-toggles the runtime / sim-speed.
+      if (!this._isActive()) return
       const dlg = document.getElementById('model-viewer-dialog')
       if (!dlg || dlg.classList.contains('hidden')) return
       const tgt = e.target

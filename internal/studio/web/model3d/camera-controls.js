@@ -175,6 +175,15 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
       const dlg = document.getElementById(dialogId)
       if (!dlg || dlg.classList.contains('hidden')) return
     }
+    // Per-tab gate (round 35): when multiple unit / sandbox tabs are
+    // open, each calls attachOrbitControls and adds its own window-
+    // level keydown listener.  Only the foreground tab's canvas is
+    // attached to the DOM (per-tab attach/detach moves canvases in /
+    // out of the stage), so `canvas.isConnected` distinguishes the
+    // active listener from the backgrounded ones — without this, R
+    // for auto-rotate and the arrow-key pans fire on every tab's
+    // camera at once and bleed state across tabs.
+    if (canvas && !canvas.isConnected) return
     const t = e.target
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return
     if (t && t.isContentEditable) return

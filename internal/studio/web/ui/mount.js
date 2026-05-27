@@ -60,6 +60,18 @@ import {
 import {
   WelcomeScreen, setWelcomeTab,
 } from '/ui/screens/welcome/welcome-screen.js'
+import { MapStatsPanel } from '/ui/map-editor/panels/map-stats-panel.js'
+import { CameraCursorPanel } from '/ui/map-editor/panels/camera-cursor-panel.js'
+import { MinimapPanel } from '/ui/map-editor/panels/minimap-panel.js'
+import { MapSidebar } from '/ui/map-editor/tabs/sidebar.js'
+import { MapRibbon, closeMapRibbonDropdowns } from '/ui/map-editor/ribbon/map-ribbon.js'
+import {
+  publishMapStats, publishMapCameraInfo, bumpMinimapTick,
+  sidebarDrawer, sidebarFilter, sidebarUsedOnly, sidebarWreckage,
+  sidebarUsedOnlyVisible, sidebarWreckageVisible,
+  configureSidebarBridge,
+  publishRibbonState, configureMapRibbonBridge,
+} from '/ui/common/map-editor-store.js'
 import {
   publishInspectorState,
   bumpRuntimeTick,
@@ -222,6 +234,48 @@ export function mountSidebarTabs() {
     () => html`<${WeaponsTab} />`)
 }
 
+// mountMapEditor — render the map-editor's React surface: the
+// ribbon, the sidebar (tabs + filter row + drawer slot), and the
+// three floating panels (Map Stats, Minimap, Camera & Cursor).
+// Idempotent: each mount root is created once and reused on
+// re-mount.  The existing canvas-wrap children (#minimap-panel,
+// #dev-stats-panel, #camera-info-panel) are removed by index.html —
+// the React tree owns them now.
+//
+// Sidebar mounts INTO `.sidebar` so the React tabs + drawer slot
+// replace the legacy static markup.  Panels mount as children of
+// `.canvas-wrap` so the existing `.minimap` / `.dev-stats` CSS rules
+// (which use `position: absolute` relative to the wrap) keep
+// applying without any positioning rewrites.
+export function mountMapEditor() {
+  // Ribbon — mounts INTO #ribbon-mount which the index.html provides
+  // as a `display: contents` shell so the React tree's root <div
+  // class="ribbon"> still lands as the immediate child of `.app`
+  // (the grid template-area `ribbon` is bound to the immediate
+  // child class .ribbon).
+  const ribbonSlot = document.getElementById('ribbon-mount')
+  if (ribbonSlot) render(html`<${MapRibbon} />`, ribbonSlot)
+  // Sidebar header (tabs + filter) — mounts into a dedicated slot
+  // alongside the static `<div id="drawer">`.  Keeping the drawer
+  // outside the React tree is intentional: renderDrawer paints
+  // tile / feature buttons directly into `#drawer`, and Preact's
+  // child diff would otherwise clobber that paint on every signal
+  // change.  Using a `display:contents` mount slot lets the React
+  // tree's tabs + filter rows still flex inside the aside grid
+  // alongside the drawer below.
+  const sidebarSlot = document.getElementById('sidebar-tabs-mount')
+  if (sidebarSlot) render(html`<${MapSidebar} />`, sidebarSlot)
+  // Three floating panels.  Mount roots are siblings of `.canvas-wrap`'s
+  // direct children so the existing `.minimap` / `.dev-stats` positioning
+  // CSS works unchanged.
+  const wrap = document.querySelector('.canvas-wrap')
+  if (wrap) {
+    _mountInto('map-stats-panel',     () => html`<${MapStatsPanel} />`,     wrap)
+    _mountInto('camera-info-panel',   () => html`<${CameraCursorPanel} />`, wrap)
+    _mountInto('minimap-panel',       () => html`<${MinimapPanel} />`,      wrap)
+  }
+}
+
 // mountWelcomeScreen — render the React welcome card body into the
 // #welcome-dialog's existing dialog-card slot, leaving the surrounding
 // glamour cross-fade + NanoFX canvas + ambient audio layers (which
@@ -276,7 +330,24 @@ export {
   setTabs, configureTabBarBridge,
   // Welcome screen tab nudger.
   setWelcomeTab,
+  // Map editor store + bridge installers.  The host calls these to
+  // push live state into the React tree (publishMapStats etc.) and
+  // to install action handlers (configureMapRibbonBridge).
+  publishMapStats, publishMapCameraInfo, bumpMinimapTick,
+  configureSidebarBridge,
+  publishRibbonState, configureMapRibbonBridge,
+  closeMapRibbonDropdowns,
 }
+
+// Sidebar signal setters — explicit re-exports so the host can write
+// through the signals (used when switchTab + the filter input have to
+// reflect the canonical state on every map open).
+export function setSidebarDrawer(key) { sidebarDrawer.value = key }
+export function setSidebarFilter(text) { sidebarFilter.value = text || '' }
+export function setSidebarUsedOnly(on) { sidebarUsedOnly.value = !!on }
+export function setSidebarWreckage(on) { sidebarWreckage.value = !!on }
+export function setSidebarUsedOnlyVisible(on)   { sidebarUsedOnlyVisible.value = !!on }
+export function setSidebarWreckageVisible(on)   { sidebarWreckageVisible.value = !!on }
 
 // showSandboxPanel — flip the panel-store visibility signal so the
 // React tree re-renders with the correct .hidden class.  Mirrors

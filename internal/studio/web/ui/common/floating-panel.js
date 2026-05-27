@@ -26,8 +26,11 @@ import { panelSignals, setPanelPos, setPanelCollapsed, setPanelVisible } from '/
 // _headerHeight — read the live header element height so the clamp
 // rule honours whatever vertical padding the CSS applies.  Falls
 // back to 32 px when the header isn't laid out yet (mid-mount).
-function _headerHeight(panelEl) {
-  const hdr = panelEl && panelEl.querySelector('.mv-inspector-header')
+// headerSelector defaults to the unit-editor's `.mv-inspector-header`
+// but map-editor panels (.minimap, .dev-stats) override it via the
+// FloatingPanel headerClass prop.
+function _headerHeight(panelEl, headerSelector = '.mv-inspector-header') {
+  const hdr = panelEl && panelEl.querySelector(headerSelector)
   if (hdr) {
     const h = hdr.offsetHeight || hdr.getBoundingClientRect().height
     if (h > 0) return h
@@ -47,17 +50,19 @@ function _clamp(v, lo, hi) {
 // doesn't strand a panel off-screen.  Bottom is intentionally
 // unbounded — the title bar has to stay reachable, the body can
 // overflow.
-export function rescuePanelIntoStage(panelId) {
+export function rescuePanelIntoStage(panelId, opts = {}) {
   const panelEl = document.getElementById(panelId)
   if (!panelEl || panelEl.classList.contains('hidden')) return
-  const stage = document.querySelector('.model-viewer-stage')
+  const stageSelector  = opts.stageSelector  || '.model-viewer-stage'
+  const headerSelector = opts.headerSelector || '.mv-inspector-header'
+  const stage = document.querySelector(stageSelector)
   if (!stage) return
   const sr = stage.getBoundingClientRect()
   const pr = panelEl.getBoundingClientRect()
   const w = pr.width || panelEl.offsetWidth || 220
   const left = pr.left - sr.left
   const top  = pr.top  - sr.top
-  const headerH = _headerHeight(panelEl)
+  const headerH = _headerHeight(panelEl, headerSelector)
   const maxLeft = Math.max(0, sr.width  - w)
   const maxTop  = Math.max(0, sr.height - headerH)
   const clLeft = _clamp(left, 0, maxLeft)
@@ -80,7 +85,32 @@ export function rescuePanelIntoStage(panelId) {
 //                 signal off.
 //   children    — body content rendered inside .mv-inspector-body.
 //   className   — extra classes merged onto the root element.
-export function FloatingPanel({ id, title, defaultPos = null, onClose = null, className = '', children }) {
+//   rootClass   — base class for the outer <aside> (default
+//                 'mv-inspector').  Map editor panels override with
+//                 their own existing class (.minimap, .dev-stats) so
+//                 studio.css's per-id positioning + chrome rules keep
+//                 applying after the React migration.
+//   headerClass / bodyClass — matching base classes for the header bar
+//                 and body wrapper.  Defaults pair with the unit-
+//                 editor's `mv-inspector-header` / `mv-inspector-body`.
+//   stageSelector — the CSS selector used to clamp drag + rescue
+//                 positions (default `.model-viewer-stage`).  Map
+//                 editor panels pass `.canvas-wrap`.
+//   gripGlyph   — first glyph in the header (defaults to the unit-
+//                 editor's `⠿` grip).  Set to '' to suppress.
+//   noCollapse / noClose — flip OFF the matching header buttons (the
+//                 minimap keeps its imperative behaviour; some map
+//                 panels (Stats) only ship a Collapse, not a Close).
+export function FloatingPanel({
+  id, title, defaultPos = null, onClose = null, className = '', children,
+  rootClass = 'mv-inspector',
+  headerClass = 'mv-inspector-header',
+  bodyClass = 'mv-inspector-body',
+  stageSelector = '.model-viewer-stage',
+  gripGlyph = '⠿',
+  noCollapse = false,
+  noClose = false,
+}) {
   const panelRef = useRef(null)
   const headerRef = useRef(null)
   const sig = panelSignals(id, { defaultVisible: true })
@@ -133,11 +163,11 @@ export function FloatingPanel({ id, title, defaultPos = null, onClose = null, cl
     }
     const onMove = (e) => {
       if (!dragOff) return
-      const stage = document.querySelector('.model-viewer-stage')
+      const stage = document.querySelector(stageSelector)
       if (!stage) return
       const sr = stage.getBoundingClientRect()
       const w = panelEl.offsetWidth || 220
-      const headerH = _headerHeight(panelEl)
+      const headerH = _headerHeight(panelEl, `.${headerClass}`)
       const nextLeft = _clamp(e.clientX - dragOff.dx - sr.left, 4, Math.max(4, sr.width - w - 4))
       const nextTop  = _clamp(e.clientY - dragOff.dy - sr.top,  4, Math.max(4, sr.height - headerH - 4))
       // Write straight into the DOM during the drag for jitter-free
@@ -165,7 +195,7 @@ export function FloatingPanel({ id, title, defaultPos = null, onClose = null, cl
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [id])
+  }, [id, stageSelector, headerClass])
 
   // Post-mount rescue clamp — once the panel has rendered we know
   // its real width + header height, so any persisted position that
@@ -174,14 +204,15 @@ export function FloatingPanel({ id, title, defaultPos = null, onClose = null, cl
   useEffect(() => {
     if (!visible) return
     let raf2 = 0
+    const opts = { stageSelector, headerSelector: `.${headerClass}` }
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => rescuePanelIntoStage(id))
+      raf2 = requestAnimationFrame(() => rescuePanelIntoStage(id, opts))
     })
     return () => {
       cancelAnimationFrame(raf1)
       if (raf2) cancelAnimationFrame(raf2)
     }
-  }, [id, visible])
+  }, [id, visible, stageSelector, headerClass])
 
   const handleCollapseClick = (e) => {
     e.stopPropagation()
@@ -194,41 +225,47 @@ export function FloatingPanel({ id, title, defaultPos = null, onClose = null, cl
   }
   const handlePointerDownStop = (e) => e.stopPropagation()
 
-  // Classlist for the root element — combines the static .mv-inspector
-  // (so the stylesheet picks it up) with the dynamic visibility +
-  // collapsed flags.  The legacy wireMvInspector uses the same class
-  // names; everything in studio.css applies as-is.
-  const rootClass = [
-    'mv-inspector',
+  // Classlist for the root element — combines the configurable base
+  // class (defaults to `.mv-inspector` for unit-editor panels; map-
+  // editor panels pass their own `.minimap` / `.dev-stats` class so
+  // studio.css's per-id positioning rules keep applying) with the
+  // dynamic visibility + collapsed flags.  The legacy wireMvInspector
+  // uses the same class names; everything in studio.css applies as-is.
+  const rootClassMerged = [
+    rootClass,
     visible ? '' : 'hidden',
     collapsed ? 'collapsed' : '',
     className,
   ].filter(Boolean).join(' ')
 
   return html`
-    <aside ref=${panelRef} id=${id} class=${rootClass}
+    <aside ref=${panelRef} id=${id} class=${rootClassMerged}
            title=${`Drag this header to move the ${title} overlay`}>
-      <div ref=${headerRef} class="mv-inspector-header" id=${`${id}-header`}>
-        <span class="minimap-grip" title="Drag to move this panel">⠿</span>
+      <div ref=${headerRef} class=${headerClass} id=${`${id}-header`}>
+        ${gripGlyph ? html`<span class="minimap-grip" title="Drag to move this panel">${gripGlyph}</span>` : null}
         <span>${title}</span>
-        <button class="minimap-toggle mv-inspector-toggle"
-                title=${collapsed
-                  ? 'Expand this panel back to its full height.'
-                  : 'Collapse this panel to a thin header bar (click again to expand).'}
-                onClick=${handleCollapseClick}
-                onPointerDown=${handlePointerDownStop}
-                onMouseDown=${handlePointerDownStop}>
-          ${collapsed ? '+' : '−'}
-        </button>
-        <button class="minimap-toggle mv-inspector-close"
-                title="Close this panel (re-open later from the View menu or the sandbox Developer Tools dropdown)."
-                onClick=${handleCloseClick}
-                onPointerDown=${handlePointerDownStop}
-                onMouseDown=${handlePointerDownStop}>
-          ×
-        </button>
+        ${noCollapse ? null : html`
+          <button class="minimap-toggle mv-inspector-toggle"
+                  title=${collapsed
+                    ? 'Expand this panel back to its full height.'
+                    : 'Collapse this panel to a thin header bar (click again to expand).'}
+                  onClick=${handleCollapseClick}
+                  onPointerDown=${handlePointerDownStop}
+                  onMouseDown=${handlePointerDownStop}>
+            ${collapsed ? '+' : '−'}
+          </button>
+        `}
+        ${noClose ? null : html`
+          <button class="minimap-toggle mv-inspector-close"
+                  title="Close this panel (re-open later from the View menu)."
+                  onClick=${handleCloseClick}
+                  onPointerDown=${handlePointerDownStop}
+                  onMouseDown=${handlePointerDownStop}>
+            ×
+          </button>
+        `}
       </div>
-      <div class="mv-inspector-body" id=${`${id}-body`}>
+      <div class=${bodyClass} id=${`${id}-body`}>
         ${children}
       </div>
     </aside>
