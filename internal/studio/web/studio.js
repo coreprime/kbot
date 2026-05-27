@@ -7236,7 +7236,7 @@ function wireMvRuntimeVisibility() {
 // off the runtime via runtimeTick subscription, no DOM writes.
 
 // build*Row port-row builders — replaced by the Preact components in
-// /ui/common/port-rows.js (round 17).
+// /ui/unit-editor/panels/port-rows.js (round 17; relocated in R48b).
 
 // mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
 // (which the Ports panel edits) back into the React COB ribbon's Unit
@@ -7351,7 +7351,7 @@ function _collectRunningCobScripts(cob) {
 
 // wireMvPortsPanel — port row builders + the panel-header Reset host
 // are both gone in round 17; the React ControlsPanel renders rows + a
-// React-owned Reset attribute via /ui/common/port-rows.js + /ui/panels/controls-panel.js.
+// React-owned Reset attribute via /ui/unit-editor/panels/port-rows.js + /ui/panels/controls-panel.js.
 
 // wireCobAttributeSliders — the COB-menu Damage / Build / Playback
 // sliders + Reset button are React-managed now (see the model viewer
