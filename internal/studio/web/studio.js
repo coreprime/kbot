@@ -173,6 +173,11 @@ import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
 // state.  Auto-focuses the New card on every re-show.
 import { wireWelcomeKeyboard } from './ui/screens/welcome/keyboard.js'
 
+// Welcome-screen drag-drop loader — accepts .tnt + optional .ota
+// from the user's desktop and routes through the openLoadedMap
+// host callback.
+import { wireWelcomeDropZone } from './ui/screens/welcome/drop-zone.js'
+
 // Open-map picker flow.  Owns its own catalogue polling state
 // (availableMaps / mapsLoading / mapsPollTimer / selectedMapPath
 // / openMapSource); routes the chosen map through the
@@ -854,54 +859,9 @@ let sizeDialogSource = 'welcome' // 'welcome' or 'tabbar' — controls where the
 // so its RAF / timer / audio stops cleanly when the user clicks
 // through into the editor.
 
-// wireWelcomeDropZone lets the welcome screen accept a drag-drop
-// of a .tnt file (+ optional .ota sibling) from the user's desktop
-// and have the editor load it without going through VFS.  The drop
-// targets are the welcome-options grid; the body is a fallback so
-// the page doesn't navigate away when a file misses the modal.
-function wireWelcomeDropZone() {
-  const wel = $('#welcome-dialog')
-  if (!wel) return
-  const block = (e) => { e.preventDefault(); e.stopPropagation() }
-  for (const ev of ['dragenter', 'dragover']) {
-    wel.addEventListener(ev, (e) => { block(e); wel.classList.add('drop-hover') })
-  }
-  for (const ev of ['dragleave', 'drop']) {
-    wel.addEventListener(ev, (e) => { block(e); wel.classList.remove('drop-hover') })
-  }
-  wel.addEventListener('drop', async (e) => {
-    const files = Array.from(e.dataTransfer?.files || [])
-    if (files.length === 0) return
-    let tntFile = null
-    let otaFile = null
-    for (const f of files) {
-      const lower = (f.name || '').toLowerCase()
-      if (lower.endsWith('.tnt')) tntFile = f
-      else if (lower.endsWith('.ota')) otaFile = f
-    }
-    if (!tntFile) {
-      setStatus('Drop a .tnt file (and optionally a sibling .ota) to load.')
-      return
-    }
-    const form = new FormData()
-    form.append('tnt', tntFile)
-    if (otaFile) form.append('ota', otaFile)
-    try {
-      const resp = await fetch('/api/studio/load-upload', { method: 'POST', body: form })
-      if (!resp.ok) {
-        const text = await resp.text()
-        throw new Error(text || `HTTP ${resp.status}`)
-      }
-      const data = await resp.json()
-      $('#welcome-dialog').classList.add('hidden')
-      $('#app').classList.remove('hidden')
-      await openLoadedMap(data, null)
-      setStatus(`Loaded ${tntFile.name}.`)
-    } catch (err) {
-      setStatus(`Upload failed: ${err.message}`)
-    }
-  })
-}
+// wireWelcomeDropZone moved to /ui/screens/welcome/drop-zone.js.
+// Routes successful uploads through the openLoadedMap host
+// callback registered above.
 
 async function openLoadedMap(data, card) {
   const w = data.tileW || 128
