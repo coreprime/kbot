@@ -1609,7 +1609,16 @@ export class SandboxView extends BaseView {
       Object.defineProperty(mv, 'cobBuildPercent', {
         enumerable: true, configurable: true,
         get: () => focused.buildPercent | 0,
-        set: (v) => { focused.buildPercent = Math.max(0, Math.min(100, v | 0)) },
+        set: (v) => {
+          const pct = Math.max(0, Math.min(100, v | 0))
+          focused.buildPercent = pct
+          // Push into the binding so sparkle emit-rate tracks the
+          // build without poking back through a global (Phase C
+          // cleanup).
+          if (focused.binding && typeof focused.binding.setBuildPercent === 'function') {
+            focused.binding.setBuildPercent(pct)
+          }
+        },
       })
     }
     return mv

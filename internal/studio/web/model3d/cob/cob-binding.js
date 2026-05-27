@@ -60,6 +60,14 @@ export class CobBinding {
     // at {0,0,0}.  Multi-entity hosts set it on every tick from each
     // unit's pos.
     this.worldOffset = { x: 0, y: 0, z: 0 }
+    // Build% drives the sparkle-emission rate in _emitBuildSparkles
+    // (and the renderer's nano-frame fade is set separately via the
+    // host's setBuildPercent).  Host writes here through setBuildPercent
+    // below; default 100% (= done = no sparkles).  Previously read
+    // through a window.__modelViewer back-channel which assumed there
+    // was exactly one host in the page — now sits on the binding so
+    // each tab's host pushes its own value into its own bindings.
+    this.buildPercent = 100
     // Audio pool — central registry for every sound the studio plays
     // (unit acks, weapon fire, hits, UI previews).  Lives on the
     // binding so it's ticked alongside particles + runtime in the
@@ -439,15 +447,20 @@ export class CobBinding {
   // surface rather than from a single emission point.  Honours the
   // controller's unit position + heading via the per-piece world
   // matrices, so the effect tracks a moving unit naturally.
+  // setBuildPercent pushes the host's current build % into this
+  // binding so _emitBuildSparkles can scale the green sparkle emit
+  // rate.  Hosts call this from their own setBuildPercent — the
+  // renderer's uniform is set separately via renderer.setBuildPercent
+  // so the visual fade can update independently of any binding.
+  setBuildPercent(pct) {
+    this.buildPercent = Math.max(0, Math.min(100, +pct || 0))
+  }
+
   _emitBuildSparkles(dtMs) {
-    // Build% lives on the active host (window.__modelViewer.cobBuildPercent
-    // is the authoritative field, mirrored on the renderer's shader
-    // uniform via setBuildPercent).  Read it directly — the binding
-    // doesn't carry a host reference but is always coupled to the
-    // one active host in the studio.
-    const viewer = (typeof window !== 'undefined') ? window.__modelViewer : null
-    if (!viewer) return
-    const buildPct = viewer.cobBuildPercent
+    // Build% comes from the host via setBuildPercent (above).  The
+    // binding doesn't reach back to look it up — multi-tab hosts
+    // would have all clobbered each other through a shared global.
+    const buildPct = this.buildPercent
     if (buildPct == null || buildPct >= 100) return
     if (!this.model || !this.particles) return
     // Sparkle density — particles per SECOND of real time, scaled

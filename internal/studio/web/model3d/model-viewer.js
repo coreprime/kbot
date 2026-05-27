@@ -150,6 +150,12 @@ export class ModelViewer {
   setBuildPercent(percent) {
     this.cobBuildPercent = Math.max(0, Math.min(100, +percent || 0))
     if (this.renderer) this.renderer.setBuildPercent(this.cobBuildPercent)
+    // Push into the live binding so its sparkle-emit rate tracks
+    // the build without poking back at this instance through a
+    // window global (Phase C cleanup).
+    if (this.cob && typeof this.cob.setBuildPercent === 'function') {
+      this.cob.setBuildPercent(this.cobBuildPercent)
+    }
   }
 
   // resetState clears EVERYTHING the user could have driven on the
