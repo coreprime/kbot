@@ -183,6 +183,7 @@ import {
   showSandboxPanel,
 } from './ui/sandbox/spawn-picker.js'
 import { wireSandboxRibbon } from './ui/sandbox/ribbon-bridge.js'
+import { wireSandboxControlsIntercept } from './ui/sandbox/controls-intercept.js'
 
 // View-menu visibility toggles (minimap / features / start
 // positions / voids).  Each flips the matching state.show* flag,
@@ -4008,51 +4009,6 @@ async function activateSandboxTab(tab) {
     window.__sandboxView = sandboxViewInstance
     window.__activeViewer = sandboxViewInstance
   }
-}
-
-// wireSandboxControlsIntercept — when sandbox is active, the
-// Controls panel's action buttons (Move / Primary / Secondary /
-// Tertiary / Stop) should drive the currently-selected sandbox unit
-// rather than the single-unit MvControls singleton.  We attach a
-// capture-phase click listener that — only when the dialog is in
-// sandbox-mode — translates each ctrl-action into the sandbox
-// command pipeline (setPendingCommand + per-unit order writes) and
-// stops the event so the underlying MvControls handler doesn't run
-// against the now-dormant single-unit viewer.  Idempotent guard via
-// a dataset flag.
-function wireSandboxControlsIntercept() {
-  const grid = document.getElementById('mv-controls-actions')
-  if (!grid || grid.dataset.sandboxWired === '1') return
-  grid.dataset.sandboxWired = '1'
-  grid.addEventListener('click', (e) => {
-    const dlg = document.getElementById('model-viewer-dialog')
-    if (!dlg || !dlg.classList.contains('sandbox-mode')) return
-    const btn = e.target.closest('.mv-ctrl-action')
-    if (!btn) return
-    const action = btn.dataset.ctrlAction
-    if (!action) return
-    e.stopPropagation()
-    e.preventDefault()
-    const sb = sandboxViewInstance
-    if (!sb || !sb.scene) return
-    if (action === 'stop') {
-      // Stop dispatches through BaseView.stop() → engine.stopUnits.
-      // The canonical "drop move + attack + weapon slots + run
-      // StopMoving + TargetCleared" entry point lives in the engine
-      // now; both the sandbox S-hotkey + #stopSelected and this
-      // Controls grid handler converge on one code path so the three
-      // can't drift apart again.
-      sb.stop()
-      return
-    }
-    // All slots arm the next canvas click — matches the unit
-    // editor's Controls panel semantics (you click Primary, then
-    // click in the scene to lock the weapon onto that target).
-    // setPendingCommand swaps the armed-cursor overlay so the user
-    // sees which slot is armed.
-    if (action === 'move') sb.setPendingCommand('move')
-    else if (action === 'primary' || action === 'secondary' || action === 'tertiary') sb.setPendingCommand(action)
-  }, /* capture = */ true)
 }
 
 // _unitEditorAutoRotate — host-side cache of the Auto-Rotate toggle
