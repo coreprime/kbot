@@ -429,7 +429,7 @@
               </div>
               <div class="submenu-slider-row" title="Playback speed for COB animations.  0.25x = quarter speed (slow-motion inspection).  1.0x = real-time TA pacing.  2x = double speed.">
                 <span class="slider-lbl">Playback</span>
-                <input id="mv-cob-playback" type="range" min="10" max="200" step="5" value="100" />
+                <input id="mv-cob-playback" type="range" min="1" max="1000" step="1" value="100" />
                 <span class="slider-val" id="mv-cob-playback-val">1.0×</span>
               </div>
               <button class="menu-row" id="mv-cob-reset" title="Reset every piece to its original 3DO position, kill all COB threads, and zero all static vars.  The unit returns to its raw rest state — exactly as it would look just after Open with no scripts run."><span class="ico">↺</span><span>Reset State</span></button>
@@ -589,8 +589,8 @@
         </div>
         <div class="mv-runtime-speed" title="Simulation speed — scales every unit's tick clock.  Mirrors the COB menu's Playback slider.">
           <label class="mv-runtime-speed-label">Speed</label>
-          <input type="range" min="10" max="200" value="100" id="mv-runtime-speed" class="mv-runtime-speed-input"
-                 title="Drag to slow down or speed up the simulation.  1.00× = real time." />
+          <input type="range" min="1" max="1000" value="100" step="1" id="mv-runtime-speed" class="mv-runtime-speed-input"
+                 title="Drag to slow down or speed up the simulation.  Range 0.01× to 10×; 1.00× = real time.  Hit + / − to step in 10% increments." />
           <span class="mv-runtime-speed-val" id="mv-runtime-speed-val">1.00×</span>
         </div>
         <div class="mv-inspector-controls">

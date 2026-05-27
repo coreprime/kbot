@@ -14995,12 +14995,15 @@ function wireCobAttributeSliders() {
 // the Runtime overlay's Speed slider call this — it pushes the new
 // rate to the runtime and writes the value labels on both sliders
 // so the two UIs stay in lock-step.  rate is the multiplier (1.0 =
-// real time, 0.25 = quarter-speed, 4.0 = fast-forward).
+// real time, 0.01 = 1/100 speed, 10.0 = 10× fast-forward).  Slider
+// max range matches CobRuntime.setPlaybackRate clamping (0.01 → 10).
 function mvSetSimulationSpeed(rate) {
-  const v = Math.max(0.1, Math.min(2.0, +rate || 1))
+  const v = Math.max(0.01, Math.min(10, +rate || 1))
   const cob = modelViewerInstance?.cob
   if (cob) cob.runtime.setPlaybackRate(v)
-  // COB-menu slider + label.
+  // Slider values are percent units (1-1000 = 0.01× - 10×).  Label
+  // uses 2 decimals so 0.05× and 0.25× both read cleanly; high end
+  // (10.00×) doesn't lose precision.
   const pb = document.getElementById('mv-cob-playback')
   const pbVal = document.getElementById('mv-cob-playback-val')
   if (pb) pb.value = String(Math.round(v * 100))
