@@ -289,6 +289,16 @@ import { runQualityChecker } from './ui/map-editor/dialogs/quality-checker.js'
 // Checker and flip the active map's dirty flag on success.
 import { save, saveLoose } from './ui/map-editor/save.js'
 
+// Content-version-keyed caches over state.features — feature
+// spatial bucket (featuresNear) + name index (getFeaturesByName).
+// Both invalidate together when bumpContentVersion ticks.
+import {
+  getContentVersion,
+  bumpContentVersion,
+  featuresNear,
+  getFeaturesByName,
+} from './ui/map-editor/content-cache.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -760,7 +770,7 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
   recreateEditorView()
   // Sync drawer / view / mode UI to the new tab's state.
   if (typeof updateUndoButtons === 'function') updateUndoButtons()
-  if (typeof bumpContentVersion === 'function') bumpContentVersion()
+  bumpContentVersion()
   // Reflect the new tab's drawer filter in the sidebar input.
   const filterInput = document.querySelector('#filter')
   if (filterInput) filterInput.value = state.drawerFilters?.[state.drawer] || ''
@@ -5757,16 +5767,12 @@ function invalidateMinimapBase() {
   bumpContentVersion()
 }
 
-// contentVersion is bumped any time state.features changes.  Feature
-// indices (spatial, name) recompute lazily when their cached version
-// falls behind.  Tile changes use invalidateMinimapBase / patchMinimapTile
-// directly and do not need to invalidate the feature indices.
-let contentVersion = 0
-function bumpContentVersion() {
-  contentVersion++
-  featureSpatial = null
-  featureNameIndex = null
-}
+// contentVersion + featureSpatial + featureNameIndex moved to
+// /ui/map-editor/content-cache.js — imported as
+// getContentVersion / bumpContentVersion / featuresNear /
+// getFeaturesByName at the top of this file.  Tile-only edits
+// route through invalidateMinimapBase + patchMinimapTile directly
+// and don't need to invalidate the feature indices.
 
 // sectionThumbCache maps a sectionPath to a downscaled canvas where
 // each 32-px source tile collapses to a single pixel.  Built once per
@@ -5839,65 +5845,6 @@ function patchMinimapTile(tx, ty) {
   ctx.clearRect(tx, ty, 1, 1)
   ctx.drawImage(thumb, stamp.sx, stamp.sy, 1, 1, tx, ty, 1, 1)
   scheduleMinimapRender()
-}
-
-// featureSpatial — tile-keyed bucket of feature indices.  Rebuilt
-// lazily by findFeatureAt / featuresNear when contentVersion ticks
-// past spatialVersion.  Without this, every mouse-move is O(N) over
-// state.features.
-let featureSpatial = null
-let spatialVersion = -1
-function rebuildFeatureSpatial() {
-  featureSpatial = new Map()
-  const tw = state.tileW
-  for (let i = 0; i < state.features.length; i++) {
-    const f = state.features[i]
-    const tx = Math.floor(f.ax / 2)
-    const ty = Math.floor(f.ay / 2)
-    const key = ty * tw + tx
-    let arr = featureSpatial.get(key)
-    if (!arr) { arr = []; featureSpatial.set(key, arr) }
-    arr.push(i)
-  }
-  spatialVersion = contentVersion
-}
-
-// featuresNear returns every feature whose ANCHOR tile is within a
-// radius of (tx, ty).  Sprites can extend off their anchor so callers
-// should still test the final draw rect, but the candidate set is now
-// O(radius²) instead of O(N).
-function featuresNear(tx, ty, radius) {
-  if (!featureSpatial || spatialVersion !== contentVersion) rebuildFeatureSpatial()
-  const tw = state.tileW, th = state.tileH
-  const lo = { x: Math.max(0, tx - radius), y: Math.max(0, ty - radius) }
-  const hi = { x: Math.min(tw - 1, tx + radius), y: Math.min(th - 1, ty + radius) }
-  const out = []
-  for (let cy = lo.y; cy <= hi.y; cy++) {
-    for (let cx = lo.x; cx <= hi.x; cx++) {
-      const arr = featureSpatial.get(cy * tw + cx)
-      if (arr) for (const i of arr) out.push(i)
-    }
-  }
-  return out
-}
-
-// featureNameIndex — name → array of indices.  Used by the hover
-// outline + minimap dot loop, which previously walked all features
-// looking for matches.  Same lifetime as featureSpatial.
-let featureNameIndex = null
-let nameIndexVersion = -1
-function getFeaturesByName(name) {
-  if (!featureNameIndex || nameIndexVersion !== contentVersion) {
-    featureNameIndex = new Map()
-    for (let i = 0; i < state.features.length; i++) {
-      const n = (state.features[i].name || '').toLowerCase()
-      let arr = featureNameIndex.get(n)
-      if (!arr) { arr = []; featureNameIndex.set(n, arr) }
-      arr.push(i)
-    }
-    nameIndexVersion = contentVersion
-  }
-  return featureNameIndex.get(name) || []
 }
 
 let minimapRenderQueued = false
@@ -6152,12 +6099,12 @@ function scheduleDevStatsRefresh() {
   // renders (scroll, hover, drag preview) skip the rAF entirely.
   // The dialog's open() call refreshes directly, so we don't have to
   // poll for it here.
-  if (lastDevStatsVersion === contentVersion) return
+  if (lastDevStatsVersion === getContentVersion()) return
   if (devStatsRefreshQueued) return
   devStatsRefreshQueued = true
   requestAnimationFrame(() => {
     devStatsRefreshQueued = false
-    lastDevStatsVersion = contentVersion
+    lastDevStatsVersion = getContentVersion()
     refreshDevStats()
   })
 }
@@ -6169,9 +6116,9 @@ function scheduleDevStatsRefresh() {
 let devStatsCache = null
 let devStatsCacheVersion = -1
 function getDevStats() {
-  if (devStatsCache && devStatsCacheVersion === contentVersion) return devStatsCache
+  if (devStatsCache && devStatsCacheVersion === getContentVersion()) return devStatsCache
   devStatsCache = computeDevStats()
-  devStatsCacheVersion = contentVersion
+  devStatsCacheVersion = getContentVersion()
   return devStatsCache
 }
 function refreshDevStats() {
@@ -6231,7 +6178,7 @@ function renderDevDiagnostics() {
     ['Canvas offset (left, top)', canvas ? `(${parseFloat(canvas.style.left || 0).toFixed(0)}, ${parseFloat(canvas.style.top || 0).toFixed(0)})` : '—'],
     ['Visible tile bounds', tb ? `tx [${tb.minTX}..${tb.maxTX}]  ty [${tb.minTY}..${tb.maxTY}]` : '—'],
     ['Visible pixel bounds', vp ? `x [${vp.minX}..${vp.maxX}]  y [${vp.minY}..${vp.maxY}]` : '—'],
-    ['Content version', num(typeof contentVersion === 'number' ? contentVersion : null)],
+    ['Content version', num(getContentVersion())],
     ['Tile / feature counts', `${(state.tiles || []).filter(Boolean).length} tile cells • ${(state.features || []).length} features`],
     ['Renderer', (typeof ensureGLRenderer === 'function' && ensureGLRenderer()) ? 'WebGL2 (tiles+features)' : '2D fallback'],
     ['devicePixelRatio', String(window.devicePixelRatio || 1)],
