@@ -51,7 +51,6 @@ import {
   undo,
   redo,
   updateUndoButtons,
-  refreshHistoryFlyouts,
   getPendingTransaction,
   setPendingTransaction,
 } from './ui/map-editor/undo.js'
@@ -260,11 +259,26 @@ import {
 // Symmetry helpers (Vertical / Horizontal / Both) — pure mate
 // generators used by every brush + stamp tool to mirror strokes
 // onto the matching half of the map.  The DOM wiring
-// (wireSymmetryGroup) stays in studio.js for now.
+// (wireSymmetryGroup) moved to /ui/map-editor/ribbon/legacy-popups.js.
 import {
-  SYMMETRY_LABELS,
   symmetryMatesAttr,
 } from './ui/map-editor/symmetry.js'
+
+// Legacy (pre-React) ribbon popup chrome — the imperative
+// "current Mode" dropdown badge, the hover-to-the-right submenu
+// positioner, the Symmetry tick row, the Voids / Heightmap / Erase
+// brush groups, and the Undo / Redo history flyouts.  All still
+// drive the static popup DOM left behind by the legacy ribbon HTML.
+import {
+  closeAllRibbonDropdowns,
+  positionRibbonPopup,
+  wireHistoryFlyout,
+  wireSymmetryGroup,
+  wireVoidsBrushGroup,
+  wireHeightmapBrushGroup,
+  wireBrushSizeGroup,
+  refreshModeDropdown,
+} from './ui/map-editor/ribbon/legacy-popups.js'
 
 // Scatter dialog — drops N features into the map honouring a
 // minimum spacing halo.  Self-contained subsystem; the React
@@ -1420,34 +1434,6 @@ function wireModeToolbar() {
   // here, but publishing the initial mode keeps the dropdown badge in
   // lockstep on first paint.
   publishMapRibbonState()
-}
-
-function refreshModeDropdown() {
-  const ico = $('#mode-current-ico')
-  const lbl = $('#mode-current-lbl')
-  const row = $$('#mode-dropdown-popup .menu-row').find((r) => r.dataset.mode === state.mode)
-  if (ico && row) ico.textContent = row.querySelector('.ico').textContent
-  if (lbl && row) lbl.textContent = row.querySelector('span:not(.ico)').textContent
-  $$('#mode-dropdown-popup .menu-row').forEach((r) => {
-    r.classList.toggle('active', r.dataset.mode === state.mode)
-  })
-}
-
-function closeAllRibbonDropdowns(except) {
-  $$('.ribbon-dropdown-popup').forEach((el) => {
-    if (el !== except) el.classList.add('hidden')
-  })
-}
-
-// positionRibbonPopup anchors a fixed-position popup directly below its
-// triggering button, in viewport coordinates so it escapes the
-// ribbon's overflow clipping.  Run on every open so subsequent toolbar
-// resizes don't strand the popup.
-function positionRibbonPopup(button, popup) {
-  if (!button || !popup) return
-  const rect = button.getBoundingClientRect()
-  popup.style.top = (rect.bottom + 4) + 'px'
-  popup.style.left = rect.left + 'px'
 }
 
 // Switch the drawer to match the active editing mode — Place Tiles
@@ -2706,252 +2692,6 @@ function wireToolbar() {
   wireSymmetryGroup()
   refreshSchemaSelector()
   updateUndoButtons()
-}
-
-// Symmetry is now exposed as a single has-sub menu row that pops a
-// submenu to the right with the four choices.  The row itself shows
-// the active label + a tick when symmetry is non-off, matching the
-// gridlines / animation toggle rows in the View menu.
-// SYMMETRY_LABELS + the pure symmetryMatesTile / symmetryMatesAttr
-// helpers moved to /ui/map-editor/symmetry.js — imported above.
-
-function wireSymmetryGroup() {
-  const row = $('#mode-row-symmetry')
-  const popup = $('#symmetry-dropdown-popup')
-  if (!row || !popup) return
-  let closeTimer = null
-  const open = () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenuRight(row, popup)
-  }
-  const scheduleClose = () => {
-    if (closeTimer) clearTimeout(closeTimer)
-    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
-  }
-  row.addEventListener('mouseenter', open)
-  row.addEventListener('mouseleave', scheduleClose)
-  popup.addEventListener('mouseenter', () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  })
-  popup.addEventListener('mouseleave', scheduleClose)
-  $$('#symmetry-dropdown-popup [data-symmetry]').forEach((r) => {
-    r.addEventListener('click', (e) => {
-      e.stopPropagation()
-      state.symmetry = r.dataset.symmetry
-      refreshSymmetryRow()
-      popup.classList.add('hidden')
-      setStatus(`Symmetry: ${SYMMETRY_LABELS[state.symmetry].toLowerCase()}.`)
-      renderCanvas()
-    })
-  })
-  refreshSymmetryRow()
-}
-
-function refreshSymmetryRow() {
-  const row = $('#mode-row-symmetry')
-  const lbl = $('#symmetry-current-lbl')
-  if (lbl) lbl.textContent = SYMMETRY_LABELS[state.symmetry] || 'Off'
-  if (row) row.dataset.on = state.symmetry === 'off' ? '0' : '1'
-  $$('#symmetry-dropdown-popup [data-symmetry]').forEach((r) => {
-    r.classList.toggle('active', r.dataset.symmetry === state.symmetry)
-  })
-}
-
-// symmetryMatesTile + symmetryMatesAttr moved to
-// /ui/map-editor/symmetry.js — imported at the top of this file.
-
-// positionSubmenuRight places `popup` to the right of `parentRow`,
-// flipping to the left if there isn't horizontal room, and clamping
-// vertically so the popup stays on-screen.  Used by all the mode-row
-// hover submenus (Erase / Heightmap / Voids) so they appear off to
-// the side instead of dropping below their parent.
-function positionSubmenuRight(parentRow, popup) {
-  const rect = parentRow.getBoundingClientRect()
-  popup.classList.remove('hidden') // need real dimensions
-  const popW = popup.offsetWidth
-  const popH = popup.offsetHeight
-  const vpW = window.innerWidth
-  const vpH = window.innerHeight
-  let left = rect.right + 4
-  let top = rect.top
-  if (left + popW > vpW - 8) left = Math.max(8, rect.left - popW - 4)
-  if (top + popH > vpH - 8) top = Math.max(8, vpH - popH - 8)
-  popup.style.left = left + 'px'
-  popup.style.top = top + 'px'
-}
-
-// wireHistoryFlyout opens a list popup to the right of the Undo or
-// Redo row when hovered, showing what would happen on the next few
-// presses.  Skips opening when the row is disabled (empty stack).
-function wireHistoryFlyout(row, popup) {
-  if (!row || !popup) return
-  let closeTimer = null
-  const open = () => {
-    if (row.disabled) return
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    refreshHistoryFlyouts()
-    positionSubmenuRight(row, popup)
-  }
-  const scheduleClose = () => {
-    if (closeTimer) clearTimeout(closeTimer)
-    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
-  }
-  row.addEventListener('mouseenter', open)
-  row.addEventListener('mouseleave', scheduleClose)
-  popup.addEventListener('mouseenter', () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  })
-  popup.addEventListener('mouseleave', scheduleClose)
-}
-
-function wireVoidsBrushGroup() {
-  const row = $('#mode-row-voids')
-  const popup = $('#voids-dropdown-popup')
-  if (!row || !popup) return
-  let closeTimer = null
-  const open = () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenuRight(row, popup)
-  }
-  const scheduleClose = () => {
-    if (closeTimer) clearTimeout(closeTimer)
-    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
-  }
-  row.addEventListener('mouseenter', open)
-  row.addEventListener('mouseleave', scheduleClose)
-  popup.addEventListener('mouseenter', () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  })
-  popup.addEventListener('mouseleave', scheduleClose)
-  $$('#voids-dropdown-popup [data-voids-size]').forEach((r) => {
-    r.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const sz = parseInt(r.dataset.voidsSize, 10) || 1
-      state.voidsBrushSize = sz
-      $$('#voids-dropdown-popup [data-voids-size]').forEach((x) => x.classList.toggle('active', x === r))
-      const lbl = $('#voids-current-lbl')
-      if (lbl) lbl.textContent = `${sz}×${sz}`
-      popup.classList.add('hidden')
-      $('#mode-dropdown-popup')?.classList.add('hidden')
-      if (state.mode !== 'voids') setMode('voids')
-      setStatus(`Voids brush set to ${sz}×${sz}.`)
-      renderCanvas()
-    })
-  })
-}
-
-function wireHeightmapBrushGroup() {
-  const hmRow = $('#mode-row-heightmap')
-  const popup = $('#hm-dropdown-popup')
-  if (!hmRow || !popup) return
-  let closeTimer = null
-  const open = () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenuRight(hmRow, popup)
-  }
-  const scheduleClose = () => {
-    if (closeTimer) clearTimeout(closeTimer)
-    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
-  }
-  hmRow.addEventListener('mouseenter', open)
-  hmRow.addEventListener('mouseleave', scheduleClose)
-  popup.addEventListener('mouseenter', () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  })
-  popup.addEventListener('mouseleave', scheduleClose)
-
-  const refreshLabel = () => {
-    const lbl = $('#hm-current-lbl')
-    if (lbl) {
-      const cap = state.hmTool.charAt(0).toUpperCase() + state.hmTool.slice(1)
-      lbl.textContent = `${cap} · ${state.hmRadius}`
-    }
-  }
-
-  $$('#hm-dropdown-popup [data-hmtool]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      state.hmTool = row.dataset.hmtool
-      $$('#hm-dropdown-popup [data-hmtool]').forEach((r) => r.classList.toggle('active', r === row))
-      if (state.mode !== 'heightmap') setMode('heightmap')
-      refreshLabel()
-      setStatus(`Heightmap tool: ${state.hmTool}.`)
-    })
-  })
-  $$('#hm-dropdown-popup [data-hm-radius]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      state.hmRadius = parseInt(row.dataset.hmRadius, 10) || 4
-      $$('#hm-dropdown-popup [data-hm-radius]').forEach((r) => r.classList.toggle('active', r === row))
-      if (state.mode !== 'heightmap') setMode('heightmap')
-      refreshLabel()
-    })
-  })
-  $$('#hm-dropdown-popup [data-hm-strength]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      state.hmStrength = parseInt(row.dataset.hmStrength, 10) || 4
-      $$('#hm-dropdown-popup [data-hm-strength]').forEach((r) => r.classList.toggle('active', r === row))
-      if (state.mode !== 'heightmap') setMode('heightmap')
-    })
-  })
-}
-
-function wireBrushSizeGroup() {
-  const eraseRow = $('#mode-row-erase')
-  const popup = $('#brush-dropdown-popup')
-  if (!eraseRow || !popup) return
-  // The brush picker hangs off the Erase row of the Mode menu — hovering
-  // the row pops the size choices out to the side; mouseleave closes
-  // after a short grace period so the cursor can travel onto the popup.
-  let closeTimer = null
-  const open = () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-    positionSubmenuRight(eraseRow, popup)
-  }
-  const scheduleClose = () => {
-    if (closeTimer) clearTimeout(closeTimer)
-    closeTimer = setTimeout(() => popup.classList.add('hidden'), 220)
-  }
-  eraseRow.addEventListener('mouseenter', open)
-  eraseRow.addEventListener('mouseleave', scheduleClose)
-  popup.addEventListener('mouseenter', () => {
-    if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  })
-  popup.addEventListener('mouseleave', scheduleClose)
-  $$('#brush-dropdown-popup .menu-row[data-size]').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const sz = parseInt(row.dataset.size, 10) || 1
-      state.eraseSize = sz
-      $$('#brush-dropdown-popup .menu-row[data-size]').forEach((r) => r.classList.toggle('active', r === row))
-      const lbl = $('#brush-current-lbl')
-      if (lbl) lbl.textContent = `${sz}×${sz}`
-      popup.classList.add('hidden')
-      // Picking a brush size also commits to Erase mode — the user is
-      // clearly about to start erasing — and closes the parent Mode
-      // popup so we're back to the canvas.
-      $('#mode-dropdown-popup')?.classList.add('hidden')
-      if (state.mode !== 'erase') setMode('erase')
-      setStatus(`Erase brush set to ${sz}×${sz}.`)
-      renderCanvas()
-    })
-  })
-  // Scope toggle — picking a scope also commits to Erase mode but
-  // leaves the submenu open so the user can adjust size + scope in one
-  // pass without re-hovering.
-  $$('#brush-dropdown-popup .scope-row').forEach((row) => {
-    row.addEventListener('click', (e) => {
-      e.stopPropagation()
-      const scope = row.dataset.scope || 'all'
-      state.eraseScope = scope
-      $$('#brush-dropdown-popup .scope-row').forEach((r) => r.classList.toggle('active', r === row))
-      if (state.mode !== 'erase') setMode('erase')
-      const labelMap = { all: 'all', terrain: 'terrain only', features: 'features only' }
-      setStatus(`Erase scope: ${labelMap[scope] || 'all'}.`)
-      renderCanvas()
-    })
-  })
 }
 
 // Schemas are addressed by their player count (the "Network N" the
