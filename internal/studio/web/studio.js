@@ -490,19 +490,6 @@ import {
   closeAllMvThreadCodePanels,
 } from './ui/unit-editor/debugger/modal.js'
 
-// BOS-pane renderer + cross-reference map + per-tick BOS highlight.
-// The asm pane's mvBuildAsmLine reaches applyMvThreadCodeCrossHover
-// directly via import; the modal lifecycle reaches the others
-// (renderMvThreadCodeDecompiled in particular) through hostCallbacks.
-import {
-  renderMvThreadCodeDecompiled,
-} from './ui/unit-editor/debugger/bos.js'
-
-// Locals / Globals / Stack tray renderer.  Reached by asm.js'
-// per-tick refreshMvThreadCodeHighlight through the existing
-// hostCallbacks.renderMvThreadCodeLocals seam.
-import { renderMvThreadCodeLocals } from './ui/unit-editor/debugger/locals.js'
-
 // Per-unit boot helpers — Studio Options defaults push, ground/
 // submersion mode setter, FBI metadata fetch, and the 5-second
 // auto-build ramp.  All five are reached from studio.js + the
@@ -551,17 +538,6 @@ import {
   isCobScriptRunning,
   runCobEntry,
 } from './ui/unit-editor/cob-sync.js'
-
-// Asm-pane renderer + bracket overlay + lockstep scroll sync +
-// PC-drag editor.  Re-exported through hostCallbacks below so the
-// modal lifecycle in debugger/modal.js can still call them via the
-// same seams used before extraction.
-import {
-  renderMvThreadCodeSource,
-  refreshMvThreadCodeHighlight,
-  wireMvThreadCodeBrackets,
-  redrawMvThreadCodeBrackets,
-} from './ui/unit-editor/debugger/asm.js'
 
 // Unit-editor sidebar — the React-managed Pieces / Textures / Weapons
 // tab bridges + the host-side helpers (selectPiece, filterPieceTree,
@@ -704,18 +680,6 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.syncCobRibbonRunning = syncCobRibbonRunning
   hostCallbacks.getUnitEditorAutoRotate = () => _unitEditorAutoRotate
   hostCallbacks.sharedModelViewerCanvas = sharedModelViewerCanvas
-  // Thread-debugger render hooks — extracted modal.js calls these
-  // back to ask studio.js to repaint the BOS source / asm decomp /
-  // bracket overlay / PC highlight when it opens a panel or processes
-  // user actions (Step button, vars-collapse).
-  hostCallbacks.renderMvThreadCodeSource = renderMvThreadCodeSource
-  hostCallbacks.renderMvThreadCodeDecompiled = renderMvThreadCodeDecompiled
-  hostCallbacks.wireMvThreadCodeBrackets = wireMvThreadCodeBrackets
-  hostCallbacks.refreshMvThreadCodeHighlight = refreshMvThreadCodeHighlight
-  hostCallbacks.redrawMvThreadCodeBrackets = redrawMvThreadCodeBrackets
-  // asm.js' refreshMvThreadCodeHighlight calls this back to repaint
-  // the Locals/Globals/Stack tray (R43g moves the var-row factories).
-  hostCallbacks.renderMvThreadCodeLocals = renderMvThreadCodeLocals
   // ── Tab registrar seams (Phase A).  Map descriptor reads these
   // from its activate / deactivate / canClose hooks.  Other tab
   // types route through `getActiveModelViewer` + the per-tab

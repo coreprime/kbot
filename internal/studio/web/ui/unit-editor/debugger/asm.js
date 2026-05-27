@@ -34,12 +34,12 @@
 // renderMvThreadCodeLocals which still lives studio-side) + the
 // sibling bos.js (applyMvThreadCodeCrossHover, refreshMvThreadCodeDecompHighlight).
 
-import { hostCallbacks } from '../../host-context.js'
 import { cobaOpCategory, computeJumps as sharedComputeJumps } from './cob-highlight.js'
 import {
   applyMvThreadCodeCrossHover,
   refreshMvThreadCodeDecompHighlight,
 } from './bos.js'
+import { renderMvThreadCodeLocals } from './locals.js'
 
 // mvOpCategory delegates to the shared cob-highlight module so studio
 // and explorer produce identical opcode classes.
@@ -359,7 +359,7 @@ export function refreshMvThreadCodeHighlight(state) {
     if (offsetEl) offsetEl.textContent = '—'
     // Clear PC highlight when thread dies.
     for (const el of panel.querySelectorAll('.mv-thread-code-source .mv-code-line.pc')) el.classList.remove('pc')
-    hostCallbacks.renderMvThreadCodeLocals?.(state, null)
+    renderMvThreadCodeLocals(state, null)
     return
   }
   // Title tracks the current script for the user's convenience even
@@ -406,7 +406,7 @@ export function refreshMvThreadCodeHighlight(state) {
     // — without that gate we'd be fighting user scrolls every tick.
     if (prevPc !== target) centerMvThreadPanesOnPc(state, thread, target)
   }
-  hostCallbacks.renderMvThreadCodeLocals?.(state, thread)
+  renderMvThreadCodeLocals(state, thread)
   refreshMvThreadCodeDecompHighlight(state, thread)
 }
 

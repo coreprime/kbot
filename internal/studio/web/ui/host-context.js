@@ -425,21 +425,6 @@ export const hostCallbacks = {
   getUnitEditorAutoRotate: null,// () => boolean
   sharedModelViewerCanvas: null,// () => HTMLCanvasElement | null
   // Thread-debugger render hooks the modal lifecycle in
-  // /ui/unit-editor/debugger/modal.js calls back into studio.js for —
-  // BOS pane + asm pane both live in sibling modules now (bos.js +
-  // asm.js).  The callbacks here are seams studio.js wires to the
-  // imported implementations so the modal can stay decoupled from
-  // either renderer's module path.
-  renderMvThreadCodeSource: null,     // (state, thread) => void
-  renderMvThreadCodeDecompiled: null, // (state, cob) => void
-  wireMvThreadCodeBrackets: null,     // (state) => void
-  refreshMvThreadCodeHighlight: null, // (state) => void
-  redrawMvThreadCodeBrackets: null,   // (state) => void
-  // The asm pane's refreshMvThreadCodeHighlight calls back into
-  // studio.js to repaint the Locals/Globals/Stack tray — the
-  // mvBuildVarRow editor still lives studio-side (R43g moves the
-  // runtime/sim panel + the var-row factories with it).
-  renderMvThreadCodeLocals: null,     // (state, thread) => void
   // The auto-build ramp in /ui/unit-editor/runtime.js reaches the
   // Ports-panel slider sync helper through this seam so it doesn't
   // have to import studio.js.  Both surfaces (ribbon Build slider +

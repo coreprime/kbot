@@ -26,11 +26,12 @@
 // The asm-side renderer + bracket-curve overlay + per-tick PC tracker
 // stay in studio.js; R43e moves them next.  Cross-pane calls (BOS
 // breakpoint toggling syncs the asm pane's `.breakpointed` class,
-// BOS-fold redraws brackets) reach studio.js via hostCallbacks.
+// BOS-fold redraws brackets) reach asm.js via a same-section import.
 
 import { hostCallbacks } from '../../host-context.js'
 import { highlightBosLine } from './cob-highlight.js'
 import { _mvThreadCodePanels } from './modal.js'
+import { redrawMvThreadCodeBrackets } from './asm.js'
 
 // mvBosStatementMatch tries to find the assembly instruction range
 // corresponding to a single BOS source line.  Heuristic: each BOS
@@ -438,7 +439,7 @@ export function renderMvThreadCodeDecompiled(state, cob) {
           row.classList.toggle('bos-fn-hidden', collapsed)
         }
         // Bracket curves depend on which BOS lines are visible.
-        requestAnimationFrame(() => hostCallbacks.redrawMvThreadCodeBrackets?.(state))
+        requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
       })
     } else {
       div.addEventListener('click', () => {
@@ -463,7 +464,7 @@ export function renderMvThreadCodeDecompiled(state, cob) {
   // panel may have been visible (and asm rendered) for a while
   // waiting on the decompile fetch, so don't rely on the next refresh
   // tick to bring them in.
-  requestAnimationFrame(() => hostCallbacks.redrawMvThreadCodeBrackets?.(state))
+  requestAnimationFrame(() => redrawMvThreadCodeBrackets(state))
 }
 
 // renderMvBosSkeleton paints a placeholder "loading…" pattern in
