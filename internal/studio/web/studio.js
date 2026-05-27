@@ -11957,12 +11957,94 @@ function pieceDisplayName(piece) {
 
 const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera', 'mv-inspector-effects', 'mv-inspector-audio']
 
+// clampMvInspectorIntoStage forces a panel back into the model-viewer
+// stage when a resize (window or stage) has pushed any of it off the
+// edge.  Guarantee: the top-left corner (with its drag grip) stays
+// inside the viewport AND at least 5% of the panel's width / height
+// remains visible — so the user can always grab the panel back even
+// when the rest of it has gone past the edge.  Stricter than the
+// drag-time clamp (which keeps the whole panel inside) — this one
+// is a rescue, not a constraint, so it doesn't aggressively re-flow
+// a panel the user has intentionally pushed near the edge.
+function clampMvInspectorIntoStage(panel) {
+  if (!panel || panel.classList.contains('hidden')) return
+  const stage = document.querySelector('.model-viewer-stage')
+  if (!stage) return
+  const sr = stage.getBoundingClientRect()
+  const pr = panel.getBoundingClientRect()
+  const w = pr.width  || panel.offsetWidth  || 220
+  const h = pr.height || panel.offsetHeight || 100
+  // Style left/top is relative to the stage (the positioning context).
+  // Compute current position by subtracting the stage's top-left
+  // from the panel's bounding-rect — works whether the panel's CSS
+  // is using top/left or right/bottom defaults.
+  let left = pr.left - sr.left
+  let top  = pr.top  - sr.top
+  // Minimum visible fraction along each axis.  At 5% the panel reads
+  // clearly as "still on screen" rather than a 1px sliver — and the
+  // top-left lower bound (>=0) keeps the drag grip + close button
+  // unconditionally reachable.
+  const MIN_VIS = 0.05
+  const maxLeft = Math.max(0, sr.width  - MIN_VIS * w)
+  const maxTop  = Math.max(0, sr.height - MIN_VIS * h)
+  const clLeft = Math.max(0, Math.min(left, maxLeft))
+  const clTop  = Math.max(0, Math.min(top,  maxTop))
+  if (clLeft === left && clTop === top) return  // already inside — no-op
+  panel.style.left = clLeft + 'px'
+  panel.style.top  = clTop  + 'px'
+  // Once we set left/top in px the CSS edge defaults have to go,
+  // mirroring the drag handler's behaviour.
+  panel.style.right     = 'auto'
+  panel.style.bottom    = 'auto'
+  panel.style.transform = 'none'
+  // Persist the rescued position so a subsequent reload doesn't snap
+  // back to the off-screen coordinate the user had saved.
+  state.mvInspectorPos = state.mvInspectorPos || {}
+  state.mvInspectorPos[panel.id] = { top: clTop, left: clLeft }
+  persistPrefs()
+}
+
+// clampAllMvInspectors — bulk-apply the rescue clamp to every wired
+// inspector panel.  Called from the stage ResizeObserver and window
+// resize hook.  Hidden panels are skipped (the per-panel guard
+// inside clampMvInspectorIntoStage handles this).
+function clampAllMvInspectors() {
+  for (const id of MV_INSPECTOR_IDS) {
+    clampMvInspectorIntoStage(document.getElementById(id))
+  }
+}
+
 function wireMvInspectors() {
   // Wire drag + collapse + close on each panel + the View menu
   // toggle that brings the panel back when it was closed.  Order
   // matters: the drag handler reads from state.mvInspectorPos so
   // we restore positions FIRST, then attach listeners.
   for (const id of MV_INSPECTOR_IDS) wireMvInspector(id)
+  // Resize rescue — re-clamp every visible inspector when the stage
+  // or window changes size.  Without this, a panel docked near the
+  // right/bottom edge ends up partly (or entirely) off-screen when
+  // the user shrinks the window, and there's no way to grab it
+  // back.  ResizeObserver on the stage covers the common case;
+  // window-resize covers Safari's older ResizeObserver semantics +
+  // any future cases where the stage size lags the window.
+  const stage = document.querySelector('.model-viewer-stage')
+  if (stage && typeof ResizeObserver !== 'undefined') {
+    // rAF-batched so a continuous drag-resize of the window fires
+    // the clamp once per frame instead of on every observer call.
+    let pending = false
+    const ro = new ResizeObserver(() => {
+      if (pending) return
+      pending = true
+      requestAnimationFrame(() => { pending = false; clampAllMvInspectors() })
+    })
+    ro.observe(stage)
+  }
+  window.addEventListener('resize', () => {
+    // Same rAF guard so multi-fire resize events coalesce.  Cheap
+    // when nothing's visible — clampMvInspectorIntoStage early-outs
+    // on hidden panels.
+    requestAnimationFrame(clampAllMvInspectors)
+  })
   for (const btn of document.querySelectorAll('#mv-view-dropdown-popup .toggle-row')) {
     const panelId = btn.dataset.panel
     if (!panelId) continue
@@ -12141,6 +12223,12 @@ function setMvInspectorVisible(panelId, visible, opts = {}) {
   const panel = document.getElementById(panelId)
   if (!panel) return
   panel.classList.toggle('hidden', !visible)
+  // If we're SHOWING a panel whose persisted position fell off-screen
+  // (e.g. saved at 1920×1080, reopened at 1280×720), rescue it now so
+  // the user doesn't have to wait for the next resize event to drag
+  // it back.  Run after the next paint so the panel's bounding rect
+  // reflects its visible dimensions.
+  if (visible) requestAnimationFrame(() => clampMvInspectorIntoStage(panel))
   // Mirror the toggle state into the View menu button.
   const btn = document.querySelector(`#mv-view-dropdown-popup [data-panel="${panelId}"]`)
   if (btn) {
