@@ -426,7 +426,6 @@ import { renderCanvas } from './ui/map-editor/canvas/render.js'
 // that snapshots state into the form and flushes Apply through
 // to the relevant subsystems.
 import {
-  DEFAULT_SETTINGS,
   openSettingsDialog,
   closeSettingsDialog,
 } from './ui/dialogs/settings.js'
@@ -471,6 +470,20 @@ import {
 // hostCallbacks.renderMvThreadCodeLocals seam.
 import { renderMvThreadCodeLocals } from './ui/unit-editor/debugger/locals.js'
 
+// Per-unit boot helpers — Studio Options defaults push, ground/
+// submersion mode setter, FBI metadata fetch, and the 5-second
+// auto-build ramp.  All five are reached from studio.js + the
+// activateModelTab onModelLoaded closure through hostCallbacks
+// already; this import lets the boot wiring point to the
+// imported functions instead of stale forward references.
+import {
+  applyUnitEditorDefaults,
+  applyDefaultGroundFor,
+  mvFetchUnitMeta,
+  startMvAutoBuild,
+  advanceMvAutoBuild,
+} from './ui/unit-editor/runtime.js'
+
 // Asm-pane renderer + bracket overlay + lockstep scroll sync +
 // PC-drag editor.  Re-exported through hostCallbacks below so the
 // modal lifecycle in debugger/modal.js can still call them via the
@@ -491,7 +504,6 @@ import {
   refreshPieceTreeEyes,
   renderPieceTree,
   renderTexturesTab,
-  renderMvWeaponsTab,
   refreshMvWeaponsLive,
   wireMvSidebarTabs,
   playWeaponSound,
@@ -603,6 +615,9 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.mvFetchUnitMeta = mvFetchUnitMeta
   hostCallbacks.applyDefaultGroundFor = applyDefaultGroundFor
   hostCallbacks.applyUnitEditorDefaults = applyUnitEditorDefaults
+  // Auto-build ramp in runtime.js reaches this slider sync helper
+  // through hostCallbacks so it doesn't have to import studio.js.
+  hostCallbacks.mvSyncCobAttrSlidersFromPorts = mvSyncCobAttrSlidersFromPorts
   hostCallbacks.getUnitEditorAutoRotate = () => _unitEditorAutoRotate
   hostCallbacks.sharedModelViewerCanvas = sharedModelViewerCanvas
   // Thread-debugger render hooks — extracted modal.js calls these
@@ -3339,121 +3354,6 @@ function updateTopbarDocInfo(tab) {
 // lets the rest of the studio reads from; the extracted activator
 // promotes the right tab through hostCallbacks.setActive* below.
 
-// applyUnitEditorDefaults pushes settings.unitDefault* through the
-// renderer's setters + into the React ribbon's state signal so the
-// Studio Options dropdown's check-marks + Environment chip reflect
-// the freshly-applied defaults.
-function applyUnitEditorDefaults() {
-  if (!modelViewerInstance?.renderer) return
-  const s = state.settings || DEFAULT_SETTINGS
-  const r = modelViewerInstance.renderer
-  const env = s.unitDefaultEnv || 'greenworld'
-  const reflections = s.unitDefaultReflections !== false
-  const bob = s.unitDefaultBob !== false
-  const waterReflections = s.unitDefaultWaterReflections !== false
-  const specular = s.unitDefaultSpecular !== false
-  const godbeams = s.unitDefaultGodBeams !== false
-  // Environment first because it swaps the sky scheme; the toggles
-  // below operate on flags the env doesn't touch.
-  r.setEnvironment(env)
-  r.setReflectionsEnabled(reflections)
-  r.setBobEnabled(bob)
-  r.setWaterReflectionsEnabled(waterReflections)
-  r.setSpecularEnabled(specular)
-  r.setGodBeamsEnabled(godbeams)
-  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-    _reactUi.setModelViewerRibbonState({
-      env, reflections, bob, waterReflections, specular, godbeams,
-    })
-  }
-}
-
-// applyDefaultGroundFor sets the ground mode based on the unit's
-// FBI metadata.  Ships / subs get "sea"; every other unit falls back
-// to "terrain" so opening a kbot after a sub doesn't leave it
-// floating on water from the previous tab's choice.
-// mvFetchUnitMeta loads the FBI movement + weapon refs for the
-// currently-loaded model and pushes the result onto the viewer +
-// the Controls overlay.  Fire-and-forget — failure leaves the
-// action buttons disabled (no metadata = "we don't know what the
-// unit can do" = safe default).
-async function mvFetchUnitMeta(mv) {
-  if (!mv?.model) return
-  mv.unitMeta = null
-  // The model name comes from the COB unit (set by model-viewer.js
-  // open() to the originally-requested model name).  Without a COB
-  // the unit isn't a real unit anyway — props/features have no
-  // FBI metadata.
-  const name = mv.cob?.unit?.name
-  if (!name) return
-  try {
-    const resp = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
-    if (!resp.ok) return
-    mv.unitMeta = await resp.json()
-    if (_mvControls) _mvControls.onMetaLoaded()
-    // Controls/Ports panel re-renders off the inspector-store
-    // signals; once unitMeta is set the next publish updates the
-    // panel's per-port visibility (canMove, isBuilder, onoffable
-    // gating) automatically — no imperative call needed.
-    // Populate the left-panel Weapons tab now that the FBI + weapon
-    // TDF data is in.  Empty-state shows "No weapons declared" for
-    // structures / props.  Passed the whole viewer so the renderer
-    // can read scriptNames + wire change-weapon / sound-play actions.
-    renderMvWeaponsTab(mv)
-  } catch (err) {
-    console.warn(`[unit-meta:${name}] fetch failed:`, err)
-  }
-}
-
-function applyDefaultGroundFor(meta) {
-  if (!modelViewerInstance?.renderer) return
-  const want = meta?.defaultGround || 'terrain'
-  // Submersion comes from the FBI's TEDClass / Category / WaterLine
-  // (computed server-side in inferSubmersionMode).  Surface ships
-  // ride the boot-stripe; subs end up under the water; everything
-  // else sits on top.
-  modelViewerInstance.renderer.setSubmersionMode(meta?.submersionMode || '')
-  modelViewerInstance.renderer.setGroundMode(want)
-  // Sub units are lifted UP off the seabed via a model-matrix Y
-  // translation; the camera was framed in open() against the
-  // un-translated bounds, so without this adjustment the camera
-  // target stays at the original centroid (well below the lifted
-  // unit).  Bump target Y by the same offset so the camera keeps
-  // looking at where the unit is actually rendered.
-  const yOff = modelViewerInstance.renderer.getUnitYOffset?.() || 0
-  if (yOff !== 0 && modelViewerInstance.camera) {
-    modelViewerInstance.camera.target[1] += yOff
-    modelViewerInstance.renderer.requestRedraw()
-  }
-  // Submerged units need the camera eye to sit BELOW the water
-  // plane, otherwise the renderer paints the surface from above
-  // and the sub itself disappears under the waves.  open() set
-  // pitch=18 deg / distance×1.25 unconditionally — for subs we
-  // recompute pitch so eye.y lands a few units under uWaterY.
-  //   eye.y = target.y + distance · sin(pitch)
-  // Solve for pitch given a target eye.y of (waterY - margin).
-  if (meta?.submersionMode === 'submerged' && modelViewerInstance.camera) {
-    const cam = modelViewerInstance.camera
-    const r = modelViewerInstance.renderer
-    const waterY = r._getWaterY ? r._getWaterY() : 0
-    const margin = 6 // eye sits this far under the surface
-    const desiredEyeY = waterY - margin
-    const dy = desiredEyeY - cam.target[1]
-    const dist = Math.max(1, cam.distance || 1)
-    // Clamp the sine to [-1, 0.05] so we always land at or just
-    // below horizontal even if the math says the eye should rise.
-    const sinP = Math.max(-1, Math.min(0.05, dy / dist))
-    cam.pitch = Math.asin(sinP)
-    r.requestRedraw()
-  }
-  // Sync the React Scene/Ground dropdown's selection chip so the
-  // closed dropdown shows what's actually applied (ship default sets
-  // Sea programmatically; the user never clicked the row so the
-  // signal wouldn't otherwise update).
-  if (_reactUi && typeof _reactUi.setModelViewerRibbonState === 'function') {
-    _reactUi.setModelViewerRibbonState({ ground: want })
-  }
-}
 
 
 // refreshPieceTreeStatus + pieceDisplayName — both moved into the
@@ -3738,49 +3638,6 @@ function mvSyncCobAttrSlidersFromPorts(mv) {
   }
 }
 
-// ── Auto-build ramp ──────────────────────────────────────────────
-//
-// When a unit first loads, we ramp BUILD_PERCENT from 0 → 100 over
-// ~5 sim-seconds so the user sees the construction-stripe wireframe
-// phase out into the finished model.  Using SIM time (not wall) so
-// slow-mo + pause both apply, matching every other timing in the
-// studio.  The ramp aborts the moment the user drags either Build
-// slider or clicks Create Unit — manual control wins.
-//
-// State lives on the viewer (mv._autoBuild) so a tab swap to a fresh
-// unit naturally re-arms the ramp; setting it to null cancels.
-const AUTO_BUILD_DURATION_MS = 5000
-
-function startMvAutoBuild(mv) {
-  if (!mv) return
-  // Snap to 0% so the ramp begins from the construction-stripe
-  // wireframe and phases the unit in.
-  if (typeof mv.setBuildPercent === 'function') mv.setBuildPercent(0)
-  else mv.cobBuildPercent = 0
-  mv._autoBuild = { elapsedMs: 0, durationMs: AUTO_BUILD_DURATION_MS }
-}
-
-function advanceMvAutoBuild(dtMs) {
-  const mv = modelViewerInstance
-  if (!mv || !mv._autoBuild) return
-  const rate = mv.cob?.runtime?.playbackRate ?? 1
-  const dtSim = Math.max(0, dtMs) * rate
-  const state = mv._autoBuild
-  state.elapsedMs += dtSim
-  const pct = Math.max(0, Math.min(100, (state.elapsedMs / state.durationMs) * 100))
-  if (typeof mv.setBuildPercent === 'function') mv.setBuildPercent(pct)
-  else mv.cobBuildPercent = pct
-  // Keep the React ribbon's Damage + Build sliders + the Ports panel
-  // in sync as the ramp advances so the user can watch the percentage
-  // tick up rather than only seeing the visual wireframe phase in.
-  // Both surfaces read off mv.cobBuildPercent so a single push covers
-  // them (the Ports panel re-renders off the inspector-store mv signal
-  // each publish).
-  mvSyncCobAttrSlidersFromPorts(mv)
-  if (state.elapsedMs >= state.durationMs) {
-    mv._autoBuild = null  // ramp complete — release the slot
-  }
-}
 
 // renderMvActionsPanel + wireMvActionsPanel — replaced by the Preact
 // ScriptCommandsPanel component in /ui/panels/script-commands-panel.js

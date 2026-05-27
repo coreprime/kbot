@@ -402,6 +402,12 @@ export const hostCallbacks = {
   // mvBuildVarRow editor still lives studio-side (R43g moves the
   // runtime/sim panel + the var-row factories with it).
   renderMvThreadCodeLocals: null,     // (state, thread) => void
+  // The auto-build ramp in /ui/unit-editor/runtime.js reaches the
+  // Ports-panel slider sync helper through this seam so it doesn't
+  // have to import studio.js.  Both surfaces (ribbon Build slider +
+  // Ports panel) read off mv.cobBuildPercent so a single push covers
+  // them per tick.
+  mvSyncCobAttrSlidersFromPorts: null, // (mv) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
