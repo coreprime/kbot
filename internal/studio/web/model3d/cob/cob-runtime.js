@@ -1029,6 +1029,18 @@ export class CobRuntime {
     this.paused = false
     this.playbackRate = 1
     this._tickAccumMs = 0
+    // simTimeMs — monotonically increasing simulation clock in
+    // milliseconds, advanced by `dtMs * playbackRate` on every tick.
+    // Use this (NOT performance.now()) for any game-logic timing that
+    // should respect slow-mo / fast-forward: reload cadence, burst
+    // inter-shot delays, smoke-trail emission intervals, etc.  At
+    // 0.5× playback this ticks half as fast as wall time, so a 2 s
+    // reload still takes 2 s of SIM time (= 4 s of wall time) — which
+    // is the behaviour the user expects from "slow-mo".  Frozen when
+    // paused.  Sub-frame precision (advances even between the fixed
+    // 25 ms TA ticks) so per-frame consumers always see a smooth
+    // monotonic clock.
+    this.simTimeMs = 0
     // Telemetry — surfaced by the Runtime overlay's stats line so
     // the user can see the sim's actual throughput.  `tickCount` is
     // the total number of fixed 25 ms ticks executed across the
@@ -1106,6 +1118,11 @@ export class CobRuntime {
     if (this.paused) return 0
     const scaledMs = Math.min(250, Math.max(0, dtMs)) * this.playbackRate
     this._tickAccumMs += scaledMs
+    // Advance the sim clock by the SAME scaledMs the accumulator gets
+    // — so consumers reading simTimeMs see sub-tick resolution between
+    // the fixed 25 ms drains.  At 1× playback this matches wall-clock
+    // delta; at 0.5× it advances at half wall-rate, etc.
+    this.simTimeMs += scaledMs
     let instCount = 0
     let stepsRemaining = 8
     // Wall-clock wall around the inner loop so the Runtime overlay
