@@ -255,6 +255,15 @@ import {
   applyScatter,
 } from './ui/map-editor/dialogs/scatter.js'
 
+// Map Properties (.ota) dialog — mission name, planet, wind, tidal,
+// gravity, sea level, lava-world flags.  Apply commits a single
+// undo transaction and mirrors mission name + planet onto state.
+import {
+  openOTADialog,
+  closeOTADialog,
+  wireOTADialog,
+} from './ui/map-editor/dialogs/ota.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -7066,62 +7075,6 @@ function deleteSchema(index) {
   state.selectedStartPos = -1
   commitTransaction('Delete schema')
   refreshSchemaSelector()
-  renderCanvas()
-}
-
-// ── OTA dialog ─────────────────────────────────────────────────────────────
-
-function openOTADialog() {
-  if (!state.ota) return
-  $('#ota-mission-name').value = state.ota.missionName
-  $('#ota-planet').value = state.ota.planet
-  $('#ota-mission-description').value = state.ota.missionDescription
-  $('#ota-numplayers').value = state.ota.numPlayers
-  $('#ota-size').value = state.ota.size
-  $('#ota-tidal').value = state.ota.tidalStrength
-  $('#ota-solar').value = state.ota.solarStrength
-  $('#ota-gravity').value = state.ota.gravity
-  $('#ota-min-wind').value = state.ota.minWindSpeed
-  $('#ota-max-wind').value = state.ota.maxWindSpeed
-  $('#ota-killmul').value = state.ota.killmul
-  $('#ota-lava').value = String(state.ota.lavaWorld || 0)
-  $('#ota-sea-level').value = state.ota.seaLevel ?? 63
-  $('#ota-impassible-water').value = String(state.ota.impassibleWater || 0)
-  $('#ota-water-damage').value = String(state.ota.waterDoesDamage || 0)
-  $('#ota-dialog').classList.remove('hidden')
-}
-
-function closeOTADialog() { $('#ota-dialog').classList.add('hidden') }
-
-function wireOTADialog() {
-  $('#ota-cancel').addEventListener('click', closeOTADialog)
-  $('#ota-apply').addEventListener('click', applyOTADialog)
-}
-
-function applyOTADialog() {
-  beginTransaction()
-  state.ota.missionName = $('#ota-mission-name').value.trim() || state.name
-  state.ota.planet = $('#ota-planet').value
-  state.planet = state.ota.planet
-  state.ota.missionDescription = $('#ota-mission-description').value
-  state.ota.numPlayers = $('#ota-numplayers').value || '2'
-  state.ota.size = $('#ota-size').value
-  state.ota.tidalStrength = parseInt($('#ota-tidal').value, 10) || 0
-  state.ota.solarStrength = parseInt($('#ota-solar').value, 10) || 0
-  state.ota.gravity = parseInt($('#ota-gravity').value, 10) || 0
-  state.ota.minWindSpeed = parseInt($('#ota-min-wind').value, 10) || 0
-  state.ota.maxWindSpeed = parseInt($('#ota-max-wind').value, 10) || 0
-  state.ota.killmul = parseInt($('#ota-killmul').value, 10) || 0
-  state.ota.lavaWorld = parseInt($('#ota-lava').value, 10) || 0
-  state.ota.seaLevel = clamp(parseInt($('#ota-sea-level').value, 10) || 0, 0, 255)
-  state.ota.impassibleWater = parseInt($('#ota-impassible-water').value, 10) || 0
-  state.ota.waterDoesDamage = parseInt($('#ota-water-damage').value, 10) || 0
-  commitTransaction('Edit map properties')
-  state.name = state.ota.missionName
-  // The tab chip's label is the mission name — refresh.
-  renderMapTabs()
-  refreshSchemaSelector()
-  closeOTADialog()
   renderCanvas()
 }
 
