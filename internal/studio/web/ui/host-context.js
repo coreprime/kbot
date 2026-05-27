@@ -268,6 +268,11 @@ export const hostCallbacks = {
   // for now; the spawn picker module reaches for it via this
   // callback so the picker doesn't have to import studio.js.
   openModelPicker: null,        // () => void
+  // getActiveSandboxView — returns the SandboxView attached to the
+  // currently-active sandbox tab (or null when no sandbox tab is
+  // foregrounded).  Used by the sandbox-ribbon bridge so each
+  // ribbon button action targets the right view's scene + camera.
+  getActiveSandboxView: null,   // () => SandboxView | null
   // openLoadedMap hydrates editor state from a /api/studio/load
   // response and switches into the editor.  Called by the open-map
   // dialog flow + the drag-drop handler + the ?initial_map=… URL

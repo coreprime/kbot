@@ -181,9 +181,8 @@ import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
 import {
   ensureSandboxPanel,
   showSandboxPanel,
-  openSandboxSpawnPicker,
-  setSandboxPanelVisible,
 } from './ui/sandbox/spawn-picker.js'
+import { wireSandboxRibbon } from './ui/sandbox/ribbon-bridge.js'
 
 // View-menu visibility toggles (minimap / features / start
 // positions / voids).  Each flips the matching state.show* flag,
@@ -604,6 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.featureAnchorWorld = featureAnchorWorld
   hostCallbacks.configureReactUi = configureReactUi
   hostCallbacks.openModelPicker = openModelPicker
+  hostCallbacks.getActiveSandboxView = () => sandboxViewInstance
   hostCallbacks.openLoadedMap = openLoadedMap
   hostCallbacks.renderMinimap = renderMinimap
   hostCallbacks.bumpContentVersion = bumpContentVersion
@@ -4200,63 +4200,6 @@ function wireModelViewerRibbon() {
   if (typeof _reactUi.mountModelViewerRibbon === 'function') {
     _reactUi.mountModelViewerRibbon()
   }
-}
-
-// wireSandboxRibbon — React-managed now (see /ui/sandbox/sandbox-ribbon.js).
-// Mounts the React tree into #sandbox-ribbon-mount + installs the host
-// bridge that ferries the per-button actions back into the sandbox view.
-function wireSandboxRibbon() {
-  if (!_reactUi) return
-  const sb = () => sandboxViewInstance
-  if (typeof _reactUi.configureSandboxRibbonBridge === 'function') {
-    _reactUi.configureSandboxRibbonBridge({
-      openSpawnPicker: (anchorEl) => openSandboxSpawnPicker(anchorEl),
-      setPendingCommand: (cmd) => sb()?.setPendingCommand(cmd),
-      stopSelected: () => {
-        const scene = sb()?.scene
-        if (!scene) return
-        for (const id of scene.selected) {
-          const u = scene.unitById(id)
-          if (u) { u.moveTarget = null; u.attackTarget = null }
-        }
-      },
-      selectAll: () => {
-        const scene = sb()?.scene
-        if (!scene) return
-        scene.selectClear()
-        for (const u of scene.units()) if (!u.dead) scene.selectAdd(u.id)
-      },
-      deselectAll: () => sb()?.scene?.selectClear(),
-      clearField: async () => {
-        const scene = sb()?.scene
-        if (!scene) return
-        const count = [...scene.units()].length
-        if (count === 0) return
-        const ok = await confirmDialog({
-          title: 'Clear Field',
-          message: count === 1
-            ? 'Remove the unit currently on the battlefield?'
-            : `Remove all ${count} units currently on the battlefield?`,
-          okLabel: 'Clear Field',
-          cancelLabel: 'Cancel',
-          okDanger: true,
-        })
-        if (!ok) return
-        const ids = [...scene.units()].map((u) => u.id)
-        for (const id of ids) scene.removeUnit(id)
-      },
-      resetCamera: () => {
-        const view = sb()
-        if (!view || !view.camera) return
-        view.camera.target = [0, 10, 0]
-        view.camera.distance = 951.5
-        view.camera.yaw = 215 * Math.PI / 180
-        view.camera.pitch = 28 * Math.PI / 180
-      },
-      setPanelVisible: (panelId, visible) => setSandboxPanelVisible(panelId, visible),
-    })
-  }
-  if (typeof _reactUi.mountSandboxRibbon === 'function') _reactUi.mountSandboxRibbon()
 }
 
 // handleSandboxDevToggle removed — the React sandbox ribbon's
