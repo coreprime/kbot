@@ -258,13 +258,16 @@ function ThreadsBody({ rt }) {
     const killed = unit._recentlyKilled || []
     const hasContent = live.length > 0 || killed.length > 0
     const isCollapsed = collapsed.has(unit.id)
-    // mv.cob is the cob binding for the focused unit (single-unit tab)
-    // OR a runtime-only stub (sandbox).  Each unit's debugger modal
-    // wants its OWN cob binding, which CobRuntime tracks via the
-    // per-unit binding map; the legacy code reached for cob (the
-    // panel-wide proxy) and trusted it would target the right unit.
-    // We follow the same convention here.
-    const cob = mv.value && mv.value.cob
+    // Build the per-unit cob shape the debugger + Reset + Kill paths
+    // consume.  We deliberately DO NOT reuse `mv.value.cob` — that
+    // proxy is either the FOCUSED unit's binding (single-select in
+    // sandbox; correct for ONE row only) OR a runtime-only stub with
+    // `unit: null` (zero / multi-select; null-derefs the debugger).
+    // The iteration unit is the CobUnit that actually owns the
+    // thread, and CobUnit holds a runtime back-ref, so a flat
+    // `{ unit, runtime }` is everything the debugger / Reset / Kill
+    // paths read.
+    const cob = { unit, runtime: unit.runtime }
     sections.push(html`<${UnitGroup} unit=${unit} cob=${cob} hasContent=${hasContent} key=${`u${unit.id}`} />`)
     if (isCollapsed || !hasContent) continue
     for (const k of killed) {

@@ -229,7 +229,12 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
 // when a BP is toggled from the asm side.
 function mvSyncBosBpForOffset(state, scriptLower, offset, on) {
   const dec = state.panel.querySelector('.mv-thread-code-decompiled')
-  const map = state.cob?.runtime?._bosMap
+  // _bosMap / _asmToBos live on the CobUnit (built once per unit by
+  // buildMvBosMap), not the CobRuntime — the latter is multi-unit so
+  // it has no single cross-ref table.  Reading off `runtime` here
+  // is a leftover from the pre-multi-unit world; it returned
+  // `undefined` and silently no-op'd the BOS-side BP sync.
+  const map = state.cob?.unit?._bosMap
   if (!dec || !map) return
   for (const [lineIdx, entry] of map.entries()) {
     if (entry.script.toLowerCase() !== scriptLower) continue
@@ -544,8 +549,12 @@ function syncScrollFromAsm(state) {
   const src = panel.querySelector('.mv-thread-code-source')
   const dec = panel.querySelector('.mv-thread-code-decompiled')
   if (!src || !dec) return
-  const rt = state.cob?.runtime
-  if (!rt?._asmToBos || !rt._bosMap) return
+  // _asmToBos / _bosMap live on the CobUnit (built by buildMvBosMap
+  // against the script tables), not the multi-unit CobRuntime.  The
+  // pre-multi-unit reads on .runtime returned undefined here and the
+  // lockstep scroll quietly stopped working in sandbox.
+  const u = state.cob?.unit
+  if (!u?._asmToBos || !u._bosMap) return
   // Asm row sitting on the source pane's vertical midpoint.
   const midY = src.getBoundingClientRect().top + src.clientHeight / 2
   const lineEls = src.querySelectorAll('.mv-code-line')
@@ -568,7 +577,7 @@ function syncScrollFromAsm(state) {
       const el = lineEls[idx]
       const asmIdx = parseInt(el.dataset.idx, 10)
       const asmScript = el.dataset.script
-      const m = rt._asmToBos.get(`${asmScript}:${asmIdx}`)
+      const m = u._asmToBos.get(`${asmScript}:${asmIdx}`)
       if (m !== undefined) { bosLineIdx = m; break }
     }
     if (bosLineIdx !== undefined) break
@@ -606,8 +615,9 @@ function syncScrollFromBos(state) {
   const src = panel.querySelector('.mv-thread-code-source')
   const dec = panel.querySelector('.mv-thread-code-decompiled')
   if (!src || !dec) return
-  const rt = state.cob?.runtime
-  if (!rt?._bosMap) return
+  // _bosMap is per-unit (see syncScrollFromAsm note).
+  const u = state.cob?.unit
+  if (!u?._bosMap) return
   const midY = dec.getBoundingClientRect().top + dec.clientHeight / 2
   let bestEl = null, bestDist = Infinity
   for (const el of dec.children) {
@@ -628,7 +638,7 @@ function syncScrollFromBos(state) {
   for (let off = 0; off < 60; off++) {
     const idxs = off === 0 ? [bosLineIdx] : [bosLineIdx - off, bosLineIdx + off]
     for (const idx of idxs) {
-      const e = rt._bosMap.get(idx)
+      const e = u._bosMap.get(idx)
       if (e) { entry = e; break }
     }
     if (entry) break
