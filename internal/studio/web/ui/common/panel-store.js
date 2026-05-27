@@ -27,6 +27,18 @@ let _persistence = {
   saveCollapsed: (_id, _on) => {},
   loadVisible:   (_id, _def) => _def,
   saveVisible:   (_id, _on) => {},
+  // Optional: resizable panels persist their size and sidebar
+  // collapse state.  Default to no-ops so callers that don't enable
+  // resize / sidebar features pay zero cost.
+  loadSize:            (_id) => null,
+  saveSize:            (_id, _size) => {},
+  loadSidebarCollapsed: (_id) => false,
+  saveSidebarCollapsed: (_id, _on) => {},
+  // Per-section collapse state (CollapsibleSection inside any panel).
+  // Keyed by `${panelId}:${sectionKey}` — flat global map keeps the
+  // backend interface simple.
+  loadSectionCollapsed: (_id, _section) => false,
+  saveSectionCollapsed: (_id, _section, _on) => {},
 }
 
 export function configurePanelPersistence(hooks) {
@@ -46,11 +58,20 @@ function _ensure(panelId, { defaultVisible = true } = {}) {
   let rec = _panelRegistry.get(panelId)
   if (rec) return rec
   const pos = _persistence.loadPos(panelId)
+  const size = _persistence.loadSize(panelId)
   rec = {
     id: panelId,
     pos:       signal(pos || null),
     collapsed: signal(!!_persistence.loadCollapsed(panelId)),
     visible:   signal(!!_persistence.loadVisible(panelId, defaultVisible)),
+    // size + sidebarCollapsed start null/false even when persistence is
+    // disabled — the FloatingPanel ignores nulls and uses its own
+    // defaultSize / sidebarDefaultCollapsed props in that case.
+    size:             signal(size || null),
+    sidebarCollapsed: signal(!!_persistence.loadSidebarCollapsed(panelId)),
+    // sectionCollapsed Map keyed by section key (lazily filled the
+    // first time a CollapsibleSection asks).
+    _sections: new Map(),
   }
   _panelRegistry.set(panelId, rec)
   return rec
@@ -84,6 +105,49 @@ export function setPanelVisible(panelId, on) {
   const rec = _ensure(panelId)
   rec.visible.value = !!on
   _persistence.saveVisible(panelId, rec.visible.value)
+}
+
+// setPanelSize — mutation helper for resizable panels.  Stores a
+// `{ width, height }` object on the panel record + persists.  Pass
+// null to clear (handy for "reset size" actions).
+export function setPanelSize(panelId, size) {
+  const rec = _ensure(panelId)
+  rec.size.value = size ? { width: size.width, height: size.height } : null
+  if (size) _persistence.saveSize(panelId, rec.size.value)
+}
+
+// setSidebarCollapsed — toggle the panel's optional sidebar pane.
+// Lives on the same record so callers reach for one signal hub per
+// panel instead of two parallel registries.
+export function setSidebarCollapsed(panelId, on) {
+  const rec = _ensure(panelId)
+  rec.sidebarCollapsed.value = !!on
+  _persistence.saveSidebarCollapsed(panelId, rec.sidebarCollapsed.value)
+}
+
+// sectionSignals — per-CollapsibleSection state.  Lazily registers
+// each (panelId, sectionKey) pair the first time someone asks, so
+// adding a new section anywhere in the panel doesn't require
+// up-front registration.  Caller passes `defaultCollapsed` for the
+// initial value when nothing's persisted yet.
+export function sectionSignals(panelId, sectionKey, { defaultCollapsed = false } = {}) {
+  const rec = _ensure(panelId)
+  let sigObj = rec._sections.get(sectionKey)
+  if (sigObj) return sigObj
+  const persisted = _persistence.loadSectionCollapsed(panelId, sectionKey)
+  const initial = (persisted !== null && persisted !== undefined) ? !!persisted : !!defaultCollapsed
+  sigObj = { collapsed: signal(initial) }
+  rec._sections.set(sectionKey, sigObj)
+  return sigObj
+}
+
+// setSectionCollapsed — flip the per-section signal + persist.  The
+// section component owns the (panelId, sectionKey) pair so the host
+// doesn't need to know how many sections any given panel has.
+export function setSectionCollapsed(panelId, sectionKey, on) {
+  const sigObj = sectionSignals(panelId, sectionKey)
+  sigObj.collapsed.value = !!on
+  _persistence.saveSectionCollapsed(panelId, sectionKey, sigObj.collapsed.value)
 }
 
 // panelSignals — read-only accessor for components that want to bind

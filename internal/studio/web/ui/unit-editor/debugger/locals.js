@@ -77,12 +77,16 @@ export function renderMvThreadCodeLocals(state, thread) {
   if (globals) {
     if (!globals.querySelector('span[data-editing="1"]')) {
       globals.replaceChildren()
-      const rt = state.cob?.runtime
-      if (rt && rt.staticVars && rt.staticVars.length) {
-        for (let i = 0; i < rt.staticVars.length; i++) {
+      // staticVars lives on the CobUnit (per-unit globals), not the
+      // multi-unit CobRuntime — the legacy reach for `runtime.staticVars`
+      // returned undefined after the multi-unit migration and the
+      // Globals tray quietly emptied out.
+      const u = state.cob?.unit
+      if (u && u.staticVars && u.staticVars.length) {
+        for (let i = 0; i < u.staticVars.length; i++) {
           const { row } = mvBuildVarRow(`global_${i}`,
-            () => rt.staticVars[i],
-            (n) => { rt.staticVars[i] = n | 0 })
+            () => u.staticVars[i],
+            (n) => { u.staticVars[i] = n | 0 })
           globals.appendChild(row)
         }
       } else {

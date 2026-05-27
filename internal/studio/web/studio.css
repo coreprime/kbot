@@ -3782,6 +3782,91 @@ canvas {
   color: var(--muted);  font-size: 12px;  text-align: center;  line-height: 1;
 }
 .mv-resize-se:hover { color: var(--accent); }
+
+/* Generic FloatingPanel chrome.  Mirrors the legacy .mv-resize-* +
+   .mv-thread-code-* rules so any panel that opts in to the new
+   FloatingPanel features (sidebar / resizable / minimizable /
+   headerExtras) gets matching styling without redefining each rule.
+   Used by ThreadDebugger today; any future panel that needs a
+   collapsible right rail or 8-direction resize re-uses the same set. */
+
+/* Two-pane layout when a sidebar is provided — body fills the
+   remaining space, sidebar takes its preferred width. */
+.mv-panel-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+.mv-panel-row > .mv-inspector-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mv-panel-sidebar {
+  flex: 0 0 auto;
+  min-width: 180px;
+  max-width: 320px;
+  overflow: auto;
+  border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.15);
+}
+.mv-panel-sidebar.collapsed,
+.has-sidebar.sidebar-collapsed .mv-panel-sidebar { display: none; }
+
+/* Resize handles for any FloatingPanel with `resizable=true`.  Same
+   geometry / cursor mapping as .mv-resize-* but namespaced so a panel
+   that doesn't opt in pays nothing. */
+.resizable { position: absolute; }  /* Hint — FloatingPanel position itself */
+.mv-panel-resize {
+  position: absolute;
+  user-select: none;
+  z-index: 2;
+}
+.mv-panel-resize-n { top: -2px;    left: 8px;    right: 8px;    height: 6px;   cursor: ns-resize; }
+.mv-panel-resize-s { bottom: -2px; left: 8px;    right: 8px;    height: 6px;   cursor: ns-resize; }
+.mv-panel-resize-e { right: -2px;  top: 8px;     bottom: 8px;   width: 6px;    cursor: ew-resize; }
+.mv-panel-resize-w { left: -2px;   top: 8px;     bottom: 8px;   width: 6px;    cursor: ew-resize; }
+.mv-panel-resize-nw { top: -2px;    left: -2px;   width: 12px;   height: 12px;  cursor: nwse-resize; }
+.mv-panel-resize-ne { top: -2px;    right: -2px;  width: 12px;   height: 12px;  cursor: nesw-resize; }
+.mv-panel-resize-sw { bottom: -2px; left: -2px;   width: 12px;   height: 12px;  cursor: nesw-resize; }
+.mv-panel-resize-se { bottom: -2px; right: -2px;  width: 12px;   height: 12px;  cursor: nwse-resize; }
+
+/* Header extras + title spacing.  The title gets its own class so
+   custom widgets (a search input) can sit beside it without the
+   bare-span style cascading layout-breaking margins. */
+.mv-inspector-header .mv-panel-title { flex: 0 0 auto; }
+.mv-inspector-header .mv-panel-sidebar-toggle,
+.mv-inspector-header .mv-panel-minimize { margin-left: 2px; }
+
+/* Minimized state — collapses the whole panel to just its header. */
+.minimized > :not(.mv-inspector-header):not(.mv-panel-resize) { display: none; }
+.minimized { height: auto !important; min-height: 0; }
+
+/* CollapsibleSection chrome — the per-section header row inside any
+   panel sidebar.  Clickable, with a caret that flips, and an extras
+   slot for inline action buttons (Clear, refresh, etc.). */
+.mv-collapsible { display: flex; flex-direction: column; margin-bottom: 4px; }
+.mv-collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--muted, #98a2b3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+}
+.mv-collapsible-header:hover { background: rgba(255, 255, 255, 0.04); }
+.mv-collapsible-caret { width: 10px; text-align: center; color: var(--accent, #8be9fd); }
+.mv-collapsible-title { flex: 1 1 auto; }
+.mv-collapsible-extras { display: inline-flex; gap: 4px; }
+.mv-collapsible-body { padding: 2px 4px 6px 14px; font-size: 12px; }
+
 /* Threads-panel debug button trio (Break / Continue / Step) — tint
    so the user discovers them as a group separate from Stop All. */
 .mv-inspector-header .mv-threads-break,
