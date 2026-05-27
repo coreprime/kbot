@@ -19,11 +19,17 @@
 
 import { CobRuntime } from './cob/cob-runtime.js'
 import { CobBinding } from './cob/cob-binding.js'
+import { spawnProjectile } from './weapon-driver.js'
 
 let _nextScenePieceId = 1
 
 export class SandboxScene {
-  constructor() {
+  constructor({ palette = null } = {}) {
+    // Shared palette ref — the weapon driver needs it to resolve TA
+    // colour indices for laser beams, and the unit editor's palette
+    // is already loaded by the view that hosts us, so we just adopt
+    // its ref rather than fetch separately.
+    this.palette = palette
     this.runtime = new CobRuntime()
     // Map<unitId, UnitInstance>.  Iteration order is insertion order
     // (Map semantics) which matches the order units were spawned —
@@ -184,14 +190,30 @@ export class SandboxScene {
                 if (u.binding.hasScript('AimPrimary')) {
                   try { u.binding.start('AimPrimary', [aimHeadingTA, 0]) } catch { /* ignore */ }
                 }
-                // Fire after aim so the muzzle-flash hook (start()
-                // in cob-binding) lights up.  Even if FirePrimary
-                // isn't defined we fall through to a synthetic flash
-                // below so the user sees the shot.
                 if (u.binding.hasScript('FirePrimary')) {
                   try { u.binding.start('FirePrimary') } catch { /* ignore */ }
                 } else if (u.binding.particles) {
                   u.binding.particles.emit(4 /* SFX_FIRE_FLASH */, [u.pos.x, u.pos.y + 14, u.pos.z], { size: 10, lifeMs: 140 })
+                }
+                // Spawn the actual TA projectile (bullet, shell,
+                // missile, plasma, dgun, or laser beam) through the
+                // shared weapon-driver so sandbox shots look exactly
+                // like unit-editor shots.  Skipped when the unit has
+                // no FBI weapon meta — falls back to the muzzle
+                // flash above + hit-scan damage below.
+                const w = u.meta && u.meta.weapons && u.meta.weapons[0]
+                if (w && w.name) {
+                  const anchor = [u.pos.x, u.pos.y + 14, u.pos.z]
+                  const tgt = [t.pos.x, t.pos.y + 14, t.pos.z]
+                  try {
+                    spawnProjectile({
+                      binding: u.binding,
+                      weapon: w,
+                      anchor,
+                      target: tgt,
+                      palette: this.palette,
+                    })
+                  } catch { /* ignore */ }
                 }
               }
               // Hit-scan damage — fixed at 12 HP/shot, scaled by the

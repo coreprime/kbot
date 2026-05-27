@@ -17162,39 +17162,13 @@ function wireSandboxControlsIntercept() {
       }
       return
     }
-    // Move arms the next ground click as a move target.
-    if (action === 'move') { sb.setPendingCommand('move'); return }
-    // Fire-immediately for Primary/Secondary/Tertiary — runs Aim*
-    // then Fire* on each currently-selected unit using the unit's
-    // present heading (no target-click required).  Matches the
-    // unit editor's behaviour where the Fire button on a single
-    // unit fires straight away at whatever the turret's aimed at.
-    if (action === 'primary' || action === 'secondary' || action === 'tertiary') {
-      const slot = action[0].toUpperCase() + action.slice(1)
-      const aimName = 'Aim' + slot
-      const fireName = 'Fire' + slot
-      let fired = 0
-      for (const id of sb.scene.selected) {
-        const u = sb.scene.unitById(id)
-        if (!u || !u.binding) continue
-        const aimHeadingTA = Math.round((u.heading) * 65536 / (Math.PI * 2)) & 0xffff
-        if (u.binding.hasScript(aimName)) {
-          try { u.binding.start(aimName, [aimHeadingTA, 0]) } catch { /* ignore */ }
-        }
-        if (u.binding.hasScript(fireName)) {
-          try { u.binding.start(fireName) } catch { /* ignore */ }
-          fired++
-        }
-      }
-      const sl = action === 'primary' ? 'Primary' : action === 'secondary' ? 'Secondary' : 'Tertiary'
-      if (typeof sb._setStatus === 'function') {
-        // _setStatus is private; use the status element directly
-      }
-      const stat = document.getElementById('status')
-      if (stat) stat.textContent = fired
-        ? `${sl} fired on ${fired} unit${fired === 1 ? '' : 's'}.`
-        : `${sl} — no selected unit has ${fireName}.`
-    }
+    // All slots arm the next canvas click — matches the unit
+    // editor's Controls panel semantics (you click Primary, then
+    // click in the scene to lock the weapon onto that target).
+    // setPendingCommand swaps the armed-cursor overlay so the user
+    // sees which slot is armed.
+    if (action === 'move') sb.setPendingCommand('move')
+    else if (action === 'primary' || action === 'secondary' || action === 'tertiary') sb.setPendingCommand(action)
   }, /* capture = */ true)
 }
 

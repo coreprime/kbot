@@ -118,7 +118,7 @@ export class SandboxView {
         host: document.getElementById('model-viewer-dialog') || document.body,
       })
     }
-    if (!this.scene) this.scene = new SandboxScene()
+    if (!this.scene) this.scene = new SandboxScene({ palette: this.palette })
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
     // which leaves spawned units floating above wherever the bumpy
@@ -186,6 +186,13 @@ export class SandboxView {
       if (inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
         try { inst.cobUnit.start('Create') } catch { /* ignore */ }
       }
+      // Fetch FBI / weapon metadata in the background.  The shared
+      // weapon driver needs weapons[0..2] to spawn proper TA
+      // projectiles (laser beams, missiles, shells) — without this
+      // sandbox firing falls back to a bare muzzle flash + hit-scan.
+      // Fetch is fire-and-forget; if it 404s the unit just stays in
+      // its no-weapons state without breaking anything.
+      this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
       this.#refreshEntities()
       this.#setStatus(`Spawned ${name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
       return inst
@@ -193,6 +200,20 @@ export class SandboxView {
       this.#setStatus(`Spawn failed: ${err.message || err}`)
       return null
     }
+  }
+
+  // #fetchUnitMeta loads FBI + weapon-TDF data for a freshly spawned
+  // unit and stows it on `inst.meta`.  The shared weapon driver reads
+  // this to pick projectile kind / ballistic flag / velocity / range /
+  // sound.  Same backend endpoint the unit editor's mvFetchUnitMeta
+  // uses so both views see identical data.
+  async #fetchUnitMeta(inst) {
+    if (!inst || !inst.name) return
+    try {
+      const resp = await fetch(`/api/studio/unit/${encodeURIComponent(inst.name)}`)
+      if (!resp.ok) return
+      inst.meta = await resp.json()
+    } catch { /* ignore */ }
   }
 
   // beginPlacement loads the unit's geometry + COB up front (so the
@@ -236,14 +257,28 @@ export class SandboxView {
   }
 
   // setPendingCommand — called by the controls UI when the user
-  // clicks Move / Attack.  Next canvas click consumes it.  Drives
-  // the shared ArmedCursor overlay so the cursor visually matches
-  // what the unit editor shows for the same gesture.
+  // clicks Move / Attack / Primary / Secondary / Tertiary.  Next
+  // canvas click consumes it.  Drives the shared ArmedCursor
+  // overlay so the cursor visually matches what the unit editor
+  // shows for the same gesture.  Passing null disarms.
+  //
+  // Accepted slots:
+  //   'move'                    — next click sets move target
+  //   'attack'                  — generic primary-weapon attack
+  //   'primary' / 'secondary' / 'tertiary'
+  //                             — fire the named weapon slot at the
+  //                               next click target (matches the
+  //                               unit-editor's Controls panel
+  //                               arm-then-target semantics).
   setPendingCommand(cmd) {
-    this._pendingCmd = (cmd === 'move' || cmd === 'attack') ? cmd : null
+    const valid = (cmd === 'move' || cmd === 'attack' ||
+                   cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
+    this._pendingCmd = valid ? cmd : null
     if (this._armedCursor) this._armedCursor.setSlot(this._pendingCmd)
     if (this._pendingCmd) {
-      this.#setStatus(`${cmd[0].toUpperCase() + cmd.slice(1)} — click a ${cmd === 'attack' ? 'target unit' : 'destination'}.`)
+      const what = (cmd === 'move') ? 'a destination' : 'a target unit'
+      const label = cmd[0].toUpperCase() + cmd.slice(1)
+      this.#setStatus(`${label} — click ${what}.`)
     }
   }
 
@@ -317,9 +352,21 @@ export class SandboxView {
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.key === 'Escape' && this._placement) {
+      if (e.key === 'Escape') {
         e.preventDefault()
-        this.cancelPlacement()
+        // Cascade: placement → armed cmd → selection.  Each Escape
+        // press peels off one level of "in progress" state so the
+        // user can back out of a multi-step gesture without losing
+        // their entire context in one keystroke.
+        if (this._placement) {
+          this.cancelPlacement()
+        } else if (this._pendingCmd) {
+          this.setPendingCommand(null)
+          this.#setStatus('Cancelled.')
+        } else if (this.scene && this.scene.selected.size > 0) {
+          this.scene.selectClear()
+          this.#setStatus('Selection cleared.')
+        }
         return
       }
       const k = (e.key || '').toLowerCase()
@@ -437,6 +484,10 @@ export class SandboxView {
         x, z,
         headingRad: 0,
       })
+      // Fetch FBI meta for this placed unit too — same path as
+      // spawn() so click-placed units get the shared weapon-driver
+      // projectiles when they fire.
+      this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
       // Auto-run Create on spawn so the unit immediately settles into
       // its idle pose (flares hidden, panels at rest).
       if (inst && inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
@@ -463,31 +514,61 @@ export class SandboxView {
       this.#setStatus(`Move order issued to ${this.scene.selected.size} unit(s).`)
       return
     }
-    if (this._pendingCmd === 'attack') {
+    if (this._pendingCmd === 'attack' || this._pendingCmd === 'primary' ||
+        this._pendingCmd === 'secondary' || this._pendingCmd === 'tertiary') {
+      const slot = (this._pendingCmd === 'attack') ? 'primary' : this._pendingCmd
+      const slotName = slot[0].toUpperCase() + slot.slice(1)
+      const aimName = 'Aim' + slotName
+      const fireName = 'Fire' + slotName
       const hit = this.#pickUnitAt(sx, sy)
       if (hit && this.scene.selected.size > 0) {
+        let fired = 0
         for (const id of this.scene.selected) {
           if (id === hit.id) continue  // don't attack self
           const u = this.scene.unitById(id)
-          if (u) u.attackTarget = hit
+          if (!u) continue
+          // For 'primary' (and the generic 'attack' alias) we set
+          // the persistent attackTarget so the scene tick keeps
+          // pouring fire until the target dies.  Secondary and
+          // Tertiary are single-shot at the target — sandbox
+          // doesn't currently maintain per-slot persistent target
+          // state, so they're one-and-done; matches the unit
+          // editor's behaviour where the second Fire arms again.
+          if (slot === 'primary') u.attackTarget = hit
+          // Always fire ONCE immediately: aim at the target heading,
+          // start the Fire script which triggers the muzzle flash
+          // hook + the COB recoil animation.
+          if (u.binding) {
+            const dx = hit.pos.x - u.pos.x
+            const dz = hit.pos.z - u.pos.z
+            const headingRad = Math.atan2(dx, dz)
+            const aimHeadingTA = Math.round(headingRad * 65536 / (Math.PI * 2)) & 0xffff
+            if (u.binding.hasScript(aimName)) {
+              try { u.binding.start(aimName, [aimHeadingTA, 0]) } catch { /* ignore */ }
+            }
+            if (u.binding.hasScript(fireName)) {
+              try { u.binding.start(fireName) } catch { /* ignore */ }
+              fired++
+            }
+          }
         }
-        this.#setStatus(`Attack order issued — ${this.scene.selected.size} unit(s) targeting ${hit.name}.`)
+        const verb = slot === 'primary' ? 'targeting' : 'firing at'
+        this.#setStatus(`${slotName} — ${fired || this.scene.selected.size} unit(s) ${verb} ${hit.name}.`)
       } else if (!hit) {
-        this.#setStatus('Attack — click cancelled (no unit under cursor).')
+        this.#setStatus(`${slotName} — click cancelled (no unit under cursor).`)
       }
       this._pendingCmd = null
       if (this._armedCursor) this._armedCursor.setSlot(null)
       return
     }
     // Default click — selection.  Click on a unit selects only it;
-    // click on empty ground clears selection.
+    // click on empty ground is a NO-OP (selection persists).  Escape
+    // is the explicit "deselect" gesture so the user doesn't lose
+    // their selection by an accidental click off the unit.
     const picked = this.#pickUnitAt(sx, sy)
     if (picked) {
       this.scene.selectOnly(picked.id)
       this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
-    } else {
-      this.scene.selectClear()
-      this.#setStatus(`Selection cleared.`)
     }
   }
 
