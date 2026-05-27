@@ -409,6 +409,14 @@ export class SandboxView {
     if (this.scene && typeof this.scene.setSilenced === 'function') {
       this.scene.setSilenced(!!s)
     }
+    // Same hook is the canonical "this view is no longer in front"
+    // signal — flip the armed-cursor overlay off so a backgrounded
+    // sandbox's last-armed glyph doesn't sit frozen on screen while
+    // the user works in a sibling tab.  Re-enabled by the next
+    // setArmed/setAmbient call when the user returns.
+    if (this._armedCursor && typeof this._armedCursor.setVisible === 'function') {
+      this._armedCursor.setVisible(!s)
+    }
   }
 
   // #beginPlacementDrag handles the click-then-drag flow for unit

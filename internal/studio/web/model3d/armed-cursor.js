@@ -35,6 +35,12 @@ export class ArmedCursor {
     this._inside = true
     this._x = 0
     this._y = 0
+    // _visible is the host's tab-active gate.  Defaults to true so a
+    // single-tab consumer doesn't have to wire setVisible explicitly.
+    // The host's deactivate path (MvControls.setSilenced /
+    // SandboxView.setSilenced) flips this off so a backgrounded tab's
+    // overlay disappears even without a mousemove to drive #refresh.
+    this._visible = true
     this._wired = false
     this._handlers = null
     this.#wire()
@@ -87,6 +93,19 @@ export class ArmedCursor {
     this.#refresh()
   }
 
+  // setVisible flips a hard-hide flag the host can flip on the
+  // outgoing tab during a tab swap, even though our slot is still
+  // armed.  Without this, the overlay glyph would stay frozen at the
+  // last (x, y) captured before the canvas was pulled out of the
+  // DOM — refresh only re-runs on events, and a backgrounded canvas
+  // generates none.  Idempotent.
+  setVisible(on) {
+    const want = !!on
+    if (this._visible === want) return
+    this._visible = want
+    this.#refresh()
+  }
+
   // #normalizeSlot returns one of the known names or null.  Centralised
   // so setSlot / setArmed / setAmbient share the validation.
   #normalizeSlot(slot) {
@@ -134,7 +153,7 @@ export class ArmedCursor {
     // flip) would render the cursor overlay frozen at whatever x/y
     // the mousemove last captured before the canvas was detached.
     const canvasDetached = this.canvas && !this.canvas.isConnected
-    const visible = this._slot && this._inside && !canvasDetached
+    const visible = this._visible && this._slot && this._inside && !canvasDetached
     if (!visible) {
       if (this._overlay) this._overlay.style.display = 'none'
       if (this.canvas) this.canvas.style.cursor = ''
