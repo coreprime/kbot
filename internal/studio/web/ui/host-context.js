@@ -278,6 +278,10 @@ export const hostCallbacks = {
   // edit that changes tile data or feature placements but isn't
   // already routed through commitTransaction.
   bumpContentVersion: null,     // () => void
+  // Camera-info panel visibility toggle.  Settings dialog flips
+  // it through this callback because the panel itself is still
+  // legacy (non-React) — once it migrates the callback can drop.
+  setCameraInfoVisible: null,   // (visible: boolean) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
