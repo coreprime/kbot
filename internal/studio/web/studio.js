@@ -358,7 +358,6 @@ import {
   preloadFeatureImage,
   featureAnchorOffset,
   featureAnchorWorld,
-  featureGroundHeight,
   featureRenderRect,
 } from './ui/map-editor/feature-assets.js'
 
@@ -437,6 +436,10 @@ import {
 // edge-alignment hints that follow the cursor after a Select Area
 // drag.
 import { drawTerrainOverlays } from './ui/map-editor/canvas/terrain.js'
+
+// Floating Feature Info callout — populated each renderCanvas
+// tick when a single feature is selected (Place Features mode).
+import { updateFeatureInfoPanel } from './ui/map-editor/feature-info.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -4340,37 +4343,9 @@ function renderCanvas() {
 // you'd want to round-trip through the TNT file — map tile, attribute
 // sub-cell, world pixel, terrain height byte, footprint, category.
 // Hidden on no-selection or multi-select (Picker mode).
-function updateFeatureInfoPanel() {
-  const panel = $('#feature-info-panel')
-  if (!panel) return
-  const multi = state.selectedFeatures && state.selectedFeatures.size > 0
-  const idx = state.selectedFeature
-  if (multi || idx < 0 || idx >= (state.features || []).length) {
-    panel.classList.add('hidden')
-    return
-  }
-  const f = state.features[idx]
-  if (!f) { panel.classList.add('hidden'); return }
-  panel.classList.remove('hidden')
-  // Tile = which 32-px tile the anchor falls in.  Sub-tile is the 0/1
-  // attribute offset inside that tile (TA's 2×2 attribute grid per tile).
-  const tx = Math.floor(f.ax / 2)
-  const ty = Math.floor(f.ay / 2)
-  const sx = f.ax & 1
-  const sy = f.ay & 1
-  const anchor = featureAnchorWorld(f)
-  const height = featureGroundHeight(f)
-  const fw = f.footprintX || 1
-  const fh = f.footprintZ || 1
-  $('#feature-info-title').textContent = f.name || 'Feature'
-  $('#fi-tile').textContent = `${tx}, ${ty}`
-  $('#fi-subtile').textContent = `${sx}, ${sy}`
-  $('#fi-attr').textContent = `${f.ax}, ${f.ay}`
-  $('#fi-world').textContent = `${anchor.px}, ${anchor.py}`
-  $('#fi-height').textContent = `${height}`
-  $('#fi-footprint').textContent = `${fw} × ${fh}`
-  $('#fi-category').textContent = f.category || f.world || '—'
-}
+// updateFeatureInfoPanel moved to
+// /ui/map-editor/feature-info.js — imported at the top of this
+// file.
 
 // WebGL tile + feature batch renderer moved to
 // ./ui/map-editor/canvas/webgl.js — see import at the top of this
