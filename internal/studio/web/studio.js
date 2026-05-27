@@ -313,6 +313,15 @@ import {
   stopAllMapPan,
 } from './ui/map-editor/zoom-pan.js'
 
+// Visible-area helpers — return the tile + pixel rect of whatever
+// the user can see right now (padded by one tile so partial-edge
+// tiles still render).  Every per-cell render pass culls against
+// these so the canvas stays cheap on large maps.
+import {
+  visibleTileBounds,
+  visiblePixelBounds,
+} from './ui/map-editor/viewport.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -4555,46 +4564,8 @@ function drawTiles(ctx) {
   }
 }
 
-// visibleTileBounds returns the inclusive [minTX..maxTX, minTY..maxTY]
-// rectangle currently visible in the canvas-scroll viewport, padded by
-// one tile so partially-visible edges aren't clipped.  Used by every
-// per-cell render pass to skip drawing tiles the user can't see — a
-// big win on large maps where the canvas is much larger than the
-// viewport.
-function visibleTileBounds() {
-  const wrap = $('#canvas-scroll')
-  if (!wrap) return { minTX: 0, minTY: 0, maxTX: state.tileW - 1, maxTY: state.tileH - 1 }
-  // The canvas sits at (overscrollPadding.x, overscrollPadding.y) inside
-  // .canvas-stack, so subtract that offset before converting scroll
-  // pixels to canvas pixels.  Negative values just mean we're looking
-  // at the whitespace beyond a map edge — they clamp away below.
-  const z = state.zoom || 1
-  const left = (wrap.scrollLeft - overscrollPadding.x) / z
-  const top = (wrap.scrollTop - overscrollPadding.y) / z
-  const right = (wrap.scrollLeft - overscrollPadding.x + wrap.clientWidth) / z
-  const bottom = (wrap.scrollTop - overscrollPadding.y + wrap.clientHeight) / z
-  const minTX = clamp(Math.floor(left / TILE_PX) - 1, 0, state.tileW - 1)
-  const minTY = clamp(Math.floor(top / TILE_PX) - 1, 0, state.tileH - 1)
-  const maxTX = clamp(Math.ceil(right / TILE_PX), 0, state.tileW - 1)
-  const maxTY = clamp(Math.ceil(bottom / TILE_PX), 0, state.tileH - 1)
-  return { minTX, minTY, maxTX, maxTY }
-}
-
-// visiblePixelBounds gives the same rectangle in canvas pixels (game
-// pixels at TILE_PX resolution) for callers that work in pixel space
-// (features, hit-test outlines, etc.) and need to cull against the
-// sprite's drawn box rather than tile cells.
-function visiblePixelBounds() {
-  const vb = visibleTileBounds()
-  return {
-    minX: vb.minTX * TILE_PX,
-    minY: vb.minTY * TILE_PX,
-    // maxTX/maxTY are inclusive tile indices, so add +1 to get the
-    // exclusive pixel upper-bound.
-    maxX: (vb.maxTX + 1) * TILE_PX,
-    maxY: (vb.maxTY + 1) * TILE_PX,
-  }
-}
+// visibleTileBounds / visiblePixelBounds moved to
+// /ui/map-editor/viewport.js — imported at the top of this file.
 
 // drawRotatedTile copies one 32×32 source tile from a section image to
 // the destination canvas, rotated by `rotation` quarter-turns clockwise.
@@ -6175,8 +6146,8 @@ function renderDevDiagnostics() {
   const wrap = $('#canvas-scroll')
   const stack = $('#canvas-stack')
   const num = (v, suffix = '') => (v == null ? '—' : `${v}${suffix}`)
-  const tb = (typeof visibleTileBounds === 'function') ? visibleTileBounds() : null
-  const vp = (typeof visiblePixelBounds === 'function') ? visiblePixelBounds() : null
+  const tb = visibleTileBounds()
+  const vp = visiblePixelBounds()
   const rows = [
     ['Mode', state.mode || '—'],
     ['View mode', state.viewMode || '—'],
