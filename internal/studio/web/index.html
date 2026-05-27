@@ -473,6 +473,10 @@
                       title="Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding's particle-pool occupancy.">
                 <span class="ico">✨</span><span>Effects</span><span class="menu-check">✓</span>
               </button>
+              <button id="mv-view-audio" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-audio"
+                      title="Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).">
+                <span class="ico">🔊</span><span>Audio</span><span class="menu-check">✓</span>
+              </button>
             </div>
           </div>
         </div>
@@ -655,6 +659,26 @@
         </div>
         <div class="mv-inspector-body" id="mv-inspector-effects-body">
           <div class="mv-inspector-empty">No particles in flight.</div>
+        </div>
+      </aside>
+      <!-- Audio overlay — live debugger for the AudioPool.  Lists
+           every sound currently playing with its stem, source label
+           (unit + event name, or "Weapon: fire"), the world XYZ the
+           sound was emitted from (unit position for acks, firing-
+           piece anchor for weapons), volume, and a progress bar from
+           startMs / durationMs.  Same chrome as the Effects panel
+           so the user can drag, collapse, and close consistently. -->
+      <aside class="mv-inspector hidden" id="mv-inspector-audio" title="Drag this header to move the Audio overlay">
+        <div class="mv-inspector-header" id="mv-inspector-audio-header">
+          <span class="minimap-grip" title="Drag to move this panel">⠿</span>
+          <span>Audio</span>
+          <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-audio"
+                  title="Collapse this panel to a thin header bar (click again to expand).">−</button>
+          <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-audio"
+                  title="Close this panel (re-open later from the View menu).">×</button>
+        </div>
+        <div class="mv-inspector-body" id="mv-inspector-audio-body">
+          <div class="mv-inspector-empty">No sounds playing.</div>
         </div>
       </aside>
       <!-- Controls overlay — drives the loaded unit.  Top section is

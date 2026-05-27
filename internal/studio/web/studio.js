@@ -11955,7 +11955,7 @@ function pieceDisplayName(piece) {
 // tail of every redraw — cheap when panels are hidden because
 // the function early-returns on each closed panel.
 
-const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera', 'mv-inspector-effects']
+const MV_INSPECTOR_IDS = ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-camera', 'mv-inspector-effects', 'mv-inspector-audio']
 
 function wireMvInspectors() {
   // Wire drag + collapse + close on each panel + the View menu
@@ -12195,6 +12195,14 @@ function refreshMvInspectors(dtMs = 16) {
   if (fxPanel && !fxPanel.classList.contains('hidden')) {
     const body = document.getElementById('mv-inspector-effects-body')
     if (body) renderMvEffectsPanel(body, mv)
+  }
+  // Audio panel — live read-out of the AudioPool.  Same 4 Hz
+  // cadence as Effects so per-sound progress bars step in ~250 ms
+  // increments — fine for visual feedback, cheap on the DOM.
+  const auPanel = document.getElementById('mv-inspector-audio')
+  if (auPanel && !auPanel.classList.contains('hidden')) {
+    const body = document.getElementById('mv-inspector-audio-body')
+    if (body) renderMvAudioPanel(body, mv)
   }
   // Grey out action / COB-entry buttons whose script has a live
   // thread, so the user can see at a glance what's running and
@@ -14378,6 +14386,127 @@ function renderMvEffectsPanel(body, mv) {
   renderSection('Projectiles & beams', projSlots)
   renderSection('Other effects',       fxSlots)
 }
+
+// renderMvAudioPanel populates the Audio overlay with a live snapshot
+// of every entry in the binding's AudioPool.  Layout mirrors the
+// Effects panel: per-kind summary chip strip on top, then a card per
+// live sound showing stem, source label, world XYZ (if any), volume,
+// and a progress bar (filled by entry.audio.currentTime / duration).
+//
+// Group kinds by category — UNIT acknowledgements, WEAPON-FIRE shots,
+// UI previews, COB-driven sounds — so a row of acks doesn't drown out
+// a single weapon-fire entry the user is hunting.
+function renderMvAudioPanel(body, mv) {
+  const pool = mv && mv.cob && mv.cob.audio
+  if (!pool) {
+    body.replaceChildren()
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No audio pool.'
+    body.appendChild(empty)
+    return
+  }
+  body.replaceChildren()
+  if (pool.count() === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'mv-inspector-empty'
+    empty.textContent = 'No sounds playing.'
+    body.appendChild(empty)
+    return
+  }
+  // Tally per-kind for the chip strip.  Kind names are friendly so
+  // a glance at the chips tells the user "5 unit acks + 1 weapon"
+  // without having to scroll.
+  const KIND_NAMES = {
+    'unit':        'UNIT',
+    'weapon-fire': 'WEAPON',
+    'weapon-hit':  'HIT',
+    'ui':          'UI',
+    'cob':         'COB',
+  }
+  const counts = new Map()
+  pool.each((e) => counts.set(e.kind, (counts.get(e.kind) || 0) + 1))
+  const chips = document.createElement('div')
+  chips.className = 'mv-fx-chips'
+  for (const [kind, n] of counts) {
+    const c = document.createElement('span')
+    c.className = 'mv-fx-chip'
+    c.textContent = `${KIND_NAMES[kind] || kind.toUpperCase()} ×${n}`
+    chips.appendChild(c)
+  }
+  body.appendChild(chips)
+  // Per-entry cards in insertion order (oldest first, newest at the
+  // bottom — same as the in-flight projectile list in Effects, so
+  // the user reads "most recent sound" off the same edge of the
+  // panel for both inspectors).
+  const fmt = (v, unit) => `${(+v).toFixed(1)}${unit ? ' ' + unit : ''}`
+  pool.each((e) => {
+    const card = document.createElement('div')
+    card.className = 'mv-au-card'
+    // Header: kind tag + stem name
+    const head = document.createElement('div')
+    head.className = 'mv-au-card-head'
+    const tag = document.createElement('span')
+    tag.className = `mv-au-kind kind-${e.kind}`
+    tag.textContent = (KIND_NAMES[e.kind] || e.kind.toUpperCase())
+    head.appendChild(tag)
+    const stem = document.createElement('span')
+    stem.className = 'mv-au-stem'
+    stem.textContent = e.stem
+    head.appendChild(stem)
+    card.appendChild(head)
+    // Source label — second line because source strings can be long
+    // ("ARMCOMLASER: fire" or "Commander: ok1") and we want them on
+    // their own row rather than wrapping the header.
+    const src = document.createElement('div')
+    src.className = 'mv-au-source'
+    src.textContent = e.source || '—'
+    card.appendChild(src)
+    // Stat grid — position (when known), volume, length/progress.
+    const stats = document.createElement('div')
+    stats.className = 'mv-au-card-stats'
+    const addStat = (k, v) => {
+      const row = document.createElement('div')
+      row.className = 'mv-au-stat'
+      const kEl = document.createElement('span'); kEl.className = 'k'; kEl.textContent = k
+      const vEl = document.createElement('span'); vEl.className = 'v'; vEl.textContent = v
+      row.appendChild(kEl); row.appendChild(vEl)
+      stats.appendChild(row)
+    }
+    if (e.x != null) {
+      addStat('Pos', `${fmt(e.x)}, ${fmt(e.y)}, ${fmt(e.z)}`)
+    }
+    addStat('Vol', `${(e.vol * 100).toFixed(0)}%`)
+    // Live currentTime / duration read each refresh — avoids having
+    // to subscribe to timeupdate (which fires too often).  Bar fill
+    // is computed from these so playback rate changes show up the
+    // moment the user drags the sim-speed slider.
+    const audio = e.audio
+    const dur = e.durationMs && e.durationMs > 0
+      ? e.durationMs
+      : (audio.duration > 0 ? audio.duration * 1000 : null)
+    const cur = audio.currentTime * 1000
+    if (dur) {
+      addStat('Time', `${(cur / 1000).toFixed(2)}s / ${(dur / 1000).toFixed(2)}s`)
+    } else {
+      addStat('Time', `${(cur / 1000).toFixed(2)}s`)
+    }
+    card.appendChild(stats)
+    // Progress bar — same dimensions as the Effects panel's life bar
+    // so the two panels read visually identical.  Indeterminate (zero
+    // width) when duration is unknown.
+    const bar = document.createElement('div')
+    bar.className = 'mv-au-life-bar'
+    const fill = document.createElement('div')
+    fill.className = 'mv-au-life-fill'
+    const pct = dur ? Math.max(0, Math.min(100, (cur / dur) * 100)) : 0
+    fill.style.width = `${pct.toFixed(1)}%`
+    bar.appendChild(fill)
+    card.appendChild(bar)
+    body.appendChild(card)
+  })
+}
+
 
 // renderMvCameraPanel populates the Renderer overlay — historically a
 // camera-only read-out, now also displays the GL canvas's smoothed

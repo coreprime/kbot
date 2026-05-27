@@ -4276,6 +4276,59 @@ canvas {
   text-overflow: ellipsis; white-space: nowrap;
 }
 .mv-fx-life { text-align: right; }
+/* Audio inspector — clones the Effects card / chip / bar styling so
+   the two overlays read as siblings.  Kind tag uses a colour-coded
+   pill so the user can tell at a glance whether a row is a unit
+   ack (blue), weapon fire (orange), or UI preview (grey). */
+#mv-inspector-audio-body { display: flex; flex-direction: column; gap: 4px; padding: 4px 6px; }
+.mv-au-card {
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-2); padding: 4px 6px;
+}
+.mv-au-card-head {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 3px;
+}
+.mv-au-kind {
+  font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: 8px;
+  border: 1px solid var(--border);
+  font-family: ui-monospace, monospace;
+}
+.mv-au-kind.kind-unit        { background: rgba(80, 140, 220, 0.20); color: #b9d6ff; }
+.mv-au-kind.kind-weapon-fire { background: rgba(220, 140, 60, 0.20); color: #ffd09a; }
+.mv-au-kind.kind-weapon-hit  { background: rgba(220, 80, 80, 0.20);  color: #ffb0b0; }
+.mv-au-kind.kind-ui          { background: rgba(160, 160, 160, 0.18); color: #ddd; }
+.mv-au-kind.kind-cob         { background: rgba(140, 80, 200, 0.20); color: #d9b6ff; }
+.mv-au-stem {
+  font-size: 11px; font-family: ui-monospace, monospace;
+  color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-au-source {
+  font-size: 10px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 3px;
+}
+.mv-au-card-stats {
+  display: grid; grid-template-columns: 1fr;
+  gap: 1px;
+  font-family: ui-monospace, monospace; font-size: 10px;
+}
+.mv-au-stat { display: flex; gap: 6px; }
+.mv-au-stat .k { color: var(--muted); width: 32px; flex-shrink: 0; }
+.mv-au-stat .v {
+  color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-au-life-bar {
+  margin-top: 3px; height: 3px; background: var(--border);
+  border-radius: 2px; overflow: hidden;
+}
+.mv-au-life-fill {
+  height: 100%; background: var(--accent, #3a6);
+  transition: width 200ms linear;
+}
 .mv-fx-more {
   font-size: 10px; color: var(--muted);
   padding: 2px 6px; font-style: italic;
