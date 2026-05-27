@@ -192,6 +192,17 @@ import {
 // picker.  Called from the boot block.
 import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
 
+// View-menu visibility toggles (minimap / features / start
+// positions / voids).  Each flips the matching state.show* flag,
+// persists prefs, republishes the ribbon, and drops out of any
+// mode whose targets just became invisible.
+import {
+  setMinimapVisible,
+  setFeaturesVisible,
+  setStartPositionsVisible,
+  setVoidsVisible,
+} from './ui/map-editor/view-toggles.js'
+
 // KBot Studio — browser-side editor.
 //
 // State model
@@ -6111,75 +6122,10 @@ function wireMinimap() {
   }
 }
 
-function setMinimapVisible(visible) {
-  state.showMinimap = !!visible
-  // React MinimapPanel reads visibility from the shared panel-store;
-  // routing through ui.setPanelVisible flips the signal AND writes
-  // through the persistence bridge (which keeps state.mvInspectorVisible
-  // + persistPrefs in lockstep).
-  if (_reactUi && typeof _reactUi.setPanelVisible === 'function') {
-    _reactUi.setPanelVisible('minimap-panel', !!visible)
-  }
-  persistPrefs()
-  publishMapRibbonState()
-}
-
-// setFeaturesVisible / setStartPositionsVisible mirror setMinimapVisible
-// but cover the two new View toggles.  Toggling features off while the
-// user is in a feature-centric mode (select-features or picker) drops
-// them back to Select, since a tool that can't see its targets is
-// useless.  Same for start-positions mode.
-function setFeaturesVisible(visible) {
-  state.showFeatures = visible
-  persistPrefs()
-  publishMapRibbonState()
-  if (!visible && (state.mode === 'select-features' || state.mode === 'picker')) {
-    setMode('select-terrain')
-  } else {
-    renderCanvas()
-  }
-}
-
-function setStartPositionsVisible(visible) {
-  state.showStartPositions = visible
-  persistPrefs()
-  publishMapRibbonState()
-  if (!visible && state.mode === 'start-points') {
-    setMode('select-terrain')
-  } else {
-    renderCanvas()
-  }
-}
-
-// setVoidsVisible toggles the view-menu pref.  The actual draw call
-// in drawVoidOverlay reads state.showVoids AND the active mode, so a
-// user in Voids mode still sees what they're painting.
-function setVoidsVisible(visible) {
-  state.showVoids = visible
-  persistPrefs()
-  publishMapRibbonState()
-  // Hiding voids while the user is still in Voids paint mode would
-  // leave them with an invisible tool — drop back to Select so the
-  // editor stays in a coherent state.
-  if (!visible && state.mode === 'voids') {
-    setMode('select-terrain')
-  } else {
-    renderCanvas()
-  }
-}
-
-// applyMinimapPosition — vestigial helper.  The legacy code wrote
-// directly to the #minimap-panel inline style after a drag; the
-// React MinimapPanel now manages its own position via the panel-
-// store + FloatingPanel persistence, so this is a no-op.  Kept (and
-// referenced once below) for backward-compatible signature.
-function applyMinimapPosition() {
-  return
-}
-// Silence the unused-function warning — the export shape is part of
-// the legacy host API and may be reintroduced if we need imperative
-// repositioning from outside the panel-store.
-void applyMinimapPosition
+// setMinimapVisible / setFeaturesVisible / setStartPositionsVisible /
+// setVoidsVisible / applyMinimapPosition moved to
+// /ui/map-editor/view-toggles.js — imported at the top of this
+// file.
 
 // ── Developer stats panel + dialog ────────────────────────────────────────
 //
