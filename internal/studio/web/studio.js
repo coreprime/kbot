@@ -12,9 +12,6 @@ let _mvControls = null
 import {
   WORLDS,
 } from './ui/map-editor/constants.js'
-import {
-  playerCountLabel,
-} from './ui/map-editor/helpers.js'
 
 // Host context — shared module-level state for every /ui/* subsystem.
 // MapDoc, the `state` Proxy, the tab registry, the DOM helpers and
@@ -34,14 +31,11 @@ import {
   $$,
 } from './ui/host-context.js'
 
-// Undo / redo + transaction wrapper for map edits — moved to
-// /ui/map-editor/undo.js.  studio.js still calls these directly
-// from the keyboard handler, the ribbon, and every mode tool.
+// Undo / redo button refresh — the captureSnapshot/undo/redo helpers
+// + the live stacks moved into /ui/map-editor/undo.js and are
+// consumed from there by the ribbon bridge.  studio.js only needs
+// the updateUndoButtons re-bridge for the host callback registry.
 import {
-  undoStack,
-  redoStack,
-  undo,
-  redo,
   updateUndoButtons,
 } from './ui/map-editor/undo.js'
 
@@ -51,16 +45,9 @@ import {
 // /ui/map-editor/boot.js's abortTransientGestureState.
 
 // Clipboard subsystem (terrain drag-clipboard + system Ctrl+C/V/X)
-// — moved to /ui/map-editor/clipboard.js.  Same call sites as
-// before; the implementations are now in the map-editor tree.
-import {
-  clearRegion,
-  cutSelection,
-  clearAllFeatures,
-  clearFeaturesInSelection,
-  copyToClipboard,
-  pasteFromClipboard,
-} from './ui/map-editor/clipboard.js'
+// — moved to /ui/map-editor/clipboard.js.  The ribbon bridge in
+// /ui/map-editor/ribbon/bridge.js owns every call site now;
+// studio.js no longer imports the helpers directly.
 
 // WebGL tile + feature renderer — moved to
 // /ui/map-editor/canvas/webgl.js.  Forward-reference helpers
@@ -87,7 +74,7 @@ import {
 // detects a dead backend so the UI can flip into a disconnected
 // state.  Lives in /ui/common/ since both the editor and the
 // welcome screen poll on the same timer.
-import { startServerHeartbeat, isConnected } from './ui/common/heartbeat.js'
+import { startServerHeartbeat } from './ui/common/heartbeat.js'
 
 // Floating-panel layout (drag + collapse + persist) for the legacy
 // non-React panels — dev stats panel, camera-info panel.  React-
@@ -187,15 +174,12 @@ import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
 import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
 import { createTab, getTabType } from './ui/tab-registry.js'
 
-// View-menu visibility toggles (minimap / features / start
-// positions / voids).  Each flips the matching state.show* flag,
-// persists prefs, republishes the ribbon, and drops out of any
-// mode whose targets just became invisible.
+// View-menu visibility toggle — setMinimapVisible is the only
+// view-toggle studio.js still touches directly (settings dialog
+// seam below).  The other three (features / start-positions /
+// voids) are reached through the ribbon bridge.
 import {
   setMinimapVisible,
-  setFeaturesVisible,
-  setStartPositionsVisible,
-  setVoidsVisible,
 } from './ui/map-editor/view-toggles.js'
 
 // Camera & Cursor panel — visibility toggle + the two publish-to-
@@ -205,37 +189,30 @@ import {
   setCameraInfoVisible,
 } from './ui/map-editor/camera-info.js'
 
+// React MapRibbon + MapSidebar bridge wiring (+ the minimap-pan
+// helper its MinimapPanel routes through).  wireMapRibbonBridge
+// installs the configureSidebarBridge + configureMapRibbonBridge
+// callback bundles on the loaded /ui/mount.js module; the two
+// publish* helpers push the matching React store state.
+import {
+  publishMapRibbonState,
+  publishMapSidebarState,
+  wireMapRibbonBridge,
+} from './ui/map-editor/ribbon/bridge.js'
+
 // Dice-face player-count picker for the New-map size dialog.
 // Owns its own dicePicked Set; pickedPlayerCounts() reads it at
 // startEditor() time to seed N-player schemas.
 import {
-  pickedPlayerCounts,
   populateWorldSelect,
   renderDiceGrid,
 } from './ui/map-editor/dialogs/dice-picker.js'
 
-// Save-payload builder.  Pure snapshot of the current map state
-// in the shape /api/studio/save / /api/studio/export-* /
-// /api/studio/quality-check all accept.  Used by save / saveLoose
-// (still in studio.js) AND by every backend-rendered export.
-import { buildSavePayload } from './ui/map-editor/save-payload.js'
-
-// PNG export + heightmap import handlers.  exportHeightmap and
-// exportMinimap render client-side from state; the *FullRender /
-// MapImage / Buildmap / Voidmap variants POST the save payload to
-// the matching /api/studio/export-* endpoint.
-import {
-  exportHeightmap,
-  exportMinimap,
-  exportFullRender,
-  exportMapImage,
-  exportBuildmap,
-  exportVoidmap,
-} from './ui/map-editor/exports.js'
-
-// Symmetry helpers live in /ui/map-editor/symmetry.js; studio.js no
-// longer imports them directly — placeFeature (the last consumer) is
-// now in /ui/map-editor/wire-toolbar.js.  The DOM wiring
+// Save-payload builder + PNG export helpers + the heightmap import
+// trigger are all consumed from /ui/map-editor/ribbon/bridge.js now;
+// studio.js no longer imports them directly.  Symmetry helpers live
+// in /ui/map-editor/symmetry.js — placeFeature (the last consumer)
+// is in /ui/map-editor/wire-toolbar.js.  The DOM wiring
 // (wireSymmetryGroup) moved to /ui/map-editor/ribbon/legacy-popups.js.
 
 // Legacy (pre-React) ribbon popup chrome — every consumer (the
@@ -269,40 +246,18 @@ import {
 // first time the editor surface boots; studio.js no longer
 // imports it directly.
 
-// Scatter dialog — drops N features into the map honouring a
-// minimum spacing halo.  Self-contained subsystem; the React
-// dialog chrome is mounted separately.
-import {
-  openScatterDialog,
-} from './ui/map-editor/dialogs/scatter.js'
-
-// Map Properties (.ota) dialog — mission name, planet, wind, tidal,
-// gravity, sea level, lava-world flags.  Apply commits a single
-// undo transaction and mirrors mission name + planet onto state.
-import {
-  openOTADialog,
-} from './ui/map-editor/dialogs/ota.js'
-
-// Per-schema editor — opened by the gear icon on each schema row in
-// the schema dropdown.  Edits the matching state.ota.schemas[i] in
-// a single undo transaction.
-import {
-  openSchemaEditor,
-} from './ui/map-editor/dialogs/schema-editor.js'
+// Scatter / OTA / per-schema dialogs are all opened from the ribbon
+// bridge in /ui/map-editor/ribbon/bridge.js; studio.js no longer
+// imports the openers directly.
 
 // Schema selector — the ribbon's Map Settings dropdown for picking
-// the active OTA schema, plus the helpers that drive its row labels
-// and the Add-N-Players chip grid.  Studio.js still consumes
-// schemaPlayerCount + schemaPickerLabel from publishMapRibbonState
-// so they're imported here; the wire/refresh pair is reached
-// through hostCallbacks by wireToolbar.
+// the active OTA schema.  The Add-N-Players / delete / picker-label
+// helpers are consumed inside /ui/map-editor/ribbon/bridge.js now;
+// studio.js just routes wire/refresh through hostCallbacks so the
+// boot order keeps working.
 import {
   wireSchemaSelector,
   refreshSchemaSelector,
-  schemaPlayerCount,
-  schemaPickerLabel,
-  addSchemaWithPlayers,
-  deleteSchema,
 } from './ui/map-editor/schema-selector.js'
 
 // New-map size dialog + the in-editor File → New / File → Open
@@ -332,22 +287,11 @@ import {
   abortTransientGestureState,
 } from './ui/map-editor/boot.js'
 
-// Resize-map dialog — anchor-grid + Crop-to-content path.  Rebuilds
-// tiles / heights / voids / features at the new size and tears out
-// the canvas DOM so no stale GL buffers survive.
-import {
-  openResizeDialog,
-} from './ui/map-editor/dialogs/resize.js'
-
-// Pre-save Quality Checker dialog — POSTs the payload to
-// /api/studio/quality-check, paces the per-check reveal, resolves
-// with either an array of fix ids or null on cancel.
-import { runQualityChecker } from './ui/map-editor/dialogs/quality-checker.js'
-
-// Save handlers — packaged HPI download (save) or raw .tnt + .ota
-// loose-file downloads (saveLoose).  Both gate behind the Quality
-// Checker and flip the active map's dirty flag on success.
-import { save, saveLoose } from './ui/map-editor/save.js'
+// Resize-map dialog, Quality Checker, and the loose-file Save
+// helper are all consumed inside /ui/map-editor/ribbon/bridge.js
+// now; studio.js still needs `save` for the unsaved-changes seam
+// the close path drives through hostCallbacks.saveActiveMap.
+import { save } from './ui/map-editor/save.js'
 
 // Content-version-keyed caches over state.features — feature
 // spatial bucket (featuresNear) + name index (getFeaturesByName).
@@ -355,18 +299,6 @@ import { save, saveLoose } from './ui/map-editor/save.js'
 import {
   bumpContentVersion,
 } from './ui/map-editor/content-cache.js'
-
-// Zoom + scroll-pan controls.  setZoom / zoomAtPointer / fitZoom
-// drive the user-facing zoom; applyOverscrollPadding keeps
-// .canvas-stack the right size; overscrollPadding is the live
-// padding object readers (visible-bounds, minimap, mouse) reach
-// for; startMapPan / stopMapPan / stopAllMapPan drive the
-// continuous arrow-key scroll loop.
-import {
-  setZoom,
-  fitZoom,
-  overscrollPadding,
-} from './ui/map-editor/zoom-pan.js'
 
 // Visible-area helpers (visibleTileBounds, visiblePixelBounds)
 // live in /ui/map-editor/viewport.js; only render.js consumes
@@ -2175,124 +2107,7 @@ function configureReactUi() {
     // through the existing studio.js functions (setMode, undo, etc.)
     // so we don't duplicate behaviour.
     if (typeof ui.mountMapEditor === 'function') ui.mountMapEditor()
-    if (typeof ui.configureSidebarBridge === 'function') {
-      ui.configureSidebarBridge({
-        onTabChange:     (tab) => { switchTab(tab) },
-        onFilterChange:  (text) => {
-          if (!state.drawerFilters) state.drawerFilters = { sections: '', features: '' }
-          state.drawerFilters[state.drawer] = text
-          renderDrawer()
-          persistPrefs()
-        },
-        onUsedOnlyChange:    (on) => { state.usedOnly = !!on; renderDrawer(); persistPrefs() },
-        onWreckageChange:    (on) => { state.includeWreckage = !!on; renderDrawer(); persistPrefs() },
-      })
-    }
-    if (typeof ui.configureMapRibbonBridge === 'function') {
-      ui.configureMapRibbonBridge({
-        // File
-        fileNew:        () => startNewMapFromEditor(),
-        fileNewWindow:  () => window.open(location.origin + '/', '_blank', 'noopener'),
-        fileOpen:       () => openExistingMapFromEditor(),
-        fileSave:       () => save(),
-        fileSaveLoose:  () => saveLoose(),
-        // Edit
-        editCut:                  () => cutSelection(),
-        editCopy:                 () => copyToClipboard(),
-        editPaste:                () => pasteFromClipboard('all'),
-        editPasteFeatures:        () => pasteFromClipboard('features'),
-        editPasteTiles:           () => pasteFromClipboard('tiles'),
-        editClearRegion:          () => clearRegion(),
-        editClearFeaturesInSel:   () => clearFeaturesInSelection(),
-        editClearAllFeatures:     () => clearAllFeatures(),
-        // Mode
-        setMode:           (m) => { setMode(m); publishMapRibbonState() },
-        setSymmetry:       (s) => {
-          state.symmetry = s
-          persistPrefs()
-          publishMapRibbonState()
-        },
-        setVoidsBrush:     (n) => { state.voidsBrushSize = n; persistPrefs(); publishMapRibbonState() },
-        setEraseScope:     (sc) => { state.eraseScope = sc; persistPrefs(); publishMapRibbonState() },
-        setEraseSize:      (n) => { state.eraseSize = n; persistPrefs(); publishMapRibbonState() },
-        setHmTool:         (t) => { state.hmTool = t; persistPrefs(); publishMapRibbonState() },
-        setHmRadius:       (n) => { state.hmRadius = n; persistPrefs(); publishMapRibbonState() },
-        setHmStrength:     (n) => { state.hmStrength = n; persistPrefs(); publishMapRibbonState() },
-        // Actions
-        undo:                  () => undo(),
-        redo:                  () => redo(),
-        jumpUndoTo:            (n) => { for (let i = 0; i < n; i++) undo() },
-        jumpRedoTo:            (n) => { for (let i = 0; i < n; i++) redo() },
-        openResize:            () => openResizeDialog(),
-        openScatter:           () => openScatterDialog(),
-        exportHeightmap:       () => exportHeightmap(),
-        importHeightmap:       () => {
-          // The file <input id="import-heightmap-file"> is rendered
-          // by the legacy template (kept in index.html so the
-          // existing change-handler wiring inside wireToolbar still
-          // attaches).  Synthesise a click on it to open the OS
-          // picker — works even though the surrounding ribbon row
-          // is now React-managed.
-          const f = document.getElementById('import-heightmap-file')
-          if (f) f.click()
-        },
-        // Zoom
-        zoomIn:    () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)),
-        zoomOut:   () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)),
-        zoomFit:   () => fitZoom(),
-        // View
-        setDisplayMode:    (m) => { state.viewMode = m; renderCanvas(); persistPrefs(); publishMapRibbonState() },
-        toggleGridlines:   () => { state.showGridlines = !state.showGridlines; renderCanvas(); persistPrefs(); publishMapRibbonState() },
-        toggleAnimate:     () => { state.animateFeatures = !state.animateFeatures; renderDrawer(); renderCanvas(); persistPrefs(); publishMapRibbonState() },
-        toggleMinimap:     () => setMinimapVisible(!state.showMinimap),
-        toggleCameraInfo:  () => setCameraInfoVisible(!state.showCameraInfo),
-        toggleVoids:       () => setVoidsVisible(!state.showVoids),
-        toggleContours:    () => { state.showContours = !state.showContours; persistPrefs(); renderCanvas(); publishMapRibbonState() },
-        toggleBuildable:   () => { state.showBuildable = !state.showBuildable; persistPrefs(); renderCanvas(); publishMapRibbonState() },
-        toggleFeatures:    () => setFeaturesVisible(!state.showFeatures),
-        toggleStartPos:    () => setStartPositionsVisible(!state.showStartPositions),
-        // Map Settings
-        openOTA:              () => openOTADialog(),
-        pickSchema:           (idx) => {
-          state.activeSchema = idx
-          renderCanvas()
-          persistPrefs()
-          publishMapRibbonState()
-        },
-        deleteSchema:         (idx) => deleteSchema(idx),
-        addSchema:            (count) => addSchemaWithPlayers(count),
-        openSchemaEditor:     (idx) => openSchemaEditor(idx),
-        // Configure
-        openSettings:    () => openSettingsDialog(),
-        // Advanced — call the existing export / quality helpers
-        // directly.  The matching legacy buttons live inside the
-        // hidden ribbon template, but the helper functions are all
-        // top-level so they don't need a synthetic click chain.
-        exportMinimap:      () => exportMinimap(),
-        exportFullRender:   () => exportFullRender(),
-        exportMapImage:     () => exportMapImage(),
-        exportBuildmap:     () => exportBuildmap(),
-        exportVoidmap:      () => exportVoidmap(),
-        runQualityCheck:    () => runQualityChecker(buildSavePayload(), { mode: 'audit' }),
-        openDeveloper:      () => openDeveloperDialog(),
-        // Help
-        openHelp:    () => openHelpDialog(),
-        // Minimap pan — re-implements the legacy wireMinimap pan
-        // logic via the shared bridge.  React fires
-        // minimapBeginPan/Pan/EndPan; the host translates the
-        // coordinates into a canvas-scroll position.
-        minimapBeginPan: (clientX, clientY, canvasEl) => {
-          _miniPanActive = true
-          _doMinimapPan(clientX, clientY, canvasEl)
-        },
-        minimapPan: (clientX, clientY, canvasEl) => {
-          if (!_miniPanActive) return
-          _doMinimapPan(clientX, clientY, canvasEl)
-        },
-        minimapEndPan: () => { _miniPanActive = false },
-        scheduleMinimapRender: () => scheduleMinimapRender(),
-      })
-    }
+    wireMapRibbonBridge(ui)
     // Seed default visibility for the map panels so their first
     // mount reads the persisted state (or defaults to visible) and
     // the React tree doesn't flash hidden then show.
@@ -2317,130 +2132,6 @@ function configureReactUi() {
     return null
   })
   return _reactUiPromise
-}
-
-// publishMapRibbonState — push every map-editor ribbon-relevant
-// flag/label into the React store so the migrated ribbon re-renders
-// on the next signal commit.  Cheap when the React UI hasn't loaded
-// (early no-op) so calling unconditionally is safe.
-function publishMapRibbonState() {
-  if (!_reactUi || typeof _reactUi.publishRibbonState !== 'function') return
-  // Schema dropdown — flatten the OTA's schema array into the shape
-  // the React ribbon expects.  Player-count labels mirror what the
-  // legacy refreshSchemaSelector produced.
-  const ota = state.ota
-  const schemas = (ota && Array.isArray(ota.schemas)) ? ota.schemas : []
-  const activeIdx = state.activeSchema | 0
-  const schemaList = schemas.map((s, i) => ({
-    index: i,
-    label: schemaPickerLabel(s),
-    active: i === activeIdx,
-    tooltip: s ? `${s.name || `Schema ${i + 1}`} (${playerCountLabel(schemaPlayerCount(s))})` : null,
-  }))
-  const schemaName = schemas.length > 0
-    ? schemaPickerLabel(schemas[activeIdx] || schemas[0])
-    : 'Schema'
-  // Add-grid — same player counts the legacy renderDiceGrid populated.
-  const addCounts = pickedPlayerCounts().map((n) => ({
-    count: n,
-    label: String(n),
-    label2: playerCountLabel(n),
-  }))
-  // Undo / redo history lists.  Each entry is the {label, kind} pair
-  // that captureSnapshot stashed at commit time.  We expose only the
-  // labels here — the popout list shows them as menu rows the user
-  // can click to jump multiple steps in one gesture.
-  const undoHistory = (undoStack || []).slice().reverse().slice(0, 16).map((entry, idx) => ({
-    label: (entry && entry.label) || 'Edit',
-    depth: idx + 1,
-  }))
-  const redoHistory = (redoStack || []).slice().reverse().slice(0, 16).map((entry, idx) => ({
-    label: (entry && entry.label) || 'Edit',
-    depth: idx + 1,
-  }))
-  _reactUi.publishRibbonState({
-    mode: state.mode || 'select-terrain',
-    viewMode: state.viewMode || 'map',
-    showGridlines: !!state.showGridlines,
-    animateFeatures: !!state.animateFeatures,
-    showMinimap: !!state.showMinimap,
-    showCameraInfo: state.showCameraInfo !== false,
-    showVoids: state.showVoids !== false,
-    showContours: !!state.showContours,
-    showBuildable: !!state.showBuildable,
-    showFeatures: state.showFeatures !== false,
-    showStartPositions: state.showStartPositions !== false,
-    symmetry: state.symmetry || 'off',
-    voidsBrushSize: state.voidsBrushSize || 1,
-    eraseSize: state.eraseSize || 1,
-    eraseScope: state.eraseScope || 'all',
-    hmTool: state.hmTool || 'raise',
-    hmRadius: state.hmRadius || 4,
-    hmStrength: state.hmStrength || 4,
-    undoLabel: undoStack && undoStack.length > 0
-      ? `Undo ${(undoStack[undoStack.length - 1] || {}).label || 'edit'}`
-      : 'Undo',
-    undoEnabled: !!(undoStack && undoStack.length > 0),
-    redoLabel: redoStack && redoStack.length > 0
-      ? `Redo ${(redoStack[redoStack.length - 1] || {}).label || 'edit'}`
-      : 'Redo',
-    redoEnabled: !!(redoStack && redoStack.length > 0),
-    undoHistory,
-    redoHistory,
-    schemaName,
-    schemaList,
-    schemaAddCounts: addCounts,
-    connected: isConnected(),
-  })
-}
-
-// Sidebar signal mirror — the React sidebar component reads its own
-// active drawer / filter / used+wreckage state off signals.  We
-// publish them on every switchTab + persistPrefs change so the
-// initial paint + tab swaps land on the right values.
-function publishMapSidebarState() {
-  if (!_reactUi) return
-  if (typeof _reactUi.setSidebarDrawer === 'function') {
-    _reactUi.setSidebarDrawer(state.drawer || 'sections')
-  }
-  if (typeof _reactUi.setSidebarFilter === 'function') {
-    _reactUi.setSidebarFilter((state.drawerFilters || {})[state.drawer] || '')
-  }
-  if (typeof _reactUi.setSidebarUsedOnly === 'function') {
-    _reactUi.setSidebarUsedOnly(!!state.usedOnly)
-  }
-  if (typeof _reactUi.setSidebarWreckage === 'function') {
-    _reactUi.setSidebarWreckage(!!state.includeWreckage)
-  }
-  if (typeof _reactUi.setSidebarUsedOnlyVisible === 'function') {
-    _reactUi.setSidebarUsedOnlyVisible(state.drawer === 'features')
-  }
-  if (typeof _reactUi.setSidebarWreckageVisible === 'function') {
-    _reactUi.setSidebarWreckageVisible(state.drawer === 'features')
-  }
-}
-
-// ── Minimap pan bridge ─────────────────────────────────────────────
-// React MinimapPanel fires minimapBeginPan / Pan / EndPan through the
-// map-ribbon bridge; the host translates the click coordinates into
-// a canvas-scroll position using the live zoom + overscroll padding.
-// Mirrors the legacy wireMinimap pan logic, just driven from the
-// React component's own listeners.
-
-let _miniPanActive = false
-function _doMinimapPan(clientX, clientY, canvasEl) {
-  const mini = canvasEl || document.getElementById('minimap')
-  const wrap = document.getElementById('canvas-scroll')
-  const canvas = document.getElementById('canvas')
-  if (!mini || !wrap || !canvas) return
-  const rect = mini.getBoundingClientRect()
-  if (rect.width <= 0 || rect.height <= 0) return
-  const cx = (clientX - rect.left) / rect.width
-  const cy = (clientY  - rect.top)  / rect.height
-  const fullW = canvas.width  * state.zoom
-  const fullH = canvas.height * state.zoom
-  wrap.scrollLeft = cx * fullW - wrap.clientWidth  / 2 + overscrollPadding.x
-  wrap.scrollTop  = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
 }
 
 async function openModelViewer(name) {
