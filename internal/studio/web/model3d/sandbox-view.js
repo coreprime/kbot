@@ -17,7 +17,7 @@ import { ModelLoader } from './model-loader.js'
 import { ModelRenderer } from './model-renderer.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { TextureCache } from './texture-cache.js'
-import { TAPalette } from './ta-palette.js'
+import { TAPalette } from './palette.js'
 import { SandboxScene } from './sandbox-scene.js'
 
 export class SandboxView {
