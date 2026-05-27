@@ -12341,8 +12341,24 @@ function refreshMvInspectors(dtMs = 16) {
   // existing panel renderers don't have to know which kind it is.
   const sandbox = (typeof window !== 'undefined') ? window.__sandboxView : null
   const sandboxActive = sandbox && document.getElementById('model-viewer-dialog')?.classList?.contains('sandbox-mode')
+  // Sandbox proxy needs to look "cob-shaped" enough that the single-
+  // unit refresh helpers (syncCobRibbonRunning / refreshMvControlsGating
+  // / etc.) don't throw on missing methods.  Stub hasScript → false so
+  // the ribbon's per-script disabled checks evaluate to "no — skip".
+  // Without these stubs the very first throw aborts the whole sweep
+  // before refreshMvRuntimeStats runs, leaving the Runtime panel
+  // showing zeros even while the scene ticks.
   const mv = sandboxActive
-    ? { camera: sandbox.camera, renderer: sandbox.renderer, cob: { runtime: sandbox.scene?.runtime, unit: null } }
+    ? {
+        camera: sandbox.camera,
+        renderer: sandbox.renderer,
+        cob: {
+          runtime: sandbox.scene?.runtime,
+          unit: null,
+          hasScript: () => false,
+          _lifecycle: 'created',
+        },
+      }
     : modelViewerInstance
   if (!mv) return
   // COB Scripts panel
@@ -12460,7 +12476,11 @@ function applyMvUnitCollapseState() {
 // "Runtime".
 function renderMvScriptsPanel(body, cob) {
   body.replaceChildren()
-  if (!cob || !cob.unit) {
+  // We only need a runtime here.  Single-unit (model) tabs set
+  // cob.unit; multi-unit (sandbox) tabs leave it null but still
+  // expose cob.runtime — the loop below walks every registered unit
+  // regardless of which one (if any) is "focused".
+  if (!cob || !cob.runtime) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
     empty.textContent = 'No COB loaded.'
@@ -15261,9 +15281,10 @@ function syncCobRibbonRunning(cob) {
   // second invocation of a script that's mid-flight, AND while the
   // unit is still pre-Create so the user only triggers Create first.
   const sel = '.cob-entry, .cob-row[data-cob-script]'
+  const has = typeof cob.hasScript === 'function' ? (n) => cob.hasScript(n) : () => false
   for (const btn of document.querySelectorAll(sel)) {
     const name = btn.dataset.cobEntry || btn.dataset.cobScript
-    if (!name || !cob.hasScript(name)) continue
+    if (!name || !has(name)) continue
     const running = isCobScriptRunning(cob, name)
     const blockedByCreate = gated && !/^Create$/i.test(name)
     const disabled = running || blockedByCreate
