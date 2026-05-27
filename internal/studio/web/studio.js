@@ -264,6 +264,15 @@ import {
   wireOTADialog,
 } from './ui/map-editor/dialogs/ota.js'
 
+// Per-schema editor — opened by the gear icon on each schema row in
+// the schema dropdown.  Edits the matching state.ota.schemas[i] in
+// a single undo transaction.
+import {
+  openSchemaEditor,
+  closeSchemaEditor,
+  wireSchemaEditor,
+} from './ui/map-editor/dialogs/schema-editor.js'
+
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
 // /ui/dialogs/settings-dialog.js; this is the host-side bridge
@@ -7076,72 +7085,6 @@ function deleteSchema(index) {
   commitTransaction('Delete schema')
   refreshSchemaSelector()
   renderCanvas()
-}
-
-// ── Schema editor (gear icon on each schema row) ───────────────────────
-// Per-schema economy / AI fields used to live in the Properties dialog;
-// now each schema has its own editor accessed via the gear icon on its
-// row in the schema dropdown.  schemaBeingEdited tracks which schema
-// index is active so Apply writes back to the right one.
-let schemaBeingEdited = -1
-
-function openSchemaEditor(index) {
-  if (!state.ota || !state.ota.schemas[index]) return
-  schemaBeingEdited = index
-  const s = state.ota.schemas[index]
-  $('#se-name').value = s.name || ''
-  $('#se-type').value = s.type || ''
-  $('#se-ai-profile').value = s.aiProfile || ''
-  $('#se-surface-metal').value = s.surfaceMetal || 0
-  $('#se-moho-metal').value = s.mohoMetal || 0
-  $('#se-human-metal').value = s.humanMetal || 0
-  $('#se-computer-metal').value = s.computerMetal || 0
-  $('#se-human-energy').value = s.humanEnergy || 0
-  $('#se-computer-energy').value = s.computerEnergy || 0
-  $('#se-meteor-weapon').value = s.meteorWeapon || ''
-  $('#se-meteor-radius').value = s.meteorRadius || 0
-  $('#se-meteor-density').value = s.meteorDensity || 0
-  $('#se-meteor-duration').value = s.meteorDuration || 0
-  $('#se-meteor-interval').value = s.meteorInterval || 0
-  // Close the schema dropdown so it doesn't sit on top of the dialog.
-  $('#schema-dropdown-popup')?.classList.add('hidden')
-  $('#schema-edit-dialog').classList.remove('hidden')
-}
-
-function closeSchemaEditor() {
-  $('#schema-edit-dialog').classList.add('hidden')
-  schemaBeingEdited = -1
-}
-
-function wireSchemaEditor() {
-  $('#se-cancel')?.addEventListener('click', closeSchemaEditor)
-  $('#se-apply')?.addEventListener('click', applySchemaEditor)
-}
-
-function applySchemaEditor() {
-  if (schemaBeingEdited < 0 || !state.ota?.schemas[schemaBeingEdited]) {
-    closeSchemaEditor()
-    return
-  }
-  beginTransaction()
-  const s = state.ota.schemas[schemaBeingEdited]
-  s.name = $('#se-name').value.trim() || 'Default'
-  s.type = $('#se-type').value.trim() || 'Network 1'
-  s.aiProfile = $('#se-ai-profile').value
-  s.surfaceMetal = parseInt($('#se-surface-metal').value, 10) || 0
-  s.mohoMetal = parseInt($('#se-moho-metal').value, 10) || 0
-  s.humanMetal = parseInt($('#se-human-metal').value, 10) || 0
-  s.computerMetal = parseInt($('#se-computer-metal').value, 10) || 0
-  s.humanEnergy = parseInt($('#se-human-energy').value, 10) || 0
-  s.computerEnergy = parseInt($('#se-computer-energy').value, 10) || 0
-  s.meteorWeapon = $('#se-meteor-weapon').value.trim()
-  s.meteorRadius = parseInt($('#se-meteor-radius').value, 10) || 0
-  s.meteorDensity = parseInt($('#se-meteor-density').value, 10) || 0
-  s.meteorDuration = parseInt($('#se-meteor-duration').value, 10) || 0
-  s.meteorInterval = parseInt($('#se-meteor-interval').value, 10) || 0
-  commitTransaction(`Edit schema: ${s.name}`)
-  refreshSchemaSelector()
-  closeSchemaEditor()
 }
 
 // startNewMapFromEditor is the toolbar New button — confirms first
