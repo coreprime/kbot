@@ -62,6 +62,11 @@ export class MvControls {
     // schedules the next intra-burst shot (TDF burstrate gap).
     // Both reset to 0/0 between full bursts so the reload-time gate
     // is the canonical "wait for next salvo" timer.
+    //
+    // NOTE: lastFireMs / nextBurstShotAtMs / threadStartMs values
+    // are all on the runtime's `simTimeMs` clock — NOT
+    // performance.now().  Slow-mo / fast-forward / pause all
+    // propagate to fire cadence through that clock.
     const slotInit = () => ({
       thread: null, lastFireMs: -Infinity,
       burstShotsLeft: 0, nextBurstShotAtMs: 0,
@@ -357,13 +362,24 @@ export class MvControls {
   // wall-clock, scaled by runtime.playbackRate so slow-mo applies.
   tick(dtMs) {
     if (!this.viewer.cob) return
-    const dtSec = (dtMs * (this.viewer.cob.runtime?.playbackRate ?? 1)) / 1000
+    const rate = this.viewer.cob.runtime?.playbackRate ?? 1
+    const dtSec = (dtMs * rate) / 1000
+    // Sim-scaled dtMs for sub-systems that gate on time but want to
+    // honour slow-mo / fast-forward (ship wakes emit on a 100 ms
+    // cadence; at 0.1× sim that should be 1000 ms wall, not 100).
+    const dtSimMs = dtMs * rate
     this._updateMove(dtSec)
     this._updateAltitude(dtSec)
     this._updateWeapon('primary')
     this._updateWeapon('secondary')
     this._updateWeapon('tertiary')
-    this._updateShipWake(dtMs)
+    this._updateShipWake(dtSimMs)
+    // Smoke-trail emitter — moved off setInterval(wall-clock 40 ms)
+    // onto the per-frame tick so trail puffs scale with sim speed.
+    // At 0.01× a slow-flying laser leaves puffs every 4 s wall ≈
+    // 40 ms sim, matching what the projectile's slowed velocity
+    // actually traces out.
+    this._tickSmokeTrails(dtSimMs)
     // Hover-preview overlay tracks the camera (which may auto-rotate
     // or be orbited by the user), so the projected screen position
     // refreshes every frame.  Stop-button live-state too.
@@ -381,7 +397,11 @@ export class MvControls {
   // behind a moving unit and would smear the puffs at the previous
   // position).  Cadence ~100 ms reads as a continuous foam trail
   // without flooding the pool on long sea crossings.
-  _updateShipWake(dtMs) {
+  //
+  // dtSimMs is wall-time scaled by playbackRate so wake density
+  // matches the ship's apparent motion — at 0.1× sim the ship
+  // crawls and the trail correspondingly thins to 1/10th the rate.
+  _updateShipWake(dtSimMs) {
     const meta = this.viewer.unitMeta
     if (!meta || !(meta.isShip || meta.isSub) || !this.isMoving) {
       this._wakeAccumMs = 0
@@ -389,7 +409,7 @@ export class MvControls {
     }
     const cob = this.viewer.cob
     if (!cob || typeof cob._emitShipWake !== 'function') return
-    this._wakeAccumMs = (this._wakeAccumMs || 0) + dtMs
+    this._wakeAccumMs = (this._wakeAccumMs || 0) + dtSimMs
     while (this._wakeAccumMs >= 100) {
       this._wakeAccumMs -= 100
       cob._emitShipWake([this.pos.x, this.alt || 0, this.pos.z], this.heading + Math.PI)
@@ -415,13 +435,11 @@ export class MvControls {
       this._wiredCanvas = null
       this._canvasHandlers = null
     }
-    // Cancel any scheduled smoke-trail intervals so the unit-swap
-    // doesn't leave orphan setIntervals emitting particles into the
-    // next unit's pool.
-    if (this._trails) {
-      for (const h of this._trails) clearInterval(h)
-      this._trails.clear()
-    }
+    // Drop any live smoke trails so the unit-swap doesn't leave
+    // them emitting puffs into the next unit's pool.  No interval
+    // handles to clear — trails are ticked from this.tick() and the
+    // tick won't run after disposal anyway.
+    if (this._trails) this._trails.length = 0
     if (this._previewOverlay) {
       this._previewOverlay.remove()
       this._previewOverlay = null
@@ -895,7 +913,12 @@ export class MvControls {
     const fireScript = 'Fire' + capitalise(slot)
     const hasAim = cob.hasScript(aimScript)
     const hasFire = cob.hasScript(fireScript)
-    const now = performance.now()
+    // Sim-time clock — at 0.5× playback `now` advances at half wall
+    // rate, so a 2 s reload waits 4 s of wall time but stays 2 s in
+    // sim time.  When the user pauses the runtime, simTimeMs freezes
+    // and the weapon's reload + burst gates freeze with it, matching
+    // the rest of the simulation.
+    const now = cob.runtime.simTimeMs
     const reloadMs = this._reloadMs(slot)
     const sinceLastFire = now - (state.lastFireMs ?? -Infinity)
     const reloadReady = sinceLastFire >= reloadMs
@@ -1252,40 +1275,60 @@ export class MvControls {
     return [0.45, 1.80, 0.45, 1]
   }
 
-  // _scheduleSmokeTrail registers a recurring smoke-puff drop along a
-  // projectile's path until its lifetime expires.  Used for missiles
-  // (TDF `smoketrail=1`).  We don't track the live particle slot
-  // (the pool compacts dead slots, invalidating indices); instead the
-  // hook recomputes the projectile position from launch + velocity +
-  // gravity at each interval.  Stored on `this._trails` so dispose()
-  // can clear pending intervals when the unit unloads.
+  // _scheduleSmokeTrail registers a smoke-trail emitter for a
+  // projectile.  Each frame, _tickSmokeTrails() advances the trail's
+  // sim-time clock and drops puffs at 40 ms sim-intervals — at 0.1×
+  // playback that's 400 ms wall, matching the projectile's slowed
+  // velocity so puffs trace the actual flight path.  Used for
+  // missiles (TDF `smoketrail=1`).  Stored on `this._trails` so
+  // dispose() can drop them when the unit unloads.
+  //
+  // Was an interval-driven emitter; moved to per-frame so trail
+  // cadence scales with runtime.playbackRate (slow-mo doesn't pile
+  // puffs into a tight clump at the projectile's slow position).
   _scheduleSmokeTrail(anchor, velocity, gravity, lifeMs) {
     const cob = this.viewer.cob
     if (!cob || !cob.particles) return
-    if (!this._trails) this._trails = new Set()
-    const t0 = performance.now()
-    const a = [anchor[0], anchor[1], anchor[2]]
-    const v = [velocity[0], velocity[1], velocity[2]]
-    const intervalMs = 40
-    const handle = setInterval(() => {
-      const elapsed = (performance.now() - t0) / 1000
-      if (elapsed * 1000 >= lifeMs) {
-        clearInterval(handle)
-        this._trails.delete(handle)
-        return
+    if (!this._trails) this._trails = []
+    this._trails.push({
+      anchor:   [anchor[0], anchor[1], anchor[2]],
+      velocity: [velocity[0], velocity[1], velocity[2]],
+      gravity,
+      lifeMs,
+      ageMs: 0,
+      nextEmitMs: 0,
+    })
+  }
+
+  // _tickSmokeTrails advances every live trail by dtSimMs and emits
+  // puffs at 40 ms sim-intervals.  Trails older than their declared
+  // lifeMs are pruned in-place.  Called from the per-frame tick.
+  _tickSmokeTrails(dtSimMs) {
+    if (!this._trails || !this._trails.length) return
+    const cob = this.viewer.cob
+    if (!cob || !cob.particles) return
+    const INTERVAL_MS = 40
+    let writeIdx = 0
+    for (let i = 0; i < this._trails.length; i++) {
+      const t = this._trails[i]
+      t.ageMs += dtSimMs
+      if (t.ageMs >= t.lifeMs) continue  // drop expired
+      while (t.ageMs >= t.nextEmitMs) {
+        t.nextEmitMs += INTERVAL_MS
+        const elapsed = Math.min(t.ageMs, t.lifeMs) / 1000
+        const px = t.anchor[0] + t.velocity[0] * elapsed
+        const py = t.anchor[1] + t.velocity[1] * elapsed - 0.5 * t.gravity * elapsed * elapsed
+        const pz = t.anchor[2] + t.velocity[2] * elapsed
+        cob.particles.emit(SFX_SMOKE_WHITE, [px, py, pz], {
+          size: 4,
+          lifeMs: 800,
+          riseSpeed: 1.5,
+          drift: 0.8,
+        })
       }
-      // Kinematic position: p = anchor + v*t + 0.5*-g*t² on Y.
-      const px = a[0] + v[0] * elapsed
-      const py = a[1] + v[1] * elapsed - 0.5 * gravity * elapsed * elapsed
-      const pz = a[2] + v[2] * elapsed
-      cob.particles.emit(SFX_SMOKE_WHITE, [px, py, pz], {
-        size: 4,
-        lifeMs: 800,
-        riseSpeed: 1.5,
-        drift: 0.8,
-      })
-    }, intervalMs)
-    this._trails.add(handle)
+      this._trails[writeIdx++] = t
+    }
+    this._trails.length = writeIdx
   }
 
   // _firingPieceFor picks the model piece a slot's projectile should
