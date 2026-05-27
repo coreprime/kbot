@@ -473,6 +473,15 @@ export const hostCallbacks = {
   // settings-section registrar pattern lands.
   getWorldOptions: null,               // () => [{ key, label }]
   setMinimapVisible: null,             // (visible: boolean) => void
+  // Drawer tab switcher — mode.js' syncDrawerToMode reaches the
+  // host's switchTab through this seam so the left-sidebar flips
+  // when the active mode implies Sections or Features.
+  switchDrawerTab: null,               // (tab: 'sections' | 'features') => void
+  // pageSectionSibling lives studio-side because it depends on
+  // selectSection — the keyboard handler reaches it through this
+  // seam so ArrowLeft / ArrowRight can page the drawer when a
+  // section is the active selection.
+  pageSectionSibling: null,            // (direction: -1 | 1) => boolean
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

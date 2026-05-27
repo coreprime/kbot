@@ -66,11 +66,6 @@ import { resetPaintStroke } from './ui/map-editor/paint-state.js'
 // — moved to /ui/map-editor/clipboard.js.  Same call sites as
 // before; the implementations are now in the map-editor tree.
 import {
-  shrinkRectToContent,
-  captureTerrain,
-  rotateTerrainClipboard,
-  dropTerrainClipboard,
-  cancelTerrainClipboard,
   clearRegion,
   cutSelection,
   clearAllFeatures,
@@ -164,7 +159,6 @@ import { wireWelcomeDropZone } from './ui/screens/welcome/drop-zone.js'
 // openLoadedMap host callback.
 import {
   openMapDialog,
-  closeOpenDialog,
 } from './ui/pickers/open-map.js'
 
 // ?initial_map=<name> URL shortcut — polls the catalogue then
@@ -277,8 +271,30 @@ import {
   wireVoidsBrushGroup,
   wireHeightmapBrushGroup,
   wireBrushSizeGroup,
-  refreshModeDropdown,
 } from './ui/map-editor/ribbon/legacy-popups.js'
+
+// Mode dispatch + the cluster of helpers that change with the active
+// mode (placement hint, terrain clipboard cleanup, the Q/E rotate
+// dispatch, the F/G flip dispatch, the Ctrl/Cmd-A select-all,
+// handleDeleteKey resolution).  Studio.js still calls these
+// directly from the drawer-pill click, selectSection / selectFeature,
+// beginSectionDrag / beginFeatureDrag, and the canvas drag-drop
+// fallback — and registers the host-side bridge entries so other
+// modules reach setMode / cancelPlacement / hide+showPlacementHint /
+// clearStampSelection through hostCallbacks.
+import {
+  setMode,
+  cancelPlacement,
+  showPlacementHint,
+  hidePlacementHint,
+  clearStampSelection,
+} from './ui/map-editor/mode.js'
+
+// Global keyboard handler — Esc dialog dismiss, mode hotkeys, undo /
+// redo + clipboard, zoom + pan + arrow-key scroll, delete dispatch.
+// Called from finishEditorBoot the first time the editor surface
+// boots.
+import { wireKeyboard } from './ui/map-editor/keyboard.js'
 
 // Scatter dialog — drops N features into the map honouring a
 // minimum spacing halo.  Self-contained subsystem; the React
@@ -294,7 +310,6 @@ import {
 // undo transaction and mirrors mission name + planet onto state.
 import {
   openOTADialog,
-  closeOTADialog,
   wireOTADialog,
 } from './ui/map-editor/dialogs/ota.js'
 
@@ -303,7 +318,6 @@ import {
 // a single undo transaction.
 import {
   openSchemaEditor,
-  closeSchemaEditor,
   wireSchemaEditor,
 } from './ui/map-editor/dialogs/schema-editor.js'
 
@@ -312,7 +326,6 @@ import {
 // the canvas DOM so no stale GL buffers survive.
 import {
   openResizeDialog,
-  closeResizeDialog,
   wireResizeDialog,
 } from './ui/map-editor/dialogs/resize.js'
 
@@ -343,9 +356,6 @@ import {
   setZoom,
   fitZoom,
   overscrollPadding,
-  startMapPan,
-  stopMapPan,
-  stopAllMapPan,
 } from './ui/map-editor/zoom-pan.js'
 
 // Visible-area helpers (visibleTileBounds, visiblePixelBounds)
@@ -415,7 +425,6 @@ import { tryAutoRotatePlacement } from './ui/map-editor/canvas/placement.js'
 // (each mode's reset for in-flight drag state) + the auto-switch
 // seeders that tryAutoSwitchAt below pokes when a click in one
 // mode lands on a different mode's pickable.
-import { resetVoidsDrag } from './ui/map-editor/modes/voids.js'
 import { resetPickerDrag } from './ui/map-editor/modes/picker.js'
 import { resetStartPosDrag } from './ui/map-editor/modes/start-points.js'
 import { resetTerrainDrag } from './ui/map-editor/modes/terrain-select.js'
@@ -441,7 +450,6 @@ import { resetPaintPlacement } from './ui/map-editor/modes/paint.js'
 import {
   shouldPan, beginPan, updatePan, endPan, isPanning, cancelPan,
   updateHoverLabel, tryAutoSwitchAt,
-  getSpacePanHotkey, setSpacePanHotkey,
 } from './ui/map-editor/cursor.js'
 
 // Drawer (left sidebar) — renders the Sections + Features panels
@@ -477,7 +485,6 @@ import { renderCanvas } from './ui/map-editor/canvas/render.js'
 // to the relevant subsystems.
 import {
   openSettingsDialog,
-  closeSettingsDialog,
 } from './ui/dialogs/settings.js'
 
 // Per-tab unit-editor lifecycle — activateModelTab lives in
@@ -665,6 +672,15 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.beginSectionDrag = beginSectionDrag
   hostCallbacks.beginFeatureDrag = beginFeatureDrag
   hostCallbacks.setActiveWorld = setActiveWorld
+  // Drawer tab switcher — mode.js' syncDrawerToMode reaches it
+  // through hostCallbacks so the drawer flips to Sections when the
+  // user picks Paint, or Features when they pick Place Features.
+  hostCallbacks.switchDrawerTab = (tab) => switchTab(tab)
+  // pageSectionSibling lives studio-side because it depends on
+  // selectSection — keyboard.js' ArrowLeft / ArrowRight branch calls
+  // it through hostCallbacks so the section-drawer paging hotkey
+  // works without dragging selectSection into the extract.
+  hostCallbacks.pageSectionSibling = pageSectionSibling
   // Unit-editor seams — /ui/unit-editor/tab.js calls these to flip
   // the host-owned modelViewerInstance / _mvControls aliases when
   // activating a tab.
@@ -1436,108 +1452,8 @@ function wireModeToolbar() {
   publishMapRibbonState()
 }
 
-// Switch the drawer to match the active editing mode — Place Tiles
-// implies the user wants sections, Place Features implies features.
-function syncDrawerToMode(mode) {
-  if (mode === 'paint' && state.drawer !== 'sections') {
-    switchTab('sections')
-  } else if (mode === 'select-features' && state.drawer !== 'features') {
-    switchTab('features')
-  }
-}
-
-function setMode(mode) {
-  state.mode = mode
-  // Tear down any in-flight tool state that doesn't belong to the new mode.
-  if (mode !== 'paint') cancelPlacement()
-  if (mode !== 'select-terrain') {
-    if (state.terrainClipboard) dropTerrainClipboard()
-    state.rectSelection = null
-  }
-  if (mode !== 'select-features') state.selectedFeature = -1
-  if (mode !== 'picker') {
-    state.selectedFeatures.clear()
-    state.pickerRect = null
-  }
-  if (mode !== 'start-points') {
-    state.selectedStartPos = -1
-  }
-  if (mode !== 'ruler' && state.ruler) {
-    // Leaving ruler mode clears the measurement so it isn't drawn on
-    // top of an unrelated tool overlay.
-    state.ruler = null
-  }
-  if (mode !== 'voids') {
-    resetVoidsDrag()
-  } else {
-    // Force Map view in Voids mode so the red overlay paints on top of
-    // the terrain instead of getting hidden behind the Heightmap view.
-    if (state.viewMode !== 'map') {
-      state.viewMode = 'map'
-      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'map'))
-      const lbl = $('#view-current-lbl')
-      if (lbl) lbl.textContent = 'Map'
-    }
-    // Also enable the View → Voids toggle so it sticks after the user
-    // leaves Voids mode — the overlay-on state matches what they were
-    // just looking at, instead of vanishing the moment they switch tool.
-    if (!state.showVoids) setVoidsVisible(true)
-  }
-  // Modes that hunt for placed objects need their layer visible — auto
-  // -enable the View toggle so the mode doesn't become a no-op.
-  if ((mode === 'select-features' || mode === 'picker') && !state.showFeatures) {
-    setFeaturesVisible(true)
-  }
-  if (mode === 'start-points' && !state.showStartPositions) {
-    setStartPositionsVisible(true)
-  }
-  if (mode === 'heightmap') {
-    // If the user is on the plain Map view, switch to Blended so they
-    // can see the heightmap variance overlaid on the terrain while
-    // they edit.  Other view modes (Heightmap / Blended) are left
-    // alone — the user's explicit choice wins.
-    if (state.viewMode === 'map') {
-      state.viewMode = 'blended'
-      $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'blended'))
-      const lbl = $('#view-current-lbl')
-      if (lbl) lbl.textContent = 'Blended'
-    }
-  }
-  // Sync the dropdown label/active row.  The old inline `.tool-btn`s
-  // were replaced by the dropdown rows.
-  refreshModeDropdown()
-  const cnv = $('#canvas')
-  if (cnv) {
-    if (mode === 'view') cnv.style.cursor = 'grab'
-    else if (mode === 'paint') cnv.style.cursor = 'crosshair'
-    else if (mode === 'erase') cnv.style.cursor = 'cell'
-    else if (mode === 'picker') cnv.style.cursor = 'crosshair'
-    else if (mode === 'start-points') cnv.style.cursor = 'crosshair'
-    else if (mode === 'voids') cnv.style.cursor = 'crosshair'
-    else cnv.style.cursor = 'default'
-  }
-  syncDrawerToMode(mode)
-  renderCanvas()
-  setStatus(modeHint(mode))
-  // Mirror the new mode into the React ribbon so the dropdown row's
-  // `.active` highlight + the toolbar button's label/icon flip in
-  // lockstep with the legacy state.
-  publishMapRibbonState()
-}
-
-function modeHint(mode) {
-  switch (mode) {
-    case 'view': return 'View mode — click and drag to pan, scroll-wheel to zoom.  No edits are made.'
-    case 'paint': return 'Place Tiles — pick a section on the left and click on the canvas to stamp.'
-    case 'select-terrain': return 'Select Area — click and drag to grab a rectangle of tiles, then drag to move or Q/E to rotate.  Click outside to drop.'
-    case 'select-features': return 'Place Features — pick a feature on the left to drop copies, or click a placed feature to pick/move it.'
-    case 'picker': return 'Feature Select — click features to select, drag a rectangle for multi-select, Shift+click to toggle, Delete to remove.'
-    case 'erase': return 'Erase — click or drag to remove tiles and features.  Switch to another mode when done.'
-    case 'start-points': return 'Start Points — click empty space to drop the next available start position; click an existing one to drag/delete.'
-    case 'voids': return 'Voids — click or drag to mark attribute cells impassable / no-build.  The first cell sets the brush state for the rest of the drag.'
-  }
-  return ''
-}
+// setMode / modeHint / syncDrawerToMode moved to
+// /ui/map-editor/mode.js — imported at the top of this file.
 
 function wireViewMenu() {
   // The View dropdown + every toggle row + the display-mode picker
@@ -1552,323 +1468,10 @@ function wireViewMenu() {
   publishMapRibbonState()
 }
 
-function wireKeyboard() {
-  // Capture phase so we catch Q/E during an HTML5 drag (the dragged
-  // node sits inside the drawer item and could otherwise stop the
-  // event from reaching the document listener in some browsers).
-  document.addEventListener('keydown', (e) => {
-    // Escape must close an open dialog *before* the text-input guard
-    // below kicks in — dialogs auto-focus their first input on open, so
-    // letting the guard run first would swallow Escape and leave the
-    // dialog stranded until the user clicked out of the input.
-    if (e.key === 'Escape') {
-      const ota = $('#ota-dialog')
-      if (ota && !ota.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeOTADialog(); return }
-      const resize = $('#resize-dialog')
-      if (resize && !resize.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeResizeDialog(); return }
-      const dev = $('#developer-dialog')
-      if (dev && !dev.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeDeveloperDialog(); return }
-      const help = $('#help-dialog')
-      if (help && !help.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeHelpDialog(); return }
-      const settings = $('#settings-dialog')
-      if (settings && !settings.classList.contains('hidden')) { e.preventDefault(); e.stopPropagation(); closeSettingsDialog(); return }
-      const openMap = $('#open-dialog')
-      if (openMap && !openMap.classList.contains('hidden')) {
-        // closeOpenDialog handles "back to welcome vs. stay on editor"
-        // routing via openMapSource, matching the Cancel button.
-        e.preventDefault(); e.stopPropagation(); closeOpenDialog(); return
-      }
-    }
-    // Don't intercept other shortcuts while the user is typing into a
-    // text input — but checkbox / radio / file <input>s and <select>
-    // dropdowns shouldn't swallow our shortcuts (the schema-select used
-    // to steal focus and block Q/E rotation).
-    const t = e.target
-    if (t instanceof HTMLTextAreaElement) return
-    if (t instanceof HTMLInputElement) {
-      const typ = (t.type || '').toLowerCase()
-      if (typ === '' || /^(text|search|number|password|email|url|tel)$/.test(typ)) return
-    }
-    // `?` (shift+/) opens the help cheat-sheet from anywhere outside
-    // a text input.  Symbol comparison handles both US and non-US
-    // layouts where Shift+/ produces different keys.
-    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault()
-      openHelpDialog()
-      return
-    }
-    if (e.key === ' ' && !getSpacePanHotkey()) {
-      setSpacePanHotkey(true)
-      document.body.style.cursor = 'grab'
-      e.preventDefault()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
-      e.preventDefault()
-      if (e.shiftKey) redo()
-      else undo()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
-      e.preventDefault()
-      redo()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-      e.preventDefault()
-      selectAllContent()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-      // Copy the current Select-Terrain rectangle (or already-lifted
-      // terrainClipboard) to the system clipboard.  The OS clipboard
-      // is what makes this work across Chrome windows.
-      e.preventDefault()
-      copyToClipboard()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'x' || e.key === 'X')) {
-      // Cut = copy + clear region.  Same selection rule as Copy
-      // (rectSelection or already-lifted terrainClipboard).
-      e.preventDefault()
-      cutSelection()
-    }
-    else if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-      // Paste a KBot Studio rectangle from the system clipboard,
-      // staged as a follow-the-cursor terrainClipboard.
-      e.preventDefault()
-      pasteFromClipboard()
-    }
-    else if (e.key === 'v' || e.key === 'V') setVoidsVisible(!state.showVoids)
-    else if (e.key === 'p' || e.key === 'P') setMode('paint')
-    else if (e.key === 't' || e.key === 'T') setMode('select-terrain')
-    else if (e.key === 'f' || e.key === 'F') {
-      // While a section is being placed (or pre-selected from the
-      // drawer), F flips horizontally rather than jumping to Features
-      // mode — matches Q/E's "act on what's in play" semantics.  No
-      // active placement → original mode-switch.
-      if (state.placement || state.selected?.type === 'section') flipActive('h')
-      else setMode('select-features')
-    }
-    else if (e.key === 'g' || e.key === 'G') {
-      if (state.placement || state.selected?.type === 'section') flipActive('v')
-    }
-    else if (e.key === 'k' || e.key === 'K') setMode('picker')
-    else if (e.key === 's' || e.key === 'S') {
-      // Cmd/Ctrl+S would conflict with save shortcuts; without
-      // modifiers, plain S switches to Start Points.
-      if (!e.ctrlKey && !e.metaKey) setMode('start-points')
-    }
-    else if (e.key === 'x' || e.key === 'X') setMode('erase')
-    else if (e.key === 'd' || e.key === 'D') setMode('voids')
-    else if (e.key === 'h' || e.key === 'H') setMode('heightmap')
-    else if (e.key === 'b' || e.key === 'B') setMode('fill')
-    else if (e.key === 'r' || e.key === 'R') setMode('ruler')
-    else if (e.key === 'q' || e.key === 'Q') rotateActive(-1)
-    else if (e.key === 'e' || e.key === 'E') rotateActive(1)
-    // Shift + Up/Down: zoom in / out at the keyboard.  Handled
-    // *before* the bare-arrow pan branch so the modifier wins.
-    else if (e.shiftKey && e.key === 'ArrowUp') {
-      e.preventDefault()
-      setZoom(state.zoom * (state.settings?.zoomStep || 1.25))
-    }
-    else if (e.shiftKey && e.key === 'ArrowDown') {
-      e.preventDefault()
-      setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
-    }
-    // Arrow keys: page through drawer sections when a section is
-    // the active selection, otherwise start a continuous pan that
-    // ramps from 1× to MAP_PAN_ACCEL_MAX_MULT over
-    // MAP_PAN_ACCEL_TIME_MS while held.  The repeat-flag check
-    // ignores the OS auto-repeat — the rAF loop drives motion.
-    else if (e.key === 'ArrowLeft' && pageSectionSibling(-1)) { e.preventDefault() }
-    else if (e.key === 'ArrowRight' && pageSectionSibling(1)) { e.preventDefault() }
-    else if (e.key === 'ArrowLeft')  { e.preventDefault(); if (!e.repeat) startMapPan('ArrowLeft',  -1,  0) }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); if (!e.repeat) startMapPan('ArrowRight',  1,  0) }
-    else if (e.key === 'ArrowUp')    { e.preventDefault(); if (!e.repeat) startMapPan('ArrowUp',     0, -1) }
-    else if (e.key === 'ArrowDown')  { e.preventDefault(); if (!e.repeat) startMapPan('ArrowDown',   0,  1) }
-    // Page Up / Page Down zoom in / out.  Same step as the toolbar
-    // buttons so the keyboard + mouse paths stay in sync.
-    else if (e.key === 'PageUp') {
-      e.preventDefault()
-      setZoom(state.zoom * (state.settings?.zoomStep || 1.25))
-    }
-    else if (e.key === 'PageDown') {
-      e.preventDefault()
-      setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
-    }
-    // Home: fit the entire map to the viewport.
-    else if (e.key === 'Home') { e.preventDefault(); fitZoom() }
-    else if (e.key === 'Escape') {
-      // If the schema-edit dialog is open, Esc cancels it.  Done
-      // before the menu / mode-reset paths so editing a schema and
-      // pressing Esc behaves like the dialog's Cancel button.
-      if (!$('#schema-edit-dialog')?.classList.contains('hidden')) {
-        closeSchemaEditor()
-        e.preventDefault()
-        return
-      }
-      // If a ribbon dropdown or hover submenu is open, the first
-      // Escape press just closes it.  Saves the user from having to
-      // mouse away to dismiss, and avoids triggering the mode-reset
-      // path below by accident while they were exploring a menu.
-      const openPopup = document.querySelector('.ribbon-dropdown-popup:not(.hidden)')
-      if (openPopup) {
-        document.querySelectorAll('.ribbon-dropdown-popup:not(.hidden)').forEach((el) => el.classList.add('hidden'))
-        e.preventDefault()
-        return
-      }
-      // Clear whatever transient state is active first, then drop the
-      // user back into Select mode — that's the "neutral" mode that
-      // lets them re-orient before picking a new tool.
-      if (state.placement) cancelPlacement()
-      if (state.terrainClipboard) cancelTerrainClipboard()
-      if (state.ruler) { state.ruler = null; renderCanvas() }
-      if (state.selectedFeatures.size > 0) state.selectedFeatures.clear()
-      if (state.selectedFeature >= 0) state.selectedFeature = -1
-      if (state.selected?.type === 'feature') clearStampSelection()
-      // Leaving Heightmap mode → drop back to the plain Map view so
-      // the editor isn't left in greyscale / blended once the user
-      // has finished sculpting.
-      const leavingHeightmap = state.mode === 'heightmap'
-      if (state.mode !== 'select-terrain') setMode('select-terrain')
-      else renderCanvas()
-      if (leavingHeightmap && state.viewMode !== 'map') {
-        state.viewMode = 'map'
-        $$('#display-mode-group .menu-row').forEach((r) => r.classList.toggle('active', r.dataset.display === 'map'))
-        const lbl = $('#view-current-lbl')
-        if (lbl) lbl.textContent = 'Map'
-        renderCanvas()
-      }
-    }
-    else if (e.key === 'Delete' || e.key === 'Backspace') {
-      handleDeleteKey()
-    }
-  }, { capture: true })
-  document.addEventListener('keyup', (e) => {
-    if (e.key === ' ') {
-      setSpacePanHotkey(false)
-    }
-    // Stop the held-key pan when the user lets go.  Each direction
-    // tracks its own held state, so releasing one of two pressed
-    // arrows keeps the other one going.
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      stopMapPan(e.key)
-    }
-  })
-  // Window-blur safety net — if the user alt-tabs while holding an
-  // arrow, we never see the keyup and would scroll forever.
-  window.addEventListener('blur', stopAllMapPan)
-}
-
-// handleDeleteKey resolves the Delete keystroke against whatever the
-// user has currently picked.  Picker multi-selection wins first, then
-// the single Place-Features pick, then a captured terrain rectangle
-// (which gets *thrown away* rather than dropped back onto the map).
-function handleDeleteKey() {
-  if (state.selectedFeatures.size > 0) {
-    // Remove every selected feature in one transaction.  Sort indices
-    // descending so earlier splices don't shift the later ones.
-    const idxs = Array.from(state.selectedFeatures).sort((a, b) => b - a)
-    beginTransaction()
-    for (const i of idxs) state.features.splice(i, 1)
-    state.selectedFeatures.clear()
-    commitTransaction(`Delete ${idxs.length} feature${idxs.length === 1 ? '' : 's'}`)
-    renderCanvas()
-    return
-  }
-  if (state.selectedFeature >= 0) {
-    beginTransaction()
-    state.features.splice(state.selectedFeature, 1)
-    state.selectedFeature = -1
-    commitTransaction('Delete feature')
-    renderCanvas()
-    return
-  }
-  if (state.terrainClipboard) {
-    // Discard the floating terrain (and any features it had picked up)
-    // without putting it back on the map — a destructive "delete this
-    // chunk of the map" gesture.
-    beginTransaction()
-    state.terrainClipboard = null
-    commitTransaction('Delete terrain selection')
-    hidePlacementHint()
-    renderCanvas()
-    setStatus('Terrain selection deleted.')
-    return
-  }
-  // Start position selected — remove it from the active schema.
-  if (state.mode === 'start-points' && state.selectedStartPos >= 0) {
-    const schema = activeSchema()
-    if (schema) {
-      beginTransaction()
-      schema.startPositions.splice(state.selectedStartPos, 1)
-      // Renumber what's left so player numbers stay 1..N dense — no
-      // gaps, which keeps the click-to-add logic (next = N+1) simple
-      // and matches what TA / the OTA save path expect.
-      for (let i = 0; i < schema.startPositions.length; i++) {
-        schema.startPositions[i].number = i + 1
-      }
-      state.selectedStartPos = -1
-      commitTransaction('Delete start position')
-      renderCanvas()
-    }
-  }
-}
-
-// rotateActive rotates whichever interactive subject is in play.  Q/E
-// dispatches to the placement preview, the floating terrain clipboard,
-// or the currently-selected drawer section (so the user can pre-rotate
-// before placement starts).
-function rotateActive(dir) {
-  // dir: +1 = clockwise, -1 = counter-clockwise.
-  if (state.placement) {
-    state.placement.rotation = (state.placement.rotation + dir + 4) % 4
-    // Manual Q/E rotation pins the orientation — auto-fit must not
-    // fight the user's intent once they've taken control.
-    state.placement.userRotated = true
-    // Wake a dormant placement so the user sees the rotation in the
-    // preview immediately.  selectSection seeds dormant=true so the
-    // ghost waits for the cursor to enter the canvas before painting;
-    // an explicit rotate key is enough engagement to count as
-    // "engaged" — pressing Q with no visible preview was confusing.
-    if (state.placement.dormant) state.placement.dormant = false
-    setStatus(`Rotation ${state.placement.rotation * 90}°.  Click on the canvas to stamp.`)
-    renderCanvas()
-    return
-  }
-  if (state.terrainClipboard) {
-    rotateTerrainClipboard(dir)
-    setStatus(`Terrain rotation ${(state.terrainClipboard.rotation || 0) * 90}°.`)
-    renderCanvas()
-    return
-  }
-  if (state.selected?.type === 'section') {
-    state.selected.rotation = ((state.selected.rotation || 0) + dir + 4) % 4
-    setStatus(`Rotation ${(state.selected.rotation || 0) * 90}°.  Click on the canvas to stamp.`)
-  }
-}
-
-// flipActive toggles a flip axis on the section currently in flight.
-// Mirrors rotateActive's dispatch but only handles sections — the
-// terrain clipboard's flip support would need the height grid mirrored
-// too, which is a separate piece of work.  Flipping pins the
-// orientation against the auto-fit so it doesn't fight the user.
-function flipActive(axis) {
-  if (state.placement) {
-    if (axis === 'h') state.placement.flipH = !state.placement.flipH
-    else state.placement.flipV = !state.placement.flipV
-    state.placement.userRotated = true
-    // Same dormant-wake as rotateActive — pressing F/G during the
-    // cursor-follow phase counts as engagement, so the preview
-    // shouldn't keep waiting for the cursor to enter the canvas.
-    if (state.placement.dormant) state.placement.dormant = false
-    const fh = state.placement.flipH ? 'on' : 'off'
-    const fv = state.placement.flipV ? 'on' : 'off'
-    setStatus(`Flip H ${fh}, V ${fv}.  Click on the canvas to stamp.`)
-    renderCanvas()
-    return
-  }
-  if (state.selected?.type === 'section') {
-    if (axis === 'h') state.selected.flipH = !state.selected.flipH
-    else state.selected.flipV = !state.selected.flipV
-  }
-}
+// wireKeyboard moved to /ui/map-editor/keyboard.js.
+// handleDeleteKey / rotateActive / flipActive moved to
+// /ui/map-editor/mode.js.  All four are imported at the top of this
+// file.
 
 function switchTab(tab) {
   state.drawer = tab
@@ -2149,27 +1752,8 @@ async function ensureSectionAssets(path) {
   }
 }
 
-function cancelPlacement() {
-  if (!state.placement) return
-  state.placement = null
-  hidePlacementHint()
-  renderCanvas()
-}
-
-function showPlacementHint(label, kind) {
-  const hint = $('#placement-hint')
-  const lbl = $('#placement-hint-label')
-  const rotateRow = $('#placement-hint-rotate')
-  if (hint) hint.classList.remove('hidden')
-  if (lbl) lbl.textContent = label
-  // Features don't rotate — hide the Q/E line so the pill is less noisy
-  // when the user is dragging features.
-  if (rotateRow) rotateRow.classList.toggle('hidden', kind === 'feature')
-}
-function hidePlacementHint() {
-  const hint = $('#placement-hint')
-  if (hint) hint.classList.add('hidden')
-}
+// cancelPlacement / showPlacementHint / hidePlacementHint moved to
+// /ui/map-editor/mode.js — imported at the top of this file.
 
 function selectFeature(f) {
   // Clicking a feature switches to Place Features mode so the next
@@ -2254,20 +1838,8 @@ function wireZoomButtons() {
 //   - left-click with the Space hotkey held
 //   - left-click in Paint mode with no active selection or placement
 //   - left-click in Select Features mode over empty space
-// selectAllContent captures the bounding box of every tile + feature
-// on the map into a Select Area clipboard.  Bound to Ctrl/Cmd-A so
-// the user can grab the whole work-in-progress in one keystroke.
-function selectAllContent() {
-  const all = shrinkRectToContent(0, 0, state.tileW, state.tileH)
-  if (!all) {
-    setStatus('Nothing to select.')
-    return
-  }
-  if (state.mode !== 'select-terrain') setMode('select-terrain')
-  beginTransaction()
-  captureTerrain(all.x, all.y, all.w, all.h)
-  commitTransaction('Select all')
-}
+// selectAllContent moved to /ui/map-editor/mode.js — imported at the
+// top of this file.
 
 // tryAutoSwitchAt + shouldPan + beginPan + updatePan + endPan moved
 // to /ui/map-editor/cursor.js (R40g) — imported at the top of
@@ -2383,16 +1955,8 @@ function activeSchema() {
 // still calls handlePaint(e) to share the stamp dispatch between
 // click-driven paint strokes and drag-drop completions.
 
-// clearStampSelection deselects the active section/feature so subsequent
-// clicks no longer stamp.  We keep the erase tool intact since it's a
-// distinct mode the user toggles explicitly.
-function clearStampSelection() {
-  if (!state.selected) return
-  state.selected = null
-  hidePlacementHint()
-  renderDrawer()
-  setStatus('Stamp placed.  Pick another section/feature on the left to keep building.')
-}
+// clearStampSelection moved to /ui/map-editor/mode.js — imported at
+// the top of this file.
 
 // eraseAt + eraseAtSingle moved to /ui/map-editor/modes/erase.js
 // (R40d.1) — imported at the top of this file.
