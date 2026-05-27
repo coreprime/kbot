@@ -12469,11 +12469,16 @@ function refreshMvInspectors(dtMs = 16) {
     const body = document.getElementById('mv-inspector-scripts-body')
     if (body) renderMvScriptsPanel(body, mv.cob)
   }
-  // Static Vars panel
+  // Static Vars panel.  In sandbox mode the panel shows "No Unit
+  // Selected" whenever the selection is empty OR multiple units are
+  // selected (statics are per-unit and meaningless to merge across N
+  // units).  The proxy mv.cob only has a .unit when exactly one unit
+  // is selected, so the existing !cob.unit gate hits the empty path
+  // and we just hand it the sandbox-specific message.
   const svPanel = document.getElementById('mv-inspector-staticvars')
   if (svPanel && !svPanel.classList.contains('hidden')) {
     const body = document.getElementById('mv-inspector-staticvars-body')
-    if (body) renderMvStaticVarsPanel(body, mv.cob)
+    if (body) renderMvStaticVarsPanel(body, mv.cob, sandboxActive ? { emptyMessage: 'No Unit Selected' } : {})
   }
   // Camera panel
   const camPanel = document.getElementById('mv-inspector-camera')
@@ -14454,12 +14459,17 @@ function renderMvThreadCodeLocals(state, thread) {
   }
 }
 
-function renderMvStaticVarsPanel(body, cob) {
+function renderMvStaticVarsPanel(body, cob, opts = {}) {
   body.replaceChildren()
   if (!cob || !cob.unit) {
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
-    empty.textContent = 'No COB loaded.'
+    // Caller can override the empty-state message — sandbox uses
+    // "No Unit Selected" because the proxy cob never has a .unit
+    // (it represents the scene runtime, not any single unit) until
+    // exactly one unit is selected and the scene promotes its
+    // binding.
+    empty.textContent = opts.emptyMessage || 'No COB loaded.'
     body.appendChild(empty)
     return
   }
@@ -15172,9 +15182,24 @@ function refreshMvControlsGating(mv) {
   // pre-Create (it's a no-op if there's nothing to reset).
   const createRow = document.getElementById('mv-controls-create-row')
   const actions   = panel.querySelector('#mv-controls-actions')
+  const emptyRow  = document.getElementById('mv-controls-empty-row')
   const showCreate = !!cob && hasCreate && lifecycle === 'unborn'
+  // Sandbox empty-state: when in sandbox mode AND no unit is selected
+  // (proxy mv.cob has no .unit), swap the action grid for the "No
+  // Units Selected" row so the panel isn't a wall of disabled
+  // buttons.  Single-unit mode never reaches this branch — there's
+  // always exactly one viewed unit so cob.unit is always set.
+  const dlg = document.getElementById('model-viewer-dialog')
+  const sandboxActive = !!(dlg && dlg.classList.contains('sandbox-mode'))
+  const sandboxNoSel = sandboxActive && !(cob && cob.unit)
   if (createRow) createRow.style.display = showCreate ? '' : 'none'
-  if (actions)   actions.style.display   = showCreate ? 'none' : ''
+  if (emptyRow)  emptyRow.style.display  = (!showCreate && sandboxNoSel) ? '' : 'none'
+  if (actions)   actions.style.display   = (showCreate || sandboxNoSel) ? 'none' : ''
+  // Hide the per-port body (health / build sliders / chip rows) in
+  // sandbox's empty state too — those sliders write into the focused
+  // unit's cobPorts; without a focus there's nothing to drive.
+  const portsBody = document.getElementById('mv-inspector-ports-body')
+  if (portsBody) portsBody.style.display = sandboxNoSel ? 'none' : ''
   // Reset is only meaningful AFTER the unit has been created — it
   // reverts to the pre-creation state and re-arms the build ramp.
   // Pre-Create / mid-Create there's nothing to revert, so disable

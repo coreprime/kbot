@@ -780,6 +780,14 @@
             ⚙ Create Unit
           </button>
         </div>
+        <!-- Sandbox empty-state row.  Sits in the same slot as the
+             action grid; refreshMvControlsGating flips between them
+             based on whether anything is selected.  Single-unit
+             mode never reaches this — there's always exactly one
+             viewed unit. -->
+        <div class="mv-controls-empty-row" id="mv-controls-empty-row" style="display:none">
+          <div class="mv-inspector-empty">No Units Selected</div>
+        </div>
         <div class="mv-controls-actions" id="mv-controls-actions">
           <button class="mv-ctrl-action" data-ctrl-action="move" disabled
                   title="Move — click here, then click in the scene to walk the unit there at its FBI-defined speed.  StartMoving / StopMoving scripts fire when those exist.">
