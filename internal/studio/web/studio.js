@@ -22,8 +22,6 @@ import {
   MAX_START_POSITIONS,
   DRAWER_ITEM_HEIGHT,
   DRAWER_OBSERVER_MARGIN,
-  FEATURE_HIT_SEARCH_TILES,
-  START_POS_RADIUS,
   HM_HOLD_INTERVAL_MS,
   SCHEMA_PLAYER_COUNTS,
 } from './ui/map-editor/constants.js'
@@ -153,11 +151,15 @@ import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 // Mouse → grid coordinate converters used by the per-mode mouse
 // handlers below.  pickCell → tile grid; pickAttrCellForVoid →
 // attribute grid; pickFeatureAttrCell → feature-anchor-aware
-// attribute grid.
+// attribute grid.  findFeatureAt / findStartPositionAt hit-test
+// the cursor against placed features + the active schema's start
+// markers respectively.
 import {
   pickCell,
   pickAttrCellForVoid,
   pickFeatureAttrCell,
+  findFeatureAt,
+  findStartPositionAt,
 } from './ui/map-editor/mouse-coords.js'
 
 // Welcome dialog visual + audio FX — all three are pure
@@ -300,7 +302,6 @@ import { save, saveLoose } from './ui/map-editor/save.js'
 // Both invalidate together when bumpContentVersion ticks.
 import {
   bumpContentVersion,
-  featuresNear,
 } from './ui/map-editor/content-cache.js'
 
 // Zoom + scroll-pan controls.  setZoom / zoomAtPointer / fitZoom
@@ -365,7 +366,6 @@ import {
   preloadFeatureImage,
   featureAnchorOffset,
   featureAnchorWorld,
-  featureRenderRect,
 } from './ui/map-editor/feature-assets.js'
 
 // Heightmap drawing passes — Heightmap view's grayscale, the
@@ -3453,39 +3453,9 @@ function onFeatureMouseUp(_e) {
 // FEATURE_HIT_SEARCH_TILES lives in ./ui/map-editor/constants.js
 // (how far from the click tile we scan for candidate features).
 
-// findFeatureAt hit-tests the actual canvas-pixel cursor position
-// against every feature's drawn rectangle.  The old version reduced
-// the cursor to its tile centre, which missed clicks whose tile
-// centre fell outside a 1×1 sprite — visible as features on
-// subtile (1,1) being unclickable while subtile (1,0) worked because
-// the anchor offset happened to leave the tile centre inside the rect.
-// Accepts either a MouseEvent or pre-resolved canvas pixel coords.
-function findFeatureAt(e) {
-  let cpx, cpy
-  if (e && typeof e.clientX === 'number') {
-    const canvas = $('#canvas')
-    const rect = canvas.getBoundingClientRect()
-    cpx = (e.clientX - rect.left) / rect.width * canvas.width
-    cpy = (e.clientY - rect.top) / rect.height * canvas.height
-  } else if (e && typeof e.cpx === 'number') {
-    cpx = e.cpx; cpy = e.cpy
-  } else {
-    return -1
-  }
-  const tx = Math.floor(cpx / TILE_PX)
-  const ty = Math.floor(cpy / TILE_PX)
-  const candidates = featuresNear(tx, ty, FEATURE_HIT_SEARCH_TILES)
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const idx = candidates[i]
-    const f = state.features[idx]
-    const { px, py } = featureAnchorWorld(f)
-    const r = featureRenderRect(f, px, py)
-    if (cpx >= r.x && cpx <= r.x + r.w && cpy >= r.y && cpy <= r.y + r.h) return idx
-  }
-  return -1
-}
-
-// featureRenderRect moved to /ui/map-editor/feature-assets.js.
+// findFeatureAt + findStartPositionAt moved to
+// /ui/map-editor/mouse-coords.js.  featureRenderRect moved to
+// /ui/map-editor/feature-assets.js.
 
 // ── Start positions ────────────────────────────────────────────────────────
 // Game pixel coords use 32 game-px per tile.  We convert between game
@@ -3498,18 +3468,6 @@ function findFeatureAt(e) {
 function activeSchema() {
   if (!state.ota || !state.ota.schemas[state.activeSchema]) return null
   return state.ota.schemas[state.activeSchema]
-}
-
-function findStartPositionAt(schema, px, py) {
-  if (!schema) return -1
-  for (let i = schema.startPositions.length - 1; i >= 0; i--) {
-    const sp = schema.startPositions[i]
-    const { px: spx, py: spy } = gameToCanvas(sp.x, sp.z)
-    const dx = spx - px
-    const dy = spy - py
-    if (dx * dx + dy * dy <= START_POS_RADIUS * START_POS_RADIUS) return i
-  }
-  return -1
 }
 
 let startPosDragging = false
