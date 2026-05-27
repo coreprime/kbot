@@ -301,15 +301,21 @@ export class SandboxView {
     })
   }
 
-  // toggleTracking — T-key handler.  When tracking is already on,
-  // turn it off + unset the camera's tracked target (matches the
-  // spec).  Otherwise pick the first selected unit and lock the
-  // camera onto its centre of mass.  No-op when there's nothing
-  // selected — the camera stays put rather than silently grabbing
-  // a random unit, so the T key always reads as deliberate.
+  // toggleTracking — T-key handler.  Flips the current state.
   toggleTracking() {
+    this.setTracking(!this.camera?.trackedTarget)
+  }
+
+  // setTracking arms / disarms tracking explicitly.  Used by the
+  // Renderer panel's Tracking checkbox so it can drive the state
+  // directly (the T-key handler routes through here too via
+  // toggleTracking).  When arming, picks the FIRST selected unit;
+  // refuses (with a status hint) if nothing's selected so the
+  // gesture always reads as deliberate.  When disarming, unsets the
+  // camera's tracked target entirely.
+  setTracking(on) {
     if (!this.camera) return
-    if (this.camera.trackedTarget) {
+    if (!on) {
       this.camera.setTrackedTarget(null)
       this.#setStatus('Tracking off.')
       return

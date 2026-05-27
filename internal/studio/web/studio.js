@@ -14813,6 +14813,14 @@ function renderMvCameraPanel(mv) {
   const trackCb = document.getElementById('mv-ci-track')
   const isTracking = !!cam.trackedTarget || !!(_mvControls && _mvControls.tracking)
   if (trackCb && trackCb.checked !== isTracking) trackCb.checked = isTracking
+  // Auto-Rotate checkbox — read the LIVE renderer state, not a
+  // remembered flag.  Drag / wheel / pan all drop auto-rotate inside
+  // camera-controls.js, so the checkbox unticks itself the moment
+  // the user grabs the canvas (no extra wiring needed beyond this
+  // refresh poll).
+  const arCb = document.getElementById('mv-ci-autorotate')
+  const arOn = !!(mv.renderer && mv.renderer.autoRotate)
+  if (arCb && arCb.checked !== arOn) arCb.checked = arOn
   // "Following: <name>" row — surfaces which unit the camera is
   // locked onto.  Hidden when nothing's tracked so the panel doesn't
   // grow a stale empty row.
@@ -14835,24 +14843,55 @@ function renderMvCameraPanel(mv) {
 // on first wire so the default-on tracking doesn't render as a
 // blank checkbox until the user opens the panel.
 function wireMvRendererPanel() {
-  const cb = document.getElementById('mv-ci-track')
-  if (!cb || cb.dataset.wired === '1') {
-    // Already wired — just resync (the panel-open path may run
-    // before the Controls overlay has its MvControls).
-    if (cb && _mvControls && cb.checked !== _mvControls.tracking) {
-      cb.checked = _mvControls.tracking
-    }
-    return
+  // Helper: figure out which view is currently driving the canvas so
+  // both checkbox handlers route to the right place.  Sandbox tab →
+  // sandbox view; single-unit tab → modelViewerInstance.
+  const activeView = () => {
+    const dlg = document.getElementById('model-viewer-dialog')
+    const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
+    return sandboxActive ? (typeof window !== 'undefined' ? window.__sandboxView : null) : modelViewerInstance
   }
-  cb.dataset.wired = '1'
-  if (_mvControls) cb.checked = _mvControls.tracking
-  cb.addEventListener('change', () => {
-    if (_mvControls) _mvControls.setTracking(cb.checked)
-  })
-  // Clicking the row label shouldn't bubble into the panel-drag
-  // handler — that would start a drag instead of toggling.
-  cb.addEventListener('pointerdown', (e) => e.stopPropagation())
-  cb.addEventListener('mousedown', (e) => e.stopPropagation())
+  // ── Tracking checkbox ────────────────────────────────────────────
+  const cb = document.getElementById('mv-ci-track')
+  if (cb && cb.dataset.wired !== '1') {
+    cb.dataset.wired = '1'
+    cb.addEventListener('change', () => {
+      const v = activeView()
+      // Sandbox owns its own setTracking; single-unit routes through
+      // MvControls.  Both end up calling camera.setTrackedTarget so
+      // applyTracking() picks it up next frame.
+      if (v && typeof v.setTracking === 'function') v.setTracking(cb.checked)
+      else if (_mvControls) _mvControls.setTracking(cb.checked)
+    })
+    cb.addEventListener('pointerdown', (e) => e.stopPropagation())
+    cb.addEventListener('mousedown', (e) => e.stopPropagation())
+  } else if (cb && _mvControls && cb.checked !== _mvControls.tracking) {
+    cb.checked = _mvControls.tracking
+  }
+  // ── Auto-Rotate checkbox ─────────────────────────────────────────
+  // Toggles renderer.autoRotate on whichever view is active.  The
+  // existing camera-controls module already drops auto-rotate on any
+  // user gesture, so the checkbox re-syncs on each refresh tick via
+  // renderMvCameraPanel — the user sees it click off the moment they
+  // grab the canvas, which matches the gesture's effect.
+  const arCb = document.getElementById('mv-ci-autorotate')
+  if (arCb && arCb.dataset.wired !== '1') {
+    arCb.dataset.wired = '1'
+    arCb.addEventListener('change', () => {
+      const v = activeView()
+      const r = v && v.renderer
+      if (r && typeof r.setAutoRotate === 'function') r.setAutoRotate(arCb.checked)
+      // Mirror to the unit-editor's ribbon Auto-Rotate button so the
+      // two surfaces stay in lockstep.
+      const ribbonBtn = document.querySelector('#mv-act-autorotate')
+      if (ribbonBtn) {
+        ribbonBtn.dataset.on = arCb.checked ? '1' : '0'
+        ribbonBtn.classList.toggle('active', arCb.checked)
+      }
+    })
+    arCb.addEventListener('pointerdown', (e) => e.stopPropagation())
+    arCb.addEventListener('mousedown', (e) => e.stopPropagation())
+  }
 }
 
 // renderMvPortsPanel builds the Ports overlay body.  Called once on

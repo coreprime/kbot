@@ -74,7 +74,10 @@ export class ModelViewer {
     }
     this._pointerState = null
     this._resizeObserver = null
-    this._wireInputs()
+    // _wireInputs runs from open() once `renderer` and `camera` exist
+    // — calling it from the constructor would hand attachOrbitControls
+    // null refs and silently no-op, leaving the canvas dead to drag /
+    // wheel / right-click gestures.
   }
 
   // setDamage sets the unit's damage percent (0..100).  When
@@ -200,6 +203,11 @@ export class ModelViewer {
       this.camera = new OrbitCamera({})
       this.renderer.setCamera(this.camera)
       this.#observeResize()
+      // Wire shared orbit / pan / zoom gestures now that renderer +
+      // camera exist — calling _wireInputs() earlier (constructor)
+      // would hand attachOrbitControls null refs and silently no-op,
+      // leaving the canvas inert to every camera gesture.
+      this._wireInputs()
       // Shaders now live as standalone .vert/.frag files under
       // shaders/ and load over fetch().  init() resolves once they're
       // compiled + linked so the first frame doesn't fire at an
