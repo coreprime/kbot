@@ -485,7 +485,11 @@ const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   // Actions inspector's "Include Private" filter — preserved across
   // sessions so a user debugging internal helpers doesn't have to
   // re-tick the box on every reload.
-  'mvActionsIncludePrivate']
+  'mvActionsIncludePrivate',
+  // Sandbox Developer Controls toggle — persists the "hide developer
+  // editors at the bottom of the Controls panel" preference so a user
+  // who wants the lean sandbox UI doesn't have to retoggle each visit.
+  'mvControlsDevVisible']
 
 // createPrefsStore returns a {load, save} interface backed by a Web
 // Storage implementation (defaults to window.localStorage).  The
@@ -11855,6 +11859,14 @@ async function activateModelTab(tab) {
   }
   const autoBtn = $('#mv-act-autorotate')
   if (autoBtn) modelViewerInstance.setAutoRotate(autoBtn.dataset.on === '1')
+  // Invalidate the Controls panel render sentinel + clear any stale
+  // body content from the previous tab.  Mirror of the wipe in
+  // activateSandboxTab — when the user swaps sandbox → viewer the
+  // body would otherwise keep the sandbox unit's rows until the
+  // next 250 ms refresh tick repopulates them.
+  _mvPortsRenderedKey = null
+  const portsBodyEl = document.getElementById('mv-inspector-ports-body')
+  if (portsBodyEl) portsBodyEl.replaceChildren()
   // open() lazily constructs the renderer the first time, then loads
   // geometry.  Wait for that before applying the ground hint so
   // setGroundMode lands on a live renderer.
@@ -12408,6 +12420,15 @@ function setMvInspectorVisible(panelId, visible, opts = {}) {
     btn.dataset.on = visible ? '1' : '0'
     btn.classList.toggle('active', visible)
   }
+  // Mirror into the sandbox Developer Tools dropdown row, if present.
+  // The sandbox menu lists the same panel IDs (Runtime / Effects /
+  // Audio / Renderer / Unit Variables), so closing a panel via its ✕
+  // button updates both menus in lockstep.
+  const sbRow = document.querySelector(`#sandbox-rb-devtools-popup [data-panel="${panelId}"]`)
+  if (sbRow && !sbRow.disabled) {
+    sbRow.dataset.on = visible ? '1' : '0'
+    sbRow.classList.toggle('active', visible)
+  }
   if (opts.persist !== false) {
     state.mvInspectorVisible = state.mvInspectorVisible || {}
     state.mvInspectorVisible[panelId] = !!visible
@@ -12426,6 +12447,13 @@ let _mvInspectorThrottleMs = 0
 // button list mid-hover.  null = no unit focused (zero or multi-
 // select; the panel shows "No COB loaded.").
 let _mvSandboxFocusedUnitId = -1
+// Sentinel for the Controls panel body — tracks which view + focused-
+// unit combination is currently rendered into #mv-inspector-ports-body.
+// A change (tab swap viewer↔sandbox, focused-unit swap in sandbox, or
+// a fresh model load in the viewer) re-invokes renderMvPortsPanel so
+// the row set + slider write-handlers bind to the active view's data
+// instead of leaking the previous tab's content into the new one.
+let _mvPortsRenderedKey = null
 function refreshMvInspectors(dtMs = 16) {
   _mvInspectorThrottleMs += dtMs
   if (_mvInspectorThrottleMs < 250) return
@@ -12444,46 +12472,24 @@ function refreshMvInspectors(dtMs = 16) {
   // the Unit Editor.  With zero or multiple units selected we fall
   // back to the runtime-only proxy so the runtime / runtime-list
   // panels still tick but the per-unit panels show "select a unit".
-  let mv = modelViewerInstance
+  // mv proxy comes from view.getInspectorMv() now — viewer and
+  // sandbox each implement the method (BaseView contract) and return
+  // the shape the inspector panel renderers below consume.  This
+  // collapses what used to be a ~50-line sandbox-vs-viewer branch
+  // here into one method call, and pushes the "aggregate scene
+  // particles", "synthesise stub cob when 0/multi selected", and
+  // "lifecycle backfill" responsibilities home to the views.
+  let mv = sandboxActive
+    ? (sandbox && typeof sandbox.getInspectorMv === 'function' ? sandbox.getInspectorMv() : null)
+    : (modelViewerInstance && typeof modelViewerInstance.getInspectorMv === 'function'
+        ? modelViewerInstance.getInspectorMv()
+        : modelViewerInstance)
   if (sandboxActive) {
-    const sel = sandbox.scene?.selected
-    let focused = null
-    let focusedId = null
-    if (sel && sel.size === 1) {
-      const onlyId = [...sel][0]
-      const u = sandbox.scene.unitById(onlyId)
-      if (u && u.binding) { focused = u.binding; focusedId = u.id }
-    }
-    mv = {
-      camera: sandbox.camera,
-      renderer: sandbox.renderer,
-      // Use the focused unit's binding directly when present — it has
-      // .runtime + .unit + hasScript + listScripts + particles + audio,
-      // exactly the surface the panels expect.  Otherwise stub a
-      // runtime-only shape so the syncCob helpers don't throw.
-      cob: focused || {
-        runtime: sandbox.scene?.runtime,
-        unit: null,
-        hasScript: () => false,
-        _lifecycle: 'created',
-      },
-    }
-    // Effects + Audio panels are SCENE-WIDE in sandbox.  Each unit
-    // owns its own ParticlePool + AudioPool (per-binding state), so
-    // the focused-binding path above would either show only the
-    // selected unit's effects OR — with 0/multi selection — show
-    // nothing (the stub cob above has no particles/audio).  Both
-    // experiences read as "the panels are broken in sandbox".  Swap
-    // mv.cob's particles/audio for a virtual pool that spans every
-    // live binding — built lazily each tick so newly-spawned units
-    // contribute immediately.
-    mv.cob.particles = aggregateSandboxParticlePool(sandbox.scene)
-    mv.cob.audio = aggregateSandboxAudioPool(sandbox.scene)
-    // The focused binding has no _lifecycle field by default — the
-    // single-unit viewer's gating reads it to greys out controls
-    // pre-Create.  In sandbox we always spawn pre-Create'd so mark
-    // it 'created' to keep buttons active.
-    if (focused && !focused._lifecycle) focused._lifecycle = 'created'
+    // Pull focused-unit id back out so the Actions-panel rebuild
+    // gating + the Controls button enable map below can read it.
+    // The view stashed it on mv._focusedUnitId.
+    const focusedId = mv && mv._focusedUnitId != null ? mv._focusedUnitId : null
+    const focused = (mv && mv.cob && mv.cob.unit) ? mv.cob : null
     // Rebuild the Actions panel only when the focused unit changes —
     // the inner buttons retain their own hover/disabled state so we
     // avoid the per-tick flicker of a full rebuild.  Tracked on a
@@ -12535,11 +12541,22 @@ function refreshMvInspectors(dtMs = 16) {
   if (camPanel && !camPanel.classList.contains('hidden')) {
     renderMvCameraPanel(mv)
   }
-  // Ports panel — only refreshes the LIVE values (read-only chips +
-  // slider labels).  The interactive controls keep their own state
-  // via wireMvPortsPanel and aren't rebuilt every tick.
+  // Ports panel — re-render the row controls whenever the active view
+  // OR the focused sandbox unit changes; otherwise just refresh the
+  // LIVE values (read-only chips + slider labels) without rebuilding.
+  // The re-render key captures everything that would change the row
+  // SET (sandbox vs viewer mode, focused unit, viewer's loaded unit)
+  // so a stale viewer layout doesn't leak into a fresh sandbox view
+  // and vice versa.
   const portsPanel = document.getElementById('mv-inspector-ports')
   if (portsPanel && !portsPanel.classList.contains('hidden')) {
+    const portsKey = sandboxActive
+      ? `sb:${mv?._focusedUnitId ?? 'none'}`
+      : `mv:${(modelViewerInstance?.cob?.unit?.name) || (modelViewerInstance?.model?.name) || 'none'}`
+    if (portsKey !== _mvPortsRenderedKey) {
+      _mvPortsRenderedKey = portsKey
+      renderMvPortsPanel(mv, { sandboxMode: sandboxActive })
+    }
     refreshMvPortsLiveValues(mv)
   }
   // Effects panel — live read-out of the particle pool.  Cheap
@@ -14586,127 +14603,10 @@ function wireMvRuntimeVisibility() {
 // so toggling doesn't snap back open.  Reset when no panel exists.
 const _mvFxCollapsed = new Set()
 
-// Reusable scratch arrays for the sandbox particle-pool aggregator.
-// Each tick we re-fill the alive slots — keeping the buffers resident
-// avoids allocator pressure when the panel is open through a long
-// firefight.  Auto-grows when total alive particles exceed capacity
-// (doubling for amortised O(1) growth).
-const _mvFxAggBufs = {
-  capacity: 0,
-  alive: null, kind: null,
-  r: null, g: null, b: null,
-  x: null, y: null, z: null,
-  vx: null, vy: null, vz: null,
-  life: null, life0: null,
-}
-
-// aggregateSandboxParticlePool returns a virtual ParticlePool that
-// exposes the same property surface (count + flat per-attribute
-// arrays indexed 0..count) the Effects panel reads.  Internally
-// concatenates every binding's alive slots into shared scratch
-// arrays.  Cost: O(total alive) copy per refresh tick (4 Hz) — for a
-// sandbox with a few hundred particles that's negligible.
-//
-// Only ALIVE source-slots are copied, so the returned `alive` array
-// is all-1s.  The Effects renderer's `if (!pool.alive[i]) continue`
-// short-circuit then becomes a no-op, but the field is still present
-// so we don't have to fork the renderer for sandbox mode.
-function aggregateSandboxParticlePool(scene) {
-  if (!scene || typeof scene.units !== 'function') {
-    return { count: 0 }
-  }
-  // First pass — sum alive across every unit's binding so we know
-  // how big the scratch arrays need to be.
-  let total = 0
-  for (const u of scene.units()) {
-    const p = u.binding && u.binding.particles
-    if (!p) continue
-    for (let i = 0; i < p.count; i++) if (p.alive[i]) total++
-  }
-  if (total === 0) {
-    return { count: 0 }
-  }
-  // Grow scratch buffers when the population exceeds current
-  // capacity.  Double so we don't grow every frame in a steady fight.
-  const bufs = _mvFxAggBufs
-  if (total > bufs.capacity) {
-    let cap = Math.max(64, bufs.capacity || 64)
-    while (cap < total) cap *= 2
-    bufs.capacity = cap
-    bufs.alive = new Uint8Array(cap)
-    bufs.kind  = new Uint16Array(cap)
-    bufs.r     = new Float32Array(cap)
-    bufs.g     = new Float32Array(cap)
-    bufs.b     = new Float32Array(cap)
-    bufs.x     = new Float32Array(cap)
-    bufs.y     = new Float32Array(cap)
-    bufs.z     = new Float32Array(cap)
-    bufs.vx    = new Float32Array(cap)
-    bufs.vy    = new Float32Array(cap)
-    bufs.vz    = new Float32Array(cap)
-    bufs.life  = new Float32Array(cap)
-    bufs.life0 = new Float32Array(cap)
-  }
-  // Second pass — copy alive slots into the flat layout.
-  let w = 0
-  for (const u of scene.units()) {
-    const p = u.binding && u.binding.particles
-    if (!p) continue
-    for (let i = 0; i < p.count; i++) {
-      if (!p.alive[i]) continue
-      bufs.alive[w] = 1
-      bufs.kind[w]  = p.kind[i] | 0
-      bufs.r[w]     = p.r[i];  bufs.g[w]  = p.g[i];  bufs.b[w]  = p.b[i]
-      bufs.x[w]     = p.x[i];  bufs.y[w]  = p.y[i];  bufs.z[w]  = p.z[i]
-      bufs.vx[w]    = p.vx[i]; bufs.vy[w] = p.vy[i]; bufs.vz[w] = p.vz[i]
-      bufs.life[w]  = p.life[i]
-      bufs.life0[w] = p.life0[i]
-      w++
-    }
-  }
-  // Return a thin facade that reuses the scratch buffers by ref.
-  // The Effects panel reads `count` once at the top and indexes the
-  // arrays per-slot, so the same buffer-by-reference contract works.
-  return {
-    count: w,
-    alive: bufs.alive,
-    kind:  bufs.kind,
-    r: bufs.r, g: bufs.g, b: bufs.b,
-    x: bufs.x, y: bufs.y, z: bufs.z,
-    vx: bufs.vx, vy: bufs.vy, vz: bufs.vz,
-    life: bufs.life, life0: bufs.life0,
-  }
-}
-
-// aggregateSandboxAudioPool returns a virtual AudioPool that exposes
-// the count() + each(cb) surface the Audio panel uses, fanning the
-// iteration over every binding's pool.  Each cb invocation receives
-// the source pool's live entry directly (no copy) so progress bars
-// keep ticking against the actual <audio> element's currentTime.
-function aggregateSandboxAudioPool(scene) {
-  if (!scene || typeof scene.units !== 'function') {
-    return { count: () => 0, each: () => {} }
-  }
-  // Snapshot the pools at call time so the panel's count() / each()
-  // see a consistent set even if a unit is added or removed between
-  // the two reads.  Pool refs are stable across ticks; new units
-  // appearing between refreshes get picked up on the NEXT refresh,
-  // which matches the panel's 4 Hz cadence.
-  const pools = []
-  for (const u of scene.units()) {
-    if (u.binding && u.binding.audio) pools.push(u.binding.audio)
-  }
-  return {
-    count: () => {
-      let n = 0
-      for (const p of pools) n += p.count()
-      return n
-    },
-    each: (fn) => {
-      for (const p of pools) p.each(fn)
-    },
-  }
-}
+// Particle / audio aggregation across every sandbox binding moved to
+// sandbox-view.js where the cardinality concern belongs.  studio.js
+// just consumes the result through SandboxView.getInspectorMv() and
+// no longer needs the scratch buffers + concat helpers here.
 
 // renderMvEffectsPanel populates the Effects overlay with a live
 // snapshot of the cob particle pool.  Layout:
@@ -15110,20 +15010,34 @@ function wireMvRendererPanel() {
   }
 }
 
-// renderMvPortsPanel builds the Ports overlay body.  Called once on
-// a new model load (so the controls bind to the new cobPorts object)
-// and on Reset, NOT every refresh tick — the live-only values
-// (health %, build %, chips) are patched by refreshMvPortsLiveValues
-// without rebuilding the controls.  Editing a control writes back
-// into mv.cobPorts (or mv.cobDamage / mv.cobBuildPercent for the
+// renderMvPortsPanel builds the Ports overlay body.  Called whenever
+// the active view / focused unit changes — refreshMvInspectors tracks
+// a render key and re-invokes us on miss; per-tick live updates run
+// through refreshMvPortsLiveValues instead.  Editing a control writes
+// back into mv.cobPorts (or mv.cobDamage / mv.cobBuildPercent for the
 // two values the COB ribbon's Unit Attributes also drives) so the
 // scripts pick up the new value on their next `get <port>`.
-function renderMvPortsPanel(mv) {
+//
+// opts.sandboxMode — when true, the panel is being rendered for a
+//   sandbox tab.  Replaces the "No COB loaded" empty message with a
+//   sandbox-appropriate placeholder (or nothing — refreshMvControlsGating
+//   hides the body entirely when no unit is selected).  Sandbox units
+//   share the same row builders as the unit editor; the synthesised
+//   sandbox proxy (BaseView.synthSandboxPorts) exposes cobPorts /
+//   cobDamage / cobBuildPercent getters that delegate to the focused
+//   UnitInstance so slider edits reach the live sim.
+function renderMvPortsPanel(mv, opts = {}) {
   wireMvPortsPanel()
   const body = document.getElementById('mv-inspector-ports-body')
   if (!body) return
   body.replaceChildren()
+  const sandboxMode = !!opts.sandboxMode
   if (!mv || !mv.cob) {
+    // Sandbox mode never shows "No COB loaded" — every spawnable unit
+    // in the sandbox has a COB by definition, so the message is just
+    // noise.  The empty-state row (refreshMvControlsGating) covers
+    // the "no unit selected" case for sandbox.  Leave the body empty.
+    if (sandboxMode) return
     const empty = document.createElement('div')
     empty.className = 'mv-inspector-empty'
     empty.textContent = 'No COB loaded.'
@@ -15131,6 +15045,11 @@ function renderMvPortsPanel(mv) {
     return
   }
   const ports = mv.cobPorts
+  // Sandbox proxy ships with no cobPorts when no unit is focused;
+  // bail before the per-port deref crashes.  refreshMvControlsGating
+  // hides the body entirely in this state, so the user sees the
+  // "No Units Selected" row above instead of an empty space.
+  if (!ports) return
   // Per-port capability gating.  The TA UnitValue ports are a long
   // list but the studio surfaces only the subset that's meaningful
   // for THIS unit — driven by a mix of FBI hints and COB usage
@@ -15165,11 +15084,10 @@ function renderMvPortsPanel(mv) {
   const showMoveFire = !!(um.canMove || um.isBuilder)
   const showBuildStance = !!um.isBuilder
   const showArmoured = !!(cob.unit && cob.unit.usesUnitValuePort && cob.unit.usesUnitValuePort(20 /* UV_ARMORED */))
-  if (showActive) {
-    body.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
-      'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
-      (on) => { ports.activation = on ? 1 : 0 }))
-  }
+  // Standing-orders section (Move + Fire orders).  NOT considered
+  // developer-level — the user sees these flip during normal play —
+  // so they sit OUTSIDE the dev wrapper and stay visible regardless
+  // of the Developer Controls toggle.
   if (showMoveFire) {
     body.appendChild(buildPortChoiceRow('Move orders', 'moveOrders', ports.moveOrders,
       [['Hold', 0, 'Hold Position — never leave the spot'],
@@ -15184,7 +15102,19 @@ function renderMvPortsPanel(mv) {
       'GET STANDINGFIREORDERS — weapon scripts read this to gate Fire* threads.  Factories pass the value to units they produce.',
       (v) => { ports.fireOrders = v }))
   }
-  body.appendChild(buildPortSliderRow('Health', 'health',
+  // Developer section — everything the user can poke to put the unit
+  // into states the running sim wouldn't normally reach (full health
+  // → low HP, freshly-built → mid-build, off → on).  Wrapped in a
+  // dedicated div so the Developer Controls menu toggle can hide the
+  // lot in one CSS rule (.mv-controls-no-dev .mv-port-dev-section).
+  const devSection = document.createElement('div')
+  devSection.className = 'mv-port-dev-section'
+  if (showActive) {
+    devSection.appendChild(buildPortToggleRow('Active', 'activation', ports.activation === 1,
+      'GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).',
+      (on) => { ports.activation = on ? 1 : 0 }))
+  }
+  devSection.appendChild(buildPortSliderRow('Health', 'health',
     Math.max(0, 100 - (mv.cobDamage | 0)), 0, 100, '%',
     'GET HEALTH returns this 0–100 value.  Drives SmokeUnit + damage-state scripts.  Synced with the COB ribbon\'s Damage slider.',
     (v) => {
@@ -15192,10 +15122,10 @@ function renderMvPortsPanel(mv) {
       mvSyncCobAttrSlidersFromPorts(mv)
     }))
   if (showBuildStance) {
-    body.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
+    devSection.appendChild(buildPortChipRow('In build stance', 'inBuildStance', ports.inBuildStance === 1,
       'GET INBUILDSTANCE — set by factory scripts via SET_VALUE while assembling a unit.  Read-only here; toggled by the running script.'))
   }
-  body.appendChild(buildPortSliderRow('Build % left', 'buildPercentLeft',
+  devSection.appendChild(buildPortSliderRow('Build % left', 'buildPercentLeft',
     Math.max(0, 100 - (mv.cobBuildPercent | 0)), 0, 100, '%',
     'GET BUILD_PERCENT_LEFT — 100 means nothing built yet, 0 means fully built.  Synced with the COB ribbon\'s Build slider.',
     (v) => {
@@ -15215,9 +15145,10 @@ function renderMvPortsPanel(mv) {
       mvSyncCobAttrSlidersFromPorts(mv)
     }))
   if (showArmoured) {
-    body.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
+    devSection.appendChild(buildPortChipRow('Armoured', 'armoured', ports.armoured === 1,
       'GET ARMORED returns 1 when the unit\'s armour plating is engaged.  Read-only here; flipped by damage scripts via SET_VALUE.'))
   }
+  body.appendChild(devSection)
 }
 
 // refreshMvPortsLiveValues updates the value-only widgets (read-only
@@ -17336,6 +17267,16 @@ async function activateSandboxTab(tab) {
   // renderMvActionsPanel for whatever's selected (or "No COB loaded"
   // for an empty selection).
   _mvSandboxFocusedUnitId = -1
+  // Invalidate the Controls panel render sentinel + clear any stale
+  // body content from the previous tab.  Without this the next refresh
+  // tick would see the previous viewer's ports rows lingering in the
+  // DOM until the 250 ms throttle fires — the user sees viewer-state
+  // bleed-through (the bug round 13 explicitly targets).  Forcing
+  // both the key and the body here makes the swap atomic with the
+  // tab activation rather than eventually-consistent.
+  _mvPortsRenderedKey = null
+  const portsBodyEl = document.getElementById('mv-inspector-ports-body')
+  if (portsBodyEl) portsBodyEl.replaceChildren()
   // Wire sandbox ribbon buttons.  Idempotent guard so repeated tab
   // switches don't stack listeners.
   wireSandboxRibbon()
@@ -17377,34 +17318,13 @@ function wireSandboxControlsIntercept() {
     const sb = sandboxViewInstance
     if (!sb || !sb.scene) return
     if (action === 'stop') {
-      // Stop = halt every selected unit completely: drop move + attack
-      // intent, AND clear the engine weapon SM's slot targets (otherwise
-      // the per-tick #stepWeapon keeps cycling reloads + spawning aim
-      // threads at a phantom target so the unit visibly keeps firing
-      // after Stop).  Then run the BOS hooks that flush per-script
-      // animation state.
-      const engine = sb.scene.engine
-      for (const id of sb.scene.selected) {
-        const u = sb.scene.unitById(id)
-        if (!u) continue
-        u.moveTarget = null
-        u.attackTarget = null
-        // Clear all three weapon slots through the engine — the SM
-        // kills any in-flight aim thread + resets burst state, then
-        // ignores the slot until the user picks a new target.
-        for (let slot = 0; slot < 3; slot++) {
-          engine.setWeaponTarget(u.id, slot, null)
-        }
-        // Mirror Stop's TA semantics — fire StopMoving (kbots / tanks
-        // read it as "halt the walk loop") + TargetCleared (turret-aim
-        // scripts reset their internal aim state).
-        if (u.binding && u.binding.hasScript('StopMoving')) {
-          try { u.binding.start('StopMoving') } catch { /* ignore */ }
-        }
-        if (u.binding && u.binding.hasScript('TargetCleared')) {
-          try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
-        }
-      }
+      // Stop dispatches through BaseView.stop() → engine.stopUnits.
+      // The canonical "drop move + attack + weapon slots + run
+      // StopMoving + TargetCleared" entry point lives in the engine
+      // now; both the sandbox S-hotkey + #stopSelected and this
+      // Controls grid handler converge on one code path so the three
+      // can't drift apart again.
+      sb.stop()
       return
     }
     // All slots arm the next canvas click — matches the unit
@@ -17430,7 +17350,7 @@ function wireSandboxRibbon() {
     const el = document.getElementById(id)
     if (el) el.addEventListener('click', fn)
   }
-  wire('sandbox-rb-spawn', () => openSandboxSpawnPicker())
+  wire('sandbox-rb-spawn', (ev) => openSandboxSpawnPicker(ev.currentTarget))
   wire('sandbox-rb-move', () => sb()?.setPendingCommand('move'))
   wire('sandbox-rb-attack', () => sb()?.setPendingCommand('attack'))
   wire('sandbox-rb-stop', () => {
@@ -17462,6 +17382,139 @@ function wireSandboxRibbon() {
     view.camera.yaw = 215 * Math.PI / 180
     view.camera.pitch = 28 * Math.PI / 180
   })
+  // Developer Tools dropdown — toggle visibility of floating panels.
+  // Driven by the same wireModelRibbonDropdown helper the unit-editor
+  // ribbon uses, plus per-row click handlers that flip the matching
+  // floating panel via setSandboxPanelVisibility.  The Controls row is
+  // disabled in markup (always visible) and is skipped in the loop.
+  wireModelRibbonDropdown('sandbox-rb-devtools-dropdown')
+  const devtoolsPopup = document.getElementById('sandbox-rb-devtools-popup')
+  if (devtoolsPopup && devtoolsPopup.dataset.wired !== '1') {
+    devtoolsPopup.dataset.wired = '1'
+    for (const row of devtoolsPopup.querySelectorAll('.toggle-row')) {
+      if (row.disabled) continue
+      row.addEventListener('click', (e) => {
+        e.stopPropagation()
+        // Two row flavours live in this dropdown.  data-panel rows
+        // toggle a whole floating panel via the shared visibility
+        // helper.  data-dev-toggle rows flip a CSS class on a target
+        // element (e.g. the developer-only section at the bottom of
+        // the Controls panel body) without affecting the panel as a
+        // whole — that's the difference between "hide the Renderer
+        // overlay" and "hide the Health / Build sliders".
+        if (row.dataset.devToggle) {
+          handleSandboxDevToggle(row)
+          return
+        }
+        const panelId = row.dataset.panel
+        if (!panelId) return
+        const panel = document.getElementById(panelId)
+        if (!panel) return
+        const next = panel.classList.contains('hidden')
+        setSandboxPanelVisible(panelId, next)
+      })
+    }
+    // Initial sync — reflect each panel's current .hidden state in the
+    // dropdown rows so the user sees an accurate snapshot the first
+    // time they open the menu (panels default to visible on first run,
+    // but a previously-closed panel persists hidden across reloads).
+    syncSandboxDevtoolsDropdown()
+    // Apply the persisted developer-section visibility so a previous
+    // "hidden" choice survives a reload.  Defaults to visible on a
+    // fresh install — the developer rows are the panel's point in
+    // sandbox so leaving them off by default would surprise the user.
+    applyControlsDevSectionVisibility()
+  }
+}
+
+// handleSandboxDevToggle — flips the developer-section class on the
+// target element and mirrors the new state into the dropdown row +
+// persisted prefs.  Currently only one dev-toggle key is wired
+// (controls-dev-section), but the data-driven shape leaves room to
+// add more (e.g. piece-tree internals, scene grid overlay) without
+// growing a switch statement here.
+function handleSandboxDevToggle(row) {
+  const key = row.dataset.devToggle
+  if (key === 'controls-dev-section') {
+    const next = !controlsDevSectionVisible()
+    setControlsDevSectionVisible(next)
+  }
+}
+
+// controlsDevSectionVisible — read the persisted preference (true by
+// default).  The class lives on #mv-inspector-ports; absence means
+// visible, presence means hidden, matching the negation pattern the
+// rest of the studio uses for opt-out overrides.
+function controlsDevSectionVisible() {
+  const v = state.mvControlsDevVisible
+  return v === undefined ? true : !!v
+}
+
+function setControlsDevSectionVisible(visible) {
+  state.mvControlsDevVisible = !!visible
+  persistPrefs()
+  applyControlsDevSectionVisibility()
+}
+
+// applyControlsDevSectionVisibility — push the saved preference into
+// both the DOM (the Controls panel's .mv-controls-no-dev class drives
+// the CSS rule that hides the developer rows) and the dropdown row's
+// data-on / .active state (so the check-mark + accent colour reflect
+// the live state without an extra refresh tick).
+function applyControlsDevSectionVisibility() {
+  const visible = controlsDevSectionVisible()
+  const panel = document.getElementById('mv-inspector-ports')
+  if (panel) panel.classList.toggle('mv-controls-no-dev', !visible)
+  const row = document.querySelector('#sandbox-rb-devtools-popup [data-dev-toggle="controls-dev-section"]')
+  if (row) {
+    row.dataset.on = visible ? '1' : '0'
+    row.classList.toggle('active', visible)
+  }
+}
+
+// setSandboxPanelVisible — uniform visibility toggle that handles both
+// the standard mv-inspector panels (which route through
+// setMvInspectorVisible so the unit-editor View menu stays in sync)
+// AND the bespoke #sandbox-panel (Spawn floating panel) which lives
+// outside the MV_INSPECTOR_IDS list.  Either way, the corresponding
+// row in the sandbox Developer Tools dropdown is updated.
+function setSandboxPanelVisible(panelId, visible) {
+  const panel = document.getElementById(panelId)
+  if (!panel) return
+  if (panelId === 'sandbox-panel') {
+    panel.classList.toggle('hidden', !visible)
+  } else {
+    setMvInspectorVisible(panelId, visible)
+  }
+  syncSandboxDevtoolsRow(panelId)
+}
+
+// syncSandboxDevtoolsRow — mirror a single panel's current .hidden
+// state into the matching dropdown row (data-on attribute + the
+// check-mark visible state).  Cheap; called whenever visibility
+// changes through any path (dropdown click, ✕ button on panel,
+// resize-clamp, etc.).
+function syncSandboxDevtoolsRow(panelId) {
+  const row = document.querySelector(`#sandbox-rb-devtools-popup [data-panel="${panelId}"]`)
+  if (!row) return
+  const panel = document.getElementById(panelId)
+  if (!panel) return
+  const visible = !panel.classList.contains('hidden')
+  row.dataset.on = visible ? '1' : '0'
+  if (!row.disabled) row.classList.toggle('active', visible)
+}
+
+// syncSandboxDevtoolsDropdown — sweep every row in the dropdown and
+// pull its state from the live panel.  Called once at wire-time and
+// any time the panel set could have changed visibility en masse
+// (e.g. after MV inspector restore-from-prefs).
+function syncSandboxDevtoolsDropdown() {
+  const popup = document.getElementById('sandbox-rb-devtools-popup')
+  if (!popup) return
+  for (const row of popup.querySelectorAll('.toggle-row')) {
+    const id = row.dataset.panel
+    if (id) syncSandboxDevtoolsRow(id)
+  }
 }
 
 // ensureSandboxPanel — creates the floating Sandbox panel the first
@@ -17477,12 +17530,13 @@ function ensureSandboxPanel() {
   const aside = document.createElement('aside')
   aside.id = 'sandbox-panel'
   aside.className = 'mv-inspector'
-  // Floating panel: a single Spawn button + the unit roster.  All
-  // command actions (Move / Attack / Stop / Selection / Field /
-  // Camera) live in the sandbox ribbon at the top of the dialog, so
-  // this panel is now just a roster surface — clicking a unit row
-  // selects that unit (which routes Static Vars + Controls panel +
-  // hover state through the standard inspector pipeline).
+  // Floating panel: just the Spawn button now.  The unit roster
+  // that used to live below it was removed — selection happens on
+  // the canvas (click-select + shift-drag rect), and the per-unit
+  // health / status surface belongs in the Controls + Static Vars
+  // inspectors, not a second list view.  Every Move / Attack /
+  // Stop / Selection / Field / Camera action lives in the sandbox
+  // ribbon at the top of the dialog.
   aside.innerHTML = `
     <div class="mv-inspector-header" id="sandbox-panel-header">
       <span class="minimap-grip" title="Drag to move">⠿</span>
@@ -17493,7 +17547,6 @@ function ensureSandboxPanel() {
       <div class="mv-controls-actions" style="grid-template-columns: 1fr;">
         <button class="mv-ctrl-action" id="sandbox-spawn"><span class="ico">🛠</span><span class="lbl">Spawn Unit</span></button>
       </div>
-      <div id="sandbox-roster" style="max-height:320px;overflow:auto;padding:4px 6px;font-size:11px;font-family:ui-monospace,monospace"></div>
     </div>
   `
   host.appendChild(aside)
@@ -17503,10 +17556,7 @@ function ensureSandboxPanel() {
   // .mv-inspector-toggle / *-header it finds inside the panel.
   try { wireMvInspector('sandbox-panel') } catch { /* ignore */ }
   // Wire Spawn button — everything else moved to the ribbon.
-  document.getElementById('sandbox-spawn').addEventListener('click', () => openSandboxSpawnPicker())
-  // Refresh the roster every 250ms so spawn / health-change is
-  // visible without per-frame work.
-  setInterval(() => refreshSandboxRoster(), 250)
+  document.getElementById('sandbox-spawn').addEventListener('click', (ev) => openSandboxSpawnPicker(ev.currentTarget))
 }
 
 function showSandboxPanel(show) {
@@ -17514,40 +17564,24 @@ function showSandboxPanel(show) {
   if (p) p.classList.toggle('hidden', !show)
 }
 
-function refreshSandboxRoster() {
-  const host = document.getElementById('sandbox-roster')
-  if (!host || !sandboxViewInstance || !sandboxViewInstance.scene) return
-  const scene = sandboxViewInstance.scene
-  if (scene.unitCount() === 0) {
-    host.textContent = 'No units spawned.  Click "Spawn Unit" to add one.'
-    return
-  }
-  const rows = []
-  for (const u of scene.units()) {
-    const sel = scene.isSelected(u.id)
-    rows.push(`<div data-uid="${u.id}" style="cursor:pointer;padding:2px 4px;border-radius:2px;${sel ? 'background:rgba(80,140,220,0.25)' : ''}">
-      ${u.name} · HP ${u.health}
-    </div>`)
-  }
-  host.innerHTML = rows.join('')
-  for (const row of host.querySelectorAll('[data-uid]')) {
-    row.addEventListener('click', () => {
-      const id = parseInt(row.dataset.uid, 10)
-      scene.selectOnly(id)
-    })
-  }
-}
-
-// openSandboxSpawnPicker — opens a small side-colour popout anchored
-// at the Spawn button.  When the user picks a side, the existing
-// Open Unit dialog opens with the picked side stashed on
-// window.__sandboxSpawnPendingSide; the confirm handler then
-// passes that side into sandboxView.beginPlacement so the unit
-// spawns with the appropriate team-colour recolour.
+// openSandboxSpawnPicker — opens a small side-colour popout
+// anchored against the source element the user pressed.  When the
+// user picks a side, the existing Open Unit dialog opens with the
+// picked side stashed on window.__sandboxSpawnPendingSide; the
+// confirm handler then passes that side into
+// sandboxView.beginPlacement so the unit spawns with the
+// appropriate team-colour recolour.
+//
+// `sourceEl` (optional) is the button the user clicked — the
+// popout anchors directly below it.  Callers pass their own button
+// (ribbon Spawn, floating-panel Spawn) so the popout always lands
+// adjacent to the gesture.  Falls back to the ribbon button if
+// nothing's supplied (keeps existing keyboard-driven callers
+// working).
 //
 // Lazy-creates the popout on first call; subsequent calls just
-// position + show it.  Click-outside dismisses without choosing.
-function openSandboxSpawnPicker() {
+// re-position + show it.  Click-outside dismisses without choosing.
+function openSandboxSpawnPicker(sourceEl = null) {
   let popout = document.getElementById('sandbox-side-popout')
   if (!popout) {
     popout = document.createElement('div')
@@ -17616,10 +17650,13 @@ function openSandboxSpawnPicker() {
       popout.style.display = 'none'
     }, true)
   }
-  // Anchor under the ribbon Spawn button if it's visible, else under
-  // the floating Sandbox panel's Spawn button.  Pixel-position the
-  // popout right below the button with a small gap.
-  const anchor = document.getElementById('sandbox-rb-spawn')
+  // Anchor under the source element the caller passed (the button
+  // the user actually pressed); fall back to the ribbon Spawn
+  // button when no source is supplied, then the floating-panel
+  // Spawn button.  Pixel-position the popout right below the
+  // button with a small gap.
+  const anchor = sourceEl
+    || document.getElementById('sandbox-rb-spawn')
     || document.getElementById('sandbox-spawn')
   if (anchor) {
     const r = anchor.getBoundingClientRect()

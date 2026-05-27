@@ -15,10 +15,11 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { spawnProjectile, SmokeTrailManager } from './model3d/weapon-driver.js'
+import { spawnProjectile } from './model3d/weapon-driver.js'
 import { ArmedCursor } from './model3d/armed-cursor.js'
 import { shouldForceTarget } from './model3d/force-target.js'
 import { GameEngine } from './model3d/game-engine.js'
+import { BaseView } from './model3d/view-base.js'
 
 const SLOT_INDEX = { primary: 0, secondary: 1, tertiary: 2 }
 const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
@@ -26,9 +27,16 @@ const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
 const TA_TICK_HZ = 30                       // FBI rates are per-frame at 30 Hz.
 const TA_TURN_FULL = 65536                  // Full turn in TA angle units.
 
-export class MvControls {
+export class MvControls extends BaseView {
   // viewer: ModelViewer.  Provides .cob, .renderer, .canvas, .unitMeta.
+  // MvControls extends BaseView (view-base.js) so the Unit Editor
+  // shares the Command API, smoke-trail lifecycle, engine event sub
+  // bookkeeping, hotkey wiring, and getInspectorMv() proxy with the
+  // Sandbox.  The viewer-side specialisation is: getSelectedUnits()
+  // returns [this._engineUnit] (single-unit cardinality).  Everything
+  // else flows through BaseView's helpers.
   constructor(viewer) {
+    super()
     this.viewer = viewer
     this.armed = null                       // null | 'move' | 'primary' | 'secondary' | 'tertiary'
     this.targets = {
@@ -86,12 +94,12 @@ export class MvControls {
     // pruning keeps the typical count to whatever's actually visible
     // in the scene at that moment.
     this.activeProjectiles = { primary: [], secondary: [], tertiary: [] }
-    // Missile smoke-trail emitter — shared with Sandbox (weapon-driver
-    // SmokeTrailManager).  spawnProjectile registers a trail when it
-    // spawns a missile-kind shot; tick() advances all live trails at
-    // sim-time scaled rate so the wake matches the projectile's
-    // actual flight path through slow-mo / pause.
-    this._smokeTrails = new SmokeTrailManager()
+    // Missile smoke-trail emitter — owned by BaseView.  initSmokeTrails()
+    // lazily constructs the SmokeTrailManager and stores it on
+    // this._smokeTrails so spawnProjectile can register a trail when
+    // it spawns a missile.  tick() advances them via tickSmokeTrails()
+    // (also from BaseView) at the unified sim-rate.
+    this.initSmokeTrails()
     this.aimState = {
       primary:   slotInit(),
       secondary: slotInit(),
@@ -147,6 +155,37 @@ export class MvControls {
     // own setter keeps the legacy + new 4-arg paths in sync.
     if (this.viewer.renderer) {
       this.viewer.renderer.setUnitTransform(0, 0, 0, 0)
+    }
+  }
+
+  // ── BaseView abstract overrides ─────────────────────────────────
+
+  // Viewer always renders a single unit — getSelectedUnits returns
+  // the adopted engine-side unit when there is one, or an empty
+  // array before the engine is wired (very brief window during open).
+  // BaseView's Command API (issueMove / stop / etc.) fans out across
+  // whatever this returns; for viewer that's always 0 or 1 entries.
+  getSelectedUnits() { return this._engineUnit ? [this._engineUnit] : [] }
+  get engine() { return this._engine }
+  get runtime() { return this.viewer && this.viewer.cob ? this.viewer.cob.runtime : null }
+  get camera() { return this.viewer && this.viewer.renderer ? this.viewer.renderer.camera : null }
+
+  // getInspectorMv returns the proxy shape studio.js's
+  // refreshMvInspectors panels expect.  Effects + Audio aggregate
+  // across every binding via BaseView.wrapCobWithAggregate — the
+  // viewer always has a single engine unit, so the aggregator's
+  // walk hits exactly one binding.  Symmetric with sandbox's
+  // implementation: both views use the SAME aggregator, so the
+  // panels are 100% common across view types.  The wrapper uses
+  // Object.create so it doesn't mutate the live binding's own
+  // .particles / .audio refs (which the binding's own emit helpers
+  // rely on).
+  getInspectorMv() {
+    const cob = this.viewer ? this.viewer.cob : null
+    return {
+      camera: this.camera,
+      renderer: this.viewer ? this.viewer.renderer : null,
+      cob: cob ? this.wrapCobWithAggregate(cob) : null,
     }
   }
 
@@ -213,28 +252,14 @@ export class MvControls {
       s.burstShotsLeft = 0
       s.nextBurstShotAtMs = 0
     }
-    // Drop every slot's engine weapon target so the SM stops cycling
-    // reloads against a phantom target.  Done before TargetCleared
-    // so the engine doesn't observe the BOS reset mid-fire.
-    for (const slot of SLOT_NAMES) this._setEngineWeaponTarget(slot, null)
-    // Run the unit's BOS target-cleared hook — the standard TA
-    // mechanism for resetting per-aim state (aimtype, bAiming,
-    // turret rotations).  Pass weapon index 0 as the legacy `which`
-    // argument; the BOS scripts ignore it but the COB runtime
-    // expects a value on the locals stack.  Force-restart by killing
-    // any already-running TargetCleared / RestorePosition threads
-    // first — without this the Stop button would silently no-op if
-    // the user pressed it WHILE a previous Stop's TargetCleared was
-    // still mid-animation, leaving the unit in a half-reset pose
-    // until that thread finally drained.
-    const cob = this.viewer.cob
-    if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
-      if (cob.unit && typeof cob.unit.killThreadsByName === 'function') {
-        cob.unit.killThreadsByName('TargetCleared')
-        cob.unit.killThreadsByName('RestorePosition')
-      }
-      cob.start('TargetCleared', [0])
-    }
+    // Engine-side cleanup — clearing every weapon slot, force-
+    // restarting TargetCleared / RestorePosition, dispatching
+    // StopMoving — is all centralised in engine.stopUnit (called via
+    // BaseView.stop()).  The viewer just adds its own UI-state
+    // teardown above (armed cursor, MvControls' per-slot aim
+    // threads, isMoving cancel) and lets the engine helper handle
+    // the rest.  Symmetric with sandbox's #stopSelected.
+    this.stop()
     this._refreshButtons()
     this._refreshArmingClass()
     this._updateArmedCursor()
@@ -435,8 +460,10 @@ export class MvControls {
     // No duplicate firing-piece resolution or ballistic recompute
     // lives here any more — task #249 consolidated both into the
     // engine.
-    this._engineSubs = []
-    this._engineSubs.push(this._engine.on('fire', (ev) => {
+    // BaseView tracks engine unsubscribe closures in _engineSubs for
+    // us — subscribeEngine() returns the unsub closure too in case
+    // callers want to detach early.  disposeBase() sweeps the list.
+    this.subscribeEngine('fire', (ev) => {
       if (!ev.weapon || !ev.weapon.name) return
       const gravity = (this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function')
         ? this.viewer.renderer.getGravity() : 80
@@ -459,7 +486,7 @@ export class MvControls {
         const slotKey = SLOT_NAMES[ev.slot]
         this._recordShot(slotKey, result.anchor, result.velocity, result.lifeMs)
       }
-    }))
+    })
     return this._engine
   }
 
@@ -504,10 +531,13 @@ export class MvControls {
   }
 
   // tick is called from the renderer's per-frame callback.  dtMs is
-  // wall-clock, scaled by runtime.playbackRate so slow-mo applies.
+  // wall-clock; rate / dtSimMs come from BaseView.simRate() which
+  // returns 0 when paused and playbackRate otherwise — the same gate
+  // the engine uses for particles, so sub-frame timing stays in
+  // lock-step with sim-time everywhere.
   tick(dtMs) {
     if (!this.viewer.cob) return
-    const rate = this.viewer.cob.runtime?.playbackRate ?? 1
+    const rate = this.simRate()
     const dtSec = (dtMs * rate) / 1000
     // Sim-scaled dtMs for sub-systems that gate on time but want to
     // honour slow-mo / fast-forward (ship wakes emit on a 100 ms
@@ -531,12 +561,11 @@ export class MvControls {
     // until at least one tick later.
     this._pruneActiveProjectiles()
     this._updateShipWake(dtSimMs)
-    // Smoke-trail emitter — moved off setInterval(wall-clock 40 ms)
-    // onto the per-frame tick so trail puffs scale with sim speed.
-    // At 0.01× a slow-flying laser leaves puffs every 4 s wall ≈
-    // 40 ms sim, matching what the projectile's slowed velocity
-    // actually traces out.
-    this._smokeTrails.tick(dtSimMs)
+    // Smoke-trail advance — BaseView.tickSmokeTrails handles the
+    // pause + playback-rate scaling internally.  At 0.01× a slow-
+    // flying laser leaves puffs every 4 s wall ≈ 40 ms sim, matching
+    // what the projectile's slowed velocity actually traces out.
+    this.tickSmokeTrails(dtMs)
     // Hover-preview overlay tracks the camera (which may auto-rotate
     // or be orbited by the user), so the projected screen position
     // refreshes every frame.  Stop-button live-state too.
@@ -589,11 +618,13 @@ export class MvControls {
       this._wiredCanvas = null
       this._canvasHandlers = null
     }
-    // Drop any live smoke trails so the unit-swap doesn't leave
-    // them emitting puffs into the next unit's pool.  No interval
-    // handles to clear — trails are ticked from this.tick() and the
-    // tick won't run after disposal anyway.
-    if (this._smokeTrails) this._smokeTrails.clear()
+    // disposeBase tears down BaseView-owned scaffolding (engine
+    // event subscriptions, the SmokeTrailManager, the unit-hotkey
+    // listener).  Replaces the inline smoke-trail clear + engine-
+    // sub sweep we used to maintain here.  Called BEFORE the viewer
+    // canvas + armed-cursor teardown so any RAF closures the engine
+    // handlers might fire into see clean refs.
+    this.disposeBase()
     if (this._previewOverlay) {
       this._previewOverlay.remove()
       this._previewOverlay = null
@@ -1014,6 +1045,25 @@ export class MvControls {
   _wireKeyboard() {
     if (this._keyHandlerWired) return
     this._keyHandlerWired = true
+    // Order keys (M/A/F/D/S/T) come from the shared unit-hotkeys
+    // module via BaseView.wireHotkeys — viewer + sandbox both bind
+    // the same keymap so muscle memory carries across.  Slot-arm
+    // callbacks route into _armSlotHotkey (which respects the
+    // disabled state of the visible Controls buttons), Stop into
+    // _stopAllTargets, T into setTracking with the viewer's
+    // tracking flag.  Allowed() always returns true here — the
+    // viewer is always single-unit, so there's no "no selection"
+    // edge case to gate on (button.disabled handles per-slot gating
+    // inside _armSlotHotkey).
+    this.wireHotkeys({
+      dialogId: 'model-viewer-dialog',
+      allowed: () => true,
+      onCommand: (cmd) => this._armSlotHotkey(cmd),
+      onStop:    () => this._stopAllTargets(),
+      onTrack:   () => this.setTracking(!this.tracking),
+    })
+    // Runtime-control keys (Space, +/-) stay viewer-specific — they
+    // drive sim playback rate / paused state, not unit orders.
     document.addEventListener('keydown', (e) => {
       const dlg = document.getElementById('model-viewer-dialog')
       if (!dlg || dlg.classList.contains('hidden')) return
@@ -1021,13 +1071,6 @@ export class MvControls {
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      const k = (e.key || '').toLowerCase()
-      if (k === 't') { e.preventDefault(); this.setTracking(!this.tracking); return }
-      if (k === 'm') { e.preventDefault(); this._armSlotHotkey('move'); return }
-      if (k === 'a') { e.preventDefault(); this._armSlotHotkey('primary'); return }
-      if (k === 'f') { e.preventDefault(); this._armSlotHotkey('secondary'); return }
-      if (k === 'd') { e.preventDefault(); this._armSlotHotkey('tertiary'); return }
-      if (k === 's') { e.preventDefault(); this._stopAllTargets(); return }
       // Spacebar — toggle the runtime between paused and running.
       // Mirrors the merged Pause/Resume button so power-users can
       // drive the simulation without leaving the canvas.  e.key for

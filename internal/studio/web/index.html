@@ -472,8 +472,8 @@
                 <span class="ico">🎮</span><span>Controls</span><span class="menu-check">✓</span>
               </button>
               <button id="mv-view-staticvars" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
-                      title="Toggle the Static Vars overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.">
-                <span class="ico">📊</span><span>Static Vars</span><span class="menu-check">✓</span>
+                      title="Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.">
+                <span class="ico">📊</span><span>Unit Variables</span><span class="menu-check">✓</span>
               </button>
               <button id="mv-view-camera" class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
                       title="Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas's current frame rate.">
@@ -563,6 +563,63 @@
             <button class="tool-btn" id="sandbox-rb-reset-cam" title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom.">
               <span class="ico">📷</span><span class="lbl">Reset</span>
             </button>
+          </div>
+        </div>
+        <!-- Right-aligned Developer Tools dropdown — visibility toggles
+             for the floating inspector panels.  Pushed to the far end
+             of the ribbon via margin-left:auto in the CSS so it always
+             sits opposite the leftmost (Spawn) section. -->
+        <div class="ribbon-section ribbon-section-right sandbox-rb-devtools-section">
+          <div class="ribbon-label">Developer Tools</div>
+          <div class="ribbon-group">
+            <!-- Matches the unit-editor's ribbon-dropdown structure
+                 so wireModelRibbonDropdown can drive it:
+                 .ribbon-dropdown > [.ribbon-dropdown-btn + .ribbon-dropdown-popup].
+                 The popup is fixed-positioned by JS below the button,
+                 escaping the ribbon's overflow clip. -->
+            <div class="ribbon-dropdown" id="sandbox-rb-devtools-dropdown">
+              <button class="tool-btn ribbon-dropdown-btn" id="sandbox-rb-devtools-btn"
+                      title="Toggle visibility of the floating inspector panels.">
+                <span class="ico">🛠</span><span class="lbl">Panels</span><span class="chev-down">▾</span>
+              </button>
+              <div class="ribbon-dropdown-popup hidden" id="sandbox-rb-devtools-popup">
+                <!-- Developer Controls — toggles the per-unit developer
+                     editors at the bottom of the Controls panel
+                     (Active toggle, Health, Build %, Build stance,
+                     Armoured).  Move / Fire orders are NOT developer-
+                     level and stay visible regardless.  data-dev-toggle
+                     selects this row in the click handler so it bypasses
+                     the standard panel show/hide logic. -->
+                <button class="menu-row toggle-row" data-on="1" data-dev-toggle="controls-dev-section"
+                        title="Developer Controls — show / hide the editors at the bottom of the Controls panel that let you set Health, Build %, Build stance, and the other per-unit COB ports.">
+                  <span class="ico">🎮</span><span>Developer Controls</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-scripts"
+                        title="Runtime overlay — active script threads, instruction counters, sim ticks.">
+                  <span class="ico">⏱</span><span>Runtime</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-effects"
+                        title="Effects overlay — every live particle across every binding (projectiles, smoke, sparks).">
+                  <span class="ico">✨</span><span>Effects</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-audio"
+                        title="Audio overlay — every sound currently playing across every unit.">
+                  <span class="ico">🔊</span><span>Audio</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="sandbox-panel"
+                        title="Sandbox Controls — the floating Spawn panel.">
+                  <span class="ico">🛠</span><span>Sandbox Controls</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-camera"
+                        title="Renderer overlay — camera pose, FPS, tracking checkbox.">
+                  <span class="ico">🎥</span><span>Renderer</span><span class="menu-check">✓</span>
+                </button>
+                <button class="menu-row toggle-row" data-on="0" data-panel="mv-inspector-staticvars"
+                        title="Unit Variables overlay — current value of every COB `static-var` the scripts share.">
+                  <span class="ico">📊</span><span>Unit Variables</span><span class="menu-check">✓</span>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -697,10 +754,10 @@
           </div>
         </div>
       </aside>
-      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag this header to move the Static Vars overlay">
+      <aside class="mv-inspector hidden" id="mv-inspector-staticvars" title="Drag this header to move the Unit Variables overlay">
         <div class="mv-inspector-header" id="mv-inspector-staticvars-header">
           <span class="minimap-grip" title="Drag to move this panel">⠿</span>
-          <span>Static Vars</span>
+          <span>Unit Variables</span>
           <button class="minimap-toggle mv-inspector-toggle" data-panel="mv-inspector-staticvars"
                   title="Collapse this panel to a thin header bar (click again to expand).">−</button>
           <button class="minimap-toggle mv-inspector-close" data-panel="mv-inspector-staticvars"

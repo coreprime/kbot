@@ -260,17 +260,60 @@ export class GameEngine {
       dead: false,
       buildPercent: 100,
       meta,
+      // Per-unit COB port state.  Sandbox units used to share a single
+      // global port object on the viewer, which made per-unit edits in
+      // the Controls panel impossible (everything routed to one bucket).
+      // Each engine unit now owns its own, mirroring the viewer's
+      // ModelViewer.cobPorts shape so the inspector renderer doesn't
+      // need to special-case.  Defaults match the viewer's defaults so
+      // standing-orders + activation behave identically in both modes.
+      cobPorts: {
+        activation: 1,
+        moveOrders: 2,
+        fireOrders: 2,
+        inBuildStance: 0,
+        armoured: 0,
+        yardOpen: 0,
+        buggerOff: 0,
+      },
       // Per-slot weapon SM state.  See _makeSlotState() commentary.
       weaponSlots: [_makeSlotState(), _makeSlotState(), _makeSlotState()],
     }
     // Wire the COB's GET_UNIT_VALUE hook so HEALTH / BUILD_PERCENT
-    // reads off this instance's live state.
+    // and the per-unit port state read off this instance.  Matches the
+    // port indices the unit editor's model-viewer.js uses so the COB
+    // scripts behave identically across modes.
     if (cobUnit) {
       cobUnit.hooks.getUnitValue = (port) => {
+        const p = unit.cobPorts
         switch (port) {
+          case 1:  return p.activation | 0      // ACTIVATION
+          case 2:  return p.moveOrders | 0      // STANDINGMOVEORDERS
+          case 3:  return p.fireOrders | 0      // STANDINGFIREORDERS
           case 4:  return Math.max(0, 100 - (100 - unit.health) | 0)  // HEALTH
+          case 5:  return p.inBuildStance | 0   // INBUILDSTANCE
           case 6:  return Math.max(0, 100 - (unit.buildPercent | 0))  // BUILD_PERCENT_LEFT
+          case 18: return p.yardOpen | 0        // YARD_OPEN
+          case 19: return p.buggerOff | 0       // BUGGER_OFF
+          case 20: return p.armoured | 0        // ARMORED
           default: return 0
+        }
+      }
+      // SET_UNIT_VALUE writes from scripts (factories flipping IN_BUILD_STANCE,
+      // damage scripts toggling ARMORED).  Mirrors the model-viewer's
+      // setUnitValue hook so script semantics stay consistent.
+      cobUnit.hooks.setUnitValue = (port, value) => {
+        const v = value | 0
+        const p = unit.cobPorts
+        switch (port) {
+          case 1:  p.activation    = v ? 1 : 0; break
+          case 2:  p.moveOrders    = Math.max(0, Math.min(2, v)); break
+          case 3:  p.fireOrders    = Math.max(0, Math.min(2, v)); break
+          case 5:  p.inBuildStance = v ? 1 : 0; break
+          case 18: p.yardOpen      = v ? 1 : 0; break
+          case 19: p.buggerOff     = v ? 1 : 0; break
+          case 20: p.armoured      = v ? 1 : 0; break
+          default: break
         }
       }
     }
@@ -364,8 +407,36 @@ export class GameEngine {
       try { u.binding.start('StopMoving') } catch { /* ignore */ }
     }
     if (u.binding && u.binding.hasScript('TargetCleared')) {
+      // Force-restart TargetCleared so a held Stop with a previous
+      // run mid-flight gets the latest reset.  Symmetric with the
+      // Viewer-side Stop handler that already does this; pulling the
+      // logic into the engine lets every caller (Viewer + Sandbox +
+      // studio's Controls grid handler) share one source of truth.
+      const cu = u.cobUnit
+      if (cu && typeof cu.killThreadsByName === 'function') {
+        cu.killThreadsByName('TargetCleared')
+        cu.killThreadsByName('RestorePosition')
+      }
       try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
     }
+  }
+
+  // stopUnit is the canonical "halt this unit completely" entry point.
+  // Mirrors clearOrders semantics — name kept for back-compat — but is
+  // the documented name callers (BaseView.stop, studio.js Controls
+  // grid handler, sandbox-view #stopSelected) should reach for.
+  stopUnit(unitId) { this.clearOrders(unitId) }
+
+  // stopUnits drops orders on every unit in the iterable.  Returns
+  // the number of units actually halted (skips ids the engine doesn't
+  // know about).  Used by multi-select Stop buttons + the S hotkey
+  // so the caller doesn't need its own for-each loop.
+  stopUnits(unitIds) {
+    let n = 0
+    for (const id of unitIds) {
+      if (this._units.has(id)) { this.stopUnit(id); n++ }
+    }
+    return n
   }
 
   // setWeaponTarget points a slot at a target and lets the per-tick

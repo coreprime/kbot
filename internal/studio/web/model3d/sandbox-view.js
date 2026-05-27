@@ -10,8 +10,10 @@
 // Built as a sibling to ModelViewer rather than a subclass — the two
 // share the renderer + loader + palette but differ in everything
 // else (single vs multi unit, free camera vs scene camera, click-
-// gestures, etc.).  Keeping them separate avoids twisting either
-// class out of shape.
+// gestures, etc.).  Both extend BaseView (view-base.js) which owns
+// the unified Command API (issueMove / issueAttack / issueArmedFire /
+// stop / toggleTracking), engine event sub bookkeeping, smoke-trail
+// lifecycle, hotkey wiring, and the getInspectorMv() panel adapter.
 
 import { ModelLoader } from './model-loader.js'
 import { ModelRenderer } from './model-renderer.js'
@@ -21,12 +23,13 @@ import { TAPalette } from './palette.js'
 import { SandboxScene } from './sandbox-scene.js'
 import { attachOrbitControls } from './camera-controls.js'
 import { ArmedCursor } from './armed-cursor.js'
-import { spawnProjectile, SmokeTrailManager, SFX_FIRE_FLASH } from './weapon-driver.js'
-import { shouldForceTarget } from './force-target.js'
+import { spawnProjectile, SFX_FIRE_FLASH } from './weapon-driver.js'
 import { teamColorForSide } from './team-colors.js'
+import { BaseView } from './view-base.js'
 
-export class SandboxView {
+export class SandboxView extends BaseView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
+    super()
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
     // The canvas is appended into a host stage by attach() and pulled
@@ -40,7 +43,11 @@ export class SandboxView {
       c.className = 'model-viewer-canvas'
       return c
     })()
+    // statusEl flows through to BaseView's setStatus().  Keep the
+    // `this.statusEl` alias too — external callers (the spawn
+    // dialog, ribbon handlers) reach in via that name.
     this.statusEl = statusEl
+    this._statusEl = statusEl
     this.onModelLoaded = onModelLoaded
     this.renderer = null
     this.camera = null
@@ -120,22 +127,19 @@ export class SandboxView {
             this.setTracking(false)
           }
         },
-        // Sandbox claims plain left-drag for placement-drag only —
-        // every other case falls through to camera-controls so plain
-        // left-drag orbits exactly like the unit editor.  Drag-rect
-        // selection is left out for now: it competes with the orbit
-        // gesture users explicitly asked for, and click-to-select +
-        // shift-click-add are enough for the multi-unit cases the
-        // sandbox needs.  _pendingCmd / _placement claim falls through
-        // first because those have higher priority than camera moves.
-        //
-        // Holding ALT on left-drag claims the gesture for rectangle
-        // selection — a modifier-gated escape hatch for the power-user
-        // workflow without re-stealing the default orbit gesture.
+        // Sandbox claims:
+        //   - placement-drag while a unit is queued for spawn
+        //   - SHIFT + left-drag for the rectangle-select gesture
+        //     (camera-controls.js no longer treats shift as a pan
+        //     modifier, so the gesture is ours to grab)
+        // Every other left-drag falls through to camera-controls so
+        // plain left-drag orbits exactly like the unit editor.
+        // _pendingCmd / _placement take priority — their commit-on-
+        // click flow shouldn't be eaten by a stray drag-select.
         onLeftDragStart: (e) => {
           if (this._pendingCmd) return false
           if (this._placement) return this.#beginPlacementDrag(e)
-          if (e.altKey) return this.#beginDragSelect(e)
+          if (e.shiftKey) return this.#beginDragSelect(e)
           return false
         },
       })
@@ -166,20 +170,14 @@ export class SandboxView {
       // illumination on nearby units; the Viewer path got the light
       // for free because binding.tick handles it for the single unit.
       this.scene.engine.setRenderer(this.renderer)
-      // Active missile smoke-trail emitter.  spawnProjectile schedules
-      // a trail whenever it spawns a missile-kind projectile and we
-      // pass this manager in; the per-frame onAfterFrame tick advances
-      // it.  Shared SmokeTrailManager class (weapon-driver.js) so the
-      // single-unit Viewer and the multi-unit Sandbox use one impl.
-      this._smokeTrails = new SmokeTrailManager()
-      // Wire the rendering side of the game engine.  The engine is
-      // headless — it emits 'fire' / 'death' / etc. and we translate
-      // those into particles + sounds.  Subscriptions return
-      // unsubscribe closures; we hold them so dispose() can cleanly
-      // detach (no stale handlers calling into a freed view).
-      this._engineSubs = []
-      const eng = this.scene.engine
-      this._engineSubs.push(eng.on('fire', (ev) => {
+      // SmokeTrailManager + engine event subscriptions are scaffolded
+      // by BaseView — initSmokeTrails returns the lazy instance, and
+      // subscribeEngine remembers the unsubscribe closures so
+      // disposeBase() tears them down cleanly.  spawnProjectile and
+      // the death-puff handler reach into base-owned state via
+      // this._smokeTrails.
+      this.initSmokeTrails()
+      this.subscribeEngine('fire', (ev) => {
         // Spawn the visible projectile through the shared weapon
         // driver.  Passing the SmokeTrailManager lets spawnProjectile
         // register a missile trail inline when the chosen visual
@@ -200,8 +198,18 @@ export class SandboxView {
             smokeTrails: this._smokeTrails,
           })
         } catch { /* ignore */ }
-      }))
-      this._engineSubs.push(eng.on('death', (ev) => {
+      })
+      // move-stop fires when a unit reaches its destination (or its
+      // move target is cleared by the engine after the prey dies).
+      // Play the TA arrived1-bank ack so the user gets the familiar
+      // "order complete" voice without each view having to wire its
+      // own movement-completion hook.
+      this.subscribeEngine('move-stop', (ev) => {
+        if (ev && ev.unit) {
+          this.playUnitSoundRandom(ev.unit, ['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
+        }
+      })
+      this.subscribeEngine('death', (ev) => {
         // Death puff so the kill reads visually.  Engine has already
         // marked the unit dead + cleared its orders.
         const b = ev.unit && ev.unit.binding
@@ -209,7 +217,7 @@ export class SandboxView {
         b.particles.emit(SFX_FIRE_FLASH, ev.anchor, {
           size: 32, lifeMs: 600, color: [1.6, 0.6, 0.2, 1.0],
         })
-      }))
+      })
     }
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
@@ -247,22 +255,23 @@ export class SandboxView {
     // animation applied per-tick is visible immediately.
     this.renderer.onAfterFrame = (dtMs) => {
       if (this.scene) this.scene.tick(dtMs)
-      // Advance any in-flight missile smoke trails — scaled by
-      // playback rate so slow-mo doesn't bunch puffs at the slowed
-      // projectile's position.  Shared SmokeTrailManager owns the
-      // emit cadence + position re-derivation.
-      // Trail cadence + position math run on sim-time, so they must
-      // mirror the engine's particle gate: scale by playbackRate, AND
-      // freeze (rate = 0) when the runtime is paused — otherwise
-      // smoke puffs keep streaming out of frozen projectiles.
-      const rt = this.scene && this.scene.runtime
-      const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
-      this._smokeTrails.tick(dtMs * rate)
+      // Advance in-flight missile smoke trails through the BaseView
+      // helper.  tickSmokeTrails scales by playbackRate and freezes
+      // (rate = 0) on pause — the unified gate every view shares so
+      // smoke puffs stop streaming out of a frozen missile without
+      // each view re-deriving the pause/rate math.
+      this.tickSmokeTrails(dtMs)
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
       // isn't active (early-out inside).
       this.#refreshShiftPreview()
+      // Cursor mode depends on selection state, hover state, and
+      // armed command — driving it per-frame is the simplest way
+      // to keep it in sync with selection mutations from any source
+      // (click, drag-rect, Esc, programmatic).  ArmedCursor.setSlot
+      // is a cheap no-op when nothing changed.
+      this.#refreshDefaultCursor()
     }
     this.#wirePointer()
     this.#refreshDefaultCursor()
@@ -617,8 +626,25 @@ export class SandboxView {
         n++
       }
     }
-    if (n > 0) this.#setStatus(`Selected ${n} unit${n === 1 ? '' : 's'}.`)
-    else this.#setStatus('Selection cleared.')
+    if (n > 0) {
+      this.#setStatus(`Selected ${n} unit${n === 1 ? '' : 's'}.`)
+      // Play the TA select1-bank ack on the FIRST unit in the new
+      // selection.  Single voice rather than N voices so a drag-rect
+      // grabbing a dozen Peewees doesn't fire a dozen acks at once.
+      this.#playSelectAck()
+    } else {
+      this.#setStatus('Selection cleared.')
+    }
+  }
+
+  // #playSelectAck plays the TA select1-bank sound (select1/2/...)
+  // on the first unit in the current selection.  Used by every
+  // selection-changing gesture (single click, drag rect, ribbon
+  // Select All) so the user gets the familiar TA acknowledgement.
+  #playSelectAck() {
+    const units = this.getSelectedUnits()
+    if (units.length === 0) return
+    this.playUnitSoundRandom(units[0], ['select1', 'select2', 'select3', 'select4', 'select5'])
   }
 
   // #refreshShiftPreview shows / hides the destination + attack-target
@@ -842,13 +868,23 @@ export class SandboxView {
 
   // #refreshDefaultCursor routes the ambient-cursor decision through
   // the shared ArmedCursor overlay so the user sees the TA animated
-  // glyph (cursornormal idle, cursorselect when hovering a unit)
-  // instead of a static-first-frame CSS cursor: url(...) which most
-  // browsers refuse to animate.  Armed slot (move / attack / fire)
-  // takes priority over the ambient slot — set via setArmed inside
-  // setPendingCommand.  When placement is active the placement
-  // ghost is the visual cursor; we suppress both ambient + armed
-  // overlays via setAmbient(null) + setArmed(null).
+  // glyph instead of a static-first-frame CSS cursor: url(...) which
+  // most browsers refuse to animate.
+  //
+  // Cursor mode reflects WHAT WILL HAPPEN if the user clicks right
+  // now — the click is the implicit verb, the glyph is the noun:
+  //
+  //   placement active     → no overlay (ghost preview IS the cursor)
+  //   armed command active → that command's glyph (move/attack/...)
+  //   no selection, ground → cursornormal (click is a no-op)
+  //   no selection, unit   → cursorselect  (click will select)
+  //   selection, friendly  → cursorselect  (click will swap selection)
+  //   selection, enemy     → cursorattack  (click will attack)
+  //   selection, ground    → cursormove    (click will Move there)
+  //
+  // The hover-unit id + side comparison match the actual click
+  // routing in #onClick so the cursor never lies about what's about
+  // to happen.
   #refreshDefaultCursor() {
     if (!this.canvas) return
     if (!this._armedCursor) {
@@ -862,11 +898,28 @@ export class SandboxView {
       this._armedCursor.setArmed(null)
       return
     }
-    // Ambient = select-on-unit-hover OR normal-when-empty.  _lastHoverUnitId
-    // is maintained by #onMouseMove — pick the matching glyph here so
-    // both the keyboard-driven path (setPendingCommand release) and
-    // the mouse-driven hover loop converge on the same state.
-    const ambient = this._lastHoverUnitId ? 'select' : 'normal'
+    const sel = this.scene ? this.scene.selected : null
+    const hasSelection = sel && sel.size > 0
+    const hoverId = this._lastHoverUnitId || 0
+    let ambient
+    if (hoverId) {
+      // Hovering a unit — clicking will SELECT it (friendly) or
+      // ATTACK it (enemy, only when we have a selection of our own
+      // to dispatch).  Same-side check matches #onClick's friendly-
+      // fire prevention so the cursor + the click agree.
+      const hovered = this.scene && this.scene.unitById(hoverId)
+      if (hasSelection && hovered && !sel.has(hovered.id)) {
+        const selUnits = [...sel].map((id) => this.scene.unitById(id)).filter(Boolean)
+        const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((hovered.side | 0)))
+        ambient = sameSide ? 'select' : 'attack'
+      } else {
+        ambient = 'select'
+      }
+    } else {
+      // Hovering ground — clicking moves the selection (if any) or
+      // is a no-op (if not).
+      ambient = hasSelection ? 'move' : 'normal'
+    }
     this._armedCursor.setAmbient(ambient)
     this._armedCursor.setArmed(this._pendingCmd)
   }
@@ -911,21 +964,20 @@ export class SandboxView {
     const entities = []
     for (const u of this.scene.units()) {
       if (!u.model) continue
-      // Auto-lift by -bounds.min[1] so the unit's bottom-most
-      // vertex sits flush with the ground plane (y = 0).  Different
-      // units use different model-origin conventions — some have it
-      // at the feet (min.y ≈ 0), some at the centre of mass (min.y
-      // negative).  Without this lift, units with a non-zero min.y
-      // float above (or sink into) the flat ground.
-      const lift = u.model.bounds ? -u.model.bounds.min[1] : 0
+      // No bounds-based lift: TA models are authored with their feet
+      // pieces (heel/toes/wheel/etc.) resting at world y=0, so
+      // placing the unit at y=0 grounds it naturally — matching the
+      // unit-editor convention.  An earlier bounds-min lift was
+      // added to compensate for "floating" units (round 206), but it
+      // over-corrects on large units: Krogoth's gun-flare pieces
+      // extend to y=-15 while its actual heel pieces sit at y=0, so
+      // the lift would shove the whole unit 15 wu above ground.
       // Heading offset by +π — mirrors the single-unit viewer's
-      // _applyRendererTransform convention (mv-controls.js:792).
-      // The model loader X-flips every vertex (so right-handed GL
-      // matches TA's left-handed authoring), which has the side
-      // effect of pointing the unit's "front" at the OPPOSITE of
-      // its logical heading.  +π compensates so the unit faces the
-      // direction it walks.  Without this fix, units appear to
-      // moonwalk backwards toward their move target.
+      // _applyRendererTransform convention.  The model loader X-
+      // flips every vertex (so right-handed GL matches TA's left-
+      // handed authoring), which has the side effect of pointing the
+      // unit's "front" at the opposite of its logical heading.  +π
+      // compensates so the unit faces the direction it walks.
       // Per-unit team colour from the unit's side field — engine owns
       // the side index, team-colors.js maps it to the renderer's
       // [r,g,b] tuple (or null for side 0, the "no recolour" sentinel
@@ -934,7 +986,7 @@ export class SandboxView {
         model: u.model,
         binding: u.binding,
         buildPercent: u.buildPercent,
-        transform: { x: u.pos.x, y: u.pos.y + lift, z: u.pos.z, headingRad: u.heading + Math.PI },
+        transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
         teamColor: teamColorForSide(u.side),
       })
@@ -945,7 +997,9 @@ export class SandboxView {
     // solid main pass.
     if (this._placement && this._placement.model) {
       const p = this._placement
-      const lift = p.model.bounds ? -p.model.bounds.min[1] : 0
+      // Ghost matches the spawned unit's grounding rule — no lift,
+      // feet at y=0.  Symmetric with the live-unit loop above.
+      const lift = 0
       // Ghost heading — defaults to π (the renderer's +π offset
       // produces a unit facing +Z, the conventional "up" on the
       // overhead grid).  When the user click-drags during placement
@@ -994,6 +1048,11 @@ export class SandboxView {
       if (e.key === 'Shift') updateShift(false)
     })
     window.addEventListener('blur', () => updateShift(false))
+    // Esc cascade is sandbox-specific (placement → armed cmd →
+    // selection), so it stays here as a bespoke listener.  The
+    // shared M/A/F/D/S/T keymap is wired separately via
+    // BaseView.wireHotkeys (attachUnitHotkeys) so both views agree
+    // on the keymap definition without copy-pasted branches.
     window.addEventListener('keydown', (e) => {
       const dlg = document.getElementById('model-viewer-dialog')
       const sandboxActive = dlg && dlg.classList.contains('sandbox-mode') && !dlg.classList.contains('hidden')
@@ -1002,114 +1061,76 @@ export class SandboxView {
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        // Cascade: placement → armed cmd → selection.  Each Escape
-        // press peels off one level of "in progress" state so the
-        // user can back out of a multi-step gesture without losing
-        // their entire context in one keystroke.
-        if (this._placement) {
-          this.cancelPlacement()
-        } else if (this._pendingCmd) {
-          this.setPendingCommand(null)
-          this.#setStatus('Cancelled.')
-        } else if (this.scene && this.scene.selected.size > 0) {
-          this.scene.selectClear()
-          this.#setStatus('Selection cleared.')
-        }
-        return
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      // Cascade: placement → armed cmd → selection.  Each Escape
+      // press peels off one level of "in progress" state so the
+      // user can back out of a multi-step gesture without losing
+      // their entire context in one keystroke.
+      if (this._placement) {
+        this.cancelPlacement()
+      } else if (this._pendingCmd) {
+        this.setPendingCommand(null)
+        this.#setStatus('Cancelled.')
+      } else if (this.scene && this.scene.selected.size > 0) {
+        this.scene.selectClear()
+        this.#setStatus('Selection cleared.')
       }
-      const k = (e.key || '').toLowerCase()
-      if (k === 't') {
-        e.preventDefault()
-        this.toggleTracking()
-        return
-      }
-      // Order hotkeys — mirror the unit-editor mapping so muscle
-      // memory carries across both views:
-      //   M  arm Move          A  arm Primary attack
-      //   F  arm Secondary     D  arm Tertiary (d-gun etc)
-      //   S  Stop (clears every target slot + halts).
-      // No-op when nothing is selected so a stray keystroke doesn't
-      // arm a cursor that has nobody to dispatch to.  The unit editor
-      // has its own copy of these — keeping the two in sync requires
-      // editing both keymaps when adding new shortcuts.
-      if (k === 'm' || k === 'a' || k === 'f' || k === 'd') {
-        if (!this.scene || this.scene.selected.size === 0) return
-        e.preventDefault()
-        const cmd = (k === 'm') ? 'move'
-                  : (k === 'a') ? 'primary'
-                  : (k === 'f') ? 'secondary'
-                  : /* k === 'd' */ 'tertiary'
-        this.setPendingCommand(cmd)
-        return
-      }
-      if (k === 's') {
-        if (!this.scene || this.scene.selected.size === 0) return
-        e.preventDefault()
-        this.#stopSelected()
-        return
-      }
+    })
+    // Shared M/A/F/D/S/T keymap.  Routes Move/Primary/Secondary/
+    // Tertiary into setPendingCommand, Stop into #stopSelected, T
+    // into toggleTracking.  Gated on the selection being non-empty
+    // so a stray keystroke doesn't arm a cursor with no unit to
+    // dispatch to.  T is allowed even with no selection so the user
+    // can untrack the current target without re-selecting first.
+    this.wireHotkeys({
+      dialogId: 'model-viewer-dialog',
+      allowed: () => this.scene && this.scene.selected.size > 0,
+      onCommand: (cmd) => this.setPendingCommand(cmd),
+      onStop:    () => this.#stopSelected(),
+      onTrack:   () => this.toggleTracking(),
     })
   }
 
-  // #stopSelected halts every selected unit completely — drops every
-  // movement / attack target AND withdraws weapon slots from the
-  // engine SM (otherwise the per-tick #stepWeapon keeps cycling
-  // reloads at a phantom target).  Mirrors the Stop button + S
-  // hotkey behaviour the unit editor uses.  Pulled out as a method
-  // so the keymap above and the Controls grid handler in studio.js
-  // can share one implementation if we wire it up later.
+  // #stopSelected wraps BaseView.stop() with the sandbox-specific
+  // post-stop housekeeping: disarm a pending Move/Fire command + push
+  // a status string.  The actual per-unit teardown (moveTarget /
+  // attackTarget / weapon slots / StopMoving / TargetCleared) lives
+  // in engine.stopUnit and is called via BaseView.stop() so the
+  // viewer's Stop button + the studio.js Controls grid handler all
+  // converge on the same code path.
   #stopSelected() {
-    if (!this.scene) return
-    const engine = this.scene.engine
-    for (const id of this.scene.selected) {
-      const u = this.scene.unitById(id)
-      if (!u) continue
-      u.moveTarget = null
-      u.attackTarget = null
-      for (let slot = 0; slot < 3; slot++) {
-        engine.setWeaponTarget(u.id, slot, null)
-      }
-      if (u.binding && u.binding.hasScript('StopMoving')) {
-        try { u.binding.start('StopMoving') } catch { /* ignore */ }
-      }
-      if (u.binding && u.binding.hasScript('TargetCleared')) {
-        try { u.binding.start('TargetCleared', [0]) } catch { /* ignore */ }
-      }
-    }
+    const n = this.stop()
     if (this._pendingCmd) this.setPendingCommand(null)
-    this.#setStatus(`Stopped ${this.scene.selected.size} unit(s).`)
-  }
-
-  // toggleTracking — T-key handler.  Flips the current state.
-  toggleTracking() {
-    this.setTracking(!this.camera?.trackedTarget)
+    this.#setStatus(`Stopped ${n} unit(s).`)
   }
 
   // setTracking arms / disarms tracking explicitly.  Used by the
-  // Renderer panel's Tracking checkbox so it can drive the state
-  // directly (the T-key handler routes through here too via
-  // toggleTracking).  When arming, picks the FIRST selected unit;
-  // refuses (with a status hint) if nothing's selected so the
-  // gesture always reads as deliberate.  When disarming, unsets the
-  // camera's tracked target entirely.
+  // Renderer panel's Tracking checkbox.  Wraps BaseView's
+  // trackFirstSelected / untrack with sandbox-specific status text
+  // (the "select a unit first" hint when no selection is active).
+  // toggleTracking (inherited from BaseView) flips current state; we
+  // override it here only to route through this setStatus-wrapped
+  // setTracking so the T key + the checkbox share user-feedback text.
   setTracking(on) {
     if (!this.camera) return
     if (!on) {
-      this.camera.setTrackedTarget(null)
+      this.untrack()
       this.#setStatus('Tracking off.')
       return
     }
-    if (!this.scene || this.scene.selected.size === 0) {
+    const units = this.getSelectedUnits()
+    if (units.length === 0) {
       this.#setStatus('Tracking — select a unit first.')
       return
     }
-    const firstId = [...this.scene.selected][0]
-    const u = this.scene.unitById(firstId)
-    if (!u) return
-    this.camera.setTrackedTarget(u, u.name || `Unit ${u.id}`)
-    this.#setStatus(`Tracking ${u.name || 'unit'}.`)
+    if (this.trackFirstSelected(`Unit ${units[0].id}`)) {
+      this.#setStatus(`Tracking ${units[0].name || 'unit'}.`)
+    }
+  }
+
+  toggleTracking() {
+    this.setTracking(!this.camera?.trackedTarget)
   }
 
   // #onMouseMove updates the ghost preview's position to follow the
@@ -1180,36 +1201,19 @@ export class SandboxView {
     // fall through to a ground-move at the click location.
     const hit = this.#pickUnitAt(sx, sy)
     if (hit && !this.scene.selected.has(hit.id)) {
-      let n = 0
-      for (const id of this.scene.selected) {
-        if (id === hit.id) continue
-        const u = this.scene.unitById(id)
-        if (u) { u.attackTarget = hit; n++ }
-      }
+      // BaseView.issueAttack handles the per-unit attackTarget fanout
+      // + ok1-bank ack on the first pursuer.  Centralised so the
+      // viewer + sandbox path the same way.
+      const n = this.issueAttack(hit)
       this.#setStatus(`Attack — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
       return
     }
     const world = this.#screenToGround(sx, sy)
     if (!world) return
-    // Right-click Move — same semantics as the M-then-click flow above:
-    // drops autonomous attackTarget + any attack-sourced weapon slot,
-    // but leaves manual fire (source='manual') alive so the user can
-    // re-position a firing unit without losing their armed shot.
-    const engine = this.scene.engine
-    let n = 0
-    for (const id of this.scene.selected) {
-      const u = this.scene.unitById(id)
-      if (!u) continue
-      u.moveTarget = { x: world[0], z: world[2] }
-      u.attackTarget = null
-      for (let slot = 0; slot < 3; slot++) {
-        const s = u.weaponSlots[slot]
-        if (s && s.target && s.target.source === 'attack') {
-          engine.setWeaponTarget(u.id, slot, null)
-        }
-      }
-      n++
-    }
+    // Right-click Move dispatches through BaseView.issueMove — same
+    // shared path the M-then-click flow uses, including the ok1-bank
+    // ack on the first unit.
+    const n = this.issueMove(world)
     this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
   }
 
@@ -1272,37 +1276,16 @@ export class SandboxView {
     const world = this.#screenToGround(sx, sy)
     // If a command is pending (Move / Attack), consume it.
     if (this._pendingCmd === 'move' && world && this.scene.selected.size > 0) {
-      // Move command — clear the autonomous attack pursuit so
-      // #stepAttack doesn't overwrite the user-supplied moveTarget
-      // every tick (chasing the old enemy).  Manual weapon-slot
-      // targets (source='manual', set when the user armed a Fire
-      // button and clicked an enemy) are LEFT INTACT — TA's RTS
-      // muscle memory expects "Move while firing" to keep shooting
-      // at the target as long as it's in range.  #stepAttack on the
-      // next tick will withdraw any 'attack'-source slots that the
-      // autonomous loop had armed; that's the cleanup path for the
-      // attackTarget=null we just set.
-      const engine = this.scene.engine
-      for (const id of this.scene.selected) {
-        const u = this.scene.unitById(id)
-        if (!u) continue
-        u.moveTarget = { x: world[0], z: world[2] }
-        u.attackTarget = null
-        // Surgically clear ONLY attack-source slots — leave manual
-        // fire alive.  Without this case-split the user's manual
-        // Primary that they just armed would die the moment they
-        // queue a Move on top of it.
-        for (let slot = 0; slot < 3; slot++) {
-          const s = u.weaponSlots[slot]
-          if (s && s.target && s.target.source === 'attack') {
-            engine.setWeaponTarget(u.id, slot, null)
-          }
-        }
-      }
+      // BaseView.issueMove fans the Move order out to every selected
+      // unit, clears autonomous attack pursuit, preserves manual
+      // weapon slots, and plays the ok1-bank ack on the first unit
+      // — same path the right-click Move + the M-then-click flow
+      // converge on so the viewer can never drift from the sandbox.
+      const n = this.issueMove(world)
       this._pendingCmd = null
       if (this._armedCursor) this._armedCursor.setSlot(null)
       this.#refreshDefaultCursor()
-      this.#setStatus(`Move order issued to ${this.scene.selected.size} unit(s).`)
+      this.#setStatus(`Move order issued to ${n} unit(s).`)
       return
     }
     if (this._pendingCmd === 'attack' || this._pendingCmd === 'primary' ||
@@ -1386,53 +1369,27 @@ export class SandboxView {
         // above the horizon).  Cancel cleanly.
         this.#setStatus(`${slotName} — click cancelled (no target).`)
       }
+      // Command consumed — clear the pending state and rerun the
+      // cursor decision so the overlay drops the armed glyph and
+      // re-derives the ambient (Move when selection live, etc.)
+      // without waiting for the next mousemove event.
       this._pendingCmd = null
-      if (this._armedCursor) this._armedCursor.setSlot(null)
+      this.#refreshDefaultCursor()
       return
-    }
-    // Force-target ground (opt-in) — Shift+left-click on empty ground
-    // with selection arms slot 0 at the clicked point.  Checked BEFORE
-    // the unit-pick path so a click that misses a unit but hits ground
-    // (the common case for "fire over there") routes to the force-fire
-    // gesture, not the no-op empty-ground branch.  shouldForceTarget
-    // gates on the persisted opt-in (Settings → Unit Editor → "Force-
-    // target ground on click") AND on the modifier — Sandbox requires
-    // Shift; Viewer doesn't.
-    if (this.scene.selected.size > 0 && world
-        && shouldForceTarget({ shiftKey: e.shiftKey, requireShift: true })) {
-      // Was the click on a unit?  If so, fall through to the unit-pick
-      // path so the user can attack-target a specific enemy with the
-      // engine's autonomous loop instead of the static-point gesture.
-      const pickedFirst = this.#pickUnitAt(sx, sy)
-      if (!pickedFirst) {
-        const engine = this.scene.engine
-        let n = 0
-        for (const id of this.scene.selected) {
-          const u = this.scene.unitById(id)
-          if (!u || u.dead) continue
-          engine.setWeaponTarget(u.id, 0, { point: [world[0], world[1], world[2]] }, { source: 'manual' })
-          n++
-        }
-        this.#setStatus(`Force-fire — ${n} unit(s) targeting (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
-        return
-      }
     }
     // Default click — TA-style left-click semantics:
     //
     //   * Click on a unit with OTHER units already selected → attack
     //     (selected units engage the clicked unit; selection unchanged).
-    //     This is what made TA a "left-click game" — no arming, no
-    //     right-click, just point at the enemy.  Drives the engine's
-    //     autonomous attack loop (#stepAttack walks units into range
-    //     then drives the weapon SM via setWeaponTarget).
     //   * Click on a unit with NOTHING selected, OR click on a unit
     //     that IS already the sole selection → select that unit.
-    //   * Click on empty ground → NO-OP (selection persists).  Escape
-    //     is the explicit "deselect" gesture so the user doesn't lose
-    //     their selection by an accidental click off the unit.
-    //     (Move-to-ground still requires the Move toolbar gesture or
-    //     right-click, deliberately — left-click move would conflict
-    //     with the "select nothing" / "no-op" idiom users expect.)
+    //   * Click on EMPTY GROUND with units selected → MOVE to that
+    //     point.  Default ground-click is now Move (previously a
+    //     no-op); the standalone Shift+click force-fire path is gone
+    //     — force-fire requires arming Primary/Secondary/Tertiary
+    //     first, then clicking.  Shift+drag on empty ground starts
+    //     the rectangle-select gesture instead (onLeftDragStart
+    //     catches that before the click handler runs).
     const picked = this.#pickUnitAt(sx, sy)
     if (picked) {
       const sel = this.scene.selected
@@ -1445,24 +1402,19 @@ export class SandboxView {
         const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((picked.side | 0)))
         if (sameSide) {
           this.scene.selectOnly(picked.id)
+          this.#playSelectAck()
           this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
           return
         }
-        // Attack — every selected unit (except the target itself)
-        // engages the clicked enemy.  attackTarget feeds #stepAttack,
-        // which handles walk-into-range + arms the weapon SM.  Selection
-        // stays put so the user can re-issue commands without losing it.
-        let n = 0
-        for (const id of sel) {
-          if (id === picked.id) continue
-          const u = this.scene.unitById(id)
-          if (!u || u.dead) continue
-          u.attackTarget = picked
-          n++
-        }
+        // Attack — BaseView.issueAttack arms #stepAttack on every
+        // selected (non-self) unit and plays the ok1-bank ack so the
+        // engage feels TA-native.  Selection stays put so the user
+        // can re-issue commands without losing it.
+        const n = this.issueAttack(picked)
         this.#setStatus(`Attack — ${n} unit(s) engaging ${picked.name} (HP ${picked.health}).`)
       } else if (sel.size === 0 || onlySelf) {
         this.scene.selectOnly(picked.id)
+        this.#playSelectAck()
         this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
       } else {
         // sel.size > 0 and picked is IN the selection — promote to
@@ -1470,8 +1422,21 @@ export class SandboxView {
         // "this unit attacks that one" rather than "the group attacks
         // one of its own members".
         this.scene.selectOnly(picked.id)
+        this.#playSelectAck()
         this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
       }
+      return
+    }
+    // No unit under the cursor — plain ground-click with a live
+    // selection issues a Move.  This replaces the old "no-op + Esc
+    // to deselect" behaviour: clicking a destination is the most
+    // common follow-up gesture after selecting a unit, so making
+    // it the default beats the old "must arm Move first" flow.
+    // Selection stays put (the user usually wants to chain orders).
+    // No selection / no world projection (clicked the sky) → no-op.
+    if (world && this.scene.selected.size > 0) {
+      const n = this.issueMove(world)
+      this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
     }
   }
 
@@ -1565,22 +1530,101 @@ export class SandboxView {
     this._resizeObserver.observe(this.canvas)
   }
 
-  #setStatus(text) {
-    if (this.statusEl) this.statusEl.textContent = text
+  // #setStatus is the sandbox-internal alias for BaseView.setStatus.
+  // Many call sites already use the leading-# form; keeping the alias
+  // avoids a sweep across this file.
+  #setStatus(text) { this.setStatus(text) }
+
+  // ── BaseView abstract overrides ───────────────────────────────────
+
+  get engine() { return this.scene ? this.scene.engine : null }
+  get runtime() { return this.scene ? this.scene.runtime : null }
+
+  // getSelectedUnits — BaseView's Command API (issueMove / stop /
+  // trackFirstSelected) fan out over whatever this returns.  Sandbox
+  // pulls every live unit currently in the selection set; dead /
+  // despawned ids are filtered so commands don't try to ride a
+  // freed binding.
+  getSelectedUnits() {
+    if (!this.scene) return []
+    const out = []
+    for (const id of this.scene.selected) {
+      const u = this.scene.unitById(id)
+      if (u && !u.dead) out.push(u)
+    }
+    return out
+  }
+
+  // getInspectorMv builds the proxy shape studio.js's
+  // refreshMvInspectors panels consume.  When exactly ONE unit is
+  // selected, the focused binding feeds the per-unit inspectors
+  // (Scripts / Static Vars / Actions / Weapons).  With 0 / multiple
+  // selected, a runtime-only stub keeps the runtime panels live.
+  // Either way the Effects + Audio fields are wrapped to the scene-
+  // wide aggregators via BaseView.wrapCobWithAggregate — Object.create
+  // shields the binding from being mutated (assigning straight onto
+  // the binding would clobber its real .particles / .audio pools and
+  // break particle emission inside the binding's own helpers).
+  getInspectorMv() {
+    const sel = this.scene ? this.scene.selected : null
+    const focused = (sel && sel.size === 1)
+      ? (this.scene.unitById([...sel][0]) || null)
+      : null
+    const focusedBinding = (focused && focused.binding) ? focused.binding : null
+    const cob = this.wrapCobWithAggregate(focusedBinding || {
+      runtime: this.runtime,
+      unit: null,
+      hasScript: () => false,
+    })
+    const mv = {
+      camera: this.camera,
+      renderer: this.renderer,
+      cob,
+      _focusedUnitId: focused ? focused.id : null,
+    }
+    // Per-unit port + damage + build% shims so the shared Controls
+    // panel renderer (renderMvPortsPanel) drives the focused engine
+    // unit directly.  Defined as getters/setters so slider edits flow
+    // through to UnitInstance.cobPorts / .health / .buildPercent in
+    // real time, and the inspector tick's refreshMvPortsLiveValues
+    // observes the same fields the COB hooks read on the next get.
+    if (focused) {
+      mv.cobPorts = focused.cobPorts
+      mv.unitMeta = focused.meta || null
+      Object.defineProperty(mv, 'cobDamage', {
+        enumerable: true, configurable: true,
+        get: () => 100 - (focused.health | 0),
+        set: (v) => { focused.health = Math.max(0, Math.min(100, 100 - (v | 0))) },
+      })
+      Object.defineProperty(mv, 'cobBuildPercent', {
+        enumerable: true, configurable: true,
+        get: () => focused.buildPercent | 0,
+        set: (v) => { focused.buildPercent = Math.max(0, Math.min(100, v | 0)) },
+      })
+    }
+    return mv
+  }
+
+  // _focusedUnitIdFromBinding finds the unit id whose binding matches
+  // the focused one.  refreshMvInspectors tracks "did the focused
+  // unit change" via this id so the Actions panel only rebuilds when
+  // selection changes, not every tick.
+  _focusedUnitIdFromBinding(binding) {
+    if (!this.scene || !binding) return null
+    for (const u of this.scene.units()) {
+      if (u.binding === binding) return u.id
+    }
+    return null
   }
 
   dispose() {
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
-    // Detach engine event subscriptions so stale closures don't fire
-    // into a disposed view.
-    if (this._engineSubs) {
-      for (const unsub of this._engineSubs) try { unsub() } catch { /* ignore */ }
-      this._engineSubs = null
-    }
-    // Drop any in-flight smoke trails so a re-open doesn't inherit
-    // stale projectiles from the previous session.
-    if (this._smokeTrails) this._smokeTrails.clear()
+    // disposeBase tears down engine subs, smoke trails, and hotkeys
+    // in one sweep — replaces the inline cleanup loop we used to do
+    // here.  Called BEFORE renderer.dispose() so any in-flight RAF
+    // closures the engine handlers might fire into see clean refs.
+    this.disposeBase()
     // Tear down the shift-preview overlay so its DOM doesn't outlive
     // the view.  Pool entries leave with the host.
     if (this._shiftPreviewHost) {
@@ -1593,3 +1637,6 @@ export class SandboxView {
     this.scene = null
   }
 }
+
+// Scene-wide particle / audio aggregation moved to BaseView (used by
+// both views).  Sandbox no longer ships its own copy.

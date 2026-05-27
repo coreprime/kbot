@@ -2814,6 +2814,15 @@ canvas {
   filter: grayscale(0.5);
   transition: opacity 120ms ease, filter 120ms ease;
 }
+/* Developer-only port editors — Active toggle, Health slider, Build
+   stance chip, Build %, Armoured chip — live inside .mv-port-dev-section.
+   The Developer Controls row in the sandbox ribbon's Developer Tools
+   dropdown flips .mv-controls-no-dev on the panel root to collapse the
+   whole block while leaving Move / Fire standing orders visible.
+   Scoped to .sandbox-mode so the unit editor (where the developer
+   editors are the panel's whole point) is unaffected — the class can
+   safely persist across mode switches without surprising the viewer. */
+#model-viewer-dialog.sandbox-mode .mv-inspector.mv-controls-no-dev .mv-port-dev-section { display: none; }
 /* Runtime overlay — dedicated control bar above the unit list.
    Pulls the heavy pause/step/stop buttons out of the title bar so
    the header reads as identity + chrome, and the operations grouping
@@ -3106,8 +3115,16 @@ canvas {
    pass through to the canvas. */
 .mv-ctrl-armed-cursor {
   position: fixed;
-  width: 32px;
-  height: 32px;
+  /* TA's authored cursor PNG dimensions vary widely — cursornormal
+     is 10x20, cursorselect 21x23, cursormove 35x35.  Forcing a
+     fixed 32x32 stretched the arrow + squished the select circle.
+     Use natural dimensions clamped to a reasonable max so the
+     biggest cursors don't dominate the screen but the small arrow
+     keeps its native aspect ratio. */
+  width: auto;
+  height: auto;
+  max-width: 40px;
+  max-height: 40px;
   pointer-events: none;
   opacity: 1.0;
   transform: translate(-50%, -50%);
@@ -4177,6 +4194,15 @@ canvas {
    reserves the 320 px "side" column, so we ALSO collapse the column
    template so the canvas fills the entire width. */
 #model-viewer-dialog.sandbox-mode .sidebar { display: none; }
+/* The Reset button on the Controls panel re-runs the unit's COB
+   Create + clears per-unit lifecycle state.  Single-unit concept —
+   meaningless for the multi-unit sandbox where every spawned unit
+   auto-Creates and dies independently.  Hide it so it doesn't read
+   as "this Controls panel still thinks it's running the unit editor". */
+#model-viewer-dialog.sandbox-mode #mv-controls-reset-btn { display: none; }
+/* Pre-Create banner is also single-unit only — sandbox bakes Create
+   into the spawn path so the user never sees an un-Created unit. */
+#model-viewer-dialog.sandbox-mode #mv-controls-create-row { display: none !important; }
 #model-viewer-dialog.sandbox-mode .model-viewer-shell {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas:

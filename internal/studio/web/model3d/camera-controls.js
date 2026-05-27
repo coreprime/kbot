@@ -81,19 +81,20 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
   }
 
   handlers.down = (e) => {
-    // Host first-pass — if onLeftDragStart is supplied AND this is a
-    // plain left-button-no-modifier press, let the host decide.  The
-    // host returns truthy to claim the gesture (sandbox drag-select);
-    // we then skip camera input until pointer-up so the orbit pivot
-    // stays put while the host's rectangle drags.
+    // Host first-pass — let the host inspect every plain-left or
+    // shift-left press.  Shift is a host modifier now (sandbox uses
+    // it for drag-select rectangle); ctrl/cmd remain camera-only
+    // (ground-plane pan).  The host returns truthy to claim the
+    // gesture; we then skip camera input until pointer-up so the
+    // orbit pivot stays put while the host's gesture runs.
     hostClaim = false
     if (typeof onLeftDragStart === 'function'
-        && e.button === 0 && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        && e.button === 0 && !e.ctrlKey && !e.metaKey) {
       try { hostClaim = !!onLeftDragStart(e) } catch { hostClaim = false }
     }
     if (hostClaim) return
     canvas.setPointerCapture(e.pointerId)
-    pointer = { x: e.clientX, y: e.clientY, button: e.button, lockDxAccum: 0, lockDyAccum: 0 }
+    pointer = { x: e.clientX, y: e.clientY, button: e.button }
     // NOTE: auto-rotate is preserved on pointerdown.  Only pan
     // gestures (shift / ctrl / right-drag) drop it — see `move`
     // below.  This lets the user orbit-drag around an auto-rotating
@@ -106,7 +107,14 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
     const dy = e.clientY - pointer.y
     pointer.x = e.clientX
     pointer.y = e.clientY
-    if (pointer.button === 2 || e.shiftKey || e.ctrlKey || e.metaKey) {
+    // Shift is intentionally NOT a camera modifier here — both views
+    // claim it for unit-orders gestures (sandbox: drag-select;
+    // viewer: future per-mode hooks), so the camera leaves it alone
+    // and the gesture falls through to the host via onLeftDragStart.
+    // Ctrl/Cmd + drag stays as the ground-plane pan (the canonical
+    // "scroll across the battlefield" gesture); right-drag stays as
+    // camera-relative pan (TA convention).
+    if (pointer.button === 2 || e.ctrlKey || e.metaKey) {
       // Pan moves the camera target — auto-rotate around a moving
       // target reads as "the world is sliding" instead of "the camera
       // is spinning", so we drop the turntable + any unit-tracking
@@ -119,26 +127,6 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
         if (typeof onUserInteract === 'function') onUserInteract('pan')
         if (typeof camera.panAlongGround === 'function') camera.panAlongGround(dx, dy)
         else if (typeof camera.panBy === 'function') camera.panBy(dx, dy)
-      } else if (e.shiftKey) {
-        if (typeof onUserInteract === 'function') onUserInteract('pan')
-        // Shift = axis-locked GROUND-plane pan.  Picks the dominant
-        // axis from the gesture's accumulated motion so a single
-        // jittery frame can't flip the lock back and forth.  Uses
-        // panAlongGround (NOT panBy) so vertical drags slide the
-        // camera through the scene along its ground-projected
-        // forward, instead of along camera-relative UP — at steep
-        // top-down pitches the latter reads as zoom because UP has a
-        // strong Y component.  In-plane motion gives consistent feel
-        // in both the unit editor (~30° pitch) and the sandbox (~50°
-        // overhead).
-        pointer.lockDxAccum += dx
-        pointer.lockDyAccum += dy
-        const pan = (typeof camera.panAlongGround === 'function') ? camera.panAlongGround.bind(camera) : camera.panBy.bind(camera)
-        if (Math.abs(pointer.lockDxAccum) > Math.abs(pointer.lockDyAccum)) {
-          pan(dx, 0)
-        } else {
-          pan(0, dy)
-        }
       } else {
         camera.panBy(dx, dy)
       }
