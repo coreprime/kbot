@@ -160,6 +160,15 @@ export function applyDefaultGroundFor(meta) {
   }
 }
 
+// model-viewer.js calls window.startMvAutoBuild from inside its
+// resetState() to re-arm the build ramp after a state reset.  Stashing
+// the function here (one-time module side effect) keeps the wiring on
+// the unit-editor side — /ui/common/sim-controls.js used to host this
+// shim, which forced common-tier code to import from ui/unit-editor/.
+if (typeof window !== 'undefined') {
+  window.startMvAutoBuild = (mv) => startMvAutoBuild(mv)
+}
+
 // startMvAutoBuild kicks off the 5-second wireframe → finished-model
 // ramp.  Snaps build% to 0 so the construction stripes are visible
 // at frame one; state lives on the viewer (mv._autoBuild) so a tab

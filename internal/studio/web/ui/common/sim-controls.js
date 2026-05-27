@@ -35,19 +35,13 @@
 //   2. CPU + battery: an idle background tab shouldn't keep
 //      churning bytecode the user can't see.
 //
-// _wireRuntimeHelpersToWindow stashes the toggle + speed-setter
-// (+ startMvAutoBuild from runtime.js) on `window` so mv-controls
-// can drive Space + +/- without an ES-module circular import.
+// _wireRuntimeHelpersToWindow stashes the toggle + speed-setter on
+// `window` so mv-controls can drive Space + +/- without an ES-module
+// circular import.  Section-agnostic on purpose: this file no longer
+// reaches into ui/unit-editor/ — unit-editor-specific window bridges
+// (e.g. window.startMvAutoBuild) live in their own section's wiring.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-// startMvAutoBuild is a unit-editor build-ramp helper that only the
-// `_wireRuntimeHelpersToWindow` shim below references (it dumps it on
-// window for mv-controls' keyboard shortcuts).  The import is the
-// last residual coupling between this section-agnostic sim-controls
-// file and the unit editor — _wireRuntimeHelpersToWindow itself
-// should move into ui/unit-editor/ in a follow-up so the upward
-// peer import goes away.
-import { startMvAutoBuild } from '../unit-editor/runtime.js'
 
 // _activeRuntime — pick the runtime the Runtime overlay's Pause /
 // Step / Stop All controls should target.  Sandbox tab → that tab's
@@ -186,13 +180,13 @@ export function wireMvRuntimeVisibility() {
   })
 }
 
-// _wireRuntimeHelpersToWindow exposes the toggle / speed-setter /
-// auto-build kicker on `window` so cross-module callers (mv-controls'
-// keyboard handler) can drive Space + +/- hotkeys + ModelViewer.resetState
-// can re-arm the build ramp without having to import the studio module
-// bundle or hit an ES-module circular import.
+// _wireRuntimeHelpersToWindow exposes the toggle / speed-setter on
+// `window` so cross-module callers (mv-controls' keyboard handler)
+// can drive Space + +/- hotkeys without having to import the studio
+// module bundle or hit an ES-module circular import.  Unit-editor-
+// specific bridges (window.startMvAutoBuild) are wired up by the
+// unit-editor section instead.
 export function _wireRuntimeHelpersToWindow() {
   window.mvToggleRuntimePaused = mvToggleRuntimePaused
   window.mvSetSimulationSpeed = mvSetSimulationSpeed
-  window.startMvAutoBuild = startMvAutoBuild
 }
