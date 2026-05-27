@@ -9,8 +9,14 @@
 // every cell the line crosses contributes to min / max / delta —
 // the label reports the tightest range across the whole path, not
 // just the two endpoints.
+//
+// The mouse handlers below own the click-to-drop / move-to-aim /
+// click-to-lock interaction.  Caller is expected to schedule a
+// renderCanvas tick (the studio.js mouse router does this for us)
+// so the handlers don't need a back-channel into the renderer.
 
-import { state } from '../../host-context.js'
+import { state, hostCallbacks } from '../../host-context.js'
+import { pickAttrCellForVoid } from '../mouse-coords.js'
 
 // rulerStats summarises the active ruler as { dPx, dTiles, dAttr,
 // hMin, hMax, hDelta } — or null when there's nothing to measure.
@@ -115,4 +121,28 @@ export function drawRulerOverlay(ctx) {
     ctx.fillText(lines[i], bxL + padX, byL + padY + i * lineH)
   }
   ctx.restore()
+}
+
+// Click once to drop the start point, then move the cursor — the
+// end point follows.  A second click locks the measurement; a
+// third click starts a new one.  Esc clears (handled by the
+// studio.js global key handler via setMode swap).
+export function onRulerMouseDown(e) {
+  const { ax, ay } = pickAttrCellForVoid(e)
+  const r = state.ruler
+  if (!r || r.locked) {
+    state.ruler = { a: { ax, ay }, b: { ax, ay }, locked: false }
+  } else {
+    state.ruler = { a: r.a, b: { ax, ay }, locked: true }
+  }
+  hostCallbacks.renderCanvas?.()
+}
+
+export function onRulerMouseMove(e) {
+  const r = state.ruler
+  if (!r || r.locked) return
+  const { ax, ay } = pickAttrCellForVoid(e)
+  if (r.b.ax === ax && r.b.ay === ay) return
+  r.b = { ax, ay }
+  hostCallbacks.renderCanvas?.()
 }

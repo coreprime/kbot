@@ -383,6 +383,16 @@ import {
 // directly any more.
 import { tryAutoRotatePlacement } from './ui/map-editor/canvas/placement.js'
 
+// Ruler-mode mouse handlers (the dashed-line measure tool).  The
+// matching draw pass moves with renderCanvas via render.js; the
+// mode handlers ride alongside in ruler.js so the click-drop +
+// click-lock interaction stays close to the data it mutates
+// (state.ruler).
+import {
+  onRulerMouseDown,
+  onRulerMouseMove,
+} from './ui/map-editor/canvas/ruler.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -3778,29 +3788,9 @@ function onFillMouseDown(e) {
 // pixels, plus the min / max / delta heightmap value sampled along the
 // line so the user can sanity-check cliffs and start-position fairness.
 
-function onRulerMouseDown(e) {
-  const { ax, ay } = pickAttrCellForVoid(e)
-  const r = state.ruler
-  if (!r || r.locked) {
-    state.ruler = { a: { ax, ay }, b: { ax, ay }, locked: false }
-  } else {
-    state.ruler = { a: r.a, b: { ax, ay }, locked: true }
-  }
-  renderCanvas()
-}
-
-function onRulerMouseMove(e) {
-  const r = state.ruler
-  if (!r || r.locked) return
-  const { ax, ay } = pickAttrCellForVoid(e)
-  if (r.b.ax === ax && r.b.ay === ay) return
-  r.b = { ax, ay }
-  renderCanvas()
-}
-
-// rulerStats + drawRulerOverlay moved to
-// /ui/map-editor/canvas/ruler.js — imported at the top of this
-// file.
+// onRulerMouseDown + onRulerMouseMove + rulerStats +
+// drawRulerOverlay all live in /ui/map-editor/canvas/ruler.js —
+// imported at the top of this file.
 
 // hmHoldTimer keeps the brush firing while the user holds the mouse
 // button still — raise / lower / smooth all need continuous application
