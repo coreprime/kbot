@@ -129,16 +129,6 @@ export class GameEngine {
     // push updates via setGravity() when the env changes.  Default
     // matches the studio's ground-world preset.
     this.gravity = gravity
-    // Optional renderer ref for cross-unit dynamic light aggregation
-    // (laser beams, d-gun orbs, missile exhaust illuminating nearby
-    // units).  When set, the engine scans every unit's particle pool
-    // each tick and pushes the globally-brightest light-emitter to
-    // renderer.setPulseLight.  Without this the multi-unit path
-    // would either get NO dynamic lights (binding.tick is what calls
-    // _pushPulseLight in the single-unit path, and the engine doesn't
-    // call binding.tick — it calls binding._sync directly) or one-
-    // light-per-binding fighting over the renderer's single slot.
-    this._renderer = null
     // Audio silencing flag — when set, every per-unit AudioPool gets
     // its setPaused(true) called each #syncBinding so a backgrounded
     // tab goes silent without pausing the simulation.  Independent of
@@ -184,16 +174,6 @@ export class GameEngine {
     const v = +g
     if (Number.isFinite(v) && v > 0) this.gravity = v
   }
-
-  // setRenderer attaches a renderer to receive per-tick dynamic-light
-  // updates.  Each tick the engine scans every unit's particle pool
-  // for the brightest live light-emitter (laser pulse, d-gun ball,
-  // missile exhaust) and calls renderer.setPulseLight with it.  Pass
-  // null to detach (e.g. the host view is disposing).  Optional —
-  // engines that don't need cross-unit lighting (single-unit paths,
-  // where binding.tick already handles it for the one unit) can ignore
-  // this entirely.
-  setRenderer(r) { this._renderer = r || null }
 
   // setSilenced toggles AudioPool muting across every unit's binding.
   // When true, all live <audio> elements pause and new emits (which
@@ -555,26 +535,27 @@ export class GameEngine {
       if (!paused) this.#stepWeapons(u, simNowMs)
       if (!skipSync) this.#syncBinding(u, dtMs)
     }
-    // Cross-unit dynamic-light aggregation.  Only when a renderer is
-    // attached AND we're driving the sync pass (single-unit paths skip
-    // sync because the binding.tick already handles _pushPulseLight
-    // for the one unit).
-    if (!skipSync && this._renderer) this.#pushSceneLight()
+    // Cross-unit dynamic-light aggregation is now pull-side — the
+    // view's per-frame hook calls engine.getSceneLight() and pushes
+    // the result to its own renderer.  The engine itself is fully
+    // headless: no renderer ref, no _pushSceneLight side-effect.
     return insts
   }
 
-  // #pushSceneLight scans every unit's particle pool for the
-  // brightest live light-emitter and forwards it to the renderer's
-  // single dynamic-light slot.  Cross-unit by design — without this,
-  // each unit's binding._pushPulseLight would overwrite the previous
-  // unit's contribution and only the last-iterated binding's light
-  // would survive (or, more often in multi-unit mode where binding.tick
-  // isn't called per-unit at all, no light would surface).  Score =
-  // lightStrength · max(r,g,b) · alpha/alpha0 — same formula
-  // cob-binding uses for the single-unit case so behaviour matches.
-  #pushSceneLight() {
-    const r = this._renderer
-    if (!r || typeof r.setPulseLight !== 'function') return
+  // getSceneLight scans every unit's particle pool for the brightest
+  // live light-emitter and returns it as a plain object the host
+  // view can forward to its renderer's single dynamic-light slot.
+  // Returns null when no live light source exists (host clears the
+  // slot).  Cross-unit by design — each unit's binding ALSO has its
+  // own _pushPulseLight for the single-binding case (legacy unit-
+  // editor path), but multi-entity hosts want the scene-wide brightest
+  // because binding.tick isn't called per-unit there.  Score formula
+  // (lightStrength · max(r,g,b) · alpha/alpha0) mirrors the binding's
+  // so the two paths agree on which particle wins.
+  //
+  // Pure read.  The engine no longer holds a renderer ref — pull-side
+  // decoupling per the engine/renderer split (Phase D).
+  getSceneLight() {
     let bestUnit = null
     let bestIdx = -1
     let bestScore = 0
@@ -592,20 +573,16 @@ export class GameEngine {
         if (s > bestScore) { bestScore = s; bestIdx = i; bestUnit = u }
       }
     }
-    if (bestIdx < 0 || !bestUnit) {
-      r.setPulseLight(null, null, 0)
-      return
-    }
+    if (bestIdx < 0 || !bestUnit) return null
     const p = bestUnit.binding.particles
     // Particle positions are in WORLD coords for multi-entity mode
     // (the binding's worldOffset has already been baked in by the
-    // spawn helper) — so pass straight through without re-adding the
-    // unit position.
-    r.setPulseLight(
-      [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
-      [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
-      p.lightStrength[bestIdx]
-    )
+    // spawn helper) — pass through unchanged.
+    return {
+      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
+      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
+      strength: p.lightStrength[bestIdx],
+    }
   }
 
   // #stepAttack — autonomous attack loop.  Walks the unit into range

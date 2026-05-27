@@ -180,13 +180,11 @@ export class SandboxView {
         this.scene.engine.setGravity(this.renderer.getGravity())
       }
       // Hand the renderer to the engine for cross-unit dynamic light
-      // aggregation — every tick the engine picks the globally
-      // strongest light-emitting particle (across all units) and
-      // pushes it to the renderer's pulse-light slot.  Without this
-      // a Commander's laser firing in the Sandbox produced no
-      // illumination on nearby units; the Viewer path got the light
-      // for free because binding.tick handles it for the single unit.
-      this.scene.engine.setRenderer(this.renderer)
+      // Cross-unit dynamic-light aggregation is pull-side now (Phase D).
+      // The per-frame onAfterFrame hook below queries
+      // engine.getSceneLight() and forwards the result to
+      // this.renderer.setPulseLight — the engine itself is fully
+      // headless and never sees the renderer.
       // SmokeTrailManager + engine event subscriptions are scaffolded
       // by the shared view-helpers — initSmokeTrails returns the lazy
       // instance on this._smokeTrails, and subscribeEngine remembers
@@ -273,6 +271,16 @@ export class SandboxView {
     // animation applied per-tick is visible immediately.
     this.renderer.onAfterFrame = (dtMs) => {
       if (this.scene) this.scene.tick(dtMs)
+      // Pull-side scene light: ask the engine for the brightest live
+      // light-emitting particle across all units and push it into the
+      // renderer's single dynamic-light slot.  This is the cross-unit
+      // aggregation that used to live engine-side via setRenderer —
+      // now the engine is headless and the view bridges per frame.
+      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLight === 'function') {
+        const light = this.scene.engine.getSceneLight()
+        if (light) this.renderer.setPulseLight(light.pos, light.color, light.strength)
+        else this.renderer.setPulseLight(null, null, 0)
+      }
       // Advance in-flight missile smoke trails through the shared
       // tickSmokeTrails helper.  It scales by playbackRate and freezes
       // (rate = 0) on pause — the unified gate every view shares so
