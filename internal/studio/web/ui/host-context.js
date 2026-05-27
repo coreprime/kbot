@@ -329,15 +329,20 @@ export const hostCallbacks = {
   renderDrawer: null,           // () => void
   // Mouse-router pan bridge — the extracted dispatcher uses these
   // to short-circuit pan gestures before consulting the per-mode
-  // handler map.  Lives in studio.js because pan state still
-  // shares space with the active scroll element + cursor style;
-  // the router calls into it without owning that state.
+  // handler map.  Implemented in /ui/map-editor/cursor.js; the
+  // bridge entries are populated from studio.js's init wiring.
   shouldPan: null,              // (e) => boolean
   beginPan: null,               // (e) => void
   updatePan: null,              // (e) => void
   endPan: null,                 // () => void
   isPanning: null,              // () => boolean
   updateHoverLabel: null,       // (e) => void  (status-bar live cursor read-out)
+  // activeSchema returns the OTA schema record for the active
+  // map's selected schema slot, or null if there isn't one.  The
+  // cursor module consumes it from tryAutoSwitchAt to test
+  // whether a click landed on a placed start-position marker —
+  // OTA / schema lookups still live studio-side.
+  activeSchema: null,           // () => Schema | null
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
