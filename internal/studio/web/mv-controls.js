@@ -71,6 +71,13 @@ export class MvControls {
       thread: null, lastFireMs: -Infinity,
       burstShotsLeft: 0, nextBurstShotAtMs: 0,
     })
+    // Per-slot circular buffer of the LAST 5 shots fired from this
+    // weapon.  Each entry: { simMs, kind, anchor:[x,y,z],
+    // velocity:[vx,vy,vz], speed }.  Used by the Weapons panel to
+    // render the "recent projectiles" list — newest at the bottom.
+    // Capped to keep the per-frame render cheap and the on-screen
+    // history short enough to read at a glance.
+    this.shotHistory = { primary: [], secondary: [], tertiary: [] }
     this.aimState = {
       primary:   slotInit(),
       secondary: slotInit(),
@@ -1139,6 +1146,25 @@ export class MvControls {
     return { heading: headingTA, pitch: pitchTA }
   }
 
+  // _recordShot pushes a slim record of a fired shot onto the slot's
+  // history buffer for the Weapons panel's "recent projectiles" list.
+  // Buffer caps at 5; oldest is dropped FIFO.  Called for every shot
+  // path — ballistic, straight-line, AND laser-beam — so the panel
+  // shows every discharge regardless of which visual the weapon uses.
+  _recordShot(slot, anchor, velocity) {
+    const hist = this.shotHistory && this.shotHistory[slot]
+    if (!hist) return
+    const speed = Math.hypot(velocity[0] || 0, velocity[1] || 0, velocity[2] || 0)
+    const simMs = this.viewer.cob?.runtime?.simTimeMs ?? performance.now()
+    hist.push({
+      simMs,
+      anchor: [anchor[0], anchor[1], anchor[2]],
+      velocity: [velocity[0], velocity[1], velocity[2]],
+      speed,
+    })
+    while (hist.length > 5) hist.shift()
+  }
+
   // _spawnProjectile spawns a travelling particle from the slot's
   // firing piece (QueryPrimary/Secondary/Tertiary on the model)
   // heading toward `target` at the FBI-defined `weaponvelocity`.
@@ -1178,7 +1204,16 @@ export class MvControls {
     // live.  No travel time, no gravity, no projectile sound past
     // the start.  Skip the standard projectile path.
     if (w.beamWeapon && !/disintegrator|dgun|d_gun/i.test(w.name)) {
-      this._spawnLaserBeam(w, anchor, [target[0], (target.length >= 3 ? target[1] : 0), target[2]])
+      // Beam weapons don't have a travelling projectile, so synthesise
+      // a "velocity" along the beam axis at the weapon's nominal
+      // weaponvelocity for the panel's speed read-out — even instant
+      // beams come from a weapon definition with a speed value.
+      const tgt = [target[0], (target.length >= 3 ? target[1] : 0), target[2]]
+      const bdx = tgt[0] - anchor[0], bdy = tgt[1] - anchor[1], bdz = tgt[2] - anchor[2]
+      const blen = Math.hypot(bdx, bdy, bdz) || 1
+      const bv = +w.velocityWU || 0
+      this._recordShot(slot, anchor, [bdx / blen * bv, bdy / blen * bv, bdz / blen * bv])
+      this._spawnLaserBeam(w, anchor, tgt)
       if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
       return
     }
@@ -1245,6 +1280,10 @@ export class MvControls {
       noFade: true,
     }
     cob.particles.emit(kind, anchor, emitOpts)
+    // Record this shot for the Weapons panel's recent-projectiles
+    // list (capped at the last 5 per slot).  Stores anchor + velocity
+    // so the panel can show launch position + speed.
+    this._recordShot(slot, anchor, [vx, vy, vz])
     // Smoke trail — for missile-class projectiles, register a tick
     // hook that drops a smoke puff at the projectile's CURRENT world
     // position every ~40 ms while it's alive, so the user sees a

@@ -12292,6 +12292,11 @@ function refreshMvInspectors(dtMs = 16) {
     const body = document.getElementById('mv-inspector-audio-body')
     if (body) renderMvAudioPanel(body, mv)
   }
+  // Weapons-tab live bits — reload bars + recent-projectiles lists.
+  // Cheap: the panel is in the left sidebar (not an inspector), so
+  // we don't gate on hidden-class.  Each card's __mvLiveRefresh
+  // closure no-ops when the card has no reload bar / projlist.
+  refreshMvWeaponsLive(mv)
   // Grey out action / COB-entry buttons whose script has a live
   // thread, so the user can see at a glance what's running and
   // can't double-trigger something that would jerk pieces.
@@ -15859,6 +15864,17 @@ function renderTexturesTab(model) {
 //
 // Empty slots ("Weapon2=NONE" or missing) render as a muted "—"
 // placeholder card so the slot count stays consistent across units.
+// _mvWeaponCollapsed — module-scoped set of slot names whose card the
+// user has collapsed.  Persists across re-renders + unit-swaps within
+// the session so toggling "Primary" closed once stays closed when the
+// panel rebuilds.
+const _mvWeaponCollapsed = new Set()
+// _mvWeaponShowProjectiles — top-level toggle for the per-weapon
+// recent-projectiles list.  Default ON so the user discovers the
+// feature; persisted to the same state.mvWeaponPrefs blob as the
+// collapsed set on the next prefs flush.
+let _mvWeaponShowProjectiles = true
+
 function renderMvWeaponsTab(mv) {
   const host = document.getElementById('model-viewer-weapons')
   if (!host) return
@@ -15871,6 +15887,25 @@ function renderMvWeaponsTab(mv) {
     host.appendChild(empty)
     return
   }
+  // Top-of-panel toggle row — "Show Projectiles".  Persists across
+  // re-renders via the module-scoped flag.  Wired with a stop-prop
+  // so a click inside the row doesn't bubble into anything that
+  // would re-trigger a tab change.
+  const toggle = document.createElement('label')
+  toggle.className = 'mv-weapon-show-proj'
+  toggle.title = 'Toggle the "recent projectiles" list below each weapon card.'
+  const tcb = document.createElement('input')
+  tcb.type = 'checkbox'
+  tcb.checked = _mvWeaponShowProjectiles
+  tcb.addEventListener('change', () => {
+    _mvWeaponShowProjectiles = tcb.checked
+    renderMvWeaponsTab(mv)
+  })
+  const tlbl = document.createElement('span')
+  tlbl.textContent = 'Show Projectiles'
+  toggle.appendChild(tcb)
+  toggle.appendChild(tlbl)
+  host.appendChild(toggle)
   // Script names from the COB — a Set for fast membership checks.
   // Empty when the unit has no COB (orphan 3DOs / props).
   const scripts = new Set((mv.cob && mv.cob.unit && mv.cob.unit.scriptNames) || [])
@@ -15879,6 +15914,20 @@ function renderMvWeaponsTab(mv) {
     const slot = slots[i]
     const w = meta.weapons.find((x) => x.slot === slot) || { slot, name: '', index: i + 1 }
     host.appendChild(buildMvWeaponCard(mv, slot, w, scripts))
+  }
+}
+
+// refreshMvWeaponsLive updates the per-card LIVE bits (reload bar +
+// timer text + recent-projectiles list) without rebuilding the whole
+// card tree — called on every refreshMvInspectors tick.  Cards know
+// how to refresh themselves via a closure stashed on dataset.
+function refreshMvWeaponsLive(mv) {
+  if (!mv || !mv.unitMeta) return
+  const host = document.getElementById('model-viewer-weapons')
+  if (!host) return
+  for (const card of host.querySelectorAll('.mv-weapon-card')) {
+    const fn = card.__mvLiveRefresh
+    if (typeof fn === 'function') fn(mv)
   }
 }
 
@@ -15894,9 +15943,32 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
   card.dataset.slot = slot
   card.dataset.slotIndex = String(idx)
 
+  // Initial collapse state — module-scoped Set so toggles persist
+  // across panel re-renders.  Cards with no weapon stay expanded by
+  // default (so the "Assign Weapon" affordance is obvious).
+  if (_mvWeaponCollapsed.has(slot)) card.classList.add('mv-weapon-collapsed')
+
   // ── Header: slot label + weapon ID + name + colour rectangle ──
+  // The header is the clickable collapse toggle.  Buttons inside
+  // (Change Weapon, sound-play) stop propagation so they don't
+  // accidentally fire the collapse on click.
   const head = document.createElement('div')
   head.className = 'mv-weapon-head'
+  head.title = 'Click to collapse / expand this weapon card.'
+  head.addEventListener('click', (e) => {
+    if (e.target.closest('button, input, label')) return
+    const nowCollapsed = card.classList.toggle('mv-weapon-collapsed')
+    if (nowCollapsed) _mvWeaponCollapsed.add(slot)
+    else _mvWeaponCollapsed.delete(slot)
+    // Flip the chevron icon — pure cosmetic; CSS rotates it when the
+    // card carries .mv-weapon-collapsed.
+  })
+  // Chevron indicator on the LEFT — rotates 90° via CSS when the
+  // card is collapsed, giving the user a clear affordance.
+  const chev = document.createElement('span')
+  chev.className = 'mv-weapon-chev'
+  chev.textContent = '▾'
+  head.appendChild(chev)
   const title = document.createElement('div')
   title.className = 'mv-weapon-title'
   title.textContent = cap
@@ -15927,6 +15999,12 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
   head.appendChild(nameEl)
   card.appendChild(head)
 
+  // Wrap everything below the head in a .mv-weapon-body so the
+  // collapse class can hide it with a single rule.  All subsequent
+  // appends go into `body` instead of `card`.
+  const body = document.createElement('div')
+  body.className = 'mv-weapon-body'
+
   // ── Action row: Change Weapon button (always available so users
   //    can populate empty slots too).
   const actions = document.createElement('div')
@@ -15936,7 +16014,7 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
   change.textContent = w.name ? 'Change Weapon' : 'Assign Weapon'
   change.addEventListener('click', () => openWeaponPicker(mv, idx))
   actions.appendChild(change)
-  card.appendChild(actions)
+  body.appendChild(actions)
 
   // ── Script presence indicators (Aim / Query / Fire) ──
   // Always rendered for every slot — even an empty slot benefits
@@ -15972,7 +16050,7 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     chip.innerHTML = `<span class="mark">${present ? '✓' : '✗'}</span><span class="lbl">${r.short}</span>`
     chips.appendChild(chip)
   }
-  card.appendChild(chips)
+  body.appendChild(chips)
   // The most actionable missing-script case is Query<X> — without
   // it the runtime can't resolve the muzzle piece and emit-sfx
   // calls fall through to a name-heuristic that frequently picks
@@ -15988,7 +16066,34 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     } else {
       warn.textContent = `⚠ Some firing scripts are missing — animations may not play correctly.`
     }
-    card.appendChild(warn)
+    body.appendChild(warn)
+  }
+
+  // ── Reload countdown bar — shows the time remaining until the
+  //    weapon's next shot.  Bar fills back up to full as the reload
+  //    timer counts down toward zero.  Updates live via the
+  //    refreshMvWeaponsLive 4Hz tick.
+  let reloadBar = null
+  let reloadFill = null
+  let reloadLabel = null
+  if (w.name && w.reloadSec > 0) {
+    const wrap = document.createElement('div')
+    wrap.className = 'mv-weapon-reload'
+    wrap.title = 'Time until this weapon can fire again — counts down on the runtime sim clock so slow-mo stretches it.'
+    const head2 = document.createElement('div')
+    head2.className = 'mv-weapon-reload-head'
+    const klabel = document.createElement('span'); klabel.className = 'mv-weapon-reload-k'; klabel.textContent = 'Reload'
+    reloadLabel = document.createElement('span'); reloadLabel.className = 'mv-weapon-reload-v'; reloadLabel.textContent = 'ready'
+    head2.appendChild(klabel); head2.appendChild(reloadLabel)
+    reloadBar = document.createElement('div')
+    reloadBar.className = 'mv-weapon-reload-bar'
+    reloadFill = document.createElement('div')
+    reloadFill.className = 'mv-weapon-reload-fill'
+    reloadFill.style.width = '100%'
+    reloadBar.appendChild(reloadFill)
+    wrap.appendChild(head2)
+    wrap.appendChild(reloadBar)
+    body.appendChild(wrap)
   }
 
   // ── Stats grid (only when a weapon is assigned) ──
@@ -16022,7 +16127,7 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
       row.appendChild(kEl); row.appendChild(vEl)
       grid.appendChild(row)
     }
-    card.appendChild(grid)
+    body.appendChild(grid)
 
     // ── Sound rows with inline play buttons ──
     const sounds = [
@@ -16047,7 +16152,7 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
         })
         row.appendChild(play)
       }
-      card.appendChild(row)
+      body.appendChild(row)
     }
 
     // ── Classifier flag chips ──
@@ -16067,9 +16172,110 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
         chip.textContent = f
         fchips.appendChild(chip)
       }
-      card.appendChild(fchips)
+      body.appendChild(fchips)
     }
   }
+
+  // ── Recent projectiles list — last 5 shots from this slot's
+  //    history buffer.  Hidden via .mv-weapon-projlist-hidden class
+  //    when the master "Show Projectiles" toggle is off.  Container
+  //    is created empty + populated by the live-refresh closure so
+  //    new shots appear without a full re-render of the card.
+  let projList = null
+  if (w.name) {
+    const wrap = document.createElement('div')
+    wrap.className = 'mv-weapon-projlist'
+    if (!_mvWeaponShowProjectiles) wrap.classList.add('mv-weapon-projlist-hidden')
+    const hdr = document.createElement('div')
+    hdr.className = 'mv-weapon-projlist-head'
+    hdr.textContent = 'Recent projectiles'
+    wrap.appendChild(hdr)
+    projList = document.createElement('div')
+    projList.className = 'mv-weapon-projlist-rows'
+    const empty = document.createElement('div')
+    empty.className = 'mv-weapon-projlist-empty'
+    empty.textContent = 'No shots fired yet.'
+    projList.appendChild(empty)
+    wrap.appendChild(projList)
+    body.appendChild(wrap)
+  }
+
+  card.appendChild(body)
+
+  // ── Live-refresh closure — stashed on the card so the panel's
+  //    per-tick refresh can update the reload bar + recent-shot
+  //    list without rebuilding the whole DOM tree.  Closure captures
+  //    `reloadBar / reloadLabel / projList / w / slot` so it can read
+  //    fresh state every tick.
+  card.__mvLiveRefresh = (mvLive) => {
+    const rt = mvLive?.cob?.runtime
+    const ctrl = mvLive?._mvControls
+    // Reload bar — read aim state (sim-time clock) and weapon reload
+    // window.  When the weapon hasn't fired yet (lastFireMs = -Infinity)
+    // the bar is full + label says "ready".
+    if (reloadBar && reloadFill && reloadLabel && rt && ctrl) {
+      const state = ctrl.aimState && ctrl.aimState[slot]
+      const reloadMs = (w.reloadSec || 0) * 1000
+      if (state && reloadMs > 0 && state.lastFireMs > -Infinity) {
+        const since = rt.simTimeMs - state.lastFireMs
+        const remaining = Math.max(0, reloadMs - since)
+        const pct = Math.max(0, Math.min(100, (1 - remaining / reloadMs) * 100))
+        reloadFill.style.width = pct.toFixed(1) + '%'
+        if (remaining <= 0) {
+          reloadLabel.textContent = 'ready'
+          reloadFill.classList.add('mv-weapon-reload-fill-ready')
+        } else {
+          reloadLabel.textContent = (remaining / 1000).toFixed(2) + ' s'
+          reloadFill.classList.remove('mv-weapon-reload-fill-ready')
+        }
+      } else {
+        reloadFill.style.width = '100%'
+        reloadLabel.textContent = 'ready'
+        reloadFill.classList.add('mv-weapon-reload-fill-ready')
+      }
+    }
+    // Projectile list visibility toggle from the master switch.  The
+    // class is recomputed each tick so the user can flip the toggle
+    // mid-refresh without waiting for a full panel re-render (the
+    // toggle handler already calls renderMvWeaponsTab, but defending
+    // here keeps the refresh idempotent).
+    const wrap = projList ? projList.parentElement : null
+    if (wrap) wrap.classList.toggle('mv-weapon-projlist-hidden', !_mvWeaponShowProjectiles)
+    // Recent shots — re-render from the history buffer.  Cheap (at
+    // most 5 rows) so we rebuild every tick rather than diffing.
+    if (projList && ctrl) {
+      const hist = ctrl.shotHistory && ctrl.shotHistory[slot]
+      projList.replaceChildren()
+      if (!hist || hist.length === 0) {
+        const empty = document.createElement('div')
+        empty.className = 'mv-weapon-projlist-empty'
+        empty.textContent = 'No shots fired yet.'
+        projList.appendChild(empty)
+      } else {
+        // Newest at the BOTTOM (matches how the user perceives time
+        // — older shots scroll up, newest appear at the cursor).
+        for (let i = 0; i < hist.length; i++) {
+          const s = hist[i]
+          const row = document.createElement('div')
+          row.className = 'mv-weapon-projlist-row'
+          const idxEl = document.createElement('span')
+          idxEl.className = 'mv-weapon-projlist-idx'
+          idxEl.textContent = '#' + (hist.length - i)
+          const posEl = document.createElement('span')
+          posEl.className = 'mv-weapon-projlist-pos'
+          posEl.textContent = `${s.anchor[0].toFixed(1)}, ${s.anchor[1].toFixed(1)}, ${s.anchor[2].toFixed(1)}`
+          const spdEl = document.createElement('span')
+          spdEl.className = 'mv-weapon-projlist-spd'
+          spdEl.textContent = s.speed.toFixed(0) + ' wu/s'
+          row.appendChild(idxEl); row.appendChild(posEl); row.appendChild(spdEl)
+          projList.appendChild(row)
+        }
+      }
+    }
+  }
+  // Run the closure once immediately so the card isn't blank for the
+  // first 250 ms before the inspector throttle fires.
+  card.__mvLiveRefresh(mv)
   return card
 }
 

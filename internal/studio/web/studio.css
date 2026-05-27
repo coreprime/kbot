@@ -4072,6 +4072,82 @@ canvas {
    it sits later in DOM order.  Bump the picker above 6000 so it also
    clears the thread debugger when both happen to be open. */
 #weapon-pick-dialog { z-index: 10000; }
+/* Master "Show Projectiles" toggle at the top of the Weapons tab. */
+.mv-weapon-show-proj {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--text);
+  cursor: pointer; user-select: none;
+}
+.mv-weapon-show-proj input { margin: 0; }
+/* Collapse chevron — rotates 90° (▾ → ▸) when card is collapsed. */
+.mv-weapon-head { cursor: pointer; }
+.mv-weapon-chev {
+  display: inline-block; width: 12px;
+  font-size: 10px; color: var(--muted);
+  transition: transform 120ms ease;
+  margin-right: 2px;
+}
+.mv-weapon-collapsed .mv-weapon-chev { transform: rotate(-90deg); }
+.mv-weapon-collapsed .mv-weapon-body { display: none; }
+/* Reload countdown — full-width bar with a label row above showing
+   "Reload" + remaining seconds (or "ready" when fully reloaded). */
+.mv-weapon-reload {
+  margin: 6px 0;
+}
+.mv-weapon-reload-head {
+  display: flex; justify-content: space-between;
+  font-size: 10px; font-family: ui-monospace, monospace;
+  margin-bottom: 2px;
+}
+.mv-weapon-reload-k { color: var(--muted); }
+.mv-weapon-reload-v { color: var(--text); }
+.mv-weapon-reload-bar {
+  height: 4px; background: var(--border);
+  border-radius: 2px; overflow: hidden;
+}
+.mv-weapon-reload-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #a04e2e, #d97950);
+  transition: width 200ms linear;
+}
+.mv-weapon-reload-fill-ready {
+  /* Solid green when the weapon is ready to fire — easy to spot at
+     a glance even in a busy panel. */
+  background: linear-gradient(90deg, #3a8a3a, #4faf4f);
+}
+/* Recent projectiles list — newest at the bottom, each row shows
+   shot #, XYZ launch pos, and speed in wu/s. */
+.mv-weapon-projlist {
+  margin: 6px 0 0 0;
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+}
+.mv-weapon-projlist-hidden { display: none; }
+.mv-weapon-projlist-head {
+  font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.3px;
+  margin-bottom: 3px;
+}
+.mv-weapon-projlist-rows {
+  display: flex; flex-direction: column; gap: 1px;
+  font-family: ui-monospace, monospace; font-size: 10px;
+}
+.mv-weapon-projlist-row {
+  display: grid; grid-template-columns: 24px 1fr auto;
+  gap: 6px; padding: 1px 0;
+}
+.mv-weapon-projlist-idx { color: var(--muted); }
+.mv-weapon-projlist-pos {
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mv-weapon-projlist-spd { color: #ffd09a; text-align: right; }
+.mv-weapon-projlist-empty {
+  color: var(--muted); font-style: italic; font-size: 10px;
+  padding: 2px 0;
+}
 .mv-weapon-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .mv-weapon-chip {
   font-size: 10px; padding: 1px 6px; border-radius: 10px;
