@@ -273,6 +273,17 @@ export const hostCallbacks = {
   // foregrounded).  Used by the sandbox-ribbon bridge so each
   // ribbon button action targets the right view's scene + camera.
   getActiveSandboxView: null,   // () => SandboxView | null
+  // getTabs — the live tabs[] array studio.js owns.  Extracted
+  // tab-activation modules iterate it to stop OTHER tabs' renderers
+  // + detach their canvases when the active tab swaps.  Returned by
+  // reference so a fresh push from studio.js (openModelViewer /
+  // openSandboxStub) shows up in the next walk without re-importing.
+  getTabs: null,                // () => Tab[]
+  // pushTab — append a new tab to studio.js's tabs[] AND flip
+  // tabState.activeIndex / switch to it.  The sandbox welcome-card
+  // entry point uses this so /ui/sandbox/tab.js doesn't have to
+  // import the tabs / switchToTab module-let pair directly.
+  pushTab: null,                // (tab) => void
   // openModelViewer — pushes a model tab into the unified tab array
   // and switches to it.  Called by openModelPicker after the user
   // confirms a unit pick (non-sandbox-spawn path).  Lives in studio.js
