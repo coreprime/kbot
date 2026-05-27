@@ -386,6 +386,16 @@ export const hostCallbacks = {
   // Auto-rotate persistence + legacy shared canvas accessor.
   getUnitEditorAutoRotate: null,// () => boolean
   sharedModelViewerCanvas: null,// () => HTMLCanvasElement | null
+  // Thread-debugger render hooks the modal lifecycle in
+  // /ui/unit-editor/debugger/modal.js calls back into studio.js for
+  // until R43d/e move the BOS + asm renderers + bracket repaint into
+  // sibling modules.  All four read state mutated by COB ticks that
+  // still live studio-side.
+  renderMvThreadCodeSource: null,     // (state, thread) => void
+  renderMvThreadCodeDecompiled: null, // (state, cob) => void
+  wireMvThreadCodeBrackets: null,     // (state) => void
+  refreshMvThreadCodeHighlight: null, // (state) => void
+  redrawMvThreadCodeBrackets: null,   // (state) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
