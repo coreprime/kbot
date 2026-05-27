@@ -75,7 +75,7 @@ export function wireHotkeys(view, opts) {
 // listScripts, runtime, unit, etc.) to the binding via the proto
 // chain.  Critical: assigning particles/audio directly ONTO the
 // binding would clobber its own pools and break particle emission
-// inside the binding's own _emitFireBurst / _pushPulseLight etc.
+// inside the binding's own _emitFireBurst / getSceneLight etc.
 //
 // The aggregator functions live on `view` (each view implements its
 // own aggregateParticlePool / aggregateAudioPool to walk whatever

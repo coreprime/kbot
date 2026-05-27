@@ -546,14 +546,14 @@ export class GameEngine {
   // live light-emitter and returns it as a plain object the host
   // view can forward to its renderer's single dynamic-light slot.
   // Returns null when no live light source exists (host clears the
-  // slot).  Cross-unit by design — each unit's binding ALSO has its
-  // own _pushPulseLight for the single-binding case (legacy unit-
-  // editor path), but multi-entity hosts want the scene-wide brightest
-  // because binding.tick isn't called per-unit there.  Score formula
+  // slot).  Cross-unit by design — each unit's binding also exposes
+  // its own getSceneLight for the single-binding renderer path, but
+  // multi-entity hosts want the scene-wide brightest because the
+  // renderer's per-binding tick isn't running there.  Score formula
   // (lightStrength · max(r,g,b) · alpha/alpha0) mirrors the binding's
   // so the two paths agree on which particle wins.
   //
-  // Pure read.  The engine no longer holds a renderer ref — pull-side
+  // Pure read.  The engine holds no renderer ref — pull-side
   // decoupling per the engine/renderer split (Phase D).
   getSceneLight() {
     let bestUnit = null

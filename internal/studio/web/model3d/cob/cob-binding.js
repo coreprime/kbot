@@ -138,25 +138,20 @@ export class CobBinding {
     // slow-mo / fast-forward / pause with the rest of the sim.
     // tick is a no-op when neither has changed since last call.
     this.audio.tick(this.runtime.playbackRate, this.runtime.paused)
-    // Dynamic light contribution — surface the strongest live
-    // light-emitting particle (d-gun ball, laser pulse) into the
-    // renderer's single pulse-light slot so units near the projectile
-    // get illuminated.  Strongest = max(lightStrength * alpha) so a
-    // fading particle gradually loses its illumination rather than
-    // snapping off.
-    this._pushPulseLight()
+    // Note: dynamic light contribution is exposed via getSceneLight()
+    // as a pure getter — the renderer pulls it after tick(), so this
+    // binding has no knowledge of a renderer.
     return count
   }
 
-  // _pushPulseLight scans the alive particles for any flagged as a
-  // light source and forwards the strongest to the renderer.  One
-  // light at a time keeps shader cost flat; in practice the d-gun
-  // dominates any other simultaneous emitter (range 300 vs laser's
-  // 80) so picking the brightest is enough.
-  _pushPulseLight() {
-    // The renderer is back-ref'd onto this binding by setCobBinding.
-    const renderer = this.renderer
-    if (!renderer || typeof renderer.setPulseLight !== 'function') return
+  // getSceneLight scans the alive particles for any flagged as a
+  // light source and returns the strongest as { pos, color, strength }
+  // (or null when nothing is lit).  One light at a time keeps shader
+  // cost flat; in practice the d-gun dominates any other simultaneous
+  // emitter (range 300 vs laser's 80) so picking the brightest is
+  // enough.  Same shape as the engine's getSceneLight so the renderer
+  // can poll either source through one code path.
+  getSceneLight() {
     const p = this.particles
     let bestIdx = -1
     let bestScore = 0
@@ -170,15 +165,12 @@ export class CobBinding {
       const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
       if (s > bestScore) { bestScore = s; bestIdx = i }
     }
-    if (bestIdx < 0) {
-      renderer.setPulseLight(null, null, 0)
-      return
+    if (bestIdx < 0) return null
+    return {
+      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
+      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
+      strength: p.lightStrength[bestIdx],
     }
-    renderer.setPulseLight(
-      [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
-      [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
-      p.lightStrength[bestIdx]
-    )
   }
 
   // start exposes the unit's entry-point launcher with the same name

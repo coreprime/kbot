@@ -807,10 +807,6 @@ export class ModelRenderer {
   // animators and copies per-piece state into the Model.
   setCobBinding(binding) {
     this.cobBinding = binding || null
-    // Hand the binding a back-reference to THIS renderer so per-tick
-    // hooks (the dynamic pulse-light from active particles) can push
-    // state into our uniforms without chasing the caller's closures.
-    if (binding) binding.renderer = this
     // Forward the binding's particle pool to the renderer's SFX
     // pass.  Detaching the binding also detaches the pool so the
     // old unit's particles don't keep drawing.
@@ -1304,7 +1300,16 @@ export class ModelRenderer {
       // animators and writes the results into the model's piece
       // tree.  Must run before draw() so the new transforms land
       // in this frame's geometry pass.
-      if (this.cobBinding) this.cobBinding.tick(dt * 1000)
+      if (this.cobBinding) {
+        this.cobBinding.tick(dt * 1000)
+        // Pull the binding's strongest live light-emitting particle
+        // into our single dynamic light slot.  The binding exposes
+        // this as a pure getter so it has no awareness of being
+        // rendered — same shape as the engine's getSceneLight().
+        const light = this.cobBinding.getSceneLight()
+        if (light) this.setPulseLight(light.pos, light.color, light.strength)
+        else this.setPulseLight(null, null, 0)
+      }
       this.draw()
       // Notify external observers (studio inspector overlays) that
       // a frame finished.  The host wires a refresh callback so
