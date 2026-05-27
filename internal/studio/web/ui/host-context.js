@@ -308,6 +308,25 @@ export const hostCallbacks = {
   // expansion live in one place (studio.js for now — moves with
   // paint mode in a later round).
   placeFeature: null,           // (ax, ay) => void
+  // placementAnchor returns the top-left tile coordinate where a
+  // section placement should land so the cursor cell ends up at
+  // the centre of the section's rotated footprint.  Lives in
+  // studio.js because the drag-drop handler + the paint-mode
+  // click flow + the paste handler all consume it from different
+  // call sites; the helper itself is pure rotation math.
+  placementAnchor: null,        // (cursorTX, cursorTY, placement) => { tx, ty }
+  // clearStampSelection deselects the active drawer
+  // section/feature so subsequent clicks no longer stamp.
+  // Studio-side because it updates DOM (drawer paint) + status
+  // bar in one shot; the paint module calls it after a productive
+  // stroke commits.
+  clearStampSelection: null,    // () => void
+  // renderDrawer repaints the sections / features drawer body.
+  // Studio-side because the legacy renderDrawer paints directly
+  // into the static <div id="drawer"> outside the React tree;
+  // the paint module calls it after dropping the selection so
+  // the row de-highlights immediately.
+  renderDrawer: null,           // () => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

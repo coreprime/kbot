@@ -109,7 +109,6 @@ import { resetGL } from './ui/map-editor/canvas/webgl.js'
 // algebra over (origW, origH, rotation, flipH, flipV).
 import {
   rotatedFootprint,
-  transformedSourceCell,
 } from './ui/map-editor/rotation.js'
 
 // Persisted UI prefs — drawer filters, view-menu toggles, inspector
@@ -250,7 +249,6 @@ import {
 // (wireSymmetryGroup) stays in studio.js for now.
 import {
   SYMMETRY_LABELS,
-  symmetryMatesTile,
   symmetryMatesAttr,
 } from './ui/map-editor/symmetry.js'
 
@@ -345,7 +343,6 @@ import {
 import {
   renderMinimap,
   invalidateMinimapBase,
-  patchMinimapTile,
   wireMinimap,
   getMinimapBaseSnapshot,
   setMinimapBaseSnapshot,
@@ -475,6 +472,19 @@ import {
 // drag state (R40e.1).
 import { onFillMouseDown } from './ui/map-editor/modes/fill.js'
 
+// Paint mode — three mouse-router entry points + the stamp
+// pipeline.  Owns the anchored-preview drag state internally;
+// resetPaintPlacement clears it on abort.  handlePaint is
+// exported so the drawer drag-drop fallback in this file can
+// route plain drops through the same code path (R40d).
+import {
+  onPaintMouseDown,
+  onPaintMouseMove,
+  onPaintMouseUp,
+  resetPaintPlacement,
+  handlePaint,
+} from './ui/map-editor/modes/paint.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -560,6 +570,9 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.scheduleMinimapRender = scheduleMinimapRender
   hostCallbacks.tryAutoSwitchAt = tryAutoSwitchAt
   hostCallbacks.placeFeature = placeFeature
+  hostCallbacks.placementAnchor = placementAnchor
+  hostCallbacks.clearStampSelection = clearStampSelection
+  hostCallbacks.renderDrawer = renderDrawer
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -686,8 +699,8 @@ function abortTransientGestureState() {
   spacePanHotkey = false
   resetPaintStroke()
   resetHmHoldTimer()
+  resetPaintPlacement()
   canvasHoverFeature = null
-  placementMoveAnchor = null
   resetTerrainDrag()
   resetFeatureDrag()
   resetStartPosDrag()
@@ -2962,12 +2975,7 @@ function onCanvasMouseDown(e) {
   }
 
   if (state.mode === 'paint') {
-    if (state.placement) {
-      handlePaintModeClick(e)
-      return
-    }
-    beginTransaction()
-    handlePaint(e)
+    onPaintMouseDown(e)
   } else if (state.mode === 'erase') {
     // Erase mode runs as a paint stroke — each stamp during the drag
     // calls eraseAt; mouseup commits the whole stroke as one undo step.
@@ -3006,22 +3014,7 @@ function onCanvasMouseMove(e) {
     hostCallbacks.cursor.lastHover = cell
   }
   if (state.mode === 'paint') {
-    if (placementMoveAnchor && state.placement) {
-      const { tx, ty } = pickCell(e)
-      const dx = tx - placementMoveAnchor.cursorTX
-      const dy = ty - placementMoveAnchor.cursorTY
-      const newTx = placementMoveAnchor.anchoredTX + dx
-      const newTy = placementMoveAnchor.anchoredTY + dy
-      if (dx !== 0 || dy !== 0) placementMoveAnchor.moved = true
-      if (state.placement.tx !== newTx || state.placement.ty !== newTy) {
-        state.placement.tx = newTx
-        state.placement.ty = newTy
-        tryAutoRotatePlacement(state.placement)
-        renderCanvas()
-      }
-    } else if (state.placement && !state.placement.anchored) {
-      updatePlacementHover(e)
-    } else if (paintState.painting) handlePaint(e)
+    onPaintMouseMove(e)
   } else if (state.mode === 'erase') {
     const { tx, ty } = pickCell(e)
     // Track the cursor cell so the brush outline follows the mouse,
@@ -3056,29 +3049,7 @@ function onCanvasMouseMove(e) {
 function onCanvasMouseUp(e) {
   if (panState) { endPan(); return }
   if (state.mode === 'paint') {
-    if (placementMoveAnchor) {
-      // If the mousedown happened inside the anchored footprint and
-      // the cursor didn't move, treat the mouseup as a "confirm here"
-      // click; otherwise the drag has already updated tx/ty in place
-      // and we just clear the anchor.
-      if (!placementMoveAnchor.moved) {
-        // Mousedown-then-up inside the anchored footprint is a "confirm
-        // here" gesture.  Commit, drop the drawer selection, and slip
-        // into Select Area mode so the user can immediately move or
-        // tweak what they just placed.
-        commitAnchoredPlacement()
-        state.selected = null
-        hidePlacementHint()
-        renderDrawer()
-        setMode('select-terrain')
-      }
-      placementMoveAnchor = null
-    } else if (paintState.painting && paintState.paintedDuringStroke && !state.placement) {
-      commitTransaction('Paint')
-      if (state.selected?.type !== 'feature') clearStampSelection()
-    } else if (paintState.painting && !paintState.paintedDuringStroke) {
-      abortTransaction()
-    }
+    onPaintMouseUp(e)
   } else if (state.mode === 'erase') {
     if (paintState.painting && paintState.paintedDuringStroke) commitTransaction('Erase')
     else if (paintState.painting) abortTransaction()
@@ -3231,157 +3202,13 @@ function placementAnchor(cursorTX, cursorTY, p) {
   return { tx: cursorTX - Math.floor(fw / 2), ty: cursorTY - Math.floor(fh / 2) }
 }
 
-function updatePlacementHover(e) {
-  const { tx: cx, ty: cy } = pickCell(e)
-  const { tx, ty } = placementAnchor(cx, cy, state.placement)
-  const moved = state.placement.tx !== tx || state.placement.ty !== ty
-  const waking = !!state.placement.dormant
-  if (moved) {
-    state.placement.tx = tx
-    state.placement.ty = ty
-  }
-  // Cursor entered the canvas → wake the preview so it starts
-  // rendering under the cursor instead of (invisibly) at the
-  // viewport centre we seeded it with.
-  if (waking) state.placement.dormant = false
-  // Auto-fit rotation while the cursor is dragging the preview around:
-  // a new position can change which orientation is the only seam-clean
-  // option.  Once Q/E sets userRotated, this becomes a no-op.
-  if (moved) tryAutoRotatePlacement(state.placement)
-  if (moved || waking) renderCanvas()
-}
-
-// placementMoveAnchor tracks an in-flight drag of an already-anchored
-// placement preview.  Populated on mousedown inside the footprint and
-// cleared on mouseup.
-let placementMoveAnchor = null
-
-// handlePaintModeClick implements the two-click placement flow.
-//
-//   Click 1 — anchors the cursor-following preview at the click cell.
-//             Tiles beneath are *not* modified yet.
-//   Click 2 inside the anchored footprint (no drag) — confirms.
-//   Click 2 outside the anchored footprint — confirms in place and
-//             re-engages cursor-follow so the next click drops another
-//             copy without re-picking from the drawer.
-//   Mousedown + drag inside footprint — slides the preview to a new
-//             position.
-function handlePaintModeClick(e) {
-  const p = state.placement
-  const { tx: cx, ty: cy } = pickCell(e)
-  if (!p.anchored) {
-    // First click — anchor at the click cell (centred via placementAnchor).
-    const a = placementAnchor(cx, cy, p)
-    p.tx = a.tx
-    p.ty = a.ty
-    p.anchored = true
-    renderCanvas()
-    setStatus('Section anchored — drag to reposition, Q / E to rotate, click again to confirm.')
-    return
-  }
-  // Already anchored.  Mousedown inside the footprint kicks off a
-  // drag-move; anywhere else commits and re-arms for the next stamp.
-  const { w: fw, h: fh } = rotatedFootprint(p.origW, p.origH, p.rotation)
-  const insideFootprint = cx >= p.tx && cx < p.tx + fw && cy >= p.ty && cy < p.ty + fh
-  if (insideFootprint) {
-    placementMoveAnchor = {
-      cursorTX: cx, cursorTY: cy,
-      anchoredTX: p.tx, anchoredTY: p.ty,
-      moved: false,
-    }
-    return
-  }
-  // Click outside the anchored footprint — commit, clear the drawer
-  // selection, and switch to Select Area mode so the user is ready
-  // to manipulate the just-placed section without re-mode-switching.
-  commitAnchoredPlacement()
-  state.selected = null
-  hidePlacementHint()
-  renderDrawer()
-  setMode('select-terrain')
-}
-
-// commitAnchoredPlacement writes the current anchored placement to the
-// map.  The drawer selection's rotation is updated so the next time we
-// re-arm (multi-stamp) we keep the user's rotation choice.
-function commitAnchoredPlacement() {
-  const p = state.placement
-  if (!p) return
-  if (state.selected?.type === 'section') {
-    state.selected.rotation = p.rotation
-    state.selected.flipH = !!p.flipH
-    state.selected.flipV = !!p.flipV
-  }
-  beginTransaction()
-  stampSectionWithRotation(p.tx, p.ty, p.sectionPath, p.origW, p.origH, p.rotation, !!p.flipH, !!p.flipV)
-  commitTransaction('Place section')
-  state.placement = null
-  hidePlacementHint()
-}
-
-// ── Rotation helpers ───────────────────────────────────────────────────────
-//
-// Pure rotation + flip primitives moved to
-// ./ui/map-editor/rotation.js (rotatedFootprint, rotatedSourceCell,
-// transformedSourceCell, drawTransformedTile).  The stamp pipeline
-// below — stampSectionWithRotation + copyTileHeights — stays here
-// because it mutates the live state.tiles / state.heights and
-// triggers minimap + canvas redraws.
-
-// stampSectionWithRotation writes per-cell {sectionPath, sx, sy, rotation,
-// flipH, flipV} records into state.tiles and copies the section's height
-// samples (with the same transform) into state.heights at 16-px
-// resolution.  flipH/flipV are optional and default to false.
-function stampSectionWithRotation(tx, ty, sectionPath, origW, origH, rotation, flipH = false, flipV = false) {
-  const { w: fw, h: fh } = rotatedFootprint(origW, origH, rotation)
-  const sec = state.sectionHeights.get(sectionPath) // may be undefined
-  for (let dy = 0; dy < fh; dy++) {
-    for (let dx = 0; dx < fw; dx++) {
-      const mx = tx + dx
-      const my = ty + dy
-      if (mx < 0 || my < 0 || mx >= state.tileW || my >= state.tileH) continue
-      const src = transformedSourceCell(dx, dy, origW, origH, rotation, flipH, flipV)
-      state.tiles[my * state.tileW + mx] = { sectionPath, sx: src.sx, sy: src.sy, rotation, flipH, flipV }
-      patchMinimapTile(mx, my)
-
-      if (sec) copyTileHeights(sec, src.sx, src.sy, mx, my, rotation, origW, origH, flipH, flipV)
-    }
-  }
-  paintState.paintedDuringStroke = true
-  renderCanvas()
-}
-
-// Each tile cell maps to a 2×2 block in the 16-px attribute grid; copy
-// the 4 height samples from the section into state.heights, applying the
-// inverse rotation so a rotated section's elevations end up where the
-// rotated tile graphic visually points.
-function copyTileHeights(sec, ssx, ssy, mtx, mty, rotation, origW, _origH, flipH = false, flipV = false) {
-  const secAttrW = origW * 2
-  const mapAttrW = state.tileW * 2
-  for (let qy = 0; qy < 2; qy++) {
-    for (let qx = 0; qx < 2; qx++) {
-      // The flip mirrors the visible 2×2 attribute slots inside the tile
-      // before we map back through the rotation — same composition as
-      // drawTransformedTile so seams stay coherent.
-      const fqx = flipH ? 1 - qx : qx
-      const fqy = flipV ? 1 - qy : qy
-      let sqx = fqx
-      let sqy = fqy
-      switch (rotation & 3) {
-        case 1: sqx = fqy; sqy = 1 - fqx; break
-        case 2: sqx = 1 - fqx; sqy = 1 - fqy; break
-        case 3: sqx = 1 - fqy; sqy = fqx; break
-      }
-      const srcAX = ssx * 2 + sqx
-      const srcAY = ssy * 2 + sqy
-      const dstAX = mtx * 2 + qx
-      const dstAY = mty * 2 + qy
-      if (srcAY >= 0 && srcAX >= 0 && srcAY * secAttrW + srcAX < sec.heights.length) {
-        state.heights[dstAY * mapAttrW + dstAX] = sec.heights[srcAY * secAttrW + srcAX]
-      }
-    }
-  }
-}
+// updatePlacementHover, handlePaintModeClick, commitAnchoredPlacement,
+// stampSectionWithRotation + copyTileHeights moved to
+// /ui/map-editor/modes/paint.js (R40d) — imported at the top of
+// this file.  placementAnchor (just below) is exposed to that
+// module through hostCallbacks because the drag-drop + paste
+// paths in this file consume the same helper from different call
+// sites.
 
 // ── Select Terrain mode ────────────────────────────────────────────────────
 // onTerrainMouseDown / Move / Up + the in-flight drag/move state
@@ -3471,26 +3298,10 @@ function activeSchema() {
 // abortTransientGestureState so a stuck hold-tick doesn't survive
 // a mode swap.
 
-function handlePaint(e) {
-  const { tx, ty } = pickCell(e)
-  if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
-
-  // Shift held in Paint mode still acts as a quick-erase modifier.
-  if (e.shiftKey) {
-    eraseAt(tx, ty)
-    paintState.paintedDuringStroke = true
-    return
-  }
-  if (!state.selected) return
-  if (state.selected.type === 'section' && state.mode === 'paint') {
-    stampSection(tx, ty)
-    paintState.paintedDuringStroke = true
-  } else if (state.selected.type === 'feature') {
-    const { ax, ay } = pickFeatureAttrCell(e, state.selected)
-    placeFeature(ax, ay)
-    paintState.paintedDuringStroke = true
-  }
-}
+// handlePaint moved to /ui/map-editor/modes/paint.js (R40d) —
+// imported at the top of this file.  The drag-drop fallback below
+// still calls handlePaint(e) to share the stamp dispatch between
+// click-driven paint strokes and drag-drop completions.
 
 // clearStampSelection deselects the active section/feature so subsequent
 // clicks no longer stamp.  We keep the erase tool intact since it's a
@@ -3506,16 +3317,9 @@ function clearStampSelection() {
 // eraseAt + eraseAtSingle moved to /ui/map-editor/modes/erase.js
 // (R40d.1) — imported at the top of this file.
 
-function stampSection(tx, ty) {
-  const sel = state.selected
-  const rotation = sel.rotation || 0
-  const { w: fw, h: fh } = rotatedFootprint(sel.tileW, sel.tileH, rotation)
-  stampSectionWithRotation(tx, ty, sel.path, sel.tileW, sel.tileH, rotation, !!sel.flipH, !!sel.flipV)
-  for (const m of symmetryMatesTile(tx, ty, fw, fh)) {
-    stampSectionWithRotation(m.tx, m.ty, sel.path, sel.tileW, sel.tileH, rotation,
-      !!sel.flipH !== m.fx, !!sel.flipV !== m.fy)
-  }
-}
+// stampSection moved to /ui/map-editor/modes/paint.js (R40d) —
+// the symmetry-aware per-tile section stamp now lives next to its
+// only consumer (handlePaint).
 
 function placeFeature(ax, ay) {
   const sel = state.selected
