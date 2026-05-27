@@ -482,6 +482,12 @@ export const hostCallbacks = {
   // seam so ArrowLeft / ArrowRight can page the drawer when a
   // section is the active selection.
   pageSectionSibling: null,            // (direction: -1 | 1) => boolean
+  // Size dialog's Confirm handler.  /ui/map-editor/dialogs/size.js
+  // binds confirmOnEnter to the size inputs' Enter key, which fires
+  // this through the seam so the dialog module doesn't have to
+  // import studio.js (startEditor still lives in studio.js this
+  // round — moves out in a follow-up).
+  startEditor: null,                   // () => Promise<void>
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────

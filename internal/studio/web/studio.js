@@ -10,7 +10,6 @@ let _mvControls = null
 // strictly map-scoped: nothing here is referenced by the unit editor
 // or sandbox views.
 import {
-  SCHEMA_PLAYER_COUNTS,
   WORLDS,
 } from './ui/map-editor/constants.js'
 import {
@@ -45,8 +44,6 @@ import {
 import {
   undoStack,
   redoStack,
-  beginTransaction,
-  commitTransaction,
   undo,
   redo,
   updateUndoButtons,
@@ -250,15 +247,13 @@ import {
 // now in /ui/map-editor/wire-toolbar.js.  The DOM wiring
 // (wireSymmetryGroup) moved to /ui/map-editor/ribbon/legacy-popups.js.
 
-// Legacy (pre-React) ribbon popup chrome — closeAllRibbonDropdowns +
-// positionRibbonPopup are reached from the local wireSchemaSelector
-// below.  The rest of the legacy-popup helpers (wireSymmetry/Brush/
-// Voids/Heightmap, wireHistoryFlyout) are consumed by
-// /ui/map-editor/wire-toolbar.js directly.
-import {
-  closeAllRibbonDropdowns,
-  positionRibbonPopup,
-} from './ui/map-editor/ribbon/legacy-popups.js'
+// Legacy (pre-React) ribbon popup chrome — every consumer (the
+// extracted schema selector + the wireToolbar wirer) reaches the
+// helpers (closeAllRibbonDropdowns, positionRibbonPopup, the
+// brush / voids / heightmap / symmetry group wirers, the history
+// flyouts) through direct module imports now, so studio.js no
+// longer imports from /ui/map-editor/ribbon/legacy-popups.js
+// directly.
 
 // Mode dispatch + the cluster of helpers that change with the active
 // mode (placement hint, terrain clipboard cleanup, the Q/E rotate
@@ -303,6 +298,34 @@ import {
 import {
   openSchemaEditor,
 } from './ui/map-editor/dialogs/schema-editor.js'
+
+// Schema selector — the ribbon's Map Settings dropdown for picking
+// the active OTA schema, plus the helpers that drive its row labels
+// and the Add-N-Players chip grid.  Studio.js still consumes
+// schemaPlayerCount + schemaPickerLabel from publishMapRibbonState
+// so they're imported here; the wire/refresh pair is reached
+// through hostCallbacks by wireToolbar.
+import {
+  wireSchemaSelector,
+  refreshSchemaSelector,
+  schemaPlayerCount,
+  schemaPickerLabel,
+  addSchemaWithPlayers,
+  deleteSchema,
+} from './ui/map-editor/schema-selector.js'
+
+// New-map size dialog + the in-editor File → New / File → Open
+// entry points.  startEditor (the size-dialog Confirm handler) still
+// lives in studio.js this round and is exposed through the
+// hostCallbacks.startEditor seam so confirmOnEnter can fire it.
+import {
+  openSizeDialog,
+  closeSizeDialog,
+  startNewMapFromEditor,
+  openExistingMapFromEditor,
+  confirmOnEnter,
+  setSizeDialogSource,
+} from './ui/map-editor/dialogs/size.js'
 
 // Resize-map dialog — anchor-grid + Crop-to-content path.  Rebuilds
 // tiles / heights / voids / features at the new size and tears out
@@ -647,6 +670,10 @@ document.addEventListener('DOMContentLoaded', () => {
   hostCallbacks.publishMapSidebarState = publishMapSidebarState
   hostCallbacks.startNewMapFromEditor = () => startNewMapFromEditor()
   hostCallbacks.openExistingMapFromEditor = () => openExistingMapFromEditor()
+  // /ui/map-editor/dialogs/size.js' confirmOnEnter helper fires the
+  // size-dialog Confirm path through this seam — startEditor still
+  // lives in studio.js this round and moves out in a follow-up.
+  hostCallbacks.startEditor = () => startEditor()
   hostCallbacks.setMode = setMode
   hostCallbacks.invalidateMinimapBase = invalidateMinimapBase
   hostCallbacks.whenImageReady = whenImageReady
@@ -766,7 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#size-name').addEventListener('keydown', confirmOnEnter)
   // Welcome modal — pick New vs Open.
   $('#welcome-new').addEventListener('click', () => {
-    sizeDialogSource = 'welcome'
+    setSizeDialogSource('welcome')
     $('#welcome-dialog').classList.add('hidden')
     openSizeDialog()
   })
@@ -1115,7 +1142,7 @@ function wireMapTabBar() {
       ui.configureTabBarBridge({
         onSwitch:   (i) => switchToTab(i),
         onClose:    (i) => closeTab(i),
-        onNewMap:   () => { sizeDialogSource = 'tabbar'; openSizeDialog() },
+        onNewMap:   () => { setSizeDialogSource('tabbar'); openSizeDialog() },
         onOpenMap:  () => openMapDialog('tabbar'),
         onOpenUnit: () => { modelOpenIntent = 'add'; openModelPicker() },
         onSandbox:  () => openSandboxStub(),
@@ -1142,9 +1169,12 @@ function wireMapTabBar() {
 //
 // openMapDialog / fetchMaps / closeOpenDialog / confirmOpenMap and
 // their module-level catalogue-polling state moved to
-// /ui/pickers/open-map.js.  Studio.js still owns sizeDialogSource
-// because openSizeDialog (still in this file) reads it.
-let sizeDialogSource = 'welcome' // 'welcome' or 'tabbar' — controls where the size dialog routes back to
+// /ui/pickers/open-map.js.  The size dialog (openSizeDialog /
+// closeSizeDialog / startNewMapFromEditor / openExistingMapFromEditor
+// / confirmOnEnter) moved to /ui/map-editor/dialogs/size.js — the
+// `sizeDialogSource` module-let lives there now, seeded through the
+// setSizeDialogSource setter when the welcome-modal New button + the
+// tab-bar "+" New Map entry route into the picker.
 
 // wireOpenDialogKeyboard makes the open-map list keyboard-navigable:
 // Tab from the filter lands on the list, arrow keys move the
@@ -1289,10 +1319,6 @@ async function openLoadedMap(data, card) {
   resetGL()
   renderCanvas()
   setStatus(`Opened ${state.name} (${w}×${h}).`)
-}
-
-function confirmOnEnter(e) {
-  if (e.key === 'Enter') startEditor()
 }
 
 async function startEditor() {
@@ -1848,259 +1874,13 @@ function wireDeveloperDialog() {
 // wireToolbar moved to /ui/map-editor/wire-toolbar.js (Phase 4) —
 // imported at the top of this file.  The wirer reaches the schema-
 // dropdown wiring (wireSchemaSelector / refreshSchemaSelector) and the
-// File-menu New / Open handlers through hostCallbacks because those
-// pieces still live in studio.js.
-
-// Schemas are addressed by their player count (the "Network N" the
-// schema's Type ends in).  Treating count as the identity keeps the
-// add-grid in sync — counts already present are disabled, the rest can
-// be added with one click.  SCHEMA_PLAYER_COUNTS lives in
-// ./ui/map-editor/constants.js.
-
-function schemaPlayerCount(schema) {
-  if (!schema) return 0
-  // The start-position count is the authoritative player count.  TA's
-  // OTA "Type = Network N" stores N as the schema index (0, 1, …), not
-  // the player count, so trusting that would mis-report the cap.  Fall
-  // back to the type-extracted N only when no start positions exist.
-  const sp = (schema.startPositions || []).length
-  if (sp > 0) return sp
-  const m = /network\s*(\d+)/i.exec(schema.type || '')
-  if (m) return parseInt(m[1], 10)
-  return 2
-}
-
-// schemaPickerLabel formats the row label for the schema picker.  For
-// Network-type schemas this comes out as "Network <name> (N Players)"
-// where N is the actual start-position count.  TA stores some OTAs with
-// bare digits in the name field ("0", "1", …) so we synthesise the
-// "Network " prefix when it's not already on the name.  Non-Network
-// schemas (rare in TA) display the bare name without a player suffix.
-function schemaPickerLabel(s) {
-  if (!s) return 'Schema'
-  const isNetwork = /network/i.test(s.type || '')
-  let name = s.name || s.type || 'Schema'
-  if (isNetwork && !/^network/i.test(name)) name = `Network ${name}`
-  if (!isNetwork) return name
-  const n = (s.startPositions || []).length
-  return `${name} (${n} ${n === 1 ? 'Player' : 'Players'})`
-}
-
-function wireSchemaSelector() {
-  const btn = $('#schema-dropdown-btn')
-  const popup = $('#schema-dropdown-popup')
-  if (!btn || !popup) return
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    closeAllRibbonDropdowns(popup)
-    positionRibbonPopup(btn, popup)
-    popup.classList.toggle('hidden')
-    if (!popup.classList.contains('hidden')) refreshSchemaSelector()
-  })
-}
-
-function refreshSchemaSelector() {
-  // React MapRibbon's Map Settings dropdown reads its schema list +
-  // active label off the publishRibbonState snapshot — push every
-  // refresh through so the dropdown stays in lockstep with the legacy
-  // (now-templated) DOM render below.
-  publishMapRibbonState()
-  const lbl = $('#schema-current-lbl')
-  if (lbl && state.ota) {
-    const active = state.ota.schemas[state.activeSchema]
-    lbl.textContent = active ? schemaPickerLabel(active) : 'Schema'
-  }
-  const list = $('#schema-row-list')
-  if (list && state.ota) {
-    const frag = document.createDocumentFragment()
-    state.ota.schemas.forEach((s, i) => {
-      const row = document.createElement('div')
-      row.className = 'schema-row' + (i === state.activeSchema ? ' active' : '')
-      const name = document.createElement('span')
-      name.className = 'schema-row-name'
-      name.textContent = schemaPickerLabel(s)
-      const gear = document.createElement('button')
-      gear.className = 'schema-row-gear'
-      gear.title = 'Edit schema economy / AI settings'
-      gear.innerHTML = '⚙'
-      gear.addEventListener('click', (ev) => {
-        ev.stopPropagation()
-        openSchemaEditor(i)
-      })
-      const del = document.createElement('button')
-      del.className = 'schema-row-del'
-      del.title = state.ota.schemas.length > 1 ? 'Delete this schema' : 'At least one schema is required'
-      del.innerHTML = '✕'
-      if (state.ota.schemas.length <= 1) del.disabled = true
-      del.addEventListener('click', async (ev) => {
-        ev.stopPropagation()
-        const ok = await confirmDialog({
-          title: 'Delete this schema?',
-          message: `"${s.name || `Schema ${i + 1}`}" (${playerCountLabel(schemaPlayerCount(s))}) and its start positions will be removed. This can be undone.`,
-          okLabel: 'Delete schema',
-          okDanger: true,
-        })
-        if (ok) deleteSchema(i)
-      })
-      row.addEventListener('click', () => {
-        if (state.activeSchema !== i) {
-          state.activeSchema = i
-          state.selectedStartPos = -1
-          refreshSchemaSelector()
-          renderCanvas()
-        }
-      })
-      row.appendChild(name)
-      row.appendChild(gear)
-      row.appendChild(del)
-      frag.appendChild(row)
-    })
-    list.replaceChildren(frag)
-  }
-  const addGrid = $('#schema-add-grid')
-  if (addGrid && state.ota) {
-    // Only the *current* schema's player count is excluded from the
-    // Add grid — duplicates against other schemas are allowed so users
-    // can keep multiple variants at the same player count.
-    const current = state.ota.schemas[state.activeSchema]
-    const used = new Set(current ? [schemaPlayerCount(current)] : [])
-    const frag = document.createDocumentFragment()
-    const available = SCHEMA_PLAYER_COUNTS.filter((n) => !used.has(n))
-    if (available.length === 0) {
-      const note = document.createElement('div')
-      note.className = 'schema-add-empty'
-      note.textContent = 'All player counts are already covered.'
-      frag.appendChild(note)
-    } else {
-      for (const n of available) {
-        const chip = document.createElement('button')
-        chip.className = 'schema-add-chip'
-        chip.textContent = `${n} Players`
-        chip.title = `Add a ${n}-player schema (named after the next free Network N)`
-        chip.addEventListener('click', (ev) => {
-          ev.stopPropagation()
-          addSchemaWithPlayers(n)
-        })
-        frag.appendChild(chip)
-      }
-    }
-    addGrid.replaceChildren(frag)
-  }
-}
-
-// addSchemaWithPlayers appends a Network N schema and selects it.
-// The schema starts with no placed positions — the user drops them in
-// via Start Points mode, which gap-fills 1..N as they click.  The
-// schema's display name is "Network X" where X is the lowest integer
-// not already taken by an existing schema's name; the OTA Type stays
-// `Network <playerCount>` for engine compatibility.
-function addSchemaWithPlayers(playerCount) {
-  if (!state.ota) return
-  const proto = state.ota.schemas[state.activeSchema] || state.ota.schemas[0]
-  const nextName = nextAvailableSchemaName(state.ota.schemas)
-  beginTransaction()
-  const newSchema = {
-    ...proto,
-    name: nextName,
-    type: `Network ${playerCount}`,
-    startPositions: [],
-  }
-  state.ota.schemas.push(newSchema)
-  state.activeSchema = state.ota.schemas.length - 1
-  state.selectedStartPos = -1
-  commitTransaction(`Add ${nextName}`)
-  refreshSchemaSelector()
-  renderCanvas()
-}
-
-// nextAvailableSchemaName scans existing schema names for the pattern
-// "Network N" (also matching bare digit names like "0") and returns
-// "Network X" where X is the smallest non-negative integer not used.
-function nextAvailableSchemaName(schemas) {
-  const used = new Set()
-  for (const s of schemas || []) {
-    const name = (s.name || '').trim()
-    // Match "Network 0", "Network 12", or just "12" — that last form
-    // is what TA's OTAs sometimes store the schema index as.
-    let m = /^network\s+(\d+)$/i.exec(name)
-    if (!m) m = /^(\d+)$/.exec(name)
-    if (m) used.add(parseInt(m[1], 10))
-  }
-  let n = 0
-  while (used.has(n)) n++
-  return `Network ${n}`
-}
-
-function deleteSchema(index) {
-  if (!state.ota || state.ota.schemas.length <= 1) return
-  beginTransaction()
-  state.ota.schemas.splice(index, 1)
-  if (state.activeSchema >= state.ota.schemas.length) state.activeSchema = state.ota.schemas.length - 1
-  state.selectedStartPos = -1
-  commitTransaction('Delete schema')
-  refreshSchemaSelector()
-  renderCanvas()
-}
-
-// startNewMapFromEditor is the toolbar New button — confirms first
-// because it nukes the current canvas, undo history, OTA, everything.
-async function startNewMapFromEditor() {
-  // Multi-tab: New simply opens the size dialog and appends a new tab
-  // on confirm.  No discard prompt — the existing map stays on its
-  // own tab.  Dimensions inherit from the current map (likely the
-  // user wants the same size), but the name resets to "newmap" so
-  // a previous map's name doesn't shadow what they're about to make.
-  sizeDialogSource = 'tabbar'
-  const wIn = $('#size-w'); if (wIn) wIn.value = String(state.tileW || 128)
-  const hIn = $('#size-h'); if (hIn) hIn.value = String(state.tileH || 128)
-  const nIn = $('#size-name'); if (nIn) nIn.value = 'newmap'
-  openSizeDialog()
-}
-
-// closeSizeDialog returns the user to the surface they came from when
-// they cancel the size picker.  Resetting transient state is deferred
-// to the actual swap inside startEditor (or openLoadedMap) so a
-// cancelled New leaves the existing editor untouched.
-function closeSizeDialog() {
-  $('#size-dialog').classList.add('hidden')
-  if (sizeDialogSource === 'welcome') {
-    $('#welcome-dialog').classList.remove('hidden')
-    return
-  }
-  // Restore the surface that was visible before the size dialog
-  // appeared.  When the user came from a model tab via the "+"
-  // popup the 3DO viewer was hidden; bring it back.
-  const active = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  if (active?.type === 'model') {
-    $('#model-viewer-dialog').classList.remove('hidden')
-  }
-}
-
-// openSizeDialog reveals the New-map dialog and focuses the name input
-// so the user can immediately type the friendly map name (#38).
-function openSizeDialog() {
-  // Same as openMapDialog: hide the 3DO viewer if it's the current
-  // surface so the size dialog isn't trapped behind a higher dialog.
-  $('#model-viewer-dialog').classList.add('hidden')
-  $('#size-dialog').classList.remove('hidden')
-  // Defer the focus to the next frame so the browser has shown the
-  // dialog before we try to put the caret in the input.
-  requestAnimationFrame(() => {
-    const nm = $('#size-name')
-    if (nm) {
-      nm.focus()
-      nm.select()
-    }
-  })
-}
-
-// openExistingMapFromEditor confirms then reuses the same picker the
-// Welcome modal shows on first boot — the load flow then replaces the
-// editor's state in place via openLoadedMap → finishEditorBoot.
-async function openExistingMapFromEditor() {
-  // Multi-tab: Open appends a new tab; no need to discard or prompt.
-  openMapDialog('tabbar')
-}
+// File-menu New / Open handlers through hostCallbacks; the schema
+// selector + helpers moved to /ui/map-editor/schema-selector.js
+// (Phase 5) and the size dialog + in-editor New / Open entry points
+// to /ui/map-editor/dialogs/size.js — both imported at the top of
+// this file.  schemaPlayerCount + schemaPickerLabel stay reachable
+// from here for the React MapRibbon publish path
+// (publishMapRibbonState).
 
 // confirmDialog moved to /ui/dialogs/confirm.js — imported at the
 // top of this file.  Same imperative API, now routes through
