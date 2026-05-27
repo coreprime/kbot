@@ -387,15 +387,21 @@ export const hostCallbacks = {
   getUnitEditorAutoRotate: null,// () => boolean
   sharedModelViewerCanvas: null,// () => HTMLCanvasElement | null
   // Thread-debugger render hooks the modal lifecycle in
-  // /ui/unit-editor/debugger/modal.js calls back into studio.js for
-  // until R43d/e move the BOS + asm renderers + bracket repaint into
-  // sibling modules.  All four read state mutated by COB ticks that
-  // still live studio-side.
+  // /ui/unit-editor/debugger/modal.js calls back into studio.js for —
+  // BOS pane + asm pane both live in sibling modules now (bos.js +
+  // asm.js).  The callbacks here are seams studio.js wires to the
+  // imported implementations so the modal can stay decoupled from
+  // either renderer's module path.
   renderMvThreadCodeSource: null,     // (state, thread) => void
   renderMvThreadCodeDecompiled: null, // (state, cob) => void
   wireMvThreadCodeBrackets: null,     // (state) => void
   refreshMvThreadCodeHighlight: null, // (state) => void
   redrawMvThreadCodeBrackets: null,   // (state) => void
+  // The asm pane's refreshMvThreadCodeHighlight calls back into
+  // studio.js to repaint the Locals/Globals/Stack tray — the
+  // mvBuildVarRow editor still lives studio-side (R43g moves the
+  // runtime/sim panel + the var-row factories with it).
+  renderMvThreadCodeLocals: null,     // (state, thread) => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
