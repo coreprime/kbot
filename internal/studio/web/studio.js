@@ -15856,21 +15856,22 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
   return card
 }
 
-// playWeaponSound triggers the named .wav via the existing
-// /api/studio/sound endpoint.  Volume is matched to the Controls
-// overlay's sample player so previews aren't louder than the
-// in-session playback.  Errors are swallowed — autoplay rejection
-// in some browsers happens on first interaction; the user just
-// re-clicks.
+// playWeaponSound triggers the named .wav via the studio's central
+// AudioPool — so the preview shows up in the Audio inspector panel
+// and respects the runtime sim-speed / pause state.  Source pos is
+// the unit's world location so the panel can still show a position
+// for a "preview" sound (matches what the inspector shows for the
+// real in-flight weapon sound).
 function playWeaponSound(stem) {
   if (!stem) return
-  try {
-    const audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
-    audio.volume = 0.6
-    audio.play().catch(() => {})
-  } catch (err) {
-    console.warn(`[weapon-sound:${stem}] play failed:`, err)
-  }
+  const mv = modelViewerInstance
+  const pool = mv && mv.cob && mv.cob.audio
+  if (!pool) return
+  // Position from the controls overlay (authoritative live unit pos)
+  // if available, otherwise origin.
+  const ctrl = mv._mvControls
+  const pos = ctrl ? [ctrl.pos.x, ctrl.alt || 0, ctrl.pos.z] : null
+  pool.play(stem, { vol: 0.6, kind: 'ui', source: `Preview: ${stem}`, pos })
 }
 
 // ── Weapon picker dialog ────────────────────────────────────────

@@ -154,6 +154,9 @@ export class ModelViewer {
     this.cob._lifecycle = (this.cob.hasScript && this.cob.hasScript('Create')) ? 'unborn' : 'created'
     // Drop SFX particles so smoke + sparks from prior runs vanish.
     if (this.cob.particles) this.cob.particles.count = 0
+    // Stop any in-flight audio so a Reset doesn't leave the previous
+    // unit's voice-acks playing over the fresh "create" state.
+    if (this.cob.audio) this.cob.audio.dispose()
     // Controls overlay state (move target, aim targets, walk pos)
     // gets cleared too so Reset really does mean "start over".
     if (this._mvControls && typeof this._mvControls.resetState === 'function') {

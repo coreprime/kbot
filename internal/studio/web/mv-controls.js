@@ -638,18 +638,20 @@ export class MvControls {
     const last = this._lastPlayedMs.get(eventKey) || 0
     if (now - last < 80) return
     this._lastPlayedMs.set(eventKey, now)
-    try {
-      const audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
-      audio.volume = 0.85
-      // Fire-and-forget — Chromium occasionally rejects play() when
-      // there's no user gesture; swallowing the rejection keeps the
-      // controls path silent rather than spraying console errors.
-      const p = audio.play()
-      if (p && typeof p.catch === 'function') p.catch(() => {})
-    } catch {
-      // Ignore — older browsers without the Audio constructor just
-      // skip the sound.
-    }
+    // Route every unit sound through the binding's AudioPool so the
+    // sim-speed slider + pause toggle apply, and the Audio inspector
+    // panel shows the entry with its source pos + progress.  Pos is
+    // the unit's current world location — sounds attach to where
+    // the unit is when they START (the player's perception); the
+    // pool doesn't follow the unit after that.
+    const pool = this.viewer.cob && this.viewer.cob.audio
+    if (!pool) return
+    pool.play(stem, {
+      vol: 0.85,
+      kind: 'unit',
+      source: `${(m && m.name) || 'Unit'}: ${eventKey}`,
+      pos: [this.pos.x, this.alt || 0, this.pos.z],
+    })
   }
 
   // _playSoundRandom picks one event from the list (only those
@@ -1177,7 +1179,7 @@ export class MvControls {
     // the start.  Skip the standard projectile path.
     if (w.beamWeapon && !/disintegrator|dgun|d_gun/i.test(w.name)) {
       this._spawnLaserBeam(w, anchor, [target[0], (target.length >= 3 ? target[1] : 0), target[2]])
-      if (w.soundStart) this._playWeaponSound(w.soundStart)
+      if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
       return
     }
     const v = +w.velocityWU || 200
@@ -1257,7 +1259,7 @@ export class MvControls {
     // Weapon-start sound.  Falls back gracefully via /api/studio/sound
     // — if the .wav isn't in the VFS the audio fetch 404s silently
     // and we just play nothing for that shot.
-    if (w.soundStart) this._playWeaponSound(w.soundStart)
+    if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
   }
 
   // _spawnLaserBeam draws a single-frame beam from `anchor` to
@@ -1452,18 +1454,21 @@ export class MvControls {
     return [this.pos.x, this.alt, this.pos.z]
   }
 
-  // _playWeaponSound is a thin wrapper around the Audio() flow used
-  // for unit sounds — separate function so per-shot debounce can
-  // diverge from the unit-sound debounce in future (rapid-fire EMGs
-  // shouldn't drop the second 80 ms shot's noise, for example).
-  _playWeaponSound(stem) {
+  // _playWeaponSound routes a weapon's per-shot sound through the
+  // central AudioPool.  Source pos is the muzzle anchor (firing
+  // piece world XYZ) — captured at fire time so the Audio inspector
+  // panel can show the discharge location even after the projectile
+  // moves on.  weaponName is the FBI section key for grouping rows.
+  _playWeaponSound(stem, weaponName, anchor) {
     if (!stem) return
-    try {
-      const audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
-      audio.volume = 0.7
-      const p = audio.play()
-      if (p && typeof p.catch === 'function') p.catch(() => {})
-    } catch { /* ignore */ }
+    const pool = this.viewer.cob && this.viewer.cob.audio
+    if (!pool) return
+    pool.play(stem, {
+      vol: 0.7,
+      kind: 'weapon-fire',
+      source: weaponName ? `${weaponName}: fire` : 'Weapon fire',
+      pos: anchor,
+    })
   }
 
   // _weaponForSlot returns the FBI weapon record for a slot string.

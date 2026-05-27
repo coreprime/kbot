@@ -26,6 +26,7 @@ import {
   SFX_PROJECTILE_LASER,
   SFX_PROJECTILE_MISSILE,
 } from './cob-particles.js'
+import { AudioPool } from '../audio-pool.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
@@ -52,6 +53,14 @@ export class CobBinding {
       if (idx >= 0) this._cobToPiece.set(idx, p)
     }
     this.particles = new ParticlePool(1024)
+    // Audio pool — central registry for every sound the studio plays
+    // (unit acks, weapon fire, hits, UI previews).  Lives on the
+    // binding so it's ticked alongside particles + runtime in the
+    // same per-frame call, and disposed when the binding tears down
+    // on a unit-swap.  Lazily imported below the constructor body
+    // would create a circular import; static import at top of file
+    // is the standard pattern.
+    this.audio = new AudioPool()
     // Wire the pool's on-expire callback so projectile particles
     // detonate visually instead of just vanishing.  This is the
     // single point of dispatch for TA-style impact effects:
@@ -97,6 +106,11 @@ export class CobBinding {
     // Particles share the runtime's playback rate so slow-mo
     // applies uniformly to script + SFX.
     this.particles.tick(dtMs * this.runtime.playbackRate)
+    // Audio pool — propagate the runtime's playbackRate + paused
+    // state to every live <audio> element each frame so sounds
+    // slow-mo / fast-forward / pause with the rest of the sim.
+    // tick is a no-op when neither has changed since last call.
+    this.audio.tick(this.runtime.playbackRate, this.runtime.paused)
     // Dynamic light contribution — surface the strongest live
     // light-emitting particle (d-gun ball, laser pulse) into the
     // renderer's single pulse-light slot so units near the projectile
