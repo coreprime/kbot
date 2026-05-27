@@ -13,6 +13,8 @@
 // seam.  No other module talks to this code; pulling it into the
 // debugger/ folder finishes the round-of-debugger extraction.
 
+import { buildMvBosVarNames } from './bos.js'
+
 // mvBuildVarRow builds one editable variable row.  `getValue` reads
 // the current number; `setValue` writes the parsed result back.
 // Both contract the value to a 32-bit signed int (TA's COB stack is
@@ -53,6 +55,17 @@ export function renderMvThreadCodeLocals(state, thread) {
   const locals = panel.querySelector('.mv-thread-code-locals')
   const stack = panel.querySelector('.mv-thread-code-stack')
   const globals = panel.querySelector('.mv-thread-code-globals')
+  // Ensure the BOS var-name caches are built (no-op when already
+  // populated).  buildMvBosVarNames itself bails when the decompile
+  // hasn't been fetched yet, so we silently fall back to numeric
+  // placeholders on the first render and pick up real names on the
+  // tick after the fetch lands.
+  if (state.cob && state.cob.unit) buildMvBosVarNames(state.cob)
+  const fnLower = thread && thread.script ? thread.script.name.toLowerCase() : null
+  const localNames = (state.cob && state.cob.unit && state.cob.unit._localNamesByFn && fnLower)
+    ? (state.cob.unit._localNamesByFn.get(fnLower) || null)
+    : null
+  const globalNames = (state.cob && state.cob.unit) ? state.cob.unit._globalNames || null : null
   if (locals) {
     // Skip a rebuild while the user is editing a value — replacing
     // the DOM would yank the cursor mid-edit.
@@ -60,12 +73,15 @@ export function renderMvThreadCodeLocals(state, thread) {
       locals.replaceChildren()
       if (thread && thread.locals && thread.locals.length) {
         for (let i = 0; i < thread.locals.length; i++) {
-          // Use `local_N` so the label matches the names the
-          // decompiled BOS source + the asm-pane operand formatter
-          // use (PUSH_LOCAL L1 still shows the operand short-form
-          // in the asm gutter, but the side-panel reads more like
-          // a debugger watch list with the long form).
-          const { row } = mvBuildVarRow(`local_${i}`,
+          // Prefer the authored BOS name lifted from the decompiled
+          // source for the currently-running script — falls back to
+          // `local_N` only when the decompile hasn't fetched yet or
+          // the source doesn't name index i (positional `var`
+          // declarations only cover the leading slots).  This makes
+          // raw .bos files with `var distance = ...` show "distance"
+          // here instead of the synthetic placeholder.
+          const label = (localNames && localNames[i]) || `local_${i}`
+          const { row } = mvBuildVarRow(label,
             () => thread.locals[i],
             (n) => { thread.locals[i] = n | 0 })
           locals.appendChild(row)
@@ -89,7 +105,12 @@ export function renderMvThreadCodeLocals(state, thread) {
       const u = state.cob?.unit
       if (u && u.staticVars && u.staticVars.length) {
         for (let i = 0; i < u.staticVars.length; i++) {
-          const { row } = mvBuildVarRow(`global_${i}`,
+          // Prefer the authored BOS static-var name; fall back to
+          // `global_N` when no name is declared at this index (the
+          // runtime allocates extra static slots on demand via
+          // POP_STATIC, so the source may name fewer than exist).
+          const label = (globalNames && globalNames[i]) || `global_${i}`
+          const { row } = mvBuildVarRow(label,
             () => u.staticVars[i],
             (n) => { u.staticVars[i] = n | 0 })
           globals.appendChild(row)

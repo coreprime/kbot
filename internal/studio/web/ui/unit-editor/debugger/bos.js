@@ -179,6 +179,97 @@ function mvBosStatementMatch(bosLine, instructions, cursor, pieceNames) {
   return null
 }
 
+// buildMvBosVarNames extracts variable names from the (de)compiled
+// BOS source so the debugger's Locals/Globals tray can label rows
+// with their authored names instead of L0/global_0 placeholders.
+// Two scopes:
+//
+//   - GLOBALS (module-scope `static-var` declarations).  These are
+//     a flat positional list — first name declared is global index
+//     0, second is index 1, etc.  Stored on cob.unit._globalNames
+//     as a string[].
+//
+//   - LOCALS (per-function `var` declarations at the top of each
+//     function body, or inline `var name = expr;` later).  Indexed
+//     positionally within each function.  Stored as a Map<funcLower,
+//     string[]> on cob.unit._localNamesByFn so the debugger can pick
+//     the right list for whatever script the inspected thread is
+//     currently running.
+//
+// The COB decompiler emits `global_N` / `local_N` placeholders when
+// it can't recover original names; this parser captures those
+// directly, so the labels read the same as the decompiled source.
+// When the user later loads a hand-written .bos file (real names),
+// the same parser picks up `var distance` or `static-var damage`
+// and the debugger labels follow the source.  Idempotent — bails
+// when both caches are already populated for this unit.
+export function buildMvBosVarNames(cob) {
+  if (cob.unit._globalNames && cob.unit._localNamesByFn) return
+  const src = cob.unit.decompiled || cob.unit._decompiledSource
+  cob.unit._globalNames = []
+  cob.unit._localNamesByFn = new Map()
+  if (!src) return
+  // Module-scope `static-var X, Y, Z;`.  Allow multiple statements
+  // (some sources split long lists) — concatenate every match.  Lines
+  // starting with `//` or inside block comments aren't fully filtered;
+  // false positives are harmless because the names are positional.
+  const lines = src.split('\n')
+  for (const ln of lines) {
+    const m = ln.match(/^\s*static-var\s+([^;]+);/)
+    if (!m) continue
+    for (const n of m[1].split(',')) {
+      const name = n.trim()
+      if (name) cob.unit._globalNames.push(name)
+    }
+  }
+  // Per-function `var X, Y, Z;`.  Walk the source tracking the
+  // current function via brace depth — anything at depth 1+ inside
+  // a `fn() { ... }` block counts as a local declaration for that
+  // function.  Robust to nested control-flow blocks because we only
+  // reset `currentFn` when depth returns to 0.
+  let currentFn = null
+  let depth = 0
+  for (const ln of lines) {
+    // Function header — name followed by `(` at column zero, depth 0.
+    // The asm-pane mapping uses the same `NOT_A_FN` guard; we mirror
+    // it here so `if (...)` / `while (...)` at depth 0 don't get
+    // promoted to "we entered function `if`".
+    if (depth === 0) {
+      const fnMatch = ln.match(/^([A-Za-z_][A-Za-z_0-9]*)\s*\(/)
+      if (fnMatch && !NOT_A_FN.has(fnMatch[1].toLowerCase())) {
+        currentFn = fnMatch[1].toLowerCase()
+        if (!cob.unit._localNamesByFn.has(currentFn)) {
+          cob.unit._localNamesByFn.set(currentFn, [])
+        }
+      }
+    }
+    // `var name1, name2, name3;` — strip any `= initializer` from
+    // each comma-separated declaration before keeping the name.
+    if (currentFn && depth >= 1) {
+      const vm = ln.match(/^\s*var\s+([^;]+);/)
+      if (vm) {
+        const arr = cob.unit._localNamesByFn.get(currentFn)
+        for (const decl of vm[1].split(',')) {
+          const name = decl.split('=')[0].trim()
+          if (name) arr.push(name)
+        }
+      }
+    }
+    // Track brace depth so we know when the current function ends.
+    for (const c of ln) {
+      if (c === '{') depth++
+      else if (c === '}') {
+        depth--
+        if (depth === 0) currentFn = null
+      }
+    }
+  }
+}
+
+// NOT_A_FN — BOS keywords that look like function headers (have
+// parens) but aren't.  Shared with buildMvBosMap below.
+const NOT_A_FN = new Set(['if', 'else', 'while', 'for', 'return', 'get', 'rand'])
+
 // buildMvBosMap walks the decompiled source once per COB to build the
 // BOS↔assembly cross-reference structures used by every open debugger
 // panel.  Stored on the runtime so multiple panels share the same
@@ -193,11 +284,8 @@ export function buildMvBosMap(cob) {
   cob.unit._asmToBos = new Map()
   if (!src) return
   const lines = src.split('\n')
-  // BOS keywords that LOOK like function calls (they have parens) but
-  // aren't.  Without this guard, `if (1)` and `while (cond)` would
-  // be treated as function headers and clobber our current-script
-  // tracking — most activatescr-body lines fell through unmapped.
-  const NOT_A_FN = new Set(['if', 'else', 'while', 'for', 'return', 'get', 'rand'])
+  // NOT_A_FN is hoisted to module scope so buildMvBosVarNames +
+  // renderMvThreadCodeDecompiled share the same exclusion set.
   let currentFn = null
   let cursor = 0
   let scriptInsts = null
@@ -252,9 +340,14 @@ export function renderMvThreadCodeDecompiled(state, cob) {
         .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
         .then((json) => {
           cob.unit._decompiledSource = json.decompiled || '// decompile failed'
-          // Bust cached map so it rebuilds against the fetched source.
+          // Bust cached maps so they rebuild against the fetched
+          // source — var-name lookups for the debugger's Locals /
+          // Globals tray live in the same family of indices and
+          // must follow the same invalidation lifecycle.
           cob.unit._bosMap = null
           cob.unit._asmToBos = null
+          cob.unit._globalNames = null
+          cob.unit._localNamesByFn = null
         })
         .catch((err) => { cob.unit._decompiledSource = `// decompile fetch failed: ${err.message}` })
         .finally(() => { cob.unit._decompileFetchInFlight = null })
@@ -272,11 +365,11 @@ export function renderMvThreadCodeDecompiled(state, cob) {
     return
   }
   buildMvBosMap(cob)
+  buildMvBosVarNames(cob)
   const lines = src.split('\n')
-  // BOS keywords that LOOK like function calls (they have parens) but
-  // aren't.  Used here purely for dataset.fn marking so the
-  // function-header lookup in refreshMvThreadCodeDecompHighlight works.
-  const NOT_A_FN = new Set(['if', 'else', 'while', 'for', 'return', 'get', 'rand'])
+  // NOT_A_FN (module-scope) tags `if (cond)` / `while (...)` / etc. so
+  // we don't treat them as function-header rows when assigning the
+  // dataset.fn / dataset.fnParent attributes the fold handler uses.
   // Track the function the current body lines belong to so each line
   // can be tagged with `data-fn-parent="<fn>"` — the fold handler
   // uses this attribute to hide an entire function in one query.
