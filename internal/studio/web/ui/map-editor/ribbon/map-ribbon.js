@@ -116,9 +116,6 @@ function FileDropdown() {
         label="File"
         title="File actions" />
       <${Dropdown} id="file-dropdown" anchorId="file-dropdown-btn">
-        <${MenuRow} icon="📂" label="Open" dropdownId="file-dropdown"
-          title="Open an existing map from the loaded game data"
-          onClick=${() => mapRibbonBridge.fileOpen()} />
         <${MenuRow} icon="💾" label="Save" dropdownId="file-dropdown"
           title="Save current map as .hpi"
           onClick=${() => mapRibbonBridge.fileSave()} />

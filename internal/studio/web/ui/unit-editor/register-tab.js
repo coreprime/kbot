@@ -122,6 +122,15 @@ class UnitEditorTabInstance {
         v._mvControls.dispose()
         v._mvControls = null
       }
+      // Pull the canvas OUT of the stage before dispose tears down its
+      // GL context.  Without this, the disposed canvas stays in the DOM
+      // as an orphan; because every .model-viewer-canvas is block-
+      // layout with width/height 100%, the orphan pushes the surviving
+      // tab's canvas below the stage's overflow-clip — visually the
+      // surviving tab "stops rendering".
+      if (typeof v.detach === 'function') {
+        try { v.detach() } catch { /* ignore */ }
+      }
       v.dispose()
     } catch { /* ignore */ }
     // Drop host's active-viewer alias when the disposed view was

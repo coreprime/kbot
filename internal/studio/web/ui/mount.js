@@ -35,6 +35,7 @@ import { EffectsPanel } from '/ui/panels/effects-panel.js'
 import { RendererPanel } from '/ui/panels/renderer-panel.js'
 import { ScriptCommandsPanel } from '/ui/panels/script-commands-panel.js'
 import { ControlsPanel } from '/ui/panels/controls-panel.js'
+import { UnitPortsPanel } from '/ui/panels/unit-ports-panel.js'
 import { RuntimePanel } from '/ui/panels/runtime-panel.js'
 import { confirmDialog } from '/ui/dialogs/confirm-dialog.js'
 import {
@@ -198,6 +199,7 @@ export function mountInspectorPanels() {
   _mountInto('mv-inspector-camera',     () => html`<${RendererPanel} />`)
   _mountInto('mv-inspector-actions',    () => html`<${ScriptCommandsPanel} />`)
   _mountInto('mv-inspector-ports',      () => html`<${ControlsPanel} />`)
+  _mountInto('mv-inspector-unit-ports', () => html`<${UnitPortsPanel} />`)
   _mountInto('mv-inspector-scripts',    () => html`<${RuntimePanel} />`)
 }
 

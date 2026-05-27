@@ -87,6 +87,13 @@ class SandboxTabInstance {
       const rt = v.scene && v.scene.runtime
       if (rt && typeof rt.setPaused === 'function') rt.setPaused(true)
       if (typeof v.setSilenced === 'function') v.setSilenced(true)
+      // Pull the canvas OUT of the stage before dispose tears down its
+      // GL context — orphan canvas + block-layout 100%/100% would push
+      // the surviving tab's canvas past the stage's overflow-clip
+      // and the surviving tab would "stop rendering" until reload.
+      if (typeof v.detach === 'function') {
+        try { v.detach() } catch { /* ignore */ }
+      }
       v.dispose()
     } catch { /* ignore */ }
     if (getActiveSandboxView() === v) clearActiveSandboxView()

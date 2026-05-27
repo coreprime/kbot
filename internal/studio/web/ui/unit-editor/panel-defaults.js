@@ -13,6 +13,7 @@ const INSPECTOR_PANEL_IDS = [
   'mv-inspector-camera',
   'mv-inspector-actions',
   'mv-inspector-ports',
+  'mv-inspector-unit-ports',
   'mv-inspector-scripts',
 ]
 

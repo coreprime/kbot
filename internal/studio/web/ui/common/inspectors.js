@@ -44,6 +44,7 @@ export const MV_INSPECTOR_IDS = [
   'mv-inspector-scripts',
   'mv-inspector-actions',
   'mv-inspector-ports',
+  'mv-inspector-unit-ports',
   'mv-inspector-staticvars',
   'mv-inspector-camera',
   'mv-inspector-effects',

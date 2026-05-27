@@ -58,17 +58,26 @@ function _mapDisplayName(m) {
   return m.missionName || m.name || '(unnamed map)'
 }
 
+// _tabType returns the registrar typeId for a tab record.  Falls back
+// to the legacy `tab.type` field for any pre-registrar consumer.
+function _tabType(tab) { return tab.typeId || tab.type || '' }
+
 function _tabLabel(tab) {
-  if (tab.type === 'model') return tab.meta?.unitTitle || tab.name || '(model)'
+  const t = _tabType(tab)
+  if (t === 'unit-editor') return tab.meta?.unitTitle || tab.displayName || tab.name || '(unit)'
+  if (t === 'sandbox')     return tab.displayName || tab.name || 'Sandbox'
+  // Map tab (or unknown) — fall back to the legacy map-name path.
   return _mapDisplayName(tab.map)
 }
 
 function _tabTitle(tab) {
-  if (tab.type === 'model') {
+  const t = _tabType(tab)
+  if (t === 'unit-editor') {
     const display = _tabLabel(tab)
     const metaBits = [tab.meta?.unitName?.toUpperCase(), tab.meta?.side, tab.meta?.category].filter(Boolean).join(' · ')
     return `${display}${metaBits ? ` · ${metaBits}` : ''}`
   }
+  if (t === 'sandbox') return _tabLabel(tab)
   const m = tab.map
   const dirty = !!m?.dirty
   const display = _mapDisplayName(m)
@@ -81,15 +90,22 @@ export function TabBar() {
     <nav class="map-tabs" role="tablist">
       <div class="map-tabs-list" id="map-tabs-list">
         ${tabs.map((tab, i) => {
-          const dirty = tab.type !== 'model' && !!tab.map?.dirty
+          const t = _tabType(tab)
+          const isModel = t === 'unit-editor'
+          const isSandbox = t === 'sandbox'
+          const dirty = !isModel && !isSandbox && !!tab.map?.dirty
           const cls = [
             'map-tab',
             i === activeIndex ? 'active' : '',
             dirty ? 'dirty' : '',
-            tab.type === 'model' ? 'map-tab-model' : '',
+            (isModel || isSandbox) ? 'map-tab-model' : '',
           ].filter(Boolean).join(' ')
           const display = _tabLabel(tab)
-          const closeTitle = tab.type === 'model' ? 'Close this model' : 'Close this map'
+          const closeTitle =
+            isModel   ? 'Close this unit' :
+            isSandbox ? 'Close this sandbox' :
+                        'Close this map'
+          const icon = isModel ? '🛠' : (isSandbox ? '🪖' : null)
           return html`
             <button key=${i}
                     type="button"
@@ -98,7 +114,7 @@ export function TabBar() {
                     role="tab"
                     title=${_tabTitle(tab)}
                     onClick=${() => _bridge.onSwitch(i)}>
-              ${tab.type === 'model' ? html`<span class="map-tab-icon">🛠</span>` : null}
+              ${icon ? html`<span class="map-tab-icon">${icon}</span>` : null}
               <span class="map-tab-label">${dirty ? `${display}*` : display}</span>
               <button type="button"
                       class="map-tab-close"

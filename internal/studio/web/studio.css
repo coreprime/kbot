@@ -3220,6 +3220,34 @@ canvas {
    default so the right-edge inspector trio isn't pushed off-screen.
    User can drag it anywhere; this only sets the first-open position. */
 #mv-inspector-ports { top: 360px; left: 12px; right: auto; max-width: 320px; min-width: 280px; }
+/* Unit Ports panel — read-only view of TA's well-known unit-value
+   ports.  Anchored top-LEFT below the Controls panel so it sits next
+   to the editable Controls inspector without overlapping the Camera
+   / Threads / StaticVars right-edge column.  Width matches Unit
+   Variables so the two read-only panels visually cluster. */
+#mv-inspector-unit-ports { top: 360px; left: 350px; right: auto; max-width: 280px; min-width: 240px; }
+.mv-unit-port-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.mv-unit-port-row:last-child { border-bottom: none; }
+.mv-unit-port-id {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+}
+.mv-unit-port-name { color: var(--text); }
+.mv-unit-port-value {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
 .mv-inspector-body .dev-stats-row {
   display: flex;
   justify-content: space-between;

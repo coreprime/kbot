@@ -178,15 +178,18 @@ export async function activateModelTab(tab) {
 // next tick lands the right paused/running state.  Safe to call
 // when no prior snapshot exists (fresh tab) — leaves runtime as-is.
 //
-// Unit-editor specific: explicitly tests `tab.type !== 'model'` so
-// map tabs no-op and the helper never reaches into a MapDoc.  Sandbox
-// tabs share the legacy 'model' type discriminator so they pass the
-// guard and route to the scene's runtime instead of the viewer's.
+// Map tabs no-op (no runtime).  Unit-editor tabs route through the
+// viewer's cob.runtime; sandbox tabs route through the per-tab scene
+// runtime.  The registrar pattern stores the discriminator on
+// tab.typeId; the legacy `tab.type === 'model'` guard never matched
+// after Phase A and the resume was a silent no-op until this fix.
 export function resumeIncomingTabRuntime(tab) {
-  if (!tab || tab.type !== 'model') return
+  if (!tab) return
+  const typeId = tab.typeId || tab.type
+  if (typeId !== 'unit-editor' && typeId !== 'sandbox') return
   const wasPaused = tab._pausedBeforeSwitch
   tab._pausedBeforeSwitch = undefined
-  const rt = tab.sandbox
+  const rt = typeId === 'sandbox'
     ? (tab.viewer && tab.viewer.scene && tab.viewer.scene.runtime)
     : (tab.viewer && tab.viewer.cob && tab.viewer.cob.runtime)
   if (!rt || typeof rt.setPaused !== 'function') return

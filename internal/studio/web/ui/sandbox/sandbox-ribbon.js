@@ -64,6 +64,8 @@ const _PANEL_ROWS = [
     title: 'Renderer overlay — camera pose, FPS, tracking checkbox.' },
   { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
     title: 'Unit Variables overlay — current value of every COB `static-var` the scripts share.' },
+  { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
+    title: 'Unit Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
 ]
 
 // _PanelToggle — reads the panel's visibility signal directly so the
