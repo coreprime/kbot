@@ -29,9 +29,7 @@ import {
 import {
   tabs,
   tabState,
-  state,
   hostCallbacks,
-  setReactUi,
   $,
 } from './ui/host-context.js'
 
@@ -71,7 +69,6 @@ import {
 // sandbox) reads + writes its own subset through the same API.
 import {
   loadPersistedPrefs,
-  persistPrefs,
 } from './ui/common/prefs.js'
 
 // Server heartbeat poller — every /api/studio/heartbeat ping
@@ -161,7 +158,6 @@ import { openModelPicker } from './ui/pickers/open-unit-flow.js'
 // controls-intercept helpers it depends on all live under
 // /ui/sandbox/.
 import {
-  openSandboxStub,
   sharedModelViewerCanvas,
   getActiveSandboxView,
 } from './ui/sandbox/tab.js'
@@ -174,7 +170,22 @@ import {
 import { registerMapTabType } from './ui/map-editor/register-tab.js'
 import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
 import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
-import { createTab, getTabType } from './ui/tab-registry.js'
+import {
+  openTab,
+  switchToTab,
+} from './ui/tab-registry.js'
+
+// Tab-bar + topbar wiring + the React UI island boot all moved to
+// /ui/ root modules in Phase 11.  The boot block below imports the
+// helpers by name and registers them on hostCallbacks for the
+// extracted subsystems that still reach for these seams.
+import {
+  renderMapTabs,
+  wireMapTabBar,
+  mapDisplayName,
+} from './ui/tab-bar.js'
+import { updateTopbarDocInfo } from './ui/topbar.js'
+import { configureReactUi } from './ui/wire-react-ui.js'
 
 // View-menu visibility toggle — setMinimapVisible is the only
 // view-toggle studio.js still touches directly (settings dialog
@@ -199,7 +210,6 @@ import {
 import {
   publishMapRibbonState,
   publishMapSidebarState,
-  wireMapRibbonBridge,
 } from './ui/map-editor/ribbon/bridge.js'
 
 // Dice-face player-count picker for the New-map size dialog.
@@ -286,7 +296,6 @@ import {
   startEditor,
   snapshotActiveTabModuleLets,
   restoreActiveTabModuleLets,
-  abortTransientGestureState,
 } from './ui/map-editor/boot.js'
 
 // Resize-map dialog, Quality Checker, and the loose-file Save
@@ -424,7 +433,6 @@ import {
 // stay in /ui/map-editor/boot.js's finishEditorBoot path (R41b).
 import {
   recreateEditorView,
-  destroyEditorView,
 } from './ui/map-editor/editor-view.js'
 
 // renderCanvas — the per-frame orchestrator that paints every
@@ -448,11 +456,10 @@ import { wireDeveloperDialog } from './ui/map-editor/wire-help-settings-develope
 
 // Panel-defaults seeders — pre-mount visibility hydration for the
 // inspector overlays (unit editor) and the map editor's floating
-// panels (Stats / Minimap / Camera & Cursor).  Both run from
-// configureReactUi before the first React mount so saved choices
-// don't flash visible-then-hidden on cold boot.
-import { seedInspectorPanelDefaults } from './ui/unit-editor/panel-defaults.js'
-import { seedMapPanelDefaults } from './ui/map-editor/panel-defaults.js'
+// panels (Stats / Minimap / Camera & Cursor).  Both run from the
+// wire-react-ui module before the first React mount so saved choices
+// don't flash visible-then-hidden on cold boot.  studio.js no longer
+// imports them directly — /ui/wire-react-ui.js consumes them.
 
 // Per-tab unit-editor lifecycle — activateModelTab lives in
 // /ui/unit-editor/tab.js and is called by the unit-editor tab
@@ -470,11 +477,9 @@ import { seedMapPanelDefaults } from './ui/map-editor/panel-defaults.js'
 // setMvInspectorVisible from the ribbon bridge.
 
 // Thread-debugger modal lifecycle + chrome.  closeAllMvThreadCodePanels
-// is still consumed by switchToTab below; openMvThreadCodeModal moved
-// into the unit-editor ribbon's host-bridge module.
-import {
-  closeAllMvThreadCodePanels,
-} from './ui/unit-editor/debugger/modal.js'
+// is now consumed by /ui/tab-registry.js's switchToTab dispatcher;
+// openMvThreadCodeModal lives in the unit-editor ribbon's host-bridge
+// module.  studio.js no longer imports either.
 
 // Per-unit boot helpers — Studio Options defaults push, ground/
 // submersion mode setter, FBI metadata fetch, and the 5-second
@@ -527,7 +532,6 @@ import {
   getActiveModelViewer,
   setActiveModelViewer,
   getUnitEditorAutoRotate,
-  setModelOpenIntent,
 } from './ui/unit-editor/host-state.js'
 
 // Unit-editor tab opener + the per-tab runtime resumption helper.
@@ -537,13 +541,10 @@ import {
 import { resumeIncomingTabRuntime, openModelViewer } from './ui/unit-editor/tab.js'
 
 // configureHostBridge bundle + the unit-editor ribbon mount/wire
-// pair.  configureReactUi calls wireUnitEditorHostBridge once the
-// React island has loaded; wireModelViewerRibbon mounts the ribbon
-// + its bridge in the same callback.
-import {
-  wireModelViewerRibbon,
-  wireUnitEditorHostBridge,
-} from './ui/unit-editor/ribbon/bridge.js'
+// pair are consumed inside /ui/wire-react-ui.js now;
+// wireUnitEditorHostBridge runs once the React island has loaded
+// and wireModelViewerRibbon mounts the ribbon + its bridge in the
+// same callback.  studio.js no longer imports them directly.
 
 // Cold-boot wiring for the unit editor's legacy DOM chrome (piece-
 // tree filter + inspectors + the React UI island).
@@ -824,70 +825,13 @@ document.addEventListener('DOMContentLoaded', () => {
 //      so the new map renders from a clean surface.
 //   6) Render + restore scroll.
 
-// openTab — single entry point for adding a tab to the host.  Each
-// opener (openLoadedMap, openModelViewer, openSandboxStub,
-// startEditor) builds its type-specific spec and routes here.
-// The function:
-//   1. Builds the registry instance via createTab(typeId, spec).
-//   2. Pushes the host record (which carries the descriptor + spec +
-//      instance) into tabs[].
-//   3. Calls instance.attachTabRef so the descriptor can mirror
-//      legacy fields onto the host record for back-compat.
-//   4. Switches focus to the new tab (unless opts.defer is true,
-//      in which case the caller is responsible for the switch —
-//      used by openers that need to populate the spec further
-//      before the first activation).
-// Returns the freshly-attached host record.
-function openTab(typeId, spec = {}, opts = {}) {
-  const record = createTab(typeId, spec)
-  tabs.push(record)
-  if (typeof record.instance.attachTabRef === 'function') {
-    record.instance.attachTabRef(record)
-  }
-  tabState.activeIndex = tabs.length - 1
-  if (!opts.defer) void switchToTab(tabState.activeIndex, { fresh: true, force: true })
-  return record
-}
-
-// _ensureTabInstance backfills the registry-managed
-// `tab.typeId` + `tab.descriptor` + `tab.instance` fields onto tab
-// records the legacy openers push with the old shape.  After every
-// opener routes through openTab() this shim should be dead — keep
-// it defensive in case any external path still pushes legacy
-// records into tabs[].
-function _ensureTabInstance(tab) {
-  if (!tab) return
-  if (tab.instance) return
-  // Map legacy discriminator -> typeId.  'model' tabs split into
-  // 'sandbox' or 'unit-editor' based on the sandbox flag.
-  let typeId = tab.typeId
-  if (!typeId) {
-    if (tab.type === 'model') typeId = tab.sandbox ? 'sandbox' : 'unit-editor'
-    else if (tab.type === 'map') typeId = 'map'
-  }
-  if (!typeId) return
-  const desc = getTabType(typeId)
-  if (!desc) return
-  // Build the descriptor's spec from whatever legacy fields the
-  // opener stashed onto the tab record.  This is the only place
-  // legacy-field reads survive in the new dispatch — once openers
-  // migrate, spec is what they pass to createTab.
-  let spec
-  if (typeId === 'map') {
-    spec = { map: tab.map }
-  } else if (typeId === 'unit-editor') {
-    spec = { name: tab.name, meta: tab.meta, displayName: tab.displayName }
-  } else if (typeId === 'sandbox') {
-    spec = { displayName: tab.displayName || tab.name || 'Sandbox' }
-  } else {
-    spec = {}
-  }
-  const instance = desc.create(spec)
-  if (typeof instance.attachTabRef === 'function') instance.attachTabRef(tab)
-  tab.typeId = typeId
-  tab.descriptor = desc
-  tab.instance = instance
-}
+// openTab / _ensureTabInstance / closeTab / showWelcomeAfterLastTabClose
+// / switchToTab moved to /ui/tab-registry.js (Phase 11).  The
+// dispatcher's type-agnostic activate / deactivate / dispose loop
+// lives next to the descriptor registrar that backs it; studio.js
+// imports the four entry points at the top of this file and
+// registers openTab / switchToTab on hostCallbacks for the
+// extracted modules that reach the seam through the bridge.
 
 // snapshotActiveTabModuleLets / restoreActiveTabModuleLets and
 // abortTransientGestureState moved to /ui/map-editor/boot.js —
@@ -897,163 +841,25 @@ function _ensureTabInstance(tab) {
 
 // unsavedChangesDialog moved to /ui/dialogs/unsaved-changes.js.
 
-// closeTab routes through the tab registry.  Each tab type's
-// instance owns its canClose (dirty prompt) and dispose semantics —
-// the host's only responsibilities are bringing focus to the
-// closing tab BEFORE the prompt (so the user sees what they're
-// about to discard), and re-activating the next tab in line once
-// the splice is done.
-async function closeTab(idx) {
-  if (idx < 0 || idx >= tabs.length) return
-  const tab = tabs[idx]
-  _ensureTabInstance(tab)
-  // Bring focus to the closing tab first so the dirty-confirm modal
-  // shows the right canvas behind it AND the save() inside
-  // canClose() operates on the right active state.
-  if (idx !== tabState.activeIndex) {
-    await switchToTab(idx, { force: true })
-  }
-  const ok = await tab.instance.canClose({})
-  if (!ok) return
-  // Deactivate before dispose so the per-tab renderer / runtime
-  // releases its hold cleanly before dispose tears down GPU buffers.
-  if (idx === tabState.activeIndex) tab.instance.deactivate({})
-  tab.instance.dispose({})
-  tabs.splice(idx, 1)
-  if (tabs.length === 0) {
-    tabState.activeIndex = -1
-    $('#model-viewer-dialog')?.classList.add('hidden')
-    showWelcomeAfterLastTabClose()
-    return
-  }
-  // Pick the previous tab if we closed the active one; otherwise
-  // stay on the same active tab (its index shifts left when the
-  // closed one was to its left).
-  if (idx < tabState.activeIndex) tabState.activeIndex -= 1
-  if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
-  if (tabState.activeIndex < 0) tabState.activeIndex = 0
-  await switchToTab(tabState.activeIndex, { fresh: false, force: true })
-}
-
-function showWelcomeAfterLastTabClose() {
-  // Hide the editor surface and bring back the welcome modal.
-  $('#app')?.classList.add('hidden')
-  const wel = $('#welcome-dialog')
-  if (wel) wel.classList.remove('hidden')
-  destroyEditorView()
-  renderMapTabs()
-}
-
-// switchToTab routes focus through the tab registry.  The dispatcher
-// is type-agnostic — every per-type decision (DOM toggles, renderer
-// start/stop, audio silence, panel show/hide, module-let snapshot /
-// restore) lives in the tab descriptor's activate / deactivate.
-//
-// Lifecycle guarantee: when this returns, exactly one tab's
-// instance.activate has been called and every other tab's
-// instance.deactivate is in a quiescent state.  Deactivate is
-// idempotent + cheap so the framework can call it across every
-// non-active tab on each swap to enforce that invariant.
-async function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
-  if (nextIdx < 0 || nextIdx >= tabs.length) return
-  if (!force && nextIdx === tabState.activeIndex) return
-  const outgoing = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  const incoming = tabs[nextIdx]
-  _ensureTabInstance(incoming)
-
-  // Close every open thread-debugger panel — they point at the
-  // outgoing tab's COB binding, which is either about to be
-  // replaced (switching between models) or hidden behind the map
-  // editor (switching to a map tab).  Reopening from the Threads
-  // inspector is one click.
-  closeAllMvThreadCodePanels()
-
-  const ctx = {
-    fromTypeId: outgoing?.typeId || null,
-    toTypeId: incoming?.typeId || null,
-    isFresh: !!fresh,
-  }
-
-  // Deactivate EVERY non-incoming tab so the framework can
-  // guarantee only the incoming holds the canvas / audio / RAF
-  // loop on the way out.  Deactivate is idempotent.
-  for (const t of tabs) {
-    if (t === incoming) continue
-    _ensureTabInstance(t)
-    try { t.instance.deactivate(ctx) } catch { /* ignore */ }
-  }
-
-  abortTransientGestureState()
-  tabState.activeIndex = nextIdx
-  renderMapTabs()
-
-  // Per-descriptor activation does its own DOM + renderer + audio
-  // wiring.  Errors here are intentionally allowed to surface so a
-  // broken tab doesn't silently fail to mount.
-  await incoming.instance.activate(ctx)
-}
-
 // pauseOutgoingTabRuntime — replaced by each tab descriptor's
-// deactivate() (Phase A).  Studio.js's switchToTab no longer
-// branches by type; the framework calls instance.deactivate() on
-// every non-incoming tab on every swap, and each instance owns the
-// pause / silence / renderer-stop sequence.
+// deactivate() (Phase A).  switchToTab no longer branches by type;
+// the framework calls instance.deactivate() on every non-incoming
+// tab on every swap, and each instance owns the pause / silence /
+// renderer-stop sequence.
 
 // resumeIncomingTabRuntime moved to /ui/unit-editor/tab.js.  Unit-
 // editor specific (early-returns on tab.type !== 'model') so it
 // lives next to the activator that consumes it.
 
-// mapDisplayName returns the friendly label for a MapDoc — prefers the
-// OTA mission name (the human-readable title the player sees in the
-// lobby) and falls back to the TNT filename when the mission name is
-// empty (#37).
-function mapDisplayName(m) {
-  const mission = (m?.ota?.missionName || '').trim()
-  if (mission) return mission
-  return (m?.name || '').trim() || '(untitled)'
-}
-
-function renderMapTabs() {
-  // Tab strip is React-managed (see /ui/common/tab-bar.js).  Push the
-  // current tabs[] + tabState.activeIndex into the React state signal each
-  // time the host's tab list mutates (open / close / switch).  No-op
-  // when the React UI hasn't loaded yet (the next setTabs after boot
-  // catches up).
-  if (_reactUi && typeof _reactUi.setTabs === 'function') {
-    _reactUi.setTabs(tabs, tabState.activeIndex)
-  }
-}
+// mapDisplayName / renderMapTabs / wireMapTabBar moved to
+// /ui/tab-bar.js (Phase 11).  studio.js imports them at the top of
+// this file and registers mapDisplayName / renderMapTabs on
+// hostCallbacks for the extracted modules that publish the React
+// state through the bridge.
 
 // buildTabElement removed — tab rendering now lives entirely in the
 // React TabBar component.  Per-tab formatting (model glyph, dirty
 // marker, title metadata) is data-driven from the tab record.
-
-function wireMapTabBar() {
-  // Tab bar + its "+" popup are React-managed.  configureReactUi
-  // resolves asynchronously (dynamic import), so we may run before
-  // the React island is loaded — `await` the promise so the bridge +
-  // mount fire as soon as the module lands.  configureReactUi caches
-  // its promise so this never starts a second import.
-  ;(async () => {
-    const ui = _reactUi || await configureReactUi()
-    if (!ui) return
-    if (typeof ui.configureTabBarBridge === 'function') {
-      ui.configureTabBarBridge({
-        onSwitch:   (i) => switchToTab(i),
-        onClose:    (i) => closeTab(i),
-        onNewMap:   () => { setSizeDialogSource('tabbar'); openSizeDialog() },
-        onOpenMap:  () => openMapDialog('tabbar'),
-        onOpenUnit: () => { setModelOpenIntent('add'); openModelPicker() },
-        onSandbox:  () => openSandboxStub(),
-      })
-    }
-    if (typeof ui.mountTabBar === 'function') ui.mountTabBar()
-    // Push the current tab list into the React state so the bar paints
-    // its initial render with whatever was already open (e.g. when this
-    // runs after a tab has already been added at boot).
-    if (typeof ui.setTabs === 'function') ui.setTabs(tabs, tabState.activeIndex)
-  })()
-}
 
 // maybeAutoOpenFromQuery + pickMapByName moved to
 // /ui/pickers/auto-open.js — imported at the top of this file.
@@ -1485,43 +1291,10 @@ function wireMapTabBar() {
 // status line moved into the React dropdown body via the
 // bridge.showStats callback.
 
-// updateTopbarDocInfo populates the shared topbar's doc-info pill
-// AND the shared footer's hints from whichever tab is now active.
-// Empty when nothing's open.
-function updateTopbarDocInfo(tab) {
-  const titleEl = $('#app-doc-title')
-  const metaEl = $('#app-doc-meta')
-  const hintsEl = $('#app-hints')
-  const MAP_HINTS = 'Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).'
-  const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
-  if (!titleEl || !metaEl) return
-  if (!tab) {
-    titleEl.textContent = ''
-    metaEl.textContent = ''
-    if (hintsEl) hintsEl.innerHTML = MAP_HINTS
-    return
-  }
-  // Read off the registered typeId (set by openTab / _ensureTabInstance)
-  // rather than the legacy `tab.type` discriminator.  Both stay in
-  // sync for now via attachTabRef; once readers migrate the legacy
-  // field can drop.
-  if (tab.typeId === 'unit-editor' || tab.typeId === 'sandbox') {
-    titleEl.textContent = tab.instance?.displayName?.() || tab.name || ''
-    const meta = tab.spec?.meta || tab.meta
-    const parts = [meta?.unitTitle, meta?.side, meta?.category, meta?.description].filter(Boolean)
-    metaEl.textContent = parts.join(' · ')
-    if (hintsEl) hintsEl.innerHTML = MODEL_HINTS
-  } else {
-    const m = tab.spec?.map || tab.map
-    titleEl.textContent = mapDisplayName(m)
-    const parts = [
-      m?.tileW && m?.tileH ? `${m.tileW}×${m.tileH}` : null,
-      m?.planet || null,
-    ].filter(Boolean)
-    metaEl.textContent = parts.join(' · ')
-    if (hintsEl) hintsEl.innerHTML = MAP_HINTS
-  }
-}
+// updateTopbarDocInfo moved to /ui/topbar.js (Phase 11) — imported
+// at the top of this file and registered on hostCallbacks below.
+// Refreshes the shared topbar's doc-info pill AND the shared
+// footer's hints from whichever tab is now active.
 
 // activateModelTab moved to /ui/unit-editor/tab.js.  The
 // per-tab ModelViewer + MvControls lifecycle, the onModelLoaded
@@ -1632,133 +1405,12 @@ function updateTopbarDocInfo(tab) {
 // path, so it lives in /ui/common rather than under either section
 // subfolder.
 
-// _reactUi — lazy-loaded handle to the Preact UI island.  Imported
-// dynamically the first time configureReactUi runs so the studio's
-// initial paint isn't blocked on the framework's parse / compile
-// even on cold loads.  Resolves to the module exports from
-// /ui/mount.js (configureUi, mountSandboxPanel, showSandboxPanel,
-// rescuePanelIntoStage).
-let _reactUi = null
-let _reactUiPromise = null
-
-// configureReactUi — boot the React/Preact island and install the
-// persistence bridge.  Idempotent: repeated calls return the same
-// Promise so multiple init paths (initial boot, hot-reload, tab
-// activation before the first import has resolved) all wait on the
-// same module load.  The persistence hooks route panel-store
-// mutations into the existing state.mvInspectorPos / Collapsed /
-// Visible maps + persistPrefs so React panels share saved state
-// with the legacy panels and stay in lockstep across reloads.
-function configureReactUi() {
-  if (_reactUiPromise) return _reactUiPromise
-  _reactUiPromise = import('/ui/mount.js').then((ui) => {
-    _reactUi = ui
-    // Mirror the bridge onto host-context so the extracted /ui/*
-    // modules (open-map dialog, confirm dialog, ribbon bridges,
-    // future ones) can reach the React API without a back-reference
-    // into studio.js.
-    setReactUi(ui)
-    ui.configureUi({
-      loadPos:       (id) => (state.mvInspectorPos       || {})[id] || null,
-      savePos:       (id, pos) => {
-        state.mvInspectorPos = state.mvInspectorPos || {}
-        state.mvInspectorPos[id] = { top: pos.top, left: pos.left }
-        persistPrefs()
-      },
-      loadCollapsed: (id) => !!(state.mvInspectorCollapsed || {})[id],
-      saveCollapsed: (id, on) => {
-        state.mvInspectorCollapsed = state.mvInspectorCollapsed || {}
-        state.mvInspectorCollapsed[id] = !!on
-        persistPrefs()
-      },
-      loadVisible:   (id, def) => {
-        const vis = state.mvInspectorVisible || {}
-        return Object.prototype.hasOwnProperty.call(vis, id) ? !!vis[id] : !!def
-      },
-      saveVisible:   (id, on) => {
-        state.mvInspectorVisible = state.mvInspectorVisible || {}
-        state.mvInspectorVisible[id] = !!on
-        persistPrefs()
-        // Both dropdown rows (unit-editor View + sandbox Developer
-        // Tools) are React-managed now and subscribe to the panel-
-        // store's visible signal directly, so writing through here is
-        // enough — the rows re-render on the next signal commit.
-      },
-    })
-    // Seed each migrated inspector panel from the persisted visibility
-    // BEFORE the first mount so the Preact tree doesn't flash visible
-    // and then hide.  Defaults match the legacy wireMvInspectors path
-    // (true unless explicitly closed at some prior session).  Lives
-    // in /ui/unit-editor/panel-defaults.js so the per-section IDs are
-    // co-located with the inspector code that owns the panels.
-    seedInspectorPanelDefaults(ui, state)
-    // Install the unit-editor host bridge bundle (camera + cob +
-    // runtime + reset + thread-debugger opener) + the Include-Private
-    // + Developer-Controls preference bridges in one shot.  Lives in
-    // /ui/unit-editor/ribbon/bridge.js so the cluster of unit-editor-
-    // specific callbacks is co-located with the ribbon mount.
-    wireUnitEditorHostBridge(ui)
-    // Bring the inspector panel tree online — sandbox panel is mounted
-    // lazily on first sandbox tab activation (it needs the onSpawn
-    // callback closure); the always-on inspectors come up at boot so
-    // they're ready when the user opens any tab.
-    ui.mountInspectorPanels()
-    // Mount the React-managed modal dialogs (confirm, Open Unit, Open
-    // Map, weapon picker) so their open-state signals are wired and
-    // the first opener call paints instantly.
-    if (typeof ui.mountDialogs === 'function') ui.mountDialogs()
-    // Mount the unit-editor sidebar tab components (Pieces, Textures,
-    // Weapons).  Each one renders empty until the host pushes a model
-    // via setPieceTreeModel / setTexturesModel — but mounting at boot
-    // keeps Preact's reconciler attached so subsequent updates flow
-    // straight to the existing DOM instead of replaceChildren-churn.
-    if (typeof ui.mountSidebarTabs === 'function') ui.mountSidebarTabs()
-    // Mount the React unit-editor ribbon + install its bridge.  The
-    // bridge resolves modelViewerInstance / renderer at call time so
-    // a tab swap automatically routes to the right one — no per-open
-    // re-wiring needed.  Idempotent on subsequent calls.
-    wireModelViewerRibbon()
-    // Mount the React welcome card body, wiring its tab card buttons
-    // into the existing host helpers (showSizeDialog / openOpenDialog
-    // / openModelPicker / openSandboxStub).
-    if (typeof ui.mountWelcomeScreen === 'function') {
-      ui.mountWelcomeScreen({
-        onNewMap:     () => openSizeDialog(),
-        onOpenMap:    () => openMapDialog('welcome'),
-        onOpenUnit:   () => openModelPicker(),
-        onOpenSandbox: () => openSandboxStub(),
-      })
-    }
-    // Texture / piece-tree / weapons-tab bridges are installed by
-    // wireUnitEditorHostBridge (above) so the unit-editor-specific
-    // configure calls + their getActiveModelViewer closures stay in
-    // /ui/unit-editor/ribbon/bridge.js.
-    // ── Map editor surface ───────────────────────────────────────
-    // Mount the React-rendered ribbon, sidebar, and three floating
-    // panels (Stats, Camera & Cursor, Minimap).  Idempotent — re-
-    // mount during File → New / Open is a re-render into the same
-    // roots.  The host wiring below routes every button press
-    // through the existing studio.js functions (setMode, undo, etc.)
-    // so we don't duplicate behaviour.
-    if (typeof ui.mountMapEditor === 'function') ui.mountMapEditor()
-    wireMapRibbonBridge(ui)
-    // Seed default visibility for the map panels so their first
-    // mount reads the persisted state (or defaults to visible) and
-    // the React tree doesn't flash hidden then show.  Per-panel
-    // logic lives in /ui/map-editor/panel-defaults.js next to the
-    // map ribbon bridge that owns the matching toggles.
-    seedMapPanelDefaults(ui, state)
-    // Publish the initial ribbon state so the React ribbon has the
-    // right mode label + view toggles on its first paint.
-    publishMapRibbonState()
-    return ui
-  }).catch((err) => {
-    console.error('[studio] React UI island failed to load:', err)
-    _reactUiPromise = null
-    return null
-  })
-  return _reactUiPromise
-}
+// _reactUi + _reactUiPromise + configureReactUi moved to
+// /ui/wire-react-ui.js (Phase 11).  studio.js imports configureReactUi
+// at the top of this file and registers it on hostCallbacks for the
+// extracted modules that boot the React island through the bridge
+// (spawn picker, open-map dialog, unit-editor wire-dialogs).  The
+// lazy import cache + the persistence bridge live in the new module.
 
 // openModelViewer moved to /ui/unit-editor/tab.js.  The descriptor's
 // attachTabRef still mirrors spec.name + spec.meta onto the legacy

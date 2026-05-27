@@ -67,6 +67,12 @@
 //     restore?()                  pull module-let state from spec
 //   }
 
+import { tabs, tabState, $ } from './host-context.js'
+import { destroyEditorView } from './map-editor/editor-view.js'
+import { abortTransientGestureState } from './map-editor/boot.js'
+import { closeAllMvThreadCodePanels } from './unit-editor/debugger/modal.js'
+import { renderMapTabs } from './tab-bar.js'
+
 // Registered descriptors, keyed by typeId.  Populated by each
 // section's register-tab.js at boot.  Mutating after boot is allowed
 // but undefined for already-open tabs.
@@ -110,3 +116,170 @@ export function createTab(typeId, spec = {}) {
   if (!instance) throw new Error(`[tab-registry] ${typeId}.create returned null`)
   return { typeId, spec, instance, descriptor: desc }
 }
+
+// openTab — single entry point for adding a tab to the host.  Each
+// opener (openLoadedMap, openModelViewer, openSandboxStub,
+// startEditor) builds its type-specific spec and routes here.
+// The function:
+//   1. Builds the registry instance via createTab(typeId, spec).
+//   2. Pushes the host record (which carries the descriptor + spec +
+//      instance) into tabs[].
+//   3. Calls instance.attachTabRef so the descriptor can mirror
+//      legacy fields onto the host record for back-compat.
+//   4. Switches focus to the new tab (unless opts.defer is true,
+//      in which case the caller is responsible for the switch —
+//      used by openers that need to populate the spec further
+//      before the first activation).
+// Returns the freshly-attached host record.
+export function openTab(typeId, spec = {}, opts = {}) {
+  const record = createTab(typeId, spec)
+  tabs.push(record)
+  if (typeof record.instance.attachTabRef === 'function') {
+    record.instance.attachTabRef(record)
+  }
+  tabState.activeIndex = tabs.length - 1
+  if (!opts.defer) void switchToTab(tabState.activeIndex, { fresh: true, force: true })
+  return record
+}
+
+// _ensureTabInstance backfills the registry-managed
+// `tab.typeId` + `tab.descriptor` + `tab.instance` fields onto tab
+// records the legacy openers push with the old shape.  After every
+// opener routes through openTab() this shim should be dead — keep
+// it defensive in case any external path still pushes legacy
+// records into tabs[].
+function _ensureTabInstance(tab) {
+  if (!tab) return
+  if (tab.instance) return
+  // Map legacy discriminator -> typeId.  'model' tabs split into
+  // 'sandbox' or 'unit-editor' based on the sandbox flag.
+  let typeId = tab.typeId
+  if (!typeId) {
+    if (tab.type === 'model') typeId = tab.sandbox ? 'sandbox' : 'unit-editor'
+    else if (tab.type === 'map') typeId = 'map'
+  }
+  if (!typeId) return
+  const desc = getTabType(typeId)
+  if (!desc) return
+  // Build the descriptor's spec from whatever legacy fields the
+  // opener stashed onto the tab record.  This is the only place
+  // legacy-field reads survive in the new dispatch — once openers
+  // migrate, spec is what they pass to createTab.
+  let spec
+  if (typeId === 'map') {
+    spec = { map: tab.map }
+  } else if (typeId === 'unit-editor') {
+    spec = { name: tab.name, meta: tab.meta, displayName: tab.displayName }
+  } else if (typeId === 'sandbox') {
+    spec = { displayName: tab.displayName || tab.name || 'Sandbox' }
+  } else {
+    spec = {}
+  }
+  const instance = desc.create(spec)
+  if (typeof instance.attachTabRef === 'function') instance.attachTabRef(tab)
+  tab.typeId = typeId
+  tab.descriptor = desc
+  tab.instance = instance
+}
+
+// closeTab routes through the tab registry.  Each tab type's
+// instance owns its canClose (dirty prompt) and dispose semantics —
+// the host's only responsibilities are bringing focus to the
+// closing tab BEFORE the prompt (so the user sees what they're
+// about to discard), and re-activating the next tab in line once
+// the splice is done.
+export async function closeTab(idx) {
+  if (idx < 0 || idx >= tabs.length) return
+  const tab = tabs[idx]
+  _ensureTabInstance(tab)
+  // Bring focus to the closing tab first so the dirty-confirm modal
+  // shows the right canvas behind it AND the save() inside
+  // canClose() operates on the right active state.
+  if (idx !== tabState.activeIndex) {
+    await switchToTab(idx, { force: true })
+  }
+  const ok = await tab.instance.canClose({})
+  if (!ok) return
+  // Deactivate before dispose so the per-tab renderer / runtime
+  // releases its hold cleanly before dispose tears down GPU buffers.
+  if (idx === tabState.activeIndex) tab.instance.deactivate({})
+  tab.instance.dispose({})
+  tabs.splice(idx, 1)
+  if (tabs.length === 0) {
+    tabState.activeIndex = -1
+    $('#model-viewer-dialog')?.classList.add('hidden')
+    showWelcomeAfterLastTabClose()
+    return
+  }
+  // Pick the previous tab if we closed the active one; otherwise
+  // stay on the same active tab (its index shifts left when the
+  // closed one was to its left).
+  if (idx < tabState.activeIndex) tabState.activeIndex -= 1
+  if (tabState.activeIndex >= tabs.length) tabState.activeIndex = tabs.length - 1
+  if (tabState.activeIndex < 0) tabState.activeIndex = 0
+  await switchToTab(tabState.activeIndex, { fresh: false, force: true })
+}
+
+export function showWelcomeAfterLastTabClose() {
+  // Hide the editor surface and bring back the welcome modal.
+  $('#app')?.classList.add('hidden')
+  const wel = $('#welcome-dialog')
+  if (wel) wel.classList.remove('hidden')
+  destroyEditorView()
+  renderMapTabs()
+}
+
+// switchToTab routes focus through the tab registry.  The dispatcher
+// is type-agnostic — every per-type decision (DOM toggles, renderer
+// start/stop, audio silence, panel show/hide, module-let snapshot /
+// restore) lives in the tab descriptor's activate / deactivate.
+//
+// Lifecycle guarantee: when this returns, exactly one tab's
+// instance.activate has been called and every other tab's
+// instance.deactivate is in a quiescent state.  Deactivate is
+// idempotent + cheap so the framework can call it across every
+// non-active tab on each swap to enforce that invariant.
+export async function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
+  if (nextIdx < 0 || nextIdx >= tabs.length) return
+  if (!force && nextIdx === tabState.activeIndex) return
+  const outgoing = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
+  const incoming = tabs[nextIdx]
+  _ensureTabInstance(incoming)
+
+  // Close every open thread-debugger panel — they point at the
+  // outgoing tab's COB binding, which is either about to be
+  // replaced (switching between models) or hidden behind the map
+  // editor (switching to a map tab).  Reopening from the Threads
+  // inspector is one click.
+  closeAllMvThreadCodePanels()
+
+  const ctx = {
+    fromTypeId: outgoing?.typeId || null,
+    toTypeId: incoming?.typeId || null,
+    isFresh: !!fresh,
+  }
+
+  // Deactivate EVERY non-incoming tab so the framework can
+  // guarantee only the incoming holds the canvas / audio / RAF
+  // loop on the way out.  Deactivate is idempotent.
+  for (const t of tabs) {
+    if (t === incoming) continue
+    _ensureTabInstance(t)
+    try { t.instance.deactivate(ctx) } catch { /* ignore */ }
+  }
+
+  abortTransientGestureState()
+  tabState.activeIndex = nextIdx
+  renderMapTabs()
+
+  // Per-descriptor activation does its own DOM + renderer + audio
+  // wiring.  Errors here are intentionally allowed to surface so a
+  // broken tab doesn't silently fail to mount.
+  await incoming.instance.activate(ctx)
+}
+
+// pauseOutgoingTabRuntime — replaced by each tab descriptor's
+// deactivate() (Phase A).  Studio.js's switchToTab no longer
+// branches by type; the framework calls instance.deactivate() on
+// every non-incoming tab on every swap, and each instance owns the
+// pause / silence / renderer-stop sequence.
