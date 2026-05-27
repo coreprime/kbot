@@ -35,19 +35,25 @@
 // the relevant refresh function directly instead.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
-// Residual peer imports into the unit editor — the per-frame tick
-// still calls into unit-editor-specific sidebar refreshes (Weapons
-// reload bars + piece-tree eyes) and the thread-debugger overlay.
-// Phase B follow-up: invert these into an event subscription so
-// refresh-tick fires a generic "tick" signal and the unit editor
-// listens; that would let map / sandbox tabs use refresh-tick
-// without dragging the debugger + sidebar along.
-import { refreshMvWeaponsLive, refreshPieceTreeEyes } from '../unit-editor/sidebar.js'
-import {
-  refreshMvThreadCodeHighlight,
-  redrawMvThreadCodeBrackets,
-} from '../unit-editor/debugger/asm.js'
-import { _mvThreadCodePanels } from '../unit-editor/debugger/modal.js'
+
+// Per-tick subscribers registered by section-specific code (e.g. the
+// unit-editor's debugger).  refresh-tick lives in /ui/common/ so it
+// must not reach down into a particular section's code — instead
+// sections call subscribeTick(fn) at module-load and refresh-tick
+// fans the per-tick mv proxy out to every subscriber after publishing
+// inspector-store state.  Exceptions in any one subscriber are
+// swallowed so a broken section doesn't take down the rest of the
+// inspector refresh.
+const _tickListeners = new Set()
+
+// subscribeTick registers a per-tick handler.  Fires at ~4 Hz with the
+// current inspector mv proxy + dtMs since the last publish.  Returns
+// an unsubscribe function so callers can detach on teardown.
+export function subscribeTick(fn) {
+  if (typeof fn !== 'function') return () => {}
+  _tickListeners.add(fn)
+  return () => _tickListeners.delete(fn)
+}
 
 // Cumulative dt since the last publish (in ms).  Cleared on every
 // publish so the next publish is exactly 250 ms later.
@@ -158,11 +164,6 @@ export function refreshMvInspectors(dtMs = 16) {
       : 0
     ui.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
   }
-  // Weapons-tab live bits — reload bars + recent-projectiles lists.
-  // Cheap: the panel is in the left sidebar (not an inspector), so
-  // we don't gate on hidden-class.  Each card's __mvLiveRefresh
-  // closure no-ops when the card has no reload bar / projlist.
-  refreshMvWeaponsLive(mv)
   // Promote 'creating' → 'created' once the Create thread has died.
   // The React Controls + Script Commands panels read cob._lifecycle
   // and render the right gated state next refresh, so this is the
@@ -170,53 +171,12 @@ export function refreshMvInspectors(dtMs = 16) {
   // COB section is still vanilla and gates its own button rows.
   hostCallbacks.syncMvActionsRunning?.(mv.cob)
   hostCallbacks.syncCobRibbonRunning?.(mv.cob)
-  // Piece-tree status icons (eye / shade / cache / shadow) — mirror
-  // the live COB-driven per-piece state.  Cheap query-and-toggle
-  // per row so a Create-script hide / dont-shade lights up in the
-  // tree the same tick the opcode runs.
-  refreshPieceTreeEyes()
-  // Thread code-view modals — refresh every open debugger panel.
-  // Each panel tracks its own thread, hover state, and DOM scope so
-  // multiple debuggers can run side-by-side.
-  for (const state of _mvThreadCodePanels.values()) {
-    refreshMvThreadCodeHighlight(state)
-    redrawMvThreadCodeBrackets(state)
-    _refreshCoverageDim(state)
-  }
-}
-
-// _refreshCoverageDim — strip the .mv-code-unexecuted class from any
-// asm line whose offset has been executed since the debugger opened.
-// Cheap: only touches the lines we previously dimmed (querySelectorAll
-// over `.mv-code-unexecuted` is bounded by the unexecuted set, which
-// shrinks toward zero as the script's hot paths run).  When a
-// previously-dormant function (walk, FireWeapon1, ...) finally gets
-// called, its lines brighten on the next 4 Hz tick so the user can
-// see at a glance "this code is reachable now."
-function _refreshCoverageDim(state) {
-  const panel = state.panel
-  if (!panel) return
-  const cov = state.cob?.unit?._executedOffsets
-  if (!cov || cov.size === 0) return
-  // Asm pane — strip the dim class from any line whose offset got
-  // stamped since the last sweep.
-  const dimAsm = panel.querySelectorAll('.mv-thread-code-source .mv-code-line.mv-code-unexecuted')
-  for (const line of dimAsm) {
-    const scr = line.dataset.script
-    const off = parseInt(line.dataset.offset, 10)
-    if (!scr || !Number.isFinite(off)) continue
-    const s = cov.get(scr)
-    if (s && s.has(off >>> 0)) line.classList.remove('mv-code-unexecuted')
-  }
-  // BOS pane — same pass against the (script, startOffset) pair the
-  // BOS renderer stamped on each mapped row.  Unmapped rows have no
-  // dataset.bosScript so the loop skips them silently.
-  const dimBos = panel.querySelectorAll('.mv-thread-code-decompiled > div.bos-unexecuted')
-  for (const line of dimBos) {
-    const scr = line.dataset.bosScript
-    const off = parseInt(line.dataset.bosOffset, 10)
-    if (!scr || !Number.isFinite(off)) continue
-    const s = cov.get(scr)
-    if (s && s.has(off >>> 0)) line.classList.remove('bos-unexecuted')
+  // Section-specific tick consumers (e.g. unit-editor's debugger
+  // panels) get their turn now.  Each subscriber receives the same
+  // mv proxy + the dt since the last publish and is responsible for
+  // its own DOM scope.  Errors are swallowed so one broken consumer
+  // doesn't strand the rest.
+  for (const fn of _tickListeners) {
+    try { fn(mv, 250) } catch (e) { /* per-subscriber failures are non-fatal */ void e }
   }
 }

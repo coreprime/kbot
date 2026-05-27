@@ -30,10 +30,57 @@
 import { render } from 'preact'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { setPanelVisible } from '/ui/common/panel-store.js'
+import { subscribeTick } from '/ui/common/refresh-tick.js'
+import {
+  refreshMvThreadCodeHighlight,
+  redrawMvThreadCodeBrackets,
+} from './asm.js'
 
 // Keyed by thread id → per-panel imperative state blob.  Populated
 // by ThreadDebugger's first useEffect; removed on unmount.
 export const _mvThreadCodePanels = new Map()
+
+// Per-tick refresh — subscribe once at module load so refresh-tick.js
+// can fire a generic 'tick' signal without knowing about the unit
+// editor's debugger.  No-op when there are no panels open.
+subscribeTick(() => {
+  for (const state of _mvThreadCodePanels.values()) {
+    refreshMvThreadCodeHighlight(state)
+    redrawMvThreadCodeBrackets(state)
+    _refreshCoverageDim(state)
+  }
+})
+
+// _refreshCoverageDim strips the .mv-code-unexecuted / .bos-unexecuted
+// class from any debugger line whose offset has been executed since
+// the debugger opened.  Cheap: only touches the lines we previously
+// dimmed (querySelectorAll over `.mv-code-unexecuted` is bounded by
+// the unexecuted set, which shrinks toward zero as the script's hot
+// paths run).  When a previously-dormant function (walk, FireWeapon1,
+// ...) finally gets called, its lines brighten on the next refresh
+// tick so the user can see at a glance "this code is reachable now."
+function _refreshCoverageDim(state) {
+  const panel = state.panel
+  if (!panel) return
+  const cov = state.cob?.unit?._executedOffsets
+  if (!cov || cov.size === 0) return
+  const dimAsm = panel.querySelectorAll('.mv-thread-code-source .mv-code-line.mv-code-unexecuted')
+  for (const line of dimAsm) {
+    const scr = line.dataset.script
+    const off = parseInt(line.dataset.offset, 10)
+    if (!scr || !Number.isFinite(off)) continue
+    const s = cov.get(scr)
+    if (s && s.has(off >>> 0)) line.classList.remove('mv-code-unexecuted')
+  }
+  const dimBos = panel.querySelectorAll('.mv-thread-code-decompiled > div.bos-unexecuted')
+  for (const line of dimBos) {
+    const scr = line.dataset.bosScript
+    const off = parseInt(line.dataset.bosOffset, 10)
+    if (!scr || !Number.isFinite(off)) continue
+    const s = cov.get(scr)
+    if (s && s.has(off >>> 0)) line.classList.remove('bos-unexecuted')
+  }
+}
 
 // _mvThreadCodeHosts — Map<threadId, { host, panelId }>.  We track
 // the React mount host separately from the state blob so we can
