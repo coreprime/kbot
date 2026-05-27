@@ -1061,10 +1061,17 @@ kbd {
   display: flex;
   align-items: stretch;
   padding: 6px 8px;
-  gap: 8px;
+  gap: 6px;
   /* overflow stays visible so ribbon popups can escape vertically. */
   overflow: visible;
   position: relative;
+  /* Wrap onto a second line on narrow viewports rather than clip the
+     trailing buttons off the right edge.  Without flex-wrap, the
+     Help / Configure groups were lost at <1100 px viewport widths.
+     Wrapped rows still respect overflow:visible so dropdown popups
+     escape downward as expected. */
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .ribbon-section {
   display: flex;
@@ -4141,13 +4148,33 @@ canvas {
    and above the .mv-thread-code-panel (6000) so it stays reachable
    when other panels are open.  Below the modal weapon-pick-dialog
    (10000) so picker selections still receive clicks. */
+/* Sandbox controls overlay.  Lives inside the model-viewer-stage so
+   it inherits the same drag/clamp behaviour as the other floating
+   inspectors (wireMvInspector treats every .mv-inspector identically;
+   the stage is the positioning context).  z-index sits in the same
+   range as the other inspector overlays so a previously-dragged
+   Renderer/Runtime panel can still cover the sandbox panel if the
+   user wants it to — no z-shoving over the ribbon. */
 #sandbox-panel {
-  z-index: 7500;
+  z-index: 60;
+  /* Default starting position — top-left of the stage (just below the
+     ribbon), out of the way of the right-column Renderer/Runtime
+     inspectors.  User can drag it anywhere from here. */
+  top: 12px;
+  left: 12px;
 }
 /* Sandbox mode — hide the left sidebar (Pieces / Textures / Weapons)
    since those panels are single-unit and don't apply to the multi-
-   unit sandbox.  Lets the canvas expand to use the full width. */
+   unit sandbox.  Hiding alone isn't enough: the shell's grid still
+   reserves the 320 px "side" column, so we ALSO collapse the column
+   template so the canvas fills the entire width. */
 #model-viewer-dialog.sandbox-mode .sidebar { display: none; }
+#model-viewer-dialog.sandbox-mode .model-viewer-shell {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "ribbon"
+    "canvas";
+}
 /* Master "Show Projectiles" toggle at the top of the Weapons tab. */
 .mv-weapon-show-proj {
   display: flex; align-items: center; gap: 6px;

@@ -776,14 +776,31 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
       const sp = document.getElementById('sandbox-panel')
       if (sp) sp.classList.add('hidden')
       $('#model-viewer-dialog')?.classList.remove('sandbox-mode')
+      // Stop the sandbox renderer's RAF loop while a single-unit tab
+      // owns the screen — no point burning frames on a hidden scene,
+      // and the shared canvas would otherwise see two RAF loops racing
+      // on it.  Renderer resumes on the next sandbox-tab activation.
+      if (sandboxViewInstance && sandboxViewInstance.renderer) {
+        try { sandboxViewInstance.renderer.stop?.() } catch { /* ignore */ }
+      }
       void activateModelTab(incoming)
     }
     return
   }
 
   // Map tab: tear down any visible model overlay before the editor
-  // takes the screen.
+  // takes the screen.  Stop BOTH the single-unit and the sandbox
+  // renderers — neither is visible while the map editor owns the
+  // viewport, and leaving their RAF loops running wastes CPU + can
+  // bleed canvas state through during fast tab switches before the
+  // dialog's display:none takes effect on the next compositor pass.
   $('#model-viewer-dialog')?.classList.add('hidden')
+  if (modelViewerInstance && modelViewerInstance.renderer) {
+    try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
+  }
+  if (sandboxViewInstance && sandboxViewInstance.renderer) {
+    try { sandboxViewInstance.renderer.stop?.() } catch { /* ignore */ }
+  }
 
   restoreActiveTabModuleLets()
   renderMapTabs()
@@ -11774,6 +11791,10 @@ async function activateModelTab(tab) {
   // geometry.  Wait for that before applying the ground hint so
   // setGroundMode lands on a live renderer.
   await modelViewerInstance.open(tab.name)
+  // Make sure the RAF loop is running — switchToTab stops it whenever
+  // a map tab or sandbox tab takes the screen so we don't burn frames
+  // on hidden surfaces.  renderer.start() is idempotent.
+  try { modelViewerInstance.renderer?.start?.() } catch { /* ignore */ }
   applyDefaultGroundFor(tab.meta)
   // Apply Unit Editor defaults from the persisted Settings — the user's
   // chosen environment + effect toggles, picked up here once the
@@ -12326,6 +12347,12 @@ function setMvInspectorVisible(panelId, visible, opts = {}) {
 // hidden flag and bails early.  Throttled to 4 Hz so an
 // auto-rotating camera doesn't burn DOM ops every animation tick.
 let _mvInspectorThrottleMs = 0
+// Sandbox-only sentinel — tracks which unit's Actions panel is
+// currently rendered.  refreshMvInspectors rebuilds the panel only
+// when this changes so the per-tick refresh doesn't flicker the
+// button list mid-hover.  null = no unit focused (zero or multi-
+// select; the panel shows "No COB loaded.").
+let _mvSandboxFocusedUnitId = -1
 function refreshMvInspectors(dtMs = 16) {
   _mvInspectorThrottleMs += dtMs
   if (_mvInspectorThrottleMs < 250) return
@@ -12337,25 +12364,51 @@ function refreshMvInspectors(dtMs = 16) {
   // existing panel renderers don't have to know which kind it is.
   const sandbox = (typeof window !== 'undefined') ? window.__sandboxView : null
   const sandboxActive = sandbox && document.getElementById('model-viewer-dialog')?.classList?.contains('sandbox-mode')
-  // Sandbox proxy needs to look "cob-shaped" enough that the single-
-  // unit refresh helpers (syncCobRibbonRunning / refreshMvControlsGating
-  // / etc.) don't throw on missing methods.  Stub hasScript → false so
-  // the ribbon's per-script disabled checks evaluate to "no — skip".
-  // Without these stubs the very first throw aborts the whole sweep
-  // before refreshMvRuntimeStats runs, leaving the Runtime panel
-  // showing zeros even while the scene ticks.
-  const mv = sandboxActive
-    ? {
-        camera: sandbox.camera,
-        renderer: sandbox.renderer,
-        cob: {
-          runtime: sandbox.scene?.runtime,
-          unit: null,
-          hasScript: () => false,
-          _lifecycle: 'created',
-        },
-      }
-    : modelViewerInstance
+  // Build the proxy mv.  When exactly ONE unit is selected in
+  // sandbox we promote its CobBinding to mv.cob — the single-unit
+  // inspector renderers (Actions / Static Vars / Threads) then
+  // populate against the selected unit, mirroring the experience in
+  // the Unit Editor.  With zero or multiple units selected we fall
+  // back to the runtime-only proxy so the runtime / runtime-list
+  // panels still tick but the per-unit panels show "select a unit".
+  let mv = modelViewerInstance
+  if (sandboxActive) {
+    const sel = sandbox.scene?.selected
+    let focused = null
+    let focusedId = null
+    if (sel && sel.size === 1) {
+      const onlyId = [...sel][0]
+      const u = sandbox.scene.unitById(onlyId)
+      if (u && u.binding) { focused = u.binding; focusedId = u.id }
+    }
+    mv = {
+      camera: sandbox.camera,
+      renderer: sandbox.renderer,
+      // Use the focused unit's binding directly when present — it has
+      // .runtime + .unit + hasScript + listScripts + particles + audio,
+      // exactly the surface the panels expect.  Otherwise stub a
+      // runtime-only shape so the syncCob helpers don't throw.
+      cob: focused || {
+        runtime: sandbox.scene?.runtime,
+        unit: null,
+        hasScript: () => false,
+        _lifecycle: 'created',
+      },
+    }
+    // The focused binding has no _lifecycle field by default — the
+    // single-unit viewer's gating reads it to greys out controls
+    // pre-Create.  In sandbox we always spawn pre-Create'd so mark
+    // it 'created' to keep buttons active.
+    if (focused && !focused._lifecycle) focused._lifecycle = 'created'
+    // Rebuild the Actions panel only when the focused unit changes —
+    // the inner buttons retain their own hover/disabled state so we
+    // avoid the per-tick flicker of a full rebuild.  Tracked on a
+    // module-scoped sentinel keyed to the scene's unit id.
+    if (focusedId !== _mvSandboxFocusedUnitId) {
+      _mvSandboxFocusedUnitId = focusedId
+      renderMvActionsPanel(focused)
+    }
+  }
   if (!mv) return
   // COB Scripts panel
   const scriptsPanel = document.getElementById('mv-inspector-scripts')
@@ -16821,6 +16874,10 @@ async function activateSandboxTab(_tab) {
     })
   }
   await sandboxViewInstance.open()
+  // Make sure the RAF loop is live — switchToTab stops it on the way
+  // to a map tab so we don't burn frames behind the editor.  Renderer
+  // .start() is idempotent.
+  try { sandboxViewInstance.renderer?.start?.() } catch { /* ignore */ }
   // Wrap the sandbox view's onAfterFrame so the inspector refresh +
   // animation-advance pipeline runs on the sandbox renderer's frames
   // too.  The sandbox view sets its own onAfterFrame (scene tick +
@@ -16843,22 +16900,26 @@ async function activateSandboxTab(_tab) {
   // / Stop buttons + a unit roster.  Lazy-created on first show.
   ensureSandboxPanel()
   showSandboxPanel(true)
-  // Hide ONLY the single-unit-specific inspectors (Actions / Ports /
-  // Static Vars / Effects / Audio).  Keep Renderer (camera info) +
-  // Scripts (runtime telemetry) — both are scene-wide and still
-  // meaningful in multi-unit mode.  refreshMvRuntimeStats already
-  // reads from the live runtime so the Scripts panel will tick the
-  // sandbox runtime correctly.
-  for (const id of ['mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-effects', 'mv-inspector-audio']) {
+  // Force-show the inspector panels meaningful in multi-unit mode:
+  // Renderer (camera info) + Scripts (runtime telemetry) for the
+  // scene as a whole, Actions + Static Vars for the focused unit
+  // (panels render against the currently-selected sandbox unit, or
+  // an empty state when nothing's selected — see refreshMvInspectors).
+  // Hide Ports (interactive sliders bound to single-unit state) +
+  // Effects/Audio (per-binding pools that don't have a single owner
+  // in multi-unit) until those are re-wired for sandbox.
+  for (const id of ['mv-inspector-ports', 'mv-inspector-effects', 'mv-inspector-audio']) {
     const p = document.getElementById(id)
     if (p) p.classList.add('hidden')
   }
-  // Force-show Renderer + Scripts so they're visible immediately
-  // even if the user previously closed them in a single-unit tab.
-  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts']) {
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-staticvars']) {
     const p = document.getElementById(id)
     if (p) p.classList.remove('hidden')
   }
+  // Reset the focused-unit sentinel so the next refresh tick re-runs
+  // renderMvActionsPanel for whatever's selected (or "No COB loaded"
+  // for an empty selection).
+  _mvSandboxFocusedUnitId = -1
   // Patch the global modelViewerInstance proxy so refreshMvRuntimeStats
   // + refreshMvCameraPanel (both read mv.cob.runtime / mv.camera /
   // mv.renderer) see the sandbox view's runtime + camera instead of
@@ -16872,15 +16933,18 @@ async function activateSandboxTab(_tab) {
 }
 
 // ensureSandboxPanel — creates the floating Sandbox panel the first
-// time the user enters sandbox mode.  Lives in the body so it floats
-// over the canvas; chrome mirrors the inspector overlay style.
+// time the user enters sandbox mode.  Mounted INSIDE the model-
+// viewer-stage so it inherits the same drag/clamp positioning context
+// the other inspector overlays (Renderer / Runtime / Audio / etc.)
+// use — that keeps it from drifting over the ribbon and lets a
+// previously-dragged inspector cover it when the user wants.
 function ensureSandboxPanel() {
   if (document.getElementById('sandbox-panel')) return
+  const stage = document.querySelector('.model-viewer-stage')
+  const host = stage || document.body
   const aside = document.createElement('aside')
   aside.id = 'sandbox-panel'
   aside.className = 'mv-inspector'
-  aside.style.top = '64px'
-  aside.style.left = '12px'
   aside.innerHTML = `
     <div class="mv-inspector-header" id="sandbox-panel-header">
       <span class="minimap-grip" title="Drag to move">⠿</span>
@@ -16897,7 +16961,12 @@ function ensureSandboxPanel() {
       <div id="sandbox-roster" style="max-height:240px;overflow:auto;padding:4px 6px;font-size:11px;font-family:ui-monospace,monospace"></div>
     </div>
   `
-  document.body.appendChild(aside)
+  host.appendChild(aside)
+  // Wire drag + collapse + persisted position via the same helper the
+  // other floating inspectors use.  No-op safely if wireMvInspector
+  // doesn't recognise the id — it just attaches handlers on whatever
+  // .mv-inspector-toggle / *-header it finds inside the panel.
+  try { wireMvInspector('sandbox-panel') } catch { /* ignore */ }
   // Wire buttons.
   document.getElementById('sandbox-spawn').addEventListener('click', () => openSandboxSpawnPicker())
   document.getElementById('sandbox-move').addEventListener('click', () => sandboxViewInstance?.setPendingCommand('move'))

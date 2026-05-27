@@ -69,6 +69,14 @@ export class SandboxView {
       this.renderer.start()
     }
     if (!this.scene) this.scene = new SandboxScene()
+    // Sandbox uses the FLAT TA-tile grid as its ground — the textured
+    // terrain mode that ModelRenderer defaults to has rolling hills,
+    // which leaves spawned units floating above wherever the bumpy
+    // surface dips below y=0.  Flat ground matches the "blank
+    // battlefield" the sandbox advertises.
+    if (typeof this.renderer.setGroundMode === 'function') {
+      this.renderer.setGroundMode('grid')
+    }
     // Empty-scene framing — camera looks at a generous patch of
     // ground so spawned units have room around the origin.
     this.camera.frameBounds([-200, 0, -200], [200, 40, 200])
@@ -183,11 +191,18 @@ export class SandboxView {
     const entities = []
     for (const u of this.scene.units()) {
       if (!u.model) continue
+      // Auto-lift by -bounds.min[1] so the unit's bottom-most
+      // vertex sits flush with the ground plane (y = 0).  Different
+      // units use different model-origin conventions — some have it
+      // at the feet (min.y ≈ 0), some at the centre of mass (min.y
+      // negative).  Without this lift, units with a non-zero min.y
+      // float above (or sink into) the flat ground.
+      const lift = u.model.bounds ? -u.model.bounds.min[1] : 0
       entities.push({
         model: u.model,
         binding: u.binding,
         buildPercent: u.buildPercent,
-        transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading },
+        transform: { x: u.pos.x, y: u.pos.y + lift, z: u.pos.z, headingRad: u.heading },
         selected: this.scene.isSelected(u.id),
       })
     }
@@ -197,9 +212,10 @@ export class SandboxView {
     // solid main pass.
     if (this._placement && this._placement.model) {
       const p = this._placement
+      const lift = p.model.bounds ? -p.model.bounds.min[1] : 0
       entities.push({
         model: p.model,
-        transform: { x: p.pos.x, y: 0, z: p.pos.z, headingRad: 0 },
+        transform: { x: p.pos.x, y: lift, z: p.pos.z, headingRad: 0 },
         ghost: true,
       })
     }
