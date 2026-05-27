@@ -106,6 +106,11 @@ export class CobBinding {
     // Particles share the runtime's playback rate so slow-mo
     // applies uniformly to script + SFX.
     this.particles.tick(dtMs * this.runtime.playbackRate)
+    // Build-time transporter sparkles — emit a smattering of green
+    // pulses across the unit's geometry while the build ramp is
+    // in flight.  No-op once build% reaches 100, so cost is zero
+    // for fully-built units.
+    this._emitBuildSparkles(dtMs)
     // Audio pool — propagate the runtime's playbackRate + paused
     // state to every live <audio> element each frame so sounds
     // slow-mo / fast-forward / pause with the rest of the sim.
@@ -386,6 +391,91 @@ export class CobBinding {
   // the moving unit's transform — the matrix is only refreshed at
   // render time, after the controller's pos/heading update — so
   // we compute the world anchor here from authoritative state.
+  // _emitBuildSparkles spits a smattering of bright-green pulses
+  // across the unit's geometry while the build-% ramp is active —
+  // gives the construction phase-in a Star Trek "transporter" feel
+  // instead of just fading polygons into existence.  No-op once
+  // build% reaches 100, so cost is zero for fully-built units.
+  //
+  // Density scales with how MUCH of the unit is still being built
+  // (more sparkles when 80% incomplete, tapering off as the build
+  // approaches 100%) so the effect peaks during the visible build
+  // phase and fades out as the unit solidifies.
+  //
+  // Particles are spawned at each piece's WORLD position (read from
+  // its already-current worldMatrix) plus a small random offset
+  // — gives the visual of sparkles erupting from along the model
+  // surface rather than from a single emission point.  Honours the
+  // controller's unit position + heading via the per-piece world
+  // matrices, so the effect tracks a moving unit naturally.
+  _emitBuildSparkles(dtMs) {
+    // Build% lives on the viewer (window.__modelViewer.cobBuildPercent
+    // is the authoritative field, mirrored on the renderer's shader
+    // uniform via setBuildPercent).  Read it directly — the binding
+    // doesn't carry a viewer reference but is always coupled to the
+    // one active viewer in the studio.
+    const viewer = (typeof window !== 'undefined') ? window.__modelViewer : null
+    if (!viewer) return
+    const buildPct = viewer.cobBuildPercent
+    if (buildPct == null || buildPct >= 100) return
+    if (!this.model || !this.particles) return
+    // Sparkle density — particles per SECOND of real time, scaled
+    // by how-incomplete the build is.  At 0% build we emit at full
+    // rate, at 100% we emit zero.  Cosine-eased so the peak holds
+    // through the middle of the build then tapers near completion.
+    const incomplete = Math.max(0, Math.min(1, 1 - buildPct / 100))
+    const rateHz = 90 * incomplete
+    // Advance the per-frame accumulator (in real ms, not sim ms —
+    // the sparkle visual reads more cleanly when its cadence
+    // doesn't slow to a crawl in 0.01× slow-mo).  When the unit
+    // is paused / very-slow-mo'd the user still sees a steady
+    // shimmer rather than a frozen unit.
+    this._sparkleAcc = (this._sparkleAcc || 0) + (dtMs * rateHz / 1000)
+    let toEmit = Math.floor(this._sparkleAcc)
+    if (toEmit < 1) return
+    this._sparkleAcc -= toEmit
+    // Cap to avoid pool exhaustion on long-stall frames (the cosine
+    // taper means rateHz peaks around 90 — at 60fps that's ~1.5/frame,
+    // but a missed frame could batch dozens).
+    if (toEmit > 12) toEmit = 12
+    const pieces = this.model.flat
+    if (!pieces || pieces.length === 0) return
+    // Pick `toEmit` random pieces from the flat list (with replacement
+    // — fine for visual density; the same piece getting two sparkles
+    // in a frame just makes that piece sparkle harder).
+    for (let i = 0; i < toEmit; i++) {
+      const piece = pieces[(Math.random() * pieces.length) | 0]
+      if (!piece || !piece.visible || !piece.worldMatrix) continue
+      // World position from the matrix's translation column.  This is
+      // the piece's origin in world space — close enough to "on the
+      // model" for a sparkle cloud; the random offset below scatters
+      // a few wu around it to give the sparkles surface coverage.
+      const m = piece.worldMatrix
+      const px = m[12], py = m[13], pz = m[14]
+      // Random offset on a unit sphere, scaled by a few wu so the
+      // sparkles cluster around the piece without being glued to its
+      // pivot point.  TA pieces are typically 10-50 wu — 8 wu radius
+      // covers small pieces while staying contained on larger ones.
+      const u = Math.random() * Math.PI * 2
+      const v = Math.acos(2 * Math.random() - 1)
+      const r = 4 + Math.random() * 6
+      const ox = r * Math.sin(v) * Math.cos(u)
+      const oy = r * Math.sin(v) * Math.sin(u)
+      const oz = r * Math.cos(v)
+      this.particles.emit(SFX_SPARK, [px + ox, py + oy, pz + oz], {
+        // Bright green with a hint of cyan — Star Trek transporter
+        // glow.  Pre-multiplied additive blending in the particle
+        // shader takes alpha=1 as "fully add to background", giving
+        // the sparkle its bright pop against any backdrop.
+        color: [0.30, 1.80, 0.80, 1.0],
+        size: 2.5,
+        lifeMs: 350,
+        riseSpeed: 0.0,
+        drift: 0.0,
+      })
+    }
+  }
+
   _emitShipWake(worldPos, headingRad) {
     if (!this.model || !this.particles) return
     const sinH = Math.sin(headingRad)

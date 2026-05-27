@@ -11678,12 +11678,12 @@ async function activateModelTab(tab) {
         // the initial pose).  Units without a Create just start
         // 'created' so nothing is gated.
         if (cob) cob._lifecycle = (cob.hasScript && cob.hasScript('Create')) ? 'unborn' : 'created'
-        // Kick off the auto-build ramp — phases the unit in from 0%
-        // (wireframe construction stripes) to 100% over ~5 sim
-        // seconds.  Cancelled if the user drags either Build slider
-        // or clicks Create Unit; otherwise runs to completion in
-        // the background while the user reads the panels.
-        startMvAutoBuild(modelViewerInstance)
+        // Initial load shows the unit fully built — Create script
+        // hasn't run yet but the geometry is already in its rest
+        // pose, which reads cleaner than starting with construction-
+        // wireframe stripes the user hasn't asked for.  The auto-
+        // build ramp kicks in only when the user clicks "Create Unit"
+        // (the explicit user gesture).
         refreshCobPanel(cob)
         // The Actions inspector lists every COB entry-point — re-
         // render whenever a new unit loads so the buttons reflect
@@ -12124,13 +12124,17 @@ function wireMvInspectors() {
       const mv = modelViewerInstance
       const cob = mv?.cob
       if (!cob || !cob.hasScript || !cob.hasScript('Create')) return
-      // Cancel any in-flight auto-build ramp so the user-driven flow
-      // takes over.  The Create script kicks off the actual unit
-      // setup; refreshMvControlsGating handles the row swap once
-      // the lifecycle transitions.
-      if (mv._autoBuild) mv._autoBuild = null
+      // Kick the Create script off IMMEDIATELY so any pose-setup
+      // it does (hide flares, set pieces to their initial offsets,
+      // etc.) lands before the first sparkle frame — keeps the
+      // build animation visually consistent with the final pose.
       cob.start('Create')
       cob._lifecycle = 'creating'
+      // Now start the construction ramp.  Build% snaps to 0 and
+      // ramps to 100 over ~5 sim seconds, with green transporter
+      // sparkles emitted from random model vertices each frame
+      // (cob-binding's _emitBuildSparkles handles the visuals).
+      startMvAutoBuild(mv)
       refreshMvControlsGating(mv)
     })
     createBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
