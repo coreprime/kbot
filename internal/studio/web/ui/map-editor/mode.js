@@ -56,7 +56,7 @@
 //   - renderDrawer()             — clearStampSelection repaints the
 //                                  drawer row after deselecting
 
-import { $, $$, state, hostCallbacks, setStatus } from '../host-context.js'
+import { $, $$, state, hostCallbacks, setStatus, activeMap } from '../host-context.js'
 import {
   beginTransaction,
   commitTransaction,
@@ -88,6 +88,13 @@ export function syncDrawerToMode(mode) {
 }
 
 export function setMode(mode) {
+  // No-op when no map tab is the active context — every state.X read
+  // below routes through the host-context Proxy to activeMap(), which
+  // returns null when the user is on the welcome screen or a unit /
+  // sandbox tab.  Hotkeys (P/T/F/G/K/S/X/D/H/B/R) bubble to the
+  // document keyboard listener regardless of which tab owns focus, so
+  // bail here rather than gating at every call site.
+  if (!activeMap()) return
   state.mode = mode
   // Tear down any in-flight tool state that doesn't belong to the new mode.
   if (mode !== 'paint') cancelPlacement()

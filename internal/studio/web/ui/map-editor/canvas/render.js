@@ -22,7 +22,7 @@
 // Cross-module deps via hostCallbacks:
 //   - none — everything we need is now a module-level import.
 
-import { state, $ } from '../../host-context.js'
+import { state, $, activeMap } from '../../host-context.js'
 import { TILE_PX, VOID_COLOR } from '../constants.js'
 import { applyOverscrollPadding } from '../zoom-pan.js'
 import { visiblePixelBounds, visibleTileBounds } from '../viewport.js'
@@ -68,6 +68,13 @@ import { updateFeatureInfoPanel } from '../feature-info.js'
 import { updateCameraInfoPanel } from '../camera-info.js'
 
 export function renderCanvas() {
+  // No-op when no map tab is the active context — every state.X read
+  // below routes through the host-context Proxy to activeMap(), which
+  // returns null when the user is on the welcome screen or a unit /
+  // sandbox tab.  Stale scheduleRenderCanvas() ticks (e.g. from the
+  // ResizeObserver on the editor view) would otherwise crash on
+  // state.features being undefined.
+  if (!activeMap()) return
   const canvas = $('#canvas')
   const glCanvas = $('#canvas-gl')
   const wantW = state.tileW * TILE_PX
