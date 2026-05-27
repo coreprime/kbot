@@ -112,8 +112,15 @@ type unitWeaponJSON struct {
 	// to translate the slot name back to a number.  Also useful for the
 	// Change Weapon flow — the client passes this back so the binding
 	// knows which Weapon{N} key to override.
-	Index      int     `json:"index"`
-	Name       string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
+	Index int `json:"index"`
+	// WeaponID — the TDF `id=` field on the weapon section (e.g.
+	// `[ARMCOMLASER] { id=84; ... }`).  TA's weapon table uses this
+	// integer as the canonical engine-internal identifier; we surface
+	// it so the Weapons panel can label each card with the real
+	// weapon ID rather than just the slot ordinal.  Zero when the
+	// TDF doesn't ship the field (some mod weapons omit it).
+	WeaponID int `json:"weaponId"`
+	Name     string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
 	ReloadSec  float64 `json:"reloadSec"`  // seconds between shots
 	RangeWU    float64 `json:"rangeWU"`    // engagement range in world units
 	VelocityWU float64 `json:"velocityWU"` // projectile velocity, world units / sec
@@ -460,6 +467,10 @@ func loadWeaponSection(name string) *tdf.Section {
 // fields with the same defaults (and the Change Weapon picker can
 // show the same stats the active panel will display after swap).
 func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
+	// `id=` — engine-internal weapon table index.  intFieldClean
+	// handles trailing /* comment */ and semicolon junk that some
+	// stock weapon TDFs ship with their integer values.
+	out.WeaponID = intFieldClean(sec, "id")
 	out.ReloadSec = sec.Float("reloadtime")
 	out.RangeWU = sec.Float("range")
 	out.VelocityWU = sec.Float("weaponvelocity")

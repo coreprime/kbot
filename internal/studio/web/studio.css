@@ -4031,23 +4031,47 @@ canvas {
    each card stacks header (slot label + weapon section name), a
    2-column stat grid (reload, range, velocity, etc.) and chip row
    of classifier flags (beam, smokeTrail, commandFire, ballistic). */
+/* Each weapon card looks like a distinct tile — outlined border,
+   rounded corners, lifted background, margin between cards.  The
+   header has a subtly tinted strip so the collapse target reads as
+   the obvious "click here" affordance, and stays visible even when
+   the body is collapsed away. */
 .mv-weapon-card {
-  border-bottom: 1px solid var(--border);
-  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2, rgba(255,255,255,0.02));
+  margin: 8px 8px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 .mv-weapon-head {
-  display: flex; align-items: baseline; justify-content: space-between;
-  gap: 8px; margin-bottom: 6px;
+  display: flex; flex-direction: column;
+  gap: 4px; padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent);
+  border-bottom: 1px solid var(--border);
 }
-.mv-weapon-title {
-  font-size: 12px; font-weight: 600;
-  color: var(--text); text-transform: uppercase; letter-spacing: 0.5px;
+.mv-weapon-collapsed .mv-weapon-head { border-bottom: 0; }
+.mv-weapon-head-row {
+  display: flex; align-items: center; gap: 8px;
 }
+/* Row 1 — slot label LEFT, chevron RIGHT.  space-between pushes
+   them to opposite ends without needing an explicit spacer. */
+.mv-weapon-head-slot-row { justify-content: space-between; }
+.mv-weapon-slot {
+  font-size: 12px; font-weight: 700;
+  color: var(--text); text-transform: uppercase; letter-spacing: 0.6px;
+}
+/* Row 2 — colour swatch + weapon name fill, TDF id chip on right. */
+.mv-weapon-head-name-row { justify-content: flex-start; }
+.mv-weapon-head-name-row .mv-weapon-name { flex: 1; min-width: 0; }
 .mv-weapon-name {
   font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-width: 60%;
 }
+/* Per-card body inherits the card padding so the collapsed header
+   alone reads as a clean tile without floating content underneath. */
+.mv-weapon-body { padding: 8px 10px 10px 10px; }
 .mv-weapon-stats {
   display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px;
   margin-bottom: 6px;
@@ -4081,13 +4105,17 @@ canvas {
   cursor: pointer; user-select: none;
 }
 .mv-weapon-show-proj input { margin: 0; }
-/* Collapse chevron — rotates 90° (▾ → ▸) when card is collapsed. */
+/* Collapse chevron — sits on the RIGHT of the slot-label row.  ▾
+   when expanded, ▸ (-90° rotation) when collapsed.  Hovering the
+   whole card head gives the chevron a slight highlight so the
+   click affordance reads from anywhere along the row. */
 .mv-weapon-head { cursor: pointer; }
+.mv-weapon-head:hover .mv-weapon-chev { color: var(--text); }
 .mv-weapon-chev {
-  display: inline-block; width: 12px;
-  font-size: 10px; color: var(--muted);
-  transition: transform 120ms ease;
-  margin-right: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  font-size: 11px; color: var(--muted);
+  transition: transform 120ms ease, color 120ms ease;
 }
 .mv-weapon-collapsed .mv-weapon-chev { transform: rotate(-90deg); }
 .mv-weapon-collapsed .mv-weapon-body { display: none; }
@@ -4157,16 +4185,18 @@ canvas {
   background: var(--bg-2); color: var(--text);
   border: 1px solid var(--border);
 }
-/* Slot ID badge — "#1", "#2", "#3" beside the slot label.  Subtle
-   monospace pip so the slot number is glanceable without competing
-   with the slot label or weapon name. */
+/* Weapon TDF id chip — sits on the right of the weapon-name row,
+   shows the actual `id=` value from the weapon TDF (e.g.
+   ARMCOMLASER id=84).  Tabular-num + monospace so chips align
+   nicely down the panel even when ids vary in width. */
 .mv-weapon-id {
-  display: inline-block; margin-left: 4px;
+  flex: 0 0 auto;
   font-family: ui-monospace, monospace; font-size: 10px;
   font-weight: 500; color: var(--muted);
-  padding: 0 4px; border: 1px solid var(--border);
-  border-radius: 3px; vertical-align: middle;
-  text-transform: none; letter-spacing: 0;
+  padding: 0 5px; border: 1px solid var(--border);
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 /* The weapon name in the card header carries an inline colour
    rectangle (when the TDF ships a `color=` palette index).  Render

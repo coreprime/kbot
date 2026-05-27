@@ -15948,10 +15948,11 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
   // default (so the "Assign Weapon" affordance is obvious).
   if (_mvWeaponCollapsed.has(slot)) card.classList.add('mv-weapon-collapsed')
 
-  // ── Header: slot label + weapon ID + name + colour rectangle ──
-  // The header is the clickable collapse toggle.  Buttons inside
-  // (Change Weapon, sound-play) stop propagation so they don't
-  // accidentally fire the collapse on click.
+  // ── Header — two-row layout for visual distinction:
+  //   Row 1: [SLOT LABEL ───────────────── CHEVRON]
+  //   Row 2: [colour swatch] WEAPON NAME  (TDF id=42)
+  // The whole header is the collapse toggle; child buttons/inputs
+  // stop propagation so they don't accidentally fire collapse.
   const head = document.createElement('div')
   head.className = 'mv-weapon-head'
   head.title = 'Click to collapse / expand this weapon card.'
@@ -15960,29 +15961,27 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     const nowCollapsed = card.classList.toggle('mv-weapon-collapsed')
     if (nowCollapsed) _mvWeaponCollapsed.add(slot)
     else _mvWeaponCollapsed.delete(slot)
-    // Flip the chevron icon — pure cosmetic; CSS rotates it when the
-    // card carries .mv-weapon-collapsed.
   })
-  // Chevron indicator on the LEFT — rotates 90° via CSS when the
-  // card is collapsed, giving the user a clear affordance.
+  // Row 1 — slot label left, chevron right.  Chevron rotates -90°
+  // when collapsed via CSS, signalling expand affordance.
+  const headRow1 = document.createElement('div')
+  headRow1.className = 'mv-weapon-head-row mv-weapon-head-slot-row'
+  const slotEl = document.createElement('div')
+  slotEl.className = 'mv-weapon-slot'
+  slotEl.textContent = cap
+  headRow1.appendChild(slotEl)
   const chev = document.createElement('span')
   chev.className = 'mv-weapon-chev'
   chev.textContent = '▾'
-  head.appendChild(chev)
-  const title = document.createElement('div')
-  title.className = 'mv-weapon-title'
-  title.textContent = cap
-  const idEl = document.createElement('span')
-  idEl.className = 'mv-weapon-id'
-  idEl.textContent = '#' + idx
-  idEl.title = `FBI Weapon${idx} slot`
-  title.appendChild(idEl)
-  const nameEl = document.createElement('div')
-  nameEl.className = 'mv-weapon-name'
-  // Colour rectangle next to the weapon name when the weapon ships a
-  // TDF `color=` (e.g. ARM laser = palette[232] = bright green).
-  // Resolved through the model viewer's TAPalette — what's drawn
-  // here is exactly what the beam will paint with.
+  chev.title = 'Collapse / expand this card'
+  headRow1.appendChild(chev)
+  head.appendChild(headRow1)
+  // Row 2 — colour swatch, weapon name, and the TDF `id=` value.
+  // The id is the engine-internal weapon-table index — the user
+  // requested this in place of the slot ordinal so the panel reads
+  // weapon-centric rather than slot-centric.
+  const headRow2 = document.createElement('div')
+  headRow2.className = 'mv-weapon-head-row mv-weapon-head-name-row'
   if (w.colorIdx > 0 && modelViewerInstance && modelViewerInstance.palette) {
     const c = modelViewerInstance.palette.colorFor(w.colorIdx)
     const rect = document.createElement('span')
@@ -15990,13 +15989,25 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     rect.style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`
     const hex = [c[0], c[1], c[2]].map(v => Math.round(v*255).toString(16).padStart(2, '0')).join('')
     rect.title = `palette[${w.colorIdx}] = #${hex}`
-    nameEl.appendChild(rect)
+    headRow2.appendChild(rect)
   }
   const nameTxt = document.createElement('span')
+  nameTxt.className = 'mv-weapon-name'
   nameTxt.textContent = w.name || '—'
-  nameEl.appendChild(nameTxt)
-  head.appendChild(title)
-  head.appendChild(nameEl)
+  headRow2.appendChild(nameTxt)
+  // TDF weapon id chip — right of the name.  Shows the actual `id=`
+  // field from the weapon TDF (e.g. ARMCOMLASER id=84), NOT the
+  // unit's slot ordinal.  Suppressed when the weapon has no id
+  // declared (some mod weapons omit it) so the chip isn't a noisy
+  // "id=0" for every such weapon.
+  if (w.weaponId && w.weaponId > 0) {
+    const idEl = document.createElement('span')
+    idEl.className = 'mv-weapon-id'
+    idEl.textContent = 'id=' + w.weaponId
+    idEl.title = `Weapon TDF id=${w.weaponId} — engine-internal weapon table index`
+    headRow2.appendChild(idEl)
+  }
+  head.appendChild(headRow2)
   card.appendChild(head)
 
   // Wrap everything below the head in a .mv-weapon-body so the
