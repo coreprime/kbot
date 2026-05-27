@@ -273,6 +273,11 @@ export const hostCallbacks = {
   // even when the visible minimap was awaiting a debounced
   // redraw.
   renderMinimap: null,          // () => void
+  // Bumps the content-version counter that drives the dev-stats
+  // panel + minimap base-canvas invalidation.  Called from any
+  // edit that changes tile data or feature placements but isn't
+  // already routed through commitTransaction.
+  bumpContentVersion: null,     // () => void
 }
 
 // ── React UI bridge accessor ────────────────────────────────────────
