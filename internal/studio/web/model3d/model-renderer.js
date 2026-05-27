@@ -1353,11 +1353,16 @@ export class ModelRenderer {
     // required.
     const haveModel = !!this.model || (this._entities && this._entities.length > 0)
     if (!this.camera || !haveModel) {
-      // Even on the empty-scene fallback, refresh the camera matrices
-      // so consumers reading `camera.eye` / `camera.viewMatrix` (the
-      // Renderer inspector overlay, etc.) see live values.  Without
-      // this the camera reports its construction defaults (eye at
-      // origin) until the first model lands.
+      // Empty-scene fallback (sandbox with nothing spawned, or
+      // single-unit between model loads).  We still want a usable
+      // backdrop: refresh the camera matrices + paint the sky AND
+      // draw the ground plane so the user sees the grid / terrain /
+      // sea immediately rather than a flat blue void.
+      // Synth a minimal bounds so #renderGround's centre/span math
+      // (model.bounds-driven) doesn't NPE — the ground geometry
+      // itself is a fixed-size VBO, the bounds only affect
+      // shadow-falloff radius and centre, which the empty scene
+      // anchors at the world origin.
       if (this.camera) {
         const aspect = gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight)
         this.camera.updateMatrices(aspect, 0.5, 8000)
@@ -1365,6 +1370,12 @@ export class ModelRenderer {
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
       gl.clearColor(this.skyBottom[0], this.skyBottom[1], this.skyBottom[2], 1)
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+      if (this.groundMode !== 'off' && this._groundVBO && this.camera) {
+        const _savedModel = this.model
+        this.model = { bounds: { min: [-4, 0, -4], max: [4, 0, 4] } }
+        try { this.#renderGround() } catch { /* shader may not be ready yet */ }
+        this.model = _savedModel
+      }
       return
     }
 

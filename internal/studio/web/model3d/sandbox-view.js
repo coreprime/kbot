@@ -77,11 +77,24 @@ export class SandboxView {
     if (typeof this.renderer.setGroundMode === 'function') {
       this.renderer.setGroundMode('grid')
     }
+    // Sandbox is a strategic top-down view — auto-rotate makes the
+    // ground spin away under the units and prevents the user from
+    // building any spatial intuition about where they spawned things.
+    // Off by default; user can re-enable from the unit-editor menu
+    // if they want a tour shot.
+    if (typeof this.renderer.setAutoRotate === 'function') {
+      this.renderer.setAutoRotate(false)
+    } else {
+      this.renderer.autoRotate = false
+    }
     // Empty-scene framing — camera looks at a generous patch of
-    // ground so spawned units have room around the origin.
-    this.camera.frameBounds([-200, 0, -200], [200, 40, 200])
+    // ground so spawned units have room around the origin.  Tighter
+    // initial distance than the prior 950 wu sweep so the grid
+    // pattern is legible from the first frame.
+    this.camera.target = [0, 0, 0]
+    this.camera.distance = 220
     this.camera.yaw = 215 * Math.PI / 180
-    this.camera.pitch = 28 * Math.PI / 180
+    this.camera.pitch = 45 * Math.PI / 180
     // Drop the entities array onto the renderer so the entity-mode
     // path engages even before the first spawn (empty array → falls
     // back to single-unit path with this.model = null, which paints
@@ -173,9 +186,17 @@ export class SandboxView {
   }
 
   // setPendingCommand — called by the controls UI when the user
-  // clicks Move / Attack.  Next canvas click consumes it.
+  // clicks Move / Attack.  Next canvas click consumes it.  Also
+  // flips the canvas cursor so the user has an unambiguous visual
+  // signal that an action is armed (the unit-editor uses a custom
+  // animated TA cursor for the same purpose; sandbox falls back to
+  // a CSS crosshair so we don't need to plumb MvControls' overlay
+  // <img> machinery through the multi-unit pipeline).
   setPendingCommand(cmd) {
     this._pendingCmd = (cmd === 'move' || cmd === 'attack') ? cmd : null
+    if (this.canvas) {
+      this.canvas.style.cursor = this._pendingCmd ? 'crosshair' : ''
+    }
     if (this._pendingCmd) {
       this.#setStatus(`${cmd[0].toUpperCase() + cmd.slice(1)} — click a ${cmd === 'attack' ? 'target unit' : 'destination'}.`)
     }
@@ -198,11 +219,19 @@ export class SandboxView {
       // negative).  Without this lift, units with a non-zero min.y
       // float above (or sink into) the flat ground.
       const lift = u.model.bounds ? -u.model.bounds.min[1] : 0
+      // Heading offset by +π — mirrors the single-unit viewer's
+      // _applyRendererTransform convention (mv-controls.js:792).
+      // The model loader X-flips every vertex (so right-handed GL
+      // matches TA's left-handed authoring), which has the side
+      // effect of pointing the unit's "front" at the OPPOSITE of
+      // its logical heading.  +π compensates so the unit faces the
+      // direction it walks.  Without this fix, units appear to
+      // moonwalk backwards toward their move target.
       entities.push({
         model: u.model,
         binding: u.binding,
         buildPercent: u.buildPercent,
-        transform: { x: u.pos.x, y: u.pos.y + lift, z: u.pos.z, headingRad: u.heading },
+        transform: { x: u.pos.x, y: u.pos.y + lift, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
       })
     }
@@ -215,7 +244,7 @@ export class SandboxView {
       const lift = p.model.bounds ? -p.model.bounds.min[1] : 0
       entities.push({
         model: p.model,
-        transform: { x: p.pos.x, y: lift, z: p.pos.z, headingRad: 0 },
+        transform: { x: p.pos.x, y: lift, z: p.pos.z, headingRad: Math.PI },
         ghost: true,
       })
     }
@@ -337,6 +366,7 @@ export class SandboxView {
         if (u) u.moveTarget = { x: world[0], z: world[2] }
       }
       this._pendingCmd = null
+      if (this.canvas) this.canvas.style.cursor = ''
       this.#setStatus(`Move order issued to ${this.scene.selected.size} unit(s).`)
       return
     }
@@ -349,8 +379,11 @@ export class SandboxView {
           if (u) u.attackTarget = hit
         }
         this.#setStatus(`Attack order issued — ${this.scene.selected.size} unit(s) targeting ${hit.name}.`)
+      } else if (!hit) {
+        this.#setStatus('Attack — click cancelled (no unit under cursor).')
       }
       this._pendingCmd = null
+      if (this.canvas) this.canvas.style.cursor = ''
       return
     }
     // Default click — selection.  Click on a unit selects only it;
