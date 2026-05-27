@@ -36,6 +36,8 @@ import {
   normalizedRect,
   defaultOTAState,
   playerCountLabel,
+  gameToCanvas,
+  canvasToGame,
 } from './ui/map-editor/helpers.js'
 
 // Host context — shared module-level state for every /ui/* subsystem.
@@ -396,6 +398,11 @@ import {
   drawEraseBrush,
   drawHeightmapBrush,
 } from './ui/map-editor/canvas/brush-cursors.js'
+
+// Start-position markers — the active schema's positions render
+// as labelled gold robot badges, other schemas' positions dim
+// behind them so the user sees the full layout at once.
+import { drawStartPositions } from './ui/map-editor/canvas/start-positions.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
 // the React chrome itself lives at
@@ -3587,12 +3594,8 @@ function findFeatureAt(e) {
 // pixels and canvas pixels via the TILE_PX scale.
 // START_POS_RADIUS lives in ./ui/map-editor/constants.js.
 
-function gameToCanvas(gx, gz) {
-  return { px: gx * TILE_PX / 32, py: gz * TILE_PX / 32 }
-}
-function canvasToGame(px, py) {
-  return { gx: Math.round(px * 32 / TILE_PX), gz: Math.round(py * 32 / TILE_PX) }
-}
+// gameToCanvas / canvasToGame live in /ui/map-editor/helpers.js —
+// imported at the top of this file.
 
 function activeSchema() {
   if (!state.ota || !state.ota.schemas[state.activeSchema]) return null
@@ -3690,91 +3693,10 @@ function onStartPosMouseUp(_e) {
   }
 }
 
-// drawStartPositions renders the active schema's start positions as
-// labelled robot markers.  Other schemas' positions are dimmed so the
-// user can see them as reference but the active set is unambiguous.
+// drawStartPositions moved to /ui/map-editor/canvas/start-positions.js.
 // drawEraseBrush + drawHeightmapBrush moved to
-// /ui/map-editor/canvas/brush-cursors.js — imported at the top of
+// /ui/map-editor/canvas/brush-cursors.js.  Both imported at the top of
 // this file.
-
-function drawStartPositions(ctx) {
-  if (!state.ota) return
-  // Hidden via View toggle, and the user isn't in start-points mode
-  // (mode forces the layer on so they can see what they're editing).
-  if (!state.showStartPositions && state.mode !== 'start-points') return
-  const fontFamily = getComputedStyle(document.body).fontFamily
-  // Inverse zoom so the marker keeps a stable CSS size as the user
-  // zooms out — clamp upward to avoid mountain-sized badges at 1%
-  // zoom while still rescuing them from the 16-px-into-the-void
-  // disappear they used to do.  At zoom >= 1 we render at the
-  // original sizes.
-  const z = state.zoom || 1
-  const scale = Math.min(8, Math.max(1, 1 / z))
-  const ringR = 16 * scale
-  const dotR = 8 * scale
-  const iconPx = Math.round(18 * scale)
-  const badgePx = Math.round(11 * scale)
-  const badgeOffsetX = 12 * scale
-  const badgeOffsetY = 6 * scale
-  const badgeH = 15 * scale
-
-  // Faded markers for non-active schemas (only render if there's more
-  // than one schema, otherwise it's noise).
-  if (state.ota.schemas.length > 1) {
-    ctx.save()
-    ctx.globalAlpha = 0.18
-    for (let si = 0; si < state.ota.schemas.length; si++) {
-      if (si === state.activeSchema) continue
-      const s = state.ota.schemas[si]
-      for (const sp of s.startPositions) {
-        const { px, py } = gameToCanvas(sp.x, sp.z)
-        ctx.fillStyle = '#8b5cf6'
-        ctx.beginPath()
-        ctx.arc(px, py, dotR, 0, Math.PI * 2)
-        ctx.fill()
-      }
-    }
-    ctx.restore()
-  }
-
-  const schema = activeSchema()
-  if (!schema) return
-  ctx.save()
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  for (let i = 0; i < schema.startPositions.length; i++) {
-    const sp = schema.startPositions[i]
-    const { px, py } = gameToCanvas(sp.x, sp.z)
-    // Outer ring — accent when selected, gold otherwise.
-    const selected = state.mode === 'start-points' && state.selectedStartPos === i
-    ctx.fillStyle = selected ? 'rgba(139, 92, 246, 0.92)' : 'rgba(255, 200, 0, 0.92)'
-    ctx.strokeStyle = selected ? '#fff' : 'rgba(0, 0, 0, 0.6)'
-    ctx.lineWidth = 2 * scale
-    ctx.beginPath()
-    ctx.arc(px, py, ringR, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.stroke()
-    // Robot glyph.
-    ctx.fillStyle = '#000'
-    ctx.font = `${iconPx}px ${fontFamily}`
-    ctx.fillText('🤖', px, py + scale)
-    // Number badge — small pill below/right of the marker.
-    const label = String(sp.number)
-    ctx.font = `bold ${badgePx}px ${fontFamily}`
-    const w = ctx.measureText(label).width + 8 * scale
-    const bx = px + badgeOffsetX
-    const by = py + badgeOffsetY
-    ctx.fillStyle = 'rgba(20, 24, 32, 0.95)'
-    ctx.strokeStyle = selected ? '#fff' : 'rgba(139, 92, 246, 0.9)'
-    ctx.lineWidth = 1.5 * scale
-    roundRect(ctx, bx, by, w, badgeH, 4 * scale)
-    ctx.fill()
-    ctx.stroke()
-    ctx.fillStyle = '#fff'
-    ctx.fillText(label, bx + w / 2, by + badgeH / 2)
-  }
-  ctx.restore()
-}
 
 // ── Picker mode ────────────────────────────────────────────────────────────
 // Click toggles single-select on a feature; Shift+click toggles in/out of a
@@ -4732,20 +4654,6 @@ function hideRotationBadge() {
   // happy.
   const badge = document.getElementById('rotation-badge')
   if (badge) badge.classList.add('hidden')
-}
-
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath()
-  ctx.moveTo(x + r, y)
-  ctx.lineTo(x + w - r, y)
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-  ctx.lineTo(x + w, y + h - r)
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-  ctx.lineTo(x + r, y + h)
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-  ctx.lineTo(x, y + r)
-  ctx.quadraticCurveTo(x, y, x + r, y)
-  ctx.closePath()
 }
 
 // PLACEMENT_ALIGN_TOLERANCE — threshold beyond which we consider two

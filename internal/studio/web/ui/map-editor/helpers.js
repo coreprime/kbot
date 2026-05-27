@@ -6,7 +6,20 @@
 // the safe-to-share slice that other /ui/map-editor/ modules can pull
 // in without dragging the whole legacy host along.
 
-import { WORLDS, PLAYER_COUNT_NAMES } from './constants.js'
+import { TILE_PX, WORLDS, PLAYER_COUNT_NAMES } from './constants.js'
+
+// gameToCanvas / canvasToGame convert between TA's 32-game-pixels-
+// per-tile coordinate space (sp.x, sp.z, weapon raycasts, etc.) and
+// the editor's TILE_PX-per-tile canvas space.  TILE_PX happens to
+// equal 32 today, but the unit conversion is intentional here —
+// any future zoom-render-at-different-ratio change should still
+// resolve via these helpers rather than re-deriving 32.
+export function gameToCanvas(gx, gz) {
+  return { px: gx * TILE_PX / 32, py: gz * TILE_PX / 32 }
+}
+export function canvasToGame(px, py) {
+  return { gx: Math.round(px * 32 / TILE_PX), gz: Math.round(py * 32 / TILE_PX) }
+}
 
 // worldFor resolves a world string (a slug, a default-tileset name, or
 // an alias) to its WORLDS entry.  Returns null when nothing matches.
