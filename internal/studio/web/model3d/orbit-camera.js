@@ -125,5 +125,26 @@ export class OrbitCamera {
     const ez = this.target[2] + this.distance * cosY * cosP
     this.eye[0] = ex; this.eye[1] = ey; this.eye[2] = ez
     Mat4.lookAt(this.viewMatrix, this.eye, this.target, [0, 1, 0])
+    // Invalidate the cached inv-view-proj so the next caller
+    // (sandbox screen-to-ground) recomputes against the fresh
+    // view/proj matrices.
+    this._invViewProjDirty = true
+  }
+
+  // invViewProj returns the inverse of (proj * view) — used by the
+  // sandbox to unproject a screen-space click into a world-space ray
+  // for ground intersection.  Cached and recomputed only when
+  // updateMatrices marks the cache dirty so we don't redo the 4x4
+  // multiply + invert on every pointer event.
+  invViewProj() {
+    if (!this._invViewProj) this._invViewProj = Mat4.create()
+    if (!this._viewProj) this._viewProj = Mat4.create()
+    if (this._invViewProjDirty || !this._invViewProjValid) {
+      Mat4.multiply(this._viewProj, this.projMatrix, this.viewMatrix)
+      const ok = Mat4.invert(this._invViewProj, this._viewProj)
+      this._invViewProjValid = !!ok
+      this._invViewProjDirty = false
+    }
+    return this._invViewProjValid ? this._invViewProj : null
   }
 }

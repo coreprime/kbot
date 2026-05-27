@@ -766,7 +766,16 @@ function switchToTab(nextIdx, { fresh = false, force = false } = {}) {
     $('#model-open-dialog')?.classList.add('hidden')
     $('#model-viewer-dialog').classList.remove('hidden')
     updateTopbarDocInfo(incoming)
-    void activateModelTab(incoming)
+    if (incoming.sandbox) {
+      void activateSandboxTab(incoming)
+    } else {
+      // Hide the sandbox panel when switching back to a regular
+      // model tab so its overlay doesn't shadow the single-unit
+      // inspectors.
+      const sp = document.getElementById('sandbox-panel')
+      if (sp) sp.classList.add('hidden')
+      void activateModelTab(incoming)
+    }
     return
   }
 
@@ -11021,7 +11030,27 @@ function wireModelDialogs() {
   if (filter) filter.addEventListener('input', renderModelList)
   const confirm = $('#model-open-confirm')
   if (confirm) confirm.addEventListener('click', () => {
-    if (selectedModelName) openModelViewer(selectedModelName)
+    if (!selectedModelName) return
+    // Sandbox spawn path — when the user clicked "Spawn Unit" inside
+    // the sandbox panel, the picker confirm should ADD the unit to
+    // the scene at a fresh ground position instead of opening a
+    // model viewer tab.  Offsets per spawn so multiple units don't
+    // overlap on the first tick.
+    if (window.__sandboxSpawnPending && sandboxViewInstance) {
+      window.__sandboxSpawnPending = false
+      // Close the picker dialog manually (skip the normal close
+      // path which restores the welcome dialog or active tab).
+      $('#model-open-dialog')?.classList.add('hidden')
+      $('#model-viewer-dialog')?.classList.remove('hidden')
+      const n = sandboxViewInstance.scene ? sandboxViewInstance.scene.unitCount() : 0
+      const ang = n * 0.9
+      const r = 30 + n * 8
+      const x = Math.cos(ang) * r
+      const z = Math.sin(ang) * r
+      void sandboxViewInstance.spawn(selectedModelName, { x, z })
+      return
+    }
+    openModelViewer(selectedModelName)
   })
   // No "Close" button on the viewer overlay any more — the user
   // closes the model tab via the × in the shared tab bar, same
@@ -16718,31 +16747,143 @@ function closeModelPicker() {
   }
 }
 
-// openSandboxStub is the Phase-1 entry point for the Sandbox welcome
-// card.  The full multi-unit RTS layer (tab routing, multi-unit
-// renderer pass, click + drag-rect selection, Move / Attack
-// commands, projectile hit-detection + damage) is a multi-commit
-// build-out — this stub explains the current state so the user
-// knows the card is wired even though the experience isn't
-// feature-complete yet.  Once Phase 2 lands, this becomes a real
-// `openSandboxTab()` that creates a 'sandbox' tab type and routes
-// to the multi-unit scene.
+// openSandboxStub — Sandbox welcome-card entry point.  Creates a
+// new 'sandbox' tab + activates it.  The activate path mounts the
+// SandboxView on the existing model-viewer canvas chrome (sky +
+// ground + camera) and exposes a floating Sandbox panel with Spawn /
+// Move / Attack actions.
 function openSandboxStub() {
-  const msg = [
-    'Sandbox mode is under construction.',
-    '',
-    'The data layer is in place: a shared CobRuntime drives multiple',
-    'units, each with its own COB script state, particles, audio,',
-    'health and build %.  Selection state lives on the scene.',
-    '',
-    'The remaining work — multi-unit rendering, click + drag-rect',
-    'selection, Move / Attack commands, and projectile-vs-bounding-',
-    'sphere damage — lands in subsequent commits.',
-  ].join('\n')
-  // Reuse the browser's native alert for the stub message — small,
-  // dismissible, doesn't need wiring + DOM machinery for a one-line
-  // notice that's going to be replaced shortly.
-  if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+  // Reuse the model-viewer tab type for hooking into the existing
+  // switchToTab routing; flag it as sandbox via tab.sandbox = true
+  // so activateModelTab knows to mount the multi-unit view instead
+  // of the single-unit one.
+  const tab = { type: 'model', name: '__sandbox__', sandbox: true, displayName: 'Sandbox' }
+  tabs.push(tab)
+  switchToTab(tabs.length - 1, { fresh: true, force: true })
+}
+
+// Singleton SandboxView — same lifetime as modelViewerInstance.  Lazy-
+// constructed on first sandbox tab activation.  Reused across sandbox
+// tab swaps so the GL context + texture cache survive.
+let sandboxViewInstance = null
+
+async function activateSandboxTab(_tab) {
+  // Hide the model-viewer dialog if visible — sandbox lives on the
+  // same canvas but with its own chrome.  Reuse the model-viewer
+  // dialog so the canvas + ribbon are already mounted.
+  $('#model-viewer-dialog')?.classList.remove('hidden')
+  // If the regular ModelViewer instance is alive, pause its renderer
+  // so it doesn't redraw the (now-stale) single-unit scene on top of
+  // the sandbox scene.  We'll re-init the sandbox view's renderer
+  // fresh below if needed.
+  if (modelViewerInstance && modelViewerInstance.renderer) {
+    // The renderer instance is shared in practice — we want one
+    // renderer at a time on the single canvas.  Tear it down.
+    try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
+  }
+  if (!sandboxViewInstance) {
+    const mod = await import('./model3d/sandbox-view.js')
+    sandboxViewInstance = new mod.SandboxView({
+      canvas: $('#model-viewer-canvas'),
+      statusEl: $('#status'),
+    })
+  }
+  await sandboxViewInstance.open()
+  // Show the Sandbox floating panel; it offers Spawn / Move / Attack
+  // / Stop buttons + a unit roster.  Lazy-created on first show.
+  ensureSandboxPanel()
+  showSandboxPanel(true)
+  // Hide the standard inspectors that don't apply to multi-unit mode
+  // (Pieces / Textures / Weapons / Threads — all single-unit).  The
+  // Sandbox panel takes their place.
+  for (const id of ['mv-inspector-scripts', 'mv-inspector-actions', 'mv-inspector-ports', 'mv-inspector-staticvars', 'mv-inspector-effects', 'mv-inspector-audio']) {
+    const p = document.getElementById(id)
+    if (p) p.classList.add('hidden')
+  }
+  // Expose on window for the preview eval harness.
+  if (typeof window !== 'undefined') window.__sandboxView = sandboxViewInstance
+}
+
+// ensureSandboxPanel — creates the floating Sandbox panel the first
+// time the user enters sandbox mode.  Lives in the body so it floats
+// over the canvas; chrome mirrors the inspector overlay style.
+function ensureSandboxPanel() {
+  if (document.getElementById('sandbox-panel')) return
+  const aside = document.createElement('aside')
+  aside.id = 'sandbox-panel'
+  aside.className = 'mv-inspector'
+  aside.style.top = '64px'
+  aside.style.left = '12px'
+  aside.innerHTML = `
+    <div class="mv-inspector-header" id="sandbox-panel-header">
+      <span class="minimap-grip" title="Drag to move">⠿</span>
+      <span>Sandbox</span>
+      <button class="minimap-toggle mv-inspector-toggle" data-panel="sandbox-panel" title="Collapse">−</button>
+    </div>
+    <div class="mv-inspector-body">
+      <div class="mv-controls-actions" style="grid-template-columns: 1fr 1fr;">
+        <button class="mv-ctrl-action" id="sandbox-spawn"><span class="ico">🛠</span><span class="lbl">Spawn Unit</span></button>
+        <button class="mv-ctrl-action" id="sandbox-move"><span class="ico">🚶</span><span class="lbl">Move</span></button>
+        <button class="mv-ctrl-action" id="sandbox-attack"><span class="ico">🎯</span><span class="lbl">Attack</span></button>
+        <button class="mv-ctrl-action mv-ctrl-action-stop" id="sandbox-stop"><span class="ico">✋</span><span class="lbl">Stop</span></button>
+      </div>
+      <div id="sandbox-roster" style="max-height:240px;overflow:auto;padding:4px 6px;font-size:11px;font-family:ui-monospace,monospace"></div>
+    </div>
+  `
+  document.body.appendChild(aside)
+  // Wire buttons.
+  document.getElementById('sandbox-spawn').addEventListener('click', () => openSandboxSpawnPicker())
+  document.getElementById('sandbox-move').addEventListener('click', () => sandboxViewInstance?.setPendingCommand('move'))
+  document.getElementById('sandbox-attack').addEventListener('click', () => sandboxViewInstance?.setPendingCommand('attack'))
+  document.getElementById('sandbox-stop').addEventListener('click', () => {
+    if (!sandboxViewInstance?.scene) return
+    for (const id of sandboxViewInstance.scene.selected) {
+      const u = sandboxViewInstance.scene.unitById(id)
+      if (u) { u.moveTarget = null; u.attackTarget = null }
+    }
+  })
+  // Refresh the roster every 250ms so spawn / health-change is
+  // visible without per-frame work.
+  setInterval(() => refreshSandboxRoster(), 250)
+}
+
+function showSandboxPanel(show) {
+  const p = document.getElementById('sandbox-panel')
+  if (p) p.classList.toggle('hidden', !show)
+}
+
+function refreshSandboxRoster() {
+  const host = document.getElementById('sandbox-roster')
+  if (!host || !sandboxViewInstance || !sandboxViewInstance.scene) return
+  const scene = sandboxViewInstance.scene
+  if (scene.unitCount() === 0) {
+    host.textContent = 'No units spawned.  Click "Spawn Unit" to add one.'
+    return
+  }
+  const rows = []
+  for (const u of scene.units()) {
+    const sel = scene.isSelected(u.id)
+    rows.push(`<div data-uid="${u.id}" style="cursor:pointer;padding:2px 4px;border-radius:2px;${sel ? 'background:rgba(80,140,220,0.25)' : ''}">
+      ${u.name} · HP ${u.health}
+    </div>`)
+  }
+  host.innerHTML = rows.join('')
+  for (const row of host.querySelectorAll('[data-uid]')) {
+    row.addEventListener('click', () => {
+      const id = parseInt(row.dataset.uid, 10)
+      scene.selectOnly(id)
+    })
+  }
+}
+
+// openSandboxSpawnPicker — opens the existing Open Unit dialog but
+// the confirm button spawns into the sandbox scene instead of
+// opening a model viewer tab.
+function openSandboxSpawnPicker() {
+  // Reuse the model-open dialog; flip a flag so the confirm handler
+  // knows to spawn instead of replace the active tab.
+  window.__sandboxSpawnPending = true
+  openModelPicker()
 }
 
 async function fetchModels() {

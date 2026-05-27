@@ -128,13 +128,52 @@ export class SandboxScene {
   // in one fixed-step pass), then walks units to apply per-instance
   // movement + attack logic.  Returns the runtime's instruction count
   // for the inspector telemetry.
+  //
+  // Per-unit binding tick is INTENTIONALLY skipped here because each
+  // CobBinding's tick already calls this.runtime.tick() — running
+  // them all here would double-step every unit's script.  Instead we
+  // manually advance binding-side state (particles, audio, piece
+  // sync) without re-ticking the runtime.
   tick(dtMs) {
     const insts = this.runtime.tick(dtMs)
-    // Per-unit binding tick — particles + audio + piece sync.  Done
-    // AFTER runtime.tick so the COB-driven piece moves are visible
-    // before the binding pushes them to the model.
+    const dtSec = (dtMs * (this.runtime.playbackRate || 1)) / 1000
     for (const u of this._units.values()) {
-      if (u.binding) u.binding.tick(dtMs)
+      if (u.dead) continue
+      // ── Movement integration ────────────────────────────────
+      if (u.moveTarget) {
+        const dx = u.moveTarget.x - u.pos.x
+        const dz = u.moveTarget.z - u.pos.z
+        const dist = Math.hypot(dx, dz)
+        if (dist < 0.5) {
+          u.moveTarget = null
+          u.isMoving = false
+        } else {
+          // Use FBI MaxVelocity if available, else a sane default
+          // (30 wu/sec ≈ a kbot's walking speed).
+          const speed = (u.meta && u.meta.maxVelocity > 0)
+            ? u.meta.maxVelocity * 30 /* FBI units/frame × 30Hz → wu/sec */
+            : 30
+          const step = Math.min(dist, speed * dtSec)
+          u.pos.x += (dx / dist) * step
+          u.pos.z += (dz / dist) * step
+          u.heading = Math.atan2(dx, dz)
+          u.isMoving = true
+        }
+      } else {
+        u.isMoving = false
+      }
+      // ── Particle + audio + piece-sync per-binding ───────────
+      // We synthesise a binding tick by calling its underlying
+      // helpers WITHOUT re-ticking the runtime.  cob-binding.tick
+      // re-runs the runtime which would double-step every unit.
+      const b = u.binding
+      if (b) {
+        // Replicate the binding tick's post-runtime work directly:
+        // sync piece transforms + advance particles + audio.
+        b._sync && b._sync(dtMs)
+        if (b.particles) b.particles.tick(dtMs * (this.runtime.playbackRate || 1))
+        if (b.audio) b.audio.tick(this.runtime.playbackRate || 1, this.runtime.paused)
+      }
     }
     return insts
   }
