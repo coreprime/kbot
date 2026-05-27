@@ -34,8 +34,6 @@ import {
   FEATURE_HIT_SEARCH_TILES,
   START_POS_RADIUS,
   HM_HOLD_INTERVAL_MS,
-  DICE_PLAYER_COUNTS,
-  DICE_PIP_POSITIONS,
   SCHEMA_PLAYER_COUNTS,
 } from './ui/map-editor/constants.js'
 import {
@@ -202,6 +200,15 @@ import {
   setStartPositionsVisible,
   setVoidsVisible,
 } from './ui/map-editor/view-toggles.js'
+
+// Dice-face player-count picker for the New-map size dialog.
+// Owns its own dicePicked Set; pickedPlayerCounts() reads it at
+// startEditor() time to seed N-player schemas.
+import {
+  pickedPlayerCounts,
+  populateWorldSelect,
+  renderDiceGrid,
+} from './ui/map-editor/dialogs/dice-picker.js'
 
 // KBot Studio — browser-side editor.
 //
@@ -1015,87 +1022,9 @@ async function startEditor() {
   await finishEditorBoot()
 }
 
-// ── Dice-face player-count picker (size dialog) ────────────────────────
-//
-// Lives inside #size-dialog.  Selecting multiple counts seeds that many
-// Network N schemas when the editor starts.  At least one count must
-// stay selected so the editor always has a schema to render.
-
-// DICE_PLAYER_COUNTS + PLAYER_COUNT_NAMES + playerCountLabel are
-// imported from ./ui/map-editor/.  dicePicked is module-local
-// editing state for the size dialog, so it stays here.
-const dicePicked = new Set([8]) // sensible default — a single 8-player schema
-
-function pickedPlayerCounts() {
-  const sorted = Array.from(dicePicked).sort((a, b) => a - b)
-  return sorted.length > 0 ? sorted : [4]
-}
-
-// populateWorldSelect rewrites a <select>'s options from the WORLDS
-// table.  `valueKind` picks whether the option value is the slug
-// (matches state.planet — used by the New-map picker) or the
-// default-tileset string (matches .ota.planet — used by the
-// Properties dialog).  Called once at boot for each picker.
-function populateWorldSelect(el, valueKind) {
-  if (!el) return
-  el.replaceChildren(...WORLDS.map((t) => {
-    const opt = document.createElement('option')
-    opt.value = valueKind === 'slug' ? t.slug : t.defaultTileset
-    opt.textContent = t.label
-    return opt
-  }))
-}
-
-function renderDiceGrid() {
-  const grid = $('#size-dice-grid')
-  if (!grid) return
-  const frag = document.createDocumentFragment()
-  for (const n of DICE_PLAYER_COUNTS) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'dice-face' + (dicePicked.has(n) ? ' selected' : '')
-    btn.dataset.count = String(n)
-    btn.title = `${playerCountLabel(n)} (Network ${n})`
-    const art = document.createElement('div')
-    art.className = 'dice-face-art'
-    art.appendChild(buildDicePips(n))
-    btn.appendChild(art)
-    const caption = document.createElement('span')
-    caption.className = 'dice-caption'
-    caption.textContent = playerCountLabel(n)
-    btn.appendChild(caption)
-    btn.addEventListener('click', () => {
-      if (dicePicked.has(n)) {
-        if (dicePicked.size <= 1) return // keep at least one selected
-        dicePicked.delete(n)
-      } else {
-        dicePicked.add(n)
-      }
-      renderDiceGrid()
-    })
-    frag.appendChild(btn)
-  }
-  grid.replaceChildren(frag)
-}
-
-// buildDicePips returns a domino-style face with exactly N pips.  Pips
-// are absolutely positioned (in % within the 44px art square) so we
-// don't run into the 4×4-grid problem where the centre dot needs 4
-// cells to look centred and the count ends up wrong.
-function buildDicePips(n) {
-  const wrap = document.createElement('div')
-  wrap.className = 'dice-pips'
-  const positions = DICE_PIP_POSITIONS[n] || []
-  for (const [px, py] of positions) {
-    const dot = document.createElement('span')
-    dot.style.left = (px * 100) + '%'
-    dot.style.top = (py * 100) + '%'
-    wrap.appendChild(dot)
-  }
-  return wrap
-}
-
-// DICE_PIP_POSITIONS lives in ./ui/map-editor/constants.js.
+// Dice-face player-count picker for the New-map size dialog moved
+// to /ui/map-editor/dialogs/dice-picker.js — imported at the top
+// of this file.  Owns its own dicePicked Set state.
 
 // finishEditorBoot wires the toolbar / canvas / drawer and loads the
 // section + feature catalogs.  Called from both the New-map and
