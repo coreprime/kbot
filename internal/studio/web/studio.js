@@ -403,6 +403,16 @@ import {
   resetVoidsDrag,
 } from './ui/map-editor/modes/voids.js'
 
+// Picker-mode mouse handlers — feature selection via click /
+// shift+click / rect-sweep.  resetPickerDrag clears the in-flight
+// rectangle when abortTransientGestureState fires.
+import {
+  onPickerMouseDown,
+  onPickerMouseMove,
+  onPickerMouseUp,
+  resetPickerDrag,
+} from './ui/map-editor/modes/picker.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -621,7 +631,7 @@ function abortTransientGestureState() {
   featureDragOffset = null
   startPosDragging = false
   startPosDragOffset = null
-  pickerDragStart = null
+  resetPickerDrag()
 }
 
 // unsavedChangesDialog moved to /ui/dialogs/unsaved-changes.js.
@@ -3575,76 +3585,9 @@ function onStartPosMouseUp(_e) {
 // this file.
 
 // ── Picker mode ────────────────────────────────────────────────────────────
-// Click toggles single-select on a feature; Shift+click toggles in/out of a
-// multi-selection; click+drag in empty space sweeps out a rectangle and
-// selects every feature inside it.  Delete (handled elsewhere) removes
-// every selected feature in one undo step.
-
-let pickerDragStart = null // { tx, ty, additive } when sweeping a rect
-
-function onPickerMouseDown(e) {
-  const { tx, ty } = pickCell(e)
-  if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
-  const hit = findFeatureAt(e)
-  if (hit >= 0) {
-    if (e.shiftKey) {
-      // Toggle this feature in the selection set.
-      if (state.selectedFeatures.has(hit)) state.selectedFeatures.delete(hit)
-      else state.selectedFeatures.add(hit)
-    } else {
-      state.selectedFeatures.clear()
-      state.selectedFeatures.add(hit)
-    }
-    renderCanvas()
-    return
-  }
-  // Empty cell — start a rectangle sweep.  Shift makes it additive so
-  // the user can build up the selection across multiple sweeps.
-  pickerDragStart = { tx, ty, additive: e.shiftKey }
-  if (!e.shiftKey) state.selectedFeatures.clear()
-  state.pickerRect = { x: tx, y: ty, w: 1, h: 1 }
-  renderCanvas()
-}
-
-function onPickerMouseMove(e) {
-  if (!pickerDragStart) return
-  const { tx, ty } = pickCell(e)
-  state.pickerRect = {
-    x: pickerDragStart.tx,
-    y: pickerDragStart.ty,
-    w: (tx - pickerDragStart.tx) + (tx >= pickerDragStart.tx ? 1 : -1),
-    h: (ty - pickerDragStart.ty) + (ty >= pickerDragStart.ty ? 1 : -1),
-  }
-  renderCanvas()
-}
-
-function onPickerMouseUp(_e) {
-  if (!pickerDragStart || !state.pickerRect) {
-    pickerDragStart = null
-    return
-  }
-  const r = normalizedRect(state.pickerRect)
-  state.pickerRect = null
-  const additive = pickerDragStart.additive
-  pickerDragStart = null
-  // Empty rect (just a click that started but didn't move) — nothing to do.
-  if (r.w <= 0 || r.h <= 0) { renderCanvas(); return }
-  if (!additive) state.selectedFeatures.clear()
-  // Features are anchored at (ax, ay) in attribute coords.  Test against
-  // the rectangle in attribute space (×2).
-  const minAX = r.x * 2, maxAX = (r.x + r.w) * 2
-  const minAY = r.y * 2, maxAY = (r.y + r.h) * 2
-  for (let i = 0; i < state.features.length; i++) {
-    const f = state.features[i]
-    if (f.ax >= minAX && f.ax < maxAX && f.ay >= minAY && f.ay < maxAY) {
-      state.selectedFeatures.add(i)
-    }
-  }
-  renderCanvas()
-  if (state.selectedFeatures.size > 0) {
-    setStatus(`${state.selectedFeatures.size} feature${state.selectedFeatures.size === 1 ? '' : 's'} selected — Delete to remove, Shift+drag to add more.`)
-  }
-}
+// onPickerMouseDown / Move / Up + pickerDragStart all moved to
+// /ui/map-editor/modes/picker.js — imported at the top of this
+// file.
 
 // ── Voids mode ──────────────────────────────────────────────────────────
 // onVoidsMouseDown / Move / Up + the paint-brush helper +
