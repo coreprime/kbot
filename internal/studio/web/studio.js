@@ -3605,7 +3605,7 @@ function _activeRendererView() {
   const dlg = document.getElementById('model-viewer-dialog')
   const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
   return sandboxActive
-    ? (typeof window !== 'undefined' ? window.__sandboxView : null)
+    ? (hostCallbacks.getActiveSandboxView?.() || null)
     : modelViewerInstance
 }
 
@@ -3747,7 +3747,7 @@ function configureReactUi() {
           // syncBinding) + the shared smoke-trail advance through
           // the SmokeTrailManager that view-helpers stashed on
           // sv._smokeTrails.
-          const sv = (typeof window !== 'undefined') ? window.__sandboxView : null
+          const sv = hostCallbacks.getActiveSandboxView?.() || null
           if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(25)
           if (sv && sv._smokeTrails) {
             const rt = sv.runtime

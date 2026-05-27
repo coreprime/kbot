@@ -19,6 +19,7 @@ import { spawnProjectile } from './model3d/weapon-driver.js'
 import { ArmedCursor } from './model3d/armed-cursor.js'
 import { shouldForceTarget } from './model3d/force-target.js'
 import { GameEngine } from './model3d/game-engine.js'
+import { hostCallbacks } from './ui/host-context.js'
 import {
   initSmokeTrails,
   tickSmokeTrails,
@@ -319,11 +320,11 @@ export class MvControls {
   // every per-tab MvControls instance would process every click /
   // keypress, causing a click on tab B's Stop button to fire tab A's
   // Stop handler too (and the React Create banner's lifecycle would
-  // bleed via the duplicated tick-side effects).  Reading the global
-  // alias via window.__modelViewer keeps mv-controls.js decoupled
-  // from studio.js's module scope.
+  // bleed via the duplicated tick-side effects).  Reading the active
+  // viewer through hostCallbacks routes the question back through
+  // the canonical setActiveModelViewer write site in studio.js.
   _isActive() {
-    const active = (typeof window !== 'undefined' ? window.__modelViewer : null)
+    const active = hostCallbacks.getActiveModelViewer?.() || null
     return !!active && active === this.viewer
   }
 

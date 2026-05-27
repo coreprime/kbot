@@ -87,7 +87,10 @@ export function refreshMvInspectors(dtMs = 16) {
   // the (possibly stale) single-unit viewer.  Both view classes
   // expose .camera, .renderer, and a .cob-like surface, so the
   // existing panel renderers don't have to know which kind it is.
-  const sandbox = (typeof window !== 'undefined') ? window.__sandboxView : null
+  // Read through hostCallbacks so this file holds no awareness of
+  // where the sandbox view lives — the sandbox section registers
+  // the getter at boot.
+  const sandbox = hostCallbacks.getActiveSandboxView?.() || null
   const sandboxActive = sandbox && document.getElementById('model-viewer-dialog')?.classList?.contains('sandbox-mode')
   // Build the proxy mv.  When exactly ONE unit is selected in
   // sandbox we promote its CobBinding to mv.cob — the single-unit

@@ -15,9 +15,10 @@
 // playback rate — both the COB-menu Playback slider and the Runtime
 // overlay's Speed slider call it.  Pushes the rate to BOTH the
 // unit-editor runtime (mv.cob.runtime) and the active sandbox
-// runtime (window.__sandboxView.scene.runtime), then mirrors the
-// value into the React COB ribbon's signal so the two sliders stay
-// in lock-step.
+// runtime (sandbox view's scene.runtime, reached through the
+// hostCallbacks.getActiveSandboxView getter), then mirrors the value
+// into the React COB ribbon's signal so the two sliders stay in
+// lock-step.
 //
 // mvToggleRuntimePaused + mvRefreshRuntimeToggle drive the merged
 // Pause/Resume button.  The caption always reflects what the NEXT
@@ -50,8 +51,9 @@ import { hostCallbacks, getReactUi } from '../host-context.js'
 export function _activeRuntime() {
   const dlg = document.getElementById('model-viewer-dialog')
   const sandboxOn = dlg && dlg.classList.contains('sandbox-mode')
-  if (sandboxOn && typeof window !== 'undefined' && window.__sandboxView) {
-    return window.__sandboxView.runtime || null
+  if (sandboxOn) {
+    const sb = hostCallbacks.getActiveSandboxView?.()
+    if (sb) return sb.runtime || null
   }
   const mv = hostCallbacks.getActiveModelViewer?.()
   return (mv && mv.cob && mv.cob.runtime) || null
@@ -131,7 +133,7 @@ export function mvSetSimulationSpeed(rate) {
   // the rate to the active sandbox view's runtime too so dragging
   // the slider while a sandbox is in front actually slows / speeds
   // its sim.  No-op when no sandbox is open.
-  const sb = typeof window !== 'undefined' ? window.__sandboxView : null
+  const sb = hostCallbacks.getActiveSandboxView?.() || null
   const sbRt = sb?.scene?.runtime
   if (sbRt && typeof sbRt.setPlaybackRate === 'function') sbRt.setPlaybackRate(v)
   // React COB ribbon's Playback slider — pushed via state signal.
