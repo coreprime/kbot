@@ -14,12 +14,11 @@
 // helper stays cheap + stateless.
 
 import { hostCallbacks } from '../host-context.js'
-import { getActiveModelViewer } from '../unit-editor/host-state.js'
 
 export function activeRendererView() {
   const dlg = document.getElementById('model-viewer-dialog')
   const sandboxActive = dlg && dlg.classList.contains('sandbox-mode')
   return sandboxActive
     ? (hostCallbacks.getActiveSandboxView?.() || null)
-    : getActiveModelViewer()
+    : (hostCallbacks.getActiveModelViewer?.() || null)
 }

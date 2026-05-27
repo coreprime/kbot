@@ -33,7 +33,6 @@ import {
   hostCallbacks,
   setReactUi,
   $,
-  $$,
 } from './ui/host-context.js'
 
 // Undo / redo button refresh — the captureSnapshot/undo/redo helpers
@@ -93,10 +92,10 @@ import { startServerHeartbeat } from './ui/common/heartbeat.js'
 // callback is the last consumer, and that bridge now lives in
 // /ui/unit-editor/ribbon/bridge.js).
 
-// Help dialog — imperative show / hide pair.  The tab strip + Close
-// button wiring stays with the other dialog-button wiring in
-// wireDeveloperDialog below.
-import { openHelpDialog, closeHelpDialog } from './ui/dialogs/help.js'
+// Help dialog imperative show / hide pair, the Settings dialog
+// opener, and the Developer dialog open/close routes — all consumed
+// from /ui/map-editor/wire-help-settings-developer.js now (see import
+// above).  studio.js no longer imports them directly.
 
 // Unsaved-changes Save / Discard / Cancel prompt — awaited from
 // closeTab when a dirty map is being closed.
@@ -308,14 +307,12 @@ import {
 // them now so studio.js doesn't import them directly.
 
 // Developer stats panel + Advanced ▸ Developer dialog.  Per-frame
-// scheduleDevStatsRefresh is consumed by render.js; only the
-// dialog open/close stay in studio.js for the ribbon + menu hooks.
-// wireDeveloperPanel is called from /ui/map-editor/boot.js's
-// finishEditorBoot.
-import {
-  openDeveloperDialog,
-  closeDeveloperDialog,
-} from './ui/map-editor/dev-stats.js'
+// scheduleDevStatsRefresh is consumed by render.js; the dialog
+// open/close + button wiring live in
+// /ui/map-editor/wire-help-settings-developer.js (the Developer
+// dialog is owned by the map-editor's dev-stats subsystem so the
+// whole trio's wiring lives in that section).  wireDeveloperPanel
+// is called from /ui/map-editor/boot.js's finishEditorBoot.
 
 // Minimap pipeline — cached one-pixel-per-tile base canvas +
 // hover-feature dots + start-position markers + viewport rect.
@@ -436,13 +433,26 @@ import {
 import { renderCanvas } from './ui/map-editor/canvas/render.js'
 
 // Settings dialog (imperative open/close + DEFAULT_SETTINGS) —
-// the React chrome itself lives at
-// /ui/dialogs/settings-dialog.js; this is the host-side bridge
-// that snapshots state into the form and flushes Apply through
-// to the relevant subsystems.
-import {
-  openSettingsDialog,
-} from './ui/dialogs/settings.js'
+// the React chrome itself lives at /ui/dialogs/settings-dialog.js.
+// The host bridge that snapshots state into the form and flushes
+// Apply through to the relevant subsystems lives there too;
+// studio.js no longer opens it directly — wireDeveloperDialog (in
+// /ui/map-editor/wire-help-settings-developer.js) wires the
+// #btn-settings click alongside Help + Developer.
+
+// Wire-up for the legacy ribbon's Help / Settings / Developer trio.
+// Lives under /ui/map-editor/ because the Developer dialog is owned
+// by that section's dev-stats subsystem; keeps `/ui/common/` from
+// reaching into a section per the directional rule.
+import { wireDeveloperDialog } from './ui/map-editor/wire-help-settings-developer.js'
+
+// Panel-defaults seeders — pre-mount visibility hydration for the
+// inspector overlays (unit editor) and the map editor's floating
+// panels (Stats / Minimap / Camera & Cursor).  Both run from
+// configureReactUi before the first React mount so saved choices
+// don't flash visible-then-hidden on cold boot.
+import { seedInspectorPanelDefaults } from './ui/unit-editor/panel-defaults.js'
+import { seedMapPanelDefaults } from './ui/map-editor/panel-defaults.js'
 
 // Per-tab unit-editor lifecycle — activateModelTab lives in
 // /ui/unit-editor/tab.js and is called by the unit-editor tab
@@ -540,17 +550,16 @@ import {
 import { wireModelDialogs } from './ui/unit-editor/wire-dialogs.js'
 
 // Unit-editor sidebar — the React-managed Pieces / Textures / Weapons
-// tab bridges + the host-side helpers (selectPiece, filterPieceTree,
-// playWeaponSound) the legacy DOM still triggers.  Weapon picker +
-// catalogue cache live here too since they're scoped to the unit
-// editor's sidebar.
+// tab bridges + the host-side helpers (selectPiece, playWeaponSound,
+// openWeaponPicker) the legacy DOM + ribbon bridge still trigger.
+// studio.js only needs the boot-time render hooks + the tab-mount
+// installer; the picker/audio helpers + selectPiece are reached
+// from /ui/unit-editor/ribbon/bridge.js' configureTexturesBridge /
+// configurePieceTreeBridge / configureWeaponsTabBridge installers.
 import {
   renderPieceTree,
   renderTexturesTab,
   wireMvSidebarTabs,
-  playWeaponSound,
-  openWeaponPicker,
-  selectPiece,
 } from './ui/unit-editor/sidebar.js'
 
 // KBot Studio — browser-side editor.
@@ -1402,40 +1411,12 @@ function wireMapTabBar() {
 // moved to /ui/map-editor/dev-stats.js — imported at the top of
 // this file.
 
-function wireDeveloperDialog() {
-  $('#btn-developer')?.addEventListener('click', openDeveloperDialog)
-  $('#dev-dialog-close')?.addEventListener('click', closeDeveloperDialog)
-  $('#btn-help')?.addEventListener('click', openHelpDialog)
-  $('#help-close')?.addEventListener('click', closeHelpDialog)
-  // Help dialog tab strip — same DOM pattern as the welcome tabs.
-  $$('#help-dialog .help-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const key = tab.dataset.helpTab
-      $$('#help-dialog .help-tab').forEach((t) => {
-        const on = t.dataset.helpTab === key
-        t.classList.toggle('active', on)
-        t.setAttribute('aria-selected', on ? 'true' : 'false')
-      })
-      $$('#help-dialog .help-tab-body').forEach((b) => {
-        b.classList.toggle('active', b.dataset.helpTabBody === key)
-      })
-    })
-  })
-  $('#btn-settings')?.addEventListener('click', openSettingsDialog)
-  // Apply / Reset / Escape are handled by the React Settings dialog
-  // itself (see /ui/dialogs/settings-dialog.js).  The legacy static
-  // #settings-apply / #settings-reset / #settings-cancel buttons in
-  // the static HTML are no longer driven.
-  // Settings dialog tab strip is React-managed now.
-  $$('#developer-dialog .dev-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const key = tab.dataset.devTab
-      $$('#developer-dialog .dev-tab').forEach((t) => t.classList.toggle('active', t === tab))
-      $$('#developer-dialog .dev-tab-body').forEach((b) => b.classList.toggle('active', b.dataset.devTabBody === key))
-    })
-  })
-}
-
+// wireDeveloperDialog moved to /ui/common/wire-dialogs.js — same
+// boot-block call site, same DOM, but the imperative onclick wiring
+// for the Help / Settings / Developer dialogs lives in a shared
+// module now so the always-on dialogs don't have an entry point in
+// studio.js itself.
+//
 // openHelpDialog / closeHelpDialog moved to /ui/dialogs/help.js.
 
 // Settings dialog (DEFAULT_SETTINGS + open/close) moved to
@@ -1707,16 +1688,10 @@ function configureReactUi() {
     // Seed each migrated inspector panel from the persisted visibility
     // BEFORE the first mount so the Preact tree doesn't flash visible
     // and then hide.  Defaults match the legacy wireMvInspectors path
-    // (true unless explicitly closed at some prior session).
-    for (const id of [
-      'mv-inspector-staticvars', 'mv-inspector-audio', 'mv-inspector-effects',
-      'mv-inspector-camera', 'mv-inspector-actions', 'mv-inspector-ports',
-      'mv-inspector-scripts',
-    ]) {
-      const vis = state.mvInspectorVisible || {}
-      const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
-      ui.setPanelVisible(id, wasSet ? !!vis[id] : true)
-    }
+    // (true unless explicitly closed at some prior session).  Lives
+    // in /ui/unit-editor/panel-defaults.js so the per-section IDs are
+    // co-located with the inspector code that owns the panels.
+    seedInspectorPanelDefaults(ui, state)
     // Install the unit-editor host bridge bundle (camera + cob +
     // runtime + reset + thread-debugger opener) + the Include-Private
     // + Developer-Controls preference bridges in one shot.  Lives in
@@ -1754,38 +1729,10 @@ function configureReactUi() {
         onOpenSandbox: () => openSandboxStub(),
       })
     }
-    // Bridge the unit-editor sidebar tabs to the live renderer /
-    // viewer / weapon-picker / audio so the tab components reach the
-    // active ModelViewer through getActiveModelViewer() rather than a
-    // module-let reference.
-    if (typeof ui.configureTexturesBridge === 'function') {
-      ui.configureTexturesBridge({
-        setHoveredTexture: (name) => {
-          getActiveModelViewer()?.renderer?.setHoveredTexture?.(name)
-        },
-      })
-    }
-    if (typeof ui.configurePieceTreeBridge === 'function') {
-      ui.configurePieceTreeBridge({
-        setHoveredPieceName: (name) => {
-          getActiveModelViewer()?.renderer?.setHoveredPieceName?.(name)
-        },
-        selectPiece: (name) => selectPiece(name),
-        requestRedraw: () => getActiveModelViewer()?.renderer?.requestRedraw?.(),
-      })
-    }
-    if (typeof ui.configureWeaponsTabBridge === 'function') {
-      ui.configureWeaponsTabBridge({
-        paletteColor: (idx) => {
-          const mv = getActiveModelViewer()
-          const pal = mv && mv.palette
-          if (!pal || idx <= 0) return null
-          return pal.colorFor(idx)
-        },
-        openWeaponPicker: (slotIndex) => openWeaponPicker(getActiveModelViewer(), slotIndex),
-        playSound: (stem) => playWeaponSound(stem),
-      })
-    }
+    // Texture / piece-tree / weapons-tab bridges are installed by
+    // wireUnitEditorHostBridge (above) so the unit-editor-specific
+    // configure calls + their getActiveModelViewer closures stay in
+    // /ui/unit-editor/ribbon/bridge.js.
     // ── Map editor surface ───────────────────────────────────────
     // Mount the React-rendered ribbon, sidebar, and three floating
     // panels (Stats, Camera & Cursor, Minimap).  Idempotent — re-
@@ -1797,18 +1744,10 @@ function configureReactUi() {
     wireMapRibbonBridge(ui)
     // Seed default visibility for the map panels so their first
     // mount reads the persisted state (or defaults to visible) and
-    // the React tree doesn't flash hidden then show.
-    for (const id of ['map-stats-panel', 'minimap-panel', 'camera-info-panel']) {
-      const vis = state.mvInspectorVisible || {}
-      const wasSet = Object.prototype.hasOwnProperty.call(vis, id)
-      // Stats panel defaults to visible; camera/minimap honour the
-      // legacy state.showCameraInfo / state.showMinimap flags so an
-      // upgrading user keeps their View-menu choices.
-      let def = true
-      if (id === 'minimap-panel')     def = state.showMinimap !== false
-      if (id === 'camera-info-panel') def = state.showCameraInfo !== false
-      ui.setPanelVisible(id, wasSet ? !!vis[id] : def)
-    }
+    // the React tree doesn't flash hidden then show.  Per-panel
+    // logic lives in /ui/map-editor/panel-defaults.js next to the
+    // map ribbon bridge that owns the matching toggles.
+    seedMapPanelDefaults(ui, state)
     // Publish the initial ribbon state so the React ribbon has the
     // right mode label + view toggles on its first paint.
     publishMapRibbonState()

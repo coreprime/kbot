@@ -42,6 +42,7 @@ import {
   setModelOpenIntent,
   TEAM_COLOURS,
 } from '../host-state.js'
+import { playWeaponSound, openWeaponPicker, selectPiece } from '../sidebar.js'
 
 // wireModelViewerRibbon — install the React unit-editor ribbon bridge
 // + mount the React tree into #model-viewer-ribbon-mount.  Called
@@ -316,4 +317,38 @@ export function wireUnitEditorHostBridge(reactUi) {
     () => state.mvControlsDevVisible === undefined ? true : !!state.mvControlsDevVisible,
     (on) => { state.mvControlsDevVisible = !!on; persistPrefs() },
   )
+  // Bridge the React unit-editor sidebar tabs (Pieces / Textures /
+  // Weapons) to the live renderer / viewer / weapon-picker / audio
+  // so the tab components reach the active ModelViewer through
+  // getActiveModelViewer() rather than a module-let reference.  Each
+  // configure* call is guarded — the React island may pre-date the
+  // matching bridge if mount.js' surface diverges.
+  if (typeof reactUi.configureTexturesBridge === 'function') {
+    reactUi.configureTexturesBridge({
+      setHoveredTexture: (name) => {
+        getActiveModelViewer()?.renderer?.setHoveredTexture?.(name)
+      },
+    })
+  }
+  if (typeof reactUi.configurePieceTreeBridge === 'function') {
+    reactUi.configurePieceTreeBridge({
+      setHoveredPieceName: (name) => {
+        getActiveModelViewer()?.renderer?.setHoveredPieceName?.(name)
+      },
+      selectPiece: (name) => selectPiece(name),
+      requestRedraw: () => getActiveModelViewer()?.renderer?.requestRedraw?.(),
+    })
+  }
+  if (typeof reactUi.configureWeaponsTabBridge === 'function') {
+    reactUi.configureWeaponsTabBridge({
+      paletteColor: (idx) => {
+        const mv = getActiveModelViewer()
+        const pal = mv && mv.palette
+        if (!pal || idx <= 0) return null
+        return pal.colorFor(idx)
+      },
+      openWeaponPicker: (slotIndex) => openWeaponPicker(getActiveModelViewer(), slotIndex),
+      playSound: (stem) => playWeaponSound(stem),
+    })
+  }
 }

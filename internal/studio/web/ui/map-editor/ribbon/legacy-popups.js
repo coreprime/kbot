@@ -3,14 +3,18 @@
 // Legacy (pre-React) ribbon popup chrome for the map editor.  Owns
 // the imperative wiring for:
 //
-//   - The "current Mode" dropdown badge (refreshModeDropdown +
-//     closeAllRibbonDropdowns + positionRibbonPopup), still painted
-//     into the static #mode-dropdown-popup the legacy ribbon HTML
-//     leaves in the DOM.
+//   - The "current Mode" dropdown badge (refreshModeDropdown), still
+//     painted into the static #mode-dropdown-popup the legacy ribbon
+//     HTML leaves in the DOM.
 //   - The hover-to-the-right submenus (positionSubmenuRight) used by
 //     every mode-row that needs its own popup — symmetry, voids
 //     brush size, heightmap tool + radius, erase brush size + scope,
 //     and the Undo / Redo history flyouts.
+//
+// The generic close-all + below-the-button positioner live in
+// /ui/common/ribbon-popups.js so this module isn't the home for
+// chrome utilities that the unit-editor and developer wiring also
+// use.  They're re-exported here so existing call sites keep working.
 //
 // The React-managed ribbon (./map-ribbon.js) already covers the main
 // dropdown buttons, but these legacy popups still drive the
@@ -35,6 +39,12 @@
 import { $, $$, state, hostCallbacks, setStatus } from '../../host-context.js'
 import { refreshHistoryFlyouts } from '../undo.js'
 import { SYMMETRY_LABELS } from '../symmetry.js'
+import {
+  closeAllRibbonDropdowns,
+  positionRibbonPopup,
+} from '../../common/ribbon-popups.js'
+
+export { closeAllRibbonDropdowns, positionRibbonPopup }
 
 export function refreshModeDropdown() {
   const ico = $('#mode-current-ico')
@@ -45,23 +55,6 @@ export function refreshModeDropdown() {
   $$('#mode-dropdown-popup .menu-row').forEach((r) => {
     r.classList.toggle('active', r.dataset.mode === state.mode)
   })
-}
-
-export function closeAllRibbonDropdowns(except) {
-  $$('.ribbon-dropdown-popup').forEach((el) => {
-    if (el !== except) el.classList.add('hidden')
-  })
-}
-
-// positionRibbonPopup anchors a fixed-position popup directly below its
-// triggering button, in viewport coordinates so it escapes the
-// ribbon's overflow clipping.  Run on every open so subsequent toolbar
-// resizes don't strand the popup.
-export function positionRibbonPopup(button, popup) {
-  if (!button || !popup) return
-  const rect = button.getBoundingClientRect()
-  popup.style.top = (rect.bottom + 4) + 'px'
-  popup.style.left = rect.left + 'px'
 }
 
 export function wireSymmetryGroup() {
