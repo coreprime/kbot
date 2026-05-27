@@ -38,7 +38,6 @@ import {
   $$,
   setStatus,
   clamp,
-  escapeHTML,
 } from './ui/host-context.js'
 
 // Undo / redo + transaction wrapper for map edits — moved to
@@ -173,6 +172,18 @@ import {
 // routes through the same openLoadedMap host callback as the
 // picker.  Called from the boot block.
 import { maybeAutoOpenFromQuery } from './ui/pickers/auto-open.js'
+
+// Model catalogue — shared cache + fetcher for /api/studio/models.
+// Replaces the legacy availableModels / modelsLoaded module-lets;
+// openModelPicker drains via fetchModels then reads the React
+// dialog's items from availableModels(), openModelViewer looks up
+// the picked unit's meta through findModelMeta.
+import {
+  fetchModels,
+  availableModels,
+  isLoaded as modelsLoaded,
+  findModelMeta,
+} from './ui/pickers/model-catalog.js'
 
 // Sandbox panel + side-colour spawn picker — first leaf-helper
 // extraction of R44 (sandbox split).  The bigger sandbox surface
@@ -3311,8 +3322,6 @@ async function openExistingMapFromEditor() {
 // picker), and the chosen model opens in a full-screen WebGL viewer.
 
 let modelViewerInstance = null
-let availableModels = []
-let modelsLoaded = false
 // selectedModelName was the module-scoped staging slot the legacy
 // Open Unit dialog wrote into before openModelViewer fired.  Picker
 // is React now and resolves with { name, sandboxIntent } directly so
@@ -3596,7 +3605,7 @@ async function openModelPicker() {
   $('#model-viewer-dialog').classList.add('hidden')
   // Bring the React UI up if it hasn't loaded yet (cold-boot path).
   const ui = _reactUi || await configureReactUi()
-  if (!modelsLoaded) await fetchModels()
+  if (!modelsLoaded()) await fetchModels()
   // The picker spawns into the React tree; await its resolution and
   // route based on the host's pending intent (sandbox spawn vs.
   // open viewer).  Polling via updateUnitDialog isn't needed here
@@ -3604,8 +3613,8 @@ async function openModelPicker() {
   const sandboxIntent = !!window.__sandboxSpawnPending
   const result = ui && typeof ui.openUnitDialog === 'function'
     ? await ui.openUnitDialog({
-        items: availableModels,
-        loading: !modelsLoaded,
+        items: availableModels(),
+        loading: !modelsLoaded(),
         query: '',
         selectedName: null,
         sandboxIntent,
@@ -4594,27 +4603,13 @@ function _doMinimapPan(clientX, clientY, canvasEl) {
   wrap.scrollTop  = cy * fullH - wrap.clientHeight / 2 + overscrollPadding.y
 }
 
-async function fetchModels() {
-  try {
-    const resp = await fetch('/api/studio/models')
-    const data = await resp.json()
-    availableModels = data.models || []
-    modelsLoaded = true
-  } catch (err) {
-    availableModels = []
-    modelsLoaded = true
-    $('#model-list').innerHTML = `<div class="loading">Failed to load models: ${escapeHTML(String(err))}</div>`
-  }
-}
-
-
 async function openModelViewer(name) {
   $('#model-open-dialog').classList.add('hidden')
   // Push a new model tab into the unified tab array so the map
   // editor's tab bar (and the viewer's mirrored tab bar) both show
   // the new entry.  switchToTab routes by type so the dialog mounts
   // automatically.
-  const meta = availableModels.find((m) => m.name === name)
+  const meta = findModelMeta(name)
   const activeTab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
   if (modelOpenIntent === 'replace' && activeTab?.type === 'model') {
     activeTab.name = name
