@@ -29,7 +29,6 @@ import {
   activeWorldsFor,
   featureWorldMatches,
   isWreckageFeature,
-  normalizedRect,
   defaultOTAState,
   playerCountLabel,
   gameToCanvas,
@@ -425,6 +424,17 @@ import {
   beginStartPosDragFromAutoSwitch,
 } from './ui/map-editor/modes/start-points.js'
 
+// Terrain-select mode handlers — rectangle-sweep capture into the
+// terrain clipboard, drag the floating clipboard, click outside to
+// drop.  resetTerrainDrag clears the in-flight sweep / move when
+// abortTransientGestureState fires (R40b).
+import {
+  onTerrainMouseDown,
+  onTerrainMouseMove,
+  onTerrainMouseUp,
+  resetTerrainDrag,
+} from './ui/map-editor/modes/terrain-select.js'
+
 // renderCanvas — the per-frame orchestrator that paints every
 // layer of the map editor canvas.  All sub-passes live in their
 // own modules at this point; the orchestrator is just call sites.
@@ -637,9 +647,7 @@ function abortTransientGestureState() {
   paintedDuringStroke = false
   canvasHoverFeature = null
   placementMoveAnchor = null
-  terrainDragging = false
-  terrainDragStart = null
-  terrainMoveAnchor = null
+  resetTerrainDrag()
   featureDragging = false
   featureDragOffset = null
   resetStartPosDrag()
@@ -3337,91 +3345,9 @@ function copyTileHeights(sec, ssx, ssy, mtx, mty, rotation, origW, _origH, flipH
 }
 
 // ── Select Terrain mode ────────────────────────────────────────────────────
-
-let terrainDragging = false
-let terrainDragStart = null // { tx, ty } when starting a rectangle drag
-let terrainMoveAnchor = null // { tx, ty, originalTx, originalTy } when moving clipboard
-
-function onTerrainMouseDown(e) {
-  const { tx, ty } = pickCell(e)
-  if (state.terrainClipboard) {
-    const c = state.terrainClipboard
-    const insideClipboard = tx >= c.tx && tx < c.tx + c.w && ty >= c.ty && ty < c.ty + c.h
-    if (insideClipboard) {
-      // Begin dragging the floating clipboard.
-      terrainMoveAnchor = { tx, ty, originalTx: c.tx, originalTy: c.ty }
-      return
-    }
-    // Click outside drops the clipboard back onto the canvas — undoable
-    // as a single "Drop terrain" step.
-    beginTransaction()
-    dropTerrainClipboard()
-    commitTransaction('Drop terrain')
-    return
-  }
-  // Direct click on a placed feature or start position takes precedence
-  // over starting a rectangle selection — it switches to the matching
-  // edit mode with that object picked.
-  if (e.button === 0 && tryAutoSwitchAt(e)) return
-  if (tx < 0 || tx >= state.tileW || ty < 0 || ty >= state.tileH) return
-  terrainDragging = true
-  terrainDragStart = { tx, ty }
-  state.rectSelection = { x: tx, y: ty, w: 1, h: 1 }
-  renderCanvas()
-}
-
-function onTerrainMouseMove(e) {
-  if (terrainMoveAnchor && state.terrainClipboard) {
-    const { tx, ty } = pickCell(e)
-    const dx = tx - terrainMoveAnchor.tx
-    const dy = ty - terrainMoveAnchor.ty
-    state.terrainClipboard.tx = terrainMoveAnchor.originalTx + dx
-    state.terrainClipboard.ty = terrainMoveAnchor.originalTy + dy
-    renderCanvas()
-    return
-  }
-  if (!terrainDragging) return
-  const { tx, ty } = pickCell(e)
-  if (!state.rectSelection || !terrainDragStart) return
-  state.rectSelection = {
-    x: terrainDragStart.tx,
-    y: terrainDragStart.ty,
-    w: (tx - terrainDragStart.tx) + (tx >= terrainDragStart.tx ? 1 : -1),
-    h: (ty - terrainDragStart.ty) + (ty >= terrainDragStart.ty ? 1 : -1),
-  }
-  renderCanvas()
-}
-
-function onTerrainMouseUp(_e) {
-  if (terrainMoveAnchor) {
-    // Releasing the mouse after a move commits the clipboard at its
-    // current position and clears the selection — saves the user a
-    // separate "click outside to drop" gesture.
-    terrainMoveAnchor = null
-    beginTransaction()
-    dropTerrainClipboard()
-    commitTransaction('Move terrain')
-    return
-  }
-  if (!terrainDragging) return
-  terrainDragging = false
-  if (!state.rectSelection) return
-  const r = normalizedRect(state.rectSelection)
-  state.rectSelection = null
-  if (r.w <= 0 || r.h <= 0) { renderCanvas(); return }
-  // Tighten the captured rectangle to the minimum bounding box of any
-  // tiles or features the user actually selected — so a sloppy drag
-  // over mostly-empty space still produces a clean clipboard.
-  const shrunk = shrinkRectToContent(r.x, r.y, r.w, r.h)
-  if (!shrunk) {
-    setStatus('No tiles or features in the selected area.')
-    renderCanvas()
-    return
-  }
-  beginTransaction()
-  captureTerrain(shrunk.x, shrunk.y, shrunk.w, shrunk.h)
-  commitTransaction('Capture terrain')
-}
+// onTerrainMouseDown / Move / Up + the in-flight drag/move state
+// moved to /ui/map-editor/modes/terrain-select.js (R40b).  Imported
+// at the top of this file.
 
 // Terrain clipboard (capture / rotate / drop / cancel) and system
 // clipboard (Ctrl+C / Ctrl+V / Ctrl+X) + the region-clear helpers
