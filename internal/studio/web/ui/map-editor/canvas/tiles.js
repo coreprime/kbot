@@ -21,7 +21,7 @@ import { state, hostCallbacks } from '../../host-context.js'
 import { TILE_PX } from '../constants.js'
 import { visibleTileBounds } from '../viewport.js'
 import { whenImageReady } from '../feature-assets.js'
-import { drawTransformedTile } from './webgl.js'
+import { drawTransformedTile } from '../rotation.js'
 
 export function drawTiles(ctx) {
   const vb = visibleTileBounds()

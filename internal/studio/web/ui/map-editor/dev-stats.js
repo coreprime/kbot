@@ -22,7 +22,8 @@ import { TILE_PX } from './constants.js'
 import { getContentVersion } from './content-cache.js'
 import { overscrollPadding } from './zoom-pan.js'
 import { visibleTileBounds, visiblePixelBounds } from './viewport.js'
-import { ensureGLRenderer, drawTransformedTile } from './canvas/webgl.js'
+import { ensureGLRenderer } from './canvas/webgl.js'
+import { drawTransformedTile } from './rotation.js'
 import { persistPanelCollapsed, makePanelDraggable } from '../common/panel-layout.js'
 
 // distinctTileKey identifies a stamp's visible appearance — the

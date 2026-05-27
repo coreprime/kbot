@@ -24,8 +24,8 @@ import {
   rotatedFootprint,
   rotatedSourceCell,
   transformedSourceCell,
+  drawTransformedTile,
 } from '../rotation.js'
-import { drawTransformedTile } from './webgl.js'
 
 // PLACEMENT_ALIGN_TOLERANCE — threshold beyond which we consider
 // two edge samples mis-aligned.  Heights live in a 0–255 byte

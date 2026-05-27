@@ -18,7 +18,7 @@
 // All three are pure functions of the event + state and live in
 // canvas-bounding-rect space so they survive zoom + CSS scaling.
 
-import { state, $, clamp } from './host-context.js'
+import { state, $, clamp } from '../host-context.js'
 import { TILE_PX, FEATURE_HIT_SEARCH_TILES, START_POS_RADIUS } from './constants.js'
 import { featuresNear } from './content-cache.js'
 import { featureAnchorWorld, featureRenderRect } from './feature-assets.js'
