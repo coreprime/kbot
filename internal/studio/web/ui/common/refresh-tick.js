@@ -91,8 +91,9 @@ export function refreshMvInspectors(dtMs = 16) {
   // back to the runtime-only proxy so the runtime / runtime-list
   // panels still tick but the per-unit panels show "select a unit".
   // mv proxy comes from view.getInspectorMv() now — viewer and
-  // sandbox each implement the method (BaseView contract) and return
-  // the shape the inspector panel renderers below consume.  This
+  // sandbox each implement the method against the shared view
+  // contract and return the shape the inspector panel renderers
+  // below consume.  This
   // collapses what used to be a ~50-line sandbox-vs-viewer branch
   // here into one method call, and pushes the "aggregate scene
   // particles", "synthesise stub cob when 0/multi selected", and

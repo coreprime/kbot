@@ -6,7 +6,7 @@
 // instead of the dormant single-unit MvControls singleton.  Move /
 // Primary / Secondary / Tertiary arm the sandbox's pending-command
 // pipeline (next canvas click commits a target); Stop bypasses
-// arming and dispatches BaseView.stop() immediately.
+// arming and dispatches sandbox.stop() immediately.
 //
 // Implementation: capture-phase click listener on the action grid.
 // Bails on non-sandbox tabs by reading the dialog's `.sandbox-mode`
@@ -36,7 +36,7 @@ export function wireSandboxControlsIntercept() {
     const sb = hostCallbacks.getActiveSandboxView?.()
     if (!sb || !sb.scene) return
     if (action === 'stop') {
-      // Stop dispatches through BaseView.stop() → engine.stopUnits.
+      // Stop dispatches through SandboxView.stop() → engine.stopUnits.
       // The canonical "drop move + attack + weapon slots + run
       // StopMoving + TargetCleared" entry point lives in the engine
       // now; both the sandbox S-hotkey + #stopSelected and this

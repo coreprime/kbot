@@ -3744,10 +3744,16 @@ function configureReactUi() {
         if (sandboxOn) {
           // Sandbox per-frame: scene.tick → engine.tick (runtime +
           // movement + attack + weapons + particles + audio via
-          // syncBinding) + the BaseView smoke-trail advance.
+          // syncBinding) + the shared smoke-trail advance through
+          // the SmokeTrailManager that view-helpers stashed on
+          // sv._smokeTrails.
           const sv = (typeof window !== 'undefined') ? window.__sandboxView : null
           if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(25)
-          if (sv && typeof sv.tickSmokeTrails === 'function') sv.tickSmokeTrails(25)
+          if (sv && sv._smokeTrails) {
+            const rt = sv.runtime
+            const rate = !rt ? 1 : (rt.paused ? 0 : (rt.playbackRate || 1))
+            try { sv._smokeTrails.tick(25 * rate) } catch { /* ignore */ }
+          }
         } else {
           // Viewer per-frame: binding.tick (runtime + particles +
           // audio) + MvControls.tick (movement + weapons via

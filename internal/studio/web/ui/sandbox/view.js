@@ -10,10 +10,14 @@
 // Built as a sibling to ModelViewer rather than a subclass — the two
 // share the renderer + loader + palette but differ in everything
 // else (single vs multi unit, free camera vs scene camera, click-
-// gestures, etc.).  Both extend BaseView (view-base.js) which owns
-// the unified Command API (issueMove / issueAttack / issueArmedFire /
-// stop / toggleTracking), engine event sub bookkeeping, smoke-trail
-// lifecycle, hotkey wiring, and the getInspectorMv() panel adapter.
+// gestures, etc.).  An earlier rev shared a BaseView class with
+// MvControls; Phase C removed it — the every-cross-section moment
+// became a contamination vector.  What's truly shared (smoke trails,
+// engine-sub bookkeeping, hotkey wiring, sim-rate, inspector cob
+// proxy) lives as free functions in ui/common/view-helpers.js and is
+// called explicitly from both views.  Everything else (per-view
+// Command API, camera tracking, unit acks, FX aggregation) lives
+// inside whichever view actually uses it.
 
 import { ModelLoader } from '../../model3d/model-loader.js'
 import { ModelRenderer } from '../../model3d/model-renderer.js'
@@ -25,16 +29,24 @@ import { attachOrbitControls } from '../../model3d/camera-controls.js'
 import { ArmedCursor } from '../../model3d/armed-cursor.js'
 import { spawnProjectile, SFX_FIRE_FLASH } from '../../model3d/weapon-driver.js'
 import { teamColorForSide } from '../../model3d/team-colors.js'
-// BaseView still lives in model3d/ for now — it's the shared base
-// for the unit editor's MvControls AND this view.  Deleting the
-// shared base (per the architectural plan) is a Phase C follow-up
-// that requires either duplicating the helpers into each subclass
-// or splitting them into ui/common/ free functions.
-import { BaseView } from '../../model3d/view-base.js'
+import {
+  initSmokeTrails,
+  tickSmokeTrails,
+  subscribeEngine,
+  wireHotkeys,
+  wrapCobWithAggregate,
+  disposeView,
+} from '../common/view-helpers.js'
 
-export class SandboxView extends BaseView {
+export class SandboxView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
-    super()
+    // Engine subscription unsubscribe closures captured by
+    // subscribeEngine(); _smokeTrails is the lazy SmokeTrailManager
+    // installed by initSmokeTrails(); _hotkeysDetach is the close
+    // returned by wireHotkeys().  disposeView() sweeps all three.
+    this._engineSubs = []
+    this._smokeTrails = null
+    this._hotkeysDetach = null
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
     // The canvas is appended into a host stage by attach() and pulled
@@ -48,8 +60,8 @@ export class SandboxView extends BaseView {
       c.className = 'model-viewer-canvas'
       return c
     })()
-    // statusEl flows through to BaseView's setStatus().  Keep the
-    // `this.statusEl` alias too — external callers (the spawn
+    // statusEl flows through to setStatus() / #setStatus().  Keep
+    // the `this.statusEl` alias too — external callers (the spawn
     // dialog, ribbon handlers) reach in via that name.
     this.statusEl = statusEl
     this._statusEl = statusEl
@@ -176,13 +188,14 @@ export class SandboxView extends BaseView {
       // for free because binding.tick handles it for the single unit.
       this.scene.engine.setRenderer(this.renderer)
       // SmokeTrailManager + engine event subscriptions are scaffolded
-      // by BaseView — initSmokeTrails returns the lazy instance, and
-      // subscribeEngine remembers the unsubscribe closures so
-      // disposeBase() tears them down cleanly.  spawnProjectile and
-      // the death-puff handler reach into base-owned state via
+      // by the shared view-helpers — initSmokeTrails returns the lazy
+      // instance on this._smokeTrails, and subscribeEngine remembers
+      // the unsubscribe closures on this._engineSubs so disposeView()
+      // can tear them down cleanly.  spawnProjectile and the death-
+      // puff handler reach into the captured state via
       // this._smokeTrails.
-      this.initSmokeTrails()
-      this.subscribeEngine('fire', (ev) => {
+      initSmokeTrails(this)
+      subscribeEngine(this, 'fire', (ev) => {
         // Spawn the visible projectile through the shared weapon
         // driver.  Passing the SmokeTrailManager lets spawnProjectile
         // register a missile trail inline when the chosen visual
@@ -209,12 +222,12 @@ export class SandboxView extends BaseView {
       // Play the TA arrived1-bank ack so the user gets the familiar
       // "order complete" voice without each view having to wire its
       // own movement-completion hook.
-      this.subscribeEngine('move-stop', (ev) => {
+      subscribeEngine(this, 'move-stop', (ev) => {
         if (ev && ev.unit) {
           this.playUnitSoundRandom(ev.unit, ['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
         }
       })
-      this.subscribeEngine('death', (ev) => {
+      subscribeEngine(this, 'death', (ev) => {
         // Death puff so the kill reads visually.  Engine has already
         // marked the unit dead + cleared its orders.
         const b = ev.unit && ev.unit.binding
@@ -260,12 +273,12 @@ export class SandboxView extends BaseView {
     // animation applied per-tick is visible immediately.
     this.renderer.onAfterFrame = (dtMs) => {
       if (this.scene) this.scene.tick(dtMs)
-      // Advance in-flight missile smoke trails through the BaseView
-      // helper.  tickSmokeTrails scales by playbackRate and freezes
+      // Advance in-flight missile smoke trails through the shared
+      // tickSmokeTrails helper.  It scales by playbackRate and freezes
       // (rate = 0) on pause — the unified gate every view shares so
       // smoke puffs stop streaming out of a frozen missile without
       // each view re-deriving the pause/rate math.
-      this.tickSmokeTrails(dtMs)
+      tickSmokeTrails(this, dtMs)
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
@@ -1061,7 +1074,7 @@ export class SandboxView extends BaseView {
     // Esc cascade is sandbox-specific (placement → armed cmd →
     // selection), so it stays here as a bespoke listener.  The
     // shared M/A/F/D/S/T keymap is wired separately via
-    // BaseView.wireHotkeys (attachUnitHotkeys) so both views agree
+    // the wireHotkeys helper (attachUnitHotkeys) so both views agree
     // on the keymap definition without copy-pasted branches.
     window.addEventListener('keydown', (e) => {
       const dlg = document.getElementById('model-viewer-dialog')
@@ -1093,7 +1106,7 @@ export class SandboxView extends BaseView {
     // so a stray keystroke doesn't arm a cursor with no unit to
     // dispatch to.  T is allowed even with no selection so the user
     // can untrack the current target without re-selecting first.
-    this.wireHotkeys({
+    wireHotkeys(this, {
       dialogId: 'model-viewer-dialog',
       allowed: () => this.scene && this.scene.selected.size > 0,
       onCommand: (cmd) => this.setPendingCommand(cmd),
@@ -1102,13 +1115,11 @@ export class SandboxView extends BaseView {
     })
   }
 
-  // #stopSelected wraps BaseView.stop() with the sandbox-specific
-  // post-stop housekeeping: disarm a pending Move/Fire command + push
-  // a status string.  The actual per-unit teardown (moveTarget /
-  // attackTarget / weapon slots / StopMoving / TargetCleared) lives
-  // in engine.stopUnit and is called via BaseView.stop() so the
-  // viewer's Stop button + the studio.js Controls grid handler all
-  // converge on the same code path.
+  // #stopSelected wraps stop() with the sandbox-specific post-stop
+  // housekeeping: disarm a pending Move/Fire command + push a status
+  // string.  The actual per-unit teardown (moveTarget / attackTarget /
+  // weapon slots / StopMoving / TargetCleared) lives in
+  // engine.stopUnits — this view's stop() is its thin wrapper.
   #stopSelected() {
     const n = this.stop()
     if (this._pendingCmd) this.setPendingCommand(null)
@@ -1116,12 +1127,10 @@ export class SandboxView extends BaseView {
   }
 
   // setTracking arms / disarms tracking explicitly.  Used by the
-  // Renderer panel's Tracking checkbox.  Wraps BaseView's
-  // trackFirstSelected / untrack with sandbox-specific status text
-  // (the "select a unit first" hint when no selection is active).
-  // toggleTracking (inherited from BaseView) flips current state; we
-  // override it here only to route through this setStatus-wrapped
-  // setTracking so the T key + the checkbox share user-feedback text.
+  // Renderer panel's Tracking checkbox + the T hotkey.  Status text
+  // is sandbox-specific (the "select a unit first" hint when no
+  // selection is active) so both entry points share the same user
+  // feedback.
   setTracking(on) {
     if (!this.camera) return
     if (!on) {
@@ -1211,18 +1220,18 @@ export class SandboxView extends BaseView {
     // fall through to a ground-move at the click location.
     const hit = this.#pickUnitAt(sx, sy)
     if (hit && !this.scene.selected.has(hit.id)) {
-      // BaseView.issueAttack handles the per-unit attackTarget fanout
-      // + ok1-bank ack on the first pursuer.  Centralised so the
-      // viewer + sandbox path the same way.
+      // issueAttack (below) handles the per-unit attackTarget fanout
+      // + ok1-bank ack on the first pursuer.  Centralised so every
+      // attack-issuing gesture in the sandbox converges on it.
       const n = this.issueAttack(hit)
       this.#setStatus(`Attack — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
       return
     }
     const world = this.#screenToGround(sx, sy)
     if (!world) return
-    // Right-click Move dispatches through BaseView.issueMove — same
-    // shared path the M-then-click flow uses, including the ok1-bank
-    // ack on the first unit.
+    // Right-click Move dispatches through issueMove — same shared
+    // path the M-then-click flow uses, including the ok1-bank ack
+    // on the first unit.
     const n = this.issueMove(world)
     this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
   }
@@ -1286,11 +1295,11 @@ export class SandboxView extends BaseView {
     const world = this.#screenToGround(sx, sy)
     // If a command is pending (Move / Attack), consume it.
     if (this._pendingCmd === 'move' && world && this.scene.selected.size > 0) {
-      // BaseView.issueMove fans the Move order out to every selected
-      // unit, clears autonomous attack pursuit, preserves manual
-      // weapon slots, and plays the ok1-bank ack on the first unit
-      // — same path the right-click Move + the M-then-click flow
-      // converge on so the viewer can never drift from the sandbox.
+      // issueMove fans the Move order out to every selected unit,
+      // clears autonomous attack pursuit, preserves manual weapon
+      // slots, and plays the ok1-bank ack on the first unit — same
+      // path the right-click Move + the M-then-click flow converge
+      // on so every Move gesture in the sandbox is one code path.
       const n = this.issueMove(world)
       this._pendingCmd = null
       if (this._armedCursor) this._armedCursor.setSlot(null)
@@ -1416,10 +1425,10 @@ export class SandboxView extends BaseView {
           this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
           return
         }
-        // Attack — BaseView.issueAttack arms #stepAttack on every
-        // selected (non-self) unit and plays the ok1-bank ack so the
-        // engage feels TA-native.  Selection stays put so the user
-        // can re-issue commands without losing it.
+        // Attack — issueAttack arms #stepAttack on every selected
+        // (non-self) unit and plays the ok1-bank ack so the engage
+        // feels TA-native.  Selection stays put so the user can re-
+        // issue commands without losing it.
         const n = this.issueAttack(picked)
         this.#setStatus(`Attack — ${n} unit(s) engaging ${picked.name} (HP ${picked.health}).`)
       } else if (sel.size === 0 || onlySelf) {
@@ -1540,21 +1549,29 @@ export class SandboxView extends BaseView {
     this._resizeObserver.observe(this.canvas)
   }
 
-  // #setStatus is the sandbox-internal alias for BaseView.setStatus.
-  // Many call sites already use the leading-# form; keeping the alias
+  // #setStatus is the sandbox-internal alias for setStatus.  Many
+  // call sites already use the leading-# form; keeping the alias
   // avoids a sweep across this file.
   #setStatus(text) { this.setStatus(text) }
 
-  // ── BaseView abstract overrides ───────────────────────────────────
+  // ── View contract surface ─────────────────────────────────────────
+  //
+  // The view-helpers free functions and the inspector-refresh tick
+  // read `view.engine` / `view.runtime` / `view.camera` /
+  // `view.getSelectedUnits()` / `view.getInspectorMv()`.  Symmetric
+  // with MvControls so one shared inspector loop drives both views.
 
   get engine() { return this.scene ? this.scene.engine : null }
   get runtime() { return this.scene ? this.scene.runtime : null }
 
-  // getSelectedUnits — BaseView's Command API (issueMove / stop /
-  // trackFirstSelected) fan out over whatever this returns.  Sandbox
-  // pulls every live unit currently in the selection set; dead /
-  // despawned ids are filtered so commands don't try to ride a
-  // freed binding.
+  setStatus(text) {
+    if (this._statusEl) this._statusEl.textContent = text
+  }
+
+  // getSelectedUnits — Sandbox's Command API (issueMove / stop /
+  // trackFirstSelected) fans out over whatever this returns.  Pulls
+  // every live unit currently in the selection set; dead / despawned
+  // ids are filtered so commands don't try to ride a freed binding.
   getSelectedUnits() {
     if (!this.scene) return []
     const out = []
@@ -1565,15 +1582,262 @@ export class SandboxView extends BaseView {
     return out
   }
 
+  // ── Command API ──────────────────────────────────────────────────
+  //
+  // These five entry points (issueMove / issueAttack / issueArmedFire /
+  // stop / camera tracking) used to live on a shared BaseView; the
+  // sandbox is now their only consumer.  MvControls has its own
+  // single-unit equivalents inlined into its click handlers — the
+  // multi-unit fan-out + formation centroid + ack-on-first-pursuer
+  // shape below is sandbox-specific.
+
+  // issueMove fans a Move order out to every currently selected unit.
+  // Cleans the autonomous attackTarget so #stepAttack stops overriding
+  // moveTarget; surgically clears attack-source weapon slots (manual
+  // fire stays alive so the user can keep shooting while reposition-
+  // ing — TA muscle-memory).  Plays the ok1-bank ack on the first
+  // unit (single voice so a 10-unit selection doesn't fire a chorus).
+  //
+  // Formation move: when multiple units are selected, each unit walks
+  // to (point + (unit.pos - centroid)) instead of stacking onto a
+  // single tile.  Single-unit selection trivially has offset = 0.
+  issueMove(point) {
+    const engine = this.engine
+    const units = this.getSelectedUnits()
+    if (!engine || !units.length || !point) return 0
+    const live = units.filter((u) => u && !u.dead)
+    if (!live.length) return 0
+    let cx = 0, cz = 0
+    for (const u of live) { cx += u.pos.x; cz += u.pos.z }
+    cx /= live.length
+    cz /= live.length
+    let n = 0
+    for (const u of live) {
+      const offX = u.pos.x - cx
+      const offZ = u.pos.z - cz
+      u.moveTarget = { x: point[0] + offX, z: point[2] + offZ }
+      u.attackTarget = null
+      if (u.weaponSlots) {
+        for (let slot = 0; slot < 3; slot++) {
+          const s = u.weaponSlots[slot]
+          if (s && s.target && s.target.source === 'attack') {
+            engine.setWeaponTarget(u.id, slot, null)
+          }
+        }
+      }
+      n++
+    }
+    if (n > 0) this.playUnitSoundRandom(live[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return n
+  }
+
+  // issueAttack arms the autonomous attack-loop on a unit target.
+  // The engine's #stepAttack walks each pursuer into range, then sets
+  // its slot 0 weapon target so firing happens automatically once
+  // aligned.  Skips self-targeting + plays the ok1-bank ack on the
+  // first pursuer (single voice).
+  issueAttack(targetUnit) {
+    const units = this.getSelectedUnits()
+    if (!units.length || !targetUnit) return 0
+    let n = 0
+    let firstPursuer = null
+    for (const u of units) {
+      if (!u || u.dead || u === targetUnit) continue
+      u.attackTarget = targetUnit
+      if (!firstPursuer) firstPursuer = u
+      n++
+    }
+    if (firstPursuer) this.playUnitSoundRandom(firstPursuer, ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return n
+  }
+
+  // stop halts every selected unit through engine.stopUnits — the
+  // canonical "drop move + attack + weapon slots + run StopMoving +
+  // TargetCleared" entry point.  Returns the count for status text.
+  stop() {
+    const engine = this.engine
+    const units = this.getSelectedUnits()
+    if (!engine || !units.length) return 0
+    return engine.stopUnits(units.map((u) => u.id))
+  }
+
+  // trackFirstSelected locks the orbit camera onto the first unit in
+  // the selection.  Returns true on success, false when there's no
+  // camera or no selection.  Caller decides what status text to show.
+  trackFirstSelected(label = 'Unit') {
+    const units = this.getSelectedUnits()
+    if (!this.camera || !units.length) return false
+    const u = units[0]
+    if (!u) return false
+    this.camera.setTrackedTarget(u, u.name || label)
+    return true
+  }
+
+  untrack() {
+    if (!this.camera) return
+    this.camera.setTrackedTarget(null)
+  }
+
+  // ── Unit acknowledgement sounds ───────────────────────────────────
+  //
+  // TA units carry a UnitSounds bank in their FBI: select1, ok1,
+  // arrived1, activate, deactivate, etc.  playUnitSound looks up the
+  // event key in the unit's resolved sounds map, picks a wav stem,
+  // and routes the playback through the unit's own AudioPool so the
+  // sim-speed slider + pause toggle apply and the Audio inspector
+  // shows the entry with its source pos + progress.  Debounced at
+  // 80ms per unit+event so a flurry of clicks doesn't stack Audio
+  // objects.
+
+  playUnitSound(unit, eventKey) {
+    if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
+    const stem = unit.meta.sounds[eventKey]
+    if (!stem) return false
+    if (!this._unitSoundDebounce) this._unitSoundDebounce = new Map()
+    const key = `${unit.id}:${eventKey}`
+    const now = performance.now()
+    const last = this._unitSoundDebounce.get(key) || 0
+    if (now - last < 80) return false
+    this._unitSoundDebounce.set(key, now)
+    const pool = unit.binding.audio
+    if (!pool) return false
+    pool.play(stem, {
+      vol: 0.85,
+      kind: 'unit',
+      source: `${unit.name || 'Unit'}: ${eventKey}`,
+      pos: [unit.pos.x, unit.pos.y || 0, unit.pos.z],
+    })
+    return true
+  }
+
+  // playUnitSoundRandom picks one event from the list (filtered to
+  // those actually present in the unit's sounds map) and plays it.
+  // Lets a unit cycle through ok1..ok5 / arrived1..arrived5 the way
+  // TA does, without callers tracking an index.
+  playUnitSoundRandom(unit, eventKeys) {
+    if (!unit || !unit.meta || !unit.meta.sounds) return false
+    const present = eventKeys.filter((k) => unit.meta.sounds[k])
+    if (present.length === 0) return false
+    const pick = present[Math.floor(Math.random() * present.length)]
+    return this.playUnitSound(unit, pick)
+  }
+
+  // ── Scene-wide effect / audio aggregation ─────────────────────────
+  //
+  // Effects + Audio panels show EVERY live binding's particle pool /
+  // audio entries — not just the focused unit's.  The aggregators
+  // walk engine.units() and concatenate.  Cost: O(total alive
+  // particles) per refresh tick (4 Hz inspector throttle) — trivial.
+
+  // _ensureFxBufs reuses scratch typed-array buffers across refresh
+  // ticks so the panel-open path doesn't allocate every 250 ms.
+  // Auto-grows (doubling) when alive-particle population exceeds
+  // capacity.  Per-instance so two open views don't fight over one
+  // shared buffer.
+  _ensureFxBufs(cap) {
+    if (!this._baseFxBufs) {
+      this._baseFxBufs = {
+        capacity: 0,
+        alive: null, kind: null,
+        r: null, g: null, b: null,
+        x: null, y: null, z: null,
+        vx: null, vy: null, vz: null,
+        life: null, life0: null,
+      }
+    }
+    const b = this._baseFxBufs
+    if (cap <= b.capacity) return b
+    let next = Math.max(64, b.capacity || 64)
+    while (next < cap) next *= 2
+    b.capacity = next
+    b.alive = new Uint8Array(next)
+    b.kind  = new Uint16Array(next)
+    b.r     = new Float32Array(next)
+    b.g     = new Float32Array(next)
+    b.b     = new Float32Array(next)
+    b.x     = new Float32Array(next)
+    b.y     = new Float32Array(next)
+    b.z     = new Float32Array(next)
+    b.vx    = new Float32Array(next)
+    b.vy    = new Float32Array(next)
+    b.vz    = new Float32Array(next)
+    b.life  = new Float32Array(next)
+    b.life0 = new Float32Array(next)
+    return b
+  }
+
+  // aggregateParticlePool returns a virtual ParticlePool with the
+  // count + flat per-attribute arrays the Effects panel iterates.
+  // Concatenates every binding's ALIVE slots into the shared scratch
+  // buffer; alive is all-1s so the panel's `if (!alive[i]) continue`
+  // guard is a harmless no-op.  Returns {count: 0} when there are
+  // no units / no particles, so the panel renders its "no particles
+  // in flight" empty state.
+  aggregateParticlePool() {
+    const engine = this.engine
+    if (!engine) return { count: 0 }
+    let total = 0
+    for (const u of engine.units()) {
+      const p = u.binding && u.binding.particles
+      if (!p) continue
+      for (let i = 0; i < p.count; i++) if (p.alive[i]) total++
+    }
+    if (total === 0) return { count: 0 }
+    const b = this._ensureFxBufs(total)
+    let w = 0
+    for (const u of engine.units()) {
+      const p = u.binding && u.binding.particles
+      if (!p) continue
+      for (let i = 0; i < p.count; i++) {
+        if (!p.alive[i]) continue
+        b.alive[w] = 1
+        b.kind[w]  = p.kind[i] | 0
+        b.r[w]     = p.r[i];  b.g[w]  = p.g[i];  b.b[w]  = p.b[i]
+        b.x[w]     = p.x[i];  b.y[w]  = p.y[i];  b.z[w]  = p.z[i]
+        b.vx[w]    = p.vx[i]; b.vy[w] = p.vy[i]; b.vz[w] = p.vz[i]
+        b.life[w]  = p.life[i]
+        b.life0[w] = p.life0[i]
+        w++
+      }
+    }
+    return {
+      count: w,
+      alive: b.alive, kind: b.kind,
+      r: b.r, g: b.g, b: b.b,
+      x: b.x, y: b.y, z: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      life: b.life, life0: b.life0,
+    }
+  }
+
+  // aggregateAudioPool returns a virtual AudioPool that fans count()
+  // + each(cb) across every binding's pool.  Entries are passed by
+  // ref so the panel's progress bar reads the live <audio>'s
+  // currentTime directly.  Snapshots the pool list at call time so a
+  // unit despawn between count() and each() invocations can't crash
+  // the panel.
+  aggregateAudioPool() {
+    const engine = this.engine
+    if (!engine) return { count: () => 0, each: () => {} }
+    const pools = []
+    for (const u of engine.units()) {
+      if (u.binding && u.binding.audio) pools.push(u.binding.audio)
+    }
+    return {
+      count: () => { let n = 0; for (const p of pools) n += p.count(); return n },
+      each:  (fn) => { for (const p of pools) p.each(fn) },
+    }
+  }
+
   // getInspectorMv builds the proxy shape studio.js's
   // refreshMvInspectors panels consume.  When exactly ONE unit is
   // selected, the focused binding feeds the per-unit inspectors
   // (Scripts / Static Vars / Actions / Weapons).  With 0 / multiple
   // selected, a runtime-only stub keeps the runtime panels live.
   // Either way the Effects + Audio fields are wrapped to the scene-
-  // wide aggregators via BaseView.wrapCobWithAggregate — Object.create
-  // shields the binding from being mutated (assigning straight onto
-  // the binding would clobber its real .particles / .audio pools and
+  // wide aggregators via wrapCobWithAggregate — Object.create shields
+  // the binding from being mutated (assigning straight onto the
+  // binding would clobber its real .particles / .audio pools and
   // break particle emission inside the binding's own helpers).
   getInspectorMv() {
     const sel = this.scene ? this.scene.selected : null
@@ -1581,7 +1845,7 @@ export class SandboxView extends BaseView {
       ? (this.scene.unitById([...sel][0]) || null)
       : null
     const focusedBinding = (focused && focused.binding) ? focused.binding : null
-    const cob = this.wrapCobWithAggregate(focusedBinding || {
+    const cob = wrapCobWithAggregate(this, focusedBinding || {
       runtime: this.runtime,
       unit: null,
       hasScript: () => false,
@@ -1666,11 +1930,11 @@ export class SandboxView extends BaseView {
         }
       }
     }
-    // disposeBase tears down engine subs, smoke trails, and hotkeys
-    // in one sweep — replaces the inline cleanup loop we used to do
-    // here.  Called BEFORE renderer.dispose() so any in-flight RAF
-    // closures the engine handlers might fire into see clean refs.
-    this.disposeBase()
+    // disposeView tears down engine subs, smoke trails, and hotkeys
+    // in one sweep.  Called BEFORE renderer.dispose() so any in-
+    // flight RAF closures the engine handlers might fire into see
+    // clean refs.
+    disposeView(this)
     // Tear down the shift-preview overlay so its DOM doesn't outlive
     // the view.  Pool entries leave with the host.
     if (this._shiftPreviewHost) {
@@ -1684,5 +1948,3 @@ export class SandboxView extends BaseView {
   }
 }
 
-// Scene-wide particle / audio aggregation moved to BaseView (used by
-// both views).  Sandbox no longer ships its own copy.

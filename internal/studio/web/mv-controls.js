@@ -19,7 +19,15 @@ import { spawnProjectile } from './model3d/weapon-driver.js'
 import { ArmedCursor } from './model3d/armed-cursor.js'
 import { shouldForceTarget } from './model3d/force-target.js'
 import { GameEngine } from './model3d/game-engine.js'
-import { BaseView } from './model3d/view-base.js'
+import {
+  initSmokeTrails,
+  tickSmokeTrails,
+  simRate,
+  subscribeEngine,
+  wireHotkeys,
+  wrapCobWithAggregate,
+  disposeView,
+} from './ui/common/view-helpers.js'
 
 const SLOT_INDEX = { primary: 0, secondary: 1, tertiary: 2 }
 const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
@@ -27,17 +35,23 @@ const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
 const TA_TICK_HZ = 30                       // FBI rates are per-frame at 30 Hz.
 const TA_TURN_FULL = 65536                  // Full turn in TA angle units.
 
-export class MvControls extends BaseView {
+export class MvControls {
   // viewer: ModelViewer.  Provides .cob, .renderer, .canvas, .unitMeta.
-  // MvControls extends BaseView (view-base.js) so the Unit Editor
-  // shares the Command API, smoke-trail lifecycle, engine event sub
-  // bookkeeping, hotkey wiring, and getInspectorMv() proxy with the
-  // Sandbox.  The viewer-side specialisation is: getSelectedUnits()
-  // returns [this._engineUnit] (single-unit cardinality).  Everything
-  // else flows through BaseView's helpers.
+  // The Unit Editor and Sandbox previously shared a BaseView class —
+  // it was deleted because the cross-section was a contamination
+  // vector.  The handful of helpers that genuinely apply to both
+  // (smoke trails, engine-sub bookkeeping, hotkey wiring, sim-rate)
+  // live as free functions in ui/common/view-helpers.js and are
+  // called explicitly here.
   constructor(viewer) {
-    super()
     this.viewer = viewer
+    // Engine subscription unsubscribe closures captured by
+    // subscribeEngine(); _smokeTrails is the lazy SmokeTrailManager
+    // installed by initSmokeTrails(); _hotkeysDetach is the close
+    // returned by wireHotkeys().  disposeView() sweeps all three.
+    this._engineSubs = []
+    this._smokeTrails = null
+    this._hotkeysDetach = null
     this.armed = null                       // null | 'move' | 'primary' | 'secondary' | 'tertiary'
     this.targets = {
       move: null,                           // [x, z] target XZ (relative to spawn).
@@ -94,12 +108,11 @@ export class MvControls extends BaseView {
     // pruning keeps the typical count to whatever's actually visible
     // in the scene at that moment.
     this.activeProjectiles = { primary: [], secondary: [], tertiary: [] }
-    // Missile smoke-trail emitter — owned by BaseView.  initSmokeTrails()
-    // lazily constructs the SmokeTrailManager and stores it on
-    // this._smokeTrails so spawnProjectile can register a trail when
-    // it spawns a missile.  tick() advances them via tickSmokeTrails()
-    // (also from BaseView) at the unified sim-rate.
-    this.initSmokeTrails()
+    // Missile smoke-trail emitter — initSmokeTrails() lazily builds
+    // the SmokeTrailManager on this._smokeTrails so spawnProjectile
+    // can register a trail when it spawns a missile.  tick() advances
+    // them via tickSmokeTrails() at the unified sim-rate.
+    initSmokeTrails(this)
     this.aimState = {
       primary:   slotInit(),
       secondary: slotInit(),
@@ -158,13 +171,17 @@ export class MvControls extends BaseView {
     }
   }
 
-  // ── BaseView abstract overrides ─────────────────────────────────
+  // ── View contract surface ───────────────────────────────────────
+  //
+  // The view-helpers free functions and the inspector-refresh tick
+  // read `view.engine` / `view.runtime` / `view.camera` /
+  // `view.getSelectedUnits()` / `view.getInspectorMv()` — same
+  // surface the Sandbox view exposes so both consumers can be
+  // refreshed by one shared inspector loop.
 
   // Viewer always renders a single unit — getSelectedUnits returns
   // the adopted engine-side unit when there is one, or an empty
   // array before the engine is wired (very brief window during open).
-  // BaseView's Command API (issueMove / stop / etc.) fans out across
-  // whatever this returns; for viewer that's always 0 or 1 entries.
   getSelectedUnits() { return this._engineUnit ? [this._engineUnit] : [] }
   get engine() { return this._engine }
   get runtime() { return this.viewer && this.viewer.cob ? this.viewer.cob.runtime : null }
@@ -172,20 +189,123 @@ export class MvControls extends BaseView {
 
   // getInspectorMv returns the proxy shape studio.js's
   // refreshMvInspectors panels expect.  Effects + Audio aggregate
-  // across every binding via BaseView.wrapCobWithAggregate — the
-  // viewer always has a single engine unit, so the aggregator's
-  // walk hits exactly one binding.  Symmetric with sandbox's
-  // implementation: both views use the SAME aggregator, so the
-  // panels are 100% common across view types.  The wrapper uses
-  // Object.create so it doesn't mutate the live binding's own
-  // .particles / .audio refs (which the binding's own emit helpers
-  // rely on).
+  // across every binding via wrapCobWithAggregate — the viewer
+  // always has a single engine unit, so the aggregator's walk hits
+  // exactly one binding.  Symmetric with sandbox's implementation:
+  // both views use the SAME wrapper helper so the panels are 100%
+  // common across view types.  The wrapper uses Object.create so it
+  // doesn't mutate the live binding's own .particles / .audio refs
+  // (which the binding's own emit helpers rely on).
   getInspectorMv() {
     const cob = this.viewer ? this.viewer.cob : null
     return {
       camera: this.camera,
       renderer: this.viewer ? this.viewer.renderer : null,
-      cob: cob ? this.wrapCobWithAggregate(cob) : null,
+      cob: cob ? wrapCobWithAggregate(this, cob) : null,
+    }
+  }
+
+  // ── Scene-wide effect / audio aggregation ───────────────────────
+  //
+  // The Effects + Audio panels iterate EVERY live binding's particle
+  // pool + audio entries — even in the unit editor, where the engine
+  // currently holds exactly one adopted unit.  Single-unit walks are
+  // a one-iteration loop; the aggregator stays uniform between views
+  // so the panel-render code never has to branch on which view it's
+  // staring at.
+  //
+  // _ensureFxBufs reuses scratch typed-array buffers across refresh
+  // ticks (4 Hz inspector throttle) so the panel-open path doesn't
+  // allocate every 250 ms.  Auto-grows (doubling) on demand.
+  _ensureFxBufs(cap) {
+    if (!this._baseFxBufs) {
+      this._baseFxBufs = {
+        capacity: 0,
+        alive: null, kind: null,
+        r: null, g: null, b: null,
+        x: null, y: null, z: null,
+        vx: null, vy: null, vz: null,
+        life: null, life0: null,
+      }
+    }
+    const b = this._baseFxBufs
+    if (cap <= b.capacity) return b
+    let next = Math.max(64, b.capacity || 64)
+    while (next < cap) next *= 2
+    b.capacity = next
+    b.alive = new Uint8Array(next)
+    b.kind  = new Uint16Array(next)
+    b.r     = new Float32Array(next)
+    b.g     = new Float32Array(next)
+    b.b     = new Float32Array(next)
+    b.x     = new Float32Array(next)
+    b.y     = new Float32Array(next)
+    b.z     = new Float32Array(next)
+    b.vx    = new Float32Array(next)
+    b.vy    = new Float32Array(next)
+    b.vz    = new Float32Array(next)
+    b.life  = new Float32Array(next)
+    b.life0 = new Float32Array(next)
+    return b
+  }
+
+  // aggregateParticlePool concatenates every binding's ALIVE particle
+  // slots into the scratch buffer in flat-attribute form (kind / pos /
+  // velocity / life), returning the shape the Effects panel reads.
+  // Returns {count: 0} when there are no particles in flight so the
+  // panel renders its "no particles" empty state.
+  aggregateParticlePool() {
+    const engine = this.engine
+    if (!engine) return { count: 0 }
+    let total = 0
+    for (const u of engine.units()) {
+      const p = u.binding && u.binding.particles
+      if (!p) continue
+      for (let i = 0; i < p.count; i++) if (p.alive[i]) total++
+    }
+    if (total === 0) return { count: 0 }
+    const b = this._ensureFxBufs(total)
+    let w = 0
+    for (const u of engine.units()) {
+      const p = u.binding && u.binding.particles
+      if (!p) continue
+      for (let i = 0; i < p.count; i++) {
+        if (!p.alive[i]) continue
+        b.alive[w] = 1
+        b.kind[w]  = p.kind[i] | 0
+        b.r[w]     = p.r[i];  b.g[w]  = p.g[i];  b.b[w]  = p.b[i]
+        b.x[w]     = p.x[i];  b.y[w]  = p.y[i];  b.z[w]  = p.z[i]
+        b.vx[w]    = p.vx[i]; b.vy[w] = p.vy[i]; b.vz[w] = p.vz[i]
+        b.life[w]  = p.life[i]
+        b.life0[w] = p.life0[i]
+        w++
+      }
+    }
+    return {
+      count: w,
+      alive: b.alive, kind: b.kind,
+      r: b.r, g: b.g, b: b.b,
+      x: b.x, y: b.y, z: b.z,
+      vx: b.vx, vy: b.vy, vz: b.vz,
+      life: b.life, life0: b.life0,
+    }
+  }
+
+  // aggregateAudioPool returns a virtual AudioPool that fans count()
+  // + each(cb) across every binding's pool.  Entries are passed by
+  // ref so the Audio panel's progress bar reads the live <audio>'s
+  // currentTime directly.  Snapshots the pool list at call time so a
+  // unit despawn between count() and each() can't crash the panel.
+  aggregateAudioPool() {
+    const engine = this.engine
+    if (!engine) return { count: () => 0, each: () => {} }
+    const pools = []
+    for (const u of engine.units()) {
+      if (u.binding && u.binding.audio) pools.push(u.binding.audio)
+    }
+    return {
+      count: () => { let n = 0; for (const p of pools) n += p.count(); return n },
+      each:  (fn) => { for (const p of pools) p.each(fn) },
     }
   }
 
@@ -280,12 +400,14 @@ export class MvControls extends BaseView {
     }
     // Engine-side cleanup — clearing every weapon slot, force-
     // restarting TargetCleared / RestorePosition, dispatching
-    // StopMoving — is all centralised in engine.stopUnit (called via
-    // BaseView.stop()).  The viewer just adds its own UI-state
-    // teardown above (armed cursor, MvControls' per-slot aim
-    // threads, isMoving cancel) and lets the engine helper handle
-    // the rest.  Symmetric with sandbox's #stopSelected.
-    this.stop()
+    // StopMoving — is all centralised in engine.stopUnits.  The
+    // viewer just adds its own UI-state teardown above (armed
+    // cursor, MvControls' per-slot aim threads, isMoving cancel)
+    // and lets the engine helper handle the rest.  Symmetric with
+    // sandbox's #stopSelected.
+    if (this._engine && this._engineUnit) {
+      this._engine.stopUnits([this._engineUnit.id])
+    }
     this._refreshButtons()
     this._refreshArmingClass()
     this._updateArmedCursor()
@@ -486,10 +608,11 @@ export class MvControls extends BaseView {
     // No duplicate firing-piece resolution or ballistic recompute
     // lives here any more — task #249 consolidated both into the
     // engine.
-    // BaseView tracks engine unsubscribe closures in _engineSubs for
-    // us — subscribeEngine() returns the unsub closure too in case
-    // callers want to detach early.  disposeBase() sweeps the list.
-    this.subscribeEngine('fire', (ev) => {
+    // subscribeEngine() captures the unsubscribe closure onto
+    // this._engineSubs so disposeView() can sweep every listener at
+    // teardown.  Returns the closure to the caller too in case it
+    // wants to detach early.
+    subscribeEngine(this, 'fire', (ev) => {
       if (!ev.weapon || !ev.weapon.name) return
       const gravity = (this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function')
         ? this.viewer.renderer.getGravity() : 80
@@ -557,13 +680,13 @@ export class MvControls extends BaseView {
   }
 
   // tick is called from the renderer's per-frame callback.  dtMs is
-  // wall-clock; rate / dtSimMs come from BaseView.simRate() which
-  // returns 0 when paused and playbackRate otherwise — the same gate
-  // the engine uses for particles, so sub-frame timing stays in
+  // wall-clock; rate / dtSimMs come from the shared simRate() helper
+  // which returns 0 when paused and playbackRate otherwise — the same
+  // gate the engine uses for particles, so sub-frame timing stays in
   // lock-step with sim-time everywhere.
   tick(dtMs) {
     if (!this.viewer.cob) return
-    const rate = this.simRate()
+    const rate = simRate(this)
     const dtSec = (dtMs * rate) / 1000
     // Sim-scaled dtMs for sub-systems that gate on time but want to
     // honour slow-mo / fast-forward (ship wakes emit on a 100 ms
@@ -587,11 +710,11 @@ export class MvControls extends BaseView {
     // until at least one tick later.
     this._pruneActiveProjectiles()
     this._updateShipWake(dtSimMs)
-    // Smoke-trail advance — BaseView.tickSmokeTrails handles the
-    // pause + playback-rate scaling internally.  At 0.01× a slow-
+    // Smoke-trail advance — tickSmokeTrails handles the pause +
+    // playback-rate scaling internally.  At 0.01× a slow-
     // flying laser leaves puffs every 4 s wall ≈ 40 ms sim, matching
     // what the projectile's slowed velocity actually traces out.
-    this.tickSmokeTrails(dtMs)
+    tickSmokeTrails(this, dtMs)
     // Hover-preview overlay tracks the camera (which may auto-rotate
     // or be orbited by the user), so the projected screen position
     // refreshes every frame.  Stop-button live-state too.
@@ -644,13 +767,12 @@ export class MvControls extends BaseView {
       this._wiredCanvas = null
       this._canvasHandlers = null
     }
-    // disposeBase tears down BaseView-owned scaffolding (engine
+    // disposeView tears down the view-helpers scaffolding (engine
     // event subscriptions, the SmokeTrailManager, the unit-hotkey
-    // listener).  Replaces the inline smoke-trail clear + engine-
-    // sub sweep we used to maintain here.  Called BEFORE the viewer
-    // canvas + armed-cursor teardown so any RAF closures the engine
-    // handlers might fire into see clean refs.
-    this.disposeBase()
+    // listener) in one sweep.  Called BEFORE the viewer canvas +
+    // armed-cursor teardown so any RAF closures the engine handlers
+    // might fire into see clean refs.
+    disposeView(this)
     if (this._previewOverlay) {
       this._previewOverlay.remove()
       this._previewOverlay = null
@@ -1072,7 +1194,7 @@ export class MvControls extends BaseView {
     if (this._keyHandlerWired) return
     this._keyHandlerWired = true
     // Order keys (M/A/F/D/S/T) come from the shared unit-hotkeys
-    // module via BaseView.wireHotkeys — viewer + sandbox both bind
+    // module via the wireHotkeys helper — viewer + sandbox both bind
     // the same keymap so muscle memory carries across.  Slot-arm
     // callbacks route into _armSlotHotkey (which respects the
     // disabled state of the visible Controls buttons), Stop into
@@ -1081,7 +1203,7 @@ export class MvControls extends BaseView {
     // viewer is always single-unit, so there's no "no selection"
     // edge case to gate on (button.disabled handles per-slot gating
     // inside _armSlotHotkey).
-    this.wireHotkeys({
+    wireHotkeys(this, {
       dialogId: 'model-viewer-dialog',
       // Round 35: gate the unit-hotkey allowed() check on per-tab
       // activeness — every per-tab MvControls subscribes the same
