@@ -71,13 +71,15 @@ export class MvControls {
       thread: null, lastFireMs: -Infinity,
       burstShotsLeft: 0, nextBurstShotAtMs: 0,
     })
-    // Per-slot circular buffer of the LAST 5 shots fired from this
-    // weapon.  Each entry: { simMs, kind, anchor:[x,y,z],
-    // velocity:[vx,vy,vz], speed }.  Used by the Weapons panel to
-    // render the "recent projectiles" list — newest at the bottom.
-    // Capped to keep the per-frame render cheap and the on-screen
-    // history short enough to read at a glance.
-    this.shotHistory = { primary: [], secondary: [], tertiary: [] }
+    // Per-slot list of ACTIVE in-flight projectiles for the Weapons
+    // panel.  Each entry: { spawnSimMs, lifeMs, anchor:[x,y,z],
+    // velocity:[vx,vy,vz], speed }.  Pruned each tick — once
+    // (simTimeMs - spawnSimMs) >= lifeMs the entry is dropped.  Hard
+    // cap at 32 entries as a safety net for pathological cases
+    // (very long lifeMs + very fast burst weapons); the natural
+    // pruning keeps the typical count to whatever's actually visible
+    // in the scene at that moment.
+    this.activeProjectiles = { primary: [], secondary: [], tertiary: [] }
     this.aimState = {
       primary:   slotInit(),
       secondary: slotInit(),
@@ -380,6 +382,10 @@ export class MvControls {
     this._updateWeapon('primary')
     this._updateWeapon('secondary')
     this._updateWeapon('tertiary')
+    // Drop any projectile whose flight time has elapsed.  Done after
+    // _updateWeapon so a brand-new entry from this tick isn't pruned
+    // until at least one tick later.
+    this._pruneActiveProjectiles()
     this._updateShipWake(dtSimMs)
     // Smoke-trail emitter — moved off setInterval(wall-clock 40 ms)
     // onto the per-frame tick so trail puffs scale with sim speed.
@@ -1146,23 +1152,47 @@ export class MvControls {
     return { heading: headingTA, pitch: pitchTA }
   }
 
-  // _recordShot pushes a slim record of a fired shot onto the slot's
-  // history buffer for the Weapons panel's "recent projectiles" list.
-  // Buffer caps at 5; oldest is dropped FIFO.  Called for every shot
-  // path — ballistic, straight-line, AND laser-beam — so the panel
-  // shows every discharge regardless of which visual the weapon uses.
-  _recordShot(slot, anchor, velocity) {
-    const hist = this.shotHistory && this.shotHistory[slot]
-    if (!hist) return
+  // _recordShot pushes a fresh projectile onto the slot's active-
+  // projectiles list for the Weapons panel.  lifeMs is the expected
+  // time-of-flight (range / velocity + slack for ballistic arcs);
+  // entries are pruned by _pruneActiveProjectiles when their age
+  // exceeds lifeMs.  Beam weapons pass a tiny lifeMs (~200 ms)
+  // since the beam itself is instant — the entry only stays around
+  // long enough for the user to see it tick by.  Cap at 32 entries
+  // as a safety net.
+  _recordShot(slot, anchor, velocity, lifeMs) {
+    const list = this.activeProjectiles && this.activeProjectiles[slot]
+    if (!list) return
     const speed = Math.hypot(velocity[0] || 0, velocity[1] || 0, velocity[2] || 0)
     const simMs = this.viewer.cob?.runtime?.simTimeMs ?? performance.now()
-    hist.push({
-      simMs,
+    list.push({
+      spawnSimMs: simMs,
+      lifeMs: Math.max(50, +lifeMs || 1000),
       anchor: [anchor[0], anchor[1], anchor[2]],
       velocity: [velocity[0], velocity[1], velocity[2]],
       speed,
     })
-    while (hist.length > 5) hist.shift()
+    while (list.length > 32) list.shift()
+  }
+
+  // _pruneActiveProjectiles drops every entry whose age (sim-time
+  // since spawn) has reached its lifeMs.  Called once per tick from
+  // tick() — keeps the per-slot lists trimmed to ACTUALLY in-flight
+  // projectiles so the panel reads as "what's currently visible".
+  _pruneActiveProjectiles() {
+    const rt = this.viewer.cob?.runtime
+    if (!rt) return
+    const now = rt.simTimeMs
+    for (const slot of ['primary', 'secondary', 'tertiary']) {
+      const list = this.activeProjectiles[slot]
+      if (!list || list.length === 0) continue
+      let writeIdx = 0
+      for (let i = 0; i < list.length; i++) {
+        const e = list[i]
+        if ((now - e.spawnSimMs) < e.lifeMs) list[writeIdx++] = e
+      }
+      list.length = writeIdx
+    }
   }
 
   // _spawnProjectile spawns a travelling particle from the slot's
@@ -1212,7 +1242,10 @@ export class MvControls {
       const bdx = tgt[0] - anchor[0], bdy = tgt[1] - anchor[1], bdz = tgt[2] - anchor[2]
       const blen = Math.hypot(bdx, bdy, bdz) || 1
       const bv = +w.velocityWU || 0
-      this._recordShot(slot, anchor, [bdx / blen * bv, bdy / blen * bv, bdz / blen * bv])
+      // Beam weapons are instant-hit; the projectile-list entry
+      // exists just long enough for the user to see the discharge
+      // tick by, so use a short fixed lifeMs rather than range/vel.
+      this._recordShot(slot, anchor, [bdx / blen * bv, bdy / blen * bv, bdz / blen * bv], 200)
       this._spawnLaserBeam(w, anchor, tgt)
       if (w.soundStart) this._playWeaponSound(w.soundStart, w.name, anchor)
       return
@@ -1280,10 +1313,10 @@ export class MvControls {
       noFade: true,
     }
     cob.particles.emit(kind, anchor, emitOpts)
-    // Record this shot for the Weapons panel's recent-projectiles
-    // list (capped at the last 5 per slot).  Stores anchor + velocity
-    // so the panel can show launch position + speed.
-    this._recordShot(slot, anchor, [vx, vy, vz])
+    // Record this shot in the slot's active-projectiles list.  lifeMs
+    // matches the particle's actual lifetime so the panel entry is
+    // pruned exactly when the projectile expires (impact / max range).
+    this._recordShot(slot, anchor, [vx, vy, vz], lifeMs)
     // Smoke trail — for missile-class projectiles, register a tick
     // hook that drops a smoke puff at the projectile's CURRENT world
     // position every ~40 ms while it's alive, so the user sees a

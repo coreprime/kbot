@@ -16176,25 +16176,30 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     }
   }
 
-  // ── Recent projectiles list — last 5 shots from this slot's
-  //    history buffer.  Hidden via .mv-weapon-projlist-hidden class
-  //    when the master "Show Projectiles" toggle is off.  Container
-  //    is created empty + populated by the live-refresh closure so
-  //    new shots appear without a full re-render of the card.
+  // ── Active projectiles list — every projectile currently in
+  //    flight from this slot, with its age.  Pruned in mv-controls
+  //    when age >= lifeMs, so the list naturally drains between
+  //    shots and stays short even for high-fire-rate weapons (no
+  //    accumulating clutter from old shots like the previous
+  //    "last 5 fired" history did).  Hidden via class when the
+  //    master "Show Projectiles" toggle is off.
   let projList = null
+  let projHeadLabel = null
   if (w.name) {
     const wrap = document.createElement('div')
     wrap.className = 'mv-weapon-projlist'
     if (!_mvWeaponShowProjectiles) wrap.classList.add('mv-weapon-projlist-hidden')
     const hdr = document.createElement('div')
     hdr.className = 'mv-weapon-projlist-head'
-    hdr.textContent = 'Recent projectiles'
+    projHeadLabel = document.createElement('span')
+    projHeadLabel.textContent = 'In flight (0)'
+    hdr.appendChild(projHeadLabel)
     wrap.appendChild(hdr)
     projList = document.createElement('div')
     projList.className = 'mv-weapon-projlist-rows'
     const empty = document.createElement('div')
     empty.className = 'mv-weapon-projlist-empty'
-    empty.textContent = 'No shots fired yet.'
+    empty.textContent = 'No projectiles in flight.'
     projList.appendChild(empty)
     wrap.appendChild(projList)
     body.appendChild(wrap)
@@ -16241,33 +16246,48 @@ function buildMvWeaponCard(mv, slot, w, scripts) {
     // here keeps the refresh idempotent).
     const wrap = projList ? projList.parentElement : null
     if (wrap) wrap.classList.toggle('mv-weapon-projlist-hidden', !_mvWeaponShowProjectiles)
-    // Recent shots — re-render from the history buffer.  Cheap (at
-    // most 5 rows) so we rebuild every tick rather than diffing.
-    if (projList && ctrl) {
-      const hist = ctrl.shotHistory && ctrl.shotHistory[slot]
+    // Active projectiles — re-render from the live in-flight list.
+    // Cheap: pruning in mv-controls keeps this short (typically the
+    // burst size + 1 or 2; high-rate weapons drain fast because each
+    // shot has its own lifeMs and is dropped at TTL).  Oldest at the
+    // top (longest in flight); newest at the bottom (just fired).
+    if (projList && ctrl && rt) {
+      const list = ctrl.activeProjectiles && ctrl.activeProjectiles[slot]
+      if (projHeadLabel) projHeadLabel.textContent = `In flight (${list ? list.length : 0})`
       projList.replaceChildren()
-      if (!hist || hist.length === 0) {
+      if (!list || list.length === 0) {
         const empty = document.createElement('div')
         empty.className = 'mv-weapon-projlist-empty'
-        empty.textContent = 'No shots fired yet.'
+        empty.textContent = 'No projectiles in flight.'
         projList.appendChild(empty)
       } else {
-        // Newest at the BOTTOM (matches how the user perceives time
-        // — older shots scroll up, newest appear at the cursor).
-        for (let i = 0; i < hist.length; i++) {
-          const s = hist[i]
+        const now = rt.simTimeMs
+        for (let i = 0; i < list.length; i++) {
+          const s = list[i]
+          const ageMs = Math.max(0, now - s.spawnSimMs)
+          // Compute the projectile's CURRENT estimated position from
+          // its launch anchor + velocity + sim age, so the row shows
+          // where the round is RIGHT NOW (not where it was fired
+          // from).  Better matches what the user is looking at in
+          // the scene.  Ignores gravity for the readout — the row
+          // is informative, not authoritative.
+          const ageSec = ageMs / 1000
+          const px = s.anchor[0] + s.velocity[0] * ageSec
+          const py = s.anchor[1] + s.velocity[1] * ageSec
+          const pz = s.anchor[2] + s.velocity[2] * ageSec
           const row = document.createElement('div')
           row.className = 'mv-weapon-projlist-row'
-          const idxEl = document.createElement('span')
-          idxEl.className = 'mv-weapon-projlist-idx'
-          idxEl.textContent = '#' + (hist.length - i)
+          const ageEl = document.createElement('span')
+          ageEl.className = 'mv-weapon-projlist-age'
+          ageEl.textContent = ageSec.toFixed(2) + 's'
+          ageEl.title = `Spawned ${ageSec.toFixed(2)} s ago — expires in ${((s.lifeMs - ageMs) / 1000).toFixed(2)} s`
           const posEl = document.createElement('span')
           posEl.className = 'mv-weapon-projlist-pos'
-          posEl.textContent = `${s.anchor[0].toFixed(1)}, ${s.anchor[1].toFixed(1)}, ${s.anchor[2].toFixed(1)}`
+          posEl.textContent = `${px.toFixed(1)}, ${py.toFixed(1)}, ${pz.toFixed(1)}`
           const spdEl = document.createElement('span')
           spdEl.className = 'mv-weapon-projlist-spd'
           spdEl.textContent = s.speed.toFixed(0) + ' wu/s'
-          row.appendChild(idxEl); row.appendChild(posEl); row.appendChild(spdEl)
+          row.appendChild(ageEl); row.appendChild(posEl); row.appendChild(spdEl)
           projList.appendChild(row)
         }
       }

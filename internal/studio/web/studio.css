@@ -4135,10 +4135,13 @@ canvas {
   font-family: ui-monospace, monospace; font-size: 10px;
 }
 .mv-weapon-projlist-row {
-  display: grid; grid-template-columns: 24px 1fr auto;
+  display: grid; grid-template-columns: 42px 1fr auto;
   gap: 6px; padding: 1px 0;
 }
-.mv-weapon-projlist-idx { color: var(--muted); }
+/* Legacy id column — kept so any external CSS reference doesn't
+   break.  Same styling as the new age cell since both occupy slot 1. */
+.mv-weapon-projlist-idx,
+.mv-weapon-projlist-age { color: #aac8ff; font-variant-numeric: tabular-nums; }
 .mv-weapon-projlist-pos {
   color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
