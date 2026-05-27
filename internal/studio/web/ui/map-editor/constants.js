@@ -124,6 +124,13 @@ export const CLIP_PREFIX = 'KBOTSTUDIO_CLIP_V1:'
 // typical TA sprites (~5 tiles ≈ 160 game pixels).
 export const FEATURE_HIT_SEARCH_TILES = 6
 
+// FEATURE_HIGHLIGHT_LIMIT disables the hover-highlight passes
+// (canvas red outlines + minimap dots) on heavily populated maps.
+// At thousands of features the outline pass becomes the dominant
+// cost on each mouse-move; below the limit the visual cue is more
+// useful than the cost.
+export const FEATURE_HIGHLIGHT_LIMIT = 1000
+
 // ── Start positions ─────────────────────────────────────────────────
 // canvas-px hit radius when picking a start position.
 export const START_POS_RADIUS = 26
