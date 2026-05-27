@@ -1347,6 +1347,14 @@ export class ModelRenderer {
     // ready - so silently skipping here is harmless.
     if (!this._programsReady) return
     this.resize()
+    // Camera tracking is a per-frame operation owned by OrbitCamera —
+    // when a unit is locked in, applyTracking() pulls camera.target
+    // onto the unit's centre of mass BEFORE updateMatrices runs so
+    // the view matrix this frame already reflects the new framing.
+    // No-op when nothing's tracked.
+    if (this.camera && typeof this.camera.applyTracking === 'function') {
+      this.camera.applyTracking()
+    }
 
     // In multi-entity mode we proceed even with no `this.model` since
     // the entities array supplies models per-pass.  Camera is always

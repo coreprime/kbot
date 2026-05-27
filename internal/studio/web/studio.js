@@ -14805,12 +14805,26 @@ function renderMvCameraPanel(mv) {
   set('mv-ci-dist', cam.distance.toFixed(1) + ' wu')
   if (cam.fov !== undefined) set('mv-ci-fov', `${(cam.fov * 180 / Math.PI).toFixed(0)}°`)
   else set('mv-ci-fov', '—')
-  // Track checkbox — mirror the live state from MvControls each
-  // tick.  Without this the checkbox would silently desync when
-  // the T key or a shift-pan flipped tracking.
+  // Track checkbox — mirror the live state.  Single-unit mode uses
+  // _mvControls.tracking; sandbox / any view exposes the same fact
+  // via cam.trackedTarget (camera.applyTracking is the source of
+  // truth in either case), so reading from the camera is the
+  // single-source-of-truth path that works for both views.
   const trackCb = document.getElementById('mv-ci-track')
-  if (trackCb && _mvControls) {
-    if (trackCb.checked !== _mvControls.tracking) trackCb.checked = _mvControls.tracking
+  const isTracking = !!cam.trackedTarget || !!(_mvControls && _mvControls.tracking)
+  if (trackCb && trackCb.checked !== isTracking) trackCb.checked = isTracking
+  // "Following: <name>" row — surfaces which unit the camera is
+  // locked onto.  Hidden when nothing's tracked so the panel doesn't
+  // grow a stale empty row.
+  const followRow = document.getElementById('mv-ci-following-row')
+  const followEl = document.getElementById('mv-ci-following')
+  if (followRow && followEl) {
+    if (isTracking) {
+      followRow.style.display = ''
+      followEl.textContent = cam.trackedName || 'Unit'
+    } else {
+      followRow.style.display = 'none'
+    }
   }
 }
 
@@ -16877,12 +16891,15 @@ function openSandboxStub() {
   switchToTab(tabs.length - 1, { fresh: true, force: true })
 }
 
-// Singleton SandboxView — same lifetime as modelViewerInstance.  Lazy-
-// constructed on first sandbox tab activation.  Reused across sandbox
-// tab swaps so the GL context + texture cache survive.
+// `sandboxViewInstance` tracks the CURRENTLY ACTIVE sandbox tab's
+// SandboxView.  Each sandbox tab owns its own SandboxView (stored on
+// tab.viewer); on activation we swap this global pointer to whichever
+// view belongs to the incoming tab so the rest of the studio (panels,
+// roster, ribbon-button handlers) reads from the right scene.  Two
+// sandbox tabs no longer share units / runtime / selection.
 let sandboxViewInstance = null
 
-async function activateSandboxTab(_tab) {
+async function activateSandboxTab(tab) {
   // Hide the model-viewer dialog if visible — sandbox lives on the
   // same canvas but with its own chrome.  Reuse the model-viewer
   // dialog so the canvas + ribbon are already mounted.
@@ -16892,13 +16909,33 @@ async function activateSandboxTab(_tab) {
   if (modelViewerInstance && modelViewerInstance.renderer) {
     try { modelViewerInstance.renderer.stop?.() } catch { /* ignore */ }
   }
-  if (!sandboxViewInstance) {
+  // Stop every OTHER sandbox tab's renderer too — two sandbox tabs
+  // each have their own SandboxView, and only the active one should
+  // own the canvas / RAF loop.  Without this, an inactive sandbox
+  // tab's renderer kept ticking + drew its scene over the canvas
+  // each frame.
+  for (const t of tabs) {
+    if (t === tab) continue
+    const v = t.viewer
+    if (v && v.renderer && v.renderer.stop) {
+      try { v.renderer.stop() } catch { /* ignore */ }
+    }
+  }
+  // Per-tab SandboxView — each sandbox tab owns its own scene,
+  // runtime, selection set, camera state.  Lazy-constructed on
+  // first activation; reused across re-activations of the SAME tab
+  // so units / camera framing survive.
+  if (!tab.viewer) {
     const mod = await import('./model3d/sandbox-view.js')
-    sandboxViewInstance = new mod.SandboxView({
+    tab.viewer = new mod.SandboxView({
       canvas: $('#model-viewer-canvas'),
       statusEl: $('#status'),
     })
   }
+  // Swap the global to whichever tab is now active so the rest of
+  // the studio (panels, ribbon handlers, refreshMvInspectors) reads
+  // from this tab's view.
+  sandboxViewInstance = tab.viewer
   await sandboxViewInstance.open()
   // Make sure the RAF loop is live — switchToTab stops it on the way
   // to a map tab so we don't burn frames behind the editor.  Renderer

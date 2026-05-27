@@ -273,14 +273,56 @@ export class SandboxView {
     canvas.addEventListener('click', (e) => this.#onClick(e))
     canvas.addEventListener('contextmenu', (e) => this.#onContextMenu(e))
     canvas.addEventListener('mousemove', (e) => this.#onMouseMove(e))
-    // Esc cancels placement.  Bound on window because the canvas
-    // doesn't take focus by default (would need tabindex), and Esc
-    // there feels more "global cancel" anyway.
+    // Esc cancels placement.  T toggles camera tracking of the first
+    // selected unit (mirrors the unit-editor's T-key behaviour, but
+    // resolves the target via the scene's selection set since there's
+    // no single "viewed unit").  Bound on window because the canvas
+    // doesn't take focus by default and Esc/T there feel more "global
+    // shortcut" than per-element.
     window.addEventListener('keydown', (e) => {
+      const dlg = document.getElementById('model-viewer-dialog')
+      const sandboxActive = dlg && dlg.classList.contains('sandbox-mode') && !dlg.classList.contains('hidden')
+      if (!sandboxActive) return
+      const tgt = e.target
+      if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
+      if (tgt && tgt.isContentEditable) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key === 'Escape' && this._placement) {
+        e.preventDefault()
         this.cancelPlacement()
+        return
+      }
+      const k = (e.key || '').toLowerCase()
+      if (k === 't') {
+        e.preventDefault()
+        this.toggleTracking()
+        return
       }
     })
+  }
+
+  // toggleTracking — T-key handler.  When tracking is already on,
+  // turn it off + unset the camera's tracked target (matches the
+  // spec).  Otherwise pick the first selected unit and lock the
+  // camera onto its centre of mass.  No-op when there's nothing
+  // selected — the camera stays put rather than silently grabbing
+  // a random unit, so the T key always reads as deliberate.
+  toggleTracking() {
+    if (!this.camera) return
+    if (this.camera.trackedTarget) {
+      this.camera.setTrackedTarget(null)
+      this.#setStatus('Tracking off.')
+      return
+    }
+    if (!this.scene || this.scene.selected.size === 0) {
+      this.#setStatus('Tracking — select a unit first.')
+      return
+    }
+    const firstId = [...this.scene.selected][0]
+    const u = this.scene.unitById(firstId)
+    if (!u) return
+    this.camera.setTrackedTarget(u, u.name || `Unit ${u.id}`)
+    this.#setStatus(`Tracking ${u.name || 'unit'}.`)
   }
 
   // #onMouseMove updates the ghost preview's position to follow the

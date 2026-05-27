@@ -21,6 +21,55 @@ export class OrbitCamera {
     this.viewMatrix = Mat4.identity(Mat4.create())
     this.projMatrix = Mat4.identity(Mat4.create())
     this.eye = [0, 0, 0]
+    // Tracked target — a reference (anything with a `pos` + `model`
+    // shape) the camera locks its `target` onto each frame.  Set via
+    // setTrackedTarget(...); cleared with null.  `trackedName` is
+    // exposed for the Renderer panel's "Following: ..." readout so
+    // the UI doesn't have to peek inside the ref.
+    this.trackedTarget = null
+    this.trackedName = null
+  }
+
+  // setTrackedTarget locks the camera's target onto a unit.  Each
+  // frame applyTracking() reads .pos + .model.bounds off the ref and
+  // pulls the camera target to the unit's CENTRE OF MASS — the
+  // model's bounding-box midpoint translated by the unit position —
+  // so the camera frames the unit's silhouette rather than its
+  // origin pivot (which for kbots is usually at the feet, leaving
+  // the camera staring at empty air just above the ground).  Pass
+  // null to clear.  `name` is purely cosmetic — surfaces in the
+  // Renderer panel as "Following: <name>".
+  setTrackedTarget(ref, name = null) {
+    this.trackedTarget = ref || null
+    this.trackedName = ref ? (name || (ref.name ?? null)) : null
+  }
+
+  // applyTracking pulls the camera target onto the tracked unit's
+  // centre of mass for THIS frame.  Cheap — three vector adds — so
+  // call it once per render frame from the view's onAfterFrame
+  // hook.  No-op when nothing's tracked.
+  applyTracking() {
+    const t = this.trackedTarget
+    if (!t) return
+    // Tolerate refs that aren't laid out exactly the way the
+    // single-unit / sandbox UnitInstance is — fall back to the unit
+    // pos when bounds aren't available, fall back to origin when
+    // pos is missing too.  Keeps the camera following SOMETHING
+    // sensible even with weird refs (e.g. between model load and
+    // first Create-script tick).
+    const px = (t.pos && Number.isFinite(t.pos.x)) ? t.pos.x : 0
+    const py = (t.pos && Number.isFinite(t.pos.y)) ? t.pos.y : 0
+    const pz = (t.pos && Number.isFinite(t.pos.z)) ? t.pos.z : 0
+    let cx = 0, cy = 0, cz = 0
+    const m = t.model
+    if (m && m.bounds) {
+      cx = (m.bounds.min[0] + m.bounds.max[0]) * 0.5
+      cy = (m.bounds.min[1] + m.bounds.max[1]) * 0.5
+      cz = (m.bounds.min[2] + m.bounds.max[2]) * 0.5
+    }
+    this.target[0] = px + cx
+    this.target[1] = py + cy
+    this.target[2] = pz + cz
   }
 
   // frameBounds positions the camera so the given min/max box fills

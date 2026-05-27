@@ -841,6 +841,14 @@
             <span class="dev-stats-label">Tracking</span>
             <input type="checkbox" id="mv-ci-track" class="mv-ci-track-cb" />
           </label>
+          <!-- "Following: <name>" — shows the unit the camera is
+               currently locked onto, hidden when tracking is off.
+               Surfaces OrbitCamera.trackedName so the user can see
+               which of N selected units in sandbox the T-key picked. -->
+          <div class="dev-stats-row mv-ci-following-row" id="mv-ci-following-row" style="display:none">
+            <span class="dev-stats-label">Following</span>
+            <span class="dev-stats-value" id="mv-ci-following">—</span>
+          </div>
         </div>
       </aside>
       </div>

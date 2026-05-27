@@ -767,43 +767,45 @@ export class MvControls {
   // rate as the unit, so the Hawk would appear stationary in the
   // frame while the ground sank).
   _followCamera() {
+    // Auto-rotate still wants a snap to keep the unit centred — the
+    // explicit-tracking path is owned by OrbitCamera.applyTracking
+    // (called every frame from the renderer's onAfterFrame hook).
     const r = this.viewer.renderer
-    if (!this.tracking && !(r && r.autoRotate)) return
+    if (!(r && r.autoRotate)) return
     const cam = this.viewer.camera
     if (!cam) return
-    // Lag-lerp the camera target toward the unit instead of snapping.
-    // A perfect snap keeps the unit pinned to screen-centre as it
-    // walks, which reads as "stationary unit, moving world" — users
-    // (correctly) report it as "the unit isn't moving."  Lerping at
-    // ~12% per frame leaves the unit visibly ahead of camera-centre
-    // while it walks (so motion is obvious), and the camera catches
-    // up within ~half a second after the unit stops so the view ends
-    // re-centred on the target.  AutoRotate paths still want the snap
-    // because that camera orbits CONTINUOUSLY and a lag would feel
-    // sluggish; gate the lerp on the explicit `tracking` flag only.
-    if (this.tracking) {
-      const k = 0.12
-      cam.target[0] += (this.pos.x - cam.target[0]) * k
-      cam.target[2] += (this.pos.z - cam.target[2]) * k
-    } else {
-      cam.target[0] = this.pos.x
-      cam.target[2] = this.pos.z
-    }
+    cam.target[0] = this.pos.x
+    cam.target[2] = this.pos.z
     r?.requestRedraw()
   }
 
-  // setTracking flips tracking on/off.  Public so the Renderer
-  // panel's checkbox + the studio-level T-key handler can both
-  // drive it.  Turning ON ALWAYS re-snaps the camera onto the
-  // unit — even if tracking was already on, because the user may
-  // have just panned the view away (shift-pan clears tracking;
-  // re-pressing T then explicitly wants the snap back).  Turning
-  // OFF just updates the flag so the next _applyRendererTransform
-  // call leaves the camera alone.
+  // setTracking flips tracking on/off.  Routes through the camera's
+  // setTrackedTarget — passes a synthesised ref that owns the
+  // controller's live pos + viewer's model so OrbitCamera.applyTracking
+  // can derive the unit's centre of mass each frame without poking
+  // back into MvControls' internals.  Turning OFF unsets the camera's
+  // tracked target entirely (matches the spec: clearing T unsets the
+  // tracked unit).  Renderer panel's checkbox stays in sync via
+  // `this.tracking` which the panel polls.
   setTracking(on) {
     const next = !!on
     this.tracking = next
-    if (next) this._followCamera()
+    const cam = this.viewer.camera
+    if (next) {
+      // Build a tracking ref that reflects the unit's CURRENT pos +
+      // model bounds each frame — the camera dereferences `.pos` and
+      // `.model.bounds` per-frame, so live edits to either pick up
+      // automatically without re-arming.
+      const ctrl = this
+      const ref = {
+        get pos() { return { x: ctrl.pos.x, y: ctrl.alt || 0, z: ctrl.pos.z } },
+        get model() { return ctrl.viewer.model },
+        get name() { return ctrl.viewer.model?.name || 'Unit' },
+      }
+      if (cam) cam.setTrackedTarget(ref, ctrl.viewer.model?.name || 'Unit')
+    } else if (cam) {
+      cam.setTrackedTarget(null)
+    }
     const cb = document.getElementById('mv-ci-track')
     if (cb && cb.checked !== next) cb.checked = next
   }
