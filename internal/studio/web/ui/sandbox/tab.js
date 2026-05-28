@@ -48,7 +48,6 @@ import { resetSandboxFocusedUnit } from '../common/refresh-tick.js'
 import {
   mountSandboxSplit,
   detachSandboxSplit,
-  wireSplitContextMenu,
   createSharedScene,
   ensureSplitState,
   revivePanes,
@@ -168,74 +167,36 @@ export async function activateSandboxTab(tab) {
   // observed by every pane the tab hosts.  Lazy-created on first
   // activation so a tab that never gets focused doesn't allocate.
   if (!tab.scene) tab.scene = createSharedScene({ palette: null })
-  // Pane factory — invoked by split-host whenever a leaf needs a
-  // SandboxView (initial open + every Split H/V from the menu).
-  // Wires the shift+right-click split menu, opens the view, and
-  // returns it ready to mount its canvas into the leaf cell.
-  const { SandboxView } = await import('./view.js')
-  const makeView = async (leafId) => {
+  // Per-tab callbacks the generic split-host invokes on top of the
+  // adapter's editor-static callbacks.  onPaneFocus updates the
+  // module-let alias the inspector refresh + ribbon callbacks read
+  // through getActiveSandboxView; the adapter side already updates
+  // tab.viewer.
+  const paneCb = {
+    onPaneFocus: (_tab, _leafId) => {
+      const view = tab.panes.get(tab.activePaneId)
+      if (view) _sandboxViewInstance = view
+    },
+  }
+  // Seed split state + pre-create the active pane's view BEFORE
+  // mountSandboxSplit renders the Preact tree.  The LeafSlot
+  // useEffect that mounts the canvas runs AFTER render, so without
+  // this we'd race a sync downstream read of tab.viewer against
+  // the leaf's async makeLeafView.  The split-host's makeLeafView
+  // (defined in the adapter in /ui/sandbox/split-host.js) constructs
+  // the SandboxView against tab.scene + opens it; we hit the same
+  // path manually here for the first pane so the activation can
+  // complete sync wrt panel / ribbon setup.
+  ensureSplitState(tab)
+  if (!tab.panes.has(tab.activePaneId)) {
+    const { SandboxView } = await import('./view.js')
     const v = new SandboxView({
-      canvas: null,            // SandboxView auto-creates its own
-      scene: tab.scene,        // shared
+      canvas: null,
+      scene: tab.scene,
       statusEl: $('#status'),
     })
-    // Set the focus gate BEFORE open() so the wireHotkeys + camera-
-    // controls callbacks (which capture `this._isFocusedPane`)
-    // immediately route through it.  Without this, window-level T/R/
-    // arrow keys fire on every pane's handler regardless of which
-    // pane the user thinks they're driving.
-    v._leafId = leafId
-    v._isFocusedPane = () => tab.activePaneId === leafId
     await v.open()
-    // Wire the split menu on this pane's canvas.  The detach closure
-    // lives on the view so view.dispose() can sweep it.
-    v._splitCtxDetach = wireSplitContextMenu({
-      canvas: v.canvas,
-      getTab: () => tab,
-      leafId,
-      hostCallbacks: getPaneCallbacks(),
-    })
-    return v
-  }
-  // Pane-focus callback — when the user pointerdown's inside a pane,
-  // promote it to be the active pane.  For MVP we just track the id;
-  // Phase 6 wires inspector focus + hotkey gating to it.
-  const onPaneFocus = (leafId) => {
-    if (tab.activePaneId === leafId) return
-    tab.activePaneId = leafId
-    const view = tab.panes.get(leafId)
-    if (view) {
-      _sandboxViewInstance = view
-      tab.viewer = view  // legacy compat
-    }
-  }
-  // onActiveViewChange — split-host emits this when the active pane
-  // changes (e.g. the active pane was closed and a sibling promoted).
-  const onActiveViewChange = (view) => {
-    _sandboxViewInstance = view
-    tab.viewer = view
-  }
-  const getPaneCallbacks = () => ({
-    makeView,
-    onPaneFocus,
-    onActiveViewChange,
-  })
-  // Mount + ensure the active pane is open.  mountSandboxSplit just
-  // attaches the mount root + renders the Preact tree; the actual
-  // SandboxView for the active pane is created by the LeafSlot's
-  // effect.  We await one microtask + the makeView promise via a
-  // direct ensure() so the first activation completes synchronously
-  // with respect to downstream setup (panels, ribbon).
-  // Seed the split state (tab.split, tab.panes, tab.activePaneId) so
-  // we know the active leaf id before creating its view.
-  ensureSplitState(tab)
-  // Force the active pane's view into existence BEFORE rendering the
-  // split tree.  The LeafSlot useEffect that mounts the canvas runs
-  // AFTER render, so without this we'd race a sync downstream read of
-  // tab.viewer against the leaf's async makeView.
-  if (!tab.panes.has(tab.activePaneId)) {
-    const view = await makeView(tab.activePaneId)
-    tab.panes.set(tab.activePaneId, view)
+    tab.panes.set(tab.activePaneId, v)
   }
   // Swap the module-local + legacy tab.viewer so the rest of the
   // studio reads the active pane's view.
@@ -243,8 +204,10 @@ export async function activateSandboxTab(tab) {
   tab.viewer = _sandboxViewInstance
   // Mount the SplitContainer into the stage + render the tree.  The
   // LeafSlot effect will see the active pane's view already in panes
-  // and just appendChild its canvas to the cell.
-  mountSandboxSplit(tab, stage, getPaneCallbacks())
+  // and just appendChild its canvas to the cell.  The per-tab
+  // callbacks (paneCb) wrap the editor-static SANDBOX_ADAPTER so the
+  // module-let active-view alias updates on pane focus.
+  mountSandboxSplit(tab, stage, paneCb)
   // Defensive canvas re-attach pass — Preact's reconciliation on
   // re-render of a multi-pane tree occasionally leaves a pane's
   // canvas orphaned from its slot, which presents as a blank pane

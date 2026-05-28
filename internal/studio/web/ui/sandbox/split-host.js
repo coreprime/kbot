@@ -1,289 +1,113 @@
 // split-host.js
 //
-// Per-sandbox-tab split layout mount.  Each sandbox tab has:
+// Sandbox-tab adapter for the generic split-host in
+// /ui/common/split-host.js.  Re-exports the host's public surface
+// so existing call sites in /ui/sandbox/tab.js + register-tab.js
+// don't have to change their imports — they get the same
+// mountSandboxSplit / detachSandboxSplit / disposeSandboxSplit /
+// revivePanes / ensureSplitState / wireSplitContextMenu / createSharedScene
+// API the per-editor module exported before the generic refactor.
 //
-//   tab.split   — recursive split tree (Node from split-container.js).
-//                 Initially a single leaf; grows when the user picks
-//                 Split H / Split V from the right-click menu.
-//   tab.scene   — the shared SandboxScene every pane observes.
-//                 Lazy-created when the first pane opens.  Engine event
-//                 subscriptions, smoke trails, and audio debounce all
-//                 live on the scene so multi-pane doesn't double-emit.
-//   tab.panes   — Map<leafId, SandboxView>.  One view per leaf — own
-//                 canvas, own renderer, own OrbitCamera, own per-pane
-//                 selection set.  Views observe the SHARED scene.
-//   tab.activePaneId — which pane drives the panel inspectors + the
-//                 _sandboxViewInstance global.  Set on canvas
-//                 pointerdown; Phase 6 will wire window-level hotkeys
-//                 to this.
-//   tab._splitMount — the <div> child of .model-viewer-stage where
-//                 the SplitContainer Preact tree is rendered.
-//
-// The view's canvas is mounted into its leaf cell via a LeafSlot
-// component that uses a ref + useEffect to appendChild after Preact
-// has placed the cell in the DOM.  Detach on leaf close so the
-// renderer can be disposed cleanly.
-//
-// Right-click on a pane's canvas opens a context menu with:
-//   Split Horizontal / Split Vertical / Close Pane
-// The sandbox already uses plain right-click for the RTS gesture
-// (move-to / attack-here), so the split menu opens on SHIFT+Right-
-// click.  Unit-editor / map-editor splits in later phases can use
-// plain right-click since they have no conflicting gesture.
+// All editor-specific knobs live in the adapter object below:
+// the slot CSS class, the shift-modifier requirement (because plain
+// right-click is already the RTS move/attack gesture in the
+// sandbox), and a makeLeafView that constructs a SandboxView wired
+// against the shared scene.
 
-import { useEffect, useRef } from 'preact/hooks'
-import { render } from 'preact'
-import { htm as html } from '../common/htm-bind.js'
 import {
-  SplitContainer, newLeaf, splitLeaf, closeLeaf, isOnlyLeaf, leafIds,
-} from '../common/split-container.js'
-import { openContextMenu } from '../common/context-menu.js'
+  mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
+  startAllRenderers as commonStartAll, stopAllRenderers as commonStopAll,
+  ensureSplitState as commonEnsure,
+} from '../common/split-host.js'
 import { SandboxScene } from './scene.js'
+import { SandboxView } from './view.js'
+import { $ } from '../host-context.js'
 
-// _activePaneCallback — host-supplied notification fired when the
-// user clicks into a pane.  Wired by mountSandboxSplit; lets the tab
-// swap the _sandboxViewInstance global + republish panels' mv proxy.
-// One per tab so two tabs' click handlers don't fight.
-
-// ensureSplitState lazily initialises the tab's split tree + pane
-// registry.  Called from tab.js before mountSandboxSplit so the
-// active pane can be made BEFORE the Preact tree renders (otherwise
-// the LeafSlot effect races the activation's downstream tab.viewer
-// reads).  Idempotent; safe to call repeatedly.
-export function ensureSplitState(tab) {
-  if (!tab.split) tab.split = newLeaf()
-  if (!tab.panes) tab.panes = new Map()
-  if (!tab.activePaneId) tab.activePaneId = tab.split.id
+// SANDBOX_ADAPTER — the per-editor plug for the generic split-host.
+// Every leaf hosts a peer SandboxView against the shared scene; the
+// first pane (created in tab.js before mount) sets up tab.scene,
+// subsequent panes observe it.  All panes are equal — there's no
+// "primary" leaf in the sandbox the way there is in the unit editor
+// (the unit editor's primary owns the COB binding; the sandbox's
+// engine subscriptions live at scene level so panes are symmetric).
+const SANDBOX_ADAPTER = {
+  slotClass: 'mv-sandbox-pane-slot',
+  // Sandbox already binds plain right-click to "Move here / Attack
+  // this unit" (the classic TA RTS gesture).  Split menu opens on
+  // SHIFT+right-click so the gameplay path stays one-click.
+  contextMenuModifier: 'shift',
+  async makeLeafView(tab, _leafId) {
+    if (!tab.scene) tab.scene = new SandboxScene({ palette: null })
+    const v = new SandboxView({
+      canvas: null,
+      scene: tab.scene,
+      statusEl: $('#status'),
+    })
+    await v.open()
+    return v
+  },
+  // Sandbox uses the default canCloseLeaf (disabled only when this
+  // is the only leaf in the tree).
+  onPaneFocus(tab, _leafId) {
+    // The active pane drives the "legacy tab.viewer" alias the rest
+    // of the studio reads through hostBridge + getActiveSandboxView.
+    tab.viewer = tab.panes.get(tab.activePaneId) || tab.viewer
+  },
 }
 
-// LeafSlot — Preact wrapper that mounts a sandbox pane's canvas into
-// its leaf cell.  The leaf cell is created by SplitContainer; LeafSlot
-// is its content.  The ref+useEffect pattern lets us appendChild the
-// (non-Preact-owned) canvas into the cell AFTER Preact places the
-// cell in the DOM, and detach on unmount so disposing a pane cleanly
-// pulls its GL surface out.
-function LeafSlot({ tab, leafId, hostCallbacks, viewFactory }) {
-  const mountRef = useRef(null)
-  useEffect(() => {
-    const slot = mountRef.current
-    if (!slot) return
-    let cancelled = false
-    let view = tab.panes.get(leafId)
-    let canvas = view ? view.canvas : null
-    // Lazy-create the view + open() it on first mount.
-    const ensure = async () => {
-      if (!view) {
-        view = await viewFactory(leafId)
-        if (cancelled) {
-          // Tab switched away before the view finished loading — drop
-          // the half-built view rather than leak it into the registry.
-          try { view.dispose?.() } catch { /* ignore */ }
-          return
-        }
-        tab.panes.set(leafId, view)
-        canvas = view.canvas
-      }
-      if (canvas && canvas.parentNode !== slot) slot.appendChild(canvas)
-      // Pointerdown on the canvas marks this pane active so panels
-      // follow focus.  We attach once per view-canvas pair (idempotent
-      // via _splitFocusWired).
-      if (canvas && !canvas._splitFocusWired) {
-        canvas._splitFocusWired = true
-        canvas.addEventListener('pointerdown', () => {
-          hostCallbacks.onPaneFocus?.(leafId)
-        }, true)  // capture so we beat the view's own click handler
-      }
-    }
-    ensure()
-    return () => {
-      cancelled = true
-      // On leaf unmount (close pane or tab close), pull the canvas
-      // out but keep the view alive if the leaf is just re-rendering
-      // (which Preact does on tree change).  The garbage-collect pass
-      // in onTreeChange decides whether to dispose() the view.
-      if (canvas && canvas.parentNode === slot) {
-        try { slot.removeChild(canvas) } catch { /* ignore */ }
-      }
-    }
-  }, [leafId])
-  return html`<div class="mv-sandbox-pane-slot" ref=${mountRef} />`
+// ── Public surface — re-exported with sandbox-flavoured names so
+// the tab.js / register-tab.js callers keep their existing imports.
+
+export function mountSandboxSplit(tab, stage, cb = null) {
+  // Per-tab adapter — merge editor-static adapter (SANDBOX_ADAPTER)
+  // with caller-supplied per-tab callbacks so tab.js can update its
+  // own module-let aliases on pane focus / tree change without the
+  // adapter having to know about them.
+  const adapter = cb ? _wrapAdapter(SANDBOX_ADAPTER, cb) : SANDBOX_ADAPTER
+  mountSplit(tab, stage, adapter)
 }
 
-// mountSandboxSplit — main entry point.  Called by activateSandboxTab
-// each time the tab becomes active.  Idempotent: initial call mounts
-// the SplitContainer into the stage; later calls re-render with the
-// current tree.
-//
-// hostCallbacks shape:
-//   makeView(leafId)    → async (leafId) => SandboxView for that leaf
-//   onPaneFocus(leafId) → notification that a pane was clicked
-//   onActiveViewChange(view) → emitted when the active pane changes
-//                              (so the tab can swap _sandboxViewInstance)
-//   onTreeChange(tree)  → optional; called after a divider drag or
-//                         a split/close mutates the tree
-export function mountSandboxSplit(tab, stage, hostCallbacks) {
-  ensureSplitState(tab)
-  // Mount root — a per-tab <div> that hosts the SplitContainer.  We
-  // create it once and reuse so a tab swap can simply re-attach it
-  // to the stage without rebuilding the Preact tree.
-  if (!tab._splitMount) {
-    tab._splitMount = document.createElement('div')
-    tab._splitMount.className = 'mv-split-mount'
-  }
-  if (tab._splitMount.parentNode !== stage) stage.appendChild(tab._splitMount)
-  renderSplitTab(tab, hostCallbacks)
-}
-
-// detachSandboxSplit — pull this tab's mount root out of the stage.
-// Called by activateSandboxTab on every OTHER tab during a switch so
-// the incoming tab's mount is the only one in the DOM.  The Preact
-// tree, the panes Map, and the scene all stay alive in memory so
-// re-activation rehydrates them instantly.
-export function detachSandboxSplit(tab) {
-  const mount = tab._splitMount
-  if (mount && mount.parentNode) {
-    try { mount.parentNode.removeChild(mount) } catch { /* ignore */ }
+function _wrapAdapter(base, cb) {
+  return {
+    ...base,
+    onPaneFocus(tab, leafId) {
+      try { base.onPaneFocus && base.onPaneFocus(tab, leafId) } catch { /* ignore */ }
+      try { cb.onPaneFocus && cb.onPaneFocus(tab, leafId) } catch { /* ignore */ }
+    },
+    onTreeChange(tab, next) {
+      try { base.onTreeChange && base.onTreeChange(tab, next) } catch { /* ignore */ }
+      try { cb.onTreeChange && cb.onTreeChange(tab, next) } catch { /* ignore */ }
+    },
   }
 }
 
-// revivePanes — defensive pass for re-activation.  Walks every pane
-// in tab.panes and makes sure its canvas is appendChild'd back into
-// its leaf slot.  Useful when Preact reconciliation around tree
-// changes (split / close-pane / tab swap) leaves a canvas orphaned
-// from its mount-slot DOM element — the LeafSlot useEffect normally
-// handles re-mount, but capture-phase re-orderings in deep trees
-// occasionally drop the canvas reference, leaving a blank pane that
-// the user can't right-click into.  This sweep finds the slot by
-// `[data-leaf-id]` (set by SplitContainer on every leaf wrapper) and
-// re-attaches if needed.  Idempotent.
-export function revivePanes(tab) {
-  if (!tab || !tab._splitMount || !tab.panes) return
-  for (const [leafId, view] of tab.panes) {
-    if (!view || !view.canvas) continue
-    const leafEl = tab._splitMount.querySelector(`.mv-split-leaf[data-leaf-id="${leafId}"]`)
-    if (!leafEl) continue
-    const slot = leafEl.querySelector('.mv-sandbox-pane-slot')
-    if (!slot) continue
-    if (view.canvas.parentNode !== slot) {
-      try { slot.appendChild(view.canvas) } catch { /* ignore */ }
-    }
-  }
+export function detachSandboxSplit(tab) { detachSplit(tab) }
+
+export function disposeSandboxSplit(tab) { disposeSplit(tab) }
+
+export function ensureSplitState(tab) { commonEnsure(tab) }
+
+export function revivePanes(tab) { commonRevive(tab, SANDBOX_ADAPTER) }
+
+// startAllRenderers / stopAllRenderers — sandbox uses the common
+// implementation that walks tab.panes and calls view.renderer.start
+// / .stop on each.
+export function startAllRenderers(tab) { commonStartAll(tab) }
+export function stopAllRenderers(tab)  { commonStopAll(tab) }
+
+// createSharedScene — kept for tab.js compatibility.  Pure
+// re-export so the scene module isn't pulled in by callers that
+// don't need it.
+export function createSharedScene(opts) {
+  return new SandboxScene(opts)
 }
 
-// disposeSandboxSplit — full teardown on tab close.  Stops every
-// pane's renderer, drops their canvases, disposes the view objects,
-// disposes the scene, unmounts the Preact tree.
-export function disposeSandboxSplit(tab) {
-  if (tab.panes) {
-    for (const view of tab.panes.values()) {
-      try { view.dispose?.() } catch { /* ignore */ }
-    }
-    tab.panes.clear()
-  }
-  if (tab.scene) {
-    try { tab.scene.dispose?.() } catch { /* ignore */ }
-    tab.scene = null
-  }
-  if (tab._splitMount) {
-    try { render(null, tab._splitMount) } catch { /* ignore */ }
-    if (tab._splitMount.parentNode) {
-      try { tab._splitMount.parentNode.removeChild(tab._splitMount) } catch { /* ignore */ }
-    }
-    tab._splitMount = null
-  }
-  tab.split = null
-  tab.activePaneId = null
-}
-
-// renderSplitTab — re-render the SplitContainer with the tab's
-// current tree.  Called after every tree mutation (split / close /
-// divider drag commit).  Idempotent.
-function renderSplitTab(tab, hostCallbacks) {
-  const onTreeChange = (next) => {
-    tab.split = next
-    // Garbage-collect panes whose leaves no longer exist.  Splits +
-    // divider drags preserve all leaves; close-pane removes one.
-    const liveIds = new Set(leafIds(next))
-    for (const [id, view] of tab.panes) {
-      if (!liveIds.has(id)) {
-        try { view.dispose?.() } catch { /* ignore */ }
-        tab.panes.delete(id)
-      }
-    }
-    // If the active pane was the one closed, fall back to the first
-    // surviving leaf.  Panels follow focus, so this keeps the
-    // inspector chrome populated.
-    if (!liveIds.has(tab.activePaneId)) {
-      tab.activePaneId = [...liveIds][0] || null
-      const view = tab.activePaneId ? tab.panes.get(tab.activePaneId) : null
-      if (view) hostCallbacks.onActiveViewChange?.(view)
-    }
-    renderSplitTab(tab, hostCallbacks)
-    hostCallbacks.onTreeChange?.(next)
-  }
-  const renderLeaf = (leafId) => html`
-    <${LeafSlot}
-      key=${leafId}
-      tab=${tab}
-      leafId=${leafId}
-      hostCallbacks=${hostCallbacks}
-      viewFactory=${hostCallbacks.makeView} />
-  `
-  render(
-    html`<${SplitContainer}
-            tree=${tab.split}
-            onTreeChange=${onTreeChange}
-            renderLeaf=${renderLeaf} />`,
-    tab._splitMount,
-  )
-}
-
-// wireSplitContextMenu — attach the shift+right-click handler that
-// pops the Split H / Split V / Close Pane menu.  Caller hands us:
-//   canvas      — the pane's <canvas>
-//   getTab()    — returns the tab the canvas belongs to (lets the
-//                 menu close-pane re-render the right tab)
-//   leafId      — this pane's id in the split tree
-//   hostCallbacks — same shape as mountSandboxSplit's
-//
-// Returns a detach() closure for view dispose.
-//
-// Why shift+right-click instead of plain right-click: the sandbox
-// already binds plain right-click to "Move here / Attack this unit"
-// (TA RTS convention).  The split menu is a power-user gesture so it
-// gets the modifier.
-export function wireSplitContextMenu({ canvas, getTab, leafId, hostCallbacks }) {
-  if (!canvas) return () => {}
-  const onContext = async (e) => {
-    if (!e.shiftKey) return                 // not the split gesture
-    e.preventDefault()
-    e.stopPropagation()                     // beat the view's own ctxmenu
-    const tab = getTab()
-    if (!tab) return
-    const items = [
-      { id: 'split-h', label: 'Split Horizontal', hint: '⇧RClick' },
-      { id: 'split-v', label: 'Split Vertical' },
-      { divider: true },
-      { id: 'close', label: 'Close Pane', disabled: isOnlyLeaf(tab.split, leafId) },
-    ]
-    const choice = await openContextMenu({ x: e.clientX, y: e.clientY, items })
-    if (!choice) return
-    if (choice === 'split-h') {
-      tab.split = splitLeaf(tab.split, leafId, 'h')
-    } else if (choice === 'split-v') {
-      tab.split = splitLeaf(tab.split, leafId, 'v')
-    } else if (choice === 'close') {
-      tab.split = closeLeaf(tab.split, leafId)
-    }
-    renderSplitTab(tab, hostCallbacks)
-  }
-  canvas.addEventListener('contextmenu', onContext, true)  // capture
-  return () => canvas.removeEventListener('contextmenu', onContext, true)
-}
-
-// createSharedScene — convenience to lazily create the per-tab
-// SandboxScene.  Hosted here (not in tab.js) so the scene+view
-// creation pair lives together.
-export function createSharedScene({ palette = null } = {}) {
-  return new SandboxScene({ palette })
+// wireSplitContextMenu — historically a separately-exported helper
+// the tab wired onto each pane's canvas manually.  The generic
+// split-host now handles context-menu wiring inside its LeafSlot
+// effect (idempotent via the canvas._splitCtxWired flag), so this
+// stays as a no-op shim for backward compatibility.  Will be
+// removed once the lone tab.js call site is cleaned up.
+export function wireSplitContextMenu(_opts) {
+  return () => {}
 }

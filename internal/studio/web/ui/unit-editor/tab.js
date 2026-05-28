@@ -25,7 +25,6 @@ import {
   mountUnitSplit,
   revivePanes,
   startAllRenderers,
-  wireSplitContextMenu,
 } from './split-host.js'
 
 export async function activateModelTab(tab) {
@@ -124,37 +123,16 @@ export async function activateModelTab(tab) {
   // panes get ModelObserverView instances that share the primary's
   // binding + runtime (animation-driving) but own their own
   // camera / canvas / renderer.  See /ui/unit-editor/split-host.js.
+  // The generic split-host wires the right-click context menu on
+  // every pane's canvas (idempotent via the canvas._splitCtxWired
+  // flag) so we don't have to call wireSplitContextMenu manually.
   if (stage) {
-    // The split-host hooks the active-pane-focus callback so the
-    // primary's hotkeys + observer hotkeys gate on whichever pane
-    // the user last pointerdown'd on.  For unit editor MVP we just
-    // track activePaneId; the active-pane → inspector follow lands
-    // with Phase 6.
-    const hostCb = {
-      onPaneFocus: (leafId) => {
-        if (tab.activePaneId === leafId) return
-        tab.activePaneId = leafId
-      },
-    }
-    mountUnitSplit(tab, stage, hostCb)
+    mountUnitSplit(tab, stage)
     // Defensive canvas re-attach (Preact occasionally orphans a
     // canvas from its slot across tree changes) + start every
     // pane's renderer (deactivate stopped them all).
     revivePanes(tab)
     startAllRenderers(tab)
-    // Wire the split context menu on the primary's canvas.  Plain
-    // right-click here (no conflicting gameplay gesture in the
-    // unit editor).  Wired ONCE per primary canvas via a flag so
-    // re-activations don't stack listeners.
-    if (tab.viewer && tab.viewer.canvas && !tab.viewer.canvas._splitCtxWired) {
-      tab.viewer.canvas._splitCtxWired = true
-      wireSplitContextMenu({
-        canvas: tab.viewer.canvas,
-        getTab: () => tab,
-        leafId: tab._primaryLeafId,
-        hostCallbacks: hostCb,
-      })
-    }
   }
   // Wire the per-frame inspector refresh callback the first time
   // the renderer is alive (it might not be on the very first
