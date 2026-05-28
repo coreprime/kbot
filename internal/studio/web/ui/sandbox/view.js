@@ -816,9 +816,19 @@ export class SandboxView {
       return null
     }
     const SLOT_BADGE = [null, '2', '3']
+    // Cap how many selected units get a destination / path overlay.  A
+    // large selection (a 100-unit army) would otherwise draw 100 end-
+    // state markers + 100 six-dot trails + attack glyphs — unreadable
+    // noise and a lot of per-frame DOM.  Show only the first few live
+    // units; the move/attack order still applies to the WHOLE selection,
+    // this just trims the visual preview.
+    const MAX_PREVIEW_UNITS = 12
+    let previewShown = 0
     for (const id of this.scene.selected) {
+      if (previewShown >= MAX_PREVIEW_UNITS) break
       const u = this.scene.unitById(id)
       if (!u || u.dead) continue
+      previewShown++
       // Move marker + trail — flow of cursormove glyphs from the
       // unit's current pos to its destination.  Drawn first so the
       // attack markers (which sit on top in z-order via DOM order)

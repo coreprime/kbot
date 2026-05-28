@@ -54,10 +54,11 @@ export function setActiveModelViewer(v) {
 // R hotkey, and freshly-opened model tabs.  Mutated through the React
 // ribbon's bridge (which writes both this var and the renderer) and
 // the configureHostBridge.setAutoRotate callback (which mirrors back
-// into the React state signal).  Default matches the React signal's
-// initial `autoRotate: true` so an early open before the user touches
-// the toggle paints the same default both surfaces show.
-let _unitEditorAutoRotate = true
+// into the React state signal).  Default OFF — a freshly-opened unit
+// sits still until the user turns rotation on (R key or the Camera
+// menu's Auto-Rotate toggle).  Must match the React ribbon signal's
+// initial `autoRotate: false` so both surfaces agree on first paint.
+let _unitEditorAutoRotate = false
 
 export function getUnitEditorAutoRotate() {
   return _unitEditorAutoRotate

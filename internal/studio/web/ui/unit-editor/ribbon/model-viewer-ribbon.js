@@ -46,7 +46,7 @@ const _state = signal({
   wireWidth:         1,           // 1..6 px
 
   ground:            'terrain',   // 'grid' | 'terrain' | 'sea' | 'off'
-  autoRotate:        true,
+  autoRotate:        false,        // off by default — user toggles via R / Camera menu
 
   env:               'greenworld',
   team:              'blue',

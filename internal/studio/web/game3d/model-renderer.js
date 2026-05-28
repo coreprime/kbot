@@ -653,7 +653,12 @@ export class ModelRenderer {
     this.seabedScaleMul = 1.0
     this.seabedRockChance = 0.12
 
-    this.autoRotate = true
+    // Auto-rotate is OFF by default — the user opts in (R key or the
+    // Camera menu's Auto-Rotate toggle).  The sandbox already forces it
+    // off explicitly; the unit viewer reads its persisted/host default
+    // via tab activate.  Starting false avoids an initial spin before
+    // that host value is applied.
+    this.autoRotate = false
     this.rotateY = 0
     this.lastFrameMs = 0
     this.running = false
