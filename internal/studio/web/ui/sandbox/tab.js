@@ -45,6 +45,13 @@ import { ensureSandboxPanel, showSandboxPanel } from './spawn-picker.js'
 import { wireSandboxRibbon } from './ribbon-bridge.js'
 import { wireSandboxControlsIntercept } from './controls-intercept.js'
 import { resetSandboxFocusedUnit } from '../common/refresh-tick.js'
+import {
+  mountSandboxSplit,
+  detachSandboxSplit,
+  wireSplitContextMenu,
+  createSharedScene,
+  ensureSplitState,
+} from './split-host.js'
 
 // `_sandboxViewInstance` tracks the CURRENTLY ACTIVE sandbox tab's
 // SandboxView.  Each sandbox tab owns its own SandboxView (stored on
@@ -109,59 +116,127 @@ export async function activateSandboxTab(tab) {
       && typeof modelViewerInstance._mvControls.setSilenced === 'function') {
     try { modelViewerInstance._mvControls.setSilenced(true) } catch { /* ignore */ }
   }
-  // Stop every OTHER sandbox tab's renderer too — two sandbox tabs
-  // each have their own SandboxView, and only the active one should
-  // own the canvas / RAF loop.  Without this, an inactive sandbox
-  // tab's renderer kept ticking + drew its scene over the canvas
-  // each frame.  Clear the canvas after stopping so the new tab's
-  // first paint doesn't get layered over the previous tab's frame.
+  // Stop every OTHER tab's renderers too.  Sandbox tabs since Phase 3
+  // can host N panes (one renderer per pane) so we walk t.panes when
+  // present and fall back to the legacy single-viewer path otherwise.
+  // Without this, an inactive sandbox tab's renderers keep ticking +
+  // draw their scenes over the canvas each frame.
   const tabs = hostCallbacks.getTabs?.() || []
   for (const t of tabs) {
     if (t === tab) continue
-    const v = t.viewer
-    if (v && v.renderer && v.renderer.stop) {
-      try {
-        v.renderer.stop()
-        v.renderer.clearCanvas?.()
-      } catch { /* ignore */ }
+    if (t.panes && t.panes.size > 0) {
+      for (const v of t.panes.values()) {
+        if (v && v.renderer && v.renderer.stop) {
+          try { v.renderer.stop() } catch { /* ignore */ }
+          try { v.renderer.clearCanvas?.() } catch { /* ignore */ }
+        }
+      }
+    } else {
+      const v = t.viewer
+      if (v && v.renderer && v.renderer.stop) {
+        try { v.renderer.stop(); v.renderer.clearCanvas?.() } catch { /* ignore */ }
+      }
     }
   }
-  // Per-tab SandboxView — each sandbox tab owns its own scene,
-  // runtime, selection set, camera state, AND canvas.  Lazy-
-  // constructed on first activation; reused across re-activations
-  // of the SAME tab so units / camera framing survive.  The canvas
-  // gets attached into the stage on activation and detached on the
-  // way out so an inactive tab's GL surface is not in the DOM and
-  // can't bleed through into the active tab's frame.
+  // Per-tab split mount — each sandbox tab owns its own scene,
+  // runtime, selection set, split tree, and the panes that observe
+  // them.  Lazy-constructed on first activation; reused across
+  // re-activations of the SAME tab so units / camera framing survive.
+  // The mount root gets attached into the stage on activation and
+  // detached on the way out so an inactive tab's surfaces are not in
+  // the DOM and can't bleed through into the active tab's frame.
   const stage = document.querySelector('.model-viewer-stage')
-  // Detach every OTHER tab's canvas (sandbox + unit) from the stage
-  // so the incoming sandbox's canvas is the only one in the DOM
-  // tree.  Both ModelViewer and SandboxView implement detach()
-  // identically.  Also drop the legacy boot-time #model-viewer-canvas
-  // (if still in the stage from page load) — every tab owns its own
-  // per-tab canvas now and the legacy one is never re-attached.
+  // Detach every OTHER tab's canvas (sandbox split mount + unit viewer
+  // canvas) from the stage so the incoming sandbox's mount is the
+  // only canvas-bearing tree in the DOM.  The legacy boot-time
+  // #model-viewer-canvas (if still in the stage from page load) is
+  // also pulled — every tab owns its own per-tab surface now and the
+  // legacy one is never re-attached.
   if (stage) {
     for (const t of tabs) {
       if (t === tab) continue
-      if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
+      if (t._splitMount) detachSandboxSplit(t)
+      else if (t.viewer && typeof t.viewer.detach === 'function') t.viewer.detach()
     }
     const legacyCanvas = sharedModelViewerCanvas()
     if (legacyCanvas && legacyCanvas.parentNode === stage) {
       stage.removeChild(legacyCanvas)
     }
   }
-  if (!tab.viewer) {
-    const mod = await import('./view.js')
-    tab.viewer = new mod.SandboxView({
+  // Shared scene — one engine + smoke trails + audio debounce per tab,
+  // observed by every pane the tab hosts.  Lazy-created on first
+  // activation so a tab that never gets focused doesn't allocate.
+  if (!tab.scene) tab.scene = createSharedScene({ palette: null })
+  // Pane factory — invoked by split-host whenever a leaf needs a
+  // SandboxView (initial open + every Split H/V from the menu).
+  // Wires the shift+right-click split menu, opens the view, and
+  // returns it ready to mount its canvas into the leaf cell.
+  const { SandboxView } = await import('./view.js')
+  const makeView = async (leafId) => {
+    const v = new SandboxView({
+      canvas: null,            // SandboxView auto-creates its own
+      scene: tab.scene,        // shared
       statusEl: $('#status'),
     })
+    await v.open()
+    // Wire the split menu on this pane's canvas.  The detach closure
+    // lives on the view so view.dispose() can sweep it.
+    v._splitCtxDetach = wireSplitContextMenu({
+      canvas: v.canvas,
+      getTab: () => tab,
+      leafId,
+      hostCallbacks: getPaneCallbacks(),
+    })
+    return v
   }
-  if (typeof tab.viewer.attach === 'function' && stage) tab.viewer.attach(stage)
-  // Swap the module-local to whichever tab is now active so the rest
-  // of the studio (panels, ribbon handlers, refreshMvInspectors)
-  // reads from this tab's view via getActiveSandboxView().
-  _sandboxViewInstance = tab.viewer
-  await _sandboxViewInstance.open()
+  // Pane-focus callback — when the user pointerdown's inside a pane,
+  // promote it to be the active pane.  For MVP we just track the id;
+  // Phase 6 wires inspector focus + hotkey gating to it.
+  const onPaneFocus = (leafId) => {
+    if (tab.activePaneId === leafId) return
+    tab.activePaneId = leafId
+    const view = tab.panes.get(leafId)
+    if (view) {
+      _sandboxViewInstance = view
+      tab.viewer = view  // legacy compat
+    }
+  }
+  // onActiveViewChange — split-host emits this when the active pane
+  // changes (e.g. the active pane was closed and a sibling promoted).
+  const onActiveViewChange = (view) => {
+    _sandboxViewInstance = view
+    tab.viewer = view
+  }
+  const getPaneCallbacks = () => ({
+    makeView,
+    onPaneFocus,
+    onActiveViewChange,
+  })
+  // Mount + ensure the active pane is open.  mountSandboxSplit just
+  // attaches the mount root + renders the Preact tree; the actual
+  // SandboxView for the active pane is created by the LeafSlot's
+  // effect.  We await one microtask + the makeView promise via a
+  // direct ensure() so the first activation completes synchronously
+  // with respect to downstream setup (panels, ribbon).
+  // Seed the split state (tab.split, tab.panes, tab.activePaneId) so
+  // we know the active leaf id before creating its view.
+  ensureSplitState(tab)
+  // Force the active pane's view into existence BEFORE rendering the
+  // split tree.  The LeafSlot useEffect that mounts the canvas runs
+  // AFTER render, so without this we'd race a sync downstream read of
+  // tab.viewer against the leaf's async makeView.
+  if (!tab.panes.has(tab.activePaneId)) {
+    const view = await makeView(tab.activePaneId)
+    tab.panes.set(tab.activePaneId, view)
+  }
+  // Swap the module-local + legacy tab.viewer so the rest of the
+  // studio reads the active pane's view.
+  _sandboxViewInstance = tab.panes.get(tab.activePaneId)
+  tab.viewer = _sandboxViewInstance
+  // Mount the SplitContainer into the stage + render the tree.  The
+  // LeafSlot effect will see the active pane's view already in panes
+  // and just appendChild its canvas to the cell.
+  mountSandboxSplit(tab, stage, getPaneCallbacks())
   // Push the current Runtime-overlay slider rate into the new
   // sandbox's runtime so it starts at the user's chosen speed instead
   // of the default 1.0×.  Each sandbox tab owns its own CobRuntime,
