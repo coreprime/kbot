@@ -27,12 +27,8 @@ import { TAPalette } from '../../model3d/palette.js'
 import { SandboxScene } from './scene.js'
 import { attachOrbitControls } from '../../model3d/camera-controls.js'
 import { ArmedCursor } from '../../model3d/armed-cursor.js'
-import { spawnProjectile, SFX_FIRE_FLASH } from '../../model3d/weapon-driver.js'
 import { teamColorForSide } from '../../model3d/team-colors.js'
 import {
-  initSmokeTrails,
-  tickSmokeTrails,
-  subscribeEngine,
   wireHotkeys,
   wrapCobWithAggregate,
   disposeView,
@@ -40,13 +36,21 @@ import {
 import { advanceCobLifecycle } from '../common/cob-lifecycle.js'
 
 export class SandboxView {
-  constructor({ canvas, statusEl, onModelLoaded } = {}) {
+  constructor({ canvas, scene = null, statusEl, onModelLoaded } = {}) {
+    // Optional shared scene — when supplied (the split-pane case), this
+    // view observes that scene's engine + uses its smoke trails +
+    // selection set, but draws into ITS OWN canvas/camera/renderer.
+    // When null (the single-pane case), open() creates a fresh
+    // SandboxScene on first paint.  This is the inversion that lets
+    // a tab host N viewports against one engine.
+    this._externalScene = scene
     // Engine subscription unsubscribe closures captured by
-    // subscribeEngine(); _smokeTrails is the lazy SmokeTrailManager
-    // installed by initSmokeTrails(); _hotkeysDetach is the close
-    // returned by wireHotkeys().  disposeView() sweeps all three.
+    // subscribeEngine() (currently unused since 'fire' / 'death' /
+    // 'move-stop' have moved to scene-level, but kept for any
+    // view-specific subscriptions a host wires later).  _hotkeysDetach
+    // is the close returned by wireHotkeys().  disposeView() sweeps
+    // both.
     this._engineSubs = []
-    this._smokeTrails = null
     this._hotkeysDetach = null
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
@@ -171,70 +175,33 @@ export class SandboxView {
       })
     }
     if (!this.scene) {
-      this.scene = new SandboxScene({ palette: this.palette })
+      if (this._externalScene) {
+        // Split-pane case — sibling view already constructed the
+        // scene; we just observe it.  Engine subscriptions, smoke
+        // trails, and the FBI sounds debounce all live there.
+        this.scene = this._externalScene
+      } else {
+        // Single-pane case — own the scene.  The constructor wires
+        // 'fire' / 'death' / 'move-stop' subscriptions internally so
+        // projectile spawn + death puffs + arrival voice all fire
+        // exactly once per event regardless of observer count.
+        this.scene = new SandboxScene({ palette: this.palette })
+      }
       // Push the active world's gravity into the engine so the
       // ballistic aim solver agrees with the projectile flight sim.
       // Renderer environments differ (Lunar = lighter, default = 80
       // wu/s²); without the sync, cannon turrets would aim for one
-      // gravity while shells fly under another and miss.
+      // gravity while shells fly under another and miss.  In the
+      // split-pane case the first-opened pane's renderer wins (each
+      // pane could have its own environment; gravity is engine-level
+      // so they reconcile to one value — last writer wins).
       if (typeof this.renderer.getGravity === 'function') {
         this.scene.engine.setGravity(this.renderer.getGravity())
       }
-      // Hand the renderer to the engine for cross-unit dynamic light
-      // Cross-unit dynamic-light aggregation is pull-side now (Phase D).
-      // The per-frame onAfterFrame hook below queries
+      // Cross-unit dynamic-light aggregation is pull-side (Phase D):
+      // the per-frame onAfterFrame hook below queries
       // engine.getSceneLight() and forwards the result to
-      // this.renderer.setPulseLight — the engine itself is fully
-      // headless and never sees the renderer.
-      // SmokeTrailManager + engine event subscriptions are scaffolded
-      // by the shared view-helpers — initSmokeTrails returns the lazy
-      // instance on this._smokeTrails, and subscribeEngine remembers
-      // the unsubscribe closures on this._engineSubs so disposeView()
-      // can tear them down cleanly.  spawnProjectile and the death-
-      // puff handler reach into the captured state via
-      // this._smokeTrails.
-      initSmokeTrails(this)
-      subscribeEngine(this, 'fire', (ev) => {
-        // Spawn the visible projectile through the shared weapon
-        // driver.  Passing the SmokeTrailManager lets spawnProjectile
-        // register a missile trail inline when the chosen visual
-        // kind is SFX_PROJECTILE_MISSILE — saves us duplicating the
-        // missile-vs-bullet classification here.  No-ops cleanly when
-        // the unit has no FBI weapon meta.
-        if (!ev.weapon || !ev.weapon.name) return
-        const gravity = (typeof this.renderer.getGravity === 'function')
-          ? this.renderer.getGravity() : 80
-        try {
-          spawnProjectile({
-            binding: ev.unit.binding,
-            weapon: ev.weapon,
-            anchor: ev.anchor,
-            target: ev.target,
-            palette: this.palette,
-            gravity,
-            smokeTrails: this._smokeTrails,
-          })
-        } catch { /* ignore */ }
-      })
-      // move-stop fires when a unit reaches its destination (or its
-      // move target is cleared by the engine after the prey dies).
-      // Play the TA arrived1-bank ack so the user gets the familiar
-      // "order complete" voice without each view having to wire its
-      // own movement-completion hook.
-      subscribeEngine(this, 'move-stop', (ev) => {
-        if (ev && ev.unit) {
-          this.playUnitSoundRandom(ev.unit, ['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
-        }
-      })
-      subscribeEngine(this, 'death', (ev) => {
-        // Death puff so the kill reads visually.  Engine has already
-        // marked the unit dead + cleared its orders.
-        const b = ev.unit && ev.unit.binding
-        if (!b || !b.particles) return
-        b.particles.emit(SFX_FIRE_FLASH, ev.anchor, {
-          size: 32, lifeMs: 600, color: [1.6, 0.6, 0.2, 1.0],
-        })
-      })
+      // this.renderer.setPulseLight.  The engine itself stays headless.
     }
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
@@ -296,12 +263,9 @@ export class SandboxView {
         if (light) this.renderer.setPulseLight(light.pos, light.color, light.strength)
         else this.renderer.setPulseLight(null, null, 0)
       }
-      // Advance in-flight missile smoke trails through the shared
-      // tickSmokeTrails helper.  It scales by playbackRate and freezes
-      // (rate = 0) on pause — the unified gate every view shares so
-      // smoke puffs stop streaming out of a frozen missile without
-      // each view re-deriving the pause/rate math.
-      tickSmokeTrails(this, dtMs)
+      // Smoke trails advance INSIDE scene.tick (scene owns the
+      // SmokeTrailManager so multiple panes observe one set of trails).
+      // No extra tick call needed here.
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
@@ -1751,46 +1715,19 @@ export class SandboxView {
 
   // ── Unit acknowledgement sounds ───────────────────────────────────
   //
-  // TA units carry a UnitSounds bank in their FBI: select1, ok1,
-  // arrived1, activate, deactivate, etc.  playUnitSound looks up the
-  // event key in the unit's resolved sounds map, picks a wav stem,
-  // and routes the playback through the unit's own AudioPool so the
-  // sim-speed slider + pause toggle apply and the Audio inspector
-  // shows the entry with its source pos + progress.  Debounced at
-  // 80ms per unit+event so a flurry of clicks doesn't stack Audio
-  // objects.
+  // Thin pass-throughs to scene.playUnitSound* — the implementations
+  // (and the per-unit/per-event debounce ledger) moved to scene-level
+  // in Phase 2A so multiple panes sharing one scene don't each play
+  // the same TA voice line.  The pass-throughs stay here so existing
+  // view call sites (issueMove / issueAttack / selection ack) don't
+  // change shape.
 
   playUnitSound(unit, eventKey) {
-    if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
-    const stem = unit.meta.sounds[eventKey]
-    if (!stem) return false
-    if (!this._unitSoundDebounce) this._unitSoundDebounce = new Map()
-    const key = `${unit.id}:${eventKey}`
-    const now = performance.now()
-    const last = this._unitSoundDebounce.get(key) || 0
-    if (now - last < 80) return false
-    this._unitSoundDebounce.set(key, now)
-    const pool = unit.binding.audio
-    if (!pool) return false
-    pool.play(stem, {
-      vol: 0.85,
-      kind: 'unit',
-      source: `${unit.name || 'Unit'}: ${eventKey}`,
-      pos: [unit.pos.x, unit.pos.y || 0, unit.pos.z],
-    })
-    return true
+    return this.scene ? this.scene.playUnitSound(unit, eventKey) : false
   }
 
-  // playUnitSoundRandom picks one event from the list (filtered to
-  // those actually present in the unit's sounds map) and plays it.
-  // Lets a unit cycle through ok1..ok5 / arrived1..arrived5 the way
-  // TA does, without callers tracking an index.
   playUnitSoundRandom(unit, eventKeys) {
-    if (!unit || !unit.meta || !unit.meta.sounds) return false
-    const present = eventKeys.filter((k) => unit.meta.sounds[k])
-    if (present.length === 0) return false
-    const pick = present[Math.floor(Math.random() * present.length)]
-    return this.playUnitSound(unit, pick)
+    return this.scene ? this.scene.playUnitSoundRandom(unit, eventKeys) : false
   }
 
   // ── Scene-wide effect / audio aggregation ─────────────────────────
