@@ -692,7 +692,14 @@ export class SandboxView {
     if (!this._shiftPreviewHost) {
       const host = document.createElement('div')
       host.id = 'sandbox-shift-preview'
-      host.style.cssText = 'position: fixed; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 9998;'
+      // Clipping container: positioned + sized to THIS pane's canvas
+      // every frame (below) with overflow:hidden so move / attack / path
+      // glyphs can never spill onto the ribbon, other panes, or off the
+      // window — a target projected off-screen (zoomed out, behind a
+      // sibling pane) is clipped at the canvas edge instead of floating
+      // over the chrome.  Child glyphs are absolutely positioned in
+      // host-local (canvas) coords.
+      host.style.cssText = 'position: fixed; pointer-events: none; z-index: 9998; overflow: hidden;'
       document.body.appendChild(host)
       this._shiftPreviewHost = host
       this._shiftPreviewEls = []  // pool of {kind, el} for reuse
@@ -726,7 +733,7 @@ export class SandboxView {
       } else {
         const el = document.createElement('div')
         el.style.cssText = [
-          'position: fixed',
+          'position: absolute',
           'width: 32px', 'height: 32px',
           'margin-left: -16px', 'margin-top: -16px',
           'background-size: contain',
@@ -763,7 +770,7 @@ export class SandboxView {
             'border-radius: 7px',
             'pointer-events: none',
           ].join('; ')
-          entry.el.style.position = 'fixed' // keep the host positioning model
+          entry.el.style.position = 'absolute' // host-local positioning model
           entry.el.appendChild(b)
           entry.badge = b
         }
@@ -775,11 +782,21 @@ export class SandboxView {
       elIdx++
       return entry.el
     }
+    // Park the clipping host over THIS pane's canvas so overflow:hidden
+    // trims any glyph that projects outside the viewport.
     const canvasRect = this.canvas.getBoundingClientRect()
+    host.style.left = canvasRect.left + 'px'
+    host.style.top = canvasRect.top + 'px'
+    host.style.width = canvasRect.width + 'px'
+    host.style.height = canvasRect.height + 'px'
+    // #worldToScreen already returns canvas-relative pixels, which are
+    // exactly host-local coords now that the host sits on the canvas —
+    // so no client-space offset is added (the glyphs are absolutely
+    // positioned children of the host).
     const projW = (x, y, z) => {
       const screen = this.#worldToScreen(x, y, z)
       if (!screen) return null
-      return [screen[0] + canvasRect.left, screen[1] + canvasRect.top]
+      return [screen[0], screen[1]]
     }
     // Helper — pull a target position from a weapon slot's stored
     // record.  Returns null when the slot isn't engaged or the unit
