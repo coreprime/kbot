@@ -133,6 +133,22 @@ export class ModelObserverView {
         this._syncProjectiles()
         this._syncPose()
       }
+      // Command routing — a Move/Fire issued by clicking in THIS
+      // secondary pane drives the same unit as the primary.  We
+      // unproject the click against OUR camera (the angle the user is
+      // looking at) then hand the world ground point to the primary's
+      // MvControls.commandAtGround, which owns the armed-slot / force-
+      // target logic.  Orbit/zoom still work because commandAtGround
+      // no-ops on an unarmed, non-force-target click.
+      this._onCommandClick = (e) => {
+        const mv = this.primary && this.primary._mvControls
+        if (!mv || typeof mv.commandAtGround !== 'function') return
+        const ground = (typeof mv._groundFromClick === 'function')
+          ? mv._groundFromClick(e, this.canvas, this.renderer)
+          : null
+        if (ground) mv.commandAtGround(ground, { shiftKey: e.shiftKey })
+      }
+      this.canvas.addEventListener('click', this._onCommandClick)
     }
     // Mirror the primary's world look immediately so a sea unit's
     // observer pane opens on water (not the default terrain) instead of
@@ -250,6 +266,10 @@ export class ModelObserverView {
     this._disposed = true
     try { this._detachCamera && this._detachCamera() } catch { /* ignore */ }
     this._detachCamera = null
+    if (this._onCommandClick && this.canvas) {
+      try { this.canvas.removeEventListener('click', this._onCommandClick) } catch { /* ignore */ }
+      this._onCommandClick = null
+    }
     try { this.renderer && this.renderer.stop && this.renderer.stop() } catch { /* ignore */ }
     try {
       if (this.localModel && this.renderer && this.renderer.gl) {

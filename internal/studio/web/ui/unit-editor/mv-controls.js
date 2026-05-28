@@ -442,105 +442,12 @@ export class MvControls {
     // after the first.  Store handler refs so dispose() can detach.
     this._canvasHandlers = this._canvasHandlers || {}
     this._canvasHandlers.click = (e) => {
-      // Force-target ground (opt-in) — when the user hasn't armed a
-      // slot, a plain left-click on the ground targets the primary
-      // weapon at that point.  No Shift required in the viewer (there's
-      // only one unit on stage, so the click is unambiguous).  Routes
-      // through the same `targets.primary` field the armed-then-click
-      // path uses, so the existing _updateWeapon SM picks it up next
-      // tick — no duplicate code path.  Gated on the persisted opt-in
-      // flag (Settings → Unit Editor → "Force-target ground on click");
-      // when off, plain canvas clicks pass through to the orbit camera
-      // as before.
-      if (!this.armed
-          && shouldForceTarget({ shiftKey: e.shiftKey, requireShift: false })) {
-        const r = canvas.getBoundingClientRect()
-        const cx = (e.clientX - r.left) * (canvas.width / r.width)
-        const cy = (e.clientY - r.top)  * (canvas.height / r.height)
-        const ground = this.viewer.renderer?.canvasToGroundPoint(cx, cy)
-        if (!ground) return
-        this._ensureCreated()
-        const cob = this.viewer.cob
-        if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
-          cob.start('TargetCleared', [0])
-        }
-        // Reset slot 0's aim-state so a fresh AimPrimary thread runs
-        // against the new target — matches the armed-click path so
-        // commandFire-after-fire and laser-after-target-change behave
-        // identically.
-        const s = this.aimState.primary
-        if (s.thread && !s.thread.dead) s.thread.dead = true
-        s.thread = null
-        s.burstShotsLeft = 0
-        s.nextBurstShotAtMs = 0
-        this.targets.primary = [ground[0], ground[1], ground[2]]
-        // Hand the target to the engine SM — engine.setWeaponTarget
-        // drops the prior aim thread + resets burst + runs
-        // TargetCleared, then the per-tick #stepWeapon spawns aim,
-        // cycles reload + burst, and fires on the cadence the weapon
-        // TDF defines.  One source of truth across sandbox + viewer.
-        this._setEngineWeaponTarget('primary', [ground[0], ground[1], ground[2]])
-        return
-      }
-      if (!this.armed) return
-      // Allow normal canvas drag (orbit) when un-armed; only consume
-      // the click when arming is active.
-      const r = canvas.getBoundingClientRect()
-      const cx = (e.clientX - r.left) * (canvas.width / r.width)
-      const cy = (e.clientY - r.top)  * (canvas.height / r.height)
-      const ground = this.viewer.renderer?.canvasToGroundPoint(cx, cy)
-      if (!ground) return
-      // The renderer applies the unit transform AFTER the click was
-      // unprojected, so target XZ here is in absolute world space —
-      // store the same coordinate system.
-      const slot = this.armed
-      // First-action auto-Create.  Task #125 made Create non-automatic
-      // so users can watch the build-shadow animation, but the Controls
-      // panel issues real commands to a finished unit — the user
-      // expects Move/Fire to "just work" the first time.  Most BOS
-      // scripts initialise state vars (bCanAim, MotionControl threads)
-      // inside Create; without it, Move animates positionally but legs
-      // never move, and Aim* blocks on `while (NOT bCanAim) sleep 100`
-      // forever.  Auto-run Create lazily on first armed-click so the
-      // unit is alive by the time the command lands.
-      this._ensureCreated()
-      // Reset BOS aim-state before every new weapon target.  Without
-      // this, a previous slot's lingering `aimtype` global (e.g.
-      // Commander's AIM_DGUN after firing the d-gun) makes the next
-      // AimX script short-circuit with `return FALSE`, and the
-      // weapon silently never fires.  We can't rely on the user
-      // clicking Stop between actions — commandFire weapons clear
-      // their own target after one shot, so the path d-gun → primary
-      // never hits Stop.  Skipped for Move and for units without
-      // the script.  Also kill our local aim-thread state so the
-      // _updateWeapon loop spawns a FRESH AimX on the new target
-      // rather than re-reading the stale dead thread's returnValue=0.
-      if (slot !== 'move') {
-        const cob = this.viewer.cob
-        if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
-          cob.start('TargetCleared', [0])
-        }
-        const s = this.aimState[slot]
-        if (s.thread && !s.thread.dead) s.thread.dead = true
-        s.thread = null
-        s.burstShotsLeft = 0
-        s.nextBurstShotAtMs = 0
-      }
-      if (slot === 'move') {
-        this.targets.move = [ground[0], ground[2]]
-        this._startMoving()
-      } else {
-        this.targets[slot] = [ground[0], ground[1], ground[2]]
-        // Engine-routed firing — see _setEngineWeaponTarget for the
-        // commentary.  Same target push the force-target-ground path
-        // uses; the engine SM owns reload / burst / commandFire for
-        // every weapon-fire gesture in both views.
-        this._setEngineWeaponTarget(slot, [ground[0], ground[1], ground[2]])
-      }
-      this.armed = null
-      this._refreshButtons()
-      this._refreshArmingClass()
-      this._updateArmedCursor()
+      // Compute the ground point against the PRIMARY canvas + renderer,
+      // then hand it to the camera-agnostic commandAtGround.  Observer
+      // split panes share that method (computing ground with their OWN
+      // camera) so a click in any pane issues the same order.
+      const ground = this._groundFromClick(e, canvas, this.viewer.renderer)
+      this.commandAtGround(ground, { shiftKey: e.shiftKey })
     }
     // Cursor pointer-tracking lives inside the shared ArmedCursor
     // helper now — no per-event listener needed here.  _updateArmedCursor()
@@ -550,6 +457,86 @@ export class MvControls {
     // Remember the canvas we attached to so dispose() can detach from
     // the SAME element even if the viewer hands us a new one later.
     this._wiredCanvas = canvas
+  }
+
+  // _groundFromClick unprojects a click event into a WORLD ground point
+  // using the supplied canvas + renderer's camera.  Returns null when
+  // the ray misses the ground.  Shared by the primary canvas handler
+  // and the observer-pane routing (each passes its OWN canvas/renderer
+  // so a click in a split pane resolves against the angle that pane
+  // shows).
+  _groundFromClick(e, canvas, renderer) {
+    if (!canvas || !renderer || typeof renderer.canvasToGroundPoint !== 'function') return null
+    const r = canvas.getBoundingClientRect()
+    if (!r.width || !r.height) return null
+    const cx = (e.clientX - r.left) * (canvas.width / r.width)
+    const cy = (e.clientY - r.top)  * (canvas.height / r.height)
+    return renderer.canvasToGroundPoint(cx, cy)
+  }
+
+  // commandAtGround applies the current command gesture at a WORLD
+  // ground point — camera-agnostic so it works no matter which split
+  // pane the click came from.  When a weapon slot is armed it sets that
+  // slot's target; when nothing is armed it force-targets the primary
+  // weapon (opt-in via Settings → "Force-target ground on click"); the
+  // 'move' slot routes to _startMoving.  Returns silently when neither
+  // gesture applies (the click falls through to the orbit camera).
+  //
+  // Unit-viewer observer panes (observer-view.js) compute `ground` with
+  // their own renderer and call this on the PRIMARY's MvControls, so a
+  // Move/Fire issued from the right-hand pane drives the same unit as
+  // the left — matching the sandbox, where every pane already commands
+  // the shared scene.
+  commandAtGround(ground, { shiftKey = false } = {}) {
+    if (!ground) return
+    if (!this.armed) {
+      // Force-target ground (opt-in) — unarmed left-click aims the
+      // primary weapon at the point.  Routes through targets.primary +
+      // the engine SM, identical to the armed-then-click path.
+      if (!shouldForceTarget({ shiftKey, requireShift: false })) return
+      this._ensureCreated()
+      const cob = this.viewer.cob
+      if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
+        cob.start('TargetCleared', [0])
+      }
+      const s = this.aimState.primary
+      if (s.thread && !s.thread.dead) s.thread.dead = true
+      s.thread = null
+      s.burstShotsLeft = 0
+      s.nextBurstShotAtMs = 0
+      this.targets.primary = [ground[0], ground[1], ground[2]]
+      this._setEngineWeaponTarget('primary', [ground[0], ground[1], ground[2]])
+      return
+    }
+    const slot = this.armed
+    // First-action auto-Create so the unit is alive (MotionControl +
+    // bCanAim set) by the time the command lands — see _ensureCreated.
+    this._ensureCreated()
+    // Reset BOS aim-state before each new weapon target so a stale
+    // aimtype global doesn't short-circuit the next AimX.  Skipped for
+    // Move + units without TargetCleared.
+    if (slot !== 'move') {
+      const cob = this.viewer.cob
+      if (cob && cob.hasScript && cob.hasScript('TargetCleared')) {
+        cob.start('TargetCleared', [0])
+      }
+      const s = this.aimState[slot]
+      if (s.thread && !s.thread.dead) s.thread.dead = true
+      s.thread = null
+      s.burstShotsLeft = 0
+      s.nextBurstShotAtMs = 0
+    }
+    if (slot === 'move') {
+      this.targets.move = [ground[0], ground[2]]
+      this._startMoving()
+    } else {
+      this.targets[slot] = [ground[0], ground[1], ground[2]]
+      this._setEngineWeaponTarget(slot, [ground[0], ground[1], ground[2]])
+    }
+    this.armed = null
+    this._refreshButtons()
+    this._refreshArmingClass()
+    this._updateArmedCursor()
   }
 
   // _updateArmedCursor delegates to the shared ArmedCursor helper
