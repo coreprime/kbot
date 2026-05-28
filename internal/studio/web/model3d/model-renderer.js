@@ -26,6 +26,8 @@ import {
   DEFAULT_SHADOW_LOD_ENABLED,
   SHADOW_LOD_MIN_PX,
   LOD_HYSTERESIS,
+  TIER_FULL_MIN_PX,
+  TIER_MID_MIN_PX,
 } from './performance.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
@@ -33,6 +35,13 @@ const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao
 // referenced by the frustum-cull predicate so the hot path doesn't
 // allocate a fresh object per entity per frame.
 const _IDENTITY_T = Object.freeze({ x: 0, y: 0, z: 0, headingRad: 0 })
+// LOD tier ids — stored on each entity as `_lodTier` between frames so
+// the hysteresis classifier knows the previous tier.  Ordered
+// largest→smallest so a numeric comparison works ("tier > Mid" =
+// "looks more detailed than Mid").
+const LOD_TIER_FULL = 0
+const LOD_TIER_MID  = 1
+const LOD_TIER_FAR  = 2
 const POS_OFFSET = 0
 const NRM_OFFSET = 3 * 4
 const UV_OFFSET = 6 * 4
@@ -773,7 +782,7 @@ export class ModelRenderer {
     // effect.  Reset at the top of draw() and read by the inspector
     // through getCullStats().  `shadowed` counts entities that ran
     // the shadow pass this frame (i.e. weren't shadow-LOD-skipped).
-    this._cullStats = { drew: 0, culled: 0, total: 0, shadowed: 0 }
+    this._cullStats = { drew: 0, culled: 0, total: 0, shadowed: 0, full: 0, mid: 0, far: 0 }
     // Shadow-LOD knobs.  When enabled, entities whose projected
     // bounding-sphere radius (in screen-space pixels) drops below
     // `shadowMinPx` skip the shadow pass — near units cast shadows,
@@ -783,6 +792,15 @@ export class ModelRenderer {
     // `_lodShadowOn` flag (LOD_HYSTERESIS-wide band).
     this.shadowLodEnabled = DEFAULT_SHADOW_LOD_ENABLED
     this.shadowMinPx = SHADOW_LOD_MIN_PX
+    // Distance-LOD toggle for the MAIN pass — at mid tier an entity's
+    // cosmetic pieces (flares, muzzles, exhausts; tagged with
+    // `piece.lodHide` by the model loader) get skipped on the
+    // geometry walk.  Off → every entity draws every piece regardless
+    // of projected size (A/B verification).  Hysteresis from
+    // performance.js's LOD_HYSTERESIS keeps tiers stable near the
+    // boundary.  Independent from shadowLodEnabled: a unit can be in
+    // Mid tier (no flares) and still cast a shadow.
+    this.lodEnabled = true
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -982,6 +1000,17 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setLodEnabled — runtime toggle for the main-pass LOD tier
+  // classifier.  Off → every entity renders in Full tier (every
+  // piece, every draw group) regardless of projected size.  On
+  // (default) → entities below TIER_FULL_MIN_PX skip cosmetic
+  // (lodHide) pieces; below TIER_MID_MIN_PX they collapse further
+  // (currently a no-op; Phase 3 will replace them with impostors).
+  setLodEnabled(on) {
+    this.lodEnabled = !!on
+    this.requestRedraw()
+  }
+
   // getCullStats returns the most recent frame's cull breakdown for
   // the Renderer overlay.  Snapshot — counters are reset at the top
   // of the next draw() call.
@@ -1038,6 +1067,60 @@ export class ModelRenderer {
       next = px >= this.shadowMinPx
     }
     ent._lodShadowOn = next
+    return next
+  }
+
+  // _pickLodTier — classify an entity into LOD_TIER_FULL / _MID / _FAR
+  // for the main pass.  Same hysteresis pattern as _castsShadow:
+  // entering a denser tier requires crossing the threshold by
+  // LOD_HYSTERESIS; leaving back to a sparser tier requires crossing
+  // by the same factor on the way out.  Per-entity state in
+  // `_lodTier` carries between frames so the band actually applies.
+  //
+  // Tier semantics:
+  //   FULL — geometry walk includes every piece (incl. lodHide-tagged
+  //     cosmetic pieces); shaders run at full quality.
+  //   MID  — skips piece.lodHide pieces.  Currently the only visible
+  //     change; Phase 2's shader changes (no specular / no rim) will
+  //     hang off this tier in a follow-up.
+  //   FAR  — currently identical to MID; Phase 3 will swap in the
+  //     impostor-batch path here.
+  //
+  // Ghost / selected entities are always Full so the user's focus
+  // (selection ring's anchor, placement preview) stays visually rich
+  // regardless of zoom.  When the LOD toggle is off, every entity is
+  // Full and the classifier is a no-op.
+  _pickLodTier(ent) {
+    if (!this.lodEnabled) return LOD_TIER_FULL
+    if (!ent || !ent.model) return LOD_TIER_FULL
+    if (ent.ghost || ent.selected) return LOD_TIER_FULL
+    const px = this._pxRadius(ent)
+    const prev = ent._lodTier != null ? ent._lodTier : LOD_TIER_FULL
+    // Symmetric hysteresis around each threshold:
+    //   enter denser tier at threshold × HYST    (going up)
+    //   exit  to sparser tier at threshold / HYST (going down)
+    const fullEnter = TIER_FULL_MIN_PX * LOD_HYSTERESIS
+    const fullExit  = TIER_FULL_MIN_PX / LOD_HYSTERESIS
+    const midEnter  = TIER_MID_MIN_PX  * LOD_HYSTERESIS
+    const midExit   = TIER_MID_MIN_PX  / LOD_HYSTERESIS
+    let next
+    if (prev === LOD_TIER_FULL) {
+      // Stay Full unless we fall below the exit threshold.
+      next = px >= fullExit ? LOD_TIER_FULL
+           : px >= midEnter ? LOD_TIER_MID
+           : LOD_TIER_FAR
+    } else if (prev === LOD_TIER_MID) {
+      // Promote back to Full if comfortably above; drop to Far if
+      // comfortably below.
+      next = px >= fullEnter ? LOD_TIER_FULL
+           : px >= midExit   ? LOD_TIER_MID
+           : LOD_TIER_FAR
+    } else {
+      next = px >= fullEnter ? LOD_TIER_FULL
+           : px >= midEnter  ? LOD_TIER_MID
+           : LOD_TIER_FAR
+    }
+    ent._lodTier = next
     return next
   }
 
@@ -1524,6 +1607,9 @@ export class ModelRenderer {
     this._cullStats.drew = 0
     this._cullStats.culled = 0
     this._cullStats.shadowed = 0
+    this._cullStats.full = 0
+    this._cullStats.mid = 0
+    this._cullStats.far = 0
     this._cullStats.total = (this._entities && this._entities.length) || 0
     // Shader programs are loaded asynchronously by init(); until they
     // resolve there's nothing to draw.  When init completes it calls
@@ -1777,7 +1863,18 @@ export class ModelRenderer {
           gl.depthMask(true)
           continue
         }
+        // Phase 2 LOD — classify this entity's distance tier and let
+        // #drawGeometry consult `_lodHideFlares` to skip the
+        // cosmetic-only pieces on mid/far units.  Counters are bumped
+        // for the Renderer overlay so the user can see the
+        // distribution shift as they zoom in/out.
+        const tier = this._pickLodTier(ent)
+        if (tier === LOD_TIER_FULL)      this._cullStats.full += 1
+        else if (tier === LOD_TIER_MID)  this._cullStats.mid  += 1
+        else                              this._cullStats.far  += 1
+        this._lodHideFlares = (tier !== LOD_TIER_FULL)
         this.#renderMain(this.renderMode === 'flat')
+        this._lodHideFlares = false
       }
       // Restore globals for subsequent passes (wireframe overlay,
       // particles, etc.) and for any post-frame code that reads
@@ -2576,10 +2673,21 @@ export class ModelRenderer {
   // pointers and uniforms get updated.
   #drawGeometry(rootPiece, parentWorld, shadowPass) {
     const gl = this.gl
+    // Phase 2 LOD — when the renderer's `_lodHideFlares` flag is set
+    // (by the entity loop for mid/far tier units), skip any piece
+    // tagged `lodHide` at load time.  Cosmetic-only pieces (flares,
+    // muzzles, exhausts) read as sub-pixel on a mid-distance unit
+    // anyway, so we save the drawArrays per piece without a visible
+    // change.  The hovered piece is exempt — the user explicitly
+    // pointed at it, the highlight should still draw even at low LOD.
+    const hideFlares = this._lodHideFlares
+    const hoveredName = this._hoveredPieceName
     const draw = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
-      if (piece.visible) {
+      const lodSkip = hideFlares && piece.lodHide
+        && (!hoveredName || piece.name.toLowerCase() !== hoveredName)
+      if (piece.visible && !lodSkip) {
         if (shadowPass) {
           gl.uniformMatrix4fv(this.uShadowWorld, false, piece.worldMatrix)
         } else {

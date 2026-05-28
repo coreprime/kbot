@@ -92,6 +92,14 @@ function RendererBody() {
     ? `${cullStats.shadowed} / ${cullStats.total}`
     : '—'
   const shadowLodEnabled = !!(r && r.shadowLodEnabled)
+  // Phase 2 LOD distribution — "full / mid / far" entity counts this
+  // frame.  Sum equals `drew` (only un-culled entities pick a tier).
+  // At default unit-editor framing all entities sit in Full; zoom out
+  // in a sandbox to watch the breakdown shift to Mid then Far.
+  const lodText = (cullStats && cullStats.total > 0)
+    ? `${cullStats.full} / ${cullStats.mid} / ${cullStats.far}`
+    : '—'
+  const lodEnabled = !!(r && r.lodEnabled)
   return html`
     <${Row} label="FPS" value=${fpsText}
            title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames." />
@@ -105,12 +113,17 @@ function RendererBody() {
            title="Frustum cull breakdown — drew / culled / total entities this frame.  Higher 'culled' means more units fell outside the camera frustum and skipped their draw calls." />
     <${Row} label="Shadows" value=${shadowText}
            title="Shadow-LOD breakdown — entities that cast a shadow this frame / total entities.  As you zoom out, distant units drop their shadows to save the shadow pass." />
+    <${Row} label="LOD" value=${lodText}
+           title="LOD-tier breakdown — full / mid / far entities this frame.  Mid drops cosmetic flare/muzzle pieces; far is reserved for Phase 3 impostors.  Sum equals the entities that survived the frustum cull." />
     <${ToggleRow} label="Frustum cull" checked=${cullEnabled}
                  title="Skip entities outside the camera frustum.  Off → render every spawned unit regardless (for A/B verification)."
                  onChange=${(on) => { if (r && typeof r.setCullEnabled === 'function') r.setCullEnabled(on) }} />
     <${ToggleRow} label="Shadow LOD" checked=${shadowLodEnabled}
                  title="Hide shadows for distant units.  When on, units smaller than ~40 px on screen skip the shadow pass — saves the GPU one full geometry walk per far-away unit."
                  onChange=${(on) => { if (r && typeof r.setShadowLodEnabled === 'function') r.setShadowLodEnabled(on) }} />
+    <${ToggleRow} label="Detail LOD" checked=${lodEnabled}
+                 title="Hide cosmetic detail (flares, muzzles, exhausts) on distant units.  Off → every entity renders every piece regardless of zoom level (A/B verification)."
+                 onChange=${(on) => { if (r && typeof r.setLodEnabled === 'function') r.setLodEnabled(on) }} />
     <${ToggleRow} label="Auto-Rotate" checked=${autoRotate}
                  title="Spin the camera around the scene.  Stops automatically on any user gesture (drag, wheel, pan)."
                  onChange=${(on) => hostBridge.setAutoRotate(on)} />

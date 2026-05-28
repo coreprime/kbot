@@ -23,6 +23,30 @@ import { Model } from './model.js'
 
 const FLOATS_PER_VERTEX = 9
 
+// _LOD_HIDE_NAME_PATTERNS — piece names matching any of these regexes
+// get tagged with `lodHide = true` at load time so the renderer's
+// distance-LOD (Phase 2) skips them on units rendering at mid tier.
+// TA modellers consistently follow these naming conventions for sub-
+// pixel cosmetic detail:
+//   flare*    muzzle-flash anchors (often invisible until the COB
+//             script shows them mid-fire)
+//   muzzle*   weapon-barrel tips
+//   sleeve*   recoil sleeves / cylinder housings
+//   exhaust*  engine exhausts (steady particle anchors)
+//   smoke*    smoke-emit anchors
+//   aim*      AimWeapon query targets (geometry-less in many units)
+//   emit*     generic SFX emit points
+// A future FBI-driven hint can extend or override this list per-unit.
+const _LOD_HIDE_NAME_PATTERNS = [
+  /^.*flare\d*$/i,
+  /^.*muzzle\d*$/i,
+  /^.*sleeve\d*$/i,
+  /^.*exhaust\d*$/i,
+  /^.*smoke\d*$/i,
+  /^.*aim\d*$/i,
+  /^emit\d*$/i,
+]
+
 export class ModelLoader {
   constructor({ gl, palette, textureCache }) {
     this.gl = gl
@@ -47,6 +71,18 @@ export class ModelLoader {
       max: [-data.bounds.min[0], data.bounds.max[1], data.bounds.max[2]],
     } : data.bounds
     const model = new Model({ name: data.name, root, bounds: flippedBounds })
+    // Phase 2 LOD — tag cosmetic-only pieces so the renderer's mid
+    // tier (units small on screen) can skip their draw groups.
+    // Heuristic: names match the TA convention for sub-pixel detail
+    // (flares, muzzles, exhausts, smoke / aim anchors).  Conservative
+    // — anything not on the list still draws at every tier.  A future
+    // FBI-driven hint can supersede this and tag additional pieces
+    // per-unit-type without changing the renderer.
+    for (const p of model.flat) {
+      if (_LOD_HIDE_NAME_PATTERNS.some((re) => re.test(p.name))) {
+        p.lodHide = true
+      }
+    }
     // Pass through the server's textureSources map (texture name →
     // GAF basename) so the studio's Textures tab can group rows by
     // parent atlas.  Empty when the server didn't resolve a GAF

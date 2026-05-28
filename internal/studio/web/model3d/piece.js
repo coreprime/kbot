@@ -32,6 +32,13 @@ export class Piece {
     this.rotate = [0, 0, 0]
     // visible: hide-piece sets this to false; show-piece restores it.
     this.visible = true
+    // lodHide: set by the model loader from a name-pattern heuristic
+    // (flares, muzzles, exhausts, smoke/aim anchors).  Renderer's
+    // distance-LOD reads this flag when an entity drops to mid tier
+    // and skips matching pieces' draw groups — cosmetic detail that
+    // reads as sub-pixel anyway gets one fewer draw call per piece.
+    // Static, shared across clones (set once at load).
+    this.lodHide = false
     // userData is a free-form slot for the COB driver to stash speeds,
     // signal masks, etc. without polluting the geometry-only fields.
     this.userData = {}
@@ -105,6 +112,9 @@ export class Piece {
     c.drawGroups = this.drawGroups
     c.wireframe = this.wireframe
     if (this.wireframeByTex) c.wireframeByTex = this.wireframeByTex
+    // lodHide is a load-time classification — propagate to clones so
+    // every instance of a unit gets the same flare/muzzle skip set.
+    c.lodHide = this.lodHide
     // Recurse on children, preserving parent linkage via addChild.
     for (const ch of this.children) {
       c.addChild(ch.cloneForInstance())
