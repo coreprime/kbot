@@ -20,7 +20,8 @@
 // listed below) or the shared host-context (`state` + `hostCallbacks`
 // for the host functions that still live in studio.js).
 
-import { state, getReactUi } from '../../host-context.js'
+import { state, getReactUi, hostCallbacks } from '../../host-context.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '../../common/split-host.js'
 import { persistPrefs } from '../../common/prefs.js'
 import { isConnected } from '../../common/heartbeat.js'
 import { setMode } from '../mode.js'
@@ -289,6 +290,20 @@ export function wireMapRibbonBridge(reactUi) {
       toggleBuildable:   () => { state.showBuildable = !state.showBuildable; persistPrefs(); renderCanvas(); publishMapRibbonState() },
       toggleFeatures:    () => setFeaturesVisible(!state.showFeatures),
       toggleStartPos:    () => setStartPositionsVisible(!state.showStartPositions),
+      // Pane layout (View ▸ Split).  Drive the active map tab's split
+      // tree from the menu, mirroring the SHIFT+right-click gesture.
+      splitView:    (orient) => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) splitActivePane(tab, orient)
+      },
+      closeView:    () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) closeActivePane(tab)
+      },
+      canCloseView: () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        return tab ? canCloseActivePane(tab) : false
+      },
       // Map Settings
       openOTA:              () => openOTADialog(),
       pickSchema:           (idx) => {

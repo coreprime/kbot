@@ -43,6 +43,7 @@ import {
   TEAM_COLOURS,
 } from '../host-state.js'
 import { playWeaponSound, openWeaponPicker, selectPiece } from '../sidebar.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '../../common/split-host.js'
 
 // wireModelViewerRibbon — install the React unit-editor ribbon bridge
 // + mount the React tree into #model-viewer-ribbon-mount.  Called
@@ -135,6 +136,24 @@ export function wireModelViewerRibbon() {
       resetCob:       () => getActiveModelViewer()?.resetState?.(),
 
       setPanelVisible: (panelId, on) => setMvInspectorVisible(panelId, !!on),
+
+      // Pane layout — split / close the active unit-editor tab's panes
+      // from the View menu.  The unit adapter refuses to close the
+      // primary leaf (it owns the COB-running ModelViewer), so canClose
+      // hides the row whenever the primary pane is focused or it's the
+      // only pane.
+      splitActive: (orient) => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) splitActivePane(tab, orient)
+      },
+      closeActive: () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) closeActivePane(tab)
+      },
+      canClose: () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        return tab ? canCloseActivePane(tab) : false
+      },
 
       openSettings: () => {
         if (typeof openSettingsDialog === 'function') openSettingsDialog()

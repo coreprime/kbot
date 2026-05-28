@@ -16,6 +16,7 @@
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { confirmDialog } from '../dialogs/confirm.js'
 import { openSandboxSpawnPicker, setSandboxPanelVisible } from './spawn-picker.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '../common/split-host.js'
 
 // wireSandboxRibbon — install the host bridge + mount the ribbon's
 // React tree.  Idempotent; safe to call before / after the React UI
@@ -77,6 +78,23 @@ export function wireSandboxRibbon() {
         view.camera.distance = 951.5
         view.camera.yaw = 215 * Math.PI / 180
         view.camera.pitch = 28 * Math.PI / 180
+      },
+      // Pane layout — drive the active sandbox tab's split tree from
+      // the View menu.  Resolve the live tab each time (the active tab
+      // can change between clicks) and delegate to the generic split
+      // API, which reuses the tab's wrapped adapter so the active-view
+      // alias updates on focus reseat.
+      splitActive: (orient) => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) splitActivePane(tab, orient)
+      },
+      closeActive: () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        if (tab) closeActivePane(tab)
+      },
+      canClose: () => {
+        const tab = hostCallbacks.getActiveTab?.()
+        return tab ? canCloseActivePane(tab) : false
       },
       setPanelVisible: (panelId, visible) => setSandboxPanelVisible(panelId, visible),
     })

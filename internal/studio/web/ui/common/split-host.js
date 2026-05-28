@@ -68,11 +68,19 @@
 
 import { useEffect, useRef } from 'preact/hooks'
 import { render } from 'preact'
+import { signal } from '@preact/signals'
 import { htm as html } from '/ui/common/htm-bind.js'
 import {
   SplitContainer, newLeaf, splitLeaf, closeLeaf, isOnlyLeaf, leafIds,
 } from '/ui/common/split-container.js'
 import { openContextMenu } from '/ui/common/context-menu.js'
+import { MenuRow, MenuSubmenuRow } from '/ui/common/ribbon.js'
+
+// splitTreeVersion bumps on every applyTreeChange so menu components
+// (SplitMenuItems below) re-evaluate the focused pane's close
+// eligibility the instant any pane is split / closed — without each
+// editor's ribbon having to thread split state through its own signal.
+export const splitTreeVersion = signal(0)
 
 // ensureSplitState lazily initialises the per-tab split tree + pane
 // registry + active pane id.  Editors call this BEFORE mountSplit
@@ -90,6 +98,12 @@ export function ensureSplitState(tab) {
 // — repeated calls on the same tab re-render with the current tree.
 export function mountSplit(tab, stage, adapter) {
   ensureSplitState(tab)
+  // Stash the (possibly per-tab-wrapped) adapter so the programmatic
+  // split API below can drive splits/closes through the SAME adapter
+  // the right-click menu uses — i.e. firing the tab's onPaneFocus /
+  // onTreeChange callbacks (active-view aliases etc), not just the
+  // editor-static base adapter.
+  tab._splitAdapter = adapter
   if (!tab._splitMount) {
     tab._splitMount = document.createElement('div')
     tab._splitMount.className = 'mv-split-mount'
@@ -225,6 +239,9 @@ function applyTreeChange(tab, next, adapter) {
   renderSplitTab(tab, adapter)
   _applyFocusClass(tab)
   try { adapter.onTreeChange && adapter.onTreeChange(tab, next) } catch { /* ignore */ }
+  // Tell any open View ▸ Split menu the tree changed so its Close row
+  // re-evaluates close eligibility against the new active pane.
+  splitTreeVersion.value++
 }
 
 // LeafSlot — Preact wrapper that mounts a leaf's view-canvas into
@@ -344,28 +361,66 @@ function _wireSplitContextMenu(canvas, tab, leafId, adapter) {
 // splitActivePane splits the focused pane in the given orientation
 // ('h' = side-by-side, 'v' = stacked).  No-op when there's no active
 // pane.  The new pane is created lazily by the LeafSlot effect, same
-// as a right-click split.
-export function splitActivePane(tab, orient, adapter) {
+// as a right-click split.  `adapter` defaults to the wrapped adapter
+// stashed by mountSplit so the tab's per-tab callbacks fire.
+export function splitActivePane(tab, orient, adapter = null) {
   if (!tab || !tab.split || !tab.activePaneId) return
   if (orient !== 'h' && orient !== 'v') return
-  applyTreeChange(tab, splitLeaf(tab.split, tab.activePaneId, orient), adapter)
+  applyTreeChange(tab, splitLeaf(tab.split, tab.activePaneId, orient), adapter || tab._splitAdapter)
 }
 
 // closeActivePane collapses the focused pane into its sibling.  Honours
 // the adapter's canCloseLeaf gate (e.g. the unit editor refuses to
 // close its primary leaf) and the universal last-pane-can't-close
 // rule.  No-op when closing isn't allowed.
-export function closeActivePane(tab, adapter) {
-  if (!canCloseActivePane(tab, adapter)) return
-  applyTreeChange(tab, closeLeaf(tab.split, tab.activePaneId), adapter)
+export function closeActivePane(tab, adapter = null) {
+  const a = adapter || tab?._splitAdapter
+  if (!canCloseActivePane(tab, a)) return
+  applyTreeChange(tab, closeLeaf(tab.split, tab.activePaneId), a)
 }
 
 // canCloseActivePane reports whether closeActivePane would do
 // anything — used by menus to enable / disable the Close item.
-export function canCloseActivePane(tab, adapter) {
+export function canCloseActivePane(tab, adapter = null) {
   if (!tab || !tab.split || !tab.activePaneId) return false
-  if (adapter && typeof adapter.canCloseLeaf === 'function') {
-    return !!adapter.canCloseLeaf(tab, tab.activePaneId)
+  const a = adapter || tab._splitAdapter
+  if (a && typeof a.canCloseLeaf === 'function') {
+    return !!a.canCloseLeaf(tab, tab.activePaneId)
   }
   return !isOnlyLeaf(tab.split, tab.activePaneId)
+}
+
+// ── Shared View-menu items ───────────────────────────────────────────
+//
+// SplitMenuItems renders the "Split ▸ Horizontal / Vertical" cascade
+// plus a "Close Pane" row, the discoverable counterpart to the right-
+// click Split menu.  Every editor's View menu drops this in so the
+// gesture + wording stay identical across sandbox / unit / map.
+//
+//   dropdownId — the parent Dropdown's id, so the rows dismiss it on click
+//   onSplitH / onSplitV — fire a split in that orientation
+//   onClose    — close the focused pane
+//   canClose   — boolean OR a live () => boolean.  When false the Close
+//                row is omitted (it's meaningless on the last pane).
+//
+// Reads splitTreeVersion so a split / close performed elsewhere
+// re-renders the Close row's presence without the host re-publishing.
+export function SplitMenuItems({ dropdownId, onSplitH, onSplitV, onClose, canClose }) {
+  void splitTreeVersion.value
+  const closeable = typeof canClose === 'function' ? !!canClose() : !!canClose
+  return html`
+    <${MenuSubmenuRow} icon="⊞" label="Split" title="Split this view into two panes">
+      <${MenuRow} icon="▥" label="Split Horizontal"
+                  title="Split into side-by-side panes"
+                  dropdownId=${dropdownId} onClick=${onSplitH} />
+      <${MenuRow} icon="▤" label="Split Vertical"
+                  title="Split into stacked panes"
+                  dropdownId=${dropdownId} onClick=${onSplitV} />
+    <//>
+    ${closeable ? html`
+      <${MenuRow} icon="✖" label="Close Pane"
+                  title="Close the focused pane and grow its sibling"
+                  dropdownId=${dropdownId} onClick=${onClose} />
+    ` : null}
+  `
 }

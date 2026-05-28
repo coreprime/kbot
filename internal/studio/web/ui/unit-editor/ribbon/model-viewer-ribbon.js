@@ -33,6 +33,7 @@ import {
   RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow, MenuSubmenuRow,
   MenuSliderRow, MenuSectionLabel, closeDropdownById,
 } from '/ui/common/ribbon.js'
+import { SplitMenuItems } from '/ui/common/split-host.js'
 
 // _state — every toggle / slider / picker value displayed on the
 // ribbon.  Defaults match the static HTML the legacy markup shipped
@@ -129,6 +130,10 @@ const _bridge = {
 
   setPanelVisible: (_id, _on) => {},
 
+  splitActive:     (_orient) => {},
+  closeActive:     () => {},
+  canClose:        () => false,
+
   openSettings:    () => {},
   openHelp:        () => {},
 }
@@ -149,6 +154,7 @@ export function configureModelViewerRibbonBridge(impl) {
     runCobEntry: (_n) => {}, setCobDamage: (_v) => {}, setCobBuild: (_v) => {},
     setCobPlayback: (_p) => {}, resetCob: () => {},
     setPanelVisible: (_i, _o) => {},
+    splitActive: (_orient) => {}, closeActive: () => {}, canClose: () => false,
     openSettings: () => {}, openHelp: () => {},
   }
   Object.assign(_bridge, stubs, impl)
@@ -925,6 +931,13 @@ function ViewDropdown() {
           <${_ViewPanelToggle} key=${p.id} id=${p.id} icon=${p.icon}
                                label=${p.label} title=${p.title} />
         `)}
+        <${MenuSectionLabel}>Layout<//>
+        <${SplitMenuItems}
+          dropdownId="mv-view-dropdown"
+          onSplitH=${() => _bridge.splitActive('h')}
+          onSplitV=${() => _bridge.splitActive('v')}
+          onClose=${() => _bridge.closeActive()}
+          canClose=${() => _bridge.canClose()} />
       <//>
     </div>
   `

@@ -192,6 +192,10 @@ const _ribbonBridge = {
   toggleBuildable:   () => {},
   toggleFeatures:    () => {},
   toggleStartPos:    () => {},
+  // Pane layout (View ▸ Split)
+  splitView:         (_orient) => {},
+  closeView:         () => {},
+  canCloseView:      () => false,
   // Map Settings
   openOTA:              () => {},
   pickSchema:           (_index) => {},

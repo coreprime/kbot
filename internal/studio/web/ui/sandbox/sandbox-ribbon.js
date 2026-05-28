@@ -21,6 +21,7 @@ import {
   RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow,
   closeDropdownById,
 } from '/ui/common/ribbon.js'
+import { SplitMenuItems } from '/ui/common/split-host.js'
 
 // _bridge — host installs the action callbacks (spawn, stop, etc.)
 // plus the setSandboxPanelVisible function the dev-tools rows use.
@@ -32,6 +33,9 @@ const _bridge = {
   deselectAll:       () => {},
   clearField:        () => {},
   resetCamera:       () => {},
+  splitActive:       (_orient) => {},
+  closeActive:       () => {},
+  canClose:          () => false,
   setPanelVisible:   (_panelId, _visible) => {},
 }
 
@@ -44,6 +48,9 @@ export function configureSandboxRibbonBridge(impl) {
     deselectAll:       () => {},
     clearField:        () => {},
     resetCamera:       () => {},
+    splitActive:       (_orient) => {},
+    closeActive:       () => {},
+    canClose:          () => false,
     setPanelVisible:   (_panelId, _visible) => {},
   }, impl)
 }
@@ -148,13 +155,29 @@ export function SandboxRibbon() {
           title="Deselect — clear the current selection."
           onClick=${() => _bridge.deselectAll()} />
       <//>
-      <${RibbonSection} label="Camera">
-        <${RibbonButton}
-          id="sandbox-rb-reset-cam"
-          icon="📷"
-          label="Reset"
-          title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom."
-          onClick=${() => _bridge.resetCamera()} />
+      <${RibbonSection} label="View">
+        <div class="ribbon-dropdown" id="sandbox-rb-view-dropdown">
+          <${RibbonDropdownButton}
+            id="sandbox-rb-view-btn"
+            dropdownId="sandbox-rb-view-dropdown"
+            icon="👁"
+            label="View"
+            title="Camera and pane-layout controls." />
+          <${Dropdown} id="sandbox-rb-view-dropdown" anchorId="sandbox-rb-view-btn">
+            <${MenuRow}
+              icon="📷"
+              label="Reset Camera"
+              title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom."
+              dropdownId="sandbox-rb-view-dropdown"
+              onClick=${() => _bridge.resetCamera()} />
+            <${SplitMenuItems}
+              dropdownId="sandbox-rb-view-dropdown"
+              onSplitH=${() => _bridge.splitActive('h')}
+              onSplitV=${() => _bridge.splitActive('v')}
+              onClose=${() => _bridge.closeActive()}
+              canClose=${() => _bridge.canClose()} />
+          <//>
+        </div>
       <//>
       <${RibbonSection} label="Developer Tools" right=${true} className="sandbox-rb-devtools-section">
         <div class="ribbon-dropdown" id="sandbox-rb-devtools-dropdown">
@@ -185,5 +208,6 @@ export function SandboxRibbon() {
 // sandbox-ribbon dropdown (e.g. on tab switch).  Cheap idempotent.
 export function closeSandboxRibbonDropdowns() {
   closeDropdownById('sandbox-rb-sandbox-dropdown')
+  closeDropdownById('sandbox-rb-view-dropdown')
   closeDropdownById('sandbox-rb-devtools-dropdown')
 }

@@ -21,6 +21,7 @@ import {
   MenuRow, MenuToggleRow, MenuSectionLabel, MenuSubmenuRow,
   closeAllDropdowns, closeDropdownById,
 } from '/ui/common/ribbon.js'
+import { SplitMenuItems } from '/ui/common/split-host.js'
 import { ribbonState, mapRibbonBridge } from '/ui/map-editor/store.js'
 
 // _MODES — single source of truth for the Mode dropdown.  Order +
@@ -606,6 +607,13 @@ function ViewDropdown({ state: s }) {
         <${MenuToggleRow} icon="🤖" label="Start Points" on=${s.showStartPositions}
           title="Show player start positions.  Forced on while Start Points mode is active."
           onChange=${() => mapRibbonBridge.toggleStartPos()} />
+        <${MenuSectionLabel}>Layout<//>
+        <${SplitMenuItems}
+          dropdownId="view-dropdown"
+          onSplitH=${() => mapRibbonBridge.splitView('h')}
+          onSplitV=${() => mapRibbonBridge.splitView('v')}
+          onClose=${() => mapRibbonBridge.closeView()}
+          canClose=${() => mapRibbonBridge.canCloseView()} />
       <//>
     </div>
   `
