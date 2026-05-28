@@ -110,7 +110,7 @@ export function setModelOpenIntent(v) {
 // ARM default and intentionally null so picking it disables the
 // shader's recolour entirely (matching the original game's "Blue
 // (default)" semantics).  Kept at module scope so the React ribbon's
-// bridge can look up a colour without re-importing model3d's tables.
+// bridge can look up a colour without re-importing game3d's tables.
 export const TEAM_COLOURS = {
   blue:   null,
   red:    [0.92, 0.18, 0.16],

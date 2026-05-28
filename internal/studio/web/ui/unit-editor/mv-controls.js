@@ -15,9 +15,9 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { spawnProjectile } from '../../model3d/weapon-driver.js'
-import { ArmedCursor } from '../../model3d/armed-cursor.js'
-import { shouldForceTarget } from '../../model3d/force-target.js'
+import { spawnProjectile } from '../../game3d/weapon-driver.js'
+import { ArmedCursor } from '../../game3d/armed-cursor.js'
+import { shouldForceTarget } from '../../game3d/force-target.js'
 import { GameEngine } from '../../engine/game-engine.js'
 import { hostCallbacks } from '../host-context.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
@@ -553,7 +553,7 @@ export class MvControls {
   }
 
   // _updateArmedCursor delegates to the shared ArmedCursor helper
-  // (model3d/armed-cursor.js) so both the single-unit editor and the
+  // (game3d/armed-cursor.js) so both the single-unit editor and the
   // multi-unit Sandbox show the same TA cursor PNGs on the same
   // gestures.  Lazily created on first arm so a viewer that never
   // gets to a command click pays no DOM cost.

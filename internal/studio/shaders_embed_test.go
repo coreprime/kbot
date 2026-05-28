@@ -14,22 +14,22 @@ import (
 // test catches it at `task test` time instead.
 func TestShaderAssetsEmbedded(t *testing.T) {
 	required := []string{
-		"web/model3d/shader-loader.js",
-		"web/model3d/shaders/lib/sea-waves.glsl",
-		"web/model3d/shaders/main/main.vert",
-		"web/model3d/shaders/main/main.frag",
-		"web/model3d/shaders/sky/sky.vert",
-		"web/model3d/shaders/sky/sky.frag",
-		"web/model3d/shaders/ground/ground.vert",
-		"web/model3d/shaders/ground/ground.frag",
-		"web/model3d/shaders/shadow/shadow.vert",
-		"web/model3d/shaders/shadow/shadow.frag",
-		"web/model3d/shaders/wire/wire.vert",
-		"web/model3d/shaders/wire/wire.frag",
-		"web/model3d/shaders/dof/dof.vert",
-		"web/model3d/shaders/dof/dof.frag",
-		"web/model3d/shaders/particles/particles.vert",
-		"web/model3d/shaders/particles/particles.frag",
+		"web/game3d/shader-loader.js",
+		"web/game3d/shaders/lib/sea-waves.glsl",
+		"web/game3d/shaders/main/main.vert",
+		"web/game3d/shaders/main/main.frag",
+		"web/game3d/shaders/sky/sky.vert",
+		"web/game3d/shaders/sky/sky.frag",
+		"web/game3d/shaders/ground/ground.vert",
+		"web/game3d/shaders/ground/ground.frag",
+		"web/game3d/shaders/shadow/shadow.vert",
+		"web/game3d/shaders/shadow/shadow.frag",
+		"web/game3d/shaders/wire/wire.vert",
+		"web/game3d/shaders/wire/wire.frag",
+		"web/game3d/shaders/dof/dof.vert",
+		"web/game3d/shaders/dof/dof.frag",
+		"web/game3d/shaders/particles/particles.vert",
+		"web/game3d/shaders/particles/particles.frag",
 	}
 	for _, path := range required {
 		data, err := fs.ReadFile(webFS, path)
@@ -48,12 +48,12 @@ func TestShaderAssetsEmbedded(t *testing.T) {
 // shaders here (no GL context), but we can at least confirm that
 // every #include resolves to a file the loader will be able to find.
 func TestShaderIncludeAnchorsExist(t *testing.T) {
-	shaderFiles, err := fs.Glob(webFS, "web/model3d/shaders/*/*")
+	shaderFiles, err := fs.Glob(webFS, "web/game3d/shaders/*/*")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
 	if len(shaderFiles) == 0 {
-		t.Fatal("no shader files found under web/model3d/shaders/")
+		t.Fatal("no shader files found under web/game3d/shaders/")
 	}
 	for _, path := range shaderFiles {
 		body, err := fs.ReadFile(webFS, path)

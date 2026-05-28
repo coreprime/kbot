@@ -22,7 +22,7 @@ import (
 // Embed the studio web assets explicitly so a stray node_modules / dotfile
 // added during local development doesn't bloat the binary.
 //
-//go:embed web/index.html web/studio.css web/studio.js web/engine web/model3d web/ui web/vendor
+//go:embed web/index.html web/studio.css web/studio.js web/engine web/game3d web/ui web/vendor
 var webFS embed.FS
 
 var (

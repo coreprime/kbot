@@ -1,4 +1,4 @@
-// Public entry point for the model3d module.  Surfaces the classes the
+// Public entry point for the game3d module.  Surfaces the classes the
 // Studio wires through to its Modelling tab and keeps every internal
 // file out of studio.js's import path.
 //

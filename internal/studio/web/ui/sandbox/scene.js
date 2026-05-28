@@ -25,12 +25,12 @@
 // call sites don't change shape.
 
 import { GameEngine } from '../../engine/game-engine.js'
-import { AudioPool } from '../../model3d/audio-pool.js'
+import { AudioPool } from '../../game3d/audio-pool.js'
 import {
   SmokeTrailManager,
   spawnProjectile,
   SFX_FIRE_FLASH,
-} from '../../model3d/weapon-driver.js'
+} from '../../game3d/weapon-driver.js'
 
 // Same 3 ms window that engine.tick uses to coalesce duplicate calls
 // from N renderers.  See comment in game-engine.js.  The scene needs
@@ -51,7 +51,7 @@ export class SandboxScene {
     this.palette = palette
     // Inject the renderer-side AudioPool via factory.  The engine
     // package never imports a concrete audio implementation — keeping
-    // the cross-package direction one-way (model3d → engine) means
+    // the cross-package direction one-way (game3d → engine) means
     // a future headless server can construct GameEngine without
     // pulling in browser-only <audio>.
     this.engine = new GameEngine({ audioFactory: () => new AudioPool() })

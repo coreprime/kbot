@@ -19,16 +19,16 @@
 // Command API, camera tracking, unit acks, FX aggregation) lives
 // inside whichever view actually uses it.
 
-import { ModelLoader } from '../../model3d/model-loader.js'
-import { ModelRenderer } from '../../model3d/model-renderer.js'
-import { OrbitCamera } from '../../model3d/orbit-camera.js'
-import { TextureCache } from '../../model3d/texture-cache.js'
-import { TAPalette } from '../../model3d/palette.js'
+import { ModelLoader } from '../../game3d/model-loader.js'
+import { ModelRenderer } from '../../game3d/model-renderer.js'
+import { OrbitCamera } from '../../game3d/orbit-camera.js'
+import { TextureCache } from '../../game3d/texture-cache.js'
+import { TAPalette } from '../../game3d/palette.js'
 import { SandboxScene } from './scene.js'
-import { attachOrbitControls } from '../../model3d/camera-controls.js'
+import { attachOrbitControls } from '../../game3d/camera-controls.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
-import { ArmedCursor } from '../../model3d/armed-cursor.js'
-import { teamColorForSide } from '../../model3d/team-colors.js'
+import { ArmedCursor } from '../../game3d/armed-cursor.js'
+import { teamColorForSide } from '../../game3d/team-colors.js'
 import {
   wireHotkeys,
   wrapCobWithAggregate,

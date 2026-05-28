@@ -29,9 +29,9 @@ import {
 import { startTabTick } from '../common/tab-tick.js'
 
 export async function activateModelTab(tab) {
-  // Lazy-import the model3d module so users who never click a
+  // Lazy-import the game3d module so users who never click a
   // model tab don't pay for the shader / matrix code.
-  const mod = await import('../../model3d/index.js')
+  const mod = await import('../../game3d/index.js')
   // Stage all OTHER tabs' canvases / split mounts out of the DOM
   // so an inactive tab's surfaces can't bleed through.  Each tab
   // type owns its own attach style: sandbox + unit-editor (since

@@ -23,7 +23,7 @@ import (
 // registerModelAPI wires the 3DO + texture endpoints into the shared mux.
 // The endpoints are intentionally narrow: list, fetch geometry, fetch
 // texture image — the heavy lifting (animation, scene assembly) lives
-// in the browser's class-based renderer under web/model3d/.
+// in the browser's class-based renderer under web/game3d/.
 func registerModelAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/models", handleModelsList)
 	mux.HandleFunc("/api/studio/model/", handleModelGeometry)

@@ -4,7 +4,7 @@
 // and the Sandbox's SandboxView.  These are free functions (not class
 // methods) on purpose: anything truly shared lives here; anything
 // view-specific stays inside the view's own class.  Phase C of the
-// model3d/ decontamination — replaces the previous BaseView class
+// game3d/ decontamination — replaces the previous BaseView class
 // whose existence was creating cross-contamination every time the
 // two consumers had to share a concept.
 //
@@ -13,8 +13,8 @@
 // (_engineSubs, _smokeTrails, _hotkeysDetach, _unitSoundDebounce)
 // — externalised access, identical semantics.
 
-import { SmokeTrailManager } from '../../model3d/weapon-driver.js'
-import { attachUnitHotkeys } from '../../model3d/unit-hotkeys.js'
+import { SmokeTrailManager } from '../../game3d/weapon-driver.js'
+import { attachUnitHotkeys } from '../../game3d/unit-hotkeys.js'
 
 // initSmokeTrails lazily installs a SmokeTrailManager on
 // `view._smokeTrails`.  Idempotent; returns the (possibly pre-

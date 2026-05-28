@@ -34,11 +34,11 @@
 // their own R / arrow-key hotkey routing.  They do NOT drive
 // COB scripts and they do NOT own a separate runtime/binding.
 
-import { ModelRenderer } from '../../model3d/model-renderer.js'
-import { ModelLoader } from '../../model3d/model-loader.js'
-import { OrbitCamera } from '../../model3d/orbit-camera.js'
-import { TextureCache } from '../../model3d/texture-cache.js'
-import { attachOrbitControls } from '../../model3d/camera-controls.js'
+import { ModelRenderer } from '../../game3d/model-renderer.js'
+import { ModelLoader } from '../../game3d/model-loader.js'
+import { OrbitCamera } from '../../game3d/orbit-camera.js'
+import { TextureCache } from '../../game3d/texture-cache.js'
+import { attachOrbitControls } from '../../game3d/camera-controls.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 
 export class ModelObserverView {

@@ -146,7 +146,7 @@ export class GameEngine {
     // hosts pass `audioFactory: () => new AudioPool()`, server-side
     // sims pass nothing and every binding gets the shared NullAudioPool
     // stub (zero-allocation no-op).  Keeps the cross-package import
-    // direction one-way: model3d → engine, never the reverse.
+    // direction one-way: game3d → engine, never the reverse.
     this._audioFactory = (typeof audioFactory === 'function') ? audioFactory : null
     // unitId → UnitInstance.  Map iteration order = insertion order
     // (per ECMAScript spec) so the inspector roster reads predictable.

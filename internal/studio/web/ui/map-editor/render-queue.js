@@ -7,7 +7,7 @@
 //
 // Sits under map-editor so the imports stay in the same subtree as
 // the renderers themselves; nothing in unit-editor / sandbox
-// reaches these — both have their own rAF loops in the model3d /
+// reaches these — both have their own rAF loops in the game3d /
 // sandbox engines.
 //
 // Cross-module deps via hostCallbacks:

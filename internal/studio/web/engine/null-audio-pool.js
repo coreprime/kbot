@@ -7,7 +7,7 @@
 // (camera-overhead minimap, replay scrubber) might want to share
 // the same engine instance with a single pool living elsewhere.
 //
-// Surface mirrors the model3d/audio-pool.js implementation closely
+// Surface mirrors the game3d/audio-pool.js implementation closely
 // enough that defensive `typeof pool.x === 'function'` checks at
 // call sites all pass.  Each method is a fast no-op + returns the
 // shape callers expect (null for play(), 0 for count(), empty for
