@@ -101,7 +101,10 @@ class _EditorView {
   destroy() {
     if (this.abort) { this.abort.abort(); this.abort = null }
     if (this.resizeObserver) { this.resizeObserver.disconnect(); this.resizeObserver = null }
-    resetGL()
+    // Free only THIS pane's GL context — a sibling pane in a split tab
+    // keeps its own live context.  Passing the glCanvas scopes the
+    // reset; the global resetGL() (boot teardown) still frees all.
+    resetGL(this.glCanvas)
     if (this.canvas?.parentNode) this.canvas.parentNode.removeChild(this.canvas)
     if (this.glCanvas?.parentNode) this.glCanvas.parentNode.removeChild(this.glCanvas)
     this.canvas = null

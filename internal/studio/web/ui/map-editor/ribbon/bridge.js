@@ -77,6 +77,23 @@ import { renderCanvas } from '../canvas/render.js'
 import { renderDrawer } from '../drawer.js'
 import { scheduleMinimapRender } from '../render-queue.js'
 
+// _ensureMapSplitEngaged lazily converts a map tab from the bootstrap
+// single-canvas path to the split-pane host so the View ▸ Split menu
+// has a pane tree to act on.  The New / Open paths push the map tab
+// with DEFERRED activation, so the registry's activate() — which mounts
+// the split host — doesn't run until a later tab switch; until then
+// splitActivePane would see no tab.split / tab.panes and silently
+// no-op.  The map tab instance's activate() body is synchronous (no
+// awaits — the active pane is pre-created in-line), so by the time it
+// returns tab.split + tab.panes + tab._splitAdapter are all live.
+// Idempotent: once panes exist this is a no-op.
+function _ensureMapSplitEngaged(tab) {
+  if (tab && (!tab.panes || tab.panes.size === 0)
+      && tab.instance && typeof tab.instance.activate === 'function') {
+    try { tab.instance.activate({}) } catch { /* leave on bootstrap path */ }
+  }
+}
+
 // publishMapRibbonState — push every map-editor ribbon-relevant
 // flag/label into the React store so the migrated ribbon re-renders
 // on the next signal commit.  Cheap when the React UI hasn't loaded
@@ -294,7 +311,9 @@ export function wireMapRibbonBridge(reactUi) {
       // tree from the menu, mirroring the SHIFT+right-click gesture.
       splitView:    (orient) => {
         const tab = hostCallbacks.getActiveTab?.()
-        if (tab) splitActivePane(tab, orient)
+        if (!tab) return
+        _ensureMapSplitEngaged(tab)
+        splitActivePane(tab, orient)
       },
       closeView:    () => {
         const tab = hostCallbacks.getActiveTab?.()
@@ -302,7 +321,9 @@ export function wireMapRibbonBridge(reactUi) {
       },
       canCloseView: () => {
         const tab = hostCallbacks.getActiveTab?.()
-        return tab ? canCloseActivePane(tab) : false
+        if (!tab) return false
+        _ensureMapSplitEngaged(tab)
+        return canCloseActivePane(tab)
       },
       // Map Settings
       openOTA:              () => openOTADialog(),

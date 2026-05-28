@@ -84,7 +84,6 @@ export class MapPaneView {
   // to a sibling.  Idempotent.
   setFocused(focused) {
     const want = !!focused
-    if (this._focused === want) return
     this._focused = want
     if (want) {
       this.scrollEl.id = 'canvas-scroll'
@@ -95,18 +94,48 @@ export class MapPaneView {
       if (this.scrollEl.id === 'canvas-scroll') this.scrollEl.id = ''
       if (this.stackEl.id === 'canvas-stack') this.stackEl.id = ''
     }
+    // The two stacked <canvas> elements carry the SAME global ids
+    // (`#canvas` / `#canvas-gl`) the ~20 querySelector call sites read
+    // — including renderCanvas's `$('#canvas')` + the GL renderer's
+    // `$('#canvas-gl')`.  Without juggling these, every pane's
+    // _EditorView mounts canvases with id="canvas", so querySelector
+    // always resolves to the FIRST pane and the render loop paints
+    // that one pane N times (the split looked broken / blank).  Move
+    // the ids onto the focused pane so each loop iteration targets the
+    // right surface.
+    this._applyCanvasIds(want)
   }
 
-  // attachEditorView — call once after this pane is in the DOM + has
-  // the focused-pane IDs (so _EditorView's mount can attach listeners
-  // bound to elements that resolve cleanly via querySelector).
-  // Idempotent: subsequent calls are no-ops if already attached.
+  // _applyCanvasIds gives or strips the global `#canvas` / `#canvas-gl`
+  // ids on this pane's editor-view canvases.  No-op until the
+  // _EditorView is attached (the canvases don't exist yet).
+  _applyCanvasIds(want) {
+    const ev = this.editorView
+    if (!ev) return
+    if (want) {
+      if (ev.canvas) ev.canvas.id = 'canvas'
+      if (ev.glCanvas) ev.glCanvas.id = 'canvas-gl'
+    } else {
+      if (ev.canvas && ev.canvas.id === 'canvas') ev.canvas.id = ''
+      if (ev.glCanvas && ev.glCanvas.id === 'canvas-gl') ev.glCanvas.id = ''
+    }
+  }
+
+  // attachEditorView — call once after this pane is in the DOM (the
+  // split-host's LeafSlot appends the root first).  Builds the per-pane
+  // _EditorView, then immediately re-applies the canvas-id state for
+  // THIS pane's focus: a freshly-mounted unfocused pane's canvases get
+  // id="canvas" from _EditorView.mount(), so we strip them right away
+  // to avoid a duplicate-id window where querySelector would resolve to
+  // the wrong pane.  Idempotent: subsequent calls return the existing
+  // view.
   attachEditorView() {
     if (this.editorView) return this.editorView
     this.editorView = recreateEditorViewFor({
       stackEl: this.stackEl,
       scrollEl: this.scrollEl,
     })
+    this._applyCanvasIds(this._focused)
     return this.editorView
   }
 

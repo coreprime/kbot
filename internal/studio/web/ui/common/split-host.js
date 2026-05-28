@@ -290,6 +290,13 @@ function LeafSlot({ tab, leafId, adapter }) {
         canvas._splitCtxWired = true
         _wireSplitContextMenu(canvas, tab, leafId, adapter)
       }
+      // Post-mount hook — fires once the pane's view exists AND its
+      // canvas is in the slot DOM.  Editors whose panes don't self-
+      // render (the map editor paints on demand via renderCanvas, not a
+      // per-pane rAF) use this to attach the pane's renderer + trigger
+      // the first paint.  Optional + idempotent: views that self-render
+      // (sandbox / unit observers) simply don't define it.
+      try { adapter.onLeafMounted && adapter.onLeafMounted(tab, leafId, view) } catch { /* ignore */ }
     }
     ensure()
     return () => {

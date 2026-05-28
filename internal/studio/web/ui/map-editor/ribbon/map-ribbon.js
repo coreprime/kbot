@@ -552,17 +552,6 @@ function _RedoSubmenuRow({ state: s }) {
   `
 }
 
-function ZoomButtons() {
-  return html`
-    <${RibbonButton} id="zoom-out" icon="－" title="Zoom out (scroll-wheel down)"
-      onClick=${() => mapRibbonBridge.zoomOut()} />
-    <${RibbonButton} id="zoom-in"  icon="＋" title="Zoom in (scroll-wheel up)"
-      onClick=${() => mapRibbonBridge.zoomIn()} />
-    <${RibbonButton} id="zoom-fit" label="Fit" title="Fit map to view"
-      onClick=${() => mapRibbonBridge.zoomFit()} />
-  `
-}
-
 function ViewDropdown({ state: s }) {
   return html`
     <div class="ribbon-dropdown" id="view-dropdown">
@@ -571,8 +560,21 @@ function ViewDropdown({ state: s }) {
         dropdownId="view-dropdown"
         icon="👁"
         label=${_displayLabel(s.viewMode)}
-        title="Gridlines / animation / display mode" />
+        title="Zoom / gridlines / animation / display mode" />
       <${Dropdown} id="view-dropdown" anchorId="view-dropdown-btn">
+        <${MenuSectionLabel}>Zoom<//>
+        <${MenuRow} icon="＋" label="Zoom In"
+          title="Zoom in (Shift +, scroll-wheel up)"
+          dropdownId="view-dropdown" closesDropdown=${false}
+          onClick=${() => mapRibbonBridge.zoomIn()} />
+        <${MenuRow} icon="－" label="Zoom Out"
+          title="Zoom out (Shift -, scroll-wheel down)"
+          dropdownId="view-dropdown" closesDropdown=${false}
+          onClick=${() => mapRibbonBridge.zoomOut()} />
+        <${MenuRow} icon="⤢" label="Fit to View"
+          title="Fit the whole map to the viewport (Home)"
+          dropdownId="view-dropdown"
+          onClick=${() => mapRibbonBridge.zoomFit()} />
         <${MenuSectionLabel}>Display mode<//>
         <div class="inline-row" id="display-mode-group">
           ${_VIEW_DISPLAY.map(([key, ico, label]) => html`
@@ -720,7 +722,6 @@ export function MapRibbon() {
       <${RibbonSection} label="Edit"><${EditDropdown} /><//>
       <${RibbonSection} label="Mode"><${ModeDropdown} state=${s} /><//>
       <${RibbonSection} label="Actions"><${ActionsDropdown} state=${s} /><//>
-      <${RibbonSection} label="Zoom"><${ZoomButtons} /><//>
       <${RibbonSection} label="View"><${ViewDropdown} state=${s} /><//>
       <${RibbonSection} id="schema-section" label="Map Settings">
         <div class="ribbon-group" id="map-settings-group">

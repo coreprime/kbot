@@ -31,58 +31,82 @@ import { state, $, hostCallbacks } from '../../host-context.js'
 import { TILE_PX } from '../constants.js'
 import { transformedSourceCell } from '../rotation.js'
 
-// gl owns every WebGL resource the renderer needs.  Re-initialised
-// from scratch by resetGL on map / view swap so the next
-// ensureGLRenderer call rebuilds against the freshly-mounted
-// #canvas-gl element.
-export const gl = {
-  ctx: null,
-  prog: null,
-  posLoc: -1,
-  uvLoc: -1,
-  texLoc: -1,
-  projLoc: -1,
-  vbo: null,
-  textures: new Map(),
-  failed: false,
+// Each #canvas-gl element owns its own WebGL context + program +
+// textures: a split map tab has N panes, each with its own
+// independent GL canvas, and a context is permanently bound to the
+// canvas it was created against.  `_glStates` keys per-canvas state
+// by the live element; `gl` is a module-level pointer at the CURRENT
+// pane's state, re-seated by ensureGLRenderer() each frame to match
+// whichever #canvas-gl is focused.  Keeping the name `gl` means every
+// `gl.ctx` / `gl.textures` access in the hot path below is unchanged
+// — only the resolution of WHICH state `gl` points at moved here.
+function _newGLState() {
+  return {
+    ctx: null, prog: null,
+    posLoc: -1, uvLoc: -1, texLoc: -1, projLoc: -1,
+    vbo: null, textures: new Map(), failed: false,
+  }
 }
+const _glStates = new Map()   // HTMLCanvasElement -> state
+let gl = _newGLState()        // the ACTIVE state (re-seated per pane)
 
-// resetGL drops the WebGL context, textures, and program references
-// so the next ensureGLRenderer() call rebuilds everything against
-// the freshly-mounted #canvas-gl element.  EditorView.destroy()
-// calls this before removing the canvas from the DOM.
-export function resetGL() {
-  if (gl.ctx) {
+// _freeGLState releases one state's GPU resources + loses its context.
+function _freeGLState(st) {
+  if (st.ctx) {
     try {
-      for (const t of gl.textures.values()) if (t && t.tex) gl.ctx.deleteTexture(t.tex)
-      if (gl.vbo) gl.ctx.deleteBuffer(gl.vbo)
-      if (gl.prog) gl.ctx.deleteProgram(gl.prog)
-      gl.ctx.getExtension('WEBGL_lose_context')?.loseContext()
+      for (const t of st.textures.values()) if (t && t.tex) st.ctx.deleteTexture(t.tex)
+      if (st.vbo) st.ctx.deleteBuffer(st.vbo)
+      if (st.prog) st.ctx.deleteProgram(st.prog)
+      st.ctx.getExtension('WEBGL_lose_context')?.loseContext()
     } catch { /* the context may already be lost */ }
   }
-  gl.textures.clear()
-  gl.ctx = null
-  gl.prog = null
-  gl.vbo = null
-  gl.posLoc = -1
-  gl.uvLoc = -1
-  gl.texLoc = -1
-  gl.projLoc = -1
-  // Clear `failed` so a fresh GL context gets a real attempt — the
-  // previous failure could have been transient (e.g. a lost context
-  // during a map switch).
-  gl.failed = false
+  st.textures.clear()
+  st.ctx = null
+  st.prog = null
+  st.vbo = null
+  st.posLoc = -1
+  st.uvLoc = -1
+  st.texLoc = -1
+  st.projLoc = -1
+  st.failed = false
+}
+
+// resetGL drops WebGL resources so the next ensureGLRenderer() call
+// rebuilds against a freshly-mounted #canvas-gl element.  Two call
+// shapes:
+//   resetGL(canvas) — free only that canvas's context (a single
+//                     pane's _EditorView.destroy()).
+//   resetGL()       — free EVERY pane's context (full teardown:
+//                     boot reset, closeAll).
+export function resetGL(canvas = null) {
+  if (canvas) {
+    const st = _glStates.get(canvas)
+    if (st) {
+      _freeGLState(st)
+      _glStates.delete(canvas)
+      if (gl === st) gl = _newGLState()
+    }
+    return
+  }
+  for (const st of _glStates.values()) _freeGLState(st)
+  _glStates.clear()
+  gl = _newGLState()
 }
 
 // ensureGLRenderer is called from renderCanvas; returns true when
-// the WebGL context is live and ready to draw.  Returns false (and
-// only the first time logs a warning) when WebGL isn't supported,
-// so the 2D fallback path stays in play.
+// the WebGL context for the CURRENT #canvas-gl is live and ready to
+// draw.  Resolves (and lazily builds) the per-canvas state, seats it
+// as `gl`, so multi-pane renders each target their own context.
+// Returns false (logging a warning once per canvas) when WebGL isn't
+// supported, so the 2D fallback path stays in play.
 export function ensureGLRenderer() {
-  if (gl.ctx) return true
-  if (gl.failed) return false
   const canvas = $('#canvas-gl')
   if (!canvas) return false
+  let st = _glStates.get(canvas)
+  if (!st) { st = _newGLState(); _glStates.set(canvas, st) }
+  gl = st
+  if (gl.ctx) return true
+  if (gl.failed) return false
   const ctx = canvas.getContext('webgl2', { premultipliedAlpha: false, antialias: false })
     || canvas.getContext('webgl', { premultipliedAlpha: false, antialias: false })
   if (!ctx) {

@@ -22,6 +22,7 @@ import {
   mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
   ensureSplitState as commonEnsure,
 } from '../common/split-host.js'
+import { hostCallbacks } from '../host-context.js'
 import { MapPaneView } from './pane-view.js'
 import { setActiveEditorView } from './editor-view.js'
 
@@ -37,6 +38,29 @@ const MAP_ADAPTER = {
   },
   onPaneFocus(tab, leafId) {
     _applyFocus(tab, leafId)
+  },
+  // onLeafMounted fires after the split-host has appended a pane's
+  // root into its slot.  Map panes don't self-render (the editor
+  // paints on demand through renderCanvas, not a per-pane rAF), so a
+  // freshly-split pane stays blank until we (1) build its _EditorView
+  // — without one, renderCanvas's pane loop skips it — and (2) fire a
+  // repaint.  We also mirror the focused pane's scroll position so the
+  // new pane opens looking at the same region instead of the corner.
+  onLeafMounted(tab, _leafId, view) {
+    if (!view) return
+    if (!view.editorView && typeof view.attachEditorView === 'function') {
+      view.attachEditorView()
+    }
+    const focused = tab.panes && tab.activePaneId && tab.panes.get(tab.activePaneId)
+    if (focused && focused !== view && focused.scrollEl && view.scrollEl) {
+      view.scrollEl.scrollLeft = focused.scrollEl.scrollLeft
+      view.scrollEl.scrollTop = focused.scrollEl.scrollTop
+    }
+    // Re-assert the active pane's id ownership (the new pane's
+    // attachEditorView briefly minted #canvas ids) then repaint every
+    // pane via the focus-juggle loop in renderCanvas.
+    if (tab.activePaneId) _applyFocus(tab, tab.activePaneId)
+    hostCallbacks.renderCanvas?.()
   },
 }
 
