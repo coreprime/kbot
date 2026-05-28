@@ -26,6 +26,7 @@ import {
   revivePanes,
   startAllRenderers,
 } from './split-host.js'
+import { startTabTick } from './tab-tick.js'
 
 export async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a
@@ -82,21 +83,11 @@ export async function activateModelTab(tab) {
         const ctrls = new MvControls(viewer)
         viewer._mvControls = ctrls
         hostCallbacks.mvFetchUnitMeta?.(viewer)
-        // Wire the per-frame inspector + auto-build hook.  Bind to
-        // the viewer's controls explicitly so the closure stays
-        // accurate even when a tab swap retargets _mvControls.
-        if (viewer.renderer) {
-          viewer.renderer.onAfterFrame = (dtMs) => {
-            hostCallbacks.advanceMvAutoBuild?.(dtMs)
-            // Only refresh inspectors when THIS viewer is the
-            // active one — backgrounded tabs shouldn't shove their
-            // signal updates into the React tree.
-            if (hostCallbacks.getActiveModelViewer?.() === viewer) {
-              hostCallbacks.refreshMvInspectors?.(dtMs)
-            }
-            ctrls.tick(dtMs)
-          }
-        }
+        // Per-frame work (binding.tick, advanceMvAutoBuild,
+        // refreshMvInspectors, ctrls.tick) lives on the tab-owned
+        // tick loop since Stage B of the split refactor — see
+        // tab-tick.js.  startTabTick is called below in the
+        // activate path; nothing to wire on the renderer here.
         // Per-tab sidebar + COB panel only refresh when THIS viewer
         // is the front one.  Otherwise a delayed load (the user
         // clicked away mid-fetch) would clobber the active tab's
@@ -134,18 +125,35 @@ export async function activateModelTab(tab) {
     revivePanes(tab)
     startAllRenderers(tab)
   }
-  // Wire the per-frame inspector refresh callback the first time
-  // the renderer is alive (it might not be on the very first
-  // activation if the network fetch lost a race).  Idempotent.
-  if (tab.viewer.renderer && !tab.viewer.renderer.onAfterFrame) {
-    tab.viewer.renderer.onAfterFrame = (dtMs) => {
-      hostCallbacks.advanceMvAutoBuild?.(dtMs)
-      if (hostCallbacks.getActiveModelViewer?.() === tab.viewer) {
-        hostCallbacks.refreshMvInspectors?.(dtMs)
-      }
-      tab.viewer._mvControls?.tick(dtMs)
+  // Tab-owned tick loop — drives binding.tick (CobRuntime + _sync +
+  // particles + audio) + MvControls.tick (aim / weapons / smoke
+  // trails / projectiles) + advanceMvAutoBuild + per-active-tab
+  // inspector refresh.  Pre-Stage-B this all lived on the primary
+  // renderer's onAfterFrame; moving to the tab decouples timing
+  // from the renderer so split-pane secondaries can't double-tick
+  // the runtime and a backgrounded tab really does freeze.
+  // startTabTick is idempotent (no-op if a loop is already running
+  // on this tab).
+  startTabTick(tab, (dtMs) => {
+    hostCallbacks.advanceMvAutoBuild?.(dtMs)
+    if (hostCallbacks.getActiveModelViewer?.() === tab.viewer) {
+      hostCallbacks.refreshMvInspectors?.(dtMs)
     }
-  }
+    // Drive the binding.  Was renderer-driven via setCobBinding's
+    // default driveTick:true; ModelViewer now passes driveTick:false
+    // so the renderer skips the tick and we own it here.
+    const cob = tab.viewer && tab.viewer.cob
+    if (cob && typeof cob.tick === 'function') {
+      try { cob.tick(dtMs) } catch (err) { console.warn('[unit-editor:cob.tick]', err) }
+    }
+    // MvControls.tick still uses skipRuntime:true since cob.tick
+    // above already advanced the runtime.  Movement / aim / weapon
+    // / smoke-trail state lives here.
+    const ctrls = tab.viewer && tab.viewer._mvControls
+    if (ctrls && typeof ctrls.tick === 'function') {
+      try { ctrls.tick(dtMs) } catch (err) { console.warn('[unit-editor:ctrls.tick]', err) }
+    }
+  })
   // Carry the unit editor's persisted Auto-Rotate state into this
   // tab's viewer ONLY on the very first activation (when the model
   // hasn't loaded yet).  On subsequent activations the tab's own

@@ -15,6 +15,7 @@ import { registerTabType } from '../tab-registry.js'
 import { $, hostCallbacks } from '../host-context.js'
 import { activateModelTab } from './tab.js'
 import { detachUnitSplit, disposeUnitSplit, stopAllRenderers } from './split-host.js'
+import { stopTabTick } from './tab-tick.js'
 
 // Per-tab record kept on the instance.  The host's tabs[] entry still
 // carries `name`, `meta`, `viewer`, `_pausedBeforeSwitch` for
@@ -101,6 +102,12 @@ class UnitEditorTabInstance {
     // tabs have a primary + N observers each with their own RAF loop.
     stopAllRenderers(tab)
     try { v.renderer && v.renderer.clearCanvas?.() } catch { /* ignore */ }
+    // Stop the tab-owned tick loop (binding.tick + ctrls.tick +
+    // inspector refresh + auto-build).  Without this a backgrounded
+    // tab keeps advancing its runtime on rAF — Pause from the panel
+    // would freeze the binding's `paused` flag, but unrelated tabs
+    // would still chew CPU on each frame.
+    stopTabTick(tab)
     // Pull the split mount out of the stage.  Pre-Phase-4 the canvas
     // sat directly on the stage; with the split mount in place the
     // mount is what an incoming activator needs to detach (the
@@ -118,6 +125,10 @@ class UnitEditorTabInstance {
     const tab = this._tabRef
     if (!tab || !tab.viewer || typeof tab.viewer.dispose !== 'function') return
     const v = tab.viewer
+    // Stop the tab-owned tick loop FIRST — otherwise the loop's
+    // captured tab.viewer reference would keep dereferencing into
+    // structures we're about to dispose.
+    stopTabTick(tab)
     try {
       const rt = v.cob && v.cob.runtime
       if (rt && typeof rt.setPaused === 'function') rt.setPaused(true)

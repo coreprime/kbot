@@ -854,20 +854,32 @@ export class ModelRenderer {
     this.model = model
   }
 
-  // setCobBinding attaches a per-frame COB-runtime tick to this
-  // renderer.  Pass null to detach (e.g. switching to a unit
-  // without a script).  When set, the render loop calls
-  // binding.tick(dtMs) before each draw, which advances the COB
-  // animators and copies per-piece state into the Model.
-  setCobBinding(binding) {
+  // setCobBinding attaches a binding to this renderer.  Two modes:
+  //
+  //  - driveTick: true  (default, single-renderer hosts) — the draw
+  //    loop calls binding.tick(dtMs) before each frame so script
+  //    animators run, the runtime advances, and per-piece state
+  //    lands in the model before geometry is drawn.  This is the
+  //    legacy behaviour every existing caller depends on.
+  //  - driveTick: false — the host owns the tick (e.g. a tab-owned
+  //    rAF loop calling binding.tick directly).  The renderer still
+  //    reads binding.particles for the SFX pass + binding.getSceneLight
+  //    for the dynamic light slot, but does NOT advance the binding.
+  //    Used by multi-pane unit-editor tabs since Phase 4: the primary
+  //    pane's renderer would double-tick the runtime if it both drove
+  //    the binding AND the tab kicked the binding from its own loop.
+  setCobBinding(binding, { driveTick = true } = {}) {
     this.cobBinding = binding || null
+    this._cobBindingDriveTick = !!driveTick
     // Forward the binding's particle pool to the renderer's SFX
     // pass.  Detaching the binding also detaches the pool so the
     // old unit's particles don't keep drawing.
     this.setParticlePool(binding ? binding.particles : null)
     // Force a redraw on attach so static scripts (Create) get
-    // their initial piece transforms applied immediately.
-    if (binding) binding.tick(0)
+    // their initial piece transforms applied immediately.  We only
+    // fire the seed-tick when we own the tick; host-driven hosts
+    // are expected to call binding.tick(0) themselves on attach.
+    if (binding && this._cobBindingDriveTick) binding.tick(0)
     this.requestRedraw()
   }
 
@@ -1539,9 +1551,13 @@ export class ModelRenderer {
       // COB animation tick — drives per-piece move/turn/spin
       // animators and writes the results into the model's piece
       // tree.  Must run before draw() so the new transforms land
-      // in this frame's geometry pass.
+      // in this frame's geometry pass.  Skipped when the host owns
+      // the tick (see setCobBinding's driveTick option) — in that
+      // case the host's per-tick callback is responsible for
+      // calling binding.tick before the next paint, and the
+      // pose-copy / particle / light reads below still hold.
       if (this.cobBinding) {
-        this.cobBinding.tick(dt * 1000)
+        if (this._cobBindingDriveTick !== false) this.cobBinding.tick(dt * 1000)
         // Pull the binding's strongest live light-emitting particle
         // into our single dynamic light slot.  The binding exposes
         // this as a pure getter so it has no awareness of being

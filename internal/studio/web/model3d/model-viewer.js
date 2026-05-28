@@ -363,7 +363,17 @@ export class ModelViewer {
           // knowledge of the renderer's audio mechanism, so we inject it
           // here at binding-construction time.
           this.cob = new CobBinding(model, this._unit, { audio: new AudioPool() })
-          this.renderer.setCobBinding(this.cob)
+          // driveTick:false — the unit-editor tab owns the per-frame
+          // tick loop since Stage B of the split refactor.  The
+          // renderer still reads binding.particles + getSceneLight
+          // each draw, but does NOT advance the binding (which
+          // would double-tick when both the tab loop and the draw
+          // loop fire).  Seed-tick is fired by the tab on attach.
+          this.renderer.setCobBinding(this.cob, { driveTick: false })
+          // Seed-tick equivalent to the one setCobBinding's
+          // driveTick:true path fires automatically — gets static
+          // scripts (Create) into their initial pose before paint.
+          try { this.cob.tick(0) } catch { /* ignore */ }
           // Earlier this auto-fired Create + Activate so freshly-
           // opened units stood in their idle "deployed" pose
           // (factories with doors open, gantries with tower raised,
