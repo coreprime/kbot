@@ -71,7 +71,7 @@ import { openScatterDialog } from '../dialogs/scatter.js'
 import { openSchemaEditor } from '../dialogs/schema-editor.js'
 import { runQualityChecker } from '../dialogs/quality-checker.js'
 import { openDeveloperDialog } from '../dev-stats.js'
-import { pickedPlayerCounts } from '../dialogs/dice-picker.js'
+import { DICE_PLAYER_COUNTS } from '../constants.js'
 import { playerCountLabel } from '../helpers.js'
 import { renderCanvas } from '../canvas/render.js'
 import { renderDrawer } from '../drawer.js'
@@ -116,8 +116,11 @@ export function publishMapRibbonState() {
   const schemaName = schemas.length > 0
     ? schemaPickerLabel(schemas[activeIdx] || schemas[0])
     : 'Schema'
-  // Add-grid — same player counts the legacy renderDiceGrid populated.
-  const addCounts = pickedPlayerCounts().map((n) => ({
+  // Add-grid — every standard player count, so the user can add any
+  // Network-N schema directly from the dropdown.  (Previously this
+  // mirrored only the counts picked at map-creation time, which left
+  // the grid showing a single chip and no way to add the rest.)
+  const addCounts = DICE_PLAYER_COUNTS.map((n) => ({
     count: n,
     label: String(n),
     label2: playerCountLabel(n),

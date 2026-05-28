@@ -637,34 +637,29 @@ function SchemaDropdown({ state: s }) {
         ${list.length === 0 ? html`
           <div class="menu-row" style="opacity:0.6; pointer-events:none">No schemas</div>
         ` : list.map((entry) => html`
-          <div key=${entry.index} class="schema-row">
-            <button class=${'menu-row schema-pick' + (entry.active ? ' active' : '')}
-                    title=${entry.tooltip || ''}
-                    onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.pickSchema(entry.index) }}>
-              <span class="ico">${entry.active ? '✓' : '·'}</span><span>${entry.label}</span>
-            </button>
-            <button class="menu-row schema-edit"
+          <div key=${entry.index}
+               class=${'schema-row' + (entry.active ? ' active' : '')}
+               title=${entry.tooltip || ''}
+               onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.pickSchema(entry.index) }}>
+            <span class="schema-row-name">${entry.label}</span>
+            <button class="schema-row-gear"
                     title="Edit this schema's metal / energy / units / start positions"
-                    onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.openSchemaEditor(entry.index) }}>
-              <span class="ico">✎</span>
-            </button>
+                    onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.openSchemaEditor(entry.index) }}>✎</button>
             ${list.length > 1 ? html`
-              <button class="menu-row schema-delete"
+              <button class="schema-row-del"
                       title="Delete this schema"
-                      onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.deleteSchema(entry.index) }}>
-                <span class="ico">✕</span>
-              </button>
+                      onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.deleteSchema(entry.index) }}>✕</button>
             ` : null}
           </div>
         `)}
         <${MenuSectionLabel}>Add<//>
-        <div id="schema-add-grid" class="schema-add-grid">
+        <div class="schema-add-grid">
           ${adds.map((a) => html`
             <button key=${a.count}
-                    class="dice-tile"
+                    class="schema-add-chip"
                     title=${a.label2 || `Add a ${a.label} schema`}
                     onClick=${(e) => { e.stopPropagation(); mapRibbonBridge.addSchema(a.count) }}>
-              <div class="dice-label">${a.label}</div>
+              ${a.label}
             </button>
           `)}
         </div>
