@@ -93,7 +93,15 @@ export function renderCanvas() {
   // panel info, etc) target the surface the user is actually looking at.
   if (savedId && tab.panes.has(savedId)) {
     const restored = tab.panes.get(savedId)
-    if (restored) _focusPane(tab, savedId, restored)
+    if (restored) {
+      _focusPane(tab, savedId, restored)
+      // Re-sync the module-level overscrollPadding to the focused pane.
+      // The loop above left it holding the LAST-iterated pane's value;
+      // the deferred minimap render + camera-info reads expect the
+      // focused pane's padding.  No-op on the focused pane's scroll
+      // (its padding didn't change) — purely refreshes the export.
+      applyOverscrollPadding()
+    }
   }
   if (!painted) {
     // Defensive: no pane has an editor view yet (very early in the

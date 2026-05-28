@@ -95,14 +95,29 @@ export function applyOverscrollPadding() {
     if (glCanvas.style.left !== padXS) glCanvas.style.left = padXS
     if (glCanvas.style.top !== padYS) glCanvas.style.top = padYS
   }
-  if (overscrollPadding.x !== padX) {
-    wrap.scrollLeft += padX - overscrollPadding.x
-    overscrollPadding.x = padX
-  }
-  if (overscrollPadding.y !== padY) {
-    wrap.scrollTop += padY - overscrollPadding.y
-    overscrollPadding.y = padY
-  }
+  // Scroll-position correction so the rendered scene stays put when the
+  // padding changes (window / split-divider resize).  The "previous
+  // padding" reference is tracked ON THE SCROLL ELEMENT, not in the
+  // module-level `overscrollPadding` singleton: renderCanvas's focus-
+  // juggle loop calls this once per pane against DIFFERENT `#canvas-
+  // scroll` containers in turn, so a shared reference cross-contaminates
+  // the corrections — a narrow pane would be told its padding "changed"
+  // from a wide sibling's value every frame and slam its scroll to the
+  // extreme (the symptom: the non-focused split pane jumps to a corner
+  // and shows mostly void).  Per-element tracking keeps each pane's
+  // correction honest; an unchanged pane sees prev === pad and stays put.
+  const prevX = (typeof wrap._ovPrevPadX === 'number') ? wrap._ovPrevPadX : padX
+  const prevY = (typeof wrap._ovPrevPadY === 'number') ? wrap._ovPrevPadY : padY
+  if (prevX !== padX) wrap.scrollLeft += padX - prevX
+  if (prevY !== padY) wrap.scrollTop += padY - prevY
+  wrap._ovPrevPadX = padX
+  wrap._ovPrevPadY = padY
+  // Mirror the pane currently wearing `#canvas-scroll` into the module
+  // export so the viewport / minimap / camera-info / dev-stats consumers
+  // (which read overscrollPadding for whichever pane is focused at the
+  // time they run) see this pane's value.
+  overscrollPadding.x = padX
+  overscrollPadding.y = padY
 }
 
 // zoomAtPointer scales around a screen-space point (typically the
