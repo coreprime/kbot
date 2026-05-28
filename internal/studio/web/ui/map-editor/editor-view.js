@@ -280,13 +280,42 @@ class _EditorView {
 }
 
 // recreateEditorView tears down any previously-mounted EditorView and
-// mounts a fresh one.  Called from finishEditorBoot (on every map open
-// or new) and applyResize so no DOM nodes, event listeners, or GL
-// state from the previous map survive the switch.
+// mounts a fresh one against the bootstrap singletons.  Called from
+// finishEditorBoot (on every map open or new) and applyResize so no
+// DOM nodes, event listeners, or GL state from the previous map
+// survive the switch.  In the split-pane world (Phase 5), the focused
+// pane's _EditorView is what this module-let points at; sibling
+// panes have their own instances created via recreateEditorViewFor.
 export function recreateEditorView() {
   if (_editorView) _editorView.destroy()
   _editorView = new _EditorView()
   _editorView.mount()
+}
+
+// recreateEditorViewFor mounts a fresh _EditorView against an
+// explicit pair of stack + scroll elements (per-pane DOM created by
+// MapPaneView).  Returns the new instance.  Also updates the
+// module-let _editorView so existing code paths that read it (e.g.
+// renderCanvas, viewport helpers) see the new active view.  Phase 5
+// callers (split-host adapter) invoke this when a pane gains focus.
+export function recreateEditorViewFor({ stackEl, scrollEl }) {
+  // Don't destroy the previous _editorView here — sibling panes
+  // each own theirs and dispose independently via destroyEditorView.
+  // Just promote the new instance into the module-let.
+  const v = new _EditorView({ stackEl, scrollEl })
+  v.mount()
+  _editorView = v
+  return v
+}
+
+// setActiveEditorView promotes an already-mounted _EditorView into
+// the module-let without re-mounting.  Used by the split-host
+// adapter when a pane gains focus — the pane already has its
+// _EditorView (created on first mount); we just want renderCanvas
+// + the viewport helpers + other singleton-reading code paths to
+// target THIS pane's instance.
+export function setActiveEditorView(view) {
+  if (view) _editorView = view
 }
 
 // prepareCanvasDimensions resizes the canvas backing buffers
@@ -339,9 +368,20 @@ export function centerViewOnMap() {
   wrap.scrollTop = midY - wrap.clientHeight / 2
 }
 
-// destroyEditorView lets the closeTab/closeAll paths tear down
-// the EditorView explicitly without going through a full
-// recreateEditorView cycle.  Idempotent on a null singleton.
-export function destroyEditorView() {
+// destroyEditorView tears down an _EditorView instance.  Two call
+// patterns:
+//   destroyEditorView()      — destroys the singleton module-let
+//                              (legacy path; closeTab/closeAll
+//                              etc.).  Idempotent on null.
+//   destroyEditorView(view)  — destroys a specific instance (Phase 5
+//                              MapPaneView.dispose).  Clears the
+//                              module-let only when the disposed
+//                              view IS the active one.
+export function destroyEditorView(view = null) {
+  if (view) {
+    try { view.destroy() } catch { /* ignore */ }
+    if (_editorView === view) _editorView = null
+    return
+  }
   if (_editorView) { _editorView.destroy(); _editorView = null }
 }
