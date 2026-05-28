@@ -724,12 +724,10 @@ export function MapRibbon() {
       <${RibbonSection} label="Actions"><${ActionsDropdown} state=${s} /><//>
       <${RibbonSection} label="View"><${ViewDropdown} state=${s} /><//>
       <${RibbonSection} id="schema-section" label="Map Settings">
-        <div class="ribbon-group" id="map-settings-group">
-          <${RibbonButton} id="btn-ota" icon="⚙" label="Properties"
-            title="Edit map properties (OTA metadata) — mission name, planet, players, water flags"
-            onClick=${() => mapRibbonBridge.openOTA()} />
-          <${SchemaDropdown} state=${s} />
-        </div>
+        <${RibbonButton} id="btn-ota" icon="⚙" label="Properties"
+          title="Edit map properties (OTA metadata) — mission name, planet, players, water flags"
+          onClick=${() => mapRibbonBridge.openOTA()} />
+        <${SchemaDropdown} state=${s} />
       <//>
       <${RibbonSection} label="Configure" right=${true}>
         <${RibbonButton} id="btn-settings" icon="⚙" label="Settings"

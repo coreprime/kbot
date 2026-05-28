@@ -155,13 +155,17 @@ export function wireViewMenu() {
   hostCallbacks.publishMapRibbonState?.()
 }
 
-// wireZoomButtons binds the three Zoom ribbon buttons.  Lives outside
-// EditorView because the buttons sit in the toolbar (which is mounted
-// once for the session) rather than the canvas stack.
+// wireZoomButtons binds the legacy static Zoom toolbar buttons IF they
+// exist.  The React map ribbon now drives zoom through the View ▸ Zoom
+// menu (mapRibbonBridge.zoomIn / zoomOut / zoomFit), so #zoom-in /
+// #zoom-out / #zoom-fit are no longer in the DOM.  The `?.` guards are
+// load-bearing: without them this throws on the missing elements during
+// finishEditorBoot's wiring block, aborting the whole boot before
+// loadSections() runs — which is why the section drawer came up empty.
 export function wireZoomButtons() {
-  $('#zoom-in').addEventListener('click', () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)))
-  $('#zoom-out').addEventListener('click', () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)))
-  $('#zoom-fit').addEventListener('click', fitZoom)
+  $('#zoom-in')?.addEventListener('click', () => setZoom(state.zoom * (state.settings?.zoomStep || 1.25)))
+  $('#zoom-out')?.addEventListener('click', () => setZoom(state.zoom / (state.settings?.zoomStep || 1.25)))
+  $('#zoom-fit')?.addEventListener('click', fitZoom)
 }
 
 // placementAnchor returns the top-left tile coordinate where the section
