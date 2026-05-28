@@ -69,6 +69,13 @@ export class MapPaneView {
     // #canvas-scroll / #canvas-stack IDs.  Used by setFocused to
     // avoid no-op churn.
     this._focused = false
+    // Per-pane zoom factor.  null until the split host seeds it (from
+    // the splitting pane / the doc's zoom).  renderCanvas's focus-juggle
+    // loop swaps state.zoom to this value while painting THIS pane, so
+    // each pane zooms independently; setZoom writes it for the focused
+    // pane.  Scroll position is already per-pane (each scrollEl is its
+    // own scroll container).
+    this.zoom = null
   }
 
   // canvas — the split-host's view-shape contract wants a `.canvas`

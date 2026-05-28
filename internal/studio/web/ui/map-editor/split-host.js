@@ -22,7 +22,7 @@ import {
   mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
   ensureSplitState as commonEnsure,
 } from '../common/split-host.js'
-import { hostCallbacks } from '../host-context.js'
+import { hostCallbacks, state } from '../host-context.js'
 import { MapPaneView } from './pane-view.js'
 import { setActiveEditorView } from './editor-view.js'
 
@@ -55,6 +55,16 @@ const MAP_ADAPTER = {
     if (focused && focused !== view && focused.scrollEl && view.scrollEl) {
       view.scrollEl.scrollLeft = focused.scrollEl.scrollLeft
       view.scrollEl.scrollTop = focused.scrollEl.scrollTop
+    }
+    // Seed this pane's zoom so it's never null once mounted — a null
+    // zoom would fall back to the shared state.zoom in the render loop,
+    // which leaks one pane's zoom changes onto the others.  A new split
+    // pane inherits the splitting pane's zoom; the very first pane takes
+    // the doc-level zoom.
+    if (view.zoom == null) {
+      view.zoom = (focused && focused !== view && focused.zoom != null)
+        ? focused.zoom
+        : (state.zoom != null ? state.zoom : 1)
     }
     // Re-assert the active pane's id ownership (the new pane's
     // attachEditorView briefly minted #canvas ids) then repaint every

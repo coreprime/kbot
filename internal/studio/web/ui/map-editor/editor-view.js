@@ -140,6 +140,22 @@ class _EditorView {
       hostCallbacks.cursor.lastHover = null
     }, sig)
 
+    // Per-pane scroll → re-render.  The map renders only the VISIBLE
+    // tile/feature bounds into the full-size canvas buffer, so a scroll
+    // (minimap jump, arrow-pan, drag) must repaint or the newly-exposed
+    // region shows stale / void content ("broken grid in lieu of map").
+    // The legacy wireMinimap() listener lived on the bootstrap
+    // #canvas-scroll only; once a tab engages the split host the focused
+    // pane's own scrollEl becomes #canvas-scroll and the bootstrap one
+    // is hidden, so that listener stops firing.  Binding here covers
+    // every pane's scrollEl (and the bootstrap singleton, which also
+    // mounts through _EditorView).
+    if (scroll) {
+      scroll.addEventListener('scroll', () => {
+        hostCallbacks.scheduleRenderCanvas?.()
+        hostCallbacks.scheduleMinimapRender?.()
+      }, { signal: abort.signal })
+    }
     // Wheel/trackpad routing:
     //   - Ctrl/Cmd + wheel → zoom (covers Mac pinch — Safari sends pinch
     //     as wheel-with-ctrlKey).

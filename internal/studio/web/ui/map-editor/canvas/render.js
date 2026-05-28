@@ -115,6 +115,10 @@ function _focusPane(tab, leafId, pane) {
   }
   if (typeof pane.setFocused === 'function') pane.setFocused(true)
   if (pane.editorView) setActiveEditorView(pane.editorView)
+  // Adopt this pane's own zoom so _renderCanvasOnce sizes its canvas
+  // independently — the split panes zoom separately.  Panes seeded
+  // with a null zoom (very first frame) just keep the doc-level zoom.
+  if (pane.zoom != null) state.zoom = pane.zoom
 }
 
 function _renderCanvasOnce() {

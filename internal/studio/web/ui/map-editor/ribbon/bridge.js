@@ -320,10 +320,14 @@ export function wireMapRibbonBridge(reactUi) {
         if (tab) closeActivePane(tab)
       },
       canCloseView: () => {
+        // Do NOT engage the split host here — this runs on every View
+        // menu render (SplitMenuItems reads it), and engaging would
+        // restructure a single-pane map onto the per-pane path just by
+        // opening the menu.  Un-engaged tabs have no split tree, so
+        // canCloseActivePane correctly reports false (the lone pane
+        // can't be closed).
         const tab = hostCallbacks.getActiveTab?.()
-        if (!tab) return false
-        _ensureMapSplitEngaged(tab)
-        return canCloseActivePane(tab)
+        return tab ? canCloseActivePane(tab) : false
       },
       // Map Settings
       openOTA:              () => openOTADialog(),

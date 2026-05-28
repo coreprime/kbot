@@ -23,7 +23,7 @@
 //   - scheduleRenderCanvas()   — rAF-batched canvas redraw
 //   - scheduleMinimapRender()  — rAF-batched minimap redraw
 
-import { state, $, clamp, hostCallbacks } from '../host-context.js'
+import { state, $, clamp, hostCallbacks, tabs, tabState } from '../host-context.js'
 import {
   MAP_PAN_RATE_PX_S,
   MAP_PAN_ACCEL_MAX_MULT,
@@ -42,6 +42,13 @@ export const overscrollPadding = { x: 0, y: 0 }
 
 export function setZoom(z) {
   state.zoom = clamp(z, MIN_ZOOM, MAX_ZOOM)
+  // Persist the new zoom onto the FOCUSED pane so the per-pane render
+  // loop keeps split panes independent — zoom acts on the current
+  // pane, not both.  No-op on the bootstrap (un-split) path where the
+  // tab has no panes.
+  const _tab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
+  const _pane = _tab && _tab.panes && _tab.activePaneId ? _tab.panes.get(_tab.activePaneId) : null
+  if (_pane) _pane.zoom = state.zoom
   const canvas = $('#canvas')
   const w = canvas.width * state.zoom + 'px'
   const h = canvas.height * state.zoom + 'px'

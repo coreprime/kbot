@@ -127,8 +127,12 @@ export class ModelObserverView {
       // we never call binding.tick; the primary's renderer is
       // responsible for driving the runtime.  We just paint the
       // result with our own camera.
-      this.renderer.onAfterFrame = () => this._syncPose()
+      this.renderer.onAfterFrame = () => { this._mirrorPrimaryConfig(); this._syncPose() }
     }
+    // Mirror the primary's world look immediately so a sea unit's
+    // observer pane opens on water (not the default terrain) instead of
+    // looking like an independent copy of the scene.
+    this._mirrorPrimaryConfig()
     // Lazy-load the model into our GL context.  Cached so split-
     // open / close cycles don't refetch + re-upload.
     if (this._modelName !== modelName) {
@@ -149,6 +153,41 @@ export class ModelObserverView {
         this.renderer.requestRedraw()
       } catch { /* ignore — primary's load is authoritative for errors */ }
     }
+  }
+
+  // _mirrorPrimaryConfig keeps THIS observer's renderer visually in
+  // step with the primary's scene config — ground (sea vs terrain),
+  // environment (sky + water colour + tileset), render mode,
+  // submersion, team colour, and the post-process toggles.  Without
+  // it an observer pane spun up from a sea unit shows the default land
+  // terrain and reads as an "independent copy of the world".  Runs
+  // every frame but is near-free: each field is compared to its
+  // last-applied value and the (sometimes heavy) setter only fires on
+  // an actual change, so steady-state is a dozen cheap comparisons.
+  _mirrorPrimaryConfig() {
+    const pr = this.primary && this.primary.renderer
+    const r = this.renderer
+    if (!pr || !r) return
+    const c = this._cfg || (this._cfg = {})
+    const apply = (key, val, fn) => {
+      if (c[key] === val) return
+      c[key] = val
+      try { fn(val) } catch { /* ignore — observer is best-effort */ }
+    }
+    apply('ground', pr.groundMode, (v) => r.setGroundMode && r.setGroundMode(v))
+    apply('env', pr._envKey, (v) => { if (v && r.setEnvironment) r.setEnvironment(v) })
+    apply('mode', pr.renderMode, (v) => r.setRenderMode && r.setRenderMode(v))
+    apply('sub', pr.submersionMode, (v) => r.setSubmersionMode && r.setSubmersionMode(v))
+    apply('team', pr.teamColorEnable ? (pr.teamColor || []).join(',') : '',
+      () => r.setTeamColor && r.setTeamColor(pr.teamColorEnable ? pr.teamColor : null))
+    apply('refl', pr.optReflections, (v) => r.setReflectionsEnabled && r.setReflectionsEnabled(v))
+    apply('spec', pr.optSpecular, (v) => r.setSpecularEnabled && r.setSpecularEnabled(v))
+    apply('beams', pr.optGodBeams, (v) => r.setGodBeamsEnabled && r.setGodBeamsEnabled(v))
+    apply('dof', pr.optDof, (v) => r.setDoFEnabled && r.setDoFEnabled(v))
+    apply('wrefl', pr.optWaterReflections, (v) => r.setWaterReflectionsEnabled && r.setWaterReflectionsEnabled(v))
+    apply('bob', pr.optBob, (v) => r.setBobEnabled && r.setBobEnabled(v))
+    apply('waves', pr.optWaves, (v) => r.setWavesEnabled && r.setWavesEnabled(v))
+    apply('bgt', pr.optBgTerrain, (v) => r.setBgTerrainEnabled && r.setBgTerrainEnabled(v))
   }
 
   // _syncPose walks the primary's model in lockstep with our local
