@@ -122,12 +122,17 @@ export class ModelObserverView {
         // an observer pane too (Shift+/- zooms instead).
         onSimSpeedStep: (dir) => stepSimSpeed(dir),
       })
-      // Per-frame hook — copy the primary's animated pose into our
-      // local model and refresh.  This is where the asymmetry lands:
-      // we never call binding.tick; the primary's renderer is
-      // responsible for driving the runtime.  We just paint the
-      // result with our own camera.
-      this.renderer.onAfterFrame = () => { this._mirrorPrimaryConfig(); this._syncPose() }
+      // Per-frame hook — mirror the primary's scene config + unit-level
+      // world transform, attach its projectile pool, then copy the
+      // animated piece pose into our local model.  We never call
+      // binding.tick; the primary's renderer drives the runtime, we
+      // just paint the result with our own camera.
+      this.renderer.onAfterFrame = () => {
+        this._mirrorPrimaryConfig()
+        this._mirrorUnitTransform()
+        this._syncProjectiles()
+        this._syncPose()
+      }
     }
     // Mirror the primary's world look immediately so a sea unit's
     // observer pane opens on water (not the default terrain) instead of
@@ -188,6 +193,38 @@ export class ModelObserverView {
     apply('bob', pr.optBob, (v) => r.setBobEnabled && r.setBobEnabled(v))
     apply('waves', pr.optWaves, (v) => r.setWavesEnabled && r.setWavesEnabled(v))
     apply('bgt', pr.optBgTerrain, (v) => r.setBgTerrainEnabled && r.setBgTerrainEnabled(v))
+  }
+
+  // _mirrorUnitTransform copies the primary's unit-level world
+  // placement — the Controls-panel Move position, body heading, and
+  // flight altitude that MvControls._applyRendererTransform writes into
+  // the primary renderer's _unitTransform — onto this observer's
+  // renderer.  _syncPose only copies the per-piece COB channels (legs /
+  // turret / flares), so without this the body stays rooted at the
+  // origin: a unit the user walks across the field or rotates would
+  // appear frozen in every secondary pane even while its limbs animate.
+  _mirrorUnitTransform() {
+    const pr = this.primary && this.primary.renderer
+    const r = this.renderer
+    if (!pr || !r || !pr._unitTransform || typeof r.setUnitTransform !== 'function') return
+    const t = pr._unitTransform
+    r.setUnitTransform(t.x || 0, t.y || 0, t.z || 0, t.headingRad || 0)
+  }
+
+  // _syncProjectiles points this observer's renderer at the primary
+  // binding's particle pool (projectiles, muzzle flashes, smoke trails,
+  // beams) in READ-ONLY mode: driveTick:false means we draw the shared
+  // pool + pull the dynamic light from it but never advance the binding
+  // (the primary's renderer owns the single per-frame tick).  Re-asserts
+  // whenever the primary swaps binding (unit reload) so the observer
+  // never draws a stale pool.  Without it the secondary panes play the
+  // firing animation but no visible shot leaves the barrel.
+  _syncProjectiles() {
+    const r = this.renderer
+    if (!r || typeof r.setCobBinding !== 'function') return
+    const binding = (this.primary && this.primary.cob) || null
+    if (r.cobBinding === binding) return
+    r.setCobBinding(binding, { driveTick: false })
   }
 
   // _syncPose walks the primary's model in lockstep with our local
