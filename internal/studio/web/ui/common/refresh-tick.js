@@ -167,12 +167,13 @@ export function refreshMvInspectors(dtMs = 16) {
       : 0
     ui.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
   }
-  // Promote 'creating' → 'created' once the Create thread has died.
-  // The React Controls + Script Commands panels read cob._lifecycle
-  // and render the right gated state next refresh, so this is the
-  // only imperative bit the host still needs to do.  The ribbon's
-  // COB section is still vanilla and gates its own button rows.
-  hostCallbacks.syncMvActionsRunning?.(mv.cob)
+  // Per-tick lifecycle advancement for the focused unit — promotes
+  // 'creating' → 'created' when the Create thread has died and auto-
+  // fires Activate once build% reaches 100.  Takes mv (not mv.cob) so
+  // the advance can read the build-percent gate on the auto-Activate
+  // transition.  The sandbox additionally walks ALL its units in its
+  // own onAfterFrame hook so non-focused units lifecycle-advance too.
+  hostCallbacks.syncMvActionsRunning?.(mv)
   hostCallbacks.syncCobRibbonRunning?.(mv.cob)
   // Section-specific tick consumers (e.g. unit-editor's debugger
   // panels) get their turn now.  Each subscriber receives the same

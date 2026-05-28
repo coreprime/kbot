@@ -42,6 +42,7 @@
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { mvSetSimulationSpeed } from '../common/sim-controls.js'
+import { advanceCobLifecycle, bindingOf } from '../common/cob-lifecycle.js'
 
 // mvSyncCobAttrSlidersFromPorts copies cobDamage / cobBuildPercent
 // off the ModelViewer proxy onto the React COB ribbon's slider
@@ -58,15 +59,15 @@ export function mvSyncCobAttrSlidersFromPorts(mv) {
   }
 }
 
-export function syncMvActionsRunning(cob) {
-  if (!cob) return
-  // Promote 'creating' → 'created' once the Create thread has died.
-  // The React Script Commands panel reads cob._lifecycle every tick
-  // so this promotion takes effect on the next publish without an
-  // explicit re-render call.
-  if (cob._lifecycle === 'creating' && !isCobScriptRunning(cob, 'Create')) {
-    cob._lifecycle = 'created'
-  }
+// syncMvActionsRunning is the refresh-tick entry point for lifecycle
+// promotion.  Takes the full mv proxy (not just cob) so the build-
+// percent gate on the auto-Activate transition can read mv.cobBuildPercent.
+// The actual phase-change logic lives in advanceCobLifecycle (shared
+// with the sandbox's per-frame walker over all units).
+export function syncMvActionsRunning(mv) {
+  if (!mv || !mv.cob) return
+  const buildPct = (mv.cobBuildPercent != null) ? (mv.cobBuildPercent | 0) : 100
+  advanceCobLifecycle(mv.cob, buildPct)
 }
 
 export function syncCobRibbonRunning(cob) {
@@ -168,6 +169,12 @@ export function isCobScriptRunning(cob, name) {
 //     doesn't tip down through the unit's own hull.
 export function runCobEntry(cob, name) {
   if (!cob || !cob.hasScript(name)) return
+  // Walk the wrapCobWithAggregate proxy down to the underlying
+  // CobBinding so _lifecycle writes persist across refresh ticks.
+  // Unit-editor callers pass a bare binding (the walk no-ops); the
+  // sandbox passes a proxy whose own-property writes would be lost
+  // when the next inspector publish rebuilds it.
+  const binding = bindingOf(cob)
   // Don't re-start a script that already has a thread alive.  The
   // first line of activatescr-style helpers is usually
   // `turn <piece> to <axis> <0> now` which INSTANTLY snaps the
@@ -181,22 +188,22 @@ export function runCobEntry(cob, name) {
   // thread is mid-flight), suppress every other action.  Real TA
   // does the same — a freshly-built unit only responds to its own
   // initialisation script.
-  const lifecycle = cob._lifecycle || 'created'
+  const lifecycle = binding._lifecycle || 'created'
   if ((lifecycle === 'unborn' || lifecycle === 'creating') && !/^Create$/i.test(name)) return
   // Starting Create flips the lifecycle into 'creating' so the
   // other buttons stay disabled while the script runs.
-  if (/^Create$/i.test(name)) cob._lifecycle = 'creating'
+  if (/^Create$/i.test(name)) binding._lifecycle = 'creating'
   const mvControls = hostCallbacks.getActiveMvControls?.()
   if (/^Activate$/i.test(name)) {
-    if (cob._lifecycle === 'activated') return
-    cob._lifecycle = 'activated'
+    if (binding._lifecycle === 'activated') return
+    binding._lifecycle = 'activated'
     if (cob.hasScript('activatescr') && !isCobScriptRunning(cob, 'activatescr')) cob.start('activatescr')
     if (cob.hasScript('OpenYard') && !isCobScriptRunning(cob, 'OpenYard')) cob.start('OpenYard')
     mvControls?._playSoundRandom?.(['activate', 'select1', 'select2', 'select3', 'build', 'unitcomplete'])
   }
   if (/^Deactivate$/i.test(name)) {
-    if (cob._lifecycle === 'deactivated') return
-    cob._lifecycle = 'deactivated'
+    if (binding._lifecycle === 'deactivated') return
+    binding._lifecycle = 'deactivated'
     if (cob.hasScript('deactivatescr') && !isCobScriptRunning(cob, 'deactivatescr')) cob.start('deactivatescr')
     if (cob.hasScript('CloseYard') && !isCobScriptRunning(cob, 'CloseYard')) cob.start('CloseYard')
     // Same fallback chain as Activate, biased toward the second

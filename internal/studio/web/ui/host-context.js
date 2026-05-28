@@ -438,7 +438,7 @@ export const hostCallbacks = {
   // React COB-ribbon's signal.  Both still belong studio-side
   // because they share isCobScriptRunning / _collectRunningCobScripts
   // helpers that haven't been factored out yet.
-  syncMvActionsRunning: null,  // (cob) => void
+  syncMvActionsRunning: null,  // (mv) => void — advances cob lifecycle (creating→created→activated) for the focused unit
   syncCobRibbonRunning: null,  // (cob) => void
   // ── Map-editor seams used by /ui/map-editor/register-tab.js.
   // Module-let snapshot / restore is host-side because the doc

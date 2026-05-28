@@ -151,8 +151,21 @@ function ControlsBody() {
       ${showActive ? html`
         <${PortToggleRow}
           label="Active" portKey="activation" on=${ports.activation === 1}
-          tip='GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).'
-          onChange=${(on) => { ports.activation = on ? 1 : 0 }} />
+          tip='GET ACTIVATION returns 1 when the unit is "on" (factory producing, radar broadcasting, etc.).  Flipping the toggle fires Activate / Deactivate on the COB.'
+          onChange=${(on) => {
+            // Update the port value first so any script that reads
+            // GET ACTIVATION on its next tick sees the new state.
+            ports.activation = on ? 1 : 0
+            // Route through hostBridge.runCobEntry so the binding's
+            // _lifecycle flips + activatescr/OpenYard (or deactivatescr/
+            // CloseYard) helper scripts fire + the Activate/Deactivate
+            // entry script runs + the audio cue plays — same code path
+            // a user click in the Script Commands panel takes, but
+            // toggled by the port switch.  runCobEntry early-outs when
+            // the lifecycle is already in the target state so a
+            // rapid toggle doesn't double-fire.
+            hostBridge.runCobEntry(cob, on ? 'Activate' : 'Deactivate')
+          }} />
       ` : null}
       <${PortSliderRow}
         label="Health" portKey="health"

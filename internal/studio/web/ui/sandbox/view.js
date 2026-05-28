@@ -37,6 +37,7 @@ import {
   wrapCobWithAggregate,
   disposeView,
 } from '../common/view-helpers.js'
+import { advanceCobLifecycle } from '../common/cob-lifecycle.js'
 
 export class SandboxView {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -271,6 +272,20 @@ export class SandboxView {
     // animation applied per-tick is visible immediately.
     this.renderer.onAfterFrame = (dtMs) => {
       if (this.scene) this.scene.tick(dtMs)
+      // Per-frame lifecycle advance for every live unit.  The shared
+      // refresh-tick only walks the FOCUSED unit (so the Controls /
+      // Script Commands panels see the lifecycle flip); non-focused
+      // units need their own walker, otherwise background spawn-ins
+      // never get their Activate auto-fired and stay in their pre-
+      // animation pose.  Sandbox units have no build-ramp, so we
+      // pass build% = 100 (the function's default) and Activate
+      // fires as soon as Create's thread dies.
+      if (this.scene) {
+        for (const u of this.scene.units()) {
+          if (u.dead || !u.binding) continue
+          advanceCobLifecycle(u.binding, u.buildPercent != null ? u.buildPercent : 100)
+        }
+      }
       // Pull-side scene light: ask the engine for the brightest live
       // light-emitting particle across all units and push it into the
       // renderer's single dynamic-light slot.  This is the cross-unit
@@ -324,10 +339,13 @@ export class SandboxView {
       const inst = this.scene.addUnit({ name, model, cobScript, x, z, headingRad, side })
       // Auto-run Create on spawn so the unit immediately settles into
       // its idle pose (flares hidden, panels at rest) without the user
-      // having to click anything per-unit.  Skipped silently when the
-      // unit has no Create script.
-      if (inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
-        try { inst.cobUnit.start('Create') } catch { /* ignore */ }
+      // having to click anything per-unit.  Flips lifecycle to
+      // 'creating' so the per-frame advanceCobLifecycle walker can
+      // promote it to 'created' (when Create's thread dies) and then
+      // auto-fire Activate (since sandbox units start at build% 100).
+      if (inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
+        inst.binding._lifecycle = 'creating'
+        try { inst.binding.start('Create') } catch { /* ignore */ }
       }
       // Fetch FBI / weapon metadata in the background.  The shared
       // weapon driver needs weapons[0..2] to spawn proper TA
@@ -475,8 +493,9 @@ export class SandboxView {
       })
       if (inst) {
         this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
-        if (inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
-          try { inst.cobUnit.start('Create') } catch { /* ignore */ }
+        if (inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
+          inst.binding._lifecycle = 'creating'
+          try { inst.binding.start('Create') } catch { /* ignore */ }
         }
         this.#setStatus(`Spawned ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
       }
@@ -1288,9 +1307,13 @@ export class SandboxView {
       // projectiles when they fire.
       this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
       // Auto-run Create on spawn so the unit immediately settles into
-      // its idle pose (flares hidden, panels at rest).
-      if (inst && inst.cobUnit && inst.cobUnit.scriptNames && inst.cobUnit.scriptNames.includes('Create')) {
-        try { inst.cobUnit.start('Create') } catch { /* ignore */ }
+      // its idle pose (flares hidden, panels at rest).  Lifecycle
+      // 'creating' lets advanceCobLifecycle auto-promote and (when
+      // the unit ships an Activate script) auto-fire that too once
+      // Create's thread dies.
+      if (inst && inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
+        inst.binding._lifecycle = 'creating'
+        try { inst.binding.start('Create') } catch { /* ignore */ }
       }
       this.#setStatus(`Spawned ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
       // Single-shot placement by default: one click drops one unit and
