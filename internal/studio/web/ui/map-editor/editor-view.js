@@ -50,9 +50,17 @@ import { handlePaint } from './modes/paint.js'
 let _editorView = null
 
 class _EditorView {
-  constructor() {
-    this.stack = document.querySelector('#canvas-stack')
-    this.scroll = document.querySelector('#canvas-scroll')
+  // Accepts injected stack + scroll elements so the same view shell
+  // can mount into either:
+  //   - the bootstrap singletons #canvas-stack / #canvas-scroll
+  //     (default — the path every existing call site uses)
+  //   - per-pane elements created by MapPaneView for the split-pane
+  //     layout (Phase 5)
+  // querySelector fallback keeps backwards compatibility for the
+  // single-pane callers; the split-host passes the per-pane refs.
+  constructor({ stackEl = null, scrollEl = null } = {}) {
+    this.stack = stackEl || document.querySelector('#canvas-stack')
+    this.scroll = scrollEl || document.querySelector('#canvas-scroll')
     this.canvas = null
     this.glCanvas = null
     this.abort = null
