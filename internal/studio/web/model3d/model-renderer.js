@@ -19,6 +19,14 @@
 
 import { Mat4 } from './mat4.js'
 import { loadAllShaders } from './shader-loader.js'
+import {
+  DEFAULT_CULL_ENABLED,
+  CULL_RADIUS_PADDING_WU,
+  PARTICLE_CULL_RADIUS_PADDING_WU,
+  DEFAULT_SHADOW_LOD_ENABLED,
+  SHADOW_LOD_MIN_PX,
+  LOD_HYSTERESIS,
+} from './performance.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Fallback transform for entities with no explicit transform field —
@@ -756,8 +764,9 @@ export class ModelRenderer {
     this._entities = null
     // Frustum-cull toggle — runtime debug knob, exposed via the
     // Developer Tools / View menu so the user can A/B the culled vs
-    // un-culled render to confirm visual parity.  Default ON.
-    this.cullEnabled = true
+    // un-culled render to confirm visual parity.  Default lives in
+    // ./performance.js so every perf knob is in one file.
+    this.cullEnabled = DEFAULT_CULL_ENABLED
     // Per-frame frustum-cull bookkeeping.  Counts entities drawn vs
     // skipped on the camera frustum so the Renderer panel can show
     // "drew 12 / culled 38" and the user can verify culling is in
@@ -769,13 +778,11 @@ export class ModelRenderer {
     // bounding-sphere radius (in screen-space pixels) drops below
     // `shadowMinPx` skip the shadow pass — near units cast shadows,
     // far units don't, exactly the "zoom out → shadows fade away"
-    // behaviour the user described.  The threshold is conservative
-    // enough that any unit big enough to read as detailed geometry
-    // also reads its shadow.  Hysteresis is applied via a per-entity
-    // `_lodShadowOn` flag: enter shadow tier above the threshold,
-    // exit at 1.25× the threshold so flicker at the boundary is rare.
-    this.shadowLodEnabled = true
-    this.shadowMinPx = 40
+    // behaviour the user described.  Defaults + threshold live in
+    // ./performance.js; hysteresis is applied via a per-entity
+    // `_lodShadowOn` flag (LOD_HYSTERESIS-wide band).
+    this.shadowLodEnabled = DEFAULT_SHADOW_LOD_ENABLED
+    this.shadowMinPx = SHADOW_LOD_MIN_PX
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -1009,8 +1016,8 @@ export class ModelRenderer {
   // _castsShadow — distance-based shadow LOD with hysteresis.  Decides
   // whether `ent` runs the shadow pass this frame.  When shadow LOD
   // is off, always true (every entity casts).  Otherwise the entity
-  // flips ON above the threshold and OFF below threshold/1.25 — the
-  // band prevents flicker at the boundary.  Ghost / selected
+  // flips ON above shadowMinPx and OFF below shadowMinPx/LOD_HYSTERESIS
+  // — the band prevents flicker at the boundary.  Ghost / selected
   // entities always cast (UI consistency: a selected unit should
   // always show its shadow as part of the user's focus).
   _castsShadow(ent) {
@@ -1024,7 +1031,7 @@ export class ModelRenderer {
       // Currently casting — only drop when comfortably below the
       // threshold so a unit hovering near the boundary doesn't
       // flicker its shadow on/off.
-      next = px >= (this.shadowMinPx / 1.25)
+      next = px >= (this.shadowMinPx / LOD_HYSTERESIS)
     } else {
       // Not casting — only enter when comfortably above so we don't
       // re-enter from the same border.
@@ -1062,7 +1069,7 @@ export class ModelRenderer {
     const cx = t.x + m.boundsCentre[0]
     const cy = t.y + m.boundsCentre[1]
     const cz = t.z + m.boundsCentre[2]
-    const r = m.boundsRadius + 5  // padding for sea-bob / heading wobble
+    const r = m.boundsRadius + CULL_RADIUS_PADDING_WU  // padding for sea-bob / heading wobble
     return this.camera.sphereInFrustum(cx, cy, cz, r)
   }
 
@@ -1847,10 +1854,10 @@ export class ModelRenderer {
       for (const ent of this._entities) {
         const pool = ent.binding && ent.binding.particles
         // Cull particle pools whose owning entity is well outside the
-        // camera frustum.  Padded radius (boundsRadius + 200 wu) so a
-        // smoke trail / missile that's drifted outside the unit's own
-        // bounds still draws as long as it's plausibly in-frame.
-        // 200 wu is conservative — half the typical TA weapon range.
+        // camera frustum.  Padded radius (PARTICLE_CULL_RADIUS_PADDING_WU
+        // from ./performance.js) so a smoke trail / missile that's
+        // drifted outside the unit's own bounds still draws as long
+        // as it's plausibly in-frame.
         const cullable = pool && pool.count > 0 && this.cullEnabled
           && ent && ent.model && ent.model.boundsCentre
           && !ent.ghost && !ent.selected
@@ -1860,7 +1867,7 @@ export class ModelRenderer {
           const cx = t.x + ent.model.boundsCentre[0]
           const cy = t.y + ent.model.boundsCentre[1]
           const cz = t.z + ent.model.boundsCentre[2]
-          const r = (ent.model.boundsRadius || 0) + 200
+          const r = (ent.model.boundsRadius || 0) + PARTICLE_CULL_RADIUS_PADDING_WU
           particlesVisible = this.camera.sphereInFrustum(cx, cy, cz, r)
         }
         if (pool && pool.count > 0 && particlesVisible) {
