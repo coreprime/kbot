@@ -10,6 +10,16 @@
 
 import { registerTabType } from '../tab-registry.js'
 import { $, state, hostCallbacks } from '../host-context.js'
+import {
+  mountMapSplit,
+  detachMapSplit,
+  disposeMapSplit,
+  ensureSplitState,
+  revivePanes,
+  applyMapPaneFocus,
+} from './split-host.js'
+import { destroyEditorView } from './editor-view.js'
+import { MapPaneView } from './pane-view.js'
 
 class MapEditorTabInstance {
   constructor(spec) {
@@ -52,10 +62,59 @@ class MapEditorTabInstance {
     // would still be in scope after the swap.
     hostCallbacks.restoreActiveTabModuleLets?.()
     // The .app container holds the editor surface.  Make sure it's
-    // visible before recreateEditorView mounts into it.
+    // visible before the split tree mounts into it.
     $('#app')?.classList.remove('hidden')
     hostCallbacks.updateTopbarDocInfo?.(this._tabRef)
-    hostCallbacks.recreateEditorView?.()
+    // Mount the per-tab split tree onto .canvas-wrap.  The map editor
+    // lives in `.canvas-wrap` (NOT `.model-viewer-stage` — that's
+    // the 3D editor surface).  Each leaf is a MapPaneView, and the
+    // focused pane owns the bootstrap-DOM ids `#canvas-scroll` /
+    // `#canvas-stack` so every existing querySelector('#canvas-…')
+    // call site reads the focused pane's surface.  Before the first
+    // setFocused runs we strip those ids off the bootstrap elements
+    // — they remain as orphans inside .canvas-wrap but harmless once
+    // the focused pane has claimed the ids.
+    const stage = document.querySelector('.canvas-wrap')
+    if (stage) {
+      // Tear down the singleton _EditorView (the bootstrap path
+      // finishEditorBoot mounted on first New / Open).  Idempotent —
+      // a no-op once the active view is a per-pane instance.  Without
+      // this, the singleton's listeners + ResizeObserver leak across
+      // the first tab swap into the split-pane world.
+      if (this._tabRef && (!this._tabRef.panes || this._tabRef.panes.size === 0)) {
+        destroyEditorView()
+      }
+      _stripBootstrapCanvasIds()
+      ensureSplitState(this._tabRef)
+      // Pre-construct the focused pane's MapPaneView SYNCHRONOUSLY so
+      // the activation path can hand the pane its focus + ids + an
+      // _EditorView before mountMapSplit returns.  The generic split
+      // host's LeafSlot uses an async useEffect to call makeLeafView,
+      // so without this pre-seed the very first renderCanvas — fired
+      // sync below — sees `tab.panes.get(activePaneId)` === undefined
+      // and the bootstrap-id strip leaves nothing in the DOM to query.
+      const tab = this._tabRef
+      if (tab.activePaneId && !tab.panes.has(tab.activePaneId)) {
+        const pane = new MapPaneView()
+        pane._leafId = tab.activePaneId
+        pane._isFocusedPane = () => tab.activePaneId === pane._leafId
+        tab.panes.set(tab.activePaneId, pane)
+      }
+      mountMapSplit(tab, stage)
+      // Attach every pane's root into its slot BEFORE focus +
+      // editor-view setup.  LeafSlot's useEffect normally does the
+      // appendChild asynchronously after Preact commits, but the
+      // focus path below + the renderCanvas call later in activate
+      // both need `document.querySelector('#canvas-stack')` to
+      // resolve to the focused pane — and that only works once the
+      // pane's root is in the document.  revivePanes is idempotent
+      // and is the canonical place this defensive append lives.
+      revivePanes(tab)
+      // Drive onPaneFocus synchronously for the active pane so its
+      // _EditorView is attached + promoted into the editor-view
+      // module-let BEFORE renderCanvas runs.
+      applyMapPaneFocus(tab)
+    }
     hostCallbacks.updateUndoButtons?.()
     hostCallbacks.bumpContentVersion?.()
     // Sync the React drawer filter input + drawer body to the
@@ -97,6 +156,11 @@ class MapEditorTabInstance {
     // visibility so a tab-return doesn't lose any in-flight hints.
     document.getElementById('placement-hint')?.classList.add('hidden')
     document.getElementById('rotation-badge')?.classList.add('hidden')
+    // Pull the per-tab split mount OUT of .canvas-wrap so an incoming
+    // tab doesn't see a stale map surface overlaid on its own content.
+    // Pane state (split tree + panes + editorViews) survives in memory
+    // so re-activation rehydrates instantly.
+    if (this._tabRef) detachMapSplit(this._tabRef)
   }
 
   // Dirty tabs prompt the user before they close.  React modal
@@ -121,7 +185,28 @@ class MapEditorTabInstance {
   // gets snapshot one last time so a re-open from history would
   // see the final state.
   dispose(_ctx) {
-    // Nothing to dispose — the MapDoc is plain data.
+    // Tear down every pane's _EditorView + the Preact mount.  The
+    // MapDoc itself is plain data the host can garbage-collect.
+    if (this._tabRef) disposeMapSplit(this._tabRef)
+  }
+}
+
+// _stripBootstrapCanvasIds removes `id="canvas-scroll"` /
+// `id="canvas-stack"` from the static elements baked into
+// index.html so the first MapPaneView.setFocused(true) doesn't
+// create duplicate ids in the DOM.  Idempotent — once stripped on
+// the first activation the bootstrap elements remain id-less for
+// the rest of the session (the panes own the ids from then on).
+function _stripBootstrapCanvasIds() {
+  for (const el of document.querySelectorAll('#canvas-scroll')) {
+    if (!el.classList.contains('canvas-scroll')) continue
+    if (el.closest('.mv-map-pane-root')) continue
+    el.id = ''
+  }
+  for (const el of document.querySelectorAll('#canvas-stack')) {
+    if (!el.classList.contains('canvas-stack')) continue
+    if (el.closest('.mv-map-pane-root')) continue
+    el.id = ''
   }
 }
 

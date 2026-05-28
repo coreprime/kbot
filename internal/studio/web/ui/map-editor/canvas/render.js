@@ -22,7 +22,8 @@
 // Cross-module deps via hostCallbacks:
 //   - none — everything we need is now a module-level import.
 
-import { state, $, activeMap } from '../../host-context.js'
+import { state, $, activeMap, tabs, tabState } from '../../host-context.js'
+import { setActiveEditorView } from '../editor-view.js'
 import { TILE_PX, VOID_COLOR } from '../constants.js'
 import { applyOverscrollPadding } from '../zoom-pan.js'
 import { visiblePixelBounds, visibleTileBounds } from '../viewport.js'
@@ -67,14 +68,56 @@ import { scheduleDevStatsRefresh } from '../dev-stats.js'
 import { updateFeatureInfoPanel } from '../feature-info.js'
 import { updateCameraInfoPanel } from '../camera-info.js'
 
+// renderCanvas — public entry point.  Wraps _renderCanvasOnce in a
+// focus-juggle loop so the FULL pane tree gets repainted, not just
+// the foreground pane.  Single-pane tabs run one iteration with no
+// state mutation (juggle is a no-op against the current focus).
+// Multi-pane tabs see every pane's canvas + GL surface receive a
+// fresh frame, with the original focused pane restored at the end.
 export function renderCanvas() {
-  // No-op when no map tab is the active context — every state.X read
-  // below routes through the host-context Proxy to activeMap(), which
-  // returns null when the user is on the welcome screen or a unit /
-  // sandbox tab.  Stale scheduleRenderCanvas() ticks (e.g. from the
-  // ResizeObserver on the editor view) would otherwise crash on
-  // state.features being undefined.
   if (!activeMap()) return
+  const tab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
+  if (!tab || !tab.panes || tab.panes.size === 0) {
+    _renderCanvasOnce()
+    return
+  }
+  const savedId = tab.activePaneId
+  let painted = false
+  for (const [leafId, pane] of tab.panes) {
+    if (!pane || !pane.editorView) continue
+    _focusPane(tab, leafId, pane)
+    try { _renderCanvasOnce() } catch { /* ignore so one bad pane doesn't kill the rest */ }
+    painted = true
+  }
+  // Restore the original focused pane so post-render reads (cursor,
+  // panel info, etc) target the surface the user is actually looking at.
+  if (savedId && tab.panes.has(savedId)) {
+    const restored = tab.panes.get(savedId)
+    if (restored) _focusPane(tab, savedId, restored)
+  }
+  if (!painted) {
+    // Defensive: no pane has an editor view yet (very early in the
+    // first activation).  Fall back to a single bootstrap render.
+    _renderCanvasOnce()
+  }
+}
+
+// _focusPane — strip the focused-pane ids off every sibling pane,
+// hand them to the target pane, and promote the target's _EditorView
+// into the module-let.  Used by renderCanvas's pane-rotation loop
+// and indirectly mirrors the split-host adapter's onPaneFocus —
+// duplicated here so this module can avoid a circular import on
+// split-host.js (which imports setActiveEditorView from editor-view).
+function _focusPane(tab, leafId, pane) {
+  for (const sibling of tab.panes.values()) {
+    if (sibling === pane) continue
+    if (sibling && typeof sibling.setFocused === 'function') sibling.setFocused(false)
+  }
+  if (typeof pane.setFocused === 'function') pane.setFocused(true)
+  if (pane.editorView) setActiveEditorView(pane.editorView)
+}
+
+function _renderCanvasOnce() {
   const canvas = $('#canvas')
   const glCanvas = $('#canvas-gl')
   const wantW = state.tileW * TILE_PX

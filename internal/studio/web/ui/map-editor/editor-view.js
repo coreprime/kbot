@@ -28,7 +28,7 @@
 //   - mouse-router dispatchers + cursor helpers + paint helpers
 //     are imported directly because they're already in modules
 
-import { state, $, setStatus, hostCallbacks } from '../host-context.js'
+import { state, $, setStatus, hostCallbacks, tabs, tabState } from '../host-context.js'
 import { TILE_PX } from './constants.js'
 import {
   applyOverscrollPadding, overscrollPadding, zoomAtPointer,
@@ -280,13 +280,47 @@ class _EditorView {
 }
 
 // recreateEditorView tears down any previously-mounted EditorView and
-// mounts a fresh one against the bootstrap singletons.  Called from
-// finishEditorBoot (on every map open or new) and applyResize so no
-// DOM nodes, event listeners, or GL state from the previous map
-// survive the switch.  In the split-pane world (Phase 5), the focused
-// pane's _EditorView is what this module-let points at; sibling
-// panes have their own instances created via recreateEditorViewFor.
+// mounts fresh ones.  Two flavours, picked automatically based on
+// whether the active tab has split panes:
+//
+//   - Split-pane path (active map tab has panes): tear down + re-mount
+//     EVERY pane's _EditorView in place.  Each pane keeps its own
+//     stack + scroll DOM (the canvases get rebuilt at the new map
+//     dimensions).  The currently-focused pane's view is promoted
+//     into the module-let.  Used by undo-across-resize + applyResize
+//     (the new map dimensions need fresh canvas backing buffers in
+//     every pane).
+//
+//   - Bootstrap path (no panes yet): build a single _EditorView
+//     against the bootstrap-DOM #canvas-stack / #canvas-scroll.
+//     finishEditorBoot uses this on the very first map open / new,
+//     BEFORE the user's first tab switch — the activate() path takes
+//     over from there.
+//
+// Called from finishEditorBoot (on every map open or new), applyResize,
+// and undo's restoreSnapshot whenever the map dimensions change.
 export function recreateEditorView() {
+  const tab = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
+  if (tab && tab.panes && tab.panes.size > 0) {
+    let firstAttached = null
+    for (const [leafId, pane] of tab.panes) {
+      if (!pane || !pane.stackEl || !pane.scrollEl) continue
+      if (pane.editorView) {
+        try { pane.editorView.destroy() } catch { /* ignore */ }
+        pane.editorView = null
+      }
+      const view = new _EditorView({ stackEl: pane.stackEl, scrollEl: pane.scrollEl })
+      view.mount()
+      pane.editorView = view
+      if (!firstAttached) firstAttached = view
+      if (tab.activePaneId === leafId) _editorView = view
+    }
+    // Defensive: if the focused pane wasn't enumerable (no live leaf
+    // id match), at least keep _editorView pointing at SOME live view
+    // so downstream renderCanvas calls have a valid target.
+    if (firstAttached && (!_editorView || !_editorView.canvas)) _editorView = firstAttached
+    return
+  }
   if (_editorView) _editorView.destroy()
   _editorView = new _EditorView()
   _editorView.mount()
