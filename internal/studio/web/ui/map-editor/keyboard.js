@@ -51,7 +51,7 @@
 // delete dispatch, …) is reached through direct imports against the
 // modules each piece lives in.
 
-import { $, $$, state, hostCallbacks } from '../host-context.js'
+import { $, $$, state, hostCallbacks, activeMap } from '../host-context.js'
 import { undo, redo } from './undo.js'
 import {
   cutSelection,
@@ -123,6 +123,16 @@ export function wireKeyboard() {
       const typ = (t.type || '').toLowerCase()
       if (typ === '' || /^(text|search|number|password|email|url|tel)$/.test(typ)) return
     }
+    // Bail out of EVERY map-editor shortcut when no map tab is active.
+    // This document-level handler stays wired across tab switches, so
+    // pressing Escape (or any key) while a sandbox / unit-editor tab is
+    // focused would otherwise fall through to the per-map handlers
+    // below — and every `state.X` read routes through activeMap(),
+    // which returns null off a map tab, so e.g. `state.selectedFeatures`
+    // is undefined and `.size` throws.  The map-editor dialog-Escape
+    // handlers above already early-returned for any open map dialog;
+    // by here there's nothing map-related to do without an active map.
+    if (!activeMap()) return
     // `?` (shift+/) opens the help cheat-sheet from anywhere outside
     // a text input.  Symbol comparison handles both US and non-US
     // layouts where Shift+/ produces different keys.

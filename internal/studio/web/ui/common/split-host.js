@@ -182,24 +182,6 @@ export function stopAllRenderers(tab) {
 // current tree.  Called from mountSplit + after every tree mutation
 // (split / close / divider drag commit).
 function renderSplitTab(tab, adapter) {
-  const onTreeChange = (next) => {
-    tab.split = next
-    // Garbage-collect panes whose leaves no longer exist.
-    const live = new Set(leafIds(next))
-    for (const [id, view] of tab.panes) {
-      if (!live.has(id)) {
-        try { view && view.dispose && view.dispose() } catch { /* ignore */ }
-        tab.panes.delete(id)
-      }
-    }
-    // If the active pane was closed, fall back to the first
-    // surviving leaf.
-    if (!live.has(tab.activePaneId)) {
-      tab.activePaneId = [...live][0] || null
-    }
-    renderSplitTab(tab, adapter)
-    try { adapter.onTreeChange && adapter.onTreeChange(tab, next) } catch { /* ignore */ }
-  }
   const renderLeaf = (leafId) => html`
     <${LeafSlot}
       key=${leafId}
@@ -210,10 +192,39 @@ function renderSplitTab(tab, adapter) {
   render(
     html`<${SplitContainer}
             tree=${tab.split}
-            onTreeChange=${onTreeChange}
+            onTreeChange=${(next) => applyTreeChange(tab, next, adapter)}
             renderLeaf=${renderLeaf} />`,
     tab._splitMount,
   )
+}
+
+// applyTreeChange is the single funnel for every tree mutation —
+// divider-drag ratio commits (via SplitContainer's onTreeChange),
+// context-menu Split / Close, and the programmatic splitActivePane /
+// closeActivePane below.  It writes the new tree, garbage-collects
+// panes whose leaves vanished (disposing their views so GL contexts
+// + canvases release — closing a pane used to leak the view because
+// the context-menu path re-rendered without this GC), reseats the
+// active pane if it was the one closed, re-renders, and fires the
+// adapter's onTreeChange.
+function applyTreeChange(tab, next, adapter) {
+  tab.split = next
+  const live = new Set(leafIds(next))
+  for (const [id, view] of tab.panes) {
+    if (!live.has(id)) {
+      try { view && view.dispose && view.dispose() } catch { /* ignore */ }
+      tab.panes.delete(id)
+    }
+  }
+  if (!live.has(tab.activePaneId)) {
+    tab.activePaneId = [...live][0] || null
+    if (tab.activePaneId) {
+      try { adapter.onPaneFocus && adapter.onPaneFocus(tab, tab.activePaneId) } catch { /* ignore */ }
+    }
+  }
+  renderSplitTab(tab, adapter)
+  _applyFocusClass(tab)
+  try { adapter.onTreeChange && adapter.onTreeChange(tab, next) } catch { /* ignore */ }
 }
 
 // LeafSlot — Preact wrapper that mounts a leaf's view-canvas into
@@ -311,14 +322,50 @@ function _wireSplitContextMenu(canvas, tab, leafId, adapter) {
     const choice = await openContextMenu({ x: e.clientX, y: e.clientY, items })
     if (!choice) return
     if (choice === 'split-h') {
-      tab.split = splitLeaf(tab.split, leafId, 'h')
+      applyTreeChange(tab, splitLeaf(tab.split, leafId, 'h'), adapter)
     } else if (choice === 'split-v') {
-      tab.split = splitLeaf(tab.split, leafId, 'v')
+      applyTreeChange(tab, splitLeaf(tab.split, leafId, 'v'), adapter)
     } else if (choice === 'close') {
       if (!canClose) return
-      tab.split = closeLeaf(tab.split, leafId)
+      applyTreeChange(tab, closeLeaf(tab.split, leafId), adapter)
     }
-    renderSplitTab(tab, adapter)
   }
   canvas.addEventListener('contextmenu', onContext, true)
+}
+
+// ── Programmatic split API ───────────────────────────────────────────
+//
+// Menu-driven entry points that mirror the right-click context menu
+// but act on tab.activePaneId.  Editors wire these to a "View ▸ Split"
+// menu so the gesture is discoverable without the right-click.  The
+// adapter (per editor) supplies the same slotClass / makeLeafView /
+// canCloseLeaf behaviour the context menu uses.
+
+// splitActivePane splits the focused pane in the given orientation
+// ('h' = side-by-side, 'v' = stacked).  No-op when there's no active
+// pane.  The new pane is created lazily by the LeafSlot effect, same
+// as a right-click split.
+export function splitActivePane(tab, orient, adapter) {
+  if (!tab || !tab.split || !tab.activePaneId) return
+  if (orient !== 'h' && orient !== 'v') return
+  applyTreeChange(tab, splitLeaf(tab.split, tab.activePaneId, orient), adapter)
+}
+
+// closeActivePane collapses the focused pane into its sibling.  Honours
+// the adapter's canCloseLeaf gate (e.g. the unit editor refuses to
+// close its primary leaf) and the universal last-pane-can't-close
+// rule.  No-op when closing isn't allowed.
+export function closeActivePane(tab, adapter) {
+  if (!canCloseActivePane(tab, adapter)) return
+  applyTreeChange(tab, closeLeaf(tab.split, tab.activePaneId), adapter)
+}
+
+// canCloseActivePane reports whether closeActivePane would do
+// anything — used by menus to enable / disable the Close item.
+export function canCloseActivePane(tab, adapter) {
+  if (!tab || !tab.split || !tab.activePaneId) return false
+  if (adapter && typeof adapter.canCloseLeaf === 'function') {
+    return !!adapter.canCloseLeaf(tab, tab.activePaneId)
+  }
+  return !isOnlyLeaf(tab.split, tab.activePaneId)
 }

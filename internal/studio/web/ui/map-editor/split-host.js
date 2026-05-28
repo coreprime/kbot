@@ -27,10 +27,11 @@ import { setActiveEditorView } from './editor-view.js'
 
 const MAP_ADAPTER = {
   slotClass: 'mv-map-pane-slot',
-  // Map editor has no conflicting right-click gesture (paint /
-  // place-feature are all left-click + drag), so plain right-click
-  // opens the Split menu — no modifier required.
-  contextMenuModifier: null,
+  // Split menu opens on SHIFT+right-click, matching the sandbox's
+  // gesture so the modifier is consistent across editors.  (Plain
+  // right-click is left free for a future map-editor context menu —
+  // e.g. tile/feature ops — without re-treading this decision.)
+  contextMenuModifier: 'shift',
   async makeLeafView(_tab, _leafId) {
     return new MapPaneView()
   },
