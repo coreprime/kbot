@@ -45,6 +45,13 @@ uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables h
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
+// uLightingTier — Phase 2 perf knob.  0 = full (rim + back/fill +
+// Blinn-Phong specular all contribute), 1 = cheap (Lambertian +
+// ambient only).  The renderer sets this to 1 for entities that the
+// shadow LOD already gave up on (px < ~40); the user can't tell the
+// difference at that screen size, and we save the per-fragment
+// Fresnel power + half-vector dot + back-light direction maths.
+uniform float uLightingTier;
 // Dynamic point light — fed each frame by the controller from the
 // strongest "light-emitting" active particle (d-gun, laser pulse).
 // Zero colour means no active light, the shader skips the path with
@@ -199,29 +206,46 @@ void main() {
   ndf = max(ndf, max(0.0, dot(-N, fillDir)) * 0.4);
   vec3 fillLight = ndf * uFillColor * 0.55;
 
+  // Cheap-tier (uLightingTier >= 0.5) — skip the rim, back-light, and
+  // Blinn-Phong specular contributions.  The unit at this distance
+  // reads as a small silhouette where the user can't tell the
+  // difference; we save the per-fragment Fresnel-power + half-vector
+  // dot + back-light direction maths.  Same threshold as the shadow
+  // LOD: when shadows are already culled, lighting is too.
+  bool cheapLighting = uLightingTier >= 0.5;
+
   // Back light: comes from BEHIND the unit relative to the camera,
   // tilted slightly above so it grazes the top edges.
-  vec3 backDir = normalize(vec3(-V.x, 0.3, -V.z));
-  float ndb = max(0.0, dot(N, backDir));
-  ndb = max(ndb, max(0.0, dot(-N, backDir)) * 0.4);
-  vec3 backLight = pow(ndb, 4.0) * uBackColor * 0.7;
+  vec3 backLight = vec3(0.0);
+  if (!cheapLighting) {
+    vec3 backDir = normalize(vec3(-V.x, 0.3, -V.z));
+    float ndb = max(0.0, dot(N, backDir));
+    ndb = max(ndb, max(0.0, dot(-N, backDir)) * 0.4);
+    backLight = pow(ndb, 4.0) * uBackColor * 0.7;
+  }
 
   // True view-direction rim light - Fresnel-style 1 - max(0, N.V).
   // Picks out the silhouette as the camera orbits, not just the
   // unit's local up.  AO suppresses it inside crevices where a
   // silhouette ramp would otherwise look wrong.
-  float fresnel = pow(1.0 - max(0.0, dot(N, V)), 4.0);
-  vec3 rim = fresnel * mix(uSkyColor, uLightColor, 0.6) * 0.35 * vAO;
+  vec3 rim = vec3(0.0);
+  if (!cheapLighting) {
+    float fresnel = pow(1.0 - max(0.0, dot(N, V)), 4.0);
+    rim = fresnel * mix(uSkyColor, uLightColor, 0.6) * 0.35 * vAO;
+  }
 
   // Blinn-Phong specular sheen - the half-vector between L and V
   // dotted with N, raised to a moderate exponent for a panel-style
   // sheen rather than a glassy point.  Modulated by the texture
   // alpha later so the sheen rides on the material brightness.
-  vec3 H = normalize(L + V);
-  float spec = pow(max(0.0, dot(N, H)), 32.0);
-  // Also sheen the back-side a little - symmetric like ndl above.
-  float specBack = pow(max(0.0, dot(-N, H)), 32.0) * 0.4;
-  spec = max(spec, specBack);
+  float spec = 0.0;
+  if (!cheapLighting) {
+    vec3 H = normalize(L + V);
+    spec = pow(max(0.0, dot(N, H)), 32.0);
+    // Also sheen the back-side a little - symmetric like ndl above.
+    float specBack = pow(max(0.0, dot(-N, H)), 32.0) * 0.4;
+    spec = max(spec, specBack);
+  }
 
   float shadow = sampleShadowMap1(N);
   vec3 directLight = ndl * uLightColor * shadow;
@@ -235,10 +259,15 @@ void main() {
     ndl2 = max(ndl2, max(0.0, dot(-N, L2)) * 0.4);
     float shadow2 = sampleShadowMap2(N);
     directLight += ndl2 * uLightColor2 * shadow2;
-    vec3 H2 = normalize(L2 + V);
-    float spec2 = pow(max(0.0, dot(N, H2)), 32.0);
-    specular += spec2 * uLightColor2 * shadow2 * 0.45;
+    if (!cheapLighting) {
+      vec3 H2 = normalize(L2 + V);
+      float spec2 = pow(max(0.0, dot(N, H2)), 32.0);
+      specular += spec2 * uLightColor2 * shadow2 * 0.45;
+    }
   }
+  // fillLight always contributes — it's a single dot product, no
+  // power / fresnel maths.  At cheap tier it's the only non-key
+  // light source for an otherwise-flat Lambertian appearance.
   vec3 lighting = ambient + directLight + fillLight + backLight + rim;
 
   // Dynamic pulse light (d-gun / laser).  Two directional terms

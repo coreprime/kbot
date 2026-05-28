@@ -94,6 +94,7 @@ export const SHADER_MANIFEST = {
   wire:      { vs: 'wire/wire.vert',           fs: 'wire/wire.frag' },
   dof:       { vs: 'dof/dof.vert',             fs: 'dof/dof.frag' },
   particles: { vs: 'particles/particles.vert', fs: 'particles/particles.frag' },
+  impostor:  { vs: 'impostor/impostor.vert',   fs: 'impostor/impostor.frag' },
 }
 
 // loadAllShaders fetches every shader in the manifest in parallel and

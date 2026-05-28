@@ -834,6 +834,7 @@ export class ModelRenderer {
       this.#initGroundProgram(sources.ground.vs, sources.ground.fs)
       this.#initWireProgram(sources.wire.vs, sources.wire.fs)
       this.#initParticlesProgram(sources.particles.vs, sources.particles.fs)
+      this.#initImpostorProgram(sources.impostor.vs, sources.impostor.fs)
       if (this._depthExt) {
         this.#initShadowFBO()
         // DoF needs the same depth-texture extension as shadows -
@@ -1050,9 +1051,12 @@ export class ModelRenderer {
   // entities always cast (UI consistency: a selected unit should
   // always show its shadow as part of the user's focus).
   _castsShadow(ent) {
-    if (!this.shadowLodEnabled) return true
-    if (!ent || !ent.model) return true
-    if (ent.ghost || ent.selected) return true
+    // Helper: pin _lodShadowOn so the lighting-LOD gate
+    // (cheap = _lodShadowOn === false) always reads a meaningful
+    // value, never a stale or undefined one from a previous frame.
+    if (!this.shadowLodEnabled) { if (ent) ent._lodShadowOn = true;  return true }
+    if (!ent || !ent.model)     { return true }
+    if (ent.ghost || ent.selected) { ent._lodShadowOn = true; return true }
     const px = this._pxRadius(ent)
     const prev = ent._lodShadowOn !== false  // default ON when undefined
     let next
@@ -1611,6 +1615,9 @@ export class ModelRenderer {
     this._cullStats.mid = 0
     this._cullStats.far = 0
     this._cullStats.total = (this._entities && this._entities.length) || 0
+    // Phase 3 impostor batch — re-zeroed each frame so _impostorPush
+    // can rebuild the buffer from this frame's classifier results.
+    this._impCount = 0
     // Shader programs are loaded asynchronously by init(); until they
     // resolve there's nothing to draw.  When init completes it calls
     // requestRedraw() which triggers a fresh draw with everything
@@ -1863,18 +1870,36 @@ export class ModelRenderer {
           gl.depthMask(true)
           continue
         }
-        // Phase 2 LOD — classify this entity's distance tier and let
-        // #drawGeometry consult `_lodHideFlares` to skip the
-        // cosmetic-only pieces on mid/far units.  Counters are bumped
-        // for the Renderer overlay so the user can see the
-        // distribution shift as they zoom in/out.
+        // Phase 2 / 3 LOD — classify this entity's distance tier:
+        //   FULL → full geometry + full lighting (existing path).
+        //   MID  → skip lodHide pieces; lighting may also drop to
+        //          the cheap shader path when shadow LOD already
+        //          gave up on this entity (sub-40 px).
+        //   FAR  → push into the impostor batch (single GL_POINTS
+        //          sprite drawn after the entity loop).  No
+        //          #renderMain call at all — the only per-entity
+        //          cost is one buffer write + the eventual one
+        //          drawArrays for the whole batch.
         const tier = this._pickLodTier(ent)
         if (tier === LOD_TIER_FULL)      this._cullStats.full += 1
         else if (tier === LOD_TIER_MID)  this._cullStats.mid  += 1
         else                              this._cullStats.far  += 1
+        if (tier === LOD_TIER_FAR) {
+          this._impostorPush(ent)
+          continue
+        }
         this._lodHideFlares = (tier !== LOD_TIER_FULL)
+        // Lighting LOD — when this entity already lost its shadow
+        // (px < SHADOW_LOD_MIN_PX) the user can't tell the difference
+        // between Blinn-Phong specular + rim + back-light and a plain
+        // Lambertian fill, so the fragment shader uses the cheap path.
+        // The flag mirrors the shadow decision: ent._lodShadowOn is
+        // set in _castsShadow above; reading it lets the lighting
+        // decision stay in lockstep without re-classifying distance.
+        this._lightingTierCheap = (ent._lodShadowOn === false)
         this.#renderMain(this.renderMode === 'flat')
         this._lodHideFlares = false
+        this._lightingTierCheap = false
       }
       // Restore globals for subsequent passes (wireframe overlay,
       // particles, etc.) and for any post-frame code that reads
@@ -1896,6 +1921,13 @@ export class ModelRenderer {
       // taller foreground geometry).  Only meaningful in multi-entity
       // mode — single-entity mode never sets `selected`.
       this.#renderSelectionRings(this._entities)
+      // Phase 3 — render the impostor batch AFTER the full / mid
+      // entity loop so far-tier coloured dots composite on top of
+      // the ground (their natural visual stack) but under particles
+      // + UI overlays.  When the batch is empty (every entity is
+      // full or mid this frame, or no entities at all) the method
+      // is a no-op.
+      this.#renderImpostorBatch()
     } else {
       this.#renderMain(this.renderMode === 'flat')
       if (this.wireframeOverlay) {
@@ -2425,6 +2457,10 @@ export class ModelRenderer {
     gl.uniform1f(this.uFlatLighting, 0)
     gl.uniform1f(this.uShadowEnabled, 0) // reflection doesn't read the depth map
     gl.uniform1f(this.uReflectionTint, 1)
+    // Reflections always run the full lighting path — the mirrored
+    // unit is the visible feature in sea mode and skipping its
+    // rim/specular would make the reflection look painted on.
+    gl.uniform1f(this.uLightingTier, 0)
     // Reflection pass paints the mirrored unit dim+blue.  Sea bounce
     // on top of that would double-glow the reflection, so leave it
     // off for this pass.
@@ -2548,6 +2584,13 @@ export class ModelRenderer {
     gl.uniform1f(this.uFlatLighting, flat ? 1 : 0)
     gl.uniform1f(this.uReflectionTint, 0)
     gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat) ? 1 : 0)
+    // Phase 2 lighting LOD — when the per-entity flag is set the
+    // shader skips rim / back-light / Blinn-Phong specular.  Set by
+    // the entity loop in lockstep with the shadow LOD: any entity
+    // small enough to skip the shadow pass also gets the cheap
+    // lighting path (the visible difference is negligible at that
+    // screen size).
+    gl.uniform1f(this.uLightingTier, this._lightingTierCheap ? 1 : 0)
     gl.uniform1f(this.uShadowBias, 0.0025)
     // Sea bounce/shimmer: only paint onto the hull when the unit is
     // actually sitting on water AND we're in full studio mode.  Flat
@@ -2986,6 +3029,10 @@ export class ModelRenderer {
     this.uUnitCenter = gl.getUniformLocation(prog, 'uUnitCenter')
     this.uUnitRadius = gl.getUniformLocation(prog, 'uUnitRadius')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
+    // Phase 2 lighting LOD — 0 = full (rim + back/fill + Blinn-Phong
+    // specular), 1 = cheap (Lambertian + ambient only).  Set by the
+    // entity loop per-entity based on the shadow LOD decision.
+    this.uLightingTier = gl.getUniformLocation(prog, 'uLightingTier')
   }
 
   #initShadowProgram(vsSrc, fsSrc) {
@@ -3174,6 +3221,109 @@ export class ModelRenderer {
   // frame dt + uploads the alive prefix to the GPU and draws.
   // Detach by passing null when the unit changes.
   setParticlePool(pool) { this._particlePool = pool || null }
+
+  // #initImpostorProgram — Phase 3 far-tier batch.  Each entity below
+  // TIER_MID_MIN_PX (≈ 12 px on screen) collapses to a single
+  // GL_POINTS sprite of its team / fallback colour.  All impostors
+  // share one buffer + one drawArrays per frame, so the cost of 100
+  // far-away units is one upload + one draw call rather than 100×
+  // geometry walks.
+  //
+  // Layout per impostor: pos(3) + color(3) + size(1) = 7 floats.
+  // Initial capacity 256 (a typical sandbox spawns 10-50 units; growth
+  // doubles on overflow).  DYNAMIC_DRAW because the batch is rebuilt
+  // every frame from the entity loop.
+  #initImpostorProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programImpostor = prog
+    const gl = this.gl
+    this.aImpPos = gl.getAttribLocation(prog, 'aPos')
+    this.aImpColor = gl.getAttribLocation(prog, 'aColor')
+    this.aImpSize = gl.getAttribLocation(prog, 'aSize')
+    this.uImpProj = gl.getUniformLocation(prog, 'uProj')
+    this.uImpView = gl.getUniformLocation(prog, 'uView')
+    this._impCapacity = 256
+    this._impInterleaved = new Float32Array(this._impCapacity * 7)
+    this._impCount = 0
+    this._impVBO = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._impVBO)
+    gl.bufferData(gl.ARRAY_BUFFER, this._impInterleaved.byteLength, gl.DYNAMIC_DRAW)
+  }
+
+  // _impostorPush — append one entity into the impostor batch.
+  // Called from the main entity loop when the LOD classifier put
+  // this entity in Far tier.  Grows the backing buffer if needed
+  // (doubling) — pretty cheap since these are 7-float-wide records.
+  _impostorPush(ent) {
+    const m = ent.model
+    if (!m || !m.boundsCentre || !(m.boundsRadius > 0)) return
+    if (this._impCount >= this._impCapacity) {
+      const next = this._impCapacity * 2
+      const grown = new Float32Array(next * 7)
+      grown.set(this._impInterleaved.subarray(0, this._impCount * 7))
+      this._impInterleaved = grown
+      this._impCapacity = next
+      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this._impVBO)
+      this.gl.bufferData(this.gl.ARRAY_BUFFER, grown.byteLength, this.gl.DYNAMIC_DRAW)
+    }
+    const t = ent.transform || _IDENTITY_T
+    const cx = t.x + m.boundsCentre[0]
+    const cy = t.y + m.boundsCentre[1]
+    const cz = t.z + m.boundsCentre[2]
+    // Pixel size for the sprite — clamped to the [4, 16] band so even
+    // the smallest units stay visible and the biggest don't dominate.
+    // The classifier already decided this entity is sub-12 px; we
+    // pick a fixed visible size proportional to bounding-sphere
+    // radius so a Krogoth's dot reads larger than a flea's.
+    const r = m.boundsRadius
+    const px = Math.max(4, Math.min(16, r * 0.35))
+    // Colour: team-coloured entities get their team tint, otherwise
+    // a neutral light grey so the sprite reads against ground + sky.
+    const tc = ent.teamColor
+    const r0 = tc ? tc[0] : 0.80
+    const g0 = tc ? tc[1] : 0.80
+    const b0 = tc ? tc[2] : 0.85
+    const off = this._impCount * 7
+    const buf = this._impInterleaved
+    buf[off]     = cx
+    buf[off + 1] = cy
+    buf[off + 2] = cz
+    buf[off + 3] = r0
+    buf[off + 4] = g0
+    buf[off + 5] = b0
+    buf[off + 6] = px
+    this._impCount += 1
+  }
+
+  // #renderImpostorBatch — one drawArrays(POINTS) per frame for every
+  // far-tier entity pushed by the main entity loop.  Runs AFTER the
+  // entity loop + selection-ring pass so impostors composite over
+  // the ground but under particles + UI.
+  #renderImpostorBatch() {
+    const gl = this.gl
+    if (this._impCount === 0 || !this.programImpostor) return
+    gl.useProgram(this.programImpostor)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._impVBO)
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._impInterleaved.subarray(0, this._impCount * 7))
+    const stride = 7 * 4
+    gl.enableVertexAttribArray(this.aImpPos)
+    gl.vertexAttribPointer(this.aImpPos, 3, gl.FLOAT, false, stride, 0)
+    gl.enableVertexAttribArray(this.aImpColor)
+    gl.vertexAttribPointer(this.aImpColor, 3, gl.FLOAT, false, stride, 3 * 4)
+    gl.enableVertexAttribArray(this.aImpSize)
+    gl.vertexAttribPointer(this.aImpSize, 1, gl.FLOAT, false, stride, 6 * 4)
+    gl.uniformMatrix4fv(this.uImpProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uImpView, false, this.camera.viewMatrix)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthMask(false) // sprites don't write depth — keeps overlapping ones from popping each other
+    gl.drawArrays(gl.POINTS, 0, this._impCount)
+    gl.depthMask(true)
+    gl.disableVertexAttribArray(this.aImpPos)
+    gl.disableVertexAttribArray(this.aImpColor)
+    gl.disableVertexAttribArray(this.aImpSize)
+  }
 
   // #renderSelectionRings draws a unit-square line-loop on the ground
   // plane per entity flagged `selected: true`.  Square scales with the
