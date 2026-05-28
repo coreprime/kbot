@@ -21,20 +21,29 @@ import { tabs, tabState, $, hostCallbacks } from '../host-context.js'
 import { MvControls } from './mv-controls.js'
 import { findModelMeta } from '../pickers/model-catalog.js'
 import { getModelOpenIntent, setModelOpenIntent } from './host-state.js'
+import {
+  mountUnitSplit,
+  revivePanes,
+  startAllRenderers,
+  wireSplitContextMenu,
+} from './split-host.js'
 
 export async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a
   // model tab don't pay for the shader / matrix code.
   const mod = await import('../../model3d/index.js')
-  // Stage all OTHER tabs' canvases out of the DOM so the GL surface
-  // for an inactive tab can't bleed through to the active frame.
-  // Same pattern activateSandboxTab uses; treats unit + sandbox
-  // viewers uniformly.
+  // Stage all OTHER tabs' canvases / split mounts out of the DOM
+  // so an inactive tab's surfaces can't bleed through.  Each tab
+  // type owns its own attach style: sandbox + unit-editor (since
+  // Phase 4) use _splitMount; legacy single-viewer fall-back uses
+  // t.viewer.detach().
   const stage = document.querySelector('.model-viewer-stage')
   if (stage) {
     for (const t of tabs) {
       if (t === tab) continue
-      if (t.viewer && typeof t.viewer.detach === 'function') {
+      if (t._splitMount && t._splitMount.parentNode) {
+        try { t._splitMount.parentNode.removeChild(t._splitMount) } catch { /* ignore */ }
+      } else if (t.viewer && typeof t.viewer.detach === 'function') {
         try { t.viewer.detach() } catch { /* ignore */ }
       }
     }
@@ -110,10 +119,43 @@ export async function activateModelTab(tab) {
   // activateSandboxTab.
   hostCallbacks.setActiveModelViewer?.(tab.viewer)
   hostCallbacks.setActiveMvControls?.(tab.viewer._mvControls || null)
-  // Attach this tab's canvas into the stage so it's the visible
-  // surface again.  Idempotent — re-attaching to the same parent
-  // is a no-op.
-  if (stage && typeof tab.viewer.attach === 'function') tab.viewer.attach(stage)
+  // Mount the per-tab split tree onto the stage + render its Preact
+  // shell.  The PRIMARY pane hosts tab.viewer.canvas; subsequent
+  // panes get ModelObserverView instances that share the primary's
+  // binding + runtime (animation-driving) but own their own
+  // camera / canvas / renderer.  See /ui/unit-editor/split-host.js.
+  if (stage) {
+    // The split-host hooks the active-pane-focus callback so the
+    // primary's hotkeys + observer hotkeys gate on whichever pane
+    // the user last pointerdown'd on.  For unit editor MVP we just
+    // track activePaneId; the active-pane → inspector follow lands
+    // with Phase 6.
+    const hostCb = {
+      onPaneFocus: (leafId) => {
+        if (tab.activePaneId === leafId) return
+        tab.activePaneId = leafId
+      },
+    }
+    mountUnitSplit(tab, stage, hostCb)
+    // Defensive canvas re-attach (Preact occasionally orphans a
+    // canvas from its slot across tree changes) + start every
+    // pane's renderer (deactivate stopped them all).
+    revivePanes(tab)
+    startAllRenderers(tab)
+    // Wire the split context menu on the primary's canvas.  Plain
+    // right-click here (no conflicting gameplay gesture in the
+    // unit editor).  Wired ONCE per primary canvas via a flag so
+    // re-activations don't stack listeners.
+    if (tab.viewer && tab.viewer.canvas && !tab.viewer.canvas._splitCtxWired) {
+      tab.viewer.canvas._splitCtxWired = true
+      wireSplitContextMenu({
+        canvas: tab.viewer.canvas,
+        getTab: () => tab,
+        leafId: tab._primaryLeafId,
+        hostCallbacks: hostCb,
+      })
+    }
+  }
   // Wire the per-frame inspector refresh callback the first time
   // the renderer is alive (it might not be on the very first
   // activation if the network fetch lost a race).  Idempotent.

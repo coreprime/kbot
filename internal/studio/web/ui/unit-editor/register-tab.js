@@ -14,6 +14,7 @@
 import { registerTabType } from '../tab-registry.js'
 import { $, hostCallbacks } from '../host-context.js'
 import { activateModelTab } from './tab.js'
+import { detachUnitSplit, disposeUnitSplit, stopAllRenderers } from './split-host.js'
 
 // Per-tab record kept on the instance.  The host's tabs[] entry still
 // carries `name`, `meta`, `viewer`, `_pausedBeforeSwitch` for
@@ -70,10 +71,12 @@ class UnitEditorTabInstance {
     await activateModelTab(tab)
   }
 
-  // Focus lost — pause the runtime, silence audio, stop the renderer
-  // so the RAF loop and audio context release.  Idempotent so the
-  // framework can call this on every non-active tab when it wants to
-  // guarantee a quiescent background.
+  // Focus lost — pause the runtime, silence audio, stop EVERY pane's
+  // renderer (primary + observers) so backgrounded RAF loops + audio
+  // contexts release.  Pull the per-tab split mount out of the stage
+  // so an incoming sandbox / map / sibling unit-editor tab doesn't
+  // see a stale unit-editor surface overlaid on its own content.
+  // Idempotent.
   deactivate(_ctx) {
     const tab = this._tabRef
     if (!tab) return
@@ -93,20 +96,24 @@ class UnitEditorTabInstance {
     if (typeof v.setSilenced === 'function') {
       try { v.setSilenced(true) } catch { /* ignore */ }
     }
-    if (v.renderer && typeof v.renderer.stop === 'function') {
-      try { v.renderer.stop() } catch { /* ignore */ }
-      // Clear the canvas so a quick re-focus doesn't bleed the last
-      // frame of the OUTGOING tab over the incoming one.
-      try { v.renderer.clearCanvas?.() } catch { /* ignore */ }
-    }
+    // Stop every pane's renderer (primary + observers).  Pre-split
+    // there was only one renderer per tab; now multi-pane unit-editor
+    // tabs have a primary + N observers each with their own RAF loop.
+    stopAllRenderers(tab)
+    try { v.renderer && v.renderer.clearCanvas?.() } catch { /* ignore */ }
+    // Pull the split mount out of the stage.  Pre-Phase-4 the canvas
+    // sat directly on the stage; with the split mount in place the
+    // mount is what an incoming activator needs to detach (the
+    // canvas inside the mount stays where it is).
+    detachUnitSplit(tab)
   }
 
   // Model tabs have no save / dirty workflow — closing is always OK.
   async canClose(_ctx) { return true }
 
-  // Final teardown — dispose viewer + its audio/runtime/controls,
-  // then drop the host's active-viewer aliases if this tab was
-  // foregrounded.
+  // Final teardown — dispose every observer pane + the primary
+  // viewer + its audio/runtime/controls, then drop the host's
+  // active-viewer aliases if this tab was foregrounded.
   dispose(_ctx) {
     const tab = this._tabRef
     if (!tab || !tab.viewer || typeof tab.viewer.dispose !== 'function') return
@@ -133,6 +140,9 @@ class UnitEditorTabInstance {
       }
       v.dispose()
     } catch { /* ignore */ }
+    // Dispose every observer pane (each owns its own GL context +
+    // local model copy) + tear down the split mount Preact tree.
+    disposeUnitSplit(tab)
     // Drop host's active-viewer alias when the disposed view was
     // foregrounded — switchToTab will promote a sibling on the next
     // activation.
