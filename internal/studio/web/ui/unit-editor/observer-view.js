@@ -39,6 +39,7 @@ import { ModelLoader } from '../../model3d/model-loader.js'
 import { OrbitCamera } from '../../model3d/orbit-camera.js'
 import { TextureCache } from '../../model3d/texture-cache.js'
 import { attachOrbitControls } from '../../model3d/camera-controls.js'
+import { stepSimSpeed } from '../common/sim-controls.js'
 
 export class ModelObserverView {
   constructor({ canvas, primaryViewer }) {
@@ -117,6 +118,9 @@ export class ModelObserverView {
         // _isFocusedPane set by split-host before open(); the gate
         // routes R / arrow keys to only the focused pane.
         isActive: () => !this._isFocusedPane || this._isFocusedPane(),
+        // Plain +/- step the unit-editor runtime's playback rate from
+        // an observer pane too (Shift+/- zooms instead).
+        onSimSpeedStep: (dir) => stepSimSpeed(dir),
       })
       // Per-frame hook — copy the primary's animated pose into our
       // local model and refresh.  This is where the asymmetry lands:

@@ -24,7 +24,7 @@
 // directly and decides what the drag means (e.g. drawing a
 // rectangle-select).  The orbit handler still runs for non-left
 // drags (right-drag pan, shift/ctrl modifiers).
-export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart, isActive = null }) {
+export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart, isActive = null, onSimSpeedStep = null }) {
   if (!canvas || !camera) return () => {}
   let pointer = null
   // Host-claimed flag — set when onLeftDragStart returns truthy to
@@ -199,6 +199,24 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
       e.preventDefault()
       if (renderer && typeof renderer.setAutoRotate === 'function') {
         renderer.setAutoRotate(!renderer.autoRotate)
+      }
+      return
+    }
+    // +/- (and the bare =, _).  Shift + the key zooms the camera in /
+    // out; the bare key steps the simulation speed (when the host
+    // supplies onSimSpeedStep).  On US layouts the symbols the user
+    // presses for "+/-" already carry Shift (Shift+= → "+", Shift+- →
+    // "_"), so reading e.shiftKey here lines up with the key faces.
+    const isPlus = e.key === '+' || e.key === '='
+    const isMinus = e.key === '-' || e.key === '_'
+    if (isPlus || isMinus) {
+      e.preventDefault()
+      if (e.shiftKey) {
+        // zoomBy(<1) zooms in, (>1) zooms out — matches the wheel.
+        if (typeof camera.zoomBy === 'function') camera.zoomBy(isPlus ? 1 / 1.1 : 1.1)
+        if (renderer && !renderer.running) renderer.requestRedraw?.()
+      } else if (typeof onSimSpeedStep === 'function') {
+        onSimSpeedStep(isPlus ? +1 : -1)
       }
       return
     }

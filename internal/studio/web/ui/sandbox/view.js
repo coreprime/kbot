@@ -26,6 +26,7 @@ import { TextureCache } from '../../model3d/texture-cache.js'
 import { TAPalette } from '../../model3d/palette.js'
 import { SandboxScene } from './scene.js'
 import { attachOrbitControls } from '../../model3d/camera-controls.js'
+import { stepSimSpeed } from '../common/sim-controls.js'
 import { ArmedCursor } from '../../model3d/armed-cursor.js'
 import { teamColorForSide } from '../../model3d/team-colors.js'
 import {
@@ -177,6 +178,9 @@ export class SandboxView {
           if (e.shiftKey) return this.#beginDragSelect(e)
           return false
         },
+        // Plain +/- step the sandbox runtime's playback rate (Shift+/-
+        // zooms instead — handled inside camera-controls).
+        onSimSpeedStep: (dir) => stepSimSpeed(dir),
       })
       // Armed cursor (Move / Attack glyph) uses the shared ArmedCursor
       // helper — same animated TA cursor PNGs the unit editor shows

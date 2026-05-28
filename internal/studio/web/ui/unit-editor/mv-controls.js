@@ -20,6 +20,7 @@ import { ArmedCursor } from '../../model3d/armed-cursor.js'
 import { shouldForceTarget } from '../../model3d/force-target.js'
 import { GameEngine } from '../../engine/game-engine.js'
 import { hostCallbacks } from '../host-context.js'
+import { stepSimSpeed } from '../common/sim-controls.js'
 import {
   initSmokeTrails,
   tickSmokeTrails,
@@ -1267,37 +1268,30 @@ export class MvControls {
         }
         return
       }
-      // +/- — step the sim speed by 10% increments.  If the current
-      // speed isn't aligned to a 10% grid, snap to the next 10%
-      // increment in the direction of travel (so 1.27× + "+" snaps
-      // to 1.30× rather than jumping straight to 1.40×).  Honours
-      // shift for "+" (which is shift-= on US keyboards) and the
-      // bare "=" / "-" keys.
-      if (e.key === '+' || e.key === '=') { e.preventDefault(); this._stepSimSpeed(+1); return }
-      if (e.key === '-' || e.key === '_') { e.preventDefault(); this._stepSimSpeed(-1); return }
+      // +/- (and bare =, _).  Shift + the key ZOOMS the focused
+      // camera (consistent with the map editor + sandbox); the bare
+      // key STEPS the sim speed.  On US layouts the "+/-" symbols
+      // carry Shift (Shift+= → "+"), so reading e.shiftKey lines up
+      // with the key faces the user presses.
+      {
+        const isPlus = e.key === '+' || e.key === '='
+        const isMinus = e.key === '-' || e.key === '_'
+        if (isPlus || isMinus) {
+          e.preventDefault()
+          if (e.shiftKey) {
+            const cam = this.camera
+            if (cam && typeof cam.zoomBy === 'function') {
+              cam.zoomBy(isPlus ? 1 / 1.1 : 1.1)
+              const r = this.viewer?.renderer
+              if (r && !r.running) r.requestRedraw?.()
+            }
+          } else {
+            stepSimSpeed(isPlus ? +1 : -1)
+          }
+          return
+        }
+      }
     })
-  }
-
-  // _stepSimSpeed adjusts the runtime's playbackRate by one 10%
-  // increment in the requested direction.  Misaligned current speeds
-  // snap to the next 10% boundary in the travel direction before
-  // applying the step — feels closer to "click the slider's next
-  // tick mark" than to "round + jump".
-  _stepSimSpeed(dir) {
-    const rt = this.viewer?.cob?.runtime
-    if (!rt) return
-    const cur = rt.playbackRate || 1
-    const tenths = cur * 10
-    const aligned = Math.abs(tenths - Math.round(tenths)) < 1e-6
-    let next
-    if (aligned) {
-      next = (Math.round(tenths) + dir) / 10
-    } else {
-      next = (dir > 0 ? Math.ceil(tenths) : Math.floor(tenths)) / 10
-    }
-    if (typeof window.mvSetSimulationSpeed === 'function') {
-      window.mvSetSimulationSpeed(next)
-    }
   }
 
   // _armSlotHotkey arms the given slot — identical state mutation

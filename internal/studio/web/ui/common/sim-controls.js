@@ -146,6 +146,29 @@ export function mvSetSimulationSpeed(rate) {
   }
 }
 
+// stepSimSpeed nudges the active runtime's playback rate by one grid
+// step in the given direction (+1 faster, -1 slower) for the keyboard
+// +/- hotkeys.  Above 10% the grid is 10%; at-or-below 10% it drops to
+// 1% (so the slow end stays usable — 9%, 8%, … 1%).  Misaligned
+// current rates snap to the next grid line in the travel direction
+// (1.27× + → 1.30×, not 1.40×).  Routes through mvSetSimulationSpeed
+// so BOTH the unit-editor + sandbox runtimes + the ribbon sliders stay
+// in lock-step, and the value is clamped to [0.01, 10] there.
+export function stepSimSpeed(dir) {
+  const rt = _activeRuntime()
+  const cur = (rt && rt.playbackRate) || 1
+  // Use the fine (1%) grid below 10%, OR when stepping DOWN from
+  // exactly 10% (10% → 9% rather than 10% → 0%).
+  const fine = cur < 0.1 - 1e-9 || (Math.abs(cur - 0.1) < 1e-9 && dir < 0)
+  const scale = fine ? 100 : 10
+  const units = cur * scale
+  const aligned = Math.abs(units - Math.round(units)) < 1e-6
+  const next = aligned
+    ? (Math.round(units) + dir) / scale
+    : (dir > 0 ? Math.ceil(units) : Math.floor(units)) / scale
+  mvSetSimulationSpeed(next)
+}
+
 // wireMvRuntimeVisibility pauses the COB runtime whenever the browser
 // tab goes background (visibilitychange → hidden) and resumes it
 // when the tab comes back.  Important for two reasons:

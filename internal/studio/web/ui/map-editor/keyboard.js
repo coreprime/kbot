@@ -215,6 +215,18 @@ export function wireKeyboard() {
       e.preventDefault()
       setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
     }
+    // +/- zoom (the "+" / "-" the user types — Shift+= / Shift+- on US
+    // layouts — plus the numpad keys).  Matches the unit editor +
+    // sandbox where Shift+/- zoom; the map editor has no simulation so
+    // the bare =/- keys zoom too rather than sitting idle.
+    else if (e.key === '+' || e.key === '=') {
+      e.preventDefault()
+      setZoom(state.zoom * (state.settings?.zoomStep || 1.25))
+    }
+    else if (e.key === '-' || e.key === '_') {
+      e.preventDefault()
+      setZoom(state.zoom / (state.settings?.zoomStep || 1.25))
+    }
     // Arrow keys: page through drawer sections when a section is
     // the active selection, otherwise start a continuous pan that
     // ramps from 1× to MAP_PAN_ACCEL_MAX_MULT over
