@@ -107,8 +107,15 @@ export function ensureGLRenderer() {
   gl = st
   if (gl.ctx) return true
   if (gl.failed) return false
-  const ctx = canvas.getContext('webgl2', { premultipliedAlpha: false, antialias: false })
-    || canvas.getContext('webgl', { premultipliedAlpha: false, antialias: false })
+  // preserveDrawingBuffer: a split tab paints each pane's GL canvas in
+  // turn within ONE renderCanvas task (the focus-juggle loop), but with
+  // the default preserveDrawingBuffer:false only the LAST context drawn
+  // reliably composites — the earlier (un-focused) panes blank out.
+  // Preserving the buffer keeps every pane's last frame on screen
+  // regardless of draw order, so all split panes stay painted.
+  const ctxOpts = { premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true }
+  const ctx = canvas.getContext('webgl2', ctxOpts)
+    || canvas.getContext('webgl', ctxOpts)
   if (!ctx) {
     gl.failed = true
     console.warn('WebGL unavailable — falling back to 2D rendering')
