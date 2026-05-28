@@ -71,6 +71,20 @@ const UNIT_ADAPTER = {
     if (leafId === tab._primaryLeafId) return false
     return !isOnlyLeaf(tab.split, leafId)
   },
+  onPaneFocus(tab, leafId) {
+    // Promote the focused pane's camera into a viewer-scoped slot
+    // MvControls reads via its focus-aware `camera` getter.  Reads
+    // through this slot make the Renderer panel reflect the focused
+    // pane's camera (not the primary's), and make T-key tracking
+    // affect the focused observer (not just the primary).  When the
+    // primary leaf is focused, _focusedCamera stays as the primary's
+    // camera (same object MvControls would read via the legacy path,
+    // so the behaviour is unchanged for the primary).
+    if (!tab.viewer) return
+    const view = tab.panes && tab.panes.get(leafId)
+    const cam = view && (view.camera || (view.renderer && view.renderer.camera))
+    if (cam) tab.viewer._focusedCamera = cam
+  },
 }
 
 // ── Public surface — unit-editor-flavoured names so the tab.js +

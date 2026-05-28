@@ -186,7 +186,22 @@ export class MvControls {
   getSelectedUnits() { return this._engineUnit ? [this._engineUnit] : [] }
   get engine() { return this._engine }
   get runtime() { return this.viewer && this.viewer.cob ? this.viewer.cob.runtime : null }
-  get camera() { return this.viewer && this.viewer.renderer ? this.viewer.renderer.camera : null }
+  // camera returns the camera the Renderer panel + T-key + tracking
+  // logic should read from / write to.  Two paths:
+  //   - split-pane: the unit-editor's split-host writes
+  //     `viewer._focusedCamera` to the camera of whichever pane the
+  //     user last pointerdown'd on (primary or observer).  Reading
+  //     that here makes the Renderer panel reflect the focused
+  //     pane's camera + T-key affect THAT pane's tracking, not just
+  //     the primary's.
+  //   - single-pane (no split-host involvement): _focusedCamera is
+  //     undefined; we fall back to the primary's renderer camera —
+  //     identical to pre-split behaviour.
+  get camera() {
+    const focused = this.viewer && this.viewer._focusedCamera
+    if (focused) return focused
+    return this.viewer && this.viewer.renderer ? this.viewer.renderer.camera : null
+  }
 
   // getInspectorMv returns the proxy shape studio.js's
   // refreshMvInspectors panels expect.  Effects + Audio aggregate
@@ -1165,7 +1180,11 @@ export class MvControls {
   setTracking(on) {
     const next = !!on
     this.tracking = next
-    const cam = this.viewer.camera
+    // Read from the focus-aware getter so a T-key press / Tracking-
+    // checkbox toggle in the split-pane case affects whichever
+    // pane's camera the user is looking at — not the primary's.
+    // Single-pane callers get the primary camera (legacy behaviour).
+    const cam = this.camera
     if (next) {
       // Build a tracking ref that reflects the unit's CURRENT pos +
       // model bounds each frame — the camera dereferences `.pos` and
