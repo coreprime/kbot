@@ -5028,6 +5028,22 @@ canvas {
   position: relative;
   overflow: hidden;
 }
+/* Focused-pane visual marker — split-host's _applyFocusClass adds
+   .is-focused to whichever leaf matches tab.activePaneId.  Subtle
+   inset border so it doesn't trim the canvas pixels — pure visual
+   feedback for "this pane will receive the next R / arrow / split
+   action", and a hint for which pane's camera the Renderer panel
+   reflects (when inspector-follow-focus is wired).  Single-pane
+   tabs sit on a single .is-focused leaf permanently; the border is
+   muted enough not to read as a chrome element. */
+.mv-split-leaf.is-focused::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
+  z-index: 2;
+}
 .mv-split-divider {
   flex: 0 0 6px;
   background: var(--border);

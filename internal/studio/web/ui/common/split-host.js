@@ -253,9 +253,11 @@ function LeafSlot({ tab, leafId, adapter }) {
           if (tab.activePaneId !== leafId) {
             tab.activePaneId = leafId
             try { adapter.onPaneFocus && adapter.onPaneFocus(tab, leafId) } catch { /* ignore */ }
+            _applyFocusClass(tab)
           }
         }, true)
       }
+      _applyFocusClass(tab)
       if (canvas && !canvas._splitCtxWired) {
         canvas._splitCtxWired = true
         _wireSplitContextMenu(canvas, tab, leafId, adapter)
@@ -270,6 +272,23 @@ function LeafSlot({ tab, leafId, adapter }) {
     }
   }, [leafId])
   return html`<div class=${adapter.slotClass} ref=${mountRef} />`
+}
+
+// _applyFocusClass toggles `.is-focused` on every `.mv-split-leaf`
+// in the tab's mount tree, putting it on whichever leaf id matches
+// tab.activePaneId.  Used by LeafSlot's effect (on initial mount +
+// re-mount) and by the pointerdown focus handler.  CSS in studio.css
+// styles `.mv-split-leaf.is-focused` with a subtle accent border so
+// the user has visual feedback for which pane will receive the next
+// hotkey + which one's camera is reflected in the Renderer panel.
+function _applyFocusClass(tab) {
+  if (!tab || !tab._splitMount) return
+  const leaves = tab._splitMount.querySelectorAll('.mv-split-leaf')
+  for (const el of leaves) {
+    const id = el.dataset.leafId
+    if (id === tab.activePaneId) el.classList.add('is-focused')
+    else el.classList.remove('is-focused')
+  }
 }
 
 // _wireSplitContextMenu attaches the right-click handler that pops
