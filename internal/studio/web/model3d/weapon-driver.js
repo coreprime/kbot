@@ -23,7 +23,7 @@ import {
   SFX_PROJECTILE_MISSILE,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
-} from './cob/cob-particles.js'
+} from '../engine/cob-particles.js'
 
 // laserColor returns the laser tint [r,g,b,a] in 0..1 floats from the
 // weapon's TDF palette indices.  TA's `color=` is the brightest shade

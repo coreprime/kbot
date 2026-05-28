@@ -26,16 +26,21 @@ import {
   SFX_PROJECTILE_LASER,
   SFX_PROJECTILE_MISSILE,
 } from './cob-particles.js'
-import { AudioPool } from '../audio-pool.js'
+import { nullAudioPool } from './null-audio-pool.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
   // unit:  CobUnit from cob-runtime.js (per-unit script + animator state)
+  // opts.audio: optional AudioPool-shaped object — when omitted the
+  //   binding uses the shared NullAudioPool stub so the engine can
+  //   compile + run headless (server-side simulation, replay scrubber).
+  //   Renderer hosts inject a concrete AudioPool that drives <audio>
+  //   elements.
   //
   // The host CobRuntime is reachable via `unit.runtime` and is also
   // mirrored on `this.runtime` so callers writing world-wide controls
   // (pause / playback / tick) don't have to walk `binding.unit.runtime`.
-  constructor(model, unit) {
+  constructor(model, unit, opts = {}) {
     this.model = model
     this.unit = unit
     this.runtime = unit.runtime
@@ -68,14 +73,15 @@ export class CobBinding {
     // was exactly one host in the page — now sits on the binding so
     // each tab's host pushes its own value into its own bindings.
     this.buildPercent = 100
-    // Audio pool — central registry for every sound the studio plays
-    // (unit acks, weapon fire, hits, UI previews).  Lives on the
-    // binding so it's ticked alongside particles + runtime in the
-    // same per-frame call, and disposed when the binding tears down
-    // on a unit-swap.  Lazily imported below the constructor body
-    // would create a circular import; static import at top of file
-    // is the standard pattern.
-    this.audio = new AudioPool()
+    // Audio pool — central registry for every sound the binding's
+    // hooks emit.  Injected from the host so the engine package stays
+    // headless: a renderer-side AudioPool drives <audio> elements,
+    // a server-side simulation passes nothing and gets the shared
+    // NullAudioPool (every method no-ops, zero allocation).  Lives
+    // on the binding so it's ticked alongside particles + runtime in
+    // the same per-frame call, and disposed when the binding tears
+    // down on a unit-swap.
+    this.audio = opts.audio || nullAudioPool
     // Wire the pool's on-expire callback so projectile particles
     // detonate visually instead of just vanishing.  This is the
     // single point of dispatch for TA-style impact effects:

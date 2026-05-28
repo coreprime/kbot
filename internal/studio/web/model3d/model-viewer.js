@@ -13,8 +13,9 @@ import { TextureCache } from './texture-cache.js'
 import { ModelLoader } from './model-loader.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
-import { CobRuntime } from './cob/cob-runtime.js'
-import { CobBinding } from './cob/cob-binding.js'
+import { CobRuntime } from '../engine/cob-runtime.js'
+import { CobBinding } from '../engine/cob-binding.js'
+import { AudioPool } from './audio-pool.js'
 import { attachOrbitControls } from './camera-controls.js'
 
 export class ModelViewer {
@@ -358,7 +359,10 @@ export class ModelViewer {
           // open).
           this._unit.decompiled = cobJson.decompiled || ''
           this._unit.name = modelName
-          this.cob = new CobBinding(model, this._unit)
+          // Browser <audio>-backed pool — the engine package keeps no
+          // knowledge of the renderer's audio mechanism, so we inject it
+          // here at binding-construction time.
+          this.cob = new CobBinding(model, this._unit, { audio: new AudioPool() })
           this.renderer.setCobBinding(this.cob)
           // Earlier this auto-fired Create + Activate so freshly-
           // opened units stood in their idle "deployed" pose

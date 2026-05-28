@@ -18,7 +18,7 @@
 import { spawnProjectile } from '../../model3d/weapon-driver.js'
 import { ArmedCursor } from '../../model3d/armed-cursor.js'
 import { shouldForceTarget } from '../../model3d/force-target.js'
-import { GameEngine } from '../../model3d/game-engine.js'
+import { GameEngine } from '../../engine/game-engine.js'
 import { hostCallbacks } from '../host-context.js'
 import {
   initSmokeTrails,

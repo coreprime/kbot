@@ -70,8 +70,8 @@
 // closure.  No-op cleanup is safe (handler isn't required to be
 // registered).
 
-import { CobRuntime } from './cob/cob-runtime.js'
-import { CobBinding } from './cob/cob-binding.js'
+import { CobRuntime } from './cob-runtime.js'
+import { CobBinding } from './cob-binding.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -118,7 +118,7 @@ function _makeSlotState() {
 }
 
 export class GameEngine {
-  constructor({ runtime, gravity = 80 } = {}) {
+  constructor({ runtime, gravity = 80, audioFactory = null } = {}) {
     // Each engine owns its own runtime by default — keeps per-tab sim
     // state cleanly isolated.  Caller can pass an existing runtime to
     // share scripts (e.g. AI vs. player on one shared sim) but that's
@@ -134,6 +134,14 @@ export class GameEngine {
     // tab goes silent without pausing the simulation.  Independent of
     // runtime.paused: the engine + per-tick scripts keep running.
     this._silenced = false
+    // audioFactory — host-supplied () => AudioPool used to allocate
+    // each new binding's audio pool on addUnit.  The engine package is
+    // headless and never imports a concrete AudioPool itself: renderer
+    // hosts pass `audioFactory: () => new AudioPool()`, server-side
+    // sims pass nothing and every binding gets the shared NullAudioPool
+    // stub (zero-allocation no-op).  Keeps the cross-package import
+    // direction one-way: model3d → engine, never the reverse.
+    this._audioFactory = (typeof audioFactory === 'function') ? audioFactory : null
     // unitId → UnitInstance.  Map iteration order = insertion order
     // (per ECMAScript spec) so the inspector roster reads predictable.
     this._units = new Map()
@@ -215,7 +223,11 @@ export class GameEngine {
       ? model.cloneForInstance()
       : model
     const cobUnit = cobScript ? this.runtime.addUnit(cobScript, {}) : null
-    const binding = (cobUnit && instModel) ? new CobBinding(instModel, cobUnit) : null
+    // Audio pool is host-supplied via the audioFactory option — keeps
+    // the engine package free of any concrete audio implementation
+    // (browser <audio>, headless no-op, future WebAudio mixer).
+    const audio = this._audioFactory ? this._audioFactory() : null
+    const binding = (cobUnit && instModel) ? new CobBinding(instModel, cobUnit, { audio }) : null
     const unit = {
       id, name,
       // Faction index (0..7) — drives the renderer's team-colour pass.

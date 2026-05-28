@@ -17,7 +17,8 @@
 // (the host view) attach via engine.on(...) to react to fire / hit /
 // death events with particles + sound + projectile spawn.
 
-import { GameEngine } from '../../model3d/game-engine.js'
+import { GameEngine } from '../../engine/game-engine.js'
+import { AudioPool } from '../../model3d/audio-pool.js'
 
 export class SandboxScene {
   constructor({ palette = null } = {}) {
@@ -26,7 +27,12 @@ export class SandboxScene {
     // beams.  Stored here (not on the engine) because the engine is
     // intentionally headless and has no rendering concerns.
     this.palette = palette
-    this.engine = new GameEngine()
+    // Inject the renderer-side AudioPool via factory.  The engine
+    // package never imports a concrete audio implementation — keeping
+    // the cross-package direction one-way (model3d → engine) means
+    // a future headless server can construct GameEngine without
+    // pulling in browser-only <audio>.
+    this.engine = new GameEngine({ audioFactory: () => new AudioPool() })
     // Selected unit ids — pure UI state.  The controls layer reads
     // this to fan commands out to the highlighted units.
     this.selected = new Set()
