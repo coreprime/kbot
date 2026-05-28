@@ -122,6 +122,21 @@ class SandboxTabInstance {
       const rt = tab.scene && tab.scene.runtime
       if (rt && typeof rt.setPaused === 'function') rt.setPaused(true)
       if (tab.scene && typeof tab.scene.setSilenced === 'function') tab.scene.setSilenced(true)
+      // Release every unit's AudioPool nodes back to the browser.
+      // setSilenced only PAUSES the `<audio>` elements; without an
+      // explicit dispose they stay rooted (and leak) while paused.
+      // This used to live in SandboxView.dispose(), but that now skips
+      // shared-scene teardown so a per-pane close doesn't mute the
+      // survivors — so the once-per-tab release moves here.
+      const engine = tab.scene && tab.scene.engine
+      if (engine && engine._units && typeof engine._units.values === 'function') {
+        for (const u of engine._units.values()) {
+          if (u && u.binding && u.binding.audio
+              && typeof u.binding.audio.dispose === 'function') {
+            try { u.binding.audio.dispose() } catch { /* ignore */ }
+          }
+        }
+      }
     } catch { /* ignore */ }
     if (tab.panes && tab.panes.size > 0) {
       for (const v of tab.panes.values()) {

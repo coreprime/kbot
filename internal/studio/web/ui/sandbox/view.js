@@ -2013,30 +2013,31 @@ export class SandboxView {
     }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
-    // Pause + silence the engine first so the cleanup below can't
-    // race with an in-flight tick.  Pausing freezes weapons +
-    // movement; setSilenced flips every binding's AudioPool into
-    // paused mode so live `<audio>` elements stop emitting before
-    // we tear down their owners.
-    if (this.scene && this.scene.runtime && typeof this.scene.runtime.setPaused === 'function') {
-      try { this.scene.runtime.setPaused(true) } catch { /* ignore */ }
-    }
-    if (this.scene && this.scene.engine && typeof this.scene.engine.setSilenced === 'function') {
-      try { this.scene.engine.setSilenced(true) } catch { /* ignore */ }
-    }
-    // Hard-dispose every live unit's AudioPool so the `<audio>`
-    // elements are released back to the browser.  setSilenced above
-    // only PAUSES — the elements still hold their audio buffer
-    // until dispose() drops the src.  Without this, closing a
-    // sandbox tab in the middle of a firefight leaks audio nodes
-    // that the GC can't reach for many seconds (the page's audio
-    // context keeps them rooted while paused).
-    const engine = this.scene && this.scene.engine
-    if (engine && engine._units && typeof engine._units.values === 'function') {
-      for (const u of engine._units.values()) {
-        if (u && u.binding && u.binding.audio
-            && typeof u.binding.audio.dispose === 'function') {
-          try { u.binding.audio.dispose() } catch { /* ignore */ }
+    // Scene-level teardown — pause the runtime, silence the engine, and
+    // release every unit's AudioPool — ONLY when this view OWNS its
+    // scene.  In a tab/split the scene is SHARED (this._externalScene)
+    // and owned by the tab, whose dispose() does this once for the whole
+    // tab.  Doing it here on a per-pane close would freeze + mute the
+    // shared sim for the surviving panes — the bug this guard fixes:
+    // closing one sandbox split pane used to stop the others' units.
+    if (!this._externalScene) {
+      if (this.scene && this.scene.runtime && typeof this.scene.runtime.setPaused === 'function') {
+        try { this.scene.runtime.setPaused(true) } catch { /* ignore */ }
+      }
+      if (this.scene && this.scene.engine && typeof this.scene.engine.setSilenced === 'function') {
+        try { this.scene.engine.setSilenced(true) } catch { /* ignore */ }
+      }
+      // Hard-dispose every live unit's AudioPool so the `<audio>`
+      // elements are released back to the browser (setSilenced only
+      // PAUSES; the elements keep their buffer until dispose() drops the
+      // src).  The tab dispose path does the same for shared scenes.
+      const engine = this.scene && this.scene.engine
+      if (engine && engine._units && typeof engine._units.values === 'function') {
+        for (const u of engine._units.values()) {
+          if (u && u.binding && u.binding.audio
+              && typeof u.binding.audio.dispose === 'function') {
+            try { u.binding.audio.dispose() } catch { /* ignore */ }
+          }
         }
       }
     }
