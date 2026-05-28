@@ -147,10 +147,15 @@ function ControlsBar({ rt }) {
 // ── Thread + unit-group rows ─────────────────────────────────────────
 
 // _statusText renders the human "Sleeping 1.2s remaining" / "Waiting
-// for turn to complete" / "Running" / "killed by signal N" string from
-// the per-thread fields.  Matches the legacy renderer's wording.
+// for turn to complete" / "Running" / "killed by signal N" / "Breakpoint"
+// string from the per-thread fields.  Matches the legacy renderer's
+// wording, with `killed` taking priority over everything (dead thread
+// can't sleep) and `breakpointHit` priority over the run-state lines
+// (an instruction whose BP fired isn't really "sleeping" or "running" —
+// it's halted, waiting for a Resume click).
 function _statusText(t, killed) {
   if (killed) return `killed by signal ${t._killedBy}`
+  if (t.breakpointHit) return 'Breakpoint'
   if (t.sleepMs > 0) {
     return t.sleepMs >= 1000
       ? `Sleeping ${(t.sleepMs / 1000).toFixed(1)}s remaining`
@@ -190,8 +195,16 @@ function ThreadRow({ t, killed, cob, unitId }) {
       }
     }
   }
+  // Row class:
+  //   .killed     — dead thread (terminated, paints red, ignores breakpoint)
+  //   .breakpoint — thread halted at a user breakpoint, paints gold so the
+  //                 user immediately sees why the runtime is paused even
+  //                 when the debugger panel is closed.
+  const rowCls = killed
+    ? 'mv-cob-thread-row killed'
+    : (t.breakpointHit ? 'mv-cob-thread-row breakpoint' : 'mv-cob-thread-row')
   return html`
-    <div class=${killed ? 'mv-cob-thread-row killed' : 'mv-cob-thread-row'}
+    <div class=${rowCls}
          data-unit-id=${unitId}
          onClick=${onRowClick}>
       <div class="mv-cob-thread-name">

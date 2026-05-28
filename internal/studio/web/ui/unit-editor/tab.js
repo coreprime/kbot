@@ -127,11 +127,17 @@ export async function activateModelTab(tab) {
     }
   }
   // Carry the unit editor's persisted Auto-Rotate state into this
-  // tab's viewer.  Per-tab — each tab can have its own rotate
-  // state if you wanted, but the global cache means all tabs share
-  // the user's last pick by default.
-  const autoRot = hostCallbacks.getUnitEditorAutoRotate?.()
-  if (typeof autoRot === 'boolean') tab.viewer.setAutoRotate(autoRot)
+  // tab's viewer ONLY on the very first activation (when the model
+  // hasn't loaded yet).  On subsequent activations the tab's own
+  // viewer.renderer.autoRotate has whatever the user last set it to
+  // and re-applying the global would clobber it — flipping auto-
+  // rotate off on tab A then switching to tab B used to turn B's
+  // off too because the global was the source of truth.  Same logic
+  // applies to camera yaw/pitch/distance/target/trackedTarget — all
+  // of which live on the per-tab viewer + camera and survive the
+  // tab swap unchanged.  We only seed the global on first activation
+  // so the user's last pick carries into a NEW tab as the default,
+  // without overriding existing tabs.
   // Open the unit IF this tab has never loaded one (first
   // activation).  Subsequent activations of the SAME tab skip the
   // load — the per-tab viewer already holds the model + cob and
@@ -143,6 +149,8 @@ export async function activateModelTab(tab) {
     && tab.viewer.model.name === tab.name
     && tab.viewer.cob && tab.viewer.cob.unit)
   if (!alreadyLoaded) {
+    const autoRot = hostCallbacks.getUnitEditorAutoRotate?.()
+    if (typeof autoRot === 'boolean') tab.viewer.setAutoRotate(autoRot)
     await tab.viewer.open(tab.name)
     // Re-grab _mvControls — the onModelLoaded callback set
     // viewer._mvControls and the global alias only if the viewer
