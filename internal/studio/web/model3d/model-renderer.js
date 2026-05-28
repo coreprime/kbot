@@ -762,8 +762,20 @@ export class ModelRenderer {
     // skipped on the camera frustum so the Renderer panel can show
     // "drew 12 / culled 38" and the user can verify culling is in
     // effect.  Reset at the top of draw() and read by the inspector
-    // through getCullStats().
-    this._cullStats = { drew: 0, culled: 0, total: 0 }
+    // through getCullStats().  `shadowed` counts entities that ran
+    // the shadow pass this frame (i.e. weren't shadow-LOD-skipped).
+    this._cullStats = { drew: 0, culled: 0, total: 0, shadowed: 0 }
+    // Shadow-LOD knobs.  When enabled, entities whose projected
+    // bounding-sphere radius (in screen-space pixels) drops below
+    // `shadowMinPx` skip the shadow pass — near units cast shadows,
+    // far units don't, exactly the "zoom out → shadows fade away"
+    // behaviour the user described.  The threshold is conservative
+    // enough that any unit big enough to read as detailed geometry
+    // also reads its shadow.  Hysteresis is applied via a per-entity
+    // `_lodShadowOn` flag: enter shadow tier above the threshold,
+    // exit at 1.25× the threshold so flicker at the boundary is rare.
+    this.shadowLodEnabled = true
+    this.shadowMinPx = 40
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -953,10 +965,74 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setShadowLodEnabled — runtime toggle for distance-based shadow
+  // culling.  When on (default), entities whose projected size on
+  // screen drops below shadowMinPx skip the shadow pass — zoom-out
+  // gradually thins out the shadow-caster set so the GPU isn't
+  // re-rasterising a hundred barely-visible silhouettes every frame.
+  setShadowLodEnabled(on) {
+    this.shadowLodEnabled = !!on
+    this.requestRedraw()
+  }
+
   // getCullStats returns the most recent frame's cull breakdown for
   // the Renderer overlay.  Snapshot — counters are reset at the top
   // of the next draw() call.
   getCullStats() { return this._cullStats }
+
+  // _pxRadius — returns the projected screen-space radius of an
+  // entity's bounding sphere in CSS pixels.  Uses the cached
+  // halfFovTan from OrbitCamera.updateMatrices so the per-frame cost
+  // is one sqrt + two divides.  Returns +Infinity when the camera is
+  // inside the sphere (treat as max-detail), 0 when the model has no
+  // bounds yet (treat as max-detail so the shadow LOD doesn't pop a
+  // freshly-loaded unit's shadow off until the next frame).
+  _pxRadius(ent) {
+    if (!ent || !ent.model) return 0
+    const m = ent.model
+    const r = m.boundsRadius
+    if (!(r > 0)) return 0
+    const t = ent.transform || _IDENTITY_T
+    const cx = t.x + (m.boundsCentre ? m.boundsCentre[0] : 0)
+    const cy = t.y + (m.boundsCentre ? m.boundsCentre[1] : 0)
+    const cz = t.z + (m.boundsCentre ? m.boundsCentre[2] : 0)
+    const dx = cx - this.camera.eye[0]
+    const dy = cy - this.camera.eye[1]
+    const dz = cz - this.camera.eye[2]
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    if (dist <= r) return Infinity
+    const halfH = this.gl.drawingBufferHeight * 0.5
+    const hft = this.camera.halfFovTan || Math.tan(35 * Math.PI / 180 * 0.5)
+    return (r / dist) * (halfH / hft)
+  }
+
+  // _castsShadow — distance-based shadow LOD with hysteresis.  Decides
+  // whether `ent` runs the shadow pass this frame.  When shadow LOD
+  // is off, always true (every entity casts).  Otherwise the entity
+  // flips ON above the threshold and OFF below threshold/1.25 — the
+  // band prevents flicker at the boundary.  Ghost / selected
+  // entities always cast (UI consistency: a selected unit should
+  // always show its shadow as part of the user's focus).
+  _castsShadow(ent) {
+    if (!this.shadowLodEnabled) return true
+    if (!ent || !ent.model) return true
+    if (ent.ghost || ent.selected) return true
+    const px = this._pxRadius(ent)
+    const prev = ent._lodShadowOn !== false  // default ON when undefined
+    let next
+    if (prev) {
+      // Currently casting — only drop when comfortably below the
+      // threshold so a unit hovering near the boundary doesn't
+      // flicker its shadow on/off.
+      next = px >= (this.shadowMinPx / 1.25)
+    } else {
+      // Not casting — only enter when comfortably above so we don't
+      // re-enter from the same border.
+      next = px >= this.shadowMinPx
+    }
+    ent._lodShadowOn = next
+    return next
+  }
 
   // _entityVisible — Phase 1 frustum cull.  Returns true when the
   // entity's world-space bounding sphere intersects the camera
@@ -1440,6 +1516,7 @@ export class ModelRenderer {
     // panel can poll every refresh tick without coordination.
     this._cullStats.drew = 0
     this._cullStats.culled = 0
+    this._cullStats.shadowed = 0
     this._cullStats.total = (this._entities && this._entities.length) || 0
     // Shader programs are loaded asynchronously by init(); until they
     // resolve there's nothing to draw.  When init completes it calls
@@ -1963,17 +2040,17 @@ export class ModelRenderer {
         // no shadow — matches the "this isn't a real spawn yet" read
         // of the wireframe ghost.
         if (ent.ghost || !ent.model) continue
-        // NOTE: the shadow pass intentionally does NOT use the
-        // camera-frustum cull from Phase 1.  The shadow program's
-        // light projection is parameterised off the active model's
-        // bounds and renders into a 1024×1024 depth FBO that the main
-        // pass then samples — a caster off the camera's edge can
-        // still legally project its shadow INTO the visible frame,
-        // and skipping it leaves a gap on the ground.  Phase 1 keeps
-        // the cull on the main entity pass + particle pass only;
-        // shadow-pass culling will get its own light-frustum test in
-        // a follow-up so we can drop off-light-volume casters too
-        // without losing in-frame shadows.
+        // Distance-based shadow LOD — entities whose projected size
+        // on screen drops below shadowMinPx skip the shadow pass.
+        // Near units cast shadows, far units don't.  The shadow pass
+        // intentionally does NOT use the camera-frustum cull from
+        // Phase 1: a caster off the camera's edge can still project
+        // its shadow INTO the visible frame, and dropping it would
+        // leave a gap on the ground.  The pixel-radius gate dodges
+        // that — at zoom-out distances where the shadow would be
+        // sub-pixel anyway, we don't care that we lose it.
+        if (!this._castsShadow(ent)) continue
+        this._cullStats.shadowed += 1
         this.model = ent.model
         const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
         Mat4.identity(this._modelMatrix)

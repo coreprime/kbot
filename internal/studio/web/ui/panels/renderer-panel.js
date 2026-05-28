@@ -88,6 +88,10 @@ function RendererBody() {
     ? `${cullStats.drew} / ${cullStats.culled} / ${cullStats.total}`
     : '—'
   const cullEnabled = !!(r && r.cullEnabled)
+  const shadowText = (cullStats && cullStats.total > 0)
+    ? `${cullStats.shadowed} / ${cullStats.total}`
+    : '—'
+  const shadowLodEnabled = !!(r && r.shadowLodEnabled)
   return html`
     <${Row} label="FPS" value=${fpsText}
            title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames." />
@@ -99,9 +103,14 @@ function RendererBody() {
     <${Row} label="FOV"      value=${fovText} />
     <${Row} label="Cull" value=${cullText}
            title="Frustum cull breakdown — drew / culled / total entities this frame.  Higher 'culled' means more units fell outside the camera frustum and skipped their draw calls." />
+    <${Row} label="Shadows" value=${shadowText}
+           title="Shadow-LOD breakdown — entities that cast a shadow this frame / total entities.  As you zoom out, distant units drop their shadows to save the shadow pass." />
     <${ToggleRow} label="Frustum cull" checked=${cullEnabled}
                  title="Skip entities outside the camera frustum.  Off → render every spawned unit regardless (for A/B verification)."
                  onChange=${(on) => { if (r && typeof r.setCullEnabled === 'function') r.setCullEnabled(on) }} />
+    <${ToggleRow} label="Shadow LOD" checked=${shadowLodEnabled}
+                 title="Hide shadows for distant units.  When on, units smaller than ~40 px on screen skip the shadow pass — saves the GPU one full geometry walk per far-away unit."
+                 onChange=${(on) => { if (r && typeof r.setShadowLodEnabled === 'function') r.setShadowLodEnabled(on) }} />
     <${ToggleRow} label="Auto-Rotate" checked=${autoRotate}
                  title="Spin the camera around the scene.  Stops automatically on any user gesture (drag, wheel, pan)."
                  onChange=${(on) => hostBridge.setAutoRotate(on)} />
