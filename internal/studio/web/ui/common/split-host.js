@@ -330,6 +330,11 @@ function _applyFocusClass(tab) {
 // the Split H / Split V / Close Pane menu.  Modifier gating + per-
 // leaf close eligibility come from the adapter.
 function _wireSplitContextMenu(canvas, tab, leafId, adapter) {
+  // Editors can opt out of split entirely (e.g. the map editor while
+  // its per-pane camera work is unfinished) by setting
+  // adapter.splitDisabled — no contextmenu listener is wired, so neither
+  // plain nor modifier right-click can engage a new pane.
+  if (adapter.splitDisabled) return
   const onContext = async (e) => {
     if (adapter.contextMenuModifier === 'shift' && !e.shiftKey) return
     e.preventDefault()

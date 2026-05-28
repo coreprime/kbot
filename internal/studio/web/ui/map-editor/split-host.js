@@ -33,6 +33,14 @@ const MAP_ADAPTER = {
   // right-click is left free for a future map-editor context menu —
   // e.g. tile/feature ops — without re-treading this decision.)
   contextMenuModifier: 'shift',
+  // Map-editor split is TEMPORARILY disabled — per-pane camera
+  // independence (no jump on focus switch + 1:1 copy on split) still
+  // has rough edges.  splitDisabled suppresses the right-click Split /
+  // Close context menu (the common split-host honours it); the View ▸
+  // Layout menu items are likewise removed from map-ribbon.js.  The
+  // single bootstrap pane still mounts + renders normally.  Flip this
+  // back off (and restore SplitMenuItems) once the camera work lands.
+  splitDisabled: true,
   async makeLeafView(_tab, _leafId) {
     return new MapPaneView()
   },
