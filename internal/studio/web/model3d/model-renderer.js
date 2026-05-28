@@ -28,7 +28,9 @@ import {
   LOD_HYSTERESIS,
   TIER_FULL_MIN_PX,
   TIER_MID_MIN_PX,
+  SELECTED_IMPOSTOR_FLICKER_MS,
 } from './performance.js'
+import { displayRgbForSide } from './team-colors.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Fallback transform for entities with no explicit transform field —
@@ -1056,7 +1058,12 @@ export class ModelRenderer {
     // value, never a stale or undefined one from a previous frame.
     if (!this.shadowLodEnabled) { if (ent) ent._lodShadowOn = true;  return true }
     if (!ent || !ent.model)     { return true }
-    if (ent.ghost || ent.selected) { ent._lodShadowOn = true; return true }
+    if (ent.ghost)              { ent._lodShadowOn = true; return true }
+    // NOTE: selected entities follow the regular pixel-radius
+    // rule — a selected unit that's too far for geometry (and
+    // renders as a flickering impostor dot) shouldn't be the
+    // single thing on the map casting a shadow.  The selection
+    // is communicated by the dot itself.
     const px = this._pxRadius(ent)
     const prev = ent._lodShadowOn !== false  // default ON when undefined
     let next
@@ -1090,14 +1097,17 @@ export class ModelRenderer {
   //   FAR  — currently identical to MID; Phase 3 will swap in the
   //     impostor-batch path here.
   //
-  // Ghost / selected entities are always Full so the user's focus
-  // (selection ring's anchor, placement preview) stays visually rich
-  // regardless of zoom.  When the LOD toggle is off, every entity is
-  // Full and the classifier is a no-op.
+  // Ghost entities are always Full (placement preview must stay
+  // legible).  Selected entities classify normally — when they
+  // fall to Far tier they render as a flickering impostor instead
+  // of a full geometry walk, so the user sees the selection at a
+  // glance without paying the per-piece cost of a unit they can
+  // barely see.  When the LOD toggle is off, every entity is Full
+  // and the classifier is a no-op.
   _pickLodTier(ent) {
     if (!this.lodEnabled) return LOD_TIER_FULL
     if (!ent || !ent.model) return LOD_TIER_FULL
-    if (ent.ghost || ent.selected) return LOD_TIER_FULL
+    if (ent.ghost) return LOD_TIER_FULL
     const px = this._pxRadius(ent)
     const prev = ent._lodTier != null ? ent._lodTier : LOD_TIER_FULL
     // Symmetric hysteresis around each threshold:
@@ -3254,9 +3264,24 @@ export class ModelRenderer {
   // Called from the main entity loop when the LOD classifier put
   // this entity in Far tier.  Grows the backing buffer if needed
   // (doubling) — pretty cheap since these are 7-float-wide records.
+  //
+  // Selected far-tier entities flicker: on half the cycle they're
+  // pushed normally, off the other half they're skipped entirely.
+  // The blink rate is SELECTED_IMPOSTOR_FLICKER_MS from
+  // performance.js (default ~0.8 s full cycle).  Wall-clock so the
+  // flicker stays visible regardless of sim speed.
   _impostorPush(ent) {
     const m = ent.model
     if (!m || !m.boundsCentre || !(m.boundsRadius > 0)) return
+    // Selection flicker.  Selected far units want to read as
+    // "selected at a glance" without their geometry or ring — we
+    // toggle the impostor every half-cycle.  Unselected entities
+    // skip the time check entirely.
+    if (ent.selected) {
+      const now = performance.now()
+      const phase = (now % SELECTED_IMPOSTOR_FLICKER_MS) < (SELECTED_IMPOSTOR_FLICKER_MS * 0.5)
+      if (!phase) return
+    }
     if (this._impCount >= this._impCapacity) {
       const next = this._impCapacity * 2
       const grown = new Float32Array(next * 7)
@@ -3277,20 +3302,24 @@ export class ModelRenderer {
     // radius so a Krogoth's dot reads larger than a flea's.
     const r = m.boundsRadius
     const px = Math.max(4, Math.min(16, r * 0.35))
-    // Colour: team-coloured entities get their team tint, otherwise
-    // a neutral light grey so the sprite reads against ground + sky.
-    const tc = ent.teamColor
-    const r0 = tc ? tc[0] : 0.80
-    const g0 = tc ? tc[1] : 0.80
-    const b0 = tc ? tc[2] : 0.85
+    // Colour: prefer the entity's side colour resolved through
+    // displayRgbForSide so the user can tell teams apart at a
+    // glance.  Falls back to ent.teamColor (legacy callers that
+    // still set the hue-shift tuple directly) and finally to a
+    // neutral grey for entities that carry neither side nor
+    // teamColor.
+    let rgb
+    if (ent.side != null) rgb = displayRgbForSide(ent.side)
+    else if (ent.teamColor) rgb = ent.teamColor
+    else rgb = [0.80, 0.80, 0.85]
     const off = this._impCount * 7
     const buf = this._impInterleaved
     buf[off]     = cx
     buf[off + 1] = cy
     buf[off + 2] = cz
-    buf[off + 3] = r0
-    buf[off + 4] = g0
-    buf[off + 5] = b0
+    buf[off + 3] = rgb[0]
+    buf[off + 4] = rgb[1]
+    buf[off + 5] = rgb[2]
     buf[off + 6] = px
     this._impCount += 1
   }
@@ -3361,7 +3390,7 @@ export class ModelRenderer {
     // common "no selection" case.
     let count = 0
     for (const ent of entities) {
-      if (ent.selected && !ent.ghost) count++
+      if (ent.selected && !ent.ghost && ent._lodTier !== LOD_TIER_FAR) count++
     }
     if (count === 0) return
     gl.useProgram(this.programWire)
@@ -3380,6 +3409,9 @@ export class ModelRenderer {
     const mat = this._selRingMat
     for (const ent of entities) {
       if (!ent.selected || ent.ghost) continue
+      // Skip the ring on far-tier selected units — the flickering
+      // impostor dot is the selection indicator at that zoom level.
+      if (ent._lodTier === LOD_TIER_FAR) continue
       const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
       // Ring radius — derived from the model's XZ bounding box plus
       // a small absolute pad so even tiny units (PeeWees) get a

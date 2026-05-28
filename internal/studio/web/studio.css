@@ -2970,6 +2970,42 @@ canvas {
    the row itself.  Killed-thread rows obey the same flag so an
    "idle" unit really does collapse to a single line. */
 .mv-cob-thread-row.mv-thread-collapsed { display: none; }
+/* AccordionSection — shared collapsible-section chrome used by the
+   Renderer panel.  Visual treatment mirrors .mv-unit-header so a
+   user familiar with the Runtime panel's collapsible unit groups
+   recognises the pattern.  No action buttons here — the component
+   is body-only; richer headers (Reset / Stop All) live on the
+   Runtime panel's own UnitGroup. */
+.mv-accordion-section { margin-top: 6px; }
+.mv-accordion-section:first-child { margin-top: 0; }
+.mv-accordion-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: rgba(139, 92, 246, 0.10);
+  border: 1px solid rgba(139, 92, 246, 0.30);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.mv-accordion-header:hover { background: rgba(139, 92, 246, 0.18); }
+.mv-accordion-chev {
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  width: 12px;
+  text-align: center;
+}
+.mv-accordion-header.is-open .mv-accordion-chev { color: var(--accent); }
+.mv-accordion-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mv-accordion-count { color: var(--muted); font-size: 9px; font-weight: 500; }
+.mv-accordion-body { padding: 4px 0 0 0; }
 .mv-unit-header-killall {
   background: transparent;
   border: 0;

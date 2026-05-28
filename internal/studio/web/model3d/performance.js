@@ -80,6 +80,20 @@ export const TIER_FULL_MIN_PX = 80   // ≥ 80 px → full pipeline
 export const TIER_MID_MIN_PX  = 12   // ≥ 12 px → mid path; below → Phase 3 impostor
 
 // ── Phase 3 — far-unit impostor ──────────────────────────────────────
-// Reserved.  See .local/performance-plan.md.  Will hold the per-tier
-// alpha cross-fade band and the impostor point sprite size scaling
-// rules once Phase 3 lands.
+
+// Selected far-tier units flicker their impostor sprite on/off so
+// the user can spot a selection that's too far away for a full
+// model.  Period is the full on-off cycle in milliseconds — wall-
+// clock, so unaffected by sim slow-mo.  ~0.8 s gives a visible but
+// not seizure-y blink that survives auto-rotate panning.
+export const SELECTED_IMPOSTOR_FLICKER_MS = 800
+
+// ── Audio dedup ──────────────────────────────────────────────────────
+
+// When a sound stem starts playing the AudioPool refuses to start
+// the SAME stem again within this wall-clock window.  Prevents the
+// 40-Hz COB tick from spawning N duplicate Audio elements when a
+// burst-fire weapon kicks off in the same simulation tick from
+// multiple weapons / multiple units.  ~125 ms ≈ 5 TA ticks at the
+// default 40 Hz tick rate.
+export const AUDIO_DEDUP_WINDOW_MS = 125

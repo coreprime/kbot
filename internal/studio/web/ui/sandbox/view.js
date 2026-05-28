@@ -1046,6 +1046,12 @@ export class SandboxView {
         buildPercent: u.buildPercent,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
+        // teamColor is the hue-shift modulator for the main shader
+        // (null = no recolour = keep authored ARM blue); `side` is
+        // the raw faction index so the Phase 3 impostor batch can
+        // resolve a concrete RGB tuple (including the ARM-blue
+        // case) via displayRgbForSide.
+        side: u.side | 0,
         teamColor: teamColorForSide(u.side),
       })
     }

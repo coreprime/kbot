@@ -35,6 +35,27 @@ export function teamColorForSide(side) {
   return entry ? entry.rgb : null
 }
 
+// _ARM_BLUE_RGB — concrete RGB tuple matching the side-0 swatch
+// (#3a6cd6) so the impostor / minimap / UI rendering paths that need
+// a real colour for the "no recolour" canonical ARM blue have
+// something to draw with.  Kept in sync with the side-0 swatchCss
+// above by hand.
+const _ARM_BLUE_RGB = [0.227, 0.424, 0.839]
+
+// displayRgbForSide returns an ALWAYS-non-null [r, g, b] tuple for
+// the side index — useful for surfaces that need to draw the side
+// colour as itself rather than as a hue-shift modulator.  Side 0
+// (the "no recolour" canonical ARM-blue) returns the resolved
+// blue equivalent; sides 1..7 return their saturated team palette;
+// out-of-range falls back to ARM blue.  Phase 3 far-tier impostors
+// use this so the user can tell teams apart by colour even when
+// units collapse to a single coloured dot.
+export function displayRgbForSide(side) {
+  const entry = TEAM_SIDES[(side | 0)]
+  if (entry && entry.rgb) return entry.rgb
+  return _ARM_BLUE_RGB
+}
+
 // sideForKey looks a side up by string key ('blue', 'red', ...).
 // Used by the side picker UI which carries the key on the DOM
 // dataset rather than a raw integer.

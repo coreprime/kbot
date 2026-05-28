@@ -23,6 +23,8 @@
 // One pool instance per ModelViewer.  Disposed (all audio stopped) on
 // viewer teardown so the next unit-load starts silent.
 
+import { AUDIO_DEDUP_WINDOW_MS } from './performance.js'
+
 let _nextId = 1
 
 export class AudioPool {
@@ -38,6 +40,14 @@ export class AudioPool {
     // for "count changed since last tick" — keeps the panel from
     // re-rendering when nothing's playing.
     this._onEntryCount = null
+    // _lastPlayByStem: last wall-clock millisecond a given stem was
+    // started.  When the same stem is requested again within
+    // AUDIO_DEDUP_WINDOW_MS, play() short-circuits so a 40 Hz COB
+    // tick that fires N identical sounds (multiple weapons / units
+    // hitting the same shot frame) doesn't spawn N stacked <audio>
+    // elements.  Entries don't get GC'd; the map size is bounded by
+    // the number of distinct stems the unit ships with.
+    this._lastPlayByStem = new Map()
   }
 
   // play registers a new sound.  Returns the entry id (or 0 if the
@@ -58,6 +68,17 @@ export class AudioPool {
   // is null and the bar shows indeterminate.
   play(stem, opts = {}) {
     if (!stem) return 0
+    // Stem dedup — reject identical stems requested within the
+    // AUDIO_DEDUP_WINDOW_MS wall-clock band.  A 40 Hz COB tick can
+    // fire the same fire / impact / ack sound multiple times in one
+    // frame (multi-weapon burst, multi-unit volley) and the browser
+    // happily stacks the resulting <audio> elements into a phaser-y
+    // mess.  Threshold lives in performance.js so the user can tune
+    // it without touching pool internals.
+    const now = performance.now()
+    const last = this._lastPlayByStem.get(stem) || 0
+    if (now - last < AUDIO_DEDUP_WINDOW_MS) return 0
+    this._lastPlayByStem.set(stem, now)
     let audio
     try {
       audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
