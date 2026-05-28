@@ -1025,6 +1025,29 @@ export class SandboxView {
     })
   }
 
+  // #copyPieceState walks two Piece trees in lockstep (DFS) and
+  // copies the binding-driven animated channels (move / rotate /
+  // visible) from `src` into `dst`.  Both trees are built from the
+  // same loader JSON so the child orders match by construction —
+  // no by-name lookup needed.  Called per-entity per-frame in
+  // #refreshEntities to make this pane's local-context model reflect
+  // the binding's authoritative pose (the binding only writes the
+  // engine-side instance model, not our per-pane GL copy).
+  #copyPieceState(src, dst) {
+    if (!src || !dst) return
+    dst.move[0] = src.move[0]
+    dst.move[1] = src.move[1]
+    dst.move[2] = src.move[2]
+    dst.rotate[0] = src.rotate[0]
+    dst.rotate[1] = src.rotate[1]
+    dst.rotate[2] = src.rotate[2]
+    dst.visible = src.visible
+    const sc = src.children
+    const dc = dst.children
+    const n = Math.min(sc.length, dc.length)
+    for (let i = 0; i < n; i++) this.#copyPieceState(sc[i], dc[i])
+  }
+
   #refreshEntities() {
     if (!this.renderer || !this.scene) return
     const entities = []
@@ -1044,6 +1067,19 @@ export class SandboxView {
         this.#ensureLocalModel(u.name)
         continue
       }
+      // Pose-sync — copy binding-driven animation state (move /
+      // rotate / visible) from u.model (which the binding writes
+      // each tick via _sync) into our local-context copy.  Same
+      // tree-shape across both so DFS lockstep is safe.  Without
+      // this the unit renders in its authored static pose forever
+      // (legs locked, turret straight, weapon flares cosmetic
+      // panels never hidden) even though the binding runtime ticks
+      // are correctly advancing the source pieces.  Pose copy
+      // applies to BOTH panes — even the spawning pane's local
+      // cache stores the load-time Model, not the instModel clone
+      // the engine animates, so without the copy the spawning pane
+      // is also static.
+      this.#copyPieceState(u.model.root, localModel.root)
       // No bounds-based lift: TA models are authored with their feet
       // pieces (heel/toes/wheel/etc.) resting at world y=0, so
       // placing the unit at y=0 grounds it naturally — matching the

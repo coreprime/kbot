@@ -51,6 +51,7 @@ import {
   wireSplitContextMenu,
   createSharedScene,
   ensureSplitState,
+  revivePanes,
 } from './split-host.js'
 
 // `_sandboxViewInstance` tracks the CURRENTLY ACTIVE sandbox tab's
@@ -244,6 +245,13 @@ export async function activateSandboxTab(tab) {
   // LeafSlot effect will see the active pane's view already in panes
   // and just appendChild its canvas to the cell.
   mountSandboxSplit(tab, stage, getPaneCallbacks())
+  // Defensive canvas re-attach pass — Preact's reconciliation on
+  // re-render of a multi-pane tree occasionally leaves a pane's
+  // canvas orphaned from its slot, which presents as a blank pane
+  // with no visible content and no captured right-click.  revivePanes
+  // walks tab.panes and re-attaches any canvas that's missing from
+  // its current leaf cell.  Idempotent + cheap.
+  revivePanes(tab)
   // Push the current Runtime-overlay slider rate into the new
   // sandbox's runtime so it starts at the user's chosen speed instead
   // of the default 1.0×.  Each sandbox tab owns its own CobRuntime,
@@ -260,10 +268,20 @@ export async function activateSandboxTab(tab) {
     const editorRate = modelViewerInstance?.cob?.runtime?.playbackRate
     mvSetSimulationSpeed(typeof editorRate === 'number' ? editorRate : 1)
   } catch { /* ignore */ }
-  // Make sure the RAF loop is live — switchToTab stops it on the way
-  // to a map tab so we don't burn frames behind the editor.  Renderer
-  // .start() is idempotent.
-  try { _sandboxViewInstance.renderer?.start?.() } catch { /* ignore */ }
+  // Make sure the RAF loop is live for EVERY pane — switchToTab +
+  // SandboxTabInstance.deactivate stop all of them on the way out so
+  // background tabs don't burn frames behind a map editor.  Multi-pane
+  // tabs need each pane's renderer restarted; before this only the
+  // active pane was being woken, leaving sibling panes frozen on
+  // their last frame (the canvas stays in the DOM but the RAF loop
+  // is dead so nothing repaints).  Renderer.start() is idempotent.
+  if (tab.panes && tab.panes.size > 0) {
+    for (const v of tab.panes.values()) {
+      try { v.renderer?.start?.() } catch { /* ignore */ }
+    }
+  } else {
+    try { _sandboxViewInstance.renderer?.start?.() } catch { /* ignore */ }
+  }
   // Un-silence audio on the incoming sandbox — outgoing tab's switch
   // muted every viewer; the active one comes back un-muted so weapon
   // fire / unit acks / death sounds play normally.

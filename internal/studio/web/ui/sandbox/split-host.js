@@ -146,6 +146,30 @@ export function detachSandboxSplit(tab) {
   }
 }
 
+// revivePanes — defensive pass for re-activation.  Walks every pane
+// in tab.panes and makes sure its canvas is appendChild'd back into
+// its leaf slot.  Useful when Preact reconciliation around tree
+// changes (split / close-pane / tab swap) leaves a canvas orphaned
+// from its mount-slot DOM element — the LeafSlot useEffect normally
+// handles re-mount, but capture-phase re-orderings in deep trees
+// occasionally drop the canvas reference, leaving a blank pane that
+// the user can't right-click into.  This sweep finds the slot by
+// `[data-leaf-id]` (set by SplitContainer on every leaf wrapper) and
+// re-attaches if needed.  Idempotent.
+export function revivePanes(tab) {
+  if (!tab || !tab._splitMount || !tab.panes) return
+  for (const [leafId, view] of tab.panes) {
+    if (!view || !view.canvas) continue
+    const leafEl = tab._splitMount.querySelector(`.mv-split-leaf[data-leaf-id="${leafId}"]`)
+    if (!leafEl) continue
+    const slot = leafEl.querySelector('.mv-sandbox-pane-slot')
+    if (!slot) continue
+    if (view.canvas.parentNode !== slot) {
+      try { slot.appendChild(view.canvas) } catch { /* ignore */ }
+    }
+  }
+}
+
 // disposeSandboxSplit — full teardown on tab close.  Stops every
 // pane's renderer, drops their canvases, disposes the view objects,
 // disposes the scene, unmounts the Preact tree.
