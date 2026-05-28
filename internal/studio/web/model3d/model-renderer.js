@@ -1963,16 +1963,17 @@ export class ModelRenderer {
         // no shadow — matches the "this isn't a real spawn yet" read
         // of the wireframe ghost.
         if (ent.ghost || !ent.model) continue
-        // Phase 1 frustum cull on the shadow pass.  Reuses the camera
-        // frustum: a caster fully outside the camera CAN still cast a
-        // shadow into frame, but the directional-light projection
-        // here is parameterised off the active model's bounds (see
-        // #updateLightMatrices) and only renders shadows within that
-        // depth range — units far enough outside the camera frustum
-        // to skip the main pass are also outside the lit ground patch
-        // and their shadow would land off-screen.  Visual parity
-        // confirmed via the cullEnabled toggle.
-        if (!this._entityVisible(ent)) continue
+        // NOTE: the shadow pass intentionally does NOT use the
+        // camera-frustum cull from Phase 1.  The shadow program's
+        // light projection is parameterised off the active model's
+        // bounds and renders into a 1024×1024 depth FBO that the main
+        // pass then samples — a caster off the camera's edge can
+        // still legally project its shadow INTO the visible frame,
+        // and skipping it leaves a gap on the ground.  Phase 1 keeps
+        // the cull on the main entity pass + particle pass only;
+        // shadow-pass culling will get its own light-frustum test in
+        // a follow-up so we can drop off-light-volume casters too
+        // without losing in-frame shadows.
         this.model = ent.model
         const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
         Mat4.identity(this._modelMatrix)
