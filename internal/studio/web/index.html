@@ -26,53 +26,15 @@
          TA's 8-bit PCM WAVs in Chrome, so we fetch + decodeAudioData
          + AudioBufferSource for reliable playback. -->
 
-    <div class="dialog-card dialog-card-wide">
-      <h1 class="welcome-title">KBot Studio</h1>
-      <p class="welcome-tagline"><span>A web-based workbench for Total Annihilation and TA: Kingdoms.  Pick a workflow to begin.</span></p>
-      <!-- Workflow tabs.  Only Mapping is implemented today; the rest
-           are placeholder stubs so the user can see the shape of
-           what's coming. -->
-      <div class="welcome-tabs" role="tablist" aria-label="Workflow">
-        <button class="welcome-tab active" role="tab" aria-selected="true" data-welcome-tab="mapping">Mapping</button>
-        <button class="welcome-tab" role="tab" aria-selected="false" data-welcome-tab="modelling">Modelling</button>
-        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="Coming soon: COB / scripting editor.">Scripting</button>
-        <button class="welcome-tab" role="tab" aria-disabled="true" disabled title="More workflows on the roadmap.">Other</button>
-        <button class="welcome-tab" role="tab" aria-selected="false" data-welcome-tab="sandbox">Sandbox Mode</button>
-      </div>
-      <div class="welcome-tab-panel" data-welcome-tab-panel="mapping">
-        <div class="welcome-options">
-          <button class="welcome-card" id="welcome-new">
-            <span class="welcome-card-ico">✨</span>
-            <span class="welcome-card-title">Create a new map</span>
-            <span class="welcome-card-sub">Start from a blank canvas — choose tileset, dimensions and name.</span>
-          </button>
-          <button class="welcome-card" id="welcome-open">
-            <span class="welcome-card-ico">📂</span>
-            <span class="welcome-card-title">Open an existing map</span>
-            <span class="welcome-card-sub">Browse the maps in your kbot context / VFS.</span>
-          </button>
-        </div>
-        <p class="dialog-sub welcome-drop-hint">…or drop a <code>.tnt</code> (and optional sibling <code>.ota</code>) file anywhere on this dialog.</p>
-      </div>
-      <div class="welcome-tab-panel hidden" data-welcome-tab-panel="modelling">
-        <div class="welcome-options">
-          <button class="welcome-card" id="welcome-model-open">
-            <span class="welcome-card-ico">🛠</span>
-            <span class="welcome-card-title">Open Unit</span>
-            <span class="welcome-card-sub">Browse every TA unit in the mounted assets — view the 3DO geometry, drive its COB animation scripts, fire its weapons, and edit its runtime ports.</span>
-          </button>
-        </div>
-      </div>
-      <div class="welcome-tab-panel hidden" data-welcome-tab-panel="sandbox">
-        <div class="welcome-options">
-          <button class="welcome-card" id="welcome-sandbox">
-            <span class="welcome-card-ico">🪖</span>
-            <span class="welcome-card-title">Open Sandbox</span>
-            <span class="welcome-card-sub">Drop units onto a blank battlefield, select them (click or drag-rect), and issue Move / Attack orders.  Weapons inflict real damage on hit, COB scripts drive movement and turret aim, and the runtime overlay shows everything that's ticking.</span>
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- The welcome card body is rendered by the React WelcomeScreen
+         (ui/screens/welcome/welcome-screen.js), mounted into this slot
+         by mountWelcomeScreen().  It MUST start empty: the old static
+         markup here painted a different tab order (Sandbox Mode last)
+         on the first frame, then React replaced it with the live order
+         (Sandbox Mode first) — which read as the welcome content
+         "snapping" from right to left on every load.  Leaving the card
+         empty means the only layout the user ever sees is React's. -->
+    <div class="dialog-card dialog-card-wide"></div>
   </div>
 
   <!-- Unit Editor picker.  Lists every units/*.fbi in the VFS plus

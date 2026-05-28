@@ -388,13 +388,18 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#size-w').addEventListener('keydown', confirmOnEnter)
   $('#size-h').addEventListener('keydown', confirmOnEnter)
   $('#size-name').addEventListener('keydown', confirmOnEnter)
-  // Welcome modal — pick New vs Open.
-  $('#welcome-new').addEventListener('click', () => {
+  // Welcome modal — pick New vs Open.  The welcome card body is now
+  // rendered by the React WelcomeScreen (its cards fire onNewMap /
+  // onOpenMap callbacks wired in wire-react-ui.js), so these legacy
+  // static buttons no longer exist in the DOM.  Guard the wiring so
+  // boot doesn't throw, and keep it as a no-op fallback for any build
+  // that still ships the static markup.
+  $('#welcome-new')?.addEventListener('click', () => {
     setSizeDialogSource('welcome')
     $('#welcome-dialog').classList.add('hidden')
     openSizeDialog()
   })
-  $('#welcome-open').addEventListener('click', () => openMapDialog('welcome'))
+  $('#welcome-open')?.addEventListener('click', () => openMapDialog('welcome'))
   wireWelcomeKeyboard()
   wireWelcomeDropZone()
   wireWelcomeNanoFX()
