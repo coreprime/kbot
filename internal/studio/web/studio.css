@@ -3006,6 +3006,34 @@ canvas {
 .mv-accordion-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mv-accordion-count { color: var(--muted); font-size: 9px; font-weight: 500; }
 .mv-accordion-body { padding: 4px 0 0 0; }
+/* Renderer panel — body has no max-height because the two accordion
+   sections together (Camera with seven rows + tracking + Advanced
+   with three stats + three toggles) outgrow the default 360 px cap
+   the moment both are expanded.  Letting the body grow to fit avoids
+   the user having to manually drag-resize every session. */
+.mv-renderer-panel .mv-inspector-body {
+  max-height: none;
+  resize: none;
+}
+/* FPS chip in the Renderer panel header — sits between the title and
+   the standard header buttons (collapse / close).  Pill-shaped with
+   tabular nums so the digits don't dance as the rate fluctuates. */
+.mv-panel-fps-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  min-width: 38px;
+  justify-content: center;
+}
 .mv-unit-header-killall {
   background: transparent;
   border: 0;

@@ -44,6 +44,46 @@ export class OrbitCamera {
     this.trackedName = ref ? (name || (ref.name ?? null)) : null
   }
 
+  // advanceTrackedTarget cycles the tracked target through an ordered
+  // list of refs.  Used by hosts to wire a single hotkey (T) into a
+  // "press to track, press again to advance, press past the end to
+  // untrack" UX over whatever the host considers a selection.
+  //
+  // Behaviour matrix:
+  //   - empty refs               → untrack, return null
+  //   - not tracking / off-list  → track refs[0]
+  //   - tracking refs[i]         → track refs[i + 1]
+  //   - tracking refs[last]      → untrack
+  //
+  // `nameFn(ref)` is invoked to derive the cosmetic name passed to
+  // setTrackedTarget — hosts use it to inject "Unit 17"-style labels
+  // when the ref itself doesn't carry a human-readable name.  When
+  // omitted the existing setTrackedTarget name fallback applies.
+  //
+  // Returns the ref that's now tracked (or null when untracked) so
+  // the host can drive its own status text without re-reading the
+  // camera state.
+  advanceTrackedTarget(refs, nameFn = null) {
+    if (!Array.isArray(refs) || refs.length === 0) {
+      this.setTrackedTarget(null)
+      return null
+    }
+    const cur = this.trackedTarget
+    const idx = cur ? refs.indexOf(cur) : -1
+    if (idx < 0) {
+      const next = refs[0]
+      this.setTrackedTarget(next, nameFn ? nameFn(next) : null)
+      return next
+    }
+    if (idx >= refs.length - 1) {
+      this.setTrackedTarget(null)
+      return null
+    }
+    const next = refs[idx + 1]
+    this.setTrackedTarget(next, nameFn ? nameFn(next) : null)
+    return next
+  }
+
   // applyTracking pulls the camera target onto the tracked unit's
   // centre of mass for THIS frame.  Cheap — three vector adds — so
   // call it once per render frame from the view's onAfterFrame

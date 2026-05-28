@@ -12,8 +12,10 @@
 // re-render in step with the rest of the inspector suite.
 //
 // Layout: rows are grouped into two AccordionSections — "Camera"
-// (open by default; pose / FPS / FOV / tracking) and "Advanced"
-// (closed by default; cull + LOD diagnostics and their toggles).
+// (open by default; pose / FOV / tracking) and "Advanced" (closed
+// by default; cull + LOD diagnostics and their toggles).  The live
+// FPS reading sits in the panel header (right of the title) so the
+// frame-rate stays visible even when both accordions are collapsed.
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
@@ -65,6 +67,21 @@ function ToggleRow({ label, checked, title, onChange }) {
   `
 }
 
+// RendererFpsChip renders the live FPS readout that lives in the
+// panel header.  Kept as its own component so the body's tick-driven
+// re-render doesn't depend on the chip being present — and so the
+// chip can re-render in step with the runtime without forcing the
+// whole panel through the body's render tree.
+function RendererFpsChip() {
+  void runtimeTick.value
+  const proxy = mv.value
+  const r = proxy && proxy.renderer
+  const fps = (r && typeof r.getFPS === 'function') ? r.getFPS() : 0
+  const text = fps > 0 ? `${fps.toFixed(0)} fps` : '—'
+  return html`<span class="mv-panel-fps-chip"
+                    title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames.">${text}</span>`
+}
+
 function RendererBody() {
   const { visible } = panelSignals(PANEL_ID)
   // Tick read — re-renders every publish so the live values stay
@@ -78,8 +95,6 @@ function RendererBody() {
     return html`<div class="mv-inspector-empty">No camera available.</div>`
   }
   const r = proxy.renderer
-  const fps = (r && typeof r.getFPS === 'function') ? r.getFPS() : 0
-  const fpsText = fps > 0 ? `${fps.toFixed(0)} fps` : '—'
   const fovText = (cam.fov !== undefined) ? `${(cam.fov * 180 / Math.PI).toFixed(0)}°` : '—'
   const tracking = _liveTracking(proxy)
   const autoRotate = _liveAutoRotate(proxy)
@@ -107,8 +122,6 @@ function RendererBody() {
   const lodEnabled = !!(r && r.lodEnabled)
   return html`
     <${AccordionSection} id="renderer-camera" title="Camera" defaultOpen=${true}>
-      <${Row} label="FPS" value=${fpsText}
-             title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames." />
       <${Row} label="Position" value=${fmtVec(cam.eye)} />
       <${Row} label="Target"   value=${fmtVec(cam.target)} />
       <${Row} label="Yaw"      value=${fmtDeg(cam.yaw)} />
@@ -147,7 +160,9 @@ function RendererBody() {
 
 export function RendererPanel() {
   return html`
-    <${FloatingPanel} id=${PANEL_ID} title="Renderer">
+    <${FloatingPanel} id=${PANEL_ID} title="Renderer"
+                     className="mv-renderer-panel"
+                     headerExtras=${html`<${RendererFpsChip} />`}>
       <${RendererBody} />
     <//>
   `

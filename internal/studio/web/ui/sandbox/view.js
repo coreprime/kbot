@@ -1189,8 +1189,34 @@ export class SandboxView {
     }
   }
 
+  // toggleTracking is the T-hotkey entry point.  Unlike the Renderer
+  // panel's checkbox (which is binary on/off), the hotkey cycles
+  // through every currently-selected unit before untracking: press T
+  // once to lock onto unit 1, again for unit 2, … past the last to
+  // untrack.  The cycle ordering is whatever getSelectedUnits()
+  // returns (insertion order of the selected set).  When nothing is
+  // selected the press just clears tracking.
   toggleTracking() {
-    this.setTracking(!this.camera?.trackedTarget)
+    if (!this.camera) return
+    const units = this.getSelectedUnits()
+    if (units.length === 0) {
+      if (this.camera.trackedTarget) {
+        this.untrack()
+        this.#setStatus('Tracking off.')
+      } else {
+        this.#setStatus('Tracking — select a unit first.')
+      }
+      return
+    }
+    const next = this.camera.advanceTrackedTarget(
+      units,
+      (u) => u.name || `Unit ${u.id}`,
+    )
+    if (next) {
+      this.#setStatus(`Tracking ${next.name || `unit ${next.id}`}.`)
+    } else {
+      this.#setStatus('Tracking off.')
+    }
   }
 
   // #onMouseMove updates the ghost preview's position to follow the
