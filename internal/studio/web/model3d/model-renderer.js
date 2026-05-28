@@ -21,6 +21,10 @@ import { Mat4 } from './mat4.js'
 import { loadAllShaders } from './shader-loader.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
+// Fallback transform for entities with no explicit transform field —
+// referenced by the frustum-cull predicate so the hot path doesn't
+// allocate a fresh object per entity per frame.
+const _IDENTITY_T = Object.freeze({ x: 0, y: 0, z: 0, headingRad: 0 })
 const POS_OFFSET = 0
 const NRM_OFFSET = 3 * 4
 const UV_OFFSET = 6 * 4
@@ -750,6 +754,16 @@ export class ModelRenderer {
     //   particles, selected }.  When null, the renderer falls back
     //  to single-unit mode driven by `this.model` + _unitTransform.
     this._entities = null
+    // Frustum-cull toggle — runtime debug knob, exposed via the
+    // Developer Tools / View menu so the user can A/B the culled vs
+    // un-culled render to confirm visual parity.  Default ON.
+    this.cullEnabled = true
+    // Per-frame frustum-cull bookkeeping.  Counts entities drawn vs
+    // skipped on the camera frustum so the Renderer panel can show
+    // "drew 12 / culled 38" and the user can verify culling is in
+    // effect.  Reset at the top of draw() and read by the inspector
+    // through getCullStats().
+    this._cullStats = { drew: 0, culled: 0, total: 0 }
     this._lightView = Mat4.create()
     this._lightProj = Mat4.create()
     this._lightSpace = Mat4.create()
@@ -928,6 +942,52 @@ export class ModelRenderer {
   setEntities(entitiesArr) {
     this._entities = (Array.isArray(entitiesArr) && entitiesArr.length > 0) ? entitiesArr : null
     this.requestRedraw()
+  }
+
+  // setCullEnabled — runtime toggle for the frustum cull.  Off →
+  // every entity draws regardless of camera frustum (the old behaviour,
+  // useful for A/B verifying visual parity).  On (default) → entities
+  // outside the camera frustum skip their main pass and shadow pass.
+  setCullEnabled(on) {
+    this.cullEnabled = !!on
+    this.requestRedraw()
+  }
+
+  // getCullStats returns the most recent frame's cull breakdown for
+  // the Renderer overlay.  Snapshot — counters are reset at the top
+  // of the next draw() call.
+  getCullStats() { return this._cullStats }
+
+  // _entityVisible — Phase 1 frustum cull.  Returns true when the
+  // entity's world-space bounding sphere intersects the camera
+  // frustum (so the renderer needs to issue draw calls for it),
+  // false when the sphere is entirely behind one of the six planes
+  // (skippable).  Special cases:
+  //   - cullEnabled === false      → always visible (debug toggle).
+  //   - ghost / selected entities  → always visible (UI / placement
+  //                                  preview must render even off-
+  //                                  centre of the camera framing).
+  //   - missing model bounds       → always visible (defensive — a
+  //                                  loader race could leave bounds
+  //                                  null on the very first frame).
+  // Callers also bump `_cullStats` so the Renderer panel can show
+  // the drew / culled split per frame.
+  _entityVisible(ent) {
+    if (!this.cullEnabled) return true
+    if (!ent || !ent.model) return true
+    if (ent.ghost || ent.selected) return true
+    const m = ent.model
+    if (!m.boundsCentre || !(m.boundsRadius > 0)) return true
+    const t = ent.transform || _IDENTITY_T
+    // Object → world translation only — the bounding sphere is
+    // rotation-invariant, so heading + sea-bob don't affect the
+    // centre+radius test.  Sea-bob can lift the sphere by ~5 wu;
+    // pad the radius slightly to absorb it.
+    const cx = t.x + m.boundsCentre[0]
+    const cy = t.y + m.boundsCentre[1]
+    const cz = t.z + m.boundsCentre[2]
+    const r = m.boundsRadius + 5  // padding for sea-bob / heading wobble
+    return this.camera.sphereInFrustum(cx, cy, cz, r)
   }
 
   // worldToCanvas projects a world-space (x, y, z) point onto the
@@ -1374,6 +1434,13 @@ export class ModelRenderer {
     // every subsequent useProgram / bindFramebuffer call would warn.
     if (this._disposed || this.gl?.isContextLost?.()) return
     const gl = this.gl
+    // Reset per-frame frustum-cull counters at the top of the frame
+    // so the Renderer panel's "drew/culled/total" rows reflect THIS
+    // frame's sphere-vs-frustum tests below.  Reads are cheap so the
+    // panel can poll every refresh tick without coordination.
+    this._cullStats.drew = 0
+    this._cullStats.culled = 0
+    this._cullStats.total = (this._entities && this._entities.length) || 0
     // Shader programs are loaded asynchronously by init(); until they
     // resolve there's nothing to draw.  When init completes it calls
     // requestRedraw() which triggers a fresh draw with everything
@@ -1571,6 +1638,17 @@ export class ModelRenderer {
       const savedTC = this.teamColor
       const savedTCe = this.teamColorEnable
       for (const ent of this._entities) {
+        // Phase 1 frustum cull — skip the entity's main pass when its
+        // bounding sphere is fully outside the camera frustum.
+        // Selection rings live OUTSIDE this loop (drawn afterwards
+        // from #renderSelectionRings) so culling a selected unit
+        // doesn't lose its ring; ghost / selected entities are
+        // exempted inside _entityVisible.
+        if (!this._entityVisible(ent)) {
+          this._cullStats.culled += 1
+          continue
+        }
+        this._cullStats.drew += 1
         this.model = ent.model
         if (typeof ent.buildPercent === 'number') this.buildPercent = ent.buildPercent
         // Per-entity team colour — caller passes ent.teamColor as
@@ -1691,7 +1769,24 @@ export class ModelRenderer {
       const savedPool = this._particlePool
       for (const ent of this._entities) {
         const pool = ent.binding && ent.binding.particles
-        if (pool && pool.count > 0) {
+        // Cull particle pools whose owning entity is well outside the
+        // camera frustum.  Padded radius (boundsRadius + 200 wu) so a
+        // smoke trail / missile that's drifted outside the unit's own
+        // bounds still draws as long as it's plausibly in-frame.
+        // 200 wu is conservative — half the typical TA weapon range.
+        const cullable = pool && pool.count > 0 && this.cullEnabled
+          && ent && ent.model && ent.model.boundsCentre
+          && !ent.ghost && !ent.selected
+        let particlesVisible = true
+        if (cullable) {
+          const t = ent.transform || _IDENTITY_T
+          const cx = t.x + ent.model.boundsCentre[0]
+          const cy = t.y + ent.model.boundsCentre[1]
+          const cz = t.z + ent.model.boundsCentre[2]
+          const r = (ent.model.boundsRadius || 0) + 200
+          particlesVisible = this.camera.sphereInFrustum(cx, cy, cz, r)
+        }
+        if (pool && pool.count > 0 && particlesVisible) {
           this._particlePool = pool
           this.#renderParticles()
         }
@@ -1868,6 +1963,16 @@ export class ModelRenderer {
         // no shadow — matches the "this isn't a real spawn yet" read
         // of the wireframe ghost.
         if (ent.ghost || !ent.model) continue
+        // Phase 1 frustum cull on the shadow pass.  Reuses the camera
+        // frustum: a caster fully outside the camera CAN still cast a
+        // shadow into frame, but the directional-light projection
+        // here is parameterised off the active model's bounds (see
+        // #updateLightMatrices) and only renders shadows within that
+        // depth range — units far enough outside the camera frustum
+        // to skip the main pass are also outside the lit ground patch
+        // and their shadow would land off-screen.  Visual parity
+        // confirmed via the cullEnabled toggle.
+        if (!this._entityVisible(ent)) continue
         this.model = ent.model
         const t = ent.transform || { x: 0, y: 0, z: 0, headingRad: 0 }
         Mat4.identity(this._modelMatrix)

@@ -78,6 +78,16 @@ function RendererBody() {
   const fovText = (cam.fov !== undefined) ? `${(cam.fov * 180 / Math.PI).toFixed(0)}°` : '—'
   const tracking = _liveTracking(proxy)
   const autoRotate = _liveAutoRotate(proxy)
+  // Frustum-cull statistics — live read off the renderer's _cullStats
+  // counters reset every draw().  `drew / culled / total` reads through
+  // as e.g. "12 / 38 / 50" so the user can see at a glance how many
+  // entities the camera frustum eliminated this frame.  Empty when no
+  // multi-entity scene is active (unit editor: total=0, drew=0).
+  const cullStats = (r && typeof r.getCullStats === 'function') ? r.getCullStats() : null
+  const cullText = (cullStats && cullStats.total > 0)
+    ? `${cullStats.drew} / ${cullStats.culled} / ${cullStats.total}`
+    : '—'
+  const cullEnabled = !!(r && r.cullEnabled)
   return html`
     <${Row} label="FPS" value=${fpsText}
            title="Smoothed frames-per-second sampled from the WebGL render loop.  Excludes paused or background-tab frames." />
@@ -87,6 +97,11 @@ function RendererBody() {
     <${Row} label="Pitch"    value=${fmtDeg(cam.pitch)} />
     <${Row} label="Distance" value=${`${cam.distance.toFixed(1)} wu`} />
     <${Row} label="FOV"      value=${fovText} />
+    <${Row} label="Cull" value=${cullText}
+           title="Frustum cull breakdown — drew / culled / total entities this frame.  Higher 'culled' means more units fell outside the camera frustum and skipped their draw calls." />
+    <${ToggleRow} label="Frustum cull" checked=${cullEnabled}
+                 title="Skip entities outside the camera frustum.  Off → render every spawned unit regardless (for A/B verification)."
+                 onChange=${(on) => { if (r && typeof r.setCullEnabled === 'function') r.setCullEnabled(on) }} />
     <${ToggleRow} label="Auto-Rotate" checked=${autoRotate}
                  title="Spin the camera around the scene.  Stops automatically on any user gesture (drag, wheel, pan)."
                  onChange=${(on) => hostBridge.setAutoRotate(on)} />

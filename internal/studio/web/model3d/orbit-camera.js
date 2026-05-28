@@ -178,6 +178,17 @@ export class OrbitCamera {
     // (screen-to-ground unprojection) recomputes against the fresh
     // view/proj matrices.
     this._invViewProjDirty = true
+    // Refresh the world-space frustum planes for this frame.  The
+    // renderer reads `frustumPlanes` per entity for the cull gate
+    // (Phase 1) — extracting them once here is cheaper than redoing
+    // the matrix multiply per entity.
+    if (!this._viewProjFrustum) this._viewProjFrustum = Mat4.create()
+    Mat4.multiply(this._viewProjFrustum, this.projMatrix, this.viewMatrix)
+    this.frustumPlanes = _extractFrustumPlanes(this._viewProjFrustum, this.frustumPlanes)
+    // tan(fov/2) cached for Phase 2's projected-pixel-radius formula
+    // (constant per frame because the camera's fov doesn't change
+    // mid-update).
+    this.halfFovTan = Math.tan(this.fov * 0.5)
   }
 
   // invViewProj returns the inverse of (proj * view) — used to
@@ -196,4 +207,64 @@ export class OrbitCamera {
     }
     return this._invViewProjValid ? this._invViewProj : null
   }
+
+  // sphereInFrustum tests a world-space bounding sphere against the
+  // six camera-frustum planes computed in updateMatrices.  Returns
+  // false when the sphere is fully outside ANY plane (cull); true
+  // otherwise (visible or straddling — caller renders it).  Cheap:
+  // six dot products + six compares; safe to call once per entity per
+  // frame for thousands of entities.
+  sphereInFrustum(cx, cy, cz, r) {
+    const planes = this.frustumPlanes
+    if (!planes) return true
+    // Iterate the six planes (left, right, bottom, top, near, far).
+    // Each plane stored as 4 floats: (a, b, c, d) with the plane
+    // equation a·x + b·y + c·z + d = 0; the normal (a, b, c) points
+    // INTO the frustum, so a positive signed distance means inside.
+    for (let i = 0; i < 6; i++) {
+      const o = i * 4
+      const d = planes[o] * cx + planes[o + 1] * cy + planes[o + 2] * cz + planes[o + 3]
+      if (d < -r) return false
+    }
+    return true
+  }
+}
+
+// _extractFrustumPlanes pulls the six world-space frustum planes from
+// the combined view-projection matrix using Gribb & Hartmann's row-
+// extraction trick.  `m` is in column-major order (gl-matrix style:
+// m[0..3] = column 0).  Each plane is stored as 4 consecutive floats
+// (nx, ny, nz, d) with the normal pointing INTO the frustum so a
+// positive signed distance means inside.  Normals are normalised so
+// the caller can use the plane equation directly as a signed-distance
+// test against a world-space point or sphere.
+//
+// Output order: left, right, bottom, top, near, far.
+function _extractFrustumPlanes(m, out) {
+  const o = out || new Float32Array(24)
+  // Column-major indexing helpers — m00 = m[0], m10 = m[1], etc.
+  const m00 = m[0],  m10 = m[1],  m20 = m[2],  m30 = m[3]
+  const m01 = m[4],  m11 = m[5],  m21 = m[6],  m31 = m[7]
+  const m02 = m[8],  m12 = m[9],  m22 = m[10], m32 = m[11]
+  const m03 = m[12], m13 = m[13], m23 = m[14], m33 = m[15]
+  // Left = row3 + row0;  Right = row3 - row0
+  // Bottom = row3 + row1; Top = row3 - row1
+  // Near = row3 + row2;  Far = row3 - row2
+  // Row i in column-major is (m0i, m1i, m2i, m3i).
+  // Six (a, b, c, d) tuples, written out for clarity.
+  _setPlane(o,  0, m30 + m00, m31 + m01, m32 + m02, m33 + m03) // left
+  _setPlane(o,  4, m30 - m00, m31 - m01, m32 - m02, m33 - m03) // right
+  _setPlane(o,  8, m30 + m10, m31 + m11, m32 + m12, m33 + m13) // bottom
+  _setPlane(o, 12, m30 - m10, m31 - m11, m32 - m12, m33 - m13) // top
+  _setPlane(o, 16, m30 + m20, m31 + m21, m32 + m22, m33 + m23) // near
+  _setPlane(o, 20, m30 - m20, m31 - m21, m32 - m22, m33 - m23) // far
+  return o
+}
+
+function _setPlane(out, off, a, b, c, d) {
+  const inv = 1 / Math.max(1e-12, Math.hypot(a, b, c))
+  out[off]     = a * inv
+  out[off + 1] = b * inv
+  out[off + 2] = c * inv
+  out[off + 3] = d * inv
 }

@@ -10,6 +10,25 @@ export class Model {
     this.name = name
     this.root = root
     this.bounds = bounds || { min: [0, 0, 0], max: [0, 0, 0] }
+    // boundsRadius — conservative bounding-sphere radius in object
+    // space, computed once at load.  Half-diagonal of the AABB; over-
+    // approximates a true minimal sphere but never under-approximates,
+    // so the frustum culler's per-frame sphere-vs-plane test stays
+    // safe (a false-positive "in frustum" is fine; a false-negative
+    // would pop the unit visibly out of view).  Reused by the LOD
+    // tier classifier (Phase 2) for projected-pixel size.
+    const dx = this.bounds.max[0] - this.bounds.min[0]
+    const dy = this.bounds.max[1] - this.bounds.min[1]
+    const dz = this.bounds.max[2] - this.bounds.min[2]
+    this.boundsRadius = 0.5 * Math.hypot(dx, dy, dz)
+    // boundsCentre — object-space midpoint of the AABB.  Caching here
+    // avoids three adds + three multiplies per entity per frame in
+    // the cull / LOD math.
+    this.boundsCentre = [
+      0.5 * (this.bounds.min[0] + this.bounds.max[0]),
+      0.5 * (this.bounds.min[1] + this.bounds.max[1]),
+      0.5 * (this.bounds.min[2] + this.bounds.max[2]),
+    ]
     this.flat = []
     if (root) {
       for (const p of root.walk()) this.flat.push(p)
@@ -36,6 +55,9 @@ export class Model {
     const cloneRoot = this.root ? this.root.cloneForInstance() : null
     const m = new Model({ name: this.name, root: cloneRoot, bounds: this.bounds })
     m.isInstance = true
+    // The constructor already recomputed boundsRadius + boundsCentre
+    // from the same `bounds` reference, so the clone shares the
+    // canonical values without extra work.
     return m
   }
 
