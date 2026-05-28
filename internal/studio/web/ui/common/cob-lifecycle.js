@@ -16,17 +16,16 @@
 //
 //   unborn → creating         runCobEntry('Create')
 //   creating → created        Create thread has died (auto)
-//   created → activated       build ramp finished AND unit has an
-//                             Activate script (auto)
 //   activated ↔ deactivated   runCobEntry('Activate' | 'Deactivate')
 //
-// advanceCobLifecycle handles the two AUTO transitions and is the
-// reason a freshly-spawned unit ends up in its idle-on pose without
-// the user having to click Activate.  Manual flips still go through
-// the unit-editor's runCobEntry — which writes the lifecycle, fires
-// the helper scripts (activatescr / OpenYard / deactivatescr /
-// CloseYard), plays the audio cue, and runs the Activate script
-// itself.
+// advanceCobLifecycle handles ONLY the creating → created auto
+// transition.  It used to also auto-fire Activate once the build ramp
+// hit 100%, but that ran a SECOND script at spawn time — deploying
+// e.g. the ARM Construction Vehicle into its build stance with nothing
+// to build.  Spawn now runs Create alone; Activate is an explicit user
+// action (the Actions panel's runCobEntry, which writes the lifecycle,
+// fires the helper scripts — activatescr / OpenYard / deactivatescr /
+// CloseYard — plays the audio cue, and runs Activate itself).
 
 // _bindingOf walks through the wrapCobWithAggregate proxy down to the
 // underlying CobBinding so _lifecycle writes persist across refresh
@@ -60,52 +59,20 @@ function _isScriptRunning(binding, name) {
   return false
 }
 
-// _startActivate fires the Activate-side scripts on the binding.
-// Returns true when a transition occurred.  Side-scripts (activatescr,
-// OpenYard) match the manual runCobEntry path so the visible animation
-// is the same whether Activate ran from a user click or from the
-// auto-trigger.  Audio cue is intentionally skipped here — the
-// auto-trigger fires from a per-tick walker that may iterate dozens
-// of units; playing a "ready for orders" SFX for each at spawn time
-// would be cacophonous.  The manual user-driven path (runCobEntry)
-// still plays the cue.
-function _startActivate(binding) {
-  if (!binding || binding._lifecycle === 'activated') return false
-  binding._lifecycle = 'activated'
-  if (binding.hasScript('activatescr') && !_isScriptRunning(binding, 'activatescr')) {
-    try { binding.start('activatescr') } catch { /* ignore */ }
-  }
-  if (binding.hasScript('OpenYard') && !_isScriptRunning(binding, 'OpenYard')) {
-    try { binding.start('OpenYard') } catch { /* ignore */ }
-  }
-  if (binding.hasScript('Activate')) {
-    try { binding.start('Activate') } catch { /* ignore */ }
-  }
-  return true
-}
-
-// advanceCobLifecycle handles the per-tick AUTO transitions.
+// advanceCobLifecycle handles the per-tick AUTO transition.
 // Idempotent + cheap; safe to call every frame on every unit.
 //
-//   buildPercent — 100 (default) for views that don't model a build
-//     ramp (sandbox).  The unit editor passes mv.cobBuildPercent so
-//     Activate waits until the visual construction phase finishes.
-export function advanceCobLifecycle(cobOrBinding, buildPercent = 100) {
+//   buildPercent — accepted for call-site compatibility (the unit
+//     editor passes mv.cobBuildPercent); no longer consulted now that
+//     Activate is user-driven only.
+export function advanceCobLifecycle(cobOrBinding, _buildPercent = 100) {
   const binding = bindingOf(cobOrBinding)
   if (!binding || typeof binding.hasScript !== 'function') return
-  // creating → created once the Create thread has died.  Default
-  // (missing _lifecycle) is treated as 'created' so units with no
-  // Create script flow straight into the Activate check.
+  // creating → created once the Create thread has died.  This is the
+  // ONLY auto transition: a freshly-spawned unit runs Create and then
+  // sits in 'created' — Activate is an explicit user action so units
+  // (e.g. constructors) don't deploy into a working stance on spawn.
   if (binding._lifecycle === 'creating' && !_isScriptRunning(binding, 'Create')) {
     binding._lifecycle = 'created'
-  }
-  // created → activated once the build ramp has finished AND the unit
-  // has an Activate script.  Skips silently when no Activate is
-  // defined.
-  const lifecycle = binding._lifecycle || 'created'
-  if (lifecycle === 'created'
-      && (buildPercent | 0) >= 100
-      && binding.hasScript('Activate')) {
-    _startActivate(binding)
   }
 }
