@@ -4911,3 +4911,131 @@ canvas {
   margin-left: 6px;
   padding-left: 6px;
 }
+
+/* ── Context menu ──────────────────────────────────────────────────── */
+/* Generic right-click popup rendered by ui/common/context-menu.js.
+   z-index sits above the floating panels (50), the thread debugger
+   (6000), the placement hint (9000), and standard dialogs (5000) so
+   a right-click inside any of those still gets a menu on top.  Stays
+   below the weapon-pick dialog (10000) and the PC-marker ghost
+   (9999) — both are mid-interaction flyouts where a context menu
+   appearing on top would be more disruptive than helpful. */
+.mv-ctxmenu {
+  position: fixed;
+  z-index: 9500;
+  min-width: 160px;
+  max-width: 280px;
+  padding: 3px 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--text);
+  user-select: none;
+}
+.mv-ctxmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  /* Reserve a bit of headroom so the hint column doesn't crowd the
+     label when both are short — keeps the right edge visually aligned
+     across rows even with varying label widths. */
+  min-height: 18px;
+}
+.mv-ctxmenu-item:hover,
+.mv-ctxmenu-item.is-active {
+  background: rgba(139, 92, 246, 0.18);
+  color: var(--text);
+}
+.mv-ctxmenu-item.is-disabled {
+  /* Disabled rows stay readable but visually muted so the user can
+     see WHY the entry exists (e.g. "Paste" present-but-empty signals
+     paste is the right action, just nothing on the clipboard). */
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.55;
+}
+.mv-ctxmenu-item.is-disabled:hover,
+.mv-ctxmenu-item.is-disabled.is-active {
+  /* Subtler hover for disabled rows — still gives a faint highlight
+     so the cursor's row is obvious, but no full purple so it doesn't
+     read as "actionable". */
+  background: rgba(139, 92, 246, 0.06);
+  color: var(--muted);
+}
+.mv-ctxmenu-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mv-ctxmenu-hint {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
+.mv-ctxmenu-divider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
+/* ── Split container (per-tab viewport split tree) ─────────────────────
+   Generic recursive splitter shared by the sandbox, unit viewer, and
+   map editor tabs.  Rendered by /ui/common/split-container.js; the
+   tree shape lives in the host's tab state.  Each split is a flex
+   container with two .mv-split-pane children separated by a
+   .mv-split-divider.  Leaves wrap the host-supplied content in a
+   .mv-split-leaf so per-cell chrome (focus ring, drop highlight)
+   has somewhere consistent to land. */
+.mv-split-root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.mv-split-pane-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.mv-split-h { flex-direction: row; }
+.mv-split-v { flex-direction: column; }
+.mv-split-pane {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+/* Leaf cell — fills the slot the surrounding split assigns it.  The
+   inner host content is positioned inside this; flex/min-0 keep an
+   oversized child from blowing out the parent's basis. */
+.mv-split-leaf {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.mv-split-divider {
+  flex: 0 0 6px;
+  background: var(--border);
+  position: relative;
+  z-index: 1;
+  transition: background 80ms ease;
+}
+.mv-split-divider:hover,
+.mv-split-divider.dragging { background: var(--accent); }
+.mv-split-divider-h { cursor: col-resize; }
+.mv-split-divider-v { cursor: row-resize; }

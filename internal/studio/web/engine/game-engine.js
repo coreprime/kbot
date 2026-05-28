@@ -84,6 +84,12 @@ const TA_TURN_FULL = 65536
 // matching the cadence the user expects to watch.
 const DEFAULT_HIT_DAMAGE = 12
 
+// Window in which back-to-back tick() calls coalesce into one.  See the
+// per-frame-tick comment in tick() below for the reasoning.  Sized so a
+// 60-fps cluster of N renderer onAfterFrame callbacks (~0.1 ms apart)
+// folds to one step, while independent ~16.7 ms drivers never collide.
+const ENGINE_TICK_COALESCE_MS = 3
+
 let _nextEngineUnitId = 1
 
 // _makeSlotState produces the per-slot weapon record.  Six fields:
@@ -148,6 +154,20 @@ export class GameEngine {
     // event-name → Set<handler>.  Lazy-allocated so engines with no
     // subscribers don't pay for the map.
     this._listeners = new Map()
+    // Per-frame tick coalesce — when more than one renderer observes
+    // the same engine (the split-pane case), each renderer's
+    // onAfterFrame hook calls engine.tick().  Without a guard the sim
+    // would advance N× per paint frame, doubling movement speed,
+    // doubling fire rate, etc.  We keep the wall-clock of the most
+    // recent tick and short-circuit any follow-up call that lands
+    // within ENGINE_TICK_COALESCE_MS — typical browser rAF cadence is
+    // ~16.7 ms (60 Hz) so a 3 ms window catches the cluster of
+    // back-to-back per-renderer calls without affecting independent
+    // per-frame drivers.  The cached result is returned so callers
+    // that read it (rare — most ignore the return value) see what the
+    // primary call computed.
+    this._lastTickWallMs = 0
+    this._lastTickResult = null
   }
 
   // ── Event bus ─────────────────────────────────────────────────────
@@ -530,6 +550,21 @@ export class GameEngine {
   //                  this when their renderer ticks the binding directly
   //                  and pushes its own worldOffset.
   tick(dtMs, { skipRuntime = false, skipMovement = false, skipSync = false } = {}) {
+    // Coalesce duplicate ticks within the same paint frame.  When two
+    // renderers observe the same engine (the split-pane case), each
+    // renderer's onAfterFrame hook will call tick() back-to-back; we
+    // only want the sim to advance once per frame so movement / fire
+    // rate / runtime time-base all stay correct.  A ENGINE_TICK_COALESCE_MS
+    // window catches that cluster without affecting independent
+    // ~16.7 ms-cadence drivers.  Returns the cached result so callers
+    // that read the runtime.tick() return see the value the primary
+    // call produced.
+    const wall = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now()
+    if (this._lastTickWallMs !== 0 && (wall - this._lastTickWallMs) < ENGINE_TICK_COALESCE_MS) {
+      return this._lastTickResult
+    }
+    this._lastTickWallMs = wall
     const insts = skipRuntime ? null : this.runtime.tick(dtMs)
     const paused = !!this.runtime.paused
     const dtSec = (dtMs * (this.runtime.playbackRate || 1)) / 1000
