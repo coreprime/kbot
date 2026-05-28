@@ -52,6 +52,8 @@ import {
   ensureSplitState,
   revivePanes,
 } from './split-host.js'
+import { startTabTick } from '../common/tab-tick.js'
+import { advanceCobLifecycle } from '../common/cob-lifecycle.js'
 
 // `_sandboxViewInstance` tracks the CURRENTLY ACTIVE sandbox tab's
 // SandboxView.  Each sandbox tab owns its own SandboxView (stored on
@@ -259,19 +261,36 @@ export async function activateSandboxTab(tab) {
   // stopped, instead of the engine racing ahead while the tab was
   // hidden.
   hostCallbacks.resumeIncomingTabRuntime?.(tab)
-  // Wrap the sandbox view's onAfterFrame so the inspector refresh +
-  // animation-advance pipeline runs on the sandbox renderer's frames
-  // too.  The sandbox view sets its own onAfterFrame (scene tick +
-  // entity refresh); we wrap it here to ADD the inspector tick so
-  // Renderer + Runtime overlays receive their per-frame data.
-  if (_sandboxViewInstance.renderer) {
-    const innerHook = _sandboxViewInstance.renderer.onAfterFrame
-    const refresh = hostCallbacks.refreshMvInspectors
-    _sandboxViewInstance.renderer.onAfterFrame = (dtMs) => {
-      if (innerHook) innerHook(dtMs)
-      refresh?.(dtMs)
+  // Tab-owned tick loop — drives scene.tick (engine.tick + smoke
+  // trails) + cob-lifecycle advance (background-spawn Activate
+  // auto-fire) + inspector refresh.  Pre-tab-tick this all hung off
+  // the active pane's renderer.onAfterFrame, which made multi-pane
+  // sandbox harder to reason about (the active pane "owned" timing)
+  // and the inspector refresh was redundant work for backgrounded
+  // sandbox tabs.  Moving to a tab-owned rAF makes scene.tick fire
+  // once per paint frame regardless of pane count, and lets the
+  // deactivate path stop it cleanly.  startTabTick is idempotent.
+  startTabTick(tab, (dtMs) => {
+    if (!tab.scene) return
+    tab.scene.tick(dtMs)
+    // COB lifecycle advance — sandbox units have no build-ramp, so
+    // we pass the default 100 % build (Activate fires as soon as
+    // Create's thread dies).  The shared refresh-tick only walks
+    // the focused unit; non-focused background spawns need this
+    // walker to flip lifecycle from 'creating' to 'created' and
+    // auto-start Activate, otherwise they stay in the pre-Create
+    // pose forever.
+    for (const u of tab.scene.units()) {
+      if (u.dead || !u.binding) continue
+      advanceCobLifecycle(u.binding, u.buildPercent != null ? u.buildPercent : 100)
     }
-  }
+    // Inspector refresh — only when this tab is the active sandbox
+    // (a backgrounded sandbox tab keeps its sim running so units
+    // animate, but its panels don't need updates the user can't see).
+    if (hostCallbacks.getActiveSandboxView?.() === _sandboxViewInstance) {
+      hostCallbacks.refreshMvInspectors?.(dtMs)
+    }
+  })
   // Hide the left sidebar (Pieces / Textures / Weapons — all
   // single-unit inspectors) by tagging the model-viewer-dialog as
   // sandbox-mode; the CSS rule collapses .sidebar in this mode so

@@ -26,7 +26,7 @@ import {
   revivePanes,
   startAllRenderers,
 } from './split-host.js'
-import { startTabTick } from './tab-tick.js'
+import { startTabTick } from '../common/tab-tick.js'
 
 export async function activateModelTab(tab) {
   // Lazy-import the model3d module so users who never click a

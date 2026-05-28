@@ -14,6 +14,7 @@ import {
   clearActiveSandboxView,
 } from './tab.js'
 import { disposeSandboxSplit, detachSandboxSplit } from './split-host.js'
+import { stopTabTick } from '../common/tab-tick.js'
 
 class SandboxTabInstance {
   constructor(spec) {
@@ -90,6 +91,11 @@ class SandboxTabInstance {
         try { v.renderer.clearCanvas?.() } catch { /* ignore */ }
       }
     }
+    // Stop the tab-owned tick loop (scene.tick + cob-lifecycle +
+    // inspector refresh).  Without this a backgrounded sandbox tab
+    // would keep ticking — runtime time + smoke trails + projectile
+    // age would all advance even though the tab is invisible.
+    stopTabTick(tab)
     // Pull the per-tab split mount OUT of the stage so an incoming
     // unit-editor or map tab doesn't see a stale sandbox surface
     // overlaid on its own content.  Pre-split the legacy single
@@ -106,6 +112,9 @@ class SandboxTabInstance {
   dispose(_ctx) {
     const tab = this._tabRef
     if (!tab) return
+    // Stop the tab-owned tick loop first so it can't fire mid-
+    // teardown and dereference structures we're about to dispose.
+    stopTabTick(tab)
     // Silence + pause the shared scene first so nothing keeps ticking
     // mid-teardown.  Then sweep every pane's view (renderer + GL
     // context + canvas), then drop the scene + split mount.

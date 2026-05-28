@@ -1,29 +1,25 @@
 // tab-tick.js
 //
-// Per-tab rAF loop for the unit editor.  Owns the timing pump that
-// drives everything that has to happen once per visible frame:
+// Per-tab rAF loop shared by every editor that needs to drive
+// per-frame sim work independently of any one renderer.  Used by:
 //
-//   - binding.tick(dtMs) — advances CobRuntime + per-piece _sync +
-//     particle/audio rate updates.  Used to be driven by the
-//     primary renderer's draw loop via setCobBinding's default
-//     driveTick:true path.  Moved here for Stage B of the split
-//     refactor: with N panes the renderer-driven path multiplied
-//     the runtime; consolidating to one tab-owned loop keeps the
-//     sim canonical regardless of pane count.
-//   - mvControls.tick(dtMs) — viewer-side aim / weapon / smoke
-//     trail / projectile state.  Engine.tick inside still passes
-//     skipRuntime:true because we advanced the binding (= runtime)
-//     above.
-//   - advanceMvAutoBuild(dtMs) — the build-ramp animation hook.
-//   - refreshMvInspectors(dtMs) — pushes per-tick signals into the
-//     React panels; gated on this tab being the active one so a
-//     backgrounded viewer doesn't keep shoving updates into the
-//     inspector tree.
+//   - Unit editor — drives binding.tick + MvControls.tick +
+//     advanceMvAutoBuild + refreshMvInspectors.  See
+//     /ui/unit-editor/tab.js (the loop replaces the primary
+//     renderer's onAfterFrame for these jobs so split-pane
+//     secondaries don't double-tick the binding).
+//   - Sandbox — drives scene.tick + cob-lifecycle advance +
+//     refreshMvInspectors.  See /ui/sandbox/tab.js (same logic:
+//     scene.tick used to ride the active pane's renderer; with
+//     splits we want one canonical advance per frame regardless
+//     of pane count).
+//   - Map editor — TBD on adoption; the tick callable still works
+//     for any per-frame poll the map view wants.
 //
 // The loop runs only while the tab is active; deactivate stops it
 // so the runtime + audio + particles all freeze when the user
-// switches to another tab.  Multiple unit-editor tabs each have
-// their own loop; the dispatcher in activateModelTab stops every
+// switches to another tab.  Multiple tabs each have their own
+// loop; the dispatcher in each editor's activate() stops every
 // other tab's loop before starting this one (mirrors how renderer
 // .stop() works for backgrounded panes).
 
@@ -47,7 +43,7 @@ export function startTabTick(tab, tickFn) {
     const raw = now - lastT
     lastT = now
     const dtMs = raw > _MAX_DT_MS ? _MAX_DT_MS : (raw < 0 ? 0 : raw)
-    try { tickFn(dtMs) } catch (err) { console.warn('[unit-editor:tab-tick]', err) }
+    try { tickFn(dtMs) } catch (err) { console.warn('[tab-tick]', err) }
     tab._tickRaf = requestAnimationFrame(loop)
   }
   tab._tickRaf = requestAnimationFrame(loop)

@@ -15,7 +15,7 @@ import { registerTabType } from '../tab-registry.js'
 import { $, hostCallbacks } from '../host-context.js'
 import { activateModelTab } from './tab.js'
 import { detachUnitSplit, disposeUnitSplit, stopAllRenderers } from './split-host.js'
-import { stopTabTick } from './tab-tick.js'
+import { stopTabTick } from '../common/tab-tick.js'
 
 // Per-tab record kept on the instance.  The host's tabs[] entry still
 // carries `name`, `meta`, `viewer`, `_pausedBeforeSwitch` for

@@ -33,7 +33,6 @@ import {
   wrapCobWithAggregate,
   disposeView,
 } from '../common/view-helpers.js'
-import { advanceCobLifecycle } from '../common/cob-lifecycle.js'
 
 export class SandboxView {
   constructor({ canvas, scene = null, statusEl, onModelLoaded } = {}) {
@@ -248,38 +247,25 @@ export class SandboxView {
     // back to single-unit path with this.model = null, which paints
     // sky + ground only — exactly the "open flat map" view we want).
     this.#refreshEntities()
-    // Hook the renderer's per-frame callback to advance the scene
-    // tick + refresh the entities array each frame so any movement /
-    // animation applied per-tick is visible immediately.
-    this.renderer.onAfterFrame = (dtMs) => {
-      if (this.scene) this.scene.tick(dtMs)
-      // Per-frame lifecycle advance for every live unit.  The shared
-      // refresh-tick only walks the FOCUSED unit (so the Controls /
-      // Script Commands panels see the lifecycle flip); non-focused
-      // units need their own walker, otherwise background spawn-ins
-      // never get their Activate auto-fired and stay in their pre-
-      // animation pose.  Sandbox units have no build-ramp, so we
-      // pass build% = 100 (the function's default) and Activate
-      // fires as soon as Create's thread dies.
-      if (this.scene) {
-        for (const u of this.scene.units()) {
-          if (u.dead || !u.binding) continue
-          advanceCobLifecycle(u.binding, u.buildPercent != null ? u.buildPercent : 100)
-        }
-      }
+    // Per-pane per-frame visual work.  Scene tick + cob-lifecycle
+    // advance are SCENE concerns (mutate shared state once per
+    // frame regardless of pane count) and live on the tab-owned
+    // tick loop since the sandbox-tab-tick refactor — see
+    // /ui/sandbox/tab.js's startTabTick wire.  This onAfterFrame
+    // is for view-only per-paint work: this pane's dynamic light
+    // pulse, this pane's entities array, this pane's shift-preview
+    // overlay, this pane's armed cursor.
+    this.renderer.onAfterFrame = () => {
       // Pull-side scene light: ask the engine for the brightest live
-      // light-emitting particle across all units and push it into the
-      // renderer's single dynamic-light slot.  This is the cross-unit
-      // aggregation that used to live engine-side via setRenderer —
-      // now the engine is headless and the view bridges per frame.
+      // light-emitting particle across all units and push it into
+      // THIS renderer's single dynamic-light slot.  Each pane reads
+      // independently so per-pane camera framing computes the
+      // light's NDC position correctly.
       if (this.scene && this.scene.engine && typeof this.renderer.setPulseLight === 'function') {
         const light = this.scene.engine.getSceneLight()
         if (light) this.renderer.setPulseLight(light.pos, light.color, light.strength)
         else this.renderer.setPulseLight(null, null, 0)
       }
-      // Smoke trails advance INSIDE scene.tick (scene owns the
-      // SmokeTrailManager so multiple panes observe one set of trails).
-      // No extra tick call needed here.
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
