@@ -52,6 +52,17 @@ export class SandboxView {
     // both.
     this._engineSubs = []
     this._hotkeysDetach = null
+    // Per-pane model cache.  Each view has its own ModelLoader bound to
+    // its own GL context, and a Model's VBO ids are context-specific —
+    // you can NOT draw a model loaded in pane A's context using pane
+    // B's context (the buffers don't exist there; the draw silently
+    // no-ops).  When this view spawns a unit it pre-populates this
+    // cache with its load result; sibling panes lazy-load their own
+    // copy on first encounter of an entity referring to a model name
+    // they haven't yet uploaded.  Lookup is by model name (u.name on
+    // the engine side).
+    this._localModels = new Map()    // name → Model (this pane's GL ctx)
+    this._loadingModels = new Set()  // names with an in-flight load
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
     // The canvas is appended into a host stage by attach() and pulled
@@ -140,6 +151,9 @@ export class SandboxView {
         renderer: this.renderer,
         camera: this.camera,
         dialogId: 'model-viewer-dialog',
+        // Split-pane focus gate — only the focused pane's R / arrow
+        // keys take effect.  See _isFocusedPane wiring in split-host.
+        isActive: () => !this._isFocusedPane || this._isFocusedPane(),
         // onUserInteract fires when the user takes manual control —
         // pan, key-scroll, T-key.  Use it to drop unit-tracking (the
         // user is driving the camera by hand; chasing the unit would
@@ -292,6 +306,10 @@ export class SandboxView {
     if (!this.loader || !this.scene) return null
     try {
       const model = await this.loader.load(name)
+      // Same per-pane cache populate as beginPlacement — see the
+      // _localModels commentary on the constructor for the GL-context
+      // rationale.
+      this._localModels.set(name, model)
       let cobScript = null
       try {
         const r = await fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=0`)
@@ -353,6 +371,11 @@ export class SandboxView {
     this.#setStatus(`Loading ${name}…`)
     try {
       const model = await this.loader.load(name)
+      // Cache the model in this pane's local registry so #refreshEntities
+      // doesn't lazy-reload it on the next tick.  Sibling panes that
+      // observe the same scene will lazy-load their own copy when they
+      // first see this unit in scene.units().
+      this._localModels.set(name, model)
       let cobScript = null
       try {
         const r = await fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=0`)
@@ -981,11 +1004,46 @@ export class SandboxView {
   // #refreshEntities builds the entity array the renderer iterates
   // each frame.  Cheap: just an array of refs into scene units, run
   // every frame so adds / removes show up immediately.
+  // #ensureLocalModel kicks off a one-shot lazy load of `name` into
+  // THIS pane's GL context.  Idempotent — concurrent calls coalesce
+  // via the _loadingModels guard.  When the load resolves, the next
+  // #refreshEntities tick finds the model in _localModels and feeds
+  // it to the renderer.  Used by the per-pane substitution in
+  // #refreshEntities below: sibling panes (the ones that didn't
+  // spawn the unit) see u.model belongs to the wrong context and
+  // ask us to upload our own copy.
+  #ensureLocalModel(name) {
+    if (!name || !this.loader) return
+    if (this._localModels.has(name)) return
+    if (this._loadingModels.has(name)) return
+    this._loadingModels.add(name)
+    this.loader.load(name).then((m) => {
+      this._localModels.set(name, m)
+      this._loadingModels.delete(name)
+    }).catch(() => {
+      this._loadingModels.delete(name)
+    })
+  }
+
   #refreshEntities() {
     if (!this.renderer || !this.scene) return
     const entities = []
     for (const u of this.scene.units()) {
       if (!u.model) continue
+      // GL-context substitution — each pane's renderer can only draw
+      // models whose VBOs live in its own context.  If the unit was
+      // spawned by US, _localModels has the right reference and we
+      // use it directly.  Otherwise the unit was spawned in a sibling
+      // pane: kick off a lazy load (no-op when already in flight) and
+      // skip this entity for the current frame — it'll appear next
+      // tick once the load completes.  Cost: a single network hit per
+      // (model name × pane) the first time the sibling pane observes
+      // a foreign unit.
+      const localModel = this._localModels.get(u.name)
+      if (!localModel) {
+        this.#ensureLocalModel(u.name)
+        continue
+      }
       // No bounds-based lift: TA models are authored with their feet
       // pieces (heel/toes/wheel/etc.) resting at world y=0, so
       // placing the unit at y=0 grounds it naturally — matching the
@@ -1005,7 +1063,7 @@ export class SandboxView {
       // [r,g,b] tuple (or null for side 0, the "no recolour" sentinel
       // that keeps the model's authored ARM blue).
       entities.push({
-        model: u.model,
+        model: localModel,
         binding: u.binding,
         buildPercent: u.buildPercent,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
@@ -1111,12 +1169,22 @@ export class SandboxView {
     // so a stray keystroke doesn't arm a cursor with no unit to
     // dispatch to.  T is allowed even with no selection so the user
     // can untrack the current target without re-selecting first.
+    //
+    // Split-pane gate: every pane registers a window-level keydown
+    // listener through attachUnitHotkeys.  Without an active-pane
+    // filter, pressing T fires N times (once per pane), toggling
+    // each pane's tracking — the user wanted a per-pane gesture
+    // and instead got "toggle every viewport".  _isFocusedPane is
+    // assigned by split-host's makeView; in the single-pane case
+    // (no split-host involvement) it's missing and we let every
+    // key through.
+    const focusGate = () => !this._isFocusedPane || this._isFocusedPane()
     wireHotkeys(this, {
       dialogId: 'model-viewer-dialog',
-      allowed: () => this.scene && this.scene.selected.size > 0,
-      onCommand: (cmd) => this.setPendingCommand(cmd),
-      onStop:    () => this.#stopSelected(),
-      onTrack:   () => this.toggleTracking(),
+      allowed: () => focusGate() && this.scene && this.scene.selected.size > 0,
+      onCommand: (cmd) => { if (focusGate()) this.setPendingCommand(cmd) },
+      onStop:    () => { if (focusGate()) this.#stopSelected() },
+      onTrack:   () => { if (focusGate()) this.toggleTracking() },
     })
   }
 

@@ -13,7 +13,7 @@ import {
   getActiveSandboxView,
   clearActiveSandboxView,
 } from './tab.js'
-import { disposeSandboxSplit } from './split-host.js'
+import { disposeSandboxSplit, detachSandboxSplit } from './split-host.js'
 
 class SandboxTabInstance {
   constructor(spec) {
@@ -90,6 +90,15 @@ class SandboxTabInstance {
         try { v.renderer.clearCanvas?.() } catch { /* ignore */ }
       }
     }
+    // Pull the per-tab split mount OUT of the stage so an incoming
+    // unit-editor or map tab doesn't see a stale sandbox surface
+    // overlaid on its own content.  Pre-split the legacy single
+    // viewer's v.detach() did this implicitly via the activator's
+    // sweep; with splits the activator's sweep only knows about
+    // tab.viewer (the active pane), not the whole mount.  Owning the
+    // detach here keeps the responsibility on the tab type that
+    // attached the mount in the first place.
+    detachSandboxSplit(tab)
   }
 
   async canClose(_ctx) { return true }

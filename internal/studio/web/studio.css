@@ -5039,3 +5039,32 @@ canvas {
 .mv-split-divider.dragging { background: var(--accent); }
 .mv-split-divider-h { cursor: col-resize; }
 .mv-split-divider-v { cursor: row-resize; }
+/* Sandbox split mount — the per-tab <div> the SplitContainer Preact
+   tree renders into.  Fills .model-viewer-stage absolutely so the
+   recursive flex tree inside has a defined sizing context.  Without
+   this, the splitter's `position: absolute; inset: 0` on .mv-split-root
+   takes effect, but the parent (our mount div) has no dimensions, so
+   the absolute children collapse to zero. */
+.mv-split-mount {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+/* Per-leaf canvas slot — the <div ref> LeafSlot returns.  The host
+   canvas is appendChild'd into this on mount and detached on unmount.
+   Absolute fill so the canvas (width/height 100%) resolves against
+   the leaf cell's actual size rather than an undimensioned wrapper.
+   Without this the canvas sized to its intrinsic 300×150 default and
+   the pane's content scaled to a wrong aspect ratio. */
+.mv-sandbox-pane-slot {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+.mv-sandbox-pane-slot > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

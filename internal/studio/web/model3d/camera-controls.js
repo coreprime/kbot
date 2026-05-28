@@ -24,7 +24,7 @@
 // directly and decides what the drag means (e.g. drawing a
 // rectangle-select).  The orbit handler still runs for non-left
 // drags (right-drag pan, shift/ctrl modifiers).
-export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart }) {
+export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, dialogId, onLeftDragStart, isActive = null }) {
   if (!canvas || !camera) return () => {}
   let pointer = null
   // Host-claimed flag — set when onLeftDragStart returns truthy to
@@ -184,6 +184,12 @@ export function attachOrbitControls({ canvas, renderer, camera, onUserInteract, 
     // for auto-rotate and the arrow-key pans fire on every tab's
     // camera at once and bleed state across tabs.
     if (canvas && !canvas.isConnected) return
+    // Split-pane filter — when a host opts in via `isActive`, the
+    // keydown only acts on the currently-focused pane.  Without this,
+    // R (auto-rotate) and the arrow-key pans fire on every pane at
+    // once because all canvases sit attached to the DOM at the same
+    // time.  Single-pane callers omit isActive and the gate is open.
+    if (typeof isActive === 'function' && !isActive()) return
     const t = e.target
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return
     if (t && t.isContentEditable) return

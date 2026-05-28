@@ -178,6 +178,13 @@ export async function activateSandboxTab(tab) {
       scene: tab.scene,        // shared
       statusEl: $('#status'),
     })
+    // Set the focus gate BEFORE open() so the wireHotkeys + camera-
+    // controls callbacks (which capture `this._isFocusedPane`)
+    // immediately route through it.  Without this, window-level T/R/
+    // arrow keys fire on every pane's handler regardless of which
+    // pane the user thinks they're driving.
+    v._leafId = leafId
+    v._isFocusedPane = () => tab.activePaneId === leafId
     await v.open()
     // Wire the split menu on this pane's canvas.  The detach closure
     // lives on the view so view.dispose() can sweep it.

@@ -88,6 +88,15 @@ class MapEditorTabInstance {
   // to gate on outgoing vs incoming.
   deactivate(_ctx) {
     hostCallbacks.snapshotActiveTabModuleLets?.()
+    // Hide map-editor floating chrome that lives at viewport scope —
+    // .placement-hint and #rotation-badge are `position: fixed`
+    // overlays with z-index 9000, ABOVE the model-viewer-dialog.
+    // Without an explicit hide they leak over the incoming sandbox
+    // or unit-editor tab if the user was mid-placement when they
+    // switched.  Map editor's own activate path drives the next
+    // visibility so a tab-return doesn't lose any in-flight hints.
+    document.getElementById('placement-hint')?.classList.add('hidden')
+    document.getElementById('rotation-badge')?.classList.add('hidden')
   }
 
   // Dirty tabs prompt the user before they close.  React modal
