@@ -194,18 +194,26 @@ class MapEditorTabInstance {
 // _stripBootstrapCanvasIds removes `id="canvas-scroll"` /
 // `id="canvas-stack"` from the static elements baked into
 // index.html so the first MapPaneView.setFocused(true) doesn't
-// create duplicate ids in the DOM.  Idempotent — once stripped on
-// the first activation the bootstrap elements remain id-less for
-// the rest of the session (the panes own the ids from then on).
+// create duplicate ids in the DOM, AND hides the bootstrap
+// .canvas-scroll wrapper so it doesn't sit on top of the split
+// mount eating pointer events.  This second part matters: the
+// bootstrap scroll is a full-bleed scroll container inside
+// .canvas-wrap; once the split mount is appended as its sibling,
+// the bootstrap element (now id-less + emptied of its canvases by
+// the singleton destroyEditorView) would otherwise overlay the
+// panes and swallow right-clicks (it has no context-menu listener,
+// so the browser's native menu shows instead of our Split menu).
+// Hiding it leaves the split mount the only interactive surface.
+// Idempotent — once hidden the bootstrap stays hidden for the
+// session (panes own the canvases from then on).
 function _stripBootstrapCanvasIds() {
-  for (const el of document.querySelectorAll('#canvas-scroll')) {
-    if (!el.classList.contains('canvas-scroll')) continue
-    if (el.closest('.mv-map-pane-root')) continue
+  for (const el of document.querySelectorAll('.canvas-scroll')) {
+    if (el.closest('.mv-map-pane-root')) continue  // a pane's own scroll
     el.id = ''
+    el.style.display = 'none'
   }
-  for (const el of document.querySelectorAll('#canvas-stack')) {
-    if (!el.classList.contains('canvas-stack')) continue
-    if (el.closest('.mv-map-pane-root')) continue
+  for (const el of document.querySelectorAll('.canvas-stack')) {
+    if (el.closest('.mv-map-pane-root')) continue  // a pane's own stack
     el.id = ''
   }
 }
