@@ -1040,7 +1040,16 @@ export class GameEngine {
     const names = u.cobUnit.pieceNames || []
     if (pieceIdx < 0 || pieceIdx >= names.length) return fallback
     const piece = u.model.findPiece(names[pieceIdx])
-    if (!piece || !piece.worldMatrix) return fallback
+    if (!piece) return fallback
+    // Resolve against the unit's live transform (see #pieceWorldPos) so
+    // the aim origin tracks the moved unit even when the engine's model
+    // clone is never drawn.  Falls back to the raw worldMatrix then the
+    // unit centre.
+    if (typeof u.model.resolvePieceWorld === 'function') {
+      const w = u.model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading + Math.PI)
+      if (w) return w
+    }
+    if (!piece.worldMatrix) return fallback
     const wm = piece.worldMatrix
     return [wm[12], wm[13], wm[14]]
   }
@@ -1082,27 +1091,26 @@ export class GameEngine {
     return model.flat.find((p) => /flare|firept|muzzl|fire/i.test(p.name)) || null
   }
 
-  // #pieceWorldPos reads the post-COB-anim WORLD position of a piece.
-  //
-  // `piece.worldMatrix` is computed by Piece.computeWorldMatrix with
-  // the renderer's `_modelMatrix` as the root parent.  In single-
-  // entity mode the renderer sets `_modelMatrix` from setUnitTransform
-  // (typically identity since a single unit sits at origin); in
-  // multi-entity mode it sets `_modelMatrix` from entity.transform
-  // per-entity (translate by unit world pos, rotate by heading).
-  // Either way, by the time we read piece.worldMatrix[12,13,14] it's
-  // already in WORLD space — the unit's translation is baked in.
-  //
-  // Multi-entity mode previously appeared to spawn particles at the
-  // wrong offset.  That symptom was real but the cause turned out to
-  // be a stale piece.worldMatrix (computed against an old _modelMatrix
-  // from the previous tab's renderer state), not double-translation.
-  //
-  // Renderer calls computeWorldMatrix every frame; engine tick runs
-  // AFTER the draw callback (onAfterFrame), so worldMatrix is fresh.
-  // Falls back to the unit's centre when the piece has no matrix yet
-  // (just-spawned unit, before the first draw).
+  // #pieceWorldPos returns the post-COB-anim WORLD position of a piece
+  // (the muzzle a projectile exits from).  See the body for why we
+  // recompute against the unit's live transform rather than trusting
+  // piece.worldMatrix, and for the fallbacks.
   #pieceWorldPos(u, piece) {
+    // Compose the piece's COB-animated model-local pose with the unit's
+    // live world transform.  In the sandbox the engine animates a
+    // per-instance model clone that NO renderer ever draws (each pane
+    // draws its own pose-copy), so reading piece.worldMatrix straight
+    // would hand back the identity matrix the clone was built with and
+    // anchor every shot at the world origin.  resolvePieceWorld walks
+    // the tree against translate(pos)·rotateY(heading + π) — the same
+    // chain #refreshEntities / _applyRendererTransform feed the renderer
+    // (the +π mirrors the loader's X-flip) — so the muzzle tracks the
+    // unit wherever it has moved.  Falls back to the raw worldMatrix (a
+    // model the renderer DID draw) then the unit centre.
+    if (piece && u.model && typeof u.model.resolvePieceWorld === 'function') {
+      const w = u.model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading + Math.PI)
+      if (w) return w
+    }
     if (piece && piece.worldMatrix) {
       const m = piece.worldMatrix
       return [m[12], m[13], m[14]]

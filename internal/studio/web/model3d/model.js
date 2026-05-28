@@ -5,6 +5,8 @@
 // Bounds are pre-computed by the server in world space so the camera
 // framing code doesn't have to walk the whole hierarchy on every load.
 
+import { Mat4 } from './mat4.js'
+
 export class Model {
   constructor({ name, root, bounds }) {
     this.name = name
@@ -40,6 +42,40 @@ export class Model {
   // model.findPiece('turret').
   findPiece(name) {
     return this.root ? this.root.findByName(name) : null
+  }
+
+  // resolvePieceWorld returns the WORLD position [x, y, z] of `piece`
+  // when this model is placed at (x, y, z) world units with body yaw
+  // `headingRad`.  It walks the whole tree recomputing every piece's
+  // worldMatrix against a root of translate(x,y,z) · rotateY(headingRad)
+  // — exactly the chain the renderer builds for an entity — but does so
+  // headlessly (no GL context).
+  //
+  // Why this is needed: the sim engine animates a per-instance model
+  // CLONE that it never draws itself (in the sandbox each pane's
+  // renderer draws its own pose-copy; the engine's clone is the
+  // animation source).  Nothing ever calls computeWorldMatrix on that
+  // clone, so its pieces keep the identity worldMatrix they were built
+  // with — which would anchor muzzle-exit positions at the world origin
+  // instead of tracking the unit wherever it has moved.  Recomputing
+  // here against the unit's live transform makes a fired projectile
+  // emit from the firing piece at the unit's current location.
+  //
+  // Returns null when there's no root or the piece carries no matrix.
+  resolvePieceWorld(piece, x, y, z, headingRad) {
+    if (!piece || !this.root) return null
+    const root = Mat4.identity(Mat4.create())
+    Mat4.translate(root, root, x || 0, y || 0, z || 0)
+    if (headingRad) Mat4.rotateY(root, root, headingRad)
+    const scratch = Mat4.create()
+    const walk = (p, parent) => {
+      p.computeWorldMatrix(parent, scratch)
+      for (const c of p.children) walk(c, p.worldMatrix)
+    }
+    walk(this.root, root)
+    const wm = piece.worldMatrix
+    if (!wm) return null
+    return [wm[12], wm[13], wm[14]]
   }
 
   // cloneForInstance returns a new Model wrapping a freshly-cloned
