@@ -43,6 +43,7 @@ import {
   SKY_PRESETS, ENVIRONMENT_PRESETS, GRAVITY_BY_ENV, GRAVITY_EARTH, loadWorlds,
 } from './worlds.js'
 import { applyResolvedHints } from './hints-textures.js'
+import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Fallback transform for entities with no explicit transform field —
@@ -2828,6 +2829,15 @@ export class ModelRenderer {
       fxSurf = Math.max(0, Math.min(1, (EFFECT_LOD_SURFACE_MAX_WU - dist) / fade))
       fxRL = Math.max(0, Math.min(1, (EFFECT_LOD_RUNNINGLIGHTS_MAX_WU - dist) / fade))
     }
+    // Piece-light override pre-check — most units have no overrides
+    // at all, so a single Map.has() up front saves a per-piece lookup
+    // on the entire tree.  The pulse phase reads off the renderer's
+    // monotonically-advancing fx clock (same source the sea / sun-
+    // motion uniforms use) so all entities pulse in lockstep without
+    // needing per-entity state.
+    const unitName = this.model && this.model.name
+    const hasGlowOverrides = !shadowPass && hasOverridesFor(unitName)
+    const glowTimeSec = hasGlowOverrides ? this._fxTimeSec() : 0
     const draw = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
@@ -2838,6 +2848,21 @@ export class ModelRenderer {
           gl.uniformMatrix4fv(this.uShadowWorld, false, piece.worldMatrix)
         } else {
           gl.uniformMatrix4fv(this.uWorld, false, piece.worldMatrix)
+          // Per-piece glow override.  Most pieces have none → set to
+          // zero alpha and the shader add-line is a no-op.  When an
+          // override applies, bake the pulse intensity into the alpha
+          // channel here so the shader stays branchless.
+          if (hasGlowOverrides) {
+            const ov = pieceLightFor(unitName, piece.name)
+            if (ov) {
+              const a = pulseAlpha(ov, glowTimeSec)
+              gl.uniform4f(this.uPieceGlow, ov.color[0], ov.color[1], ov.color[2], a)
+            } else {
+              gl.uniform4f(this.uPieceGlow, 0, 0, 0, 0)
+            }
+          } else {
+            gl.uniform4f(this.uPieceGlow, 0, 0, 0, 0)
+          }
         }
         for (const group of piece.drawGroups) {
           gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)
@@ -3207,6 +3232,10 @@ export class ModelRenderer {
     // opposite side.
     this.uUnitCenter = gl.getUniformLocation(prog, 'uUnitCenter')
     this.uUnitRadius = gl.getUniformLocation(prog, 'uUnitRadius')
+    // Per-piece glow override — see piece-light-overrides.js.  Default
+    // zero alpha at the start of each entity's draw so any piece that
+    // doesn't carry an override emits no glow.
+    this.uPieceGlow = gl.getUniformLocation(prog, 'uPieceGlow')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
     // Phase 2 lighting LOD — 0 = full (rim + back/fill + Blinn-Phong
     // specular), 1 = cheap (Lambertian + ambient only).  Set by the

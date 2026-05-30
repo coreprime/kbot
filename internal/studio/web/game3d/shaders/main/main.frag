@@ -96,6 +96,20 @@ uniform vec3 uUnitCenter;
 // at finer distance, a big unit needs a larger transition band.
 uniform float uUnitRadius;
 
+// uPieceGlow — additive emissive RGBA contributed by per-piece-name
+// overrides (see piece-light-overrides.js).  rgb = the lamp colour at
+// peak intensity, a = current pulse intensity in [0..1] computed JS-
+// side from the override's blink curve so the shader stays simple +
+// branchless.  Zero alpha = no override on this piece (the default;
+// every uncovered piece pays one mul-then-add of zero, which is
+// cheaper than a conditional).
+//
+// The glow is added after tone-map / cinematic so it stays punchy and
+// trips the bloom bright-pass, the same way the texture-keyed running
+// lights do.  Lives in WORLD-emit space (no shading applied) — these
+// are "the piece itself glows," not "the piece is lit by something."
+uniform vec4  uPieceGlow;
+
 // rgbToHsv / hsvToRgb come from the standard Sam Hocevar GLSL
 // formulation - branchless, suitable for fragment shaders.  We use
 // them to detect blue-team palette pixels by hue and shift them to
@@ -580,6 +594,12 @@ void main() {
   // Surface-hint running lights ride on top of the tone-mapped scene so the
   // lamps stay punchy (well above 1.0) and trip the bloom bright-pass.
   col += rlEmissive;
+  // Per-piece glow override — added flat, post-tonemap.  Zero alpha
+  // (the default) is a no-op so unhinted pieces pay nothing visible.
+  // The renderer sets uPieceGlow once per piece draw call from the
+  // piece-light-overrides table; pulse intensity is computed JS-side
+  // and baked into the alpha channel, leaving the shader pure.
+  col += uPieceGlow.rgb * uPieceGlow.a;
   if (uReflectionTint > 0.5) {
     // Mirror reflection underwater: shift toward the deep-water
     // hue but keep most of the original brightness so the
