@@ -2,9 +2,15 @@
 //
 // React-rendered ribbon for the unit editor (model viewer) — the
 // long horizontal strip with Model / Camera / Rendering / Scene /
-// Studio Options / Animation (COB) / View / Configure / Help.  Built
+// Graphics Options / Animation (COB) / View / Configure / Help.  Built
 // on the shared ribbon primitives so the structural chrome stays
 // consistent with the sandbox ribbon migrated earlier.
+//
+// The "Graphics Options" body (effect toggles + shadow controls + the
+// liquid sim) is the SHARED GraphicsOptionsItems component, also used
+// by the sandbox ribbon so the two stay in lockstep.  Editor-only
+// pickers (Environment / Team colour / Background Terrain) deliberately
+// live in this ribbon's Rendering ▸ Scene section instead.
 //
 // State falls into three families, all module-scoped signals so they
 // can be mutated from outside without prop-drilling:
@@ -34,6 +40,7 @@ import {
   MenuSliderRow, MenuSectionLabel, closeDropdownById,
 } from '/ui/common/ribbon.js'
 import { SplitMenuItems } from '/ui/common/split-host.js'
+import { GraphicsOptionsItems } from '/ui/common/graphics-options-menu.js'
 
 // _state — every toggle / slider / picker value displayed on the
 // ribbon.  Defaults match the static HTML the legacy markup shipped
@@ -50,6 +57,10 @@ const _state = signal({
 
   env:               'greenworld',
   team:              'blue',
+
+  shadows:           true,        // cast + self shadows master toggle
+  shadowIntensity:   100,         // %, 0..100 → uShadowStrength 0..1
+  selfShadow:        true,        // unit casts shadows on its own geometry
 
   reflections:       true,
   specular:          true,
@@ -104,6 +115,10 @@ const _bridge = {
   setEnvironment:  (_env, _opts) => {},   // { preview, commit }
   setTeamColor:    (_team, _opts) => {},  // { preview, commit }
 
+  setShadows:            (_on) => {},
+  setShadowIntensity:    (_v) => {},      // already normalised 0..1
+  setSelfShadow:         (_on) => {},
+
   setReflections:        (_on) => {},
   setSpecular:           (_on) => {},
   setGodBeams:           (_on) => {},
@@ -145,6 +160,7 @@ export function configureModelViewerRibbonBridge(impl) {
     setRenderMode: (_m) => {}, setWireOverlay: (_o) => {}, setWireWidth: (_p) => {},
     setGround: (_m) => {},
     setEnvironment: (_e, _o) => {}, setTeamColor: (_t, _o) => {},
+    setShadows: (_o) => {}, setShadowIntensity: (_v) => {}, setSelfShadow: (_o) => {},
     setReflections: (_o) => {}, setSpecular: (_o) => {},
     setGodBeams: (_o) => {}, setDoF: (_o) => {}, setWaterReflections: (_o) => {},
     setBob: (_o) => {}, setBobAmount: (_v) => {}, setBobSpeed: (_v) => {},
@@ -373,7 +389,10 @@ function CameraDropdown() {
 }
 
 function RenderingDropdown() {
-  const { renderMode, wireOverlay, wireOverlayLocked, wireWidth } = _state.value
+  const {
+    renderMode, wireOverlay, wireOverlayLocked, wireWidth,
+    bgterrain, bgterrainHeight, bgterrainScale,
+  } = _state.value
   const current = _RENDER_MODES.find((m) => m.mode === renderMode) || _RENDER_MODES[0]
   return html`
     <div class="ribbon-dropdown" id="mv-render-dropdown">
@@ -426,6 +445,37 @@ function RenderingDropdown() {
             setModelViewerRibbonState({ wireWidth: v })
             _bridge.setWireWidth(v)
           }} />
+
+        <${MenuSectionLabel}>Scene<//>
+        <${EnvironmentSubmenu} />
+        <${TeamSubmenu} />
+        <${MenuSubmenuRow}
+          icon="🏔️"
+          label="Background Mountains"
+          title="Procedural mountains in the background of non-sea worlds — hover for height + scale"
+          on=${bgterrain}
+          onToggle=${(next) => {
+            setModelViewerRibbonState({ bgterrain: next })
+            _bridge.setBgTerrain(next)
+          }}>
+          <${_SubmenuSlider}
+            label="Height"
+            min=${0} max=${200} step=${5}
+            value=${bgterrainHeight}
+            onChange=${(v) => {
+              setModelViewerRibbonState({ bgterrainHeight: v })
+              _bridge.setBgTerrainHeight(v / 100)
+            }} />
+          <${_SubmenuSlider}
+            label="Scale"
+            min=${30} max=${300} step=${5}
+            value=${bgterrainScale}
+            onChange=${(v) => {
+              setModelViewerRibbonState({ bgterrainScale: v })
+              _bridge.setBgTerrainScale(v / 100)
+            }} />
+        <//>
+        <${SeabedSubmenu} />
       <//>
     </div>
   `
@@ -631,146 +681,20 @@ function _SubmenuSlider({ label, min, max, step, value, onChange }) {
 }
 
 function OptionsDropdown() {
-  const {
-    reflections, specular, godbeams, dof, waterReflections,
-    bob, bobAmount, bobSpeed,
-    waves, wavesIntensity,
-    bgterrain, bgterrainHeight, bgterrainScale,
-  } = _state.value
+  const s = _state.value
   return html`
     <div class="ribbon-dropdown" id="mv-options-dropdown">
       <${RibbonDropdownButton}
         id="mv-options-dropdown-btn"
         dropdownId="mv-options-dropdown"
+        icon="🎨"
         label="Options"
-        title="Toggle studio effects + pick the world look" />
+        title="Shadows, lighting effects + liquid simulation" />
       <${Dropdown} id="mv-options-dropdown">
-        <${MenuSectionLabel}>Environment<//>
-        <${EnvironmentSubmenu} />
-        <${TeamSubmenu} />
-
-        <${MenuSectionLabel}>General Effects<//>
-        <${MenuToggleRow}
-          icon="🪞"
-          label="Reflections"
-          title="The unit reflects on the water (and other reflective surfaces)."
-          on=${reflections}
-          onChange=${(next) => {
-            setModelViewerRibbonState({ reflections: next })
-            _bridge.setReflections(next)
-          }} />
-        <${MenuToggleRow}
-          icon="💎"
-          label="Specular Highlights"
-          title="Bright sun highlights on the water surface"
-          on=${specular}
-          onChange=${(next) => {
-            setModelViewerRibbonState({ specular: next })
-            _bridge.setSpecular(next)
-          }} />
-        <${MenuToggleRow}
-          icon="🌟"
-          label="God Beams"
-          title="Crepuscular light shafts from the sun through clouds"
-          on=${godbeams}
-          onChange=${(next) => {
-            setModelViewerRibbonState({ godbeams: next })
-            _bridge.setGodBeams(next)
-          }} />
-        <${MenuToggleRow}
-          icon="🎞️"
-          label="Depth of Field"
-          title="Cinematic depth of field — unit stays sharp, background softens"
-          on=${dof}
-          onChange=${(next) => {
-            setModelViewerRibbonState({ dof: next })
-            _bridge.setDoF(next)
-          }} />
-
-        <${MenuSectionLabel}>Background Terrain<//>
-        <${MenuSubmenuRow}
-          icon="🏔️"
-          label="Background Mountains"
-          title="Procedural mountains in the background of non-sea worlds — hover for height + scale"
-          on=${bgterrain}
-          onToggle=${(next) => {
-            setModelViewerRibbonState({ bgterrain: next })
-            _bridge.setBgTerrain(next)
-          }}>
-          <${_SubmenuSlider}
-            label="Height"
-            min=${0} max=${200} step=${5}
-            value=${bgterrainHeight}
-            onChange=${(v) => {
-              setModelViewerRibbonState({ bgterrainHeight: v })
-              _bridge.setBgTerrainHeight(v / 100)
-            }} />
-          <${_SubmenuSlider}
-            label="Scale"
-            min=${30} max=${300} step=${5}
-            value=${bgterrainScale}
-            onChange=${(v) => {
-              setModelViewerRibbonState({ bgterrainScale: v })
-              _bridge.setBgTerrainScale(v / 100)
-            }} />
-        <//>
-
-        <${SeabedSubmenu} />
-
-        <${MenuSectionLabel}>Liquid Simulation<//>
-        <${MenuToggleRow}
-          icon="🌅"
-          label="Water Surface Reflections"
-          title="Water reflects onto the unit’s hull — caustic bounce + sun shimmer on side plates"
-          on=${waterReflections}
-          onChange=${(next) => {
-            setModelViewerRibbonState({ waterReflections: next })
-            _bridge.setWaterReflections(next)
-          }} />
-        <${MenuSubmenuRow}
-          icon="🌊"
-          label="Waves"
-          title="Animate the water surface — hover for intensity"
-          on=${waves}
-          onToggle=${(next) => {
-            setModelViewerRibbonState({ waves: next })
-            _bridge.setWaves(next)
-          }}>
-          <${_SubmenuSlider}
-            label="Intensity"
-            min=${0} max=${200} step=${5}
-            value=${wavesIntensity}
-            onChange=${(v) => {
-              setModelViewerRibbonState({ wavesIntensity: v })
-              _bridge.setWavesIntensity(v / 100)
-            }} />
-        <//>
-        <${MenuSubmenuRow}
-          icon="🚤"
-          label="Bobbing / Swaying"
-          title="Unit bobs + sways with the swell — hover for amount + speed"
-          on=${bob}
-          onToggle=${(next) => {
-            setModelViewerRibbonState({ bob: next })
-            _bridge.setBob(next)
-          }}>
-          <${_SubmenuSlider}
-            label="Amount"
-            min=${0} max=${200} step=${5}
-            value=${bobAmount}
-            onChange=${(v) => {
-              setModelViewerRibbonState({ bobAmount: v })
-              _bridge.setBobAmount(v / 100)
-            }} />
-          <${_SubmenuSlider}
-            label="Speed"
-            min=${0} max=${200} step=${5}
-            value=${bobSpeed}
-            onChange=${(v) => {
-              setModelViewerRibbonState({ bobSpeed: v })
-              _bridge.setBobSpeed(v / 100)
-            }} />
-        <//>
+        <${GraphicsOptionsItems}
+          s=${s}
+          setState=${setModelViewerRibbonState}
+          bridge=${_bridge} />
       <//>
     </div>
   `
@@ -963,7 +887,7 @@ export function ModelViewerRibbon() {
       <${RibbonSection} label="Scene">
         <${GroundDropdown} />
       <//>
-      <${RibbonSection} label="Studio Options">
+      <${RibbonSection} label="Graphics Options">
         <${OptionsDropdown} />
       <//>
       <${RibbonSection} label="Animation">

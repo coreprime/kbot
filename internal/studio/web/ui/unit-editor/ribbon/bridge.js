@@ -104,6 +104,10 @@ export function wireModelViewerRibbon() {
         getActiveModelViewer()?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
       },
 
+      setShadows:           (on) => getActiveModelViewer()?.renderer?.setShadowsEnabled(!!on),
+      setShadowIntensity:   (v)  => getActiveModelViewer()?.renderer?.setShadowStrength(v),
+      setSelfShadow:        (on) => getActiveModelViewer()?.renderer?.setSelfShadow(!!on),
+
       setReflections:       (on) => getActiveModelViewer()?.renderer?.setReflectionsEnabled(!!on),
       setSpecular:          (on) => getActiveModelViewer()?.renderer?.setSpecularEnabled(!!on),
       setGodBeams:          (on) => getActiveModelViewer()?.renderer?.setGodBeamsEnabled(!!on),

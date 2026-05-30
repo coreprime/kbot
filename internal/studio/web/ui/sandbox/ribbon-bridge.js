@@ -26,6 +26,27 @@ export function wireSandboxRibbon() {
   const ui = getReactUi()
   if (!ui) return
   const sb = () => hostCallbacks.getActiveSandboxView?.() || null
+  // Graphics Options apply scene-wide: a sandbox tab can host N panes
+  // (one renderer each, all observing the same shared scene), so a
+  // toggle has to reach every pane's renderer — not just the focused
+  // one — or split panes would drift out of sync.  Walk tab.panes when
+  // present, falling back to the single active view otherwise.
+  const eachRenderer = (fn) => {
+    const tab = hostCallbacks.getActiveTab?.()
+    const seen = new Set()
+    if (tab && tab.panes && tab.panes.size > 0) {
+      for (const v of tab.panes.values()) {
+        if (v && v.renderer && !seen.has(v.renderer)) {
+          seen.add(v.renderer)
+          try { fn(v.renderer) } catch { /* ignore */ }
+        }
+      }
+    }
+    if (seen.size === 0) {
+      const v = sb()
+      if (v && v.renderer) { try { fn(v.renderer) } catch { /* ignore */ } }
+    }
+  }
   if (typeof ui.configureSandboxRibbonBridge === 'function') {
     ui.configureSandboxRibbonBridge({
       openSpawnPicker: (anchorEl) => openSandboxSpawnPicker(anchorEl),
@@ -97,6 +118,22 @@ export function wireSandboxRibbon() {
         return tab ? canCloseActivePane(tab) : false
       },
       setPanelVisible: (panelId, visible) => setSandboxPanelVisible(panelId, visible),
+
+      // Graphics Options — broadcast to every pane's renderer so the
+      // toggle/slider takes effect across the whole battlefield.
+      setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
+      setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
+      setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),
+      setReflections:       (on) => eachRenderer((r) => r.setReflectionsEnabled?.(!!on)),
+      setSpecular:          (on) => eachRenderer((r) => r.setSpecularEnabled?.(!!on)),
+      setGodBeams:          (on) => eachRenderer((r) => r.setGodBeamsEnabled?.(!!on)),
+      setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
+      setWaterReflections:  (on) => eachRenderer((r) => r.setWaterReflectionsEnabled?.(!!on)),
+      setWaves:             (on) => eachRenderer((r) => r.setWavesEnabled?.(!!on)),
+      setWavesIntensity:    (v)  => eachRenderer((r) => r.setWavesIntensity?.(v)),
+      setBob:               (on) => eachRenderer((r) => r.setBobEnabled?.(!!on)),
+      setBobAmount:         (v)  => eachRenderer((r) => r.setBobAmount?.(v)),
+      setBobSpeed:          (v)  => eachRenderer((r) => r.setBobSpeed?.(v)),
     })
   }
   if (typeof ui.mountSandboxRibbon === 'function') ui.mountSandboxRibbon()

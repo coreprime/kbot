@@ -36,6 +36,8 @@ uniform vec3 uFillColor;      // cinematic 3-point fill light tint (counter-key 
 uniform vec3 uBackColor;      // cinematic 3-point back light tint (rim/separation behind unit)
 uniform float uShadowEnabled; // 1 if uShadowMap is bound to a real depth texture, else 0
 uniform float uShadowBias;
+uniform float uShadowStrength; // 0..1 — user shadow intensity (Graphics Options); scales how dark self-shadows go
+uniform float uSelfShadow;     // 1 = the unit shadows its own geometry, 0 = self-shadowing off (cast ground shadow unaffected)
 uniform float uFlatLighting;  // 1 = no directional/ambient/shadow, full bright (Flat display mode)
 uniform float uReflectionTint; // 1 = output is dimmed + blue-tinted, used by the water reflection pass
 uniform float uSeaActive;     // 1 in Sea mode - adds caustic bounce light + sun shimmer to the hull
@@ -247,7 +249,12 @@ void main() {
     spec = max(spec, specBack);
   }
 
-  float shadow = sampleShadowMap1(N);
+  // Self-shadow term — gated by the Graphics Options self-shadow
+  // checkbox (uSelfShadow) and scaled by the shadow-intensity slider
+  // (uShadowStrength).  When self-shadowing is off (or intensity 0)
+  // the unit lights as if it never occludes itself; the cast shadow on
+  // the ground is handled separately in the ground shader, so it stays.
+  float shadow = mix(1.0, sampleShadowMap1(N), uShadowStrength * uSelfShadow);
   vec3 directLight = ndl * uLightColor * shadow;
   vec3 specular = spec * uLightColor * shadow * 0.45;
   // Second sun contribution - twin-sun environments fill this in
@@ -257,7 +264,7 @@ void main() {
     vec3 L2 = normalize(uLightDir2);
     float ndl2 = max(0.0, dot(N, L2));
     ndl2 = max(ndl2, max(0.0, dot(-N, L2)) * 0.4);
-    float shadow2 = sampleShadowMap2(N);
+    float shadow2 = mix(1.0, sampleShadowMap2(N), uShadowStrength * uSelfShadow);
     directLight += ndl2 * uLightColor2 * shadow2;
     if (!cheapLighting) {
       vec3 H2 = normalize(L2 + V);

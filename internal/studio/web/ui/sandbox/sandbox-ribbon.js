@@ -13,6 +13,7 @@
 // panel-store helpers the floating-panel chrome uses, so the
 // dropdown and the panel ✕ button stay in lockstep.
 
+import { signal } from '@preact/signals'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { mv as mvSignal, runtimeTick, controlsDevSectionVisible, setControlsDevSectionVisible } from '/ui/common/inspector-store.js'
 import { panelSignals } from '/ui/common/panel-store.js'
@@ -22,6 +23,37 @@ import {
   closeDropdownById,
 } from '/ui/common/ribbon.js'
 import { SplitMenuItems } from '/ui/common/split-host.js'
+import { GraphicsOptionsItems } from '/ui/common/graphics-options-menu.js'
+
+// _gfx — the Graphics Options menu state for sandbox mode (mirrors the
+// shared GraphicsOptionsItems shape).  Defaults match the renderer's
+// startup state so the toggle ticks paint correctly before the host
+// pushes any persisted prefs via setSandboxGraphicsState().
+const _gfx = signal({
+  shadows:          true,
+  shadowIntensity:  100,
+  selfShadow:       true,
+
+  reflections:      true,
+  specular:         true,
+  godbeams:         true,
+  dof:              false,
+  waterReflections: true,
+
+  waves:            true,
+  wavesIntensity:   100,
+  bob:              true,
+  bobAmount:        100,
+  bobSpeed:         100,
+})
+
+// setSandboxGraphicsState — partial merge into the Graphics Options
+// state.  Called by the menu rows (to keep ticks in sync with the
+// user's choice) and by the host when it applies persisted prefs.
+export function setSandboxGraphicsState(patch) {
+  if (!patch) return
+  _gfx.value = { ..._gfx.value, ...patch }
+}
 
 // _bridge — host installs the action callbacks (spawn, stop, etc.)
 // plus the setSandboxPanelVisible function the dev-tools rows use.
@@ -37,6 +69,21 @@ const _bridge = {
   closeActive:       () => {},
   canClose:          () => false,
   setPanelVisible:   (_panelId, _visible) => {},
+
+  // Graphics Options — applied scene-wide across every sandbox pane.
+  setShadows:           (_on) => {},
+  setShadowIntensity:   (_v) => {},   // already normalised 0..1
+  setSelfShadow:        (_on) => {},
+  setReflections:       (_on) => {},
+  setSpecular:          (_on) => {},
+  setGodBeams:          (_on) => {},
+  setDoF:               (_on) => {},
+  setWaterReflections:  (_on) => {},
+  setWaves:             (_on) => {},
+  setWavesIntensity:    (_v) => {},
+  setBob:               (_on) => {},
+  setBobAmount:         (_v) => {},
+  setBobSpeed:          (_v) => {},
 }
 
 export function configureSandboxRibbonBridge(impl) {
@@ -52,6 +99,19 @@ export function configureSandboxRibbonBridge(impl) {
     closeActive:       () => {},
     canClose:          () => false,
     setPanelVisible:   (_panelId, _visible) => {},
+    setShadows:           (_on) => {},
+    setShadowIntensity:   (_v) => {},
+    setSelfShadow:        (_on) => {},
+    setReflections:       (_on) => {},
+    setSpecular:          (_on) => {},
+    setGodBeams:          (_on) => {},
+    setDoF:               (_on) => {},
+    setWaterReflections:  (_on) => {},
+    setWaves:             (_on) => {},
+    setWavesIntensity:    (_v) => {},
+    setBob:               (_on) => {},
+    setBobAmount:         (_v) => {},
+    setBobSpeed:          (_v) => {},
   }, impl)
 }
 
@@ -85,6 +145,30 @@ function _PanelToggle({ id, icon, label, title }) {
     <${MenuToggleRow} icon=${icon} label=${label} title=${title}
                       on=${visible}
                       onChange=${(next) => _bridge.setPanelVisible(id, next)} />
+  `
+}
+
+// GraphicsOptionsDropdown — the shared Graphics Options menu body
+// (shadows + lighting effects + liquid simulation) inside a sandbox
+// ribbon dropdown.  Reads _gfx.value so it re-renders whenever a row
+// updates the state.  Bridge setters apply scene-wide across panes.
+function GraphicsOptionsDropdown() {
+  const s = _gfx.value
+  return html`
+    <div class="ribbon-dropdown" id="sandbox-rb-gfx-dropdown">
+      <${RibbonDropdownButton}
+        id="sandbox-rb-gfx-btn"
+        dropdownId="sandbox-rb-gfx-dropdown"
+        icon="🎨"
+        label="Graphics"
+        title="Shadows, lighting effects + liquid simulation — applied to the whole battlefield." />
+      <${Dropdown} id="sandbox-rb-gfx-dropdown" anchorId="sandbox-rb-gfx-btn">
+        <${GraphicsOptionsItems}
+          s=${s}
+          setState=${setSandboxGraphicsState}
+          bridge=${_bridge} />
+      <//>
+    </div>
   `
 }
 
@@ -179,6 +263,9 @@ export function SandboxRibbon() {
           <//>
         </div>
       <//>
+      <${RibbonSection} label="Graphics Options">
+        <${GraphicsOptionsDropdown} />
+      <//>
       <${RibbonSection} label="Developer Tools" right=${true} className="sandbox-rb-devtools-section">
         <div class="ribbon-dropdown" id="sandbox-rb-devtools-dropdown">
           <${RibbonDropdownButton}
@@ -209,5 +296,6 @@ export function SandboxRibbon() {
 export function closeSandboxRibbonDropdowns() {
   closeDropdownById('sandbox-rb-sandbox-dropdown')
   closeDropdownById('sandbox-rb-view-dropdown')
+  closeDropdownById('sandbox-rb-gfx-dropdown')
   closeDropdownById('sandbox-rb-devtools-dropdown')
 }

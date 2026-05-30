@@ -799,6 +799,17 @@ export class ModelRenderer {
     // `_lodShadowOn` flag (LOD_HYSTERESIS-wide band).
     this.shadowLodEnabled = DEFAULT_SHADOW_LOD_ENABLED
     this.shadowMinPx = SHADOW_LOD_MIN_PX
+    // Graphics Options shadow controls (global, user-driven):
+    //   shadowsEnabled — master on/off; gates the whole shadow pass.
+    //   shadowStrength — 0..1 darkness multiplier for the cast (ground)
+    //                    + self shadows.
+    //   selfShadow     — whether the unit shadows its own geometry (the
+    //                    ground cast shadow is independent of this).
+    // Defaults preserve the prior look (shadows on, full strength,
+    // self-shadowing on).
+    this.shadowsEnabled = true
+    this.shadowStrength = 1.0
+    this.selfShadow = true
     // Distance-LOD toggle for the MAIN pass — at mid tier an entity's
     // cosmetic pieces (flares, muzzles, exhausts; tagged with
     // `piece.lodHide` by the model loader) get skipped on the
@@ -1017,6 +1028,31 @@ export class ModelRenderer {
   // re-rasterising a hundred barely-visible silhouettes every frame.
   setShadowLodEnabled(on) {
     this.shadowLodEnabled = !!on
+    this.requestRedraw()
+  }
+
+  // setShadowsEnabled — Graphics Options master shadow toggle.  Off
+  // skips the shadow depth pass entirely (no self + no cast shadows)
+  // and forces uShadowEnabled to 0 in both the unit + ground shaders.
+  setShadowsEnabled(on) {
+    this.shadowsEnabled = !!on
+    this.requestRedraw()
+  }
+
+  // setShadowStrength — 0..1 darkness of the cast + self shadows.  1 =
+  // full (prior look), 0 = invisible (equivalent to off, but the pass
+  // still runs).  Clamped.
+  setShadowStrength(v) {
+    const n = +v
+    this.shadowStrength = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1
+    this.requestRedraw()
+  }
+
+  // setSelfShadow — whether the unit shadows its own geometry.  Off
+  // lights the unit as if it never occludes itself; the cast shadow on
+  // the ground (ground shader) is unaffected.
+  setSelfShadow(on) {
+    this.selfShadow = !!on
     this.requestRedraw()
   }
 
@@ -1764,7 +1800,7 @@ export class ModelRenderer {
 
     // Shadow pass is meaningful only when the main pass actually uses
     // shadows.  In Flat / Wireframe modes we skip it to save GPU.
-    const usesShadows = this.renderMode === 'full'
+    const usesShadows = this.renderMode === 'full' && this.shadowsEnabled
     if (this._shadowFBO && usesShadows) {
       this.#renderShadowPass(0)
       // Second shadow pass only when the active environment has a
@@ -2324,12 +2360,13 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundCenter, [cx, groundY, cz])
     gl.uniform1f(this.uGroundRadius, radius)
     gl.uniform1f(this.uGroundY, groundY)
-    gl.uniform1f(this.uGroundShadowEnabled, (this._shadowFBO && this.renderMode === 'full') ? 1 : 0)
+    gl.uniform1f(this.uGroundShadowEnabled, (this._shadowFBO && this.renderMode === 'full' && this.shadowsEnabled) ? 1 : 0)
     // Shadow opacity tracks construction progress — translucent at low
     // build %, solid at 100%.  Cubic ease so the shadow stays subtle
     // until the build is nearly done, then snaps to full presence.
+    // Then scaled by the Graphics Options shadow-intensity slider.
     const _bps = (this.buildPercent ?? 100) / 100
-    gl.uniform1f(this.uGroundShadowStrength, _bps * _bps * _bps)
+    gl.uniform1f(this.uGroundShadowStrength, _bps * _bps * _bps * this.shadowStrength)
     if (this._shadowFBO) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -2614,7 +2651,12 @@ export class ModelRenderer {
     // the renderer prints the raw texture / palette colour.
     gl.uniform1f(this.uFlatLighting, flat ? 1 : 0)
     gl.uniform1f(this.uReflectionTint, 0)
-    gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat) ? 1 : 0)
+    gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat && this.shadowsEnabled) ? 1 : 0)
+    // Graphics Options shadow controls — uShadowStrength scales the
+    // self-shadow darkness, uSelfShadow gates it off entirely.  Both
+    // multiply into the unit's shadow term in main.frag.
+    gl.uniform1f(this.uShadowStrength, this.shadowStrength)
+    gl.uniform1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
     // Phase 2 lighting LOD — when the per-entity flag is set the
     // shader skips rim / back-light / Blinn-Phong specular.  Set by
     // the entity loop in lockstep with the shadow LOD: any entity
@@ -3038,6 +3080,8 @@ export class ModelRenderer {
     this.uMainBackColor = gl.getUniformLocation(prog, 'uBackColor')
     this.uShadowEnabled = gl.getUniformLocation(prog, 'uShadowEnabled')
     this.uShadowBias = gl.getUniformLocation(prog, 'uShadowBias')
+    this.uShadowStrength = gl.getUniformLocation(prog, 'uShadowStrength')
+    this.uSelfShadow = gl.getUniformLocation(prog, 'uSelfShadow')
     this.uFlatLighting = gl.getUniformLocation(prog, 'uFlatLighting')
     this.uReflectionTint = gl.getUniformLocation(prog, 'uReflectionTint')
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
