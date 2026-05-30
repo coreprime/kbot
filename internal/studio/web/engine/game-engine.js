@@ -752,7 +752,11 @@ export class GameEngine {
         (u._bombRun || u.weaponSlots.some((s) => s.target && s.target.source === 'manual'))
       if (u.moveTarget && !stickyBomber) { u._atk = null; return }
       const range = this.#weaponRangeFor(u, eslot)
-      if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: 1 }
+      // flybySide starts random so a flight of bombers attacking the same
+      // target scatters to both sides on the first pass; the maneuver
+      // toggles the sign on every subsequent egress so an individual
+      // aircraft still alternates (figure-eight) across its own runs.
+      if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: Math.random() < 0.5 ? -1 : 1 }
       const st = {
         x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0,
         atkPhase: u._atk.atkPhase, sweepPhase: u._atk.sweepPhase, sweepCenter: u._atk.sweepCenter,
