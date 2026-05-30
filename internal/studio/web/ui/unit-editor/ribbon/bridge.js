@@ -276,33 +276,57 @@ export function wireUnitEditorHostBridge(reactUi) {
       // re-engage BP checking.  Clearing the flag here would let
       // the BP at the same PC re-fire immediately and Step would
       // be stuck pacing the same line forever.
+      //
+      // Override playbackRate to 1× for the duration of the step so
+      // every downstream tick consumer (runtime accumulator, engine
+      // dtSec, smoke trails, simRate helper) treats this as exactly
+      // one TA tick regardless of the user's sim-speed setting.  At
+      // 0.5× the runtime's accumulator would only see 12.5 ms per
+      // step and would never reach the 25 ms TA_TICK_MS threshold —
+      // multiple clicks would advance one tick.  At 2× the
+      // accumulator would see 50 ms and drain two ticks per click.
+      // Both wrong: Step is meant to be a "freeze-frame advance",
+      // not a sped-up/slowed-down advance.
       const dlg = document.getElementById('model-viewer-dialog')
       const sandboxOn = dlg && dlg.classList.contains('sandbox-mode')
       const wasPaused = rt.paused
+      const savedRate = rt.playbackRate
       rt.paused = false
-      if (sandboxOn) {
-        // Sandbox per-frame: scene.tick → engine.tick (runtime +
-        // movement + attack + weapons + particles + audio via
-        // syncBinding) + the shared smoke-trail advance through
-        // the SmokeTrailManager that view-helpers stashed on
-        // sv._smokeTrails.
-        const sv = hostCallbacks.getActiveSandboxView?.() || null
-        if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(TA_TICK_MS)
-        if (sv && sv._smokeTrails) {
-          const rt = sv.runtime
-          const rate = !rt ? 1 : (rt.paused ? 0 : (rt.playbackRate || 1))
-          try { sv._smokeTrails.tick(TA_TICK_MS * rate) } catch { /* ignore */ }
+      rt.playbackRate = 1
+      try {
+        if (sandboxOn) {
+          // Sandbox per-frame: scene.tick → engine.tick (runtime +
+          // movement + attack + weapons + particles + audio via
+          // syncBinding) + the shared smoke-trail advance through
+          // the SmokeTrailManager that view-helpers stashed on
+          // sv._smokeTrails.  With playbackRate forced to 1 above,
+          // the smokeTrails rate calc below resolves to 1 too — so
+          // the trails get exactly one TA tick's worth of advance
+          // regardless of the user's sim-speed selection.
+          const sv = hostCallbacks.getActiveSandboxView?.() || null
+          if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(TA_TICK_MS)
+          if (sv && sv._smokeTrails) {
+            const rt = sv.runtime
+            const rate = !rt ? 1 : (rt.paused ? 0 : (rt.playbackRate || 1))
+            try { sv._smokeTrails.tick(TA_TICK_MS * rate) } catch { /* ignore */ }
+          }
+        } else {
+          // Viewer per-frame: binding.tick (runtime + particles +
+          // audio) + MvControls.tick (movement + weapons via
+          // engine.tick(skipRuntime, skipMovement, skipSync), plus
+          // its own tickSmokeTrails inside).
+          const mv = getActiveModelViewer()
+          const cob = mv && mv.cob
+          if (cob && typeof cob.tick === 'function') cob.tick(TA_TICK_MS)
+          const ctrls = hostCallbacks.getActiveMvControls?.()
+          if (ctrls && typeof ctrls.tick === 'function') ctrls.tick(TA_TICK_MS)
         }
-      } else {
-        // Viewer per-frame: binding.tick (runtime + particles +
-        // audio) + MvControls.tick (movement + weapons via
-        // engine.tick(skipRuntime, skipMovement, skipSync), plus
-        // its own tickSmokeTrails inside).
-        const mv = getActiveModelViewer()
-        const cob = mv && mv.cob
-        if (cob && typeof cob.tick === 'function') cob.tick(TA_TICK_MS)
-        const ctrls = hostCallbacks.getActiveMvControls?.()
-        if (ctrls && typeof ctrls.tick === 'function') ctrls.tick(TA_TICK_MS)
+      } finally {
+        // Restore the user's chosen playback rate even if a tick
+        // call threw — otherwise a buggy script could permanently
+        // pin the sim to 1× and leave the user wondering why their
+        // slider stopped working.
+        rt.playbackRate = savedRate
       }
       // Always leave the runtime paused after a step so the user
       // can keep stepping (`wasPaused || true === true`).
