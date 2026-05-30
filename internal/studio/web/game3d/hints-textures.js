@@ -12,7 +12,7 @@
 // renderer plumbing — only this file:
 //
 //   specular      { metallic, scale }                 — sheen boost   (LIVE)
-//   runningLights { blink, emit, fadeOut, gap, keyBright, keySat }
+//   runningLights { blink, emit, fadeOut, gap, keyBright, keySat, keyBrightHi }
 //                   — colour-keyed blinking status lights that glow (and bloom
 //                   into the scene).  A CPU pre-pass (lamp-map.js) groups every
 //                   proximal/touching lamp texel into one component carrying a
@@ -25,10 +25,12 @@
 //                   close that merges areas within ~2·gap of each other into
 //                   one lamp AND fills holes that wide so the middle of a spot
 //                   lights, not just its rim; 0 keeps each blob separate.
-//                   `keyBright` / `keySat` are the detection thresholds (min
-//                   max-channel brightness / relative saturation a texel needs
-//                   to read as a lamp) — lower either to pick up more pixels.
-//                                                                        (LIVE)
+//                   `keyBright` / `keySat` are the COLOURED-lamp thresholds
+//                   (min brightness / relative saturation); `keyBrightHi` is a
+//                   brightness cutoff above which colour is ignored so white /
+//                   desaturated lamps still key.  Lower keyBright/keySat for
+//                   dimmer coloured lamps, lower keyBrightHi for dimmer white
+//                   lamps.                                                (LIVE)
 //   bump          { generate, intensity, smooth, threshold, scale } — surface
 //                   relief from the tile's luminance height field via parallax
 //                   occlusion mapping (the UV is marched along the view ray so
@@ -94,20 +96,21 @@ export const TEXTURE_HINTS = {
     match: /^corv0?6[ab]$|^corv04[bc]$/i,
     defaults: {
       specular: { metallic: true, scale: METAL_SPEC_SCALE },
-      // gap 1 groups touching/adjacent lamp texels into one component (and
-      // fills the 1-texel holes in the middle of a small spot) so each painted
-      // light reads as ONE lamp in its dominant colour — the purple cluster on
-      // CorV06b stops splitting into a blue + purple pair.
-      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, gap: 1 },
+      // Detection: keyBright/keySat catch the COLOURED dots; keyBrightHi catches
+      // white-hot lamps on brightness alone (defaults in applyResolvedHints).
+      // gap 0 = no extra grouping; per-component dominant colour already keeps
+      // a single painted blob reading as one lamp.
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.2, gap: 0 },
     },
   },
-  // ARM building running lights — Armpanel1.  Same gap-1 grouping so each
-  // panel's lit corner reads as a single lamp rather than scattered dots.
+  // ARM building running lights — Armpanel1.  Its top lamps are near-white
+  // (low saturation), so detection leans on the brightness cutoff (keyBrightHi)
+  // to pick them up rather than the colour key.
   'armbldg.gaf': {
     match: /^armpanel1$/i,
     defaults: {
       specular: { metallic: true, scale: METAL_SPEC_SCALE },
-      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, gap: 1 },
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.2, gap: 0 },
     },
   },
   // ARM building plating — ArmBui2b/c/d opt into auto bump mapping: the
@@ -257,11 +260,13 @@ export function applyResolvedHints(group, name) {
   group.metallic = !!(h.specular && h.specular.metallic)
   group.specScale = (h.specular && h.specular.scale) || 1.0
   group.runningLights = !!(h.runningLights && h.runningLights.blink)
-  group.rlEmit = (h.runningLights && h.runningLights.emit) || 0.0
-  group.rlFadeOut = (h.runningLights && h.runningLights.fadeOut != null) ? h.runningLights.fadeOut : 0.15
-  group.rlKeyBright = (h.runningLights && h.runningLights.keyBright != null) ? h.runningLights.keyBright : 0.12
+  group.rlEmit = h.runningLights ? (h.runningLights.emit != null ? h.runningLights.emit : 1.0) : 0.0
+  group.rlFadeOut = (h.runningLights && h.runningLights.fadeOut != null) ? h.runningLights.fadeOut : 0.2
+  group.rlKeyBright = (h.runningLights && h.runningLights.keyBright != null) ? h.runningLights.keyBright : 0.2
   group.rlKeySat = (h.runningLights && h.runningLights.keySat != null) ? h.runningLights.keySat : 0.50
-  group.rlGap = (h.runningLights && h.runningLights.gap != null) ? h.runningLights.gap : 1
+  group.rlKeyBrightHi = (h.runningLights && h.runningLights.keyBrightHi != null) ? h.runningLights.keyBrightHi : 0.8
+  group.rlMinRise = (h.runningLights && h.runningLights.minRise != null) ? h.runningLights.minRise : 0.12
+  group.rlGap = (h.runningLights && h.runningLights.gap != null) ? h.runningLights.gap : 0
   group.bump = !!(h.bump && h.bump.generate)
   group.bumpIntensity = (h.bump && h.bump.intensity) || 0.0
   group.bumpSmooth = (h.bump && h.bump.smooth != null) ? h.bump.smooth : 1.5

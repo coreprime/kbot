@@ -101,6 +101,22 @@ export const EFFECT_LOD_SURFACE_MAX_WU = 700        // beyond → no bump / no s
 export const EFFECT_LOD_RUNNINGLIGHTS_MAX_WU = 1100 // beyond → no running lights
 export const EFFECT_LOD_FADE_WU = 120               // smoothstep fade width before each cutoff
 
+// ── Running-light grouping ───────────────────────────────────────────
+// Lamp-atlas (lamp-map.js) colour harmonisation: any two running-light
+// sources within this many TEXELS of each other that resolve to a
+// DIFFERENT colour are both snapped to the dominant (strongest) source's
+// colour, so a cluster of nearby lamps reads as one coherent colour
+// instead of a speckle of competing shades.  Raise to harmonise over a
+// wider area, drop toward 0 to let neighbouring lamps keep distinct hues.
+export const RUNNING_LIGHT_COLOR_MERGE_PX = 4
+
+// Running-light blink timing is quantised into this many HSV-hue buckets
+// (in main.frag): every lamp whose hue lands in the same bucket pulses on
+// the SAME cycle, so two slightly different shades of blue can't drift a
+// little out of phase.  1 = all lamps blink together; more = finer
+// per-colour timing.
+export const RUNNING_LIGHT_TIMING_BUCKETS = 5
+
 // ── Audio dedup ──────────────────────────────────────────────────────
 
 // When a sound stem starts playing the AudioPool refuses to start

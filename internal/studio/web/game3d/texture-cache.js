@@ -173,10 +173,13 @@ export class TextureCache {
   getLampMap(name, opts = {}) {
     const base = (name || '').toLowerCase()
     if (!base) return null
-    const keyBright = opts.keyBright != null ? opts.keyBright : 0.12
+    const keyBright = opts.keyBright != null ? opts.keyBright : 0.20
     const keySat = opts.keySat != null ? opts.keySat : 0.50
-    const gapPx = Math.max(0, Math.round(opts.gapPx != null ? opts.gapPx : 1))
-    const key = `${base}|${keyBright}|${keySat}|${gapPx}`
+    const keyBrightHi = opts.keyBrightHi != null ? opts.keyBrightHi : 0.80
+    const minRise = opts.minRise != null ? opts.minRise : 0.12
+    const gapPx = Math.max(0, opts.gapPx != null ? opts.gapPx : 0)
+    const colorMergePx = Math.max(0, opts.colorMergePx != null ? opts.colorMergePx : 4)
+    const key = `${base}|${keyBright}|${keySat}|${keyBrightHi}|${minRise}|${gapPx}|${colorMergePx}`
     const cached = this.lampMaps.get(key)
     if (cached) return cached.ready ? cached : null
 
@@ -188,7 +191,7 @@ export class TextureCache {
       return null
     }
 
-    const built = this.#buildLampTexture(entry.source, { keyBright, keySat, gapPx })
+    const built = this.#buildLampTexture(entry.source, { keyBright, keySat, keyBrightHi, minRise, gapPx, colorMergePx })
     this.lampMaps.set(key, built)
     if (this.lampMaps.size > LAMP_MAP_CACHE_MAX) {
       const oldest = this.lampMaps.keys().next().value

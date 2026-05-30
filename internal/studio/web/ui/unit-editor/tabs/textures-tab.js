@@ -176,10 +176,12 @@ function _effRL(h) {
   return {
     blink: !!r.blink,
     emit: r.emit != null ? r.emit : 1.0,
-    fadeOut: r.fadeOut != null ? r.fadeOut : 0.15,
-    gap: r.gap != null ? r.gap : 1,
-    keyBright: r.keyBright != null ? r.keyBright : 0.12,
+    fadeOut: r.fadeOut != null ? r.fadeOut : 0.2,
+    gap: r.gap != null ? r.gap : 0,
+    keyBright: r.keyBright != null ? r.keyBright : 0.2,
     keySat: r.keySat != null ? r.keySat : 0.50,
+    keyBrightHi: r.keyBrightHi != null ? r.keyBrightHi : 0.8,
+    minRise: r.minRise != null ? r.minRise : 0.12,
   }
 }
 function _effBump(h) {
@@ -268,12 +270,16 @@ function _HintPopover() {
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ emit: v })} />
           <${_EditNum} label="Fade Out Opacity" min=${0} max=${1} step=${0.05} value=${er.fadeOut}
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ fadeOut: v })} />
-          <${_EditNum} label="Group radius" min=${0} max=${4} step=${1} value=${er.gap}
-            disabled=${!er.blink} fmt=${(v) => `${v | 0}`} onInput=${(v) => setRL({ gap: v })} />
+          <${_EditNum} label="Group radius" min=${0} max=${3} step=${0.05} value=${er.gap}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ gap: v })} />
           <${_EditNum} label="Detect brightness" min=${0.02} max=${0.6} step=${0.01} value=${er.keyBright}
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keyBright: v })} />
           <${_EditNum} label="Detect saturation" min=${0} max=${1} step=${0.05} value=${er.keySat}
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keySat: v })} />
+          <${_EditNum} label="Bright cutoff" min=${0.3} max=${1} step=${0.05} value=${er.keyBrightHi}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keyBrightHi: v })} />
+          <${_EditNum} label="Local rise" min=${0} max=${0.5} step=${0.02} value=${er.minRise}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ minRise: v })} />
 
           <div class="mv-hint-edit-group-label">🗻 Bump Mapping</div>
           <${_EditToggle} label="Generate relief" on=${eb.generate} onChange=${(v) => setBump({ generate: v })} />

@@ -32,6 +32,8 @@ import {
   EFFECT_LOD_SURFACE_MAX_WU,
   EFFECT_LOD_RUNNINGLIGHTS_MAX_WU,
   EFFECT_LOD_FADE_WU,
+  RUNNING_LIGHT_COLOR_MERGE_PX,
+  RUNNING_LIGHT_TIMING_BUCKETS,
 } from './performance.js'
 import { displayRgbForSide } from './team-colors.js'
 import {
@@ -2231,8 +2233,9 @@ export class ModelRenderer {
     gl.uniform1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
     gl.uniform1f(this.uSpecularStrength, this.specularStrength)
     gl.uniform1f(this.uRLStrength, this.rlStrength)
+    gl.uniform1f(this.uRLPhaseBuckets, RUNNING_LIGHT_TIMING_BUCKETS)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
-    gl.uniform1f(this.uRLFadeOut, 0.15)
+    gl.uniform1f(this.uRLFadeOut, 0.2)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform1f(this.uBumpScale, 1.0)
@@ -2379,8 +2382,9 @@ export class ModelRenderer {
     gl.uniform1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
     gl.uniform1f(this.uSpecularStrength, this.specularStrength)
     gl.uniform1f(this.uRLStrength, this.rlStrength)
+    gl.uniform1f(this.uRLPhaseBuckets, RUNNING_LIGHT_TIMING_BUCKETS)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
-    gl.uniform1f(this.uRLFadeOut, 0.15)
+    gl.uniform1f(this.uRLFadeOut, 0.2)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform1f(this.uBumpScale, 1.0)
@@ -2648,7 +2652,7 @@ export class ModelRenderer {
             const rlOn = (this.optRunningLights && group.runningLights && fxRL > 0.01) ? 1 : 0
             gl.uniform1f(this.uRunningLights, rlOn)
             gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) * fxRL : 0)
-            gl.uniform1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.15)
+            gl.uniform1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.2)
             // Running lights now read a CPU-built lamp atlas (texture-cache +
             // lamp-map.js): proximal/touching texels are grouped into one
             // component carrying a single dominant colour, so the whole lamp
@@ -2660,9 +2664,12 @@ export class ModelRenderer {
             let lampValid = 0
             if (rlOn && this.textureCache && group.textureName) {
               const lm = this.textureCache.getLampMap(group.textureName, {
-                keyBright: (group.rlKeyBright != null) ? group.rlKeyBright : 0.12,
+                keyBright: (group.rlKeyBright != null) ? group.rlKeyBright : 0.20,
                 keySat: (group.rlKeySat != null) ? group.rlKeySat : 0.50,
-                gapPx: (group.rlGap != null) ? group.rlGap : 1,
+                keyBrightHi: (group.rlKeyBrightHi != null) ? group.rlKeyBrightHi : 0.80,
+                minRise: (group.rlMinRise != null) ? group.rlMinRise : 0.12,
+                gapPx: (group.rlGap != null) ? group.rlGap : 0,
+                colorMergePx: RUNNING_LIGHT_COLOR_MERGE_PX,
               })
               if (lm && lm.ready) {
                 gl.activeTexture(gl.TEXTURE4)
@@ -2908,6 +2915,7 @@ export class ModelRenderer {
     this.uRLEmit = gl.getUniformLocation(prog, 'uRLEmit')
     this.uRLStrength = gl.getUniformLocation(prog, 'uRLStrength')
     this.uRLFadeOut = gl.getUniformLocation(prog, 'uRLFadeOut')
+    this.uRLPhaseBuckets = gl.getUniformLocation(prog, 'uRLPhaseBuckets')
     this.uLampMap = gl.getUniformLocation(prog, 'uLampMap')
     this.uLampMapValid = gl.getUniformLocation(prog, 'uLampMapValid')
     this.uBump = gl.getUniformLocation(prog, 'uBump')

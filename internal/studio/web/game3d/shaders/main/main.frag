@@ -57,6 +57,7 @@ uniform float uRunningLights;   // Surface-hint "running lights" — colour-keye
 uniform float uRLEmit;          // running-lights per-texture emissive strength (hint)
 uniform float uRLStrength;      // "Running Lights" intensity slider; 1 = default
 uniform float uRLFadeOut;       // running-lights fade-out opacity (0..1): 0 = dim phase keeps the original texture, 1 = dim phase fades to black
+uniform float uRLPhaseBuckets;  // running-lights timing: quantise hue into this many blink-phase buckets so similar shades pulse together (RUNNING_LIGHT_TIMING_BUCKETS)
 uniform sampler2D uLampMap;     // running-lights lamp atlas — per-texel RGB = the texel's lamp's single dominant colour, A = lamp membership (built CPU-side)
 uniform float uLampMapValid;    // 1 when uLampMap holds a real atlas for this batch, 0 = no lamps this draw
 uniform float uBump;            // Surface-hint auto-bump — perturb the normal from the tile's luminance gradient
@@ -553,8 +554,13 @@ void main() {
     vec4 lampSoft = texture2D(uLampMap, vUV, 2.5);
     float member = lamp.a * edgeFade;
     vec3 hue = lamp.rgb;                              // component's vivid colour
-    // Blink phase from the component hue → identical across the whole lamp.
-    float phase = rgbToHsv(hue).x * 6.2831853;
+    // Blink phase from the component hue, QUANTISED into uRLPhaseBuckets evenly
+    // spaced buckets: every lamp whose hue lands in the same bucket pulses on
+    // ONE cycle, so two slightly different shades of blue can't drift a little
+    // out of phase.  (The CPU colour-merge already harmonises NEAR lamps; this
+    // catches similar shades anywhere on the unit.)
+    float nb = max(uRLPhaseBuckets, 1.0);
+    float phase = (floor(rgbToHsv(hue).x * nb) / nb) * 6.2831853;
     float blink = smoothstep(0.12, 0.88, 0.5 + 0.5 * sin(uTime * 3.5 + phase));
 
     // Lamp body: recolour to the component colour, pulsing in sync.  The dim
@@ -569,7 +575,11 @@ void main() {
     // its fringe.
     float glow = smoothstep(0.05, 0.55, lampSoft.a) * edgeFade;
     vec3 glowHue = lampSoft.rgb / max(lampSoft.a, 0.02);
-    col += glowHue * (glow * blink) * 0.55 * uRLStrength;   // hull wash (pre-tone)
+    // The hull-wash glow scales with uRLEmit (as the emissive does below) so the
+    // per-texture Emit slider visibly controls how much the lamp lights its
+    // surroundings — not just the bloom-only emissive, which reads as "Emit
+    // does nothing" on dim/sparse lamps.  Emit 1 = unchanged from before.
+    col += glowHue * (glow * blink) * 0.55 * uRLStrength * uRLEmit;   // hull wash (pre-tone)
     // Emissive (post tone curve), boosted so low-luma coloured lamps (blue /
     // teal weigh little in luma) still clear the bloom bright-pass.
     vec3 coreEm = hue * (blink * 2.2 * uRLStrength) * member;
