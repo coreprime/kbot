@@ -71,12 +71,25 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
       title="Crepuscular light shafts from the sun through clouds"
       on=${s.godbeams}
       onChange=${(next) => set('godbeams', next, next, bridge.setGodBeams)} />
-    <${MenuToggleRow}
+    <${MenuSubmenuRow}
       icon="🎞️"
       label="Depth of Field"
-      title="Cinematic depth of field — unit stays sharp, background softens"
+      title="Cinematic depth of field — unit stays sharp, background softens.  Hover for onset distance + blur amount."
       on=${s.dof}
-      onChange=${(next) => set('dof', next, next, bridge.setDoF)} />
+      onToggle=${(next) => set('dof', next, next, bridge.setDoF)}>
+      <${_Slider}
+        label="Distance"
+        min=${100} max=${2000} step=${50}
+        value=${s.dofDistance}
+        format=${(v) => `${(v / 100).toFixed(1)}×`}
+        onChange=${(v) => set('dofDistance', v, v / 100, bridge.setDoFDistance)} />
+      <${_Slider}
+        label="Amount"
+        min=${0} max=${200} step=${5}
+        value=${s.dofLevel}
+        format=${(v) => `${v}%`}
+        onChange=${(v) => set('dofLevel', v, v / 100, bridge.setDoFLevel)} />
+    <//>
 
     <${MenuSectionLabel}>Shadows<//>
     <${MenuSubmenuRow}

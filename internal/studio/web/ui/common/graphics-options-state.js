@@ -35,6 +35,8 @@ export const GRAPHICS_DEFAULTS = {
   specular:         true,
   godbeams:         true,
   dof:              false,
+  dofDistance:      500,   // 100..2000 → 1.0..20.0× onset distance (default 5×)
+  dofLevel:         100,   // 0..200    → 0..2.0× max blur radius
 
   waterReflections: true,
   waves:            true,
@@ -80,6 +82,8 @@ export function applyGraphicsOptionsToRenderer(r) {
   r.setSpecularEnabled?.(!!g.specular)
   r.setGodBeamsEnabled?.(!!g.godbeams)
   r.setDoFEnabled?.(!!g.dof)
+  r.setDoFDistance?.(g.dofDistance / 100)
+  r.setDoFLevel?.(g.dofLevel / 100)
   r.setWaterReflectionsEnabled?.(!!g.waterReflections)
   r.setWavesEnabled?.(!!g.waves)
   r.setWavesIntensity?.(g.wavesIntensity / 100)

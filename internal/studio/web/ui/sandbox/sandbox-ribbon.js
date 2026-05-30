@@ -100,6 +100,8 @@ export function configureSandboxRibbonBridge(impl) {
     setSpecular:          (_on) => {},
     setGodBeams:          (_on) => {},
     setDoF:               (_on) => {},
+    setDoFDistance:       (_v) => {},
+    setDoFLevel:          (_v) => {},
     setWaterReflections:  (_on) => {},
     setWaves:             (_on) => {},
     setWavesIntensity:    (_v) => {},

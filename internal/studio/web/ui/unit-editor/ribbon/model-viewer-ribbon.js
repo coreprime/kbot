@@ -67,6 +67,8 @@ const _state = signal({
   specular:          true,
   godbeams:          true,
   dof:               false,
+  dofDistance:       500,         // %, /100 → onset distance multiplier (5×)
+  dofLevel:          100,         // %, /100 → blur-radius scale
   waterReflections:  true,
 
   bob:               true,
@@ -124,6 +126,8 @@ const _bridge = {
   setSpecular:           (_on) => {},
   setGodBeams:           (_on) => {},
   setDoF:                (_on) => {},
+  setDoFDistance:        (_v) => {},      // onset distance multiplier
+  setDoFLevel:           (_v) => {},      // blur-radius scale
   setWaterReflections:   (_on) => {},
 
   setBob:           (_on) => {},
@@ -163,7 +167,9 @@ export function configureModelViewerRibbonBridge(impl) {
     setEnvironment: (_e, _o) => {}, setTeamColor: (_t, _o) => {},
     setShadows: (_o) => {}, setShadowIntensity: (_v) => {}, setSelfShadow: (_o) => {},
     setReflections: (_o) => {}, setSpecular: (_o) => {},
-    setGodBeams: (_o) => {}, setDoF: (_o) => {}, setWaterReflections: (_o) => {},
+    setGodBeams: (_o) => {}, setDoF: (_o) => {},
+    setDoFDistance: (_v) => {}, setDoFLevel: (_v) => {},
+    setWaterReflections: (_o) => {},
     setBob: (_o) => {}, setBobAmount: (_v) => {}, setBobSpeed: (_v) => {},
     setWaves: (_o) => {}, setWavesIntensity: (_v) => {},
     setBgTerrain: (_o) => {}, setBgTerrainHeight: (_v) => {}, setBgTerrainScale: (_v) => {},

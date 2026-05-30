@@ -51,6 +51,15 @@ const AO_OFFSET = 8 * 4
 
 const SHADOW_MAP_SIZE = 1024
 
+// DoF tuning bases.  DOF_BASE_GAP is the window-depth gap from 1.0 that
+// puts the blur onset at the unit's default framing distance (~25 wu)
+// at a "1×" Distance setting; because window depth is ~inversely
+// proportional to world distance in our near/far range, the onset
+// distance scales as 1/gap, so a Distance multiplier m just divides the
+// gap.  DOF_BASE_BLUR is the max blur radius (px) at a "100 %" Amount.
+const DOF_BASE_GAP = 0.002
+const DOF_BASE_BLUR = 8
+
 // Shader sources live in shaders/{main,sky,ground,shadow,wire,dof}/
 // as .vert/.frag files so they open with proper GLSL highlighting in
 // editors.  shader-loader.js fetches + resolves `#include` directives
@@ -737,20 +746,24 @@ export class ModelRenderer {
     if (aniso && textureCache) textureCache.setAnisotropicExt(aniso)
 
     // DoF toggle + tuning parameters.  Default off so users see no
-    // surprises until they opt in via the Studio Options checkbox.
+    // surprises until they opt in via the Graphics Options menu.
     this.optDof = false
     // NDC depth is wildly nonlinear: with near=0.05 / far=6000,
-    // z_ndc=0.985 sits at only ~3 world units from the camera, so
-    // the old defaults were sweeping the unit itself into the blur
-    // zone.  Bumping focalDepth to 0.998 puts the in-focus plane at
-    // roughly 25 wu (~10x further) - matching where the unit sits at
-    // default framing.  focalRange widened to 0.0015 so the ramp out
-    // to full blur covers a meaningful distance instead of saturating
-    // a few world units past the unit.  Max blur dropped to 8 px
-    // since only the genuine background should pick it up now.
-    this.dofFocalDepth = 0.998
+    // z_ndc=0.985 sits at only ~3 world units from the camera.  The
+    // "in-focus" plane is therefore expressed as a window-depth value
+    // (uFocalDepth); blur ramps from there to uFocalDepth+range.
+    //
+    // In this near/far regime the depth GAP from 1.0 is ~inversely
+    // proportional to the onset world distance (gap ≈ near/distance),
+    // so the user-facing "Distance" control is a plain multiplier on a
+    // base onset (DOF_BASE_GAP → focalDepth 0.998 ≈ 25 wu at 1×).  The
+    // default is 5× — blur only the genuine far background, leaving the
+    // unit and its near surroundings sharp.  "Amount" scales the max
+    // blur radius off DOF_BASE_BLUR.
+    this.dofDistanceMul = 5
+    this.dofFocalDepth = 1 - DOF_BASE_GAP / this.dofDistanceMul
     this.dofFocalRange = 0.0015
-    this.dofMaxBlur = 8
+    this.dofMaxBlur = DOF_BASE_BLUR
     // Shader program init is deferred to ModelRenderer.init() — that
     // method fetches shader sources from shaders/ and links them.  Set
     // to true once init() has resolved so render() bails early when
@@ -1525,6 +1538,26 @@ export class ModelRenderer {
   // When off, the renderer skips the scene FBO entirely so the cost is
   // a single extra `if` per frame.
   setDoFEnabled(on) { this.optDof = !!on; this.requestRedraw() }
+
+  // setDoFDistance sets the blur-onset distance as a multiplier of the
+  // base (~25 wu) framing distance.  Higher = blur starts further out
+  // (only the deep background softens); 1× matches the legacy onset.
+  // Converts to the shader's window-depth focal plane via 1 - gap/m.
+  setDoFDistance(mult) {
+    const m = Math.max(0.2, Math.min(40, +mult || 1))
+    this.dofDistanceMul = m
+    this.dofFocalDepth = Math.max(0.9, Math.min(0.999995, 1 - DOF_BASE_GAP / m))
+    this.requestRedraw()
+  }
+
+  // setDoFLevel scales the maximum blur radius.  1.0 == DOF_BASE_BLUR
+  // (the legacy 8 px cap); 0 disables the blur without touching the
+  // toggle, 2.0 doubles it for a heavier cinematic look.
+  setDoFLevel(frac) {
+    const f = Math.max(0, Math.min(4, +frac || 0))
+    this.dofMaxBlur = DOF_BASE_BLUR * f
+    this.requestRedraw()
+  }
 
   // setBgTerrainEnabled toggles the background-mountain ring.  When
   // off, the vertex shader's uMountainActive=0 fast-path keeps the

@@ -128,6 +128,8 @@ export function wireSandboxRibbon() {
       setSpecular:          (on) => eachRenderer((r) => r.setSpecularEnabled?.(!!on)),
       setGodBeams:          (on) => eachRenderer((r) => r.setGodBeamsEnabled?.(!!on)),
       setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
+      setDoFDistance:       (v)  => eachRenderer((r) => r.setDoFDistance?.(v)),
+      setDoFLevel:          (v)  => eachRenderer((r) => r.setDoFLevel?.(v)),
       setWaterReflections:  (on) => eachRenderer((r) => r.setWaterReflectionsEnabled?.(!!on)),
       setWaves:             (on) => eachRenderer((r) => r.setWavesEnabled?.(!!on)),
       setWavesIntensity:    (v)  => eachRenderer((r) => r.setWavesIntensity?.(v)),
