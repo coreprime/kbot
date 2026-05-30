@@ -4913,6 +4913,52 @@ canvas {
   display: inline-block; width: 12px; height: 12px;
   border-radius: 2px; border: 1px solid var(--border);
 }
+/* Movement panel — cockpit gauges for the focused unit.  Two-column
+   layout: stats rows on top, two SVG dials below.  The dials are SVG
+   so the heading needle / pitch ladder scale crisply at any zoom. */
+.mv-mov-rows {
+  display: flex; flex-direction: column;
+  gap: 2px; padding: 6px 8px 4px;
+  font-family: ui-monospace, monospace;
+}
+.mv-mov-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px;
+}
+.mv-mov-row-label { color: var(--muted); }
+.mv-mov-row-val   { color: var(--text); }
+.mv-mov-row-unit  { color: var(--muted); font-size: 10px; }
+.mv-mov-phase     { color: #ffb84a; }
+.mv-mov-speed-bar {
+  height: 4px; margin: 2px 0;
+  background: var(--border); border-radius: 2px; overflow: hidden;
+}
+.mv-mov-speed-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3a6 0%, #7f7 50%, #ffb84a 100%);
+  transition: width 80ms linear;
+}
+.mv-mov-dials {
+  display: flex; gap: 4px;
+  padding: 4px 6px 8px;
+  justify-content: space-around;
+}
+.mv-mov-dial-wrap {
+  display: flex; flex-direction: column;
+  align-items: center;
+}
+.mv-mov-dial-caption {
+  font-size: 9px; color: var(--muted);
+  margin-top: 2px;
+  font-family: ui-monospace, monospace;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.mv-mov-dial, .mv-mov-attitude {
+  background: #0a0e10;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  display: block;
+}
 /* Music panel — retro mini-jukebox.  The marquee uses a CSS scroll
    animation on a duplicated text track so the loop is seamless, and the
    buttons keep the same Effects/Audio card chrome (.mv-fx-card-style

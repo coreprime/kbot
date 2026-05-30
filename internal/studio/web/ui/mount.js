@@ -35,6 +35,7 @@ import { AudioPanel } from '/ui/panels/audio-panel.js'
 import { EffectsPanel } from '/ui/panels/effects-panel.js'
 import { ProjectilesPanel } from '/ui/panels/projectiles-panel.js'
 import { MusicPanel } from '/ui/panels/music-panel.js'
+import { MovementPanel } from '/ui/panels/movement-panel.js'
 import { RendererPanel } from '/ui/panels/renderer-panel.js'
 import { ScriptCommandsPanel } from '/ui/panels/script-commands-panel.js'
 import { ControlsPanel } from '/ui/panels/controls-panel.js'
@@ -201,6 +202,7 @@ export function mountInspectorPanels() {
   _mountInto('mv-inspector-effects',    () => html`<${EffectsPanel} />`)
   _mountInto('mv-inspector-projectiles', () => html`<${ProjectilesPanel} />`)
   _mountInto('mv-inspector-music',       () => html`<${MusicPanel} />`)
+  _mountInto('mv-inspector-movement',    () => html`<${MovementPanel} />`)
   _mountInto('mv-inspector-camera',     () => html`<${RendererPanel} />`)
   _mountInto('mv-inspector-actions',    () => html`<${ScriptCommandsPanel} />`)
   _mountInto('mv-inspector-ports',      () => html`<${ControlsPanel} />`)

@@ -33,6 +33,7 @@ import {
   wireHotkeys,
   wrapCobWithAggregate,
   appendParticleProjectiles,
+  buildUnitMotion,
   disposeView,
 } from '../common/view-helpers.js'
 import { getReactUi } from '../host-context.js'
@@ -2157,6 +2158,10 @@ export class SandboxView {
     if (focused) {
       mv.cobPorts = focused.cobPorts
       mv.unitMeta = focused.meta || null
+      // Live motion telemetry for the Movement panel — snapshot of the
+      // engine unit's speed / heading / atkPhase etc.  Refreshed every
+      // refresh-tick publish via this getter being called again.
+      mv.unitMotion = buildUnitMotion(focused)
       Object.defineProperty(mv, 'cobDamage', {
         enumerable: true, configurable: true,
         get: () => 100 - (focused.health | 0),

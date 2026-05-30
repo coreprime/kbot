@@ -131,6 +131,80 @@ export function appendParticleProjectiles(engine, out) {
   }
 }
 
+// buildUnitMotion returns the live motion telemetry the Movement panel
+// reads off the inspector mv proxy.  Single-source so the sandbox view +
+// the unit-editor's MvControls produce identical shapes — the panel
+// renders the same regardless of which view is feeding it.
+//
+// Output shape:
+//   {
+//     speed, maxSpeed, accelerationWUPerSec2, brakeWUPerSec2,
+//     heading, pitch, headingDeg, pitchDeg,
+//     pos: {x, y, z},
+//     isMoving, moveTarget, atkPhase, attackTarget,
+//     bombRunBombsLeft, bombRunPoint,
+//     meta: { isAircraft, isHover, isHovercraft },
+//     // Derived:
+//     desiredSpeedFraction — current/max, [0, 1].
+//     bearingDeg — heading toward moveTarget (or attackTarget) if set.
+//   }
+//
+// Returns null when `unit` is missing — the panel maps null to an empty
+// state ("No Unit Selected" / "Multiple units selected").
+export function buildUnitMotion(unit) {
+  if (!unit) return null
+  // TA's FBI MaxVelocity is wu/frame at the 30 Hz locomotion clock — convert
+  // to wu/s for display alongside the engine's already-per-second speed.
+  // Same conversion the engine uses inside locomotion.js so the dial's
+  // "max" reading matches the unit's actual top speed.
+  const TA_MOVE_HZ = 30
+  const meta = unit.meta || {}
+  const maxSpeed = (meta.maxVelocity > 0) ? meta.maxVelocity * TA_MOVE_HZ : 0
+  const acceleration = (meta.acceleration > 0) ? meta.acceleration * TA_MOVE_HZ * TA_MOVE_HZ : 0
+  const brake = (meta.brakeRate > 0) ? meta.brakeRate * TA_MOVE_HZ * TA_MOVE_HZ : 0
+  const speed = unit.speed || 0
+  const heading = unit.heading || 0
+  // Aircraft pitch comes from the locomotion overlay; the engine doesn't
+  // currently store a per-unit pitch on the unit record.  We approximate
+  // by reading the _atk.atkPhase ("approach"/"egress"/"strafe") which is
+  // a more meaningful state for a player than a numeric pitch.  Pitch
+  // value left at 0 — the panel's attitude indicator stays level for
+  // ground units, which is correct.
+  const at = unit.attackTarget
+  const atkPhase = (unit._atk && unit._atk.atkPhase) || null
+  let bearingDeg = null
+  if (unit.moveTarget) {
+    bearingDeg = Math.atan2(unit.moveTarget.x - unit.pos.x, unit.moveTarget.z - unit.pos.z) * 180 / Math.PI
+  } else if (at && !at.dead) {
+    bearingDeg = Math.atan2(at.pos.x - unit.pos.x, at.pos.z - unit.pos.z) * 180 / Math.PI
+  }
+  return {
+    speed,
+    maxSpeed,
+    accelerationWUPerSec2: acceleration,
+    brakeWUPerSec2: brake,
+    heading,
+    pitch: 0,
+    headingDeg: (heading * 180 / Math.PI),
+    pitchDeg: 0,
+    pos: { x: unit.pos.x, y: unit.pos.y || 0, z: unit.pos.z },
+    isMoving: !!unit.isMoving,
+    moveTarget: unit.moveTarget ? { x: unit.moveTarget.x, z: unit.moveTarget.z } : null,
+    atkPhase,
+    attackTarget: at && !at.dead ? { id: at.id, name: at.name || '' } : null,
+    bombRunBombsLeft: (unit._bombRun && unit._bombRun.bombsLeft) || 0,
+    bombRunPoint: (unit._bombRun && unit._bombRun.point) ? [...unit._bombRun.point] : null,
+    meta: {
+      isAircraft:   !!meta.isAircraft,
+      isHover:      !!meta.isHover,
+      isHovercraft: !!meta.isHovercraft,
+      name: unit.name || '',
+    },
+    desiredSpeedFraction: maxSpeed > 0 ? Math.max(0, Math.min(1, speed / maxSpeed)) : 0,
+    bearingDeg,
+  }
+}
+
 // wrapCobWithAggregate returns a NON-mutating proxy of the given cob
 // binding with particles/audio overridden to the scene-wide
 // aggregators on `view`.  Object.create gives a fresh own-property

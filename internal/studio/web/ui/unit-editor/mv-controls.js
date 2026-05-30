@@ -29,6 +29,7 @@ import {
   wireHotkeys,
   wrapCobWithAggregate,
   appendParticleProjectiles,
+  buildUnitMotion,
   disposeView,
 } from '../common/view-helpers.js'
 
@@ -209,10 +210,18 @@ export class MvControls {
   // (which the binding's own emit helpers rely on).
   getInspectorMv() {
     const cob = this.viewer ? this.viewer.cob : null
+    // Unit editor adopts a single unit into the engine — fetch it so the
+    // Movement panel can read live speed/heading/atkPhase off it.  The
+    // adopt path tags the engine unit so unitById finds it; fall through
+    // to a null motion if the editor hasn't finished adoption yet.
+    const engine = this.engine
+    const adopted = (engine && this.viewer && this.viewer._adoptedUnitId != null)
+      ? engine.unitById(this.viewer._adoptedUnitId) : null
     return {
       camera: this.camera,
       renderer: this.viewer ? this.viewer.renderer : null,
       cob: cob ? wrapCobWithAggregate(this, cob) : null,
+      unitMotion: buildUnitMotion(adopted),
     }
   }
 

@@ -19,7 +19,7 @@ import { mv as mvSignal, runtimeTick, controlsDevSectionVisible, setControlsDevS
 import { panelSignals } from '/ui/common/panel-store.js'
 import {
   Ribbon, RibbonSection, RibbonButton,
-  RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow,
+  RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow, MenuSectionLabel,
   closeDropdownById,
 } from '/ui/common/ribbon.js'
 import { SplitMenuItems } from '/ui/common/split-host.js'
@@ -118,28 +118,44 @@ export function configureSandboxRibbonBridge(impl) {
   }, impl)
 }
 
-// _PANEL_ROWS — defines every panel-toggle row in the Developer
-// Tools dropdown.  Data-driven so adding a new floating panel only
-// needs one line here + a panel-store registration.
-const _PANEL_ROWS = [
-  { id: 'mv-inspector-scripts',    icon: '⏱', label: 'Runtime',
-    title: 'Runtime overlay — active script threads, instruction counters, sim ticks.' },
-  { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
-    title: 'Effects overlay — every live particle across every binding (projectiles, smoke, sparks).' },
-  { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
-    title: 'Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
-  { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
-    title: 'Music — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
-  { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
-    title: 'Audio overlay — every sound currently playing across every unit.' },
+// _PANEL_GROUPS — the Developer Tools dropdown groups its panel-toggle
+// rows by domain so the user finds inspectors of the same kind sitting
+// together: engine guts, graphics knobs, per-unit telemetry, and an
+// "Other" bucket for ambient utilities (Music + scene-wide Audio).  The
+// ungrouped header at the top is for one-off entries that don't belong
+// in any of the buckets — currently just the Sandbox Controls floating
+// panel.
+const _PANEL_TOP = [
   { id: 'sandbox-panel',           icon: '🛠', label: 'Sandbox Controls',
     title: 'Sandbox Controls — the floating Spawn panel.' },
-  { id: 'mv-inspector-camera',     icon: '🎥', label: 'Renderer',
-    title: 'Renderer overlay — camera pose, FPS, tracking checkbox.' },
-  { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
-    title: 'Unit Variables overlay — current value of every COB `static-var` the scripts share.' },
-  { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
-    title: 'Unit Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
+]
+const _PANEL_GROUPS = [
+  { label: 'Engine', rows: [
+    { id: 'mv-inspector-scripts',     icon: '⏱', label: 'Runtime',
+      title: 'Runtime overlay — active script threads, instruction counters, sim ticks.' },
+    { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
+      title: 'Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
+  ] },
+  { label: 'Graphics', rows: [
+    { id: 'mv-inspector-camera',     icon: '🎥', label: 'Renderer',
+      title: 'Renderer overlay — camera pose, FPS, tracking checkbox.' },
+    { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
+      title: 'Effects overlay — every live particle across every binding (projectiles, smoke, sparks).' },
+  ] },
+  { label: 'Units', rows: [
+    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
+      title: 'Unit Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
+    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
+      title: 'Unit Variables overlay — current value of every COB `static-var` the scripts share.' },
+    { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
+      title: 'Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
+  ] },
+  { label: 'Other', rows: [
+    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
+      title: 'Music — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
+    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
+      title: 'Audio overlay — every sound currently playing across every unit.' },
+  ] },
 ]
 
 // _PanelToggle — reads the panel's visibility signal directly so the
@@ -288,8 +304,14 @@ export function SandboxRibbon() {
               title="Developer Controls — show / hide the editors at the bottom of the Controls panel that let you set Health, Build %, Build stance, and the other per-unit COB ports."
               on=${devVisible}
               onChange=${(next) => setControlsDevSectionVisible(next)} />
-            ${_PANEL_ROWS.map((p) => html`
+            ${_PANEL_TOP.map((p) => html`
               <${_PanelToggle} key=${p.id} id=${p.id} icon=${p.icon} label=${p.label} title=${p.title} />
+            `)}
+            ${_PANEL_GROUPS.map((g) => html`
+              <${MenuSectionLabel} key=${g.label}>${g.label}<//>
+              ${g.rows.map((p) => html`
+                <${_PanelToggle} key=${p.id} id=${p.id} icon=${p.icon} label=${p.label} title=${p.title} />
+              `)}
             `)}
           <//>
         </div>

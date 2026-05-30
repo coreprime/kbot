@@ -329,27 +329,42 @@ const _COB_ENTRIES = [
   ] },
 ]
 
-const _VIEW_PANELS = [
-  { id: 'mv-inspector-scripts',    icon: '⚙', label: 'Runtime',
-    title: 'Toggle the Runtime overlay — every loaded unit’s live COB threads, grouped by unit, with PC + signal mask + a one-click debugger jump.' },
-  { id: 'mv-inspector-actions',    icon: '▶', label: 'Script Commands',
-    title: 'Toggle the Script Commands overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).' },
-  { id: 'mv-inspector-ports',      icon: '🎮', label: 'Controls',
-    title: 'Toggle the Controls overlay — drive the unit (Move, Aim+Fire Primary/Secondary/Tertiary) AND view+edit its COB unit-value ports (Active, Move/Fire orders, Health, Build %, etc.).' },
-  { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
-    title: 'Toggle the Unit Ports overlay — read-only view of every well-known COB unit-value port (ACTIVATION, STANDINGMOVE/FIREORDERS, HEALTH, BUILD_PERCENT_LEFT, YARD_OPEN, BUGGER_OFF, ARMORED, …).' },
-  { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
-    title: 'Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.' },
-  { id: 'mv-inspector-camera',     icon: '🎥', label: 'Renderer',
-    title: 'Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas’s current frame rate.' },
-  { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
-    title: 'Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding’s particle-pool occupancy.' },
-  { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
-    title: 'Toggle the Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
-  { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
-    title: 'Toggle the Music panel — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
-  { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
-    title: 'Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
+// _VIEW_PANEL_GROUPS — same domain bucketing the sandbox dev-tools menu
+// uses, mirrored here so the two menus feel parallel.  The unit editor
+// also exposes the per-script Controls + Script Commands inspectors
+// (sandbox routes those through the panel directly), so those live in
+// the same Units bucket.
+const _VIEW_PANEL_GROUPS = [
+  { label: 'Engine', rows: [
+    { id: 'mv-inspector-scripts',    icon: '⚙', label: 'Runtime',
+      title: 'Toggle the Runtime overlay — every loaded unit’s live COB threads, grouped by unit, with PC + signal mask + a one-click debugger jump.' },
+    { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
+      title: 'Toggle the Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
+  ] },
+  { label: 'Graphics', rows: [
+    { id: 'mv-inspector-camera',     icon: '🎥', label: 'Renderer',
+      title: 'Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas’s current frame rate.' },
+    { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
+      title: 'Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding’s particle-pool occupancy.' },
+  ] },
+  { label: 'Units', rows: [
+    { id: 'mv-inspector-actions',    icon: '▶', label: 'Script Commands',
+      title: 'Toggle the Script Commands overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).' },
+    { id: 'mv-inspector-ports',      icon: '🎮', label: 'Controls',
+      title: 'Toggle the Controls overlay — drive the unit (Move, Aim+Fire Primary/Secondary/Tertiary) AND view+edit its COB unit-value ports (Active, Move/Fire orders, Health, Build %, etc.).' },
+    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
+      title: 'Toggle the Unit Ports overlay — read-only view of every well-known COB unit-value port (ACTIVATION, STANDINGMOVE/FIREORDERS, HEALTH, BUILD_PERCENT_LEFT, YARD_OPEN, BUGGER_OFF, ARMORED, …).' },
+    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
+      title: 'Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.' },
+    { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
+      title: 'Toggle the Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
+  ] },
+  { label: 'Other', rows: [
+    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
+      title: 'Toggle the Music panel — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
+    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
+      title: 'Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
+  ] },
 ]
 
 // ── Sub-components ──────────────────────────────────────────────────
@@ -889,10 +904,12 @@ function ViewDropdown() {
         label="View"
         title="Toggle floating inspector overlays." />
       <${Dropdown} id="mv-view-dropdown">
-        <${MenuSectionLabel}>Inspectors<//>
-        ${_VIEW_PANELS.map((p) => html`
-          <${_ViewPanelToggle} key=${p.id} id=${p.id} icon=${p.icon}
-                               label=${p.label} title=${p.title} />
+        ${_VIEW_PANEL_GROUPS.map((g) => html`
+          <${MenuSectionLabel} key=${g.label}>${g.label}<//>
+          ${g.rows.map((p) => html`
+            <${_ViewPanelToggle} key=${p.id} id=${p.id} icon=${p.icon}
+                                 label=${p.label} title=${p.title} />
+          `)}
         `)}
         <${MenuSectionLabel}>Layout<//>
         <${SplitMenuItems}
