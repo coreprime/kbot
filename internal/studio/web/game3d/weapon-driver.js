@@ -21,6 +21,7 @@ import {
   SFX_PROJECTILE_DGUN,
   SFX_PROJECTILE_LASER,
   SFX_PROJECTILE_MISSILE,
+  SFX_PROJECTILE_SPRITE,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
 } from '../engine/cob-particles.js'
@@ -35,6 +36,7 @@ import {
   WEAPON_RENDERTYPE_LIGHTNING,
   hasRenderType,
 } from '../engine/weapon-rendertype.js'
+import { loadWeaponBitmap } from '../engine/weapon-bitmap-loader.js'
 
 // Per-kind brightness multipliers applied on top of the palette-derived
 // hue so each projectile family keeps its visual identity even when the
@@ -52,6 +54,11 @@ const PROJECTILE_BRIGHTNESS = {
   [SFX_PROJECTILE_SHELL]:   1.1,
   [SFX_PROJECTILE_MISSILE]: 1.1,
   [SFX_PROJECTILE_BULLET]:  1.0,
+  // Sprite kind multiplies the SAMPLED TEXEL by the tint — we want the
+  // GAF-baked colours to come through verbatim (the bitmap projectile
+  // sprites are pre-shaded by the original artists), so the per-kind
+  // tint is white and the brightness multiplier is 1.0.
+  [SFX_PROJECTILE_SPRITE]:  1.0,
 }
 
 // Per-kind fallback hues used when the weapon's TDF doesn't ship a
@@ -75,6 +82,13 @@ const PROJECTILE_FALLBACK_COLOUR = {
 // 0..2 float range — the additive blend tolerates >1 channels and the
 // post-FX bloom relies on them to bloom on.
 export function projectileColor(weapon, kind, palette) {
+  // Sprite particles render a pre-painted GAF bitmap; the weapon's
+  // `color=` field on rendertype=4 is the SLOT index (a small enum
+  // selecting which fx.gaf sequence to use), NOT a palette tint.
+  // Returning white means the sampled texel passes through unmodified
+  // and the projectile reads as the artist drew it.  Documented in
+  // engine/weapon-bitmap-loader.js + internal/studio/weapon_bitmap.go.
+  if (kind === SFX_PROJECTILE_SPRITE) return [1.0, 1.0, 1.0, 1.0]
   const w = weapon || {}
   const mul = PROJECTILE_BRIGHTNESS[kind] || 1.0
   const idx = (w.colorIdx > 0) ? w.colorIdx : (w.color2Idx > 0 ? w.color2Idx : 0)
@@ -168,6 +182,11 @@ const PROJECTILE_BASE_SIZE = {
   [SFX_PROJECTILE_SHELL]:   5.0,
   [SFX_PROJECTILE_MISSILE]: 4.0,
   [SFX_PROJECTILE_BULLET]:  2.5,
+  // Animated bitmap projectile — the EMG-class yellow bolt reads at
+  // roughly 8 world units (about the diameter of a Peewee gun barrel).
+  // AoE-scaling on top still applies, so heavier weapons get a bigger
+  // sprite without the artist's hand-painted bolt blowing up unreadably.
+  [SFX_PROJECTILE_SPRITE]:  8.0,
 }
 
 // projectileSize — visual sprite size derived from the weapon's blast
@@ -358,6 +377,45 @@ export class SmokeTrailManager {
   clear() { this._trails.length = 0 }
 }
 
+// resolveSpriteId asks the renderer whether the named weapon already
+// has a registered fx.gaf bitmap sprite.  On miss it kicks off an
+// async fetch + registration so a *subsequent* shot of the same
+// weapon picks up the real sprite — the current shot uses the
+// synthetic fallback (BULLET/SHELL/MISSILE) so the projectile is
+// still visible while the asset loads.
+//
+// Only rendertype=4 weapons with a color slot in the supported range
+// have bitmap projectiles; everything else short-circuits to 0.  See
+// internal/studio/weapon_bitmap.go for the slot→sequence mapping +
+// the documented "color=2 is a hack" reproduction.
+function resolveSpriteId(binding, weapon) {
+  if (!binding || !binding._renderer || !weapon) return 0
+  if (!weapon.name) return 0
+  if (!hasRenderType(weapon) || weapon.renderType !== WEAPON_RENDERTYPE_BITMAP) return 0
+  const slot = +weapon.color || 0
+  // 255 is the EARTHQUAKE "(No art)" sentinel — don't fetch.  Anything
+  // outside the documented slot range falls through too so a wildly
+  // mis-set TDF doesn't keep round-tripping 404s.
+  if (slot < 0 || slot > 7) return 0
+  const r = binding._renderer
+  const existing = r.weaponBitmapId ? r.weaponBitmapId(weapon.name) : 0
+  if (existing) return existing
+  // First-sight: kick off the async load; subsequent shots will pick
+  // up the registered sprite.  Guard with a per-binding seen-set so we
+  // don't spam fetches for the same weapon (loader cache de-dupes the
+  // network hit anyway, but the closure churn isn't free either).
+  if (!binding._sprFetching) binding._sprFetching = new Set()
+  const key = String(weapon.name).toUpperCase()
+  if (binding._sprFetching.has(key)) return 0
+  binding._sprFetching.add(key)
+  loadWeaponBitmap(weapon.name).then((sprite) => {
+    if (sprite && r.registerWeaponBitmap) r.registerWeaponBitmap(weapon.name, sprite)
+    // Leave key in the set — registered sprites win the cache check on
+    // next call regardless, and re-fetching on hot-reload is fine.
+  }).catch(() => { /* loader returns null on error; nothing to do */ })
+  return 0
+}
+
 // spawnProjectile emits a TA-style projectile from `anchor` toward
 // `target` at the weapon's FBI velocity.  Handles three categories:
 //
@@ -434,7 +492,15 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   const lifeFactor = weapon.ballistic ? 1.5 : 1.0
   const lifeMs = Math.max(300, (range / v) * 1000 * lifeFactor)
 
-  const kind = preKind
+  // Animated-bitmap upgrade: rendertype=4 weapons can render a real
+  // fx.gaf sprite strip instead of the synthetic point particle.  We
+  // ask the renderer for an already-registered sprite id; on miss it
+  // queues an async load so the *next* shot gets the upgrade and
+  // this one keeps using the BULLET/SHELL/MISSILE fallback from
+  // pickProjectileKind.  See resolveSpriteId above for the slot-
+  // gating rules.
+  const spriteId = resolveSpriteId(binding, weapon)
+  const kind = spriteId > 0 ? SFX_PROJECTILE_SPRITE : preKind
   // Per-shot visual props derived from the weapon's TDF — colour from
   // the palette index, size + lightStrength from the blast radius.
   // emit() honours each opt, falling back to the kind defaults when a
@@ -453,6 +519,7 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
     size,
   }
   if (light > 0) emitOpts.lightStrength = light
+  if (spriteId > 0) emitOpts.spriteId = spriteId
   binding.particles.emit(kind, anchor, emitOpts)
   playWeaponSound({ binding, weapon, anchor })
   // Remember the weapon on the binding so _onParticleExpire knows what

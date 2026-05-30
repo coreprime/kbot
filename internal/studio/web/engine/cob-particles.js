@@ -35,6 +35,14 @@ export const SFX_PROJECTILE_LASER  = 204
 // for ANY TDF that sets `smoketrail=1` (rockets, AAS, plasma cannons
 // with smoke).
 export const SFX_PROJECTILE_MISSILE = 205
+// Animated bitmap projectile — rendered as a billboarded textured quad
+// whose frames cycle from an fx.gaf sprite sheet (one strip per stock
+// `rendertype=4` weapon variant).  Carries a `spriteId` opt that the
+// renderer looks up in its sprite registry to find the atlas texture +
+// frame metadata.  See game3d/weapon-bitmap-loader.js + the bitmap
+// shader path.  Falls back to a coloured point sprite when the sprite
+// hasn't loaded yet (spriteId==0).
+export const SFX_PROJECTILE_SPRITE = 206
 export const SFX_NANO_PARTICLES = 16  // construction nano lathe stream
 export const SFX_WAKE           = 257 // ship wake (handled by the renderer's water shader; pool tag for future)
 // Weapon projectiles — bright travelling pellets that fly from the
@@ -142,6 +150,13 @@ const KIND_DEFAULTS = {
   // visibly drags a white wake behind it.  Life is sized in opts to
   // cover the actual flight time.
   [SFX_PROJECTILE_MISSILE]: { color: [1.90, 1.40, 0.40, 1.00], size: 4.0, lifeMs: 3000, riseSpeed: 0.0, drift: 0.0 },
+  // Animated bitmap projectile — visual hue is the texture itself; the
+  // colour tint here is white (multiplied with the sampled texel) so the
+  // sprite's painted yellow / blue / red shows through unmodified.  Size
+  // is a sane default; the spawner overrides per-shot based on the
+  // weapon's AoE / sprite scale.  noFade is the typical projectile
+  // behaviour so the bolt reads as a solid object until impact.
+  [SFX_PROJECTILE_SPRITE]: { color: [1.00, 1.00, 1.00, 1.00], size: 8.0, lifeMs: 4000, riseSpeed: 0.0, drift: 0.0 },
 }
 
 export class ParticlePool {
@@ -188,6 +203,15 @@ export class ParticlePool {
     // chain-burst, etc.) knows what KIND of particle is expiring at
     // its last position.  Uint16 covers our SFX_* range easily.
     this.kind = new Uint16Array(capacity)
+    // Animated-sprite particle metadata.  spriteId is a numeric handle
+    // into the renderer's sprite registry (see weapon-bitmap-loader.js);
+    // 0 means "no sprite" (the particle renders as a coloured point
+    // sprite via the existing path).  age tracks tick-driven elapsed
+    // milliseconds since spawn so the renderer can compute the current
+    // animation frame deterministically — Step at any sim speed advances
+    // the visible frame by exactly its tick share, not by wall-clock.
+    this.spriteId = new Uint16Array(capacity)
+    this.age      = new Float32Array(capacity)
     this.alive = new Uint8Array(capacity)
     this.count = 0
     // onExpire(slot) — optional callback invoked when a particle's
@@ -252,6 +276,11 @@ export class ParticlePool {
     // Per-particle kind so onExpire can dispatch the right impact
     // burst (small bullet hit vs. d-gun blast vs. missile detonation).
     this.kind[slot] = kind | 0
+    // Sprite handle + zero-age start.  Defaults to 0 (no sprite) so
+    // the existing point-sprite render path stays unchanged for every
+    // non-bitmap particle.
+    this.spriteId[slot] = (opts.spriteId | 0) || 0
+    this.age[slot] = 0
     this.alive[slot] = 1
   }
 
@@ -273,6 +302,10 @@ export class ParticlePool {
         this.alive[i] = 0
         continue
       }
+      // Tick-driven age advance.  Animated sprites compute frame index
+      // from age + sprite metadata; using sim-scaled dtMs (the same
+      // signal that drives motion + life) keeps Step deterministic.
+      this.age[i] += dtMs
       this.x[i] += this.vx[i] * dt
       this.y[i] += this.vy[i] * dt
       this.z[i] += this.vz[i] * dt
@@ -306,7 +339,7 @@ export class ParticlePool {
       // Grow once - particle counts plateau quickly.  Doubling
       // matches the standard amortised-O(1) growth pattern.
       const nc = this.capacity * 2
-      for (const name of ['x','y','z','vx','vy','vz','r','g','b','a','a0','size','life','life0','gravity','lightStrength']) {
+      for (const name of ['x','y','z','vx','vy','vz','r','g','b','a','a0','size','life','life0','gravity','lightStrength','age']) {
         const next = new Float32Array(nc)
         next.set(this[name])
         this[name] = next
@@ -316,10 +349,13 @@ export class ParticlePool {
         next.set(this[name])
         this[name] = next
       }
-      // `kind` is Uint16 so it lives separately from the Uint8 group.
-      const nextKind = new Uint16Array(nc)
-      nextKind.set(this.kind)
-      this.kind = nextKind
+      // `kind` + `spriteId` are Uint16 so they live separately from the
+      // Uint8 / Float32 groups.
+      for (const name of ['kind','spriteId']) {
+        const next = new Uint16Array(nc)
+        next.set(this[name])
+        this[name] = next
+      }
       this.capacity = nc
     }
     const slot = this.count
@@ -338,6 +374,8 @@ export class ParticlePool {
     this.noFade[to] = this.noFade[from]
     this.lightStrength[to] = this.lightStrength[from]
     this.kind[to] = this.kind[from]
+    this.spriteId[to] = this.spriteId[from]
+    this.age[to] = this.age[from]
     this.alive[to] = 1
   }
 }

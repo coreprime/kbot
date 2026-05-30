@@ -430,6 +430,7 @@ export class ModelRenderer {
       this.#initGroundProgram(sources.ground.vs, sources.ground.fs)
       this.#initWireProgram(sources.wire.vs, sources.wire.fs)
       this.#initParticlesProgram(sources.particles.vs, sources.particles.fs)
+      this.#initSpritesProgram(sources.sprites.vs, sources.sprites.fs)
       this.#initImpostorProgram(sources.impostor.vs, sources.impostor.fs)
       if (this._depthExt) {
         this.#initShadowFBO()
@@ -2023,11 +2024,13 @@ export class ModelRenderer {
         if (pool && pool.count > 0 && particlesVisible) {
           this._particlePool = pool
           this.#renderParticles()
+          this.#renderSpriteParticles()
         }
       }
       this._particlePool = savedPool
     } else {
       this.#renderParticles()
+      this.#renderSpriteParticles()
     }
 
     // When the scene rendered into our offscreen FBO, run the post
@@ -3675,6 +3678,202 @@ export class ModelRenderer {
     // Reset to the studio's default alpha blend so anything drawn
     // after this pass (currently nothing, but defensive in case the
     // pipeline gains a post-pass) starts from a known state.
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+  }
+
+  // #initSpritesProgram links the animated-bitmap projectile shader and
+  // allocates the interleaved-attribute VBO for the per-frame upload.
+  // Layout: pos(3) + color(4) + size(1) + uvRect(4) = 12 floats per
+  // particle.  Initial capacity matches the regular particle pool; the
+  // upload path grows the buffer if a frame ever needs more.
+  //
+  // Sprites are batched by spriteId — one draw call per unique atlas
+  // texture in flight.  Stock TA only ever has color=1 and color=2 in
+  // play at once (PlasmaSm + PlasmaMd), so the typical batch count
+  // stays at 1-2 draw calls per frame.
+  #initSpritesProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programSprites = prog
+    const gl = this.gl
+    this.aSprPos = gl.getAttribLocation(prog, 'aPos')
+    this.aSprColor = gl.getAttribLocation(prog, 'aColor')
+    this.aSprSize = gl.getAttribLocation(prog, 'aSize')
+    this.aSprUvRect = gl.getAttribLocation(prog, 'aUvRect')
+    this.uSprProj = gl.getUniformLocation(prog, 'uProj')
+    this.uSprView = gl.getUniformLocation(prog, 'uView')
+    this.uSprViewport = gl.getUniformLocation(prog, 'uViewport')
+    this.uSprAtlas = gl.getUniformLocation(prog, 'uAtlas')
+    this._sprCapacity = 256
+    this._sprInterleaved = new Float32Array(this._sprCapacity * 12)
+    this._sprVBO = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._sprVBO)
+    gl.bufferData(gl.ARRAY_BUFFER, this._sprInterleaved.byteLength, gl.DYNAMIC_DRAW)
+    // Sprite registry: id → {texture, frameCount, frameWidth, ...}.
+    // id 0 is reserved as "no sprite" so a zero-default in the pool
+    // means "fall back to coloured point particle."
+    this._sprRegistry = new Map()
+    this._sprNextId = 1
+    // Reverse cache so the same weapon name → same id across re-fires.
+    this._sprWeaponToId = new Map()
+  }
+
+  // registerWeaponBitmap takes the metadata returned by
+  // weapon-bitmap-loader.js, uploads the sprite sheet as a GL texture,
+  // and returns a numeric sprite id the particle pool stores per
+  // particle.  Idempotent per weapon name — calling twice with the
+  // same name returns the cached id without re-uploading.
+  registerWeaponBitmap(weaponName, sprite) {
+    if (!sprite || !sprite.image) return 0
+    if (!this.programSprites || !this.gl) return 0
+    const key = String(weaponName || '').trim().toUpperCase()
+    if (key && this._sprWeaponToId.has(key)) return this._sprWeaponToId.get(key)
+    const gl = this.gl
+    const tex = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    // Premultiplied alpha matches the additive blend we use in the
+    // sprites fragment shader.  Without it, the GAF transparency index
+    // would bleed dark edges into bright projectile sprites.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sprite.image)
+    // CLAMP_TO_EDGE so the per-frame UV sub-rect doesn't bleed into the
+    // adjacent frame's column when the float math overshoots by an
+    // epsilon at the cell boundary.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    // LINEAR filtering keeps the chunky sprite from pixelating as it
+    // grows on screen; the projectile is pretty small anyway so mipmap
+    // overhead isn't worth it.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+    const id = this._sprNextId++
+    this._sprRegistry.set(id, {
+      texture:         tex,
+      frameCount:      sprite.frameCount,
+      frameWidth:      sprite.frameWidth,
+      frameHeight:     sprite.frameHeight,
+      sheetWidth:      sprite.sheetWidth,
+      sheetHeight:     sprite.sheetHeight,
+      frameDurationMs: sprite.frameDurationMs,
+    })
+    if (key) this._sprWeaponToId.set(key, id)
+    this.requestRedraw()
+    return id
+  }
+
+  // hasWeaponBitmap is a quick lookup used by the weapon-driver to know
+  // whether to spawn a textured sprite vs. the synthetic point sprite.
+  hasWeaponBitmap(weaponName) {
+    const key = String(weaponName || '').trim().toUpperCase()
+    return key ? this._sprWeaponToId.has(key) : false
+  }
+
+  // weaponBitmapId returns the registered sprite id for a weapon name,
+  // or 0 when no bitmap has been registered.  Caller passes the id as
+  // opts.spriteId to particles.emit so the renderer's sprite pass
+  // picks it up.
+  weaponBitmapId(weaponName) {
+    const key = String(weaponName || '').trim().toUpperCase()
+    return (key && this._sprWeaponToId.get(key)) || 0
+  }
+
+  // #renderSpriteParticles draws every alive particle with spriteId>0
+  // as a textured billboarded point quad.  Particles are partitioned
+  // by spriteId (one draw call per atlas).  Runs AFTER #renderParticles
+  // so the cone-shaped smoke trail behind a sprite projectile reads
+  // correctly under it; the additive blend means ordering between the
+  // bright sprite and its trail isn't visually critical.
+  #renderSpriteParticles() {
+    const pool = this._particlePool
+    if (!pool || pool.count === 0 || !this.programSprites) return
+    if (!this._sprRegistry || this._sprRegistry.size === 0) return
+    const gl = this.gl
+
+    // First pass: bucket alive sprite particles by spriteId.  Most
+    // frames have ≤ 2 unique atlases in flight (PlasmaSm + PlasmaMd in
+    // stock TA), so a Map keyed by the small numeric id beats sorting.
+    let buckets = null
+    for (let i = 0; i < pool.count; i++) {
+      const sid = pool.spriteId[i]
+      if (!sid) continue
+      if (!this._sprRegistry.has(sid)) continue
+      if (!buckets) buckets = new Map()
+      let arr = buckets.get(sid)
+      if (!arr) { arr = []; buckets.set(sid, arr) }
+      arr.push(i)
+    }
+    if (!buckets) return
+
+    // Grow the interleaved scratch buffer if any bucket overflows our
+    // capacity.  Sized to the largest bucket (we re-use the buffer
+    // across draw calls).
+    let maxBucket = 0
+    for (const arr of buckets.values()) if (arr.length > maxBucket) maxBucket = arr.length
+    if (maxBucket > this._sprCapacity) {
+      while (this._sprCapacity < maxBucket) this._sprCapacity *= 2
+      this._sprInterleaved = new Float32Array(this._sprCapacity * 12)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._sprVBO)
+      gl.bufferData(gl.ARRAY_BUFFER, this._sprInterleaved.byteLength, gl.DYNAMIC_DRAW)
+    }
+
+    gl.useProgram(this.programSprites)
+    gl.uniformMatrix4fv(this.uSprProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uSprView, false, this.camera.viewMatrix)
+    gl.uniform2f(this.uSprViewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    gl.uniform1i(this.uSprAtlas, 0)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._sprVBO)
+    const STRIDE = 12 * 4
+    gl.enableVertexAttribArray(this.aSprPos)
+    gl.vertexAttribPointer(this.aSprPos, 3, gl.FLOAT, false, STRIDE, 0)
+    gl.enableVertexAttribArray(this.aSprColor)
+    gl.vertexAttribPointer(this.aSprColor, 4, gl.FLOAT, false, STRIDE, 3 * 4)
+    gl.enableVertexAttribArray(this.aSprSize)
+    gl.vertexAttribPointer(this.aSprSize, 1, gl.FLOAT, false, STRIDE, 7 * 4)
+    gl.enableVertexAttribArray(this.aSprUvRect)
+    gl.vertexAttribPointer(this.aSprUvRect, 4, gl.FLOAT, false, STRIDE, 8 * 4)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.ONE, gl.ONE) // additive, matches particle pass
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthMask(false)
+
+    for (const [sid, indices] of buckets) {
+      const sprite = this._sprRegistry.get(sid)
+      const data = this._sprInterleaved
+      const frameWidthUV = sprite.frameWidth / sprite.sheetWidth
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k]
+        // Frame index from particle age — clamped to [0..frameCount-1]
+        // by mod so the strip loops naturally if a projectile outlives
+        // one full cycle.
+        const frame = Math.floor(pool.age[i] / sprite.frameDurationMs) % sprite.frameCount
+        const u0 = frame * frameWidthUV
+        const u1 = u0 + frameWidthUV
+        const o = k * 12
+        data[o + 0]  = pool.x[i]
+        data[o + 1]  = pool.y[i]
+        data[o + 2]  = pool.z[i]
+        data[o + 3]  = pool.r[i]
+        data[o + 4]  = pool.g[i]
+        data[o + 5]  = pool.b[i]
+        data[o + 6]  = pool.a[i]
+        data[o + 7]  = pool.size[i]
+        data[o + 8]  = u0
+        data[o + 9]  = 0   // v0
+        data[o + 10] = u1
+        data[o + 11] = 1   // v1
+      }
+      gl.bindTexture(gl.TEXTURE_2D, sprite.texture)
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, indices.length * 12))
+      gl.drawArrays(gl.POINTS, 0, indices.length)
+    }
+
+    gl.depthMask(true)
+    gl.disableVertexAttribArray(this.aSprPos)
+    gl.disableVertexAttribArray(this.aSprColor)
+    gl.disableVertexAttribArray(this.aSprSize)
+    gl.disableVertexAttribArray(this.aSprUvRect)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
   }
 

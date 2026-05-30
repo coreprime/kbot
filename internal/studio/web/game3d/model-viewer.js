@@ -363,6 +363,11 @@ export class ModelViewer {
           // knowledge of the renderer's audio mechanism, so we inject it
           // here at binding-construction time.
           this.cob = new CobBinding(model, this._unit, { audio: new AudioPool() })
+          // Attach the renderer so weapon-driver.spawnProjectile can
+          // look up registered fx.gaf bitmap sprites for rendertype=4
+          // weapons (EMG, plasma, flak…).  Mirrors the sandbox view's
+          // wiring of binding._renderer + _explosionOverlay.
+          this.cob._renderer = this.renderer
           // driveTick:false — the unit-editor tab owns the per-frame
           // tick loop since Stage B of the split refactor.  The
           // renderer still reads binding.particles + getSceneLight

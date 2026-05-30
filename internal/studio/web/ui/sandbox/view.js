@@ -264,17 +264,21 @@ export class SandboxView {
       )
       // Install on every binding the engine has already spawned (case
       // where the view re-attaches to an existing scene), then keep up
-      // by subscribing to future spawns.
+      // by subscribing to future spawns.  Also attach a reference to
+      // the renderer itself so weapon-driver.spawnProjectile can look
+      // up registered fx.gaf bitmap sprites (rendertype=4 weapons).
       if (this.scene && this.scene.engine) {
         for (const u of this.scene.engine.units?.() || []) {
-          if (u && u.binding && !u.binding._explosionOverlay) {
-            u.binding._explosionOverlay = this._explosionOverlay
+          if (u && u.binding) {
+            if (!u.binding._explosionOverlay) u.binding._explosionOverlay = this._explosionOverlay
+            if (!u.binding._renderer) u.binding._renderer = this.renderer
           }
         }
         this._explosionSpawnUnsub = this.scene.engine.on?.('spawn', (ev) => {
           const inst = ev && ev.unit
-          if (inst && inst.binding && !inst.binding._explosionOverlay) {
-            inst.binding._explosionOverlay = this._explosionOverlay
+          if (inst && inst.binding) {
+            if (!inst.binding._explosionOverlay) inst.binding._explosionOverlay = this._explosionOverlay
+            if (!inst.binding._renderer) inst.binding._renderer = this.renderer
           }
         }) || null
       }

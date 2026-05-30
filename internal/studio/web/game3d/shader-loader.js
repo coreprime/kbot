@@ -97,6 +97,7 @@ export const SHADER_MANIFEST = {
   bloomBright: { vs: 'bloom/bloom.vert',       fs: 'bloom/bright.frag' },
   bloomBlur:   { vs: 'bloom/bloom.vert',       fs: 'bloom/blur.frag' },
   particles: { vs: 'particles/particles.vert', fs: 'particles/particles.frag' },
+  sprites:   { vs: 'sprites/sprites.vert',     fs: 'sprites/sprites.frag' },
   impostor:  { vs: 'impostor/impostor.vert',   fs: 'impostor/impostor.frag' },
 }
 

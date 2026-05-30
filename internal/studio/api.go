@@ -52,6 +52,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/music", handleMusicList)
 	mux.HandleFunc("/api/studio/music/", handleMusicStream)
 	mux.HandleFunc("/api/studio/weapon-fx/", handleWeaponFx)
+	mux.HandleFunc("/api/studio/weapon-bitmap/", handleWeaponBitmap)
 	registerModelAPI(mux)
 	registerCobAPI(mux)
 	registerUnitAPI(mux)
