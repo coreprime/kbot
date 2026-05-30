@@ -42,7 +42,9 @@ func Marshal(v any) ([]byte, error) {
 	}
 
 	var b strings.Builder
-	writeElements(&b, els, 0)
+	if err := writeElems(&b, els, 0); err != nil {
+		return nil, err
+	}
 	return []byte(b.String()), nil
 }
 

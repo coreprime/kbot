@@ -3,14 +3,12 @@ package tak
 import "github.com/coreprime/kbot/formats/gamedata/common"
 
 // Side is a [SIDEn] section of gamedata/sidedata.tdf: the identity, art and
-// audio of one playable kingdom (Aramon, Veruna, Taros, Zhon, Creon).
+// audio of one playable kingdom (Aramon, Veruna, Taros, Zhon, Creon). Fields
+// shared with Total Annihilation live on the embedded common.SideBase.
 type Side struct {
-	Key string `tdf:",name"` // section header, e.g. SIDE0
+	common.SideBase
 
-	Name       string `tdf:"name,omitempty"`
-	NamePrefix string `tdf:"nameprefix,omitempty"`
-	Commander  string `tdf:"commander,omitempty"`
-	God        string `tdf:"god,omitempty"`
+	God string `tdf:"god,omitempty"`
 
 	Palette      string `tdf:"palette,omitempty"`
 	BuildPalette string `tdf:"buildpalette,omitempty"`
@@ -36,7 +34,7 @@ type Side struct {
 
 	UnderAttackSound string `tdf:"underattack_sound,omitempty"`
 	UnderAttackDelay int    `tdf:"underattack_delay,omitempty"`
-
-	// Remaining preserves any other key=value so the file round-trips.
-	Remaining map[string]string `tdf:",remaining"`
 }
+
+// Side satisfies the shared common.Side interface via its embedded base.
+var _ common.Side = (*Side)(nil)

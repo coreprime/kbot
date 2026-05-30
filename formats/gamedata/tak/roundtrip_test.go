@@ -209,4 +209,7 @@ func TestRoundTripGeneric(t *testing.T) {
 	} {
 		roundTripDir(t, root, sub, tdfOnly, sec)
 	}
+	// anims/*.tsf are nested animation-sequence definitions ([FrameN]/[LayerN])
+	// in TDF grammar.
+	roundTripDir(t, root, "anims", map[string]bool{".tsf": true}, sec)
 }

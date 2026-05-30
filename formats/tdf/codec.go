@@ -161,28 +161,63 @@ func (p *parser) parseField() (*element, bool) {
 	return nil, false
 }
 
-// writeElements renders elements back to TDF text with tab indentation.
-func writeElements(b *strings.Builder, els []*element, depth int) {
-	pad := strings.Repeat("\t", depth)
-	for _, el := range els {
-		if el.section {
-			b.WriteString(pad)
-			b.WriteByte('[')
-			b.WriteString(el.key)
-			b.WriteString("]\n")
-			b.WriteString(pad)
-			b.WriteString("{\n")
-			writeElements(b, el.children, depth+1)
-			b.WriteString(pad)
-			b.WriteString("}\n")
-			continue
-		}
-		b.WriteString(pad)
-		b.WriteString(el.key)
-		b.WriteByte('=')
-		b.WriteString(el.value)
-		b.WriteString(";\n")
+// tokenWriter is the subset of writer behaviour the TDF emitter needs. Both
+// *strings.Builder (in-memory Marshal/Canonicalize) and *bufio.Writer (the
+// streaming Encoder) satisfy it.
+type tokenWriter interface {
+	WriteString(string) (int, error)
+	WriteByte(byte) error
+}
+
+// errWriter accumulates the first write error so the emitter can stay
+// branch-free; callers check err once at the end.
+type errWriter struct {
+	w   tokenWriter
+	err error
+}
+
+func (e *errWriter) str(s string) {
+	if e.err == nil {
+		_, e.err = e.w.WriteString(s)
 	}
+}
+
+func (e *errWriter) ch(c byte) {
+	if e.err == nil {
+		e.err = e.w.WriteByte(c)
+	}
+}
+
+// writeElems renders elements back to TDF text with tab indentation.
+func writeElems(w tokenWriter, els []*element, depth int) error {
+	e := &errWriter{w: w}
+	for _, el := range els {
+		e.writeElem(el, depth)
+	}
+	return e.err
+}
+
+func (e *errWriter) writeElem(el *element, depth int) {
+	pad := strings.Repeat("\t", depth)
+	if el.section {
+		e.str(pad)
+		e.ch('[')
+		e.str(el.key)
+		e.str("]\n")
+		e.str(pad)
+		e.str("{\n")
+		for _, c := range el.children {
+			e.writeElem(c, depth+1)
+		}
+		e.str(pad)
+		e.str("}\n")
+		return
+	}
+	e.str(pad)
+	e.str(el.key)
+	e.ch('=')
+	e.str(el.value)
+	e.str(";\n")
 }
 
 // Canonicalize parses TDF bytes and re-emits them with normalised whitespace and
@@ -194,7 +229,9 @@ func Canonicalize(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	var b strings.Builder
-	writeElements(&b, els, 0)
+	if err := writeElems(&b, els, 0); err != nil {
+		return nil, err
+	}
 	return []byte(b.String()), nil
 }
 
