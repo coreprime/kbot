@@ -193,6 +193,34 @@ type unitWeaponJSON struct {
 	// one-shot: after the first fire, the slot's target is cleared so
 	// the burst loop exits instead of re-firing on every reload.
 	CommandFire bool `json:"commandFire"`
+	// Dropped: TDF `dropped=1`.  A gravity bomb — the projectile has no
+	// propulsion; it's released at the carrier's velocity and falls under
+	// gravity.  Bombers release these over the target rather than firing
+	// straight at it; the targeting cursor switches to the airstrike glyph.
+	Dropped bool `json:"dropped"`
+	// VLaunch: TDF `vlaunch=1`.  Vertical-launch missile — leaves the rail
+	// straight up along the weapon mount, climbs for an ascent phase, then
+	// pitches over toward the target and homes the rest of the way.
+	VLaunch bool `json:"vlaunch"`
+	// Tolerance / PitchTolerance: TDF `tolerance` / `pitchtolerance`, in TA
+	// angle units (65536 = full circle).  The weapon may only OPEN FIRE once
+	// the firing unit / turret faces the target within Tolerance on the yaw
+	// axis (and PitchTolerance on pitch).  Out of tolerance, the unit must
+	// rotate (or the turret aim) to face before the shot is allowed.  Zero
+	// when the TDF omits it — treated as "no constraint" by the client.
+	Tolerance      int `json:"tolerance"`
+	PitchTolerance int `json:"pitchTolerance"`
+	// TurnRate: TDF `turnrate`, in TA angle units / frame — the missile's
+	// own homing turn rate (distinct from the unit FBI TurnRate).  Guided
+	// projectiles curve toward the target at this rate; 0 = unguided.
+	TurnRate int `json:"turnRate"`
+	// FlightTimeSec: TDF `weapontimer`, seconds the projectile self-destructs
+	// after if it hasn't hit — caps a guided missile's pursuit.  0 = use the
+	// range/velocity time-of-flight fallback.
+	FlightTimeSec float64 `json:"flightTimeSec"`
+	// Cruise: TDF `cruise=1`.  Cruise missile — flies low/level toward the
+	// target rather than arcing.  Surfaced for the projectile guidance mode.
+	Cruise bool `json:"cruise"`
 }
 
 func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
@@ -523,6 +551,13 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
 	out.Model = strings.ToLower(strings.TrimSpace(sec.String("model")))
 	out.DurationSec = sec.Float("duration")
 	out.CommandFire = boolish(sec.String("commandfire"))
+	out.Dropped = boolish(sec.String("dropped"))
+	out.VLaunch = boolish(sec.String("vlaunch"))
+	out.Tolerance = intFieldClean(sec, "tolerance")
+	out.PitchTolerance = intFieldClean(sec, "pitchtolerance")
+	out.TurnRate = intFieldClean(sec, "turnrate")
+	out.FlightTimeSec = sec.Float("weapontimer")
+	out.Cruise = boolish(sec.String("cruise"))
 }
 
 // weaponsListMu / weaponsListOnce / weaponsListCache cache the parsed
