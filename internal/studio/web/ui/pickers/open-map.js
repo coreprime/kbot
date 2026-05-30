@@ -42,9 +42,24 @@ let mapsLoading = false
 let mapsPollTimer = null
 let selectedMapPath = null
 let openMapSource = 'welcome' // 'welcome' or 'editor' — controls where Back returns to
+// Surfaces that were visible at openMapDialog() entry; closeOpenDialog
+// puts each one back when the user cancels.  Snapshotting (rather than
+// switching on active tab type) means we restore correctly for sandbox
+// tabs (which share #model-viewer-dialog with model tabs) AND any future
+// tab type that hangs off one of these surfaces.
+let openMapPriorSurfaces = null
 
 export async function openMapDialog(source = 'welcome') {
   openMapSource = source
+  // Snapshot every surface we're about to hide so the cancel handler
+  // can flip the same ones back on.  Previously closeOpenDialog branched
+  // on the active tab's `type` and only knew about 'model' / 'map' — a
+  // sandbox tab fell through both branches and the screen went blank.
+  openMapPriorSurfaces = {
+    welcome:   !$('#welcome-dialog').classList.contains('hidden'),
+    viewer:    !$('#model-viewer-dialog').classList.contains('hidden'),
+    appEditor: !$('#app').classList.contains('hidden'),
+  }
   // Hide every surface that might be in front of the picker —
   // the welcome screen on first boot, the 3DO viewer dialog when
   // the user clicks "Open Map" from a model tab.  Without this
@@ -109,25 +124,33 @@ export async function fetchMaps() {
 }
 
 // closeOpenDialog returns the user to whichever surface they
-// came from — the Welcome modal on first boot, the 3DO viewer
-// if the active tab is a model, or back to the map editor when
-// they hit File → Open mid-session.
+// came from.  Snapshot/restore via openMapPriorSurfaces — that catches
+// every tab type that hangs off welcome / model-viewer-dialog / #app
+// without having to enumerate them, so a sandbox tab (which shares
+// model-viewer-dialog with model tabs) restores correctly.
 export function closeOpenDialog() {
   const ui = getReactUi()
   if (ui && typeof ui.closeMapDialog === 'function') {
     ui.closeMapDialog()
   }
   if (mapsPollTimer) { clearTimeout(mapsPollTimer); mapsPollTimer = null }
+  const prior = openMapPriorSurfaces
+  openMapPriorSurfaces = null
+  if (prior) {
+    $('#welcome-dialog').classList.toggle('hidden', !prior.welcome)
+    $('#model-viewer-dialog').classList.toggle('hidden', !prior.viewer)
+    $('#app')?.classList.toggle('hidden', !prior.appEditor)
+    return
+  }
+  // Fallback for the (now impossible) case where someone calls
+  // closeOpenDialog without a matching openMapDialog().  Use the
+  // legacy source-based restore so we don't leave the screen blank.
   if (openMapSource === 'welcome') {
     $('#welcome-dialog').classList.remove('hidden')
     return
   }
-  // Dialog opened from the editor / tabbar — pop back to
-  // whatever was in front before.  Without this an active model
-  // tab leaves the editor's .app on screen with no map loaded,
-  // which the user reads as "the viewer broke".
   const active = tabState.activeIndex >= 0 ? tabs[tabState.activeIndex] : null
-  if (active?.type === 'model') {
+  if (active?.type === 'model' || active?.type === 'sandbox') {
     $('#model-viewer-dialog').classList.remove('hidden')
   } else if (active?.type === 'map') {
     $('#app')?.classList.remove('hidden')
@@ -136,6 +159,11 @@ export function closeOpenDialog() {
 
 async function confirmOpenMap() {
   if (!selectedMapPath) return
+  // openLoadedMap below routes the screen onto the new map tab — the
+  // restore snapshot from openMapDialog() is no longer relevant, drop
+  // it so a subsequent close path can't accidentally fire a stale
+  // restore against a moved-on UI state.
+  openMapPriorSurfaces = null
   const card = availableMaps.find((x) => x.path === selectedMapPath)
   const confirmBtn = $('#open-confirm')
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Loading…' }
