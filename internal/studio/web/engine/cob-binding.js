@@ -28,6 +28,7 @@ import {
 } from './cob-particles.js'
 import { nullAudioPool } from './null-audio-pool.js'
 import { makeRng } from './rng.js'
+import { loadWeaponFx, pickExplosionVariant } from './weapon-fx-loader.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
@@ -93,6 +94,24 @@ export class CobBinding {
     // GameEngine.addUnit injects the engine's deterministic RNG so the full
     // sim is reproducible.  See engine/rng.js.
     this.rng = opts.rng || makeRng(null)
+    // _lastFiredWeapon — the weapon TDF JSON for the most recent shot
+    // this binding emitted.  Used by _onParticleExpire to look up the
+    // real GAF explosion art for the impact.  Best-effort: when a unit
+    // has multiple in-flight projectiles from different weapons, the
+    // newer one's art is used for whichever expires next.  Suitable for
+    // the common single-weapon case; a future pass can thread per-shot
+    // weapon refs through the particle pool for full fidelity.
+    this._lastFiredWeapon = null
+    // _explosionOverlay — host-supplied ExplosionOverlay used to play
+    // real APNG explosion sprites at impact.  Null in headless mode or
+    // before the host wires one in; _onParticleExpire falls back to the
+    // synthetic cluster path when this is null OR the weapon-fx fetch
+    // returns no art for the named weapon.
+    this._explosionOverlay = opts.explosionOverlay || null
+    // _waterY — world-Y of the water plane (set by the host when in sea
+    // mode).  _onParticleExpire passes it to pickExplosionVariant so an
+    // impact below the surface gets the water explosion sprite.
+    this._waterY = (opts.waterY != null) ? +opts.waterY : null
     // Wire the pool's on-expire callback so projectile particles
     // detonate visually instead of just vanishing.  This is the
     // single point of dispatch for TA-style impact effects:
@@ -397,6 +416,21 @@ export class CobBinding {
     // muzzle, e.g.) shouldn't fake an explosion on top of the unit.
     // The muzzle flash already handles the "shot fired" visual.
     if (k === SFX_PROJECTILE_LASER) return
+    // Real GAF explosion — fire-and-forget.  Falls through to the
+    // synthetic cluster below regardless, so the impact still has
+    // particles for the bloom + light contribution.  When the GAF
+    // resolves successfully the sprite overlay plays on top; when
+    // it 404s the sprite path silently no-ops and the synthetic
+    // burst remains the entire impact.
+    this._spawnRealExplosion(anchor)
+    // TDF endSmoke=1 — extra smoke puff at the terminal point.  TA
+    // ships this on explosive shells / missiles whose impact should
+    // leave a lingering plume independent of the explosion proper.
+    // Reads off the same _lastFiredWeapon best-effort cache the
+    // sprite path uses.
+    if (this._lastFiredWeapon && this._lastFiredWeapon.endSmoke) {
+      this.particles.emit(SFX_SMOKE_GREY, anchor, { size: 10, lifeMs: 1800, riseSpeed: 2.0, drift: 1.2 })
+    }
     // Impact magnitude scaler — projectile size is driven from the
     // weapon's TDF areaOfEffect by weapon-driver.projectileSize, so
     // reading back pool.size gives us a sim-time proxy for the blast
@@ -443,6 +477,37 @@ export class CobBinding {
       this.particles.emit(SFX_FIRE_FLASH, anchor, { size: cSize(22), lifeMs: 400, color: [1.8, 0.4, 0.15, 0.9] })
       return
     }
+  }
+
+  // _spawnRealExplosion — best-effort path that asks the server for
+  // the named weapon's GAF explosion APNG and plays it through the
+  // host-supplied ExplosionOverlay.  No-ops cleanly when:
+  //   - the host hasn't wired an overlay (_explosionOverlay null), or
+  //   - we don't know which weapon to look up (_lastFiredWeapon null,
+  //     e.g. fire emitted directly without going through spawnProjectile),
+  //   - the server has no shipped art (404 → loadWeaponFx resolves null).
+  // Variant is picked from the impact Y vs the binding's water plane
+  // (set by the host on init).  The synthetic cluster path in
+  // _onParticleExpire runs unconditionally so the impact still has the
+  // sparks + smoke contribution even when the sprite plays on top.
+  _spawnRealExplosion(anchor) {
+    const overlay = this._explosionOverlay
+    const weapon = this._lastFiredWeapon
+    if (!overlay || !weapon || !weapon.name) return
+    const variant = pickExplosionVariant(anchor[1], { waterY: this._waterY })
+    loadWeaponFx(weapon.name, variant).then((img) => {
+      if (!img || !this._explosionOverlay) return
+      // Sprite world-unit size scales with the weapon's blast radius
+      // (areaOfEffectWU), with a floor so a pinpoint bullet still
+      // produces something visible if the weapon has shipped art.
+      const aoe = +weapon.areaOfEffectWU || 0
+      const sizeWU = Math.max(12, Math.min(160, aoe > 0 ? aoe : 24))
+      // Life sized to TA's typical 0.8-1.2 s explosion playback; for
+      // wider AoE (heavy nukes) we let the APNG play through twice
+      // so the wider sprite has time to register on screen.
+      const lifeMs = aoe > 100 ? 1600 : 900
+      this._explosionOverlay.play(anchor, img, { sizeWU, lifeMs })
+    }).catch(() => { /* network errors fall through to synthetic only */ })
   }
 
   // _emitShipWake drops a pair of foamy puffs at the ship's wake1 /

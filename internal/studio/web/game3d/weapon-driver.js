@@ -245,7 +245,12 @@ export class SmokeTrailManager {
   // Binding ref is held weakly via the trail record — when the unit
   // disposes, the binding's particle pool stops accepting emits and
   // the trail effectively becomes a no-op until it expires.
-  schedule(binding, anchor, velocity, gravity, lifeMs) {
+  //
+  // intervalMs is the per-trail puff cadence (TA `smokedelay`).  Falls
+  // back to the historic 40 ms default when omitted so existing
+  // weapons (and weapons that don't ship the TDF field) keep their
+  // current visual.
+  schedule(binding, anchor, velocity, gravity, lifeMs, intervalMs) {
     if (!binding || !binding.particles) return
     this._trails.push({
       binding,
@@ -253,18 +258,20 @@ export class SmokeTrailManager {
       velocity: [velocity[0], velocity[1], velocity[2]],
       gravity:  gravity || 0,
       lifeMs:   Math.max(50, lifeMs || 0),
+      // Floor at 20 ms so a bogus 0 / negative TDF field doesn't
+      // spin up an infinite emit loop in the inner while().
+      intervalMs: Math.max(20, +intervalMs > 0 ? +intervalMs : 40),
       ageMs: 0,
       nextEmitMs: 0,
     })
   }
 
   // tick advances every live trail by dtSimMs and drops puffs at
-  // 40 ms sim-intervals.  Trails older than their declared lifeMs
-  // are pruned in-place (the projectile is past its max range or
-  // would have hit by now).
+  // each trail's own intervalMs (TDF `smokedelay`).  Trails older
+  // than their declared lifeMs are pruned in-place (the projectile
+  // is past its max range or would have hit by now).
   tick(dtSimMs) {
     if (!this._trails.length) return
-    const INTERVAL_MS = 40
     let writeIdx = 0
     for (let i = 0; i < this._trails.length; i++) {
       const t = this._trails[i]
@@ -273,7 +280,7 @@ export class SmokeTrailManager {
       const b = t.binding
       if (!b || !b.particles) continue
       while (t.ageMs >= t.nextEmitMs) {
-        t.nextEmitMs += INTERVAL_MS
+        t.nextEmitMs += t.intervalMs
         const elapsed = Math.min(t.ageMs, t.lifeMs) / 1000
         const px = t.anchor[0] + t.velocity[0] * elapsed
         const py = t.anchor[1] + t.velocity[1] * elapsed - 0.5 * t.gravity * elapsed * elapsed
@@ -393,13 +400,26 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   if (light > 0) emitOpts.lightStrength = light
   binding.particles.emit(kind, anchor, emitOpts)
   playWeaponSound({ binding, weapon, anchor })
+  // Remember the weapon on the binding so _onParticleExpire knows what
+  // to look up when the projectile lifeMs elapses and the impact fires.
+  // Best-effort: shared across every concurrent in-flight shot from this
+  // binding, so multi-weapon units use the LAST fired weapon's art for
+  // whichever expires next.  Acceptable for the common case.
+  binding._lastFiredWeapon = weapon
+  // TDF startSmoke=1 — puff of grey smoke at the muzzle on each fire.
+  // Most cannons + plasma weapons ship this so the discharge has a
+  // visible cloud independent of the impact burst at the other end.
+  if (weapon.startSmoke) {
+    binding.particles.emit(SFX_SMOKE_WHITE, anchor, { size: 7, lifeMs: 600, riseSpeed: 1.4, drift: 1.0 })
+  }
   // Missiles trail smoke along their flight path.  Caller passes a
   // SmokeTrailManager via opts.smokeTrails when it wants this — hosts
   // either hold one per active unit or one shared across every
   // spawned unit's bindings.  No-ops cleanly when the manager isn't
   // supplied or the kind isn't a missile.
   if (smokeTrails && kind === SFX_PROJECTILE_MISSILE) {
-    smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs)
+    const intervalMs = (+weapon.smokeDelaySec > 0) ? weapon.smokeDelaySec * 1000 : 40
+    smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs, intervalMs)
   }
   return { kind, lifeMs, velocity: [vx, vy, vz], anchor: [anchor[0], anchor[1], anchor[2]] }
 }

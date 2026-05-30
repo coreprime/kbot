@@ -28,6 +28,7 @@ import { SandboxScene } from './scene.js'
 import { attachOrbitControls } from '../../game3d/camera-controls.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
+import { ExplosionOverlay } from '../../game3d/explosion-overlay.js'
 import { teamColorForSide } from '../../game3d/team-colors.js'
 import {
   wireHotkeys,
@@ -240,6 +241,43 @@ export class SandboxView {
       // the per-frame onAfterFrame hook below queries
       // engine.getSceneLight() and forwards the result to
       // this.renderer.setPulseLight.  The engine itself stays headless.
+    }
+    // ExplosionOverlay — DOM <img> layer that plays the real TA GAF
+    // explosion sprites at impact (see /api/studio/weapon-fx).  Each
+    // binding's _onParticleExpire path attempts to load the named
+    // weapon's APNG and play it through this overlay; on miss the
+    // synthetic particle cluster still fires.  Multi-pane: only one
+    // overlay can be active per binding, so the first-attaching pane
+    // wins — split panes share the visual through whichever canvas's
+    // parent the overlay was appended to.
+    if (!this._explosionOverlay && this.renderer && this.renderer.canvas) {
+      this._explosionOverlay = new ExplosionOverlay(
+        this.renderer.canvas,
+        // project closure — pixel scale stays constant (4 px/wu) for
+        // the MVP; a future pass can derive it from camera distance to
+        // make the sprite track its real world-space footprint.
+        (world) => {
+          const p = this.renderer.worldToCanvas(world)
+          if (!p) return null
+          return { x: p.x, y: p.y, depth: 1, pxPerWU: 4 }
+        }
+      )
+      // Install on every binding the engine has already spawned (case
+      // where the view re-attaches to an existing scene), then keep up
+      // by subscribing to future spawns.
+      if (this.scene && this.scene.engine) {
+        for (const u of this.scene.engine.units?.() || []) {
+          if (u && u.binding && !u.binding._explosionOverlay) {
+            u.binding._explosionOverlay = this._explosionOverlay
+          }
+        }
+        this._explosionSpawnUnsub = this.scene.engine.on?.('spawn', (ev) => {
+          const inst = ev && ev.unit
+          if (inst && inst.binding && !inst.binding._explosionOverlay) {
+            inst.binding._explosionOverlay = this._explosionOverlay
+          }
+        }) || null
+      }
     }
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
@@ -2257,6 +2295,17 @@ export class SandboxView {
     // base _localModels entries / the renderer's GL context teardown;
     // clones only alias them, so there's nothing to GPU-free here).
     this._localInstances.clear()
+    // Explosion overlay teardown — removes the DOM root + any live
+    // sprites, and detaches the spawn subscription so future spawns
+    // don't try to wire a destroyed overlay onto a binding.
+    if (this._explosionSpawnUnsub) {
+      try { this._explosionSpawnUnsub() } catch { /* ignore */ }
+      this._explosionSpawnUnsub = null
+    }
+    if (this._explosionOverlay) {
+      try { this._explosionOverlay.dispose() } catch { /* ignore */ }
+      this._explosionOverlay = null
+    }
     if (this.renderer) this.renderer.dispose()
     this.renderer = null
     this.scene = null
