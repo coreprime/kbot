@@ -114,6 +114,20 @@ export class SandboxScene {
         size: 32, lifeMs: 600, color: [1.6, 0.6, 0.2, 1.0],
       })
     })
+    // Impact flash on every model-projectile detonation (placeholder visual —
+    // a bright orange bloom at the strike point so it reads as "the bomb /
+    // missile hit here").  Borrows the firing unit's particle pool because
+    // projectiles are pool-less by design.  Skips expiries that timed out
+    // mid-air rather than detonating on a target / ground.
+    this.engine.on('projectile-hit', (ev) => {
+      if (!ev || !ev.hit) return
+      const owner = ev.projectile && this.engine.unitById(ev.projectile.ownerId)
+      const b = owner && owner.binding
+      if (!b || !b.particles) return
+      b.particles.emit(SFX_FIRE_FLASH, ev.pos, {
+        size: 56, lifeMs: 800, color: [1.9, 0.7, 0.2, 1.0],
+      })
+    })
   }
 
   // The engine's CobRuntime is the source of truth for sim time +

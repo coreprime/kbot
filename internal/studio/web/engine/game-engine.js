@@ -953,17 +953,7 @@ export class GameEngine {
     // below already enforces their arc), so the body constraint is skipped for
     // them.  Gates the START of a burst, like the range gate.
     const inAimTolerance = this.#withinFireArc(u, w, tgx, tgz)
-    // Bombers don't release at ground level — bombs need altitude to fall.
-    // For a `dropped` weapon on an aircraft, hold fire until the unit has
-    // climbed at least halfway to its FBI CruiseAltitude (data-driven; the
-    // 0.5 ratio is the only tuning knob and it falls out of "high enough
-    // that bombs have meaningful airtime").  Non-aircraft / non-dropped
-    // weapons are unaffected.
-    let atBombAlt = true
-    if (w.dropped && u.meta && u.meta.isAircraft && u.meta.cruiseAltitude > 0) {
-      atBombAlt = (u.pos.y || 0) >= (u.meta.cruiseAltitude * 0.5)
-    }
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance && atBombAlt
+    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance
     if (startBurst || burstReady) {
       state.lastFireMs = simNowMs
       // Initialise (burstSize - 1) on the FIRST shot — we're about to
@@ -1130,11 +1120,9 @@ export class GameEngine {
       tgtPoint = stateTarget.point
     }
     if (!tgtPoint) return
-    const spd = u.speed || 0
-    const carrierVel = { x: Math.sin(u.heading) * spd, z: Math.cos(u.heading) * spd }
     const proj = makeProjectile({
       id: this._nextProjId++, ownerId: u.id, slot, weapon: w,
-      anchor, target: tgtPoint, targetUnitId: tgtUnitId, carrierVel, gravity: this.gravity,
+      anchor, target: tgtPoint, targetUnitId: tgtUnitId, gravity: this.gravity,
     })
     this._projectiles.push(proj)
     this.emit('projectile-spawn', { projectile: proj })

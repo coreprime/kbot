@@ -47,10 +47,8 @@ export function hasModelProjectile(weapon) {
 //   anchor     — muzzle-exit world XYZ (the engine's firing-piece resolver).
 //   target     — aim point [x,y,z]; for a unit target the engine also passes
 //                targetUnitId so the guided modes re-read the live position.
-//   carrierVel — the firing unit's world velocity {x,z}; a dropped bomb keeps
-//                it so it falls forward along the bomber's track.
 //   gravity    — world gravity (wu/s²) for the falling/arcing modes.
-export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targetUnitId = null, carrierVel = null, gravity = 80 }) {
+export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targetUnitId = null, gravity = 80 }) {
   const mode = projectileMode(weapon)
   const vmax = (weapon.velocityWU > 0) ? weapon.velocityWU : 200
   const accel = (weapon.accelerationWU > 0) ? weapon.accelerationWU : 0
@@ -71,7 +69,13 @@ export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targ
   if (mode === 'vlaunch') {
     vx = 0; vy = Math.max(1, speed0); vz = 0   // straight up off the rail
   } else if (mode === 'dropped') {
-    vx = carrierVel ? carrierVel.x : 0; vy = 0; vz = carrierVel ? carrierVel.z : 0
+    // Bombs fall straight down from the bomber rather than inheriting its
+    // forward momentum.  Real bombs do carry the carrier's velocity, but
+    // they also have aerodynamic drag we don't model; without that drag the
+    // bomb visually "outstrips" the bomber when it turns away on egress.
+    // Dropping straight matches the in-game look of bombs falling from the
+    // bomber and lays them along the flight path.
+    vx = 0; vy = 0; vz = 0
   } else {
     vx = (dx / d) * speed0; vy = (dy / d) * speed0; vz = (dz / d) * speed0
   }
