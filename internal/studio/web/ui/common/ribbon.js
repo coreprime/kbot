@@ -354,7 +354,10 @@ export function MenuSubmenuRow({
       ${label ? html`<span class="lbl">${label}</span>` : null}
       ${currentIcon ? html`<span class="ico">${currentIcon}</span>` : null}
       ${currentLabel ? html`<span class="env-current-lbl">${currentLabel}</span>` : null}
-      ${isToggle ? html`<span class="menu-check">✓</span>` : null}
+      ${/* No check glyph: a pop-out row's on/off is shown by the row's
+           .active highlight, and the (enlarged) chevron sits in the
+           same right-hand column the plain toggle rows' checks use so
+           everything lines up vertically. */ ''}
       <span class="chev-right">▸</span>
       <div ref=${subRef} class=${'ribbon-submenu' + (openSubmenu ? '' : ' hidden')}>
         ${children}

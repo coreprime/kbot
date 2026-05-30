@@ -34,6 +34,10 @@ import {
   wrapCobWithAggregate,
   disposeView,
 } from '../common/view-helpers.js'
+import { getReactUi } from '../host-context.js'
+import {
+  getGraphicsOptions, applyGraphicsOptionsToRenderer,
+} from '../common/graphics-options-state.js'
 
 export class SandboxView {
   constructor({ canvas, scene = null, statusEl, onModelLoaded } = {}) {
@@ -141,6 +145,12 @@ export class SandboxView {
       this.#observeResize()
       await this.renderer.init()
       this.renderer.start()
+      // Seed this pane's renderer with the persisted Graphics Options
+      // (shadows + effects + liquid sim) so every sandbox pane shares
+      // the user's chosen look, and reseed the ribbon menu signal in
+      // case prefs loaded after the ribbon module was first evaluated.
+      applyGraphicsOptionsToRenderer(this.renderer)
+      getReactUi()?.setSandboxGraphicsState?.(getGraphicsOptions())
       // Orbit / pan / zoom gestures come from the same shared module
       // the unit editor uses (camera-controls.js) so left-drag-orbit,
       // wheel-zoom, shift-pan, ctrl-pan, right-drag-pan all behave

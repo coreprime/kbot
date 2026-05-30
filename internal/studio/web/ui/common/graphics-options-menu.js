@@ -52,27 +52,6 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
     if (typeof fn === 'function') fn(applyVal)
   }
   return html`
-    <${MenuSectionLabel}>Shadows<//>
-    <${MenuSubmenuRow}
-      icon="🌑"
-      label="Shadows"
-      title="Cast + self shadows — hover for intensity.  Off removes all shadows."
-      on=${s.shadows}
-      onToggle=${(next) => set('shadows', next, next, bridge.setShadows)}>
-      <${_Slider}
-        label="Intensity"
-        min=${0} max=${100} step=${5}
-        value=${s.shadowIntensity}
-        format=${(v) => `${v}%`}
-        onChange=${(v) => set('shadowIntensity', v, v / 100, bridge.setShadowIntensity)} />
-    <//>
-    <${MenuToggleRow}
-      icon="🫥"
-      label="Self-Shadowing"
-      title="The unit casts shadows onto its own geometry.  Off keeps the ground shadow but lights the unit evenly."
-      on=${s.selfShadow}
-      onChange=${(next) => set('selfShadow', next, next, bridge.setSelfShadow)} />
-
     <${MenuSectionLabel}>General Effects<//>
     <${MenuToggleRow}
       icon="🪞"
@@ -98,6 +77,30 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
       title="Cinematic depth of field — unit stays sharp, background softens"
       on=${s.dof}
       onChange=${(next) => set('dof', next, next, bridge.setDoF)} />
+
+    <${MenuSectionLabel}>Shadows<//>
+    <${MenuSubmenuRow}
+      icon="🌑"
+      label="Shadows"
+      title="Cast + self shadows — hover for intensity.  Off removes all shadows."
+      on=${s.shadows}
+      onToggle=${(next) => set('shadows', next, next, bridge.setShadows)}>
+      <${_Slider}
+        label="Intensity"
+        min=${0} max=${100} step=${5}
+        value=${s.shadowIntensity}
+        format=${(v) => `${v}%`}
+        onChange=${(v) => set('shadowIntensity', v, v / 100, bridge.setShadowIntensity)} />
+    <//>
+    <${MenuToggleRow}
+      icon="🫥"
+      label="Self-Shadowing"
+      title=${s.shadows
+        ? 'The unit casts shadows onto its own geometry.  Off keeps the ground shadow but lights the unit evenly.'
+        : 'Enable Shadows first — self-shadowing needs the shadow pass.'}
+      on=${s.selfShadow}
+      disabled=${!s.shadows}
+      onChange=${(next) => set('selfShadow', next, next, bridge.setSelfShadow)} />
 
     <${MenuSectionLabel}>Liquid Simulation<//>
     <${MenuToggleRow}

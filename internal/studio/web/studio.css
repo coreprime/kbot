@@ -1355,7 +1355,16 @@ kbd {
 }
 .menu-row-submenu:hover { background: var(--bg-2); }
 .menu-row-submenu .env-current-lbl { flex: 1; }
-.menu-row-submenu .chev-right { color: var(--muted); font-size: 10px; }
+/* Pop-out indicator.  Pushed to the far-right column (margin-left:auto)
+   so it lines up with the plain toggle rows' check glyphs, and sized
+   up since it now carries the affordance on its own (the redundant
+   check glyph was removed from pop-out rows). */
+.menu-row-submenu .chev-right {
+  color: var(--muted);
+  font-size: 14px;
+  margin-left: auto;
+}
+.menu-row-submenu.active .chev-right { color: #fff; }
 .ribbon-submenu {
   position: absolute;
   left: 100%;
@@ -1403,16 +1412,6 @@ kbd {
 .ribbon-submenu .menu-row:hover { background: var(--bg-2); }
 .ribbon-submenu .menu-row.active { background: var(--accent); color: #fff; }
 
-/* Toggle-submenu rows (Waves, Bobbing/Swaying) — click the body
-   toggles the effect; the chev opens the slider submenu.  Visual:
-   like a checkbox-row with a peek-out submenu indicator. */
-.menu-row-toggle-submenu .menu-check {
-  margin-left: 6px;
-  opacity: 0.4;
-  font-weight: 700;
-}
-.menu-row-toggle-submenu[data-on="1"] .menu-check { opacity: 1; }
-.menu-row-toggle-submenu.active .menu-check { color: #fff; opacity: 1; }
 /* Submenu slider row — label + range + value.  The submenu itself
    reserves enough width that the range track gets a useful scrub
    distance (was ~80 px which made the value snap between

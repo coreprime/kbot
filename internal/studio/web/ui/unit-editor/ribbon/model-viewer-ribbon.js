@@ -41,6 +41,7 @@ import {
 } from '/ui/common/ribbon.js'
 import { SplitMenuItems } from '/ui/common/split-host.js'
 import { GraphicsOptionsItems } from '/ui/common/graphics-options-menu.js'
+import { persistGraphicsOptions } from '/ui/common/graphics-options-state.js'
 
 // _state — every toggle / slider / picker value displayed on the
 // ribbon.  Defaults match the static HTML the legacy markup shipped
@@ -184,6 +185,17 @@ export function configureModelViewerRibbonBridge(impl) {
 export function setModelViewerRibbonState(patch) {
   if (!patch) return
   _state.value = { ..._state.value, ...patch }
+}
+
+// _applyGraphicsPatch — the setState the shared Graphics Options menu
+// calls.  Mirrors the value into the ribbon signal AND persists it
+// (graphics options are a global, preserved-across-reload setting like
+// the sandbox's).  Only ever receives graphics-option keys, and
+// persistGraphicsOptions filters to the known set, so non-graphics
+// ribbon state is never written to the prefs blob.
+function _applyGraphicsPatch(patch) {
+  setModelViewerRibbonState(patch)
+  persistGraphicsOptions(patch)
 }
 
 // setModelViewerCobState — push the per-unit COB state.  Pass the
@@ -693,7 +705,7 @@ function OptionsDropdown() {
       <${Dropdown} id="mv-options-dropdown">
         <${GraphicsOptionsItems}
           s=${s}
-          setState=${setModelViewerRibbonState}
+          setState=${_applyGraphicsPatch}
           bridge=${_bridge} />
       <//>
     </div>

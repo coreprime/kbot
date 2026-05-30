@@ -35,7 +35,12 @@ export const PREF_FIELDS = ['usedOnly', 'includeWreckage', 'animateFeatures',
   // editors at the bottom of the Controls panel" preference so a
   // user who wants the lean sandbox UI doesn't have to retoggle
   // each visit.
-  'mvControlsDevVisible']
+  'mvControlsDevVisible',
+  // Graphics Options menu state (shadows + effect toggles + liquid
+  // sim) — one blob shared by the unit-editor + sandbox ribbons so a
+  // user's chosen look persists across reloads and applies to every
+  // rendering pane.  See /ui/common/graphics-options-state.js.
+  'graphicsOptions']
 
 // createPrefsStore returns a {load, save} interface backed by a
 // Web Storage implementation (defaults to window.localStorage).

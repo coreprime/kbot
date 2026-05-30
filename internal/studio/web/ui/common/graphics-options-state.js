@@ -1,0 +1,89 @@
+// graphics-options-state.js
+//
+// Single source of truth for the "Graphics Options" menu values shared
+// by the unit-editor and sandbox ribbons.  The menu itself
+// (/ui/common/graphics-options-menu.js) is presentational; this module
+// owns the *persistence* + *renderer application* side so a user's
+// chosen effect toggles + shadow settings survive reloads and apply
+// uniformly across every rendering pane.
+//
+//   - getGraphicsOptions()   — the live values (persisted patch merged
+//                              over GRAPHICS_DEFAULTS).  Raw menu units
+//                              (sliders are 0..100 / 0..200, NOT the
+//                              normalised /100 the renderer wants).
+//   - persistGraphicsOptions(patch) — merge a raw-value patch into
+//                              state.graphicsOptions + debounce-save.
+//   - applyGraphicsOptionsToRenderer(r) — push every option through the
+//                              renderer's setters (normalising sliders).
+//
+// Lives in /ui/common/ because BOTH editor sections read + write it;
+// the only upward import is host-context (state) + prefs, matching the
+// existing prefs.js dependency shape.
+
+import { state } from '../host-context.js'
+import { persistPrefs } from './prefs.js'
+
+// GRAPHICS_DEFAULTS — the at-rest values, matching the renderer's own
+// constructor defaults so a fresh session paints identically whether
+// or not anything has been persisted yet.  Raw menu units.
+export const GRAPHICS_DEFAULTS = {
+  shadows:          true,
+  shadowIntensity:  100,   // 0..100  → uShadowStrength 0..1
+  selfShadow:       true,
+
+  reflections:      true,
+  specular:         true,
+  godbeams:         true,
+  dof:              false,
+
+  waterReflections: true,
+  waves:            true,
+  wavesIntensity:   100,   // 0..200  → 0..2.0×
+  bob:              true,
+  bobAmount:        100,   // 0..200  → 0..2.0×
+  bobSpeed:         100,   // 0..200  → 0..2.0×
+}
+
+// getGraphicsOptions — persisted patch merged over the hard defaults.
+// Unknown keys in the stored blob are ignored on read by virtue of the
+// caller only reading known keys, but the merge keeps any extra keys
+// harmlessly.
+export function getGraphicsOptions() {
+  return { ...GRAPHICS_DEFAULTS, ...(state.graphicsOptions || {}) }
+}
+
+// persistGraphicsOptions — merge a raw-value patch (only the known
+// graphics keys are taken) into state.graphicsOptions and schedule a
+// debounced save through the shared prefs store.
+export function persistGraphicsOptions(patch) {
+  if (!patch) return
+  const next = { ...getGraphicsOptions() }
+  for (const k of Object.keys(GRAPHICS_DEFAULTS)) {
+    if (k in patch) next[k] = patch[k]
+  }
+  state.graphicsOptions = next
+  persistPrefs()
+}
+
+// applyGraphicsOptionsToRenderer — push every persisted option through
+// the renderer's setters.  Sliders are normalised (/100) to match the
+// values the ribbon bridges pass.  Optional-chained so a renderer that
+// predates a given setter (or a lighter observer renderer) is skipped
+// gracefully rather than throwing.
+export function applyGraphicsOptionsToRenderer(r) {
+  if (!r) return
+  const g = getGraphicsOptions()
+  r.setShadowsEnabled?.(!!g.shadows)
+  r.setShadowStrength?.(g.shadowIntensity / 100)
+  r.setSelfShadow?.(!!g.selfShadow)
+  r.setReflectionsEnabled?.(!!g.reflections)
+  r.setSpecularEnabled?.(!!g.specular)
+  r.setGodBeamsEnabled?.(!!g.godbeams)
+  r.setDoFEnabled?.(!!g.dof)
+  r.setWaterReflectionsEnabled?.(!!g.waterReflections)
+  r.setWavesEnabled?.(!!g.waves)
+  r.setWavesIntensity?.(g.wavesIntensity / 100)
+  r.setBobEnabled?.(!!g.bob)
+  r.setBobAmount?.(g.bobAmount / 100)
+  r.setBobSpeed?.(g.bobSpeed / 100)
+}

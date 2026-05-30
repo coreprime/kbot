@@ -20,6 +20,7 @@ import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
 import {
   SandboxRibbon, configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
+  setSandboxGraphicsState,
 } from '/ui/sandbox/sandbox-ribbon.js'
 import {
   ModelViewerRibbon, configureModelViewerRibbonBridge,
@@ -337,6 +338,7 @@ export {
   setPieceTreeModel, setPieceTreeFilter, configurePieceTreeBridge,
   configureWeaponsTabBridge,
   configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
+  setSandboxGraphicsState,
   configureModelViewerRibbonBridge, setModelViewerRibbonState,
   setModelViewerCobState, closeModelViewerRibbonDropdowns,
   setTabs, configureTabBarBridge,

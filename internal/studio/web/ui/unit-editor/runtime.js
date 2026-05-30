@@ -32,6 +32,9 @@
 import { state, hostCallbacks, getReactUi } from '../host-context.js'
 import { DEFAULT_SETTINGS } from '../dialogs/settings.js'
 import { renderMvWeaponsTab } from './sidebar.js'
+import {
+  getGraphicsOptions, persistGraphicsOptions, applyGraphicsOptionsToRenderer,
+} from '../common/graphics-options-state.js'
 
 // AUTO_BUILD_DURATION_MS — total sim-time for the wireframe → finished
 // model ramp.  Five seconds was the sweet spot in user testing: long
@@ -49,24 +52,27 @@ export function applyUnitEditorDefaults() {
   const s = state.settings || DEFAULT_SETTINGS
   const r = mv.renderer
   const env = s.unitDefaultEnv || 'greenworld'
-  const reflections = s.unitDefaultReflections !== false
-  const bob = s.unitDefaultBob !== false
-  const waterReflections = s.unitDefaultWaterReflections !== false
-  const specular = s.unitDefaultSpecular !== false
-  const godbeams = s.unitDefaultGodBeams !== false
-  // Environment first because it swaps the sky scheme; the toggles
-  // below operate on flags the env doesn't touch.
+  // First-run seed — the persisted graphics blob doesn't exist yet on a
+  // brand-new profile, so fold the Settings dialog's unitDefault*
+  // effect toggles into it once.  After that the Graphics Options menu
+  // owns these values (they persist + apply scene-wide across reloads),
+  // so we never clobber a user's later choice with a stale default.
+  if (!state.graphicsOptions) {
+    persistGraphicsOptions({
+      reflections:      s.unitDefaultReflections !== false,
+      bob:              s.unitDefaultBob !== false,
+      waterReflections: s.unitDefaultWaterReflections !== false,
+      specular:         s.unitDefaultSpecular !== false,
+      godbeams:         s.unitDefaultGodBeams !== false,
+    })
+  }
+  // Environment first because it swaps the sky scheme; the graphics
+  // options below operate on flags the env doesn't touch.
   r.setEnvironment(env)
-  r.setReflectionsEnabled(reflections)
-  r.setBobEnabled(bob)
-  r.setWaterReflectionsEnabled(waterReflections)
-  r.setSpecularEnabled(specular)
-  r.setGodBeamsEnabled(godbeams)
+  applyGraphicsOptionsToRenderer(r)
   const ui = getReactUi()
   if (ui && typeof ui.setModelViewerRibbonState === 'function') {
-    ui.setModelViewerRibbonState({
-      env, reflections, bob, waterReflections, specular, godbeams,
-    })
+    ui.setModelViewerRibbonState({ env, ...getGraphicsOptions() })
   }
 }
 

@@ -26,6 +26,7 @@ import {
   ensureSplitState as commonEnsure,
 } from '../common/split-host.js'
 import { newLeaf, isOnlyLeaf } from '../common/split-container.js'
+import { applyGraphicsOptionsToRenderer } from '../common/graphics-options-state.js'
 import { ModelObserverView } from './observer-view.js'
 
 // PrimaryViewerWrapper — a tiny adapter that lets the generic
@@ -62,6 +63,10 @@ const UNIT_ADAPTER = {
     const obs = new ModelObserverView({ primaryViewer: tab.viewer })
     const modelName = tab.viewer && tab.viewer.model && tab.viewer.model.name
     if (modelName) await obs.open(modelName)
+    // Seed the fresh observer's renderer with the persisted Graphics
+    // Options so a newly-split pane matches the primary's look (shadows,
+    // effects, liquid sim) instead of falling back to renderer defaults.
+    applyGraphicsOptionsToRenderer(obs.renderer)
     return obs
   },
   canCloseLeaf(tab, leafId) {

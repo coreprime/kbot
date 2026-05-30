@@ -24,28 +24,14 @@ import {
 } from '/ui/common/ribbon.js'
 import { SplitMenuItems } from '/ui/common/split-host.js'
 import { GraphicsOptionsItems } from '/ui/common/graphics-options-menu.js'
+import { getGraphicsOptions, persistGraphicsOptions } from '/ui/common/graphics-options-state.js'
 
 // _gfx — the Graphics Options menu state for sandbox mode (mirrors the
-// shared GraphicsOptionsItems shape).  Defaults match the renderer's
-// startup state so the toggle ticks paint correctly before the host
-// pushes any persisted prefs via setSandboxGraphicsState().
-const _gfx = signal({
-  shadows:          true,
-  shadowIntensity:  100,
-  selfShadow:       true,
-
-  reflections:      true,
-  specular:         true,
-  godbeams:         true,
-  dof:              false,
-  waterReflections: true,
-
-  waves:            true,
-  wavesIntensity:   100,
-  bob:              true,
-  bobAmount:        100,
-  bobSpeed:         100,
-})
+// shared GraphicsOptionsItems shape).  Seeded from the persisted blob
+// so a fresh sandbox paints the user's last-chosen look; the host also
+// reseeds via setSandboxGraphicsState() once a view's renderer inits
+// (prefs may load after this module is first evaluated).
+const _gfx = signal(getGraphicsOptions())
 
 // setSandboxGraphicsState — partial merge into the Graphics Options
 // state.  Called by the menu rows (to keep ticks in sync with the
@@ -53,6 +39,14 @@ const _gfx = signal({
 export function setSandboxGraphicsState(patch) {
   if (!patch) return
   _gfx.value = { ..._gfx.value, ...patch }
+}
+
+// _applyGfxPatch — the setState the shared menu calls.  Mirrors the
+// chosen value into the live signal AND persists it so the look
+// survives reloads + applies to every pane the host re-seeds.
+function _applyGfxPatch(patch) {
+  setSandboxGraphicsState(patch)
+  persistGraphicsOptions(patch)
 }
 
 // _bridge — host installs the action callbacks (spawn, stop, etc.)
@@ -165,7 +159,7 @@ function GraphicsOptionsDropdown() {
       <${Dropdown} id="sandbox-rb-gfx-dropdown" anchorId="sandbox-rb-gfx-btn">
         <${GraphicsOptionsItems}
           s=${s}
-          setState=${setSandboxGraphicsState}
+          setState=${_applyGfxPatch}
           bridge=${_bridge} />
       <//>
     </div>

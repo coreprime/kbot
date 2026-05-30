@@ -60,6 +60,25 @@ import { splitActivePane, closeActivePane, canCloseActivePane } from '../../comm
 export function wireModelViewerRibbon() {
   const reactUi = getReactUi()
   if (!reactUi) return
+  // Graphics Options apply scene-wide: a unit-editor tab can host a
+  // primary ModelViewer plus N observer panes, each with its own
+  // renderer + GL context.  A toggle has to reach every pane or the
+  // observers drift out of sync with the primary.  Walk tab.panes
+  // (dedup by renderer instance) and fall back to the active viewer.
+  const eachRenderer = (fn) => {
+    const tab = hostCallbacks.getActiveTab?.()
+    const seen = new Set()
+    if (tab && tab.panes && tab.panes.size > 0) {
+      for (const v of tab.panes.values()) {
+        const r = v && v.renderer
+        if (r && !seen.has(r)) { seen.add(r); try { fn(r) } catch { /* ignore */ } }
+      }
+    }
+    if (seen.size === 0) {
+      const r = getActiveModelViewer()?.renderer
+      if (r) { try { fn(r) } catch { /* ignore */ } }
+    }
+  }
   if (typeof reactUi.configureModelViewerRibbonBridge === 'function') {
     reactUi.configureModelViewerRibbonBridge({
       openAnother: () => { setModelOpenIntent('add'); openModelPicker() },
@@ -104,21 +123,23 @@ export function wireModelViewerRibbon() {
         getActiveModelViewer()?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
       },
 
-      setShadows:           (on) => getActiveModelViewer()?.renderer?.setShadowsEnabled(!!on),
-      setShadowIntensity:   (v)  => getActiveModelViewer()?.renderer?.setShadowStrength(v),
-      setSelfShadow:        (on) => getActiveModelViewer()?.renderer?.setSelfShadow(!!on),
+      // Graphics Options — broadcast across every pane's renderer so a
+      // toggle/slider takes effect on the primary AND its observers.
+      setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
+      setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
+      setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),
 
-      setReflections:       (on) => getActiveModelViewer()?.renderer?.setReflectionsEnabled(!!on),
-      setSpecular:          (on) => getActiveModelViewer()?.renderer?.setSpecularEnabled(!!on),
-      setGodBeams:          (on) => getActiveModelViewer()?.renderer?.setGodBeamsEnabled(!!on),
-      setDoF:               (on) => getActiveModelViewer()?.renderer?.setDoFEnabled(!!on),
-      setWaterReflections:  (on) => getActiveModelViewer()?.renderer?.setWaterReflectionsEnabled(!!on),
+      setReflections:       (on) => eachRenderer((r) => r.setReflectionsEnabled?.(!!on)),
+      setSpecular:          (on) => eachRenderer((r) => r.setSpecularEnabled?.(!!on)),
+      setGodBeams:          (on) => eachRenderer((r) => r.setGodBeamsEnabled?.(!!on)),
+      setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
+      setWaterReflections:  (on) => eachRenderer((r) => r.setWaterReflectionsEnabled?.(!!on)),
 
-      setBob:               (on) => getActiveModelViewer()?.renderer?.setBobEnabled(!!on),
-      setBobAmount:         (v)  => getActiveModelViewer()?.renderer?.setBobAmount(v),
-      setBobSpeed:          (v)  => getActiveModelViewer()?.renderer?.setBobSpeed(v),
-      setWaves:             (on) => getActiveModelViewer()?.renderer?.setWavesEnabled(!!on),
-      setWavesIntensity:    (v)  => getActiveModelViewer()?.renderer?.setWavesIntensity(v),
+      setBob:               (on) => eachRenderer((r) => r.setBobEnabled?.(!!on)),
+      setBobAmount:         (v)  => eachRenderer((r) => r.setBobAmount?.(v)),
+      setBobSpeed:          (v)  => eachRenderer((r) => r.setBobSpeed?.(v)),
+      setWaves:             (on) => eachRenderer((r) => r.setWavesEnabled?.(!!on)),
+      setWavesIntensity:    (v)  => eachRenderer((r) => r.setWavesIntensity?.(v)),
       setBgTerrain:         (on) => getActiveModelViewer()?.renderer?.setBgTerrainEnabled(!!on),
       setBgTerrainHeight:   (v)  => getActiveModelViewer()?.renderer?.setBgTerrainHeight(v),
       setBgTerrainScale:    (v)  => getActiveModelViewer()?.renderer?.setBgTerrainScale(v),
