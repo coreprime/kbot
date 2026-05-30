@@ -72,7 +72,8 @@
 
 import { CobRuntime } from './cob-runtime.js'
 import { CobBinding } from './cob-binding.js'
-import { stepSurfaceLocomotion, attackManeuver } from './locomotion.js'
+import { stepSurfaceLocomotion, attackManeuver, shortestArc } from './locomotion.js'
+import { angleToRadians } from './cob-opcodes.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -927,7 +928,16 @@ export class GameEngine {
     else if (target.pos) { tgx = target.pos.x; tgz = target.pos.z }
     const inWeaponRange = (tgx == null) ||
       (Math.hypot(tgx - u.pos.x, tgz - u.pos.z) <= this.#weaponRangeFor(u, slot) * 1.05)
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange
+    // Aim-tolerance gate — the weapon TDF `tolerance` (TA angle units) is the
+    // arc within which the unit may open fire.  Aircraft aim by pointing the
+    // whole airframe (no rotating turret), so we compare the BODY heading to
+    // the target bearing: the ARM Hawk's missile (tolerance 8000 ≈ 44°) only
+    // fires once it's lined up, and the attack maneuver turns it to face first.
+    // Turreted ground units aim via their COB AimX turret (the aim-thread gate
+    // below already enforces their arc), so the body constraint is skipped for
+    // them.  Gates the START of a burst, like the range gate.
+    const inAimTolerance = this.#withinFireArc(u, w, tgx, tgz)
+    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance
     if (startBurst || burstReady) {
       state.lastFireMs = simNowMs
       // Initialise (burstSize - 1) on the FIRST shot — we're about to
@@ -1045,6 +1055,23 @@ export class GameEngine {
   weaponRangeFor(unitId, slot) {
     const u = this._units.get(unitId)
     return u ? this.#weaponRangeFor(u, slot) : 220
+  }
+
+  // #withinFireArc enforces the weapon TDF `tolerance` (TA angle units, where
+  // 65536 = a full turn) as a yaw firing arc.  Aircraft aim by pointing the
+  // whole airframe — there's no rotating turret — so the body heading must be
+  // within tolerance of the target bearing before the weapon may open fire
+  // (the attack maneuver turns the unit to face first).  Turreted ground units
+  // aim via their COB AimX turret, whose completion is gated separately by the
+  // aim thread, so the body arc doesn't constrain them.  Returns true when
+  // there's no target XZ, no tolerance specified, or the unit isn't an
+  // airframe — i.e. "no constraint".
+  #withinFireArc(u, w, tgx, tgz) {
+    if (tgx == null) return true
+    const tol = (w && w.tolerance > 0) ? w.tolerance : 0
+    if (!tol || !u.meta || !u.meta.isAircraft) return true
+    const bearing = Math.atan2(tgx - u.pos.x, tgz - u.pos.z)
+    return Math.abs(shortestArc(bearing - u.heading)) <= angleToRadians(tol)
   }
 
   // #normalizeTarget coerces the caller's shape into the SM's internal
