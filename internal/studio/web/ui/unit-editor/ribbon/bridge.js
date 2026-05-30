@@ -34,6 +34,7 @@ import { openSettingsDialog } from '../../dialogs/settings.js'
 import { openHelpDialog } from '../../dialogs/help.js'
 import { openModelPicker } from '../../pickers/open-unit-flow.js'
 import { openMvThreadCodeModal } from '../debugger/modal.js'
+import { TA_TICK_MS } from '/engine/tick-rate.js'
 import { isCobScriptRunning, runCobEntry } from '../cob-sync.js'
 import { startMvAutoBuild } from '../runtime.js'
 import {
@@ -260,9 +261,9 @@ export function wireUnitEditorHostBridge(reactUi) {
     stepRuntime: () => {
       const rt = _activeRuntime()
       if (!rt) return
-      // Force one fixed 25 ms TA tick across the WHOLE per-frame
-      // pipeline, not just the COB scripts.  rt.tick(25) alone only
-      // advances bytecode — weapons, movement, particles, audio,
+      // Force one fixed TA_TICK_MS step across the WHOLE per-frame
+      // pipeline, not just the COB scripts.  rt.tick(TA_TICK_MS) alone
+      // only advances bytecode — weapons, movement, particles, audio,
       // and smoke trails are driven elsewhere (engine.tick + the
       // per-view onAfterFrame hook), so a script-only step looked
       // like "the panel stats tick but nothing in the world moves."
@@ -286,11 +287,11 @@ export function wireUnitEditorHostBridge(reactUi) {
         // the SmokeTrailManager that view-helpers stashed on
         // sv._smokeTrails.
         const sv = hostCallbacks.getActiveSandboxView?.() || null
-        if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(25)
+        if (sv && sv.scene && typeof sv.scene.tick === 'function') sv.scene.tick(TA_TICK_MS)
         if (sv && sv._smokeTrails) {
           const rt = sv.runtime
           const rate = !rt ? 1 : (rt.paused ? 0 : (rt.playbackRate || 1))
-          try { sv._smokeTrails.tick(25 * rate) } catch { /* ignore */ }
+          try { sv._smokeTrails.tick(TA_TICK_MS * rate) } catch { /* ignore */ }
         }
       } else {
         // Viewer per-frame: binding.tick (runtime + particles +
@@ -299,9 +300,9 @@ export function wireUnitEditorHostBridge(reactUi) {
         // its own tickSmokeTrails inside).
         const mv = getActiveModelViewer()
         const cob = mv && mv.cob
-        if (cob && typeof cob.tick === 'function') cob.tick(25)
+        if (cob && typeof cob.tick === 'function') cob.tick(TA_TICK_MS)
         const ctrls = hostCallbacks.getActiveMvControls?.()
-        if (ctrls && typeof ctrls.tick === 'function') ctrls.tick(25)
+        if (ctrls && typeof ctrls.tick === 'function') ctrls.tick(TA_TICK_MS)
       }
       // Always leave the runtime paused after a step so the user
       // can keep stepping (`wasPaused || true === true`).

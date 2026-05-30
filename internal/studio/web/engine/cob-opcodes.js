@@ -135,8 +135,11 @@ export const TA_LINEAR_SCALE     = 65536 // movement / position units (1 wu = 65
 // sequences (turret restore-after-delay, factory door cadence,
 // smoke-unit polling) play at the exact pacing TA gameplay shows
 // instead of drifting with the browser's render dt.
-export const TA_TICK_HZ = 40
-export const TA_TICK_MS = 1000 / TA_TICK_HZ // 25 ms
+// Tick rate lives in its own module (engine/tick-rate.js) so external
+// callers can import it without dragging the rest of the opcode table.
+// Re-exported here for backward compatibility with the many existing
+// imports that already pull it from cob-opcodes.
+export { TA_TICK_HZ, TA_TICK_MS } from './tick-rate.js'
 
 // Helper - convert a TA fixed-point angle (units of 1/65536 of a
 // full turn) into radians for downstream Math.* / matrix code.

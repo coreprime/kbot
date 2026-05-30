@@ -33,11 +33,6 @@ import {
   SFX_FIRE_FLASH,
 } from '../../game3d/weapon-driver.js'
 
-// Same 3 ms window that engine.tick uses to coalesce duplicate calls
-// from N renderers.  See comment in game-engine.js.  The scene needs
-// its own guard because smokeTrails.tick lives outside engine.tick.
-const SCENE_TICK_COALESCE_MS = 3
-
 // Per-(unit, eventKey) debounce in ms.  A second click within the
 // window plays no sound — prevents the "select1 / select1 / select1"
 // stack when the user spam-clicks a unit.
@@ -69,11 +64,6 @@ export class SandboxScene {
     this.smokeTrails = new SmokeTrailManager()
     // Per-unit / per-event sound debounce ledger.  See playUnitSound.
     this._unitSoundDebounce = new Map()
-    // Per-frame scene-tick coalesce.  Mirrors engine.tick's guard so
-    // smoke-trail advance also folds to once per frame when N renderers
-    // each call scene.tick().
-    this._lastTickWallMs = 0
-    this._lastTickResult = null
     // Engine event subscriptions — all scene-level concerns: spawn a
     // visible projectile, drop a death puff, voice an arrival ack.
     // Each mutates engine/binding state, so each must fire once per
@@ -205,21 +195,15 @@ export class SandboxScene {
     return this.playUnitSound(unit, pick)
   }
 
-  // tick advances the engine + smoke trails by dtMs.  Coalesces
-  // duplicate calls within SCENE_TICK_COALESCE_MS so N renderers
-  // sharing this scene only step the sim once per paint frame.
+  // tick advances the engine + smoke trails by dtMs.  Sole driver is the
+  // tab-owned tick loop (/ui/sandbox/tab.js); renderers no longer self-
+  // tick from onAfterFrame, so the wall-clock coalesce guard this used to
+  // carry is gone — every call advances the sim deterministically.
   tick(dtMs) {
-    const wall = (typeof performance !== 'undefined' && performance.now)
-      ? performance.now() : Date.now()
-    if (this._lastTickWallMs !== 0 && (wall - this._lastTickWallMs) < SCENE_TICK_COALESCE_MS) {
-      return this._lastTickResult
-    }
-    this._lastTickWallMs = wall
     const result = this.engine.tick(dtMs)
     const rt = this.engine.runtime
     const rate = (rt && rt.paused) ? 0 : ((rt && rt.playbackRate) || 1)
     this.smokeTrails.tick(dtMs * rate)
-    this._lastTickResult = result
     return result
   }
 
