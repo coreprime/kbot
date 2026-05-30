@@ -4913,6 +4913,20 @@ canvas {
   display: inline-block; width: 12px; height: 12px;
   border-radius: 2px; border: 1px solid var(--border);
 }
+/* Projectiles panel — group-mode picker.  Sits at the top of the
+   panel body styled as a section row, but the click target is the
+   buttons (not the row); the picker label + chips sit on one line
+   so the panel stays as compact as the Effects panel. */
+.mv-fx-section-tabs { gap: 4px; padding: 4px 6px; cursor: default; }
+.mv-fx-mode-label   { font-size: 10px; color: var(--muted); margin-right: 2px; }
+.mv-fx-mode-tab {
+  font-size: 10px; font-family: ui-monospace, monospace;
+  padding: 1px 6px; border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-2); color: var(--text); cursor: pointer;
+  text-transform: none; letter-spacing: 0;
+}
+.mv-fx-mode-tab:hover     { background: var(--bg-3, var(--bg-2)); }
+.mv-fx-mode-tab.on        { background: var(--accent, #3a6); color: #fff; border-color: var(--accent, #3a6); }
 .mv-fx-kind {
   color: var(--text); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;

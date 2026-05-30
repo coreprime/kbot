@@ -89,6 +89,12 @@ export function wrapCobWithAggregate(view, cob) {
   if (typeof view.aggregateAudioPool === 'function') {
     proxy.audio = view.aggregateAudioPool()
   }
+  // Projectiles inspector reads off proxy.projectiles — both views populate
+  // it via their own aggregateProjectiles().  Absent (or empty array) when
+  // the engine has nothing in flight; that's the panel's empty state.
+  if (typeof view.aggregateProjectiles === 'function') {
+    proxy.projectiles = view.aggregateProjectiles()
+  }
   // _lifecycle default — the inspector's per-unit panels read this
   // to gate buttons pre-Create.  Multi-entity / aircraft-Create paths
   // set it on the real binding; the proxy needs a sensible default

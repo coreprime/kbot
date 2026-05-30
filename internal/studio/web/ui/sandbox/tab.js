@@ -325,7 +325,7 @@ export async function activateSandboxTab(tab) {
   for (const id of ['mv-inspector-actions']) {
     setMvInspectorVisible(id, false, { persist: false })
   }
-  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports', 'mv-inspector-unit-ports', 'mv-inspector-effects', 'mv-inspector-audio']) {
+  for (const id of ['mv-inspector-camera', 'mv-inspector-scripts', 'mv-inspector-staticvars', 'mv-inspector-ports', 'mv-inspector-unit-ports', 'mv-inspector-effects', 'mv-inspector-projectiles', 'mv-inspector-audio']) {
     setMvInspectorVisible(id, true, { persist: false })
   }
   // The Controls panel's action buttons (Move / Primary / Secondary /

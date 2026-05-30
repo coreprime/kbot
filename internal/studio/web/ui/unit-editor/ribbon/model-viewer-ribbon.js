@@ -344,6 +344,8 @@ const _VIEW_PANELS = [
     title: 'Toggle the Renderer overlay — live read-out of the viewer camera (eye, target, yaw, pitch, distance, FOV) plus the GL canvas’s current frame rate.' },
   { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
     title: 'Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding’s particle-pool occupancy.' },
+  { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
+    title: 'Toggle the Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
   { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
     title: 'Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
 ]

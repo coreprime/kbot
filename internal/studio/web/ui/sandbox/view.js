@@ -2030,6 +2030,48 @@ export class SandboxView {
     }
   }
 
+  // aggregateProjectiles returns a flat snapshot of every in-flight model
+  // projectile (bombs / missiles / rockets) with the host-side metadata
+  // the Projectiles inspector needs but the engine record doesn't carry —
+  // the owning unit's name + faction + side colour, the live unit position
+  // when the projectile is homing on a unit (so origin/destination renders
+  // a live track).  Snapshots at call time so a despawn between the panel's
+  // build pass and a draw pass can't crash the renderer.
+  aggregateProjectiles() {
+    const engine = this.engine
+    if (!engine) return []
+    const out = []
+    for (const p of engine.projectiles()) {
+      if (!p || p.dead) continue
+      const owner = engine.unitById(p.ownerId) || null
+      let liveTarget = null
+      if (p.targetUnitId != null) {
+        const tu = engine.unitById(p.targetUnitId)
+        if (tu && !tu.dead) liveTarget = { x: tu.pos.x, y: tu.pos.y, z: tu.pos.z }
+      }
+      out.push({
+        id: p.id,
+        weaponName: p.weaponName || '',
+        model: p.model || '',
+        mode: p.mode || 'straight',
+        origin:      { x: p.origin.x, y: p.origin.y, z: p.origin.z },
+        destination: { x: p.target.x, y: p.target.y, z: p.target.z },
+        liveTarget,
+        pos: { x: p.pos.x, y: p.pos.y, z: p.pos.z },
+        vel: { x: p.vel.x, y: p.vel.y, z: p.vel.z },
+        speed: p.speed || 0,
+        ageSec: p.ageSec || 0,
+        lifeSec: p.lifeSec || 0,
+        owner: owner ? {
+          id: owner.id,
+          name: owner.name || '',
+          side: owner.side | 0,
+        } : null,
+      })
+    }
+    return out
+  }
+
   // aggregateAudioPool returns a virtual AudioPool that fans count()
   // + each(cb) across every binding's pool.  Entries are passed by
   // ref so the panel's progress bar reads the live <audio>'s

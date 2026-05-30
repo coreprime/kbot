@@ -126,6 +126,8 @@ const _PANEL_ROWS = [
     title: 'Runtime overlay — active script threads, instruction counters, sim ticks.' },
   { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
     title: 'Effects overlay — every live particle across every binding (projectiles, smoke, sparks).' },
+  { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
+    title: 'Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
   { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
     title: 'Audio overlay — every sound currently playing across every unit.' },
   { id: 'sandbox-panel',           icon: '🛠', label: 'Sandbox Controls',

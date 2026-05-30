@@ -10,6 +10,7 @@ const INSPECTOR_PANEL_IDS = [
   'mv-inspector-staticvars',
   'mv-inspector-audio',
   'mv-inspector-effects',
+  'mv-inspector-projectiles',
   'mv-inspector-camera',
   'mv-inspector-actions',
   'mv-inspector-ports',

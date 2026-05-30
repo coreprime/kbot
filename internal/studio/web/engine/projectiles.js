@@ -97,6 +97,9 @@ export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targ
     pos: { x: anchor[0], y: anchor[1], z: anchor[2] },
     vel: { x: vx, y: vy, z: vz },
     launchY: anchor[1],
+    // Carry the muzzle-exit anchor so inspectors can plot origin → destination
+    // for a projectile that's already in flight (pos changes every tick).
+    origin: { x: anchor[0], y: anchor[1], z: anchor[2] },
     target: { x: tx, y: ty, z: tz },
     targetUnitId,
     speed: Math.hypot(vx, vy, vz),

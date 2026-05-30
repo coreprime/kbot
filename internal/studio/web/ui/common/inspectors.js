@@ -48,6 +48,7 @@ export const MV_INSPECTOR_IDS = [
   'mv-inspector-staticvars',
   'mv-inspector-camera',
   'mv-inspector-effects',
+  'mv-inspector-projectiles',
   'mv-inspector-audio',
 ]
 
