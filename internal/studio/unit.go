@@ -221,6 +221,11 @@ type unitWeaponJSON struct {
 	// Cruise: TDF `cruise=1`.  Cruise missile — flies low/level toward the
 	// target rather than arcing.  Surfaced for the projectile guidance mode.
 	Cruise bool `json:"cruise"`
+	// AreaOfEffectWU: TDF `areaofeffect`, the blast diameter in world units.
+	// The projectile simulation uses half of it as the proximity radius for
+	// "reached the target" detonation, so a bomb's wide blast detonates
+	// sooner than a pinpoint missile.
+	AreaOfEffectWU float64 `json:"areaOfEffectWU"`
 }
 
 func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
@@ -558,6 +563,7 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
 	out.TurnRate = intFieldClean(sec, "turnrate")
 	out.FlightTimeSec = sec.Float("weapontimer")
 	out.Cruise = boolish(sec.String("cruise"))
+	out.AreaOfEffectWU = sec.Float("areaofeffect")
 }
 
 // weaponsListMu / weaponsListOnce / weaponsListCache cache the parsed

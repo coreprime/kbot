@@ -74,6 +74,7 @@ import { CobRuntime } from './cob-runtime.js'
 import { CobBinding } from './cob-binding.js'
 import { stepSurfaceLocomotion, attackManeuver, shortestArc } from './locomotion.js'
 import { angleToRadians } from './cob-opcodes.js'
+import { makeProjectile, stepProjectile, hasModelProjectile } from './projectiles.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -170,6 +171,12 @@ export class GameEngine {
     // primary call computed.
     this._lastTickWallMs = 0
     this._lastTickResult = null
+    // Active model-projectiles (missiles / rockets / bombs) the engine
+    // simulates each tick — see projectiles.js.  Views read projectiles()
+    // and render a 3DO mesh per entry.  Plain bullets / lasers / shells stay
+    // on the lightweight particle path and never land here.
+    this._projectiles = []
+    this._nextProjId = 1
   }
 
   // ── Event bus ─────────────────────────────────────────────────────
@@ -584,6 +591,10 @@ export class GameEngine {
       if (!paused) this.#stepWeapons(u, simNowMs)
       if (!skipSync) this.#syncBinding(u, dtMs)
     }
+    // Advance in-flight model-projectiles (missiles / rockets / bombs).
+    // Engine-owned in BOTH views, so it runs regardless of skipMovement —
+    // only the pause gate stops it, like every other sim phase.
+    if (!paused) this.#stepProjectiles(dtSec)
     // Cross-unit dynamic-light aggregation is now pull-side — the
     // view's per-frame hook calls engine.getSceneLight() and pushes
     // the result to its own renderer.  The engine itself is fully
@@ -961,6 +972,11 @@ export class GameEngine {
       // sound through the shared weapon-driver.
       const firePiece = this.#firingPieceFor(u, slot)
       const anchor = this.#pieceWorldPos(u, firePiece)
+      // Model weapons (missiles / rockets / bombs) fly a simulated 3DO mesh
+      // the engine owns; the view renders it and skips the dead-reckoned
+      // particle.  The flag rides the 'fire' event so the particle path can
+      // bow out for these while still playing the muzzle sound / smoke.
+      const isModelProj = hasModelProjectile(w)
       this.emit('fire', {
         unit: u,
         slot,
@@ -968,7 +984,9 @@ export class GameEngine {
         weapon: w,
         anchor,
         target,
+        modelProjectile: isModelProj,
       })
+      if (isModelProj) this.#spawnProjectile(u, slot, w, anchor, state.target, target)
       // Hit-scan damage for unit-vs-unit fire.
       // Real game models per-projectile flight-time damage; the engine
       // doesn't yet, so apply on fire when the target is a live unit
@@ -1072,6 +1090,63 @@ export class GameEngine {
     if (!tol || !u.meta || !u.meta.isAircraft) return true
     const bearing = Math.atan2(tgx - u.pos.x, tgz - u.pos.z)
     return Math.abs(shortestArc(bearing - u.heading)) <= angleToRadians(tol)
+  }
+
+  // projectiles — the live model-projectile list (missiles / rockets / bombs)
+  // for the views to render.  Read-only; the engine owns the array.
+  projectiles() { return this._projectiles }
+
+  // #spawnProjectile registers one in-flight model weapon from a fire event.
+  // Resolves the aim point (and the live unit id for homing), captures the
+  // firing unit's velocity so a dropped bomb falls forward along its track,
+  // and hands the rest to makeProjectile (all rates come from the weapon TDF).
+  #spawnProjectile(u, slot, w, anchor, stateTarget, resolvedTarget) {
+    let tgtPoint = null, tgtUnitId = null
+    if (stateTarget && stateTarget.type === 'unit' && resolvedTarget && resolvedTarget.pos) {
+      tgtPoint = [resolvedTarget.pos.x, resolvedTarget.pos.y, resolvedTarget.pos.z]
+      tgtUnitId = resolvedTarget.id
+    } else if (Array.isArray(resolvedTarget)) {
+      tgtPoint = resolvedTarget
+    } else if (stateTarget && stateTarget.type === 'point' && stateTarget.point) {
+      tgtPoint = stateTarget.point
+    }
+    if (!tgtPoint) return
+    const spd = u.speed || 0
+    const carrierVel = { x: Math.sin(u.heading) * spd, z: Math.cos(u.heading) * spd }
+    const proj = makeProjectile({
+      id: this._nextProjId++, ownerId: u.id, slot, weapon: w,
+      anchor, target: tgtPoint, targetUnitId: tgtUnitId, carrierVel, gravity: this.gravity,
+    })
+    this._projectiles.push(proj)
+    this.emit('projectile-spawn', { projectile: proj })
+  }
+
+  // #stepProjectiles advances every live model-projectile one tick, lets a
+  // guided shot re-home on a still-living unit target, and emits
+  // 'projectile-hit' (with hit=true if it reached the target vs. timed out)
+  // as each expires.  Dead entries are compacted out after the pass.
+  #stepProjectiles(dtSec) {
+    if (this._projectiles.length === 0 || dtSec <= 0) return
+    let anyDead = false
+    for (const p of this._projectiles) {
+      if (p.dead) { anyDead = true; continue }
+      let opts
+      if (p.targetUnitId != null) {
+        const t = this._units.get(p.targetUnitId)
+        if (t && !t.dead) opts = { targetPos: t.pos }
+      }
+      stepProjectile(p, dtSec, opts)
+      if (p.dead) {
+        anyDead = true
+        this.emit('projectile-hit', {
+          projectile: p,
+          pos: [p.pos.x, p.pos.y, p.pos.z],
+          hit: p.hit,
+          weaponName: p.weaponName,
+        })
+      }
+    }
+    if (anyDead) this._projectiles = this._projectiles.filter((p) => !p.dead)
   }
 
   // #normalizeTarget coerces the caller's shape into the SM's internal
