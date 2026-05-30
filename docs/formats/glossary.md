@@ -15,6 +15,12 @@ runtime; its purpose is to serve as a named coordinate for
 A [HPI / UFO / CCX / GP3](hpi.md) file. All four extensions are the
 same on-disk format and only differ in load order.
 
+### ARGB4444 / ARGB1555
+The two 16-bit pixel encodings used by a truecolor [TAF](taf.md).
+ARGB4444 packs 4 bits each of alpha, red, green and blue (16 levels of
+soft alpha); ARGB1555 packs a 1-bit alpha plus 5 bits each of RGB (a
+hard cutout). A frame's `Format` byte (`4` or `5`) selects which.
+
 ### Attribute cell
 A 16×16 pixel cell in a [TNT](tnt.md) (or [SCT](sct.md)) map. Each
 tile is 32×32 px and so contains 4 attribute cells. Heights, feature
@@ -104,7 +110,9 @@ description, AI brief, start positions, environmental hints.
 A bitmap whose pixel values are 8-bit indices into a separate 256-entry
 [PAL](pal.md), rather than direct RGB triples. Every visible asset
 shipped with TA is paletted: [PCX](pcx.md), [GAF](gaf.md), [SCT](sct.md),
-[TNT](tnt.md) tile pixels, and the embedded minimaps.
+[TNT](tnt.md) tile pixels, and the embedded minimaps. The notable
+exception is TA: Kingdoms' [truecolor](#truecolor) [TAF](taf.md)
+animations.
 
 ### Piece
 A named sub-object in a [3DO](3do.md). [COB](cob.md) scripts manipulate
@@ -146,6 +154,13 @@ A nested [GAF](gaf.md) frame. A single visible animation frame can be a
 composite of multiple sub-frames blitted in order, each with its own
 origin offset and pixel data.
 
+### TAF
+A [TA: Kingdoms truecolor animation](taf.md). Reuses the [GAF](gaf.md)
+container layout but stores 16-bit [ARGB4444 / ARGB1555](#argb4444--argb1555)
+pixels instead of palette indices, so it carries its own colour and
+alpha. The `.taf` extension is shared with paletted GAF-style files —
+the per-frame format byte tells them apart.
+
 ### Tick
 See *game tick*.
 
@@ -157,7 +172,20 @@ allowing up to 65,536 unique tiles per map in theory.
 ### Transparent sentinel
 Palette index 0. Always rendered as fully transparent regardless of the
 RGB stored at that index. Universal across [PCX](pcx.md), [GAF](gaf.md),
-and all paletted bitmaps.
+and all paletted bitmaps. Truecolor [TAF](taf.md) frames have no
+sentinel — transparency comes from the per-pixel alpha channel instead.
+
+### Truecolor
+A bitmap that stores a colour (and alpha) per pixel rather than an index
+into a palette. The exception to TA's otherwise universally
+[paletted](#paletted-image) art: TA: Kingdoms' [TAF](taf.md) animations
+use 16-bit [ARGB4444 / ARGB1555](#argb4444--argb1555) pixels.
+
+### TSF
+"TAF Source Format" — the human-readable, brace-delimited text form of a
+[TAF](taf.md). The TA: Kingdoms GUI loader reads `.tsf` directly for
+menu backgrounds; `kbot taf decompile` emits it and `kbot taf compile`
+reads it back. See [TAF / TSF](taf.md).
 
 ### Virtual filesystem (VFS)
 The merged tree of files the engine (and `kbot mount` / `kbot mcp`) see
