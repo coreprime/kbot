@@ -40,6 +40,7 @@ real files alongside the prose.
 | Page | Extensions | Purpose | First class? |
 |------|-----------|---------|--------------|
 | [GAF](gaf.md) | `.gaf` `.taf` | Indexed-colour sprite animations (cursors, explosions, unit gadgets, features) | TA ✅ &nbsp; TA:K ✅ |
+| [TAF / TSF](taf.md) | `.taf` `.tsf` | TA: Kingdoms **truecolor** (16-bit ARGB) animations — spell effects, explosions, menu backgrounds — plus their editable text form | TA:K ✅ |
 | [PCX](pcx.md) | `.pcx` | ZSoft Paintbrush bitmap — unit portraits, GUI panels, and TA:K palette carriers | TA ✅ &nbsp; TA:K ✅ |
 | [PAL / ALP / LHT / SHD](pal.md) | `.pal` `.alp` `.lht` `.shd` | 256-entry colour palette and 256×4 colour lookup tables | TA ✅ |
 | [FNT](fnt.md) | `.fnt` | 1-bit-per-pixel variable-width bitmap font | TA ✅ |

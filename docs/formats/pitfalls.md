@@ -145,9 +145,28 @@ relevant format page.
   origin), not deltas.
 - **`anims/terrain.gaf` and `anims/vismasks.gaf` have `Version == 0`**
   in their headers. Accept zero as a valid synonym for `0x00010100`.
-- **TA: Kingdoms `.taf` IS a GAF** — same on-disk format. Only
-  difference: TAK pulls the palette from a per-side `.pcx` rather
-  than the global TA palette.
+- **TA: Kingdoms `.taf` comes in two kinds.** A *paletted* `.taf` IS a
+  GAF — same on-disk format, except TAK pulls the palette from a
+  per-side `.pcx` rather than the global TA palette. A *truecolor*
+  `.taf` reuses the same container but stores 16-bit ARGB pixels and
+  needs no palette. The frame format byte (`0`/`1` = paletted,
+  `4`/`5` = truecolor), not the extension, is authoritative — see
+  [TAF / TSF](taf.md).
+
+## TAF / TSF — truecolor animations
+
+- **`.taf` is overloaded** — paletted (read as [GAF](gaf.md)) vs
+  truecolor (read with `kbot taf`). Always check the frame format byte,
+  never the filename, though most TAK truecolor files carry a `_4444` /
+  `_1555` suffix by convention.
+- **GIF export is lossy.** GIF holds only a 1-bit cutout and 255
+  colours, so soft ARGB4444 alpha becomes hard edges. Use APNG
+  (`kbot taf export --format apng`) to keep the real alpha channel.
+- **The frame name field and the `0x0B` flag byte can hold junk.**
+  Preserve them verbatim for a byte-exact round-trip; don't normalise.
+- **`Delay` / `Duration` of `0` is legal** — like GAF, a zero-tick
+  frame is event-driven (static menu backgrounds use it). Don't "fix"
+  it.
 
 ## PCX — images
 

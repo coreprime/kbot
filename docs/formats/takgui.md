@@ -174,9 +174,11 @@ Reading top to bottom:
 
 The header widget supports two background sources:
 
-- **`.tsf`** — a thin JPG carrier. TA:K accepts JPEGs via this wrapper
-  (the actual TAF/TSF binary format hasn't been fully reverse-engineered
-  publicly).
+- **`.tsf`** — the text form of a TA:K truecolor animation, which the GUI
+  loader reads directly. For a static menu it is a thin JPG carrier (the
+  `TitleScreen.tsf` example wraps `TitleScreen.jpg`), but the same format
+  describes full multi-frame animations. See [TAF / TSF](taf.md) for the
+  binary and text layout, both of which kbot parses and round-trips.
 - **`.gaf`** — the standard TA: Kingdoms animation. The header
   references a sequence inside the GAF; the engine plays it as the
   background.
@@ -217,9 +219,12 @@ quirk.
 
 ## See also
 
-- [GAF](gaf.md) — `.taf` animations are referenced throughout `.gui`
-  files.
-- [PCX](pcx.md) — the palette-carrier convention TA:K uses for `.taf`.
+- [TAF / TSF](taf.md) — the truecolor animation and its `.tsf` text form
+  that `.gui` headers reference for menu backgrounds.
+- [GAF](gaf.md) — paletted `.taf` animations are referenced throughout
+  `.gui` files.
+- [PCX](pcx.md) — the palette-carrier convention TA:K uses for paletted
+  `.taf`.
 - The TA:K format-challenges notes in this repo's source materials —
   practical pitfalls when porting TA assets to TA:K.
 - [Glossary](glossary.md).

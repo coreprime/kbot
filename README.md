@@ -40,12 +40,14 @@ To develop/code against the project:
 
 - [Installation](#installation)
 - [File-Format Reference](docs/formats/README.md) — deep dive into HPI, GAF,
-  PCX, PAL, FNT, SCT, TNT, 3DO, COB/BOS, TDF/FBI/OTA, TA:K GUI
+  TAF/TSF, PCX, PAL, FNT, SCT, TNT, 3DO, COB/BOS, TDF/FBI/OTA, TA:K GUI
 - [Commands](#commands)
   - [`kbot ctx` — Working-Directory Contexts](#kbot-ctx--working-directory-contexts)
   - [`kbot cob` — COB/BOS Scripting](#kbot-cob--cobbos-scripting)
   - [`kbot hpi` — Archive Files](#kbot-hpi--archive-files)
   - [`kbot gaf` — Sprite Animations](#kbot-gaf--sprite-animations)
+  - [`kbot taf` — Truecolor Animations](#kbot-taf--truecolor-animations)
+  - [`kbot tsf` — Animation Text Scripts](#kbot-tsf--animation-text-scripts)
   - [`kbot pcx` — PCX Images](#kbot-pcx--pcx-images)
   - [`kbot fnt` — Bitmap Fonts](#kbot-fnt--bitmap-fonts)
   - [`kbot sct` — Map Sections](#kbot-sct--map-sections)
@@ -258,6 +260,52 @@ kbot gaf build ./sprites --target rebuilt.gaf
 ```
 
 The dump output includes a `frames.csv` in each sequence folder with timing metadata. The build command reads this CSV to reconstruct frame durations.
+
+---
+
+### `kbot taf` — Truecolor Animations
+
+Work with TA: Kingdoms truecolor (16-bit ARGB) animation files. Unlike GAF, a TAF carries its own colour and alpha, so no palette is needed. See [docs/formats/taf.md](docs/formats/taf.md) for the format.
+
+```bash
+# Inspect
+kbot taf info anims/manabomb_1555.taf      # per-frame table
+kbot taf list anims/manabomb_1555.taf      # one-line summary
+kbot taf lint anims/manabomb_1555.taf      # structural validation
+
+# Render
+kbot taf render anims/bluefire_4444.taf --frame 4 -o frame4.png
+kbot taf sheet  anims/manabomb_1555.taf --cols 5 --bg "#202830" -o sheet.png
+kbot taf export anims/fireballa_1555.taf --format apng -o anim.png   # or --format gif
+
+# Decompile / compile round-trip (TAF <-> TSF + PNG layers)
+kbot taf decompile anims/manabomb_1555.taf --target ./manabomb
+kbot taf compile   ./manabomb/manabomb.tsf --images ./manabomb -o rebuilt.taf
+kbot taf diff anims/manabomb_1555.taf rebuilt.taf      # verify identical
+kbot taf roundtrip anims/manabomb_1555.taf             # byte-for-byte check
+
+# Import from common formats
+kbot taf from-gif   boom.gif  --format argb4444 --name Boom -o boom.taf
+kbot taf from-sheet strip.png --frame-width 64 --frame-height 64 --count 8 -o strip.taf
+```
+
+`export` defaults to APNG (full alpha); `--format gif` produces a 1-bit-cutout preview. Every command resolves bare filenames through the active kbot context or an explicit `--vfs` mount.
+
+---
+
+### `kbot tsf` — Animation Text Scripts
+
+Inspect and validate TSF documents — the human-readable, brace-delimited text form of a TAF that the TA: Kingdoms GUI loader reads directly for menu backgrounds. `kbot taf decompile` emits TSF and `kbot taf compile` reads it back.
+
+```bash
+# Summarise the animation, frames and layer images
+kbot tsf info anims/titlescreen.tsf
+
+# Check the document matches the compiler's expectations
+kbot tsf lint anims/titlescreen.tsf
+```
+
+`lint` checks document shape only (one animation, one Filename'd layer per frame, recognised pixel formats); use `kbot taf compile` to exercise the full image-loading pipeline.
 
 ---
 
@@ -710,6 +758,21 @@ These tools render various artefacts from a `.tnt` to PNG.  Each accepts `path` 
 | `tnt_voidmap` | Engine-void mask — cells with `Feature == 0xFFFC` painted red, everything else transparent. |
 | `tnt_minimap` | Embedded 252×252 minimap (paletted PNG when `paletted=true`). |
 | `tnt_preview` | `tnt_image` plus composited feature sprites and numbered StartPos markers for the schema chosen by `schema` (0-based; defaults to 0).  Requires `game_data` so feature sprites and the sister `.ota` resolve. |
+
+#### TAF / TSF animation tools
+
+These tools inspect and render TA: Kingdoms truecolor animations (see [docs/formats/taf.md](docs/formats/taf.md)).  `taf_render` and `taf_sheet` return the rendered PNG **inline** so the assistant can show it directly; `taf_export` writes an animated file to `output`.
+
+| Tool | Purpose |
+|------|---------|
+| `taf_info` | Per-frame JSON: name, size, origin, pixel format and duration for every frame. |
+| `taf_list` | One-line JSON summary (name, frame count, duration, format). |
+| `taf_render` | Render a single frame and return it inline as PNG (optional `output` also saves it). |
+| `taf_sheet` | Render every frame into a grid sprite sheet, returned inline as PNG. |
+| `taf_export` | Write an animated GIF (`format: gif`) or APNG (`format: apng`/`png`, default) to `output`. |
+| `taf_lint` | Structural validation findings as JSON. |
+| `tsf_info` | Summarise a TSF document — animation, frames and referenced layer images. |
+| `tsf_lint` | Shape-check a TSF document against the compiler's expectations. |
 
 #### VFS introspection tools
 

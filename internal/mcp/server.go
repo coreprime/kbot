@@ -111,6 +111,7 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 	registerPALTools(s, resolver)
 	registerPCXTools(s, resolver)
 	registerSCTTools(s, resolver)
+	registerTAFTools(s, resolver)
 	registerTDFTools(s, resolver)
 	registerTNTTools(s, resolver)
 	registerVFSTools(s, resolver)
