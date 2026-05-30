@@ -56,8 +56,10 @@ uniform float uSpecularStrength;// "Specular Highlights" intensity slider; 1 = d
 uniform float uRunningLights;   // Surface-hint "running lights" — colour-keyed blinking emissive lights (corv06a/b)
 uniform float uRLEmit;          // running-lights per-texture emissive strength (hint)
 uniform float uRLStrength;      // "Running Lights" intensity slider; 1 = default
-uniform float uRLFade;          // running-lights faded-out floor (0..1) as a fraction of the lit surface — 0.85 = gentle dim, no hard edges
+uniform float uRLFadeOut;       // running-lights fade-out opacity (0..1): 0 = dim phase keeps the original texture, 1 = dim phase fades to black
 uniform float uRLMinNeighbors;  // running-lights continuity: a lamp texel must have at least this many keyed 8-neighbours (0 = off, 1 = reject lone specks)
+uniform float uRLKeyBright;     // running-lights detection: min brightness (max channel, 0..1) a texel needs to read as a lamp — lower picks up more pixels
+uniform float uRLKeySat;        // running-lights detection: min relative saturation (0..1) a texel needs to read as a lamp — lower picks up more pixels
 uniform float uBump;            // Surface-hint auto-bump — perturb the normal from the tile's luminance gradient
 uniform float uBumpIntensity;   // bump relief strength (per-texture hint)
 uniform float uBumpStrength;    // "Bump Mapping" intensity slider; 1 = default
@@ -163,7 +165,7 @@ vec4 lampSample(vec2 uv) {
   float mx = max(max(t.r, t.g), t.b);
   float mn = min(min(t.r, t.g), t.b);
   float rsat = (mx - mn) / max(mx, 0.004);
-  float keyed = step(0.12, mx) * step(0.50, rsat);
+  float keyed = step(uRLKeyBright, mx) * step(uRLKeySat, rsat);
   return vec4(t, keyed);
 }
 
@@ -527,8 +529,13 @@ void main() {
     float gmn = min(min(gb.r, gb.g), gb.b);
     float gsat = (gmx - gmn) / max(gmx, 0.004);
     vec3 hue = gb / max(gmx, 0.004);                 // dominant (vivid) blob hue
-    float phase = (hue.b >= hue.r && hue.b >= hue.g) ? 0.0
-                : ((hue.g >= hue.r) ? 2.094 : 4.188);
+    // Blink phase from the CONTINUOUS hue angle (0..1 around the wheel) so a
+    // single-coloured blob pulses as ONE lamp.  The old 3-bucket mapping
+    // (blue / green / yellow-red) split colours that straddled a bucket edge
+    // — e.g. a purple area (r≈b) flickered as two competing lamps, one blue
+    // one red, on the same texels.  A smooth angle has no such seam, while
+    // distinct colours (blue vs yellow) still land on different phases.
+    float phase = rgbToHsv(hue).x * 6.2831853;
     float blink = smoothstep(0.12, 0.88, 0.5 + 0.5 * sin(uTime * 3.5 + phase));
 
     // ── Lamp body gate (sharp 5x5 scan) ─────────────────────────────────
@@ -555,8 +562,10 @@ void main() {
     float dense  = smoothstep(0.32, 0.62, densN) * step(uRLMinNeighbors * 0.05, densN);
     float coreAmt = c0.a * max(bright, dense) * edgeFade;
 
-    // Lamp body: recolour to the dominant blob hue, pulsing in sync.
-    vec3 lampOff = col * uRLFade;
+    // Lamp body: recolour to the dominant blob hue, pulsing in sync.  The
+    // dim phase fades from the original surface (uRLFadeOut 0) toward black
+    // (uRLFadeOut 1).
+    vec3 lampOff = col * (1.0 - uRLFadeOut);
     vec3 lampOn = hue * (0.95 + 0.55 * uRLStrength);
     col = mix(col, mix(lampOff, lampOn, blink), coreAmt);
 

@@ -88,6 +88,19 @@ export const TIER_MID_MIN_PX  = 12   // ≥ 12 px → mid path; below → Phase 
 // not seizure-y blink that survives auto-rotate panning.
 export const SELECTED_IMPOSTOR_FLICKER_MS = 800
 
+// ── Effect distance LOD ───────────────────────────────────────────────
+// Fine surface effects only read up close, so they're switched off past a
+// camera-to-unit distance (wu) to save fragment work in busy scenes.  Bump
+// + specular drop first (they need near-pixel detail to register at all);
+// the running-lights glow survives a bit further since its bright dots +
+// halo stay legible at range.  Distance is camera → unit-centre in world
+// units — at the default unit-editor framing a kbot sits ~100 wu out, so
+// these only bite once a unit is well into the distance.  A short
+// smoothstep fade-band (below) avoids a hard pop at the boundary.
+export const EFFECT_LOD_SURFACE_MAX_WU = 700        // beyond → no bump / no specular hint
+export const EFFECT_LOD_RUNNINGLIGHTS_MAX_WU = 1100 // beyond → no running lights
+export const EFFECT_LOD_FADE_WU = 120               // smoothstep fade width before each cutoff
+
 // ── Audio dedup ──────────────────────────────────────────────────────
 
 // When a sound stem starts playing the AudioPool refuses to start

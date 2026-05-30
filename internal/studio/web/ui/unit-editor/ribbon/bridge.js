@@ -388,6 +388,12 @@ export function wireUnitEditorHostBridge(reactUi) {
       setHoveredTexture: (name) => {
         getActiveModelViewer()?.renderer?.setHoveredTexture?.(name)
       },
+      // Re-apply the hints table (incl. live session overrides) to the
+      // loaded model + redraw — drives the Textures panel's per-tile
+      // specular / running-lights / bump parameter editors.
+      refreshHints: () => {
+        getActiveModelViewer()?.renderer?.reapplyTextureHints?.()
+      },
     })
   }
   if (typeof reactUi.configurePieceTreeBridge === 'function') {

@@ -4912,6 +4912,42 @@ canvas {
 .mv-hint-label { flex-shrink: 0; min-width: 88px; color: var(--text, #ddd); }
 .mv-hint-value { flex: 1; text-align: right; color: var(--muted, #aaa); font-variant-numeric: tabular-nums; }
 .mv-hint-pop-foot { margin-top: 7px; color: var(--muted, #999); font-size: 10px; }
+
+/* Editable variant — wider + capped height so the parameter editors
+   scroll rather than run off-screen.  Sections mimic the panel "group"
+   look: a small caption header over a body of rows. */
+.mv-hint-popover--edit { width: 286px; max-height: 80vh; overflow-y: auto; }
+.mv-hint-section { margin-top: 8px; }
+.mv-hint-section:first-of-type { margin-top: 4px; }
+.mv-hint-section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted, #9aa); padding: 4px 0 3px; border-bottom: 1px solid var(--border, #333);
+  margin-bottom: 3px;
+}
+.mv-hint-reset {
+  background: none; border: 1px solid var(--border, #444); border-radius: 4px;
+  color: var(--muted, #aaa); font-size: 10px; padding: 1px 7px; cursor: pointer;
+  text-transform: none; letter-spacing: 0;
+}
+.mv-hint-reset:hover:not(:disabled) { color: var(--text, #fff); border-color: #5fd35f; }
+.mv-hint-reset:disabled { opacity: 0.4; cursor: default; }
+.mv-hint-edit-group-label {
+  font-size: 10.5px; color: var(--text, #cfd3da); font-weight: 600;
+  margin: 6px 0 2px;
+}
+.mv-hint-edit-row {
+  display: flex; align-items: center; gap: 6px; padding: 2px 0; min-height: 20px;
+}
+.mv-hint-edit-row.disabled { opacity: 0.4; }
+.mv-hint-edit-row .mv-hint-label { min-width: 84px; font-size: 11px; }
+.mv-hint-edit-row input[type="range"] { flex: 1; min-width: 0; height: 14px; accent-color: #5fd35f; }
+.mv-hint-edit-toggle { cursor: pointer; }
+.mv-hint-edit-toggle input { accent-color: #5fd35f; }
+.mv-hint-edit-val {
+  flex-shrink: 0; min-width: 34px; text-align: right;
+  color: var(--muted, #aaa); font-variant-numeric: tabular-nums; font-size: 10.5px;
+}
 .drawer-piece-group > .drawer-group-title { gap: 4px; }
 
 /* Slider variant of menu-row used by the Rendering dropdown's

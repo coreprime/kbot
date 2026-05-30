@@ -27,7 +27,14 @@
 import { signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
 import { htm as html } from '/ui/common/htm-bind.js'
-import { resolveTextureHints, DEFAULT_HINTS } from '/game3d/hints-textures.js'
+import {
+  resolveTextureHints, resolveBaseHints, DEFAULT_HINTS,
+  setTextureHintOverride, clearTextureHintOverride, hasTextureHintOverride,
+} from '/game3d/hints-textures.js'
+
+// _hintEditTick — bumped on every parameter edit so the open pop-up
+// re-renders against the freshly-resolved (overridden) hints.
+const _hintEditTick = signal(0)
 
 // _model — current model the user is inspecting.  Host updates it
 // via setTexturesModel(); the component re-renders when it changes.
@@ -41,10 +48,10 @@ const _openHint = signal(null)
 // _bridge — host-supplied callbacks.  setHoveredTexture(name|null)
 // asks the renderer to flash matching primitives; the no-op fallback
 // keeps the module importable in isolated tests.
-const _bridge = { setHoveredTexture: (_name) => {} }
+const _bridge = { setHoveredTexture: (_name) => {}, refreshHints: () => {} }
 
 export function configureTexturesBridge(impl) {
-  Object.assign(_bridge, { setHoveredTexture: (_name) => {} }, impl)
+  Object.assign(_bridge, { setHoveredTexture: (_name) => {}, refreshHints: () => {} }, impl)
 }
 
 export function setTexturesModel(model) {
@@ -156,35 +163,141 @@ function _HintLine({ label, value, on }) {
   `
 }
 
+// Effective sub-block readers — fill in the same defaults the renderer
+// applies for any field the hint omits, so the editor sliders always show
+// a real starting value (e.g. a tile that detected only `blink` still
+// edits emit/fade/minNeighbors from their defaults).
+function _effSpec(h) {
+  const s = h.specular || {}
+  return { metallic: !!s.metallic, scale: s.scale != null ? s.scale : 1.0 }
+}
+function _effRL(h) {
+  const r = h.runningLights || {}
+  return {
+    blink: !!r.blink,
+    emit: r.emit != null ? r.emit : 1.0,
+    fadeOut: r.fadeOut != null ? r.fadeOut : 0.15,
+    minNeighbors: r.minNeighbors != null ? r.minNeighbors : 0,
+    keyBright: r.keyBright != null ? r.keyBright : 0.12,
+    keySat: r.keySat != null ? r.keySat : 0.50,
+  }
+}
+function _effBump(h) {
+  const b = h.bump || {}
+  return {
+    generate: !!b.generate,
+    intensity: b.intensity != null ? b.intensity : 1.0,
+    smooth: b.smooth != null ? b.smooth : 1.5,
+    threshold: b.threshold != null ? b.threshold : 0.12,
+  }
+}
+
+// _EditToggle / _EditNum — the editable rows.  onChange/onInput fire on
+// every input event so the 3D view updates live as the slider drags.
+function _EditToggle({ label, on, onChange }) {
+  return html`
+    <label class="mv-hint-edit-row mv-hint-edit-toggle">
+      <input type="checkbox" checked=${on} onChange=${(e) => onChange(e.currentTarget.checked)} />
+      <span class="mv-hint-label">${label}</span>
+    </label>
+  `
+}
+function _EditNum({ label, value, min, max, step, fmt, disabled, onInput }) {
+  return html`
+    <div class=${'mv-hint-edit-row' + (disabled ? ' disabled' : '')}>
+      <span class="mv-hint-label">${label}</span>
+      <input type="range" min=${min} max=${max} step=${step} value=${value} disabled=${disabled}
+             onInput=${(e) => onInput(+e.currentTarget.value)} />
+      <span class="mv-hint-edit-val">${fmt ? fmt(value) : value}</span>
+    </div>
+  `
+}
+
 function _HintPopover() {
   const o = _openHint.value
+  // Read the edit tick so the card re-subscribes + re-renders after every
+  // tweak (also stamped on the card below to keep the read "used").
+  const tick = _hintEditTick.value
   if (!o) return null
-  const h = o.hints
-  const plain = h === DEFAULT_HINTS || (!_hintBadges(h).length)
-  // Clamp so the card stays on-screen.
-  const left = Math.min(o.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 280)
-  const top = Math.min(o.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 220)
-  const spec = h.specular || {}
-  const rl = h.runningLights
-  const bump = h.bump
+  // Effective hints = detected + any live session override; the editors
+  // read/write these.  Detected = the raw table values, shown read-only
+  // below for comparison.
+  const eff = resolveTextureHints(o.name)
+  const base = resolveBaseHints(o.name)
+  const overridden = hasTextureHintOverride(o.name)
+  const left = Math.min(o.x, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 300)
+  const top = Math.min(o.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 440)
+
+  // commit — push the new override to the renderer + bump the card.  All
+  // setters write the FULL sub-block so the replace-merge keeps siblings.
+  const commit = () => { _bridge.refreshHints(); _hintEditTick.value++ }
+  const setSpec = (patch) => { setTextureHintOverride(o.name, { specular: { ..._effSpec(eff), ...patch } }); commit() }
+  const setRL = (patch) => { setTextureHintOverride(o.name, { runningLights: { ..._effRL(eff), ...patch } }); commit() }
+  const setBump = (patch) => { setTextureHintOverride(o.name, { bump: { ..._effBump(eff), ...patch } }); commit() }
+  const reset = () => { clearTextureHintOverride(o.name); commit() }
+
+  const es = _effSpec(eff), er = _effRL(eff), eb = _effBump(eff)
+  const bs = base.specular || {}, br = base.runningLights, bb = base.bump
+  const plainBase = base === DEFAULT_HINTS || !_hintBadges(base).length
+
   return html`
     <div class="mv-hint-backdrop" onClick=${() => { _openHint.value = null }}>
-      <div class="mv-hint-popover" style=${`left:${left}px;top:${top}px`} onClick=${(e) => e.stopPropagation()}>
+      <div class="mv-hint-popover mv-hint-popover--edit" data-tick=${tick} style=${`left:${left}px;top:${top}px`} onClick=${(e) => e.stopPropagation()}>
         <div class="mv-hint-pop-head">
           <span class="mv-hint-pop-title">${o.name}</span>
           <button class="mv-hint-pop-close" onClick=${() => { _openHint.value = null }}>×</button>
         </div>
-        <div class="mv-hint-pop-sub">Resolved material hints</div>
-        ${plain && html`<div class="mv-hint-plain">Plain painted surface — no hints.</div>`}
-        <${_HintLine} label="Specular" on=${!!spec.metallic}
-          value=${spec.metallic ? `metallic · ×${spec.scale}` : `painted · ×${spec.scale || 1}`} />
-        <${_HintLine} label="Running lights" on=${!!(rl && rl.blink)}
-          value=${rl ? `blink ${rl.blink ? 'on' : 'off'} · emit ${rl.emit}` : 'off'} />
-        <${_HintLine} label="Auto-bump" on=${!!(bump && bump.generate)}
-          value=${bump ? `generate ${bump.generate ? 'on' : 'off'} · ×${bump.intensity}` : 'off'} />
-        <${_HintLine} label="Emissive" on=${!!h.emissive}
-          value=${h.emissive ? `[${(h.emissive.color || []).join(', ')}] · ${h.emissive.strength}` : 'off'} />
-        <div class="mv-hint-pop-foot">Gated by <b>Surface Hints</b> in Graphics Options.</div>
+
+        <div class="mv-hint-section">
+          <div class="mv-hint-section-head">
+            <span>Custom Parameters</span>
+            <button class="mv-hint-reset" disabled=${!overridden}
+                    title="Revert this tile to its detected hints"
+                    onClick=${reset}>${overridden ? '↺ Reset' : 'Detected'}</button>
+          </div>
+
+          <div class="mv-hint-edit-group-label">💎 Specular</div>
+          <${_EditToggle} label="Metallic sheen" on=${es.metallic} onChange=${(v) => setSpec({ metallic: v })} />
+          <${_EditNum} label="Scale" min=${0} max=${6} step=${0.1} value=${es.scale}
+            disabled=${!es.metallic} fmt=${(v) => `×${(+v).toFixed(1)}`} onInput=${(v) => setSpec({ scale: v })} />
+
+          <div class="mv-hint-edit-group-label">💡 Running Lights</div>
+          <${_EditToggle} label="Blink + emit" on=${er.blink} onChange=${(v) => setRL({ blink: v })} />
+          <${_EditNum} label="Emit" min=${0} max=${3} step=${0.05} value=${er.emit}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ emit: v })} />
+          <${_EditNum} label="Fade Out Opacity" min=${0} max=${1} step=${0.05} value=${er.fadeOut}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ fadeOut: v })} />
+          <${_EditNum} label="Cluster density" min=${0} max=${8} step=${1} value=${er.minNeighbors}
+            disabled=${!er.blink} fmt=${(v) => `${v | 0}`} onInput=${(v) => setRL({ minNeighbors: v })} />
+          <${_EditNum} label="Detect brightness" min=${0.02} max=${0.6} step=${0.01} value=${er.keyBright}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keyBright: v })} />
+          <${_EditNum} label="Detect saturation" min=${0} max=${1} step=${0.05} value=${er.keySat}
+            disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keySat: v })} />
+
+          <div class="mv-hint-edit-group-label">🗻 Bump Mapping</div>
+          <${_EditToggle} label="Generate relief" on=${eb.generate} onChange=${(v) => setBump({ generate: v })} />
+          <${_EditNum} label="Intensity" min=${0} max=${3} step=${0.05} value=${eb.intensity}
+            disabled=${!eb.generate} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setBump({ intensity: v })} />
+          <${_EditNum} label="Smooth" min=${1} max=${4} step=${0.1} value=${eb.smooth}
+            disabled=${!eb.generate} fmt=${(v) => (+v).toFixed(1)} onInput=${(v) => setBump({ smooth: v })} />
+          <${_EditNum} label="Grain deadzone" min=${0} max=${0.4} step=${0.01} value=${eb.threshold}
+            disabled=${!eb.generate} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setBump({ threshold: v })} />
+        </div>
+
+        <div class="mv-hint-section">
+          <div class="mv-hint-section-head"><span>Detected Parameters</span></div>
+          ${plainBase && html`<div class="mv-hint-plain">Plain painted surface — no hints detected.</div>`}
+          <${_HintLine} label="Specular" on=${!!bs.metallic}
+            value=${bs.metallic ? `metallic · ×${bs.scale}` : `painted · ×${bs.scale || 1}`} />
+          <${_HintLine} label="Running lights" on=${!!(br && br.blink)}
+            value=${br ? `blink ${br.blink ? 'on' : 'off'} · emit ${br.emit} · dens ${br.minNeighbors != null ? br.minNeighbors : 0}` : 'off'} />
+          <${_HintLine} label="Auto-bump" on=${!!(bb && bb.generate)}
+            value=${bb ? `generate ${bb.generate ? 'on' : 'off'} · ×${bb.intensity}` : 'off'} />
+          <${_HintLine} label="Emissive" on=${!!base.emissive}
+            value=${base.emissive ? `[${(base.emissive.color || []).join(', ')}] · ${base.emissive.strength}` : 'off'} />
+        </div>
+
+        <div class="mv-hint-pop-foot">Live, session-only. Gated by <b>Surface Hints</b> / <b>Running Lights</b> / <b>Bump Mapping</b> in Graphics Options.</div>
       </div>
     </div>
   `

@@ -12,17 +12,20 @@
 // renderer plumbing — only this file:
 //
 //   specular      { metallic, scale }                 — sheen boost   (LIVE)
-//   runningLights { blink, emit, fade, minNeighbors } — colour-keyed blinking
-//                   status lights that glow (and bloom into the scene).
-//                   `fade` (0..1) is the faded-out floor as a fraction of the
-//                   lit surface colour — 0.85 keeps the dim phase close to the
-//                   original so the pulse-down doesn't show hard edges.
-//                   `minNeighbors` is the cluster-density sensitivity: the
-//                   shader weights each lamp by how DENSE the keyed texels are
-//                   around it, so coherent blobs glow while lone grain specks
-//                   fall through to the base texture.  0 is the most permissive
-//                   (keeps small genuine dots); raise it to demand chunkier
-//                   blobs before anything lights.                       (LIVE)
+//   runningLights { blink, emit, fadeOut, minNeighbors, keyBright, keySat }
+//                   — colour-keyed blinking status lights that glow (and bloom
+//                   into the scene).  Each blob blinks as one lamp in its
+//                   dominant hue (phase from a continuous hue angle, so a
+//                   single colour never splits into two competing phases).
+//                   `fadeOut` (0..1) is the dim-phase opacity: 0 keeps the
+//                   original texture, 1 fades the lamp to black.
+//                   `minNeighbors` is the cluster-density sensitivity — coherent
+//                   blobs glow, lone grain specks fall through; 0 is most
+//                   permissive (keeps small dots), raise it to demand chunkier
+//                   blobs.  `keyBright` / `keySat` are the detection thresholds
+//                   (min max-channel brightness / relative saturation a texel
+//                   needs to read as a lamp) — lower either to pick up more
+//                   pixels.                                              (LIVE)
 //   bump          { generate, intensity, smooth }      — derive a normal from
 //                   the tile's luminance gradient for surface relief.
 //                   `smooth` (texels) low-passes the height field first so a
@@ -88,7 +91,7 @@ export const TEXTURE_HINTS = {
       // minNeighbors 0 = no continuity filter: these tiles' lamps are sparse
       // single-pixel dots (the small yellow/purple ones especially), so the
       // colour-key alone decides — every saturated lamp pixel blinks.
-      runningLights: { blink: true, emit: 1.0, fade: 0.85, minNeighbors: 0 },
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, minNeighbors: 0 },
     },
   },
   // ARM building running lights — Armpanel1.  Its lamps are sparse single
@@ -97,7 +100,7 @@ export const TEXTURE_HINTS = {
     match: /^armpanel1$/i,
     defaults: {
       specular: { metallic: true, scale: METAL_SPEC_SCALE },
-      runningLights: { blink: true, emit: 1.0, fade: 0.85, minNeighbors: 0 },
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, minNeighbors: 0 },
     },
   },
   // ARM building plating — ArmBui2b/c/d opt into auto bump mapping: the
@@ -182,9 +185,10 @@ function _groupCovers(group, name) {
   return _tileOverride(group, name) !== undefined
 }
 
-// resolveTextureHints — merged hint block for a tile name.  Returns
-// DEFAULT_HINTS when nothing matches (a plain painted surface).
-export function resolveTextureHints(name) {
+// resolveBaseHints — the DETECTED hint block for a tile name, straight
+// from the TEXTURE_HINTS table (no session edits).  Returns DEFAULT_HINTS
+// when nothing matches (a plain painted surface).
+export function resolveBaseHints(name) {
   if (!name) return DEFAULT_HINTS
   for (const group of Object.values(TEXTURE_HINTS)) {
     if (!_groupCovers(group, name)) continue
@@ -193,4 +197,66 @@ export function resolveTextureHints(name) {
     return hints
   }
   return DEFAULT_HINTS
+}
+
+// ── Session overrides ─────────────────────────────────────────────────
+// In-memory, per-tile tweaks layered ON TOP of the detected hints so the
+// Textures panel can experiment with specular / running-lights / bump
+// parameters live.  Keyed by lower-cased tile name; each value is a
+// partial hint block whose present sub-sections (specular / runningLights
+// / bump / emissive) REPLACE the detected ones (same merge semantics as a
+// group's per-tile override).  Never persisted — cleared on reload, so
+// it's a scratch pad for this Kbot session only.
+const _overrides = new Map()
+
+// setTextureHintOverride — store the FULL sub-blocks the caller passes
+// (the UI sends complete specular / runningLights / bump objects so the
+// replace-merge below keeps every field).  Merges into any existing
+// override for the tile rather than clobbering sibling sub-sections.
+export function setTextureHintOverride(name, patch) {
+  if (!name || !patch) return
+  const k = name.toLowerCase()
+  _overrides.set(k, _mergeHints(_overrides.get(k) || DEFAULT_HINTS, patch))
+}
+
+// clearTextureHintOverride — drop a tile's session tweaks (revert to
+// detected).  With no name, clears every override at once.
+export function clearTextureHintOverride(name) {
+  if (!name) { _overrides.clear(); return }
+  _overrides.delete(name.toLowerCase())
+}
+
+// hasTextureHintOverride — true when the tile currently carries session edits.
+export function hasTextureHintOverride(name) {
+  return !!(name && _overrides.has(name.toLowerCase()))
+}
+
+// resolveTextureHints — the EFFECTIVE hint block the renderer applies:
+// detected hints with any live session override layered on top.
+export function resolveTextureHints(name) {
+  const base = resolveBaseHints(name)
+  if (!name) return base
+  const ov = _overrides.get(name.toLowerCase())
+  return ov ? _mergeHints(base, ov) : base
+}
+
+// applyResolvedHints — copy the effective hint block for `name` onto a
+// render group's flat fields (the form the draw loop reads as uniforms).
+// Single source of truth shared by the model loader (at load) and the
+// renderer's live re-apply (when a session override changes), so the two
+// can never drift.
+export function applyResolvedHints(group, name) {
+  const h = resolveTextureHints(name)
+  group.metallic = !!(h.specular && h.specular.metallic)
+  group.specScale = (h.specular && h.specular.scale) || 1.0
+  group.runningLights = !!(h.runningLights && h.runningLights.blink)
+  group.rlEmit = (h.runningLights && h.runningLights.emit) || 0.0
+  group.rlFadeOut = (h.runningLights && h.runningLights.fadeOut != null) ? h.runningLights.fadeOut : 0.15
+  group.rlKeyBright = (h.runningLights && h.runningLights.keyBright != null) ? h.runningLights.keyBright : 0.12
+  group.rlKeySat = (h.runningLights && h.runningLights.keySat != null) ? h.runningLights.keySat : 0.50
+  group.rlMinNeighbors = (h.runningLights && h.runningLights.minNeighbors != null) ? h.runningLights.minNeighbors : 1
+  group.bump = !!(h.bump && h.bump.generate)
+  group.bumpIntensity = (h.bump && h.bump.intensity) || 0.0
+  group.bumpSmooth = (h.bump && h.bump.smooth != null) ? h.bump.smooth : 1.5
+  group.bumpThreshold = (h.bump && h.bump.threshold != null) ? h.bump.threshold : 0.12
 }

@@ -20,7 +20,7 @@
 
 import { Piece } from './piece.js'
 import { Model } from './model.js'
-import { resolveTextureHints } from './hints-textures.js'
+import { applyResolvedHints } from './hints-textures.js'
 
 const FLOATS_PER_VERTEX = 9
 
@@ -387,9 +387,9 @@ export class ModelLoader {
       const opaque = []
       const decal = []
       for (const bucket of map.values()) {
-        // Resolve material hints for this tile (specular today; bump /
-        // emissive later) — see hints-textures.js for the full data.
-        const hints = resolveTextureHints(bucket.texture)
+        // Material-hint fields (specular / running-lights / bump) are
+        // copied on by applyResolvedHints below — the single shared mapper
+        // also used by the renderer's live re-apply, so the two never drift.
         const group = {
           vbo: null,
           mode,
@@ -398,17 +398,8 @@ export class ModelLoader {
           color: bucket.color,
           isDecal: !!(bucket.texture && decals.has(bucket.texture.toLowerCase())),
           depthTier: bucket.depthTier || 0,
-          metallic: !!(hints.specular && hints.specular.metallic),
-          specScale: (hints.specular && hints.specular.scale) || 1.0,
-          runningLights: !!(hints.runningLights && hints.runningLights.blink),
-          rlEmit: (hints.runningLights && hints.runningLights.emit) || 0.0,
-          rlFade: (hints.runningLights && hints.runningLights.fade != null) ? hints.runningLights.fade : 0.85,
-          rlMinNeighbors: (hints.runningLights && hints.runningLights.minNeighbors != null) ? hints.runningLights.minNeighbors : 1,
-          bump: !!(hints.bump && hints.bump.generate),
-          bumpIntensity: (hints.bump && hints.bump.intensity) || 0.0,
-          bumpSmooth: (hints.bump && hints.bump.smooth != null) ? hints.bump.smooth : 1.5,
-          bumpThreshold: (hints.bump && hints.bump.threshold != null) ? hints.bump.threshold : 0.12,
         }
+        applyResolvedHints(group, bucket.texture)
         const arr = new Float32Array(bucket.interleaved)
         group.vbo = gl.createBuffer()
         gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)

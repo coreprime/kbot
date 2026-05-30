@@ -32,11 +32,11 @@
 //     without affecting siblings (e.g. .mv-sandbox-pane-slot vs
 //     .mv-unit-pane-slot).
 //
-//   contextMenuModifier: 'shift' | null
-//     When 'shift', plain right-click falls through (so the editor
-//     can use it for an existing gesture, e.g. the sandbox's RTS
-//     move-to / attack-here) and SHIFT+right-click opens the split
-//     menu.  When null, plain right-click opens the menu.
+//   (Pane split is an advanced gesture, gated behind CTRL+SHIFT — or
+//   CMD+SHIFT on macOS — right-click in EVERY editor.  Plain and Shift
+//   right-click fall through untouched so they stay free for camera pan
+//   in the unit viewer and RTS move-to / attack-here in the sandbox.
+//   There's no longer a per-adapter modifier knob.)
 //
 //   async makeLeafView(tab, leafId) → view
 //     Construct (or look up) the view for this leaf.  The host
@@ -336,7 +336,13 @@ function _wireSplitContextMenu(canvas, tab, leafId, adapter) {
   // plain nor modifier right-click can engage a new pane.
   if (adapter.splitDisabled) return
   const onContext = async (e) => {
-    if (adapter.contextMenuModifier === 'shift' && !e.shiftKey) return
+    // Split is an advanced gesture: require CTRL+SHIFT (or CMD+SHIFT on
+    // macOS) right-click.  Without both modifiers the handler is fully
+    // passive — no preventDefault / stopPropagation — so the gesture never
+    // pops on a plain or Shift right-click and never blocks the editor's
+    // own right-click use (camera pan in the unit viewer, unit commands in
+    // the sandbox); those editors suppress the native menu themselves.
+    if (!(e.shiftKey && (e.ctrlKey || e.metaKey))) return
     e.preventDefault()
     e.stopPropagation()
     const canClose = (typeof adapter.canCloseLeaf === 'function')

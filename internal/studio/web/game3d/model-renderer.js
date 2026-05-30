@@ -29,11 +29,15 @@ import {
   TIER_FULL_MIN_PX,
   TIER_MID_MIN_PX,
   SELECTED_IMPOSTOR_FLICKER_MS,
+  EFFECT_LOD_SURFACE_MAX_WU,
+  EFFECT_LOD_RUNNINGLIGHTS_MAX_WU,
+  EFFECT_LOD_FADE_WU,
 } from './performance.js'
 import { displayRgbForSide } from './team-colors.js'
 import {
   SKY_PRESETS, ENVIRONMENT_PRESETS, GRAVITY_BY_ENV, GRAVITY_EARTH, loadWorlds,
 } from './worlds.js'
+import { applyResolvedHints } from './hints-textures.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Fallback transform for entities with no explicit transform field —
@@ -904,6 +908,24 @@ export class ModelRenderer {
   // ENVIRONMENT_PRESETS.  The Studio Options UI calls this when the
   // user picks Mars / Lava / etc.; passing a custom object also
   // works for scripted scenes.
+  // reapplyTextureHints — recompute every draw group's material-hint
+  // fields (specular / running-lights / bump) from the hints table, which
+  // now includes any live session overrides set from the Textures panel,
+  // then redraw.  Lets the user tweak a tile's parameters and see the
+  // change instantly without reloading the model.
+  reapplyTextureHints() {
+    if (!this.model || !this.model.root) return
+    const visit = (p) => {
+      if (!p) return
+      for (const g of (p.drawGroups || [])) {
+        applyResolvedHints(g, g.textureName || g.texture)
+      }
+      for (const c of (p.children || [])) visit(c)
+    }
+    visit(this.model.root)
+    this.requestRedraw()
+  }
+
   setEnvironment(nameOrPreset) {
     let env
     let envKey = null
@@ -2198,8 +2220,10 @@ export class ModelRenderer {
     gl.uniform1f(this.uSpecularStrength, this.specularStrength)
     gl.uniform1f(this.uRLStrength, this.rlStrength)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
-    gl.uniform1f(this.uRLFade, 0.85)
+    gl.uniform1f(this.uRLFadeOut, 0.15)
     gl.uniform1f(this.uRLMinNeighbors, 1.0)
+    gl.uniform1f(this.uRLKeyBright, 0.12)
+    gl.uniform1f(this.uRLKeySat, 0.50)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
@@ -2345,8 +2369,10 @@ export class ModelRenderer {
     gl.uniform1f(this.uSpecularStrength, this.specularStrength)
     gl.uniform1f(this.uRLStrength, this.rlStrength)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
-    gl.uniform1f(this.uRLFade, 0.85)
+    gl.uniform1f(this.uRLFadeOut, 0.15)
     gl.uniform1f(this.uRLMinNeighbors, 1.0)
+    gl.uniform1f(this.uRLKeyBright, 0.12)
+    gl.uniform1f(this.uRLKeySat, 0.50)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
@@ -2510,6 +2536,24 @@ export class ModelRenderer {
     // pointed at it, the highlight should still draw even at low LOD.
     const hideFlares = this._lodHideFlares
     const hoveredName = this._hoveredPieceName
+    // Effect distance LOD — fade the per-fragment surface hints out as the
+    // unit recedes (no point paying for bump's texture-space Sobel or the
+    // running-lights neighbourhood scan on a tiny far unit).  Distance is
+    // camera → this draw's world origin (parentWorld translation), which is
+    // the unit position in both the single-unit viewer and per-entity
+    // sandbox draws.  `fxSurf` (bump + specular) cuts first, `fxRL`
+    // (running lights) a bit further; each ramps 1→0 across a short band.
+    let fxSurf = 1, fxRL = 1
+    if (!shadowPass) {
+      const eye = this.camera ? this.camera.eye : [0, 0, 0]
+      const dx = eye[0] - parentWorld[12]
+      const dy = eye[1] - parentWorld[13]
+      const dz = eye[2] - parentWorld[14]
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      const fade = Math.max(1, EFFECT_LOD_FADE_WU)
+      fxSurf = Math.max(0, Math.min(1, (EFFECT_LOD_SURFACE_MAX_WU - dist) / fade))
+      fxRL = Math.max(0, Math.min(1, (EFFECT_LOD_RUNNINGLIGHTS_MAX_WU - dist) / fade))
+    }
     const draw = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
@@ -2583,16 +2627,24 @@ export class ModelRenderer {
             //   specScale     — metal sheen boost (>1 on metal tiles)   — Surface Hints
             //   runningLights — colour-keyed blinking emissive lamps    — Running Lights
             //   bump          — derivative auto-bump (needs deriv ext)  — Bump Mapping
-            gl.uniform1f(this.uSpecScale,
-              (this.optMetalSpec && group.metallic) ? (group.specScale || 1.0) : 1.0)
-            const rlOn = (this.optRunningLights && group.runningLights) ? 1 : 0
+            // Distance LOD (fxSurf / fxRL, computed once above): fade the
+            // specular hint to 0 and skip the bump branch past the surface
+            // cutoff, and skip the running-lights branch past its further
+            // cutoff — so a far unit pays nothing for these per-fragment
+            // effects.  Setting uBump / uRunningLights to 0 lets the shader
+            // short-circuit the whole block, not just dim its output.
+            const specBase = (this.optMetalSpec && group.metallic) ? (group.specScale || 1.0) : 1.0
+            gl.uniform1f(this.uSpecScale, specBase * fxSurf)
+            const rlOn = (this.optRunningLights && group.runningLights && fxRL > 0.01) ? 1 : 0
             gl.uniform1f(this.uRunningLights, rlOn)
-            gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) : 0)
-            gl.uniform1f(this.uRLFade, (group.rlFade != null) ? group.rlFade : 0.85)
+            gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) * fxRL : 0)
+            gl.uniform1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.15)
             gl.uniform1f(this.uRLMinNeighbors, (group.rlMinNeighbors != null) ? group.rlMinNeighbors : 1.0)
-            const bumpOn = (this.optBump && group.bump && this._derivExt) ? 1 : 0
+            gl.uniform1f(this.uRLKeyBright, (group.rlKeyBright != null) ? group.rlKeyBright : 0.12)
+            gl.uniform1f(this.uRLKeySat, (group.rlKeySat != null) ? group.rlKeySat : 0.50)
+            const bumpOn = (this.optBump && group.bump && this._derivExt && fxSurf > 0.01) ? 1 : 0
             gl.uniform1f(this.uBump, bumpOn)
-            gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) : 0)
+            gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) * fxSurf : 0)
             gl.uniform1f(this.uBumpSmooth, (group.bumpSmooth != null) ? group.bumpSmooth : 1.5)
             gl.uniform1f(this.uBumpThreshold, (group.bumpThreshold != null) ? group.bumpThreshold : 0.12)
           }
@@ -2824,8 +2876,10 @@ export class ModelRenderer {
     this.uRunningLights = gl.getUniformLocation(prog, 'uRunningLights')
     this.uRLEmit = gl.getUniformLocation(prog, 'uRLEmit')
     this.uRLStrength = gl.getUniformLocation(prog, 'uRLStrength')
-    this.uRLFade = gl.getUniformLocation(prog, 'uRLFade')
+    this.uRLFadeOut = gl.getUniformLocation(prog, 'uRLFadeOut')
     this.uRLMinNeighbors = gl.getUniformLocation(prog, 'uRLMinNeighbors')
+    this.uRLKeyBright = gl.getUniformLocation(prog, 'uRLKeyBright')
+    this.uRLKeySat = gl.getUniformLocation(prog, 'uRLKeySat')
     this.uBump = gl.getUniformLocation(prog, 'uBump')
     this.uBumpIntensity = gl.getUniformLocation(prog, 'uBumpIntensity')
     this.uBumpStrength = gl.getUniformLocation(prog, 'uBumpStrength')
