@@ -174,7 +174,7 @@ function _flyForward(state, want, meta, dtSec) {
 // state carries x/z/heading/speed plus persistent maneuver fields (atkPhase,
 // sweepPhase/Center, egX/egZ, flybySide).  Mutated in place.  Returns
 // { inRange } so the caller knows whether the weapon may fire this tick.
-export function attackManeuver(state, tx, tz, meta, range, dtSec) {
+export function attackManeuver(state, tx, tz, meta, range, dtSec, opts = {}) {
   const dx = tx - state.x
   const dz = tz - state.z
   const dist = Math.hypot(dx, dz)
@@ -207,12 +207,15 @@ export function attackManeuver(state, tx, tz, meta, range, dtSec) {
     return { inRange: dist <= range }
   }
 
-  // Fixed-wing fly-by.
+  // Fixed-wing fly-by.  A bomber (opts.bomberMode) stays on approach until it
+  // crosses directly over the target so the bomb run drops along the target
+  // itself rather than peeling off at long range; a missile-armed fighter
+  // peels at ~40% of weapon range, before getting dangerously close.
+  const egressDist = opts.bomberMode ? 30 : Math.max(30, range * 0.4)
   if (state.atkPhase !== 'egress') {
     state.atkPhase = 'approach'
     _flyForward(state, bearing, meta, dtSec)
-    // Close pass → peel off to a turn-around point ahead + to one side.
-    if (dist < Math.max(30, range * 0.4)) {
+    if (dist < egressDist) {
       state.atkPhase = 'egress'
       const fwdX = Math.sin(state.heading), fwdZ = Math.cos(state.heading)
       const sx = fwdZ, sz = -fwdX

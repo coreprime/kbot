@@ -701,13 +701,18 @@ export class GameEngine {
       }
       if (ex == null || u.moveTarget) { u._atk = null; return }
       const range = this.#weaponRangeFor(u, eslot)
+      // Bombers (fixed-wing aircraft whose engaged weapon is a `dropped` bomb)
+      // stay on approach until they're directly over the target so the bomb run
+      // lays bombs along the target itself, not 40% of range short of it.
+      const eweapon = this.#weaponForSlot(u, eslot)
+      const bomberMode = !!(eweapon && eweapon.dropped)
       if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: 1 }
       const st = {
         x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0,
         atkPhase: u._atk.atkPhase, sweepPhase: u._atk.sweepPhase, sweepCenter: u._atk.sweepCenter,
         egX: u._atk.egX, egZ: u._atk.egZ, flybySide: u._atk.flybySide,
       }
-      attackManeuver(st, ex, ez, u.meta, range, dtSec)
+      attackManeuver(st, ex, ez, u.meta, range, dtSec, { bomberMode })
       u.pos.x = st.x; u.pos.z = st.z; u.heading = st.heading; u.speed = st.speed
       u._atk = {
         atkPhase: st.atkPhase, sweepPhase: st.sweepPhase, sweepCenter: st.sweepCenter,
