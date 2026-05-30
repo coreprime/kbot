@@ -128,7 +128,15 @@ const KIND_DEFAULTS = {
   // beam line itself.  90 gives a noticeable but subtle wash that
   // tints the unit's lit side without making the silhouette the
   // dominant visual element of a shot.
-  [SFX_PROJECTILE_LASER]:   { color: [0.55, 2.80, 0.70, 1.00], size: 28.0, lifeMs: 220,  riseSpeed: 0.0, drift: 0.0, lightStrength: 90.0 },
+  // Laser pulse size + reach reduced significantly from the earlier
+  // 28-wu / 90-light tuning — the beam was visually dominating the
+  // scene out of proportion to its damage.  12 wu reads as a clear
+  // beam line without obscuring the unit firing it; lightStrength 45
+  // still washes nearby surfaces with the beam tint but no longer
+  // overwhelms the laser's own silhouette.  150 ms life keeps the
+  // flash snappy (TA beams are visible for ~1-2 frames in the
+  // original engine).
+  [SFX_PROJECTILE_LASER]:   { color: [0.55, 2.80, 0.70, 1.00], size: 12.0, lifeMs: 150,  riseSpeed: 0.0, drift: 0.0, lightStrength: 45.0 },
   // Missile body — small orange-yellow flame.  Pairs with a per-tick
   // smoke trail spawned by the controller code so the projectile
   // visibly drags a white wake behind it.  Life is sized in opts to

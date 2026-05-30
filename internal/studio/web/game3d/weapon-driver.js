@@ -32,7 +32,10 @@ import {
 // Values are linear; >1 pushes into the bloom threshold so the FX chain
 // can lift them above HDR clamp.
 const PROJECTILE_BRIGHTNESS = {
-  [SFX_PROJECTILE_LASER]:   1.8,   // beam needs to pop hot
+  // Laser multiplier reduced from 1.8 → 1.3 so the beam still reads as
+  // saturated against terrain without blowing past the HDR clamp on
+  // the post-FX bloom (1.8 was tone-mapping into a fat solid streak).
+  [SFX_PROJECTILE_LASER]:   1.3,
   [SFX_PROJECTILE_DGUN]:    1.6,   // bright energy ball
   [SFX_PROJECTILE_PLASMA]:  1.5,
   [SFX_PROJECTILE_SHELL]:   1.1,
@@ -90,10 +93,15 @@ export function laserColor(weapon, palette) {
 // which broke for any rename / localisation / mod.
 export function pickProjectileKind(weapon) {
   const w = weapon || {}
-  // D-Gun family — TA's signature commander weapon is the canonical
-  // commandfire-with-huge-AoE TDF (ARM_DISINTEGRATOR has
-  // commandfire=1, areaofeffect ≈ 150).  No other stock weapon
-  // combines both, so this single rule replaces the regex.
+  // D-Gun family — every D-Gun in the stock TDFs combines commandfire=1
+  // with beamweapon=1 (ARM_DISINTEGRATOR / CORE_DISINTEGRATOR are the
+  // only weapons that pair those two flags).  Catching that pair BEFORE
+  // the beam-weapon branch is essential — without it the D-Gun falls
+  // through to the laser path (ARM_DISINTEGRATOR's areaofeffect is 48,
+  // below any sensible AoE-based gate).
+  if (w.commandFire && w.beamWeapon) return SFX_PROJECTILE_DGUN
+  // Secondary D-Gun signal for mod variants that drop the beamweapon
+  // flag but keep the canonical "huge blast you fire manually" shape.
   if (w.commandFire && (+w.areaOfEffectWU >= 80)) return SFX_PROJECTILE_DGUN
   // Beam weapons — instant-hit line.  TA's `rendertype=0` is the
   // historic laser render path; `beamweapon=1` is the modern flag.
@@ -125,7 +133,9 @@ export function pickProjectileKind(weapon) {
 // keep our own copy here so the multiplier scaling below stays decoupled
 // from the pool's render defaults.
 const PROJECTILE_BASE_SIZE = {
-  [SFX_PROJECTILE_LASER]:   28.0,
+  // Beam pulse base size mirrors the trimmed KIND_DEFAULTS — 12 wu reads
+  // as a clean line without dominating the unit's silhouette.
+  [SFX_PROJECTILE_LASER]:   12.0,
   [SFX_PROJECTILE_DGUN]:    32.0,
   [SFX_PROJECTILE_PLASMA]:  3.5,
   [SFX_PROJECTILE_SHELL]:   5.0,
@@ -184,7 +194,12 @@ export function spawnLaserBeam({ binding, weapon, anchor, target, palette }) {
   const len = Math.hypot(dx, dy, dz)
   if (len < 0.001) return
   const color = laserColor(weapon, palette)
-  const segs = Math.max(16, Math.min(120, Math.round(len / 4)))
+  // Pulse spacing widened from 4 → 6 wu so the chain isn't a solid
+  // wall of overlapping sprites — with the trimmed 12 wu pulse size
+  // 6 wu spacing keeps adjacent pulses just touching, producing a
+  // continuous line without the fat solid streak the dense 4 wu
+  // packing was creating.
+  const segs = Math.max(12, Math.min(80, Math.round(len / 6)))
   for (let i = 0; i <= segs; i++) {
     const t = i / segs
     const p = [anchor[0] + dx * t, anchor[1] + dy * t, anchor[2] + dz * t]
@@ -250,7 +265,7 @@ export class SmokeTrailManager {
   // back to the historic 40 ms default when omitted so existing
   // weapons (and weapons that don't ship the TDF field) keep their
   // current visual.
-  schedule(binding, anchor, velocity, gravity, lifeMs, intervalMs) {
+  schedule(binding, anchor, velocity, gravity, lifeMs, intervalMs, opts = {}) {
     if (!binding || !binding.particles) return
     this._trails.push({
       binding,
@@ -263,6 +278,17 @@ export class SmokeTrailManager {
       intervalMs: Math.max(20, +intervalMs > 0 ? +intervalMs : 40),
       ageMs: 0,
       nextEmitMs: 0,
+      // Per-puff kind / size / life override.  Defaults give the
+      // original white smoke trail used by missiles; the D-Gun path
+      // overrides with a hot orange fire puff so the disintegrator
+      // ball drags a visible flame behind it instead of trailing
+      // missile-style smoke.
+      puffKind:  opts.puffKind  || SFX_SMOKE_WHITE,
+      puffSize:  +opts.puffSize  || 4,
+      puffLife:  +opts.puffLife  || 800,
+      puffRise:  +opts.puffRise  || 1.5,
+      puffDrift: +opts.puffDrift || 0.8,
+      puffColor: opts.puffColor || null,
     })
   }
 
@@ -285,12 +311,14 @@ export class SmokeTrailManager {
         const px = t.anchor[0] + t.velocity[0] * elapsed
         const py = t.anchor[1] + t.velocity[1] * elapsed - 0.5 * t.gravity * elapsed * elapsed
         const pz = t.anchor[2] + t.velocity[2] * elapsed
-        b.particles.emit(SFX_SMOKE_WHITE, [px, py, pz], {
-          size: 4,
-          lifeMs: 800,
-          riseSpeed: 1.5,
-          drift: 0.8,
-        })
+        const emitOpts = {
+          size:      t.puffSize,
+          lifeMs:    t.puffLife,
+          riseSpeed: t.puffRise,
+          drift:     t.puffDrift,
+        }
+        if (t.puffColor) emitOpts.color = t.puffColor
+        b.particles.emit(t.puffKind, [px, py, pz], emitOpts)
       }
       this._trails[writeIdx++] = t
     }
@@ -420,6 +448,23 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   if (smokeTrails && kind === SFX_PROJECTILE_MISSILE) {
     const intervalMs = (+weapon.smokeDelaySec > 0) ? weapon.smokeDelaySec * 1000 : 40
     smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs, intervalMs)
+  }
+  // D-Gun trail — the disintegrator ball drags a hot orange flame
+  // behind it in the original game.  We re-use the SmokeTrailManager
+  // (it's geometry-only — re-derives puff positions from the launch
+  // anchor + velocity) and tell it to emit fire-flash puffs instead
+  // of the missile-default white smoke.  Cadence is faster than a
+  // missile trail (every 30 ms) so the flame reads as continuous at
+  // the D-Gun's slow 200 wu/s flight.
+  if (smokeTrails && kind === SFX_PROJECTILE_DGUN) {
+    smokeTrails.schedule(binding, anchor, [vx, vy, vz], weapon.ballistic ? gravity : 0, lifeMs, 30, {
+      puffKind:  SFX_FIRE_FLASH,
+      puffSize:  10,
+      puffLife:  350,
+      puffRise:  0,
+      puffDrift: 0,
+      puffColor: [2.0, 0.7, 0.2, 1.0],
+    })
   }
   return { kind, lifeMs, velocity: [vx, vy, vz], anchor: [anchor[0], anchor[1], anchor[2]] }
 }
