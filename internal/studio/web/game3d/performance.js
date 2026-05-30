@@ -79,6 +79,17 @@ export const LOD_HYSTERESIS = 1.25
 export const TIER_FULL_MIN_PX = 80   // ≥ 80 px → full pipeline
 export const TIER_MID_MIN_PX  = 12   // ≥ 12 px → mid path; below → Phase 3 impostor
 
+// PROJECTILE_LOD_MULTIPLIER lets in-flight model projectiles (missiles,
+// rockets, bombs) stay at higher detail than their projected size would
+// otherwise warrant.  A bomb has a tiny bounding sphere — 4-8 wu vs. a
+// kbot's ~15 wu — so by the unit-tier thresholds it drops to the impostor
+// dot before it's halfway to its target, which reads as the bomb
+// "vanishing" mid-flight.  This multiplier divides the FULL / MID / shadow
+// thresholds for projectile entities, so a 3× multiplier keeps the
+// projectile in its current tier roughly 3× further out.  Set to 1 to
+// treat projectiles like ordinary units; raise for "stay drawn longer".
+export const PROJECTILE_LOD_MULTIPLIER = 3
+
 // ── Phase 3 — far-unit impostor ──────────────────────────────────────
 
 // Selected far-tier units flicker their impostor sprite on/off so

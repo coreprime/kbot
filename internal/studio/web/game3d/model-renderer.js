@@ -28,6 +28,7 @@ import {
   LOD_HYSTERESIS,
   TIER_FULL_MIN_PX,
   TIER_MID_MIN_PX,
+  PROJECTILE_LOD_MULTIPLIER,
   SELECTED_IMPOSTOR_FLICKER_MS,
   EFFECT_LOD_SURFACE_MAX_WU,
   EFFECT_LOD_RUNNINGLIGHTS_MAX_WU,
@@ -853,16 +854,21 @@ export class ModelRenderer {
     // is communicated by the dot itself.
     const px = this._pxRadius(ent)
     const prev = ent._lodShadowOn !== false  // default ON when undefined
+    // Projectiles get the same multiplier as the main-pass tiers, so a
+    // bomb's shadow doesn't disappear right after release — the silhouette
+    // on the ground is what makes a bomb-run readable.
+    const mult = ent.isProjectile ? (PROJECTILE_LOD_MULTIPLIER || 1) : 1
+    const shadowPx = this.shadowMinPx / mult
     let next
     if (prev) {
       // Currently casting — only drop when comfortably below the
       // threshold so a unit hovering near the boundary doesn't
       // flicker its shadow on/off.
-      next = px >= (this.shadowMinPx / LOD_HYSTERESIS)
+      next = px >= (shadowPx / LOD_HYSTERESIS)
     } else {
       // Not casting — only enter when comfortably above so we don't
       // re-enter from the same border.
-      next = px >= this.shadowMinPx
+      next = px >= shadowPx
     }
     ent._lodShadowOn = next
     return next
@@ -897,13 +903,22 @@ export class ModelRenderer {
     if (ent.ghost) return LOD_TIER_FULL
     const px = this._pxRadius(ent)
     const prev = ent._lodTier != null ? ent._lodTier : LOD_TIER_FULL
+    // In-flight model projectiles (bombs, missiles, rockets) have tiny
+    // bounding spheres compared to their host unit, so by the unit-tier
+    // thresholds they pop down to the impostor dot long before they reach
+    // their target — the bomb appears to "vanish" mid-air.  Divide both
+    // tier thresholds by performance.js's PROJECTILE_LOD_MULTIPLIER for
+    // these so they stay drawn at the same on-screen size band as units.
+    const mult = ent.isProjectile ? (PROJECTILE_LOD_MULTIPLIER || 1) : 1
+    const fullPx = TIER_FULL_MIN_PX / mult
+    const midPx  = TIER_MID_MIN_PX  / mult
     // Symmetric hysteresis around each threshold:
     //   enter denser tier at threshold × HYST    (going up)
     //   exit  to sparser tier at threshold / HYST (going down)
-    const fullEnter = TIER_FULL_MIN_PX * LOD_HYSTERESIS
-    const fullExit  = TIER_FULL_MIN_PX / LOD_HYSTERESIS
-    const midEnter  = TIER_MID_MIN_PX  * LOD_HYSTERESIS
-    const midExit   = TIER_MID_MIN_PX  / LOD_HYSTERESIS
+    const fullEnter = fullPx * LOD_HYSTERESIS
+    const fullExit  = fullPx / LOD_HYSTERESIS
+    const midEnter  = midPx  * LOD_HYSTERESIS
+    const midExit   = midPx  / LOD_HYSTERESIS
     let next
     if (prev === LOD_TIER_FULL) {
       // Stay Full unless we fall below the exit threshold.

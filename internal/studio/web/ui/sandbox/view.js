@@ -1238,6 +1238,11 @@ export class SandboxView {
           pitchRad: -proj.pitch,
         },
         id: 'proj-' + proj.id,
+        // Flagged so the LOD classifier divides its thresholds by
+        // PROJECTILE_LOD_MULTIPLIER for this entity — bombs / missiles have
+        // a much smaller bounding sphere than the units that fire them, so
+        // without the boost they pop to the impostor dot mid-flight.
+        isProjectile: true,
       })
     }
     this.renderer.setEntities(entities)
