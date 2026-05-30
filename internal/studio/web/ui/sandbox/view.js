@@ -1235,22 +1235,25 @@ export class SandboxView {
         model: pm,
         transform: {
           x: proj.pos.x, y: proj.pos.y, z: proj.pos.z,
-          // Orientation derivation — the renderer applies Rx(pitch) FIRST in
-          // object space then Ry(heading), so for a TA model authored facing
-          // -Z (forward into the screen at heading 0) the final forward
-          // direction works out to
-          //   (-cos(pitch) sin(heading), sin(pitch), -cos(pitch) cos(heading))
+          // Orientation derivation.  Empirically (from the armmhmsl.3do
+          // bounds: z ∈ [-19.25, 2.5] — the body extends into -Z with the
+          // small pointy nose at +Z) the missile is authored facing +Z,
+          // unlike units which are authored facing -Z and so need the +π
+          // yaw compensator.  The renderer applies Rx(pitch) FIRST in
+          // object space then Ry(heading), so for a model whose initial
+          // forward is (0, 0, +1) the final forward direction works out to
+          //   (cos(pitch) sin(heading), -sin(pitch), cos(pitch) cos(heading))
           // and we want this to equal the velocity direction
-          //   (cos(p) sin(h), sin(p), cos(p) cos(h))
-          // with p = proj.pitch and h = proj.heading.  Solving gives
-          //   pitch_render   = +proj.pitch     (NOT negated — the previous
-          //                                     -proj.pitch made the model
-          //                                     belly-flop in the opposite
-          //                                     pitch direction)
-          //   heading_render = proj.heading + π (X-flip compensator, same as
-          //                                     units use).
-          headingRad: proj.heading + Math.PI,
-          pitchRad:   proj.pitch,
+          //   (cos(p) sin(h),  sin(p),  cos(p) cos(h))
+          // with p = proj.pitch and h = proj.heading.  Solving:
+          //   pitch_render   = -proj.pitch
+          //   heading_render = +proj.heading       (no π flip)
+          // The π flip used for units was the cause of the missile flying
+          // arse-first after pitching over: it rotated the nose 180° on
+          // the yaw axis, which only became visually obvious once the
+          // missile had transitioned out of the vertical pose.
+          headingRad: proj.heading,
+          pitchRad:   -proj.pitch,
         },
         id: 'proj-' + proj.id,
         // Flagged so the LOD classifier divides its thresholds by
