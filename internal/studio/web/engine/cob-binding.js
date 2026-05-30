@@ -397,6 +397,27 @@ export class CobBinding {
     // muzzle, e.g.) shouldn't fake an explosion on top of the unit.
     // The muzzle flash already handles the "shot fired" visual.
     if (k === SFX_PROJECTILE_LASER) return
+    // Impact magnitude scaler — projectile size is driven from the
+    // weapon's TDF areaOfEffect by weapon-driver.projectileSize, so
+    // reading back pool.size gives us a sim-time proxy for the blast
+    // radius without having to keep a per-particle AoE field.  Ratio
+    // is taken against each kind's base size so a TDF-silent shot
+    // produces the historic visual.
+    const sz = pool.size[slot] || 1
+    const baseSizeByKind = {
+      [SFX_PROJECTILE_BULLET]:  2.5,
+      [SFX_PROJECTILE_PLASMA]:  3.5,
+      [SFX_PROJECTILE_MISSILE]: 4.0,
+      [SFX_PROJECTILE_SHELL]:   5.0,
+      [SFX_PROJECTILE_DGUN]:    32.0,
+    }
+    const baseSz = baseSizeByKind[k] || sz
+    const aoeMul = Math.max(0.6, Math.min(3.5, sz / baseSz))
+    // Helper — multiply the cluster count + spread + flash size while
+    // keeping minimums so a 1× shot still produces a visible burst.
+    const cN     = (n) => Math.max(1,  Math.round(n * aoeMul))
+    const cSpread= (s) => s * aoeMul
+    const cSize  = (s) => s * aoeMul
     // Impact bursts.  Durations tuned to match TA's brief flash
     // rather than linger as static glow.  Smoke kinds (SMOKE_GREY,
     // SMOKE_WHITE) keep their KIND_DEFAULTS lifeMs (~3-4s) so the
@@ -404,22 +425,22 @@ export class CobBinding {
     // flashes since those were the dominant "glow that won't fade"
     // contributors the user noticed.
     if (k === SFX_PROJECTILE_BULLET || k === SFX_PROJECTILE_PLASMA) {
-      this._emitCluster(SFX_SPARK,       anchor, 8,  { spread: 2.0 })
-      this._emitCluster(SFX_SMOKE_WHITE, anchor, 2,  { spread: 1.5 })
-      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 6, lifeMs: 120 })
+      this._emitCluster(SFX_SPARK,       anchor, cN(8),  { spread: cSpread(2.0) })
+      this._emitCluster(SFX_SMOKE_WHITE, anchor, cN(2),  { spread: cSpread(1.5) })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: cSize(6), lifeMs: 120 })
       return
     }
     if (k === SFX_PROJECTILE_MISSILE || k === SFX_PROJECTILE_SHELL) {
-      this._emitCluster(SFX_SPARK,       anchor, 18, { spread: 4.0 })
-      this._emitCluster(SFX_SMOKE_GREY,  anchor, 6,  { spread: 3.0 })
-      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 14, lifeMs: 180 })
+      this._emitCluster(SFX_SPARK,       anchor, cN(18), { spread: cSpread(4.0) })
+      this._emitCluster(SFX_SMOKE_GREY,  anchor, cN(6),  { spread: cSpread(3.0) })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: cSize(14), lifeMs: 180 })
       return
     }
     if (k === SFX_PROJECTILE_DGUN) {
-      this._emitCluster(SFX_SPARK,       anchor, 36, { spread: 9.0 })
-      this._emitCluster(SFX_SMOKE_GREY,  anchor, 14, { spread: 8.0 })
-      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 36, lifeMs: 300, color: [2.0, 0.7, 0.25, 1.0] })
-      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: 22, lifeMs: 400, color: [1.8, 0.4, 0.15, 0.9] })
+      this._emitCluster(SFX_SPARK,       anchor, cN(36), { spread: cSpread(9.0) })
+      this._emitCluster(SFX_SMOKE_GREY,  anchor, cN(14), { spread: cSpread(8.0) })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: cSize(36), lifeMs: 300, color: [2.0, 0.7, 0.25, 1.0] })
+      this.particles.emit(SFX_FIRE_FLASH, anchor, { size: cSize(22), lifeMs: 400, color: [1.8, 0.4, 0.15, 0.9] })
       return
     }
   }

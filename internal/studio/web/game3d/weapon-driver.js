@@ -25,32 +25,150 @@ import {
   SFX_SMOKE_WHITE,
 } from '../engine/cob-particles.js'
 
-// laserColor returns the laser tint [r,g,b,a] in 0..1 floats from the
-// weapon's TDF palette indices.  TA's `color=` is the brightest shade
-// (used for the beam core); `color2=` is the darker rim — we just use
-// `color` since our beam is a single colour.  Falls back to a TA-green
-// default when the palette / weapon colour isn't available.
-export function laserColor(weapon, palette) {
-  const idx = (weapon.colorIdx > 0) ? weapon.colorIdx : (weapon.color2Idx > 0 ? weapon.color2Idx : 0)
-  if (palette && idx > 0) {
-    const c = palette.colorFor(idx)
-    // Boost above 1.0 so the additive blend produces the bright
-    // saturated beam look TA's hand-drawn sprites give.  Capped at
-    // 2.0 to stay readable when overlapping multiple shots.
-    return [Math.min(2, c[0] * 1.8), Math.min(2, c[1] * 1.8), Math.min(2, c[2] * 1.8), 1]
-  }
-  return [0.45, 1.80, 0.45, 1]
+// Per-kind brightness multipliers applied on top of the palette-derived
+// hue so each projectile family keeps its visual identity even when the
+// raw colour is the same.  Beams need to glow hot to read at distance,
+// d-gun reads as a violent overcharge, missile bodies are dim sparks.
+// Values are linear; >1 pushes into the bloom threshold so the FX chain
+// can lift them above HDR clamp.
+const PROJECTILE_BRIGHTNESS = {
+  [SFX_PROJECTILE_LASER]:   1.8,   // beam needs to pop hot
+  [SFX_PROJECTILE_DGUN]:    1.6,   // bright energy ball
+  [SFX_PROJECTILE_PLASMA]:  1.5,
+  [SFX_PROJECTILE_SHELL]:   1.1,
+  [SFX_PROJECTILE_MISSILE]: 1.1,
+  [SFX_PROJECTILE_BULLET]:  1.0,
 }
 
-// pickProjectileKind decides which particle kind to emit based on
-// weapon metadata + name heuristic.  Same priority order the original
-// implementation used so visuals stay consistent across host views.
+// Per-kind fallback hues used when the weapon's TDF doesn't ship a
+// colour index (most non-laser weapons omit `color=`).  These mirror
+// the historic KIND_DEFAULTS so a TDF-silent weapon looks the same as
+// before this refactor.
+const PROJECTILE_FALLBACK_COLOUR = {
+  [SFX_PROJECTILE_LASER]:   [0.45, 1.80, 0.45],
+  [SFX_PROJECTILE_DGUN]:    [1.10, 0.30, 0.10],
+  [SFX_PROJECTILE_PLASMA]:  [0.30, 1.00, 1.10],
+  [SFX_PROJECTILE_SHELL]:   [1.00, 0.55, 0.20],
+  [SFX_PROJECTILE_MISSILE]: [1.00, 0.75, 0.20],
+  [SFX_PROJECTILE_BULLET]:  [1.00, 0.85, 0.20],
+}
+
+// projectileColor — the SINGLE source of truth for a projectile's tint
+// across every kind.  Reads the TDF `color=` (or `color2=` as a fallback)
+// through the palette, then scales it by the per-kind brightness so the
+// hand-authored weapon hue still reads as a laser / plasma / bullet
+// rather than collapsing to a dim palette entry.  Returns [r,g,b,a] in
+// 0..2 float range — the additive blend tolerates >1 channels and the
+// post-FX bloom relies on them to bloom on.
+export function projectileColor(weapon, kind, palette) {
+  const w = weapon || {}
+  const mul = PROJECTILE_BRIGHTNESS[kind] || 1.0
+  const idx = (w.colorIdx > 0) ? w.colorIdx : (w.color2Idx > 0 ? w.color2Idx : 0)
+  if (palette && idx > 0) {
+    const c = palette.colorFor(idx)
+    return [Math.min(2, c[0] * mul), Math.min(2, c[1] * mul), Math.min(2, c[2] * mul), 1]
+  }
+  const fb = PROJECTILE_FALLBACK_COLOUR[kind] || [1.0, 1.0, 1.0]
+  return [fb[0] * mul, fb[1] * mul, fb[2] * mul, 1]
+}
+
+// Back-compat alias — older call sites import `laserColor` directly.
+// Beam shots are just the SFX_PROJECTILE_LASER variant of
+// projectileColor, so the alias keeps the caller terse without
+// duplicating the lookup logic.
+export function laserColor(weapon, palette) {
+  return projectileColor(weapon, SFX_PROJECTILE_LASER, palette)
+}
+
+// pickProjectileKind — TDF-flag-driven projectile-kind classifier.
+// Order matters: each branch is a tighter signal than the next, so the
+// first match wins.  Name regex stays as a last-resort fallback for the
+// (mostly mod) TDFs that ship no flags at all.
+//
+// The D-Gun branch is data-driven (commandFire + huge AoE) rather than
+// name-pattern: the original implementation matched /disintegrator/
+// which broke for any rename / localisation / mod.
 export function pickProjectileKind(weapon) {
-  if (/disintegrator|dgun|d_gun/i.test(weapon.name)) return SFX_PROJECTILE_DGUN
-  if (weapon.smokeTrail || weapon.selfProp || /missile|rocket/i.test(weapon.model || '')) return SFX_PROJECTILE_MISSILE
-  if (weapon.ballistic) return SFX_PROJECTILE_SHELL
-  if (/laser|plasma|emg|emp|beam/i.test(weapon.name)) return SFX_PROJECTILE_PLASMA
+  const w = weapon || {}
+  // D-Gun family — TA's signature commander weapon is the canonical
+  // commandfire-with-huge-AoE TDF (ARM_DISINTEGRATOR has
+  // commandfire=1, areaofeffect ≈ 150).  No other stock weapon
+  // combines both, so this single rule replaces the regex.
+  if (w.commandFire && (+w.areaOfEffectWU >= 80)) return SFX_PROJECTILE_DGUN
+  // Beam weapons — instant-hit line.  TA's `rendertype=0` is the
+  // historic laser render path; `beamweapon=1` is the modern flag.
+  // Either one wins.
+  if (w.beamWeapon || w.renderType === 0) return SFX_PROJECTILE_LASER
+  // Missile family — anything self-propelled, smoke-trailing, dropped
+  // gravity bomb, or vertical-launch.  All share the missile visual
+  // (small bright body + smoke trail) so they collapse to one kind.
+  if (w.smokeTrail || w.selfProp || w.dropped || w.vlaunch) return SFX_PROJECTILE_MISSILE
+  // Ballistic shells / mortars / cannons — arc projectiles.
+  if (w.ballistic) return SFX_PROJECTILE_SHELL
+  // Plasma family — TA's `rendertype=1` (2D bitmap) and 5 (particle)
+  // are typically plasma bolts / EMG tracers.  Catches Peewee and Core
+  // Crasher style weapons without a name match.
+  if (w.renderType === 1 || w.renderType === 5) return SFX_PROJECTILE_PLASMA
+  // ── Last-resort name regex (only when every flag above said nothing) ──
+  const n = w.name || ''
+  if (/disintegrator|dgun|d_gun/i.test(n)) return SFX_PROJECTILE_DGUN
+  if (/missile|rocket|torpedo/i.test(n) || /missile|rocket/i.test(w.model || '')) return SFX_PROJECTILE_MISSILE
+  if (/laser|beam/i.test(n)) return SFX_PROJECTILE_LASER
+  if (/plasma|emg|emp/i.test(n)) return SFX_PROJECTILE_PLASMA
+  if (/cannon|mortar|shell/i.test(n)) return SFX_PROJECTILE_SHELL
   return SFX_PROJECTILE_BULLET
+}
+
+// Per-kind default size in world units used to derive a sensible visual
+// scale when the weapon's TDF doesn't push us anywhere unusual.  Mirrors
+// the KIND_DEFAULTS in cob-particles for the projectile families; we
+// keep our own copy here so the multiplier scaling below stays decoupled
+// from the pool's render defaults.
+const PROJECTILE_BASE_SIZE = {
+  [SFX_PROJECTILE_LASER]:   28.0,
+  [SFX_PROJECTILE_DGUN]:    32.0,
+  [SFX_PROJECTILE_PLASMA]:  3.5,
+  [SFX_PROJECTILE_SHELL]:   5.0,
+  [SFX_PROJECTILE_MISSILE]: 4.0,
+  [SFX_PROJECTILE_BULLET]:  2.5,
+}
+
+// projectileSize — visual sprite size derived from the weapon's blast
+// radius.  TA's `areaofeffect` is the blast DIAMETER in world units, so
+// half of it is the radius; we scale the kind's base size up smoothly
+// (with a soft cap) so a big AoE warhead reads visibly bigger than a
+// pinpoint bullet without making every shell fill the screen.  Falls
+// through to the kind base when the TDF doesn't ship areaofeffect.
+export function projectileSize(weapon, kind) {
+  const base = PROJECTILE_BASE_SIZE[kind] || 3.0
+  const aoe = +((weapon || {}).areaOfEffectWU) || 0
+  if (aoe <= 0) return base
+  // Reference AoE = 32 wu (a typical Peewee/cannon round).  Square-root
+  // scaling so a 4× larger AoE only doubles the sprite — keeps
+  // pinpoint vs. heavy weapons distinguishable without making a 256-wu
+  // nuke literally 16× the size of a bullet.
+  const refAoE = 32
+  const factor = Math.sqrt(aoe / refAoE)
+  return base * Math.max(0.6, Math.min(3.5, factor))
+}
+
+// projectileLightStrength — dynamic-light reach derived from the AoE.
+// Bigger blast → wider pulse on nearby surfaces.  The Laser and D-Gun
+// kinds have non-zero base reach baked into KIND_DEFAULTS already; this
+// helper computes an additional AoE-scaled value the emitter can pass
+// when it wants every shot's glow to track its real game-data magnitude.
+export function projectileLightStrength(weapon, kind) {
+  const aoe = +((weapon || {}).areaOfEffectWU) || 0
+  if (aoe <= 0) return 0
+  // Lasers and the D-gun keep their baked-in floor (90 / 300) — only
+  // raise it for AoE that's beyond that floor.  Other kinds get a
+  // proportional pulse so a heavy plasma weapon visibly throbs the
+  // scene more than a peashooter.
+  const base = (kind === SFX_PROJECTILE_LASER) ? 90
+             : (kind === SFX_PROJECTILE_DGUN)  ? 300
+             : 0
+  const scaled = aoe * 1.4
+  return Math.max(base, Math.min(400, scaled))
 }
 
 // spawnLaserBeam draws a single-frame "instant hit" beam from anchor
@@ -209,8 +327,11 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   if (horiz < 0.001) return null
 
   // Beam weapons: instant-hit.  Spawn the streak + play sound; no
-  // travelling projectile.
-  if (weapon.beamWeapon && !/disintegrator|dgun|d_gun/i.test(weapon.name)) {
+  // travelling projectile.  The "is this really a beam vs. a D-gun
+  // misflagged as beamWeapon" decision now lives in pickProjectileKind
+  // (commandFire + huge AoE → DGUN); we just ask the classifier.
+  const preKind = pickProjectileKind(weapon)
+  if (preKind === SFX_PROJECTILE_LASER) {
     spawnLaserBeam({ binding, weapon, anchor, target, palette })
     playWeaponSound({ binding, weapon, anchor })
     return { kind: SFX_PROJECTILE_LASER, lifeMs: 200, velocity: [dx, dy, dz] }
@@ -251,13 +372,25 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   const lifeFactor = weapon.ballistic ? 1.5 : 1.0
   const lifeMs = Math.max(300, (range / v) * 1000 * lifeFactor)
 
-  const kind = pickProjectileKind(weapon)
+  const kind = preKind
+  // Per-shot visual props derived from the weapon's TDF — colour from
+  // the palette index, size + lightStrength from the blast radius.
+  // emit() honours each opt, falling back to the kind defaults when a
+  // field is omitted; we always pass colour so even a flag-only TDF
+  // (no `color=`) gets its kind's branded hue rather than the smoke
+  // grey default.
+  const color = projectileColor(weapon, kind, palette)
+  const size = projectileSize(weapon, kind)
+  const light = projectileLightStrength(weapon, kind)
   const emitOpts = {
     velocity: [vx, vy, vz],
     gravity: weapon.ballistic ? gravity : 0,
     lifeMs,
     noFade: true,
+    color,
+    size,
   }
+  if (light > 0) emitOpts.lightStrength = light
   binding.particles.emit(kind, anchor, emitOpts)
   playWeaponSound({ binding, weapon, anchor })
   // Missiles trail smoke along their flight path.  Caller passes a
