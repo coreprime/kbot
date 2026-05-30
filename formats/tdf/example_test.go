@@ -3,7 +3,7 @@ package tdf_test
 import (
 	"fmt"
 	"log"
-	
+
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -25,7 +25,7 @@ func ExampleParse() {
 	}
 
 	unit := doc.Section("UNITINFO")
-	
+
 	fmt.Println("Unit:", unit.String("UnitName"))
 	fmt.Println("Side:", unit.String("Side"))
 	fmt.Println("Cost:", unit.Int("BuildCostMetal"))
@@ -44,7 +44,7 @@ func ExampleParse() {
 
 func ExampleNewDocument() {
 	doc := tdf.NewDocument()
-	
+
 	unit := doc.AddSection("UNITINFO")
 	unit.SetString("UnitName", "CUSTOMBOT")
 	unit.SetString("Side", "ARM")
@@ -75,7 +75,7 @@ func ExampleDocument_Section() {
 	}`
 
 	doc, _ := tdf.ParseString(content)
-	
+
 	mission := doc.Section("MISSION0")
 	if mission != nil {
 		fmt.Println("File:", mission.String("missionfile"))
@@ -95,7 +95,7 @@ func ExampleSection_List() {
 
 	doc, _ := tdf.ParseString(content)
 	unit := doc.Section("UNITINFO")
-	
+
 	for _, category := range unit.List("Category") {
 		fmt.Println("-", category)
 	}
@@ -119,7 +119,7 @@ func ExampleSection_Bool() {
 
 	doc, _ := tdf.ParseString(content)
 	unit := doc.Section("UNITINFO")
-	
+
 	fmt.Println("Builder:", unit.Bool("Builder"))
 	fmt.Println("Can Move:", unit.Bool("canmove"))
 	fmt.Println("Upright:", unit.Bool("Upright"))
@@ -134,7 +134,7 @@ func ExampleSection_Bool() {
 
 func ExampleDocument_WriteFile() {
 	doc := tdf.NewDocument()
-	
+
 	feature := doc.AddSection("MetalDeposit")
 	feature.SetString("world", "greenworld")
 	feature.SetString("description", "Metal Patch")
@@ -143,9 +143,9 @@ func ExampleDocument_WriteFile() {
 
 	// In real code, check error
 	_ = doc.WriteFile("/tmp/metal.tdf")
-	
+
 	fmt.Println("File written")
-	
+
 	// Output:
 	// File written
 }

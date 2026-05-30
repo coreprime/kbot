@@ -29,7 +29,7 @@ func TestRealARMFARK(t *testing.T) {
 	fmt.Printf("Energy Use: %.1f\n", unit.Float("EnergyUse"))
 	fmt.Printf("Builder: %v\n", unit.Bool("Builder"))
 	fmt.Printf("Can Move: %v\n", unit.Bool("canmove"))
-	
+
 	fmt.Printf("\nCategories:\n")
 	for _, cat := range unit.List("Category") {
 		fmt.Printf("  - %s\n", cat)
@@ -60,7 +60,7 @@ func TestRealARMFARK(t *testing.T) {
 
 	// Create a new FBI
 	fmt.Println("=== Creating New FBI ===")
-	
+
 	newDoc := NewDocument()
 	newUnit := newDoc.AddSection("UNITINFO")
 	newUnit.SetString("UnitName", "CUSTOMBOT")

@@ -234,7 +234,7 @@ func TestWriteTDF(t *testing.T) {
 func TestWriteFBI(t *testing.T) {
 	// Create FBI document
 	doc := NewDocument()
-	
+
 	unit := doc.AddSection("UNITINFO")
 	unit.SetString("UnitName", "TESTUNIT")
 	unit.SetString("Version", "1.0")

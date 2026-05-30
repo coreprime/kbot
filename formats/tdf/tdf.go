@@ -34,8 +34,8 @@ import (
 
 // Document represents a complete TDF/FBI file
 type Document struct {
-	sections    map[string]*Section
-	order       []string // Preserve section order
+	sections     map[string]*Section
+	order        []string   // Preserve section order
 	rootSections []*Section // Top-level sections in order
 }
 
@@ -213,7 +213,7 @@ func (d *Document) Sections() []*Section {
 // AddSection adds a new section or returns existing one
 func (d *Document) AddSection(name string) *Section {
 	upperName := strings.ToUpper(name)
-	
+
 	if section, exists := d.sections[upperName]; exists {
 		return section
 	}
@@ -226,7 +226,7 @@ func (d *Document) AddSection(name string) *Section {
 
 	d.sections[upperName] = section
 	d.order = append(d.order, upperName)
-	
+
 	return section
 }
 
@@ -240,7 +240,7 @@ func (d *Document) HasSection(name string) bool {
 func (d *Document) Write(w io.Writer) error {
 	for _, sectionName := range d.order {
 		section := d.sections[sectionName]
-		
+
 		// Write section header
 		if _, err := fmt.Fprintf(w, "[%s]\n", section.name); err != nil {
 			return err
@@ -303,7 +303,7 @@ func (s *Section) Get(key string) (string, bool) {
 // Set sets a field value
 func (s *Section) Set(key, value string) {
 	upperKey := strings.ToUpper(key)
-	
+
 	if field, exists := s.fields[upperKey]; exists {
 		field.value = value
 		return
@@ -336,12 +336,12 @@ func (s *Section) Int(key string) int {
 	if !ok {
 		return 0
 	}
-	
+
 	i, err := strconv.Atoi(value)
 	if err != nil {
 		return 0
 	}
-	
+
 	return i
 }
 
@@ -351,12 +351,12 @@ func (s *Section) Float(key string) float64 {
 	if !ok {
 		return 0.0
 	}
-	
+
 	f, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		return 0.0
 	}
-	
+
 	return f
 }
 
@@ -367,9 +367,9 @@ func (s *Section) Bool(key string) bool {
 	if !ok {
 		return false
 	}
-	
+
 	value = strings.ToLower(strings.TrimSpace(value))
-	
+
 	switch value {
 	case "1", "true", "yes":
 		return true
@@ -384,7 +384,7 @@ func (s *Section) List(key string) []string {
 	if !ok {
 		return nil
 	}
-	
+
 	// Split by spaces and filter empty strings
 	parts := strings.Fields(value)
 	return parts
