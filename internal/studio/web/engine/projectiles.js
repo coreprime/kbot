@@ -79,6 +79,18 @@ export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targ
   } else {
     vx = (dx / d) * speed0; vy = (dy / d) * speed0; vz = (dz / d) * speed0
   }
+  // Initial heading + pitch — atan2(0,0) is 0, so a vlaunch / dropped shot's
+  // launch state has no horizontal cue and the orientation would default to
+  // 0 yaw, snapping when the missile pitches over and starts homing.  Seed
+  // the heading from the BEARING to the target instead so the ascent state
+  // already points the missile at where it's going to fly.  Pitch follows
+  // the velocity if we have one, falls back to bearing for the drop case.
+  const horizT = Math.hypot(dx, dz)
+  const headingInit = (horizT > 1e-3) ? Math.atan2(dx, dz) : 0
+  const horiz0 = Math.hypot(vx, vz)
+  const pitchInit = (horiz0 > 1)
+    ? Math.atan2(vy, horiz0)
+    : (mode === 'vlaunch' ? Math.PI / 2 : Math.atan2(dy, horizT || 1))
 
   // Lifetime: weapontimer if specified, else the time-of-flight at top speed
   // over the weapon's range (a little extra for arcing/homing paths so the
@@ -117,32 +129,36 @@ export function makeProjectile({ id, ownerId, slot, weapon, anchor, target, targ
     ageSec: 0,
     lifeSec,
     phase: (mode === 'vlaunch') ? 'ascent' : 'cruise',
-    heading: Math.atan2(vx, vz),
-    pitch: Math.atan2(vy, Math.hypot(vx, vz)),
+    heading: headingInit,
+    pitch: pitchInit,
     dead: false,
     hit: false,   // true on the tick it reaches the target (vs. just expiring)
   }
 }
 
-// _steerToward rotates the velocity vector toward (target − pos) at turnRad
-// rad/sec on both yaw and pitch, holding the current speed — the homing turn.
+// _steerToward rotates the missile's heading + pitch toward (target − pos) at
+// turnRad rad/sec on both axes, then rebuilds the velocity from those angles
+// holding the current speed.  p.heading and p.pitch are the SOURCE of truth
+// for orientation between ticks — derived spherical coordinates from the
+// velocity blow up near the vertical singularity (vlaunch ascent + the first
+// few ticks of the homing turn), which made the renderer's yaw flicker every
+// frame so the model read as a flailing tumble instead of a clean turn.
 function _steerToward(p, dtSec) {
   const dx = p.target.x - p.pos.x
   const dy = p.target.y - p.pos.y
   const dz = p.target.z - p.pos.z
-  const wantHeading = Math.atan2(dx, dz)
-  const wantPitch = Math.atan2(dy, Math.hypot(dx, dz))
-  let curHeading = Math.atan2(p.vel.x, p.vel.z)
-  let curPitch = Math.atan2(p.vel.y, Math.hypot(p.vel.x, p.vel.z))
+  const horizD = Math.hypot(dx, dz)
+  const wantHeading = (horizD > 1e-3) ? Math.atan2(dx, dz) : p.heading
+  const wantPitch = Math.atan2(dy, horizD)
   const step = (p.turnRad > 0 ? p.turnRad : Math.PI) * dtSec
-  const dh = shortestArc(wantHeading - curHeading)
-  curHeading += (Math.abs(dh) <= step) ? dh : Math.sign(dh) * step
-  const dp = wantPitch - curPitch
-  curPitch += (Math.abs(dp) <= step) ? dp : Math.sign(dp) * step
-  const cp = Math.cos(curPitch)
-  p.vel.x = Math.sin(curHeading) * cp * p.speed
-  p.vel.z = Math.cos(curHeading) * cp * p.speed
-  p.vel.y = Math.sin(curPitch) * p.speed
+  const dh = shortestArc(wantHeading - p.heading)
+  p.heading += (Math.abs(dh) <= step) ? dh : Math.sign(dh) * step
+  const dp = wantPitch - p.pitch
+  p.pitch += (Math.abs(dp) <= step) ? dp : Math.sign(dp) * step
+  const cp = Math.cos(p.pitch)
+  p.vel.x = Math.sin(p.heading) * cp * p.speed
+  p.vel.z = Math.cos(p.heading) * cp * p.speed
+  p.vel.y = Math.sin(p.pitch) * p.speed
 }
 
 // stepProjectile advances ONE projectile by dtSec.  opts.targetPos (a live
@@ -188,9 +204,20 @@ export function stepProjectile(p, dtSec, opts = {}) {
   p.pos.y += p.vel.y * dtSec
   p.pos.z += p.vel.z * dtSec
 
-  const horiz = Math.hypot(p.vel.x, p.vel.z)
-  p.heading = Math.atan2(p.vel.x, p.vel.z)
-  p.pitch = Math.atan2(p.vel.y, horiz)
+  // Update orientation from velocity for unsteered modes (ballistic / dropped
+  // arcs and straight powered shots).  The guided + vlaunch-home steered
+  // modes already wrote p.heading / p.pitch directly in _steerToward — we
+  // skip the atan2 derivation for those because it would re-introduce the
+  // singularity noise we set out to eliminate.  Even in the unsteered
+  // branches we only update heading when there's enough horizontal velocity
+  // for atan2 to be meaningful; vlaunch ascent (pure vy) leaves the seeded
+  // initial heading in place so the missile keeps pointing at the target.
+  const steered = p.mode === 'guided' || (p.mode === 'vlaunch' && p.phase === 'home')
+  if (!steered) {
+    const horiz = Math.hypot(p.vel.x, p.vel.z)
+    if (horiz > 1) p.heading = Math.atan2(p.vel.x, p.vel.z)
+    p.pitch = Math.atan2(p.vel.y, horiz)
+  }
 
   // Detonation.  Reached the target (within one tick's travel, so a fast
   // shot registers the pass instead of tunnelling through); hit the ground
