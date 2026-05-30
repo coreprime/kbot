@@ -716,13 +716,24 @@ export class GameEngine {
           if (p) { ex = p.x; ez = p.z; eslot = s; break }
         }
       }
-      if (ex == null || u.moveTarget) { u._atk = null; return }
-      const range = this.#weaponRangeFor(u, eslot)
+      if (ex == null) { u._atk = null; return }
+      const eweapon = this.#weaponForSlot(u, eslot)
       // Bombers (fixed-wing aircraft whose engaged weapon is a `dropped` bomb)
       // stay on approach until they're directly over the target so the bomb run
       // lays bombs along the target itself, not 40% of range short of it.
-      const eweapon = this.#weaponForSlot(u, eslot)
       const bomberMode = !!(eweapon && eweapon.dropped)
+      // Move usually preempts the attack maneuver — the player asked the unit
+      // to go somewhere, so the aircraft drops its pattern and obeys.  Bombers
+      // are different: an attack-ground order is a sticky patrol-and-bomb task
+      // in TA, and the player issuing Move mid-cycle is most often the bomb-
+      // and-bail tactic (bombs already arming, the move just brings the carrier
+      // home).  For those, the maneuver wins and the Move is queued (slot or
+      // active bomb run keeps it on the run; Stop / new target is the only way
+      // to abandon).  Non-bomber aircraft fall back to the original rule.
+      const stickyBomber = bomberMode &&
+        (u._bombRun || u.weaponSlots.some((s) => s.target && s.target.source === 'manual'))
+      if (u.moveTarget && !stickyBomber) { u._atk = null; return }
+      const range = this.#weaponRangeFor(u, eslot)
       if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: 1 }
       const st = {
         x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0,
@@ -1045,22 +1056,38 @@ export class GameEngine {
           const spacing = carrierSpeed * reloadSec
           const desiredRun = (w.areaOfEffectWU > 0 ? w.areaOfEffectWU : 32) * 4
           const bombsTotal = Math.max(2, Math.ceil(desiredRun / spacing))
+          // Snapshot the aim point + remember the original arming source so
+          // the run-end logic knows whether to recycle (force-fire ground)
+          // or stop (autonomous unit attack — let #stepAttack re-engage).
+          const originalSource = (state.target && state.target.source) || 'attack'
           let pt = null
           if (state.target.type === 'point' && state.target.point) pt = state.target.point.slice()
-          else if (Array.isArray(target)) pt = [target[0], target[1], target[2]]
-          if (pt) {
-            u._bombRun = { slot, point: pt, bombsLeft: bombsTotal }
-            // Lock the slot to the cached point so the run survives Move /
-            // attackTarget death without drifting.
-            this.setWeaponTarget(u.id, slot, { point: pt }, { source: 'attack' })
-          }
+          else if (state.target.type === 'unit' && state.target.unit) {
+            const tu = state.target.unit
+            pt = [tu.pos.x, (tu.pos.y || 0), tu.pos.z]
+            // Re-arm the slot at the cached point so the run's range / aim /
+            // drop-window gates evaluate against the locked spot, not the
+            // live unit (which might walk out of the window or die mid-run).
+            // Preserve the original source tag so the Move-sweep and run-end
+            // logic still see the run as "autonomous attack".
+            this.setWeaponTarget(u.id, slot, { point: pt }, { source: originalSource })
+          } else if (Array.isArray(target)) pt = [target[0], target[1], target[2]]
+          if (pt) u._bombRun = { slot, point: pt, bombsLeft: bombsTotal, originalSource }
         }
         if (u._bombRun && u._bombRun.slot === slot) {
           u._bombRun.bombsLeft--
           if (u._bombRun.bombsLeft <= 0) {
+            const originalSource = u._bombRun.originalSource
             u._bombRun = null
-            // End of run — drop the slot so the bomber doesn't keep cycling.
-            this.setWeaponTarget(u.id, slot, null)
+            // Force-fire (the user shift+clicked ground) is a sticky
+            // "patrol-and-bomb here" order in TA — leave the slot armed so
+            // the bomber loops back, reloads, and lays another string.  An
+            // autonomous unit attack instead RELEASES the slot at the end of
+            // the run, letting #stepAttack re-engage on the next tick: the
+            // attackTarget may be dead, hiding, or out of reach.
+            if (originalSource !== 'manual') {
+              this.setWeaponTarget(u.id, slot, null)
+            }
           }
         }
       }
@@ -1084,19 +1111,24 @@ export class GameEngine {
         state.thread = null
         state.threadStartMs = null
       }
-      // commandFire weapons clear the target after one full burst when the
-      // shot was manually issued — matches TA's D-key one-shot behaviour
-      // (the user re-arms + clicks for a second discharge).  An AUTONOMOUS
-      // attack arming (source 'attack' — set by #stepAttack to chase a unit
-      // or fly a bomb run) must keep the target so the cycle re-fires on the
-      // weapon's reload cadence: that's how a Thunder bomber lays a string of
-      // bombs across the target instead of releasing one and forgetting why.
-      // The bomb-run block above may have cleared state.target on the run's
-      // last shot (setWeaponTarget(slot, null)); the commandFire branch then
-      // has nothing left to clear, so just exit the slot for this tick.
+      // commandFire weapons normally clear the target after one full burst
+      // when the shot was manually issued — matches TA's D-key one-shot
+      // behaviour (the user re-arms + clicks for a second discharge).
+      // EXCEPTIONS:
+      //   1. AUTONOMOUS attack arming (source 'attack' — set by #stepAttack
+      //      to chase a unit) must keep the target so the cycle re-fires on
+      //      the weapon's reload cadence.
+      //   2. Aircraft `dropped` weapons re-fire on every pass — the cycle is
+      //      the bomb run itself, not one-click-per-shot.  Preserving the
+      //      slot lets a force-fire ground order patrol-and-bomb forever the
+      //      way a TA bomber on a sticky attack-ground task does.
+      //   3. The bomb-run block above may have cleared state.target on the
+      //      run's last shot; the branch then has nothing left to clear, so
+      //      just exit the slot for this tick.
       if (w.commandFire) {
         if (!state.target) return
-        if (state.burstShotsLeft === 0 && state.target.source !== 'attack') {
+        const isAirDropped = w.dropped && u.meta && u.meta.isAircraft
+        if (!isAirDropped && state.burstShotsLeft === 0 && state.target.source !== 'attack') {
           state.target = null
           return
         }
