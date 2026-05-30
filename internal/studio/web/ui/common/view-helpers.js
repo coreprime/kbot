@@ -136,10 +136,16 @@ export function appendParticleProjectiles(engine, out) {
 // the unit-editor's MvControls produce identical shapes — the panel
 // renders the same regardless of which view is feeding it.
 //
+// `orient` is the optional renderer-side pose overlay { pitch, roll, heave }
+// (radians).  Caller passes renderer.getUnitOrientation(unit.id) — that
+// covers aircraft banking, hovercraft wobble, and (single-unit mode only)
+// the sea-bob sway of a ship.  When omitted the attitude indicator stays
+// level — correct for a ground unit on flat terrain.
+//
 // Output shape:
 //   {
 //     speed, maxSpeed, accelerationWUPerSec2, brakeWUPerSec2,
-//     heading, pitch, headingDeg, pitchDeg,
+//     heading, pitch, headingDeg, pitchDeg, rollDeg,
 //     pos: {x, y, z},
 //     isMoving, moveTarget, atkPhase, attackTarget,
 //     bombRunBombsLeft, bombRunPoint,
@@ -151,7 +157,7 @@ export function appendParticleProjectiles(engine, out) {
 //
 // Returns null when `unit` is missing — the panel maps null to an empty
 // state ("No Unit Selected" / "Multiple units selected").
-export function buildUnitMotion(unit) {
+export function buildUnitMotion(unit, orient) {
   if (!unit) return null
   // TA's FBI MaxVelocity is wu/frame at the 30 Hz locomotion clock — convert
   // to wu/s for display alongside the engine's already-per-second speed.
@@ -164,12 +170,13 @@ export function buildUnitMotion(unit) {
   const brake = (meta.brakeRate > 0) ? meta.brakeRate * TA_MOVE_HZ * TA_MOVE_HZ : 0
   const speed = unit.speed || 0
   const heading = unit.heading || 0
-  // Aircraft pitch comes from the locomotion overlay; the engine doesn't
-  // currently store a per-unit pitch on the unit record.  We approximate
-  // by reading the _atk.atkPhase ("approach"/"egress"/"strafe") which is
-  // a more meaningful state for a player than a numeric pitch.  Pitch
-  // value left at 0 — the panel's attitude indicator stays level for
-  // ground units, which is correct.
+  // Pitch + roll come from the renderer's pose overlay (aircraft banking,
+  // hovercraft wobble, ship sea-bob) — the engine doesn't store them on
+  // the unit record because they're a render-time effect.  Caller passes
+  // renderer.getUnitOrientation(unit.id) as `orient`; we fall through to
+  // zeros when no overlay applies (ground unit on flat terrain).
+  const pitch = (orient && orient.pitch) || 0
+  const roll  = (orient && orient.roll)  || 0
   const at = unit.attackTarget
   const atkPhase = (unit._atk && unit._atk.atkPhase) || null
   let bearingDeg = null
@@ -184,9 +191,10 @@ export function buildUnitMotion(unit) {
     accelerationWUPerSec2: acceleration,
     brakeWUPerSec2: brake,
     heading,
-    pitch: 0,
+    pitch,
     headingDeg: (heading * 180 / Math.PI),
-    pitchDeg: 0,
+    pitchDeg: pitch * 180 / Math.PI,
+    rollDeg:  roll  * 180 / Math.PI,
     pos: { x: unit.pos.x, y: unit.pos.y || 0, z: unit.pos.z },
     isMoving: !!unit.isMoving,
     moveTarget: unit.moveTarget ? { x: unit.moveTarget.x, z: unit.moveTarget.z } : null,

@@ -102,15 +102,23 @@ function CompassDial({ headingDeg, bearingDeg }) {
 
 // Attitude indicator.  Two-tone horizon — sky above (blue) / ground
 // below (brown) — rolls and pitches under a fixed centre marker.  Pitch
-// is the offset of the horizon line away from centre; yaw is rendered
-// as a bottom tick mark + numeric readout so the user has both axes in
-// one widget.
-function AttitudeIndicator({ pitchDeg, headingDeg }) {
+// is the offset of the horizon line away from centre, roll is a rotation
+// of the whole sky/ground group about the instrument centre, and yaw is
+// rendered as a bottom tick mark + numeric readout so all three axes
+// live in one widget.
+function AttitudeIndicator({ pitchDeg, rollDeg, headingDeg }) {
   // Clamp pitch for display so a falling bomb (-90°) doesn't shove the
   // horizon off the gauge.  ±60° covers most realistic aircraft pitches.
   const p = Math.max(-60, Math.min(60, pitchDeg || 0))
   // Each degree of pitch moves the horizon by ~0.7 px so ±60° → ±42 px.
   const offset = p * 0.7
+  // Roll: rotate the whole sky/ground group about the gauge centre so
+  // the horizon TILTS with the unit's bank angle.  Clamp so an inverted
+  // unit (rare in TA) still reads sensibly.  Sign: a +roll banks RIGHT
+  // (right wing down) which on a real attitude indicator drops the
+  // horizon's right edge — i.e. the horizon line rotates CW about the
+  // centre marker.  In SVG y-down space, CW rotation is positive degrees.
+  const r = Math.max(-90, Math.min(90, rollDeg || 0))
   // Compass rose at the bottom for yaw — show ±45° around the current
   // heading.  Ticks every 15°, label every 45°.
   const sweep = []
@@ -120,7 +128,7 @@ function AttitudeIndicator({ pitchDeg, headingDeg }) {
   }
   return html`
     <svg class="mv-mov-attitude" viewBox="0 0 96 96" width="96" height="96"
-         title=${`Pitch: ${pitchDeg.toFixed(0)}° · Yaw: ${headingDeg.toFixed(0)}°`}>
+         title=${`Pitch: ${pitchDeg.toFixed(0)}° · Roll: ${r.toFixed(0)}° · Yaw: ${headingDeg.toFixed(0)}°`}>
       <!-- clip the moving horizon to a circular instrument face -->
       <defs>
         <clipPath id="att-clip">
@@ -128,22 +136,27 @@ function AttitudeIndicator({ pitchDeg, headingDeg }) {
         </clipPath>
       </defs>
       <g clip-path="url(#att-clip)">
-        <!-- sky -->
-        <rect x="0" y=${0} width="96" height=${48 + offset} fill="#3a78b8" />
-        <!-- ground -->
-        <rect x="0" y=${48 + offset} width="96" height=${48 - offset} fill="#7a5a30" />
-        <!-- horizon line -->
-        <line x1="14" y1=${48 + offset} x2="82" y2=${48 + offset}
-              stroke="#fff" stroke-width="1" />
-        <!-- pitch ladder marks every 10° -->
-        ${[-20, -10, 10, 20].map((d) => {
-          const yy = 48 + (offset - d * 0.7)
-          const w = d % 20 === 0 ? 22 : 14
-          return html`
-            <line x1=${48 - w / 2} y1=${yy} x2=${48 + w / 2} y2=${yy}
-                  stroke="#fff" stroke-width="0.8" opacity="0.7" />
-          `
-        })}
+        <!-- Roll the horizon block about the instrument centre.  Pitch is
+             applied INSIDE the rotation so the horizon stays level with
+             the sky/ground edge as it tilts. -->
+        <g transform=${`rotate(${r} 48 48)`}>
+          <!-- sky -->
+          <rect x="-30" y=${-30} width="156" height=${48 + offset + 30} fill="#3a78b8" />
+          <!-- ground -->
+          <rect x="-30" y=${48 + offset} width="156" height=${48 - offset + 30} fill="#7a5a30" />
+          <!-- horizon line -->
+          <line x1="-30" y1=${48 + offset} x2="126" y2=${48 + offset}
+                stroke="#fff" stroke-width="1" />
+          <!-- pitch ladder marks every 10° -->
+          ${[-20, -10, 10, 20].map((d) => {
+            const yy = 48 + (offset - d * 0.7)
+            const w = d % 20 === 0 ? 22 : 14
+            return html`
+              <line x1=${48 - w / 2} y1=${yy} x2=${48 + w / 2} y2=${yy}
+                    stroke="#fff" stroke-width="0.8" opacity="0.7" />
+            `
+          })}
+        </g>
       </g>
       <!-- instrument bezel -->
       <circle cx="48" cy="48" r="34" fill="none" stroke="#3a3" stroke-width="1.5" />
@@ -201,6 +214,7 @@ function MovementBody() {
   const headingDeg = ((m.headingDeg % 360) + 360) % 360
   const bearingDeg = m.bearingDeg == null ? null : ((m.bearingDeg % 360) + 360) % 360
   const pitchDeg = m.pitchDeg || 0
+  const rollDeg  = m.rollDeg  || 0
   const speedPctWidth = maxSpeed > 0
     ? Math.max(0, Math.min(100, (speed / maxSpeed) * 100))
     : 0
@@ -240,7 +254,7 @@ function MovementBody() {
         <div class="mv-mov-dial-caption">Heading</div>
       </div>
       <div class="mv-mov-dial-wrap">
-        <${AttitudeIndicator} pitchDeg=${pitchDeg} headingDeg=${headingDeg} />
+        <${AttitudeIndicator} pitchDeg=${pitchDeg} rollDeg=${rollDeg} headingDeg=${headingDeg} />
         <div class="mv-mov-dial-caption">Attitude</div>
       </div>
     </div>

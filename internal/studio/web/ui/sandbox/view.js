@@ -2161,7 +2161,12 @@ export class SandboxView {
       // Live motion telemetry for the Movement panel — snapshot of the
       // engine unit's speed / heading / atkPhase etc.  Refreshed every
       // refresh-tick publish via this getter being called again.
-      mv.unitMotion = buildUnitMotion(focused)
+      // Hand the renderer's live pose overlay (banking / wobble) to the
+      // motion builder so the Movement panel's attitude indicator rolls
+      // with the unit.  Sandbox runs in multi-entity mode → look up by id.
+      const orient = (this.renderer && this.renderer.getUnitOrientation)
+        ? this.renderer.getUnitOrientation(focused.id) : null
+      mv.unitMotion = buildUnitMotion(focused, orient)
       Object.defineProperty(mv, 'cobDamage', {
         enumerable: true, configurable: true,
         get: () => 100 - (focused.health | 0),

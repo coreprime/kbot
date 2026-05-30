@@ -736,6 +736,48 @@ export class ModelRenderer {
   unitWorldY() { return this._unitTransform.y }
   unitHeading() { return this._unitTransform.headingRad }
 
+  // getUnitOrientation returns the live pose overlay {pitch, roll, heave}
+  // currently being applied to a unit's model matrix.  Used by the Movement
+  // panel so the cockpit attitude indicator reflects aircraft banking,
+  // hovercraft wobble, and (single-unit mode only) the sea-bob sway of a
+  // ship.  All angles in radians.  Returns an all-zero overlay when no
+  // overlay applies to the unit — the panel can still render a level
+  // horizon for ground units.
+  //
+  //   unitId == null → single-unit mode (unit editor): combines _locoState
+  //     plus the sea-bob sample at the model's centre.
+  //   unitId != null → multi-entity mode (sandbox): returns the entity's
+  //     _entOrient overlay only.  Entities don't sea-bob today (see the
+  //     gate around _applySeaBob in draw()), so the panel matches the
+  //     renderer's actual visual behaviour.
+  getUnitOrientation(unitId) {
+    let pitch = 0, roll = 0, heave = 0
+    if (unitId == null) {
+      // Single-unit (unit editor) — locomotion overlay if a hover/aircraft
+      // descriptor is installed, plus the sea bob when groundMode is 'sea'.
+      if (this._loco && (this._loco.hover || this._loco.aircraft)) {
+        pitch += this._locoState.pitch
+        roll  += this._locoState.roll
+        heave += this._locoState.heave
+      }
+      if (this.groundMode === 'sea' && this.optBob && this.model) {
+        const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
+        const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
+        const tSlow = this._fxTimeSec() * 0.75 * this.bobSpeed
+        const s = this.seaWaveSample(cx, cz, tSlow)
+        const BOB_SCALE = 0.30 * this.bobAmount
+        const tilt = 0.55 * BOB_SCALE
+        pitch += Math.atan2(s.dhz, 1) * tilt
+        roll  += -Math.atan2(s.dhx, 1) * tilt
+        heave += s.h * BOB_SCALE
+      }
+    } else {
+      const est = this._entOrient.get(unitId)
+      if (est) { pitch += est.pitch; roll += est.roll; heave += est.heave }
+    }
+    return { pitch, roll, heave }
+  }
+
   // setEntities switches the renderer into multi-entity mode.  When
   // entities are present, draw() draws each entity's model after the
   // shared sky / ground pass instead of the single `this.model`.

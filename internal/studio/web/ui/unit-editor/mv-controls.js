@@ -217,11 +217,17 @@ export class MvControls {
     const engine = this.engine
     const adopted = (engine && this.viewer && this.viewer._adoptedUnitId != null)
       ? engine.unitById(this.viewer._adoptedUnitId) : null
+    // Pose overlay (aircraft bank, hover wobble, ship sea-bob) — unit editor
+    // is single-unit mode so we pass null and let the renderer fall through
+    // to its single-unit _locoState + sea-bob sample.
+    const renderer = this.viewer ? this.viewer.renderer : null
+    const orient = (renderer && renderer.getUnitOrientation)
+      ? renderer.getUnitOrientation(null) : null
     return {
       camera: this.camera,
-      renderer: this.viewer ? this.viewer.renderer : null,
+      renderer,
       cob: cob ? wrapCobWithAggregate(this, cob) : null,
-      unitMotion: buildUnitMotion(adopted),
+      unitMotion: buildUnitMotion(adopted, orient),
     }
   }
 
