@@ -4929,6 +4929,11 @@ canvas {
 .mv-mov-row-val   { color: var(--text); }
 .mv-mov-row-unit  { color: var(--muted); font-size: 10px; }
 .mv-mov-phase     { color: #ffb84a; }
+/* Position row: three small chips, one per axis, so the X/Y/Z trio
+   reads as a vector rather than a glob of numbers. */
+.mv-mov-pos { display: inline-flex; gap: 6px; }
+.mv-mov-pos-axis { display: inline-flex; gap: 3px; align-items: baseline; }
+.mv-mov-pos-axis .k { color: var(--muted); font-size: 10px; }
 .mv-mov-speed-bar {
   height: 4px; margin: 2px 0;
   background: var(--border); border-radius: 2px; overflow: hidden;

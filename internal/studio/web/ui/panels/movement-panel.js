@@ -3,6 +3,7 @@
 // Per-unit movement telemetry overlay — like the cockpit dashboard of a
 // car or aircraft.  Shows
 //   * Speed (current / max / acceleration ramp)
+//   * Position — world-space X/Y/Z of the focused unit.
 //   * Heading dial — top-down compass with a needle on the unit's yaw
 //                    and a "bearing" tick for the move/attack target.
 //   * Attitude indicator — cockpit-style artificial horizon for pitch +
@@ -219,6 +220,14 @@ function MovementBody() {
       <div class="mv-mov-row">
         <span class="mv-mov-row-label">Acceleration</span>
         <span class="mv-mov-row-val">${accel.toFixed(1)}<span class="mv-mov-row-unit"> wu/s²</span></span>
+      </div>
+      <div class="mv-mov-row" title="World-space position of the unit's origin.">
+        <span class="mv-mov-row-label">Position</span>
+        <span class="mv-mov-row-val mv-mov-pos">
+          <span class="mv-mov-pos-axis"><span class="k">X</span>${(m.pos.x).toFixed(1)}</span>
+          <span class="mv-mov-pos-axis"><span class="k">Y</span>${(m.pos.y).toFixed(1)}</span>
+          <span class="mv-mov-pos-axis"><span class="k">Z</span>${(m.pos.z).toFixed(1)}</span>
+        </span>
       </div>
       <div class="mv-mov-row">
         <span class="mv-mov-row-label">Phase</span>
