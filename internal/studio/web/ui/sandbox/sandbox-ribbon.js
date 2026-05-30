@@ -128,6 +128,8 @@ const _PANEL_ROWS = [
     title: 'Effects overlay — every live particle across every binding (projectiles, smoke, sparks).' },
   { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
     title: 'Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
+  { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
+    title: 'Music — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
   { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
     title: 'Audio overlay — every sound currently playing across every unit.' },
   { id: 'sandbox-panel',           icon: '🛠', label: 'Sandbox Controls',

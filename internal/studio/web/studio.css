@@ -4913,6 +4913,49 @@ canvas {
   display: inline-block; width: 12px; height: 12px;
   border-radius: 2px; border: 1px solid var(--border);
 }
+/* Music panel — retro mini-jukebox.  The marquee uses a CSS scroll
+   animation on a duplicated text track so the loop is seamless, and the
+   buttons keep the same Effects/Audio card chrome (.mv-fx-card-style
+   backgrounds + borders) so the panel reads as a sibling.  Audio host
+   is invisible — only there to anchor the <audio> element in the DOM
+   for the lifetime of the panel mount. */
+.mv-music-audio-host { display: none; }
+.mv-music-marquee {
+  overflow: hidden; white-space: nowrap;
+  margin: 4px 6px 6px 6px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #0a0e10;
+  color: #ffb84a;
+  font-family: ui-monospace, "Press Start 2P", monospace;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 4px rgba(255, 184, 74, 0.55);
+}
+.mv-music-marquee-track {
+  display: inline-flex; gap: 60px;
+  animation: mv-music-scroll 16s linear infinite;
+}
+.mv-music-marquee-track span { padding-left: 100%; }
+@keyframes mv-music-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.mv-music-controls {
+  display: flex; gap: 4px; padding: 4px 6px 6px;
+  justify-content: space-between;
+}
+.mv-music-btn {
+  flex: 1; padding: 4px 6px;
+  font-size: 14px;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--bg-2); color: var(--text);
+  cursor: pointer;
+}
+.mv-music-btn:hover    { background: var(--bg-3, var(--bg-2)); }
+.mv-music-btn:active   { transform: translateY(1px); }
+.mv-music-btn-play     { color: #ffb84a; }
 /* Projectiles panel — group-mode picker.  Sits at the top of the
    panel body styled as a section row, but the click target is the
    buttons (not the row); the picker label + chips sit on one line
