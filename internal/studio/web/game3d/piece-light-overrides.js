@@ -65,10 +65,10 @@ function _build(authored) {
 // alternating sweep reads as deliberate signalling.
 const _AUTHORED = {
   armpw: {
-    lloarm: { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.05, intensityMax: 0.55, phaseRad: 0 },
-    rloarm: { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.05, intensityMax: 0.55, phaseRad: Math.PI },
-    lfire:  { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.15, intensityMax: 0.85, phaseRad: 0 },
-    rfire:  { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.15, intensityMax: 0.85, phaseRad: Math.PI },
+    // lloarm: { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.05, intensityMax: 0.55, phaseRad: 0 },
+    // rloarm: { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.05, intensityMax: 0.55, phaseRad: Math.PI },
+    // lfire:  { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.15, intensityMax: 0.85, phaseRad: 0 },
+    // rfire:  { color: [1.0, 0.85, 0.30], blinkHz: 1.6, intensityMin: 0.15, intensityMax: 0.85, phaseRad: Math.PI },
   },
 }
 
