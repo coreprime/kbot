@@ -272,36 +272,10 @@ func (s *Sequence) ToAPNGWith(palette *Palette, opts RenderOptions, w io.Writer)
 			return err
 		}
 
-		// Extract ALL IDAT data from PNG (can be multiple chunks)
-		// fmt.Printf("Frame %d: Extracting IDAT chunks\n", frameIdx)
-		pngData := pngBuf.Bytes()
-		var idatData []byte
-		pos := 0
-
-		for {
-			idx := bytes.Index(pngData[pos:], []byte("IDAT"))
-			if idx < 0 {
-				break
-			}
-			idx += pos
-
-			if idx < 4 {
-				return fmt.Errorf("invalid IDAT position in frame %d", frameIdx)
-			}
-
-			// Get length (4 bytes before "IDAT")
-			length := binary.BigEndian.Uint32(pngData[idx-4 : idx])
-			// Get data (after "IDAT" type)
-			chunkData := pngData[idx+4 : idx+4+int(length)]
-			idatData = append(idatData, chunkData...)
-			// fmt.Printf("  IDAT chunk at pos %d, length %d\n", idx, length)
-
-			// Move past this chunk (length + type + data + CRC)
-			pos = idx + 4 + int(length) + 4
-		}
-
-		if len(idatData) == 0 {
-			return fmt.Errorf("no IDAT chunks found in frame %d", frameIdx)
+		// Extract ALL IDAT data from PNG (can be multiple chunks).
+		idatData, err := extractAllIDAT(pngBuf.Bytes())
+		if err != nil {
+			return fmt.Errorf("frame %d: %w", frameIdx, err)
 		}
 		// First frame uses IDAT, subsequent frames use fdAT
 		if frameIdx == 0 {
@@ -350,30 +324,26 @@ func writeChunk(w io.Writer, chunkType string, data []byte) error {
 	return binary.Write(w, binary.BigEndian, crc)
 }
 
-// extractAllIDAT extracts all IDAT chunk data from a PNG file
+// extractAllIDAT concatenates every IDAT chunk payload from a complete PNG
+// byte stream. It walks the chunk structure (length, type, payload, CRC)
+// starting after the 8-byte signature rather than scanning for the literal
+// "IDAT" bytes, which could otherwise false-match on palette or other chunk
+// data and read a bogus length.
 func extractAllIDAT(pngData []byte) ([]byte, error) {
 	var idatData []byte
-	pos := 0
-
-	for {
-		idx := bytes.Index(pngData[pos:], []byte("IDAT"))
-		if idx < 0 {
+	pos := 8 // skip the PNG signature
+	for pos+8 <= len(pngData) {
+		length := binary.BigEndian.Uint32(pngData[pos:])
+		chunkType := string(pngData[pos+4 : pos+8])
+		start := pos + 8
+		end := start + int(length)
+		if end > len(pngData) {
 			break
 		}
-		idx += pos
-
-		if idx < 4 {
-			return nil, fmt.Errorf("invalid IDAT position")
+		if chunkType == "IDAT" {
+			idatData = append(idatData, pngData[start:end]...)
 		}
-
-		// Get length (4 bytes before "IDAT")
-		length := binary.BigEndian.Uint32(pngData[idx-4 : idx])
-		// Get data (after "IDAT" type)
-		chunkData := pngData[idx+4 : idx+4+int(length)]
-		idatData = append(idatData, chunkData...)
-
-		// Move past this chunk (length + type + data + CRC)
-		pos = idx + 4 + int(length) + 4
+		pos = end + 4 // skip the 4-byte CRC
 	}
 
 	if len(idatData) == 0 {
