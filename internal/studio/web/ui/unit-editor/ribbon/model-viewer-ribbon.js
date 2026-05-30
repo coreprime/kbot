@@ -65,6 +65,7 @@ const _state = signal({
 
   reflections:       true,
   specular:          true,
+  metalSpec:         true,        // auto specular on metal-named textures
   godbeams:          true,
   dof:               false,
   dofDistance:       500,         // %, /100 → onset distance multiplier (5×)
@@ -124,6 +125,7 @@ const _bridge = {
 
   setReflections:        (_on) => {},
   setSpecular:           (_on) => {},
+  setMetalSpec:          (_on) => {},
   setGodBeams:           (_on) => {},
   setDoF:                (_on) => {},
   setDoFDistance:        (_v) => {},      // onset distance multiplier
@@ -166,7 +168,7 @@ export function configureModelViewerRibbonBridge(impl) {
     setGround: (_m) => {},
     setEnvironment: (_e, _o) => {}, setTeamColor: (_t, _o) => {},
     setShadows: (_o) => {}, setShadowIntensity: (_v) => {}, setSelfShadow: (_o) => {},
-    setReflections: (_o) => {}, setSpecular: (_o) => {},
+    setReflections: (_o) => {}, setSpecular: (_o) => {}, setMetalSpec: (_o) => {},
     setGodBeams: (_o) => {}, setDoF: (_o) => {},
     setDoFDistance: (_v) => {}, setDoFLevel: (_v) => {},
     setWaterReflections: (_o) => {},

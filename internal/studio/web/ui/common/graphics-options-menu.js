@@ -66,6 +66,12 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
       on=${s.specular}
       onChange=${(next) => set('specular', next, next, bridge.setSpecular)} />
     <${MenuToggleRow}
+      icon="🔩"
+      label="Metallic Highlights"
+      title="Automatically give a sharper sun glint to surfaces whose texture name reads as metal (metal/chrome/steel/…)."
+      on=${s.metalSpec}
+      onChange=${(next) => set('metalSpec', next, next, bridge.setMetalSpec)} />
+    <${MenuToggleRow}
       icon="🌟"
       label="God Beams"
       title="Crepuscular light shafts from the sun through clouds"

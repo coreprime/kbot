@@ -60,6 +60,12 @@ const SHADOW_MAP_SIZE = 1024
 const DOF_BASE_GAP = 0.002
 const DOF_BASE_BLUR = 8
 
+// METAL_SPEC_SCALE — specular multiplier applied to draw batches whose
+// texture name read as metal (model-loader's `metallic` flag).  >1 so
+// the hull's Blinn-Phong sheen catches a brighter, sharper sun glint on
+// inferred-metallic panels; non-metal batches stay at 1.0.
+const METAL_SPEC_SCALE = 3.0
+
 // Shader sources live in shaders/{main,sky,ground,shadow,wire,dof}/
 // as .vert/.frag files so they open with proper GLSL highlighting in
 // editors.  shader-loader.js fetches + resolves `#include` directives
@@ -731,6 +737,7 @@ export class ModelRenderer {
     this.optBob = true               // unit heave + pitch + roll on the swell
     this.optWaterReflections = true  // sky / sun reflected in the water surface
     this.optSpecular = true          // sun's specular highlight on water + hull
+    this.optMetalSpec = true         // boost hull specular on metal-named textures
     this.optGodBeams = true          // light shafts from the sun(s)
     this.optWaves = true             // animate sea surface; false → flat sea
     // Slider-controlled multipliers — all default to 1.0 (no scaling).
@@ -1581,6 +1588,11 @@ export class ModelRenderer {
   setBobEnabled(on) { this.optBob = !!on; this.requestRedraw() }
   setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
   setSpecularEnabled(on) { this.optSpecular = !!on; this.requestRedraw() }
+
+  // setMetalSpecEnabled toggles the auto-metal specular boost.  When
+  // off, every batch draws at the baseline specular (uSpecScale 1);
+  // when on, batches the loader tagged `metallic` get METAL_SPEC_SCALE.
+  setMetalSpecEnabled(on) { this.optMetalSpec = !!on; this.requestRedraw() }
   setGodBeamsEnabled(on) { this.optGodBeams = !!on; this.requestRedraw() }
   setWavesEnabled(on) { this.optWaves = !!on; this.requestRedraw() }
   setBobAmount(v) { this.bobAmount = Math.max(0, +v) || 0; this.requestRedraw() }
@@ -2690,6 +2702,11 @@ export class ModelRenderer {
     // multiply into the unit's shadow term in main.frag.
     gl.uniform1f(this.uShadowStrength, this.shadowStrength)
     gl.uniform1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
+    // Baseline specular scale — the per-batch draw loop overrides this
+    // to METAL_SPEC_SCALE for metal-named groups when the auto-metal
+    // boost is on.  Set here so any main-program draw that doesn't hit
+    // the per-group path still has a sane (non-zero) value.
+    gl.uniform1f(this.uSpecScale, 1.0)
     // Phase 2 lighting LOD — when the per-entity flag is set the
     // shader skips rim / back-light / Blinn-Phong specular.  Set by
     // the entity loop in lockstep with the shadow LOD: any entity
@@ -2896,6 +2913,9 @@ export class ModelRenderer {
               gl.uniform4fv(this.uTint, [0.45, 0.45, 0.5, 1])
               gl.uniform1i(this.uMode, 1)
             }
+            // Per-batch specular boost for inferred-metal textures.
+            gl.uniform1f(this.uSpecScale,
+              (this.optMetalSpec && group.metallic) ? METAL_SPEC_SCALE : 1.0)
           }
           gl.drawArrays(group.mode, 0, group.vertexCount)
         }
@@ -3115,6 +3135,7 @@ export class ModelRenderer {
     this.uShadowBias = gl.getUniformLocation(prog, 'uShadowBias')
     this.uShadowStrength = gl.getUniformLocation(prog, 'uShadowStrength')
     this.uSelfShadow = gl.getUniformLocation(prog, 'uSelfShadow')
+    this.uSpecScale = gl.getUniformLocation(prog, 'uSpecScale')
     this.uFlatLighting = gl.getUniformLocation(prog, 'uFlatLighting')
     this.uReflectionTint = gl.getUniformLocation(prog, 'uReflectionTint')
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')

@@ -46,6 +46,7 @@ uniform float uWaterY;        // world Y of the water plane - fades reflections 
 uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables hull bounce/shimmer
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
+uniform float uSpecScale;       // per-batch specular multiplier — >1 on metal-named textures, 1 elsewhere
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
 // uLightingTier — Phase 2 perf knob.  0 = full (rim + back/fill +
 // Blinn-Phong specular all contribute), 1 = cheap (Lambertian +
@@ -256,7 +257,7 @@ void main() {
   // the ground is handled separately in the ground shader, so it stays.
   float shadow = mix(1.0, sampleShadowMap1(N), uShadowStrength * uSelfShadow);
   vec3 directLight = ndl * uLightColor * shadow;
-  vec3 specular = spec * uLightColor * shadow * 0.45;
+  vec3 specular = spec * uLightColor * shadow * 0.45 * uSpecScale;
   // Second sun contribution - twin-sun environments fill this in
   // with a non-zero colour, single-sun worlds leave it black and
   // it costs almost nothing.
@@ -269,7 +270,7 @@ void main() {
     if (!cheapLighting) {
       vec3 H2 = normalize(L2 + V);
       float spec2 = pow(max(0.0, dot(N, H2)), 32.0);
-      specular += spec2 * uLightColor2 * shadow2 * 0.45;
+      specular += spec2 * uLightColor2 * shadow2 * 0.45 * uSpecScale;
     }
   }
   // fillLight always contributes — it's a single dot product, no

@@ -98,6 +98,7 @@ export function configureSandboxRibbonBridge(impl) {
     setSelfShadow:        (_on) => {},
     setReflections:       (_on) => {},
     setSpecular:          (_on) => {},
+    setMetalSpec:         (_on) => {},
     setGodBeams:          (_on) => {},
     setDoF:               (_on) => {},
     setDoFDistance:       (_v) => {},

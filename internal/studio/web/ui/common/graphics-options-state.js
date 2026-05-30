@@ -33,6 +33,7 @@ export const GRAPHICS_DEFAULTS = {
 
   reflections:      true,
   specular:         true,
+  metalSpec:        true,   // auto specular boost on metal-named textures
   godbeams:         true,
   dof:              false,
   dofDistance:      500,   // 100..2000 → 1.0..20.0× onset distance (default 5×)
@@ -80,6 +81,7 @@ export function applyGraphicsOptionsToRenderer(r) {
   r.setSelfShadow?.(!!g.selfShadow)
   r.setReflectionsEnabled?.(!!g.reflections)
   r.setSpecularEnabled?.(!!g.specular)
+  r.setMetalSpecEnabled?.(!!g.metalSpec)
   r.setGodBeamsEnabled?.(!!g.godbeams)
   r.setDoFEnabled?.(!!g.dof)
   r.setDoFDistance?.(g.dofDistance / 100)

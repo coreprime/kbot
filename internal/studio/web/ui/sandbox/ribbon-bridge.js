@@ -126,6 +126,7 @@ export function wireSandboxRibbon() {
       setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),
       setReflections:       (on) => eachRenderer((r) => r.setReflectionsEnabled?.(!!on)),
       setSpecular:          (on) => eachRenderer((r) => r.setSpecularEnabled?.(!!on)),
+      setMetalSpec:         (on) => eachRenderer((r) => r.setMetalSpecEnabled?.(!!on)),
       setGodBeams:          (on) => eachRenderer((r) => r.setGodBeamsEnabled?.(!!on)),
       setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
       setDoFDistance:       (v)  => eachRenderer((r) => r.setDoFDistance?.(v)),

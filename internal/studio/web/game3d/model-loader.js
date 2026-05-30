@@ -23,6 +23,17 @@ import { Model } from './model.js'
 
 const FLOATS_PER_VERTEX = 9
 
+// _METAL_TEX_RE — texture / GAF-sequence names that read as bare metal.
+// Batches whose texture matches get tagged `metallic` so the renderer
+// can boost their Blinn-Phong specular (the "infer shininess from the
+// name" heuristic).  Conservative word list to avoid lighting up
+// painted / camo panels; the user can disable the inference entirely
+// via the Graphics Options "Metallic Highlights" toggle.
+const _METAL_TEX_RE = /(metal|chrome|steel|iron|alloy|titan|gold|silver|brass|copper)/i
+function _isMetallicTexture(name) {
+  return !!name && _METAL_TEX_RE.test(name)
+}
+
 // _LOD_HIDE_NAME_PATTERNS — piece names matching any of these regexes
 // get tagged with `lodHide = true` at load time so the renderer's
 // distance-LOD (Phase 2) skips them on units rendering at mid tier.
@@ -394,6 +405,7 @@ export class ModelLoader {
           color: bucket.color,
           isDecal: !!(bucket.texture && decals.has(bucket.texture.toLowerCase())),
           depthTier: bucket.depthTier || 0,
+          metallic: _isMetallicTexture(bucket.texture),
         }
         const arr = new Float32Array(bucket.interleaved)
         group.vbo = gl.createBuffer()
