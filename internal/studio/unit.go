@@ -114,6 +114,18 @@ type unitMetaJSON struct {
 	// resolved TDF data so the client doesn't need to chase a
 	// second request per weapon.  Empty slot ⇒ {Name:""}.
 	Weapons []unitWeaponJSON `json:"weapons"` // always length 3 (primary/secondary/tertiary)
+
+	// Death explosion references from the FBI:
+	//   ExplodeAs       — TDF `ExplodeAs`: weapon name whose explosion art
+	//                     plays when the unit is killed.
+	//   SelfDestructAs  — TDF `SelfDestructAs`: weapon name whose explosion
+	//                     art plays when the unit is manually self-destructed
+	//                     (the bigger 5-second-timer blast).
+	// Both are weapon-by-name references; the client passes the resolved
+	// name to /api/studio/weapon-fx/{weapon}/{variant} to fetch the real
+	// GAF animation.  Empty when the FBI omits the field.
+	ExplodeAs      string `json:"explodeAs,omitempty"`
+	SelfDestructAs string `json:"selfDestructAs,omitempty"`
 }
 
 type unitWeaponJSON struct {
@@ -479,6 +491,12 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			populateWeaponJSON(&out.Weapons[i], sec)
 		}
 	}
+	// Death explosion FBI refs — surfaced for the client's death-FX
+	// path.  Uppercased so the eventual /api/studio/weapon-fx/<name>
+	// fetch matches the weapon-by-name resolver (which lowercases for
+	// comparison anyway).
+	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.String("ExplodeAs")))
+	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.String("SelfDestructAs")))
 	// Sounds — SoundCategory keys into gamedata/sound.tdf.  Each
 	// section there maps named events (select1, ok1, arrived1, ...)
 	// to .wav stems in sounds/.  Studio plays the matching .wav
