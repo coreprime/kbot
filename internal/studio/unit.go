@@ -226,6 +226,87 @@ type unitWeaponJSON struct {
 	// "reached the target" detonation, so a bomb's wide blast detonates
 	// sooner than a pinpoint missile.
 	AreaOfEffectWU float64 `json:"areaOfEffectWU"`
+
+	// --- Remaining weapon TDF fields ---
+	// Everything below is surfaced verbatim from the weapon section so the
+	// renderer / sim can drive visuals + behaviour from real game data rather
+	// than name-pattern heuristics.  Field names mirror the TDF keys; zero /
+	// false / "" mean the key was absent (TA treats those as the default).
+
+	// RenderType: TDF `rendertype`, the engine's projectile draw method
+	// (0=laser, 1=2D bitmap, 4=3D model, 5=flame/particle, etc.).  Lets the
+	// renderer pick a projectile family without inspecting the weapon name.
+	RenderType int `json:"renderType"`
+
+	// Trajectory / targeting category flags.
+	Turret      bool `json:"turret"`      // 360° turret-mounted, free pitch
+	LineOfSight bool `json:"lineOfSight"` // straight-line shot, gravity ignored
+	Guidance    bool `json:"guidance"`    // guided, homes using TurnRate
+	WaterWeapon bool `json:"waterWeapon"` // travels through water (torpedoes)
+	TwoPhase    bool `json:"twoPhase"`    // converts to a second weapon mid-flight
+	NoAutoRange bool `json:"noAutoRange"` // never auto-detonates at max range
+	BurnBlow    bool `json:"burnBlow"`    // detonates at end of range
+	Propeller   bool `json:"propeller"`   // projectile model has a spinning prop
+	UnitsOnly   bool `json:"unitsOnly"`   // only detonates on units, not terrain
+	Targetable  bool `json:"targetable"`  // can be shot down by interceptors
+	Interceptor bool `json:"interceptor"` // shoots down other weapons
+	Meteor      bool `json:"meteor"`      // meteor-shower style area weapon
+	Paralyzer   bool `json:"paralyzer"`   // stuns rather than damages
+	NoExplode   bool `json:"noExplode"`   // no explosion on impact
+	NoRadar     bool `json:"noRadar"`     // invisible to radar
+	GroundBounce bool `json:"groundBounce"` // bounces off the ground
+	Stockpile   bool `json:"stockpile"`   // must be built/stockpiled before firing
+	ToAirWeapon bool `json:"toAirWeapon"` // anti-air only
+	StartFire   bool `json:"startFire"`   // ignites a fire at the firing point
+	SoundTrigger bool `json:"soundTrigger"` // re-plays SoundStart on each burst shot
+	StartSmoke  bool `json:"startSmoke"`  // puff of smoke at the muzzle on fire
+	EndSmoke    bool `json:"endSmoke"`    // puff of smoke at the terminal point
+
+	// Integer tuning fields (TA angle units = 65536 / circle where noted).
+	Coverage       int `json:"coverage"`       // anti-missile protection radius
+	Firestarter    int `json:"firestarter"`    // % chance to start a fire (0..100)
+	EnergyPerShot  int `json:"energyPerShot"`   // energy drained per shot
+	MetalPerShot   int `json:"metalPerShot"`    // metal drained per shot
+	EnergyCost     int `json:"energyCost"`      // TDF `energy` (build/stockpile cost)
+	MetalCost      int `json:"metalCost"`       // TDF `metal` (build/stockpile cost)
+	ShakeMagnitude int `json:"shakeMagnitude"`  // screen-shake strength on fire
+	MinBarrelAngle int `json:"minBarrelAngle"`  // min barrel pitch, degrees (may be negative)
+	SprayAngle     int `json:"sprayAngle"`      // burst spread, TA angle units
+	Accuracy       int `json:"accuracy"`        // inaccuracy, TA angle units (0 = perfect)
+	AimRate        int `json:"aimRate"`          // aim speed, TA angle units / sec
+	HoldTime       int `json:"holdTime"`         // TDF `holdtime`
+
+	// Floating-point timing / falloff fields (seconds unless noted).
+	EdgeEffectiveness float64 `json:"edgeEffectiveness"` // damage fraction at AoE edge (0..1)
+	SmokeDelaySec     float64 `json:"smokeDelaySec"`     // interval between trail puffs
+	ShakeDurationSec  float64 `json:"shakeDurationSec"`  // screen-shake duration
+	RandomDecaySec    float64 `json:"randomDecaySec"`    // random burst decay time
+	// FlightTime: TDF `flighttime`, the self-propelled burn time of a
+	// starburst / two-phase missile.  Distinct from FlightTimeSec above,
+	// which is TDF `weapontimer` (the projectile's overall self-destruct
+	// timer).  Both are kept because TA ships them as separate keys.
+	FlightTime float64 `json:"flightTime"`
+
+	// Explosion art references — the GAF file + animation sequence TA plays
+	// at impact for ground, water and lava hits respectively.  Surfaced so a
+	// future FX pass can render the real sprite instead of a synthetic burst.
+	ExplosionGaf      string `json:"explosionGaf"`
+	ExplosionArt      string `json:"explosionArt"`
+	WaterExplosionGaf string `json:"waterExplosionGaf"`
+	WaterExplosionArt string `json:"waterExplosionArt"`
+	LavaExplosionGaf  string `json:"lavaExplosionGaf"`
+	LavaExplosionArt  string `json:"lavaExplosionArt"`
+
+	// SoundWater: TDF `soundwater`, played when the projectile strikes water.
+	SoundWater string `json:"soundWater"`
+
+	// Damage table from the weapon's nested [DAMAGE] subsection.
+	// DamageDefault is the `default=` value applied to any target without a
+	// specific override; Damage holds every entry (including per-unit-name
+	// overrides, keyed lowercase) so the client can look up the exact damage
+	// dealt to a given target.
+	DamageDefault int            `json:"damageDefault"`
+	Damage        map[string]int `json:"damage,omitempty"`
 }
 
 func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
@@ -564,6 +645,88 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
 	out.FlightTimeSec = sec.Float("weapontimer")
 	out.Cruise = boolish(sec.String("cruise"))
 	out.AreaOfEffectWU = sec.Float("areaofeffect")
+
+	// Render method + trajectory/targeting category flags.
+	out.RenderType = intFieldClean(sec, "rendertype")
+	out.Turret = boolish(sec.String("turret"))
+	out.LineOfSight = boolish(sec.String("lineofsight"))
+	out.Guidance = boolish(sec.String("guidance"))
+	out.WaterWeapon = boolish(sec.String("waterweapon"))
+	out.TwoPhase = boolish(sec.String("twophase"))
+	out.NoAutoRange = boolish(sec.String("noautorange"))
+	out.BurnBlow = boolish(sec.String("burnblow"))
+	out.Propeller = boolish(sec.String("propeller"))
+	out.UnitsOnly = boolish(sec.String("unitsonly"))
+	out.Targetable = boolish(sec.String("targetable"))
+	out.Interceptor = boolish(sec.String("interceptor"))
+	out.Meteor = boolish(sec.String("meteor"))
+	out.Paralyzer = boolish(sec.String("paralyzer"))
+	out.NoExplode = boolish(sec.String("noexplode"))
+	out.NoRadar = boolish(sec.String("noradar"))
+	out.GroundBounce = boolish(sec.String("groundbounce"))
+	out.Stockpile = boolish(sec.String("stockpile"))
+	out.ToAirWeapon = boolish(sec.String("toairweapon"))
+	out.StartFire = boolish(sec.String("startfire"))
+	out.SoundTrigger = boolish(sec.String("soundtrigger"))
+	out.StartSmoke = boolish(sec.String("startsmoke"))
+	out.EndSmoke = boolish(sec.String("endsmoke"))
+
+	// Integer tuning fields.
+	out.Coverage = intFieldClean(sec, "coverage")
+	out.Firestarter = intFieldClean(sec, "firestarter")
+	out.EnergyPerShot = intFieldClean(sec, "energypershot")
+	out.MetalPerShot = intFieldClean(sec, "metalpershot")
+	out.EnergyCost = intFieldClean(sec, "energy")
+	out.MetalCost = intFieldClean(sec, "metal")
+	out.ShakeMagnitude = intFieldClean(sec, "shakemagnitude")
+	out.MinBarrelAngle = intFieldClean(sec, "minbarrelangle")
+	out.SprayAngle = intFieldClean(sec, "sprayangle")
+	out.Accuracy = intFieldClean(sec, "accuracy")
+	out.AimRate = intFieldClean(sec, "aimrate")
+	out.HoldTime = intFieldClean(sec, "holdtime")
+
+	// Floating-point timing / falloff fields.
+	out.EdgeEffectiveness = floatFieldClean(sec, "edgeeffectiveness")
+	out.SmokeDelaySec = floatFieldClean(sec, "smokedelay")
+	out.ShakeDurationSec = floatFieldClean(sec, "shakeduration")
+	out.RandomDecaySec = floatFieldClean(sec, "randomdecay")
+	out.FlightTime = floatFieldClean(sec, "flighttime")
+
+	// Explosion art references + water-impact sound.
+	out.ExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("explosiongaf")))
+	out.ExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("explosionart")))
+	out.WaterExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("waterexplosiongaf")))
+	out.WaterExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("waterexplosionart")))
+	out.LavaExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("lavaexplosiongaf")))
+	out.LavaExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("lavaexplosionart")))
+	out.SoundWater = strings.ToLower(strings.TrimSpace(sec.String("soundwater")))
+
+	// Nested [DAMAGE] table — `default=` plus per-target-name overrides.
+	// Keys are lowercased so a client lookup by unit name is case-stable.
+	for _, sub := range sec.Sections() {
+		if !strings.EqualFold(sub.Name(), "DAMAGE") {
+			continue
+		}
+		dmg := map[string]int{}
+		for _, f := range sub.Fields() {
+			key := strings.ToLower(strings.TrimSpace(f.Key()))
+			if key == "" {
+				continue
+			}
+			val := cleanNumeric(f.Value())
+			if val == "" {
+				continue
+			}
+			if n, err := strconv.Atoi(val); err == nil {
+				dmg[key] = n
+			}
+		}
+		if len(dmg) > 0 {
+			out.Damage = dmg
+			out.DamageDefault = dmg["default"]
+		}
+		break
+	}
 }
 
 // weaponsListMu / weaponsListOnce / weaponsListCache cache the parsed
@@ -630,23 +793,48 @@ func boolish(s string) bool {
 	return false
 }
 
+// cleanNumeric strips trailing inline /* … */ or // comments and the
+// line-terminator semicolon from a raw TDF value, returning the bare
+// number text.  Shared by the int/float field readers and the [DAMAGE]
+// table parse so every numeric read tolerates the comment junk stock
+// weapon TDFs ship with (e.g. `color=232; /* GREEN */`).
+func cleanNumeric(raw string) string {
+	if idx := strings.Index(raw, "/*"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	if idx := strings.Index(raw, "//"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	raw = strings.TrimRight(strings.TrimSpace(raw), ";")
+	return strings.TrimSpace(raw)
+}
+
 // intFieldClean reads sec.String(key), strips trailing inline /* … */
 // comments and the line-terminator semicolon, and Atoi-parses what's
 // left.  Workaround for weapon-TDF entries like `color=232; /* GREEN */`
 // where the generic TDF parser keeps the whole tail in the raw value
 // and Atoi rejects it.  Returns 0 on missing / unparseable values.
 func intFieldClean(sec *tdf.Section, key string) int {
-	raw := sec.String(key)
-	if idx := strings.Index(raw, "/*"); idx >= 0 {
-		raw = raw[:idx]
-	}
-	raw = strings.TrimRight(strings.TrimSpace(raw), ";")
-	raw = strings.TrimSpace(raw)
+	raw := cleanNumeric(sec.String(key))
 	if raw == "" {
 		return 0
 	}
 	if i, err := strconv.Atoi(raw); err == nil {
 		return i
+	}
+	return 0
+}
+
+// floatFieldClean mirrors intFieldClean for fractional values
+// (edgeeffectiveness, smokedelay, …) — leading-dot forms like `.3` parse
+// fine through strconv.ParseFloat.  Returns 0 on missing / unparseable.
+func floatFieldClean(sec *tdf.Section, key string) float64 {
+	raw := cleanNumeric(sec.String(key))
+	if raw == "" {
+		return 0
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil {
+		return f
 	}
 	return 0
 }
