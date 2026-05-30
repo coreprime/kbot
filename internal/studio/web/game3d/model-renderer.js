@@ -31,6 +31,9 @@ import {
   SELECTED_IMPOSTOR_FLICKER_MS,
 } from './performance.js'
 import { displayRgbForSide } from './team-colors.js'
+import {
+  SKY_PRESETS, ENVIRONMENT_PRESETS, GRAVITY_BY_ENV, GRAVITY_EARTH, loadWorlds,
+} from './worlds.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Fallback transform for entities with no explicit transform field —
@@ -68,532 +71,12 @@ const DOF_BASE_BLUR = 8
 // used to live here have moved to those files; this comment is the
 // trail of breadcrumbs.
 
-// SKY_PRESETS: every aesthetic knob the skybox shader reads.  Each
-// preset is a fully-formed sky scheme — call ModelRenderer.setSky-
-// Scheme('alien-twin') and the whole sky redraws to match.  Adding a
-// new preset is a single object literal here — no shader edits.
-//
-// Keys:
-//   * zenith / horizon: gradient stops (linear-ish RGB; can exceed 1
-//     because the renderer doesn't tone-map the sky pass).
-//   * sun1 / sun2: { color, dir, size }.  color = [0,0,0] disables.
-//     size ~0.005 = pinpoint star, ~0.04 = soft halo.
-//   * cloudColor / cloudShadow: highlight + body tints.
-//   * cloudCoverage: 0..1, fraction of sky filled.
-//   * cloudDensity: 0..1, opacity of cloud bodies on top of sky.
-//   * cloudSpeed: drift velocity (UV units per second).
-//
-// The renderer falls back to sun1.dir = current scene lightDir when
-// the preset doesn't specify one — that way the unit's shadows match
-// the visible sun without the caller having to keep both in sync.
-const SKY_PRESETS = {
-  earth: {
-    name: 'Earth (day)',
-    zenith: [0.18, 0.42, 0.85],
-    horizon: [0.78, 0.86, 0.95],
-    // sun1 sits low above the horizon so it actually appears in the
-    // default camera view (which mostly looks at the unit, with a
-    // narrow strip of sky above).  The unit's shadow light direction
-    // is the renderer's separate `lightDir` — keeping them split
-    // lets us put the visible sun where the camera is pointing
-    // without disturbing the unit's shading.
-    zenith2: [0.18, 0.42, 0.85],
-    sun1: { color: [2.40, 1.95, 1.30], dir: [-0.45, 0.35, -0.85], size: 0.040 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [1.20, 1.18, 1.15],
-    cloudShadow: [0.45, 0.55, 0.70],
-    cloudCoverage: 0.78,
-    cloudDensity: 0.95,
-    cloudSpeed: 0.012,
-  },
-  sunset: {
-    name: 'Earth (sunset)',
-    zenith: [0.18, 0.18, 0.45],
-    horizon: [1.35, 0.55, 0.30],
-    sun1: { color: [2.60, 1.20, 0.45], dir: [-0.60, 0.18, 0.78], size: 0.055 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [1.30, 0.85, 0.65],
-    cloudShadow: [0.40, 0.22, 0.30],
-    cloudCoverage: 0.55,
-    cloudDensity: 0.85,
-    cloudSpeed: 0.008,
-  },
-  alienTwin: {
-    name: 'Alien (twin suns)',
-    zenith: [0.18, 0.05, 0.42],
-    horizon: [0.85, 0.45, 0.70],
-    // Twin suns sit on either side of the default camera's forward
-    // axis (yaw=215 deg, pitch=18 deg → forward ≈ (0.55, -0.31, 0.78))
-    // so BOTH land in the sky strip above the unit.  Amber sun1
-    // toward the left, cool-blue sun2 toward the right; their
-    // shadows splay in opposite directions (visible on the ground
-    // beneath any unit).  Sizes bumped enough that the discs read
-    // as discrete bodies in the small sky strip the default view
-    // exposes — 0.045/0.030 used to disappear into the gradient.
-    sun1: { color: [2.60, 1.20, 0.55], dir: [-0.55, 0.45, 0.70], size: 0.070 },
-    sun2: { color: [0.65, 1.05, 2.10], dir: [ 0.85, 0.30, 0.50], size: 0.055 },
-    cloudColor: [0.85, 0.50, 0.70],
-    cloudShadow: [0.30, 0.08, 0.25],
-    cloudCoverage: 0.70,
-    cloudDensity: 0.75,
-    cloudSpeed: 0.020,
-  },
-  mars: {
-    name: 'Mars (dusty)',
-    zenith: [0.55, 0.32, 0.20],
-    horizon: [1.05, 0.65, 0.35],
-    sun1: { color: [1.55, 1.20, 0.85], dir: [-0.40, 0.30, 0.80], size: 0.030 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.75, 0.55, 0.40],
-    cloudShadow: [0.40, 0.22, 0.15],
-    cloudCoverage: 0.30,
-    cloudDensity: 0.45,
-    cloudSpeed: 0.025,
-  },
-  night: {
-    name: 'Earth (night)',
-    zenith: [0.02, 0.03, 0.10],
-    horizon: [0.08, 0.12, 0.22],
-    sun1: { color: [1.30, 1.35, 1.55], dir: [-0.50, 0.50, 0.70], size: 0.015 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.30, 0.32, 0.38],
-    cloudShadow: [0.08, 0.10, 0.16],
-    cloudCoverage: 0.40,
-    cloudDensity: 0.55,
-    cloudSpeed: 0.006,
-  },
-  arctic: {
-    name: 'Arctic (pale)',
-    zenith: [0.55, 0.65, 0.78],
-    horizon: [0.92, 0.95, 0.98],
-    sun1: { color: [1.60, 1.55, 1.30], dir: [-0.45, 0.30, -0.78], size: 0.030 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [1.05, 1.05, 1.08],
-    cloudShadow: [0.65, 0.70, 0.78],
-    cloudCoverage: 0.65,
-    cloudDensity: 0.85,
-    cloudSpeed: 0.010,
-  },
-  lava: {
-    name: 'Lava world',
-    zenith: [0.35, 0.10, 0.05],
-    horizon: [1.30, 0.45, 0.15],
-    sun1: { color: [2.20, 0.70, 0.15], dir: [-0.40, 0.25, -0.80], size: 0.045 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.95, 0.55, 0.35],
-    cloudShadow: [0.30, 0.10, 0.05],
-    cloudCoverage: 0.45,
-    cloudDensity: 0.75,
-    cloudSpeed: 0.018,
-  },
-  desert: {
-    name: 'Desert (hot)',
-    zenith: [0.42, 0.55, 0.80],
-    horizon: [1.20, 0.95, 0.55],
-    sun1: { color: [2.30, 1.85, 1.10], dir: [-0.40, 0.30, -0.85], size: 0.038 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [1.15, 1.05, 0.85],
-    cloudShadow: [0.55, 0.45, 0.30],
-    cloudCoverage: 0.30,
-    cloudDensity: 0.55,
-    cloudSpeed: 0.015,
-  },
-  archipelago: {
-    name: 'Archipelago',
-    // Tropical clear sky — strong blue above, hazy white at horizon.
-    zenith: [0.10, 0.45, 0.92],
-    horizon: [0.85, 0.95, 1.02],
-    sun1: { color: [2.50, 2.20, 1.55], dir: [-0.45, 0.45, -0.78], size: 0.030 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [1.15, 1.15, 1.18],
-    cloudShadow: [0.65, 0.72, 0.80],
-    cloudCoverage: 0.35,
-    cloudDensity: 0.70,
-    cloudSpeed: 0.012,
-  },
-  metal: {
-    name: 'Metal world',
-    // Cloudless metallic sky — neutral steel above, hot exhaust
-    // band at horizon (think industrial smog without the clouds).
-    zenith: [0.32, 0.36, 0.42],
-    horizon: [0.85, 0.78, 0.65],
-    sun1: { color: [1.95, 1.85, 1.65], dir: [-0.50, 0.45, -0.75], size: 0.025 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.0, 0.0, 0.0],
-    cloudShadow: [0.0, 0.0, 0.0],
-    cloudCoverage: 0.0,   // no clouds per request
-    cloudDensity: 0.0,
-    cloudSpeed: 0.0,
-  },
-  lunar: {
-    name: 'Lunar',
-    // Airless world — near-black sky shading into a faint planet
-    // glow at the horizon.  No clouds because no atmosphere.
-    zenith: [0.005, 0.008, 0.025],
-    horizon: [0.12, 0.10, 0.16],
-    sun1: { color: [3.00, 2.85, 2.55], dir: [-0.45, 0.55, -0.70], size: 0.020 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.0, 0.0, 0.0],
-    cloudShadow: [0.0, 0.0, 0.0],
-    cloudCoverage: 0.0,
-    cloudDensity: 0.0,
-    cloudSpeed: 0.0,
-  },
-  slate: {
-    name: 'Slate (overcast)',
-    // Gunmetal overcast sky — heavy cloud cover, diffuse light.
-    zenith: [0.32, 0.34, 0.38],
-    horizon: [0.65, 0.65, 0.68],
-    sun1: { color: [1.20, 1.20, 1.18], dir: [-0.45, 0.65, -0.65], size: 0.040 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.78, 0.78, 0.80],
-    cloudShadow: [0.40, 0.40, 0.45],
-    cloudCoverage: 0.95,
-    cloudDensity: 0.85,
-    cloudSpeed: 0.018,
-  },
-  marsh: {
-    name: 'Marsh (hazy)',
-    // Swampy haze — yellowed sky with low-hanging clouds.
-    zenith: [0.55, 0.60, 0.55],
-    horizon: [0.92, 0.88, 0.65],
-    sun1: { color: [1.85, 1.65, 1.10], dir: [-0.45, 0.55, -0.70], size: 0.045 },
-    sun2: { color: [0, 0, 0], dir: [0, 1, 0], size: 0 },
-    cloudColor: [0.92, 0.88, 0.72],
-    cloudShadow: [0.45, 0.42, 0.30],
-    cloudCoverage: 0.55,
-    cloudDensity: 0.70,
-    cloudSpeed: 0.008,
-  },
-}
-
-// ENVIRONMENT_PRESETS bundle every visual world knob into one
-// switchable choice — sky scheme, terrain tileset, water tints,
-// even the light direction.  setEnvironment(name) on the renderer
-// swaps the whole stack so the user picks "Mars" once and the sky,
-// ground, water, and shadows all match.
-//
-// Tilesets reference the TA tilesets served from /api/studio/ground-
-// tile/{tileset}.  Unknown ones fall back to 'greenworld' at the
-// server-side handler, so a typo is a visual mismatch, not a crash.
-//
-// waterShallow / waterDeep / waterAccent are not yet plumbed into
-// the sea shader; defined here so a future water-tint pass can pick
-// up the preset without re-editing the renderer.  For now the sea
-// shader uses its built-in aqua palette.
-// ENVIRONMENT_PRESETS map onto Total Annihilation's actual map
-// tilesets where one exists — Greenworld is the default since most
-// TA maps use it, and the other built-in TA tilesets get their own
-// thematically appropriate water + seabed + sky settings.  A few
-// extras (sunset / night / alien-twin) extend the picker for
-// special moods without needing dedicated tileset assets.
-//
-// Per-environment fields:
-//   * sky                — name of a SKY_PRESETS entry
-//   * terrainTileset     — passed to /api/studio/ground-tile/{name}
-//   * lightDir           — world-space direction toward the sun
-//   * waterShallow/Mid/Deep — three-stop water column tint
-//   * waterTranslucency  — alpha multiplier (0.5 = opaque, 1.5 = glass)
-//   * seabedSand/Rock    — colours of the seabed dunes + outcrops
-//   * seabedCaustic      — tint of the caustic light shaft on the bed
-// Gravity table — per-environment world-Y acceleration in wu/sec²,
-// consumed by the ballistic aim solver to set barrel pitch on
-// cannon-class weapons.  Earth-like tilesets use ~80 (calibrated so
-// the ARM_BATS cannon at its 1250 wu range / 350 wu/sec velocity
-// elevates to ~28°, which matches the visual TA cannon-up posture).
-// Lunar drops to a quarter, Mars to ~⅜ — so switching environment
-// visibly changes the barrel angle for the same range.
-//
-// Indexed by ENVIRONMENT_PRESETS key.  Anything not listed falls
-// back to GRAVITY_EARTH.  Exposed via renderer.getGravity() so
-// mv-controls can re-query each aim cycle without poking internals.
-const GRAVITY_EARTH = 80
-const GRAVITY_BY_ENV = {
-  greenworld:  80,
-  archipelago: 80,
-  desert:      80,
-  marsh:       80,
-  arctic:      80,
-  slate:       80,
-  sunset:      80,
-  night:       80,
-  alienTwin:   90,   // alien world — heavier
-  metal:       80,
-  lava:        80,
-  mars:        30,   // ~⅜ Earth
-  moon:        20,   // ~¼ Earth (ENVIRONMENT_PRESETS key)
-}
-const ENVIRONMENT_PRESETS = {
-  greenworld: {
-    name: 'Greenworld',
-    sky: 'earth',
-    terrainTileset: 'greenworld',
-    lightDir: [-0.6, 0.95, 0.4],
-    // Deeper blue ocean per request — moves away from the previous
-    // tropical aqua toward a temperate / open-ocean look.
-    waterShallow: [0.10, 0.40, 0.72],
-    waterMid:     [0.04, 0.18, 0.45],
-    waterDeep:    [0.01, 0.05, 0.20],
-    waterTranslucency: 0.95,
-    seabedSand:    [0.25, 0.32, 0.30],
-    seabedRock:    [0.14, 0.18, 0.18],
-    seabedCaustic: [0.35, 0.65, 0.95],
-    // Rocky mountain ring - mossy green-brown lowlands climbing to
-    // pale grey-blue peaks.  Default for the temperate-Earth feel.
-    mountainStyle: 0,
-    mountainHeight: 62,
-    mountainScale: 1.0,
-    mountainBase: [0.28, 0.32, 0.22],
-    mountainPeak: [0.72, 0.78, 0.80],
-    mountainGloss: 0.0,
-  },
-  archipelago: {
-    name: 'Archipelago',
-    sky: 'archipelago',
-    terrainTileset: 'archipelago',
-    lightDir: [-0.50, 0.92, 0.35],
-    // Crystal Caribbean: vibrant aqua, very translucent so the
-    // pale sandy bed reads clearly through the water.
-    waterShallow: [0.40, 0.92, 0.95],
-    waterMid:     [0.12, 0.65, 0.85],
-    waterDeep:    [0.04, 0.22, 0.45],
-    waterTranslucency: 1.55,
-    seabedSand:    [0.95, 0.92, 0.78],   // white tropical sand
-    seabedRock:    [0.78, 0.72, 0.55],
-    seabedCaustic: [0.95, 0.95, 0.85],
-    // Low tropical headlands - shorter peaks, pale beachy tones.
-    mountainStyle: 0,
-    mountainHeight: 40,
-    mountainScale: 1.3,
-    mountainBase: [0.68, 0.62, 0.42],
-    mountainPeak: [0.92, 0.88, 0.72],
-    mountainGloss: 0.0,
-  },
-  metal: {
-    name: 'Metal world',
-    sky: 'metal',
-    terrainTileset: 'metal',
-    lightDir: [-0.55, 0.85, 0.30],
-    // Oily industrial liquid: thick dark goo with a metallic sheen
-    // at the top, drops to deep black underneath.  Translucency
-    // pushed down so the bed is barely visible — this stuff isn't
-    // water, it's coolant.
-    waterShallow: [0.32, 0.30, 0.28],
-    waterMid:     [0.14, 0.12, 0.12],
-    waterDeep:    [0.04, 0.04, 0.05],
-    waterTranslucency: 0.55,
-    seabedSand:    [0.22, 0.22, 0.24],
-    seabedRock:    [0.36, 0.32, 0.28],   // rust-stained metal plates
-    seabedCaustic: [0.55, 0.55, 0.65],
-    // Angular metal protrusions - mechanical, plated, glossy.
-    // Style 1 triggers the ridged-value noise + panel grid in
-    // ground.frag so these read as fabricated structures.
-    mountainStyle: 1,
-    mountainHeight: 80,
-    mountainScale: 0.85,
-    mountainBase: [0.18, 0.20, 0.24],
-    mountainPeak: [0.55, 0.58, 0.65],
-    mountainGloss: 0.85,
-  },
-  lava: {
-    name: 'Lava world',
-    sky: 'lava',
-    terrainTileset: 'lava',
-    lightDir: [-0.50, 0.70, 0.40],
-    // Glowing molten lake — yellow-hot crusts breaking through
-    // dark cooled flows, going black in the deeps.  Translucency
-    // up because the molten layer is bright enough to bleed.
-    waterShallow: [1.40, 0.55, 0.08],
-    waterMid:     [0.85, 0.18, 0.02],
-    waterDeep:    [0.18, 0.04, 0.01],
-    waterTranslucency: 1.15,
-    seabedSand:    [0.55, 0.20, 0.08],   // cooled lava crust
-    seabedRock:    [0.18, 0.06, 0.03],
-    seabedCaustic: [1.50, 0.85, 0.25],
-    // Volcanic stratovolcanoes - dark obsidian lowlands, glowing
-    // red-orange near the peaks where fresh lava cools.
-    mountainStyle: 0,
-    mountainHeight: 95,
-    mountainScale: 1.1,
-    mountainBase: [0.18, 0.07, 0.04],
-    mountainPeak: [0.85, 0.32, 0.10],
-    mountainGloss: 0.0,
-  },
-  moon: {
-    name: 'Lunar',
-    sky: 'lunar',
-    terrainTileset: 'moon',
-    lightDir: [-0.45, 0.85, 0.35],
-    // Lunar water — barely there.  Cold pale blue tint with very
-    // high translucency so the bed dominates the look.  Stylised
-    // — there's obviously no real water on the moon.
-    waterShallow: [0.45, 0.55, 0.70],
-    waterMid:     [0.20, 0.30, 0.45],
-    waterDeep:    [0.05, 0.08, 0.18],
-    waterTranslucency: 1.85,
-    seabedSand:    [0.62, 0.60, 0.58],   // lunar regolith
-    seabedRock:    [0.32, 0.30, 0.28],
-    seabedCaustic: [0.80, 0.85, 0.95],
-    // Lunar highlands - cratered grey, no atmosphere so no haze
-    // pull on the peaks.  Lower height than Earth ranges.
-    mountainStyle: 0,
-    mountainHeight: 55,
-    mountainScale: 1.4,
-    mountainBase: [0.32, 0.32, 0.32],
-    mountainPeak: [0.78, 0.78, 0.78],
-    mountainGloss: 0.0,
-  },
-  mars: {
-    name: 'Mars',
-    sky: 'mars',
-    terrainTileset: 'mars',
-    lightDir: [-0.55, 0.65, 0.40],
-    // Purple Martian water as requested — rusty mauve at the top,
-    // deepening to dark indigo.
-    waterShallow: [0.62, 0.38, 0.72],
-    waterMid:     [0.32, 0.18, 0.50],
-    waterDeep:    [0.08, 0.04, 0.18],
-    waterTranslucency: 0.90,
-    seabedSand:    [0.55, 0.30, 0.22],   // iron-oxide red
-    seabedRock:    [0.32, 0.18, 0.14],
-    seabedCaustic: [0.80, 0.55, 0.85],
-    // Rust-red Martian highlands.
-    mountainStyle: 0,
-    mountainHeight: 70,
-    mountainScale: 1.2,
-    mountainBase: [0.48, 0.22, 0.14],
-    mountainPeak: [0.85, 0.55, 0.35],
-    mountainGloss: 0.0,
-  },
-  slate: {
-    name: 'Slate',
-    sky: 'slate',
-    terrainTileset: 'slate',
-    lightDir: [-0.45, 0.85, 0.40],
-    // Cold grey water under overcast sky — like a quarry pool.
-    waterShallow: [0.32, 0.38, 0.42],
-    waterMid:     [0.15, 0.20, 0.25],
-    waterDeep:    [0.04, 0.06, 0.10],
-    waterTranslucency: 0.80,
-    seabedSand:    [0.28, 0.30, 0.30],
-    seabedRock:    [0.15, 0.17, 0.18],
-    seabedCaustic: [0.55, 0.65, 0.75],
-    // Cold grey quarry crags.
-    mountainStyle: 0,
-    mountainHeight: 65,
-    mountainScale: 1.05,
-    mountainBase: [0.22, 0.24, 0.26],
-    mountainPeak: [0.62, 0.66, 0.70],
-    mountainGloss: 0.0,
-  },
-  marsh: {
-    name: 'Marsh',
-    sky: 'marsh',
-    terrainTileset: 'marsh',
-    lightDir: [-0.45, 0.85, 0.40],
-    // Tannin-stained swamp water — brown-green muddy translucent.
-    waterShallow: [0.45, 0.55, 0.30],
-    waterMid:     [0.20, 0.28, 0.12],
-    waterDeep:    [0.06, 0.10, 0.04],
-    waterTranslucency: 0.85,
-    seabedSand:    [0.32, 0.30, 0.18],
-    seabedRock:    [0.15, 0.18, 0.10],
-    seabedCaustic: [0.65, 0.75, 0.45],
-    // Marshland hummocks - flat-ish terrain in the distance, mossy.
-    mountainStyle: 0,
-    mountainHeight: 42,
-    mountainScale: 1.4,
-    mountainBase: [0.20, 0.22, 0.14],
-    mountainPeak: [0.45, 0.52, 0.32],
-    mountainGloss: 0.0,
-  },
-  desert: {
-    name: 'Desert (acid)',
-    sky: 'desert',
-    terrainTileset: 'desert',
-    lightDir: [-0.55, 0.85, 0.35],
-    // Acid lake — pale chartreuse shallows over toxic green deeps.
-    waterShallow: [0.55, 0.92, 0.30],
-    waterMid:     [0.18, 0.55, 0.15],
-    waterDeep:    [0.05, 0.18, 0.06],
-    waterTranslucency: 0.95,
-    seabedSand:    [0.55, 0.48, 0.22],   // dry yellow dirt
-    seabedRock:    [0.28, 0.22, 0.10],
-    seabedCaustic: [0.85, 0.95, 0.45],
-    // Sand dunes - style 2 picks the smooth rolling profile.
-    mountainStyle: 2,
-    mountainHeight: 52,
-    mountainScale: 1.5,
-    mountainBase: [0.62, 0.45, 0.22],
-    mountainPeak: [0.92, 0.75, 0.45],
-    mountainGloss: 0.0,
-  },
-  sunset: {
-    name: 'Sunset',
-    sky: 'sunset',
-    terrainTileset: 'greenworld',
-    lightDir: [-0.55, 0.35, 0.50],
-    // Lit warm at the surface by the low sun, deepening to a
-    // muted purple-blue underneath.
-    waterShallow: [0.55, 0.55, 0.65],
-    waterMid:     [0.20, 0.20, 0.45],
-    waterDeep:    [0.05, 0.05, 0.18],
-    waterTranslucency: 0.95,
-    seabedSand:    [0.32, 0.25, 0.22],
-    seabedRock:    [0.18, 0.12, 0.10],
-    seabedCaustic: [0.85, 0.55, 0.45],
-    // Sunset-warm mountain silhouettes.
-    mountainStyle: 0,
-    mountainHeight: 62,
-    mountainScale: 1.0,
-    mountainBase: [0.28, 0.18, 0.18],
-    mountainPeak: [0.88, 0.55, 0.38],
-    mountainGloss: 0.0,
-  },
-  night: {
-    name: 'Night',
-    sky: 'night',
-    terrainTileset: 'greenworld',
-    lightDir: [-0.40, 0.85, 0.30],
-    waterShallow: [0.10, 0.20, 0.32],
-    waterMid:     [0.04, 0.08, 0.18],
-    waterDeep:    [0.01, 0.02, 0.06],
-    waterTranslucency: 0.85,
-    seabedSand:    [0.10, 0.12, 0.15],
-    seabedRock:    [0.04, 0.05, 0.08],
-    seabedCaustic: [0.20, 0.35, 0.55],
-    // Night-time silhouettes - dim, cool grey-blue.
-    mountainStyle: 0,
-    mountainHeight: 62,
-    mountainScale: 1.0,
-    mountainBase: [0.08, 0.10, 0.14],
-    mountainPeak: [0.32, 0.38, 0.48],
-    mountainGloss: 0.0,
-  },
-  alienTwin: {
-    name: 'Alien (twin suns)',
-    sky: 'alienTwin',
-    terrainTileset: 'moon',
-    lightDir: [-0.45, 0.75, 0.40],
-    // Bioluminescent alien water — cyan shallows, electric teal
-    // mid, deep void.
-    waterShallow: [0.30, 0.95, 0.85],
-    waterMid:     [0.12, 0.50, 0.65],
-    waterDeep:    [0.04, 0.10, 0.22],
-    waterTranslucency: 1.10,
-    seabedSand:    [0.42, 0.32, 0.55],
-    seabedRock:    [0.20, 0.12, 0.32],
-    seabedCaustic: [0.60, 1.00, 0.95],
-    // Alien angular spires - sharp metal-style ridges in a deep
-    // bioluminescent palette.
-    mountainStyle: 1,
-    mountainHeight: 85,
-    mountainScale: 0.9,
-    mountainBase: [0.16, 0.10, 0.28],
-    mountainPeak: [0.55, 0.32, 0.78],
-    mountainGloss: 0.65,
-  },
-}
+// SKY_PRESETS / ENVIRONMENT_PRESETS / GRAVITY_BY_ENV now live in the editable
+// per-world JSON under game3d/worlds/ and are loaded by worlds.js (imported
+// above).  The renderer consumes the same map shapes it always has; the only
+// behavioural change is each world now carries its own unit key-light colour
+// (env.lightColor), applied in setEnvironment so the world's sun tints units
+// + scenery.  Add/edit a world by editing its JSON file — no code change.
 
 export class ModelRenderer {
   constructor({ canvas, textureCache, gl }) {
@@ -689,6 +172,15 @@ export class ModelRenderer {
     // animated waves (uTime = (now − _t0) / 1000).  Anchored at
     // construction so each ModelRenderer has its own t=0.
     this._t0 = performance.now()
+    // Unit "effect clock" — a pausable wall-clock used only for animations
+    // that belong to the UNIT (running-light blink + sea bobbing/swaying), as
+    // opposed to the environment (sea waves, sky) which keep real wall time.
+    // It freezes whenever the attached COB runtime is paused so a paused unit
+    // sits genuinely still.  Implemented by accumulating the time spent paused
+    // and subtracting it from the wall clock (see _syncFxClock / _fxTimeSec).
+    this._fxPaused = false
+    this._fxPauseStartMs = 0
+    this._fxPausedAccumMs = 0
     // hoveredPieceName: the piece currently hovered in the sidebar
     // tree, set by the host UI via setHoveredPieceName.  Triggers a
     // red-wireframe overlay around just that piece during draw.
@@ -896,7 +388,16 @@ export class ModelRenderer {
   init() {
     if (this._initPromise) return this._initPromise
     this._initPromise = (async () => {
-      const sources = await loadAllShaders()
+      // Fetch the editable world JSON in parallel with the shaders; both
+      // resolve before the first frame.  loadWorlds() fills the preset maps
+      // the constructor seeded with Greenworld, so all worlds are available
+      // by the time the host applies an environment.
+      const [sources] = await Promise.all([loadAllShaders(), loadWorlds()])
+      // If an environment was selected against the synchronous seed before
+      // the JSON arrived, re-apply it now that the full data is loaded.
+      if (this._envKey && ENVIRONMENT_PRESETS[this._envKey]) {
+        this.setEnvironment(this._envKey)
+      }
       this.#initMainProgram(sources.main.vs, sources.main.fs)
       this.#initShadowProgram(sources.shadow.vs, sources.shadow.fs)
       this.#initSkyProgram(sources.sky.vs, sources.sky.fs)
@@ -1426,6 +927,11 @@ export class ModelRenderer {
     this._envKey = envKey
     this.setSkyScheme(env.sky)
     if (env.lightDir) this.lightDir = ModelRenderer.#normalise(env.lightDir)
+    // Primary key-light colour comes from the world now (each world JSON
+    // carries its own sun tint), so picking Mars / Lava / Night actually
+    // re-tints the units + scenery — warm amber, hot orange, dim moonlight
+    // — instead of every world reusing one neutral daylight.
+    if (env.lightColor) this.lightColor = env.lightColor.slice()
     // Pull sun2 from the active sky scheme so the scene-lighting
     // pass casts a shadow from it too (single suns leave it at
     // zero colour, in which case the shadow pass is skipped).
@@ -1796,6 +1302,28 @@ export class ModelRenderer {
     requestAnimationFrame(() => this.draw())
   }
 
+  // _syncFxClock — called once per frame before any animated unit uniform is
+  // read.  Watches the attached COB runtime's `paused` flag and, on each
+  // pause/resume edge, banks the elapsed paused span so _fxTimeSec freezes
+  // while paused and resumes seamlessly.  No-ops when there's no binding.
+  _syncFxClock() {
+    const paused = !!(this.cobBinding && this.cobBinding.runtime && this.cobBinding.runtime.paused)
+    if (paused === this._fxPaused) return
+    const now = performance.now()
+    if (paused) this._fxPauseStartMs = now
+    else this._fxPausedAccumMs += now - this._fxPauseStartMs
+    this._fxPaused = paused
+  }
+
+  // _fxTimeSec — the unit effect clock in seconds.  Wall time minus all the
+  // time spent paused (including the current, still-open pause span), so
+  // running-light blink + sea bob track the runtime's play/pause state.
+  _fxTimeSec() {
+    const now = performance.now()
+    const openPause = this._fxPaused ? (now - this._fxPauseStartMs) : 0
+    return (now - this._t0 - this._fxPausedAccumMs - openPause) / 1000
+  }
+
   draw() {
     // Same guard as requestRedraw — the RAF loop can fire one more
     // frame between the dispose call and the stop() taking effect.
@@ -1823,6 +1351,9 @@ export class ModelRenderer {
     // requestRedraw() which triggers a fresh draw with everything
     // ready - so silently skipping here is harmless.
     if (!this._programsReady) return
+    // Advance / freeze the unit effect clock for this frame before any
+    // animated uniform reads it (running lights + sea bob).
+    this._syncFxClock()
     this.resize()
     // Camera tracking is a per-frame operation owned by OrbitCamera —
     // when a unit is locked in, applyTracking() pulls camera.target
@@ -1908,7 +1439,7 @@ export class ModelRenderer {
         Mat4.translate(this._modelMatrix, this._modelMatrix, 0, yOff, 0)
       }
       if (this.optBob) {
-        const t = (performance.now() - this._t0) / 1000
+        const t = this._fxTimeSec()
         const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
         const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
         this._applySeaBob(this._modelMatrix, cx, cz, t)
@@ -2526,6 +2057,11 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundTerrainReady, this._terrainReady ? 1 : 0)
     gl.uniform1f(this.uGroundTime, (performance.now() - this._t0) / 1000)
     gl.uniform1f(this.uGroundExposure, this.exposure ?? 1.0)
+    // Normalise the world key-light colour to max-channel 1 so the ground
+    // picks up the sun's HUE without changing its overall brightness.
+    const _lc = this.lightColor || [1, 1, 1]
+    const _lm = Math.max(_lc[0], _lc[1], _lc[2], 1e-4)
+    gl.uniform3f(this.uGroundSunTint, _lc[0] / _lm, _lc[1] / _lm, _lc[2] / _lm)
     gl.uniform3fv(this.uGroundLightDir, this.lightDir)
     gl.uniform3fv(this.uGroundEyePos, this.camera.eye)
     gl.uniform3fv(this.uGroundHorizonColor, this.skyScheme.horizon)
@@ -2684,7 +2220,7 @@ export class ModelRenderer {
     // on top of that would double-glow the reflection, so leave it
     // off for this pass.
     gl.uniform1f(this.uSeaActive, 0)
-    gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uMainTime, this._fxTimeSec())
     gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
@@ -2740,7 +2276,7 @@ export class ModelRenderer {
     mirror[13] = 2 * waterY            // translate Y by 2 * waterY
     const refl = this._scratch2 || (this._scratch2 = Mat4.create())
     if (this.groundMode === 'sea' && this.model) {
-      const t = (performance.now() - this._t0) / 1000
+      const t = this._fxTimeSec()
       const cx = (this.model.bounds.min[0] + this.model.bounds.max[0]) * 0.5
       const cz = (this.model.bounds.min[2] + this.model.bounds.max[2]) * 0.5
       const bob = this._bobScratch || (this._bobScratch = Mat4.create())
@@ -2845,7 +2381,7 @@ export class ModelRenderer {
     // actually sitting on water AND we're in full studio mode.  Flat
     // and wireframe modes bypass it.
     gl.uniform1f(this.uSeaActive, (!flat && this.groundMode === 'sea') ? 1 : 0)
-    gl.uniform1f(this.uMainTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uMainTime, this._fxTimeSec())
     gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
@@ -3398,6 +2934,7 @@ export class ModelRenderer {
     this.uGroundTerrainTex = gl.getUniformLocation(prog, 'uTerrainTex')
     this.uGroundTime = gl.getUniformLocation(prog, 'uTime')
     this.uGroundExposure = gl.getUniformLocation(prog, 'uExposure')
+    this.uGroundSunTint = gl.getUniformLocation(prog, 'uSunTint')
     this.uGroundLightDir = gl.getUniformLocation(prog, 'uLightDir')
     this.uGroundEyePos = gl.getUniformLocation(prog, 'uEyePos')
     this.uGroundSeabedY = gl.getUniformLocation(prog, 'uSeabedY')

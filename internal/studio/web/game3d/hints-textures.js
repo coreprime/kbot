@@ -17,11 +17,12 @@
 //                   `fade` (0..1) is the faded-out floor as a fraction of the
 //                   lit surface colour — 0.85 keeps the dim phase close to the
 //                   original so the pulse-down doesn't show hard edges.
-//                   `minNeighbors` (0..8) is the continuity filter: a lamp
-//                   texel needs that many keyed 8-neighbours to count — 1
-//                   rejects lone grain specks but keeps small dots; 0 keys
-//                   every saturated pixel (use for sparse single-pixel lamps).
-//                   (LIVE)
+//                   `minNeighbors` is the cluster-density sensitivity: the
+//                   shader weights each lamp by how DENSE the keyed texels are
+//                   around it, so coherent blobs glow while lone grain specks
+//                   fall through to the base texture.  0 is the most permissive
+//                   (keeps small genuine dots); raise it to demand chunkier
+//                   blobs before anything lights.                       (LIVE)
 //   bump          { generate, intensity, smooth }      — derive a normal from
 //                   the tile's luminance gradient for surface relief.
 //                   `smooth` (texels) low-passes the height field first so a

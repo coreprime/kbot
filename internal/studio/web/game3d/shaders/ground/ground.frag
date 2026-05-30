@@ -27,6 +27,7 @@ uniform float uTileSize;       // world units per repeat (one TA map tile)
 uniform float uTerrainReady;   // 1 once the terrain texture has uploaded
 uniform float uTime;           // seconds since renderer start, drives sea animation
 uniform float uExposure;       // scene brightness / exposure (Graphics Options Brightness) — 1 = default; applied to the final ground/sea colour to match the unit
+uniform vec3  uSunTint;        // world sun colour normalised to max-channel 1 — terrain + seabed are tinted toward it so the ground reads as lit by the world's sun (amber Mars, orange Lava, cool moonlight, …)
 uniform vec3 uLightDir;        // world-space direction toward the sun, used by Sea specular
 uniform vec3 uEyePos;          // camera world position - Sea Fresnel needs the real view dir
 uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
@@ -249,6 +250,7 @@ void main() {
     float horizonMix = smoothstep(1800.0, 5500.0, dCamT);
     base = mix(base, uHorizonColor, horizonMix * 0.78);
     base += pulseLightContribution(vWorldPos);
+    base *= mix(vec3(1.0), uSunTint, 0.45);   // tint terrain by the world's sun hue
     gl_FragColor = vec4(base * uExposure, 1.0);
     return;
   }
@@ -273,6 +275,7 @@ void main() {
     float dCamBed = length(uEyePos - vWorldPos);
     float bedHaze = smoothstep(500.0, 2200.0, dCamBed);
     col = mix(col, uHorizonColor * 0.45, bedHaze);
+    col *= mix(vec3(1.0), uSunTint, 0.45);    // tint seabed by the world's sun hue
     gl_FragColor = vec4(col * uExposure, 1.0);
     return;
   }
@@ -362,5 +365,6 @@ void main() {
     base = mix(base, mountainShade(shadow), vMountainAmt);
   }
   base *= mix(1.0, shadow, 0.85 * fade);
-  gl_FragColor = vec4(base, fade);
+  base *= mix(vec3(1.0), uSunTint, 0.45);     // tint fallback ground by the world's sun hue
+  gl_FragColor = vec4(base * uExposure, fade);
 }

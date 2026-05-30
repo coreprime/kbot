@@ -1,0 +1,109 @@
+{
+  "key": "night",
+  "skyKey": "night",
+  "icon": "🌌",
+  "name": "Night",
+  "title": "Greenworld at night — dark sky, dim moonlight",
+  "gravity": 80,
+  "terrainTileset": "greenworld",
+  "lightDir": [
+    -0.45,
+    0.72,
+    0.6
+  ],
+  "lightColor": [
+    0.78,
+    0.85,
+    1.08
+  ],
+  "sky": {
+    "zenith": [
+      0.02,
+      0.03,
+      0.1
+    ],
+    "horizon": [
+      0.08,
+      0.12,
+      0.22
+    ],
+    "sun1": {
+      "color": [
+        1.2,
+        1.3,
+        1.7
+      ],
+      "dir": [
+        -0.5,
+        0.5,
+        0.7
+      ],
+      "size": 0.016
+    },
+    "sun2": null,
+    "cloudColor": [
+      0.3,
+      0.32,
+      0.38
+    ],
+    "cloudShadow": [
+      0.08,
+      0.1,
+      0.16
+    ],
+    "cloudCoverage": 0.4,
+    "cloudDensity": 0.55,
+    "cloudSpeed": 0.006
+  },
+  "water": {
+    "shallow": [
+      0.1,
+      0.2,
+      0.32
+    ],
+    "mid": [
+      0.04,
+      0.08,
+      0.18
+    ],
+    "deep": [
+      0.01,
+      0.02,
+      0.06
+    ],
+    "translucency": 0.85
+  },
+  "seabed": {
+    "sand": [
+      0.1,
+      0.12,
+      0.15
+    ],
+    "rock": [
+      0.04,
+      0.05,
+      0.08
+    ],
+    "caustic": [
+      0.2,
+      0.35,
+      0.55
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 62,
+    "scale": 1,
+    "base": [
+      0.08,
+      0.1,
+      0.14
+    ],
+    "peak": [
+      0.32,
+      0.38,
+      0.48
+    ],
+    "gloss": 0
+  }
+}

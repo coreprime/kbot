@@ -1,0 +1,109 @@
+{
+  "key": "moon",
+  "skyKey": "lunar",
+  "icon": "🌙",
+  "name": "Lunar",
+  "title": "Lunar — airless black sky, harsh blue-white sun",
+  "gravity": 20,
+  "terrainTileset": "moon",
+  "lightDir": [
+    -0.6,
+    0.82,
+    0.45
+  ],
+  "lightColor": [
+    1.5,
+    1.55,
+    1.7
+  ],
+  "sky": {
+    "zenith": [
+      0.005,
+      0.008,
+      0.025
+    ],
+    "horizon": [
+      0.12,
+      0.1,
+      0.16
+    ],
+    "sun1": {
+      "color": [
+        3,
+        2.95,
+        2.8
+      ],
+      "dir": [
+        -0.3,
+        0.5,
+        -0.8
+      ],
+      "size": 0.02
+    },
+    "sun2": null,
+    "cloudColor": [
+      0,
+      0,
+      0
+    ],
+    "cloudShadow": [
+      0,
+      0,
+      0
+    ],
+    "cloudCoverage": 0,
+    "cloudDensity": 0,
+    "cloudSpeed": 0
+  },
+  "water": {
+    "shallow": [
+      0.45,
+      0.55,
+      0.7
+    ],
+    "mid": [
+      0.2,
+      0.3,
+      0.45
+    ],
+    "deep": [
+      0.05,
+      0.08,
+      0.18
+    ],
+    "translucency": 1.85
+  },
+  "seabed": {
+    "sand": [
+      0.62,
+      0.6,
+      0.58
+    ],
+    "rock": [
+      0.32,
+      0.3,
+      0.28
+    ],
+    "caustic": [
+      0.8,
+      0.85,
+      0.95
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 55,
+    "scale": 1.4,
+    "base": [
+      0.32,
+      0.32,
+      0.32
+    ],
+    "peak": [
+      0.78,
+      0.78,
+      0.78
+    ],
+    "gloss": 0
+  }
+}

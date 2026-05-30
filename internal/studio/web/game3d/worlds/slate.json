@@ -1,0 +1,109 @@
+{
+  "key": "slate",
+  "skyKey": "slate",
+  "icon": "⛰️",
+  "name": "Slate",
+  "title": "Slate — overcast sky, cold grey quarry water",
+  "gravity": 80,
+  "terrainTileset": "slate",
+  "lightDir": [
+    -0.4,
+    0.95,
+    0.3
+  ],
+  "lightColor": [
+    1.22,
+    1.28,
+    1.38
+  ],
+  "sky": {
+    "zenith": [
+      0.32,
+      0.34,
+      0.38
+    ],
+    "horizon": [
+      0.65,
+      0.65,
+      0.68
+    ],
+    "sun1": {
+      "color": [
+        1.3,
+        1.35,
+        1.45
+      ],
+      "dir": [
+        -0.55,
+        0.6,
+        -0.6
+      ],
+      "size": 0.04
+    },
+    "sun2": null,
+    "cloudColor": [
+      0.78,
+      0.78,
+      0.8
+    ],
+    "cloudShadow": [
+      0.4,
+      0.4,
+      0.45
+    ],
+    "cloudCoverage": 0.95,
+    "cloudDensity": 0.85,
+    "cloudSpeed": 0.018
+  },
+  "water": {
+    "shallow": [
+      0.32,
+      0.38,
+      0.42
+    ],
+    "mid": [
+      0.15,
+      0.2,
+      0.25
+    ],
+    "deep": [
+      0.04,
+      0.06,
+      0.1
+    ],
+    "translucency": 0.8
+  },
+  "seabed": {
+    "sand": [
+      0.28,
+      0.3,
+      0.3
+    ],
+    "rock": [
+      0.15,
+      0.17,
+      0.18
+    ],
+    "caustic": [
+      0.55,
+      0.65,
+      0.75
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 65,
+    "scale": 1.05,
+    "base": [
+      0.22,
+      0.24,
+      0.26
+    ],
+    "peak": [
+      0.62,
+      0.66,
+      0.7
+    ],
+    "gloss": 0
+  }
+}

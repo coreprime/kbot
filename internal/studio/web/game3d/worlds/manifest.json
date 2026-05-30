@@ -1,0 +1,76 @@
+{
+  "worlds": [
+    {
+      "key": "greenworld",
+      "icon": "🌳",
+      "name": "Greenworld",
+      "title": "Greenworld — lush forest, deeper-blue ocean (TA default)"
+    },
+    {
+      "key": "archipelago",
+      "icon": "🏝️",
+      "name": "Archipelago",
+      "title": "Archipelago — tropical white-sand seabed, crystal blue translucent water"
+    },
+    {
+      "key": "metal",
+      "icon": "⚙️",
+      "name": "Metal world",
+      "title": "Metal world — cloudless industrial sky, thick oily coolant"
+    },
+    {
+      "key": "lava",
+      "icon": "🌋",
+      "name": "Lava world",
+      "title": "Lava world — red sky, glowing molten lakes"
+    },
+    {
+      "key": "moon",
+      "icon": "🌙",
+      "name": "Lunar",
+      "title": "Lunar — airless black sky, harsh blue-white sun"
+    },
+    {
+      "key": "mars",
+      "icon": "🔴",
+      "name": "Mars",
+      "title": "Mars — orange dusty sky, purple water"
+    },
+    {
+      "key": "slate",
+      "icon": "⛰️",
+      "name": "Slate",
+      "title": "Slate — overcast sky, cold grey quarry water"
+    },
+    {
+      "key": "marsh",
+      "icon": "🪷",
+      "name": "Marsh",
+      "title": "Marsh — hazy sky, tannin-stained swamp water"
+    },
+    {
+      "key": "desert",
+      "icon": "🏜️",
+      "name": "Desert (acid)",
+      "title": "Desert — sandy terrain, acid-green lake"
+    },
+    {
+      "key": "sunset",
+      "icon": "🌇",
+      "name": "Sunset",
+      "title": "Greenworld at sunset — warm low sun, muted water"
+    },
+    {
+      "key": "night",
+      "icon": "🌌",
+      "name": "Night",
+      "title": "Greenworld at night — dark sky, dim moonlight"
+    },
+    {
+      "key": "alienTwin",
+      "icon": "👽",
+      "name": "Alien (twin suns)",
+      "title": "Alien — twin suns (amber + violet), purple sky, bioluminescent water"
+    }
+  ]
+}

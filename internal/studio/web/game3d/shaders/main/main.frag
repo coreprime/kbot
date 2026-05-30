@@ -151,17 +151,20 @@ float sampleShadowMap2(vec3 normal) {
   return lit / 9.0;
 }
 
-// lampKey — is the SHARP-mip texel at `uv` a saturated running-light pixel?
-// Returns 1.0 if bright + saturated enough to read as a status lamp, else
-// 0.0.  Used both for the centre pixel and its neighbours so the running-
-// lights block can demand spatial continuity (a real blob/line) rather than
-// firing on stray isolated specks.
-float lampKey(vec2 uv) {
+// lampSample — sample the SHARP-mip texel at `uv` and report whether it reads
+// as a saturated running-light pixel.  Returns the RAW colour in .rgb and
+// 1.0 / 0.0 in .a for keyed / not-keyed.  The running-lights block sums this
+// across a neighbourhood so the effect can be weighted by both local cluster
+// DENSITY and BRIGHTNESS — bright dots or coherent blobs glow, while the lone
+// DARK specks of texture grain (the dither that reads near the key threshold)
+// fall through to the base texture instead of firing as stray pixels.
+vec4 lampSample(vec2 uv) {
   vec3 t = texture2D(uTex, uv, -8.0).rgb;
   float mx = max(max(t.r, t.g), t.b);
   float mn = min(min(t.r, t.g), t.b);
   float rsat = (mx - mn) / max(mx, 0.004);
-  return step(0.12, mx) * step(0.50, rsat);
+  float keyed = step(0.12, mx) * step(0.50, rsat);
+  return vec4(t, keyed);
 }
 
 void main() {
@@ -211,6 +214,14 @@ void main() {
   }
 
   vec3 N = normalize(vNormal);
+  // Ng — the un-bumped GEOMETRIC (macro) normal.  The broad, coloured
+  // environment fills (hemisphere ambient, the cool-blue cinematic fill,
+  // the back light, the fresnel rim, and the blue sea-surface bounce)
+  // all read off Ng so the bump perturbation can NOT scatter their tint
+  // across the surface — that scattering is what produced the blue
+  // speckle on bump-mapped plating.  The bumped N below sculpts only the
+  // KEY sun diffuse + specular, where surface relief genuinely reads.
+  vec3 Ng = N;
   // Auto-bump surface hint — derive surface relief from the tile's luminance
   // treated as a height field.  The height GRADIENT is measured by sampling
   // the texture at TEXEL offsets (uTexel = 1/size) rather than screen-space
@@ -230,7 +241,13 @@ void main() {
     //      amplitude floor — low-contrast grain goes flat, while high-contrast
     //      edges (rivets, weld seams, panel breaks) pass through.
     float sm = max(uBumpSmooth, 1.0);
-    float lod = log2(sm) * 0.5;      // gentle blur — keep rivets crisp
+    // Low-pass the height field HARD enough that the gradient follows the
+    // LARGE painted features (panel breaks, rivet lines, weld seams) and not
+    // the per-texel palette grain — sampling the height at a blurred mip is
+    // what separates "surface relief" from "texture noise scattered over the
+    // panel".  +1 mip on top of the smooth radius does that without melting
+    // the bigger detail away.
+    float lod = log2(sm) + 1.0;
     vec2 d = uTexel * sm;            // gradient step
     float hL = dot(texture2D(uTex, vUV - vec2(d.x, 0.0), lod).rgb, lw);
     float hR = dot(texture2D(uTex, vUV + vec2(d.x, 0.0), lod).rgb, lw);
@@ -252,7 +269,11 @@ void main() {
     vec3 T = dp2perp * du1.x + dp1perp * du2.x;
     vec3 B = dp2perp * du1.y + dp1perp * du2.y;
     float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
-    float k = uBumpIntensity * uBumpStrength * 6.0;
+    // Perturbation scale.  6× over-tilted the normal so the relief read as
+    // high-frequency shading noise rather than gentle, coherent bumps; 3×
+    // keeps the surface reading as relief while the key sun + specular still
+    // catch the painted detail as the unit turns.
+    float k = uBumpIntensity * uBumpStrength * 3.0;
     N = normalize(N - (T * dHdu + B * dHdv) * invmax * k);
   }
   vec3 L = normalize(uLightDir);
@@ -269,7 +290,7 @@ void main() {
   // Baked AO darkens it in crevices so contact shadows read without
   // a screen-space pass.  AO is biased toward 1 so flat panels stay
   // open - only true creases pick up the darkening.
-  float hemiMix = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
+  float hemiMix = clamp(Ng.y * 0.5 + 0.5, 0.0, 1.0);
   // Ambient is a FILL, not a second key.  uSkyColor sits near 1.0 (it
   // also tints the sky/ground), so taking it un-scaled lit every face
   // to ~full texture value — flattening contrast and, once the bright
@@ -286,8 +307,8 @@ void main() {
   // background.  Both lights are subordinate to the key and AO so
   // they don't wash out genuine sculpting.
   vec3 fillDir = normalize(vec3(-L.x, max(0.1, L.y * 0.4), -L.z));
-  float ndf = max(0.0, dot(N, fillDir));
-  ndf = max(ndf, max(0.0, dot(-N, fillDir)) * 0.4);
+  float ndf = max(0.0, dot(Ng, fillDir));
+  ndf = max(ndf, max(0.0, dot(-Ng, fillDir)) * 0.4);
   vec3 fillLight = ndf * uFillColor * 0.55;
 
   // Cheap-tier (uLightingTier >= 0.5) — skip the rim, back-light, and
@@ -303,8 +324,8 @@ void main() {
   vec3 backLight = vec3(0.0);
   if (!cheapLighting) {
     vec3 backDir = normalize(vec3(-V.x, 0.3, -V.z));
-    float ndb = max(0.0, dot(N, backDir));
-    ndb = max(ndb, max(0.0, dot(-N, backDir)) * 0.4);
+    float ndb = max(0.0, dot(Ng, backDir));
+    ndb = max(ndb, max(0.0, dot(-Ng, backDir)) * 0.4);
     backLight = pow(ndb, 4.0) * uBackColor * 0.7;
   }
 
@@ -314,7 +335,7 @@ void main() {
   // silhouette ramp would otherwise look wrong.
   vec3 rim = vec3(0.0);
   if (!cheapLighting) {
-    float fresnel = pow(1.0 - max(0.0, dot(N, V)), 4.0);
+    float fresnel = pow(1.0 - max(0.0, dot(Ng, V)), 4.0);
     rim = fresnel * mix(uSkyColor, uLightColor, 0.6) * 0.35 * vAO;
   }
 
@@ -438,7 +459,7 @@ void main() {
     //     the waterline gets full strength.  Stops decks + masts
     //     from picking up reflections just because they happen to
     //     have a sideways normal.
-    float sideness = 1.0 - abs(N.y);
+    float sideness = 1.0 - abs(Ng.y);
     // Extended falloff (was 8 wu) so the side plating ~12 wu up
     // the hull still picks up some bounce - keeps the effect
     // reading on tall units, not just the boot-stripe.
@@ -482,52 +503,72 @@ void main() {
   // feeds the bloom bright-pass.
   vec3 rlEmissive = vec3(0.0);
   if (uRunningLights > 0.5 && uMode != 1) {
-    // Status lamps (corv06a/b) are tiny, saturated dots painted DARK —
-    // CORE's blue lamps sit around (35,91,135), some as low as (19,27,47).
-    // Two samples drive the effect:
-    //   lampTex  — a SHARP mip (negative LOD bias) so the dots survive the
-    //              trilinear blur that otherwise averages them into the hull
-    vec3 lampTex = texture2D(uTex, vUV, -8.0).rgb;
-    float mx = max(max(lampTex.r, lampTex.g), lampTex.b);
-    float mn = min(min(lampTex.r, lampTex.g), lampTex.b);
-    float rsat = (mx - mn) / max(mx, 0.004);
-    // rsat is the discriminator (saturated dot vs grey CORE hull); mx kept
-    // low so the dark blue lamps still register.
-    float keyHere = step(0.12, mx) * step(0.50, rsat);
-    // Spatial continuity (morphological erosion): count keyed texels in the
-    // full 8-neighbourhood and require at least uRLMinNeighbors of them.  At
-    // the default 1 this rejects only fully-isolated single specks (grain)
-    // while keeping genuine small lamps — a 2-px dot or the corner of a blob
-    // has at least one keyed neighbour.  0 disables the filter entirely.
     vec2 tx = uTexel;
-    float n8 = lampKey(vUV + vec2(tx.x, 0.0)) + lampKey(vUV - vec2(tx.x, 0.0))
-             + lampKey(vUV + vec2(0.0, tx.y)) + lampKey(vUV - vec2(0.0, tx.y))
-             + lampKey(vUV + tx)             + lampKey(vUV - tx)
-             + lampKey(vUV + vec2(tx.x, -tx.y)) + lampKey(vUV + vec2(-tx.x, tx.y));
-    float isLight = keyHere * step(uRLMinNeighbors - 0.5, n8);
-    // Pure, full-brightness version of the lamp's own hue so a dark muted
-    // blue dot emits a VIVID blue when lit.
-    vec3 hue = lampTex / max(mx, 0.004);
-    // Per-hue phase so the blue / yellow lamps flicker out of step.
-    float phase = (lampTex.b >= lampTex.r && lampTex.b >= lampTex.g) ? 0.0
-                : ((lampTex.g >= lampTex.r) ? 2.094 : 4.188);
-    // Clear, high-contrast pulse — smoothstep holds each lamp at its dim
-    // and bright extremes (rather than a soft sine) so the on/off reads as
-    // a deliberate flicker; blue/yellow run out of phase.
-    float s = 0.5 + 0.5 * sin(uTime * 3.5 + phase);
-    float blink = smoothstep(0.12, 0.88, s);
-    // The pulse runs from a gentle FADED floor (uRLFade × the lit surface
-    // colour — 0.85 by default, so the lamp barely dims and shows no hard
-    // dark edge) up to the vivid lamp hue when fully lit.  uRLStrength (the
-    // Running Lights intensity slider) scales the "on" punch.
+    // ── Edge guard ──────────────────────────────────────────────────────
+    // Fade the whole effect out within a couple of texels of the tile border.
+    // The outermost texels of a tile are often saturated frame/bleed pixels,
+    // and the neighbourhood scan + sharp -8.0 fetch alias badly where a face
+    // is seen edge-on — both light up as stray lamps along a surface's edges.
+    // Distance to the nearest u/v border, in texels (fract keeps it correct
+    // for tiled UVs); 0 at the very edge, 1 a couple of texels in.
+    vec2 uvf = fract(vUV);
+    vec2 edgeUV = min(uvf, 1.0 - uvf);
+    float edgePx = min(edgeUV.x / max(tx.x, 1e-6), edgeUV.y / max(tx.y, 1e-6));
+    float edgeFade = smoothstep(0.5, 2.5, edgePx);
+
+    // ── Blob colour + phase (blurred mip) ───────────────────────────────
+    // A coarse mip averages a connected cluster into one soft coloured blob,
+    // so EVERY texel that touches the blob sees the same DOMINANT colour and
+    // therefore the same blink phase — a contacting area reads as ONE lamp,
+    // not several groups flickering out of step (the split-purple-dot bug).
+    // The same blurred sample drives the wide hull glow (smooth, no hard edge).
+    vec3 gb = texture2D(uTex, vUV, 2.5).rgb;
+    float gmx = max(max(gb.r, gb.g), gb.b);
+    float gmn = min(min(gb.r, gb.g), gb.b);
+    float gsat = (gmx - gmn) / max(gmx, 0.004);
+    vec3 hue = gb / max(gmx, 0.004);                 // dominant (vivid) blob hue
+    float phase = (hue.b >= hue.r && hue.b >= hue.g) ? 0.0
+                : ((hue.g >= hue.r) ? 2.094 : 4.188);
+    float blink = smoothstep(0.12, 0.88, 0.5 + 0.5 * sin(uTime * 3.5 + phase));
+
+    // ── Lamp body gate (sharp 5x5 scan) ─────────────────────────────────
+    // The blurred colour says WHAT colour and WHEN; the sharp scan says WHERE
+    // a crisp lamp texel actually sits.  A keyed texel lights if it is BRIGHT
+    // (lamp dots read ~0.45–0.9 vs the ~0.12–0.18 dark dither — also rescues a
+    // dot whose pixels sit a texel apart, e.g. corv04b's cyan) OR part of a
+    // DENSE blob (a 2x2 status cluster / lit panel, even when painted dark).
+    // A lone DARK speck is neither, so it falls through to the base texture.
+    float dens = 0.0, wsum = 0.0;
+    vec4 c0 = vec4(0.0);
+    for (int dy = -2; dy <= 2; dy++) {
+      for (int dx = -2; dx <= 2; dx++) {
+        vec4 ls = lampSample(vUV + vec2(float(dx), float(dy)) * tx);
+        float w = exp(-float(dx * dx + dy * dy) * 0.5);
+        dens += ls.a * w;
+        wsum += w;
+        if (dx == 0 && dy == 0) c0 = ls;
+      }
+    }
+    float densN = dens / wsum;                       // 0..1 cluster density
+    float mxC = max(max(c0.r, c0.g), c0.b);          // centre brightness
+    float bright = smoothstep(0.24, 0.44, mxC);
+    float dense  = smoothstep(0.32, 0.62, densN) * step(uRLMinNeighbors * 0.05, densN);
+    float coreAmt = c0.a * max(bright, dense) * edgeFade;
+
+    // Lamp body: recolour to the dominant blob hue, pulsing in sync.
     vec3 lampOff = col * uRLFade;
-    vec3 lampOn = hue * (1.0 + 0.8 * uRLStrength);
-    vec3 lamp = mix(lampOff, lampOn, blink);
-    col = mix(col, lamp, isLight);
-    // Emit when lit so the colour bleeds off the hull into the scene (bloom
-    // halo).  Added after the tone curve below so it isn't crushed; coeff
-    // halved (4.5 → 2.25) then scaled by the slider.
-    rlEmissive = hue * (blink * 2.25 * uRLStrength) * uRLEmit * isLight;
+    vec3 lampOn = hue * (0.95 + 0.55 * uRLStrength);
+    col = mix(col, mix(lampOff, lampOn, blink), coreAmt);
+
+    // Wide soft glow / hull light-wash from the same blurred blob, also
+    // edge-faded so it never blooms off the rim of a surface.
+    float glow = smoothstep(0.14, 0.40, gmx) * smoothstep(0.30, 0.62, gsat) * edgeFade;
+    col += hue * (glow * blink) * 0.55 * uRLStrength;   // hull wash (pre-tone)
+    // Emissive (post tone curve), boosted so low-luma coloured lamps (blue /
+    // teal weigh little in luma) still clear the bloom bright-pass.
+    vec3 coreEm = hue * (blink * 2.2 * uRLStrength) * coreAmt;
+    vec3 haloEm = hue * (blink * glow * 1.4 * uRLStrength);
+    rlEmissive = (coreEm + haloEm) * uRLEmit;
   }
 
   // Exposure — the Graphics Options Brightness slider scales the whole

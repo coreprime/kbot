@@ -1,0 +1,109 @@
+{
+  "key": "marsh",
+  "skyKey": "marsh",
+  "icon": "🪷",
+  "name": "Marsh",
+  "title": "Marsh — hazy sky, tannin-stained swamp water",
+  "gravity": 80,
+  "terrainTileset": "marsh",
+  "lightDir": [
+    -0.5,
+    0.85,
+    0.4
+  ],
+  "lightColor": [
+    1.5,
+    1.42,
+    1.02
+  ],
+  "sky": {
+    "zenith": [
+      0.55,
+      0.6,
+      0.55
+    ],
+    "horizon": [
+      0.92,
+      0.88,
+      0.65
+    ],
+    "sun1": {
+      "color": [
+        1.95,
+        1.8,
+        1.15
+      ],
+      "dir": [
+        0.3,
+        0.5,
+        -0.78
+      ],
+      "size": 0.045
+    },
+    "sun2": null,
+    "cloudColor": [
+      0.92,
+      0.88,
+      0.72
+    ],
+    "cloudShadow": [
+      0.45,
+      0.42,
+      0.3
+    ],
+    "cloudCoverage": 0.55,
+    "cloudDensity": 0.7,
+    "cloudSpeed": 0.008
+  },
+  "water": {
+    "shallow": [
+      0.45,
+      0.55,
+      0.3
+    ],
+    "mid": [
+      0.2,
+      0.28,
+      0.12
+    ],
+    "deep": [
+      0.06,
+      0.1,
+      0.04
+    ],
+    "translucency": 0.85
+  },
+  "seabed": {
+    "sand": [
+      0.32,
+      0.3,
+      0.18
+    ],
+    "rock": [
+      0.15,
+      0.18,
+      0.1
+    ],
+    "caustic": [
+      0.65,
+      0.75,
+      0.45
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 42,
+    "scale": 1.4,
+    "base": [
+      0.2,
+      0.22,
+      0.14
+    ],
+    "peak": [
+      0.45,
+      0.52,
+      0.32
+    ],
+    "gloss": 0
+  }
+}

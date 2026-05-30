@@ -1,0 +1,109 @@
+{
+  "key": "sunset",
+  "skyKey": "sunset",
+  "icon": "🌇",
+  "name": "Sunset",
+  "title": "Greenworld at sunset — warm low sun, muted water",
+  "gravity": 80,
+  "terrainTileset": "greenworld",
+  "lightDir": [
+    -0.6,
+    0.4,
+    0.55
+  ],
+  "lightColor": [
+    1.7,
+    1.05,
+    0.62
+  ],
+  "sky": {
+    "zenith": [
+      0.18,
+      0.18,
+      0.45
+    ],
+    "horizon": [
+      1.35,
+      0.55,
+      0.3
+    ],
+    "sun1": {
+      "color": [
+        2.7,
+        1.2,
+        0.45
+      ],
+      "dir": [
+        -0.6,
+        0.18,
+        0.78
+      ],
+      "size": 0.06
+    },
+    "sun2": null,
+    "cloudColor": [
+      1.3,
+      0.85,
+      0.65
+    ],
+    "cloudShadow": [
+      0.4,
+      0.22,
+      0.3
+    ],
+    "cloudCoverage": 0.55,
+    "cloudDensity": 0.85,
+    "cloudSpeed": 0.008
+  },
+  "water": {
+    "shallow": [
+      0.55,
+      0.55,
+      0.65
+    ],
+    "mid": [
+      0.2,
+      0.2,
+      0.45
+    ],
+    "deep": [
+      0.05,
+      0.05,
+      0.18
+    ],
+    "translucency": 0.95
+  },
+  "seabed": {
+    "sand": [
+      0.32,
+      0.25,
+      0.22
+    ],
+    "rock": [
+      0.18,
+      0.12,
+      0.1
+    ],
+    "caustic": [
+      0.85,
+      0.55,
+      0.45
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 62,
+    "scale": 1,
+    "base": [
+      0.28,
+      0.18,
+      0.18
+    ],
+    "peak": [
+      0.88,
+      0.55,
+      0.38
+    ],
+    "gloss": 0
+  }
+}

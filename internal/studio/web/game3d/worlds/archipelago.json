@@ -1,0 +1,109 @@
+{
+  "key": "archipelago",
+  "skyKey": "archipelago",
+  "icon": "🏝️",
+  "name": "Archipelago",
+  "title": "Archipelago — tropical white-sand seabed, crystal blue translucent water",
+  "gravity": 80,
+  "terrainTileset": "archipelago",
+  "lightDir": [
+    -0.35,
+    0.92,
+    0.55
+  ],
+  "lightColor": [
+    1.68,
+    1.6,
+    1.42
+  ],
+  "sky": {
+    "zenith": [
+      0.1,
+      0.45,
+      0.92
+    ],
+    "horizon": [
+      0.85,
+      0.95,
+      1.02
+    ],
+    "sun1": {
+      "color": [
+        2.55,
+        2.25,
+        1.6
+      ],
+      "dir": [
+        0.45,
+        0.4,
+        -0.78
+      ],
+      "size": 0.032
+    },
+    "sun2": null,
+    "cloudColor": [
+      1.15,
+      1.15,
+      1.18
+    ],
+    "cloudShadow": [
+      0.65,
+      0.72,
+      0.8
+    ],
+    "cloudCoverage": 0.35,
+    "cloudDensity": 0.7,
+    "cloudSpeed": 0.012
+  },
+  "water": {
+    "shallow": [
+      0.4,
+      0.92,
+      0.95
+    ],
+    "mid": [
+      0.12,
+      0.65,
+      0.85
+    ],
+    "deep": [
+      0.04,
+      0.22,
+      0.45
+    ],
+    "translucency": 1.55
+  },
+  "seabed": {
+    "sand": [
+      0.95,
+      0.92,
+      0.78
+    ],
+    "rock": [
+      0.78,
+      0.72,
+      0.55
+    ],
+    "caustic": [
+      0.95,
+      0.95,
+      0.85
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 40,
+    "scale": 1.3,
+    "base": [
+      0.68,
+      0.62,
+      0.42
+    ],
+    "peak": [
+      0.92,
+      0.88,
+      0.72
+    ],
+    "gloss": 0
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "key": "greenworld",
+  "skyKey": "earth",
+  "icon": "🌳",
+  "name": "Greenworld",
+  "title": "Greenworld — lush forest, deeper-blue ocean (TA default)",
+  "gravity": 80,
+  "terrainTileset": "greenworld",
+  "lightDir": [
+    -0.55,
+    0.9,
+    0.45
+  ],
+  "lightColor": [
+    1.55,
+    1.48,
+    1.32
+  ],
+  "sky": {
+    "zenith": [
+      0.18,
+      0.42,
+      0.85
+    ],
+    "zenith2": [
+      0.18,
+      0.42,
+      0.85
+    ],
+    "horizon": [
+      0.78,
+      0.86,
+      0.95
+    ],
+    "sun1": {
+      "color": [
+        2.4,
+        1.95,
+        1.3
+      ],
+      "dir": [
+        -0.45,
+        0.35,
+        -0.85
+      ],
+      "size": 0.04
+    },
+    "sun2": null,
+    "cloudColor": [
+      1.2,
+      1.18,
+      1.15
+    ],
+    "cloudShadow": [
+      0.45,
+      0.55,
+      0.7
+    ],
+    "cloudCoverage": 0.78,
+    "cloudDensity": 0.95,
+    "cloudSpeed": 0.012
+  },
+  "water": {
+    "shallow": [
+      0.1,
+      0.4,
+      0.72
+    ],
+    "mid": [
+      0.04,
+      0.18,
+      0.45
+    ],
+    "deep": [
+      0.01,
+      0.05,
+      0.2
+    ],
+    "translucency": 0.95
+  },
+  "seabed": {
+    "sand": [
+      0.25,
+      0.32,
+      0.3
+    ],
+    "rock": [
+      0.14,
+      0.18,
+      0.18
+    ],
+    "caustic": [
+      0.35,
+      0.65,
+      0.95
+    ]
+  },
+  "mountain": {
+    "style": 0,
+    "height": 62,
+    "scale": 1,
+    "base": [
+      0.28,
+      0.32,
+      0.22
+    ],
+    "peak": [
+      0.72,
+      0.78,
+      0.8
+    ],
+    "gloss": 0
+  }
+}
