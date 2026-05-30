@@ -125,17 +125,24 @@ export function wireModelViewerRibbon() {
 
       // Graphics Options — broadcast across every pane's renderer so a
       // toggle/slider takes effect on the primary AND its observers.
+      setLightIntensity:    (v)  => eachRenderer((r) => r.setExposure?.(v)),
       setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
       setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
       setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),
 
       setReflections:       (on) => eachRenderer((r) => r.setReflectionsEnabled?.(!!on)),
       setSpecular:          (on) => eachRenderer((r) => r.setSpecularEnabled?.(!!on)),
+      setSpecularStrength:  (v)  => eachRenderer((r) => r.setSpecularStrength?.(v)),
       setMetalSpec:         (on) => eachRenderer((r) => r.setMetalSpecEnabled?.(!!on)),
+      setRunningLights:     (on) => eachRenderer((r) => r.setRunningLightsEnabled?.(!!on)),
+      setRunningLightsStrength: (v) => eachRenderer((r) => r.setRunningLightsStrength?.(v)),
+      setBumpMap:           (on) => eachRenderer((r) => r.setBumpEnabled?.(!!on)),
+      setBumpStrength:      (v)  => eachRenderer((r) => r.setBumpStrength?.(v)),
       setGodBeams:          (on) => eachRenderer((r) => r.setGodBeamsEnabled?.(!!on)),
       setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
       setDoFDistance:       (v)  => eachRenderer((r) => r.setDoFDistance?.(v)),
       setDoFLevel:          (v)  => eachRenderer((r) => r.setDoFLevel?.(v)),
+      setAntialias:         (on) => eachRenderer((r) => r.setAntialiasEnabled?.(!!on)),
       setCinematic:         (on) => eachRenderer((r) => r.setCinematic?.(!!on)),
       setCinematicStrength: (v)  => eachRenderer((r) => r.setCinematicStrength?.(v)),
       setBloom:             (on) => eachRenderer((r) => r.setBloomEnabled?.(!!on)),

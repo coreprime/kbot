@@ -16,6 +16,13 @@ uniform float uEnabled;   // 0 = passthrough copy
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
+// Edge-detect thresholds (Lottes' recommended FXAA defaults).  MIN skips
+// near-black areas where contrast is just sensor-floor noise; MAX is the
+// relative luma range (vs the brightest neighbour) that qualifies as an
+// aliased edge worth smoothing.
+const float EDGE_THRESHOLD_MIN = 0.0312;
+const float EDGE_THRESHOLD_MAX = 0.125;
+
 void main() {
   vec3 rgbM = texture2D(uTex, vUV).rgb;
   if (uEnabled < 0.5) {
@@ -31,13 +38,30 @@ void main() {
   float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
   float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
 
+  // Edge-contrast early-out (the canonical FXAA gate this variant was
+  // missing).  Without it FXAA blends EVERY pixel — not just aliased
+  // edges — which smears thin high-contrast texture detail at distance
+  // (side-panel stripes vanish into the hull, fin shadows wash out).
+  // Only run the edge-directed blur where the local luma range is a
+  // meaningful fraction of the brightest neighbour; flat / low-contrast
+  // texture areas pass straight through untouched.
+  float range = lMax - lMin;
+  if (range < max(EDGE_THRESHOLD_MIN, lMax * EDGE_THRESHOLD_MAX)) {
+    gl_FragColor = vec4(rgbM, 1.0);
+    return;
+  }
+
   vec2 dir;
   dir.x = -((lNW + lNE) - (lSW + lSE));
   dir.y =  ((lNW + lSW) - (lNE + lSE));
 
   const float REDUCE_MIN = 1.0 / 128.0;
   const float REDUCE_MUL = 1.0 / 8.0;
-  const float SPAN_MAX = 8.0;
+  // Shorter blur reach than the canonical 8.0 — the long span is what
+  // smeared thin features across several texels at distance; 4.0 still
+  // resolves staircased edges while keeping panel stripes / fin shadows
+  // intact.
+  const float SPAN_MAX = 4.0;
   float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * REDUCE_MUL, REDUCE_MIN);
   float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
   dir = clamp(dir * rcpDirMin, vec2(-SPAN_MAX), vec2(SPAN_MAX)) * uTexel;

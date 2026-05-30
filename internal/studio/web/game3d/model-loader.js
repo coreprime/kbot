@@ -20,19 +20,9 @@
 
 import { Piece } from './piece.js'
 import { Model } from './model.js'
+import { resolveTextureHints } from './hints-textures.js'
 
 const FLOATS_PER_VERTEX = 9
-
-// _METAL_TEX_RE — texture / GAF-sequence names that read as bare metal.
-// Batches whose texture matches get tagged `metallic` so the renderer
-// can boost their Blinn-Phong specular (the "infer shininess from the
-// name" heuristic).  Conservative word list to avoid lighting up
-// painted / camo panels; the user can disable the inference entirely
-// via the Graphics Options "Metallic Highlights" toggle.
-const _METAL_TEX_RE = /(metal|chrome|steel|iron|alloy|titan|gold|silver|brass|copper)/i
-function _isMetallicTexture(name) {
-  return !!name && _METAL_TEX_RE.test(name)
-}
 
 // _LOD_HIDE_NAME_PATTERNS — piece names matching any of these regexes
 // get tagged with `lodHide = true` at load time so the renderer's
@@ -397,6 +387,9 @@ export class ModelLoader {
       const opaque = []
       const decal = []
       for (const bucket of map.values()) {
+        // Resolve material hints for this tile (specular today; bump /
+        // emissive later) — see hints-textures.js for the full data.
+        const hints = resolveTextureHints(bucket.texture)
         const group = {
           vbo: null,
           mode,
@@ -405,7 +398,16 @@ export class ModelLoader {
           color: bucket.color,
           isDecal: !!(bucket.texture && decals.has(bucket.texture.toLowerCase())),
           depthTier: bucket.depthTier || 0,
-          metallic: _isMetallicTexture(bucket.texture),
+          metallic: !!(hints.specular && hints.specular.metallic),
+          specScale: (hints.specular && hints.specular.scale) || 1.0,
+          runningLights: !!(hints.runningLights && hints.runningLights.blink),
+          rlEmit: (hints.runningLights && hints.runningLights.emit) || 0.0,
+          rlFade: (hints.runningLights && hints.runningLights.fade != null) ? hints.runningLights.fade : 0.85,
+          rlMinNeighbors: (hints.runningLights && hints.runningLights.minNeighbors != null) ? hints.runningLights.minNeighbors : 1,
+          bump: !!(hints.bump && hints.bump.generate),
+          bumpIntensity: (hints.bump && hints.bump.intensity) || 0.0,
+          bumpSmooth: (hints.bump && hints.bump.smooth != null) ? hints.bump.smooth : 1.5,
+          bumpThreshold: (hints.bump && hints.bump.threshold != null) ? hints.bump.threshold : 0.12,
         }
         const arr = new Float32Array(bucket.interleaved)
         group.vbo = gl.createBuffer()

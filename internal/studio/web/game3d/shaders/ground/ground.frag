@@ -26,6 +26,7 @@ uniform int uGroundMode;       // 0 = grid, 1 = terrain (textured), 2 = sea (pro
 uniform float uTileSize;       // world units per repeat (one TA map tile)
 uniform float uTerrainReady;   // 1 once the terrain texture has uploaded
 uniform float uTime;           // seconds since renderer start, drives sea animation
+uniform float uExposure;       // scene brightness / exposure (Graphics Options Brightness) — 1 = default; applied to the final ground/sea colour to match the unit
 uniform vec3 uLightDir;        // world-space direction toward the sun, used by Sea specular
 uniform vec3 uEyePos;          // camera world position - Sea Fresnel needs the real view dir
 uniform float uSeabedActive;   // 1 when this pass renders the seabed below the water
@@ -218,7 +219,7 @@ void main() {
     // tile).
     base += line * onGlow * 0.18;
     base += pulseLightContribution(vWorldPos);
-    gl_FragColor = vec4(base, fade);
+    gl_FragColor = vec4(base * uExposure, fade);
     return;
   }
   if (uGroundMode == 1 && uTerrainReady > 0.5) {
@@ -248,7 +249,7 @@ void main() {
     float horizonMix = smoothstep(1800.0, 5500.0, dCamT);
     base = mix(base, uHorizonColor, horizonMix * 0.78);
     base += pulseLightContribution(vWorldPos);
-    gl_FragColor = vec4(base, 1.0);
+    gl_FragColor = vec4(base * uExposure, 1.0);
     return;
   }
   if (uSeabedActive > 0.5) {
@@ -272,7 +273,7 @@ void main() {
     float dCamBed = length(uEyePos - vWorldPos);
     float bedHaze = smoothstep(500.0, 2200.0, dCamBed);
     col = mix(col, uHorizonColor * 0.45, bedHaze);
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col * uExposure, 1.0);
     return;
   }
   if (uGroundMode == 2) {
@@ -344,7 +345,7 @@ void main() {
     aOut = mix(aOut, 0.78, fresnel * 0.6);
     aOut = mix(aOut, 1.0, horizonMix);
     aOut = clamp(aOut * uWaterTranslucency, 0.05, 1.0);
-    gl_FragColor = vec4(surface, aOut * fade);
+    gl_FragColor = vec4(surface * uExposure, aOut * fade);
     return;
   }
 

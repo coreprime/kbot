@@ -89,39 +89,71 @@ void main() {
   }
 
   // 2b. Lens flare — a glow at the sun's screen position plus a few
-  // ghosts strung along the sun→centre axis.  Gated by an occlusion
-  // test: the sun pixel's depth has to read as sky/far, so the flare
-  // hides the instant geometry crosses in front of the sun.
+  // ghosts strung along the sun→centre axis.  uFlarePos is the sun's
+  // projected screen UV; the host sets uFlareOn whenever the sun is in
+  // FRONT of the camera, even when it projects OFF the visible frame.
+  // That lets the ghost streaks reach across the frame toward the sun
+  // when you look in its direction (the sun sits high overhead, so it's
+  // rarely framed directly).  Two falloffs tame the off-screen case:
+  //   offDist  — how far the sun is outside the [0,1] frame.
+  //   reach    — overall flare presence; fades over ~1-2 screens so a
+  //              sun far from the look direction contributes nothing.
+  //   coreFade — fades the bright core/halo faster, so an off-screen sun
+  //              doesn't smear a hard blob bleeding from the edge while
+  //              the dimmer ghosts still streak in.
   if (uFlareOn > 0.5) {
-    float dSun = texture2D(uSceneDepth, uFlarePos).r;
-    float vis = smoothstep(0.985, 0.999, dSun);
-    if (vis > 0.001) {
-      float aspect = uTexel.y / uTexel.x;   // w/h — keep the glow circular
+    float aspect = uTexel.y / uTexel.x;   // w/h — keep the glow circular
+    vec2 q = clamp(uFlarePos, 0.0, 1.0);
+    float offDist = length(uFlarePos - q);
+    float reach = exp(-offDist * 1.5);
+    float coreFade = exp(-offDist * 7.0);
+    // Occlusion only when the sun pixel is actually on screen — off
+    // screen we can't depth-test it, so assume it's visible (sky).
+    float vis = (offDist < 0.0005)
+      ? smoothstep(0.985, 0.999, texture2D(uSceneDepth, uFlarePos).r)
+      : 1.0;
+    if (vis > 0.001 && reach > 0.003) {
       vec3 flare = vec3(0.0);
       float dc = length((vUV - uFlarePos) * vec2(aspect, 1.0));
-      flare += uFlareColor * exp(-dc * 16.0) * 1.3;   // tight core
-      flare += uFlareColor * exp(-dc * 3.5) * 0.22;   // soft halo
+      flare += uFlareColor * exp(-dc * 16.0) * 1.3 * coreFade;   // tight core
+      flare += uFlareColor * exp(-dc * 3.5) * 0.22 * coreFade;   // soft halo
       vec2 dir = vec2(0.5) - uFlarePos;
       for (int i = 1; i <= 4; i++) {
         vec2 gp = uFlarePos + dir * (float(i) * 0.34);
         float gd = length((vUV - gp) * vec2(aspect, 1.0));
         flare += uFlareColor * exp(-gd * 26.0) * (0.14 / float(i));
       }
-      col += flare * vis * uFlareStrength;
+      col += flare * vis * reach * uFlareStrength;
     }
   }
 
   // 3. Cinematic grade.
+  //
+  // The scene texture is ALREADY in display space (the main pass writes
+  // tone-mapped LDR colour).  Running a full ACES tonemap over it would
+  // double-tonemap — crushing + desaturating the midtones into a flat,
+  // washed-out look.  Instead we apply a gentle filmic *grade*: a soft
+  // S-curve for contrast, a touch of saturation to enrich the palette,
+  // a light ACES roll-off applied ONLY to the brightest pixels (so sun
+  // glints / muzzle flashes soften without dulling unit colours), and a
+  // subtle vignette.  Net effect reads "filmic", not "washed".
   if (uCinematic > 0.5) {
-    vec3 graded = acesTonemap(col * 1.18);            // slight exposure lift into the tonemap
-    float l = dot(graded, vec3(0.2126, 0.7152, 0.0722));
-    graded = mix(vec3(l), graded, 1.12);              // +saturation
-    graded = (graded - 0.5) * 1.06 + 0.5;             // +contrast around mid grey
-    // Soft vignette - darkens the corners to focus the eye.
+    vec3 g = col;
+    // Soft S-curve contrast about mid grey — the core filmic feel.
+    g = clamp((g - 0.5) * 1.08 + 0.5, 0.0, 1.0);
+    // Saturation lift to enrich (counteracts any roll-off desaturation).
+    float l = dot(g, vec3(0.2126, 0.7152, 0.0722));
+    g = mix(vec3(l), g, 1.15);
+    // Highlight-only ACES roll-off, blended in lightly so only the top
+    // end softens — midtones keep their full chroma.
+    vec3 rolled = acesTonemap(g);
+    float hi = smoothstep(0.72, 1.0, l);
+    g = mix(g, rolled, hi * 0.5);
+    // Subtle vignette - frames the shot without darkening the subject.
     vec2 dd = vUV - 0.5;
-    float vig = smoothstep(0.85, 0.35, dot(dd, dd) * 2.0);
-    graded *= mix(1.0, vig, 0.55);
-    col = mix(col, graded, clamp(uGrade, 0.0, 1.0));
+    float vig = smoothstep(1.0, 0.35, dot(dd, dd) * 2.0);
+    g *= mix(1.0, vig, 0.28);
+    col = mix(col, clamp(g, 0.0, 1.0), clamp(uGrade, 0.0, 1.0));
   }
 
   gl_FragColor = vec4(col, 1.0);

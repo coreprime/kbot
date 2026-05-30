@@ -9,6 +9,10 @@
 //   * Team-colour hue shift                   (#82)
 //   * Reflection-pass tinting + clipping     (water reflection)
 
+// Screen-space derivatives (dFdx/dFdy) for the auto-bump surface hint.
+// `enable` (not require) so hardware without the extension still links —
+// the bump branch is gated off there by the renderer anyway.
+#extension GL_OES_standard_derivatives : enable
 precision highp float;
 precision highp int;
 
@@ -46,7 +50,21 @@ uniform float uWaterY;        // world Y of the water plane - fades reflections 
 uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables hull bounce/shimmer
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
-uniform float uSpecScale;       // per-batch specular multiplier — >1 on metal-named textures, 1 elsewhere
+uniform float uSpecScale;       // per-batch specular multiplier — >1 on Surface-Hints-detected metal textures, 1 elsewhere
+uniform float uSpecularEnabled; // "Specular Highlights" master toggle — gates ALL hull shine (incl. Surface Hints)
+uniform float uSpecularStrength;// "Specular Highlights" intensity slider; 1 = default
+uniform float uRunningLights;   // Surface-hint "running lights" — colour-keyed blinking emissive lights (corv06a/b)
+uniform float uRLEmit;          // running-lights per-texture emissive strength (hint)
+uniform float uRLStrength;      // "Running Lights" intensity slider; 1 = default
+uniform float uRLFade;          // running-lights faded-out floor (0..1) as a fraction of the lit surface — 0.85 = gentle dim, no hard edges
+uniform float uRLMinNeighbors;  // running-lights continuity: a lamp texel must have at least this many keyed 8-neighbours (0 = off, 1 = reject lone specks)
+uniform float uBump;            // Surface-hint auto-bump — perturb the normal from the tile's luminance gradient
+uniform float uBumpIntensity;   // bump relief strength (per-texture hint)
+uniform float uBumpStrength;    // "Bump Mapping" intensity slider; 1 = default
+uniform float uBumpSmooth;      // bump height-field low-pass radius (texels) — drops fine roughness so only large details bump
+uniform float uBumpThreshold;   // bump grain deadzone — height gradients below this are dropped (grain → flat) while strong edges (rivets/seams) survive
+uniform vec2  uTexel;           // 1 / texture size — texel step for texture-space bump sampling
+uniform float uExposure;        // scene light-intensity / exposure (Graphics Options Brightness slider); 1 = default
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
 // uLightingTier — Phase 2 perf knob.  0 = full (rim + back/fill +
 // Blinn-Phong specular all contribute), 1 = cheap (Lambertian +
@@ -133,6 +151,19 @@ float sampleShadowMap2(vec3 normal) {
   return lit / 9.0;
 }
 
+// lampKey — is the SHARP-mip texel at `uv` a saturated running-light pixel?
+// Returns 1.0 if bright + saturated enough to read as a status lamp, else
+// 0.0.  Used both for the centre pixel and its neighbours so the running-
+// lights block can demand spatial continuity (a real blob/line) rather than
+// firing on stray isolated specks.
+float lampKey(vec2 uv) {
+  vec3 t = texture2D(uTex, uv, -8.0).rgb;
+  float mx = max(max(t.r, t.g), t.b);
+  float mn = min(min(t.r, t.g), t.b);
+  float rsat = (mx - mn) / max(mx, 0.004);
+  return step(0.12, mx) * step(0.50, rsat);
+}
+
 void main() {
   vec4 base;
   if (uMode == 1) {
@@ -180,6 +211,50 @@ void main() {
   }
 
   vec3 N = normalize(vNormal);
+  // Auto-bump surface hint — derive surface relief from the tile's luminance
+  // treated as a height field.  The height GRADIENT is measured by sampling
+  // the texture at TEXEL offsets (uTexel = 1/size) rather than screen-space
+  // derivatives, so the relief follows the PAINTED detail — rivets, panel
+  // lines, weld seams — instead of dissolving into screen-space noise.  The
+  // gradient is then mapped onto the surface through a UV-aligned tangent
+  // frame reconstructed from position + UV derivatives (Mikkelsen cotangent
+  // frame), so no precomputed tangents are needed.
+  if (uBump > 0.5 && uMode != 1) {
+    vec3 lw = vec3(0.299, 0.587, 0.114);
+    // Desaturate (luminance) then build the height GRADIENT with two passes
+    // of grain rejection so the surface reads smooth yet keeps small, sharp
+    // features like rivets:
+    //   1. a GENTLE blur (half the mip implied by `smooth`) knocks out the
+    //      1-px palette-dither checkerboard without melting real detail;
+    //   2. a `threshold` DEADZONE on the gradient drops everything below an
+    //      amplitude floor — low-contrast grain goes flat, while high-contrast
+    //      edges (rivets, weld seams, panel breaks) pass through.
+    float sm = max(uBumpSmooth, 1.0);
+    float lod = log2(sm) * 0.5;      // gentle blur — keep rivets crisp
+    vec2 d = uTexel * sm;            // gradient step
+    float hL = dot(texture2D(uTex, vUV - vec2(d.x, 0.0), lod).rgb, lw);
+    float hR = dot(texture2D(uTex, vUV + vec2(d.x, 0.0), lod).rgb, lw);
+    float hD = dot(texture2D(uTex, vUV - vec2(0.0, d.y), lod).rgb, lw);
+    float hU = dot(texture2D(uTex, vUV + vec2(0.0, d.y), lod).rgb, lw);
+    float dHdu = hR - hL;   // ∂luminance/∂u
+    float dHdv = hU - hD;   // ∂luminance/∂v
+    // Soft deadzone (wavelet-style shrinkage): scale the gradient down by the
+    // threshold, clamped at 0 — grain (small magnitude) vanishes, edges keep
+    // most of their strength.
+    float gm = length(vec2(dHdu, dHdv));
+    float keep = max(gm - uBumpThreshold, 0.0) / max(gm, 1e-4);
+    dHdu *= keep;
+    dHdv *= keep;
+    vec3 dp1 = dFdx(vWorldPos), dp2 = dFdy(vWorldPos);
+    vec2 du1 = dFdx(vUV),       du2 = dFdy(vUV);
+    vec3 dp2perp = cross(dp2, N);
+    vec3 dp1perp = cross(N, dp1);
+    vec3 T = dp2perp * du1.x + dp1perp * du2.x;
+    vec3 B = dp2perp * du1.y + dp1perp * du2.y;
+    float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+    float k = uBumpIntensity * uBumpStrength * 6.0;
+    N = normalize(N - (T * dHdu + B * dHdv) * invmax * k);
+  }
   vec3 L = normalize(uLightDir);
   vec3 V = normalize(uEyePos - vWorldPos);
   float ndl = max(0.0, dot(N, L));
@@ -195,7 +270,13 @@ void main() {
   // a screen-space pass.  AO is biased toward 1 so flat panels stay
   // open - only true creases pick up the darkening.
   float hemiMix = clamp(N.y * 0.5 + 0.5, 0.0, 1.0);
-  vec3 ambient = mix(uGroundColor, uSkyColor, hemiMix) * vAO;
+  // Ambient is a FILL, not a second key.  uSkyColor sits near 1.0 (it
+  // also tints the sky/ground), so taking it un-scaled lit every face
+  // to ~full texture value — flattening contrast and, once the bright
+  // key piled on top and the tone curve compressed it, washing the
+  // textures out.  Scale it to a fill level so shadow sides read as
+  // shadow and the key actually sculpts the form.
+  vec3 ambient = mix(uGroundColor, uSkyColor, hemiMix) * vAO * 0.55;
 
   // Cinematic 3-point lighting: the key light is uLightDir/uLightColor
   // (already the scene sun).  Fill kicks in from the OPPOSITE side
@@ -241,12 +322,18 @@ void main() {
   // dotted with N, raised to a moderate exponent for a panel-style
   // sheen rather than a glassy point.  Modulated by the texture
   // alpha later so the sheen rides on the material brightness.
+  // Specular exponent.  TA hulls are chunky + low-poly and the sun sits
+  // high, so a tight exponent (32) put N·H below the highlight threshold
+  // on almost every face — the sheen never appeared.  A broad exponent
+  // (14) gives a satin highlight that actually reads across the faceted
+  // surfaces; metal batches still read sharper because they get 3× the
+  // strength via uSpecScale.
   float spec = 0.0;
   if (!cheapLighting) {
     vec3 H = normalize(L + V);
-    spec = pow(max(0.0, dot(N, H)), 32.0);
+    spec = pow(max(0.0, dot(N, H)), 14.0);
     // Also sheen the back-side a little - symmetric like ndl above.
-    float specBack = pow(max(0.0, dot(-N, H)), 32.0) * 0.4;
+    float specBack = pow(max(0.0, dot(-N, H)), 14.0) * 0.4;
     spec = max(spec, specBack);
   }
 
@@ -257,7 +344,16 @@ void main() {
   // the ground is handled separately in the ground shader, so it stays.
   float shadow = mix(1.0, sampleShadowMap1(N), uShadowStrength * uSelfShadow);
   vec3 directLight = ndl * uLightColor * shadow;
-  vec3 specular = spec * uLightColor * shadow * 0.45 * uSpecScale;
+  // Specular gating.  "Specular Highlights" (uSpecularEnabled) is the
+  // master switch for ALL hull shine and uSpecularStrength is its
+  // intensity slider.  "Surface Hints" only raises uSpecScale (1 → 3) on
+  // textures whose name reads as metal, so it builds ON TOP of the base
+  // specular rather than acting on its own — no specular, no metal glint.
+  // specK is 0.85 baseline (vs the old 0.45) so the highlight registers
+  // after the tone curve.
+  float specOn = (uSpecularEnabled > 0.5) ? 1.0 : 0.0;
+  float specK = 0.60 * specOn * uSpecularStrength;
+  vec3 specular = spec * uLightColor * shadow * specK * uSpecScale;
   // Second sun contribution - twin-sun environments fill this in
   // with a non-zero colour, single-sun worlds leave it black and
   // it costs almost nothing.
@@ -269,8 +365,8 @@ void main() {
     directLight += ndl2 * uLightColor2 * shadow2;
     if (!cheapLighting) {
       vec3 H2 = normalize(L2 + V);
-      float spec2 = pow(max(0.0, dot(N, H2)), 32.0);
-      specular += spec2 * uLightColor2 * shadow2 * 0.45 * uSpecScale;
+      float spec2 = pow(max(0.0, dot(N, H2)), 14.0);
+      specular += spec2 * uLightColor2 * shadow2 * specK * uSpecScale;
     }
   }
   // fillLight always contributes — it's a single dot product, no
@@ -374,9 +470,85 @@ void main() {
   // highlight stays bright even on dark base textures - a sheen on
   // a black hull should still glint.
   vec3 col = base.rgb * lighting + specular;
-  // Subtle vignette / ACES-ish tone curve to lift colour pop.
-  col = col / (col + vec3(0.55));
-  col = pow(col, vec3(0.9));
+
+  // Running lights surface hint — the saturated colour pixels on the tile
+  // (blue / green / yellow status lamps on corv06a/b) blink and glow.
+  // We colour-key by relative saturation + brightness and blink each lamp
+  // with a phase keyed off its dominant hue (so blue/green/yellow pulse out
+  // of step).  Two parts: the lamp pixel is self-lit here so it never sits
+  // in shadow, while its additive glow is banked into rlEmissive and applied
+  // AFTER the tone curve below — otherwise the Reinhard roll-off crushes the
+  // bright lamp back toward the hull and it neither reads as emissive nor
+  // feeds the bloom bright-pass.
+  vec3 rlEmissive = vec3(0.0);
+  if (uRunningLights > 0.5 && uMode != 1) {
+    // Status lamps (corv06a/b) are tiny, saturated dots painted DARK —
+    // CORE's blue lamps sit around (35,91,135), some as low as (19,27,47).
+    // Two samples drive the effect:
+    //   lampTex  — a SHARP mip (negative LOD bias) so the dots survive the
+    //              trilinear blur that otherwise averages them into the hull
+    vec3 lampTex = texture2D(uTex, vUV, -8.0).rgb;
+    float mx = max(max(lampTex.r, lampTex.g), lampTex.b);
+    float mn = min(min(lampTex.r, lampTex.g), lampTex.b);
+    float rsat = (mx - mn) / max(mx, 0.004);
+    // rsat is the discriminator (saturated dot vs grey CORE hull); mx kept
+    // low so the dark blue lamps still register.
+    float keyHere = step(0.12, mx) * step(0.50, rsat);
+    // Spatial continuity (morphological erosion): count keyed texels in the
+    // full 8-neighbourhood and require at least uRLMinNeighbors of them.  At
+    // the default 1 this rejects only fully-isolated single specks (grain)
+    // while keeping genuine small lamps — a 2-px dot or the corner of a blob
+    // has at least one keyed neighbour.  0 disables the filter entirely.
+    vec2 tx = uTexel;
+    float n8 = lampKey(vUV + vec2(tx.x, 0.0)) + lampKey(vUV - vec2(tx.x, 0.0))
+             + lampKey(vUV + vec2(0.0, tx.y)) + lampKey(vUV - vec2(0.0, tx.y))
+             + lampKey(vUV + tx)             + lampKey(vUV - tx)
+             + lampKey(vUV + vec2(tx.x, -tx.y)) + lampKey(vUV + vec2(-tx.x, tx.y));
+    float isLight = keyHere * step(uRLMinNeighbors - 0.5, n8);
+    // Pure, full-brightness version of the lamp's own hue so a dark muted
+    // blue dot emits a VIVID blue when lit.
+    vec3 hue = lampTex / max(mx, 0.004);
+    // Per-hue phase so the blue / yellow lamps flicker out of step.
+    float phase = (lampTex.b >= lampTex.r && lampTex.b >= lampTex.g) ? 0.0
+                : ((lampTex.g >= lampTex.r) ? 2.094 : 4.188);
+    // Clear, high-contrast pulse — smoothstep holds each lamp at its dim
+    // and bright extremes (rather than a soft sine) so the on/off reads as
+    // a deliberate flicker; blue/yellow run out of phase.
+    float s = 0.5 + 0.5 * sin(uTime * 3.5 + phase);
+    float blink = smoothstep(0.12, 0.88, s);
+    // The pulse runs from a gentle FADED floor (uRLFade × the lit surface
+    // colour — 0.85 by default, so the lamp barely dims and shows no hard
+    // dark edge) up to the vivid lamp hue when fully lit.  uRLStrength (the
+    // Running Lights intensity slider) scales the "on" punch.
+    vec3 lampOff = col * uRLFade;
+    vec3 lampOn = hue * (1.0 + 0.8 * uRLStrength);
+    vec3 lamp = mix(lampOff, lampOn, blink);
+    col = mix(col, lamp, isLight);
+    // Emit when lit so the colour bleeds off the hull into the scene (bloom
+    // halo).  Added after the tone curve below so it isn't crushed; coeff
+    // halved (4.5 → 2.25) then scaled by the slider.
+    rlEmissive = hue * (blink * 2.25 * uRLStrength) * uRLEmit * isLight;
+  }
+
+  // Exposure — the Graphics Options Brightness slider scales the whole
+  // lit result before the tone curve, so the user can dial the scene
+  // light intensity up/down.
+  col *= uExposure;
+  // Luminance-preserving Reinhard tone curve.  The old curve divided
+  // each channel independently (`col/(col+0.55)`), which compresses the
+  // brighter channel more than the dim ones — desaturating colours as
+  // they got bright, the core of the "washed out" look in Studio Mode.
+  // Instead compress on LUMINANCE and rescale RGB by the same ratio:
+  // highlights still roll off, but hue + saturation are preserved so
+  // textures keep the punch they have in Flat Shading.  For neutral
+  // greys this is identical to the old curve, so overall brightness is
+  // unchanged — only the colour fidelity improves.
+  float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+  float lumT = pow(lum / (lum + 0.55), 0.9);
+  col *= lumT / max(lum, 1e-4);
+  // Surface-hint running lights ride on top of the tone-mapped scene so the
+  // lamps stay punchy (well above 1.0) and trip the bloom bright-pass.
+  col += rlEmissive;
   if (uReflectionTint > 0.5) {
     // Mirror reflection underwater: shift toward the deep-water
     // hue but keep most of the original brightness so the

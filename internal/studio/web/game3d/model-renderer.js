@@ -60,12 +60,6 @@ const SHADOW_MAP_SIZE = 1024
 const DOF_BASE_GAP = 0.002
 const DOF_BASE_BLUR = 8
 
-// METAL_SPEC_SCALE — specular multiplier applied to draw batches whose
-// texture name read as metal (model-loader's `metallic` flag).  >1 so
-// the hull's Blinn-Phong sheen catches a brighter, sharper sun glint on
-// inferred-metallic panels; non-metal batches stay at 1.0.
-const METAL_SPEC_SCALE = 3.0
-
 // Shader sources live in shaders/{main,sky,ground,shadow,wire,dof}/
 // as .vert/.frag files so they open with proper GLSL highlighting in
 // editors.  shader-loader.js fetches + resolves `#include` directives
@@ -624,6 +618,19 @@ export class ModelRenderer {
     // setEnvironment when the active sky scheme defines sun2.
     this.lightDir2 = [0, 1, 0]
     this.lightColor2 = [0, 0, 0]
+    // Exposure — master scene light-intensity multiplier applied to the
+    // lit unit colour before the tone curve (Graphics Options Brightness
+    // slider).  1.0 = default; lower for richer/darker, higher to
+    // brighten.  Unit-shader only — ground/sky/water keep their own
+    // levels.
+    this.exposure = 1.0
+    // Specular intensity — scales the hull Blinn-Phong sheen (Graphics
+    // Options "Specular Highlights" intensity slider).  1 = default.
+    this.specularStrength = 1.0
+    // Surface-hint intensity sliders — scale the running-lights glow and the
+    // auto-bump relief (Graphics Options).  1 = default.
+    this.rlStrength = 1.0
+    this.bumpStrength = 1.0
     // skyScheme picks the gradient + suns + clouds painted by the
     // skybox shader.  Setter `setSkyScheme(name)` swaps presets at
     // runtime; the renderer doesn't care which preset is active —
@@ -738,6 +745,8 @@ export class ModelRenderer {
     this.optWaterReflections = true  // sky / sun reflected in the water surface
     this.optSpecular = true          // sun's specular highlight on water + hull
     this.optMetalSpec = true         // boost hull specular on metal-named textures
+    this.optRunningLights = true     // colour-keyed blinking emissive status lamps
+    this.optBump = true              // derivative auto-bump relief on tagged tiles
     this.optGodBeams = true          // light shafts from the sun(s)
     this.optWaves = true             // animate sea surface; false → flat sea
     // Slider-controlled multipliers — all default to 1.0 (no scaling).
@@ -749,6 +758,11 @@ export class ModelRenderer {
     // texture cache so future uploads use it; depth-texture gates the
     // entire shadow-mapping pipeline.
     this._depthExt = ctx.getExtension('WEBGL_depth_texture') || ctx.getExtension('WEBKIT_WEBGL_depth_texture')
+    // Screen-space derivatives — enables the auto-bump surface hint
+    // (dFdx/dFdy in main.frag).  Universally available on the desktop
+    // browsers the studio targets; when absent we leave the bump batches
+    // un-flagged so the shader's gated branch never runs.
+    this._derivExt = ctx.getExtension('OES_standard_derivatives')
     const aniso = ctx.getExtension('EXT_texture_filter_anisotropic') || ctx.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
     if (aniso && textureCache) textureCache.setAnisotropicExt(aniso)
 
@@ -772,17 +786,22 @@ export class ModelRenderer {
     this.dofFocalRange = 0.0015
     this.dofMaxBlur = DOF_BASE_BLUR
 
-    // Cinematic post-grade — ACES tonemap + contrast/saturation +
-    // vignette + a final FXAA pass.  Default off so the baseline look is
-    // unchanged until the user opts in via Graphics Options.  Any of the
-    // post-FX (DoF, cinematic, bloom) routes the scene through the
-    // offscreen FBO + composite chain.
+    // Cinematic post-grade — gentle filmic contrast/saturation + highlight
+    // roll-off + vignette.  Default off so the baseline look is unchanged
+    // until the user opts in via Graphics Options.  Any post-FX (DoF,
+    // cinematic, bloom, lens flare, anti-aliasing) routes the scene through
+    // the offscreen FBO + composite chain.
     this.optCinematic = false
     this.cinematicStrength = 1.0    // 0..1 grade mix toward the graded image
     this.optBloom = false
     this.bloomStrength = 1.0
     this.optLensFlare = false
     this.lensFlareStrength = 1.0
+    // Anti-aliasing (FXAA) — its own toggle, independent of the cinematic
+    // grade.  When on it forces the scene through the offscreen FBO +
+    // composite so the final image can be run through the edge-smoothing
+    // FXAA pass even with every other post-effect disabled.
+    this.optAntialias = false
     // Shader program init is deferred to ModelRenderer.init() — that
     // method fetches shader sources from shaders/ and links them.  Set
     // to true once init() has resolved so render() bails early when
@@ -1605,10 +1624,21 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setAntialiasEnabled toggles the FXAA edge-smoothing pass.  Forces the
+  // FBO/composite path on (see #postActive) so the final image can be
+  // FXAA-resolved even when no other post-effect is active.
+  setAntialiasEnabled(on) { this.optAntialias = !!on; this.requestRedraw() }
+
+  // setExposure sets the master scene light-intensity multiplier applied
+  // to the lit unit colour before the tone curve (Graphics Options
+  // Brightness slider).  Clamped to a sane 0.1..3.0 so the slider can't
+  // crush to black or blow the image out entirely.
+  setExposure(v) { this.exposure = Math.max(0.1, Math.min(3, +v || 1)); this.requestRedraw() }
+
   // #postActive — true when any post-process effect needs the scene
   // rendered into the offscreen FBO + composited.  Gates the FBO path.
   #postActive() {
-    return this.optDof || this.optCinematic || this.optBloom || this.optLensFlare
+    return this.optDof || this.optCinematic || this.optBloom || this.optLensFlare || this.optAntialias
   }
 
   // setBgTerrainEnabled toggles the background-mountain ring.  When
@@ -1633,11 +1663,24 @@ export class ModelRenderer {
   setBobEnabled(on) { this.optBob = !!on; this.requestRedraw() }
   setWaterReflectionsEnabled(on) { this.optWaterReflections = !!on; this.requestRedraw() }
   setSpecularEnabled(on) { this.optSpecular = !!on; this.requestRedraw() }
+  // setSpecularStrength scales the hull specular sheen (0..2× via the
+  // "Specular Highlights" intensity slider).  Surface Hints' metal boost
+  // rides on top of this, so the slider scales metal glints too.
+  setSpecularStrength(v) { this.specularStrength = Math.max(0, Math.min(3, +v || 0)); this.requestRedraw() }
 
-  // setMetalSpecEnabled toggles the auto-metal specular boost.  When
-  // off, every batch draws at the baseline specular (uSpecScale 1);
-  // when on, batches the loader tagged `metallic` get METAL_SPEC_SCALE.
+  // setMetalSpecEnabled toggles the Surface Hints specular boost.  When
+  // off, every batch draws at the baseline specular (uSpecScale 1); when
+  // on, batches the loader tagged `metallic` (per hints-textures.js) get
+  // their per-group specScale.
   setMetalSpecEnabled(on) { this.optMetalSpec = !!on; this.requestRedraw() }
+  // setRunningLightsEnabled / setBumpEnabled — independent toggles for the
+  // two non-specular surface hints, so they can be turned on/off separately
+  // from the metallic-specular inference (Surface Hints).
+  setRunningLightsEnabled(on) { this.optRunningLights = !!on; this.requestRedraw() }
+  setBumpEnabled(on) { this.optBump = !!on; this.requestRedraw() }
+  // Intensity sliders for the two surface-hint effects (0..3, 1 = default).
+  setRunningLightsStrength(v) { this.rlStrength = Math.max(0, Math.min(3, +v || 0)); this.requestRedraw() }
+  setBumpStrength(v) { this.bumpStrength = Math.max(0, Math.min(3, +v || 0)); this.requestRedraw() }
   setGodBeamsEnabled(on) { this.optGodBeams = !!on; this.requestRedraw() }
   setWavesEnabled(on) { this.optWaves = !!on; this.requestRedraw() }
   setBobAmount(v) { this.bobAmount = Math.max(0, +v) || 0; this.requestRedraw() }
@@ -2482,6 +2525,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundTileSize, 16)
     gl.uniform1f(this.uGroundTerrainReady, this._terrainReady ? 1 : 0)
     gl.uniform1f(this.uGroundTime, (performance.now() - this._t0) / 1000)
+    gl.uniform1f(this.uGroundExposure, this.exposure ?? 1.0)
     gl.uniform3fv(this.uGroundLightDir, this.lightDir)
     gl.uniform3fv(this.uGroundEyePos, this.camera.eye)
     gl.uniform3fv(this.uGroundHorizonColor, this.skyScheme.horizon)
@@ -2613,6 +2657,23 @@ export class ModelRenderer {
     gl.uniform3fv(this.uMainFillColor, this._fillColor())
     gl.uniform3fv(this.uMainBackColor, this._backColor())
     gl.uniform1f(this.uFlatLighting, 0)
+    gl.uniform1f(this.uExposure, this.exposure)
+    gl.uniform1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
+    gl.uniform1f(this.uSpecularStrength, this.specularStrength)
+    gl.uniform1f(this.uRLStrength, this.rlStrength)
+    gl.uniform1f(this.uBumpStrength, this.bumpStrength)
+    gl.uniform1f(this.uRLFade, 0.85)
+    gl.uniform1f(this.uRLMinNeighbors, 1.0)
+    gl.uniform1f(this.uBumpSmooth, 1.5)
+    gl.uniform1f(this.uBumpThreshold, 0.12)
+    gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
+    // Surface-hint effects off in the reflection pass (the per-group loop
+    // re-enables them for opted-in tiles); keeps the uniforms defined so a
+    // reflection draw never inherits stale values.
+    gl.uniform1f(this.uRunningLights, 0)
+    gl.uniform1f(this.uRLEmit, 0)
+    gl.uniform1f(this.uBump, 0)
+    gl.uniform1f(this.uBumpIntensity, 0)
     gl.uniform1f(this.uShadowEnabled, 0) // reflection doesn't read the depth map
     gl.uniform1f(this.uReflectionTint, 1)
     // Reflections always run the full lighting path — the mirrored
@@ -2698,7 +2759,10 @@ export class ModelRenderer {
       // actually-displayed position.
       const yOff = this.getUnitYOffset()
       if (yOff !== 0) Mat4.translate(bob, bob, 0, yOff, 0)
-      this._applySeaBob(bob, cx, cz, t)
+      // Only heave/pitch/roll the reflection when the unit itself is
+      // bobbing — matches the main pass's `if (this.optBob)` gate so a
+      // still ship doesn't get a swaying mirror image.
+      if (this.optBob) this._applySeaBob(bob, cx, cz, t)
       Mat4.multiply(refl, mirror, bob)
     } else {
       Mat4.copy(refl, mirror)
@@ -2740,6 +2804,16 @@ export class ModelRenderer {
     // Flat mode bypasses the directional + ambient + shadow path so
     // the renderer prints the raw texture / palette colour.
     gl.uniform1f(this.uFlatLighting, flat ? 1 : 0)
+    gl.uniform1f(this.uExposure, this.exposure)
+    gl.uniform1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
+    gl.uniform1f(this.uSpecularStrength, this.specularStrength)
+    gl.uniform1f(this.uRLStrength, this.rlStrength)
+    gl.uniform1f(this.uBumpStrength, this.bumpStrength)
+    gl.uniform1f(this.uRLFade, 0.85)
+    gl.uniform1f(this.uRLMinNeighbors, 1.0)
+    gl.uniform1f(this.uBumpSmooth, 1.5)
+    gl.uniform1f(this.uBumpThreshold, 0.12)
+    gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
     gl.uniform1f(this.uReflectionTint, 0)
     gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat && this.shadowsEnabled) ? 1 : 0)
     // Graphics Options shadow controls — uShadowStrength scales the
@@ -2748,10 +2822,17 @@ export class ModelRenderer {
     gl.uniform1f(this.uShadowStrength, this.shadowStrength)
     gl.uniform1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
     // Baseline specular scale — the per-batch draw loop overrides this
-    // to METAL_SPEC_SCALE for metal-named groups when the auto-metal
-    // boost is on.  Set here so any main-program draw that doesn't hit
-    // the per-group path still has a sane (non-zero) value.
+    // with each group's specScale (from hints-textures.js) for metal-
+    // tagged groups when Surface Hints is on.  Set here so any main-
+    // program draw that doesn't hit the per-group path still has a sane
+    // (non-zero) value.
     gl.uniform1f(this.uSpecScale, 1.0)
+    // Baseline the per-batch surface-hint effects off; the per-group draw
+    // loop turns them on for the tiles that opt in (hints-textures.js).
+    gl.uniform1f(this.uRunningLights, 0)
+    gl.uniform1f(this.uRLEmit, 0)
+    gl.uniform1f(this.uBump, 0)
+    gl.uniform1f(this.uBumpIntensity, 0)
     // Phase 2 lighting LOD — when the per-entity flag is set the
     // shader skips rim / back-light / Blinn-Phong specular.  Set by
     // the entity loop in lockstep with the shadow LOD: any entity
@@ -2951,6 +3032,9 @@ export class ModelRenderer {
               gl.bindTexture(gl.TEXTURE_2D, entry.tex)
               gl.uniform1i(this.uTex, 0)
               gl.uniform1i(this.uMode, 0)
+              // Texel step for texture-space bump sampling — from the real
+              // tile dimensions so the relief tracks one texel exactly.
+              gl.uniform2f(this.uTexel, 1 / (entry.width || 64), 1 / (entry.height || 64))
             } else if (group.color) {
               gl.uniform4fv(this.uTint, group.color)
               gl.uniform1i(this.uMode, 1)
@@ -2958,9 +3042,23 @@ export class ModelRenderer {
               gl.uniform4fv(this.uTint, [0.45, 0.45, 0.5, 1])
               gl.uniform1i(this.uMode, 1)
             }
-            // Per-batch specular boost for inferred-metal textures.
+            // Per-batch material hints (hints-textures.js), each behind its
+            // own Graphics Options toggle so they're independently switchable:
+            //   specScale     — metal sheen boost (>1 on metal tiles)   — Surface Hints
+            //   runningLights — colour-keyed blinking emissive lamps    — Running Lights
+            //   bump          — derivative auto-bump (needs deriv ext)  — Bump Mapping
             gl.uniform1f(this.uSpecScale,
-              (this.optMetalSpec && group.metallic) ? METAL_SPEC_SCALE : 1.0)
+              (this.optMetalSpec && group.metallic) ? (group.specScale || 1.0) : 1.0)
+            const rlOn = (this.optRunningLights && group.runningLights) ? 1 : 0
+            gl.uniform1f(this.uRunningLights, rlOn)
+            gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) : 0)
+            gl.uniform1f(this.uRLFade, (group.rlFade != null) ? group.rlFade : 0.85)
+            gl.uniform1f(this.uRLMinNeighbors, (group.rlMinNeighbors != null) ? group.rlMinNeighbors : 1.0)
+            const bumpOn = (this.optBump && group.bump && this._derivExt) ? 1 : 0
+            gl.uniform1f(this.uBump, bumpOn)
+            gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) : 0)
+            gl.uniform1f(this.uBumpSmooth, (group.bumpSmooth != null) ? group.bumpSmooth : 1.5)
+            gl.uniform1f(this.uBumpThreshold, (group.bumpThreshold != null) ? group.bumpThreshold : 0.12)
           }
           gl.drawArrays(group.mode, 0, group.vertexCount)
         }
@@ -3181,7 +3279,25 @@ export class ModelRenderer {
     this.uShadowStrength = gl.getUniformLocation(prog, 'uShadowStrength')
     this.uSelfShadow = gl.getUniformLocation(prog, 'uSelfShadow')
     this.uSpecScale = gl.getUniformLocation(prog, 'uSpecScale')
+    this.uSpecularEnabled = gl.getUniformLocation(prog, 'uSpecularEnabled')
+    this.uSpecularStrength = gl.getUniformLocation(prog, 'uSpecularStrength')
+    // Surface-hint uniforms — running-lights + auto-bump.  These were
+    // being SET every draw (uniform1f) but never LOOKED UP here, so the
+    // location was undefined and every set was a silent no-op — the shader
+    // kept uRunningLights/uBump at 0 and neither effect ever ran.
+    this.uRunningLights = gl.getUniformLocation(prog, 'uRunningLights')
+    this.uRLEmit = gl.getUniformLocation(prog, 'uRLEmit')
+    this.uRLStrength = gl.getUniformLocation(prog, 'uRLStrength')
+    this.uRLFade = gl.getUniformLocation(prog, 'uRLFade')
+    this.uRLMinNeighbors = gl.getUniformLocation(prog, 'uRLMinNeighbors')
+    this.uBump = gl.getUniformLocation(prog, 'uBump')
+    this.uBumpIntensity = gl.getUniformLocation(prog, 'uBumpIntensity')
+    this.uBumpStrength = gl.getUniformLocation(prog, 'uBumpStrength')
+    this.uBumpSmooth = gl.getUniformLocation(prog, 'uBumpSmooth')
+    this.uBumpThreshold = gl.getUniformLocation(prog, 'uBumpThreshold')
+    this.uTexel = gl.getUniformLocation(prog, 'uTexel')
     this.uFlatLighting = gl.getUniformLocation(prog, 'uFlatLighting')
+    this.uExposure = gl.getUniformLocation(prog, 'uExposure')
     this.uReflectionTint = gl.getUniformLocation(prog, 'uReflectionTint')
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
     this.uMainTime = gl.getUniformLocation(prog, 'uTime')
@@ -3281,6 +3397,7 @@ export class ModelRenderer {
     this.uGroundTerrainReady = gl.getUniformLocation(prog, 'uTerrainReady')
     this.uGroundTerrainTex = gl.getUniformLocation(prog, 'uTerrainTex')
     this.uGroundTime = gl.getUniformLocation(prog, 'uTime')
+    this.uGroundExposure = gl.getUniformLocation(prog, 'uExposure')
     this.uGroundLightDir = gl.getUniformLocation(prog, 'uLightDir')
     this.uGroundEyePos = gl.getUniformLocation(prog, 'uEyePos')
     this.uGroundSeabedY = gl.getUniformLocation(prog, 'uSeabedY')
@@ -3734,13 +3851,24 @@ export class ModelRenderer {
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0)
     const depth = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, depth)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, w, h, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_SHORT, null)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, depth, 0)
-    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    // Depth precision — a 24-bit (UNSIGNED_INT) depth texture matches the
+    // default framebuffer.  The old 16-bit (UNSIGNED_SHORT) buffer was the
+    // cause of the z-fighting on coplanar TA polygons + thin-geometry
+    // "clipping" that only showed once a post effect routed the scene
+    // through this FBO: the depthTier polygon-offset bias is tuned for
+    // 24-bit depth and 16 bit couldn't separate the coplanar layers.  Fall
+    // back to 16-bit only if the driver won't complete the 24-bit FBO.
+    let status = 0
+    for (const depthType of [gl.UNSIGNED_INT, gl.UNSIGNED_SHORT]) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT, w, h, 0, gl.DEPTH_COMPONENT, depthType, null)
+      status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+      if (status === gl.FRAMEBUFFER_COMPLETE) break
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     if (status !== gl.FRAMEBUFFER_COMPLETE) {
       gl.deleteFramebuffer(this._sceneFBO)
@@ -3760,11 +3888,11 @@ export class ModelRenderer {
 
   // #runPostChain composites the offscreen scene into the screen.
   // Stage 1 (composite): DoF blur + bloom add + cinematic grade via the
-  // dof.frag program.  When the cinematic FXAA pass is active the
+  // dof.frag program.  When the FXAA pass is active (anti-aliasing on) the
   // composite renders into the LDR FBO so FXAA can sample its result;
   // otherwise it draws straight to the default framebuffer.
-  // Stage 2 (FXAA): only when cinematic is on, the LDR FBO is blurred
-  // along its edges into the default framebuffer.
+  // Stage 2 (FXAA): only when anti-aliasing is on, the LDR FBO is edge-
+  // smoothed into the default framebuffer.
   #runPostChain() {
     const gl = this.gl
     if (!this.programDoF || !this._sceneFBO) return
@@ -3772,7 +3900,14 @@ export class ModelRenderer {
     // bloom-add reads a fresh result, never a stale prior frame.
     if (this.optBloom) this.#renderBloom()
     else this._bloomTex = null
-    const wantFxaa = this.optCinematic && !!this.programFxaa && this.#ensureLdrFBO()
+    // FXAA runs when the user's AA toggle is on, OR whenever any OTHER post
+    // effect has already forced the scene through this no-MSAA FBO — the
+    // canvas's hardware MSAA is lost on the offscreen path, so without FXAA
+    // the edges would go jagged the moment Cinematic / DoF / Bloom / Lens
+    // Flare is enabled.  When on, the composite renders into the LDR FBO so
+    // the FXAA pass can sample it; otherwise it draws straight to screen.
+    const anyPostFx = this.optDof || this.optCinematic || this.optBloom || this.optLensFlare
+    const wantFxaa = (this.optAntialias || anyPostFx) && !!this.programFxaa && this.#ensureLdrFBO()
 
     // Stage 1 — composite.
     if (wantFxaa) {
@@ -3806,9 +3941,13 @@ export class ModelRenderer {
     gl.uniform1f(this.uDoFCinematic, this.optCinematic ? 1 : 0)
     gl.uniform1f(this.uDoFGrade, this.cinematicStrength)
     // Lens flare — project the sun (a far point along lightDir from the
-    // camera target) into screen UV; the composite reads the depth at
-    // that pixel to occlusion-test it.  Off-screen / behind-camera suns
-    // disable the flare.
+    // camera target) into screen UV.  We fire the flare whenever the sun
+    // is in FRONT of the camera (cw > 0), even when it projects off the
+    // visible frame: the composite fades the bright core out off-screen
+    // but still streaks the ghosts across the frame toward the sun, so a
+    // partial flare appears when you look in the sun's direction (it sits
+    // high overhead and is rarely framed directly).  Behind-camera suns
+    // (cw <= 0) still disable it.
     let flareOn = 0, fx = 0.5, fy = 0.5
     let fcol = this._flareColor || (this._flareColor = [1, 1, 1])
     if (this.optLensFlare && this.camera) {
@@ -3818,14 +3957,12 @@ export class ModelRenderer {
       Mat4.multiply(m, c.projMatrix, c.viewMatrix)
       const cw = m[3] * sx + m[7] * sy + m[11] * sz + m[15]
       if (cw > 0.0001) {
-        const u = (m[0] * sx + m[4] * sy + m[8] * sz + m[12]) / cw * 0.5 + 0.5
-        const v = (m[1] * sx + m[5] * sy + m[9] * sz + m[13]) / cw * 0.5 + 0.5
-        if (u > -0.3 && u < 1.3 && v > -0.3 && v < 1.3) {
-          flareOn = 1; fx = u; fy = v
-          const lc = this.lightColor
-          const mx = Math.max(lc[0], lc[1], lc[2], 1)
-          fcol[0] = lc[0] / mx; fcol[1] = lc[1] / mx; fcol[2] = lc[2] / mx
-        }
+        flareOn = 1
+        fx = (m[0] * sx + m[4] * sy + m[8] * sz + m[12]) / cw * 0.5 + 0.5
+        fy = (m[1] * sx + m[5] * sy + m[9] * sz + m[13]) / cw * 0.5 + 0.5
+        const lc = this.lightColor
+        const mx = Math.max(lc[0], lc[1], lc[2], 1)
+        fcol[0] = lc[0] / mx; fcol[1] = lc[1] / mx; fcol[2] = lc[2] / mx
       }
     }
     gl.uniform1f(this.uDoFFlareOn, flareOn)

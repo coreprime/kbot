@@ -27,19 +27,32 @@ import { persistPrefs } from './prefs.js'
 // constructor defaults so a fresh session paints identically whether
 // or not anything has been persisted yet.  Raw menu units.
 export const GRAPHICS_DEFAULTS = {
+  lightIntensity:   100,   // 0..200 → 0..2.0× scene exposure (Brightness)
+
   shadows:          true,
-  shadowIntensity:  100,   // 0..100  → uShadowStrength 0..1
+  shadowIntensity:  70,    // 0..100  → uShadowStrength 0..1
   selfShadow:       true,
 
   reflections:      true,
   specular:         true,
-  metalSpec:        true,   // auto specular boost on metal-named textures
+  specularLevel:    100,   // 0..200  → 0..2.0× specular sheen strength
+  metalSpec:        true,   // Surface Hints: per-material specular inference
+  runningLights:    true,   // colour-keyed blinking emissive status lamps
+  runningLightsLevel: 100,  // 0..200 → 0..2.0× running-lights glow strength
+  bumpMap:          true,   // texture-luminance auto-bump relief on tagged tiles
+  bumpLevel:        100,    // 0..200 → 0..2.0× bump relief strength
   godbeams:         true,
   dof:              false,
   dofDistance:      500,   // 100..2000 → 1.0..20.0× onset distance (default 5×)
   dofLevel:         100,   // 0..200    → 0..2.0× max blur radius
 
-  cinematic:        false, // ACES tonemap + grade + vignette + FXAA
+  antialias:        false, // FXAA edge smoothing.  Off by default: the
+                           // canvas already gets hardware MSAA on the
+                           // direct-to-screen path (crisper than FXAA);
+                           // FXAA mainly matters once a post-FX forces the
+                           // no-MSAA offscreen FBO path.
+
+  cinematic:        false, // ACES tonemap + grade + vignette
   cinematicLevel:   100,   // 0..100    → grade intensity %
   bloom:            false, // bright-pass glow
   bloomLevel:       100,   // 0..200    → 0..2.0× bloom add strength
@@ -83,16 +96,23 @@ export function persistGraphicsOptions(patch) {
 export function applyGraphicsOptionsToRenderer(r) {
   if (!r) return
   const g = getGraphicsOptions()
+  r.setExposure?.(g.lightIntensity / 100)
   r.setShadowsEnabled?.(!!g.shadows)
   r.setShadowStrength?.(g.shadowIntensity / 100)
   r.setSelfShadow?.(!!g.selfShadow)
   r.setReflectionsEnabled?.(!!g.reflections)
   r.setSpecularEnabled?.(!!g.specular)
+  r.setSpecularStrength?.(g.specularLevel / 100)
   r.setMetalSpecEnabled?.(!!g.metalSpec)
+  r.setRunningLightsEnabled?.(!!g.runningLights)
+  r.setRunningLightsStrength?.(g.runningLightsLevel / 100)
+  r.setBumpEnabled?.(!!g.bumpMap)
+  r.setBumpStrength?.(g.bumpLevel / 100)
   r.setGodBeamsEnabled?.(!!g.godbeams)
   r.setDoFEnabled?.(!!g.dof)
   r.setDoFDistance?.(g.dofDistance / 100)
   r.setDoFLevel?.(g.dofLevel / 100)
+  r.setAntialiasEnabled?.(!!g.antialias)
   r.setCinematic?.(!!g.cinematic)
   r.setCinematicStrength?.(g.cinematicLevel / 100)
   r.setBloomEnabled?.(!!g.bloom)

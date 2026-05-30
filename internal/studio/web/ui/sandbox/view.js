@@ -67,6 +67,15 @@ export class SandboxView {
     // the engine side).
     this._localModels = new Map()    // name → Model (this pane's GL ctx)
     this._loadingModels = new Set()  // names with an in-flight load
+    // Per-unit-instance pose clones.  _localModels caches ONE Model per
+    // unit TYPE (the uploaded geometry); but every same-type unit needs
+    // its OWN animated piece tree or they all render the pose of
+    // whichever instance was copied last that frame (5 PeeWees would
+    // share one set of legs / turret / flares).  Each entry is a
+    // cloneForInstance() of the type's base local model — fresh
+    // move/rotate/visible/worldMatrix per piece, GPU buffers aliased by
+    // reference (no geometry re-upload).  Keyed by engine unit id.
+    this._localInstances = new Map() // unitId → Model (per-instance pose)
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
     // The canvas is appended into a host stage by attach() and pulled
@@ -1078,26 +1087,43 @@ export class SandboxView {
   #refreshEntities() {
     if (!this.renderer || !this.scene) return
     const entities = []
+    // Live ids this frame — used to prune per-instance pose clones for
+    // units that have despawned (otherwise the clone map grows without
+    // bound across a long session).
+    const liveIds = new Set()
     for (const u of this.scene.units()) {
       if (!u.model) continue
       // GL-context substitution — each pane's renderer can only draw
-      // models whose VBOs live in its own context.  If the unit was
-      // spawned by US, _localModels has the right reference and we
-      // use it directly.  Otherwise the unit was spawned in a sibling
-      // pane: kick off a lazy load (no-op when already in flight) and
-      // skip this entity for the current frame — it'll appear next
-      // tick once the load completes.  Cost: a single network hit per
-      // (model name × pane) the first time the sibling pane observes
-      // a foreign unit.
-      const localModel = this._localModels.get(u.name)
-      if (!localModel) {
+      // models whose VBOs live in its own context.  If the unit's TYPE
+      // geometry was spawned/loaded by US, _localModels has the base
+      // Model.  Otherwise the unit was spawned in a sibling pane: kick
+      // off a lazy load (no-op when already in flight) and skip this
+      // entity for the current frame — it'll appear next tick once the
+      // load completes.  Cost: a single network hit per (model name ×
+      // pane) the first time the sibling pane observes a foreign unit.
+      const baseModel = this._localModels.get(u.name)
+      if (!baseModel) {
         this.#ensureLocalModel(u.name)
         continue
       }
+      // Per-instance pose isolation — _localModels caches ONE Model per
+      // unit type, so feeding it straight to every same-type entity
+      // makes them all render whichever instance's pose was copied last
+      // this frame (legs / turret / flares all in lockstep, animations
+      // appear "dead" for every unit but the last).  Give each engine
+      // unit its own cloneForInstance() of the type's base model — own
+      // animated piece tree, GPU buffers shared by reference — so the
+      // pose copy below lands in an isolated tree per unit.
+      let localModel = this._localInstances.get(u.id)
+      if (!localModel) {
+        localModel = baseModel.cloneForInstance()
+        this._localInstances.set(u.id, localModel)
+      }
+      liveIds.add(u.id)
       // Pose-sync — copy binding-driven animation state (move /
       // rotate / visible) from u.model (which the binding writes
-      // each tick via _sync) into our local-context copy.  Same
-      // tree-shape across both so DFS lockstep is safe.  Without
+      // each tick via _sync) into this unit's local-context clone.
+      // Same tree-shape across both so DFS lockstep is safe.  Without
       // this the unit renders in its authored static pose forever
       // (legs locked, turret straight, weapon flares cosmetic
       // panels never hidden) even though the binding runtime ticks
@@ -1139,6 +1165,15 @@ export class SandboxView {
         side: u.side | 0,
         teamColor: teamColorForSide(u.side),
       })
+    }
+    // Prune pose clones for despawned units.  Clones share GPU buffers
+    // by reference (isInstance), so there's no VBO to release — just
+    // drop the piece-tree ref so the map doesn't accumulate dead units
+    // across a long sandbox session.
+    if (this._localInstances.size > liveIds.size) {
+      for (const id of this._localInstances.keys()) {
+        if (!liveIds.has(id)) this._localInstances.delete(id)
+      }
     }
     // Placement ghost — appended LAST so it draws over the live units
     // (renderer iterates entities in order).  The renderer checks
@@ -2090,6 +2125,10 @@ export class SandboxView {
       this._shiftPreviewHost = null
       this._shiftPreviewEls = null
     }
+    // Drop per-instance pose clones (geometry buffers are owned by the
+    // base _localModels entries / the renderer's GL context teardown;
+    // clones only alias them, so there's nothing to GPU-free here).
+    this._localInstances.clear()
     if (this.renderer) this.renderer.dispose()
     this.renderer = null
     this.scene = null
