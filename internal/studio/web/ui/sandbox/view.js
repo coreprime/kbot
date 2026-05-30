@@ -1204,6 +1204,26 @@ export class SandboxView {
         ghost: true,
       })
     }
+    // In-flight model-projectiles (missiles / rockets / bombs).  The engine
+    // owns their flight (see projectiles.js); we draw the weapon's real 3DO
+    // mesh oriented along the velocity — heading + π matches the unit X-flip
+    // convention, and pitch tilts the nose along the climb/dive.  Models load
+    // lazily into the shared _localModels cache (keyed by the TDF model name);
+    // a projectile skips a frame until its mesh is in.
+    for (const proj of this.scene.projectiles()) {
+      if (!proj.model) continue
+      const pm = this._localModels.get(proj.model)
+      if (!pm) { this.#ensureLocalModel(proj.model); continue }
+      entities.push({
+        model: pm,
+        transform: {
+          x: proj.pos.x, y: proj.pos.y, z: proj.pos.z,
+          headingRad: proj.heading + Math.PI,
+          pitchRad: -proj.pitch,
+        },
+        id: 'proj-' + proj.id,
+      })
+    }
     this.renderer.setEntities(entities)
   }
 

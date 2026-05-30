@@ -29,6 +29,7 @@ import { AudioPool } from '../../game3d/audio-pool.js'
 import {
   SmokeTrailManager,
   spawnProjectile,
+  playWeaponSound,
   SFX_FIRE_FLASH,
 } from '../../game3d/weapon-driver.js'
 
@@ -82,6 +83,14 @@ export class SandboxScene {
     this.engine.on('fire', (ev) => {
       if (!ev || !ev.weapon || !ev.weapon.name) return
       try {
+        // Model weapons (missiles / rockets / bombs) are flown by the engine's
+        // projectile sim and drawn as a real 3DO mesh (see #refreshEntities) —
+        // skip the dead-reckoned particle here, but still play the muzzle
+        // sound so firing is audible.
+        if (ev.modelProjectile) {
+          playWeaponSound({ binding: ev.unit.binding, weapon: ev.weapon, anchor: ev.anchor })
+          return
+        }
         spawnProjectile({
           binding: ev.unit.binding,
           weapon: ev.weapon,
@@ -118,6 +127,9 @@ export class SandboxScene {
   addUnit(opts) { return this.engine.addUnit(opts) }
   removeUnit(id) { this.engine.removeUnit(id) }
   units() { return this.engine.units() }
+  // In-flight model-projectiles (missiles / rockets / bombs) for the view
+  // to render as 3DO meshes — forwarded straight from the engine.
+  projectiles() { return this.engine.projectiles() }
   unitById(id) { return this.engine.unitById(id) }
   unitCount() { return this.engine.unitCount() }
 

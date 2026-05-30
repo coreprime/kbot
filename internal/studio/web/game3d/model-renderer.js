@@ -1797,6 +1797,12 @@ export class ModelRenderer {
         if (t.headingRad !== 0) {
           Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
         }
+        // Optional pitch — model-projectiles (missiles / bombs) tilt their
+        // nose along the flight path; units leave pitchRad unset.  Applied
+        // after the yaw so the mesh banks then dives like the real round.
+        if (t.pitchRad) {
+          Mat4.rotateX(this._modelMatrix, this._modelMatrix, t.pitchRad)
+        }
         // Per-entity locomotion pose overlay — sandbox hovercraft gyrate +
         // aircraft bank into their turns, same as the single-unit path.  Each
         // entity keeps its own prev-transform/smoothing state keyed by id.
