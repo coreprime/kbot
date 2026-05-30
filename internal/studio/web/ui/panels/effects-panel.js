@@ -132,33 +132,20 @@ function EffectsBody() {
   if (pool.count === 0) {
     return html`<div class="mv-inspector-empty">No particles in flight.</div>`
   }
-  // Per-kind tally + section bucketing.  Walking the alive flags
-  // twice (count + bucket) is fine — pool.count caps at the SFX
-  // budget the engine sets, low enough that the second pass is
-  // negligible vs the DOM rebuild it feeds.
-  const counts = new Map()
+  // Section bucketing — split the live slots into projectiles/beams
+  // vs other effects.  Each section header carries its own live count
+  // (the rollup), so there's no separate per-kind chip strip up top:
+  // it duplicated those counts and its wrapping reflowed the panel
+  // width every time a kind entered or left the pool.
   const projSlots = []
   const fxSlots = []
   for (let i = 0; i < pool.count; i++) {
     if (!pool.alive[i]) continue
     const k = pool.kind[i] | 0
-    counts.set(k, (counts.get(k) || 0) + 1)
     if (isProjectile(k)) projSlots.push(i)
     else fxSlots.push(i)
   }
-  const chipEntries = [...counts.entries()].sort((a, b) => {
-    const aProj = isProjectile(a[0]) ? 0 : 1
-    const bProj = isProjectile(b[0]) ? 0 : 1
-    return aProj - bProj || b[1] - a[1]
-  })
   return html`
-    <div class="mv-fx-chips">
-      ${chipEntries.map(([k, n]) => html`
-        <span class=${isProjectile(k) ? 'mv-fx-chip mv-fx-chip-proj' : 'mv-fx-chip'} key=${k}>
-          ${KIND_NAMES[k] || ('K' + k)} ×${n}
-        </span>
-      `)}
-    </div>
     <${Section} label="Projectiles & beams" pool=${pool} slots=${projSlots} />
     <${Section} label="Other effects"       pool=${pool} slots=${fxSlots} />
   `

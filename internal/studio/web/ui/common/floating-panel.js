@@ -53,6 +53,20 @@ function _clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v)
 }
 
+// Bring-to-front stacking.  Every floating panel's CSS-default z-index
+// lives in the 40-65 band (mv-inspector 50, sandbox-panel / renderer
+// 60); dropdowns sit at 1500 and modals at 5000+.  We hand out an
+// ever-increasing inline z-index starting just above that band so an
+// interacted-with panel rises over its peers without ever climbing
+// into the dropdown / modal range.  Session-only — not persisted, and
+// shared across the unit viewer, sandbox, and map editor since they
+// all render through this one component.
+let _panelZTop = 100
+function _bringPanelToFront(el) {
+  if (!el) return
+  el.style.zIndex = String(++_panelZTop)
+}
+
 // rescuePanelIntoStage — public helper hosts call after a window /
 // stage resize.  Reads each registered panel's DOM rect and writes
 // back a clamped position so a layout saved at a larger viewport
@@ -294,6 +308,20 @@ export function FloatingPanel({
       window.removeEventListener('mouseup', onUp)
     }
   }, [id, resizable, minSize])
+
+  // Bring-to-front — any mousedown anywhere in the panel raises it
+  // above its peers.  Capture phase so it fires even on children that
+  // stopPropagation their own mousedown (header buttons, slider thumbs)
+  // and before the drag/resize handlers below run.  Bumps an inline
+  // z-index, which the position layout-effect never touches, so it
+  // survives re-renders for the life of the mounted panel.
+  useEffect(() => {
+    const el = panelRef.current
+    if (!el) return undefined
+    const onDown = () => _bringPanelToFront(el)
+    el.addEventListener('mousedown', onDown, true)
+    return () => el.removeEventListener('mousedown', onDown, true)
+  }, [])
 
   // Drag handler — wired imperatively so a fast-moving cursor that
   // escapes the header (or even the panel) still drives the move.

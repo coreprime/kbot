@@ -4689,10 +4689,6 @@ canvas {
 .mv-fx-section:first-child { border-top: none; }
 .mv-fx-section:hover { background: var(--bg-2); }
 .mv-fx-chev { font-size: 9px; opacity: 0.7; width: 8px; }
-/* Highlight projectile chips so the user spots them at a glance. */
-.mv-fx-chip-proj {
-  background: var(--accent, #3a6); color: #fff; border-color: transparent;
-}
 /* Card grid — one card per live particle, 1 column for narrow
    panel widths.  Each card is a self-contained block with header
    + stat grid + life bar. */
