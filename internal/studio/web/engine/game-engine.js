@@ -664,10 +664,13 @@ export class GameEngine {
     if (t && (t.dead || !this._units.has(t.id))) {
       u.attackTarget = null
       // Withdraw every attack-tagged weapon slot so it stops firing at a
-      // phantom enemy.  Manual (force-fire) slots are left alone.
+      // phantom enemy.  Manual (force-fire) slots are left alone.  A bomb run
+      // in progress survives target death — the slot was already locked to
+      // the cached aim point, so leave it alone and let the run finish.
       for (let slot = 0; slot < 3; slot++) {
         const s = u.weaponSlots[slot]
         if (s.target && s.target.source === 'attack') {
+          if (u._bombRun && u._bombRun.slot === slot) continue
           this.setWeaponTarget(u.id, slot, null)
         }
       }
@@ -678,6 +681,20 @@ export class GameEngine {
           Math.abs(u.moveTarget.x - t.pos.x) < 1 &&
           Math.abs(u.moveTarget.z - t.pos.z) < 1) {
         u.moveTarget = null
+      }
+    }
+
+    // ── Sweep stale attack-tagged slots when there's no engagement ──
+    // If the user issued Move (which clears attackTarget directly, not via
+    // target-death) and no bomb run is in progress, the attack-tagged slot
+    // would otherwise keep auto-firing forever.  A committed bomb run is the
+    // ONE exception — those slots persist until their cached run completes.
+    if (!u.attackTarget && !u._bombRun) {
+      for (let slot = 0; slot < 3; slot++) {
+        const s = u.weaponSlots[slot]
+        if (s.target && s.target.source === 'attack') {
+          this.setWeaponTarget(u.id, slot, null)
+        }
       }
     }
 
@@ -941,7 +958,7 @@ export class GameEngine {
     // Applies to attack + manual targets, sandbox + unit-viewer alike.
     let tgx = null, tgz = null
     if (state.target.type === 'point' && state.target.point) { tgx = state.target.point[0]; tgz = state.target.point[2] }
-    else if (target.pos) { tgx = target.pos.x; tgz = target.pos.z }
+    else if (Array.isArray(target)) { tgx = target[0]; tgz = target[2] }
     const inWeaponRange = (tgx == null) ||
       (Math.hypot(tgx - u.pos.x, tgz - u.pos.z) <= this.#weaponRangeFor(u, slot) * 1.05)
     // Aim-tolerance gate — the weapon TDF `tolerance` (TA angle units) is the
@@ -953,7 +970,31 @@ export class GameEngine {
     // below already enforces their arc), so the body constraint is skipped for
     // them.  Gates the START of a burst, like the range gate.
     const inAimTolerance = this.#withinFireArc(u, w, tgx, tgz)
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance
+    // Drop-window gate for bombers: a `dropped` weapon on an aircraft only
+    // STARTS firing when the carrier is close enough to the target that the
+    // run will straddle it — first bomb dropped before, last bomb after, with
+    // the centre of the string on the target.  Distance derived purely from
+    // the weapon TDF: a run spread roughly 4 blast diameters along the flight
+    // path, divided by the bomb spacing (carrier speed × reload) to pick the
+    // bomb count, and half of that distance becomes the trigger range.  Once
+    // a run is in progress (u._bombRun) the gate is suspended — bombs keep
+    // dropping until the cached count empties even if the user issues Move.
+    let inBombDropWindow = true
+    if (w.dropped && u.meta && u.meta.isAircraft && tgx != null) {
+      if (u._bombRun && u._bombRun.slot === slot) {
+        inBombDropWindow = true   // committed run
+      } else {
+        const carrierSpeed = Math.max(1, u.speed || 0)
+        const reloadSec = (w.reloadSec > 0) ? w.reloadSec : 0.18
+        const spacing = carrierSpeed * reloadSec
+        const desiredRun = (w.areaOfEffectWU > 0 ? w.areaOfEffectWU : 32) * 4
+        const bombsTotal = Math.max(2, Math.ceil(desiredRun / spacing))
+        const halfRun = ((bombsTotal - 1) * spacing) / 2
+        const dist = Math.hypot(tgx - u.pos.x, tgz - u.pos.z)
+        inBombDropWindow = dist <= halfRun
+      }
+    }
+    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance && inBombDropWindow
     if (startBurst || burstReady) {
       state.lastFireMs = simNowMs
       // Initialise (burstSize - 1) on the FIRST shot — we're about to
@@ -992,11 +1033,46 @@ export class GameEngine {
         modelProjectile: isModelProj,
       })
       if (isModelProj) this.#spawnProjectile(u, slot, w, anchor, state.target, target)
-      // Hit-scan damage for unit-vs-unit fire.
-      // Real game models per-projectile flight-time damage; the engine
-      // doesn't yet, so apply on fire when the target is a live unit
-      // ref.  Point targets (manual fire-at-ground) don't damage anything.
-      if (state.target.type === 'unit' && state.target.unit && !state.target.unit.dead) {
+      // Bomb-run bookkeeping (dropped weapons on aircraft).  The first shot in
+      // a run snapshots the aim point + total bomb count so subsequent shots
+      // keep dropping at the cached point — even if the user issues Move (the
+      // TA "bomb-and-bail" tactic).  Slot is rebound to the cached point so
+      // attackTarget death / clearance can't drift the run mid-flight.
+      if (w.dropped && u.meta && u.meta.isAircraft) {
+        if (!u._bombRun) {
+          const carrierSpeed = Math.max(1, u.speed || 0)
+          const reloadSec = (w.reloadSec > 0) ? w.reloadSec : 0.18
+          const spacing = carrierSpeed * reloadSec
+          const desiredRun = (w.areaOfEffectWU > 0 ? w.areaOfEffectWU : 32) * 4
+          const bombsTotal = Math.max(2, Math.ceil(desiredRun / spacing))
+          let pt = null
+          if (state.target.type === 'point' && state.target.point) pt = state.target.point.slice()
+          else if (Array.isArray(target)) pt = [target[0], target[1], target[2]]
+          if (pt) {
+            u._bombRun = { slot, point: pt, bombsLeft: bombsTotal }
+            // Lock the slot to the cached point so the run survives Move /
+            // attackTarget death without drifting.
+            this.setWeaponTarget(u.id, slot, { point: pt }, { source: 'attack' })
+          }
+        }
+        if (u._bombRun && u._bombRun.slot === slot) {
+          u._bombRun.bombsLeft--
+          if (u._bombRun.bombsLeft <= 0) {
+            u._bombRun = null
+            // End of run — drop the slot so the bomber doesn't keep cycling.
+            this.setWeaponTarget(u.id, slot, null)
+          }
+        }
+      }
+      // Hit-scan damage for unit-vs-unit fire.  Plain bullets / lasers / shells
+      // resolve damage at fire time (the engine doesn't yet model their per-
+      // projectile flight + impact).  MODEL projectiles fly a real mesh and
+      // apply blast-radius damage when they detonate via #stepProjectiles, so
+      // skip the hit-scan path for those — otherwise a Thunder bomb would
+      // damage the target twice (once on release, once on impact).  Point
+      // targets (manual fire-at-ground) never deliver hit-scan damage either.
+      if (!isModelProj &&
+          state.target && state.target.type === 'unit' && state.target.unit && !state.target.unit.dead) {
         this.applyDamage(u.id, state.target.unit.id, DEFAULT_HIT_DAMAGE)
       }
       // Kill the stale aim thread on the FIRST burst shot — fresh
@@ -1015,9 +1091,15 @@ export class GameEngine {
       // or fly a bomb run) must keep the target so the cycle re-fires on the
       // weapon's reload cadence: that's how a Thunder bomber lays a string of
       // bombs across the target instead of releasing one and forgetting why.
-      if (w.commandFire && state.burstShotsLeft === 0 && state.target.source !== 'attack') {
-        state.target = null
-        return
+      // The bomb-run block above may have cleared state.target on the run's
+      // last shot (setWeaponTarget(slot, null)); the commandFire branch then
+      // has nothing left to clear, so just exit the slot for this tick.
+      if (w.commandFire) {
+        if (!state.target) return
+        if (state.burstShotsLeft === 0 && state.target.source !== 'attack') {
+          state.target = null
+          return
+        }
       }
     }
     // Maintain a live aim thread between shots so the turret tracks
@@ -1111,9 +1193,14 @@ export class GameEngine {
   // and hands the rest to makeProjectile (all rates come from the weapon TDF).
   #spawnProjectile(u, slot, w, anchor, stateTarget, resolvedTarget) {
     let tgtPoint = null, tgtUnitId = null
-    if (stateTarget && stateTarget.type === 'unit' && resolvedTarget && resolvedTarget.pos) {
-      tgtPoint = [resolvedTarget.pos.x, resolvedTarget.pos.y, resolvedTarget.pos.z]
-      tgtUnitId = resolvedTarget.id
+    // stateTarget is the SM's normalised record ({type:'unit',unit} | {type:'point',point}).
+    // resolvedTarget is the array returned by #resolveTarget — [x, y+lift, z] for a
+    // unit, or the raw point for a point target.  For homing, we want the live unit
+    // id off stateTarget; the aim coordinates come from the resolved array.
+    if (stateTarget && stateTarget.type === 'unit' && stateTarget.unit && !stateTarget.unit.dead) {
+      const tu = stateTarget.unit
+      tgtPoint = [tu.pos.x, tu.pos.y, tu.pos.z]
+      tgtUnitId = tu.id
     } else if (Array.isArray(resolvedTarget)) {
       tgtPoint = resolvedTarget
     } else if (stateTarget && stateTarget.type === 'point' && stateTarget.point) {
@@ -1145,6 +1232,24 @@ export class GameEngine {
       stepProjectile(p, dtSec, opts)
       if (p.dead) {
         anyDead = true
+        // Area-of-effect damage on detonation: every live non-owner unit within
+        // the weapon's blast radius takes the weapon's base damage, falling off
+        // linearly to 25% at the edge.  Without this, dropped bombs that lay
+        // along a target point (the "bomb-and-bail" Move case) hit visually but
+        // do no damage — the hit-scan path only fires when the firing slot still
+        // names the unit at trigger time.  Skips when the projectile timed out
+        // mid-air rather than detonating.
+        if (p.hit && p.aoeWU > 0) {
+          const r = p.aoeWU
+          const ownerId = p.ownerId
+          for (const t of this._units.values()) {
+            if (!t || t.dead || t.id === ownerId) continue
+            const d = Math.hypot(t.pos.x - p.pos.x, t.pos.z - p.pos.z)
+            if (d > r) continue
+            const falloff = 1 - 0.75 * (d / r)
+            this.applyDamage(ownerId, t.id, DEFAULT_HIT_DAMAGE * falloff)
+          }
+        }
         this.emit('projectile-hit', {
           projectile: p,
           pos: [p.pos.x, p.pos.y, p.pos.z],
