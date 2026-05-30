@@ -27,6 +27,7 @@ import {
   SFX_PROJECTILE_MISSILE,
 } from './cob-particles.js'
 import { nullAudioPool } from './null-audio-pool.js'
+import { makeRng } from './rng.js'
 
 export class CobBinding {
   // model: Model from model-loader.js (with root piece + findPiece)
@@ -57,7 +58,11 @@ export class CobBinding {
       this._pieceMap.set(p, idx)
       if (idx >= 0) this._cobToPiece.set(idx, p)
     }
-    this.particles = new ParticlePool(1024)
+    // ParticlePool inherits the binding's RNG so emit()'s fallback
+    // drift-angle path is deterministic when the engine is seeded.  The
+    // binding sets this.rng below — but we haven't read opts.rng yet, so
+    // we pull it inline rather than re-ordering the constructor.
+    this.particles = new ParticlePool(1024, { rng: opts.rng || null })
     // worldOffset — applied to every piece-anchored SFX emit so that
     // multi-entity hosts can place each unit at a different world
     // position while reusing the same binding code.  Single-entity
@@ -82,6 +87,12 @@ export class CobBinding {
     // the same per-frame call, and disposed when the binding tears
     // down on a unit-swap.
     this.audio = opts.audio || nullAudioPool
+    // RNG used by every random spawn helper (SmokeUnit ray-pick, fire-burst
+    // angle, build-sparkle scatter).  Defaults to a non-seeded fallback so
+    // a binding constructed directly (without an engine) still works;
+    // GameEngine.addUnit injects the engine's deterministic RNG so the full
+    // sim is reproducible.  See engine/rng.js.
+    this.rng = opts.rng || makeRng(null)
     // Wire the pool's on-expire callback so projectile particles
     // detonate visually instead of just vanishing.  This is the
     // single point of dispatch for TA-style impact effects:
@@ -497,18 +508,18 @@ export class CobBinding {
     // This puts the sparkle ON the actual polygon surface, not in a
     // sphere around the piece pivot.
     for (let i = 0; i < toEmit; i++) {
-      const piece = pieces[(Math.random() * pieces.length) | 0]
+      const piece = pieces[(this.rng.nextFloat() * pieces.length) | 0]
       if (!piece || !piece.visible || !piece.worldMatrix) continue
       const tris = piece._tris
       const triCount = (tris.length / 9) | 0
       if (triCount === 0) continue
       // Random triangle (9 floats per: ax,ay,az, bx,by,bz, cx,cy,cz).
-      const tBase = ((Math.random() * triCount) | 0) * 9
+      const tBase = ((this.rng.nextFloat() * triCount) | 0) * 9
       // Random barycentric coords (u, v) with the standard sqrt-trick
       // to get a uniform distribution over the triangle area; the
       // third weight w = 1 - u - v.
-      let u = Math.random()
-      let v = Math.random()
+      let u = this.rng.nextFloat()
+      let v = this.rng.nextFloat()
       if (u + v > 1) { u = 1 - u; v = 1 - v }
       const w = 1 - u - v
       const lx = tris[tBase]     * w + tris[tBase + 3] * u + tris[tBase + 6] * v
@@ -584,11 +595,11 @@ export class CobBinding {
   _emitCluster(kind, anchor, n, opts = {}) {
     const spread = opts.spread ?? 0.8
     for (let i = 0; i < n; i++) {
-      const ang = Math.random() * Math.PI * 2
-      const r = Math.random() * spread
+      const ang = this.rng.nextFloat() * Math.PI * 2
+      const r = this.rng.nextFloat() * spread
       const dx = Math.cos(ang) * r
       const dz = Math.sin(ang) * r
-      const dy = (Math.random() - 0.3) * spread * 0.5
+      const dy = (this.rng.nextFloat() - 0.3) * spread * 0.5
       this.particles.emit(kind, [anchor[0] + dx, anchor[1] + dy, anchor[2] + dz])
     }
   }

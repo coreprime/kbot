@@ -137,8 +137,13 @@ const KIND_DEFAULTS = {
 }
 
 export class ParticlePool {
-  constructor(capacity = 512) {
+  constructor(capacity = 512, opts = {}) {
     this.capacity = capacity
+    // Optional RNG injected by the binding so the fallback drift angle
+    // (when emit() is called without an explicit velocity) draws from the
+    // deterministic stream.  Falls back to Math.random when no RNG is
+    // provided so standalone pools — particle previews, tests — still work.
+    this.rng = opts.rng || null
     // Flat float arrays so the GL upload can be a single
     // glBufferSubData per frame instead of a per-particle loop.
     this.x   = new Float32Array(capacity)
@@ -212,7 +217,8 @@ export class ParticlePool {
       this.vy[slot] = opts.velocity[1]
       this.vz[slot] = opts.velocity[2]
     } else {
-      const ang = Math.random() * Math.PI * 2
+      const rand = this.rng ? this.rng.nextFloat() : Math.random()
+      const ang = rand * Math.PI * 2
       this.vx[slot] = Math.cos(ang) * drift
       this.vy[slot] = rise
       this.vz[slot] = Math.sin(ang) * drift

@@ -84,6 +84,7 @@ import {
   UV_ACTIVATION, UV_HEALTH, UV_INBUILDSTANCE, UV_BUSY, UV_ARMORED,
   TA_TURNS_PER_CIRCLE, TA_TICK_MS, angleToRadians, linearToWorld,
 } from './cob-opcodes.js'
+import { makeRng } from './rng.js'
 
 // Each thread instance carries its own VM state.  The instruction
 // stream is shared with every other thread executing the same
@@ -845,8 +846,10 @@ export class CobUnit {
       // ── Random / unit values ──────────────────────────────
       case OP_RAND: {
         const hi = t.popI(); const lo = t.popI()
-        const lo2 = Math.min(lo, hi), hi2 = Math.max(lo, hi)
-        t.pushI(lo2 + Math.floor(Math.random() * (hi2 - lo2 + 1)))
+        // Route through the runtime RNG so the GameEngine's seed propagates
+        // all the way into every script's rand() call — the single biggest
+        // source of sim divergence between replays.
+        t.pushI(this.rng.range(lo, hi))
         return false
       }
       case OP_GET_UNIT_VALUE:
@@ -1069,6 +1072,11 @@ export class CobRuntime {
   constructor() {
     this._units = new Map()           // unitId → CobUnit
     this._nextUnitId = 1
+    // RNG used by the OP_RAND opcode.  Defaults to a non-seeded fallback so
+    // a standalone runtime (no GameEngine wrapping it) still runs scripts;
+    // GameEngine overwrites this with its own deterministic RNG in its
+    // constructor so the full sim is reproducible.  See engine/rng.js.
+    this.rng = makeRng(null)
     // Shared time state.  Sleeps and animators of every unit share
     // the same fixed-step clock so units don't drift relative to
     // each other.

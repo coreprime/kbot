@@ -75,6 +75,7 @@ import { CobBinding } from './cob-binding.js'
 import { stepSurfaceLocomotion, attackManeuver, shortestArc } from './locomotion.js'
 import { angleToRadians } from './cob-opcodes.js'
 import { makeProjectile, stepProjectile, hasModelProjectile } from './projectiles.js'
+import { makeRng } from './rng.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -127,12 +128,28 @@ function _makeSlotState() {
 }
 
 export class GameEngine {
-  constructor({ runtime, gravity = 80, audioFactory = null } = {}) {
+  // opts.seed — integer seed for the deterministic RNG.  Pass an explicit
+  // seed AND drive the engine from a fixed-dt tick loop (e.g. always
+  // engine.tick(25)) to make the whole simulation replayable: every COB
+  // OP_RAND draw, particle spawn offset, and aircraft egress side will
+  // reproduce bit-for-bit on the same JS engine.  Omitting the seed
+  // matches the historic Math.random behaviour (fresh draw each run).
+  constructor({ runtime, gravity = 80, audioFactory = null, seed = null } = {}) {
+    // Deterministic RNG.  Constructed first so the runtime + every binding
+    // we instantiate below can share it.  See rng.js — Mulberry32, single
+    // 32-bit state, snapshot/restore friendly.
+    this.rng = makeRng(seed)
     // Each engine owns its own runtime by default — keeps per-tab sim
     // state cleanly isolated.  Caller can pass an existing runtime to
     // share scripts (e.g. AI vs. player on one shared sim) but that's
     // not the common path.
     this.runtime = runtime || new CobRuntime()
+    // Share the engine's RNG with the runtime so every script's rand()
+    // (OP_RAND opcode) draws from the same deterministic stream.  When the
+    // caller supplied their own runtime this overwrites whatever RNG it
+    // booted with — intentional: the engine is the single source of truth
+    // for randomness within a sim.
+    this.runtime.rng = this.rng
     // World gravity (wu/s²) for the ballistic aim solver.  The
     // renderer's environment owns the authoritative value; callers
     // push updates via setGravity() when the env changes.  Default
@@ -256,7 +273,13 @@ export class GameEngine {
     // the engine package free of any concrete audio implementation
     // (browser <audio>, headless no-op, future WebAudio mixer).
     const audio = this._audioFactory ? this._audioFactory() : null
-    const binding = (cobUnit && instModel) ? new CobBinding(instModel, cobUnit, { audio }) : null
+    // Pass the engine RNG so the binding's particle / SFX spawn helpers
+    // (SmokeUnit, _emitFireBurst, _emitBuildSparkles) draw from the
+    // deterministic stream instead of Math.random.  All bindings share
+    // the engine RNG — that's intentional: the addUnit insertion order
+    // is the deterministic ordering, and forking per-binding here would
+    // need every replay to recreate units in the same order to match.
+    const binding = (cobUnit && instModel) ? new CobBinding(instModel, cobUnit, { audio, rng: this.rng }) : null
     const unit = {
       id, name,
       // Faction index (0..7) — drives the renderer's team-colour pass.
@@ -756,7 +779,7 @@ export class GameEngine {
       // target scatters to both sides on the first pass; the maneuver
       // toggles the sign on every subsequent egress so an individual
       // aircraft still alternates (figure-eight) across its own runs.
-      if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: Math.random() < 0.5 ? -1 : 1 }
+      if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: this.rng.nextFloat() < 0.5 ? -1 : 1 }
       const st = {
         x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0,
         atkPhase: u._atk.atkPhase, sweepPhase: u._atk.sweepPhase, sweepCenter: u._atk.sweepCenter,
