@@ -70,3 +70,42 @@ func UnpackedDir(t *testing.T, rel ...string) string {
 	}
 	return p
 }
+
+// TAKUnpackedPath returns the TAK_UNPACKED_PATH (unpacked TA: Kingdoms assets)
+// or skips/fails the test the same way UnpackedPath does.
+func TAKUnpackedPath(t *testing.T) string {
+	t.Helper()
+	p := os.Getenv("TAK_UNPACKED_PATH")
+	if p == "" {
+		if canSkip() {
+			t.Skip("TAK_UNPACKED_PATH not set — skipping test that requires unpacked TA: Kingdoms assets")
+		}
+		t.Fatal("TAK_UNPACKED_PATH not set — set it in .env.local or set ALLOW_SKIP_ASSETS=true to skip")
+	}
+	if _, err := os.Stat(p); err != nil {
+		if canSkip() {
+			t.Skipf("TAK_UNPACKED_PATH=%s not found: %v", p, err)
+		}
+		t.Fatalf("TAK_UNPACKED_PATH=%s not found: %v", p, err)
+	}
+	return p
+}
+
+// TAKUnpackedFile returns the full path to a file within the unpacked TA:
+// Kingdoms assets, or skips the test if TAK_UNPACKED_PATH is not set.
+func TAKUnpackedFile(t *testing.T, rel ...string) string {
+	t.Helper()
+	base := TAKUnpackedPath(t)
+	return filepath.Join(append([]string{base}, rel...)...)
+}
+
+// TAKUnpackedDir returns the full path to a directory within the unpacked TA:
+// Kingdoms assets, or skips the test if the directory doesn't exist.
+func TAKUnpackedDir(t *testing.T, rel ...string) string {
+	t.Helper()
+	p := TAKUnpackedFile(t, rel...)
+	if _, err := os.Stat(p); err != nil {
+		t.Skipf("directory not available: %s", p)
+	}
+	return p
+}
