@@ -32,6 +32,7 @@ const KIND_NAMES = {
   16: 'NANO', 257: 'WAKE',
   200: 'BULLET', 201: 'SHELL', 202: 'PLASMA',
   203: 'DGUN', 204: 'LASER', 205: 'MISSILE',
+  206: 'BITMAP',
 }
 const SECTION_CAP = 60
 const isProjectile = (k) => k >= 200 && k <= 299
@@ -50,7 +51,7 @@ function _toggleSection(label) {
   _collapsedSections.value = next
 }
 
-function ParticleCard({ pool, slot: i }) {
+function ParticleCard({ pool, slot: i, renderer }) {
   const k = pool.kind[i] | 0
   const sr = Math.max(0, Math.min(255, Math.round(pool.r[i] * 127)))
   const sg = Math.max(0, Math.min(255, Math.round(pool.g[i] * 127)))
@@ -62,7 +63,22 @@ function ParticleCard({ pool, slot: i }) {
     : '—'
   const lifeFrac = pool.life0[i] > 0 ? (pool.life[i] / pool.life0[i]) : 0
   const lifePct = Math.max(0, Math.min(1, lifeFrac)) * 100
-  const kindName = KIND_NAMES[k] || ('K' + k)
+  // Bitmap projectile (kind 206) — resolve the weapon name + TDF color
+  // slot via the renderer's sprite registry so the card reads as
+  // "Bitmap Projectile #2 (EMG)" instead of the opaque "K206".  Falls
+  // back to the bare KIND name when the renderer isn't reachable
+  // (headless tests, sprite still loading).
+  let kindName = KIND_NAMES[k] || ('K' + k)
+  if (k === 206 && renderer && renderer.weaponBitmapInfo && pool.spriteId) {
+    const info = renderer.weaponBitmapInfo(pool.spriteId[i] | 0)
+    if (info && info.weaponName) {
+      kindName = info.colorSlot > 0
+        ? `Bitmap Projectile #${info.colorSlot} (${info.weaponName})`
+        : `Bitmap Projectile (${info.weaponName})`
+    } else {
+      kindName = 'Bitmap Projectile'
+    }
+  }
   return html`
     <div class="mv-fx-card">
       <div class="mv-fx-card-head">
@@ -94,7 +110,7 @@ function ParticleCard({ pool, slot: i }) {
   `
 }
 
-function Section({ label, pool, slots }) {
+function Section({ label, pool, slots, renderer }) {
   if (slots.length === 0) return null
   const collapsed = _collapsedSections.value.has(label)
   const shown = Math.min(slots.length, SECTION_CAP)
@@ -106,7 +122,7 @@ function Section({ label, pool, slots }) {
     ${collapsed ? null : html`
       <div class="mv-fx-cards">
         ${slots.slice(0, shown).map((i) => html`
-          <${ParticleCard} pool=${pool} slot=${i} key=${i} />
+          <${ParticleCard} pool=${pool} slot=${i} renderer=${renderer} key=${i} />
         `)}
       </div>
       ${slots.length > shown ? html`
@@ -126,6 +142,11 @@ function EffectsBody() {
   if (!visible.value) return null
   const proxy = mv.value
   const pool = proxy && proxy.cob && proxy.cob.particles
+  // The renderer is attached on the binding so sprite-kind particles
+  // can be labelled with their weapon name + TDF color slot.  Missing
+  // for early frames / headless test paths — Section + Card both
+  // degrade gracefully to the generic name in that case.
+  const renderer = proxy && proxy.cob && proxy.cob._renderer
   if (!pool) {
     return html`<div class="mv-inspector-empty">No particle pool.</div>`
   }
@@ -146,8 +167,8 @@ function EffectsBody() {
     else fxSlots.push(i)
   }
   return html`
-    <${Section} label="Projectiles & beams" pool=${pool} slots=${projSlots} />
-    <${Section} label="Other effects"       pool=${pool} slots=${fxSlots} />
+    <${Section} label="Projectiles & beams" pool=${pool} slots=${projSlots} renderer=${renderer} />
+    <${Section} label="Other effects"       pool=${pool} slots=${fxSlots}   renderer=${renderer} />
   `
 }
 

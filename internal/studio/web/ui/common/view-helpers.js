@@ -74,11 +74,12 @@ export function wireHotkeys(view, opts) {
 // not flying ordnance, and dropping them in here makes the panel churn
 // every fire tick.
 const _PARTICLE_PROJECTILE_KINDS = {
-  200: { name: 'Bullet',  family: 'bullet'  },  // EMG / cannon rounds
-  201: { name: 'Shell',   family: 'shell'   },  // tank / artillery shells
-  202: { name: 'Plasma',  family: 'plasma'  },  // Guardian / Punisher etc.
-  203: { name: 'D-Gun',   family: 'dgun'    },  // Commander disintegrator
-  205: { name: 'Missile', family: 'missile' },  // dead-reckoned missiles
+  200: { name: 'Bullet',           family: 'bullet'  },  // EMG / cannon rounds
+  201: { name: 'Shell',            family: 'shell'   },  // tank / artillery shells
+  202: { name: 'Plasma',           family: 'plasma'  },  // Guardian / Punisher etc.
+  203: { name: 'D-Gun',            family: 'dgun'    },  // Commander disintegrator
+  205: { name: 'Missile',          family: 'missile' },  // dead-reckoned missiles
+  206: { name: 'Bitmap Projectile', family: 'bullet' },  // rendertype=4 fx.gaf sprite
 }
 
 // appendParticleProjectiles walks every binding's particle pool and pushes a
@@ -95,11 +96,31 @@ export function appendParticleProjectiles(engine, out) {
     if (!u || u.dead) continue
     const pool = u.binding && u.binding.particles
     if (!pool || !pool.count) continue
+    // Renderer reference is attached by the host view (sandbox / unit
+    // editor) so we can look up sprite metadata — weapon name + TDF
+    // color slot — for kind=206 bitmap projectiles.  Without it the
+    // generic "Bitmap Projectile" label still renders.
+    const renderer = u.binding && u.binding._renderer
     for (let i = 0; i < pool.count; i++) {
       if (!pool.alive[i]) continue
       const k = pool.kind[i] | 0
       const def = _PARTICLE_PROJECTILE_KINDS[k]
       if (!def) continue
+      // Resolve the display name + slot when this is a bitmap sprite
+      // particle.  Falls back to the generic kind name when the
+      // renderer can't resolve (e.g. headless test, sprite still
+      // loading).
+      let weaponName = def.name
+      if (k === 206 && renderer && pool.spriteId) {
+        const info = renderer.weaponBitmapInfo
+          ? renderer.weaponBitmapInfo(pool.spriteId[i] | 0)
+          : null
+        if (info && info.weaponName) {
+          weaponName = info.colorSlot > 0
+            ? `Bitmap Projectile #${info.colorSlot} (${info.weaponName})`
+            : `Bitmap Projectile (${info.weaponName})`
+        }
+      }
       const px = pool.x[i], py = pool.y[i], pz = pool.z[i]
       const vx = pool.vx[i], vy = pool.vy[i], vz = pool.vz[i]
       const speed = Math.hypot(vx, vy, vz)
@@ -110,7 +131,7 @@ export function appendParticleProjectiles(engine, out) {
       const remainingSec = Math.max(0, lifeMs / 1000)
       out.push({
         id: `p-${u.id}-${i}`,
-        weaponName: def.name,
+        weaponName,
         model: '',
         mode: def.family,
         origin:      { x: px - vx * elapsedSec,   y: py - vy * elapsedSec,   z: pz - vz * elapsedSec },

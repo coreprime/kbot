@@ -247,7 +247,7 @@ export class MvControls {
     if (!this._baseFxBufs) {
       this._baseFxBufs = {
         capacity: 0,
-        alive: null, kind: null,
+        alive: null, kind: null, spriteId: null,
         r: null, g: null, b: null,
         x: null, y: null, z: null,
         vx: null, vy: null, vz: null,
@@ -259,19 +259,23 @@ export class MvControls {
     let next = Math.max(64, b.capacity || 64)
     while (next < cap) next *= 2
     b.capacity = next
-    b.alive = new Uint8Array(next)
-    b.kind  = new Uint16Array(next)
-    b.r     = new Float32Array(next)
-    b.g     = new Float32Array(next)
-    b.b     = new Float32Array(next)
-    b.x     = new Float32Array(next)
-    b.y     = new Float32Array(next)
-    b.z     = new Float32Array(next)
-    b.vx    = new Float32Array(next)
-    b.vy    = new Float32Array(next)
-    b.vz    = new Float32Array(next)
-    b.life  = new Float32Array(next)
-    b.life0 = new Float32Array(next)
+    b.alive    = new Uint8Array(next)
+    b.kind     = new Uint16Array(next)
+    // spriteId per particle so the Effects panel can label kind=206
+    // bitmap projectiles with their weapon name + TDF color slot via
+    // the renderer's sprite registry.
+    b.spriteId = new Uint16Array(next)
+    b.r        = new Float32Array(next)
+    b.g        = new Float32Array(next)
+    b.b        = new Float32Array(next)
+    b.x        = new Float32Array(next)
+    b.y        = new Float32Array(next)
+    b.z        = new Float32Array(next)
+    b.vx       = new Float32Array(next)
+    b.vy       = new Float32Array(next)
+    b.vz       = new Float32Array(next)
+    b.life     = new Float32Array(next)
+    b.life0    = new Float32Array(next)
     return b
   }
 
@@ -297,19 +301,20 @@ export class MvControls {
       if (!p) continue
       for (let i = 0; i < p.count; i++) {
         if (!p.alive[i]) continue
-        b.alive[w] = 1
-        b.kind[w]  = p.kind[i] | 0
-        b.r[w]     = p.r[i];  b.g[w]  = p.g[i];  b.b[w]  = p.b[i]
-        b.x[w]     = p.x[i];  b.y[w]  = p.y[i];  b.z[w]  = p.z[i]
-        b.vx[w]    = p.vx[i]; b.vy[w] = p.vy[i]; b.vz[w] = p.vz[i]
-        b.life[w]  = p.life[i]
-        b.life0[w] = p.life0[i]
+        b.alive[w]    = 1
+        b.kind[w]     = p.kind[i] | 0
+        b.spriteId[w] = (p.spriteId && p.spriteId[i]) | 0
+        b.r[w]        = p.r[i];  b.g[w]  = p.g[i];  b.b[w]  = p.b[i]
+        b.x[w]        = p.x[i];  b.y[w]  = p.y[i];  b.z[w]  = p.z[i]
+        b.vx[w]       = p.vx[i]; b.vy[w] = p.vy[i]; b.vz[w] = p.vz[i]
+        b.life[w]     = p.life[i]
+        b.life0[w]    = p.life0[i]
         w++
       }
     }
     return {
       count: w,
-      alive: b.alive, kind: b.kind,
+      alive: b.alive, kind: b.kind, spriteId: b.spriteId,
       r: b.r, g: b.g, b: b.b,
       x: b.x, y: b.y, z: b.z,
       vx: b.vx, vy: b.vy, vz: b.vz,

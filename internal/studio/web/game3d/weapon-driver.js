@@ -409,7 +409,11 @@ function resolveSpriteId(binding, weapon) {
   if (binding._sprFetching.has(key)) return 0
   binding._sprFetching.add(key)
   loadWeaponBitmap(weapon.name).then((sprite) => {
-    if (sprite && r.registerWeaponBitmap) r.registerWeaponBitmap(weapon.name, sprite)
+    // Pass the TDF color slot through so the renderer can show
+    // "Bitmap Projectile #N" on the inspector cards — the only
+    // signal in the data that distinguishes one bitmap weapon from
+    // another (same sprite slot can be shared across many weapons).
+    if (sprite && r.registerWeaponBitmap) r.registerWeaponBitmap(weapon.name, sprite, slot)
     // Leave key in the set — registered sprites win the cache check on
     // next call regardless, and re-fetching on hot-reload is fine.
   }).catch(() => { /* loader returns null on error; nothing to do */ })

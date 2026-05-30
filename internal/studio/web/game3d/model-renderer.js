@@ -3722,7 +3722,14 @@ export class ModelRenderer {
   // and returns a numeric sprite id the particle pool stores per
   // particle.  Idempotent per weapon name — calling twice with the
   // same name returns the cached id without re-uploading.
-  registerWeaponBitmap(weaponName, sprite) {
+  //
+  // `colorSlot` (optional) is the weapon TDF's color= value (0-7) —
+  // the engine-internal slot index that picks which fx.gaf sequence
+  // this weapon's projectile uses (see internal/studio/weapon_bitmap.go
+  // for the slot→sequence mapping).  Stashed on the registry entry so
+  // the Projectiles + Effects panels can label sprite particles with
+  // their weapon name and slot # rather than a raw kind code.
+  registerWeaponBitmap(weaponName, sprite, colorSlot = 0) {
     if (!sprite || !sprite.image) return 0
     if (!this.programSprites || !this.gl) return 0
     const key = String(weaponName || '').trim().toUpperCase()
@@ -3756,6 +3763,10 @@ export class ModelRenderer {
       sheetWidth:      sprite.sheetWidth,
       sheetHeight:     sprite.sheetHeight,
       frameDurationMs: sprite.frameDurationMs,
+      // Carried for the inspector panels — see weaponBitmapInfo().
+      weaponName:      String(weaponName || ''),
+      colorSlot:       colorSlot | 0,
+      sequence:        String(sprite.sequence || ''),
     })
     if (key) this._sprWeaponToId.set(key, id)
     this.requestRedraw()
@@ -3776,6 +3787,22 @@ export class ModelRenderer {
   weaponBitmapId(weaponName) {
     const key = String(weaponName || '').trim().toUpperCase()
     return (key && this._sprWeaponToId.get(key)) || 0
+  }
+
+  // weaponBitmapInfo looks up a registered sprite by id and returns
+  // `{ weaponName, colorSlot, sequence }`, or null when the id isn't
+  // registered.  Used by the Projectiles + Effects inspectors to label
+  // bitmap-particle cards with their real weapon name + TDF color slot
+  // instead of a generic "K206" kind code.
+  weaponBitmapInfo(spriteId) {
+    if (!spriteId) return null
+    const e = this._sprRegistry && this._sprRegistry.get(spriteId)
+    if (!e) return null
+    return {
+      weaponName: e.weaponName,
+      colorSlot:  e.colorSlot,
+      sequence:   e.sequence,
+    }
   }
 
   // #renderSpriteParticles draws every alive particle with spriteId>0
