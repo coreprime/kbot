@@ -24,6 +24,17 @@ import {
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
 } from '../engine/cob-particles.js'
+import {
+  WEAPON_RENDERTYPE_LASER,
+  WEAPON_RENDERTYPE_PROJECTILE,
+  WEAPON_RENDERTYPE_MINDGUN,
+  WEAPON_RENDERTYPE_DGUN,
+  WEAPON_RENDERTYPE_BITMAP,
+  WEAPON_RENDERTYPE_FLAME,
+  WEAPON_RENDERTYPE_BOMB,
+  WEAPON_RENDERTYPE_LIGHTNING,
+  hasRenderType,
+} from '../engine/weapon-rendertype.js'
 
 // Per-kind brightness multipliers applied on top of the palette-derived
 // hue so each projectile family keeps its visual identity even when the
@@ -83,41 +94,57 @@ export function laserColor(weapon, palette) {
   return projectileColor(weapon, SFX_PROJECTILE_LASER, palette)
 }
 
-// pickProjectileKind — TDF-flag-driven projectile-kind classifier.
-// Order matters: each branch is a tighter signal than the next, so the
-// first match wins.  Name regex stays as a last-resort fallback for the
-// (mostly mod) TDFs that ship no flags at all.
+// pickProjectileKind — pick the visual particle kind for a weapon.
 //
-// The D-Gun branch is data-driven (commandFire + huge AoE) rather than
-// name-pattern: the original implementation matched /disintegrator/
-// which broke for any rename / localisation / mod.
+// PRIMARY signal is the weapon's TDF `rendertype` (see
+// engine/weapon-rendertype.js for the audit + constants).  Every stock
+// TA weapon ships rendertype, and it's the same value TA's own engine
+// uses to pick the projectile visual — so consulting it makes our
+// classifier match TA's behaviour by construction.
+//
+// FALLBACK (for mod weapons that omit rendertype) is the older flag-
+// based heuristic.  Name regex is the absolute last resort.
 export function pickProjectileKind(weapon) {
   const w = weapon || {}
-  // D-Gun family — every D-Gun in the stock TDFs combines commandfire=1
-  // with beamweapon=1 (ARM_DISINTEGRATOR / CORE_DISINTEGRATOR are the
-  // only weapons that pair those two flags).  Catching that pair BEFORE
-  // the beam-weapon branch is essential — without it the D-Gun falls
-  // through to the laser path (ARM_DISINTEGRATOR's areaofeffect is 48,
-  // below any sensible AoE-based gate).
+  if (hasRenderType(w)) {
+    switch (w.renderType) {
+      case WEAPON_RENDERTYPE_LASER:
+      case WEAPON_RENDERTYPE_MINDGUN:    // beam-like paralyser variant
+      case WEAPON_RENDERTYPE_LIGHTNING:  // instant-hit lightning bolt
+        return SFX_PROJECTILE_LASER
+      case WEAPON_RENDERTYPE_PROJECTILE: // smoke-trailed missile / torpedo
+        return SFX_PROJECTILE_MISSILE
+      case WEAPON_RENDERTYPE_DGUN:
+        return SFX_PROJECTILE_DGUN
+      case WEAPON_RENDERTYPE_BITMAP:
+        // Bitmap sprite is the catch-all bullet / plasma / shell class.
+        // Split by physics: ballistic=1 reads as a heavy shell arcing
+        // through the air; smokeTrail=1 (rare with bitmap) reads as a
+        // missile; otherwise a bright bullet/plasma tracer.
+        if (w.ballistic) return SFX_PROJECTILE_SHELL
+        if (w.smokeTrail) return SFX_PROJECTILE_MISSILE
+        return SFX_PROJECTILE_BULLET
+      case WEAPON_RENDERTYPE_FLAME:
+        // Flamethrower stream — closest visual fit is the plasma bolt
+        // kind (bright, additive, short-lived).
+        return SFX_PROJECTILE_PLASMA
+      case WEAPON_RENDERTYPE_BOMB:
+        // Gravity bombs always ship as model-projectiles (model=bomb),
+        // so this kind is the particle fallback when the bomb's 3DO
+        // mesh isn't available.  Missile reads closest to "thing
+        // falling out of the sky."
+        return SFX_PROJECTILE_MISSILE
+    }
+  }
+  // ── Flag heuristic fallback (mod weapons without rendertype) ──
+  // D-Gun family: commandfire + beamweapon is the unique pair in TA's
+  // stock data (mirrors rendertype=3).
   if (w.commandFire && w.beamWeapon) return SFX_PROJECTILE_DGUN
-  // Secondary D-Gun signal for mod variants that drop the beamweapon
-  // flag but keep the canonical "huge blast you fire manually" shape.
   if (w.commandFire && (+w.areaOfEffectWU >= 80)) return SFX_PROJECTILE_DGUN
-  // Beam weapons — instant-hit line.  TA's `rendertype=0` is the
-  // historic laser render path; `beamweapon=1` is the modern flag.
-  // Either one wins.
-  if (w.beamWeapon || w.renderType === 0) return SFX_PROJECTILE_LASER
-  // Missile family — anything self-propelled, smoke-trailing, dropped
-  // gravity bomb, or vertical-launch.  All share the missile visual
-  // (small bright body + smoke trail) so they collapse to one kind.
+  if (w.beamWeapon) return SFX_PROJECTILE_LASER
   if (w.smokeTrail || w.selfProp || w.dropped || w.vlaunch) return SFX_PROJECTILE_MISSILE
-  // Ballistic shells / mortars / cannons — arc projectiles.
   if (w.ballistic) return SFX_PROJECTILE_SHELL
-  // Plasma family — TA's `rendertype=1` (2D bitmap) and 5 (particle)
-  // are typically plasma bolts / EMG tracers.  Catches Peewee and Core
-  // Crasher style weapons without a name match.
-  if (w.renderType === 1 || w.renderType === 5) return SFX_PROJECTILE_PLASMA
-  // ── Last-resort name regex (only when every flag above said nothing) ──
+  // ── Last-resort name regex ──
   const n = w.name || ''
   if (/disintegrator|dgun|d_gun/i.test(n)) return SFX_PROJECTILE_DGUN
   if (/missile|rocket|torpedo/i.test(n) || /missile|rocket/i.test(w.model || '')) return SFX_PROJECTILE_MISSILE
