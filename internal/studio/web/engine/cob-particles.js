@@ -67,21 +67,24 @@ const KIND_DEFAULTS = {
   // 50ms intervals — at HEALTH=20 (80% damage) that's a puff per
   // second, so each puff has to linger long enough that the trail
   // reads as a continuous plume instead of a strobe.
-  // Alpha was previously 0.96 (effectively opaque) which crowded the
-  // scene with damage trails — a single damaged kbot left a thick
-  // brown column hanging in the air for 4+ seconds.  0.50 reads as a
-  // visible-but-airy plume that thins out as it rises, and the shorter
-  // life (2800 ms vs 4200 ms) means puffs from successive damage
-  // ticks don't stack into a solid wall.  See the "Dynamic smoke from
-  // game data" notes at the top of this file for what TDF knobs could
-  // drive these values per-weapon / per-unit at a future pass.
-  [SFX_SMOKE_GREY]:     { color: [0.45, 0.45, 0.48, 0.50], size: 14.0, lifeMs: 2800, riseSpeed: 3.6, drift: 1.6 },
+  // Alpha + life halved again from the previous pass (was 0.50 α /
+  // 2800 ms / 2000 ms) — even at 50% opacity the trails were stacking
+  // into opaque clouds whenever a battalion fired or moved together,
+  // blocking the scene.  α=0.25 + ~half life lets the puffs disperse
+  // before the next batch lands.  Per-weapon AoE-scaling + per-unit
+  // damage-state alpha modulation are documented as Tier-1/Tier-2
+  // upgrades in the in-tree "Dynamic smoke" notes — those would let
+  // these defaults relax (heavy weapons + dying units could push
+  // alpha back up) without re-introducing the everyone-leaks-fog
+  // problem the static values had.
+  [SFX_SMOKE_GREY]:     { color: [0.45, 0.45, 0.48, 0.25], size: 14.0, lifeMs: 1400, riseSpeed: 3.6, drift: 1.6 },
   // SMOKE_WHITE (exhaust / dust): bright, slightly translucent,
   // medium life so it visibly drifts off the unit instead of
   // popping out instantly.  Same tuning rationale as SMOKE_GREY —
-  // halved alpha + trimmed life so muzzle puffs and aircraft jetwash
-  // don't dominate the silhouette of the firing unit.
-  [SFX_SMOKE_WHITE]:    { color: [0.92, 0.92, 0.96, 0.50], size: 11.0, lifeMs: 2000, riseSpeed: 2.4, drift: 1.2 },
+  // alpha + life halved so muzzle puffs and aircraft jetwash from a
+  // mass of units don't blanket the silhouette of whatever they're
+  // shooting at.
+  [SFX_SMOKE_WHITE]:    { color: [0.92, 0.92, 0.96, 0.25], size: 11.0, lifeMs: 1000, riseSpeed: 2.4, drift: 1.2 },
   // Sparks fade fast in TA (~200ms).  Earlier 450ms left a halo of
   // sparks lingering well after the impact concluded.
   [SFX_SPARK]:          { color: [1.50, 0.75, 0.25, 1.00], size: 3.0,  lifeMs: 220,  riseSpeed: -2.5, drift: 1.6 },
