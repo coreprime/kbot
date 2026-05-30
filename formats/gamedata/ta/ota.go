@@ -25,6 +25,9 @@ type GlobalHeader struct {
 	Glamour      string `tdf:"glamour,omitempty"`
 	GlamourSound string `tdf:"glamoursound,omitempty"`
 
+	SeaLevel        int `tdf:"sealevel,omitempty"`
+	ImpassibleWater int `tdf:"impassiblewater,omitempty"`
+
 	// SCHEMACOUNT in the file is the length of this slice; the codec emits it.
 	Schemas []Schema `tdf:"Schema,repeats=SCHEMACOUNT"`
 }

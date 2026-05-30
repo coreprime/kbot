@@ -47,6 +47,9 @@ type UnitInfo struct {
 	AltFromSeaLevel float64 `tdf:"altfromsealevel,omitempty"` // Assuming float, due to name/usage
 	Amphibious      int     `tdf:"amphibious,omitempty"`
 
+	HoverAttack int `tdf:"hoverattack,omitempty"`
+	OnOffable   int `tdf:"onoffable,omitempty"`
+
 	// Orders / behaviour flags.
 	CanReclamate      int    `tdf:"canreclamate,omitempty"`
 	CanCapture        int    `tdf:"cancapture,omitempty"`

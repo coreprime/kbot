@@ -30,13 +30,39 @@ type Weapon struct {
 	Turret      int `tdf:"turret,omitempty"`
 	NoExplode   int `tdf:"noexplode,omitempty"`
 
+	// Trajectory / targeting category flags.
+	SelfProp     int `tdf:"selfprop,omitempty"`
+	Tracks       int `tdf:"tracks,omitempty"`
+	CommandFire  int `tdf:"commandfire,omitempty"`
+	VLaunch      int `tdf:"vlaunch,omitempty"`
+	Cruise       int `tdf:"cruise,omitempty"`
+	Guidance     int `tdf:"guidance,omitempty"`
+	WaterWeapon  int `tdf:"waterweapon,omitempty"`
+	TwoPhase     int `tdf:"twophase,omitempty"`
+	NoAutoRange  int `tdf:"noautorange,omitempty"`
+	BurnBlow     int `tdf:"burnblow,omitempty"`
+	UnitsOnly    int `tdf:"unitsonly,omitempty"`
+	Targetable   int `tdf:"targetable,omitempty"`
+	Interceptor  int `tdf:"interceptor,omitempty"`
+	Meteor       int `tdf:"meteor,omitempty"`
+	Paralyzer    int `tdf:"paralyzer,omitempty"`
+	NoRadar      int `tdf:"noradar,omitempty"`
+	GroundBounce int `tdf:"groundbounce,omitempty"`
+	Stockpile    int `tdf:"stockpile,omitempty"`
+	ToAirWeapon  int `tdf:"toairweapon,omitempty"`
+	StartFire    int `tdf:"startfire,omitempty"`
+
 	Coverage int `tdf:"coverage,omitempty"`
 
 	EnergyPerShot float64 `tdf:"energypershot,omitempty"` // Assuming float, due to name/usage
+	MetalPerShot  int     `tdf:"metalpershot,omitempty"`
+	Energy        int     `tdf:"energy,omitempty"` // build/stockpile cost
+	Metal         int     `tdf:"metal,omitempty"`  // build/stockpile cost
 	WeaponTimer   float64 `tdf:"weapontimer,omitempty"`
 
 	WeaponAcceleration float64 `tdf:"weaponacceleration,omitempty"` // Assuming float, due to name/usage
 	StartVelocity      float64 `tdf:"startvelocity,omitempty"`      // Assuming float, due to name/usage
+	Duration           float64 `tdf:"duration,omitempty"`
 
 	Burst       int     `tdf:"burst,omitempty"`
 	BurstRate   float64 `tdf:"burstrate,omitempty"`
@@ -46,7 +72,9 @@ type Weapon struct {
 	FlightTime float64 `tdf:"flighttime,omitempty"` // Assuming float, due to name/usage
 	Accuracy   int     `tdf:"accuracy,omitempty"`
 	Tolerance  int     `tdf:"tolerance,omitempty"`
+	PitchTolerance int `tdf:"pitchtolerance,omitempty"`
 	AimRate    int     `tdf:"aimrate,omitempty"`
+	HoldTime   int     `tdf:"holdtime,omitempty"`
 
 	MinBarrelAngle float64 `tdf:"minbarrelangle,omitempty"` // Assuming float, degrees
 
@@ -62,7 +90,11 @@ type Weapon struct {
 	ExplosionArt      string  `tdf:"explosionart,omitempty"`
 	WaterExplosionGAF string  `tdf:"waterexplosiongaf,omitempty"`
 	WaterExplosionArt string  `tdf:"waterexplosionart,omitempty"`
+	LavaExplosionGAF  string  `tdf:"lavaexplosiongaf,omitempty"`
+	LavaExplosionArt  string  `tdf:"lavaexplosionart,omitempty"`
 	Propeller         int     `tdf:"propeller,omitempty"`
+	ShakeMagnitude    int     `tdf:"shakemagnitude,omitempty"`
+	ShakeDuration     float64 `tdf:"shakeduration,omitempty"`
 
 	// Sounds.
 	SoundStart   string `tdf:"soundstart,omitempty"`
