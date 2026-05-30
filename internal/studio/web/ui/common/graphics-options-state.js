@@ -43,6 +43,8 @@ export const GRAPHICS_DEFAULTS = {
   cinematicLevel:   100,   // 0..100    → grade intensity %
   bloom:            false, // bright-pass glow
   bloomLevel:       100,   // 0..200    → 0..2.0× bloom add strength
+  lensFlare:        false, // screen-space sun flare
+  lensFlareLevel:   100,   // 0..200    → 0..2.0× flare strength
 
   waterReflections: true,
   waves:            true,
@@ -95,6 +97,8 @@ export function applyGraphicsOptionsToRenderer(r) {
   r.setCinematicStrength?.(g.cinematicLevel / 100)
   r.setBloomEnabled?.(!!g.bloom)
   r.setBloomStrength?.(g.bloomLevel / 100)
+  r.setLensFlareEnabled?.(!!g.lensFlare)
+  r.setLensFlareStrength?.(g.lensFlareLevel / 100)
   r.setWaterReflectionsEnabled?.(!!g.waterReflections)
   r.setWavesEnabled?.(!!g.waves)
   r.setWavesIntensity?.(g.wavesIntensity / 100)

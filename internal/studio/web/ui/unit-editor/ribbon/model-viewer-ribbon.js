@@ -74,6 +74,8 @@ const _state = signal({
   cinematicLevel:    100,         // %, /100 → grade intensity
   bloom:             false,       // bright-pass glow
   bloomLevel:        100,         // %, /100 → bloom add strength
+  lensFlare:         false,       // screen-space sun flare
+  lensFlareLevel:    100,         // %, /100 → flare strength
   waterReflections:  true,
 
   bob:               true,
@@ -138,6 +140,8 @@ const _bridge = {
   setCinematicStrength:  (_v) => {},
   setBloom:              (_on) => {},
   setBloomStrength:      (_v) => {},
+  setLensFlare:          (_on) => {},
+  setLensFlareStrength:  (_v) => {},
   setWaterReflections:   (_on) => {},
 
   setBob:           (_on) => {},
@@ -181,6 +185,7 @@ export function configureModelViewerRibbonBridge(impl) {
     setDoFDistance: (_v) => {}, setDoFLevel: (_v) => {},
     setCinematic: (_o) => {}, setCinematicStrength: (_v) => {},
     setBloom: (_o) => {}, setBloomStrength: (_v) => {},
+    setLensFlare: (_o) => {}, setLensFlareStrength: (_v) => {},
     setWaterReflections: (_o) => {},
     setBob: (_o) => {}, setBobAmount: (_v) => {}, setBobSpeed: (_v) => {},
     setWaves: (_o) => {}, setWavesIntensity: (_v) => {},

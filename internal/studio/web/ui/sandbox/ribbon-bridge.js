@@ -135,6 +135,8 @@ export function wireSandboxRibbon() {
       setCinematicStrength: (v)  => eachRenderer((r) => r.setCinematicStrength?.(v)),
       setBloom:             (on) => eachRenderer((r) => r.setBloomEnabled?.(!!on)),
       setBloomStrength:     (v)  => eachRenderer((r) => r.setBloomStrength?.(v)),
+      setLensFlare:         (on) => eachRenderer((r) => r.setLensFlareEnabled?.(!!on)),
+      setLensFlareStrength: (v)  => eachRenderer((r) => r.setLensFlareStrength?.(v)),
       setWaterReflections:  (on) => eachRenderer((r) => r.setWaterReflectionsEnabled?.(!!on)),
       setWaves:             (on) => eachRenderer((r) => r.setWavesEnabled?.(!!on)),
       setWavesIntensity:    (v)  => eachRenderer((r) => r.setWavesIntensity?.(v)),

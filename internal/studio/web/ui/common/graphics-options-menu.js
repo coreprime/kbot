@@ -188,5 +188,18 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
         format=${(v) => `${v}%`}
         onChange=${(v) => set('cinematicLevel', v, v / 100, bridge.setCinematicStrength)} />
     <//>
+    <${MenuSubmenuRow}
+      icon="✴️"
+      label="Lens Flare"
+      title="Screen-space sun flare — a glow + ghosts that hide when geometry crosses in front of the sun.  Hover for strength."
+      on=${s.lensFlare}
+      onToggle=${(next) => set('lensFlare', next, next, bridge.setLensFlare)}>
+      <${_Slider}
+        label="Strength"
+        min=${0} max=${200} step=${5}
+        value=${s.lensFlareLevel}
+        format=${(v) => `${v}%`}
+        onChange=${(v) => set('lensFlareLevel', v, v / 100, bridge.setLensFlareStrength)} />
+    <//>
   `
 }

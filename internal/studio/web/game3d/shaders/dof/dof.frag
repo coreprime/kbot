@@ -28,6 +28,10 @@ uniform float uBloomOn;          // 1 adds the bloom texture
 uniform float uBloomStrength;    // bloom add multiplier
 uniform float uCinematic;        // 1 enables tonemap + grade + vignette
 uniform float uGrade;            // 0..1 grade intensity (mix toward graded)
+uniform float uFlareOn;          // 1 enables the screen-space sun lens flare
+uniform vec2 uFlarePos;          // sun position in screen UV (0..1)
+uniform vec3 uFlareColor;        // flare tint (sun colour, normalised)
+uniform float uFlareStrength;    // flare intensity multiplier
 
 // 8 unit-disk taps stored as a constant function - GLSL ES 1.00
 // can't constant-initialise an array, so each tap is returned by
@@ -82,6 +86,29 @@ void main() {
   // 2. Bloom add.
   if (uBloomOn > 0.5) {
     col += texture2D(uBloom, vUV).rgb * uBloomStrength;
+  }
+
+  // 2b. Lens flare — a glow at the sun's screen position plus a few
+  // ghosts strung along the sun→centre axis.  Gated by an occlusion
+  // test: the sun pixel's depth has to read as sky/far, so the flare
+  // hides the instant geometry crosses in front of the sun.
+  if (uFlareOn > 0.5) {
+    float dSun = texture2D(uSceneDepth, uFlarePos).r;
+    float vis = smoothstep(0.985, 0.999, dSun);
+    if (vis > 0.001) {
+      float aspect = uTexel.y / uTexel.x;   // w/h — keep the glow circular
+      vec3 flare = vec3(0.0);
+      float dc = length((vUV - uFlarePos) * vec2(aspect, 1.0));
+      flare += uFlareColor * exp(-dc * 16.0) * 1.3;   // tight core
+      flare += uFlareColor * exp(-dc * 3.5) * 0.22;   // soft halo
+      vec2 dir = vec2(0.5) - uFlarePos;
+      for (int i = 1; i <= 4; i++) {
+        vec2 gp = uFlarePos + dir * (float(i) * 0.34);
+        float gd = length((vUV - gp) * vec2(aspect, 1.0));
+        flare += uFlareColor * exp(-gd * 26.0) * (0.14 / float(i));
+      }
+      col += flare * vis * uFlareStrength;
+    }
   }
 
   // 3. Cinematic grade.

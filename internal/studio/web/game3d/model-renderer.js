@@ -781,6 +781,8 @@ export class ModelRenderer {
     this.cinematicStrength = 1.0    // 0..1 grade mix toward the graded image
     this.optBloom = false
     this.bloomStrength = 1.0
+    this.optLensFlare = false
+    this.lensFlareStrength = 1.0
     // Shader program init is deferred to ModelRenderer.init() — that
     // method fetches shader sources from shaders/ and links them.  Set
     // to true once init() has resolved so render() bails early when
@@ -1595,10 +1597,18 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setLensFlareEnabled toggles the screen-space sun flare; strength
+  // scales the glow + ghosts.
+  setLensFlareEnabled(on) { this.optLensFlare = !!on; this.requestRedraw() }
+  setLensFlareStrength(v) {
+    this.lensFlareStrength = Math.max(0, Math.min(4, +v || 0))
+    this.requestRedraw()
+  }
+
   // #postActive — true when any post-process effect needs the scene
   // rendered into the offscreen FBO + composited.  Gates the FBO path.
   #postActive() {
-    return this.optDof || this.optCinematic || this.optBloom
+    return this.optDof || this.optCinematic || this.optBloom || this.optLensFlare
   }
 
   // setBgTerrainEnabled toggles the background-mountain ring.  When
@@ -3685,6 +3695,10 @@ export class ModelRenderer {
     this.uDoFBloomStrength = gl.getUniformLocation(prog, 'uBloomStrength')
     this.uDoFCinematic = gl.getUniformLocation(prog, 'uCinematic')
     this.uDoFGrade = gl.getUniformLocation(prog, 'uGrade')
+    this.uDoFFlareOn = gl.getUniformLocation(prog, 'uFlareOn')
+    this.uDoFFlarePos = gl.getUniformLocation(prog, 'uFlarePos')
+    this.uDoFFlareColor = gl.getUniformLocation(prog, 'uFlareColor')
+    this.uDoFFlareStrength = gl.getUniformLocation(prog, 'uFlareStrength')
     const buf = gl.createBuffer()
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -3791,6 +3805,33 @@ export class ModelRenderer {
     gl.uniform1f(this.uDoFBloomStrength, this.bloomStrength)
     gl.uniform1f(this.uDoFCinematic, this.optCinematic ? 1 : 0)
     gl.uniform1f(this.uDoFGrade, this.cinematicStrength)
+    // Lens flare — project the sun (a far point along lightDir from the
+    // camera target) into screen UV; the composite reads the depth at
+    // that pixel to occlusion-test it.  Off-screen / behind-camera suns
+    // disable the flare.
+    let flareOn = 0, fx = 0.5, fy = 0.5
+    let fcol = this._flareColor || (this._flareColor = [1, 1, 1])
+    if (this.optLensFlare && this.camera) {
+      const c = this.camera, L = this.lightDir, t = c.target, D = 5000
+      const sx = t[0] + L[0] * D, sy = t[1] + L[1] * D, sz = t[2] + L[2] * D
+      const m = this._flareVP || (this._flareVP = Mat4.create())
+      Mat4.multiply(m, c.projMatrix, c.viewMatrix)
+      const cw = m[3] * sx + m[7] * sy + m[11] * sz + m[15]
+      if (cw > 0.0001) {
+        const u = (m[0] * sx + m[4] * sy + m[8] * sz + m[12]) / cw * 0.5 + 0.5
+        const v = (m[1] * sx + m[5] * sy + m[9] * sz + m[13]) / cw * 0.5 + 0.5
+        if (u > -0.3 && u < 1.3 && v > -0.3 && v < 1.3) {
+          flareOn = 1; fx = u; fy = v
+          const lc = this.lightColor
+          const mx = Math.max(lc[0], lc[1], lc[2], 1)
+          fcol[0] = lc[0] / mx; fcol[1] = lc[1] / mx; fcol[2] = lc[2] / mx
+        }
+      }
+    }
+    gl.uniform1f(this.uDoFFlareOn, flareOn)
+    gl.uniform2f(this.uDoFFlarePos, fx, fy)
+    gl.uniform3fv(this.uDoFFlareColor, fcol)
+    gl.uniform1f(this.uDoFFlareStrength, this.lensFlareStrength)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._dofVBO)
     gl.enableVertexAttribArray(this.aDoFPos)
     gl.vertexAttribPointer(this.aDoFPos, 2, gl.FLOAT, false, 0, 0)
