@@ -207,17 +207,34 @@ export function attackManeuver(state, tx, tz, meta, range, dtSec, opts = {}) {
     return { inRange: dist <= range }
   }
 
-  // Fixed-wing fly-by.  A bomber (opts.bomberMode) stays on approach until it
-  // crosses directly over the target so the bomb run drops along the target
-  // itself rather than peeling off at long range; a missile-armed fighter
-  // peels at ~40% of weapon range, before getting dangerously close.
+  // Fixed-wing fly-by.  A missile-armed fighter peels at ~40 % of weapon
+  // range, before it ends up dangerously close.  A bomber (opts.bomberMode)
+  // commits to its current heading inside the drop window so the whole bomb
+  // string lays on a straight line — a chasing turn truncates the run and
+  // bombs 3-4 end up landing 20+ wu off the aim point — and only banks away
+  // once it has cleared the FAR edge of the window (target + opts.bomberPass-
+  // throughDist).
+  const passthrough = (opts.bomberMode && opts.bomberPassthroughDist > 0)
+    ? opts.bomberPassthroughDist : 0
   const egressDist = opts.bomberMode ? 30 : Math.max(30, range * 0.4)
   if (state.atkPhase !== 'egress') {
     state.atkPhase = 'approach'
-    _flyForward(state, bearing, meta, dtSec)
-    if (dist < egressDist) {
+    // Hold heading inside the drop zone (bomber + within passthrough distance
+    // of the target).  Everywhere else, steer to the target bearing.
+    const inDropZone = opts.bomberMode && dist <= passthrough
+    _flyForward(state, inDropZone ? state.heading : bearing, meta, dtSec)
+    // Past-target test: forward·(target - pos) negative ⇒ the carrier has
+    // crossed the aim point.  Bombers wait for that AND to have flown clear
+    // of the far drop-zone edge before peeling off; non-bombers peel as soon
+    // as they get inside the standoff range.
+    const fwdX = Math.sin(state.heading), fwdZ = Math.cos(state.heading)
+    const dot = fwdX * dx + fwdZ * dz
+    const pastTarget = (dot < 0)
+    const triggerEgress = opts.bomberMode
+      ? (pastTarget && dist >= passthrough)
+      : (dist < egressDist)
+    if (triggerEgress) {
       state.atkPhase = 'egress'
-      const fwdX = Math.sin(state.heading), fwdZ = Math.cos(state.heading)
       const sx = fwdZ, sz = -fwdX
       state.flybySide = (state.flybySide || 1) * -1
       const lead = Math.max(180, range * 1.2)

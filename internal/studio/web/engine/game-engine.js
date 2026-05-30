@@ -722,6 +722,24 @@ export class GameEngine {
       // stay on approach until they're directly over the target so the bomb run
       // lays bombs along the target itself, not 40% of range short of it.
       const bomberMode = !!(eweapon && eweapon.dropped)
+      // Drop-window half-length — re-derived here from the same weapon TDF
+      // fields as the bomb-run gate in #stepWeapon (areaofeffect × 4 / spacing,
+      // where spacing = carrier-speed × reload).  Passing it to attackManeuver
+      // lets the bomber hold heading through the entire string and only bank
+      // once it has flown clear of the FAR edge, so all 4-ish bombs land on a
+      // straight line instead of curving away after bomb 2.  A small buffer
+      // past the last release point keeps the bomber from cutting the run
+      // short on the trailing edge.
+      let bomberPassthrough = 0
+      if (bomberMode && eweapon) {
+        const carrierSpeed = Math.max(1, u.speed || 0)
+        const reloadSec = (eweapon.reloadSec > 0) ? eweapon.reloadSec : 0.18
+        const spacing = carrierSpeed * reloadSec
+        const desiredRun = (eweapon.areaOfEffectWU > 0 ? eweapon.areaOfEffectWU : 32) * 4
+        const bombsTotal = Math.max(2, Math.ceil(desiredRun / spacing))
+        const halfRun = ((bombsTotal - 1) * spacing) / 2
+        bomberPassthrough = Math.min(600, halfRun + 30)
+      }
       // Move usually preempts the attack maneuver — the player asked the unit
       // to go somewhere, so the aircraft drops its pattern and obeys.  Bombers
       // are different: an attack-ground order is a sticky patrol-and-bomb task
@@ -740,7 +758,7 @@ export class GameEngine {
         atkPhase: u._atk.atkPhase, sweepPhase: u._atk.sweepPhase, sweepCenter: u._atk.sweepCenter,
         egX: u._atk.egX, egZ: u._atk.egZ, flybySide: u._atk.flybySide,
       }
-      attackManeuver(st, ex, ez, u.meta, range, dtSec, { bomberMode })
+      attackManeuver(st, ex, ez, u.meta, range, dtSec, { bomberMode, bomberPassthroughDist: bomberPassthrough })
       u.pos.x = st.x; u.pos.z = st.z; u.heading = st.heading; u.speed = st.speed
       u._atk = {
         atkPhase: st.atkPhase, sweepPhase: st.sweepPhase, sweepCenter: st.sweepCenter,
