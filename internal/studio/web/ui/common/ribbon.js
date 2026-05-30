@@ -336,11 +336,18 @@ export function MenuSubmenuRow({
     if (on !== null && onToggle) onToggle(!on)
   }
   const isToggle = on !== null
+  // A toggle-submenu row only reveals its pop-out while it's ON.  An
+  // OFF effect has nothing to configure, and letting the slider show
+  // while off read as if the slider itself controlled on/off (drag to
+  // 100 %, but the toggle still says Off).  Non-toggle pickers
+  // (Environment / Team) always pop out.
+  const canPopOut = !isToggle || !!on
+  const showSub = openSubmenu && canPopOut
   const cls = [
     'menu-row', 'menu-row-submenu',
     isToggle ? 'menu-row-toggle-submenu' : '',
     isToggle && on ? 'active' : '',
-    openSubmenu ? 'open' : '',
+    showSub ? 'open' : '',
     className,
   ].filter(Boolean).join(' ')
   return html`
@@ -357,9 +364,10 @@ export function MenuSubmenuRow({
       ${/* No check glyph: a pop-out row's on/off is shown by the row's
            .active highlight, and the (enlarged) chevron sits in the
            same right-hand column the plain toggle rows' checks use so
-           everything lines up vertically. */ ''}
-      <span class="chev-right">▸</span>
-      <div ref=${subRef} class=${'ribbon-submenu' + (openSubmenu ? '' : ' hidden')}>
+           everything lines up vertically.  Hidden while the toggle is
+           off since there's no pop-out to reach. */ ''}
+      ${canPopOut ? html`<span class="chev-right">▸</span>` : null}
+      <div ref=${subRef} class=${'ribbon-submenu' + (showSub ? '' : ' hidden')}>
         ${children}
       </div>
     </div>

@@ -1452,7 +1452,17 @@ kbd {
    and clicks are ignored by JS. */
 .ribbon-dropdown-popup .menu-row.disabled-locked {
   cursor: not-allowed;
-  opacity: 0.85;
+  opacity: 0.4;
+}
+/* A disabled row keeps its state (e.g. Self-Shadowing stays ticked) but
+   must read as inert — drop the bright active fill back to the muted
+   hover tone so "greyed out" is unmistakable even when it's also on. */
+.ribbon-dropdown-popup .menu-row.disabled-locked.active {
+  background: var(--bg-2);
+  color: var(--text);
+}
+.ribbon-dropdown-popup .menu-row.disabled-locked.active .menu-check {
+  color: var(--text);
 }
 .ribbon-dropdown-popup .menu-row.disabled-locked:hover {
   background: var(--bg-2);
