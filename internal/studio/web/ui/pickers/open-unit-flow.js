@@ -19,6 +19,13 @@
 import { $, hostCallbacks, getReactUi } from '../host-context.js'
 import { fetchModels, availableModels, isLoaded as modelsLoaded } from './model-catalog.js'
 
+// Surfaces that were visible at openModelPicker() entry; closeModelPicker
+// flips each one back if the user cancels.  Mirrors the open-map flow —
+// snapshot/restore rather than switch-on-tab-type, so sandbox tabs (which
+// share #model-viewer-dialog with model tabs in .sandbox-mode) restore
+// correctly instead of falling through to the welcome screen.
+let openUnitPriorSurfaces = null
+
 // openModelPicker — hides whichever editor surface currently has
 // focus, makes sure the React UI island has finished its dynamic
 // import (cold-boot path), drains the catalogue if it hasn't been
@@ -29,6 +36,14 @@ import { fetchModels, availableModels, isLoaded as modelsLoaded } from './model-
 //   sandbox spawn  → beginPlacement on the active SandboxView
 //   open viewer    → host's openModelViewer (pushes a new tab)
 export async function openModelPicker() {
+  // Snapshot the three top-level surfaces before we hide the front-
+  // most ones, so the cancel path can restore the same state without
+  // having to enumerate every tab type.
+  openUnitPriorSurfaces = {
+    welcome:   !$('#welcome-dialog').classList.contains('hidden'),
+    viewer:    !$('#model-viewer-dialog').classList.contains('hidden'),
+    appEditor: !$('#app').classList.contains('hidden'),
+  }
   // The picker is React-managed.  Hide whichever editor surface was
   // on top so the modal isn't fighting another dialog stack for
   // the user's eye, then open the React picker.  The legacy
@@ -59,6 +74,9 @@ export async function openModelPicker() {
     closeModelPicker()
     return
   }
+  // From here on we're on a success path — clear the entry snapshot so
+  // a future cancel from a different open can't replay a stale state.
+  openUnitPriorSurfaces = null
   if (result.sandboxIntent) {
     // The side-colour picker stashed the chosen team side on the
     // __sandboxSpawnPending* globals before openModelPicker fired;
@@ -77,17 +95,29 @@ export async function openModelPicker() {
 }
 
 // closeModelPicker — React owns the dialog DOM, so dismissing is
-// "close the open-state signal".  When the user cancelled via Esc /
-// Cancel the React dialog has already cleared itself, so this is
-// mainly the post-confirm cleanup path: restore whichever editor
-// surface was on top before the picker opened.
+// "close the open-state signal".  Snapshot/restore via
+// openUnitPriorSurfaces means we put back exactly the surfaces that
+// were on screen at open time, regardless of the active tab type —
+// previously a sandbox tab fell through the model/map switch and
+// landed on the welcome screen.
 export function closeModelPicker() {
   const ui = getReactUi()
   if (ui && typeof ui.closeUnitDialog === 'function') {
     ui.closeUnitDialog()
   }
+  const prior = openUnitPriorSurfaces
+  openUnitPriorSurfaces = null
+  if (prior) {
+    $('#welcome-dialog').classList.toggle('hidden', !prior.welcome)
+    $('#model-viewer-dialog').classList.toggle('hidden', !prior.viewer)
+    $('#app')?.classList.toggle('hidden', !prior.appEditor)
+    return
+  }
+  // Fallback for a close call with no matching open snapshot (defensive;
+  // shouldn't happen in the current flow but keeps the screen non-blank
+  // if a future caller invokes closeModelPicker out-of-band).
   const activeTab = hostCallbacks.getActiveTab?.()
-  if (activeTab?.type === 'model') {
+  if (activeTab?.type === 'model' || activeTab?.type === 'sandbox') {
     $('#model-viewer-dialog').classList.remove('hidden')
   } else if (activeTab?.type === 'map') {
     $('#app')?.classList.remove('hidden')
