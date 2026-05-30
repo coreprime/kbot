@@ -136,7 +136,12 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "weapon not found", http.StatusNotFound)
 		return
 	}
-	rt := sec.Int("rendertype")
+	// Stock TA weapon TDFs commonly carry trailing junk on numeric
+	// fields ("rendertype=4;\t/* 2D bitmap */"), so the cleaner-aware
+	// helpers (used everywhere else in the studio for the same fields)
+	// are the right read.  Bare sec.Int would 0-default on the EMG
+	// rendertype and bounce every bitmap weapon back as "not bitmap".
+	rt := intFieldClean(sec, "rendertype")
 	if rt != 4 {
 		// Not a bitmap weapon — caller should be checking renderType
 		// before hitting this endpoint, but a defensive 404 here keeps
@@ -145,7 +150,7 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "weapon is not rendertype=4 bitmap", http.StatusNotFound)
 		return
 	}
-	colorSlot := sec.Int("color")
+	colorSlot := intFieldClean(sec, "color")
 	seqName, ok := colorSlotToFxSequence[colorSlot]
 	if !ok || seqName == "" {
 		_cacheWeaponBitmapMiss(key)
