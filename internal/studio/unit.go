@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/tdf"
 )
@@ -329,7 +329,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name = strings.ToLower(strings.TrimSuffix(name, ".fbi"))
-	fbiDoc, err := loadUnitFBI(name)
+	unit, err := loadUnitFBI(name)
 	if err != nil {
 		// 404 for missing FBI — many 3DOs ship without a unit ref
 		// (props / features).  Client treats absence as "no controls
@@ -337,30 +337,13 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unit fbi not found", http.StatusNotFound)
 		return
 	}
-	// FBI files key their single section by the unit's name (e.g.
-	// [ARMCOM], [CORKBOT]), not by a fixed [UNITINFO] tag.  Grab the
-	// first section that carries an Objectname — that's the unit
-	// definition.  Skips comment-only blocks if any.
-	var info *tdf.Section
-	for _, s := range fbiDoc.Sections() {
-		if strings.TrimSpace(s.String("Objectname")) != "" || strings.TrimSpace(s.String("UnitName")) != "" {
-			info = s
-			break
-		}
-	}
-	if info == nil && len(fbiDoc.Sections()) > 0 {
-		info = fbiDoc.Sections()[0]
-	}
-	if info == nil {
-		http.Error(w, "fbi has no sections", http.StatusInternalServerError)
-		return
-	}
+	info := &unit.Info
 	out := unitMetaJSON{
 		Name:         name,
-		MaxVelocity:  info.Float("MaxVelocity"),
-		TurnRate:     info.Float("TurnRate"),
-		Acceleration: info.Float("Acceleration"),
-		BrakeRate:    info.Float("BrakeRate"),
+		MaxVelocity:  info.MaxVelocity,
+		TurnRate:     float64(info.TurnRate),
+		Acceleration: info.Acceleration,
+		BrakeRate:    info.BrakeRate,
 	}
 	// CanMove: non-zero MaxVelocity is the cheapest signal that the
 	// unit isn't a structure / wreckage.  Static category flags
@@ -371,11 +354,8 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// keyword.  Check both so we catch units that flag their domain
 	// in one but not the other (Commander uses Category to convey
 	// "wades but doesn't swim", for example).
-	tedClass := strings.ToUpper(strings.TrimSpace(info.String("TEDClass")))
-	catTokens := map[string]bool{}
-	for _, t := range strings.Fields(strings.ToUpper(info.String("Category"))) {
-		catTokens[t] = true
-	}
+	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
+	catTokens := categoryTokens(info.Category)
 	switch tedClass {
 	case "SHIP":
 		out.IsShip = true
@@ -398,7 +378,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// stock TA aircraft sets it.  Picking it up here means modded
 	// units that omit the VTOL TEDClass / Category still get the
 	// aircraft flight model.
-	if info.Int("Canfly") == 1 {
+	if info.CanFly == 1 {
 		out.IsAircraft = true
 	}
 	if catTokens["SHIP"] && !out.IsSub {
@@ -412,7 +392,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// torpedo launchers).  Treat as sub unless Floater=1 is set,
 	// in which case it's a surface unit.
 	if tedClass == "WATER" {
-		if info.Int("Floater") == 1 || catTokens["SHIP"] {
+		if info.Floater == 1 || catTokens["SHIP"] {
 			out.IsShip = true
 		} else {
 			out.IsSub = true
@@ -421,7 +401,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// HoverAttack=1 → unit can stop and rotate in place (gunship-
 	// style).  Without it, fixed-wing aircraft must keep moving
 	// (the studio's flight scheduler arcs them around the target).
-	out.IsHover = info.Int("HoverAttack") == 1
+	out.IsHover = info.HoverAttack == 1
 	// Hovercraft vehicles tag themselves with the HOVER Category token
 	// (Construction Hovercraft, Anaconda, ...).  They drive on the ground
 	// plane but ride an air cushion, so the studio gives them a procedural
@@ -431,11 +411,11 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// to 1 when the FBI omits them, so surface 1 for any flier and 0 otherwise
 	// (the renderer skips banking when the scale is 0).
 	if out.IsAircraft {
-		out.BankScale = info.Float("BankScale")
+		out.BankScale = info.BankScale
 		if out.BankScale <= 0 {
 			out.BankScale = 1
 		}
-		out.PitchScale = info.Float("PitchScale")
+		out.PitchScale = info.PitchScale
 		if out.PitchScale <= 0 {
 			out.PitchScale = 1
 		}
@@ -444,16 +424,15 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// construction units (Builder + WorkerTime > 0).  The studio
 	// only needs the boolean for panel gating; per-class behaviour
 	// (factory vs construction) isn't differentiated here.
-	out.IsBuilder = info.Int("Builder") == 1
+	out.IsBuilder = info.Builder == 1
 	// onoffable=1 — unit can be manually toggled on/off by the
-	// player (Radar, Solar, Adv Fusion).  TA uses the lowercase
-	// spelling consistently in the original FBIs.
-	out.OnOffable = info.Int("onoffable") == 1
+	// player (Radar, Solar, Adv Fusion).
+	out.OnOffable = info.OnOffable == 1
 	// CruiseAltitude: FBI `CruiseAlt` for aircraft, otherwise 0.
 	// Defaults pick a sensible mid-air position when the FBI is
 	// silent (some unit FBIs omit the field).
 	if out.IsAircraft {
-		out.CruiseAltitude = info.Float("CruiseAlt")
+		out.CruiseAltitude = info.CruiseAlt
 		if out.CruiseAltitude <= 0 {
 			if out.IsHover {
 				out.CruiseAltitude = 60
@@ -477,8 +456,9 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		{Slot: "tertiary", Index: 3},
 	}
 	overrideKeys := []string{"weapon1", "weapon2", "weapon3"}
-	for i, key := range []string{"Weapon1", "Weapon2", "Weapon3"} {
-		w := strings.ToUpper(strings.TrimSpace(info.String(key)))
+	fbiWeapons := []string{info.Weapon1, info.Weapon2, info.Weapon3}
+	for i := range fbiWeapons {
+		w := strings.ToUpper(strings.TrimSpace(fbiWeapons[i]))
 		// Per-slot override from the query string — wins over FBI.
 		if ov := strings.TrimSpace(r.URL.Query().Get(overrideKeys[i])); ov != "" {
 			w = strings.ToUpper(ov)
@@ -495,17 +475,17 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// path.  Uppercased so the eventual /api/studio/weapon-fx/<name>
 	// fetch matches the weapon-by-name resolver (which lowercases for
 	// comparison anyway).
-	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.String("ExplodeAs")))
-	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.String("SelfDestructAs")))
+	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.ExplodeAs))
+	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.SelfDestructAs))
 	// Sounds — SoundCategory keys into gamedata/sound.tdf.  Each
 	// section there maps named events (select1, ok1, arrived1, ...)
 	// to .wav stems in sounds/.  Studio plays the matching .wav
 	// when the user performs the corresponding action.
-	if cat := strings.ToUpper(strings.TrimSpace(info.String("SoundCategory"))); cat != "" {
-		if sec := loadSoundSection(cat); sec != nil {
+	if cat := strings.ToUpper(strings.TrimSpace(info.SoundCategory)); cat != "" {
+		if events := loadSoundSection(cat); events != nil {
 			out.Sounds = make(map[string]string)
 			for _, key := range soundEventKeys {
-				if v := strings.TrimSpace(sec.String(key)); v != "" {
+				if v := strings.TrimSpace(events[key]); v != "" {
 					out.Sounds[key] = strings.ToLower(v)
 				}
 			}
@@ -535,20 +515,24 @@ var soundEventKeys = []string{
 // section (case-insensitive).  Cached for the server lifetime so
 // repeated unit-meta requests don't re-parse the (large) TDF.
 var (
-	soundTDFMu   sync.Mutex
-	soundTDFOnce sync.Once
-	soundTDFDoc  *tdf.Document
+	soundTDFMu      sync.Mutex
+	soundTDFOnce    sync.Once
+	soundTDFClasses []ta.SoundClass
 )
 
-func loadSoundSection(name string) *tdf.Section {
+// loadSoundSection reads gamedata/sound.tdf and returns the named class's
+// event map (event name → sound stem) with keys lower-cased, or nil when the
+// file or class is missing.  Cached for the server lifetime.
+func loadSoundSection(name string) map[string]string {
 	soundTDFOnce.Do(func() {
 		// gamedata/sound.tdf is the canonical location in TA.  Try
 		// the lowercase + casing variants so mods that ship the
 		// file with a different name still resolve.
 		for _, p := range []string{"gamedata/sound.tdf", "gamedata/SOUND.tdf", "GameData/sound.tdf"} {
 			if data, err := vfs.ReadFile(p); err == nil {
-				if doc, derr := tdf.ParseString(string(data)); derr == nil {
-					soundTDFDoc = doc
+				var classes []ta.SoundClass
+				if derr := tdf.Unmarshal(data, &classes); derr == nil {
+					soundTDFClasses = classes
 					return
 				}
 			}
@@ -556,13 +540,15 @@ func loadSoundSection(name string) *tdf.Section {
 	})
 	soundTDFMu.Lock()
 	defer soundTDFMu.Unlock()
-	if soundTDFDoc == nil {
-		return nil
-	}
-	for _, s := range soundTDFDoc.Sections() {
-		if strings.EqualFold(s.Name(), name) {
-			return s
+	for i := range soundTDFClasses {
+		if !strings.EqualFold(soundTDFClasses[i].Key, name) {
+			continue
 		}
+		events := make(map[string]string, len(soundTDFClasses[i].Events))
+		for k, v := range soundTDFClasses[i].Events {
+			events[strings.ToLower(k)] = v
+		}
+		return events
 	}
 	return nil
 }
@@ -571,15 +557,22 @@ func loadSoundSection(name string) *tdf.Section {
 // case-insensitive match.  Unit names in the file system are
 // frequently mixed-case (e.g. ARMCOM.FBI) so we don't trust a
 // straight ReadFile.
-func loadUnitFBI(name string) (*tdf.Document, error) {
+func loadUnitFBI(name string) (*ta.Unit, error) {
 	candidates := []string{
 		"units/" + name + ".fbi",
 		"units/" + strings.ToUpper(name) + ".FBI",
 		"Units/" + name + ".fbi",
 	}
+	parse := func(data []byte) (*ta.Unit, error) {
+		var u ta.Unit
+		if err := tdf.Unmarshal(data, &u); err != nil {
+			return nil, err
+		}
+		return &u, nil
+	}
 	for _, p := range candidates {
 		if data, err := vfs.ReadFile(p); err == nil {
-			return tdf.ParseString(string(data))
+			return parse(data)
 		}
 	}
 	// Last-ditch: walk the entire VFS for a case-insensitive name match.
@@ -587,7 +580,7 @@ func loadUnitFBI(name string) (*tdf.Document, error) {
 	for _, p := range vfs.List() {
 		if strings.ToLower(basename(p)) == want {
 			if data, err := vfs.ReadFile(p); err == nil {
-				return tdf.ParseString(string(data))
+				return parse(data)
 			}
 		}
 	}
@@ -598,7 +591,7 @@ func loadUnitFBI(name string) (*tdf.Document, error) {
 // matches `name` (case-insensitive).  Returns nil when no weapons
 // folder ships or the ref doesn't resolve — the client treats that
 // as "use default reload" and the Fire button still works.
-func loadWeaponSection(name string) *tdf.Section {
+func loadWeaponSection(name string) *ta.Weapon {
 	want := strings.ToUpper(strings.TrimSpace(name))
 	for _, p := range vfs.List() {
 		lower := strings.ToLower(p)
@@ -609,13 +602,13 @@ func loadWeaponSection(name string) *tdf.Section {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
+		var weapons []ta.Weapon
+		if err := tdf.Unmarshal(data, &weapons); err != nil {
 			continue
 		}
-		for _, sec := range doc.Sections() {
-			if strings.ToUpper(sec.Name()) == want {
-				return sec
+		for i := range weapons {
+			if strings.ToUpper(weapons[i].Key) == want {
+				return &weapons[i]
 			}
 		}
 	}
@@ -627,123 +620,105 @@ func loadWeaponSection(name string) *tdf.Section {
 // the catalogue /api/studio/weapons endpoint so both expose the same
 // fields with the same defaults (and the Change Weapon picker can
 // show the same stats the active panel will display after swap).
-func populateWeaponJSON(out *unitWeaponJSON, sec *tdf.Section) {
-	// `id=` — engine-internal weapon table index.  intFieldClean
-	// handles trailing /* comment */ and semicolon junk that some
-	// stock weapon TDFs ship with their integer values.
-	out.WeaponID = intFieldClean(sec, "id")
-	out.ReloadSec = sec.Float("reloadtime")
-	out.RangeWU = sec.Float("range")
-	out.VelocityWU = sec.Float("weaponvelocity")
-	out.Ballistic = boolish(sec.String("ballistic"))
-	out.SoundStart = strings.ToLower(strings.TrimSpace(sec.String("soundstart")))
-	out.SoundHit = strings.ToLower(strings.TrimSpace(sec.String("soundhit")))
-	burst := sec.Int("burst")
+func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
+	lc := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	out.WeaponID = sec.ID
+	out.ReloadSec = sec.ReloadTime
+	out.RangeWU = float64(sec.Range)
+	out.VelocityWU = sec.WeaponVelocity
+	out.Ballistic = sec.Ballistic != 0
+	out.SoundStart = lc(sec.SoundStart)
+	out.SoundHit = lc(sec.SoundHit)
+	burst := sec.Burst
 	if burst < 1 {
 		burst = 1
 	}
 	out.Burst = burst
-	out.BurstRateSec = sec.Float("burstrate")
-	out.BeamWeapon = boolish(sec.String("beamweapon"))
-	out.SmokeTrail = boolish(sec.String("smoketrail"))
-	out.SelfProp = boolish(sec.String("selfprop"))
-	out.Tracks = boolish(sec.String("tracks"))
-	out.StartVelocityWU = sec.Float("startvelocity")
-	out.AccelerationWU = sec.Float("weaponacceleration")
-	out.ColorIdx = intFieldClean(sec, "color")
-	out.Color2Idx = intFieldClean(sec, "color2")
-	out.Model = strings.ToLower(strings.TrimSpace(sec.String("model")))
-	out.DurationSec = sec.Float("duration")
-	out.CommandFire = boolish(sec.String("commandfire"))
-	out.Dropped = boolish(sec.String("dropped"))
-	out.VLaunch = boolish(sec.String("vlaunch"))
-	out.Tolerance = intFieldClean(sec, "tolerance")
-	out.PitchTolerance = intFieldClean(sec, "pitchtolerance")
-	out.TurnRate = intFieldClean(sec, "turnrate")
-	out.FlightTimeSec = sec.Float("weapontimer")
-	out.Cruise = boolish(sec.String("cruise"))
-	out.AreaOfEffectWU = sec.Float("areaofeffect")
+	out.BurstRateSec = sec.BurstRate
+	out.BeamWeapon = sec.BeamWeapon != 0
+	out.SmokeTrail = sec.SmokeTrail != 0
+	out.SelfProp = sec.SelfProp != 0
+	out.Tracks = sec.Tracks != 0
+	out.StartVelocityWU = sec.StartVelocity
+	out.AccelerationWU = sec.WeaponAcceleration
+	out.ColorIdx = sec.Color
+	out.Color2Idx = sec.Color2
+	out.Model = lc(sec.Model)
+	out.DurationSec = sec.Duration
+	out.CommandFire = sec.CommandFire != 0
+	out.Dropped = sec.Dropped != 0
+	out.VLaunch = sec.VLaunch != 0
+	out.Tolerance = sec.Tolerance
+	out.PitchTolerance = sec.PitchTolerance
+	out.TurnRate = sec.TurnRate
+	out.FlightTimeSec = sec.WeaponTimer
+	out.Cruise = sec.Cruise != 0
+	out.AreaOfEffectWU = float64(sec.AreaOfEffect)
 
 	// Render method + trajectory/targeting category flags.
-	out.RenderType = intFieldClean(sec, "rendertype")
-	out.Turret = boolish(sec.String("turret"))
-	out.LineOfSight = boolish(sec.String("lineofsight"))
-	out.Guidance = boolish(sec.String("guidance"))
-	out.WaterWeapon = boolish(sec.String("waterweapon"))
-	out.TwoPhase = boolish(sec.String("twophase"))
-	out.NoAutoRange = boolish(sec.String("noautorange"))
-	out.BurnBlow = boolish(sec.String("burnblow"))
-	out.Propeller = boolish(sec.String("propeller"))
-	out.UnitsOnly = boolish(sec.String("unitsonly"))
-	out.Targetable = boolish(sec.String("targetable"))
-	out.Interceptor = boolish(sec.String("interceptor"))
-	out.Meteor = boolish(sec.String("meteor"))
-	out.Paralyzer = boolish(sec.String("paralyzer"))
-	out.NoExplode = boolish(sec.String("noexplode"))
-	out.NoRadar = boolish(sec.String("noradar"))
-	out.GroundBounce = boolish(sec.String("groundbounce"))
-	out.Stockpile = boolish(sec.String("stockpile"))
-	out.ToAirWeapon = boolish(sec.String("toairweapon"))
-	out.StartFire = boolish(sec.String("startfire"))
-	out.SoundTrigger = boolish(sec.String("soundtrigger"))
-	out.StartSmoke = boolish(sec.String("startsmoke"))
-	out.EndSmoke = boolish(sec.String("endsmoke"))
+	out.RenderType = sec.RenderType
+	out.Turret = sec.Turret != 0
+	out.LineOfSight = sec.LineOfSight != 0
+	out.Guidance = sec.Guidance != 0
+	out.WaterWeapon = sec.WaterWeapon != 0
+	out.TwoPhase = sec.TwoPhase != 0
+	out.NoAutoRange = sec.NoAutoRange != 0
+	out.BurnBlow = sec.BurnBlow != 0
+	out.Propeller = sec.Propeller != 0
+	out.UnitsOnly = sec.UnitsOnly != 0
+	out.Targetable = sec.Targetable != 0
+	out.Interceptor = sec.Interceptor != 0
+	out.Meteor = sec.Meteor != 0
+	out.Paralyzer = sec.Paralyzer != 0
+	out.NoExplode = sec.NoExplode != 0
+	out.NoRadar = sec.NoRadar != 0
+	out.GroundBounce = sec.GroundBounce != 0
+	out.Stockpile = sec.Stockpile != 0
+	out.ToAirWeapon = sec.ToAirWeapon != 0
+	out.StartFire = sec.StartFire != 0
+	out.SoundTrigger = sec.SoundTrigger != 0
+	out.StartSmoke = sec.StartSmoke != 0
+	out.EndSmoke = sec.EndSmoke != 0
 
 	// Integer tuning fields.
-	out.Coverage = intFieldClean(sec, "coverage")
-	out.Firestarter = intFieldClean(sec, "firestarter")
-	out.EnergyPerShot = intFieldClean(sec, "energypershot")
-	out.MetalPerShot = intFieldClean(sec, "metalpershot")
-	out.EnergyCost = intFieldClean(sec, "energy")
-	out.MetalCost = intFieldClean(sec, "metal")
-	out.ShakeMagnitude = intFieldClean(sec, "shakemagnitude")
-	out.MinBarrelAngle = intFieldClean(sec, "minbarrelangle")
-	out.SprayAngle = intFieldClean(sec, "sprayangle")
-	out.Accuracy = intFieldClean(sec, "accuracy")
-	out.AimRate = intFieldClean(sec, "aimrate")
-	out.HoldTime = intFieldClean(sec, "holdtime")
+	out.Coverage = sec.Coverage
+	out.Firestarter = int(sec.FireStarter)
+	out.EnergyPerShot = int(sec.EnergyPerShot)
+	out.MetalPerShot = sec.MetalPerShot
+	out.EnergyCost = sec.Energy
+	out.MetalCost = sec.Metal
+	out.ShakeMagnitude = sec.ShakeMagnitude
+	out.MinBarrelAngle = int(sec.MinBarrelAngle)
+	out.SprayAngle = sec.SprayAngle
+	out.Accuracy = sec.Accuracy
+	out.AimRate = sec.AimRate
+	out.HoldTime = sec.HoldTime
 
 	// Floating-point timing / falloff fields.
-	out.EdgeEffectiveness = floatFieldClean(sec, "edgeeffectiveness")
-	out.SmokeDelaySec = floatFieldClean(sec, "smokedelay")
-	out.ShakeDurationSec = floatFieldClean(sec, "shakeduration")
-	out.RandomDecaySec = floatFieldClean(sec, "randomdecay")
-	out.FlightTime = floatFieldClean(sec, "flighttime")
+	out.EdgeEffectiveness = sec.EdgeEffectiveness
+	out.SmokeDelaySec = sec.SmokeDelay
+	out.ShakeDurationSec = sec.ShakeDuration
+	out.RandomDecaySec = sec.RandomDecay
+	out.FlightTime = sec.FlightTime
 
 	// Explosion art references + water-impact sound.
-	out.ExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("explosiongaf")))
-	out.ExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("explosionart")))
-	out.WaterExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("waterexplosiongaf")))
-	out.WaterExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("waterexplosionart")))
-	out.LavaExplosionGaf = strings.ToLower(strings.TrimSpace(sec.String("lavaexplosiongaf")))
-	out.LavaExplosionArt = strings.ToLower(strings.TrimSpace(sec.String("lavaexplosionart")))
-	out.SoundWater = strings.ToLower(strings.TrimSpace(sec.String("soundwater")))
+	out.ExplosionGaf = lc(sec.ExplosionGAF)
+	out.ExplosionArt = lc(sec.ExplosionArt)
+	out.WaterExplosionGaf = lc(sec.WaterExplosionGAF)
+	out.WaterExplosionArt = lc(sec.WaterExplosionArt)
+	out.LavaExplosionGaf = lc(sec.LavaExplosionGAF)
+	out.LavaExplosionArt = lc(sec.LavaExplosionArt)
+	out.SoundWater = lc(sec.SoundWater)
 
 	// Nested [DAMAGE] table — `default=` plus per-target-name overrides.
 	// Keys are lowercased so a client lookup by unit name is case-stable.
-	for _, sub := range sec.Sections() {
-		if !strings.EqualFold(sub.Name(), "DAMAGE") {
-			continue
+	if len(sec.Damage) > 0 {
+		dmg := make(map[string]int, len(sec.Damage))
+		for k, v := range sec.Damage {
+			dmg[strings.ToLower(strings.TrimSpace(k))] = v
 		}
-		dmg := map[string]int{}
-		for _, f := range sub.Fields() {
-			key := strings.ToLower(strings.TrimSpace(f.Key()))
-			if key == "" {
-				continue
-			}
-			val := cleanNumeric(f.Value())
-			if val == "" {
-				continue
-			}
-			if n, err := strconv.Atoi(val); err == nil {
-				dmg[key] = n
-			}
-		}
-		if len(dmg) > 0 {
-			out.Damage = dmg
-			out.DamageDefault = dmg["default"]
-		}
-		break
+		out.Damage = dmg
+		out.DamageDefault = dmg["default"]
 	}
 }
 
@@ -774,18 +749,18 @@ func buildWeaponsList() []unitWeaponJSON {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
+		var weapons []ta.Weapon
+		if err := tdf.Unmarshal(data, &weapons); err != nil {
 			continue
 		}
-		for _, sec := range doc.Sections() {
-			name := strings.ToUpper(strings.TrimSpace(sec.Name()))
+		for i := range weapons {
+			name := strings.ToUpper(strings.TrimSpace(weapons[i].Key))
 			if name == "" || seen[name] {
 				continue
 			}
 			seen[name] = true
 			w := unitWeaponJSON{Name: name}
-			populateWeaponJSON(&w, sec)
+			populateWeaponJSON(&w, &weapons[i])
 			out = append(out, w)
 		}
 	}
@@ -801,60 +776,6 @@ func handleWeaponsList(w http.ResponseWriter, _ *http.Request) {
 	weaponsListMu.Lock()
 	defer weaponsListMu.Unlock()
 	writeJSON(w, weaponsListCache)
-}
-
-func boolish(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
-// cleanNumeric strips trailing inline /* … */ or // comments and the
-// line-terminator semicolon from a raw TDF value, returning the bare
-// number text.  Shared by the int/float field readers and the [DAMAGE]
-// table parse so every numeric read tolerates the comment junk stock
-// weapon TDFs ship with (e.g. `color=232; /* GREEN */`).
-func cleanNumeric(raw string) string {
-	if idx := strings.Index(raw, "/*"); idx >= 0 {
-		raw = raw[:idx]
-	}
-	if idx := strings.Index(raw, "//"); idx >= 0 {
-		raw = raw[:idx]
-	}
-	raw = strings.TrimRight(strings.TrimSpace(raw), ";")
-	return strings.TrimSpace(raw)
-}
-
-// intFieldClean reads sec.String(key), strips trailing inline /* … */
-// comments and the line-terminator semicolon, and Atoi-parses what's
-// left.  Workaround for weapon-TDF entries like `color=232; /* GREEN */`
-// where the generic TDF parser keeps the whole tail in the raw value
-// and Atoi rejects it.  Returns 0 on missing / unparseable values.
-func intFieldClean(sec *tdf.Section, key string) int {
-	raw := cleanNumeric(sec.String(key))
-	if raw == "" {
-		return 0
-	}
-	if i, err := strconv.Atoi(raw); err == nil {
-		return i
-	}
-	return 0
-}
-
-// floatFieldClean mirrors intFieldClean for fractional values
-// (edgeeffectiveness, smokedelay, …) — leading-dot forms like `.3` parse
-// fine through strconv.ParseFloat.  Returns 0 on missing / unparseable.
-func floatFieldClean(sec *tdf.Section, key string) float64 {
-	raw := cleanNumeric(sec.String(key))
-	if raw == "" {
-		return 0
-	}
-	if f, err := strconv.ParseFloat(raw, 64); err == nil {
-		return f
-	}
-	return 0
 }
 
 // errFBINotFound is the sentinel for the 404 path so the handler can

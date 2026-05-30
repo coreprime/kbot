@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/objects3d"
 	"github.com/coreprime/kbot/formats/pcx"
@@ -124,41 +125,40 @@ func buildModelIndex() {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
+		var u ta.Unit
+		if err := tdf.Unmarshal(data, &u); err != nil {
 			continue
 		}
-		for _, s := range doc.Sections() {
-			unitName := strings.TrimSpace(s.String("UnitName"))
-			obj := strings.ToLower(strings.TrimSpace(s.String("Objectname")))
-			if unitName == "" && obj == "" {
-				continue // not a unit section
-			}
-			key := strings.ToLower(unitName)
-			if key == "" {
-				key = obj
-			}
-			if _, dup := byID[key]; dup {
-				continue
-			}
-			threePath := seen.threeDO[obj]
-			entry := modelEntry{
-				Name:           key,
-				Path:           threePath,
-				UnitName:       unitName,
-				UnitTitle:      s.String("Name"),
-				Side:           s.String("Side"),
-				Description:    s.String("Description"),
-				Category:       s.String("TEDClass"),
-				DefaultGround:  inferDefaultGround(s),
-				SubmersionMode: inferSubmersionMode(s),
-				HasFBI:         true,
-				Has3DO:         threePath != "",
-				HasCOB:         seen.cob[key] || seen.cob[obj],
-				HasBuildPic:    seen.buildPic[key] || seen.buildPic[obj] || seen.buildPic[strings.ToLower(unitName)],
-			}
-			byID[key] = entry
+		info := &u.Info
+		unitName := strings.TrimSpace(info.UnitName)
+		obj := strings.ToLower(strings.TrimSpace(info.ObjectName))
+		if unitName == "" && obj == "" {
+			continue // not a unit section
 		}
+		key := strings.ToLower(unitName)
+		if key == "" {
+			key = obj
+		}
+		if _, dup := byID[key]; dup {
+			continue
+		}
+		threePath := seen.threeDO[obj]
+		entry := modelEntry{
+			Name:           key,
+			Path:           threePath,
+			UnitName:       unitName,
+			UnitTitle:      info.Name,
+			Side:           info.Side,
+			Description:    info.Description,
+			Category:       info.TEDClass,
+			DefaultGround:  inferDefaultGround(info),
+			SubmersionMode: inferSubmersionMode(info),
+			HasFBI:         true,
+			Has3DO:         threePath != "",
+			HasCOB:         seen.cob[key] || seen.cob[obj],
+			HasBuildPic:    seen.buildPic[key] || seen.buildPic[obj] || seen.buildPic[strings.ToLower(unitName)],
+		}
+		byID[key] = entry
 	}
 
 	// Add any orphan 3DOs that no FBI references — props / features /
@@ -225,17 +225,17 @@ func handleModelsList(w http.ResponseWriter, _ *http.Request) {
 // the water" gets the Sea ground; everything else falls through to
 // Terrain (which the client treats as the default when this field is
 // empty).
-func inferDefaultGround(s *tdf.Section) string {
-	ted := strings.ToUpper(strings.TrimSpace(s.String("TEDClass")))
+func inferDefaultGround(info *ta.UnitInfo) string {
+	ted := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	switch ted {
 	case "SHIP", "SUB", "UWMINE", "UWBLDG":
 		return "sea"
 	}
-	// Category is a space-separated token list — e.g. ARMCOM has
-	// `ARM commander LEVEL10 WEAPON NOTAIR NOTSUB CTRL_C`.  A plain
-	// substring check matched the `SUB` inside `NOTSUB` and shoved
-	// the Commander onto Sea.  Tokenise + check exact membership.
-	tokens := categoryTokens(s.String("Category"))
+	// Category is a token list — e.g. ARMCOM has `ARM commander LEVEL10
+	// WEAPON NOTAIR NOTSUB CTRL_C`.  A plain substring check matched the
+	// `SUB` inside `NOTSUB` and shoved the Commander onto Sea; exact token
+	// membership avoids that.
+	tokens := categoryTokens(info.Category)
 	for _, kw := range []string{"SHIP", "SUB", "UNDERWATER"} {
 		if tokens[kw] {
 			return "sea"
@@ -247,20 +247,19 @@ func inferDefaultGround(s *tdf.Section) string {
 	// water" signal — but it overlaps with hovercraft + the
 	// Commander (who has MaxWaterDepth=35 because he can wade), so
 	// we don't trust it on its own.
-	if s.Int("MinWaterDepth") > 0 {
+	if info.MinWaterDepth > 0 {
 		return "sea"
 	}
 	return ""
 }
 
-// categoryTokens splits a TA Category field on whitespace and
-// returns a set of upper-cased tokens.  Used by both the default-
-// ground and submersion classifiers to avoid the NOTSUB / NOTSHIP
-// pitfall a plain substring check trips into.
-func categoryTokens(raw string) map[string]bool {
+// categoryTokens upper-cases a unit's already-tokenised Category list into a
+// set for exact membership tests, avoiding the NOTSUB / NOTSHIP pitfall a
+// plain substring check trips into.
+func categoryTokens(cats []string) map[string]bool {
 	out := make(map[string]bool)
-	for _, t := range strings.Fields(strings.ToUpper(raw)) {
-		out[t] = true
+	for _, t := range cats {
+		out[strings.ToUpper(strings.TrimSpace(t))] = true
 	}
 	return out
 }
@@ -271,9 +270,9 @@ func categoryTokens(raw string) map[string]bool {
 // for TA's subs — and almost always carry "UNDERWATER" in their
 // Category.  Surface ships are TEDClass=SHIP with no WaterLine.
 // Hovercraft / non-water units return "".
-func inferSubmersionMode(s *tdf.Section) string {
-	ted := strings.ToUpper(strings.TrimSpace(s.String("TEDClass")))
-	tokens := categoryTokens(s.String("Category"))
+func inferSubmersionMode(info *ta.UnitInfo) string {
+	ted := strings.ToUpper(strings.TrimSpace(info.TEDClass))
+	tokens := categoryTokens(info.Category)
 	// Submarine signals (in priority order):
 	//   * Category explicitly tags UNDERWATER (TA's submarine units
 	//     always include this).
@@ -289,7 +288,7 @@ func inferSubmersionMode(s *tdf.Section) string {
 	// other walking units used to trigger.
 	if tokens["UNDERWATER"] ||
 		ted == "SUB" || ted == "UWMINE" || ted == "UWBLDG" ||
-		s.Int("WaterLine") > 0 {
+		info.WaterLine > 0 {
 		return "submerged"
 	}
 	if ted == "SHIP" || tokens["SHIP"] {

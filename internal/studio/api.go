@@ -12,12 +12,14 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/sct"
 	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
@@ -339,12 +341,11 @@ func summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
 	}
 	otaPath := strings.TrimSuffix(p, path.Ext(p)) + ".ota"
 	if data, err := vfs.ReadFile(otaPath); err == nil {
-		if doc, err := tdf.ParseString(string(data)); err == nil {
-			if gh := doc.Section("GlobalHeader"); gh != nil {
-				entry.MissionName = gh.String("missionname")
-				entry.Planet = gh.String("planet")
-				entry.NumPlayers = gh.String("numplayers")
-			}
+		var m ta.Map
+		if err := tdf.Unmarshal(data, &m); err == nil && m.Header.Key != "" {
+			entry.MissionName = m.Header.MissionName
+			entry.Planet = m.Header.Planet
+			entry.NumPlayers = joinInts(m.Header.NumPlayers)
 		}
 	}
 	return entry, pngBytes
@@ -766,72 +767,76 @@ func handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 	_ = png.Encode(w, img)
 }
 
+// joinInts renders the typed NumPlayers list back to the comma-joined
+// string the editor JSON expects (e.g. []int{2,3,4} → "2, 3, 4").
+func joinInts(vals []int) string {
+	parts := make([]string, len(vals))
+	for i, v := range vals {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // parseOTA walks the [GlobalHeader] block (and its nested Schema /
 // specials sub-sections) into the editor's otaState shape.  Returns
 // nil when the file is empty or unparseable.
 func parseOTA(content string, tileW, tileH int) *otaState {
-	doc, err := tdf.ParseString(content)
-	if err != nil {
+	var m ta.Map
+	if err := tdf.Unmarshal([]byte(content), &m); err != nil {
 		return nil
 	}
-	gh := doc.Section("GlobalHeader")
-	if gh == nil {
+	gh := m.Header
+	if gh.Key == "" {
 		return nil
 	}
 	out := &otaState{
-		MissionName:        gh.String("missionname"),
-		MissionDescription: gh.String("missiondescription"),
-		MissionHint:        gh.String("missionhint"),
-		Brief:              gh.String("brief"),
-		Narration:          gh.String("narration"),
-		Glamour:            gh.String("glamour"),
-		Planet:             gh.String("planet"),
-		NumPlayers:         gh.String("numplayers"),
-		Size:               gh.String("size"),
-		Memory:             gh.String("memory"),
-		LineOfSight:        gh.Int("lineofsight"),
-		Mapping:            gh.Int("mapping"),
-		TidalStrength:      gh.Int("tidalstrength"),
-		SolarStrength:      gh.Int("solarstrength"),
-		LavaWorld:          gh.Int("lavaworld"),
-		Killmul:            gh.Int("killmul"),
-		Timemul:            gh.Int("timemul"),
-		MinWindSpeed:       gh.Int("minwindspeed"),
-		MaxWindSpeed:       gh.Int("maxwindspeed"),
-		Gravity:            gh.Int("gravity"),
-		SeaLevel:           gh.Int("sealevel"),
-		ImpassibleWater:    gh.Int("impassiblewater"),
-		WaterDoesDamage:    gh.Int("waterdoesdamage"),
+		MissionName:        gh.MissionName,
+		MissionDescription: gh.MissionDescription,
+		MissionHint:        gh.MissionHint,
+		Brief:              gh.Brief,
+		Narration:          gh.Narration,
+		Glamour:            gh.Glamour,
+		Planet:             gh.Planet,
+		NumPlayers:         joinInts(gh.NumPlayers),
+		Size:               gh.Size,
+		Memory:             gh.Memory,
+		LineOfSight:        gh.LineOfSight,
+		Mapping:            gh.Mapping,
+		TidalStrength:      gh.TidalStrength,
+		SolarStrength:      gh.SolarStrength,
+		LavaWorld:          gh.LavaWorld,
+		Killmul:            gh.KillMul,
+		Timemul:            gh.TimeMul,
+		MinWindSpeed:       gh.MinWindSpeed,
+		MaxWindSpeed:       gh.MaxWindSpeed,
+		Gravity:            gh.Gravity,
+		SeaLevel:           gh.SeaLevel,
+		ImpassibleWater:    gh.ImpassibleWater,
+		WaterDoesDamage:    gh.WaterDoesDamage,
 	}
-	for _, sec := range gh.Sections() {
-		if !strings.HasPrefix(strings.ToLower(sec.Name()), "schema") {
-			continue
-		}
+	for _, sec := range gh.Schemas {
 		schema := otaSchema{
-			Name:           strings.TrimPrefix(sec.Name(), "Schema "),
-			Type:           sec.String("type"),
-			AIProfile:      sec.String("aiprofile"),
-			SurfaceMetal:   sec.Int("surfacemetal"),
-			MohoMetal:      sec.Int("mohometal"),
-			HumanMetal:     sec.Int("humanmetal"),
-			ComputerMetal:  sec.Int("computermetal"),
-			HumanEnergy:    sec.Int("humanenergy"),
-			ComputerEnergy: sec.Int("computerenergy"),
-			MeteorWeapon:   sec.String("meteorweapon"),
-			MeteorRadius:   sec.Int("meteorradius"),
-			MeteorDensity:  sec.Int("meteordensity"),
-			MeteorDuration: sec.Int("meteorduration"),
-			MeteorInterval: sec.Int("meteorinterval"),
+			Name:           strings.TrimPrefix(sec.Key, "Schema "),
+			Type:           sec.Type,
+			AIProfile:      sec.AIProfile,
+			SurfaceMetal:   sec.SurfaceMetal,
+			MohoMetal:      sec.MohoMetal,
+			HumanMetal:     sec.HumanMetal,
+			ComputerMetal:  sec.ComputerMetal,
+			HumanEnergy:    sec.HumanEnergy,
+			ComputerEnergy: sec.ComputerEnergy,
+			MeteorWeapon:   sec.MeteorWeapon,
+			MeteorRadius:   sec.MeteorRadius,
+			MeteorDensity:  int(sec.MeteorDensity),
+			MeteorDuration: sec.MeteorDuration,
+			MeteorInterval: sec.MeteorInterval,
 		}
 		if schema.Name == "" {
-			schema.Name = sec.Name()
+			schema.Name = sec.Key
 		}
-		for _, child := range sec.Sections() {
-			if !strings.EqualFold(child.Name(), "specials") {
-				continue
-			}
-			for _, sp := range child.Sections() {
-				what := sp.String("specialwhat")
+		if sec.Specials != nil {
+			for _, sp := range sec.Specials.Items {
+				what := sp.SpecialWhat
 				if !strings.HasPrefix(strings.ToLower(what), "startpos") {
 					continue
 				}
@@ -842,8 +847,8 @@ func parseOTA(content string, tileW, tileH int) *otaState {
 				}
 				schema.StartPos = append(schema.StartPos, saveStartPos{
 					Number: num,
-					X:      sp.Int("xpos"),
-					Z:      sp.Int("zpos"),
+					X:      sp.XPos,
+					Z:      sp.ZPos,
 				})
 			}
 		}
@@ -1283,26 +1288,26 @@ func scanFeatures() ([]featureEntry, map[string]featureEntry) {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
+		var features []ta.Feature
+		if err := tdf.Unmarshal(data, &features); err != nil {
 			continue
 		}
-		for _, s := range doc.Sections() {
-			name := s.Name()
+		for _, f := range features {
+			name := f.Key
 			key := strings.ToLower(name)
 			if _, dup := byName[key]; dup {
 				continue
 			}
 			entry := featureEntry{
 				Name:        name,
-				Description: s.String("description"),
-				Category:    s.String("category"),
-				World:       s.String("world"),
-				FootprintX:  s.Int("footprintx"),
-				FootprintZ:  s.Int("footprintz"),
-				Filename:    s.String("filename"),
-				Seqname:     s.String("seqname"),
-				Metal:       s.Int("metal"),
+				Description: f.Description,
+				Category:    f.Category,
+				World:       f.World,
+				FootprintX:  f.FootprintX,
+				FootprintZ:  f.FootprintZ,
+				Filename:    f.Filename,
+				Seqname:     f.SeqName,
+				Metal:       int(f.Metal),
 			}
 			if entry.Filename != "" && entry.Seqname != "" {
 				entry.PreviewURL = "/api/studio/feature-preview/" + url.PathEscape(name)

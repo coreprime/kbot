@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 )
 
 // weapon_fx.go
@@ -127,25 +127,22 @@ func handleWeaponFx(w http.ResponseWriter, r *http.Request) {
 // ground explosion and let the engine reuse it everywhere; we copy that
 // behaviour so a missile splashing into water still produces SOME
 // animation rather than no-op.
-func weaponExplosionRefs(sec *tdf.Section, variant string) (string, string) {
-	gafKey := "explosiongaf"
-	artKey := "explosionart"
+func weaponExplosionRefs(sec *ta.Weapon, variant string) (string, string) {
+	lc := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+	var gaf, art string
 	switch variant {
 	case "water":
-		gafKey = "waterexplosiongaf"
-		artKey = "waterexplosionart"
+		gaf, art = lc(sec.WaterExplosionGAF), lc(sec.WaterExplosionArt)
 	case "lava":
-		gafKey = "lavaexplosiongaf"
-		artKey = "lavaexplosionart"
+		gaf, art = lc(sec.LavaExplosionGAF), lc(sec.LavaExplosionArt)
+	default:
+		gaf, art = lc(sec.ExplosionGAF), lc(sec.ExplosionArt)
 	}
-	gaf := strings.ToLower(strings.TrimSpace(sec.String(gafKey)))
-	art := strings.ToLower(strings.TrimSpace(sec.String(artKey)))
 	if (gaf == "" || art == "") && variant != "ground" {
 		// Variant-specific art missing — fall back to the ground pair
 		// so the impact still animates.  Matches TA's runtime
 		// behaviour of "use ground if water/lava isn't set".
-		gaf = strings.ToLower(strings.TrimSpace(sec.String("explosiongaf")))
-		art = strings.ToLower(strings.TrimSpace(sec.String("explosionart")))
+		gaf, art = lc(sec.ExplosionGAF), lc(sec.ExplosionArt)
 	}
 	return gaf, art
 }
