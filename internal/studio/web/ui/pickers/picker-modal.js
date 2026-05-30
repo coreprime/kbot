@@ -12,9 +12,15 @@
 // autofocus, and backdrop styling stay consistent with the other
 // dialogs.
 
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { DialogModal } from '/ui/dialogs/dialog-modal.js'
+
+// Number of card rows the list shows before it scrolls.  The list is pinned
+// to this many rows so the dialog is a stable height that does NOT grow or
+// shrink as the filter narrows the results — the user reaches for the same
+// screen real estate every time.
+const VISIBLE_ROWS = 3
 
 // PickerModal — props:
 //   open               — boolean
@@ -73,6 +79,7 @@ export function PickerModal({
   gridCols = 4,
 }) {
   const filterRef = useRef(null)
+  const listRef = useRef(null)
   // Autofocus the filter input the moment the dialog opens — typing
   // narrows the list right away, matching the legacy flow.
   useEffect(() => {
@@ -90,6 +97,39 @@ export function PickerModal({
     if (selectedKey == null || !itemKey) return -1
     return items.findIndex((it) => itemKey(it) === selectedKey)
   }
+  // Auto-select the first item whenever the (filtered) list changes and the
+  // current selection isn't in it.  Gives the keyboard a starting cursor and
+  // makes Enter-from-the-filter open the top match without the user having to
+  // Tab into the list first.
+  useEffect(() => {
+    if (!open || !onSelect || items.length === 0) return
+    if (currentIdx() < 0) onSelect(items[0])
+  }, [open, items, selectedKey])
+  // Keep the selected card scrolled into view as the user arrows through the
+  // list (or the auto-select above moves the cursor past the fold).
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const sel = list.querySelector('.open-list-item.selected')
+    if (sel && typeof sel.scrollIntoView === 'function') sel.scrollIntoView({ block: 'nearest' })
+  }, [selectedKey, items])
+  // Pin the list to exactly VISIBLE_ROWS rows tall by measuring one card.
+  // Re-runs when items change, but a single card's height is stable so the
+  // computed height never drifts — the dialog stays the same size while the
+  // user types.  Skips (keeps the prior height) when the filter empties the
+  // list so a zero-result query doesn't collapse the box.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!open || !list) return
+    const card = list.querySelector('.open-list-item')
+    if (!card) return
+    const cs = getComputedStyle(list)
+    const gap = parseFloat(cs.rowGap || cs.gap || '0') || 0
+    const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+    const border = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    const h = card.offsetHeight * VISIBLE_ROWS + gap * (VISIBLE_ROWS - 1) + padY + border
+    list.style.height = `${Math.round(h)}px`
+  }, [open, items])
   const moveSelection = (delta) => {
     if (items.length === 0) return
     const cur = currentIdx()
@@ -109,12 +149,15 @@ export function PickerModal({
     else if (e.key === 'Home')      { e.preventDefault(); if (items[0] && onSelect) onSelect(items[0]) }
     else if (e.key === 'End')       { e.preventDefault(); if (items[items.length - 1] && onSelect) onSelect(items[items.length - 1]) }
   }
-  // Filter Enter also confirms — if the user typed a query then hit
-  // Enter without ever leaving the filter input, we still want to
-  // open the selected (or single-match) item.
+  // Filter input keys:
+  //   Enter — confirm/open the (auto-)selected item without leaving the field.
+  //   Tab   — move focus into the list so the arrow keys drive selection.
+  //   ↓     — also dive into the list (natural "into the results" gesture).
   const onFilterKey = (e) => {
     if (e.key === 'Enter') {
       if (!confirmDisabled && onConfirm) { e.preventDefault(); onConfirm() }
+    } else if ((e.key === 'Tab' && !e.shiftKey) || e.key === 'ArrowDown') {
+      if (listRef.current && items.length) { e.preventDefault(); listRef.current.focus() }
     }
   }
   const actions = [
@@ -145,6 +188,7 @@ export function PickerModal({
                spellcheck=${false} />
       </div>
       <div class="open-list"
+           ref=${listRef}
            tabindex="0"
            role="listbox"
            onKeyDown=${onListKey}>

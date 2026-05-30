@@ -65,7 +65,7 @@ uniform float uBumpIntensity;   // bump relief strength (per-texture hint)
 uniform float uBumpStrength;    // "Bump Mapping" intensity slider; 1 = default
 uniform float uBumpSmooth;      // bump height-field low-pass radius (texels) — drops fine roughness so only large details bump
 uniform float uBumpThreshold;   // bump grain deadzone — height gradients below this are dropped (grain → flat) while strong edges (rivets/seams) survive
-uniform float uBumpScale;       // SIGNED relief depth: + = features protrude toward the viewer, − = recessed/engraved; magnitude deepens the parallax + normal tilt
+uniform float uBumpScale;       // SIGNED relief depth: + = features protrude toward the viewer, − = recessed/engraved; magnitude deepens the normal tilt
 uniform vec2  uTexel;           // 1 / texture size — texel step for texture-space bump sampling
 uniform float uExposure;        // scene light-intensity / exposure (Graphics Options Brightness slider); 1 = default
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
@@ -156,74 +156,38 @@ float sampleShadowMap2(vec3 normal) {
 
 // bumpHeight — the tile's luminance read as a surface HEIGHT (white = tall).
 // `bias` shifts the mip so the height field follows the LARGE painted detail
-// (panel breaks, rivet rows) rather than per-texel palette grain.  Shared by
-// the parallax-occlusion march and the normal-perturbation gradient.
+// (panel breaks, rivet rows) rather than per-texel palette grain.  Feeds the
+// tangent-space gradient that perturbs the shading normal.
 float bumpHeight(vec2 uv, float bias) {
   return dot(texture2D(uTex, uv, bias).rgb, vec3(0.299, 0.587, 0.114));
 }
 
 void main() {
-  // Geometric (macro) normal, plus a UV that parallax-occlusion mapping may
-  // displace below.  Everything that samples the texture (base colour, lamp
-  // atlas, the bump gradient) reads `uv` so the displaced surface stays
-  // self-consistent.
+  // Geometric (macro) normal.  Ng stays the flat surface normal for the broad
+  // coloured environment fills; N below gets sculpted by the bump height field
+  // so only the KEY sun diffuse + specular pick up the surface relief.
   vec3 N = normalize(vNormal);
   vec3 Ng = N;
   vec2 uv = vUV;
 
-  // Mikkelsen cotangent frame from screen-space position + UV derivatives —
-  // computed in uniform control flow (outside any branch) so the derivatives
-  // are well defined.  Reused by the parallax march and the normal tilt, so
-  // no precomputed per-vertex tangents are needed.  T/B are normalised here.
+  // Mikkelsen cotangent tangent frame from screen-space position + UV
+  // derivatives — gives the bump a per-fragment tangent basis with no
+  // precomputed per-vertex tangents.  Guarded against degenerate UVs: on
+  // flat-coloured / non-textured faces duv≈0 collapses T and B to ~0, and an
+  // unguarded inversesqrt(0) → +Inf would splatter NaN colour across the face
+  // (the "strange colour distortion").  tbValid gates the bump branch below.
   vec3 dp1 = dFdx(vWorldPos), dp2 = dFdy(vWorldPos);
   vec2 duv1 = dFdx(vUV),      duv2 = dFdy(vUV);
   vec3 dp2perp = cross(dp2, N);
   vec3 dp1perp = cross(N, dp1);
   vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
   vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-  float tbInv = inversesqrt(max(dot(T, T), dot(B, B)));
-  T *= tbInv;
-  B *= tbInv;
-
-  // ── Parallax occlusion mapping ───────────────────────────────────────
-  // March the view ray through the luminance height field and shift the UV
-  // so painted relief actually OCCLUDES — high features hide the lower ones
-  // behind them as the unit turns, which flat normal-only bump never sells.
-  // uBumpScale's SIGN sets the relief direction (positive = features stand
-  // proud of the surface, negative = engraved/recessed); its magnitude (with
-  // the global Bump strength) sets the parallax depth.
-  if (uBump > 0.5 && uMode != 1 && uBumpIntensity > 0.0) {
-    float sm = max(uBumpSmooth, 1.0);
-    float bias = log2(sm) + 1.0;
-    float sgn = (uBumpScale < 0.0) ? -1.0 : 1.0;
-    float depth = uBumpIntensity * uBumpStrength * abs(uBumpScale) * 0.045;
-    // View dir toward the eye, taken into tangent space.
-    vec3 Vw = normalize(uEyePos - vWorldPos);
-    vec3 Vt = vec3(dot(Vw, T), dot(Vw, B), dot(Vw, N));
-    float vz = max(abs(Vt.z), 0.25);            // clamp the grazing blow-up
-    vec2 maxShift = (Vt.xy / vz) * depth;       // total UV shift at full depth
-    const int POM_STEPS = 16;
-    float layer = 1.0 / float(POM_STEPS);
-    vec2 dStep = maxShift / float(POM_STEPS);
-    float rayDepth = 0.0;
-    vec2 curUV = vUV;
-    float hs = bumpHeight(curUV, bias);
-    float surf = 1.0 - (sgn < 0.0 ? 1.0 - hs : hs);   // depth below the top plane
-    for (int i = 0; i < POM_STEPS; i++) {
-      if (rayDepth >= surf) break;
-      curUV -= dStep;
-      rayDepth += layer;
-      float h = bumpHeight(curUV, bias);
-      surf = 1.0 - (sgn < 0.0 ? 1.0 - h : h);
-    }
-    // Occlusion interpolation between the last two layers (soft contact).
-    vec2 prevUV = curUV + dStep;
-    float hPrev = bumpHeight(prevUV, bias);
-    float surfPrev = 1.0 - (sgn < 0.0 ? 1.0 - hPrev : hPrev);
-    float after = surf - rayDepth;
-    float before = surfPrev - (rayDepth - layer);
-    float w = clamp(after / max(after - before, 1e-4), 0.0, 1.0);
-    uv = mix(curUV, prevUV, w);
+  float tbMax = max(dot(T, T), dot(B, B));
+  bool tbValid = tbMax > 1e-10;
+  if (tbValid) {
+    float tbInv = inversesqrt(tbMax);
+    T *= tbInv;
+    B *= tbInv;
   }
 
   vec4 base;
@@ -271,37 +235,47 @@ void main() {
     return;
   }
 
-  // Auto-bump surface hint — sculpt the lighting normal from the tile's
-  // luminance height field at the (parallax-displaced) `uv`.  Ng — the macro
-  // geometric normal — is kept for the broad coloured environment fills
+  // Relief bump — sculpt the shading normal from the tile's luminance height
+  // field so painted plating / rivets / panel seams catch light and shade as
+  // both the camera and the sun move.  It's a true tangent-space normal, NOT
+  // a UV warp, so it can never pull a neighbouring atlas tile into the face
+  // (the old parallax march did, which is what read as colour distortion).
+  // Ng — the macro geometric normal — is kept for the broad coloured fills
   // (hemisphere ambient, cinematic fill, back light, fresnel rim, sea bounce)
-  // so the bump perturbation can NOT scatter their tint across the surface;
-  // the bumped N below sculpts only the KEY sun diffuse + specular, where
-  // surface relief genuinely reads.  The gradient rides the SAME cotangent
-  // frame (T/B) the parallax march used, so the normal and the displacement
-  // agree.  uBumpScale's sign flips the relief (protrude vs engrave).
-  if (uBump > 0.5 && uMode != 1) {
+  // so the bump can't scatter their tint; only the KEY sun diffuse + specular
+  // ride the bumped N, where surface relief genuinely reads.  uBumpScale's
+  // sign flips the relief (+ protrudes / lit on the sun-facing slope, −
+  // engraves); its magnitude deepens the tilt.  tbValid skips degenerate
+  // (flat-UV) faces so the frame can't blow up.
+  if (uBump > 0.5 && uMode != 1 && tbValid && uBumpIntensity > 0.0) {
     float sm = max(uBumpSmooth, 1.0);
     float bias = log2(sm) + 1.0;     // low-pass to LARGE features, not grain
-    vec2 d = uTexel * sm;            // gradient step
+    vec2 d = uTexel * sm;            // central-difference step
     float hL = bumpHeight(uv - vec2(d.x, 0.0), bias);
     float hR = bumpHeight(uv + vec2(d.x, 0.0), bias);
     float hD = bumpHeight(uv - vec2(0.0, d.y), bias);
     float hU = bumpHeight(uv + vec2(0.0, d.y), bias);
-    float dHdu = hR - hL;   // ∂height/∂u
-    float dHdv = hU - hD;   // ∂height/∂v
-    // Soft deadzone (wavelet shrinkage): grain (small magnitude) vanishes,
-    // edges (rivets, weld seams, panel breaks) keep most of their strength.
+    float dHdu = (hR - hL) * 0.5;   // ∂height/∂u
+    float dHdv = (hU - hD) * 0.5;   // ∂height/∂v
+    // Soft grain rolloff — a gentle rational knee that de-emphasises tiny
+    // palette noise but always lets real slope through.  (The old hard
+    // subtract-threshold zeroed every gradient below uBumpThreshold, which
+    // left the relief completely unshaded — the "no real shading" report.)
     float gm = length(vec2(dHdu, dHdv));
-    float keep = max(gm - uBumpThreshold, 0.0) / max(gm, 1e-4);
+    float keep = gm / (gm + max(uBumpThreshold, 1e-3));
     dHdu *= keep;
     dHdv *= keep;
-    // Signed tilt strength — sign(uBumpScale) flips bump-out vs bump-in so the
-    // shading matches the parallax direction; |scale| deepens the relief.  3×
-    // keeps it reading as coherent relief, not high-frequency shading noise.
-    float k = uBumpIntensity * uBumpStrength * abs(uBumpScale) * 3.0
+    // Signed relief strength — sign(uBumpScale) flips protrude vs engrave,
+    // |scale| (× the global Bump slider) deepens the tilt.  6× turns the small
+    // luminance slope into a clearly readable surface tilt without tipping
+    // into high-frequency shading noise.
+    float k = uBumpIntensity * uBumpStrength * abs(uBumpScale) * 6.0
               * ((uBumpScale < 0.0) ? -1.0 : 1.0);
-    N = normalize(N - (T * dHdu + B * dHdv) * k);
+    // Build the height-field normal in tangent space, then rotate it into
+    // world space through the cotangent frame.  z = 1 bounds the tilt so even
+    // a steep gradient can't flip the normal past the surface plane.
+    vec3 tn = normalize(vec3(-dHdu * k, -dHdv * k, 1.0));
+    N = normalize(tn.x * T + tn.y * B + tn.z * Ng);
   }
   vec3 L = normalize(uLightDir);
   vec3 V = normalize(uEyePos - vWorldPos);

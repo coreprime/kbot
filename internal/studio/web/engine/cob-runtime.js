@@ -522,6 +522,26 @@ export class CobUnit {
       this._rotValue(pieceIdx, AXIS_Z),
     ]
   }
+  // setPieceRotationNow — snap a piece's rotation animator to an absolute TA
+  // angle on one axis.  Writes the SAME engine state a `turn-now` opcode does
+  // (kind=2, done), so the per-frame binding sync reads the new pose and a
+  // studio-set rotation persists instead of snapping back — while a later
+  // script TURN / SPIN still re-drives the axis cleanly.
+  setPieceRotationNow(pieceIdx, axis, taTurns) {
+    if (pieceIdx < 0 || axis < 0 || axis > 2) return
+    const a = this._animRot(pieceIdx, axis)
+    a.kind = 2
+    a.value = taTurns
+    a.target = taTurns
+    a.speed = 0
+    a.done = true
+  }
+  // setPieceRotationNowRad — radians wrapper for setPieceRotationNow so the
+  // renderer / studio dial can stay in its native radian convention and never
+  // needs to know TA's 65536-turns-per-circle fixed-point scale.
+  setPieceRotationNowRad(pieceIdx, axis, radians) {
+    this.setPieceRotationNow(pieceIdx, axis, (radians / (Math.PI * 2)) * TA_TURNS_PER_CIRCLE)
+  }
   isPieceVisible(pieceIdx) {
     return pieceIdx < 0 || this._pieceVisible[pieceIdx] !== false
   }

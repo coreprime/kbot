@@ -561,31 +561,32 @@ kbd {
   margin-bottom: 12px;
 }
 .open-filter input[type="search"]:focus { outline: none; border-color: var(--accent); }
-/* Open-map AND Open-unit dialogs: pinned to 80vh so the picker
-   doesn't grow or shrink as the filter narrows the list — the
-   user reaches for the same screen real estate every time, and a
-   one-row "Peewee" filter result doesn't suddenly collapse the
-   card around it.  Card is a flex column (set by .dialog-card-wide);
-   flex:1 on .open-list expands it to fill whatever's left after the
-   title + filter + actions. */
-#open-dialog .dialog-card,
-#model-open-dialog .dialog-card {
-  height: 80vh;
+/* Open-map / Open-unit / Weapon pickers: the card sizes to its content
+   (title + filter + a 3-ROW list + actions) and is capped at 80vh so it
+   never runs off-screen.  PickerModal measures one card and pins .open-list
+   to exactly 3 rows tall, so the dialog is a stable height that does NOT
+   grow or shrink as the filter narrows the results. */
+/* Any picker card (the ones containing an .open-list) is capped at 80vh so a
+   tall 3-row list never runs off a short screen — the list shrinks + scrolls
+   under the cap (flex: 0 1 auto below). */
+.dialog-card:has(.open-list) {
+  max-height: 80vh;
 }
 .open-list {
   display: grid;
-  /* 4 columns across in the wide Open-map dialog.  Height grows
-     from the flex parent (.dialog-card) so the grid always fills
-     the remaining vertical space — no max-height + collapse jitter.
-     align-content:start packs the rows at the top so a single short
-     row of cards keeps its natural height instead of stretching to
-     fill the leftover space.  grid-auto-rows:max-content belt-and-
-     braces the same intent for additional rows of items. */
+  /* 4 columns across in the wide pickers.  The HEIGHT is set inline by
+     PickerModal (VISIBLE_ROWS × card height) so it's fixed; flex:0 0 auto
+     keeps the flex column from stretching it.  align-content:start packs
+     rows at the top; grid-auto-rows:max-content keeps cards their natural
+     height instead of stretching to fill leftover space.  A min-height
+     covers the brief loading / no-results state before any card exists. */
   grid-template-columns: repeat(4, 1fr);
   grid-auto-rows: max-content;
   align-content: start;
   gap: 10px;
-  flex: 1 1 auto;
+  /* The JS-set height (3 rows) is the flex-basis; shrink is allowed so the
+     list collapses + scrolls if the 80vh card cap bites on a short screen. */
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 4px;
@@ -4315,6 +4316,181 @@ canvas {
   min-width: 18px;
   height: 16px;
 }
+/* Right-side meta cluster: the prim count + the four status chips
+   (eye / shade / cache / shadow) wrapped in one fixed-layout, right-
+   flushed box.  Putting them in a single 0-gap flex box with a fixed-
+   width count column and fixed 18px chips means the four icons land in
+   IDENTICAL columns on every row — regardless of tree depth or whether
+   the row is a group or a leaf.  (Before this, group rows and leaf rows
+   used different gaps + right padding, so the chips drifted a few px.) */
+.piece-row-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-shrink: 0;
+}
+.piece-row-meta .drawer-group-count,
+.piece-row-meta .piece-stat {
+  margin-left: 0;
+  min-width: 56px;
+  padding-right: 6px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.piece-row-meta .piece-eye,
+.piece-row-meta .piece-status {
+  margin: 0;
+}
+/* Flexible name column for group rows (matches leaf rows) so the meta
+   cluster gets pushed to the same right edge.  (Right padding is set on the
+   group-title rule itself, below, to beat its own `padding` shorthand.) */
+.drawer-piece-group > .drawer-group-title .piece-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Selected group row — mirror the leaf piece's accent highlight so the user
+   can see which piece the rotate footer is acting on, regardless of whether
+   it's a group or a leaf. */
+.drawer-group-title.selected {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 3px;
+}
+.drawer-group-title.selected .drawer-group-count { color: rgba(255, 255, 255, 0.7); }
+/* Pieces tab layout: the tree scrolls inside .piece-tree-scroll while the
+   rotate widget pins to the bottom as a footer.  #model-viewer-tree (a shared
+   .drawer) normally scrolls + pads itself; for the pieces tree we turn it into
+   a non-scrolling flex column and move the scroll + padding inside so the
+   footer can sit flush at the very bottom of the sidebar. */
+#model-viewer-tree {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.piece-tree-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.piece-tree-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+/* Rotate footer — pinned at the bottom of the Pieces sidebar whenever a piece
+   is selected.  Three circular dials (X / Y / Z), 0-360° = the full TA
+   rotation arc, with the TA game-units value beneath each.  Lives outside the
+   scroll area so it stays put while the tree scrolls. */
+.rot-dials {
+  flex: 0 0 auto;
+  padding: 6px 8px 8px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.rot-dials-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.rot-dials-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rot-dials-close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.rot-dials-close:hover { color: var(--text); }
+.rot-dials-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.rot-dial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.rot-dial-svg {
+  cursor: grab;
+  touch-action: none;
+}
+.rot-dial-svg:active { cursor: grabbing; }
+.rot-dial-ring {
+  fill: var(--bg-0, #14181d);
+  stroke: var(--border);
+  stroke-width: 2;
+}
+.rot-dial-needle {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.rot-dial-knob {
+  fill: var(--accent);
+}
+.rot-dial-meta {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.rot-dial-axis {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.rot-dial-num {
+  width: 34px;
+  background: var(--bg-0, #14181d);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  text-align: right;
+  padding: 1px 2px;
+}
+.rot-dial-deg { font-size: 11px; color: var(--muted); }
+/* TA game-units readout under each dial (65536 = a full turn) — the value a
+   COB turn/get-angle opcode actually works in, shown alongside the degrees. */
+.rot-dial-units {
+  margin-top: 1px;
+  font-size: 9px;
+  line-height: 1.1;
+  color: var(--muted);
+  opacity: 0.8;
+}
+.rot-dials-reset {
+  margin-top: 6px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.rot-dials-reset:hover { color: var(--text); border-color: var(--muted); }
 /* Two-tab left panel chrome — switches between Pieces and Textures
    without consuming the panel's horizontal grid columns the way a
    second outer tab bar would. */
@@ -4980,7 +5156,9 @@ canvas {
   font-weight: 500;
   color: var(--text);
   border-bottom: none;
-  padding: 4px 4px 4px 0;
+  /* Match the leaf rows' right padding (6px) so the right-side meta cluster
+     flushes to the same edge on group and leaf rows. */
+  padding: 4px 6px 4px 0;
   margin-bottom: 0;
 }
 .drawer-piece-group > .drawer-group-title:hover { color: var(--accent); }

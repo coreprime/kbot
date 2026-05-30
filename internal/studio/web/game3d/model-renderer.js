@@ -520,6 +520,54 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // ── Per-piece rotation pose (studio "Rotate" dial) ───────────────────────
+  // The Pieces tab opens a 3-axis dial on a piece; each axis writes an
+  // ABSOLUTE rotation here.  Two channels are written so the pose shows
+  // instantly AND survives:
+  //   • piece.rotate[axis] — immediate visual feedback this frame (even when
+  //     the runtime is paused and the binding isn't lerping).
+  //   • the COB rotation animator (engine state, via setPieceRotationNowRad)
+  //     — so the per-frame binding sync lands on the SAME value instead of
+  //     lerping the piece back to its script pose ("snap back").  A later
+  //     script TURN / SPIN still re-drives the axis, so the dial never fights
+  //     scripting.
+  // Angles are radians; the binding's per-axis sign flip (X/Y negated, Z
+  // passthrough) is mirrored here so the direct write and the synced write
+  // agree on direction.
+  _pieceRotSign(axis) { return axis === 2 ? 1 : -1 }
+  rotatePiece(name, axis, rad) {
+    if (!this.model || !this.model.root || axis < 0 || axis > 2) return
+    const piece = this.model.root.findByName(name)
+    if (!piece) return
+    piece.rotate[axis] = this._pieceRotSign(axis) * rad
+    const unit = this.cobBinding && this.cobBinding.unit
+    if (unit && typeof unit.setPieceRotationNowRad === 'function') {
+      const idx = unit.pieceIndexByName(name)
+      if (idx >= 0) unit.setPieceRotationNowRad(idx, axis, rad)
+    }
+    this.requestRedraw()
+  }
+
+  // getPieceRotation returns the piece's current [x, y, z] rotation in radians,
+  // in TA game-unit convention (the value the dial maps onto 0-360°).  Reads
+  // the engine animator when a COB is bound (the live pose a script may have
+  // set), else the renderer's transient piece.rotate.
+  getPieceRotation(name) {
+    if (!this.model || !this.model.root) return [0, 0, 0]
+    const unit = this.cobBinding && this.cobBinding.unit
+    if (unit && typeof unit.pieceRotation === 'function') {
+      const idx = unit.pieceIndexByName(name)
+      if (idx >= 0) return unit.pieceRotation(idx)
+    }
+    const piece = this.model.root.findByName(name)
+    if (!piece) return [0, 0, 0]
+    return [
+      piece.rotate[0] * this._pieceRotSign(0),
+      piece.rotate[1] * this._pieceRotSign(1),
+      piece.rotate[2] * this._pieceRotSign(2),
+    ]
+  }
+
   // setHoveredTexture flags every piece whose drawGroups reference
   // the given texture name for the red-wireframe overlay.  Pair
   // with a texture list in the host UI — the user hovers a texture

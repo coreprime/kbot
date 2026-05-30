@@ -402,6 +402,23 @@ export function wireUnitEditorHostBridge(reactUi) {
         getActiveModelViewer()?.renderer?.setHoveredPieceName?.(name)
       },
       selectPiece: (name) => selectPiece(name),
+      // Per-piece rotate dial.  The dial works in degrees (0-360° = the full
+      // TA rotation arc in game units); the renderer + COB engine state work
+      // in radians, so the deg↔rad conversion lives here at the bridge.
+      rotatePiece: (name, axis, deg) => {
+        const rad = (((+deg || 0) % 360) * Math.PI) / 180
+        getActiveModelViewer()?.renderer?.rotatePiece?.(name, axis, rad)
+      },
+      getPieceRotation: (name) => {
+        const rads = getActiveModelViewer()?.renderer?.getPieceRotation?.(name)
+        if (!rads) return [0, 0, 0]
+        // radians → degrees in [0, 360)
+        return rads.map((r) => {
+          let d = (r * 180) / Math.PI
+          d = ((d % 360) + 360) % 360
+          return Math.round(d)
+        })
+      },
       requestRedraw: () => getActiveModelViewer()?.renderer?.requestRedraw?.(),
     })
   }
