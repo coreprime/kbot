@@ -52,6 +52,14 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
     if (typeof fn === 'function') fn(applyVal)
   }
   return html`
+    <${MenuSectionLabel}>Geometry<//>
+    <${MenuToggleRow}
+      icon="🧩"
+      label="Enhanced Mesh"
+      title="Reconstruct the faces TA's artists deleted as a 90s fill-rate optimisation — open box bottoms, hollow torsos, missing undersides — so the unit reads solid from every angle.  Re-fetches the model geometry."
+      on=${s.enhanceMesh}
+      onChange=${(next) => set('enhanceMesh', next, next, bridge.setEnhanceMesh)} />
+
     <${MenuSectionLabel}>Lighting<//>
     <${MenuSliderRow}
       icon="☀️"

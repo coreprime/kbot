@@ -45,6 +45,7 @@ import {
 } from '../host-state.js'
 import { playWeaponSound, openWeaponPicker, selectPiece } from '../sidebar.js'
 import { splitActivePane, closeActivePane, canCloseActivePane } from '../../common/split-host.js'
+import { setEnhanceMeshEnabled } from '../../../game3d/enhance-mesh.js'
 
 // wireModelViewerRibbon — install the React unit-editor ribbon bridge
 // + mount the React tree into #model-viewer-ribbon-mount.  Called
@@ -123,6 +124,12 @@ export function wireModelViewerRibbon() {
       setTeamColor:    (key, _opts) => {
         getActiveModelViewer()?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
       },
+
+      // Geometry — flip the shared Enhanced Mesh flag.  Every open
+      // model-viewer subscribes via onEnhanceMeshChanged and reloads its
+      // geometry in place, so this is identical to the sandbox bridge —
+      // one entry point, the views react.
+      setEnhanceMesh:       (on) => setEnhanceMeshEnabled(!!on),
 
       // Graphics Options — broadcast across every pane's renderer so a
       // toggle/slider takes effect on the primary AND its observers.

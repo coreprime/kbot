@@ -30,6 +30,7 @@ import { stepSimSpeed } from '../common/sim-controls.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
 import { ExplosionOverlay } from '../../game3d/explosion-overlay.js'
 import { teamColorForSide } from '../../game3d/team-colors.js'
+import { onEnhanceMeshChanged } from '../../game3d/enhance-mesh.js'
 import {
   wireHotkeys,
   wrapCobWithAggregate,
@@ -163,6 +164,12 @@ export class SandboxView {
       // case prefs loaded after the ribbon module was first evaluated.
       applyGraphicsOptionsToRenderer(this.renderer)
       getReactUi()?.setSandboxGraphicsState?.(getGraphicsOptions())
+      // Follow the shared Enhanced Mesh flag.  Each pane keeps its own
+      // per-context model cache, so when the user flips the toggle this
+      // pane drops + reloads its geometry — letting units already on the
+      // field swap mesh live.  Subscribed once per pane; dispose() drops
+      // it so a closed pane never reloads into a dead GL context.
+      this._unsubEnhance = onEnhanceMeshChanged(() => this.reloadGeometryForEnhance())
       // Orbit / pan / zoom gestures come from the same shared module
       // the unit editor uses (camera-controls.js) so left-drag-orbit,
       // wheel-zoom, shift-pan, ctrl-pan, right-drag-pan all behave
@@ -1093,6 +1100,41 @@ export class SandboxView {
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
+  }
+
+  // reloadGeometryForEnhance reacts to an Enhanced Mesh toggle by
+  // dropping this pane's per-type model cache (and the per-instance pose
+  // clones that alias its GPU buffers) so #refreshEntities lazy-reloads
+  // every on-field unit under the new flag.  Pose keeps flowing from the
+  // engine bindings — the fill only adds primitives, never pieces, so
+  // the reloaded piece trees stay lockstep-compatible with the bindings
+  // and animation survives the swap.
+  reloadGeometryForEnhance() {
+    if (!this.renderer) return
+    const gl = this.renderer.gl
+    // Drop instance clones FIRST: they alias the base models' VBOs by
+    // reference, so the bases must not be deleted while a clone still
+    // points at them.
+    this._localInstances.clear()
+    for (const m of this._localModels.values()) {
+      try { m.dispose(gl) } catch { /* ignore */ }
+    }
+    this._localModels.clear()
+    this._loadingModels.clear()
+    // A ghost placement in flight cached its model in the now-cleared
+    // map and renders it directly.  Null it so the ghost simply skips a
+    // frame, then reload under the new flag.
+    if (this._placement && this._placement.name) {
+      const name = this._placement.name
+      this._placement.model = null
+      this.loader.load(name).then((m) => {
+        this._localModels.set(name, m)
+        if (this._placement && this._placement.name === name) this._placement.model = m
+        if (this.renderer) this.renderer.requestRedraw()
+      }).catch(() => { /* ignore — ghost just stays hidden */ })
+    }
+    this.#refreshEntities()
+    this.renderer.requestRedraw()
   }
 
   // ── Internals ──────────────────────────────────────────────────
@@ -2260,6 +2302,10 @@ export class SandboxView {
     if (typeof this._detachCamera === 'function') {
       try { this._detachCamera() } catch { /* ignore */ }
       this._detachCamera = null
+    }
+    if (typeof this._unsubEnhance === 'function') {
+      try { this._unsubEnhance() } catch { /* ignore */ }
+      this._unsubEnhance = null
     }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null

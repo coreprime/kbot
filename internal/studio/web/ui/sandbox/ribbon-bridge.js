@@ -17,6 +17,7 @@ import { hostCallbacks, getReactUi } from '../host-context.js'
 import { confirmDialog } from '../dialogs/confirm.js'
 import { openSandboxSpawnPicker, setSandboxPanelVisible } from './spawn-picker.js'
 import { splitActivePane, closeActivePane, canCloseActivePane } from '../common/split-host.js'
+import { setEnhanceMeshEnabled } from '../../game3d/enhance-mesh.js'
 
 // wireSandboxRibbon — install the host bridge + mount the ribbon's
 // React tree.  Idempotent; safe to call before / after the React UI
@@ -118,6 +119,12 @@ export function wireSandboxRibbon() {
         return tab ? canCloseActivePane(tab) : false
       },
       setPanelVisible: (panelId, visible) => setSandboxPanelVisible(panelId, visible),
+
+      // Geometry — sets the shared flag so units spawned from here load with
+      // reconstructed faces.  Units already on the field keep their current
+      // mesh until respawned (a live geometry swap of a commanded unit isn't
+      // worth the churn); the unit viewer reloads in place.
+      setEnhanceMesh:       (on) => setEnhanceMeshEnabled(!!on),
 
       // Graphics Options — broadcast to every pane's renderer so the
       // toggle/slider takes effect across the whole battlefield.

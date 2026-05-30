@@ -21,6 +21,7 @@
 import { Piece } from './piece.js'
 import { Model } from './model.js'
 import { applyResolvedHints } from './hints-textures.js'
+import { enhanceMeshEnabled } from './enhance-mesh.js'
 
 const FLOATS_PER_VERTEX = 9
 
@@ -56,7 +57,8 @@ export class ModelLoader {
   }
 
   async load(modelName) {
-    const resp = await fetch(`/api/studio/model/${encodeURIComponent(modelName)}`)
+    const qs = enhanceMeshEnabled() ? '?enhanceMesh=1' : ''
+    const resp = await fetch(`/api/studio/model/${encodeURIComponent(modelName)}${qs}`)
     if (!resp.ok) throw new Error(`HTTP ${resp.status} loading model ${modelName}`)
     const data = await resp.json()
     // decalSet flags textures with alpha-keyed pixels — the loader

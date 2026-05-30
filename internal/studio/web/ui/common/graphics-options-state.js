@@ -22,11 +22,16 @@
 
 import { state } from '../host-context.js'
 import { persistPrefs } from './prefs.js'
+import { setEnhanceMeshEnabled } from '../../game3d/enhance-mesh.js'
 
 // GRAPHICS_DEFAULTS — the at-rest values, matching the renderer's own
 // constructor defaults so a fresh session paints identically whether
 // or not anything has been persisted yet.  Raw menu units.
 export const GRAPHICS_DEFAULTS = {
+  enhanceMesh:      false,  // reconstruct faces TA deleted (open box bottoms,
+                            // hollow shells) so units render solid all round;
+                            // changes the geometry fetched, not a shader flag
+
   lightIntensity:   100,   // 0..200 → 0..2.0× scene exposure (Brightness)
 
   shadows:          true,
@@ -96,6 +101,13 @@ export function persistGraphicsOptions(patch) {
 export function applyGraphicsOptionsToRenderer(r) {
   if (!r) return
   const g = getGraphicsOptions()
+  // enhanceMesh isn't a renderer uniform — it picks which geometry the
+  // loader fetches. Only sync it once the user has actually chosen a value
+  // so a persisted preference survives reloads without overriding the
+  // URL-seeded default (?enhanceMesh=1) on profiles that never toggled it.
+  if (state.graphicsOptions && 'enhanceMesh' in state.graphicsOptions) {
+    setEnhanceMeshEnabled(!!g.enhanceMesh)
+  }
   r.setExposure?.(g.lightIntensity / 100)
   r.setShadowsEnabled?.(!!g.shadows)
   r.setShadowStrength?.(g.shadowIntensity / 100)
