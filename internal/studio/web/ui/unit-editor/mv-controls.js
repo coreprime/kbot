@@ -551,6 +551,12 @@ export class MvControls {
       })
     }
     this._armedCursor.setSlot(this.armed)
+    // When the armed weapon is a `dropped` bomb, swap the targeting glyph
+    // for the airstrike cursor — same gesture (click ground to aim) but the
+    // user sees an air-attack reticle instead of the generic crosshair.
+    const slotIdx = SLOT_INDEX[this.armed]
+    const w = (slotIdx != null && this.viewer.unitMeta) ? this.viewer.unitMeta.weapons[slotIdx] : null
+    this._armedCursor.setKind((w && w.dropped) ? 'airstrike' : null)
   }
 
   // ── External hooks ──────────────────────────────────────────────

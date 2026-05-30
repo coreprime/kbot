@@ -35,6 +35,10 @@ export class ArmedCursor {
     this._inside = true
     this._x = 0
     this._y = 0
+    // _kind is an optional flavour modifier for weapon-arming slots:
+    // 'airstrike' swaps the cursorattack glyph for cursorairstrike, used when
+    // the armed weapon is a dropped bomb (TDF `dropped=1`).  null = default.
+    this._kind = null
     // _visible is the host's tab-active gate.  Defaults to true so a
     // single-tab consumer doesn't have to wire setVisible explicitly.
     // The host's deactivate path (MvControls.setSilenced /
@@ -90,6 +94,20 @@ export class ArmedCursor {
     if (this._ambient === want) return
     this._ambient = want
     this._slot = this._armed || this._ambient
+    this.#refresh()
+  }
+
+  // setKind tags the current weapon-arming slot with a flavour that picks a
+  // different glyph at refresh time.  Currently:
+  //   'airstrike' → cursorairstrike (used when the armed weapon's TDF flags
+  //                  dropped=1 — bombers releasing area-effect bombs).
+  //   null        → the default (cursorattack for weapon slots).
+  // The kind is independent of slot priority — it only modifies the rendered
+  // glyph, not which slot the click routes to.
+  setKind(kind) {
+    const want = (kind === 'airstrike') ? 'airstrike' : null
+    if (this._kind === want) return
+    this._kind = want
     this.#refresh()
   }
 
@@ -171,8 +189,12 @@ export class ArmedCursor {
       case 'move':   srcName = 'cursormove'; break
       case 'select': srcName = 'cursorselect'; break
       case 'normal': srcName = 'cursornormal'; break
-      // primary / secondary / tertiary / attack all share the attack glyph
-      default:       srcName = 'cursorattack'; break
+      // primary / secondary / tertiary / attack share the attack glyph by
+      // default — but a `dropped` weapon (TDF dropped=1) is a bomb run, so
+      // the host can tag the kind as 'airstrike' to swap in cursorairstrike.
+      default:
+        srcName = (this._kind === 'airstrike') ? 'cursorairstrike' : 'cursorattack'
+        break
     }
     const want = `/api/studio/cursor/${srcName}`
     if (img.dataset.src !== want) {

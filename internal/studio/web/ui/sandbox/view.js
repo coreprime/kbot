@@ -1003,6 +1003,22 @@ export class SandboxView {
     }
     this._armedCursor.setAmbient(ambient)
     this._armedCursor.setArmed(this._pendingCmd)
+    // Airstrike glyph when the armed slot's weapon is a `dropped` bomb on
+    // any selected unit — same gesture (click ground to bomb a point) but
+    // the cursor reads as an air-attack reticle instead of the generic
+    // crosshair.  Checks the FIRST selected unit; mixed-loadout selections
+    // (some bombers, some non) show the airstrike glyph if any qualify.
+    const slotIdxMap = { primary: 0, secondary: 1, tertiary: 2 }
+    const slotIdx = slotIdxMap[this._pendingCmd]
+    let isAirstrike = false
+    if (slotIdx != null && hasSelection) {
+      for (const id of sel) {
+        const u = this.scene.unitById(id)
+        const w = u && u.meta && u.meta.weapons && u.meta.weapons[slotIdx]
+        if (w && w.dropped) { isAirstrike = true; break }
+      }
+    }
+    this._armedCursor.setKind(isAirstrike ? 'airstrike' : null)
   }
 
   // setPendingCommand — called by the controls UI when the user
