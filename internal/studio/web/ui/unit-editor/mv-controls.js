@@ -15,7 +15,7 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { spawnProjectile } from '../../game3d/weapon-driver.js'
+import { spawnProjectile, playWeaponSound } from '../../game3d/weapon-driver.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
 import { shouldForceTarget } from '../../game3d/force-target.js'
 import { GameEngine } from '../../engine/game-engine.js'
@@ -699,6 +699,18 @@ export class MvControls {
     // wants to detach early.
     subscribeEngine(this, 'fire', (ev) => {
       if (!ev.weapon || !ev.weapon.name) return
+      // Model weapons (missiles / rockets / bombs) are flown by the
+      // engine's projectile simulation and drawn as a real 3DO mesh
+      // — the same short-circuit sandbox uses.  Without this guard
+      // Thunder's gravity bombs (model=bomb + dropped=1) were also
+      // getting a missile-class particle from spawnProjectile that
+      // flew straight toward the aim point, on top of the real bomb
+      // falling under gravity.  Still play the muzzle sound so the
+      // discharge is audible.
+      if (ev.modelProjectile) {
+        try { playWeaponSound({ binding: this.viewer.cob, weapon: ev.weapon, anchor: ev.anchor }) } catch { /* ignore */ }
+        return
+      }
       const gravity = (this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function')
         ? this.viewer.renderer.getGravity() : 80
       let result = null
