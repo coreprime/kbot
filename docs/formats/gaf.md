@@ -3,8 +3,10 @@
 > **GAF** stores indexed-colour sprite **animations**. Almost every animated
 > 2D element in Total Annihilation is a GAF: cursors, mouse pointers,
 > explosions, unit gadgets, tree sway, weapon icons, lava bubble, the lot.
-> TA: Kingdoms uses the same file format under the `.taf` extension, with
-> the palette pulled from a separate sidecar file.
+> TA: Kingdoms reuses the same container under the `.taf` extension for its
+> *paletted* animations (palette pulled from a sidecar file). TA:K also
+> ships a **truecolor** `.taf` variant that stores 16-bit ARGB pixels
+> instead of indices — that one has its own page, [TAF / TSF](taf.md).
 
 <p align="center">
   <img src="img/gaf-cursor.gif" alt="cursormove sequence from cursors.gaf" />
@@ -387,8 +389,10 @@ nearest-colour match against the embedded palette; anything that hits the
   frames after editing, it's that bug — use kbot's pipeline instead.
 - **Sub-frame origins are absolute** (relative to the parent frame's
   origin), not deltas.
-- **TA: Kingdoms supports `.taf` and a few sequences with editor-only
-  metadata** that the engine ignores. kbot reads `.taf` as a vanilla GAF.
+- **TA: Kingdoms `.taf` comes in two flavours.** kbot reads a *paletted*
+  `.taf` as a vanilla GAF, but TA:K also ships **truecolor** `.taf` files
+  (16-bit ARGB pixels, no palette). Check the frame format byte to tell
+  them apart and see [TAF / TSF](taf.md) for the truecolor variant.
 - **`anims/terrain.gaf` and `anims/vismasks.gaf` have `Version == 0`.**
   Treat zero as a valid synonym for `0x00010100`.
 - **Frames per sequence are not bounded** — `cursorteleport` has 46 frames.
@@ -434,8 +438,10 @@ Notable GAFs in the TA install — extract any with
 
 ## See also
 
+- [TAF / TSF](taf.md) — TA: Kingdoms' truecolor `.taf` variant built on
+  this same container, plus its editable text form.
 - [PAL](pal.md) — the colour table needed to render GAF frames.
-- [PCX](pcx.md) — how TA:K supplies a palette to a `.taf`.
+- [PCX](pcx.md) — how TA:K supplies a palette to a paletted `.taf`.
 - [3DO](3do.md) — when a "sprite" is actually a textured 3D model
   (most explosions are GAF; most projectiles are 3DO + GAF muzzle flash).
 - [Glossary](glossary.md) — *sub-frame*, *origin*, *tick*.

@@ -34,6 +34,9 @@ against a flattened directory.
 |-------|----------------|---------|
 | ![cursor anim](gaf-cursor.gif) | `kbot gaf export anims/cursors.gaf --format gif --sequence 0 -o gaf-cursor.gif` | [gaf.md](../gaf.md) |
 | ![cursor frame](gaf-cursorselect.png) | `kbot gaf export anims/cursors.gaf --format png --sequence 2 -o gaf-cursorselect.png` | [gaf.md](../gaf.md) |
+| ![fireball anim](taf-fireball.gif) | `kbot taf export anims/fireballa_1555.taf --format gif -o taf-fireball.gif` | [taf.md](../taf.md) |
+| ![bluefire frame](taf-bluefire-frame.png) | `kbot taf render anims/bluefire_4444.taf --frame 4 -o taf-bluefire-frame.png` | [taf.md](../taf.md) |
+| ![manabomb sheet](taf-manabomb-sheet.png) | `kbot taf sheet anims/manabomb_1555.taf --cols 5 --bg "#1b2330" -o taf-manabomb-sheet.png` | [taf.md](../taf.md) |
 
 ## Bitmaps
 

@@ -20,7 +20,7 @@ tool needs to support.
 |--------|----|--------------|----------------|
 | **HPI / UFO / CCX / GP3** archive | v1 — XOR-encrypted, multi-chunk per file, ≤64 KiB chunks | v2 — plaintext envelope, single SQSH chunk per file, ~32-byte header | ✅ Read both; ✅ write v1; ❌ write v2 |
 | **`.kmp` campaign archives** | N/A | HPI v2 with renamed extension; bundles per-mission map + scripts + GAFs | ✅ Read |
-| **GAF / TAF** sprite animations | `.gaf`, palette comes from `palettes/palette.pal` | `.taf` (same binary format), palette from per-side `.pcx` | ✅ Read both; ✅ write GAF |
+| **GAF / TAF** sprite animations | `.gaf`, palette comes from `palettes/palette.pal` | Paletted `.taf` (same binary format), palette from per-side `.pcx`; **plus** a truecolor `.taf`/`.tsf` variant (16-bit ARGB, see [taf.md](taf.md)) | ✅ Read all; ✅ write GAF & truecolor TAF/TSF |
 | **PCX** images | `unitpics/<name>.pcx` for unit portraits (96×96 paletted) | Used as 1×1 palette carrier next to `.taf` | ✅ Read/write |
 | **PAL / ALP / LHT / SHD** | Global TA palette + lookup tables | Per-side palettes inside PCX carriers; no `.alp`/`.lht`/`.shd` tables observed in install | ✅ TA; N/A TA:K |
 | **FNT** bitmap fonts | `fonts/*.fnt` 1bpp glyphs | Same format, larger glyph set typical | ✅ Read |
