@@ -19,6 +19,7 @@ import { spawnProjectile } from '../../game3d/weapon-driver.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
 import { shouldForceTarget } from '../../game3d/force-target.js'
 import { GameEngine } from '../../engine/game-engine.js'
+import { stepSurfaceLocomotion } from '../../engine/locomotion.js'
 import { hostCallbacks } from '../host-context.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import {
@@ -78,6 +79,9 @@ export class MvControls {
     this.pos = { x: 0, z: 0 }
     this.heading = Math.PI
     this.alt = 0
+    // Current forward ground speed (wu/sec) for the accel/brake ramp in the
+    // shared arc-locomotion integrator.  0 = stationary.
+    this.speed = 0
     this.altTarget = 0           // where the altitude is heading
     this.wasLanded = true        // last frame's "alt <= 0.5" state — drives the Deactivate trigger on touchdown
     this.isMoving = false
@@ -1025,27 +1029,21 @@ export class MvControls {
     const target = this.targets.move
     if (!target) return
     const m = this.viewer.unitMeta || {}
-    const dx = target[0] - this.pos.x
-    const dz = target[1] - this.pos.z
-    const dist = Math.hypot(dx, dz)
-    // Fixed-wing aircraft (aircraft && !hover) can't stop mid-air —
-    // they fly through the target and arc back.  When we get close,
-    // we recompute the target as a fly-by point on the far side of
-    // the requested location, offset perpendicular to the approach
-    // so the unit traces a wide arc through it.  Hover aircraft +
-    // ground/sea units stop normally on arrival.
+    // Fixed-wing aircraft (aircraft && !hover) can't stop mid-air — they fly
+    // through the target and arc back.  They keep their own flight path here;
+    // ground / ship / sub / hover units all share the arc-locomotion
+    // integrator below.  (Aircraft flight dynamics get reworked separately.)
     const isFixedWingAir = !!(m.isAircraft && !m.isHover)
-    const arriveThreshold = isFixedWingAir ? 40 : 0.5
-    if (dist < arriveThreshold) {
-      if (isFixedWingAir) {
-        // Pick a new target: continue past the current one, offset
-        // sideways by ~120 wu so the unit banks back around.  Each
-        // arc-end picks the side opposite the last, giving a rough
-        // figure-eight pattern over the target rather than a tight
-        // circle that the user might mistake for hovering.
+    if (isFixedWingAir) {
+      const dx = target[0] - this.pos.x
+      const dz = target[1] - this.pos.z
+      const dist = Math.hypot(dx, dz)
+      if (dist < 40) {
+        // Recompute a fly-by point past + beside the target so the unit banks
+        // back around it (alternating sides ⇒ rough figure-eight, not a tight
+        // circle that reads as hovering).
         const fwdX = Math.sin(this.heading)
         const fwdZ = Math.cos(this.heading)
-        // Perpendicular (right-hand side of heading): rotateY(-π/2).
         const sx = fwdZ, sz = -fwdX
         this._flybySide = (this._flybySide || 1) * -1
         const lead = 220, lateral = 140 * this._flybySide
@@ -1053,57 +1051,33 @@ export class MvControls {
           target[0] + fwdX * lead + sx * lateral,
           target[1] + fwdZ * lead + sz * lateral,
         ]
-        return  // recompute next tick against new target
+        return
       }
-      // Arrived (hover / ground / sea).
-      this.pos.x = target[0]
-      this.pos.z = target[1]
-      this.targets.move = null
-      this._stopMoving()
+      const want = Math.atan2(dx, dz)
+      const turnStep = this._turnRateRadPerSec() * dtSec
+      let dh = want - this.heading
+      while (dh >  Math.PI) dh -= Math.PI * 2
+      while (dh < -Math.PI) dh += Math.PI * 2
+      if (Math.abs(dh) > turnStep) this.heading += Math.sign(dh) * turnStep
+      else this.heading = want
+      const step = this._maxVelocityWUPerSec() * dtSec  // never slows at target
+      this.pos.x += Math.sin(this.heading) * step
+      this.pos.z += Math.cos(this.heading) * step
       this._applyRendererTransform()
       return
     }
-    // Desired heading: atan2 with renderer convention (+Z forward).
-    const want = Math.atan2(dx, dz)
-    const turnRate = this._turnRateRadPerSec()
-    let dh = want - this.heading
-    // Shortest-arc unwrap.
-    while (dh >  Math.PI) dh -= Math.PI * 2
-    while (dh < -Math.PI) dh += Math.PI * 2
-    const turnStep = turnRate * dtSec
-    if (Math.abs(dh) > turnStep) {
-      this.heading += Math.sign(dh) * turnStep
-    } else {
-      this.heading = want
-    }
-    // Forward advance.  Three movement models:
-    //   * Fixed-wing aircraft: always full speed, never clamped —
-    //     trace a banking arc through the target.
-    //   * Ships (+ hover units): translate WHILE turning.  Real
-    //     boats arc around the target; they don't pivot in place.
-    //     Speed scales with how close to aligned we are
-    //     (cos(dh)² so a 90° misalignment gives 0 forward speed, a
-    //     30° gives ~75%) — this keeps the unit visibly moving from
-    //     the moment Move is clicked instead of sitting at the
-    //     spawn point rotating for 13 seconds (ARMBATS at TurnRate
-    //     64 is the canonical example).
-    //   * Ground units (kbots, tanks): pivot in place, then walk
-    //     once aligned.  Matches the legged + tracked feel.
-    const isShipOrHover = !!(m.isShip || m.isSub || m.isHover)
-    const aligned = (Math.abs(dh) <= turnStep) || isFixedWingAir
-    if (aligned || isShipOrHover) {
-      const speed = this._maxVelocityWUPerSec()
-      let scale = 1
-      if (isShipOrHover && !aligned) {
-        const cosA = Math.cos(dh)
-        scale = Math.max(0, cosA * cosA)        // cos² — 0 at 90°, 0.75 at 30°
-      }
-      const baseStep = speed * dtSec * scale
-      const step = isFixedWingAir
-        ? speed * dtSec                          // always full speed, never clamped — fighter doesn't slow at the target
-        : Math.min(baseStep, dist)
-      this.pos.x += Math.sin(this.heading) * step
-      this.pos.z += Math.cos(this.heading) * step
+    // Ground / ship / sub / hover — shared drive-and-steer arc integrator
+    // (translate while turning, turn radius = speed / turnRate, accel/brake
+    // ramp), identical to the sandbox engine path.
+    const st = { x: this.pos.x, z: this.pos.z, heading: this.heading, speed: this.speed || 0 }
+    const r = stepSurfaceLocomotion(st, target[0], target[1], m, dtSec)
+    this.pos.x = st.x
+    this.pos.z = st.z
+    this.heading = st.heading
+    this.speed = st.speed
+    if (r.arrived) {
+      this.targets.move = null
+      this._stopMoving()
     }
     this._applyRendererTransform()
   }

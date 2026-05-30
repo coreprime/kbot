@@ -72,6 +72,7 @@
 
 import { CobRuntime } from './cob-runtime.js'
 import { CobBinding } from './cob-binding.js'
+import { stepSurfaceLocomotion } from './locomotion.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -711,45 +712,26 @@ export class GameEngine {
     // as 30 wu/sec and walking factories across the field.
     const canMove = !u.meta || u.meta.canMove !== false
     if (u.moveTarget && canMove) {
-      const dx = u.moveTarget.x - u.pos.x
-      const dz = u.moveTarget.z - u.pos.z
-      const dist = Math.hypot(dx, dz)
-      if (dist < 0.5) {
+      // Shared drive-and-steer integrator: the unit translates while it turns
+      // toward the target so its path curves in an arc (turn radius =
+      // speed / turnRate, both straight from the FBI), ramping up under
+      // Acceleration and braking into the goal under BrakeRate.  The same
+      // helper backs the unit-editor's Move so both views drive identically.
+      const st = { x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0 }
+      const r = stepSurfaceLocomotion(st, u.moveTarget.x, u.moveTarget.z, u.meta, dtSec)
+      u.pos.x = st.x
+      u.pos.z = st.z
+      u.heading = st.heading
+      u.speed = st.speed
+      if (r.arrived) {
         u.moveTarget = null
         u.isMoving = false
       } else {
-        const want = Math.atan2(dx, dz)
-        // FBI TurnRate: TA-angle/frame.  Convert to rad/sec.
-        const turnRateTA = (u.meta && u.meta.turnRate) ? u.meta.turnRate : 600
-        const turnRate = (turnRateTA / 65536) * Math.PI * 2 * 30
-        let dh = want - u.heading
-        while (dh > Math.PI) dh -= Math.PI * 2
-        while (dh < -Math.PI) dh += Math.PI * 2
-        const turnStep = turnRate * dtSec
-        let aligned
-        if (Math.abs(dh) > turnStep) {
-          u.heading += Math.sign(dh) * turnStep
-          aligned = false
-        } else {
-          u.heading = want
-          aligned = true
-        }
-        if (aligned) {
-          // maxVelocity = 0 should have been caught by the canMove gate
-          // above; the `|| 30` arm survives only as a safety net for
-          // mod units that ship a non-zero meta but somehow zero
-          // maxVelocity.
-          const speed = (u.meta && u.meta.maxVelocity > 0)
-            ? u.meta.maxVelocity * 30 /* FBI units/frame × 30Hz → wu/sec */
-            : 30
-          const step = Math.min(dist, speed * dtSec)
-          u.pos.x += Math.sin(u.heading) * step
-          u.pos.z += Math.cos(u.heading) * step
-        }
         u.isMoving = true
       }
     } else {
       u.isMoving = false
+      u.speed = 0
     }
     if (u.isMoving && !wasMoving) {
       if (u.binding && u.binding.hasScript('StartMoving')) {
