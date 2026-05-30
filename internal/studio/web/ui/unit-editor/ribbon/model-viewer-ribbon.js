@@ -70,6 +70,8 @@ const _state = signal({
   dof:               false,
   dofDistance:       500,         // %, /100 → onset distance multiplier (5×)
   dofLevel:          100,         // %, /100 → blur-radius scale
+  cinematic:         false,       // tonemap + grade + vignette + FXAA
+  cinematicLevel:    100,         // %, /100 → grade intensity
   waterReflections:  true,
 
   bob:               true,
@@ -130,6 +132,8 @@ const _bridge = {
   setDoF:                (_on) => {},
   setDoFDistance:        (_v) => {},      // onset distance multiplier
   setDoFLevel:           (_v) => {},      // blur-radius scale
+  setCinematic:          (_on) => {},
+  setCinematicStrength:  (_v) => {},
   setWaterReflections:   (_on) => {},
 
   setBob:           (_on) => {},
@@ -171,6 +175,7 @@ export function configureModelViewerRibbonBridge(impl) {
     setReflections: (_o) => {}, setSpecular: (_o) => {}, setMetalSpec: (_o) => {},
     setGodBeams: (_o) => {}, setDoF: (_o) => {},
     setDoFDistance: (_v) => {}, setDoFLevel: (_v) => {},
+    setCinematic: (_o) => {}, setCinematicStrength: (_v) => {},
     setWaterReflections: (_o) => {},
     setBob: (_o) => {}, setBobAmount: (_v) => {}, setBobSpeed: (_v) => {},
     setWaves: (_o) => {}, setWavesIntensity: (_v) => {},

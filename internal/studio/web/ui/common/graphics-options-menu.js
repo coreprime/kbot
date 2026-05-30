@@ -160,5 +160,20 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
         format=${(v) => `${(v / 100).toFixed(1)}×`}
         onChange=${(v) => set('bobSpeed', v, v / 100, bridge.setBobSpeed)} />
     <//>
+
+    <${MenuSectionLabel}>Post-Processing<//>
+    <${MenuSubmenuRow}
+      icon="🎬"
+      label="Cinematic"
+      title="Filmic look — ACES tonemap, contrast/saturation grade, vignette, and anti-aliasing.  Hover for intensity."
+      on=${s.cinematic}
+      onToggle=${(next) => set('cinematic', next, next, bridge.setCinematic)}>
+      <${_Slider}
+        label="Intensity"
+        min=${0} max=${100} step=${5}
+        value=${s.cinematicLevel}
+        format=${(v) => `${v}%`}
+        onChange=${(v) => set('cinematicLevel', v, v / 100, bridge.setCinematicStrength)} />
+    <//>
   `
 }

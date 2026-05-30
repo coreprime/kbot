@@ -39,6 +39,9 @@ export const GRAPHICS_DEFAULTS = {
   dofDistance:      500,   // 100..2000 → 1.0..20.0× onset distance (default 5×)
   dofLevel:         100,   // 0..200    → 0..2.0× max blur radius
 
+  cinematic:        false, // ACES tonemap + grade + vignette + FXAA
+  cinematicLevel:   100,   // 0..100    → grade intensity %
+
   waterReflections: true,
   waves:            true,
   wavesIntensity:   100,   // 0..200  → 0..2.0×
@@ -86,6 +89,8 @@ export function applyGraphicsOptionsToRenderer(r) {
   r.setDoFEnabled?.(!!g.dof)
   r.setDoFDistance?.(g.dofDistance / 100)
   r.setDoFLevel?.(g.dofLevel / 100)
+  r.setCinematic?.(!!g.cinematic)
+  r.setCinematicStrength?.(g.cinematicLevel / 100)
   r.setWaterReflectionsEnabled?.(!!g.waterReflections)
   r.setWavesEnabled?.(!!g.waves)
   r.setWavesIntensity?.(g.wavesIntensity / 100)

@@ -771,6 +771,16 @@ export class ModelRenderer {
     this.dofFocalDepth = 1 - DOF_BASE_GAP / this.dofDistanceMul
     this.dofFocalRange = 0.0015
     this.dofMaxBlur = DOF_BASE_BLUR
+
+    // Cinematic post-grade — ACES tonemap + contrast/saturation +
+    // vignette + a final FXAA pass.  Default off so the baseline look is
+    // unchanged until the user opts in via Graphics Options.  Any of the
+    // post-FX (DoF, cinematic, bloom) routes the scene through the
+    // offscreen FBO + composite chain.
+    this.optCinematic = false
+    this.cinematicStrength = 1.0    // 0..1 grade mix toward the graded image
+    this.optBloom = false
+    this.bloomStrength = 1.0
     // Shader program init is deferred to ModelRenderer.init() — that
     // method fetches shader sources from shaders/ and links them.  Set
     // to true once init() has resolved so render() bails early when
@@ -879,6 +889,7 @@ export class ModelRenderer {
         // when missing, the renderer skips the post-process pass
         // entirely.
         this.#initDoFProgram(sources.dof.vs, sources.dof.fs)
+        this.#initFxaaProgram(sources.fxaa.vs, sources.fxaa.fs)
       }
       this._programsReady = true
       this.requestRedraw()
@@ -1566,6 +1577,29 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setCinematic toggles the ACES tonemap + colour grade + vignette +
+  // FXAA post pass.  setCinematicStrength scales how far the grade
+  // pushes from the raw image (0 = none, 1 = full).
+  setCinematic(on) { this.optCinematic = !!on; this.requestRedraw() }
+  setCinematicStrength(v) {
+    this.cinematicStrength = Math.max(0, Math.min(1, +v || 0))
+    this.requestRedraw()
+  }
+
+  // setBloomEnabled toggles the bright-pass glow; setBloomStrength
+  // scales the additive bloom contribution.
+  setBloomEnabled(on) { this.optBloom = !!on; this.requestRedraw() }
+  setBloomStrength(v) {
+    this.bloomStrength = Math.max(0, Math.min(4, +v || 0))
+    this.requestRedraw()
+  }
+
+  // #postActive — true when any post-process effect needs the scene
+  // rendered into the offscreen FBO + composited.  Gates the FBO path.
+  #postActive() {
+    return this.optDof || this.optCinematic || this.optBloom
+  }
+
   // setBgTerrainEnabled toggles the background-mountain ring.  When
   // off, the vertex shader's uMountainActive=0 fast-path keeps the
   // ground flat - no cost beyond a few extra clamps per vertex.
@@ -1854,12 +1888,12 @@ export class ModelRenderer {
       if (sun2Mag > 0.001 && this._shadowFBO2) this.#renderShadowPass(1)
     }
 
-    // DoF needs an offscreen colour + depth target to do its
-    // distance-weighted blur from.  When the scene FBO is set up, we
-    // render the entire pass into it and composite via #compositeDoF
-    // below.  Falling back to the default framebuffer when DoF is
-    // disabled / unavailable keeps the existing direct-render path.
-    const useScenePass = this.optDof && this.#ensureSceneFBO()
+    // Post-process effects (DoF, cinematic grade, bloom) need the scene
+    // rendered into an offscreen colour + depth target so the composite
+    // chain can read it back.  When any are active we render into the
+    // FBO and run #runPostChain below; otherwise the direct-to-screen
+    // path keeps its MSAA + zero overhead.
+    const useScenePass = this.#postActive() && this.#ensureSceneFBO()
     if (useScenePass) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, this._sceneFBO)
       gl.viewport(0, 0, this._sceneW, this._sceneH)
@@ -2121,9 +2155,9 @@ export class ModelRenderer {
       this.#renderParticles()
     }
 
-    // When the scene rendered into our offscreen FBO (DoF enabled),
-    // composite to the default framebuffer via the post-process pass.
-    if (useScenePass) this.#compositeDoF()
+    // When the scene rendered into our offscreen FBO, run the post
+    // chain (DoF + bloom + cinematic grade, then FXAA) to the screen.
+    if (useScenePass) this.#runPostChain()
 
     // Restore single-entity `this.model` after multi-entity rendering
     // so callers reading the renderer's `model` (inspectors, piece
@@ -3645,6 +3679,11 @@ export class ModelRenderer {
     this.uDoFFocalRange = gl.getUniformLocation(prog, 'uFocalRange')
     this.uDoFMaxBlur = gl.getUniformLocation(prog, 'uMaxBlur')
     this.uDoFEnabled = gl.getUniformLocation(prog, 'uEnabled')
+    this.uDoFBloom = gl.getUniformLocation(prog, 'uBloom')
+    this.uDoFBloomOn = gl.getUniformLocation(prog, 'uBloomOn')
+    this.uDoFBloomStrength = gl.getUniformLocation(prog, 'uBloomStrength')
+    this.uDoFCinematic = gl.getUniformLocation(prog, 'uCinematic')
+    this.uDoFGrade = gl.getUniformLocation(prog, 'uGrade')
     const buf = gl.createBuffer()
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
@@ -3704,13 +3743,24 @@ export class ModelRenderer {
     return true
   }
 
-  // #compositeDoF draws the scene FBO into the default framebuffer
-  // through the DoF post-process shader.  When DoF is disabled or the
-  // FBO isn't ready, it does a straight copy (uEnabled=0).
-  #compositeDoF() {
+  // #runPostChain composites the offscreen scene into the screen.
+  // Stage 1 (composite): DoF blur + bloom add + cinematic grade via the
+  // dof.frag program.  When the cinematic FXAA pass is active the
+  // composite renders into the LDR FBO so FXAA can sample its result;
+  // otherwise it draws straight to the default framebuffer.
+  // Stage 2 (FXAA): only when cinematic is on, the LDR FBO is blurred
+  // along its edges into the default framebuffer.
+  #runPostChain() {
     const gl = this.gl
     if (!this.programDoF || !this._sceneFBO) return
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    const wantFxaa = this.optCinematic && !!this.programFxaa && this.#ensureLdrFBO()
+
+    // Stage 1 — composite.
+    if (wantFxaa) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this._ldrFBO)
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
     gl.disable(gl.DEPTH_TEST)
     gl.disable(gl.BLEND)
@@ -3721,15 +3771,87 @@ export class ModelRenderer {
     gl.activeTexture(gl.TEXTURE1)
     gl.bindTexture(gl.TEXTURE_2D, this._sceneDepthTex)
     gl.uniform1i(this.uDoFSceneDepth, 1)
+    // Bloom sampler — bind the live bloom texture when on, else a
+    // harmless stand-in (the scene colour) so the sampler is always
+    // backed; the uBloomOn gate keeps it out of the output anyway.
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, (this.optBloom && this._bloomTex) ? this._bloomTex : this._sceneColorTex)
+    gl.uniform1i(this.uDoFBloom, 2)
     gl.uniform2f(this.uDoFTexel, 1 / this._sceneW, 1 / this._sceneH)
     gl.uniform1f(this.uDoFFocalDepth, this.dofFocalDepth)
     gl.uniform1f(this.uDoFFocalRange, this.dofFocalRange)
     gl.uniform1f(this.uDoFMaxBlur, this.dofMaxBlur)
     gl.uniform1f(this.uDoFEnabled, this.optDof ? 1 : 0)
+    gl.uniform1f(this.uDoFBloomOn, (this.optBloom && this._bloomTex) ? 1 : 0)
+    gl.uniform1f(this.uDoFBloomStrength, this.bloomStrength)
+    gl.uniform1f(this.uDoFCinematic, this.optCinematic ? 1 : 0)
+    gl.uniform1f(this.uDoFGrade, this.cinematicStrength)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._dofVBO)
     gl.enableVertexAttribArray(this.aDoFPos)
     gl.vertexAttribPointer(this.aDoFPos, 2, gl.FLOAT, false, 0, 0)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+    // Stage 2 — FXAA over the composited LDR image.
+    if (wantFxaa) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
+      gl.useProgram(this.programFxaa)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, this._ldrColorTex)
+      gl.uniform1i(this.uFxaaTex, 0)
+      gl.uniform2f(this.uFxaaTexel, 1 / this._sceneW, 1 / this._sceneH)
+      gl.uniform1f(this.uFxaaEnabled, 1)
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._dofVBO)
+      gl.enableVertexAttribArray(this.aFxaaPos)
+      gl.vertexAttribPointer(this.aFxaaPos, 2, gl.FLOAT, false, 0, 0)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+    }
+  }
+
+  // #initFxaaProgram links the FXAA pass + grabs its uniform locations.
+  // Reuses the shared full-screen quad VBO created by #initDoFProgram.
+  #initFxaaProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programFxaa = prog
+    const gl = this.gl
+    this.aFxaaPos = gl.getAttribLocation(prog, 'aPos')
+    this.uFxaaTex = gl.getUniformLocation(prog, 'uTex')
+    this.uFxaaTexel = gl.getUniformLocation(prog, 'uTexel')
+    this.uFxaaEnabled = gl.getUniformLocation(prog, 'uEnabled')
+  }
+
+  // #ensureLdrFBO (re)allocates the full-res colour-only target the
+  // composite stage writes to when FXAA needs a sampleable input.
+  // Sized to the drawing buffer; matches scene FBO dims.
+  #ensureLdrFBO() {
+    const gl = this.gl
+    const w = gl.drawingBufferWidth | 0
+    const h = gl.drawingBufferHeight | 0
+    if (w <= 0 || h <= 0) return false
+    if (this._ldrFBO && this._ldrW === w && this._ldrH === h) return true
+    if (this._ldrFBO) gl.deleteFramebuffer(this._ldrFBO)
+    if (this._ldrColorTex) gl.deleteTexture(this._ldrColorTex)
+    this._ldrFBO = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._ldrFBO)
+    const color = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, color)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0)
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteFramebuffer(this._ldrFBO); gl.deleteTexture(color)
+      this._ldrFBO = null; this._ldrColorTex = null
+      return false
+    }
+    this._ldrColorTex = color
+    this._ldrW = w
+    this._ldrH = h
+    return true
   }
 
   // #loadTerrainTexture pulls the active tileset's flat-tile PNG from

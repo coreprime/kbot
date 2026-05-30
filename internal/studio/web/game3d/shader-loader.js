@@ -93,6 +93,7 @@ export const SHADER_MANIFEST = {
   shadow:    { vs: 'shadow/shadow.vert',       fs: 'shadow/shadow.frag' },
   wire:      { vs: 'wire/wire.vert',           fs: 'wire/wire.frag' },
   dof:       { vs: 'dof/dof.vert',             fs: 'dof/dof.frag' },
+  fxaa:      { vs: 'fxaa/fxaa.vert',           fs: 'fxaa/fxaa.frag' },
   particles: { vs: 'particles/particles.vert', fs: 'particles/particles.frag' },
   impostor:  { vs: 'impostor/impostor.vert',   fs: 'impostor/impostor.frag' },
 }

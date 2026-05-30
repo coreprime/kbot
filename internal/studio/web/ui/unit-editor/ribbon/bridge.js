@@ -136,6 +136,8 @@ export function wireModelViewerRibbon() {
       setDoF:               (on) => eachRenderer((r) => r.setDoFEnabled?.(!!on)),
       setDoFDistance:       (v)  => eachRenderer((r) => r.setDoFDistance?.(v)),
       setDoFLevel:          (v)  => eachRenderer((r) => r.setDoFLevel?.(v)),
+      setCinematic:         (on) => eachRenderer((r) => r.setCinematic?.(!!on)),
+      setCinematicStrength: (v)  => eachRenderer((r) => r.setCinematicStrength?.(v)),
       setWaterReflections:  (on) => eachRenderer((r) => r.setWaterReflectionsEnabled?.(!!on)),
 
       setBob:               (on) => eachRenderer((r) => r.setBobEnabled?.(!!on)),
