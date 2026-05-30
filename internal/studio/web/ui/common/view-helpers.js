@@ -68,6 +68,69 @@ export function wireHotkeys(view, opts) {
   view._hotkeysDetach = attachUnitHotkeys(opts)
 }
 
+// Particle-pool kind codes that count as "in-flight projectiles" for the
+// Projectiles inspector.  Maps each to a friendly name + the family bucket
+// the panel uses.  Lasers (204) are skipped — they're instantaneous beams,
+// not flying ordnance, and dropping them in here makes the panel churn
+// every fire tick.
+const _PARTICLE_PROJECTILE_KINDS = {
+  200: { name: 'Bullet',  family: 'bullet'  },  // EMG / cannon rounds
+  201: { name: 'Shell',   family: 'shell'   },  // tank / artillery shells
+  202: { name: 'Plasma',  family: 'plasma'  },  // Guardian / Punisher etc.
+  203: { name: 'D-Gun',   family: 'dgun'    },  // Commander disintegrator
+  205: { name: 'Missile', family: 'missile' },  // dead-reckoned missiles
+}
+
+// appendParticleProjectiles walks every binding's particle pool and pushes a
+// projectile record for each alive slot whose kind is one of the projectile-
+// family codes above.  Owner is the unit hosting the pool.  Origin /
+// destination are EXTRAPOLATED along the velocity vector — the engine's
+// dead-reckoned particles carry no explicit launch / aim point, but the
+// remaining-life × velocity segment ahead reads as "where this will land",
+// and the elapsed-life × velocity segment behind reads as "where it came
+// from" — close enough for the inspector to plot a track.
+export function appendParticleProjectiles(engine, out) {
+  if (!engine) return
+  for (const u of engine.units()) {
+    if (!u || u.dead) continue
+    const pool = u.binding && u.binding.particles
+    if (!pool || !pool.count) continue
+    for (let i = 0; i < pool.count; i++) {
+      if (!pool.alive[i]) continue
+      const k = pool.kind[i] | 0
+      const def = _PARTICLE_PROJECTILE_KINDS[k]
+      if (!def) continue
+      const px = pool.x[i], py = pool.y[i], pz = pool.z[i]
+      const vx = pool.vx[i], vy = pool.vy[i], vz = pool.vz[i]
+      const speed = Math.hypot(vx, vy, vz)
+      const lifeMs   = pool.life[i]
+      const life0Ms  = pool.life0[i]
+      const elapsedMs = Math.max(0, life0Ms - lifeMs)
+      const elapsedSec   = elapsedMs / 1000
+      const remainingSec = Math.max(0, lifeMs / 1000)
+      out.push({
+        id: `p-${u.id}-${i}`,
+        weaponName: def.name,
+        model: '',
+        mode: def.family,
+        origin:      { x: px - vx * elapsedSec,   y: py - vy * elapsedSec,   z: pz - vz * elapsedSec },
+        destination: { x: px + vx * remainingSec, y: py + vy * remainingSec, z: pz + vz * remainingSec },
+        liveTarget: null,
+        pos: { x: px, y: py, z: pz },
+        vel: { x: vx, y: vy, z: vz },
+        speed,
+        ageSec: elapsedSec,
+        lifeSec: life0Ms / 1000,
+        owner: {
+          id: u.id,
+          name: u.name || '',
+          side: u.side | 0,
+        },
+      })
+    }
+  }
+}
+
 // wrapCobWithAggregate returns a NON-mutating proxy of the given cob
 // binding with particles/audio overridden to the scene-wide
 // aggregators on `view`.  Object.create gives a fresh own-property

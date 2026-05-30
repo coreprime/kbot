@@ -42,28 +42,28 @@ function _toggleSection(key) {
   _collapsedSections.value = next
 }
 
-// Per-family icon + label — matches the projectile.mode strings the engine
-// stamps on each record in projectiles.js.  Any unrecognised mode falls
-// into the 'other' bucket so the user still sees a count instead of the
-// projectile vanishing from the panel.
+// Per-family icon + label — both the engine's projectile-mode tags (bombs /
+// guided / vlaunch / straight / ballistic) and the particle-pool projectile
+// tags (bullet / shell / plasma / dgun / missile) feed in here.
 const _FAMILY_DEFS = {
-  bomb:    { id: 'bomb',    label: 'Bombs',    icon: '💣' },
-  missile: { id: 'missile', label: 'Missiles', icon: '🚀' },
-  rocket:  { id: 'rocket',  label: 'Rockets',  icon: '🎆' },
-  other:   { id: 'other',   label: 'Other Projectiles', icon: '◦' },
+  bomb:        { id: 'bomb',        label: 'Bombs',       icon: '💣' },
+  missile:     { id: 'missile',     label: 'Missiles',    icon: '🚀' },
+  rocket:      { id: 'rocket',      label: 'Rockets',     icon: '🎆' },
+  projectile:  { id: 'projectile',  label: 'Projectiles', icon: '◦' },
 }
 
-// Family resolver — maps the engine's mode tag into one of the four
-// inspector buckets.  Bombs are gravity-released; missiles are anything
-// that homes (guided or vlaunch); rockets are an unguided powered shot
-// (the engine's 'straight' mode); ballistic shells + anything else land
-// in Other so the panel never silently drops a row.
+// Family resolver — maps the source mode tag into one of the four inspector
+// buckets.  Bombs are gravity-released; missiles are anything that homes
+// (engine 'guided' / 'vlaunch', or a particle 'missile').  Rockets are the
+// engine's unguided powered 'straight' shot.  Everything else — ballistic
+// shells, particle bullets / plasma / d-guns, unknown modes — falls under
+// Projectiles so the panel never silently drops a row.
 function _familyOf(mode) {
   switch (mode) {
-    case 'dropped':                          return _FAMILY_DEFS.bomb
-    case 'guided':  case 'vlaunch':          return _FAMILY_DEFS.missile
-    case 'straight':                         return _FAMILY_DEFS.rocket
-    default:                                 return _FAMILY_DEFS.other
+    case 'dropped':                                          return _FAMILY_DEFS.bomb
+    case 'guided':   case 'vlaunch':   case 'missile':       return _FAMILY_DEFS.missile
+    case 'straight':                                         return _FAMILY_DEFS.rocket
+    default:                                                 return _FAMILY_DEFS.projectile
   }
 }
 
@@ -229,14 +229,13 @@ function ProjectilesBody() {
     // Family mode — fixed bucket order so a user toggling Bombs back open
     // doesn't have it jump position when the rocket count changes.
     const byFamily = new Map()
-    for (const fam of [_FAMILY_DEFS.missile, _FAMILY_DEFS.rocket, _FAMILY_DEFS.bomb, _FAMILY_DEFS.other]) {
-      byFamily.set(fam.id, [])
-    }
+    const order = [_FAMILY_DEFS.missile, _FAMILY_DEFS.rocket, _FAMILY_DEFS.bomb, _FAMILY_DEFS.projectile]
+    for (const fam of order) byFamily.set(fam.id, [])
     for (const p of list) {
       const fam = _familyOf(p.mode)
       byFamily.get(fam.id).push(p)
     }
-    for (const fam of [_FAMILY_DEFS.missile, _FAMILY_DEFS.rocket, _FAMILY_DEFS.bomb, _FAMILY_DEFS.other]) {
+    for (const fam of order) {
       const items = byFamily.get(fam.id)
       if (items.length === 0) continue
       sections.push(html`

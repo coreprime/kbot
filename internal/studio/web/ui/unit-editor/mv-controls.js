@@ -28,6 +28,7 @@ import {
   subscribeEngine,
   wireHotkeys,
   wrapCobWithAggregate,
+  appendParticleProjectiles,
   disposeView,
 } from '../common/view-helpers.js'
 
@@ -311,6 +312,8 @@ export class MvControls {
     const engine = this.engine
     if (!engine) return []
     const out = []
+    // Model-projectiles (bombs / homing missiles / mesh rockets) — full
+    // engine flight records.
     for (const p of engine.projectiles()) {
       if (!p || p.dead) continue
       const owner = engine.unitById(p.ownerId) || null
@@ -320,7 +323,7 @@ export class MvControls {
         if (tu && !tu.dead) liveTarget = { x: tu.pos.x, y: tu.pos.y, z: tu.pos.z }
       }
       out.push({
-        id: p.id,
+        id: 'm-' + p.id,
         weaponName: p.weaponName || '',
         model: p.model || '',
         mode: p.mode || 'straight',
@@ -339,6 +342,9 @@ export class MvControls {
         } : null,
       })
     }
+    // Particle-pool projectiles — bullets, plasma, shells, d-guns, the
+    // dead-reckoned missiles from PeeWees / Guardians / Commanders / etc.
+    appendParticleProjectiles(engine, out)
     return out
   }
 

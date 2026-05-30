@@ -32,6 +32,7 @@ import { teamColorForSide } from '../../game3d/team-colors.js'
 import {
   wireHotkeys,
   wrapCobWithAggregate,
+  appendParticleProjectiles,
   disposeView,
 } from '../common/view-helpers.js'
 import { getReactUi } from '../host-context.js'
@@ -2041,6 +2042,8 @@ export class SandboxView {
     const engine = this.engine
     if (!engine) return []
     const out = []
+    // Model-projectiles (bombs / homing missiles / mesh rockets) — the
+    // engine simulates these with full flight records.
     for (const p of engine.projectiles()) {
       if (!p || p.dead) continue
       const owner = engine.unitById(p.ownerId) || null
@@ -2050,7 +2053,7 @@ export class SandboxView {
         if (tu && !tu.dead) liveTarget = { x: tu.pos.x, y: tu.pos.y, z: tu.pos.z }
       }
       out.push({
-        id: p.id,
+        id: 'm-' + p.id,
         weaponName: p.weaponName || '',
         model: p.model || '',
         mode: p.mode || 'straight',
@@ -2069,6 +2072,16 @@ export class SandboxView {
         } : null,
       })
     }
+    // Particle-pool projectiles — bullets, plasma, shells, d-guns, the
+    // dead-reckoned missiles fired by everything that's NOT a bomber: PeeWees,
+    // Guardians, Commanders, etc.  Each unit's binding owns its own particle
+    // pool, so we walk every binding here and pick out the projectile-kind
+    // slots (kind code 200-299, lasers excepted since they're instantaneous
+    // beams rather than flying ordnance).  Origin / destination are extrapolated
+    // along the velocity vector: the elapsed-life segment behind the slot
+    // gives the launch point, the remaining-life segment ahead of it gives
+    // where it'll expire if nothing intercepts it.
+    appendParticleProjectiles(engine, out)
     return out
   }
 
