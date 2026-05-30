@@ -57,9 +57,8 @@ uniform float uRunningLights;   // Surface-hint "running lights" — colour-keye
 uniform float uRLEmit;          // running-lights per-texture emissive strength (hint)
 uniform float uRLStrength;      // "Running Lights" intensity slider; 1 = default
 uniform float uRLFadeOut;       // running-lights fade-out opacity (0..1): 0 = dim phase keeps the original texture, 1 = dim phase fades to black
-uniform float uRLMinNeighbors;  // running-lights continuity: a lamp texel must have at least this many keyed 8-neighbours (0 = off, 1 = reject lone specks)
-uniform float uRLKeyBright;     // running-lights detection: min brightness (max channel, 0..1) a texel needs to read as a lamp — lower picks up more pixels
-uniform float uRLKeySat;        // running-lights detection: min relative saturation (0..1) a texel needs to read as a lamp — lower picks up more pixels
+uniform sampler2D uLampMap;     // running-lights lamp atlas — per-texel RGB = the texel's lamp's single dominant colour, A = lamp membership (built CPU-side)
+uniform float uLampMapValid;    // 1 when uLampMap holds a real atlas for this batch, 0 = no lamps this draw
 uniform float uBump;            // Surface-hint auto-bump — perturb the normal from the tile's luminance gradient
 uniform float uBumpIntensity;   // bump relief strength (per-texture hint)
 uniform float uBumpStrength;    // "Bump Mapping" intensity slider; 1 = default
@@ -151,22 +150,6 @@ float sampleShadowMap2(vec3 normal) {
     }
   }
   return lit / 9.0;
-}
-
-// lampSample — sample the SHARP-mip texel at `uv` and report whether it reads
-// as a saturated running-light pixel.  Returns the RAW colour in .rgb and
-// 1.0 / 0.0 in .a for keyed / not-keyed.  The running-lights block sums this
-// across a neighbourhood so the effect can be weighted by both local cluster
-// DENSITY and BRIGHTNESS — bright dots or coherent blobs glow, while the lone
-// DARK specks of texture grain (the dither that reads near the key threshold)
-// fall through to the base texture instead of firing as stray pixels.
-vec4 lampSample(vec2 uv) {
-  vec3 t = texture2D(uTex, uv, -8.0).rgb;
-  float mx = max(max(t.r, t.g), t.b);
-  float mn = min(min(t.r, t.g), t.b);
-  float rsat = (mx - mn) / max(mx, 0.004);
-  float keyed = step(uRLKeyBright, mx) * step(uRLKeySat, rsat);
-  return vec4(t, keyed);
 }
 
 void main() {
@@ -504,79 +487,52 @@ void main() {
   // bright lamp back toward the hull and it neither reads as emissive nor
   // feeds the bloom bright-pass.
   vec3 rlEmissive = vec3(0.0);
-  if (uRunningLights > 0.5 && uMode != 1) {
-    vec2 tx = uTexel;
+  if (uRunningLights > 0.5 && uLampMapValid > 0.5 && uMode != 1) {
     // ── Edge guard ──────────────────────────────────────────────────────
-    // Fade the whole effect out within a couple of texels of the tile border.
-    // The outermost texels of a tile are often saturated frame/bleed pixels,
-    // and the neighbourhood scan + sharp -8.0 fetch alias badly where a face
-    // is seen edge-on — both light up as stray lamps along a surface's edges.
-    // Distance to the nearest u/v border, in texels (fract keeps it correct
-    // for tiled UVs); 0 at the very edge, 1 a couple of texels in.
+    // Fade the effect out within a couple of texels of the tile border.  The
+    // outermost texels of a tile are often saturated frame/bleed pixels, and
+    // any texture fetch aliases badly where a face is seen edge-on — both
+    // light up as stray lamps along a surface's edges.  Distance to the
+    // nearest u/v border, in texels (fract keeps it correct for tiled UVs);
+    // 0 at the very edge, 1 a couple of texels in.
     vec2 uvf = fract(vUV);
     vec2 edgeUV = min(uvf, 1.0 - uvf);
-    float edgePx = min(edgeUV.x / max(tx.x, 1e-6), edgeUV.y / max(tx.y, 1e-6));
+    float edgePx = min(edgeUV.x / max(uTexel.x, 1e-6), edgeUV.y / max(uTexel.y, 1e-6));
     float edgeFade = smoothstep(0.5, 2.5, edgePx);
 
-    // ── Blob colour + phase (blurred mip) ───────────────────────────────
-    // A coarse mip averages a connected cluster into one soft coloured blob,
-    // so EVERY texel that touches the blob sees the same DOMINANT colour and
-    // therefore the same blink phase — a contacting area reads as ONE lamp,
-    // not several groups flickering out of step (the split-purple-dot bug).
-    // The same blurred sample drives the wide hull glow (smooth, no hard edge).
-    vec3 gb = texture2D(uTex, vUV, 2.5).rgb;
-    float gmx = max(max(gb.r, gb.g), gb.b);
-    float gmn = min(min(gb.r, gb.g), gb.b);
-    float gsat = (gmx - gmn) / max(gmx, 0.004);
-    vec3 hue = gb / max(gmx, 0.004);                 // dominant (vivid) blob hue
-    // Blink phase from the CONTINUOUS hue angle (0..1 around the wheel) so a
-    // single-coloured blob pulses as ONE lamp.  The old 3-bucket mapping
-    // (blue / green / yellow-red) split colours that straddled a bucket edge
-    // — e.g. a purple area (r≈b) flickered as two competing lamps, one blue
-    // one red, on the same texels.  A smooth angle has no such seam, while
-    // distinct colours (blue vs yellow) still land on different phases.
+    // ── Lamp atlas ───────────────────────────────────────────────────────
+    // The lamp atlas (lamp-map.js) has already grouped every proximal /
+    // touching lamp texel into one connected component and baked that
+    // component's SINGLE dominant colour here.  So an entire lamp shares one
+    // colour → one blink phase → one intensity, with no per-pixel colour
+    // drift — the split-purple-dot bug is gone because the split came from
+    // sampling colour locally per fragment.  The sharp LOD-0 fetch gives
+    // crisp membership + colour; a blurred mip gives a soft halo for the haze.
+    vec4 lamp = texture2D(uLampMap, vUV);
+    vec4 lampSoft = texture2D(uLampMap, vUV, 2.5);
+    float member = lamp.a * edgeFade;
+    vec3 hue = lamp.rgb;                              // component's vivid colour
+    // Blink phase from the component hue → identical across the whole lamp.
     float phase = rgbToHsv(hue).x * 6.2831853;
     float blink = smoothstep(0.12, 0.88, 0.5 + 0.5 * sin(uTime * 3.5 + phase));
 
-    // ── Lamp body gate (sharp 5x5 scan) ─────────────────────────────────
-    // The blurred colour says WHAT colour and WHEN; the sharp scan says WHERE
-    // a crisp lamp texel actually sits.  A keyed texel lights if it is BRIGHT
-    // (lamp dots read ~0.45–0.9 vs the ~0.12–0.18 dark dither — also rescues a
-    // dot whose pixels sit a texel apart, e.g. corv04b's cyan) OR part of a
-    // DENSE blob (a 2x2 status cluster / lit panel, even when painted dark).
-    // A lone DARK speck is neither, so it falls through to the base texture.
-    float dens = 0.0, wsum = 0.0;
-    vec4 c0 = vec4(0.0);
-    for (int dy = -2; dy <= 2; dy++) {
-      for (int dx = -2; dx <= 2; dx++) {
-        vec4 ls = lampSample(vUV + vec2(float(dx), float(dy)) * tx);
-        float w = exp(-float(dx * dx + dy * dy) * 0.5);
-        dens += ls.a * w;
-        wsum += w;
-        if (dx == 0 && dy == 0) c0 = ls;
-      }
-    }
-    float densN = dens / wsum;                       // 0..1 cluster density
-    float mxC = max(max(c0.r, c0.g), c0.b);          // centre brightness
-    float bright = smoothstep(0.24, 0.44, mxC);
-    float dense  = smoothstep(0.32, 0.62, densN) * step(uRLMinNeighbors * 0.05, densN);
-    float coreAmt = c0.a * max(bright, dense) * edgeFade;
-
-    // Lamp body: recolour to the dominant blob hue, pulsing in sync.  The
-    // dim phase fades from the original surface (uRLFadeOut 0) toward black
-    // (uRLFadeOut 1).
+    // Lamp body: recolour to the component colour, pulsing in sync.  The dim
+    // phase fades from the original surface (uRLFadeOut 0) toward black (1).
     vec3 lampOff = col * (1.0 - uRLFadeOut);
     vec3 lampOn = hue * (0.95 + 0.55 * uRLStrength);
-    col = mix(col, mix(lampOff, lampOn, blink), coreAmt);
+    col = mix(col, mix(lampOff, lampOn, blink), member);
 
-    // Wide soft glow / hull light-wash from the same blurred blob, also
-    // edge-faded so it never blooms off the rim of a surface.
-    float glow = smoothstep(0.14, 0.40, gmx) * smoothstep(0.30, 0.62, gsat) * edgeFade;
-    col += hue * (glow * blink) * 0.55 * uRLStrength;   // hull wash (pre-tone)
+    // Wide soft glow / hull light-wash from the blurred atlas, edge-faded so
+    // it never blooms off the rim of a surface.  Divide out the mip's alpha
+    // so the halo keeps the lamp's colour instead of fading toward black at
+    // its fringe.
+    float glow = smoothstep(0.05, 0.55, lampSoft.a) * edgeFade;
+    vec3 glowHue = lampSoft.rgb / max(lampSoft.a, 0.02);
+    col += glowHue * (glow * blink) * 0.55 * uRLStrength;   // hull wash (pre-tone)
     // Emissive (post tone curve), boosted so low-luma coloured lamps (blue /
     // teal weigh little in luma) still clear the bloom bright-pass.
-    vec3 coreEm = hue * (blink * 2.2 * uRLStrength) * coreAmt;
-    vec3 haloEm = hue * (blink * glow * 1.4 * uRLStrength);
+    vec3 coreEm = hue * (blink * 2.2 * uRLStrength) * member;
+    vec3 haloEm = glowHue * (blink * glow * 1.4 * uRLStrength);
     rlEmissive = (coreEm + haloEm) * uRLEmit;
   }
 

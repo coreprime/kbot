@@ -2221,9 +2221,6 @@ export class ModelRenderer {
     gl.uniform1f(this.uRLStrength, this.rlStrength)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
     gl.uniform1f(this.uRLFadeOut, 0.15)
-    gl.uniform1f(this.uRLMinNeighbors, 1.0)
-    gl.uniform1f(this.uRLKeyBright, 0.12)
-    gl.uniform1f(this.uRLKeySat, 0.50)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
@@ -2231,6 +2228,7 @@ export class ModelRenderer {
     // re-enables them for opted-in tiles); keeps the uniforms defined so a
     // reflection draw never inherits stale values.
     gl.uniform1f(this.uRunningLights, 0)
+    gl.uniform1f(this.uLampMapValid, 0)
     gl.uniform1f(this.uRLEmit, 0)
     gl.uniform1f(this.uBump, 0)
     gl.uniform1f(this.uBumpIntensity, 0)
@@ -2370,9 +2368,6 @@ export class ModelRenderer {
     gl.uniform1f(this.uRLStrength, this.rlStrength)
     gl.uniform1f(this.uBumpStrength, this.bumpStrength)
     gl.uniform1f(this.uRLFadeOut, 0.15)
-    gl.uniform1f(this.uRLMinNeighbors, 1.0)
-    gl.uniform1f(this.uRLKeyBright, 0.12)
-    gl.uniform1f(this.uRLKeySat, 0.50)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
@@ -2392,6 +2387,7 @@ export class ModelRenderer {
     // Baseline the per-batch surface-hint effects off; the per-group draw
     // loop turns them on for the tiles that opt in (hints-textures.js).
     gl.uniform1f(this.uRunningLights, 0)
+    gl.uniform1f(this.uLampMapValid, 0)
     gl.uniform1f(this.uRLEmit, 0)
     gl.uniform1f(this.uBump, 0)
     gl.uniform1f(this.uBumpIntensity, 0)
@@ -2639,9 +2635,29 @@ export class ModelRenderer {
             gl.uniform1f(this.uRunningLights, rlOn)
             gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) * fxRL : 0)
             gl.uniform1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.15)
-            gl.uniform1f(this.uRLMinNeighbors, (group.rlMinNeighbors != null) ? group.rlMinNeighbors : 1.0)
-            gl.uniform1f(this.uRLKeyBright, (group.rlKeyBright != null) ? group.rlKeyBright : 0.12)
-            gl.uniform1f(this.uRLKeySat, (group.rlKeySat != null) ? group.rlKeySat : 0.50)
+            // Running lights now read a CPU-built lamp atlas (texture-cache +
+            // lamp-map.js): proximal/touching texels are grouped into one
+            // component carrying a single dominant colour, so the whole lamp
+            // shares one colour / phase / intensity.  The detection thresholds
+            // (keyBright/keySat) + group radius (gap) are baked into the atlas
+            // at build time; changing a slider mints a fresh atlas.  Bound to
+            // TEXTURE4 (TEXTURE0=tex, 1/3=shadow maps) so it never clobbers
+            // the unit texture or the shadow samplers.
+            let lampValid = 0
+            if (rlOn && this.textureCache && group.textureName) {
+              const lm = this.textureCache.getLampMap(group.textureName, {
+                keyBright: (group.rlKeyBright != null) ? group.rlKeyBright : 0.12,
+                keySat: (group.rlKeySat != null) ? group.rlKeySat : 0.50,
+                gapPx: (group.rlGap != null) ? group.rlGap : 1,
+              })
+              if (lm && lm.ready) {
+                gl.activeTexture(gl.TEXTURE4)
+                gl.bindTexture(gl.TEXTURE_2D, lm.tex)
+                gl.uniform1i(this.uLampMap, 4)
+                lampValid = 1
+              }
+            }
+            gl.uniform1f(this.uLampMapValid, lampValid)
             const bumpOn = (this.optBump && group.bump && this._derivExt && fxSurf > 0.01) ? 1 : 0
             gl.uniform1f(this.uBump, bumpOn)
             gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) * fxSurf : 0)
@@ -2877,9 +2893,8 @@ export class ModelRenderer {
     this.uRLEmit = gl.getUniformLocation(prog, 'uRLEmit')
     this.uRLStrength = gl.getUniformLocation(prog, 'uRLStrength')
     this.uRLFadeOut = gl.getUniformLocation(prog, 'uRLFadeOut')
-    this.uRLMinNeighbors = gl.getUniformLocation(prog, 'uRLMinNeighbors')
-    this.uRLKeyBright = gl.getUniformLocation(prog, 'uRLKeyBright')
-    this.uRLKeySat = gl.getUniformLocation(prog, 'uRLKeySat')
+    this.uLampMap = gl.getUniformLocation(prog, 'uLampMap')
+    this.uLampMapValid = gl.getUniformLocation(prog, 'uLampMapValid')
     this.uBump = gl.getUniformLocation(prog, 'uBump')
     this.uBumpIntensity = gl.getUniformLocation(prog, 'uBumpIntensity')
     this.uBumpStrength = gl.getUniformLocation(prog, 'uBumpStrength')

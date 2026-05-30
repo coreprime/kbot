@@ -12,20 +12,23 @@
 // renderer plumbing — only this file:
 //
 //   specular      { metallic, scale }                 — sheen boost   (LIVE)
-//   runningLights { blink, emit, fadeOut, minNeighbors, keyBright, keySat }
+//   runningLights { blink, emit, fadeOut, gap, keyBright, keySat }
 //                   — colour-keyed blinking status lights that glow (and bloom
-//                   into the scene).  Each blob blinks as one lamp in its
-//                   dominant hue (phase from a continuous hue angle, so a
-//                   single colour never splits into two competing phases).
+//                   into the scene).  A CPU pre-pass (lamp-map.js) groups every
+//                   proximal/touching lamp texel into one component carrying a
+//                   single dominant colour, so the WHOLE lamp shares one colour
+//                   / blink phase / intensity (no per-pixel drift splitting a
+//                   blob into competing phases).
 //                   `fadeOut` (0..1) is the dim-phase opacity: 0 keeps the
 //                   original texture, 1 fades the lamp to black.
-//                   `minNeighbors` is the cluster-density sensitivity — coherent
-//                   blobs glow, lone grain specks fall through; 0 is most
-//                   permissive (keeps small dots), raise it to demand chunkier
-//                   blobs.  `keyBright` / `keySat` are the detection thresholds
-//                   (min max-channel brightness / relative saturation a texel
-//                   needs to read as a lamp) — lower either to pick up more
-//                   pixels.                                              (LIVE)
+//                   `gap` (texels) is the grouping radius — a morphological
+//                   close that merges areas within ~2·gap of each other into
+//                   one lamp AND fills holes that wide so the middle of a spot
+//                   lights, not just its rim; 0 keeps each blob separate.
+//                   `keyBright` / `keySat` are the detection thresholds (min
+//                   max-channel brightness / relative saturation a texel needs
+//                   to read as a lamp) — lower either to pick up more pixels.
+//                                                                        (LIVE)
 //   bump          { generate, intensity, smooth }      — derive a normal from
 //                   the tile's luminance gradient for surface relief.
 //                   `smooth` (texels) low-passes the height field first so a
@@ -88,19 +91,20 @@ export const TEXTURE_HINTS = {
     match: /^corv0?6[ab]$|^corv04[bc]$/i,
     defaults: {
       specular: { metallic: true, scale: METAL_SPEC_SCALE },
-      // minNeighbors 0 = no continuity filter: these tiles' lamps are sparse
-      // single-pixel dots (the small yellow/purple ones especially), so the
-      // colour-key alone decides — every saturated lamp pixel blinks.
-      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, minNeighbors: 0 },
+      // gap 1 groups touching/adjacent lamp texels into one component (and
+      // fills the 1-texel holes in the middle of a small spot) so each painted
+      // light reads as ONE lamp in its dominant colour — the purple cluster on
+      // CorV06b stops splitting into a blue + purple pair.
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, gap: 1 },
     },
   },
-  // ARM building running lights — Armpanel1.  Its lamps are sparse single
-  // pixels too, so minNeighbors 0 (key every saturated dot, no erosion).
+  // ARM building running lights — Armpanel1.  Same gap-1 grouping so each
+  // panel's lit corner reads as a single lamp rather than scattered dots.
   'armbldg.gaf': {
     match: /^armpanel1$/i,
     defaults: {
       specular: { metallic: true, scale: METAL_SPEC_SCALE },
-      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, minNeighbors: 0 },
+      runningLights: { blink: true, emit: 1.0, fadeOut: 0.15, gap: 1 },
     },
   },
   // ARM building plating — ArmBui2b/c/d opt into auto bump mapping: the
@@ -254,7 +258,7 @@ export function applyResolvedHints(group, name) {
   group.rlFadeOut = (h.runningLights && h.runningLights.fadeOut != null) ? h.runningLights.fadeOut : 0.15
   group.rlKeyBright = (h.runningLights && h.runningLights.keyBright != null) ? h.runningLights.keyBright : 0.12
   group.rlKeySat = (h.runningLights && h.runningLights.keySat != null) ? h.runningLights.keySat : 0.50
-  group.rlMinNeighbors = (h.runningLights && h.runningLights.minNeighbors != null) ? h.runningLights.minNeighbors : 1
+  group.rlGap = (h.runningLights && h.runningLights.gap != null) ? h.runningLights.gap : 1
   group.bump = !!(h.bump && h.bump.generate)
   group.bumpIntensity = (h.bump && h.bump.intensity) || 0.0
   group.bumpSmooth = (h.bump && h.bump.smooth != null) ? h.bump.smooth : 1.5

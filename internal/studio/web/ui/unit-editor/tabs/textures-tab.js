@@ -166,7 +166,7 @@ function _HintLine({ label, value, on }) {
 // Effective sub-block readers — fill in the same defaults the renderer
 // applies for any field the hint omits, so the editor sliders always show
 // a real starting value (e.g. a tile that detected only `blink` still
-// edits emit/fade/minNeighbors from their defaults).
+// edits emit/fadeOut/gap from their defaults).
 function _effSpec(h) {
   const s = h.specular || {}
   return { metallic: !!s.metallic, scale: s.scale != null ? s.scale : 1.0 }
@@ -177,7 +177,7 @@ function _effRL(h) {
     blink: !!r.blink,
     emit: r.emit != null ? r.emit : 1.0,
     fadeOut: r.fadeOut != null ? r.fadeOut : 0.15,
-    minNeighbors: r.minNeighbors != null ? r.minNeighbors : 0,
+    gap: r.gap != null ? r.gap : 1,
     keyBright: r.keyBright != null ? r.keyBright : 0.12,
     keySat: r.keySat != null ? r.keySat : 0.50,
   }
@@ -267,8 +267,8 @@ function _HintPopover() {
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ emit: v })} />
           <${_EditNum} label="Fade Out Opacity" min=${0} max=${1} step=${0.05} value=${er.fadeOut}
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ fadeOut: v })} />
-          <${_EditNum} label="Cluster density" min=${0} max=${8} step=${1} value=${er.minNeighbors}
-            disabled=${!er.blink} fmt=${(v) => `${v | 0}`} onInput=${(v) => setRL({ minNeighbors: v })} />
+          <${_EditNum} label="Group radius" min=${0} max=${4} step=${1} value=${er.gap}
+            disabled=${!er.blink} fmt=${(v) => `${v | 0}`} onInput=${(v) => setRL({ gap: v })} />
           <${_EditNum} label="Detect brightness" min=${0.02} max=${0.6} step=${0.01} value=${er.keyBright}
             disabled=${!er.blink} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setRL({ keyBright: v })} />
           <${_EditNum} label="Detect saturation" min=${0} max=${1} step=${0.05} value=${er.keySat}
@@ -290,7 +290,7 @@ function _HintPopover() {
           <${_HintLine} label="Specular" on=${!!bs.metallic}
             value=${bs.metallic ? `metallic · ×${bs.scale}` : `painted · ×${bs.scale || 1}`} />
           <${_HintLine} label="Running lights" on=${!!(br && br.blink)}
-            value=${br ? `blink ${br.blink ? 'on' : 'off'} · emit ${br.emit} · dens ${br.minNeighbors != null ? br.minNeighbors : 0}` : 'off'} />
+            value=${br ? `blink ${br.blink ? 'on' : 'off'} · emit ${br.emit} · gap ${br.gap != null ? br.gap : 1}` : 'off'} />
           <${_HintLine} label="Auto-bump" on=${!!(bb && bb.generate)}
             value=${bb ? `generate ${bb.generate ? 'on' : 'off'} · ×${bb.intensity}` : 'off'} />
           <${_HintLine} label="Emissive" on=${!!base.emissive}
