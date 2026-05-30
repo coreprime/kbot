@@ -953,7 +953,17 @@ export class GameEngine {
     // below already enforces their arc), so the body constraint is skipped for
     // them.  Gates the START of a burst, like the range gate.
     const inAimTolerance = this.#withinFireArc(u, w, tgx, tgz)
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance
+    // Bombers don't release at ground level — bombs need altitude to fall.
+    // For a `dropped` weapon on an aircraft, hold fire until the unit has
+    // climbed at least halfway to its FBI CruiseAltitude (data-driven; the
+    // 0.5 ratio is the only tuning knob and it falls out of "high enough
+    // that bombs have meaningful airtime").  Non-aircraft / non-dropped
+    // weapons are unaffected.
+    let atBombAlt = true
+    if (w.dropped && u.meta && u.meta.isAircraft && u.meta.cruiseAltitude > 0) {
+      atBombAlt = (u.pos.y || 0) >= (u.meta.cruiseAltitude * 0.5)
+    }
+    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange && inAimTolerance && atBombAlt
     if (startBurst || burstReady) {
       state.lastFireMs = simNowMs
       // Initialise (burstSize - 1) on the FIRST shot — we're about to
@@ -1008,10 +1018,14 @@ export class GameEngine {
         state.thread = null
         state.threadStartMs = null
       }
-      // commandFire weapons (d-gun) clear the target after one full
-      // burst — matches TA's D-key one-shot behaviour.  The user
-      // re-arms + clicks for a second shot.
-      if (w.commandFire && state.burstShotsLeft === 0) {
+      // commandFire weapons clear the target after one full burst when the
+      // shot was manually issued — matches TA's D-key one-shot behaviour
+      // (the user re-arms + clicks for a second discharge).  An AUTONOMOUS
+      // attack arming (source 'attack' — set by #stepAttack to chase a unit
+      // or fly a bomb run) must keep the target so the cycle re-fires on the
+      // weapon's reload cadence: that's how a Thunder bomber lays a string of
+      // bombs across the target instead of releasing one and forgetting why.
+      if (w.commandFire && state.burstShotsLeft === 0 && state.target.source !== 'attack') {
         state.target = null
         return
       }
