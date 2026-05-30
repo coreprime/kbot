@@ -532,11 +532,37 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   // binding, so multi-weapon units use the LAST fired weapon's art for
   // whichever expires next.  Acceptable for the common case.
   binding._lastFiredWeapon = weapon
-  // TDF startSmoke=1 — puff of grey smoke at the muzzle on each fire.
+  // TDF startSmoke=1 — puff of light smoke at the muzzle on each fire.
   // Most cannons + plasma weapons ship this so the discharge has a
   // visible cloud independent of the impact burst at the other end.
+  //
+  // Size + life + alpha scale with the weapon's blast radius (AoE).
+  // The old fixed (size 7, life 600 ms) was tuned for cannon-class
+  // weapons but the Brawler / Peewee EMG (areaofeffect=8, burst=4 @
+  // 100 ms cadence, startsmoke=1) stacked 4 of those per burst and
+  // smoked the screen out of all proportion to a bullet weapon.
+  // Reference AoE = 32 wu (a typical Peewee/cannon round); ratio
+  // capped + sqrt-eased so the EMG gets a wisp (~size 3.5, life 280
+  // ms), a heavy cannon stays at the old visual (~size 8, life 700
+  // ms), and a Bertha-class blast still puffs visibly without the
+  // sqrt curve runaway.  Alpha modulated too so EMG-class puffs are
+  // ~half as opaque as cannon-class.
   if (weapon.startSmoke) {
-    binding.particles.emit(SFX_SMOKE_WHITE, anchor, { size: 7, lifeMs: 600, riseSpeed: 1.4, drift: 1.0 })
+    const aoe = +weapon.areaOfEffectWU || 32
+    const refAoE = 32
+    const scale = Math.max(0.4, Math.min(2.5, Math.sqrt(aoe / refAoE)))
+    const size  = 3.0 + 5.0 * (scale - 0.4) / (2.5 - 0.4)
+    const life  = 200 + 1100 * (scale - 0.4) / (2.5 - 0.4)
+    const alpha = 0.18 + 0.32 * (scale - 0.4) / (2.5 - 0.4)
+    binding.particles.emit(SFX_SMOKE_WHITE, anchor, {
+      size,
+      lifeMs: life,
+      riseSpeed: 1.4,
+      drift: 1.0,
+      // Override the kind default colour so the alpha scales — pick
+      // up the kind's RGB but use the AoE-scaled alpha.
+      color: [0.92, 0.92, 0.96, alpha],
+    })
   }
   // Missiles trail smoke along their flight path.  Caller passes a
   // SmokeTrailManager via opts.smokeTrails when it wants this — hosts

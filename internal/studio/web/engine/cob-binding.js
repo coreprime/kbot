@@ -19,6 +19,7 @@ import {
   SFX_SMOKE_WHITE,
   SFX_SPARK,
   SFX_FIRE_FLASH,
+  SFX_SUB_BUBBLES,
   SFX_PROJECTILE_BULLET,
   SFX_PROJECTILE_SHELL,
   SFX_PROJECTILE_PLASMA,
@@ -26,6 +27,31 @@ import {
   SFX_PROJECTILE_LASER,
   SFX_PROJECTILE_MISSILE,
 } from './cob-particles.js'
+
+// TA SFXTYPE constants reproduced from Cavedog's smokeunit.h.  These
+// are the values a unit's BOS script passes to `emit-sfx` — the
+// engine routes them through to the particle system based on which
+// bits / low-byte enum members are set.  Reproducing the exact
+// constants here (instead of using bare numbers) means the
+// _emitSfx dispatch reads like the source it's modelled on.
+//
+//   #define SFXTYPE_POINTBASED 256          // any (256|N) variant is "spawn at piece"
+//   #define SFXTYPE_WHITESMOKE (256 | 1)    // light grey exhaust / muzzle puff
+//   #define SFXTYPE_BLACKSMOKE (256 | 2)    // dark damage trail (SmokeUnit's default)
+//   #define SFXTYPE_SUBBUBBLES (256 | 3)    // submerged-unit bubble trail
+//
+// The lower 8 bits act as a "variant within the family" enum, NOT a
+// bitmask — slots 1-3 are documented, 4-255 are spare for mods.  Any
+// unknown variant falls back to dark smoke so a custom mod that picks
+// e.g. (256 | 7) still emits SOMETHING visible rather than vanishing.
+const TA_SFXTYPE_POINTBASED  = 256
+const TA_SFXTYPE_WHITESMOKE  = TA_SFXTYPE_POINTBASED | 1
+const TA_SFXTYPE_BLACKSMOKE  = TA_SFXTYPE_POINTBASED | 2
+const TA_SFXTYPE_SUBBUBBLES  = TA_SFXTYPE_POINTBASED | 3
+// Auxiliary mask used by the SFXTYPE_PARTICLES family — a spark / dust
+// dispatch that BOS scripts use for chip-off effects.  Not documented
+// in smokeunit.h but observed in stock unit BOS sources.
+const TA_SFXTYPE_PARTICLES   = 1024
 import { nullAudioPool } from './null-audio-pool.js'
 import { makeRng } from './rng.js'
 import { loadWeaponFx, pickExplosionVariant } from './weapon-fx-loader.js'
@@ -240,60 +266,79 @@ export class CobBinding {
   // transform.  Falls back to the unit's origin if the piece is
   // unknown / hidden.
   //
-  // TA's sfxType is a 16-bit bag of flags + indices.  The mapping
-  // below covers the categories real bos scripts emit:
-  //   bit 8 (256) — smoke series.  257 = light grey, 258 = dark
-  //                  grey (damage trail), 259+ = other smoke
-  //                  variants.  SmokeUnit fires from this set
-  //                  every 0.2-3s depending on HEALTH.
-  //   bit 10 (1024) — particles / spark effects.
-  //   0, 1, 2 — wake / vtol-fart trails (water/airborne motion).
-  //   3       — brief muzzle flash.
-  //   16      — nano-construction stream.
-  // Anything unrecognised emits a generic smoke puff so unknown
-  // SFX still register visibly (better than silently swallowing).
+  // The dispatch table is keyed off the named TA_SFXTYPE_* constants
+  // reproduced at the top of the file from Cavedog's smokeunit.h.
+  // The script-side SFX type is NOT a hard-coded engine choice — the
+  // unit's BOS picks which variant to emit based on its own logic
+  // (e.g. SmokeUnit fires BLACKSMOKE because that's what reads as
+  // "I'm damaged"; sub units fire SUBBUBBLES because that's what
+  // reads as "I'm underwater"; muzzle scripts use WHITESMOKE for the
+  // exhaust puff).  So we honour each documented variant rather than
+  // collapsing them into a single "smoke or other" branch.
   _emitSfx(sfxType, pieceIdx) {
     const anchor = this._worldAnchor(pieceIdx)
-    let kind = 1 // default = grey smoke
+    let kind = SFX_SMOKE_GREY
     let cluster = 1
     let smokeBias = false
-    if (sfxType & 256) {
-      // Smoke family.  Lower 8 bits pick the variant; 1 = light, 2
-      // = dark/damage.  We collapse anything >= 2 to dark smoke so
-      // damaged-unit trails read distinctly from idle exhaust.
-      const sub = sfxType & 0xff
-      kind = (sub <= 1) ? 2 /* light */ : 1 /* dark */
-      // Each bos `emit-sfx 256|N` spawns one particle in the game;
-      // SmokeUnit polls slowly (>= 200ms, scales with HEALTH) so a
-      // single puff per call looks too thin.  Spawn a small cluster
-      // so each call reads as a visible plume.  The cluster is
-      // distributed via _emitCluster's per-particle offset so they
-      // don't pile up exactly on top of each other.
-      cluster = 3
-      // Most TA bos scripts emit damage smoke `from base` — and the
-      // base piece is at the unit's origin (Y≈0), inside the lower
-      // hull.  Without an upward spawn bias the puff is occluded by
-      // the unit body until it rises clear, which at TA scale can be
-      // a full second of invisible particle.  Bias the smoke spawn
-      // up to the top of the unit's bbox so it reads immediately.
-      smokeBias = true
-    } else if (sfxType & 1024) {
-      kind = 3 // spark / particle effect
+    let liftAnchor = false
+    // POINTBASED family — smoke / bubbles / piece-anchored effects.
+    // The low-byte enum picks the variant; unknown subs default to
+    // BLACKSMOKE so mod scripts that pick an undocumented slot still
+    // produce a visible puff.
+    if ((sfxType & TA_SFXTYPE_POINTBASED) === TA_SFXTYPE_POINTBASED) {
+      const variant = sfxType
+      if (variant === TA_SFXTYPE_WHITESMOKE) {
+        kind = SFX_SMOKE_WHITE
+        cluster = 3
+        smokeBias = true
+      } else if (variant === TA_SFXTYPE_BLACKSMOKE) {
+        // The documented damage-trail variant — SmokeUnit fires this.
+        // Same cluster + lift treatment as the unknown-variant fall-
+        // through below; broken out so the dispatch reads like the
+        // spec rather than collapsing the named case into the default.
+        kind = SFX_SMOKE_GREY
+        cluster = 3
+        smokeBias = true
+      } else if (variant === TA_SFXTYPE_SUBBUBBLES) {
+        // Bubbles spawn at the emitting piece's actual position (not
+        // lifted to the unit top — sub vents are below the waterline
+        // and the bubble plume rises through the water by its own
+        // riseSpeed).  Smaller cluster than smoke because each bubble
+        // is a discrete shape rather than a puff that needs density.
+        kind = SFX_SUB_BUBBLES
+        cluster = 2
+        liftAnchor = true // tiny lift so the first bubble isn't inside the hull
+      } else {
+        // BLACKSMOKE (256|2) + any unknown POINTBASED variant —
+        // damage trail kind.  Cluster of 3 so each SmokeUnit poll
+        // reads as a visible plume rather than a single dot.
+        kind = SFX_SMOKE_GREY
+        cluster = 3
+        smokeBias = true
+      }
+    } else if (sfxType & TA_SFXTYPE_PARTICLES) {
+      kind = SFX_SPARK
       cluster = 4
     } else if (sfxType === 3) {
-      kind = 4 // muzzle flash
+      kind = SFX_FIRE_FLASH // brief muzzle flash
     } else if (sfxType === 16) {
-      kind = 16 // nano particles
+      kind = 16 // SFX_NANO_PARTICLES — construction stream
     } else if (sfxType === 0 || sfxType === 1 || sfxType === 2) {
-      // Wake / vtol trails — light splashy effect.
-      kind = 2
+      // Wake / vtol-fart trails — light splashy effect.
+      kind = SFX_SMOKE_WHITE
     }
     if (smokeBias) {
       // Lift spawn to the top of the unit so the puff is visible
-      // above the hull from frame one.  +1 wu extra so smoke doesn't
-      // z-fight the top surface.
+      // above the hull from frame one — most TA bos scripts emit
+      // damage smoke `from base`, and base is at Y≈0 inside the lower
+      // hull.  +1 wu so the smoke doesn't z-fight the top surface.
       const liftedAnchor = [anchor[0], (this.model.bounds?.max?.[1] ?? anchor[1]) + 1, anchor[2]]
       this._emitCluster(kind, liftedAnchor, cluster, { spread: 1.4 })
+    } else if (liftAnchor) {
+      // Tiny lift for bubbles so the first frame isn't intersecting
+      // the emitting piece's mesh.
+      const liftedAnchor = [anchor[0], anchor[1] + 1, anchor[2]]
+      this._emitCluster(kind, liftedAnchor, cluster, { spread: 0.8 })
     } else {
       this._emitCluster(kind, anchor, cluster)
     }

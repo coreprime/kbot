@@ -43,8 +43,19 @@ export const SFX_PROJECTILE_MISSILE = 205
 // shader path.  Falls back to a coloured point sprite when the sprite
 // hasn't loaded yet (spriteId==0).
 export const SFX_PROJECTILE_SPRITE = 206
+// Sub-bubbles — small light-blue spheres released by submerged units.
+// Maps from the COB `emit-sfx 259` opcode (TA_SFXTYPE_SUBBUBBLES,
+// SFXTYPE_POINTBASED | 3).  Rises slowly through the water column
+// then pops at the surface.  See smokeunit.h for the source enum and
+// cob-binding._emitSfx for the routing.
+export const SFX_SUB_BUBBLES    = 260
 export const SFX_NANO_PARTICLES = 16  // construction nano lathe stream
-export const SFX_WAKE           = 257 // ship wake (handled by the renderer's water shader; pool tag for future)
+// SFX_WAKE was 257, which collided with TA's SFXTYPE_WHITESMOKE
+// (POINTBASED | 1) — a COB script that emits whitesmoke would have
+// matched our wake handling if anything ever cross-keyed the two.
+// Moved to 270 (out of the POINTBASED 256-263 band) to remove the
+// foot-gun.  Still pool-tag-only until the wake path needs it.
+export const SFX_WAKE           = 270
 // Weapon projectiles — bright travelling pellets that fly from the
 // firing piece toward the target.  Bullet = small bright tracer
 // (kbot machine-guns), Shell = bigger orange ball (cannons + heavy
@@ -170,6 +181,12 @@ const KIND_DEFAULTS = {
   // weapon's AoE / sprite scale.  noFade is the typical projectile
   // behaviour so the bolt reads as a solid object until impact.
   [SFX_PROJECTILE_SPRITE]: { color: [1.00, 1.00, 1.00, 1.00], size: 8.0, lifeMs: 4000, riseSpeed: 0.0, drift: 0.0 },
+  // SUB_BUBBLES — pale blue, half-transparent, lazily rises.  Cavedog's
+  // sub units (ARMSUB / CORSUB / etc.) emit these via
+  // `emit-sfx SFXTYPE_SUBBUBBLES from <piece>` in their BOS.  Should
+  // read as "this thing is underwater" without dominating the scene;
+  // alpha kept low + life short for the same reason smoke is kept thin.
+  [SFX_SUB_BUBBLES]:    { color: [0.55, 0.80, 1.00, 0.45], size: 3.5,  lifeMs: 1800, riseSpeed: 4.5, drift: 0.6 },
 }
 
 export class ParticlePool {
