@@ -118,7 +118,7 @@ function AudioBody() {
 
 export function AudioPanel() {
   return html`
-    <${FloatingPanel} id=${PANEL_ID} title="Audio">
+    <${FloatingPanel} id=${PANEL_ID} title="Active Sounds">
       <${AudioBody} />
     <//>
   `

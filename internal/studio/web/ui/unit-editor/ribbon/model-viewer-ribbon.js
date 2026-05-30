@@ -347,6 +347,12 @@ const _VIEW_PANEL_GROUPS = [
     { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
       title: 'Toggle the Effects overlay — live inspector of every active particle (kind, position, velocity, life remaining) plus the COB binding’s particle-pool occupancy.' },
   ] },
+  { label: 'Sound', rows: [
+    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
+      title: 'Toggle the Music panel — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
+    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Active Sounds',
+      title: 'Toggle the Active Sounds overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
+  ] },
   { label: 'Units', rows: [
     { id: 'mv-inspector-actions',    icon: '▶', label: 'Script Commands',
       title: 'Toggle the Script Commands overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).' },
@@ -358,12 +364,6 @@ const _VIEW_PANEL_GROUPS = [
       title: 'Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.' },
     { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
       title: 'Toggle the Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
-  ] },
-  { label: 'Other', rows: [
-    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
-      title: 'Toggle the Music panel — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
-    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
-      title: 'Toggle the Audio overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
   ] },
 ]
 

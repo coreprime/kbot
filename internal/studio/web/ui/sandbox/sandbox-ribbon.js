@@ -15,7 +15,7 @@
 
 import { signal } from '@preact/signals'
 import { htm as html } from '/ui/common/htm-bind.js'
-import { mv as mvSignal, runtimeTick, controlsDevSectionVisible, setControlsDevSectionVisible } from '/ui/common/inspector-store.js'
+import { mv as mvSignal, runtimeTick } from '/ui/common/inspector-store.js'
 import { panelSignals } from '/ui/common/panel-store.js'
 import {
   Ribbon, RibbonSection, RibbonButton,
@@ -119,9 +119,8 @@ export function configureSandboxRibbonBridge(impl) {
 }
 
 // _PANEL_GROUPS — the Developer Tools dropdown groups its panel-toggle
-// rows by domain so the user finds inspectors of the same kind sitting
-// together: engine guts, graphics knobs, per-unit telemetry, and an
-// "Other" bucket for ambient utilities (Music + scene-wide Audio).  The
+// rows by domain (alphabetical: Engine / Graphics / Sound / Units) so
+// the user finds inspectors of the same kind sitting together.  The
 // ungrouped header at the top is for one-off entries that don't belong
 // in any of the buckets — currently just the Sandbox Controls floating
 // panel.
@@ -142,6 +141,12 @@ const _PANEL_GROUPS = [
     { id: 'mv-inspector-effects',    icon: '✨', label: 'Effects',
       title: 'Effects overlay — every live particle across every binding (projectiles, smoke, sparks).' },
   ] },
+  { label: 'Sound', rows: [
+    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
+      title: 'Music — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
+    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Active Sounds',
+      title: 'Active Sounds overlay — every sound currently playing across every unit.' },
+  ] },
   { label: 'Units', rows: [
     { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
       title: 'Unit Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
@@ -149,12 +154,6 @@ const _PANEL_GROUPS = [
       title: 'Unit Variables overlay — current value of every COB `static-var` the scripts share.' },
     { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
       title: 'Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
-  ] },
-  { label: 'Other', rows: [
-    { id: 'mv-inspector-music',      icon: '🎵', label: 'Music',
-      title: 'Music — stream a sound-track from the TA music/ folder.  Closing the panel stops playback.' },
-    { id: 'mv-inspector-audio',      icon: '🔊', label: 'Audio',
-      title: 'Audio overlay — every sound currently playing across every unit.' },
   ] },
 ]
 
@@ -201,7 +200,6 @@ export function SandboxRibbon() {
   // button.  Cheap when the ribbon is hidden (tab inactive).
   void runtimeTick.value
   void mvSignal.value
-  const devVisible = !!controlsDevSectionVisible.value
   return html`
     <${Ribbon} id="sandbox-ribbon" className="sandbox-ribbon" align="space-between">
       <${RibbonSection} label="Sandbox">
@@ -295,15 +293,9 @@ export function SandboxRibbon() {
             id="sandbox-rb-devtools-btn"
             dropdownId="sandbox-rb-devtools-dropdown"
             icon="🛠"
-            label="Panels"
+            label="Configure Panels"
             title="Toggle visibility of the floating inspector panels." />
           <${Dropdown} id="sandbox-rb-devtools-dropdown" anchorId="sandbox-rb-devtools-btn" className="sandbox-rb-devtools-popup-cls">
-            <${MenuToggleRow}
-              icon="🎮"
-              label="Developer Controls"
-              title="Developer Controls — show / hide the editors at the bottom of the Controls panel that let you set Health, Build %, Build stance, and the other per-unit COB ports."
-              on=${devVisible}
-              onChange=${(next) => setControlsDevSectionVisible(next)} />
             ${_PANEL_TOP.map((p) => html`
               <${_PanelToggle} key=${p.id} id=${p.id} icon=${p.icon} label=${p.label} title=${p.title} />
             `)}
