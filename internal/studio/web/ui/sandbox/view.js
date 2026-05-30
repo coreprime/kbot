@@ -1157,6 +1157,11 @@ export class SandboxView {
         buildPercent: u.buildPercent,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
+        // id + meta let the renderer apply the per-unit locomotion pose
+        // overlay (hovercraft wobble, aircraft bank) in the sandbox, keyed by
+        // a stable id with the unit's FBI flags.
+        id: u.id,
+        meta: u.meta || null,
         // teamColor is the hue-shift modulator for the main shader
         // (null = no recolour = keep authored ARM blue); `side` is
         // the raw faction index so the Phase 3 impostor batch can

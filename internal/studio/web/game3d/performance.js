@@ -117,6 +117,19 @@ export const RUNNING_LIGHT_COLOR_MERGE_PX = 4
 // per-colour timing.
 export const RUNNING_LIGHT_TIMING_BUCKETS = 5
 
+// ── Locomotion pose overlay (model-renderer._updateUnitOrientation) ───
+
+// HOVERCRAFT_WOBBLE_SCALE multiplies the procedural pitch/roll/heave gyration
+// applied to hovercraft (Category HOVER) as they idle + drive on their air
+// cushion.  1 = the baseline amplitude; raise for a more pronounced wobble,
+// drop toward 0 to calm it.  Tune this to taste.
+export const HOVERCRAFT_WOBBLE_SCALE = 3
+
+// AIRCRAFT_BANK_SCALE multiplies how hard aircraft roll into their turns (on
+// top of the per-unit FBI BankScale).  1 = baseline lean; raise for a more
+// dramatic bank.  Tune to taste.
+export const AIRCRAFT_BANK_SCALE = 3
+
 // ── Audio dedup ──────────────────────────────────────────────────────
 
 // When a sound stem starts playing the AudioPool refuses to start

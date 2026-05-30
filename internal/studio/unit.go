@@ -70,6 +70,17 @@ type unitMetaJSON struct {
 	IsHover    bool `json:"isHover"`
 	IsShip     bool `json:"isShip"`
 	IsSub      bool `json:"isSub"`
+	// IsHovercraft — Category contains HOVER.  A ground-domain vehicle that
+	// rides an air cushion (Construction Hovercraft, Anaconda, ...); it drives
+	// like a ground unit but gyrates / wobbles on its cushion, which the studio
+	// renders as a procedural sway.  Distinct from IsHover (that's HoverAttack,
+	// an aircraft trait).
+	IsHovercraft bool `json:"isHovercraft"`
+	// BankScale / PitchScale — aircraft roll-into-turn and nose-pitch
+	// multipliers (FBI BankScale / PitchScale).  Default 1 for aircraft, 0 for
+	// everything else, so the renderer only banks things that actually fly.
+	BankScale  float64 `json:"bankScale"`
+	PitchScale float64 `json:"pitchScale"`
 	// CruiseAltitude — wu above ground the unit hovers at while in
 	// motion (aircraft only).  FBI CruiseAlt when set; otherwise a
 	// sensible default (60 for hover, 100 for fixed-wing).  Zero for
@@ -285,6 +296,24 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// style).  Without it, fixed-wing aircraft must keep moving
 	// (the studio's flight scheduler arcs them around the target).
 	out.IsHover = info.Int("HoverAttack") == 1
+	// Hovercraft vehicles tag themselves with the HOVER Category token
+	// (Construction Hovercraft, Anaconda, ...).  They drive on the ground
+	// plane but ride an air cushion, so the studio gives them a procedural
+	// hover sway.  Don't treat aircraft as hovercraft.
+	out.IsHovercraft = catTokens["HOVER"] && !out.IsAircraft
+	// BankScale / PitchScale — only meaningful for aircraft.  TA defaults both
+	// to 1 when the FBI omits them, so surface 1 for any flier and 0 otherwise
+	// (the renderer skips banking when the scale is 0).
+	if out.IsAircraft {
+		out.BankScale = info.Float("BankScale")
+		if out.BankScale <= 0 {
+			out.BankScale = 1
+		}
+		out.PitchScale = info.Float("PitchScale")
+		if out.PitchScale <= 0 {
+			out.PitchScale = 1
+		}
+	}
 	// Builder=1 covers both factories (Builder + YardMap) and
 	// construction units (Builder + WorkerTime > 0).  The studio
 	// only needs the boolean for panel gating; per-class behaviour

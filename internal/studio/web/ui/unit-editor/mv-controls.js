@@ -19,7 +19,6 @@ import { spawnProjectile } from '../../game3d/weapon-driver.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
 import { shouldForceTarget } from '../../game3d/force-target.js'
 import { GameEngine } from '../../engine/game-engine.js'
-import { stepSurfaceLocomotion } from '../../engine/locomotion.js'
 import { hostCallbacks } from '../host-context.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import {
@@ -34,9 +33,6 @@ import {
 
 const SLOT_INDEX = { primary: 0, secondary: 1, tertiary: 2 }
 const SLOT_NAMES = ['primary', 'secondary', 'tertiary']
-
-const TA_TICK_HZ = 30                       // FBI rates are per-frame at 30 Hz.
-const TA_TURN_FULL = 65536                  // Full turn in TA angle units.
 
 export class MvControls {
   // viewer: ModelViewer.  Provides .cob, .renderer, .canvas, .unitMeta.
@@ -79,10 +75,9 @@ export class MvControls {
     this.pos = { x: 0, z: 0 }
     this.heading = Math.PI
     this.alt = 0
-    // Current forward ground speed (wu/sec) for the accel/brake ramp in the
-    // shared arc-locomotion integrator.  0 = stationary.
+    // Current forward ground speed (wu/sec), mirrored back from the engine
+    // each tick (the engine is the mover).  0 = stationary.
     this.speed = 0
-    this.altTarget = 0           // where the altitude is heading
     this.wasLanded = true        // last frame's "alt <= 0.5" state — drives the Deactivate trigger on touchdown
     this.isMoving = false
     // Per-weapon aim-thread + fire timer.  thread is the live
@@ -135,12 +130,6 @@ export class MvControls {
     // top of each other (each click would otherwise spawn a fresh
     // Audio() that plays the same .wav concurrently).
     this._lastPlayedMs = new Map()
-    // _flybySide alternates between +1 and -1 on consecutive
-    // fly-by arcs (fixed-wing aircraft only) so the unit traces a
-    // figure-eight pattern over the target rather than a tight
-    // identical loop.  Lives on the instance so the value persists
-    // across _updateMove ticks.
-    this._flybySide = 1
     // Camera-tracking state.  When true, the orbit camera's target
     // follows the unit's XZ each frame so the unit stays centred —
     // used to watch aircraft fly off into the distance without
@@ -532,6 +521,12 @@ export class MvControls {
     }
     if (slot === 'move') {
       this.targets.move = [ground[0], ground[2]]
+      // The engine is the mover: _pushOrdersToEngine mirrors this.targets.move
+      // onto the engine unit each tick (and the engine clears it on arrival,
+      // which _readPoseFromEngine detects).  Issuing Move cancels any
+      // in-progress attack maneuver — clear the engine's attackTarget if it
+      // already exists (the viewer never sets one, but keep it consistent).
+      if (this._engineUnit) this._engineUnit.attackTarget = null
       this._startMoving()
     } else {
       this.targets[slot] = [ground[0], ground[1], ground[2]]
@@ -568,6 +563,20 @@ export class MvControls {
     // Refresh the engine unit's meta ref so the weapon SM picks up
     // newly-loaded weaponSlots[].  Cheap; no-op when no engine yet.
     if (this._engineUnit) this._engineUnit.meta = this.viewer.unitMeta
+    // Tell the renderer the unit's movement flavour so it can layer the
+    // FBI-driven pose overlay (aircraft bank/pitch, hovercraft gyration) on
+    // top of the move transform.  Aircraft bank; hovercraft (Category HOVER)
+    // wobble; everything else gets a flat, overlay-free pose.
+    const m = this.viewer.unitMeta
+    const r = this.viewer.renderer
+    if (r && typeof r.setUnitLocomotion === 'function') {
+      r.setUnitLocomotion(m ? {
+        hover: !!m.isHovercraft,
+        aircraft: !!m.isAircraft,
+        bankScale: m.bankScale,
+        pitchScale: m.pitchScale,
+      } : null)
+    }
   }
 
   // _ensureEngine lazily builds a GameEngine that ADOPTS the viewer's
@@ -647,17 +656,54 @@ export class MvControls {
     return this._engine
   }
 
-  // _syncEngineUnit pushes the viewer's MvControls-authoritative pos /
-  // heading / meta onto the adopted engine unit so the weapon SM's
-  // ballistic aim solver + firing-piece resolver work off live values.
-  // Called once per tick before engine.tick.  Cheap.
-  _syncEngineUnit() {
-    if (!this._engineUnit) return
-    this._engineUnit.pos.x = this.pos.x
-    this._engineUnit.pos.y = this.alt || 0
-    this._engineUnit.pos.z = this.pos.z
-    this._engineUnit.heading = this.heading
-    this._engineUnit.meta = this.viewer.unitMeta
+  // _pushOrdersToEngine syncs the viewer's order + display state onto the
+  // adopted engine unit each tick, BEFORE the engine moves it.  Move + fire
+  // orders are written to the engine when issued (commandAtGround); here we
+  // just keep the live meta ref + the camera-appropriate cruise ceiling
+  // current, since the unit's FBI meta + the model bounds can load after the
+  // engine unit is adopted.  The engine is the mover from here on.
+  _pushOrdersToEngine() {
+    const u = this._engineUnit
+    if (!u) return
+    const m = this.viewer.unitMeta
+    u.meta = m
+    // Display ceiling for THIS view's close-up camera (see _cruiseAltClamped).
+    // The engine clamps the cruise altitude to this so a Hawk doesn't fly out
+    // of frame; the climb/descend physics + airborne decision are unchanged.
+    u.cruiseAltOverride = (m && m.isAircraft) ? this._cruiseAltClamped() : 0
+    // Mirror the Move order onto the engine.  Re-pushing the same XZ each
+    // tick is harmless (the integrator just keeps driving toward it); on the
+    // tick the engine reaches the goal it clears u.moveTarget itself, and
+    // _readPoseFromEngine sees the cleared flag and ends the move.  Fire
+    // orders are pushed separately via _setEngineWeaponTarget on click; the
+    // engine's attack maneuver follows whatever slot is armed.
+    if (this.targets.move) {
+      u.moveTarget = { x: this.targets.move[0], z: this.targets.move[1] }
+    }
+  }
+
+  // _readPoseFromEngine mirrors the engine's freshly-computed pose back into
+  // the viewer's pos / heading / alt / speed, pushes it to the renderer
+  // (which derives the bank / pitch / hover-wobble overlay from the deltas)
+  // and fires the move-complete lifecycle when the engine reports arrival.
+  // This is the read side of "engine leads, the view renders the result".
+  _readPoseFromEngine() {
+    const u = this._engineUnit
+    if (!u) return
+    this.pos.x = u.pos.x
+    this.pos.z = u.pos.z
+    this.alt = u.pos.y || 0
+    this.heading = u.heading
+    this.speed = u.speed || 0
+    // The engine clears u.moveTarget on arrival.  Mirror that into the
+    // viewer's order state and run the StopMoving lifecycle (Deactivate +
+    // "arrived" voice) exactly once on that edge.
+    if (this.targets.move && !u.moveTarget) {
+      this.targets.move = null
+      this._stopMoving()
+    }
+    this._applyRendererTransform()
+    this.wasLanded = this.alt <= 0.5
   }
 
   // setSilenced silences this viewer's audio.  Called from
@@ -703,24 +749,28 @@ export class MvControls {
   tick(dtMs) {
     if (!this.viewer.cob) return
     const rate = simRate(this)
-    const dtSec = (dtMs * rate) / 1000
     // Sim-scaled dtMs for sub-systems that gate on time but want to
     // honour slow-mo / fast-forward (ship wakes emit on a 100 ms
     // cadence; at 0.1× sim that should be 1000 ms wall, not 100).
     const dtSimMs = dtMs * rate
-    this._updateMove(dtSec)
-    this._updateAltitude(dtSec)
-    // Push current pos / heading / meta into the adopted engine unit
-    // BEFORE ticking it so the weapon SM's ballistic solver + firing-
-    // piece resolver work off fresh values.  Then tick the engine in
-    // viewer-embedded mode (no runtime advance — the renderer's
-    // binding.tick already drove the runtime this frame; no movement
-    // — MvControls owns the viewer's bespoke aircraft/ship/ground
-    // model; no sync — the renderer pushes worldOffset itself).
-    this._syncEngineUnit()
+    // Engine-led motion — the unification.  The viewer pushes its order +
+    // display state onto the adopted engine unit, then lets the engine be
+    // the SINGLE mover: #stepAttack + #stepMovement compute pos / heading /
+    // altitude here exactly as they do for the sandbox.  The viewer renders
+    // the result by reading the pose straight back (_readPoseFromEngine).
+    // We still pass skipRuntime (the renderer's binding.tick already advanced
+    // the shared runtime this frame) and skipSync (the renderer pushes its
+    // own worldOffset) — but movement is NO LONGER skipped.
+    // Make sure the adopted engine unit exists (it's the mover): _ensureEngine
+    // is otherwise lazy (first weapon command), which would leave a Move-only
+    // unit with nothing to drive it now that the viewer no longer integrates
+    // motion itself.
+    this._ensureEngine()
+    this._pushOrdersToEngine()
     if (this._engine) {
-      this._engine.tick(dtMs, { skipRuntime: true, skipMovement: true, skipSync: true })
+      this._engine.tick(dtMs, { skipRuntime: true, skipSync: true })
     }
+    this._readPoseFromEngine()
     // Drop any projectile whose flight time has elapsed.  Done after
     // the engine tick so a brand-new entry from this tick isn't pruned
     // until at least one tick later.
@@ -808,10 +858,28 @@ export class MvControls {
     this.armed = null
     this.targets = { move: null, primary: null, secondary: null, tertiary: null }
     this.pos.x = 0; this.pos.z = 0
+    this.alt = 0
+    this.speed = 0
     // Same native-orientation default as the constructor — see comment
     // there for why heading starts at π (3DO nose-at-minus-Z convention).
     this.heading = Math.PI
     this.isMoving = false
+    // Reset the adopted engine unit too — it's the mover, so without this
+    // the next tick's _readPoseFromEngine would read its stale pose / orders
+    // straight back and undo the reset.
+    if (this._engineUnit) {
+      const u = this._engineUnit
+      u.pos.x = 0; u.pos.y = 0; u.pos.z = 0
+      u.heading = Math.PI
+      u.speed = 0
+      u.moveTarget = null
+      u.attackTarget = null
+      u._atk = null
+      u.isMoving = false
+      for (let slot = 0; slot < 3; slot++) {
+        if (this._engine) this._engine.setWeaponTarget(u.id, slot, null)
+      }
+    }
     for (const slot of ['primary', 'secondary', 'tertiary']) {
       const s = this.aimState[slot]
       if (s.thread && !s.thread.dead) s.thread.dead = true
@@ -856,14 +924,13 @@ export class MvControls {
     if (this.isMoving) return
     this.isMoving = true
     const cob = this.viewer.cob
-    // StartMoving is optional — many tank-style scripts don't ship it.
-    if (cob.hasScript('StartMoving')) cob.start('StartMoving')
-    // Aircraft climb to cruise altitude when motion starts.  Hover
-    // and fixed-wing both rise; the difference shows up in how they
-    // behave at the target (hover stops, fighter loops back).
+    // StartMoving + altitude are the ENGINE's job now (it's the mover):
+    // #stepMovement fires StartMoving on its u.isMoving transition and
+    // lifts the unit to cruise.  Firing StartMoving here too would
+    // double-spawn the leg-walk loop.  This method only runs the viewer's
+    // order-time lifecycle: aircraft Activate + the "ordered" voice.
     const m = this.viewer.unitMeta
     if (m && m.isAircraft) {
-      this.altTarget = this._cruiseAltClamped()
       // Activate-style scripts (engines on) typically run when an
       // aircraft starts flying; trigger Activate if it exists AND
       // we haven't already activated, so the unit's idle pose
@@ -887,17 +954,13 @@ export class MvControls {
     if (!this.isMoving) return
     this.isMoving = false
     const cob = this.viewer.cob
-    if (cob.hasScript('StopMoving')) cob.start('StopMoving')
-    // Aircraft descend to ground when their move target is cleared.
-    // The descent runs in _updateAltitude below; Deactivate fires
-    // immediately on STOP (not on touchdown) so the wings-fold
-    // animation plays DURING the descent rather than after the
-    // unit has already settled — matches how TA itself sequences
-    // the landing: deactivate animation runs while the aircraft
-    // glides down to the ground.
+    // StopMoving + the descent are the ENGINE's job (it fires StopMoving on
+    // arrival and settles the unit to the ground).  Here we run only the
+    // viewer's order-completion lifecycle: aircraft Deactivate (its wings-
+    // fold animation plays during the engine-driven descent, matching how
+    // TA sequences a landing) + the "arrived" voice.
     const m = this.viewer.unitMeta
     if (m && m.isAircraft) {
-      this.altTarget = 0
       if (cob && cob.hasScript('Deactivate') && cob._lifecycle !== 'deactivated') {
         cob._lifecycle = 'deactivated'
         cob.start('Deactivate')
@@ -925,60 +988,6 @@ export class MvControls {
     const minLift = unitH * 1.2
     const maxLift = unitH * 3.0
     return Math.max(minLift, Math.min(raw, maxLift))
-  }
-
-  // _updateAltitude lerps `this.alt` toward `this.altTarget` using
-  // the FBI Acceleration / BrakeRate values to derive realistic
-  // climb + descent rates.  Ground/sea units leave both alt +
-  // target at 0 so this is a no-op for them.  Deactivate fires from
-  // _stopMoving (not on touchdown) so the wings-fold animation
-  // plays DURING descent — by the time we reach alt=0 the unit is
-  // already in its deactivated pose.
-  _updateAltitude(dtSec) {
-    const m = this.viewer.unitMeta
-    if (!m || !m.isAircraft) {
-      this.alt = 0
-      this.altTarget = 0
-      return
-    }
-    const startAlt = this.alt
-    // FBI Acceleration / BrakeRate drive how briskly the aircraft
-    // climbs + descends.  We scale them to a perceptible "gradual
-    // lift" pace (the studio camera frames the unit close, so a
-    // realistic ~3 m/s rotor lift would feel glacial here).  Each
-    // value is clamped to a [floor, ceiling] band so under-spec
-    // FBIs still produce visible motion and over-spec ones (e.g.
-    // BrakeRate=9 for Hawk) don't snap the unit to the ground.
-    //   climbRate  = Acceleration * 100, clamped to [12, 80] wu/sec
-    //   descendRate = BrakeRate    * 10,  clamped to [8,  40] wu/sec
-    // For Hawk (accel 0.45, brake 9) ⇒ climb 45 wu/sec, descend 40
-    // wu/sec — lifts to its clamped cruise alt (~25 wu) in ~0.6s,
-    // settles back down in ~0.6s.  For Brawler (accel 0.16, brake
-    // 4) ⇒ climb 16 wu/sec, descend 40 wu/sec — slower lift, fast
-    // settle, which matches the heavier-hover feel.
-    const accel = m.acceleration || 0.1
-    const brake = m.brakeRate || 0.1
-    const climbRate   = Math.max(12, Math.min(80, accel * 100))
-    const descendRate = Math.max(8,  Math.min(40, brake * 10))
-    const rate = (this.altTarget > this.alt) ? climbRate : descendRate
-    const step = rate * dtSec
-    if (Math.abs(this.altTarget - this.alt) <= step) {
-      this.alt = this.altTarget
-    } else {
-      this.alt += Math.sign(this.altTarget - this.alt) * step
-    }
-    // Push the new Y onto the renderer.  Calling
-    // _applyRendererTransform here (not just from _updateMove)
-    // means an aircraft descending after Stop is cleared still
-    // visibly drops to the ground — _updateMove returns early when
-    // the move target is null, so the Y change would otherwise be
-    // computed but never pushed to the GPU.
-    if (this.alt !== startAlt) this._applyRendererTransform()
-    // Touchdown bookkeeping — no longer fires Deactivate (that
-    // moved to _stopMoving so the fold animation plays during
-    // descent).  Just keeps wasLanded in sync for any future
-    // transition-edge logic.
-    this.wasLanded = this.alt <= 0.5
   }
 
   // _playSound triggers an Audio() for the named sound-event.  The
@@ -1023,63 +1032,6 @@ export class MvControls {
     if (present.length === 0) return
     const pick = present[Math.floor(Math.random() * present.length)]
     this._playSound(pick)
-  }
-
-  _updateMove(dtSec) {
-    const target = this.targets.move
-    if (!target) return
-    const m = this.viewer.unitMeta || {}
-    // Fixed-wing aircraft (aircraft && !hover) can't stop mid-air — they fly
-    // through the target and arc back.  They keep their own flight path here;
-    // ground / ship / sub / hover units all share the arc-locomotion
-    // integrator below.  (Aircraft flight dynamics get reworked separately.)
-    const isFixedWingAir = !!(m.isAircraft && !m.isHover)
-    if (isFixedWingAir) {
-      const dx = target[0] - this.pos.x
-      const dz = target[1] - this.pos.z
-      const dist = Math.hypot(dx, dz)
-      if (dist < 40) {
-        // Recompute a fly-by point past + beside the target so the unit banks
-        // back around it (alternating sides ⇒ rough figure-eight, not a tight
-        // circle that reads as hovering).
-        const fwdX = Math.sin(this.heading)
-        const fwdZ = Math.cos(this.heading)
-        const sx = fwdZ, sz = -fwdX
-        this._flybySide = (this._flybySide || 1) * -1
-        const lead = 220, lateral = 140 * this._flybySide
-        this.targets.move = [
-          target[0] + fwdX * lead + sx * lateral,
-          target[1] + fwdZ * lead + sz * lateral,
-        ]
-        return
-      }
-      const want = Math.atan2(dx, dz)
-      const turnStep = this._turnRateRadPerSec() * dtSec
-      let dh = want - this.heading
-      while (dh >  Math.PI) dh -= Math.PI * 2
-      while (dh < -Math.PI) dh += Math.PI * 2
-      if (Math.abs(dh) > turnStep) this.heading += Math.sign(dh) * turnStep
-      else this.heading = want
-      const step = this._maxVelocityWUPerSec() * dtSec  // never slows at target
-      this.pos.x += Math.sin(this.heading) * step
-      this.pos.z += Math.cos(this.heading) * step
-      this._applyRendererTransform()
-      return
-    }
-    // Ground / ship / sub / hover — shared drive-and-steer arc integrator
-    // (translate while turning, turn radius = speed / turnRate, accel/brake
-    // ramp), identical to the sandbox engine path.
-    const st = { x: this.pos.x, z: this.pos.z, heading: this.heading, speed: this.speed || 0 }
-    const r = stepSurfaceLocomotion(st, target[0], target[1], m, dtSec)
-    this.pos.x = st.x
-    this.pos.z = st.z
-    this.heading = st.heading
-    this.speed = st.speed
-    if (r.arrived) {
-      this.targets.move = null
-      this._stopMoving()
-    }
-    this._applyRendererTransform()
   }
 
   _applyRendererTransform() {
@@ -1272,24 +1224,6 @@ export class MvControls {
     this._refreshButtons()
     this._refreshArmingClass()
     this._updateArmedCursor()
-  }
-
-  _maxVelocityWUPerSec() {
-    // FBI MaxVelocity is in "FBI units / frame" at 30 FPS.  TA unit
-    // distances are roughly equivalent to world units in our viewer
-    // at the renderer's scale, so the raw FBI number * 30 gives a
-    // reasonable walking speed.  Fall back to a sensible default
-    // when meta hasn't loaded.
-    const m = this.viewer.unitMeta
-    const v = (m && m.maxVelocity) ? m.maxVelocity : 1.0
-    return v * TA_TICK_HZ
-  }
-  _turnRateRadPerSec() {
-    // FBI TurnRate is TA-angle units per frame.  Convert to radians
-    // per second: rad/sec = (TA/frame) * (2π / 65536) * 30.
-    const m = this.viewer.unitMeta
-    const t = (m && m.turnRate) ? m.turnRate : 600
-    return (t / TA_TURN_FULL) * Math.PI * 2 * TA_TICK_HZ
   }
 
 

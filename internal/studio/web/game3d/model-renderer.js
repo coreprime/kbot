@@ -34,6 +34,8 @@ import {
   EFFECT_LOD_FADE_WU,
   RUNNING_LIGHT_COLOR_MERGE_PX,
   RUNNING_LIGHT_TIMING_BUCKETS,
+  HOVERCRAFT_WOBBLE_SCALE,
+  AIRCRAFT_BANK_SCALE,
 } from './performance.js'
 import { displayRgbForSide } from './team-colors.js'
 import {
@@ -324,6 +326,19 @@ export class ModelRenderer {
     // the surface, not below.  Defaults are zero so legacy call
     // sites that never set this see the unit at world origin.
     this._unitTransform = { x: 0, y: 0, z: 0, headingRad: 0 }
+    // Locomotion-flavoured orientation overlay layered on top of the unit
+    // transform: aircraft bank into turns + pitch their nose on climb/descend,
+    // and hovercraft gyrate/wobble on their air cushion.  `_loco` is the
+    // FBI-derived descriptor the host sets via setUnitLocomotion; `_orient` is
+    // the smoothed pitch/roll/heave applied each frame; `_locoPrev` tracks the
+    // previous transform so we can derive turn rate + speed from the stream.
+    this._loco = { hover: false, aircraft: false, bankScale: 0, pitchScale: 0 }
+    // Per-unit overlay state — previous transform (to derive turn-rate / speed
+    // / climb) + the smoothed pitch/roll/heave currently applied.  The single
+    // unit uses _locoState; sandbox entities each get their own in _entOrient
+    // (keyed by entity id) so every flier banks + every hovercraft wobbles.
+    this._locoState = { heading: 0, x: 0, z: 0, y: 0, t: 0, init: false, pitch: 0, roll: 0, heave: 0 }
+    this._entOrient = new Map()
     // Multi-entity mode — when an array is set here, draw() iterates
     // over each entity and renders its model independently after the
     // shared sky/ground pass.  Each entity is
@@ -603,6 +618,113 @@ export class ModelRenderer {
       this._unitTransform.headingRad = +headingRad || 0
     }
     this.requestRedraw()
+  }
+
+  // setUnitLocomotion installs the FBI-derived movement flavour for the
+  // single-unit pose overlay: { hover, aircraft, bankScale, pitchScale }.
+  // The renderer derives turn-rate + speed from the per-frame transform
+  // stream and turns them into bank / pitch / wobble in _updateUnitOrientation
+  // below.  Pass null (or a non-unit) to clear it.  Resets the smoothed state
+  // so a freshly-loaded unit never inherits the previous one's lean.
+  setUnitLocomotion(desc) {
+    const d = desc || {}
+    this._loco = {
+      hover: !!d.hover,
+      aircraft: !!d.aircraft,
+      bankScale: (d.bankScale > 0) ? d.bankScale : 0,
+      pitchScale: (d.pitchScale > 0) ? d.pitchScale : 0,
+    }
+    this._locoState.pitch = 0
+    this._locoState.roll = 0
+    this._locoState.heave = 0
+    this._locoState.init = false
+    // Hovercraft gyrate even at rest, so keep the continuous render loop
+    // alive (otherwise an idle hovercraft on dry ground would only redraw
+    // on demand and the wobble would freeze).  Idempotent; aircraft don't
+    // need this (they sit level until they actually fly).
+    if (this._loco.hover) this.start()
+    else this.requestRedraw()
+  }
+
+  // _computeOrientation derives the pose overlay for ONE unit from the change
+  // in its transform since the last frame, easing the result into `st`
+  // (st.pitch / st.roll / st.heave):
+  //   * aircraft — roll INTO the turn (turn-rate × FBI BankScale ×
+  //     AIRCRAFT_BANK_SCALE) and pitch the nose up/down with climb/descent;
+  //   * hovercraft — a continuous multi-frequency gyration (× the tunable
+  //     HOVERCRAFT_WOBBLE_SCALE) that grows with ground speed, plus a light
+  //     bank into turns, so it visibly floats on its cushion even at rest.
+  // `st` carries both the previous transform and the smoothed overlay, so the
+  // single unit and each sandbox entity can keep independent state.  Time is
+  // the pausable, speed-scaled fx clock so the wobble freezes on pause and
+  // scales with the Runtime Speed slider.
+  _computeOrientation(loco, st, ut, t) {
+    if (!loco.hover && !loco.aircraft) { st.pitch = 0; st.roll = 0; st.heave = 0; return st }
+    if (!st.init) {
+      st.init = true
+      st.heading = ut.headingRad; st.x = ut.x; st.z = ut.z; st.y = ut.y; st.t = t
+    }
+    const dt = t - st.t
+    let turnRate = 0, speed = 0, climb = 0
+    if (dt > 1e-4) {
+      let dh = ut.headingRad - st.heading
+      while (dh > Math.PI) dh -= Math.PI * 2
+      while (dh < -Math.PI) dh += Math.PI * 2
+      turnRate = dh / dt
+      speed = Math.hypot(ut.x - st.x, ut.z - st.z) / dt
+      climb = (ut.y - st.y) / dt
+      st.heading = ut.headingRad; st.x = ut.x; st.z = ut.z; st.y = ut.y; st.t = t
+    }
+    // Exponential smoothing factor — quick enough to feel responsive, slow
+    // enough to hide the per-frame jitter in the derived turn rate.
+    const k = dt > 1e-4 ? (1 - Math.exp(-dt / 0.18)) : 0
+    let targetPitch = 0, targetRoll = 0, targetHeave = 0
+    if (loco.aircraft) {
+      // Bank: lean INTO the turn.  +turnRate rolls the inside wing down for a
+      // right turn (the sign was inverted before — banking the wrong way).
+      // Magnitude = turn rate × FBI BankScale × the global AIRCRAFT_BANK_SCALE.
+      const maxBank = 1.0
+      targetRoll = Math.max(-maxBank, Math.min(maxBank,
+        turnRate * 0.45 * (loco.bankScale || 1) * AIRCRAFT_BANK_SCALE))
+      // Pitch: nose up while climbing, down while descending (× PitchScale).
+      const maxPitch = 0.35
+      targetPitch = Math.max(-maxPitch, Math.min(maxPitch, (climb / 60) * 0.3 * (loco.pitchScale || 1)))
+    }
+    if (loco.hover) {
+      // Continuous gyration on the air cushion.  Two incommensurate
+      // frequencies per axis so it never reads as a clean loop; amplitude
+      // rises with ground speed; heave is a gentle vertical breathe.  Scaled
+      // by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      const spd = Math.min(1, speed / 40)
+      const amp = (0.045 + 0.075 * spd) * HOVERCRAFT_WOBBLE_SCALE
+      targetPitch += amp * (Math.sin(t * 1.7) * 0.6 + Math.sin(t * 0.9 + 1.3) * 0.4)
+      targetRoll  += amp * (Math.sin(t * 1.3 + 0.7) * 0.6 + Math.sin(t * 2.1) * 0.4)
+      targetHeave += (0.8 + 1.3 * spd) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
+      // Light bank into turns on top of the idle wobble (same sign as above).
+      targetRoll  += Math.max(-0.3, Math.min(0.3, turnRate * 0.18))
+      // The hover gyration is procedural (already smooth), so chase it fast.
+      st.pitch += (targetPitch - st.pitch) * Math.max(k, 0.4)
+      st.roll  += (targetRoll  - st.roll)  * Math.max(k, 0.4)
+      st.heave += (targetHeave - st.heave) * Math.max(k, 0.4)
+      return st
+    }
+    st.pitch += (targetPitch - st.pitch) * k
+    st.roll  += (targetRoll  - st.roll)  * k
+    st.heave += (targetHeave - st.heave) * k
+    return st
+  }
+
+  // _locoForMeta builds the overlay descriptor for a sandbox entity from its
+  // FBI meta (mirrors the single-unit descriptor set via setUnitLocomotion).
+  _locoForMeta(meta) {
+    if (!meta) return null
+    if (!meta.isHovercraft && !meta.isAircraft) return null
+    return {
+      hover: !!meta.isHovercraft,
+      aircraft: !!meta.isAircraft,
+      bankScale: (meta.bankScale > 0) ? meta.bankScale : 0,
+      pitchScale: (meta.pitchScale > 0) ? meta.pitchScale : 0,
+    }
   }
 
   // unitWorldXZ returns the unit's current world XZ position.  The
@@ -1510,6 +1632,15 @@ export class ModelRenderer {
     if (ut.headingRad !== 0) {
       Mat4.rotateY(this._modelMatrix, this._modelMatrix, ut.headingRad)
     }
+    // Locomotion pose overlay — aircraft bank/pitch into their flight, hover-
+    // craft gyrate on their cushion.  Applied around the unit's own pivot
+    // (after heading, before the sea bob) so it composes with both.
+    if (this._loco.hover || this._loco.aircraft) {
+      const o = this._computeOrientation(this._loco, this._locoState, this._unitTransform, this._fxTimeSec())
+      if (o.heave) Mat4.translate(this._modelMatrix, this._modelMatrix, 0, o.heave, 0)
+      if (o.pitch) Mat4.rotateX(this._modelMatrix, this._modelMatrix, o.pitch)
+      if (o.roll)  Mat4.rotateZ(this._modelMatrix, this._modelMatrix, o.roll)
+    }
     if (this.groundMode === 'sea' && this.model) {
       // Submersion offset comes first — the model is lifted into
       // place between water and seabed (subs) BEFORE the bob is
@@ -1665,6 +1796,21 @@ export class ModelRenderer {
         }
         if (t.headingRad !== 0) {
           Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
+        }
+        // Per-entity locomotion pose overlay — sandbox hovercraft gyrate +
+        // aircraft bank into their turns, same as the single-unit path.  Each
+        // entity keeps its own prev-transform/smoothing state keyed by id.
+        const entLoco = ent.ghost ? null : this._locoForMeta(ent.meta)
+        if (entLoco) {
+          let est = this._entOrient.get(ent.id)
+          if (!est) {
+            est = { heading: 0, x: 0, z: 0, y: 0, t: 0, init: false, pitch: 0, roll: 0, heave: 0 }
+            this._entOrient.set(ent.id, est)
+          }
+          const o = this._computeOrientation(entLoco, est, t, this._fxTimeSec())
+          if (o.heave) Mat4.translate(this._modelMatrix, this._modelMatrix, 0, o.heave, 0)
+          if (o.pitch) Mat4.rotateX(this._modelMatrix, this._modelMatrix, o.pitch)
+          if (o.roll)  Mat4.rotateZ(this._modelMatrix, this._modelMatrix, o.roll)
         }
         // Ghost entities (placement preview) render as a pulsing
         // green wireframe instead of the solid main pass — no shadow,

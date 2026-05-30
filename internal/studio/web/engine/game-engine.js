@@ -72,7 +72,7 @@
 
 import { CobRuntime } from './cob-runtime.js'
 import { CobBinding } from './cob-binding.js'
-import { stepSurfaceLocomotion } from './locomotion.js'
+import { stepSurfaceLocomotion, attackManeuver } from './locomotion.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -577,7 +577,7 @@ export class GameEngine {
       // firing because #stepMovement / #stepWeapons / #stepAttack all
       // use wall-clock dt.  Pause should look like a freeze frame.
       if (!skipMovement && !paused) {
-        this.#stepAttack(u, simNowMs)
+        this.#stepAttack(u, simNowMs, dtSec)
         this.#stepMovement(u, dtSec)
       }
       if (!paused) this.#stepWeapons(u, simNowMs)
@@ -633,54 +633,93 @@ export class GameEngine {
     }
   }
 
-  // #stepAttack — autonomous attack loop.  Walks the unit into range
-  // of attackTarget, then pushes the target into slot 0's weapon SM
-  // (tagged source='attack' so a manual override or a Move order can
-  // reclaim it).  Damage application now happens in #stepWeapon on
-  // each shot — this step is purely "walk + arm slot 0".
-  #stepAttack(u, _simNowMs) {
+  // #stepAttack — the SINGLE movement decision for engagement, shared by
+  // the sandbox and the unit viewer (both tick the engine; the views only
+  // render the resulting u.pos / u.heading / u.pos.y).  Two engagement
+  // sources feed it:
+  //   • u.attackTarget — an autonomous unit pursuit (sandbox plain-attack
+  //     a unit).  Ground units walk into range + arm slot 0; aircraft fly
+  //     the attack pattern around the unit.
+  //   • an armed weapon slot's aim point — a force-fire (sandbox shift-
+  //     click ground/ally, OR the unit viewer where EVERY shot is a force-
+  //     fire at a clicked point).  Aircraft fly the same pattern around the
+  //     point; ground units fire in place (the weapon SM aims + range-gates
+  //     — they don't chase a clicked point).
+  // Damage application happens in #stepWeapon on each shot.
+  #stepAttack(u, _simNowMs, dtSec = 0) {
+    // ── Tear down a dead / departed autonomous unit attackTarget ──
     const t = u.attackTarget
-    if (!t || t.dead || !this._units.has(t.id)) {
+    if (t && (t.dead || !this._units.has(t.id))) {
       u.attackTarget = null
-      // Withdraw any attack-tagged weapon target so the slot doesn't
-      // keep firing at a phantom enemy.  Manual targets are left
-      // alone — the user explicitly asked for them.  Also stop ALL
-      // slots that the autonomous attack loop had armed: secondary +
-      // tertiary fire-while-engaged stay live until the pursuit ends
-      // (mirrors slot 0 — without this, killing the target leaves
-      // those slots cycling forever at a phantom).
+      // Withdraw every attack-tagged weapon slot so it stops firing at a
+      // phantom enemy.  Manual (force-fire) slots are left alone.
       for (let slot = 0; slot < 3; slot++) {
         const s = u.weaponSlots[slot]
         if (s.target && s.target.source === 'attack') {
           this.setWeaponTarget(u.id, slot, null)
         }
       }
-      // Drop the in-flight move command if it was driven by THIS
-      // attack pursuit (walk-into-range writes u.moveTarget every
-      // tick to the prey's last position).  Without this clear, the
-      // survivor units keep walking to the late prey's coffin spot
-      // before settling — looks like "they all stop responding" right
-      // after a kill.  Pursuit-issued moveTarget always matches the
-      // last-known prey position to within ~1 wu, so we test that
-      // before clearing in case the user issued an unrelated move.
-      // `t` may be null here (no attack target was ever set — the
-      // common case after Move was issued), so guard the dereference.
-      if (t && u.moveTarget &&
+      // Drop a pursuit-issued moveTarget aimed at the dead prey's coffin
+      // (walk-into-range rewrites it to the prey's position each tick), so
+      // the unit doesn't keep walking to a corpse's spot after the kill.
+      if (u.moveTarget &&
           Math.abs(u.moveTarget.x - t.pos.x) < 1 &&
           Math.abs(u.moveTarget.z - t.pos.z) < 1) {
         u.moveTarget = null
       }
+    }
+
+    const canMove = !u.meta || u.meta.canMove !== false
+
+    // ── Aircraft: fly an attack maneuver around whatever it's engaging ──
+    // Gunships strafe an arc around the engagement; fixed-wing aircraft run
+    // fly-by passes.  A live Move order overrides the maneuver (Move cancels
+    // Attack, as in TA) — #stepMovement drives the move and the weapon SM
+    // still fires if a pass brings the target into range.  #stepMovement
+    // keeps the aircraft at cruise altitude while u._atk is set.
+    if (canMove && u.meta && u.meta.isAircraft && dtSec > 0) {
+      let ex = null, ez = null, eslot = 0, armUnit = null
+      if (u.attackTarget && !u.attackTarget.dead) {
+        armUnit = u.attackTarget; ex = armUnit.pos.x; ez = armUnit.pos.z
+      } else {
+        for (let s = 0; s < 3; s++) {
+          const p = this.#slotAimXZ(u, s)
+          if (p) { ex = p.x; ez = p.z; eslot = s; break }
+        }
+      }
+      if (ex == null || u.moveTarget) { u._atk = null; return }
+      const range = this.#weaponRangeFor(u, eslot)
+      if (!u._atk) u._atk = { atkPhase: 'approach', sweepPhase: 0, sweepCenter: null, egX: 0, egZ: 0, flybySide: 1 }
+      const st = {
+        x: u.pos.x, z: u.pos.z, heading: u.heading, speed: u.speed || 0,
+        atkPhase: u._atk.atkPhase, sweepPhase: u._atk.sweepPhase, sweepCenter: u._atk.sweepCenter,
+        egX: u._atk.egX, egZ: u._atk.egZ, flybySide: u._atk.flybySide,
+      }
+      attackManeuver(st, ex, ez, u.meta, range, dtSec)
+      u.pos.x = st.x; u.pos.z = st.z; u.heading = st.heading; u.speed = st.speed
+      u._atk = {
+        atkPhase: st.atkPhase, sweepPhase: st.sweepPhase, sweepCenter: st.sweepCenter,
+        egX: st.egX, egZ: st.egZ, flybySide: st.flybySide,
+      }
+      u.moveTarget = null   // maneuver owns movement; don't let #stepMovement double-drive
+      // Auto-arm slot 0 only for autonomous unit pursuit — a force-fire slot
+      // is already armed by the caller and re-arming would reset its aim.
+      if (armUnit) this.setWeaponTarget(u.id, 0, { unit: armUnit }, { source: 'attack' })
       return
     }
-    const dx = t.pos.x - u.pos.x
-    const dz = t.pos.z - u.pos.z
-    const dist = Math.hypot(dx, dz)
+
+    // ── Ground / ship / sub: walk into range of an autonomous unit ──
+    // Only a unit attackTarget triggers the chase; force-fire points fire in
+    // place via the weapon SM's own range gate.
+    const at = u.attackTarget
+    if (!at || at.dead) return
+    const dist = Math.hypot(at.pos.x - u.pos.x, at.pos.z - u.pos.z)
     const range = this.#weaponRangeFor(u, 0)
     if (dist > range) {
       // Out of range — re-aim the move command at the prey's CURRENT
       // position each tick (target may be running) and drop slot 0's
       // weapon target so the SM doesn't burn aim threads while we walk.
-      u.moveTarget = { x: t.pos.x, z: t.pos.z }
+      u.moveTarget = { x: at.pos.x, z: at.pos.z }
       const slot0 = u.weaponSlots[0]
       if (slot0.target && slot0.target.source === 'attack') {
         this.setWeaponTarget(u.id, 0, null)
@@ -691,7 +730,24 @@ export class GameEngine {
     // the same target each tick is a no-op via #targetsEqual, so the
     // live aim thread + burst state survive across ticks.
     u.moveTarget = null
-    this.setWeaponTarget(u.id, 0, { unit: t }, { source: 'attack' })
+    this.setWeaponTarget(u.id, 0, { unit: at }, { source: 'attack' })
+  }
+
+  // #slotAimXZ returns the world XZ a weapon slot is currently aiming at
+  // (its armed point, or a live unit target's position), or null when the
+  // slot is unarmed / its unit target is gone.  Lets the aircraft attack
+  // maneuver follow whatever the unit is actually trying to shoot — the key
+  // to force-fire-at-point flying the same pattern as attack-a-unit.
+  #slotAimXZ(u, slot) {
+    const s = u.weaponSlots[slot]
+    if (!s || !s.target) return null
+    if (s.target.type === 'point' && s.target.point) {
+      return { x: s.target.point[0], z: s.target.point[2] }
+    }
+    if (s.target.type === 'unit' && s.target.unit && !s.target.unit.dead) {
+      return { x: s.target.unit.pos.x, z: s.target.unit.pos.z }
+    }
+    return null
   }
 
   // #stepMovement turns the unit toward its move-target at FBI
@@ -729,9 +785,48 @@ export class GameEngine {
       } else {
         u.isMoving = true
       }
+    } else if (u.meta && u.meta.isAircraft && u._atk && canMove) {
+      // Attacking aircraft fly their pattern in #stepAttack (which runs just
+      // before this and clears u.moveTarget so it "owns" movement): that step
+      // already advanced u.pos/heading and ramped u.speed via attackManeuver.
+      // Mark the unit as moving and leave its speed UNTOUCHED — the plain
+      // `else` below would zero u.speed every tick, restarting the maneuver
+      // from a standstill so the aircraft could never accelerate or fly its
+      // arc.  The altitude block then keeps it at cruise.
+      u.isMoving = true
     } else {
       u.isMoving = false
       u.speed = 0
+    }
+    // Aircraft altitude — lift to cruise while the unit has somewhere to be
+    // (a move target or an active fire order), and settle to the ground once
+    // it's idle with no orders so it lands.  Drives u.pos.y, which the sandbox
+    // reads into each entity's transform, so aircraft visibly take off + land.
+    // Climb / descent rates come from the FBI Acceleration / BrakeRate.
+    if (u.meta && u.meta.isAircraft) {
+      const hasFireOrder = u.weaponSlots && u.weaponSlots.some((s) => s.target)
+      const airborne = u.isMoving || hasFireOrder
+      // Cruise ceiling: a host may supply u.cruiseAltOverride to cap the
+      // altitude for its camera (the unit viewer's close-up showroom clamps
+      // a Hawk's 110 wu cruise so it stays framed).  The sandbox leaves it
+      // unset and uses the raw FBI CruiseAltitude.  The climb/descend physics
+      // + airborne decision below are identical either way — only the ceiling
+      // differs, which is a per-view display concern, not a motion one.
+      const cruise = (u.cruiseAltOverride > 0)
+        ? u.cruiseAltOverride
+        : ((u.meta.cruiseAltitude > 0)
+          ? u.meta.cruiseAltitude : (u.meta.isHover ? 60 : 100))
+      const altTarget = airborne ? cruise : 0
+      const accel = (u.meta.acceleration > 0) ? u.meta.acceleration : 0.1
+      const brake = (u.meta.brakeRate > 0) ? u.meta.brakeRate : 0.1
+      const climbRate = Math.max(12, Math.min(80, accel * 100))
+      const descendRate = Math.max(8, Math.min(40, brake * 10))
+      const cur = u.pos.y || 0
+      const rate = (altTarget > cur) ? climbRate : descendRate
+      const step = rate * dtSec
+      u.pos.y = (Math.abs(altTarget - cur) <= step)
+        ? altTarget
+        : cur + Math.sign(altTarget - cur) * step
     }
     if (u.isMoving && !wasMoving) {
       if (u.binding && u.binding.hasScript('StartMoving')) {
@@ -821,7 +916,18 @@ export class GameEngine {
     const burstGapMs = (w.burstRateSec > 0) ? w.burstRateSec * 1000 : 0
     const inBurst = state.burstShotsLeft > 0
     const burstReady = inBurst && simNowMs >= state.nextBurstShotAtMs
-    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck)
+    // Range gate — a unit only opens fire when the target is within this
+    // slot's weapon range (from the weapon TDF).  Out-of-range targets get
+    // chased into range by #stepAttack rather than shot at from afar.  Gates
+    // the START of a burst only, so a volley that began in range still
+    // empties even if the shooter drifts out mid-burst (e.g. a fly-by pass).
+    // Applies to attack + manual targets, sandbox + unit-viewer alike.
+    let tgx = null, tgz = null
+    if (state.target.type === 'point' && state.target.point) { tgx = state.target.point[0]; tgz = state.target.point[2] }
+    else if (target.pos) { tgx = target.pos.x; tgz = target.pos.z }
+    const inWeaponRange = (tgx == null) ||
+      (Math.hypot(tgx - u.pos.x, tgz - u.pos.z) <= this.#weaponRangeFor(u, slot) * 1.05)
+    const startBurst = !inBurst && reloadReady && (aimDoneOk || aimStuck) && inWeaponRange
     if (startBurst || burstReady) {
       state.lastFireMs = simNowMs
       // Initialise (burstSize - 1) on the FIRST shot — we're about to
@@ -931,6 +1037,14 @@ export class GameEngine {
     const w = this.#weaponForSlot(u, slot)
     if (w && w.rangeWU > 0) return w.rangeWU
     return 220
+  }
+
+  // weaponRangeFor — public accessor for slot N's engagement range (wu), so
+  // the unit-editor's own mover can reuse the exact range the engine weapon
+  // SM gates firing on (keeps editor + sandbox consistent).
+  weaponRangeFor(unitId, slot) {
+    const u = this._units.get(unitId)
+    return u ? this.#weaponRangeFor(u, slot) : 220
   }
 
   // #normalizeTarget coerces the caller's shape into the SM's internal
