@@ -226,10 +226,7 @@ func (t *TAF) ToAPNG(w io.Writer) error {
 			return cerr
 		}
 
-		delay := uint16(int(t.Frames[i].Duration) * 100 / ticksPerSecond)
-		if delay < 2 {
-			delay = 2
-		}
+		delay := uint16(ticksToCentiseconds(t.Frames[i].Duration))
 
 		fctl := &bytes.Buffer{}
 		_ = binary.Write(fctl, binary.BigEndian, seq)
