@@ -175,6 +175,31 @@ func reportContextSource(source string) {
 	fmt.Fprintf(os.Stderr, "Using %s\n", source)
 }
 
+// openContextVFS mounts a TA / TA: Kingdoms install as a virtual filesystem so
+// commands can resolve bare filenames and virtual paths.  Priority is the
+// explicit --vfs flag, then the active kbot context.  A nil VFS with a nil
+// error means no root is available and the caller should fall back to plain
+// local-disk handling.
+func openContextVFS(explicit string) (*filesystem.VirtualFileSystem, string, error) {
+	root, source, err := resolveVFSPath(explicit)
+	if err != nil {
+		return nil, "", err
+	}
+	if root == "" {
+		return nil, "", nil
+	}
+	vfs, err := filesystem.NewVirtualFileSystem(root, &filesystem.Config{
+		Extensions:        []string{".hpi", ".ccx", ".gp3", ".ufo"},
+		ExcludeExtensions: []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
+		ExcludePrefixes:   []string{"goggame"},
+		SkipErrors:        true,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("mount vfs at %s: %w", root, err)
+	}
+	return vfs, source, nil
+}
+
 // hpiInputPath resolves an archive path from args or stdin.
 // When stream is true (or no args), stdin is spooled to a temp file because
 // the HPI reader requires random-access I/O.  The caller must invoke the

@@ -24,7 +24,9 @@ Sub-commands operate on specific file formats:
   pal   TA palettes and ALP/LHT/SHD lookup tables (info, describe, swatch, convert, lookup)
   pcx   PCX image files (describe, convert, info)
   sct   SCT map sections (info, describe, image, heightmap, minimap)
+  taf   TA:K truecolor animations (info, render, export, decompile, compile)
   tnt   TNT map files (describe, unpack, pack, image, heightmap, minimap, ascii)
+  tsf   TA:K animation text scripts (info, lint)
   zrb      Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp      Run kbot as a Model Context Protocol server
   studio   Web-based map editor (KBot Studio)
@@ -42,7 +44,9 @@ Sub-commands operate on specific file formats:
 		newPALCommand(),
 		newPCXCommand(),
 		newSCTCommand(),
+		newTAFCommand(),
 		newTNTCommand(),
+		newTSFCommand(),
 		newZRBCommand(),
 		newMountCommand(),
 		newMCPCommand(),

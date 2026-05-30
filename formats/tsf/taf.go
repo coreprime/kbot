@@ -23,6 +23,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Version is the format version stored in every TA: Kingdoms TAF header. It is
@@ -71,6 +72,13 @@ func parsePixelFormat(s string) (PixelFormat, error) {
 	default:
 		return 0, fmt.Errorf("unknown pixel format %q", s)
 	}
+}
+
+// ParsePixelFormat maps a case-insensitive format name ("ARGB4444"/"4444" or
+// "ARGB1555"/"1555") to its PixelFormat. It is the public entry point used by
+// import tooling.
+func ParsePixelFormat(s string) (PixelFormat, error) {
+	return parsePixelFormat(strings.ToUpper(strings.TrimSpace(s)))
 }
 
 // BytesPerPixel is always 2 for the truecolor TAF formats.
@@ -122,6 +130,11 @@ type Frame struct {
 	// kept so re-serialization is byte-exact.
 	flagB uint8
 }
+
+// FlagByte returns the preserved frame-info byte at offset 0x0B (0x00 or 0xFF
+// across the retail asset set). Its meaning is unconfirmed; it is exposed for
+// inspection and lint tooling.
+func (f *Frame) FlagByte() uint8 { return f.flagB }
 
 // ParseTAF parses a TAF file from a byte slice. The format is pointer-based,
 // so the whole file must be available.
