@@ -373,6 +373,13 @@ func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parse model: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// ?enhanceMesh=1 reconstructs the faces TA's artists deleted as a
+	// fill-rate optimisation (open box bottoms, hollow shells) so the unit
+	// renders solid from every angle. Synthetic caps flow through the
+	// normal primitive path below; the client treats them like any face.
+	if r.URL.Query().Get("enhanceMesh") == "1" {
+		objects3d.FillModel(model, objects3d.FillOptions{})
+	}
 	out := &modelJSON{Name: entry.Name}
 	textures := map[string]bool{}
 	pieceNames := []string{}

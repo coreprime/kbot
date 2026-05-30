@@ -65,6 +65,7 @@ const _bridge = {
   setPanelVisible:   (_panelId, _visible) => {},
 
   // Graphics Options — applied scene-wide across every sandbox pane.
+  setEnhanceMesh:       (_on) => {},
   setShadows:           (_on) => {},
   setShadowIntensity:   (_v) => {},   // already normalised 0..1
   setSelfShadow:        (_on) => {},
@@ -93,6 +94,7 @@ export function configureSandboxRibbonBridge(impl) {
     closeActive:       () => {},
     canClose:          () => false,
     setPanelVisible:   (_panelId, _visible) => {},
+    setEnhanceMesh:       (_on) => {},
     setShadows:           (_on) => {},
     setShadowIntensity:   (_v) => {},
     setSelfShadow:        (_on) => {},

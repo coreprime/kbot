@@ -17,6 +17,7 @@ import { CobRuntime } from '../engine/cob-runtime.js'
 import { CobBinding } from '../engine/cob-binding.js'
 import { AudioPool } from './audio-pool.js'
 import { attachOrbitControls } from './camera-controls.js'
+import { onEnhanceMeshChanged } from './enhance-mesh.js'
 
 export class ModelViewer {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -237,6 +238,9 @@ export class ModelViewer {
   // model.  Subsequent open() calls swap the model in-place without
   // tearing down the GL context.
   async open(modelName) {
+    // Remember the current unit so setEnhanceMesh() can reload the same
+    // model with the new geometry without the caller re-supplying a name.
+    this._modelName = modelName
     this.#setStatus(`Loading ${modelName}…`)
     if (!this.renderer) {
       const palette = await TAPalette.load()
@@ -266,6 +270,11 @@ export class ModelViewer {
       // un-ready renderer.
       await this.renderer.init()
       this.renderer.start()
+      // Follow the shared Enhanced Mesh flag: when the user flips it in
+      // the Graphics menu, swap this unit's geometry in place WITHOUT
+      // re-running open() (which would reframe the camera).  Subscribed
+      // once per viewer; dispose() drops it.
+      this._unsubEnhance = onEnhanceMeshChanged(() => { this.reloadGeometry() })
     }
     try {
       if (this.model) this.model.dispose(this.renderer.gl)
@@ -407,6 +416,10 @@ export class ModelViewer {
       try { this._detachInputs() } catch { /* ignore */ }
       this._detachInputs = null
     }
+    if (typeof this._unsubEnhance === 'function') {
+      try { this._unsubEnhance() } catch { /* ignore */ }
+      this._unsubEnhance = null
+    }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
     if (this.renderer) {
@@ -419,6 +432,42 @@ export class ModelViewer {
 
   setAutoRotate(on) {
     if (this.renderer) this.renderer.setAutoRotate(on)
+  }
+
+  // reloadGeometry re-fetches the current unit under the active
+  // Enhanced Mesh flag and swaps the mesh in place.  Unlike open() it
+  // leaves the camera, orbit angle and zoom untouched — the user toggled
+  // a render option, not opened a new unit, so the framing must hold.
+  // The geometry comes from a different endpoint response, so this can't
+  // be a live shader flip — it re-fetches and rebinds.
+  async reloadGeometry() {
+    if (!this._modelName || !this.loader || !this.renderer) return
+    let model
+    try {
+      model = await this.loader.load(this._modelName)
+    } catch (err) {
+      this.#setStatus(`Reload failed: ${err.message || err}`)
+      return
+    }
+    if (this.model) this.model.dispose(this.renderer.gl)
+    this.model = model
+    this.renderer.setModel(model)
+    // Re-point the live COB binding at the fresh piece tree so animation
+    // survives the swap.  Thread / timer state lives on the runtime unit
+    // (this._unit), not the binding, so rebuilding the binding only
+    // remaps piece indices — the script keeps running from where it was.
+    // The fill only adds primitives (never pieces), so index mapping by
+    // construction still lines up.
+    if (this._unit) {
+      const audio = (this.cob && this.cob.audio) || new AudioPool()
+      this.cob = new CobBinding(model, this._unit, { audio })
+      this.cob._renderer = this.renderer
+      this.renderer.setCobBinding(this.cob, { driveTick: false })
+      try { this.cob.tick(0) } catch { /* ignore */ }
+    }
+    this.renderer.requestRedraw()
+    if (this.onModelLoaded) this.onModelLoaded(model, this.cob)
+    this.#setStatus(`${this._modelName} · ${model.flat.length} piece${model.flat.length === 1 ? '' : 's'}`)
   }
 
   // jumpToPiece centres the orbit target on the given piece so the user

@@ -50,6 +50,10 @@ type Primitive struct {
 	VertexIndices []int
 	TextureName   string
 	IsColored     bool
+	// Synthetic marks primitives that were not present in the source file
+	// but were generated to close gaps left by deleted faces. It is never
+	// set by the loader; only FillModel produces synthetic primitives.
+	Synthetic bool
 }
 
 // Object is a node in the 3DO hierarchy.
