@@ -148,12 +148,12 @@ const _PANEL_GROUPS = [
       title: 'Active Sounds overlay — every sound currently playing across every unit.' },
   ] },
   { label: 'Units', rows: [
-    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
-      title: 'Unit Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
-    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
-      title: 'Unit Variables overlay — current value of every COB `static-var` the scripts share.' },
     { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
       title: 'Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
+    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'I/O Ports',
+      title: 'I/O Ports overlay — read-only view of every well-known COB unit-value port (Active, Health, Build %, Move/Fire orders, etc.) for the selected unit.' },
+    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Script Variables',
+      title: 'Script Variables overlay — current value of every COB `static-var` the scripts share.' },
   ] },
 ]
 

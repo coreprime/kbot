@@ -108,7 +108,7 @@ function UnitPortsBody() {
 
 export function UnitPortsPanel() {
   return html`
-    <${FloatingPanel} id=${PANEL_ID} title="Unit Ports">
+    <${FloatingPanel} id=${PANEL_ID} title="I/O Ports">
       <${UnitPortsBody} />
     <//>
   `

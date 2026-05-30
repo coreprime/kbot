@@ -66,7 +66,7 @@ function StaticVarsBody() {
 
 export function StaticVarsPanel() {
   return html`
-    <${FloatingPanel} id=${PANEL_ID} title="Unit Variables">
+    <${FloatingPanel} id=${PANEL_ID} title="Script Variables">
       <${StaticVarsBody} />
     <//>
   `

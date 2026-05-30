@@ -354,16 +354,16 @@ const _VIEW_PANEL_GROUPS = [
       title: 'Toggle the Active Sounds overlay — live inspector of every sound currently playing (stem, source label, world XYZ of emission, volume, progress).' },
   ] },
   { label: 'Units', rows: [
+    { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
+      title: 'Toggle the Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
     { id: 'mv-inspector-actions',    icon: '▶', label: 'Script Commands',
       title: 'Toggle the Script Commands overlay — a clickable button for every script the loaded COB exports (Activate, Deactivate, Fire*, AimWeapon*, etc.).' },
     { id: 'mv-inspector-ports',      icon: '🎮', label: 'Controls',
       title: 'Toggle the Controls overlay — drive the unit (Move, Aim+Fire Primary/Secondary/Tertiary) AND view+edit its COB unit-value ports (Active, Move/Fire orders, Health, Build %, etc.).' },
-    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'Unit Ports',
-      title: 'Toggle the Unit Ports overlay — read-only view of every well-known COB unit-value port (ACTIVATION, STANDINGMOVE/FIREORDERS, HEALTH, BUILD_PERCENT_LEFT, YARD_OPEN, BUGGER_OFF, ARMORED, …).' },
-    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Unit Variables',
-      title: 'Toggle the Unit Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.' },
-    { id: 'mv-inspector-movement',   icon: '🧭', label: 'Movement',
-      title: 'Toggle the Movement overlay — speed, acceleration, heading dial, attitude indicator, and movement phase (approach / egress / strafe / idle) for the focused unit.' },
+    { id: 'mv-inspector-unit-ports', icon: '🔌', label: 'I/O Ports',
+      title: 'Toggle the I/O Ports overlay — read-only view of every well-known COB unit-value port (ACTIVATION, STANDINGMOVE/FIREORDERS, HEALTH, BUILD_PERCENT_LEFT, YARD_OPEN, BUGGER_OFF, ARMORED, …).' },
+    { id: 'mv-inspector-staticvars', icon: '📊', label: 'Script Variables',
+      title: 'Toggle the Script Variables overlay — current value of every COB `static-var` (global_0, global_1, …) the scripts share.' },
   ] },
 ]
 
