@@ -29,11 +29,14 @@
 //                   max-channel brightness / relative saturation a texel needs
 //                   to read as a lamp) — lower either to pick up more pixels.
 //                                                                        (LIVE)
-//   bump          { generate, intensity, smooth }      — derive a normal from
-//                   the tile's luminance gradient for surface relief.
-//                   `smooth` (texels) low-passes the height field first so a
-//                   noisy/rough texture only bumps on its LARGE features, not
-//                   every speckle (≈ desaturate + blur).                (LIVE)
+//   bump          { generate, intensity, smooth, threshold, scale } — surface
+//                   relief from the tile's luminance height field via parallax
+//                   occlusion mapping (the UV is marched along the view ray so
+//                   high detail OCCLUDES the lower detail behind it) plus a
+//                   matching normal tilt.  `smooth` (texels) low-passes the
+//                   height field so only LARGE features bump; `threshold` is a
+//                   grain deadzone; `scale` is the SIGNED relief depth —
+//                   positive protrudes, negative recesses/engraves.      (LIVE)
 //   emissive      { color: [r, g, b], strength }       — make the whole tile
 //                   glow / cast a colour                            (planned)
 //
@@ -263,4 +266,7 @@ export function applyResolvedHints(group, name) {
   group.bumpIntensity = (h.bump && h.bump.intensity) || 0.0
   group.bumpSmooth = (h.bump && h.bump.smooth != null) ? h.bump.smooth : 1.5
   group.bumpThreshold = (h.bump && h.bump.threshold != null) ? h.bump.threshold : 0.12
+  // Signed relief depth for parallax-occlusion mapping: + protrudes, − recesses.
+  // Defaults to +1 so existing bump hints read as raised plating as before.
+  group.bumpScale = (h.bump && h.bump.scale != null) ? h.bump.scale : 1.0
 }

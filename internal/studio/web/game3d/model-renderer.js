@@ -176,15 +176,19 @@ export class ModelRenderer {
     // animated waves (uTime = (now − _t0) / 1000).  Anchored at
     // construction so each ModelRenderer has its own t=0.
     this._t0 = performance.now()
-    // Unit "effect clock" — a pausable wall-clock used only for animations
-    // that belong to the UNIT (running-light blink + sea bobbing/swaying), as
-    // opposed to the environment (sea waves, sky) which keep real wall time.
-    // It freezes whenever the attached COB runtime is paused so a paused unit
-    // sits genuinely still.  Implemented by accumulating the time spent paused
-    // and subtracting it from the wall clock (see _syncFxClock / _fxTimeSec).
+    // Unit "effect clock" — a pausable, speed-scaled clock that drives every
+    // animation tied to the sim: running-light blink, sea bobbing/swaying, and
+    // the sea SURFACE waves the hull rides on (so the bob stays glued to the
+    // swell at any playback rate).  It advances each frame by the wall delta
+    // times the attached COB runtime's `playbackRate`, and by 0 while paused —
+    // so the effects freeze on pause and run faster/slower in lock-step with
+    // the Runtime Speed slider.  Integrated once per frame in _syncFxClock;
+    // _fxTimeSec just reads the accumulator so all reads in a frame agree.
+    // The sky keeps real wall time (see uSkyTime) so the scene never looks
+    // wholly dead when the sim is paused.
     this._fxPaused = false
-    this._fxPauseStartMs = 0
-    this._fxPausedAccumMs = 0
+    this._fxTimeMs = 0
+    this._fxLastMs = performance.now()
     // hoveredPieceName: the piece currently hovered in the sidebar
     // tree, set by the host UI via setHoveredPieceName.  Triggers a
     // red-wireframe overlay around just that piece during draw.
@@ -1325,25 +1329,30 @@ export class ModelRenderer {
   }
 
   // _syncFxClock — called once per frame before any animated unit uniform is
-  // read.  Watches the attached COB runtime's `paused` flag and, on each
-  // pause/resume edge, banks the elapsed paused span so _fxTimeSec freezes
-  // while paused and resumes seamlessly.  No-ops when there's no binding.
+  // read.  Advances the effect clock by the wall delta scaled by the attached
+  // COB runtime's playback rate (0 while paused), so blink + bob + sea waves
+  // run at the sim's tempo and freeze on pause.  With no binding the rate is a
+  // plain 1× (the clock then tracks wall time, matching old behaviour).
   _syncFxClock() {
-    const paused = !!(this.cobBinding && this.cobBinding.runtime && this.cobBinding.runtime.paused)
-    if (paused === this._fxPaused) return
     const now = performance.now()
-    if (paused) this._fxPauseStartMs = now
-    else this._fxPausedAccumMs += now - this._fxPauseStartMs
+    const dt = now - this._fxLastMs
+    this._fxLastMs = now
+    const rt = this.cobBinding && this.cobBinding.runtime
+    const paused = !!(rt && rt.paused)
     this._fxPaused = paused
+    const rate = paused
+      ? 0
+      : (rt && typeof rt.playbackRate === 'number' ? rt.playbackRate : 1)
+    // Clamp the wall delta so a stalled / backgrounded frame (rAF throttled to
+    // ~1 Hz) doesn't lurch the clock forward by a full second at once.
+    this._fxTimeMs += Math.min(250, Math.max(0, dt)) * rate
   }
 
-  // _fxTimeSec — the unit effect clock in seconds.  Wall time minus all the
-  // time spent paused (including the current, still-open pause span), so
-  // running-light blink + sea bob track the runtime's play/pause state.
+  // _fxTimeSec — the unit effect clock in seconds.  Pure accumulator read, so
+  // every call within a frame returns the same value (the clock only advances
+  // in _syncFxClock, once per frame).
   _fxTimeSec() {
-    const now = performance.now()
-    const openPause = this._fxPaused ? (now - this._fxPauseStartMs) : 0
-    return (now - this._t0 - this._fxPausedAccumMs - openPause) / 1000
+    return this._fxTimeMs / 1000
   }
 
   draw() {
@@ -2077,7 +2086,10 @@ export class ModelRenderer {
     gl.uniform1i(this.uGroundModeId, modeId)
     gl.uniform1f(this.uGroundTileSize, 16)
     gl.uniform1f(this.uGroundTerrainReady, this._terrainReady ? 1 : 0)
-    gl.uniform1f(this.uGroundTime, (performance.now() - this._t0) / 1000)
+    // Sea-surface waves run on the pausable, speed-scaled effect clock — the
+    // SAME clock the unit's CPU sea-bob samples — so the hull stays seated on
+    // its wave crest at any Runtime Speed and both freeze together on pause.
+    gl.uniform1f(this.uGroundTime, this._fxTimeSec())
     gl.uniform1f(this.uGroundExposure, this.exposure ?? 1.0)
     // Normalise the world key-light colour to max-channel 1 so the ground
     // picks up the sun's HUE without changing its overall brightness.
@@ -2223,6 +2235,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uRLFadeOut, 0.15)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
+    gl.uniform1f(this.uBumpScale, 1.0)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
     // Surface-hint effects off in the reflection pass (the per-group loop
     // re-enables them for opted-in tiles); keeps the uniforms defined so a
@@ -2370,6 +2383,7 @@ export class ModelRenderer {
     gl.uniform1f(this.uRLFadeOut, 0.15)
     gl.uniform1f(this.uBumpSmooth, 1.5)
     gl.uniform1f(this.uBumpThreshold, 0.12)
+    gl.uniform1f(this.uBumpScale, 1.0)
     gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
     gl.uniform1f(this.uReflectionTint, 0)
     gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat && this.shadowsEnabled) ? 1 : 0)
@@ -2663,6 +2677,7 @@ export class ModelRenderer {
             gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) * fxSurf : 0)
             gl.uniform1f(this.uBumpSmooth, (group.bumpSmooth != null) ? group.bumpSmooth : 1.5)
             gl.uniform1f(this.uBumpThreshold, (group.bumpThreshold != null) ? group.bumpThreshold : 0.12)
+            gl.uniform1f(this.uBumpScale, (group.bumpScale != null) ? group.bumpScale : 1.0)
           }
           gl.drawArrays(group.mode, 0, group.vertexCount)
         }
@@ -2900,6 +2915,7 @@ export class ModelRenderer {
     this.uBumpStrength = gl.getUniformLocation(prog, 'uBumpStrength')
     this.uBumpSmooth = gl.getUniformLocation(prog, 'uBumpSmooth')
     this.uBumpThreshold = gl.getUniformLocation(prog, 'uBumpThreshold')
+    this.uBumpScale = gl.getUniformLocation(prog, 'uBumpScale')
     this.uTexel = gl.getUniformLocation(prog, 'uTexel')
     this.uFlatLighting = gl.getUniformLocation(prog, 'uFlatLighting')
     this.uExposure = gl.getUniformLocation(prog, 'uExposure')

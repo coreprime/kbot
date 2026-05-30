@@ -189,6 +189,7 @@ function _effBump(h) {
     intensity: b.intensity != null ? b.intensity : 1.0,
     smooth: b.smooth != null ? b.smooth : 1.5,
     threshold: b.threshold != null ? b.threshold : 0.12,
+    scale: b.scale != null ? b.scale : 1.0,
   }
 }
 
@@ -282,6 +283,8 @@ function _HintPopover() {
             disabled=${!eb.generate} fmt=${(v) => (+v).toFixed(1)} onInput=${(v) => setBump({ smooth: v })} />
           <${_EditNum} label="Grain deadzone" min=${0} max=${0.4} step=${0.01} value=${eb.threshold}
             disabled=${!eb.generate} fmt=${(v) => (+v).toFixed(2)} onInput=${(v) => setBump({ threshold: v })} />
+          <${_EditNum} label="Depth scale" min=${-2} max=${2} step=${0.1} value=${eb.scale}
+            disabled=${!eb.generate} fmt=${(v) => (+v >= 0 ? `+${(+v).toFixed(1)}` : (+v).toFixed(1))} onInput=${(v) => setBump({ scale: v })} />
         </div>
 
         <div class="mv-hint-section">
@@ -292,7 +295,7 @@ function _HintPopover() {
           <${_HintLine} label="Running lights" on=${!!(br && br.blink)}
             value=${br ? `blink ${br.blink ? 'on' : 'off'} · emit ${br.emit} · gap ${br.gap != null ? br.gap : 1}` : 'off'} />
           <${_HintLine} label="Auto-bump" on=${!!(bb && bb.generate)}
-            value=${bb ? `generate ${bb.generate ? 'on' : 'off'} · ×${bb.intensity}` : 'off'} />
+            value=${bb ? `generate ${bb.generate ? 'on' : 'off'} · ×${bb.intensity} · scale ${bb.scale != null ? (bb.scale >= 0 ? `+${bb.scale}` : bb.scale) : '+1'}` : 'off'} />
           <${_HintLine} label="Emissive" on=${!!base.emissive}
             value=${base.emissive ? `[${(base.emissive.color || []).join(', ')}] · ${base.emissive.strength}` : 'off'} />
         </div>
