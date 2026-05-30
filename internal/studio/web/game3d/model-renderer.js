@@ -890,6 +890,7 @@ export class ModelRenderer {
         // entirely.
         this.#initDoFProgram(sources.dof.vs, sources.dof.fs)
         this.#initFxaaProgram(sources.fxaa.vs, sources.fxaa.fs)
+        this.#initBloomPrograms(sources.bloomBright, sources.bloomBlur)
       }
       this._programsReady = true
       this.requestRedraw()
@@ -3753,6 +3754,10 @@ export class ModelRenderer {
   #runPostChain() {
     const gl = this.gl
     if (!this.programDoF || !this._sceneFBO) return
+    // Bloom first — fills _bloomTex (or clears it) so the composite's
+    // bloom-add reads a fresh result, never a stale prior frame.
+    if (this.optBloom) this.#renderBloom()
+    else this._bloomTex = null
     const wantFxaa = this.optCinematic && !!this.programFxaa && this.#ensureLdrFBO()
 
     // Stage 1 — composite.
@@ -3852,6 +3857,103 @@ export class ModelRenderer {
     this._ldrW = w
     this._ldrH = h
     return true
+  }
+
+  // #initBloomPrograms links the bright-pass + separable-blur programs
+  // (both share bloom.vert) and grabs their uniform locations.  They
+  // reuse the shared full-screen quad VBO from #initDoFProgram.
+  #initBloomPrograms(brightSrc, blurSrc) {
+    const gl = this.gl
+    const bp = this.#linkProgram(brightSrc.vs, brightSrc.fs)
+    this.programBright = bp
+    this.aBrightPos = gl.getAttribLocation(bp, 'aPos')
+    this.uBrightTex = gl.getUniformLocation(bp, 'uTex')
+    this.uBrightThreshold = gl.getUniformLocation(bp, 'uThreshold')
+    const bl = this.#linkProgram(blurSrc.vs, blurSrc.fs)
+    this.programBlur = bl
+    this.aBlurPos = gl.getAttribLocation(bl, 'aPos')
+    this.uBlurTex = gl.getUniformLocation(bl, 'uTex')
+    this.uBlurDir = gl.getUniformLocation(bl, 'uDir')
+  }
+
+  // #ensureBloomFBOs (re)allocates the two half-res ping-pong colour
+  // targets the bright-pass + blur write into.  Half-res keeps the blur
+  // cheap and naturally widens the glow.
+  #ensureBloomFBOs() {
+    const gl = this.gl
+    const w = Math.max(1, (gl.drawingBufferWidth >> 1))
+    const h = Math.max(1, (gl.drawingBufferHeight >> 1))
+    if (this._bloomFboA && this._bloomW === w && this._bloomH === h) return true
+    for (const k of ['_bloomFboA', '_bloomFboB']) {
+      if (this[k]) { gl.deleteFramebuffer(this[k]); this[k] = null }
+    }
+    for (const k of ['_bloomTexA', '_bloomTexB']) {
+      if (this[k]) { gl.deleteTexture(this[k]); this[k] = null }
+    }
+    const make = () => {
+      const fbo = gl.createFramebuffer()
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+      const tex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+      const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+      return ok ? { fbo, tex } : (gl.deleteFramebuffer(fbo), gl.deleteTexture(tex), null)
+    }
+    const a = make(), b = make()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    if (!a || !b) { this._bloomTex = null; return false }
+    this._bloomFboA = a.fbo; this._bloomTexA = a.tex
+    this._bloomFboB = b.fbo; this._bloomTexB = b.tex
+    this._bloomW = w; this._bloomH = h
+    return true
+  }
+
+  // #renderBloom extracts the bright pixels of the scene colour, blurs
+  // them with a two-pass separable Gaussian, and leaves the result in
+  // _bloomTex for the composite stage to add on top.  No-op (clears
+  // _bloomTex) when the FBOs can't be allocated.
+  #renderBloom() {
+    const gl = this.gl
+    if (!this.programBright || !this.programBlur || !this.#ensureBloomFBOs()) {
+      this._bloomTex = null
+      return
+    }
+    gl.disable(gl.DEPTH_TEST)
+    gl.disable(gl.BLEND)
+    gl.viewport(0, 0, this._bloomW, this._bloomH)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._dofVBO)
+    // Bright pass: scene colour -> bloom A.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._bloomFboA)
+    gl.useProgram(this.programBright)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this._sceneColorTex)
+    gl.uniform1i(this.uBrightTex, 0)
+    gl.uniform1f(this.uBrightThreshold, 0.72)
+    gl.enableVertexAttribArray(this.aBrightPos)
+    gl.vertexAttribPointer(this.aBrightPos, 2, gl.FLOAT, false, 0, 0)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+    // Blur — horizontal A -> B, then vertical B -> A.  SPREAD widens the
+    // tap stride for a softer, larger glow than a 1-texel kernel.
+    const SPREAD = 1.5
+    gl.useProgram(this.programBlur)
+    gl.enableVertexAttribArray(this.aBlurPos)
+    gl.vertexAttribPointer(this.aBlurPos, 2, gl.FLOAT, false, 0, 0)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._bloomFboB)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this._bloomTexA)
+    gl.uniform1i(this.uBlurTex, 0)
+    gl.uniform2f(this.uBlurDir, SPREAD / this._bloomW, 0)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._bloomFboA)
+    gl.bindTexture(gl.TEXTURE_2D, this._bloomTexB)
+    gl.uniform2f(this.uBlurDir, 0, SPREAD / this._bloomH)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+    this._bloomTex = this._bloomTexA
   }
 
   // #loadTerrainTexture pulls the active tileset's flat-tile PNG from

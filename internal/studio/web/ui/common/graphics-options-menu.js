@@ -163,6 +163,19 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
 
     <${MenuSectionLabel}>Post-Processing<//>
     <${MenuSubmenuRow}
+      icon="🌠"
+      label="Bloom"
+      title="Soft glow bleeding off the brightest pixels — sun glints, muzzle flashes, lasers, glowing panels.  Hover for strength."
+      on=${s.bloom}
+      onToggle=${(next) => set('bloom', next, next, bridge.setBloom)}>
+      <${_Slider}
+        label="Strength"
+        min=${0} max=${200} step=${5}
+        value=${s.bloomLevel}
+        format=${(v) => `${v}%`}
+        onChange=${(v) => set('bloomLevel', v, v / 100, bridge.setBloomStrength)} />
+    <//>
+    <${MenuSubmenuRow}
       icon="🎬"
       label="Cinematic"
       title="Filmic look — ACES tonemap, contrast/saturation grade, vignette, and anti-aliasing.  Hover for intensity."

@@ -105,6 +105,8 @@ export function configureSandboxRibbonBridge(impl) {
     setDoFLevel:          (_v) => {},
     setCinematic:         (_on) => {},
     setCinematicStrength: (_v) => {},
+    setBloom:             (_on) => {},
+    setBloomStrength:     (_v) => {},
     setWaterReflections:  (_on) => {},
     setWaves:             (_on) => {},
     setWavesIntensity:    (_v) => {},

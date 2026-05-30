@@ -94,6 +94,8 @@ export const SHADER_MANIFEST = {
   wire:      { vs: 'wire/wire.vert',           fs: 'wire/wire.frag' },
   dof:       { vs: 'dof/dof.vert',             fs: 'dof/dof.frag' },
   fxaa:      { vs: 'fxaa/fxaa.vert',           fs: 'fxaa/fxaa.frag' },
+  bloomBright: { vs: 'bloom/bloom.vert',       fs: 'bloom/bright.frag' },
+  bloomBlur:   { vs: 'bloom/bloom.vert',       fs: 'bloom/blur.frag' },
   particles: { vs: 'particles/particles.vert', fs: 'particles/particles.frag' },
   impostor:  { vs: 'impostor/impostor.vert',   fs: 'impostor/impostor.frag' },
 }
