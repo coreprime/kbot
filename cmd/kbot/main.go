@@ -5,9 +5,27 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-)
 
-var Version = "dev"
+	"github.com/coreprime/kbot/cmd/kbot/bik"
+	"github.com/coreprime/kbot/cmd/kbot/cob"
+	"github.com/coreprime/kbot/cmd/kbot/crt"
+	"github.com/coreprime/kbot/cmd/kbot/ctx"
+	"github.com/coreprime/kbot/cmd/kbot/document"
+	"github.com/coreprime/kbot/cmd/kbot/fnt"
+	"github.com/coreprime/kbot/cmd/kbot/gaf"
+	"github.com/coreprime/kbot/cmd/kbot/hpi"
+	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/cmd/kbot/mcp"
+	"github.com/coreprime/kbot/cmd/kbot/mount"
+	"github.com/coreprime/kbot/cmd/kbot/pal"
+	"github.com/coreprime/kbot/cmd/kbot/pcx"
+	"github.com/coreprime/kbot/cmd/kbot/sct"
+	"github.com/coreprime/kbot/cmd/kbot/studio"
+	"github.com/coreprime/kbot/cmd/kbot/taf"
+	"github.com/coreprime/kbot/cmd/kbot/tnt"
+	"github.com/coreprime/kbot/cmd/kbot/tsf"
+	"github.com/coreprime/kbot/cmd/kbot/zrb"
+)
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -33,28 +51,28 @@ Sub-commands operate on specific file formats:
   mcp      Run kbot as a Model Context Protocol server
   studio   Web-based map editor (KBot Studio)
   document Regenerate the TA reference catalogue (units, weapons, build tree)`,
-		Version: Version,
+		Version: cli.Version,
 	}
 
 	rootCmd.AddCommand(
-		newCobCommand(),
-		newCRTCommand(),
-		newCtxCommand(),
-		newDocumentCommand(),
-		newFNTCommand(),
-		newGAFCommand(),
-		newHPICommand(),
-		newPALCommand(),
-		newPCXCommand(),
-		newSCTCommand(),
-		newTAFCommand(),
-		newTNTCommand(),
-		newTSFCommand(),
-		newBIKCommand(),
-		newZRBCommand(),
-		newMountCommand(),
-		newMCPCommand(),
-		newStudioCommand(),
+		cob.NewCommand(),
+		crt.NewCommand(),
+		ctx.NewCommand(),
+		document.NewCommand(),
+		fnt.NewCommand(),
+		gaf.NewCommand(),
+		hpi.NewCommand(),
+		pal.NewCommand(),
+		pcx.NewCommand(),
+		sct.NewCommand(),
+		taf.NewCommand(),
+		tnt.NewCommand(),
+		tsf.NewCommand(),
+		bik.NewCommand(),
+		zrb.NewCommand(),
+		mount.NewCommand(),
+		mcp.NewCommand(),
+		studio.NewCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
