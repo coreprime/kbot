@@ -111,6 +111,12 @@ func (r *Reader) Duration() float64 {
 	return float64(r.header.Frames) / r.FrameRate()
 }
 
+// SignatureString returns the four-character signature ("SMK2" or "SMK4").
+func (r *Reader) SignatureString() string {
+	s := r.header.Signature
+	return string([]byte{byte(s), byte(s >> 8), byte(s >> 16), byte(s >> 24)})
+}
+
 // HasAudio returns true if the video has any audio tracks
 func (r *Reader) HasAudio() bool {
 	for i := 0; i < 7; i++ {
@@ -223,11 +229,7 @@ func readHeader(f *os.File) (*Header, error) {
 // Info returns a formatted string with video information
 func (r *Reader) Info() string {
 	info := "Smacker Video File\n"
-	info += fmt.Sprintf("  Signature: %c%c%c%c\n",
-		byte(r.header.Signature),
-		byte(r.header.Signature>>8),
-		byte(r.header.Signature>>16),
-		byte(r.header.Signature>>24))
+	info += fmt.Sprintf("  Signature: %s\n", r.SignatureString())
 	info += fmt.Sprintf("  Resolution: %dx%d\n", r.Width(), r.Height())
 	info += fmt.Sprintf("  Frames: %d\n", r.FrameCount())
 	info += fmt.Sprintf("  Frame Rate: %.2f fps\n", r.FrameRate())

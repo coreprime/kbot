@@ -803,6 +803,16 @@ These tools inspect and convert TA: Kingdoms Bink cutscenes (see [docs/formats/b
 | `bik_info` | Header JSON: geometry, frame count, frame rate, duration, alpha/grayscale flags and per-track audio. Native parse, no ffmpeg. |
 | `bik_to_mp4` | Decode a `.bik` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. Decode-only — no reverse conversion exists. |
 
+#### Smacker video tools
+
+These tools inspect and convert the original TA Smacker/ZRB cutscenes (see [docs/formats/smacker.md](docs/formats/smacker.md)).
+
+| Tool | Purpose |
+|------|---------|
+| `zrb_info` | Header JSON: signature, geometry, frame count, frame rate, duration and present audio tracks. Native parse, no ffmpeg. |
+| `zrb_to_mp4` | Decode a `.zrb`/`.smk` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. |
+| `zrb_from_mp4` | Re-encode an MP4 back to Smacker via ffmpeg's smackvid/smackaud encoders (best-effort; not in every ffmpeg build). |
+
 #### VFS introspection tools
 
 These tools let the assistant query the virtual filesystem directly:

@@ -7,12 +7,17 @@ import (
 	"strings"
 )
 
+// FFmpegAvailable reports whether an ffmpeg binary is on the PATH.
+func FFmpegAvailable() bool {
+	_, err := exec.LookPath("ffmpeg")
+	return err == nil
+}
+
 // ConvertToMP4 converts a Smacker video file to MP4 using FFmpeg
 // This is a practical implementation using FFmpeg as it has native Smacker support
 func ConvertToMP4(smkPath, mp4Path string) error {
-	// Check if ffmpeg is available
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found in PATH: %w\nPlease install: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)", err)
+	if !FFmpegAvailable() {
+		return fmt.Errorf("ffmpeg not found in PATH\nPlease install: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)")
 	}
 
 	// Build ffmpeg command
@@ -45,9 +50,8 @@ func ConvertToMP4(smkPath, mp4Path string) error {
 
 // ConvertFromMP4 converts an MP4 file to Smacker format using FFmpeg
 func ConvertFromMP4(mp4Path, smkPath string) error {
-	// Check if ffmpeg is available
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return fmt.Errorf("ffmpeg not found in PATH: %w\nPlease install: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)", err)
+	if !FFmpegAvailable() {
+		return fmt.Errorf("ffmpeg not found in PATH\nPlease install: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)")
 	}
 
 	// Note: FFmpeg can decode Smacker but encoding is limited
