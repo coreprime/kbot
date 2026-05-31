@@ -10,7 +10,15 @@ import (
 
 	"github.com/coreprime/kbot/formats/hpi"
 	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
+	hpiv2 "github.com/coreprime/kbot/formats/hpi/v2"
 )
+
+// packWriter is the minimal surface the pack command needs from a version
+// specific HPI writer.
+type packWriter interface {
+	AddFile(archivePath, filePath string) error
+	Close() error
+}
 
 func newHPIPackCommand() *cobra.Command {
 	var (
@@ -21,6 +29,7 @@ func newHPIPackCommand() *cobra.Command {
 		headerKey    uint8
 		encodeChunks bool
 		trailer      string
+		format       string
 	)
 
 	cmd := &cobra.Command{
@@ -55,27 +64,50 @@ Examples:
 			_ = tmpFile.Close()
 			defer func() { _ = os.Remove(tmpPath) }()
 
-			writer, err := hpiv1.CreateWriter(tmpPath)
-			if err != nil {
-				return fmt.Errorf("failed to create archive: %w", err)
-			}
-			writer.CompressionLevel = compression
-			writer.HeaderKey = headerKey
-			writer.ChunkEncoded = encodeChunks
-			switch method {
-			case "lz77", "":
-				writer.CompressionMethod = hpi.CompressionLZ77
-			case "zlib":
-				writer.CompressionMethod = hpi.CompressionZLib
-			case "none":
-				writer.CompressionMethod = hpi.CompressionNone
+			var writer packWriter
+			switch format {
+			case "v1", "":
+				w, err := hpiv1.CreateWriter(tmpPath)
+				if err != nil {
+					return fmt.Errorf("failed to create archive: %w", err)
+				}
+				w.CompressionLevel = compression
+				w.HeaderKey = headerKey
+				w.ChunkEncoded = encodeChunks
+				switch method {
+				case "lz77", "":
+					w.CompressionMethod = hpi.CompressionLZ77
+				case "zlib":
+					w.CompressionMethod = hpi.CompressionZLib
+				case "none":
+					w.CompressionMethod = hpi.CompressionNone
+				default:
+					return fmt.Errorf("unknown compression method: %s (use lz77, zlib, or none)", method)
+				}
+				if trailer != "" {
+					w.SetTrailer([]byte(trailer))
+				} else {
+					w.SetTrailer(nil)
+				}
+				writer = w
+			case "v2":
+				w, err := hpiv2.CreateWriter(tmpPath)
+				if err != nil {
+					return fmt.Errorf("failed to create archive: %w", err)
+				}
+				w.CompressionLevel = compression
+				switch method {
+				case "zlib", "lz77", "":
+					// TA: Kingdoms archives only use zlib-in-SQSH chunks.
+					w.CompressionMethod = hpi.CompressionZLib
+				case "none":
+					w.CompressionMethod = hpi.CompressionNone
+				default:
+					return fmt.Errorf("unknown compression method: %s (use zlib or none for v2)", method)
+				}
+				writer = w
 			default:
-				return fmt.Errorf("unknown compression method: %s (use lz77, zlib, or none)", method)
-			}
-			if trailer != "" {
-				writer.SetTrailer([]byte(trailer))
-			} else {
-				writer.SetTrailer(nil)
+				return fmt.Errorf("unknown HPI format: %s (use v1 or v2)", format)
 			}
 
 			if verbose {
@@ -162,7 +194,8 @@ Examples:
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed packing progress")
 	cmd.Flags().StringVar(&target, "target", "", "Output archive path (default: stdout)")
 	cmd.Flags().IntVar(&compression, "compression", 0, "Zlib compression level 1-9 (0 = default)")
-	cmd.Flags().StringVar(&method, "method", "lz77", "Compression method: lz77, zlib, or none")
+	cmd.Flags().StringVar(&format, "format", "v1", "HPI format: v1 (Total Annihilation) or v2 (TA: Kingdoms)")
+	cmd.Flags().StringVar(&method, "method", "lz77", "Compression method: lz77, zlib, or none (v2 supports zlib or none)")
 	cmd.Flags().Uint8Var(&headerKey, "key", hpi.DefaultHeaderKey,
 		"HPI HeaderKey for XOR encryption (default matches retail TA; 0 disables encryption)")
 	cmd.Flags().BoolVar(&encodeChunks, "encode-chunks", true,
