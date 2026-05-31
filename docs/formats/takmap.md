@@ -39,7 +39,7 @@ Counting across the maps directory of the GoG install:
 | `.tnt` | 55 | Map terrain data (TNT-shaped binary with a TA:K-specific IDVersion word) |
 | `.ota` | 55 | Map metadata — TDF format, same shape as TA's `.ota` with TAK-specific fields |
 | `.txt` | 55 | Free-text map description (a few words; shown in the lobby) |
-| `.crt` | 33 | Small (≤256-byte) binary — probably camera/start-pos hints; not yet decoded |
+| `.crt` | 33 | Scenario sidecar: pre-placed units, per-player rule engine, named trigger regions |
 | `.tdf` | 6 | Per-map gameplay tweak files (campaign-tuning, AI nudges) |
 
 A typical multiplayer map ships as a `.tnt` + `.ota` + `.txt` triple,
@@ -221,23 +221,83 @@ all work directly. Each `.kmp` typically packages:
 
 ---
 
-## `.crt` — Small binary, purpose unclear
+## `.crt` — Scenario script (units, rules, triggers)
 
-Every `.crt` in the install is between 56 and 256 bytes. Header bytes
-of `abnar's terrace.crt`:
+A `.crt` carries the scripted layer of a map: the units placed before
+play starts, the per-player rule engine that drives skirmish AI and
+campaign objectives, and the named rectangular trigger regions those
+rules reference. Multiplayer maps ship an empty *stub* (no units, nine
+empty player slots, no triggers, 56 bytes); campaign and special maps
+populate every section, up to ~120 KB.
+
+The whole file is little-endian and is a direct image of the engine's
+in-memory structures, so unit records include several uninitialised
+padding fields.
+
+### Header
+
+| Offset | Type     | Field      | Notes                                   |
+| ------ | -------- | ---------- | --------------------------------------- |
+| `0x00` | `uint32` | Signature  | `0x3F800000` — IEEE-754 `1.0f` marker   |
+| `0x04` | `uint32` | Unknown1   | `0` on every shipped map but one        |
+| `0x08` | `uint32` | UnitCount  | number of placed-unit records following |
+
+`abnar's terrace.crt` (an empty stub) begins:
 
 ```
 00000000: 00 00 80 3f 00 00 00 00 00 00 00 00 09 00 00 00
 ```
 
-The leading `00 00 80 3f` is the IEEE-754 little-endian encoding of
-`1.0f`, suggesting a transform matrix or camera position. The third
-uint32 is `9`, which doesn't match anything obvious. Without a clear
-hypothesis we just preserve the file verbatim when packing mods.
+`1.0f`, `Unknown1 = 0`, `UnitCount = 0`, then the player count `9`.
 
-If you have a working `.crt` reverse-engineering — particularly
-something tying it to camera angles, fog parameters, or scenario hints
-— please open an issue.
+### Unit records (568 bytes each)
+
+| Offset | Type           | Field                       |
+| ------ | -------------- | --------------------------- |
+| `+0`   | `char[256]`    | UnitType (NUL-terminated)   |
+| `+256` | `char[256]`    | UniqueName (usually empty)  |
+| `+512` | `uint32`       | X (world)                   |
+| `+516` | `uint32`       | Y (height axis)             |
+| `+520` | `uint32`       | Z (world)                   |
+| `+524` | `uint32`       | PlayerId (0-based)          |
+| `+528` | `uint32`       | HealthPercent (usually 100) |
+| `+532` | `uint32`       | ArmorPercent (usually 100)  |
+| `+536` | `uint32`       | WeaponPercent (usually 100) |
+| `+540` | `uint32`       | Angle (usually 180)         |
+| `+544` | `uint32`       | Veteran                     |
+| `+548` | `uint32`       | unknown                     |
+| `+552` | `uint32`       | unknown                     |
+| `+556` | `uint32`       | FootprintX                  |
+| `+560` | `uint32`       | FootprintZ                  |
+| `+564` | `uint32`       | unknown                     |
+
+### Players, rules, conditions, actions
+
+After the units, a `uint32` player count (always `9`) precedes that
+many player blocks. Each player block is a `uint32` rule count followed
+by that many rules. A rule is:
+
+- `uint32` condition count, then each condition is a `uint32` opcode and
+  five 64-byte argument slots;
+- `uint32` action count, then each action is a `uint32` opcode and five
+  64-byte argument slots.
+
+### Triggers
+
+A trailing `uint32` trigger count precedes that many trigger records.
+Each is a 256-byte NUL-terminated name followed by four `uint32`
+bounds — `Left`, `Top`, `Right`, `Bottom` — in map cells. Names are
+human-readable (`The Hill`, `Player 1`).
+
+### Tooling
+
+`kbot crt describe <map.crt>` prints the unit-type breakdown, rule
+counts and trigger regions; add `--verbose` for the full placement
+list. The MCP `crt_describe` tool returns the same data as JSON.
+
+One file — `cairbray coast landing.crt` — has a shifted, hand-edited
+header that does not match this layout; the parser rejects it with a
+clear error rather than mis-decoding it.
 
 ---
 

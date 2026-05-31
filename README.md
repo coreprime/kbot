@@ -51,6 +51,7 @@ To develop/code against the project:
   - [`kbot pcx` — PCX Images](#kbot-pcx--pcx-images)
   - [`kbot fnt` — Bitmap Fonts](#kbot-fnt--bitmap-fonts)
   - [`kbot sct` — Map Sections](#kbot-sct--map-sections)
+  - [`kbot crt` — TA: Kingdoms Scenarios](#kbot-crt--ta-kingdoms-scenarios)
   - [`kbot pal` — Palettes & Lookup Tables](#kbot-pal--palettes--lookup-tables)
   - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
@@ -375,6 +376,24 @@ kbot sct heightmap hill01.sct --target hill01-h.png
 
 # Export the embedded 128x128 minimap as PNG
 kbot sct minimap hill01.sct --target hill01-mini.png
+```
+
+---
+
+### `kbot crt` — TA: Kingdoms Scenarios
+
+Inspect the `.crt` scenario sidecar that pairs with a TA: Kingdoms `.tnt`
+map. It holds the units placed before play, the per-player rule engine
+and named trigger regions. Multiplayer maps ship an empty stub; campaign
+and special maps populate every section. See
+[docs/formats/takmap.md](docs/formats/takmap.md) for the binary layout.
+
+```bash
+# Unit-type breakdown, rule counts and trigger regions
+kbot crt describe "king of the hill.crt"
+
+# Add every placement with its position, owner and facing
+kbot crt describe --verbose "savannah hunt.crt"
 ```
 
 ---
@@ -803,6 +822,12 @@ These tools inspect and convert TA: Kingdoms Bink cutscenes (see [docs/formats/b
 | `bik_info` | Header JSON: geometry, frame count, frame rate, duration, alpha/grayscale flags and per-track audio. Native parse, no ffmpeg. |
 | `bik_to_mp4` | Decode a `.bik` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. Decode-only — no reverse conversion exists. |
 
+#### Scenario tools
+
+| Tool | Purpose |
+|------|---------|
+| `crt_describe` | Summarise a TA: Kingdoms `.crt` scenario: placed-unit breakdown, per-player rule counts and named trigger regions, returned as JSON. Pass `units: true` for the full per-unit placement list. |
+
 #### VFS introspection tools
 
 These tools let the assistant query the virtual filesystem directly:
@@ -906,6 +931,7 @@ kbot/
 ├── formats/         Public format packages
 │   ├── ai/          AI opponent profiles
 │   ├── bik/         Bink video (TA:K cutscenes; header parse + ffmpeg decode)
+│   ├── crt/         TA:K scenario sidecars (placed units, rules, triggers)
 │   ├── fnt/         Bitmap fonts (1bpp, MSB-first)
 │   ├── gaf/         Sprite animations + writer
 │   ├── hpi/         HPI/UFO/CCX archives

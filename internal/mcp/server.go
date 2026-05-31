@@ -105,6 +105,7 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 
 	registerBIKTools(s, resolver)
 	registerCOBTools(s, resolver)
+	registerCRTTools(s, resolver)
 	registerCtxTools(s, resolver)
 	registerFNTTools(s, resolver)
 	registerHPITools(s, resolver)
