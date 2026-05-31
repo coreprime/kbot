@@ -17,6 +17,7 @@ func main() {
 
 Sub-commands operate on specific file formats:
   cob   COB/BOS scripting (compile, decompile, assemble, disassemble)
+  crt   TA: Kingdoms .crt scenario files (describe)
   ctx   Manage named working-directory contexts (~/.kbot)
   fnt   Bitmap font files (info, describe, render, sheet, dump)
   gaf   GAF sprite animations (list, export, dump, build)
@@ -37,6 +38,7 @@ Sub-commands operate on specific file formats:
 
 	rootCmd.AddCommand(
 		newCobCommand(),
+		newCRTCommand(),
 		newCtxCommand(),
 		newDocumentCommand(),
 		newFNTCommand(),

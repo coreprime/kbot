@@ -54,7 +54,7 @@ real files alongside the prose.
 |------|-----------|---------|--------------|
 | [SCT](sct.md) | `.sct` | Reusable map sections stitched together to build `.tnt` maps | TA ✅ |
 | [TNT](tnt.md) | `.tnt` | A complete playable map (tile grid + heightmap + minimap + feature list) | TA ✅ |
-| [TA:K maps](takmap.md) | `.btm` `.bmp` | TA: Kingdoms heightmap-based map pipeline (research notes) | TA:K 🟡 |
+| [TA:K maps](takmap.md) | `.tnt` `.ota` `.crt` `.kmp` | TA: Kingdoms map pipeline — texture-mapped terrain + minimap render, and the `.crt` scenario sidecar (placed units, rules, triggers) | TA:K 🟡 |
 
 ### Units, scripts, configs
 

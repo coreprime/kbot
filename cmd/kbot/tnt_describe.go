@@ -28,6 +28,12 @@ func newTNTDescribeCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+
+			if m.IsTAK {
+				describeTAK(path, data, m)
+				return nil
+			}
+
 			features, err := m.LoadFeatures(r)
 			if err != nil {
 				return fmt.Errorf("read features: %w", err)
@@ -105,4 +111,56 @@ func newTNTDescribeCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// describeTAK prints the verified portion of a TA: Kingdoms TNT.  The tile,
+// attribute and feature sections use an undecoded encoding, so only the
+// header and the embedded minimap are reported.
+func describeTAK(path string, data []byte, m *tnt.Map) {
+	fmt.Printf("TNT File: %s\n", path)
+	fmt.Printf("File Size: %d bytes\n\n", len(data))
+
+	fmt.Printf("Header (TA: Kingdoms variant):\n")
+	fmt.Printf("  IDVersion:   0x%X (TA: Kingdoms)\n", m.Header.IDVersion)
+	fmt.Printf("  Width:       %d DataUnits (%d px)\n", m.Header.Width, m.TAKPixelW())
+	fmt.Printf("  Height:      %d DataUnits (%d px)\n", m.Header.Height, m.TAKPixelH())
+	fmt.Printf("  Minimap:     %dx%d\n", m.MinimapW, m.MinimapH)
+	if k := takKingdomForTNT(path); k != "" {
+		fmt.Printf("  Kingdom:     %s (terrain/minimap palette)\n", k)
+	}
+
+	features, _ := m.LoadFeatures(bytes.NewReader(data))
+	placements := m.TAKFeaturePlacements()
+	fmt.Printf("  Heightmap:   %dx%d DataUnits\n", m.TAKW, m.TAKH)
+	fmt.Printf("  Terrain:     %dx%d Graphic Units (texture-mapped, %dx%d px)\n", m.TAKGUW, m.TAKGUH, m.TAKPixelW(), m.TAKPixelH())
+	fmt.Printf("  Features:    %d in table, %d placements\n", len(features), len(placements))
+
+	if len(features) > 0 && len(placements) > 0 {
+		counts := make([]int, len(features))
+		for _, p := range placements {
+			if p.FeatureIdx < len(counts) {
+				counts[p.FeatureIdx]++
+			}
+		}
+		type pair struct{ idx, count int }
+		ps := make([]pair, 0, len(counts))
+		for i, c := range counts {
+			if c > 0 {
+				ps = append(ps, pair{i, c})
+			}
+		}
+		sort.Slice(ps, func(i, j int) bool { return ps[i].count > ps[j].count })
+		limit := 10
+		if len(ps) < limit {
+			limit = len(ps)
+		}
+		fmt.Printf("\nTop features:\n")
+		for i := 0; i < limit; i++ {
+			fmt.Printf("  [%3d] %-20s  count=%d\n", ps[i].idx, features[ps[i].idx].Name, ps[i].count)
+		}
+	}
+
+	fmt.Printf("\nNote: render the full map with 'kbot tnt image' (add\n")
+	fmt.Printf("--features to overlay placements). The half-resolution\n")
+	fmt.Printf("attribute/height layers are not yet decoded.\n")
 }
