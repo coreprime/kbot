@@ -15,11 +15,16 @@ import (
 )
 
 // Reader reads a Total Annihilation (v1) HPI archive.
+//
+// A Reader is not safe for concurrent use: every read seeks the shared file
+// handle, so callers serving an archive to multiple goroutines must serialize
+// access.
 type Reader struct {
 	file       *os.File
 	header     *common.Header
 	root       *common.Entry
 	decryptKey uint8
+	fileSize   int64
 }
 
 // Open opens a v1 HPI archive for reading.
@@ -114,14 +119,22 @@ func (r *Reader) OpenEntry(entry *common.Entry) (io.ReadCloser, error) {
 // ---------------------------------------------------------------------------
 
 func (r *Reader) readDecryptBytes(size int) ([]byte, error) {
+	if size < 0 {
+		return nil, fmt.Errorf("negative read size %d", size)
+	}
+	// Every read length here derives from on-disk header/chunk fields. None can
+	// legitimately exceed the file itself, so reject oversized requests before
+	// allocating to avoid a corrupt archive triggering a huge allocation.
+	if int64(size) > r.fileSize {
+		return nil, fmt.Errorf("read size %d exceeds file size %d", size, r.fileSize)
+	}
 	seed := uint8(r.currentPosition())
 	data := make([]byte, size)
-	n, err := r.file.Read(data)
-	if err != nil {
+	if _, err := io.ReadFull(r.file, data); err != nil {
 		return nil, err
 	}
-	common.DecryptBuffer(r.decryptKey, seed, data[:n])
-	return data[:n], nil
+	common.DecryptBuffer(r.decryptKey, seed, data)
+	return data, nil
 }
 
 func (r *Reader) readDecryptUint32() (uint32, error) {
@@ -142,15 +155,18 @@ func (r *Reader) currentPosition() int64 {
 // ---------------------------------------------------------------------------
 
 func (r *Reader) readHeader() error {
+	info, err := r.file.Stat()
+	if err != nil {
+		return err
+	}
+	r.fileSize = info.Size()
+
 	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	header := &common.Header{}
-	if err := binary.Read(r.file, binary.LittleEndian, header); err != nil {
+	header, err := common.ReadHeader(r.file)
+	if err != nil {
 		return err
-	}
-	if header.Marker != common.HeaderMarker {
-		return fmt.Errorf("invalid HPI marker: 0x%X", header.Marker)
 	}
 	if header.Version != common.VersionV1 {
 		return fmt.Errorf("not a v1 HPI archive: version 0x%X", header.Version)
@@ -162,12 +178,21 @@ func (r *Reader) readHeader() error {
 }
 
 func (r *Reader) readDirectory() error {
-	dirBuffer := make([]byte, r.header.DirectorySize)
-
 	dirStart := r.header.Offset
 	if dirStart == 0 {
 		dirStart = uint32(common.HeaderSize)
 	}
+
+	// DirectorySize and Offset come straight from the on-disk header; validate
+	// them against the real file size before trusting them to size a buffer.
+	if int64(r.header.DirectorySize) > r.fileSize {
+		return fmt.Errorf("directory size %d exceeds file size %d", r.header.DirectorySize, r.fileSize)
+	}
+	if dirStart > r.header.DirectorySize {
+		return fmt.Errorf("directory offset %d past directory end %d", dirStart, r.header.DirectorySize)
+	}
+
+	dirBuffer := make([]byte, r.header.DirectorySize)
 
 	if _, err := r.file.Seek(int64(dirStart), io.SeekStart); err != nil {
 		return err
@@ -307,7 +332,14 @@ func (r *Reader) extractCompressed(entry *common.Entry) ([]byte, error) {
 		chunkSizes[i] = size
 	}
 
-	output := make([]byte, 0, entry.Size)
+	// entry.Size is the decompressed length and can legitimately exceed the
+	// archive size, so it cannot be bounded by fileSize. Cap only the initial
+	// capacity hint; append grows the slice if the real output is larger.
+	capHint := entry.Size
+	if int64(capHint) > r.fileSize {
+		capHint = uint32(r.fileSize)
+	}
+	output := make([]byte, 0, capHint)
 	for i := uint32(0); i < numChunks; i++ {
 		chunk, err := r.readChunk()
 		if err != nil {

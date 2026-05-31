@@ -39,8 +39,3 @@ func (h *Header) WriteHeader(w io.Writer) error {
 	}
 	return nil
 }
-
-// Size returns the size of the header in bytes.
-func (h *Header) Size() int {
-	return HeaderSize
-}

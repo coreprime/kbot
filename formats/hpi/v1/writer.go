@@ -404,8 +404,8 @@ func (w *Writer) writeArchive() error {
 		DecryptKey:    uint32(w.HeaderKey),
 		Offset:        uint32(common.HeaderSize),
 	}
-	if err := binary.Write(w.file, binary.LittleEndian, &hdr); err != nil {
-		return fmt.Errorf("writing header: %w", err)
+	if err := hdr.WriteHeader(w.file); err != nil {
+		return err
 	}
 
 	xorKey := common.TransformHeaderKey(w.HeaderKey)

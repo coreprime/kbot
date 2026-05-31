@@ -34,10 +34,15 @@ type headerV2 struct {
 }
 
 // Reader reads a TA: Kingdoms (v2) HPI archive.
+//
+// A Reader is not safe for concurrent use: every read seeks the shared file
+// handle, so callers serving an archive to multiple goroutines must serialize
+// access.
 type Reader struct {
-	file   *os.File
-	header *common.Header
-	root   *common.Entry
+	file     *os.File
+	header   *common.Header
+	root     *common.Entry
+	fileSize int64
 }
 
 // Open opens a v2 HPI archive for reading.
@@ -129,6 +134,12 @@ func (r *Reader) OpenEntry(entry *common.Entry) (io.ReadCloser, error) {
 }
 
 func (r *Reader) readHeader() error {
+	info, err := r.file.Stat()
+	if err != nil {
+		return err
+	}
+	r.fileSize = info.Size()
+
 	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -275,6 +286,9 @@ func (r *Reader) readMaybeCompressedBlock(offset int64, size int) ([]byte, error
 	if size < 0 {
 		return nil, fmt.Errorf("negative block size %d", size)
 	}
+	if int64(size) > r.fileSize {
+		return nil, fmt.Errorf("block size %d exceeds file size %d", size, r.fileSize)
+	}
 	if _, err := r.file.Seek(offset, io.SeekStart); err != nil {
 		return nil, err
 	}
@@ -294,11 +308,19 @@ func (r *Reader) extractFile(entry *common.Entry) ([]byte, error) {
 		return nil, err
 	}
 	if entry.CompressedSize == 0 {
+		// Uncompressed payload read straight from disk; its length cannot exceed
+		// the file itself.
+		if int64(entry.Size) > r.fileSize {
+			return nil, fmt.Errorf("file size %d exceeds archive size %d", entry.Size, r.fileSize)
+		}
 		buf := make([]byte, entry.Size)
 		if _, err := io.ReadFull(r.file, buf); err != nil {
 			return nil, err
 		}
 		return buf, nil
+	}
+	if int64(entry.CompressedSize) > r.fileSize {
+		return nil, fmt.Errorf("compressed size %d exceeds archive size %d", entry.CompressedSize, r.fileSize)
 	}
 	chunk := make([]byte, entry.CompressedSize)
 	if _, err := io.ReadFull(r.file, chunk); err != nil {
