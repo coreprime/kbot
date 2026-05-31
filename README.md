@@ -574,6 +574,26 @@ Requires FFmpeg for conversions.
 
 ---
 
+### `kbot bik` — Bink Video
+
+Work with Bink (.bik) video files — the cutscene format TA: Kingdoms uses in
+place of the original game's Smacker (.zrb) videos. See
+[docs/formats/bik.md](docs/formats/bik.md) for the format.
+
+```bash
+# Show video information (native header parse — no ffmpeg needed)
+kbot bik info movies/takmission14_ph.bik
+
+# Decode to MP4
+kbot bik to-mp4 movies/takmission14_ph.bik intro.mp4
+```
+
+`to-mp4` requires FFmpeg (which ships a Bink decoder). Conversion is
+**decode-only** — no open-source Bink encoder exists, so unlike `kbot zrb`
+there is no `from-mp4` counterpart.
+
+---
+
 ### `kbot mount` — Asset Explorer
 
 Browse game files interactively in a terminal or web UI.
@@ -774,6 +794,15 @@ These tools inspect and render TA: Kingdoms truecolor animations (see [docs/form
 | `tsf_info` | Summarise a TSF document — animation, frames and referenced layer images. |
 | `tsf_lint` | Shape-check a TSF document against the compiler's expectations. |
 
+#### Bink video tools
+
+These tools inspect and convert TA: Kingdoms Bink cutscenes (see [docs/formats/bik.md](docs/formats/bik.md)).
+
+| Tool | Purpose |
+|------|---------|
+| `bik_info` | Header JSON: geometry, frame count, frame rate, duration, alpha/grayscale flags and per-track audio. Native parse, no ffmpeg. |
+| `bik_to_mp4` | Decode a `.bik` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. Decode-only — no reverse conversion exists. |
+
 #### VFS introspection tools
 
 These tools let the assistant query the virtual filesystem directly:
@@ -876,6 +905,7 @@ kbot/
 ├── cmd/kbot/        CLI entry point and subcommands
 ├── formats/         Public format packages
 │   ├── ai/          AI opponent profiles
+│   ├── bik/         Bink video (TA:K cutscenes; header parse + ffmpeg decode)
 │   ├── fnt/         Bitmap fonts (1bpp, MSB-first)
 │   ├── gaf/         Sprite animations + writer
 │   ├── hpi/         HPI/UFO/CCX archives

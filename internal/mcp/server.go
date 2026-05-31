@@ -103,6 +103,7 @@ func NewServer(cfg Config) (*server.MCPServer, func() error, error) {
 
 	resolver := NewResolver(guard, registry)
 
+	registerBIKTools(s, resolver)
 	registerCOBTools(s, resolver)
 	registerCtxTools(s, resolver)
 	registerFNTTools(s, resolver)

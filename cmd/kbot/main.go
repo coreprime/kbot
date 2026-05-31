@@ -27,6 +27,7 @@ Sub-commands operate on specific file formats:
   taf   TA:K truecolor animations (info, render, export, decompile, compile)
   tnt   TNT map files (describe, unpack, pack, image, heightmap, minimap, ascii)
   tsf   TA:K animation text scripts (info, lint)
+  bik      Bink video files — TA: Kingdoms cutscenes (info, to-mp4)
   zrb      Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp      Run kbot as a Model Context Protocol server
   studio   Web-based map editor (KBot Studio)
@@ -47,6 +48,7 @@ Sub-commands operate on specific file formats:
 		newTAFCommand(),
 		newTNTCommand(),
 		newTSFCommand(),
+		newBIKCommand(),
 		newZRBCommand(),
 		newMountCommand(),
 		newMCPCommand(),

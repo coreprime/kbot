@@ -44,7 +44,8 @@ real files alongside the prose.
 | [PCX](pcx.md) | `.pcx` | ZSoft Paintbrush bitmap — unit portraits, GUI panels, and TA:K palette carriers | TA ✅ &nbsp; TA:K ✅ |
 | [PAL / ALP / LHT / SHD](pal.md) | `.pal` `.alp` `.lht` `.shd` | 256-entry colour palette and 256×4 colour lookup tables | TA ✅ |
 | [FNT](fnt.md) | `.fnt` | 1-bit-per-pixel variable-width bitmap font | TA ✅ |
-| [Smacker / ZRB](smacker.md) | `.smk` `.zrb` | Cutscene video (RAD Game Tools Smacker, renamed `.zrb`) | TA ✅ &nbsp; TA:K ✅ |
+| [Smacker / ZRB](smacker.md) | `.smk` `.zrb` | Cutscene video (RAD Game Tools Smacker, renamed `.zrb`) | TA ✅ |
+| [Bink](bik.md) | `.bik` | TA: Kingdoms cutscene video (RAD Bink 1) — Smacker's successor | TA:K ✅ |
 | [WAV / Sound](sound.md) | `.wav` | Plain WAV plus the three-layer sound-bank wiring | TA ✅ &nbsp; TA:K ✅ |
 
 ### Maps & terrain

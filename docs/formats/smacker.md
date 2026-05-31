@@ -174,8 +174,8 @@ Bink tools remain the gold standard for re-encoding.
 > uninitialised memory the file ships with, not a real value.
 
 - **Smacker is not Bink.** RAD released Smacker first, then Bink as
-  its successor. TA only uses Smacker. Don't try to load `.bik` files
-  with `kbot zrb`.
+  its successor. TA only uses Smacker; TA: Kingdoms switched to Bink.
+  Don't load `.bik` files with `kbot zrb` — use [`kbot bik`](bik.md) instead.
 - **`SMK4` Huffman trees are not backward-compatible with `SMK2`
   decoders.** FFmpeg handles both, but older third-party libraries
   may not.
@@ -191,5 +191,6 @@ Bink tools remain the gold standard for re-encoding.
 
 ## See also
 
+- [Bink](bik.md) — the successor codec TA: Kingdoms uses in place of Smacker.
 - [HPI](hpi.md) — the wrapper archive that ships ZRB files.
 - [Glossary](glossary.md) — *frame rate*, *signature*.
