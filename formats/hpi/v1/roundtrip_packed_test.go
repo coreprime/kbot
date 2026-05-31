@@ -1,4 +1,4 @@
-package hpi
+package v1
 
 import (
 	"crypto/sha512"
@@ -18,8 +18,7 @@ import (
 // TA_PACKED_PATH, streams each entry out while computing SHA-512s, repacks the
 // extracted files into fresh archives with the writer API, then re-reads the
 // new archives and verifies that every file's SHA-512 still matches the
-// original. The intent is to confirm that the decompression and recompression
-// paths are reciprocal at the per-file level.
+// original.
 func TestPackedArchivesRoundTrip(t *testing.T) {
 	packedRoot := testutil.PackedPath(t)
 
@@ -37,10 +36,10 @@ func TestPackedArchivesRoundTrip(t *testing.T) {
 	repackRoot := filepath.Join(tmpRoot, "repacked")
 
 	type archiveJob struct {
-		path       string // original archive path
-		rel        string // relative to packedRoot (unique key)
-		extractDir string // where the streamed-out files live
-		repackPath string // where the rebuilt archive is written
+		path       string
+		rel        string
+		extractDir string
+		repackPath string
 		origHashes map[string]string
 	}
 
@@ -58,7 +57,6 @@ func TestPackedArchivesRoundTrip(t *testing.T) {
 		})
 	}
 
-	// Phase 1 — stream every entry out, SHA-512 each, persist to disk.
 	totalOriginalEntries := 0
 	for _, job := range jobs {
 		if err := os.MkdirAll(job.extractDir, 0o755); err != nil {
@@ -78,7 +76,6 @@ func TestPackedArchivesRoundTrip(t *testing.T) {
 	t.Logf("milestone: read and SHA-512 hashed %d entries across %d archives",
 		totalOriginalEntries, len(jobs))
 
-	// Phase 2 — repack the extracted files back into fresh archives.
 	for _, job := range jobs {
 		if job.origHashes == nil {
 			continue
@@ -92,7 +89,6 @@ func TestPackedArchivesRoundTrip(t *testing.T) {
 	}
 	t.Logf("milestone: repacked %d archives into %s", len(jobs), repackRoot)
 
-	// Phase 3 — re-read the repacked archives and verify every hash matches.
 	t.Logf("milestone: starting SHA-512 verification of repacked archives")
 	totalVerified := 0
 	totalMismatches := 0
@@ -160,12 +156,10 @@ func findPackedArchives(root string) ([]string, error) {
 	return out, nil
 }
 
-// streamHashHPI opens archivePath, iterates every file entry via the streaming
-// reader API, computes a SHA-512 for each entry, and optionally writes a copy
-// to extractDir. Returns a map keyed by the lower-cased forward-slashed entry
-// path so it can be compared case-insensitively across reads.
+// streamHashHPI opens archivePath, iterates every file entry, computes a
+// SHA-512 for each, and optionally writes a copy to extractDir.
 func streamHashHPI(archivePath, extractDir string) (map[string]string, error) {
-	reader, err := OpenReader(archivePath)
+	reader, err := Open(archivePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", archivePath, err)
 	}
@@ -180,8 +174,6 @@ func streamHashHPI(archivePath, extractDir string) (map[string]string, error) {
 	return hashes, nil
 }
 
-// streamHashEntry copies one entry to its destination (if any) while feeding a
-// SHA-512 hasher, then records the hex digest in hashes.
 func streamHashEntry(reader *Reader, entry, extractDir string, hashes map[string]string) error {
 	rc, err := reader.Open(entry)
 	if err != nil {
@@ -222,8 +214,7 @@ func streamHashEntry(reader *Reader, entry, extractDir string, hashes map[string
 }
 
 // repackDirectory builds a fresh HPI archive at outPath from the files under
-// srcDir, using the writer's directory-walk helper so every file is
-// re-compressed.
+// srcDir.
 func repackDirectory(srcDir, outPath string) error {
 	w, err := CreateWriter(outPath)
 	if err != nil {

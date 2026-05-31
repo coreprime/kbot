@@ -110,7 +110,7 @@ type VirtualFileSystem struct {
 // archiveLayer represents a loaded archive
 type archiveLayer struct {
 	name        string
-	reader      *hpi.Reader
+	reader      hpi.Archive
 	archivePath string
 	mu          sync.Mutex // Protects reader access
 }

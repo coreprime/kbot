@@ -9,7 +9,7 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/coreprime/kbot/formats/hpi"
+	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
 	"github.com/coreprime/kbot/testutil"
 )
 
@@ -103,7 +103,7 @@ func TestTNTLintHandler_OTAFromArchive(t *testing.T) {
 		gameRoot = resolved
 	}
 	hpiPath := filepath.Join(gameRoot, "maps.hpi")
-	hw, err := hpi.CreateWriter(hpiPath)
+	hw, err := hpiv1.CreateWriter(hpiPath)
 	if err != nil {
 		t.Fatalf("CreateWriter: %v", err)
 	}

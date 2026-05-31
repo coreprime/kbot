@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot/formats/hpi"
+	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
 )
 
 func newHPIPackCommand() *cobra.Command {
@@ -54,7 +55,7 @@ Examples:
 			_ = tmpFile.Close()
 			defer func() { _ = os.Remove(tmpPath) }()
 
-			writer, err := hpi.CreateWriter(tmpPath)
+			writer, err := hpiv1.CreateWriter(tmpPath)
 			if err != nil {
 				return fmt.Errorf("failed to create archive: %w", err)
 			}

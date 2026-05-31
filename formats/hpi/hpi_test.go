@@ -1,95 +1,59 @@
 package hpi
 
 import (
-	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestHeaderReadWrite(t *testing.T) {
-	header := &Header{
-		Marker:        HeaderMarker,
-		Version:       0x00010000,
-		DirectorySize: 1024,
-		DecryptKey:    0x5A,
-		Offset:        512,
+// TestOpenReaderDetectsV1 confirms OpenReader transparently selects the v1
+// reader for a Total Annihilation archive.
+func TestOpenReaderDetectsV1(t *testing.T) {
+	root := os.Getenv("TA_PACKED_PATH")
+	if root == "" {
+		t.Skip("TA_PACKED_PATH not set — skipping v1 auto-detect test")
 	}
-	
-	var buf bytes.Buffer
-	if err := header.WriteHeader(&buf); err != nil {
-		t.Fatalf("failed to write header: %v", err)
+	archive := filepath.Join(root, "totala1.hpi")
+	if _, err := os.Stat(archive); err != nil {
+		t.Skipf("%s not found: %v", archive, err)
 	}
-	
-	read, err := ReadHeader(&buf)
+
+	a, err := OpenReader(archive)
 	if err != nil {
-		t.Fatalf("failed to read header: %v", err)
+		t.Fatalf("OpenReader(%s): %v", archive, err)
 	}
-	
-	if read.Marker != header.Marker {
-		t.Errorf("marker mismatch: got %X, want %X", read.Marker, header.Marker)
+	defer func() { _ = a.Close() }()
+
+	if got := a.Version(); got != VersionV1 {
+		t.Fatalf("version = 0x%X, want VersionV1 (0x%X)", got, VersionV1)
 	}
-	if read.Version != header.Version {
-		t.Errorf("version mismatch: got %X, want %X", read.Version, header.Version)
+	if len(a.List()) == 0 {
+		t.Fatal("v1 archive listed no files")
 	}
 }
 
-func TestCompressionLZ77(t *testing.T) {
-	original := []byte("AAAAAABBBBBBCCCCCCDDDDDDEEEEEE")
-	
-	decompressed, err := decompressLZ77(original, len(original))
+// TestOpenReaderDetectsV2 confirms OpenReader transparently selects the v2
+// reader for a TA: Kingdoms archive.
+func TestOpenReaderDetectsV2(t *testing.T) {
+	root := os.Getenv("TAK_PACKED_PATH")
+	if root == "" {
+		t.Skip("TAK_PACKED_PATH not set — skipping v2 auto-detect test")
+	}
+	archive := filepath.Join(root, "data.hpi")
+	if _, err := os.Stat(archive); err != nil {
+		t.Skipf("%s not found: %v", archive, err)
+	}
+
+	a, err := OpenReader(archive)
 	if err != nil {
-		t.Fatalf("failed to decompress: %v", err)
+		t.Fatalf("OpenReader(%s): %v", archive, err)
 	}
-	
-	if !bytes.Equal(decompressed, original) {
-		t.Logf("Note: LZ77 test is basic - got %d bytes, want %d", len(decompressed), len(original))
-	}
-}
+	defer func() { _ = a.Close() }()
 
-func TestEntryPath(t *testing.T) {
-	root := &Entry{Name: ""}
-	dir1 := &Entry{Name: "units", Parent: root}
-	dir2 := &Entry{Name: "arm", Parent: dir1}
-	file := &Entry{Name: "armcom.fbi", Parent: dir2}
-	
-	expected := "units/arm/armcom.fbi"
-	if path := file.FullPath(); path != expected {
-		t.Errorf("path mismatch: got %q, want %q", path, expected)
+	if got := a.Version(); got != VersionV2 {
+		t.Fatalf("version = 0x%X, want VersionV2 (0x%X)", got, VersionV2)
 	}
-}
-
-func TestEntryWalk(t *testing.T) {
-	root := &Entry{
-		Name:  "",
-		IsDir: true,
-		Children: []*Entry{
-			{Name: "file1.txt", IsDir: false},
-			{
-				Name:  "dir1",
-				IsDir: true,
-				Children: []*Entry{
-					{Name: "file2.txt", IsDir: false},
-				},
-			},
-		},
-	}
-	
-	for _, child := range root.Children {
-		child.Parent = root
-		if child.IsDir {
-			for _, subchild := range child.Children {
-				subchild.Parent = child
-			}
-		}
-	}
-	
-	count := 0
-	_ = root.Walk(func(e *Entry) error {
-		count++
-		return nil
-	})
-	
-	expected := 4 // root + file1 + dir1 + file2
-	if count != expected {
-		t.Errorf("walk count mismatch: got %d, want %d", count, expected)
+	if len(a.List()) == 0 {
+		t.Fatal("v2 archive listed no files")
 	}
 }

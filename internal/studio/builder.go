@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/hpi"
+	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
 	"github.com/coreprime/kbot/formats/sct"
 	"github.com/coreprime/kbot/formats/tnt"
 )
@@ -46,7 +46,7 @@ func buildHPI(req saveRequest) ([]byte, error) {
 		return nil, err
 	}
 
-	// hpi.Writer is file-backed, so route through a temp file and slurp.
+	// The HPI writer is file-backed, so route through a temp file and slurp.
 	tmp, err := os.CreateTemp("", "studio-*.hpi")
 	if err != nil {
 		return nil, fmt.Errorf("temp file: %w", err)
@@ -55,7 +55,7 @@ func buildHPI(req saveRequest) ([]byte, error) {
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	hw, err := hpi.CreateWriter(tmpPath)
+	hw, err := hpiv1.CreateWriter(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("create hpi: %w", err)
 	}

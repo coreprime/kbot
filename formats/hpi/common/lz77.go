@@ -1,13 +1,13 @@
-package hpi
+package common
 
-// compressLZ77 compresses data using the HPI sliding-window LZ77 format.
+// CompressLZ77 compresses data using the HPI sliding-window LZ77 format.
 //
 // Stream layout, per group of up to 8 items:
 //   - 1 tag byte (8 flag bits, LSB first)
 //   - For each bit (0 = literal, 1 = match):
-//       literal: 1 raw byte
-//       match:   2 bytes encoding (windowOffset << 4) | (matchLen - 2)
-//                giving 12-bit offset (1–4095) and 4-bit length (2–17)
+//     literal: 1 raw byte
+//     match:   2 bytes encoding (windowOffset << 4) | (matchLen - 2)
+//     giving 12-bit offset (1–4095) and 4-bit length (2–17)
 //
 // A match with windowOffset == 0 terminates the stream.
 //
@@ -16,7 +16,7 @@ package hpi
 // emitted window offset is computed against a tracked windowPos that mirrors
 // the decompressor's state — the window content itself isn't needed for
 // matching since it always equals the corresponding bytes of the input.
-func compressLZ77(data []byte) []byte {
+func CompressLZ77(data []byte) []byte {
 	const (
 		windowSize    = 4096
 		maxDistance   = 4095
@@ -142,4 +142,73 @@ func matchLengthAt(data []byte, pos, dist, maxLen int) int {
 		n++
 	}
 	return n
+}
+
+// DecompressLZ77 decompresses HPI LZ77 data into a buffer of decompressedSize
+// bytes using the 4096-byte sliding window scheme.
+func DecompressLZ77(compressed []byte, decompressedSize int) ([]byte, error) {
+	output := make([]byte, 0, decompressedSize)
+	window := make([]byte, 4096)
+	inPos := 0
+	windowPos := uint32(1)
+
+	for inPos < len(compressed) {
+
+		tag := uint8(compressed[inPos])
+		inPos++
+
+		for bit := uint32(0); bit < 8; bit++ {
+			if (tag & 1) == 0 {
+				// Literal byte
+				if inPos >= len(compressed) {
+					break
+				}
+
+				if len(output) >= decompressedSize {
+					return output, nil
+				}
+
+				b := compressed[inPos]
+				output = append(output, b)
+				window[windowPos] = b
+				windowPos = (windowPos + 1) & 0xFFF
+				inPos++
+			} else {
+				// Window reference
+				if inPos+1 >= len(compressed) {
+					break
+				}
+
+				packedData := uint32(compressed[inPos]) | (uint32(compressed[inPos+1]) << 8)
+				offset := packedData >> 4
+				count := (packedData & 0x0F) + 2
+
+				inPos += 2
+
+				if offset == 0 {
+					return output, nil
+				}
+
+				if len(output)+int(count) > decompressedSize {
+					count = uint32(decompressedSize - len(output))
+				}
+
+				for x := uint32(0); x < count; x++ {
+					b := window[offset]
+					output = append(output, b)
+					window[windowPos] = b
+					offset = (offset + 1) & 0xFFF
+					windowPos = (windowPos + 1) & 0xFFF
+				}
+			}
+
+			tag >>= 1
+		}
+
+		if len(output) >= decompressedSize {
+			return output, nil
+		}
+	}
+
+	return output, nil
 }

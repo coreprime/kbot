@@ -1,16 +1,18 @@
-package hpi
+package v2
 
 import (
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/coreprime/kbot/formats/hpi/common"
 )
 
-// TestHPIv2OpenAndRead confirms the v2 reader can open a TA: Kingdoms archive
-// and successfully extract a file. It opportunistically uses TAK_PACKED_PATH
-// (set in .env.local) and skips when the asset is unavailable.
-func TestHPIv2OpenAndRead(t *testing.T) {
+// TestOpenAndRead confirms the v2 reader can open a TA: Kingdoms archive and
+// successfully extract a file. It opportunistically uses TAK_PACKED_PATH (set in
+// .env.local) and skips when the asset is unavailable.
+func TestOpenAndRead(t *testing.T) {
 	root := os.Getenv("TAK_PACKED_PATH")
 	if root == "" {
 		t.Skip("TAK_PACKED_PATH not set — skipping TA: Kingdoms HPI v2 test")
@@ -20,19 +22,18 @@ func TestHPIv2OpenAndRead(t *testing.T) {
 		t.Skipf("%s not found: %v", archive, err)
 	}
 
-	reader, err := OpenReader(archive)
+	reader, err := Open(archive)
 	if err != nil {
-		t.Fatalf("OpenReader(%s): %v", archive, err)
+		t.Fatalf("Open(%s): %v", archive, err)
 	}
 	defer func() { _ = reader.Close() }()
 
-	if got := reader.Version(); got != VersionV2 {
-		t.Fatalf("version = 0x%X, want 0x%X", got, VersionV2)
+	if got := reader.Version(); got != common.VersionV2 {
+		t.Fatalf("version = 0x%X, want 0x%X", got, common.VersionV2)
 	}
 
-	// Walk and pull one regular file to exercise the SQSH decode path.
-	var sample *Entry
-	_ = reader.Walk(func(e *Entry) error {
+	var sample *common.Entry
+	_ = reader.Walk(func(e *common.Entry) error {
 		if sample == nil && !e.IsDir && e.Size > 0 {
 			sample = e
 		}
