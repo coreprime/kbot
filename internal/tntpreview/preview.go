@@ -82,6 +82,79 @@ func ComposeWith(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *file
 	return stats, nil
 }
 
+// ComposeTAK paints TA: Kingdoms feature sprites onto base, which must be the
+// map's full-resolution terrain render (see tnt.Map.RenderTAKTerrain).  Each
+// placement carries a full-resolution terrain pixel (its DataUnit cell scaled
+// by 16), so the sprite is anchored at that coordinate using the GAF frame's
+// hotspot (falling back to bottom-centre when the frame carries no origin).
+//
+// vfs resolves feature TDFs (features/**.tdf) and their GAFs (anims/*.gaf);
+// spritePalette is the map's per-kingdom feature palette used to decode frames.
+// Placements are walked in grid (top-to-bottom) order so nearer features paint
+// over farther ones.
+func ComposeTAK(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *filesystem.VirtualFileSystem, spritePalette *gaf.Palette) (Stats, error) {
+	if base == nil {
+		return Stats{}, fmt.Errorf("base image is nil")
+	}
+	if vfs == nil {
+		return Stats{}, fmt.Errorf("vfs is required")
+	}
+	cache := newFeatureSpriteCache(vfs, spritePalette)
+	painted, missing := compositeTAKFeatureSprites(base, m, features, cache)
+	return Stats{SpritesPainted: painted, SpritesMissing: missing}, nil
+}
+
+// compositeTAKFeatureSprites paints each TA:K placement's sprite anchored at the
+// centre of its footprint, mirroring the TA path's featureAnchorWorld math.  The
+// feature grid stores the top-left DataUnit cell of a feature's footprint, so
+// the world anchor is that cell's pixel plus half the footprint
+// (footprintX/Z are in 16px DataUnits, verified: footprint*16 ≈ sprite extent).
+// The anchor is then lifted north by half the terrain height at the cell: the
+// game's tilted camera projects raised ground up-screen, so a feature on a
+// highland sits higher than its flat top-down footprint — the same height>>1
+// trick TA uses.  The GAF frame's OriginX/OriginY hotspot — which sits at the
+// footprint centre — is placed on that anchor; a zero origin falls back to
+// bottom-centre so a sprite still sits on its base.
+func compositeTAKFeatureSprites(base *image.RGBA, m *tnt.Map, features []tnt.Feature, cache *featureSpriteCache) (painted, missing int) {
+	for _, p := range m.TAKFeaturePlacements() {
+		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
+			missing++
+			continue
+		}
+		sp := cache.sprite(features[p.FeatureIdx].Name)
+		if sp == nil {
+			missing++
+			continue
+		}
+
+		fw, fh := sp.footprintX, sp.footprintZ
+		if fw <= 0 {
+			fw = 1
+		}
+		if fh <= 0 {
+			fh = 1
+		}
+		var terrainH int
+		if p.AttrX >= 0 && p.AttrY >= 0 && p.AttrX < m.TAKW && p.AttrY < m.TAKH {
+			terrainH = int(m.TAKHeight[p.AttrY*m.TAKW+p.AttrX])
+		}
+		anchorX := p.PixelX + fw*(tnt.TAKDataUnit/2)
+		anchorY := p.PixelY + fh*(tnt.TAKDataUnit/2) - (terrainH >> 1)
+
+		dx, dy := sp.originX, sp.originY
+		if dx == 0 && dy == 0 {
+			dx = sp.img.Bounds().Dx() / 2
+			dy = sp.img.Bounds().Dy()
+		}
+		dstX := anchorX - dx
+		dstY := anchorY - dy
+		dstRect := image.Rect(dstX, dstY, dstX+sp.img.Bounds().Dx(), dstY+sp.img.Bounds().Dy())
+		draw.Draw(base, dstRect, sp.img, image.Point{}, draw.Over)
+		painted++
+	}
+	return
+}
+
 // StartPos holds one player start position in map pixel coordinates.
 type StartPos struct {
 	Number int
