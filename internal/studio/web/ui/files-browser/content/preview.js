@@ -1,17 +1,25 @@
 // preview.js
 //
 // The Files tab preview pane.  Given a VFS path it fetches the combined
-// ?metadata document (identity + layering + describe) and dispatches to
-// a representation appropriate for the file's extension: a rendered
-// image, a transcoded video, raw text, or a structured describe view.
+// ?metadata document (identity + layering + describe) and presents it as
+// a set of tabs:
+//   - Preview : the format's visual / playable / textual representation
+//   - Details : the structured describe doc as a collapsible tree
+//   - Layers  : which archive layers contribute this path
+//   - Hex     : a raw byte dump (always available)
 //
-// Stage 7 keeps each branch inline and minimal.  Stage 8 replaces the
-// inline branches with dedicated components under this directory
-// (image-viewer, video-player, data-tree, hex-view) and adds the
-// per-format controls (palette / transparency / view / sequence).
+// The Preview tab dispatches on the file's extension into the dedicated
+// per-format viewers in this directory (image / video / palette / code).
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { useEffect, useState } from 'preact/hooks'
+import { Tabs } from './tabs.js'
+import { DataTree } from './data-tree.js'
+import { HexView } from './hex-view.js'
+import { ImageViewer } from './image-viewer.js'
+import { VideoPlayer } from './video-player.js'
+import { PaletteGrid } from './palette-grid.js'
+import { TextFileView, CodeBlock } from './code-view.js'
 
 // extOf returns the lowercased extension (without the dot) of a path.
 function extOf(path) {
@@ -19,47 +27,39 @@ function extOf(path) {
   return i < 0 ? '' : path.slice(i + 1).toLowerCase()
 }
 
-// IMAGE_EXTS map to the render query that turns each format into a PNG/
-// APNG the browser can show in an <img>.
-const IMAGE_RENDER = {
-  gaf: 'sequence=0&frame=-1&format=apng',
-  pcx: 'format=png',
-  pal: 'format=png',
-  fnt: 'format=png',
-  tnt: 'view=minimap',
-  sct: 'view=minimap',
-}
+const IMAGE_EXTS = new Set(['gaf', 'pcx', 'fnt', 'tnt', 'sct'])
 const VIDEO_EXTS = new Set(['smk', 'zrb', 'bik'])
-const TEXT_EXTS = new Set(['txt', 'ota', 'tdf', 'fbi', 'gui', 'bos', 'cob', 'h', 'cfg', 'gam', 'tai'])
+const TEXT_EXTS = new Set(['txt', 'ota', 'tdf', 'fbi', 'gui', 'bos', 'h', 'cfg', 'gam', 'tai'])
 
-function previewURL(path, query) {
-  return `/api/vfs/${path}?${query}`
-}
-
-// DescribeView renders the structured describe document as indented
-// JSON.  It's the catch-all when no richer representation fits.
-function DescribeView({ describe }) {
-  if (!describe || Object.keys(describe).length === 0) {
-    return html`<div class="files-preview-empty">No structured description available</div>`
+// PreviewBody picks the visual representation for the Preview tab.
+function PreviewBody({ path, ext, describe }) {
+  if (ext === 'pal') return html`<${PaletteGrid} colors=${describe && describe.colors} />`
+  if (IMAGE_EXTS.has(ext)) return html`<${ImageViewer} path=${path} ext=${ext} describe=${describe} />`
+  if (VIDEO_EXTS.has(ext)) return html`<${VideoPlayer} path=${path} />`
+  if (TEXT_EXTS.has(ext)) return html`<${TextFileView} path=${path} />`
+  // COB ships disassembly / decompilation in the describe doc — surface
+  // those as sub-tabs instead of a flat tree.
+  if (ext === 'cob' && describe) {
+    const items = [
+      describe.disassembly ? { id: 'disasm', label: 'Disassembly', render: () => html`<${CodeBlock} value=${describe.disassembly} />` } : null,
+      describe.decompiled ? { id: 'decomp', label: 'Decompiled', render: () => html`<${CodeBlock} value=${describe.decompiled} />` } : null,
+    ].filter(Boolean)
+    if (items.length) return html`<${Tabs} items=${items} />`
   }
-  return html`<pre class="files-describe">${JSON.stringify(describe, null, 2)}</pre>`
+  return html`<${DataTree} data=${describe} />`
 }
 
-// TextView fetches the raw bytes and shows them as plain text.
-function TextView({ path }) {
-  const [text, setText] = useState(null)
-  const [err, setErr] = useState(null)
-  useEffect(() => {
-    let alive = true
-    fetch(`/api/vfs/${path}`)
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
-      .then((t) => { if (alive) setText(t) })
-      .catch((e) => { if (alive) setErr(String(e)) })
-    return () => { alive = false }
-  }, [path])
-  if (err) return html`<div class="files-error">${err}</div>`
-  if (text == null) return html`<div class="files-loading">Loading…</div>`
-  return html`<pre class="files-text">${text}</pre>`
+// LayersView lists the archive layers that contribute the path, most
+// specific (winning) layer first.
+function LayersView({ layering }) {
+  if (!layering || !layering.length) {
+    return html`<div class="files-preview-empty">No layering information</div>`
+  }
+  return html`
+    <ol class="files-layers">
+      ${layering.map((l) => html`<li class="files-layer">${typeof l === 'string' ? l : (l.source || JSON.stringify(l))}</li>`)}
+    </ol>
+  `
 }
 
 export function FilePreview({ path }) {
@@ -78,19 +78,15 @@ export function FilePreview({ path }) {
   }, [path])
 
   const ext = extOf(path)
+  const describe = meta && meta.describe
+  const layering = meta && meta.layering
 
-  let body
-  if (IMAGE_RENDER[ext]) {
-    body = html`<div class="files-image-wrap"><img class="files-image"
-                  src=${previewURL(path, IMAGE_RENDER[ext])} alt=${path} /></div>`
-  } else if (VIDEO_EXTS.has(ext)) {
-    body = html`<video class="files-video" controls
-                  src=${previewURL(path, 'format=mp4')}></video>`
-  } else if (TEXT_EXTS.has(ext)) {
-    body = html`<${TextView} path=${path} />`
-  } else {
-    body = html`<${DescribeView} describe=${meta && meta.describe} />`
-  }
+  const tabs = [
+    { id: 'preview', label: 'Preview', render: () => html`<${PreviewBody} path=${path} ext=${ext} describe=${describe} />` },
+    { id: 'details', label: 'Details', render: () => html`<${DataTree} data=${describe} />` },
+    { id: 'layers', label: 'Layers', render: () => html`<${LayersView} layering=${layering} />` },
+    { id: 'hex', label: 'Hex', render: () => html`<${HexView} path=${path} />` },
+  ]
 
   return html`
     <div class="files-preview-pane">
@@ -98,7 +94,9 @@ export function FilePreview({ path }) {
         <span class="files-preview-name">${meta ? meta.name : path.split('/').pop()}</span>
         ${meta ? html`<span class="files-preview-meta">${meta.size} bytes${meta.source ? ` · ${meta.source}` : ''}</span>` : null}
       </header>
-      ${err ? html`<div class="files-error">${err}</div>` : html`<div class="files-preview-body">${body}</div>`}
+      ${err
+        ? html`<div class="files-error">${err}</div>`
+        : html`<div class="files-preview-body"><${Tabs} items=${tabs} key=${path} /></div>`}
     </div>
   `
 }

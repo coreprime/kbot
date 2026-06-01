@@ -2722,29 +2722,6 @@ canvas {
 .files-empty, .files-loading, .files-error { padding: 12px 10px; color: var(--fg-2, #888); font-size: 12px; }
 .files-error { color: var(--danger-0, #e66); }
 
-/* Preview-pane chrome. */
-.files-preview-empty { margin: auto; color: var(--fg-2, #888); }
-.files-preview-title { font-size: 14px; font-weight: 600; margin: 0 0 8px; word-break: break-all; }
-.files-preview img,
-.files-preview video {
-  max-width: 100%;
-  max-height: 60vh;
-  image-rendering: pixelated;
-  background: #000;
-  border: 1px solid var(--border-0, #333);
-}
-.files-preview pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 12px;
-  background: var(--bg-1, #1a1a1a);
-  border: 1px solid var(--border-0, #333);
-  padding: 8px 10px;
-  margin: 0;
-  overflow: auto;
-}
-
 /* Warm-cache progress footer pinned to the bottom of the tree pane. */
 .files-warm {
   flex: 0 0 auto;
@@ -2759,6 +2736,118 @@ canvas {
 .files-warm.done .files-warm-label { color: var(--ok-0, #6c6); }
 .files-warm-bar { height: 4px; background: var(--bg-2, #333); border-radius: 2px; overflow: hidden; }
 .files-warm-fill { height: 100%; background: var(--accent-0, #6cf); transition: width 0.2s ease; }
+
+/* Preview pane: header (name + size) + a tabbed body. */
+.files-preview-pane { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.files-preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-0, #333);
+  margin-bottom: 8px;
+}
+.files-preview-name { font-size: 14px; font-weight: 600; word-break: break-all; }
+.files-preview-meta { color: var(--fg-2, #888); font-size: 11px; font-variant-numeric: tabular-nums; }
+.files-preview-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.files-preview-empty { margin: auto; color: var(--fg-2, #888); }
+
+/* Tab strip used inside the preview pane (Preview / Details / Layers / Hex). */
+.files-tabs { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.files-tabs-strip {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-0, #333);
+  margin-bottom: 8px;
+}
+.files-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--fg-2, #999);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.files-tab:hover { color: var(--fg-0, #e6e6e6); }
+.files-tab.active { color: var(--fg-0, #e6e6e6); border-bottom-color: var(--accent-0, #6cf); }
+.files-tabs-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/* Render controls (sequence / frame / view / format selectors). */
+.files-viewer { display: flex; flex-direction: column; gap: 8px; }
+.files-ctl-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.files-ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.files-ctl-label { color: var(--fg-2, #999); }
+.files-ctl select {
+  background: var(--bg-1, #1a1a1a);
+  color: var(--fg-0, #e6e6e6);
+  border: 1px solid var(--border-0, #333);
+  border-radius: 3px;
+  padding: 2px 4px;
+  font: inherit;
+}
+.files-ctl-check { gap: 4px; cursor: pointer; }
+.files-image-wrap { display: flex; }
+.files-image, .files-video {
+  max-width: 100%;
+  max-height: 60vh;
+  image-rendering: pixelated;
+  background: #000;
+  border: 1px solid var(--border-0, #333);
+}
+.files-video { image-rendering: auto; }
+
+/* Palette swatch grid. */
+.files-pal-grid {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 2px;
+  max-width: 420px;
+}
+.files-pal-swatch { aspect-ratio: 1; border: 1px solid rgba(0, 0, 0, 0.4); }
+
+/* Monospace text / code / hex blocks. */
+.files-code, .files-hex-dump {
+  white-space: pre;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  background: var(--bg-1, #1a1a1a);
+  border: 1px solid var(--border-0, #333);
+  padding: 8px 10px;
+  margin: 0;
+  overflow: auto;
+}
+.files-code { white-space: pre-wrap; word-break: break-word; }
+.files-hex-note { color: var(--fg-2, #888); font-size: 11px; padding-top: 6px; }
+
+/* Collapsible describe tree. */
+.files-tree-view { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+.files-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 1px 0;
+}
+.files-tree-toggle { cursor: pointer; }
+.files-tree-toggle:hover { background: var(--bg-2, #262626); }
+.files-tree-caret { width: 12px; color: var(--fg-2, #888); }
+.files-tree-key { color: var(--accent-0, #6cf); }
+.files-tree-summary { color: var(--fg-2, #888); }
+.files-tree-val { word-break: break-word; }
+.files-tree-string { color: var(--ok-0, #9c9); }
+.files-tree-number { color: #d9a; }
+.files-tree-boolean, .files-tree-null { color: #c96; }
+
+/* Archive-layer list. */
+.files-layers { margin: 0; padding-left: 20px; font-size: 12px; }
+.files-layer { padding: 1px 0; }
 
 .model-viewer-shell {
   display: grid;
