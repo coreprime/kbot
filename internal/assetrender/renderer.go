@@ -12,6 +12,7 @@ package assetrender
 import (
 	"hash/fnv"
 	"image/color"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -84,6 +85,28 @@ func (r *Renderer) Cache(name string) *cache.Cache {
 	}
 	r.caches[name] = c
 	return c
+}
+
+// renderCached returns the bytes for entry (key + ext) in the named cache,
+// producing and persisting them on a miss. With caching disabled (or when the
+// cache directory can't be created) it always produces fresh, so callers never
+// need to special-case the no-cache path. A failed disk write is non-fatal: the
+// freshly produced bytes are still returned.
+func (r *Renderer) renderCached(cacheName, key, ext string, produce func() ([]byte, error)) ([]byte, error) {
+	c := r.Cache(cacheName)
+	if c == nil {
+		return produce()
+	}
+	p := c.GetPath(key, ext)
+	if b, err := os.ReadFile(p); err == nil {
+		return b, nil
+	}
+	b, err := produce()
+	if err != nil {
+		return nil, err
+	}
+	_ = os.WriteFile(p, b, 0o644)
+	return b, nil
 }
 
 // CacheKey returns a stable content hash for path. It prefers the MD5 the VFS

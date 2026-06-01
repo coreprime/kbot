@@ -3,8 +3,10 @@ package studio
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot/internal/assetrender"
@@ -53,8 +55,64 @@ func handleVFS(w http.ResponseWriter, r *http.Request) {
 	case q.Has("describe"):
 		handleVFSDescribe(w, rel)
 	default:
+		if req := parseRenderRequest(q); req.IsRender() {
+			handleVFSRender(w, r, rel, req)
+			return
+		}
 		handleVFSRaw(w, r, rel)
 	}
+}
+
+// parseRenderRequest maps the query string onto an assetrender.RenderRequest.
+// Numeric selectors default to -1 (unset) so "frame 0" and "no frame" stay
+// distinct.
+func parseRenderRequest(q url.Values) assetrender.RenderRequest {
+	atoi := func(key string) int {
+		if v := q.Get(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				return n
+			}
+		}
+		return -1
+	}
+	return assetrender.RenderRequest{
+		Format:       q.Get("format"),
+		View:         q.Get("view"),
+		Sequence:     atoi("sequence"),
+		SequenceName: q.Get("sequenceName"),
+		Frame:        atoi("frame"),
+		Text:         q.Get("text"),
+		Palette:      q.Get("palette"),
+		Transparency: q.Get("transparency"),
+	}
+}
+
+// handleVFSRender renders a format-specific representation (a GAF frame, a TNT
+// minimap, a PCX as PNG, …) and serves the encoded bytes with a matching
+// content type. Renders are content-addressed and cached on disk by the
+// Renderer, so a successful result also carries an ETag for conditional GETs.
+func handleVFSRender(w http.ResponseWriter, r *http.Request, vpath string, req assetrender.RenderRequest) {
+	data, err := vfs.ReadFile(vpath)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+
+	out, err := renderer.Render(vpath, data, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	etag := `"` + renderer.CacheKey(vpath, data) + "-" + req.CacheTag() + `"`
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", out.ContentType)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(out.Body)
 }
 
 // handleVFSList returns the direct children of dir as a sorted listing with
