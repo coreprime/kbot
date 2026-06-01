@@ -15,10 +15,8 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { spawnProjectile, playWeaponSound } from '../../game3d/weapon-driver.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
 import { shouldForceTarget } from '../../game3d/force-target.js'
-import { GameEngine } from '../../engine/game-engine.js'
 import { hostCallbacks } from '../host-context.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import {
@@ -588,12 +586,14 @@ export class MvControls {
     }
     if (slot === 'move') {
       this.targets.move = [ground[0], ground[2]]
-      // The engine is the mover: _pushOrdersToEngine mirrors this.targets.move
-      // onto the engine unit each tick (and the engine clears it on arrival,
-      // which _readPoseFromEngine detects).  Issuing Move cancels any
-      // in-progress attack maneuver — clear the engine's attackTarget if it
-      // already exists (the viewer never sets one, but keep it consistent).
-      if (this._engineUnit) this._engineUnit.attackTarget = null
+      // The wasm scene is the mover.  Setting unit.moveTarget issues a single
+      // source.move order (the WasmUnit setter also cancels any standing
+      // attack the way TA does); the sim drives toward the goal and emits a
+      // moveStop event on arrival, which _readPoseFromEngine detects.
+      this._ensureEngine()
+      if (this._engineUnit) {
+        this._engineUnit.moveTarget = { x: ground[0], z: ground[2] }
+      }
       this._startMoving()
     } else {
       this.targets[slot] = [ground[0], ground[1], ground[2]]
@@ -652,119 +652,53 @@ export class MvControls {
     }
   }
 
-  // _ensureEngine lazily builds a GameEngine that ADOPTS the viewer's
-  // existing CobUnit + binding (rather than creating a parallel set).
-  // Done once the viewer's COB is alive — the engine then owns the
-  // per-slot weapon SM, the click handlers route through it via
-  // setWeaponTarget(), and a 'fire' event subscriber spawns the
-  // visible projectile via the shared weapon-driver.
+  // _ensureEngine binds this controller to the viewer's WasmSandboxScene —
+  // the same Go/wasm simulation the Sandbox runs.  There is no separate
+  // engine any more: the scene IS the mover, the weapon state machine, the
+  // aim/ballistic solver and the firing-piece anchor, all running inside the
+  // wasm engine.  This controller just routes orders in (move / fire / stop)
+  // and reads the resulting pose back out each tick.
   //
-  // The engine here runs in "viewer-embedded" mode — its tick is
-  // called with skipRuntime/skipMovement/skipSync because the renderer
-  // ticks the binding (which advances the runtime) and MvControls
-  // owns this viewer's movement + altitude + ground walk.  The engine
-  // is along for the ride only to drive the weapon SM + ballistic
-  // aim solver + firing-piece anchor — every weapon-related thing
-  // that used to be duplicated.
+  // Idempotent and lazy — the scene + unit only exist after the viewer's COB
+  // fetch resolves, so this returns null during the brief open() window and
+  // re-binds the first tick the unit is live.
   _ensureEngine() {
-    if (this._engine) return this._engine
-    const cob = this.viewer.cob
-    if (!cob || !cob.unit || !cob.runtime) return null
-    // Share the viewer's runtime so engine.runtime.simTimeMs reads the
-    // same clock the binding's tick advances (otherwise reload + burst
-    // gates would diverge from the rest of the sim).
-    this._engine = new GameEngine({
-      runtime: cob.runtime,
-      gravity: this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function'
-        ? this.viewer.renderer.getGravity() : 80,
-    })
-    this._engineUnit = this._engine.adoptUnit({
-      name: this.viewer.cob?.unit?.name || 'viewer-unit',
-      model: this.viewer.model,
-      cobUnit: cob.unit,
-      binding: cob,
-      meta: this.viewer.unitMeta,
-      x: this.pos.x, z: this.pos.z,
-      headingRad: this.heading,
-    })
-    // Subscribe to 'fire' so each shot spawns a visible projectile.
-    // The engine has already done the heavy lifting before emitting:
-    //   ev.anchor — firing-piece world XYZ (via engine.#firingPieceFor
-    //               which runs QueryX → cobUnit.pieceNames → model)
-    //   ev.target — the SM's aim point (unit pos or static point)
-    //   ev.weapon — the FBI weapon record
-    // So the subscriber is just "hand all that to the shared
-    // weapon-driver, and record the shot for the Weapons panel".
-    // No duplicate firing-piece resolution or ballistic recompute
-    // lives here any more — task #249 consolidated both into the
-    // engine.
-    // subscribeEngine() captures the unsubscribe closure onto
-    // this._engineSubs so disposeView() can sweep every listener at
-    // teardown.  Returns the closure to the caller too in case it
-    // wants to detach early.
-    subscribeEngine(this, 'fire', (ev) => {
-      if (!ev.weapon || !ev.weapon.name) return
-      // Model weapons (missiles / rockets / bombs) are flown by the
-      // engine's projectile simulation and drawn as a real 3DO mesh
-      // — the same short-circuit sandbox uses.  Without this guard
-      // Thunder's gravity bombs (model=bomb + dropped=1) were also
-      // getting a missile-class particle from spawnProjectile that
-      // flew straight toward the aim point, on top of the real bomb
-      // falling under gravity.  Still play the muzzle sound so the
-      // discharge is audible.
-      if (ev.modelProjectile) {
-        try { playWeaponSound({ binding: this.viewer.cob, weapon: ev.weapon, anchor: ev.anchor }) } catch { /* ignore */ }
-        return
-      }
-      const gravity = (this.viewer.renderer && typeof this.viewer.renderer.getGravity === 'function')
-        ? this.viewer.renderer.getGravity() : 80
-      let result = null
-      try {
-        result = spawnProjectile({
-          binding: this.viewer.cob,
-          weapon: ev.weapon,
-          anchor: ev.anchor,
-          target: ev.target,
-          palette: this.viewer.palette,
-          gravity,
-          smokeTrails: this._smokeTrails,
-        })
-      } catch { /* ignore */ }
-      // Push the in-flight shot onto the Weapons panel's per-slot
-      // list so the panel can show what's currently visible in the
-      // scene.  No-op for beams (lifeMs ~200 ms — ticks by quickly).
-      if (result) {
+    const scene = this.viewer.scene
+    const unit = this.viewer.unit
+    if (!scene || !unit) return null
+    if (this._engine === scene && this._engineUnit === unit) return this._engine
+    this._engine = scene
+    this._engineUnit = unit
+    // getInspectorMv reads the live unit back via engine.unitById(_adoptedUnitId).
+    this.viewer._adoptedUnitId = unit.id
+    if (unit.meta == null) unit.meta = this.viewer.unitMeta
+    // The scene already spawns the visible projectile + plays the muzzle sound
+    // inside _onFire; the controller's only remaining job on a 'fire' event is
+    // to log the shot for the Weapons panel.  The scene event carries no
+    // velocity / lifeMs (those live in the sim), so record a stationary entry
+    // with a default lifetime — the panel only needs the anchor + slot.
+    if (!this._fireSubscribed) {
+      this._fireSubscribed = true
+      subscribeEngine(this, 'fire', (ev) => {
+        if (!ev || !ev.weapon || !ev.weapon.name) return
         const slotKey = SLOT_NAMES[ev.slot]
-        this._recordShot(slotKey, result.anchor, result.velocity, result.lifeMs)
-      }
-    })
+        if (!slotKey) return
+        this._recordShot(slotKey, ev.anchor || [0, 0, 0], [0, 0, 0], 1000)
+      })
+    }
     return this._engine
   }
 
-  // _pushOrdersToEngine syncs the viewer's order + display state onto the
-  // adopted engine unit each tick, BEFORE the engine moves it.  Move + fire
-  // orders are written to the engine when issued (commandAtGround); here we
-  // just keep the live meta ref + the camera-appropriate cruise ceiling
-  // current, since the unit's FBI meta + the model bounds can load after the
-  // engine unit is adopted.  The engine is the mover from here on.
+  // _pushOrdersToEngine keeps the engine unit's live meta ref current — the
+  // unit's FBI / weapon metadata can finish loading after the unit is bound,
+  // and the wasm weapon driver reads it for sounds + slot resolution.  Move +
+  // fire orders are issued once when the user clicks (commandAtGround →
+  // unit.moveTarget setter → source.move), so there is nothing to re-push per
+  // tick; the sim drives toward the goal and emits a moveStop event on arrival.
   _pushOrdersToEngine() {
     const u = this._engineUnit
     if (!u) return
-    const m = this.viewer.unitMeta
-    u.meta = m
-    // Display ceiling for THIS view's close-up camera (see _cruiseAltClamped).
-    // The engine clamps the cruise altitude to this so a Hawk doesn't fly out
-    // of frame; the climb/descend physics + airborne decision are unchanged.
-    u.cruiseAltOverride = (m && m.isAircraft) ? this._cruiseAltClamped() : 0
-    // Mirror the Move order onto the engine.  Re-pushing the same XZ each
-    // tick is harmless (the integrator just keeps driving toward it); on the
-    // tick the engine reaches the goal it clears u.moveTarget itself, and
-    // _readPoseFromEngine sees the cleared flag and ends the move.  Fire
-    // orders are pushed separately via _setEngineWeaponTarget on click; the
-    // engine's attack maneuver follows whatever slot is armed.
-    if (this.targets.move) {
-      u.moveTarget = { x: this.targets.move[0], z: this.targets.move[1] }
-    }
+    if (this.viewer.unitMeta) u.meta = this.viewer.unitMeta
   }
 
   // _readPoseFromEngine mirrors the engine's freshly-computed pose back into
@@ -818,8 +752,12 @@ export class MvControls {
     const slotIdx = SLOT_INDEX[slotKey]
     if (slotIdx === undefined) return
     if (point == null) {
-      this._engine.setWeaponTarget(this._engineUnit.id, slotIdx, null)
+      // No "clear one slot" order in the sim; a Stop drops every standing
+      // fire/move, which is the closest equivalent for a single-unit editor.
+      this._engine.stopUnits([this._engineUnit.id])
     } else {
+      // Force-fire the slot at a ground point — the scene routes this to
+      // source.fire(unitId, slot, 0, px, pz), the shift-to-ground path.
       this._engine.setWeaponTarget(this._engineUnit.id, slotIdx,
         { point: [point[0], point[1] || 0, point[2]] },
         { source: 'manual' })
@@ -838,23 +776,14 @@ export class MvControls {
     // honour slow-mo / fast-forward (ship wakes emit on a 100 ms
     // cadence; at 0.1× sim that should be 1000 ms wall, not 100).
     const dtSimMs = dtMs * rate
-    // Engine-led motion — the unification.  The viewer pushes its order +
-    // display state onto the adopted engine unit, then lets the engine be
-    // the SINGLE mover: #stepAttack + #stepMovement compute pos / heading /
-    // altitude here exactly as they do for the sandbox.  The viewer renders
-    // the result by reading the pose straight back (_readPoseFromEngine).
-    // We still pass skipRuntime (the renderer's binding.tick already advanced
-    // the shared runtime this frame) and skipSync (the renderer pushes its
-    // own worldOffset) — but movement is NO LONGER skipped.
-    // Make sure the adopted engine unit exists (it's the mover): _ensureEngine
-    // is otherwise lazy (first weapon command), which would leave a Move-only
-    // unit with nothing to drive it now that the viewer no longer integrates
-    // motion itself.
+    // Engine-led motion — the wasm scene is the single mover, weapon SM and
+    // ballistic solver.  It was already advanced this frame by the viewer's
+    // cob.tick (driven from the tab tick loop BEFORE this controller tick), so
+    // here we only bind to the live unit, keep its meta current, and read the
+    // freshly-computed pose straight back.  No second scene.tick — that would
+    // double-step the sim.
     this._ensureEngine()
     this._pushOrdersToEngine()
-    if (this._engine) {
-      this._engine.tick(dtMs, { skipRuntime: true, skipSync: true })
-    }
     this._readPoseFromEngine()
     // Drop any projectile whose flight time has elapsed.  Done after
     // the engine tick so a brand-new entry from this tick isn't pruned
@@ -942,28 +871,26 @@ export class MvControls {
   resetState() {
     this.armed = null
     this.targets = { move: null, primary: null, secondary: null, tertiary: null }
-    this.pos.x = 0; this.pos.z = 0
-    this.alt = 0
-    this.speed = 0
-    // Same native-orientation default as the constructor — see comment
-    // there for why heading starts at π (3DO nose-at-minus-Z convention).
-    this.heading = Math.PI
     this.isMoving = false
-    // Reset the adopted engine unit too — it's the mover, so without this
-    // the next tick's _readPoseFromEngine would read its stale pose / orders
-    // straight back and undo the reset.
-    if (this._engineUnit) {
+    // The wasm scene owns the unit's world position; it has no teleport
+    // order, so a Reset halts the unit (dropping every standing move / fire /
+    // attack) wherever it stands and mirrors that live pose into the viewer's
+    // display state.  We deliberately do NOT snap to origin: the next snapshot
+    // read would overwrite it from the engine and the unit would visibly jump
+    // back, so the controller follows the engine's authoritative pose instead.
+    if (this._engine && this._engineUnit) {
       const u = this._engineUnit
-      u.pos.x = 0; u.pos.y = 0; u.pos.z = 0
-      u.heading = Math.PI
-      u.speed = 0
-      u.moveTarget = null
-      u.attackTarget = null
-      u._atk = null
+      this._engine.stopUnits([u.id])
       u.isMoving = false
-      for (let slot = 0; slot < 3; slot++) {
-        if (this._engine) this._engine.setWeaponTarget(u.id, slot, null)
-      }
+      this.pos.x = u.pos.x; this.pos.z = u.pos.z
+      this.alt = u.pos.y || 0
+      this.heading = u.heading
+      this.speed = 0
+    } else {
+      this.pos.x = 0; this.pos.z = 0
+      this.alt = 0
+      this.speed = 0
+      this.heading = Math.PI
     }
     for (const slot of ['primary', 'secondary', 'tertiary']) {
       const s = this.aimState[slot]
@@ -1052,27 +979,9 @@ export class MvControls {
         this._playSound('deactivate')
       }
     }
-    // "Order complete" voice — TA's arrived1+ sound bank.
-    this._playSoundRandom(['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
-  }
-
-  // _cruiseAltClamped returns the unit's effective cruise altitude
-  // for studio display — capped against the model's bounding-box
-  // height so a Hawk's 160 wu cruise alt doesn't fly out of frame
-  // on a unit that's only 20 wu tall.  The clamp keeps the lifted
-  // aircraft visible while still reading as obviously airborne
-  // (roughly 2× the unit's own height above the ground).
-  _cruiseAltClamped() {
-    const m = this.viewer.unitMeta
-    const raw = (m && m.cruiseAltitude) ? m.cruiseAltitude : 80
-    const model = this.viewer.model
-    if (!model || !model.bounds) return Math.min(raw, 60)
-    const unitH = Math.max(1, model.bounds.max[1] - model.bounds.min[1])
-    // Floor at 1.2× height (always noticeably airborne), cap at 3×
-    // height (keeps the unit framed in the orbit camera).
-    const minLift = unitH * 1.2
-    const maxLift = unitH * 3.0
-    return Math.max(minLift, Math.min(raw, maxLift))
+    // The "arrived" voice is played by the scene on its authoritative moveStop
+    // event (playUnitSoundRandom), so it is NOT replayed here — doing both
+    // would double up the acknowledgement on every move completion.
   }
 
   // _playSound triggers an Audio() for the named sound-event.  The

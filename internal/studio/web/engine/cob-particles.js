@@ -46,8 +46,8 @@ export const SFX_PROJECTILE_SPRITE = 206
 // Sub-bubbles — small light-blue spheres released by submerged units.
 // Maps from the COB `emit-sfx 259` opcode (TA_SFXTYPE_SUBBUBBLES,
 // SFXTYPE_POINTBASED | 3).  Rises slowly through the water column
-// then pops at the surface.  See smokeunit.h for the source enum and
-// cob-binding._emitSfx for the routing.
+// then pops at the surface.  See smokeunit.h for the source enum; the
+// emit-sfx events are routed to this pool by the snapshot consumer.
 export const SFX_SUB_BUBBLES    = 260
 export const SFX_NANO_PARTICLES = 16  // construction nano lathe stream
 // SFX_WAKE was 257, which collided with TA's SFXTYPE_WHITESMOKE
@@ -229,9 +229,9 @@ export class ParticlePool {
     // skips the light path entirely.
     this.lightStrength = new Float32Array(capacity)
     // Per-particle kind tag.  Set on emit() so the pool's onExpire
-    // hook (used by cob-binding for impact explosions, missile
-    // chain-burst, etc.) knows what KIND of particle is expiring at
-    // its last position.  Uint16 covers our SFX_* range easily.
+    // hook (used for impact explosions, missile chain-burst, etc.)
+    // knows what KIND of particle is expiring at its last position.
+    // Uint16 covers our SFX_* range easily.
     this.kind = new Uint16Array(capacity)
     // Animated-sprite particle metadata.  spriteId is a numeric handle
     // into the renderer's sprite registry (see weapon-bitmap-loader.js);

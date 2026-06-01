@@ -36,7 +36,7 @@ export class NullAudioPool {
 
 const _EMPTY_MAP = new Map()
 
-// nullAudioPool — shared singleton for cob-binding callers that
-// don't bring their own.  No state is ever stored, so reusing one
-// instance across every binding is safe.
+// nullAudioPool — shared singleton for binding callers that don't
+// bring their own.  No state is ever stored, so reusing one instance
+// across every binding is safe.
 export const nullAudioPool = new NullAudioPool()

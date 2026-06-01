@@ -13,11 +13,15 @@ import { TextureCache } from './texture-cache.js'
 import { ModelLoader } from './model-loader.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
-import { CobRuntime } from '../engine/cob-runtime.js'
-import { CobBinding } from '../engine/cob-binding.js'
-import { AudioPool } from './audio-pool.js'
+import { WasmSandboxScene } from '../ui/sandbox/wasm-scene.js'
+import { SFX_SPARK, SFX_SMOKE_WHITE } from '../engine/cob-particles.js'
 import { attachOrbitControls } from './camera-controls.js'
 import { onEnhanceMeshChanged } from './enhance-mesh.js'
+
+// TA 3DOs author the nose toward -Z; the wasm engine's heading 0 faces +Z, so
+// the unit spawns at heading π so its native rest pose renders un-rotated (the
+// renderer applies heading + π — see mv-controls _applyRendererTransform).
+const REST_HEADING = Math.PI
 
 export class ModelViewer {
   constructor({ canvas, statusEl, onModelLoaded } = {}) {
@@ -35,6 +39,18 @@ export class ModelViewer {
     // unit ships no .COB (many props / features).  Per-frame
     // animation tick is driven from the renderer via setCobBinding.
     this.cob = null
+    // The viewer is, in effect, a single-unit sandbox: it owns a
+    // WasmSandboxScene (the same Go/wasm simulation the Sandbox runs)
+    // with exactly one unit.  COB scripts, movement, weapons and
+    // ballistics all run inside the engine; JS only renders the
+    // resulting per-tick snapshot.  Created lazily in open() and
+    // reused across model loads.
+    this._scene = null
+    this._unitId = -1
+    // The raw COB JSON for the current unit (static disassembly +
+    // piece / script tables) — backs the debugger's listing and the
+    // facade.unit's static fields.
+    this._cobJson = null
     // cobDamage drives the GET_UNIT_VALUE port for HEALTH so the
     // user can preview "this unit at 50% health" via the studio's
     // damage popup.  Some bos scripts also emit damage smoke when
@@ -80,6 +96,17 @@ export class ModelViewer {
     // — calling it from the constructor would hand attachOrbitControls
     // null refs and silently no-op, leaving the canvas dead to drag /
     // wheel / right-click gestures.
+  }
+
+  // scene is the viewer's WasmSandboxScene (the engine MvControls + the
+  // inspector panels reach through as `viewer.scene`).  Null before open().
+  get scene() { return this._scene }
+
+  // unit is the live WasmUnit adapter for the single simulated unit — the
+  // shape the engine-led MvControls drives (pos / heading / moveTarget /
+  // attackTarget / binding).  Null before the unit is spawned.
+  get unit() {
+    return (this._scene && this._unitId >= 0) ? this._scene.unitById(this._unitId) : null
   }
 
   // attach mounts this viewer's canvas into the given stage element.
@@ -138,6 +165,9 @@ export class ModelViewer {
   // do we kick off a single instance.
   setDamage(percent) {
     this.cobDamage = Math.max(0, Math.min(100, +percent || 0))
+    // Push HEALTH (= 100 - damage) into the engine's unit-value store so a
+    // script's GET_UNIT_VALUE(HEALTH) sees the new value next iteration.
+    this._pushPort(4, Math.max(0, 100 - this.cobDamage))
     if (!this.cob || !this.cob.hasScript('SmokeUnit') || this.cobDamage <= 0) return
     const alreadyRunning = this.cob.unit._threads.some(
       (t) => t.script.name.toLowerCase() === 'smokeunit',
@@ -154,10 +184,13 @@ export class ModelViewer {
     if (this.renderer) this.renderer.setBuildPercent(this.cobBuildPercent)
     // Push into the live binding so its sparkle-emit rate tracks
     // the build without poking back at this instance through a
-    // window global (Phase C cleanup).
+    // window global.
     if (this.cob && typeof this.cob.setBuildPercent === 'function') {
       this.cob.setBuildPercent(this.cobBuildPercent)
     }
+    // BUILD_PERCENT_LEFT port (TA returns 100 - build%) so a script's
+    // `while (get BUILD_PERCENT_LEFT)` intro loop unblocks at 100%.
+    this._pushPort(17, Math.max(0, 100 - this.cobBuildPercent))
   }
 
   // resetState clears EVERYTHING the user could have driven on the
@@ -167,37 +200,15 @@ export class ModelViewer {
   resetState() {
     if (!this.cob) return
     const unit = this.cob.unit
-    const rt = this.cob.runtime
-    unit.killAllThreads()
-    // Clear thread list completely (killAllThreads only marks
-    // dead; the next tick removes them, but we want it INSTANT).
-    unit._threads.length = 0
-    unit._recentlyKilled.length = 0
-    // Zero static vars in place so any subsequent script start
-    // sees the same blank-slate state Create would have set up.
-    for (let i = 0; i < unit.staticVars.length; i++) unit.staticVars[i] = 0
-    // Drop every animator slot so pieceOffset / pieceRotation
-    // return 0 immediately — the per-frame sync writes 0/0/0 into
-    // piece.move/rotate and the renderer draws the rest pose.
-    unit._moveAnims.length = 0
-    unit._rotAnims.length = 0
-    // Reset the runtime-wide tick accumulator so the next script
-    // run starts at a clean clock.  Playback rate is intentionally
-    // preserved — the user dialled it in and would expect Reset
-    // to keep their slow-mo / fast-forward setting.
-    rt._tickAccumMs = 0
-    // Restore every piece to fully visible — Create() typically
-    // hides muzzle flares + decorative panels, so the visibility
-    // state needs explicit reset back to the 3DO default of
-    // "everything shown".
-    for (let i = 0; i < unit._pieceVisible.length; i++) unit._pieceVisible[i] = true
-    // Reset the render-flag arrays to their defaults too — Create
-    // typically calls hide / dont-shade on flares to set up the
-    // idle pose, and Reset State should mimic the freshly-loaded
-    // state where every flag is back to TA's engine default.
-    for (let i = 0; i < unit._pieceShade.length; i++)  unit._pieceShade[i]  = true
-    for (let i = 0; i < unit._pieceCache.length; i++)  unit._pieceCache[i]  = false
-    for (let i = 0; i < unit._pieceShadow.length; i++) unit._pieceShadow[i] = true
+    // Return the engine's COB VM to a clean script state: kills every
+    // thread, zeroes static vars, restores rest pose.  The next render
+    // tick paints the snapshot with pieces at their 3DO defaults.
+    if (typeof unit.reset === 'function') unit.reset()
+    // ResetState in the engine also clears the unit-value port store, so
+    // re-push the viewer's current port values (activation / orders /
+    // health / build%) — otherwise a script's first GET_UNIT_VALUE after
+    // reset would read 0.
+    this._pushPorts()
     // Drop lifecycle tracking — Activate/Deactivate go back to a
     // fresh "no idea what state this is" path AND Create gating
     // re-engages (so the user has to click Create again before
@@ -280,6 +291,7 @@ export class ModelViewer {
       if (this.model) this.model.dispose(this.renderer.gl)
       const model = await this.loader.load(modelName)
       this.model = model
+      this._sparklePieces = null
       this.renderer.setModel(model)
       this.camera.frameBounds(model.bounds.min, model.bounds.max)
       // Reset orbit angle on each new model so the user always
@@ -295,10 +307,10 @@ export class ModelViewer {
       // Try to fetch + attach the unit's COB script.  Many units
       // ship without one (features / props / placeholders) so the
       // 404 path just leaves this.cob null and the unit displays
-      // statically.  The runtime auto-runs Create + Activate on
-      // load so flares hide / blades start spinning without the
-      // user clicking anything.
+      // statically.  COB runs inside the wasm engine now; the viewer
+      // spawns one unit into its scene and renders the per-tick pose.
       this.cob = null
+      this._cobJson = null
       this.renderer.setCobBinding(null)
       try {
         // ?decompile=0 — skip the slow BOS-decompile pass on the
@@ -309,93 +321,44 @@ export class ModelViewer {
         const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}?decompile=0`)
         if (cobResp.ok) {
           const cobJson = await cobResp.json()
-          // Reuse the host runtime across model loads so its time
-          // state + paused flag survive a swap.  Each model load
-          // tears down its previous unit and registers a fresh one.
-          if (!this._runtime) this._runtime = new CobRuntime()
-          if (this._unit) {
-            this._runtime.removeUnit(this._unit)
-            this._unit = null
+          this._cobJson = cobJson
+          // Reuse one WasmSandboxScene across model loads so the wasm
+          // module + engine handle survive a swap.  Each load removes
+          // the previous unit and spawns a fresh one.
+          if (!this._scene) {
+            this._scene = new WasmSandboxScene({ palette: this.palette, seed: 1 })
+            await this._scene.ready()
+          } else if (this._unitId >= 0) {
+            this._scene.removeUnit(this._unitId)
+            this._unitId = -1
           }
-          const hooks = {
-            // Tag log lines so they're easy to spot in the console.
-            log: (msg) => console.warn(`[cob:${modelName}]`, msg),
-            // Provide the unit-value port reads the bos scripts
-            // query.  Most ports read from cobPorts (which the user
-            // can edit via the Ports inspector); HEALTH and
-            // BUILD_PERCENT_LEFT derive from the cobDamage /
-            // cobBuildPercent sliders so the existing Unit Attributes
-            // UI stays the source of truth for those two.
-            getUnitValue: (port) => {
-              switch (port) {
-                case 1:  /* ACTIVATION         */ return this.cobPorts.activation | 0
-                case 2:  /* STANDINGMOVEORDERS */ return this.cobPorts.moveOrders | 0
-                case 3:  /* STANDINGFIREORDERS */ return this.cobPorts.fireOrders | 0
-                case 4:  /* HEALTH             */ return Math.max(0, 100 - (this.cobDamage || 0))
-                case 5:  /* INBUILDSTANCE      */ return this.cobPorts.inBuildStance | 0
-                case 17: /* BUILD_PERCENT_LEFT */ return Math.max(0, 100 - (this.cobBuildPercent || 0))
-                case 18: /* YARD_OPEN          */ return this.cobPorts.yardOpen | 0
-                case 19: /* BUGGER_OFF         */ return this.cobPorts.buggerOff | 0
-                case 20: /* ARMORED            */ return this.cobPorts.armoured | 0
-                default: return 0
-              }
-            },
-            // setUnitValue is invoked by SET_VALUE opcodes (rare —
-            // mostly factory scripts toggle YARD_OPEN / BUGGER_OFF
-            // and IN_BUILD_STANCE during build cycles).  Write-back
-            // keeps the Ports panel + cobDamage/cobBuildPercent in
-            // sync with what the running scripts have done.
-            setUnitValue: (port, value) => {
-              const v = value | 0
-              switch (port) {
-                case 1:  this.cobPorts.activation = v ? 1 : 0; break
-                case 2:  this.cobPorts.moveOrders = Math.max(0, Math.min(2, v)); break
-                case 3:  this.cobPorts.fireOrders = Math.max(0, Math.min(2, v)); break
-                case 4:  this.cobDamage = Math.max(0, Math.min(100, 100 - v)); break
-                case 5:  this.cobPorts.inBuildStance = v ? 1 : 0; break
-                case 17: this.cobBuildPercent = Math.max(0, Math.min(100, 100 - v)); break
-                case 18: this.cobPorts.yardOpen = v ? 1 : 0; break
-                case 19: this.cobPorts.buggerOff = v ? 1 : 0; break
-                case 20: this.cobPorts.armoured = v ? 1 : 0; break
-              }
-            },
-          }
-          this._unit = this._runtime.addUnit(cobJson, hooks)
-          // Cache the decompiled BOS source on the unit so the
-          // thread-debugger's right pane can render side-by-side
-          // without an extra fetch.  Empty string when the initial
-          // ?decompile=0 fetch skipped it (debugger will fetch on
-          // open).
-          this._unit.decompiled = cobJson.decompiled || ''
-          this._unit.name = modelName
-          // Browser <audio>-backed pool — the engine package keeps no
-          // knowledge of the renderer's audio mechanism, so we inject it
-          // here at binding-construction time.
-          this.cob = new CobBinding(model, this._unit, { audio: new AudioPool() })
-          // Attach the renderer so weapon-driver.spawnProjectile can
-          // look up registered fx.gaf bitmap sprites for rendertype=4
-          // weapons (EMG, plasma, flak…).  Mirrors the sandbox view's
-          // wiring of binding._renderer + _explosionOverlay.
-          this.cob._renderer = this.renderer
-          // driveTick:false — the unit-editor tab owns the per-frame
-          // tick loop since Stage B of the split refactor.  The
-          // renderer still reads binding.particles + getSceneLight
-          // each draw, but does NOT advance the binding (which
-          // would double-tick when both the tab loop and the draw
-          // loop fire).  Seed-tick is fired by the tab on attach.
+          // Spawn the unit into the engine.  model:null — the engine's
+          // _applyPieces writes the snapshot pose straight onto THIS
+          // viewer's rendered model (set below), not a clone, so the
+          // single canvas shows the animation.  headingRad = REST so
+          // the native pose renders un-rotated.
+          const u = await this._scene.addUnit({
+            name: modelName, model: null, cobScript: cobJson,
+            x: 0, z: 0, headingRad: REST_HEADING, side: 0,
+          })
+          this._unitId = u.id
+          u.model = model
+          u.meta = this.unitMeta || u.meta
+          // Cancel the auto-spawned Create thread so the unit opens in
+          // its raw 3DO rest pose (artists inspect geometry first); the
+          // first user command re-runs Create via _ensureCreated.  This
+          // also clears the engine's unit-value port store, so push the
+          // viewer's port defaults back in.
+          this._scene.source.resetUnit(u.id)
+          this._pushPorts()
+          // Build the render binding + COB facade the renderer, the
+          // MvControls engine path and the inspector / debugger panels
+          // all read through.
+          this.cob = this._buildCob(cobJson, modelName)
           this.renderer.setCobBinding(this.cob, { driveTick: false })
-          // Seed-tick equivalent to the one setCobBinding's
-          // driveTick:true path fires automatically — gets static
-          // scripts (Create) into their initial pose before paint.
-          try { this.cob.tick(0) } catch { /* ignore */ }
-          // Earlier this auto-fired Create + Activate so freshly-
-          // opened units stood in their idle "deployed" pose
-          // (factories with doors open, gantries with tower raised,
-          // construction bots with guncase open).  That hid the
-          // raw 3DO rest state, which is what most artists need to
-          // see when inspecting a model.  Removed — the user opens
-          // the unit in its un-animated rest geometry, then drives
-          // Create / Activate / etc from the Actions panel.
+          // Seed one step so the rest pose lands on the model before the
+          // first paint (the tab tick loop drives subsequent steps).
+          try { this._scene._stepOnce(); this._scene.interpolate() } catch { /* ignore */ }
         }
       } catch (e) {
         console.warn(`[cob:${modelName}] fetch failed:`, e)
@@ -422,10 +385,18 @@ export class ModelViewer {
     }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null
+    // Tear down the engine scene (frees the wasm engine handle) before the
+    // renderer drops its GL context.
+    if (this._scene) {
+      try { this._scene.dispose() } catch { /* ignore */ }
+      this._scene = null
+      this._unitId = -1
+    }
     if (this.renderer) {
       this.renderer.dispose()
       this.renderer = null
     }
+    this.cob = null
     this.model = null
     this.camera = null
   }
@@ -452,18 +423,18 @@ export class ModelViewer {
     if (this.model) this.model.dispose(this.renderer.gl)
     this.model = model
     this.renderer.setModel(model)
-    // Re-point the live COB binding at the fresh piece tree so animation
-    // survives the swap.  Thread / timer state lives on the runtime unit
-    // (this._unit), not the binding, so rebuilding the binding only
-    // remaps piece indices — the script keeps running from where it was.
-    // The fill only adds primitives (never pieces), so index mapping by
-    // construction still lines up.
-    if (this._unit) {
-      const audio = (this.cob && this.cob.audio) || new AudioPool()
-      this.cob = new CobBinding(model, this._unit, { audio })
-      this.cob._renderer = this.renderer
+    // Re-point the live unit + COB facade at the fresh piece tree so the
+    // engine's per-tick pose lands on the new geometry.  The COB script keeps
+    // running inside the engine across the swap — only the render-side model
+    // and the sparkle-piece cache are rebuilt.  scene._applyPieces resolves
+    // pieces by name, so a primitives-only enhanced-mesh fill still lines up.
+    this._sparklePieces = null
+    const u = this.unit
+    if (u && this._cobJson) {
+      u.model = model
+      this.cob = this._buildCob(this._cobJson, this._modelName)
       this.renderer.setCobBinding(this.cob, { driveTick: false })
-      try { this.cob.tick(0) } catch { /* ignore */ }
+      try { this._scene._stepOnce(); this._scene.interpolate() } catch { /* ignore */ }
     }
     this.renderer.requestRedraw()
     if (this.onModelLoaded) this.onModelLoaded(model, this.cob)
@@ -523,6 +494,311 @@ export class ModelViewer {
   }
 
   // ── private ────────────────────────────────────────────────────────
+
+  // _pushPort writes one COB unit-value port into the engine's writable
+  // store so a script's GET_UNIT_VALUE(port) reads the studio-chosen value
+  // on its next iteration.  No-op until the unit is spawned.
+  _pushPort(port, value) {
+    if (this._scene && this._unitId >= 0) {
+      try { this._scene.source.setUnitValue(this._unitId, port | 0, value | 0) } catch { /* ignore */ }
+    }
+  }
+
+  // _pushPorts re-asserts every port the studio drives.  Called after spawn
+  // and after resetUnit (the engine's ResetState clears the port store, so
+  // without this a script's first GET_UNIT_VALUE post-reset reads 0).
+  _pushPorts() {
+    const p = this.cobPorts
+    this._pushPort(1, p.activation)          // ACTIVATION
+    this._pushPort(2, p.moveOrders)          // STANDINGMOVEORDERS
+    this._pushPort(3, p.fireOrders)          // STANDINGFIREORDERS
+    this._pushPort(4, Math.max(0, 100 - this.cobDamage))        // HEALTH
+    this._pushPort(5, p.inBuildStance)       // INBUILDSTANCE
+    this._pushPort(17, Math.max(0, 100 - this.cobBuildPercent)) // BUILD_PERCENT_LEFT
+    this._pushPort(18, p.yardOpen)           // YARD_OPEN
+    this._pushPort(19, p.buggerOff)          // BUGGER_OFF
+    this._pushPort(20, p.armoured)           // ARMORED
+  }
+
+  // _liveCobUnit returns the engine's live COB inspection record for this
+  // viewer's unit — { id, name, static:[…], threads:[…] } — memoised per
+  // tick by the scene.  Null before the unit is spawned.
+  _liveCobUnit() {
+    if (!this._scene || this._unitId < 0) return null
+    const snap = this._scene._cobSnapshot()
+    if (!snap || !snap.units) return null
+    return snap.units.find((cu) => cu.id === this._unitId) || null
+  }
+
+  // _buildCob assembles the COB facade the renderer, the engine-led
+  // MvControls path and the inspector / debugger panels all read through.
+  // COB itself runs inside the wasm engine; this object is a thin shim that
+  //   • delegates render resources (particles / audio / scene-lights) to the
+  //     scene's per-unit binding,
+  //   • exposes the live thread + static-var state from the engine snapshot,
+  //   • routes every debug / control op (step, breakpoints, var edits, kills,
+  //     coverage) into the new wasm debug exports, and
+  //   • keeps the static disassembly tables (scripts / scriptNames /
+  //     pieceNames / decompiled) the debugger maps PC → source line against.
+  _buildCob(cobJson, modelName) {
+    const viewer = this
+    const scene = this._scene
+    const source = scene.source
+    const unitId = this._unitId
+    const binding = scene.unitById(unitId)?.binding || {}
+    const scripts = cobJson.scripts || []
+    const scriptNames = cobJson.scriptNames || []
+    const pieceNames = cobJson.pieceNames || []
+    // Lower-cased script-name → { script, index } so the thread adapter can
+    // attach the static instruction list (the engine snapshot ships only a
+    // script NAME per thread) and so breakpoint / coverage ops can resolve a
+    // name to the engine's script index.
+    const scriptByLower = new Map()
+    scripts.forEach((s, i) => { if (s && s.name) scriptByLower.set(s.name.toLowerCase(), { script: s, index: i }) })
+    const scriptIndex = (name) => {
+      const lower = (name || '').toLowerCase()
+      const byScripts = scriptByLower.get(lower)
+      if (byScripts) return byScripts.index
+      return scriptNames.findIndex((n) => n && n.toLowerCase() === lower)
+    }
+
+    // ── facade.unit — stable object (built once per open) so the debugger's
+    // scratch fields (_bosMap, _asmToBos, _globalNames, …) survive ticks. ──
+    const unit = {
+      name: modelName,
+      scriptOriginName: modelName,
+      scripts,
+      scriptNames,
+      pieceNames,
+      numStaticVars: cobJson.numStaticVars || 0,
+      decompiled: cobJson.decompiled || '',
+      _breakpoints: new Set(),
+      _coverageBaseline: new Map(),
+      killThreadById(id) { source.killThread(unitId, id); scene._invalidateCob() },
+      killThreadsByName(name) { source.killThreadsByName(unitId, name); scene._invalidateCob() },
+      killAllThreads() { source.killUnitThreads(unitId); scene._invalidateCob() },
+      reset() { source.resetUnit(unitId); scene._invalidateCob() },
+      setThreadLocal(threadId, idx, v) { source.setThreadLocal(unitId, threadId, idx, v | 0); scene._invalidateCob() },
+      setStatic(idx, v) { source.setStaticVar(unitId, idx, v | 0); scene._invalidateCob() },
+      setThreadPc(threadId, pcIdx) { source.setThreadPc(unitId, threadId, pcIdx | 0); scene._invalidateCob() },
+      addBreakpoint(scriptName, offset) {
+        const idx = scriptIndex(scriptName)
+        if (idx < 0) return
+        source.addBreakpoint(unitId, idx, offset >>> 0)
+        this._breakpoints.add(`${(scriptName || '').toLowerCase()}:${offset >>> 0}`)
+      },
+      removeBreakpoint(scriptName, offset) {
+        const idx = scriptIndex(scriptName)
+        if (idx < 0) return
+        source.removeBreakpoint(unitId, idx, offset >>> 0)
+        this._breakpoints.delete(`${(scriptName || '').toLowerCase()}:${offset >>> 0}`)
+      },
+      hasBreakpoint(scriptName, offset) {
+        return this._breakpoints.has(`${(scriptName || '').toLowerCase()}:${offset >>> 0}`)
+      },
+      clearBreakpoints() {
+        source.clearBreakpoints(unitId)
+        this._breakpoints.clear()
+      },
+      // clearExecutedOffsets snapshots the engine's current coverage as a
+      // baseline; subsequent _executedOffsets reads subtract it so the
+      // debugger's dimming view restarts clean after a Reset / re-run.
+      clearExecutedOffsets() {
+        const cov = source.coverage(unitId) || {}
+        const base = new Map()
+        for (const key of Object.keys(cov)) {
+          const sname = scriptNames[parseInt(key, 10)]
+          if (sname) base.set(sname.toLowerCase(), new Set(cov[key]))
+        }
+        this._coverageBaseline = base
+      },
+      // usesUnitValuePort reports whether any script reads/writes the given
+      // GET_UNIT_VALUE port (a PUSH_IMM <port> immediately followed by a
+      // GET_UNIT_VALUE / GET / SET_VALUE).  Drives the Controls panel's
+      // "show Armoured toggle" gate.
+      usesUnitValuePort(port) {
+        for (const s of scripts) {
+          const insts = s.instructions || []
+          for (let i = 0; i < insts.length - 1; i++) {
+            const a = insts[i]
+            const b = insts[i + 1]
+            if (a && a.name === 'PUSH_IMM' && a.p1 === port &&
+                b && (b.name === 'GET_UNIT_VALUE' || b.name === 'GET' || b.name === 'SET_VALUE')) {
+              return true
+            }
+          }
+        }
+        return false
+      },
+    }
+    Object.defineProperty(unit, '_threads', {
+      get() {
+        const live = viewer._liveCobUnit()
+        if (!live || !live.threads) return []
+        return live.threads.map((t) => {
+          const entry = scriptByLower.get((t.script || '').toLowerCase())
+          return {
+            id: t.id,
+            pc: t.pc,
+            offset: t.offset,
+            sleepMs: t.sleepMs,
+            signalMask: t.signalMask,
+            breakpointHit: !!t.breakpointHit,
+            locals: t.locals || [],
+            stack: t.stack || [],
+            dead: false,
+            waitOn: t.waiting ? { type: t.waitTurn ? 'turn' : 'move' } : null,
+            script: entry ? entry.script : { name: t.script, instructions: [] },
+          }
+        })
+      },
+    })
+    Object.defineProperty(unit, 'staticVars', {
+      get() { const live = viewer._liveCobUnit(); return (live && live.static) || [] },
+    })
+    Object.defineProperty(unit, '_executedOffsets', {
+      get() {
+        const cov = source.coverage(unitId) || {}
+        const out = new Map()
+        for (const key of Object.keys(cov)) {
+          const sname = scriptNames[parseInt(key, 10)]
+          if (!sname) continue
+          const lower = sname.toLowerCase()
+          const baseline = unit._coverageBaseline.get(lower)
+          let set = out.get(lower)
+          if (!set) { set = new Set(); out.set(lower, set) }
+          for (const off of cov[key]) {
+            if (baseline && baseline.has(off)) continue
+            set.add(off)
+          }
+        }
+        return out
+      },
+    })
+
+    // ── facade.runtime — the scene's runtime facade, augmented in place to
+    // present THIS unit (the viewer owns its scene exclusively). ──
+    const runtime = scene._runtime
+    runtime.units = () => [unit]
+    runtime.findThreadById = (tid) => {
+      for (const t of unit._threads) if (t.id === tid) return { thread: t, unit }
+      return null
+    }
+    runtime.stepOne = (tid) => { source.stepThread(unitId, tid); scene._invalidateCob() }
+    unit.runtime = runtime
+
+    // ── facade root ──
+    const cob = {
+      unit,
+      runtime,
+      particles: binding.particles,
+      audio: binding.audio,
+      worldOffset: binding.worldOffset || { x: 0, y: 0, z: 0 },
+      buildPercent: this.cobBuildPercent,
+      _lifecycle: 'created',
+      _renderer: this.renderer,
+      hasScript: (name) => scriptByLower.has((name || '').toLowerCase()),
+      listScripts: () => scriptNames.slice(),
+      start: (name, args = []) => { source.startScript(unitId, name, args); scene._invalidateCob() },
+      setBuildPercent: (pct) => { cob.buildPercent = Math.max(0, Math.min(100, +pct || 0)) },
+      getSceneLight: () => (typeof binding.getSceneLight === 'function' ? binding.getSceneLight() : null),
+      getSceneLights: () => (typeof binding.getSceneLights === 'function' ? binding.getSceneLights() : []),
+      _emitShipWake: (worldPos, headingRad) => viewer._emitShipWake(worldPos, headingRad),
+      // tick advances the engine, samples the interpolated pose, ages
+      // sparkles, then autopauses the tab tick loop if any thread just hit a
+      // breakpoint (the loop reads runtime.paused and stops stepping).
+      tick: (dtMs) => {
+        scene.tick(dtMs)
+        scene.interpolate()
+        if (!runtime.paused) viewer._emitBuildSparkles(dtMs)
+        if (!runtime.paused) {
+          const live = viewer._liveCobUnit()
+          if (live && live.threads && live.threads.some((t) => t.breakpointHit)) {
+            runtime.setPaused(true)
+          }
+        }
+      },
+    }
+    return cob
+  }
+
+  // _emitBuildSparkles spits bright-green pulses across the unit's geometry
+  // while the build-% ramp is active, fading out as the unit solidifies — the
+  // construction phase-in's "transporter" shimmer.  Ported from the retired
+  // JS binding; reads build% off the viewer and emits into the scene binding's
+  // particle pool.
+  _emitBuildSparkles(dtMs) {
+    const buildPct = this.cobBuildPercent
+    if (buildPct == null || buildPct >= 100) return
+    const model = this.model
+    const particles = this.cob && this.cob.particles
+    if (!model || !particles) return
+    const incomplete = Math.max(0, Math.min(1, 1 - buildPct / 100))
+    const rateHz = 90 * incomplete
+    this._sparkleAcc = (this._sparkleAcc || 0) + (dtMs * rateHz / 1000)
+    let toEmit = Math.floor(this._sparkleAcc)
+    if (toEmit < 1) return
+    this._sparkleAcc -= toEmit
+    if (toEmit > 12) toEmit = 12
+    if (!this._sparklePieces) {
+      this._sparklePieces = model.flat.filter((p) => p._tris && p._tris.length >= 9)
+    }
+    const pieces = this._sparklePieces
+    if (!pieces || pieces.length === 0) return
+    for (let i = 0; i < toEmit; i++) {
+      const piece = pieces[(Math.random() * pieces.length) | 0]
+      if (!piece || !piece.visible || !piece.worldMatrix) continue
+      const tris = piece._tris
+      const triCount = (tris.length / 9) | 0
+      if (triCount === 0) continue
+      const tBase = ((Math.random() * triCount) | 0) * 9
+      let u = Math.random()
+      let v = Math.random()
+      if (u + v > 1) { u = 1 - u; v = 1 - v }
+      const w = 1 - u - v
+      const lx = tris[tBase] * w + tris[tBase + 3] * u + tris[tBase + 6] * v
+      const ly = tris[tBase + 1] * w + tris[tBase + 4] * u + tris[tBase + 7] * v
+      const lz = tris[tBase + 2] * w + tris[tBase + 5] * u + tris[tBase + 8] * v
+      const m = piece.worldMatrix
+      const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12]
+      const wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13]
+      const wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14]
+      particles.emit(SFX_SPARK, [wx, wy, wz], {
+        color: [0.30, 1.80, 0.80, 1.0], size: 2.5, lifeMs: 350, riseSpeed: 0.0, drift: 0.0,
+      })
+    }
+  }
+
+  // _emitShipWake drops a pair of foamy puffs at the ship's wake1 / wake2
+  // pieces (or a stern fallback when the artist left them at the pivot).
+  // Called by MvControls while a ship is moving.  Ported from the retired JS
+  // binding; emits into the scene binding's particle pool.
+  _emitShipWake(worldPos, headingRad) {
+    const model = this.model
+    const particles = this.cob && this.cob.particles
+    if (!model || !particles) return
+    const sinH = Math.sin(headingRad)
+    const cosH = Math.cos(headingRad)
+    const b = model.bounds
+    const sternZ = b ? b.min[2] : 0
+    const halfBeam = b ? (b.max[0] - b.min[0]) * 0.25 : 4
+    const waterY = b ? b.min[1] + 1 : 0
+    const emitAt = (piece, fallbackLocalX) => {
+      let ox = piece && piece.origin ? piece.origin[0] : 0
+      let oy = piece && piece.origin ? piece.origin[1] : 0
+      let oz = piece && piece.origin ? piece.origin[2] : 0
+      const hasOrigin = Math.abs(ox) + Math.abs(oy) + Math.abs(oz) > 0.1
+      if (!hasOrigin) { ox = fallbackLocalX; oy = waterY; oz = sternZ }
+      const wx = worldPos[0] + (ox * cosH + oz * sinH)
+      const wy = (worldPos[1] || 0) + oy
+      const wz = worldPos[2] + (-ox * sinH + oz * cosH)
+      particles.emit(SFX_SMOKE_WHITE, [wx, wy, wz], {
+        size: 9, lifeMs: 1400, riseSpeed: 0.3, drift: 1.2, color: [0.95, 0.97, 1.0, 0.85],
+      })
+    }
+    emitAt(model.findPiece('wake1'), -halfBeam)
+    emitAt(model.findPiece('wake2'), halfBeam)
+  }
 
   #setStatus(msg) {
     if (this.statusEl) this.statusEl.textContent = msg

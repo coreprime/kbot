@@ -106,6 +106,7 @@ class WasmUnit {
     this._p0 = { x: 0, y: 0, z: 0, h: 0 }
     this._p1 = { x: 0, y: 0, z: 0, h: 0 }
     this.isMoving = false
+    this.speed = 0       // world-units/s from the snapshot, for the Movement panel
     this.dead = false
     this.health = 100
     this.buildPercent = 100
@@ -953,6 +954,7 @@ export class WasmSandboxScene {
       const jump = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
       if (jump > INTERP_SNAP_WU) { p0.x = p1.x; p0.y = p1.y; p0.z = p1.z; p0.h = p1.h }
       u.isMoving = su.isMoving
+      u.speed = su.speed || 0
       u.health = su.health
       u.dead = su.dead
       u.buildPercent = su.buildPercent
@@ -970,9 +972,8 @@ export class WasmSandboxScene {
   }
 
   // _applyPieces writes the snapshot's per-piece transforms onto the unit's
-  // model clone.  The sign convention matches cob-binding._sync: the model
-  // loader X-flips geometry, so Z-translation and X/Y rotation flip while
-  // Z-rotation does not.
+  // model clone.  The model loader X-flips geometry, so Z-translation and
+  // X/Y rotation flip sign while Z-rotation does not.
   _applyPieces(u, pieces) {
     if (!u.model || !pieces) return
     const names = u._cobPieceNames
