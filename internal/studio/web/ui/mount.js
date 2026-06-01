@@ -67,6 +67,7 @@ import {
 import {
   WelcomeScreen, setWelcomeTab,
 } from '/ui/screens/welcome/welcome-screen.js'
+import { FilesBrowser } from '/ui/files-browser/browser.js'
 import { MapStatsPanel } from '/ui/map-editor/panels/map-stats-panel.js'
 import { CameraCursorPanel } from '/ui/map-editor/panels/camera-cursor-panel.js'
 import { MinimapPanel } from '/ui/map-editor/panels/minimap-panel.js'
@@ -320,6 +321,15 @@ export function mountWelcomeScreen({ onNewMap, onOpenMap, onOpenUnit, onOpenSand
       onOpenUnit=${onOpenUnit}
       onOpenSandbox=${onOpenSandbox} />
   `)
+}
+
+// mountFilesBrowser — render the Files-tab VFS explorer into the
+// #files-browser-mount slot inside the #files-dialog overlay.  Called
+// once on the first Files-tab activation; the mounted tree is reused on
+// subsequent activations so the user's folder + selection persist.
+export function mountFilesBrowser() {
+  const slot = document.getElementById('files-browser-mount')
+  if (slot) render(html`<${FilesBrowser} />`, slot)
 }
 
 // isInspectorMounted — host bridge predicate.  Lets the vanilla

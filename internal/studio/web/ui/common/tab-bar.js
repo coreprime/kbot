@@ -30,6 +30,7 @@ const _bridge = {
   onOpenMap:   () => {},
   onOpenUnit:  () => {},
   onSandbox:   () => {},
+  onBrowseFiles: () => {},
 }
 
 export function configureTabBarBridge(impl) {
@@ -40,6 +41,7 @@ export function configureTabBarBridge(impl) {
     onOpenMap:   () => {},
     onOpenUnit:  () => {},
     onSandbox:   () => {},
+    onBrowseFiles: () => {},
   }, impl)
 }
 
@@ -66,6 +68,7 @@ function _tabLabel(tab) {
   const t = _tabType(tab)
   if (t === 'unit-editor') return tab.meta?.unitTitle || tab.displayName || tab.name || '(unit)'
   if (t === 'sandbox')     return tab.displayName || tab.name || 'Sandbox'
+  if (t === 'files')       return tab.displayName || tab.name || 'Files'
   // Map tab (or unknown) — fall back to the legacy map-name path.
   return _mapDisplayName(tab.map)
 }
@@ -78,6 +81,7 @@ function _tabTitle(tab) {
     return `${display}${metaBits ? ` · ${metaBits}` : ''}`
   }
   if (t === 'sandbox') return _tabLabel(tab)
+  if (t === 'files') return 'Browse VFS files'
   const m = tab.map
   const dirty = !!m?.dirty
   const display = _mapDisplayName(m)
@@ -153,6 +157,11 @@ export function TabBar() {
             label="Sandbox Mode"
             dropdownId="map-tab-add-dropdown"
             onClick=${() => _bridge.onSandbox()} />
+          <${MenuRow}
+            icon="🗂"
+            label="Browse Files"
+            dropdownId="map-tab-add-dropdown"
+            onClick=${() => _bridge.onBrowseFiles()} />
         <//>
       </div>
     </nav>

@@ -233,6 +233,16 @@
     </div>
   </div>
 
+  <!-- Files (VFS) browser — overlays the editor surface the same way the
+       model-viewer dialog does: the shared topbar + tab strip stay
+       visible above and the status bar below.  The FilesBrowser Preact
+       tree mounts once into #files-browser-mount (display:contents so it
+       acts as a direct child of the overlay) and is reused across the
+       tab's lifetime. -->
+  <div id="files-dialog" class="dialog hidden files-dialog">
+    <div id="files-browser-mount" style="display: contents"></div>
+  </div>
+
   <div id="open-dialog" class="dialog hidden">
     <div class="dialog-card dialog-card-wide dialog-card-xwide">
       <h1>Open an existing map</h1>
