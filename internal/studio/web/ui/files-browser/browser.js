@@ -67,7 +67,7 @@ export function FilesBrowser() {
       </header>
       <main class="fx-content">
         ${route.kind === 'home'
-          ? html`<${HomePage} onOpenDir=${openDir} onSearch=${openDir} />`
+          ? html`<${HomePage} onOpenDir=${openDir} />`
           : null}
         ${route.kind === 'browse'
           ? html`<${BrowsePage} dir=${route.path} onOpenDir=${openDir} onOpenFile=${openFile} key=${route.path} />`

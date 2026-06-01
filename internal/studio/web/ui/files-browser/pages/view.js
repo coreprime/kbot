@@ -9,8 +9,8 @@
 // Layering tab re-renders the visual tabs from that archive source.
 
 import { htm as html } from '/ui/common/htm-bind.js'
-import { useState, useCallback, useMemo } from 'preact/hooks'
-import { metadata, rawURL, extOf } from '../api.js'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
+import { metadata, rawURL, renderURL, extOf } from '../api.js'
 import { useAsync, useRawText, Loading, ErrorMsg } from '../components/async.js'
 import { HexView } from '../content/hex-view.js'
 import { InfoTab } from '../viewers/info.js'
@@ -114,6 +114,64 @@ function BosCodeTab({ path, source, lintLines, highlightLine, onOpenFile }) {
   return html`<${BosHighlighter} code=${data || ''} basePath=${path} lintLines=${lintLines} highlightLine=${highlightLine} onOpenFile=${onOpenFile} />`
 }
 
+// swapExt returns the download filename with its extension replaced by
+// `ext` (e.g. logos.zrb + 'mp4' → logos.mp4), so a transcoded/rendered
+// download lands with a sensible name.
+function swapExt(name, ext) {
+  const b = name || 'file'
+  const i = b.lastIndexOf('.')
+  return `${i > 0 ? b.slice(0, i) : b}.${ext}`
+}
+
+// extraFormats lists the rendered download variants offered for a kind,
+// alongside the original bytes — PNG/GIF for PCX images, MP4 for video.
+function extraFormats(kind, path, name, src) {
+  switch (kind) {
+    case 'pcx': case 'image':
+      return [
+        { label: 'PNG', filename: swapExt(name, 'png'), href: renderURL(path, { format: 'png', source: src }) },
+        { label: 'GIF', filename: swapExt(name, 'gif'), href: renderURL(path, { format: 'gif', source: src }) },
+      ]
+    case 'video':
+      return [
+        { label: 'MP4', filename: swapExt(name, 'mp4'), href: renderURL(path, { format: 'mp4', source: src }) },
+      ]
+    default:
+      return []
+  }
+}
+
+// DownloadMenu renders the original-bytes download as a primary button;
+// when a kind offers rendered variants it grows a caret revealing them.
+function DownloadMenu({ name, origHref, extras }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  if (!extras.length) {
+    return html`<a class="fx-dl-btn" download=${name} href=${origHref}>⬇ Download</a>`
+  }
+
+  return html`
+    <div class=${'fx-dl-menu' + (open ? ' open' : '')} ref=${ref}>
+      <a class="fx-dl-btn fx-dl-main" download=${name} href=${origHref}>⬇ Download</a>
+      <button type="button" class="fx-dl-caret" title="More formats" onClick=${() => setOpen((o) => !o)}>▾</button>
+      ${open ? html`
+        <div class="fx-dl-pop">
+          <a class="fx-dl-item" download=${name} href=${origHref} onClick=${() => setOpen(false)}>Original (${extOf(name).toUpperCase()})</a>
+          ${extras.map((x) => html`
+            <a class="fx-dl-item" key=${x.label} download=${x.filename} href=${x.href} onClick=${() => setOpen(false)}>${x.label}</a>`)}
+        </div>` : null}
+    </div>
+  `
+}
+
 export function ViewPage({ path, source: initialSource, onOpenFile }) {
   const [activeSource, setActiveSource] = useState(initialSource || '')
   const [tab, setTab] = useState(null)
@@ -195,7 +253,8 @@ export function ViewPage({ path, source: initialSource, onOpenFile }) {
           ${describe.format ? html`<span class="fx-format-badge">${describe.format}</span>` : null}
           ${src ? html`<span class="fx-source-badge">📚 ${src}</span>` : null}
         </div>
-        <a class="fx-dl-btn" download=${meta.name} href=${rawURL(path, src)}>⬇ Download</a>
+        <${DownloadMenu} name=${meta.name} origHref=${rawURL(path, src)}
+                         extras=${extraFormats(kind, path, meta.name, src)} />
       </div>
       <div class="fx-tabs">
         ${tabs.map((t) => html`

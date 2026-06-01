@@ -8,7 +8,6 @@
 import { htm as html } from '/ui/common/htm-bind.js'
 import { getStats, formatSize } from '../api.js'
 import { useAsync, Loading, ErrorMsg } from '../components/async.js'
-import { SearchBox } from '../components/search-box.js'
 
 function StatCard({ value, label, accent }) {
   return html`
@@ -19,7 +18,7 @@ function StatCard({ value, label, accent }) {
   `
 }
 
-export function HomePage({ onOpenDir, onOpenFile }) {
+export function HomePage({ onOpenDir }) {
   const { data: stats, loading, error } = useAsync(() => getStats(), [])
 
   if (loading) return html`<${Loading} label="Reading filesystem…" />`
@@ -33,10 +32,7 @@ export function HomePage({ onOpenDir, onOpenFile }) {
     <div class="fx-home">
       <section class="fx-hero">
         <h1>🗂 Game File Explorer</h1>
-        <p>Browse the complete file-systems for Total Annihilation ${'&'} TA: Kingdoms, including any mod content — preview animations, maps, scripts, fonts, and more.</p>
-        <div class="fx-hero-search">
-          <${SearchBox} onOpenDir=${onOpenDir} onOpenFile=${onOpenFile} autoFocus=${true} />
-        </div>
+        <p>Browse the complete file-systems for Total Annihilation ${'&'} TA: Kingdoms, including any mod content — preview animations, maps, scripts, fonts, and more. Use the search box at the top right to jump to any file or folder.</p>
         <div class="fx-hero-actions">
           <button type="button" class="fx-btn-primary" onClick=${() => onOpenDir?.('')}>📁 Browse Files</button>
         </div>

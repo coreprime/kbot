@@ -6323,6 +6323,24 @@ canvas {
 }
 .fx-icon-action:hover { border-color: var(--accent); background: var(--bg-2); }
 
+/* Table "Layer" column — the effective archive source as a small chip. */
+.fx-th-source { width: 132px; }
+.fx-source-cell { white-space: nowrap; }
+.fx-layer-chip {
+  display: inline-block;
+  max-width: 124px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Table "Actions" column download control. */
 .fx-th-actions { width: 72px; text-align: center; }
 .fx-actions-cell { text-align: center; white-space: nowrap; }
@@ -6376,6 +6394,45 @@ canvas {
   white-space: nowrap;
 }
 .fx-dl-btn:hover { background: var(--accent-hover); }
+
+/* Split download control: primary button + caret revealing rendered
+   format variants (PNG/GIF for images, MP4 for video). */
+.fx-dl-menu { position: relative; margin-left: auto; display: inline-flex; align-items: stretch; }
+.fx-dl-menu .fx-dl-btn { margin-left: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.fx-dl-caret {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  font-size: 12px;
+  padding: 0 9px;
+  cursor: pointer;
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+.fx-dl-caret:hover, .fx-dl-menu.open .fx-dl-caret { background: var(--accent-hover); }
+.fx-dl-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 160px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+}
+.fx-dl-item {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 4px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.fx-dl-item:hover { background: var(--bg-2); color: var(--accent-hover); }
 .fx-tabs {
   display: flex;
   flex-wrap: wrap;

@@ -37,6 +37,7 @@ type vfsEntry struct {
 	Path       string `json:"path"`
 	Type       string `json:"type"`
 	Size       int64  `json:"size,omitempty"`
+	Source     string `json:"source,omitempty"`
 	DirFiles   int    `json:"dirFiles,omitempty"`
 	DirFolders int    `json:"dirFolders,omitempty"`
 	DirSize    int64  `json:"dirSize,omitempty"`
@@ -253,6 +254,7 @@ func handleVFSList(w http.ResponseWriter, dir string) {
 			}
 		} else if info, err := vfs.Stat(full); err == nil {
 			e.Size = info.Size
+			e.Source = info.Source
 		}
 		entries = append(entries, e)
 	}

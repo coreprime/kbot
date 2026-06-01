@@ -74,6 +74,7 @@ function FileRow({ entry, onOpenFile }) {
       </td>
       <td class="fx-size-cell">${formatSize(entry.size)}</td>
       <td class="fx-type-cell">${ext ? ext.toUpperCase() : '—'}</td>
+      <td class="fx-source-cell">${entry.source ? html`<span class="fx-layer-chip" title=${`Effective layer: ${entry.source}`}>${entry.source}</span>` : ''}</td>
       <td class="fx-actions-cell">
         <a class="fx-row-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download" onClick=${(e) => e.stopPropagation()}>⬇</a>
       </td>
@@ -90,6 +91,7 @@ function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFil
             <${SortHeader} label="Name" field="name" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
             <${SortHeader} label="Size" field="size" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
             <${SortHeader} label="Type" field="type" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
+            <th class="fx-th-source">Layer</th>
             <th class="fx-th-actions">Actions</th>
           </tr>
         </thead>
@@ -104,12 +106,13 @@ function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFil
               </td>
               <td class="fx-size-cell">${formatSize(e.dirSize)}</td>
               <td class="fx-type-cell">${dirStats(e.dirFolders, e.dirFiles)}</td>
+              <td class="fx-source-cell"></td>
               <td class="fx-actions-cell"></td>
             </tr>
           `)}
           ${files.map((e) => html`<${FileRow} key=${e.path} entry=${e} onOpenFile=${onOpenFile} />`)}
           ${dirs.length === 0 && files.length === 0
-            ? html`<tr><td colspan="4"><div class="fx-empty">📭 Empty directory</div></td></tr>`
+            ? html`<tr><td colspan="5"><div class="fx-empty">📭 Empty directory</div></td></tr>`
             : null}
         </tbody>
       </table>
@@ -140,7 +143,7 @@ function FileIconCard({ entry, onOpenFile }) {
         <span class="fx-icon-size">${entry.size ? formatSize(entry.size) : ''}</span>
         <span class="fx-icon-actions">
           <a class="fx-icon-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download">⬇</a>
-          <button type="button" class="fx-icon-action" onClick=${() => onOpenFile(entry.path)} title="Open">↗</button>
+          <button type="button" class="fx-icon-action" onClick=${() => onOpenFile(entry.path)} title="Open">→</button>
         </span>
       </div>
     </div>

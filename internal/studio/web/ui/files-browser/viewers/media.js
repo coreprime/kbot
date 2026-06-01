@@ -5,24 +5,18 @@
 // raw and played by the native <audio> element.
 
 import { htm as html } from '/ui/common/htm-bind.js'
-import { videoURL, rawURL, extOf, baseName } from '../api.js'
+import { videoURL, rawURL, extOf } from '../api.js'
 
-// mp4Name swaps the source extension for .mp4 so the transcoded download
-// lands with a sensible filename (e.g. logos.zrb → logos.mp4).
-function mp4Name(path) {
-  const b = baseName(path) || 'video'
-  const i = b.lastIndexOf('.')
-  return `${i > 0 ? b.slice(0, i) : b}.mp4`
-}
-
+// The MP4 download lives in the view bar's download menu (alongside the
+// original bytes); this tab is purely the player.
 export function VideoTab({ path, source, describe }) {
   const d = describe || {}
   return html`
     <div class="fx-viewer">
-      <div class="fx-ctl-row">
-        ${d.videoWidth ? html`<span class="fx-img-dims">${d.videoWidth}×${d.videoHeight}${d.videoFPS ? ` · ${d.videoFPS}fps` : ''}</span>` : null}
-        <a class="fx-ctl-btn" download=${mp4Name(path)} href=${videoURL(path, source)}>⬇ Download MP4</a>
-      </div>
+      ${d.videoWidth ? html`
+        <div class="fx-ctl-row">
+          <span class="fx-img-dims">${d.videoWidth}×${d.videoHeight}${d.videoFPS ? ` · ${d.videoFPS}fps` : ''}</span>
+        </div>` : null}
       <div class="fx-media-stage">
         <video class="fx-video" src=${videoURL(path, source)} controls autoplay loop></video>
       </div>
