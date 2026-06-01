@@ -593,6 +593,39 @@ export function spawnProjectile({ binding, weapon, anchor, target, palette, grav
   return { kind, lifeMs, velocity: [vx, vy, vz], anchor: [anchor[0], anchor[1], anchor[2]] }
 }
 
+// spawnProjectileInFlight re-emits a tracer particle for a shot already mid-air
+// — the late-join / Force-Sync case, where the authoritative engine carries an
+// in-flight cannon shell or EMG bolt but the joining client never saw the fire
+// event that would have spawned its visual.  Unlike spawnProjectile it does not
+// derive a launch solution: the caller supplies the engine's current position,
+// velocity and remaining flight time, so the cosmetic particle picks the shot up
+// exactly where the host left it.  Beam weapons never persist in flight (they
+// hit instantly), so a laser kind is a no-op.  No muzzle smoke / fire sound is
+// played — those belong to the launch instant, which already happened.
+export function spawnProjectileInFlight({ binding, weapon, pos, vel, lifeMs, palette, gravity = 80 }) {
+  if (!binding || !binding.particles || !weapon) return null
+  const preKind = pickProjectileKind(weapon)
+  if (preKind === SFX_PROJECTILE_LASER) return null
+  const spriteId = resolveSpriteId(binding, weapon)
+  const kind = spriteId > 0 ? SFX_PROJECTILE_SPRITE : preKind
+  const color = projectileColor(weapon, kind, palette)
+  const size = projectileSize(weapon, kind)
+  const light = projectileLightStrength(weapon, kind)
+  const emitOpts = {
+    velocity: [vel[0], vel[1], vel[2]],
+    gravity: weapon.ballistic ? gravity : 0,
+    lifeMs: Math.max(100, lifeMs || 0),
+    noFade: true,
+    color,
+    size,
+  }
+  if (light > 0) emitOpts.lightStrength = light
+  if (spriteId > 0) emitOpts.spriteId = spriteId
+  binding.particles.emit(kind, pos, emitOpts)
+  binding._lastFiredWeapon = weapon
+  return { kind, lifeMs: emitOpts.lifeMs }
+}
+
 // Re-export the SFX kind ids so consumers that need to special-case
 // (e.g. "schedule a smoke trail for missiles") can compare against
 // pickProjectileKind's return without importing cob-particles.js

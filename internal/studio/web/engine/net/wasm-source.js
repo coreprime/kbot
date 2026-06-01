@@ -109,8 +109,23 @@ export class WasmFrameSource extends FrameSource {
 
   // restore reinitializes the world from an authoritative snapshot so a client
   // joining a match already in progress sees the current unit set.  The
-  // networked source calls it when the server sends a snapshot.
-  restore(snapshot) { this._engine.restore(this._handle, snapshot) }
+  // networked source calls it when the server sends a snapshot. The public tick
+  // is advanced to the restored tick so callers reading `tick` (the join
+  // catch-up loop, the COB/Runtime panels) reflect the authority's clock
+  // immediately rather than a stale pre-restore value.
+  restore(snapshot) {
+    this._engine.restore(this._handle, snapshot)
+    if (snapshot && typeof snapshot.tick === 'number') this.tick = snapshot.tick
+  }
+
+  // renderState returns the render snapshot of the world at its CURRENT tick
+  // without advancing it. The networked source uses it after a restore to paint
+  // the authority's units immediately — including while the shared clock is
+  // paused, where step() would never run. Null before the engine has a handle.
+  renderState() {
+    if (!this._engine || this._handle < 0) return null
+    return this._engine.renderState(this._handle)
+  }
 
   // step advances one simulation tick, fans out the tick's events, and returns
   // the render snapshot.

@@ -2316,6 +2316,9 @@ export class SandboxView {
       camera: this.camera,
       renderer: this.renderer,
       cob,
+      // Network/sync telemetry for the Network developer panel. Null in an
+      // offline sandbox (no authority); a live stats object in a joined match.
+      net: (this.scene && typeof this.scene.netStats === 'function') ? this.scene.netStats() : null,
       _focusedUnitId: focused ? focused.id : null,
     }
     // Per-unit port + damage + build% shims so the shared Controls

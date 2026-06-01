@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/coreprime/kbot/engine/fixed"
+	"github.com/coreprime/kbot/engine/frame"
 	"github.com/coreprime/kbot/engine/order"
 )
 
@@ -33,6 +34,18 @@ const (
 	// client so all windows pause, step and slow together. It is a developer /
 	// sandbox affordance, not a competitive-play control.
 	MsgControl MsgType = "control"
+	// MsgPing / MsgPong are a lightweight round-trip latency probe. The client
+	// sends a Ping carrying an opaque sequence number; the authority answers
+	// immediately with a Pong echoing that sequence plus its own wall clock, so
+	// the client can both measure RTT and estimate the server's clock offset
+	// without disturbing the simulation. Pings are answered off the read path so
+	// they never queue behind a simulation tick.
+	MsgPing MsgType = "ping"
+	MsgPong MsgType = "pong"
+	// MsgResync asks the authority to push a fresh full snapshot to the
+	// requesting client, used by the sandbox "Force Sync" affordance to discard
+	// the client's locally diverged state and re-seed from authority.
+	MsgResync MsgType = "resync"
 )
 
 // ClientMsg is anything a client sends to the server.
@@ -42,6 +55,7 @@ type ClientMsg struct {
 	Order   *order.Order `json:"order,omitempty"`
 	Ack     *Ack         `json:"ack,omitempty"`
 	Control *Control     `json:"control,omitempty"`
+	Ping    *Ping        `json:"ping,omitempty"`
 }
 
 // ServerMsg is anything the server sends to a client.
@@ -52,6 +66,21 @@ type ServerMsg struct {
 	Snapshot   *Snapshot     `json:"snapshot,omitempty"`
 	Hash       *HashMsg      `json:"hash,omitempty"`
 	Control    *Control      `json:"control,omitempty"`
+	Pong       *Pong         `json:"pong,omitempty"`
+}
+
+// Ping is a client latency probe. Seq is an opaque counter the client uses to
+// match the answering Pong to its send time; the server never interprets it.
+type Ping struct {
+	Seq uint64 `json:"seq"`
+}
+
+// Pong answers a Ping. It echoes the client's Seq so the client can compute RTT
+// against the send time it stored, and carries the authority's wall clock in
+// Unix milliseconds so the client can estimate the server-clock offset.
+type Pong struct {
+	Seq        uint64 `json:"seq"`
+	ServerTime int64  `json:"serverTime"`
 }
 
 // Control is a sandbox runtime command and its echoed result. A client sends
@@ -127,6 +156,11 @@ type UnitSnap struct {
 	HasAttack    bool          `json:"hasAttack,omitempty"`
 	AttackTarget uint32        `json:"attackTarget,omitempty"`
 	Weapons      [3]WeaponSnap `json:"weapons,omitempty"`
+	// Cob carries the unit's full live script VM state so the joiner resumes the
+	// authority's exact piece poses (turret aim, mid-recoil) rather than
+	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry
+	// it; periodic backstop snapshots omit it to avoid a bandwidth spike.
+	Cob *frame.CobSnapshot `json:"cob,omitempty"`
 }
 
 // WeaponSnap is one weapon slot's standing aim/fire order in a join snapshot.
@@ -191,6 +225,11 @@ type Snapshot struct {
 	Hash        uint64           `json:"hash,string"`
 	Units       []UnitSnap       `json:"units"`
 	Projectiles []ProjectileSnap `json:"projectiles,omitempty"`
+	// RuntimeRng is the script RNG's draw position at the snapshot tick. OP_RAND
+	// consumes this stream, so a joiner that adopts it keeps script-driven
+	// randomness (and the animation it drives) in lockstep with the authority.
+	// Only join snapshots carry it.
+	RuntimeRng uint32 `json:"runtimeRng,omitempty"`
 }
 
 // Encode marshals a server message to JSON bytes.

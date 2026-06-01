@@ -72,6 +72,10 @@ type Match struct {
 	seed       uint32
 	inputDelay uint64
 	session    *session.Session
+	// rt is the per-match script runtime. The match holds a reference so a join
+	// snapshot can capture the runtime's RNG draw position alongside each unit's
+	// COB state, letting a late joiner resume script randomness in lockstep.
+	rt *script.Runtime
 
 	// Descriptive metadata for session listings. name and kind are set once,
 	// before Run starts, so they are safe to read from other goroutines;
@@ -93,8 +97,12 @@ type Match struct {
 	unregister chan *client
 	orders     chan clientOrder
 	control    chan wire.Control
-	quit       chan struct{}
-	stopOnce   sync.Once
+	// resync carries a Force-Sync request from a client's read loop to the
+	// authority goroutine, which alone may read session state to build the full
+	// snapshot the client re-seeds from.
+	resync   chan *client
+	quit     chan struct{}
+	stopOnce sync.Once
 
 	clients  map[*client]struct{}
 	nextSlot int
@@ -181,11 +189,13 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, co
 		seed:       seed,
 		inputDelay: inputDelay,
 		createdAt:  now,
+		rt:         rt,
 		session:    session.New(session.Config{World: w, Runtime: rt, InputDelay: inputDelay}),
 		register:   make(chan *client),
 		unregister: make(chan *client),
 		orders:     make(chan clientOrder, 1024),
 		control:    make(chan wire.Control, 16),
+		resync:     make(chan *client, 16),
 		quit:       make(chan struct{}),
 		clients:    make(map[*client]struct{}),
 		rate:       1,
@@ -218,6 +228,8 @@ func (m *Match) Run() {
 				ticker.Stop()
 				ticker = time.NewTicker(m.tickInterval())
 			}
+		case c := <-m.resync:
+			m.onResync(c)
 		case <-ticker.C:
 			if !m.paused {
 				m.step()
@@ -300,8 +312,9 @@ func (m *Match) onJoin(c *client) {
 		Seed:       m.seed,
 		Tick:       m.session.World().Tick(),
 	}})
-	// Full state so a late joiner can initialize its local engine.
-	c.send(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: m.buildSnapshot()})
+	// Full state so a late joiner can initialize its local engine, including the
+	// live COB VM state so its piece poses match the authority exactly.
+	c.send(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: m.buildSnapshot(true)})
 	// Replay command frames already scheduled for future ticks so the new
 	// client does not miss orders issued before it connected.
 	for _, t := range m.session.PendingTicks() {
@@ -317,6 +330,24 @@ func (m *Match) onJoin(c *client) {
 		Rate:   m.rate,
 		Tick:   m.session.World().Tick(),
 	}})
+}
+
+// onResync re-pushes a full authoritative snapshot to one client on demand
+// (the sandbox Force-Sync button). The client discards its locally diverged
+// state and re-seeds from this payload, exactly as it does on first join.
+func (m *Match) onResync(c *client) {
+	if _, ok := m.clients[c]; !ok {
+		return
+	}
+	c.send(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: m.buildSnapshot(true)})
+	// Re-deliver any still-scheduled command frames so the re-seeded client
+	// keeps the orders that were queued ahead of the current tick.
+	for _, t := range m.session.PendingTicks() {
+		c.send(wire.ServerMsg{Type: wire.MsgCommand, Command: &wire.CommandFrame{
+			Tick:   t,
+			Orders: m.session.OrdersForTick(t),
+		}})
+	}
 }
 
 func (m *Match) onLeave(c *client) {
@@ -353,13 +384,23 @@ func (m *Match) step() {
 		}})
 	}
 	if tick%snapshotEvery == 0 {
-		m.broadcast(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: m.buildSnapshot()})
+		// The periodic backstop omits COB VM state: it is a desync digest, not a
+		// join, and shipping every unit's threads + animators every 200 ticks to
+		// every client would spike bandwidth for no gain (clients do not re-apply it).
+		m.broadcast(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: m.buildSnapshot(false)})
 	}
 }
 
-func (m *Match) buildSnapshot() *wire.Snapshot {
+// buildSnapshot assembles an authoritative state snapshot. When full is true it
+// also carries each unit's live COB VM state and the script runtime's RNG draw
+// position, the pixel-perfect resync payload a late joiner adopts; periodic
+// backstop snapshots pass false to keep the wire small.
+func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 	w := m.session.World()
 	snap := &wire.Snapshot{Tick: w.Tick(), Hash: w.Hash()}
+	if full && m.rt != nil {
+		snap.RuntimeRng = m.rt.SnapshotRng()
+	}
 	for _, ru := range w.ExportUnits() {
 		us := wire.UnitSnap{
 			ID: ru.ID, Name: ru.Name, Side: ru.Side,
@@ -368,6 +409,9 @@ func (m *Match) buildSnapshot() *wire.Snapshot {
 			HasMove: ru.HasMove, TX: ru.MoveTarget.X, TZ: ru.MoveTarget.Z,
 			Health: ru.Health, Dead: ru.Dead,
 			HasAttack: ru.HasAttack, AttackTarget: ru.AttackTarget,
+		}
+		if full {
+			us.Cob = ru.Cob
 		}
 		for i := range ru.Weapons {
 			rw := ru.Weapons[i]
@@ -444,6 +488,26 @@ func (c *client) readPump(m *Match) {
 				m.unregister <- c
 			}
 			return
+		case wire.MsgPing:
+			// Latency probe: answer straight off the read loop with the echoed
+			// sequence and our wall clock. Bypassing the authority goroutine keeps
+			// RTT a measure of the transport, not of tick scheduling jitter.
+			if registered {
+				seq := uint64(0)
+				if msg.Ping != nil {
+					seq = msg.Ping.Seq
+				}
+				c.send(wire.ServerMsg{Type: wire.MsgPong, Pong: &wire.Pong{
+					Seq:        seq,
+					ServerTime: time.Now().UnixMilli(),
+				}})
+			}
+		case wire.MsgResync:
+			// Force Sync: route to the authority goroutine, the sole reader of
+			// session state, to build and push a fresh full snapshot.
+			if registered {
+				m.resync <- c
+			}
 		case wire.MsgAck:
 			// flow control hook; no-op for now.
 		}

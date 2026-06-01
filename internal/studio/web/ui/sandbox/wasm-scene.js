@@ -30,6 +30,7 @@ import { ParticlePool } from '../../engine/cob-particles.js'
 import {
   SmokeTrailManager,
   spawnProjectile,
+  spawnProjectileInFlight,
   playWeaponSound,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
@@ -190,6 +191,20 @@ export class WasmSandboxScene {
     this._unitSoundDebounce = new Map()
     // Fixed-timestep accumulator.
     this._acc = 0
+    // Set when a join restore (snapshot seed or Force-Sync re-pull) re-seeded the
+    // world; the next tick folds the authority's state in from a non-advancing
+    // render read. Deferring to the tick loop — rather than painting straight
+    // from the network callback — guarantees a view is driving the scene (so its
+    // model resolver is registered) before units are adopted, and lets a window
+    // joining a PAUSED match show the live units even though it never steps.
+    this._pendingRenderSync = false
+    // IDs of the model-less projectiles (cannon shells / EMG bolts) carried in
+    // the most recent restore snapshot that still owe a reconstructed tracer
+    // vfx. A restored shot has no local fire event to spawn its visual, so we
+    // re-emit one into the firing unit's particle pool once that unit hydrates.
+    // Only ids captured at restore time live here, so live post-join shots
+    // (drawn by the fire-event path) are never double-painted.
+    this._pendingRestoredProjoIds = new Set()
     // Wall-clock time (ms) of the most recent folded sim step, used to derive
     // the render-interpolation fraction in join mode (local mode reads the
     // exact leftover from _acc instead).
@@ -279,7 +294,96 @@ export class WasmSandboxScene {
         this._runtime.paused = !!c.paused
         if (c.rate) this._runtime.playbackRate = c.rate
       })
+      // A restore (join snapshot or Force-Sync re-pull) re-seeds the world at the
+      // authority's tick but does not step, so the per-tick adopt/sync path never
+      // runs. Flag it so the next tick paints the restored unit set from a
+      // non-advancing render read; a window joining a PAUSED match then shows the
+      // live units instead of an empty field until the clock resumes.
+      this.source.on('restored', () => {
+        this._pendingRenderSync = true
+        this._captureRestoredProjectiles()
+      })
     }
+  }
+
+  // _captureRestoredProjectiles records the ids of the model-less projectiles
+  // present at restore time so _applyRenderState can re-emit a tracer vfx for
+  // each once its firing unit hydrates. Model projectiles (3DO mesh) draw
+  // straight from scene.projectiles() and need no reconstruction, so only the
+  // model-less ids (empty kind) are captured here.
+  _captureRestoredProjectiles() {
+    if (!this._join || typeof this.source.renderState !== 'function') return
+    let snap
+    try { snap = this.source.renderState() } catch { snap = null }
+    const projos = snap && snap.projos
+    if (!projos) return
+    for (const p of projos) {
+      if (!p.kind) this._pendingRestoredProjoIds.add(p.id)
+    }
+  }
+
+  // _applyRenderState folds the transport's current-tick render snapshot into the
+  // adapter unit set + projectiles without advancing the sim. Used after a
+  // restore to surface the authority's world while paused; it deliberately does
+  // NOT dispatch events (a restore is not a tick that fired anything).
+  _applyRenderState() {
+    if (!this._join || !this.source || typeof this.source.renderState !== 'function') return
+    let snap
+    try { snap = this.source.renderState() } catch { snap = null }
+    if (!snap) return
+    this._runtime.simTimeMs = (snap.tick || 0) * TICK_MS
+    this._syncUnits(snap)
+    this._syncProjectiles(snap)
+  }
+
+  // _reconstructRestoredProjectiles re-emits a tracer vfx for each model-less
+  // projectile captured at restore time, now that the firing unit's particle
+  // pool and weapon metadata have hydrated. The authoritative position,
+  // velocity and remaining life come straight from the snapshot, so the cosmetic
+  // particle picks up the shot mid-flight where the host left it. Each id is
+  // drained once spawned; ids whose projectile has already detonated (gone from
+  // the snapshot) are dropped so the pending set can't leak.
+  _reconstructRestoredProjectiles(snap) {
+    if (this._pendingRestoredProjoIds.size === 0) return
+    const projos = snap.projos || []
+    const present = new Set()
+    for (const p of projos) {
+      present.add(p.id)
+      if (!this._pendingRestoredProjoIds.has(p.id)) continue
+      const owner = this._units.get(p.ownerId)
+      // Owner not adopted/hydrated yet — leave the id pending for a later pass
+      // (each unit hydrate re-runs _applyRenderState via _pendingRenderSync).
+      if (!owner || !owner.binding || !owner.meta) continue
+      const weapon = this._weaponForProjectile(owner, p)
+      if (weapon) {
+        const remainingMs = Math.max(100, ((p.life || 0) - (p.age || 0)) * 1000)
+        spawnProjectileInFlight({
+          binding: owner.binding,
+          weapon,
+          pos: [p.x, p.y, p.z],
+          vel: [p.vx, p.vy, p.vz],
+          lifeMs: remainingMs,
+          palette: this.palette,
+          gravity: this.gravity || 80,
+        })
+      }
+      this._pendingRestoredProjoIds.delete(p.id)
+    }
+    for (const id of this._pendingRestoredProjoIds) {
+      if (!present.has(id)) this._pendingRestoredProjoIds.delete(id)
+    }
+  }
+
+  // _weaponForProjectile resolves the firing unit's weapon entry for a snapshot
+  // projectile, matching on the weapon name the engine stamped onto the shot.
+  _weaponForProjectile(owner, p) {
+    const weapons = owner.meta && owner.meta.weapons
+    if (!weapons) return null
+    const name = p.weapon || ''
+    for (const w of weapons) {
+      if (w && w.name === name) return w
+    }
+    return null
   }
 
   // _invalidateCob drops the memoized COB snapshot so the next panel read pulls
@@ -298,6 +402,22 @@ export class WasmSandboxScene {
   get engine() { return this }
 
   get runtime() { return this._runtime }
+
+  // netStats exposes the transport's network/sync telemetry for the Network
+  // developer panel. Only the join transport tracks it; an offline wasm sandbox
+  // has no server, so this returns null and the panel renders an offline state.
+  netStats() {
+    if (!this._join || !this.source || typeof this.source.netStats !== 'function') return null
+    return this.source.netStats()
+  }
+
+  // forceSync triggers the join transport's Force-Sync re-pull (discard local
+  // work, re-seed from authority). A no-op offline.
+  forceSync() {
+    if (this._join && this.source && typeof this.source.forceSync === 'function') {
+      this.source.forceSync()
+    }
+  }
 
   // ── COB inspection ────────────────────────────────────────────────
   //
@@ -527,6 +647,11 @@ export class WasmSandboxScene {
       u._cobPieceNames = await this._fetchPieceNames(u.name)
       if (this._modelResolver) u.model = await this._modelResolver(u.name)
     } catch { /* asset hydrate failed — unit stays a static marker */ }
+    // The model resolves after the snapshot's poses were first applied (when
+    // _applyPieces still bailed on a missing model). Request another render-state
+    // pass so the latched poses land now that the model exists — without this a
+    // paused join shows units frozen at their origin until a Force Sync.
+    this._pendingRenderSync = true
   }
 
   removeUnit(id) {
@@ -705,6 +830,26 @@ export class WasmSandboxScene {
         if (s === null) break
         snap = s
         steps++
+      }
+      // Fold in a fresh restore that produced no step this frame (a paused join,
+      // or a Force-Sync re-pull at the current tick): without this the restored
+      // units would never reach the adapters until the clock advanced. When the
+      // catch-up loop did step, it already synced the freshest snapshot, so the
+      // pending flag is simply cleared.
+      if (this._pendingRenderSync) {
+        this._pendingRenderSync = false
+        if (steps === 0) this._applyRenderState()
+      }
+      // Re-emit tracer vfx for any model-less shots a restore carried in but that
+      // had no local fire event. Runs whether the catch-up loop stepped (paused
+      // join uses the non-advancing render read; a resumed / non-paused Force
+      // Sync uses the freshest stepped snapshot) and drains as owners hydrate.
+      if (this._pendingRestoredProjoIds.size > 0) {
+        let s = snap
+        if (!s && typeof this.source.renderState === 'function') {
+          try { s = this.source.renderState() } catch { s = null }
+        }
+        if (s) this._reconstructRestoredProjectiles(s)
       }
     } else {
       this._acc += dtMs * rate

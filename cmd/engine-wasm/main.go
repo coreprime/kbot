@@ -56,6 +56,7 @@ func main() {
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
+		"renderState":  js.FuncOf(renderState),
 		"hash":         js.FuncOf(hashOf),
 		"tick":         js.FuncOf(tickOf),
 		"cobState":     js.FuncOf(cobState),
@@ -250,8 +251,16 @@ func restore(_ js.Value, args []js.Value) any {
 	// provider, which registers a fresh script unit on the runtime. Resetting
 	// first keeps the runtime's unit list in step with the restored world.
 	inst.rt.Reset()
-	tick, units, projectiles := restoreFromJS(args[1])
+	tick, units, projectiles, runtimeRng := restoreFromJS(args[1])
 	inst.sess.Restore(tick, units, projectiles)
+	// Adopt the authority's script RNG draw position so OP_RAND on this client
+	// draws the same values in the same order, keeping script-driven animation in
+	// lockstep. Reset preserves the rng, so this overwrites the seed-time state
+	// with the authority's live position. A periodic snapshot carries no rng (0),
+	// in which case we leave the runtime's own stream untouched.
+	if runtimeRng != 0 {
+		inst.rt.RestoreRng(runtimeRng)
+	}
 	return nil
 }
 
@@ -262,6 +271,19 @@ func step(_ js.Value, args []js.Value) any {
 		return js.Null()
 	}
 	return snapshotToJS(inst.sess.Step())
+}
+
+// renderState(handle) returns the render snapshot of the world at its current
+// tick WITHOUT advancing it. The networked client uses this after a restore to
+// paint the authority's unit set immediately — even while the shared clock is
+// paused, where step() would never run — so a window joining a paused match
+// shows the live units rather than an empty field until resume.
+func renderState(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToJS(inst.world.Snapshot())
 }
 
 // hash(handle) returns the world hash as a decimal string (uint64 exceeds the

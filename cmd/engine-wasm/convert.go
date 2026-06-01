@@ -109,7 +109,7 @@ func orderFromJS(o js.Value) order.Order {
 // broadcasts on join) into the tick, unit set and in-flight projectiles
 // sim.World.Restore expects. Positions and health arrive as raw fixed-point
 // integers, so they pass through unconverted.
-func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjectile) {
+func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjectile, uint32) {
 	tick := uint64(getInt64(o, "tick"))
 	arr := o.Get("units")
 	var units []sim.RestoredUnit
@@ -152,10 +152,104 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 					}
 				}
 			}
+			ru.Cob = cobFromJS(u.Get("cob"))
 			units = append(units, ru)
 		}
 	}
-	return tick, units, projectilesFromJS(o.Get("projectiles"))
+	return tick, units, projectilesFromJS(o.Get("projectiles")), uint32(getInt64(o, "runtimeRng"))
+}
+
+// cobFromJS parses a unit's live COB VM state from a join snapshot into the
+// neutral frame.CobSnapshot the sim hands the script binding's ImportCob. A
+// missing or null "cob" (a periodic backstop snapshot, or a script-less unit)
+// yields nil, so the joiner falls back to replaying Create/StartMoving.
+func cobFromJS(o js.Value) *frame.CobSnapshot {
+	if o.Type() != js.TypeObject || o.IsNull() {
+		return nil
+	}
+	snap := &frame.CobSnapshot{
+		Static: int32SliceFromJS(o.Get("static")),
+		Hidden: intSliceFromJS(o.Get("hidden")),
+		NextID: int32(getInt(o, "nextId")),
+	}
+	if a := o.Get("anims"); a.Type() == js.TypeObject && !a.IsNull() {
+		n := a.Length()
+		snap.Anims = make([]frame.CobAnimSnap, 0, n)
+		for i := 0; i < n; i++ {
+			e := a.Index(i)
+			snap.Anims = append(snap.Anims, frame.CobAnimSnap{
+				Key:    getInt(e, "key"),
+				Kind:   getInt(e, "kind"),
+				Value:  getInt64(e, "value"),
+				Target: getInt64(e, "target"),
+				Speed:  getInt64(e, "speed"),
+				Decel:  getInt64(e, "decel"),
+				Done:   getBool(e, "done"),
+			})
+		}
+	}
+	if th := o.Get("threads"); th.Type() == js.TypeObject && !th.IsNull() {
+		n := th.Length()
+		snap.Threads = make([]frame.CobThreadSnap, 0, n)
+		for i := 0; i < n; i++ {
+			t := th.Index(i)
+			ts := frame.CobThreadSnap{
+				ID:          int32(getInt(t, "id")),
+				ScriptIndex: getInt(t, "scriptIndex"),
+				PC:          getInt(t, "pc"),
+				Stack:       int32SliceFromJS(t.Get("stack")),
+				Locals:      int32SliceFromJS(t.Get("locals")),
+				SignalMask:  int32(getInt(t, "signalMask")),
+				SleepMs:     getInt64(t, "sleepMs"),
+				Waiting:     getBool(t, "waiting"),
+				WaitRot:     getBool(t, "waitRot"),
+				WaitKey:     getInt(t, "waitKey"),
+				ReturnValue: int32(getInt(t, "returnValue")),
+			}
+			if cs := t.Get("callStack"); cs.Type() == js.TypeObject && !cs.IsNull() {
+				cn := cs.Length()
+				ts.CallStack = make([]frame.CobCallFrame, 0, cn)
+				for j := 0; j < cn; j++ {
+					cf := cs.Index(j)
+					ts.CallStack = append(ts.CallStack, frame.CobCallFrame{
+						ScriptIndex: getInt(cf, "scriptIndex"),
+						PC:          getInt(cf, "pc"),
+						Locals:      int32SliceFromJS(cf.Get("locals")),
+					})
+				}
+			}
+			snap.Threads = append(snap.Threads, ts)
+		}
+	}
+	return snap
+}
+
+// int32SliceFromJS copies a JS number array into an []int32, returning nil for a
+// missing or null array (the omitempty case).
+func int32SliceFromJS(arr js.Value) []int32 {
+	if arr.Type() != js.TypeObject || arr.IsNull() {
+		return nil
+	}
+	n := arr.Length()
+	out := make([]int32, n)
+	for i := 0; i < n; i++ {
+		out[i] = int32(arr.Index(i).Int())
+	}
+	return out
+}
+
+// intSliceFromJS copies a JS number array into an []int, returning nil for a
+// missing or null array.
+func intSliceFromJS(arr js.Value) []int {
+	if arr.Type() != js.TypeObject || arr.IsNull() {
+		return nil
+	}
+	n := arr.Length()
+	out := make([]int, n)
+	for i := 0; i < n; i++ {
+		out[i] = arr.Index(i).Int()
+	}
+	return out
 }
 
 // projectilesFromJS rebuilds the in-flight model weapons carried in a join

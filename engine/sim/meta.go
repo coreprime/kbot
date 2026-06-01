@@ -41,11 +41,13 @@ type WeaponMeta struct {
 	// target bearing before the weapon may open fire.
 	Tolerance int32
 
-	// Ballistic / projectile fields. A weapon that names a 3DO model (and is
-	// not a beam) flies a simulated mesh through the projectile subsystem and
-	// applies its damage on detonation; everything else hits instantly at fire
-	// time. All rates derive from the weapon TDF.
-	Model           string      // 3DO projectile model; empty = no model projectile
+	// Ballistic / projectile fields. Every weapon except an instant-hit beam
+	// flies a tracked projectile through the subsystem and applies its damage on
+	// detonation — a missile/rocket/bomb carries a 3DO mesh, while a cannon shell
+	// or EMG bolt flies the same flight path with no model. Tracking the
+	// model-less shots is what lets a late joiner restore in-flight cannon/EMG
+	// fire, not just missiles. All rates derive from the weapon TDF.
+	Model           string      // 3DO projectile model; empty = model-less shot
 	BeamWeapon      bool        // instant-hit beam (lasers): never flies
 	VelocityWU      fixed.Fixed // top speed, world units/sec
 	StartVelocityWU fixed.Fixed // launch speed; 0 = top speed (no ramp)
@@ -60,10 +62,13 @@ type WeaponMeta struct {
 	Ballistic       bool        // unpowered arc under gravity
 }
 
-// hasModelProjectile reports whether the weapon flies a visible mesh the
-// projectile simulation owns. Beam weapons hit instantly and never travel.
-func (w WeaponMeta) hasModelProjectile() bool {
-	return w.Model != "" && !w.BeamWeapon
+// flies reports whether the weapon launches a tracked projectile the sim flies
+// to its target. Only an instant-hit beam (laser) skips the flight path; every
+// other weapon — model missile, model-less cannon shell, EMG bolt — travels
+// through the projectile subsystem and resolves damage on detonation. Tracking
+// the model-less shots authoritatively is what lets them survive a join/restore.
+func (w WeaponMeta) flies() bool {
+	return !w.BeamWeapon
 }
 
 // movement-rate conversions. TA simulates locomotion at 30 Hz, so an FBI

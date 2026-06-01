@@ -41,6 +41,7 @@ import { ScriptCommandsPanel } from '/ui/panels/script-commands-panel.js'
 import { ControlsPanel } from '/ui/panels/controls-panel.js'
 import { UnitPortsPanel } from '/ui/panels/unit-ports-panel.js'
 import { RuntimePanel } from '/ui/panels/runtime-panel.js'
+import { NetworkPanel } from '/ui/panels/network-panel.js'
 import { confirmDialog } from '/ui/dialogs/confirm-dialog.js'
 import {
   SettingsDialog, openSettingsDialog, closeSettingsDialog,
@@ -208,6 +209,7 @@ export function mountInspectorPanels() {
   _mountInto('mv-inspector-ports',      () => html`<${ControlsPanel} />`)
   _mountInto('mv-inspector-unit-ports', () => html`<${UnitPortsPanel} />`)
   _mountInto('mv-inspector-scripts',    () => html`<${RuntimePanel} />`)
+  _mountInto('mv-inspector-network',    () => html`<${NetworkPanel} />`)
 }
 
 // mountDialogs — bring up all React-managed modal dialogs.  Each one

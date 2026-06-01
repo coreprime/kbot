@@ -2777,6 +2777,13 @@ canvas {
    gives the user one-click access to every COB entry point without
    obscuring the model state they're trying to drive. */
 #mv-inspector-actions    { top: 12px;  left: 12px; right: auto; max-width: 340px; min-width: 280px; }
+/* Network/Sync overlay — bottom-left, opposite the right-edge inspector
+   column so the two stat blocks don't stack. */
+#mv-inspector-network    { bottom: 12px; left: 12px; right: auto; top: auto; min-width: 240px; }
+/* Warning state for the Last Sync stat when the client has fallen severely
+   out of step with the authority. */
+.mv-runtime-stat.mv-runtime-stat-warn .mv-runtime-stat-label,
+.mv-runtime-stat.mv-runtime-stat-warn .mv-runtime-stat-value { color: #ff6b6b; }
 .mv-inspector.hidden { display: none; }
 .mv-inspector.collapsed { width: auto; }
 .mv-inspector.collapsed .mv-inspector-body,

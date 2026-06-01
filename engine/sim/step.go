@@ -545,9 +545,12 @@ func (w *World) stepWeapons(u *Unit) {
 		// per-barrel cycle so multi-barrel weapons alternate muzzles.
 		fromPiece := w.queryFirePiece(u, slot)
 		w.emit(frame.Event{Kind: frame.EvFire, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Target: aimPoint, FromPiece: fromPiece, Weapon: wm.Name})
-		if wm.hasModelProjectile() {
-			// Model weapons fly a simulated mesh and resolve damage on
-			// detonation; the flight is stepped in stepProjectiles.
+		if wm.flies() {
+			// Every non-beam weapon flies a tracked projectile and resolves damage
+			// on detonation; the flight is stepped in stepProjectiles. Model
+			// missiles draw a 3DO mesh, model-less cannon/EMG shots fly the same
+			// path invisibly server-side (the client paints their tracer vfx). A
+			// shot that exists as authoritative state survives a join/restore.
 			target3 := fixed.Vec3{X: targetPos.X, Z: targetPos.Z}
 			if s.targetUnit != 0 {
 				if t := w.units[s.targetUnit]; t != nil {
@@ -561,7 +564,7 @@ func (w *World) stepWeapons(u *Unit) {
 			w.projectiles = append(w.projectiles, p)
 			w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Weapon: wm.Name})
 		} else if s.targetUnit != 0 {
-			// Hitscan / beam: resolve damage instantly at fire time.
+			// Instant-hit beam (laser): resolve damage now; nothing flies.
 			dmg := wm.Damage
 			if dmg <= 0 {
 				dmg = defaultHitDamage

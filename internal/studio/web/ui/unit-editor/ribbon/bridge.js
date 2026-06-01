@@ -411,6 +411,15 @@ export function wireUnitEditorHostBridge(reactUi) {
       if (typeof unit.clearExecutedOffsets === 'function') unit.clearExecutedOffsets()
     },
     openThreadCodeModal: (cob, thread) => openMvThreadCodeModal(cob, thread),
+    // Force Sync (Network panel) — re-pull the authority's full snapshot,
+    // discarding local work. Only the joined sandbox scene can honour it; the
+    // unit editor and an offline sandbox simply have no authority to re-pull.
+    forceSync: () => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      sv?.scene?.forceSync?.()
+      const ui = getReactUi()
+      if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
+    },
   })
   // Bridge the Include-Private toggle into the prefs system so the
   // React Script Commands panel signal + persisted

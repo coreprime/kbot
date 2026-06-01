@@ -146,3 +146,64 @@ func TestProjectileSnapshotExposesFlight(t *testing.T) {
 		t.Fatal("snapshot never exposed an in-flight projectile")
 	}
 }
+
+// cannonMeta is a unit whose single weapon is a model-less ballistic shell — no
+// 3DO mesh, no beam flag. Before model-less shots were tracked these resolved
+// instantly at fire time; now they fly the projectile subsystem like a missile.
+func cannonMeta(name string) *UnitMeta {
+	m := &UnitMeta{
+		Name:        name,
+		CanMove:     true,
+		MaxVelocity: fixed.FromFloat(1.2),
+		TurnRate:    fixed.FromInt(600),
+		Accel:       fixed.FromFloat(0.1),
+		BrakeRate:   fixed.FromFloat(0.2),
+	}
+	m.Weapons[0] = WeaponMeta{
+		Name:           "cannon",
+		Range:          fixed.FromInt(400),
+		ReloadMs:       900,
+		Burst:          1,
+		Damage:         fixed.FromInt(50),
+		Present:        true,
+		VelocityWU:     fixed.FromInt(260),
+		AreaOfEffectWU: fixed.FromInt(24),
+		Ballistic:      true,
+	}
+	return m
+}
+
+// TestModelLessShotFliesAndRestores proves a cannon shell with no 3DO model now
+// flies as a tracked projectile (so true ballistics + a late joiner can restore
+// it) rather than hitting instantly, and that the in-flight shell survives an
+// export/restore round-trip into a fresh world.
+func TestModelLessShotFliesAndRestores(t *testing.T) {
+	w := New(Config{Seed: 21})
+	atk := w.AddUnit("atk", cannonMeta("atk"), nil, fixed.Vec2{}, 0, 0)
+	def := w.AddUnit("def", cannonMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(260)}, 0, 1)
+	w.ApplyOrder(order.Attack([]uint32{atk}, def))
+
+	var snapTick uint64
+	var projos []RestoredProjectile
+	for i := 0; i < 300; i++ {
+		w.Step(nil)
+		if len(w.projectiles) > 0 {
+			snapTick = w.Tick()
+			projos = w.ExportProjectiles()
+			break
+		}
+	}
+	if len(projos) == 0 {
+		t.Fatal("model-less cannon never spawned a tracked projectile")
+	}
+	if projos[0].Model != "" {
+		t.Fatalf("expected a model-less projectile, got model %q", projos[0].Model)
+	}
+
+	// The shell must restore into a fresh world so a late joiner sees it mid-air.
+	client := New(Config{Seed: 21})
+	client.Restore(snapTick, nil, projos)
+	if len(client.projectiles) != len(projos) {
+		t.Fatalf("restored projectile count = %d, want %d", len(client.projectiles), len(projos))
+	}
+}

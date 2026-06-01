@@ -289,6 +289,86 @@ func TestRunQueryFailsOnYield(t *testing.T) {
 	}
 }
 
+// TestExportImportCobResumesExactPoses proves the full COB VM transfer used on a
+// late join: a unit caught mid-turn, mid-spin and parked on a SLEEP exports its
+// live VM state, a fresh unit adopts it (instead of re-running Create), and the
+// two stay bit-identical in piece poses as both step forward — including across
+// the sleeping thread's wake, where it draws OP_RAND. Restoring the runtime RNG
+// is what keeps that post-wake draw identical; without it the joiner's pieces
+// would diverge the moment the parked thread resumes.
+func TestExportImportCobResumesExactPoses(t *testing.T) {
+	build := func() *Program {
+		return prog(twoPieces(), 1, ScriptSource{
+			Name: "Create",
+			Insts: []Instruction{
+				i1(scripting.OP_PUSH_IMMEDIATE, 40000), // turn speed
+				i1(scripting.OP_PUSH_IMMEDIATE, 3000),  // turn target
+				i2(scripting.OP_TURN, 1, 1),            // turret mid-aim
+				i1(scripting.OP_PUSH_IMMEDIATE, 100),   // rand lo
+				i1(scripting.OP_PUSH_IMMEDIATE, 300),   // rand hi
+				i0(scripting.OP_RAND),                  // advance the rng before snapshot
+				i2(scripting.OP_SPIN, 0, 0),            // continuous spin at rand speed
+				i1(scripting.OP_PUSH_IMMEDIATE, 7),
+				i1(scripting.OP_POP_STATIC, 0), // a static to carry
+				i1(scripting.OP_PUSH_IMMEDIATE, 100),
+				i0(scripting.OP_SLEEP), // park; resumes after the snapshot
+				i1(scripting.OP_PUSH_IMMEDIATE, 50),
+				i1(scripting.OP_PUSH_IMMEDIATE, 500),
+				i0(scripting.OP_RAND),       // post-wake draw — needs the restored rng
+				i2(scripting.OP_SPIN, 1, 0), // drive a second piece from it
+			},
+		})
+	}
+
+	const seed = 0xBEEF
+	prg := build()
+	authRT := NewRuntime(seed)
+	au := authRT.NewUnit(prg, nil)
+	au.Start("Create")
+
+	// Advance until the turret is mid-turn (not yet at target) and the thread is
+	// parked on its sleep — the awkward mid-everything state a join can land on.
+	for tick := 1; tick <= 3; tick++ {
+		authRT.Tick(int64(tick) * stepMs)
+	}
+	if a := au.rotAnim(1, 1); a == nil || a.done {
+		t.Fatalf("setup: turret turn should still be in progress at snapshot")
+	}
+
+	snap := au.ExportCob()
+	rng := authRT.SnapshotRng()
+
+	// Rebuild a fresh unit from the same program, as a joiner would, and adopt the
+	// authority's VM state + rng instead of replaying Create.
+	cliRT := NewRuntime(seed)
+	cu := cliRT.NewUnit(prg, nil)
+	cu.ImportCob(snap)
+	cliRT.RestoreRng(rng)
+
+	assertSamePieces := func(label string) {
+		t.Helper()
+		pa, pb := au.Pieces(), cu.Pieces()
+		if len(pa) != len(pb) {
+			t.Fatalf("%s: piece count %d != %d", label, len(pa), len(pb))
+		}
+		for i := range pa {
+			if pa[i] != pb[i] {
+				t.Fatalf("%s: piece %d %+v != %+v", label, i, pa[i], pb[i])
+			}
+		}
+	}
+	assertSamePieces("immediately after import")
+
+	// Step both forward past the sleep's wake (100ms -> 4 ticks) and well beyond,
+	// so the restored rng draw and continued animation are exercised in lockstep.
+	for i := 0; i < 20; i++ {
+		ms := int64(3+i+1) * stepMs
+		authRT.Tick(ms)
+		cliRT.Tick(ms)
+		assertSamePieces("after step")
+	}
+}
+
 func TestDeterministicRandomDrivesIdenticalPieces(t *testing.T) {
 	// A script whose spin speed comes from OP_RAND: two runtimes seeded
 	// identically must evolve bit-identical piece transforms.

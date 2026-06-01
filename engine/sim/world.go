@@ -334,6 +334,27 @@ type RestoredUnit struct {
 	HasAttack    bool
 	AttackTarget uint32
 	Weapons      [3]RestoredWeapon
+	// Cob carries the unit's full live script VM state (piece animators, threads,
+	// statics, visibility) when the binding can export it. With it the joiner
+	// resumes the exact piece poses the authority holds — a turret's aim angle, a
+	// half-played recoil — instead of re-deriving them by replaying Create and
+	// StartMoving, which only ever reproduces a rest pose. Nil when the binding
+	// has no script or cannot export, in which case Restore falls back to replay.
+	Cob *frame.CobSnapshot
+}
+
+// cobExporter is the optional surface a binding exposes to hand the world its
+// full live VM state for a resync snapshot. The script VM's *Unit satisfies it;
+// test fakes without it simply omit COB state and the joiner falls back to
+// replaying Create/StartMoving.
+type cobExporter interface {
+	ExportCob() frame.CobSnapshot
+}
+
+// cobImporter is the inverse of cobExporter: a binding that can adopt a
+// previously exported VM state in place of running its Create script.
+type cobImporter interface {
+	ImportCob(frame.CobSnapshot)
 }
 
 // RestoredWeapon is one weapon slot's standing aim/fire order, carried across a
@@ -421,6 +442,10 @@ func (w *World) ExportUnits() []RestoredUnit {
 				Source:     s.source,
 				LastFireMs: s.lastFireMs,
 			}
+		}
+		if ce, ok := u.binding.(cobExporter); ok {
+			cob := ce.ExportCob()
+			ru.Cob = &cob
 		}
 		out = append(out, ru)
 	}
@@ -529,20 +554,30 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 		u.loco.Heading = ru.Heading
 		u.loco.Speed = ru.Speed
 		u.PosY = ru.Pos.Y
-		// Run the Create script just as AddUnit does, so a unit restored on a
-		// late-joining client lays out its initial pose and starts its idle
-		// animation threads instead of standing inert (its body pieces never
-		// positioned, radar/idle loops never spun up). Piece animation is not
-		// hashed, so re-running Create on the client cannot perturb lockstep.
-		if binding != nil && binding.HasScript("Create") {
-			binding.Start("Create")
-		}
-		// A unit caught mid-move was animating its walk/drive cycle on the
-		// authority; the move-start transition that kicks StartMoving already fired
-		// before the snapshot, so re-arm it here or the restored unit glides to its
-		// destination frozen in its Create-time rest pose (legs/tracks not moving).
-		if u.hasMove && binding != nil && binding.HasScript("StartMoving") {
-			binding.Start("StartMoving")
+		if ci, ok := binding.(cobImporter); ok && ru.Cob != nil {
+			// Adopt the authority's exact live VM state — every piece animator,
+			// thread and static — so the joiner's poses match to the angle instead
+			// of being approximated by a fresh Create/StartMoving replay. This is the
+			// pixel-perfect path; the replay below is the fallback for bindings or
+			// snapshots that carry no COB state.
+			ci.ImportCob(*ru.Cob)
+		} else {
+			// Run the Create script just as AddUnit does, so a unit restored on a
+			// late-joining client lays out its initial pose and starts its idle
+			// animation threads instead of standing inert (its body pieces never
+			// positioned, radar/idle loops never spun up). Piece animation is not
+			// hashed, so re-running Create on the client cannot perturb lockstep.
+			if binding != nil && binding.HasScript("Create") {
+				binding.Start("Create")
+			}
+			// A unit caught mid-move was animating its walk/drive cycle on the
+			// authority; the move-start transition that kicks StartMoving already
+			// fired before the snapshot, so re-arm it here or the restored unit glides
+			// to its destination frozen in its Create-time rest pose (legs/tracks not
+			// moving).
+			if u.hasMove && binding != nil && binding.HasScript("StartMoving") {
+				binding.Start("StartMoving")
+			}
 		}
 		w.units[ru.ID] = u
 		w.order = append(w.order, ru.ID)

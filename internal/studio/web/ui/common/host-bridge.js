@@ -42,6 +42,9 @@ const _noopBridge = {
   // Living behind the bridge means the React panel doesn't import
   // the modal's many-hundred-line code-view module at all.
   openThreadCodeModal:   (_cob, _thread) => {},
+  // Network panel "Force Sync" — re-pull the full authoritative snapshot,
+  // discarding local work. Routes to the active join scene's forceSync().
+  forceSync:             () => {},
 }
 
 // Single live bridge object — overwritten by configureHostBridge.

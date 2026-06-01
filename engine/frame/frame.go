@@ -127,6 +127,61 @@ type CobUnitState struct {
 	Threads []CobThread
 }
 
+// CobAnimSnap is one active (piece,axis) animator carried across a resync. Key
+// is piece*3+axis. Only non-idle animators are serialized: an idle animator
+// contributes nothing to a piece's pose and is the rest state a freshly built
+// unit already holds, so omitting it is lossless. Value/Target/Speed/Decel are
+// the raw fixed.Fixed integers (the same scale COB operands use).
+type CobAnimSnap struct {
+	Key    int   `json:"key"`
+	Kind   int   `json:"kind"`
+	Value  int64 `json:"value"`
+	Target int64 `json:"target,omitempty"`
+	Speed  int64 `json:"speed,omitempty"`
+	Decel  int64 `json:"decel,omitempty"`
+	Done   bool  `json:"done,omitempty"`
+}
+
+// CobCallFrame is one saved CALL_SCRIPT context on a thread's call stack.
+type CobCallFrame struct {
+	ScriptIndex int     `json:"scriptIndex"`
+	PC          int     `json:"pc"`
+	Locals      []int32 `json:"locals,omitempty"`
+}
+
+// CobThreadSnap is one live script thread carried across a resync. ScriptIndex
+// is an index into the unit's own program; it is stable because both authority
+// and joiner bind the same .cob for a given unit type. A thread blocked on an
+// animation carries WaitOn (Waiting=true) naming the animator it polls.
+type CobThreadSnap struct {
+	ID          int32          `json:"id"`
+	ScriptIndex int            `json:"scriptIndex"`
+	PC          int            `json:"pc"`
+	Stack       []int32        `json:"stack,omitempty"`
+	Locals      []int32        `json:"locals,omitempty"`
+	SignalMask  int32          `json:"signalMask,omitempty"`
+	SleepMs     int64          `json:"sleepMs,omitempty"`
+	Waiting     bool           `json:"waiting,omitempty"`
+	WaitRot     bool           `json:"waitRot,omitempty"`
+	WaitKey     int            `json:"waitKey,omitempty"`
+	CallStack   []CobCallFrame `json:"callStack,omitempty"`
+	ReturnValue int32          `json:"returnValue,omitempty"`
+}
+
+// CobSnapshot is the full live COB VM state for one unit — its static
+// variables, active piece animators, piece visibility and running threads —
+// transferred across a late join so the joiner's piece poses (turret aim,
+// rotation, mid-animation) match the authority exactly instead of being
+// re-derived by replaying Create/StartMoving. NextID preserves the monotonic
+// thread-id counter so the inspector keeps stable keys.
+type CobSnapshot struct {
+	Static  []int32         `json:"static,omitempty"`
+	Anims   []CobAnimSnap   `json:"anims,omitempty"`
+	Hidden  []int           `json:"hidden,omitempty"` // piece indices that are HIDE'd
+	Threads []CobThreadSnap `json:"threads,omitempty"`
+	NextID  int32           `json:"nextId,omitempty"`
+}
+
 // Snapshot is the complete drawable state for one simulation tick plus the
 // events that fired during it.
 type Snapshot struct {

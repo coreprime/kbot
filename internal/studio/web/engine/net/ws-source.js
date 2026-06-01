@@ -21,6 +21,12 @@ import { WasmFrameSource } from './wasm-source.js'
 
 const FRAC = 65536 // Q16.16 — world float -> fixed-point for the wire.
 
+// Beyond this long without a verified-matching authoritative hash, the client
+// is treated as severely out of sync and the panel raises its warning. The
+// authority emits a hash every 8 ticks (~200ms at 40Hz), so a multi-second gap
+// means hash verification has stopped landing — a real divergence or stall.
+const SEVERE_DESYNC_MS = 2000
+
 function toFixed(f) { return Math.round(f * FRAC) }
 
 export class WsFrameSource extends FrameSource {
@@ -63,6 +69,39 @@ export class WsFrameSource extends FrameSource {
     this._metaProvider = null
     this._metaInflight = new Set()
     this._spawnBarrier = Infinity
+    // Network/sync telemetry for the developer panel. Byte counts are the
+    // serialized JSON length (close enough to wire size for a dev gauge).
+    this._bytesSent = 0
+    this._bytesRecv = 0
+    this._msgsSent = 0
+    this._msgsRecv = 0
+    // Latency probe state. The ping loop sends one ping, waits for its pong,
+    // then waits a further second before the next — a self-paced cadence, not a
+    // fixed-rate interval, so a stalled link never piles up unanswered pings.
+    this._pingSeq = 0
+    this._pingInFlight = 0   // seq of the outstanding ping, 0 when idle
+    this._pingSentAt = 0     // _now() when the outstanding ping was sent
+    this._pingTimer = null   // doubles as the in-flight timeout and inter-ping delay
+    this._latencyMs = 0      // last measured round-trip, ms
+    // Server-clock estimate, anchored at each pong and extrapolated on the wall
+    // clock between pongs so the panel can show a live server time.
+    this._srvClockMs = 0
+    this._srvClockWall = 0
+    // Sync tracking. _lastSyncTick marks the most recent tick whose local hash
+    // matched the authority; _lastDesyncTick marks the most recent mismatch. The
+    // panel reports the gap as a tick delta (current tick − _lastSyncTick), so a
+    // paused game shows a frozen "ticks ago" rather than an ever-growing wall
+    // age. A desync newer than the last good sync (or a stale sync) trips the
+    // warning.
+    this._lastSyncTick = 0
+    this._lastDesyncTick = 0
+    // Latest authoritative hash observed, for side-by-side display with the
+    // local hash (kept even after the per-tick verification entry is consumed).
+    this._lastServerHash = null
+    this._lastServerHashTick = 0
+    // Force-Sync latch: set when the user requests a re-pull so the next
+    // snapshot re-seeds the local world even though it was already seeded.
+    this._forceResync = false
   }
 
   // setMetaProvider installs an async (name) -> meta resolver the source uses to
@@ -118,10 +157,12 @@ export class WsFrameSource extends FrameSource {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this._url)
       this._ws = ws
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', join: { matchId: '' } }))
+      ws.onopen = () => this._wsSend({ type: 'join', join: { matchId: '' } })
       ws.onerror = () => reject(new Error('websocket error'))
       ws.onclose = () => this.emit('disconnect', null)
       ws.onmessage = (evt) => {
+        this._bytesRecv += (evt.data && evt.data.length) || 0
+        this._msgsRecv += 1
         let msg
         try { msg = JSON.parse(evt.data) } catch { return }
         this._onServerMessage(msg, resolve)
@@ -151,6 +192,7 @@ export class WsFrameSource extends FrameSource {
       this._restored = !this._needsRestore
       this._noteServerTick(a.tick || 0)
       this.emit('join', a)
+      this._startPingLoop()
       const queued = this._backlog
       this._backlog = []
       for (const m of queued) this._dispatch(m)
@@ -179,8 +221,24 @@ export class WsFrameSource extends FrameSource {
       }
       case 'hash':
         this._serverHashes.set(msg.hash.tick, String(msg.hash.hash))
+        this._lastServerHash = String(msg.hash.hash)
+        this._lastServerHashTick = msg.hash.tick
         this._noteServerTick(msg.hash.tick)
         break
+      case 'pong': {
+        // Match the answer to the outstanding probe; ignore a stale/duplicate
+        // pong whose sequence we already retired on timeout.
+        const p = msg.pong || {}
+        if (p.seq === this._pingInFlight) {
+          this._latencyMs = this._now() - this._pingSentAt
+          // Estimate the server clock at receive time: its stamped wall time
+          // plus the half-RTT the pong spent travelling back to us.
+          this._srvClockMs = (p.serverTime || 0) + this._latencyMs / 2
+          this._srvClockWall = this._now()
+          this._completePing(p.seq)
+        }
+        break
+      }
       case 'control': {
         // Authority's shared-clock state. Adopt paused / rate, re-pace the tick
         // period, and anchor serverTick to the tick the control reports so a
@@ -189,7 +247,19 @@ export class WsFrameSource extends FrameSource {
         const ctl = msg.control || {}
         this._paused = !!ctl.paused
         if (ctl.rate) { this._rate = ctl.rate; this._tickMs = this._baseTickMs / this._rate }
-        if (typeof ctl.tick === 'number') this._noteServerTick(ctl.tick)
+        if (typeof ctl.tick === 'number') {
+          this._noteServerTick(ctl.tick)
+          // Wall-clock extrapolation can race a pause: the client may have
+          // already stepped its local engine one tick past where the authority
+          // actually froze, so two windows disagree by 1. When a pause lands and
+          // we have predicted past the authoritative tick, re-pull the snapshot
+          // to roll the local world back to the exact paused tick — every window
+          // then converges on the same state. (Deterministic replay means a
+          // behind/at-tick client needs no rollback; only an ahead one does.)
+          if (this._paused && this._restored && this.tick > ctl.tick) {
+            this.forceSync()
+          }
+        }
         this.emit('control', { paused: this._paused, rate: this._rate, tick: this._srvTick })
         break
       }
@@ -205,16 +275,22 @@ export class WsFrameSource extends FrameSource {
         // so later periodic snapshots are not blindly replayed — the command
         // stream and hash checks maintain lockstep from here. (Full mid-game
         // resync after a confirmed desync is a follow-up.)
-        if (!this._seeded) {
+        if (!this._seeded || this._forceResync) {
           this._seeded = true
-          if (this._needsRestore) {
-            // Mid-game: hydrate every restored type's meta first (so units come
-            // back with COB bindings), then restore and lift the step gate.
+          const force = this._forceResync
+          this._forceResync = false
+          if (this._needsRestore || force) {
+            // Mid-game (or a Force-Sync re-pull): hydrate every restored type's
+            // meta first (so units come back with COB bindings), then restore
+            // and lift the step gate. A re-pull's snapshot is always full state,
+            // so the local world adopts the authority's exact poses again.
             this._seedFromSnapshot(msg.snapshot)
           } else {
             // Fresh join: the world is empty at tick 0, so restore synchronously
             // before any step and skip the (no-op) meta hydration.
             this._local.restore(msg.snapshot)
+            this.tick = msg.snapshot.tick | 0
+            this.emit('restored', { tick: this.tick })
           }
         }
         this.emit('snapshot', msg.snapshot)
@@ -240,7 +316,12 @@ export class WsFrameSource extends FrameSource {
       }))
     }
     this._local.restore(snapshot)
+    this.tick = snapshot.tick | 0
     this._restored = true
+    // Let the scene paint the restored unit set now (it adopts render adapters
+    // only while stepping, which never happens on a paused join), and align the
+    // public tick to the authority so the catch-up loop does not overshoot by 1.
+    this.emit('restored', { tick: this.tick })
   }
 
   // _ensureSpawnMeta fetches+registers a unit type seen in the command stream
@@ -301,9 +382,19 @@ export class WsFrameSource extends FrameSource {
   }
 
   _send(order) {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify({ type: 'order', order }))
-    }
+    this._wsSend({ type: 'order', order })
+  }
+
+  // _wsSend serializes and sends one client message, tallying it into the
+  // bytes/messages-sent telemetry. Returns false (and sends nothing) when the
+  // socket is not open, so callers degrade gracefully on a dropped link.
+  _wsSend(obj) {
+    if (!this._ws || this._ws.readyState !== WebSocket.OPEN) return false
+    const data = JSON.stringify(obj)
+    this._ws.send(data)
+    this._bytesSent += data.length
+    this._msgsSent += 1
+    return true
   }
 
   // ── Shared-clock control ──────────────────────────────────────────
@@ -322,10 +413,103 @@ export class WsFrameSource extends FrameSource {
   }
 
   _sendControl(control) {
-    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify({ type: 'control', control }))
+    this._wsSend({ type: 'control', control })
+  }
+
+  // ── Latency probe ─────────────────────────────────────────────────
+  //
+  // The loop is self-paced: send one ping, await its pong (or a timeout), then
+  // wait a full second before the next send. _pingTimer holds whichever delay
+  // is live — the in-flight timeout while a ping is outstanding, the one-second
+  // gap between completions otherwise — since the two never overlap.
+
+  _startPingLoop() {
+    if (this._pingTimer || this._pingInFlight) return
+    this._sendPing()
+  }
+
+  _sendPing() {
+    this._pingTimer = null
+    if (!this._wsSend({ type: 'ping', ping: { seq: this._pingSeq + 1 } })) {
+      // Socket closed; stop probing until a fresh connect restarts the loop.
+      this._pingInFlight = 0
+      return
+    }
+    this._pingSeq += 1
+    this._pingInFlight = this._pingSeq
+    this._pingSentAt = this._now()
+    // Give up on a silent link after 5s and resume the cadence so a transient
+    // stall does not wedge the loop permanently.
+    this._pingTimer = setTimeout(() => this._completePing(this._pingInFlight), 5000)
+  }
+
+  // _completePing retires the outstanding probe (answered or timed out) and
+  // schedules the next ping one second later, giving the requested gap between
+  // completions rather than a fixed send rate.
+  _completePing(seq) {
+    if (seq !== this._pingInFlight || this._pingInFlight === 0) return
+    this._pingInFlight = 0
+    if (this._pingTimer) { clearTimeout(this._pingTimer); this._pingTimer = null }
+    this._pingTimer = setTimeout(() => this._sendPing(), 1000)
+  }
+
+  // forceSync asks the authority to re-push a full snapshot, then stalls local
+  // stepping until it lands. The restore discards the client's locally diverged
+  // (and any pending) work and re-seeds from authority, and the warning clears
+  // since we are deliberately re-pulling the canonical state.
+  forceSync() {
+    if (!this._joined) return
+    if (!this._wsSend({ type: 'resync' })) return
+    this._forceResync = true
+    this._restored = false
+    this._lastDesyncTick = 0
+  }
+
+  // netStats returns a plain snapshot of the network/sync telemetry for the
+  // developer panel: the authoritative serverTick alongside the local clientTick
+  // (they differ by the client's prediction lead, and pausing reveals it), live
+  // hashes, estimated server clock, last latency, cumulative byte/message
+  // counts, and how many ticks since the last verified sync (converted to
+  // seconds via the tick rate, so a paused game shows a frozen age rather than
+  // an ever-growing wall-clock gap). A severe flag the panel surfaces as a
+  // warning trips on a confirmed desync or a stale sync.
+  netStats() {
+    const now = this._now()
+    const serverTimeMs = this._srvClockWall
+      ? Math.round(this._srvClockMs + (now - this._srvClockWall))
+      : 0
+    const tickHz = this._baseTickMs > 0 ? 1000 / this._baseTickMs : 40
+    const haveSync = this._lastSyncTick > 0
+    const lastSyncTicksAgo = haveSync ? Math.max(0, (this.tick | 0) - this._lastSyncTick) : null
+    const lastSyncAgoSec = lastSyncTicksAgo === null ? null : lastSyncTicksAgo / tickHz
+    const hadDesync = this._lastDesyncTick > this._lastSyncTick
+    const severeTicks = this._baseTickMs > 0 ? SEVERE_DESYNC_MS / this._baseTickMs : 80
+    const stale = lastSyncTicksAgo !== null && lastSyncTicksAgo > severeTicks
+    return {
+      joined: this._joined,
+      serverTick: this.serverTick,
+      clientTick: this.tick,
+      hash: this.hash(),
+      serverHash: this._lastServerHash,
+      serverHashTick: this._lastServerHashTick,
+      serverTimeMs,
+      latencyMs: this._latencyMs > 0 ? Math.round(this._latencyMs) : null,
+      bytesSent: this._bytesSent,
+      bytesRecv: this._bytesRecv,
+      msgsSent: this._msgsSent,
+      msgsRecv: this._msgsRecv,
+      lastSyncTick: this._lastSyncTick || null,
+      lastSyncTicksAgo,
+      lastSyncAgoSec,
+      severeDesync: hadDesync || stale,
     }
   }
+
+  // renderState returns the local prediction engine's render snapshot at its
+  // current tick without advancing it, for painting the unit set right after a
+  // restore (a paused join never steps, so this is the only way its units reach
+  // the scene). Null before the engine seeds.
+  renderState() { return this._local ? this._local.renderState() : null }
 
   // step advances the local prediction engine one tick and verifies any
   // authoritative hash the server has reported for the tick just produced.
@@ -345,7 +529,12 @@ export class WsFrameSource extends FrameSource {
       this._serverHashes.delete(snap.tick)
       const got = this._local.hash()
       if (got !== expected) {
+        this._lastDesyncTick = snap.tick
         this.emit('desync', { tick: snap.tick, local: got, authority: expected })
+      } else {
+        // Verified in lockstep with the authority at this tick; mark the sync so
+        // the panel can report how many ticks ago the client was last known-good.
+        this._lastSyncTick = snap.tick
       }
     }
     this._fanOutEvents(snap)
@@ -364,6 +553,8 @@ export class WsFrameSource extends FrameSource {
   get joined() { return this._joined }
 
   dispose() {
+    if (this._pingTimer) { clearTimeout(this._pingTimer); this._pingTimer = null }
+    this._pingInFlight = 0
     if (this._ws) {
       this._ws.close()
       this._ws = null
