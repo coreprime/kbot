@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot/internal/assetrender"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,7 @@ var webFS embed.FS
 
 var (
 	vfs        *filesystem.VirtualFileSystem
+	renderer   *assetrender.Renderer
 	serverPort int
 )
 
@@ -79,6 +81,12 @@ func runStudio(_ *cobra.Command, args []string) error {
 	}
 	defer func() { _ = vfs.Close() }()
 
+	// The renderer owns the same VFS so format renders can resolve sidecar
+	// files (a TNT's .ota, a GAF's palette) through it. Caches live under
+	// .cache/<representation> beside the working directory, matching the
+	// layout the explorer established.
+	renderer = assetrender.New(vfs, assetrender.Options{CacheDir: ".cache"})
+
 	stats := vfs.Stats()
 	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
 	fmt.Printf("✓ %d files available\n\n", stats["total_files"])
@@ -97,6 +105,7 @@ func runStudio(_ *cobra.Command, args []string) error {
 	mux := http.NewServeMux()
 	registerAPI(mux)
 	registerHostAPI(mux)
+	registerVFSAPI(mux)
 	registerStatic(mux)
 
 	addr := fmt.Sprintf(":%d", serverPort)
