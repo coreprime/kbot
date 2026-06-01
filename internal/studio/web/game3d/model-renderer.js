@@ -44,7 +44,7 @@ import {
 } from './worlds.js'
 import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
-import { MAX_PULSE_LIGHTS } from '../engine/scene-lights.js'
+import { MAX_PULSE_LIGHTS, setMaxSceneLights } from '../engine/scene-lights.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Scratch buffers for the dynamic pulse-light uniform arrays, sized to
@@ -528,30 +528,43 @@ export class ModelRenderer {
     }
   }
 
+  // setMaxDynamicLights sets the live cap on simultaneous dynamic lights from
+  // the "Dynamic Lights" graphics option (0..MAX_PULSE_LIGHTS).  The cap is
+  // enforced by the shared scene-lights collector — routing it there keeps
+  // every render path (sandbox, multi-unit engine, single-binding viewer) in
+  // agreement — and a renderer-side copy clamps the per-frame upload as a
+  // defensive backstop.
+  setMaxDynamicLights(n) {
+    const v = Math.max(0, Math.min(MAX_PULSE_LIGHTS, Math.floor(n) || 0))
+    this._maxPulseLights = v
+    setMaxSceneLights(v)
+  }
+
   // #uploadPulseLights flattens the active dynamic lights into the scratch
   // uniform arrays and uploads them to the bound program's pulse-light
-  // uniforms.  Slots beyond the active count get range 0 so the shader's
-  // per-light gate skips them, and a null location (program without the
-  // uniform) is a no-op.  Shared by the main, reflection and ground passes.
-  #uploadPulseLights(gl, locPos, locColor, locRange) {
-    if (!locPos && !locColor && !locRange) return
+  // uniforms.  Only the active count is filled + uploaded (uPulseLightCount
+  // tells the shader where to stop), so a low slider value costs the GPU
+  // nothing past that count even though the arrays are sized for the worst
+  // case.  A null location (program without the uniform) is a no-op.  Shared by
+  // the main, reflection and ground passes.
+  #uploadPulseLights(gl, locPos, locColor, locRange, locCount) {
+    if (!locPos && !locColor && !locRange && !locCount) return
     const lights = this._pulseLights || []
-    for (let i = 0; i < MAX_PULSE_LIGHTS; i++) {
-      const l = i < lights.length ? lights[i] : null
+    const cap = Math.min(this._maxPulseLights ?? MAX_PULSE_LIGHTS, MAX_PULSE_LIGHTS)
+    const n = Math.min(lights.length, cap)
+    for (let i = 0; i < n; i++) {
+      const l = lights[i]
       const base = i * 3
-      if (l && l.range > 0) {
-        _PULSE_POS[base] = l.pos[0]; _PULSE_POS[base + 1] = l.pos[1]; _PULSE_POS[base + 2] = l.pos[2]
-        _PULSE_COLOR[base] = l.color[0]; _PULSE_COLOR[base + 1] = l.color[1]; _PULSE_COLOR[base + 2] = l.color[2]
-        _PULSE_RANGE[i] = l.range
-      } else {
-        _PULSE_POS[base] = 0; _PULSE_POS[base + 1] = 0; _PULSE_POS[base + 2] = 0
-        _PULSE_COLOR[base] = 0; _PULSE_COLOR[base + 1] = 0; _PULSE_COLOR[base + 2] = 0
-        _PULSE_RANGE[i] = 0
-      }
+      _PULSE_POS[base] = l.pos[0]; _PULSE_POS[base + 1] = l.pos[1]; _PULSE_POS[base + 2] = l.pos[2]
+      _PULSE_COLOR[base] = l.color[0]; _PULSE_COLOR[base + 1] = l.color[1]; _PULSE_COLOR[base + 2] = l.color[2]
+      _PULSE_RANGE[i] = l.range
     }
-    if (locPos) gl.uniform3fv(locPos, _PULSE_POS)
-    if (locColor) gl.uniform3fv(locColor, _PULSE_COLOR)
-    if (locRange) gl.uniform1fv(locRange, _PULSE_RANGE)
+    if (locCount) gl.uniform1i(locCount, n)
+    if (n > 0) {
+      if (locPos) gl.uniform3fv(locPos, _PULSE_POS.subarray(0, n * 3))
+      if (locColor) gl.uniform3fv(locColor, _PULSE_COLOR.subarray(0, n * 3))
+      if (locRange) gl.uniform1fv(locRange, _PULSE_RANGE.subarray(0, n))
+    }
   }
 
   setRenderMode(mode) {
@@ -2464,7 +2477,7 @@ export class ModelRenderer {
     // Terrain modes use these to spill a coloured wash from weapon SFX onto
     // the ground beneath the firing units; unused slots upload range 0 so the
     // shader's per-light gate skips them.
-    this.#uploadPulseLights(gl, this.uGroundPulseLightPos, this.uGroundPulseLightColor, this.uGroundPulseLightRange)
+    this.#uploadPulseLights(gl, this.uGroundPulseLightPos, this.uGroundPulseLightColor, this.uGroundPulseLightRange, this.uGroundPulseLightCount)
     // Background mountain ring.  Active only on non-sea ground
     // modes; sea pass already paints water + seabed and shouldn't
     // be displaced.  Inner clearing scales with the unit's bounding
@@ -2595,7 +2608,7 @@ export class ModelRenderer {
     // frame.  Unused slots upload range 0 so the shader skips them when no
     // weapon is firing.  Same uniforms in main + reflection passes so the
     // weapon glow reflects off water too.
-    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange)
+    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange, this.uPulseLightCount)
     // Unit centre + radius for the pulse-light self-occlusion test.
     // Centre = model bbox centroid translated by the unit transform
     // (so it follows a walking unit).  Radius = bbox diagonal/2 with
@@ -2749,7 +2762,7 @@ export class ModelRenderer {
     // frame.  Unused slots upload range 0 so the shader skips them when no
     // weapon is firing.  Same uniforms in main + reflection passes so the
     // weapon glow reflects off water too.
-    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange)
+    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange, this.uPulseLightCount)
     // Unit centre + radius for the pulse-light self-occlusion test.
     // Centre = model bbox centroid translated by the unit transform
     // (so it follows a walking unit).  Radius = bbox diagonal/2 with
@@ -3275,6 +3288,7 @@ export class ModelRenderer {
     this.uPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos[0]')
     this.uPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor[0]')
     this.uPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange[0]')
+    this.uPulseLightCount = gl.getUniformLocation(prog, 'uPulseLightCount')
     // Unit centre + radius — pulse light uses them for self-shadowing
     // so the projectile light doesn't bleed through to the unit's
     // opposite side.
@@ -3404,6 +3418,7 @@ export class ModelRenderer {
     this.uGroundPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos[0]')
     this.uGroundPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor[0]')
     this.uGroundPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange[0]')
+    this.uGroundPulseLightCount = gl.getUniformLocation(prog, 'uPulseLightCount')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

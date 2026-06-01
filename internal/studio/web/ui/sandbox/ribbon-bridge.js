@@ -129,6 +129,7 @@ export function wireSandboxRibbon() {
       // Graphics Options — broadcast to every pane's renderer so the
       // toggle/slider takes effect across the whole battlefield.
       setLightIntensity:    (v)  => eachRenderer((r) => r.setExposure?.(v)),
+      setMaxDynamicLights:  (v)  => eachRenderer((r) => r.setMaxDynamicLights?.(v)),
       setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
       setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
       setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),

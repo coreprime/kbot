@@ -5,9 +5,11 @@
 precision highp float;
 precision highp int;
 
-// Dynamic pulse-light slot count.  Must match MAX_PULSE_LIGHTS in
-// engine/scene-lights.js and main.frag.
-#define MAX_PULSE_LIGHTS 4
+// Dynamic pulse-light slot count — the hard ceiling on simultaneous dynamic
+// lights.  Must match MAX_PULSE_LIGHTS in engine/scene-lights.js and main.frag.
+// uPulseLightCount carries how many slots are live this frame (the "Dynamic
+// Lights" graphics option) so the loop early-outs before this ceiling.
+#define MAX_PULSE_LIGHTS 256
 
 #include "../lib/sea-waves.glsl"
 
@@ -52,6 +54,7 @@ uniform float uWaterTranslucency;  // multiplier on water alpha - higher = clear
 uniform vec3 uPulseLightPos[MAX_PULSE_LIGHTS];
 uniform vec3 uPulseLightColor[MAX_PULSE_LIGHTS];
 uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
+uniform int uPulseLightCount;
 
 // pulseLightContribution sums the additive RGB every active dynamic point
 // light deposits on a horizontal ground patch at worldPos.  Ground normal is
@@ -61,6 +64,7 @@ uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
 vec3 pulseLightContribution(vec3 worldPos) {
   vec3 sum = vec3(0.0);
   for (int pli = 0; pli < MAX_PULSE_LIGHTS; pli++) {
+    if (pli >= uPulseLightCount) break;
     vec3 plColor = uPulseLightColor[pli];
     float plRange = uPulseLightRange[pli];
     if (dot(plColor, plColor) < 0.0001 || plRange <= 0.0) continue;

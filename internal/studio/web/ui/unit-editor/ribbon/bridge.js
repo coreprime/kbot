@@ -134,6 +134,7 @@ export function wireModelViewerRibbon() {
       // Graphics Options — broadcast across every pane's renderer so a
       // toggle/slider takes effect on the primary AND its observers.
       setLightIntensity:    (v)  => eachRenderer((r) => r.setExposure?.(v)),
+      setMaxDynamicLights:  (v)  => eachRenderer((r) => r.setMaxDynamicLights?.(v)),
       setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
       setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
       setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),

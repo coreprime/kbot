@@ -33,6 +33,9 @@ export const GRAPHICS_DEFAULTS = {
                             // changes the geometry fetched, not a shader flag
 
   lightIntensity:   100,   // 0..200 → 0..2.0× scene exposure (Brightness)
+  dynamicLights:    32,    // 0..256  → max simultaneous weapon-SFX point lights
+                           // (raw count, NOT a /100 slider — passed straight to
+                           // the renderer's setMaxDynamicLights)
 
   shadows:          true,
   shadowIntensity:  70,    // 0..100  → uShadowStrength 0..1
@@ -109,6 +112,7 @@ export function applyGraphicsOptionsToRenderer(r) {
     setEnhanceMeshEnabled(!!g.enhanceMesh)
   }
   r.setExposure?.(g.lightIntensity / 100)
+  r.setMaxDynamicLights?.(g.dynamicLights)
   r.setShadowsEnabled?.(!!g.shadows)
   r.setShadowStrength?.(g.shadowIntensity / 100)
   r.setSelfShadow?.(!!g.selfShadow)

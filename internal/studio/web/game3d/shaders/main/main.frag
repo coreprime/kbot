@@ -16,10 +16,13 @@
 precision highp float;
 precision highp int;
 
-// Dynamic pulse-light slot count.  Must stay in lockstep with
-// MAX_PULSE_LIGHTS in engine/scene-lights.js (the controller sizes its
-// uniform-array uploads to it).
-#define MAX_PULSE_LIGHTS 4
+// Dynamic pulse-light slot count — the hard ceiling on simultaneous dynamic
+// lights.  Must stay in lockstep with MAX_PULSE_LIGHTS in
+// engine/scene-lights.js (the controller sizes its uniform-array uploads to
+// it).  uPulseLightCount carries how many slots are actually live this frame
+// (the "Dynamic Lights" graphics option) so the loop early-outs well before
+// this ceiling at normal settings.
+#define MAX_PULSE_LIGHTS 256
 
 #include "../lib/sea-waves.glsl"
 
@@ -89,6 +92,7 @@ uniform float uLightingTier;
 uniform vec3 uPulseLightPos[MAX_PULSE_LIGHTS];
 uniform vec3 uPulseLightColor[MAX_PULSE_LIGHTS];
 uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
+uniform int uPulseLightCount;
 // Unit world-space centre — used by the pulse-light path to apply
 // self-occlusion: fragments whose position vector (from centre)
 // points AWAY from the light direction are inside the unit's own
@@ -436,6 +440,7 @@ void main() {
   // Falls off with inverse-square in distance so close shots flood
   // the unit and distant ones barely tint it.
   for (int pli = 0; pli < MAX_PULSE_LIGHTS; pli++) {
+    if (pli >= uPulseLightCount) break;
     vec3 plColor = uPulseLightColor[pli];
     float plRange = uPulseLightRange[pli];
     if (dot(plColor, plColor) <= 0.0001 || plRange <= 0.0) continue;

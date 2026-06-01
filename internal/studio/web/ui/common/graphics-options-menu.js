@@ -69,6 +69,14 @@ export function GraphicsOptionsItems({ s, setState, bridge }) {
       value=${s.lightIntensity}
       format=${(v) => `${v}%`}
       onChange=${(v) => set('lightIntensity', v, v / 100, bridge.setLightIntensity)} />
+    <${MenuSliderRow}
+      icon="💥"
+      label="Dynamic Lights"
+      title="How many weapon effects (muzzle flashes, tracer shells, the d-gun, lasers) can light the scene at once.  Higher lets a rapid-firing battleship or a crowded battlefield glow from every shot; lower trades that off for fill-rate.  0 disables dynamic lighting entirely."
+      min=${0} max=${256} step=${8}
+      value=${s.dynamicLights}
+      format=${(v) => `${v}`}
+      onChange=${(v) => set('dynamicLights', v, v, bridge.setMaxDynamicLights)} />
 
     <${MenuSectionLabel}>General Effects<//>
     <${MenuSubmenuRow}
