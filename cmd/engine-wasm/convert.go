@@ -57,6 +57,24 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Burst:    burst,
 		Damage:   fixed.FromFloat(getFloat(o, "damage")),
 		Present:  true,
+
+		// Ballistic / model-projectile flight fields, surfaced verbatim from the
+		// weapon TDF. A weapon naming a 3DO model (and not a beam) flies through
+		// the projectile subsystem; everything else hits instantly. The TDF
+		// turnrate is already in TA-angle units per second.
+		Model:           getString(o, "model"),
+		BeamWeapon:      getBool(o, "beamWeapon"),
+		VelocityWU:      fixed.FromFloat(getFloat(o, "velocityWU")),
+		StartVelocityWU: fixed.FromFloat(getFloat(o, "startVelocityWU")),
+		AccelerationWU:  fixed.FromFloat(getFloat(o, "accelerationWU")),
+		TurnRateAng:     int32(getFloat(o, "turnRate")),
+		FlightTimeSec:   fixed.FromFloat(getFloat(o, "flightTimeSec")),
+		AreaOfEffectWU:  fixed.FromFloat(getFloat(o, "areaOfEffectWU")),
+		Dropped:         getBool(o, "dropped"),
+		VLaunch:         getBool(o, "vlaunch"),
+		Tracks:          getBool(o, "tracks"),
+		SelfProp:        getBool(o, "selfProp"),
+		Ballistic:       getBool(o, "ballistic"),
 	}
 }
 

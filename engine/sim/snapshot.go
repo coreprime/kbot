@@ -30,11 +30,25 @@ func (w *World) Snapshot() frame.Snapshot {
 			Pieces:       pieces,
 		})
 	}
+	var projos []frame.ProjectileState
+	if len(w.projectiles) > 0 {
+		projos = make([]frame.ProjectileState, 0, len(w.projectiles))
+		for _, p := range w.projectiles {
+			projos = append(projos, frame.ProjectileState{
+				ID:      p.id,
+				Kind:    p.model,
+				Pos:     p.pos,
+				Heading: p.heading,
+				Pitch:   p.pitch,
+			})
+		}
+	}
 	evts := w.events
 	w.events = nil
 	return frame.Snapshot{
 		Tick:   w.tick,
 		Units:  units,
+		Projos: projos,
 		Events: evts,
 	}
 }

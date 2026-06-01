@@ -42,6 +42,58 @@ func (w *World) Step(rt Runtime) {
 		w.stepMovement(u)
 		w.stepWeapons(u)
 	}
+	w.stepProjectiles()
+}
+
+// stepProjectiles advances every in-flight model weapon one tick, refreshes a
+// guided shot's aim at its live target, and detonates the ones that arrive or
+// expire this tick.
+func (w *World) stepProjectiles() {
+	if len(w.projectiles) == 0 {
+		return
+	}
+	alive := w.projectiles[:0]
+	for _, p := range w.projectiles {
+		if p.targetID != 0 {
+			if t := w.units[p.targetID]; t != nil && !t.Dead {
+				p.target = t.Pos()
+			}
+		}
+		p.stepProjectile(fixed.Zero)
+		if p.dead {
+			w.detonate(p)
+			continue
+		}
+		alive = append(alive, p)
+	}
+	w.projectiles = alive
+}
+
+// detonate emits the projectile's hit event and, if it actually reached its
+// target (rather than timing out), applies damage — to everything inside the
+// blast radius for an area weapon, or to the single target otherwise.
+func (w *World) detonate(p *projectile) {
+	w.emit(frame.Event{Kind: frame.EvProjectileHit, UnitID: p.ownerID, Slot: p.slot, TargetID: p.targetID, Anchor: p.pos, Weapon: p.weapon})
+	if !p.hit {
+		return
+	}
+	if p.aoe > 0 {
+		r := p.aoe.Div(fixed.FromInt(2)) // diameter -> radius
+		center := fixed.Vec2{X: p.pos.X, Z: p.pos.Z}
+		for _, id := range w.order {
+			t := w.units[id]
+			if t == nil || t.Dead {
+				continue
+			}
+			if t.loco.Pos.DistTo(center) <= r {
+				w.ApplyDamage(p.ownerID, id, p.damage)
+			}
+		}
+		return
+	}
+	if p.targetID != 0 {
+		w.ApplyDamage(p.ownerID, p.targetID, p.damage)
+	}
 }
 
 // stepAttack points the unit at its ordered attack target and decides whether
@@ -195,7 +247,23 @@ func (w *World) stepWeapons(u *Unit) {
 		anchor := u.Pos()
 		anchor.Y += fixed.FromInt(12)
 		w.emit(frame.Event{Kind: frame.EvFire, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Weapon: wm.Name})
-		if s.targetUnit != 0 {
+		if wm.hasModelProjectile() {
+			// Model weapons fly a simulated mesh and resolve damage on
+			// detonation; the flight is stepped in stepProjectiles.
+			target3 := fixed.Vec3{X: targetPos.X, Z: targetPos.Z}
+			if s.targetUnit != 0 {
+				if t := w.units[s.targetUnit]; t != nil {
+					target3.Y = t.Pos().Y
+				}
+			} else {
+				target3.Y = s.targetPt.Y
+			}
+			p := w.makeProjectile(u.ID, s.targetUnit, slot, wm, anchor, target3)
+			w.nextProjID++
+			w.projectiles = append(w.projectiles, p)
+			w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Weapon: wm.Name})
+		} else if s.targetUnit != 0 {
+			// Hitscan / beam: resolve damage instantly at fire time.
 			dmg := wm.Damage
 			if dmg <= 0 {
 				dmg = defaultHitDamage

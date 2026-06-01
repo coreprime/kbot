@@ -1,0 +1,349 @@
+package sim
+
+import "github.com/coreprime/kbot/engine/fixed"
+
+// This file is the per-tick flight simulation for weapons that carry a 3DO
+// model — the missiles, rockets and bombs whose projectile is a real mesh.
+// Lasers, plain bullets and shells with no model resolve their damage instantly
+// at fire time; this subsystem exists for the ones the player can see fly.
+//
+// Everything here is integer fixed-point through engine/fixed, so a missile
+// flies bit-identically on the authoritative host and on every predicting
+// client. Headings and pitch are raw TA-angles (65536 per turn); the renderer
+// convention is heading 0 = +Z, forward = (sin h, cos h) on the ground plane
+// and pitch lifts toward +Y.
+
+// TA-angle landmarks used as flight thresholds.
+const (
+	quarterTurn int32 = 1 << 14 // 16384, a 90° pitch (straight up)
+	halfTurn    int32 = 1 << 15 // 32768, the default homing rate (≈π rad/s)
+)
+
+// projMode is the flight behaviour selected from the weapon TDF flags.
+type projMode uint8
+
+const (
+	projStraight  projMode = iota // constant-heading powered shot (unguided rockets)
+	projDropped                   // gravity bomb: released with no thrust
+	projVLaunch                   // vertical launch: climbs, then pitches over and homes
+	projGuided                    // self-propelled + tracking: homes on the target
+	projBallistic                 // unpowered arc under gravity (mortars)
+)
+
+// projPhase tracks the two-stage flight of a vertical-launch missile.
+type projPhase uint8
+
+const (
+	phaseCruise projPhase = iota
+	phaseAscent
+	phaseHome
+)
+
+// projectile is one in-flight model weapon. Orientation (heading/pitch) is the
+// source of truth between ticks: deriving spherical angles from velocity blows
+// up near the vertical singularity (vlaunch ascent, the first homing ticks), so
+// the steered modes write the angles directly and rebuild velocity from them.
+type projectile struct {
+	id       uint32
+	ownerID  uint32
+	targetID uint32 // 0 = fixed point target
+	slot     int
+	mode     projMode
+	phase    projPhase
+	model    string
+	weapon   string
+
+	pos     fixed.Vec3
+	vel     fixed.Vec3
+	origin  fixed.Vec3
+	target  fixed.Vec3
+	launchY fixed.Fixed
+
+	speed   fixed.Fixed
+	vmax    fixed.Fixed
+	accel   fixed.Fixed
+	turnAng int32 // homing turn rate, TA-angle/sec; 0 = unguided
+	gravity fixed.Fixed
+	aoe     fixed.Fixed // blast diameter
+	damage  fixed.Fixed
+
+	ageSec  fixed.Fixed
+	lifeSec fixed.Fixed
+
+	heading int32
+	pitch   int32
+	dead    bool
+	hit     bool // true on the tick it reaches the target (vs. timing out)
+}
+
+// projectileModeFor picks a flight behaviour from the weapon flags.
+func projectileModeFor(w WeaponMeta) projMode {
+	switch {
+	case w.Dropped:
+		return projDropped
+	case w.VLaunch:
+		return projVLaunch
+	case (w.Tracks || w.SelfProp) && w.TurnRateAng > 0:
+		return projGuided
+	case w.Ballistic:
+		return projBallistic
+	default:
+		return projStraight
+	}
+}
+
+// velFromAngles rebuilds a velocity vector from heading, pitch and speed.
+func velFromAngles(heading, pitch int32, speed fixed.Fixed) fixed.Vec3 {
+	sh, ch := fixed.SinCos(fixed.NormalizeAngle(heading))
+	sp, cp := fixed.SinCos(fixed.NormalizeAngle(pitch))
+	return fixed.Vec3{
+		X: sh.Mul(cp).Mul(speed),
+		Y: sp.Mul(speed),
+		Z: ch.Mul(cp).Mul(speed),
+	}
+}
+
+// hypot3 is the 3D magnitude, composed from the 2D fixed-point Hypot.
+func hypot3(x, y, z fixed.Fixed) fixed.Fixed {
+	return fixed.Hypot(fixed.Hypot(x, z), y)
+}
+
+// makeProjectile builds the flight record for one shot. anchor is the muzzle
+// exit, target the aim point; gravity is the world gravity for arcing modes.
+func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta, anchor, target fixed.Vec3) *projectile {
+	mode := projectileModeFor(wm)
+
+	vmax := wm.VelocityWU
+	if vmax <= 0 {
+		vmax = fixed.FromInt(200)
+	}
+	speed0 := wm.StartVelocityWU
+	if speed0 <= 0 {
+		if mode == projDropped {
+			speed0 = 0
+		} else {
+			speed0 = vmax
+		}
+	}
+
+	dx := target.X - anchor.X
+	dy := target.Y - anchor.Y
+	dz := target.Z - anchor.Z
+	d := hypot3(dx, dy, dz)
+	if d <= 0 {
+		d = fixed.One
+	}
+
+	var vel fixed.Vec3
+	switch mode {
+	case projVLaunch:
+		vel = fixed.Vec3{Y: fixed.Max(fixed.One, speed0)} // straight up off the rail
+	case projDropped:
+		vel = fixed.Vec3{} // bombs fall straight; no inherited thrust
+	default:
+		vel = fixed.Vec3{
+			X: dx.Mul(speed0).Div(d),
+			Y: dy.Mul(speed0).Div(d),
+			Z: dz.Mul(speed0).Div(d),
+		}
+	}
+
+	// Seed orientation from the bearing to the target so a vlaunch/dropped shot
+	// (which has no horizontal launch velocity) still points where it will fly.
+	eps := fixed.FromFloat(0.001)
+	horizT := fixed.Hypot(dx, dz)
+	headingInit := int32(0)
+	if horizT > eps {
+		headingInit = fixed.Atan2(dx, dz)
+	}
+	horiz0 := fixed.Hypot(vel.X, vel.Z)
+	var pitchInit int32
+	switch {
+	case horiz0 > fixed.One:
+		pitchInit = fixed.Atan2(vel.Y, horiz0)
+	case mode == projVLaunch:
+		pitchInit = quarterTurn
+	default:
+		denom := horizT
+		if denom <= 0 {
+			denom = fixed.One
+		}
+		pitchInit = fixed.Atan2(dy, denom)
+	}
+
+	// Lifetime: the TDF timer if given, else time-of-flight at top speed over
+	// the weapon range, with extra slack for arcing/homing paths.
+	rng := wm.Range
+	if rng <= 0 {
+		rng = vmax.Mul(fixed.FromInt(3))
+	}
+	slack := fixed.FromFloat(1.2)
+	switch mode {
+	case projBallistic, projDropped:
+		slack = fixed.FromFloat(1.6)
+	case projGuided, projVLaunch:
+		slack = fixed.FromFloat(1.4)
+	}
+	lifeSec := wm.FlightTimeSec
+	if lifeSec <= 0 {
+		lifeSec = fixed.Max(fixed.FromFloat(0.4), rng.Div(vmax).Mul(slack))
+	}
+
+	grav := fixed.Zero
+	if mode == projBallistic || mode == projDropped {
+		grav = w.gravity
+	}
+	phase := phaseCruise
+	if mode == projVLaunch {
+		phase = phaseAscent
+	}
+	dmg := wm.Damage
+	if dmg <= 0 {
+		dmg = defaultHitDamage
+	}
+
+	return &projectile{
+		id:       w.nextProjID,
+		ownerID:  ownerID,
+		targetID: targetID,
+		slot:     slot,
+		mode:     mode,
+		phase:    phase,
+		model:    wm.Model,
+		weapon:   wm.Name,
+		pos:      anchor,
+		vel:      vel,
+		origin:   anchor,
+		target:   target,
+		launchY:  anchor.Y,
+		speed:    hypot3(vel.X, vel.Y, vel.Z),
+		vmax:     vmax,
+		accel:    wm.AccelerationWU,
+		turnAng:  wm.TurnRateAng,
+		gravity:  grav,
+		aoe:      wm.AreaOfEffectWU,
+		damage:   dmg,
+		lifeSec:  lifeSec,
+		heading:  headingInit,
+		pitch:    pitchInit,
+	}
+}
+
+// steerToward rotates heading and pitch toward the target at the homing rate,
+// then rebuilds velocity from those angles at the current speed.
+func (p *projectile) steerToward() {
+	dx := p.target.X - p.pos.X
+	dy := p.target.Y - p.pos.Y
+	dz := p.target.Z - p.pos.Z
+	horizD := fixed.Hypot(dx, dz)
+	wantHeading := p.heading
+	if horizD > fixed.FromFloat(0.001) {
+		wantHeading = fixed.Atan2(dx, dz)
+	}
+	wantPitch := fixed.Atan2(dy, horizD)
+
+	rate := p.turnAng
+	if rate <= 0 {
+		rate = halfTurn
+	}
+	step := int32(fixed.FromInt(int(rate)).Mul(dtSec).Int())
+	if step < 1 {
+		step = 1
+	}
+
+	dh := fixed.ShortestArc(wantHeading - p.heading)
+	if dh > step {
+		dh = step
+	} else if dh < -step {
+		dh = -step
+	}
+	p.heading = fixed.NormalizeAngle(p.heading + dh)
+
+	dp := fixed.ShortestArc(wantPitch - p.pitch)
+	if dp > step {
+		dp = step
+	} else if dp < -step {
+		dp = -step
+	}
+	p.pitch = fixed.NormalizeAngle(p.pitch + dp)
+
+	p.vel = velFromAngles(p.heading, p.pitch, p.speed)
+}
+
+// stepProjectile advances one projectile by a single tick. groundY is the floor
+// for falling modes. It mutates the projectile and sets dead (and hit, when it
+// reached the target rather than expiring).
+func (p *projectile) stepProjectile(groundY fixed.Fixed) {
+	if p.dead {
+		return
+	}
+	p.ageSec += dtSec
+
+	// Ramp toward top speed under acceleration (instant when accel = 0).
+	if p.accel > 0 {
+		p.speed = fixed.Min(p.vmax, p.speed+p.accel.Mul(dtSec))
+	} else {
+		p.speed = p.vmax
+	}
+
+	steered := p.mode == projGuided || (p.mode == projVLaunch && p.phase == phaseHome)
+	switch {
+	case steered:
+		p.steerToward()
+	case p.mode == projVLaunch && p.phase == phaseAscent:
+		// Climb straight up, pitch over once there is room to arc toward the
+		// target without diving into the ground — "room" is the homing turn
+		// radius (speed / turnRate), fully derived from the TDF.
+		p.vel = fixed.Vec3{Y: p.speed}
+		var turnRadius fixed.Fixed
+		if p.turnAng > 0 {
+			turnRadius = p.speed.Div(fixed.FromInt(int(p.turnAng)))
+		}
+		if (p.pos.Y-p.launchY) >= turnRadius || (p.turnAng <= 0 && p.speed >= p.vmax) {
+			p.phase = phaseHome
+		}
+	case p.mode == projDropped || p.mode == projBallistic:
+		p.vel.Y -= p.gravity.Mul(dtSec) // unpowered: gravity bends the path
+	default:
+		// Straight powered shot — rescale the heading vector to the ramped speed.
+		s := hypot3(p.vel.X, p.vel.Y, p.vel.Z)
+		if s <= 0 {
+			s = fixed.One
+		}
+		p.vel.X = p.vel.X.Mul(p.speed).Div(s)
+		p.vel.Y = p.vel.Y.Mul(p.speed).Div(s)
+		p.vel.Z = p.vel.Z.Mul(p.speed).Div(s)
+	}
+
+	p.pos.X += p.vel.X.Mul(dtSec)
+	p.pos.Y += p.vel.Y.Mul(dtSec)
+	p.pos.Z += p.vel.Z.Mul(dtSec)
+
+	// Unsteered modes derive orientation from velocity; the steered modes wrote
+	// it directly above and re-deriving would re-introduce singularity noise.
+	if !steered {
+		horiz := fixed.Hypot(p.vel.X, p.vel.Z)
+		if horiz > fixed.One {
+			p.heading = fixed.Atan2(p.vel.X, p.vel.Z)
+		}
+		p.pitch = fixed.Atan2(p.vel.Y, horiz)
+	}
+
+	// Detonation is pure physics; the blast radius is for damage, not the
+	// trigger. Reached the target within one tick's travel (so a fast shot
+	// registers the pass instead of tunnelling), hit the ground while falling,
+	// or ran out its flight time.
+	distT := hypot3(p.target.X-p.pos.X, p.target.Y-p.pos.Y, p.target.Z-p.pos.Z)
+	reach := p.speed.Mul(dtSec)
+	switch {
+	case distT <= reach:
+		p.dead = true
+		p.hit = true
+	case (p.mode == projDropped || p.mode == projBallistic) && p.pos.Y <= groundY:
+		p.pos.Y = groundY
+		p.dead = true
+		p.hit = true
+	case p.ageSec >= p.lifeSec:
+		p.dead = true
+	}
+}

@@ -34,6 +34,30 @@ type WeaponMeta struct {
 	Burst    int         // shots per burst (>=1)
 	Damage   fixed.Fixed // per shot
 	Present  bool
+
+	// Ballistic / projectile fields. A weapon that names a 3DO model (and is
+	// not a beam) flies a simulated mesh through the projectile subsystem and
+	// applies its damage on detonation; everything else hits instantly at fire
+	// time. All rates derive from the weapon TDF.
+	Model           string      // 3DO projectile model; empty = no model projectile
+	BeamWeapon      bool        // instant-hit beam (lasers): never flies
+	VelocityWU      fixed.Fixed // top speed, world units/sec
+	StartVelocityWU fixed.Fixed // launch speed; 0 = top speed (no ramp)
+	AccelerationWU  fixed.Fixed // ramp to top speed, wu/s^2; 0 = instant
+	TurnRateAng     int32       // homing turn rate, TA-angle/sec; 0 = unguided
+	FlightTimeSec   fixed.Fixed // self-destruct timer; 0 = derive from range/vel
+	AreaOfEffectWU  fixed.Fixed // blast diameter for detonation damage
+	Dropped         bool        // gravity bomb: released with no thrust
+	VLaunch         bool        // vertical launch: climbs then homes
+	Tracks          bool        // guided: homes on the target
+	SelfProp        bool        // self-propelled (with Tracks + turn rate, homes)
+	Ballistic       bool        // unpowered arc under gravity
+}
+
+// hasModelProjectile reports whether the weapon flies a visible mesh the
+// projectile simulation owns. Beam weapons hit instantly and never travel.
+func (w WeaponMeta) hasModelProjectile() bool {
+	return w.Model != "" && !w.BeamWeapon
 }
 
 // movement-rate conversions. TA simulates locomotion at 30 Hz, so an FBI

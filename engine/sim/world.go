@@ -82,6 +82,12 @@ type World struct {
 	gravity fixed.Fixed
 	events  []frame.Event
 
+	// projectiles are the in-flight model weapons (missiles/rockets/bombs) the
+	// world steps each tick. They are render state derived deterministically
+	// from fire events, so they back the snapshot but stay out of the hash.
+	projectiles []*projectile
+	nextProjID  uint32
+
 	// metaProvider resolves a unit type name to its stat block + binding when
 	// a Spawn order arrives. Injected so the core stays asset-agnostic.
 	spawn SpawnFunc
@@ -105,11 +111,12 @@ func New(cfg Config) *World {
 		g = fixed.FromInt(80)
 	}
 	return &World{
-		units:   make(map[uint32]*Unit),
-		nextID:  1,
-		rng:     rng.New(cfg.Seed),
-		gravity: g,
-		spawn:   cfg.Spawn,
+		units:      make(map[uint32]*Unit),
+		nextID:     1,
+		nextProjID: 1,
+		rng:        rng.New(cfg.Seed),
+		gravity:    g,
+		spawn:      cfg.Spawn,
 	}
 }
 
@@ -215,6 +222,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit) {
 	w.tick = tick
 	w.simMs = int64(tick) * TickMs // simMs is derived purely from the tick count
 	w.events = nil
+	w.projectiles = nil
 	var maxID uint32
 	for _, ru := range units {
 		var meta *UnitMeta
