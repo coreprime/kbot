@@ -8,7 +8,6 @@ import (
 
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -19,15 +18,14 @@ import (
 type describer func(r *Renderer, vpath string, data []byte, out map[string]any)
 
 // describers maps a lowercased file extension to the describer that handles it.
-// Stage 2 covers the self-contained text/binary formats; image, model, archive,
-// and script-analysis describers are layered on in later stages.
+// The simple, self-contained formats live here; the heavier structured and
+// script-analysis describers are registered from describe_more.go.
 var describers = map[string]describer{
 	".tdf": describeTDF,
 	".fbi": describeTDF,
 	".gui": describeTDF,
 	".ota": describeTDF,
 	".gaf": describeGAF,
-	".cob": describeCOB,
 	".pcx": describePCX,
 }
 
@@ -130,21 +128,6 @@ func describeGAF(_ *Renderer, _ string, data []byte, out map[string]any) {
 		seqs = append(seqs, sq)
 	}
 	out["sequences"] = seqs
-}
-
-func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
-	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
-	if err != nil {
-		return
-	}
-	out["format"] = "COB"
-	out["version"] = cob.VersionSignature
-	out["scriptCount"] = cob.NumScripts
-	out["pieceCount"] = cob.NumPieces
-	out["codeLength"] = len(cob.Code)
-	out["staticVars"] = cob.NumberOfStaticVars
-	out["scriptNames"] = cob.ScriptNames
-	out["pieceNames"] = cob.PieceNames
 }
 
 func describePCX(_ *Renderer, _ string, data []byte, out map[string]any) {
