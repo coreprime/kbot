@@ -244,6 +244,36 @@ export class WasmFrameSource extends FrameSource {
     return this._engine.getUnitValue(this._handle, unitId, port)
   }
 
+  // ── Script invocation ────────────────────────────────────────────
+  //
+  // The offline unit editor's Actions panel runs a unit's named COB entry
+  // points (Create, Activate, AimPrimary, …), lists the available ones, and
+  // retracts a transient pose handler. Authoring-only: these reach the engine's
+  // live VM directly and never cross the join transport.
+
+  // startScript spawns a thread on the named entry point; args is an optional
+  // integer array passed as the script's initial locals.
+  startScript(unitId, name, args = []) {
+    if (this._engine && this._handle >= 0) this._engine.startScript(this._handle, unitId, name, args)
+  }
+
+  // restartScript spawns the named script after cancelling any live instance of
+  // it (the COB START supersede), used by per-tick re-driven aim threads.
+  restartScript(unitId, name, args = []) {
+    if (this._engine && this._handle >= 0) this._engine.restartScript(this._handle, unitId, name, args)
+  }
+
+  // killThreadsByName marks dead every live thread running the named script.
+  killThreadsByName(unitId, name) {
+    if (this._engine && this._handle >= 0) this._engine.killThreadsByName(this._handle, unitId, name)
+  }
+
+  // scriptNames lists a unit type's script entry-point names in index order.
+  scriptNames(unitId) {
+    if (!this._engine || this._handle < 0) return []
+    return this._engine.scriptNames(this._handle, unitId)
+  }
+
   dispose() {
     if (this._engine && this._handle >= 0) {
       this._engine.destroy(this._handle)

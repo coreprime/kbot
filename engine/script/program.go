@@ -123,3 +123,14 @@ func (p *Program) HasScript(name string) bool {
 
 // PieceNames returns the program's piece-name list (rest-pose order).
 func (p *Program) PieceNames() []string { return p.pieceNames }
+
+// ScriptNames returns the program's script entry-point names in index order.
+// The studio's unit editor lists them so the Actions panel can offer a button
+// per script (Create, Activate, AimPrimary, …).
+func (p *Program) ScriptNames() []string {
+	out := make([]string, len(p.scripts))
+	for i, s := range p.scripts {
+		out[i] = s.name
+	}
+	return out
+}

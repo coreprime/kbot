@@ -186,6 +186,22 @@ func (u *Unit) KillThread(id int32) {
 	}
 }
 
+// KillThreadsByName marks dead every live thread running the named script. The
+// offline unit editor uses it to retract a transient pose handler (the
+// RestoreAfterDelay / RestorePosition threads a one-shot aim leaves behind)
+// before re-driving the unit. Unknown names are ignored.
+func (u *Unit) KillThreadsByName(name string) {
+	idx, ok := u.prog.ScriptIndex(name)
+	if !ok {
+		return
+	}
+	for _, t := range u.threads {
+		if !t.dead && t.scriptIndex == idx {
+			t.dead = true
+		}
+	}
+}
+
 // ResetState returns the unit to a clean slate: every thread dies, static vars
 // zero, animators snap back to rest, and all pieces become visible — the
 // per-unit "Reset" developer command. It does not re-run Create; the caller
@@ -561,6 +577,11 @@ func (u *Unit) signal(n int32) {
 
 // HasScript reports whether the unit's program defines the named entry point.
 func (u *Unit) HasScript(name string) bool { return u.prog.HasScript(name) }
+
+// ScriptNames returns the unit type's script entry-point names in index order,
+// the list the offline editor's Actions panel turns into a run-script button
+// per entry (Create, Activate, AimPrimary, …).
+func (u *Unit) ScriptNames() []string { return u.prog.ScriptNames() }
 
 // Start spawns a thread on the named script with the given integer arguments as
 // its initial locals. Unknown names are ignored, matching the world's

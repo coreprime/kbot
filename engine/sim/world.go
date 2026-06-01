@@ -395,6 +395,63 @@ func (w *World) UnitValuePort(id uint32, port int) int32 {
 	return 0
 }
 
+// CobScripts is the optional script-invocation surface a binding exposes so the
+// offline unit editor's Actions panel can run a named entry point (Create,
+// Activate, AimPrimary, …), list the available ones, and retract a transient
+// pose handler. The script.Unit binding implements it; script-less bindings do
+// not. Editor-driven invocations are offline / single-unit and carry no
+// determinism contract.
+type CobScripts interface {
+	HasScript(name string) bool
+	Start(name string, args ...int)
+	Restart(name string, args ...int)
+	KillThreadsByName(name string)
+	ScriptNames() []string
+}
+
+// scripts returns a unit's script-invocation binding, or nil for a missing unit
+// or a script-less binding.
+func (w *World) scripts(id uint32) CobScripts {
+	if u := w.units[id]; u != nil {
+		if s, ok := u.binding.(CobScripts); ok {
+			return s
+		}
+	}
+	return nil
+}
+
+// UnitStartScript spawns a thread on the named entry point. UnitRestartScript
+// does the same but first cancels any live instance of that script (the COB
+// START supersede). Both are no-ops for a missing / script-less unit or an
+// unknown script name.
+func (w *World) UnitStartScript(id uint32, name string, args ...int) {
+	if s := w.scripts(id); s != nil && s.HasScript(name) {
+		s.Start(name, args...)
+	}
+}
+
+func (w *World) UnitRestartScript(id uint32, name string, args ...int) {
+	if s := w.scripts(id); s != nil && s.HasScript(name) {
+		s.Restart(name, args...)
+	}
+}
+
+// UnitKillThreadsByName marks dead every live thread running the named script.
+func (w *World) UnitKillThreadsByName(id uint32, name string) {
+	if s := w.scripts(id); s != nil {
+		s.KillThreadsByName(name)
+	}
+}
+
+// UnitScriptNames lists a unit type's script entry-point names, or nil for a
+// missing / script-less unit.
+func (w *World) UnitScriptNames(id uint32) []string {
+	if s := w.scripts(id); s != nil {
+		return s.ScriptNames()
+	}
+	return nil
+}
+
 // UnitCount returns the number of units currently in the world (live or dead
 // until reaped). It is a cheap map length read used for session listings.
 func (w *World) UnitCount() int { return len(w.units) }

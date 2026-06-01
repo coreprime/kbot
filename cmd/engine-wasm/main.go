@@ -81,6 +81,14 @@ func main() {
 		// inspector sliders. Authoring-only; never networked.
 		"setUnitValue": js.FuncOf(setUnitValue),
 		"getUnitValue": js.FuncOf(getUnitValue),
+
+		// Script invocation — the offline unit editor's Actions panel runs a
+		// named entry point, lists the available ones, and retracts a transient
+		// pose handler. Authoring-only; never networked.
+		"startScript":       js.FuncOf(startScript),
+		"restartScript":     js.FuncOf(restartScript),
+		"killThreadsByName": js.FuncOf(killThreadsByName),
+		"scriptNames":       js.FuncOf(scriptNames),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -449,6 +457,57 @@ func getUnitValue(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.world.UnitValuePort(uint32(args[1].Int()), args[2].Int()))
+}
+
+// startScript(handle, unitId, name, [args]) spawns a thread on the named entry
+// point, passing the optional integer array as its initial locals.
+func startScript(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitStartScript(uint32(args[1].Int()), args[2].String(), scriptArgs(args, 3)...)
+	}
+	return nil
+}
+
+// restartScript(handle, unitId, name, [args]) spawns the named script after
+// cancelling any live instance of it (the COB START supersede).
+func restartScript(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitRestartScript(uint32(args[1].Int()), args[2].String(), scriptArgs(args, 3)...)
+	}
+	return nil
+}
+
+// killThreadsByName(handle, unitId, name) marks dead every live thread running
+// the named script (retracting a transient pose handler).
+func killThreadsByName(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitKillThreadsByName(uint32(args[1].Int()), args[2].String())
+	}
+	return nil
+}
+
+// scriptNames(handle, unitId) lists a unit type's script entry-point names in
+// index order, for the editor's Actions panel.
+func scriptNames(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.ValueOf([]any{})
+	}
+	names := inst.world.UnitScriptNames(uint32(args[1].Int()))
+	out := make([]any, len(names))
+	for i, n := range names {
+		out[i] = n
+	}
+	return js.ValueOf(out)
+}
+
+// scriptArgs reads an optional JS integer array at args[idx] into the variadic
+// []int the script start methods take, tolerating a missing / non-array arg.
+func scriptArgs(args []js.Value, idx int) []int {
+	if idx >= len(args) {
+		return nil
+	}
+	return intSliceFromJS(args[idx])
 }
 
 // cobState(handle) returns the live COB inspection snapshot — the world tick
