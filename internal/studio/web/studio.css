@@ -3072,6 +3072,20 @@ canvas {
 }
 
 /* ── Sync Diagnostics panel (drift comparison) ────────────────────── */
+/* The diff comparison lives in a standard FloatingPanel now. It needs its
+   own anchor: without a per-id rule it would inherit .mv-inspector's
+   top/left:12px (stacking invisibly behind the Actions panel) and the
+   360px max-width clamp (defeating its 420px default). Sit it offset from
+   the top-left cluster, lift it above the 40-65 panel z-band so it opens
+   on top, and drop the width cap so the diff tables have room. */
+#mv-inspector-sync-diag {
+  top: 64px;
+  left: 96px;
+  right: auto;
+  bottom: auto;
+  max-width: none;
+  z-index: 200;
+}
 /* The diff comparison lives in a standard FloatingPanel now; these rules
    only style the content inside its body, which scrolls within the
    user-resizable panel. */

@@ -48,9 +48,14 @@ export async function openModelPicker() {
   // on top so the modal isn't fighting another dialog stack for
   // the user's eye, then open the React picker.  The legacy
   // #model-open-dialog static markup is no longer used — React
-  // mounts its own dialog DOM on demand.
+  // mounts its own dialog DOM on demand.  #app carries the map
+  // editor's chrome (ribbon + sidebar + canvas); without hiding it
+  // here the map surface bleeds through the picker's translucent
+  // backdrop whenever a map tab is the one on screen.  closeModelPicker
+  // restores all three surfaces from the entry snapshot above.
   $('#welcome-dialog').classList.add('hidden')
   $('#model-viewer-dialog').classList.add('hidden')
+  $('#app')?.classList.add('hidden')
   // Bring the React UI up if it hasn't loaded yet (cold-boot path).
   let ui = getReactUi()
   if (!ui && hostCallbacks.configureReactUi) {
@@ -86,6 +91,10 @@ export async function openModelPicker() {
       window.__sandboxSpawnPending = false
       const pendingSide = (window.__sandboxSpawnPendingSide | 0) || 0
       window.__sandboxSpawnPendingSide = 0
+      // Spawn happens back in the live sandbox tab — restore both the
+      // shared app shell (topbar/tabs/statusbar) we hid for the picker
+      // and the viewer overlay the sandbox renders into.
+      $('#app')?.classList.remove('hidden')
       $('#model-viewer-dialog')?.classList.remove('hidden')
       void sb.beginPlacement(result.name, { side: pendingSide })
       return
