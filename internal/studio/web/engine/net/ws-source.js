@@ -8,14 +8,13 @@
 // assigns each one an execution tick before broadcasting it back as a command
 // frame that every client applies at the same tick.
 //
-// Reconciliation: the local engine is kept in lockstep by the command stream,
-// and each authoritative hash is checked against the local hash (a mismatch
-// emits a 'desync' event).  The render loop only steps up to stepTarget — the
-// extrapolated server clock clamped to the safe order-arrival lead — so it never
-// outruns a command frame still in flight.  As a backstop, a command frame for a
-// tick already produced (or an explicit Force-Sync) re-pulls a full snapshot and
-// restores the local world from authority, so a divergence self-heals instead of
-// persisting.
+// Reconciliation status: the local engine is kept in lockstep purely by the
+// command stream, and each authoritative hash is checked against the local
+// hash (a mismatch emits a 'desync' event).  Mid-game resync from a full
+// snapshot — needed for late joins and after a confirmed desync — requires a
+// world-restore entry point the wasm bridge does not yet expose, so it is a
+// follow-up.  For a match joined near tick 0 (the common case) the command
+// stream alone keeps the client correct.
 
 import { FrameSource } from './frame-source.js'
 import { WasmFrameSource } from './wasm-source.js'
@@ -54,12 +53,6 @@ export class WsFrameSource extends FrameSource {
     this._tickMs = 1000 / 40 // current tick period = baseTickMs / rate
     this._srvTick = 0       // newest authoritative tick observed
     this._srvWall = 0       // wall-clock (ms) when _srvTick was observed
-    // Order-scheduling lead: the authority stamps every order for
-    // serverTick + inputDelay + 1. The render loop must never step the local
-    // engine past a tick whose command frame might still be in flight, so the
-    // catch-up bound (stepTarget) is clamped to _srvTick + inputDelay — the
-    // furthest tick for which TCP guarantees all command frames have arrived.
-    this._inputDelay = 0
     // Shared-clock state mirrored from the authority's MsgControl. While paused
     // the client stops extrapolating serverTick so every window freezes at the
     // authoritative tick; rate scales _tickMs so a slowed/sped host paces all
@@ -161,27 +154,14 @@ export class WsFrameSource extends FrameSource {
   }
 
   // serverTick is the estimated authoritative tick *right now*, extrapolated at
-  // the tick rate from the last observed beacon. Used for telemetry/display; the
-  // render loop steps to stepTarget (a clamped form), not this raw estimate.
+  // the tick rate from the last observed beacon. The render loop steps the local
+  // engine up to (but not past) this value.
   get serverTick() {
     if (!this._joined) return 0
     // Paused: clamp to the last authoritative tick so local prediction freezes
     // exactly where the server did instead of free-running on the wall clock.
     if (this._paused) return this._srvTick
     return this._srvTick + Math.floor((this._now() - this._srvWall) / this._tickMs)
-  }
-
-  // stepTarget is the furthest tick the render loop may step the local engine
-  // to. It is the wall-clock-extrapolated serverTick, but clamped to
-  // _srvTick + inputDelay: orders are stamped for serverTick + inputDelay + 1, so
-  // every command frame for any tick at or below this bound has provably already
-  // arrived (TCP delivers it before the beacon that advanced _srvTick). Stepping
-  // past it would risk producing a tick whose order frame is still in flight,
-  // which the session would then drop — the permanent post-kill desync this
-  // clamp closes. The extrapolation still smooths pacing within the safe window.
-  get stepTarget() {
-    if (!this._joined) return 0
-    return Math.min(this.serverTick, this._srvTick + this._inputDelay)
   }
 
   // paused / rate expose the shared-clock state so the scene's runtime facade
@@ -223,7 +203,6 @@ export class WsFrameSource extends FrameSource {
       })
       await this._local.ready()
       if (a.tickRate) { this._baseTickMs = 1000 / a.tickRate; this._tickMs = this._baseTickMs / this._rate }
-      this._inputDelay = a.inputDelay || 0
       this._joined = true
       // A join above tick 0 is mid-game: hold stepping until the snapshot has
       // restored the live unit set (and its metas) so the replayed command
@@ -251,22 +230,6 @@ export class WsFrameSource extends FrameSource {
     switch (msg.type) {
       case 'command': {
         const frame = msg.command
-        // A frame's tick is a future execution time (server tick + inputDelay +
-        // 1), so it is not a beacon — but it does prove the authority had
-        // reached (tick - inputDelay - 1) to stamp it. Folding that lower bound
-        // into the server-clock estimate advances stepTarget during active play
-        // (orders flow far more often than the periodic hash beacon), keeping
-        // local pacing smooth without ever exceeding the safe lead.
-        const srvAt = frame.tick - this._inputDelay - 1
-        if (srvAt >= 0) this._noteServerTick(srvAt)
-        // A frame for a tick the local engine has already produced can never be
-        // applied (the session only runs pending[currentTick+1]); rather than
-        // silently drop it and diverge forever, re-pull authoritative state. The
-        // stepTarget clamp keeps this from happening in normal flow, so this is a
-        // defensive self-heal, gated to a live (seeded, restored) world.
-        if (this._seeded && this._restored && frame.tick <= this.tick) {
-          this.forceSync()
-        }
         for (const order of frame.orders || []) {
           // A Spawn (Kind 5) for a type this client never registered would
           // resolve to a nil meta and be dropped; fetch+register it and hold the
