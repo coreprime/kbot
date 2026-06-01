@@ -15,7 +15,7 @@ import (
 	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/internal/assets"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // packedTNTRoundTripSamples is a hand-picked sample covering the shapes of

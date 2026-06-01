@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // TestDecompileCompileRoundTrip is the end-to-end validation of the compiler

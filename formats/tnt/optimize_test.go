@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // buildSyntheticMap returns a minimal 4x4-cell (2x2-tile) map with the

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/internal/assets"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 func TestLoadEmbeddedPalette(t *testing.T) {

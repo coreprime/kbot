@@ -12,7 +12,7 @@ import (
 	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/formats/scripting/compiler"
 	"github.com/coreprime/kbot/formats/scripting/decompiler"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // TestCOBDecompileRoundTrip tests the full decompile → compile → compare cycle

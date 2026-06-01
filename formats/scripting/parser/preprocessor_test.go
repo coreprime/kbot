@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 func TestPreprocessorDefine(t *testing.T) {

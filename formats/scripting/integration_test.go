@@ -2,7 +2,7 @@ package scripting_test
 
 import (
 	"os"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 	"path/filepath"
 	"strings"
 	"testing"

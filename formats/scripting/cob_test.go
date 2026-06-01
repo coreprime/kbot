@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 func TestLoadFromFile(t *testing.T) {

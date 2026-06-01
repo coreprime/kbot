@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/formats/bik"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // TestKnownHeader pins the parsed fields of a specific shipped cutscene so a

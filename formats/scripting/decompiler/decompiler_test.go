@@ -6,7 +6,7 @@ import (
 
 	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/formats/scripting/assembly"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 func TestDecompiler_BasicOutput(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/formats/scripting/compiler"
 	"github.com/coreprime/kbot/formats/scripting/decompiler"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 // TestAllCOBRoundtrip tests every .cob file from flat/scripts for byte-perfect roundtrip.

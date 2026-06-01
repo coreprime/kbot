@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/formats/scripting"
-	"github.com/coreprime/kbot/testutil"
+	"github.com/coreprime/kbot/internal/testutil"
 )
 
 func TestLintRealCOB(t *testing.T) {
