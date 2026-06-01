@@ -33,7 +33,7 @@ export function HomePage({ onOpenDir, onOpenFile }) {
     <div class="fx-home">
       <section class="fx-hero">
         <h1>🗂 Game File Explorer</h1>
-        <p>Browse the complete file-systems for Total Annihilation &amp; TA: Kingdoms, including any mod content — preview animations, maps, scripts, fonts, and more.</p>
+        <p>Browse the complete file-systems for Total Annihilation ${'&'} TA: Kingdoms, including any mod content — preview animations, maps, scripts, fonts, and more.</p>
         <div class="fx-hero-search">
           <${SearchBox} onOpenDir=${onOpenDir} onOpenFile=${onOpenFile} autoFocus=${true} />
         </div>
