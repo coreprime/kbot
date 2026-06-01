@@ -119,6 +119,10 @@ func (w *World) Tick() uint64 { return w.tick }
 // UnitByID returns a unit or nil.
 func (w *World) UnitByID(id uint32) *Unit { return w.units[id] }
 
+// UnitCount returns the number of units currently in the world (live or dead
+// until reaped). It is a cheap map length read used for session listings.
+func (w *World) UnitCount() int { return len(w.units) }
+
 // ForEachUnit visits every live unit in stable insertion order. Used to build
 // authoritative wire snapshots without disturbing the render event buffer.
 func (w *World) ForEachUnit(fn func(*Unit)) {

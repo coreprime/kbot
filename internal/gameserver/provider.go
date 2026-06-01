@@ -75,8 +75,27 @@ func (p *fbiProvider) loadUnit(name string) *sim.UnitMeta {
 	return p.toMeta(name, &u.Info)
 }
 
-// toMeta converts a parsed FBI into the simulation stat block.
+// toMeta converts a parsed FBI into the simulation stat block, resolving weapon
+// references against this provider's cached weapons index.
 func (p *fbiProvider) toMeta(name string, info *ta.UnitInfo) *sim.UnitMeta {
+	return MetaFromUnitInfo(name, info, p.resolveWeapon)
+}
+
+// resolveWeapon looks up an FBI weapon reference in the cached weapons index.
+// Caller holds p.mu (toMeta runs under it).
+func (p *fbiProvider) resolveWeapon(ref string) (ta.Weapon, bool) {
+	p.ensureWeapons()
+	sec, ok := p.weapons[strings.ToUpper(strings.TrimSpace(ref))]
+	return sec, ok
+}
+
+// MetaFromUnitInfo converts a parsed FBI [UNITINFO] block into the simulation's
+// fixed-point stat block. resolveWeapon maps an FBI weapon reference
+// (Weapon1/2/3) to its parsed TDF section, returning ok=false for an unknown
+// ref. Both asset bridges — the native flattened-tree provider and the studio
+// VFS provider — funnel through here so a unit gets identical stats regardless
+// of where the bytes were read from.
+func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref string) (ta.Weapon, bool)) *sim.UnitMeta {
 	m := &sim.UnitMeta{
 		Name:        name,
 		MaxVelocity: fixed.FromFloat(info.MaxVelocity),
@@ -122,19 +141,20 @@ func (p *fbiProvider) toMeta(name string, info *ta.UnitInfo) *sim.UnitMeta {
 		m.CruiseAltitude = fixed.FromFloat(alt)
 	}
 	for i, ref := range []string{info.Weapon1, info.Weapon2, info.Weapon3} {
-		m.Weapons[i] = p.weaponMeta(ref)
+		m.Weapons[i] = weaponMetaFromRef(ref, resolveWeapon)
 	}
 	return m
 }
 
-// weaponMeta resolves an FBI weapon reference into the engine's per-slot stats.
-func (p *fbiProvider) weaponMeta(ref string) sim.WeaponMeta {
+// weaponMetaFromRef resolves an FBI weapon reference into the engine's per-slot
+// stats via the supplied resolver. An empty / NONE / unknown ref yields a zero
+// (absent) weapon slot.
+func weaponMetaFromRef(ref string, resolveWeapon func(ref string) (ta.Weapon, bool)) sim.WeaponMeta {
 	key := strings.ToUpper(strings.TrimSpace(ref))
 	if key == "" || key == "NONE" || key == "-" {
 		return sim.WeaponMeta{}
 	}
-	p.ensureWeapons()
-	sec, ok := p.weapons[key]
+	sec, ok := resolveWeapon(key)
 	if !ok {
 		return sim.WeaponMeta{}
 	}

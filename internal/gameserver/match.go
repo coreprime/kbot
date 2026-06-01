@@ -8,6 +8,7 @@
 package gameserver
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/coreprime/kbot/engine/order"
@@ -42,6 +43,15 @@ type Match struct {
 	inputDelay uint64
 	session    *session.Session
 
+	// Descriptive metadata for session listings. name and kind are set once,
+	// before Run starts, so they are safe to read from other goroutines;
+	// players and units are updated inside Run and read atomically.
+	name      string
+	kind      string
+	createdAt time.Time
+	players   atomic.Int64
+	units     atomic.Int64
+
 	register   chan *client
 	unregister chan *client
 	orders     chan clientOrder
@@ -49,6 +59,36 @@ type Match struct {
 
 	clients  map[*client]struct{}
 	nextSlot int
+}
+
+// SessionInfo is a thread-safe snapshot of a match's descriptive state, used by
+// the host's session-listing endpoint.
+type SessionInfo struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	Players   int       `json:"players"`
+	Units     int       `json:"units"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// SetInfo records descriptive metadata for listings. It must be called before
+// Run starts, while the match is still single-threaded.
+func (m *Match) SetInfo(name, kind string) {
+	m.name = name
+	m.kind = kind
+}
+
+// info returns a thread-safe snapshot of the match's listing state.
+func (m *Match) info() SessionInfo {
+	return SessionInfo{
+		ID:        m.id,
+		Name:      m.name,
+		Kind:      m.kind,
+		Players:   int(m.players.Load()),
+		Units:     int(m.units.Load()),
+		CreatedAt: m.createdAt,
+	}
 }
 
 type clientOrder struct {
@@ -63,6 +103,7 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc) *M
 		id:         id,
 		seed:       seed,
 		inputDelay: inputDelay,
+		createdAt:  time.Now(),
 		session:    session.New(session.Config{World: w, InputDelay: inputDelay}),
 		register:   make(chan *client),
 		unregister: make(chan *client),
@@ -100,6 +141,7 @@ func (m *Match) onJoin(c *client) {
 	c.slot = m.nextSlot
 	m.nextSlot++
 	m.clients[c] = struct{}{}
+	m.players.Store(int64(len(m.clients)))
 	go c.writePump()
 	c.send(wire.ServerMsg{Type: wire.MsgJoinAccept, JoinAccept: &wire.JoinAccept{
 		PlayerSlot: c.slot,
@@ -123,6 +165,7 @@ func (m *Match) onJoin(c *client) {
 func (m *Match) onLeave(c *client) {
 	if _, ok := m.clients[c]; ok {
 		delete(m.clients, c)
+		m.players.Store(int64(len(m.clients)))
 		close(c.out)
 	}
 }
@@ -142,6 +185,7 @@ func (m *Match) onOrder(o clientOrder) {
 
 func (m *Match) step() {
 	m.session.Step()
+	m.units.Store(int64(m.session.World().UnitCount()))
 	tick := m.session.World().Tick()
 	if tick%hashEvery == 0 {
 		m.broadcast(wire.ServerMsg{Type: wire.MsgHash, Hash: &wire.HashMsg{

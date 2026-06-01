@@ -92,8 +92,11 @@ func runStudio(_ *cobra.Command, args []string) error {
 		go reportPreloadProgress()
 	}
 
+	startGameHost()
+
 	mux := http.NewServeMux()
 	registerAPI(mux)
+	registerHostAPI(mux)
 	registerStatic(mux)
 
 	addr := fmt.Sprintf(":%d", serverPort)
