@@ -340,7 +340,8 @@ type primitiveJSON struct {
 	Texture     string   `json:"texture,omitempty"`
 	ColorIndex  int      `json:"colorIndex"`
 	IsColored   bool     `json:"isColored"`
-	VertexCount int      `json:"vertexCount"` // 1=point, 2=line, 3=tri, 4+=polygon
+	VertexCount int      `json:"vertexCount"`        // 1=point, 2=line, 3=tri, 4+=polygon
+	Synthetic   bool     `json:"synthetic,omitempty"` // reconstructed by FillModel, not original art
 }
 
 // scale3DO converts a 3DO fixed-point int32 to a world-space float.
@@ -437,6 +438,7 @@ func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 				ColorIndex:  prim.ColorIndex,
 				IsColored:   prim.IsColored,
 				VertexCount: len(prim.VertexIndices),
+				Synthetic:   prim.Synthetic,
 			}
 			for i, idx := range prim.VertexIndices {
 				if idx < 0 || idx > 65535 {

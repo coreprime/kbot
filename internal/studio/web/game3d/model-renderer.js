@@ -3029,6 +3029,13 @@ export class ModelRenderer {
           if (group.depthTier > 0) {
             gl.enable(gl.POLYGON_OFFSET_FILL)
             gl.polygonOffset(-group.depthTier, -group.depthTier)
+          } else if (group.synthetic) {
+            // FillModel reconstructed this face; it sits coplanar with the
+            // artist's original geometry (e.g. the ARM Swatter nose cap on
+            // the team-colour deck plane).  Push it away from the camera so
+            // the real face always wins the depth test — no shimmer/z-fight.
+            gl.enable(gl.POLYGON_OFFSET_FILL)
+            gl.polygonOffset(1, 1)
           } else {
             gl.disable(gl.POLYGON_OFFSET_FILL)
           }
