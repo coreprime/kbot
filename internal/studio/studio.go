@@ -102,10 +102,16 @@ func runStudio(_ *cobra.Command, args []string) error {
 
 	startGameHost()
 
+	// Warm the VFS render caches in the background, reporting progress over the
+	// /api/vfs/events websocket so the Files tab can show a live indicator and
+	// refresh thumbnails as they land.
+	startVFSWarm()
+
 	mux := http.NewServeMux()
 	registerAPI(mux)
 	registerHostAPI(mux)
 	registerVFSAPI(mux)
+	registerVFSEvents(mux)
 	registerStatic(mux)
 
 	addr := fmt.Sprintf(":%d", serverPort)
