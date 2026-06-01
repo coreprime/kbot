@@ -17,9 +17,33 @@
 // so the user sees the planned surface area without thinking the
 // click did nothing.
 
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { htm as html } from '/ui/common/htm-bind.js'
+
+// _hostWsUrl builds a websocket URL onto the in-process game host
+// (mounted at /host/ws on the same origin the studio is served from).
+// `params` becomes the query string — `match` selects/creates the
+// match, and `name`/`kind` tag a freshly-created one for the listing.
+function _hostWsUrl(params) {
+  const proto = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss:' : 'ws:'
+  const host = (typeof location !== 'undefined' && location.host) ? location.host : 'localhost'
+  const qs = new URLSearchParams(params).toString()
+  return `${proto}//${host}/host/ws?${qs}`
+}
+
+// _genMatchId mints a short, collision-unlikely id for a New Hosted
+// match.  The host lazily creates the match on first connect, so the
+// id only needs to be unique among live matches, not globally.
+function _genMatchId() {
+  return 'sbx-' + Math.random().toString(36).slice(2, 8)
+}
+
+// _sandboxView toggles the Sandbox panel between its mode menu (Local
+// / New Hosted / Join Hosted) and the Join Hosted picker that lists
+// live sessions.  Module-scoped so it survives the dialog's
+// unmount/remount the same way _activeTab does.
+const _sandboxView = signal('menu')
 
 // Module-scoped so the tab the user picked survives unmount/remount
 // (e.g. opening + closing the dialog without losing the workflow
@@ -62,6 +86,56 @@ function _Card({ icon, title, sub, onClick, disabled = false, titleAttr = null }
   `
 }
 
+// _JoinPicker — lists the live hosted sandboxes from
+// /api/studio/sandboxes and joins the one the user clicks.  Fetched on
+// mount (and via the Refresh button); editor sessions are already
+// filtered out server-side.  Selecting a row hands the host ws URL for
+// that match's id back up through onOpenSandbox, which spins up a
+// sandbox tab whose scene observes the authoritative world.
+function _JoinPicker({ onOpenSandbox, onBack }) {
+  const [state, setState] = useState({ status: 'loading', sessions: [], error: null })
+  const load = () => {
+    setState((s) => ({ ...s, status: 'loading', error: null }))
+    fetch('/api/studio/sandboxes')
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then((rows) => setState({ status: 'ready', sessions: Array.isArray(rows) ? rows : [], error: null }))
+      .catch((e) => setState({ status: 'error', sessions: [], error: String(e && e.message || e) }))
+  }
+  useEffect(() => { load() }, [])
+  const join = (s) => {
+    if (!onOpenSandbox) return
+    onOpenSandbox({
+      joinUrl: _hostWsUrl({ match: s.id }),
+      displayName: s.name || s.id,
+    })
+  }
+  return html`
+    <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox-join">
+      <div class="welcome-join-head">
+        <button class="welcome-link-btn" onClick=${() => onBack && onBack()}>← Back</button>
+        <button class="welcome-link-btn" onClick=${load}>↻ Refresh</button>
+      </div>
+      ${state.status === 'loading' ? html`<p class="welcome-join-msg">Loading live sandboxes…</p>` : null}
+      ${state.status === 'error' ? html`<p class="welcome-join-msg welcome-join-err">Couldn't load sandboxes: ${state.error}</p>` : null}
+      ${state.status === 'ready' && state.sessions.length === 0 ? html`
+        <p class="welcome-join-msg">No live hosted sandboxes.  Start one with New Hosted.</p>
+      ` : null}
+      ${state.status === 'ready' && state.sessions.length > 0 ? html`
+        <ul class="welcome-join-list">
+          ${state.sessions.map((s) => html`
+            <li key=${s.id}>
+              <button class="welcome-join-row" onClick=${() => join(s)}>
+                <span class="welcome-join-name">${s.name || s.id}</span>
+                <span class="welcome-join-meta">${s.units} unit${s.units === 1 ? '' : 's'} · ${s.players} player${s.players === 1 ? '' : 's'}</span>
+              </button>
+            </li>
+          `)}
+        </ul>
+      ` : null}
+    </div>
+  `
+}
+
 export function WelcomeScreen({
   onNewMap,
   onOpenMap,
@@ -69,12 +143,18 @@ export function WelcomeScreen({
   onOpenSandbox,
 }) {
   const active = _activeTab.value
+  // Read the sandbox sub-view (menu vs join picker) so the keyboard-nav
+  // effect below re-binds when the Sandbox panel swaps between its card
+  // grid and the Join Hosted list — the card row remounts on that
+  // toggle, so the listener must follow it.
+  const sandboxView = _sandboxView.value
   // Keyboard nav — Arrow Left / Right walks the cards inside whichever
   // panel is active.  Same shape the legacy wireWelcomeKeyboard()
   // shipped; mounted on the card row so tab-press doesn't carry
-  // through to the dialog.  The ref is re-bound each time `active`
-  // changes (the rendered panel changes too), so all four tabs get
-  // identical keyboard behaviour without per-tab duplication.
+  // through to the dialog.  The ref is re-bound each time `active` (or
+  // the sandbox sub-view) changes — the rendered panel changes too —
+  // so every tab gets identical keyboard behaviour without per-tab
+  // duplication.
   const cardRowRef = useRef(null)
   useEffect(() => {
     if (!cardRowRef.current) return undefined
@@ -92,7 +172,7 @@ export function WelcomeScreen({
     }
     row.addEventListener('keydown', onKey)
     return () => row.removeEventListener('keydown', onKey)
-  }, [active])
+  }, [active, sandboxView])
   return html`
     <h1 class="welcome-title">Welcome to KBot Studio</h1>
     <p class="welcome-tagline">
@@ -112,19 +192,36 @@ export function WelcomeScreen({
         </button>
       `)}
     </div>
-    ${active === 'sandbox' ? html`
+    ${active === 'sandbox' && _sandboxView.value === 'join' ? html`
+      <${_JoinPicker}
+        onOpenSandbox=${onOpenSandbox}
+        onBack=${() => { _sandboxView.value = 'menu' }} />
+    ` : null}
+    ${active === 'sandbox' && _sandboxView.value !== 'join' ? html`
       <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox">
         <div class="welcome-options" ref=${cardRowRef}>
           <${_Card}
             icon="🪖"
-            title="New Sandbox"
-            sub="Drop units on a blank battlefield and test them live."
+            title="Local Sandbox"
+            sub="Drop units on a blank battlefield and test them live, in-browser."
             onClick=${() => onOpenSandbox && onOpenSandbox()} />
           <${_Card}
-            icon="📂"
-            title="Load Sandbox"
-            sub="Reopen a saved sandbox from your workspace."
-            disabled=${true} />
+            icon="🌐"
+            title="New Hosted"
+            sub="Start an authoritative hosted match and join it for multiplayer testing."
+            onClick=${() => {
+              const id = _genMatchId()
+              const name = `Sandbox ${id}`
+              onOpenSandbox && onOpenSandbox({
+                joinUrl: _hostWsUrl({ match: id, name, kind: 'sandbox' }),
+                displayName: name,
+              })
+            }} />
+          <${_Card}
+            icon="🔗"
+            title="Join Hosted"
+            sub="Browse live hosted sandboxes and join one to share the world."
+            onClick=${() => { _sandboxView.value = 'join' }} />
         </div>
       </div>
     ` : null}

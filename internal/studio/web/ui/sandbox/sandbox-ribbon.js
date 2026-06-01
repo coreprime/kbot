@@ -136,6 +136,8 @@ const _PANEL_GROUPS = [
       title: 'Runtime overlay — active script threads, instruction counters, sim ticks.' },
     { id: 'mv-inspector-projectiles', icon: '🚀', label: 'Projectiles',
       title: 'Projectiles overlay — every in-flight bomb, missile, and rocket with origin, destination, speed, and the unit that launched it.  Group by family or by owner.' },
+    { id: 'mv-inspector-network',     icon: '📡', label: 'Network',
+      title: 'Network / Sync overlay — tick, hash, server clock, latency, traffic counters, and time since the client was last in sync with the authority.  Includes Force Sync.' },
   ] },
   { label: 'Graphics', rows: [
     { id: 'mv-inspector-camera',     icon: '🎥', label: 'Renderer',

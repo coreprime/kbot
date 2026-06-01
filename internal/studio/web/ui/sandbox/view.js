@@ -4,7 +4,7 @@
 //
 //   - A shared WebGL context + ModelRenderer (entity-mode)
 //   - An OrbitCamera framed on the spawn ring
-//   - A SandboxScene that owns N CobUnit + CobBinding pairs
+//   - A WasmSandboxScene backed by the Go/wasm sim, driving N units
 //   - Spawn / select / command UI hooks
 //
 // Built as a sibling to ModelViewer rather than a subclass — the two
@@ -24,7 +24,8 @@ import { ModelRenderer } from '../../game3d/model-renderer.js'
 import { OrbitCamera } from '../../game3d/orbit-camera.js'
 import { TextureCache } from '../../game3d/texture-cache.js'
 import { TAPalette } from '../../game3d/palette.js'
-import { SandboxScene } from './scene.js'
+import { WasmSandboxScene } from './wasm-scene.js'
+import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { attachOrbitControls } from '../../game3d/camera-controls.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import { ArmedCursor } from '../../game3d/armed-cursor.js'
@@ -44,14 +45,19 @@ import {
 } from '../common/graphics-options-state.js'
 
 export class SandboxView {
-  constructor({ canvas, scene = null, statusEl, onModelLoaded } = {}) {
+  constructor({ canvas, scene = null, statusEl, onModelLoaded, joinUrl = null } = {}) {
     // Optional shared scene — when supplied (the split-pane case), this
     // view observes that scene's engine + uses its smoke trails +
     // selection set, but draws into ITS OWN canvas/camera/renderer.
     // When null (the single-pane case), open() creates a fresh
-    // SandboxScene on first paint.  This is the inversion that lets
+    // WasmSandboxScene on first paint.  This is the inversion that lets
     // a tab host N viewports against one engine.
     this._externalScene = scene
+    // joinUrl — when set, open() backs the scene with a WsFrameSource
+    // connected to an authoritative host instead of an in-process wasm
+    // world. Units then arrive through the host's snapshots and spawning
+    // round-trips Spawn orders through the authority (see #spawnUnit).
+    this._joinUrl = joinUrl
     // Engine subscription unsubscribe closures captured by
     // subscribeEngine() (currently unused since 'fire' / 'death' /
     // 'move-stop' have moved to scene-level, but kept for any
@@ -226,12 +232,38 @@ export class SandboxView {
         // scene; we just observe it.  Engine subscriptions, smoke
         // trails, and the FBI sounds debounce all live there.
         this.scene = this._externalScene
+        // Shared scenes are constructed at tab level (createSharedScene)
+        // before any pane exists, so they have no TA palette — that loads
+        // per-pane with the GL context above.  Backfill it here so the
+        // scene's ballistic-particle colouring (cannon balls / plasma)
+        // resolves a real RGB instead of rendering colourless / invisible.
+        // The palette is the global TA palette (identical across panes), so
+        // last-writer-wins is harmless.
+        if (!this.scene.palette && this.palette) this.scene.palette = this.palette
+        // Join scenes are created at tab level (before any pane), so
+        // they have no model resolver yet — the resolver needs a
+        // pane's GL-bound loader.  The first pane to open registers
+        // its loader; setModelResolver is idempotent so siblings are
+        // no-ops.  Without this an adopted remote unit's u.model stays
+        // null and the unit never renders.
+        if (this.scene._join && typeof this.scene.setModelResolver === 'function') {
+          this.scene.setModelResolver((name) => this.loader.load(name).then((m) => m.cloneForInstance()))
+        }
       } else {
         // Single-pane case — own the scene.  The constructor wires
         // 'fire' / 'death' / 'move-stop' subscriptions internally so
         // projectile spawn + death puffs + arrival voice all fire
-        // exactly once per event regardless of observer count.
-        this.scene = new SandboxScene({ palette: this.palette })
+        // exactly once per event regardless of observer count.  In join
+        // mode the scene is backed by a WsFrameSource against the host;
+        // it adopts units from the authority's snapshots and resolves
+        // their geometry through this pane's loader.
+        this.scene = new WasmSandboxScene({
+          palette: this.palette,
+          source: this._joinUrl ? new WsFrameSource({ url: this._joinUrl }) : null,
+          modelResolver: this._joinUrl
+            ? (name) => this.loader.load(name).then((m) => m.cloneForInstance())
+            : null,
+        })
       }
       // Push the active world's gravity into the engine so the
       // ballistic aim solver agrees with the projectile flight sim.
@@ -245,7 +277,7 @@ export class SandboxView {
         this.scene.engine.setGravity(this.renderer.getGravity())
       }
       // Cross-unit dynamic-light aggregation is pull-side (Phase D):
-      // the per-frame onAfterFrame hook below queries
+      // the per-frame onBeforeFrame hook below queries
       // engine.getSceneLight() and forwards the result to
       // this.renderer.setPulseLight.  The engine itself stays headless.
     }
@@ -321,24 +353,39 @@ export class SandboxView {
     // back to single-unit path with this.model = null, which paints
     // sky + ground only — exactly the "open flat map" view we want).
     this.#refreshEntities()
-    // Per-pane per-frame visual work.  Scene tick + cob-lifecycle
+    // Per-pane per-frame visual work.  Sim stepping + cob-lifecycle
     // advance are SCENE concerns (mutate shared state once per
     // frame regardless of pane count) and live on the tab-owned
     // tick loop since the sandbox-tab-tick refactor — see
-    // /ui/sandbox/tab.js's startTabTick wire.  This onAfterFrame
-    // is for view-only per-paint work: this pane's dynamic light
+    // /ui/sandbox/tab.js's startTabTick wire.  This onBeforeFrame
+    // hook runs just before the pane's draw() for view-only per-paint
+    // work: render-interpolation sampling, this pane's dynamic light
     // pulse, this pane's entities array, this pane's shift-preview
-    // overlay, this pane's armed cursor.
-    this.renderer.onAfterFrame = () => {
-      // Pull-side scene light: ask the engine for the brightest live
-      // light-emitting particle across all units and push it into
-      // THIS renderer's single dynamic-light slot.  Each pane reads
-      // independently so per-pane camera framing computes the
-      // light's NDC position correctly.
-      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLight === 'function') {
-        const light = this.scene.engine.getSceneLight()
-        if (light) this.renderer.setPulseLight(light.pos, light.color, light.strength)
-        else this.renderer.setPulseLight(null, null, 0)
+    // overlay, this pane's armed cursor.  Pre-draw (not post) so the
+    // model + tracking camera read one frame-correct pose together.
+    this.renderer.onBeforeFrame = () => {
+      // Sample render interpolation for THIS frame's instant first, so both
+      // the entity transforms built below and the tracking camera (which
+      // reads the unit position inside draw()) see one coherent, frame-
+      // correct pose.  Doing this pre-draw is what keeps a tracked aircraft
+      // from stuttering on displays whose refresh rate isn't a clean multiple
+      // of the 40 Hz sim — the sim still steps on its own cadence, but every
+      // painted frame shows the exact interpolated position/heading for the
+      // moment it's displayed.
+      if (this.scene && typeof this.scene.interpolate === 'function') {
+        this.scene.interpolate()
+      }
+      // Pull-side scene lights: ask the engine for the brightest live
+      // light-emitting particles across all units and push them into THIS
+      // renderer's dynamic-light slots.  Several at once so each concurrent
+      // shot (a battleship's volley) casts its own glow rather than only the
+      // first.  Each pane reads independently so per-pane camera framing
+      // computes each light's NDC position correctly.
+      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLights === 'function') {
+        const lights = typeof this.scene.engine.getSceneLights === 'function'
+          ? this.scene.engine.getSceneLights()
+          : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
+        this.renderer.setPulseLights(lights)
       }
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
@@ -356,6 +403,19 @@ export class SandboxView {
     this.#refreshDefaultCursor()
     this.#setStatus('Sandbox ready — click "Spawn Unit" to add a unit to the field.')
     if (this.onModelLoaded) this.onModelLoaded(null, null)
+  }
+
+  // #spawnUnit introduces a unit, hiding the local/join split: in local
+  // mode it inserts directly via scene.addUnit and returns the adapter; in
+  // join mode it round-trips a Spawn order through the authority and returns
+  // null (the adapter materializes asynchronously when the host's snapshot
+  // first reports the new unit, with geometry resolved via modelResolver).
+  async #spawnUnit({ name, model, cobScript, x, z, headingRad, side }) {
+    if (this.scene && this.scene._join) {
+      await this.scene.spawnRemote({ name, x, z, headingRad, side })
+      return null
+    }
+    return this.scene.addUnit({ name, model, cobScript, x, z, headingRad, side })
   }
 
   // spawn loads geometry + COB for `name` and adds a unit instance to
@@ -378,24 +438,11 @@ export class SandboxView {
           cobScript = j
         }
       } catch { /* unit has no COB — fine, it'll just stand */ }
-      const inst = this.scene.addUnit({ name, model, cobScript, x, z, headingRad, side })
-      // Auto-run Create on spawn so the unit immediately settles into
-      // its idle pose (flares hidden, panels at rest) without the user
-      // having to click anything per-unit.  Flips lifecycle to
-      // 'creating' so the per-frame advanceCobLifecycle walker can
-      // promote it to 'created' (when Create's thread dies) and then
-      // auto-fire Activate (since sandbox units start at build% 100).
-      if (inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
-        inst.binding._lifecycle = 'creating'
-        try { inst.binding.start('Create') } catch { /* ignore */ }
-      }
-      // Fetch FBI / weapon metadata in the background.  The shared
-      // weapon driver needs weapons[0..2] to spawn proper TA
-      // projectiles (laser beams, missiles, shells) — without this
-      // sandbox firing falls back to a bare muzzle flash + hit-scan.
-      // Fetch is fire-and-forget; if it 404s the unit just stays in
-      // its no-weapons state without breaking anything.
-      this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
+      // addUnit introduces the unit into the wasm world and resolves once its
+      // FBI/weapon meta + COB bytes are loaded (the sim runs Create itself on
+      // spawn, so there's no JS-side lifecycle kick here).  The shared weapon
+      // driver reads inst.meta.weapons to draw proper TA projectiles.
+      const inst = await this.#spawnUnit({ name, model, cobScript, x, z, headingRad, side })
       this.#refreshEntities()
       this.#setStatus(`Spawned ${name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
       return inst
@@ -403,20 +450,6 @@ export class SandboxView {
       this.#setStatus(`Spawn failed: ${err.message || err}`)
       return null
     }
-  }
-
-  // #fetchUnitMeta loads FBI + weapon-TDF data for a freshly spawned
-  // unit and stows it on `inst.meta`.  The shared weapon driver reads
-  // this to pick projectile kind / ballistic flag / velocity / range /
-  // sound.  Same backend endpoint the unit editor's mvFetchUnitMeta
-  // uses so both views see identical data.
-  async #fetchUnitMeta(inst) {
-    if (!inst || !inst.name) return
-    try {
-      const resp = await fetch(`/api/studio/unit/${encodeURIComponent(inst.name)}`)
-      if (!resp.ok) return
-      inst.meta = await resp.json()
-    } catch { /* ignore */ }
   }
 
   // beginPlacement loads the unit's geometry + COB up front (so the
@@ -520,16 +553,32 @@ export class SandboxView {
       this._placementDrag.headingRad = Math.atan2(dx, dz)
       this.#refreshEntities()
     }
-    const onUp = (ev) => {
+    const onUp = async (ev) => {
       canvas.removeEventListener('pointermove', onMove)
       canvas.removeEventListener('pointerup', onUp)
       canvas.removeEventListener('pointercancel', onUp)
       try { canvas.releasePointerCapture(ev.pointerId) } catch { /* ignore */ }
       const drag = this._placementDrag
       this._placementDrag = null
-      // Commit the spawn — pointer-down position, drag-derived heading.
       const p = this._placement
-      const inst = this.scene.addUnit({
+      // Resolve the placement state SYNCHRONOUSLY, before the awaited spawn
+      // below yields the event loop. The browser fires the synthetic `click`
+      // immediately after `pointerup` — if we cleared _placement and armed
+      // _suppressNextClick only after the await, #onClick would run first, still
+      // see _placement set and the suppress flag unset, and commit a duplicate
+      // spawn at the same spot (the double-spawn bug).
+      this._suppressNextClick = true
+      // Single-shot placement unless Shift held — TA convention is
+      // one spawn per Build click; chain-spawn (shift) is the power-
+      // user shortcut for dropping multiple of the same unit fast.
+      if (!ev.shiftKey) {
+        this._placement = null
+      }
+      this.#refreshEntities()
+      this.#refreshDefaultCursor()
+      // Commit the spawn — pointer-down position, drag-derived heading.  The
+      // wasm world runs the unit's Create script itself on spawn.
+      await this.#spawnUnit({
         name: p.name,
         model: p.model,
         cobScript: p.cobScript,
@@ -538,25 +587,8 @@ export class SandboxView {
         headingRad: drag ? drag.headingRad : 0,
         side: p.side | 0,
       })
-      if (inst) {
-        this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
-        if (inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
-          inst.binding._lifecycle = 'creating'
-          try { inst.binding.start('Create') } catch { /* ignore */ }
-        }
-        this.#setStatus(`Spawned ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
-      }
-      // Single-shot placement unless Shift held — TA convention is
-      // one spawn per Build click; chain-spawn (shift) is the power-
-      // user shortcut for dropping multiple of the same unit fast.
-      if (!ev.shiftKey) {
-        this._placement = null
-      }
-      // Suppress the trailing click event so #onClick doesn't fire a
-      // second commit (or worse, a selection click) right after up.
-      this._suppressNextClick = true
+      this.#setStatus(`Spawned ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
       this.#refreshEntities()
-      this.#refreshDefaultCursor()
     }
     canvas.addEventListener('pointermove', onMove)
     canvas.addEventListener('pointerup', onUp)
@@ -1089,6 +1121,18 @@ export class SandboxView {
   setPendingCommand(cmd) {
     const valid = (cmd === 'move' || cmd === 'attack' ||
                    cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
+    // A weapon slot can only be armed when at least one selected unit actually
+    // carries a weapon in that slot.  Firing an empty slot is a no-op in the
+    // engine, so arming it (and showing its cursor) would be a lie — refuse and
+    // tell the user why instead of letting them paint a dead reticle around.
+    const slotIdxMap = { attack: 0, primary: 0, secondary: 1, tertiary: 2 }
+    if (valid && cmd in slotIdxMap && !this.#anySelectedHasWeaponSlot(slotIdxMap[cmd])) {
+      this._pendingCmd = null
+      this.#refreshDefaultCursor()
+      const label = cmd[0].toUpperCase() + cmd.slice(1)
+      this.#setStatus(`${label} — no selected unit has that weapon.`)
+      return
+    }
     this._pendingCmd = valid ? cmd : null
     // #refreshDefaultCursor drives the ArmedCursor overlay's
     // armed+ambient slot pair — armed wins over ambient so the cmd
@@ -1100,6 +1144,21 @@ export class SandboxView {
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
+  }
+
+  // #anySelectedHasWeaponSlot reports whether any currently-selected, living
+  // unit carries a populated weapon in the given slot index.  A populated slot
+  // is one whose meta entry has a weapon name — the same predicate the Controls
+  // panel uses to enable its per-slot buttons, so arming and UX stay in sync.
+  #anySelectedHasWeaponSlot(slotIdx) {
+    if (slotIdx == null) return false
+    for (const id of this.scene.selected) {
+      const u = this.scene.unitById(id)
+      if (!u || u.dead) continue
+      const w = u.meta && u.meta.weapons && u.meta.weapons[slotIdx]
+      if (w && w.name) return true
+    }
+    return false
   }
 
   // reloadGeometryForEnhance reacts to an Enhanced Mesh toggle by
@@ -1195,6 +1254,19 @@ export class SandboxView {
     const liveIds = new Set()
     for (const u of this.scene.units()) {
       if (!u.model) continue
+      // Pre-warm this pane's GL context with the unit's model-weapon projectile
+      // meshes (missiles / rockets / bombs) so the 3DO is uploaded before the
+      // shot flies.  A projectile lives in scene.projectiles() only for its
+      // brief flight; if the mesh isn't already cached, the lazy load in the
+      // projectile loop below never lands in time and the projectile never
+      // draws.  #ensureLocalModel is idempotent, so this is a cheap Map probe
+      // once the meshes are in.
+      const weapons = u.meta && u.meta.weapons
+      if (weapons) {
+        for (const w of weapons) {
+          if (w && w.model && !w.beamWeapon) this.#ensureLocalModel(w.model)
+        }
+      }
       // GL-context substitution — each pane's renderer can only draw
       // models whose VBOs live in its own context.  If the unit's TYPE
       // geometry was spawned/loaded by US, _localModels has the base
@@ -1259,6 +1331,9 @@ export class SandboxView {
         buildPercent: u.buildPercent,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
+        // Inspector hover highlight — the Sync Diagnostics panel flags the
+        // unit its hovered row points at, so the renderer outlines it.
+        highlight: this.scene.isUnitHighlighted ? this.scene.isUnitHighlighted(u.id) : false,
         // id + meta let the renderer apply the per-unit locomotion pose
         // overlay (hovercraft wobble, aircraft bank) in the sandbox, keyed by
         // a stable id with the unit's FBI flags.
@@ -1341,6 +1416,9 @@ export class SandboxView {
           pitchRad:   -proj.pitch,
         },
         id: 'proj-' + proj.id,
+        // Inspector hover highlight — the Sync Diagnostics Projectiles tab
+        // outlines the shot its hovered row points at.
+        highlight: this.scene.isProjoHighlighted ? this.scene.isProjoHighlighted(proj.id) : false,
         // Flagged so the LOD classifier divides its thresholds by
         // PROJECTILE_LOD_MULTIPLIER for this entity — bombs / missiles have
         // a much smaller bounding sphere than the units that fire them, so
@@ -1605,28 +1683,19 @@ export class SandboxView {
       const world = this.#screenToGround(sx, sy)
       const x = world ? world[0] : p.pos.x
       const z = world ? world[2] : p.pos.z
-      const inst = this.scene.addUnit({
+      // The wasm world fetches the unit's meta + COB and runs Create on spawn;
+      // refresh the field + status once the add resolves.
+      this.#spawnUnit({
         name: p.name,
         model: p.model,
         cobScript: p.cobScript,
         x, z,
         headingRad: 0,
         side: p.side | 0,
-      })
-      // Fetch FBI meta for this placed unit too — same path as
-      // spawn() so click-placed units get the shared weapon-driver
-      // projectiles when they fire.
-      this.#fetchUnitMeta(inst).catch(() => { /* ignore */ })
-      // Auto-run Create on spawn so the unit immediately settles into
-      // its idle pose (flares hidden, panels at rest).  Lifecycle
-      // 'creating' lets advanceCobLifecycle auto-promote and (when
-      // the unit ships an Activate script) auto-fire that too once
-      // Create's thread dies.
-      if (inst && inst.binding && inst.binding.hasScript && inst.binding.hasScript('Create')) {
-        inst.binding._lifecycle = 'creating'
-        try { inst.binding.start('Create') } catch { /* ignore */ }
-      }
-      this.#setStatus(`Spawned ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
+      }).then(() => {
+        this.#setStatus(`Spawned ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}) — ${this.scene.unitCount()} unit${this.scene.unitCount() === 1 ? '' : 's'} on field.`)
+        this.#refreshEntities()
+      }).catch(() => { /* spawn failed — status stays as-is */ })
       // Single-shot placement by default: one click drops one unit and
       // exits placement mode so the user is back to selection.  Hold
       // Shift on the click to KEEP placement live for drop-rows of the
@@ -1703,6 +1772,10 @@ export class SandboxView {
           if (id === hit.id) continue  // don't attack self
           const u = this.scene.unitById(id)
           if (!u) continue
+          // Skip any selected unit that lacks this weapon slot — a mixed
+          // selection should only fire the units actually carrying the weapon.
+          const wm = u.meta && u.meta.weapons && u.meta.weapons[slotIdx]
+          if (!wm || !wm.name) continue
           // Set attackTarget for ALL armed-fire variants so the
           // engine's autonomous attack loop walks the unit into
           // range first when the target is out of weapon reach.
@@ -1729,6 +1802,10 @@ export class SandboxView {
         for (const id of this.scene.selected) {
           const u = this.scene.unitById(id)
           if (!u || u.dead) continue
+          // Same mixed-selection guard as the unit-target branch: only units
+          // that actually carry this weapon slot get a force-fire order.
+          const wm = u.meta && u.meta.weapons && u.meta.weapons[slotIdx]
+          if (!wm || !wm.name) continue
           engine.setWeaponTarget(u.id, slotIdx, { point: [world[0], world[1], world[2]] }, { source: 'manual' })
           targeted++
         }
@@ -2231,14 +2308,25 @@ export class SandboxView {
       : null
     const focusedBinding = (focused && focused.binding) ? focused.binding : null
     const cob = wrapCobWithAggregate(this, focusedBinding || {
-      runtime: this.runtime,
       unit: null,
       hasScript: () => false,
     })
+    // COB executes inside the wasm engine, so the live runtime (thread list,
+    // tick/unit/thread counts) and the focused unit's static vars come from the
+    // scene's COB adapter, not the render-only JS binding. The Runtime / Script
+    // Variables panels read cob.runtime + cob.unit; populate both here so they
+    // show real state in the offline sandbox and in a joined match alike.
+    cob.runtime = (this.scene && this.scene.runtime) ? this.scene.runtime : this.runtime
+    if (focused && this.scene && typeof this.scene.cobUnit === 'function') {
+      cob.unit = this.scene.cobUnit(focused.id)
+    }
     const mv = {
       camera: this.camera,
       renderer: this.renderer,
       cob,
+      // Network/sync telemetry for the Network developer panel. Null in an
+      // offline sandbox (no authority); a live stats object in a joined match.
+      net: (this.scene && typeof this.scene.netStats === 'function') ? this.scene.netStats() : null,
       _focusedUnitId: focused ? focused.id : null,
     }
     // Per-unit port + damage + build% shims so the shared Controls

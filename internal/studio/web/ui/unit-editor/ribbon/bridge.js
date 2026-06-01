@@ -134,6 +134,7 @@ export function wireModelViewerRibbon() {
       // Graphics Options — broadcast across every pane's renderer so a
       // toggle/slider takes effect on the primary AND its observers.
       setLightIntensity:    (v)  => eachRenderer((r) => r.setExposure?.(v)),
+      setMaxDynamicLights:  (v)  => eachRenderer((r) => r.setMaxDynamicLights?.(v)),
       setShadows:           (on) => eachRenderer((r) => r.setShadowsEnabled?.(!!on)),
       setShadowIntensity:   (v)  => eachRenderer((r) => r.setShadowStrength?.(v)),
       setSelfShadow:        (on) => eachRenderer((r) => r.setSelfShadow?.(!!on)),
@@ -268,6 +269,16 @@ export function wireUnitEditorHostBridge(reactUi) {
     stepRuntime: () => {
       const rt = _activeRuntime()
       if (!rt) return
+      // Joined sandbox: a single-step is authoritative.  Ask the host to advance
+      // exactly one tick and broadcast it; every client's local prediction then
+      // follows via serverTick.  No local frame replay — that would desync this
+      // window ahead of the others.
+      if (rt.isJoin && typeof rt.stepOnce === 'function') {
+        rt.stepOnce()
+        const ui = getReactUi()
+        if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
+        return
+      }
       // Force one fixed TA_TICK_MS step across the WHOLE per-frame
       // pipeline, not just the COB scripts.  rt.tick(TA_TICK_MS) alone
       // only advances bytecode — weapons, movement, particles, audio,
@@ -379,6 +390,15 @@ export function wireUnitEditorHostBridge(reactUi) {
         mv.resetState()
         return
       }
+      // wasm sandbox units own their script state in the engine; the field-poking
+      // path below resets only the JS adapter snapshot, so route to the adapter's
+      // engine-backed reset() when present and repaint the panel immediately.
+      if (typeof unit.reset === 'function') {
+        unit.reset()
+        const ui = getReactUi()
+        if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
+        return
+      }
       if (typeof unit.killAllThreads === 'function') unit.killAllThreads()
       unit._threads.length = 0
       unit._recentlyKilled.length = 0
@@ -392,6 +412,30 @@ export function wireUnitEditorHostBridge(reactUi) {
       if (typeof unit.clearExecutedOffsets === 'function') unit.clearExecutedOffsets()
     },
     openThreadCodeModal: (cob, thread) => openMvThreadCodeModal(cob, thread),
+    // Force Sync (Network panel) — re-pull the authority's full snapshot,
+    // discarding local work. Only the joined sandbox scene can honour it; the
+    // unit editor and an offline sandbox simply have no authority to re-pull.
+    forceSync: () => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      sv?.scene?.forceSync?.()
+      const ui = getReactUi()
+      if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
+    },
+    // Diagnose (Network panel) — fetch a read-only authoritative snapshot for a
+    // drift comparison without disturbing local prediction. Routes to the joined
+    // sandbox scene; rejects elsewhere (no authority to query).
+    diagnose: () => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      if (sv?.scene?.diagnose) return sv.scene.diagnose()
+      return Promise.reject(new Error('no authority'))
+    },
+    // Hover-highlight (Sync Diagnostics panel) — mark the hovered row's unit /
+    // projectile ids so the active sandbox renderer outlines them. Empty arrays
+    // clear the highlight. Only the joined sandbox scene carries live entities.
+    highlightEntities: (unitIds, projIds) => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      sv?.scene?.setHighlight?.(unitIds || [], projIds || [])
+    },
   })
   // Bridge the Include-Private toggle into the prefs system so the
   // React Script Commands panel signal + persisted

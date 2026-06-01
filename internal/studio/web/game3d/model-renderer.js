@@ -44,8 +44,15 @@ import {
 } from './worlds.js'
 import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
+import { MAX_PULSE_LIGHTS, setMaxSceneLights } from '../engine/scene-lights.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
+// Scratch buffers for the dynamic pulse-light uniform arrays, sized to
+// MAX_PULSE_LIGHTS so the per-frame upload never allocates.  Positions and
+// colours are vec3 (3 floats each); ranges are scalar.
+const _PULSE_POS = new Float32Array(MAX_PULSE_LIGHTS * 3)
+const _PULSE_COLOR = new Float32Array(MAX_PULSE_LIGHTS * 3)
+const _PULSE_RANGE = new Float32Array(MAX_PULSE_LIGHTS)
 // Fallback transform for entities with no explicit transform field —
 // referenced by the frustum-cull predicate so the hot path doesn't
 // allocate a fresh object per entity per frame.
@@ -63,6 +70,19 @@ const UV_OFFSET = 6 * 4
 const AO_OFFSET = 8 * 4
 
 const SHADOW_MAP_SIZE = 1024
+
+// Multi-entity (sandbox) shadow-frustum clamp.  A single shadow map only
+// stays crisp while its ortho box is small: sizing it to enclose every
+// spawned unit collapses each unit's footprint to a handful of texels
+// (blocky "square" shadows) and stretches the depth range until the
+// fixed bias can't stop peter-panning (the shadow tears off and reads as
+// sinking through the ground).  Instead the sandbox follows the CAMERA —
+// the same anchor the ground plane uses — with the half-extent clamped to
+// this window so resolution stays high where the user is looking.  Units
+// outside it cast no shadow, which already matches the shadow-distance LOD
+// dropping faraway casters.
+const SHADOW_FRUSTUM_MIN_WU = 48
+const SHADOW_FRUSTUM_MAX_WU = 160
 
 // DoF tuning bases.  DOF_BASE_GAP is the window-depth gap from 1.0 that
 // puts the blur onset at the unit's default framing distance (~25 wu)
@@ -348,6 +368,13 @@ export class ModelRenderer {
     //   particles, selected }.  When null, the renderer falls back
     //  to single-unit mode driven by `this.model` + _unitTransform.
     this._entities = null
+    // Single-model overlay projectiles — in-flight weapon meshes
+    // (missiles / rockets / bombs) the single-unit viewer draws on top
+    // of its one unit.  Each entry is { model, transform:{x,y,z,
+    // headingRad, pitchRad} }.  Null when none in flight.  Multi-entity
+    // hosts (sandbox) render projectiles as ordinary entities and leave
+    // this unset.
+    this._overlayProjectiles = null
     // Frustum-cull toggle — runtime debug knob, exposed via the
     // Developer Tools / View menu so the user can A/B the culled vs
     // un-culled render to confirm visual parity.  Default lives in
@@ -489,18 +516,74 @@ export class ModelRenderer {
     this.autoRotate = !!on
   }
 
-  // setPulseLight pushes a single dynamic point light into the next
-  // main + reflection passes.  pos = [x,y,z], color = [r,g,b] (over-1
-  // values are fine — the contribution is additive and tone-mapped
-  // post-lighting), range = WORLD-unit radius at which intensity falls
-  // to ~50%.  Pass null (or range = 0) to clear and let the shader
-  // skip the path.  Called per-frame by cob-binding from the strongest
-  // active light-emitting particle.
+  // setPulseLights pushes up to MAX_PULSE_LIGHTS dynamic point lights into the
+  // next main + ground + reflection passes.  `lights` is an array of
+  // { pos:[x,y,z], color:[r,g,b], strength } — over-1 colour values are fine
+  // (the contribution is additive and tone-mapped post-lighting); strength is
+  // the WORLD-unit radius at which intensity falls to ~50%.  Several lights at
+  // once means concurrent weapon SFX each cast their own glow rather than only
+  // the strongest.  Pass an empty array to clear and let the shaders skip the
+  // path.  Called per-frame by the host view from the scene's live
+  // light-emitting particles.
+  setPulseLights(lights) {
+    const out = []
+    if (Array.isArray(lights)) {
+      for (const l of lights) {
+        if (!l || !l.pos || !l.color || !(l.strength > 0)) continue
+        out.push({ pos: l.pos, color: l.color, range: l.strength })
+        if (out.length >= MAX_PULSE_LIGHTS) break
+      }
+    }
+    this._pulseLights = out
+  }
+
+  // setPulseLight is the legacy single-slot entry point, kept so callers that
+  // still resolve one light (the per-binding renderer path) keep working.  It
+  // delegates to the multi-light store.
   setPulseLight(pos, color, range) {
     if (!pos || !color || !(range > 0)) {
-      this._pulseLight = null
+      this._pulseLights = []
     } else {
-      this._pulseLight = { pos, color, range }
+      this._pulseLights = [{ pos, color, range }]
+    }
+  }
+
+  // setMaxDynamicLights sets the live cap on simultaneous dynamic lights from
+  // the "Dynamic Lights" graphics option (0..MAX_PULSE_LIGHTS).  The cap is
+  // enforced by the shared scene-lights collector — routing it there keeps
+  // every render path (sandbox, multi-unit engine, single-binding viewer) in
+  // agreement — and a renderer-side copy clamps the per-frame upload as a
+  // defensive backstop.
+  setMaxDynamicLights(n) {
+    const v = Math.max(0, Math.min(MAX_PULSE_LIGHTS, Math.floor(n) || 0))
+    this._maxPulseLights = v
+    setMaxSceneLights(v)
+  }
+
+  // #uploadPulseLights flattens the active dynamic lights into the scratch
+  // uniform arrays and uploads them to the bound program's pulse-light
+  // uniforms.  Only the active count is filled + uploaded (uPulseLightCount
+  // tells the shader where to stop), so a low slider value costs the GPU
+  // nothing past that count even though the arrays are sized for the worst
+  // case.  A null location (program without the uniform) is a no-op.  Shared by
+  // the main, reflection and ground passes.
+  #uploadPulseLights(gl, locPos, locColor, locRange, locCount) {
+    if (!locPos && !locColor && !locRange && !locCount) return
+    const lights = this._pulseLights || []
+    const cap = Math.min(this._maxPulseLights ?? MAX_PULSE_LIGHTS, MAX_PULSE_LIGHTS)
+    const n = Math.min(lights.length, cap)
+    for (let i = 0; i < n; i++) {
+      const l = lights[i]
+      const base = i * 3
+      _PULSE_POS[base] = l.pos[0]; _PULSE_POS[base + 1] = l.pos[1]; _PULSE_POS[base + 2] = l.pos[2]
+      _PULSE_COLOR[base] = l.color[0]; _PULSE_COLOR[base + 1] = l.color[1]; _PULSE_COLOR[base + 2] = l.color[2]
+      _PULSE_RANGE[i] = l.range
+    }
+    if (locCount) gl.uniform1i(locCount, n)
+    if (n > 0) {
+      if (locPos) gl.uniform3fv(locPos, _PULSE_POS.subarray(0, n * 3))
+      if (locColor) gl.uniform3fv(locColor, _PULSE_COLOR.subarray(0, n * 3))
+      if (locRange) gl.uniform1fv(locRange, _PULSE_RANGE.subarray(0, n))
     }
   }
 
@@ -640,6 +723,7 @@ export class ModelRenderer {
     this._locoState.pitch = 0
     this._locoState.roll = 0
     this._locoState.heave = 0
+    this._locoState.prevSpeed = undefined
     this._locoState.init = false
     // Hovercraft gyrate even at rest, so keep the continuous render loop
     // alive (otherwise an idle hovercraft on dry ground would only redraw
@@ -695,14 +779,26 @@ export class ModelRenderer {
     }
     if (loco.hover) {
       // Continuous gyration on the air cushion.  Two incommensurate
-      // frequencies per axis so it never reads as a clean loop; amplitude
-      // rises with ground speed; heave is a gentle vertical breathe.  Scaled
-      // by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      // frequencies per axis so it never reads as a clean loop; heave is a
+      // gentle vertical breathe.  Scaled by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      //
+      // The at-rest baseline is cut ~40% from the old constant so a parked
+      // hovercraft barely shivers; the bulk of the wobble now rides a "motion"
+      // factor that blends ground speed with the magnitude of acceleration, so
+      // a craft surging under throttle or braking gyrates harder than one
+      // idling, and a slow craft wobbles less than a fast one.
       const spd = Math.min(1, speed / 40)
-      const amp = (0.045 + 0.075 * spd) * HOVERCRAFT_WOBBLE_SCALE
+      let accelMag = 0
+      if (dt > 1e-4) {
+        const prevSpeed = (st.prevSpeed !== undefined) ? st.prevSpeed : speed
+        accelMag = Math.min(1, Math.abs(speed - prevSpeed) / dt / 80)
+        st.prevSpeed = speed
+      }
+      const motion = Math.min(1, spd + 0.4 * accelMag)
+      const amp = (0.027 + 0.075 * motion) * HOVERCRAFT_WOBBLE_SCALE
       targetPitch += amp * (Math.sin(t * 1.7) * 0.6 + Math.sin(t * 0.9 + 1.3) * 0.4)
       targetRoll  += amp * (Math.sin(t * 1.3 + 0.7) * 0.6 + Math.sin(t * 2.1) * 0.4)
-      targetHeave += (0.8 + 1.3 * spd) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
+      targetHeave += (0.48 + 1.3 * motion) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
       // Light bank into turns on top of the idle wobble (same sign as above).
       targetRoll  += Math.max(-0.3, Math.min(0.3, turnRate * 0.18))
       // The hover gyration is procedural (already smooth), so chase it fast.
@@ -788,6 +884,16 @@ export class ModelRenderer {
   //     particles?, buildPercent?, selected?, teamColor? }
   setEntities(entitiesArr) {
     this._entities = (Array.isArray(entitiesArr) && entitiesArr.length > 0) ? entitiesArr : null
+    this.requestRedraw()
+  }
+
+  // setOverlayProjectiles feeds the single-unit viewer the in-flight
+  // projectile meshes to draw on top of its one unit (the sandbox draws
+  // these as ordinary entities instead).  Each entry is
+  //   { model, transform: {x, y, z, headingRad, pitchRad} }.
+  // Pass null / empty when nothing is in flight.
+  setOverlayProjectiles(arr) {
+    this._overlayProjectiles = (Array.isArray(arr) && arr.length > 0) ? arr : null
     this.requestRedraw()
   }
 
@@ -1495,14 +1601,26 @@ export class ModelRenderer {
       // pose-copy / particle / light reads below still hold.
       if (this.cobBinding) {
         if (this._cobBindingDriveTick !== false) this.cobBinding.tick(dt * 1000)
-        // Pull the binding's strongest live light-emitting particle
-        // into our single dynamic light slot.  The binding exposes
-        // this as a pure getter so it has no awareness of being
-        // rendered — same shape as the engine's getSceneLight().
-        const light = this.cobBinding.getSceneLight()
-        if (light) this.setPulseLight(light.pos, light.color, light.strength)
-        else this.setPulseLight(null, null, 0)
+        // Pull the binding's strongest live light-emitting particles into our
+        // dynamic light slots.  The binding exposes this as a pure getter so it
+        // has no awareness of being rendered — same shape as the engine's
+        // getSceneLights().
+        if (typeof this.cobBinding.getSceneLights === 'function') {
+          this.setPulseLights(this.cobBinding.getSceneLights())
+        } else {
+          const light = this.cobBinding.getSceneLight && this.cobBinding.getSceneLight()
+          this.setPulseLights(light ? [light] : [])
+        }
       }
+      // Pre-draw hook — runs immediately before draw() so the host can
+      // sample render interpolation and rebuild the entity list for THIS
+      // exact frame.  Doing it here (rather than in onAfterFrame, after the
+      // draw) keeps the rendered model geometry and the tracking camera —
+      // both of which read the unit's live position inside draw() — locked to
+      // one coherent, frame-correct world state.  Sampling after the draw left
+      // the model a frame behind the camera, which reads as stutter on any
+      // display whose refresh rate isn't a clean multiple of the sim tick.
+      if (this.onBeforeFrame) this.onBeforeFrame(dt * 1000)
       this.draw()
       // Notify external observers (studio inspector overlays) that
       // a frame finished.  The host wires a refresh callback so
@@ -1923,6 +2041,24 @@ export class ModelRenderer {
         this.#renderMain(this.renderMode === 'flat')
         this._lodHideFlares = false
         this._lightingTierCheap = false
+        // Inspector hover highlight — when a panel row points at this
+        // entity (unit or projectile), trace its silhouette in a bright
+        // wireframe so the user can locate it on the field.  Drawn here,
+        // while this.model + _modelMatrix already point at the entity, with
+        // depth-write off so the outline floats over the hull.
+        if (ent.highlight) {
+          const g = this.gl
+          g.enable(g.BLEND)
+          g.blendFunc(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA)
+          g.disable(g.DEPTH_TEST)
+          g.depthMask(false)
+          const prevW = this.wireframeWidth
+          this.wireframeWidth = 2
+          this.#renderWireframe([1.0, 0.85, 0.2, 0.95])
+          this.wireframeWidth = prevW
+          g.depthMask(true)
+          g.enable(g.DEPTH_TEST)
+        }
       }
       // Restore globals for subsequent passes (wireframe overlay,
       // particles, etc.) and for any post-frame code that reads
@@ -1984,6 +2120,11 @@ export class ModelRenderer {
         gl.depthMask(true)
       }
     }
+    // In-flight projectile meshes for the single-unit viewer — drawn after
+    // the unit's main pass so missiles / rockets / bombs composite over the
+    // hull.  No-op (null) in multi-entity mode, where projectiles are
+    // ordinary entities in the loop above.
+    if (this._overlayProjectiles) this.#renderOverlayProjectiles()
     if (this._hoveredPieceName || this._hoveredTexture) {
       // Hover highlight: bright red wireframe on the hovered piece
       // (with its descendants) AND/OR every piece whose drawGroups
@@ -2384,21 +2525,12 @@ export class ModelRenderer {
     gl.uniform1f(this.uGroundSeabedHeightMul, this.seabedHeightMul)
     gl.uniform1f(this.uGroundSeabedScaleMul, this.seabedScaleMul)
     gl.uniform1f(this.uGroundSeabedRockChance, this.seabedRockChance)
-    // Dynamic pulse light — same source as the main pass (set per
-    // frame by setPulseLight from the strongest active particle).
-    // Terrain modes use this to spill a coloured wash from weapon
-    // SFX onto the ground beneath the firing unit; cleared (null)
-    // means the shader's gate skips the contribution entirely.
-    const _gpl = this._pulseLight
-    if (_gpl && _gpl.range > 0) {
-      gl.uniform3fv(this.uGroundPulseLightPos, _gpl.pos)
-      gl.uniform3fv(this.uGroundPulseLightColor, _gpl.color)
-      gl.uniform1f(this.uGroundPulseLightRange, _gpl.range)
-    } else {
-      gl.uniform3fv(this.uGroundPulseLightPos, [0, 0, 0])
-      gl.uniform3fv(this.uGroundPulseLightColor, [0, 0, 0])
-      gl.uniform1f(this.uGroundPulseLightRange, 0)
-    }
+    // Dynamic pulse lights — same source as the main pass (set per frame by
+    // setPulseLights from the scene's active light-emitting particles).
+    // Terrain modes use these to spill a coloured wash from weapon SFX onto
+    // the ground beneath the firing units; unused slots upload range 0 so the
+    // shader's per-light gate skips them.
+    this.#uploadPulseLights(gl, this.uGroundPulseLightPos, this.uGroundPulseLightColor, this.uGroundPulseLightRange, this.uGroundPulseLightCount)
     // Background mountain ring.  Active only on non-sea ground
     // modes; sea pass already paints water + seabed and shouldn't
     // be displaced.  Inner clearing scales with the unit's bounding
@@ -2525,20 +2657,11 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
-    // Dynamic pulse light — fed by setPulseLight() from the
-    // controller each frame.  Zero colour gates the shader path off
-    // when no weapon is firing.  Same uniforms in main + reflection
-    // passes so the d-gun light reflects off water too.
-    const _pl = this._pulseLight
-    if (_pl && _pl.range > 0) {
-      gl.uniform3fv(this.uPulseLightPos, _pl.pos)
-      gl.uniform3fv(this.uPulseLightColor, _pl.color)
-      gl.uniform1f(this.uPulseLightRange, _pl.range)
-    } else {
-      gl.uniform3fv(this.uPulseLightPos, [0, 0, 0])
-      gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
-      gl.uniform1f(this.uPulseLightRange, 0)
-    }
+    // Dynamic pulse lights — fed by setPulseLights() from the controller each
+    // frame.  Unused slots upload range 0 so the shader skips them when no
+    // weapon is firing.  Same uniforms in main + reflection passes so the
+    // weapon glow reflects off water too.
+    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange, this.uPulseLightCount)
     // Unit centre + radius for the pulse-light self-occlusion test.
     // Centre = model bbox centroid translated by the unit transform
     // (so it follows a walking unit).  Radius = bbox diagonal/2 with
@@ -2618,6 +2741,47 @@ export class ModelRenderer {
     gl.uniform1f(this.uReflectionTint, 0)
   }
 
+  // #renderOverlayProjectiles draws the single-unit viewer's in-flight
+  // projectile meshes by swapping `this.model` + `_modelMatrix` to each
+  // projectile in turn and running the standard main pass — the same trick
+  // the multi-entity loop uses, minus culling/LOD (a handful of close-range
+  // shots).  Saves + restores the unit's model / transform / build% so any
+  // post-frame reader (inspectors, jump-to-piece) still sees the unit.
+  #renderOverlayProjectiles() {
+    const savedModel = this.model
+    const savedBp = this.buildPercent
+    const savedHide = this._lodHideFlares
+    const ut = this._unitTransform
+    const savedUt = { x: ut.x, y: ut.y, z: ut.z, headingRad: ut.headingRad }
+    // Projectiles are always fully built; the unit's build% would otherwise
+    // paint a nano-frame wireframe over the missile mid-flight.
+    this.buildPercent = 100
+    this._lodHideFlares = false
+    for (const proj of this._overlayProjectiles) {
+      if (!proj || !proj.model) continue
+      this.model = proj.model
+      const t = proj.transform || _IDENTITY_T
+      ut.x = +t.x || 0
+      ut.y = +t.y || 0
+      ut.z = +t.z || 0
+      ut.headingRad = +t.headingRad || 0
+      Mat4.identity(this._modelMatrix)
+      Mat4.translate(this._modelMatrix, this._modelMatrix, ut.x, ut.y, ut.z)
+      if (ut.headingRad !== 0) Mat4.rotateY(this._modelMatrix, this._modelMatrix, ut.headingRad)
+      // Pitch tilts the nose along the climb/dive — applied after the yaw,
+      // matching the sandbox projectile-entity convention.
+      if (t.pitchRad) Mat4.rotateX(this._modelMatrix, this._modelMatrix, t.pitchRad)
+      this.#renderMain(this.renderMode === 'flat')
+    }
+    this.model = savedModel
+    this.buildPercent = savedBp
+    this._lodHideFlares = savedHide
+    ut.x = savedUt.x
+    ut.y = savedUt.y
+    ut.z = savedUt.z
+    ut.headingRad = savedUt.headingRad
+  }
+
   // ── Frame: main scene pass ─────────────────────────────────────────
 
   #renderMain(flat) {
@@ -2688,20 +2852,11 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
-    // Dynamic pulse light — fed by setPulseLight() from the
-    // controller each frame.  Zero colour gates the shader path off
-    // when no weapon is firing.  Same uniforms in main + reflection
-    // passes so the d-gun light reflects off water too.
-    const _pl = this._pulseLight
-    if (_pl && _pl.range > 0) {
-      gl.uniform3fv(this.uPulseLightPos, _pl.pos)
-      gl.uniform3fv(this.uPulseLightColor, _pl.color)
-      gl.uniform1f(this.uPulseLightRange, _pl.range)
-    } else {
-      gl.uniform3fv(this.uPulseLightPos, [0, 0, 0])
-      gl.uniform3fv(this.uPulseLightColor, [0, 0, 0])
-      gl.uniform1f(this.uPulseLightRange, 0)
-    }
+    // Dynamic pulse lights — fed by setPulseLights() from the controller each
+    // frame.  Unused slots upload range 0 so the shader skips them when no
+    // weapon is firing.  Same uniforms in main + reflection passes so the
+    // weapon glow reflects off water too.
+    this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange, this.uPulseLightCount)
     // Unit centre + radius for the pulse-light self-occlusion test.
     // Centre = model bbox centroid translated by the unit transform
     // (so it follows a walking unit).  Radius = bbox diagonal/2 with
@@ -2874,6 +3029,13 @@ export class ModelRenderer {
           if (group.depthTier > 0) {
             gl.enable(gl.POLYGON_OFFSET_FILL)
             gl.polygonOffset(-group.depthTier, -group.depthTier)
+          } else if (group.synthetic) {
+            // FillModel reconstructed this face; it sits coplanar with the
+            // artist's original geometry (e.g. the ARM Swatter nose cap on
+            // the team-colour deck plane).  Push it away from the camera so
+            // the real face always wins the depth test — no shimmer/z-fight.
+            gl.enable(gl.POLYGON_OFFSET_FILL)
+            gl.polygonOffset(1, 1)
           } else {
             gl.disable(gl.POLYGON_OFFSET_FILL)
           }
@@ -3082,40 +3244,22 @@ export class ModelRenderer {
   #updateLightMatrices() {
     let cx, cy, cz, r
     if (this._entities && this._entities.length > 0) {
-      // Multi-entity mode — compute the bounding sphere of all
-      // entities' world positions PLUS each unit's per-model bounds
-      // radius.  Without this the frustum stays sized for the first
-      // entity, so units placed further out cast no shadow (their
-      // geometry falls outside the shadow-map's ortho frame).  Pads
-      // each unit's bounds by the same 1.6× the single-unit path
-      // uses so rotated kbots don't clip at the frustum corners.
-      let minX = Infinity, minY = Infinity, minZ = Infinity
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
-      let maxUnitRadius = 4
-      for (const ent of this._entities) {
-        if (!ent.model || !ent.model.bounds) continue
-        const t = ent.transform || { x: 0, y: 0, z: 0 }
-        const bmin = ent.model.bounds.min
-        const bmax = ent.model.bounds.max
-        const ux = t.x + (bmin[0] + bmax[0]) * 0.5
-        const uy = t.y + (bmin[1] + bmax[1]) * 0.5
-        const uz = t.z + (bmin[2] + bmax[2]) * 0.5
-        const ur = 0.5 * Math.hypot(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2])
-        if (ur > maxUnitRadius) maxUnitRadius = ur
-        if (ux - ur < minX) minX = ux - ur
-        if (uy - ur < minY) minY = uy - ur
-        if (uz - ur < minZ) minZ = uz - ur
-        if (ux + ur > maxX) maxX = ux + ur
-        if (uy + ur > maxY) maxY = uy + ur
-        if (uz + ur > maxZ) maxZ = uz + ur
-      }
-      cx = (minX + maxX) * 0.5
-      cy = (minY + maxY) * 0.5
-      cz = (minZ + maxZ) * 0.5
-      const halfX = (maxX - minX) * 0.5
-      const halfY = (maxY - minY) * 0.5
-      const halfZ = (maxZ - minZ) * 0.5
-      r = Math.max(2, Math.hypot(halfX, halfY, halfZ) * 1.6)
+      // Multi-entity (sandbox) mode — anchor the shadow frustum on the
+      // camera target and clamp its half-extent (see SHADOW_FRUSTUM_*).
+      // Enclosing every spawned unit, as an earlier revision did, let the
+      // ortho box balloon with the spread of the field: each unit then
+      // occupied only a few shadow-map texels (square shadows) and the
+      // widened depth range outran the bias (peter-panning that reads as
+      // the shadow sinking through the ground).  Following the camera with
+      // a bounded window keeps the resolution high under the units the
+      // user is actually looking at; faraway casters drop their shadow,
+      // which the shadow-distance LOD already does anyway.
+      const tgt = (this.camera && this.camera.target) || [0, 0, 0]
+      cx = tgt[0]
+      cy = tgt[1]
+      cz = tgt[2]
+      const camDist = (this.camera && this.camera.distance) || 200
+      r = Math.min(SHADOW_FRUSTUM_MAX_WU, Math.max(SHADOW_FRUSTUM_MIN_WU, camDist * 0.45))
     } else {
       const min = this.model.bounds.min
       const max = this.model.bounds.max
@@ -3220,13 +3364,14 @@ export class ModelRenderer {
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
     this.uMainTeamColor = gl.getUniformLocation(prog, 'uTeamColor')
     this.uMainTeamColorEnable = gl.getUniformLocation(prog, 'uTeamColorEnable')
-    // Dynamic pulse-light (weapon SFX) — set each frame by the
-    // controller via setPulseLight(pos, color, range).  Defaults to
-    // zero colour so the shader's gate skips it when no weapon is
-    // firing.
-    this.uPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos')
-    this.uPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor')
-    this.uPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange')
+    // Dynamic pulse-lights (weapon SFX) — set each frame by the controller via
+    // setPulseLights().  The bare-name location addresses element 0 of each
+    // uniform array; uniform3fv/uniform1fv then fill all MAX_PULSE_LIGHTS
+    // slots.  Empty slots upload range 0 so the shader's gate skips them.
+    this.uPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos[0]')
+    this.uPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor[0]')
+    this.uPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange[0]')
+    this.uPulseLightCount = gl.getUniformLocation(prog, 'uPulseLightCount')
     // Unit centre + radius — pulse light uses them for self-shadowing
     // so the projectile light doesn't bleed through to the unit's
     // opposite side.
@@ -3348,13 +3493,15 @@ export class ModelRenderer {
     this.uGroundSeabedHeightMul = gl.getUniformLocation(prog, 'uSeabedHeightMul')
     this.uGroundSeabedScaleMul = gl.getUniformLocation(prog, 'uSeabedScaleMul')
     this.uGroundSeabedRockChance = gl.getUniformLocation(prog, 'uSeabedRockChance')
-    // Dynamic pulse-light — same set as the main shader, lets weapon
-    // SFX (d-gun, lasers) tint the terrain beneath them.  Set in
-    // #renderGround from this._pulseLight which the controller
-    // updates per frame via setPulseLight().
-    this.uGroundPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos')
-    this.uGroundPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor')
-    this.uGroundPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange')
+    // Dynamic pulse-lights — same set as the main shader, lets weapon SFX
+    // (tracer shells, d-gun, lasers) tint the terrain beneath them.  Set in
+    // #renderGround from this._pulseLights which the controller updates per
+    // frame via setPulseLights().  Bare-name location addresses array element
+    // 0 so the *fv upload fills every slot.
+    this.uGroundPulseLightPos = gl.getUniformLocation(prog, 'uPulseLightPos[0]')
+    this.uGroundPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor[0]')
+    this.uGroundPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange[0]')
+    this.uGroundPulseLightCount = gl.getUniformLocation(prog, 'uPulseLightCount')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

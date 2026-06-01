@@ -42,6 +42,7 @@ import { persistPrefs } from './prefs.js'
 
 export const MV_INSPECTOR_IDS = [
   'mv-inspector-scripts',
+  'mv-inspector-network',
   'mv-inspector-actions',
   'mv-inspector-ports',
   'mv-inspector-unit-ports',

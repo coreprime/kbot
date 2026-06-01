@@ -42,6 +42,17 @@ const _noopBridge = {
   // Living behind the bridge means the React panel doesn't import
   // the modal's many-hundred-line code-view module at all.
   openThreadCodeModal:   (_cob, _thread) => {},
+  // Network panel "Force Sync" — re-pull the full authoritative snapshot,
+  // discarding local work. Routes to the active join scene's forceSync().
+  forceSync:             () => {},
+  // Network panel "Diagnose" — fetch a read-only authoritative snapshot and
+  // resolve with { server, client } for a field-by-field drift comparison,
+  // without disturbing local prediction. Routes to the join scene's diagnose().
+  diagnose:              () => Promise.reject(new Error('no authority')),
+  // Sync-diagnostics hover — highlight the given unit / projectile ids on the
+  // active renderer so the user can locate the row's object in the scene.
+  // Pass empty arrays to clear. Routes to the join scene's setHighlight().
+  highlightEntities:     (_unitIds, _projIds) => {},
 }
 
 // Single live bridge object — overwritten by configureHostBridge.

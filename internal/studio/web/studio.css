@@ -540,6 +540,66 @@ kbd {
   outline-offset: -8px;
 }
 
+/* ── Sandbox Join-Hosted picker ────────────────────────────────────── */
+/* Lives in the same ~400px footprint the card grid reserves so the
+   panel doesn't jump when switching between the mode menu and the
+   live-session list. */
+.welcome-join-head {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.welcome-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+.welcome-link-btn:hover { text-decoration: underline; }
+.welcome-join-msg {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 40px;
+}
+.welcome-join-err { color: #ff8a7a; }
+.welcome-join-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.welcome-join-row {
+  width: 100%;
+  background: var(--bg-2);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  transition: border-color 100ms ease, background 100ms ease;
+}
+.welcome-join-row:hover,
+.welcome-join-row:focus-visible {
+  background: var(--bg-3);
+  border-color: #fff;
+  outline: none;
+}
+.welcome-join-name { font-size: 15px; font-weight: 600; }
+.welcome-join-meta { font-size: 12px; color: var(--muted); }
+
 /* ── Open-map dialog ───────────────────────────────────────────────── */
 /* The filter row needs flex-shrink: 0 — without it the column flex
    layout will gladly crush it to ~2 px to make room for the
@@ -2717,6 +2777,16 @@ canvas {
    gives the user one-click access to every COB entry point without
    obscuring the model state they're trying to drive. */
 #mv-inspector-actions    { top: 12px;  left: 12px; right: auto; max-width: 340px; min-width: 280px; }
+/* Network/Sync overlay — bottom-left, opposite the right-edge inspector
+   column so the two stat blocks don't stack. */
+#mv-inspector-network    { bottom: 12px; left: 12px; right: auto; top: auto; min-width: 240px; }
+/* The Network panel sizes to its fixed telemetry + graphs; the shared body
+   resize grip doesn't apply, so suppress the vertical resize handle here. */
+#mv-inspector-network .mv-inspector-body { resize: none; }
+/* Warning state for the Last Sync stat when the client has fallen severely
+   out of step with the authority. */
+.mv-runtime-stat.mv-runtime-stat-warn .mv-runtime-stat-label,
+.mv-runtime-stat.mv-runtime-stat-warn .mv-runtime-stat-value { color: #ff6b6b; }
 .mv-inspector.hidden { display: none; }
 .mv-inspector.collapsed { width: auto; }
 .mv-inspector.collapsed .mv-inspector-body,
@@ -2934,6 +3004,183 @@ canvas {
    crammed into the third slot. */
 .mv-inspector-controls .mv-runtime-ctrl-wide { grid-column: 1 / -1; }
 .mv-inspector-controls .mv-runtime-ctrl:active { background: var(--bg-0); }
+.mv-inspector-controls .mv-runtime-ctrl:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg-1);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ── Network panel: bandwidth graphs ──────────────────────────────── */
+.mv-net-bw-graphs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.mv-net-bw {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 5px;
+  background: var(--bg-1);
+}
+.mv-net-bw-label {
+  font-size: 10px;
+  font-family: var(--mono, ui-monospace, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* Rate + peak stack on their own lines beneath the direction title so the
+   numbers read top-to-bottom rather than crowding the label. */
+.mv-net-bw-vals {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  font-family: var(--mono, ui-monospace, monospace);
+  margin: 1px 0 3px;
+}
+.mv-net-bw-cur { color: var(--text); }
+.mv-net-bw-peak { color: var(--text-dim, #888); }
+.mv-net-spark { display: block; width: 100%; height: 36px; }
+
+/* ── Shared tab strip (ui/common/tab-strip.js) ────────────────────── */
+/* A row of pill tabs reused by any inspector panel that switches between a
+   few views. Sits on a bottom border so the active tab reads as the front
+   sheet of a tabbed surface. */
+.mv-tab-strip {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.mv-tab {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--mono, ui-monospace, monospace);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.mv-tab:hover { background: var(--bg-2); }
+.mv-tab.is-active {
+  background: var(--bg-0);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Sync Diagnostics panel (drift comparison) ────────────────────── */
+/* The diff comparison lives in a standard FloatingPanel now. It needs its
+   own anchor: without a per-id rule it would inherit .mv-inspector's
+   top/left:12px (stacking invisibly behind the Actions panel) and the
+   360px max-width clamp (defeating its 420px default). Sit it offset from
+   the top-left cluster, lift it above the 40-65 panel z-band so it opens
+   on top, and drop the width cap so the diff tables have room. */
+#mv-inspector-sync-diag {
+  top: 64px;
+  left: 96px;
+  right: auto;
+  bottom: auto;
+  max-width: none;
+  z-index: 200;
+}
+/* The diff comparison lives in a standard FloatingPanel now; these rules
+   only style the content inside its body, which scrolls within the
+   user-resizable panel. */
+.mv-net-diag {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.mv-net-diag-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 6px;
+}
+/* "Diffs only" toggle rides in the panel header-actions slot. */
+.mv-net-diffonly {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  cursor: pointer;
+  color: var(--text-dim, #888);
+  margin-right: 4px;
+}
+.mv-net-diag-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-right: 6px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mv-net-diag-refresh:hover:not(:disabled) {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text, #ddd);
+}
+.mv-net-diag-refresh:disabled { opacity: 0.4; cursor: default; }
+.mv-net-diff-empty {
+  color: var(--text-dim, #888);
+  font-size: 11px;
+  padding: 12px 4px;
+  text-align: center;
+}
+.mv-net-diff-error { color: #ff6b6b; }
+.mv-net-diff-list { display: flex; flex-direction: column; gap: 6px; }
+/* Each entity is an accordion section; the wrapper just carries the hover
+   target for the renderer highlight. */
+.mv-net-diff-acc { border-radius: 4px; }
+.mv-net-diff-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+.mv-net-diff-title.is-diff .mv-net-diff-name { color: #ff9b6b; }
+.mv-net-diff-id { color: var(--accent); }
+.mv-net-diff-name { color: var(--text); }
+.mv-net-diff-missing { color: #ff6b6b; font-size: 10px; }
+.mv-net-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.mv-net-diff-table th {
+  text-align: left;
+  color: var(--text-dim, #888);
+  font-weight: normal;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.mv-net-diff-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.mv-net-diff-table tr.is-diff td { color: #ff9b6b; background: rgba(255, 107, 107, 0.08); }
+.mv-net-diff-hashed {
+  color: var(--accent);
+  margin-left: 3px;
+  cursor: help;
+}
+.mv-net-diff-note {
+  font-size: 10px;
+  color: var(--text-dim, #888);
+  line-height: 1.5;
+  margin: 8px 2px 0;
+}
 /* Runtime overlay — per-unit grouping.  A section divider sits at
    the top of each group; the threads (one row each) follow. */
 .mv-unit-header {

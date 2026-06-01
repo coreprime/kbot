@@ -92,8 +92,11 @@ func runStudio(_ *cobra.Command, args []string) error {
 		go reportPreloadProgress()
 	}
 
+	startGameHost()
+
 	mux := http.NewServeMux()
 	registerAPI(mux)
+	registerHostAPI(mux)
 	registerStatic(mux)
 
 	addr := fmt.Sprintf(":%d", serverPort)
@@ -208,6 +211,11 @@ func contentTypeFor(name string) string {
 		return "application/javascript"
 	case ".css":
 		return "text/css"
+	case ".wasm":
+		// WebAssembly.instantiateStreaming rejects any response whose
+		// Content-Type isn't application/wasm, so the engine module must
+		// be served with this exact type.
+		return "application/wasm"
 	case ".json":
 		return "application/json"
 	case ".svg":

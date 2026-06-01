@@ -838,12 +838,15 @@ function wireMvPcDrag(state) {
   })
 }
 
-// mvSetThreadPc writes (script, pc) → thread, clears any sleep/wait
-// so execution can resume from the new spot, and refreshes the panel.
-// Looks the thread up via CobRuntime.findThreadById — the runtime is
-// now multi-unit, so a flat rt._threads.find no longer works (threads
-// live on the unit, not the runtime).  Script tables (scriptNames /
-// scripts) also live on the owning unit.
+// mvSetThreadPc moves the thread's program counter to the dropped
+// instruction index via the engine's setThreadPc debug export (which also
+// clears the thread's sleep / wait / breakpoint-hit state so execution can
+// resume from the new spot), then refreshes the panel.  The thread is looked
+// up via the runtime adapter's findThreadById.
+//
+// Cross-script PC moves are not expressible through the wasm debug API — the
+// engine relocates the PC within the thread's CURRENT script only — so a drop
+// onto a different script's listing is ignored.
 function mvSetThreadPc(state, lineEl) {
   const newIdx = parseInt(lineEl.dataset.idx, 10)
   const newScript = lineEl.dataset.script
@@ -853,13 +856,7 @@ function mvSetThreadPc(state, lineEl) {
   const found = rt.findThreadById(state.threadId)
   if (!found) return
   const { thread: t, unit: u } = found
-  if (newScript !== t.script.name.toLowerCase()) {
-    const sIdx = u.scriptNames.findIndex((n) => n && n.toLowerCase() === newScript)
-    if (sIdx >= 0 && u.scripts[sIdx]) t.script = u.scripts[sIdx]
-  }
-  t.pc = newIdx
-  t.sleepMs = 0
-  t.waitOn = null
-  t.breakpointHit = false
+  if (newScript !== t.script.name.toLowerCase()) return
+  u.setThreadPc?.(t.id, newIdx)
   refreshMvThreadCodeHighlight(state)
 }

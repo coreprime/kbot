@@ -19,7 +19,8 @@ import {
   startAllRenderers as commonStartAll, stopAllRenderers as commonStopAll,
   ensureSplitState as commonEnsure,
 } from '../common/split-host.js'
-import { SandboxScene } from './scene.js'
+import { WasmSandboxScene } from './wasm-scene.js'
+import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { SandboxView } from './view.js'
 import { $ } from '../host-context.js'
 
@@ -37,7 +38,10 @@ const SANDBOX_ADAPTER = {
   // SHIFT+right-click so the gameplay path stays one-click.
   contextMenuModifier: 'shift',
   async makeLeafView(tab, _leafId) {
-    if (!tab.scene) tab.scene = new SandboxScene({ palette: null })
+    // Defensive fallback — tab.js normally creates tab.scene before
+    // mount.  When it hasn't, honour the tab's join mode so a hosted
+    // sandbox doesn't silently fall back to an in-process world.
+    if (!tab.scene) tab.scene = createSharedScene({ palette: null, joinUrl: tab._joinUrl || null })
     const v = new SandboxView({
       canvas: null,
       scene: tab.scene,
@@ -95,11 +99,21 @@ export function revivePanes(tab) { commonRevive(tab, SANDBOX_ADAPTER) }
 export function startAllRenderers(tab) { commonStartAll(tab) }
 export function stopAllRenderers(tab)  { commonStopAll(tab) }
 
-// createSharedScene — kept for tab.js compatibility.  Pure
-// re-export so the scene module isn't pulled in by callers that
-// don't need it.
-export function createSharedScene(opts) {
-  return new SandboxScene(opts)
+// createSharedScene — the per-tab shared scene factory tab.js calls
+// on first activation.  A `joinUrl` (set on the tab from the welcome
+// dialog's New Hosted / Join Hosted mode) backs the scene with a
+// WsFrameSource against the authoritative host instead of an
+// in-process wasm world: units arrive through the host's snapshots
+// and spawning round-trips Spawn orders through the authority.  Local
+// mode (no joinUrl) leaves source null so the scene owns an isolated
+// wasm engine, exactly as before.  The model resolver is registered
+// later by the first pane (it needs a GL-bound loader) — see
+// view.open()'s setModelResolver call.
+export function createSharedScene({ palette = null, joinUrl = null } = {}) {
+  return new WasmSandboxScene({
+    palette,
+    source: joinUrl ? new WsFrameSource({ url: joinUrl }) : null,
+  })
 }
 
 // wireSplitContextMenu — historically a separately-exported helper

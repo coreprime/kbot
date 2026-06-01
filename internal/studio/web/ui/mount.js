@@ -41,6 +41,7 @@ import { ScriptCommandsPanel } from '/ui/panels/script-commands-panel.js'
 import { ControlsPanel } from '/ui/panels/controls-panel.js'
 import { UnitPortsPanel } from '/ui/panels/unit-ports-panel.js'
 import { RuntimePanel } from '/ui/panels/runtime-panel.js'
+import { NetworkPanel, SyncDiagnosticsPanel } from '/ui/panels/network-panel.js'
 import { confirmDialog } from '/ui/dialogs/confirm-dialog.js'
 import {
   SettingsDialog, openSettingsDialog, closeSettingsDialog,
@@ -208,6 +209,11 @@ export function mountInspectorPanels() {
   _mountInto('mv-inspector-ports',      () => html`<${ControlsPanel} />`)
   _mountInto('mv-inspector-unit-ports', () => html`<${UnitPortsPanel} />`)
   _mountInto('mv-inspector-scripts',    () => html`<${RuntimePanel} />`)
+  _mountInto('mv-inspector-network',    () => html`<${NetworkPanel} />`)
+  // Mounted as its own stage-root sibling (not nested in the Network panel
+  // body) so its floating chrome anchors to the stage and isn't clipped by
+  // the small Network panel.  Renders nothing until a Diagnose is requested.
+  _mountInto('mv-inspector-sync-diag',  () => html`<${SyncDiagnosticsPanel} />`)
 }
 
 // mountDialogs — bring up all React-managed modal dialogs.  Each one

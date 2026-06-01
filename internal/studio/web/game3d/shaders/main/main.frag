@@ -16,6 +16,14 @@
 precision highp float;
 precision highp int;
 
+// Dynamic pulse-light slot count — the hard ceiling on simultaneous dynamic
+// lights.  Must stay in lockstep with MAX_PULSE_LIGHTS in
+// engine/scene-lights.js (the controller sizes its uniform-array uploads to
+// it).  uPulseLightCount carries how many slots are actually live this frame
+// (the "Dynamic Lights" graphics option) so the loop early-outs well before
+// this ceiling at normal settings.
+#define MAX_PULSE_LIGHTS 256
+
 #include "../lib/sea-waves.glsl"
 
 varying vec2 vUV;
@@ -76,14 +84,15 @@ uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textu
 // difference at that screen size, and we save the per-fragment
 // Fresnel power + half-vector dot + back-light direction maths.
 uniform float uLightingTier;
-// Dynamic point light — fed each frame by the controller from the
-// strongest "light-emitting" active particle (d-gun, laser pulse).
-// Zero colour means no active light, the shader skips the path with
-// no measurable cost.  Range is the world-unit radius at which the
+// Dynamic point lights — fed each frame by the controller from the
+// strongest "light-emitting" active particles (tracer shells, d-gun, laser
+// pulse).  Range 0 in a slot means no active light there, so the shader skips
+// it with no measurable cost.  Range is the world-unit radius at which the
 // contribution falls to ~half; we use 1/(1+(d/r)²) attenuation.
-uniform vec3 uPulseLightPos;
-uniform vec3 uPulseLightColor;
-uniform float uPulseLightRange;
+uniform vec3 uPulseLightPos[MAX_PULSE_LIGHTS];
+uniform vec3 uPulseLightColor[MAX_PULSE_LIGHTS];
+uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
+uniform int uPulseLightCount;
 // Unit world-space centre — used by the pulse-light path to apply
 // self-occlusion: fragments whose position vector (from centre)
 // points AWAY from the light direction are inside the unit's own
@@ -430,20 +439,25 @@ void main() {
   //
   // Falls off with inverse-square in distance so close shots flood
   // the unit and distant ones barely tint it.
-  if (dot(uPulseLightColor, uPulseLightColor) > 0.0001 && uPulseLightRange > 0.0) {
-    vec3 pulseDir = uPulseLightPos - vWorldPos;
+  for (int pli = 0; pli < MAX_PULSE_LIGHTS; pli++) {
+    if (pli >= uPulseLightCount) break;
+    vec3 plColor = uPulseLightColor[pli];
+    float plRange = uPulseLightRange[pli];
+    if (dot(plColor, plColor) <= 0.0001 || plRange <= 0.0) continue;
+    vec3 plPos = uPulseLightPos[pli];
+    vec3 pulseDir = plPos - vWorldPos;
     float pulseDist = length(pulseDir);
     pulseDir = pulseDir / max(0.0001, pulseDist);
     float ndlPulse = max(0.0, dot(N, pulseDir));
     vec3 fromCentre = vWorldPos - uUnitCenter;
-    vec3 lightFromCentre = uPulseLightPos - uUnitCenter;
+    vec3 lightFromCentre = plPos - uUnitCenter;
     float fcLen = max(0.0001, length(fromCentre));
     float lcLen = max(0.0001, length(lightFromCentre));
     float facing = dot(fromCentre / fcLen, lightFromCentre / lcLen);
     float selfOcclusion = smoothstep(-0.4, 0.4, facing);
-    float r = pulseDist / uPulseLightRange;
+    float r = pulseDist / plRange;
     float atten = 1.0 / (1.0 + r * r);
-    lighting += uPulseLightColor * ndlPulse * atten * selfOcclusion;
+    lighting += plColor * ndlPulse * atten * selfOcclusion;
   }
 
   // -- Sea bounce light --------------------------------------------

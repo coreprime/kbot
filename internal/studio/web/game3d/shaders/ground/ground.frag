@@ -5,6 +5,12 @@
 precision highp float;
 precision highp int;
 
+// Dynamic pulse-light slot count — the hard ceiling on simultaneous dynamic
+// lights.  Must match MAX_PULSE_LIGHTS in engine/scene-lights.js and main.frag.
+// uPulseLightCount carries how many slots are live this frame (the "Dynamic
+// Lights" graphics option) so the loop early-outs before this ceiling.
+#define MAX_PULSE_LIGHTS 256
+
 #include "../lib/sea-waves.glsl"
 
 varying vec3 vWorldPos;
@@ -45,27 +51,33 @@ uniform float uWaterTranslucency;  // multiplier on water alpha - higher = clear
 // a visible coloured wash onto the terrain beneath them.  Zero
 // colour means no active pulse — the cheap dot-product test gates
 // the contribution off so quiescent frames pay almost nothing.
-uniform vec3 uPulseLightPos;
-uniform vec3 uPulseLightColor;
-uniform float uPulseLightRange;
+uniform vec3 uPulseLightPos[MAX_PULSE_LIGHTS];
+uniform vec3 uPulseLightColor[MAX_PULSE_LIGHTS];
+uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
+uniform int uPulseLightCount;
 
-// pulseLightContribution computes the additive RGB the dynamic
-// point light deposits on a horizontal ground patch at worldPos.
-// Ground normal is implicit +Y; only the vertical component of the
-// light direction matters for the Lambert dot.  Returns zero when
-// no active pulse so callers can blindly add it.
+// pulseLightContribution sums the additive RGB every active dynamic point
+// light deposits on a horizontal ground patch at worldPos.  Ground normal is
+// implicit +Y; only the vertical component of the light direction matters for
+// the Lambert dot.  Returns zero when no active pulse so callers can blindly
+// add it; empty slots (range 0) are skipped.
 vec3 pulseLightContribution(vec3 worldPos) {
-  if (dot(uPulseLightColor, uPulseLightColor) < 0.0001 || uPulseLightRange <= 0.0) {
-    return vec3(0.0);
+  vec3 sum = vec3(0.0);
+  for (int pli = 0; pli < MAX_PULSE_LIGHTS; pli++) {
+    if (pli >= uPulseLightCount) break;
+    vec3 plColor = uPulseLightColor[pli];
+    float plRange = uPulseLightRange[pli];
+    if (dot(plColor, plColor) < 0.0001 || plRange <= 0.0) continue;
+    vec3 d = uPulseLightPos[pli] - worldPos;
+    float dist = length(d);
+    if (dist < 0.0001) continue;
+    // ndl against +Y normal = max(0, d.y/dist).
+    float ndl = max(0.0, d.y / dist);
+    float r = dist / plRange;
+    float atten = 1.0 / (1.0 + r * r);
+    sum += plColor * ndl * atten;
   }
-  vec3 d = uPulseLightPos - worldPos;
-  float dist = length(d);
-  if (dist < 0.0001) return vec3(0.0);
-  // ndl against +Y normal = max(0, d.y/dist).
-  float ndl = max(0.0, d.y / dist);
-  float r = dist / uPulseLightRange;
-  float atten = 1.0 / (1.0 + r * r);
-  return uPulseLightColor * ndl * atten;
+  return sum;
 }
 uniform vec3 uSeabedSand;          // colour of the bed's sand / dune surface
 uniform vec3 uSeabedRock;          // colour of rocky outcrops

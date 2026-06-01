@@ -3,6 +3,7 @@ module github.com/coreprime/kbot
 go 1.25.5
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2

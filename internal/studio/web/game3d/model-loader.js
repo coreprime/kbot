@@ -123,7 +123,7 @@ export class ModelLoader {
       verts[i + 2] = raw[i + 2]
     }
     if (node.primitives && node.primitives.length) {
-      this.#buildDrawGroups(piece, verts, node.primitives)
+      this.#buildDrawGroups(piece, verts, node.primitives, node.selectionPrim)
     }
     for (const c of node.children || []) {
       piece.addChild(this.#buildPiece(c))
@@ -131,7 +131,39 @@ export class ModelLoader {
     return piece
   }
 
-  #buildDrawGroups(piece, verts, primitives) {
+  // Decide whether a primitive is one of TA's flat ground plates —
+  // the selection footprint and/or the projected drop shadow — which
+  // the engine paints onto the terrain rather than drawing as model
+  // geometry.  Three signals, any of which qualifies:
+  //   1. The object header's OffsetToSelectionPrimitive INDEX names it
+  //      directly (the authoritative selection plate).
+  //   2. Untextured + palette-0 (TA's transparency / shadow key).
+  //   3. Untextured + flat-horizontal quad painted PURE BLACK — a
+  //      separate drop-shadow plate some units carry alongside the
+  //      selection one (e.g. the ARM Swatter / ARMAH, whose "GP" root
+  //      holds a colour-0 selection quad AND a colour-245 black quad).
+  // Without skipping all three, the stray plate renders as an opaque
+  // square sitting on the ground under the unit.
+  #isGroundPlate(prim, verts, primIdx, shadowPlateIdx) {
+    if (primIdx === shadowPlateIdx) return true
+    if (prim.texture) return false
+    if (!prim.isColored) return false
+    if (prim.colorIndex === 0) return true
+    const indices = prim.indices || []
+    if (indices.length < 3) return false
+    const y0 = verts[indices[0] * 3 + 1]
+    for (let k = 1; k < indices.length; k++) {
+      if (Math.abs(verts[indices[k] * 3 + 1] - y0) > 1e-4) return false
+    }
+    const c = this.palette.colorFor(prim.colorIndex)
+    return c[0] === 0 && c[1] === 0 && c[2] === 0
+  }
+
+  #buildDrawGroups(piece, verts, primitives, selectionPrim = -1) {
+    const shadowPlateIdx =
+      typeof selectionPrim === 'number' && selectionPrim >= 0
+        ? selectionPrim
+        : -1
     // Bucket primitives by (texture | flat colour) so each becomes one
     // batched draw call.  Keying on lowercased texture name keeps the
     // case-insensitive matching the GAF lookup uses.
@@ -175,12 +207,12 @@ export class ModelLoader {
       return triples.join('|')
     }
     const faceCount = new Map()
-    for (const prim of primitives) {
+    for (let primIdx = 0; primIdx < primitives.length; primIdx++) {
+      const prim = primitives[primIdx]
       if ((prim.indices || []).length < 3) continue
-      // Ignore the shadow-plate primitives — they don't render and
+      // Ignore ground / shadow plates — they don't render and
       // shouldn't be considered "a base" for someone else.
-      const isShadow = !prim.texture && prim.isColored && prim.colorIndex === 0
-      if (isShadow) continue
+      if (this.#isGroundPlate(prim, verts, primIdx, shadowPlateIdx)) continue
       const sig = positionSig(prim.indices)
       faceCount.set(sig, (faceCount.get(sig) || 0) + 1)
     }
@@ -201,17 +233,17 @@ export class ModelLoader {
     // camera so it wins the depth test cleanly.
     const depthTierAtSig = new Map()
 
-    for (const prim of primitives) {
+    for (let primIdx = 0; primIdx < primitives.length; primIdx++) {
+      const prim = primitives[primIdx]
       const indices = prim.indices || []
       const count = indices.length
       if (count === 0) continue
+      // Ground / shadow plates (selection footprint, palette-0 key, or a
+      // flat black drop-shadow quad) are projected onto the terrain
+      // in-game, never drawn as model geometry — skip them so they don't
+      // render as a solid square slab under the unit.
+      if (this.#isGroundPlate(prim, verts, primIdx, shadowPlateIdx)) continue
       const texKey = (prim.texture || '').toLowerCase()
-      // Palette index 0 is TA's transparency / shadow key.  Untextured
-      // primitives that paint with it are the unit's flat "shadow
-      // plate" polygon — the game draws those as a projected ground
-      // shadow, never as visible model geometry.  Skip them so they
-      // don't render as a solid black slab under the unit.
-      if (!texKey && prim.isColored && prim.colorIndex === 0) continue
       const color = (!texKey && prim.isColored) ? this.palette.colorFor(prim.colorIndex) : null
       // Look up depth tier for this primitive's face: 0 for the
       // first primitive at this position, 1 for the second, etc.
@@ -225,7 +257,14 @@ export class ModelLoader {
         depthTierAtSig.set(ps, tier + 1)
       }
       const baseBucketKey = texKey || (color ? `#${prim.colorIndex}` : '__notex__')
-      const bucketKey = tier === 0 ? baseBucketKey : `${baseBucketKey}#t${tier}`
+      let bucketKey = tier === 0 ? baseBucketKey : `${baseBucketKey}#t${tier}`
+      // FillModel's reconstructed faces (open box bottoms, hollow-shell
+      // backsides) routinely land coplanar with original art — e.g. the
+      // ARM Swatter's nose cap shares the deck plane with the team-colour
+      // top.  They must never win a depth tie against the artist's real
+      // face, so keep them in their own bucket and mark it so the renderer
+      // can push them away from the camera.
+      if (prim.synthetic) bucketKey += '#syn'
 
       // Lonely-decal check: a decal primitive whose face position
       // doesn't appear in any other (non-shadow) primitive within
@@ -293,6 +332,7 @@ export class ModelLoader {
       // Stash the tier on the bucket so the renderer can apply a
       // depth offset to higher-tier coplanar layers.
       bucket.depthTier = Math.max(bucket.depthTier || 0, tier)
+      if (prim.synthetic) bucket.synthetic = true
       // Triangle fan: (0, i, i+1) for i = 1..count-2.  AO seeds at
       // 1.0 (no occlusion); the smoothing pass replaces it with a
       // baked value derived from local face-normal divergence.
@@ -400,6 +440,7 @@ export class ModelLoader {
           color: bucket.color,
           isDecal: !!(bucket.texture && decals.has(bucket.texture.toLowerCase())),
           depthTier: bucket.depthTier || 0,
+          synthetic: !!bucket.synthetic,
         }
         applyResolvedHints(group, bucket.texture)
         const arr = new Float32Array(bucket.interleaved)

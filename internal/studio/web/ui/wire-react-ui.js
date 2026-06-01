@@ -123,7 +123,7 @@ export function configureReactUi() {
         onNewMap:     () => openSizeDialog(),
         onOpenMap:    () => openMapDialog('welcome'),
         onOpenUnit:   () => openModelPicker(),
-        onOpenSandbox: () => openSandboxStub(),
+        onOpenSandbox: (opts) => openSandboxStub(opts),
       })
     }
     // Texture / piece-tree / weapons-tab bridges are installed by

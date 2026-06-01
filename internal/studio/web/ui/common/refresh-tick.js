@@ -137,15 +137,25 @@ export function refreshMvInspectors(dtMs = 16) {
     // least one selected unit (anything that walked into the
     // selection set is moveable / stoppable by definition).
     const selectedUnits = (sandbox && typeof sandbox.getSelectedUnits === 'function')
-      ? sandbox.getSelectedUnits().filter((u) => u && u.binding && u.binding.hasScript)
+      ? sandbox.getSelectedUnits().filter((u) => u && u.binding)
       : []
-    const everyHasAny = (names) => selectedUnits.length > 0
-      && selectedUnits.every((u) => names.some((n) => u.binding.hasScript(n)))
+    // COB now runs inside the wasm engine, so the render-side binding's
+    // hasScript() is inert (always false). Drive the weapon-slot enable
+    // off the unit's FBI weapon declaration — a slot lights up when every
+    // selected unit declares a weapon there — and keep the legacy COB
+    // script probe as a fallback for any in-process JS binding.
+    const slotHasWeapon = (u, idx) => {
+      const w = u.meta && u.meta.weapons && u.meta.weapons[idx]
+      return !!(w && w.name)
+    }
+    const everySlot = (idx, names) => selectedUnits.length > 0
+      && selectedUnits.every((u) => slotHasWeapon(u, idx)
+        || (u.binding.hasScript && names.some((n) => u.binding.hasScript(n))))
     const ctrlEnabled = {
       move: selectedUnits.length > 0,
-      primary:   everyHasAny(['AimPrimary',   'FirePrimary',   'QueryPrimary']),
-      secondary: everyHasAny(['AimSecondary', 'FireSecondary', 'QuerySecondary']),
-      tertiary:  everyHasAny(['AimTertiary',  'FireTertiary',  'QueryTertiary']),
+      primary:   everySlot(0, ['AimPrimary',   'FirePrimary',   'QueryPrimary']),
+      secondary: everySlot(1, ['AimSecondary', 'FireSecondary', 'QuerySecondary']),
+      tertiary:  everySlot(2, ['AimTertiary',  'FireTertiary',  'QueryTertiary']),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction

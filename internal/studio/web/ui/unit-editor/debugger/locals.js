@@ -83,7 +83,7 @@ export function renderMvThreadCodeLocals(state, thread) {
           const label = (localNames && localNames[i]) || `local_${i}`
           const { row } = mvBuildVarRow(label,
             () => thread.locals[i],
-            (n) => { thread.locals[i] = n | 0 })
+            (n) => { state.cob?.unit?.setThreadLocal?.(thread.id, i, n | 0) })
           locals.appendChild(row)
         }
       } else {
@@ -112,7 +112,7 @@ export function renderMvThreadCodeLocals(state, thread) {
           const label = (globalNames && globalNames[i]) || `global_${i}`
           const { row } = mvBuildVarRow(label,
             () => u.staticVars[i],
-            (n) => { u.staticVars[i] = n | 0 })
+            (n) => { u.setStatic?.(i, n | 0) })
           globals.appendChild(row)
         }
       } else {
