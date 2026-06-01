@@ -48,9 +48,14 @@ type Renderer struct {
 }
 
 // Rendered is one produced representation ready to write to an HTTP response.
+// Most renders carry their bytes in Body. Large, seekable results (transcoded
+// video) instead set Path to an on-disk cache file so the HTTP layer can serve
+// it with http.ServeFile and honour Range requests; when Path is set Body is
+// empty.
 type Rendered struct {
 	ContentType string
 	Body        []byte
+	Path        string
 }
 
 // New builds a Renderer backed by vfs.
@@ -107,6 +112,55 @@ func (r *Renderer) renderCached(cacheName, key, ext string, produce func() ([]by
 	}
 	_ = os.WriteFile(p, b, 0o644)
 	return b, nil
+}
+
+// renderCachedFile is the file-path analogue of renderCached for results that
+// are expensive and large enough to serve straight off disk (transcoded video,
+// animated thumbnails). produce writes the finished artefact to the path it is
+// handed; renderCachedFile stages that write through a temp file and renames it
+// into place so a failed or interrupted produce never leaves a half-written
+// entry in the cache. With caching disabled it produces into a temp file whose
+// lifetime the caller must manage.
+func (r *Renderer) renderCachedFile(cacheName, key, ext string, produce func(dst string) error) (string, error) {
+	c := r.Cache(cacheName)
+	if c == nil {
+		// No cache: produce straight into a temp file the caller owns.
+		f, err := os.CreateTemp("", "render-*"+ext)
+		if err != nil {
+			return "", err
+		}
+		dst := f.Name()
+		_ = f.Close()
+		if err := produce(dst); err != nil {
+			_ = os.Remove(dst)
+			return "", err
+		}
+		return dst, nil
+	}
+
+	dst := c.GetPath(key, ext)
+	if _, err := os.Stat(dst); err == nil {
+		return dst, nil
+	}
+
+	// Stage into a sibling temp file that keeps the target extension — some
+	// producers (ffmpeg) pick their output muxer from it — then rename into
+	// place so an interrupted produce never publishes a half-written entry.
+	stage, err := os.CreateTemp(filepath.Dir(dst), "stage-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	tmp := stage.Name()
+	_ = stage.Close()
+	if err := produce(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return dst, nil
 }
 
 // CacheKey returns a stable content hash for path. It prefers the MD5 the VFS

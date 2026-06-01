@@ -71,6 +71,9 @@ func (r *Renderer) Render(vpath string, data []byte, req RenderRequest) (Rendere
 	case ".sct":
 		return r.renderSCT(vpath, data, req)
 	default:
+		if ext := strings.ToLower(path.Ext(vpath)); isVideoExt(ext) {
+			return r.renderVideo(vpath, data, req)
+		}
 		return Rendered{}, fmt.Errorf("no image representation for %s", path.Ext(vpath))
 	}
 }

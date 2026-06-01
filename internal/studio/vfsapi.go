@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -112,6 +113,24 @@ func handleVFSRender(w http.ResponseWriter, r *http.Request, vpath string, req a
 	w.Header().Set("Content-Type", out.ContentType)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, max-age=3600")
+
+	// Large, seekable artefacts (transcoded video) arrive as a cache path so
+	// the browser can scrub via Range requests; everything else is in memory.
+	if out.Path != "" {
+		f, err := os.Open(out.Path)
+		if err != nil {
+			http.Error(w, "render unavailable", http.StatusInternalServerError)
+			return
+		}
+		defer func() { _ = f.Close() }()
+		info, err := f.Stat()
+		if err != nil {
+			http.Error(w, "render unavailable", http.StatusInternalServerError)
+			return
+		}
+		http.ServeContent(w, r, path.Base(vpath), info.ModTime(), f)
+		return
+	}
 	_, _ = w.Write(out.Body)
 }
 
