@@ -57,7 +57,9 @@
   <h1>KBot Engine — WASM sandbox</h1>
   <p class="lead">
     The deterministic Go engine compiled to WebAssembly. In local mode it runs
-    in-process via <code>WasmFrameSource</code>. Append
+    in-process via <code>WasmFrameSource</code>: the orange launcher fires guided
+    missiles that fly through the Go projectile subsystem and home on their
+    target. Click anywhere to steer the blue scout. Append
     <code>?host=ws://localhost:8099/ws</code> to drive it through
     <code>WsFrameSource</code> against <code>kbot host</code> — open two windows
     and watch a single authoritative match stay in lockstep across both.
@@ -67,6 +69,7 @@
   <div id="hud">
     <span>tick <b id="tick">0</b></span>
     <span>units <b id="count">0</b></span>
+    <span>missiles <b id="projos">0</b></span>
     <span>hash <b id="hash">—</b></span>
   </div>
   <div class="controls">
@@ -108,6 +111,35 @@
       weapons: [],
     }
 
+    // A guided missile weapon: it names a 3DO model (so the Go sim flies it as a
+    // real projectile rather than resolving the hit instantly) and tracks at a
+    // half-turn-per-second homing rate. These floats are converted to fixed
+    // point at the wasm boundary, so the flight is bit-identical everywhere.
+    const MISSILE = {
+      name: 'missile',
+      rangeWU: 1200,
+      reloadSec: 0.7,
+      burst: 1,
+      damage: 9,
+      model: 'missile',
+      velocityWU: 320,
+      startVelocityWU: 120,
+      accelerationWU: 400,
+      turnRate: 32768,
+      tracks: true,
+      selfProp: true,
+      areaOfEffectWU: 48,
+    }
+
+    // A stationary launcher that fires the missile. canMove:false keeps it
+    // planted so every shot is a clean cross-map flight the eye can follow.
+    const TURRET = {
+      name: 'turret',
+      canMove: false,
+      turnRate: 1000,
+      weapons: [MISSILE],
+    }
+
     const hostUrl = new URLSearchParams(location.search).get('host')
     const networked = !!hostUrl
     document.getElementById('mode').innerHTML = networked
@@ -116,6 +148,8 @@
 
     let source = null
     let scoutId = -1        // local mode: the unit we steer
+    let turretId = -1       // local mode: the stationary missile launcher
+    let markerId = -1       // local mode: the launcher's current target
     let movableIds = []     // current unit ids, refreshed each frame
     let running = true
     let timer = null
@@ -144,9 +178,24 @@
       source = new WasmFrameSource({ seed: 7, inputDelay: 0 })
       await source.ready()
       scoutId = source.addUnit({ name: SCOUT.name, meta: SCOUT, x: 200, z: 200, side: 0 })
-      source.addUnit({ name: 'marker', meta: { name: 'marker', canMove: false, weapons: [] }, x: 700, z: 500, side: 1 })
+      turretId = source.addUnit({ name: TURRET.name, meta: TURRET, x: 140, z: 860, side: 0 })
+      spawnTarget()
       spawnBtn.disabled = true
-      setStatus('local engine ready')
+      setStatus('local engine ready — the launcher is firing guided missiles')
+    }
+
+    // spawnTarget drops a fresh enemy for the turret and points the launcher at
+    // it. Called on boot and again whenever the current target is destroyed, so
+    // the missiles keep flying for as long as the demo is open.
+    function spawnTarget() {
+      markerId = source.addUnit({
+        name: 'marker',
+        meta: { name: 'marker', canMove: false, weapons: [] },
+        x: 620 + Math.random() * 260,
+        z: 120 + Math.random() * 320,
+        side: 1,
+      })
+      source.attack([turretId], markerId)
     }
 
     async function bootNetworked() {
@@ -197,12 +246,31 @@
 
     function render(snap) {
       movableIds = snap.units.map((u) => u.id)
+      if (!networked) maintainTarget(snap)
       draw(snap)
       document.getElementById('tick').textContent = String(snap.tick)
       document.getElementById('count').textContent = String(snap.units.length)
+      document.getElementById('projos').textContent = String((snap.projos || []).length)
       const h = source.hash()
       document.getElementById('hash').textContent = h == null ? '—' : h
     }
+
+    // maintainTarget reaps a destroyed marker and spawns a replacement so the
+    // turret always has something to shoot. Reading the kill straight off the
+    // render snapshot keeps the demo driven entirely by simulation state.
+    function maintainTarget(snap) {
+      const marker = snap.units.find((u) => u.id === markerId)
+      if (!marker || marker.dead) {
+        if (marker) source.removeUnit(markerId)
+        spawnTarget()
+      }
+    }
+
+    // TA-angles run 65536 to a full turn; heading 0 points along +Z and forward
+    // is (sin h, cos h) on the ground plane — the same convention the renderer
+    // uses, so a projectile's nose points the way it's actually flying.
+    const TA_TURN = 65536
+    function headingToRad(h) { return (h / TA_TURN) * Math.PI * 2 }
 
     function draw(snap) {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -231,6 +299,25 @@
         ctx.moveTo(sx, sz)
         ctx.lineTo(hx, hz)
         ctx.stroke()
+      }
+      // In-flight missiles from the Go projectile subsystem. Each is drawn as a
+      // glowing dot with a tail along its heading so the homing arc is visible.
+      for (const p of (snap.projos || [])) {
+        const [sx, sz] = toScreen(p.x, p.z)
+        const rad = headingToRad(p.heading)
+        const tx = sx - Math.sin(rad) * 12
+        const tz = sz - Math.cos(rad) * 12
+        ctx.strokeStyle = '#f0883e'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(sx, sz)
+        ctx.lineTo(tx, tz)
+        ctx.stroke()
+        ctx.lineWidth = 1
+        ctx.fillStyle = '#ffd9a0'
+        ctx.beginPath()
+        ctx.arc(sx, sz, 3, 0, Math.PI * 2)
+        ctx.fill()
       }
     }
 
