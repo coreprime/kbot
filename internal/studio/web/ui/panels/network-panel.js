@@ -18,6 +18,7 @@
 // the panel is closed.
 
 import { useState, useCallback } from 'preact/hooks'
+import { signal } from '@preact/signals'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
 import { AccordionSection } from '/ui/common/accordion-section.js'
@@ -31,6 +32,16 @@ const PANEL_ID = 'mv-inspector-network'
 // inherits the standard inspector chrome (drag, resize, persisted geometry)
 // rather than the old hand-rolled modal backdrop.
 const DIAG_PANEL_ID = 'mv-inspector-sync-diag'
+
+// Diagnose result state lives at module scope so the floating diagnostics panel
+// can mount as a stage-root sibling of the Network panel (via SyncDiagnosticsPanel
+// + mount.js) instead of nesting inside the Network panel's body.  Nesting it as
+// a child of NetworkBody made its position:absolute chrome anchor to — and get
+// clipped by — the little Network panel, so the diagnostics panel rendered off
+// in nowhere and read as "does nothing".  The Network panel's Diagnose button
+// writes this signal; the separately-mounted panel reads it and renders when
+// non-null.  Shape: { loading } | { result } | { error } | null (closed).
+const diagState = signal(null)
 
 const _stopProp = (e) => e.stopPropagation()
 
@@ -380,20 +391,21 @@ function DiagnoseModal({ result, error, loading, onClose }) {
 
 function NetworkBody() {
   const { visible } = panelSignals(PANEL_ID)
-  const [modal, setModal] = useState(null) // { loading, result?, error? } | null
   // Subscribe to the per-publish refresh: mv.net is a plain snapshot rebuilt
   // each 4 Hz publish, so reading runtimeTick keeps the live ages/counters
   // moving even when the mv reference itself is reused.
   void runtimeTick.value
 
+  // The diagnose result drives the separately-mounted SyncDiagnosticsPanel; we
+  // only write the shared signal here (loading → result/error) so the panel can
+  // live at the stage root rather than nested inside this body.
   const onDiagnose = useCallback((e) => {
     _stopProp(e)
-    setModal({ loading: true })
+    diagState.value = { loading: true }
     Promise.resolve(hostBridge.diagnose())
-      .then((result) => setModal({ loading: false, result }))
-      .catch((err) => setModal({ loading: false, error: (err && err.message) || String(err) }))
+      .then((result) => { diagState.value = { loading: false, result } })
+      .catch((err) => { diagState.value = { loading: false, error: (err && err.message) || String(err) } })
   }, [])
-  const closeModal = useCallback(() => setModal(null), [])
 
   if (!visible.value) return null
   const net = mv.value && mv.value.net
@@ -412,7 +424,8 @@ function NetworkBody() {
   const bw = net.bandwidth || { samples: [], intervalMs: 1000 }
   const outSeries = (bw.samples || []).map((s) => s.sent)
   const inSeries = (bw.samples || []).map((s) => s.recv)
-  const canDiagnose = !!net.severeDesync && !net.diagnosing && !(modal && modal.loading)
+  const diagLoading = !!(diagState.value && diagState.value.loading)
+  const canDiagnose = !!net.severeDesync && !net.diagnosing && !diagLoading
   return html`
     <div class="mv-runtime-stats" title="Live network + sync telemetry — refreshed 4× per second.">
       <div class="mv-runtime-stats-row">
@@ -463,7 +476,6 @@ function NetworkBody() {
         ⚖ Diagnose
       </button>
     </div>
-    ${modal ? html`<${DiagnoseModal} ...${modal} onClose=${closeModal} />` : null}
   `
 }
 
@@ -473,4 +485,15 @@ export function NetworkPanel() {
       <${NetworkBody} />
     <//>
   `
+}
+
+// SyncDiagnosticsPanel — the floating drift comparison, mounted at the stage
+// root (see mount.js) as a sibling of the Network panel rather than nested in
+// its body.  Renders nothing until the Network panel's Diagnose button writes
+// diagState; closing clears the signal so the panel unmounts cleanly.
+export function SyncDiagnosticsPanel() {
+  const state = diagState.value
+  if (!state) return null
+  const onClose = () => { diagState.value = null }
+  return html`<${DiagnoseModal} ...${state} onClose=${onClose} />`
 }
