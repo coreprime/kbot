@@ -1,5 +1,5 @@
-// Package explorer provides KBot Explorer - an interactive filesystem browser for Total Annihilation archives
-package explorer
+// Package mount provides the `kbot mount` interactive terminal browser for Total Annihilation archives.
+package mount
 
 import (
 	"bufio"
@@ -52,7 +52,7 @@ var (
 	currentDir string
 )
 
-// NewCommand returns the explorer cobra command tree, suitable for
+// NewCommand returns the mount cobra command tree, suitable for
 // embedding as a subcommand in a larger CLI (e.g. kbot mount).
 func NewCommand() *cobra.Command {
 	cmd := &cobra.Command{
@@ -146,7 +146,7 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 	// Interactive loop
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Printf("explorer:%s> ", currentDir)
+		fmt.Printf("mount:%s> ", currentDir)
 		
 		if !scanner.Scan() {
 			break

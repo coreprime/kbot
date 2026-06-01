@@ -1,10 +1,10 @@
 package mount
 
 import (
-	"github.com/coreprime/kbot/internal/explorer"
+	mountpkg "github.com/coreprime/kbot/internal/mount"
 	"github.com/spf13/cobra"
 )
 
 func NewCommand() *cobra.Command {
-	return explorer.NewCommand()
+	return mountpkg.NewCommand()
 }

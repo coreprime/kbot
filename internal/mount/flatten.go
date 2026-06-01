@@ -1,4 +1,4 @@
-package explorer
+package mount
 
 import (
 	"crypto/md5"

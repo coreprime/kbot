@@ -84,7 +84,7 @@ tasks:
   clean:
     desc: Remove build artifacts
     cmds:
-      - rm -rf bin/ coverage.out coverage.html .cache/
+      - rm -rf bin/ coverage.out coverage.html .cache/ kbot engine-wasm
 
   install:
     desc: Run the KBot Explorer against the TA assets

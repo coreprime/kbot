@@ -975,10 +975,12 @@ kbot/
 │   └── tnt/         Map terrain
 ├── filesystem/      Virtual filesystem (HPI layering)
 └── internal/
+    ├── assetrender/ Shared VFS render/describe engine (studio Files tab)
     ├── assets/      Embedded TA palette
     ├── cache/       On-disk file cache
-    ├── explorer/    Terminal asset browser (kbot mount)
-    └── studio/      Web workbench + Files explorer (kbot studio)
+    ├── mount/       Terminal asset browser (kbot mount)
+    ├── studio/      Web workbench + Files explorer (kbot studio)
+    └── testutil/    Asset-path helpers for tests
 ```
 
 ## Development
