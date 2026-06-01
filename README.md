@@ -20,7 +20,7 @@ Or build from source:
 ```bash
 git clone https://github.com/coreprime/kbot.git
 cd kbot
-task build        # builds the web UI and kbot binary
+task build        # builds the Studio web assets and kbot binary
 task install      # installs kbot to $GOPATH/bin
 ```
 
@@ -29,8 +29,7 @@ To run the visual explorer for Total Annihilation:
 
 - Perform the installation steps
 - Launch `kbot studio ~/games/totala` and open the **Files** tab to browse,
-  preview, and inspect every asset in the install (the old
-  `kbot mount --server` web explorer is deprecated and folded into Studio)
+  preview, and inspect every asset in the install
 
 To develop/code against the project:
 
@@ -632,13 +631,9 @@ kbot mount flatten --target ./flat
 
 **Terminal commands:** `ls`, `cd`, `pwd`, `cat`, `describe`, `archives`, `stats`, `exit`
 
-> **Deprecated:** the `--server` flag launched a standalone web explorer.
-> That browser now lives in `kbot studio` as the **Files** tab — see below.
-> `--server` still starts the legacy server for now but prints a pointer to
-> Studio and will be removed in a future release.
-
-The Studio **Files** tab covers everything the old web explorer did:
-- Browse the VFS with a folder tree and per-folder listings
+For a graphical asset explorer, use the **Files** tab in `kbot studio` (see
+below). It browses the VFS with per-folder listings and adds rich per-format
+previews:
 - View GAF animations with APNG preview, sequence/frame controls, and transparency toggles
 - View PCX/FNT images with format options, and palettes as a swatch grid
 - Play SMK/ZRB/Bink video transcoded to MP4 with an animated poster
@@ -958,14 +953,15 @@ kbot/
 └── internal/
     ├── assets/      Embedded TA palette
     ├── cache/       On-disk file cache
-    └── explorer/    Web UI server + React app
+    ├── explorer/    Terminal asset browser (kbot mount)
+    └── studio/      Web workbench + Files explorer (kbot studio)
 ```
 
 ## Development
 
 ```bash
 task              # build + vet + lint + test
-task build        # build web UI + kbot binary
+task build        # build Studio web assets + kbot binary
 task install      # install kbot to $GOPATH/bin
 task test         # run all tests
 task test-race    # tests with race detector
@@ -976,7 +972,7 @@ task coverage     # generate coverage.html
 ### Prerequisites
 
 - Go 1.24+
-- Node.js 18+ and npm (for the web UI)
+- Node.js 18+ and npm (for the Studio web assets)
 - [Task](https://taskfile.dev/) (`go install github.com/go-task/task/v3/cmd/task@latest`)
 - [golangci-lint](https://golangci-lint.run/) (for `task lint`)
 - FFmpeg (optional, for video conversions)

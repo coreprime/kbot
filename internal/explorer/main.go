@@ -50,10 +50,6 @@ func resolveContextPath(args []string) (string, string, error) {
 var (
 	vfs        *filesystem.VirtualFileSystem
 	currentDir string
-	serverMode bool
-	serverPort int
-	noCache    bool
-	clearCache bool
 )
 
 // NewCommand returns the explorer cobra command tree, suitable for
@@ -63,7 +59,7 @@ func NewCommand() *cobra.Command {
 		Use:   "mount [path]",
 		Short: "Browse Total Annihilation archives interactively",
 		Long: `Mount and browse Total Annihilation game files from HPI, UFO, CCX,
-and GP3 archives in an interactive terminal or web UI.
+and GP3 archives in an interactive terminal.
 
 When <path> is omitted, the active kbot context (see 'kbot ctx') is
 mounted instead.  Set KBOT_CONTEXT=<alias> to pick a different
@@ -80,18 +76,11 @@ Terminal Mode Commands:
   help                - Show available commands
   exit/quit           - Exit the browser
 
-Web Server Mode (deprecated):
-  The --server flag served a web asset explorer.  That browser now lives
-  in 'kbot studio' as the Files tab; --server prints a pointer to it and
-  still starts the legacy server for now, but will be removed.`,
+For a graphical asset explorer with per-format previews, use the Files
+tab in 'kbot studio'.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runBrowser,
 	}
-
-	cmd.Flags().BoolVarP(&serverMode, "server", "s", false, "Run as web server (deprecated — use 'kbot studio')")
-	cmd.Flags().IntVarP(&serverPort, "port", "p", 8000, "Web server port (default 8000)")
-	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Disable caching (server mode only)")
-	cmd.Flags().BoolVar(&clearCache, "clear-cache", false, "Clear all caches on startup (server mode only)")
 
 	cmd.AddCommand(newFlattenCommand())
 
@@ -135,18 +124,6 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
 	fmt.Printf("✓ %d files available\n", stats["total_files"])
 	fmt.Printf("✓ %d directories\n\n", stats["directories"])
-
-	// Check if running in server mode
-	if serverMode {
-		fmt.Println("⚠ 'kbot mount --server' is deprecated.")
-		fmt.Println("  The web asset explorer now lives in 'kbot studio' as the Files tab,")
-		fmt.Println("  with richer per-format previews and background cache warming.")
-		fmt.Println("  Starting the legacy server anyway for now…")
-		fmt.Println()
-		fmt.Printf("Starting web server on port %d...\n", serverPort)
-		fmt.Printf("Open http://localhost:%d in your browser\n\n", serverPort)
-		return runWebServer(vfs, serverPort)
-	}
 
 	// Show archives
 	archives := vfs.Archives()
