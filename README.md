@@ -7,7 +7,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/coreprime/kbot)](https://github.com/coreprime/kbot/issues)
 [![GitHub commit activity](https://img.shields.io/github/commit-activity/m/coreprime/kbot)](https://github.com/coreprime/kbot/commits/main)
 
-A toolkit for working with Total Annihilation game assets. KBot provides a unified CLI for managing the various proprietary file formats used by the game, along with a browser-based studio (map editor + asset explorer). There are also development tools, allowing advanced debugging and processing of various formats, including the COB/BOS scripting language.
+A toolkit for working with Total Annihilation game assets. KBot provides a unified CLI for managing the various proprietary file formats used by the game, along with a browser-based studio (asset explorer, map editor, unit viewer, and live sandbox). There are also development tools, allowing advanced debugging and processing of various formats, including the COB/BOS scripting language.
 
 ## Installation
 
@@ -57,7 +57,7 @@ To develop/code against the project:
   - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
-  - [`kbot studio` — KBot Studio (Map Editor)](#kbot-studio--kbot-studio-map-editor)
+  - [`kbot studio` — KBot Studio (Web Workbench)](#kbot-studio--kbot-studio-web-workbench)
   - [`kbot document` — Reference Catalogue Generator](#kbot-document--reference-catalogue-generator)
   - [`kbot mcp` — Model Context Protocol Server](#kbot-mcp--model-context-protocol-server)
 - [Shell Completion](#shell-completion)
@@ -643,15 +643,14 @@ previews:
 
 ---
 
-### `kbot studio` — KBot Studio (Map Editor)
+### `kbot studio` — KBot Studio (Web Workbench)
 
-Launch a browser-based map editor for Total Annihilation and TA: Kingdoms
-maps.  The editor mounts a TA install over a VFS, lets you drag sections and
-features into the world, and bundles the result into a downloadable `.hpi`
-archive containing `maps/<name>.tnt` and `maps/<name>.ota`.
+A browser-based workbench for Total Annihilation and TA: Kingdoms.  It mounts a
+game install (or the active `kbot ctx`) over a VFS and opens a tabbed
+single-page app whose welcome screen offers several workflows.
 
 ```bash
-# Edit against a packed TA install
+# Open against a packed TA install
 kbot studio ~/games/totala
 
 # Or use the active kbot context (see `kbot ctx`)
@@ -661,11 +660,36 @@ kbot studio
 kbot studio --port 9000
 ```
 
-When the page loads you pick the initial map dimensions in tiles (default
-`128 × 128`, roughly the size of *Metal Heck*) and choose a planet/world.
-The sidebar lists every `.sct` under `sections/` grouped by world/group;
-click one to select, then click on the canvas to stamp it.  Hit **Save**
-to download an `.hpi` ready to drop into the game's `maps/` folder.
+**Explorer** — the full Files tab / VFS browser: table and icon listings with
+live thumbnails, search, and a layer/source override, plus rich per-format
+previews — GAF/PCX/FNT/palette images, TNT/SCT maps, COB/BOS code (decompile,
+disassembly, call graph, lint), AI profiles, TDF/FBI/OTA structure, SMK/ZRB/BIK
+video, and audio — with a metadata, hex, and layering tab on every file and a
+download menu that offers rendered variants (PNG/GIF, MP4) alongside the raw
+bytes.  A background cache warmer renders preview assets on startup and reports
+progress live over a websocket.
+
+**Map Creator** — a visual TNT/OTA map editor.  Start from a blank canvas or
+open an existing map, then paint terrain from `.sct` sections, place and scatter
+features, sculpt the heightmap, mark engine voids, and set per-schema start
+positions.  Split panes, undo/redo, a ruler, and symmetry tools aid editing; a
+Quality Checker lints the map (with auto-fixes) before you save.  The export
+menu bundles a downloadable `.hpi` (or loose TNT/OTA) plus full renders,
+minimaps, heightmaps, buildmaps, and voidmaps.
+
+**Sandbox Mode** — drop units onto a battlefield and test them live.  A WASM
+physics core simulates movement, commands, weapon fire, and damage with team
+colours and particle effects.  Run a local in-browser scene, host an
+authoritative match, or join a live hosted sandbox for shared multiplayer
+testing.
+
+**Unit Creator** — open a unit to inspect and test it: an orbiting 3D model
+viewer with per-piece animation and weapon hardpoints, a piece tree, texture and
+weapon galleries, and a COB/BOS thread debugger that steps scripts with synced
+source/assembly, locals, and runtime port values.
+
+A **Scripting** workflow and further tools are previewed on the welcome screen
+as planned additions.
 
 ---
 
