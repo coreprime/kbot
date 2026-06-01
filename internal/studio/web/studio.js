@@ -82,6 +82,7 @@ import {
 import { registerMapTabType } from './ui/map-editor/register-tab.js'
 import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
 import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
+import { registerFilesTabType } from './ui/files-browser/register-tab.js'
 import {
   openTab,
   switchToTab,
@@ -380,6 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
   registerMapTabType()
   registerUnitEditorTabType()
   registerSandboxTabType()
+  registerFilesTabType()
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()

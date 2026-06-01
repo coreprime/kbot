@@ -14,7 +14,6 @@ tasks:
   build:
     desc: Build all binaries
     cmds:
-      - task: build-web
       - task: build-studio-web
       - task: build-wasm
       - task: build-kbot
@@ -29,13 +28,6 @@ tasks:
     desc: Build the kbot CLI
     cmds:
       - CGO_ENABLED=0 go build -o bin/kbot ./cmd/kbot
-
-  build-web:
-    desc: Build the React web UI
-    cmds:
-      - npm install
-      - npm run build
-    dir: internal/explorer/web
 
   build-studio-web:
     desc: Install and validate the KBot Studio web assets
@@ -53,14 +45,7 @@ tasks:
     desc: Run golangci-lint and eslint
     cmds:
       - golangci-lint run ./...
-      - task: lint-web
       - task: lint-studio-web
-
-  lint-web:
-    desc: Run ESLint on the web UI
-    cmds:
-      - npx eslint . --max-warnings 0
-    dir: internal/explorer/web
 
   lint-studio-web:
     desc: Run ESLint on the KBot Studio web assets
@@ -108,10 +93,10 @@ tasks:
       - go install ./cmd/kbot
     
   run-explorer-ta:
-    desc: Run the KBot Explorer against the TA packed assets
+    desc: Run KBot Studio against the TA packed assets
     cmds:
       - task: install
-      - kbot mount {{.TA_PACKED_PATH}} --server
+      - kbot studio {{.TA_PACKED_PATH}}
   
   run-mcp-ta:
     desc: Run the KBot Explorer against the TA packed assets
@@ -120,10 +105,10 @@ tasks:
       - kbot mcp --mount {{.TA_PACKED_PATH}}
    
   run-explorer-tak:
-    desc: Run the KBot Explorer against the TA packed assets
+    desc: "Run KBot Studio against the TA: Kingdoms packed assets"
     cmds:
       - task: install
-      - kbot mount {{.TAK_PACKED_PATH}} --server
+      - kbot studio {{.TAK_PACKED_PATH}}
   
   run-mcp-tak:
     desc: Run the KBot Explorer against the TA packed assets

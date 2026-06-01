@@ -47,10 +47,10 @@ const _sandboxView = signal('menu')
 
 // Module-scoped so the tab the user picked survives unmount/remount
 // (e.g. opening + closing the dialog without losing the workflow
-// context).  Defaults to 'sandbox' — sandbox is the first tab AND the
-// fastest path to verify a unit in motion, so a fresh boot lands
-// there.
-const _activeTab = signal('sandbox')
+// context).  Defaults to 'explorer' — the file explorer is the first
+// tab and the broadest entry point into a workspace, so a fresh boot
+// lands there.
+const _activeTab = signal('explorer')
 
 // _TABS — single source of truth for the tab strip.  Each entry has
 // the display label and an optional `disabled` flag.  Order here is
@@ -59,6 +59,7 @@ const _activeTab = signal('sandbox')
 // lets the user see what's coming) while Other is a fully-disabled
 // roadmap placeholder.
 const _TABS = [
+  { key: 'explorer',  label: 'Explorer' },
   { key: 'sandbox',   label: 'Sandbox Mode' },
   { key: 'mapping',   label: 'Map Creator' },
   { key: 'modelling', label: 'Unit Creator' },
@@ -136,11 +137,37 @@ function _JoinPicker({ onOpenSandbox, onBack }) {
   `
 }
 
+// _WorkspaceFootnote reports which VFS / workspace the studio is serving
+// (the active kbot context's base path plus headline counts), fetched
+// once from the explorer's ?stats document.  Stays silent until the
+// numbers arrive so a slow mount doesn't flash an empty line.
+function _WorkspaceFootnote() {
+  const [stats, setStats] = useState(null)
+  useEffect(() => {
+    let ok = true
+    fetch('/api/vfs/?stats')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (ok) setStats(d) })
+      .catch(() => { /* explorer surface unavailable — stay silent */ })
+    return () => { ok = false }
+  }, [])
+  if (!stats || !stats.basePath) return null
+  const num = (n) => Number(n || 0).toLocaleString()
+  return html`
+    <p class="welcome-footnote">
+      📂 Workspace: <code>${stats.basePath}</code>
+      <span class="welcome-footnote-sep">·</span> ${num(stats.archives)} archives
+      <span class="welcome-footnote-sep">·</span> ${num(stats.totalFiles)} files
+    </p>
+  `
+}
+
 export function WelcomeScreen({
   onNewMap,
   onOpenMap,
   onOpenUnit,
   onOpenSandbox,
+  onBrowseFiles,
 }) {
   const active = _activeTab.value
   // Read the sandbox sub-view (menu vs join picker) so the keyboard-nav
@@ -262,6 +289,17 @@ export function WelcomeScreen({
         </div>
       </div>
     ` : null}
+    ${active === 'explorer' ? html`
+      <div class="welcome-tab-panel" data-welcome-tab-panel="explorer">
+        <div class="welcome-options" ref=${cardRowRef}>
+          <${_Card}
+            icon="🗂"
+            title="Browse Files"
+            sub="View the full set of content for this workspace."
+            onClick=${() => onBrowseFiles && onBrowseFiles()} />
+        </div>
+      </div>
+    ` : null}
     ${active === 'scripting' ? html`
       <div class="welcome-tab-panel" data-welcome-tab-panel="scripting">
         <div class="welcome-options" ref=${cardRowRef}>
@@ -283,6 +321,7 @@ export function WelcomeScreen({
         </div>
       </div>
     ` : null}
+    <${_WorkspaceFootnote} />
   `
 }
 

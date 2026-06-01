@@ -19,6 +19,7 @@ import { openSizeDialog } from './map-editor/dialogs/size.js'
 import { openMapDialog } from './pickers/open-map.js'
 import { openModelPicker } from './pickers/open-unit-flow.js'
 import { openSandboxStub } from './sandbox/tab.js'
+import { openFilesTab } from './files-browser/tab.js'
 import { seedInspectorPanelDefaults } from './unit-editor/panel-defaults.js'
 import { seedMapPanelDefaults } from './map-editor/panel-defaults.js'
 import {
@@ -124,6 +125,7 @@ export function configureReactUi() {
         onOpenMap:    () => openMapDialog('welcome'),
         onOpenUnit:   () => openModelPicker(),
         onOpenSandbox: (opts) => openSandboxStub(opts),
+        onBrowseFiles: () => openFilesTab(),
       })
     }
     // Texture / piece-tree / weapons-tab bridges are installed by
