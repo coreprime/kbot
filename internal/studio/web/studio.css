@@ -3111,6 +3111,27 @@ canvas {
   color: var(--text-dim, #888);
   margin-right: 4px;
 }
+.mv-net-diag-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-right: 6px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mv-net-diag-refresh:hover:not(:disabled) {
+  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  color: var(--text, #ddd);
+}
+.mv-net-diag-refresh:disabled { opacity: 0.4; cursor: default; }
 .mv-net-diff-empty {
   color: var(--text-dim, #888);
   font-size: 11px;

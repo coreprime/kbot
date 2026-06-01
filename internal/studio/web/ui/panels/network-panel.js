@@ -43,6 +43,17 @@ const DIAG_PANEL_ID = 'mv-inspector-sync-diag'
 // non-null.  Shape: { loading } | { result } | { error } | null (closed).
 const diagState = signal(null)
 
+// runDiagnose captures a fresh point-in-time comparison: it flips diagState to
+// loading, fires the authority snapshot request, and resolves into result/error.
+// Shared by the Network panel's Diagnose button and the diagnostics panel's
+// header Refresh action so both re-capture identically.
+function runDiagnose() {
+  diagState.value = { loading: true }
+  Promise.resolve(hostBridge.diagnose())
+    .then((result) => { diagState.value = { loading: false, result } })
+    .catch((err) => { diagState.value = { loading: false, error: (err && err.message) || String(err) } })
+}
+
 const _stopProp = (e) => e.stopPropagation()
 
 // _bytes renders a byte count in the largest unit that keeps it readable.
@@ -363,7 +374,14 @@ function DiagnoseModal({ result, error, loading, onClose }) {
     body = html`<${DriftTable} groups=${projGroups} kind="proj" />`
   }
 
-  const diffOnlyToggle = html`
+  const headerActions = html`
+    <button class="mv-net-diag-refresh"
+            title="Refresh — re-capture a fresh point-in-time comparison against the authority's current state."
+            disabled=${!!loading}
+            onClick=${(e) => { _stopProp(e); runDiagnose() }}
+            onMouseDown=${_stopProp} onPointerDown=${_stopProp}>
+      ↻
+    </button>
     <label class="mv-net-diffonly" title="Hide rows and entities that match the authority."
            onMouseDown=${_stopProp} onPointerDown=${_stopProp}>
       <input type="checkbox" checked=${diffOnly}
@@ -380,7 +398,7 @@ function DiagnoseModal({ result, error, loading, onClose }) {
       resizable=${true}
       defaultSize=${{ width: 420, height: 460 }}
       minSize=${{ width: 320, height: 220 }}
-      headerActions=${diffOnlyToggle}>
+      headerActions=${headerActions}>
       <div class="mv-net-diag">
         <${TabStrip} tabs=${tabs} active=${tab} onSelect=${setTab} />
         <div class="mv-net-diag-body">${body}</div>
@@ -401,10 +419,7 @@ function NetworkBody() {
   // live at the stage root rather than nested inside this body.
   const onDiagnose = useCallback((e) => {
     _stopProp(e)
-    diagState.value = { loading: true }
-    Promise.resolve(hostBridge.diagnose())
-      .then((result) => { diagState.value = { loading: false, result } })
-      .catch((err) => { diagState.value = { loading: false, error: (err && err.message) || String(err) } })
+    runDiagnose()
   }, [])
 
   if (!visible.value) return null
@@ -425,7 +440,11 @@ function NetworkBody() {
   const outSeries = (bw.samples || []).map((s) => s.sent)
   const inSeries = (bw.samples || []).map((s) => s.recv)
   const diagLoading = !!(diagState.value && diagState.value.loading)
-  const canDiagnose = !!net.severeDesync && !net.diagnosing && !diagLoading
+  // Diagnose is always available while joined — it is a point-in-time snapshot
+  // taken at the moment the button is pressed, useful for inspecting drift even
+  // when the hashes currently agree (a predicting client legitimately leads the
+  // server, so transient health/dead differences around a death are expected).
+  const canDiagnose = !net.diagnosing && !diagLoading
   return html`
     <div class="mv-runtime-stats" title="Live network + sync telemetry — refreshed 4× per second.">
       <div class="mv-runtime-stats-row">
@@ -467,9 +486,7 @@ function NetworkBody() {
       </button>
       <button class="mv-runtime-ctrl"
               disabled=${!canDiagnose}
-              title=${canDiagnose
-                ? 'Diagnose — fetch the authoritative state and compare it field-by-field with this window, without disturbing prediction.'
-                : 'Diagnose is available only when the window is out of sync.'}
+              title=${'Diagnose — capture a point-in-time authoritative snapshot and compare it field-by-field with this window, without disturbing prediction.'}
               onClick=${onDiagnose}
               onPointerDown=${_stopProp}
               onMouseDown=${_stopProp}>

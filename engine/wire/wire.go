@@ -158,8 +158,11 @@ type UnitSnap struct {
 	Dead    bool        `json:"dead"`
 	// Combat state so a late joiner re-engages weapons/attacks that were live on
 	// the authority, replaying the firing animation instead of snapping to rest.
-	HasAttack    bool          `json:"hasAttack,omitempty"`
-	AttackTarget uint32        `json:"attackTarget,omitempty"`
+	// Always serialized (no omitempty): the Diagnose diff compares these against
+	// the client's own export field-by-field, and dropping false/0 here would
+	// surface a phantom mismatch (server undefined vs client false/0).
+	HasAttack    bool          `json:"hasAttack"`
+	AttackTarget uint32        `json:"attackTarget"`
 	Weapons      [3]WeaponSnap `json:"weapons,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than

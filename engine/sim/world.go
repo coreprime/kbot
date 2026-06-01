@@ -894,6 +894,7 @@ func (w *World) stopUnit(id uint32) {
 	}
 	u.hasMove = false
 	u.hasAttack = false
+	u.attackTarget = 0
 	u.atkActive = false
 	u.bombRunActive = false
 	for i := range u.weapons {

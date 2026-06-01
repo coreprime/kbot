@@ -145,6 +145,7 @@ func (w *World) stepAttack(u *Unit) {
 	if u.hasAttack {
 		if t := w.units[u.attackTarget]; t == nil || t.Dead {
 			u.hasAttack = false
+			u.attackTarget = 0
 			for slot := range u.weapons {
 				s := &u.weapons[slot]
 				if s.hasTarget && s.source == "attack" {
