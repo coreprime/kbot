@@ -71,6 +71,19 @@ const AO_OFFSET = 8 * 4
 
 const SHADOW_MAP_SIZE = 1024
 
+// Multi-entity (sandbox) shadow-frustum clamp.  A single shadow map only
+// stays crisp while its ortho box is small: sizing it to enclose every
+// spawned unit collapses each unit's footprint to a handful of texels
+// (blocky "square" shadows) and stretches the depth range until the
+// fixed bias can't stop peter-panning (the shadow tears off and reads as
+// sinking through the ground).  Instead the sandbox follows the CAMERA —
+// the same anchor the ground plane uses — with the half-extent clamped to
+// this window so resolution stays high where the user is looking.  Units
+// outside it cast no shadow, which already matches the shadow-distance LOD
+// dropping faraway casters.
+const SHADOW_FRUSTUM_MIN_WU = 48
+const SHADOW_FRUSTUM_MAX_WU = 160
+
 // DoF tuning bases.  DOF_BASE_GAP is the window-depth gap from 1.0 that
 // puts the blur onset at the unit's default framing distance (~25 wu)
 // at a "1×" Distance setting; because window depth is ~inversely
@@ -3224,40 +3237,22 @@ export class ModelRenderer {
   #updateLightMatrices() {
     let cx, cy, cz, r
     if (this._entities && this._entities.length > 0) {
-      // Multi-entity mode — compute the bounding sphere of all
-      // entities' world positions PLUS each unit's per-model bounds
-      // radius.  Without this the frustum stays sized for the first
-      // entity, so units placed further out cast no shadow (their
-      // geometry falls outside the shadow-map's ortho frame).  Pads
-      // each unit's bounds by the same 1.6× the single-unit path
-      // uses so rotated kbots don't clip at the frustum corners.
-      let minX = Infinity, minY = Infinity, minZ = Infinity
-      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
-      let maxUnitRadius = 4
-      for (const ent of this._entities) {
-        if (!ent.model || !ent.model.bounds) continue
-        const t = ent.transform || { x: 0, y: 0, z: 0 }
-        const bmin = ent.model.bounds.min
-        const bmax = ent.model.bounds.max
-        const ux = t.x + (bmin[0] + bmax[0]) * 0.5
-        const uy = t.y + (bmin[1] + bmax[1]) * 0.5
-        const uz = t.z + (bmin[2] + bmax[2]) * 0.5
-        const ur = 0.5 * Math.hypot(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2])
-        if (ur > maxUnitRadius) maxUnitRadius = ur
-        if (ux - ur < minX) minX = ux - ur
-        if (uy - ur < minY) minY = uy - ur
-        if (uz - ur < minZ) minZ = uz - ur
-        if (ux + ur > maxX) maxX = ux + ur
-        if (uy + ur > maxY) maxY = uy + ur
-        if (uz + ur > maxZ) maxZ = uz + ur
-      }
-      cx = (minX + maxX) * 0.5
-      cy = (minY + maxY) * 0.5
-      cz = (minZ + maxZ) * 0.5
-      const halfX = (maxX - minX) * 0.5
-      const halfY = (maxY - minY) * 0.5
-      const halfZ = (maxZ - minZ) * 0.5
-      r = Math.max(2, Math.hypot(halfX, halfY, halfZ) * 1.6)
+      // Multi-entity (sandbox) mode — anchor the shadow frustum on the
+      // camera target and clamp its half-extent (see SHADOW_FRUSTUM_*).
+      // Enclosing every spawned unit, as an earlier revision did, let the
+      // ortho box balloon with the spread of the field: each unit then
+      // occupied only a few shadow-map texels (square shadows) and the
+      // widened depth range outran the bias (peter-panning that reads as
+      // the shadow sinking through the ground).  Following the camera with
+      // a bounded window keeps the resolution high under the units the
+      // user is actually looking at; faraway casters drop their shadow,
+      // which the shadow-distance LOD already does anyway.
+      const tgt = (this.camera && this.camera.target) || [0, 0, 0]
+      cx = tgt[0]
+      cy = tgt[1]
+      cz = tgt[2]
+      const camDist = (this.camera && this.camera.distance) || 200
+      r = Math.min(SHADOW_FRUSTUM_MAX_WU, Math.max(SHADOW_FRUSTUM_MIN_WU, camDist * 0.45))
     } else {
       const min = this.model.bounds.min
       const max = this.model.bounds.max
