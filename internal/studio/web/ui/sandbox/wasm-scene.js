@@ -53,12 +53,14 @@ const MAX_STEPS_PER_FRAME = 8
 // MAX_STEPS_PER_FRAME can never close a gap once one opens (join-restore
 // latency, a GC pause, a briefly backgrounded tab whose rAF was throttled): it
 // only ever adds one frame's worth of time, so the prediction stalls behind
-// authority and the rendered poses freeze.  Instead we chase serverTick with a
-// generous per-frame burst.  A single wasm step is cheap, so a few hundred fit
-// in a frame budget; a very large gap drains over several frames, keeping the
-// UI responsive.  Stepping only up to (never past) serverTick is safe because
-// every order is stamped for serverTick + inputDelay + 1, so the local engine
-// never runs ahead of an order it has already been told about.
+// authority and the rendered poses freeze.  Instead we chase the source's
+// stepTarget with a generous per-frame burst.  A single wasm step is cheap, so a
+// few hundred fit in a frame budget; a very large gap drains over several
+// frames, keeping the UI responsive.  stepTarget is the wall-clock-extrapolated
+// serverTick clamped to the safe lead (serverTick + inputDelay): every order is
+// stamped for serverTick + inputDelay + 1, so stepping no further than that
+// bound guarantees the local engine never produces a tick whose order frame is
+// still in flight — which the session would otherwise drop, diverging forever.
 const MAX_CATCHUP_STEPS = 600
 
 // COB TA-angle (65536 per turn) to radians.
@@ -858,7 +860,9 @@ export class WasmSandboxScene {
       // at the host's rate — so the local clock always follows it rather than
       // gating on the (mirrored) local pause flag.  rate below still scales
       // particle/audio aging so a paused window's effects freeze too.
-      const target = this.source.serverTick || 0
+      const target = (typeof this.source.stepTarget === 'number'
+        ? this.source.stepTarget
+        : (this.source.serverTick || 0))
       let steps = 0
       while (this.source.tick < target && steps < MAX_CATCHUP_STEPS) {
         const s = this._stepOnce()
