@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/coreprime/kbot/formats/ai"
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/tdf"
@@ -38,6 +39,12 @@ func (r *Renderer) Describe(vpath string, data []byte) (map[string]any, bool) {
 	ext := strings.ToLower(path.Ext(vpath))
 	d, ok := describers[ext]
 	if !ok {
+		// A .txt that parses as an AI profile is described as one; this mirrors
+		// how TA ships some bot profiles with a plain .txt extension.
+		if ext == ".txt" && ai.IsAIFile(data) {
+			describeAI(r, vpath, data, out)
+			return out, true
+		}
 		return out, false
 	}
 	d(r, vpath, data, out)

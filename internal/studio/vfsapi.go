@@ -30,16 +30,37 @@ func registerVFSAPI(mux *http.ServeMux) {
 }
 
 // vfsEntry is one row in a directory listing. Type is "file" or "directory";
-// Size is the file's byte length (0 for directories).
+// Size is the file's byte length (files only). Directories carry recursive
+// roll-up counts/size so the browse view can show "N folders, M files".
 type vfsEntry struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Type       string `json:"type"`
+	Size       int64  `json:"size,omitempty"`
+	DirFiles   int    `json:"dirFiles,omitempty"`
+	DirFolders int    `json:"dirFolders,omitempty"`
+	DirSize    int64  `json:"dirSize,omitempty"`
+}
+
+// vfsCrumb is one breadcrumb segment in a listing response.
+type vfsCrumb struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
-	Type string `json:"type"`
-	Size int64  `json:"size"`
 }
 
 func handleVFS(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/api/vfs/")
+	q := r.URL.Query()
+
+	// Global, path-independent queries handled first.
+	if q.Has("q") || q.Has("search") {
+		handleVFSSearch(w, q.Get("q"))
+		return
+	}
+	if q.Has("stats") {
+		handleVFSStats(w)
+		return
+	}
 
 	// A trailing slash (or the bare root) means "list this directory".
 	if rel == "" || strings.HasSuffix(rel, "/") {
@@ -47,7 +68,6 @@ func handleVFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q := r.URL.Query()
 	switch {
 	case q.Has("metadata"):
 		handleVFSMetadata(w, rel)
@@ -57,11 +77,75 @@ func handleVFS(w http.ResponseWriter, r *http.Request) {
 		handleVFSDescribe(w, rel)
 	default:
 		if req := parseRenderRequest(q); req.IsRender() {
-			handleVFSRender(w, r, rel, req)
+			handleVFSRender(w, r, rel, req, q.Get("source"))
 			return
 		}
-		handleVFSRaw(w, r, rel)
+		handleVFSRaw(w, r, rel, q.Get("source"))
 	}
+}
+
+// readVFS reads a file's bytes, optionally from a specific archive layer
+// (the ?source= query param) so the Layering tab can show what a lower
+// layer holds for the same path.
+func readVFS(vpath, source string) ([]byte, error) {
+	if source != "" {
+		return vfs.ReadFileFromSource(vpath, source)
+	}
+	return vfs.ReadFile(vpath)
+}
+
+// handleVFSStats returns a filesystem overview (archive count, file/dir
+// totals, packed/unpacked sizes, compression) for the explorer Home page.
+func handleVFSStats(w http.ResponseWriter) {
+	s := vfs.Stats()
+	writeJSON(w, map[string]any{
+		"basePath":         s["base_path"],
+		"archives":         s["archives"],
+		"totalFiles":       s["total_files"],
+		"archiveFiles":     s["archive_files"],
+		"physicalFiles":    s["physical_files"],
+		"directories":      s["directories"],
+		"unpackedSize":     s["total_unpacked_size"],
+		"packedSize":       s["total_packed_size"],
+		"compressionRatio": s["compression_ratio"],
+	})
+}
+
+// handleVFSSearch does a substring match over every VFS path, returning the
+// matching files (and their matching parent directories) capped at 50 rows.
+func handleVFSSearch(w http.ResponseWriter, query string) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if len(query) < 2 {
+		writeJSON(w, map[string]any{"results": []any{}})
+		return
+	}
+
+	type result struct {
+		Name  string `json:"name"`
+		Path  string `json:"path"`
+		IsDir bool   `json:"isDir"`
+	}
+	results := make([]result, 0, 50)
+	seen := make(map[string]bool)
+
+	for _, fp := range vfs.List() {
+		if len(results) >= 50 {
+			break
+		}
+		if !strings.Contains(strings.ToLower(fp), query) {
+			continue
+		}
+		dir := path.Dir(fp)
+		if dir != "." && dir != "" && !seen[dir] && strings.Contains(strings.ToLower(dir), query) {
+			seen[dir] = true
+			results = append(results, result{Name: path.Base(dir), Path: dir, IsDir: true})
+		}
+		if !seen[fp] {
+			seen[fp] = true
+			results = append(results, result{Name: path.Base(fp), Path: fp, IsDir: false})
+		}
+	}
+	writeJSON(w, map[string]any{"results": results})
 }
 
 // parseRenderRequest maps the query string onto an assetrender.RenderRequest.
@@ -92,8 +176,8 @@ func parseRenderRequest(q url.Values) assetrender.RenderRequest {
 // minimap, a PCX as PNG, …) and serves the encoded bytes with a matching
 // content type. Renders are content-addressed and cached on disk by the
 // Renderer, so a successful result also carries an ETag for conditional GETs.
-func handleVFSRender(w http.ResponseWriter, r *http.Request, vpath string, req assetrender.RenderRequest) {
-	data, err := vfs.ReadFile(vpath)
+func handleVFSRender(w http.ResponseWriter, r *http.Request, vpath string, req assetrender.RenderRequest, source string) {
+	data, err := readVFS(vpath, source)
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
@@ -157,6 +241,16 @@ func handleVFSList(w http.ResponseWriter, dir string) {
 		e := vfsEntry{Name: name, Path: full, Type: "file"}
 		if isDir {
 			e.Type = "directory"
+			ds := vfs.RecursiveDirectoryStats(full)
+			if v, ok := ds["files"].(int); ok {
+				e.DirFiles = v
+			}
+			if v, ok := ds["subdirectories"].(int); ok {
+				e.DirFolders = v
+			}
+			if v, ok := ds["total_size"].(int64); ok {
+				e.DirSize = v
+			}
 		} else if info, err := vfs.Stat(full); err == nil {
 			e.Size = info.Size
 		}
@@ -171,13 +265,37 @@ func handleVFSList(w http.ResponseWriter, dir string) {
 		return entries[i].Name < entries[j].Name
 	})
 
-	writeJSON(w, map[string]any{"path": dir, "entries": entries})
+	// Breadcrumbs from the root down to this directory.
+	crumbs := []vfsCrumb{{Name: "Root", Path: ""}}
+	dirName := "Root"
+	if dir != "" {
+		cur := ""
+		for _, part := range strings.Split(dir, "/") {
+			if part == "" {
+				continue
+			}
+			cur = path.Join(cur, part)
+			crumbs = append(crumbs, vfsCrumb{Name: part, Path: cur})
+		}
+		dirName = crumbs[len(crumbs)-1].Name
+	}
+
+	totals := vfs.RecursiveDirectoryStats(dir)
+	writeJSON(w, map[string]any{
+		"path":        dir,
+		"dirName":     dirName,
+		"breadcrumbs": crumbs,
+		"entries":     entries,
+		"fileCount":   totals["files"],
+		"subdirCount": totals["subdirectories"],
+		"totalSize":   totals["total_size"],
+	})
 }
 
 // handleVFSRaw serves the file's bytes verbatim with a content-type derived
 // from its extension and a content-hash ETag for cheap conditional GETs.
-func handleVFSRaw(w http.ResponseWriter, r *http.Request, vpath string) {
-	data, err := vfs.ReadFile(vpath)
+func handleVFSRaw(w http.ResponseWriter, r *http.Request, vpath string, source string) {
+	data, err := readVFS(vpath, source)
 	if err != nil {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return

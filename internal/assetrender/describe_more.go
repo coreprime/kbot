@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/coreprime/kbot/formats/ai"
 	"github.com/coreprime/kbot/formats/crt"
 	"github.com/coreprime/kbot/formats/fnt"
 	"github.com/coreprime/kbot/formats/hpi"
@@ -40,6 +41,7 @@ func init() {
 		".pal": describePAL,
 		".sct": describeSCT,
 		".tnt": describeTNT,
+		".ai":  describeAI,
 	} {
 		describers[ext] = d
 	}
@@ -93,11 +95,64 @@ func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
 			out["decompiled"] = decompiled
 		}
 	}
+	// Call graph (functions, signals, and the edges between them) drives the
+	// flow-arrow and graph views; analysis runs on a fresh load.
+	if cob5, err := scripting.LoadFromReader(bytes.NewReader(data)); err == nil {
+		graph := linter.New().GetCallGraph(cob5)
+		if graph != nil && len(graph.Nodes) > 0 {
+			out["callGraphNodes"] = graph.Nodes
+			out["callGraphEdges"] = graph.Edges
+		}
+	}
+	// Web disassembly: a structured JSON form of the bytecode the code view can
+	// fold, annotate, and draw control-flow arrows over.
+	if cob6, err := scripting.LoadFromReader(bytes.NewReader(data)); err == nil {
+		if webDisasm, err := assembly.GenerateWebDisassembly(cob6); err == nil {
+			out["webDisassembly"] = webDisasm
+		}
+	}
 	if cob3, err := scripting.LoadFromReader(bytes.NewReader(data)); err == nil {
 		results, summary := diagsToJSON(linter.New().Lint(cob3))
 		out["lintResults"] = results
 		out["lintSummary"] = summary
 	}
+}
+
+// describeAI parses a TA / TA: Kingdoms bot profile into its per-difficulty
+// plans (unit weights and build limits) for the AI plan view.
+func describeAI(_ *Renderer, _ string, data []byte, out map[string]any) {
+	aiFile, err := ai.Parse(data)
+	if err != nil {
+		return
+	}
+	out["format"] = "AI Profile"
+
+	type weight struct {
+		Unit   string  `json:"unit"`
+		Weight float64 `json:"weight"`
+	}
+	type limit struct {
+		Unit    string `json:"unit"`
+		Maximum int    `json:"maximum"`
+	}
+	type plan struct {
+		Name    string   `json:"name"`
+		Weights []weight `json:"weights"`
+		Limits  []limit  `json:"limits"`
+	}
+
+	plans := make([]plan, 0, len(aiFile.Plans))
+	for _, p := range aiFile.Plans {
+		pl := plan{Name: p.Name, Weights: make([]weight, 0, len(p.Weights)), Limits: make([]limit, 0, len(p.Limits))}
+		for _, w := range p.Weights {
+			pl.Weights = append(pl.Weights, weight{Unit: w.UnitName, Weight: w.Weight})
+		}
+		for _, l := range p.Limits {
+			pl.Limits = append(pl.Limits, limit{Unit: l.UnitName, Maximum: l.Maximum})
+		}
+		plans = append(plans, pl)
+	}
+	out["aiPlans"] = plans
 }
 
 func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
@@ -128,7 +183,12 @@ func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
 
 	// Lint .bos files by resolving #includes through the VFS, compiling, then
 	// linting the result. Headers (.h) are not standalone compilation units.
-	if strings.EqualFold(path.Ext(vpath), ".bos") && r.vfs != nil {
+	if strings.EqualFold(path.Ext(vpath), ".bos") {
+		describeBOSCallGraph(r, vpath, data, out)
+
+		if r.vfs == nil {
+			return
+		}
 		prep := parser.NewPreprocessor(r.vfs, path.Dir(vpath), "")
 		processed, err := prep.ProcessContent(string(data), vpath)
 		if err != nil {
@@ -143,6 +203,35 @@ func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
 		results, summary := diagsToJSON(linter.New().Lint(cob))
 		out["lintResults"] = results
 		out["lintSummary"] = summary
+	}
+}
+
+// describeBOSCallGraph extracts a BOS file's call/signal graph. It prefers a
+// full compile (which yields accurate edges), preprocessing #includes through
+// the VFS first when available, and falls back to a text scan for files that
+// don't compile cleanly on their own.
+func describeBOSCallGraph(r *Renderer, vpath string, data []byte, out map[string]any) {
+	source := string(data)
+	if r.vfs != nil {
+		prep := parser.NewPreprocessor(r.vfs, path.Dir(vpath), "")
+		if processed, err := prep.ProcessContent(source, vpath); err == nil {
+			source = processed
+		}
+	}
+
+	if cob, err := compiler.NewCompiler(source).Compile(); err == nil {
+		graph := linter.New().GetCallGraphFromSource(cob, source)
+		if graph != nil && len(graph.Nodes) > 0 {
+			out["callGraphNodes"] = graph.Nodes
+			out["callGraphEdges"] = graph.Edges
+			return
+		}
+	}
+
+	nodes, edges := extractCallGraphFromSource(source)
+	if len(nodes) > 0 {
+		out["callGraphNodes"] = nodes
+		out["callGraphEdges"] = edges
 	}
 }
 
@@ -494,6 +583,95 @@ func findSection(root *tdf.Section, names ...string) *tdf.Section {
 		cur = next
 	}
 	return cur
+}
+
+// extractCallGraphFromSource is the best-effort text fallback used when a BOS
+// file won't compile on its own. It recognises function declarations and the
+// call-script / start-script / signal / set-signal-mask directives, returning
+// deduplicated nodes and edges in the same shape the compiled path produces.
+func extractCallGraphFromSource(source string) ([]linter.CallGraphNode, []linter.CallGraphEdge) {
+	lines := strings.Split(source, "\n")
+	nodeType := make(map[string]string)
+	var edges []linter.CallGraphEdge
+	current := ""
+
+	addEdge := func(to, typ string) {
+		nodeType[to] = "function"
+		if typ == "signal" || typ == "set-mask" {
+			nodeType[to] = "signal"
+		}
+		edges = append(edges, linter.CallGraphEdge{From: current, To: to, Type: typ})
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if idx := strings.Index(trimmed, "("); idx > 0 &&
+			!strings.HasPrefix(trimmed, "if ") && !strings.HasPrefix(trimmed, "while ") &&
+			!strings.HasPrefix(trimmed, "start-script ") && !strings.HasPrefix(trimmed, "call-script ") &&
+			!strings.HasPrefix(trimmed, "//") {
+			fnName := trimmed[:idx]
+			if len(fnName) > 0 && fnName[0] != '#' && isIdentifier(fnName) {
+				current = fnName
+				nodeType[fnName] = "function"
+			}
+		}
+		if current == "" {
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(trimmed, "call-script "):
+			if rest := strings.TrimPrefix(trimmed, "call-script "); true {
+				if idx := strings.Index(rest, "("); idx > 0 {
+					addEdge(rest[:idx], "call")
+				}
+			}
+		case strings.HasPrefix(trimmed, "start-script "):
+			if rest := strings.TrimPrefix(trimmed, "start-script "); true {
+				if idx := strings.Index(rest, "("); idx > 0 {
+					addEdge(rest[:idx], "start")
+				}
+			}
+		case strings.HasPrefix(trimmed, "signal "):
+			val := strings.TrimSuffix(strings.TrimPrefix(trimmed, "signal "), ";")
+			addEdge("SIG:"+strings.TrimSpace(val), "signal")
+		case strings.HasPrefix(trimmed, "set-signal-mask "):
+			val := strings.TrimSuffix(strings.TrimPrefix(trimmed, "set-signal-mask "), ";")
+			addEdge("SIG:"+strings.TrimSpace(val), "set-mask")
+		}
+	}
+
+	type edgeKey struct{ from, to, typ string }
+	seen := make(map[edgeKey]bool)
+	uniqueEdges := make([]linter.CallGraphEdge, 0, len(edges))
+	for _, e := range edges {
+		k := edgeKey{e.From, e.To, e.Type}
+		if !seen[k] {
+			seen[k] = true
+			uniqueEdges = append(uniqueEdges, e)
+		}
+	}
+
+	nodes := make([]linter.CallGraphNode, 0, len(nodeType))
+	for name, typ := range nodeType {
+		nodes = append(nodes, linter.CallGraphNode{Name: name, Type: typ})
+	}
+	return nodes, uniqueEdges
+}
+
+// isIdentifier reports whether s is a bare BOS identifier (letters, digits,
+// underscores), used to filter out punctuation when scanning for declarations.
+func isIdentifier(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, ch := range s {
+		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // isProbablyText reports whether data looks like UTF-8/ASCII text rather than
