@@ -9,14 +9,28 @@
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { useState } from 'preact/hooks'
-import { gafPngURL, gafApngURL, gafGifURL } from '../api.js'
+import { gafPngURL, gafApngURL, gafGifURL, baseName } from '../api.js'
 
 function hideBroken(e) { e.target.style.visibility = 'hidden' }
+
+// stemOf strips the extension off a path's filename so exported frames
+// can be named after the source GAF (acidbrief.gaf → "acidbrief").
+function stemOf(path) {
+  const b = baseName(path) || 'gaf'
+  const i = b.lastIndexOf('.')
+  return i > 0 ? b.slice(0, i) : b
+}
+
+// safeName reduces a sequence name to filename-safe characters so the
+// browser's download attribute yields a clean, predictable filename.
+function safeName(s) { return String(s || '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'seq' }
 
 function SequenceAccordion({ path, seq, index, transparency }) {
   const [open, setOpen] = useState(index === 0)
   const frames = seq.frames || []
   const first = frames[0]
+  const stem = stemOf(path)
+  const seqName = safeName(seq.name || `seq${index}`)
   return html`
     <div class=${'fx-gaf-acc' + (open ? ' open' : '')}>
       <div class="fx-gaf-acc-head" onClick=${() => setOpen(!open)}>
@@ -28,8 +42,8 @@ function SequenceAccordion({ path, seq, index, transparency }) {
           <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}</span>
         </div>
         <div class="fx-gaf-acc-actions" onClick=${(e) => e.stopPropagation()}>
-          <a class="fx-dl" download href=${gafGifURL(path, index, '', transparency)} title="Download GIF">⬇ GIF</a>
-          <a class="fx-dl" download href=${gafApngURL(path, index, '', transparency)} title="Download APNG">⬇ APNG</a>
+          <a class="fx-dl" download=${`${stem}_${seqName}.gif`} href=${gafGifURL(path, index, '', transparency)} title="Download GIF">⬇ GIF</a>
+          <a class="fx-dl" download=${`${stem}_${seqName}.png`} href=${gafApngURL(path, index, '', transparency)} title="Download APNG">⬇ APNG</a>
         </div>
       </div>
       ${open ? html`
@@ -49,7 +63,7 @@ function SequenceAccordion({ path, seq, index, transparency }) {
                       <td>${f.duration}</td>
                       <td><img class="fx-frame-thumb" loading="lazy" onError=${hideBroken}
                                src=${gafPngURL(path, index, f.index, '', transparency)} alt=${'Frame ' + f.index} /></td>
-                      <td><a class="fx-frame-dl" download href=${gafPngURL(path, index, f.index, '', transparency)} title="Download PNG">⬇</a></td>
+                      <td><a class="fx-frame-dl" download=${`${stem}_${seqName}_f${f.index}.png`} href=${gafPngURL(path, index, f.index, '', transparency)} title="Download PNG">⬇</a></td>
                     </tr>
                   `)}
                 </tbody>

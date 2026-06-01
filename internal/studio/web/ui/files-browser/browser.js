@@ -15,9 +15,21 @@ import { htm as html } from '/ui/common/htm-bind.js'
 import { useCallback, useState } from 'preact/hooks'
 import { WarmIndicator } from './content/warm-indicator.js'
 import { SearchBox } from './components/search-box.js'
+import { Breadcrumbs } from './components/breadcrumbs.js'
 import { HomePage } from './pages/home.js'
 import { BrowsePage } from './pages/browse.js'
 import { ViewPage } from './pages/view.js'
+import { parentDir, baseName } from './api.js'
+
+// crumbsFromPath turns a VFS path into accumulating breadcrumb segments
+// ([{name, path}]), always rooted at "" so the first crumb is the root.
+function crumbsFromPath(path) {
+  const parts = String(path || '').split('/').filter(Boolean)
+  const crumbs = [{ name: 'Root', path: '' }]
+  let acc = ''
+  for (const p of parts) { acc = acc ? `${acc}/${p}` : p; crumbs.push({ name: p, path: acc }) }
+  return crumbs
+}
 
 export function FilesBrowser() {
   // route: { kind: 'home' | 'browse' | 'view', path, source }
@@ -30,16 +42,13 @@ export function FilesBrowser() {
   return html`
     <div class="fx" data-theme="dark">
       <header class="fx-header">
-        <button type="button" class="fx-logo" onClick=${goHome} title="Dashboard">
-          <span class="fx-logo-ico">🗂</span>
-          <span class="fx-logo-text">File Explorer</span>
-        </button>
-        <nav class="fx-nav">
-          <button type="button" class=${'fx-nav-link' + (route.kind === 'home' ? ' active' : '')}
-                  onClick=${goHome}>Dashboard</button>
-          <button type="button" class=${'fx-nav-link' + (route.kind !== 'home' ? ' active' : '')}
-                  onClick=${() => openDir('')}>Browse</button>
-        </nav>
+        <div class="fx-header-crumbs">
+          ${route.kind === 'home'
+            ? html`<nav class="fx-crumbs"><span class="fx-crumb current">File System</span></nav>`
+            : route.kind === 'browse'
+              ? html`<${Breadcrumbs} crumbs=${crumbsFromPath(route.path)} onOpenDir=${openDir} onGoHome=${goHome} />`
+              : html`<${Breadcrumbs} crumbs=${crumbsFromPath(parentDir(route.path))} trailing=${baseName(route.path)} onOpenDir=${openDir} onGoHome=${goHome} />`}
+        </div>
         <div class="fx-header-right">
           <${SearchBox} onOpenDir=${openDir} onOpenFile=${openFile} />
         </div>

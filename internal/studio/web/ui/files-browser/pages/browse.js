@@ -15,7 +15,6 @@ import {
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
 } from '../api.js'
 import { useAsync, Loading, ErrorMsg } from '../components/async.js'
-import { Breadcrumbs } from '../components/breadcrumbs.js'
 import { fileIcon, fileKind } from '../components/icons.js'
 
 const PREVIEW_EXTS = new Set(['gaf', 'pcx', 'tnt', 'sct', 'smk', 'zrb', 'bik'])
@@ -185,7 +184,6 @@ export function BrowsePage({ dir, onOpenDir, onOpenFile }) {
 
   return html`
     <div class="fx-browse">
-      <${Breadcrumbs} crumbs=${data.breadcrumbs} onOpenDir=${onOpenDir} />
       <div class="fx-browse-toolbar">
         <div class="fx-dir-summary">
           <span>📁 ${data.subdirCount} folders</span>

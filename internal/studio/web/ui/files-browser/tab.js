@@ -52,6 +52,20 @@ export function openFilesTab() {
   return openTab('files', {})
 }
 
+// setExplorerStatus replaces the shared footer's map-editor copy with
+// explorer-appropriate text and clears the doc-info pills, which would
+// otherwise still read off whatever map/unit tab was last active.
+function setExplorerStatus() {
+  const statusEl = $('#status')
+  const hintsEl = $('#app-hints')
+  const titleEl = $('#app-doc-title')
+  const metaEl = $('#app-doc-meta')
+  if (statusEl) statusEl.textContent = 'File Explorer'
+  if (hintsEl) hintsEl.innerHTML = 'Search, browse, and preview the files in this workspace.'
+  if (titleEl) titleEl.textContent = ''
+  if (metaEl) metaEl.textContent = ''
+}
+
 // activateFilesTab reveals the overlay (keeping the shared topbar/tabs
 // visible) and ensures the browser is mounted.
 export async function activateFilesTab() {
@@ -60,6 +74,7 @@ export async function activateFilesTab() {
   $('#welcome-dialog')?.classList.add('hidden')
   $('#model-viewer-dialog')?.classList.add('hidden')
   $('#files-dialog')?.classList.remove('hidden')
+  setExplorerStatus()
   await mountFilesBrowserOnce()
 }
 

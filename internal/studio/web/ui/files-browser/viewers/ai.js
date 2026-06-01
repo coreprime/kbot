@@ -56,10 +56,8 @@ export function AiViewer({ describe }) {
   return html`
     <div class="fx-ai">
       <div class="fx-ai-head">
-        <div>
-          <h2 class="fx-ai-title">🤖 AI Behaviour Profile</h2>
-          <p class="fx-ai-sub">Build weights set production priority; limits cap how many of each unit the AI builds.</p>
-        </div>
+        <h2 class="fx-ai-title">🤖 AI Behaviour Profile</h2>
+        <p class="fx-ai-sub">Build weights set production priority; limits cap how many of each unit the AI builds.</p>
         ${!single ? html`
           <div class="fx-ai-plans-tabs">
             ${plans.map((p, i) => html`

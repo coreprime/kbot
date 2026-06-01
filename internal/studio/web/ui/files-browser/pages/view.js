@@ -12,7 +12,6 @@ import { htm as html } from '/ui/common/htm-bind.js'
 import { useState, useCallback, useMemo } from 'preact/hooks'
 import { metadata, rawURL, parentDir, extOf } from '../api.js'
 import { useAsync, useRawText, Loading, ErrorMsg } from '../components/async.js'
-import { Breadcrumbs } from '../components/breadcrumbs.js'
 import { HexView } from '../content/hex-view.js'
 import { InfoTab } from '../viewers/info.js'
 import { TextTab } from '../viewers/text.js'
@@ -190,7 +189,6 @@ export function ViewPage({ path, source: initialSource, onOpenDir, onOpenFile })
 
   return html`
     <div class="fx-view">
-      <${Breadcrumbs} crumbs=${[{ name: 'Root', path: '' }]} onOpenDir=${onOpenDir} trailing=${meta.name} />
       <div class="fx-view-bar">
         <button type="button" class="fx-back" onClick=${() => onOpenDir(parentDir(path))}>← Back to folder</button>
         <div class="fx-view-title">
@@ -198,7 +196,7 @@ export function ViewPage({ path, source: initialSource, onOpenDir, onOpenFile })
           ${describe.format ? html`<span class="fx-format-badge">${describe.format}</span>` : null}
           ${src ? html`<span class="fx-source-badge">📚 ${src}</span>` : null}
         </div>
-        <a class="fx-dl-btn" download href=${rawURL(path, src)}>⬇ Download</a>
+        <a class="fx-dl-btn" download=${meta.name} href=${rawURL(path, src)}>⬇ Download</a>
       </div>
       <div class="fx-tabs">
         ${tabs.map((t) => html`

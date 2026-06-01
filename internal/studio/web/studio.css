@@ -97,6 +97,7 @@ kbd {
 #welcome-dialog .dialog-card {
   position: relative;
   z-index: 1;
+  width: min(760px, 94vw);
   border: 2px solid transparent;
   background-image:
     linear-gradient(var(--bg-1), var(--bg-1)),
@@ -173,6 +174,27 @@ kbd {
   color: var(--muted);
   line-height: 1.4;
 }
+
+/* Workspace footnote — a quiet line at the foot of the welcome card
+   naming the VFS / context the studio is serving. */
+.welcome-footnote {
+  margin: 18px auto 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
+  line-height: 1.5;
+}
+.welcome-footnote code {
+  background: rgba(22, 26, 33, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--text);
+  word-break: break-all;
+}
+.welcome-footnote-sep { opacity: 0.5; margin: 0 4px; }
 
 /* Workflow tab row above the New / Open Map cards.  Only the active
    tab (Mapping) is wired up today — the others are placeholders so
@@ -5990,34 +6012,9 @@ canvas {
   background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
   border-bottom: 1px solid var(--border);
 }
-.fx-logo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: 0;
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  padding: 4px 6px;
-  border-radius: 6px;
-}
-.fx-logo:hover { background: var(--bg-2); }
-.fx-logo-ico { font-size: 18px; }
-.fx-logo-text { font-weight: 700; letter-spacing: 0.2px; }
-.fx-nav { display: flex; gap: 4px; }
-.fx-nav-link {
-  background: none;
-  border: 0;
-  color: var(--muted);
-  cursor: pointer;
-  font: inherit;
-  padding: 6px 12px;
-  border-radius: 6px;
-}
-.fx-nav-link:hover { background: var(--bg-2); color: var(--text); }
-.fx-nav-link.active { background: var(--bg-3); color: var(--text); }
-.fx-header-right { margin-left: auto; width: 360px; max-width: 42vw; }
+.fx-header-crumbs { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
+.fx-header-crumbs .fx-crumbs { flex-wrap: nowrap; overflow: hidden; }
+.fx-header-right { margin-left: auto; flex: 0 0 auto; width: 360px; max-width: 42vw; }
 
 /* ── search box ────────────────────────────────────────────────────── */
 .fx-search { position: relative; width: 100%; }
@@ -6557,10 +6554,10 @@ canvas {
 
 /* ── AI viewer ─────────────────────────────────────────────────────── */
 .fx-ai { display: flex; flex-direction: column; gap: 16px; }
-.fx-ai-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.fx-ai-head { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .fx-ai-title { font-size: 18px; }
 .fx-ai-sub { color: var(--muted); font-size: 12px; max-width: 520px; }
-.fx-ai-plans-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.fx-ai-plans-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .fx-ai-plan-tab {
   background: var(--bg-2);
   border: 1px solid var(--border);

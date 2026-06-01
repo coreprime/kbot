@@ -18,6 +18,7 @@ function eventsURL() {
 
 export function WarmIndicator() {
   const [evt, setEvt] = useState(null)
+  const [dismissed, setDismissed] = useState(false)
 
   useEffect(() => {
     let ws
@@ -31,9 +32,18 @@ export function WarmIndicator() {
     return () => { closed = true; if (ws) try { ws.close() } catch { /* ignore */ } void closed }
   }, [])
 
-  if (!evt || evt.total === 0) return null
+  const done = !!evt && (evt.type === 'done' || evt.processed >= evt.total)
 
-  const done = evt.type === 'done' || evt.processed >= evt.total
+  // Once warming finishes, show the "ready" line briefly then retire the
+  // indicator so it doesn't linger over the explorer.
+  useEffect(() => {
+    if (!done) return undefined
+    const t = setTimeout(() => setDismissed(true), 4000)
+    return () => clearTimeout(t)
+  }, [done])
+
+  if (!evt || evt.total === 0 || dismissed) return null
+
   const pct = evt.total ? Math.round((evt.processed / evt.total) * 100) : 0
 
   return html`

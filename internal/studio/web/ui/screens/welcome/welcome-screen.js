@@ -47,10 +47,10 @@ const _sandboxView = signal('menu')
 
 // Module-scoped so the tab the user picked survives unmount/remount
 // (e.g. opening + closing the dialog without losing the workflow
-// context).  Defaults to 'sandbox' — sandbox is the first tab AND the
-// fastest path to verify a unit in motion, so a fresh boot lands
-// there.
-const _activeTab = signal('sandbox')
+// context).  Defaults to 'explorer' — the file explorer is the first
+// tab and the broadest entry point into a workspace, so a fresh boot
+// lands there.
+const _activeTab = signal('explorer')
 
 // _TABS — single source of truth for the tab strip.  Each entry has
 // the display label and an optional `disabled` flag.  Order here is
@@ -59,11 +59,11 @@ const _activeTab = signal('sandbox')
 // lets the user see what's coming) while Other is a fully-disabled
 // roadmap placeholder.
 const _TABS = [
+  { key: 'explorer',  label: 'Explorer' },
   { key: 'sandbox',   label: 'Sandbox Mode' },
   { key: 'mapping',   label: 'Map Creator' },
   { key: 'modelling', label: 'Unit Creator' },
   { key: 'scripting', label: 'Scripting' },
-  { key: 'explorer',  label: 'Explorer' },
   { key: 'other',     label: 'Other', disabled: true,
     title: 'More workflows on the roadmap.' },
 ]
@@ -134,6 +134,31 @@ function _JoinPicker({ onOpenSandbox, onBack }) {
         </ul>
       ` : null}
     </div>
+  `
+}
+
+// _WorkspaceFootnote reports which VFS / workspace the studio is serving
+// (the active kbot context's base path plus headline counts), fetched
+// once from the explorer's ?stats document.  Stays silent until the
+// numbers arrive so a slow mount doesn't flash an empty line.
+function _WorkspaceFootnote() {
+  const [stats, setStats] = useState(null)
+  useEffect(() => {
+    let ok = true
+    fetch('/api/vfs/?stats')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (ok) setStats(d) })
+      .catch(() => { /* explorer surface unavailable — stay silent */ })
+    return () => { ok = false }
+  }, [])
+  if (!stats || !stats.basePath) return null
+  const num = (n) => Number(n || 0).toLocaleString()
+  return html`
+    <p class="welcome-footnote">
+      📂 Workspace: <code>${stats.basePath}</code>
+      <span class="welcome-footnote-sep">·</span> ${num(stats.archives)} archives
+      <span class="welcome-footnote-sep">·</span> ${num(stats.totalFiles)} files
+    </p>
   `
 }
 
@@ -269,8 +294,8 @@ export function WelcomeScreen({
         <div class="welcome-options" ref=${cardRowRef}>
           <${_Card}
             icon="🗂"
-            title="Browse Game Files"
-            sub="Explore the complete Total Annihilation & TA: Kingdoms file-systems — preview animations, maps, scripts, and more."
+            title="Browse Files"
+            sub="View the full set of content for this workspace."
             onClick=${() => onBrowseFiles && onBrowseFiles()} />
         </div>
       </div>
@@ -296,6 +321,7 @@ export function WelcomeScreen({
         </div>
       </div>
     ` : null}
+    <${_WorkspaceFootnote} />
   `
 }
 
