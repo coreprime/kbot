@@ -80,13 +80,15 @@ Terminal Mode Commands:
   help                - Show available commands
   exit/quit           - Exit the browser
 
-Web Server Mode:
-  Use --server flag to run as a web server instead of terminal mode`,
+Web Server Mode (deprecated):
+  The --server flag served a web asset explorer.  That browser now lives
+  in 'kbot studio' as the Files tab; --server prints a pointer to it and
+  still starts the legacy server for now, but will be removed.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: runBrowser,
 	}
 
-	cmd.Flags().BoolVarP(&serverMode, "server", "s", false, "Run as web server")
+	cmd.Flags().BoolVarP(&serverMode, "server", "s", false, "Run as web server (deprecated — use 'kbot studio')")
 	cmd.Flags().IntVarP(&serverPort, "port", "p", 8000, "Web server port (default 8000)")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "Disable caching (server mode only)")
 	cmd.Flags().BoolVar(&clearCache, "clear-cache", false, "Clear all caches on startup (server mode only)")
@@ -136,6 +138,11 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 
 	// Check if running in server mode
 	if serverMode {
+		fmt.Println("⚠ 'kbot mount --server' is deprecated.")
+		fmt.Println("  The web asset explorer now lives in 'kbot studio' as the Files tab,")
+		fmt.Println("  with richer per-format previews and background cache warming.")
+		fmt.Println("  Starting the legacy server anyway for now…")
+		fmt.Println()
 		fmt.Printf("Starting web server on port %d...\n", serverPort)
 		fmt.Printf("Open http://localhost:%d in your browser\n\n", serverPort)
 		return runWebServer(vfs, serverPort)

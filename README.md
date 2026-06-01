@@ -7,7 +7,7 @@
 [![GitHub issues](https://img.shields.io/github/issues/coreprime/kbot)](https://github.com/coreprime/kbot/issues)
 [![GitHub commit activity](https://img.shields.io/github/commit-activity/m/coreprime/kbot)](https://github.com/coreprime/kbot/commits/main)
 
-A toolkit for working with Total Annihilation game assets. KBot provides a unified CLI for managing the various proprietary file formats used by the game, along with a web-based asset explorer. There are also development tools, allowing advanced debugging and processing of various formats, including the COB/BOS scripting language.
+A toolkit for working with Total Annihilation game assets. KBot provides a unified CLI for managing the various proprietary file formats used by the game, along with a browser-based studio (map editor + asset explorer). There are also development tools, allowing advanced debugging and processing of various formats, including the COB/BOS scripting language.
 
 ## Installation
 
@@ -28,7 +28,9 @@ task install      # installs kbot to $GOPATH/bin
 To run the visual explorer for Total Annihilation:
 
 - Perform the installation steps
-- Run the web explorer with `kbot mount ~/games/totala --server`
+- Launch `kbot studio ~/games/totala` and open the **Files** tab to browse,
+  preview, and inspect every asset in the install (the old
+  `kbot mount --server` web explorer is deprecated and folded into Studio)
 
 To develop/code against the project:
 
@@ -615,40 +617,34 @@ there is no `from-mp4` counterpart.
 
 ### `kbot mount` — Asset Explorer
 
-Browse game files interactively in a terminal or web UI.
+Browse game files interactively in a terminal.
 
 ```bash
 # Terminal browser
 kbot mount ~/ta-content
 
-# Web server (KBot Explorer)
-kbot mount ~/ta-content --server
-kbot mount ~/ta-content --server --port 8080
-
 # Flatten (extract all files to disk)
 kbot mount ~/ta-content flatten --target ./flat
 
 # Omit the path to mount the active kbot context (see `kbot ctx`)
-kbot mount --server
 kbot mount flatten --target ./flat
 ```
 
 **Terminal commands:** `ls`, `cd`, `pwd`, `cat`, `describe`, `archives`, `stats`, `exit`
 
-**Web UI features:**
-- Browse files with icon/list view and search
-- View COB scripts with syntax highlighting, code folding, and linting
-- View GAF animations with APNG preview and frame tables
-- View PCX images with palette selection
-- Play WAV/MP3 audio and SMK/ZRB video
-- View TNT maps with pan/zoom, start positions, and feature overlays
-- View SCT sections with tile grid overlay and height maps
-- View 3DO models with object hierarchy and texture lists
-- View TDF/FBI/OTA configs with collapsible section trees
-- View palettes and color lookup tables (ALP/LHT/SHD)
-- View bitmap fonts with live text preview
-- Call graph visualization for script functions and signals
-- Light/dark/system theme toggle
+> **Deprecated:** the `--server` flag launched a standalone web explorer.
+> That browser now lives in `kbot studio` as the **Files** tab — see below.
+> `--server` still starts the legacy server for now but prints a pointer to
+> Studio and will be removed in a future release.
+
+The Studio **Files** tab covers everything the old web explorer did:
+- Browse the VFS with a folder tree and per-folder listings
+- View GAF animations with APNG preview, sequence/frame controls, and transparency toggles
+- View PCX/FNT images with format options, and palettes as a swatch grid
+- Play SMK/ZRB/Bink video transcoded to MP4 with an animated poster
+- View TNT/SCT maps with minimap/heightmap/tilemap/buildmap/voidmap renders
+- Inspect COB disassembly/decompilation, TDF/FBI/OTA structure, and raw hex
+- Background cache warming with live websocket progress
 
 ---
 
