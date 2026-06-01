@@ -106,6 +106,11 @@ type projectile struct {
 	pitch   int32
 	dead    bool
 	hit     bool // true on the tick it reaches the target (vs. timing out)
+
+	// fromPiece is the emitter piece index the slot's Query script returned at
+	// launch. The sim has no geometry so it spawns from the unit origin; this is
+	// carried purely so the renderer can offset the model to the real muzzle.
+	fromPiece int
 }
 
 // projectileModeFor picks a flight behaviour from the weapon flags.
@@ -142,7 +147,7 @@ func hypot3(x, y, z fixed.Fixed) fixed.Fixed {
 
 // makeProjectile builds the flight record for one shot. anchor is the muzzle
 // exit, target the aim point; gravity is the world gravity for arcing modes.
-func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta, anchor, target fixed.Vec3) *projectile {
+func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta, anchor, target fixed.Vec3, fromPiece int) *projectile {
 	mode := projectileModeFor(wm)
 
 	vmax := wm.VelocityWU
@@ -268,6 +273,7 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 		heading:   headingInit,
 		pitch:     pitchInit,
 		lastDistT: d,
+		fromPiece: fromPiece,
 	}
 }
 

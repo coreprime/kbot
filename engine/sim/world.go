@@ -587,10 +587,11 @@ type RestoredProjectile struct {
 	Damage   fixed.Fixed
 	AgeSec   fixed.Fixed
 	LifeSec  fixed.Fixed
-	LastDist fixed.Fixed
-	Closing  bool
-	Heading  int32
-	Pitch    int32
+	LastDist  fixed.Fixed
+	Closing   bool
+	Heading   int32
+	Pitch     int32
+	FromPiece int
 }
 
 // ExportUnits captures every live unit's full motion state in insertion order,
@@ -669,10 +670,11 @@ func (w *World) ExportProjectiles() []RestoredProjectile {
 			Damage:   p.damage,
 			AgeSec:   p.ageSec,
 			LifeSec:  p.lifeSec,
-			LastDist: p.lastDistT,
-			Closing:  p.closing,
-			Heading:  p.heading,
-			Pitch:    p.pitch,
+			LastDist:  p.lastDistT,
+			Closing:   p.closing,
+			Heading:   p.heading,
+			Pitch:     p.pitch,
+			FromPiece: p.fromPiece,
 		})
 	}
 	return out
@@ -810,6 +812,7 @@ func (w *World) restoreProjectiles(projectiles []RestoredProjectile) {
 			closing:   rp.Closing,
 			heading:   rp.Heading,
 			pitch:     rp.Pitch,
+			fromPiece: rp.FromPiece,
 		})
 		if rp.ID > maxID {
 			maxID = rp.ID

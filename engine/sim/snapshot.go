@@ -47,9 +47,10 @@ func (w *World) Snapshot() frame.Snapshot {
 				Vel:      p.vel,
 				Origin:   p.origin,
 				Target:   p.target,
-				Speed:    p.speed,
-				AgeSec:   p.ageSec,
-				LifeSec:  p.lifeSec,
+				Speed:     p.speed,
+				AgeSec:    p.ageSec,
+				LifeSec:   p.lifeSec,
+				FromPiece: int32(p.fromPiece),
 			})
 		}
 	}

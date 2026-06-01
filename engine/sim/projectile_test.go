@@ -85,7 +85,7 @@ func TestVLaunchAscendsThenHits(t *testing.T) {
 	}
 	anchor := fixed.Vec3{}
 	target := fixed.Vec3{X: fixed.FromInt(300)}
-	p := w.makeProjectile(1, 2, 0, wm, anchor, target)
+	p := w.makeProjectile(1, 2, 0, wm, anchor, target, -1)
 
 	maxY := fixed.Zero
 	for i := 0; i < 400 && !p.dead; i++ {

@@ -139,6 +139,15 @@ export class WasmFrameSource extends FrameSource {
   // hash returns the authoritative-comparable world hash as a decimal string.
   hash() { return this._engine.hash(this._handle) }
 
+  // exportSnapshot returns the local world's authoritative state in the same
+  // shape the server's wire snapshot serializes to (raw fixed-point integers),
+  // for the Network panel's Diagnose drift comparison against the server. Does
+  // not advance the world; null before the engine seeds.
+  exportSnapshot() {
+    if (!this._engine || this._handle < 0) return null
+    return this._engine.exportSnapshot(this._handle)
+  }
+
   // cobState returns the live COB inspection snapshot — { tick, units:[{ id,
   // name, static:[…], threads:[…] }] } — the studio's Runtime / Script
   // Variables panels render. Debug-only; reads no hashed state.

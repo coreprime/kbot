@@ -296,6 +296,97 @@ func projectilesFromJS(arr js.Value) []sim.RestoredProjectile {
 	return out
 }
 
+// snapshotToWireJS marshals the world's authoritative export into the same shape
+// the server's wire.Snapshot serializes to (raw fixed-point integers as JS
+// numbers, identical field names). The Network panel's Diagnose feature diffs
+// this client-side snapshot field-by-field against the server's, so the two must
+// be byte-comparable: every position/health/velocity stays a raw Q16.16 integer
+// rather than being converted to world-unit floats. Read-only / debug-only.
+func snapshotToWireJS(inst *instance) js.Value {
+	w := inst.world
+	units := make([]any, 0)
+	for _, ru := range w.ExportUnits() {
+		weapons := make([]any, len(ru.Weapons))
+		for i := range ru.Weapons {
+			rw := ru.Weapons[i]
+			weapons[i] = map[string]any{
+				"hasTarget":  rw.HasTarget,
+				"targetUnit": int(rw.TargetUnit),
+				"px":         float64(rw.TargetPt.X),
+				"py":         float64(rw.TargetPt.Y),
+				"pz":         float64(rw.TargetPt.Z),
+				"source":     rw.Source,
+				"lastFireMs": float64(rw.LastFireMs),
+			}
+		}
+		units = append(units, map[string]any{
+			"id":           int(ru.ID),
+			"name":         ru.Name,
+			"side":         ru.Side,
+			"x":            float64(ru.Pos.X),
+			"y":            float64(ru.Pos.Y),
+			"z":            float64(ru.Pos.Z),
+			"heading":      float64(ru.Heading),
+			"speed":        float64(ru.Speed),
+			"hasMove":      ru.HasMove,
+			"tx":           float64(ru.MoveTarget.X),
+			"tz":           float64(ru.MoveTarget.Z),
+			"health":       float64(ru.Health),
+			"dead":         ru.Dead,
+			"hasAttack":    ru.HasAttack,
+			"attackTarget": int(ru.AttackTarget),
+			"weapons":      weapons,
+		})
+	}
+	projos := make([]any, 0)
+	for _, rp := range w.ExportProjectiles() {
+		projos = append(projos, map[string]any{
+			"id":        int(rp.ID),
+			"ownerId":   int(rp.OwnerID),
+			"targetId":  int(rp.TargetID),
+			"slot":      rp.Slot,
+			"mode":      int(rp.Mode),
+			"phase":     int(rp.Phase),
+			"model":     rp.Model,
+			"weapon":    rp.Weapon,
+			"x":         float64(rp.Pos.X),
+			"y":         float64(rp.Pos.Y),
+			"z":         float64(rp.Pos.Z),
+			"vx":        float64(rp.Vel.X),
+			"vy":        float64(rp.Vel.Y),
+			"vz":        float64(rp.Vel.Z),
+			"ox":        float64(rp.Origin.X),
+			"oy":        float64(rp.Origin.Y),
+			"oz":        float64(rp.Origin.Z),
+			"tx":        float64(rp.Target.X),
+			"ty":        float64(rp.Target.Y),
+			"tz":        float64(rp.Target.Z),
+			"launchY":   float64(rp.LaunchY),
+			"speed":     float64(rp.Speed),
+			"vmax":      float64(rp.VMax),
+			"accel":     float64(rp.Accel),
+			"turnAng":   int(rp.TurnAng),
+			"homingR":   float64(rp.HomingR),
+			"gravity":   float64(rp.Gravity),
+			"aoe":       float64(rp.AoE),
+			"damage":    float64(rp.Damage),
+			"ageSec":    float64(rp.AgeSec),
+			"lifeSec":   float64(rp.LifeSec),
+			"lastDist":  float64(rp.LastDist),
+			"closing":   rp.Closing,
+			"heading":   int(rp.Heading),
+			"pitch":     int(rp.Pitch),
+			"fromPiece": rp.FromPiece,
+		})
+	}
+	return js.ValueOf(map[string]any{
+		"tick":        int(w.Tick()),
+		"hash":        formatUint(w.Hash()),
+		"units":       units,
+		"projectiles": projos,
+	})
+}
+
 // snapshotToJS marshals a render snapshot into a JS object the WebGL renderer
 // consumes. Positions are floats (world units) and headings are exposed both as
 // the raw TA-angle and as radians so the renderer can use whichever it already
@@ -309,13 +400,14 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 	for i := range s.Projos {
 		p := &s.Projos[i]
 		projos = append(projos, map[string]any{
-			"id":      int(p.ID),
-			"kind":    p.Kind,
-			"x":       p.Pos.X.Float(),
-			"y":       p.Pos.Y.Float(),
-			"z":       p.Pos.Z.Float(),
-			"heading": int(p.Heading),
-			"pitch":   int(p.Pitch),
+			"id":        int(p.ID),
+			"kind":      p.Kind,
+			"x":         p.Pos.X.Float(),
+			"y":         p.Pos.Y.Float(),
+			"z":         p.Pos.Z.Float(),
+			"heading":   int(p.Heading),
+			"pitch":     int(p.Pitch),
+			"fromPiece": int(p.FromPiece),
 			// Inspection fields the Projectiles panel reads to plot the
 			// launch→aim track and label the shot.
 			"ownerId":      int(p.OwnerID),

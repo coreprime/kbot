@@ -57,9 +57,10 @@ func main() {
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
 		"renderState":  js.FuncOf(renderState),
-		"hash":         js.FuncOf(hashOf),
-		"tick":         js.FuncOf(tickOf),
-		"cobState":     js.FuncOf(cobState),
+		"hash":           js.FuncOf(hashOf),
+		"tick":           js.FuncOf(tickOf),
+		"cobState":       js.FuncOf(cobState),
+		"exportSnapshot": js.FuncOf(exportSnapshot),
 		// Developer commands — sandbox-only script control for the Runtime panel.
 		"killAllThreads":  js.FuncOf(killAllThreads),
 		"killUnitThreads": js.FuncOf(killUnitThreads),
@@ -308,6 +309,18 @@ func renderState(_ js.Value, args []js.Value) any {
 		return js.Null()
 	}
 	return snapshotToJS(inst.world.Snapshot())
+}
+
+// exportSnapshot(handle) returns the local world's authoritative state in the
+// same shape the server's wire snapshot serializes to (raw fixed-point integers,
+// matching field names), for the Network panel's Diagnose drift comparison. It
+// does not advance the world. Read-only / debug-only.
+func exportSnapshot(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToWireJS(inst)
 }
 
 // hash(handle) returns the world hash as a decimal string (uint64 exceeds the

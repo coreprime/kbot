@@ -64,6 +64,13 @@ const MAX_CATCHUP_STEPS = 600
 // COB TA-angle (65536 per turn) to radians.
 const ANGLE_TO_RAD = (2 * Math.PI) / 65536
 
+// Seconds over which a freshly-launched projectile's frozen muzzle offset
+// decays to zero. The sim spawns every shot from the unit origin (it has no
+// geometry); we displace the rendered mesh to the real firing piece at launch
+// and ease it back onto the authoritative trajectory so the shot still detonates
+// where the sim says it does.
+const MUZZLE_DECAY_SEC = 0.3
+
 // A single-tick positional delta larger than this (world units) is treated as
 // a teleport (respawn / restore / map wrap) rather than continuous motion, so
 // render interpolation snaps to it instead of sliding the unit across the map.
@@ -181,6 +188,10 @@ export class WasmSandboxScene {
     // In-flight model-projectiles from the latest snapshot, in the shape the
     // view's projectile renderer expects.
     this._projectiles = []
+    // Per-projectile frozen muzzle offset (id -> {dx,dy,dz}), captured the first
+    // tick a shot is seen so the rendered mesh leaves the real firing piece
+    // rather than the unit origin. See MUZZLE_DECAY_SEC.
+    this._projOffsets = new Map()
     // Selection — pure UI state.
     this.selected = new Set()
     this._spawnCount = 0
@@ -419,6 +430,16 @@ export class WasmSandboxScene {
     if (this._join && this.source && typeof this.source.forceSync === 'function') {
       this.source.forceSync()
     }
+  }
+
+  // diagnose fetches a read-only authoritative snapshot and resolves with
+  // { server, client } for the Network panel's drift comparison, leaving local
+  // prediction untouched. Rejects when offline (no authority to query).
+  diagnose() {
+    if (this._join && this.source && typeof this.source.diagnose === 'function') {
+      return this.source.diagnose()
+    }
+    return Promise.reject(new Error('offline sandbox — no authority'))
   }
 
   // ── COB inspection ────────────────────────────────────────────────
@@ -998,13 +1019,27 @@ export class WasmSandboxScene {
     const projos = snap.projos || []
     if (projos.length === 0) {
       if (this._projectiles.length) this._projectiles = []
+      if (this._projOffsets.size) this._projOffsets.clear()
       return
     }
-    this._projectiles = projos.map((p) => ({
+    // Drop frozen offsets for shots that are no longer in flight.
+    if (this._projOffsets.size) {
+      const live = new Set(projos.map((p) => p.id))
+      for (const id of this._projOffsets.keys()) if (!live.has(id)) this._projOffsets.delete(id)
+    }
+    this._projectiles = projos.map((p) => {
+      // Capture the muzzle offset the first tick a shot appears (age ~0, when the
+      // sim spawn point still coincides with the launcher), then ease it out so
+      // the mesh starts at the firing piece and converges onto the sim path.
+      let off = this._projOffsets.get(p.id)
+      if (!off) { off = this._muzzleOffsetFor(p); this._projOffsets.set(p.id, off) }
+      const k = Math.max(0, 1 - (p.age || 0) / MUZZLE_DECAY_SEC)
+      const pos = { x: p.x + off.dx * k, y: p.y + off.dy * k, z: p.z + off.dz * k }
+      return {
       id: p.id,
       model: p.kind || null,
       weaponName: p.weapon || p.kind || '',
-      pos: { x: p.x, y: p.y, z: p.z },
+      pos,
       // The snapshot carries projectile orientation as raw TA-angles (65536 per
       // turn); the renderer's projectile transform expects radians (it feeds
       // these straight into Ry(heading)/Rx(-pitch)). Convert here — without it
@@ -1025,7 +1060,29 @@ export class WasmSandboxScene {
       speed: p.speed || 0,
       ageSec: p.age || 0,
       lifeSec: p.life || 0,
-    }))
+      }
+    })
+  }
+
+  // _muzzleOffsetFor computes the world delta from a shot's sim spawn point (the
+  // unit origin) to the actual firing piece, using the owner model's
+  // resolvePieceWorld with the same +π render convention _muzzleAnchor uses. Any
+  // gap (no owner/model/piece, missing fromPiece) yields a zero offset so the
+  // shot simply renders at the sim position.
+  _muzzleOffsetFor(p) {
+    const zero = { dx: 0, dy: 0, dz: 0 }
+    const owner = this._units.get(p.ownerId)
+    if (!owner) return zero
+    const idx = p.fromPiece
+    const names = owner._cobPieceNames || []
+    if (idx == null || idx < 0 || idx >= names.length) return zero
+    const model = owner.model
+    if (!model || typeof model.findPiece !== 'function' || typeof model.resolvePieceWorld !== 'function') return zero
+    const piece = model.findPiece(names[idx])
+    if (!piece) return zero
+    const w = model.resolvePieceWorld(piece, owner.pos.x, owner.pos.y, owner.pos.z, owner.heading + Math.PI)
+    if (!w) return zero
+    return { dx: w[0] - p.x, dy: w[1] - p.y, dz: w[2] - p.z }
   }
 
   // _dispatchEvents turns the tick's render events into particle / audio /

@@ -100,7 +100,11 @@ type Match struct {
 	// resync carries a Force-Sync request from a client's read loop to the
 	// authority goroutine, which alone may read session state to build the full
 	// snapshot the client re-seeds from.
-	resync   chan *client
+	resync chan *client
+	// diagnose carries a read-only drift-inspection request. Like resync it is
+	// serviced on the authority goroutine, but the client does not re-seed from
+	// the reply — the snapshot is flagged Diagnostic for the diff UI.
+	diagnose chan *client
 	quit     chan struct{}
 	stopOnce sync.Once
 
@@ -196,6 +200,7 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, co
 		orders:     make(chan clientOrder, 1024),
 		control:    make(chan wire.Control, 16),
 		resync:     make(chan *client, 16),
+		diagnose:   make(chan *client, 16),
 		quit:       make(chan struct{}),
 		clients:    make(map[*client]struct{}),
 		rate:       1,
@@ -230,6 +235,8 @@ func (m *Match) Run() {
 			}
 		case c := <-m.resync:
 			m.onResync(c)
+		case c := <-m.diagnose:
+			m.onDiagnose(c)
 		case <-ticker.C:
 			if !m.paused {
 				m.step()
@@ -350,6 +357,20 @@ func (m *Match) onResync(c *client) {
 	}
 }
 
+// onDiagnose pushes a full authoritative snapshot to one client for read-only
+// drift inspection (the Network panel's Diagnose button). It is flagged
+// Diagnostic so the client routes it to the diff UI rather than re-seeding its
+// engine, and unlike onResync it does NOT replay pending command frames — the
+// client's prediction is left untouched.
+func (m *Match) onDiagnose(c *client) {
+	if _, ok := m.clients[c]; !ok {
+		return
+	}
+	snap := m.buildSnapshot(false)
+	snap.Diagnostic = true
+	c.send(wire.ServerMsg{Type: wire.MsgSnapshot, Snapshot: snap})
+}
+
 func (m *Match) onLeave(c *client) {
 	if _, ok := m.clients[c]; ok {
 		delete(m.clients, c)
@@ -439,6 +460,7 @@ func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 			TurnAng: rp.TurnAng, HomingR: rp.HomingR, Gravity: rp.Gravity,
 			AoE: rp.AoE, Damage: rp.Damage, AgeSec: rp.AgeSec, LifeSec: rp.LifeSec,
 			LastDist: rp.LastDist, Closing: rp.Closing, Heading: rp.Heading, Pitch: rp.Pitch,
+			FromPiece: rp.FromPiece,
 		})
 	}
 	return snap
@@ -507,6 +529,12 @@ func (c *client) readPump(m *Match) {
 			// session state, to build and push a fresh full snapshot.
 			if registered {
 				m.resync <- c
+			}
+		case wire.MsgDiagnose:
+			// Diagnose: route to the authority goroutine for a read-only full
+			// snapshot the client diffs against its predicted state. No re-seed.
+			if registered {
+				m.diagnose <- c
 			}
 		case wire.MsgAck:
 			// flow control hook; no-op for now.

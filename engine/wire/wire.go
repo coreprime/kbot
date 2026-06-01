@@ -46,6 +46,11 @@ const (
 	// requesting client, used by the sandbox "Force Sync" affordance to discard
 	// the client's locally diverged state and re-seed from authority.
 	MsgResync MsgType = "resync"
+	// MsgDiagnose asks the authority for a full snapshot the client uses for
+	// read-only drift inspection. Unlike MsgResync the client does NOT restore
+	// from it — the returned Snapshot carries Diagnostic=true so the client routes
+	// it to the diff UI instead of re-seeding its local engine.
+	MsgDiagnose MsgType = "diagnose"
 )
 
 // ClientMsg is anything a client sends to the server.
@@ -216,6 +221,10 @@ type ProjectileSnap struct {
 	Closing  bool        `json:"closing,omitempty"`
 	Heading  int32       `json:"heading"`
 	Pitch    int32       `json:"pitch"`
+	// FromPiece is the emitter piece index the weapon's query-script returned at
+	// launch. The sim spawns from the unit origin (it has no geometry), so the
+	// renderer uses this to offset the model to the actual muzzle.
+	FromPiece int `json:"fromPiece,omitempty"`
 }
 
 // Snapshot is a full authoritative state for join/reconnect/resync. The hash is
@@ -230,6 +239,10 @@ type Snapshot struct {
 	// randomness (and the animation it drives) in lockstep with the authority.
 	// Only join snapshots carry it.
 	RuntimeRng uint32 `json:"runtimeRng,omitempty"`
+	// Diagnostic marks a snapshot the client requested for read-only drift
+	// inspection (MsgDiagnose). The client must NOT restore its engine from it;
+	// it is routed to the network-panel diff UI instead.
+	Diagnostic bool `json:"diagnostic,omitempty"`
 }
 
 // Encode marshals a server message to JSON bytes.

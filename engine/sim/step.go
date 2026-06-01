@@ -559,7 +559,7 @@ func (w *World) stepWeapons(u *Unit) {
 			} else {
 				target3.Y = s.targetPt.Y
 			}
-			p := w.makeProjectile(u.ID, s.targetUnit, slot, wm, anchor, target3)
+			p := w.makeProjectile(u.ID, s.targetUnit, slot, wm, anchor, target3, int(fromPiece))
 			w.nextProjID++
 			w.projectiles = append(w.projectiles, p)
 			w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Weapon: wm.Name})

@@ -47,6 +47,14 @@ export class ModelViewer {
     // reused across model loads.
     this._scene = null
     this._unitId = -1
+    // Per-viewer cache of loaded projectile meshes (missiles / rockets /
+    // bombs), keyed by TDF model name.  The viewer renders the engine's
+    // in-flight projectiles as a renderer overlay the same way the sandbox
+    // draws them as entities; models load lazily on first sight (a shot
+    // skips a frame until its mesh is uploaded into this viewer's GL
+    // context).  _projModelLoading guards against duplicate in-flight loads.
+    this._projModels = new Map()
+    this._projModelLoading = new Set()
     // The raw COB JSON for the current unit (static disassembly +
     // piece / script tables) — backs the debugger's listing and the
     // facade.unit's static fields.
@@ -392,6 +400,15 @@ export class ModelViewer {
       this._scene = null
       this._unitId = -1
     }
+    // Free cached projectile meshes before the GL context drops (they hold
+    // VBOs in the renderer's context).
+    if (this._projModels && this._projModels.size) {
+      for (const m of this._projModels.values()) {
+        try { m.dispose(this.renderer && this.renderer.gl) } catch { /* ignore */ }
+      }
+      this._projModels.clear()
+    }
+    if (this._projModelLoading) this._projModelLoading.clear()
     if (this.renderer) {
       this.renderer.dispose()
       this.renderer = null
@@ -710,6 +727,11 @@ export class ModelViewer {
       tick: (dtMs) => {
         scene.tick(dtMs)
         scene.interpolate()
+        // Push the engine's in-flight projectile meshes to the renderer so
+        // missiles / rockets / bombs draw in the viewer the same way they do
+        // in the sandbox (the muzzle-offset fix in scene._syncProjectiles
+        // rides along, since both views read scene.projectiles()).
+        viewer._syncOverlayProjectiles()
         if (!runtime.paused) viewer._emitBuildSparkles(dtMs)
         if (!runtime.paused) {
           const live = viewer._liveCobUnit()
@@ -798,6 +820,57 @@ export class ModelViewer {
     }
     emitAt(model.findPiece('wake1'), -halfBeam)
     emitAt(model.findPiece('wake2'), halfBeam)
+  }
+
+  // _syncOverlayProjectiles hands the renderer the engine's current in-flight
+  // model-projectiles so they draw on top of the viewed unit.  Mirrors the
+  // sandbox's projectile-entity build (heading straight through, pitch negated
+  // — see view.js #refreshEntities): the projectile 3DO is authored nose-+Z,
+  // so it needs no +π yaw compensator and the renderer's Rx(pitch) is the
+  // inverse of the flight pitch.  Model-less shots (cannon shells / EMG bolts)
+  // carry no .model and are left to the particle pool.
+  _syncOverlayProjectiles() {
+    const renderer = this.renderer
+    const scene = this._scene
+    if (!renderer || typeof renderer.setOverlayProjectiles !== 'function') return
+    const projos = (scene && typeof scene.projectiles === 'function') ? scene.projectiles() : null
+    if (!projos || projos.length === 0) {
+      renderer.setOverlayProjectiles(null)
+      return
+    }
+    const out = []
+    for (const proj of projos) {
+      if (!proj || !proj.model) continue
+      const pm = this._ensureProjModel(proj.model)
+      if (!pm) continue
+      out.push({
+        model: pm,
+        transform: {
+          x: proj.pos.x, y: proj.pos.y, z: proj.pos.z,
+          headingRad: proj.heading,
+          pitchRad: -proj.pitch,
+        },
+      })
+    }
+    renderer.setOverlayProjectiles(out.length ? out : null)
+  }
+
+  // _ensureProjModel returns the loaded projectile Model for a TDF model name,
+  // kicking off a lazy load on first sight (idempotent — concurrent loads of
+  // the same name are coalesced via _projModelLoading).  Returns null until
+  // the load resolves; the projectile simply skips a frame.
+  _ensureProjModel(name) {
+    if (!name || !this.loader) return null
+    const cached = this._projModels.get(name)
+    if (cached) return cached
+    if (this._projModelLoading.has(name)) return null
+    this._projModelLoading.add(name)
+    this.loader.load(name).then((m) => {
+      this._projModelLoading.delete(name)
+      this._projModels.set(name, m)
+      if (this.renderer) this.renderer.requestRedraw()
+    }).catch(() => { this._projModelLoading.delete(name) })
+    return null
   }
 
   #setStatus(msg) {

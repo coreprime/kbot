@@ -3,17 +3,21 @@
 // React-rendered Network / Sync overlay for a joined sandbox.  Surfaces the
 // transport telemetry the WsFrameSource tracks (mv.net, built each publish from
 // scene.netStats()): current tick + hash, the estimated server clock, the
-// latest round-trip latency, cumulative byte/message counters, and how long
-// since the client's local hash last matched the authority.  A severe-desync
-// flag (a confirmed hash mismatch or a multi-second gap with no verified sync)
-// paints the Last Sync row as a warning, and a Force Sync button re-pulls the
-// authority's full snapshot, discarding local work.
+// latest round-trip latency, cumulative byte/message counters, how long since
+// the client's local hash last matched the authority, and rolling in/out
+// bandwidth graphs over the last five minutes.  A severe-desync flag (a
+// confirmed hash mismatch or a multi-second gap with no verified sync) paints
+// the Last Sync row as a warning, a Force Sync button re-pulls the authority's
+// full snapshot (discarding local work), and a Diagnose button — enabled only
+// while out of sync — fetches a read-only authoritative snapshot and opens a
+// per-field drift comparison without disturbing local prediction.
 //
 // Offline sandbox (no authority) has no net stats, so the body shows an
-// "offline" message and hides the Force Sync control.  Like the other
-// inspectors the heavy read bails when the panel is hidden so the 4 Hz refresh
-// stays cheap when the panel is closed.
+// "offline" message and hides the sync controls.  Like the other inspectors the
+// heavy read bails when the panel is hidden so the 4 Hz refresh stays cheap when
+// the panel is closed.
 
+import { useState, useCallback } from 'preact/hooks'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
 import { panelSignals } from '/ui/common/panel-store.js'
@@ -30,6 +34,15 @@ function _bytes(n) {
   if (v < 1024) return `${v} B`
   if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`
   return `${(v / (1024 * 1024)).toFixed(2)} MB`
+}
+
+// _rate renders a per-second byte throughput (bytes-in-an-interval scaled to a
+// 1s window) in the largest readable unit.
+function _rate(bytesPerSec) {
+  const v = Math.max(0, bytesPerSec | 0)
+  if (v < 1024) return `${v} B/s`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB/s`
+  return `${(v / (1024 * 1024)).toFixed(2)} MB/s`
 }
 
 // _lastSync renders the gap since the last verified hash match as a tick delta
@@ -59,12 +72,285 @@ function _stat(label, value, title) {
   `
 }
 
+// Sparkline renders a fixed-size SVG area/line plot of the given numeric series,
+// scaled to its own peak. An empty/flat series draws a baseline. Used for the
+// in/out bandwidth graphs.
+function Sparkline({ values, color }) {
+  const W = 150
+  const H = 36
+  const n = values.length
+  const peak = values.reduce((m, v) => (v > m ? v : m), 0)
+  if (n === 0 || peak <= 0) {
+    return html`
+      <svg class="mv-net-spark" viewBox=${`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        <line x1="0" y1=${H - 1} x2=${W} y2=${H - 1} stroke=${color} stroke-opacity="0.35" />
+      </svg>
+    `
+  }
+  const dx = n > 1 ? W / (n - 1) : W
+  const pts = values.map((v, i) => {
+    const x = i * dx
+    const y = H - 1 - (v / peak) * (H - 2)
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  const line = `M${pts.join(' L')}`
+  const area = `M0,${H - 1} L${pts.join(' L')} L${((n - 1) * dx).toFixed(1)},${H - 1} Z`
+  return html`
+    <svg class="mv-net-spark" viewBox=${`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <path d=${area} fill=${color} fill-opacity="0.18" stroke="none" />
+      <path d=${line} fill="none" stroke=${color} stroke-width="1.5" />
+    </svg>
+  `
+}
+
+// BandwidthGraph shows one direction's per-second throughput over the rolling
+// window, with the current and peak rates labelled.
+function BandwidthGraph({ label, series, color, title }) {
+  const cur = series.length ? series[series.length - 1] : 0
+  const peak = series.reduce((m, v) => (v > m ? v : m), 0)
+  return html`
+    <div class="mv-net-bw" title=${title}>
+      <div class="mv-net-bw-head">
+        <span class="mv-net-bw-label" style=${`color:${color}`}>${label}</span>
+        <span class="mv-net-bw-vals">${_rate(cur)} <span class="mv-net-bw-peak">peak ${_rate(peak)}</span></span>
+      </div>
+      <${Sparkline} values=${series} color=${color} />
+    </div>
+  `
+}
+
+// ── Drift comparison ──────────────────────────────────────────────────
+//
+// The Diagnose popup diffs the client's predicted state against an on-demand
+// authoritative snapshot.  Fields flagged `hashed` are the ones the desync
+// digest actually covers, so a drift there explains a hash mismatch; the rest
+// are shown for context (a predicting client legitimately leads the server, so
+// some non-hashed drift is expected).
+
+const UNIT_FIELDS = [
+  ['Pos X', 'x', true],
+  ['Pos Y', 'y', true],
+  ['Pos Z', 'z', true],
+  ['Heading', 'heading', true],
+  ['Health', 'health', true],
+  ['Dead', 'dead', true],
+  ['Speed', 'speed', false],
+  ['Has Move', 'hasMove', false],
+  ['Move TX', 'tx', false],
+  ['Move TZ', 'tz', false],
+  ['Has Attack', 'hasAttack', false],
+  ['Attack Target', 'attackTarget', false],
+]
+
+const PROJ_FIELDS = [
+  ['Model', 'model', false],
+  ['Weapon', 'weapon', false],
+  ['Mode', 'mode', false],
+  ['Phase', 'phase', false],
+  ['Pos X', 'x', false],
+  ['Pos Y', 'y', false],
+  ['Pos Z', 'z', false],
+  ['Vel X', 'vx', false],
+  ['Vel Y', 'vy', false],
+  ['Vel Z', 'vz', false],
+  ['Heading', 'heading', false],
+  ['Pitch', 'pitch', false],
+  ['Speed', 'speed', false],
+  ['Age', 'ageSec', false],
+  ['Life', 'lifeSec', false],
+  ['From Piece', 'fromPiece', false],
+]
+
+function _indexById(arr) {
+  const m = new Map()
+  for (const x of arr || []) m.set(x.id, x)
+  return m
+}
+
+// _fmt renders a comparison cell value compactly: booleans as yes/—, missing as
+// an em-dash, large fixed-point numbers as plain integers.
+function _fmt(v) {
+  if (v === undefined || v === null) return '—'
+  if (v === true) return 'yes'
+  if (v === false) return '—'
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2)
+  return String(v)
+}
+
+function _eq(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a === b
+  return a === b
+}
+
+// _diffRows builds the per-field rows for one entity pair (server vs client),
+// dropping equal rows when diffOnly is set. Returns { rows, anyDiff }.
+function _diffRows(fields, srv, cli, diffOnly) {
+  const rows = []
+  let anyDiff = false
+  for (const [label, key, hashed] of fields) {
+    const s = srv ? srv[key] : undefined
+    const c = cli ? cli[key] : undefined
+    const differs = !_eq(s, c)
+    if (differs) anyDiff = true
+    if (diffOnly && !differs) continue
+    rows.push({ label, key, hashed, s, c, differs })
+  }
+  return { rows, anyDiff }
+}
+
+// _buildGroups pairs entities by id across both snapshots and computes their
+// field diffs. Entities present on only one side are still listed (the missing
+// side shows em-dashes) since their very absence is the most important drift.
+function _buildGroups(fields, srvArr, cliArr, diffOnly) {
+  const srv = _indexById(srvArr)
+  const cli = _indexById(cliArr)
+  const ids = new Set([...srv.keys(), ...cli.keys()])
+  const groups = []
+  for (const id of [...ids].sort((a, b) => a - b)) {
+    const s = srv.get(id)
+    const c = cli.get(id)
+    const onlyOne = !s || !c
+    const { rows, anyDiff } = _diffRows(fields, s, c, diffOnly && !onlyOne)
+    const differs = anyDiff || onlyOne
+    if (diffOnly && !differs) continue
+    groups.push({
+      id,
+      name: (s && s.name) || (c && c.name) || (s && s.model) || (c && c.model) || '',
+      onlyOne,
+      missingSide: !s ? 'server' : (!c ? 'client' : null),
+      rows,
+      differs,
+    })
+  }
+  return groups
+}
+
+function DriftTable({ groups }) {
+  if (groups.length === 0) {
+    return html`<div class="mv-net-diff-empty">No differences in this category.</div>`
+  }
+  return html`
+    <div class="mv-net-diff-list">
+      ${groups.map((g) => html`
+        <div class=${`mv-net-diff-group${g.differs ? ' is-diff' : ''}`} key=${g.id}>
+          <div class="mv-net-diff-group-head">
+            <span class="mv-net-diff-id">#${g.id}</span>
+            <span class="mv-net-diff-name">${g.name}</span>
+            ${g.missingSide ? html`<span class="mv-net-diff-missing">missing on ${g.missingSide}</span>` : null}
+          </div>
+          ${g.rows.length ? html`
+            <table class="mv-net-diff-table">
+              <thead>
+                <tr><th>Field</th><th>Server</th><th>Client</th></tr>
+              </thead>
+              <tbody>
+                ${g.rows.map((r) => html`
+                  <tr class=${r.differs ? 'is-diff' : ''} key=${r.key}>
+                    <td>${r.label}${r.hashed ? html`<span class="mv-net-diff-hashed" title="Part of the desync hash — drift here causes a confirmed desync.">#</span>` : null}</td>
+                    <td>${_fmt(r.s)}</td>
+                    <td>${_fmt(r.c)}</td>
+                  </tr>
+                `)}
+              </tbody>
+            </table>
+          ` : null}
+        </div>
+      `)}
+    </div>
+  `
+}
+
+function DiagnoseModal({ result, error, loading, onClose }) {
+  const [tab, setTab] = useState('units')
+  const [diffOnly, setDiffOnly] = useState(true)
+
+  const srv = result && result.server
+  const cli = result && result.client
+  const unitGroups = (srv && cli) ? _buildGroups(UNIT_FIELDS, srv.units, cli.units, diffOnly) : []
+  const projGroups = (srv && cli) ? _buildGroups(PROJ_FIELDS, srv.projectiles, cli.projectiles, diffOnly) : []
+
+  const tabBtn = (id, label) => html`
+    <button class=${`mv-net-tab${tab === id ? ' is-active' : ''}`}
+            onClick=${(e) => { _stopProp(e); setTab(id) }}>${label}</button>
+  `
+
+  let body
+  if (loading) {
+    body = html`<div class="mv-net-diff-empty">Fetching authoritative snapshot…</div>`
+  } else if (error) {
+    body = html`<div class="mv-net-diff-empty mv-net-diff-error">Diagnose failed: ${error}</div>`
+  } else if (!srv || !cli) {
+    body = html`<div class="mv-net-diff-empty">No snapshot data.</div>`
+  } else if (tab === 'summary') {
+    const hashMatch = String(srv.hash) === String(cli.hash)
+    body = html`
+      <div class="mv-net-diff-summary">
+        <table class="mv-net-diff-table">
+          <thead><tr><th>Field</th><th>Server</th><th>Client</th></tr></thead>
+          <tbody>
+            <tr class=${srv.tick !== cli.tick ? 'is-diff' : ''}><td>Tick</td><td>${srv.tick}</td><td>${cli.tick}</td></tr>
+            <tr class=${hashMatch ? '' : 'is-diff'}><td>Hash</td><td>${String(srv.hash)}</td><td>${String(cli.hash)}</td></tr>
+            <tr><td>Units</td><td>${(srv.units || []).length}</td><td>${(cli.units || []).length}</td></tr>
+            <tr><td>Projectiles</td><td>${(srv.projectiles || []).length}</td><td>${(cli.projectiles || []).length}</td></tr>
+          </tbody>
+        </table>
+        <p class="mv-net-diff-note">
+          The client leads the server by its prediction window, so a tick gap
+          (and the non-hashed drift it implies) is normal. Fields marked
+          <span class="mv-net-diff-hashed">#</span> feed the desync hash — drift
+          there is what a confirmed desync is made of.
+        </p>
+      </div>
+    `
+  } else if (tab === 'units') {
+    body = html`<${DriftTable} groups=${unitGroups} />`
+  } else {
+    body = html`<${DriftTable} groups=${projGroups} />`
+  }
+
+  return html`
+    <div class="mv-net-modal-backdrop" onClick=${(e) => { _stopProp(e); onClose() }}
+         onPointerDown=${_stopProp} onMouseDown=${_stopProp}>
+      <div class="mv-net-modal" onClick=${_stopProp}>
+        <div class="mv-net-modal-head">
+          <span class="mv-net-modal-title">Sync Diagnostics</span>
+          <button class="mv-net-modal-close" title="Close" onClick=${(e) => { _stopProp(e); onClose() }}>✕</button>
+        </div>
+        <div class="mv-net-tabs">
+          ${tabBtn('summary', 'Summary')}
+          ${tabBtn('units', `Units${unitGroups.length && diffOnly ? ` (${unitGroups.length})` : ''}`)}
+          ${tabBtn('projectiles', `Projectiles${projGroups.length && diffOnly ? ` (${projGroups.length})` : ''}`)}
+        </div>
+        <div class="mv-net-modal-body">${body}</div>
+        <div class="mv-net-modal-foot">
+          <label class="mv-net-diffonly" title="Hide rows and entities that match the authority.">
+            <input type="checkbox" checked=${diffOnly}
+                   onChange=${(e) => { _stopProp(e); setDiffOnly(!!e.target.checked) }} />
+            Differences only
+          </label>
+        </div>
+      </div>
+    </div>
+  `
+}
+
 function NetworkBody() {
   const { visible } = panelSignals(PANEL_ID)
+  const [modal, setModal] = useState(null) // { loading, result?, error? } | null
   // Subscribe to the per-publish refresh: mv.net is a plain snapshot rebuilt
   // each 4 Hz publish, so reading runtimeTick keeps the live ages/counters
   // moving even when the mv reference itself is reused.
   void runtimeTick.value
+
+  const onDiagnose = useCallback((e) => {
+    _stopProp(e)
+    setModal({ loading: true })
+    Promise.resolve(hostBridge.diagnose())
+      .then((result) => setModal({ loading: false, result }))
+      .catch((err) => setModal({ loading: false, error: (err && err.message) || String(err) }))
+  }, [])
+  const closeModal = useCallback(() => setModal(null), [])
+
   if (!visible.value) return null
   const net = mv.value && mv.value.net
   if (!net) {
@@ -79,6 +365,10 @@ function NetworkBody() {
   const syncCls = net.severeDesync
     ? 'mv-runtime-stat mv-runtime-stat-warn'
     : 'mv-runtime-stat'
+  const bw = net.bandwidth || { samples: [], intervalMs: 1000 }
+  const outSeries = (bw.samples || []).map((s) => s.sent)
+  const inSeries = (bw.samples || []).map((s) => s.recv)
+  const canDiagnose = !!net.severeDesync && !net.diagnosing && !(modal && modal.loading)
   return html`
     <div class="mv-runtime-stats" title="Live network + sync telemetry — refreshed 4× per second.">
       <div class="mv-runtime-stats-row">
@@ -104,15 +394,32 @@ function NetworkBody() {
         </span>
       </div>
     </div>
+    <div class="mv-net-bw-graphs">
+      <${BandwidthGraph} label="Incoming" series=${inSeries} color="#4caf82"
+        title="Bytes received from the authority per second over the last 5 minutes." />
+      <${BandwidthGraph} label="Outgoing" series=${outSeries} color="#5b9bd5"
+        title="Bytes sent to the authority per second over the last 5 minutes." />
+    </div>
     <div class="mv-inspector-controls">
-      <button class="mv-runtime-ctrl mv-runtime-ctrl-danger mv-runtime-ctrl-wide"
+      <button class="mv-runtime-ctrl mv-runtime-ctrl-danger"
               title="Force Sync — discard the client's local work and re-pull the authority's full state.  Use when the window has fallen out of sync."
               onClick=${(e) => { _stopProp(e); hostBridge.forceSync() }}
               onPointerDown=${_stopProp}
               onMouseDown=${_stopProp}>
         ↻ Force Sync
       </button>
+      <button class="mv-runtime-ctrl"
+              disabled=${!canDiagnose}
+              title=${canDiagnose
+                ? 'Diagnose — fetch the authoritative state and compare it field-by-field with this window, without disturbing prediction.'
+                : 'Diagnose is available only when the window is out of sync.'}
+              onClick=${onDiagnose}
+              onPointerDown=${_stopProp}
+              onMouseDown=${_stopProp}>
+        ⚖ Diagnose
+      </button>
     </div>
+    ${modal ? html`<${DiagnoseModal} ...${modal} onClose=${closeModal} />` : null}
   `
 }
 

@@ -27,6 +27,12 @@ const FRAC = 65536 // Q16.16 — world float -> fixed-point for the wire.
 // means hash verification has stopped landing — a real divergence or stall.
 const SEVERE_DESYNC_MS = 2000
 
+// Bandwidth history granularity + span. One bucket per second, 5 minutes deep,
+// so the panel's in/out graphs plot 300 samples of per-second throughput.
+const BW_SAMPLE_MS = 1000
+const BW_WINDOW_MS = 5 * 60 * 1000
+const BW_MAX_SAMPLES = Math.round(BW_WINDOW_MS / BW_SAMPLE_MS)
+
 function toFixed(f) { return Math.round(f * FRAC) }
 
 export class WsFrameSource extends FrameSource {
@@ -102,6 +108,19 @@ export class WsFrameSource extends FrameSource {
     // Force-Sync latch: set when the user requests a re-pull so the next
     // snapshot re-seeds the local world even though it was already seeded.
     this._forceResync = false
+    // Diagnose: a pending {resolve,reject,timer} for an in-flight read-only
+    // server-snapshot request the Network panel's Diagnose button raised. The
+    // server answers with a snapshot flagged `diagnostic`, which the dispatcher
+    // routes here instead of re-seeding the local world.
+    this._diagPending = null
+    // Bandwidth history: one bucket per BW_SAMPLE_MS of bytes sent/received,
+    // capped at BW_WINDOW_MS worth (the panel plots the last 5 minutes). A timer
+    // started on join snapshots the cumulative counters each interval and pushes
+    // the delta so the graph shows per-interval throughput, not running totals.
+    this._bwSamples = []
+    this._bwLastSent = 0
+    this._bwLastRecv = 0
+    this._bwTimer = null
   }
 
   // setMetaProvider installs an async (name) -> meta resolver the source uses to
@@ -193,6 +212,7 @@ export class WsFrameSource extends FrameSource {
       this._noteServerTick(a.tick || 0)
       this.emit('join', a)
       this._startPingLoop()
+      this._startBandwidthSampler()
       const queued = this._backlog
       this._backlog = []
       for (const m of queued) this._dispatch(m)
@@ -264,6 +284,13 @@ export class WsFrameSource extends FrameSource {
         break
       }
       case 'snapshot':
+        // A diagnostic snapshot is a read-only Diagnose reply: do NOT re-seed
+        // the local world from it. Resolve the pending request with the server
+        // state paired against the client's own export for a field-by-field diff.
+        if (msg.snapshot && msg.snapshot.diagnostic) {
+          this._resolveDiagnose(msg.snapshot)
+          break
+        }
         this._noteServerTick(msg.snapshot.tick)
         // Seed the local prediction engine from the authority once, on join, so
         // a client entering a match in progress sees the live unit set. The
@@ -465,6 +492,67 @@ export class WsFrameSource extends FrameSource {
     this._lastDesyncTick = 0
   }
 
+  // diagnose asks the authority for a read-only full snapshot and resolves with
+  // both sides' state so the Network panel can diff them field-by-field. Unlike
+  // forceSync the local world is NOT re-seeded — prediction keeps running. The
+  // client export is captured at request time (the closest local tick to the
+  // server's reply); the panel surfaces both ticks so the lead is visible.
+  // Rejects if not joined, the send fails, or no reply arrives within 5s.
+  diagnose() {
+    return new Promise((resolve, reject) => {
+      if (!this._joined) { reject(new Error('not joined')); return }
+      // Only one in-flight request; a second supersedes the first.
+      if (this._diagPending) {
+        clearTimeout(this._diagPending.timer)
+        this._diagPending.reject(new Error('superseded'))
+        this._diagPending = null
+      }
+      if (!this._wsSend({ type: 'diagnose' })) { reject(new Error('socket closed')); return }
+      const timer = setTimeout(() => {
+        const p = this._diagPending
+        this._diagPending = null
+        if (p) p.reject(new Error('diagnose timed out'))
+      }, 5000)
+      this._diagPending = { resolve, reject, timer }
+    })
+  }
+
+  // _resolveDiagnose pairs the server's diagnostic snapshot with the local
+  // engine's own export (same wire shape, raw fixed-point) and hands both to the
+  // waiting diagnose() promise.
+  _resolveDiagnose(serverSnap) {
+    const p = this._diagPending
+    if (!p) return
+    clearTimeout(p.timer)
+    this._diagPending = null
+    const clientSnap = this._local ? this._local.exportSnapshot() : null
+    p.resolve({ server: serverSnap, client: clientSnap })
+  }
+
+  // ── Bandwidth history ─────────────────────────────────────────────
+  //
+  // A once-a-second timer snapshots the cumulative byte counters and records the
+  // delta since the previous tick, so the panel's graphs plot per-second
+  // throughput over a rolling 5-minute window rather than ever-growing totals.
+
+  _startBandwidthSampler() {
+    if (this._bwTimer) return
+    this._bwLastSent = this._bytesSent
+    this._bwLastRecv = this._bytesRecv
+    this._bwTimer = setInterval(() => this._sampleBandwidth(), BW_SAMPLE_MS)
+  }
+
+  _sampleBandwidth() {
+    const sent = this._bytesSent - this._bwLastSent
+    const recv = this._bytesRecv - this._bwLastRecv
+    this._bwLastSent = this._bytesSent
+    this._bwLastRecv = this._bytesRecv
+    this._bwSamples.push({ t: Date.now(), sent: Math.max(0, sent), recv: Math.max(0, recv) })
+    if (this._bwSamples.length > BW_MAX_SAMPLES) {
+      this._bwSamples.splice(0, this._bwSamples.length - BW_MAX_SAMPLES)
+    }
+  }
+
   // netStats returns a plain snapshot of the network/sync telemetry for the
   // developer panel: the authoritative serverTick alongside the local clientTick
   // (they differ by the client's prediction lead, and pausing reveals it), live
@@ -502,6 +590,12 @@ export class WsFrameSource extends FrameSource {
       lastSyncTicksAgo,
       lastSyncAgoSec,
       severeDesync: hadDesync || stale,
+      diagnosing: !!this._diagPending,
+      bandwidth: {
+        intervalMs: BW_SAMPLE_MS,
+        windowMs: BW_WINDOW_MS,
+        samples: this._bwSamples,
+      },
     }
   }
 
@@ -554,6 +648,12 @@ export class WsFrameSource extends FrameSource {
 
   dispose() {
     if (this._pingTimer) { clearTimeout(this._pingTimer); this._pingTimer = null }
+    if (this._bwTimer) { clearInterval(this._bwTimer); this._bwTimer = null }
+    if (this._diagPending) {
+      clearTimeout(this._diagPending.timer)
+      this._diagPending.reject(new Error('disposed'))
+      this._diagPending = null
+    }
     this._pingInFlight = 0
     if (this._ws) {
       this._ws.close()

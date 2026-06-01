@@ -3001,6 +3001,176 @@ canvas {
    crammed into the third slot. */
 .mv-inspector-controls .mv-runtime-ctrl-wide { grid-column: 1 / -1; }
 .mv-inspector-controls .mv-runtime-ctrl:active { background: var(--bg-0); }
+.mv-inspector-controls .mv-runtime-ctrl:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg-1);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ── Network panel: bandwidth graphs ──────────────────────────────── */
+.mv-net-bw-graphs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.mv-net-bw {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 5px;
+  background: var(--bg-1);
+}
+.mv-net-bw-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 10px;
+  font-family: var(--mono, ui-monospace, monospace);
+  margin-bottom: 2px;
+}
+.mv-net-bw-label { text-transform: uppercase; letter-spacing: 0.04em; }
+.mv-net-bw-vals { color: var(--text); }
+.mv-net-bw-peak { color: var(--text-dim, #888); margin-left: 4px; }
+.mv-net-spark { display: block; width: 100%; height: 36px; }
+
+/* ── Network panel: Diagnose drift modal ──────────────────────────── */
+.mv-net-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9500;
+}
+.mv-net-modal {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.mv-net-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.mv-net-modal-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.mv-net-modal-close {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.mv-net-modal-close:hover { background: var(--bg-2); color: var(--accent); }
+.mv-net-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.mv-net-tab {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.mv-net-tab.is-active {
+  background: var(--bg-0);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.mv-net-modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 10px;
+}
+.mv-net-modal-foot {
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+}
+.mv-net-diffonly {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.mv-net-diff-empty {
+  color: var(--text-dim, #888);
+  font-size: 11px;
+  padding: 12px 4px;
+  text-align: center;
+}
+.mv-net-diff-error { color: #ff6b6b; }
+.mv-net-diff-list { display: flex; flex-direction: column; gap: 8px; }
+.mv-net-diff-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mv-net-diff-group.is-diff { border-color: rgba(255, 107, 107, 0.5); }
+.mv-net-diff-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-1);
+  font-size: 11px;
+}
+.mv-net-diff-id { color: var(--accent); }
+.mv-net-diff-name { color: var(--text); flex: 1; }
+.mv-net-diff-missing { color: #ff6b6b; font-size: 10px; }
+.mv-net-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.mv-net-diff-table th {
+  text-align: left;
+  color: var(--text-dim, #888);
+  font-weight: normal;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.mv-net-diff-table td {
+  padding: 2px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.mv-net-diff-table tr.is-diff td { color: #ff9b6b; background: rgba(255, 107, 107, 0.08); }
+.mv-net-diff-hashed {
+  color: var(--accent);
+  margin-left: 3px;
+  cursor: help;
+}
+.mv-net-diff-note {
+  font-size: 10px;
+  color: var(--text-dim, #888);
+  line-height: 1.5;
+  margin: 8px 2px 0;
+}
 /* Runtime overlay — per-unit grouping.  A section divider sits at
    the top of each group; the threads (one row each) follow. */
 .mv-unit-header {

@@ -355,6 +355,13 @@ export class ModelRenderer {
     //   particles, selected }.  When null, the renderer falls back
     //  to single-unit mode driven by `this.model` + _unitTransform.
     this._entities = null
+    // Single-model overlay projectiles — in-flight weapon meshes
+    // (missiles / rockets / bombs) the single-unit viewer draws on top
+    // of its one unit.  Each entry is { model, transform:{x,y,z,
+    // headingRad, pitchRad} }.  Null when none in flight.  Multi-entity
+    // hosts (sandbox) render projectiles as ordinary entities and leave
+    // this unset.
+    this._overlayProjectiles = null
     // Frustum-cull toggle — runtime debug knob, exposed via the
     // Developer Tools / View menu so the user can A/B the culled vs
     // un-culled render to confirm visual parity.  Default lives in
@@ -864,6 +871,16 @@ export class ModelRenderer {
   //     particles?, buildPercent?, selected?, teamColor? }
   setEntities(entitiesArr) {
     this._entities = (Array.isArray(entitiesArr) && entitiesArr.length > 0) ? entitiesArr : null
+    this.requestRedraw()
+  }
+
+  // setOverlayProjectiles feeds the single-unit viewer the in-flight
+  // projectile meshes to draw on top of its one unit (the sandbox draws
+  // these as ordinary entities instead).  Each entry is
+  //   { model, transform: {x, y, z, headingRad, pitchRad} }.
+  // Pass null / empty when nothing is in flight.
+  setOverlayProjectiles(arr) {
+    this._overlayProjectiles = (Array.isArray(arr) && arr.length > 0) ? arr : null
     this.requestRedraw()
   }
 
@@ -2072,6 +2089,11 @@ export class ModelRenderer {
         gl.depthMask(true)
       }
     }
+    // In-flight projectile meshes for the single-unit viewer — drawn after
+    // the unit's main pass so missiles / rockets / bombs composite over the
+    // hull.  No-op (null) in multi-entity mode, where projectiles are
+    // ordinary entities in the loop above.
+    if (this._overlayProjectiles) this.#renderOverlayProjectiles()
     if (this._hoveredPieceName || this._hoveredTexture) {
       // Hover highlight: bright red wireframe on the hovered piece
       // (with its descendants) AND/OR every piece whose drawGroups
@@ -2686,6 +2708,47 @@ export class ModelRenderer {
     gl.disable(gl.POLYGON_OFFSET_FILL)
 
     gl.uniform1f(this.uReflectionTint, 0)
+  }
+
+  // #renderOverlayProjectiles draws the single-unit viewer's in-flight
+  // projectile meshes by swapping `this.model` + `_modelMatrix` to each
+  // projectile in turn and running the standard main pass — the same trick
+  // the multi-entity loop uses, minus culling/LOD (a handful of close-range
+  // shots).  Saves + restores the unit's model / transform / build% so any
+  // post-frame reader (inspectors, jump-to-piece) still sees the unit.
+  #renderOverlayProjectiles() {
+    const savedModel = this.model
+    const savedBp = this.buildPercent
+    const savedHide = this._lodHideFlares
+    const ut = this._unitTransform
+    const savedUt = { x: ut.x, y: ut.y, z: ut.z, headingRad: ut.headingRad }
+    // Projectiles are always fully built; the unit's build% would otherwise
+    // paint a nano-frame wireframe over the missile mid-flight.
+    this.buildPercent = 100
+    this._lodHideFlares = false
+    for (const proj of this._overlayProjectiles) {
+      if (!proj || !proj.model) continue
+      this.model = proj.model
+      const t = proj.transform || _IDENTITY_T
+      ut.x = +t.x || 0
+      ut.y = +t.y || 0
+      ut.z = +t.z || 0
+      ut.headingRad = +t.headingRad || 0
+      Mat4.identity(this._modelMatrix)
+      Mat4.translate(this._modelMatrix, this._modelMatrix, ut.x, ut.y, ut.z)
+      if (ut.headingRad !== 0) Mat4.rotateY(this._modelMatrix, this._modelMatrix, ut.headingRad)
+      // Pitch tilts the nose along the climb/dive — applied after the yaw,
+      // matching the sandbox projectile-entity convention.
+      if (t.pitchRad) Mat4.rotateX(this._modelMatrix, this._modelMatrix, t.pitchRad)
+      this.#renderMain(this.renderMode === 'flat')
+    }
+    this.model = savedModel
+    this.buildPercent = savedBp
+    this._lodHideFlares = savedHide
+    ut.x = savedUt.x
+    ut.y = savedUt.y
+    ut.z = savedUt.z
+    ut.headingRad = savedUt.headingRad
   }
 
   // ── Frame: main scene pass ─────────────────────────────────────────

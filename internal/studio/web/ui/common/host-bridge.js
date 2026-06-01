@@ -45,6 +45,10 @@ const _noopBridge = {
   // Network panel "Force Sync" — re-pull the full authoritative snapshot,
   // discarding local work. Routes to the active join scene's forceSync().
   forceSync:             () => {},
+  // Network panel "Diagnose" — fetch a read-only authoritative snapshot and
+  // resolve with { server, client } for a field-by-field drift comparison,
+  // without disturbing local prediction. Routes to the join scene's diagnose().
+  diagnose:              () => Promise.reject(new Error('no authority')),
 }
 
 // Single live bridge object — overwritten by configureHostBridge.

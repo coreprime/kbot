@@ -55,6 +55,10 @@ type ProjectileState struct {
 	Speed    fixed.Fixed
 	AgeSec   fixed.Fixed
 	LifeSec  fixed.Fixed
+	// FromPiece is the emitter piece index the slot's Query script returned at
+	// launch. The sim spawns from the unit origin (no geometry); the renderer
+	// uses this to offset the in-flight mesh to the real muzzle.
+	FromPiece int32
 }
 
 // EventKind enumerates the discrete events the renderer's effects layer reacts

@@ -421,6 +421,14 @@ export function wireUnitEditorHostBridge(reactUi) {
       const ui = getReactUi()
       if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
     },
+    // Diagnose (Network panel) — fetch a read-only authoritative snapshot for a
+    // drift comparison without disturbing local prediction. Routes to the joined
+    // sandbox scene; rejects elsewhere (no authority to query).
+    diagnose: () => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      if (sv?.scene?.diagnose) return sv.scene.diagnose()
+      return Promise.reject(new Error('no authority'))
+    },
   })
   // Bridge the Include-Private toggle into the prefs system so the
   // React Script Commands panel signal + persisted
