@@ -137,7 +137,11 @@ export class WasmFrameSource extends FrameSource {
   }
 
   // hash returns the authoritative-comparable world hash as a decimal string.
-  hash() { return this._engine.hash(this._handle) }
+  // Null before the engine has a handle (callers treat that as "not ready").
+  hash() {
+    if (!this._engine || this._handle < 0) return null
+    return this._engine.hash(this._handle)
+  }
 
   // exportSnapshot returns the local world's authoritative state in the same
   // shape the server's wire snapshot serializes to (raw fixed-point integers),
