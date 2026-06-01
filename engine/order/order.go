@@ -74,3 +74,15 @@ func Attack(units []uint32, targetUnit uint32) Order {
 func Stop(units []uint32) Order {
 	return Order{Kind: KindStop, UnitIDs: units}
 }
+
+// FireAtUnit points one unit's weapon slot at a target unit (manual force-fire
+// on a specific enemy, distinct from a standing Attack order).
+func FireAtUnit(unit uint32, slot int, targetUnit uint32) Order {
+	return Order{Kind: KindFire, UnitID: unit, Slot: slot, HasTargetUnit: true, TargetUnit: targetUnit}
+}
+
+// FireAtPoint points one unit's weapon slot at a ground point (shift-to-ground
+// force-fire). Only X/Z matter; the target elevation is the ground plane.
+func FireAtPoint(unit uint32, slot int, target fixed.Vec2) Order {
+	return Order{Kind: KindFire, UnitID: unit, Slot: slot, HasTargetUnit: false, Target: target}
+}

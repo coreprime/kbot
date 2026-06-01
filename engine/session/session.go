@@ -92,10 +92,12 @@ func (s *Session) Step() frame.Snapshot {
 
 // Restore reinitializes the world from an authoritative snapshot and discards
 // any locally scheduled orders, so a late-joining client resyncs to the
-// server's current tick before applying the command frames that follow.
-func (s *Session) Restore(tick uint64, units []sim.RestoredUnit) {
+// server's current tick before applying the command frames that follow. The
+// in-flight projectiles are restored alongside the units so the joiner's sky
+// matches the authority's and any shot still en route lands identically.
+func (s *Session) Restore(tick uint64, units []sim.RestoredUnit, projectiles []sim.RestoredProjectile) {
 	s.pending = make(map[uint64][]order.Order)
-	s.world.Restore(tick, units)
+	s.world.Restore(tick, units, projectiles)
 }
 
 // PendingTicks returns the sorted ticks that have scheduled orders, used by the

@@ -51,12 +51,19 @@ func main() {
 		"removeUnit":   js.FuncOf(removeUnit),
 		"submitMove":   js.FuncOf(submitMove),
 		"submitAttack": js.FuncOf(submitAttack),
+		"submitFire":   js.FuncOf(submitFire),
 		"submitStop":   js.FuncOf(submitStop),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
 		"hash":         js.FuncOf(hashOf),
 		"tick":         js.FuncOf(tickOf),
+		"cobState":     js.FuncOf(cobState),
+		// Developer commands — sandbox-only script control for the Runtime panel.
+		"killAllThreads":  js.FuncOf(killAllThreads),
+		"killUnitThreads": js.FuncOf(killUnitThreads),
+		"killThread":      js.FuncOf(killThread),
+		"resetUnit":       js.FuncOf(resetUnitScript),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -192,6 +199,25 @@ func submitAttack(_ js.Value, args []js.Value) any {
 	return int(inst.sess.Submit(order.Attack(ids, uint32(args[2].Int()))))
 }
 
+// submitFire(handle, unitId, slot, targetUnitId, px, pz) -> execTick. A nonzero
+// targetUnitId force-fires the slot at that unit; otherwise the slot fires at
+// the ground point (px, pz). This is the manual / shift-to-ground force-fire
+// path, distinct from a standing Attack order.
+func submitFire(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	unit := uint32(args[1].Int())
+	slot := args[2].Int()
+	targetUnit := uint32(args[3].Int())
+	if targetUnit != 0 {
+		return int(inst.sess.Submit(order.FireAtUnit(unit, slot, targetUnit)))
+	}
+	pt := fixed.Vec2{X: fixed.FromFloat(args[4].Float()), Z: fixed.FromFloat(args[5].Float())}
+	return int(inst.sess.Submit(order.FireAtPoint(unit, slot, pt)))
+}
+
 // submitStop(handle, unitIds[]) -> execTick.
 func submitStop(_ js.Value, args []js.Value) any {
 	inst := instances[args[0].Int()]
@@ -224,8 +250,8 @@ func restore(_ js.Value, args []js.Value) any {
 	// provider, which registers a fresh script unit on the runtime. Resetting
 	// first keeps the runtime's unit list in step with the restored world.
 	inst.rt.Reset()
-	tick, units := restoreFromJS(args[1])
-	inst.sess.Restore(tick, units)
+	tick, units, projectiles := restoreFromJS(args[1])
+	inst.sess.Restore(tick, units, projectiles)
 	return nil
 }
 
@@ -254,4 +280,67 @@ func tickOf(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.world.Tick())
+}
+
+// killAllThreads(handle) terminates every COB thread on every unit (the Runtime
+// panel's "Terminate All Scripts" command). Sandbox-only dev tooling.
+func killAllThreads(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.KillAllThreads()
+	}
+	return nil
+}
+
+// killUnitThreads(handle, unitId) stops every thread on one unit.
+func killUnitThreads(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitKillThreads(uint32(args[1].Int()))
+	}
+	return nil
+}
+
+// killThread(handle, unitId, threadId) stops a single thread by its per-unit id.
+func killThread(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitKillThread(uint32(args[1].Int()), int32(args[2].Int()))
+	}
+	return nil
+}
+
+// resetUnitScript(handle, unitId) returns one unit to a clean script state:
+// threads killed, statics zeroed, animators + visibility reset.
+func resetUnitScript(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitReset(uint32(args[1].Int()))
+	}
+	return nil
+}
+
+// cobState(handle) returns the live COB inspection snapshot — the world tick
+// plus, per unit, its static variables and running threads — for the studio's
+// Runtime / Script Variables panels. Debug-only: it reads no hashed state and is
+// safe to call as often as the inspector refreshes.
+func cobState(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.ValueOf(map[string]any{"tick": 0, "units": []any{}})
+	}
+	out := make([]any, 0, inst.world.UnitCount())
+	inst.world.ForEachUnit(func(u *sim.Unit) {
+		entry := map[string]any{
+			"id":      int(u.ID),
+			"name":    u.Name,
+			"static":  []any{},
+			"threads": []any{},
+		}
+		if cs, ok := inst.world.UnitCob(u.ID); ok {
+			entry["static"] = i32SliceToJS(cs.Static)
+			entry["threads"] = cobThreadsToJS(cs.Threads)
+		}
+		out = append(out, entry)
+	})
+	return js.ValueOf(map[string]any{
+		"tick":  int(inst.world.Tick()),
+		"units": out,
+	})
 }

@@ -1,0 +1,1035 @@
+// wasm-scene.js
+//
+// Snapshot-driven sandbox scene.  Drop-in replacement for SandboxScene /
+// GameEngine: instead of running the simulation in JavaScript it drives the
+// deterministic Go engine (compiled to WebAssembly) through a WasmFrameSource
+// and renders whatever the per-tick render snapshot reports.  The same Go
+// simulation runs here as on the authoritative match server, which is what
+// lets the offline sandbox and a remote-joined match share one code path.
+//
+// Responsibilities mirror the old SandboxScene so SandboxView's call sites
+// don't change shape:
+//
+//   - Own the FrameSource (per-tab — one isolated wasm world per tab).
+//   - Hold selection state (a VIEW concern, not a sim one).
+//   - Translate snapshot events (fire / death / move-stop / explode / …) into
+//     the renderer-side particle, audio and projectile visuals exactly once
+//     per event regardless of how many panes observe the scene.
+//   - Adapt each simulated unit into a plain object shaped like the legacy
+//     GameEngine unit (pos / heading / model clone / binding) so the view's
+//     entity builder, selection and command paths keep working unchanged.
+//
+// Commands (move / attack / stop) submit orders to the wasm session; the
+// resulting motion comes back through the next snapshot rather than by mutating
+// unit fields directly.
+
+import { WasmFrameSource } from '../../engine/net/wasm-source.js'
+import { withCobBytes } from '../../engine/net/cob-bytes.js'
+import { AudioPool } from '../../game3d/audio-pool.js'
+import { ParticlePool } from '../../engine/cob-particles.js'
+import {
+  SmokeTrailManager,
+  spawnProjectile,
+  playWeaponSound,
+  SFX_FIRE_FLASH,
+  SFX_SMOKE_WHITE,
+} from '../../game3d/weapon-driver.js'
+
+// One simulation tick in milliseconds (40 Hz), matching the Go engine's
+// sim.TickMs.  The scene advances the wasm world on this fixed grid; the
+// renderer's variable wall-clock dt only drives the accumulator + particle
+// ageing, never the deterministic step count.
+const TICK_MS = 25
+
+// Cap the catch-up burst so a long stall (tab backgrounded, GC pause) doesn't
+// run hundreds of sim steps in one frame and freeze the UI — drop the surplus
+// time instead, the same coalesce a fixed-timestep game loop uses.
+const MAX_STEPS_PER_FRAME = 8
+
+// In join mode the host owns sim time and the local prediction must track its
+// clock, not free-run on wall-clock.  A wall-clock accumulator capped at
+// MAX_STEPS_PER_FRAME can never close a gap once one opens (join-restore
+// latency, a GC pause, a briefly backgrounded tab whose rAF was throttled): it
+// only ever adds one frame's worth of time, so the prediction stalls behind
+// authority and the rendered poses freeze.  Instead we chase serverTick with a
+// generous per-frame burst.  A single wasm step is cheap, so a few hundred fit
+// in a frame budget; a very large gap drains over several frames, keeping the
+// UI responsive.  Stepping only up to (never past) serverTick is safe because
+// every order is stamped for serverTick + inputDelay + 1, so the local engine
+// never runs ahead of an order it has already been told about.
+const MAX_CATCHUP_STEPS = 600
+
+// COB TA-angle (65536 per turn) to radians.
+const ANGLE_TO_RAD = (2 * Math.PI) / 65536
+
+// A single-tick positional delta larger than this (world units) is treated as
+// a teleport (respawn / restore / map wrap) rather than continuous motion, so
+// render interpolation snaps to it instead of sliding the unit across the map.
+// Even the fastest aircraft travel only a few tens of WU per 25 ms tick, so
+// this comfortably clears legitimate motion.
+const INTERP_SNAP_WU = 256
+
+// Per-(unit, eventKey) sound debounce window, ms — see playUnitSound.
+const UNIT_SOUND_DEBOUNCE_MS = 80
+
+// WasmUnit adapts one simulated unit into the shape SandboxView reads.  Motion
+// state (pos / heading / health / …) is refreshed from each snapshot; the
+// model clone holds the per-unit animated piece tree the snapshot writes into.
+//
+// moveTarget / attackTarget are accessor properties: the view assigns them as
+// "issue this order" hints (the legacy GameEngine acted on the mutation), so
+// here the setters translate the assignment into an authoritative order on the
+// session.  The stored value also backs the view's order-line overlay.
+class WasmUnit {
+  constructor(scene, id, name, side) {
+    this._scene = scene
+    this.id = id
+    this.name = name
+    this.side = side | 0
+    this.model = null      // per-unit clone; snapshot pieces written here
+    this.meta = null       // FBI + weapon metadata (weapon driver / sounds)
+    this.cobUnit = null    // COB runs server-side now; kept for shape parity
+    this.cobPorts = {}
+    this._cobPieceNames = []
+    this.pos = { x: 0, y: 0, z: 0 }
+    this.heading = 0       // radians
+    // Render-interpolation endpoints.  The sim ticks at 40 Hz but the renderer
+    // paints on rAF (~60+ Hz), so reading the raw tick position straight into
+    // pos makes the unit hold still between ticks and then jump — visible
+    // stutter, worst when the camera tracks a fast aircraft.  Each tick shifts
+    // the previous state into _p0 and the new one into _p1; the scene then
+    // lerps pos/heading between them every frame by the leftover-timestep
+    // fraction (see _applyInterpolation).  Seeded so a freshly-spawned unit
+    // doesn't slide in from the origin.
+    this._p0 = { x: 0, y: 0, z: 0, h: 0 }
+    this._p1 = { x: 0, y: 0, z: 0, h: 0 }
+    this.isMoving = false
+    this.dead = false
+    this.health = 100
+    this.buildPercent = 100
+    this.weaponSlots = null // wasm snapshot carries no per-slot aim state
+    this._moveTarget = null
+    this._attackTarget = null
+    this.binding = null
+  }
+
+  get moveTarget() { return this._moveTarget }
+  set moveTarget(v) {
+    this._moveTarget = v
+    if (!v) return
+    // A move order cancels a standing attack the way TA does — the sim has no
+    // "clear attack only" order, so stop first (drops the attack + weapon
+    // slots) then issue the move.
+    if (this._attackTarget || this.weaponSlots) {
+      this._scene.source.stop([this.id])
+      this._attackTarget = null
+      this.weaponSlots = null
+    }
+    this._scene.source.move([this.id], v.x, v.z)
+  }
+
+  get attackTarget() { return this._attackTarget }
+  set attackTarget(v) {
+    this._attackTarget = v
+    // A standing attack supersedes any manual force-fire aim, so drop the
+    // per-slot hint that the shift overlay would otherwise double up on.
+    if (v) {
+      this.weaponSlots = null
+      this._scene.source.attack([this.id], v.id)
+    }
+  }
+}
+
+export class WasmSandboxScene {
+  // Two transports back the scene:
+  //   - local (default): an in-process WasmFrameSource; addUnit inserts directly
+  //     and returns an id synchronously.
+  //   - join: a caller-supplied WsFrameSource (`source` option) wired to an
+  //     authoritative host. Units are never inserted locally — they arrive in
+  //     the authority's snapshots and the scene adopts an adapter for each new
+  //     id (model + meta hydrated lazily via `modelResolver`). Spawning routes
+  //     through spawnRemote, which round-trips a Spawn order through the host.
+  constructor({ palette = null, seed = 1, source = null, modelResolver = null } = {}) {
+    this.palette = palette
+    // Factory mirrors SandboxScene: the engine package never imports a concrete
+    // audio implementation, keeping the cross-package direction one-way.
+    this._audioFactory = () => new AudioPool()
+    // Join mode when a transport is injected; otherwise own an isolated wasm world.
+    this._join = !!source
+    this._modelResolver = modelResolver
+    this.source = source || new WasmFrameSource({ seed: seed >>> 0, inputDelay: 0 })
+    // In join mode, let the transport hydrate any unit type it sees in the
+    // command stream or a join snapshot but that this client never spawned
+    // itself — otherwise the authority's Spawn would resolve to a nil meta and
+    // be dropped, leaving the observer with no unit. The provider returns the
+    // FBI/weapon meta with COB bytes attached so restored units keep their
+    // scripts. _fetchMeta is a method (resolved at call time), so referencing
+    // it here before its definition is fine.
+    if (this._join && typeof this.source.setMetaProvider === 'function') {
+      this.source.setMetaProvider((name) => this._fetchMeta(name))
+    }
+    this._ready = false
+    // WsFrameSource opens with connect(); WasmFrameSource is ready() once loaded.
+    const start = this.source.connect ? this.source.connect() : this.source.ready()
+    this._readyPromise = Promise.resolve(start).then(() => { this._ready = true })
+    // Live unit adapters keyed by sim id, in no particular order (the view
+    // tolerates iteration order; the deterministic order lives in the engine).
+    this._units = new Map()
+    // In-flight model-projectiles from the latest snapshot, in the shape the
+    // view's projectile renderer expects.
+    this._projectiles = []
+    // Selection — pure UI state.
+    this.selected = new Set()
+    this._spawnCount = 0
+    this._silenced = false
+    // Renderer-owned gravity; the ballistic visuals read it.
+    this.gravity = 80
+    // Smoke trails for in-flight missiles — scene-owned so all panes share one
+    // set of puffs rather than each pushing duplicates.
+    this.smokeTrails = new SmokeTrailManager()
+    this._unitSoundDebounce = new Map()
+    // Fixed-timestep accumulator.
+    this._acc = 0
+    // Wall-clock time (ms) of the most recent folded sim step, used to derive
+    // the render-interpolation fraction in join mode (local mode reads the
+    // exact leftover from _acc instead).
+    this._lastStepAtMs = 0
+    // Event listeners (spawn / despawn / fire / death / …) for hosts that want
+    // to observe — the view subscribes 'spawn' to attach its explosion overlay.
+    this._listeners = new Map()
+    // Memoized COB inspection snapshot, refreshed at most once per sim tick (see
+    // _cobSnapshot). The inspector panels read it through the runtime adapter.
+    this._cobCache = null
+    // Lightweight runtime facade: the wasm world owns sim time, but the
+    // inspector + audio/particle playback read pause / rate / clock from here.
+    // It doubles as the COB-runtime adapter the Runtime / Script Variables
+    // panels consume — tickCount / unitCount() / threadCount() / units() are
+    // backed by the live wasm COB snapshot (COB runs in the engine, not here).
+    const scene = this
+    this._runtime = {
+      paused: false,
+      playbackRate: 1,
+      simTimeMs: 0,
+      rng: null,
+      lastTickMs: 0,
+      lastInstCount: 0,
+      // isJoin tells the Runtime panel / step bridge that this runtime is backed
+      // by an authoritative host, so Pause / Step / Speed must round-trip
+      // through the server rather than poke the local clock.
+      get isJoin() { return scene._join },
+      // Pause: local sandbox freezes its own clock; a joined sandbox asks the
+      // authority to pause, which freezes every connected window. The facade's
+      // `paused` is then updated from the authority's echo (see the 'control'
+      // subscription below), so the UI reflects the true shared state.
+      setPaused(p) {
+        if (scene._join && typeof scene.source.setPaused === 'function') {
+          scene.source.setPaused(!!p)
+          return
+        }
+        this.paused = !!p
+      },
+      // setPlaybackRate scales the sim clock (0.01×–10×). The scene's tick loop
+      // reads playbackRate each frame, so this is the single knob both the COB
+      // ribbon slider and the Runtime overlay's Speed slider drive. In join mode
+      // the rate is authoritative — the host re-paces its tick and every client
+      // follows — so it routes through the source instead.
+      setPlaybackRate(r) {
+        const n = Number(r)
+        const v = Math.max(0.01, Math.min(10, Number.isFinite(n) ? n : 1))
+        if (scene._join && typeof scene.source.setRate === 'function') {
+          scene.source.setRate(v)
+          return
+        }
+        this.playbackRate = v
+      },
+      // stepOnce advances exactly one tick while paused. Local mode is handled by
+      // the step bridge's per-frame replay; join mode asks the authority to
+      // advance one tick and broadcast it so every client steps together.
+      stepOnce() {
+        if (scene._join && typeof scene.source.stepOnce === 'function') {
+          scene.source.stepOnce()
+        }
+      },
+      tick() { /* sim time is advanced by the scene's step loop */ },
+      get tickCount() { const c = scene._cobSnapshot(); return c ? (c.tick | 0) : (scene.source.tick | 0) },
+      unitCount() { const c = scene._cobSnapshot(); return c && c.units ? c.units.length : 0 },
+      threadCount() {
+        const c = scene._cobSnapshot()
+        if (!c || !c.units) return 0
+        let n = 0
+        for (const u of c.units) n += (u.threads ? u.threads.length : 0)
+        return n
+      },
+      units() { return scene._cobUnitAdapters() },
+      // Developer command: terminate every COB thread on every unit. COB runs in
+      // the engine, so this routes through the source; the join transport has no
+      // such method, so it degrades to a no-op there.
+      killAllThreads() {
+        if (typeof scene.source.killAllThreads === 'function') {
+          scene.source.killAllThreads()
+          scene._invalidateCob()
+        }
+      },
+    }
+    // In join mode the authority owns the clock; mirror its broadcast pause /
+    // rate into the facade so the Runtime overlay's Pause label + Speed slider
+    // show the true shared state (and the local tick loop honours the pause).
+    if (this._join && typeof this.source.on === 'function') {
+      this.source.on('control', (c) => {
+        this._runtime.paused = !!c.paused
+        if (c.rate) this._runtime.playbackRate = c.rate
+      })
+    }
+  }
+
+  // _invalidateCob drops the memoized COB snapshot so the next panel read pulls
+  // fresh engine state. A developer command mutates script state without
+  // advancing the sim tick, so the per-tick memo would otherwise show stale
+  // threads until the clock moved.
+  _invalidateCob() { this._cobCache = null }
+
+  // ready resolves once the wasm module is live and this scene owns an engine
+  // handle.  The view awaits it before the first addUnit / step.
+  ready() { return this._readyPromise }
+
+  // engine alias — the view reaches through scene.engine for a handful of
+  // calls (setGravity / on / units / getSceneLight / setWeaponTarget /
+  // stopUnits).  They all live on the scene, so the scene IS the engine here.
+  get engine() { return this }
+
+  get runtime() { return this._runtime }
+
+  // ── COB inspection ────────────────────────────────────────────────
+  //
+  // COB runs inside the wasm engine, so the live thread / static-var state the
+  // Runtime + Script Variables + I/O Ports panels show is pulled from the
+  // engine each refresh rather than read off the (render-only) JS binding. The
+  // snapshot is memoized per sim tick so the four panels reading it in one
+  // publish share a single boundary crossing.
+
+  _cobSnapshot() {
+    if (!this._ready || !this.source || typeof this.source.cobState !== 'function') return null
+    const tick = this.source.tick || 0
+    if (this._cobCache && this._cobCache.tick === tick && this._cobCache.data) {
+      return this._cobCache.data
+    }
+    let data
+    try { data = this.source.cobState() } catch { data = null }
+    this._cobCache = { tick, data }
+    return data
+  }
+
+  // _makeCobUnitAdapter shapes one engine unit's COB state into the object the
+  // Runtime panel's unit groups + thread rows and the Script Variables panel
+  // read. Interactive controls route through the engine: kill / reset hit the
+  // source, which drives the live COB state COB owns. The _wasm flag still tells
+  // the thread row to skip the disassembly modal it can't source.
+  _makeCobUnitAdapter(cu) {
+    const threads = (cu.threads || []).map((t) => ({
+      id: t.id,
+      pc: t.pc | 0,
+      offset: t.offset | 0,
+      sleepMs: t.sleepMs | 0,
+      signalMask: t.signalMask | 0,
+      waitOn: t.waiting ? { type: t.waitTurn ? 'turn' : 'move' } : null,
+      script: { name: t.script || '' },
+    }))
+    const scene = this
+    const id = cu.id
+    return {
+      id,
+      name: cu.name || '',
+      scriptOriginName: cu.name || '',
+      staticVars: cu.static || [],
+      _threads: threads,
+      _recentlyKilled: [],
+      _wasm: true,
+      runtime: this._runtime,
+      killAllThreads() {
+        if (typeof scene.source.killUnitThreads === 'function') {
+          scene.source.killUnitThreads(id)
+          scene._invalidateCob()
+        }
+      },
+      killThreadById(threadId) {
+        if (typeof scene.source.killThread === 'function') {
+          scene.source.killThread(id, threadId)
+          scene._invalidateCob()
+        }
+      },
+      // reset returns the unit to a clean script state in the engine. The Runtime
+      // panel's per-unit Reset routes here for wasm units (the in-JS reset path
+      // pokes adapter fields that don't back the engine's real state).
+      reset() {
+        if (typeof scene.source.resetUnit === 'function') {
+          scene.source.resetUnit(id)
+          scene._invalidateCob()
+        }
+      },
+    }
+  }
+
+  _cobUnitAdapters() {
+    const c = this._cobSnapshot()
+    if (!c || !c.units) return []
+    return c.units.map((cu) => this._makeCobUnitAdapter(cu))
+  }
+
+  // cobUnit returns the COB adapter for one engine unit id, for the per-unit
+  // Script Variables / I/O Ports panels. Null when the unit has no live COB
+  // state (script-less, or not yet present in the latest snapshot).
+  cobUnit(id) {
+    const c = this._cobSnapshot()
+    if (!c || !c.units) return null
+    const cu = c.units.find((u) => u.id === id)
+    return cu ? this._makeCobUnitAdapter(cu) : null
+  }
+
+  // ── Event bus ─────────────────────────────────────────────────────
+
+  on(name, cb) {
+    if (!this._listeners.has(name)) this._listeners.set(name, new Set())
+    this._listeners.get(name).add(cb)
+    return () => { const s = this._listeners.get(name); if (s) s.delete(cb) }
+  }
+
+  _emit(name, payload) {
+    const s = this._listeners.get(name)
+    if (!s) return
+    for (const cb of s) { try { cb(payload) } catch { /* listener must not stall sim */ } }
+  }
+
+  // ── Unit lifecycle ────────────────────────────────────────────────
+
+  // addUnit introduces a unit into the wasm world and returns its adapter.
+  // Async because the sim needs the unit's FBI/weapon meta and raw COB bytes
+  // (both fetched here) before the engine can spawn it.  The view awaits it.
+  // Local mode only — in join mode units arrive through the authority's
+  // snapshots, so callers use spawnRemote instead.
+  async addUnit({ name, model = null, cobScript = null, x = 0, z = 0, headingRad = 0, side = 0 }) {
+    await this._readyPromise
+    const meta = await this._fetchMeta(name)
+    const pieceNames = await this._fetchPieceNames(name, cobScript)
+    const id = this.source.addUnit({ name, meta, x, z, headingRad, side })
+    const u = new WasmUnit(this, id, name, side)
+    u.model = model ? model.cloneForInstance() : null
+    u.meta = meta
+    u._cobPieceNames = pieceNames
+    u.pos = { x, y: 0, z }
+    u.heading = headingRad
+    u._p0 = { x, y: 0, z, h: headingRad }
+    u._p1 = { x, y: 0, z, h: headingRad }
+    u.binding = this._makeBinding()
+    this._units.set(id, u)
+    this._spawnCount++
+    this._emit('spawn', { unit: u })
+    return u
+  }
+
+  // setModelResolver installs the geometry resolver used to populate u.model on
+  // adopted remote units (join mode). The shared scene is created at tab level
+  // before any pane exists, but the resolver needs a pane's GL-bound loader, so
+  // the first SandboxView to open against a join scene registers its loader here
+  // (idempotent — only the first registration sticks). u.model is consumed solely
+  // as the pose-tree source for #copyPieceState, so a single loader suffices even
+  // across multiple panes (each pane uploads its own GL geometry by unit name).
+  setModelResolver(fn) {
+    if (!this._modelResolver) this._modelResolver = fn
+  }
+
+  // spawnRemote requests a unit from the authority (join mode). It prefetches
+  // the type's meta + COB so the client's prediction engine can resolve the
+  // Spawn order synchronously when the command frame arrives, then sends the
+  // order. The unit materializes via the next snapshot, where _syncUnits adopts
+  // an adapter for it. No return value — the spawn is fire-and-forget through
+  // the host, and the adapter appears asynchronously.
+  async spawnRemote({ name, x = 0, z = 0, headingRad = 0, side = 0 }) {
+    await this._readyPromise
+    if (!this._join || !this.source.registerMeta) return
+    if (!this.source.hasMeta(name)) {
+      this.source.registerMeta(name, await this._fetchMeta(name))
+    }
+    // Spawn orders carry an integer TA-angle heading (not radians).
+    const heading = (Math.round(headingRad / ANGLE_TO_RAD) % 65536 + 65536) % 65536
+    this.source.spawn({ name, x, z, heading, side })
+  }
+
+  // _fetchMeta loads a unit type's FBI/weapon meta and attaches raw COB bytes
+  // so the simulation runs the unit's script (Create, Killed, aim threads);
+  // render-side animation derives from the resulting snapshot.
+  async _fetchMeta(name) {
+    let meta = null
+    try {
+      const r = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+      if (r.ok) meta = await r.json()
+    } catch { /* no FBI — unit spawns static */ }
+    if (!meta) meta = { name }
+    if (!meta.name) meta.name = name
+    return withCobBytes(name, meta)
+  }
+
+  // _fetchPieceNames returns the positional piece-name list that maps a
+  // snapshot's pieces[] back to model pieces. Accepts a pre-fetched cobScript.
+  async _fetchPieceNames(name, cobScript = null) {
+    let cs = cobScript
+    if (!cs) {
+      try {
+        const r = await fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=0`)
+        if (r.ok) cs = await r.json()
+      } catch { /* no COB — pieces stay at rest */ }
+    }
+    return (cs && cs.pieceNames) || []
+  }
+
+  // _makeBinding builds the per-unit render binding (particle + audio pools).
+  // COB runs in the wasm engine, not here, so the script hooks are inert — the
+  // view's auto-Create path becomes a no-op (Create already ran on spawn).
+  _makeBinding() {
+    const binding = {
+      particles: new ParticlePool(1024, { rng: this._runtime.rng }),
+      audio: this._audioFactory(),
+      worldOffset: { x: 0, y: 0, z: 0 },
+      cobPorts: {},
+      _lifecycle: 'created',
+      hasScript: () => false,
+      start: () => {},
+      getSceneLight: () => null,
+    }
+    if (this._silenced && typeof binding.audio.setPaused === 'function') {
+      try { binding.audio.setPaused(true) } catch { /* ignore */ }
+    }
+    return binding
+  }
+
+  // _adoptRemoteUnit builds an adapter for a unit first seen in an authority
+  // snapshot (join mode). Motion fields are filled by the caller; model + meta
+  // hydrate asynchronously so a missing asset never stalls the snapshot apply.
+  _adoptRemoteUnit(su) {
+    const u = new WasmUnit(this, su.id, su.name, su.side)
+    u.pos = { x: su.x, y: su.y, z: su.z }
+    u.heading = su.headingRad
+    u._p0 = { x: su.x, y: su.y, z: su.z, h: su.headingRad }
+    u._p1 = { x: su.x, y: su.y, z: su.z, h: su.headingRad }
+    u.binding = this._makeBinding()
+    this._units.set(su.id, u)
+    this._spawnCount++
+    this._hydrateRemoteUnit(u)
+    this._emit('spawn', { unit: u })
+    return u
+  }
+
+  // _hydrateRemoteUnit fills in the meta, piece-name map and model clone for an
+  // adopted remote unit. Until it resolves the unit renders at its origin with
+  // no pose (pieces guard on a missing model); once ready it animates normally.
+  async _hydrateRemoteUnit(u) {
+    try {
+      u.meta = await this._fetchMeta(u.name)
+      u._cobPieceNames = await this._fetchPieceNames(u.name)
+      if (this._modelResolver) u.model = await this._modelResolver(u.name)
+    } catch { /* asset hydrate failed — unit stays a static marker */ }
+  }
+
+  removeUnit(id) {
+    if (!this._units.has(id)) return
+    try { this.source.removeUnit(id) } catch { /* ignore */ }
+    this._units.delete(id)
+    this.selected.delete(id)
+    this._emit('despawn', { unitId: id })
+  }
+
+  units() { return this._units.values() }
+  unitById(id) { return this._units.get(id) || null }
+  unitCount() { return this._units.size }
+  projectiles() { return this._projectiles }
+
+  // ── Commands ──────────────────────────────────────────────────────
+  //
+  // The view mostly drives commands by assigning unit.moveTarget /
+  // attackTarget (handled by the WasmUnit setters); these are the few it
+  // routes through the engine object directly.
+
+  setWeaponTarget(unitId, slot, target /*, opts */) {
+    const u = this._units.get(unitId)
+    if (!u || !target) return
+    const s = slot | 0
+    if (typeof this.source.fire !== 'function') return
+    if (target.unit) {
+      // Force-fire a specific weapon slot at a unit. Unlike an Attack order this
+      // does not make the unit chase — it fires the slot in place.
+      this.source.fire(unitId, s, target.unit.id >>> 0, 0, 0)
+      this._setWeaponHint(u, s, { type: 'unit', unit: target.unit })
+      return
+    }
+    if (target.point) {
+      // Shift-to-ground force-fire: aim the slot at a terrain point (x, z); the
+      // ground plane supplies the elevation.
+      const [x, , z] = target.point
+      this.source.fire(unitId, s, 0, x, z)
+      this._setWeaponHint(u, s, { type: 'point', point: [x, 0, z] })
+    }
+  }
+
+  // _setWeaponHint records the slot's current aim target on the adapter so the
+  // view's shift-hold overlay can draw an attack glyph for a force-fire order.
+  // The wasm snapshot carries no per-slot aim state, so this client-side hint is
+  // the overlay's only source; it's cleared by a Stop or a new Move order (both
+  // of which the sim treats as cancelling the standing fire).
+  _setWeaponHint(u, slot, target) {
+    if (!u.weaponSlots) u.weaponSlots = [null, null, null]
+    u.weaponSlots[slot] = { target }
+  }
+
+  stopUnits(ids) {
+    if (!ids || !ids.length) return 0
+    this.source.stop(ids)
+    for (const id of ids) {
+      const u = this._units.get(id)
+      if (u) { u._moveTarget = null; u._attackTarget = null; u.weaponSlots = null }
+    }
+    return ids.length
+  }
+
+  stopUnit(id) { return this.stopUnits([id]) }
+  clearOrders(id) { this.stopUnits([id]) }
+
+  setGravity(g) {
+    const v = +g
+    if (Number.isFinite(v) && v > 0) this.gravity = v
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────
+
+  selectOnly(id) {
+    this.selected.clear()
+    if (id != null && this._units.has(id)) this.selected.add(id)
+  }
+  selectAdd(id) { if (id != null && this._units.has(id)) this.selected.add(id) }
+  selectClear() { this.selected.clear() }
+  isSelected(id) { return this.selected.has(id) }
+
+  // ── Audio ─────────────────────────────────────────────────────────
+
+  setSilenced(s) {
+    s = !!s
+    if (s === this._silenced) return
+    this._silenced = s
+    for (const u of this._units.values()) {
+      const a = u.binding && u.binding.audio
+      if (a && typeof a.setPaused === 'function') {
+        try { a.setPaused(s) } catch { /* ignore */ }
+      }
+    }
+  }
+
+  playUnitSound(unit, eventKey) {
+    if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
+    const stem = unit.meta.sounds[eventKey]
+    if (!stem) return false
+    const key = `${unit.id}:${eventKey}`
+    const now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now()
+    const last = this._unitSoundDebounce.get(key) || 0
+    if (now - last < UNIT_SOUND_DEBOUNCE_MS) return false
+    this._unitSoundDebounce.set(key, now)
+    const pool = unit.binding.audio
+    if (!pool) return false
+    pool.play(stem, {
+      vol: 0.85,
+      kind: 'unit',
+      source: `${unit.name || 'Unit'}: ${eventKey}`,
+      pos: [unit.pos.x, unit.pos.y || 0, unit.pos.z],
+    })
+    return true
+  }
+
+  playUnitSoundRandom(unit, eventKeys) {
+    if (!unit || !unit.meta || !unit.meta.sounds) return false
+    const present = eventKeys.filter((k) => unit.meta.sounds[k])
+    if (present.length === 0) return false
+    const pick = present[Math.floor(Math.random() * present.length)]
+    return this.playUnitSound(unit, pick)
+  }
+
+  // getSceneLight scans every live unit's particle pool for the brightest
+  // light-emitting particle and returns it for the renderer's single dynamic
+  // light slot.  Mirrors the GameEngine implementation so the visual matches.
+  getSceneLight() {
+    let bestUnit = null
+    let bestIdx = -1
+    let bestScore = 0
+    for (const u of this._units.values()) {
+      if (u.dead) continue
+      const p = u.binding && u.binding.particles
+      if (!p) continue
+      for (let i = 0; i < p.count; i++) {
+        if (!p.alive[i]) continue
+        const ls = p.lightStrength[i]
+        if (!(ls > 0)) continue
+        const lum = Math.max(p.r[i], p.g[i], p.b[i])
+        const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
+        if (s > bestScore) { bestScore = s; bestIdx = i; bestUnit = u }
+      }
+    }
+    if (bestIdx < 0 || !bestUnit) return null
+    const p = bestUnit.binding.particles
+    return {
+      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
+      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
+      strength: p.lightStrength[bestIdx],
+    }
+  }
+
+  // ── Per-frame tick ────────────────────────────────────────────────
+
+  // tick advances the wasm world on the fixed 25 ms grid for however much
+  // wall-clock time `dtMs` (scaled by playback rate) has accumulated, then ages
+  // particles / audio / smoke trails by the same scaled dt.
+  tick(dtMs) {
+    if (!this._ready) return null
+    const rt = this._runtime
+    const rate = rt.paused ? 0 : (rt.playbackRate || 1)
+    let snap = null
+    if (this._join) {
+      // Authority-clock pacing: step the local prediction up to the host's
+      // serverTick.  Pause / step / rate are authoritative — serverTick freezes
+      // when the host pauses, advances by one on a host single-step, and paces
+      // at the host's rate — so the local clock always follows it rather than
+      // gating on the (mirrored) local pause flag.  rate below still scales
+      // particle/audio aging so a paused window's effects freeze too.
+      const target = this.source.serverTick || 0
+      let steps = 0
+      while (this.source.tick < target && steps < MAX_CATCHUP_STEPS) {
+        const s = this._stepOnce()
+        // A join transport stalls (null) while awaiting a snapshot restore or a
+        // pending unit-type fetch; stop this frame and retry once the gate clears.
+        if (s === null) break
+        snap = s
+        steps++
+      }
+    } else {
+      this._acc += dtMs * rate
+      let steps = 0
+      while (this._acc >= TICK_MS && steps < MAX_STEPS_PER_FRAME) {
+        const s = this._stepOnce()
+        if (s === null) break
+        this._acc -= TICK_MS
+        snap = s
+        steps++
+      }
+      if (steps >= MAX_STEPS_PER_FRAME) this._acc = 0
+    }
+    const dt = dtMs * rate
+    for (const u of this._units.values()) {
+      const b = u.binding
+      if (!b) continue
+      if (b.particles) b.particles.tick(dt)
+      if (b.audio) b.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
+    }
+    this.smokeTrails.tick(dt)
+    return snap
+  }
+
+  // interpolate samples every unit's display pose for the CURRENT wall-clock
+  // instant, independent of the sim-step cadence. The renderer calls it from
+  // its pre-draw hook once per painted frame, so a 30/60/144 Hz display each
+  // shows the exact in-between pose for the moment it paints — not the last
+  // sim tick's frozen pose. The fraction is real time elapsed since the most
+  // recent folded step over the tick interval (scaled by playback rate), which
+  // works identically in local and join mode because both stamp _lastStepAtMs
+  // on every step. Paused / zero-rate holds the previously sampled fraction so
+  // the scene freezes in place rather than snapping.
+  interpolate() {
+    const rt = this._runtime
+    const rate = rt.paused ? 0 : (rt.playbackRate || 1)
+    let alpha
+    if (rate <= 0) {
+      alpha = this._interpAlpha || 0
+    } else {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+      const interval = TICK_MS / rate
+      alpha = interval > 0 ? (now - this._lastStepAtMs) / interval : 1
+    }
+    if (!(alpha >= 0)) alpha = 0
+    if (alpha > 1) alpha = 1
+    this._interpAlpha = alpha
+    this._applyInterpolation(alpha)
+  }
+
+  // _applyInterpolation writes each unit's display pose as a lerp between its
+  // previous (_p0) and latest (_p1) tick states by `alpha` ∈ [0,1]. Heading
+  // takes the wrap-aware shortest arc so a unit crossing the ±π seam doesn't
+  // spin the long way round. This is the single point both the rendered model
+  // (via #refreshEntities) and the tracking camera (via applyTracking) read, so
+  // interpolating pos/heading here smooths both at once.
+  _applyInterpolation(alpha) {
+    for (const u of this._units.values()) {
+      const p0 = u._p0, p1 = u._p1
+      u.pos.x = p0.x + (p1.x - p0.x) * alpha
+      u.pos.y = p0.y + (p1.y - p0.y) * alpha
+      u.pos.z = p0.z + (p1.z - p0.z) * alpha
+      let dh = p1.h - p0.h
+      while (dh > Math.PI) dh -= Math.PI * 2
+      while (dh < -Math.PI) dh += Math.PI * 2
+      u.heading = p0.h + dh * alpha
+    }
+  }
+
+  // _stepOnce advances exactly one sim tick and folds the resulting snapshot
+  // into the adapter unit set, model poses, projectile list and visual events.
+  _stepOnce() {
+    const snap = this.source.step()
+    // Join transport may return null to stall (awaiting snapshot/meta); the
+    // caller leaves the accumulator intact and retries next frame.
+    if (!snap) return null
+    this._lastStepAtMs = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+    this._runtime.simTimeMs = (snap.tick || 0) * TICK_MS
+    this._syncUnits(snap)
+    this._syncProjectiles(snap)
+    this._dispatchEvents(snap)
+    return snap
+  }
+
+  _syncUnits(snap) {
+    const units = snap.units || []
+    for (const su of units) {
+      let u = this._units.get(su.id)
+      if (!u) {
+        // Local mode creates adapters in addUnit; an unknown id there is a
+        // transient race, so skip it. Join mode discovers units only through
+        // the authority's snapshots, so adopt an adapter on first sighting.
+        if (!this._join) continue
+        u = this._adoptRemoteUnit(su)
+      }
+      // Shift the last tick's pose into _p0 and record the new one in _p1; the
+      // per-frame _applyInterpolation lerps pos/heading between them so motion
+      // reads smooth between sim ticks. A large positional jump (respawn /
+      // teleport) collapses both endpoints so the unit snaps rather than
+      // sliding across the field. pos/heading themselves are left for the
+      // interpolation pass to write.
+      const p0 = u._p0, p1 = u._p1
+      p0.x = p1.x; p0.y = p1.y; p0.z = p1.z; p0.h = p1.h
+      p1.x = su.x; p1.y = su.y; p1.z = su.z; p1.h = su.headingRad
+      const jump = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z)
+      if (jump > INTERP_SNAP_WU) { p0.x = p1.x; p0.y = p1.y; p0.z = p1.z; p0.h = p1.h }
+      u.isMoving = su.isMoving
+      u.health = su.health
+      u.dead = su.dead
+      u.buildPercent = su.buildPercent
+      // Drop the attack hint when its target dies / despawns. The move hint is
+      // NOT cleared on a transient isMoving==false here — acceleration ramps and
+      // turn-in-place make isMoving flicker low for a tick or two before the unit
+      // actually travels, and clearing on that flicker wiped the shift-drag
+      // destination overlay almost immediately. The authoritative arrival is the
+      // 'moveStop' event instead (see _dispatchEvents), which fires once when the
+      // unit truly reaches its destination.
+      const t = u._attackTarget
+      if (t && (t.dead || !this._units.has(t.id))) u._attackTarget = null
+      this._applyPieces(u, su.pieces)
+    }
+  }
+
+  // _applyPieces writes the snapshot's per-piece transforms onto the unit's
+  // model clone.  The sign convention matches cob-binding._sync: the model
+  // loader X-flips geometry, so Z-translation and X/Y rotation flip while
+  // Z-rotation does not.
+  _applyPieces(u, pieces) {
+    if (!u.model || !pieces) return
+    const names = u._cobPieceNames
+    const n = pieces.length
+    for (let i = 0; i < n; i++) {
+      const name = names[i]
+      if (!name) continue
+      const piece = u.model.findPiece(name)
+      if (!piece) continue
+      const p = pieces[i]
+      piece.move[0] = p.ox
+      piece.move[1] = p.oy
+      piece.move[2] = -p.oz
+      piece.rotate[0] = -ANGLE_TO_RAD * p.rx
+      piece.rotate[1] = -ANGLE_TO_RAD * p.ry
+      piece.rotate[2] = ANGLE_TO_RAD * p.rz
+      piece.visible = p.visible
+    }
+  }
+
+  _syncProjectiles(snap) {
+    const projos = snap.projos || []
+    if (projos.length === 0) {
+      if (this._projectiles.length) this._projectiles = []
+      return
+    }
+    this._projectiles = projos.map((p) => ({
+      id: p.id,
+      model: p.kind || null,
+      weaponName: p.weapon || p.kind || '',
+      pos: { x: p.x, y: p.y, z: p.z },
+      // The snapshot carries projectile orientation as raw TA-angles (65536 per
+      // turn); the renderer's projectile transform expects radians (it feeds
+      // these straight into Ry(heading)/Rx(-pitch)). Convert here — without it
+      // a TA-angle integer is read as a radian value and the missile spins /
+      // flaps / flies sideways as the angle wraps each tick.
+      heading: p.heading * ANGLE_TO_RAD,
+      pitch: p.pitch * ANGLE_TO_RAD,
+      // Inspection fields the Projectiles panel reads (aggregateProjectiles).
+      // Without them its model-projectile loop dereferences undefined and
+      // throws, which also suppresses the particle-projectile feed.
+      dead: false,
+      ownerId: p.ownerId || 0,
+      targetUnitId: p.targetUnitId || null,
+      mode: p.mode || 'straight',
+      origin: { x: p.ox, y: p.oy, z: p.oz },
+      target: { x: p.tx, y: p.ty, z: p.tz },
+      vel: { x: p.vx, y: p.vy, z: p.vz },
+      speed: p.speed || 0,
+      ageSec: p.age || 0,
+      lifeSec: p.life || 0,
+    }))
+  }
+
+  // _dispatchEvents turns the tick's render events into particle / audio /
+  // projectile visuals — once per event, scene-level, so a split view doesn't
+  // double them.  Event kind names match cmd/engine-wasm/convert.go.
+  _dispatchEvents(snap) {
+    const events = snap.events || []
+    for (const ev of events) {
+      switch (ev.kind) {
+        case 'spawn':
+          this._spawnCount++
+          break
+        case 'despawn':
+          this.selected.delete(ev.unitId)
+          this._emit('despawn', { unitId: ev.unitId })
+          break
+        case 'fire':
+          this._onFire(ev)
+          break
+        case 'death':
+          this._onDeath(ev)
+          break
+        case 'explode':
+          // COB EXPLODE opcode (death-throes debris from a Killed script).
+          this._flash(ev.unitId, ev, 24, 500, [1.6, 0.6, 0.2, 1.0])
+          break
+        case 'emitSfx':
+          this._sfx(ev.unitId, SFX_SMOKE_WHITE, ev)
+          break
+        case 'projectileHit':
+          this._flash(ev.unitId, ev, 56, 800, [1.9, 0.7, 0.2, 1.0])
+          break
+        case 'moveStop': {
+          const u = this._units.get(ev.unitId)
+          if (u) {
+            // Authoritative arrival — drop the move hint so the shift-drag
+            // destination glyph clears now that the unit has reached its target.
+            u._moveTarget = null
+            this.playUnitSoundRandom(u, ['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
+          }
+          break
+        }
+        default:
+          break
+      }
+    }
+  }
+
+  _onFire(ev) {
+    const u = this._units.get(ev.unitId)
+    if (!u) return
+    const weapon = u.meta && u.meta.weapons && u.meta.weapons[ev.slot]
+    if (!weapon || !weapon.name) return
+    // Prefer the muzzle the sim's Query<slot> script reported (post-animation
+    // world position of that piece), so multi-barrel weapons fire from the
+    // cycling barrel rather than the unit centre. Falls back to the sim anchor.
+    const anchor = this._muzzleAnchor(u, ev)
+    // Notify external listeners (test harness, HUD) for parity with the
+    // legacy GameEngine, which surfaced every muzzle as a 'fire' event.
+    this._emit('fire', { unit: u, slot: ev.slot, weapon, anchor, targetId: ev.targetId })
+    try {
+      // A model weapon (missile / rocket / bomb) is flown by the sim and drawn
+      // as a 3DO mesh from the projectile list — just voice the muzzle here.
+      if (weapon.model && !weapon.beamWeapon) {
+        playWeaponSound({ binding: u.binding, weapon, anchor })
+        return
+      }
+      const target = this._targetPoint(ev)
+      spawnProjectile({
+        binding: u.binding,
+        weapon,
+        anchor,
+        target,
+        palette: this.palette,
+        gravity: this.gravity || 80,
+        smokeTrails: this.smokeTrails,
+      })
+    } catch { /* projectile-vis failures must not stall the sim */ }
+  }
+
+  // _targetPoint resolves a fire event's aim point. A live target unit's centre
+  // of mass takes priority so a tracked shot leads the unit's current pose; for
+  // a force-fire at the ground there is no target unit, so the sim's resolved
+  // aim point (tx/ty/tz) drives the trajectory. The firing anchor is the final
+  // fallback, kept only so the beam helper never throws on a target-less shot.
+  _targetPoint(ev) {
+    const t = ev.targetId && this._units.get(ev.targetId)
+    if (t) return [t.pos.x, t.pos.y + 12, t.pos.z]
+    if (Number.isFinite(ev.tx) && (ev.tx !== ev.x || ev.ty !== ev.y || ev.tz !== ev.z)) {
+      return [ev.tx, ev.ty, ev.tz]
+    }
+    return [ev.x, ev.y, ev.z]
+  }
+
+  // _muzzleAnchor resolves the world position the shot exits from. The sim runs
+  // the unit's Query<slot> script and forwards the firing piece index (ev.fromPiece,
+  // into the unit's piece-name table); we look that piece up on the unit's live,
+  // COB-animated model and compute its post-animation world position via
+  // resolvePieceWorld — the same transform chain the renderer feeds the pose
+  // (the +π mirrors the loader's X-flip), so the muzzle tracks the moved/turned
+  // unit and cycles between barrels as the query alternates. Any gap (no Query
+  // script, no model yet, out-of-range index) falls back to the sim's fire anchor.
+  _muzzleAnchor(u, ev) {
+    const fallback = [ev.x, ev.y, ev.z]
+    const idx = ev.fromPiece
+    if (idx == null || idx < 0) return fallback
+    const names = u._cobPieceNames || []
+    if (idx >= names.length) return fallback
+    const model = u.model
+    if (!model || typeof model.findPiece !== 'function') return fallback
+    const piece = model.findPiece(names[idx])
+    if (!piece) return fallback
+    if (typeof model.resolvePieceWorld === 'function') {
+      const w = model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading + Math.PI)
+      if (w) return w
+    }
+    return fallback
+  }
+
+  _onDeath(ev) {
+    const u = this._units.get(ev.unitId)
+    this._flash(ev.unitId, ev, 32, 600, [1.6, 0.6, 0.2, 1.0])
+    this._emit('death', { unit: u, anchor: [ev.x, ev.y, ev.z] })
+  }
+
+  _flash(unitId, ev, size, lifeMs, color) {
+    const u = this._units.get(unitId)
+    const b = u && u.binding
+    if (!b || !b.particles) return
+    b.particles.emit(SFX_FIRE_FLASH, [ev.x, ev.y, ev.z], { size, lifeMs, color })
+  }
+
+  _sfx(unitId, kind, ev) {
+    const u = this._units.get(unitId)
+    const b = u && u.binding
+    if (!b || !b.particles) return
+    b.particles.emit(kind, [ev.x, ev.y, ev.z], {})
+  }
+
+  // ── Teardown ──────────────────────────────────────────────────────
+
+  dispose() {
+    try { this.smokeTrails.clear() } catch { /* ignore */ }
+    this._unitSoundDebounce.clear()
+    this._units.clear()
+    this._projectiles = []
+    try { this.source.dispose() } catch { /* ignore */ }
+  }
+}

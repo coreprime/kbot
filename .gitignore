@@ -1,6 +1,9 @@
 # Binaries
+# Compiled `cmd/*` outputs land at the repo root when built without -o
+# (e.g. `go build ./cmd/...`); ignore each by name.
 /bin/
 /kbot
+/engine-wasm
 
 # Build artifacts
 coverage.out

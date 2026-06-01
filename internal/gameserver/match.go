@@ -8,15 +8,44 @@
 package gameserver
 
 import (
+	"bytes"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coreprime/kbot/engine/order"
+	"github.com/coreprime/kbot/engine/script"
 	"github.com/coreprime/kbot/engine/session"
 	"github.com/coreprime/kbot/engine/sim"
 	"github.com/coreprime/kbot/engine/wire"
+	"github.com/coreprime/kbot/formats/scripting"
 )
+
+// CobSource returns a unit type's raw COB bytecode, with ok=false for a
+// script-less type. A match uses it to drive the authority's units through the
+// same COB animation + scripted weapon-aim/death threads the browser clients
+// run, so the authoritative simulation stays bit-identical to every client's
+// prediction during combat — without it, the script-less server diverges from
+// the COB-running clients the moment a fight starts.
+type CobSource func(name string) ([]byte, bool)
+
+// compileCOB disassembles raw COB bytes into a shared program, returning nil
+// when the bytes are absent or unparseable so the unit degrades to script-less.
+// Mirrors the wasm bridge so server and client compile the identical program.
+func compileCOB(b []byte) *script.Program {
+	if len(b) == 0 {
+		return nil
+	}
+	cob, err := scripting.LoadFromReader(bytes.NewReader(b))
+	if err != nil {
+		return nil
+	}
+	prog, err := script.FromCOB(cob)
+	if err != nil {
+		return nil
+	}
+	return prog
+}
 
 // Conn is one client's bidirectional message channel.
 type Conn interface {
@@ -63,11 +92,19 @@ type Match struct {
 	register   chan *client
 	unregister chan *client
 	orders     chan clientOrder
+	control    chan wire.Control
 	quit       chan struct{}
 	stopOnce   sync.Once
 
 	clients  map[*client]struct{}
 	nextSlot int
+
+	// Sandbox runtime-clock state, owned by the authority goroutine. paused
+	// freezes the tick advance; rate is the wall-clock pacing multiplier the
+	// ticker interval is derived from. Both are broadcast to clients so every
+	// window's local prediction paces to the same clock.
+	paused bool
+	rate   float64
 }
 
 // SessionInfo is a thread-safe snapshot of a match's descriptive state, used by
@@ -105,21 +142,53 @@ type clientOrder struct {
 	ord  wire.ClientMsg
 }
 
-// NewMatch creates a match with a fresh world and the given spawn provider.
-func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc) *Match {
-	w := sim.New(sim.Config{Seed: seed, Spawn: spawn})
+// NewMatch creates a match with a fresh world and the given spawn provider. The
+// cob source (optional) backs each spawned unit with its COB script, run by a
+// per-match script runtime so the authority animates and fights identically to
+// the clients; pass nil for a script-less authority.
+func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, cob CobSource) *Match {
+	// A per-match runtime drives every unit's COB in lockstep. It is seeded with
+	// the match seed (shared with the world and every client via join_accept) so
+	// any script RNG draw lands identically on the authority and the clients.
+	rt := script.NewRuntime(seed)
+	// program cache: a type's bytecode is disassembled at most once; a miss is
+	// cached as nil so a script-less type is probed once. Touched only on the
+	// authority goroutine (spawn resolves during session.Step / Restore).
+	programs := map[string]*script.Program{}
+	bound := func(name string) (*sim.UnitMeta, sim.Binding) {
+		meta, _ := spawn(name)
+		if meta == nil {
+			return nil, nil
+		}
+		prog, ok := programs[name]
+		if !ok {
+			var b []byte
+			if cob != nil {
+				b, _ = cob(name)
+			}
+			prog = compileCOB(b)
+			programs[name] = prog
+		}
+		if prog == nil {
+			return meta, nil
+		}
+		return meta, rt.NewUnit(prog, nil)
+	}
+	w := sim.New(sim.Config{Seed: seed, Spawn: bound})
 	now := time.Now()
 	m := &Match{
 		id:         id,
 		seed:       seed,
 		inputDelay: inputDelay,
 		createdAt:  now,
-		session:    session.New(session.Config{World: w, InputDelay: inputDelay}),
+		session:    session.New(session.Config{World: w, Runtime: rt, InputDelay: inputDelay}),
 		register:   make(chan *client),
 		unregister: make(chan *client),
 		orders:     make(chan clientOrder, 1024),
+		control:    make(chan wire.Control, 16),
 		quit:       make(chan struct{}),
 		clients:    make(map[*client]struct{}),
+		rate:       1,
 	}
 	// A match is born empty; mark it idle from creation so one that is created
 	// (e.g. by an HTTP upgrade) but never actually joined is still reaped.
@@ -130,8 +199,8 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc) *M
 // Run drives the authority loop until Stop. It must run on its own goroutine;
 // it is the sole owner of the session, so no locking is needed.
 func (m *Match) Run() {
-	ticker := time.NewTicker(time.Duration(sim.TickMs) * time.Millisecond)
-	defer ticker.Stop()
+	ticker := time.NewTicker(m.tickInterval())
+	defer func() { ticker.Stop() }()
 	for {
 		select {
 		case <-m.quit:
@@ -142,10 +211,75 @@ func (m *Match) Run() {
 			m.onLeave(c)
 		case o := <-m.orders:
 			m.onOrder(o)
+		case ctl := <-m.control:
+			if m.onControl(ctl) {
+				// A rate change resizes the wall-clock tick interval; swap the
+				// ticker so the new pace takes effect immediately.
+				ticker.Stop()
+				ticker = time.NewTicker(m.tickInterval())
+			}
 		case <-ticker.C:
-			m.step()
+			if !m.paused {
+				m.step()
+			}
 		}
 	}
+}
+
+// tickInterval is the wall-clock period between authoritative ticks at the
+// current pacing rate. The per-tick simulation step is always a fixed sim.TickMs
+// of game time; rate only changes how often it fires in real time.
+func (m *Match) tickInterval() time.Duration {
+	rate := m.rate
+	if rate <= 0 {
+		rate = 1
+	}
+	d := time.Duration(float64(sim.TickMs) / rate * float64(time.Millisecond))
+	if d < time.Millisecond {
+		d = time.Millisecond
+	}
+	return d
+}
+
+// onControl applies a client's runtime command to the shared clock and
+// broadcasts the resulting state to every client. It returns true when the
+// ticker must be resized (a rate change).
+func (m *Match) onControl(ctl wire.Control) (resized bool) {
+	switch ctl.Action {
+	case "pause":
+		m.paused = true
+	case "resume":
+		m.paused = false
+	case "step":
+		// A single-step is only meaningful while paused; advance exactly one
+		// authoritative tick so every client steps with the server.
+		if m.paused {
+			m.step()
+		}
+	case "rate":
+		r := ctl.Rate
+		if r < 0.01 {
+			r = 0.01
+		} else if r > 10 {
+			r = 10
+		}
+		m.rate = r
+		resized = true
+	default:
+		return false
+	}
+	m.broadcastControl()
+	return resized
+}
+
+// broadcastControl tells every client the current shared-clock state so their
+// local prediction paces, pauses and steps in lockstep with the authority.
+func (m *Match) broadcastControl() {
+	m.broadcast(wire.ServerMsg{Type: wire.MsgControl, Control: &wire.Control{
+		Paused: m.paused,
+		Rate:   m.rate,
+		Tick:   m.session.World().Tick(),
+	}})
 }
 
 // Stop ends the match loop. It is safe to call more than once: the server's
@@ -176,6 +310,13 @@ func (m *Match) onJoin(c *client) {
 			Orders: m.session.OrdersForTick(t),
 		}})
 	}
+	// Seed the joiner with the current clock state so a window opened into a
+	// paused or slowed sandbox starts out paused / slowed instead of free-running.
+	c.send(wire.ServerMsg{Type: wire.MsgControl, Control: &wire.Control{
+		Paused: m.paused,
+		Rate:   m.rate,
+		Tick:   m.session.World().Tick(),
+	}})
 }
 
 func (m *Match) onLeave(c *client) {
@@ -220,12 +361,40 @@ func (m *Match) buildSnapshot() *wire.Snapshot {
 	w := m.session.World()
 	snap := &wire.Snapshot{Tick: w.Tick(), Hash: w.Hash()}
 	for _, ru := range w.ExportUnits() {
-		snap.Units = append(snap.Units, wire.UnitSnap{
+		us := wire.UnitSnap{
 			ID: ru.ID, Name: ru.Name, Side: ru.Side,
 			X: ru.Pos.X, Y: ru.Pos.Y, Z: ru.Pos.Z,
 			Heading: ru.Heading, Speed: ru.Speed,
 			HasMove: ru.HasMove, TX: ru.MoveTarget.X, TZ: ru.MoveTarget.Z,
 			Health: ru.Health, Dead: ru.Dead,
+			HasAttack: ru.HasAttack, AttackTarget: ru.AttackTarget,
+		}
+		for i := range ru.Weapons {
+			rw := ru.Weapons[i]
+			us.Weapons[i] = wire.WeaponSnap{
+				HasTarget:  rw.HasTarget,
+				TargetUnit: rw.TargetUnit,
+				PX:         rw.TargetPt.X,
+				PY:         rw.TargetPt.Y,
+				PZ:         rw.TargetPt.Z,
+				Source:     rw.Source,
+				LastFireMs: rw.LastFireMs,
+			}
+		}
+		snap.Units = append(snap.Units, us)
+	}
+	for _, rp := range w.ExportProjectiles() {
+		snap.Projectiles = append(snap.Projectiles, wire.ProjectileSnap{
+			ID: rp.ID, OwnerID: rp.OwnerID, TargetID: rp.TargetID, Slot: rp.Slot,
+			Mode: rp.Mode, Phase: rp.Phase, Model: rp.Model, Weapon: rp.Weapon,
+			X: rp.Pos.X, Y: rp.Pos.Y, Z: rp.Pos.Z,
+			VX: rp.Vel.X, VY: rp.Vel.Y, VZ: rp.Vel.Z,
+			OX: rp.Origin.X, OY: rp.Origin.Y, OZ: rp.Origin.Z,
+			TX: rp.Target.X, TY: rp.Target.Y, TZ: rp.Target.Z,
+			LaunchY: rp.LaunchY, Speed: rp.Speed, VMax: rp.VMax, Accel: rp.Accel,
+			TurnAng: rp.TurnAng, HomingR: rp.HomingR, Gravity: rp.Gravity,
+			AoE: rp.AoE, Damage: rp.Damage, AgeSec: rp.AgeSec, LifeSec: rp.LifeSec,
+			LastDist: rp.LastDist, Closing: rp.Closing, Heading: rp.Heading, Pitch: rp.Pitch,
 		})
 	}
 	return snap
@@ -263,6 +432,10 @@ func (c *client) readPump(m *Match) {
 		case wire.MsgOrder:
 			if registered {
 				m.orders <- clientOrder{from: c, ord: msg}
+			}
+		case wire.MsgControl:
+			if registered && msg.Control != nil {
+				m.control <- *msg.Control
 			}
 		case wire.MsgLeave:
 			// Voluntary departure: free the slot and end the read loop so the

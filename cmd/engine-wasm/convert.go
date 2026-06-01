@@ -58,6 +58,10 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Damage:   fixed.FromFloat(getFloat(o, "damage")),
 		Present:  true,
 
+		// Firing arc (TA-angle units): aircraft must point the airframe within
+		// this of the target bearing before the weapon opens fire.
+		Tolerance: int32(getFloat(o, "tolerance")),
+
 		// Ballistic / model-projectile flight fields, surfaced verbatim from the
 		// weapon TDF. A weapon naming a 3DO model (and not a beam) flies through
 		// the projectile subsystem; everything else hits instantly. The TDF
@@ -102,37 +106,100 @@ func orderFromJS(o js.Value) order.Order {
 }
 
 // restoreFromJS parses an authoritative wire snapshot (the shape the server
-// broadcasts on join) into the tick and unit set sim.World.Restore expects.
-// Positions and health arrive as raw fixed-point integers, so they pass through
-// unconverted.
-func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit) {
+// broadcasts on join) into the tick, unit set and in-flight projectiles
+// sim.World.Restore expects. Positions and health arrive as raw fixed-point
+// integers, so they pass through unconverted.
+func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjectile) {
 	tick := uint64(getInt64(o, "tick"))
 	arr := o.Get("units")
+	var units []sim.RestoredUnit
+	if arr.Type() == js.TypeObject && !arr.IsNull() {
+		n := arr.Length()
+		units = make([]sim.RestoredUnit, 0, n)
+		for i := 0; i < n; i++ {
+			u := arr.Index(i)
+			ru := sim.RestoredUnit{
+				ID:   uint32(getInt(u, "id")),
+				Name: getString(u, "name"),
+				Side: getInt(u, "side"),
+				Pos: fixed.Vec3{
+					X: fixed.Fixed(getInt64(u, "x")),
+					Y: fixed.Fixed(getInt64(u, "y")),
+					Z: fixed.Fixed(getInt64(u, "z")),
+				},
+				Heading:      fixed.Fixed(getInt64(u, "heading")),
+				Speed:        fixed.Fixed(getInt64(u, "speed")),
+				HasMove:      getBool(u, "hasMove"),
+				MoveTarget:   fixed.Vec2{X: fixed.Fixed(getInt64(u, "tx")), Z: fixed.Fixed(getInt64(u, "tz"))},
+				Health:       fixed.Fixed(getInt64(u, "health")),
+				Dead:         getBool(u, "dead"),
+				HasAttack:    getBool(u, "hasAttack"),
+				AttackTarget: uint32(getInt(u, "attackTarget")),
+			}
+			if ws := u.Get("weapons"); ws.Type() == js.TypeObject && !ws.IsNull() {
+				for s := 0; s < len(ru.Weapons) && s < ws.Length(); s++ {
+					w := ws.Index(s)
+					ru.Weapons[s] = sim.RestoredWeapon{
+						HasTarget:  getBool(w, "hasTarget"),
+						TargetUnit: uint32(getInt(w, "targetUnit")),
+						TargetPt: fixed.Vec3{
+							X: fixed.Fixed(getInt64(w, "px")),
+							Y: fixed.Fixed(getInt64(w, "py")),
+							Z: fixed.Fixed(getInt64(w, "pz")),
+						},
+						Source:     getString(w, "source"),
+						LastFireMs: getInt64(w, "lastFireMs"),
+					}
+				}
+			}
+			units = append(units, ru)
+		}
+	}
+	return tick, units, projectilesFromJS(o.Get("projectiles"))
+}
+
+// projectilesFromJS rebuilds the in-flight model weapons carried in a join
+// snapshot. Every field is a raw fixed-point integer or plain scalar, so the
+// flight record passes through unconverted.
+func projectilesFromJS(arr js.Value) []sim.RestoredProjectile {
 	if arr.Type() != js.TypeObject || arr.IsNull() {
-		return tick, nil
+		return nil
 	}
 	n := arr.Length()
-	units := make([]sim.RestoredUnit, 0, n)
+	out := make([]sim.RestoredProjectile, 0, n)
 	for i := 0; i < n; i++ {
-		u := arr.Index(i)
-		units = append(units, sim.RestoredUnit{
-			ID:   uint32(getInt(u, "id")),
-			Name: getString(u, "name"),
-			Side: getInt(u, "side"),
-			Pos: fixed.Vec3{
-				X: fixed.Fixed(getInt64(u, "x")),
-				Y: fixed.Fixed(getInt64(u, "y")),
-				Z: fixed.Fixed(getInt64(u, "z")),
-			},
-			Heading:    fixed.Fixed(getInt64(u, "heading")),
-			Speed:      fixed.Fixed(getInt64(u, "speed")),
-			HasMove:    getBool(u, "hasMove"),
-			MoveTarget: fixed.Vec2{X: fixed.Fixed(getInt64(u, "tx")), Z: fixed.Fixed(getInt64(u, "tz"))},
-			Health:     fixed.Fixed(getInt64(u, "health")),
-			Dead:       getBool(u, "dead"),
+		p := arr.Index(i)
+		out = append(out, sim.RestoredProjectile{
+			ID:       uint32(getInt(p, "id")),
+			OwnerID:  uint32(getInt(p, "ownerId")),
+			TargetID: uint32(getInt(p, "targetId")),
+			Slot:     getInt(p, "slot"),
+			Mode:     uint8(getInt(p, "mode")),
+			Phase:    uint8(getInt(p, "phase")),
+			Model:    getString(p, "model"),
+			Weapon:   getString(p, "weapon"),
+			Pos:      fixed.Vec3{X: fixed.Fixed(getInt64(p, "x")), Y: fixed.Fixed(getInt64(p, "y")), Z: fixed.Fixed(getInt64(p, "z"))},
+			Vel:      fixed.Vec3{X: fixed.Fixed(getInt64(p, "vx")), Y: fixed.Fixed(getInt64(p, "vy")), Z: fixed.Fixed(getInt64(p, "vz"))},
+			Origin:   fixed.Vec3{X: fixed.Fixed(getInt64(p, "ox")), Y: fixed.Fixed(getInt64(p, "oy")), Z: fixed.Fixed(getInt64(p, "oz"))},
+			Target:   fixed.Vec3{X: fixed.Fixed(getInt64(p, "tx")), Y: fixed.Fixed(getInt64(p, "ty")), Z: fixed.Fixed(getInt64(p, "tz"))},
+			LaunchY:  fixed.Fixed(getInt64(p, "launchY")),
+			Speed:    fixed.Fixed(getInt64(p, "speed")),
+			VMax:     fixed.Fixed(getInt64(p, "vmax")),
+			Accel:    fixed.Fixed(getInt64(p, "accel")),
+			TurnAng:  int32(getInt(p, "turnAng")),
+			HomingR:  fixed.Fixed(getInt64(p, "homingR")),
+			Gravity:  fixed.Fixed(getInt64(p, "gravity")),
+			AoE:      fixed.Fixed(getInt64(p, "aoe")),
+			Damage:   fixed.Fixed(getInt64(p, "damage")),
+			AgeSec:   fixed.Fixed(getInt64(p, "ageSec")),
+			LifeSec:  fixed.Fixed(getInt64(p, "lifeSec")),
+			LastDist: fixed.Fixed(getInt64(p, "lastDist")),
+			Closing:  getBool(p, "closing"),
+			Heading:  int32(getInt(p, "heading")),
+			Pitch:    int32(getInt(p, "pitch")),
 		})
 	}
-	return tick, units
+	return out
 }
 
 // snapshotToJS marshals a render snapshot into a JS object the WebGL renderer
@@ -155,6 +222,24 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 			"z":       p.Pos.Z.Float(),
 			"heading": int(p.Heading),
 			"pitch":   int(p.Pitch),
+			// Inspection fields the Projectiles panel reads to plot the
+			// launch→aim track and label the shot.
+			"ownerId":      int(p.OwnerID),
+			"targetUnitId": int(p.TargetID),
+			"weapon":       p.Weapon,
+			"mode":         p.Mode,
+			"vx":           p.Vel.X.Float(),
+			"vy":           p.Vel.Y.Float(),
+			"vz":           p.Vel.Z.Float(),
+			"ox":           p.Origin.X.Float(),
+			"oy":           p.Origin.Y.Float(),
+			"oz":           p.Origin.Z.Float(),
+			"tx":           p.Target.X.Float(),
+			"ty":           p.Target.Y.Float(),
+			"tz":           p.Target.Z.Float(),
+			"speed":        p.Speed.Float(),
+			"age":          p.AgeSec.Float(),
+			"life":         p.LifeSec.Float(),
 		})
 	}
 	events := make([]any, 0, len(s.Events))
@@ -220,17 +305,51 @@ var eventNames = map[frame.EventKind]string{
 
 func eventToJS(e *frame.Event) map[string]any {
 	return map[string]any{
-		"kind":     eventNames[e.Kind],
-		"unitId":   int(e.UnitID),
-		"targetId": int(e.TargetID),
-		"slot":     e.Slot,
-		"weapon":   e.Weapon,
-		"sound":    e.Sound,
-		"sfxType":  e.SfxType,
-		"x":        e.Anchor.X.Float(),
-		"y":        e.Anchor.Y.Float(),
-		"z":        e.Anchor.Z.Float(),
+		"kind":      eventNames[e.Kind],
+		"unitId":    int(e.UnitID),
+		"targetId":  int(e.TargetID),
+		"slot":      e.Slot,
+		"weapon":    e.Weapon,
+		"sound":     e.Sound,
+		"sfxType":   e.SfxType,
+		"x":         e.Anchor.X.Float(),
+		"y":         e.Anchor.Y.Float(),
+		"z":         e.Anchor.Z.Float(),
+		"tx":        e.Target.X.Float(),
+		"ty":        e.Target.Y.Float(),
+		"tz":        e.Target.Z.Float(),
+		"fromPiece": int(e.FromPiece),
 	}
+}
+
+// i32SliceToJS converts a static-variable slice into a plain JS number array
+// the Script Variables panel renders row-by-row.
+func i32SliceToJS(vs []int32) []any {
+	out := make([]any, len(vs))
+	for i, v := range vs {
+		out[i] = int(v)
+	}
+	return out
+}
+
+// cobThreadsToJS marshals the per-thread inspection summary into the shape the
+// Runtime panel's thread rows consume.
+func cobThreadsToJS(ts []frame.CobThread) []any {
+	out := make([]any, 0, len(ts))
+	for i := range ts {
+		t := &ts[i]
+		out = append(out, map[string]any{
+			"id":         t.ID,
+			"script":     t.Script,
+			"pc":         t.PC,
+			"offset":     t.Offset,
+			"sleepMs":    t.SleepMs,
+			"waiting":    t.Waiting,
+			"waitTurn":   t.WaitTurn,
+			"signalMask": t.SignalMask,
+		})
+	}
+	return out
 }
 
 // --- small JS-value accessors -------------------------------------------------

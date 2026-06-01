@@ -19,6 +19,13 @@ const (
 	halfTurn    int32 = 1 << 15 // 32768, the default homing rate (≈π rad/s)
 )
 
+// taAnglesPerRadian converts a TA-angle turn rate into a physical turn radius.
+// A homing rate of turnAng TA-angle/sec is ω = turnAng·2π/65536 rad/sec, so the
+// arc radius at a given speed is speed/ω = speed·(65536/2π)/turnAng. Without the
+// 65536/2π factor the radius collapses to a fraction of a world unit and a
+// vertical-launch missile pitches over on its first tick — no ascent at all.
+const taAnglesPerRadian = 65536.0 / 6.283185307179586 // ≈ 10430.378
+
 // projMode is the flight behaviour selected from the weapon TDF flags.
 type projMode uint8
 
@@ -29,6 +36,23 @@ const (
 	projGuided                    // self-propelled + tracking: homes on the target
 	projBallistic                 // unpowered arc under gravity (mortars)
 )
+
+// String names the flight mode for the inspection snapshot the studio's
+// Projectiles panel labels each shot with.
+func (m projMode) String() string {
+	switch m {
+	case projDropped:
+		return "dropped"
+	case projVLaunch:
+		return "vlaunch"
+	case projGuided:
+		return "guided"
+	case projBallistic:
+		return "ballistic"
+	default:
+		return "straight"
+	}
+}
 
 // projPhase tracks the two-stage flight of a vertical-launch missile.
 type projPhase uint8
@@ -62,13 +86,21 @@ type projectile struct {
 	speed   fixed.Fixed
 	vmax    fixed.Fixed
 	accel   fixed.Fixed
-	turnAng int32 // homing turn rate, TA-angle/sec; 0 = unguided
+	turnAng int32       // homing turn rate, TA-angle/sec; 0 = unguided
+	homingR fixed.Fixed // physical turn radius at top speed (ascent height + fuze window)
 	gravity fixed.Fixed
 	aoe     fixed.Fixed // blast diameter
 	damage  fixed.Fixed
 
 	ageSec  fixed.Fixed
 	lifeSec fixed.Fixed
+
+	// Proximity-fuze state for steered shots: a missile whose turn radius is
+	// wider than the kill radius closes on the target then sweeps past it; we
+	// detonate at that closest pass instead of letting it orbit. closing latches
+	// once the range starts dropping so the outbound ascent doesn't false-trigger.
+	lastDistT fixed.Fixed
+	closing   bool
 
 	heading int32
 	pitch   int32
@@ -202,30 +234,40 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 		dmg = defaultHitDamage
 	}
 
+	// Physical homing turn radius at top speed: ω = turnAng·2π/65536 rad/s, so
+	// radius = vmax/ω. Doubles as the vlaunch ascent height and the proximity-
+	// fuze capture window for a missile that can't turn tighter than this.
+	var homingR fixed.Fixed
+	if wm.TurnRateAng > 0 {
+		homingR = vmax.Mul(fixed.FromFloat(taAnglesPerRadian)).Div(fixed.FromInt(int(wm.TurnRateAng)))
+	}
+
 	return &projectile{
-		id:       w.nextProjID,
-		ownerID:  ownerID,
-		targetID: targetID,
-		slot:     slot,
-		mode:     mode,
-		phase:    phase,
-		model:    wm.Model,
-		weapon:   wm.Name,
-		pos:      anchor,
-		vel:      vel,
-		origin:   anchor,
-		target:   target,
-		launchY:  anchor.Y,
-		speed:    hypot3(vel.X, vel.Y, vel.Z),
-		vmax:     vmax,
-		accel:    wm.AccelerationWU,
-		turnAng:  wm.TurnRateAng,
-		gravity:  grav,
-		aoe:      wm.AreaOfEffectWU,
-		damage:   dmg,
-		lifeSec:  lifeSec,
-		heading:  headingInit,
-		pitch:    pitchInit,
+		id:        w.nextProjID,
+		ownerID:   ownerID,
+		targetID:  targetID,
+		slot:      slot,
+		mode:      mode,
+		phase:     phase,
+		model:     wm.Model,
+		weapon:    wm.Name,
+		pos:       anchor,
+		vel:       vel,
+		origin:    anchor,
+		target:    target,
+		launchY:   anchor.Y,
+		speed:     hypot3(vel.X, vel.Y, vel.Z),
+		vmax:      vmax,
+		accel:     wm.AccelerationWU,
+		turnAng:   wm.TurnRateAng,
+		homingR:   homingR,
+		gravity:   grav,
+		aoe:       wm.AreaOfEffectWU,
+		damage:    dmg,
+		lifeSec:   lifeSec,
+		heading:   headingInit,
+		pitch:     pitchInit,
+		lastDistT: d,
 	}
 }
 
@@ -295,11 +337,7 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 		// target without diving into the ground — "room" is the homing turn
 		// radius (speed / turnRate), fully derived from the TDF.
 		p.vel = fixed.Vec3{Y: p.speed}
-		var turnRadius fixed.Fixed
-		if p.turnAng > 0 {
-			turnRadius = p.speed.Div(fixed.FromInt(int(p.turnAng)))
-		}
-		if (p.pos.Y-p.launchY) >= turnRadius || (p.turnAng <= 0 && p.speed >= p.vmax) {
+		if (p.pos.Y-p.launchY) >= p.homingR || (p.turnAng <= 0 && p.speed >= p.vmax) {
 			p.phase = phaseHome
 		}
 	case p.mode == projDropped || p.mode == projBallistic:
@@ -335,8 +373,28 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 	// or ran out its flight time.
 	distT := hypot3(p.target.X-p.pos.X, p.target.Y-p.pos.Y, p.target.Z-p.pos.Z)
 	reach := p.speed.Mul(dtSec)
+	// A guided shot turns on a radius far wider than one tick's travel, so a
+	// pinpoint "within reach" capture lets it sail past and orbit the target
+	// forever. Let it detonate anywhere inside its own blast radius instead.
+	prox := reach
+	closestPass := false
+	if steered {
+		prox = fixed.Max(reach, p.aoe.Div(fixed.FromInt(2)))
+		// Proximity fuze: once the missile has begun closing, the first tick it
+		// starts receding again is its closest pass. Detonate there if it's
+		// within a homing-radius of the target — a missile that can't turn
+		// tighter than homingR can never do better than that pass. Targets
+		// beyond reach keep timing out via lifeSec instead of self-destructing.
+		if p.closing && distT > p.lastDistT && distT <= p.homingR {
+			closestPass = true
+		}
+		if distT < p.lastDistT {
+			p.closing = true
+		}
+		p.lastDistT = distT
+	}
 	switch {
-	case distT <= reach:
+	case distT <= prox || closestPass:
 		p.dead = true
 		p.hit = true
 	case (p.mode == projDropped || p.mode == projBallistic) && p.pos.Y <= groundY:

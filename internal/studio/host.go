@@ -27,7 +27,7 @@ var gameHost *gameserver.Server
 // It must run after the VFS is mounted; the spawn provider reads the VFS lazily
 // when a client first spawns a unit.
 func startGameHost() {
-	gameHost = gameserver.NewServer(vfsSpawnFunc(), hostSeed, hostInputDelay)
+	gameHost = gameserver.NewServer(vfsSpawnFunc(), resolveCobBytes, hostSeed, hostInputDelay)
 }
 
 // registerHostAPI mounts the game host's websocket endpoint and the
@@ -39,9 +39,9 @@ func registerHostAPI(mux *http.ServeMux) {
 
 // vfsSpawnFunc resolves Spawn orders against the studio VFS: it parses the
 // unit's FBI and converts it (with its weapon stats) into the simulation's
-// fixed-point stat block. Piece-animation bindings (COB) are not attached yet —
-// units move, fight and die, but render in their rest pose until the COB
-// delivery pass lands.
+// fixed-point stat block. The match layers each unit's COB script on top via
+// resolveCobBytes, so the authority runs the same animation + scripted
+// weapon/death threads as the clients.
 func vfsSpawnFunc() sim.SpawnFunc {
 	return func(name string) (*sim.UnitMeta, sim.Binding) {
 		unit, err := loadUnitFBI(strings.ToLower(strings.TrimSuffix(name, ".fbi")))

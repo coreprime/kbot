@@ -93,6 +93,14 @@ export class WasmFrameSource extends FrameSource {
 
   move(unitIds, x, z) { return this._engine.submitMove(this._handle, unitIds, x, z) }
   attack(unitIds, targetId) { return this._engine.submitAttack(this._handle, unitIds, targetId) }
+
+  // fire force-fires one unit's weapon slot.  A nonzero targetUnit aims the slot
+  // at that unit; otherwise it fires at the ground point (px, pz) — the
+  // shift-to-ground path.  Distinct from attack(), which is a standing order.
+  fire(unitId, slot, targetUnit = 0, px = 0, pz = 0) {
+    return this._engine.submitFire(this._handle, unitId, slot, targetUnit, px, pz)
+  }
+
   stop(unitIds) { return this._engine.submitStop(this._handle, unitIds) }
 
   // scheduleAt queues an authoritative order at an exact tick.  The networked
@@ -115,6 +123,36 @@ export class WasmFrameSource extends FrameSource {
 
   // hash returns the authoritative-comparable world hash as a decimal string.
   hash() { return this._engine.hash(this._handle) }
+
+  // cobState returns the live COB inspection snapshot — { tick, units:[{ id,
+  // name, static:[…], threads:[…] }] } — the studio's Runtime / Script
+  // Variables panels render. Debug-only; reads no hashed state.
+  cobState() {
+    if (!this._engine || this._handle < 0) return { tick: 0, units: [] }
+    return this._engine.cobState(this._handle)
+  }
+
+  // ── Developer commands ───────────────────────────────────────────
+  //
+  // Sandbox-only script control for the Runtime panel. They reach into the
+  // engine's live COB state and never round-trip through the order stream, so
+  // they are local-only (the join transport does not expose them).
+
+  killAllThreads() {
+    if (this._engine && this._handle >= 0) this._engine.killAllThreads(this._handle)
+  }
+
+  killUnitThreads(unitId) {
+    if (this._engine && this._handle >= 0) this._engine.killUnitThreads(this._handle, unitId)
+  }
+
+  killThread(unitId, threadId) {
+    if (this._engine && this._handle >= 0) this._engine.killThread(this._handle, unitId, threadId)
+  }
+
+  resetUnit(unitId) {
+    if (this._engine && this._handle >= 0) this._engine.resetUnit(this._handle, unitId)
+  }
 
   dispose() {
     if (this._engine && this._handle >= 0) {

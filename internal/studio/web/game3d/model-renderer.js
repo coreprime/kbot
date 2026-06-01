@@ -640,6 +640,7 @@ export class ModelRenderer {
     this._locoState.pitch = 0
     this._locoState.roll = 0
     this._locoState.heave = 0
+    this._locoState.prevSpeed = undefined
     this._locoState.init = false
     // Hovercraft gyrate even at rest, so keep the continuous render loop
     // alive (otherwise an idle hovercraft on dry ground would only redraw
@@ -695,14 +696,26 @@ export class ModelRenderer {
     }
     if (loco.hover) {
       // Continuous gyration on the air cushion.  Two incommensurate
-      // frequencies per axis so it never reads as a clean loop; amplitude
-      // rises with ground speed; heave is a gentle vertical breathe.  Scaled
-      // by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      // frequencies per axis so it never reads as a clean loop; heave is a
+      // gentle vertical breathe.  Scaled by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      //
+      // The at-rest baseline is cut ~40% from the old constant so a parked
+      // hovercraft barely shivers; the bulk of the wobble now rides a "motion"
+      // factor that blends ground speed with the magnitude of acceleration, so
+      // a craft surging under throttle or braking gyrates harder than one
+      // idling, and a slow craft wobbles less than a fast one.
       const spd = Math.min(1, speed / 40)
-      const amp = (0.045 + 0.075 * spd) * HOVERCRAFT_WOBBLE_SCALE
+      let accelMag = 0
+      if (dt > 1e-4) {
+        const prevSpeed = (st.prevSpeed !== undefined) ? st.prevSpeed : speed
+        accelMag = Math.min(1, Math.abs(speed - prevSpeed) / dt / 80)
+        st.prevSpeed = speed
+      }
+      const motion = Math.min(1, spd + 0.4 * accelMag)
+      const amp = (0.027 + 0.075 * motion) * HOVERCRAFT_WOBBLE_SCALE
       targetPitch += amp * (Math.sin(t * 1.7) * 0.6 + Math.sin(t * 0.9 + 1.3) * 0.4)
       targetRoll  += amp * (Math.sin(t * 1.3 + 0.7) * 0.6 + Math.sin(t * 2.1) * 0.4)
-      targetHeave += (0.8 + 1.3 * spd) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
+      targetHeave += (0.48 + 1.3 * motion) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
       // Light bank into turns on top of the idle wobble (same sign as above).
       targetRoll  += Math.max(-0.3, Math.min(0.3, turnRate * 0.18))
       // The hover gyration is procedural (already smooth), so chase it fast.
@@ -1503,6 +1516,15 @@ export class ModelRenderer {
         if (light) this.setPulseLight(light.pos, light.color, light.strength)
         else this.setPulseLight(null, null, 0)
       }
+      // Pre-draw hook — runs immediately before draw() so the host can
+      // sample render interpolation and rebuild the entity list for THIS
+      // exact frame.  Doing it here (rather than in onAfterFrame, after the
+      // draw) keeps the rendered model geometry and the tracking camera —
+      // both of which read the unit's live position inside draw() — locked to
+      // one coherent, frame-correct world state.  Sampling after the draw left
+      // the model a frame behind the camera, which reads as stutter on any
+      // display whose refresh rate isn't a clean multiple of the sim tick.
+      if (this.onBeforeFrame) this.onBeforeFrame(dt * 1000)
       this.draw()
       // Notify external observers (studio inspector overlays) that
       // a frame finished.  The host wires a refresh callback so

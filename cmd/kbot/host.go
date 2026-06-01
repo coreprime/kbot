@@ -34,6 +34,7 @@ server runs with a single built-in synthetic unit ("scout"), which is enough to
 exercise the lockstep netcode from the browser demo with no TA install.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var spawn sim.SpawnFunc
+			var cob gameserver.CobSource
 			if root == "" {
 				spawn = gameserver.DemoSpawnFunc()
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "no --root given: serving the built-in demo unit set")
@@ -42,8 +43,9 @@ exercise the lockstep netcode from the browser demo with no TA install.`,
 					return fmt.Errorf("asset root: %w", err)
 				}
 				spawn = gameserver.FBISpawnFunc(root)
+				cob = gameserver.FBICobSource(root)
 			}
-			srv := gameserver.NewServer(spawn, seed, inputDelay)
+			srv := gameserver.NewServer(spawn, cob, seed, inputDelay)
 			defer srv.Stop()
 
 			mux := http.NewServeMux()

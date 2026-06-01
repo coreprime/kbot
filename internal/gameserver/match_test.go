@@ -67,7 +67,7 @@ func testSpawn(name string) (*sim.UnitMeta, sim.Binding) {
 // broadcasts stays bit-identical to the authority, verified against the
 // authoritative hash digests.
 func TestWireLockstep(t *testing.T) {
-	m := NewMatch("t", 7, 3, testSpawn)
+	m := NewMatch("t", 7, 3, testSpawn, nil)
 	go m.Run()
 	defer m.Stop()
 

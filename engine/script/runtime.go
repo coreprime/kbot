@@ -97,6 +97,99 @@ type Unit struct {
 	rotAnims  []pieceAnim
 	visible   []bool
 	threads   []*thread
+	// nextID hands out a stable per-unit identifier to each thread the unit
+	// spawns. Debug-only (the studio's Runtime panel keys its thread list on it);
+	// it never influences execution order, so it stays out of the world hash.
+	nextID int32
+	// effects buffers the render-only events the script emits via the COB
+	// effect opcodes (EMIT_SFX / EXPLODE / PLAY_SOUND) during a tick. The world
+	// drains it after each Tick, stamps the unit id + world anchor, and folds it
+	// into the render snapshot's event stream. Render-only: it never feeds the
+	// world hash, so it can't perturb determinism.
+	effects []frame.Event
+	// doneReturns records the return value of every thread that died during the
+	// current tick, keyed by thread id, so a caller polling for an aim thread's
+	// completion (the weapon SM gating fire on AimWeapon returning TRUE) can read
+	// the result in the same tick before the dead thread is pruned. It is cleared
+	// at the top of every tickStep, so it only ever holds this tick's deaths.
+	doneReturns map[int32]int32
+}
+
+// recordEffect buffers one COB effect opcode as a partially-filled render event.
+// piece is the opcode's piece operand (or volume for PLAY_SOUND); arg carries
+// the sfx type (EMIT_SFX / EXPLODE) or the sound id (PLAY_SOUND). The world fills
+// in UnitID and Anchor when it drains the buffer.
+func (u *Unit) recordEffect(kind frame.EventKind, piece, arg int) {
+	u.effects = append(u.effects, frame.Event{Kind: kind, Slot: piece, SfxType: arg})
+}
+
+// DrainEffects returns the effect events buffered since the last drain and
+// clears the buffer. The world calls it each tick to harvest script-emitted
+// SFX / sounds for the render snapshot.
+func (u *Unit) DrainEffects() []frame.Event {
+	if len(u.effects) == 0 {
+		return nil
+	}
+	out := u.effects
+	u.effects = nil
+	return out
+}
+
+// newThread allocates a thread carrying the next per-unit id. Centralizing
+// creation keeps ids monotonic so the inspector can follow a thread across ticks.
+func (u *Unit) newThread(scriptIndex int, locals []int32) *thread {
+	u.nextID++
+	return &thread{id: u.nextID, scriptIndex: scriptIndex, locals: locals}
+}
+
+// KillAllThreads marks every live thread on every hosted unit dead. It backs the
+// studio's "Terminate All Scripts" developer command; the next tickStep prunes
+// the dead threads. Debug-only — a sandbox tool, never driven from gameplay — so
+// it carries no determinism contract.
+func (r *Runtime) KillAllThreads() {
+	for _, u := range r.units {
+		u.KillAllThreads()
+	}
+}
+
+// KillAllThreads marks every live thread on this unit dead (the per-unit "Stop
+// all threads" developer command). Animators keep their last pose; only the
+// threads stop.
+func (u *Unit) KillAllThreads() {
+	for _, t := range u.threads {
+		t.dead = true
+	}
+}
+
+// KillThread marks the single thread with the given id dead (the per-thread kill
+// button in the Runtime panel). Unknown ids are ignored.
+func (u *Unit) KillThread(id int32) {
+	for _, t := range u.threads {
+		if t.id == id {
+			t.dead = true
+			return
+		}
+	}
+}
+
+// ResetState returns the unit to a clean slate: every thread dies, static vars
+// zero, animators snap back to rest, and all pieces become visible — the
+// per-unit "Reset" developer command. It does not re-run Create; the caller
+// decides whether to restart any entry point.
+func (u *Unit) ResetState() {
+	u.threads = nil
+	for i := range u.static {
+		u.static[i] = 0
+	}
+	u.moveAnims = makeAnims(len(u.moveAnims))
+	u.rotAnims = makeAnims(len(u.rotAnims))
+	for i := range u.visible {
+		u.visible[i] = true
+	}
+	u.effects = nil
+	for k := range u.doneReturns {
+		delete(u.doneReturns, k)
+	}
 }
 
 func animKey(piece, axis int) int { return piece*3 + axis }
@@ -145,6 +238,11 @@ func (u *Unit) animDone(w *waitCond) bool {
 // tick run next tick, matching the snapshot semantics scripts are written
 // against.
 func (u *Unit) tickStep() {
+	// Reset this tick's death ledger; only threads that die during this tick's
+	// run should be visible to a same-tick AimStatus poll.
+	for k := range u.doneReturns {
+		delete(u.doneReturns, k)
+	}
 	tickAnimArray(u.moveAnims)
 	tickAnimArray(u.rotAnims)
 	snap := append([]*thread(nil), u.threads...)
@@ -173,7 +271,14 @@ func (u *Unit) tickStep() {
 	for _, t := range u.threads {
 		if !t.dead {
 			live = append(live, t)
+			continue
 		}
+		// Record the dying thread's return value so a same-tick poll can read it
+		// before the thread vanishes from the slice.
+		if u.doneReturns == nil {
+			u.doneReturns = make(map[int32]int32)
+		}
+		u.doneReturns[t.id] = t.returnValue
 	}
 	u.threads = live
 }
@@ -221,7 +326,7 @@ func (u *Unit) startScript(caller *thread, childIdx, argCount int) {
 			ex.dead = true
 		}
 	}
-	u.threads = append(u.threads, &thread{scriptIndex: childIdx, locals: args})
+	u.threads = append(u.threads, u.newThread(childIdx, args))
 }
 
 func (u *Unit) callScript(t *thread, childIdx, argCount int) {
@@ -259,7 +364,64 @@ func (u *Unit) Start(name string, args ...int) {
 	if !ok {
 		return
 	}
-	u.threads = append(u.threads, &thread{scriptIndex: idx, locals: toI32(args)})
+	u.threads = append(u.threads, u.newThread(idx, toI32(args)))
+}
+
+// Restart spawns a thread on the named script, first marking any live thread
+// already running that same script dead. It gives the world the COB START
+// opcode's supersede semantics, so a continuously re-driven tracking thread (a
+// weapon's aim loop, re-issued as its target moves) replaces its prior instance
+// instead of accumulating a fresh thread every tick.
+func (u *Unit) Restart(name string, args ...int) {
+	idx, ok := u.prog.ScriptIndex(name)
+	if !ok {
+		return
+	}
+	for _, ex := range u.threads {
+		if !ex.dead && ex.scriptIndex == idx {
+			ex.dead = true
+		}
+	}
+	u.threads = append(u.threads, u.newThread(idx, toI32(args)))
+}
+
+// StartAim spawns the named aim script with the COB START supersede semantics
+// (cancelling any live instance) and returns the new thread's id so the caller
+// can poll its completion via AimStatus. It returns 0 if the script is unknown,
+// which AimStatus reads as "already done" so a unit without the script never
+// blocks its fire cadence.
+func (u *Unit) StartAim(name string, args ...int) int32 {
+	idx, ok := u.prog.ScriptIndex(name)
+	if !ok {
+		return 0
+	}
+	for _, ex := range u.threads {
+		if !ex.dead && ex.scriptIndex == idx {
+			ex.dead = true
+		}
+	}
+	t := u.newThread(idx, toI32(args))
+	u.threads = append(u.threads, t)
+	return t.id
+}
+
+// AimStatus reports whether the thread with the given id has finished and, if
+// so, the value it returned. A still-running thread reports (false, 0). A thread
+// that died this tick reports its captured return value from the death ledger.
+// An id that is neither live nor in the ledger — already pruned, or never a real
+// thread (id 0) — reports (true, 1): a vanished aim thread is treated as a
+// completed, successful aim so the weapon SM degrades to firing rather than
+// stalling forever.
+func (u *Unit) AimStatus(id int32) (done bool, ret int32) {
+	for _, t := range u.threads {
+		if t.id == id && !t.dead {
+			return false, 0
+		}
+	}
+	if rv, ok := u.doneReturns[id]; ok {
+		return true, rv
+	}
+	return true, 1
 }
 
 // RunQuery executes a Query* script synchronously within the current tick and
@@ -271,7 +433,8 @@ func (u *Unit) RunQuery(name string, args ...int) (int32, bool) {
 	if !ok {
 		return 0, false
 	}
-	t := &thread{scriptIndex: idx, locals: toI32(args), queryOnly: true}
+	t := u.newThread(idx, toI32(args))
+	t.queryOnly = true
 	for n := 0; !t.dead && n < 1024; n++ {
 		insts := u.prog.scripts[t.scriptIndex].insts
 		if t.pc >= len(insts) {
@@ -316,6 +479,43 @@ func (u *Unit) Pieces() []frame.PieceState {
 		}
 	}
 	return out
+}
+
+// CobState returns the unit's inspectable script state — a copy of its static
+// variables plus a per-live-thread summary — for the studio's Runtime / Script
+// Variables panels. Debug-only: it never feeds the world hash, so reporting it
+// cannot perturb determinism.
+func (u *Unit) CobState() frame.CobUnitState {
+	threads := make([]frame.CobThread, 0, len(u.threads))
+	for _, t := range u.threads {
+		if t.dead {
+			continue
+		}
+		sd := u.prog.scripts[t.scriptIndex]
+		offset := 0
+		if t.pc >= 0 && t.pc < len(sd.insts) {
+			offset = int(sd.insts[t.pc].Offset)
+		} else if n := len(sd.insts); n > 0 {
+			offset = int(sd.insts[n-1].Offset)
+		}
+		ct := frame.CobThread{
+			ID:         int(t.id),
+			Script:     sd.name,
+			PC:         t.pc,
+			Offset:     offset,
+			SleepMs:    int(t.sleepMs),
+			SignalMask: int(t.signalMask),
+		}
+		if t.waitOn != nil {
+			ct.Waiting = true
+			ct.WaitTurn = t.waitOn.rot
+		}
+		threads = append(threads, ct)
+	}
+	return frame.CobUnitState{
+		Static:  append([]int32(nil), u.static...),
+		Threads: threads,
+	}
 }
 
 // moveValue is a piece axis's translation in world units. A COB linear operand

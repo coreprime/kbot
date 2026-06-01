@@ -2,6 +2,7 @@ package script
 
 import (
 	"github.com/coreprime/kbot/engine/fixed"
+	"github.com/coreprime/kbot/engine/frame"
 	"github.com/coreprime/kbot/formats/scripting"
 )
 
@@ -80,6 +81,7 @@ type callFrame struct {
 // stack, locals and signal mask. Threads yield only on SLEEP/WAIT_FOR_* (and
 // die on RETURN at top level or when a matching signal fires).
 type thread struct {
+	id          int32
 	scriptIndex int
 	pc          int
 	stack       []int32
@@ -374,6 +376,7 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 		if u.host != nil {
 			u.host.EmitSfx(int(sfx), int(ins.P1))
 		}
+		u.recordEffect(frame.EvEmitSfx, int(ins.P1), int(sfx))
 
 	// ── Waits ────────────────────────────────────────────────────
 	case scripting.OP_SLEEP:
@@ -423,11 +426,13 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 		if u.host != nil {
 			u.host.Explode(int(ins.P1), int(sfx))
 		}
+		u.recordEffect(frame.EvExplode, int(ins.P1), int(sfx))
 	case scripting.OP_PLAY_SOUND:
 		sound := t.pop()
 		if u.host != nil {
 			u.host.PlaySound(int(sound), int(ins.P1))
 		}
+		u.recordEffect(frame.EvPlaySound, int(ins.P1), int(sound))
 	case scripting.OP_ATTACH_UNIT, scripting.OP_DROP_UNIT:
 		// Unit attachment is resolved by the world, not the script VM.
 	}

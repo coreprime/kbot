@@ -37,10 +37,24 @@ type UnitState struct {
 // ProjectileState is one in-flight model projectile (missile/rocket/bomb).
 type ProjectileState struct {
 	ID      uint32
-	Kind    string
+	Kind    string // 3DO model name the renderer draws the in-flight mesh from
 	Pos     fixed.Vec3
 	Heading int32
 	Pitch   int32
+
+	// Inspection fields — the studio's Projectiles panel plots a launch→aim
+	// track and labels each shot by owner/weapon. They are render/debug-only
+	// (never hashed), so surfacing them cannot perturb determinism.
+	OwnerID  uint32
+	TargetID uint32 // 0 when the shot is aimed at a fixed ground point
+	Weapon   string
+	Mode     string // flight behaviour: straight|dropped|vlaunch|guided|ballistic
+	Vel      fixed.Vec3
+	Origin   fixed.Vec3
+	Target   fixed.Vec3
+	Speed    fixed.Fixed
+	AgeSec   fixed.Fixed
+	LifeSec  fixed.Fixed
 }
 
 // EventKind enumerates the discrete events the renderer's effects layer reacts
@@ -71,9 +85,46 @@ type Event struct {
 	TargetID uint32
 	Slot     int
 	Anchor   fixed.Vec3
-	Weapon   string
-	Sound    string
-	SfxType  int
+	// Target is the resolved aim point for a fire event — the unit's position
+	// when locked on a unit, or the ground point for a force-fire. The renderer
+	// needs it to launch a ballistic shot whose model the sim does not fly; for
+	// a ground-aimed cannon ball there is no TargetID to look up, so without
+	// this the client cannot derive a trajectory.
+	Target fixed.Vec3
+	// FromPiece is the COB piece index a fire event's shot exits from, as
+	// reported by the unit's Query<slot> script. The sim is geometry-agnostic, so
+	// it cannot resolve the muzzle's world position itself; it hands the renderer
+	// the piece index (into the unit's piece-name table) and lets the client
+	// compute the post-animation muzzle position. -1 means the unit has no Query
+	// script, so the renderer falls back to the unit anchor. Running the query
+	// also advances any per-barrel cycle the script keeps, so multi-barrel
+	// weapons alternate their muzzle from shot to shot.
+	FromPiece int32
+	Weapon    string
+	Sound     string
+	SfxType   int
+}
+
+// CobThread is one live script thread's inspectable state, surfaced to the
+// studio's Runtime panel. It is render/debug-only: thread identity and program
+// counters never feed the world hash, so reporting them cannot perturb
+// determinism.
+type CobThread struct {
+	ID         int    // stable per-unit thread id, for list keys
+	Script     string // entry-point name the thread is executing
+	PC         int    // next instruction index within the current script
+	Offset     int    // byte offset of that instruction, for the disassembly view
+	SleepMs    int    // remaining sleep, 0 when running
+	Waiting    bool   // blocked on a piece animation (turn/move) completing
+	WaitTurn   bool   // when Waiting, true = turn animation, false = move
+	SignalMask int    // signal bits this thread listens for
+}
+
+// CobUnitState is one unit's inspectable COB state — its static variables and
+// the threads currently running on it. Debug-only, never hashed.
+type CobUnitState struct {
+	Static  []int32
+	Threads []CobThread
 }
 
 // Snapshot is the complete drawable state for one simulation tick plus the

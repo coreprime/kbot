@@ -44,6 +44,25 @@ func FBISpawnFunc(root string) sim.SpawnFunc {
 	}
 }
 
+// FBICobSource returns a CobSource backed by the flattened asset tree's
+// scripts/*.cob files, so the native host's authority runs each unit's COB in
+// lockstep with the browser clients (which fetch the identical bytes).
+func FBICobSource(root string) CobSource {
+	p := newFBIProvider(root)
+	return func(name string) ([]byte, bool) {
+		key := strings.ToLower(strings.TrimSuffix(name, ".cob"))
+		path := p.findFile(filepath.Join("scripts", key+".cob"))
+		if path == "" {
+			return nil, false
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, false
+		}
+		return b, true
+	}
+}
+
 // Unit implements assets.Provider.
 func (p *fbiProvider) Unit(name string) (*sim.UnitMeta, sim.Binding, bool) {
 	key := strings.ToLower(strings.TrimSuffix(name, ".fbi"))
@@ -169,6 +188,28 @@ func weaponMetaFromRef(ref string, resolveWeapon func(ref string) (ta.Weapon, bo
 		Burst:    burst,
 		Damage:   fixed.FromInt(sec.Damage["default"]),
 		Present:  true,
+
+		// Firing arc, in TA-angle units, that gates an aircraft's body before it
+		// fires (no rotating turret).
+		Tolerance: int32(sec.Tolerance),
+
+		// Projectile flight fields, surfaced from the weapon TDF so a missile /
+		// rocket / bomb flies through the projectile subsystem (matching the
+		// wasm conversion path in cmd/engine-wasm/convert.go). The TDF turnrate
+		// is already in TA-angle units per second.
+		Model:           strings.ToLower(strings.TrimSpace(sec.Model)),
+		BeamWeapon:      sec.BeamWeapon != 0,
+		VelocityWU:      fixed.FromFloat(sec.WeaponVelocity),
+		StartVelocityWU: fixed.FromFloat(sec.StartVelocity),
+		AccelerationWU:  fixed.FromFloat(sec.WeaponAcceleration),
+		TurnRateAng:     int32(sec.TurnRate),
+		FlightTimeSec:   fixed.FromFloat(sec.WeaponTimer),
+		AreaOfEffectWU:  fixed.FromInt(sec.AreaOfEffect),
+		Dropped:         sec.Dropped != 0,
+		VLaunch:         sec.VLaunch != 0,
+		Tracks:          sec.Tracks != 0,
+		SelfProp:        sec.SelfProp != 0,
+		Ballistic:       sec.Ballistic != 0,
 	}
 }
 

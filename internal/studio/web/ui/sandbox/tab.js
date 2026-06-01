@@ -96,9 +96,15 @@ let _sandboxLabelCounter = 0
 // builds an instance, pushes the host record, and switches focus.
 // No type discriminator + no legacy `sandbox: true` flag — the
 // registry handles dispatch by typeId.
-export function openSandboxStub() {
+export function openSandboxStub(opts = {}) {
   _sandboxLabelCounter += 1
-  hostCallbacks.openTab?.('sandbox', { displayName: `Sandbox ${_sandboxLabelCounter}` })
+  // opts.joinUrl (set by the welcome dialog's New Hosted / Join Hosted
+  // modes) backs the tab's scene with a WsFrameSource against the
+  // authoritative host; absent it the tab runs an in-process wasm
+  // world (Local mode).  opts.displayName lets the hosted modes label
+  // the tab after the match instead of the generic counter.
+  const displayName = opts.displayName || `Sandbox ${_sandboxLabelCounter}`
+  hostCallbacks.openTab?.('sandbox', { displayName, joinUrl: opts.joinUrl || null })
 }
 
 export async function activateSandboxTab(tab) {
@@ -168,7 +174,7 @@ export async function activateSandboxTab(tab) {
   // Shared scene — one engine + smoke trails + audio debounce per tab,
   // observed by every pane the tab hosts.  Lazy-created on first
   // activation so a tab that never gets focused doesn't allocate.
-  if (!tab.scene) tab.scene = createSharedScene({ palette: null })
+  if (!tab.scene) tab.scene = createSharedScene({ palette: null, joinUrl: tab._joinUrl || null })
   // Per-tab callbacks the generic split-host invokes on top of the
   // adapter's editor-static callbacks.  onPaneFocus updates the
   // module-let alias the inspector refresh + ribbon callbacks read

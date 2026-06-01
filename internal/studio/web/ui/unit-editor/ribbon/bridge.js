@@ -268,6 +268,16 @@ export function wireUnitEditorHostBridge(reactUi) {
     stepRuntime: () => {
       const rt = _activeRuntime()
       if (!rt) return
+      // Joined sandbox: a single-step is authoritative.  Ask the host to advance
+      // exactly one tick and broadcast it; every client's local prediction then
+      // follows via serverTick.  No local frame replay — that would desync this
+      // window ahead of the others.
+      if (rt.isJoin && typeof rt.stepOnce === 'function') {
+        rt.stepOnce()
+        const ui = getReactUi()
+        if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
+        return
+      }
       // Force one fixed TA_TICK_MS step across the WHOLE per-frame
       // pipeline, not just the COB scripts.  rt.tick(TA_TICK_MS) alone
       // only advances bytecode — weapons, movement, particles, audio,
@@ -377,6 +387,15 @@ export function wireUnitEditorHostBridge(reactUi) {
       const mv = getActiveModelViewer()
       if (cob && mv && mv.cob === cob && cob.unit === unit) {
         mv.resetState()
+        return
+      }
+      // wasm sandbox units own their script state in the engine; the field-poking
+      // path below resets only the JS adapter snapshot, so route to the adapter's
+      // engine-backed reset() when present and repaint the panel immediately.
+      if (typeof unit.reset === 'function') {
+        unit.reset()
+        const ui = getReactUi()
+        if (ui && typeof ui.bumpRuntimeTick === 'function') ui.bumpRuntimeTick()
         return
       }
       if (typeof unit.killAllThreads === 'function') unit.killAllThreads()

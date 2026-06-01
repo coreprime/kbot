@@ -24,6 +24,7 @@ type Server struct {
 	mu         sync.Mutex
 	matches    map[string]*Match
 	spawn      sim.SpawnFunc
+	cob        CobSource
 	seed       uint32
 	inputDelay uint64
 
@@ -32,12 +33,15 @@ type Server struct {
 }
 
 // NewServer creates an empty server that builds matches with the given spawn
-// provider, seed and input delay. It starts a background reaper that retires
-// matches left empty past the idle grace.
-func NewServer(spawn sim.SpawnFunc, seed uint32, inputDelay uint64) *Server {
+// provider, COB source, seed and input delay. The cob source (optional, may be
+// nil) backs each match's units with their scripts so the authority stays
+// bit-identical to the COB-running clients. It starts a background reaper that
+// retires matches left empty past the idle grace.
+func NewServer(spawn sim.SpawnFunc, cob CobSource, seed uint32, inputDelay uint64) *Server {
 	s := &Server{
 		matches:    make(map[string]*Match),
 		spawn:      spawn,
+		cob:        cob,
 		seed:       seed,
 		inputDelay: inputDelay,
 		done:       make(chan struct{}),
@@ -61,7 +65,7 @@ func (s *Server) match(id string, seed uint32, inputDelay uint64, name, kind str
 	if m, ok := s.matches[id]; ok {
 		return m
 	}
-	m := NewMatch(id, seed, inputDelay, s.spawn)
+	m := NewMatch(id, seed, inputDelay, s.spawn, s.cob)
 	m.SetInfo(name, kind)
 	go m.Run()
 	s.matches[id] = m

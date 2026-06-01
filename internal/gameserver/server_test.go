@@ -40,7 +40,7 @@ func sessionByID(s []SessionInfo, id string) (SessionInfo, bool) {
 // match carries its name/kind metadata, its player count tracks join/leave, and
 // its unit count reflects spawns once the authority ticks them in.
 func TestSessionListing(t *testing.T) {
-	s := NewServer(testSpawn, 1, 3)
+	s := NewServer(testSpawn, nil, 1, 3)
 	defer s.Stop()
 
 	// A freshly created match carries the metadata supplied at creation.
@@ -85,7 +85,7 @@ func TestSessionListing(t *testing.T) {
 // the grace is retired, a still-occupied match is spared no matter the clock,
 // and a freshly created (never-joined) match survives until the grace lapses.
 func TestIdleReaper(t *testing.T) {
-	s := NewServer(testSpawn, 1, 3)
+	s := NewServer(testSpawn, nil, 1, 3)
 	defer s.Stop()
 
 	// A just-created, never-joined match is idle but inside the grace window,
@@ -121,7 +121,7 @@ func TestIdleReaper(t *testing.T) {
 // TestExplicitLeave covers the voluntary-departure path: a leave message frees
 // the player slot and marks the match empty, so the reaper can then collect it.
 func TestExplicitLeave(t *testing.T) {
-	s := NewServer(testSpawn, 1, 3)
+	s := NewServer(testSpawn, nil, 1, 3)
 	defer s.Stop()
 
 	m := s.match("room", 1, 3, "", "sandbox")

@@ -33,6 +33,11 @@ class SandboxTabInstance {
     // Legacy boolean flag a handful of host helpers still read to
     // route pause/resume into scene.runtime rather than cob.runtime.
     tab.sandbox = true
+    // Join mode — when the welcome dialog created this tab for a hosted
+    // sandbox (New Hosted / Join Hosted), the spec carries the host
+    // websocket URL.  activateSandboxTab reads it off the tab to back
+    // the shared scene with a WsFrameSource.  Null for Local mode.
+    tab._joinUrl = this.spec.joinUrl || null
   }
 
   displayName() {

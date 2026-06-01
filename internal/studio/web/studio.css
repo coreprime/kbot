@@ -540,6 +540,66 @@ kbd {
   outline-offset: -8px;
 }
 
+/* ── Sandbox Join-Hosted picker ────────────────────────────────────── */
+/* Lives in the same ~400px footprint the card grid reserves so the
+   panel doesn't jump when switching between the mode menu and the
+   live-session list. */
+.welcome-join-head {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.welcome-link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+.welcome-link-btn:hover { text-decoration: underline; }
+.welcome-join-msg {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 40px;
+}
+.welcome-join-err { color: #ff8a7a; }
+.welcome-join-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.welcome-join-row {
+  width: 100%;
+  background: var(--bg-2);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  transition: border-color 100ms ease, background 100ms ease;
+}
+.welcome-join-row:hover,
+.welcome-join-row:focus-visible {
+  background: var(--bg-3);
+  border-color: #fff;
+  outline: none;
+}
+.welcome-join-name { font-size: 15px; font-weight: 600; }
+.welcome-join-meta { font-size: 12px; color: var(--muted); }
+
 /* ── Open-map dialog ───────────────────────────────────────────────── */
 /* The filter row needs flex-shrink: 0 — without it the column flex
    layout will gladly crush it to ~2 px to make room for the

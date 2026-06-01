@@ -35,6 +35,12 @@ type WeaponMeta struct {
 	Damage   fixed.Fixed // per shot
 	Present  bool
 
+	// Tolerance is the weapon's firing arc in TA-angle units (65536 = full
+	// turn); 0 = no arc constraint. Aircraft aim by pointing the whole airframe
+	// (no rotating turret), so the body heading must be within tolerance of the
+	// target bearing before the weapon may open fire.
+	Tolerance int32
+
 	// Ballistic / projectile fields. A weapon that names a 3DO model (and is
 	// not a beam) flies a simulated mesh through the projectile subsystem and
 	// applies its damage on detonation; everything else hits instantly at fire

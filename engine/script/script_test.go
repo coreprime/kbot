@@ -136,6 +136,47 @@ func TestSleepDelaysSubsequentOps(t *testing.T) {
 	}
 }
 
+// TestCobStateReportsStaticsAndThreads guards the inspector surface the
+// studio's Runtime / Script Variables panels read: a unit running a script that
+// has set a static var and parked on a SLEEP reports that global's value and a
+// live thread carrying the script name + remaining sleep.
+func TestCobStateReportsStaticsAndThreads(t *testing.T) {
+	p := prog(twoPieces(), 2, ScriptSource{
+		Name: "Idle",
+		Insts: []Instruction{
+			i1(scripting.OP_PUSH_IMMEDIATE, 7),
+			i1(scripting.OP_POP_STATIC, 1), // global_1 = 7
+			i1(scripting.OP_PUSH_IMMEDIATE, 100000),
+			i0(scripting.OP_SLEEP),
+		},
+	})
+	rt := NewRuntime(1)
+	u := rt.NewUnit(p, nil)
+	u.Start("Idle")
+	rt.Tick(25) // runs to the SLEEP and parks
+
+	st := u.CobState()
+	if len(st.Static) != 2 {
+		t.Fatalf("static count = %d, want 2", len(st.Static))
+	}
+	if st.Static[1] != 7 {
+		t.Fatalf("global_1 = %d, want 7", st.Static[1])
+	}
+	if len(st.Threads) != 1 {
+		t.Fatalf("thread count = %d, want 1", len(st.Threads))
+	}
+	th := st.Threads[0]
+	if th.Script != "Idle" {
+		t.Fatalf("thread script = %q, want Idle", th.Script)
+	}
+	if th.SleepMs <= 0 {
+		t.Fatalf("thread sleepMs = %d, want > 0 (parked on SLEEP)", th.SleepMs)
+	}
+	if th.ID == 0 {
+		t.Fatalf("thread id = 0, want a nonzero per-unit id")
+	}
+}
+
 func TestSignalKillsMaskedThread(t *testing.T) {
 	p := prog(twoPieces(), 0,
 		ScriptSource{

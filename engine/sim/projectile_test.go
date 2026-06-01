@@ -64,6 +64,44 @@ func TestProjectileReachesAndDamages(t *testing.T) {
 	}
 }
 
+// TestVLaunchAscendsThenHits models ARMMH's vertical-launch rocket: it must
+// climb a real ascent before pitching over, and its wide homing turn must not
+// leave it orbiting the target forever — it should detonate within its blast
+// radius. Guards the turn-radius units (no 65536/2π factor collapses the ascent
+// to one tick) and the steered-shot proximity capture.
+func TestVLaunchAscendsThenHits(t *testing.T) {
+	w := New(Config{Seed: 5})
+	wm := WeaponMeta{
+		Name:           "rocket",
+		Range:          fixed.FromInt(670),
+		Model:          "armmhmsl",
+		VelocityWU:     fixed.FromInt(400),
+		AccelerationWU: fixed.FromInt(40),
+		TurnRateAng:    24384,
+		AreaOfEffectWU: fixed.FromInt(80),
+		Damage:         fixed.FromInt(300),
+		VLaunch:        true,
+		Present:        true,
+	}
+	anchor := fixed.Vec3{}
+	target := fixed.Vec3{X: fixed.FromInt(300)}
+	p := w.makeProjectile(1, 2, 0, wm, anchor, target)
+
+	maxY := fixed.Zero
+	for i := 0; i < 400 && !p.dead; i++ {
+		p.stepProjectile(fixed.Zero)
+		if p.pos.Y > maxY {
+			maxY = p.pos.Y
+		}
+	}
+	if maxY < fixed.FromInt(100) {
+		t.Fatalf("vlaunch missile never ascended (peak Y = %v); ascent phase collapsed", maxY.Float())
+	}
+	if !p.dead || !p.hit {
+		t.Fatalf("vlaunch missile did not detonate on target (dead=%v hit=%v) — likely orbiting", p.dead, p.hit)
+	}
+}
+
 // TestProjectileDeterminism guards that the projectile subsystem keeps the
 // world bit-identical across identical runs — projectiles are render state but
 // the damage they apply mutates hashed unit state.

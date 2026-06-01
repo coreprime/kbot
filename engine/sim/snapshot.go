@@ -35,11 +35,21 @@ func (w *World) Snapshot() frame.Snapshot {
 		projos = make([]frame.ProjectileState, 0, len(w.projectiles))
 		for _, p := range w.projectiles {
 			projos = append(projos, frame.ProjectileState{
-				ID:      p.id,
-				Kind:    p.model,
-				Pos:     p.pos,
-				Heading: p.heading,
-				Pitch:   p.pitch,
+				ID:       p.id,
+				Kind:     p.model,
+				Pos:      p.pos,
+				Heading:  p.heading,
+				Pitch:    p.pitch,
+				OwnerID:  p.ownerID,
+				TargetID: p.targetID,
+				Weapon:   p.weapon,
+				Mode:     p.mode.String(),
+				Vel:      p.vel,
+				Origin:   p.origin,
+				Target:   p.target,
+				Speed:    p.speed,
+				AgeSec:   p.ageSec,
+				LifeSec:  p.lifeSec,
 			})
 		}
 	}

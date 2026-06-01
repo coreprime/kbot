@@ -170,10 +170,23 @@ function _statusText(t, killed) {
 }
 
 function ThreadRow({ t, killed, cob, unitId }) {
-  const inst = t.script.instructions[t.pc] || t.script.instructions[t.script.instructions.length - 1]
-  const off = inst ? `0x${inst.offset.toString(16)}` : '—'
+  // Offset display: the wasm COB adapter ships a flat byte `offset`; the legacy
+  // in-JS runtime instead exposes the full instruction list, so derive it from
+  // instructions[pc] when there's no flat offset.
+  const insts = t.script && t.script.instructions
+  const inst = insts ? (insts[t.pc] || insts[insts.length - 1]) : null
+  const off = (typeof t.offset === 'number')
+    ? `0x${t.offset.toString(16)}`
+    : (inst ? `0x${inst.offset.toString(16)}` : '—')
+  // The disassembly modal needs the in-JS program; the wasm adapter (unit._wasm)
+  // can't source it, so row clicks are inert there (the panel stays read-only).
+  const debuggable = cob && cob.unit && !cob.unit._wasm
+  // Killing a thread is independent of the modal — the wasm adapter routes
+  // killThreadById into the engine, so the per-row kill button shows whenever
+  // the adapter can terminate threads, even when the disassembly modal can't.
+  const killable = cob && cob.unit && typeof cob.unit.killThreadById === 'function'
   const onRowClick = (e) => {
-    if (killed || !cob) return
+    if (killed || !debuggable) return
     if (e.target.closest('.mv-cob-thread-kill')) return
     hostBridge.openThreadCodeModal(cob, t)
   }
@@ -210,7 +223,7 @@ function ThreadRow({ t, killed, cob, unitId }) {
       <div class="mv-cob-thread-name">
         <span>${t.script.name}</span>
         <span class="mv-cob-thread-pc">#${t.pc} @ ${off}</span>
-        ${(!killed && cob) ? html`
+        ${(!killed && killable) ? html`
           <button class="mv-cob-thread-kill"
                   title=${`Terminate this ${t.script.name} thread`}
                   onClick=${onKill}
