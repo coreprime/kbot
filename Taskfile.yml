@@ -16,7 +16,14 @@ tasks:
     cmds:
       - task: build-web
       - task: build-studio-web
+      - task: build-wasm
       - task: build-kbot
+
+  build-wasm:
+    desc: Compile the deterministic engine core to wasm for the studio web client
+    cmds:
+      - GOOS=js GOARCH=wasm go build -o internal/studio/web/engine/engine.wasm ./cmd/engine-wasm
+      - cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" internal/studio/web/engine/wasm_exec.js
 
   build-kbot:
     desc: Build the kbot CLI

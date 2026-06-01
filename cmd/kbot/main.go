@@ -28,6 +28,7 @@ Sub-commands operate on specific file formats:
   zrb      Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp      Run kbot as a Model Context Protocol server
   studio   Web-based map editor (KBot Studio)
+  host     Authoritative multiplayer game server
   document Regenerate the TA reference catalogue (units, weapons, build tree)`,
 		Version: Version,
 	}
@@ -47,6 +48,7 @@ Sub-commands operate on specific file formats:
 		newMountCommand(),
 		newMCPCommand(),
 		newStudioCommand(),
+		newHostCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

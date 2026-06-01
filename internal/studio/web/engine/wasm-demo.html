@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KBot Engine — WASM sandbox</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0d1117;
+      color: #c9d1d9;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+    }
+    h1 { font-size: 15px; font-weight: 600; margin: 0; }
+    p.lead { margin: 0; max-width: 640px; text-align: center; color: #8b949e; }
+    #mode { font-size: 12px; color: #8b949e; }
+    #mode b { color: #58a6ff; }
+    #stage {
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      background: #010409;
+      cursor: crosshair;
+      touch-action: none;
+    }
+    #hud {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #hud span b { color: #58a6ff; font-weight: 600; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    button {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: #30363d; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #status { min-height: 18px; }
+    #status.bad { color: #f85149; }
+    #status.good { color: #3fb950; }
+    #err { color: #f85149; max-width: 640px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>KBot Engine — WASM sandbox</h1>
+  <p class="lead">
+    The deterministic Go engine compiled to WebAssembly. In local mode it runs
+    in-process via <code>WasmFrameSource</code>. Append
+    <code>?host=ws://localhost:8099/ws</code> to drive it through
+    <code>WsFrameSource</code> against <code>kbot host</code> — open two windows
+    and watch a single authoritative match stay in lockstep across both.
+  </p>
+  <div id="mode"></div>
+  <canvas id="stage" width="640" height="640"></canvas>
+  <div id="hud">
+    <span>tick <b id="tick">0</b></span>
+    <span>units <b id="count">0</b></span>
+    <span>hash <b id="hash">—</b></span>
+  </div>
+  <div class="controls">
+    <button id="spawn">Spawn unit</button>
+    <button id="toggle">Pause</button>
+    <button id="reset">Reset</button>
+  </div>
+  <div id="status"></div>
+  <div id="err"></div>
+
+  <script type="module">
+    import { WasmFrameSource } from './net/wasm-source.js'
+    import { WsFrameSource } from './net/ws-source.js'
+
+    // World is laid out in TA world units; the demo spans a fixed square that
+    // we letterbox into the canvas. Keeping the mapping explicit means the
+    // click->order round-trip lands where the cursor is.
+    const WORLD = 1000
+    const canvas = document.getElementById('stage')
+    const ctx = canvas.getContext('2d')
+    const errEl = document.getElementById('err')
+    const statusEl = document.getElementById('status')
+    const spawnBtn = document.getElementById('spawn')
+
+    const scale = canvas.width / WORLD
+    const toScreen = (x, z) => [x * scale, z * scale]
+    const toWorld = (px, pz) => [px / scale, pz / scale]
+
+    // The scout meta. In networked mode these exact floats must match the
+    // server's DemoSpawnFunc (gameserver/demo.go) so the fixed-point unit the
+    // command stream spawns is bit-identical on every client and the authority.
+    const SCOUT = {
+      name: 'scout',
+      canMove: true,
+      maxVelocity: 1.6,
+      turnRate: 1000,
+      acceleration: 0.12,
+      brakeRate: 0.25,
+      weapons: [],
+    }
+
+    const hostUrl = new URLSearchParams(location.search).get('host')
+    const networked = !!hostUrl
+    document.getElementById('mode').innerHTML = networked
+      ? `mode <b>networked</b> — ${hostUrl}`
+      : `mode <b>local</b> — single in-process engine`
+
+    let source = null
+    let scoutId = -1        // local mode: the unit we steer
+    let movableIds = []     // current unit ids, refreshed each frame
+    let running = true
+    let timer = null
+
+    function setStatus(text, cls = '') {
+      statusEl.textContent = text
+      statusEl.className = cls
+    }
+
+    async function boot() {
+      try {
+        movableIds = []
+        lastSnap = null
+        if (networked) {
+          await bootNetworked()
+        } else {
+          await bootLocal()
+        }
+        start()
+      } catch (e) {
+        errEl.textContent = `failed to start engine: ${e && e.message ? e.message : e}`
+      }
+    }
+
+    async function bootLocal() {
+      source = new WasmFrameSource({ seed: 7, inputDelay: 0 })
+      await source.ready()
+      scoutId = source.addUnit({ name: SCOUT.name, meta: SCOUT, x: 200, z: 200, side: 0 })
+      source.addUnit({ name: 'marker', meta: { name: 'marker', canMove: false, weapons: [] }, x: 700, z: 500, side: 1 })
+      spawnBtn.disabled = true
+      setStatus('local engine ready')
+    }
+
+    async function bootNetworked() {
+      // The meta map lets the local prediction engine resolve the "scout"
+      // units the authoritative command stream introduces by name.
+      source = new WsFrameSource({ url: hostUrl, metas: { scout: SCOUT } })
+      source.on('desync', (d) => setStatus(`desync at tick ${d.tick} (local ${d.local} vs authority ${d.authority})`, 'bad'))
+      source.on('disconnect', () => setStatus('disconnected from host', 'bad'))
+      spawnBtn.disabled = false
+      setStatus('connecting…')
+      const accept = await source.connect()
+      setStatus(`joined as player ${accept.playerSlot} — open another window and click "Spawn unit"`, 'good')
+    }
+
+    let lastSnap = null
+
+    function start() {
+      if (timer) return
+      // Local mode steps at the engine's native 40 Hz. Networked mode polls
+      // faster and steps only enough to track the server clock, so every window
+      // converges on the same authoritative tick instead of free-running.
+      timer = setInterval(tickFrame, networked ? 1000 / 60 : 25)
+    }
+
+    function stop() {
+      if (!timer) return
+      clearInterval(timer)
+      timer = null
+    }
+
+    function tickFrame() {
+      if (networked) {
+        const target = source.serverTick
+        let steps = 0
+        // Catch the local engine up to the authority, bounded so a backgrounded
+        // tab that fell far behind converges over a few frames rather than
+        // freezing in a huge catch-up loop.
+        while (source.tick < target && steps < 16) {
+          lastSnap = source.step()
+          steps++
+        }
+        if (!lastSnap) return
+        render(lastSnap)
+      } else {
+        render(source.step())
+      }
+    }
+
+    function render(snap) {
+      movableIds = snap.units.map((u) => u.id)
+      draw(snap)
+      document.getElementById('tick').textContent = String(snap.tick)
+      document.getElementById('count').textContent = String(snap.units.length)
+      const h = source.hash()
+      document.getElementById('hash').textContent = h == null ? '—' : h
+    }
+
+    function draw(snap) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.strokeStyle = '#161b22'
+      ctx.lineWidth = 1
+      for (let g = 0; g <= WORLD; g += 100) {
+        const [p] = toScreen(g, 0)
+        ctx.beginPath()
+        ctx.moveTo(p, 0)
+        ctx.lineTo(p, canvas.height)
+        ctx.moveTo(0, p)
+        ctx.lineTo(canvas.width, p)
+        ctx.stroke()
+      }
+      for (const u of snap.units) {
+        const [sx, sz] = toScreen(u.x, u.z)
+        ctx.fillStyle = u.id === scoutId ? '#58a6ff' : '#d29922'
+        ctx.beginPath()
+        ctx.arc(sx, sz, 7, 0, Math.PI * 2)
+        ctx.fill()
+        // Heading whisker so we can see units turn toward their target.
+        const hx = sx + Math.cos(u.headingRad) * 14
+        const hz = sz + Math.sin(u.headingRad) * 14
+        ctx.strokeStyle = '#c9d1d9'
+        ctx.beginPath()
+        ctx.moveTo(sx, sz)
+        ctx.lineTo(hx, hz)
+        ctx.stroke()
+      }
+    }
+
+    canvas.addEventListener('pointerdown', (ev) => {
+      if (!source) return
+      const rect = canvas.getBoundingClientRect()
+      const px = (ev.clientX - rect.left) * (canvas.width / rect.width)
+      const pz = (ev.clientY - rect.top) * (canvas.height / rect.height)
+      const [wx, wz] = toWorld(px, pz)
+      const ids = networked ? movableIds : [scoutId]
+      if (ids.length) source.move(ids, wx, wz)
+    })
+
+    spawnBtn.addEventListener('click', () => {
+      if (!networked || !source) return
+      // Position is chosen here and broadcast verbatim, so it spawns at the
+      // same spot on every connected client.
+      source.spawn({ name: 'scout', x: 100 + Math.random() * 800, z: 100 + Math.random() * 800 })
+    })
+
+    document.getElementById('toggle').addEventListener('click', (ev) => {
+      running = !running
+      if (running) start()
+      else stop()
+      ev.target.textContent = running ? 'Pause' : 'Resume'
+    })
+
+    document.getElementById('reset').addEventListener('click', async () => {
+      stop()
+      if (source) source.dispose()
+      running = true
+      document.getElementById('toggle').textContent = 'Pause'
+      await boot()
+    })
+
+    boot()
+  </script>
+</body>
+</html>

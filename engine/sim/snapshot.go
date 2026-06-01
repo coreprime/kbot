@@ -1,0 +1,74 @@
+package sim
+
+import "github.com/coreprime/kbot/engine/frame"
+
+// Snapshot builds the render snapshot for the current tick and drains the
+// events accumulated since the last call. The local renderer consumes this; it
+// never crosses the wire.
+func (w *World) Snapshot() frame.Snapshot {
+	units := make([]frame.UnitState, 0, len(w.order))
+	for _, id := range w.order {
+		u := w.units[id]
+		if u == nil {
+			continue
+		}
+		var pieces []frame.PieceState
+		if u.binding != nil {
+			pieces = u.binding.Pieces()
+		}
+		units = append(units, frame.UnitState{
+			ID:           u.ID,
+			Name:         u.Name,
+			Side:         u.Side,
+			Pos:          u.Pos(),
+			Heading:      int32(u.loco.Heading.Int()),
+			Health:       u.Health,
+			Dead:         u.Dead,
+			BuildPercent: u.BuildPercent,
+			IsMoving:     u.IsMoving,
+			Pieces:       pieces,
+		})
+	}
+	evts := w.events
+	w.events = nil
+	return frame.Snapshot{
+		Tick:   w.tick,
+		Units:  units,
+		Events: evts,
+	}
+}
+
+// Hash returns a deterministic digest of the authoritative unit state. The
+// server broadcasts it periodically and clients compare against their own to
+// detect prediction divergence. Iteration follows the stable insertion order.
+func (w *World) Hash() uint64 {
+	const (
+		offset uint64 = 1469598103934665603
+		prime  uint64 = 1099511628211
+	)
+	h := offset
+	mix := func(v uint64) {
+		for i := 0; i < 8; i++ {
+			h ^= v & 0xff
+			h *= prime
+			v >>= 8
+		}
+	}
+	mix(w.tick)
+	for _, id := range w.order {
+		u := w.units[id]
+		if u == nil {
+			continue
+		}
+		mix(uint64(id))
+		mix(uint64(u.loco.Pos.X))
+		mix(uint64(u.loco.Pos.Z))
+		mix(uint64(u.PosY))
+		mix(uint64(u.loco.Heading))
+		mix(uint64(u.Health))
+		if u.Dead {
+			mix(1)
+		}
+	}
+	return h
+}
