@@ -4,8 +4,18 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/coreprime/kbot/engine/sim"
+)
+
+const (
+	// idleGrace is how long a match may sit with no connected clients before
+	// the reaper retires it. It is long enough to survive a brief reconnect
+	// (a page reload, a flaky network) without orphaning abandoned sessions.
+	idleGrace = 30 * time.Second
+	// reapInterval is how often the reaper scans for idle matches.
+	reapInterval = 10 * time.Second
 )
 
 // Server hosts one or more matches and routes websocket upgrades to them. It
@@ -16,17 +26,24 @@ type Server struct {
 	spawn      sim.SpawnFunc
 	seed       uint32
 	inputDelay uint64
+
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 // NewServer creates an empty server that builds matches with the given spawn
-// provider, seed and input delay.
+// provider, seed and input delay. It starts a background reaper that retires
+// matches left empty past the idle grace.
 func NewServer(spawn sim.SpawnFunc, seed uint32, inputDelay uint64) *Server {
-	return &Server{
+	s := &Server{
 		matches:    make(map[string]*Match),
 		spawn:      spawn,
 		seed:       seed,
 		inputDelay: inputDelay,
+		done:       make(chan struct{}),
 	}
+	go s.reapLoop()
+	return s
 }
 
 // Match returns the match with the given id, creating and starting it on first
@@ -78,8 +95,38 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.ServeWS(w, r)
 }
 
-// Stop ends every running match.
+// reapLoop scans for idle matches on a fixed interval until the server stops.
+func (s *Server) reapLoop() {
+	ticker := time.NewTicker(reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.reapIdle(time.Now())
+		}
+	}
+}
+
+// reapIdle stops and removes every match that has sat empty since before
+// now-idleGrace. A match reports the moment it last emptied via emptySince
+// (zero while occupied), so an occupied match is never reaped.
+func (s *Server) reapIdle(now time.Time) {
+	cutoff := now.Add(-idleGrace).UnixNano()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, m := range s.matches {
+		if since := m.emptySince.Load(); since != 0 && since <= cutoff {
+			m.Stop()
+			delete(s.matches, id)
+		}
+	}
+}
+
+// Stop ends every running match and halts the reaper.
 func (s *Server) Stop() {
+	s.doneOnce.Do(func() { close(s.done) })
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, m := range s.matches {

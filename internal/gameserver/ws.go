@@ -3,9 +3,20 @@ package gameserver
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coreprime/kbot/engine/wire"
+)
+
+const (
+	// heartbeatInterval is how often the server pings an idle client. Browsers
+	// answer ping control frames automatically, so this detects a vanished tab
+	// or a dropped connection without any application-level cooperation.
+	heartbeatInterval = 15 * time.Second
+	// heartbeatTimeout is how long a single ping waits for its pong before the
+	// connection is judged dead.
+	heartbeatTimeout = 10 * time.Second
 )
 
 // wsConn adapts a coder/websocket connection to the Conn interface the match
@@ -46,7 +57,35 @@ func (m *Match) ServeWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	ctx := r.Context()
+	// A cancelable context lets the heartbeat tear down a dead connection: when
+	// a ping goes unanswered it cancels, which unblocks the read loop's Recv
+	// and triggers the match's unregister/leave path.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	m.AddConn(&wsConn{ws: ws, ctx: ctx})
+	go heartbeat(ctx, cancel, ws)
 	<-ctx.Done()
+	_ = ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// heartbeat pings the client on an interval and cancels the connection context
+// if a ping is not answered within the timeout, so a client that vanishes
+// without a clean close is detected and its slot freed.
+func heartbeat(ctx context.Context, cancel context.CancelFunc, ws *websocket.Conn) {
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pctx, pcancel := context.WithTimeout(ctx, heartbeatTimeout)
+			err := ws.Ping(pctx)
+			pcancel()
+			if err != nil {
+				cancel()
+				return
+			}
+		}
+	}
 }

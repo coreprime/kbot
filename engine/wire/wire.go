@@ -23,6 +23,10 @@ const (
 	MsgSnapshot    MsgType = "snapshot"
 	MsgHash        MsgType = "hash"
 	MsgAck         MsgType = "ack"
+	// MsgLeave lets a client relinquish its slot without dropping the socket,
+	// so the authority can free the seat and reap an emptied match promptly
+	// rather than waiting for the transport to notice the disconnect.
+	MsgLeave MsgType = "leave"
 )
 
 // ClientMsg is anything a client sends to the server.

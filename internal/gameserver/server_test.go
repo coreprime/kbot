@@ -80,3 +80,70 @@ func TestSessionListing(t *testing.T) {
 		t.Fatal("second match not listed")
 	}
 }
+
+// TestIdleReaper covers the lifecycle reaper: a match that has sat empty past
+// the grace is retired, a still-occupied match is spared no matter the clock,
+// and a freshly created (never-joined) match survives until the grace lapses.
+func TestIdleReaper(t *testing.T) {
+	s := NewServer(testSpawn, 1, 3)
+	defer s.Stop()
+
+	// A just-created, never-joined match is idle but inside the grace window,
+	// so an immediate reap leaves it alone.
+	idle := s.match("idle", 1, 3, "", "sandbox")
+	s.reapIdle(time.Now())
+	if _, ok := sessionByID(s.Sessions(), "idle"); !ok {
+		t.Fatal("idle match reaped before grace elapsed")
+	}
+
+	// Backdate its empty timestamp past the grace and it is collected.
+	idle.emptySince.Store(time.Now().Add(-2 * idleGrace).UnixNano())
+	s.reapIdle(time.Now())
+	if _, ok := sessionByID(s.Sessions(), "idle"); ok {
+		t.Fatal("idle match not reaped after grace elapsed")
+	}
+
+	// An occupied match is never reaped, even with the clock pushed far ahead.
+	busy := s.match("busy", 1, 3, "", "sandbox")
+	lb := newLoopback()
+	busy.AddConn(serverConn{lb: lb})
+	lb.toServer <- wire.ClientMsg{Type: wire.MsgJoin, Join: &wire.JoinReq{MatchID: "busy"}}
+	waitFor(t, "busy match to register its player", func() bool {
+		si, _ := sessionByID(s.Sessions(), "busy")
+		return si.Players == 1
+	})
+	s.reapIdle(time.Now().Add(time.Hour))
+	if _, ok := sessionByID(s.Sessions(), "busy"); !ok {
+		t.Fatal("occupied match was reaped")
+	}
+}
+
+// TestExplicitLeave covers the voluntary-departure path: a leave message frees
+// the player slot and marks the match empty, so the reaper can then collect it.
+func TestExplicitLeave(t *testing.T) {
+	s := NewServer(testSpawn, 1, 3)
+	defer s.Stop()
+
+	m := s.match("room", 1, 3, "", "sandbox")
+	lb := newLoopback()
+	m.AddConn(serverConn{lb: lb})
+	lb.toServer <- wire.ClientMsg{Type: wire.MsgJoin, Join: &wire.JoinReq{MatchID: "room"}}
+	waitFor(t, "player count to reach 1", func() bool {
+		si, _ := sessionByID(s.Sessions(), "room")
+		return si.Players == 1
+	})
+
+	// Leaving drops the slot back to zero.
+	lb.toServer <- wire.ClientMsg{Type: wire.MsgLeave}
+	waitFor(t, "player count to fall to 0", func() bool {
+		si, _ := sessionByID(s.Sessions(), "room")
+		return si.Players == 0
+	})
+
+	// And the now-empty match is eligible for reaping once the grace lapses.
+	m.emptySince.Store(time.Now().Add(-2 * idleGrace).UnixNano())
+	s.reapIdle(time.Now())
+	if _, ok := sessionByID(s.Sessions(), "room"); ok {
+		t.Fatal("emptied match not reaped after leave + grace")
+	}
+}

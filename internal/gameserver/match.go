@@ -8,6 +8,7 @@
 package gameserver
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,10 +53,18 @@ type Match struct {
 	players   atomic.Int64
 	units     atomic.Int64
 
+	// emptySince is the unix-nano timestamp at which the match last held zero
+	// connected clients, or 0 while occupied. The server's reaper reads it to
+	// retire matches that have sat empty past the idle grace. It is written on
+	// the authority goroutine (and at creation, while still single-threaded)
+	// and read by the reaper, so it crosses goroutines through an atomic.
+	emptySince atomic.Int64
+
 	register   chan *client
 	unregister chan *client
 	orders     chan clientOrder
 	quit       chan struct{}
+	stopOnce   sync.Once
 
 	clients  map[*client]struct{}
 	nextSlot int
@@ -99,11 +108,12 @@ type clientOrder struct {
 // NewMatch creates a match with a fresh world and the given spawn provider.
 func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc) *Match {
 	w := sim.New(sim.Config{Seed: seed, Spawn: spawn})
-	return &Match{
+	now := time.Now()
+	m := &Match{
 		id:         id,
 		seed:       seed,
 		inputDelay: inputDelay,
-		createdAt:  time.Now(),
+		createdAt:  now,
 		session:    session.New(session.Config{World: w, InputDelay: inputDelay}),
 		register:   make(chan *client),
 		unregister: make(chan *client),
@@ -111,6 +121,10 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc) *M
 		quit:       make(chan struct{}),
 		clients:    make(map[*client]struct{}),
 	}
+	// A match is born empty; mark it idle from creation so one that is created
+	// (e.g. by an HTTP upgrade) but never actually joined is still reaped.
+	m.emptySince.Store(now.UnixNano())
+	return m
 }
 
 // Run drives the authority loop until Stop. It must run on its own goroutine;
@@ -134,14 +148,16 @@ func (m *Match) Run() {
 	}
 }
 
-// Stop ends the match loop.
-func (m *Match) Stop() { close(m.quit) }
+// Stop ends the match loop. It is safe to call more than once: the server's
+// reaper and an explicit Server.Stop can both target the same match.
+func (m *Match) Stop() { m.stopOnce.Do(func() { close(m.quit) }) }
 
 func (m *Match) onJoin(c *client) {
 	c.slot = m.nextSlot
 	m.nextSlot++
 	m.clients[c] = struct{}{}
 	m.players.Store(int64(len(m.clients)))
+	m.emptySince.Store(0)
 	go c.writePump()
 	c.send(wire.ServerMsg{Type: wire.MsgJoinAccept, JoinAccept: &wire.JoinAccept{
 		PlayerSlot: c.slot,
@@ -166,6 +182,9 @@ func (m *Match) onLeave(c *client) {
 	if _, ok := m.clients[c]; ok {
 		delete(m.clients, c)
 		m.players.Store(int64(len(m.clients)))
+		if len(m.clients) == 0 {
+			m.emptySince.Store(time.Now().UnixNano())
+		}
 		close(c.out)
 	}
 }
@@ -245,6 +264,13 @@ func (c *client) readPump(m *Match) {
 			if registered {
 				m.orders <- clientOrder{from: c, ord: msg}
 			}
+		case wire.MsgLeave:
+			// Voluntary departure: free the slot and end the read loop so the
+			// match can be reaped without waiting on a transport timeout.
+			if registered {
+				m.unregister <- c
+			}
+			return
 		case wire.MsgAck:
 			// flow control hook; no-op for now.
 		}
