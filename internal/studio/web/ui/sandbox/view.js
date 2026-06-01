@@ -1331,6 +1331,9 @@ export class SandboxView {
         buildPercent: u.buildPercent,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
+        // Inspector hover highlight — the Sync Diagnostics panel flags the
+        // unit its hovered row points at, so the renderer outlines it.
+        highlight: this.scene.isUnitHighlighted ? this.scene.isUnitHighlighted(u.id) : false,
         // id + meta let the renderer apply the per-unit locomotion pose
         // overlay (hovercraft wobble, aircraft bank) in the sandbox, keyed by
         // a stable id with the unit's FBI flags.
@@ -1413,6 +1416,9 @@ export class SandboxView {
           pitchRad:   -proj.pitch,
         },
         id: 'proj-' + proj.id,
+        // Inspector hover highlight — the Sync Diagnostics Projectiles tab
+        // outlines the shot its hovered row points at.
+        highlight: this.scene.isProjoHighlighted ? this.scene.isProjoHighlighted(proj.id) : false,
         // Flagged so the LOD classifier divides its thresholds by
         // PROJECTILE_LOD_MULTIPLIER for this entity — bombs / missiles have
         // a much smaller bounding sphere than the units that fire them, so

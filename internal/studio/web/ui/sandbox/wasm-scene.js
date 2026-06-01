@@ -194,6 +194,11 @@ export class WasmSandboxScene {
     this._projOffsets = new Map()
     // Selection — pure UI state.
     this.selected = new Set()
+    // Inspector hover highlight — transient ids (units + projectiles) a panel
+    // row is pointing at, so the renderer can trace their silhouette. Pure UI
+    // state, cleared the moment the cursor leaves the row.
+    this._highlightUnits = new Set()
+    this._highlightProjos = new Set()
     this._spawnCount = 0
     this._silenced = false
     // Renderer-owned gravity; the ballistic visuals read it.
@@ -755,6 +760,20 @@ export class WasmSandboxScene {
   selectAdd(id) { if (id != null && this._units.has(id)) this.selected.add(id) }
   selectClear() { this.selected.clear() }
   isSelected(id) { return this.selected.has(id) }
+
+  // ── Inspector hover highlight ─────────────────────────────────────
+  //
+  // setHighlight replaces the highlighted-id sets (unit ids + projectile
+  // ids) the entity builder reads to flag the renderer's bright-outline
+  // pass.  Called from the host bridge as a panel row is hovered / un-
+  // hovered (empty arrays clear it).  The sandbox renderer runs a live RAF
+  // loop, so the entity builder picks the new set up on the next frame.
+  setHighlight(unitIds, projIds) {
+    this._highlightUnits = new Set((unitIds || []).map((n) => n | 0))
+    this._highlightProjos = new Set((projIds || []).map((n) => n | 0))
+  }
+  isUnitHighlighted(id) { return this._highlightUnits.size > 0 && this._highlightUnits.has(id | 0) }
+  isProjoHighlighted(id) { return this._highlightProjos.size > 0 && this._highlightProjos.has(id | 0) }
 
   // ── Audio ─────────────────────────────────────────────────────────
 

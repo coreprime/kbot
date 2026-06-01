@@ -2028,6 +2028,24 @@ export class ModelRenderer {
         this.#renderMain(this.renderMode === 'flat')
         this._lodHideFlares = false
         this._lightingTierCheap = false
+        // Inspector hover highlight — when a panel row points at this
+        // entity (unit or projectile), trace its silhouette in a bright
+        // wireframe so the user can locate it on the field.  Drawn here,
+        // while this.model + _modelMatrix already point at the entity, with
+        // depth-write off so the outline floats over the hull.
+        if (ent.highlight) {
+          const g = this.gl
+          g.enable(g.BLEND)
+          g.blendFunc(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA)
+          g.disable(g.DEPTH_TEST)
+          g.depthMask(false)
+          const prevW = this.wireframeWidth
+          this.wireframeWidth = 2
+          this.#renderWireframe([1.0, 0.85, 0.2, 0.95])
+          this.wireframeWidth = prevW
+          g.depthMask(true)
+          g.enable(g.DEPTH_TEST)
+        }
       }
       // Restore globals for subsequent passes (wireframe overlay,
       // particles, etc.) and for any post-frame code that reads

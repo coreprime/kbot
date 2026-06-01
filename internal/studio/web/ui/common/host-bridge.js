@@ -49,6 +49,10 @@ const _noopBridge = {
   // resolve with { server, client } for a field-by-field drift comparison,
   // without disturbing local prediction. Routes to the join scene's diagnose().
   diagnose:              () => Promise.reject(new Error('no authority')),
+  // Sync-diagnostics hover — highlight the given unit / projectile ids on the
+  // active renderer so the user can locate the row's object in the scene.
+  // Pass empty arrays to clear. Routes to the join scene's setHighlight().
+  highlightEntities:     (_unitIds, _projIds) => {},
 }
 
 // Single live bridge object — overwritten by configureHostBridge.

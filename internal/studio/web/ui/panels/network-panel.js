@@ -20,11 +20,17 @@
 import { useState, useCallback } from 'preact/hooks'
 import { htm as html } from '/ui/common/htm-bind.js'
 import { FloatingPanel } from '/ui/common/floating-panel.js'
+import { AccordionSection } from '/ui/common/accordion-section.js'
+import { TabStrip } from '/ui/common/tab-strip.js'
 import { panelSignals } from '/ui/common/panel-store.js'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 
 const PANEL_ID = 'mv-inspector-network'
+// The Sync Diagnostics drift comparison rides in its own floating panel so it
+// inherits the standard inspector chrome (drag, resize, persisted geometry)
+// rather than the old hand-rolled modal backdrop.
+const DIAG_PANEL_ID = 'mv-inspector-sync-diag'
 
 const _stopProp = (e) => e.stopPropagation()
 
@@ -110,9 +116,10 @@ function BandwidthGraph({ label, series, color, title }) {
   const peak = series.reduce((m, v) => (v > m ? v : m), 0)
   return html`
     <div class="mv-net-bw" title=${title}>
-      <div class="mv-net-bw-head">
-        <span class="mv-net-bw-label" style=${`color:${color}`}>${label}</span>
-        <span class="mv-net-bw-vals">${_rate(cur)} <span class="mv-net-bw-peak">peak ${_rate(peak)}</span></span>
+      <div class="mv-net-bw-label" style=${`color:${color}`}>${label}</div>
+      <div class="mv-net-bw-vals">
+        <span class="mv-net-bw-cur">${_rate(cur)}</span>
+        <span class="mv-net-bw-peak">peak ${_rate(peak)}</span>
       </div>
       <${Sparkline} values=${series} color=${color} />
     </div>
@@ -225,35 +232,68 @@ function _buildGroups(fields, srvArr, cliArr, diffOnly) {
   return groups
 }
 
-function DriftTable({ groups }) {
+// _syncStats counts, for one entity category, how many of the authority's
+// items the client matches exactly (every field in agreement) against the total
+// the server reports — the "X/Y" a section header surfaces so the user can see
+// at a glance how much of the world is in sync.
+function _syncStats(fields, srvArr, cliArr) {
+  const cli = _indexById(cliArr)
+  const total = (srvArr || []).length
+  let synced = 0
+  for (const s of srvArr || []) {
+    const c = cli.get(s.id)
+    if (!c) continue
+    const { anyDiff } = _diffRows(fields, s, c, false)
+    if (!anyDiff) synced++
+  }
+  return { synced, total }
+}
+
+function DriftTable({ groups, kind }) {
   if (groups.length === 0) {
     return html`<div class="mv-net-diff-empty">No differences in this category.</div>`
   }
+  // Hover over a group highlights its object on the renderer so the user can
+  // locate it in the scene; leaving clears the highlight. Units route through
+  // the unit-id channel, projectiles through the projectile-id channel.
+  const onEnter = (id) => () => hostBridge.highlightEntities(
+    kind === 'unit' ? [id] : [],
+    kind === 'proj' ? [id] : [],
+  )
+  const onLeave = () => hostBridge.highlightEntities([], [])
   return html`
     <div class="mv-net-diff-list">
       ${groups.map((g) => html`
-        <div class=${`mv-net-diff-group${g.differs ? ' is-diff' : ''}`} key=${g.id}>
-          <div class="mv-net-diff-group-head">
-            <span class="mv-net-diff-id">#${g.id}</span>
-            <span class="mv-net-diff-name">${g.name}</span>
-            ${g.missingSide ? html`<span class="mv-net-diff-missing">missing on ${g.missingSide}</span>` : null}
-          </div>
-          ${g.rows.length ? html`
-            <table class="mv-net-diff-table">
-              <thead>
-                <tr><th>Field</th><th>Server</th><th>Client</th></tr>
-              </thead>
-              <tbody>
-                ${g.rows.map((r) => html`
-                  <tr class=${r.differs ? 'is-diff' : ''} key=${r.key}>
-                    <td>${r.label}${r.hashed ? html`<span class="mv-net-diff-hashed" title="Part of the desync hash — drift here causes a confirmed desync.">#</span>` : null}</td>
-                    <td>${_fmt(r.s)}</td>
-                    <td>${_fmt(r.c)}</td>
-                  </tr>
-                `)}
-              </tbody>
-            </table>
-          ` : null}
+        <div class="mv-net-diff-acc" key=${g.id}
+             onMouseEnter=${onEnter(g.id)} onMouseLeave=${onLeave}>
+          <${AccordionSection}
+            id=${`sync-diag-${kind}-${g.id}`}
+            defaultOpen=${g.differs}
+            count=${g.differs ? (g.missingSide ? g.missingSide : g.rows.filter((r) => r.differs).length || null) : null}
+            title=${html`
+              <span class=${`mv-net-diff-title${g.differs ? ' is-diff' : ''}`}>
+                <span class="mv-net-diff-id">#${g.id}</span>
+                <span class="mv-net-diff-name">${g.name}</span>
+                ${g.missingSide ? html`<span class="mv-net-diff-missing">missing on ${g.missingSide}</span>` : null}
+              </span>
+            `}>
+            ${g.rows.length ? html`
+              <table class="mv-net-diff-table">
+                <thead>
+                  <tr><th>Field</th><th>Server</th><th>Client</th></tr>
+                </thead>
+                <tbody>
+                  ${g.rows.map((r) => html`
+                    <tr class=${r.differs ? 'is-diff' : ''} key=${r.key}>
+                      <td>${r.label}${r.hashed ? html`<span class="mv-net-diff-hashed" title="Part of the desync hash — drift here causes a confirmed desync.">#</span>` : null}</td>
+                      <td>${_fmt(r.s)}</td>
+                      <td>${_fmt(r.c)}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            ` : html`<div class="mv-net-diff-empty">No field differences.</div>`}
+          <//>
         </div>
       `)}
     </div>
@@ -268,11 +308,15 @@ function DiagnoseModal({ result, error, loading, onClose }) {
   const cli = result && result.client
   const unitGroups = (srv && cli) ? _buildGroups(UNIT_FIELDS, srv.units, cli.units, diffOnly) : []
   const projGroups = (srv && cli) ? _buildGroups(PROJ_FIELDS, srv.projectiles, cli.projectiles, diffOnly) : []
+  // X/Y per section — synced (fully-matching) items over the authority total.
+  const unitStat = (srv && cli) ? _syncStats(UNIT_FIELDS, srv.units, cli.units) : { synced: 0, total: 0 }
+  const projStat = (srv && cli) ? _syncStats(PROJ_FIELDS, srv.projectiles, cli.projectiles) : { synced: 0, total: 0 }
 
-  const tabBtn = (id, label) => html`
-    <button class=${`mv-net-tab${tab === id ? ' is-active' : ''}`}
-            onClick=${(e) => { _stopProp(e); setTab(id) }}>${label}</button>
-  `
+  const tabs = [
+    { id: 'summary', label: 'Summary' },
+    { id: 'units', label: `Units ${unitStat.synced}/${unitStat.total}` },
+    { id: 'projectiles', label: `Projectiles ${projStat.synced}/${projStat.total}` },
+  ]
 
   let body
   if (loading) {
@@ -303,34 +347,34 @@ function DiagnoseModal({ result, error, loading, onClose }) {
       </div>
     `
   } else if (tab === 'units') {
-    body = html`<${DriftTable} groups=${unitGroups} />`
+    body = html`<${DriftTable} groups=${unitGroups} kind="unit" />`
   } else {
-    body = html`<${DriftTable} groups=${projGroups} />`
+    body = html`<${DriftTable} groups=${projGroups} kind="proj" />`
   }
 
+  const diffOnlyToggle = html`
+    <label class="mv-net-diffonly" title="Hide rows and entities that match the authority."
+           onMouseDown=${_stopProp} onPointerDown=${_stopProp}>
+      <input type="checkbox" checked=${diffOnly}
+             onChange=${(e) => { _stopProp(e); setDiffOnly(!!e.target.checked) }} />
+      Diffs only
+    </label>
+  `
+
   return html`
-    <div class="mv-net-modal-backdrop" onClick=${(e) => { _stopProp(e); onClose() }}
-         onPointerDown=${_stopProp} onMouseDown=${_stopProp}>
-      <div class="mv-net-modal" onClick=${_stopProp}>
-        <div class="mv-net-modal-head">
-          <span class="mv-net-modal-title">Sync Diagnostics</span>
-          <button class="mv-net-modal-close" title="Close" onClick=${(e) => { _stopProp(e); onClose() }}>✕</button>
-        </div>
-        <div class="mv-net-tabs">
-          ${tabBtn('summary', 'Summary')}
-          ${tabBtn('units', `Units${unitGroups.length && diffOnly ? ` (${unitGroups.length})` : ''}`)}
-          ${tabBtn('projectiles', `Projectiles${projGroups.length && diffOnly ? ` (${projGroups.length})` : ''}`)}
-        </div>
-        <div class="mv-net-modal-body">${body}</div>
-        <div class="mv-net-modal-foot">
-          <label class="mv-net-diffonly" title="Hide rows and entities that match the authority.">
-            <input type="checkbox" checked=${diffOnly}
-                   onChange=${(e) => { _stopProp(e); setDiffOnly(!!e.target.checked) }} />
-            Differences only
-          </label>
-        </div>
+    <${FloatingPanel}
+      id=${DIAG_PANEL_ID}
+      title="Sync Diagnostics"
+      onClose=${onClose}
+      resizable=${true}
+      defaultSize=${{ width: 420, height: 460 }}
+      minSize=${{ width: 320, height: 220 }}
+      headerActions=${diffOnlyToggle}>
+      <div class="mv-net-diag">
+        <${TabStrip} tabs=${tabs} active=${tab} onSelect=${setTab} />
+        <div class="mv-net-diag-body">${body}</div>
       </div>
-    </div>
+    <//>
   `
 }
 

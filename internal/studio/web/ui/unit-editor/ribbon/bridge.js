@@ -429,6 +429,13 @@ export function wireUnitEditorHostBridge(reactUi) {
       if (sv?.scene?.diagnose) return sv.scene.diagnose()
       return Promise.reject(new Error('no authority'))
     },
+    // Hover-highlight (Sync Diagnostics panel) — mark the hovered row's unit /
+    // projectile ids so the active sandbox renderer outlines them. Empty arrays
+    // clear the highlight. Only the joined sandbox scene carries live entities.
+    highlightEntities: (unitIds, projIds) => {
+      const sv = hostCallbacks.getActiveSandboxView?.() || null
+      sv?.scene?.setHighlight?.(unitIds || [], projIds || [])
+    },
   })
   // Bridge the Include-Private toggle into the prefs system so the
   // React Script Commands panel signal + persisted
