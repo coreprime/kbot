@@ -65,6 +65,17 @@ func main() {
 		"killUnitThreads": js.FuncOf(killUnitThreads),
 		"killThread":      js.FuncOf(killThread),
 		"resetUnit":       js.FuncOf(resetUnitScript),
+		// COB debugger — offline unit-editor script debugging (single-step,
+		// breakpoints, variable edits, coverage). Debug-only; never networked.
+		"stepThread":          js.FuncOf(stepThread),
+		"setThreadPc":         js.FuncOf(setThreadPc),
+		"setThreadLocal":      js.FuncOf(setThreadLocal),
+		"setStaticVar":        js.FuncOf(setStaticVar),
+		"addBreakpoint":       js.FuncOf(addBreakpoint),
+		"removeBreakpoint":    js.FuncOf(removeBreakpoint),
+		"clearBreakpoints":    js.FuncOf(clearBreakpoints),
+		"clearBreakpointHits": js.FuncOf(clearBreakpointHits),
+		"coverage":            js.FuncOf(coverage),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -336,6 +347,84 @@ func resetUnitScript(_ js.Value, args []js.Value) any {
 		inst.world.UnitReset(uint32(args[1].Int()))
 	}
 	return nil
+}
+
+// stepThread(handle, unitId, threadId) advances one COB thread by a single
+// instruction (the debugger's Step button).
+func stepThread(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitStepThread(uint32(args[1].Int()), int32(args[2].Int()))
+	}
+	return nil
+}
+
+// setThreadPc(handle, unitId, threadId, pcIndex) moves a thread's program
+// counter to an instruction index.
+func setThreadPc(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitSetThreadPC(uint32(args[1].Int()), int32(args[2].Int()), args[3].Int())
+	}
+	return nil
+}
+
+// setThreadLocal(handle, unitId, threadId, index, value) edits a thread local.
+func setThreadLocal(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitSetThreadLocal(uint32(args[1].Int()), int32(args[2].Int()), args[3].Int(), int32(args[4].Int()))
+	}
+	return nil
+}
+
+// setStaticVar(handle, unitId, index, value) edits a unit static variable.
+func setStaticVar(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitSetStatic(uint32(args[1].Int()), args[2].Int(), int32(args[3].Int()))
+	}
+	return nil
+}
+
+// addBreakpoint(handle, unitId, scriptIndex, offset) sets a breakpoint; the
+// matching offset arrives as the byte offset from the disassembly listing.
+func addBreakpoint(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitAddBreakpoint(uint32(args[1].Int()), args[2].Int(), uint32(args[3].Int()))
+	}
+	return nil
+}
+
+// removeBreakpoint(handle, unitId, scriptIndex, offset) clears one breakpoint.
+func removeBreakpoint(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitRemoveBreakpoint(uint32(args[1].Int()), args[2].Int(), uint32(args[3].Int()))
+	}
+	return nil
+}
+
+// clearBreakpoints(handle, unitId) drops every breakpoint on a unit.
+func clearBreakpoints(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitClearBreakpoints(uint32(args[1].Int()))
+	}
+	return nil
+}
+
+// clearBreakpointHits(handle, unitId) releases every thread parked on a
+// breakpoint so execution resumes (the debugger's Continue).
+func clearBreakpointHits(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitClearBreakpointHits(uint32(args[1].Int()))
+	}
+	return nil
+}
+
+// coverage(handle, unitId) returns the unit's executed byte offsets keyed by
+// script index, for the debugger's coverage-dimming view.
+func coverage(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.ValueOf(map[string]any{})
+	}
+	return coverageToJS(inst.world.UnitCoverage(uint32(args[1].Int())))
 }
 
 // cobState(handle) returns the live COB inspection snapshot — the world tick

@@ -93,6 +93,12 @@ type thread struct {
 	callStack   []callFrame
 	returnValue int32
 	queryOnly   bool
+	// breakpointHit is set when the thread parks on a breakpoint instruction (the
+	// debugger autopauses on it); bpResume suppresses the breakpoint check for the
+	// next instruction so a step / continue can move execution past the
+	// breakpoint it is stopped on. Both are debug-only and never hashed.
+	breakpointHit bool
+	bpResume      bool
 }
 
 func (t *thread) push(v int32) { t.stack = append(t.stack, v) }

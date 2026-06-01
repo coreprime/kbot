@@ -113,6 +113,13 @@ type Unit struct {
 	// the result in the same tick before the dead thread is pruned. It is cleared
 	// at the top of every tickStep, so it only ever holds this tick's deaths.
 	doneReturns map[int32]int32
+	// breakpoints and executed back the studio debugger, which runs against this
+	// VM in the offline unit editor. breakpoints holds the byte offsets a thread
+	// should park on, keyed by script index; executed accumulates every offset the
+	// unit has run, for the coverage-dimming view. Both are debug-only — they
+	// never feed the world hash — so they carry no determinism contract.
+	breakpoints map[int]map[uint32]bool
+	executed    map[int]map[uint32]bool
 }
 
 // recordEffect buffers one COB effect opcode as a partially-filled render event.
@@ -190,6 +197,140 @@ func (u *Unit) ResetState() {
 	for k := range u.doneReturns {
 		delete(u.doneReturns, k)
 	}
+}
+
+// threadByID returns the thread carrying the given per-unit id, or nil. Used by
+// the debugger control methods, which key on the same id the inspector reports.
+func (u *Unit) threadByID(id int32) *thread {
+	for _, t := range u.threads {
+		if t.id == id {
+			return t
+		}
+	}
+	return nil
+}
+
+// StepThread advances one thread by exactly one instruction (the debugger's
+// "Step" button). It clears any sleep / wait so the instruction runs now and
+// resumes past a breakpoint the thread is parked on. A missing or dead thread is
+// a no-op. Debug-only — never driven from gameplay.
+func (u *Unit) StepThread(id int32) {
+	t := u.threadByID(id)
+	if t == nil || t.dead {
+		return
+	}
+	t.sleepMs = 0
+	t.waitOn = nil
+	t.breakpointHit = false
+	t.bpResume = false
+	for !t.dead {
+		insts := u.prog.scripts[t.scriptIndex].insts
+		if t.pc >= len(insts) {
+			if len(t.callStack) == 0 {
+				t.dead = true
+				return
+			}
+			u.returnFromCall(t, 0)
+			continue
+		}
+		ins := insts[t.pc]
+		u.markExecuted(t.scriptIndex, ins.Offset)
+		t.pc++
+		u.exec(t, ins)
+		return
+	}
+}
+
+// SetThreadPC moves a thread's program counter to an instruction index and
+// clears its sleep / wait / breakpoint-parked state so execution resumes from
+// the new spot. The index is clamped to the current script's instruction range.
+func (u *Unit) SetThreadPC(id int32, pc int) {
+	t := u.threadByID(id)
+	if t == nil || t.dead {
+		return
+	}
+	n := len(u.prog.scripts[t.scriptIndex].insts)
+	if pc < 0 {
+		pc = 0
+	}
+	if pc > n {
+		pc = n
+	}
+	t.pc = pc
+	t.sleepMs = 0
+	t.waitOn = nil
+	t.breakpointHit = false
+}
+
+// SetThreadLocal writes one of a thread's local variables (the debugger's
+// editable Locals tray). Out-of-range indices are ignored.
+func (u *Unit) SetThreadLocal(id int32, idx int, v int32) {
+	t := u.threadByID(id)
+	if t == nil || idx < 0 || idx >= len(t.locals) {
+		return
+	}
+	t.locals[idx] = v
+}
+
+// SetStatic writes one of the unit's static variables (the debugger's editable
+// Globals tray). Out-of-range indices are ignored.
+func (u *Unit) SetStatic(idx int, v int32) {
+	if idx < 0 || idx >= len(u.static) {
+		return
+	}
+	u.static[idx] = v
+}
+
+// AddBreakpoint sets a breakpoint at a byte offset of one script; RemoveBreakpoint
+// clears it; ClearBreakpoints drops every breakpoint on the unit. Threads park on
+// a set offset before executing its instruction.
+func (u *Unit) AddBreakpoint(scriptIdx int, offset uint32) {
+	if scriptIdx < 0 || scriptIdx >= len(u.prog.scripts) {
+		return
+	}
+	if u.breakpoints == nil {
+		u.breakpoints = make(map[int]map[uint32]bool)
+	}
+	offs := u.breakpoints[scriptIdx]
+	if offs == nil {
+		offs = make(map[uint32]bool)
+		u.breakpoints[scriptIdx] = offs
+	}
+	offs[offset] = true
+}
+
+func (u *Unit) RemoveBreakpoint(scriptIdx int, offset uint32) {
+	if offs := u.breakpoints[scriptIdx]; offs != nil {
+		delete(offs, offset)
+	}
+}
+
+func (u *Unit) ClearBreakpoints() { u.breakpoints = nil }
+
+// ClearBreakpointHits releases every thread parked on a breakpoint (the
+// debugger's "Continue"): it clears the hit flag and arms bpResume so the thread
+// runs past the breakpoint it is stopped on rather than re-parking immediately.
+func (u *Unit) ClearBreakpointHits() {
+	for _, t := range u.threads {
+		if t.breakpointHit {
+			t.breakpointHit = false
+			t.bpResume = true
+		}
+	}
+}
+
+// Coverage returns a stable snapshot of every executed byte offset, keyed by
+// script index, for the debugger's coverage-dimming view.
+func (u *Unit) Coverage() map[int][]uint32 {
+	out := make(map[int][]uint32, len(u.executed))
+	for idx, offs := range u.executed {
+		list := make([]uint32, 0, len(offs))
+		for off := range offs {
+			list = append(list, off)
+		}
+		out[idx] = list
+	}
+	return out
 }
 
 func animKey(piece, axis int) int { return piece*3 + axis }
@@ -298,12 +439,48 @@ func (u *Unit) runThread(t *thread) {
 			u.returnFromCall(t, 0)
 			continue
 		}
+		// Debugger: park on a breakpoint before executing its instruction, unless
+		// we just resumed from one (bpResume lets a step / continue clear the
+		// instruction the thread is stopped on). Coverage stamps run regardless.
 		ins := insts[t.pc]
+		if u.atBreakpoint(t, ins.Offset) {
+			t.breakpointHit = true
+			return
+		}
+		t.bpResume = false
+		u.markExecuted(t.scriptIndex, ins.Offset)
 		t.pc++
 		if u.exec(t, ins) {
 			return
 		}
 	}
+}
+
+// atBreakpoint reports whether a breakpoint is set at the given offset of the
+// thread's current script and execution should park on it. A resuming thread
+// (bpResume) clears the breakpoint it is stopped on so a step / continue can
+// proceed; the flag is consumed once the instruction runs.
+func (u *Unit) atBreakpoint(t *thread, offset uint32) bool {
+	if t.bpResume {
+		return false
+	}
+	offs := u.breakpoints[t.scriptIndex]
+	return offs != nil && offs[offset]
+}
+
+// markExecuted records that the given offset of a script has run, for the
+// debugger's coverage view. Debug-only; lazily allocated so a unit with no
+// debugger attached never grows the maps.
+func (u *Unit) markExecuted(scriptIdx int, offset uint32) {
+	if u.executed == nil {
+		u.executed = make(map[int]map[uint32]bool)
+	}
+	offs := u.executed[scriptIdx]
+	if offs == nil {
+		offs = make(map[uint32]bool)
+		u.executed[scriptIdx] = offs
+	}
+	offs[offset] = true
 }
 
 func (u *Unit) startScript(caller *thread, childIdx, argCount int) {
@@ -499,12 +676,15 @@ func (u *Unit) CobState() frame.CobUnitState {
 			offset = int(sd.insts[n-1].Offset)
 		}
 		ct := frame.CobThread{
-			ID:         int(t.id),
-			Script:     sd.name,
-			PC:         t.pc,
-			Offset:     offset,
-			SleepMs:    int(t.sleepMs),
-			SignalMask: int(t.signalMask),
+			ID:            int(t.id),
+			Script:        sd.name,
+			PC:            t.pc,
+			Offset:        offset,
+			SleepMs:       int(t.sleepMs),
+			SignalMask:    int(t.signalMask),
+			Locals:        append([]int32(nil), t.locals...),
+			Stack:         append([]int32(nil), t.stack...),
+			BreakpointHit: t.breakpointHit,
 		}
 		if t.waitOn != nil {
 			ct.Waiting = true

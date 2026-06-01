@@ -269,6 +269,100 @@ func (w *World) UnitReset(id uint32) {
 	}
 }
 
+// CobDebugger is the optional debug-control surface a binding exposes for the
+// studio's COB debugger (single-stepping, breakpoints, variable edits, coverage)
+// in the offline unit editor. The script.Unit binding implements it; script-less
+// bindings do not. Like the other developer commands these mutate VM state
+// outside the hashed contract and carry no determinism guarantee.
+type CobDebugger interface {
+	StepThread(id int32)
+	SetThreadPC(id int32, pc int)
+	SetThreadLocal(id int32, idx int, v int32)
+	SetStatic(idx int, v int32)
+	AddBreakpoint(scriptIdx int, offset uint32)
+	RemoveBreakpoint(scriptIdx int, offset uint32)
+	ClearBreakpoints()
+	ClearBreakpointHits()
+	Coverage() map[int][]uint32
+}
+
+// dbg returns a unit's debug-control binding, or nil for a missing unit or a
+// script-less binding. Each debug command below funnels through it so a unit
+// without a script is a silent no-op.
+func (w *World) dbg(id uint32) CobDebugger {
+	if u := w.units[id]; u != nil {
+		if d, ok := u.binding.(CobDebugger); ok {
+			return d
+		}
+	}
+	return nil
+}
+
+// UnitStepThread advances one thread of a unit by a single instruction.
+func (w *World) UnitStepThread(id uint32, threadID int32) {
+	if d := w.dbg(id); d != nil {
+		d.StepThread(threadID)
+	}
+}
+
+// UnitSetThreadPC moves a thread's program counter to an instruction index.
+func (w *World) UnitSetThreadPC(id uint32, threadID int32, pc int) {
+	if d := w.dbg(id); d != nil {
+		d.SetThreadPC(threadID, pc)
+	}
+}
+
+// UnitSetThreadLocal writes one of a thread's local variables.
+func (w *World) UnitSetThreadLocal(id uint32, threadID int32, idx int, v int32) {
+	if d := w.dbg(id); d != nil {
+		d.SetThreadLocal(threadID, idx, v)
+	}
+}
+
+// UnitSetStatic writes one of a unit's static variables.
+func (w *World) UnitSetStatic(id uint32, idx int, v int32) {
+	if d := w.dbg(id); d != nil {
+		d.SetStatic(idx, v)
+	}
+}
+
+// UnitAddBreakpoint / UnitRemoveBreakpoint / UnitClearBreakpoints manage a
+// unit's breakpoints by script index + byte offset.
+func (w *World) UnitAddBreakpoint(id uint32, scriptIdx int, offset uint32) {
+	if d := w.dbg(id); d != nil {
+		d.AddBreakpoint(scriptIdx, offset)
+	}
+}
+
+func (w *World) UnitRemoveBreakpoint(id uint32, scriptIdx int, offset uint32) {
+	if d := w.dbg(id); d != nil {
+		d.RemoveBreakpoint(scriptIdx, offset)
+	}
+}
+
+func (w *World) UnitClearBreakpoints(id uint32) {
+	if d := w.dbg(id); d != nil {
+		d.ClearBreakpoints()
+	}
+}
+
+// UnitClearBreakpointHits releases every thread of a unit parked on a breakpoint
+// (the debugger's "Continue").
+func (w *World) UnitClearBreakpointHits(id uint32) {
+	if d := w.dbg(id); d != nil {
+		d.ClearBreakpointHits()
+	}
+}
+
+// UnitCoverage returns a unit's executed-offset coverage, keyed by script index,
+// or nil for a missing / script-less unit.
+func (w *World) UnitCoverage(id uint32) map[int][]uint32 {
+	if d := w.dbg(id); d != nil {
+		return d.Coverage()
+	}
+	return nil
+}
+
 // UnitCount returns the number of units currently in the world (live or dead
 // until reaped). It is a cheap map length read used for session listings.
 func (w *World) UnitCount() int { return len(w.units) }

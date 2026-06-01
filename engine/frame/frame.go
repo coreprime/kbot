@@ -118,6 +118,13 @@ type CobThread struct {
 	Waiting    bool   // blocked on a piece animation (turn/move) completing
 	WaitTurn   bool   // when Waiting, true = turn animation, false = move
 	SignalMask int    // signal bits this thread listens for
+	// Locals and Stack are the thread's live local variables and operand stack,
+	// surfaced to the debugger's variables tray. Debug-only, never hashed.
+	Locals []int32
+	Stack  []int32
+	// BreakpointHit is true when the thread is parked on a breakpoint instruction
+	// (the debugger autopauses on it). Cleared by a step / continue / pc edit.
+	BreakpointHit bool
 }
 
 // CobUnitState is one unit's inspectable COB state — its static variables and

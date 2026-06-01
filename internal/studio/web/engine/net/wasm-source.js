@@ -169,6 +169,61 @@ export class WasmFrameSource extends FrameSource {
     if (this._engine && this._handle >= 0) this._engine.resetUnit(this._handle, unitId)
   }
 
+  // ── COB debugger ─────────────────────────────────────────────────
+  //
+  // Offline unit-editor script debugging: single-stepping, breakpoints, variable
+  // edits and coverage. Like the developer commands these mutate live VM state
+  // outside the hashed contract and never cross the join transport. Each is a
+  // no-op until the engine has a live handle.
+
+  // stepThread advances one COB thread by a single instruction.
+  stepThread(unitId, threadId) {
+    if (this._engine && this._handle >= 0) this._engine.stepThread(this._handle, unitId, threadId)
+  }
+
+  // setThreadPc moves a thread's program counter to an instruction index.
+  setThreadPc(unitId, threadId, pcIndex) {
+    if (this._engine && this._handle >= 0) this._engine.setThreadPc(this._handle, unitId, threadId, pcIndex)
+  }
+
+  // setThreadLocal edits one of a thread's local variables.
+  setThreadLocal(unitId, threadId, index, value) {
+    if (this._engine && this._handle >= 0) this._engine.setThreadLocal(this._handle, unitId, threadId, index, value)
+  }
+
+  // setStaticVar edits one of a unit's static (global) variables.
+  setStaticVar(unitId, index, value) {
+    if (this._engine && this._handle >= 0) this._engine.setStaticVar(this._handle, unitId, index, value)
+  }
+
+  // addBreakpoint / removeBreakpoint toggle a breakpoint by script index + byte
+  // offset (the offset the disassembly listing labels each line with).
+  addBreakpoint(unitId, scriptIndex, offset) {
+    if (this._engine && this._handle >= 0) this._engine.addBreakpoint(this._handle, unitId, scriptIndex, offset)
+  }
+
+  removeBreakpoint(unitId, scriptIndex, offset) {
+    if (this._engine && this._handle >= 0) this._engine.removeBreakpoint(this._handle, unitId, scriptIndex, offset)
+  }
+
+  // clearBreakpoints drops every breakpoint on a unit.
+  clearBreakpoints(unitId) {
+    if (this._engine && this._handle >= 0) this._engine.clearBreakpoints(this._handle, unitId)
+  }
+
+  // clearBreakpointHits releases every thread parked on a breakpoint so
+  // execution resumes (the debugger's Continue).
+  clearBreakpointHits(unitId) {
+    if (this._engine && this._handle >= 0) this._engine.clearBreakpointHits(this._handle, unitId)
+  }
+
+  // coverage returns the unit's executed byte offsets as { "<scriptIndex>":
+  // [offset…] } for the debugger's coverage-dimming view.
+  coverage(unitId) {
+    if (!this._engine || this._handle < 0) return {}
+    return this._engine.coverage(this._handle, unitId)
+  }
+
   dispose() {
     if (this._engine && this._handle >= 0) {
       this._engine.destroy(this._handle)

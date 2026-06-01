@@ -433,17 +433,35 @@ func cobThreadsToJS(ts []frame.CobThread) []any {
 	for i := range ts {
 		t := &ts[i]
 		out = append(out, map[string]any{
-			"id":         t.ID,
-			"script":     t.Script,
-			"pc":         t.PC,
-			"offset":     t.Offset,
-			"sleepMs":    t.SleepMs,
-			"waiting":    t.Waiting,
-			"waitTurn":   t.WaitTurn,
-			"signalMask": t.SignalMask,
+			"id":            t.ID,
+			"script":        t.Script,
+			"pc":            t.PC,
+			"offset":        t.Offset,
+			"sleepMs":       t.SleepMs,
+			"waiting":       t.Waiting,
+			"waitTurn":      t.WaitTurn,
+			"signalMask":    t.SignalMask,
+			"locals":        i32SliceToJS(t.Locals),
+			"stack":         i32SliceToJS(t.Stack),
+			"breakpointHit": t.BreakpointHit,
 		})
 	}
 	return out
+}
+
+// coverageToJS converts the executed-offset coverage map into a plain JS object
+// keyed by script index (as a decimal string) → array of byte offsets, the shape
+// the debugger's coverage-dimming view consumes.
+func coverageToJS(cov map[int][]uint32) js.Value {
+	out := make(map[string]any, len(cov))
+	for idx, offs := range cov {
+		arr := make([]any, len(offs))
+		for i, off := range offs {
+			arr[i] = int(off)
+		}
+		out[strconv.Itoa(idx)] = arr
+	}
+	return js.ValueOf(out)
 }
 
 // --- small JS-value accessors -------------------------------------------------
