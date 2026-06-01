@@ -109,7 +109,8 @@ export function TabBar() {
             isModel   ? 'Close this unit' :
             isSandbox ? 'Close this sandbox' :
                         'Close this map'
-          const icon = isModel ? '🛠' : (isSandbox ? '🪖' : null)
+          const isFiles = t === 'files'
+          const icon = isModel ? '🛠' : (isSandbox ? '🪖' : (isFiles ? '🗂' : '🗺'))
           return html`
             <button key=${i}
                     type="button"

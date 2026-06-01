@@ -25,7 +25,7 @@ function stemOf(path) {
 // browser's download attribute yields a clean, predictable filename.
 function safeName(s) { return String(s || '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'seq' }
 
-function SequenceAccordion({ path, seq, index, transparency }) {
+function SequenceAccordion({ path, seq, index, transparency, source }) {
   const [open, setOpen] = useState(index === 0)
   const frames = seq.frames || []
   const first = frames[0]
@@ -36,19 +36,19 @@ function SequenceAccordion({ path, seq, index, transparency }) {
       <div class="fx-gaf-acc-head" onClick=${() => setOpen(!open)}>
         <span class="fx-gaf-caret">${open ? '▾' : '▸'}</span>
         <img class="fx-gaf-thumb" loading="lazy" onError=${hideBroken}
-             src=${gafApngURL(path, index, '', transparency)} alt=${seq.name} />
+             src=${gafApngURL(path, index, '', transparency, source)} alt=${seq.name} />
         <div class="fx-gaf-acc-info">
           <span class="fx-gaf-name">${seq.name || `Sequence ${index}`}</span>
           <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}</span>
         </div>
         <div class="fx-gaf-acc-actions" onClick=${(e) => e.stopPropagation()}>
-          <a class="fx-dl" download=${`${stem}_${seqName}.gif`} href=${gafGifURL(path, index, '', transparency)} title="Download GIF">⬇ GIF</a>
-          <a class="fx-dl" download=${`${stem}_${seqName}.png`} href=${gafApngURL(path, index, '', transparency)} title="Download APNG">⬇ APNG</a>
+          <a class="fx-dl" download=${`${stem}_${seqName}.gif`} href=${gafGifURL(path, index, '', transparency, source)} title="Download GIF">⬇ GIF</a>
+          <a class="fx-dl" download=${`${stem}_${seqName}.png`} href=${gafApngURL(path, index, '', transparency, source)} title="Download APNG">⬇ APNG</a>
         </div>
       </div>
       ${open ? html`
         <div class="fx-gaf-acc-body">
-          <div class="fx-gaf-preview"><img onError=${hideBroken} src=${gafApngURL(path, index, '', transparency)} alt=${seq.name} /></div>
+          <div class="fx-gaf-preview"><img onError=${hideBroken} src=${gafApngURL(path, index, '', transparency, source)} alt=${seq.name} /></div>
           ${frames.length ? html`
             <div class="fx-frame-table-wrap">
               <table class="fx-frame-table">
@@ -62,8 +62,8 @@ function SequenceAccordion({ path, seq, index, transparency }) {
                       <td>${f.transparency ?? '—'}</td>
                       <td>${f.duration}</td>
                       <td><img class="fx-frame-thumb" loading="lazy" onError=${hideBroken}
-                               src=${gafPngURL(path, index, f.index, '', transparency)} alt=${'Frame ' + f.index} /></td>
-                      <td><a class="fx-frame-dl" download=${`${stem}_${seqName}_f${f.index}.png`} href=${gafPngURL(path, index, f.index, '', transparency)} title="Download PNG">⬇</a></td>
+                               src=${gafPngURL(path, index, f.index, '', transparency, source)} alt=${'Frame ' + f.index} /></td>
+                      <td><a class="fx-frame-dl" download=${`${stem}_${seqName}_f${f.index}.png`} href=${gafPngURL(path, index, f.index, '', transparency, source)} title="Download PNG">⬇</a></td>
                     </tr>
                   `)}
                 </tbody>
@@ -76,7 +76,7 @@ function SequenceAccordion({ path, seq, index, transparency }) {
   `
 }
 
-export function GafViewer({ path, describe }) {
+export function GafViewer({ path, describe, source }) {
   const sequences = (describe && describe.sequences) || []
   const [transparency, setTransparency] = useState('')
   if (!sequences.length) return html`<div class="fx-empty">🎨 No sequences in this GAF file</div>`
@@ -94,7 +94,7 @@ export function GafViewer({ path, describe }) {
           </select>
         </label>
       </div>
-      ${sequences.map((s, i) => html`<${SequenceAccordion} key=${i} path=${path} seq=${s} index=${i} transparency=${transparency} />`)}
+      ${sequences.map((s, i) => html`<${SequenceAccordion} key=${i} path=${path} seq=${s} index=${i} transparency=${transparency} source=${source} />`)}
     </div>
   `
 }

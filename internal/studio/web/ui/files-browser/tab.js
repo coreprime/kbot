@@ -10,7 +10,7 @@
 // above it and the status bar below, so switching to a Files tab feels
 // like the other tabs.
 
-import { $, getReactUi } from '../host-context.js'
+import { $, getReactUi, tabs, tabState } from '../host-context.js'
 import { openTab } from '../tab-registry.js'
 import { configureReactUi } from '../wire-react-ui.js'
 
@@ -50,6 +50,18 @@ async function mountFilesBrowserOnce() {
 export function openFilesTab() {
   ensureFilesDialog()
   return openTab('files', {})
+}
+
+// setFilesTabTitle mirrors the explorer's current location onto the
+// active Files tab's strip label so the tab reads "maps" or "acidbrief.gaf"
+// instead of a static "Files".  The mounted browser reports its route
+// here on each navigation.
+export function setFilesTabTitle(label) {
+  const rec = tabs[tabState.activeIndex]
+  if (!rec || (rec.typeId || rec.type) !== 'files') return
+  rec.displayName = label || 'Files'
+  const ui = getReactUi()
+  if (ui && typeof ui.setTabs === 'function') ui.setTabs(tabs, tabState.activeIndex)
 }
 
 // setExplorerStatus replaces the shared footer's map-editor copy with

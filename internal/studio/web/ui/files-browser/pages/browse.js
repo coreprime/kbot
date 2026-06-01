@@ -11,7 +11,7 @@
 import { htm as html } from '/ui/common/htm-bind.js'
 import { useCallback, useMemo, useState } from 'preact/hooks'
 import {
-  browse, formatSize, extOf,
+  browse, formatSize, extOf, baseName, rawURL,
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
 } from '../api.js'
 import { useAsync, Loading, ErrorMsg } from '../components/async.js'
@@ -74,6 +74,9 @@ function FileRow({ entry, onOpenFile }) {
       </td>
       <td class="fx-size-cell">${formatSize(entry.size)}</td>
       <td class="fx-type-cell">${ext ? ext.toUpperCase() : '—'}</td>
+      <td class="fx-actions-cell">
+        <a class="fx-row-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download" onClick=${(e) => e.stopPropagation()}>⬇</a>
+      </td>
     </tr>
   `
 }
@@ -87,6 +90,7 @@ function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFil
             <${SortHeader} label="Name" field="name" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
             <${SortHeader} label="Size" field="size" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
             <${SortHeader} label="Type" field="type" sortKey=${sortKey} sortDir=${sortDir} onSort=${onSort} />
+            <th class="fx-th-actions">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -100,11 +104,12 @@ function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFil
               </td>
               <td class="fx-size-cell">${formatSize(e.dirSize)}</td>
               <td class="fx-type-cell">${dirStats(e.dirFolders, e.dirFiles)}</td>
+              <td class="fx-actions-cell"></td>
             </tr>
           `)}
           ${files.map((e) => html`<${FileRow} key=${e.path} entry=${e} onOpenFile=${onOpenFile} />`)}
           ${dirs.length === 0 && files.length === 0
-            ? html`<tr><td colspan="3"><div class="fx-empty">📭 Empty directory</div></td></tr>`
+            ? html`<tr><td colspan="4"><div class="fx-empty">📭 Empty directory</div></td></tr>`
             : null}
         </tbody>
       </table>
@@ -120,17 +125,25 @@ function FileIconCard({ entry, onOpenFile }) {
   const thumb = PREVIEW_EXTS.has(ext) ? thumbFor(entry.path, ext) : null
   const src = thumb && hover && thumb.anim ? thumb.anim : (thumb && thumb.still)
   return html`
-    <button type="button" class=${'fx-icon-card ' + fileKind(entry.name)}
-            onMouseEnter=${() => thumb && thumb.anim && setHover(true)}
-            onMouseLeave=${() => setHover(false)} onClick=${() => onOpenFile(entry.path)}>
-      <div class="fx-icon-thumb">
-        ${thumb && src
-          ? html`<img src=${src} alt=${entry.name} class="fx-icon-img" onError=${hideBroken} />`
-          : html`<span class="fx-icon-emoji">${fileIcon(entry.name)}</span>`}
+    <div class=${'fx-icon-card ' + fileKind(entry.name)}
+         onMouseEnter=${() => thumb && thumb.anim && setHover(true)}
+         onMouseLeave=${() => setHover(false)}>
+      <button type="button" class="fx-icon-open-area" onClick=${() => onOpenFile(entry.path)} title=${entry.name}>
+        <div class="fx-icon-thumb">
+          ${thumb && src
+            ? html`<img src=${src} alt=${entry.name} class="fx-icon-img" onError=${hideBroken} />`
+            : html`<span class="fx-icon-emoji">${fileIcon(entry.name)}</span>`}
+        </div>
+        <div class="fx-icon-label" title=${entry.name}>${entry.name}</div>
+      </button>
+      <div class="fx-icon-foot">
+        <span class="fx-icon-size">${entry.size ? formatSize(entry.size) : ''}</span>
+        <span class="fx-icon-actions">
+          <a class="fx-icon-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download">⬇</a>
+          <button type="button" class="fx-icon-action" onClick=${() => onOpenFile(entry.path)} title="Open">↗</button>
+        </span>
       </div>
-      <div class="fx-icon-label" title=${entry.name}>${entry.name}</div>
-      ${entry.size ? html`<div class="fx-icon-size">${formatSize(entry.size)}</div>` : null}
-    </button>
+    </div>
   `
 }
 
@@ -150,8 +163,20 @@ function IconView({ dirs, files, onOpenDir, onOpenFile }) {
   `
 }
 
+// The list/icon layout choice is a global preference, remembered across
+// folders and reloads via localStorage.
+const MODE_KEY = 'fx-browse-mode'
+function loadMode() {
+  try { const m = localStorage.getItem(MODE_KEY); if (m === 'list' || m === 'icons') return m } catch { /* storage unavailable */ }
+  return 'list'
+}
+function saveMode(m) {
+  try { localStorage.setItem(MODE_KEY, m) } catch { /* storage unavailable */ }
+}
+
 export function BrowsePage({ dir, onOpenDir, onOpenFile }) {
-  const [mode, setMode] = useState('list')
+  const [mode, setModeState] = useState(loadMode)
+  const setMode = useCallback((m) => { saveMode(m); setModeState(m) }, [])
   const [sortKey, setSortKey] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
   const { data, loading, error } = useAsync(() => browse(dir), [dir])

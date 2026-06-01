@@ -26,23 +26,23 @@ function Stage({ src, alt, describe }) {
   `
 }
 
-export function PcxViewer({ path, describe }) {
-  return html`<${Stage} src=${pcxURL(path)} alt=${path} describe=${describe} />`
+export function PcxViewer({ path, describe, source }) {
+  return html`<${Stage} src=${pcxURL(path, '', source)} alt=${path} describe=${describe} />`
 }
 
-export function NativeImageViewer({ path }) {
-  return html`<${Stage} src=${rawURL(path)} alt=${path} />`
+export function NativeImageViewer({ path, source }) {
+  return html`<${Stage} src=${rawURL(path, source)} alt=${path} />`
 }
 
 // FontSheet renders the FNT glyph sheet plus a few headline facts.
-export function FontViewer({ path, describe }) {
+export function FontViewer({ path, describe, source }) {
   const d = describe || {}
   return html`
     <div class="fx-viewer">
       <div class="fx-ctl-row">
         ${d.glyphCount != null ? html`<span class="fx-img-dims">${d.glyphCount} glyphs · ${d.height}px tall</span>` : null}
       </div>
-      <div class="fx-img-stage"><img class="fx-img" src=${imageURL(path, 'png')} alt=${path} /></div>
+      <div class="fx-img-stage"><img class="fx-img" src=${imageURL(path, 'png', source)} alt=${path} /></div>
     </div>
   `
 }

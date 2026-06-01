@@ -10,7 +10,7 @@
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { useState, useCallback, useMemo } from 'preact/hooks'
-import { metadata, rawURL, parentDir, extOf } from '../api.js'
+import { metadata, rawURL, extOf } from '../api.js'
 import { useAsync, useRawText, Loading, ErrorMsg } from '../components/async.js'
 import { HexView } from '../content/hex-view.js'
 import { InfoTab } from '../viewers/info.js'
@@ -114,11 +114,11 @@ function BosCodeTab({ path, source, lintLines, highlightLine, onOpenFile }) {
   return html`<${BosHighlighter} code=${data || ''} basePath=${path} lintLines=${lintLines} highlightLine=${highlightLine} onOpenFile=${onOpenFile} />`
 }
 
-export function ViewPage({ path, source: initialSource, onOpenDir, onOpenFile }) {
+export function ViewPage({ path, source: initialSource, onOpenFile }) {
   const [activeSource, setActiveSource] = useState(initialSource || '')
   const [tab, setTab] = useState(null)
   const [highlightLine, setHighlightLine] = useState(null)
-  const { data: meta, loading, error } = useAsync(() => metadata(path), [path])
+  const { data: meta, loading, error } = useAsync(() => metadata(path, activeSource), [path, activeSource])
 
   const handleJumpToLine = useCallback((line, toTab) => {
     setHighlightLine(line)
@@ -154,10 +154,10 @@ export function ViewPage({ path, source: initialSource, onOpenDir, onOpenFile })
     switch (id) {
       case 'content':
         switch (kind) {
-          case 'gaf': return html`<${GafViewer} path=${path} describe=${describe} />`
-          case 'pcx': return html`<${PcxViewer} path=${path} describe=${describe} />`
-          case 'image': return html`<${NativeImageViewer} path=${path} />`
-          case 'font': return html`<${FontViewer} path=${path} describe=${describe} />`
+          case 'gaf': return html`<${GafViewer} path=${path} describe=${describe} source=${src} />`
+          case 'pcx': return html`<${PcxViewer} path=${path} describe=${describe} source=${src} />`
+          case 'image': return html`<${NativeImageViewer} path=${path} source=${src} />`
+          case 'font': return html`<${FontViewer} path=${path} describe=${describe} source=${src} />`
           case 'palette': return html`<${PaletteViewer} describe=${describe} />`
           case 'audio': return html`<${AudioTab} path=${path} source=${src} />`
           case 'video': return html`<${VideoTab} path=${path} source=${src} describe=${describe} />`
@@ -190,7 +190,6 @@ export function ViewPage({ path, source: initialSource, onOpenDir, onOpenFile })
   return html`
     <div class="fx-view">
       <div class="fx-view-bar">
-        <button type="button" class="fx-back" onClick=${() => onOpenDir(parentDir(path))}>← Back to folder</button>
         <div class="fx-view-title">
           <h1 class="fx-view-name">${meta.name}</h1>
           ${describe.format ? html`<span class="fx-format-badge">${describe.format}</span>` : null}

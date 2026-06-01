@@ -70,11 +70,11 @@ func handleVFS(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case q.Has("metadata"):
-		handleVFSMetadata(w, rel)
+		handleVFSMetadata(w, rel, q.Get("source"))
 	case q.Has("layering"):
 		handleVFSLayering(w, rel)
 	case q.Has("describe"):
-		handleVFSDescribe(w, rel)
+		handleVFSDescribe(w, rel, q.Get("source"))
 	default:
 		if req := parseRenderRequest(q); req.IsRender() {
 			handleVFSRender(w, r, rel, req, q.Get("source"))
@@ -316,8 +316,8 @@ func handleVFSRaw(w http.ResponseWriter, r *http.Request, vpath string, source s
 
 // handleVFSDescribe returns the format-specific structured description, or a
 // minimal record (format: "") for files no describer recognises.
-func handleVFSDescribe(w http.ResponseWriter, vpath string) {
-	data, err := vfs.ReadFile(vpath)
+func handleVFSDescribe(w http.ResponseWriter, vpath, source string) {
+	data, err := readVFS(vpath, source)
 	if err != nil {
 		jsonError(w, "file not found", http.StatusNotFound)
 		return
@@ -345,13 +345,13 @@ func handleVFSLayering(w http.ResponseWriter, vpath string) {
 // handleVFSMetadata folds identity, layering, and the format describe into one
 // document so the preview pane can populate its header and detail tabs from a
 // single request.
-func handleVFSMetadata(w http.ResponseWriter, vpath string) {
+func handleVFSMetadata(w http.ResponseWriter, vpath, source string) {
 	info, err := vfs.Stat(vpath)
 	if err != nil {
 		jsonError(w, "file not found", http.StatusNotFound)
 		return
 	}
-	data, err := vfs.ReadFile(vpath)
+	data, err := readVFS(vpath, source)
 	if err != nil {
 		jsonError(w, "cannot read file", http.StatusInternalServerError)
 		return
@@ -359,11 +359,18 @@ func handleVFSMetadata(w http.ResponseWriter, vpath string) {
 
 	describe, _ := renderer.Describe(vpath, data)
 
+	// Report the layer actually read so the header reflects the selected
+	// source rather than always naming the top-priority one.
+	shown := info.Source
+	if source != "" {
+		shown = source
+	}
+
 	writeJSON(w, map[string]any{
 		"path":     vpath,
 		"name":     path.Base(vpath),
-		"size":     info.Size,
-		"source":   info.Source,
+		"size":     len(data),
+		"source":   shown,
 		"layering": vfs.GetFileLayers(vpath),
 		"describe": describe,
 	})

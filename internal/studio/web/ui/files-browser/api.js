@@ -52,12 +52,12 @@ export function browse(dir) {
   return fetchJSON(`${BASE}${clean}${clean ? '/' : ''}`)
 }
 
-export function metadata(path) {
-  return fetchJSON(`${BASE}${enc(path)}?metadata`)
+export function metadata(path, source) {
+  return fetchJSON(`${BASE}${enc(path)}?metadata${source ? `&source=${encodeURIComponent(source)}` : ''}`)
 }
 
-export function describe(path) {
-  return fetchJSON(`${BASE}${enc(path)}?describe`)
+export function describe(path, source) {
+  return fetchJSON(`${BASE}${enc(path)}?describe${source ? `&source=${encodeURIComponent(source)}` : ''}`)
 }
 
 export function layering(path) {

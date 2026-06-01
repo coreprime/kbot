@@ -6013,7 +6013,9 @@ canvas {
   border-bottom: 1px solid var(--border);
 }
 .fx-header-crumbs { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; align-items: center; }
-.fx-header-crumbs .fx-crumbs { flex-wrap: nowrap; overflow: hidden; }
+.fx-header-crumbs .fx-crumbs { flex-wrap: nowrap; overflow: hidden; margin: 0; }
+.fx-header-crumbs .fx-crumb { font-weight: 600; font-size: 14px; }
+.fx-header-crumbs .fx-crumb-sep { font-size: 14px; }
 .fx-header-right { margin-left: auto; flex: 0 0 auto; width: 360px; max-width: 42vw; }
 
 /* ── search box ────────────────────────────────────────────────────── */
@@ -6280,19 +6282,68 @@ canvas {
 .fx-icon-card.dir .fx-icon-label { font-weight: 600; }
 .fx-icon-size { color: var(--muted); font-size: 11px; }
 
+/* File icon cards split into a clickable open-area (thumb + label) and a
+   footer that puts the size on the left, action icons on the right. */
+.fx-icon-open-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.fx-icon-foot {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+}
+.fx-icon-foot .fx-icon-size { flex: 1 1 auto; text-align: left; }
+.fx-icon-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.fx-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: none;
+}
+.fx-icon-action:hover { border-color: var(--accent); background: var(--bg-2); }
+
+/* Table "Actions" column download control. */
+.fx-th-actions { width: 72px; text-align: center; }
+.fx-actions-cell { text-align: center; white-space: nowrap; }
+.fx-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+.fx-row-action:hover { border-color: var(--accent); background: var(--bg-2); }
+
 /* ── view page: header bar + tabs ──────────────────────────────────── */
 .fx-view { display: flex; flex-direction: column; min-height: 100%; padding: 16px 24px 0; }
 .fx-view-bar { display: flex; align-items: center; gap: 14px; margin: 6px 0 12px; }
-.fx-back {
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  padding: 6px 12px;
-  border-radius: 6px;
-}
-.fx-back:hover { background: var(--bg-3); }
 .fx-view-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .fx-view-name { font-size: 18px; font-weight: 700; word-break: break-all; }
 .fx-format-badge {
