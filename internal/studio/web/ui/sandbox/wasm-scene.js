@@ -25,6 +25,7 @@
 
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
+import { gatherSceneLights } from '../../engine/scene-lights.js'
 import { AudioPool } from '../../game3d/audio-pool.js'
 import { ParticlePool } from '../../engine/cob-particles.js'
 import {
@@ -614,6 +615,7 @@ export class WasmSandboxScene {
       hasScript: () => false,
       start: () => {},
       getSceneLight: () => null,
+      getSceneLights: () => [],
     }
     if (this._silenced && typeof binding.audio.setPaused === 'function') {
       try { binding.audio.setPaused(true) } catch { /* ignore */ }
@@ -775,33 +777,27 @@ export class WasmSandboxScene {
     return this.playUnitSound(unit, pick)
   }
 
-  // getSceneLight scans every live unit's particle pool for the brightest
-  // light-emitting particle and returns it for the renderer's single dynamic
-  // light slot.  Mirrors the GameEngine implementation so the visual matches.
-  getSceneLight() {
-    let bestUnit = null
-    let bestIdx = -1
-    let bestScore = 0
+  // getSceneLights scans every live unit's particle pool and returns the
+  // strongest light-emitting particles (up to MAX_PULSE_LIGHTS) for the
+  // renderer's dynamic light slots.  Returning several — rather than a single
+  // winner — lets every concurrent shot light the scene at once, so a
+  // rapid-firing battleship's volley each casts its own glow instead of only
+  // the first shell.  Mirrors the GameEngine path through the shared collector.
+  getSceneLights() {
+    const pools = []
     for (const u of this._units.values()) {
       if (u.dead) continue
       const p = u.binding && u.binding.particles
-      if (!p) continue
-      for (let i = 0; i < p.count; i++) {
-        if (!p.alive[i]) continue
-        const ls = p.lightStrength[i]
-        if (!(ls > 0)) continue
-        const lum = Math.max(p.r[i], p.g[i], p.b[i])
-        const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
-        if (s > bestScore) { bestScore = s; bestIdx = i; bestUnit = u }
-      }
+      if (p) pools.push(p)
     }
-    if (bestIdx < 0 || !bestUnit) return null
-    const p = bestUnit.binding.particles
-    return {
-      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
-      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
-      strength: p.lightStrength[bestIdx],
-    }
+    return gatherSceneLights(pools)
+  }
+
+  // getSceneLight returns the single strongest light for callers still on the
+  // one-slot path; null when nothing is lit.
+  getSceneLight() {
+    const lights = this.getSceneLights()
+    return lights.length ? lights[0] : null
   }
 
   // ── Per-frame tick ────────────────────────────────────────────────

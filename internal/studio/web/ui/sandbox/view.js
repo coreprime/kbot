@@ -375,15 +375,17 @@ export class SandboxView {
       if (this.scene && typeof this.scene.interpolate === 'function') {
         this.scene.interpolate()
       }
-      // Pull-side scene light: ask the engine for the brightest live
-      // light-emitting particle across all units and push it into
-      // THIS renderer's single dynamic-light slot.  Each pane reads
-      // independently so per-pane camera framing computes the
-      // light's NDC position correctly.
-      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLight === 'function') {
-        const light = this.scene.engine.getSceneLight()
-        if (light) this.renderer.setPulseLight(light.pos, light.color, light.strength)
-        else this.renderer.setPulseLight(null, null, 0)
+      // Pull-side scene lights: ask the engine for the brightest live
+      // light-emitting particles across all units and push them into THIS
+      // renderer's dynamic-light slots.  Several at once so each concurrent
+      // shot (a battleship's volley) casts its own glow rather than only the
+      // first.  Each pane reads independently so per-pane camera framing
+      // computes each light's NDC position correctly.
+      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLights === 'function') {
+        const lights = typeof this.scene.engine.getSceneLights === 'function'
+          ? this.scene.engine.getSceneLights()
+          : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
+        this.renderer.setPulseLights(lights)
       }
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they

@@ -27,6 +27,7 @@ import {
   SFX_PROJECTILE_LASER,
   SFX_PROJECTILE_MISSILE,
 } from './cob-particles.js'
+import { gatherSceneLights } from './scene-lights.js'
 
 // TA SFXTYPE constants reproduced from Cavedog's smokeunit.h.  These
 // are the values a unit's BOS script passes to `emit-sfx` — the
@@ -206,33 +207,19 @@ export class CobBinding {
     return count
   }
 
-  // getSceneLight scans the alive particles for any flagged as a
-  // light source and returns the strongest as { pos, color, strength }
-  // (or null when nothing is lit).  One light at a time keeps shader
-  // cost flat; in practice the d-gun dominates any other simultaneous
-  // emitter (range 300 vs laser's 80) so picking the brightest is
-  // enough.  Same shape as the engine's getSceneLight so the renderer
-  // can poll either source through one code path.
+  // getSceneLights scans the alive particles for any flagged as a light
+  // source and returns the strongest few (up to MAX_PULSE_LIGHTS) as
+  // { pos, color, strength } objects.  Several at once so concurrent muzzle
+  // flashes and tracer shells each cast their own glow.  Same shape as the
+  // engine's getSceneLights so the renderer polls either source through one
+  // code path.
+  getSceneLights() {
+    return gatherSceneLights([this.particles])
+  }
+
   getSceneLight() {
-    const p = this.particles
-    let bestIdx = -1
-    let bestScore = 0
-    for (let i = 0; i < p.count; i++) {
-      if (!p.alive[i]) continue
-      const ls = p.lightStrength[i]
-      if (!(ls > 0)) continue
-      // Score combines range × brightness × alpha so a fading puff
-      // gradually dims; the d-gun's huge range keeps it dominant.
-      const lum = Math.max(p.r[i], p.g[i], p.b[i])
-      const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
-      if (s > bestScore) { bestScore = s; bestIdx = i }
-    }
-    if (bestIdx < 0) return null
-    return {
-      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
-      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
-      strength: p.lightStrength[bestIdx],
-    }
+    const lights = this.getSceneLights()
+    return lights.length ? lights[0] : null
   }
 
   // start exposes the unit's entry-point launcher with the same name

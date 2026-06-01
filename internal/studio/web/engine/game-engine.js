@@ -76,6 +76,7 @@ import { stepSurfaceLocomotion, attackManeuver, shortestArc } from './locomotion
 import { angleToRadians } from './cob-opcodes.js'
 import { makeProjectile, stepProjectile, hasModelProjectile } from './projectiles.js'
 import { makeRng } from './rng.js'
+import { gatherSceneLights } from './scene-lights.js'
 
 const SLOT_NAMES = ['Primary', 'Secondary', 'Tertiary']
 const TA_TURN_FULL = 65536
@@ -595,47 +596,33 @@ export class GameEngine {
     return insts
   }
 
-  // getSceneLight scans every unit's particle pool for the brightest
-  // live light-emitter and returns it as a plain object the host
-  // view can forward to its renderer's single dynamic-light slot.
-  // Returns null when no live light source exists (host clears the
-  // slot).  Cross-unit by design — each unit's binding also exposes
-  // its own getSceneLight for the single-binding renderer path, but
-  // multi-entity hosts want the scene-wide brightest because the
-  // renderer's per-binding tick isn't running there.  Score formula
-  // (lightStrength · max(r,g,b) · alpha/alpha0) mirrors the binding's
-  // so the two paths agree on which particle wins.
+  // getSceneLights scans every unit's particle pool for the brightest live
+  // light-emitters and returns the top few (up to MAX_PULSE_LIGHTS) as plain
+  // objects the host view forwards to the renderer's dynamic-light slots.
+  // Empty when no live light source exists (host clears the slots).
+  // Cross-unit by design — each unit's binding also exposes its own
+  // getSceneLights for the single-binding renderer path, but multi-entity
+  // hosts want the scene-wide set because the renderer's per-binding tick
+  // isn't running there.
   //
-  // Pure read.  The engine holds no renderer ref — pull-side
-  // decoupling per the engine/renderer split (Phase D).
-  getSceneLight() {
-    let bestUnit = null
-    let bestIdx = -1
-    let bestScore = 0
+  // Pure read.  The engine holds no renderer ref — pull-side decoupling per
+  // the engine/renderer split (Phase D).
+  getSceneLights() {
+    // Particle positions are in WORLD coords for multi-entity mode (the
+    // binding's worldOffset is baked in by the spawn helper) — pass through
+    // unchanged.
+    const pools = []
     for (const u of this._units.values()) {
       if (u.dead) continue
       const b = u.binding
-      if (!b || !b.particles) continue
-      const p = b.particles
-      for (let i = 0; i < p.count; i++) {
-        if (!p.alive[i]) continue
-        const ls = p.lightStrength[i]
-        if (!(ls > 0)) continue
-        const lum = Math.max(p.r[i], p.g[i], p.b[i])
-        const s = ls * lum * (p.a[i] / Math.max(0.001, p.a0[i]))
-        if (s > bestScore) { bestScore = s; bestIdx = i; bestUnit = u }
-      }
+      if (b && b.particles) pools.push(b.particles)
     }
-    if (bestIdx < 0 || !bestUnit) return null
-    const p = bestUnit.binding.particles
-    // Particle positions are in WORLD coords for multi-entity mode
-    // (the binding's worldOffset has already been baked in by the
-    // spawn helper) — pass through unchanged.
-    return {
-      pos: [p.x[bestIdx], p.y[bestIdx], p.z[bestIdx]],
-      color: [p.r[bestIdx], p.g[bestIdx], p.b[bestIdx]],
-      strength: p.lightStrength[bestIdx],
-    }
+    return gatherSceneLights(pools)
+  }
+
+  getSceneLight() {
+    const lights = this.getSceneLights()
+    return lights.length ? lights[0] : null
   }
 
   // #stepAttack — the SINGLE movement decision for engagement, shared by
