@@ -309,7 +309,7 @@ export function mountMapEditor() {
 //
 // onNewMap / onOpenMap / onOpenUnit / onOpenSandbox are host
 // callbacks fired when the user clicks the matching welcome card.
-export function mountWelcomeScreen({ onNewMap, onOpenMap, onOpenUnit, onOpenSandbox } = {}) {
+export function mountWelcomeScreen({ onNewMap, onOpenMap, onOpenUnit, onOpenSandbox, onBrowseFiles } = {}) {
   const dlg = document.getElementById('welcome-dialog')
   if (!dlg) return
   const card = dlg.querySelector('.dialog-card')
@@ -319,7 +319,8 @@ export function mountWelcomeScreen({ onNewMap, onOpenMap, onOpenUnit, onOpenSand
       onNewMap=${onNewMap}
       onOpenMap=${onOpenMap}
       onOpenUnit=${onOpenUnit}
-      onOpenSandbox=${onOpenSandbox} />
+      onOpenSandbox=${onOpenSandbox}
+      onBrowseFiles=${onBrowseFiles} />
   `)
 }
 

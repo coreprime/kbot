@@ -63,6 +63,7 @@ const _TABS = [
   { key: 'mapping',   label: 'Map Creator' },
   { key: 'modelling', label: 'Unit Creator' },
   { key: 'scripting', label: 'Scripting' },
+  { key: 'explorer',  label: 'Explorer' },
   { key: 'other',     label: 'Other', disabled: true,
     title: 'More workflows on the roadmap.' },
 ]
@@ -141,6 +142,7 @@ export function WelcomeScreen({
   onOpenMap,
   onOpenUnit,
   onOpenSandbox,
+  onBrowseFiles,
 }) {
   const active = _activeTab.value
   // Read the sandbox sub-view (menu vs join picker) so the keyboard-nav
@@ -259,6 +261,17 @@ export function WelcomeScreen({
             title="Open Unit"
             sub="Browse, test, and tune existing units in your workspace."
             onClick=${() => onOpenUnit && onOpenUnit()} />
+        </div>
+      </div>
+    ` : null}
+    ${active === 'explorer' ? html`
+      <div class="welcome-tab-panel" data-welcome-tab-panel="explorer">
+        <div class="welcome-options" ref=${cardRowRef}>
+          <${_Card}
+            icon="🗂"
+            title="Browse Game Files"
+            sub="Explore the complete Total Annihilation & TA: Kingdoms file-systems — preview animations, maps, scripts, and more."
+            onClick=${() => onBrowseFiles && onBrowseFiles()} />
         </div>
       </div>
     ` : null}

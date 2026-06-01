@@ -10,6 +10,7 @@
 
 import { htm as html } from '/ui/common/htm-bind.js'
 import { useEffect, useState } from 'preact/hooks'
+import { rawURL, formatSize } from '../api.js'
 
 const MAX_BYTES = 64 * 1024 // 64 KiB rendered ceiling
 
@@ -38,30 +39,32 @@ function dumpLines(bytes) {
   return lines.join('\n')
 }
 
-export function HexView({ path }) {
-  const [state, setState] = useState({ text: null, err: null, truncated: false })
+export function HexView({ path, source }) {
+  const [state, setState] = useState({ text: null, err: null, truncated: false, total: 0 })
   useEffect(() => {
     let alive = true
-    setState({ text: null, err: null, truncated: false })
-    fetch(`/api/vfs/${path}`)
+    setState({ text: null, err: null, truncated: false, total: 0 })
+    fetch(rawURL(path, source))
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status} ${r.statusText}`))))
       .then((buf) => {
         if (!alive) return
         const all = new Uint8Array(buf)
         const truncated = all.length > MAX_BYTES
         const view = truncated ? all.subarray(0, MAX_BYTES) : all
-        setState({ text: dumpLines(view), err: null, truncated })
+        setState({ text: dumpLines(view), err: null, truncated, total: all.length })
       })
-      .catch((e) => { if (alive) setState({ text: null, err: String(e), truncated: false }) })
+      .catch((e) => { if (alive) setState({ text: null, err: String(e), truncated: false, total: 0 }) })
     return () => { alive = false }
-  }, [path])
+  }, [path, source])
 
-  if (state.err) return html`<div class="files-error">${state.err}</div>`
-  if (state.text == null) return html`<div class="files-loading">Loading…</div>`
+  if (state.err) return html`<div class="fx-error">${state.err}</div>`
+  if (state.text == null) return html`<div class="fx-loading"><span class="fx-spinner"></span>Loading…</div>`
   return html`
-    <div class="files-hex">
-      <pre class="files-hex-dump">${state.text}</pre>
-      ${state.truncated ? html`<div class="files-hex-note">Showing first ${MAX_BYTES / 1024} KiB</div>` : null}
+    <div class="fx-hex">
+      <pre class="fx-hex-dump">${state.text}</pre>
+      ${state.truncated
+        ? html`<div class="fx-hex-note">Showing first ${MAX_BYTES / 1024} KiB of ${formatSize(state.total)} — download for the full file.</div>`
+        : null}
     </div>
   `
 }
