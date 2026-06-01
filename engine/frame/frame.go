@@ -26,6 +26,7 @@ type UnitState struct {
 	Side         int
 	Pos          fixed.Vec3
 	Heading      int32
+	Speed        fixed.Fixed // current locomotion speed (world units/sec)
 	Health       fixed.Fixed // 0..100
 	Dead         bool
 	BuildPercent fixed.Fixed // 0..100

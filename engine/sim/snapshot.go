@@ -22,6 +22,7 @@ func (w *World) Snapshot() frame.Snapshot {
 			Side:         u.Side,
 			Pos:          u.Pos(),
 			Heading:      int32(u.loco.Heading.Int()),
+			Speed:        u.loco.Speed,
 			Health:       u.Health,
 			Dead:         u.Dead,
 			BuildPercent: u.BuildPercent,

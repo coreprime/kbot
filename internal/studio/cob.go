@@ -15,6 +15,46 @@ import (
 // surface area stays self-contained for the JS-side runtime.
 func registerCobAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/cob/", handleCobScript)
+	mux.HandleFunc("/api/studio/cob-bytes/", handleCobBytes)
+}
+
+// resolveCobBytes reads a unit's raw COB bytecode from the VFS, trying the
+// case-inconsistent locations TA assets ship under. It returns ok=false when
+// the unit carries no script, which both the disassembly and the raw-bytes
+// handlers surface as a 404 so callers degrade gracefully.
+func resolveCobBytes(name string) ([]byte, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, ".cob"))
+	candidates := []string{
+		"scripts/" + name + ".cob",
+		"Scripts/" + name + ".cob",
+		"scripts/" + strings.ToUpper(name) + ".cob",
+	}
+	for _, p := range candidates {
+		if b, err := vfs.ReadFile(p); err == nil {
+			return b, true
+		}
+	}
+	return nil, false
+}
+
+// handleCobBytes serves a unit's raw COB bytecode unmodified. The wasm engine
+// compiles it through the same Go disassembler the server uses, so the browser
+// client and the authoritative host derive piece animation from one code path
+// rather than the studio's debug-oriented JSON disassembly.
+func handleCobBytes(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/cob-bytes/")
+	name, err := url.PathUnescape(raw)
+	if err != nil || name == "" {
+		http.Error(w, "missing cob name", http.StatusBadRequest)
+		return
+	}
+	data, ok := resolveCobBytes(name)
+	if !ok {
+		http.Error(w, "cob not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	_, _ = w.Write(data)
 }
 
 // cobScriptJSON is the wire format consumed by the browser-side
@@ -61,31 +101,17 @@ func handleCobScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing cob name", http.StatusBadRequest)
 		return
 	}
-	// Strip extension if the caller helpfully supplied one - we treat
-	// the unit name as the canonical key (matches /api/studio/model/).
-	name = strings.ToLower(strings.TrimSuffix(name, ".cob"))
-	// TA stores COB scripts in the scripts/ folder named after the
-	// unit ID.  Some assets case the filename inconsistently so try a
-	// couple of likely locations.
-	candidates := []string{
-		"scripts/" + name + ".cob",
-		"Scripts/" + name + ".cob",
-		"scripts/" + strings.ToUpper(name) + ".cob",
-	}
-	var data []byte
-	for _, p := range candidates {
-		if b, err := vfs.ReadFile(p); err == nil {
-			data = b
-			break
-		}
-	}
-	if data == nil {
+	data, ok := resolveCobBytes(name)
+	if !ok {
 		// Surface a 404 so the JS client can degrade gracefully -
 		// many TA assets ship without a per-unit script, in which
 		// case the viewer just shows the static 3DO with no animation.
 		http.Error(w, "cob not found", http.StatusNotFound)
 		return
 	}
+	// The canonical key is the lowercased, extension-less unit name (matches
+	// /api/studio/model/).
+	name = strings.ToLower(strings.TrimSuffix(name, ".cob"))
 
 	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
 	if err != nil {

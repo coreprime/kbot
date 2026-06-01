@@ -174,6 +174,7 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"z":            u.Pos.Z.Float(),
 		"heading":      int(u.Heading),
 		"headingRad":   fixed.AngleToRadians(u.Heading),
+		"speed":        u.Speed.Float(),
 		"health":       u.Health.Float(),
 		"dead":         u.Dead,
 		"buildPercent": u.BuildPercent.Float(),
@@ -226,6 +227,23 @@ func uint32Slice(v js.Value) []uint32 {
 		out = append(out, uint32(v.Index(i).Int()))
 	}
 	return out
+}
+
+// cobBytes copies the raw COB bytecode off a meta object's "cob" field, which
+// the studio attaches as a Uint8Array. An absent or empty field yields nil, so
+// the unit falls back to script-less movement/combat.
+func cobBytes(o js.Value) []byte {
+	v := o.Get("cob")
+	if v.Type() != js.TypeObject || v.IsNull() {
+		return nil
+	}
+	n := v.Length()
+	if n <= 0 {
+		return nil
+	}
+	b := make([]byte, n)
+	js.CopyBytesToGo(b, v)
+	return b
 }
 
 func getString(o js.Value, k string) string {

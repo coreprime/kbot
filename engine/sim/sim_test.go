@@ -77,3 +77,31 @@ func TestCombatKills(t *testing.T) {
 		t.Errorf("attacker never killed defender; def hp=%v", w.UnitByID(def).Health.Float())
 	}
 }
+
+// TestSnapshotCarriesSpeed guards the render-snapshot speed enrichment: a unit
+// mid-move reports a positive speed the renderer can drive gait/effects from,
+// and a stationary unit reports zero.
+func TestSnapshotCarriesSpeed(t *testing.T) {
+	w := New(Config{Seed: 3})
+	id := w.AddUnit("m", testMeta("m"), nil, fixed.Vec2{}, 0, 0)
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(400)}))
+	var sawMoving bool
+	for i := 0; i < 60; i++ {
+		w.Step(nil)
+		snap := w.Snapshot()
+		if snap.Units[0].Speed > 0 {
+			sawMoving = true
+			break
+		}
+	}
+	if !sawMoving {
+		t.Fatal("snapshot never reported a positive speed while moving")
+	}
+
+	stopped := New(Config{Seed: 3})
+	stopped.AddUnit("s", testMeta("s"), nil, fixed.Vec2{}, 0, 0)
+	stopped.Step(nil)
+	if got := stopped.Snapshot().Units[0].Speed; got != 0 {
+		t.Fatalf("idle unit speed = %v, want 0", got.Float())
+	}
+}

@@ -14,20 +14,28 @@
 package main
 
 import (
+	"bytes"
 	"syscall/js"
 
 	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/order"
+	"github.com/coreprime/kbot/engine/script"
 	"github.com/coreprime/kbot/engine/session"
 	"github.com/coreprime/kbot/engine/sim"
+	"github.com/coreprime/kbot/formats/scripting"
 )
 
 // instance pairs a session with the optional JS unit-meta resolver used when a
-// Spawn order has to materialize a unit by name (the networked path).
+// Spawn order has to materialize a unit by name (the networked path). It owns a
+// per-session script runtime that drives every bound unit's COB animation in
+// lockstep, plus a name-keyed cache of compiled programs so each unit type's
+// bytecode is disassembled at most once.
 type instance struct {
-	sess    *session.Session
-	world   *sim.World
-	resolve js.Value // a JS function name -> meta object, or undefined
+	sess     *session.Session
+	world    *sim.World
+	rt       *script.Runtime
+	resolve  js.Value                   // a JS function name -> meta object, or undefined
+	programs map[string]*script.Program // unit name -> compiled COB, nil = no script
 }
 
 var (
@@ -67,13 +75,14 @@ func create(_ js.Value, args []js.Value) any {
 	if len(args) > 1 {
 		delay = uint64(args[1].Int())
 	}
-	inst := &instance{}
+	inst := &instance{programs: map[string]*script.Program{}}
 	if len(args) > 2 && args[2].Type() == js.TypeFunction {
 		inst.resolve = args[2]
 	}
+	inst.rt = script.NewRuntime(seed)
 	w := sim.New(sim.Config{Seed: seed, Spawn: inst.spawnFunc()})
 	inst.world = w
-	inst.sess = session.New(session.Config{World: w, InputDelay: delay})
+	inst.sess = session.New(session.Config{World: w, Runtime: inst.rt, InputDelay: delay})
 	id := nextID
 	nextID++
 	instances[id] = inst
@@ -96,8 +105,48 @@ func (inst *instance) spawnFunc() sim.SpawnFunc {
 		if !m.Truthy() {
 			return nil, nil
 		}
-		return metaFromJS(m), nil
+		meta := metaFromJS(m)
+		return meta, inst.bindingFor(meta.Name, m)
 	}
+}
+
+// bindingFor builds a per-unit script binding from the COB bytes carried on the
+// meta object, or nil when the unit ships no script. The returned binding
+// registers with the instance runtime so session.Step animates its pieces.
+func (inst *instance) bindingFor(name string, metaObj js.Value) sim.Binding {
+	prog := inst.program(name, metaObj)
+	if prog == nil {
+		return nil
+	}
+	return inst.rt.NewUnit(prog, nil)
+}
+
+// program compiles (and caches) the COB program for a unit type. A miss is
+// cached as nil so a script-less type is probed at most once.
+func (inst *instance) program(name string, metaObj js.Value) *script.Program {
+	if p, ok := inst.programs[name]; ok {
+		return p
+	}
+	prog := compileCOB(cobBytes(metaObj))
+	inst.programs[name] = prog
+	return prog
+}
+
+// compileCOB disassembles raw COB bytes into a shared program, returning nil if
+// the bytes are absent or unparseable so the unit degrades to a script-less one.
+func compileCOB(b []byte) *script.Program {
+	if len(b) == 0 {
+		return nil
+	}
+	cob, err := scripting.LoadFromReader(bytes.NewReader(b))
+	if err != nil {
+		return nil
+	}
+	prog, err := script.FromCOB(cob)
+	if err != nil {
+		return nil
+	}
+	return prog
 }
 
 // addUnit(handle, metaObj, x, z, headingRad, side) -> unitId. Direct insertion
@@ -111,7 +160,8 @@ func addUnit(_ js.Value, args []js.Value) any {
 	at := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
 	heading := fixed.RadiansToAngle(args[4].Float())
 	side := args[5].Int()
-	return int(inst.world.AddUnit(meta.Name, meta, nil, at, heading, side))
+	binding := inst.bindingFor(meta.Name, args[1])
+	return int(inst.world.AddUnit(meta.Name, meta, binding, at, heading, side))
 }
 
 func removeUnit(_ js.Value, args []js.Value) any {
@@ -169,6 +219,11 @@ func restore(_ js.Value, args []js.Value) any {
 	if inst == nil {
 		return nil
 	}
+	// Drop the runtime's stale units before the world rebuilds its set: the
+	// session's Restore re-resolves each unit's binding through the spawn
+	// provider, which registers a fresh script unit on the runtime. Resetting
+	// first keeps the runtime's unit list in step with the restored world.
+	inst.rt.Reset()
 	tick, units := restoreFromJS(args[1])
 	inst.sess.Restore(tick, units)
 	return nil
