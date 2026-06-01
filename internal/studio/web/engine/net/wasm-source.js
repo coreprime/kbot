@@ -224,6 +224,26 @@ export class WasmFrameSource extends FrameSource {
     return this._engine.coverage(this._handle, unitId)
   }
 
+  // ── Unit-value ports ─────────────────────────────────────────────
+  //
+  // The offline unit editor drives COB GET_UNIT_VALUE reads from its inspector
+  // sliders — damage → HEALTH, build% → BUILD_PERCENT_LEFT, plus activation and
+  // standing move/fire orders. Authoring-only: the engine answers script reads
+  // from this writable store when no combat host is attached, so the join
+  // transport never exposes these.
+
+  // setUnitValue writes one COB unit-value port (TA's GetUnitValue table index).
+  setUnitValue(unitId, port, value) {
+    if (this._engine && this._handle >= 0) this._engine.setUnitValue(this._handle, unitId, port, value)
+  }
+
+  // getUnitValue reads back one port — the value a script's GET_UNIT_VALUE would
+  // yield now (an explicit write, else TA's resting default).
+  getUnitValue(unitId, port) {
+    if (!this._engine || this._handle < 0) return 0
+    return this._engine.getUnitValue(this._handle, unitId, port)
+  }
+
   dispose() {
     if (this._engine && this._handle >= 0) {
       this._engine.destroy(this._handle)

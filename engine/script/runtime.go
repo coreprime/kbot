@@ -120,6 +120,13 @@ type Unit struct {
 	// never feed the world hash — so they carry no determinism contract.
 	breakpoints map[int]map[uint32]bool
 	executed    map[int]map[uint32]bool
+	// ports is the writable COB unit-value store consulted by GET_UNIT_VALUE /
+	// SET_VALUE when no Host is attached. The offline unit editor drives it from
+	// its inspector sliders (HEALTH / build / activation / standing orders) so
+	// scripts such as SmokeUnit and MotionControl observe the user's chosen state.
+	// Port writes never feed the world hash — combat-authoritative state lives on
+	// the sim unit — so the editor's port pokes carry no determinism contract.
+	ports map[int]int32
 }
 
 // recordEffect buffers one COB effect opcode as a partially-filled render event.
@@ -197,6 +204,28 @@ func (u *Unit) ResetState() {
 	for k := range u.doneReturns {
 		delete(u.doneReturns, k)
 	}
+	for k := range u.ports {
+		delete(u.ports, k)
+	}
+}
+
+// SetUnitValuePort writes a COB unit-value port that scripts read via
+// GET_UNIT_VALUE (TA's GetUnitValue). The offline unit editor uses it to drive
+// HEALTH / build-percent / activation / standing-orders from its inspector
+// sliders. With no Host attached this store is the port source; a hosted unit
+// routes through the Host instead. Debug/authoring-only — never feeds the hash.
+func (u *Unit) SetUnitValuePort(port int, v int32) {
+	if u.ports == nil {
+		u.ports = map[int]int32{}
+	}
+	u.ports[port] = v
+}
+
+// UnitValuePort reports the current value of a COB unit-value port (the read the
+// inspector's Ports panel surfaces). Returns the effective value GET_UNIT_VALUE
+// would yield: an explicit port write, else TA's resting default.
+func (u *Unit) UnitValuePort(port int) int32 {
+	return u.getUnitValue(port)
 }
 
 // threadByID returns the thread carrying the given per-unit id, or nil. Used by

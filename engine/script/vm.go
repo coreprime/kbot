@@ -315,6 +315,8 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 		port := t.pop()
 		if u.host != nil {
 			u.host.SetUnitValue(int(port), int(value))
+		} else {
+			u.SetUnitValuePort(int(port), value)
 		}
 
 	// ── Piece animation ──────────────────────────────────────────
@@ -448,6 +450,11 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 func (u *Unit) getUnitValue(port int) int32 {
 	if u.host != nil {
 		return u.host.GetUnitValue(port)
+	}
+	if u.ports != nil {
+		if v, ok := u.ports[port]; ok {
+			return v
+		}
 	}
 	switch port {
 	case uvActivation:

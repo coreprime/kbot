@@ -363,6 +363,38 @@ func (w *World) UnitCoverage(id uint32) map[int][]uint32 {
 	return nil
 }
 
+// CobPorts is the optional unit-value port surface a binding exposes so the
+// offline unit editor can drive COB GET_UNIT_VALUE reads (HEALTH, build percent,
+// activation, standing orders) from its inspector sliders. The script.Unit
+// binding implements it; script-less bindings do not. Port writes never feed the
+// world hash — combat-authoritative state lives on the sim unit — so they carry
+// no determinism contract.
+type CobPorts interface {
+	SetUnitValuePort(port int, v int32)
+	UnitValuePort(port int) int32
+}
+
+// UnitSetValuePort writes a COB unit-value port on a unit's script binding. A
+// missing or script-less unit is a silent no-op.
+func (w *World) UnitSetValuePort(id uint32, port int, v int32) {
+	if u := w.units[id]; u != nil {
+		if p, ok := u.binding.(CobPorts); ok {
+			p.SetUnitValuePort(port, v)
+		}
+	}
+}
+
+// UnitValuePort reads a COB unit-value port off a unit's script binding (the
+// value GET_UNIT_VALUE would yield). Returns 0 for a missing / script-less unit.
+func (w *World) UnitValuePort(id uint32, port int) int32 {
+	if u := w.units[id]; u != nil {
+		if p, ok := u.binding.(CobPorts); ok {
+			return p.UnitValuePort(port)
+		}
+	}
+	return 0
+}
+
 // UnitCount returns the number of units currently in the world (live or dead
 // until reaped). It is a cheap map length read used for session listings.
 func (w *World) UnitCount() int { return len(w.units) }

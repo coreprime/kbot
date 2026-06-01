@@ -76,6 +76,11 @@ func main() {
 		"clearBreakpoints":    js.FuncOf(clearBreakpoints),
 		"clearBreakpointHits": js.FuncOf(clearBreakpointHits),
 		"coverage":            js.FuncOf(coverage),
+		// Unit-value ports — the offline unit editor drives COB GET_UNIT_VALUE
+		// reads (HEALTH / build percent / activation / standing orders) from its
+		// inspector sliders. Authoring-only; never networked.
+		"setUnitValue": js.FuncOf(setUnitValue),
+		"getUnitValue": js.FuncOf(getUnitValue),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -425,6 +430,25 @@ func coverage(_ js.Value, args []js.Value) any {
 		return js.ValueOf(map[string]any{})
 	}
 	return coverageToJS(inst.world.UnitCoverage(uint32(args[1].Int())))
+}
+
+// setUnitValue(handle, unitId, port, value) writes a COB unit-value port so the
+// unit editor's sliders (damage / build) and Ports inspector drive script reads.
+func setUnitValue(_ js.Value, args []js.Value) any {
+	if inst := instances[args[0].Int()]; inst != nil {
+		inst.world.UnitSetValuePort(uint32(args[1].Int()), args[2].Int(), int32(args[3].Int()))
+	}
+	return nil
+}
+
+// getUnitValue(handle, unitId, port) reads back a COB unit-value port for the
+// Ports inspector — the value GET_UNIT_VALUE would yield for that port now.
+func getUnitValue(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.world.UnitValuePort(uint32(args[1].Int()), args[2].Int()))
 }
 
 // cobState(handle) returns the live COB inspection snapshot — the world tick
