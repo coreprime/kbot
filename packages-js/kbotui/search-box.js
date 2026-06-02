@@ -1,14 +1,16 @@
 // search-box.js
 //
-// Debounced global search over every VFS path, with a keyboard-navigable
-// results dropdown.  Mirrors the standalone explorer's search: ⌘K / Ctrl+K
-// focuses it, ↑/↓ walk results, Enter opens the highlighted hit (folders
-// open in Browse, files in the viewer), Esc dismisses.
+// Debounced global search with a keyboard-navigable results dropdown:
+// ⌘K / Ctrl+K focuses it, ↑/↓ walk results, Enter opens the highlighted
+// hit (folders via onOpenDir, files via onOpenFile), Esc dismisses.
+//
+// The data source is injected: `onSearch(query)` returns a promise of
+// result rows ({ path, name, isDir }), so the component stays free of
+// any particular backend.
 
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { search } from '../api.js'
-import { fileIcon } from './icons.js'
+import { fileIcon } from './file-icons.js'
 
 // highlight splits a name around the first case-insensitive match so the
 // matched run can be emphasised in the dropdown.
@@ -19,7 +21,7 @@ function highlight(text, query) {
   return html`${text.slice(0, idx)}<strong class="fx-search-hl">${text.slice(idx, idx + query.length)}</strong>${text.slice(idx + query.length)}`
 }
 
-export function SearchBox({ onOpenDir, onOpenFile, autoFocus }) {
+export function SearchBox({ onSearch, onOpenDir, onOpenFile, autoFocus }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [busy, setBusy] = useState(false)
@@ -50,10 +52,10 @@ export function SearchBox({ onOpenDir, onOpenFile, autoFocus }) {
   }, [])
 
   const run = useCallback((q) => {
-    if (q.length < 2) { setResults([]); setOpen(false); return }
+    if (q.length < 2 || typeof onSearch !== 'function') { setResults([]); setOpen(false); return }
     setBusy(true)
-    search(q).then((r) => { setResults(r); setOpen(true); setSel(-1); setBusy(false) }).catch(() => setBusy(false))
-  }, [])
+    onSearch(q).then((r) => { setResults(r); setOpen(true); setSel(-1); setBusy(false) }).catch(() => setBusy(false))
+  }, [onSearch])
 
   const onChange = useCallback((e) => {
     const v = e.target.value

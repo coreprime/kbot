@@ -10,7 +10,7 @@
 
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useEffect, useState } from 'preact/hooks'
-import { rawURL, formatSize } from '../api.js'
+import { formatSize } from './format.js'
 
 const MAX_BYTES = 64 * 1024 // 64 KiB rendered ceiling
 
@@ -39,12 +39,14 @@ function dumpLines(bytes) {
   return lines.join('\n')
 }
 
-export function HexView({ path, source }) {
+// HexView fetches the bytes at `src` (a fully-resolved URL — the caller
+// owns how that maps to a backend) and renders the capped dump.
+export function HexView({ src }) {
   const [state, setState] = useState({ text: null, err: null, truncated: false, total: 0 })
   useEffect(() => {
     let alive = true
     setState({ text: null, err: null, truncated: false, total: 0 })
-    fetch(rawURL(path, source))
+    fetch(src)
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`${r.status} ${r.statusText}`))))
       .then((buf) => {
         if (!alive) return
@@ -55,7 +57,7 @@ export function HexView({ path, source }) {
       })
       .catch((e) => { if (alive) setState({ text: null, err: String(e), truncated: false, total: 0 }) })
     return () => { alive = false }
-  }, [path, source])
+  }, [src])
 
   if (state.err) return html`<div class="fx-error">${state.err}</div>`
   if (state.text == null) return html`<div class="fx-loading"><span class="fx-spinner"></span>Loading…</div>`

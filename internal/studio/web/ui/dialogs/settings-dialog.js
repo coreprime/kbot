@@ -15,7 +15,7 @@
 import { signal } from '@preact/signals'
 import { useState, useEffect } from 'preact/hooks'
 import { htm as html } from '@kbot/ui/htm-bind'
-import { DialogModal } from '/ui/dialogs/dialog-modal.js'
+import { DialogModal } from '@kbot/ui/dialog-modal'
 
 // _state — singleton request bag.  Carries the initial values, the
 // world preset options for the Unit Editor tab's environment picker,

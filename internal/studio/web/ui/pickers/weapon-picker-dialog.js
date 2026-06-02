@@ -15,7 +15,7 @@
 
 import { signal } from '@preact/signals'
 import { htm as html } from '@kbot/ui/htm-bind'
-import { PickerModal } from '/ui/pickers/picker-modal.js'
+import { PickerModal } from '@kbot/ui/picker-modal'
 
 const _state = signal(null)
 

@@ -5,7 +5,8 @@
 // the active layer) and shows them with line numbers.
 
 import { htm as html } from '@kbot/ui/htm-bind'
-import { useRawText, Loading, ErrorMsg } from '../components/async.js'
+import { useRawText } from '../components/async.js'
+import { Loading, ErrorMsg } from '@kbot/ui/async'
 
 export function TextTab({ path, source }) {
   const { data, loading, error } = useRawText(path, source)

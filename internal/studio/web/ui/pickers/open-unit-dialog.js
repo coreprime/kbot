@@ -15,7 +15,7 @@
 
 import { signal } from '@preact/signals'
 import { htm as html } from '@kbot/ui/htm-bind'
-import { PickerModal } from '/ui/pickers/picker-modal.js'
+import { PickerModal } from '@kbot/ui/picker-modal'
 
 // _state — singleton signal carrying the picker's full state and the
 // callbacks for the current invocation.  Null when not open.  Shape:

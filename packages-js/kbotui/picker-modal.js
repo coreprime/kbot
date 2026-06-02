@@ -14,7 +14,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks'
 import { htm as html } from '@kbot/ui/htm-bind'
-import { DialogModal } from '/ui/dialogs/dialog-modal.js'
+import { DialogModal } from './dialog-modal.js'
 
 // Number of card rows the list shows before it scrolls.  The list is pinned
 // to this many rows so the dialog is a stable height that does NOT grow or

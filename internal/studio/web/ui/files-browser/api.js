@@ -12,6 +12,11 @@
 // viewers can ask for "the PNG of GAF sequence 3, frame 2, with the
 // unit's team palette" without hand-assembling a query string.
 
+// The pure formatting + path helpers live in @kbot/ui so non-studio
+// surfaces can share them; re-export here so the explorer's many
+// callers keep importing them from the VFS client as before.
+export { formatSize, parentDir, baseName, extOf } from '@kbot/ui/format'
+
 const BASE = '/api/vfs/'
 
 // enc encodes a VFS-relative path for use in the dispatcher URL,
@@ -119,30 +124,3 @@ export function videoThumbURL(path, source) {
   return renderURL(path, { format: 'thumb', source })
 }
 
-// ── formatting ──────────────────────────────────────────────────────
-
-export function formatSize(bytes) {
-  const n = Number(bytes) || 0
-  if (n === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const i = Math.floor(Math.log(n) / Math.log(1024))
-  const val = n / Math.pow(1024, i)
-  return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
-}
-
-export function parentDir(filePath) {
-  const parts = String(filePath || '').split('/').filter(Boolean)
-  if (parts.length <= 1) return ''
-  return parts.slice(0, -1).join('/')
-}
-
-export function baseName(filePath) {
-  const parts = String(filePath || '').split('/').filter(Boolean)
-  return parts.length ? parts[parts.length - 1] : ''
-}
-
-export function extOf(filePath) {
-  const b = baseName(filePath)
-  const i = b.lastIndexOf('.')
-  return i < 0 ? '' : b.slice(i + 1).toLowerCase()
-}

@@ -7,7 +7,7 @@
 
 import { htm as html } from '@kbot/ui/htm-bind'
 import { getStats, formatSize } from '../api.js'
-import { useAsync, Loading, ErrorMsg } from '../components/async.js'
+import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
 
 function StatCard({ value, label, accent }) {
   return html`

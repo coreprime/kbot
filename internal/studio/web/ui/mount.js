@@ -42,7 +42,7 @@ import { ControlsPanel } from '/ui/panels/controls-panel.js'
 import { UnitPortsPanel } from '/ui/panels/unit-ports-panel.js'
 import { RuntimePanel } from '/ui/panels/runtime-panel.js'
 import { NetworkPanel, SyncDiagnosticsPanel } from '/ui/panels/network-panel.js'
-import { confirmDialog } from '/ui/dialogs/confirm-dialog.js'
+import { confirmDialog } from '@kbot/ui/confirm-dialog'
 import {
   SettingsDialog, openSettingsDialog, closeSettingsDialog,
 } from '/ui/dialogs/settings-dialog.js'

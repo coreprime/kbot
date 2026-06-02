@@ -1,10 +1,10 @@
-// icons.js
+// file-icons.js
 //
 // Maps a file name to a glyph and a coarse "kind" used for colour-coding
 // rows and choosing a viewer.  Kept tiny and dependency-free so both the
 // browse table and the search dropdown can share it.
 
-import { extOf } from '../api.js'
+import { extOf } from './format.js'
 
 const ICONS = {
   gaf: '🎨', pcx: '🖼️', pal: '🎨',

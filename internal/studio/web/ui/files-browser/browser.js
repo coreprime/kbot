@@ -14,12 +14,12 @@
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { WarmIndicator } from './content/warm-indicator.js'
-import { SearchBox } from './components/search-box.js'
-import { Breadcrumbs } from './components/breadcrumbs.js'
+import { SearchBox } from '@kbot/ui/search-box'
+import { Breadcrumbs } from '@kbot/ui/breadcrumbs'
 import { HomePage } from './pages/home.js'
 import { BrowsePage } from './pages/browse.js'
 import { ViewPage } from './pages/view.js'
-import { parentDir, baseName } from './api.js'
+import { parentDir, baseName, search } from './api.js'
 import { setFilesTabTitle } from './tab.js'
 
 // routeTitle derives the strip label shown on the Files tab from the
@@ -62,7 +62,7 @@ export function FilesBrowser() {
               : html`<${Breadcrumbs} crumbs=${crumbsFromPath(parentDir(route.path))} trailing=${baseName(route.path)} onOpenDir=${openDir} onGoHome=${goHome} />`}
         </div>
         <div class="fx-header-right">
-          <${SearchBox} onOpenDir=${openDir} onOpenFile=${openFile} autoFocus=${true} />
+          <${SearchBox} onSearch=${search} onOpenDir=${openDir} onOpenFile=${openFile} autoFocus=${true} />
         </div>
       </header>
       <main class="fx-content">

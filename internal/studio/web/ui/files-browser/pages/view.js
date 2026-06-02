@@ -11,8 +11,9 @@
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
 import { metadata, rawURL, renderURL, extOf } from '../api.js'
-import { useAsync, useRawText, Loading, ErrorMsg } from '../components/async.js'
-import { HexView } from '../content/hex-view.js'
+import { useRawText } from '../components/async.js'
+import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
+import { HexView } from '@kbot/ui/hex-view'
 import { InfoTab } from '../viewers/info.js'
 import { TextTab } from '../viewers/text.js'
 import { GafViewer } from '../viewers/gaf.js'
@@ -239,7 +240,7 @@ export function ViewPage({ path, source: initialSource, onOpenFile }) {
       case 'lint': return html`<${LintTab} describe=${describe} format=${describe.format} onJumpToLine=${handleJumpToLine} />`
       case 'text': return html`<${TextTab} path=${path} source=${src} />`
       case 'metadata': return html`<${InfoTab} meta=${meta} />`
-      case 'binary': return html`<${HexView} path=${path} source=${src} />`
+      case 'binary': return html`<${HexView} src=${rawURL(path, src)} />`
       case 'layers': return html`<${LayersTab} layers=${layers} activeSource=${src || meta.source} onSwitch=${setActiveSource} />`
       default: return null
     }

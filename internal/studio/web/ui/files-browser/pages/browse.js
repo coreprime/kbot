@@ -14,8 +14,8 @@ import {
   browse, formatSize, extOf, baseName, rawURL,
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
 } from '../api.js'
-import { useAsync, Loading, ErrorMsg } from '../components/async.js'
-import { fileIcon, fileKind } from '../components/icons.js'
+import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
+import { fileIcon, fileKind } from '@kbot/ui/file-icons'
 
 const PREVIEW_EXTS = new Set(['gaf', 'pcx', 'tnt', 'sct', 'smk', 'zrb', 'bik'])
 
