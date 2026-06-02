@@ -18,6 +18,7 @@
 // so weapon SM + audio scheduling stay coherent.
 
 import { tabs, tabState, $, hostCallbacks } from '../host-context.js'
+import { WasmSandboxScene } from '../sandbox/wasm-scene.js'
 import { MvControls } from './mv-controls.js'
 import { findModelMeta } from '../pickers/model-catalog.js'
 import { getModelOpenIntent, setModelOpenIntent } from './host-state.js'
@@ -31,7 +32,7 @@ import { startTabTick } from '../common/tab-tick.js'
 export async function activateModelTab(tab) {
   // Lazy-import the game3d module so users who never click a
   // model tab don't pay for the shader / matrix code.
-  const mod = await import('../../game3d/index.js')
+  const mod = await import('@kbot/game3d')
   // Stage all OTHER tabs' canvases / split mounts out of the DOM
   // so an inactive tab's surfaces can't bleed through.  Each tab
   // type owns its own attach style: sandbox + unit-editor (since
@@ -69,6 +70,9 @@ export async function activateModelTab(tab) {
     viewer = new mod.ModelViewer({
       canvas,
       statusEl: $('#status'),
+      // Inject the wasm-backed scene so @kbot/game3d stays free of any
+      // dependency back into the studio's ui layer.
+      sceneFactory: (opts) => new WasmSandboxScene(opts),
       onModelLoaded: (model, cob) => {
         // Initial lifecycle state — units with a Create script
         // start 'unborn' (Action buttons gated until Create runs);

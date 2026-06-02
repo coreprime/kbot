@@ -4,7 +4,7 @@
 // greyscale height map.  SCT sections are the map tiles TA composes maps
 // from, so they reuse the same pan/zoom canvas as the TNT viewer.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { mapViewURL } from '../api.js'
 import { PanZoomMap } from './mapview.js'
 

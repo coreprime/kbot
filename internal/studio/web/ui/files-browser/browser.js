@@ -11,7 +11,7 @@
 // button reset the route.  State is intentionally shallow (one object)
 // so a back/forward stack can be layered on later without restructuring.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { WarmIndicator } from './content/warm-indicator.js'
 import { SearchBox } from './components/search-box.js'

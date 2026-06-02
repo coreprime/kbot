@@ -12,7 +12,7 @@
 // /api/studio/maps for the loading catalog.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { PickerModal } from '/ui/pickers/picker-modal.js'
 
 const _state = signal(null)

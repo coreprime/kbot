@@ -4,7 +4,7 @@
 // start-position markers, and a minimap), a greyscale height map, and a
 // searchable feature catalogue card grid.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { mapViewURL } from '../api.js'
 import { PanZoomMap } from './mapview.js'

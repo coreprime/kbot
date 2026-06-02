@@ -1,0 +1,12 @@
+{
+  "name": "@kbot/game3d",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "WebGL game surface and model rendering used by the KBot Studio sandbox.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./*": "./*.js"
+  }
+}

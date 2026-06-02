@@ -20,10 +20,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Embed the studio web assets explicitly so a stray node_modules / dotfile
-// added during local development doesn't bloat the binary.
+// Embed the Vite build output for the studio web app.  The bundle is produced
+// by `task build` (vite build → web/dist) before the binary is compiled; a
+// committed web/dist/.gitkeep keeps this package compiling on a fresh checkout
+// before that build has run.
 //
-//go:embed web/index.html web/studio.css web/studio.js web/engine web/game3d web/ui web/vendor
+//go:embed all:web/dist
 var webFS embed.FS
 
 var (
@@ -149,7 +151,7 @@ func resolveContextPath(args []string) (string, string, error) {
 // embed.FS directly rather than using http.FileServer, which auto-redirects
 // `/index.html` back to `/` and trips up our root handler.
 func registerStatic(mux *http.ServeMux) {
-	sub, err := fs.Sub(webFS, "web")
+	sub, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
 		panic(fmt.Sprintf("studio: embed sub-fs: %v", err))
 	}

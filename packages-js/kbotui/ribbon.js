@@ -19,7 +19,7 @@
 
 import { signal } from '@preact/signals'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 
 // _openDropdown — id of the dropdown currently showing its popup,
 // or null when none.  Single-slot signal so the Dropdown component

@@ -8,7 +8,7 @@
 // metadata + hex pair for anything unrecognised.  Picking a layer in the
 // Layering tab re-renders the visual tabs from that archive source.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
 import { metadata, rawURL, renderURL, extOf } from '../api.js'
 import { useAsync, useRawText, Loading, ErrorMsg } from '../components/async.js'

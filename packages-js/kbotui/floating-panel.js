@@ -20,7 +20,7 @@
 // consistent across the migration.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 import {
   panelSignals,
   setPanelPos,
@@ -30,7 +30,7 @@ import {
   setSidebarCollapsed,
   sectionSignals,
   setSectionCollapsed,
-} from '/ui/common/panel-store.js'
+} from './panel-store.js'
 
 // _headerHeight — read the live header element height so the clamp
 // rule honours whatever vertical padding the CSS applies.  Falls

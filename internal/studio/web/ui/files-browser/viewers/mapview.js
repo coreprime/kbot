@@ -6,7 +6,7 @@
 // shows the current viewport rectangle.  Feature markers and start
 // positions are passed in as overlay data and drawn in map space.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useRef, useState, useEffect, useCallback } from 'preact/hooks'
 
 function hideBroken(e) { e.target.style.visibility = 'hidden' }

@@ -14,7 +14,7 @@
 
 import { signal } from '@preact/signals'
 import { useState, useEffect } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { DialogModal } from '/ui/dialogs/dialog-modal.js'
 
 // _state — singleton request bag.  Carries the initial values, the

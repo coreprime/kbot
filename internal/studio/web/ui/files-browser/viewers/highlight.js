@@ -11,7 +11,7 @@
 // dangerouslySetInnerHTML; folding/lane state lives in the Preact tree so
 // only the interactive chrome re-renders.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useState, useMemo, useCallback } from 'preact/hooks'
 
 // ── shared helpers ──────────────────────────────────────────────────

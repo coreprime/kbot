@@ -22,9 +22,9 @@
 // legacy renderMvPortsPanel hit, no imperative refresh needed.
 
 import { useRef, useLayoutEffect } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, sandboxActive, sandboxSelSize, runtimeTick, controlsDevSectionVisible } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 import { PortChoiceRow, PortToggleRow, PortChipRow, PortSliderRow } from '/ui/panels/port-rows.js'

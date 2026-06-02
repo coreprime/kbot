@@ -12,10 +12,10 @@
 // `meta`, `map.dirty`, etc. fields.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 import {
   Dropdown, RibbonDropdownButton, MenuRow,
-} from '/ui/common/ribbon.js'
+} from './ribbon.js'
 
 // _state — singleton signal carrying { tabs, activeIndex }.  The
 // host pushes updates via setTabs() each time the underlying tabs

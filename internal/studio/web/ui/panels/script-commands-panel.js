@@ -18,9 +18,9 @@
 // component still renders cleanly when given an empty selection so
 // quick visibility flips don't tear down + rebuild the body.
 
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, runtimeTick, actionsIncludePrivate, setActionsIncludePrivate } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 

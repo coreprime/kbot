@@ -23,10 +23,10 @@
 // Rendering ▸ Scene section and are intentionally NOT part of this
 // shared body.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 import {
   MenuSectionLabel, MenuToggleRow, MenuSubmenuRow, MenuSliderRow,
-} from '/ui/common/ribbon.js'
+} from './ribbon.js'
 
 // _Slider — pop-out submenu slider row, matching the look of the
 // unit-editor's submenu sliders (.submenu-slider-row in studio.css).

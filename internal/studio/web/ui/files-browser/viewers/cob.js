@@ -4,7 +4,7 @@
 // decompiled high-level source (BOS-style highlighting + folding + lint
 // annotations), and the raw bytecode disassembly (control-flow arrows).
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { BosHighlighter, CobaHighlighter } from './highlight.js'
 
 function StatCard({ value, label }) {

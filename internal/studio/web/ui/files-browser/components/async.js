@@ -8,7 +8,7 @@
 // Loading / ErrorMsg are the matching placeholder components so every
 // page renders the same spinner and error chrome.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useEffect, useState } from 'preact/hooks'
 import { rawURL } from '../api.js'
 

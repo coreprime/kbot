@@ -5,7 +5,7 @@
 // packed vs unpacked size, compression), and a small facts panel.  All
 // numbers come from the ?stats document in one request.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { getStats, formatSize } from '../api.js'
 import { useAsync, Loading, ErrorMsg } from '../components/async.js'
 

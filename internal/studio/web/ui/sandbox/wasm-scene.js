@@ -26,7 +26,7 @@
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { gatherSceneLights } from '../../engine/scene-lights.js'
-import { AudioPool } from '../../game3d/audio-pool.js'
+import { AudioPool } from '@kbot/game3d/audio-pool'
 import { ParticlePool } from '../../engine/cob-particles.js'
 import {
   SmokeTrailManager,
@@ -35,7 +35,7 @@ import {
   playWeaponSound,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
-} from '../../game3d/weapon-driver.js'
+} from '@kbot/game3d/weapon-driver'
 
 // One simulation tick in milliseconds (40 Hz), matching the Go engine's
 // sim.TickMs.  The scene advances the wasm world on this fixed grid; the

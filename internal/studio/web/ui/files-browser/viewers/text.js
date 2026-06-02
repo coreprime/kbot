@@ -4,7 +4,7 @@
 // syntax-highlighted treatment.  Fetches the bytes as text (honouring
 // the active layer) and shows them with line numbers.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useRawText, Loading, ErrorMsg } from '../components/async.js'
 
 export function TextTab({ path, source }) {

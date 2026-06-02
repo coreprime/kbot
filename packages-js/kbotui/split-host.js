@@ -69,12 +69,12 @@
 import { useEffect, useRef } from 'preact/hooks'
 import { render } from 'preact'
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 import {
   SplitContainer, newLeaf, splitLeaf, closeLeaf, isOnlyLeaf, leafIds,
-} from '/ui/common/split-container.js'
-import { openContextMenu } from '/ui/common/context-menu.js'
-import { MenuRow, MenuSubmenuRow } from '/ui/common/ribbon.js'
+} from './split-container.js'
+import { openContextMenu } from './context-menu.js'
+import { MenuRow, MenuSubmenuRow } from './ribbon.js'
 
 // splitTreeVersion bumps on every applyTreeChange so menu components
 // (SplitMenuItems below) re-evaluate the focused pane's close

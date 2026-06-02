@@ -44,8 +44,8 @@ import {
   TEAM_COLOURS,
 } from '../host-state.js'
 import { playWeaponSound, openWeaponPicker, selectPiece } from '../sidebar.js'
-import { splitActivePane, closeActivePane, canCloseActivePane } from '../../common/split-host.js'
-import { setEnhanceMeshEnabled } from '../../../game3d/enhance-mesh.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
+import { setEnhanceMeshEnabled } from '@kbot/game3d/enhance-mesh'
 
 // wireModelViewerRibbon — install the React unit-editor ribbon bridge
 // + mount the React tree into #model-viewer-ribbon-mount.  Called

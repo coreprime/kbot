@@ -6,7 +6,7 @@
 // bind step turns it into a JSX-free template syntax we can drop into
 // any module:
 //
-//   import { htm } from '/ui/common/htm-bind.js'
+//   import { htm } from './htm-bind.js'
 //   const html = htm
 //   const view = html`<div class="row">${count}</div>`
 //

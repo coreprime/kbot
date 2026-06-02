@@ -21,9 +21,9 @@
 // waiting for the host's throttled publish.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 

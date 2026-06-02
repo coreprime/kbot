@@ -12,8 +12,8 @@
 // owns drag, collapse, position persistence) configured with
 // `.canvas-wrap` as the clamp container.
 
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
 import { mapStats } from '/ui/map-editor/store.js'
 
 // PANEL_ID — historic-id alignment.  The legacy panel used

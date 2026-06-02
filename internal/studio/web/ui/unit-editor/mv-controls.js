@@ -15,8 +15,8 @@
 // matrix.  The unit starts at (0,0) so the first Move target is
 // already in this frame.
 
-import { ArmedCursor } from '../../game3d/armed-cursor.js'
-import { shouldForceTarget } from '../../game3d/force-target.js'
+import { ArmedCursor } from '@kbot/game3d/armed-cursor'
+import { shouldForceTarget } from '@kbot/game3d/force-target'
 import { hostCallbacks } from '../host-context.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import {

@@ -22,7 +22,7 @@
 
 import { signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 
 const _showProjectiles = signal(true)

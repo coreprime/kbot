@@ -9,7 +9,7 @@
 //
 // Usage:
 //
-//   import { AccordionSection } from '/ui/common/accordion-section.js'
+//   import { AccordionSection } from './accordion-section.js'
 //
 //   <${AccordionSection} id="camera" title="Camera" defaultOpen=${true}>
 //     ...rows...
@@ -22,7 +22,7 @@
 // panels with a "Camera" section don't share toggle state.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 
 // _state — Set of section ids that are currently OPEN.  A section is
 // open iff its id is in the set.  Module-level so it survives

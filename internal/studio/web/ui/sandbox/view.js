@@ -19,19 +19,19 @@
 // Command API, camera tracking, unit acks, FX aggregation) lives
 // inside whichever view actually uses it.
 
-import { ModelLoader } from '../../game3d/model-loader.js'
-import { ModelRenderer } from '../../game3d/model-renderer.js'
-import { OrbitCamera } from '../../game3d/orbit-camera.js'
-import { TextureCache } from '../../game3d/texture-cache.js'
-import { TAPalette } from '../../game3d/palette.js'
+import { ModelLoader } from '@kbot/game3d/model-loader'
+import { ModelRenderer } from '@kbot/game3d/model-renderer'
+import { OrbitCamera } from '@kbot/game3d/orbit-camera'
+import { TextureCache } from '@kbot/game3d/texture-cache'
+import { TAPalette } from '@kbot/game3d/palette'
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
-import { attachOrbitControls } from '../../game3d/camera-controls.js'
+import { attachOrbitControls } from '@kbot/game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
-import { ArmedCursor } from '../../game3d/armed-cursor.js'
-import { ExplosionOverlay } from '../../game3d/explosion-overlay.js'
-import { teamColorForSide } from '../../game3d/team-colors.js'
-import { onEnhanceMeshChanged } from '../../game3d/enhance-mesh.js'
+import { ArmedCursor } from '@kbot/game3d/armed-cursor'
+import { ExplosionOverlay } from '@kbot/game3d/explosion-overlay'
+import { teamColorForSide } from '@kbot/game3d/team-colors'
+import { onEnhanceMeshChanged } from '@kbot/game3d/enhance-mesh'
 import {
   wireHotkeys,
   wrapCobWithAggregate,

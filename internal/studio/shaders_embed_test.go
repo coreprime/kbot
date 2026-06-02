@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+// shaderRoot is where the Vite build copies the GLSL tree verbatim inside
+// the embedded bundle.  shader-loader fetches it at /game3d/shaders/ and the
+// studio serves it straight from this embedded path.
+const shaderRoot = "web/dist/game3d/shaders"
+
+// requireBuiltBundle skips a test when the Vite bundle hasn't been produced
+// yet (a fresh checkout embeds only web/dist/.gitkeep).  The canonical flow
+// — `task build` then `task test` — always builds first, so CI still runs
+// these guards; a bare `go test ./...` without a prior build skips instead
+// of failing on a missing artifact.
+func requireBuiltBundle(t *testing.T) {
+	t.Helper()
+	if _, err := fs.Stat(webFS, shaderRoot); err != nil {
+		t.Skipf("studio web bundle not built (run `task build`): %v", err)
+	}
+}
+
 // TestShaderAssetsEmbedded asserts that the //go:embed directive in
 // studio.go covers every shader file the renderer needs at runtime.
 // If a file ever moves and the embed pattern can't see it any more,
@@ -13,23 +30,23 @@ import (
 // from the browser, which is a painful failure mode to debug.  This
 // test catches it at `task test` time instead.
 func TestShaderAssetsEmbedded(t *testing.T) {
+	requireBuiltBundle(t)
 	required := []string{
-		"web/game3d/shader-loader.js",
-		"web/game3d/shaders/lib/sea-waves.glsl",
-		"web/game3d/shaders/main/main.vert",
-		"web/game3d/shaders/main/main.frag",
-		"web/game3d/shaders/sky/sky.vert",
-		"web/game3d/shaders/sky/sky.frag",
-		"web/game3d/shaders/ground/ground.vert",
-		"web/game3d/shaders/ground/ground.frag",
-		"web/game3d/shaders/shadow/shadow.vert",
-		"web/game3d/shaders/shadow/shadow.frag",
-		"web/game3d/shaders/wire/wire.vert",
-		"web/game3d/shaders/wire/wire.frag",
-		"web/game3d/shaders/dof/dof.vert",
-		"web/game3d/shaders/dof/dof.frag",
-		"web/game3d/shaders/particles/particles.vert",
-		"web/game3d/shaders/particles/particles.frag",
+		shaderRoot + "/lib/sea-waves.glsl",
+		shaderRoot + "/main/main.vert",
+		shaderRoot + "/main/main.frag",
+		shaderRoot + "/sky/sky.vert",
+		shaderRoot + "/sky/sky.frag",
+		shaderRoot + "/ground/ground.vert",
+		shaderRoot + "/ground/ground.frag",
+		shaderRoot + "/shadow/shadow.vert",
+		shaderRoot + "/shadow/shadow.frag",
+		shaderRoot + "/wire/wire.vert",
+		shaderRoot + "/wire/wire.frag",
+		shaderRoot + "/dof/dof.vert",
+		shaderRoot + "/dof/dof.frag",
+		shaderRoot + "/particles/particles.vert",
+		shaderRoot + "/particles/particles.frag",
 	}
 	for _, path := range required {
 		data, err := fs.ReadFile(webFS, path)
@@ -48,12 +65,13 @@ func TestShaderAssetsEmbedded(t *testing.T) {
 // shaders here (no GL context), but we can at least confirm that
 // every #include resolves to a file the loader will be able to find.
 func TestShaderIncludeAnchorsExist(t *testing.T) {
-	shaderFiles, err := fs.Glob(webFS, "web/game3d/shaders/*/*")
+	requireBuiltBundle(t)
+	shaderFiles, err := fs.Glob(webFS, shaderRoot+"/*/*")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
 	if len(shaderFiles) == 0 {
-		t.Fatal("no shader files found under web/game3d/shaders/")
+		t.Fatalf("no shader files found under %s/", shaderRoot)
 	}
 	for _, path := range shaderFiles {
 		body, err := fs.ReadFile(webFS, path)

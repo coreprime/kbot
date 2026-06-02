@@ -21,7 +21,7 @@
 import {
   mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
   ensureSplitState as commonEnsure,
-} from '../common/split-host.js'
+} from '@kbot/ui/split-host'
 import { hostCallbacks, state } from '../host-context.js'
 import { MapPaneView } from './pane-view.js'
 import { setActiveEditorView } from './editor-view.js'

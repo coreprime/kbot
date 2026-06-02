@@ -5,7 +5,7 @@
 // layer re-renders the file's other tabs from that specific source so
 // you can see what a lower-priority archive holds for the same name.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { formatSize } from '../api.js'
 
 // Layer records arrive as Go structs (PascalCase); tolerate camelCase too.

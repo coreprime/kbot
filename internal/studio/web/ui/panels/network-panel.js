@@ -19,11 +19,11 @@
 
 import { useState, useCallback } from 'preact/hooks'
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { AccordionSection } from '/ui/common/accordion-section.js'
-import { TabStrip } from '/ui/common/tab-strip.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { AccordionSection } from '@kbot/ui/accordion-section'
+import { TabStrip } from '@kbot/ui/tab-strip'
+import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 

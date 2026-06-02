@@ -19,7 +19,7 @@
 // publishes the visibility flags through the store after every
 // switchTab, mirroring the legacy hide/show logic verbatim.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import {
   sidebarDrawer, sidebarFilter, sidebarUsedOnly, sidebarWreckage,
   sidebarUsedOnlyVisible, sidebarWreckageVisible,

@@ -21,7 +21,7 @@
 // for the host functions that still live in studio.js).
 
 import { state, getReactUi, hostCallbacks } from '../../host-context.js'
-import { splitActivePane, closeActivePane, canCloseActivePane } from '../../common/split-host.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
 import { persistPrefs } from '../../common/prefs.js'
 import { isConnected } from '../../common/heartbeat.js'
 import { setMode } from '../mode.js'

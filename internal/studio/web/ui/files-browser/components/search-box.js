@@ -5,7 +5,7 @@
 // focuses it, ↑/↓ walk results, Enter opens the highlighted hit (folders
 // open in Browse, files in the viewer), Esc dismisses.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { search } from '../api.js'
 import { fileIcon } from './icons.js'

@@ -15,7 +15,11 @@
 // implement the C preprocessor.  Just one directive, no nesting
 // guards, no #ifdefs.  Cyclic includes are detected and rejected.
 
-const baseDir = new URL('./shaders/', import.meta.url)
+// Absolute, origin-rooted base so the fetch URLs stay stable whether this
+// module is served raw or rolled into a hashed bundle chunk (import.meta.url
+// would otherwise point at /assets/… once bundled).  The studio serves the
+// shader tree verbatim at /game3d/shaders/.
+const baseDir = new URL('/game3d/shaders/', window.location.origin)
 
 // Module-level cache: same shader URL only ever fetches once per page
 // load, even if multiple renderers spin up.

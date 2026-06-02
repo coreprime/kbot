@@ -28,7 +28,18 @@ vendor/
 .env.local
 
 # Node
+/node_modules/
 internal/studio/web/node_modules/
+packages-js/*/node_modules/
+
+# Vite build output (embedded into the Go binary by `task build`).
+# Keep the committed .gitkeep so the Go package embedding dist/ still
+# compiles on a fresh checkout before the web bundle has been built.
+internal/studio/web/dist/*
+!internal/studio/web/dist/.gitkeep
+
+# Storybook build output
+packages-js/*/storybook-static/
 
 # IDE
 .idea/

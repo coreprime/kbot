@@ -18,8 +18,8 @@
 // (e.g. after a resize / a tab swap with a freshly-loaded map).
 
 import { useEffect, useRef } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
 import { mapRibbonBridge, minimapTick } from '/ui/map-editor/store.js'
 
 const PANEL_ID = 'minimap-panel'

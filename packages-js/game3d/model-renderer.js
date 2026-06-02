@@ -44,7 +44,7 @@ import {
 } from './worlds.js'
 import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
-import { MAX_PULSE_LIGHTS, setMaxSceneLights } from '../engine/scene-lights.js'
+import { MAX_PULSE_LIGHTS, setMaxSceneLights } from '/engine/scene-lights.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Scratch buffers for the dynamic pulse-light uniform arrays, sized to

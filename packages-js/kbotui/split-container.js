@@ -11,8 +11,8 @@
 // content: it knows nothing about what a "leaf" actually renders.
 // The caller passes a `renderLeaf(leafId)` callback that returns
 // whatever JSX should fill the cell.  This keeps the split engine
-// free of any imports from /ui/{section}/ — it sits as a peer of
-// floating-panel + accordion-section in /ui/common/, and the same
+// free of any host-app imports — it sits as a peer of
+// floating-panel + accordion-section in @kbot/ui, and the same
 // component can host a 3DO viewer in one tab, a map editor in the
 // next, and a sandbox runtime in a third.
 //
@@ -35,7 +35,7 @@
 // reducer would work without the reducer plumbing.
 
 import { useEffect, useRef } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 
 // ── Tree model ───────────────────────────────────────────────────────
 //

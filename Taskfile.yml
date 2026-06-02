@@ -16,6 +16,7 @@ tasks:
     cmds:
       - task: build-studio-web
       - task: build-wasm
+      - task: bundle-studio-web
       - task: build-kbot
 
   build-wasm:
@@ -30,11 +31,28 @@ tasks:
       - CGO_ENABLED=0 go build -o bin/kbot ./cmd/kbot
 
   build-studio-web:
-    desc: Install and validate the KBot Studio web assets
+    desc: Install the JS workspace (studio web + packages-js) and lint it
     cmds:
       - npm install
-      - task: lint-studio-web
+      - task: lint-js
+
+  bundle-studio-web:
+    desc: Bundle the KBot Studio web app with Vite into web/dist (embedded by build-kbot)
+    cmds:
+      - npx vite build
     dir: internal/studio/web
+
+  storybook:
+    desc: Run the @kbot/ui Storybook dev server (http://localhost:6006)
+    cmds:
+      - npm install
+      - npm run storybook --workspace @kbot/ui
+
+  build-storybook:
+    desc: Build the @kbot/ui Storybook into a static bundle
+    cmds:
+      - npm install
+      - npm run build-storybook --workspace @kbot/ui
 
   vet:
     desc: Run go vet
@@ -45,13 +63,12 @@ tasks:
     desc: Run golangci-lint and eslint
     cmds:
       - golangci-lint run ./...
-      - task: lint-studio-web
+      - task: lint-js
 
-  lint-studio-web:
-    desc: Run ESLint on the KBot Studio web assets
+  lint-js:
+    desc: Run ESLint over the JS workspace (studio web + packages-js)
     cmds:
       - npx eslint . --max-warnings 0
-    dir: internal/studio/web
 
   test:
     desc: Run all tests

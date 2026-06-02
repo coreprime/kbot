@@ -8,7 +8,7 @@
 //
 // Usage:
 //
-//   import { TabStrip } from '/ui/common/tab-strip.js'
+//   import { TabStrip } from './tab-strip.js'
 //
 //   <${TabStrip}
 //     tabs=${[{ id: 'units', label: 'Units (3)' }, ...]}
@@ -19,7 +19,7 @@
 // strip living inside a draggable FloatingPanel header doesn't kick off
 // a panel drag.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 
 const _stopProp = (e) => e.stopPropagation()
 

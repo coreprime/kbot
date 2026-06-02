@@ -8,7 +8,7 @@
 // The listing comes from one /api/vfs/<dir>/ request, which already
 // carries breadcrumbs, per-directory roll-up counts, and folder totals.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useMemo, useState } from 'preact/hooks'
 import {
   browse, formatSize, extOf, baseName, rawURL,

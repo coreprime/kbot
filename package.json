@@ -1,0 +1,19 @@
+{
+  "name": "kbot-workspace",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "workspaces": [
+    "packages-js/*",
+    "internal/studio/web"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "postinstall": "find node_modules -name '*.go' -type f -delete 2>/dev/null || true"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.3.0",
+    "globals": "^17.6.0"
+  }
+}

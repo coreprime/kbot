@@ -16,9 +16,9 @@
 // uniform.  Body subscribes to runtimeTick so the dials redraw on every
 // refresh-tick publish (4 Hz).
 
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals, registerPanel } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals, registerPanel } from '@kbot/ui/panel-store'
 import { mv, sandboxActive, sandboxSelSize, runtimeTick } from '/ui/common/inspector-store.js'
 
 const PANEL_ID = 'mv-inspector-movement'

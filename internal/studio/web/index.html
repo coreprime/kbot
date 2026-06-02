@@ -1167,25 +1167,9 @@
        trigger via the same single-open Dropdown signal the ribbon
        dropdowns use.  Legacy static markup gone. -->
 
-  <!-- Import map for the vendored Preact + signals + htm ESM modules.
-       MUST come before any <script type="module"> so the browser knows
-       how to resolve the bare specifiers ("preact", "preact/hooks",
-       "@preact/signals", "htm") that the vendored bundles + our own
-       /ui modules import.  Vendor licenses are preserved alongside
-       each module in /vendor — preact + @preact/signals are MIT,
-       htm is Apache 2.0 (both permissive, both compatible with the
-       project's MIT license). -->
-  <script type="importmap">
-  {
-    "imports": {
-      "preact": "/vendor/preact/preact.mjs",
-      "preact/hooks": "/vendor/preact/hooks/hooks.mjs",
-      "@preact/signals-core": "/vendor/preact-signals-core/signals-core.mjs",
-      "@preact/signals": "/vendor/preact-signals/signals.mjs",
-      "htm": "/vendor/htm/htm.mjs"
-    }
-  }
-  </script>
+  <!-- Vite bundles studio.js and resolves the bare specifiers (preact,
+       preact/hooks, @preact/signals, htm) from node_modules at build time,
+       so the runtime import map and the /vendor tree it pointed at are gone. -->
   <script type="module" src="/studio.js"></script>
 </body>
 </html>

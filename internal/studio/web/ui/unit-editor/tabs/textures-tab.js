@@ -26,11 +26,11 @@
 
 import { signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import {
   resolveTextureHints, resolveBaseHints, DEFAULT_HINTS,
   setTextureHintOverride, clearTextureHintOverride, hasTextureHintOverride,
-} from '/game3d/hints-textures.js'
+} from '@kbot/game3d/hints-textures'
 
 // _hintEditTick — bumped on every parameter edit so the open pop-up
 // re-renders against the freshly-resolved (overridden) hints.

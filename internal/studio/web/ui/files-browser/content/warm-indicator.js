@@ -6,7 +6,7 @@
 // progress bar while warming is in flight, then collapses to a "ready"
 // line when the "done" event arrives.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useEffect, useState } from 'preact/hooks'
 
 // eventsURL builds the ws:// (or wss://) URL for the warm event stream

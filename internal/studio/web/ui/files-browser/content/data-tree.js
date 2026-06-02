@@ -5,7 +5,7 @@
 // replaces the Stage-7 raw-JSON <pre> with something navigable for the
 // deeper describers (COB disassembly, HPI file lists, TNT tile stats).
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useState } from 'preact/hooks'
 
 function isLeaf(v) {

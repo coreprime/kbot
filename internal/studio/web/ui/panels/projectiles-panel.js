@@ -21,11 +21,11 @@
 // view's aggregateProjectiles().  The panel only reads off that proxy.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
-import { displayRgbForSide } from '/game3d/team-colors.js'
+import { displayRgbForSide } from '@kbot/game3d/team-colors'
 
 const PANEL_ID = 'mv-inspector-projectiles'
 

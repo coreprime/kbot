@@ -13,8 +13,7 @@ import { TextureCache } from './texture-cache.js'
 import { ModelLoader } from './model-loader.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
-import { WasmSandboxScene } from '../ui/sandbox/wasm-scene.js'
-import { SFX_SPARK, SFX_SMOKE_WHITE } from '../engine/cob-particles.js'
+import { SFX_SPARK, SFX_SMOKE_WHITE } from '/engine/cob-particles.js'
 import { attachOrbitControls } from './camera-controls.js'
 import { onEnhanceMeshChanged } from './enhance-mesh.js'
 
@@ -24,9 +23,13 @@ import { onEnhanceMeshChanged } from './enhance-mesh.js'
 const REST_HEADING = Math.PI
 
 export class ModelViewer {
-  constructor({ canvas, statusEl, onModelLoaded } = {}) {
+  constructor({ canvas, statusEl, onModelLoaded, sceneFactory } = {}) {
     this.canvas = canvas
     this.statusEl = statusEl
+    // sceneFactory(opts) -> a wasm-backed single-unit scene (the studio
+    // injects ui/sandbox's WasmSandboxScene).  Injected rather than imported
+    // so this package doesn't depend back on the studio app's ui layer.
+    this._sceneFactory = sceneFactory || null
     // onModelLoaded is invoked whenever a new Model finishes loading,
     // letting the host (Studio) render its own piece-tree UI without
     // ModelViewer needing to know about the studio's drawer classes.
@@ -330,11 +333,14 @@ export class ModelViewer {
         if (cobResp.ok) {
           const cobJson = await cobResp.json()
           this._cobJson = cobJson
-          // Reuse one WasmSandboxScene across model loads so the wasm
+          // Reuse one wasm-backed scene across model loads so the wasm
           // module + engine handle survive a swap.  Each load removes
           // the previous unit and spawns a fresh one.
           if (!this._scene) {
-            this._scene = new WasmSandboxScene({ palette: this.palette, seed: 1 })
+            if (!this._sceneFactory) {
+              throw new Error('ModelViewer: sceneFactory was not provided')
+            }
+            this._scene = this._sceneFactory({ palette: this.palette, seed: 1 })
             await this._scene.ready()
           } else if (this._unitId >= 0) {
             this._scene.removeUnit(this._unitId)

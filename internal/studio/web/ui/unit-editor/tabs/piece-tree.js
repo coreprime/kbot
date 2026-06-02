@@ -25,7 +25,7 @@
 
 import { signal } from '@preact/signals'
 import { useState, useEffect, useRef } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { TA_TURNS_PER_CIRCLE } from '/engine/cob-opcodes.js'
 

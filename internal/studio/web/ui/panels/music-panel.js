@@ -31,9 +31,9 @@
 
 import { signal, effect } from '@preact/signals'
 import { useEffect, useRef } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel } from '/ui/common/floating-panel.js'
-import { panelSignals, registerPanel } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { panelSignals, registerPanel } from '@kbot/ui/panel-store'
 
 const PANEL_ID = 'mv-inspector-music'
 

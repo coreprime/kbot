@@ -32,9 +32,9 @@
 
 import { useEffect, useRef } from 'preact/hooks'
 import { signal } from '@preact/signals'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { FloatingPanel, CollapsibleSection } from '/ui/common/floating-panel.js'
-import { panelSignals, setPanelVisible } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { FloatingPanel, CollapsibleSection } from '@kbot/ui/floating-panel'
+import { panelSignals, setPanelVisible } from '@kbot/ui/panel-store'
 import { renderMvThreadCodeSource, refreshMvThreadCodeHighlight, redrawMvThreadCodeBrackets, wireMvThreadCodeBrackets } from './asm.js'
 import { renderMvThreadCodeDecompiled } from './bos.js'
 import { _mvThreadCodePanels, applyMvThreadCodeSearch } from './modal.js'

@@ -14,8 +14,8 @@
 // point.
 
 import { render } from 'preact'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { configurePanelPersistence, setPanelVisible } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { configurePanelPersistence, setPanelVisible } from '@kbot/ui/panel-store'
 import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
 import {
@@ -29,7 +29,7 @@ import {
 } from '/ui/unit-editor/ribbon/model-viewer-ribbon.js'
 import {
   TabBar, setTabs, configureTabBarBridge,
-} from '/ui/common/tab-bar.js'
+} from '@kbot/ui/tab-bar'
 import { StaticVarsPanel } from '/ui/panels/static-vars-panel.js'
 import { AudioPanel } from '/ui/panels/audio-panel.js'
 import { EffectsPanel } from '/ui/panels/effects-panel.js'
@@ -88,7 +88,7 @@ import {
   setControlsDevSectionVisible,
 } from '/ui/common/inspector-store.js'
 import { configureHostBridge } from '/ui/common/host-bridge.js'
-import { rescuePanelIntoStage } from '/ui/common/floating-panel.js'
+import { rescuePanelIntoStage } from '@kbot/ui/floating-panel'
 
 // _mountedInspectors — tracks which inspector panels have a Preact
 // root mounted.  Used by the host's setMvInspectorVisible bridge so

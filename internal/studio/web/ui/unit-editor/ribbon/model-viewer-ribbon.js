@@ -32,15 +32,15 @@
 
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
-import { panelSignals } from '/ui/common/panel-store.js'
+import { htm as html } from '@kbot/ui/htm-bind'
+import { panelSignals } from '@kbot/ui/panel-store'
 import {
   Ribbon, RibbonSection, RibbonButton,
   RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow, MenuSubmenuRow,
   MenuSliderRow, MenuSectionLabel, closeDropdownById,
-} from '/ui/common/ribbon.js'
-import { SplitMenuItems } from '/ui/common/split-host.js'
-import { GraphicsOptionsItems } from '/ui/common/graphics-options-menu.js'
+} from '@kbot/ui/ribbon'
+import { SplitMenuItems } from '@kbot/ui/split-host'
+import { GraphicsOptionsItems } from '@kbot/ui/graphics-options-menu'
 import { persistGraphicsOptions } from '/ui/common/graphics-options-state.js'
 
 // _state — every toggle / slider / picker value displayed on the

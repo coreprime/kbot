@@ -16,8 +16,8 @@
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { confirmDialog } from '../dialogs/confirm.js'
 import { openSandboxSpawnPicker, setSandboxPanelVisible } from './spawn-picker.js'
-import { splitActivePane, closeActivePane, canCloseActivePane } from '../common/split-host.js'
-import { setEnhanceMeshEnabled } from '../../game3d/enhance-mesh.js'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
+import { setEnhanceMeshEnabled } from '@kbot/game3d/enhance-mesh'
 
 // wireSandboxRibbon — install the host bridge + mount the ribbon's
 // React tree.  Idempotent; safe to call before / after the React UI

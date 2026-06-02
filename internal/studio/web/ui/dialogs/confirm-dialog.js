@@ -21,7 +21,7 @@
 import { render } from 'preact'
 import { signal } from '@preact/signals'
 import { useEffect } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 
 // _request — single signal carrying the current open request, or null
 // when no dialog is showing.  The shape is { title, message, okLabel,

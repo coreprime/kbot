@@ -36,7 +36,7 @@
 import { render } from 'preact'
 import { signal } from '@preact/signals'
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from './htm-bind.js'
 
 // _request — the active menu request, or null when nothing is open.
 // Shape: { x, y, items, anchorClass, resolve }.  Signal-driven so the

@@ -5,7 +5,7 @@
 // / signal / set-mask) with arrowheads and hover labels.  The simulation
 // runs on a canvas; nodes drag, the background pans, the wheel zooms.
 
-import { htm as html } from '/ui/common/htm-bind.js'
+import { htm as html } from '@kbot/ui/htm-bind'
 import { useRef, useEffect, useState, useCallback } from 'preact/hooks'
 
 const EDGE_COLORS = { call: '#82aaff', start: '#c3e88d', signal: '#f78c6c', 'set-mask': '#c792ea' }
