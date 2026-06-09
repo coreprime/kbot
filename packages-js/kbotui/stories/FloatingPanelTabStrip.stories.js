@@ -1,9 +1,9 @@
 import { html } from '../index.js'
 import { useState } from 'preact/hooks'
-import { TabStrip } from '../tab-strip.js'
+import { FloatingPanelTabStrip } from '../floating-panel-tab-strip.js'
 
 export default {
-  title: 'Chrome/TabStrip',
+  title: 'Chrome/FloatingPanelTabStrip',
   parameters: { layout: 'padded' },
 }
 
@@ -18,7 +18,7 @@ function InteractiveTabs() {
   const [active, setActive] = useState('pieces')
   return html`
     <div style="width:360px">
-      <${TabStrip} tabs=${TABS} active=${active} onSelect=${setActive} />
+      <${FloatingPanelTabStrip} tabs=${TABS} active=${active} onSelect=${setActive} />
       <div style="padding:14px 6px;color:var(--muted)">
         Active tab: <strong style="color:var(--text)">${active}</strong>
       </div>
@@ -38,7 +38,7 @@ export const ManyTabs = {
     }))
     return html`
       <div style="width:520px">
-        <${TabStrip} tabs=${tabs} active="t2" onSelect=${() => {}} />
+        <${FloatingPanelTabStrip} tabs=${tabs} active="t2" onSelect=${() => {}} />
       </div>
     `
   },

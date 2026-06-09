@@ -22,7 +22,7 @@ import { signal } from '@preact/signals'
 import { htm as html } from '@kbot/ui/htm-bind'
 import { FloatingPanel } from '@kbot/ui/floating-panel'
 import { AccordionSection } from '@kbot/ui/accordion-section'
-import { TabStrip } from '@kbot/ui/tab-strip'
+import { FloatingPanelTabStrip } from '@kbot/ui/floating-panel-tab-strip'
 import { panelSignals } from '@kbot/ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
@@ -400,7 +400,7 @@ function DiagnoseModal({ result, error, loading, onClose }) {
       minSize=${{ width: 320, height: 220 }}
       headerActions=${headerActions}>
       <div class="mv-net-diag">
-        <${TabStrip} tabs=${tabs} active=${tab} onSelect=${setTab} />
+        <${FloatingPanelTabStrip} tabs=${tabs} active=${tab} onSelect=${setTab} />
         <div class="mv-net-diag-body">${body}</div>
       </div>
     <//>

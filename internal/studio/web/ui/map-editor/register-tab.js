@@ -57,6 +57,10 @@ class MapEditorTabInstance {
     $('#model-viewer-dialog')?.classList.add('hidden')
     $('#welcome-dialog')?.classList.add('hidden')
     $('#model-open-dialog')?.classList.add('hidden')
+    // Hide the Files overlay too — switching to a map tab must own the
+    // editor surface even if the outgoing Files tab's deactivate was
+    // skipped (e.g. focus arriving via a non-switchToTab path).
+    $('#files-dialog')?.classList.add('hidden')
     // Pull the per-tab module-let state (undo/redo/minimap/scroll)
     // out of the MapDoc.  Without this the previous tab's stacks
     // would still be in scope after the swap.

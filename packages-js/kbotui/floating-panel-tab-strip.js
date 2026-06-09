@@ -1,16 +1,17 @@
-// tab-strip.js
+// floating-panel-tab-strip.js
 //
-// Single shared tab-strip component for inspector panels that switch
-// between a small set of views (e.g. the Sync Diagnostics panel's
-// Summary / Units / Projectiles tabs).  Matches the inspector visual
-// family — a row of pill buttons with the active one lit — so any
-// panel adopting it feels native rather than hand-rolled.
+// Tab strip for inspector floating panels that switch between a small
+// set of views (e.g. the Sync Diagnostics panel's Summary / Units /
+// Projectiles tabs).  Matches the inspector visual family — a row of
+// pill buttons with the active one lit — so any panel adopting it feels
+// native rather than hand-rolled.  Named for its home: it lives inside
+// FloatingPanel headers, distinct from the app-level interface tabs.
 //
 // Usage:
 //
-//   import { TabStrip } from './tab-strip.js'
+//   import { FloatingPanelTabStrip } from './floating-panel-tab-strip.js'
 //
-//   <${TabStrip}
+//   <${FloatingPanelTabStrip}
 //     tabs=${[{ id: 'units', label: 'Units (3)' }, ...]}
 //     active=${tab}
 //     onSelect=${setTab} />
@@ -23,7 +24,7 @@ import { htm as html } from './htm-bind.js'
 
 const _stopProp = (e) => e.stopPropagation()
 
-export function TabStrip({ tabs, active, onSelect }) {
+export function FloatingPanelTabStrip({ tabs, active, onSelect }) {
   return html`
     <div class="mv-tab-strip" role="tablist">
       ${(tabs || []).map((t) => html`

@@ -1,6 +1,8 @@
-// tab-bar.js
+// interface-tab-strip.js
 //
-// Shared tab strip at the top of the editor.  Hosts both map tabs
+// The application's top-level tab strip — the row of tabs at the top of
+// the editor shell, distinct from the per-panel FloatingPanelTabStrip.
+// Hosts both map tabs
 // (when the user has a map open) and model / sandbox tabs.  Tab
 // records flow in from the host as a tabs[] array + an active index;
 // the "+" popup uses the same Dropdown primitive the ribbons use so
@@ -88,7 +90,7 @@ function _tabTitle(tab) {
   return `${display}${dirty ? ' (unsaved changes)' : ''} · ${m?.name || '(no file)'} · ${m?.tileW}×${m?.tileH}`
 }
 
-export function TabBar() {
+export function InterfaceTabStrip() {
   const { tabs, activeIndex } = _state.value
   return html`
     <nav class="map-tabs" role="tablist">

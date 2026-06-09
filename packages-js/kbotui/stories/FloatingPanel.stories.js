@@ -11,7 +11,7 @@ export default {
 // −/✕ buttons collapse and hide it.
 export const Basic = {
   render: () => html`
-    <div style="position:relative;height:420px">
+    <div class="model-viewer-stage" style="position:relative;height:420px">
       <${FloatingPanel}
         id="story-basic"
         title="Renderer"
@@ -36,7 +36,7 @@ export const Basic = {
 // Two panels coexisting, as overlays do in the sandbox.
 export const Multiple = {
   render: () => html`
-    <div style="position:relative;height:480px">
+    <div class="model-viewer-stage" style="position:relative;height:480px">
       <${FloatingPanel} id="story-multi-a" title="Controls" defaultPos=${{ top: 30, left: 30 }}>
         <div style="padding:10px;color:var(--muted)">No units selected.</div>
       <//>
@@ -50,7 +50,7 @@ export const Multiple = {
 // A panel hosting collapsible sub-sections.
 export const WithSections = {
   render: () => html`
-    <div style="position:relative;height:460px">
+    <div class="model-viewer-stage" style="position:relative;height:460px">
       <${FloatingPanel} id="story-sections" title="Inspector" defaultPos=${{ top: 40, left: 40 }}>
         <${CollapsibleSection} panelId="story-sections" sectionKey="transform" title="Transform">
           <div style="padding:8px 10px;color:var(--muted)">x / y / z fields…</div>

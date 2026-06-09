@@ -38,7 +38,7 @@
 // Reaches studio.js (modelViewerInstance, tabs[], pushTab seam,
 // resumeIncomingTabRuntime, refreshMvInspectors) through hostCallbacks.
 
-import { $, hostCallbacks } from '../host-context.js'
+import { $, hostCallbacks, liveStatusEl } from '../host-context.js'
 import { mvSetSimulationSpeed } from '../common/sim-controls.js'
 import { setMvInspectorVisible } from '../common/inspectors.js'
 import { ensureSandboxPanel, showSandboxPanel } from './spawn-picker.js'
@@ -201,7 +201,7 @@ export async function activateSandboxTab(tab) {
     const v = new SandboxView({
       canvas: null,
       scene: tab.scene,
-      statusEl: $('#status'),
+      statusEl: liveStatusEl,
     })
     await v.open()
     tab.panes.set(tab.activePaneId, v)

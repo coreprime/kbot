@@ -78,6 +78,11 @@ function _virtualisedDrawerBody(itemCount, populate) {
 
 export function renderDrawer() {
   const drawer = $('#drawer')
+  // `#drawer` is rendered by the React MapSidebar (inside a FrozenSlot),
+  // so it only exists once that island has mounted.  Bail out quietly if
+  // a repaint is requested before then — the next renderDrawer after the
+  // sidebar mounts paints the real content.
+  if (!drawer) return
   // Tear down any pending observers from the previous render — those
   // bodies are about to be discarded and would otherwise keep refs.
   if (_drawerObserver) { _drawerObserver.disconnect(); _drawerObserver = null }

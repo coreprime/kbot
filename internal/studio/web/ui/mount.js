@@ -28,8 +28,9 @@ import {
   closeModelViewerRibbonDropdowns,
 } from '/ui/unit-editor/ribbon/model-viewer-ribbon.js'
 import {
-  TabBar, setTabs, configureTabBarBridge,
-} from '@kbot/ui/tab-bar'
+  InterfaceTabStrip, setTabs, configureTabBarBridge,
+} from '@kbot/ui/interface-tab-strip'
+import { InterfaceStatusBar } from '@kbot/ui/interface-status-bar'
 import { StaticVarsPanel } from '/ui/panels/static-vars-panel.js'
 import { AudioPanel } from '/ui/panels/audio-panel.js'
 import { EffectsPanel } from '/ui/panels/effects-panel.js'
@@ -190,7 +191,25 @@ export function mountModelViewerRibbon() {
 // open/close/switch to refresh the visible state.
 export function mountTabBar() {
   const slot = document.getElementById('map-tabs-mount')
-  if (slot) render(html`<${TabBar} />`, slot)
+  if (slot) render(html`<${InterfaceTabStrip} />`, slot)
+}
+
+// mountStatusBar — render the shared footer status strip into the
+// #statusbar-mount slot.  The component is mounted ONCE with static
+// content and never re-rendered, so the host's imperative writes to
+// `#status` (setStatus / live cursor read-out) and `#app-hints` (active
+// tab hints), plus the `#copyright-year` fill, all survive untouched.
+export function mountStatusBar() {
+  const slot = document.getElementById('statusbar-mount')
+  if (!slot) return
+  render(html`
+    <${InterfaceStatusBar}
+      statusId="status"
+      status="Ready.  Pick a section on the left, then click on the canvas to stamp it."
+      hintsId="app-hints"
+      hints=${html`Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).`}
+      copyright=${html`KBot © Steve Gray <span id="copyright-year"></span>`} />
+  `, slot)
 }
 
 // mountInspectorPanels — bring up every Preact-managed floating
@@ -272,15 +291,13 @@ export function mountMapEditor() {
   // child class .ribbon).
   const ribbonSlot = document.getElementById('ribbon-mount')
   if (ribbonSlot) render(html`<${MapRibbon} />`, ribbonSlot)
-  // Sidebar header (tabs + filter) — mounts into a dedicated slot
-  // alongside the static `<div id="drawer">`.  Keeping the drawer
-  // outside the React tree is intentional: renderDrawer paints
-  // tile / feature buttons directly into `#drawer`, and Preact's
-  // child diff would otherwise clobber that paint on every signal
-  // change.  Using a `display:contents` mount slot lets the React
-  // tree's tabs + filter rows still flex inside the aside grid
-  // alongside the drawer below.
-  const sidebarSlot = document.getElementById('sidebar-tabs-mount')
+  // Sidebar — MapSidebar renders the whole `<aside class="sidebar">`
+  // (tabs + filter + drawer) via the shared SideBar shell into this
+  // `display: contents` slot, so the aside lands as the `side` grid
+  // child.  The drawer it renders is wrapped in a FrozenSlot, so the
+  // legacy renderDrawer paint (tile / feature buttons written straight
+  // into `#drawer`) survives every React re-render.
+  const sidebarSlot = document.getElementById('map-sidebar-mount')
   if (sidebarSlot) render(html`<${MapSidebar} />`, sidebarSlot)
   // Three floating panels.  Mount roots are siblings of `.canvas-wrap`'s
   // direct children so the existing `.minimap` / `.dev-stats` positioning

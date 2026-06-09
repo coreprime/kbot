@@ -17,7 +17,7 @@
 // still ticks the viewer's _mvControls even when backgrounded
 // so weapon SM + audio scheduling stay coherent.
 
-import { tabs, tabState, $, hostCallbacks } from '../host-context.js'
+import { tabs, tabState, $, hostCallbacks, liveStatusEl } from '../host-context.js'
 import { WasmSandboxScene } from '../sandbox/wasm-scene.js'
 import { MvControls } from './mv-controls.js'
 import { findModelMeta } from '../pickers/model-catalog.js'
@@ -69,7 +69,7 @@ export async function activateModelTab(tab) {
     let viewer  // forward-declared so the closure binds to the const below
     viewer = new mod.ModelViewer({
       canvas,
-      statusEl: $('#status'),
+      statusEl: liveStatusEl,
       // Inject the wasm-backed scene so @kbot/game3d stays free of any
       // dependency back into the studio's ui layer.
       sceneFactory: (opts) => new WasmSandboxScene(opts),

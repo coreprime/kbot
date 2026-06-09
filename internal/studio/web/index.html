@@ -713,8 +713,8 @@
          button at the end opens the popout (which now lives outside
          .app so it stays visible when the 3DO viewer dialog overlays
          the editor and hides .app). -->
-    <!-- Tab strip is React-managed (see /ui/common/tab-bar.js).  Hosts
-         both map tabs (when the user has a map open) and unit /
+    <!-- Tab strip is React-managed (InterfaceTabStrip in @kbot/ui).
+         Hosts both map tabs (when the user has a map open) and unit /
          sandbox tabs.  The host pushes tabs[] + activeTabIndex via
          setTabs() on each switch/open/close.  Mount slot uses
          `display: contents` so the inner `<nav class="map-tabs">`
@@ -1073,19 +1073,14 @@
     </div>
     </template>
 
-    <!-- Sidebar — React-managed (see /ui/map-editor/tabs/sidebar.js).
-         The React MapSidebar mounts into #sidebar-tabs-mount and
-         renders only the tabs strip + filter row.  The #drawer is
-         kept as a sibling under the React mount slot — that way the
-         legacy renderDrawer pipeline keeps painting tile / feature
-         buttons into it without React's diff clobbering them on
-         every signal change. -->
-    <aside class="sidebar">
-      <div id="sidebar-tabs-mount" style="display: contents"></div>
-      <div id="drawer" class="drawer">
-        <div class="loading">Loading sections…</div>
-      </div>
-    </aside>
+    <!-- Sidebar — fully React-managed (see /ui/map-editor/tabs/sidebar.js).
+         MapSidebar renders the whole `<aside class="sidebar">` via the
+         shared @kbot/ui SideBar shell (tabs + filter + drawer) into this
+         `display: contents` slot, so the rendered aside lands as the
+         `side` grid child.  The #drawer it renders is wrapped in a
+         FrozenSlot so the legacy renderDrawer paint survives React
+         re-renders. -->
+    <div id="map-sidebar-mount" style="display: contents"></div>
 
     <main class="canvas-wrap">
       <!-- The legacy `.canvas-toolbar` strip + #hover-cell readout
@@ -1144,11 +1139,12 @@
       </aside>
     </main>
 
-    <footer class="statusbar">
-      <span id="status">Ready.  Pick a section on the left, then click on the canvas to stamp it.</span>
-      <span class="muted hints" id="app-hints">Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).</span>
-      <span class="copyright">KBot &copy; Steve Gray <span id="copyright-year"></span></span>
-    </footer>
+    <!-- Footer status strip is React-managed (InterfaceStatusBar) and
+         mounts into this `display: contents` slot so the rendered
+         `<footer class="statusbar">` still lands as the grid child that
+         the `status` template-area is bound to.  The host keeps writing
+         `#status` / `#app-hints` / `#copyright-year` imperatively. -->
+    <div id="statusbar-mount" style="display: contents"></div>
   </div>
 
   <div id="disconnect-overlay" class="disconnect-overlay hidden"></div>
@@ -1162,10 +1158,10 @@
     </div>
   </div>
 
-  <!-- Tab-bar "+" popup — React-managed now (see /ui/common/tab-bar.js
-       and /ui/common/ribbon.js Dropdown).  Hangs off the TabBar's "+"
-       trigger via the same single-open Dropdown signal the ribbon
-       dropdowns use.  Legacy static markup gone. -->
+  <!-- Tab-bar "+" popup — React-managed now (see @kbot/ui
+       interface-tab-strip.js and ribbon.js Dropdown).  Hangs off the
+       InterfaceTabStrip's "+" trigger via the same single-open Dropdown
+       signal the ribbon dropdowns use.  Legacy static markup gone. -->
 
   <!-- Vite bundles studio.js and resolves the bare specifiers (preact,
        preact/hooks, @preact/signals, htm) from node_modules at build time,

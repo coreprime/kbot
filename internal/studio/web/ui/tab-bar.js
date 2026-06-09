@@ -9,8 +9,9 @@
 //                          mount the React tab bar.
 //
 // The tab-strip component itself (the Preact JSX, dropdown popups,
-// dirty-marker rendering) lives in /ui/common/tab-bar.js — this
-// module is the host-side bridge that feeds it.
+// dirty-marker rendering) is InterfaceTabStrip in
+// @kbot/ui/interface-tab-strip — this module is the host-side bridge
+// that feeds it.
 //
 // /ui/ root rather than /ui/common/ because it imports section
 // concerns (size dialog, map picker, model picker, sandbox opener)
@@ -50,8 +51,8 @@ export function renderMapTabs() {
 }
 
 // buildTabElement removed — tab rendering now lives entirely in the
-// React TabBar component.  Per-tab formatting (model glyph, dirty
-// marker, title metadata) is data-driven from the tab record.
+// React InterfaceTabStrip component.  Per-tab formatting (model glyph,
+// dirty marker, title metadata) is data-driven from the tab record.
 
 export function wireMapTabBar() {
   // Tab bar + its "+" popup are React-managed.  configureReactUi

@@ -77,7 +77,7 @@
 //   - openTab(typeId, spec, opts)      — tab registry push; lives in
 //                                        studio.js (orchestration).
 //   - renderMapTabs()                  — pushes the tab list into the
-//                                        React TabBar signal.
+//                                        React InterfaceTabStrip signal.
 //   - updateTopbarDocInfo(tab)         — refreshes the shared topbar
 //                                        from the active tab.
 //   - wireDeveloperDialog()            — Settings / Help / Developer
@@ -283,7 +283,12 @@ export async function openLoadedMap(data, card) {
   $('#welcome-dialog').classList.add('hidden')
   // If the user came from a model tab, the 3DO viewer was the
   // surface in front — hide it so the map editor takes the screen.
+  // Same for the Files overlay: this deferred open path mounts the
+  // editor without routing through switchToTab, so the outgoing
+  // Files tab's deactivate never fires — hide its overlay here or it
+  // sits on top of the freshly-opened map.
   $('#model-viewer-dialog')?.classList.add('hidden')
+  $('#files-dialog')?.classList.add('hidden')
   $('#app').classList.remove('hidden')
   hostCallbacks.renderMapTabs?.()
   // Refresh the shared topbar + footer hints from this new map tab,
@@ -366,7 +371,11 @@ export async function startEditor() {
 
   $('#size-dialog').classList.add('hidden')
   $('#welcome-dialog').classList.add('hidden')
+  // Hide the model viewer + Files overlays — this deferred open path
+  // bypasses switchToTab, so the outgoing tab's deactivate (which
+  // would normally hide them) never runs.
   $('#model-viewer-dialog')?.classList.add('hidden')
+  $('#files-dialog')?.classList.add('hidden')
   $('#app').classList.remove('hidden')
   hostCallbacks.renderMapTabs?.()
   hostCallbacks.updateTopbarDocInfo?.(tabs[tabState.activeIndex])

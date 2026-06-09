@@ -1,4 +1,9 @@
 :root {
+  /* Dark UA scrollbars + form controls everywhere.  Without this the
+     browser paints light-mode native scrollbars over the dark theme;
+     it's also the base the custom ::-webkit-scrollbar rules below build
+     on for a consistent thin, themed scroll across every surface. */
+  color-scheme: dark;
   --bg-0: #0f1115;
   --bg-1: #161a21;
   --bg-2: #1d222b;
@@ -30,6 +35,25 @@ body {
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Consistent, themed scroll surfaces.  Every overflow:auto container in
+   the studio (drawer, side rails, panels, dialogs, the canvas) renders
+   the same thin, muted scrollbar instead of the chunky platform default,
+   on both Firefox (scrollbar-*) and Chromium/WebKit (::-webkit-*). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-3) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--bg-3);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
@@ -1095,7 +1119,12 @@ kbd {
   position: relative;
   overflow-x: auto;
   overflow-y: visible;
+  /* The tab strip scrolls horizontally only when tabs overflow its
+     width — it's chrome, so never paint a scrollbar across it (the
+     overflow still scrolls via wheel / trackpad). */
+  scrollbar-width: none;
 }
+.map-tabs::-webkit-scrollbar { display: none; }
 .map-tabs-list { display: flex; gap: 2px; }
 .map-tab {
   display: flex;

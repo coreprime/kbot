@@ -512,7 +512,29 @@ export const $$ = (sel) => Array.from(document.querySelectorAll(sel))
 // #status — that lets us repaint the status line via React without
 // breaking dozens of call sites.
 
-export function setStatus(msg) { $('#status').textContent = msg }
+// setStatus writes the footer status line AND remembers it on the
+// active tab record (tab._status).  The status bar is owned by the tab
+// being shown: when focus returns to a tab the framework replays its
+// remembered line (see updateTopbarDocInfo) instead of leaving whatever
+// the previously-viewed tab last wrote.
+export function setStatus(msg) {
+  const el = $('#status')
+  if (el) el.textContent = msg
+  const tab = tabs[tabState.activeIndex]
+  if (tab) tab._status = msg
+}
+
+// liveStatusEl is a stand-in "element" for viewers that expect a status
+// DOM node (the game3d ModelViewer, the sandbox view).  They only ever
+// write `statusEl.textContent = msg`, so the setter re-resolves #status
+// on every write.  That keeps the status line working now that the
+// footer is (re)mounted by React: capturing the node once at tab
+// construction would go stale when React replaces the footer, or be
+// null if the tab is built before the footer mounts.
+export const liveStatusEl = {
+  set textContent(v) { setStatus(v) },
+  get textContent() { const el = $('#status'); return el ? el.textContent : '' },
+}
 
 export function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 

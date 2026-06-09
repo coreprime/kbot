@@ -55,8 +55,10 @@ export {
   SplitMenuItems,
 } from './split-host.js'
 
-export { TabStrip } from './tab-strip.js'
-export { configureTabBarBridge, setTabs, TabBar } from './tab-bar.js'
+export { FloatingPanelTabStrip } from './floating-panel-tab-strip.js'
+export { SideBar, FrozenSlot } from './side-bar.js'
+export { SideBarTabStrip } from './side-bar-tab-strip.js'
+export { configureTabBarBridge, setTabs, InterfaceTabStrip } from './interface-tab-strip.js'
 
 export {
   rescuePanelIntoStage,
@@ -87,7 +89,7 @@ export { Breadcrumbs } from './breadcrumbs.js'
 export { SearchBox } from './search-box.js'
 export { HexView } from './hex-view.js'
 export { fileIcon, fileKind } from './file-icons.js'
-export { StatusBar } from './status-bar.js'
+export { InterfaceStatusBar } from './interface-status-bar.js'
 
 // Data-fetching hook + placeholder chrome.
 export { useAsync, Loading, ErrorMsg } from './async.js'

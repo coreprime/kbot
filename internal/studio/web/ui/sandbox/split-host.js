@@ -22,7 +22,7 @@ import {
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { SandboxView } from './view.js'
-import { $ } from '../host-context.js'
+import { liveStatusEl } from '../host-context.js'
 
 // SANDBOX_ADAPTER — the per-editor plug for the generic split-host.
 // Every leaf hosts a peer SandboxView against the shared scene; the
@@ -45,7 +45,7 @@ const SANDBOX_ADAPTER = {
     const v = new SandboxView({
       canvas: null,
       scene: tab.scene,
-      statusEl: $('#status'),
+      statusEl: liveStatusEl,
     })
     await v.open()
     return v

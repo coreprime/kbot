@@ -1,8 +1,8 @@
 import { html } from '../index.js'
-import { StatusBar } from '../status-bar.js'
+import { InterfaceStatusBar } from '../interface-status-bar.js'
 
 export default {
-  title: 'Chrome/StatusBar',
+  title: 'Chrome/InterfaceStatusBar',
   parameters: { layout: 'fullscreen' },
 }
 
@@ -11,7 +11,7 @@ export default {
 // copyright note.
 export const Full = {
   render: () => html`
-    <${StatusBar}
+    <${InterfaceStatusBar}
       status="Ready.  Pick a section on the left, then click on the canvas to stamp it."
       hints=${html`Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom.`}
       copyright=${html`KBot © Steve Gray 2026`}
@@ -21,5 +21,5 @@ export const Full = {
 
 // Just a status message — the minimal form.
 export const StatusOnly = {
-  render: () => html`<${StatusBar} status="Loading filesystem…" />`,
+  render: () => html`<${InterfaceStatusBar} status="Loading filesystem…" />`,
 }

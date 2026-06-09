@@ -105,6 +105,9 @@ export function configureReactUi() {
     // Map, weapon picker) so their open-state signals are wired and
     // the first opener call paints instantly.
     if (typeof ui.mountDialogs === 'function') ui.mountDialogs()
+    // Mount the shared footer status strip.  Done once at boot; the
+    // host keeps driving `#status` / `#app-hints` imperatively after.
+    if (typeof ui.mountStatusBar === 'function') ui.mountStatusBar()
     // Mount the unit-editor sidebar tab components (Pieces, Textures,
     // Weapons).  Each one renders empty until the host pushes a model
     // via setPieceTreeModel / setTexturesModel — but mounting at boot

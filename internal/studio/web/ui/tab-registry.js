@@ -67,7 +67,7 @@
 //     restore?()                  pull module-let state from spec
 //   }
 
-import { tabs, tabState, $ } from './host-context.js'
+import { tabs, tabState, $, hostCallbacks } from './host-context.js'
 import { destroyEditorView } from './map-editor/editor-view.js'
 import { abortTransientGestureState } from './map-editor/boot.js'
 import { closeAllMvThreadCodePanels } from './unit-editor/debugger/modal.js'
@@ -276,6 +276,12 @@ export async function switchToTab(nextIdx, { fresh = false, force = false } = {}
   // wiring.  Errors here are intentionally allowed to surface so a
   // broken tab doesn't silently fail to mount.
   await incoming.instance.activate(ctx)
+
+  // Repaint the status bar (doc-info pill + footer hints + status line)
+  // from the now-active tab.  This is the single owner of the chrome
+  // strings, so the incoming tab's own title / hints / status replace
+  // the outgoing tab's — no leftover text bleeds across the swap.
+  hostCallbacks.updateTopbarDocInfo?.(incoming)
 }
 
 // pauseOutgoingTabRuntime — replaced by each tab descriptor's
