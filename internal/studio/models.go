@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"image/png"
 	"net/http"
 	"net/url"
@@ -98,8 +99,13 @@ func (sess *Session) buildModelIndex() {
 		case strings.HasPrefix(lower, "scripts/") && strings.HasSuffix(lower, ".cob"):
 			seen.cob[strings.TrimSuffix(path.Base(lower), ".cob")] = true
 		case strings.HasPrefix(lower, "unitpics/") && (strings.HasSuffix(lower, ".pcx") || strings.HasSuffix(lower, ".bmp") || strings.HasSuffix(lower, ".tga")):
-			// Build pictures live under unitpics/.  Keyed by the
+			// TA build pictures live under unitpics/.  Keyed by the
 			// stem so a single map covers .pcx/.bmp/.tga variants.
+			stem := path.Base(lower)
+			stem = stem[:len(stem)-len(path.Ext(stem))]
+			seen.buildPic[stem] = true
+		case strings.HasPrefix(lower, "anims/buildpic/") && (strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".pcx")):
+			// TA:Kingdoms build pictures live under anims/buildpic/ as JPEGs.
 			stem := path.Base(lower)
 			stem = stem[:len(stem)-len(path.Ext(stem))]
 			seen.buildPic[stem] = true
@@ -663,10 +669,9 @@ func (sess *Session) renderTexturePNG(src textureSource) ([]byte, error) {
 	if len(target.Frames) == 0 {
 		return nil, errors.New("sequence has no frames")
 	}
-	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
-	if err != nil {
-		return nil, fmt.Errorf("load palette: %w", err)
-	}
+	// The palette resolver picks the right table per game (TA: global;
+	// TA:Kingdoms: the texture GAF's per-side palette).
+	pal := sess.palettes().texturePalette(src.GAFPath)
 	// 3DO model textures are ALWAYS rendered fully opaque.  Unlike
 	// sprite GAFs, the TA engine doesn't punch through unit textures
 	// at the GAF's "transparency" index — palette[TI] is just another
@@ -808,28 +813,39 @@ func (sess *Session) handleBuildPic(w http.ResponseWriter, r *http.Request) {
 	}
 	stem := strings.ToLower(strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".pcx"), ".bmp"), ".tga"))
 	// Try the common variants in the order TA itself would.
+	// TA stores build pics as unitpics/<unit>.pcx; TA:Kingdoms as
+	// anims/buildpic/<unit>.jpg. Try both layouts (JPEG first since it's the
+	// TA:K convention and self-describing).
 	candidates := []string{
+		"anims/buildpic/" + stem + ".jpg",
+		"anims/buildpic/" + stem + ".jpeg",
 		"unitpics/" + stem + ".pcx",
 		"unitpics/" + strings.ToUpper(stem) + ".PCX",
+		"anims/buildpic/" + stem + ".pcx",
 	}
 	var data []byte
+	var found string
 	for _, p := range candidates {
 		if b, e := sess.vfs.ReadFile(p); e == nil {
-			data = b
+			data, found = b, p
 			break
 		}
 	}
 	if data == nil {
-		// Last-ditch case-insensitive walk.
-		want := strings.ToLower(stem + ".pcx")
+		// Last-ditch case-insensitive walk over both build-pic locations.
 		for _, p := range sess.vfs.List() {
 			lower := strings.ToLower(p)
-			if !strings.HasPrefix(lower, "unitpics/") {
+			if !strings.HasPrefix(lower, "unitpics/") && !strings.HasPrefix(lower, "anims/buildpic/") {
 				continue
 			}
-			if strings.ToLower(path.Base(lower)) == want {
+			bn := strings.ToLower(path.Base(lower))
+			ext := path.Ext(bn)
+			if bn[:len(bn)-len(ext)] != strings.ToLower(stem) {
+				continue
+			}
+			if ext == ".pcx" || ext == ".jpg" || ext == ".jpeg" {
 				if b, e := sess.vfs.ReadFile(p); e == nil {
-					data = b
+					data, found = b, p
 					break
 				}
 			}
@@ -839,14 +855,9 @@ func (sess *Session) handleBuildPic(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "build picture not found", http.StatusNotFound)
 		return
 	}
-	rd, err := pcx.LoadFromReader(bytes.NewReader(data))
+	img, err := decodeBuildPic(found, data)
 	if err != nil {
-		http.Error(w, "read pcx: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	img, err := rd.Decode()
-	if err != nil {
-		http.Error(w, "decode pcx: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "decode build pic: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
@@ -854,4 +865,17 @@ func (sess *Session) handleBuildPic(w http.ResponseWriter, r *http.Request) {
 	if err := png.Encode(w, img); err != nil {
 		http.Error(w, "encode png: "+err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// decodeBuildPic decodes a build picture by extension: JPEG (TA:Kingdoms, full
+// colour — no palette needed) or PCX (TA, palette embedded in the file).
+func decodeBuildPic(srcPath string, data []byte) (image.Image, error) {
+	if ext := strings.ToLower(path.Ext(srcPath)); ext == ".jpg" || ext == ".jpeg" {
+		return jpeg.Decode(bytes.NewReader(data))
+	}
+	rd, err := pcx.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	return rd.Decode()
 }

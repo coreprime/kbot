@@ -82,24 +82,27 @@ func toRGBAImage(src image.Image) *image.RGBA {
 }
 
 // baseObjectOptions returns the default camera with the session's texture/palette
-// material attached.
-func (sess *Session) baseObjectOptions() objects3d.RenderOptions {
+// material attached. The colour-keyed-primitive palette is chosen for `object`:
+// for TA:Kingdoms that's the model's per-side texture palette, else the VFS
+// global palette. (Textures themselves are resolved per-source-GAF inside the
+// material's Texture method.)
+func (sess *Session) baseObjectOptions(object string) objects3d.RenderOptions {
 	opts := objects3d.DefaultRenderOptions()
-	opts.Material = &objectMaterial{sess: sess, pal: sess.loadVFSPalette()}
+	opts.Material = &objectMaterial{sess: sess, pal: sess.palettes().modelColorPalette(object)}
 	return opts
 }
 
 // objectStillOptions: the small list thumbnail — steep top-down at TRUE game
 // scale so wrecks read at their real relative sizes.
-func (sess *Session) objectStillOptions() objects3d.RenderOptions {
-	return sess.baseObjectOptions()
+func (sess *Session) objectStillOptions(object string) objects3d.RenderOptions {
+	return sess.baseObjectOptions(object)
 }
 
 // objectSpinOptions: the large hover preview — a 3/4 turntable (so the spin reads
 // as the model orbiting, not a top-down flatten) filling the (larger) frame so
 // detail is visible.
-func (sess *Session) objectSpinOptions(size int) objects3d.RenderOptions {
-	opts := sess.baseObjectOptions()
+func (sess *Session) objectSpinOptions(object string, size int) objects3d.RenderOptions {
+	opts := sess.baseObjectOptions(object)
 	opts.ElevationDeg = 32 // 3/4 view: clean turntable orbit
 	opts.FitToFrame = true // fill the larger hover frame
 	if size > 0 {
@@ -135,9 +138,9 @@ func (sess *Session) serveObjectFeaturePreview(w http.ResponseWriter, cacheKey, 
 	}
 	var b []byte
 	if staticOnly {
-		b, err = model.RenderPNG(sess.objectStillOptions())
+		b, err = model.RenderPNG(sess.objectStillOptions(object))
 	} else {
-		b, err = model.RenderSpinAPNG(sess.objectSpinOptions(size), objectSpinFrames, objectSpinDelayMS)
+		b, err = model.RenderSpinAPNG(sess.objectSpinOptions(object, size), objectSpinFrames, objectSpinDelayMS)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

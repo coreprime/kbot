@@ -33,6 +33,7 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)
 	mux.HandleFunc("/api/studio/maps", sess.handleMapsList)
 	mux.HandleFunc("/api/studio/minimap/", sess.handleMapMinimap)
+	mux.HandleFunc("/api/studio/map-render/", sess.handleMapRender)
 	mux.HandleFunc("/api/studio/load", sess.handleMapLoad)
 	mux.HandleFunc("/api/studio/load-upload", sess.handleMapLoadUpload)
 	mux.HandleFunc("/api/studio/tile-pool/", sess.handleMapTilePool)
@@ -178,7 +179,7 @@ func (sess *Session) startAssetPreload() {
 	}
 	sess.preloadProgress.set("maps", 0, len(tntPaths))
 	for i, p := range tntPaths {
-		entry, mini := sess.summariseMapWithMinimap(p, pal)
+		entry, mini := sess.summariseMapWithMinimap(p)
 		sess.mapCatalog.mu.Lock()
 		sess.mapCatalog.entries = append(sess.mapCatalog.entries, entry)
 		if mini != nil {
@@ -327,7 +328,7 @@ func (sess *Session) handleMapsList(w http.ResponseWriter, _ *http.Request) {
 
 // summariseMapWithMinimap is summariseMap plus the rendered minimap PNG
 // so the preload goroutine can populate both caches in one TNT parse.
-func (sess *Session) summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
+func (sess *Session) summariseMapWithMinimap(p string) (mapEntry, []byte) {
 	entry := mapEntry{Path: p, Name: strings.TrimSuffix(path.Base(p), path.Ext(p))}
 	var pngBytes []byte
 	if data, err := sess.vfs.ReadFile(p); err == nil {
@@ -336,7 +337,9 @@ func (sess *Session) summariseMapWithMinimap(p string, pal color.Palette) (mapEn
 			entry.TileH = m.TileH
 			if m.Minimap != nil {
 				entry.MinimapURL = "/api/studio/minimap/" + p
-				if img := m.RenderMinimap(pal); img != nil {
+				// The resolver picks the per-map terrain palette (TA:K bakes its
+				// minimap with the map's per-kingdom table).
+				if img := m.RenderMinimap(sess.palettes().terrainPalette(p)); img != nil {
 					var buf bytes.Buffer
 					if err := png.Encode(&buf, img); err == nil {
 						pngBytes = buf.Bytes()
@@ -386,7 +389,7 @@ func (sess *Session) handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no minimap available", http.StatusNotFound)
 		return
 	}
-	img := m.RenderMinimap(sess.loadVFSPalette())
+	img := m.RenderMinimap(sess.palettes().terrainPalette(mapPath))
 	if img == nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 		return
@@ -1103,10 +1106,7 @@ func (sess *Session) renderFeatureStaticPNG(gafFilename, seqName string) ([]byte
 	if len(target.Frames) == 0 {
 		return nil, fmt.Errorf("sequence %s has no frames", target.Name)
 	}
-	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
-	if err != nil {
-		return nil, fmt.Errorf("load palette: %w", err)
-	}
+	pal := sess.palettes().featurePalette(gafFilename)
 	var buf bytes.Buffer
 	if err := target.Frames[0].ToPNG(pal, &buf); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
@@ -1143,10 +1143,7 @@ func (sess *Session) renderFeatureAPNG(gafFilename, seqName string) ([]byte, err
 			break
 		}
 	}
-	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
-	if err != nil {
-		return nil, fmt.Errorf("load palette: %w", err)
-	}
+	pal := sess.palettes().featurePalette(gafFilename)
 	var buf bytes.Buffer
 	if err := target.ToAPNG(pal, &buf); err != nil {
 		return nil, fmt.Errorf("encode apng: %w", err)

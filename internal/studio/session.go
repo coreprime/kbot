@@ -51,6 +51,15 @@ type Session struct {
 	objTexMu sync.Mutex
 	objTex   map[string]*image.RGBA
 
+	// Game-aware palette resolver (palette.go). Chosen once from the game id;
+	// rendering paths consult the interface and never special-case the game.
+	paletteOnce     sync.Once
+	paletteResolver paletteResolver
+
+	// rendered + downscaled TA:K terrain PNGs per map path (takterrain.go)
+	takTerrainMu  sync.Mutex
+	takTerrainPNG map[string][]byte
+
 	scanFeaturesCacheMu sync.Mutex
 	scanFeaturesList    []featureEntry
 	scanFeaturesByName  map[string]featureEntry

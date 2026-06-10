@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/internal/kbotctx"
 )
 
 // Glamour image slideshow source: TA ships ~50 PCX splash artworks
@@ -60,22 +59,22 @@ func (sess *Session) listGlamourSlugs() []string {
 func (sess *Session) handleGlamourList(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	var urls []string
-	if sess.game != kbotctx.GameTAKingdoms {
-		for _, slug := range sess.listGlamourSlugs() {
-			urls = append(urls, "/api/studio/glamour/image/"+slug)
-		}
+	for _, slug := range sess.listGlamourSlugs() {
+		urls = append(urls, "/api/studio/glamour/image/"+slug)
 	}
+	// No splash art (e.g. TA:Kingdoms ships none) — fall back to map renders.
 	if len(urls) == 0 {
-		urls = sess.welcomeMapPreviews(40)
+		urls = sess.welcomeMapBackgrounds()
 	}
 	writeJSON(w, map[string]any{"images": urls})
 }
 
-// welcomeMapPreviews lists up to max map-minimap URLs (for maps under maps/*.tnt)
-// to use as welcome backgrounds when no glamour art exists, e.g. TA: Kingdoms.
-// The minimap handler renders lazily and 404s maps without an embedded minimap;
-// the slideshow skips those.
-func (sess *Session) welcomeMapPreviews(max int) []string {
+// welcomeMapBackgrounds lists map-render URLs to use as welcome backgrounds when
+// no splash art exists. /api/studio/map-render/ serves a full-resolution terrain
+// render for TA:Kingdoms maps and falls back to the baked minimap for plain TNT
+// maps, so this needs no per-game branch. Renders are lazy + memoised; full
+// terrain renders are heavy, so the count is capped.
+func (sess *Session) welcomeMapBackgrounds() []string {
 	if sess.vfs == nil {
 		return nil
 	}
@@ -85,8 +84,8 @@ func (sess *Session) welcomeMapPreviews(max int) []string {
 		if !strings.HasPrefix(lower, "maps/") || !strings.HasSuffix(lower, ".tnt") {
 			continue
 		}
-		urls = append(urls, "/api/studio/minimap/"+p)
-		if len(urls) >= max {
+		urls = append(urls, "/api/studio/map-render/"+p)
+		if len(urls) >= 12 {
 			break
 		}
 	}
