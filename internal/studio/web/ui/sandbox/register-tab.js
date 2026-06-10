@@ -16,6 +16,9 @@ import {
 import { disposeSandboxSplit, detachSandboxSplit } from './split-host.js'
 import { stopTabTick } from '../common/tab-tick.js'
 
+const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
+const SANDBOX_STATUS = 'Sandbox ready — click "Spawn Unit" to add a unit to the field.'
+
 class SandboxTabInstance {
   constructor(spec) {
     // spec: { displayName? }
@@ -45,6 +48,17 @@ class SandboxTabInstance {
   }
 
   dirty() { return false }
+
+  statusBar() {
+    const meta = this.spec?.meta || this._tabRef?.meta
+    const parts = [meta?.unitTitle, meta?.side, meta?.category, meta?.description].filter(Boolean)
+    return {
+      title: this.displayName(),
+      meta: parts.join(' · '),
+      hints: MODEL_HINTS,
+      status: this._tabRef?._status != null ? this._tabRef._status : SANDBOX_STATUS,
+    }
+  }
 
   async activate(_ctx) {
     const tab = this._tabRef

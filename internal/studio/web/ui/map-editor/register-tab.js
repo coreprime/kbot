@@ -19,7 +19,11 @@ import {
   applyMapPaneFocus,
 } from './split-host.js'
 import { destroyEditorView } from './editor-view.js'
+import { abortTransientGestureState } from './boot.js'
 import { MapPaneView } from './pane-view.js'
+
+const MAP_HINTS = 'Drag-paint with the mouse.  Hold <kbd>Shift</kbd> to erase.  Scroll to zoom (<kbd>Shift</kbd>+scroll pans).'
+const MAP_STATUS = 'Ready.  Pick a section on the left, then click on the canvas to stamp it.'
 
 class MapEditorTabInstance {
   constructor(spec) {
@@ -47,6 +51,21 @@ class MapEditorTabInstance {
   // the MapDoc directly so a save() that mutates `dirty = false`
   // shows up on the next signal commit.
   dirty() { return !!this.spec.map?.dirty }
+
+  // statusBar — the map editor's title/meta/hints/status for the shared chrome.
+  statusBar() {
+    const m = this.spec.map
+    const parts = [
+      m?.tileW && m?.tileH ? `${m.tileW}×${m.tileH}` : null,
+      m?.planet || null,
+    ].filter(Boolean)
+    return {
+      title: this.displayName(),
+      meta: parts.join(' · '),
+      hints: MAP_HINTS,
+      status: this._tabRef?._status != null ? this._tabRef._status : MAP_STATUS,
+    }
+  }
 
   // Focus gained — hide the model overlay, run the map editor's
   // mount path (canvas + drawer + ribbon + scroll restore).  Every
@@ -150,6 +169,8 @@ class MapEditorTabInstance {
   // The framework calls this on every focus loss so we don't need
   // to gate on outgoing vs incoming.
   deactivate(_ctx) {
+    // Cancel any in-flight map gesture (drag-paint/select) as focus leaves.
+    abortTransientGestureState()
     hostCallbacks.snapshotActiveTabModuleLets?.()
     // Hide map-editor floating chrome that lives at viewport scope —
     // .placement-hint and #rotation-badge are `position: fixed`
@@ -192,6 +213,9 @@ class MapEditorTabInstance {
     // Tear down every pane's _EditorView + the Preact mount.  The
     // MapDoc itself is plain data the host can garbage-collect.
     if (this._tabRef) disposeMapSplit(this._tabRef)
+    // Also tear down the bootstrap singleton _EditorView (idempotent —
+    // a no-op once the active view is a per-pane instance).
+    destroyEditorView()
   }
 }
 

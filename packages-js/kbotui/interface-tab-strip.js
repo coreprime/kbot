@@ -61,41 +61,23 @@ export function setTabs(tabs, activeIndex) {
   _state.value = { tabs: tabs.slice(), activeIndex }
 }
 
-// _mapDisplayName — humanise a map record's name.  Mirrors the host's
-// mapDisplayName helper without depending on it.
-function _mapDisplayName(m) {
-  if (!m) return '(no map)'
-  return m.missionName || m.name || '(unnamed map)'
-}
-
 // _tabType returns the registrar typeId for a tab record.  Falls back
 // to the legacy `tab.type` field for any pre-registrar consumer.
 function _tabType(tab) { return tab.typeId || tab.type || '' }
 
+// Label + tooltip are data-driven from the tab record — the strip keeps NO
+// per-type (map/unit/sandbox/…) knowledge. A tab provides its own label via
+// displayName(); an optional tabTitle() supplies a richer tooltip.
 function _tabLabel(tab) {
-  const t = _tabType(tab)
-  if (t === 'unit-editor') return tab.meta?.unitTitle || tab.displayName || tab.name || '(unit)'
-  if (t === 'sandbox')     return tab.displayName || tab.name || 'Sandbox'
-  if (t === 'files')       return tab.displayName || tab.name || 'Files'
-  if (t === 'welcome')     return tab.displayName || tab.name || 'Welcome'
-  // Map tab (or unknown) — fall back to the legacy map-name path.
-  return _mapDisplayName(tab.map)
+  return tab.displayName
+    || (tab.instance && typeof tab.instance.displayName === 'function' ? tab.instance.displayName() : '')
+    || tab.name
+    || '(untitled)'
 }
 
 function _tabTitle(tab) {
-  const t = _tabType(tab)
-  if (t === 'unit-editor') {
-    const display = _tabLabel(tab)
-    const metaBits = [tab.meta?.unitName?.toUpperCase(), tab.meta?.side, tab.meta?.category].filter(Boolean).join(' · ')
-    return `${display}${metaBits ? ` · ${metaBits}` : ''}`
-  }
-  if (t === 'sandbox') return _tabLabel(tab)
-  if (t === 'files') return 'Browse VFS files'
-  if (t === 'welcome') return _tabLabel(tab)
-  const m = tab.map
-  const dirty = !!m?.dirty
-  const display = _mapDisplayName(m)
-  return `${display}${dirty ? ' (unsaved changes)' : ''} · ${m?.name || '(no file)'} · ${m?.tileW}×${m?.tileH}`
+  if (tab.instance && typeof tab.instance.tabTitle === 'function') return tab.instance.tabTitle()
+  return _tabLabel(tab)
 }
 
 export function InterfaceTabStrip() {
@@ -105,22 +87,17 @@ export function InterfaceTabStrip() {
       <div class="map-tabs-list" id="map-tabs-list">
         ${tabs.map((tab, i) => {
           const t = _tabType(tab)
-          const isModel = t === 'unit-editor'
-          const isSandbox = t === 'sandbox'
-          const dirty = !isModel && !isSandbox && !!tab.map?.dirty
+          const modelLike = t === 'unit-editor' || t === 'sandbox'
+          const dirty = !!(tab.instance && typeof tab.instance.dirty === 'function' && tab.instance.dirty())
           const cls = [
             'map-tab',
             i === activeIndex ? 'active' : '',
             dirty ? 'dirty' : '',
-            (isModel || isSandbox) ? 'map-tab-model' : '',
+            modelLike ? 'map-tab-model' : '',
           ].filter(Boolean).join(' ')
           const display = _tabLabel(tab)
-          const closeTitle =
-            isModel   ? 'Close this unit' :
-            isSandbox ? 'Close this sandbox' :
-                        'Close this map'
-          const isFiles = t === 'files'
-          const icon = isModel ? '🛠' : (isSandbox ? '🪖' : (isFiles ? '🗂' : '🗺'))
+          const closeTitle = `Close ${display}`
+          const icon = tab.descriptor?.glyph || tab.glyph || ''
           return html`
             <button key=${i}
                     type="button"

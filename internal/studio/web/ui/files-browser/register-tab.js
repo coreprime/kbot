@@ -9,6 +9,9 @@
 import { registerTabType } from '../tab-registry.js'
 import { activateFilesTab, deactivateFilesTab } from './tab.js'
 
+const FILES_HINTS = 'Search, browse, and preview the files in this workspace.'
+const FILES_STATUS = 'File Explorer'
+
 class FilesTabInstance {
   constructor(spec) {
     this.spec = spec || {}
@@ -23,6 +26,13 @@ class FilesTabInstance {
 
   displayName() { return 'Files' }
   dirty() { return false }
+
+  statusBar() {
+    return {
+      title: '', meta: '', hints: FILES_HINTS,
+      status: this._tabRef?._status != null ? this._tabRef._status : FILES_STATUS,
+    }
+  }
 
   async activate(_ctx) { await activateFilesTab() }
   deactivate(_ctx) { deactivateFilesTab() }

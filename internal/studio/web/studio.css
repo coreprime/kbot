@@ -114,10 +114,11 @@ kbd {
   filter: brightness(0.55) saturate(0.85);
 }
 .welcome-glamour img.visible { opacity: 0.55; }
-/* Welcome card: nanolathe-themed green grid overlay, plus a gradient
-   border darker at the top, lighter at the bottom that "pulses" by
-   sliding its three-stop gradient — visually reads as particles
-   flowing up the frame and constructing the dialog. */
+/* Welcome card (Total Annihilation / default): nanolathe-themed green grid
+   overlay, plus a gradient border darker at the top, lighter at the bottom that
+   "pulses" by sliding its three-stop gradient — reads as particles flowing up
+   the frame and constructing the dialog.  TA:Kingdoms overrides this with a
+   papyrus scroll + candlelight further down. */
 #welcome-dialog .dialog-card {
   position: relative;
   z-index: 1;
@@ -142,10 +143,8 @@ kbd {
   0%, 100% { background-position: 0 0, 0 0%; }
   50%      { background-position: 0 0, 0 100%; }
 }
-/* Green grid overlay.  The grid itself is faint and translucent;
-   the strobe is driven by a hue/opacity pulse cycling through three
-   tints (cool green → bright green → cyan-green) so it reads as a
-   live, energised surface instead of a static decal. */
+/* Green grid overlay — faint translucent grid, strobed through three tints so
+   it reads as a live, energised surface. */
 #welcome-dialog .dialog-card::before {
   content: '';
   position: absolute;
@@ -169,6 +168,60 @@ kbd {
   100% { color: rgba(127, 255, 102, 0.05); opacity: 0.55; }
 }
 #welcome-dialog .dialog-card > * { position: relative; z-index: 1; }
+
+/* ── TA:Kingdoms welcome — an aged papyrus scroll read by candlelight ────
+   For TAK sessions the card becomes a dark aged-papyrus sheet (generated
+   texture) with a sepia frame; a warm light pool drifts across it and flickers
+   (screen blend) as if someone were holding a candle to read.  Scoped to
+   body[data-game="takingdoms"] (set by applySessionBrand). The sheet is dark
+   enough that the existing light text stays legible. */
+body[data-game="takingdoms"] #welcome-dialog .dialog-card {
+  border-color: #6f5527;
+  background-image: url('/branding/textures/papyrus.png');
+  background-size: cover;
+  background-position: center;
+  background-clip: padding-box;
+  background-origin: padding-box;
+  box-shadow:
+    0 0 30px rgba(120, 80, 30, 0.22),
+    0 24px 64px rgba(0, 0, 0, 0.6);
+  animation: none; /* the green border-pulse slide doesn't apply here */
+}
+body[data-game="takingdoms"] #welcome-dialog .dialog-card::before {
+  background-image: radial-gradient(circle at 50% 42%,
+    rgba(255, 206, 130, 0.30),
+    rgba(255, 156, 60, 0.12) 36%,
+    transparent 64%);
+  background-size: 170% 170%;
+  background-repeat: no-repeat;
+  color: transparent; /* drop the green grid lines */
+  mix-blend-mode: screen;  /* warm candle light pooling on the dark paper */
+  animation:
+    welcome-candle-move 7.5s ease-in-out infinite,
+    welcome-candle-flicker 3.1s ease-in-out infinite;
+}
+body[data-game="takingdoms"] #welcome-dialog .welcome-tab-panel,
+body[data-game="takingdoms"] #welcome-dialog .welcome-tab.active {
+  border-color: rgba(120, 92, 44, 0.85);
+}
+@keyframes welcome-candle-move {
+  0%   { background-position: 24% 16%; }
+  25%  { background-position: 70% 40%; }
+  50%  { background-position: 40% 64%; }
+  75%  { background-position: 72% 30%; }
+  100% { background-position: 24% 16%; }
+}
+@keyframes welcome-candle-flicker {
+  0%   { opacity: 0.82; }
+  9%   { opacity: 1; }
+  18%  { opacity: 0.66; }
+  29%  { opacity: 0.95; }
+  43%  { opacity: 0.58; }
+  56%  { opacity: 0.92; }
+  68%  { opacity: 0.74; }
+  82%  { opacity: 1; }
+  100% { opacity: 0.82; }
+}
 
 /* Title — bigger, centred at the top of the card so the dialog
    feels like a name plate rather than a paragraph header.  Selector
@@ -1101,11 +1154,25 @@ kbd {
 }
 .brand {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 8px;
-  font-weight: 600;
+  gap: 9px;
+  min-width: 0;
 }
-.brand-mark { font-size: 18px; }
+.brand-logo {
+  width: 26px; height: 26px; flex: none;
+  object-fit: contain; display: block; border-radius: 5px;
+  -webkit-user-select: none; user-select: none;
+}
+.brand-logo[hidden] { display: none; }
+.brand-text {
+  display: flex; flex-direction: column; gap: 1px; min-width: 0; line-height: 1.1;
+}
+.brand-name { font-weight: 600; }
+.brand-sub {
+  font-size: 11px; line-height: 1; color: var(--muted);
+  max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ── Map tab bar ───────────────────────────────────────────────────── */
 .map-tabs {
@@ -6952,9 +7019,22 @@ canvas {
 
 /* ── Workspace picker page (ui/picker) ───────────────────────────────── */
 .picker { min-height: 100vh; }
-.picker-header { padding: 24px 32px; border-bottom: 1px solid #232838; }
+.picker-header { padding: 28px 32px 22px; border-bottom: 1px solid #232838; text-align: center; }
 .picker-header h1 { margin: 0; font-size: 20px; }
-.picker-sub { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+.picker-sub { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+/* Cross-fading brand banner: all three logos stacked, opacity toggled by the
+   active game filter so switching tabs dissolves between them. */
+.picker-logo {
+  position: relative; height: 180px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: center;
+}
+.picker-logo-img {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  max-height: 100%; max-width: min(840px, 92vw); width: auto;
+  opacity: 0; transition: opacity .4s ease; pointer-events: none;
+  -webkit-user-select: none; user-select: none;
+}
+.picker-logo-img.active { opacity: 1; }
 .picker-main { max-width: 1280px; margin: 0 auto; padding: 16px 32px 64px; }
 .picker-section { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 10px; }
 .picker-empty { color: #6b7488; font-style: italic; }
@@ -6993,9 +7073,6 @@ canvas {
 .picker-card-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; color: var(--muted); font-size: 12px; }
 
 /* ── Picker brand + two-column layout + hover arrows ─────────────────── */
-.picker-brand { display: inline-flex; align-items: center; gap: 12px; }
-.picker-wordmark { font-size: 22px; font-weight: 500; color: var(--text); letter-spacing: .2px; }
-.picker-wordmark b { font-weight: 800; }
 .picker-tab { display: inline-flex; align-items: center; gap: 7px; }
 .picker-tab .kb-game-icon { border-radius: 4px; }
 
@@ -7019,4 +7096,33 @@ canvas {
 
 /* Welcome shown as an MDI tab: sit below the topbar (48px) + tab strip
    (34px) so the strip stays visible, rather than the full-screen modal. */
-.dialog.as-tab { inset: 82px 0 0 0; z-index: 4000; background: #0f1115; }
+.dialog.as-tab { inset: 82px 0 0 0; z-index: 40; background: #0f1115; }
+
+/* ── Neutral shell: map-editor chrome only renders for a map tab ─────────
+   The shell (#app: topbar + tab strip + status) is type-agnostic. Map-only
+   surfaces — the ribbon, the section/feature sidebar, the canvas, and the
+   floating map-stats / minimap / camera-info panels — are gated on the active
+   tab type stamped on <body data-tab> by switchToTab. Scoped to #app so the
+   model-viewer shell's own .ribbon/.sidebar (a sibling subtree) is untouched. */
+body:not([data-tab="map"]) #minimap-panel,
+body:not([data-tab="map"]) #map-stats-panel,
+body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
+
+/* ── Expanded feature hover preview (drawer) ─────────────────────────── */
+.drawer-hover-preview {
+  position: fixed;
+  z-index: 9000;
+  display: none;
+  padding: 6px;
+  background: #11141a;
+  border: 1px solid #2c3346;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.drawer-hover-preview img {
+  display: block;
+  width: 240px;
+  height: 240px;
+  object-fit: contain;
+}

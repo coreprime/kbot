@@ -28,6 +28,13 @@ export function gameInfo(game) {
   return GAME[game] || GAME.custom
 }
 
+// gameIconDataUri — the game's real application-icon PNG as a data URI, or null
+// when no extracted icon exists (e.g. "custom"). Lets non-Preact chrome (the
+// editor topbar brand) show the same icon without serving an asset.
+export function gameIconDataUri(game) {
+  return ICON[game] || null
+}
+
 // GameIcon — the game's real application icon, or a coloured letter badge
 // when no icon is available for that game id.
 export function GameIcon({ game, size = 18 }) {

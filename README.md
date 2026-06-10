@@ -1,6 +1,6 @@
 # KBot - Total Annihilation Toolkit
 
-![KBot Logo](docs/kbot-header.png)
+![KBot Logo](branding/logos/kbot-header.png)
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/coreprime/kbot.svg)](https://pkg.go.dev/github.com/coreprime/kbot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

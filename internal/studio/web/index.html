@@ -749,9 +749,17 @@
 
   <div id="app" class="app hidden">
     <header class="topbar">
+      <!-- Brand: the game's application icon + the KBot Studio wordmark, with
+           the workspace name as a subtitle. The icon src and subtitle are set
+           from /api/studio/session-info at boot (applySessionBrand): a TA or
+           TA:Kingdoms session shows that game's exe icon; the icon is hidden
+           for games without one. -->
       <div class="brand">
-        <span class="brand-mark">⚙️</span>
-        <span>KBot Studio</span>
+        <img id="app-brand-logo" class="brand-logo" alt="" hidden />
+        <div class="brand-text">
+          <span class="brand-name">KBot Studio</span>
+          <span id="app-brand-sub" class="brand-sub"></span>
+        </div>
       </div>
       <!-- Active-document badge populated by JS — shows the unit
            name + meta when a 3DO tab is on top, the map title when

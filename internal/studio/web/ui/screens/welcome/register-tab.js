@@ -22,6 +22,13 @@ class WelcomeTabInstance {
   displayName() { return 'Welcome' }
   dirty() { return false }
 
+  statusBar() {
+    return {
+      title: 'Welcome', meta: '', hints: '',
+      status: this._tabRef?._status != null ? this._tabRef._status : '',
+    }
+  }
+
   async activate(_ctx) { activateWelcomeTab() }
   deactivate(_ctx) { deactivateWelcomeTab() }
   async canClose(_ctx) { return true }

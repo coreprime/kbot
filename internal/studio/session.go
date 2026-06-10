@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"image"
 	"net/http"
 	"sync"
 
@@ -45,6 +46,10 @@ type Session struct {
 	featureCacheMu sync.Mutex
 	featureCache   map[string][]byte
 	featureCacheBy map[string]featureEntry
+
+	// decoded GAF texture images per 3DO texture name, for object previews
+	objTexMu sync.Mutex
+	objTex   map[string]*image.RGBA
 
 	scanFeaturesCacheMu sync.Mutex
 	scanFeaturesList    []featureEntry

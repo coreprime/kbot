@@ -28,6 +28,7 @@ import (
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/heartbeat", handleHeartbeat)
+	mux.HandleFunc("/api/studio/session-info", sess.handleSessionInfo)
 	mux.HandleFunc("/api/studio/feature-origins", sess.handleFeatureOrigins)
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)
 	mux.HandleFunc("/api/studio/maps", sess.handleMapsList)
@@ -71,6 +72,19 @@ func handleHeartbeat(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
+// ── /api/studio/session-info ───────────────────────────────────────────────
+
+// handleSessionInfo reports the session's game and display name so the editor
+// chrome can show the game-specific brand banner and the workspace name.
+func (sess *Session) handleSessionInfo(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, map[string]any{
+		"id":   sess.id,
+		"name": sess.name,
+		"game": sess.game,
+	})
 }
 
 // ── /api/studio/defaults ───────────────────────────────────────────────────
@@ -978,9 +992,18 @@ func (sess *Session) handleFeaturePreview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	staticOnly := r.URL.Query().Get("static") == "1"
+	size := 0
+	if s := r.URL.Query().Get("size"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 && n <= 512 {
+			size = n
+		}
+	}
 	key := strings.ToLower(name)
 	if staticOnly {
 		key += "|static"
+	}
+	if size > 0 {
+		key += "|" + strconv.Itoa(size)
 	}
 
 	sess.featureCacheMu.Lock()
@@ -1001,7 +1024,12 @@ func (sess *Session) handleFeaturePreview(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if entry.Filename == "" {
-		http.Error(w, "feature has no animation", http.StatusNotFound)
+		// No GAF — render the feature's 3DO object (wreckage / dead units).
+		if entry.Object != "" {
+			sess.serveObjectFeaturePreview(w, key, entry.Object, staticOnly, size)
+			return
+		}
+		http.Error(w, "feature has no preview", http.StatusNotFound)
 		return
 	}
 
@@ -1207,6 +1235,8 @@ type featureEntry struct {
 	FootprintZ  int    `json:"footprintZ"`
 	Filename    string `json:"filename"`
 	Seqname     string `json:"seqname"`
+	Object      string `json:"-"`              // 3DO model for object-only features (wreckage)
+	Spin        bool   `json:"spin,omitempty"` // preview is a 3DO spin APNG (hover-only)
 	OriginX     int    `json:"originX"`
 	OriginY     int    `json:"originY"`
 	// Metal yield (non-zero for the rocks-with-metal features the
@@ -1281,10 +1311,20 @@ func (sess *Session) scanFeatures() ([]featureEntry, map[string]featureEntry) {
 				FootprintZ:  f.FootprintZ,
 				Filename:    f.Filename,
 				Seqname:     f.SeqName,
+				Object:      f.Object,
 				Metal:       int(f.Metal),
 			}
 			if entry.Filename != "" && entry.Seqname != "" {
 				entry.PreviewURL = "/api/studio/feature-preview/" + url.PathEscape(name)
+			} else if entry.Object != "" && sess.vfs != nil &&
+				sess.vfs.Exists("objects3d/"+strings.ToLower(entry.Object)+".3do") {
+				// Wreckage / dead-unit features are 3DO objects with no GAF; the
+				// preview endpoint renders the 3DO. Only advertise it when the
+				// model exists so the drawer never shows a broken image. Marked
+				// as a spin preview so the drawer shows a static still until hover
+				// (the animated spin APNG is expensive to render for all at once).
+				entry.PreviewURL = "/api/studio/feature-preview/" + url.PathEscape(name)
+				entry.Spin = true
 			}
 			byName[key] = entry
 			out = append(out, entry)

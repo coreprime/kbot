@@ -16,6 +16,10 @@ import { $, hostCallbacks } from '../host-context.js'
 import { activateModelTab } from './tab.js'
 import { detachUnitSplit, disposeUnitSplit, stopAllRenderers } from './split-host.js'
 import { stopTabTick } from '../common/tab-tick.js'
+import { closeAllMvThreadCodePanels } from './debugger/modal.js'
+
+const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
+const UNIT_STATUS = 'Unit viewer ready.'
 
 // Per-tab record kept on the instance.  The host's tabs[] entry still
 // carries `name`, `meta`, `viewer`, `_pausedBeforeSwitch` for
@@ -44,11 +48,22 @@ class UnitEditorTabInstance {
   }
 
   displayName() {
-    return this.spec.displayName || this.spec.name || 'Unit'
+    return this.spec.meta?.unitTitle || this.spec.displayName || this.spec.name || 'Unit'
   }
 
   // No dirty concept on model tabs (yet).
   dirty() { return false }
+
+  statusBar() {
+    const meta = this.spec?.meta || this._tabRef?.meta
+    const parts = [meta?.unitTitle, meta?.side, meta?.category, meta?.description].filter(Boolean)
+    return {
+      title: this.displayName(),
+      meta: parts.join(' · '),
+      hints: MODEL_HINTS,
+      status: this._tabRef?._status != null ? this._tabRef._status : UNIT_STATUS,
+    }
+  }
 
   // Focus gained — bring the unit editor's DOM surface up + run the
   // per-tab activator (canvas attach, viewer construction, ribbon
@@ -79,6 +94,9 @@ class UnitEditorTabInstance {
   // see a stale unit-editor surface overlaid on its own content.
   // Idempotent.
   deactivate(_ctx) {
+    // Close any open thread-debugger panels — they point at this unit's COB
+    // binding, which is about to be hidden/replaced.
+    closeAllMvThreadCodePanels()
     const tab = this._tabRef
     if (!tab) return
     const v = tab.viewer

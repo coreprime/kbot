@@ -29,6 +29,50 @@ import {
 } from './helpers.js'
 import { DRAWER_ITEM_HEIGHT, DRAWER_OBSERVER_MARGIN } from './constants.js'
 
+// _apiUrl scopes an absolute /api/ path to the active workspace prefix when the
+// editor runs under /workspaces/<id>/. Needed for <img> srcs built as HTML
+// strings (innerHTML), which bypass the page's fetch/src shim.
+function _apiUrl(p) {
+  const base = (typeof window !== 'undefined' && window.__WS_BASE__) || ''
+  return base + p
+}
+
+// Expanded hover preview popup — a large floating preview shown beside the
+// hovered feature so spinning wreck/object models are big enough to read. For
+// 3DO spin features it requests a larger render; for GAF features it shows the
+// animated sprite enlarged.
+const HOVER_PREVIEW_PX = 240
+let _hoverPreviewEl = null
+function _ensureHoverPreview() {
+  if (_hoverPreviewEl) return _hoverPreviewEl
+  const el = document.createElement('div')
+  el.className = 'drawer-hover-preview'
+  el.innerHTML = '<img alt="" />'
+  document.body.appendChild(el)
+  _hoverPreviewEl = el
+  return el
+}
+function showFeatureHoverPreview(item, f) {
+  if (!f.previewUrl) return
+  const el = _ensureHoverPreview()
+  const img = el.querySelector('img')
+  const src = f.spin ? `${f.previewUrl}?size=${HOVER_PREVIEW_PX}` : f.previewUrl
+  img.src = _apiUrl(src)
+  const r = item.getBoundingClientRect()
+  const box = HOVER_PREVIEW_PX + 16
+  let left = r.right + 10
+  if (left + box > window.innerWidth) left = r.left - box - 10
+  if (left < 4) left = 4
+  let top = r.top + r.height / 2 - box / 2
+  top = Math.max(8, Math.min(top, window.innerHeight - box - 8))
+  el.style.left = `${left}px`
+  el.style.top = `${top}px`
+  el.style.display = 'block'
+}
+function hideFeatureHoverPreview() {
+  if (_hoverPreviewEl) _hoverPreviewEl.style.display = 'none'
+}
+
 // featureUsage returns a Map<lowercase name → count> derived from the
 // current state.features array, so the drawer can show usage badges and
 // filter to "used only" without re-walking the placements per row.
@@ -276,7 +320,7 @@ function _createSectionItem(s) {
   if (s.path) tooltipParts.push(s.path)
   item.title = tooltipParts.join('\n')
   item.innerHTML = `
-    <img class="drawer-thumb" src="/api/studio/section-preview/${encodeURI(s.path)}" alt="" loading="lazy" draggable="false" />
+    <img class="drawer-thumb" src="${_apiUrl('/api/studio/section-preview/' + encodeURI(s.path))}" alt="" loading="lazy" draggable="false" />
     <div class="drawer-meta">
       <div class="drawer-name">${escapeHTML(s.name)}</div>
       <div class="drawer-sub">${s.tileW || '?'}×${s.tileH || '?'} tiles · ${escapeHTML(s.group || '')}</div>
@@ -410,11 +454,14 @@ function _createFeatureItem(f, usage) {
   if (f.description) tooltipParts.push(f.description)
   item.title = tooltipParts.join('\n')
   const staticUrl = f.previewUrl ? f.previewUrl + '?static=1' : null
-  const initialUrl = (state.animateFeatures || state.hoveredFeatureName === f.name)
-    ? f.previewUrl
-    : staticUrl
+  // 3DO spin previews are expensive APNGs — keep them static until hover even
+  // when the global "Animate features" toggle is on, so the drawer stays snappy.
+  // Spin (3DO) thumbnails stay static in the list; the rotating preview shows in
+  // the expanded hover popup. GAF features still honour the Animate toggle.
+  const wantAnimated = f.spin ? false : (state.animateFeatures || state.hoveredFeatureName === f.name)
+  const initialUrl = wantAnimated ? f.previewUrl : staticUrl
   const thumb = f.previewUrl
-    ? `<img class="drawer-thumb feature-thumb" src="${initialUrl}" data-animated="${f.previewUrl}" data-static="${staticUrl}" alt="" loading="lazy" draggable="false" />`
+    ? `<img class="drawer-thumb feature-thumb" src="${_apiUrl(initialUrl)}" data-animated="${f.previewUrl}" data-static="${staticUrl}" alt="" loading="lazy" draggable="false" />`
     : `<div class="drawer-thumb drawer-thumb-glyph">🌲</div>`
   item.innerHTML = `
     ${thumb}
@@ -429,19 +476,13 @@ function _createFeatureItem(f, usage) {
   item.addEventListener('mouseenter', () => {
     state.hoveredFeatureName = f.name
     state.highlightFeatureName = (f.name || '').toLowerCase()
-    if (f.previewUrl && !state.animateFeatures) {
-      const img = item.querySelector('img.feature-thumb')
-      if (img) img.src = img.dataset.animated
-    }
+    if (f.previewUrl) showFeatureHoverPreview(item, f)
     hostCallbacks.renderCanvas?.()
   })
   item.addEventListener('mouseleave', () => {
     if (state.hoveredFeatureName === f.name) state.hoveredFeatureName = null
     if (state.highlightFeatureName === (f.name || '').toLowerCase()) state.highlightFeatureName = null
-    if (f.previewUrl && !state.animateFeatures) {
-      const img = item.querySelector('img.feature-thumb')
-      if (img) img.src = img.dataset.static
-    }
+    hideFeatureHoverPreview()
     hostCallbacks.renderCanvas?.()
   })
   return item

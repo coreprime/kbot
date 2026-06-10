@@ -49,6 +49,7 @@ import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 // Welcome dialog visual + audio FX — three pure self-contained
 // subsystems that observe #welcome-dialog's hidden class via
 // MutationObserver to suspend / resume on dialog close.
+import { gameIconDataUri } from '@kbot/ui/game-icon'
 import { wireWelcomeNanoFX } from './ui/screens/welcome/fx/nano-fx.js'
 import { wireWelcomeAmbient } from './ui/screens/welcome/fx/ambient.js'
 import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
@@ -272,6 +273,26 @@ import {
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 
+// applySessionBrand fetches the session's game + name and paints the topbar
+// brand: the game's application icon next to the KBot Studio wordmark, plus the
+// workspace name as a subtitle. It also tags <body> with the game and publishes
+// it on window.__KBOT_GAME__ so the welcome FX + parchment background can pick
+// their game theme (green nanolathe vs magical smoke; papyrus tint).
+async function applySessionBrand() {
+  try {
+    const info = await fetch('/api/studio/session-info').then((r) => (r.ok ? r.json() : null))
+    if (!info) return
+    const game = info.game || ''
+    window.__KBOT_GAME__ = game
+    if (game) document.body.dataset.game = game
+    const icon = $('#app-brand-logo')
+    const uri = gameIconDataUri(game)
+    if (icon && uri) { icon.src = uri; icon.removeAttribute('hidden') }
+    const sub = $('#app-brand-sub')
+    if (sub) sub.textContent = info.name || ''
+  } catch { /* leave the default brand on any error */ }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // Wire host-context callbacks so the extracted subsystems
   // (/ui/map-editor/undo.js, /ui/map-editor/clipboard.js, ...) can
@@ -408,6 +429,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireWelcomeKeyboard()
   wireWelcomeDropZone()
   wireWelcomeNanoFX()
+  applySessionBrand()
   wireWelcomeGlamour()
   wireWelcomeAmbient()
   // Welcome tabs are React-rendered (see /ui/screens/welcome/welcome-screen.js);

@@ -13,8 +13,22 @@ import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
 import { Tag } from '@kbot/ui/tag'
 import { GameChip, GameIcon } from '@kbot/ui/game-icon'
 import { confirmDialog } from '@kbot/ui/confirm-dialog'
-import { KBotLogo, CavedogIcon } from './icons.js'
+import { CavedogIcon } from './icons.js'
 import { NewWorkspaceDialog } from './new-workspace-dialog.js'
+
+// Header brand logos. All three are stacked and cross-faded via CSS opacity as
+// the game filter changes: the blended logo for All/Other, and the
+// game-specific banner when the TA or TA:Kingdoms tab is selected.
+const HEADER_LOGOS = [
+  { id: 'general', src: '/branding/logos/kbot-header.png' },
+  { id: 'totala', src: '/branding/logos/kbot-header-ta.png' },
+  { id: 'takingdoms', src: '/branding/logos/kbot-header-tak.png' },
+]
+
+function activeLogoId(filter) {
+  if (filter === 'totala' || filter === 'takingdoms') return filter
+  return 'general'
+}
 
 const WIDE_QUERY = '(min-width: 1040px)'
 
@@ -111,9 +125,14 @@ export function PickerApp() {
     return () => mq.removeEventListener('change', sync)
   }, [])
 
+  const activeLogo = activeLogoId(filter)
   const header = html`
     <header class="picker-header">
-      <${KBotLogo} />
+      <div class="picker-logo">
+        ${HEADER_LOGOS.map((l) => html`
+          <img key=${l.id} class=${'picker-logo-img' + (l.id === activeLogo ? ' active' : '')}
+               src=${l.src} alt="KBot Studio" draggable="false" />`)}
+      </div>
       <p class="picker-sub">Pick a context to browse, or a workspace to edit. Each opens in its own tab.</p>
       <nav class="picker-tabs">
         ${TABS.map((t) => html`
@@ -195,7 +214,7 @@ export function PickerApp() {
 
   const workspacesCol = html`
     <section class="picker-col">
-      <h2 class="picker-section">Workspaces</h2>
+      <h2 class="picker-section">Mods & Workspaces</h2>
       ${workspaces.length === 0
         ? html`<p class="picker-empty">No workspaces here — create one from a context.</p>`
         : workspaces.map((w) => html`
@@ -219,7 +238,7 @@ export function PickerApp() {
 
   const contextsCol = html`
     <section class="picker-col">
-      <h2 class="picker-section">Contexts</h2>
+      <h2 class="picker-section">Base Data Contexts</h2>
       ${contexts.length === 0
         ? html`<p class="picker-empty">No contexts for this filter.</p>`
         : contexts.map((c) => html`
@@ -259,8 +278,8 @@ export function PickerApp() {
                                               d=${a.d} marker-end="url(#pk-arrow)" />`)}
           </svg>` : null}
         <div class="picker-cols">
-          ${workspacesCol}
           ${contextsCol}
+          ${workspacesCol}
         </div>
       </main>
 

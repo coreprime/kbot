@@ -32,4 +32,27 @@ export default [
       'no-empty': ['warn', { allowEmptyCatch: true }],
     },
   },
+  {
+    // Decoupling guardrail: the type-agnostic shell, tab dispatcher and shared
+    // chrome must not reach into any specific tab feature (map / unit / sandbox
+    // / files / welcome). Per-type behaviour belongs in the tab descriptor.
+    // (tab-bar.js is exempt — it's the composition root that wires the "+"
+    // menu to each feature's opener.)
+    files: [
+      'internal/studio/web/ui/tab-registry.js',
+      'internal/studio/web/ui/topbar.js',
+      'internal/studio/web/ui/host-context.js',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: [
+            '**/map-editor/**', '**/unit-editor/**', '**/sandbox/**',
+            '**/files-browser/**', '**/screens/**',
+          ],
+          message: 'Type-agnostic shell/dispatch/chrome must not import feature (tab) modules — move per-type behaviour into the tab descriptor.',
+        }],
+      }],
+    },
+  },
 ]

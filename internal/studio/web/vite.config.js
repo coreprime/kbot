@@ -14,6 +14,10 @@ import { resolve } from 'node:path'
 //   - worlds/**   (world manifests fetched by /game3d/worlds/…)
 const game3dPkg = resolve(import.meta.dirname, '../../../packages-js/game3d')
 const runtimeAssetDirs = ['shaders', 'worlds']
+// Brand assets live at the repo root (branding/) — logos/ for the picker header
+// + editor brand, textures/ for the welcome backgrounds. Copy the whole tree
+// into dist/branding/ so the studio serves them at stable /branding/* URLs.
+const brandingDir = resolve(import.meta.dirname, '../../../branding')
 
 function copyRuntimeAssets() {
   return {
@@ -25,6 +29,9 @@ function copyRuntimeAssets() {
         const from = resolve(game3dPkg, dir)
         if (!existsSync(from)) continue
         cpSync(from, resolve(out, 'game3d', dir), { recursive: true })
+      }
+      if (existsSync(brandingDir)) {
+        cpSync(brandingDir, resolve(out, 'branding'), { recursive: true })
       }
       // Keep a committed placeholder so the Go package embedding dist/ still
       // compiles on a fresh checkout before the web bundle has been built.

@@ -57,6 +57,10 @@
 //
 //     // Metadata.
 //     displayName()               tab-strip / topbar label
+//     statusBar?()                optional; returns { title, meta, hints,
+//                                 status } for the shared chrome (topbar
+//                                 doc-info + footer).  Absent → neutral bar.
+//     tabTitle?()                 optional; richer tab-strip tooltip string
 //     dirty?()                    optional; drives the × indicator
 //                                 and canClose prompt
 //
@@ -68,9 +72,6 @@
 //   }
 
 import { tabs, tabState, $, hostCallbacks } from './host-context.js'
-import { destroyEditorView } from './map-editor/editor-view.js'
-import { abortTransientGestureState } from './map-editor/boot.js'
-import { closeAllMvThreadCodePanels } from './unit-editor/debugger/modal.js'
 import { renderMapTabs } from './tab-bar.js'
 
 // Registered descriptors, keyed by typeId.  Populated by each
@@ -221,9 +222,9 @@ export async function closeTab(idx) {
 }
 
 export function showWelcomeAfterLastTabClose() {
-  // The welcome screen is itself an MDI tab now — tear down the editor
-  // view and open a fresh Welcome tab so the user always lands on it.
-  destroyEditorView()
+  // The welcome screen is itself an MDI tab now — open a fresh Welcome tab so
+  // the user always lands on it. (Editor-view teardown is the map tab's own
+  // dispose responsibility.)
   openTab('welcome', {})
 }
 
@@ -244,13 +245,6 @@ export async function switchToTab(nextIdx, { fresh = false, force = false } = {}
   const incoming = tabs[nextIdx]
   _ensureTabInstance(incoming)
 
-  // Close every open thread-debugger panel — they point at the
-  // outgoing tab's COB binding, which is either about to be
-  // replaced (switching between models) or hidden behind the map
-  // editor (switching to a map tab).  Reopening from the Threads
-  // inspector is one click.
-  closeAllMvThreadCodePanels()
-
   const ctx = {
     fromTypeId: outgoing?.typeId || null,
     toTypeId: incoming?.typeId || null,
@@ -266,7 +260,6 @@ export async function switchToTab(nextIdx, { fresh = false, force = false } = {}
     try { t.instance.deactivate(ctx) } catch { /* ignore */ }
   }
 
-  abortTransientGestureState()
   tabState.activeIndex = nextIdx
   renderMapTabs()
 

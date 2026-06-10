@@ -1,6 +1,6 @@
 # Total Annihilation & TA: Kingdoms Format Reference
 
-![kbot](../kbot-header.png)
+![kbot](../../branding/logos/kbot-header.png)
 
 A field guide to the proprietary file formats Cavedog Entertainment shipped
 in *Total Annihilation* (1997) and *Total Annihilation: Kingdoms* (1999),
