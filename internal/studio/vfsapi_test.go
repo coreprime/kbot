@@ -9,14 +9,13 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/internal/assetrender"
 )
 
 // setupVFSAPI writes a small loose-file tree to a temp dir, mounts it, and
 // installs it as the package-level vfs + renderer the handlers read. It
 // restores the previous globals on cleanup so it composes with other tests
 // that swap vfs.
-func setupVFSAPI(t *testing.T) {
+func setupVFSAPI(t *testing.T) *Session {
 	t.Helper()
 
 	base := t.TempDir()
@@ -38,27 +37,23 @@ func setupVFSAPI(t *testing.T) {
 		t.Fatalf("NewVirtualFileSystem: %v", err)
 	}
 
-	prevVFS, prevRenderer := vfs, renderer
-	vfs = mounted
-	renderer = assetrender.New(mounted, assetrender.Options{CacheDir: t.TempDir()})
-	t.Cleanup(func() {
-		_ = mounted.Close()
-		vfs, renderer = prevVFS, prevRenderer
-	})
+	sess := newSession("test", "test", mounted, t.TempDir())
+	t.Cleanup(func() { _ = mounted.Close() })
+	return sess
 }
 
-func doVFS(t *testing.T, target string) *httptest.ResponseRecorder {
+func doVFS(t *testing.T, sess *Session, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
-	handleVFS(rec, req)
+	sess.handleVFS(rec, req)
 	return rec
 }
 
 func TestVFSListing(t *testing.T) {
-	setupVFSAPI(t)
+	sess := setupVFSAPI(t)
 
-	rec := doVFS(t, "/api/vfs/maps/")
+	rec := doVFS(t, sess, "/api/vfs/maps/")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -88,9 +83,9 @@ func TestVFSListing(t *testing.T) {
 }
 
 func TestVFSRawServesBytesWithETag(t *testing.T) {
-	setupVFSAPI(t)
+	sess := setupVFSAPI(t)
 
-	rec := doVFS(t, "/api/vfs/maps/notes.txt")
+	rec := doVFS(t, sess, "/api/vfs/maps/notes.txt")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -109,16 +104,16 @@ func TestVFSRawServesBytesWithETag(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/vfs/maps/notes.txt", nil)
 	req.Header.Set("If-None-Match", etag)
 	rec2 := httptest.NewRecorder()
-	handleVFS(rec2, req)
+	sess.handleVFS(rec2, req)
 	if rec2.Code != http.StatusNotModified {
 		t.Errorf("conditional GET status = %d, want 304", rec2.Code)
 	}
 }
 
 func TestVFSDescribeOTA(t *testing.T) {
-	setupVFSAPI(t)
+	sess := setupVFSAPI(t)
 
-	rec := doVFS(t, "/api/vfs/maps/test.ota?describe")
+	rec := doVFS(t, sess, "/api/vfs/maps/test.ota?describe")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -138,9 +133,9 @@ func TestVFSDescribeOTA(t *testing.T) {
 }
 
 func TestVFSMetadataCombinesFields(t *testing.T) {
-	setupVFSAPI(t)
+	sess := setupVFSAPI(t)
 
-	rec := doVFS(t, "/api/vfs/maps/test.ota?metadata")
+	rec := doVFS(t, sess, "/api/vfs/maps/test.ota?metadata")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -166,12 +161,12 @@ func TestVFSMetadataCombinesFields(t *testing.T) {
 }
 
 func TestVFSMissingFile(t *testing.T) {
-	setupVFSAPI(t)
+	sess := setupVFSAPI(t)
 
-	if rec := doVFS(t, "/api/vfs/maps/missing.txt"); rec.Code != http.StatusNotFound {
+	if rec := doVFS(t, sess, "/api/vfs/maps/missing.txt"); rec.Code != http.StatusNotFound {
 		t.Errorf("raw missing status = %d, want 404", rec.Code)
 	}
-	if rec := doVFS(t, "/api/vfs/nope/"); rec.Code != http.StatusNotFound {
+	if rec := doVFS(t, sess, "/api/vfs/nope/"); rec.Code != http.StatusNotFound {
 		t.Errorf("listing missing dir status = %d, want 404", rec.Code)
 	}
 }

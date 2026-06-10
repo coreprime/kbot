@@ -96,6 +96,33 @@ let _sandboxLabelCounter = 0
 // builds an instance, pushes the host record, and switches focus.
 // No type discriminator + no legacy `sandbox: true` flag — the
 // registry handles dispatch by typeId.
+import { openWelcomeTab } from '../screens/welcome/tab.js'
+import { setWelcomeTab, setSandboxView } from '../screens/welcome/welcome-screen.js'
+
+// _sbxMatchId / _sbxHostWsUrl mirror the welcome screen's New-Hosted
+// helpers so the "+" menu can host a match without the welcome UI.
+function _sbxMatchId() { return 'sbx-' + Math.random().toString(36).slice(2, 8) }
+function _sbxHostWsUrl(params) {
+  const proto = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss:' : 'ws:'
+  const host = (typeof location !== 'undefined' && location.host) ? location.host : 'localhost'
+  return `${proto}//${host}/host/ws?${new URLSearchParams(params).toString()}`
+}
+
+// hostNewSandbox starts a new authoritative hosted match and joins it.
+export function hostNewSandbox() {
+  const id = _sbxMatchId()
+  const name = `Sandbox ${id}`
+  openSandboxStub({ joinUrl: _sbxHostWsUrl({ match: id, name, kind: 'sandbox' }), displayName: name })
+}
+
+// openSandboxJoin surfaces the Welcome tab's Sandbox → Join Hosted picker
+// (the live-session browser) rather than duplicating its UI here.
+export function openSandboxJoin() {
+  openWelcomeTab()
+  setWelcomeTab('sandbox')
+  setSandboxView('join')
+}
+
 export function openSandboxStub(opts = {}) {
   _sandboxLabelCounter += 1
   // opts.joinUrl (set by the welcome dialog's New Hosted / Join Hosted

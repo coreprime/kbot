@@ -25,7 +25,8 @@ import { openSizeDialog, setSizeDialogSource } from './map-editor/dialogs/size.j
 import { openMapDialog } from './pickers/open-map.js'
 import { openModelPicker } from './pickers/open-unit-flow.js'
 import { setModelOpenIntent } from './unit-editor/host-state.js'
-import { openSandboxStub } from './sandbox/tab.js'
+import { openSandboxStub, hostNewSandbox, openSandboxJoin } from './sandbox/tab.js'
+import { openWelcomeTab } from './screens/welcome/tab.js'
 import { openFilesTab } from './files-browser/tab.js'
 
 // mapDisplayName returns the friendly label for a MapDoc — prefers the
@@ -67,10 +68,13 @@ export function wireMapTabBar() {
       ui.configureTabBarBridge({
         onSwitch:   (i) => switchToTab(i),
         onClose:    (i) => closeTab(i),
+        onWelcome:  () => openWelcomeTab(),
         onNewMap:   () => { setSizeDialogSource('tabbar'); openSizeDialog() },
         onOpenMap:  () => openMapDialog('tabbar'),
         onOpenUnit: () => { setModelOpenIntent('add'); openModelPicker() },
-        onSandbox:  () => openSandboxStub(),
+        onSandboxLocal: () => openSandboxStub(),
+        onSandboxHost:  () => hostNewSandbox(),
+        onSandboxJoin:  () => openSandboxJoin(),
         onBrowseFiles: () => openFilesTab(),
       })
     }

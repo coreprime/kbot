@@ -8,6 +8,9 @@
 // Files in archives are layered with higher-priority archives overriding lower-priority ones.
 // Physical files always override archive files.
 //
+// For multi-source layering (a base game, optional parent contexts and a writable
+// work folder overlaid on top) see NewLayered in layered.go.
+//
 // Example usage:
 //
 //	config := &filesystem.Config{
@@ -75,9 +78,10 @@ type Config struct {
 	SkipErrors bool
 }
 
-// extensionPriority defines the loading order for archive types
-// Lower number = lower priority (loaded first, overridden by later)
-
+// physicalSource is the layer label used for loose files found inside a context
+// directory (as opposed to the writable work-folder overlay, which carries its
+// own label).
+const physicalSource = "Physical Filesystem"
 
 // FileInfo provides information about a virtual file
 type FileInfo struct {
@@ -87,21 +91,39 @@ type FileInfo struct {
 	IsDir  bool   // True if this is a directory
 }
 
-// Ensure VirtualFileSystem implements FileSystem
-var _ FileSystem = (*VirtualFileSystem)(nil)
+// Ensure VirtualFileSystem implements the filesystem interfaces
+var (
+	_ FileSystem         = (*VirtualFileSystem)(nil)
+	_ WritableFileSystem = (*VirtualFileSystem)(nil)
+)
 
-// VirtualFileSystem provides a layered view of archive and physical files
+// VirtualFileSystem provides a layered view of archive and physical files.
+//
+// Files are resolved through an ordered stack of sources (see NewLayered). Each
+// file carries one FileLayer per source that contains it; the layer with the
+// highest load sequence (the top-most source) is the active version.
 type VirtualFileSystem struct {
-	basePath      string
-	config        *Config
-	archives      []*archiveLayer
-	files         map[string]*virtualFile // Map of normalized path -> file
+	basePath string
+	config   *Config
+	archives []*archiveLayer
+
+	// filesMu guards files, fileLayers, directories, physicalFiles and seqCounter
+	// so background MD5 hashing and write operations don't race.
+	filesMu       sync.RWMutex
+	files         map[string]*virtualFile // Map of normalized path -> active file
 	fileLayers    map[string][]FileLayer  // Map of path -> all layers containing it
 	directories   map[string]bool         // Set of directory paths
-	physicalFiles map[string]string       // Map of normalized path -> physical path
-	md5Hashes     map[string]string       // Map of normalized path -> MD5 hex hash
-	md5Mutex      sync.RWMutex            // Protects md5Hashes
-	
+	physicalFiles map[string]string       // Map of normalized path -> active physical path
+	seqCounter    int                     // Monotonic layer load sequence
+
+	// writeDir is the physical directory backing the writable overlay layer.
+	// It is empty for a read-only VFS (e.g. a bare context browsing tab).
+	writeDir      string
+	writableLabel string // FileLayer.Source label for the writable overlay
+
+	md5Hashes map[string]string // Map of normalized path -> MD5 hex hash
+	md5Mutex  sync.RWMutex      // Protects md5Hashes
+
 	// Metrics callback for tracking I/O
 	metricsCallback func(bytes int64)
 	metricsMutex    sync.RWMutex
@@ -115,7 +137,7 @@ type archiveLayer struct {
 	mu          sync.Mutex // Protects reader access
 }
 
-// virtualFile represents a file in the VFS
+// virtualFile represents the active version of a file in the VFS
 type virtualFile struct {
 	path    string // Normalized path
 	size    int64
@@ -123,21 +145,16 @@ type virtualFile struct {
 	archive *archiveLayer
 }
 
-// NewVirtualFileSystem creates a new virtual filesystem
+// NewVirtualFileSystem creates a read-only virtual filesystem over a single
+// directory (its archives plus loose physical files). It is a thin wrapper over
+// NewLayered for backward compatibility.
 func NewVirtualFileSystem(basePath string, config *Config) (*VirtualFileSystem, error) {
-	if config == nil {
-		config = &Config{
-			Extensions: []string{".hpi", ".ccx", ".gp3", ".ufo"},
-		}
-	}
-	
-	// Set default extensions if not specified
-	if len(config.Extensions) == 0 {
-		config.Extensions = []string{".hpi", ".ccx", ".gp3", ".ufo"}
-	}
+	return NewLayered([]Source{{Kind: SourceContextDir, Path: basePath}}, config)
+}
 
-	vfs := &VirtualFileSystem{
-		basePath:      basePath,
+// newVFS allocates an empty VFS with the given config and initialised maps.
+func newVFS(config *Config) *VirtualFileSystem {
+	return &VirtualFileSystem{
 		config:        config,
 		fileLayers:    make(map[string][]FileLayer),
 		archives:      make([]*archiveLayer, 0),
@@ -146,25 +163,6 @@ func NewVirtualFileSystem(basePath string, config *Config) (*VirtualFileSystem, 
 		physicalFiles: make(map[string]string),
 		md5Hashes:     make(map[string]string),
 	}
-
-	// Load archives in priority order
-	if err := vfs.loadArchives(); err != nil {
-		if !config.SkipErrors {
-			return nil, err
-		}
-	}
-
-	// Scan physical files
-	if err := vfs.scanPhysicalFiles(); err != nil {
-		if !config.SkipErrors {
-			return nil, err
-		}
-	}
-
-	// Start background MD5 calculation
-	vfs.startMD5Calculation()
-
-	return vfs, nil
 }
 
 // Close closes all open archives
@@ -178,12 +176,56 @@ func (vfs *VirtualFileSystem) Close() error {
 	return lastErr
 }
 
-// loadArchives loads all archive files from the base path
-func (vfs *VirtualFileSystem) loadArchives() error {
-	// Find all archive files grouped by extension
+// nextSeq returns the next monotonic load sequence. Callers must hold filesMu
+// when invoking this concurrently with writes; it is unlocked during initial
+// load, which is single-threaded.
+func (vfs *VirtualFileSystem) nextSeq() int {
+	vfs.seqCounter++
+	return vfs.seqCounter
+}
+
+// addDirs registers all parent directories of a normalized path.
+func (vfs *VirtualFileSystem) addDirs(normalized string) {
+	dir := filepath.Dir(normalized)
+	for dir != "." && dir != "/" && dir != "" {
+		vfs.directories[dir] = true
+		dir = filepath.Dir(dir)
+	}
+}
+
+// applyLayer records a layer for a path and makes it the active version. It is
+// used during the initial (single-threaded) load, where layers are applied in
+// ascending sequence so the last one applied is always the highest priority.
+func (vfs *VirtualFileSystem) applyLayer(normalized string, layer FileLayer) {
+	vfs.fileLayers[normalized] = append(vfs.fileLayers[normalized], layer)
+	vfs.setActiveFromLayer(normalized, layer)
+}
+
+// setActiveFromLayer points the active-file maps at the given layer.
+func (vfs *VirtualFileSystem) setActiveFromLayer(normalized string, layer FileLayer) {
+	if layer.archive != nil {
+		vfs.files[normalized] = &virtualFile{
+			path:    normalized,
+			size:    layer.Size,
+			source:  layer.Source,
+			archive: layer.archive,
+		}
+		delete(vfs.physicalFiles, normalized)
+		return
+	}
+	vfs.files[normalized] = &virtualFile{
+		path:   normalized,
+		size:   layer.Size,
+		source: "disk",
+	}
+	vfs.physicalFiles[normalized] = layer.physPath
+}
+
+// loadArchivesFrom loads all archive files found under basePath in priority order.
+func (vfs *VirtualFileSystem) loadArchivesFrom(basePath string) error {
 	archivesByExt := make(map[string][]string) // extension -> []paths
 
-	err := filepath.Walk(vfs.basePath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -191,7 +233,6 @@ func (vfs *VirtualFileSystem) loadArchives() error {
 			return nil
 		}
 
-		// Check if extension matches
 		ext := strings.ToLower(filepath.Ext(path))
 		for _, validExt := range vfs.config.Extensions {
 			if ext == strings.ToLower(validExt) {
@@ -199,28 +240,24 @@ func (vfs *VirtualFileSystem) loadArchives() error {
 				break
 			}
 		}
-
 		return nil
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to scan for archives: %w", err)
 	}
 
-	// Define extension priority order
+	// Define extension priority order (lowest to highest).
 	extensionOrder := []string{".hpi", ".ccx", ".gp3", ".ufo"}
-	
-	// Load archives by extension priority (lowest to highest)
+
 	for _, ext := range extensionOrder {
 		paths, exists := archivesByExt[ext]
 		if !exists {
 			continue
 		}
 
-		// Sort files within same extension alphabetically
+		// Sort files within same extension alphabetically.
 		sort.Strings(paths)
 
-		// Load each archive of this type
 		for _, path := range paths {
 			name := filepath.Base(path)
 			if err := vfs.loadArchive(name, path); err != nil {
@@ -235,7 +272,7 @@ func (vfs *VirtualFileSystem) loadArchives() error {
 	return nil
 }
 
-// loadArchive loads a single archive and adds its files to the VFS
+// loadArchive loads a single archive and adds its files to the VFS as one layer.
 func (vfs *VirtualFileSystem) loadArchive(name, path string) error {
 	reader, err := hpi.OpenReader(path)
 	if err != nil {
@@ -247,110 +284,80 @@ func (vfs *VirtualFileSystem) loadArchive(name, path string) error {
 		reader:      reader,
 		archivePath: path,
 	}
-
 	vfs.archives = append(vfs.archives, layer)
 
-	// Add all files from this archive by walking the entry tree
-	err = reader.Walk(func(entry *hpi.Entry) error {
+	seq := vfs.nextSeq()
+
+	return reader.Walk(func(entry *hpi.Entry) error {
 		if entry.IsDir {
 			return nil
 		}
 
 		filePath := entry.FullPath()
-		
-		// Check if file should be excluded
 		if vfs.ShouldExclude(filePath, false) {
-			return nil // Skip this file
+			return nil
 		}
-		
+
 		normalized := vfs.normalizePath(filePath)
-
-		// Add directory entries for all parent directories
-		dir := filepath.Dir(normalized)
-		for dir != "." && dir != "/" && dir != "" {
-			vfs.directories[dir] = true
-			dir = filepath.Dir(dir)
-		}
-
-		// Track this layer for the file
-		// Archive priority increases with index (later = higher priority)
-		archivePriority := len(vfs.archives) // Current archive gets priority based on load order
-		vfs.fileLayers[normalized] = append(vfs.fileLayers[normalized], FileLayer{
-			Source:   name,
-			Priority: archivePriority,
-			Size:     int64(entry.Size),
-		})
-
-		// Add or override file entry with actual size from Entry
-		// Later archives override earlier ones
-		vfs.files[normalized] = &virtualFile{
-			path:    normalized,
-			size:    int64(entry.Size), // Get actual size from archive entry
-			source:  name,
+		vfs.addDirs(normalized)
+		vfs.applyLayer(normalized, FileLayer{
+			Source:  name,
+			Size:    int64(entry.Size),
+			seq:     seq,
 			archive: layer,
-		}
-		
+		})
 		return nil
 	})
-
-	return err
 }
 
-// scanPhysicalFiles scans for physical files in the base directory
-func (vfs *VirtualFileSystem) scanPhysicalFiles() error {
-	return filepath.Walk(vfs.basePath, func(path string, info os.FileInfo, err error) error {
+// scanLooseFrom scans for loose (non-archive) physical files under basePath and
+// records them as a single layer with the given source label.
+func (vfs *VirtualFileSystem) scanLooseFrom(basePath, label string) error {
+	seq := vfs.nextSeq()
+
+	return filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Get relative path
-		relPath, err := filepath.Rel(vfs.basePath, path)
+		relPath, err := filepath.Rel(basePath, path)
 		if err != nil {
 			return err
 		}
-
-		// Skip base directory
 		if relPath == "." {
 			return nil
 		}
 
-		// Skip archive files
-		ext := strings.ToLower(filepath.Ext(path))
-		for _, archiveExt := range vfs.config.Extensions {
-			if ext == strings.ToLower(archiveExt) {
-				return nil
+		// Skip archive files; they are handled by loadArchivesFrom.
+		if !info.IsDir() {
+			ext := strings.ToLower(filepath.Ext(path))
+			for _, archiveExt := range vfs.config.Extensions {
+				if ext == strings.ToLower(archiveExt) {
+					return nil
+				}
 			}
 		}
 
-		// Check if file/directory should be excluded
 		if vfs.ShouldExclude(relPath, info.IsDir()) {
 			if info.IsDir() {
-				return filepath.SkipDir // Skip entire directory
+				return filepath.SkipDir
 			}
-			return nil // Skip this file
+			return nil
 		}
 
 		normalized := vfs.normalizePath(relPath)
-
 		if info.IsDir() {
 			vfs.directories[normalized] = true
-		} else {
-			// Track physical file layer (priority 0 = highest)
-			vfs.fileLayers[normalized] = append([]FileLayer{{
-				Source:   "Physical Filesystem",
-				Priority: 0,
-				Size:     info.Size(),
-			}}, vfs.fileLayers[normalized]...) // Prepend to existing layers
-
-			// Physical files always override archive files
-			vfs.files[normalized] = &virtualFile{
-				path:   normalized,
-				size:   info.Size(),
-				source: "disk",
-			}
-			vfs.physicalFiles[normalized] = path
+			return nil
 		}
 
+		vfs.addDirs(normalized)
+		vfs.applyLayer(normalized, FileLayer{
+			Source:   label,
+			Size:     info.Size(),
+			seq:      seq,
+			physPath: path,
+		})
 		return nil
 	})
 }
@@ -376,7 +383,7 @@ func (vfs *VirtualFileSystem) ShouldExclude(filePath string, isDir bool) bool {
 	// Normalize path for consistent checking
 	normalizedPath := vfs.normalizePath(filePath)
 	parts := strings.Split(normalizedPath, "/")
-	
+
 	// Check if any directory in the path is excluded (case-insensitive)
 	for _, part := range parts {
 		for _, excludeDir := range vfs.config.ExcludeDirectories {
@@ -385,13 +392,13 @@ func (vfs *VirtualFileSystem) ShouldExclude(filePath string, isDir bool) bool {
 			}
 		}
 	}
-	
+
 	// Check file-specific exclusions (only for files, not directories)
 	if !isDir {
 		// Get just the filename (without directory path)
 		filename := filepath.Base(filePath)
 		filenameLower := strings.ToLower(filename)
-		
+
 		// Check file extension (case-insensitive)
 		ext := strings.ToLower(filepath.Ext(filePath))
 		for _, excludeExt := range vfs.config.ExcludeExtensions {
@@ -404,7 +411,7 @@ func (vfs *VirtualFileSystem) ShouldExclude(filePath string, isDir bool) bool {
 				return true
 			}
 		}
-		
+
 		// Check filename prefix (case-insensitive)
 		for _, prefix := range vfs.config.ExcludePrefixes {
 			if strings.HasPrefix(filenameLower, strings.ToLower(prefix)) {
@@ -412,7 +419,7 @@ func (vfs *VirtualFileSystem) ShouldExclude(filePath string, isDir bool) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -420,14 +427,17 @@ func (vfs *VirtualFileSystem) ShouldExclude(filePath string, isDir bool) bool {
 func (vfs *VirtualFileSystem) Open(path string) (io.ReadCloser, error) {
 	normalized := vfs.normalizePath(path)
 
+	vfs.filesMu.RLock()
 	file, exists := vfs.files[normalized]
+	physicalPath := vfs.physicalFiles[normalized]
+	vfs.filesMu.RUnlock()
+
 	if !exists {
 		return nil, fmt.Errorf("file not found: %s", path)
 	}
 
 	// Physical file?
 	if file.source == "disk" {
-		physicalPath := vfs.physicalFiles[normalized]
 		return os.Open(physicalPath)
 	}
 
@@ -439,23 +449,21 @@ func (vfs *VirtualFileSystem) Open(path string) (io.ReadCloser, error) {
 	// Lock the archive reader for thread-safe access
 	file.archive.mu.Lock()
 	defer file.archive.mu.Unlock()
-	
+
 	return file.archive.reader.Open(file.path)
 }
 
 // Exists checks if a file or directory exists
 func (vfs *VirtualFileSystem) Exists(path string) bool {
 	normalized := vfs.normalizePath(path)
-	
+
+	vfs.filesMu.RLock()
+	defer vfs.filesMu.RUnlock()
+
 	if _, exists := vfs.files[normalized]; exists {
 		return true
 	}
-	
-	if vfs.directories[normalized] {
-		return true
-	}
-	
-	return false
+	return vfs.directories[normalized]
 }
 
 // IsDir checks if a path is a directory
@@ -465,12 +473,17 @@ func (vfs *VirtualFileSystem) IsDir(path string) bool {
 	if normalized == "" {
 		return true
 	}
+	vfs.filesMu.RLock()
+	defer vfs.filesMu.RUnlock()
 	return vfs.directories[normalized]
 }
 
 // Stat returns information about a file
 func (vfs *VirtualFileSystem) Stat(path string) (*FileInfo, error) {
 	normalized := vfs.normalizePath(path)
+
+	vfs.filesMu.RLock()
+	defer vfs.filesMu.RUnlock()
 
 	// Check if it's a file
 	if file, exists := vfs.files[normalized]; exists {
@@ -497,10 +510,13 @@ func (vfs *VirtualFileSystem) Stat(path string) (*FileInfo, error) {
 
 // List returns all files in the VFS
 func (vfs *VirtualFileSystem) List() []string {
+	vfs.filesMu.RLock()
 	files := make([]string, 0, len(vfs.files))
 	for path := range vfs.files {
 		files = append(files, path)
 	}
+	vfs.filesMu.RUnlock()
+
 	sort.Strings(files)
 	return files
 }
@@ -508,29 +524,28 @@ func (vfs *VirtualFileSystem) List() []string {
 // ListDir returns files in a specific directory
 func (vfs *VirtualFileSystem) ListDir(dir string) ([]string, error) {
 	normalized := vfs.normalizePath(dir)
-	
+
+	vfs.filesMu.RLock()
+	defer vfs.filesMu.RUnlock()
+
 	if !vfs.directories[normalized] && normalized != "" && normalized != "." {
 		return nil, fmt.Errorf("not a directory: %s", dir)
 	}
 
-	files := make([]string, 0)
 	prefix := normalized
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 
+	files := make([]string, 0)
 	seen := make(map[string]bool)
 
-	// Find direct children
+	// Find direct children among files
 	for path := range vfs.files {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
-
-		// Get the part after prefix
 		remainder := strings.TrimPrefix(path, prefix)
-		
-		// Get first component
 		parts := strings.Split(remainder, "/")
 		if len(parts) > 0 && parts[0] != "" {
 			child := parts[0]
@@ -546,7 +561,6 @@ func (vfs *VirtualFileSystem) ListDir(dir string) ([]string, error) {
 		if !strings.HasPrefix(dirPath, prefix) {
 			continue
 		}
-
 		remainder := strings.TrimPrefix(dirPath, prefix)
 		parts := strings.Split(remainder, "/")
 		if len(parts) > 0 && parts[0] != "" {
@@ -564,31 +578,29 @@ func (vfs *VirtualFileSystem) ListDir(dir string) ([]string, error) {
 
 // Walk walks the entire filesystem tree
 func (vfs *VirtualFileSystem) Walk(fn func(path string, info *FileInfo) error) error {
-	// Get all paths (files and directories)
-	allPaths := make(map[string]bool)
-	
+	// Snapshot all paths under the read lock, then Stat each without holding it.
+	vfs.filesMu.RLock()
+	allPaths := make(map[string]bool, len(vfs.files)+len(vfs.directories))
 	for path := range vfs.files {
 		allPaths[path] = true
 	}
-	
 	for dir := range vfs.directories {
 		allPaths[dir] = true
 	}
+	vfs.filesMu.RUnlock()
 
-	// Sort paths
 	paths := make([]string, 0, len(allPaths))
 	for path := range allPaths {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 
-	// Walk each path
 	for _, path := range paths {
 		info, err := vfs.Stat(path)
 		if err != nil {
-			return err
+			// The path may have been removed between snapshot and Stat; skip it.
+			continue
 		}
-
 		if err := fn(path, info); err != nil {
 			return err
 		}
@@ -612,36 +624,44 @@ func (vfs *VirtualFileSystem) ReadFile(path string) ([]byte, error) {
 	return data, err
 }
 
-// ReadFileFromSource reads a file from a specific source layer
-// sourceName can be "Physical Filesystem" or an archive name like "totala1.hpi"
+// ReadFileFromSource reads a file from a specific source layer.
+// sourceName can be the physical/overlay label or an archive name like "totala1.hpi".
 func (vfs *VirtualFileSystem) ReadFileFromSource(path, sourceName string) ([]byte, error) {
-	path = vfs.normalizePath(path)
-	
-	// Check physical filesystem first
-	if sourceName == "Physical Filesystem" {
-		if physPath, exists := vfs.physicalFiles[path]; exists {
-			data, err := os.ReadFile(physPath)
-			if err == nil {
-				vfs.recordBytesRead(int64(len(data)))
-			}
-			return data, err
+	normalized := vfs.normalizePath(path)
+
+	// Resolve the physical path for a loose/overlay layer under the read lock.
+	vfs.filesMu.RLock()
+	var physPath string
+	var physOK bool
+	for _, l := range vfs.fileLayers[normalized] {
+		if l.Source == sourceName && l.archive == nil {
+			physPath = l.physPath
+			physOK = true
+			break
 		}
-		return nil, fmt.Errorf("file not found in physical filesystem")
 	}
-	
-	// Find matching archive layer
+	vfs.filesMu.RUnlock()
+
+	if physOK {
+		data, err := os.ReadFile(physPath)
+		if err == nil {
+			vfs.recordBytesRead(int64(len(data)))
+		}
+		return data, err
+	}
+
+	// Find matching archive layer (archives are immutable after load).
 	for _, layer := range vfs.archives {
 		if layer.name == sourceName {
 			layer.mu.Lock()
 			defer layer.mu.Unlock()
-			
-			// Open file from this archive
-			rc, err := layer.reader.Open(path)
+
+			rc, err := layer.reader.Open(normalized)
 			if err != nil {
 				return nil, fmt.Errorf("file not found in %s", sourceName)
 			}
 			defer func() { _ = rc.Close() }()
-			
+
 			data, err := io.ReadAll(rc)
 			if err == nil {
 				vfs.recordBytesRead(int64(len(data)))
@@ -649,7 +669,7 @@ func (vfs *VirtualFileSystem) ReadFileFromSource(path, sourceName string) ([]byt
 			return data, err
 		}
 	}
-	
+
 	return nil, fmt.Errorf("source not found: %s", sourceName)
 }
 
@@ -669,7 +689,7 @@ func (vfs *VirtualFileSystem) Stats() map[string]interface{} {
 	totalUnpackedSize := int64(0)
 	totalPackedSize := int64(0)
 
-	// Count files and sizes
+	vfs.filesMu.RLock()
 	for _, file := range vfs.files {
 		if file.source == "disk" {
 			physicalFileCount++
@@ -678,8 +698,11 @@ func (vfs *VirtualFileSystem) Stats() map[string]interface{} {
 		}
 		totalUnpackedSize += file.size
 	}
+	totalFiles := len(vfs.files)
+	dirCount := len(vfs.directories)
+	vfs.filesMu.RUnlock()
 
-	// Calculate packed size from archive files
+	// Calculate packed size from archive files (archives are immutable post-load).
 	for _, layer := range vfs.archives {
 		if fileInfo, err := os.Stat(layer.archivePath); err == nil {
 			totalPackedSize += fileInfo.Size()
@@ -693,74 +716,71 @@ func (vfs *VirtualFileSystem) Stats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"archives":           len(vfs.archives),
-		"total_files":        len(vfs.files),
-		"archive_files":      archiveFileCount,
-		"physical_files":     physicalFileCount,
-		"directories":        len(vfs.directories),
+		"archives":            len(vfs.archives),
+		"total_files":         totalFiles,
+		"archive_files":       archiveFileCount,
+		"physical_files":      physicalFileCount,
+		"directories":         dirCount,
 		"total_unpacked_size": totalUnpackedSize,
 		"total_packed_size":   totalPackedSize,
 		"compression_ratio":   compressionRatio,
-		"base_path":          vfs.basePath,
-		"archive_names":      vfs.Archives(),
+		"base_path":           vfs.basePath,
+		"archive_names":       vfs.Archives(),
 	}
 }
 
 // DirectoryStats returns statistics for a specific directory
 func (vfs *VirtualFileSystem) DirectoryStats(dirPath string) map[string]interface{} {
 	dirPath = vfs.normalizePath(dirPath)
-	
+
 	fileCount := 0
 	subdirCount := 0
 	totalSize := int64(0)
-	
-	// Count files in this directory
+
+	vfs.filesMu.RLock()
 	for path, file := range vfs.files {
 		if filepath.Dir(path) == dirPath {
 			fileCount++
 			totalSize += file.size
 		}
 	}
-	
-	// Count subdirectories
 	for dir := range vfs.directories {
 		if filepath.Dir(dir) == dirPath {
 			subdirCount++
 		}
 	}
-	
+	vfs.filesMu.RUnlock()
+
 	return map[string]interface{}{
-		"path":             dirPath,
-		"files":            fileCount,
-		"subdirectories":   subdirCount,
-		"total_size":       totalSize,
+		"path":           dirPath,
+		"files":          fileCount,
+		"subdirectories": subdirCount,
+		"total_size":     totalSize,
 	}
 }
 
 // RecursiveDirectoryStats returns statistics for a directory and all subdirectories
 func (vfs *VirtualFileSystem) RecursiveDirectoryStats(dirPath string) map[string]interface{} {
 	dirPath = vfs.normalizePath(dirPath)
-	
+
 	fileCount := 0
 	subdirCount := 0
 	totalSize := int64(0)
-	
+
 	prefix := dirPath
 	if prefix != "" && prefix != "." {
 		prefix = prefix + "/"
 	} else {
 		prefix = ""
 	}
-	
-	// Count all files under this directory
+
+	vfs.filesMu.RLock()
 	for path, file := range vfs.files {
 		if prefix == "" || strings.HasPrefix(path, prefix) {
 			fileCount++
 			totalSize += file.size
 		}
 	}
-	
-	// Count all subdirectories under this directory
 	for dir := range vfs.directories {
 		if prefix == "" || strings.HasPrefix(dir, prefix) {
 			if dir != dirPath { // Don't count the directory itself
@@ -768,58 +788,46 @@ func (vfs *VirtualFileSystem) RecursiveDirectoryStats(dirPath string) map[string
 			}
 		}
 	}
-	
+	vfs.filesMu.RUnlock()
+
 	return map[string]interface{}{
-		"path":             dirPath,
-		"files":            fileCount,
-		"subdirectories":   subdirCount,
-		"total_size":       totalSize,
+		"path":           dirPath,
+		"files":          fileCount,
+		"subdirectories": subdirCount,
+		"total_size":     totalSize,
 	}
 }
 
 // FileLayer represents a single layer containing a file
 type FileLayer struct {
-	Source   string // Archive name or "physical"
-	Priority int    // Layer priority (lower = higher priority)
+	Source   string // Archive name or physical/overlay label
+	Priority int    // Layer priority (lower = higher priority); assigned by GetFileLayers
 	Size     int64  // File size in this layer
+
+	seq      int           // Monotonic load sequence (higher = higher priority)
+	archive  *archiveLayer // Set for archive layers
+	physPath string        // Set for physical/overlay layers
 }
 
-// GetFileLayers returns all layers containing this file (ordered by priority)
+// GetFileLayers returns all layers containing this file, ordered by priority
+// (index 0 = highest priority = the active version).
 func (vfs *VirtualFileSystem) GetFileLayers(path string) []FileLayer {
-	path = vfs.normalizePath(path)
-	
-	// Return pre-built layers from index
-	layers := vfs.fileLayers[path]
-	if layers == nil {
-		return []FileLayer{}
-	}
-	
-	// Make a copy to avoid modifying the cached data
+	normalized := vfs.normalizePath(path)
+
+	vfs.filesMu.RLock()
+	layers := vfs.fileLayers[normalized]
 	result := make([]FileLayer, len(layers))
 	copy(result, layers)
-	
-	// Reassign priorities based on archive order
-	// Physical files (if any) already have priority 0
-	// Archives loaded later have higher priority
-	numArchives := len(vfs.archives)
-	for i := range result {
-		if result[i].Source != "Physical Filesystem" {
-			// Find the archive index for this source
-			for archiveIdx, archive := range vfs.archives {
-				if archive.name == result[i].Source {
-					// Reverse priority: later archives (higher index) = higher priority (lower number)
-					result[i].Priority = numArchives - archiveIdx
-					break
-				}
-			}
-		}
-	}
-	
-	// Sort by priority (0 = highest priority = active file)
+	vfs.filesMu.RUnlock()
+
+	// Higher load sequence = higher priority (lower Priority number).
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority < result[j].Priority
+		return result[i].seq > result[j].seq
 	})
-	
+	for i := range result {
+		result[i].Priority = i
+	}
+
 	return result
 }
 
@@ -827,11 +835,9 @@ func (vfs *VirtualFileSystem) GetFileLayers(path string) []FileLayer {
 // Uses a worker pool of 10 goroutines to parallelize the work
 func (vfs *VirtualFileSystem) startMD5Calculation() {
 	const numWorkers = 10
-	
-	// Create channel for file paths to process
+
 	filePaths := make(chan string, 100)
-	
-	// Start worker goroutines
+
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
@@ -842,33 +848,37 @@ func (vfs *VirtualFileSystem) startMD5Calculation() {
 			}
 		}()
 	}
-	
-	// Send all file paths to workers in a separate goroutine
+
+	// Snapshot the path set under the read lock, then feed the workers.
 	go func() {
+		vfs.filesMu.RLock()
+		paths := make([]string, 0, len(vfs.files))
 		for path := range vfs.files {
+			paths = append(paths, path)
+		}
+		vfs.filesMu.RUnlock()
+
+		for _, path := range paths {
 			filePaths <- path
 		}
 		close(filePaths)
-		wg.Wait() // Wait for all workers to finish
+		wg.Wait()
 	}()
 }
 
 // calculateFileMD5 calculates and stores the MD5 hash for a single file
 func (vfs *VirtualFileSystem) calculateFileMD5(path string) {
-	// Read file content
 	reader, err := vfs.Open(path)
 	if err != nil {
 		return // Skip files that can't be opened
 	}
 	defer func() { _ = reader.Close() }()
-	
-	// Calculate MD5
+
 	hash := md5.New()
 	if _, err := io.Copy(hash, reader); err != nil {
 		return // Skip files with read errors
 	}
-	
-	// Store hash
+
 	md5Sum := fmt.Sprintf("%x", hash.Sum(nil))
 	vfs.md5Mutex.Lock()
 	vfs.md5Hashes[path] = md5Sum
@@ -879,11 +889,11 @@ func (vfs *VirtualFileSystem) calculateFileMD5(path string) {
 // Returns (hash, true) if available, ("", false) if not yet calculated
 func (vfs *VirtualFileSystem) GetMD5(path string) (string, bool) {
 	normalized := vfs.normalizePath(path)
-	
+
 	vfs.md5Mutex.RLock()
 	hash, exists := vfs.md5Hashes[normalized]
 	vfs.md5Mutex.RUnlock()
-	
+
 	return hash, exists
 }
 
@@ -899,7 +909,7 @@ func (vfs *VirtualFileSystem) recordBytesRead(bytes int64) {
 	vfs.metricsMutex.RLock()
 	callback := vfs.metricsCallback
 	vfs.metricsMutex.RUnlock()
-	
+
 	if callback != nil {
 		callback(bytes)
 	}

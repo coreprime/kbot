@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/internal/assetrender"
 )
 
 func TestVFSEventHubFanout(t *testing.T) {
@@ -86,16 +85,13 @@ func TestWarmOnePalette(t *testing.T) {
 	}
 	defer func() { _ = mounted.Close() }()
 
-	prevVFS, prevRenderer := vfs, renderer
-	vfs = mounted
-	renderer = assetrender.New(mounted, assetrender.Options{CacheDir: t.TempDir()})
-	defer func() { vfs, renderer = prevVFS, prevRenderer }()
+	sess := newSession("test", "test", mounted, t.TempDir())
 
-	files := collectWarmFiles("")
+	files := sess.collectWarmFiles("")
 	if len(files) != 1 || files[0].fileType != "pal" {
 		t.Fatalf("collectWarmFiles = %+v, want one pal", files)
 	}
-	if cached := warmOne(files[0]); cached == 0 {
+	if cached := sess.warmOne(files[0]); cached == 0 {
 		t.Error("warmOne produced no cached representations for a palette")
 	}
 }

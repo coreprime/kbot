@@ -40,9 +40,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // The studio is a single-page host; index.html is the only entry.
+    // Two entries: the editor SPA (index.html, mounted per workspace) and
+    // the lightweight workspace picker (picker.html, served at "/").
     rollupOptions: {
-      input: resolve(import.meta.dirname, 'index.html'),
+      input: {
+        main: resolve(import.meta.dirname, 'index.html'),
+        picker: resolve(import.meta.dirname, 'picker.html'),
+      },
     },
   },
   plugins: [copyRuntimeAssets()],

@@ -18,7 +18,7 @@ import (
 // can't be coaxed into reading arbitrary VFS paths.  This is a
 // local CLI serving local game assets, so widening past the
 // allowlist is appropriate.
-func handleSound(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSound(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/sound/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || strings.TrimSpace(name) == "" {
@@ -36,7 +36,7 @@ func handleSound(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad slug", http.StatusBadRequest)
 		return
 	}
-	if vfs == nil {
+	if sess.vfs == nil {
 		http.Error(w, "no vfs mounted", http.StatusNotFound)
 		return
 	}
@@ -51,20 +51,20 @@ func handleSound(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	for _, p := range candidates {
-		if b, err := vfs.ReadFile(p); err == nil {
+		if b, err := sess.vfs.ReadFile(p); err == nil {
 			data = b
 			break
 		}
 	}
 	if data == nil {
 		want := slug + ".wav"
-		for _, p := range vfs.List() {
+		for _, p := range sess.vfs.List() {
 			lower := strings.ToLower(p)
 			if !strings.HasPrefix(lower, "sounds/") {
 				continue
 			}
 			if strings.ToLower(path.Base(lower)) == want {
-				if b, err := vfs.ReadFile(p); err == nil {
+				if b, err := sess.vfs.ReadFile(p); err == nil {
 					data = b
 					break
 				}

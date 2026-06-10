@@ -43,12 +43,28 @@ type Context struct {
 	Path    string `json:"path"`
 	Game    string `json:"game"`
 	Version string `json:"version,omitempty"`
+
+	// Parent is the alias of another context this one is layered on top of.
+	// When set, a VFS built for this context resolves through the parent
+	// chain (base game → expansion → mod), with this context overriding its
+	// parents. Empty for a root context.
+	Parent string `json:"parent,omitempty"`
+}
+
+// WorkspaceRef is a lightweight pointer to an editing workspace on disk. The
+// authoritative metadata lives in the workspace's manifest; this index just
+// lets tools (e.g. the studio picker) list recently used workspaces.
+type WorkspaceRef struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Base string `json:"base"`
 }
 
 // Config is the on-disk shape of the kbot config file.
 type Config struct {
-	Current  string             `json:"current,omitempty"`
-	Contexts map[string]Context `json:"contexts,omitempty"`
+	Current    string             `json:"current,omitempty"`
+	Contexts   map[string]Context `json:"contexts,omitempty"`
+	Workspaces []WorkspaceRef     `json:"workspaces,omitempty"`
 
 	path string // resolved location on disk, not serialised
 }
@@ -154,10 +170,20 @@ func (c *Config) Add(alias string, ctx Context, replace bool) error {
 	if c.Contexts == nil {
 		c.Contexts = map[string]Context{}
 	}
-	if _, exists := c.Contexts[alias]; exists && !replace {
+	prev, had := c.Contexts[alias]
+	if had && !replace {
 		return fmt.Errorf("context %q already exists (pass --replace to overwrite)", alias)
 	}
 	c.Contexts[alias] = ctx
+	// Validate the parent chain (existence, no cycles, compatible games).
+	if _, err := c.ResolveChain(alias); err != nil {
+		if had {
+			c.Contexts[alias] = prev
+		} else {
+			delete(c.Contexts, alias)
+		}
+		return err
+	}
 	// First context becomes current automatically.
 	if c.Current == "" {
 		c.Current = alias
@@ -165,15 +191,93 @@ func (c *Config) Add(alias string, ctx Context, replace bool) error {
 	return nil
 }
 
-// Delete removes a context. Returns an error if the alias is unknown.
-// If the deleted context was current, Current is cleared.
+// Delete removes a context. Returns an error if the alias is unknown or if
+// another context still names it as a parent. If the deleted context was
+// current, Current is cleared.
 func (c *Config) Delete(alias string) error {
 	if _, exists := c.Contexts[alias]; !exists {
 		return fmt.Errorf("context %q not found", alias)
 	}
+	if children := c.childrenOf(alias); len(children) > 0 {
+		sort.Strings(children)
+		return fmt.Errorf("context %q is the parent of %s; reparent or delete those first",
+			alias, strings.Join(children, ", "))
+	}
 	delete(c.Contexts, alias)
 	if c.Current == alias {
 		c.Current = ""
+	}
+	return nil
+}
+
+// childrenOf returns the aliases of contexts that name alias as their parent.
+func (c *Config) childrenOf(alias string) []string {
+	var children []string
+	for name, ctx := range c.Contexts {
+		if ctx.Parent == alias {
+			children = append(children, name)
+		}
+	}
+	return children
+}
+
+// ResolveChain returns the context aliases from alias up to its root parent,
+// highest-priority first (alias itself, then its parent, and so on). It fails
+// if a parent is missing, a cycle exists, or the chain mixes incompatible
+// games (e.g. totala under takingdoms; custom is compatible with either).
+func (c *Config) ResolveChain(alias string) ([]string, error) {
+	if _, ok := c.Contexts[alias]; !ok {
+		return nil, fmt.Errorf("context %q not found", alias)
+	}
+	var (
+		chain    []string
+		seen     = map[string]bool{}
+		concrete string
+		cur      = alias
+	)
+	for cur != "" {
+		if seen[cur] {
+			return nil, fmt.Errorf("context parent cycle detected at %q", cur)
+		}
+		seen[cur] = true
+		ctx, ok := c.Contexts[cur]
+		if !ok {
+			return nil, fmt.Errorf("parent context %q not found", cur)
+		}
+		chain = append(chain, cur)
+		if ctx.Game != "" && ctx.Game != GameCustom {
+			if concrete != "" && concrete != ctx.Game {
+				return nil, fmt.Errorf("context chain mixes incompatible games (%s and %s)", concrete, ctx.Game)
+			}
+			concrete = ctx.Game
+		}
+		cur = ctx.Parent
+	}
+	return chain, nil
+}
+
+// SetParent sets (or clears, when parent is "") the parent of alias, validating
+// that the resulting chain is acyclic and game-compatible.
+func (c *Config) SetParent(alias, parent string) error {
+	ctx, ok := c.Contexts[alias]
+	if !ok {
+		return fmt.Errorf("context %q not found", alias)
+	}
+	if parent != "" {
+		if _, ok := c.Contexts[parent]; !ok {
+			return fmt.Errorf("parent context %q not found", parent)
+		}
+		if parent == alias {
+			return errors.New("a context cannot be its own parent")
+		}
+	}
+	old := ctx.Parent
+	ctx.Parent = parent
+	c.Contexts[alias] = ctx
+	if _, err := c.ResolveChain(alias); err != nil {
+		ctx.Parent = old
+		c.Contexts[alias] = ctx
+		return err
 	}
 	return nil
 }
@@ -211,6 +315,40 @@ func (c *Config) Active() (alias string, ctx Context, source string, ok bool) {
 
 // Path returns the on-disk path the config was loaded from.
 func (c *Config) Path() string { return c.path }
+
+// RememberWorkspace records (or refreshes) a workspace in the recents index,
+// moving it to the front. Entries are de-duplicated by absolute path.
+func (c *Config) RememberWorkspace(ref WorkspaceRef) error {
+	abs, err := filepath.Abs(ref.Path)
+	if err != nil {
+		return fmt.Errorf("resolve workspace path: %w", err)
+	}
+	ref.Path = abs
+	filtered := c.Workspaces[:0:0]
+	for _, w := range c.Workspaces {
+		if w.Path != abs {
+			filtered = append(filtered, w)
+		}
+	}
+	c.Workspaces = append([]WorkspaceRef{ref}, filtered...)
+	return nil
+}
+
+// ForgetWorkspace removes a workspace from the recents index by path. It is a
+// no-op if the path is not present.
+func (c *Config) ForgetWorkspace(path string) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	filtered := c.Workspaces[:0:0]
+	for _, w := range c.Workspaces {
+		if w.Path != abs {
+			filtered = append(filtered, w)
+		}
+	}
+	c.Workspaces = filtered
+}
 
 // IsKnownGame reports whether g is one of the accepted Game values.
 func IsKnownGame(g string) bool {

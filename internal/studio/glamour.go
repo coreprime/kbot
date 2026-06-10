@@ -6,9 +6,9 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot/internal/kbotctx"
 )
 
 // Glamour image slideshow source: TA ships ~50 PCX splash artworks
@@ -16,31 +16,23 @@ import (
 // list is fixed for a given VFS so we cache it on first read, and
 // each rendered PNG is memoised so flipping through repeats is free.
 
-var (
-	glamourListMu sync.Mutex
-	glamourList   []string
-
-	glamourPNGMu sync.RWMutex
-	glamourPNG   = map[string][]byte{}
-)
-
 // listGlamourSlugs walks the VFS for bitmaps/glamour/*.pcx and returns
 // the lowercase basenames (without extension), sorted for stability.
 // Cached after the first call — the VFS is immutable for a session.
-func listGlamourSlugs() []string {
-	glamourListMu.Lock()
-	defer glamourListMu.Unlock()
-	if glamourList != nil {
-		out := make([]string, len(glamourList))
-		copy(out, glamourList)
+func (sess *Session) listGlamourSlugs() []string {
+	sess.glamourListMu.Lock()
+	defer sess.glamourListMu.Unlock()
+	if sess.glamourList != nil {
+		out := make([]string, len(sess.glamourList))
+		copy(out, sess.glamourList)
 		return out
 	}
-	if vfs == nil {
-		glamourList = []string{}
+	if sess.vfs == nil {
+		sess.glamourList = []string{}
 		return nil
 	}
 	seen := map[string]bool{}
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "bitmaps/glamour/") {
 			continue
@@ -53,43 +45,78 @@ func listGlamourSlugs() []string {
 			continue
 		}
 		seen[base] = true
-		glamourList = append(glamourList, base)
+		sess.glamourList = append(sess.glamourList, base)
 	}
-	sort.Strings(glamourList)
-	out := make([]string, len(glamourList))
-	copy(out, glamourList)
+	sort.Strings(sess.glamourList)
+	out := make([]string, len(sess.glamourList))
+	copy(out, sess.glamourList)
 	return out
 }
 
-func handleGlamourList(w http.ResponseWriter, _ *http.Request) {
+// handleGlamourList returns the welcome-screen background image URLs for the
+// session's game. Total Annihilation uses its bitmaps/glamour/ splash art;
+// TA: Kingdoms (which ships none) falls back to map preview minimaps. Keyed on
+// the game so the background source stays pluggable per title.
+func (sess *Session) handleGlamourList(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	writeJSON(w, map[string]any{"images": listGlamourSlugs()})
+	var urls []string
+	if sess.game != kbotctx.GameTAKingdoms {
+		for _, slug := range sess.listGlamourSlugs() {
+			urls = append(urls, "/api/studio/glamour/image/"+slug)
+		}
+	}
+	if len(urls) == 0 {
+		urls = sess.welcomeMapPreviews(40)
+	}
+	writeJSON(w, map[string]any{"images": urls})
+}
+
+// welcomeMapPreviews lists up to max map-minimap URLs (for maps under maps/*.tnt)
+// to use as welcome backgrounds when no glamour art exists, e.g. TA: Kingdoms.
+// The minimap handler renders lazily and 404s maps without an embedded minimap;
+// the slideshow skips those.
+func (sess *Session) welcomeMapPreviews(max int) []string {
+	if sess.vfs == nil {
+		return nil
+	}
+	var urls []string
+	for _, p := range sess.vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "maps/") || !strings.HasSuffix(lower, ".tnt") {
+			continue
+		}
+		urls = append(urls, "/api/studio/minimap/"+p)
+		if len(urls) >= max {
+			break
+		}
+	}
+	return urls
 }
 
 // handleGlamourImage streams a PNG render of bitmaps/glamour/<slug>.pcx.
 // Slug is the lowercased basename without extension — keeps the URL
 // tidy and side-steps any case sensitivity in the VFS.
-func handleGlamourImage(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleGlamourImage(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/glamour/image/")
 	slug := strings.ToLower(strings.TrimSpace(raw))
 	if slug == "" || strings.ContainsAny(slug, "/\\") {
 		http.Error(w, "bad slug", http.StatusBadRequest)
 		return
 	}
-	glamourPNGMu.RLock()
-	cached := glamourPNG[slug]
-	glamourPNGMu.RUnlock()
+	sess.glamourPNGMu.RLock()
+	cached := sess.glamourPNG[slug]
+	sess.glamourPNGMu.RUnlock()
 	if cached != nil {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(cached)
 		return
 	}
-	if vfs == nil {
+	if sess.vfs == nil {
 		http.Error(w, "no vfs mounted", http.StatusNotFound)
 		return
 	}
-	data, err := vfs.ReadFile("bitmaps/glamour/" + slug + ".pcx")
+	data, err := sess.vfs.ReadFile("bitmaps/glamour/" + slug + ".pcx")
 	if err != nil {
 		http.Error(w, "glamour image not found", http.StatusNotFound)
 		return
@@ -100,9 +127,9 @@ func handleGlamourImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := buf.Bytes()
-	glamourPNGMu.Lock()
-	glamourPNG[slug] = out
-	glamourPNGMu.Unlock()
+	sess.glamourPNGMu.Lock()
+	sess.glamourPNG[slug] = out
+	sess.glamourPNGMu.Unlock()
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(out)

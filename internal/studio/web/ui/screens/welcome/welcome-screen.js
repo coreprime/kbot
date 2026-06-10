@@ -325,6 +325,10 @@ export function WelcomeScreen({
   `
 }
 
+// setSandboxView — host helper to surface the Sandbox workflow's Join
+// picker (or its menu) directly, e.g. from the tab-bar's "+" menu.
+export function setSandboxView(view) { _sandboxView.value = view }
+
 // setWelcomeTab — host helper for surfacing a specific workflow
 // programmatically (e.g. after a Modelling-context error the host
 // might want to nudge the user back to the Mapping tab).

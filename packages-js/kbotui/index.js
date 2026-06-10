@@ -84,6 +84,11 @@ export { DialogModal } from './dialog-modal.js'
 export { confirmDialog } from './confirm-dialog.js'
 export { PickerModal } from './picker-modal.js'
 
+// Form controls + metadata pills.
+export { FormField, TextField, SelectField } from './form-field.js'
+export { Tag } from './tag.js'
+export { GameIcon, GameChip, gameInfo, GAME } from './game-icon.js'
+
 // Explorer chrome + data viewers.
 export { Breadcrumbs } from './breadcrumbs.js'
 export { SearchBox } from './search-box.js'

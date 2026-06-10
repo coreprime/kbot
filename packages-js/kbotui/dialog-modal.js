@@ -13,7 +13,7 @@
 // action" plumbing so each migrated modal only writes its own form +
 // state.
 
-import { useEffect } from 'preact/hooks'
+import { useEffect, useRef } from 'preact/hooks'
 import { htm as html } from '@kbot/ui/htm-bind'
 
 // DialogModal — props:
@@ -54,6 +54,11 @@ export function DialogModal({
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
   }, [open, onCancel])
+  // Focus the autofocus action once per open. Re-running el.focus() on
+  // every render (the ref fires each render) would steal focus from any
+  // text input the dialog body renders.
+  const focusedForOpen = useRef(false)
+  useEffect(() => { if (!open) focusedForOpen.current = false }, [open])
   if (!open) return null
   const cardCls = ('dialog-card ' + (cardClass || '')).trim()
   // First primary action gets autofocus by default — keyboard users
@@ -78,7 +83,10 @@ export function DialogModal({
               ].filter(Boolean).join(' ')
               const refFn = (el) => {
                 if (!el) return
-                if (focusLabel && a.label === focusLabel) el.focus()
+                if (focusLabel && a.label === focusLabel && !focusedForOpen.current) {
+                  focusedForOpen.current = true
+                  el.focus()
+                }
               }
               return html`
                 <button key=${a.label}

@@ -26,38 +26,39 @@ import (
 	"github.com/coreprime/kbot/internal/assets"
 )
 
-func registerAPI(mux *http.ServeMux) {
+func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/heartbeat", handleHeartbeat)
-	mux.HandleFunc("/api/studio/feature-origins", handleFeatureOrigins)
+	mux.HandleFunc("/api/studio/feature-origins", sess.handleFeatureOrigins)
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)
-	mux.HandleFunc("/api/studio/maps", handleMapsList)
-	mux.HandleFunc("/api/studio/minimap/", handleMapMinimap)
-	mux.HandleFunc("/api/studio/load", handleMapLoad)
-	mux.HandleFunc("/api/studio/load-upload", handleMapLoadUpload)
-	mux.HandleFunc("/api/studio/tile-pool/", handleMapTilePool)
-	mux.HandleFunc("/api/studio/sections", handleSections)
-	mux.HandleFunc("/api/studio/section-preview/", handleSectionPreview)
-	mux.HandleFunc("/api/studio/section-image/", handleSectionImage)
-	mux.HandleFunc("/api/studio/section-heights/", handleSectionHeights)
-	mux.HandleFunc("/api/studio/features", handleFeatures)
-	mux.HandleFunc("/api/studio/feature-preview/", handleFeaturePreview)
-	mux.HandleFunc("/api/studio/save", handleSave)
-	mux.HandleFunc("/api/studio/save-loose", handleSaveLoose)
-	mux.HandleFunc("/api/studio/quality-check", handleQualityCheck)
-	mux.HandleFunc("/api/studio/export-render", handleExportFullRender)
-	mux.HandleFunc("/api/studio/export-map-image", handleExportMapImage)
-	mux.HandleFunc("/api/studio/export-buildmap", handleExportBuildmap)
-	mux.HandleFunc("/api/studio/export-voidmap", handleExportVoidmap)
-	mux.HandleFunc("/api/studio/glamour/list", handleGlamourList)
-	mux.HandleFunc("/api/studio/glamour/image/", handleGlamourImage)
-	mux.HandleFunc("/api/studio/sound/", handleSound)
-	mux.HandleFunc("/api/studio/music", handleMusicList)
-	mux.HandleFunc("/api/studio/music/", handleMusicStream)
-	mux.HandleFunc("/api/studio/weapon-fx/", handleWeaponFx)
-	mux.HandleFunc("/api/studio/weapon-bitmap/", handleWeaponBitmap)
-	registerModelAPI(mux)
-	registerCobAPI(mux)
-	registerUnitAPI(mux)
+	mux.HandleFunc("/api/studio/maps", sess.handleMapsList)
+	mux.HandleFunc("/api/studio/minimap/", sess.handleMapMinimap)
+	mux.HandleFunc("/api/studio/load", sess.handleMapLoad)
+	mux.HandleFunc("/api/studio/load-upload", sess.handleMapLoadUpload)
+	mux.HandleFunc("/api/studio/tile-pool/", sess.handleMapTilePool)
+	mux.HandleFunc("/api/studio/sections", sess.handleSections)
+	mux.HandleFunc("/api/studio/section-preview/", sess.handleSectionPreview)
+	mux.HandleFunc("/api/studio/section-image/", sess.handleSectionImage)
+	mux.HandleFunc("/api/studio/section-heights/", sess.handleSectionHeights)
+	mux.HandleFunc("/api/studio/features", sess.handleFeatures)
+	mux.HandleFunc("/api/studio/feature-preview/", sess.handleFeaturePreview)
+	mux.HandleFunc("/api/studio/save", sess.handleSave)
+	mux.HandleFunc("/api/studio/save-loose", sess.handleSaveLoose)
+	mux.HandleFunc("/api/studio/quality-check", sess.handleQualityCheck)
+	mux.HandleFunc("/api/studio/export-render", sess.handleExportFullRender)
+	mux.HandleFunc("/api/studio/export-map-image", sess.handleExportMapImage)
+	mux.HandleFunc("/api/studio/export-buildmap", sess.handleExportBuildmap)
+	mux.HandleFunc("/api/studio/export-voidmap", sess.handleExportVoidmap)
+	mux.HandleFunc("/api/studio/glamour/list", sess.handleGlamourList)
+	mux.HandleFunc("/api/studio/glamour/image/", sess.handleGlamourImage)
+	mux.HandleFunc("/api/studio/sound/", sess.handleSound)
+	mux.HandleFunc("/api/studio/music", sess.handleMusicList)
+	mux.HandleFunc("/api/studio/music/", sess.handleMusicStream)
+	mux.HandleFunc("/api/studio/weapon-fx/", sess.handleWeaponFx)
+	mux.HandleFunc("/api/studio/weapon-bitmap/", sess.handleWeaponBitmap)
+	mux.HandleFunc("/api/studio/export-mod", sess.handleExportMod)
+	sess.registerModelAPI(mux)
+	sess.registerCobAPI(mux)
+	sess.registerUnitAPI(mux)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────
@@ -111,16 +112,9 @@ type mapCatalogState struct {
 	minimaps map[string][]byte // path -> PNG bytes
 }
 
-var mapCatalog = &mapCatalogState{minimaps: map[string][]byte{}}
-
 // sectionPreviewCache memoises rendered section-preview PNGs so the
 // drawer's per-section thumbnails don't re-parse the SCT on every
 // request.  Populated lazily and by the startup preload goroutine.
-var (
-	sectionPreviewMu    sync.RWMutex
-	sectionPreviewCache = map[string][]byte{}
-)
-
 // preloadProgress is a tiny progress tracker the TTY renderer reads.
 // All counters are guarded by mu so the renderer's snapshot stays
 // internally consistent (no torn reads across phase/done/total).
@@ -131,8 +125,6 @@ type preloadTracker struct {
 	total    int
 	finished bool
 }
-
-var preloadProgress = &preloadTracker{}
 
 func (p *preloadTracker) set(phase string, done, total int) {
 	p.mu.Lock()
@@ -158,9 +150,9 @@ func (p *preloadTracker) finish() {
 // and pre-renders the PNGs the studio web UI needs.  Runs in a single
 // background goroutine after the server boots; the TTY progress bar
 // (when stdout is a terminal) follows the preloadProgress counters.
-func startAssetPreload() {
-	pal := loadVFSPalette()
-	paths := vfs.List()
+func (sess *Session) startAssetPreload() {
+	pal := sess.loadVFSPalette()
+	paths := sess.vfs.List()
 
 	// ── Maps ──
 	var tntPaths []string
@@ -170,23 +162,23 @@ func startAssetPreload() {
 			tntPaths = append(tntPaths, p)
 		}
 	}
-	preloadProgress.set("maps", 0, len(tntPaths))
+	sess.preloadProgress.set("maps", 0, len(tntPaths))
 	for i, p := range tntPaths {
-		entry, mini := summariseMapWithMinimap(p, pal)
-		mapCatalog.mu.Lock()
-		mapCatalog.entries = append(mapCatalog.entries, entry)
+		entry, mini := sess.summariseMapWithMinimap(p, pal)
+		sess.mapCatalog.mu.Lock()
+		sess.mapCatalog.entries = append(sess.mapCatalog.entries, entry)
 		if mini != nil {
-			mapCatalog.minimaps[p] = mini
+			sess.mapCatalog.minimaps[p] = mini
 		}
-		mapCatalog.mu.Unlock()
-		preloadProgress.set("maps", i+1, len(tntPaths))
+		sess.mapCatalog.mu.Unlock()
+		sess.preloadProgress.set("maps", i+1, len(tntPaths))
 	}
-	mapCatalog.mu.Lock()
-	sort.Slice(mapCatalog.entries, func(i, j int) bool {
-		return strings.ToLower(mapCatalog.entries[i].Name) < strings.ToLower(mapCatalog.entries[j].Name)
+	sess.mapCatalog.mu.Lock()
+	sort.Slice(sess.mapCatalog.entries, func(i, j int) bool {
+		return strings.ToLower(sess.mapCatalog.entries[i].Name) < strings.ToLower(sess.mapCatalog.entries[j].Name)
 	})
-	mapCatalog.ready = true
-	mapCatalog.mu.Unlock()
+	sess.mapCatalog.ready = true
+	sess.mapCatalog.mu.Unlock()
 
 	// ── Sections + feature thumbnails (parallel via the asset queue) ──
 	//
@@ -195,8 +187,8 @@ func startAssetPreload() {
 	// LOW priority — if the user hits the editor mid-warm and asks for
 	// a specific section/feature, the handler enqueues at HIGH and
 	// jumps the queue.
-	sections := allSectionsFromVFS()
-	features, _ := scanFeatures()
+	sections := sess.allSectionsFromVFS()
+	features, _ := sess.scanFeatures()
 	withFile := features[:0:0]
 	for _, f := range features {
 		if f.Filename != "" && f.Seqname != "" {
@@ -204,31 +196,31 @@ func startAssetPreload() {
 		}
 	}
 
-	q := getAssetQueue()
+	q := sess.getAssetQueue()
 
 	// Track section + feature drain progress separately so the TTY
 	// progress bar still reports per-phase counters.
 	var sectionsDone, featuresDone atomic.Int64
-	preloadProgress.set("sections", 0, len(sections))
-	preloadProgress.set("features", 0, len(withFile))
+	sess.preloadProgress.set("sections", 0, len(sections))
+	sess.preloadProgress.set("features", 0, len(withFile))
 
 	for _, s := range sections {
 		path := s.Path
 		q.Submit(priorityLow, func() {
 			// Skip if a HIGH-priority handler raced ahead and cached
 			// this section already — no point burning a worker.
-			sectionPreviewMu.RLock()
-			cached := sectionPreviewCache[path] != nil
-			sectionPreviewMu.RUnlock()
+			sess.sectionPreviewMu.RLock()
+			cached := sess.sectionPreviewCache[path] != nil
+			sess.sectionPreviewMu.RUnlock()
 			if !cached {
-				if b := renderSectionPreviewPNG(path, pal); b != nil {
-					sectionPreviewMu.Lock()
-					sectionPreviewCache[path] = b
-					sectionPreviewMu.Unlock()
+				if b := sess.renderSectionPreviewPNG(path, pal); b != nil {
+					sess.sectionPreviewMu.Lock()
+					sess.sectionPreviewCache[path] = b
+					sess.sectionPreviewMu.Unlock()
 				}
 			}
 			n := sectionsDone.Add(1)
-			preloadProgress.set("sections", int(n), len(sections))
+			sess.preloadProgress.set("sections", int(n), len(sections))
 		})
 	}
 
@@ -236,18 +228,18 @@ func startAssetPreload() {
 		feat := f
 		q.Submit(priorityLow, func() {
 			key := strings.ToLower(feat.Name) + "|static"
-			featureCacheMu.Lock()
-			_, already := featureCache[key]
-			featureCacheMu.Unlock()
+			sess.featureCacheMu.Lock()
+			_, already := sess.featureCache[key]
+			sess.featureCacheMu.Unlock()
 			if !already {
-				if data, err := renderFeatureStaticPNG(feat.Filename, feat.Seqname); err == nil {
-					featureCacheMu.Lock()
-					featureCache[key] = data
-					featureCacheMu.Unlock()
+				if data, err := sess.renderFeatureStaticPNG(feat.Filename, feat.Seqname); err == nil {
+					sess.featureCacheMu.Lock()
+					sess.featureCache[key] = data
+					sess.featureCacheMu.Unlock()
 				}
 			}
 			n := featuresDone.Add(1)
-			preloadProgress.set("features", int(n), len(withFile))
+			sess.preloadProgress.set("features", int(n), len(withFile))
 		})
 	}
 
@@ -258,14 +250,14 @@ func startAssetPreload() {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	preloadProgress.finish()
+	sess.preloadProgress.finish()
 }
 
 // renderSectionPreviewPNG renders the same PNG handleSectionPreview
 // would serve, so the preload goroutine and the live handler agree
 // on bytes.
-func renderSectionPreviewPNG(sectionPath string, pal color.Palette) []byte {
-	data, err := vfs.ReadFile(sectionPath)
+func (sess *Session) renderSectionPreviewPNG(sectionPath string, pal color.Palette) []byte {
+	data, err := sess.vfs.ReadFile(sectionPath)
 	if err != nil {
 		return nil
 	}
@@ -289,9 +281,9 @@ func renderSectionPreviewPNG(sectionPath string, pal color.Palette) []byte {
 // allSectionsFromVFS lists all .sct paths under sections/.  Mirrors
 // what handleSections does, kept local so the preload doesn't depend
 // on the JSON-serialising path.
-func allSectionsFromVFS() []sectionEntry {
+func (sess *Session) allSectionsFromVFS() []sectionEntry {
 	var out []sectionEntry
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "sections/") || !strings.HasSuffix(lower, ".sct") {
 			continue
@@ -301,12 +293,12 @@ func allSectionsFromVFS() []sectionEntry {
 	return out
 }
 
-func handleMapsList(w http.ResponseWriter, _ *http.Request) {
-	mapCatalog.mu.RLock()
-	ready := mapCatalog.ready
-	entries := make([]mapEntry, len(mapCatalog.entries))
-	copy(entries, mapCatalog.entries)
-	mapCatalog.mu.RUnlock()
+func (sess *Session) handleMapsList(w http.ResponseWriter, _ *http.Request) {
+	sess.mapCatalog.mu.RLock()
+	ready := sess.mapCatalog.ready
+	entries := make([]mapEntry, len(sess.mapCatalog.entries))
+	copy(entries, sess.mapCatalog.entries)
+	sess.mapCatalog.mu.RUnlock()
 	if ready {
 		writeJSON(w, map[string]any{"maps": entries, "loading": false})
 		return
@@ -321,10 +313,10 @@ func handleMapsList(w http.ResponseWriter, _ *http.Request) {
 
 // summariseMapWithMinimap is summariseMap plus the rendered minimap PNG
 // so the preload goroutine can populate both caches in one TNT parse.
-func summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
+func (sess *Session) summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
 	entry := mapEntry{Path: p, Name: strings.TrimSuffix(path.Base(p), path.Ext(p))}
 	var pngBytes []byte
-	if data, err := vfs.ReadFile(p); err == nil {
+	if data, err := sess.vfs.ReadFile(p); err == nil {
 		if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil {
 			entry.TileW = m.TileW
 			entry.TileH = m.TileH
@@ -340,7 +332,7 @@ func summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
 		}
 	}
 	otaPath := strings.TrimSuffix(p, path.Ext(p)) + ".ota"
-	if data, err := vfs.ReadFile(otaPath); err == nil {
+	if data, err := sess.vfs.ReadFile(otaPath); err == nil {
 		var m ta.Map
 		if err := tdf.Unmarshal(data, &m); err == nil && m.Header.Key != "" {
 			entry.MissionName = m.Header.MissionName
@@ -355,22 +347,22 @@ func summariseMapWithMinimap(p string, pal color.Palette) (mapEntry, []byte) {
 // open-map dialog can show a thumbnail per map.  The preload goroutine
 // usually has the PNG ready; the live fallback covers requests that
 // race ahead of the preload (or maps that weren't picked up by it).
-func handleMapMinimap(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 	mapPath := strings.TrimPrefix(r.URL.Path, "/api/studio/minimap/")
 	if mapPath == "" {
 		http.Error(w, "missing map path", http.StatusBadRequest)
 		return
 	}
-	mapCatalog.mu.RLock()
-	cached := mapCatalog.minimaps[mapPath]
-	mapCatalog.mu.RUnlock()
+	sess.mapCatalog.mu.RLock()
+	cached := sess.mapCatalog.minimaps[mapPath]
+	sess.mapCatalog.mu.RUnlock()
 	if cached != nil {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(cached)
 		return
 	}
-	data, err := vfs.ReadFile(mapPath)
+	data, err := sess.vfs.ReadFile(mapPath)
 	if err != nil {
 		http.Error(w, "map not found", http.StatusNotFound)
 		return
@@ -380,7 +372,7 @@ func handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no minimap available", http.StatusNotFound)
 		return
 	}
-	img := m.RenderMinimap(loadVFSPalette())
+	img := m.RenderMinimap(sess.loadVFSPalette())
 	if img == nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 		return
@@ -401,44 +393,38 @@ func handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 
 const tntCacheCap = 16
 
-var (
-	tntCacheMu    sync.Mutex
-	tntCache      = map[string]*tnt.Map{}
-	tntCacheOrder []string // LRU recency, most-recent last
-)
-
-func cacheTNT(mapPath string, m *tnt.Map) {
-	tntCacheMu.Lock()
-	defer tntCacheMu.Unlock()
-	if _, ok := tntCache[mapPath]; ok {
-		tntCacheTouchLocked(mapPath)
+func (sess *Session) cacheTNT(mapPath string, m *tnt.Map) {
+	sess.tntCacheMu.Lock()
+	defer sess.tntCacheMu.Unlock()
+	if _, ok := sess.tntCache[mapPath]; ok {
+		sess.tntCacheTouchLocked(mapPath)
 	} else {
-		tntCacheOrder = append(tntCacheOrder, mapPath)
+		sess.tntCacheOrder = append(sess.tntCacheOrder, mapPath)
 	}
-	tntCache[mapPath] = m
-	for len(tntCacheOrder) > tntCacheCap {
-		evict := tntCacheOrder[0]
-		tntCacheOrder = tntCacheOrder[1:]
-		delete(tntCache, evict)
+	sess.tntCache[mapPath] = m
+	for len(sess.tntCacheOrder) > tntCacheCap {
+		evict := sess.tntCacheOrder[0]
+		sess.tntCacheOrder = sess.tntCacheOrder[1:]
+		delete(sess.tntCache, evict)
 	}
 }
 
-func lookupTNT(mapPath string) *tnt.Map {
-	tntCacheMu.Lock()
-	defer tntCacheMu.Unlock()
-	m, ok := tntCache[mapPath]
+func (sess *Session) lookupTNT(mapPath string) *tnt.Map {
+	sess.tntCacheMu.Lock()
+	defer sess.tntCacheMu.Unlock()
+	m, ok := sess.tntCache[mapPath]
 	if !ok {
 		return nil
 	}
-	tntCacheTouchLocked(mapPath)
+	sess.tntCacheTouchLocked(mapPath)
 	return m
 }
 
-func tntCacheTouchLocked(mapPath string) {
-	for i, p := range tntCacheOrder {
+func (sess *Session) tntCacheTouchLocked(mapPath string) {
+	for i, p := range sess.tntCacheOrder {
 		if p == mapPath {
-			tntCacheOrder = append(tntCacheOrder[:i], tntCacheOrder[i+1:]...)
-			tntCacheOrder = append(tntCacheOrder, mapPath)
+			sess.tntCacheOrder = append(sess.tntCacheOrder[:i], sess.tntCacheOrder[i+1:]...)
+			sess.tntCacheOrder = append(sess.tntCacheOrder, mapPath)
 			return
 		}
 	}
@@ -490,13 +476,13 @@ type loadResponse struct {
 // coordinates per cell, heightmap, feature placements, and the full
 // OTA struct.  The browser then fetches the tile pool atlas through
 // /api/studio/tile-pool/<path>.
-func handleMapLoad(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	mapPath := r.URL.Query().Get("path")
 	if mapPath == "" {
 		http.Error(w, "missing path", http.StatusBadRequest)
 		return
 	}
-	data, err := vfs.ReadFile(mapPath)
+	data, err := sess.vfs.ReadFile(mapPath)
 	if err != nil {
 		http.Error(w, "map not found: "+err.Error(), http.StatusNotFound)
 		return
@@ -513,7 +499,7 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	features, _ := m.LoadFeatures(reader)
 	placements := m.GetFeaturePlacements()
 
-	cacheTNT(mapPath, m)
+	sess.cacheTNT(mapPath, m)
 
 	poolCols := tilePoolCols(len(m.Tiles))
 
@@ -564,7 +550,7 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	planet := ""
 	missionName := baseName
 	var ota *otaState
-	if data, err := vfs.ReadFile(otaPath); err == nil {
+	if data, err := sess.vfs.ReadFile(otaPath); err == nil {
 		ota = parseOTA(string(data), m.TileW, m.TileH)
 		if ota != nil {
 			if ota.Planet != "" {
@@ -605,7 +591,7 @@ func handleMapLoad(w http.ResponseWriter, r *http.Request) {
 // cache; cache eviction would break subsequent tile-pool fetches, but
 // the cap is 16 entries so that's only an issue when juggling many
 // uploads at once.
-func handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -644,7 +630,7 @@ func handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	baseName = sanitiseMapName(baseName)
 	uploadPath := fmt.Sprintf("upload:%s:%d", baseName, time.Now().UnixNano())
-	cacheTNT(uploadPath, m)
+	sess.cacheTNT(uploadPath, m)
 
 	poolCols := tilePoolCols(len(m.Tiles))
 	tiles := make([]loadedTile, len(m.TileMap))
@@ -716,14 +702,14 @@ func handleMapLoadUpload(w http.ResponseWriter, r *http.Request) {
 // handleMapTilePool renders the TNT's full tile pool as a PNG atlas —
 // each 32×32 tile sits at (sx*32, sy*32) where sx/sy match what
 // handleMapLoad reported in `tiles[i]`.
-func handleMapTilePool(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/tile-pool/")
 	mapPath, err := url.PathUnescape(raw)
 	if err != nil || mapPath == "" {
 		http.Error(w, "bad map path", http.StatusBadRequest)
 		return
 	}
-	m := lookupTNT(mapPath)
+	m := sess.lookupTNT(mapPath)
 	if m == nil {
 		// Upload-only maps live in cache; once evicted they can't be
 		// rehydrated, so don't try to read them from VFS.
@@ -733,7 +719,7 @@ func handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 		}
 		// Cache miss (process restart, direct URL hit before /load) —
 		// re-parse the file on the fly so the endpoint stays usable.
-		data, err := vfs.ReadFile(mapPath)
+		data, err := sess.vfs.ReadFile(mapPath)
 		if err != nil {
 			http.Error(w, "map not found", http.StatusNotFound)
 			return
@@ -743,9 +729,9 @@ func handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "parse TNT: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		cacheTNT(mapPath, m)
+		sess.cacheTNT(mapPath, m)
 	}
-	pal := loadVFSPalette()
+	pal := sess.loadVFSPalette()
 	cols := tilePoolCols(len(m.Tiles))
 	rows := (len(m.Tiles) + cols - 1) / cols
 	if rows < 1 {
@@ -886,14 +872,14 @@ type sectionEntry struct {
 	HasMini bool   `json:"hasMinimap"`
 }
 
-func handleSections(w http.ResponseWriter, _ *http.Request) {
+func (sess *Session) handleSections(w http.ResponseWriter, _ *http.Request) {
 	var entries []sectionEntry
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "sections/") || !strings.HasSuffix(lower, ".sct") {
 			continue
 		}
-		entries = append(entries, summariseSection(p))
+		entries = append(entries, sess.summariseSection(p))
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].World != entries[j].World {
@@ -907,7 +893,7 @@ func handleSections(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"sections": entries})
 }
 
-func summariseSection(p string) sectionEntry {
+func (sess *Session) summariseSection(p string) sectionEntry {
 	parts := strings.Split(p, "/")
 	world, group := "", ""
 	if len(parts) >= 2 {
@@ -922,7 +908,7 @@ func summariseSection(p string) sectionEntry {
 		Group: group,
 		World: world,
 	}
-	if data, err := vfs.ReadFile(p); err == nil {
+	if data, err := sess.vfs.ReadFile(p); err == nil {
 		if s, err := sct.LoadFromReader(bytes.NewReader(data)); err == nil {
 			entry.TileW = int(s.Header.Width)
 			entry.TileH = int(s.Header.Height)
@@ -938,15 +924,15 @@ func summariseSection(p string) sectionEntry {
 // otherwise a rendered tile-grid.  Cached in memory — the preload
 // goroutine populates the cache up front and live requests fall back
 // to a render+cache when the cache misses.
-func handleSectionPreview(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSectionPreview(w http.ResponseWriter, r *http.Request) {
 	sectionPath := strings.TrimPrefix(r.URL.Path, "/api/studio/section-preview/")
 	if sectionPath == "" {
 		http.Error(w, "missing section path", http.StatusBadRequest)
 		return
 	}
-	sectionPreviewMu.RLock()
-	cached := sectionPreviewCache[sectionPath]
-	sectionPreviewMu.RUnlock()
+	sess.sectionPreviewMu.RLock()
+	cached := sess.sectionPreviewCache[sectionPath]
+	sess.sectionPreviewMu.RUnlock()
 	if cached != nil {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -956,18 +942,18 @@ func handleSectionPreview(w http.ResponseWriter, r *http.Request) {
 	// Jump the warm queue: the user is staring at the drawer waiting
 	// for this exact section.  singleflight inside Run() dedupes
 	// concurrent requests for the same path.
-	getAssetQueue().Run("section:"+sectionPath, func() {
-		pal := loadVFSPalette()
-		b := renderSectionPreviewPNG(sectionPath, pal)
+	sess.getAssetQueue().Run("section:"+sectionPath, func() {
+		pal := sess.loadVFSPalette()
+		b := sess.renderSectionPreviewPNG(sectionPath, pal)
 		if b != nil {
-			sectionPreviewMu.Lock()
-			sectionPreviewCache[sectionPath] = b
-			sectionPreviewMu.Unlock()
+			sess.sectionPreviewMu.Lock()
+			sess.sectionPreviewCache[sectionPath] = b
+			sess.sectionPreviewMu.Unlock()
 		}
 	})
-	sectionPreviewMu.RLock()
-	pngBytes := sectionPreviewCache[sectionPath]
-	sectionPreviewMu.RUnlock()
+	sess.sectionPreviewMu.RLock()
+	pngBytes := sess.sectionPreviewCache[sectionPath]
+	sess.sectionPreviewMu.RUnlock()
 	if pngBytes == nil {
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
@@ -984,13 +970,7 @@ func handleSectionPreview(w http.ResponseWriter, r *http.Request) {
 // matching sequence inside that file).  Single-frame sequences come back as
 // a plain PNG (APNG degrades to PNG gracefully).
 
-var (
-	featureCacheMu sync.Mutex
-	featureCache   = make(map[string][]byte) // lowercased name → APNG/PNG bytes
-	featureCacheBy map[string]featureEntry   // lazy lookup table
-)
-
-func handleFeaturePreview(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleFeaturePreview(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/feature-preview/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -1003,19 +983,19 @@ func handleFeaturePreview(w http.ResponseWriter, r *http.Request) {
 		key += "|static"
 	}
 
-	featureCacheMu.Lock()
-	if cached, ok := featureCache[key]; ok {
-		featureCacheMu.Unlock()
+	sess.featureCacheMu.Lock()
+	if cached, ok := sess.featureCache[key]; ok {
+		sess.featureCacheMu.Unlock()
 		w.Header().Set("Content-Type", contentTypeForFeature(staticOnly))
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		_, _ = w.Write(cached)
 		return
 	}
-	if featureCacheBy == nil {
-		_, featureCacheBy = scanFeatures()
+	if sess.featureCacheBy == nil {
+		_, sess.featureCacheBy = sess.scanFeatures()
 	}
-	entry, ok := featureCacheBy[strings.ToLower(name)]
-	featureCacheMu.Unlock()
+	entry, ok := sess.featureCacheBy[strings.ToLower(name)]
+	sess.featureCacheMu.Unlock()
 	if !ok {
 		http.Error(w, "feature not found", http.StatusNotFound)
 		return
@@ -1028,29 +1008,29 @@ func handleFeaturePreview(w http.ResponseWriter, r *http.Request) {
 	// Jump the warm queue at HIGH priority + dedupe concurrent requests
 	// for the same (feature, static) key via singleflight inside Run().
 	var renderErr error
-	getAssetQueue().Run("feature:"+key, func() {
+	sess.getAssetQueue().Run("feature:"+key, func() {
 		var b []byte
 		var e error
 		if staticOnly {
-			b, e = renderFeatureStaticPNG(entry.Filename, entry.Seqname)
+			b, e = sess.renderFeatureStaticPNG(entry.Filename, entry.Seqname)
 		} else {
-			b, e = renderFeatureAPNG(entry.Filename, entry.Seqname)
+			b, e = sess.renderFeatureAPNG(entry.Filename, entry.Seqname)
 		}
 		if e != nil {
 			renderErr = e
 			return
 		}
-		featureCacheMu.Lock()
-		featureCache[key] = b
-		featureCacheMu.Unlock()
+		sess.featureCacheMu.Lock()
+		sess.featureCache[key] = b
+		sess.featureCacheMu.Unlock()
 	})
 	if renderErr != nil {
 		http.Error(w, renderErr.Error(), http.StatusNotFound)
 		return
 	}
-	featureCacheMu.Lock()
-	imgBytes := featureCache[key]
-	featureCacheMu.Unlock()
+	sess.featureCacheMu.Lock()
+	imgBytes := sess.featureCache[key]
+	sess.featureCacheMu.Unlock()
 	if imgBytes == nil {
 		http.Error(w, "feature render failed", http.StatusInternalServerError)
 		return
@@ -1070,9 +1050,9 @@ func contentTypeForFeature(staticOnly bool) string {
 // renderFeatureStaticPNG returns a single-frame PNG of the feature's
 // first sequence frame.  Used when the studio's "Animate features"
 // toggle is off.
-func renderFeatureStaticPNG(gafFilename, seqName string) ([]byte, error) {
+func (sess *Session) renderFeatureStaticPNG(gafFilename, seqName string) ([]byte, error) {
 	gafPath := "anims/" + strings.ToLower(gafFilename) + ".gaf"
-	data, err := vfs.ReadFile(gafPath)
+	data, err := sess.vfs.ReadFile(gafPath)
 	if err != nil {
 		return nil, fmt.Errorf("anim file not found: %s", gafPath)
 	}
@@ -1095,7 +1075,7 @@ func renderFeatureStaticPNG(gafFilename, seqName string) ([]byte, error) {
 	if len(target.Frames) == 0 {
 		return nil, fmt.Errorf("sequence %s has no frames", target.Name)
 	}
-	pal, err := gaf.LoadPaletteFromBytes(loadPaletteBytes())
+	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 	if err != nil {
 		return nil, fmt.Errorf("load palette: %w", err)
 	}
@@ -1110,9 +1090,9 @@ func renderFeatureStaticPNG(gafFilename, seqName string) ([]byte, error) {
 // name matches seqName (case-insensitive), and returns its APNG bytes.  If
 // seqName isn't found we fall back to the first sequence so the user at
 // least sees something representative.
-func renderFeatureAPNG(gafFilename, seqName string) ([]byte, error) {
+func (sess *Session) renderFeatureAPNG(gafFilename, seqName string) ([]byte, error) {
 	gafPath := "anims/" + strings.ToLower(gafFilename) + ".gaf"
-	data, err := vfs.ReadFile(gafPath)
+	data, err := sess.vfs.ReadFile(gafPath)
 	if err != nil {
 		return nil, fmt.Errorf("anim file not found: %s", gafPath)
 	}
@@ -1135,7 +1115,7 @@ func renderFeatureAPNG(gafFilename, seqName string) ([]byte, error) {
 			break
 		}
 	}
-	pal, err := gaf.LoadPaletteFromBytes(loadPaletteBytes())
+	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 	if err != nil {
 		return nil, fmt.Errorf("load palette: %w", err)
 	}
@@ -1148,8 +1128,8 @@ func renderFeatureAPNG(gafFilename, seqName string) ([]byte, error) {
 
 // loadPaletteBytes returns the raw 1024-byte palette (RGBA × 256).  Prefers
 // the VFS copy if available, else falls back to the embedded TA palette.
-func loadPaletteBytes() []byte {
-	if data, err := vfs.ReadFile("palettes/palette.pal"); err == nil && len(data) >= 1024 {
+func (sess *Session) loadPaletteBytes() []byte {
+	if data, err := sess.vfs.ReadFile("palettes/palette.pal"); err == nil && len(data) >= 1024 {
 		return data
 	}
 	return assets.DefaultPalette
@@ -1158,13 +1138,13 @@ func loadPaletteBytes() []byte {
 // handleSectionHeights returns the section's per-attribute-cell heights
 // as JSON so the studio client can populate its heightmap view without
 // having to re-parse the SCT in the browser.
-func handleSectionHeights(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSectionHeights(w http.ResponseWriter, r *http.Request) {
 	sectionPath := strings.TrimPrefix(r.URL.Path, "/api/studio/section-heights/")
 	if sectionPath == "" {
 		http.Error(w, "missing section path", http.StatusBadRequest)
 		return
 	}
-	data, err := vfs.ReadFile(sectionPath)
+	data, err := sess.vfs.ReadFile(sectionPath)
 	if err != nil {
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
@@ -1194,13 +1174,13 @@ func handleSectionHeights(w http.ResponseWriter, r *http.Request) {
 // handleSectionImage returns the full tile-grid render (32px per tile) of a
 // section.  The studio canvas slices this image to draw stamped sections on
 // the map.
-func handleSectionImage(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSectionImage(w http.ResponseWriter, r *http.Request) {
 	sectionPath := strings.TrimPrefix(r.URL.Path, "/api/studio/section-image/")
 	if sectionPath == "" {
 		http.Error(w, "missing section path", http.StatusBadRequest)
 		return
 	}
-	data, err := vfs.ReadFile(sectionPath)
+	data, err := sess.vfs.ReadFile(sectionPath)
 	if err != nil {
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
@@ -1210,7 +1190,7 @@ func handleSectionImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to parse SCT", http.StatusInternalServerError)
 		return
 	}
-	img := section.RenderTileMap(loadVFSPalette())
+	img := section.RenderTileMap(sess.loadVFSPalette())
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_ = png.Encode(w, img)
@@ -1237,8 +1217,8 @@ type featureEntry struct {
 	PreviewURL string `json:"previewUrl,omitempty"`
 }
 
-func handleFeatures(w http.ResponseWriter, _ *http.Request) {
-	features, _ := scanFeatures()
+func (sess *Session) handleFeatures(w http.ResponseWriter, _ *http.Request) {
+	features, _ := sess.scanFeatures()
 	sorted := make([]featureEntry, len(features))
 	copy(sorted, features)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -1256,35 +1236,29 @@ func handleFeatures(w http.ResponseWriter, _ *http.Request) {
 // scanFeaturesCache memoises the (slow) walk of every features/*.tdf so
 // repeated /features requests are served from memory.  The walk is
 // idempotent — TA's mounted assets don't change during a session.
-var (
-	scanFeaturesCacheMu sync.Mutex
-	scanFeaturesList    []featureEntry
-	scanFeaturesByName  map[string]featureEntry
-)
-
 // scanFeatures walks features/*.tdf, returning one entry per declared
 // feature plus a map keyed by lowercased name for direct lookup.
 // Origin metadata (OriginX/OriginY) is *not* loaded here — that
 // requires parsing every referenced GAF, which is too slow to block
 // the features list on.  The browser fetches origins lazily via
 // /api/studio/feature-origins.
-func scanFeatures() ([]featureEntry, map[string]featureEntry) {
-	scanFeaturesCacheMu.Lock()
-	if scanFeaturesList != nil {
-		out, byName := scanFeaturesList, scanFeaturesByName
-		scanFeaturesCacheMu.Unlock()
+func (sess *Session) scanFeatures() ([]featureEntry, map[string]featureEntry) {
+	sess.scanFeaturesCacheMu.Lock()
+	if sess.scanFeaturesList != nil {
+		out, byName := sess.scanFeaturesList, sess.scanFeaturesByName
+		sess.scanFeaturesCacheMu.Unlock()
 		return out, byName
 	}
-	scanFeaturesCacheMu.Unlock()
+	sess.scanFeaturesCacheMu.Unlock()
 
 	var out []featureEntry
 	byName := make(map[string]featureEntry)
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
 			continue
 		}
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
@@ -1316,10 +1290,10 @@ func scanFeatures() ([]featureEntry, map[string]featureEntry) {
 			out = append(out, entry)
 		}
 	}
-	scanFeaturesCacheMu.Lock()
-	scanFeaturesList = out
-	scanFeaturesByName = byName
-	scanFeaturesCacheMu.Unlock()
+	sess.scanFeaturesCacheMu.Lock()
+	sess.scanFeaturesList = out
+	sess.scanFeaturesByName = byName
+	sess.scanFeaturesCacheMu.Unlock()
 	return out, byName
 }
 
@@ -1328,8 +1302,8 @@ func scanFeatures() ([]featureEntry, map[string]featureEntry) {
 // browser fires this in parallel with /api/studio/features so the
 // drawer renders immediately and feature placements progressively
 // snap to their correct anchor as origins load.
-func handleFeatureOrigins(w http.ResponseWriter, _ *http.Request) {
-	features, _ := scanFeatures()
+func (sess *Session) handleFeatureOrigins(w http.ResponseWriter, _ *http.Request) {
+	features, _ := sess.scanFeatures()
 	type originEntry struct {
 		Name    string `json:"name"`
 		OriginX int    `json:"originX"`
@@ -1340,7 +1314,7 @@ func handleFeatureOrigins(w http.ResponseWriter, _ *http.Request) {
 		if f.Filename == "" || f.Seqname == "" {
 			continue
 		}
-		ox, oy, ok := featureSpriteOrigin(f.Filename, f.Seqname)
+		ox, oy, ok := sess.featureSpriteOrigin(f.Filename, f.Seqname)
 		if !ok {
 			continue
 		}
@@ -1350,29 +1324,24 @@ func handleFeatureOrigins(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"origins": out})
 }
 
-var (
-	featureOriginCacheMu sync.Mutex
-	featureOriginCache   = map[string][2]int{}
-)
-
 // featureSpriteOrigin returns the OriginX/OriginY of the first frame
 // of <gafFilename>.gaf's named sequence, with results memoised so
 // repeated lookups are free.  Falls back to (0,0,false) when the GAF
 // can't be loaded — callers treat that as "no offset known".
-func featureSpriteOrigin(gafFilename, seqName string) (int, int, bool) {
+func (sess *Session) featureSpriteOrigin(gafFilename, seqName string) (int, int, bool) {
 	if gafFilename == "" {
 		return 0, 0, false
 	}
 	key := strings.ToLower(gafFilename) + "|" + strings.ToLower(seqName)
-	featureOriginCacheMu.Lock()
-	if v, ok := featureOriginCache[key]; ok {
-		featureOriginCacheMu.Unlock()
+	sess.featureOriginCacheMu.Lock()
+	if v, ok := sess.featureOriginCache[key]; ok {
+		sess.featureOriginCacheMu.Unlock()
 		return v[0], v[1], true
 	}
-	featureOriginCacheMu.Unlock()
+	sess.featureOriginCacheMu.Unlock()
 
 	gafPath := "anims/" + strings.ToLower(gafFilename) + ".gaf"
-	data, err := vfs.ReadFile(gafPath)
+	data, err := sess.vfs.ReadFile(gafPath)
 	if err != nil {
 		return 0, 0, false
 	}
@@ -1397,9 +1366,9 @@ func featureSpriteOrigin(gafFilename, seqName string) (int, int, bool) {
 	}
 	ox := int(target.Frames[0].OriginX)
 	oy := int(target.Frames[0].OriginY)
-	featureOriginCacheMu.Lock()
-	featureOriginCache[key] = [2]int{ox, oy}
-	featureOriginCacheMu.Unlock()
+	sess.featureOriginCacheMu.Lock()
+	sess.featureOriginCache[key] = [2]int{ox, oy}
+	sess.featureOriginCacheMu.Unlock()
 	return ox, oy, true
 }
 
@@ -1460,8 +1429,8 @@ type otaState struct {
 	Memory             string      `json:"memory"`
 	LineOfSight        int         `json:"lineOfSight"`
 	Mapping            int         `json:"mapping"`
-	TidalStrength     int         `json:"tidalStrength"`
-	SolarStrength    int         `json:"solarStrength"`
+	TidalStrength      int         `json:"tidalStrength"`
+	SolarStrength      int         `json:"solarStrength"`
 	LavaWorld          int         `json:"lavaWorld"`
 	Killmul            int         `json:"killmul"`
 	Timemul            int         `json:"timemul"`
@@ -1502,7 +1471,7 @@ type saveRequest struct {
 	ActiveSchema int `json:"activeSchema,omitempty"`
 }
 
-func handleSave(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -1526,21 +1495,39 @@ func handleSave(w http.ResponseWriter, r *http.Request) {
 	// Sanitise mapName — only ASCII letters/digits/space/underscore.
 	req.MapName = sanitiseMapName(req.MapName)
 
-	hpiBytes, err := buildHPI(req)
+	hpiBytes, err := sess.buildHPI(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return
 	}
+	// In a workspace session, also persist the built map into the work folder
+	// (copy-on-write) so it becomes part of the mod and can be exported.
+	sess.persistMapToWorkspace(req)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
 	_, _ = w.Write(hpiBytes)
+}
+
+// persistMapToWorkspace writes the built TNT + OTA into the session's work
+// folder when it is a writable workspace. No-op for read-only context sessions.
+func (sess *Session) persistMapToWorkspace(req saveRequest) {
+	if sess.workDir == "" || sess.vfs == nil {
+		return
+	}
+	tntBytes, otaBytes, err := sess.buildArtifacts(req)
+	if err != nil {
+		return
+	}
+	name := strings.ToLower(req.MapName)
+	_ = sess.vfs.WriteFile("maps/"+name+".tnt", tntBytes)
+	_ = sess.vfs.WriteFile("maps/"+name+".ota", otaBytes)
 }
 
 // handleSaveLoose returns the TNT + OTA artifacts as a multipart
 // response so the client can offer separate file downloads.  Pairs
 // with the Map menu's loose-save button for users who want to drop a
 // new TNT into an HPI tool of their choice.
-func handleSaveLoose(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -1567,7 +1554,7 @@ func handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "which must be 'tnt' or 'ota'", http.StatusBadRequest)
 		return
 	}
-	tntBytes, otaBytes, err := buildArtifacts(req)
+	tntBytes, otaBytes, err := sess.buildArtifacts(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return
@@ -1623,8 +1610,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func loadVFSPalette() color.Palette {
-	palData, err := vfs.ReadFile("palettes/palette.pal")
+func (sess *Session) loadVFSPalette() color.Palette {
+	palData, err := sess.vfs.ReadFile("palettes/palette.pal")
 	if err != nil {
 		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
 		if err != nil {

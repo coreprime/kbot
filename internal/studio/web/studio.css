@@ -6919,3 +6919,104 @@ canvas {
 .fx .files-warm-label { color: var(--text); font-size: 12px; }
 .fx .files-warm.done .files-warm-label { color: var(--good); }
 .fx .files-warm-fill { background: var(--accent); }
+
+
+/* ── Form controls (@kbot/ui FormField/TextField/SelectField) ───────── */
+.form-field { display: grid; gap: 6px; }
+.form-field-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.kb-input, .kb-select {
+  width: 100%; box-sizing: border-box;
+  background: #0f1320; color: var(--text);
+  border: 1px solid #2a3142; border-radius: 7px;
+  padding: 8px 10px; font: inherit;
+}
+.kb-input:focus, .kb-select:focus {
+  outline: none; border-color: #3b6cff;
+  box-shadow: 0 0 0 2px rgba(59,108,255,.25);
+}
+.form-field.has-error .kb-input,
+.form-field.has-error .kb-select { border-color: #ff6b6b; }
+.form-field-msg { font-size: 12px; }
+.form-field-hint { color: var(--muted); }
+.form-field-error { color: #ff8585; }
+.form-grid { display: grid; gap: 14px; padding: 6px 0 2px; }
+
+/* ── Tag pill (@kbot/ui Tag) ─────────────────────────────────────────── */
+.kb-tag {
+  display: inline-block; font-size: 11px; line-height: 1.6;
+  padding: 1px 8px; border-radius: 6px; margin-right: 6px;
+  background: #222838; color: #c7cedd; border: 1px solid #2c3346;
+  vertical-align: middle;
+}
+.kb-tag-accent { background: rgba(59,108,255,.18); color: #aebfff; border-color: #3b6cff; }
+
+/* ── Workspace picker page (ui/picker) ───────────────────────────────── */
+.picker { min-height: 100vh; }
+.picker-header { padding: 24px 32px; border-bottom: 1px solid #232838; }
+.picker-header h1 { margin: 0; font-size: 20px; }
+.picker-sub { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+.picker-main { max-width: 1280px; margin: 0 auto; padding: 16px 32px 64px; }
+.picker-section { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 26px 0 10px; }
+.picker-empty { color: #6b7488; font-style: italic; }
+.picker-card {
+  background: #181c25; border: 1px solid #262c3b; border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 12px;
+}
+.picker-card-meta { flex: 1; min-width: 0; }
+.picker-card-name { font-weight: 600; }
+.picker-card-tags { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.picker-path { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Game icon / chip + version tag (@kbot/ui game-icon, Tag) ───────── */
+.kb-game-icon { vertical-align: middle; flex: none; }
+.kb-game-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text); margin-right: 8px;
+}
+.kb-tag-version {
+  background: transparent; color: #9fb0c8;
+  border: 1px solid #39455c; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ── Picker filter tabs + secondary card line ───────────────────────── */
+.picker-tabs { display: flex; justify-content: center; gap: 4px; margin-top: 16px; }
+.picker-tab {
+  font: inherit; background: transparent; color: var(--muted);
+  border: 0; border-bottom: 2px solid transparent;
+  padding: 6px 12px; cursor: pointer; border-radius: 6px 6px 0 0;
+}
+.picker-tab:hover { color: var(--text); }
+.picker-tab.active { color: var(--text); border-bottom-color: #3b6cff; }
+.picker-card-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.picker-card-sub { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 5px; color: var(--muted); font-size: 12px; }
+
+/* ── Picker brand + two-column layout + hover arrows ─────────────────── */
+.picker-brand { display: inline-flex; align-items: center; gap: 12px; }
+.picker-wordmark { font-size: 22px; font-weight: 500; color: var(--text); letter-spacing: .2px; }
+.picker-wordmark b { font-weight: 800; }
+.picker-tab { display: inline-flex; align-items: center; gap: 7px; }
+.picker-tab .kb-game-icon { border-radius: 4px; }
+
+.picker-main { position: relative; }
+.picker-cols { display: grid; gap: 0 28px; grid-template-columns: 1fr; }
+@media (min-width: 1040px) { .picker-cols { grid-template-columns: 1fr 1fr; } }
+.picker-col { min-width: 0; }
+
+.picker-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 5; }
+.picker-arrow { fill: none; stroke-width: 2; opacity: .85; }
+.picker-arrow-parent { stroke: #8aa0c8; color: #8aa0c8; stroke-dasharray: 4 3; }
+.picker-arrow-workspace { stroke: #3b6cff; color: #3b6cff; }
+
+.picker-card.is-hovered { border-color: #3b6cff; }
+.picker-card.is-linked { border-color: #3b6cff; box-shadow: inset 0 0 0 1px #3b6cff; }
+
+/* ── Picker tab centering + cavedog mark + tighter sub line ─────────── */
+.picker-tab { justify-content: center; min-width: 156px; }
+.kb-cavedog { width: auto; vertical-align: middle; }
+.picker-card-sub { flex-wrap: nowrap; overflow: hidden; }
+
+/* Welcome shown as an MDI tab: sit below the topbar (48px) + tab strip
+   (34px) so the strip stays visible, rather than the full-screen modal. */
+.dialog.as-tab { inset: 82px 0 0 0; z-index: 4000; background: #0f1115; }

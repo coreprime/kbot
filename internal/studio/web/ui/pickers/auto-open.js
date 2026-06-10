@@ -22,9 +22,9 @@ export async function maybeAutoOpenFromQuery() {
   try {
     target = new URLSearchParams(window.location.search).get('initial_map')
   } catch { return }
-  if (!target) return
+  if (!target) return false
   const wanted = target.trim().toLowerCase()
-  if (!wanted) return
+  if (!wanted) return false
   try {
     // Poll until the server's map catalogue has finished
     // preloading — the entry we're looking for may not be in the
@@ -41,14 +41,16 @@ export async function maybeAutoOpenFromQuery() {
         if (!loadResp.ok) throw new Error(await loadResp.text() || `HTTP ${loadResp.status}`)
         const loaded = await loadResp.json()
         await hostCallbacks.openLoadedMap?.(loaded, match)
-        return
+        return true
       }
       if (!data.loading) break
       await new Promise(r => setTimeout(r, 250))
     }
     setStatus(`initial_map="${target}" not found in this kbot context.`)
+    return false
   } catch (err) {
     setStatus(`Failed to auto-open ${target}: ${err.message || err}`)
+    return false
   }
 }
 

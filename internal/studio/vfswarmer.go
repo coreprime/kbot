@@ -35,15 +35,15 @@ type warmState struct {
 // their cached representations in the background, publishing progress over the
 // vfs event hub. It returns immediately; the actual work runs on the shared
 // asset queue so it competes politely with on-demand render requests.
-func startVFSWarm() {
-	if vfs == nil || renderer == nil {
+func (sess *Session) startVFSWarm() {
+	if sess.vfs == nil || sess.renderer == nil {
 		return
 	}
-	go runVFSWarm()
+	go sess.runVFSWarm()
 }
 
-func runVFSWarm() {
-	files := collectWarmFiles("")
+func (sess *Session) runVFSWarm() {
+	files := sess.collectWarmFiles("")
 	if len(files) == 0 {
 		return
 	}
@@ -60,19 +60,19 @@ func runVFSWarm() {
 
 	st := &warmState{}
 	st.total.Store(int64(len(files)))
-	vfsEvents.publish(vfsWarmEvent{Type: "start", Total: st.total.Load()})
+	sess.vfsEvents.publish(vfsWarmEvent{Type: "start", Total: st.total.Load()})
 
-	q := getAssetQueue()
+	q := sess.getAssetQueue()
 	var wg sync.WaitGroup
 	for _, f := range files {
 		f := f
 		wg.Add(1)
 		q.Submit(priorityLow, func() {
 			defer wg.Done()
-			cached := warmOne(f)
+			cached := sess.warmOne(f)
 			st.cached.Add(cached)
 			processed := st.processed.Add(1)
-			vfsEvents.publish(vfsWarmEvent{
+			sess.vfsEvents.publish(vfsWarmEvent{
 				Type:      "progress",
 				FileType:  f.fileType,
 				FileName:  f.path,
@@ -85,7 +85,7 @@ func runVFSWarm() {
 
 	go func() {
 		wg.Wait()
-		vfsEvents.publish(vfsWarmEvent{
+		sess.vfsEvents.publish(vfsWarmEvent{
 			Type:      "done",
 			Processed: st.processed.Load(),
 			Total:     st.total.Load(),
@@ -97,8 +97,8 @@ func runVFSWarm() {
 // collectWarmFiles walks the VFS from dir and returns every file whose
 // extension maps to a render representation, skipping directories and anything
 // over the size cap.
-func collectWarmFiles(dir string) []vfsWarmFile {
-	names, err := vfs.ListDir(dir)
+func (sess *Session) collectWarmFiles(dir string) []vfsWarmFile {
+	names, err := sess.vfs.ListDir(dir)
 	if err != nil {
 		return nil
 	}
@@ -107,15 +107,15 @@ func collectWarmFiles(dir string) []vfsWarmFile {
 	var out []vfsWarmFile
 	for _, name := range names {
 		full := path.Join(dir, name)
-		if vfs.IsDir(full) {
-			out = append(out, collectWarmFiles(full)...)
+		if sess.vfs.IsDir(full) {
+			out = append(out, sess.collectWarmFiles(full)...)
 			continue
 		}
 		ft := warmFileType(strings.ToLower(path.Ext(name)), videoOK)
 		if ft == "" {
 			continue
 		}
-		info, err := vfs.Stat(full)
+		info, err := sess.vfs.Stat(full)
 		if err != nil || info.Size > vfsWarmMaxBytes {
 			continue
 		}
@@ -151,8 +151,8 @@ func warmFileType(ext string, videoOK bool) string {
 // warmOne renders and caches the representations for a single file, returning
 // how many representations were successfully produced. Errors are swallowed:
 // an asset that fails to warm simply stays available via on-demand rendering.
-func warmOne(f vfsWarmFile) int64 {
-	data, err := vfs.ReadFile(f.path)
+func (sess *Session) warmOne(f vfsWarmFile) int64 {
+	data, err := sess.vfs.ReadFile(f.path)
 	if err != nil {
 		return 0
 	}
@@ -177,7 +177,7 @@ func warmOne(f vfsWarmFile) int64 {
 
 	var cached int64
 	for _, req := range reqs {
-		if _, err := renderer.Render(f.path, data, req); err == nil {
+		if _, err := sess.renderer.Render(f.path, data, req); err == nil {
 			cached++
 		}
 	}

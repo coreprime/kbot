@@ -20,3 +20,26 @@ type FileSystem interface {
 	// Close closes the filesystem and releases resources
 	Close() error
 }
+
+// WritableFileSystem is a FileSystem with a writable overlay layer, used by
+// editing workspaces. Writes land in a local work folder layered on top of one
+// or more read-only base layers (copy-on-write).
+type WritableFileSystem interface {
+	FileSystem
+
+	// WriteFile writes data to the writable overlay, overriding any lower-layer
+	// version of the same path. Fails if the filesystem is read-only.
+	WriteFile(path string, data []byte) error
+
+	// Remove deletes a path from the writable overlay: a net-new local file is
+	// removed, an override reverts to the base version, and a base-only file
+	// cannot be removed.
+	Remove(path string) error
+
+	// EnsureLocal copies an existing file into the writable overlay so that
+	// later edits are local (copy-on-write). No-op if already local.
+	EnsureLocal(path string) error
+
+	// IsLocal reports whether a path is backed by the writable overlay layer.
+	IsLocal(path string) bool
+}

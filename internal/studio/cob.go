@@ -13,16 +13,16 @@ import (
 // registerCobAPI wires the /api/studio/cob/{name} endpoint into the
 // shared mux.  Kept in its own file alongside models.go so the COB
 // surface area stays self-contained for the JS-side runtime.
-func registerCobAPI(mux *http.ServeMux) {
-	mux.HandleFunc("/api/studio/cob/", handleCobScript)
-	mux.HandleFunc("/api/studio/cob-bytes/", handleCobBytes)
+func (sess *Session) registerCobAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/studio/cob/", sess.handleCobScript)
+	mux.HandleFunc("/api/studio/cob-bytes/", sess.handleCobBytes)
 }
 
 // resolveCobBytes reads a unit's raw COB bytecode from the VFS, trying the
 // case-inconsistent locations TA assets ship under. It returns ok=false when
 // the unit carries no script, which both the disassembly and the raw-bytes
 // handlers surface as a 404 so callers degrade gracefully.
-func resolveCobBytes(name string) ([]byte, bool) {
+func (sess *Session) resolveCobBytes(name string) ([]byte, bool) {
 	name = strings.ToLower(strings.TrimSuffix(name, ".cob"))
 	candidates := []string{
 		"scripts/" + name + ".cob",
@@ -30,7 +30,7 @@ func resolveCobBytes(name string) ([]byte, bool) {
 		"scripts/" + strings.ToUpper(name) + ".cob",
 	}
 	for _, p := range candidates {
-		if b, err := vfs.ReadFile(p); err == nil {
+		if b, err := sess.vfs.ReadFile(p); err == nil {
 			return b, true
 		}
 	}
@@ -41,14 +41,14 @@ func resolveCobBytes(name string) ([]byte, bool) {
 // compiles it through the same Go disassembler the server uses, so the browser
 // client and the authoritative host derive piece animation from one code path
 // rather than the studio's debug-oriented JSON disassembly.
-func handleCobBytes(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleCobBytes(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/cob-bytes/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
 		http.Error(w, "missing cob name", http.StatusBadRequest)
 		return
 	}
-	data, ok := resolveCobBytes(name)
+	data, ok := sess.resolveCobBytes(name)
 	if !ok {
 		http.Error(w, "cob not found", http.StatusNotFound)
 		return
@@ -63,13 +63,13 @@ func handleCobBytes(w http.ResponseWriter, r *http.Request) {
 // the VM.  Keeping the parser in Go means the JS runtime stays small
 // and the heavy bit-twiddling lives in well-tested Go code.
 type cobScriptJSON struct {
-	Name           string             `json:"name"`            // unit ID (lowercased basename)
-	NumStaticVars  uint32             `json:"numStaticVars"`   // total static variable slots
-	PieceNames     []string           `json:"pieceNames"`      // index → piece name (lowercase ok)
-	ScriptNames    []string           `json:"scriptNames"`     // index → entry-point name
-	SoundNames     []string           `json:"soundNames"`      // TAK-only; empty for v4 TA cobs
-	Scripts        []cobScriptDef     `json:"scripts"`         // one entry per script (matches ScriptNames index)
-	Decompiled     string             `json:"decompiled"`      // full BOS source text — studio uses for side-by-side debug
+	Name          string         `json:"name"`          // unit ID (lowercased basename)
+	NumStaticVars uint32         `json:"numStaticVars"` // total static variable slots
+	PieceNames    []string       `json:"pieceNames"`    // index → piece name (lowercase ok)
+	ScriptNames   []string       `json:"scriptNames"`   // index → entry-point name
+	SoundNames    []string       `json:"soundNames"`    // TAK-only; empty for v4 TA cobs
+	Scripts       []cobScriptDef `json:"scripts"`       // one entry per script (matches ScriptNames index)
+	Decompiled    string         `json:"decompiled"`    // full BOS source text — studio uses for side-by-side debug
 }
 
 // cobScriptDef carries the disassembled instructions for a single
@@ -78,8 +78,8 @@ type cobScriptJSON struct {
 // pass them through verbatim instead of converting to PC indices —
 // the JS side rebuilds an offset → instruction map on load.
 type cobScriptDef struct {
-	Name         string            `json:"name"`
-	Instructions []cobInstruction  `json:"instructions"`
+	Name         string           `json:"name"`
+	Instructions []cobInstruction `json:"instructions"`
 }
 
 // cobInstruction is one disassembled opcode.  `op` is the raw 32-bit
@@ -94,14 +94,14 @@ type cobInstruction struct {
 	P2     int32  `json:"p2,omitempty"`
 }
 
-func handleCobScript(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/cob/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
 		http.Error(w, "missing cob name", http.StatusBadRequest)
 		return
 	}
-	data, ok := resolveCobBytes(name)
+	data, ok := sess.resolveCobBytes(name)
 	if !ok {
 		// Surface a 404 so the JS client can degrade gracefully -
 		// many TA assets ship without a per-unit script, in which

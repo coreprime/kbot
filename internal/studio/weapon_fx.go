@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/coreprime/kbot/formats/gamedata/ta"
 )
@@ -32,23 +31,15 @@ import (
 
 // Cache keyed by "WEAPON|VARIANT".  We don't expire — explosion APNGs
 // are immutable assets, the server's lifetime caches them once.
-var (
-	weaponFxMu    sync.Mutex
-	weaponFxCache = map[string][]byte{}
-	// Sentinel value stored in the cache for keys we've tried to
-	// resolve and confirmed have no shipped explosion art.  Avoids
-	// re-walking the VFS on every miss.
-	weaponFxMissSentinel = []byte{}
-)
-
 // handleWeaponFx serves the GAF animation as APNG.  Returns 404 when:
 //   - the weapon name doesn't resolve to a known TDF section, or
 //   - the weapon has no explosion gaf/art shipped for the requested
 //     variant (and no ground fallback), or
 //   - the GAF file or sequence isn't in the VFS.
+//
 // Caches both hits and misses so a flurry of explosions doesn't
 // re-walk the weapon table 100×.
-func handleWeaponFx(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleWeaponFx(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/studio/weapon-fx/")
 	if rest == "" {
 		http.Error(w, "missing weapon/variant", http.StatusBadRequest)
@@ -76,9 +67,9 @@ func handleWeaponFx(w http.ResponseWriter, r *http.Request) {
 
 	// Cache check — both hits AND known-misses live here, so an
 	// unresolvable weapon doesn't pay the lookup cost twice.
-	weaponFxMu.Lock()
-	if cached, ok := weaponFxCache[key]; ok {
-		weaponFxMu.Unlock()
+	sess.weaponFxMu.Lock()
+	if cached, ok := sess.weaponFxCache[key]; ok {
+		sess.weaponFxMu.Unlock()
 		if len(cached) == 0 {
 			http.Error(w, "weapon has no explosion art", http.StatusNotFound)
 			return
@@ -88,18 +79,18 @@ func handleWeaponFx(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(cached)
 		return
 	}
-	weaponFxMu.Unlock()
+	sess.weaponFxMu.Unlock()
 
 	// Resolve the weapon's TDF section + the variant's GAF refs.
-	sec := loadWeaponSection(name)
+	sec := sess.loadWeaponSection(name)
 	if sec == nil {
-		_cacheWeaponFxMiss(key)
+		sess._cacheWeaponFxMiss(key)
 		http.Error(w, "weapon not found", http.StatusNotFound)
 		return
 	}
 	gafName, artName := weaponExplosionRefs(sec, variant)
 	if gafName == "" || artName == "" {
-		_cacheWeaponFxMiss(key)
+		sess._cacheWeaponFxMiss(key)
 		http.Error(w, "weapon has no explosion art for variant", http.StatusNotFound)
 		return
 	}
@@ -107,15 +98,15 @@ func handleWeaponFx(w http.ResponseWriter, r *http.Request) {
 	// Reuse the feature renderer's GAF→APNG path.  Same palette, same
 	// frame walk, same encoder — keeps every cinematic animation in
 	// the project on one codepath.
-	apng, err := renderFeatureAPNG(gafName, artName)
+	apng, err := sess.renderFeatureAPNG(gafName, artName)
 	if err != nil {
-		_cacheWeaponFxMiss(key)
+		sess._cacheWeaponFxMiss(key)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	weaponFxMu.Lock()
-	weaponFxCache[key] = apng
-	weaponFxMu.Unlock()
+	sess.weaponFxMu.Lock()
+	sess.weaponFxCache[key] = apng
+	sess.weaponFxMu.Unlock()
 	w.Header().Set("Content-Type", "image/apng")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(apng)
@@ -147,8 +138,8 @@ func weaponExplosionRefs(sec *ta.Weapon, variant string) (string, string) {
 	return gaf, art
 }
 
-func _cacheWeaponFxMiss(key string) {
-	weaponFxMu.Lock()
-	weaponFxCache[key] = weaponFxMissSentinel
-	weaponFxMu.Unlock()
+func (sess *Session) _cacheWeaponFxMiss(key string) {
+	sess.weaponFxMu.Lock()
+	sess.weaponFxCache[key] = []byte{}
+	sess.weaponFxMu.Unlock()
 }

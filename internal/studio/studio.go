@@ -7,7 +7,6 @@ package studio
 import (
 	"embed"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,8 +14,6 @@ import (
 	"time"
 
 	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/internal/assetrender"
-	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
 
@@ -28,11 +25,7 @@ import (
 //go:embed all:web/dist
 var webFS embed.FS
 
-var (
-	vfs        *filesystem.VirtualFileSystem
-	renderer   *assetrender.Renderer
-	serverPort int
-)
+var serverPort int
 
 // NewCommand returns the `kbot studio` subcommand.
 func NewCommand() *cobra.Command {
@@ -56,124 +49,47 @@ and start designing.`,
 }
 
 func runStudio(_ *cobra.Command, args []string) error {
-	basePath, note, err := resolveContextPath(args)
-	if err != nil {
-		return err
-	}
-	if note != "" {
-		fmt.Println(note)
-	}
-	if _, err := os.Stat(basePath); os.IsNotExist(err) {
-		return fmt.Errorf("path does not exist: %s", basePath)
+	mgr := newWorkspaceManager(".cache")
+
+	fmt.Printf("KBot Studio — TA/TAK content editor\n\n")
+
+	// `kbot studio <path>` pre-opens that path as a quick "local" workspace;
+	// otherwise the picker lists the configured contexts and recent workspaces.
+	if len(args) > 0 && args[0] != "" {
+		path := args[0]
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return fmt.Errorf("path does not exist: %s", path)
+		}
+		sess, err := mgr.openLocalPath("local", "Local", path)
+		if err != nil {
+			return fmt.Errorf("failed to open %s: %w", path, err)
+		}
+		if isTerminal(os.Stdout) {
+			go sess.reportPreloadProgress()
+		}
+		fmt.Printf("Opened %s\n  → http://localhost:%d/workspaces/local/\n\n", path, serverPort)
 	}
 
-	fmt.Printf("KBot Studio — TA/TAK map editor\n")
-	fmt.Printf("Loading archives from: %s\n\n", basePath)
+	mux := http.NewServeMux()
+	mgr.register(mux)
 
-	config := &filesystem.Config{
+	addr := fmt.Sprintf(":%d", serverPort)
+	fmt.Printf("KBot Studio is running:\n")
+	fmt.Printf("  Open  http://localhost:%d  (workspace picker)\n", serverPort)
+	fmt.Printf("  Ctrl+C to stop\n\n")
+	return http.ListenAndServe(addr, mux)
+}
+
+// studioFSConfig returns the VFS config the studio mounts contexts with:
+// TA archive extensions, excluding the non-asset files an install ships.
+func studioFSConfig() *filesystem.Config {
+	return &filesystem.Config{
 		Extensions:         []string{".hpi", ".ccx", ".gp3", ".ufo"},
 		ExcludeDirectories: []string{"Docs"},
 		ExcludeExtensions:  []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
 		ExcludePrefixes:    []string{"goggame"},
 		SkipErrors:         true,
 	}
-	vfs, err = filesystem.NewVirtualFileSystem(basePath, config)
-	if err != nil {
-		return fmt.Errorf("failed to create VFS: %w", err)
-	}
-	defer func() { _ = vfs.Close() }()
-
-	// The renderer owns the same VFS so format renders can resolve sidecar
-	// files (a TNT's .ota, a GAF's palette) through it. Caches live under
-	// .cache/<representation> beside the working directory, matching the
-	// layout the explorer established.
-	renderer = assetrender.New(vfs, assetrender.Options{CacheDir: ".cache"})
-
-	stats := vfs.Stats()
-	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
-	fmt.Printf("✓ %d files available\n\n", stats["total_files"])
-
-	// Pre-render maps, sections, and feature thumbnails so the editor
-	// doesn't pay parse costs on first open.  The progress reporter
-	// follows the same goroutine and only renders to a TTY (silent in
-	// pipes or non-interactive shells).
-	go startAssetPreload()
-	if isTerminal(os.Stdout) {
-		go reportPreloadProgress()
-	}
-
-	startGameHost()
-
-	// Warm the VFS render caches in the background, reporting progress over the
-	// /api/vfs/events websocket so the Files tab can show a live indicator and
-	// refresh thumbnails as they land.
-	startVFSWarm()
-
-	mux := http.NewServeMux()
-	registerAPI(mux)
-	registerHostAPI(mux)
-	registerVFSAPI(mux)
-	registerVFSEvents(mux)
-	registerStatic(mux)
-
-	addr := fmt.Sprintf(":%d", serverPort)
-	fmt.Printf("KBot Studio is running:\n")
-	fmt.Printf("  Open  http://localhost:%d  in your browser\n", serverPort)
-	fmt.Printf("  Ctrl+C to stop\n\n")
-	return http.ListenAndServe(addr, mux)
-}
-
-// resolveContextPath mirrors the logic the explorer uses to pick a working
-// directory: explicit arg first, then active kbot context.
-func resolveContextPath(args []string) (string, string, error) {
-	if len(args) > 0 && args[0] != "" {
-		return args[0], "", nil
-	}
-	cfg, err := kbotctx.Load()
-	if err != nil {
-		return "", "", err
-	}
-	alias, ctx, src, ok := cfg.Active()
-	if !ok {
-		if alias != "" && src == "env" {
-			return "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
-		}
-		return "", "", fmt.Errorf("no path provided and no kbot context configured (run `kbot ctx add` or pass an explicit path)")
-	}
-	note := fmt.Sprintf("Using context %q (%s)", alias, ctx.Path)
-	if src == "env" {
-		note = fmt.Sprintf("Using context %q via %s (%s)", alias, kbotctx.EnvVar, ctx.Path)
-	}
-	return ctx.Path, note, nil
-}
-
-// registerStatic serves the embedded web app.  We read files out of the
-// embed.FS directly rather than using http.FileServer, which auto-redirects
-// `/index.html` back to `/` and trips up our root handler.
-func registerStatic(mux *http.ServeMux) {
-	sub, err := fs.Sub(webFS, "web/dist")
-	if err != nil {
-		panic(fmt.Sprintf("studio: embed sub-fs: %v", err))
-	}
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clean := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
-		if clean == "" || clean == "." {
-			clean = "index.html"
-		}
-		data, err := fs.ReadFile(sub, clean)
-		if err != nil {
-			// SPA fallback — unknown routes get index.html.
-			data, err = fs.ReadFile(sub, "index.html")
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			clean = "index.html"
-		}
-		w.Header().Set("Content-Type", contentTypeFor(clean))
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(data)
-	}))
 }
 
 // isTerminal returns true when f appears to be a character device
@@ -191,13 +107,13 @@ func isTerminal(f *os.File) bool {
 // until the preload goroutine flips finished=true.  Redraws every
 // 100 ms using carriage return + clear-to-EOL; the line is cleared
 // on completion so the server's normal output isn't garbled.
-func reportPreloadProgress() {
+func (sess *Session) reportPreloadProgress() {
 	const barWidth = 24
 	const clearLine = "\r\033[2K"
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		phase, done, total, finished := preloadProgress.snapshot()
+		phase, done, total, finished := sess.preloadProgress.snapshot()
 		if finished {
 			_, _ = fmt.Fprint(os.Stdout, clearLine+"✓ Asset cache ready\n")
 			return

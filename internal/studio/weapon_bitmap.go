@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/coreprime/kbot/formats/gaf"
 )
@@ -62,12 +61,6 @@ import (
 //   - caches hits + known-misses indefinitely (the sprite art is
 //     immutable for the lifetime of the server process).
 
-var (
-	weaponBitmapMu    sync.Mutex
-	weaponBitmapCache = map[string][]byte{}
-	weaponBitmapMiss  = []byte{}
-)
-
 // colorSlotToFxSequence maps the rendertype=4 `color=` field to its
 // fx.gaf sequence name.  Empty string means "no art shipped" (the
 // 255-slot EARTHQUAKE case — the engine plays no projectile sprite,
@@ -103,7 +96,7 @@ type weaponBitmapResponse struct {
 	Sequence        string `json:"sequence"`        // diagnostic: the fx.gaf sequence name
 }
 
-func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/studio/weapon-bitmap/")
 	if rest == "" {
 		http.Error(w, "missing weapon name", http.StatusBadRequest)
@@ -116,9 +109,9 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 	}
 	key := strings.ToUpper(strings.TrimSpace(name))
 
-	weaponBitmapMu.Lock()
-	if cached, ok := weaponBitmapCache[key]; ok {
-		weaponBitmapMu.Unlock()
+	sess.weaponBitmapMu.Lock()
+	if cached, ok := sess.weaponBitmapCache[key]; ok {
+		sess.weaponBitmapMu.Unlock()
 		if len(cached) == 0 {
 			http.Error(w, "weapon has no bitmap projectile", http.StatusNotFound)
 			return
@@ -128,11 +121,11 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(cached)
 		return
 	}
-	weaponBitmapMu.Unlock()
+	sess.weaponBitmapMu.Unlock()
 
-	sec := loadWeaponSection(name)
+	sec := sess.loadWeaponSection(name)
 	if sec == nil {
-		_cacheWeaponBitmapMiss(key)
+		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, "weapon not found", http.StatusNotFound)
 		return
 	}
@@ -140,21 +133,21 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 		// Not a bitmap weapon — caller should be checking renderType
 		// before hitting this endpoint, but a defensive 404 here keeps
 		// the contract clean.
-		_cacheWeaponBitmapMiss(key)
+		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, "weapon is not rendertype=4 bitmap", http.StatusNotFound)
 		return
 	}
 	colorSlot := sec.Color
 	seqName, ok := colorSlotToFxSequence[colorSlot]
 	if !ok || seqName == "" {
-		_cacheWeaponBitmapMiss(key)
+		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, fmt.Sprintf("no fx.gaf sequence mapped for color=%d", colorSlot), http.StatusNotFound)
 		return
 	}
 
-	resp, err := buildWeaponBitmapSheet(seqName)
+	resp, err := sess.buildWeaponBitmapSheet(seqName)
 	if err != nil {
-		_cacheWeaponBitmapMiss(key)
+		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -162,13 +155,13 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 
 	body, err := json.Marshal(resp)
 	if err != nil {
-		_cacheWeaponBitmapMiss(key)
+		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, "json encode failed", http.StatusInternalServerError)
 		return
 	}
-	weaponBitmapMu.Lock()
-	weaponBitmapCache[key] = body
-	weaponBitmapMu.Unlock()
+	sess.weaponBitmapMu.Lock()
+	sess.weaponBitmapCache[key] = body
+	sess.weaponBitmapMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(body)
@@ -180,8 +173,8 @@ func handleWeaponBitmap(w http.ResponseWriter, r *http.Request) {
 // bounding rect of all frames (using each frame's OriginX/Y as
 // hotspot) so the projectile sprite's "centre" stays put as the
 // animation cycles.
-func buildWeaponBitmapSheet(seqName string) (*weaponBitmapResponse, error) {
-	data, err := vfs.ReadFile("anims/fx.gaf")
+func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapResponse, error) {
+	data, err := sess.vfs.ReadFile("anims/fx.gaf")
 	if err != nil {
 		return nil, fmt.Errorf("fx.gaf not found")
 	}
@@ -207,7 +200,7 @@ func buildWeaponBitmapSheet(seqName string) (*weaponBitmapResponse, error) {
 	if len(target.Frames) == 0 {
 		return nil, fmt.Errorf("sequence %q has zero frames", seqName)
 	}
-	pal, err := gaf.LoadPaletteFromBytes(loadPaletteBytes())
+	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 	if err != nil {
 		return nil, fmt.Errorf("load palette: %w", err)
 	}
@@ -318,8 +311,8 @@ func buildWeaponBitmapSheet(seqName string) (*weaponBitmapResponse, error) {
 	}, nil
 }
 
-func _cacheWeaponBitmapMiss(key string) {
-	weaponBitmapMu.Lock()
-	weaponBitmapCache[key] = weaponBitmapMiss
-	weaponBitmapMu.Unlock()
+func (sess *Session) _cacheWeaponBitmapMiss(key string) {
+	sess.weaponBitmapMu.Lock()
+	sess.weaponBitmapCache[key] = []byte{}
+	sess.weaponBitmapMu.Unlock()
 }

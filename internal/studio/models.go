@@ -11,10 +11,9 @@ import (
 	"path"
 	"sort"
 	"strings"
-	"sync"
 
-	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/objects3d"
 	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/sct"
@@ -25,13 +24,13 @@ import (
 // The endpoints are intentionally narrow: list, fetch geometry, fetch
 // texture image — the heavy lifting (animation, scene assembly) lives
 // in the browser's class-based renderer under web/game3d/.
-func registerModelAPI(mux *http.ServeMux) {
-	mux.HandleFunc("/api/studio/models", handleModelsList)
-	mux.HandleFunc("/api/studio/model/", handleModelGeometry)
-	mux.HandleFunc("/api/studio/texture/", handleTextureImage)
-	mux.HandleFunc("/api/studio/palette", handlePaletteJSON)
-	mux.HandleFunc("/api/studio/ground-tile/", handleGroundTile)
-	mux.HandleFunc("/api/studio/buildpic/", handleBuildPic)
+func (sess *Session) registerModelAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/studio/models", sess.handleModelsList)
+	mux.HandleFunc("/api/studio/model/", sess.handleModelGeometry)
+	mux.HandleFunc("/api/studio/texture/", sess.handleTextureImage)
+	mux.HandleFunc("/api/studio/palette", sess.handlePaletteJSON)
+	mux.HandleFunc("/api/studio/ground-tile/", sess.handleGroundTile)
+	mux.HandleFunc("/api/studio/buildpic/", sess.handleBuildPic)
 }
 
 // ── /api/studio/models ─────────────────────────────────────────────────────
@@ -63,39 +62,32 @@ type modelEntry struct {
 	HasBuildPic bool `json:"hasBuildPic"`
 }
 
-var (
-	modelIndexMu   sync.Mutex
-	modelIndexOnce sync.Once
-	modelIndex     []modelEntry
-	modelIndexByID map[string]modelEntry // keyed by lowercased name (no extension)
-)
-
-func ensureModelIndex() ([]modelEntry, map[string]modelEntry) {
-	modelIndexOnce.Do(func() {
-		buildModelIndex()
+func (sess *Session) ensureModelIndex() ([]modelEntry, map[string]modelEntry) {
+	sess.modelIndexOnce.Do(func() {
+		sess.buildModelIndex()
 	})
-	modelIndexMu.Lock()
-	defer modelIndexMu.Unlock()
-	return modelIndex, modelIndexByID
+	sess.modelIndexMu.Lock()
+	defer sess.modelIndexMu.Unlock()
+	return sess.modelIndex, sess.modelIndexByID
 }
 
-func buildModelIndex() {
+func (sess *Session) buildModelIndex() {
 	// Walk the VFS ONCE, partitioning by category, then merge the
 	// FBI / 3DO / COB / build-pic indexes into modelEntries.  Walking
 	// the whole VFS once is much cheaper than the previous "walk for
 	// 3DOs, walk for FBIs" two-pass.
 	type seenSet struct {
-		threeDO  map[string]string // objbasename → 3DO vfs path
+		threeDO  map[string]string // objbasename → 3DO sess.vfs path
 		cob      map[string]bool   // script basename → present
 		buildPic map[string]bool   // unitname.pcx → present
-		fbi      []string          // FBI vfs paths
+		fbi      []string          // FBI sess.vfs paths
 	}
 	seen := seenSet{
 		threeDO:  map[string]string{},
 		cob:      map[string]bool{},
 		buildPic: map[string]bool{},
 	}
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		switch {
 		case strings.HasPrefix(lower, "objects3d/") && strings.HasSuffix(lower, ".3do"):
@@ -121,7 +113,7 @@ func buildModelIndex() {
 	// FBI is the source of truth — iterate each unit definition,
 	// resolve its 3DO + COB references, attach build-pic presence.
 	for _, p := range seen.fbi {
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
@@ -152,7 +144,7 @@ func buildModelIndex() {
 			Description:    info.Description,
 			Category:       info.TEDClass,
 			DefaultGround:  inferDefaultGround(info),
-			SubmersionMode: inferSubmersionMode(info),
+			SubmersionMode: sess.inferSubmersionMode(info),
 			HasFBI:         true,
 			Has3DO:         threePath != "",
 			HasCOB:         seen.cob[key] || seen.cob[obj],
@@ -207,14 +199,14 @@ func buildModelIndex() {
 		}
 		return list[i].Name < list[j].Name
 	})
-	modelIndexMu.Lock()
-	modelIndex = list
-	modelIndexByID = byID
-	modelIndexMu.Unlock()
+	sess.modelIndexMu.Lock()
+	sess.modelIndex = list
+	sess.modelIndexByID = byID
+	sess.modelIndexMu.Unlock()
 }
 
-func handleModelsList(w http.ResponseWriter, _ *http.Request) {
-	list, _ := ensureModelIndex()
+func (sess *Session) handleModelsList(w http.ResponseWriter, _ *http.Request) {
+	list, _ := sess.ensureModelIndex()
 	writeJSON(w, map[string]any{"models": list})
 }
 
@@ -270,7 +262,7 @@ func categoryTokens(cats []string) map[string]bool {
 // for TA's subs — and almost always carry "UNDERWATER" in their
 // Category.  Surface ships are TEDClass=SHIP with no WaterLine.
 // Hovercraft / non-water units return "".
-func inferSubmersionMode(info *ta.UnitInfo) string {
+func (sess *Session) inferSubmersionMode(info *ta.UnitInfo) string {
 	ted := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	tokens := categoryTokens(info.Category)
 	// Submarine signals (in priority order):
@@ -304,11 +296,11 @@ func inferSubmersionMode(info *ta.UnitInfo) string {
 // client gets pure float meshes; piece offsets are reported the same way
 // so the hierarchy can be assembled with a straight translate.
 type modelJSON struct {
-	Name     string      `json:"name"`
-	Root     *pieceJSON  `json:"root"`
-	Pieces   []string    `json:"pieces"`   // flat list of piece names in DFS order
-	Textures []string    `json:"textures"` // unique texture names referenced
-	Decals   []string    `json:"decals"`   // subset of Textures known to carry alpha-keyed pixels (logos, glass, etc.) — clients render these last so they don't depth-occlude the opaque base when two primitives share a face
+	Name     string     `json:"name"`
+	Root     *pieceJSON `json:"root"`
+	Pieces   []string   `json:"pieces"`   // flat list of piece names in DFS order
+	Textures []string   `json:"textures"` // unique texture names referenced
+	Decals   []string   `json:"decals"`   // subset of Textures known to carry alpha-keyed pixels (logos, glass, etc.) — clients render these last so they don't depth-occlude the opaque base when two primitives share a face
 	// TextureSources maps each referenced texture name (lowercase)
 	// to the basename of the GAF file it lives in (e.g.
 	// "armhawk.gaf" or "kbot1.gaf").  Used by the Textures tab in
@@ -340,7 +332,7 @@ type primitiveJSON struct {
 	Texture     string   `json:"texture,omitempty"`
 	ColorIndex  int      `json:"colorIndex"`
 	IsColored   bool     `json:"isColored"`
-	VertexCount int      `json:"vertexCount"`        // 1=point, 2=line, 3=tri, 4+=polygon
+	VertexCount int      `json:"vertexCount"`         // 1=point, 2=line, 3=tri, 4+=polygon
 	Synthetic   bool     `json:"synthetic,omitempty"` // reconstructed by FillModel, not original art
 }
 
@@ -349,7 +341,7 @@ type primitiveJSON struct {
 // around ~50 units across, which the client orbits comfortably.
 const scale3DO = 1.0 / 65536.0
 
-func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/model/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -357,13 +349,13 @@ func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name = strings.ToLower(strings.TrimSuffix(name, ".3do"))
-	_, byID := ensureModelIndex()
+	_, byID := sess.ensureModelIndex()
 	entry, ok := byID[name]
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
-	data, err := vfs.ReadFile(entry.Path)
+	data, err := sess.vfs.ReadFile(entry.Path)
 	if err != nil {
 		http.Error(w, "read model: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -465,11 +457,11 @@ func handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 	// the index map to "" so the client can group those as
 	// "unknown / missing" — typical for stub textures the engine
 	// would substitute with the default grey.
-	texIdx := ensureTextureIndex()
+	texIdx := sess.ensureTextureIndex()
 	out.TextureSources = make(map[string]string)
 	for t := range textures {
 		out.Textures = append(out.Textures, t)
-		if textureIsDecal(t) {
+		if sess.textureIsDecal(t) {
 			out.Decals = append(out.Decals, t)
 		}
 		if src, ok := texIdx[t]; ok {
@@ -500,16 +492,6 @@ type textureSource struct {
 	UseShadow bool // true for texture sequences where the shadow palette index 0 should stay transparent
 }
 
-var (
-	textureIndexOnce sync.Once
-	textureIndexMu   sync.Mutex
-	textureIndex     map[string]textureSource // lowercase texture name → source
-	textureCacheMu   sync.Mutex
-	textureCache     = map[string][]byte{}
-	textureDecalMu   sync.Mutex
-	textureDecalCache = map[string]bool{}
-)
-
 // textureIsDecal returns true when the named texture's GAF frame has any
 // pixel matching its transparency index — i.e. when the renderer will
 // need alpha-test to punch out those pixels.  Decals (logos, glass,
@@ -519,23 +501,23 @@ var (
 // pixels and are safe to render in any order.
 //
 // Memoised forever — the answer never changes during a server run.
-func textureIsDecal(name string) bool {
+func (sess *Session) textureIsDecal(name string) bool {
 	key := strings.ToLower(name)
-	textureDecalMu.Lock()
-	if v, ok := textureDecalCache[key]; ok {
-		textureDecalMu.Unlock()
+	sess.textureDecalMu.Lock()
+	if v, ok := sess.textureDecalCache[key]; ok {
+		sess.textureDecalMu.Unlock()
 		return v
 	}
-	textureDecalMu.Unlock()
+	sess.textureDecalMu.Unlock()
 
-	src, ok := ensureTextureIndex()[key]
+	src, ok := sess.ensureTextureIndex()[key]
 	if !ok {
-		textureDecalMu.Lock()
-		textureDecalCache[key] = false
-		textureDecalMu.Unlock()
+		sess.textureDecalMu.Lock()
+		sess.textureDecalCache[key] = false
+		sess.textureDecalMu.Unlock()
 		return false
 	}
-	data, err := vfs.ReadFile(src.GAFPath)
+	data, err := sess.vfs.ReadFile(src.GAFPath)
 	if err != nil {
 		return false
 	}
@@ -554,33 +536,33 @@ func textureIsDecal(name string) bool {
 	// synthetic-base injection (which became a no-op anyway).
 	hasAlpha := false
 	_ = seqs
-	textureDecalMu.Lock()
-	textureDecalCache[key] = hasAlpha
-	textureDecalMu.Unlock()
+	sess.textureDecalMu.Lock()
+	sess.textureDecalCache[key] = hasAlpha
+	sess.textureDecalMu.Unlock()
 	return hasAlpha
 }
 
-func ensureTextureIndex() map[string]textureSource {
-	textureIndexOnce.Do(func() {
-		buildTextureIndex()
+func (sess *Session) ensureTextureIndex() map[string]textureSource {
+	sess.textureIndexOnce.Do(func() {
+		sess.buildTextureIndex()
 	})
-	textureIndexMu.Lock()
-	defer textureIndexMu.Unlock()
-	return textureIndex
+	sess.textureIndexMu.Lock()
+	defer sess.textureIndexMu.Unlock()
+	return sess.textureIndex
 }
 
 // buildTextureIndex walks every textures/*.gaf, recording the (GAF path,
 // sequence name) pair that satisfies each texture name a 3DO might
 // reference. Lazy + cached: each entry is read again on demand when a
 // client asks for the actual PNG; sequence data isn't decoded here.
-func buildTextureIndex() {
+func (sess *Session) buildTextureIndex() {
 	idx := make(map[string]textureSource)
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "textures/") || !strings.HasSuffix(lower, ".gaf") {
 			continue
 		}
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
@@ -601,12 +583,12 @@ func buildTextureIndex() {
 			idx[key] = textureSource{GAFPath: p, SeqName: s.Name, UseShadow: true}
 		}
 	}
-	textureIndexMu.Lock()
-	textureIndex = idx
-	textureIndexMu.Unlock()
+	sess.textureIndexMu.Lock()
+	sess.textureIndex = idx
+	sess.textureIndexMu.Unlock()
 }
 
-func handleTextureImage(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleTextureImage(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/texture/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -615,36 +597,36 @@ func handleTextureImage(w http.ResponseWriter, r *http.Request) {
 	}
 	name = strings.ToLower(strings.TrimSuffix(name, ".png"))
 
-	textureCacheMu.Lock()
-	cached, ok := textureCache[name]
-	textureCacheMu.Unlock()
+	sess.textureCacheMu.Lock()
+	cached, ok := sess.textureCache[name]
+	sess.textureCacheMu.Unlock()
 	if ok {
 		serveTexturePNG(w, cached)
 		return
 	}
 
-	idx := ensureTextureIndex()
+	idx := sess.ensureTextureIndex()
 	src, ok := idx[name]
 	if !ok {
 		// Fall back to a 1×1 neutral grey texture so the client can keep
 		// rendering even when a 3DO references a missing or
 		// mod-specific texture name.
 		png := neutralTexturePNG()
-		textureCacheMu.Lock()
-		textureCache[name] = png
-		textureCacheMu.Unlock()
+		sess.textureCacheMu.Lock()
+		sess.textureCache[name] = png
+		sess.textureCacheMu.Unlock()
 		serveTexturePNG(w, png)
 		return
 	}
 
-	pngBytes, err := renderTexturePNG(src)
+	pngBytes, err := sess.renderTexturePNG(src)
 	if err != nil {
 		http.Error(w, "render texture: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	textureCacheMu.Lock()
-	textureCache[name] = pngBytes
-	textureCacheMu.Unlock()
+	sess.textureCacheMu.Lock()
+	sess.textureCache[name] = pngBytes
+	sess.textureCacheMu.Unlock()
 	serveTexturePNG(w, pngBytes)
 }
 
@@ -654,8 +636,8 @@ func serveTexturePNG(w http.ResponseWriter, data []byte) {
 	_, _ = w.Write(data)
 }
 
-func renderTexturePNG(src textureSource) ([]byte, error) {
-	data, err := vfs.ReadFile(src.GAFPath)
+func (sess *Session) renderTexturePNG(src textureSource) ([]byte, error) {
+	data, err := sess.vfs.ReadFile(src.GAFPath)
 	if err != nil {
 		return nil, err
 	}
@@ -681,7 +663,7 @@ func renderTexturePNG(src textureSource) ([]byte, error) {
 	if len(target.Frames) == 0 {
 		return nil, errors.New("sequence has no frames")
 	}
-	pal, err := gaf.LoadPaletteFromBytes(loadPaletteBytes())
+	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 	if err != nil {
 		return nil, fmt.Errorf("load palette: %w", err)
 	}
@@ -728,7 +710,7 @@ func neutralTexturePNG() []byte {
 // pixels of seamless terrain that the GPU can tile across the ground
 // plane via CLAMP_TO_EDGE doesn't help us here, so it sets
 // TEXTURE_WRAP_S/T to REPEAT on the client.
-func handleGroundTile(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleGroundTile(w http.ResponseWriter, r *http.Request) {
 	tileset := strings.ToLower(strings.TrimPrefix(r.URL.Path, "/api/studio/ground-tile/"))
 	if tileset == "" {
 		tileset = "greenworld"
@@ -742,7 +724,7 @@ func handleGroundTile(w http.ResponseWriter, r *http.Request) {
 	}
 	var sctPath string
 	for _, p := range candidates {
-		if _, err := vfs.Stat(p); err == nil {
+		if _, err := sess.vfs.Stat(p); err == nil {
 			sctPath = p
 			break
 		}
@@ -750,7 +732,7 @@ func handleGroundTile(w http.ResponseWriter, r *http.Request) {
 	if sctPath == "" {
 		// Walk the tileset's flat/ directory for any SCT.
 		prefix := fmt.Sprintf("sections/%s/flat/", tileset)
-		for _, p := range vfs.List() {
+		for _, p := range sess.vfs.List() {
 			if strings.HasPrefix(strings.ToLower(p), prefix) && strings.HasSuffix(strings.ToLower(p), ".sct") {
 				sctPath = p
 				break
@@ -761,7 +743,7 @@ func handleGroundTile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no flat tile for tileset "+tileset, http.StatusNotFound)
 		return
 	}
-	data, err := vfs.ReadFile(sctPath)
+	data, err := sess.vfs.ReadFile(sctPath)
 	if err != nil {
 		http.Error(w, "read tile: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -774,7 +756,7 @@ func handleGroundTile(w http.ResponseWriter, r *http.Request) {
 	// First 32×32 tile of the section's tile grid — the same primitive
 	// the studio map editor uses for stamping.  Smaller than the whole
 	// tile-map, perfect for GPU-side REPEAT tiling.
-	full := section.RenderTileMap(loadVFSPalette())
+	full := section.RenderTileMap(sess.loadVFSPalette())
 	tileW := 32
 	tileH := 32
 	if full.Bounds().Dx() < tileW {
@@ -801,8 +783,8 @@ func handleGroundTile(w http.ResponseWriter, r *http.Request) {
 // in addition to texture pixels so it can resolve `IsColored` primitives
 // (per-face flat colour, no UVs) without round-tripping back to the
 // server for every shaded face.
-func handlePaletteJSON(w http.ResponseWriter, _ *http.Request) {
-	data := loadPaletteBytes()
+func (sess *Session) handlePaletteJSON(w http.ResponseWriter, _ *http.Request) {
+	data := sess.loadPaletteBytes()
 	out := make([][3]int, 256)
 	for i := 0; i < 256 && i*4+2 < len(data); i++ {
 		out[i] = [3]int{int(data[i*4]), int(data[i*4+1]), int(data[i*4+2])}
@@ -817,7 +799,7 @@ func handlePaletteJSON(w http.ResponseWriter, _ *http.Request) {
 // these as PCX (most common) or occasionally BMP/TGA under
 // unitpics/.  Returns 404 when no build pic is shipped — the JS
 // picker renders a muted "no thumbnail" tile in that case.
-func handleBuildPic(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleBuildPic(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/buildpic/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -832,7 +814,7 @@ func handleBuildPic(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	for _, p := range candidates {
-		if b, e := vfs.ReadFile(p); e == nil {
+		if b, e := sess.vfs.ReadFile(p); e == nil {
 			data = b
 			break
 		}
@@ -840,11 +822,13 @@ func handleBuildPic(w http.ResponseWriter, r *http.Request) {
 	if data == nil {
 		// Last-ditch case-insensitive walk.
 		want := strings.ToLower(stem + ".pcx")
-		for _, p := range vfs.List() {
+		for _, p := range sess.vfs.List() {
 			lower := strings.ToLower(p)
-			if !strings.HasPrefix(lower, "unitpics/") { continue }
+			if !strings.HasPrefix(lower, "unitpics/") {
+				continue
+			}
 			if strings.ToLower(path.Base(lower)) == want {
-				if b, e := vfs.ReadFile(p); e == nil {
+				if b, e := sess.vfs.ReadFile(p); e == nil {
 					data = b
 					break
 				}

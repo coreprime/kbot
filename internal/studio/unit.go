@@ -6,23 +6,22 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 
-	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the
 // movement parameters + weapon refs the studio's Controls panel uses
 // to drive the Move / Aim+Fire buttons.
-func registerUnitAPI(mux *http.ServeMux) {
-	mux.HandleFunc("/api/studio/unit/", handleUnitMeta)
-	mux.HandleFunc("/api/studio/cursor/", handleCursorImage)
+func (sess *Session) registerUnitAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/studio/unit/", sess.handleUnitMeta)
+	mux.HandleFunc("/api/studio/cursor/", sess.handleCursorImage)
 	// Weapon catalogue endpoints — `/api/studio/weapons` returns the
 	// full list of weapon TDF sections in the loaded VFS (used by the
 	// "Change Weapon" picker in the Weapons panel).
-	mux.HandleFunc("/api/studio/weapons", handleWeaponsList)
+	mux.HandleFunc("/api/studio/weapons", sess.handleWeaponsList)
 	// /api/studio/sound/ is owned by sound.go (registered in api.go) —
 	// it already serves the FBI SoundCategory sounds the Controls
 	// overlay needs.  See sound.go for the case-insensitive resolver.
@@ -142,8 +141,8 @@ type unitWeaponJSON struct {
 	// it so the Weapons panel can label each card with the real
 	// weapon ID rather than just the slot ordinal.  Zero when the
 	// TDF doesn't ship the field (some mod weapons omit it).
-	WeaponID int `json:"weaponId"`
-	Name     string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
+	WeaponID   int     `json:"weaponId"`
+	Name       string  `json:"name"`       // FBI Weapon1/2/3 value (TDF section key), uppercased
 	ReloadSec  float64 `json:"reloadSec"`  // seconds between shots
 	RangeWU    float64 `json:"rangeWU"`    // engagement range in world units
 	VelocityWU float64 `json:"velocityWU"` // projectile velocity, world units / sec
@@ -251,42 +250,42 @@ type unitWeaponJSON struct {
 	RenderType int `json:"renderType"`
 
 	// Trajectory / targeting category flags.
-	Turret      bool `json:"turret"`      // 360° turret-mounted, free pitch
-	LineOfSight bool `json:"lineOfSight"` // straight-line shot, gravity ignored
-	Guidance    bool `json:"guidance"`    // guided, homes using TurnRate
-	WaterWeapon bool `json:"waterWeapon"` // travels through water (torpedoes)
-	TwoPhase    bool `json:"twoPhase"`    // converts to a second weapon mid-flight
-	NoAutoRange bool `json:"noAutoRange"` // never auto-detonates at max range
-	BurnBlow    bool `json:"burnBlow"`    // detonates at end of range
-	Propeller   bool `json:"propeller"`   // projectile model has a spinning prop
-	UnitsOnly   bool `json:"unitsOnly"`   // only detonates on units, not terrain
-	Targetable  bool `json:"targetable"`  // can be shot down by interceptors
-	Interceptor bool `json:"interceptor"` // shoots down other weapons
-	Meteor      bool `json:"meteor"`      // meteor-shower style area weapon
-	Paralyzer   bool `json:"paralyzer"`   // stuns rather than damages
-	NoExplode   bool `json:"noExplode"`   // no explosion on impact
-	NoRadar     bool `json:"noRadar"`     // invisible to radar
+	Turret       bool `json:"turret"`       // 360° turret-mounted, free pitch
+	LineOfSight  bool `json:"lineOfSight"`  // straight-line shot, gravity ignored
+	Guidance     bool `json:"guidance"`     // guided, homes using TurnRate
+	WaterWeapon  bool `json:"waterWeapon"`  // travels through water (torpedoes)
+	TwoPhase     bool `json:"twoPhase"`     // converts to a second weapon mid-flight
+	NoAutoRange  bool `json:"noAutoRange"`  // never auto-detonates at max range
+	BurnBlow     bool `json:"burnBlow"`     // detonates at end of range
+	Propeller    bool `json:"propeller"`    // projectile model has a spinning prop
+	UnitsOnly    bool `json:"unitsOnly"`    // only detonates on units, not terrain
+	Targetable   bool `json:"targetable"`   // can be shot down by interceptors
+	Interceptor  bool `json:"interceptor"`  // shoots down other weapons
+	Meteor       bool `json:"meteor"`       // meteor-shower style area weapon
+	Paralyzer    bool `json:"paralyzer"`    // stuns rather than damages
+	NoExplode    bool `json:"noExplode"`    // no explosion on impact
+	NoRadar      bool `json:"noRadar"`      // invisible to radar
 	GroundBounce bool `json:"groundBounce"` // bounces off the ground
-	Stockpile   bool `json:"stockpile"`   // must be built/stockpiled before firing
-	ToAirWeapon bool `json:"toAirWeapon"` // anti-air only
-	StartFire   bool `json:"startFire"`   // ignites a fire at the firing point
+	Stockpile    bool `json:"stockpile"`    // must be built/stockpiled before firing
+	ToAirWeapon  bool `json:"toAirWeapon"`  // anti-air only
+	StartFire    bool `json:"startFire"`    // ignites a fire at the firing point
 	SoundTrigger bool `json:"soundTrigger"` // re-plays SoundStart on each burst shot
-	StartSmoke  bool `json:"startSmoke"`  // puff of smoke at the muzzle on fire
-	EndSmoke    bool `json:"endSmoke"`    // puff of smoke at the terminal point
+	StartSmoke   bool `json:"startSmoke"`   // puff of smoke at the muzzle on fire
+	EndSmoke     bool `json:"endSmoke"`     // puff of smoke at the terminal point
 
 	// Integer tuning fields (TA angle units = 65536 / circle where noted).
 	Coverage       int `json:"coverage"`       // anti-missile protection radius
 	Firestarter    int `json:"firestarter"`    // % chance to start a fire (0..100)
-	EnergyPerShot  int `json:"energyPerShot"`   // energy drained per shot
-	MetalPerShot   int `json:"metalPerShot"`    // metal drained per shot
-	EnergyCost     int `json:"energyCost"`      // TDF `energy` (build/stockpile cost)
-	MetalCost      int `json:"metalCost"`       // TDF `metal` (build/stockpile cost)
-	ShakeMagnitude int `json:"shakeMagnitude"`  // screen-shake strength on fire
-	MinBarrelAngle int `json:"minBarrelAngle"`  // min barrel pitch, degrees (may be negative)
-	SprayAngle     int `json:"sprayAngle"`      // burst spread, TA angle units
-	Accuracy       int `json:"accuracy"`        // inaccuracy, TA angle units (0 = perfect)
-	AimRate        int `json:"aimRate"`          // aim speed, TA angle units / sec
-	HoldTime       int `json:"holdTime"`         // TDF `holdtime`
+	EnergyPerShot  int `json:"energyPerShot"`  // energy drained per shot
+	MetalPerShot   int `json:"metalPerShot"`   // metal drained per shot
+	EnergyCost     int `json:"energyCost"`     // TDF `energy` (build/stockpile cost)
+	MetalCost      int `json:"metalCost"`      // TDF `metal` (build/stockpile cost)
+	ShakeMagnitude int `json:"shakeMagnitude"` // screen-shake strength on fire
+	MinBarrelAngle int `json:"minBarrelAngle"` // min barrel pitch, degrees (may be negative)
+	SprayAngle     int `json:"sprayAngle"`     // burst spread, TA angle units
+	Accuracy       int `json:"accuracy"`       // inaccuracy, TA angle units (0 = perfect)
+	AimRate        int `json:"aimRate"`        // aim speed, TA angle units / sec
+	HoldTime       int `json:"holdTime"`       // TDF `holdtime`
 
 	// Floating-point timing / falloff fields (seconds unless noted).
 	EdgeEffectiveness float64 `json:"edgeEffectiveness"` // damage fraction at AoE edge (0..1)
@@ -321,7 +320,7 @@ type unitWeaponJSON struct {
 	Damage        map[string]int `json:"damage,omitempty"`
 }
 
-func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/unit/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -329,7 +328,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name = strings.ToLower(strings.TrimSuffix(name, ".fbi"))
-	unit, err := loadUnitFBI(name)
+	unit, err := sess.loadUnitFBI(name)
 	if err != nil {
 		// 404 for missing FBI — many 3DOs ship without a unit ref
 		// (props / features).  Client treats absence as "no controls
@@ -467,7 +466,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		out.Weapons[i].Name = w
-		if sec := loadWeaponSection(w); sec != nil {
+		if sec := sess.loadWeaponSection(w); sec != nil {
 			populateWeaponJSON(&out.Weapons[i], sec)
 		}
 	}
@@ -482,7 +481,7 @@ func handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// to .wav stems in sounds/.  Studio plays the matching .wav
 	// when the user performs the corresponding action.
 	if cat := strings.ToUpper(strings.TrimSpace(info.SoundCategory)); cat != "" {
-		if events := loadSoundSection(cat); events != nil {
+		if events := sess.loadSoundSection(cat); events != nil {
 			out.Sounds = make(map[string]string)
 			for _, key := range soundEventKeys {
 				if v := strings.TrimSpace(events[key]); v != "" {
@@ -514,38 +513,32 @@ var soundEventKeys = []string{
 // loadSoundSection reads gamedata/sound.tdf and returns the named
 // section (case-insensitive).  Cached for the server lifetime so
 // repeated unit-meta requests don't re-parse the (large) TDF.
-var (
-	soundTDFMu      sync.Mutex
-	soundTDFOnce    sync.Once
-	soundTDFClasses []ta.SoundClass
-)
-
 // loadSoundSection reads gamedata/sound.tdf and returns the named class's
 // event map (event name → sound stem) with keys lower-cased, or nil when the
 // file or class is missing.  Cached for the server lifetime.
-func loadSoundSection(name string) map[string]string {
-	soundTDFOnce.Do(func() {
+func (sess *Session) loadSoundSection(name string) map[string]string {
+	sess.soundTDFOnce.Do(func() {
 		// gamedata/sound.tdf is the canonical location in TA.  Try
 		// the lowercase + casing variants so mods that ship the
 		// file with a different name still resolve.
 		for _, p := range []string{"gamedata/sound.tdf", "gamedata/SOUND.tdf", "GameData/sound.tdf"} {
-			if data, err := vfs.ReadFile(p); err == nil {
+			if data, err := sess.vfs.ReadFile(p); err == nil {
 				var classes []ta.SoundClass
 				if derr := tdf.Unmarshal(data, &classes); derr == nil {
-					soundTDFClasses = classes
+					sess.soundTDFClasses = classes
 					return
 				}
 			}
 		}
 	})
-	soundTDFMu.Lock()
-	defer soundTDFMu.Unlock()
-	for i := range soundTDFClasses {
-		if !strings.EqualFold(soundTDFClasses[i].Key, name) {
+	sess.soundTDFMu.Lock()
+	defer sess.soundTDFMu.Unlock()
+	for i := range sess.soundTDFClasses {
+		if !strings.EqualFold(sess.soundTDFClasses[i].Key, name) {
 			continue
 		}
-		events := make(map[string]string, len(soundTDFClasses[i].Events))
-		for k, v := range soundTDFClasses[i].Events {
+		events := make(map[string]string, len(sess.soundTDFClasses[i].Events))
+		for k, v := range sess.soundTDFClasses[i].Events {
 			events[strings.ToLower(k)] = v
 		}
 		return events
@@ -557,7 +550,7 @@ func loadSoundSection(name string) map[string]string {
 // case-insensitive match.  Unit names in the file system are
 // frequently mixed-case (e.g. ARMCOM.FBI) so we don't trust a
 // straight ReadFile.
-func loadUnitFBI(name string) (*ta.Unit, error) {
+func (sess *Session) loadUnitFBI(name string) (*ta.Unit, error) {
 	candidates := []string{
 		"units/" + name + ".fbi",
 		"units/" + strings.ToUpper(name) + ".FBI",
@@ -571,15 +564,15 @@ func loadUnitFBI(name string) (*ta.Unit, error) {
 		return &u, nil
 	}
 	for _, p := range candidates {
-		if data, err := vfs.ReadFile(p); err == nil {
+		if data, err := sess.vfs.ReadFile(p); err == nil {
 			return parse(data)
 		}
 	}
 	// Last-ditch: walk the entire VFS for a case-insensitive name match.
 	want := strings.ToLower(name + ".fbi")
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		if strings.ToLower(basename(p)) == want {
-			if data, err := vfs.ReadFile(p); err == nil {
+			if data, err := sess.vfs.ReadFile(p); err == nil {
 				return parse(data)
 			}
 		}
@@ -591,14 +584,14 @@ func loadUnitFBI(name string) (*ta.Unit, error) {
 // matches `name` (case-insensitive).  Returns nil when no weapons
 // folder ships or the ref doesn't resolve — the client treats that
 // as "use default reload" and the Fire button still works.
-func loadWeaponSection(name string) *ta.Weapon {
+func (sess *Session) loadWeaponSection(name string) *ta.Weapon {
 	want := strings.ToUpper(strings.TrimSpace(name))
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
 			continue
 		}
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
@@ -726,26 +719,20 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 // catalogue for the server lifetime — walking every weapons/*.tdf and
 // re-parsing on each picker open would be wasteful for a list that
 // doesn't change after startup.
-var (
-	weaponsListMu    sync.Mutex
-	weaponsListOnce  sync.Once
-	weaponsListCache []unitWeaponJSON
-)
-
 // buildWeaponsList walks every weapons/*.tdf in the VFS and emits one
 // JSON entry per section.  Slot / Index are left zero — the catalogue
 // is unit-agnostic; the client assigns those when the user picks one
 // for a specific slot.  Sorted alphabetically by name so the picker's
 // stable ordering doesn't depend on directory walk order.
-func buildWeaponsList() []unitWeaponJSON {
+func (sess *Session) buildWeaponsList() []unitWeaponJSON {
 	seen := map[string]bool{}
 	out := []unitWeaponJSON{}
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
 			continue
 		}
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
@@ -769,13 +756,13 @@ func buildWeaponsList() []unitWeaponJSON {
 }
 
 // handleWeaponsList serves the cached weapon catalogue.
-func handleWeaponsList(w http.ResponseWriter, _ *http.Request) {
-	weaponsListOnce.Do(func() {
-		weaponsListCache = buildWeaponsList()
+func (sess *Session) handleWeaponsList(w http.ResponseWriter, _ *http.Request) {
+	sess.weaponsListOnce.Do(func() {
+		sess.weaponsListCache = sess.buildWeaponsList()
 	})
-	weaponsListMu.Lock()
-	defer weaponsListMu.Unlock()
-	writeJSON(w, weaponsListCache)
+	sess.weaponsListMu.Lock()
+	defer sess.weaponsListMu.Unlock()
+	writeJSON(w, sess.weaponsListCache)
 }
 
 // errFBINotFound is the sentinel for the 404 path so the handler can
@@ -801,7 +788,7 @@ func basename(p string) string {
 // transparency index is honoured so the browser sees a proper
 // alpha channel and the SVG cursor scales correctly.  Falls back
 // to 404 when the named sequence isn't in any cursors GAF.
-func handleCursorImage(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/cursor/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || name == "" {
@@ -816,7 +803,7 @@ func handleCursorImage(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	for _, p := range gafCandidates {
-		if b, e := vfs.ReadFile(p); e == nil {
+		if b, e := sess.vfs.ReadFile(p); e == nil {
 			data = b
 			break
 		}
@@ -848,7 +835,7 @@ func handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cursor sequence not found", http.StatusNotFound)
 		return
 	}
-	pal, err := gaf.LoadPaletteFromBytes(loadPaletteBytes())
+	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 	if err != nil {
 		http.Error(w, "load palette: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -881,5 +868,3 @@ func handleCursorImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	_, _ = w.Write(buf.Bytes())
 }
-
-

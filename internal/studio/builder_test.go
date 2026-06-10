@@ -14,9 +14,7 @@ import (
 func TestBuildMapMinimal(t *testing.T) {
 	// buildMap reads section files through the package-global vfs; for an
 	// empty stamp list we never touch it, so leaving it nil is fine.
-	prev := vfs
-	vfs = nil
-	defer func() { vfs = prev }()
+	sess := newSession("test", "test", nil, t.TempDir())
 
 	req := saveRequest{
 		MapName:  "smoke",
@@ -24,7 +22,7 @@ func TestBuildMapMinimal(t *testing.T) {
 		TileH:    16,
 		DefaultH: 90,
 	}
-	m, features, err := buildMap(req)
+	m, features, err := sess.buildMap(req)
 	if err != nil {
 		t.Fatalf("buildMap: %v", err)
 	}
@@ -91,9 +89,9 @@ func TestBuildOTAContents(t *testing.T) {
 // to the expected new corner after each quarter-turn.
 func TestRotateTile32(t *testing.T) {
 	tile := make([]byte, 1024)
-	tile[0] = 1   // top-left
-	tile[31] = 2  // top-right
-	tile[992] = 3 // bottom-left (row 31, col 0)
+	tile[0] = 1    // top-left
+	tile[31] = 2   // top-right
+	tile[992] = 3  // bottom-left (row 31, col 0)
 	tile[1023] = 4 // bottom-right
 
 	r1 := rotateTile32(tile, 1) // 90° CW: TL→TR, TR→BR, BR→BL, BL→TL
@@ -162,9 +160,7 @@ func TestFlipTile32(t *testing.T) {
 // don't touch the VFS when no sections are referenced, so we can run it
 // with vfs = nil.
 func TestBuildHPIEndToEnd(t *testing.T) {
-	prev := vfs
-	vfs = nil
-	defer func() { vfs = prev }()
+	sess := newSession("test", "test", nil, t.TempDir())
 
 	req := saveRequest{
 		MapName:     "smoke",
@@ -172,7 +168,7 @@ func TestBuildHPIEndToEnd(t *testing.T) {
 		TileW:       32,
 		TileH:       32,
 	}
-	hpi, err := buildHPI(req)
+	hpi, err := sess.buildHPI(req)
 	if err != nil {
 		t.Fatalf("buildHPI: %v", err)
 	}

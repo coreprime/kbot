@@ -18,23 +18,18 @@ const (
 	hostInputDelay uint64 = 3
 )
 
-// gameHost is the in-process authoritative game server. Opening a sandbox in
-// the browser connects to this over a websocket, so the simulation runs here in
-// the kbot process rather than in a throwaway in-browser engine.
-var gameHost *gameserver.Server
-
 // startGameHost constructs the in-process game server backed by the studio VFS.
 // It must run after the VFS is mounted; the spawn provider reads the VFS lazily
 // when a client first spawns a unit.
-func startGameHost() {
-	gameHost = gameserver.NewServer(vfsSpawnFunc(), resolveCobBytes, hostSeed, hostInputDelay)
+func (sess *Session) startGameHost() {
+	sess.gameHost = gameserver.NewServer(sess.vfsSpawnFunc(), sess.resolveCobBytes, hostSeed, hostInputDelay)
 }
 
 // registerHostAPI mounts the game host's websocket endpoint and the
 // sandbox-discovery API on the studio mux.
-func registerHostAPI(mux *http.ServeMux) {
-	mux.Handle("/host/ws", gameHost)
-	mux.HandleFunc("/api/studio/sandboxes", handleSandboxList)
+func (sess *Session) registerHostAPI(mux *http.ServeMux) {
+	mux.Handle("/host/ws", sess.gameHost)
+	mux.HandleFunc("/api/studio/sandboxes", sess.handleSandboxList)
 }
 
 // vfsSpawnFunc resolves Spawn orders against the studio VFS: it parses the
@@ -42,21 +37,21 @@ func registerHostAPI(mux *http.ServeMux) {
 // fixed-point stat block. The match layers each unit's COB script on top via
 // resolveCobBytes, so the authority runs the same animation + scripted
 // weapon/death threads as the clients.
-func vfsSpawnFunc() sim.SpawnFunc {
+func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 	return func(name string) (*sim.UnitMeta, sim.Binding) {
-		unit, err := loadUnitFBI(strings.ToLower(strings.TrimSuffix(name, ".fbi")))
+		unit, err := sess.loadUnitFBI(strings.ToLower(strings.TrimSuffix(name, ".fbi")))
 		if err != nil {
 			return nil, nil
 		}
-		meta := gameserver.MetaFromUnitInfo(name, &unit.Info, resolveWeaponSection)
+		meta := gameserver.MetaFromUnitInfo(name, &unit.Info, sess.resolveWeaponSection)
 		return meta, nil
 	}
 }
 
 // resolveWeaponSection adapts the studio VFS weapon loader to the meta
 // converter's resolver signature.
-func resolveWeaponSection(ref string) (ta.Weapon, bool) {
-	sec := loadWeaponSection(ref)
+func (sess *Session) resolveWeaponSection(ref string) (ta.Weapon, bool) {
+	sec := sess.loadWeaponSection(ref)
 	if sec == nil {
 		return ta.Weapon{}, false
 	}
@@ -66,8 +61,8 @@ func resolveWeaponSection(ref string) (ta.Weapon, bool) {
 // handleSandboxList reports the active sandbox sessions for the Join picker.
 // Editor sessions are excluded; unclassified matches (e.g. a default match) are
 // treated as sandboxes so they remain visible during manual testing.
-func handleSandboxList(w http.ResponseWriter, _ *http.Request) {
-	all := gameHost.Sessions()
+func (sess *Session) handleSandboxList(w http.ResponseWriter, _ *http.Request) {
+	all := sess.gameHost.Sessions()
 	out := make([]gameserver.SessionInfo, 0, len(all))
 	for _, s := range all {
 		if s.Kind == "editor" {

@@ -43,6 +43,7 @@ Subcommands:
 	cmd.AddCommand(newCtxPathCommand())
 	cmd.AddCommand(newCtxUseCommand())
 	cmd.AddCommand(newCtxDeleteCommand())
+	cmd.AddCommand(newCtxSetParentCommand())
 	return cmd
 }
 
@@ -51,6 +52,7 @@ func newCtxAddCommand() *cobra.Command {
 		alias   string
 		game    string
 		version string
+		parent  string
 		replace bool
 	)
 	cmd := &cobra.Command{
@@ -89,6 +91,7 @@ Examples:
 				Path:    path,
 				Game:    strings.ToLower(game),
 				Version: version,
+				Parent:  parent,
 			}, replace); err != nil {
 				return err
 			}
@@ -105,6 +108,7 @@ Examples:
 	cmd.Flags().StringVar(&alias, "alias", "", "Short name to refer to the context by (required)")
 	cmd.Flags().StringVar(&game, "game", "", fmt.Sprintf("Game flavour: %s (required)", strings.Join(kbotctx.ValidGames, ", ")))
 	cmd.Flags().StringVar(&version, "version", "", "Optional version label (e.g. \"3.1c\")")
+	cmd.Flags().StringVar(&parent, "parent", "", "Alias of a parent context to layer this one on top of")
 	cmd.Flags().BoolVar(&replace, "replace", false, "Overwrite an existing alias")
 	_ = cmd.MarkFlagRequired("alias")
 	_ = cmd.MarkFlagRequired("game")
@@ -135,7 +139,7 @@ func runCtxList(cmd *cobra.Command) error {
 	}
 	activeAlias, _, activeSource, _ := cfg.Active()
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "CURRENT\tALIAS\tGAME\tVERSION\tPATH"); err != nil {
+	if _, err := fmt.Fprintln(tw, "CURRENT\tALIAS\tGAME\tVERSION\tPARENT\tPATH"); err != nil {
 		return err
 	}
 	for _, alias := range cfg.Aliases() {
@@ -151,7 +155,11 @@ func runCtxList(cmd *cobra.Command) error {
 		if version == "" {
 			version = "-"
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", marker, alias, ctx.Game, version, ctx.Path); err != nil {
+		parent := ctx.Parent
+		if parent == "" {
+			parent = "-"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", marker, alias, ctx.Game, version, parent, ctx.Path); err != nil {
 			return err
 		}
 	}
@@ -184,6 +192,45 @@ func newCtxUseCommand() *cobra.Command {
 			fmt.Fprintf(os.Stderr, "Switched current context to %q (%s)\n", alias, cfg.Contexts[alias].Path)
 			if env := os.Getenv(kbotctx.EnvVar); env != "" && env != alias {
 				fmt.Fprintf(os.Stderr, "Note: %s=%s is set and will still override this for the current shell\n", kbotctx.EnvVar, env)
+			}
+			return nil
+		},
+	}
+}
+
+func newCtxSetParentCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set-parent <alias> <parent>",
+		Short: "Layer a context on top of a parent (use \"\" or \"none\" to clear)",
+		Long: `Set the parent context that <alias> is layered on top of.
+
+When a context has a parent, its VFS resolves through the parent chain
+(base game -> expansion -> mod), with the child overriding its parents.
+Pass "" or "none" as <parent> to clear the relationship.
+
+The chain must be acyclic and game-compatible (e.g. a totala context
+cannot be layered under a takingdoms one; "custom" is compatible with
+either).`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			alias, parent := args[0], args[1]
+			if parent == "none" {
+				parent = ""
+			}
+			cfg, err := kbotctx.Load()
+			if err != nil {
+				return err
+			}
+			if err := cfg.SetParent(alias, parent); err != nil {
+				return err
+			}
+			if err := cfg.Save(); err != nil {
+				return err
+			}
+			if parent == "" {
+				fmt.Fprintf(os.Stderr, "Cleared parent of context %q\n", alias)
+			} else {
+				fmt.Fprintf(os.Stderr, "Set parent of %q to %q\n", alias, parent)
 			}
 			return nil
 		},

@@ -159,16 +159,11 @@ func (q *AssetQueue) workerLoop() {
 // Initialised lazily on first use so tests that don't need the queue
 // don't pay for the workers.
 
-var (
-	assetQueueOnce sync.Once
-	assetQueue     *AssetQueue
-)
-
-func getAssetQueue() *AssetQueue {
-	assetQueueOnce.Do(func() {
-		assetQueue = newAssetQueue(assetQueueWorkers())
+func (sess *Session) getAssetQueue() *AssetQueue {
+	sess.assetQueueOnce.Do(func() {
+		sess.assetQueue = newAssetQueue(assetQueueWorkers())
 	})
-	return assetQueue
+	return sess.assetQueue
 }
 
 // assetQueueWorkers picks the worker pool size.  The asset pipeline is

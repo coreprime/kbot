@@ -45,6 +45,14 @@ function _statusBarFor(tab) {
       status: tab._status != null ? tab._status : FILES_STATUS,
     }
   }
+  if (typeId === 'welcome') {
+    return {
+      title: 'Welcome',
+      meta: '',
+      hints: '',
+      status: tab._status != null ? tab._status : '',
+    }
+  }
   // Map tab (or unknown legacy record).
   const m = tab.spec?.map || tab.map
   const parts = [

@@ -3,11 +3,65 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script>
+  // Workspace API shim: when this page is served under /workspaces/<id>/, scope
+  // all absolute /api/ and /host/ requests (fetch, WebSocket, EventSource) to
+  // that prefix so the editor's hardcoded paths reach the right session.
+  (function () {
+    var m = location.pathname.match(/^\/workspaces\/([^\/]+)\//);
+    if (!m) return;
+    var base = '/workspaces/' + m[1];
+    window.__WS_BASE__ = base;
+    function pfx(u) { return (u.charAt(0) === '/' && (u.indexOf('/api/') === 0 || u.indexOf('/host/') === 0)); }
+    var of = window.fetch;
+    window.fetch = function (input, init) {
+      try {
+        if (typeof input === 'string' && pfx(input)) input = base + input;
+        else if (input && input.url && pfx(input.url)) input = new Request(base + input.url, input);
+      } catch (e) {}
+      return of.call(this, input, init);
+    };
+    function wsURL(u) {
+      try {
+        if (typeof u !== 'string') return u;
+        if (u.indexOf('://') !== -1) {
+          var url = new URL(u);
+          if (url.pathname.indexOf('/api/') === 0 || url.pathname.indexOf('/host/') === 0) { url.pathname = base + url.pathname; return url.toString(); }
+          return u;
+        }
+        if (pfx(u)) return base + u;
+      } catch (e) {}
+      return u;
+    }
+    var OWS = window.WebSocket;
+    function WS(url, protocols) { url = wsURL(url); return protocols === undefined ? new OWS(url) : new OWS(url, protocols); }
+    WS.prototype = OWS.prototype; WS.CONNECTING = OWS.CONNECTING; WS.OPEN = OWS.OPEN; WS.CLOSING = OWS.CLOSING; WS.CLOSED = OWS.CLOSED;
+    window.WebSocket = WS;
+    if (window.EventSource) {
+      var OES = window.EventSource;
+      function ES(url, cfg) { return new OES(pfx(url) ? base + url : url, cfg); }
+      ES.prototype = OES.prototype; window.EventSource = ES;
+    }
+    function patchSrc(proto) {
+      if (!proto) return;
+      var d = Object.getOwnPropertyDescriptor(proto, 'src');
+      if (!d || !d.set || !d.get) return;
+      Object.defineProperty(proto, 'src', {
+        configurable: true, enumerable: d.enumerable,
+        get: function () { return d.get.call(this); },
+        set: function (v) { d.set.call(this, (typeof v === 'string' && pfx(v)) ? base + v : v); },
+      });
+    }
+    patchSrc(window.HTMLImageElement && HTMLImageElement.prototype);
+    patchSrc(window.HTMLMediaElement && HTMLMediaElement.prototype);
+    patchSrc(window.HTMLSourceElement && HTMLSourceElement.prototype);
+  })();
+  </script>
   <title>KBot Studio</title>
   <link rel="stylesheet" href="/studio.css" />
 </head>
 <body>
-  <div id="welcome-dialog" class="dialog">
+  <div id="welcome-dialog" class="dialog hidden">
     <!-- Glamour slideshow layer.  Two <img> elements cross-fade every
          15s; JS preloads the next image before swapping, populated
          only when the VFS has bitmaps/glamour/ content.  Sits behind

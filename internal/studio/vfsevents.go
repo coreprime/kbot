@@ -73,17 +73,16 @@ func (h *vfsEventHub) publish(evt vfsWarmEvent) {
 
 // vfsEvents is the package-level hub. It is created at boot in runStudio; the
 // websocket handler and the warmer both reference it.
-var vfsEvents = newVFSEventHub()
 
 // registerVFSEvents mounts the warm-progress websocket endpoint.
-func registerVFSEvents(mux *http.ServeMux) {
-	mux.HandleFunc("/api/vfs/events", handleVFSEvents)
+func (sess *Session) registerVFSEvents(mux *http.ServeMux) {
+	mux.HandleFunc("/api/vfs/events", sess.handleVFSEvents)
 }
 
 // handleVFSEvents upgrades the request to a websocket and streams warm-progress
 // events until the client disconnects. It mirrors the game host's heartbeat
 // pattern so a vanished tab is detected and its subscription freed.
-func handleVFSEvents(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleVFSEvents(w http.ResponseWriter, r *http.Request) {
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
 		return
@@ -92,8 +91,8 @@ func handleVFSEvents(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	defer func() { _ = ws.Close(websocket.StatusNormalClosure, "") }()
 
-	ch, last, hasLast := vfsEvents.subscribe()
-	defer vfsEvents.unsubscribe(ch)
+	ch, last, hasLast := sess.vfsEvents.subscribe()
+	defer sess.vfsEvents.unsubscribe(ch)
 
 	go vfsEventsHeartbeat(ctx, cancel, ws)
 

@@ -26,8 +26,8 @@ const defaultHeight = 80
 // Split out from buildHPI so non-HPI save paths (loose .tnt + .ota,
 // overwriting a source HPI, etc.) can reuse the same pipeline without
 // going through the temp-file dance below.
-func buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
-	m, features, err := buildMap(req)
+func (sess *Session) buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
+	m, features, err := sess.buildMap(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -40,8 +40,8 @@ func buildArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
 
 // buildHPI takes a save request, materialises a TNT + OTA pair, and bundles
 // them into an HPI archive ready for download.
-func buildHPI(req saveRequest) ([]byte, error) {
-	tntBytes, otaBytes, err := buildArtifacts(req)
+func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
+	tntBytes, otaBytes, err := sess.buildArtifacts(req)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func buildHPI(req saveRequest) ([]byte, error) {
 // we resolve those references here, accumulating the unique 32×32 tile
 // graphics into the map's shared tile pool and stamping the tile index into
 // the map's TileMap.
-func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
+func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 	tileW, tileH := req.TileW, req.TileH
 	attrW, attrH := tileW*2, tileH*2
 
@@ -91,7 +91,7 @@ func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 		if s, ok := sectionCache[p]; ok {
 			return s, nil
 		}
-		data, err := vfs.ReadFile(p)
+		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			return nil, fmt.Errorf("section %q: %w", p, err)
 		}
@@ -161,11 +161,11 @@ func buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) {
 			// Stamps loaded from an existing TNT have a synthetic
 			// "tnt:<path>" section path — the (SX, SY) refer to a
 			// position in that TNT's flattened tile pool (see
-			// handleMapLoad).  We pull pixels straight from the cached
+			// sess.handleMapLoad).  We pull pixels straight from the cached
 			// *tnt.Map; no SCT lookup, no height-rotation table.
 			if strings.HasPrefix(stamp.SectionPath, "tnt:") {
 				mapPath := strings.TrimPrefix(stamp.SectionPath, "tnt:")
-				srcMap := lookupTNT(mapPath)
+				srcMap := sess.lookupTNT(mapPath)
 				if srcMap == nil {
 					return nil, nil, fmt.Errorf("tnt source %q not in cache; reload the map", mapPath)
 				}
@@ -599,4 +599,3 @@ func flipTile32(src []byte, flipH, flipV bool) []byte {
 	}
 	return out
 }
-

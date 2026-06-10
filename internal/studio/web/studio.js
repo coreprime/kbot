@@ -83,6 +83,8 @@ import { registerMapTabType } from './ui/map-editor/register-tab.js'
 import { registerUnitEditorTabType } from './ui/unit-editor/register-tab.js'
 import { registerSandboxTabType } from './ui/sandbox/register-tab.js'
 import { registerFilesTabType } from './ui/files-browser/register-tab.js'
+import { registerWelcomeTabType } from './ui/screens/welcome/register-tab.js'
+import { openWelcomeTab } from './ui/screens/welcome/tab.js'
 import {
   openTab,
   switchToTab,
@@ -382,6 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
   registerUnitEditorTabType()
   registerSandboxTabType()
   registerFilesTabType()
+  registerWelcomeTabType()
   // Cross-module helpers — keyboard shortcuts in mv-controls call
   // these via window.* to avoid an ES-module circular import.
   _wireRuntimeHelpersToWindow()
@@ -446,5 +449,5 @@ document.addEventListener('DOMContentLoaded', () => {
   // into the named map.  Match is case-insensitive against either the
   // file name or the OTA mission name so URL-friendly slugs like
   // "Metal%20Heck" line up with however the catalogue indexes them.
-  maybeAutoOpenFromQuery()
+  maybeAutoOpenFromQuery().then((opened) => { if (!opened) openWelcomeTab() })
 })

@@ -25,12 +25,12 @@ import (
 // `kbot tnt image` and the MCP `tnt_image` tool.  Output can be very
 // large for big maps (a 256×256 tile map is 8192×8192 px); the client
 // warns the user before hitting this.
-func handleExportMapImage(w http.ResponseWriter, r *http.Request) {
-	m, _, _, ok := buildMapFromExportRequestWithFeatures(w, r)
+func (sess *Session) handleExportMapImage(w http.ResponseWriter, r *http.Request) {
+	m, _, _, ok := sess.buildMapFromExportRequestWithFeatures(w, r)
 	if !ok {
 		return
 	}
-	writePNGResponse(w, m.RenderTileMap(loadVFSPalette()))
+	writePNGResponse(w, m.RenderTileMap(sess.loadVFSPalette()))
 }
 
 // handleExportFullRender renders the full preview — tile grid +
@@ -38,13 +38,13 @@ func handleExportMapImage(w http.ResponseWriter, r *http.Request) {
 // editor's active schema.  Equivalent to the CLI's `kbot tnt preview
 // --schema <ActiveSchema>` and the MCP `tnt_preview` tool, with the
 // generated OTA from buildOTA standing in for a sister .ota file.
-func handleExportFullRender(w http.ResponseWriter, r *http.Request) {
-	m, features, req, ok := buildMapFromExportRequestWithFeatures(w, r)
+func (sess *Session) handleExportFullRender(w http.ResponseWriter, r *http.Request) {
+	m, features, req, ok := sess.buildMapFromExportRequestWithFeatures(w, r)
 	if !ok {
 		return
 	}
-	base := m.RenderTileMap(loadVFSPalette())
-	if vfs == nil {
+	base := m.RenderTileMap(sess.loadVFSPalette())
+	if sess.vfs == nil {
 		// No VFS bound — degrade to the bare tile render rather than
 		// 500ing.  The user still gets a useful image; sprites and
 		// markers just won't be drawn.
@@ -58,7 +58,7 @@ func handleExportFullRender(w http.ResponseWriter, r *http.Request) {
 	}
 	otaText := buildOTA(req)
 	if _, err := tntpreview.ComposeWith(
-		base, m, features, vfs, spritePal,
+		base, m, features, sess.vfs, spritePal,
 		req.MapName, otaText,
 		tntpreview.Options{SchemaIndex: req.ActiveSchema},
 	); err != nil {
@@ -70,8 +70,8 @@ func handleExportFullRender(w http.ResponseWriter, r *http.Request) {
 
 // handleExportBuildmap renders the per-cell buildability classification.
 // See [tnt.Map.RenderBuildMap] for the colour key.
-func handleExportBuildmap(w http.ResponseWriter, r *http.Request) {
-	m, _, _, ok := buildMapFromExportRequestWithFeatures(w, r)
+func (sess *Session) handleExportBuildmap(w http.ResponseWriter, r *http.Request) {
+	m, _, _, ok := sess.buildMapFromExportRequestWithFeatures(w, r)
 	if !ok {
 		return
 	}
@@ -84,8 +84,8 @@ func handleExportBuildmap(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleExportVoidmap renders the engine-void mask (0xFFFC cells only).
-func handleExportVoidmap(w http.ResponseWriter, r *http.Request) {
-	m, _, _, ok := buildMapFromExportRequestWithFeatures(w, r)
+func (sess *Session) handleExportVoidmap(w http.ResponseWriter, r *http.Request) {
+	m, _, _, ok := sess.buildMapFromExportRequestWithFeatures(w, r)
 	if !ok {
 		return
 	}
@@ -103,7 +103,7 @@ func handleExportVoidmap(w http.ResponseWriter, r *http.Request) {
 // component is the parsed body so callers that need fields beyond the
 // tnt.Map (the active schema index, the OTA, the map name, etc.) don't
 // have to decode the JSON twice.
-func buildMapFromExportRequestWithFeatures(w http.ResponseWriter, r *http.Request) (*tnt.Map, []tnt.Feature, saveRequest, bool) {
+func (sess *Session) buildMapFromExportRequestWithFeatures(w http.ResponseWriter, r *http.Request) (*tnt.Map, []tnt.Feature, saveRequest, bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return nil, nil, saveRequest{}, false
@@ -121,7 +121,7 @@ func buildMapFromExportRequestWithFeatures(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "tileW and tileH must be positive", http.StatusBadRequest)
 		return nil, nil, saveRequest{}, false
 	}
-	m, features, err := buildMap(req)
+	m, features, err := sess.buildMap(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return nil, nil, saveRequest{}, false

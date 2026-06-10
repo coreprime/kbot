@@ -30,13 +30,13 @@ import (
 // characters that are reasonable in a filename, no slashes or leading
 // dots.
 
-func handleMusicList(w http.ResponseWriter, _ *http.Request) {
-	if vfs == nil {
+func (sess *Session) handleMusicList(w http.ResponseWriter, _ *http.Request) {
+	if sess.vfs == nil {
 		http.Error(w, "no vfs mounted", http.StatusNotFound)
 		return
 	}
 	out := make([]string, 0, 32)
-	for _, p := range vfs.List() {
+	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "music/") {
 			continue
@@ -81,7 +81,7 @@ func musicNumericPrefix(name string) (int, bool) {
 	return n, true
 }
 
-func handleMusicStream(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleMusicStream(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/music/")
 	name, err := url.PathUnescape(raw)
 	if err != nil || strings.TrimSpace(name) == "" {
@@ -93,7 +93,7 @@ func handleMusicStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad name", http.StatusBadRequest)
 		return
 	}
-	if vfs == nil {
+	if sess.vfs == nil {
 		http.Error(w, "no vfs mounted", http.StatusNotFound)
 		return
 	}
@@ -106,20 +106,20 @@ func handleMusicStream(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	for _, p := range candidates {
-		if b, err := vfs.ReadFile(p); err == nil {
+		if b, err := sess.vfs.ReadFile(p); err == nil {
 			data = b
 			break
 		}
 	}
 	if data == nil {
 		want := strings.ToLower(name)
-		for _, p := range vfs.List() {
+		for _, p := range sess.vfs.List() {
 			lower := strings.ToLower(p)
 			if !strings.HasPrefix(lower, "music/") {
 				continue
 			}
 			if strings.ToLower(path.Base(lower)) == want {
-				if b, err := vfs.ReadFile(p); err == nil {
+				if b, err := sess.vfs.ReadFile(p); err == nil {
 					data = b
 					break
 				}

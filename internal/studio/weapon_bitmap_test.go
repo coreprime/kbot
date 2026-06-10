@@ -28,35 +28,26 @@ func taPathForSmoke(t *testing.T) string {
 // the duration of the test, restoring the prior value on cleanup.  All
 // the studio handlers read through the same global, so this is the
 // switch that puts them in "live" mode.
-func mountVFSForTest(t *testing.T) {
+func mountVFSForTest(t *testing.T) *Session {
 	t.Helper()
 	taPath := taPathForSmoke(t)
 	v, err := filesystem.NewVirtualFileSystem(taPath, &filesystem.Config{})
 	if err != nil {
 		t.Fatalf("mount VFS at %s: %v", taPath, err)
 	}
-	prev := vfs
-	vfs = v
-	t.Cleanup(func() {
-		_ = v.Close()
-		vfs = prev
-		// Drop the bitmap cache too so a subsequent test that mounts a
-		// different VFS doesn't serve the previous mount's bytes.
-		weaponBitmapMu.Lock()
-		weaponBitmapCache = map[string][]byte{}
-		weaponBitmapMu.Unlock()
-	})
+	t.Cleanup(func() { _ = v.Close() })
+	return newSession("test", "test", v, t.TempDir())
 }
 
 // TestHandleWeaponBitmapEMG drives the handler end-to-end for the EMG
 // (color=2 → PlasmaMd) and a no-bitmap weapon (ARMCOMLASER, rendertype=0
 // laser), confirming the routing + per-weapon resolution works.
 func TestHandleWeaponBitmapEMG(t *testing.T) {
-	mountVFSForTest(t)
+	sess := mountVFSForTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/studio/weapon-bitmap/EMG", nil)
 	rr := httptest.NewRecorder()
-	handleWeaponBitmap(rr, req)
+	sess.handleWeaponBitmap(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("EMG: want 200, got %d (body=%q)", rr.Code, rr.Body.String())
 	}
@@ -82,10 +73,10 @@ func TestHandleWeaponBitmapEMG(t *testing.T) {
 // is rejected by the endpoint — the client falls back to the synthetic
 // particle path when it sees the 404.
 func TestHandleWeaponBitmapNonBitmap(t *testing.T) {
-	mountVFSForTest(t)
+	sess := mountVFSForTest(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/studio/weapon-bitmap/ARMCOMLASER", nil)
 	rr := httptest.NewRecorder()
-	handleWeaponBitmap(rr, req)
+	sess.handleWeaponBitmap(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("ARMCOMLASER: want 404, got %d", rr.Code)
 	}
@@ -94,10 +85,10 @@ func TestHandleWeaponBitmapNonBitmap(t *testing.T) {
 // TestHandleWeaponBitmapVTOLEMG covers the second stock-shipped slot
 // (color=1 → PlasmaSm) via VTOL_EMG (Hawk's air-to-ground tracer).
 func TestHandleWeaponBitmapVTOLEMG(t *testing.T) {
-	mountVFSForTest(t)
+	sess := mountVFSForTest(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/studio/weapon-bitmap/VTOL_EMG", nil)
 	rr := httptest.NewRecorder()
-	handleWeaponBitmap(rr, req)
+	sess.handleWeaponBitmap(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("VTOL_EMG: want 200, got %d (body=%q)", rr.Code, rr.Body.String())
 	}

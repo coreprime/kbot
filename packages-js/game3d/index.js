@@ -16,3 +16,4 @@ export { ModelLoader } from './model-loader.js'
 export { OrbitCamera } from './orbit-camera.js'
 export { ModelRenderer } from './model-renderer.js'
 export { ModelViewer } from './model-viewer.js'
+x`x`

@@ -25,8 +25,8 @@ type qualityIssue struct {
 // runQualityChecks builds a maplint.Input from the studio's
 // saveRequest, runs the shared rule set, and then decorates the
 // dialog-bound results with auto-fix metadata.
-func runQualityChecks(m *tnt.Map, req saveRequest, applied []string) []qualityIssue {
-	in := buildMaplintInput(m, req, applied)
+func (sess *Session) runQualityChecks(m *tnt.Map, req saveRequest, applied []string) []qualityIssue {
+	in := sess.buildMaplintInput(m, req, applied)
 	diags := maplint.Run(in)
 	out := make([]qualityIssue, 0, len(diags))
 	for _, d := range diags {
@@ -37,7 +37,7 @@ func runQualityChecks(m *tnt.Map, req saveRequest, applied []string) []qualityIs
 
 // buildMaplintInput converts the studio's saveRequest + parsed tnt.Map
 // into the neutral structs maplint operates on.
-func buildMaplintInput(m *tnt.Map, req saveRequest, applied []string) maplint.Input {
+func (sess *Session) buildMaplintInput(m *tnt.Map, req saveRequest, applied []string) maplint.Input {
 	in := maplint.Input{Map: m, AppliedFixes: append([]string(nil), applied...)}
 
 	if req.OTA != nil {
@@ -76,7 +76,7 @@ func buildMaplintInput(m *tnt.Map, req saveRequest, applied []string) maplint.In
 	// Feature → metal registry from the VFS feature catalog.  Only
 	// names that actually have a non-zero `metal=` are interesting to
 	// the metal-proximity check.
-	_, byName := scanFeatures()
+	_, byName := sess.scanFeatures()
 	if len(byName) > 0 {
 		reg := make(map[string]int, len(byName))
 		for k, v := range byName {
@@ -112,7 +112,7 @@ func wrapDiagnostic(d maplint.Diagnostic) qualityIssue {
 
 // handleQualityCheck runs every quality check against a build of the
 // supplied saveRequest and returns the result list.
-func handleQualityCheck(w http.ResponseWriter, r *http.Request) {
+func (sess *Session) handleQualityCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
@@ -130,12 +130,12 @@ func handleQualityCheck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tileW and tileH must be positive", http.StatusBadRequest)
 		return
 	}
-	m, _, err := buildMap(req)
+	m, _, err := sess.buildMap(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-	issues := runQualityChecks(m, req, req.Fixes)
+	issues := sess.runQualityChecks(m, req, req.Fixes)
 	allOK := true
 	for _, i := range issues {
 		if i.Severity != "ok" {

@@ -16,7 +16,7 @@
 import { signal } from '@preact/signals'
 import { htm as html } from './htm-bind.js'
 import {
-  Dropdown, RibbonDropdownButton, MenuRow,
+  Dropdown, RibbonDropdownButton, MenuRow, MenuSectionLabel,
 } from './ribbon.js'
 
 // _state — singleton signal carrying { tabs, activeIndex }.  The
@@ -28,10 +28,13 @@ const _state = signal({ tabs: [], activeIndex: -1 })
 const _bridge = {
   onSwitch:    (_i) => {},
   onClose:     (_i) => {},
+  onWelcome:   () => {},
   onNewMap:    () => {},
   onOpenMap:   () => {},
   onOpenUnit:  () => {},
-  onSandbox:   () => {},
+  onSandboxLocal: () => {},
+  onSandboxHost:  () => {},
+  onSandboxJoin:  () => {},
   onBrowseFiles: () => {},
 }
 
@@ -39,10 +42,13 @@ export function configureTabBarBridge(impl) {
   Object.assign(_bridge, {
     onSwitch:    (_i) => {},
     onClose:     (_i) => {},
+    onWelcome:   () => {},
     onNewMap:    () => {},
     onOpenMap:   () => {},
     onOpenUnit:  () => {},
-    onSandbox:   () => {},
+    onSandboxLocal: () => {},
+    onSandboxHost:  () => {},
+    onSandboxJoin:  () => {},
     onBrowseFiles: () => {},
   }, impl)
 }
@@ -71,6 +77,7 @@ function _tabLabel(tab) {
   if (t === 'unit-editor') return tab.meta?.unitTitle || tab.displayName || tab.name || '(unit)'
   if (t === 'sandbox')     return tab.displayName || tab.name || 'Sandbox'
   if (t === 'files')       return tab.displayName || tab.name || 'Files'
+  if (t === 'welcome')     return tab.displayName || tab.name || 'Welcome'
   // Map tab (or unknown) — fall back to the legacy map-name path.
   return _mapDisplayName(tab.map)
 }
@@ -84,6 +91,7 @@ function _tabTitle(tab) {
   }
   if (t === 'sandbox') return _tabLabel(tab)
   if (t === 'files') return 'Browse VFS files'
+  if (t === 'welcome') return _tabLabel(tab)
   const m = tab.map
   const dirty = !!m?.dirty
   const display = _mapDisplayName(m)
@@ -141,6 +149,12 @@ export function InterfaceTabStrip() {
           title="Open something new — map, unit, or sandbox." />
         <${Dropdown} id="map-tab-add-dropdown" anchorId="map-tab-add" className="map-tab-add-popup">
           <${MenuRow}
+            icon="🏠"
+            label="Welcome"
+            dropdownId="map-tab-add-dropdown"
+            onClick=${() => _bridge.onWelcome()} />
+          <${MenuSectionLabel}>Mapping<//>
+          <${MenuRow}
             icon="✨"
             label="New map"
             dropdownId="map-tab-add-dropdown"
@@ -150,16 +164,29 @@ export function InterfaceTabStrip() {
             label="Open map"
             dropdownId="map-tab-add-dropdown"
             onClick=${() => _bridge.onOpenMap()} />
+          <${MenuSectionLabel}>Units<//>
           <${MenuRow}
             icon="🛠"
             label="Open Unit"
             dropdownId="map-tab-add-dropdown"
             onClick=${() => _bridge.onOpenUnit()} />
+          <${MenuSectionLabel}>Sandbox<//>
           <${MenuRow}
             icon="🪖"
-            label="Sandbox Mode"
+            label="Local"
             dropdownId="map-tab-add-dropdown"
-            onClick=${() => _bridge.onSandbox()} />
+            onClick=${() => _bridge.onSandboxLocal()} />
+          <${MenuRow}
+            icon="🌐"
+            label="Host New"
+            dropdownId="map-tab-add-dropdown"
+            onClick=${() => _bridge.onSandboxHost()} />
+          <${MenuRow}
+            icon="🔗"
+            label="Join Hosted"
+            dropdownId="map-tab-add-dropdown"
+            onClick=${() => _bridge.onSandboxJoin()} />
+          <${MenuSectionLabel}>Browse<//>
           <${MenuRow}
             icon="🗂"
             label="Browse Files"

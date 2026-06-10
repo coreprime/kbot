@@ -221,12 +221,10 @@ export async function closeTab(idx) {
 }
 
 export function showWelcomeAfterLastTabClose() {
-  // Hide the editor surface and bring back the welcome modal.
-  $('#app')?.classList.add('hidden')
-  const wel = $('#welcome-dialog')
-  if (wel) wel.classList.remove('hidden')
+  // The welcome screen is itself an MDI tab now — tear down the editor
+  // view and open a fresh Welcome tab so the user always lands on it.
   destroyEditorView()
-  renderMapTabs()
+  openTab('welcome', {})
 }
 
 // switchToTab routes focus through the tab registry.  The dispatcher
