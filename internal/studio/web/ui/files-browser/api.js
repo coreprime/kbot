@@ -69,6 +69,16 @@ export function layering(path) {
   return fetchJSON(`${BASE}${enc(path)}?layering`)
 }
 
+// deleteFile removes a file's workspace-local copy. The server refuses
+// paths without one (base-game content is read-only); an override reverts
+// to the base version — the response's `reverted` flag says which happened.
+export async function deleteFile(path) {
+  const r = await fetch(`${BASE}${enc(path)}`, { method: 'DELETE' })
+  const body = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(body.error || `delete failed (${r.status})`)
+  return body
+}
+
 // ── byte / representation URLs ──────────────────────────────────────
 
 // rawURL serves the file's bytes verbatim — used for natively

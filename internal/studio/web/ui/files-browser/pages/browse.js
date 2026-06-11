@@ -10,8 +10,9 @@
 
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useMemo, useState } from 'preact/hooks'
+import { confirmDialog } from '@kbot/ui/confirm-dialog'
 import {
-  browse, formatSize, extOf, baseName, rawURL,
+  browse, deleteFile, formatSize, extOf, baseName, rawURL,
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
 } from '../api.js'
 import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
@@ -51,7 +52,7 @@ function SortHeader({ label, field, sortKey, sortDir, onSort }) {
   return html`<th class="fx-th-sort" onClick=${() => onSort(field)}>${label}${arrow}</th>`
 }
 
-function FileRow({ entry, onOpenFile }) {
+function FileRow({ entry, onOpenFile, onDelete }) {
   const [hover, setHover] = useState(false)
   const ext = extOf(entry.name)
   const thumb = PREVIEW_EXTS.has(ext) ? thumbFor(entry.path, ext) : null
@@ -77,12 +78,18 @@ function FileRow({ entry, onOpenFile }) {
       <td class="fx-source-cell">${entry.source ? html`<span class="fx-layer-chip" title=${`Effective layer: ${entry.source}`}>${entry.source}</span>` : ''}</td>
       <td class="fx-actions-cell">
         <a class="fx-row-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download" onClick=${(e) => e.stopPropagation()}>⬇</a>
+        ${entry.deletable ? html`
+          <button type="button" class="fx-row-action fx-row-action-danger"
+                  title=${entry.revertsToBase
+                    ? 'Delete the workspace copy — the base version underneath shows through again'
+                    : 'Delete this workspace file'}
+                  onClick=${(e) => { e.stopPropagation(); onDelete(entry) }}>🗑</button>` : null}
       </td>
     </tr>
   `
 }
 
-function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFile }) {
+function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFile, onDelete }) {
   return html`
     <div class="fx-card">
       <table class="fx-dir-table">
@@ -110,7 +117,7 @@ function TableView({ dirs, files, sortKey, sortDir, onSort, onOpenDir, onOpenFil
               <td class="fx-actions-cell"></td>
             </tr>
           `)}
-          ${files.map((e) => html`<${FileRow} key=${e.path} entry=${e} onOpenFile=${onOpenFile} />`)}
+          ${files.map((e) => html`<${FileRow} key=${e.path} entry=${e} onOpenFile=${onOpenFile} onDelete=${onDelete} />`)}
           ${dirs.length === 0 && files.length === 0
             ? html`<tr><td colspan="5"><div class="fx-empty">📭 Empty directory</div></td></tr>`
             : null}
@@ -182,7 +189,30 @@ export function BrowsePage({ dir, onOpenDir, onOpenFile }) {
   const setMode = useCallback((m) => { saveMode(m); setModeState(m) }, [])
   const [sortKey, setSortKey] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
-  const { data, loading, error } = useAsync(() => browse(dir), [dir])
+  // version bumps re-run the listing fetch — the refresh after a delete.
+  const [version, setVersion] = useState(0)
+  const { data, loading, error } = useAsync(() => browse(dir), [dir, version])
+
+  // confirmDelete routes every row's 🗑 through the styled confirm dialog.
+  // The message distinguishes an override (the base version shows through
+  // again) from a net-new workspace file (gone for good).
+  const confirmDelete = useCallback(async (entry) => {
+    const ok = await confirmDialog({
+      title: 'Delete file',
+      message: entry.revertsToBase
+        ? `Delete the workspace copy of "${entry.path}"? The base version underneath will show through again.`
+        : `Delete "${entry.path}"? This permanently removes the workspace file.`,
+      okLabel: 'Delete',
+      okDanger: true,
+    })
+    if (!ok) return
+    try {
+      await deleteFile(entry.path)
+      setVersion((v) => v + 1)
+    } catch (e) {
+      await confirmDialog({ title: 'Delete failed', message: String(e?.message || e), okLabel: 'OK' })
+    }
+  }, [])
 
   const onSort = useCallback((key) => {
     setSortKey((prev) => {
@@ -225,7 +255,7 @@ export function BrowsePage({ dir, onOpenDir, onOpenFile }) {
       </div>
       ${mode === 'list'
         ? html`<${TableView} dirs=${dirs} files=${files} sortKey=${sortKey} sortDir=${sortDir}
-                            onSort=${onSort} onOpenDir=${onOpenDir} onOpenFile=${onOpenFile} />`
+                            onSort=${onSort} onOpenDir=${onOpenDir} onOpenFile=${onOpenFile} onDelete=${confirmDelete} />`
         : html`<${IconView} dirs=${dirs} files=${files} onOpenDir=${onOpenDir} onOpenFile=${onOpenFile} />`}
     </div>
   `

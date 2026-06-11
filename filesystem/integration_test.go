@@ -11,7 +11,7 @@ import (
 // TestVFSIntegrationWithTA tests the VFS with real Total Annihilation files
 func TestVFSIntegrationWithTA(t *testing.T) {
 	taPath := "../../content/base_game/Total Annihilation"
-	
+
 	if _, err := os.Stat(taPath); os.IsNotExist(err) {
 		t.Skip("Skipping integration test - TA files not found at:", taPath)
 	}

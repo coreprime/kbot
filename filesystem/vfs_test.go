@@ -144,7 +144,7 @@ func TestVFSListDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDir(''): %v", err)
 	}
-	
+
 	if len(rootFiles) != 1 || rootFiles[0] != "units" {
 		t.Errorf("Root listing: expected [units], got %v", rootFiles)
 	}
@@ -354,7 +354,7 @@ func TestVFSStats(t *testing.T) {
 func TestVFSWithRealFiles(t *testing.T) {
 	// This is optional - only runs if TA files are present
 	taPath := "../../../content/base_game/Total Annihilation"
-	
+
 	if _, err := os.Stat(taPath); os.IsNotExist(err) {
 		t.Skip("Skipping real file test - TA files not found")
 	}

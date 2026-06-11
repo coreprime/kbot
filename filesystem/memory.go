@@ -63,5 +63,3 @@ func (mfs *MemoryFileSystem) List() []string {
 func (mfs *MemoryFileSystem) Close() error {
 	return nil
 }
-
-

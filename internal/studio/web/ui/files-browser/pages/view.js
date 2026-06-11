@@ -10,7 +10,8 @@
 
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
-import { metadata, rawURL, renderURL, extOf } from '../api.js'
+import { metadata, rawURL, renderURL, extOf, deleteFile, parentDir } from '../api.js'
+import { confirmDialog } from '@kbot/ui/confirm-dialog'
 import { useRawText } from '../components/async.js'
 import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
 import { HexView } from '@kbot/ui/hex-view'
@@ -173,7 +174,7 @@ function DownloadMenu({ name, origHref, extras }) {
   `
 }
 
-export function ViewPage({ path, source: initialSource, onOpenFile }) {
+export function ViewPage({ path, source: initialSource, onOpenFile, onOpenDir }) {
   const [activeSource, setActiveSource] = useState(initialSource || '')
   const [tab, setTab] = useState(null)
   const [highlightLine, setHighlightLine] = useState(null)
@@ -254,8 +255,32 @@ export function ViewPage({ path, source: initialSource, onOpenFile }) {
           ${describe.format ? html`<span class="fx-format-badge">${describe.format}</span>` : null}
           ${src ? html`<span class="fx-source-badge">📚 ${src}</span>` : null}
         </div>
-        <${DownloadMenu} name=${meta.name} origHref=${rawURL(path, src)}
-                         extras=${extraFormats(kind, path, meta.name, src)} />
+        <div class="fx-view-actions">
+          <${DownloadMenu} name=${meta.name} origHref=${rawURL(path, src)}
+                           extras=${extraFormats(kind, path, meta.name, src)} />
+          ${meta.deletable ? html`
+            <button type="button" class="fx-dl-btn fx-del-btn"
+                    title=${meta.revertsToBase
+                      ? 'Delete the workspace copy — the base version underneath shows through again'
+                      : 'Delete this workspace file'}
+                    onClick=${async () => {
+                      const ok = await confirmDialog({
+                        title: 'Delete file',
+                        message: meta.revertsToBase
+                          ? `Delete the workspace copy of "${path}"? The base version underneath will show through again.`
+                          : `Delete "${path}"? This permanently removes the workspace file.`,
+                        okLabel: 'Delete',
+                        okDanger: true,
+                      })
+                      if (!ok) return
+                      try {
+                        await deleteFile(path)
+                        onOpenDir?.(parentDir(path))
+                      } catch (e) {
+                        await confirmDialog({ title: 'Delete failed', message: String(e?.message || e), okLabel: 'OK' })
+                      }
+                    }}>🗑 Delete</button>` : null}
+        </div>
       </div>
       <div class="fx-tabs">
         ${tabs.map((t) => html`

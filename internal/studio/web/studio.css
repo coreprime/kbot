@@ -7126,3 +7126,20 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   height: 240px;
   object-fit: contain;
 }
+
+/* ── Files browser: delete actions ─────────────────────────────────── */
+.fx-view-actions { display: flex; align-items: center; gap: 8px; }
+.fx-del-btn {
+  background: none;
+  border: 1px solid var(--danger, #b3403a);
+  color: var(--danger, #d9534f);
+  cursor: pointer;
+}
+.fx-del-btn:hover { background: rgba(217, 83, 79, 0.12); }
+.fx-row-action-danger {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.fx-row-action-danger:hover { opacity: 1; filter: drop-shadow(0 0 3px rgba(217, 83, 79, 0.7)); }

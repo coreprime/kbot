@@ -54,7 +54,7 @@ func (pfs *PhysicalFileSystem) Exists(path string) bool {
 // List returns all file paths (recursively walks the directory)
 func (pfs *PhysicalFileSystem) List() []string {
 	var files []string
-	
+
 	_ = filepath.Walk(pfs.basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip errors
@@ -62,17 +62,17 @@ func (pfs *PhysicalFileSystem) List() []string {
 		if info.IsDir() {
 			return nil
 		}
-		
+
 		// Get relative path
 		relPath, err := filepath.Rel(pfs.basePath, path)
 		if err != nil {
 			return nil
 		}
-		
+
 		files = append(files, relPath)
 		return nil
 	})
-	
+
 	return files
 }
 

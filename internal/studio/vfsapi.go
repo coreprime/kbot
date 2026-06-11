@@ -41,6 +41,11 @@ type vfsEntry struct {
 	DirFiles   int    `json:"dirFiles,omitempty"`
 	DirFolders int    `json:"dirFolders,omitempty"`
 	DirSize    int64  `json:"dirSize,omitempty"`
+	// Deletable marks files with a workspace-local copy — the only layer
+	// Remove may touch. RevertsToBase distinguishes an override (deleting
+	// uncovers the base version) from a net-new file (deleting erases it).
+	Deletable     bool `json:"deletable,omitempty"`
+	RevertsToBase bool `json:"revertsToBase,omitempty"`
 }
 
 // vfsCrumb is one breadcrumb segment in a listing response.
@@ -52,6 +57,11 @@ type vfsCrumb struct {
 func (sess *Session) handleVFS(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/api/vfs/")
 	q := r.URL.Query()
+
+	if r.Method == http.MethodDelete {
+		sess.handleVFSDelete(w, rel)
+		return
+	}
 
 	// Global, path-independent queries handled first.
 	if q.Has("q") || q.Has("search") {
@@ -83,6 +93,27 @@ func (sess *Session) handleVFS(w http.ResponseWriter, r *http.Request) {
 		}
 		sess.handleVFSRaw(w, r, rel, q.Get("source"))
 	}
+}
+
+// handleVFSDelete removes a file's workspace-local copy. Only the writable
+// overlay is ever touched: a net-new workspace file is erased, an override
+// reverts to the base version underneath, and a file served purely from
+// read-only base layers (game content, archives) is refused outright.
+func (sess *Session) handleVFSDelete(w http.ResponseWriter, vpath string) {
+	if vpath == "" || strings.HasSuffix(vpath, "/") {
+		jsonError(w, "file path required", http.StatusBadRequest)
+		return
+	}
+	hasLocal, layers := sess.vfs.LocalLayerInfo(vpath)
+	if !hasLocal {
+		jsonError(w, "not deletable: file has no workspace-local copy (base game content is read-only)", http.StatusForbidden)
+		return
+	}
+	if err := sess.vfs.Remove(vpath); err != nil {
+		jsonError(w, "delete failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "reverted": layers > 1})
 }
 
 // readVFS reads a file's bytes, optionally from a specific archive layer
@@ -255,6 +286,9 @@ func (sess *Session) handleVFSList(w http.ResponseWriter, dir string) {
 		} else if info, err := sess.vfs.Stat(full); err == nil {
 			e.Size = info.Size
 			e.Source = info.Source
+			hasLocal, layers := sess.vfs.LocalLayerInfo(full)
+			e.Deletable = hasLocal
+			e.RevertsToBase = hasLocal && layers > 1
 		}
 		entries = append(entries, e)
 	}
@@ -368,13 +402,16 @@ func (sess *Session) handleVFSMetadata(w http.ResponseWriter, vpath, source stri
 		shown = source
 	}
 
+	hasLocal, layers := sess.vfs.LocalLayerInfo(vpath)
 	writeJSON(w, map[string]any{
-		"path":     vpath,
-		"name":     path.Base(vpath),
-		"size":     len(data),
-		"source":   shown,
-		"layering": sess.vfs.GetFileLayers(vpath),
-		"describe": describe,
+		"path":          vpath,
+		"name":          path.Base(vpath),
+		"size":          len(data),
+		"source":        shown,
+		"layering":      sess.vfs.GetFileLayers(vpath),
+		"describe":      describe,
+		"deletable":     hasLocal,
+		"revertsToBase": hasLocal && layers > 1,
 	})
 }
 

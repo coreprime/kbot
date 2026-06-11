@@ -302,3 +302,23 @@ func (vfs *VirtualFileSystem) removeLayerBySourceLocked(normalized, source strin
 	}
 	vfs.fileLayers[normalized] = filtered
 }
+
+// LocalLayerInfo reports whether the path has a copy in the writable layer
+// (i.e. Remove would succeed) and how many layers carry it in total. A
+// deletable file with more than one layer is an OVERRIDE — removing it
+// reverts to the base version rather than erasing the path.
+func (vfs *VirtualFileSystem) LocalLayerInfo(path string) (hasLocal bool, layers int) {
+	if vfs.writeDir == "" {
+		return false, 0
+	}
+	normalized := vfs.normalizePath(path)
+	vfs.filesMu.RLock()
+	defer vfs.filesMu.RUnlock()
+	ls := vfs.fileLayers[normalized]
+	for _, l := range ls {
+		if l.Source == vfs.writableLabel {
+			hasLocal = true
+		}
+	}
+	return hasLocal, len(ls)
+}

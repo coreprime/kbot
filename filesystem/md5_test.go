@@ -13,8 +13,8 @@ func TestMD5Calculation(t *testing.T) {
 
 	// Create test files with known content
 	testFiles := map[string]string{
-		"file1.txt": "Hello, World!",
-		"file2.txt": "Testing MD5 calculation",
+		"file1.txt":      "Hello, World!",
+		"file2.txt":      "Testing MD5 calculation",
 		"dir1/file3.txt": "Nested file content",
 	}
 
@@ -114,7 +114,7 @@ func TestMD5NonBlockingStartup(t *testing.T) {
 
 	// VFS should be immediately usable, even if MD5 calculation is not complete
 	normalized := vfs.normalizePath("test.txt")
-	
+
 	// File should exist and be readable
 	if !vfs.Exists(normalized) {
 		t.Error("File should exist immediately after VFS creation")
