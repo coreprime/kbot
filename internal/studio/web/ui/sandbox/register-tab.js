@@ -173,8 +173,17 @@ class SandboxTabInstance {
       } catch { /* ignore */ }
     }
     disposeSandboxSplit(tab)
-    if (getActiveSandboxView() && (tab.panes ? !tab.panes.has(getActiveSandboxView()) : tab.viewer === getActiveSandboxView())) {
-      clearActiveSandboxView()
+    // Drop the module-level active-view reference when it pointed into THIS
+    // tab — otherwise the refresh tick, ribbon orders, and Runtime panel
+    // keep reading the disposed view (frozen counters, Select All routed to
+    // a dead scene). Note tab.panes maps paneId → view, so ownership is a
+    // values() scan, not .has().
+    const active = getActiveSandboxView()
+    if (active) {
+      const ownsActive = tab.panes
+        ? [...tab.panes.values()].includes(active)
+        : tab.viewer === active
+      if (ownsActive) clearActiveSandboxView()
     }
     tab.viewer = null
   }
