@@ -94,3 +94,37 @@ func TestMapTerrainGroupReadsKingdomAffinity(t *testing.T) {
 		t.Fatalf("MapTerrainGroup(abnar's terrace) = %q, want veruna", got)
 	}
 }
+
+func TestBuildOptionsFromCanbuildDir(t *testing.T) {
+	a := adapterForTest(t)
+	// The Aramon Mage Builder gets its grants from canbuild/arabuild/.
+	opts := a.BuildOptions("arabuild")
+	if len(opts) == 0 {
+		t.Fatal("arabuild has no build options")
+	}
+	has := func(n string) bool {
+		for _, o := range opts {
+			if o == n {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("aralode") || !has("araat") {
+		t.Fatalf("arabuild options missing lodestone/tower: %v", opts)
+	}
+	// King Elsin builds too (canbuild/araking/ exists in retail data).
+	if king := a.BuildOptions("ARAKING"); len(king) == 0 || !func() bool {
+		for _, o := range king {
+			if o == "aralode" {
+				return true
+			}
+		}
+		return false
+	}() {
+		t.Fatalf("araking should build aralode, got %v", king)
+	}
+	if got := a.BuildOptions("arapal"); len(got) != 0 {
+		t.Fatalf("knight should build nothing, got %v", got)
+	}
+}

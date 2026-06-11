@@ -37,6 +37,9 @@ type adapter struct {
 
 	soundOnce    sync.Once
 	soundClasses []ta.SoundClass
+
+	buildOnce sync.Once
+	buildOpts map[string][]string
 }
 
 func (a *adapter) Game() games.Game { return Game }
@@ -66,6 +69,26 @@ func (a *adapter) TextureRenderOptions(*gaf.Palette) gaf.RenderOptions {
 	// asphalt / panel base on runway tiles), and punching it out lets the
 	// ground plane bleed through.
 	return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}
+}
+
+// BuildOptions resolves a builder's constructible units from sidedata's
+// [CANBUILD] table plus download/*.tdf menu add-ons (the AFark.ufo
+// mechanism), cached per adapter.
+func (a *adapter) BuildOptions(unit string) []string {
+	a.buildOnce.Do(func() {
+		a.buildOpts = map[string][]string{}
+		base := games.SidedataBuildOptions(a.fs)
+		extra := games.DownloadMenuOptions(a.fs)
+		for b, list := range base {
+			a.buildOpts[b] = games.MergeBuildOptions(list, extra[b])
+		}
+		for b, list := range extra {
+			if _, ok := a.buildOpts[b]; !ok {
+				a.buildOpts[b] = list
+			}
+		}
+	})
+	return a.buildOpts[strings.ToUpper(strings.TrimSpace(unit))]
 }
 
 // MapTerrainGroup: TA tracks a map's world through the .ota planet= field,

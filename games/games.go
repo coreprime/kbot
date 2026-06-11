@@ -67,6 +67,12 @@ type Adapter interface {
 	// affinity from the sibling .ota. "" when the game has no such notion
 	// (TA's planet lives in the .ota planet= the caller already parses).
 	MapTerrainGroup(mapPath string) string
+
+	// BuildOptions lists the unit names (lower-case, ordered as the game's
+	// menus order them) a builder unit can construct, resolved from the
+	// game's canbuild data plus any download-menu add-ons. Empty for
+	// non-builders.
+	BuildOptions(unit string) []string
 }
 
 // PaletteResolver decides which palette applies to each kind of game asset.

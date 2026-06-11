@@ -116,6 +116,11 @@ type unitMetaJSON struct {
 	// resolved section is missing from sound.tdf.
 	Sounds map[string]string `json:"sounds,omitempty"`
 
+	// BuildOptions lists the units this unit can construct, lower-cased and
+	// in the game's menu order — resolved by the game adapter from sidedata
+	// CANBUILD (TA), canbuild/ grants (TA:K), and download menu add-ons.
+	BuildOptions []string `json:"buildOptions,omitempty"`
+
 	// Weapons — each slot exposes the FBI ref string plus the
 	// resolved TDF data so the client doesn't need to chase a
 	// second request per weapon.  Empty slot ⇒ {Name:""}.
@@ -520,6 +525,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	out.BuildOptions = sess.palettes().BuildOptions(name)
 	// Corpse chain: FBI corpse= names a wreck feature whose object= is the
 	// 3DO the sandbox renders when the unit dies; its featuredead chains to
 	// the damaged wreck used for heavier kills (Killed corpsetype 2).

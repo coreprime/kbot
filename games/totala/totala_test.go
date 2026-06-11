@@ -90,3 +90,26 @@ func TestPalettesAreGlobal(t *testing.T) {
 		t.Fatal("TA has no out-of-band terrain group")
 	}
 }
+
+func TestBuildOptionsFromSidedata(t *testing.T) {
+	a := adapterForTest(t)
+	opts := a.BuildOptions("ARMCOM")
+	if len(opts) == 0 {
+		t.Fatal("commander has no build options")
+	}
+	if opts[0] != "armsolar" {
+		t.Fatalf("first commander option = %q, want armsolar (canbuild1)", opts[0])
+	}
+	found := false
+	for _, o := range opts {
+		if o == "armmex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("armmex missing from commander options: %v", opts)
+	}
+	if got := a.BuildOptions("armpw"); len(got) != 0 {
+		t.Fatalf("peewee should build nothing, got %v", got)
+	}
+}

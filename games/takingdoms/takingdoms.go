@@ -76,6 +76,8 @@ type adapter struct {
 
 	soundMu      sync.Mutex
 	soundClasses map[string]*tdf.Section // class name -> section (nil cached = absent)
+	buildOnce    sync.Once
+	buildOpts    map[string][]string
 }
 
 func (a *adapter) Game() games.Game { return Game }
@@ -272,6 +274,26 @@ func (a *adapter) kingdomForMap(mapPath string) string {
 	a.kingdom[key] = kingdom
 	a.kingMu.Unlock()
 	return kingdom
+}
+
+// BuildOptions resolves a builder's constructible units from the
+// canbuild/<builder>/<unit>.tdf grants ([Menu] Priority ordering) plus any
+// TA-style download/*.tdf menu add-ons a mod ships, cached per adapter.
+func (a *adapter) BuildOptions(unit string) []string {
+	a.buildOnce.Do(func() {
+		a.buildOpts = map[string][]string{}
+		base := games.CanbuildDirOptions(a.fs)
+		extra := games.DownloadMenuOptions(a.fs)
+		for b, list := range base {
+			a.buildOpts[b] = games.MergeBuildOptions(list, extra[b])
+		}
+		for b, list := range extra {
+			if _, ok := a.buildOpts[b]; !ok {
+				a.buildOpts[b] = list
+			}
+		}
+	})
+	return a.buildOpts[strings.ToUpper(strings.TrimSpace(unit))]
 }
 
 // MapTerrainGroup reports the map's kingdom so the editor can activate the

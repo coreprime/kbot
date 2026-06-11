@@ -15,7 +15,7 @@
 //
 // Clicking a cell narrows the selection to that unit (or that type).
 
-import { hostCallbacks } from '../host-context.js'
+import { hostCallbacks, setStatus } from '../host-context.js'
 import { subscribeTick } from '../common/refresh-tick.js'
 
 const GROUP_THRESHOLD = 5
@@ -40,6 +40,16 @@ function healthFrac(u) {
 
 function barColor(frac) {
   return `hsl(${Math.round(120 * frac)}, 85%, 45%)`
+}
+
+// buildCellHTML — one constructible unit in the single-builder build row.
+function buildCellHTML(name) {
+  return `
+    <div class="roster-cell roster-build-cell" data-build="${name}" title="Build ${name}">
+      <div class="roster-pic-wrap roster-pic-wrap-sm">
+        <img class="roster-pic roster-pic-sm" data-unit="${name}" alt="${name}" />
+      </div>
+    </div>`
 }
 
 function cellHTML({ name, title, count, frac }) {
@@ -83,11 +93,21 @@ function update() {
     cells = [...groups.values()].map((g) => ({ ...g, frac: g.frac / g.count }))
   }
 
+  // Single builder selected → append its build menu (the game adapter's
+  // canbuild data rides the unit meta as buildOptions).
+  const buildOpts = (units.length === 1 && units[0].meta && Array.isArray(units[0].meta.buildOptions))
+    ? units[0].meta.buildOptions
+    : []
+
   const sig = cells.map((c) => `${c.name}:${c.count}:${Math.round(c.frac * 50)}`).join('|')
+    + (buildOpts.length ? '+build:' + units[0].name : '')
   if (sig === _sig && !root.hidden) return
   _sig = sig
   root.hidden = false
   root.innerHTML = cells.map((c) => cellHTML(c)).join('')
+    + (buildOpts.length
+      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n)).join('')}`
+      : '')
   // Set image sources as PROPERTY writes after the markup lands: the
   // workspace URL shim rewrites src assignments to carry the /workspaces/
   // prefix, but it cannot see attributes baked into innerHTML.
@@ -97,7 +117,7 @@ function update() {
   }
   // Click narrows the selection to the cell's unit(s).
   const byName = new Map(cells.map((c) => [c.name, c.ids]))
-  for (const el of root.querySelectorAll('.roster-cell')) {
+  for (const el of root.querySelectorAll('.roster-cell:not(.roster-build-cell)')) {
     el.addEventListener('click', () => {
       const v = hostCallbacks.getActiveSandboxView?.()
       const ids = byName.get(el.dataset.unit)
@@ -105,6 +125,28 @@ function update() {
       v.scene.selectClear()
       for (const id of ids) v.scene.selectAdd(id)
       _sig = '' // force a rebuild against the narrowed selection
+    })
+  }
+  // Build cells construct the unit next to the builder. The sandbox builds
+  // instantly — build time / nanolathe staging is a future refinement; the
+  // point here is that WHAT a unit can build comes from the game data.
+  const builder = units.length === 1 ? units[0] : null
+  let buildSeq = 0
+  for (const el of root.querySelectorAll('.roster-build-cell')) {
+    el.addEventListener('click', async () => {
+      const v = hostCallbacks.getActiveSandboxView?.()
+      if (!v || !v.scene || !builder) return
+      const name = el.dataset.build
+      const angle = (buildSeq++ * 0.9) + 0.6
+      const x = builder.pos.x + Math.cos(angle) * 55
+      const z = builder.pos.z + Math.sin(angle) * 55
+      try {
+        const model = await v.loader.load(name)
+        await v.scene.addUnit({ name, model, x, z, side: builder.side })
+        setStatus(`Built ${name} (instant — sandbox).`)
+      } catch (e) {
+        setStatus(`Build failed: ${e?.message || e}`)
+      }
     })
   }
 }
