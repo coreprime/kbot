@@ -98,6 +98,11 @@ let _sandboxLabelCounter = 0
 // registry handles dispatch by typeId.
 import { openWelcomeTab } from '../screens/welcome/tab.js'
 import { setWelcomeTab, setSandboxView } from '../screens/welcome/welcome-screen.js'
+import { wireRosterStrip } from './roster-strip.js'
+
+// Selection roster strip (bottom-centre build-pic summary) — one global
+// subscriber on the shared inspector tick, wired at module load.
+wireRosterStrip()
 
 // _sbxMatchId / _sbxHostWsUrl mirror the welcome screen's New-Hosted
 // helpers so the "+" menu can host a match without the welcome UI.

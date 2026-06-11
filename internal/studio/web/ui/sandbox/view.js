@@ -148,6 +148,10 @@ export class SandboxView {
 
   async open() {
     this.#setStatus('Initialising sandbox…')
+    // Debug/automation handle: the most recently opened sandbox view. Test
+    // harnesses (and the console) reach the live scene through it; never
+    // read by product code.
+    window.__kbotSandboxView = this
     // A wasm engine exit (Go panic) silently freezes every sim on the page —
     // make it loud so a "units stopped responding" report comes with the
     // captured stack (wasm-source.js stashes it on __KBOT_WASM_CRASH).
@@ -2475,6 +2479,7 @@ export class SandboxView {
   }
 
   dispose() {
+    if (window.__kbotSandboxView === this) window.__kbotSandboxView = null
     if (this._hudCanvas) {
       this._hudCanvas.remove()
       this._hudCanvas = null
