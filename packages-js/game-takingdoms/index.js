@@ -40,8 +40,21 @@ export const game = {
   id: 'takingdoms',
   label: 'TA: Kingdoms',
 
+  // Inherit TA's 3D-view tables but strip the ARM/CORE faction flavour from
+  // the side labels — Kingdoms teams are just colours.
+  view3d: {
+    ...totala.view3d,
+    teamSides: totala.view3d.teamSides.map((s) => ({
+      ...s,
+      label: s.label.replace(/ \((ARM|CORE)\)$/, ''),
+    })),
+  },
+
   branding: {
     headerLogo: '/branding/logos/kbot-header-tak.png',
+    // Chip metadata + Kingdoms.exe's application icon (32x32 PNG data URI).
+    chip: { short: 'TAK', color: '#3a9d7a' },
+    icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACCUlEQVR4nK1XCw7DIAjFpvceO7kLregDsbq2JGYWnfwfmgiImfI5KYOIPh+i79fsaYP6uSdmSrRKTIcCx9B5zm0UBc91hn3c9le+GjOh5L7lj9Za8QIclVJxjnoJPKJeq/z+/CU3ZLGmWuS9gGtipduvXlsVlwJezQOMb80FjHOz1MS/zJes3yKl1J2jxFLZuGe0744CWa0eUQ01Wk3vUdb4Yqx9FWh+HAP4mC+aM1fC9tBCiH3Hrx+Wj79Cki8rubCF3FHcIwVAuCTqITz9l4ieTvdDiXkgikAnCNFtyogBXsBsDTDhvgKkh4HFIw9AojUwYn7JAxwL8lWCFQH/X6It5LoE8/ya9Tpg/wxDlqGYAd1yto1ImlPUlFDRe43opK7taggQbIbt+NUcIItul0mpSjTll2gPudpkSigE1RRkyvLh4OOeAHvr2h+9YR8pgAmVQbhRAtszKk3rtIXy6yUv/hPCsXjGVMMLbTFj/SsgaRJ2GKH54PjPFKC4xaJQg5Qeqp9WAZXSU0GqgLkLTGD5sQfowkLFhpGnnivA1trLd4HrCaAEPbqUcvmIktpd/895mQhEC26Awn8rkKflFF3N3RNNFJESnXlj686GA9UssUiuWWZPEe7vjzzwxpUSSH1sMe7B29FfXIK3oa8kQwk/SnbbRwaEI0K7IQL2LRmFD1u1sfKFMaUfoP53QdkEM4UAAAAASUVORK5CYII=',
   },
 
   // A sorcery-driven world rather than a nano-tech one: slow violet/gold

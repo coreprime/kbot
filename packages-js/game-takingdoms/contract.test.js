@@ -22,6 +22,8 @@ test('identity and branding', () => {
     assert.ok(g.label && typeof g.label === 'string', `${g.id}: label`)
     assert.ok(g.branding && typeof g.branding.headerLogo === 'string', `${g.id}: branding.headerLogo`)
     assert.match(g.branding.headerLogo, /^\/branding\//, `${g.id}: logo served from /branding/`)
+    assert.ok(g.branding.chip && g.branding.chip.short && g.branding.chip.color, `${g.id}: chip metadata`)
+    assert.match(g.branding.icon || '', /^data:image\/png;base64,/, `${g.id}: application icon data URI`)
   }
 })
 
@@ -112,6 +114,11 @@ test('view3d config (game3d injection)', () => {
       assert.ok(s.key && s.label && s.swatchCss, `${g.id}: side ${s.side} shape`)
     }
     assert.ok(v.projectileFallbackColors && v.projectileFallbackColors.laser, `${g.id}: projectile hues`)
+  }
+  assert.equal(totala.view3d.teamSides[0].label, 'Blue (ARM)')
+  assert.equal(takingdoms.view3d.teamSides[0].label, 'Blue', 'TA:K strips faction flavour')
+  for (const g of GAMES) {
+    const v = g.view3d
     assert.ok(Array.isArray(v.lodHidePatterns) && v.lodHidePatterns.every((re) => re instanceof RegExp),
       `${g.id}: LOD patterns are regexes`)
   }

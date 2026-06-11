@@ -12,10 +12,23 @@
 // resolve to Total Annihilation, the TA-format baseline (mirroring the Go
 // games registry).
 
+import { registerGameBranding } from '@kbot/ui/game-icon'
 import { game as totala } from '@kbot/game-totala'
 import { game as takingdoms } from '@kbot/game-takingdoms'
 
 const REGISTRY = new Map([totala, takingdoms].map((g) => [g.id, g]))
+
+// Push each adapter's chip metadata + application icon into @kbot/ui's
+// branding registry at module load, so GameIcon/GameChip render the real
+// per-game iconography without kbotui carrying any game data itself.
+for (const g of REGISTRY.values()) {
+  registerGameBranding(g.id, {
+    short: g.branding?.chip?.short,
+    name: g.label,
+    color: g.branding?.chip?.color,
+    icon: g.branding?.icon,
+  })
+}
 
 // ALL_GAMES — every shipped adapter, in presentation order (the picker's
 // filter tabs and header logos derive from this).

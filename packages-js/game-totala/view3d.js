@@ -16,8 +16,8 @@
 // as closely as the renderer's hue-shift can approximate. swatchCss is the
 // CSS colour a picker swatch can use without a round-trip conversion.
 export const teamSides = [
-  { side: 0, key: 'blue',   label: 'Blue',   rgb: null,                  swatchCss: '#3a6cd6' },
-  { side: 1, key: 'red',    label: 'Red',    rgb: [0.92, 0.18, 0.16],    swatchCss: '#eb2e29' },
+  { side: 0, key: 'blue',   label: 'Blue (ARM)',  rgb: null,               swatchCss: '#3a6cd6' },
+  { side: 1, key: 'red',    label: 'Red (CORE)',  rgb: [0.92, 0.18, 0.16], swatchCss: '#eb2e29' },
   { side: 2, key: 'green',  label: 'Green',  rgb: [0.20, 0.78, 0.28],    swatchCss: '#34c747' },
   { side: 3, key: 'yellow', label: 'Yellow', rgb: [0.95, 0.85, 0.20],    swatchCss: '#f3d933' },
   { side: 4, key: 'purple', label: 'Purple', rgb: [0.62, 0.30, 0.85],    swatchCss: '#9e4dd9' },

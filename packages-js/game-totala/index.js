@@ -45,6 +45,11 @@ export const game = {
 
   branding: {
     headerLogo: '/branding/logos/kbot-header-ta.png',
+    // Chip metadata + the real application icon (lifted from TotalA.exe's
+    // PE resources, 32x32 PNG as a data URI) — registered into @kbot/ui's
+    // game-icon registry at studio boot.
+    chip: { short: 'TA', color: '#e0793a' },
+    icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABK0lEQVR4nMVWAQ7DIAhE03/PvfwWXd1IBxYo20hNWpS7KypK9GcrkSCMRwRz45UQKc7RrGKKmZyR3veoG+RvpuAUv1rJO0lvhZFN3yTufdO3p0zLlc1ABIDQnkCjNacvLAJGoq+IgJM8VQSC5GkicADwkGsiVgK2lZjGVnt/t9oYO3eHpzSBKY/8+SoTpmkAC7hKLokwC4BjwXkWpisD5AB1jdcEILjVIlv0QwSS9nlYBIwA3lKcKqAlj3FNQ7s4RaaFCCUwoxSHBbQLBWm1WM11oL0DQs1yIFVVDRema3bHHO+JddX58hcqQ/reVqSz9RiL0E2SKB2jHFCbR410HutS7ybwl7Obi/XvJOyjr9KfrYpedtfPsI6lZa0q/KEUR6z+iihky6qVhPEAA3DLX1hqEg8AAAAASUVORK5CYII=',
   },
 
   // Welcome-dialog particle theme: the classic green nanolathe — beam
