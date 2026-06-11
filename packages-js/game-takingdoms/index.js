@@ -65,6 +65,29 @@ export const game = {
     entryArgs,
   },
 
+  // Kingdoms-flavoured scene catalogue. The env keys reuse the shipped
+  // world manifests (Darien's grasslands ride the greenworld scene, Taros'
+  // wastes the lava one, …) so no new renderer assets are needed — the
+  // menu just stops describing Aramon's homeland as "TA default".
+  environments: [
+    { env: 'greenworld', icon: '🌳', label: 'Aramon',
+      title: 'Aramon — green heartlands, deep-blue coastal water' },
+    { env: 'lava', icon: '🌋', label: 'Taros',
+      title: 'Taros — scorched wastes, glowing molten rivers' },
+    { env: 'archipelago', icon: '🏝️', label: 'Veruna',
+      title: 'Veruna — island shallows, crystal-clear water' },
+    { env: 'slate', icon: '⛰️', label: 'Zhon',
+      title: 'Zhon — wild highlands under an overcast sky' },
+    { env: 'metal', icon: '⚙️', label: 'Creon',
+      title: 'Creon — the Iron Plague\u2019s industrial isle' },
+    { env: 'marsh', icon: '🪷', label: 'Marsh',
+      title: 'Marshland — hazy sky, tannin-stained swamp water' },
+    { env: 'sunset', icon: '🌇', label: 'Dusk',
+      title: 'Aramon at dusk — warm sky, muted water' },
+    { env: 'night', icon: '🌌', label: 'Night',
+      title: 'Aramon at night — dark sky, moonlit water' },
+  ],
+
   cobEntries: totala.cobEntries.map((sec) => {
     if (sec.section === 'Lifecycle') {
       return { ...sec, rows: [...sec.rows,

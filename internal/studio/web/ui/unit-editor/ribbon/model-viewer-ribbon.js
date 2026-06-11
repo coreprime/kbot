@@ -267,32 +267,10 @@ const _GROUND_MODES = [
     title: 'Hide the ground plane entirely' },
 ]
 
-const _ENVIRONMENTS = [
-  { env: 'greenworld', icon: '🌳', label: 'Greenworld',
-    title: 'Greenworld — lush forest, deeper-blue ocean (TA default)' },
-  { env: 'archipelago', icon: '🏝️', label: 'Archipelago',
-    title: 'Archipelago — tropical white-sand seabed, crystal blue translucent water' },
-  { env: 'metal', icon: '⚙️', label: 'Metal',
-    title: 'Metal world — cloudless industrial sky, thick oily coolant' },
-  { env: 'desert', icon: '🏜️', label: 'Desert',
-    title: 'Desert — sandy terrain, acid-green lake' },
-  { env: 'lava', icon: '🌋', label: 'Lava',
-    title: 'Lava world — red sky, glowing molten lakes' },
-  { env: 'marsh', icon: '🪷', label: 'Marsh',
-    title: 'Marsh — hazy sky, tannin-stained swamp water' },
-  { env: 'slate', icon: '⛰️', label: 'Slate',
-    title: 'Slate — overcast sky, cold grey quarry water' },
-  { env: 'moon', icon: '🌙', label: 'Lunar',
-    title: 'Lunar — airless black sky, highly translucent water' },
-  { env: 'mars', icon: '🔴', label: 'Mars',
-    title: 'Mars — orange dusty sky, purple water' },
-  { env: 'sunset', icon: '🌇', label: 'Sunset',
-    title: 'Greenworld at sunset — warm sky, muted water' },
-  { env: 'night', icon: '🌌', label: 'Night',
-    title: 'Greenworld at night — dark sky, moonlit water' },
-  { env: 'alienTwin', icon: '👽', label: 'Alien (twin suns)',
-    title: 'Alien — twin suns, purple sky, bioluminescent water' },
-]
+// Scene environments come from the game adapter — TA's planet list, TA:K's
+// kingdom-flavoured catalogue over the same world manifests. First entry is
+// the catalogue's default scene.
+const _environments = () => activeGame().environments
 
 const _TEAMS = [
   { team: 'blue',   icon: '🔵', label: 'Blue (default)',
@@ -557,7 +535,7 @@ function GroundDropdown() {
 function EnvironmentSubmenu() {
   const { env } = _state.value
   const previewing = useRef(false)
-  const current = _ENVIRONMENTS.find((e) => e.env === env) || _ENVIRONMENTS[0]
+  const current = _environments().find((e) => e.env === env) || _environments()[0]
   const onSubmenuClose = () => {
     if (previewing.current) {
       previewing.current = false
@@ -580,7 +558,7 @@ function EnvironmentSubmenu() {
       currentLabel=${current.label}
       title="Pick the world look"
       onClose=${onSubmenuClose}>
-      ${_ENVIRONMENTS.map((e) => html`
+      ${_environments().map((e) => html`
         <button key=${e.env}
                 class=${'menu-row mv-env-row ' + (env === e.env ? 'active' : '')}
                 title=${e.title}

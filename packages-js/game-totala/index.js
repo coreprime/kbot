@@ -75,6 +75,36 @@ export const game = {
     entryArgs,
   },
 
+  // Scene environments for the unit viewer / sandbox Scene menu. env keys
+  // name @kbot/game3d world manifests (worlds/<env>.json); the labels carry
+  // the game's flavour. First entry is the default scene.
+  environments: [
+    { env: 'greenworld', icon: '🌳', label: 'Greenworld',
+      title: 'Greenworld — lush forest, deeper-blue ocean (TA default)' },
+    { env: 'archipelago', icon: '🏝️', label: 'Archipelago',
+      title: 'Archipelago — tropical white-sand seabed, crystal blue translucent water' },
+    { env: 'metal', icon: '⚙️', label: 'Metal',
+      title: 'Metal world — cloudless industrial sky, thick oily coolant' },
+    { env: 'desert', icon: '🏜️', label: 'Desert',
+      title: 'Desert — sandy terrain, acid-green lake' },
+    { env: 'lava', icon: '🌋', label: 'Lava',
+      title: 'Lava world — red sky, glowing molten lakes' },
+    { env: 'marsh', icon: '🪷', label: 'Marsh',
+      title: 'Marsh — hazy sky, tannin-stained swamp water' },
+    { env: 'slate', icon: '⛰️', label: 'Slate',
+      title: 'Slate — overcast sky, cold grey quarry water' },
+    { env: 'moon', icon: '🌙', label: 'Lunar',
+      title: 'Lunar — airless black sky, highly translucent water' },
+    { env: 'mars', icon: '🔴', label: 'Mars',
+      title: 'Mars — orange dusty sky, purple water' },
+    { env: 'sunset', icon: '🌇', label: 'Sunset',
+      title: 'Greenworld at sunset — warm sky, muted water' },
+    { env: 'night', icon: '🌌', label: 'Night',
+      title: 'Greenworld at night — dark sky, moonlit water' },
+    { env: 'alienTwin', icon: '👽', label: 'Alien (twin suns)',
+      title: 'Alien — twin suns, purple sky, bioluminescent water' },
+  ],
+
   // COB quick actions for the unit editor's ribbon, filtered at render time
   // to the scripts the loaded COB actually exports.
   cobEntries: [

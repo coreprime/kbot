@@ -83,6 +83,25 @@ test('cob quick-action catalogue', () => {
   assert.ok(names(takingdoms).includes('AimWeapon'))
 })
 
+test('scene environments', () => {
+  for (const g of GAMES) {
+    assert.ok(Array.isArray(g.environments) && g.environments.length >= 6, `${g.id}: catalogue size`)
+    for (const e of g.environments) {
+      assert.ok(e.env && e.icon && e.label && e.title, `${g.id}: env row shape`)
+    }
+  }
+  // TA:K relabels the shared world manifests with kingdom names and must
+  // not describe anything as the "TA default".
+  const tak = takingdoms.environments
+  assert.ok(tak.some((e) => e.label === 'Aramon'))
+  assert.ok(tak.every((e) => !/TA default/i.test(e.title)))
+  // Every env key must be a world manifest both catalogues can share.
+  const known = new Set(totala.environments.map((e) => e.env))
+  for (const e of tak) {
+    assert.ok(known.has(e.env), `TA:K env ${e.env} reuses a shipped world manifest`)
+  }
+})
+
 test('view3d config (game3d injection)', () => {
   for (const g of GAMES) {
     const v = g.view3d
