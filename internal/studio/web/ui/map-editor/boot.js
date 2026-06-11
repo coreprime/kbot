@@ -288,11 +288,24 @@ export async function openLoadedMap(data, card) {
   // terrain-compositing path (tak-edit.js) instead of TA tile stamping.
   setCurrentTakMap(data.textureMapped ? data.path : null)
   if (data.textureMapped && data.terrainUrl) {
-    // Request a near-native render so the backdrop stays crisp when zoomed in
-    // (the default render is small + decorative, for the welcome slideshow).
+    // Two-stage backdrop: block boot only on a SMALL render (fast to
+    // composite server-side and to decode), then swap in the near-native
+    // render asynchronously once it lands. A cold full-res render of a big
+    // TA:K map costs over a second before the first PNG byte plus a large
+    // decode — awaiting it froze the editor on open.
     const sep = data.terrainUrl.includes('?') ? '&' : '?'
-    img.src = `${data.terrainUrl}${sep}max=${TAK_TERRAIN_EDITOR_MAX}`
+    img.src = `${data.terrainUrl}${sep}max=512`
     state.sectionImages.set(TAK_TERRAIN_KEY, img)
+    const full = new Image()
+    full.addEventListener('load', () => {
+      // Only swap if this map is still the active backdrop.
+      if (state.sectionImages.get(TAK_TERRAIN_KEY) === img) {
+        state.sectionImages.set(TAK_TERRAIN_KEY, full)
+        invalidateMinimapBase()
+        hostCallbacks.renderCanvas?.()
+      }
+    }, { once: true })
+    full.src = `${data.terrainUrl}${sep}max=${TAK_TERRAIN_EDITOR_MAX}`
   } else {
     img.src = data.tilePoolUrl
     state.sectionImages.set(data.tilePoolKey, img)

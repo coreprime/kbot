@@ -164,7 +164,8 @@ function rebuildMinimapBase() {
   // averages rather than point-samples to noise).
   const takTerrain = state.sectionImages.get(TAK_TERRAIN_KEY)
   if (takTerrain) {
-    if (takTerrain.complete && takTerrain.naturalWidth > 0) {
+    const isCanvas = typeof HTMLCanvasElement !== 'undefined' && takTerrain instanceof HTMLCanvasElement
+    if (isCanvas || (takTerrain.complete && takTerrain.naturalWidth > 0)) {
       ctx.imageSmoothingEnabled = true
       ctx.drawImage(takTerrain, 0, 0, W, H)
     } else {

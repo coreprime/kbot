@@ -34,15 +34,20 @@ import { drawTransformedTile } from '../rotation.js'
 function drawTakTerrain(ctx) {
   const img = state.sectionImages.get(TAK_TERRAIN_KEY)
   if (!img) return false
-  if (!img.complete || img.naturalWidth === 0) {
+  // The backdrop is an <img> until the first stamp patch converts it to a
+  // canvas (which has no complete/naturalWidth and is always drawable).
+  const isCanvas = typeof HTMLCanvasElement !== 'undefined' && img instanceof HTMLCanvasElement
+  if (!isCanvas && (!img.complete || img.naturalWidth === 0)) {
     whenImageReady(img, 'render', () => hostCallbacks.renderCanvas?.())
     return true
   }
+  const iw = isCanvas ? img.width : img.naturalWidth
+  const ih = isCanvas ? img.height : img.naturalHeight
   const canvasW = state.tileW * TILE_PX
   const canvasH = state.tileH * TILE_PX
   // Source→canvas scale (the served render may be smaller than the canvas).
-  const sx = img.naturalWidth / canvasW
-  const sy = img.naturalHeight / canvasH
+  const sx = iw / canvasW
+  const sy = ih / canvasH
   const pb = visiblePixelBounds()
   const dx = Math.max(0, pb.minX)
   const dy = Math.max(0, pb.minY)

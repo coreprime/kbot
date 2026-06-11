@@ -102,6 +102,35 @@ function applyStampToLocalState(sectionPath, gx, gy) {
     .catch(() => { /* alignment overlay degrades to stale heights */ })
 }
 
+// patchTakBackdrop blits a section's cached drawer render into the backdrop
+// at graphic-unit (gx, gy), converting the backdrop Image to a canvas on
+// first patch so later stamps draw into the same surface. Both renders come
+// from the same terrain compositor, so the blit is pixel-faithful at the
+// backdrop's scale. Returns false when either image isn't ready.
+function patchTakBackdrop(sectionPath, gx, gy) {
+  const backdrop = state.sectionImages.get(TAK_TERRAIN_KEY)
+  const secImg = state.sectionImages.get(sectionPath)
+  if (!backdrop || !secImg || !secImg.complete || !secImg.naturalWidth) return false
+  const bw = backdrop.width || backdrop.naturalWidth
+  const bh = backdrop.height || backdrop.naturalHeight
+  if (!bw || !bh) return false
+  let canvas = backdrop
+  if (typeof HTMLCanvasElement === 'undefined' || !(backdrop instanceof HTMLCanvasElement)) {
+    canvas = document.createElement('canvas')
+    canvas.width = bw
+    canvas.height = bh
+    canvas.getContext('2d').drawImage(backdrop, 0, 0)
+    state.sectionImages.set(TAK_TERRAIN_KEY, canvas)
+  }
+  const scale = bw / (state.tileW * 32)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(secImg, gx * 32 * scale, gy * 32 * scale, secImg.naturalWidth * scale, secImg.naturalHeight * scale)
+  invalidateMinimapBase()
+  hostCallbacks.renderCanvas?.()
+  hostCallbacks.scheduleMinimapRender?.()
+  return true
+}
+
 // dropFeaturesInRect removes placements whose anchor falls inside a stamped
 // DataUnit rect — their cells were overwritten server-side.
 function dropFeaturesInRect(duX, duY, w, h) {
@@ -132,7 +161,14 @@ export async function stampTakSection(sectionPath, gx, gy) {
     // alignment squares (and the feature overlay) compare against the
     // OLD terrain — which reads as "the heightmap was never applied".
     applyStampToLocalState(sectionPath, gx, gy)
-    await reloadTakBackdrop()
+    // Patch the backdrop in place by blitting the section's own render
+    // (already cached for the drawer/placement preview) — a full backdrop
+    // reload re-composites and re-decodes the whole map (seconds on big
+    // maps) for every stamp. Falls back to the reload when the section
+    // image isn't cached yet.
+    if (!patchTakBackdrop(sectionPath, gx, gy)) {
+      await reloadTakBackdrop()
+    }
     setStatus(`Stamped section at graphic unit (${gx}, ${gy}).`)
   } catch (e) {
     setStatus(`Stamp error: ${e?.message || e}`)

@@ -59,6 +59,7 @@ type Session struct {
 	// rendered + downscaled TA:K terrain PNGs per map path (takterrain.go)
 	takTerrainMu  sync.Mutex
 	takTerrainPNG map[string][]byte
+	takTerrainImg map[string]*image.RGBA
 
 	scanFeaturesCacheMu sync.Mutex
 	scanFeaturesList    []featureEntry

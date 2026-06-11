@@ -170,7 +170,7 @@ func (sess *Session) handleMapRender(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var out []byte
-	if img, err := sess.renderTAKTerrain(mapPath); err == nil && img != nil {
+	if img := sess.takTerrainComposite(mapPath); img != nil {
 		// TA:Kingdoms texture-mapped terrain: crisp full-resolution render
 		// (downscaleRGBA returns it unchanged when already within maxDim).
 		var buf bytes.Buffer
@@ -196,6 +196,31 @@ func (sess *Session) handleMapRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writePNGBytes(w, out)
+}
+
+// takTerrainComposite returns the full-resolution composited terrain for a
+// TA:K map, memoised per path — compositing a big map costs over a second,
+// and the editor requests two sizes back-to-back (a fast small backdrop,
+// then the near-native swap), so the composite must only be paid once.
+// Returns nil for non-TA:K maps. Invalidated alongside the PNG cache.
+func (sess *Session) takTerrainComposite(mapPath string) *image.RGBA {
+	sess.takTerrainMu.Lock()
+	if sess.takTerrainImg == nil {
+		sess.takTerrainImg = map[string]*image.RGBA{}
+	}
+	img, ok := sess.takTerrainImg[mapPath]
+	sess.takTerrainMu.Unlock()
+	if ok {
+		return img
+	}
+	img, err := sess.renderTAKTerrain(mapPath)
+	if err != nil {
+		img = nil
+	}
+	sess.takTerrainMu.Lock()
+	sess.takTerrainImg[mapPath] = img
+	sess.takTerrainMu.Unlock()
+	return img
 }
 
 // handleTAKStamp composites a TA:Kingdoms section into a map at a graphic-unit
@@ -265,6 +290,7 @@ func (sess *Session) invalidateTAKMapCaches(mapPath string) {
 			delete(sess.takTerrainPNG, k)
 		}
 	}
+	delete(sess.takTerrainImg, mapPath)
 	sess.takTerrainMu.Unlock()
 
 	sess.tntCacheMu.Lock()
