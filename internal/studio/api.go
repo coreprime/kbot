@@ -1634,6 +1634,14 @@ type saveRequest struct {
 	// endpoint so the rendered StartPos markers reflect what the user
 	// is looking at, not always Schema 0.
 	ActiveSchema int `json:"activeSchema,omitempty"`
+
+	// TakMapPath marks a TA:Kingdoms save: the VFS path of the open
+	// texture-mapped map. TA:K terrain/heights are server-authoritative
+	// (section stamps write the TNT immediately), so Save updates the
+	// EXISTING 0x4000 TNT in place — features + sea level from the editor —
+	// instead of running the TA tile-pool builder, which would otherwise
+	// clobber the map with a blank TA-format TNT.
+	TakMapPath string `json:"takMapPath,omitempty"`
 }
 
 func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
@@ -1660,6 +1668,34 @@ func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 	// Sanitise mapName — only ASCII letters/digits/space/underscore.
 	req.MapName = sanitiseMapName(req.MapName)
 
+	// TA:K maps never go through the TA tile-pool builder — the 0x4000 TNT
+	// is updated in place (see saveTAKMap), or packaged for download when
+	// the session has no writable overlay.
+	if req.TakMapPath != "" {
+		if sess.workDir != "" {
+			paths, err := sess.saveTAKMap(req)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true, "saved": paths})
+			return
+		}
+		tntBytes, otaBytes, err := sess.buildTAKArtifacts(req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		hpiBytes, err := bundleMapHPI(req.MapName, tntBytes, otaBytes)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
+		_, _ = w.Write(hpiBytes)
+		return
+	}
 	// A writable workspace session treats Save as a real save: every changed
 	// file the map comprises (TNT + OTA) is written into the workspace's
 	// copy-on-write VFS overlay, and the response is a JSON receipt rather
@@ -1739,7 +1775,16 @@ func (sess *Session) handleSaveLoose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "which must be 'tnt' or 'ota'", http.StatusBadRequest)
 		return
 	}
-	tntBytes, otaBytes, err := sess.buildArtifacts(req)
+	var tntBytes, otaBytes []byte
+	var err error
+	if req.TakMapPath != "" {
+		// TA:K: apply the editor's feature/sea-level state to the existing
+		// 0x4000 TNT and serve that; the OTA ships verbatim (it carries
+		// kingdom= and other fields the TA OTA writer doesn't model).
+		tntBytes, otaBytes, err = sess.buildTAKArtifacts(req)
+	} else {
+		tntBytes, otaBytes, err = sess.buildArtifacts(req)
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return

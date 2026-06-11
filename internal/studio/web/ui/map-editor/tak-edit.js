@@ -26,6 +26,13 @@ export function isTakMapActive() {
   return !!currentTakMapPath && state.sectionImages.has(TAK_TERRAIN_KEY)
 }
 
+// getCurrentTakMapPath returns the open TA:K map's VFS path ('' for TA maps).
+// The save payload carries it so the server updates the 0x4000 TNT in place
+// instead of running the TA tile-pool builder.
+export function getCurrentTakMapPath() {
+  return isTakMapActive() ? currentTakMapPath : ''
+}
+
 function terrainURL(bust) {
   const p = currentTakMapPath.split('/').map(encodeURIComponent).join('/')
   const t = bust ? `&t=${Math.floor(performance.now())}` : ''

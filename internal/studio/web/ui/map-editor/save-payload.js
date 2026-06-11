@@ -18,11 +18,15 @@
 import { state } from '../host-context.js'
 import { dropTerrainClipboard } from './clipboard.js'
 import { hostCallbacks } from '../host-context.js'
+import { getCurrentTakMapPath } from './tak-edit.js'
 
 export function buildSavePayload() {
   if (state.terrainClipboard) dropTerrainClipboard()
   hostCallbacks.cancelPlacement?.()
   return {
+    // '' for TA maps; the open map's VFS path for TA:K, which routes the
+    // server to the in-place 0x4000 save instead of the TA builder.
+    takMapPath: getCurrentTakMapPath(),
     mapName: state.name,
     displayName: state.ota?.missionName || state.name,
     tileW: state.tileW,

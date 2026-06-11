@@ -21,10 +21,20 @@
 import { state, setStatus, sanitiseFilename, hostCallbacks, activeMap } from '../host-context.js'
 import { buildSavePayload } from './save-payload.js'
 import { runQualityChecker } from './dialogs/quality-checker.js'
+import { isTakMapActive } from './tak-edit.js'
+
+// qualityFixes runs the TA quality checker, which lints the tile-pool build
+// pipeline. TA:K maps skip it — their terrain never goes through that
+// pipeline (stamps write the 0x4000 TNT server-side) and the checker's rules
+// assume tile stamps.
+async function qualityFixes(payload) {
+  if (isTakMapActive()) return []
+  return runQualityChecker(payload)
+}
 
 export async function saveLoose() {
   const payload = buildSavePayload()
-  const fixes = await runQualityChecker(payload)
+  const fixes = await qualityFixes(payload)
   if (!fixes) return false
   payload.fixes = fixes
   setStatus('Building TNT + OTA…')
@@ -59,7 +69,7 @@ export async function saveLoose() {
 
 export async function save() {
   const payload = buildSavePayload()
-  const fixes = await runQualityChecker(payload)
+  const fixes = await qualityFixes(payload)
   if (!fixes) return false
   payload.fixes = fixes
   setStatus('Building HPI archive…')

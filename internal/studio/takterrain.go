@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -279,4 +280,59 @@ func writePNGBytes(w http.ResponseWriter, b []byte) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(b)
+}
+
+// buildTAKArtifacts applies the editor's save payload to the EXISTING TA:K
+// map: feature placements and sea level come from the editor; terrain,
+// heights, and the minimap stay as the stamp pipeline last wrote them
+// (section stamps are server-authoritative and already persisted, and the
+// client's height snapshot goes stale the moment a stamp lands). The OTA is
+// returned verbatim from the VFS — it carries kingdom= and other fields the
+// TA OTA writer doesn't model, so rewriting it would corrupt the map's
+// kingdom affinity.
+func (sess *Session) buildTAKArtifacts(req saveRequest) (tntBytes, otaBytes []byte, err error) {
+	if strings.Contains(req.TakMapPath, "..") {
+		return nil, nil, fmt.Errorf("invalid map path")
+	}
+	mapData, err := sess.vfs.ReadFile(req.TakMapPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("map not found: %w", err)
+	}
+	m, err := tak.Decode(bytes.NewReader(mapData))
+	if err != nil {
+		return nil, nil, fmt.Errorf("not a TA:K map: %w", err)
+	}
+	anchors := make([]tak.FeatureAnchor, 0, len(req.Features))
+	for _, f := range req.Features {
+		anchors = append(anchors, tak.FeatureAnchor{X: f.AX, Y: f.AY, Name: f.Name})
+	}
+	m.SetFeaturePlacements(anchors)
+	if req.SeaLevel > 0 {
+		m.Header.SeaLevel = uint32(req.SeaLevel)
+	}
+	var buf bytes.Buffer
+	if err := tak.Encode(&buf, m); err != nil {
+		return nil, nil, fmt.Errorf("encode TA:K TNT: %w", err)
+	}
+	otaPath := strings.TrimSuffix(req.TakMapPath, path.Ext(req.TakMapPath)) + ".ota"
+	otaBytes, _ = sess.vfs.ReadFile(otaPath) // best-effort; nil when missing
+	return buf.Bytes(), otaBytes, nil
+}
+
+// saveTAKMap writes the edited TA:K TNT back to its original VFS path in the
+// writable workspace overlay. The sibling OTA is untouched (Save doesn't
+// change it), so the receipt lists only the TNT.
+func (sess *Session) saveTAKMap(req saveRequest) ([]string, error) {
+	if sess.workDir == "" || sess.vfs == nil {
+		return nil, fmt.Errorf("session has no writable workspace")
+	}
+	tntBytes, _, err := sess.buildTAKArtifacts(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := sess.vfs.WriteFile(req.TakMapPath, tntBytes); err != nil {
+		return nil, err
+	}
+	sess.invalidateTAKMapCaches(req.TakMapPath)
+	return []string{req.TakMapPath}, nil
 }

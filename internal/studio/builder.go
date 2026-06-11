@@ -45,7 +45,13 @@ func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return bundleMapHPI(req.MapName, tntBytes, otaBytes)
+}
 
+// bundleMapHPI packages a TNT + OTA pair as maps/<name>.{tnt,ota} inside an
+// HPI archive. Shared by the TA build pipeline and the TA:K in-place editor,
+// which produce their bytes differently but download identically.
+func bundleMapHPI(mapName string, tntBytes, otaBytes []byte) ([]byte, error) {
 	// The HPI writer is file-backed, so route through a temp file and slurp.
 	tmp, err := os.CreateTemp("", "studio-*.hpi")
 	if err != nil {
@@ -60,7 +66,7 @@ func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
 		return nil, fmt.Errorf("create hpi: %w", err)
 	}
 	hw.SetTrailer(nil)
-	mapName := strings.ToLower(req.MapName)
+	mapName = strings.ToLower(mapName)
 	if err := hw.AddFileFromBytes(filepath.ToSlash(filepath.Join("maps", mapName+".tnt")), tntBytes); err != nil {
 		_ = hw.Close()
 		return nil, fmt.Errorf("add tnt: %w", err)
