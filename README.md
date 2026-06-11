@@ -64,6 +64,7 @@ To develop/code against the project:
 - [Project Structure](#project-structure)
 - [Development](#development)
   - [Game Asset Setup](#game-asset-setup)
+  - [Supported Games & Custom Games](#supported-games--custom-games)
 - [License](#license)
 
 
@@ -1023,19 +1024,66 @@ task build
 Then create a `.env.local` file in the project root (this file is gitignored):
 
 ```bash
-# .env.local — local paths to TA game assets for tests
+# .env.local — local paths to game assets for tests
 TA_UNPACKED_PATH=/path/to/ta-flattened
 TA_PACKED_PATH=/path/to/total-annihilation
+TAK_UNPACKED_PATH=/path/to/ta-kingdoms-flattened
 ```
 
 | Variable | Description | Used by |
 |----------|-------------|---------|
-| `TA_UNPACKED_PATH` | Flattened game assets (scripts, maps, textures, etc.) | Most format tests |
-| `TA_PACKED_PATH` | Original packed archives (HPI, UFO, CCX, GP3) | HPI/VFS tests |
+| `TA_UNPACKED_PATH` | Flattened TA game assets (scripts, maps, textures, etc.) | Most format tests |
+| `TA_PACKED_PATH` | Original packed TA archives (HPI, UFO, CCX, GP3) | HPI/VFS tests |
+| `TAK_UNPACKED_PATH` | Flattened TA: Kingdoms assets | TA:K format, adapter, and combat tests |
 | `ALLOW_SKIP_ASSETS` | If `true`, tests skip when assets are missing. If `false` (default), tests **fail**. | All asset tests |
 
 By default, missing game assets cause test failures to ensure developers have a complete test environment. Set `ALLOW_SKIP_ASSETS=true` in CI or environments where game assets are not available.
 
+
+### Supported Games & Custom Games
+
+kbot supports **Total Annihilation** and **Total Annihilation: Kingdoms**.
+The format packages (`formats/…`) are game-agnostic — a TNT or COB announces
+its own dialect through version words and parsing dispatches on what the
+bytes say. Everything that instead depends on *which game* an install is
+lives behind a per-game adapter, registered in two registries:
+
+- **Go** — [`games`](games/games.go) defines the `Game`/`Adapter` interfaces
+  (palette resolution, unit sounds, cursor palettes, tilesets, map terrain
+  groups, FBI→unit-meta building). [`games/totala`](games/totala) and
+  [`games/takingdoms`](games/takingdoms) register themselves from package
+  `init`; sessions resolve one adapter per mounted install via
+  `games.Resolve(id)`.
+- **JS** — [`@kbot/game-totala`](packages-js/game-totala) and
+  [`@kbot/game-takingdoms`](packages-js/game-takingdoms) carry the studio's
+  per-game surfaces: weapon-script conventions, COB quick-action catalogues,
+  branding, welcome theming, and the `view3d` tables injected into the
+  game-agnostic `@kbot/game3d` renderer at boot. The studio resolves the
+  active adapter through `ui/common/game-registry.js`.
+
+Engine behaviour that varies per *unit* rather than per game — TA's per-slot
+`AimPrimary`/`FirePrimary` scripts versus TA:K's shared parameterized
+`AimWeapon`/`FireWeapon` set — is resolved from what each COB actually
+exports (`engine/sim/weapon_convention.go`), so the simulation never consults
+a game id and mixed-convention content just works.
+
+To build a **custom game** on the TA formats:
+
+1. **Go**: implement `games.Game` (usually embedding the `totala` adapter
+   and overriding what differs), call `games.Register` from your package
+   `init`, and blank-import the package where the studio wires adapters
+   (`internal/studio/palette.go`).
+2. **JS**: create a package composing over `@kbot/game-totala` the way
+   `@kbot/game-takingdoms` does (spread the baseline `game` object, override
+   fields), and add it to the registry list in
+   `internal/studio/web/ui/common/game-registry.js`. The required surface is
+   pinned by the contract tests in
+   [`packages-js/game-takingdoms/contract.test.js`](packages-js/game-takingdoms/contract.test.js)
+   (`task test-js`).
+3. **Context**: register the install with `kbot ctx add <path> --game custom`.
+   Unregistered ids resolve to the Total Annihilation baseline in both
+   registries, so a partially-adapted game degrades to TA behaviour instead
+   of failing.
 
 ## History
 Having played Total Annihilation since its release in 1996 religiously, it was one of the formative games of my youth. Back in 1999, a 14 year old version of me logged onto the PlanetAnnihilation forums. They were dead, quiet. I was annoyed that there was lots of modding and activity going on, but nobody was updating the site, similar to how PlanetQuake/PlanetHalfLife were being maintained well. With poor wording, a young version of me unleashed some harsh words.
