@@ -82,3 +82,53 @@ func TestStampSectionClipsAtEdge(t *testing.T) {
 		t.Errorf("terrain names length changed")
 	}
 }
+
+func TestStampSectionRemapsFeatureIndices(t *testing.T) {
+	// Retail sections ship no feature placements (verified by scan), so the
+	// remap path is covered synthetically: the section and the map disagree
+	// about table indices for the same name, and the section also brings a
+	// name the map lacks.
+	m := newBlankMap(16, 16)
+	mTree := m.EnsureFeature("tree")
+	mRock := m.EnsureFeature("rock")
+	if mTree != 0 || mRock != 1 {
+		t.Fatalf("unexpected map table layout: tree=%d rock=%d", mTree, mRock)
+	}
+	for i := range m.FeatureGrid {
+		m.FeatureGrid[i] = 0xFFFF
+	}
+	m.FeatureGrid[0] = uint16(mRock) // pre-existing placement outside the stamp
+
+	sec := newBlankMap(8, 8)
+	sRock := sec.EnsureFeature("rock") // index 0 in the SECTION's table
+	sBush := sec.EnsureFeature("bush") // a name the map doesn't know yet
+	for i := range sec.FeatureGrid {
+		sec.FeatureGrid[i] = 0xFFFF
+	}
+	sec.FeatureGrid[1*sec.W+1] = uint16(sRock)
+	sec.FeatureGrid[2*sec.W+3] = uint16(sBush)
+
+	m.StampSection(sec, 2, 2) // DU offset (4,4)
+
+	names := m.FeatureNames()
+	nameAt := func(x, y int) string {
+		v := m.FeatureGrid[y*m.W+x]
+		if int(v) >= len(names) || v >= NoFeatureThreshold {
+			return ""
+		}
+		return names[v]
+	}
+	if got := nameAt(4+1, 4+1); got != "rock" {
+		t.Fatalf("stamped rock resolved to %q — raw-index copy corrupts placements", got)
+	}
+	if got := nameAt(4+3, 4+2); got != "bush" {
+		t.Fatalf("stamped bush resolved to %q, want bush appended to the map table", got)
+	}
+	if got := nameAt(0, 0); got != "rock" {
+		t.Fatalf("pre-existing placement outside the stamp changed to %q", got)
+	}
+	// Cells inside the stamp footprint with no section feature must be cleared.
+	if v := m.FeatureGrid[4*m.W+4]; v < NoFeatureThreshold {
+		t.Fatalf("empty stamp cell still hosts feature index %d", v)
+	}
+}

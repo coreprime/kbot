@@ -9,6 +9,8 @@
 // drops here instead of the TA tile-stamp flow.
 
 import { state, hostCallbacks, setStatus } from '../host-context.js'
+import { bumpContentVersion } from './content-cache.js'
+import { renderCanvas } from './canvas/render.js'
 import { TAK_TERRAIN_KEY, TAK_TERRAIN_EDITOR_MAX } from './constants.js'
 import { invalidateMinimapBase } from './minimap.js'
 
@@ -60,6 +62,55 @@ function reloadTakBackdrop() {
   })
 }
 
+// applyStampToLocalState mirrors a server-side section stamp into the
+// editor's height layer and feature list. Heights come from the section's
+// cached heights (preloaded for the placement overlay); when the cache is
+// cold the whole map height layer is refetched instead. Feature placements
+// covered by the stamp footprint are dropped — the stamp owns its area.
+function applyStampToLocalState(sectionPath, gx, gy) {
+  const mapAttrW = state.tileW * 2
+  const mapAttrH = state.tileH * 2
+  const duX = gx * 2
+  const duY = gy * 2
+  const sec = state.sectionHeights.get(sectionPath)
+  if (sec && Array.isArray(sec.heights) && sec.attrW > 0) {
+    for (let sy = 0; sy < sec.attrH; sy++) {
+      const dy = duY + sy
+      if (dy < 0 || dy >= mapAttrH) continue
+      for (let sx = 0; sx < sec.attrW; sx++) {
+        const dx = duX + sx
+        if (dx < 0 || dx >= mapAttrW) continue
+        state.heights[dy * mapAttrW + dx] = sec.heights[sy * sec.attrW + sx] | 0
+      }
+    }
+    dropFeaturesInRect(duX, duY, sec.attrW, sec.attrH)
+    bumpContentVersion()
+    return
+  }
+  // Cache miss — refetch the whole map's height layer (the section-heights
+  // endpoint parses any TA:K TNT, maps included).
+  fetch(`/api/studio/section-heights/${encodeURI(currentTakMapPath)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (!data || !Array.isArray(data.heights)) return
+      for (let i = 0; i < data.heights.length && i < state.heights.length; i++) {
+        state.heights[i] = data.heights[i] | 0
+      }
+      bumpContentVersion()
+      renderCanvas()
+    })
+    .catch(() => { /* alignment overlay degrades to stale heights */ })
+}
+
+// dropFeaturesInRect removes placements whose anchor falls inside a stamped
+// DataUnit rect — their cells were overwritten server-side.
+function dropFeaturesInRect(duX, duY, w, h) {
+  const before = state.features.length
+  state.features = state.features.filter((f) =>
+    !(f.ax >= duX && f.ax < duX + w && f.ay >= duY && f.ay < duY + h))
+  if (state.features.length !== before) bumpContentVersion()
+}
+
 // stampTakSection composites a section into the active TA:K map at graphic-unit
 // (gx, gy) and reloads the backdrop. gx/gy are tile (= graphic-unit) coords from
 // the canvas, which is exactly what the backend expects.
@@ -76,6 +127,11 @@ export async function stampTakSection(sectionPath, gx, gy) {
       setStatus(`Stamp failed: ${await r.text()}`)
       return
     }
+    // The stamp rewrote the map's DataUnits server-side; the client's
+    // height layer and feature list must follow or the next placement's
+    // alignment squares (and the feature overlay) compare against the
+    // OLD terrain — which reads as "the heightmap was never applied".
+    applyStampToLocalState(sectionPath, gx, gy)
     await reloadTakBackdrop()
     setStatus(`Stamped section at graphic unit (${gx}, ${gy}).`)
   } catch (e) {

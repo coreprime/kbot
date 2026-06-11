@@ -44,6 +44,12 @@ func (m *Map) StampSection(src *Map, atGUx, atGUy int) {
 		}
 	}
 	// DataUnit layers: heightmap + feature grid (2× the GU resolution).
+	// Feature indices are PER-MAP table positions, so the section's
+	// placements remap through this map's table (appending names it lacks);
+	// empty sentinel cells copy through as-is, clearing whatever the old
+	// terrain hosted there — the stamp owns its footprint.
+	srcNames := src.FeatureNames()
+	remap := make(map[uint16]uint16, len(srcNames))
 	duX, duY := atGUx*2, atGUy*2
 	for sy := 0; sy < src.H; sy++ {
 		dy := duY + sy
@@ -61,7 +67,16 @@ func (m *Map) StampSection(src *Map, atGUx, atGUy int) {
 				m.Height[di] = src.Height[si]
 			}
 			if si < len(src.FeatureGrid) && di < len(m.FeatureGrid) {
-				m.FeatureGrid[di] = src.FeatureGrid[si]
+				v := src.FeatureGrid[si]
+				if int(v) < len(srcNames) && v < NoFeatureThreshold {
+					mapped, ok := remap[v]
+					if !ok {
+						mapped = uint16(m.EnsureFeature(srcNames[v]))
+						remap[v] = mapped
+					}
+					v = mapped
+				}
+				m.FeatureGrid[di] = v
 			}
 		}
 	}
