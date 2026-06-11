@@ -17,6 +17,38 @@ const WASM_EXEC_URL = new URL('../wasm_exec.js', import.meta.url)
 
 let goReady = null
 
+// _wasmOutputTail keeps the last chunk of the Go program's console output
+// (panic messages + goroutine stacks land here via wasm_exec's fs shim) so a
+// crash can be diagnosed after the fact — the engine parks in select{}
+// forever, so go.run() resolving at all means the program died.
+const _wasmOutputTail = []
+const _WASM_TAIL_MAX = 16384
+
+// _captureWasmOutput wraps the fs.writeSync shim wasm_exec.js installs so
+// every byte the Go runtime writes is mirrored into _wasmOutputTail. The
+// original shim still runs (console logging is unchanged).
+function _captureWasmOutput() {
+  const fs = globalThis.fs
+  if (!fs || typeof fs.writeSync !== 'function' || fs.__kbotCaptured) return
+  fs.__kbotCaptured = true
+  const orig = fs.writeSync.bind(fs)
+  const dec = new TextDecoder('utf-8')
+  fs.writeSync = (fd, buf) => {
+    try {
+      _wasmOutputTail.push(dec.decode(buf))
+      let total = 0
+      for (let i = _wasmOutputTail.length - 1; i >= 0; i--) {
+        total += _wasmOutputTail[i].length
+        if (total > _WASM_TAIL_MAX) {
+          _wasmOutputTail.splice(0, i)
+          break
+        }
+      }
+    } catch { /* capture is best-effort; never break the shim */ }
+    return orig(fd, buf)
+  }
+}
+
 // loadGo injects Go's wasm_exec.js (a classic script that defines globalThis.Go)
 // and instantiates the engine module.  Returns a promise that resolves once
 // globalThis.KbotEngine is live.  Cached so repeated source construction shares
@@ -27,12 +59,22 @@ function loadGo() {
     if (typeof globalThis.Go === 'undefined') {
       await injectScript(WASM_EXEC_URL.href)
     }
+    _captureWasmOutput()
     const go = new globalThis.Go()
     const result = await WebAssembly.instantiateStreaming(fetch(WASM_URL.href), go.importObject)
     // go.run never resolves while the module is parked in select{}; that is
     // intentional — it keeps the exported KbotEngine callable for the page's
-    // lifetime.  We don't await it.
-    go.run(result.instance)
+    // lifetime.  We don't await it.  If it DOES resolve the engine panicked
+    // (or os.Exit'd): preserve the captured output for diagnosis and let the
+    // page know — every wasm-backed sim on this page is now dead.
+    go.run(result.instance).then(() => {
+      const output = _wasmOutputTail.join('')
+      globalThis.__KBOT_WASM_CRASH = { output }
+      console.error('KBot wasm engine exited — every sandbox/viewer sim on this page is dead. Captured output:\n' + output)
+      try {
+        window.dispatchEvent(new CustomEvent('kbot-wasm-crash', { detail: { output } }))
+      } catch { /* event dispatch is best-effort */ }
+    })
     if (!globalThis.KbotEngine) {
       throw new Error('wasm engine loaded but KbotEngine was not exported')
     }

@@ -148,6 +148,15 @@ export class SandboxView {
 
   async open() {
     this.#setStatus('Initialising sandbox…')
+    // A wasm engine exit (Go panic) silently freezes every sim on the page —
+    // make it loud so a "units stopped responding" report comes with the
+    // captured stack (wasm-source.js stashes it on __KBOT_WASM_CRASH).
+    if (!this._wasmCrashHandler) {
+      this._wasmCrashHandler = () => {
+        this.#setStatus('⚠ Engine crashed — sim is frozen. Stack captured in the console; reload the page to recover.')
+      }
+      window.addEventListener('kbot-wasm-crash', this._wasmCrashHandler)
+    }
     if (!this.renderer) {
       const palette = await TAPalette.load()
       this.palette = palette
@@ -2410,6 +2419,10 @@ export class SandboxView {
   }
 
   dispose() {
+    if (this._wasmCrashHandler) {
+      window.removeEventListener('kbot-wasm-crash', this._wasmCrashHandler)
+      this._wasmCrashHandler = null
+    }
     // Detach the orbit-controls listeners (wheel / pointer / key)
     // FIRST so any in-flight wheel event between dispose start and
     // canvas teardown can't fire requestRedraw against the about-to-
