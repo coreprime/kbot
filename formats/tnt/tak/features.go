@@ -102,3 +102,42 @@ type FeatureAnchor struct {
 	X, Y int
 	Name string
 }
+
+// CompactFeatureTable drops feature-table entries no grid cell references —
+// the editor's EnsureFeature appends but never reaps, and hand-edited maps
+// accumulate dead names. Referenced entries keep their relative order; grid
+// indices are remapped in place. Returns the entry counts before and after.
+func (m *Map) CompactFeatureTable() (before, after int) {
+	names := m.FeatureNames()
+	before = len(names)
+	if before == 0 {
+		return 0, 0
+	}
+	used := make([]bool, before)
+	for _, v := range m.FeatureGrid {
+		if int(v) < before && v < NoFeatureThreshold {
+			used[v] = true
+		}
+	}
+	remap := make([]uint16, before)
+	var raw []byte
+	for i, n := range names {
+		if !used[i] {
+			continue
+		}
+		var entry [featureEntrySize]byte
+		binary.LittleEndian.PutUint32(entry[:4], uint32(after))
+		copy(entry[4:], n)
+		raw = append(raw, entry[:]...)
+		remap[i] = uint16(after)
+		after++
+	}
+	for i, v := range m.FeatureGrid {
+		if int(v) < before && v < NoFeatureThreshold {
+			m.FeatureGrid[i] = remap[v]
+		}
+	}
+	m.FeatureTableRaw = raw
+	m.Header.FeatureCount = uint32(after)
+	return before, after
+}

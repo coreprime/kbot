@@ -202,6 +202,9 @@ var (
 // skipped (matches a map authoring tool that never wrote a sea level).
 // Returns nil when the map has no attribute grid.
 func (m *Map) RenderBuildMap(seaLevel uint32) *image.RGBA {
+	if m.IsTAK {
+		return m.renderTAKBuildMap(seaLevel)
+	}
 	if m.TileAttr == nil || m.AttrW == 0 || m.AttrH == 0 {
 		return nil
 	}
@@ -232,6 +235,45 @@ func (m *Map) RenderBuildMap(seaLevel uint32) *image.RGBA {
 				continue
 			}
 			if seaLevel > 0 && uint32(a.Height) < seaLevel {
+				img.SetRGBA(x, y, buildMapUnderwater)
+				continue
+			}
+			if cellIsCliff(heights, w, h, x, y) {
+				img.SetRGBA(x, y, buildMapCliff)
+				continue
+			}
+			img.SetRGBA(x, y, buildMapBuildable)
+		}
+	}
+	return img
+}
+
+// renderTAKBuildMap classifies a TA: Kingdoms map's DataUnit grid (16px
+// cells — the same resolution as TA's attribute grid) into the buildmap
+// buckets. TA:K has no void sentinel, so the black bucket never appears:
+// cells are feature-blocked (red), underwater (blue), cliff (yellow), or
+// buildable (green). Returns nil when the map carries no heightmap.
+func (m *Map) renderTAKBuildMap(seaLevel uint32) *image.RGBA {
+	if m.TAKHeight == nil || m.TAKW == 0 || m.TAKH == 0 {
+		return nil
+	}
+	w, h := m.TAKW, m.TAKH
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	heights := make([]int, w*h)
+	for i, v := range m.TAKHeight {
+		heights[i] = int(v)
+	}
+	maxFeature := uint16(m.Header.TileAnims)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := y*w + x
+			if m.TAKFeatureGrid != nil {
+				if f := m.TAKFeatureGrid[i]; f < takNoFeature && f < maxFeature {
+					img.SetRGBA(x, y, buildMapFeatureBlock)
+					continue
+				}
+			}
+			if seaLevel > 0 && uint32(heights[i]) < seaLevel {
 				img.SetRGBA(x, y, buildMapUnderwater)
 				continue
 			}

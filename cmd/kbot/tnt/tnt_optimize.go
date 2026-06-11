@@ -9,6 +9,7 @@ import (
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot/formats/tnt/tak"
 )
 
 func newTNTOptimizeCommand() *cobra.Command {
@@ -67,7 +68,11 @@ default.  Use --target to write the TNT to a file instead.`,
 				return fmt.Errorf("parse tnt: %w", err)
 			}
 			if m.IsTAK {
-				return fmt.Errorf("TA: Kingdoms maps are texture-mapped and have no tile pool to optimize")
+				// TA:K maps have no tile pool; their optimizable redundancy is
+				// the feature-name table (the studio's editor appends entries
+				// but never reaps). Compact it and re-emit the 0x4000 stream —
+				// the tile-pool flags (--similarity, --keep-unused) don't apply.
+				return optimizeTAK(path, data, target)
 			}
 			features, err := m.LoadFeatures(r)
 			if err != nil {
@@ -119,4 +124,28 @@ default.  Use --target to write the TNT to a file instead.`,
 	cmd.Flags().BoolVar(&keepUnused, "keep-unused", false,
 		"Keep tile graphics that no map cell references")
 	return cmd
+}
+
+// optimizeTAK compacts a TA: Kingdoms map's feature-name table (dropping
+// entries no grid cell references) and writes the re-encoded 0x4000 stream.
+func optimizeTAK(path string, data []byte, target string) error {
+	m, err := tak.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("parse TA:K tnt: %w", err)
+	}
+	before, after := m.CompactFeatureTable()
+	fmt.Fprintf(os.Stderr, "loaded %s: %dx%d DataUnits, %d feature entries\n", path, m.W, m.H, before)
+	fmt.Fprintf(os.Stderr, "feature table: %d -> %d entries (%d unused removed)\n", before, after, before-after)
+	out, err := cli.OpenOutput(target)
+	if err != nil {
+		return err
+	}
+	defer cli.CloseOutput(out, target)
+	if err := tak.Encode(out, m); err != nil {
+		return fmt.Errorf("encode TA:K tnt: %w", err)
+	}
+	if target != "" {
+		fmt.Fprintf(os.Stderr, "wrote %s\n", target)
+	}
+	return nil
 }

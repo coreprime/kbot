@@ -30,7 +30,10 @@ that classifies every cell into one of five buckets:
   green   buildable
 
 By default the .tnt header's SeaLevel field is used for the underwater
-classification; pass --sealevel to override (0 disables the check).`,
+classification; pass --sealevel to override (0 disables the check).
+
+TA: Kingdoms maps classify their DataUnit grid (same 16px cell size) the
+same way, minus the void bucket — the 0x4000 format has no void sentinel.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := os.ReadFile(args[0])
@@ -40,9 +43,6 @@ classification; pass --sealevel to override (0 disables the check).`,
 			m, err := tnt.LoadFromReader(bytes.NewReader(data))
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
-			}
-			if m.IsTAK {
-				return fmt.Errorf("TA: Kingdoms maps are not yet supported by buildmap (buildability rules are TA-specific)")
 			}
 			sea := m.Header.SeaLevel
 			if cmd.Flags().Changed("sealevel") {

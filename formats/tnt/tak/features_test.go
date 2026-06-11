@@ -102,3 +102,52 @@ func TestSetFeaturePlacementsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactFeatureTableDropsUnused(t *testing.T) {
+	m := loadRetailMap(t)
+	// Append a dead entry the grid never references, then compact.
+	if idx := m.EnsureFeature("kbot_dead_entry"); idx < 0 {
+		t.Fatal("append failed")
+	}
+	beforeNames := m.FeatureNames()
+	placedBefore := map[string]int{}
+	for _, v := range m.FeatureGrid {
+		if v < NoFeatureThreshold {
+			placedBefore[beforeNames[v]]++
+		}
+	}
+
+	before, after := m.CompactFeatureTable()
+	if after >= before {
+		t.Fatalf("compaction removed nothing (before=%d after=%d)", before, after)
+	}
+	for _, n := range m.FeatureNames() {
+		if n == "kbot_dead_entry" {
+			t.Fatal("dead entry survived compaction")
+		}
+	}
+	// Every placement must still resolve to the same name.
+	afterNames := m.FeatureNames()
+	placedAfter := map[string]int{}
+	for _, v := range m.FeatureGrid {
+		if v < NoFeatureThreshold {
+			placedAfter[afterNames[v]]++
+		}
+	}
+	if len(placedBefore) != len(placedAfter) {
+		t.Fatalf("placement name set changed: %v vs %v", placedBefore, placedAfter)
+	}
+	for n, c := range placedBefore {
+		if placedAfter[n] != c {
+			t.Fatalf("placement count for %s changed: %d -> %d", n, c, placedAfter[n])
+		}
+	}
+	// And the result must round-trip through the writer.
+	var buf bytes.Buffer
+	if err := Encode(&buf, m); err != nil {
+		t.Fatalf("encode after compaction: %v", err)
+	}
+	if _, err := Decode(bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatalf("re-decode after compaction: %v", err)
+	}
+}

@@ -35,7 +35,7 @@ docs/formats/tnt.md); use 'kbot tnt describe' to inspect those values.`,
 				return fmt.Errorf("parse tnt: %w", err)
 			}
 			if m.IsTAK {
-				return fmt.Errorf("TA: Kingdoms maps are not yet supported by voidmap (void sentinels are TA-specific)")
+				return fmt.Errorf("TA: Kingdoms maps have no void sentinel — the 0x4000 format encodes no void cells; use 'kbot tnt buildmap' for a buildability classification")
 			}
 			img := m.RenderVoidMap()
 			if img == nil {

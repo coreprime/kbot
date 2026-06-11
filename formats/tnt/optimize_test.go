@@ -129,9 +129,9 @@ func TestOptimizeSimilaritySameHeights(t *testing.T) {
 	// context, so it should NOT consolidate even though its pixels are
 	// also similar.
 	tiles := [][]byte{
-		solidTile(0),  // -> rgb (0,0,0)
-		solidTile(1),  // -> rgb (1,1,1) — visually identical
-		solidTile(0),  // tile 2: pixels match tile 0 exactly
+		solidTile(0), // -> rgb (0,0,0)
+		solidTile(1), // -> rgb (1,1,1) — visually identical
+		solidTile(0), // tile 2: pixels match tile 0 exactly
 	}
 	tilemap := []uint16{0, 1, 2, 2}
 	heights := []uint8{
