@@ -1903,20 +1903,33 @@ export class SandboxView {
   #pickUnitAt(sx, sy) {
     if (!this.scene || !this.camera) return null
     let best = null
-    let bestDist = 32  // pixel-radius gate
+    let bestScore = 0
     for (const u of this.scene.units()) {
       // A dead unit (or one mid death-animation) is scenery, not a
       // selectable actor — clicks pass through to the ground/others.
       if (u.dead) continue
-      // Compose model-space centroid then add unit pos.
-      const cx = u.pos.x
-      const cy = u.pos.y + 12  // approximate centre-of-mass lift
-      const cz = u.pos.z
-      const screen = this.#worldToScreen(cx, cy, cz)
-      if (!screen) continue
-      const dx = screen[0] - sx, dy = screen[1] - sy
-      const dist = Math.hypot(dx, dy)
-      if (dist < bestDist) { bestDist = dist; best = u }
+      // Project the unit's vertical axis (feet → head) and measure the
+      // click's distance to that SEGMENT. The acceptance gate scales with
+      // the projected height, so a unit filling 200px when zoomed in is
+      // clickable across its whole body, not just a fixed 32px disc near
+      // its feet (which made torso clicks fall through to the ground).
+      const feet = this.#worldToScreen(u.pos.x, u.pos.y, u.pos.z)
+      const head = this.#worldToScreen(u.pos.x, u.pos.y + 24, u.pos.z)
+      if (!feet || !head) continue
+      const ax = feet[0], ay = feet[1]
+      const bx = head[0], by = head[1]
+      const abx = bx - ax, aby = by - ay
+      const abLen2 = abx * abx + aby * aby
+      let t = abLen2 > 0 ? ((sx - ax) * abx + (sy - ay) * aby) / abLen2 : 0
+      t = Math.max(0, Math.min(1, t))
+      const px = ax + abx * t, py = ay + aby * t
+      const dist = Math.hypot(sx - px, sy - py)
+      const gate = Math.max(24, 0.6 * Math.sqrt(abLen2))
+      if (dist >= gate) continue
+      // Among gated candidates prefer the closest relative to its gate so
+      // a small far unit isn't shadowed by a huge near one.
+      const score = 1 - dist / gate
+      if (score > bestScore) { bestScore = score; best = u }
     }
     return best
   }
