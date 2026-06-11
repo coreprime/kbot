@@ -1,0 +1,15 @@
+{
+  "name": "@kbot/game-takingdoms",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "TA: Kingdoms game adapter: shared-weapon script conventions, COB quick actions, branding, and welcome theming for KBot Studio.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./*": "./*.js"
+  },
+  "dependencies": {
+    "@kbot/game-totala": "0.0.0"
+  }
+}

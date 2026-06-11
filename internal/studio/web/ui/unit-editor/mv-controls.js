@@ -18,6 +18,7 @@
 import { ArmedCursor } from '@kbot/game3d/armed-cursor'
 import { shouldForceTarget } from '@kbot/game3d/force-target'
 import { hostCallbacks } from '../host-context.js'
+import { activeGame } from '../common/game-registry.js'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import {
   initSmokeTrails,
@@ -1278,15 +1279,26 @@ export class MvControls {
     //     that piece when the user clicks Fire so VTOLs aren't
     //     stuck with permanently-grey weapon controls.
     const hasW = (idx) => !!(m.weapons && m.weapons[idx] && m.weapons[idx].name)
-    // TA:K COBs ship one shared AimWeapon/FireWeapon/QueryWeapon set; a slot
+    // The game adapter owns the script-name conventions. When the game ships
+    // a shared parameterized weapon set (TA:K's AimWeapon/FireWeapon), a slot
     // is live when the FBI declares a weapon there (slot 0 also lights up on
     // the shared scripts alone, mirroring the TA Primary fallback).
-    const takShared = !!(cob && (cob.hasScript('AimWeapon') || cob.hasScript('FireWeapon')))
+    const weapons = activeGame().weapons
+    const shared = weapons.shared
+    const hasShared = !!(cob && shared && (cob.hasScript(shared.aim) || cob.hasScript(shared.fire)))
+    const slotOn = (idx) => {
+      if (!cob) return false
+      const s = weapons.slots[idx]
+      if (!s) return false
+      return cob.hasScript(s.aim) || cob.hasScript(s.fire)
+        || (hasW(idx) && cob.hasScript(s.query))
+        || (hasShared && (idx === 0 || hasW(idx)))
+    }
     const enabled = {
       move:      !!(m.canMove && cob),
-      primary:   !!(cob && (cob.hasScript('AimPrimary')   || cob.hasScript('FirePrimary')   || (hasW(0) && cob.hasScript('QueryPrimary')) || takShared)),
-      secondary: !!(cob && (cob.hasScript('AimSecondary') || cob.hasScript('FireSecondary') || (hasW(1) && cob.hasScript('QuerySecondary')) || (hasW(1) && takShared))),
-      tertiary:  !!(cob && (cob.hasScript('AimTertiary')  || cob.hasScript('FireTertiary')  || (hasW(2) && cob.hasScript('QueryTertiary')) || (hasW(2) && takShared))),
+      primary:   slotOn(0),
+      secondary: slotOn(1),
+      tertiary:  slotOn(2),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction

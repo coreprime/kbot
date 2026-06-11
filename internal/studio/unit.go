@@ -11,7 +11,6 @@ import (
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gamedata/tak"
-	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -507,12 +506,12 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// comparison anyway).
 	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.ExplodeAs))
 	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.SelfDestructAs))
-	// Sounds — SoundCategory keys into gamedata/sound.tdf.  Each
-	// section there maps named events (select1, ok1, arrived1, ...)
-	// to .wav stems in sounds/.  Studio plays the matching .wav
-	// when the user performs the corresponding action.
+	// Sounds — the game adapter resolves SoundCategory into an event map
+	// (TA: gamedata/sound.tdf classes; TA:K: per-class soundclasses/ pools
+	// mapped onto the same numbered keys).  The whitelist keeps a mod from
+	// injecting events the client never plays.
 	if cat := strings.ToUpper(strings.TrimSpace(info.SoundCategory)); cat != "" {
-		if events := sess.loadSoundSection(cat); events != nil {
+		if events := sess.palettes().UnitSounds(cat); len(events) > 0 {
 			out.Sounds = make(map[string]string)
 			for _, key := range soundEventKeys {
 				if v := strings.TrimSpace(events[key]); v != "" {
@@ -520,7 +519,8 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Corpse chain: FBI corpse= names a wreck feature whose object= is the
+	}
+	// Corpse chain: FBI corpse= names a wreck feature whose object= is the
 	// 3DO the sandbox renders when the unit dies; its featuredead chains to
 	// the damaged wreck used for heavier kills (Killed corpsetype 2).
 	if corpse := strings.ToLower(strings.TrimSpace(info.Corpse)); corpse != "" {
@@ -534,105 +534,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// TA:K has no gamedata/sound.tdf — each class is its own file under
-		// gamedata/soundclasses/ with per-event weighted pools. Translate
-		// those pools into the TA-style numbered keys the client plays.
-		if len(out.Sounds) == 0 {
-			if tak := sess.loadTAKSoundClass(cat); len(tak) > 0 {
-				out.Sounds = tak
-			}
-		}
-	}
 	writeJSON(w, out)
-}
-
-// loadTAKSoundClass reads gamedata/soundclasses/*.tdf looking for the named
-// class section and maps its event pools onto the TA-style keys the studio
-// client already plays: [select] entries become select1..N and [move] +
-// [attack] acknowledgements become ok1..N. Pool weights order the entries
-// (heaviest first) but every variant stays available to the random picker.
-func (sess *Session) loadTAKSoundClass(name string) map[string]string {
-	sec := sess.findTAKSoundClass(name)
-	if sec == nil {
-		return nil
-	}
-	out := make(map[string]string)
-	emit := func(sub *tdf.Section, keyBase string, n int) int {
-		if sub == nil {
-			return n
-		}
-		type entry struct {
-			stem   string
-			weight float64
-		}
-		var pool []entry
-		for _, f := range sub.Fields() {
-			stem := strings.ToLower(strings.TrimSpace(f.Key()))
-			if stem == "" {
-				continue
-			}
-			w, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(f.Value()), ";"), 64)
-			pool = append(pool, entry{stem, w})
-		}
-		sort.SliceStable(pool, func(i, j int) bool { return pool[i].weight > pool[j].weight })
-		for _, e := range pool {
-			n++
-			out[keyBase+strconv.Itoa(n)] = e.stem
-		}
-		return n
-	}
-	subs := map[string]*tdf.Section{}
-	for _, sub := range sec.Sections() {
-		subs[strings.ToLower(sub.Name())] = sub
-	}
-	emit(subs["select"], "select", 0)
-	n := emit(subs["move"], "ok", 0)
-	emit(subs["attack"], "ok", n)
-	return out
-}
-
-// findTAKSoundClass scans gamedata/soundclasses/*.tdf for the section whose
-// name matches the unit's soundcategory. Results are cached per class name
-// (nil cached for known-missing) so repeated unit-meta requests stay cheap.
-func (sess *Session) findTAKSoundClass(name string) *tdf.Section {
-	sess.takSoundMu.Lock()
-	if sess.takSoundClasses == nil {
-		sess.takSoundClasses = map[string]*tdf.Section{}
-	}
-	if sec, ok := sess.takSoundClasses[name]; ok {
-		sess.takSoundMu.Unlock()
-		return sec
-	}
-	sess.takSoundMu.Unlock()
-
-	var found *tdf.Section
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "gamedata/soundclasses/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
-		data, err := sess.vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		doc, err := tdf.Parse(bytes.NewReader(data))
-		if err != nil {
-			continue
-		}
-		for _, sec := range doc.Sections() {
-			if strings.EqualFold(sec.Name(), name) {
-				found = sec
-				break
-			}
-		}
-		if found != nil {
-			break
-		}
-	}
-	sess.takSoundMu.Lock()
-	sess.takSoundClasses[name] = found
-	sess.takSoundMu.Unlock()
-	return found
 }
 
 // soundEventKeys is the set of TA sound-event names the studio
@@ -650,42 +552,6 @@ var soundEventKeys = []string{
 	"build", "repair", "working",
 	"count0", "count1", "count2", "count3", "count4", "count5",
 	"canceldestruct",
-}
-
-// loadSoundSection reads gamedata/sound.tdf and returns the named
-// section (case-insensitive).  Cached for the server lifetime so
-// repeated unit-meta requests don't re-parse the (large) TDF.
-// loadSoundSection reads gamedata/sound.tdf and returns the named class's
-// event map (event name → sound stem) with keys lower-cased, or nil when the
-// file or class is missing.  Cached for the server lifetime.
-func (sess *Session) loadSoundSection(name string) map[string]string {
-	sess.soundTDFOnce.Do(func() {
-		// gamedata/sound.tdf is the canonical location in TA.  Try
-		// the lowercase + casing variants so mods that ship the
-		// file with a different name still resolve.
-		for _, p := range []string{"gamedata/sound.tdf", "gamedata/SOUND.tdf", "GameData/sound.tdf"} {
-			if data, err := sess.vfs.ReadFile(p); err == nil {
-				var classes []ta.SoundClass
-				if derr := tdf.Unmarshal(data, &classes); derr == nil {
-					sess.soundTDFClasses = classes
-					return
-				}
-			}
-		}
-	})
-	sess.soundTDFMu.Lock()
-	defer sess.soundTDFMu.Unlock()
-	for i := range sess.soundTDFClasses {
-		if !strings.EqualFold(sess.soundTDFClasses[i].Key, name) {
-			continue
-		}
-		events := make(map[string]string, len(sess.soundTDFClasses[i].Events))
-		for k, v := range sess.soundTDFClasses[i].Events {
-			events[strings.ToLower(k)] = v
-		}
-		return events
-	}
-	return nil
 }
 
 // loadUnitFBI finds the units/<name>.fbi by walking the VFS for a
@@ -752,26 +618,6 @@ func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
 	if d, ok := sec.Damage["default"]; ok {
 		out.DamageDefault = int(d)
 	}
-}
-
-// cursorPalette returns the palette for the cursors GAF from the TA:K
-// sibling PCX (anims/cursors.pcx), or nil when no sidecar ships (TA installs;
-// the caller then falls back to the global palette).
-func (sess *Session) cursorPalette() *gaf.Palette {
-	for _, p := range []string{"anims/cursors.pcx", "Anims/cursors.pcx"} {
-		data, err := sess.vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		reader, err := pcx.LoadFromReader(bytes.NewReader(data))
-		if err != nil {
-			continue
-		}
-		if pal := reader.EmbeddedPalette(); pal != nil {
-			return pal
-		}
-	}
-	return nil
 }
 
 // loadWeaponSection finds the weapons/*.tdf section whose key
@@ -1029,10 +875,10 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cursor sequence not found", http.StatusNotFound)
 		return
 	}
-	// TA:K ships the cursor palette in a sibling anims/cursors.pcx (its GAFs
-	// carry per-asset palettes); TA uses the global palette. Probe the
-	// sidecar first so both games render with the colours they shipped.
-	pal := sess.cursorPalette()
+	// The game adapter supplies a cursor palette when the game ships one
+	// (TA:K's anims/cursors.pcx sidecar); nil means use the global palette,
+	// which is TA's convention.
+	pal := sess.palettes().CursorPalette()
 	if pal == nil {
 		p, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 		if err != nil {

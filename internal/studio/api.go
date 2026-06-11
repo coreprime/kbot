@@ -285,7 +285,7 @@ func (sess *Session) renderSectionPreviewPNG(sectionPath string, pal color.Palet
 		}
 		if data, err := sess.vfs.ReadFile(sectionPath); err == nil {
 			if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil && m.Minimap != nil {
-				if mm := m.RenderMinimap(sess.palettes().terrainPalette(sectionPath)); mm != nil {
+				if mm := m.RenderMinimap(sess.palettes().TerrainPalette(sectionPath)); mm != nil {
 					var buf bytes.Buffer
 					if png.Encode(&buf, mm) == nil {
 						return buf.Bytes()
@@ -362,7 +362,7 @@ func (sess *Session) summariseMapWithMinimap(p string) (mapEntry, []byte) {
 				entry.MinimapURL = "/api/studio/minimap/" + p
 				// The resolver picks the per-map terrain palette (TA:K bakes its
 				// minimap with the map's per-kingdom table).
-				if img := m.RenderMinimap(sess.palettes().terrainPalette(p)); img != nil {
+				if img := m.RenderMinimap(sess.palettes().TerrainPalette(p)); img != nil {
 					var buf bytes.Buffer
 					if err := png.Encode(&buf, img); err == nil {
 						pngBytes = buf.Bytes()
@@ -412,7 +412,7 @@ func (sess *Session) handleMapMinimap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no minimap available", http.StatusNotFound)
 		return
 	}
-	img := m.RenderMinimap(sess.palettes().terrainPalette(mapPath))
+	img := m.RenderMinimap(sess.palettes().TerrainPalette(mapPath))
 	if img == nil {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 		return
@@ -648,10 +648,8 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	// as the planet so the editor's section drawer activates the matching
 	// kingdom's section group (sections are grouped by kingdom for TA:K).
 	if textureMapped && planet == "" {
-		if tr, ok := sess.palettes().(*takPaletteResolver); ok {
-			if k := tr.kingdomForMap(mapPath); k != "" {
-				planet = k
-			}
+		if k := sess.palettes().MapTerrainGroup(mapPath); k != "" {
+			planet = k
 		}
 	}
 
@@ -1198,7 +1196,7 @@ func (sess *Session) renderFeatureStaticPNG(gafFilename, seqName string) ([]byte
 	if len(target.Frames) == 0 {
 		return nil, fmt.Errorf("sequence %s has no frames", target.Name)
 	}
-	pal := sess.palettes().featurePalette(gafFilename)
+	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
 	if err := target.Frames[0].ToPNG(pal, &buf); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
@@ -1235,7 +1233,7 @@ func (sess *Session) renderFeatureAPNG(gafFilename, seqName string) ([]byte, err
 			break
 		}
 	}
-	pal := sess.palettes().featurePalette(gafFilename)
+	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
 	if err := target.ToAPNG(pal, &buf); err != nil {
 		return nil, fmt.Errorf("encode apng: %w", err)

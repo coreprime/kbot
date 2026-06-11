@@ -41,6 +41,7 @@
 // same as before this extraction.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
+import { activeGame } from '../common/game-registry.js'
 import { mvSetSimulationSpeed } from '../common/sim-controls.js'
 import { advanceCobLifecycle, bindingOf } from '../common/cob-lifecycle.js'
 
@@ -217,7 +218,8 @@ export function runCobEntry(cob, name) {
   if (/^Create$/i.test(name)) {
     mvControls?._playSoundRandom?.(['select1', 'select2', 'select3', 'unitcomplete'])
   }
-  if (/^Aim(Primary|Secondary|Tertiary|Weapon\d*)$/i.test(name)) {
+  const weapons = activeGame().weapons
+  if (weapons.isAimScript(name)) {
     cob.unit.killThreadsByName('RestoreAfterDelay')
     cob.unit.killThreadsByName('RestorePosition')
     // Independent random heading per click - no per-weapon bias.
@@ -245,19 +247,18 @@ export function runCobEntry(cob, name) {
       const pitchRad = Math.atan2(dy, distance)
       pitch = Math.round(pitchRad * TURNS / (2 * Math.PI))
     }
-    // TA:K's shared AimWeapon takes the weapon index as a third argument
-    // and reports readiness through the WEAPON_READY port; the quick
-    // action drives weapon 0.
-    if (/^AimWeapon$/i.test(name)) {
-      cob.start(name, [heading, pitch, 0])
-    } else {
-      cob.start(name, [heading, pitch])
-    }
+    // The adapter shapes the stack for the game's convention — TA's
+    // (heading, pitch), or TA:K's shared AimWeapon which takes the weapon
+    // index as a third argument and reports readiness through the
+    // WEAPON_READY port. The quick action drives weapon 0.
+    cob.start(name, weapons.entryArgs(name, { heading, pitch, weapon: 0 }) || [heading, pitch])
     return
   }
-  // TA:K's shared FireWeapon dispatches on a weapon-index argument.
-  if (/^FireWeapon$/i.test(name)) {
-    cob.start(name, [0])
+  // Non-aim entry points may still take arguments under the game's
+  // convention (TA:K's FireWeapon dispatches on a weapon index).
+  const args = weapons.entryArgs(name, { weapon: 0 })
+  if (args) {
+    cob.start(name, args)
     return
   }
   cob.start(name)

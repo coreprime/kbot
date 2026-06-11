@@ -551,7 +551,7 @@ func (w *World) stepWeapons(u *Unit) {
 		// Body-aimed units (TA:K ground units, which have no turret scripts)
 		// additionally pivot the whole unit toward the target and hold fire
 		// until the body bears.
-		if usesBodyAim(u) && !w.faceWeaponTarget(u, targetPos) {
+		if conventionFor(u.binding).bodyAim(u.Meta) && !w.faceWeaponTarget(u, targetPos) {
 			aimReady = false
 		}
 		rngF := wm.Range
@@ -586,13 +586,9 @@ func (w *World) stepWeapons(u *Unit) {
 		// Run it before the query so a script that cycles its barrel from the Fire
 		// thread has toggled by the time Query reports the muzzle, matching TA.
 		if u.binding != nil {
-			if name := fireScriptName(u.binding, slot); name != "" && u.binding.HasScript(name) {
-				if usesTAKWeaponScripts(u.binding) {
-					// TA:K's shared FireWeapon dispatches on the weapon index.
-					u.binding.Start(name, slot)
-				} else {
-					u.binding.Start(name)
-				}
+			conv := conventionFor(u.binding)
+			if name := conv.fireScript(slot); name != "" && u.binding.HasScript(name) {
+				u.binding.Start(name, conv.fireArgs(slot)...)
 			}
 		}
 		// Resolve which piece the shot exits from via the Query<slot> script. The
@@ -697,74 +693,12 @@ const aimReissueArc int32 = 512
 // turret on target instead of letting it drift back to its home pose.
 const aimRefreshMs int64 = 1000
 
-// weaponSlotSuffix maps a weapon slot to the COB naming convention TA uses for
-// its per-weapon aim/fire/query entry points.
-var weaponSlotSuffix = [3]string{"Primary", "Secondary", "Tertiary"}
-
-// usesTAKWeaponScripts reports whether the unit's COB follows the TA: Kingdoms
-// weapon convention: one parameterized AimWeapon/FireWeapon/QueryWeapon set
-// shared by every slot, with the weapon index passed as an argument, instead
-// of TA's per-slot Aim<Primary|Secondary|Tertiary> entry points. The two
-// conventions also differ in how aim completion is reported — a TA aim thread
-// returns TRUE, a TA:K script writes the weapon index into the WEAPON_READY
-// port — so callers branch on this for the whole calling sequence.
-func usesTAKWeaponScripts(b Binding) bool {
-	return b != nil && b.HasScript("AimWeapon")
-}
-
-func aimScriptName(b Binding, slot int) string {
-	if usesTAKWeaponScripts(b) {
-		return "AimWeapon"
-	}
-	if slot < 0 || slot >= len(weaponSlotSuffix) {
-		return ""
-	}
-	return "Aim" + weaponSlotSuffix[slot]
-}
-
-func fireScriptName(b Binding, slot int) string {
-	if usesTAKWeaponScripts(b) {
-		return "FireWeapon"
-	}
-	if slot < 0 || slot >= len(weaponSlotSuffix) {
-		return ""
-	}
-	return "Fire" + weaponSlotSuffix[slot]
-}
-
-func queryScriptName(b Binding, slot int) string {
-	if usesTAKWeaponScripts(b) {
-		return "QueryWeapon"
-	}
-	if slot < 0 || slot >= len(weaponSlotSuffix) {
-		return ""
-	}
-	return "Query" + weaponSlotSuffix[slot]
-}
-
-// takAimBinding is the optional surface a script binding exposes so the weapon
-// SM can consume TA:K's port-based aim handshake. The script VM's *Unit
-// satisfies it; for bindings without it the SM falls back to the stuck-timeout.
-type takAimBinding interface {
-	TakeWeaponReady(slot int) bool
-	TakeWeaponAimAborted(slot int) bool
-}
-
 // bodyAimArc is how far (TA-angle units, ~10 degrees) a body-aimed unit's
-// heading may be off the target bearing and still fire. TA:K units carry no
-// turret aim scripts — the engine pivots the whole unit — so the gate is
-// deliberately lenient: the projectile already launches at the target, the
-// pivot is what makes the unit visibly point where it shoots.
+// heading may be off the target bearing and still fire. Body-aimed units
+// carry no turret aim scripts — the engine pivots the whole unit — so the
+// gate is deliberately lenient: the projectile already launches at the
+// target, the pivot is what makes the unit visibly point where it shoots.
 const bodyAimArc int32 = 1820
-
-// usesBodyAim reports whether the engine, not the unit's script, owns turning
-// the unit to face its weapon target. TA turreted units aim via their COB
-// (AimPrimary turns the turret pieces); TA:K's shared AimWeapon scripts manage
-// recoil/readiness but expect the engine to rotate a mobile unit's body.
-// Aircraft keep their fire-arc maneuvering instead.
-func usesBodyAim(u *Unit) bool {
-	return usesTAKWeaponScripts(u.binding) && u.Meta != nil && u.Meta.CanMove && !u.Meta.IsAircraft
-}
 
 // faceWeaponTarget pivots a stationary unit's body toward the target bearing
 // at its FBI turn rate, reporting whether the heading is within bodyAimArc.
@@ -812,7 +746,8 @@ func (w *World) queryFirePiece(u *Unit, slot int) int32 {
 	if u.binding == nil {
 		return -1
 	}
-	name := queryScriptName(u.binding, slot)
+	conv := conventionFor(u.binding)
+	name := conv.queryScript(slot)
 	if name == "" || !u.binding.HasScript(name) {
 		return -1
 	}
@@ -820,14 +755,7 @@ func (w *World) queryFirePiece(u *Unit, slot int) int32 {
 	if !ok {
 		return -1
 	}
-	// TA's Query<slot> takes one local (the piece, written by the script).
-	// TA:K's shared QueryWeapon takes (piece-out, weaponIdx) so the script can
-	// branch per weapon; both report the piece through the first local.
-	args := []int{0}
-	if usesTAKWeaponScripts(u.binding) {
-		args = append(args, slot)
-	}
-	if piece, ok := qb.RunQuery(name, args...); ok {
+	if piece, ok := qb.RunQuery(name, conv.queryArgs(slot)...); ok {
 		return piece
 	}
 	return -1
@@ -852,11 +780,11 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 	if u.binding == nil {
 		return true
 	}
-	name := aimScriptName(u.binding, slot)
+	conv := conventionFor(u.binding)
+	name := conv.aimScript(slot)
 	if name == "" || !u.binding.HasScript(name) {
 		return true
 	}
-	tak := usesTAKWeaponScripts(u.binding)
 	ab, ok := u.binding.(aimBinding)
 	if !ok {
 		// Binding can drive scripts but can't report aim completion: re-drive on
@@ -884,32 +812,11 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 			s.aimReady = false
 			s.aimStartMs = w.simMs
 		}
-		if tak {
-			// TA:K's shared AimWeapon receives the weapon index after the
-			// bearing; the script echoes it back through WEAPON_READY.
-			s.aimThread = ab.StartAim(name, int(heading), int(pitch), slot)
-		} else {
-			s.aimThread = ab.StartAim(name, int(heading), int(pitch))
-		}
+		s.aimThread = ab.StartAim(name, conv.aimArgs(heading, pitch, slot)...)
 	}
-	if tak {
-		// TA:K port handshake: the script writes the weapon index into
-		// WEAPON_READY when its aim solution holds and into WEAPON_AIM_ABORTED
-		// when it gives up. An abort re-arms the gate even on a settled aim.
-		if tb, ok := u.binding.(takAimBinding); ok {
-			if tb.TakeWeaponAimAborted(slot) {
-				s.aimReady = false
-				s.aimStartMs = w.simMs
-			}
-			if !s.aimReady && tb.TakeWeaponReady(slot) {
-				s.aimReady = true
-			}
-		}
-	} else if !s.aimReady {
-		if done, ret := ab.AimStatus(s.aimThread); done && ret == 1 {
-			s.aimReady = true
-		}
-	}
+	// Consume the convention's aim-completion signal: TA reads the thread's
+	// return value, TA:K the WEAPON_READY / WEAPON_AIM_ABORTED ports.
+	conv.pollAimReady(u.binding, ab, s, slot, w.simMs)
 	if !s.aimReady && w.simMs-s.aimStartMs >= 2*reloadMs {
 		// The aim thread never reported completion within twice the reload
 		// window; fire anyway rather than stalling the weapon indefinitely.
@@ -937,11 +844,7 @@ func (w *World) driveAimDrift(u *Unit, s *weaponSlot, slot int, name string, tar
 	s.aimHeading = heading
 	s.aimPitch = pitch
 	s.aimLastIssueMs = w.simMs
-	if usesTAKWeaponScripts(u.binding) {
-		u.binding.Restart(name, int(heading), int(pitch), slot)
-	} else {
-		u.binding.Restart(name, int(heading), int(pitch))
-	}
+	u.binding.Restart(name, conventionFor(u.binding).aimArgs(heading, pitch, slot)...)
 }
 
 // absAngle is the absolute value of a TA-angle delta.

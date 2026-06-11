@@ -62,16 +62,32 @@ const PROJECTILE_BRIGHTNESS = {
 }
 
 // Per-kind fallback hues used when the weapon's TDF doesn't ship a
-// colour index (most non-laser weapons omit `color=`).  These mirror
-// the historic KIND_DEFAULTS so a TDF-silent weapon looks the same as
-// before this refactor.
-const PROJECTILE_FALLBACK_COLOUR = {
-  [SFX_PROJECTILE_LASER]:   [0.45, 1.80, 0.45],
-  [SFX_PROJECTILE_DGUN]:    [1.10, 0.30, 0.10],
-  [SFX_PROJECTILE_PLASMA]:  [0.30, 1.00, 1.10],
-  [SFX_PROJECTILE_SHELL]:   [1.00, 0.55, 0.20],
-  [SFX_PROJECTILE_MISSILE]: [1.00, 0.75, 0.20],
-  [SFX_PROJECTILE_BULLET]:  [1.00, 0.85, 0.20],
+// colour index (most non-laser weapons omit `color=`).  The hues are game
+// configuration — the active game's adapter supplies them keyed by kind
+// name via setProjectileFallbackColors() at boot; unset kinds fall back
+// to white.
+const PROJECTILE_FALLBACK_COLOUR = {}
+
+// _KIND_BY_NAME maps the adapter config's kind names onto the SFX kind
+// constants the driver dispatches on.
+const _KIND_BY_NAME = {
+  laser:   SFX_PROJECTILE_LASER,
+  dgun:    SFX_PROJECTILE_DGUN,
+  plasma:  SFX_PROJECTILE_PLASMA,
+  shell:   SFX_PROJECTILE_SHELL,
+  missile: SFX_PROJECTILE_MISSILE,
+  bullet:  SFX_PROJECTILE_BULLET,
+}
+
+// setProjectileFallbackColors installs the game's per-kind fallback hues
+// ({ laser: [r,g,b], ... } in 0..2 floats — additive blend + bloom rely on
+// >1 channels). Unknown kind names are ignored.
+export function setProjectileFallbackColors(colors) {
+  for (const k of Object.keys(PROJECTILE_FALLBACK_COLOUR)) delete PROJECTILE_FALLBACK_COLOUR[k]
+  for (const [name, rgb] of Object.entries(colors || {})) {
+    const kind = _KIND_BY_NAME[name]
+    if (kind != null && Array.isArray(rgb)) PROJECTILE_FALLBACK_COLOUR[kind] = rgb
+  }
 }
 
 // projectileColor — the SINGLE source of truth for a projectile's tint

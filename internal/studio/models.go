@@ -319,8 +319,8 @@ type modelJSON struct {
 	// TextureQuery is the query string clients append to each
 	// /api/studio/texture/<name> fetch so per-side texture names resolve
 	// against this unit's own side GAF ("side=ara"); empty for TA.
-	TextureQuery string `json:"textureQuery,omitempty"`
-	Bounds         *boundsJSON       `json:"bounds"` // axis-aligned bounds across the whole model in piece-local frames
+	TextureQuery string      `json:"textureQuery,omitempty"`
+	Bounds       *boundsJSON `json:"bounds"` // axis-aligned bounds across the whole model in piece-local frames
 }
 
 type boundsJSON struct {
@@ -400,8 +400,8 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 	out := &modelJSON{Name: entry.Name}
 	// Per-game colour table for IsColored faces (TA:K resolves the unit's
 	// side palette from its name prefix; TA uses the global palette).
-	colorPal := sess.palettes().modelColorPalette(entry.Name)
-	texSide := sess.palettes().textureSidePrefix(entry.Name)
+	colorPal := sess.palettes().ModelColorPalette(entry.Name)
+	texSide := sess.palettes().TextureSidePrefix(entry.Name)
 	if texSide != "" {
 		out.TextureQuery = "side=" + texSide
 	}
@@ -734,12 +734,12 @@ func (sess *Session) renderTexturePNG(src textureSource, side string) ([]byte, e
 	// TA:Kingdoms: the texture GAF's per-side palette) and the transparency
 	// mode (TA: opaque — palette[TI] is a real colour; TA:K: punch out the
 	// real transparent key, e.g. a dragon's magenta wings).
-	pal := sess.palettes().texturePalette(src.GAFPath)
+	pal := sess.palettes().TexturePalette(src.GAFPath)
 	// The requesting unit's side palette beats the GAF-name-derived one:
 	// TA:K logo art is shared across sides and takes its team colours from
 	// the side palette of whoever wears it.
 	if side != "" {
-		if sp := sess.palettes().texturePaletteForSide(side); sp != nil {
+		if sp := sess.palettes().TexturePaletteForSide(side); sp != nil {
 			pal = sp
 		}
 	}
@@ -747,7 +747,7 @@ func (sess *Session) renderTexturePNG(src textureSource, side string) ([]byte, e
 	// another colour for asphalt / panel base, and punching it out let the
 	// ground plane bleed through runways); TA:Kingdoms resolves a real
 	// transparent key so e.g. dragon wings read through.
-	opts := sess.palettes().textureRenderOptions(pal)
+	opts := sess.palettes().TextureRenderOptions(pal)
 	// Serve unit textures as true-colour PNG with the transparent texels'
 	// RGB bled from their opaque neighbours. An indexed PNG keeps the
 	// colour-key's RGB (TA:K uses magenta) under alpha 0, and the GPU's

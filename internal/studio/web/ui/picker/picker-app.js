@@ -15,19 +15,20 @@ import { GameChip, GameIcon } from '@kbot/ui/game-icon'
 import { confirmDialog } from '@kbot/ui/confirm-dialog'
 import { CavedogIcon } from './icons.js'
 import { NewWorkspaceDialog } from './new-workspace-dialog.js'
+import { ALL_GAMES } from '/ui/common/game-registry.js'
 
-// Header brand logos. All three are stacked and cross-faded via CSS opacity as
-// the game filter changes: the blended logo for All/Other, and the
-// game-specific banner when the TA or TA:Kingdoms tab is selected.
+// Header brand logos. All are stacked and cross-faded via CSS opacity as the
+// game filter changes: the blended logo for All/Other, plus each shipped
+// game's banner from its adapter package.
 const HEADER_LOGOS = [
   { id: 'general', src: '/branding/logos/kbot-header.png' },
-  { id: 'totala', src: '/branding/logos/kbot-header-ta.png' },
-  { id: 'takingdoms', src: '/branding/logos/kbot-header-tak.png' },
+  ...ALL_GAMES.map((g) => ({ id: g.id, src: g.branding.headerLogo })),
 ]
 
+const GAME_IDS = new Set(ALL_GAMES.map((g) => g.id))
+
 function activeLogoId(filter) {
-  if (filter === 'totala' || filter === 'takingdoms') return filter
-  return 'general'
+  return GAME_IDS.has(filter) ? filter : 'general'
 }
 
 const WIDE_QUERY = '(min-width: 1040px)'
@@ -55,8 +56,7 @@ async function openInTab(body) {
 
 const TABS = [
   { id: 'all', label: 'All' },
-  { id: 'totala', label: 'Total Annihilation' },
-  { id: 'takingdoms', label: 'TA: Kingdoms' },
+  ...ALL_GAMES.map((g) => ({ id: g.id, label: g.label })),
   { id: 'other', label: 'Other' },
 ]
 
@@ -68,7 +68,7 @@ function tabIcon(id) {
 
 function gameMatches(filter, game) {
   if (filter === 'all') return true
-  if (filter === 'other') return game !== 'totala' && game !== 'takingdoms'
+  if (filter === 'other') return !GAME_IDS.has(game)
   return game === filter
 }
 

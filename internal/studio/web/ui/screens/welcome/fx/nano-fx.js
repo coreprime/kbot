@@ -16,30 +16,14 @@
 // (`.as-tab` insets it 82px below the chrome) when shown as a tab, so viewport
 // coords would put the emitters and impacts in the wrong place.
 //
-// The active game is read from window.__KBOT_GAME__ each frame, so the effect
-// re-themes the moment session-info resolves at boot.
-//
-// No state, no host-context — only DOM + canvas + window APIs.
+// The active game adapter is re-resolved each frame, so the effect re-themes
+// the moment session-info publishes the game id at boot. The theme itself
+// (beam colours / smoke gradients) ships with each game's adapter package.
 
-const NANO_THEMES = {
-  green: {
-    style: 'beam',
-    core: 'rgba(220, 255, 200, 1)',
-    body: 'rgba(127, 255, 102, 0.9)',
-    tail: 'rgba(80, 220, 80, 0.0)',
-    hot: (t) => [`rgba(220, 255, 200, ${0.85 * t})`, `rgba(127, 255, 102, ${0.55 * t})`, 'rgba(80, 220, 80, 0)'],
-    edge: (t) => `rgba(180, 255, 150, ${0.7 * t})`,
-    spark: (t) => `rgba(180, 255, 150, ${t * 0.95})`,
-  },
-  magical: {
-    style: 'smoke',
-    // Wisp gradient: warm gold-white core → violet body → transparent.
-    smoke: (a) => [`rgba(255, 228, 170, ${a * 0.9})`, `rgba(186, 130, 255, ${a})`, 'rgba(90, 60, 160, 0)'],
-  },
-}
+import { activeGame } from '/ui/common/game-registry.js'
 
 function nanoTheme() {
-  return window.__KBOT_GAME__ === 'takingdoms' ? NANO_THEMES.magical : NANO_THEMES.green
+  return activeGame().welcomeFx
 }
 
 export function wireWelcomeNanoFX() {

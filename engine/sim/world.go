@@ -634,29 +634,29 @@ type RestoredWeapon struct {
 // that dropped it would otherwise diverge on the target's health the moment it
 // lands.
 type RestoredProjectile struct {
-	ID       uint32
-	OwnerID  uint32
-	TargetID uint32
-	Slot     int
-	Mode     uint8
-	Phase    uint8
-	Model    string
-	Weapon   string
-	Pos      fixed.Vec3
-	Vel      fixed.Vec3
-	Origin   fixed.Vec3
-	Target   fixed.Vec3
-	LaunchY  fixed.Fixed
-	Speed    fixed.Fixed
-	VMax     fixed.Fixed
-	Accel    fixed.Fixed
-	TurnAng  int32
-	HomingR  fixed.Fixed
-	Gravity  fixed.Fixed
-	AoE      fixed.Fixed
-	Damage   fixed.Fixed
-	AgeSec   fixed.Fixed
-	LifeSec  fixed.Fixed
+	ID        uint32
+	OwnerID   uint32
+	TargetID  uint32
+	Slot      int
+	Mode      uint8
+	Phase     uint8
+	Model     string
+	Weapon    string
+	Pos       fixed.Vec3
+	Vel       fixed.Vec3
+	Origin    fixed.Vec3
+	Target    fixed.Vec3
+	LaunchY   fixed.Fixed
+	Speed     fixed.Fixed
+	VMax      fixed.Fixed
+	Accel     fixed.Fixed
+	TurnAng   int32
+	HomingR   fixed.Fixed
+	Gravity   fixed.Fixed
+	AoE       fixed.Fixed
+	Damage    fixed.Fixed
+	AgeSec    fixed.Fixed
+	LifeSec   fixed.Fixed
 	LastDist  fixed.Fixed
 	Closing   bool
 	Heading   int32
@@ -717,29 +717,29 @@ func (w *World) ExportProjectiles() []RestoredProjectile {
 			continue
 		}
 		out = append(out, RestoredProjectile{
-			ID:       p.id,
-			OwnerID:  p.ownerID,
-			TargetID: p.targetID,
-			Slot:     p.slot,
-			Mode:     uint8(p.mode),
-			Phase:    uint8(p.phase),
-			Model:    p.model,
-			Weapon:   p.weapon,
-			Pos:      p.pos,
-			Vel:      p.vel,
-			Origin:   p.origin,
-			Target:   p.target,
-			LaunchY:  p.launchY,
-			Speed:    p.speed,
-			VMax:     p.vmax,
-			Accel:    p.accel,
-			TurnAng:  p.turnAng,
-			HomingR:  p.homingR,
-			Gravity:  p.gravity,
-			AoE:      p.aoe,
-			Damage:   p.damage,
-			AgeSec:   p.ageSec,
-			LifeSec:  p.lifeSec,
+			ID:        p.id,
+			OwnerID:   p.ownerID,
+			TargetID:  p.targetID,
+			Slot:      p.slot,
+			Mode:      uint8(p.mode),
+			Phase:     uint8(p.phase),
+			Model:     p.model,
+			Weapon:    p.weapon,
+			Pos:       p.pos,
+			Vel:       p.vel,
+			Origin:    p.origin,
+			Target:    p.target,
+			LaunchY:   p.launchY,
+			Speed:     p.speed,
+			VMax:      p.vmax,
+			Accel:     p.accel,
+			TurnAng:   p.turnAng,
+			HomingR:   p.homingR,
+			Gravity:   p.gravity,
+			AoE:       p.aoe,
+			Damage:    p.damage,
+			AgeSec:    p.ageSec,
+			LifeSec:   p.lifeSec,
 			LastDist:  p.lastDistT,
 			Closing:   p.closing,
 			Heading:   p.heading,

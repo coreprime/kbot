@@ -25,29 +25,20 @@ import { enhanceMeshEnabled } from './enhance-mesh.js'
 
 const FLOATS_PER_VERTEX = 9
 
-// _LOD_HIDE_NAME_PATTERNS — piece names matching any of these regexes
-// get tagged with `lodHide = true` at load time so the renderer's
-// distance-LOD (Phase 2) skips them on units rendering at mid tier.
-// TA modellers consistently follow these naming conventions for sub-
-// pixel cosmetic detail:
-//   flare*    muzzle-flash anchors (often invisible until the COB
-//             script shows them mid-fire)
-//   muzzle*   weapon-barrel tips
-//   sleeve*   recoil sleeves / cylinder housings
-//   exhaust*  engine exhausts (steady particle anchors)
-//   smoke*    smoke-emit anchors
-//   aim*      AimWeapon query targets (geometry-less in many units)
-//   emit*     generic SFX emit points
-// A future FBI-driven hint can extend or override this list per-unit.
-const _LOD_HIDE_NAME_PATTERNS = [
-  /^.*flare\d*$/i,
-  /^.*muzzle\d*$/i,
-  /^.*sleeve\d*$/i,
-  /^.*exhaust\d*$/i,
-  /^.*smoke\d*$/i,
-  /^.*aim\d*$/i,
-  /^emit\d*$/i,
-]
+// _lodHidePatterns — piece names matching any of these regexes get tagged
+// with `lodHide = true` at load time so the renderer's distance-LOD
+// (Phase 2) skips them on units rendering at mid tier. The patterns encode
+// the game's modelling conventions for sub-pixel cosmetic detail, so the
+// list is game configuration: the active game's adapter supplies it via
+// setLodHidePatterns() at boot (empty until then — conservative, every
+// piece draws at every tier). A future FBI-driven hint can extend or
+// override this per-unit.
+let _lodHidePatterns = []
+
+// setLodHidePatterns installs the game's cosmetic-piece name heuristics.
+export function setLodHidePatterns(patterns) {
+  _lodHidePatterns = Array.isArray(patterns) ? patterns.slice() : []
+}
 
 export class ModelLoader {
   constructor({ gl, palette, textureCache }) {
@@ -86,7 +77,7 @@ export class ModelLoader {
     // FBI-driven hint can supersede this and tag additional pieces
     // per-unit-type without changing the renderer.
     for (const p of model.flat) {
-      if (_LOD_HIDE_NAME_PATTERNS.some((re) => re.test(p.name))) {
+      if (_lodHidePatterns.some((re) => re.test(p.name))) {
         p.lodHide = true
       }
     }

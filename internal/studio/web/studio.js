@@ -50,6 +50,7 @@ import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 // subsystems that observe #welcome-dialog's hidden class via
 // MutationObserver to suspend / resume on dialog close.
 import { gameIconDataUri } from '@kbot/ui/game-icon'
+import { applyGameView3D } from './ui/common/game-view3d.js'
 import { wireWelcomeNanoFX } from './ui/screens/welcome/fx/nano-fx.js'
 import { wireWelcomeAmbient } from './ui/screens/welcome/fx/ambient.js'
 import { wireWelcomeGlamour } from './ui/screens/welcome/fx/glamour.js'
@@ -286,6 +287,9 @@ async function applySessionBrand() {
     const game = info.game || ''
     window.__KBOT_GAME__ = game
     if (game) document.body.dataset.game = game
+    // Re-inject game3d's view config now the real game id is known (the
+    // module applied the TA baseline at import time).
+    applyGameView3D()
     const icon = $('#app-brand-logo')
     const uri = gameIconDataUri(game)
     if (icon && uri) { icon.src = uri; icon.removeAttribute('hidden') }

@@ -42,6 +42,7 @@ import {
 import { SplitMenuItems } from '@kbot/ui/split-host'
 import { GraphicsOptionsItems } from '@kbot/ui/graphics-options-menu'
 import { persistGraphicsOptions } from '/ui/common/graphics-options-state.js'
+import { activeGame } from '/ui/common/game-registry.js'
 
 // _state — every toggle / slider / picker value displayed on the
 // ribbon.  Defaults match the static HTML the legacy markup shipped
@@ -306,35 +307,11 @@ const _TEAMS = [
   { team: 'black',  icon: '⚫', label: 'Black',  title: 'Black team' },
 ]
 
-const _COB_ENTRIES = [
-  { section: 'Lifecycle', rows: [
-    { name: 'Create',      icon: '🪄', title: 'Initial setup script that runs on unit spawn (hides flares, sets piece offsets).' },
-    { name: 'Activate',    icon: '⚡', title: 'Powers on the unit — radar dishes spin, hatches open, etc.' },
-    { name: 'Deactivate',  icon: '🔌', title: 'Powers off — folds antennas, closes hatches.' },
-    { name: 'Killed',      icon: '💀', title: 'Death animation — body parts fly off, smoke trails.' },
-    { name: 'Dying',       icon: '💀', title: 'TA:K death animation — the fall sequence that ends with FINISHED_DYING.' },
-  ] },
-  { section: 'Movement', rows: [
-    { name: 'StartMoving',   icon: '🚶', title: 'Start walking / driving animation.' },
-    { name: 'StopMoving',    icon: '🛑', title: 'Stop walking / driving animation.' },
-    { name: 'StartBuilding', icon: '🏗️', title: 'Begin construction animation (cranes extending).' },
-    { name: 'StopBuilding',  icon: '✋', title: 'End construction animation.' },
-  ] },
-  { section: 'Weapons', rows: [
-    { name: 'AimPrimary',   icon: '🎯', title: 'Aim primary weapon at a random heading + elevation in the unit’s FOV.' },
-    { name: 'FirePrimary',  icon: '💥', title: 'Fire primary weapon (recoil + muzzle flash).' },
-    { name: 'AimSecondary', icon: '🎯', title: 'Aim secondary weapon at a random target.' },
-    { name: 'FireSecondary',icon: '💥', title: 'Fire secondary weapon.' },
-    { name: 'AimTertiary',  icon: '🎯', title: 'Aim tertiary weapon.' },
-    { name: 'FireTertiary', icon: '💥', title: 'Fire tertiary weapon.' },
-    // TA: Kingdoms units export one parameterized weapon set instead of
-    // per-slot entries; the quick actions drive weapon 0. The list is
-    // filtered to scripts the loaded COB actually exports, so these rows
-    // only surface on TA:K units.
-    { name: 'AimWeapon',    icon: '🎯', title: 'Aim weapon 0 at a random heading + elevation (TA:K shared aim entry).' },
-    { name: 'FireWeapon',   icon: '💥', title: 'Fire weapon 0 (TA:K shared fire entry).' },
-  ] },
-]
+// COB quick actions come from the game adapter — TA's per-slot weapon
+// entries, TA:K's shared AimWeapon/FireWeapon set + Dying. The menu filters
+// to scripts the loaded COB actually exports, so the catalogue can be a
+// superset of any one unit.
+const _cobEntries = () => activeGame().cobEntries
 
 // _VIEW_PANEL_GROUPS — same domain bucketing the sandbox dev-tools menu
 // uses, mirrored here so the two menus feel parallel.  The unit editor
@@ -806,7 +783,7 @@ function CobDropdown() {
         label="COB"
         title="COB-driven animation: trigger the unit’s standard entry points." />
       <${Dropdown} id="mv-anim-dropdown">
-        ${_COB_ENTRIES.map((section) => html`
+        ${_cobEntries().map((section) => html`
           <${MenuSectionLabel} key=${section.section}>${section.section}<//>
           ${section.rows.filter((r) => showEntry(r.name)).map((r) => {
             const running = runningScripts.has(r.name.toLowerCase())

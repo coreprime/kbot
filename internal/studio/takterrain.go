@@ -179,7 +179,7 @@ func (sess *Session) handleMapRender(w http.ResponseWriter, r *http.Request) {
 	} else if data, err := sess.vfs.ReadFile(mapPath); err == nil {
 		// Plain TNT (TA-style): fall back to the baked minimap.
 		if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil && m.Minimap != nil {
-			if mm := m.RenderMinimap(sess.palettes().terrainPalette(mapPath)); mm != nil {
+			if mm := m.RenderMinimap(sess.palettes().TerrainPalette(mapPath)); mm != nil {
 				var buf bytes.Buffer
 				if encErr := png.Encode(&buf, mm); encErr == nil {
 					out = buf.Bytes()

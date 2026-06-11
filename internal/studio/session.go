@@ -6,9 +6,8 @@ import (
 	"sync"
 
 	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot/games"
 	"github.com/coreprime/kbot/internal/assetrender"
 	"github.com/coreprime/kbot/internal/gameserver"
 )
@@ -54,8 +53,8 @@ type Session struct {
 
 	// Game-aware palette resolver (palette.go). Chosen once from the game id;
 	// rendering paths consult the interface and never special-case the game.
-	paletteOnce     sync.Once
-	paletteResolver paletteResolver
+	paletteOnce sync.Once
+	adapter     games.Adapter
 
 	// rendered + downscaled TA:K terrain PNGs per map path (takterrain.go)
 	takTerrainMu  sync.Mutex
@@ -78,17 +77,12 @@ type Session struct {
 	textureIndexMu    sync.Mutex
 	textureIndex      map[string]textureSource
 	textureIndexAll   map[string][]textureSource
-	takSoundMu        sync.Mutex
-	takSoundClasses   map[string]*tdf.Section
 	textureCacheMu    sync.Mutex
 	textureCache      map[string][]byte
 	textureDecalMu    sync.Mutex
 	textureDecalCache map[string]bool
 
 	// unit/weapon caches (unit.go)
-	soundTDFMu      sync.Mutex
-	soundTDFOnce    sync.Once
-	soundTDFClasses []ta.SoundClass
 
 	weaponsListMu    sync.Mutex
 	weaponsListOnce  sync.Once

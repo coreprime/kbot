@@ -89,7 +89,7 @@ func toRGBAImage(src image.Image) *image.RGBA {
 // material's Texture method.)
 func (sess *Session) baseObjectOptions(object string) objects3d.RenderOptions {
 	opts := objects3d.DefaultRenderOptions()
-	opts.Material = &objectMaterial{sess: sess, pal: sess.palettes().modelColorPalette(object)}
+	opts.Material = &objectMaterial{sess: sess, pal: sess.palettes().ModelColorPalette(object)}
 	return opts
 }
 

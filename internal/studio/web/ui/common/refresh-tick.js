@@ -35,6 +35,7 @@
 // the relevant refresh function directly instead.
 
 import { hostCallbacks, getReactUi } from '../host-context.js'
+import { activeGame } from './game-registry.js'
 
 // Per-tick subscribers registered by section-specific code (e.g. the
 // unit-editor's debugger).  refresh-tick lives in /ui/common/ so it
@@ -151,14 +152,16 @@ export function refreshMvInspectors(dtMs = 16) {
     const everySlot = (idx, names) => selectedUnits.length > 0
       && selectedUnits.every((u) => slotHasWeapon(u, idx)
         || (u.binding.hasScript && names.some((n) => u.binding.hasScript(n))))
-    // TA:K COBs export one shared weapon set (AimWeapon/FireWeapon/
-    // QueryWeapon); the names sit in every slot's fallback list because the
-    // FBI weapon declaration is what distinguishes the slots.
+    // The game adapter owns which script names mark a slot drivable —
+    // TA's per-slot Aim/Fire/Query triples, plus TA:K's shared
+    // AimWeapon/FireWeapon/QueryWeapon set (the FBI weapon declaration is
+    // what distinguishes the slots there).
+    const weapons = activeGame().weapons
     const ctrlEnabled = {
       move: selectedUnits.length > 0,
-      primary:   everySlot(0, ['AimPrimary',   'FirePrimary',   'QueryPrimary',   'AimWeapon', 'FireWeapon', 'QueryWeapon']),
-      secondary: everySlot(1, ['AimSecondary', 'FireSecondary', 'QuerySecondary', 'AimWeapon', 'FireWeapon', 'QueryWeapon']),
-      tertiary:  everySlot(2, ['AimTertiary',  'FireTertiary',  'QueryTertiary',  'AimWeapon', 'FireWeapon', 'QueryWeapon']),
+      primary:   everySlot(0, weapons.slotScripts(0)),
+      secondary: everySlot(1, weapons.slotScripts(1)),
+      tertiary:  everySlot(2, weapons.slotScripts(2)),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction

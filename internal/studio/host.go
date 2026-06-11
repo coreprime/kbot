@@ -6,8 +6,7 @@ import (
 
 	"github.com/coreprime/kbot/engine/sim"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/gamedata/tak"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot/games"
 	"github.com/coreprime/kbot/internal/gameserver"
 )
 
@@ -42,19 +41,16 @@ func (sess *Session) registerHostAPI(mux *http.ServeMux) {
 func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 	return func(name string) (*sim.UnitMeta, sim.Binding) {
 		key := strings.ToLower(strings.TrimSuffix(name, ".fbi"))
-		unit, err := sess.loadUnitFBI(key)
+		data, err := sess.loadUnitFBIBytes(key)
 		if err != nil {
 			return nil, nil
 		}
-		meta := gameserver.MetaFromUnitInfo(name, &unit.Info, sess.resolveWeaponSection)
-		// TA:K FBIs inline their weapons; fill the slots the TA ref pass
-		// left empty so the authority fights with the same stats the
-		// browser clients computed from /api/studio/unit.
-		if data, err := sess.loadUnitFBIBytes(key); err == nil {
-			var ku tak.Unit
-			if err := tdf.Unmarshal(data, &ku); err == nil {
-				gameserver.ApplyTAKWeapons(meta, &ku)
-			}
+		// games.UnitMetaFromFBI runs both weapon passes (TA references +
+		// TA:K inline sections) so the authority fights with the same
+		// stats the browser clients computed from /api/studio/unit.
+		meta, err := games.UnitMetaFromFBI(name, data, sess.resolveWeaponSection)
+		if err != nil {
+			return nil, nil
 		}
 		return meta, nil
 	}
