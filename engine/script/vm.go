@@ -58,6 +58,7 @@ const (
 	UVWeaponAimAborted = 21
 	UVWeaponReady      = 22
 	UVWeaponLaunchNow  = 23
+	UVFinishedDying    = 26
 	UVCurrentSpeed     = 29
 )
 

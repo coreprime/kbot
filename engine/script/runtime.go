@@ -126,6 +126,9 @@ type Unit struct {
 	// Deterministic state: it only changes through script execution.
 	weaponReady   uint32
 	weaponAborted uint32
+	// finishedDying latches once the Dying script sets FINISHED_DYING —
+	// TA:K's signal that the fall animation has completed.
+	finishedDying bool
 	// breakpoints and executed back the studio debugger, which runs against this
 	// VM in the offline unit editor. breakpoints holds the byte offsets a thread
 	// should park on, keyed by script index; executed accumulates every offset the
@@ -238,12 +241,20 @@ func (u *Unit) ResetState() {
 	}
 	u.weaponReady = 0
 	u.weaponAborted = 0
+	u.finishedDying = false
 }
 
-// noteWeaponPortWrite records a SET_VALUE write to one of TA:K's weapon
-// handshake ports. The written value is the weapon index; out-of-range
-// indices (a script writing garbage) are ignored rather than wrapped.
+// noteWeaponPortWrite records a SET_VALUE write to one of TA:K's signalling
+// ports: the weapon handshake pair (value = weapon index) and FINISHED_DYING
+// (the Dying fall animation's completion flag). Out-of-range weapon indices
+// (a script writing garbage) are ignored rather than wrapped.
 func (u *Unit) noteWeaponPortWrite(port int, v int32) {
+	if port == UVFinishedDying {
+		if v != 0 {
+			u.finishedDying = true
+		}
+		return
+	}
 	if v < 0 || v > 31 {
 		return
 	}
@@ -254,6 +265,11 @@ func (u *Unit) noteWeaponPortWrite(port int, v int32) {
 		u.weaponAborted |= 1 << uint(v)
 	}
 }
+
+// FinishedDying reports whether the unit's Dying script has signalled
+// completion by setting FINISHED_DYING — TA:K's cue that the fall animation
+// has landed and the corpse swap can happen.
+func (u *Unit) FinishedDying() bool { return u.finishedDying }
 
 // TakeWeaponReady reports whether the script has signalled WEAPON_READY for
 // the given weapon index since the last call, clearing the flag. This is the

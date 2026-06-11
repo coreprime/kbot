@@ -122,3 +122,51 @@ func TestBodyAimHoldsFireWhileFacingAway(t *testing.T) {
 		}
 	}
 }
+
+// TestTAKRetailDeathLeavesCorpse drives a retail TA:K unit through the full
+// death sequence: ApplyDamage past zero starts Killed (3-arg TA:K form) and
+// Dying; the corpse event must not surface until the Dying script signals
+// FINISHED_DYING, and the TA:K corpsetype convention (script returns 1 =
+// leave the corpse) must map onto the renderer's slot 1.
+func TestTAKRetailDeathLeavesCorpse(t *testing.T) {
+	rt := script.NewRuntime(35)
+	bind := loadTAKBinding(t, rt, "arapal.cob")
+	if !bind.HasScript("Dying") || !bind.HasScript("Killed") {
+		t.Fatal("arapal.cob does not carry the TA:K death pair")
+	}
+
+	w := New(Config{Seed: 35})
+	id := w.AddUnit("arapal", testMeta("arapal"), bind, fixed.Vec2{}, 0, 0)
+	w.Step(rt) // let Create settle
+
+	w.ApplyDamage(0, id, fixed.FromInt(1000))
+	if u := w.UnitByID(id); u == nil || !u.Dead {
+		t.Fatal("unit did not die")
+	}
+
+	corpseAt, corpseSlot := -1, -1
+	finishedAt := -1
+	for i := 0; i < 600 && corpseAt < 0; i++ {
+		w.Step(rt)
+		if finishedAt < 0 && bind.FinishedDying() {
+			finishedAt = i
+		}
+		for _, ev := range w.Snapshot().Events {
+			if ev.Kind == frame.EvCorpseSpawn && ev.UnitID == id {
+				corpseAt, corpseSlot = i, ev.Slot
+			}
+		}
+	}
+	if corpseAt < 0 {
+		t.Fatal("death never produced a corpse event")
+	}
+	if finishedAt < 0 {
+		t.Fatal("Dying never signalled FINISHED_DYING")
+	}
+	if corpseAt < finishedAt {
+		t.Fatalf("corpse surfaced at step %d, before FINISHED_DYING at %d", corpseAt, finishedAt)
+	}
+	if corpseSlot != 1 {
+		t.Fatalf("corpse slot = %d, want 1 (TA:K corpsetype 1 = intact corpse)", corpseSlot)
+	}
+}

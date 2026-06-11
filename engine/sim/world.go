@@ -135,9 +135,14 @@ type Unit struct {
 	// Corpse bookkeeping: killedThread tracks the Killed script started on
 	// death so stepCorpse can read the corpsetype it wrote (its second
 	// local) once the death sequence finishes; corpsePending holds the poll
-	// open until then.
+	// open until then. dyingPending marks a TA:K-style death — the corpse
+	// swap additionally waits for the Dying script's FINISHED_DYING signal
+	// (the fall animation landing), with diedAtMs bounding the wait so a
+	// script that never signals can't strand the corpse.
 	killedThread  int32
 	corpsePending bool
+	dyingPending  bool
+	diedAtMs      int64
 
 	binding Binding
 }
@@ -229,10 +234,25 @@ func (w *World) emitCorpse(u *Unit, corpsetype int32) {
 		Anchor:  u.Pos(),
 	})
 	u.corpsePending = false
+	u.dyingPending = false
 }
 
+// dyingBinding is the optional surface a binding exposes so the corpse poll
+// can wait for TA:K's FINISHED_DYING signal — the Dying fall animation
+// landing. The script VM's *Unit satisfies it.
+type dyingBinding interface {
+	FinishedDying() bool
+}
+
+// dyingTimeoutMs bounds how long the corpse swap waits on FINISHED_DYING. A
+// retail Dying fall lasts a couple of seconds; a script that never signals
+// (or dies mid-fall) shouldn't strand the unit in its death pose forever.
+const dyingTimeoutMs int64 = 10000
+
 // stepCorpse polls a dead unit's tracked Killed thread and publishes the
-// corpse once the script settles its choice.
+// corpse once the script settles its choice. A TA:K death additionally waits
+// for the Dying script's FINISHED_DYING — the corpse model must not replace
+// the unit while the fall animation is still playing.
 func (w *World) stepCorpse(u *Unit) {
 	if !u.corpsePending {
 		return
@@ -242,9 +262,28 @@ func (w *World) stepCorpse(u *Unit) {
 		w.emitCorpse(u, 1)
 		return
 	}
-	if done, ct := kb.KilledStatus(u.killedThread); done {
-		w.emitCorpse(u, ct)
+	done, ct := kb.KilledStatus(u.killedThread)
+	if !done {
+		return
 	}
+	if u.dyingPending && w.simMs-u.diedAtMs < dyingTimeoutMs {
+		if db, ok := u.binding.(dyingBinding); ok && !db.FinishedDying() {
+			return
+		}
+	}
+	// A binding that ships Dying follows the TA:K convention, where
+	// Killed's corpsetype out-param is a yes/no: 0 = blown apart (no
+	// corpse), anything else leaves the single corpse stage (TA:K corpse
+	// features chain no featuredead). Map it onto the renderer's TA-style
+	// slots: 1 = intact corpse, 3 = nothing.
+	if u.dyingPending || (u.binding != nil && u.binding.HasScript("Dying")) {
+		if ct <= 0 {
+			ct = 3
+		} else {
+			ct = 1
+		}
+	}
+	w.emitCorpse(u, ct)
 }
 
 // CobInspector is the optional inspection surface a binding may expose. The
@@ -1028,7 +1067,9 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 		// TA:K splits the death sequence: Killed picks the corpse, Dying plays
 		// the fall animation and reports completion through FINISHED_DYING.
 		// Without it a TA:K unit dies standing in its rest pose.
+		t.diedAtMs = w.simMs
 		if t.binding != nil && t.binding.HasScript("Dying") {
+			t.dyingPending = true
 			t.binding.Start("Dying", 0)
 		}
 		anchor := t.Pos()
