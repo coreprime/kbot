@@ -408,6 +408,10 @@ export class SandboxView {
       // (click, drag-rect, Esc, programmatic).  ArmedCursor.setSlot
       // is a cheap no-op when nothing changed.
       this.#refreshDefaultCursor()
+      // Health bars: the hovered unit always shows one; the backquote
+      // toggle adds every selected unit. Screen-space 2D overlay so no
+      // GL state is involved.
+      this.#drawHealthBars()
     }
     this.#wirePointer()
     this.#refreshDefaultCursor()
@@ -1492,6 +1496,17 @@ export class SandboxView {
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      // Backquote toggles the persistent health-bar layer for selected
+      // units (hover bars always show). Bespoke rather than wireHotkeys
+      // because it must work with an empty selection too.
+      if (e.key === '`') {
+        e.preventDefault()
+        this._healthBars = !this._healthBars
+        this.#setStatus(this._healthBars
+          ? 'Health bars on — shown beneath selected units (` to hide).'
+          : 'Health bars off — hover a unit to inspect its health.')
+        return
+      }
       if (e.key !== 'Escape') return
       e.preventDefault()
       // Cascade: placement → armed cmd → selection.  Each Escape
@@ -1941,6 +1956,47 @@ export class SandboxView {
       if (score > bestScore) { bestScore = score; best = u }
     }
     return best
+  }
+
+  // #drawHealthBars paints the health-bar HUD onto a 2D canvas overlay
+  // sitting above the GL canvas (pointer-events: none). Bars appear beneath
+  // the hovered unit always, and beneath every selected unit while the
+  // backquote toggle is on. Fill sweeps green→red with the unit's health
+  // fraction (sim health is a 0–100 percent).
+  #drawHealthBars() {
+    const rect = this.canvas.getBoundingClientRect()
+    let hud = this._hudCanvas
+    if (!hud) {
+      hud = document.createElement('canvas')
+      hud.className = 'sandbox-health-hud'
+      hud.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5'
+      if (this.canvas.parentElement) this.canvas.parentElement.appendChild(hud)
+      this._hudCanvas = hud
+    }
+    const w = Math.max(1, Math.round(rect.width))
+    const h = Math.max(1, Math.round(rect.height))
+    if (hud.width !== w || hud.height !== h) { hud.width = w; hud.height = h }
+    const ctx = hud.getContext('2d')
+    ctx.clearRect(0, 0, w, h)
+    if (!this.scene) return
+    const ids = new Set()
+    if (this._healthBars) for (const id of this.scene.selected) ids.add(id)
+    if (this._lastHoverUnitId) ids.add(this._lastHoverUnitId)
+    if (ids.size === 0) return
+    for (const id of ids) {
+      const u = this.scene.unitById(id)
+      if (!u || u.dead) continue
+      const feet = this.#worldToScreen(u.pos.x, u.pos.y, u.pos.z)
+      if (!feet) continue
+      const frac = Math.max(0, Math.min(1, (u.health ?? 100) / 100))
+      const bw = 30, bh = 4
+      const x = Math.round(feet[0] - bw / 2)
+      const y = Math.round(feet[1] + 8)
+      ctx.fillStyle = 'rgba(0,0,0,0.65)'
+      ctx.fillRect(x - 1, y - 1, bw + 2, bh + 2)
+      ctx.fillStyle = `hsl(${Math.round(120 * frac)}, 85%, 45%)`
+      ctx.fillRect(x, y, Math.round(bw * frac), bh)
+    }
   }
 
   #worldToScreen(wx, wy, wz) {
@@ -2419,6 +2475,10 @@ export class SandboxView {
   }
 
   dispose() {
+    if (this._hudCanvas) {
+      this._hudCanvas.remove()
+      this._hudCanvas = null
+    }
     if (this._wasmCrashHandler) {
       window.removeEventListener('kbot-wasm-crash', this._wasmCrashHandler)
       this._wasmCrashHandler = null
