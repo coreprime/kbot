@@ -112,9 +112,11 @@ export class Piece {
     c.drawGroups = this.drawGroups
     c.wireframe = this.wireframe
     if (this.wireframeByTex) c.wireframeByTex = this.wireframeByTex
-    // lodHide is a load-time classification — propagate to clones so
-    // every instance of a unit gets the same flare/muzzle skip set.
+    // lodHide / billboard are load-time classifications — propagate to
+    // clones so every instance gets the same flare-skip + sprite-facing
+    // behaviour.
     c.lodHide = this.lodHide
+    c.billboard = this.billboard
     // Recurse on children, preserving parent linkage via addChild.
     for (const ch of this.children) {
       c.addChild(ch.cloneForInstance())
@@ -134,5 +136,35 @@ export class Piece {
       Mat4.multiply(scratch, parentWorld, this.worldMatrix)
       Mat4.copy(this.worldMatrix, scratch)
     }
+    // Sprite-on-a-stick pieces (TA:K lodestones and similar single-quad
+    // models authored for the game's fixed camera) re-orient to face the
+    // free camera: the rotation part of the world matrix is replaced by
+    // the camera basis while the translation (the stick) is kept. Without
+    // this the quad is edge-on — invisible — from above.
+    if (this.billboard && _billboardBasis) {
+      const w = this.worldMatrix, b = _billboardBasis
+      w[0] = b[0]; w[1] = b[1]; w[2] = b[2]
+      w[4] = b[3]; w[5] = b[4]; w[6] = b[5]
+      w[8] = b[6]; w[9] = b[7]; w[10] = b[8]
+    }
   }
+}
+
+// _billboardBasis — the camera's world-space orientation (right/up/forward
+// as a row-major 3x3), refreshed once per frame by the renderer. Null until
+// a renderer sets it; headless callers (resolvePieceWorld) read positions
+// only, which billboarding never moves.
+let _billboardBasis = null
+
+// setBillboardBasis installs the camera basis billboarded pieces face.
+// Pass the renderer's VIEW matrix; the inverse rotation (transpose) is
+// extracted here so callers don't duplicate the math.
+export function setBillboardBasis(viewMatrix) {
+  if (!viewMatrix) { _billboardBasis = null; return }
+  _billboardBasis = _billboardBasis || new Float32Array(9)
+  const v = viewMatrix
+  // Rows of the view rotation = camera right/up/forward in world space.
+  _billboardBasis[0] = v[0]; _billboardBasis[1] = v[4]; _billboardBasis[2] = v[8]
+  _billboardBasis[3] = v[1]; _billboardBasis[4] = v[5]; _billboardBasis[5] = v[9]
+  _billboardBasis[6] = v[2]; _billboardBasis[7] = v[6]; _billboardBasis[8] = v[10]
 }

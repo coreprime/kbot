@@ -81,6 +81,27 @@ export class ModelLoader {
         p.lodHide = true
       }
     }
+    // Sprite-on-a-stick detection: a piece whose own geometry is one big
+    // quad standing roughly upright (TA:K lodestones, banner-style props
+    // authored for the game's fixed camera) gets billboarded so it stays
+    // visible from any angle in the free camera. Tight gates keep normal
+    // 3D pieces and tiny muzzle-flare quads out:
+    //   - exactly one quad's worth of vertices,
+    //   - tall (height the dominant extent, above sprite scale),
+    //   - not lying flat (ground plates must stay put),
+    //   - not a known cosmetic anchor (flares are lodHide-tagged anyway).
+    for (const p of model.flat) {
+      if (p.lodHide || !p.sourceVertices || p.sourceVertices.length !== 12) continue
+      const vs = p.sourceVertices
+      const xs = [vs[0], vs[3], vs[6], vs[9]]
+      const ys = [vs[1], vs[4], vs[7], vs[10]]
+      const zs = [vs[2], vs[5], vs[8], vs[11]]
+      const ext = (a) => Math.max(...a) - Math.min(...a)
+      const h = ext(ys)
+      if (h < 24) continue
+      if (h < ext(xs) * 0.8 && h < ext(zs) * 0.8) continue // lying flat
+      p.billboard = true
+    }
     // Pass through the server's textureSources map (texture name →
     // GAF basename) so the studio's Textures tab can group rows by
     // parent atlas.  Empty when the server didn't resolve a GAF
@@ -118,6 +139,10 @@ export class ModelLoader {
       verts[i + 1] = raw[i + 1]
       verts[i + 2] = raw[i + 2]
     }
+    // Keep the raw verts for tiny pieces — the single-quad billboard
+    // detector reads them after the tree is built. Capped to one quad's
+    // worth so normal meshes don't double their vertex memory.
+    if (verts.length <= 12) piece.sourceVertices = verts
     if (node.primitives && node.primitives.length) {
       this.#buildDrawGroups(piece, verts, node.primitives, node.selectionPrim)
     }

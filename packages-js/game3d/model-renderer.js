@@ -18,6 +18,7 @@
 // lighting + a soft blob shadow on the ground plane.
 
 import { Mat4 } from './mat4.js'
+import { setBillboardBasis } from './piece.js'
 import { loadAllShaders } from './shader-loader.js'
 import {
   DEFAULT_CULL_ENABLED,
@@ -1723,6 +1724,9 @@ export class ModelRenderer {
     this._cullStats.mid = 0
     this._cullStats.far = 0
     this._cullStats.total = (this._entities && this._entities.length) || 0
+    // Refresh the camera basis billboarded pieces (sprite-on-a-stick
+    // models like TA:K lodestones) face this frame.
+    if (this.camera && this.camera.viewMatrix) setBillboardBasis(this.camera.viewMatrix)
     // Phase 3 impostor batch — re-zeroed each frame so _impostorPush
     // can rebuild the buffer from this frame's classifier results.
     this._impCount = 0
