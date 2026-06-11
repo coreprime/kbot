@@ -49,12 +49,20 @@ func (sess *Session) handleMusicList(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, base)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		// Prefer numeric ordering — TA's music folder is 0.mp3 … 17.mp3,
-		// and a lexical sort would put 10.mp3 before 2.mp3.
-		ni, ok1 := musicNumericPrefix(out[i])
-		nj, ok2 := musicNumericPrefix(out[j])
+		// Natural ordering — TA's music folder is 0.mp3 … 17.mp3 and TA:K's
+		// is track1.wav … trackN.wav; a lexical sort would put 10 before 2
+		// in both. Compare on the first embedded digit run (with the text
+		// before it as a tiebreak) and fall back to lexical order for names
+		// with no number at all.
+		pi, ni, ok1 := musicNaturalKey(out[i])
+		pj, nj, ok2 := musicNaturalKey(out[j])
 		if ok1 && ok2 {
-			return ni < nj
+			if pi != pj {
+				return pi < pj
+			}
+			if ni != nj {
+				return ni < nj
+			}
 		}
 		return out[i] < out[j]
 	})
@@ -62,23 +70,25 @@ func (sess *Session) handleMusicList(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"tracks": out})
 }
 
-func musicNumericPrefix(name string) (int, bool) {
-	stem := strings.TrimSuffix(name, path.Ext(name))
-	n := 0
-	if stem == "" {
-		return 0, false
-	}
+// musicNaturalKey splits a track filename into (text prefix, first embedded
+// number) for natural-order comparison: "track10.wav" → ("track", 10).
+// ok is false when the stem carries no digits anywhere.
+func musicNaturalKey(name string) (prefix string, n int, ok bool) {
+	stem := strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))
+	start := -1
 	for i := 0; i < len(stem); i++ {
-		c := stem[i]
-		if c < '0' || c > '9' {
-			if i == 0 {
-				return 0, false
-			}
+		if stem[i] >= '0' && stem[i] <= '9' {
+			start = i
 			break
 		}
-		n = n*10 + int(c-'0')
 	}
-	return n, true
+	if start < 0 {
+		return "", 0, false
+	}
+	for i := start; i < len(stem) && stem[i] >= '0' && stem[i] <= '9'; i++ {
+		n = n*10 + int(stem[i]-'0')
+	}
+	return stem[:start], n, true
 }
 
 func (sess *Session) handleMusicStream(w http.ResponseWriter, r *http.Request) {

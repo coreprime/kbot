@@ -23,8 +23,8 @@ type Unit struct {
 	// TA:K single-resource cost (empty on TA).
 	BuildCost string
 
-	BuildTime  string
-	MaxDamage  string
+	BuildTime string
+	MaxDamage string
 
 	// TA-style weapon name refs (empty on TA:K which inlines weapons).
 	Weapon1 string
@@ -68,9 +68,9 @@ func (u Unit) HasWeapon() bool { return len(u.Weapons()) > 0 }
 // Weapon is a parsed entry from a weapons/*.tdf section (TA) or from a
 // unit FBI's inline [WEAPONn] sub-section (TA:K).
 type Weapon struct {
-	File          string   // source filename
-	NameKey       string   // [SECTION_NAME] — the key units refer to (TA) or "[WEAPONn]" (TA:K)
-	Display       string   // "name=" field
+	File          string // source filename
+	NameKey       string // [SECTION_NAME] — the key units refer to (TA) or "[WEAPONn]" (TA:K)
+	Display       string // "name=" field
 	ID            string
 	Range         string
 	Reload        string
@@ -112,8 +112,8 @@ type MenuEntry struct {
 // BuildSlot is the resolved page/button position for one unit registered
 // against one builder. Source is "sidedata" or a download filename.
 type BuildSlot struct {
-	Page   int    // 1-indexed
-	Button int    // 0..5
+	Page   int // 1-indexed
+	Button int // 0..5
 	Unit   string
 	Source string
 }

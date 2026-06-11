@@ -14,6 +14,7 @@ package games
 
 import (
 	"image/color"
+	"sort"
 
 	"github.com/coreprime/kbot/formats/gaf"
 )
@@ -141,4 +142,23 @@ func Resolve(id string) Game {
 		return g
 	}
 	return registry["totala"]
+}
+
+// Lookup returns the Game registered under an exact id, with ok=false for
+// unknown ids — for callers that must reject rather than fall back (CLI
+// argument validation, config checks).
+func Lookup(id string) (Game, bool) {
+	g, ok := registry[id]
+	return g, ok
+}
+
+// IDs lists the registered game ids in sorted order, for help text and
+// error messages.
+func IDs() []string {
+	out := make([]string, 0, len(registry))
+	for id := range registry {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }

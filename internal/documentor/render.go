@@ -181,29 +181,44 @@ func executeTemplate(root *template.Template, name string, data any, outPath str
 func funcMapFor(prefix, ext string, available map[string]bool) template.FuncMap {
 	pic := tplPicFor(prefix, ext, available)
 	return template.FuncMap{
-		"pic":         pic,
-		"unitLabel":   tplUnitLabel,
-		"weaponCell":  tplWeaponList,
-		"trim":        strings.TrimSpace,
-		"truncate":    tplTruncate,
-		"escapePipe":  func(s string) string { return strings.ReplaceAll(s, "|", `\|`) },
-		"defaultDash": func(s string) string { if s == "" { return "—" } ; return s },
-		"join":        strings.Join,
-		"upper":       strings.ToUpper,
-		"lower":       strings.ToLower,
-		"toAnchor":    tplAnchor,
-		"plural":      tplPlural,
-		"htmlEscape":  html.EscapeString,
-		"slotCell":    tplSlotCellFor(pic),
-		"badge":       func(s BuildSlot) string { if s.IsDownload() { return " ⬇️" } ; return "" },
-		"chunk":       tplChunk,
-		"usedByCell":  tplUsedByCell,
-		"joinCodes":   tplJoinCodes,
-		"slotAt":      func(p BuildPage, btn int) *BuildSlot { if s, ok := p.Slots[btn]; ok { return &s }; return nil },
-		"dict":         tplDict,
-		"chunkUnits":   tplChunkUnits,
-		"padCells":     tplPadCells,
-		"sortedSlots":  tplSortedSlots,
+		"pic":        pic,
+		"unitLabel":  tplUnitLabel,
+		"weaponCell": tplWeaponList,
+		"trim":       strings.TrimSpace,
+		"truncate":   tplTruncate,
+		"escapePipe": func(s string) string { return strings.ReplaceAll(s, "|", `\|`) },
+		"defaultDash": func(s string) string {
+			if s == "" {
+				return "—"
+			}
+			return s
+		},
+		"join":       strings.Join,
+		"upper":      strings.ToUpper,
+		"lower":      strings.ToLower,
+		"toAnchor":   tplAnchor,
+		"plural":     tplPlural,
+		"htmlEscape": html.EscapeString,
+		"slotCell":   tplSlotCellFor(pic),
+		"badge": func(s BuildSlot) string {
+			if s.IsDownload() {
+				return " ⬇️"
+			}
+			return ""
+		},
+		"chunk":      tplChunk,
+		"usedByCell": tplUsedByCell,
+		"joinCodes":  tplJoinCodes,
+		"slotAt": func(p BuildPage, btn int) *BuildSlot {
+			if s, ok := p.Slots[btn]; ok {
+				return &s
+			}
+			return nil
+		},
+		"dict":        tplDict,
+		"chunkUnits":  tplChunkUnits,
+		"padCells":    tplPadCells,
+		"sortedSlots": tplSortedSlots,
 	}
 }
 
@@ -265,12 +280,12 @@ func tplTruncate(s string, n int) string {
 }
 
 // tplAnchor approximates GitHub's heading-to-slug algorithm:
-//   1. Lowercase.
-//   2. Convert em-dash (—) to a regular hyphen — GitHub does this.
-//   3. Drop everything that isn't alphanumeric, space, or hyphen.
-//   4. Replace spaces with hyphens, **preserving runs** (GitHub does NOT
-//      collapse `--` into `-`, so `ARM — Commander` becomes
-//      `arm---commander`, not `arm-commander`).
+//  1. Lowercase.
+//  2. Convert em-dash (—) to a regular hyphen — GitHub does this.
+//  3. Drop everything that isn't alphanumeric, space, or hyphen.
+//  4. Replace spaces with hyphens, **preserving runs** (GitHub does NOT
+//     collapse `--` into `-`, so `ARM — Commander` becomes
+//     `arm---commander`, not `arm-commander`).
 var anchorDropRe = regexp.MustCompile(`[^a-z0-9 \-]+`)
 
 func tplAnchor(s string) string {
@@ -432,4 +447,3 @@ func tplChunk(size int, items any) [][]any {
 	}
 	return nil
 }
-

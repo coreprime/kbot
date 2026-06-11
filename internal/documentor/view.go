@@ -103,12 +103,12 @@ type WeaponUserMap map[string][]string
 
 // WeaponsView is the top-level view-model for ta-weapons.md.
 type WeaponsView struct {
-	TotalWeapons int
+	TotalWeapons    int
 	UnitsWithWeapon int
 	Groups          []WeaponGroup
-	UserMap         WeaponUserMap     // key → sorted list of unit names
-	UserKeys        []string          // sorted keys of UserMap
-	Defined         map[string]bool   // weapon key → defined-here flag
+	UserMap         WeaponUserMap   // key → sorted list of unit names
+	UserKeys        []string        // sorted keys of UserMap
+	Defined         map[string]bool // weapon key → defined-here flag
 }
 
 // ----- Builders -----

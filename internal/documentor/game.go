@@ -1,8 +1,18 @@
 package documentor
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
 
-// Game identifies which Cavedog title's reference catalogue we're rendering.
+	"github.com/coreprime/kbot/games"
+	_ "github.com/coreprime/kbot/games/takingdoms"
+	_ "github.com/coreprime/kbot/games/totala"
+)
+
+// Game identifies which title's reference catalogue we're rendering. Values
+// are the canonical games-registry ids ("totala", "takingdoms"); the
+// documentor layers its own filename prefixes and per-game rendering rules
+// on top, but identity and display names come from the registry.
 type Game string
 
 const (
@@ -13,16 +23,26 @@ const (
 	GameTAKingdoms Game = "takingdoms"
 )
 
-// ParseGame coerces a CLI string into a Game value.
+// gameAliases maps the CLI shorthand spellings onto registry ids.
+var gameAliases = map[string]string{
+	"":         "totala",
+	"ta":       "totala",
+	"tak":      "takingdoms",
+	"kingdoms": "takingdoms",
+}
+
+// ParseGame coerces a CLI string into a Game value: shorthand aliases map to
+// canonical ids and anything else must be a registered game id, so a game
+// added to the registry is documentable without touching this file.
 func ParseGame(s string) (Game, error) {
-	switch s {
-	case "", "totala", "ta":
-		return GameTotalA, nil
-	case "takingdoms", "tak", "kingdoms":
-		return GameTAKingdoms, nil
-	default:
-		return "", fmt.Errorf("unknown game %q (want totala or takingdoms)", s)
+	id := strings.ToLower(strings.TrimSpace(s))
+	if canonical, ok := gameAliases[id]; ok {
+		id = canonical
 	}
+	if _, ok := games.Lookup(id); !ok {
+		return "", fmt.Errorf("unknown game %q (want one of: %s)", s, strings.Join(games.IDs(), ", "))
+	}
+	return Game(id), nil
 }
 
 // Prefix is the per-game filename/identifier prefix:
@@ -37,14 +57,9 @@ func (g Game) Prefix() string {
 	}
 }
 
-// HumanName returns the player-friendly title.
+// HumanName returns the player-friendly title from the games registry.
 func (g Game) HumanName() string {
-	switch g {
-	case GameTAKingdoms:
-		return "Total Annihilation: Kingdoms"
-	default:
-		return "Total Annihilation"
-	}
+	return games.Resolve(string(g)).Name()
 }
 
 // PortraitDir is the per-game portrait subdirectory (relative to target).

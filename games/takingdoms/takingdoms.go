@@ -32,7 +32,7 @@ var Game games.Game = game{}
 type game struct{}
 
 func (game) ID() string   { return "takingdoms" }
-func (game) Name() string { return "TA: Kingdoms" }
+func (game) Name() string { return "Total Annihilation: Kingdoms" }
 
 func (g game) NewAdapter(fs games.VFS) games.Adapter {
 	a := &adapter{
