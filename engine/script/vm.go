@@ -455,7 +455,7 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 		if u.host != nil {
 			u.host.PlaySound(int(sound), int(ins.P1))
 		}
-		u.recordEffect(frame.EvPlaySound, int(ins.P1), int(sound))
+		u.recordSound(int(ins.P1), int(sound))
 	case scripting.OP_ATTACH_UNIT, scripting.OP_DROP_UNIT:
 		// Unit attachment is resolved by the world, not the script VM.
 

@@ -17,13 +17,13 @@ import (
 type MsgType string
 
 const (
-	MsgJoin        MsgType = "join"
-	MsgJoinAccept  MsgType = "join_accept"
-	MsgOrder       MsgType = "order"
-	MsgCommand     MsgType = "command"
-	MsgSnapshot    MsgType = "snapshot"
-	MsgHash        MsgType = "hash"
-	MsgAck         MsgType = "ack"
+	MsgJoin       MsgType = "join"
+	MsgJoinAccept MsgType = "join_accept"
+	MsgOrder      MsgType = "order"
+	MsgCommand    MsgType = "command"
+	MsgSnapshot   MsgType = "snapshot"
+	MsgHash       MsgType = "hash"
+	MsgAck        MsgType = "ack"
 	// MsgLeave lets a client relinquish its slot without dropping the socket,
 	// so the authority can free the seat and reap an emptied match promptly
 	// rather than waiting for the transport to notice the disconnect.

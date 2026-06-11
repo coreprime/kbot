@@ -57,6 +57,18 @@ type Program struct {
 	scriptByName map[string]int // lower-cased script name -> index
 	pieceNames   []string
 	numStatic    int
+	// soundNames is the TA:K v6 COB sound table; PLAY_SOUND operands index
+	// into it. Empty for TA COBs (the opcode doesn't exist in v4 scripts).
+	soundNames []string
+}
+
+// SoundName resolves a PLAY_SOUND index to its .wav stem, "" when the
+// program carries no sound table or the index is out of range.
+func (p *Program) SoundName(i int) string {
+	if i < 0 || i >= len(p.soundNames) {
+		return ""
+	}
+	return p.soundNames[i]
 }
 
 // NewProgram assembles a Program from raw script sources. The piece-name list
@@ -106,7 +118,11 @@ func FromCOB(c *scripting.COB) (*Program, error) {
 		}
 		sources = append(sources, ScriptSource{Name: name, Insts: insts})
 	}
-	return NewProgram(c.PieceNames, int(c.NumberOfStaticVars), sources), nil
+	prog := NewProgram(c.PieceNames, int(c.NumberOfStaticVars), sources)
+	// TA:K v6 COBs carry a sound-name table; PLAY_SOUND operands index into
+	// it. Keep it so the VM can resolve a play-sound effect to its .wav stem.
+	prog.soundNames = append([]string(nil), c.SoundNames...)
+	return prog, nil
 }
 
 // ScriptIndex resolves a script name (case-insensitively) to its index.

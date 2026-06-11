@@ -153,6 +153,19 @@ func (u *Unit) recordEffect(kind frame.EventKind, piece, arg int) {
 	u.effects = append(u.effects, frame.Event{Kind: kind, Slot: piece, SfxType: arg})
 }
 
+// recordSound buffers a PLAY_SOUND effect with its sound index resolved to
+// the .wav stem from the program's TA:K v6 sound table — TA:K scripts play
+// their death cries and ability stingers through this opcode. The raw index
+// still rides SfxType for inspection; clients key playback off Sound.
+func (u *Unit) recordSound(volume, soundIdx int) {
+	u.effects = append(u.effects, frame.Event{
+		Kind:    frame.EvPlaySound,
+		Slot:    volume,
+		SfxType: soundIdx,
+		Sound:   u.prog.SoundName(soundIdx),
+	})
+}
+
 // DrainEffects returns the effect events buffered since the last drain and
 // clears the buffer. The world calls it each tick to harvest script-emitted
 // SFX / sounds for the render snapshot.

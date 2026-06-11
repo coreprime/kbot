@@ -18,9 +18,9 @@ func TestEffectOpcodesSurfaceAsSnapshotEvents(t *testing.T) {
 	p := prog(twoPieces(), 0, ScriptSource{
 		Name: "Create",
 		Insts: []Instruction{
-			i1(scripting.OP_PUSH_IMMEDIATE, 7), // emit-sfx type 7
-			i1(scripting.OP_EMIT_SFX, 1),       // from piece 1
-			i1(scripting.OP_PUSH_IMMEDIATE, 3), // explode sfx 3
+			i1(scripting.OP_PUSH_IMMEDIATE, 7),  // emit-sfx type 7
+			i1(scripting.OP_EMIT_SFX, 1),        // from piece 1
+			i1(scripting.OP_PUSH_IMMEDIATE, 3),  // explode sfx 3
 			i1(scripting.OP_EXPLODE, 0),         // on piece 0
 			i1(scripting.OP_PUSH_IMMEDIATE, 12), // sound id 12
 			i1(scripting.OP_PLAY_SOUND, 64),     // at volume 64

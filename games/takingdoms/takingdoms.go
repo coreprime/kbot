@@ -340,7 +340,9 @@ func (a *adapter) UnitSounds(category string) map[string]string {
 	}
 	emit(subs["select"], "select", 0)
 	n := emit(subs["move"], "ok", 0)
-	emit(subs["attack"], "ok", n)
+	n = emit(subs["attack"], "ok", n)
+	n = emit(subs["guard"], "ok", n)
+	emit(subs["patrol"], "ok", n)
 	if len(out) == 0 {
 		return nil
 	}

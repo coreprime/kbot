@@ -1144,6 +1144,22 @@ export class WasmSandboxScene {
           // 3DO so the battlefield keeps TA's TDF-faithful debris.
           this._onCorpse(ev)
           break
+        case 'playSound': {
+          // COB PLAY_SOUND (TA:K v6) — the sim resolved the opcode's index
+          // through the COB's sound table into a .wav stem. Death cries and
+          // ability stingers arrive here rather than via the FBI sound map.
+          const u = this._units.get(ev.unitId)
+          const stem = (ev.sound || '').trim().toLowerCase()
+          if (u && stem && u.binding && u.binding.audio) {
+            u.binding.audio.play(stem, {
+              vol: 0.85,
+              kind: 'unit',
+              source: `${u.name || 'Unit'}: play-sound`,
+              pos: [ev.x || 0, ev.y || 0, ev.z || 0],
+            })
+          }
+          break
+        }
         case 'moveStop': {
           const u = this._units.get(ev.unitId)
           if (u) {
