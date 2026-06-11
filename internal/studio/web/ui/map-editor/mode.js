@@ -57,6 +57,8 @@
 //                                  drawer row after deselecting
 
 import { isTakMapActive } from './tak-edit.js'
+import { findRotatedTakSection } from './tak-rotate.js'
+import { ensureSectionAssets } from './drawer-actions.js'
 import { $, $$, state, hostCallbacks, setStatus, activeMap } from '../host-context.js'
 import {
   beginTransaction,
@@ -196,9 +198,22 @@ export function rotateActive(dir) {
   // dir: +1 = clockwise, -1 = counter-clockwise.
   if (state.placement) {
     // TA:K terrain cells carry no orientation bits, so a rotated section
-    // stamp cannot be represented — hold at 0 and tell the user why.
+    // stamp cannot be represented. The library ships directional VARIANTS
+    // instead (e01 → s01 …) — swap the placement to the rotated sibling
+    // when one exists, and explain the format limit when it doesn't.
     if (isTakMapActive()) {
-      setStatus('TA:K sections cannot rotate — the format stores terrain as (texture, U, V) with no orientation.')
+      const variant = findRotatedTakSection(state.sectionsList, state.placement.sectionPath, dir)
+      if (variant) {
+        state.placement.sectionPath = variant.path
+        state.placement.origW = variant.tileW
+        state.placement.origH = variant.tileH
+        if (state.placement.dormant) state.placement.dormant = false
+        ensureSectionAssets(variant.path)
+        setStatus(`Swapped to ${variant.name} — the library's ${dir > 0 ? 'clockwise' : 'counter-clockwise'} variant (TA:K sections rotate by substitution).`)
+        renderCanvas()
+        return
+      }
+      setStatus('TA:K sections cannot rotate — the format stores terrain as (texture, U, V) with no orientation, and no rotated variant of this section exists in the library.')
       return
     }
     state.placement.rotation = (state.placement.rotation + dir + 4) % 4

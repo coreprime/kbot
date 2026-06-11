@@ -74,12 +74,12 @@ tasks:
     desc: Run all tests
     cmds:
       - go test ./... 
-      - node --test packages-js/game-takingdoms/contract.test.js
+      - node --test packages-js/game-takingdoms/contract.test.js "internal/studio/web/ui/map-editor/tak-rotate.test.js"
 
   test-js:
-    desc: Run the JS game-adapter contract tests
+    desc: Run the JS unit tests (adapter contract + pure UI helpers)
     cmds:
-      - node --test packages-js/game-takingdoms/contract.test.js
+      - node --test packages-js/game-takingdoms/contract.test.js "internal/studio/web/ui/map-editor/tak-rotate.test.js"
 
   test-verbose:
     desc: Run all tests
