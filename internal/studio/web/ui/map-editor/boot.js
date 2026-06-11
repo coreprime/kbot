@@ -94,6 +94,8 @@
 //                                        switch.
 
 import { $, state, tabs, tabState, hostCallbacks, MapDoc, setStatus, clamp } from '../host-context.js'
+import { TAK_TERRAIN_KEY, TAK_TERRAIN_EDITOR_MAX } from './constants.js'
+import { setCurrentTakMap } from './tak-edit.js'
 import {
   undoStack,
   redoStack,
@@ -271,12 +273,30 @@ export async function openLoadedMap(data, card) {
   // name indices need to rebuild after the bulk load.
   bumpContentVersion()
 
-  // Preload the tile pool atlas as a section image so the existing
-  // drawSectionTiles path can render the loaded map at full fidelity.
+  // Preload the canvas backdrop.  TA maps: the tile-pool atlas (drawn per
+  // stamp).  TA:Kingdoms maps are texture-mapped — there is no tile pool, so
+  // preload the full terrain render and stash it under TAK_TERRAIN_KEY for the
+  // backdrop pass.  The promise resolves on BOTH load and error so a missing
+  // image (e.g. a TA:K map with no tile pool) can never hang the editor boot
+  // and leave the default "newmap" showing.
   const img = new Image()
-  const ready = new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }) })
-  img.src = data.tilePoolUrl
-  state.sectionImages.set(data.tilePoolKey, img)
+  const ready = new Promise((resolve) => {
+    img.addEventListener('load', resolve, { once: true })
+    img.addEventListener('error', resolve, { once: true })
+  })
+  // Track the active TA:K map so section drops route to the server-side
+  // terrain-compositing path (tak-edit.js) instead of TA tile stamping.
+  setCurrentTakMap(data.textureMapped ? data.path : null)
+  if (data.textureMapped && data.terrainUrl) {
+    // Request a near-native render so the backdrop stays crisp when zoomed in
+    // (the default render is small + decorative, for the welcome slideshow).
+    const sep = data.terrainUrl.includes('?') ? '&' : '?'
+    img.src = `${data.terrainUrl}${sep}max=${TAK_TERRAIN_EDITOR_MAX}`
+    state.sectionImages.set(TAK_TERRAIN_KEY, img)
+  } else {
+    img.src = data.tilePoolUrl
+    state.sectionImages.set(data.tilePoolKey, img)
+  }
   await ready
 
   $('#open-dialog').classList.add('hidden')
@@ -340,6 +360,7 @@ export async function startEditor() {
   state.tileH = h
   state.name = name
   state.planet = planet
+  setCurrentTakMap(null) // a freshly-created map is TA tile-based, not TA:K terrain
   state.tiles = new Array(w * h).fill(null)
   state.heights = new Array(w * 2 * h * 2).fill(80)
   state.voids = new Array(w * 2 * h * 2).fill(0)

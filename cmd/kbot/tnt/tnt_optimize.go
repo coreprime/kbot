@@ -66,6 +66,9 @@ default.  Use --target to write the TNT to a file instead.`,
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+			if m.IsTAK {
+				return fmt.Errorf("TA: Kingdoms maps are texture-mapped and have no tile pool to optimize")
+			}
 			features, err := m.LoadFeatures(r)
 			if err != nil {
 				return fmt.Errorf("read features: %w", err)

@@ -48,6 +48,19 @@ const (
 	uvArmored       = 20
 )
 
+// TA: Kingdoms unit-value ports (21+, inert under the TA engine). The weapon
+// trio backs TA:K's aim handshake: a v6 script signals aim state by WRITING
+// the weapon index into WEAPON_READY / WEAPON_AIM_ABORTED via SET_VALUE
+// instead of returning a value from the aim thread the way TA scripts do.
+// CURRENT_SPEED feeds the MoveWatcher loops TA:K units poll to trigger their
+// walk gaits (the world pushes it through SetUnitValuePort each tick).
+const (
+	UVWeaponAimAborted = 21
+	UVWeaponReady      = 22
+	UVWeaponLaunchNow  = 23
+	UVCurrentSpeed     = 29
+)
+
 // pieceAnim is one (piece, axis) animator. value/target/speed are fixed-point
 // numbers whose real value equals the COB integer operand, so sub-tick motion
 // accumulates without integer-division drift. kind is sticky after the first
@@ -313,6 +326,7 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 	case scripting.OP_SET_VALUE:
 		value := t.pop()
 		port := t.pop()
+		u.noteWeaponPortWrite(int(port), value)
 		if u.host != nil {
 			u.host.SetUnitValue(int(port), int(value))
 		} else {
@@ -443,6 +457,23 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 		u.recordEffect(frame.EvPlaySound, int(ins.P1), int(sound))
 	case scripting.OP_ATTACH_UNIT, scripting.OP_DROP_UNIT:
 		// Unit attachment is resolved by the world, not the script VM.
+
+	// ── TA: Kingdoms ─────────────────────────────────────────────
+	case scripting.OP_MISSION_COMMAND:
+		// A named campaign-engine command (P1 indexes the COB's sound-name
+		// table, P2 is the argument count). The commands only exist inside
+		// TA:K's mission engine, so outside it the call degrades to a neutral
+		// result: pop the declared arguments and push 0 so the surrounding
+		// expression's stack stays balanced.
+		for i := int32(0); i < ins.P2; i++ {
+			t.pop()
+		}
+		t.push(0)
+	case scripting.OP_TAK_MATH_09, scripting.OP_TAK_MATH_0B:
+		// Undocumented TA:K operators (Scriptor itself labels them ??).
+		// Every retail site uses them as stack-neutral wrappers around a
+		// producing expression, so leaving the stack untouched preserves
+		// the value the expression already pushed.
 	}
 	return false
 }

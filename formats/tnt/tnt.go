@@ -10,6 +10,8 @@ import (
 	"image/png"
 	"io"
 	"strings"
+
+	"github.com/coreprime/kbot/formats/tnt/tak"
 )
 
 // TNT IDVersion words. TA writes 0x2000; TA: Kingdoms reuses the TNT
@@ -43,27 +45,9 @@ type Header struct {
 	Pad4        uint32
 }
 
-// TA: Kingdoms reuses the 64-byte TNT header but repurposes every pointer slot.
-// These accessors name the TA:K meaning of each slot so the TA:K code path
-// reads clearly instead of referencing TA-shaped field names. Width and Height
-// are in 16px DataUnits; terrain renders from 32px Graphic Units (guW = Width/2).
-//
-//	0x0c  sea level
-//	0x10  heightmap (Width×Height bytes, one per DataUnit)
-//	0x14  attribute/feature grid (Width×Height uint16; >=0xFF00 means none)
-//	0x18  feature name table pointer
-//	0x1c  feature count (shared with TA's TileAnims field)
-//	0x20  terrain-name table (guW×guH uint32 → "%08X.JPG")
-//	0x24  U-mapping (guW×guH bytes; texture column in 32px units)
-//	0x28  V-mapping (guW×guH bytes; texture row in 32px units)
-//	0x2c  minimap pointer (126×126 across the shipped corpus)
-func (h Header) takHeightPtr() uint32       { return h.PTRMapAttr }
-func (h Header) takFeatureGrid() uint32     { return h.PTRTileGfx }
-func (h Header) takFeatureTable() uint32    { return h.Tiles }
-func (h Header) takTerrainNamesPtr() uint32 { return h.PTRTileAnim }
-func (h Header) takUMapPtr() uint32         { return h.SeaLevel }
-func (h Header) takVMapPtr() uint32         { return h.PTRMinimap }
-func (h Header) takMinimapPtr() uint32      { return h.Unknown1 }
+// The TA: Kingdoms meaning of each repurposed header slot (sea level, heightmap,
+// feature grid + name table, terrain-name table, U/V maps, minimap) lives in the
+// formats/tnt/tak subpackage, which owns the 0x4000 read/write variance.
 
 // takNoFeature is the threshold at or above which a feature-grid cell holds a
 // sentinel (e.g. 0xFFFF, 0xFFFB) rather than a feature index.
@@ -106,6 +90,10 @@ type Map struct {
 	TAKTerrainNames []uint32 // TAKGUW×TAKGUH terrain texture names ("%08X.JPG")
 	TAKUMap         []byte   // TAKGUW×TAKGUH texture column offsets (32px units)
 	TAKVMap         []byte   // TAKGUW×TAKGUH texture row offsets (32px units)
+	// TAKFeatureTableRaw is the feature-name table captured verbatim (its
+	// internal layout isn't modelled). SaveTAK writes it back unchanged so a
+	// map with features round-trips; the entry count lives in Header.TileAnims.
+	TAKFeatureTableRaw []byte
 
 	// MapDataPad preserves any padding bytes between the end of the
 	// tile-index array and the start of the attribute array.  Cavedog's
@@ -127,11 +115,10 @@ func LoadFromReader(r io.ReadSeeker) (*Map, error) {
 	case VersionTA:
 		// Full TA parse below.
 	case VersionTAK:
-		// TA: Kingdoms reuses the TNT container but its tile-index,
-		// attribute and tile-graphics encoding has not been reverse-
-		// engineered.  Read the header and the embedded minimap (the one
-		// section whose layout matches across the shipped corpus) and
-		// return a partial map rather than misreading TA-shaped offsets.
+		// TA: Kingdoms reuses the TNT container but repurposes the header
+		// pointers: no tile mosaic, instead a texture-mapped Graphic-Unit
+		// grid plus DataUnit-resolution heightmap and feature grid.  The
+		// tak subpackage owns that layout.
 		return loadTAK(r, m)
 	default:
 		return nil, fmt.Errorf("unsupported TNT version: %d (expected %d for TA or %d for TA:K)",
@@ -212,11 +199,6 @@ func LoadFromReader(r io.ReadSeeker) (*Map, error) {
 	return m, nil
 }
 
-// takMaxPixels bounds the terrain/feature allocations against a corrupt header.
-// The largest shipped TA:K map is well under this (a 1024×1024-pixel map would
-// be a 32×32-tile map, already larger than anything Cavedog shipped).
-const takMaxPixels = 4096 * 4096
-
 // loadTAK parses a TA: Kingdoms TNT. TA:K reuses the TNT container but stores
 // Width/Height in 16px DataUnits and renders terrain by texture-mapping a grid
 // of 32px Graphic Units: each unit names a JPG texture (0x20) plus a U/V offset
@@ -224,89 +206,25 @@ const takMaxPixels = 4096 * 4096
 // (0x14) accompany a feature name table (0x18 / count 0x1c) and an embedded
 // minimap (0x2c). Every section is read by its own header pointer and length.
 func loadTAK(r io.ReadSeeker, m *Map) (*Map, error) {
+	// The 0x4000 read/write variance lives in the tak subpackage; copy its
+	// decoded sections onto the shared Map so existing consumers (rendering,
+	// studio backdrop, save) keep working against Map's TAK* fields.
+	tm, err := tak.Decode(r)
+	if err != nil {
+		return nil, err
+	}
 	m.IsTAK = true
-	m.TAKW = int(m.Header.Width)
-	m.TAKH = int(m.Header.Height)
-	// A Graphic Unit is 32px and a DataUnit 16px, so the texture grid is half
-	// the DataUnit grid on each axis.
-	m.TAKGUW = m.TAKW / 2
-	m.TAKGUH = m.TAKH / 2
-
-	n := m.TAKW * m.TAKH
-	if n > 0 && n <= takMaxPixels {
-		// Heightmap: one byte per DataUnit.
-		if buf, err := readSection(r, m.Header.takHeightPtr(), n); err == nil {
-			m.TAKHeight = buf
-		}
-		// Feature placement grid: one uint16 per DataUnit, >=takNoFeature = none.
-		if raw, err := readSection(r, m.Header.takFeatureGrid(), n*2); err == nil {
-			grid := make([]uint16, n)
-			for i := 0; i < n; i++ {
-				grid[i] = binary.LittleEndian.Uint16(raw[i*2:])
-			}
-			m.TAKFeatureGrid = grid
-		}
-	}
-
-	gu := m.TAKGUW * m.TAKGUH
-	if gu > 0 && gu <= takMaxPixels {
-		// Terrain texture names: one uint32 per Graphic Unit.
-		if raw, err := readSection(r, m.Header.takTerrainNamesPtr(), gu*4); err == nil {
-			names := make([]uint32, gu)
-			for i := 0; i < gu; i++ {
-				names[i] = binary.LittleEndian.Uint32(raw[i*4:])
-			}
-			m.TAKTerrainNames = names
-		}
-		// U/V mapping: one byte each per Graphic Unit (32px texture offsets).
-		if buf, err := readSection(r, m.Header.takUMapPtr(), gu); err == nil {
-			m.TAKUMap = buf
-		}
-		if buf, err := readSection(r, m.Header.takVMapPtr(), gu); err == nil {
-			m.TAKVMap = buf
-		}
-	}
-
-	m.readTAKMinimap(r)
+	m.TAKW, m.TAKH = tm.W, tm.H
+	m.TAKGUW, m.TAKGUH = tm.GUW, tm.GUH
+	m.TAKHeight = tm.Height
+	m.TAKFeatureGrid = tm.FeatureGrid
+	m.TAKTerrainNames = tm.TerrainNames
+	m.TAKUMap = tm.UMap
+	m.TAKVMap = tm.VMap
+	m.TAKFeatureTableRaw = tm.FeatureTableRaw
+	m.Minimap = tm.Minimap
+	m.MinimapW, m.MinimapH = tm.MinimapW, tm.MinimapH
 	return m, nil
-}
-
-// readTAKMinimap reads the embedded paletted minimap from the 0x2c pointer.
-func (m *Map) readTAKMinimap(r io.ReadSeeker) {
-	ptr := m.Header.takMinimapPtr()
-	if ptr == 0 {
-		return
-	}
-	if _, err := r.Seek(int64(ptr), io.SeekStart); err != nil {
-		return
-	}
-	var mmW, mmH uint32
-	if err := binary.Read(r, binary.LittleEndian, &mmW); err != nil {
-		return
-	}
-	if err := binary.Read(r, binary.LittleEndian, &mmH); err != nil {
-		return
-	}
-	if mmW > 0 && mmH > 0 && mmW <= 1024 && mmH <= 1024 {
-		pixels := make([]byte, mmW*mmH)
-		if _, err := io.ReadFull(r, pixels); err == nil {
-			m.Minimap = pixels
-			m.MinimapW = int(mmW)
-			m.MinimapH = int(mmH)
-		}
-	}
-}
-
-// readSection seeks to ptr and reads exactly n bytes.
-func readSection(r io.ReadSeeker, ptr uint32, n int) ([]byte, error) {
-	if _, err := r.Seek(int64(ptr), io.SeekStart); err != nil {
-		return nil, err
-	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, err
-	}
-	return buf, nil
 }
 
 func readByte(r io.Reader) uint8 {
@@ -352,8 +270,12 @@ func (m *Map) RenderTileMap(palette color.Palette) *image.RGBA {
 }
 
 // RenderHeightMap renders elevation data as a normalized greyscale image.
-// The image is AttrW × AttrH (16px resolution, 2× the tile grid).
+// The image is AttrW × AttrH (16px resolution, 2× the tile grid). TA:K maps
+// render from their DataUnit heightmap at the same 16px resolution.
 func (m *Map) RenderHeightMap() *image.Gray {
+	if m.IsTAK {
+		return m.RenderTAKHeightmap()
+	}
 	if m.TileAttr == nil {
 		return nil
 	}
@@ -464,7 +386,7 @@ func (m *Map) LoadFeatures(r io.ReadSeeker) ([]Feature, error) {
 	}
 	tablePtr := m.Header.PTRTileAnim
 	if m.IsTAK {
-		tablePtr = m.Header.takFeatureTable()
+		tablePtr = m.Header.Tiles // TA:K keeps the feature-name table at 0x18
 	}
 	if _, err := r.Seek(int64(tablePtr), io.SeekStart); err != nil {
 		return nil, err
@@ -491,6 +413,11 @@ func (m *Map) LoadFeatures(r io.ReadSeeker) ([]Feature, error) {
 
 // GetFeaturePlacements returns all placed features from the MapAttr grid.
 func (m *Map) GetFeaturePlacements() []FeaturePlacement {
+	if m.IsTAK {
+		// TA:K stores placements in its DataUnit feature grid rather than
+		// the TA attribute array; same 16px cell resolution either way.
+		return m.TAKFeaturePlacements()
+	}
 	if m.TileAttr == nil {
 		return nil
 	}

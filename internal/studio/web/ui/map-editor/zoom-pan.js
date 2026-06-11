@@ -120,6 +120,10 @@ export function applyOverscrollPadding() {
   overscrollPadding.y = padY
 }
 
+// _zoomStreak tracks consecutive same-direction wheel events so
+// zoomAtPointer can accelerate sustained spins.
+const _zoomStreak = { lastMs: 0, dir: 0, count: 0 }
+
 // zoomAtPointer scales around a screen-space point (typically the
 // cursor during a wheel event) so the map pixel under that point
 // stays anchored.  `deltaY` follows the WheelEvent convention:
@@ -135,8 +139,22 @@ export function zoomAtPointer(clientX, clientY, deltaY) {
   const mapY = (clientY - rect.top) / state.zoom
 
   // Pinch trackpads emit very small deltas; mouse wheels emit large
-  // ones.  Normalise so a single wheel click is ~1.1×.
-  const step = Math.exp(-deltaY * 0.0015)
+  // ones.  Normalise so a single wheel click is ~1.27×, and accelerate
+  // sustained spins: each wheel event inside the streak window grows the
+  // step (up to ~3.4×) so crossing the whole zoom range takes a quick
+  // flick instead of a dozen deliberate notches.  A pause or direction
+  // change resets the streak, so fine adjustments stay precise.
+  const now = performance.now()
+  const dir = Math.sign(deltaY)
+  if (now - _zoomStreak.lastMs < 220 && dir === _zoomStreak.dir) {
+    _zoomStreak.count = Math.min(_zoomStreak.count + 1, 10)
+  } else {
+    _zoomStreak.count = 0
+  }
+  _zoomStreak.lastMs = now
+  _zoomStreak.dir = dir
+  const accel = 1 + _zoomStreak.count * 0.5
+  const step = Math.exp(-deltaY * 0.0024 * accel)
   const newZoom = clamp(state.zoom * step, MIN_ZOOM, MAX_ZOOM)
   if (newZoom === state.zoom) return
   setZoom(newZoom)

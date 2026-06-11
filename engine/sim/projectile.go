@@ -401,6 +401,16 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 	}
 	switch {
 	case distT <= prox || closestPass:
+		// Within one tick's travel the shot would pass through the target
+		// mid-tick, so land the detonation ON the aim point rather than up to
+		// a tick early — a fast shot whose per-tick travel exceeds its blast
+		// radius (the EMG: 7.5 wu/tick vs a 4 wu radius) would otherwise
+		// detonate short and never damage the very unit it was aimed at. The
+		// steered closest-pass fuze keeps its true position: that pass is the
+		// physical best a wide-turning missile can do.
+		if !closestPass {
+			p.pos = p.target
+		}
 		p.dead = true
 		p.hit = true
 	case (p.mode == projDropped || p.mode == projBallistic) && p.pos.Y <= groundY:

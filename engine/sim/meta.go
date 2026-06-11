@@ -23,6 +23,12 @@ type UnitMeta struct {
 	IsBuilder bool
 	OnOffable bool
 
+	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
+	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
+	// absolute damage by this to land TDF-faithful percentage hits. Zero
+	// means unknown — damage then applies at face value, the legacy scale.
+	MaxHealth fixed.Fixed
+
 	Weapons [3]WeaponMeta
 }
 

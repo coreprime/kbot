@@ -41,6 +41,9 @@ classification; pass --sealevel to override (0 disables the check).`,
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+			if m.IsTAK {
+				return fmt.Errorf("TA: Kingdoms maps are not yet supported by buildmap (buildability rules are TA-specific)")
+			}
 			sea := m.Header.SeaLevel
 			if cmd.Flags().Changed("sealevel") {
 				if seaLevel < 0 {

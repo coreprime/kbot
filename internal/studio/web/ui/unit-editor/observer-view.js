@@ -95,6 +95,10 @@ export class ModelObserverView {
       const gl = this.canvas.getContext('webgl', {
         antialias: true,
         premultipliedAlpha: false,
+        // Opaque backbuffer: MSAA's fractional-coverage pixels at
+        // alpha-tested silhouettes otherwise composite over the page's
+        // purple theme and read as pink fringes.
+        alpha: false,
       })
       if (!gl) return
       const textureCache = new TextureCache(gl)

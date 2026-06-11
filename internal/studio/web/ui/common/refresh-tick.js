@@ -151,11 +151,14 @@ export function refreshMvInspectors(dtMs = 16) {
     const everySlot = (idx, names) => selectedUnits.length > 0
       && selectedUnits.every((u) => slotHasWeapon(u, idx)
         || (u.binding.hasScript && names.some((n) => u.binding.hasScript(n))))
+    // TA:K COBs export one shared weapon set (AimWeapon/FireWeapon/
+    // QueryWeapon); the names sit in every slot's fallback list because the
+    // FBI weapon declaration is what distinguishes the slots.
     const ctrlEnabled = {
       move: selectedUnits.length > 0,
-      primary:   everySlot(0, ['AimPrimary',   'FirePrimary',   'QueryPrimary']),
-      secondary: everySlot(1, ['AimSecondary', 'FireSecondary', 'QuerySecondary']),
-      tertiary:  everySlot(2, ['AimTertiary',  'FireTertiary',  'QueryTertiary']),
+      primary:   everySlot(0, ['AimPrimary',   'FirePrimary',   'QueryPrimary',   'AimWeapon', 'FireWeapon', 'QueryWeapon']),
+      secondary: everySlot(1, ['AimSecondary', 'FireSecondary', 'QuerySecondary', 'AimWeapon', 'FireWeapon', 'QueryWeapon']),
+      tertiary:  everySlot(2, ['AimTertiary',  'FireTertiary',  'QueryTertiary',  'AimWeapon', 'FireWeapon', 'QueryWeapon']),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction

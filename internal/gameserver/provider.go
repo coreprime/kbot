@@ -1,6 +1,7 @@
 package gameserver
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/sim"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/gamedata/tak"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -91,7 +93,14 @@ func (p *fbiProvider) loadUnit(name string) *sim.UnitMeta {
 	if err := tdf.Unmarshal(data, &u); err != nil {
 		return nil
 	}
-	return p.toMeta(name, &u.Info)
+	m := p.toMeta(name, &u.Info)
+	// TA:K installs inline the weapons in the FBI itself — fill any slots
+	// the TA-style ref pass left empty.
+	var ku tak.Unit
+	if err := tdf.Unmarshal(data, &ku); err == nil {
+		ApplyTAKWeapons(m, &ku)
+	}
+	return m
 }
 
 // toMeta converts a parsed FBI into the simulation stat block, resolving weapon
@@ -124,6 +133,7 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		CanMove:     info.MaxVelocity > 0,
 		IsBuilder:   info.Builder == 1,
 		OnOffable:   info.OnOffable == 1,
+		MaxHealth:   fixed.FromInt(info.MaxDamage),
 	}
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	cats := map[string]bool{}
@@ -163,6 +173,45 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		m.Weapons[i] = weaponMetaFromRef(ref, resolveWeapon)
 	}
 	return m
+}
+
+// ApplyTAKWeapons fills any empty weapon slots from a TA:Kingdoms unit's
+// inline [WEAPONn] sections. TA:K FBIs carry the weapon definitions as
+// top-level siblings of [UNITINFO] instead of weapons/*.tdf references, so
+// the ref-based loop in MetaFromUnitInfo finds nothing for them. Both asset
+// bridges (native flattened-tree and studio VFS) call this after the TA pass
+// so a unit gets identical stats on the authority and in the browser.
+func ApplyTAKWeapons(m *sim.UnitMeta, u *tak.Unit) {
+	if m == nil || u == nil {
+		return
+	}
+	for i, sec := range []*tak.Weapon{u.Weapon1, u.Weapon2, u.Weapon3} {
+		if sec == nil || m.Weapons[i].Present {
+			continue
+		}
+		name := strings.ToUpper(strings.TrimSpace(sec.Name))
+		if name == "" {
+			name = fmt.Sprintf("WEAPON%d", i+1)
+		}
+		// The [DAMAGE] table's default= is the absolute per-shot damage;
+		// the other keys are per-category multipliers, so only the default
+		// feeds the engine's damage figure. Truncate exactly like the
+		// studio's JSON path (damageDefault is an int) so the authority and
+		// the browser clients hash identical weapon stats.
+		dmg := float64(int(sec.Damage["default"]))
+		m.Weapons[i] = sim.WeaponMeta{
+			Name:           name,
+			Range:          fixed.FromInt(sec.Range),
+			ReloadMs:       int(sec.ReloadTime * 1000),
+			Burst:          1,
+			Damage:         fixed.FromFloat(dmg),
+			Present:        true,
+			Tolerance:      int32(sec.AimTolerance),
+			VelocityWU:     fixed.FromFloat(sec.WeaponVelocity),
+			AreaOfEffectWU: fixed.FromInt(sec.AreaOfEffect),
+			Ballistic:      strings.EqualFold(strings.TrimSpace(sec.Type), "ballistic"),
+		}
+	}
 }
 
 // weaponMetaFromRef resolves an FBI weapon reference into the engine's per-slot

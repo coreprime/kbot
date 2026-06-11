@@ -82,6 +82,18 @@ export const MAP_PAN_ACCEL_TIME_MS = 2000
 //                   display-cased names).
 //   aliases:        additional strings (beyond slug + defaultTileset)
 //                   that should still resolve to this world on read.
+
+// Reserved sectionImages key under which a TA:Kingdoms map stashes its full
+// terrain render, drawn as a read-only backdrop (TA:K maps are texture-mapped,
+// not tile-stamped, so there is no tile pool to draw).
+export const TAK_TERRAIN_KEY = '__tak_terrain__'
+
+// Resolution cap requested for the editor's TA:K terrain backdrop. Big enough to
+// stay reasonably crisp on the tileW*TILE_PX canvas (≈1.9× upscale on a
+// 240-unit/7680px map) while keeping the PNG light enough to fetch + decode
+// reliably — a native 7680² render is ~40MB/235MB-RAM and can fail to load.
+export const TAK_TERRAIN_EDITOR_MAX = 4096
+
 export const WORLDS = [
   { slug: 'greenworld',  label: 'Green',       defaultTileset: 'Green',  aliases: [] },
   { slug: 'metal',       label: 'Metal',       defaultTileset: 'Metal',  aliases: [] },

@@ -7,6 +7,7 @@ import (
 
 	"github.com/coreprime/kbot/filesystem"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
 	"github.com/coreprime/kbot/internal/assetrender"
 	"github.com/coreprime/kbot/internal/gameserver"
@@ -76,6 +77,9 @@ type Session struct {
 	textureIndexOnce  sync.Once
 	textureIndexMu    sync.Mutex
 	textureIndex      map[string]textureSource
+	textureIndexAll   map[string][]textureSource
+	takSoundMu        sync.Mutex
+	takSoundClasses   map[string]*tdf.Section
 	textureCacheMu    sync.Mutex
 	textureCache      map[string][]byte
 	textureDecalMu    sync.Mutex

@@ -79,6 +79,11 @@ const (
 	EvEmitSfx
 	EvPlaySound
 	EvExplode
+	// EvCorpseSpawn fires when a dead unit's Killed script settles its
+	// corpse choice: Slot carries the corpsetype (1 = intact corpse,
+	// 2 = damaged, 3 = nothing) and SfxType the body heading in TA-angle
+	// units. The client resolves the actual wreck feature from unit meta.
+	EvCorpseSpawn
 )
 
 // Event is a discrete occurrence during a tick. Only the fields meaningful for

@@ -43,6 +43,7 @@
 // the paint-mode click path now; the drag-from-drawer path goes
 // through handlePaint above them.
 
+import { isTakMapActive, stampTakSection } from '../tak-edit.js'
 import { state, setStatus, hostCallbacks } from '../../host-context.js'
 import { pickCell, pickFeatureAttrCell } from '../mouse-coords.js'
 import { rotatedFootprint, transformedSourceCell } from '../rotation.js'
@@ -208,6 +209,15 @@ function _handlePaintModeClick(e) {
 export function commitAnchoredPlacement() {
   const p = state.placement
   if (!p) return
+  // TA:K maps composite the section server-side (terrain + heights +
+  // features) — there is no tile pool to stamp and no client-side undo
+  // entry; the workspace's saved map is the authority.
+  if (isTakMapActive()) {
+    stampTakSection(p.sectionPath, p.tx, p.ty)
+    state.placement = null
+    hostCallbacks.hidePlacementHint?.()
+    return
+  }
   if (state.selected?.type === 'section') {
     state.selected.rotation = p.rotation
     state.selected.flipH = !!p.flipH

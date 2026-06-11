@@ -156,6 +156,42 @@ func TestTAKTerrainAndFeatures(t *testing.T) {
 	}
 }
 
+// TestTAKHeightmapDispatch guards that the generic height renderers serve
+// TA:K maps from the DataUnit heightmap instead of returning nil (which
+// crashed `kbot tnt heightmap` on TA:K input).
+func TestTAKHeightmapDispatch(t *testing.T) {
+	path := testutil.TAKUnpackedFile(t, "maps", "athri cay.tnt")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("sample not available: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	m, err := LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("LoadFromReader: %v", err)
+	}
+	norm := m.RenderHeightMap()
+	if norm == nil {
+		t.Fatal("RenderHeightMap returned nil for TA:K map")
+	}
+	if b := norm.Bounds(); b.Dx() != m.TAKW || b.Dy() != m.TAKH {
+		t.Errorf("normalized bounds = %dx%d, want %dx%d", b.Dx(), b.Dy(), m.TAKW, m.TAKH)
+	}
+	raw := m.RenderHeightMapRaw()
+	if raw == nil {
+		t.Fatal("RenderHeightMapRaw returned nil for TA:K map")
+	}
+	if b := raw.Bounds(); b.Dx() != m.TAKW || b.Dy() != m.TAKH {
+		t.Errorf("raw bounds = %dx%d, want %dx%d", b.Dx(), b.Dy(), m.TAKW, m.TAKH)
+	}
+	// Raw means raw: pixel bytes equal the stored elevation bytes.
+	if !bytes.Equal(raw.Pix, m.TAKHeight) {
+		t.Error("raw heightmap pixels differ from stored TAKHeight bytes")
+	}
+}
+
 // TestTAKParseAllMaps walks every TA:K .tnt and asserts the header + minimap
 // parse consistently across the shipped corpus.
 func TestTAKParseAllMaps(t *testing.T) {
@@ -219,6 +255,60 @@ func TestTAKParseAllMaps(t *testing.T) {
 		t.Skip("no TA:K .tnt files found under maps/")
 	}
 	t.Logf("parsed %d TA: Kingdoms maps", seen)
+}
+
+// TestTAKParseAllSections walks the shipped TA:K section library — small
+// 0x4000 TNTs under sections/<world>/<theme>/ that the in-game editor stamps
+// into maps — and asserts every one decodes with consistent height, feature
+// and terrain grids.  Sections embed a 128x128 minimap (maps use 126x126),
+// so the geometry expectations differ from TestTAKParseAllMaps.
+func TestTAKParseAllSections(t *testing.T) {
+	dir := testutil.TAKUnpackedDir(t, "sections")
+
+	var seen int
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".tnt") {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: read: %v", rel, err)
+			return nil
+		}
+		m, err := LoadFromReader(bytes.NewReader(data))
+		if err != nil {
+			t.Errorf("%s: %v", rel, err)
+			return nil
+		}
+		if !m.IsTAK {
+			t.Errorf("%s: expected IsTAK", rel)
+		}
+		if got, want := len(m.TAKHeight), m.TAKW*m.TAKH; got != want || want == 0 {
+			t.Errorf("%s: TAKHeight len %d, want %d", rel, got, want)
+		}
+		if got, want := len(m.TAKFeatureGrid), m.TAKW*m.TAKH; got != want {
+			t.Errorf("%s: TAKFeatureGrid len %d, want %d", rel, got, want)
+		}
+		if got, want := len(m.TAKTerrainNames), m.TAKGUW*m.TAKGUH; got != want || want == 0 {
+			t.Errorf("%s: TAKTerrainNames len %d, want %d", rel, got, want)
+		}
+		if got, want := len(m.TAKUMap), m.TAKGUW*m.TAKGUH; got != want {
+			t.Errorf("%s: TAKUMap len %d, want %d", rel, got, want)
+		}
+		seen++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if seen == 0 {
+		t.Skip("no TA:K .tnt files found under sections/")
+	}
+	t.Logf("parsed %d TA: Kingdoms sections", seen)
 }
 
 // TestTANotRegressed guards that the TA:K branch did not change behaviour for

@@ -252,6 +252,12 @@ class _EditorView {
       state.dropPreview = null
       paintState.paintedDuringStroke = false
       const wasFeature = state.dragging.type === 'feature'
+      // TA:Kingdoms sections share the TA anchored-placement flow below: the
+      // drop anchors a floating preview (with the heightmap edge hints), and
+      // only the confirm click composites the section server-side
+      // (commitAnchoredPlacement routes to stampTakSection). Rotation stays
+      // locked at 0 — a TA:K graphic unit is (texture, U, V) with no
+      // orientation bits, so a rotated stamp cannot exist in the format.
       if (state.dragging.type === 'section' && state.placement) {
         // Anchor the section at the drop point instead of immediately
         // overwriting the tiles underneath — the user can then drag /

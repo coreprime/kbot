@@ -117,6 +117,7 @@ import {
 
 import {
   populateWorldSelect,
+  loadTilesets,
   renderDiceGrid,
 } from './ui/map-editor/dialogs/dice-picker.js'
 
@@ -463,6 +464,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // of truth so adding a new world only requires one edit.
   populateWorldSelect($('#size-planet'), 'slug')
   populateWorldSelect($('#ota-planet'), 'defaultTileset')
+  // Replace the TA default world list with the game-appropriate tilesets
+  // (TA:Kingdoms → its kingdoms) from the backend; no-ops on failure.
+  loadTilesets()
   // Start the server heartbeat as soon as the page is wired — works
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.

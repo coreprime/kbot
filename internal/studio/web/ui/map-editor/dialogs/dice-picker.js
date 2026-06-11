@@ -25,6 +25,34 @@ import { playerCountLabel } from '../helpers.js'
 
 const dicePicked = new Set([8]) // sensible default — a single 8-player schema
 
+// Tileset list shown by the New-map / Properties pickers. Defaults to the TA
+// world table and is replaced per-game by loadTilesets() from
+// /api/studio/tilesets (TA:Kingdoms returns its kingdoms instead). Kept as a
+// module-local mutable so a failed/late fetch never breaks the picker.
+let worldList = WORLDS
+
+// loadTilesets fetches the game-appropriate tileset list and repopulates any
+// already-rendered pickers. Safe to call at boot; on any error the TA defaults
+// stay in place.
+export async function loadTilesets() {
+  try {
+    const r = await fetch('/api/studio/tilesets')
+    if (!r.ok) return
+    const data = await r.json()
+    if (Array.isArray(data.tilesets) && data.tilesets.length > 0) {
+      worldList = data.tilesets.map((t) => ({
+        slug: t.slug,
+        label: t.label || t.slug,
+        defaultTileset: t.defaultTileset || t.slug,
+        aliases: [],
+      }))
+      // Repopulate any pickers that were filled before the fetch resolved.
+      populateWorldSelect($('#size-planet'), 'slug')
+      populateWorldSelect($('#ota-planet'), 'defaultTileset')
+    }
+  } catch { /* keep TA defaults */ }
+}
+
 // pickedPlayerCounts returns the current selection sorted
 // ascending, falling back to [4] if somehow nothing is selected.
 // Used by startEditor to seed schemas at File → New time.
@@ -40,7 +68,7 @@ export function pickedPlayerCounts() {
 // the Properties dialog).  Called once at boot for each picker.
 export function populateWorldSelect(el, valueKind) {
   if (!el) return
-  el.replaceChildren(...WORLDS.map((t) => {
+  el.replaceChildren(...worldList.map((t) => {
     const opt = document.createElement('option')
     opt.value = valueKind === 'slug' ? t.slug : t.defaultTileset
     opt.textContent = t.label

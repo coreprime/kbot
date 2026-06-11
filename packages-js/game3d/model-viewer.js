@@ -270,7 +270,7 @@ export class ModelViewer {
       // Controls module's laser-beam tint) can resolve TA palette
       // indices to RGB without re-fetching the JSON.
       this.palette = palette
-      const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false })
+      const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false, alpha: false })
       if (!gl) {
         this.#setStatus('WebGL unavailable in this browser.')
         return

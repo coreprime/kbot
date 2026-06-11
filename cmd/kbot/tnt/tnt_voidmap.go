@@ -34,6 +34,9 @@ docs/formats/tnt.md); use 'kbot tnt describe' to inspect those values.`,
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+			if m.IsTAK {
+				return fmt.Errorf("TA: Kingdoms maps are not yet supported by voidmap (void sentinels are TA-specific)")
+			}
 			img := m.RenderVoidMap()
 			if img == nil {
 				return fmt.Errorf("map has no attribute grid")

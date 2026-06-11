@@ -35,7 +35,28 @@ type paletteResolver interface {
 	// terrainPalette returns the palette for a map's terrain + baked minimap
 	// (by map VFS path).
 	terrainPalette(mapPath string) color.Palette
+	// textureRenderOptions returns how 3DO model textures resolve transparency,
+	// given the resolved palette. TA renders unit textures fully opaque
+	// (palette[TI] is a real colour); TA:Kingdoms texture atlases reserve a
+	// transparent key colour (the (128,0,128) "purple" the artists paint behind
+	// dragon wings, glass, etc.) which must be punched out.
+	textureRenderOptions(pal *gaf.Palette) gaf.RenderOptions
+	// textureSidePrefix returns the side name-prefix (lowercase, e.g. "ara")
+	// for a 3DO model name, or "" when sides don't apply. TA:K ships
+	// same-named logo/team textures in every side's GAF, so texture lookups
+	// for a unit must prefer GAFs from its own side.
+	textureSidePrefix(object string) string
+	// texturePaletteForSide returns the texture palette for an explicit side
+	// prefix (the ?side= a client passes with a texture fetch), or nil when
+	// the side is unknown / sides don't apply. TA:K logo art is painted in
+	// shared palette indices that take their team colours from the viewing
+	// unit's side palette, so the requester's side wins over the GAF's name.
+	texturePaletteForSide(side string) *gaf.Palette
 }
+
+// takTransparentKey is the colour TA:Kingdoms texture palettes reserve as the
+// transparent key (palette index 5 in the shipped side palettes).
+var takTransparentKey = color.RGBA{R: 128, G: 0, B: 128, A: 255}
 
 // palettes returns the session's palette resolver, constructed once from the
 // game id. This is the single place the game is consulted; everything else
@@ -64,10 +85,15 @@ func (sess *Session) globalGAFPalette() *gaf.Palette {
 
 type taPaletteResolver struct{ sess *Session }
 
-func (r *taPaletteResolver) texturePalette(string) *gaf.Palette      { return r.sess.globalGAFPalette() }
-func (r *taPaletteResolver) modelColorPalette(string) color.Palette  { return r.sess.loadVFSPalette() }
-func (r *taPaletteResolver) featurePalette(string) *gaf.Palette      { return r.sess.globalGAFPalette() }
-func (r *taPaletteResolver) terrainPalette(string) color.Palette     { return r.sess.loadVFSPalette() }
+func (r *taPaletteResolver) texturePalette(string) *gaf.Palette     { return r.sess.globalGAFPalette() }
+func (r *taPaletteResolver) modelColorPalette(string) color.Palette { return r.sess.loadVFSPalette() }
+func (r *taPaletteResolver) featurePalette(string) *gaf.Palette     { return r.sess.globalGAFPalette() }
+func (r *taPaletteResolver) terrainPalette(string) color.Palette    { return r.sess.loadVFSPalette() }
+func (r *taPaletteResolver) textureRenderOptions(*gaf.Palette) gaf.RenderOptions {
+	return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}
+}
+func (r *taPaletteResolver) textureSidePrefix(string) string          { return "" }
+func (r *taPaletteResolver) texturePaletteForSide(string) *gaf.Palette { return nil }
 
 // ── TA:Kingdoms: sidedata-driven, per-side / per-kingdom palettes ────────────
 
@@ -187,6 +213,26 @@ func (r *takPaletteResolver) texturePalette(gafPath string) *gaf.Palette {
 	return r.sess.globalGAFPalette()
 }
 
+func (r *takPaletteResolver) texturePaletteForSide(side string) *gaf.Palette {
+	side = strings.ToUpper(strings.TrimSpace(side))
+	if side == "" {
+		return nil
+	}
+	for i := range r.sides {
+		if r.sides[i].prefix == side {
+			return r.paletteFromStem(r.sides[i].texPalStem)
+		}
+	}
+	return nil
+}
+
+func (r *takPaletteResolver) textureSidePrefix(object string) string {
+	if s := r.sideForName(object); s != nil {
+		return strings.ToLower(s.prefix)
+	}
+	return ""
+}
+
 func (r *takPaletteResolver) modelColorPalette(object string) color.Palette {
 	if s := r.sideForName(object); s != nil {
 		if pal := r.paletteFromStem(s.texPalStem); pal != nil {
@@ -203,6 +249,20 @@ func (r *takPaletteResolver) featurePalette(gafName string) *gaf.Palette {
 		}
 	}
 	return r.sess.globalGAFPalette()
+}
+
+func (r *takPaletteResolver) textureRenderOptions(pal *gaf.Palette) gaf.RenderOptions {
+	// TA:K texture atlases paint the transparent regions (dragon wings, glass)
+	// with a fixed key colour rather than honouring the GAF's stored
+	// transparency index, so punch out whichever palette entry holds that key.
+	if pal != nil {
+		for i, c := range pal.Colors {
+			if c.R == takTransparentKey.R && c.G == takTransparentKey.G && c.B == takTransparentKey.B {
+				return gaf.RenderOptions{Mode: gaf.TransparencyModeIndex, Index: uint8(i)}
+			}
+		}
+	}
+	return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}
 }
 
 func (r *takPaletteResolver) terrainPalette(mapPath string) color.Palette {

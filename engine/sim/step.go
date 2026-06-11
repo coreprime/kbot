@@ -39,6 +39,11 @@ func (w *World) Step(rt Runtime) {
 	for _, id := range w.order {
 		if u := w.units[id]; u != nil {
 			w.drainEffects(u)
+			// Dead units still owe their corpse decision: poll the tracked
+			// Killed thread until the script settles the corpsetype.
+			if u.Dead && u.corpsePending {
+				w.stepCorpse(u)
+			}
 		}
 	}
 	for _, id := range w.order {
@@ -152,7 +157,7 @@ func (w *World) stepAttack(u *Unit) {
 					if u.bombRunActive && u.bombRunSlot == slot {
 						continue
 					}
-					*s = weaponSlot{}
+					w.clearWeaponSlot(u, slot)
 				}
 			}
 		}
@@ -164,7 +169,7 @@ func (w *World) stepAttack(u *Unit) {
 		for slot := range u.weapons {
 			s := &u.weapons[slot]
 			if s.hasTarget && s.source == "attack" {
-				*s = weaponSlot{}
+				w.clearWeaponSlot(u, slot)
 			}
 		}
 	}
@@ -197,7 +202,7 @@ func (w *World) stepAttack(u *Unit) {
 		u.moveTarget = t.loco.Pos
 		s := &u.weapons[0]
 		if s.hasTarget && s.source == "attack" {
-			*s = weaponSlot{}
+			w.clearWeaponSlot(u, 0)
 		}
 		return
 	}
@@ -415,14 +420,53 @@ func (w *World) stepMovement(u *Unit) {
 		if u.binding != nil && u.binding.HasScript("StartMoving") {
 			u.binding.Start("StartMoving")
 		}
+		// TA:K fliers have no StartMoving: the engine announces takeoff via
+		// BeginFlight and marks the unit airborne through setSFXoccupy(5) —
+		// the state the dragons' FlightControl loop gates its wing-flap
+		// cycle on.
+		if u.binding != nil && u.binding.HasScript("BeginFlight") {
+			u.binding.Start("BeginFlight")
+		}
+		if u.Meta != nil && u.Meta.IsAircraft && u.binding != nil && u.binding.HasScript("setSFXoccupy") {
+			u.binding.Start("setSFXoccupy", takOccupyAir)
+		}
 		w.emit(frame.Event{Kind: frame.EvMoveStart, UnitID: u.ID})
 	} else if !u.IsMoving && wasMoving {
 		if u.binding != nil && u.binding.HasScript("StopMoving") {
 			u.binding.Start("StopMoving")
 		}
+		// TA:K fliers: announce the landing sequence and drop the airborne
+		// occupation state so the flap loop folds the wings.
+		if u.binding != nil && u.binding.HasScript("BeginLanding") {
+			u.binding.Start("BeginLanding")
+		}
+		if u.Meta != nil && u.Meta.IsAircraft && u.binding != nil && u.binding.HasScript("setSFXoccupy") {
+			u.binding.Start("setSFXoccupy", takOccupyLand)
+		}
 		w.emit(frame.Event{Kind: frame.EvMoveStop, UnitID: u.ID})
 	}
+
+	// TA:K units have no StartMoving/StopMoving: their MoveWatcher loop polls
+	// the CURRENT_SPEED port to switch the walk gait on and off. Publish the
+	// unit's speed (world units/sec) so those loops observe real motion; the
+	// scripts gate on small thresholds (> 5), which a walking unit clears by
+	// an order of magnitude.
+	if p, ok := u.binding.(CobPorts); ok {
+		p.SetUnitValuePort(cobPortCurrentSpeed, int32(u.loco.Speed.Int()))
+	}
 }
+
+// cobPortCurrentSpeed is TA:K's CURRENT_SPEED unit-value port. sim keeps its
+// own copy of the number rather than importing engine/script (the dependency
+// arrow points the other way); it must match script.UVCurrentSpeed.
+const cobPortCurrentSpeed = 29
+
+// TA:K setSFXoccupy states. The retail scripts only test airborne (5); the
+// grounded value just needs to differ so the flight loops disengage.
+const (
+	takOccupyLand = 1
+	takOccupyAir  = 5
+)
 
 // stepAltitude lifts aircraft to cruise while they have somewhere to be and
 // settles them to the ground when idle. Climb/descent rates derive from the
@@ -487,7 +531,7 @@ func (w *World) stepWeapons(u *Unit) {
 		if s.targetUnit != 0 {
 			t := w.units[s.targetUnit]
 			if t == nil || t.Dead {
-				*s = weaponSlot{}
+				w.clearWeaponSlot(u, slot)
 				continue
 			}
 			targetPos = t.loco.Pos
@@ -504,6 +548,12 @@ func (w *World) stepWeapons(u *Unit) {
 		// the aim animation is live before the shot resolves. aimReady reports
 		// whether the turret has actually turned to bear; fire waits on it.
 		aimReady := w.aimWeapon(u, s, slot, targetPos, targetY, reload)
+		// Body-aimed units (TA:K ground units, which have no turret scripts)
+		// additionally pivot the whole unit toward the target and hold fire
+		// until the body bears.
+		if usesBodyAim(u) && !w.faceWeaponTarget(u, targetPos) {
+			aimReady = false
+		}
 		rngF := wm.Range
 		if rngF <= 0 {
 			rngF = fixed.FromInt(180)
@@ -536,8 +586,13 @@ func (w *World) stepWeapons(u *Unit) {
 		// Run it before the query so a script that cycles its barrel from the Fire
 		// thread has toggled by the time Query reports the muzzle, matching TA.
 		if u.binding != nil {
-			if name := fireScriptName(slot); u.binding.HasScript(name) {
-				u.binding.Start(name)
+			if name := fireScriptName(u.binding, slot); name != "" && u.binding.HasScript(name) {
+				if usesTAKWeaponScripts(u.binding) {
+					// TA:K's shared FireWeapon dispatches on the weapon index.
+					u.binding.Start(name, slot)
+				} else {
+					u.binding.Start(name)
+				}
 			}
 		}
 		// Resolve which piece the shot exits from via the Query<slot> script. The
@@ -611,7 +666,7 @@ func (w *World) stepWeapons(u *Unit) {
 					// string. An autonomous attack run releases the slot so stepAttack
 					// can re-engage (the prey may be dead, hiding, or out of reach).
 					if src != "manual" {
-						*s = weaponSlot{}
+						w.clearWeaponSlot(u, slot)
 					}
 				}
 			}
@@ -620,7 +675,7 @@ func (w *World) stepWeapons(u *Unit) {
 		// firing (single-burst weapons). Force-firing at a ground point persists
 		// at the reload cadence until the player issues a new fire or stop order.
 		if s.source == "manual" && s.targetUnit != 0 && wm.Burst <= 1 {
-			*s = weaponSlot{}
+			w.clearWeaponSlot(u, slot)
 		}
 	}
 }
@@ -646,9 +701,106 @@ const aimRefreshMs int64 = 1000
 // its per-weapon aim/fire/query entry points.
 var weaponSlotSuffix = [3]string{"Primary", "Secondary", "Tertiary"}
 
-func aimScriptName(slot int) string   { return "Aim" + weaponSlotSuffix[slot] }
-func fireScriptName(slot int) string  { return "Fire" + weaponSlotSuffix[slot] }
-func queryScriptName(slot int) string { return "Query" + weaponSlotSuffix[slot] }
+// usesTAKWeaponScripts reports whether the unit's COB follows the TA: Kingdoms
+// weapon convention: one parameterized AimWeapon/FireWeapon/QueryWeapon set
+// shared by every slot, with the weapon index passed as an argument, instead
+// of TA's per-slot Aim<Primary|Secondary|Tertiary> entry points. The two
+// conventions also differ in how aim completion is reported — a TA aim thread
+// returns TRUE, a TA:K script writes the weapon index into the WEAPON_READY
+// port — so callers branch on this for the whole calling sequence.
+func usesTAKWeaponScripts(b Binding) bool {
+	return b != nil && b.HasScript("AimWeapon")
+}
+
+func aimScriptName(b Binding, slot int) string {
+	if usesTAKWeaponScripts(b) {
+		return "AimWeapon"
+	}
+	if slot < 0 || slot >= len(weaponSlotSuffix) {
+		return ""
+	}
+	return "Aim" + weaponSlotSuffix[slot]
+}
+
+func fireScriptName(b Binding, slot int) string {
+	if usesTAKWeaponScripts(b) {
+		return "FireWeapon"
+	}
+	if slot < 0 || slot >= len(weaponSlotSuffix) {
+		return ""
+	}
+	return "Fire" + weaponSlotSuffix[slot]
+}
+
+func queryScriptName(b Binding, slot int) string {
+	if usesTAKWeaponScripts(b) {
+		return "QueryWeapon"
+	}
+	if slot < 0 || slot >= len(weaponSlotSuffix) {
+		return ""
+	}
+	return "Query" + weaponSlotSuffix[slot]
+}
+
+// takAimBinding is the optional surface a script binding exposes so the weapon
+// SM can consume TA:K's port-based aim handshake. The script VM's *Unit
+// satisfies it; for bindings without it the SM falls back to the stuck-timeout.
+type takAimBinding interface {
+	TakeWeaponReady(slot int) bool
+	TakeWeaponAimAborted(slot int) bool
+}
+
+// bodyAimArc is how far (TA-angle units, ~10 degrees) a body-aimed unit's
+// heading may be off the target bearing and still fire. TA:K units carry no
+// turret aim scripts — the engine pivots the whole unit — so the gate is
+// deliberately lenient: the projectile already launches at the target, the
+// pivot is what makes the unit visibly point where it shoots.
+const bodyAimArc int32 = 1820
+
+// usesBodyAim reports whether the engine, not the unit's script, owns turning
+// the unit to face its weapon target. TA turreted units aim via their COB
+// (AimPrimary turns the turret pieces); TA:K's shared AimWeapon scripts manage
+// recoil/readiness but expect the engine to rotate a mobile unit's body.
+// Aircraft keep their fire-arc maneuvering instead.
+func usesBodyAim(u *Unit) bool {
+	return usesTAKWeaponScripts(u.binding) && u.Meta != nil && u.Meta.CanMove && !u.Meta.IsAircraft
+}
+
+// faceWeaponTarget pivots a stationary unit's body toward the target bearing
+// at its FBI turn rate, reporting whether the heading is within bodyAimArc.
+// A unit that is walking leaves steering to locomotion — it keeps driving
+// toward its move goal — but the facing gate still applies: a body-aimed
+// weapon must never fire sideways mid-stride, only when the walk happens to
+// point the body at the target.
+func (w *World) faceWeaponTarget(u *Unit, targetPos fixed.Vec2) bool {
+	d := targetPos.Sub(u.loco.Pos)
+	want := fixed.FromInt(int(fixed.Atan2(d.X, d.Z)))
+	if !u.IsMoving {
+		dh := shortestArcFx(want - u.loco.Heading)
+		turnStep := u.Meta.turnRatePerSec().Mul(dtSec)
+		if dh.Abs() > turnStep {
+			u.loco.Heading += fixed.FromInt(dh.Sign()).Mul(turnStep)
+		} else {
+			u.loco.Heading = want
+		}
+	}
+	dh := shortestArcFx(want - u.loco.Heading)
+	return dh.Abs() <= fixed.FromInt(int(bodyAimArc))
+}
+
+// clearWeaponSlot resets a weapon slot and, when the slot was tracking a
+// target and the unit's script defines TargetCleared (the TA:K handler that
+// aborts the aim loop and restores the turret pose), notifies it with the
+// weapon index. TA scripts have no TargetCleared, so this degrades to a plain
+// reset for them.
+func (w *World) clearWeaponSlot(u *Unit, slot int) {
+	s := &u.weapons[slot]
+	hadTarget := s.hasTarget
+	*s = weaponSlot{}
+	if hadTarget && u.binding != nil && u.binding.HasScript("TargetCleared") {
+		u.binding.Start("TargetCleared", slot)
+	}
+}
 
 // queryFirePiece runs the slot's Query<slot> script to find the piece the shot
 // exits from, returning its index into the unit's piece-name table. It returns
@@ -660,15 +812,22 @@ func (w *World) queryFirePiece(u *Unit, slot int) int32 {
 	if u.binding == nil {
 		return -1
 	}
-	name := queryScriptName(slot)
-	if !u.binding.HasScript(name) {
+	name := queryScriptName(u.binding, slot)
+	if name == "" || !u.binding.HasScript(name) {
 		return -1
 	}
 	qb, ok := u.binding.(queryBinding)
 	if !ok {
 		return -1
 	}
-	if piece, ok := qb.RunQuery(name, 0); ok {
+	// TA's Query<slot> takes one local (the piece, written by the script).
+	// TA:K's shared QueryWeapon takes (piece-out, weaponIdx) so the script can
+	// branch per weapon; both report the piece through the first local.
+	args := []int{0}
+	if usesTAKWeaponScripts(u.binding) {
+		args = append(args, slot)
+	}
+	if piece, ok := qb.RunQuery(name, args...); ok {
 		return piece
 	}
 	return -1
@@ -693,10 +852,11 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 	if u.binding == nil {
 		return true
 	}
-	name := aimScriptName(slot)
-	if !u.binding.HasScript(name) {
+	name := aimScriptName(u.binding, slot)
+	if name == "" || !u.binding.HasScript(name) {
 		return true
 	}
+	tak := usesTAKWeaponScripts(u.binding)
 	ab, ok := u.binding.(aimBinding)
 	if !ok {
 		// Binding can drive scripts but can't report aim completion: re-drive on
@@ -724,16 +884,36 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 			s.aimReady = false
 			s.aimStartMs = w.simMs
 		}
-		s.aimThread = ab.StartAim(name, int(heading), int(pitch))
+		if tak {
+			// TA:K's shared AimWeapon receives the weapon index after the
+			// bearing; the script echoes it back through WEAPON_READY.
+			s.aimThread = ab.StartAim(name, int(heading), int(pitch), slot)
+		} else {
+			s.aimThread = ab.StartAim(name, int(heading), int(pitch))
+		}
 	}
-	if !s.aimReady {
+	if tak {
+		// TA:K port handshake: the script writes the weapon index into
+		// WEAPON_READY when its aim solution holds and into WEAPON_AIM_ABORTED
+		// when it gives up. An abort re-arms the gate even on a settled aim.
+		if tb, ok := u.binding.(takAimBinding); ok {
+			if tb.TakeWeaponAimAborted(slot) {
+				s.aimReady = false
+				s.aimStartMs = w.simMs
+			}
+			if !s.aimReady && tb.TakeWeaponReady(slot) {
+				s.aimReady = true
+			}
+		}
+	} else if !s.aimReady {
 		if done, ret := ab.AimStatus(s.aimThread); done && ret == 1 {
 			s.aimReady = true
-		} else if w.simMs-s.aimStartMs >= 2*reloadMs {
-			// The aim thread never reported completion within twice the reload
-			// window; fire anyway rather than stalling the weapon indefinitely.
-			s.aimReady = true
 		}
+	}
+	if !s.aimReady && w.simMs-s.aimStartMs >= 2*reloadMs {
+		// The aim thread never reported completion within twice the reload
+		// window; fire anyway rather than stalling the weapon indefinitely.
+		s.aimReady = true
 	}
 	return s.aimReady
 }
@@ -757,7 +937,11 @@ func (w *World) driveAimDrift(u *Unit, s *weaponSlot, slot int, name string, tar
 	s.aimHeading = heading
 	s.aimPitch = pitch
 	s.aimLastIssueMs = w.simMs
-	u.binding.Restart(name, int(heading), int(pitch))
+	if usesTAKWeaponScripts(u.binding) {
+		u.binding.Restart(name, int(heading), int(pitch), slot)
+	} else {
+		u.binding.Restart(name, int(heading), int(pitch))
+	}
 }
 
 // absAngle is the absolute value of a TA-angle delta.

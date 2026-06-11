@@ -82,6 +82,9 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+			if m.IsTAK {
+				return fmt.Errorf("TA: Kingdoms maps are texture-mapped and have no tile pool; the lint rules are TA-specific (use 'kbot tnt describe' to inspect)")
+			}
 
 			// Tile-pool diagnostics first — pure storage efficiency,
 			// no OTA or feature registry required.

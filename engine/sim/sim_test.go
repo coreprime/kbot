@@ -262,3 +262,139 @@ func TestSnapshotCarriesSpeed(t *testing.T) {
 		t.Fatalf("idle unit speed = %v, want 0", got.Float())
 	}
 }
+
+// takWeaponBinding fakes a TA:K v6 script binding: the shared AimWeapon /
+// FireWeapon / QueryWeapon set with the WEAPON_READY port handshake instead of
+// aim-thread return values. It signals ready for the slot named in the last
+// StartAim once readyAfterAims aim drives have been issued.
+type takWeaponBinding struct {
+	recordingBinding
+	readyAfterAims int
+	aims           int
+	ready          uint32
+	aborted        uint32
+}
+
+func (b *takWeaponBinding) StartAim(name string, args ...int) int32 {
+	b.restarts = append(b.restarts, recordedCall{name, append([]int(nil), args...)})
+	b.aims++
+	if b.aims >= b.readyAfterAims && len(args) >= 3 {
+		b.ready |= 1 << uint(args[2])
+	}
+	return int32(b.aims)
+}
+
+// AimStatus is TA's protocol; a TA:K unit must never be gated through it.
+func (b *takWeaponBinding) AimStatus(id int32) (bool, int32) { return false, 0 }
+
+func (b *takWeaponBinding) TakeWeaponReady(slot int) bool {
+	bit := uint32(1) << uint(slot)
+	if b.ready&bit == 0 {
+		return false
+	}
+	b.ready &^= bit
+	return true
+}
+
+func (b *takWeaponBinding) TakeWeaponAimAborted(slot int) bool {
+	bit := uint32(1) << uint(slot)
+	if b.aborted&bit == 0 {
+		return false
+	}
+	b.aborted &^= bit
+	return true
+}
+
+// TestTAKWeaponConvention proves the weapon SM speaks TA:K when the unit's
+// script defines AimWeapon: the aim drive passes (heading, pitch, slot), fire
+// is gated on the WEAPON_READY port write rather than a thread return, and the
+// shot starts FireWeapon with the slot argument.
+func TestTAKWeaponConvention(t *testing.T) {
+	w := New(Config{Seed: 13})
+	bind := &takWeaponBinding{
+		recordingBinding: recordingBinding{scripts: map[string]bool{
+			"AimWeapon": true, "FireWeapon": true, "TargetCleared": true,
+		}},
+		readyAfterAims: 1,
+	}
+	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
+	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Attack([]uint32{atk}, def))
+	for i := 0; i < 80; i++ {
+		w.Step(nil)
+	}
+	if len(bind.restarts) == 0 {
+		t.Fatal("AimWeapon was never driven")
+	}
+	first := bind.restarts[0]
+	if first.name != "AimWeapon" {
+		t.Fatalf("first aim drive = %q, want AimWeapon", first.name)
+	}
+	if len(first.args) != 3 || first.args[2] != 0 {
+		t.Fatalf("AimWeapon args = %v, want (heading, pitch, 0)", first.args)
+	}
+	fires := 0
+	for _, c := range bind.starts {
+		if c.name == "FireWeapon" {
+			fires++
+			if len(c.args) != 1 || c.args[0] != 0 {
+				t.Fatalf("FireWeapon args = %v, want (0)", c.args)
+			}
+		}
+	}
+	if fires == 0 {
+		t.Fatal("FireWeapon was never started on a shot")
+	}
+}
+
+// TestTAKFireGatedOnWeaponReady holds the WEAPON_READY write back and asserts
+// no shot lands before it: the TA:K gate must come from the port handshake,
+// not from AimStatus (which a TA:K binding never satisfies).
+func TestTAKFireGatedOnWeaponReady(t *testing.T) {
+	w := New(Config{Seed: 17})
+	bind := &takWeaponBinding{
+		recordingBinding: recordingBinding{scripts: map[string]bool{
+			"AimWeapon": true, "FireWeapon": true,
+		}},
+		readyAfterAims: 1 << 30, // never signals ready
+	}
+	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
+	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Attack([]uint32{atk}, def))
+	for i := 0; i < 20; i++ {
+		w.Step(nil)
+	}
+	if got := countCalls(bind.starts, "FireWeapon"); got != 0 {
+		t.Fatalf("fired %d times without WEAPON_READY, want 0", got)
+	}
+}
+
+// TestTAKTargetClearedNotified proves a TA:K unit hears TargetCleared with the
+// weapon index when its tracked target dies, so its script can abort the aim
+// loop and restore the turret pose.
+func TestTAKTargetClearedNotified(t *testing.T) {
+	w := New(Config{Seed: 19})
+	bind := &takWeaponBinding{
+		recordingBinding: recordingBinding{scripts: map[string]bool{
+			"AimWeapon": true, "FireWeapon": true, "TargetCleared": true,
+		}},
+		readyAfterAims: 1,
+	}
+	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
+	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Attack([]uint32{atk}, def))
+	for i := 0; i < 500; i++ {
+		w.Step(nil)
+		if w.UnitByID(def).Dead {
+			break
+		}
+	}
+	if !w.UnitByID(def).Dead {
+		t.Fatal("defender never died; cannot exercise TargetCleared")
+	}
+	// Step once more so stepAttack sweeps the dead target's slot.
+	w.Step(nil)
+	if got := countCalls(bind.starts, "TargetCleared"); got == 0 {
+		t.Fatal("TargetCleared was never started after the target died")
+	}
+}

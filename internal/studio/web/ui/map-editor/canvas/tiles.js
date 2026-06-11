@@ -18,12 +18,43 @@
 //     callback target).
 
 import { state, hostCallbacks } from '../../host-context.js'
-import { TILE_PX } from '../constants.js'
-import { visibleTileBounds } from '../viewport.js'
+import { TILE_PX, TAK_TERRAIN_KEY } from '../constants.js'
+import { visibleTileBounds, visiblePixelBounds } from '../viewport.js'
 import { whenImageReady } from '../feature-assets.js'
 import { drawTransformedTile } from '../rotation.js'
 
+// drawTakTerrain paints the TA:Kingdoms texture-mapped terrain render as a
+// read-only backdrop (TA:K maps have no 32×32 tile pool). Returns true when it
+// handled the draw so the caller skips the tile loop.
+//
+// Only the VISIBLE region is blitted each frame — the full backdrop maps onto a
+// tileW*32-pixel canvas (up to ~7680px), and redrawing the whole thing on every
+// pan/zoom was the source of the sluggish zoom. We map the visible canvas rect
+// to the corresponding source-image rect and let the GPU scale just that slice.
+function drawTakTerrain(ctx) {
+  const img = state.sectionImages.get(TAK_TERRAIN_KEY)
+  if (!img) return false
+  if (!img.complete || img.naturalWidth === 0) {
+    whenImageReady(img, 'render', () => hostCallbacks.renderCanvas?.())
+    return true
+  }
+  const canvasW = state.tileW * TILE_PX
+  const canvasH = state.tileH * TILE_PX
+  // Source→canvas scale (the served render may be smaller than the canvas).
+  const sx = img.naturalWidth / canvasW
+  const sy = img.naturalHeight / canvasH
+  const pb = visiblePixelBounds()
+  const dx = Math.max(0, pb.minX)
+  const dy = Math.max(0, pb.minY)
+  const dw = Math.min(canvasW, pb.maxX) - dx
+  const dh = Math.min(canvasH, pb.maxY) - dy
+  if (dw <= 0 || dh <= 0) return true
+  ctx.drawImage(img, dx * sx, dy * sy, dw * sx, dh * sy, dx, dy, dw, dh)
+  return true
+}
+
 export function drawTiles(ctx) {
+  if (drawTakTerrain(ctx)) return
   const vb = visibleTileBounds()
   for (let ty = vb.minTY; ty <= vb.maxTY; ty++) {
     for (let tx = vb.minTX; tx <= vb.maxTX; tx++) {

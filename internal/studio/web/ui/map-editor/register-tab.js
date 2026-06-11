@@ -39,7 +39,10 @@ class MapEditorTabInstance {
   attachTabRef(tab) {
     this._tabRef = tab
     tab.map = this.spec.map
-    tab.displayName = this.displayName()
+    // No static displayName mirror: the strip falls through to the live
+    // instance.displayName(), so the label tracks the MapDoc as it hydrates
+    // (an opened map's name lands AFTER the tab is created — a snapshot
+    // here would freeze the label at "newmap").
   }
 
   displayName() {

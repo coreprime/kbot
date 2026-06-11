@@ -111,7 +111,7 @@ const DOF_BASE_BLUR = 8
 export class ModelRenderer {
   constructor({ canvas, textureCache, gl }) {
     this.canvas = canvas
-    const ctx = gl || canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false, stencil: false })
+    const ctx = gl || canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false, stencil: false, alpha: false })
     if (!ctx) throw new Error('WebGL unavailable')
     this.gl = ctx
     this.textureCache = textureCache

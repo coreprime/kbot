@@ -138,27 +138,89 @@ func (r *Reader) readFrame(offset uint32, duration uint32) (*Frame, error) {
 		return nil, fmt.Errorf("failed to read frame info: %w", err)
 	}
 
-	// Handle subframes (layers).
+	// Layered frame: PtrFrameData is an array of LayerCount uint32 pointers
+	// to nested FrameInfos, composited back-to-front inside the outer
+	// frame's bounding box (see docs/formats/gaf.md). The TA:K cursor GAFs
+	// build every frame this way.
 	if fi.LayerCount > 0 {
 		// Sanity check: LayerCount should be reasonable (< 100 layers is sane).
 		if fi.LayerCount > 100 {
 			return nil, fmt.Errorf("invalid layer count %d (possibly corrupt file)", fi.LayerCount)
 		}
-
-		// Read inline layer FrameInfo structures (not pointers).
-		layerFrames := make([]FrameInfo, fi.LayerCount)
-		for i := uint16(0); i < fi.LayerCount; i++ {
-			if err := binary.Read(r.file, binary.LittleEndian, &layerFrames[i]); err != nil {
-				return nil, fmt.Errorf("failed to read layer %d frame info: %w", i, err)
-			}
-		}
-
-		// Read the first layer (multi-layer compositing not yet supported).
-		firstLayer := &layerFrames[0]
-		return r.readSimpleFrame(firstLayer, fi.TransparencyIndex, duration)
+		return r.readLayeredFrame(&fi, duration)
 	}
 
 	return r.readSimpleFrame(&fi, fi.TransparencyIndex, duration)
+}
+
+// readLayeredFrame composites a multi-layer frame. Each layer carries its own
+// origin (hotspot); layers align by hotspot, so a layer's top-left lands at
+// (outer.Origin - layer.Origin) within the outer frame's Width×Height canvas.
+// Layer pixels equal to the layer's own transparency index leave the canvas
+// untouched, keeping lower layers visible.
+func (r *Reader) readLayeredFrame(fi *FrameInfo, duration uint32) (*Frame, error) {
+	if _, err := r.file.Seek(int64(fi.PtrFrameData), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek to layer table at 0x%X: %w", fi.PtrFrameData, err)
+	}
+	ptrs := make([]uint32, fi.LayerCount)
+	if err := binary.Read(r.file, binary.LittleEndian, &ptrs); err != nil {
+		return nil, fmt.Errorf("failed to read layer pointers: %w", err)
+	}
+
+	w, h := int(fi.Width), int(fi.Height)
+	canvas := make([]byte, w*h)
+	for i := range canvas {
+		canvas[i] = fi.TransparencyIndex
+	}
+
+	for li, p := range ptrs {
+		var sub FrameInfo
+		if _, err := r.file.Seek(int64(p), io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek to layer %d at 0x%X: %w", li, p, err)
+		}
+		if err := binary.Read(r.file, binary.LittleEndian, &sub); err != nil {
+			return nil, fmt.Errorf("failed to read layer %d frame info: %w", li, err)
+		}
+		if sub.LayerCount > 0 {
+			// Nested composites don't appear in the shipped corpus; skip
+			// rather than recurse unbounded into a corrupt pointer loop.
+			continue
+		}
+		lf, err := r.readSimpleFrame(&sub, sub.TransparencyIndex, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read layer %d pixels: %w", li, err)
+		}
+		// Hotspot alignment within the outer bounding box.
+		dx := int(fi.OriginX) - int(sub.OriginX)
+		dy := int(fi.OriginY) - int(sub.OriginY)
+		for y := 0; y < int(sub.Height); y++ {
+			ty := dy + y
+			if ty < 0 || ty >= h {
+				continue
+			}
+			for x := 0; x < int(sub.Width); x++ {
+				tx := dx + x
+				if tx < 0 || tx >= w {
+					continue
+				}
+				px := lf.Pixels[y*int(sub.Width)+x]
+				if px == sub.TransparencyIndex {
+					continue
+				}
+				canvas[ty*w+tx] = px
+			}
+		}
+	}
+
+	return &Frame{
+		Width:             fi.Width,
+		Height:            fi.Height,
+		OriginX:           fi.OriginX,
+		OriginY:           fi.OriginY,
+		TransparencyIndex: fi.TransparencyIndex,
+		Duration:          duration,
+		Pixels:            canvas,
+	}, nil
 }
 
 // readSimpleFrame reads pixel data for a simple (non-layered) frame.

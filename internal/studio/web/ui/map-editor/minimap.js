@@ -30,7 +30,7 @@
 //     next frame.
 
 import { state, $, clamp, hostCallbacks } from '../host-context.js'
-import { TILE_PX, VOID_COLOR, FEATURE_HIGHLIGHT_LIMIT } from './constants.js'
+import { TILE_PX, VOID_COLOR, FEATURE_HIGHLIGHT_LIMIT, TAK_TERRAIN_KEY } from './constants.js'
 import { overscrollPadding } from './zoom-pan.js'
 import { bumpContentVersion, getFeaturesByName } from './content-cache.js'
 
@@ -159,6 +159,25 @@ function rebuildMinimapBase() {
   ctx.imageSmoothingEnabled = false
   ctx.fillStyle = VOID_COLOR
   ctx.fillRect(0, 0, W, H)
+  // TA:Kingdoms maps have no tile pool — the minimap base is the terrain
+  // backdrop downscaled to one pixel per graphic unit (smoothing on so it
+  // averages rather than point-samples to noise).
+  const takTerrain = state.sectionImages.get(TAK_TERRAIN_KEY)
+  if (takTerrain) {
+    if (takTerrain.complete && takTerrain.naturalWidth > 0) {
+      ctx.imageSmoothingEnabled = true
+      ctx.drawImage(takTerrain, 0, 0, W, H)
+    } else {
+      // Backdrop still decoding — repaint the minimap once it's ready (the
+      // big terrain PNG often resolves after the first minimap render).
+      hostCallbacks.whenImageReady?.(takTerrain, 'minimap-base', () => {
+        invalidateMinimapBase()
+        hostCallbacks.scheduleMinimapRender?.()
+      })
+    }
+    minimapBaseStale = false
+    return
+  }
   for (let ty = 0; ty < state.tileH; ty++) {
     for (let tx = 0; tx < state.tileW; tx++) {
       const stamp = state.tiles[ty * state.tileW + tx]

@@ -85,7 +85,7 @@ export class SandboxView {
     // cloneForInstance() of the type's base local model — fresh
     // move/rotate/visible/worldMatrix per piece, GPU buffers aliased by
     // reference (no geometry re-upload).  Keyed by engine unit id.
-    this._localInstances = new Map() // unitId → Model (per-instance pose)
+    this._localInstances = new Map() // unitId → { geomName, model } (per-instance pose; geomName re-keys on wreck swap)
     // Per-tab canvas — caller (studio.js activateSandboxTab) creates
     // a fresh <canvas> element for each tab and passes it in here.
     // The canvas is appended into a host stage by attach() and pulled
@@ -151,7 +151,7 @@ export class SandboxView {
     if (!this.renderer) {
       const palette = await TAPalette.load()
       this.palette = palette
-      const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false })
+      const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false, alpha: false })
       if (!gl) {
         this.#setStatus('WebGL unavailable in this browser.')
         return
@@ -260,9 +260,10 @@ export class SandboxView {
         this.scene = new WasmSandboxScene({
           palette: this.palette,
           source: this._joinUrl ? new WsFrameSource({ url: this._joinUrl }) : null,
-          modelResolver: this._joinUrl
-            ? (name) => this.loader.load(name).then((m) => m.cloneForInstance())
-            : null,
+          // Every mode gets a model resolver: join scenes hydrate adopted
+          // units through it, and local scenes need it for the corpse swap
+          // (a destroyed unit's model is replaced by its wreck 3DO).
+          modelResolver: (name) => this.loader.load(name).then((m) => m.cloneForInstance()),
         })
       }
       // Push the active world's gravity into the engine so the
@@ -1275,9 +1276,15 @@ export class SandboxView {
       // entity for the current frame — it'll appear next tick once the
       // load completes.  Cost: a single network hit per (model name ×
       // pane) the first time the sibling pane observes a foreign unit.
-      const baseModel = this._localModels.get(u.name)
+      // Death resolution: a corpsetype-3 kill leaves nothing to draw; a
+      // wreck swap re-keys the entity's geometry to the corpse feature's
+      // 3DO (the engine-side u.model stays the unit's pose tree, so the
+      // wreck renders in its authored static pose).
+      if (u.corpseHidden) continue
+      const geomName = u.wreckName || u.name
+      const baseModel = this._localModels.get(geomName)
       if (!baseModel) {
-        this.#ensureLocalModel(u.name)
+        this.#ensureLocalModel(geomName)
         continue
       }
       // Per-instance pose isolation — _localModels caches ONE Model per
@@ -1288,11 +1295,14 @@ export class SandboxView {
       // unit its own cloneForInstance() of the type's base model — own
       // animated piece tree, GPU buffers shared by reference — so the
       // pose copy below lands in an isolated tree per unit.
-      let localModel = this._localInstances.get(u.id)
-      if (!localModel) {
-        localModel = baseModel.cloneForInstance()
-        this._localInstances.set(u.id, localModel)
+      let inst = this._localInstances.get(u.id)
+      if (!inst || inst.geomName !== geomName) {
+        // First sighting, or the geometry was re-keyed (wreck swap): build
+        // a fresh per-instance clone of the new base model.
+        inst = { geomName, model: baseModel.cloneForInstance() }
+        this._localInstances.set(u.id, inst)
       }
+      const localModel = inst.model
       liveIds.add(u.id)
       // Pose-sync — copy binding-driven animation state (move /
       // rotate / visible) from u.model (which the binding writes
@@ -1306,7 +1316,8 @@ export class SandboxView {
       // cache stores the load-time Model, not the instModel clone
       // the engine animates, so without the copy the spawning pane
       // is also static.
-      this.#copyPieceState(u.model.root, localModel.root)
+      // A wreck has no COB pose to mirror — its 3DO renders as authored.
+      if (!u.wreckName) this.#copyPieceState(u.model.root, localModel.root)
       // No bounds-based lift: TA models are authored with their feet
       // pieces (heel/toes/wheel/etc.) resting at world y=0, so
       // placing the unit at y=0 grounds it naturally — matching the
@@ -1894,6 +1905,9 @@ export class SandboxView {
     let best = null
     let bestDist = 32  // pixel-radius gate
     for (const u of this.scene.units()) {
+      // A dead unit (or one mid death-animation) is scenery, not a
+      // selectable actor — clicks pass through to the ground/others.
+      if (u.dead) continue
       // Compose model-space centroid then add unit pos.
       const cx = u.pos.x
       const cy = u.pos.y + 12  // approximate centre-of-mass lift

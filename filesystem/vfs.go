@@ -255,8 +255,19 @@ func (vfs *VirtualFileSystem) loadArchivesFrom(basePath string) error {
 			continue
 		}
 
-		// Sort files within same extension alphabetically.
-		sort.Strings(paths)
+		// Sort files within the same extension by case-insensitive name, so the
+		// load order (and thus override precedence — later archives win) is
+		// stable regardless of letter case. TA:Kingdoms relies on this: data.hpi
+		// must be overlaid by IPData.hpi (case-sensitive byte order would put
+		// the upper-case "IPData" first, letting data.hpi clobber the Iron
+		// Plague overrides — e.g. the Creon side in gamedata/sidedata.tdf).
+		sort.Slice(paths, func(i, j int) bool {
+			ni, nj := strings.ToLower(filepath.Base(paths[i])), strings.ToLower(filepath.Base(paths[j]))
+			if ni != nj {
+				return ni < nj
+			}
+			return paths[i] < paths[j]
+		})
 
 		for _, path := range paths {
 			name := filepath.Base(path)

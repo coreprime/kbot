@@ -132,6 +132,13 @@ type Unit struct {
 	bombRunLeft   int
 	bombRunSource string
 
+	// Corpse bookkeeping: killedThread tracks the Killed script started on
+	// death so stepCorpse can read the corpsetype it wrote (its second
+	// local) once the death sequence finishes; corpsePending holds the poll
+	// open until then.
+	killedThread  int32
+	corpsePending bool
+
 	binding Binding
 }
 
@@ -197,6 +204,48 @@ func (w *World) Tick() uint64 { return w.tick }
 
 // UnitByID returns a unit or nil.
 func (w *World) UnitByID(id uint32) *Unit { return w.units[id] }
+
+// killedBinding is the optional surface stepCorpse uses to read the
+// corpsetype a tracked Killed thread wrote before it died. The script VM's
+// *Unit satisfies it; without it the world defaults to an intact corpse.
+type killedBinding interface {
+	KilledStatus(id int32) (done bool, corpsetype int32)
+}
+
+// emitCorpse publishes the unit's corpse decision to the render stream.
+// corpsetype follows TA's Killed convention: 1 = intact corpse feature,
+// 2 = damaged (the corpse's featuredead), 3 = nothing left. Slot carries the
+// type and SfxType the body heading; the client resolves the actual wreck
+// feature names from unit meta.
+func (w *World) emitCorpse(u *Unit, corpsetype int32) {
+	if corpsetype < 1 || corpsetype > 3 {
+		corpsetype = 1
+	}
+	w.emit(frame.Event{
+		Kind:    frame.EvCorpseSpawn,
+		UnitID:  u.ID,
+		Slot:    int(corpsetype),
+		SfxType: int(u.Heading()),
+		Anchor:  u.Pos(),
+	})
+	u.corpsePending = false
+}
+
+// stepCorpse polls a dead unit's tracked Killed thread and publishes the
+// corpse once the script settles its choice.
+func (w *World) stepCorpse(u *Unit) {
+	if !u.corpsePending {
+		return
+	}
+	kb, ok := u.binding.(killedBinding)
+	if !ok {
+		w.emitCorpse(u, 1)
+		return
+	}
+	if done, ct := kb.KilledStatus(u.killedThread); done {
+		w.emitCorpse(u, ct)
+	}
+}
 
 // CobInspector is the optional inspection surface a binding may expose. The
 // script.Unit binding implements it; script-less bindings do not, so the world
@@ -489,8 +538,29 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	if binding != nil && binding.HasScript("Create") {
 		binding.Start("Create")
 	}
+	startSetMaxReloadTime(meta, binding)
 	w.emit(frame.Event{Kind: frame.EvSpawn, UnitID: id})
 	return id
+}
+
+// startSetMaxReloadTime tells a TA:K script its slowest weapon's reload time
+// in milliseconds. TA:K units size their restore-after-delay timers from it
+// (typically sleeping a multiple of the value); TA scripts have no such entry
+// point, so this is a no-op for them.
+func startSetMaxReloadTime(meta *UnitMeta, binding Binding) {
+	if meta == nil || binding == nil || !binding.HasScript("SetMaxReloadTime") {
+		return
+	}
+	maxMs := 0
+	for _, wm := range meta.Weapons {
+		if wm.ReloadMs > maxMs {
+			maxMs = wm.ReloadMs
+		}
+	}
+	if maxMs <= 0 {
+		maxMs = 1500
+	}
+	binding.Start("SetMaxReloadTime", maxMs)
 }
 
 // RestoredUnit carries the full per-unit motion state needed to resume the
@@ -755,6 +825,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			if binding != nil && binding.HasScript("Create") {
 				binding.Start("Create")
 			}
+			startSetMaxReloadTime(u.Meta, binding)
 			// A unit caught mid-move was animating its walk/drive cycle on the
 			// authority; the move-start transition that kicks StartMoving already
 			// fired before the snapshot, so re-arm it here or the restored unit glides
@@ -898,13 +969,10 @@ func (w *World) stopUnit(id uint32) {
 	u.atkActive = false
 	u.bombRunActive = false
 	for i := range u.weapons {
-		u.weapons[i] = weaponSlot{}
+		w.clearWeaponSlot(u, i)
 	}
 	if u.binding != nil && u.binding.HasScript("StopMoving") {
 		u.binding.Start("StopMoving")
-	}
-	if u.binding != nil && u.binding.HasScript("TargetCleared") {
-		u.binding.Start("TargetCleared", 0)
 	}
 }
 
@@ -913,6 +981,17 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 	t := w.units[targetID]
 	if t == nil || t.Dead {
 		return false
+	}
+	// Health runs on a 0..100 percent scale; when the target carries its
+	// absolute hit points (FBI maxdamage), scale the weapon's absolute TDF
+	// damage onto that bar so combat follows the game data. Without it
+	// (test fakes, units shipping no maxdamage), damage applies at face
+	// value — the legacy percent-direct scale.
+	if t.Meta != nil && t.Meta.MaxHealth > 0 {
+		dmg = dmg.Mul(fixed.FromInt(100)).Div(t.Meta.MaxHealth)
+		if dmg <= 0 {
+			dmg = fixed.FromFloat(0.05)
+		}
 	}
 	t.Health -= dmg
 	w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
@@ -924,8 +1003,33 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 		// stream like any other effect). TA's Killed(severity, corpsetype)
 		// takes a severity input; corpsetype is an output the script fills, so
 		// it starts at zero. Fire-and-forget — the corpse value isn't read back.
+		// severity is the killing blow as a percentage of the unit's full
+		// health bar — the figure TA's Killed(severity, corpsetype) scripts
+		// threshold on (<=25 leaves a clean corpse, <=50 a damaged one,
+		// beyond that debris or nothing). dmg was already scaled onto the
+		// percent bar above.
+		severity := int(dmg.Float())
 		if t.binding != nil && t.binding.HasScript("Killed") {
-			t.binding.Start("Killed", 1, 0)
+			// TA:K adds a third damagetype argument; passing it to a TA
+			// script is harmless (extra locals are simply unread). The
+			// thread is tracked so stepCorpse can read the corpsetype the
+			// script wrote into its second local once the death sequence
+			// finishes.
+			if ab, ok := t.binding.(aimBinding); ok {
+				t.killedThread = ab.StartAim("Killed", severity, 0, 0)
+				t.corpsePending = true
+			} else {
+				t.binding.Start("Killed", severity, 0, 0)
+				w.emitCorpse(t, 1)
+			}
+		} else {
+			w.emitCorpse(t, 1)
+		}
+		// TA:K splits the death sequence: Killed picks the corpse, Dying plays
+		// the fall animation and reports completion through FINISHED_DYING.
+		// Without it a TA:K unit dies standing in its rest pose.
+		if t.binding != nil && t.binding.HasScript("Dying") {
+			t.binding.Start("Dying", 0)
 		}
 		anchor := t.Pos()
 		anchor.Y += fixed.FromInt(18)

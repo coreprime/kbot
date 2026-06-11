@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/gaf"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/gamedata/tak"
+	"github.com/coreprime/kbot/formats/pcx"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -45,6 +48,11 @@ type unitMetaJSON struct {
 	TurnRate     float64 `json:"turnRate"`     // TA-angle / frame.
 	Acceleration float64 `json:"acceleration"` // FBI units / frame²
 	BrakeRate    float64 `json:"brakeRate"`    // FBI units / frame²
+
+	// MaxDamage — FBI `maxdamage`, the unit's absolute hit points. The
+	// engine pairs it with each weapon's absolute [DAMAGE] value to scale
+	// hits onto its percent health bar, so combat follows the game data.
+	MaxDamage int `json:"maxDamage"`
 
 	// Movement domain — controls how the studio's Move handler
 	// animates the unit between targets.  Mutually exclusive in
@@ -125,6 +133,13 @@ type unitMetaJSON struct {
 	// GAF animation.  Empty when the FBI omits the field.
 	ExplodeAs      string `json:"explodeAs,omitempty"`
 	SelfDestructAs string `json:"selfDestructAs,omitempty"`
+
+	// Corpse chain, resolved through the feature registry so the sandbox can
+	// swap a destroyed unit for its wreck without a second lookup:
+	// CorpseObject is the FBI corpse= feature's 3DO; CorpseHeapObject the
+	// featuredead follow-up (the damaged wreck a heavier kill leaves).
+	CorpseObject     string `json:"corpseObject,omitempty"`
+	CorpseHeapObject string `json:"corpseHeapObject,omitempty"`
 }
 
 type unitWeaponJSON struct {
@@ -343,6 +358,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		TurnRate:     float64(info.TurnRate),
 		Acceleration: info.Acceleration,
 		BrakeRate:    info.BrakeRate,
+		MaxDamage:    info.MaxDamage,
 	}
 	// CanMove: non-zero MaxVelocity is the cheapest signal that the
 	// unit isn't a structure / wreckage.  Static category flags
@@ -470,6 +486,21 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			populateWeaponJSON(&out.Weapons[i], sec)
 		}
 	}
+	// TA: Kingdoms inlines each weapon as a top-level [WEAPONn] sibling of
+	// [UNITINFO] instead of referencing weapons/*.tdf, so the ref loop above
+	// finds nothing. Re-parse the FBI against the TA:K schema and fill any
+	// slot that is still empty.
+	if data, err := sess.loadUnitFBIBytes(name); err == nil {
+		var ku tak.Unit
+		if err := tdf.Unmarshal(data, &ku); err == nil {
+			for i, sec := range []*tak.Weapon{ku.Weapon1, ku.Weapon2, ku.Weapon3} {
+				if sec == nil || out.Weapons[i].Name != "" {
+					continue
+				}
+				populateWeaponJSONFromTAK(&out.Weapons[i], sec)
+			}
+		}
+	}
 	// Death explosion FBI refs — surfaced for the client's death-FX
 	// path.  Uppercased so the eventual /api/studio/weapon-fx/<name>
 	// fetch matches the weapon-by-name resolver (which lowercases for
@@ -489,8 +520,119 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Corpse chain: FBI corpse= names a wreck feature whose object= is the
+	// 3DO the sandbox renders when the unit dies; its featuredead chains to
+	// the damaged wreck used for heavier kills (Killed corpsetype 2).
+	if corpse := strings.ToLower(strings.TrimSpace(info.Corpse)); corpse != "" {
+		_, byName := sess.scanFeatures()
+		if f, ok := byName[corpse]; ok {
+			out.CorpseObject = strings.ToLower(strings.TrimSpace(f.Object))
+			if dead := strings.ToLower(strings.TrimSpace(f.FeatureDead)); dead != "" {
+				if hf, ok := byName[dead]; ok {
+					out.CorpseHeapObject = strings.ToLower(strings.TrimSpace(hf.Object))
+				}
+			}
+		}
+	}
+	// TA:K has no gamedata/sound.tdf — each class is its own file under
+		// gamedata/soundclasses/ with per-event weighted pools. Translate
+		// those pools into the TA-style numbered keys the client plays.
+		if len(out.Sounds) == 0 {
+			if tak := sess.loadTAKSoundClass(cat); len(tak) > 0 {
+				out.Sounds = tak
+			}
+		}
 	}
 	writeJSON(w, out)
+}
+
+// loadTAKSoundClass reads gamedata/soundclasses/*.tdf looking for the named
+// class section and maps its event pools onto the TA-style keys the studio
+// client already plays: [select] entries become select1..N and [move] +
+// [attack] acknowledgements become ok1..N. Pool weights order the entries
+// (heaviest first) but every variant stays available to the random picker.
+func (sess *Session) loadTAKSoundClass(name string) map[string]string {
+	sec := sess.findTAKSoundClass(name)
+	if sec == nil {
+		return nil
+	}
+	out := make(map[string]string)
+	emit := func(sub *tdf.Section, keyBase string, n int) int {
+		if sub == nil {
+			return n
+		}
+		type entry struct {
+			stem   string
+			weight float64
+		}
+		var pool []entry
+		for _, f := range sub.Fields() {
+			stem := strings.ToLower(strings.TrimSpace(f.Key()))
+			if stem == "" {
+				continue
+			}
+			w, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(f.Value()), ";"), 64)
+			pool = append(pool, entry{stem, w})
+		}
+		sort.SliceStable(pool, func(i, j int) bool { return pool[i].weight > pool[j].weight })
+		for _, e := range pool {
+			n++
+			out[keyBase+strconv.Itoa(n)] = e.stem
+		}
+		return n
+	}
+	subs := map[string]*tdf.Section{}
+	for _, sub := range sec.Sections() {
+		subs[strings.ToLower(sub.Name())] = sub
+	}
+	emit(subs["select"], "select", 0)
+	n := emit(subs["move"], "ok", 0)
+	emit(subs["attack"], "ok", n)
+	return out
+}
+
+// findTAKSoundClass scans gamedata/soundclasses/*.tdf for the section whose
+// name matches the unit's soundcategory. Results are cached per class name
+// (nil cached for known-missing) so repeated unit-meta requests stay cheap.
+func (sess *Session) findTAKSoundClass(name string) *tdf.Section {
+	sess.takSoundMu.Lock()
+	if sess.takSoundClasses == nil {
+		sess.takSoundClasses = map[string]*tdf.Section{}
+	}
+	if sec, ok := sess.takSoundClasses[name]; ok {
+		sess.takSoundMu.Unlock()
+		return sec
+	}
+	sess.takSoundMu.Unlock()
+
+	var found *tdf.Section
+	for _, p := range sess.vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "gamedata/soundclasses/") || !strings.HasSuffix(lower, ".tdf") {
+			continue
+		}
+		data, err := sess.vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		doc, err := tdf.Parse(bytes.NewReader(data))
+		if err != nil {
+			continue
+		}
+		for _, sec := range doc.Sections() {
+			if strings.EqualFold(sec.Name(), name) {
+				found = sec
+				break
+			}
+		}
+		if found != nil {
+			break
+		}
+	}
+	sess.takSoundMu.Lock()
+	sess.takSoundClasses[name] = found
+	sess.takSoundMu.Unlock()
+	return found
 }
 
 // soundEventKeys is the set of TA sound-event names the studio
@@ -551,21 +693,29 @@ func (sess *Session) loadSoundSection(name string) map[string]string {
 // frequently mixed-case (e.g. ARMCOM.FBI) so we don't trust a
 // straight ReadFile.
 func (sess *Session) loadUnitFBI(name string) (*ta.Unit, error) {
+	data, err := sess.loadUnitFBIBytes(name)
+	if err != nil {
+		return nil, err
+	}
+	var u ta.Unit
+	if err := tdf.Unmarshal(data, &u); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// loadUnitFBIBytes returns the raw units/<name>.fbi contents using the same
+// case-insensitive resolution as loadUnitFBI, so callers can re-parse the
+// file against a different schema (TA:K's inline [WEAPONn] sections).
+func (sess *Session) loadUnitFBIBytes(name string) ([]byte, error) {
 	candidates := []string{
 		"units/" + name + ".fbi",
 		"units/" + strings.ToUpper(name) + ".FBI",
 		"Units/" + name + ".fbi",
 	}
-	parse := func(data []byte) (*ta.Unit, error) {
-		var u ta.Unit
-		if err := tdf.Unmarshal(data, &u); err != nil {
-			return nil, err
-		}
-		return &u, nil
-	}
 	for _, p := range candidates {
 		if data, err := sess.vfs.ReadFile(p); err == nil {
-			return parse(data)
+			return data, nil
 		}
 	}
 	// Last-ditch: walk the entire VFS for a case-insensitive name match.
@@ -573,11 +723,55 @@ func (sess *Session) loadUnitFBI(name string) (*ta.Unit, error) {
 	for _, p := range sess.vfs.List() {
 		if strings.ToLower(basename(p)) == want {
 			if data, err := sess.vfs.ReadFile(p); err == nil {
-				return parse(data)
+				return data, nil
 			}
 		}
 	}
 	return nil, errFBINotFound
+}
+
+// populateWeaponJSONFromTAK copies a TA:K inline [WEAPONn] section into the
+// slot JSON. TA:K weapon blocks carry a subset of TA's fields (no burst, no
+// beam flag, no projectile 3DO); the [DAMAGE] table's `default=` is the
+// absolute hit damage and the remaining keys are per-category multipliers,
+// so only the default feeds the engine's damage figure.
+func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
+	name := strings.ToUpper(strings.TrimSpace(sec.Name))
+	if name == "" {
+		name = "WEAPON" + strconv.Itoa(out.Index)
+	}
+	out.Name = name
+	out.ReloadSec = sec.ReloadTime
+	out.RangeWU = float64(sec.Range)
+	out.VelocityWU = sec.WeaponVelocity
+	out.Ballistic = strings.EqualFold(strings.TrimSpace(sec.Type), "ballistic")
+	out.Burst = 1
+	out.AreaOfEffectWU = float64(sec.AreaOfEffect)
+	out.EdgeEffectiveness = sec.EdgeEffectiveness
+	out.Tolerance = sec.AimTolerance
+	if d, ok := sec.Damage["default"]; ok {
+		out.DamageDefault = int(d)
+	}
+}
+
+// cursorPalette returns the palette for the cursors GAF from the TA:K
+// sibling PCX (anims/cursors.pcx), or nil when no sidecar ships (TA installs;
+// the caller then falls back to the global palette).
+func (sess *Session) cursorPalette() *gaf.Palette {
+	for _, p := range []string{"anims/cursors.pcx", "Anims/cursors.pcx"} {
+		data, err := sess.vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		reader, err := pcx.LoadFromReader(bytes.NewReader(data))
+		if err != nil {
+			continue
+		}
+		if pal := reader.EmbeddedPalette(); pal != nil {
+			return pal
+		}
+	}
+	return nil
 }
 
 // loadWeaponSection finds the weapons/*.tdf section whose key
@@ -835,10 +1029,17 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cursor sequence not found", http.StatusNotFound)
 		return
 	}
-	pal, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
-	if err != nil {
-		http.Error(w, "load palette: "+err.Error(), http.StatusInternalServerError)
-		return
+	// TA:K ships the cursor palette in a sibling anims/cursors.pcx (its GAFs
+	// carry per-asset palettes); TA uses the global palette. Probe the
+	// sidecar first so both games render with the colours they shipped.
+	pal := sess.cursorPalette()
+	if pal == nil {
+		p, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
+		if err != nil {
+			http.Error(w, "load palette: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		pal = p
 	}
 	// TA cursors use the GAF's transparency index for the "outside
 	// the cursor shape" pixels.  TransparencyModeAuto runs the

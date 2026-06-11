@@ -1278,11 +1278,15 @@ export class MvControls {
     //     that piece when the user clicks Fire so VTOLs aren't
     //     stuck with permanently-grey weapon controls.
     const hasW = (idx) => !!(m.weapons && m.weapons[idx] && m.weapons[idx].name)
+    // TA:K COBs ship one shared AimWeapon/FireWeapon/QueryWeapon set; a slot
+    // is live when the FBI declares a weapon there (slot 0 also lights up on
+    // the shared scripts alone, mirroring the TA Primary fallback).
+    const takShared = !!(cob && (cob.hasScript('AimWeapon') || cob.hasScript('FireWeapon')))
     const enabled = {
       move:      !!(m.canMove && cob),
-      primary:   !!(cob && (cob.hasScript('AimPrimary')   || cob.hasScript('FirePrimary')   || (hasW(0) && cob.hasScript('QueryPrimary')))),
-      secondary: !!(cob && (cob.hasScript('AimSecondary') || cob.hasScript('FireSecondary') || (hasW(1) && cob.hasScript('QuerySecondary')))),
-      tertiary:  !!(cob && (cob.hasScript('AimTertiary')  || cob.hasScript('FireTertiary')  || (hasW(2) && cob.hasScript('QueryTertiary')))),
+      primary:   !!(cob && (cob.hasScript('AimPrimary')   || cob.hasScript('FirePrimary')   || (hasW(0) && cob.hasScript('QueryPrimary')) || takShared)),
+      secondary: !!(cob && (cob.hasScript('AimSecondary') || cob.hasScript('FireSecondary') || (hasW(1) && cob.hasScript('QuerySecondary')) || (hasW(1) && takShared))),
+      tertiary:  !!(cob && (cob.hasScript('AimTertiary')  || cob.hasScript('FireTertiary')  || (hasW(2) && cob.hasScript('QueryTertiary')) || (hasW(2) && takShared))),
     }
     for (const btn of document.querySelectorAll('#mv-controls-actions .mv-ctrl-action')) {
       const action = btn.dataset.ctrlAction

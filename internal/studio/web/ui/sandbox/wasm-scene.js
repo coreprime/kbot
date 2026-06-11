@@ -996,6 +996,9 @@ export class WasmSandboxScene {
       u.isMoving = su.isMoving
       u.speed = su.speed || 0
       u.health = su.health
+      // Death drops the unit out of the live selection — a corpse playing
+      // its death animation is no longer a commandable actor.
+      if (su.dead && !u.dead) this.selected.delete(su.id)
       u.dead = su.dead
       u.buildPercent = su.buildPercent
       // Drop the attack hint when its target dies / despawns. The move hint is
@@ -1134,6 +1137,13 @@ export class WasmSandboxScene {
         case 'projectileHit':
           this._flash(ev.unitId, ev, 56, 800, [1.9, 0.7, 0.2, 1.0])
           break
+        case 'corpseSpawn':
+          // The Killed script settled its corpsetype (carried in slot):
+          // 1 = intact corpse feature, 2 = the damaged featuredead wreck,
+          // 3 = nothing survives. Swap the dead unit's model for the wreck
+          // 3DO so the battlefield keeps TA's TDF-faithful debris.
+          this._onCorpse(ev)
+          break
         case 'moveStop': {
           const u = this._units.get(ev.unitId)
           if (u) {
@@ -1219,6 +1229,24 @@ export class WasmSandboxScene {
       if (w) return w
     }
     return fallback
+  }
+
+  _onCorpse(ev) {
+    const u = this._units.get(ev.unitId)
+    if (!u) return
+    const meta = u.meta || {}
+    let object = null
+    if (ev.slot === 2) object = meta.corpseHeapObject || meta.corpseObject
+    else if (ev.slot !== 3) object = meta.corpseObject
+    if (!object) {
+      // Nothing left (corpsetype 3, or the unit ships no corpse feature):
+      // the unit vanishes once its death sequence has finished.
+      u.corpseHidden = true
+      return
+    }
+    // The view keys GL geometry by name, so the swap is a name override:
+    // #refreshEntities loads + draws the wreck 3DO in place of the unit.
+    u.wreckName = object
   }
 
   _onDeath(ev) {

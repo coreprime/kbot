@@ -56,6 +56,7 @@
 //   - renderDrawer()             — clearStampSelection repaints the
 //                                  drawer row after deselecting
 
+import { isTakMapActive } from './tak-edit.js'
 import { $, $$, state, hostCallbacks, setStatus, activeMap } from '../host-context.js'
 import {
   beginTransaction,
@@ -194,6 +195,12 @@ export function modeHint(mode) {
 export function rotateActive(dir) {
   // dir: +1 = clockwise, -1 = counter-clockwise.
   if (state.placement) {
+    // TA:K terrain cells carry no orientation bits, so a rotated section
+    // stamp cannot be represented — hold at 0 and tell the user why.
+    if (isTakMapActive()) {
+      setStatus('TA:K sections cannot rotate — the format stores terrain as (texture, U, V) with no orientation.')
+      return
+    }
     state.placement.rotation = (state.placement.rotation + dir + 4) % 4
     // Manual Q/E rotation pins the orientation — auto-fit must not
     // fight the user's intent once they've taken control.

@@ -10,8 +10,17 @@ import (
 // of the height attribute grid.  Pixel value equals the raw elevation byte at
 // that cell — suitable for byte-perfect round-trip through PNG.
 //
-// Pixel(x, y) = TileAttr[y*AttrW+x].Height.
+// Pixel(x, y) = TileAttr[y*AttrW+x].Height.  TA:K maps render their DataUnit
+// heightmap bytes directly — the same 16px cell resolution.
 func (m *Map) RenderHeightMapRaw() *image.Gray {
+	if m.IsTAK {
+		if m.TAKHeight == nil || m.TAKW == 0 {
+			return nil
+		}
+		img := image.NewGray(image.Rect(0, 0, m.TAKW, m.TAKH))
+		copy(img.Pix, m.TAKHeight)
+		return img
+	}
 	if m.TileAttr == nil {
 		return nil
 	}
@@ -69,31 +78,48 @@ const asciiRamp = " .:-=+*#%@"
 // RenderASCII produces a compact ASCII visualization of the height map,
 // scaled down to fit within the given column width.  The aspect ratio of
 // the source is preserved (with a 2:1 character cell adjustment so columns
-// read squarish in a terminal).
+// read squarish in a terminal).  TA:K maps render from the DataUnit
+// heightmap at the same 16px cell resolution.
 func (m *Map) RenderASCII(maxCols int) string {
+	if m.IsTAK {
+		return renderASCIIHeights(m.TAKHeight, m.TAKW, m.TAKH, maxCols)
+	}
 	if m.TileAttr == nil || m.AttrW == 0 || m.AttrH == 0 {
+		return ""
+	}
+	heights := make([]byte, len(m.TileAttr))
+	for i, a := range m.TileAttr {
+		heights[i] = a.Height
+	}
+	return renderASCIIHeights(heights, m.AttrW, m.AttrH, maxCols)
+}
+
+// renderASCIIHeights is the elevation-grid-to-ASCII core shared by the TA
+// attribute grid and the TA:K DataUnit heightmap.
+func renderASCIIHeights(heights []byte, w, h, maxCols int) string {
+	if len(heights) == 0 || w == 0 || h == 0 {
 		return ""
 	}
 	if maxCols <= 0 {
 		maxCols = 80
 	}
 	cols := maxCols
-	if cols > m.AttrW {
-		cols = m.AttrW
+	if cols > w {
+		cols = w
 	}
 	// Terminal characters are roughly twice as tall as they are wide.
-	rows := (m.AttrH * cols) / m.AttrW / 2
+	rows := (h * cols) / w / 2
 	if rows < 1 {
 		rows = 1
 	}
 
 	minH, maxH := uint8(255), uint8(0)
-	for _, a := range m.TileAttr {
-		if a.Height < minH {
-			minH = a.Height
+	for _, v := range heights {
+		if v < minH {
+			minH = v
 		}
-		if a.Height > maxH {
-			maxH = a.Height
+		if v > maxH {
+			maxH = v
 		}
 	}
 	span := int(maxH) - int(minH)
@@ -106,10 +132,10 @@ func (m *Map) RenderASCII(maxCols int) string {
 	for ry := 0; ry < rows; ry++ {
 		for rx := 0; rx < cols; rx++ {
 			// Bilinear-ish sample: average the source cell block under this character.
-			sx0 := rx * m.AttrW / cols
-			sx1 := (rx + 1) * m.AttrW / cols
-			sy0 := ry * m.AttrH / rows
-			sy1 := (ry + 1) * m.AttrH / rows
+			sx0 := rx * w / cols
+			sx1 := (rx + 1) * w / cols
+			sy0 := ry * h / rows
+			sy1 := (ry + 1) * h / rows
 			if sx1 <= sx0 {
 				sx1 = sx0 + 1
 			}
@@ -117,9 +143,9 @@ func (m *Map) RenderASCII(maxCols int) string {
 				sy1 = sy0 + 1
 			}
 			sum, n := 0, 0
-			for sy := sy0; sy < sy1 && sy < m.AttrH; sy++ {
-				for sx := sx0; sx < sx1 && sx < m.AttrW; sx++ {
-					sum += int(m.TileAttr[sy*m.AttrW+sx].Height)
+			for sy := sy0; sy < sy1 && sy < h; sy++ {
+				for sx := sx0; sx < sx1 && sx < w; sx++ {
+					sum += int(heights[sy*w+sx])
 					n++
 				}
 			}

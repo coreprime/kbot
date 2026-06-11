@@ -59,7 +59,8 @@ func (sess *Session) objectTexture(name string) *image.RGBA {
 
 	var out *image.RGBA
 	if src, ok := sess.ensureTextureIndex()[key]; ok {
-		if data, err := sess.renderTexturePNG(src); err == nil {
+		// Object previews have no requesting unit, so no side preference.
+		if data, err := sess.renderTexturePNG(src, ""); err == nil {
 			if dec, err := png.Decode(bytes.NewReader(data)); err == nil {
 				out = toRGBAImage(dec)
 			}

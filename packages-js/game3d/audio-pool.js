@@ -81,7 +81,12 @@ export class AudioPool {
     this._lastPlayByStem.set(stem, now)
     let audio
     try {
-      audio = new Audio(`/api/studio/sound/${encodeURIComponent(stem)}`)
+      // Assign src as a property (not via the Audio(url) constructor): the
+      // workspace URL shim in index.html rewrites /api/... paths through the
+      // patched HTMLMediaElement src setter, which the constructor bypasses —
+      // constructor-set URLs 404 at the hub root and the sound never plays.
+      audio = new Audio()
+      audio.src = `/api/studio/sound/${encodeURIComponent(stem)}`
     } catch {
       return 0
     }

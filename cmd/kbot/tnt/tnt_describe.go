@@ -114,9 +114,9 @@ func newTNTDescribeCommand() *cobra.Command {
 	}
 }
 
-// describeTAK prints the verified portion of a TA: Kingdoms TNT.  The tile,
-// attribute and feature sections use an undecoded encoding, so only the
-// header and the embedded minimap are reported.
+// describeTAK prints a summary of a TA: Kingdoms TNT: header geometry,
+// embedded minimap, heightmap/terrain grid dimensions, and the feature table
+// with placement counts.
 func describeTAK(path string, data []byte, m *tnt.Map) {
 	fmt.Printf("TNT File: %s\n", path)
 	fmt.Printf("File Size: %d bytes\n\n", len(data))
@@ -162,6 +162,6 @@ func describeTAK(path string, data []byte, m *tnt.Map) {
 	}
 
 	fmt.Printf("\nNote: render the full map with 'kbot tnt image' (add\n")
-	fmt.Printf("--features to overlay placements). The half-resolution\n")
-	fmt.Printf("attribute/height layers are not yet decoded.\n")
+	fmt.Printf("--features to overlay placements) and the elevation grid\n")
+	fmt.Printf("with 'kbot tnt heightmap'.\n")
 }

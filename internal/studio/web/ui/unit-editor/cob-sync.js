@@ -217,7 +217,7 @@ export function runCobEntry(cob, name) {
   if (/^Create$/i.test(name)) {
     mvControls?._playSoundRandom?.(['select1', 'select2', 'select3', 'unitcomplete'])
   }
-  if (/^Aim(Primary|Secondary|Tertiary|Weapon\d+)$/i.test(name)) {
+  if (/^Aim(Primary|Secondary|Tertiary|Weapon\d*)$/i.test(name)) {
     cob.unit.killThreadsByName('RestoreAfterDelay')
     cob.unit.killThreadsByName('RestorePosition')
     // Independent random heading per click - no per-weapon bias.
@@ -245,7 +245,19 @@ export function runCobEntry(cob, name) {
       const pitchRad = Math.atan2(dy, distance)
       pitch = Math.round(pitchRad * TURNS / (2 * Math.PI))
     }
-    cob.start(name, [heading, pitch])
+    // TA:K's shared AimWeapon takes the weapon index as a third argument
+    // and reports readiness through the WEAPON_READY port; the quick
+    // action drives weapon 0.
+    if (/^AimWeapon$/i.test(name)) {
+      cob.start(name, [heading, pitch, 0])
+    } else {
+      cob.start(name, [heading, pitch])
+    }
+    return
+  }
+  // TA:K's shared FireWeapon dispatches on a weapon-index argument.
+  if (/^FireWeapon$/i.test(name)) {
+    cob.start(name, [0])
     return
   }
   cob.start(name)

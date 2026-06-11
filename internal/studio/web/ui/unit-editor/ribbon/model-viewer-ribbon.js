@@ -312,6 +312,7 @@ const _COB_ENTRIES = [
     { name: 'Activate',    icon: '⚡', title: 'Powers on the unit — radar dishes spin, hatches open, etc.' },
     { name: 'Deactivate',  icon: '🔌', title: 'Powers off — folds antennas, closes hatches.' },
     { name: 'Killed',      icon: '💀', title: 'Death animation — body parts fly off, smoke trails.' },
+    { name: 'Dying',       icon: '💀', title: 'TA:K death animation — the fall sequence that ends with FINISHED_DYING.' },
   ] },
   { section: 'Movement', rows: [
     { name: 'StartMoving',   icon: '🚶', title: 'Start walking / driving animation.' },
@@ -326,6 +327,12 @@ const _COB_ENTRIES = [
     { name: 'FireSecondary',icon: '💥', title: 'Fire secondary weapon.' },
     { name: 'AimTertiary',  icon: '🎯', title: 'Aim tertiary weapon.' },
     { name: 'FireTertiary', icon: '💥', title: 'Fire tertiary weapon.' },
+    // TA: Kingdoms units export one parameterized weapon set instead of
+    // per-slot entries; the quick actions drive weapon 0. The list is
+    // filtered to scripts the loaded COB actually exports, so these rows
+    // only surface on TA:K units.
+    { name: 'AimWeapon',    icon: '🎯', title: 'Aim weapon 0 at a random heading + elevation (TA:K shared aim entry).' },
+    { name: 'FireWeapon',   icon: '💥', title: 'Fire weapon 0 (TA:K shared fire entry).' },
   ] },
 ]
 

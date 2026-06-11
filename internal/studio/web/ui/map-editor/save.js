@@ -73,16 +73,26 @@ export async function save() {
       const text = await resp.text()
       throw new Error(text || `HTTP ${resp.status}`)
     }
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitiseFilename(state.name)}.hpi`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-    setStatus(`Saved ${a.download}.`)
+    // Writable workspaces answer with a JSON receipt — the map's changed
+    // files were written into the workspace VFS, nothing to download.
+    // Read-only contexts stream the packaged HPI as before.
+    const ctype = resp.headers.get('Content-Type') || ''
+    if (ctype.includes('application/json')) {
+      const receipt = await resp.json()
+      const files = (receipt.saved || []).join(', ')
+      setStatus(files ? `Saved ${files} to the workspace.` : 'Saved to the workspace.')
+    } else {
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${sanitiseFilename(state.name)}.hpi`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setStatus(`Saved ${a.download}.`)
+    }
     const m = activeMap()
     if (m) { m.dirty = false; hostCallbacks.renderMapTabs?.() }
     return true

@@ -53,7 +53,7 @@ const ACTION_GRID_HTML = `
     <span class="ico">🚶</span><span class="lbl">Move</span>
   </button>
   <button class="mv-ctrl-action" data-ctrl-action="primary" disabled
-          title="Primary weapon — click here, then click in the scene to lock the primary aim.  AimPrimary fires each tick; when it returns 1 FirePrimary fires at the weapon's reload rate.">
+          title="Primary weapon — click here, then click in the scene to lock the primary aim.  The aim script (AimPrimary, or TA:K's AimWeapon) tracks the target; once it reports ready the fire script runs at the weapon's reload rate.">
     <span class="ico">🎯</span><span class="lbl">Primary</span>
   </button>
   <button class="mv-ctrl-action" data-ctrl-action="secondary" disabled

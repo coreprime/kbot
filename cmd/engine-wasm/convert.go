@@ -32,6 +32,7 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 		OnOffable:   getBool(o, "onoffable"),
 	}
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
+	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
 		n := w.Length()
 		for i := 0; i < n && i < 3; i++ {
@@ -55,7 +56,9 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Range:    fixed.FromFloat(getFloat(o, "rangeWU")),
 		ReloadMs: int(getFloat(o, "reloadSec") * 1000),
 		Burst:    burst,
-		Damage:   fixed.FromFloat(getFloat(o, "damage")),
+		// damageDefault is the [DAMAGE] table's `default=` — the weapon's
+		// absolute per-shot damage (the `damage` key is the per-target map).
+		Damage: fixed.FromFloat(getFloat(o, "damageDefault")),
 		Present:  true,
 
 		// Firing arc (TA-angle units): aircraft must point the airframe within
@@ -487,6 +490,7 @@ var eventNames = map[frame.EventKind]string{
 	frame.EvEmitSfx:         "emitSfx",
 	frame.EvPlaySound:       "playSound",
 	frame.EvExplode:         "explode",
+	frame.EvCorpseSpawn:     "corpseSpawn",
 }
 
 func eventToJS(e *frame.Event) map[string]any {

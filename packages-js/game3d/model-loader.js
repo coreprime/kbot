@@ -66,6 +66,10 @@ export class ModelLoader {
     // the GPU draws coplanar logos/glass/rotors on top of their base
     // surface rather than punching the base out via alpha-test.
     this._decalSet = new Set((data.decals || []).map((n) => n.toLowerCase()))
+    // TA:K models carry a per-side texture query ("side=ara") so same-named
+    // team/logo textures resolve against the unit's own side GAF. The query
+    // is baked into every texture key this load produces.
+    this._texQuery = data.textureQuery || ''
     const root = this.#buildPiece(data.root)
     // X-flip the bounds to match the per-piece flip applied above,
     // otherwise camera framing centres on the un-flipped X midpoint.
@@ -95,7 +99,8 @@ export class ModelLoader {
     if (data.textures && data.textures.length) {
       // Fire-and-forget — the renderer is happy to draw fallbacks
       // until the real PNGs land.  ensure() resolves once they have.
-      this.textureCache.ensure(data.textures)
+      const q = this._texQuery
+      this.textureCache.ensure(q ? data.textures.map((n) => `${n}?${q}`) : data.textures)
     }
     return model
   }
@@ -155,7 +160,9 @@ export class ModelLoader {
     for (let k = 1; k < indices.length; k++) {
       if (Math.abs(verts[indices[k] * 3 + 1] - y0) > 1e-4) return false
     }
-    const c = this.palette.colorFor(prim.colorIndex)
+    const c = prim.colorRGB
+      ? [prim.colorRGB[0] / 255, prim.colorRGB[1] / 255, prim.colorRGB[2] / 255, 1]
+      : this.palette.colorFor(prim.colorIndex)
     return c[0] === 0 && c[1] === 0 && c[2] === 0
   }
 
@@ -243,8 +250,15 @@ export class ModelLoader {
       // in-game, never drawn as model geometry — skip them so they don't
       // render as a solid square slab under the unit.
       if (this.#isGroundPlate(prim, verts, primIdx, shadowPlateIdx)) continue
-      const texKey = (prim.texture || '').toLowerCase()
-      const color = (!texKey && prim.isColored) ? this.palette.colorFor(prim.colorIndex) : null
+      const plainTex = (prim.texture || '').toLowerCase()
+      const texKey = plainTex && this._texQuery ? `${plainTex}?${this._texQuery}` : plainTex
+      // Prefer the server-resolved face colour (TA:K side palettes differ
+      // per unit); fall back to the global palette for older payloads.
+      const color = (!texKey && prim.isColored)
+        ? (prim.colorRGB
+            ? [prim.colorRGB[0] / 255, prim.colorRGB[1] / 255, prim.colorRGB[2] / 255, 1]
+            : this.palette.colorFor(prim.colorIndex))
+        : null
       // Look up depth tier for this primitive's face: 0 for the
       // first primitive at this position, 1 for the second, etc.
       // Bucket key gets the tier baked in so primitives at different
@@ -272,7 +286,7 @@ export class ModelLoader {
       // only if the face is roughly vertical or downward-facing.
       // Upward-facing decals (baseplates with grate cutouts) need
       // to keep their see-through pixels so the ground shows.
-      if (count >= 3 && texKey && decals.has(texKey)) {
+      if (count >= 3 && texKey && decals.has(plainTex)) {
         const sig = positionSig(indices)
         if (faceCount.get(sig) === 1) {
           const positions = []

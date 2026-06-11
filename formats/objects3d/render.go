@@ -415,7 +415,14 @@ func rasterTri(img *image.RGBA, zbuf []float64, W, H int, t rtri, shade float64,
 			if t.tex != nil {
 				u := l0*t.uv[0][0] + l1*t.uv[1][0] + l2*t.uv[2][0]
 				v := l0*t.uv[0][1] + l1*t.uv[1][1] + l2*t.uv[2][1]
-				cr, cg, cb = sampleTex(t.tex, u, v)
+				var ca uint8
+				cr, cg, cb, ca = sampleTex(t.tex, u, v)
+				// Transparent texel (e.g. a TA:Kingdoms wing/glass key punched
+				// out of the texture): skip it so the colour beneath shows and
+				// the z-buffer isn't claimed by an invisible fragment.
+				if ca == 0 {
+					continue
+				}
 			} else {
 				cr, cg, cb = t.col.R, t.col.G, t.col.B
 			}
@@ -429,18 +436,18 @@ func rasterTri(img *image.RGBA, zbuf []float64, W, H int, t rtri, shade float64,
 	}
 }
 
-func sampleTex(tex *image.RGBA, u, v float64) (uint8, uint8, uint8) {
+func sampleTex(tex *image.RGBA, u, v float64) (uint8, uint8, uint8, uint8) {
 	b := tex.Bounds()
 	tw, th := b.Dx(), b.Dy()
 	if tw == 0 || th == 0 {
-		return 0xb6, 0xbc, 0xc6
+		return 0xb6, 0xbc, 0xc6, 0xff
 	}
 	u = clamp01(u)
 	v = clamp01(v)
 	tx := b.Min.X + int(u*float64(tw-1)+0.5)
 	ty := b.Min.Y + int(v*float64(th-1)+0.5)
 	o := tex.PixOffset(tx, ty)
-	return tex.Pix[o], tex.Pix[o+1], tex.Pix[o+2]
+	return tex.Pix[o], tex.Pix[o+1], tex.Pix[o+2], tex.Pix[o+3]
 }
 
 func clamp01(f float64) float64 {

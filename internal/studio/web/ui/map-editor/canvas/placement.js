@@ -19,6 +19,7 @@
 // the old definitions in studio.js.
 
 import { state } from '../../host-context.js'
+import { isTakMapActive } from '../tak-edit.js'
 import { TILE_PX } from '../constants.js'
 import {
   rotatedFootprint,
@@ -207,6 +208,8 @@ function countPlacementMismatches(p, fw, fh) {
 // don't override their intent.
 export function tryAutoRotatePlacement(p) {
   if (!p || p.userRotated) return
+  // TA:K sections cannot rotate (no orientation bits in the format).
+  if (isTakMapActive()) return
   if (!state.sectionHeights.has(p.sectionPath)) return
   const original = p.rotation & 3
   const results = []

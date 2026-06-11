@@ -31,9 +31,11 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/session-info", sess.handleSessionInfo)
 	mux.HandleFunc("/api/studio/feature-origins", sess.handleFeatureOrigins)
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)
+	mux.HandleFunc("/api/studio/tilesets", sess.handleTilesets)
 	mux.HandleFunc("/api/studio/maps", sess.handleMapsList)
 	mux.HandleFunc("/api/studio/minimap/", sess.handleMapMinimap)
 	mux.HandleFunc("/api/studio/map-render/", sess.handleMapRender)
+	mux.HandleFunc("/api/studio/tak-stamp", sess.handleTAKStamp)
 	mux.HandleFunc("/api/studio/load", sess.handleMapLoad)
 	mux.HandleFunc("/api/studio/load-upload", sess.handleMapLoadUpload)
 	mux.HandleFunc("/api/studio/tile-pool/", sess.handleMapTilePool)
@@ -272,6 +274,27 @@ func (sess *Session) startAssetPreload() {
 // would serve, so the preload goroutine and the live handler agree
 // on bytes.
 func (sess *Session) renderSectionPreviewPNG(sectionPath string, pal color.Palette) []byte {
+	// TA:Kingdoms sections are texture-mapped TNT prefabs — render the terrain
+	// surface as the thumbnail (downscaled), with the baked minimap as fallback.
+	if strings.HasSuffix(strings.ToLower(sectionPath), ".tnt") {
+		if img, err := sess.renderTAKTerrain(sectionPath); err == nil && img != nil {
+			var buf bytes.Buffer
+			if png.Encode(&buf, downscaleRGBA(img, 256)) == nil {
+				return buf.Bytes()
+			}
+		}
+		if data, err := sess.vfs.ReadFile(sectionPath); err == nil {
+			if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil && m.Minimap != nil {
+				if mm := m.RenderMinimap(sess.palettes().terrainPalette(sectionPath)); mm != nil {
+					var buf bytes.Buffer
+					if png.Encode(&buf, mm) == nil {
+						return buf.Bytes()
+					}
+				}
+			}
+		}
+		return nil
+	}
 	data, err := sess.vfs.ReadFile(sectionPath)
 	if err != nil {
 		return nil
@@ -426,6 +449,23 @@ func (sess *Session) cacheTNT(mapPath string, m *tnt.Map) {
 	}
 }
 
+// uncacheTNT drops a parsed map from the cache (after a save rewrites the
+// underlying file) so the next load re-reads the fresh bytes.
+func (sess *Session) uncacheTNT(mapPath string) {
+	sess.tntCacheMu.Lock()
+	defer sess.tntCacheMu.Unlock()
+	if _, ok := sess.tntCache[mapPath]; !ok {
+		return
+	}
+	delete(sess.tntCache, mapPath)
+	for i, p := range sess.tntCacheOrder {
+		if p == mapPath {
+			sess.tntCacheOrder = append(sess.tntCacheOrder[:i], sess.tntCacheOrder[i+1:]...)
+			break
+		}
+	}
+}
+
 func (sess *Session) lookupTNT(mapPath string) *tnt.Map {
 	sess.tntCacheMu.Lock()
 	defer sess.tntCacheMu.Unlock()
@@ -486,6 +526,11 @@ type loadResponse struct {
 	Voids       []int           `json:"voids"`
 	Features    []loadedFeature `json:"features"`
 	OTA         *otaState       `json:"ota"`
+	// TextureMapped marks a TA:Kingdoms map: its terrain is a texture-mapped
+	// surface (no 32×32 tile pool), so the editor shows TerrainURL as a backdrop
+	// instead of stamped tiles.
+	TextureMapped bool   `json:"textureMapped,omitempty"`
+	TerrainURL    string `json:"terrainUrl,omitempty"`
 }
 
 // handleMapLoad parses a TNT (and its sibling OTA when present) and
@@ -520,27 +565,45 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 
 	poolCols := tilePoolCols(len(m.Tiles))
 
-	// Per-cell tile pool coords.  TileMap[i] indexes into m.Tiles.
-	tiles := make([]loadedTile, len(m.TileMap))
-	for i, idx := range m.TileMap {
-		px := int(idx) % poolCols
-		py := int(idx) / poolCols
-		tiles[i] = loadedTile{SX: px, SY: py}
-	}
-
-	// Heights from TileAttr — one byte per 16-px attribute cell.
-	// Voids are encoded in the same TileAttr.Feature field; 0xFFFC is
-	// the canonical void sentinel and 0xFFFF means "no feature,
-	// passable".  Early Cavedog maps (Metal Heck, Lava Run) also use
-	// 0xFFFE on cells that are demonstrably buildable in-engine, so we
-	// treat those as ordinary passable cells per the project's TNT
-	// pitfall note (docs/formats/tnt.md).
-	heights := make([]int, len(m.TileAttr))
-	voids := make([]int, len(m.TileAttr))
-	for i, a := range m.TileAttr {
-		heights[i] = int(a.Height)
-		if a.Feature == 0xFFFC {
-			voids[i] = 1
+	// TA:Kingdoms maps are texture-mapped rather than tile-stamped: there is no
+	// 32×32 tile pool. Report the graphic-unit grid as the tile dimensions, an
+	// empty tile list, and the per-DataUnit heightmap (TAKW×TAKH = 2×2 per
+	// graphic unit, exactly the attribute-cell resolution the editor expects).
+	// The editor shows the terrain render as a backdrop (TextureMapped flag).
+	tileW, tileH := m.TileW, m.TileH
+	textureMapped := m.IsTAK
+	var tiles []loadedTile
+	var heights, voids []int
+	if m.IsTAK {
+		tileW, tileH = m.TAKGUW, m.TAKGUH
+		tiles = []loadedTile{}
+		heights = make([]int, len(m.TAKHeight))
+		for i, h := range m.TAKHeight {
+			heights[i] = int(h)
+		}
+		voids = make([]int, len(m.TAKHeight))
+	} else {
+		// Per-cell tile pool coords.  TileMap[i] indexes into m.Tiles.
+		tiles = make([]loadedTile, len(m.TileMap))
+		for i, idx := range m.TileMap {
+			px := int(idx) % poolCols
+			py := int(idx) / poolCols
+			tiles[i] = loadedTile{SX: px, SY: py}
+		}
+		// Heights from TileAttr — one byte per 16-px attribute cell.
+		// Voids are encoded in the same TileAttr.Feature field; 0xFFFC is
+		// the canonical void sentinel and 0xFFFF means "no feature,
+		// passable".  Early Cavedog maps (Metal Heck, Lava Run) also use
+		// 0xFFFE on cells that are demonstrably buildable in-engine, so we
+		// treat those as ordinary passable cells per the project's TNT
+		// pitfall note (docs/formats/tnt.md).
+		heights = make([]int, len(m.TileAttr))
+		voids = make([]int, len(m.TileAttr))
+		for i, a := range m.TileAttr {
+			heights[i] = int(a.Height)
+			if a.Feature == 0xFFFC {
+				voids[i] = 1
+			}
 		}
 	}
 
@@ -568,7 +631,7 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 	missionName := baseName
 	var ota *otaState
 	if data, err := sess.vfs.ReadFile(otaPath); err == nil {
-		ota = parseOTA(string(data), m.TileW, m.TileH)
+		ota = parseOTA(string(data), tileW, tileH)
 		if ota != nil {
 			if ota.Planet != "" {
 				planet = ota.Planet
@@ -581,12 +644,22 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// TA:Kingdoms maps have no .ota planet= (only kingdom=); report the kingdom
+	// as the planet so the editor's section drawer activates the matching
+	// kingdom's section group (sections are grouped by kingdom for TA:K).
+	if textureMapped && planet == "" {
+		if tr, ok := sess.palettes().(*takPaletteResolver); ok {
+			if k := tr.kingdomForMap(mapPath); k != "" {
+				planet = k
+			}
+		}
+	}
 
 	resp := loadResponse{
 		Name:        baseName,
 		Path:        mapPath,
-		TileW:       m.TileW,
-		TileH:       m.TileH,
+		TileW:       tileW,
+		TileH:       tileH,
 		Planet:      planet,
 		MissionName: missionName,
 		TilePoolURL: "/api/studio/tile-pool/" + url.PathEscape(mapPath),
@@ -596,6 +669,10 @@ func (sess *Session) handleMapLoad(w http.ResponseWriter, r *http.Request) {
 		Voids:       voids,
 		Features:    outFeatures,
 		OTA:         ota,
+	}
+	if textureMapped {
+		resp.TextureMapped = true
+		resp.TerrainURL = "/api/studio/map-render/" + mapPath
 	}
 	writeJSON(w, resp)
 }
@@ -893,7 +970,11 @@ func (sess *Session) handleSections(w http.ResponseWriter, _ *http.Request) {
 	var entries []sectionEntry
 	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "sections/") || !strings.HasSuffix(lower, ".sct") {
+		if !strings.HasPrefix(lower, "sections/") {
+			continue
+		}
+		// TA uses .sct prefabs; TA:Kingdoms ships .tnt section prefabs.
+		if !strings.HasSuffix(lower, ".sct") && !strings.HasSuffix(lower, ".tnt") {
 			continue
 		}
 		entries = append(entries, sess.summariseSection(p))
@@ -926,7 +1007,18 @@ func (sess *Session) summariseSection(p string) sectionEntry {
 		World: world,
 	}
 	if data, err := sess.vfs.ReadFile(p); err == nil {
-		if s, err := sct.LoadFromReader(bytes.NewReader(data)); err == nil {
+		if strings.HasSuffix(strings.ToLower(p), ".tnt") {
+			// TA:Kingdoms sections are texture-mapped TNT prefabs (Sections.hpi
+			// / IPSections.hpi), grouped sections/<kingdom>/<group>/*.tnt.
+			if m, merr := tnt.LoadFromReader(bytes.NewReader(data)); merr == nil {
+				if m.IsTAK {
+					entry.TileW, entry.TileH = m.TAKGUW, m.TAKGUH
+				} else {
+					entry.TileW, entry.TileH = m.TileW, m.TileH
+				}
+				entry.HasMini = m.Minimap != nil
+			}
+		} else if s, serr := sct.LoadFromReader(bytes.NewReader(data)); serr == nil {
 			entry.TileW = int(s.Header.Width)
 			entry.TileH = int(s.Header.Height)
 			entry.HasMini = s.Minimap != nil
@@ -1174,6 +1266,28 @@ func (sess *Session) handleSectionHeights(w http.ResponseWriter, r *http.Request
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
 	}
+	// TA:K sections are texture-mapped TNT prefabs; their heights live in
+	// the DataUnit grid (16px cells — the same resolution as TA's attribute
+	// grid, so the response shape is identical).
+	if strings.HasSuffix(strings.ToLower(sectionPath), ".tnt") {
+		m, err := tnt.LoadFromReader(bytes.NewReader(data))
+		if err != nil || !m.IsTAK {
+			http.Error(w, "failed to parse TA:K section", http.StatusInternalServerError)
+			return
+		}
+		heights := make([]int, len(m.TAKHeight))
+		for i, h := range m.TAKHeight {
+			heights[i] = int(h)
+		}
+		writeJSON(w, map[string]any{
+			"w":       m.TAKGUW,
+			"h":       m.TAKGUH,
+			"attrW":   m.TAKW,
+			"attrH":   m.TAKH,
+			"heights": heights,
+		})
+		return
+	}
 	section, err := sct.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
 		http.Error(w, "failed to parse SCT", http.StatusInternalServerError)
@@ -1210,6 +1324,20 @@ func (sess *Session) handleSectionImage(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "section not found", http.StatusNotFound)
 		return
 	}
+	// TA:K sections render their texture-mapped terrain at full resolution
+	// (32px per graphic unit — the same px-per-cell contract the TA tile
+	// grid render keeps, so the canvas slicing math is unchanged).
+	if strings.HasSuffix(strings.ToLower(sectionPath), ".tnt") {
+		img, err := sess.renderTAKTerrain(sectionPath)
+		if err != nil || img == nil {
+			http.Error(w, "failed to render TA:K section", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_ = png.Encode(w, img)
+		return
+	}
 	section, err := sct.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
 		http.Error(w, "failed to parse SCT", http.StatusInternalServerError)
@@ -1233,6 +1361,7 @@ type featureEntry struct {
 	Filename    string `json:"filename"`
 	Seqname     string `json:"seqname"`
 	Object      string `json:"-"`              // 3DO model for object-only features (wreckage)
+	FeatureDead string `json:"-"`              // next wreck in the damage chain (corpse -> heap)
 	Spin        bool   `json:"spin,omitempty"` // preview is a 3DO spin APNG (hover-only)
 	OriginX     int    `json:"originX"`
 	OriginY     int    `json:"originY"`
@@ -1309,6 +1438,7 @@ func (sess *Session) scanFeatures() ([]featureEntry, map[string]featureEntry) {
 				Filename:    f.Filename,
 				Seqname:     f.SeqName,
 				Object:      f.Object,
+				FeatureDead: f.FeatureDead,
 				Metal:       int(f.Metal),
 			}
 			if entry.Filename != "" && entry.Seqname != "" {
@@ -1532,32 +1662,52 @@ func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 	// Sanitise mapName — only ASCII letters/digits/space/underscore.
 	req.MapName = sanitiseMapName(req.MapName)
 
+	// A writable workspace session treats Save as a real save: every changed
+	// file the map comprises (TNT + OTA) is written into the workspace's
+	// copy-on-write VFS overlay, and the response is a JSON receipt rather
+	// than a download. Read-only context sessions have nowhere to write, so
+	// they keep the original behaviour: stream the packaged HPI download.
+	if sess.workDir != "" {
+		paths, err := sess.saveMapToWorkspace(req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "saved": paths})
+		return
+	}
 	hpiBytes, err := sess.buildHPI(req)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-	// In a workspace session, also persist the built map into the work folder
-	// (copy-on-write) so it becomes part of the mod and can be exported.
-	sess.persistMapToWorkspace(req)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
 	_, _ = w.Write(hpiBytes)
 }
 
-// persistMapToWorkspace writes the built TNT + OTA into the session's work
-// folder when it is a writable workspace. No-op for read-only context sessions.
-func (sess *Session) persistMapToWorkspace(req saveRequest) {
+// saveMapToWorkspace writes the built TNT + OTA into the session's writable
+// VFS overlay and returns the paths written. Errors when the session has no
+// work folder (read-only context).
+func (sess *Session) saveMapToWorkspace(req saveRequest) ([]string, error) {
 	if sess.workDir == "" || sess.vfs == nil {
-		return
+		return nil, fmt.Errorf("session has no writable workspace")
 	}
 	tntBytes, otaBytes, err := sess.buildArtifacts(req)
 	if err != nil {
-		return
+		return nil, err
 	}
 	name := strings.ToLower(req.MapName)
-	_ = sess.vfs.WriteFile("maps/"+name+".tnt", tntBytes)
-	_ = sess.vfs.WriteFile("maps/"+name+".ota", otaBytes)
+	tntPath, otaPath := "maps/"+name+".tnt", "maps/"+name+".ota"
+	if err := sess.vfs.WriteFile(tntPath, tntBytes); err != nil {
+		return nil, err
+	}
+	if err := sess.vfs.WriteFile(otaPath, otaBytes); err != nil {
+		return nil, err
+	}
+	// Drop the stale parse cache so the next load sees the saved bytes.
+	sess.uncacheTNT(tntPath)
+	return []string{tntPath, otaPath}, nil
 }
 
 // handleSaveLoose returns the TNT + OTA artifacts as a multipart

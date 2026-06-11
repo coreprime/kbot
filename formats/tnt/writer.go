@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/coreprime/kbot/formats/tnt/tak"
 )
 
 // HeaderSize is the on-disk size of the TNT header in bytes.
@@ -133,6 +135,33 @@ func (m *Map) Save(w io.Writer, features []Feature) error {
 	}
 
 	return nil
+}
+
+// SaveTAK writes a TA: Kingdoms (0x4000) TNT by delegating to the tak
+// subpackage (which owns the 0x4000 read/write variance). It builds the
+// subpackage's map view from the shared Map's TAK* fields — including the
+// sea-level value and header padding preserved from the original header — so an
+// edited heightmap / terrain-name / U-V / feature grid round-trips.
+func (m *Map) SaveTAK(w io.Writer) error {
+	if m == nil {
+		return fmt.Errorf("nil map")
+	}
+	if !m.IsTAK {
+		return fmt.Errorf("not a TA:K map (use Save for TA)")
+	}
+	tm := &tak.Map{
+		W: m.TAKW, H: m.TAKH, GUW: m.TAKGUW, GUH: m.TAKGUH,
+		Height: m.TAKHeight, FeatureGrid: m.TAKFeatureGrid,
+		FeatureTableRaw: m.TAKFeatureTableRaw, TerrainNames: m.TAKTerrainNames,
+		UMap: m.TAKUMap, VMap: m.TAKVMap,
+		Minimap: m.Minimap, MinimapW: m.MinimapW, MinimapH: m.MinimapH,
+	}
+	// Preserve the non-pointer header values TA:K keeps (sea level at 0x0c,
+	// the feature count at 0x1c, and the trailing pad words).
+	tm.Header.SeaLevel = m.Header.PTRMapData
+	tm.Header.FeatureCount = m.Header.TileAnims
+	tm.Header.Pad = [4]uint32{m.Header.Pad1, m.Header.Pad2, m.Header.Pad3, m.Header.Pad4}
+	return tak.Encode(w, tm)
 }
 
 func isZeroBytes(b []byte) bool {

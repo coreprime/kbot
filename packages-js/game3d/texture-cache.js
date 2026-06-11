@@ -102,7 +102,12 @@ export class TextureCache {
     const promise = (async () => {
       const img = new Image()
       img.crossOrigin = 'anonymous'
-      img.src = `/api/studio/texture/${encodeURIComponent(key)}`
+      // Keys may carry a resolver query ("name?side=ara") — split it out so
+      // the name is encoded but the query reaches the server intact.
+      const qi = key.indexOf('?')
+      img.src = qi === -1
+        ? `/api/studio/texture/${encodeURIComponent(key)}`
+        : `/api/studio/texture/${encodeURIComponent(key.slice(0, qi))}?${key.slice(qi + 1)}`
       await new Promise((resolve, reject) => {
         img.addEventListener('load', resolve, { once: true })
         img.addEventListener('error', reject, { once: true })

@@ -5,8 +5,10 @@
 package studio
 
 import (
+	"bufio"
 	"embed"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,7 +79,48 @@ func runStudio(_ *cobra.Command, args []string) error {
 	fmt.Printf("KBot Studio is running:\n")
 	fmt.Printf("  Open  http://localhost:%d  (workspace picker)\n", serverPort)
 	fmt.Printf("  Ctrl+C to stop\n\n")
-	return http.ListenAndServe(addr, mux)
+	var handler http.Handler = mux
+	if os.Getenv("KBOT_HTTP_LOG") != "" {
+		handler = requestLogger(mux)
+		fmt.Printf("  [KBOT_HTTP_LOG] request logging enabled\n\n")
+	}
+	return http.ListenAndServe(addr, handler)
+}
+
+// requestLogger wraps a handler to print "METHOD path -> status (dur)" per
+// request when KBOT_HTTP_LOG is set — a DevTools-free way to see what the
+// editor actually fetches (and whether it succeeds) while debugging.
+func requestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(sw, r)
+		fmt.Printf("[http] %-4s %-3d %5dms  %s\n", r.Method, sw.status, time.Since(start).Milliseconds(), r.URL.RequestURI())
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Flush/Hijack pass-through so SSE + websockets keep working under the logger.
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("hijack not supported")
 }
 
 // studioFSConfig returns the VFS config the studio mounts contexts with:

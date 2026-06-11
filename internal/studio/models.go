@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/jpeg"
 	"image/png"
 	"net/http"
@@ -315,6 +316,10 @@ type modelJSON struct {
 	// Empty string when the texture wasn't found in any GAF (the
 	// renderer's neutral-grey fallback will be used).
 	TextureSources map[string]string `json:"textureSources,omitempty"`
+	// TextureQuery is the query string clients append to each
+	// /api/studio/texture/<name> fetch so per-side texture names resolve
+	// against this unit's own side GAF ("side=ara"); empty for TA.
+	TextureQuery string `json:"textureQuery,omitempty"`
 	Bounds         *boundsJSON       `json:"bounds"` // axis-aligned bounds across the whole model in piece-local frames
 }
 
@@ -340,6 +345,11 @@ type primitiveJSON struct {
 	IsColored   bool     `json:"isColored"`
 	VertexCount int      `json:"vertexCount"`         // 1=point, 2=line, 3=tri, 4+=polygon
 	Synthetic   bool     `json:"synthetic,omitempty"` // reconstructed by FillModel, not original art
+	// ColorRGB is the server-resolved colour for an IsColored face, looked
+	// up through the game's palette resolver (TA: global palette; TA:K: the
+	// unit's side palette). Without it the client falls back to indexing
+	// its single global palette, which paints TA:K faces with TA colours.
+	ColorRGB *[3]int `json:"colorRGB,omitempty"`
 }
 
 // scale3DO converts a 3DO fixed-point int32 to a world-space float.
@@ -357,6 +367,15 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 	name = strings.ToLower(strings.TrimSuffix(name, ".3do"))
 	_, byID := sess.ensureModelIndex()
 	entry, ok := byID[name]
+	if !ok {
+		// Not a unit — wreck / feature 3DOs (corpse swaps, props) live in
+		// objects3d/ without an FBI, so resolve them by path directly.
+		p := "objects3d/" + name + ".3do"
+		if sess.vfs.Exists(p) {
+			entry = modelEntry{Name: name, Path: p}
+			ok = true
+		}
+	}
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
@@ -379,6 +398,13 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 		objects3d.FillModel(model, objects3d.FillOptions{})
 	}
 	out := &modelJSON{Name: entry.Name}
+	// Per-game colour table for IsColored faces (TA:K resolves the unit's
+	// side palette from its name prefix; TA uses the global palette).
+	colorPal := sess.palettes().modelColorPalette(entry.Name)
+	texSide := sess.palettes().textureSidePrefix(entry.Name)
+	if texSide != "" {
+		out.TextureQuery = "side=" + texSide
+	}
 	textures := map[string]bool{}
 	pieceNames := []string{}
 	bounds := &boundsJSON{
@@ -438,6 +464,10 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 				VertexCount: len(prim.VertexIndices),
 				Synthetic:   prim.Synthetic,
 			}
+			if prim.IsColored && prim.ColorIndex >= 0 && prim.ColorIndex < len(colorPal) {
+				cr, cg, cb, _ := colorPal[prim.ColorIndex].RGBA()
+				pj.ColorRGB = &[3]int{int(cr >> 8), int(cg >> 8), int(cb >> 8)}
+			}
 			for i, idx := range prim.VertexIndices {
 				if idx < 0 || idx > 65535 {
 					pj.Indices[i] = 0
@@ -463,14 +493,13 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 	// the index map to "" so the client can group those as
 	// "unknown / missing" — typical for stub textures the engine
 	// would substitute with the default grey.
-	texIdx := sess.ensureTextureIndex()
 	out.TextureSources = make(map[string]string)
 	for t := range textures {
 		out.Textures = append(out.Textures, t)
 		if sess.textureIsDecal(t) {
 			out.Decals = append(out.Decals, t)
 		}
-		if src, ok := texIdx[t]; ok {
+		if src, ok := sess.resolveTextureSource(t, texSide); ok {
 			out.TextureSources[t] = path.Base(src.GAFPath)
 		} else {
 			out.TextureSources[t] = ""
@@ -563,6 +592,7 @@ func (sess *Session) ensureTextureIndex() map[string]textureSource {
 // client asks for the actual PNG; sequence data isn't decoded here.
 func (sess *Session) buildTextureIndex() {
 	idx := make(map[string]textureSource)
+	all := make(map[string][]textureSource)
 	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
 		if !strings.HasPrefix(lower, "textures/") || !strings.HasSuffix(lower, ".gaf") {
@@ -583,15 +613,40 @@ func (sess *Session) buildTextureIndex() {
 		}
 		for _, s := range seqs {
 			key := strings.ToLower(s.Name)
+			src := textureSource{GAFPath: p, SeqName: s.Name, UseShadow: true}
+			// TA:K ships same-named team/logo textures in every side's GAF;
+			// keep every source so per-unit lookups can prefer the unit's own
+			// side (see resolveTextureSource).
+			all[key] = append(all[key], src)
 			if _, ok := idx[key]; ok {
 				continue
 			}
-			idx[key] = textureSource{GAFPath: p, SeqName: s.Name, UseShadow: true}
+			idx[key] = src
 		}
 	}
 	sess.textureIndexMu.Lock()
 	sess.textureIndex = idx
+	sess.textureIndexAll = all
 	sess.textureIndexMu.Unlock()
+}
+
+// resolveTextureSource resolves a texture name, preferring a GAF whose
+// basename starts with the given side prefix (e.g. "ara"). Side-less callers
+// (TA) get the default first-seen source.
+func (sess *Session) resolveTextureSource(name, side string) (textureSource, bool) {
+	idx := sess.ensureTextureIndex()
+	sess.textureIndexMu.Lock()
+	all := sess.textureIndexAll[name]
+	sess.textureIndexMu.Unlock()
+	if side != "" {
+		for _, src := range all {
+			if strings.HasPrefix(strings.ToLower(path.Base(src.GAFPath)), side) {
+				return src, true
+			}
+		}
+	}
+	src, ok := idx[name]
+	return src, ok
 }
 
 func (sess *Session) handleTextureImage(w http.ResponseWriter, r *http.Request) {
@@ -602,36 +657,42 @@ func (sess *Session) handleTextureImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name = strings.ToLower(strings.TrimSuffix(name, ".png"))
+	// ?side=<prefix> (TA:K): prefer the texture from that side's GAF when
+	// several sides ship the same name (team logos, tunic colours).
+	side := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("side")))
+	cacheKey := name
+	if side != "" {
+		cacheKey = name + "|" + side
+	}
 
 	sess.textureCacheMu.Lock()
-	cached, ok := sess.textureCache[name]
+	cached, ok := sess.textureCache[cacheKey]
 	sess.textureCacheMu.Unlock()
 	if ok {
 		serveTexturePNG(w, cached)
 		return
 	}
 
-	idx := sess.ensureTextureIndex()
-	src, ok := idx[name]
+	src, ok := sess.resolveTextureSource(name, side)
 	if !ok {
 		// Fall back to a 1×1 neutral grey texture so the client can keep
 		// rendering even when a 3DO references a missing or
 		// mod-specific texture name.
 		png := neutralTexturePNG()
 		sess.textureCacheMu.Lock()
-		sess.textureCache[name] = png
+		sess.textureCache[cacheKey] = png
 		sess.textureCacheMu.Unlock()
 		serveTexturePNG(w, png)
 		return
 	}
 
-	pngBytes, err := sess.renderTexturePNG(src)
+	pngBytes, err := sess.renderTexturePNG(src, side)
 	if err != nil {
 		http.Error(w, "render texture: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	sess.textureCacheMu.Lock()
-	sess.textureCache[name] = pngBytes
+	sess.textureCache[cacheKey] = pngBytes
 	sess.textureCacheMu.Unlock()
 	serveTexturePNG(w, pngBytes)
 }
@@ -642,7 +703,7 @@ func serveTexturePNG(w http.ResponseWriter, data []byte) {
 	_, _ = w.Write(data)
 }
 
-func (sess *Session) renderTexturePNG(src textureSource) ([]byte, error) {
+func (sess *Session) renderTexturePNG(src textureSource, side string) ([]byte, error) {
 	data, err := sess.vfs.ReadFile(src.GAFPath)
 	if err != nil {
 		return nil, err
@@ -670,20 +731,94 @@ func (sess *Session) renderTexturePNG(src textureSource) ([]byte, error) {
 		return nil, errors.New("sequence has no frames")
 	}
 	// The palette resolver picks the right table per game (TA: global;
-	// TA:Kingdoms: the texture GAF's per-side palette).
+	// TA:Kingdoms: the texture GAF's per-side palette) and the transparency
+	// mode (TA: opaque — palette[TI] is a real colour; TA:K: punch out the
+	// real transparent key, e.g. a dragon's magenta wings).
 	pal := sess.palettes().texturePalette(src.GAFPath)
-	// 3DO model textures are ALWAYS rendered fully opaque.  Unlike
-	// sprite GAFs, the TA engine doesn't punch through unit textures
-	// at the GAF's "transparency" index — palette[TI] is just another
-	// colour for asphalt / panel base / etc.  Forcing TransparencyModeNone
-	// fixes the long-running bug where runways and panel atlases let
-	// the ground plane bleed through dense palette[TI] regions.
-	opts := gaf.RenderOptions{Mode: gaf.TransparencyModeNone}
+	// The requesting unit's side palette beats the GAF-name-derived one:
+	// TA:K logo art is shared across sides and takes its team colours from
+	// the side palette of whoever wears it.
+	if side != "" {
+		if sp := sess.palettes().texturePaletteForSide(side); sp != nil {
+			pal = sp
+		}
+	}
+	// See resolver.textureRenderOptions: TA forces opaque (palette[TI] is just
+	// another colour for asphalt / panel base, and punching it out let the
+	// ground plane bleed through runways); TA:Kingdoms resolves a real
+	// transparent key so e.g. dragon wings read through.
+	opts := sess.palettes().textureRenderOptions(pal)
+	// Serve unit textures as true-colour PNG with the transparent texels'
+	// RGB bled from their opaque neighbours. An indexed PNG keeps the
+	// colour-key's RGB (TA:K uses magenta) under alpha 0, and the GPU's
+	// bilinear filter then smears pink fringes along every keyed edge.
+	frameImg := target.Frames[0].ToImageWith(pal, opts)
+	rgba := image.NewNRGBA(frameImg.Bounds())
+	draw.Draw(rgba, rgba.Bounds(), frameImg, frameImg.Bounds().Min, draw.Src)
+	// Bleed to completion: any transparent texel left with stale RGB still
+	// tints mip levels, so dilate until every texel has a neighbour-derived
+	// colour (texture tiles are small, the cost is microseconds).
+	bleedTransparentRGB(rgba, rgba.Bounds().Dx()+rgba.Bounds().Dy())
 	var buf bytes.Buffer
-	if err := target.Frames[0].ToPNGWith(pal, opts, &buf); err != nil {
+	if err := png.Encode(&buf, rgba); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// bleedTransparentRGB dilates opaque RGB into fully transparent pixels for a
+// few passes so texture filtering (and mip generation) blends edge texels
+// against their real neighbours instead of the punched-out colour key.
+// Alpha is left untouched.
+func bleedTransparentRGB(img *image.NRGBA, passes int) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	filled := make([]bool, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			filled[y*w+x] = img.Pix[(y*img.Stride)+x*4+3] != 0
+		}
+	}
+	for p := 0; p < passes; p++ {
+		next := make([]bool, len(filled))
+		copy(next, filled)
+		changed := false
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				if filled[y*w+x] {
+					continue
+				}
+				var r, g, bl, n int
+				probe := func(nx, ny int) {
+					if nx < 0 || ny < 0 || nx >= w || ny >= h || !filled[ny*w+nx] {
+						return
+					}
+					o := ny*img.Stride + nx*4
+					r += int(img.Pix[o])
+					g += int(img.Pix[o+1])
+					bl += int(img.Pix[o+2])
+					n++
+				}
+				probe(x-1, y)
+				probe(x+1, y)
+				probe(x, y-1)
+				probe(x, y+1)
+				if n == 0 {
+					continue
+				}
+				o := y*img.Stride + x*4
+				img.Pix[o] = uint8(r / n)
+				img.Pix[o+1] = uint8(g / n)
+				img.Pix[o+2] = uint8(bl / n)
+				next[y*w+x] = true
+				changed = true
+			}
+		}
+		filled = next
+		if !changed {
+			break
+		}
+	}
 }
 
 // neutralTexturePNG returns a tiny 2×2 grey PNG used as the fallback when

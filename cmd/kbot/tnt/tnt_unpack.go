@@ -48,6 +48,9 @@ a byte-identical TNT.`,
 			if err != nil {
 				return fmt.Errorf("parse tnt: %w", err)
 			}
+			if m.IsTAK {
+				return fmt.Errorf("TA: Kingdoms maps have no tile pool to unpack; use 'kbot tnt image' or 'kbot tnt heightmap' to export layers")
+			}
 			features, err := m.LoadFeatures(r)
 			if err != nil {
 				return fmt.Errorf("read features: %w", err)

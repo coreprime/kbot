@@ -113,6 +113,19 @@ type Unit struct {
 	// the result in the same tick before the dead thread is pruned. It is cleared
 	// at the top of every tickStep, so it only ever holds this tick's deaths.
 	doneReturns map[int32]int32
+	// doneCorpse mirrors doneReturns for TA's Killed(severity, corpsetype)
+	// out-param convention: when a thread dies, its second local (the
+	// corpsetype the script chose) is recorded here for a same-tick
+	// KilledStatus poll. Cleared with doneReturns at the top of each tick.
+	doneCorpse map[int32]int32
+	// weaponReady / weaponAborted accumulate TA:K's aim handshake: a v6 script
+	// signals "weapon N has an aim solution" by writing N into the WEAPON_READY
+	// port (and aborts via WEAPON_AIM_ABORTED) rather than returning a value
+	// from its aim thread. Each write sets bit N; the world's weapon state
+	// machine consumes bits through TakeWeaponReady / TakeWeaponAimAborted.
+	// Deterministic state: it only changes through script execution.
+	weaponReady   uint32
+	weaponAborted uint32
 	// breakpoints and executed back the studio debugger, which runs against this
 	// VM in the offline unit editor. breakpoints holds the byte offsets a thread
 	// should park on, keyed by script index; executed accumulates every offset the
@@ -223,6 +236,53 @@ func (u *Unit) ResetState() {
 	for k := range u.ports {
 		delete(u.ports, k)
 	}
+	u.weaponReady = 0
+	u.weaponAborted = 0
+}
+
+// noteWeaponPortWrite records a SET_VALUE write to one of TA:K's weapon
+// handshake ports. The written value is the weapon index; out-of-range
+// indices (a script writing garbage) are ignored rather than wrapped.
+func (u *Unit) noteWeaponPortWrite(port int, v int32) {
+	if v < 0 || v > 31 {
+		return
+	}
+	switch port {
+	case UVWeaponReady:
+		u.weaponReady |= 1 << uint(v)
+	case UVWeaponAimAborted:
+		u.weaponAborted |= 1 << uint(v)
+	}
+}
+
+// TakeWeaponReady reports whether the script has signalled WEAPON_READY for
+// the given weapon index since the last call, clearing the flag. This is the
+// TA:K equivalent of an aim thread returning TRUE.
+func (u *Unit) TakeWeaponReady(slot int) bool {
+	if slot < 0 || slot > 31 {
+		return false
+	}
+	bit := uint32(1) << uint(slot)
+	if u.weaponReady&bit == 0 {
+		return false
+	}
+	u.weaponReady &^= bit
+	return true
+}
+
+// TakeWeaponAimAborted reports whether the script has signalled
+// WEAPON_AIM_ABORTED for the given weapon index since the last call, clearing
+// the flag.
+func (u *Unit) TakeWeaponAimAborted(slot int) bool {
+	if slot < 0 || slot > 31 {
+		return false
+	}
+	bit := uint32(1) << uint(slot)
+	if u.weaponAborted&bit == 0 {
+		return false
+	}
+	u.weaponAborted &^= bit
+	return true
 }
 
 // SetUnitValuePort writes a COB unit-value port that scripts read via
@@ -429,6 +489,9 @@ func (u *Unit) tickStep() {
 	for k := range u.doneReturns {
 		delete(u.doneReturns, k)
 	}
+	for k := range u.doneCorpse {
+		delete(u.doneCorpse, k)
+	}
 	tickAnimArray(u.moveAnims)
 	tickAnimArray(u.rotAnims)
 	snap := append([]*thread(nil), u.threads...)
@@ -465,6 +528,10 @@ func (u *Unit) tickStep() {
 			u.doneReturns = make(map[int32]int32)
 		}
 		u.doneReturns[t.id] = t.returnValue
+		if u.doneCorpse == nil {
+			u.doneCorpse = make(map[int32]int32)
+		}
+		u.doneCorpse[t.id] = localAt(t.locals, 1)
 	}
 	u.threads = live
 }
@@ -647,6 +714,23 @@ func (u *Unit) AimStatus(id int32) (done bool, ret int32) {
 	}
 	if rv, ok := u.doneReturns[id]; ok {
 		return true, rv
+	}
+	return true, 1
+}
+
+// KilledStatus reports whether the tracked Killed thread has finished and,
+// when it has, the corpsetype its second local held — TA's out-param
+// convention (1 = intact corpse, 2 = damaged, 3 = nothing). A vanished or
+// never-real id reports (true, 1) so a unit whose death script was pruned
+// still leaves the default corpse.
+func (u *Unit) KilledStatus(id int32) (done bool, corpsetype int32) {
+	for _, t := range u.threads {
+		if t.id == id && !t.dead {
+			return false, 0
+		}
+	}
+	if v, ok := u.doneCorpse[id]; ok {
+		return true, v
 	}
 	return true, 1
 }
