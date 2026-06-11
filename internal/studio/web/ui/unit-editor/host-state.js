@@ -2,7 +2,7 @@
 //
 // Module-private host state for the unit editor: the currently-active
 // ModelViewer instance, the persisted Auto-Rotate toggle, the next-
-// open intent flag for the Open Unit picker, and the TEAM_COLOURS
+// open intent flag for the Open Unit picker, and the team-colour
 // palette the React ribbon hands back to the renderer.
 //
 // Why this lives here:
@@ -21,7 +21,7 @@
 //   - modelOpenIntent is the next-open intent ('add' | 'replace') the
 //     React ribbon's "Open another model…" sets right before kicking
 //     openModelPicker.  Lives next to the viewer it controls.
-//   - TEAM_COLOURS is the hue-shift table the ribbon's setTeamColor
+//   - teamColourForKey is the hue-shift lookup the ribbon's setTeamColor
 //     callback consumes; null at 'blue' disables the recolour shader
 //     entirely (matches the original game's "Blue (default)" semantics).
 //
@@ -29,6 +29,7 @@
 // through hostCallbacks (registered in studio.js's boot block) so the
 // API surface to non-unit-editor code is unchanged.
 
+import { TEAM_SIDES } from '@kbot/game3d/team-colors'
 import { getReactUi } from '../host-context.js'
 
 // modelViewerInstance — the currently-active unit-editor ModelViewer.
@@ -106,20 +107,16 @@ export function setModelOpenIntent(v) {
   modelOpenIntent = v
 }
 
-// TEAM_COLOURS — hue-shift RGB triplets the renderer's setTeamColor
-// applies to the unit's team-colour palette indices.  `blue` is the
-// ARM default and intentionally null so picking it disables the
-// shader's recolour entirely (matching the original game's "Blue
-// (default)" semantics).  Kept at module scope so the React ribbon's
-// bridge can look up a colour without re-importing game3d's tables.
-export const TEAM_COLOURS = {
-  blue:   null,
-  red:    [0.92, 0.18, 0.16],
-  green:  [0.20, 0.78, 0.28],
-  yellow: [0.95, 0.85, 0.20],
-  purple: [0.62, 0.30, 0.85],
-  cyan:   [0.20, 0.80, 0.92],
-  orange: [0.98, 0.55, 0.18],
-  white:  [0.95, 0.95, 0.95],
-  black:  [0.10, 0.10, 0.12],
+// teamColourForKey — hue-shift RGB triplet the renderer's setTeamColor
+// applies for a side key, read from the injected game team table (so a
+// custom game's sides drive the ribbon's team menu too). The side-0 key
+// returns null, disabling the shader's recolour entirely (matching the
+// original game's "Blue (default)" semantics). `white` is a viewer-only
+// extra the ribbon offers for screenshots; it is not a game side.
+const VIEWER_EXTRA_COLOURS = { white: [0.95, 0.95, 0.95] }
+
+export function teamColourForKey(key) {
+  const entry = TEAM_SIDES.find((s) => s.key === key)
+  if (entry) return entry.rgb
+  return VIEWER_EXTRA_COLOURS[key] ?? null
 }

@@ -41,7 +41,7 @@ import {
   getActiveModelViewer,
   setUnitEditorAutoRotate,
   setModelOpenIntent,
-  TEAM_COLOURS,
+  teamColourForKey,
 } from '../host-state.js'
 import { playWeaponSound, openWeaponPicker, selectPiece } from '../sidebar.js'
 import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
@@ -122,7 +122,7 @@ export function wireModelViewerRibbon() {
         getActiveModelViewer()?.renderer?.setEnvironment(env)
       },
       setTeamColor:    (key, _opts) => {
-        getActiveModelViewer()?.renderer?.setTeamColor(TEAM_COLOURS[key] ?? null)
+        getActiveModelViewer()?.renderer?.setTeamColor(teamColourForKey(key))
       },
 
       // Geometry — flip the shared Enhanced Mesh flag.  Every open

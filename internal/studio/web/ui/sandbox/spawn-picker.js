@@ -22,22 +22,13 @@
 // controls intercept wiring) lives in studio.js still and moves in
 // later rounds.
 
+import { TEAM_SIDES } from '@kbot/game3d/team-colors'
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { setMvInspectorVisible } from '../common/inspectors.js'
 
-// 8 team-colour swatches.  Same palette as TEAM_SIDES in
-// game3d/team-colors.js — inlined here so this module doesn't have
-// to import the engine module at popup-render time.
-const SIDES = [
-  { side: 0, key: 'blue',   css: '#3a6cd6', label: 'Blue (ARM)' },
-  { side: 1, key: 'red',    css: '#eb2e29', label: 'Red (CORE)' },
-  { side: 2, key: 'green',  css: '#34c747', label: 'Green' },
-  { side: 3, key: 'yellow', css: '#f3d933', label: 'Yellow' },
-  { side: 4, key: 'purple', css: '#9e4dd9', label: 'Purple' },
-  { side: 5, key: 'cyan',   css: '#34ccea', label: 'Cyan' },
-  { side: 6, key: 'orange', css: '#fa8d2e', label: 'Orange' },
-  { side: 7, key: 'black',  css: '#1a1a1f', label: 'Black' },
-]
+// Team-colour swatches come from the injected game table (TEAM_SIDES is
+// configured from the active game's adapter at boot), so a custom game's
+// sides show up here without touching the sandbox.
 
 // ensureSandboxPanel — bring up the React-rendered sandbox panel the
 // first time the user enters sandbox mode.  The Preact island owns
@@ -120,7 +111,7 @@ export function openSandboxSpawnPicker(sourceEl = null) {
       'gap: 6px',
       'box-shadow: 0 6px 20px rgba(0,0,0,0.45)',
     ].join('; ')
-    for (const s of SIDES) {
+    for (const s of TEAM_SIDES) {
       const sw = document.createElement('button')
       sw.type = 'button'
       sw.className = 'sandbox-side-swatch'
@@ -132,7 +123,7 @@ export function openSandboxSpawnPicker(sourceEl = null) {
         'border: 2px solid rgba(255,255,255,0.15)',
         'cursor: pointer',
         'padding: 0',
-        `background: ${s.css}`,
+        `background: ${s.swatchCss}`,
       ].join('; ')
       sw.addEventListener('click', () => {
         window.__sandboxSpawnPendingSide = s.side
