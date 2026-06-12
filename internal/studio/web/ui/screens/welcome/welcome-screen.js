@@ -137,6 +137,59 @@ function _JoinPicker({ onOpenSandbox, onBack }) {
   `
 }
 
+// _BattlefieldPicker — the map-choice step in front of Local Sandbox:
+// The Grid (the classic blank floor) or any TNT from the workspace,
+// each with its embedded minimap as the thumbnail.  Picking one hands
+// { mapPath } up through onOpenSandbox (The Grid passes none) and the
+// sandbox activation applies it once the scene is ready.
+function _BattlefieldPicker({ onOpenSandbox, onBack }) {
+  const [state, setState] = useState({ status: 'loading', maps: [], error: null })
+  useEffect(() => {
+    let ok = true
+    fetch('/api/studio/maps')
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+      .then((d) => { if (ok) setState({ status: 'ready', maps: (d && d.maps) || [], error: null }) })
+      .catch((e) => { if (ok) setState({ status: 'error', maps: [], error: String(e && e.message || e) }) })
+    return () => { ok = false }
+  }, [])
+  const pick = (mapPath) => {
+    _sandboxView.value = 'menu'
+    if (!onOpenSandbox) return
+    onOpenSandbox(mapPath ? { mapPath } : {})
+  }
+  const base = (typeof window !== 'undefined' && window.__WS_BASE__) || ''
+  return html`
+    <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox-map">
+      <div class="welcome-join-head">
+        <button class="welcome-link-btn" onClick=${() => onBack && onBack()}>← Back</button>
+        <span class="welcome-join-msg">Choose a battlefield</span>
+      </div>
+      <ul class="welcome-join-list welcome-map-list">
+        <li key="__grid__">
+          <button class="welcome-join-row" onClick=${() => pick(null)}>
+            <span class="welcome-map-thumb welcome-map-grid"></span>
+            <span class="welcome-join-name">The Grid</span>
+            <span class="welcome-join-meta">Blank floor — no terrain rules</span>
+          </button>
+        </li>
+        ${state.status === 'loading' ? html`<li><p class="welcome-join-msg">Loading maps…</p></li>` : null}
+        ${state.status === 'error' ? html`<li><p class="welcome-join-msg welcome-join-err">Couldn't list maps: ${state.error}</p></li>` : null}
+        ${state.maps.map((m) => html`
+          <li key=${m.path}>
+            <button class="welcome-join-row" onClick=${() => pick(m.path)}>
+              <img class="welcome-map-thumb" loading="lazy" alt=""
+                   src=${`${base}/api/studio/minimap/${m.path}`}
+                   onError=${(e) => { e.currentTarget.style.visibility = 'hidden' }} />
+              <span class="welcome-join-name">${m.name || m.path}</span>
+              ${m.numPlayers ? html`<span class="welcome-join-meta">${m.numPlayers} players</span>` : null}
+            </button>
+          </li>
+        `)}
+      </ul>
+    </div>
+  `
+}
+
 // _WorkspaceFootnote reports which VFS / workspace the studio is serving
 // (the active kbot context's base path plus headline counts), fetched
 // once from the explorer's ?stats document.  Stays silent until the
@@ -224,14 +277,19 @@ export function WelcomeScreen({
         onOpenSandbox=${onOpenSandbox}
         onBack=${() => { _sandboxView.value = 'menu' }} />
     ` : null}
-    ${active === 'sandbox' && _sandboxView.value !== 'join' ? html`
+    ${active === 'sandbox' && _sandboxView.value === 'map' ? html`
+      <${_BattlefieldPicker}
+        onOpenSandbox=${onOpenSandbox}
+        onBack=${() => { _sandboxView.value = 'menu' }} />
+    ` : null}
+    ${active === 'sandbox' && _sandboxView.value !== 'join' && _sandboxView.value !== 'map' ? html`
       <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox">
         <div class="welcome-options" ref=${cardRowRef}>
           <${_Card}
             icon="🪖"
             title="Local Sandbox"
-            sub="Drop units on a blank battlefield and test them live, in-browser."
-            onClick=${() => onOpenSandbox && onOpenSandbox()} />
+            sub="Pick a battlefield and test units live, in-browser."
+            onClick=${() => { _sandboxView.value = 'map' }} />
           <${_Card}
             icon="🌐"
             title="New Hosted"

@@ -7283,6 +7283,24 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 #sandbox-economy-bar .eco-rate-neg { color: #e25b52; }
 #sandbox-economy-bar .eco-total { font-size: 10px; color: rgba(255, 255, 255, 0.45); }
 
+/* Welcome battlefield chooser — map rows with minimap thumbnails. */
+.welcome-map-list .welcome-join-row { display: flex; align-items: center; gap: 12px; }
+.welcome-map-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.5);
+  flex: none;
+}
+.welcome-map-grid {
+  background:
+    linear-gradient(rgba(32, 192, 88, 0.55) 1px, transparent 1px) 0 0 / 9px 9px,
+    linear-gradient(90deg, rgba(32, 192, 88, 0.55) 1px, transparent 1px) 0 0 / 9px 9px,
+    #04130a;
+}
+.welcome-map-list { max-height: 320px; overflow-y: auto; }
+
 /* Sandbox battlefield picker — list of maps with minimap thumbnails. */
 #sandbox-map-picker {
   position: absolute;

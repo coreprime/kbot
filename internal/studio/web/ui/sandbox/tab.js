@@ -141,7 +141,9 @@ export function openSandboxStub(opts = {}) {
   // world (Local mode).  opts.displayName lets the hosted modes label
   // the tab after the match instead of the generic counter.
   const displayName = opts.displayName || `Sandbox ${_sandboxLabelCounter}`
-  hostCallbacks.openTab?.('sandbox', { displayName, joinUrl: opts.joinUrl || null })
+  // opts.mapPath (set by the welcome battlefield picker) loads that TNT
+  // as the tab's terrain once the scene is ready; absent = The Grid.
+  hostCallbacks.openTab?.('sandbox', { displayName, joinUrl: opts.joinUrl || null, mapPath: opts.mapPath || null })
 }
 
 export async function activateSandboxTab(tab) {
@@ -242,6 +244,19 @@ export async function activateSandboxTab(tab) {
     })
     await v.open()
     tab.panes.set(tab.activePaneId, v)
+    // Welcome-picker battlefield: apply the chosen map to the freshly
+    // opened scene (sim height field + draped terrain + camera at the
+    // first player start). Once per tab — re-activations keep it.
+    if (tab._mapPath && !tab._mapApplied) {
+      tab._mapApplied = true
+      try {
+        const { loadSandboxMap } = await import('./map-loader.js')
+        const info = await loadSandboxMap(v, tab._mapPath)
+        v.setStatus?.(`Battlefield: ${info.name} — camera at player 1 start.`)
+      } catch (e) {
+        v.setStatus?.(`Map load failed: ${e?.message || e}`)
+      }
+    }
   }
   // Swap the module-local + legacy tab.viewer so the rest of the
   // studio reads the active pane's view.
