@@ -37,6 +37,9 @@ const (
 	// 1 maneuver, 2 roam) and FireMode (0 hold fire, 1 return fire,
 	// 2 fire at will).
 	KindStance
+	// SelfDestruct toggles UnitIDs' 5-second self-destruct fuse: armed units
+	// disarm, idle units start counting down to their selfdestructas blast.
+	KindSelfDestruct
 )
 
 // Standing-order values carried by a Stance order.
@@ -132,6 +135,11 @@ func Patrol(units []uint32, target fixed.Vec2) Order {
 // Stance sets the units' standing move and fire orders.
 func Stance(units []uint32, moveMode, fireMode int) Order {
 	return Order{Kind: KindStance, UnitIDs: units, MoveMode: moveMode, FireMode: fireMode}
+}
+
+// SelfDestruct toggles the units' self-destruct fuses.
+func SelfDestruct(units []uint32) Order {
+	return Order{Kind: KindSelfDestruct, UnitIDs: units}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

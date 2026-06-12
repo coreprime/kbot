@@ -436,6 +436,7 @@ func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 			MoveMode: ru.MoveMode, FireMode: ru.FireMode,
 			HomeX: ru.HomePos.X, HomeZ: ru.HomePos.Z,
 			AutoEngaged: ru.AutoEngaged, CurIsPatrol: ru.CurIsPatrol,
+			SelfDAtMs: ru.SelfDAtMs,
 		}
 		if full {
 			us.Cob = ru.Cob

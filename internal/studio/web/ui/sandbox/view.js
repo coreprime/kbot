@@ -1670,6 +1670,19 @@ export class SandboxView {
         }
         return
       }
+      // Ctrl+D toggles self-destruct on the selection: a 5-second fuse with
+      // a countdown over each unit, ending in its selfdestructas blast.
+      // Pressing again disarms. Checked before the modifier gate (and ahead
+      // of the selection hotkeys — keys.tdf maps CTRL_D to the same verb).
+      if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        const ids = this.getSelectedUnits().map((u) => u.id)
+        if (ids.length > 0 && this.scene.source.selfDestruct) {
+          e.preventDefault()
+          this.scene.source.selfDestruct(ids)
+          this.#setStatus(`Self-destruct toggled on ${ids.length} unit${ids.length === 1 ? '' : 's'} — Ctrl+D again to disarm.`)
+          return
+        }
+      }
       // Game-defined selection hotkeys (keys.tdf, or the adapter's default
       // table) — SelectUnits <token> and friends. Tried before the modifier
       // gate because most bindings are Ctrl+letter chords.
@@ -2221,6 +2234,23 @@ export class SandboxView {
     const ctx = hud.getContext('2d')
     ctx.clearRect(0, 0, w, h)
     if (!this.scene) return
+    // Self-destruct countdowns paint over EVERY armed unit, selected or
+    // not — a live fuse is exactly the thing the user must not lose sight
+    // of. Big pulsing digit above the unit, seconds remaining.
+    for (const u of this.scene.units()) {
+      if (!u || u.dead || !(u.selfDestructMs > 0)) continue
+      const head = this.#worldToScreen(u.pos.x, u.pos.y + 30, u.pos.z)
+      if (!head) continue
+      const secs = Math.max(1, Math.ceil(u.selfDestructMs / 1000))
+      const pulse = 1 + 0.25 * (1 - ((u.selfDestructMs % 1000) / 1000))
+      ctx.font = `bold ${Math.round(20 * pulse)}px ui-sans-serif, system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.lineWidth = 3
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+      ctx.fillStyle = '#ff5340'
+      ctx.strokeText(String(secs), head[0], head[1])
+      ctx.fillText(String(secs), head[0], head[1])
+    }
     const ids = new Set()
     if (this._healthBars) for (const id of this.scene.selected) ids.add(id)
     if (this._lastHoverUnitId) ids.add(this._lastHoverUnitId)

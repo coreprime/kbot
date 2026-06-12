@@ -16,6 +16,12 @@ func (w *World) Snapshot() frame.Snapshot {
 		if u.binding != nil {
 			pieces = u.binding.Pieces()
 		}
+		var selfDMs int64
+		if u.selfDAtMs > 0 {
+			if selfDMs = u.selfDAtMs - w.simMs; selfDMs < 0 {
+				selfDMs = 0
+			}
+		}
 		var queue []frame.QueuedOrder
 		if len(u.queue) > 0 {
 			queue = make([]frame.QueuedOrder, 0, len(u.queue))
@@ -40,8 +46,9 @@ func (w *World) Snapshot() frame.Snapshot {
 			Queue:        queue,
 			Building:     u.buildName,
 			ProdQueue:    u.prodQueue,
-			MoveMode:     u.moveMode,
-			FireMode:     u.fireMode,
+			MoveMode:       u.moveMode,
+			FireMode:       u.fireMode,
+			SelfDestructMs: selfDMs,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -142,6 +149,7 @@ func (w *World) Hash() uint64 {
 		if u.autoEngaged {
 			mix(3)
 		}
+		mix(uint64(u.selfDAtMs))
 		mix(uint64(len(u.prodQueue)))
 		for _, name := range u.prodQueue {
 			for i := 0; i < len(name); i++ {

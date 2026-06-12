@@ -143,6 +143,10 @@ type Unit struct {
 	wanderAtMs  int64
 	curIsPatrol bool
 
+	// selfDAtMs is the armed self-destruct detonation time (0 = no fuse).
+	// Ctrl+D toggles it; the countdown surfaces on the render snapshot.
+	selfDAtMs int64
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
@@ -742,6 +746,7 @@ type RestoredUnit struct {
 	HomePos     fixed.Vec2
 	AutoEngaged bool
 	CurIsPatrol bool
+	SelfDAtMs   int64
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -860,6 +865,7 @@ func (w *World) ExportUnits() []RestoredUnit {
 			HomePos:       u.homePos,
 			AutoEngaged:   u.autoEngaged,
 			CurIsPatrol:   u.curIsPatrol,
+			SelfDAtMs:     u.selfDAtMs,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
@@ -972,6 +978,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			homePos:      ru.HomePos,
 			autoEngaged:  ru.AutoEngaged,
 			curIsPatrol:  ru.CurIsPatrol,
+			selfDAtMs:    ru.SelfDAtMs,
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
 			IsMoving:     ru.HasMove,
@@ -1137,6 +1144,16 @@ func (w *World) ApplyOrder(o order.Order) {
 				u.enqueue(queuedCommand{kind: order.KindPatrol, target: o.Target})
 				if idle {
 					w.advanceQueue(u)
+				}
+			}
+		}
+	case order.KindSelfDestruct:
+		for _, id := range o.UnitIDs {
+			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() {
+				if u.selfDAtMs != 0 {
+					u.selfDAtMs = 0 // second press disarms
+				} else {
+					u.selfDAtMs = w.simMs + selfDestructCountdownMs
 				}
 			}
 		}
@@ -1335,46 +1352,18 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 	t.provokedMs = w.simMs
 	w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
 	if t.Health <= 0 {
-		t.Health = 0
-		t.Dead = true
-		// Run the unit's death script so its corpse animation plays and its
-		// EXPLODE opcodes emit debris effects (drained into the render event
-		// stream like any other effect). TA's Killed(severity, corpsetype)
-		// takes a severity input; corpsetype is an output the script fills, so
-		// it starts at zero. Fire-and-forget — the corpse value isn't read back.
 		// severity is the killing blow as a percentage of the unit's full
 		// health bar — the figure TA's Killed(severity, corpsetype) scripts
 		// threshold on (<=25 leaves a clean corpse, <=50 a damaged one,
 		// beyond that debris or nothing). dmg was already scaled onto the
-		// percent bar above.
-		severity := int(dmg.Float())
-		if t.binding != nil && t.binding.HasScript("Killed") {
-			// TA:K adds a third damagetype argument; passing it to a TA
-			// script is harmless (extra locals are simply unread). The
-			// thread is tracked so stepCorpse can read the corpsetype the
-			// script wrote into its second local once the death sequence
-			// finishes.
-			if ab, ok := t.binding.(aimBinding); ok {
-				t.killedThread = ab.StartAim("Killed", severity, 0, 0)
-				t.corpsePending = true
-			} else {
-				t.binding.Start("Killed", severity, 0, 0)
-				w.emitCorpse(t, 1)
-			}
-		} else {
-			w.emitCorpse(t, 1)
+		// percent bar above. An ordinary death detonates the unit's
+		// explodeas blast; self-destruct routes through killUnit with
+		// selfdestructas instead.
+		var blast Blast
+		if t.Meta != nil {
+			blast = t.Meta.Explode
 		}
-		// TA:K splits the death sequence: Killed picks the corpse, Dying plays
-		// the fall animation and reports completion through FINISHED_DYING.
-		// Without it a TA:K unit dies standing in its rest pose.
-		t.diedAtMs = w.simMs
-		if t.binding != nil && t.binding.HasScript("Dying") {
-			t.dyingPending = true
-			t.binding.Start("Dying", 0)
-		}
-		anchor := t.Pos()
-		anchor.Y += fixed.FromInt(18)
-		w.emit(frame.Event{Kind: frame.EvDeath, UnitID: targetID, Anchor: anchor})
+		w.killUnit(t, int(dmg.Float()), blast)
 		return true
 	}
 	return false

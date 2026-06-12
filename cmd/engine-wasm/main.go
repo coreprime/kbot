@@ -56,6 +56,7 @@ func main() {
 		"submitBuild":  js.FuncOf(submitBuild),
 		"submitPatrol": js.FuncOf(submitPatrol),
 		"submitStance": js.FuncOf(submitStance),
+		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
@@ -284,6 +285,16 @@ func submitStance(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.Stance(uint32Slice(args[1]), args[2].Int(), args[3].Int())))
+}
+
+// submitSelfDestruct(handle, unitIds[]) -> execTick. Toggles the 5-second
+// self-destruct fuse on each unit.
+func submitSelfDestruct(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.sess.Submit(order.SelfDestruct(uint32Slice(args[1]))))
 }
 
 // submitStop(handle, unitIds[]) -> execTick.

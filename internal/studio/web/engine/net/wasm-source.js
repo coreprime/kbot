@@ -152,9 +152,11 @@ export class WasmFrameSource extends FrameSource {
   build(builderId, name, x, z) { return this._engine.submitBuild(this._handle, builderId, name, x, z) }
 
   // patrol appends a patrol waypoint to each unit's queue (consecutive
-  // patrol legs loop); stance sets the standing move/fire orders.
+  // patrol legs loop); stance sets the standing move/fire orders;
+  // selfDestruct toggles the 5-second fuse.
   patrol(unitIds, x, z) { return this._engine.submitPatrol(this._handle, unitIds, x, z) }
   stance(unitIds, moveMode, fireMode) { return this._engine.submitStance(this._handle, unitIds, moveMode, fireMode) }
+  selfDestruct(unitIds) { return this._engine.submitSelfDestruct(this._handle, unitIds) }
 
   // scheduleAt queues an authoritative order at an exact tick.  The networked
   // source uses it to apply command frames the server broadcasts.

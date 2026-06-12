@@ -43,6 +43,8 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	// Fire at Will).
 	m.StandMove = uint8(getInt(o, "standingMoveOrder"))
 	m.StandFire = uint8(getInt(o, "standingFireOrder"))
+	m.Explode = blastFromJS(o.Get("explodeWeapon"))
+	m.SelfD = blastFromJS(o.Get("selfDestructWeapon"))
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
@@ -70,8 +72,8 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Burst:    burst,
 		// damageDefault is the [DAMAGE] table's `default=` — the weapon's
 		// absolute per-shot damage (the `damage` key is the per-target map).
-		Damage: fixed.FromFloat(getFloat(o, "damageDefault")),
-		Present:  true,
+		Damage:  fixed.FromFloat(getFloat(o, "damageDefault")),
+		Present: true,
 
 		// Firing arc (TA-angle units): aircraft must point the airframe within
 		// this of the target bearing before the weapon opens fire.
@@ -94,6 +96,18 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Tracks:          getBool(o, "tracks"),
 		SelfProp:        getBool(o, "selfProp"),
 		Ballistic:       getBool(o, "ballistic"),
+	}
+}
+
+// blastFromJS reads a resolved death-blast stat block off the unit meta.
+func blastFromJS(o js.Value) sim.Blast {
+	if o.Type() != js.TypeObject || o.IsNull() {
+		return sim.Blast{}
+	}
+	return sim.Blast{
+		Damage: fixed.FromFloat(getFloat(o, "damage")),
+		AoE:    fixed.FromFloat(getFloat(o, "areaOfEffectWU")),
+		Edge:   fixed.FromFloat(getFloat(o, "edgeEffectiveness")),
 	}
 }
 
@@ -145,18 +159,18 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 					Y: fixed.Fixed(getInt64(u, "y")),
 					Z: fixed.Fixed(getInt64(u, "z")),
 				},
-				Heading:      fixed.Fixed(getInt64(u, "heading")),
-				Speed:        fixed.Fixed(getInt64(u, "speed")),
-				HasMove:      getBool(u, "hasMove"),
-				MoveTarget:   fixed.Vec2{X: fixed.Fixed(getInt64(u, "tx")), Z: fixed.Fixed(getInt64(u, "tz"))},
-				Health:       fixed.Fixed(getInt64(u, "health")),
-				Dead:         getBool(u, "dead"),
-				HasAttack:    getBool(u, "hasAttack"),
-				AttackTarget: uint32(getInt(u, "attackTarget")),
-				BuildPercent: fixed.Fixed(getInt64(u, "buildPercent")),
-				BuildState:   uint8(getInt(u, "buildState")),
-				BuildName:    getString(u, "buildName"),
-				BuildSite:    fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
+				Heading:       fixed.Fixed(getInt64(u, "heading")),
+				Speed:         fixed.Fixed(getInt64(u, "speed")),
+				HasMove:       getBool(u, "hasMove"),
+				MoveTarget:    fixed.Vec2{X: fixed.Fixed(getInt64(u, "tx")), Z: fixed.Fixed(getInt64(u, "tz"))},
+				Health:        fixed.Fixed(getInt64(u, "health")),
+				Dead:          getBool(u, "dead"),
+				HasAttack:     getBool(u, "hasAttack"),
+				AttackTarget:  uint32(getInt(u, "attackTarget")),
+				BuildPercent:  fixed.Fixed(getInt64(u, "buildPercent")),
+				BuildState:    uint8(getInt(u, "buildState")),
+				BuildName:     getString(u, "buildName"),
+				BuildSite:     fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
 				BuildTargetID: uint32(getInt(u, "buildTargetId")),
 				ProdQueue:     stringSliceFromJS(u.Get("prodQueue")),
 				MoveMode:      uint8(getInt(u, "moveMode")),
@@ -164,6 +178,7 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				HomePos:       fixed.Vec2{X: fixed.Fixed(getInt64(u, "homeX")), Z: fixed.Fixed(getInt64(u, "homeZ"))},
 				AutoEngaged:   getBool(u, "autoEngaged"),
 				CurIsPatrol:   getBool(u, "curIsPatrol"),
+				SelfDAtMs:     getInt64(u, "selfDAtMs"),
 			}
 			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
 				for i := 0; i < qs.Length(); i++ {
@@ -402,6 +417,9 @@ func snapshotToWireJS(inst *instance) js.Value {
 		if ru.CurIsPatrol {
 			entry["curIsPatrol"] = true
 		}
+		if ru.SelfDAtMs != 0 {
+			entry["selfDAtMs"] = float64(ru.SelfDAtMs)
+		}
 		if ru.BuildState != 0 {
 			entry["buildState"] = int(ru.BuildState)
 			entry["buildName"] = ru.BuildName
@@ -567,25 +585,26 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		})
 	}
 	out := map[string]any{
-		"id":           int(u.ID),
-		"name":         u.Name,
-		"side":         u.Side,
-		"x":            u.Pos.X.Float(),
-		"y":            u.Pos.Y.Float(),
-		"z":            u.Pos.Z.Float(),
-		"heading":      int(u.Heading),
-		"headingRad":   fixed.AngleToRadians(u.Heading),
-		"speed":        u.Speed.Float(),
-		"health":       u.Health.Float(),
-		"dead":         u.Dead,
-		"buildPercent": u.BuildPercent.Float(),
-		"isMoving":     u.IsMoving,
-		"hasMove":      u.HasMove,
-		"moveX":        u.MoveTarget.X.Float(),
-		"moveZ":        u.MoveTarget.Z.Float(),
-		"moveMode":     int(u.MoveMode),
-		"fireMode":     int(u.FireMode),
-		"pieces":       pieces,
+		"id":             int(u.ID),
+		"name":           u.Name,
+		"side":           u.Side,
+		"x":              u.Pos.X.Float(),
+		"y":              u.Pos.Y.Float(),
+		"z":              u.Pos.Z.Float(),
+		"heading":        int(u.Heading),
+		"headingRad":     fixed.AngleToRadians(u.Heading),
+		"speed":          u.Speed.Float(),
+		"health":         u.Health.Float(),
+		"dead":           u.Dead,
+		"buildPercent":   u.BuildPercent.Float(),
+		"isMoving":       u.IsMoving,
+		"hasMove":        u.HasMove,
+		"moveX":          u.MoveTarget.X.Float(),
+		"moveZ":          u.MoveTarget.Z.Float(),
+		"moveMode":       int(u.MoveMode),
+		"fireMode":       int(u.FireMode),
+		"selfDestructMs": int(u.SelfDestructMs),
+		"pieces":         pieces,
 	}
 	// Production state, for the build-menu counters: the type currently
 	// raising on the pad plus the factory's pending run in click order.
@@ -634,6 +653,7 @@ var eventNames = map[frame.EventKind]string{
 	frame.EvCorpseSpawn:     "corpseSpawn",
 	frame.EvBuildStart:      "buildStart",
 	frame.EvBuildStop:       "buildStop",
+	frame.EvBlast:           "blast",
 }
 
 func eventToJS(e *frame.Event) map[string]any {

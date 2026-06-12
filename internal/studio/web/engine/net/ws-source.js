@@ -422,6 +422,11 @@ export class WsFrameSource extends FrameSource {
     this._send({ Kind: 9, UnitIDs: unitIds, MoveMode: moveMode | 0, FireMode: fireMode | 0 })
   }
 
+  // selfDestruct toggles the units' 5-second fuses (Kind 10).
+  selfDestruct(unitIds) {
+    this._send({ Kind: 10, UnitIDs: unitIds })
+  }
+
   // spawn requests a new unit by type name at a world point. Like every order
   // it round-trips through the authority, which stamps an execution tick and
   // broadcasts a command frame; the unit then materializes on every client at

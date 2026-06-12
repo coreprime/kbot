@@ -49,6 +49,13 @@ type UnitMeta struct {
 	StandMove uint8
 	StandFire uint8
 
+	// Death blasts: the resolved explodeas weapon (ordinary death) and
+	// selfdestructas weapon (Ctrl+D). Damage is absolute per-shot, AoE the
+	// blast diameter in world units, Edge the damage fraction left at the
+	// rim. A zero-damage blast deals no splash (visual only).
+	Explode Blast
+	SelfD   Blast
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero
@@ -56,6 +63,13 @@ type UnitMeta struct {
 	MaxHealth fixed.Fixed
 
 	Weapons [3]WeaponMeta
+}
+
+// Blast is one resolved death-explosion weapon's stat block.
+type Blast struct {
+	Damage fixed.Fixed
+	AoE    fixed.Fixed
+	Edge   fixed.Fixed
 }
 
 // WeaponMeta holds the per-slot weapon stats the engine acts on.

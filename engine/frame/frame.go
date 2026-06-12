@@ -55,6 +55,9 @@ type UnitState struct {
 	// (values follow order.Move*/Fire*).
 	MoveMode uint8
 	FireMode uint8
+	// SelfDestructMs is the remaining fuse time (0 = no fuse armed) for the
+	// countdown overlay.
+	SelfDestructMs int64
 }
 
 // ResourceState is one side's resource usage figures for the HUD: totals
@@ -125,6 +128,10 @@ const (
 	// client runs its per-game lathe/casting effect between them.
 	EvBuildStart
 	EvBuildStop
+	// EvBlast is a death explosion (explodeas / selfdestructas): Anchor is
+	// the blast centre and SfxType carries the blast diameter in world
+	// units, so the client sizes its explosion visual from the game data.
+	EvBlast
 )
 
 // Event is a discrete occurrence during a tick. Only the fields meaningful for

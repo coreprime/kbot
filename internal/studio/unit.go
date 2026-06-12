@@ -130,6 +130,12 @@ type unitMetaJSON struct {
 	StandingMoveOrder int `json:"standingMoveOrder,omitempty"`
 	StandingFireOrder int `json:"standingFireOrder,omitempty"`
 
+	// Resolved death-blast stats: the explodeas / selfdestructas weapon's
+	// damage, blast diameter and edge falloff, so the sim deals splash on
+	// death without chasing weapon TDFs itself.
+	ExplodeWeapon     *explosionJSON `json:"explodeWeapon,omitempty"`
+	SelfDestructWeapn *explosionJSON `json:"selfDestructWeapon,omitempty"`
+
 	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
@@ -556,7 +562,10 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// Death explosion FBI refs — surfaced for the client's death-FX
 	// path.  Uppercased so the eventual /api/studio/weapon-fx/<name>
 	// fetch matches the weapon-by-name resolver (which lowercases for
-	// comparison anyway).
+	// comparison anyway).  The resolved blast stats ride alongside so the
+	// sim deals data-faithful splash damage on death.
+	out.ExplodeWeapon = sess.resolveExplosion(info.ExplodeAs)
+	out.SelfDestructWeapn = sess.resolveExplosion(info.SelfDestructAs)
 	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.ExplodeAs))
 	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.SelfDestructAs))
 	// Sounds — the game adapter resolves SoundCategory into an event map
@@ -671,6 +680,35 @@ func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
 	out.Tolerance = sec.AimTolerance
 	if d, ok := sec.Damage["default"]; ok {
 		out.DamageDefault = int(d)
+	}
+}
+
+// explosionJSON is a resolved death-blast stat block: the explodeas /
+// selfdestructas weapon's per-shot damage, blast diameter (world units) and
+// edge falloff fraction (damage multiplier at the blast rim, 0..1).
+type explosionJSON struct {
+	Damage            float64 `json:"damage"`
+	AreaOfEffectWU    float64 `json:"areaOfEffectWU"`
+	EdgeEffectiveness float64 `json:"edgeEffectiveness"`
+}
+
+// resolveExplosion loads a death-blast weapon ref into its stat block, or
+// nil when the FBI names none / the ref doesn't resolve.
+func (sess *Session) resolveExplosion(name string) *explosionJSON {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	sec := sess.loadWeaponSection(name)
+	if sec == nil {
+		return nil
+	}
+	var w unitWeaponJSON
+	populateWeaponJSON(&w, sec)
+	return &explosionJSON{
+		Damage:            float64(w.DamageDefault),
+		AreaOfEffectWU:    w.AreaOfEffectWU,
+		EdgeEffectiveness: w.EdgeEffectiveness,
 	}
 }
 

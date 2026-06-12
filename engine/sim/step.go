@@ -62,6 +62,10 @@ func (w *World) Step(rt Runtime) {
 		if u.underConstruction() {
 			continue
 		}
+		w.stepSelfDestruct(u)
+		if u.Dead {
+			continue
+		}
 		w.stepBuilder(u)
 		w.stepStance(u)
 		w.stepAttack(u)

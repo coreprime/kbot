@@ -1107,6 +1107,9 @@ export class WasmSandboxScene {
       // Standing orders — the Controls panel's Move/Fire rows read these.
       u._stance.move = su.moveMode | 0
       u._stance.fire = su.fireMode | 0
+      // Armed self-destruct fuse remaining (ms; 0 = off) for the countdown
+      // overlay above the unit.
+      u.selfDestructMs = su.selfDestructMs | 0
       if (su.hasMove) {
         if (!u._moveTarget) u._moveTarget = { x: su.moveX, z: su.moveZ }
         else { u._moveTarget.x = su.moveX; u._moveTarget.z = su.moveZ }
@@ -1287,6 +1290,14 @@ export class WasmSandboxScene {
         case 'buildStop':
           if (this._activeBuilds) this._activeBuilds.delete(ev.unitId)
           break
+        case 'blast': {
+          // Death explosion (explodeas / selfdestructas) — sized from the
+          // weapon's blast diameter (sfxType, world units) so a commander
+          // blast reads catastrophically bigger than a peewee pop.
+          const aoe = Math.max(32, ev.sfxType | 0)
+          this._flash(ev.unitId, ev, aoe, 950, [1.9, 0.8, 0.25, 1.0])
+          break
+        }
         default:
           break
       }

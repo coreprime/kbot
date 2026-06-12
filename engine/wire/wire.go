@@ -185,6 +185,7 @@ type UnitSnap struct {
 	HomeZ       fixed.Fixed `json:"homeZ"`
 	AutoEngaged bool        `json:"autoEngaged,omitempty"`
 	CurIsPatrol bool        `json:"curIsPatrol,omitempty"`
+	SelfDAtMs   int64       `json:"selfDAtMs,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry
