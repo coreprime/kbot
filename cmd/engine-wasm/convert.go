@@ -39,6 +39,10 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
 	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))
 	m.CostMana = fixed.FromFloat(getFloat(o, "costMana"))
+	// 0 / absent means "game default" — AddUnit resolves it (Maneuver /
+	// Fire at Will).
+	m.StandMove = uint8(getInt(o, "standingMoveOrder"))
+	m.StandFire = uint8(getInt(o, "standingFireOrder"))
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
@@ -106,6 +110,8 @@ func orderFromJS(o js.Value) order.Order {
 		Name:          getString(o, "Name"),
 		Heading:       int32(getInt(o, "Heading")),
 		Side:          getInt(o, "Side"),
+		MoveMode:      getInt(o, "MoveMode"),
+		FireMode:      getInt(o, "FireMode"),
 	}
 	ord.UnitIDs = uint32Slice(o.Get("UnitIDs"))
 	if t := o.Get("Target"); t.Truthy() {
@@ -153,6 +159,11 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				BuildSite:    fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
 				BuildTargetID: uint32(getInt(u, "buildTargetId")),
 				ProdQueue:     stringSliceFromJS(u.Get("prodQueue")),
+				MoveMode:      uint8(getInt(u, "moveMode")),
+				FireMode:      uint8(getInt(u, "fireMode")),
+				HomePos:       fixed.Vec2{X: fixed.Fixed(getInt64(u, "homeX")), Z: fixed.Fixed(getInt64(u, "homeZ"))},
+				AutoEngaged:   getBool(u, "autoEngaged"),
+				CurIsPatrol:   getBool(u, "curIsPatrol"),
 			}
 			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
 				for i := 0; i < qs.Length(); i++ {
@@ -379,8 +390,18 @@ func snapshotToWireJS(inst *instance) js.Value {
 			"attackTarget": int(ru.AttackTarget),
 			"weapons":      weapons,
 			"buildPercent": float64(ru.BuildPercent),
+			"moveMode":     int(ru.MoveMode),
+			"fireMode":     int(ru.FireMode),
+			"homeX":        float64(ru.HomePos.X),
+			"homeZ":        float64(ru.HomePos.Z),
 		}
-		// Mirror the wire's omitempty for the builder-job fields.
+		// Mirror the wire's omitempty flags.
+		if ru.AutoEngaged {
+			entry["autoEngaged"] = true
+		}
+		if ru.CurIsPatrol {
+			entry["curIsPatrol"] = true
+		}
 		if ru.BuildState != 0 {
 			entry["buildState"] = int(ru.BuildState)
 			entry["buildName"] = ru.BuildName
@@ -562,6 +583,8 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"hasMove":      u.HasMove,
 		"moveX":        u.MoveTarget.X.Float(),
 		"moveZ":        u.MoveTarget.Z.Float(),
+		"moveMode":     int(u.MoveMode),
+		"fireMode":     int(u.FireMode),
 		"pieces":       pieces,
 	}
 	// Production state, for the build-menu counters: the type currently

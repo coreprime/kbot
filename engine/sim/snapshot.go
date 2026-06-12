@@ -40,6 +40,8 @@ func (w *World) Snapshot() frame.Snapshot {
 			Queue:        queue,
 			Building:     u.buildName,
 			ProdQueue:    u.prodQueue,
+			MoveMode:     u.moveMode,
+			FireMode:     u.fireMode,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -129,6 +131,17 @@ func (w *World) Hash() uint64 {
 		// pending production run.
 		mix(uint64(u.BuildPercent))
 		mix(uint64(u.buildState))
+		// Standing orders steer autonomous behaviour, so a divergent stance
+		// or post must surface as a desync.
+		mix(uint64(u.moveMode)<<8 | uint64(u.fireMode))
+		mix(uint64(u.homePos.X))
+		mix(uint64(u.homePos.Z))
+		if u.curIsPatrol {
+			mix(2)
+		}
+		if u.autoEngaged {
+			mix(3)
+		}
 		mix(uint64(len(u.prodQueue)))
 		for _, name := range u.prodQueue {
 			for i := 0; i < len(name); i++ {

@@ -43,6 +43,12 @@ type UnitMeta struct {
 	CostEnergy fixed.Fixed
 	CostMana   fixed.Fixed
 
+	// Default standing orders the unit spawns with (FBI standingmoveorder /
+	// standingfireorder, already resolved to the game defaults — Maneuver /
+	// Fire at Will — when the FBI is silent).
+	StandMove uint8
+	StandFire uint8
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero

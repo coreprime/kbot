@@ -14,6 +14,7 @@ func TestAttackOutOfRangeClosesDistance(t *testing.T) {
 	w := New(Config{Seed: 7})
 	atk := w.AddUnit("atk", testMeta("atk"), nil, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(600)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 
 	u := w.UnitByID(atk)
@@ -58,6 +59,7 @@ func TestAttackRechasesFleeingTarget(t *testing.T) {
 	weak.Weapons[0].Damage = fixed.FromInt(1)
 	atk := w.AddUnit("atk", weak, nil, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(150)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 
 	u := w.UnitByID(atk)

@@ -49,6 +49,7 @@ func TestQueuedAttackAfterMove(t *testing.T) {
 	w := New(Config{Seed: 2})
 	atk := w.AddUnit("atk", testMeta("atk"), nil, fixed.Vec2{}, 0, 0)
 	prey := w.AddUnit("prey", testMeta("prey"), nil, fixed.Vec2{X: fixed.FromInt(140)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{prey}, order.MoveHold, order.FireHold))
 	rally := fixed.Vec2{Z: fixed.FromInt(60)}
 	home := fixed.Vec2{X: fixed.FromInt(-60)}
 	w.ApplyOrder(order.Move([]uint32{atk}, rally))
@@ -114,6 +115,7 @@ func TestQueueSurvivesExportRestore(t *testing.T) {
 	w := New(Config{Seed: 5})
 	id := w.AddUnit("m", testMeta("m"), nil, fixed.Vec2{}, 0, 0)
 	prey := w.AddUnit("prey", testMeta("prey"), nil, fixed.Vec2{X: fixed.FromInt(900)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{prey}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(100)}))
 	w.ApplyOrder(order.AttackQueued([]uint32{id}, prey))
 	w.ApplyOrder(order.MoveQueued([]uint32{id}, fixed.Vec2{X: fixed.FromInt(200)}))

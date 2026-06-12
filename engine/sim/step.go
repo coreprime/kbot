@@ -3,6 +3,7 @@ package sim
 import (
 	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/frame"
+	"github.com/coreprime/kbot/engine/order"
 )
 
 const (
@@ -62,6 +63,7 @@ func (w *World) Step(rt Runtime) {
 			continue
 		}
 		w.stepBuilder(u)
+		w.stepStance(u)
 		w.stepAttack(u)
 		w.stepMovement(u)
 		w.stepWeapons(u)
@@ -398,8 +400,17 @@ func (w *World) stepAttack(u *Unit) {
 	}
 	dist := u.loco.Pos.DistTo(t.loco.Pos)
 	if dist > rngF {
-		// Out of range — chase the prey's current position and drop slot 0 so the
-		// SM doesn't burn aim threads while we walk.
+		// Out of range. Hold Position never steps off its spot — it waits
+		// for the prey to come to it (an autonomous engagement stands down
+		// so acquisition can re-pick something reachable).
+		if u.moveMode == MoveHold {
+			if u.autoEngaged {
+				w.standDown(u)
+			}
+			return
+		}
+		// Chase the prey's current position and drop slot 0 so the SM
+		// doesn't burn aim threads while we walk.
 		u.hasMove = true
 		u.moveTarget = t.loco.Pos
 		s := &u.weapons[0]
@@ -609,6 +620,11 @@ func (w *World) stepMovement(u *Unit) {
 		} else if arrived {
 			u.hasMove = false
 			u.IsMoving = false
+			// A completed patrol leg re-queues itself at the tail, so N
+			// consecutive patrol commands loop the route indefinitely.
+			if u.curIsPatrol {
+				u.enqueue(queuedCommand{kind: order.KindPatrol, target: u.moveTarget})
+			}
 			// A player move completing starts the next shift-queued order. A
 			// chase move (stepAttack walking into range) arrives with hasAttack
 			// still set — the attack is the active order, so its queue waits.

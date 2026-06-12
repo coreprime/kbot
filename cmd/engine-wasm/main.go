@@ -54,6 +54,8 @@ func main() {
 		"submitFire":   js.FuncOf(submitFire),
 		"submitStop":   js.FuncOf(submitStop),
 		"submitBuild":  js.FuncOf(submitBuild),
+		"submitPatrol": js.FuncOf(submitPatrol),
+		"submitStance": js.FuncOf(submitStance),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
@@ -261,6 +263,27 @@ func submitBuild(_ js.Value, args []js.Value) any {
 	}
 	target := fixed.Vec2{X: fixed.FromFloat(args[3].Float()), Z: fixed.FromFloat(args[4].Float())}
 	return int(inst.sess.Submit(order.Build(uint32(args[1].Int()), args[2].String(), target)))
+}
+
+// submitPatrol(handle, unitIds[], tx, tz) -> execTick. Appends a patrol
+// waypoint to each unit's queue; consecutive patrol legs loop.
+func submitPatrol(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	target := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
+	return int(inst.sess.Submit(order.Patrol(uint32Slice(args[1]), target)))
+}
+
+// submitStance(handle, unitIds[], moveMode, fireMode) -> execTick. Sets the
+// units' standing move/fire orders (order.Move*/Fire* values).
+func submitStance(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.sess.Submit(order.Stance(uint32Slice(args[1]), args[2].Int(), args[3].Int())))
 }
 
 // submitStop(handle, unitIds[]) -> execTick.

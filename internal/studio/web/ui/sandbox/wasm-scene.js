@@ -99,7 +99,18 @@ class WasmUnit {
     this.model = null      // per-unit clone; snapshot pieces written here
     this.meta = null       // FBI + weapon metadata (weapon driver / sounds)
     this.cobUnit = null    // COB runs server-side now; kept for shape parity
-    this.cobPorts = {}
+    // cobPorts mirrors the unit-value surface the Controls panel edits.
+    // moveOrders/fireOrders are live: reads reflect the sim's standing
+    // orders (synced from every snapshot), writes dispatch a Stance order
+    // so the change is authoritative and stays in lockstep.
+    this._stance = { move: 1, fire: 2 }
+    const self = this
+    this.cobPorts = {
+      get moveOrders() { return self._stance.move },
+      set moveOrders(v) { self._scene.source.stance([self.id], v | 0, self._stance.fire) },
+      get fireOrders() { return self._stance.fire },
+      set fireOrders(v) { self._scene.source.stance([self.id], self._stance.move, v | 0) },
+    }
     this._cobPieceNames = []
     this.pos = { x: 0, y: 0, z: 0 }
     this.heading = 0       // radians
@@ -1093,6 +1104,9 @@ export class WasmSandboxScene {
       // raising on this builder's pad plus a factory's pending run.
       u.building = su.building || ''
       u.prodQueue = su.prodQueue || []
+      // Standing orders — the Controls panel's Move/Fire rows read these.
+      u._stance.move = su.moveMode | 0
+      u._stance.fire = su.fireMode | 0
       if (su.hasMove) {
         if (!u._moveTarget) u._moveTarget = { x: su.moveX, z: su.moveZ }
         else { u._moveTarget.x = su.moveX; u._moveTarget.z = su.moveZ }

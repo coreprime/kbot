@@ -29,6 +29,25 @@ const (
 	// ground point Target: walk into builddistance, then gradually raise the
 	// buildee's build percentage until it is complete and commandable.
 	KindBuild
+	// Patrol appends a patrol waypoint to UnitIDs' queues. Consecutive
+	// patrol entries loop: a completed leg re-queues itself at the tail, so
+	// the unit cycles its patrol route until ordered otherwise.
+	KindPatrol
+	// Stance sets UnitIDs' standing orders: MoveMode (0 hold position,
+	// 1 maneuver, 2 roam) and FireMode (0 hold fire, 1 return fire,
+	// 2 fire at will).
+	KindStance
+)
+
+// Standing-order values carried by a Stance order.
+const (
+	MoveHold     = 0
+	MoveManeuver = 1
+	MoveRoam     = 2
+
+	FireHold   = 0
+	FireReturn = 1
+	FireAtWill = 2
 )
 
 // Order is a tagged command. Only the fields relevant to Kind are populated;
@@ -69,6 +88,10 @@ type Order struct {
 	SpawnAt fixed.Vec2
 	Heading int32
 	Side    int
+
+	// Standing orders for Stance (always both set; see Move/Fire constants).
+	MoveMode int
+	FireMode int
 }
 
 // Move builds a move order.
@@ -99,6 +122,16 @@ func Stop(units []uint32) Order {
 // Build sends one mobile builder to construct unit type name at a ground point.
 func Build(builder uint32, name string, target fixed.Vec2) Order {
 	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target}
+}
+
+// Patrol appends a patrol waypoint to each unit's queue.
+func Patrol(units []uint32, target fixed.Vec2) Order {
+	return Order{Kind: KindPatrol, UnitIDs: units, Target: target}
+}
+
+// Stance sets the units' standing move and fire orders.
+func Stance(units []uint32, moveMode, fireMode int) Order {
+	return Order{Kind: KindStance, UnitIDs: units, MoveMode: moveMode, FireMode: fireMode}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

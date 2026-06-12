@@ -187,6 +187,9 @@ export class ArmedCursor {
     let srcName
     switch (this._slot) {
       case 'move':   srcName = 'cursormove'; break
+      // Patrol shares the move glyph — neither game ships a dedicated
+      // patrol cursor GAF.
+      case 'patrol': srcName = 'cursormove'; break
       case 'select': srcName = 'cursorselect'; break
       case 'normal': srcName = 'cursornormal'; break
       // primary / secondary / tertiary / attack share the attack glyph by

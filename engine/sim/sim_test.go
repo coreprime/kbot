@@ -179,6 +179,7 @@ func TestFireGatedOnAimCompletion(t *testing.T) {
 	}
 	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 
 	// First few ticks: in range and reloaded, but the aim is still turning, so
@@ -319,6 +320,7 @@ func TestTAKWeaponConvention(t *testing.T) {
 	}
 	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 	for i := 0; i < 80; i++ {
 		w.Step(nil)
@@ -360,6 +362,7 @@ func TestTAKFireGatedOnWeaponReady(t *testing.T) {
 	}
 	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 	for i := 0; i < 20; i++ {
 		w.Step(nil)
@@ -382,6 +385,7 @@ func TestTAKTargetClearedNotified(t *testing.T) {
 	}
 	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
+	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 	for i := 0; i < 500; i++ {
 		w.Step(nil)

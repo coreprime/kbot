@@ -127,6 +127,22 @@ type Unit struct {
 	// job whenever the pad is idle.
 	prodQueue []string
 
+	// Standing orders + their working state. moveMode/fireMode follow the
+	// order.Move*/Fire* values (seeded from FBI defaults at spawn). homePos
+	// anchors Maneuver's leash and post-combat return; autoEngaged marks an
+	// attack the unit acquired itself (so completion returns it home rather
+	// than leaving it wherever the chase ended); provokedMs is the last time
+	// the unit took damage (Return Fire's trigger); wanderAtMs schedules a
+	// Roamer's next idle wander; curIsPatrol marks the active move as a
+	// patrol leg that re-queues itself on arrival.
+	moveMode    uint8
+	fireMode    uint8
+	homePos     fixed.Vec2
+	autoEngaged bool
+	provokedMs  int64
+	wanderAtMs  int64
+	curIsPatrol bool
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
@@ -635,6 +651,21 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 		BuildPercent: fixed.FromInt(100),
 		binding:      binding,
 	}
+	// Standing-order defaults: the FBI's standingmoveorder/standingfireorder
+	// when set, else the game defaults (Maneuver / Fire at Will). An FBI 0 is
+	// indistinguishable from absent through the meta pipeline, so explicit
+	// Hold ships via a Stance order instead.
+	u.moveMode = MoveManeuver
+	u.fireMode = FireAtWill
+	if meta != nil {
+		if meta.StandMove >= 1 && meta.StandMove <= 2 {
+			u.moveMode = meta.StandMove
+		}
+		if meta.StandFire >= 1 && meta.StandFire <= 2 {
+			u.fireMode = meta.StandFire
+		}
+	}
+	u.homePos = at
 	u.loco.Pos = at
 	u.loco.Heading = fixed.FromInt(int(fixed.NormalizeAngle(heading)))
 	w.units[id] = u
@@ -704,6 +735,13 @@ type RestoredUnit struct {
 	BuildSite     fixed.Vec2
 	BuildTargetID uint32
 	ProdQueue     []string
+	// Standing orders + their working state, so a joiner's units keep the
+	// same stances, posts and patrol/auto-engage status.
+	MoveMode    uint8
+	FireMode    uint8
+	HomePos     fixed.Vec2
+	AutoEngaged bool
+	CurIsPatrol bool
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -817,6 +855,11 @@ func (w *World) ExportUnits() []RestoredUnit {
 			BuildSite:     u.buildSite,
 			BuildTargetID: u.buildeeID,
 			ProdQueue:     append([]string(nil), u.prodQueue...),
+			MoveMode:      u.moveMode,
+			FireMode:      u.fireMode,
+			HomePos:       u.homePos,
+			AutoEngaged:   u.autoEngaged,
+			CurIsPatrol:   u.curIsPatrol,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
@@ -924,6 +967,11 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			buildSite:    ru.BuildSite,
 			buildeeID:    ru.BuildTargetID,
 			prodQueue:    append([]string(nil), ru.ProdQueue...),
+			moveMode:     ru.MoveMode,
+			fireMode:     ru.FireMode,
+			homePos:      ru.HomePos,
+			autoEngaged:  ru.AutoEngaged,
+			curIsPatrol:  ru.CurIsPatrol,
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
 			IsMoving:     ru.HasMove,
@@ -1072,6 +1120,41 @@ func (w *World) ApplyOrder(o order.Order) {
 				// Move cancels an autonomous attack (as in TA); a committed bomb
 				// run survives so the bomb-and-bail tactic still lays its string.
 				u.hasAttack = false
+				u.autoEngaged = false
+				u.curIsPatrol = false
+				// The destination becomes the unit's new post — Maneuver's
+				// leash and post-combat return anchor there.
+				u.homePos = o.Target
+			}
+		}
+	case order.KindPatrol:
+		for _, id := range o.UnitIDs {
+			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() &&
+				u.Meta != nil && u.Meta.CanMove {
+				// Patrol waypoints always queue; the first one starts at once
+				// when the unit has nothing in flight.
+				idle := !u.busy()
+				u.enqueue(queuedCommand{kind: order.KindPatrol, target: o.Target})
+				if idle {
+					w.advanceQueue(u)
+				}
+			}
+		}
+	case order.KindStance:
+		for _, id := range o.UnitIDs {
+			if u := w.units[id]; u != nil && !u.Dead {
+				if o.MoveMode >= order.MoveHold && o.MoveMode <= order.MoveRoam {
+					u.moveMode = uint8(o.MoveMode)
+				}
+				if o.FireMode >= order.FireHold && o.FireMode <= order.FireAtWill {
+					u.fireMode = uint8(o.FireMode)
+					// Hold Fire stands an autonomous engagement down at once.
+					if u.fireMode == order.FireHold && u.autoEngaged {
+						u.hasAttack = false
+						u.attackTarget = 0
+						u.autoEngaged = false
+					}
+				}
 			}
 		}
 	case order.KindAttack:
@@ -1173,18 +1256,21 @@ func (u *Unit) enqueue(c queuedCommand) {
 	u.queue = append(u.queue, c)
 }
 
-// advanceQueue pops deferred orders until one takes effect: a queued move
-// arms locomotion; a queued attack arms pursuit if its target is still alive,
-// else it is skipped and the next entry is tried.
+// advanceQueue pops deferred orders until one takes effect: a queued move or
+// patrol leg arms locomotion (a patrol leg re-queues itself on arrival); a
+// queued attack arms pursuit if its target is still alive, else it is
+// skipped and the next entry is tried.
 func (w *World) advanceQueue(u *Unit) {
+	u.curIsPatrol = false
 	for len(u.queue) > 0 {
 		c := u.queue[0]
 		u.queue = u.queue[1:]
 		switch c.kind {
-		case order.KindMove:
+		case order.KindMove, order.KindPatrol:
 			u.hasMove = true
 			u.moveTarget = c.target
 			u.hasAttack = false
+			u.curIsPatrol = c.kind == order.KindPatrol
 			return
 		case order.KindAttack:
 			if t := w.units[c.targetUnit]; t != nil && !t.Dead && t != u {
@@ -1212,6 +1298,10 @@ func (w *World) stopUnit(id uint32) {
 	u.atkActive = false
 	u.bombRunActive = false
 	u.prodQueue = nil
+	u.curIsPatrol = false
+	u.autoEngaged = false
+	// Standing here is the unit's new post.
+	u.homePos = u.loco.Pos
 	w.cancelBuild(u)
 	for i := range u.weapons {
 		w.clearWeaponSlot(u, i)
@@ -1239,6 +1329,10 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 		}
 	}
 	t.Health -= dmg
+	// Mark the provocation for Return Fire: a damaged unit engages back and
+	// stays engaged while enemies remain in reach (stepStance re-arms off
+	// this stamp).
+	t.provokedMs = w.simMs
 	w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
 	if t.Health <= 0 {
 		t.Health = 0

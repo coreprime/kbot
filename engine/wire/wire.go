@@ -178,6 +178,13 @@ type UnitSnap struct {
 	BuildSiteZ    fixed.Fixed `json:"buildSiteZ,omitempty"`
 	BuildTargetID uint32      `json:"buildTargetId,omitempty"`
 	ProdQueue     []string    `json:"prodQueue,omitempty"`
+	// Standing orders + working state (posts, patrol/auto-engage flags).
+	MoveMode    uint8       `json:"moveMode"`
+	FireMode    uint8       `json:"fireMode"`
+	HomeX       fixed.Fixed `json:"homeX"`
+	HomeZ       fixed.Fixed `json:"homeZ"`
+	AutoEngaged bool        `json:"autoEngaged,omitempty"`
+	CurIsPatrol bool        `json:"curIsPatrol,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry

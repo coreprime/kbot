@@ -1195,6 +1195,9 @@ export class SandboxView {
   //
   // Accepted slots:
   //   'move'                    — next click sets move target
+  //   'patrol'                  — clicks append looping patrol waypoints
+  //                               (stays armed so a route lays click by
+  //                               click; Esc disarms)
   //   'attack'                  — generic primary-weapon attack
   //   'primary' / 'secondary' / 'tertiary'
   //                             — fire the named weapon slot at the
@@ -1202,7 +1205,7 @@ export class SandboxView {
   //                               unit-editor's Controls panel
   //                               arm-then-target semantics).
   setPendingCommand(cmd) {
-    const valid = (cmd === 'move' || cmd === 'attack' ||
+    const valid = (cmd === 'move' || cmd === 'attack' || cmd === 'patrol' ||
                    cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
     // A weapon slot can only be armed when at least one selected unit actually
     // carries a weapon in that slot.  Firing an empty slot is a no-op in the
@@ -1223,7 +1226,9 @@ export class SandboxView {
     // needing a separate code path here.
     this.#refreshDefaultCursor()
     if (this._pendingCmd) {
-      const what = (cmd === 'move') ? 'a destination' : 'a target unit'
+      const what = (cmd === 'move') ? 'a destination'
+        : (cmd === 'patrol') ? 'patrol waypoints (Esc to finish)'
+          : 'a target unit'
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
@@ -1687,6 +1692,13 @@ export class SandboxView {
         this.#setStatus(`Group ${digit} — ${live.length} unit${live.length === 1 ? '' : 's'} selected.`)
         return
       }
+      // P arms Patrol — subsequent clicks lay looping waypoints (the
+      // keys.tdf "UnitCommand Patrol" binding; Esc finishes the route).
+      if ((e.key === 'p' || e.key === 'P') && this.scene && this.scene.selected.size > 0) {
+        e.preventDefault()
+        this.setPendingCommand('patrol')
+        return
+      }
       // Backquote toggles the persistent health-bar layer for selected
       // units (hover bars always show). Bespoke rather than wireHotkeys
       // because it must work with an empty selection too.
@@ -1955,6 +1967,13 @@ export class SandboxView {
     // to selecting the nearest unit by screen-projected distance.
     const world = this.#screenToGround(sx, sy)
     // If a command is pending (Move / Attack), consume it.
+    if (this._pendingCmd === 'patrol' && world && this.scene.selected.size > 0) {
+      // Patrol waypoints lay click by click and the command STAYS armed —
+      // consecutive points loop the route sim-side; Esc finishes.
+      const n = this.issuePatrol(world)
+      this.#setStatus(`Patrol waypoint added for ${n} unit(s) — keep clicking to extend the loop, Esc to finish.`)
+      return
+    }
     if (this._pendingCmd === 'move' && world && this.scene.selected.size > 0) {
       // issueMove fans the Move order out to every selected unit,
       // clears autonomous attack pursuit, preserves manual weapon
@@ -2404,6 +2423,16 @@ export class SandboxView {
     }
     if (firstPursuer) this.playUnitSoundRandom(firstPursuer, ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return n
+  }
+
+  // issuePatrol appends a looping patrol waypoint for every selected mobile
+  // unit (the sim cycles consecutive patrol entries until reordered).
+  issuePatrol(point) {
+    const units = this.getSelectedUnits().filter((u) => !u.meta || u.meta.canMove !== false)
+    if (!units.length || !point || !this.scene.source.patrol) return 0
+    this.scene.source.patrol(units.map((u) => u.id), point[0], point[2])
+    this.playUnitSoundRandom(units[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return units.length
   }
 
   // stop halts every selected unit through engine.stopUnits — the

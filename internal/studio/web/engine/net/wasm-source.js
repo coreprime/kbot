@@ -151,6 +151,11 @@ export class WasmFrameSource extends FrameSource {
   // ground point — walk into builddistance, then raise the buildee to 100%.
   build(builderId, name, x, z) { return this._engine.submitBuild(this._handle, builderId, name, x, z) }
 
+  // patrol appends a patrol waypoint to each unit's queue (consecutive
+  // patrol legs loop); stance sets the standing move/fire orders.
+  patrol(unitIds, x, z) { return this._engine.submitPatrol(this._handle, unitIds, x, z) }
+  stance(unitIds, moveMode, fireMode) { return this._engine.submitStance(this._handle, unitIds, moveMode, fireMode) }
+
   // scheduleAt queues an authoritative order at an exact tick.  The networked
   // source uses it to apply command frames the server broadcasts.
   scheduleAt(tick, order) { this._engine.scheduleAt(this._handle, tick, order) }

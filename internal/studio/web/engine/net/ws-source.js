@@ -412,6 +412,16 @@ export class WsFrameSource extends FrameSource {
     this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) } })
   }
 
+  // patrol appends a patrol waypoint (Kind 8); stance sets the standing
+  // move/fire orders (Kind 9).
+  patrol(unitIds, x, z) {
+    this._send({ Kind: 8, UnitIDs: unitIds, Target: { X: toFixed(x), Z: toFixed(z) } })
+  }
+
+  stance(unitIds, moveMode, fireMode) {
+    this._send({ Kind: 9, UnitIDs: unitIds, MoveMode: moveMode | 0, FireMode: fireMode | 0 })
+  }
+
   // spawn requests a new unit by type name at a world point. Like every order
   // it round-trips through the authority, which stamps an execution tick and
   // broadcasts a command frame; the unit then materializes on every client at

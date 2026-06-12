@@ -51,6 +51,10 @@ type UnitState struct {
 	// pending production run in click order.
 	Building  string
 	ProdQueue []string
+	// Standing orders, for the Controls panel's Move/Fire orders rows
+	// (values follow order.Move*/Fire*).
+	MoveMode uint8
+	FireMode uint8
 }
 
 // ResourceState is one side's resource usage figures for the HUD: totals

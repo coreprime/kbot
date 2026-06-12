@@ -124,6 +124,12 @@ type unitMetaJSON struct {
 	CostEnergy float64 `json:"costEnergy,omitempty"`
 	CostMana   float64 `json:"costMana,omitempty"`
 
+	// Default standing orders (FBI standingmoveorder / standingfireorder).
+	// 0 in the FBI is indistinguishable from absent, so 0 here means "use
+	// the game default" (Maneuver / Fire at Will) — the sim resolves it.
+	StandingMoveOrder int `json:"standingMoveOrder,omitempty"`
+	StandingFireOrder int `json:"standingFireOrder,omitempty"`
+
 	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
@@ -477,6 +483,8 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.CostMetal = info.BuildCostMetal
 	out.CostEnergy = float64(info.BuildCostEnergy)
 	out.CostMana = float64(info.BuildCost)
+	out.StandingMoveOrder = info.StandingMoveOrder
+	out.StandingFireOrder = info.StandingFireOrder
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
 	for _, tok := range info.Category {
