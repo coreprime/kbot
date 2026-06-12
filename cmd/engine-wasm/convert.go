@@ -34,6 +34,8 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.BuildTime = fixed.FromFloat(getFloat(o, "buildTime"))
 	m.WorkerTime = getInt(o, "workerTime")
 	m.BuildDistance = fixed.FromFloat(getFloat(o, "buildDistance"))
+	m.FootprintX = getInt(o, "footprintX")
+	m.FootprintZ = getInt(o, "footprintZ")
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {

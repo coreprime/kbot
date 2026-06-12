@@ -31,6 +31,11 @@ type UnitMeta struct {
 	WorkerTime    int
 	BuildDistance fixed.Fixed
 
+	// FootprintX/Z are the FBI footprint in map squares; collisionRadius
+	// derives the body circle the collision/avoidance passes use.
+	FootprintX int
+	FootprintZ int
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero
@@ -83,6 +88,20 @@ type WeaponMeta struct {
 // the model-less shots authoritatively is what lets them survive a join/restore.
 func (w WeaponMeta) flies() bool {
 	return !w.BeamWeapon
+}
+
+// collisionRadius derives the unit's body circle from its FBI footprint
+// (squares of 8 world units; the radius is half the wider side). Units with
+// no footprint get a small vehicle-sized default.
+func (m *UnitMeta) collisionRadius() fixed.Fixed {
+	f := m.FootprintX
+	if m.FootprintZ > f {
+		f = m.FootprintZ
+	}
+	if f <= 0 {
+		return fixed.FromInt(8)
+	}
+	return fixed.Clamp(fixed.FromInt(f*4), fixed.FromInt(6), fixed.FromInt(48))
 }
 
 // movement-rate conversions. TA simulates locomotion at 30 Hz, so an FBI

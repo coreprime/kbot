@@ -61,6 +61,7 @@ func (w *World) Step(rt Runtime) {
 		w.stepMovement(u)
 		w.stepWeapons(u)
 	}
+	w.stepCollisions()
 	w.stepProjectiles()
 }
 
@@ -487,9 +488,16 @@ func (u *Unit) inBombDropWindow(slot int, wm WeaponMeta, targetPos fixed.Vec2) b
 func (w *World) stepMovement(u *Unit) {
 	wasMoving := u.IsMoving
 	if u.hasMove && u.Meta.CanMove {
-		arrived, moving := stepSurfaceLocomotion(&u.loco, u.moveTarget, u.Meta, dtSec)
+		// Steer toward the avoidance target — the real destination, or a
+		// tangent point beside a unit blocking the path. Arrival only counts
+		// against the REAL target; touching a detour point just keeps driving
+		// (the detour is recomputed from the live field every tick).
+		steer := w.avoidanceTarget(u)
+		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
 		u.IsMoving = moving
-		if arrived {
+		if arrived && steer != u.moveTarget {
+			u.IsMoving = true
+		} else if arrived {
 			u.hasMove = false
 			u.IsMoving = false
 			// A player move completing starts the next shift-queued order. A

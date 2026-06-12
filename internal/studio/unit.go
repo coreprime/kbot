@@ -117,6 +117,11 @@ type unitMetaJSON struct {
 	WorkerTime    int     `json:"workerTime,omitempty"`
 	BuildDistance int     `json:"buildDistance,omitempty"`
 
+	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
+	// its collision body from it.
+	FootprintX int `json:"footprintX,omitempty"`
+	FootprintZ int `json:"footprintZ,omitempty"`
+
 	// Sounds — flattened from sound.tdf's section for the unit's
 	// SoundCategory field.  The map's keys are the canonical TA
 	// event names (select1, ok1, arrived1, activate, deactivate,
@@ -457,6 +462,8 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.BuildTime = float64(info.BuildTime)
 	out.WorkerTime = info.WorkerTime
 	out.BuildDistance = info.BuildDistance
+	out.FootprintX = info.FootprintX
+	out.FootprintZ = info.FootprintZ
 	// onoffable=1 — unit can be manually toggled on/off by the
 	// player (Radar, Solar, Adv Fusion).
 	out.OnOffable = info.OnOffable == 1
