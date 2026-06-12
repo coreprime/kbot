@@ -1,12 +1,14 @@
 package games
 
 import (
-	"bytes"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/coreprime/kbot/formats/gamedata/common"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/gamedata/tak"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -23,8 +25,10 @@ import (
 //     the file's [Menu] Priority orders the entries. Kingdoms mods can also
 //     ship TA-style download TDFs, so both games honour those.
 //
+// Each shape unmarshals into its typed gamedata model (ta.SideData,
+// tak.CanBuildGrant, common.DownloadFile) like every other TA format.
 // SidedataBuildOptions, CanbuildDirOptions and DownloadMenuOptions are the
-// shared parsers; each game's adapter composes them in its BuildOptions.
+// shared resolvers; each game's adapter composes them in its BuildOptions.
 
 // SidedataBuildOptions reads TA's [CANBUILD] table: builder (upper-case) →
 // ordered buildable names (lower-case).
@@ -35,39 +39,33 @@ func SidedataBuildOptions(fs VFS) map[string][]string {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.Parse(bytes.NewReader(data))
-		if err != nil {
+		var sd ta.SideData
+		if err := tdf.Unmarshal(data, &sd); err != nil {
 			continue
 		}
-		for _, sec := range doc.Sections() {
-			if !strings.EqualFold(sec.Name(), "CANBUILD") {
-				continue
+		for _, b := range sd.CanBuild.Builders {
+			builder := strings.ToUpper(strings.TrimSpace(b.Name))
+			type ent struct {
+				n    int
+				name string
 			}
-			for _, b := range sec.Sections() {
-				builder := strings.ToUpper(strings.TrimSpace(b.Name()))
-				type ent struct {
-					n    int
-					name string
+			var ents []ent
+			for key, value := range b.Entries {
+				k := strings.ToLower(strings.TrimSpace(key))
+				if !strings.HasPrefix(k, "canbuild") {
+					continue
 				}
-				var ents []ent
-				for _, f := range b.Fields() {
-					key := strings.ToLower(strings.TrimSpace(f.Key()))
-					if !strings.HasPrefix(key, "canbuild") {
-						continue
-					}
-					n, err := strconv.Atoi(strings.TrimPrefix(key, "canbuild"))
-					if err != nil {
-						continue
-					}
-					v := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(f.Value()), ";"))
-					if v != "" {
-						ents = append(ents, ent{n, v})
-					}
+				n, err := strconv.Atoi(strings.TrimPrefix(k, "canbuild"))
+				if err != nil {
+					continue
 				}
-				sort.Slice(ents, func(i, j int) bool { return ents[i].n < ents[j].n })
-				for _, e := range ents {
-					out[builder] = append(out[builder], e.name)
+				if v := strings.ToLower(strings.TrimSpace(value)); v != "" {
+					ents = append(ents, ent{n, v})
 				}
+			}
+			sort.Slice(ents, func(i, j int) bool { return ents[i].n < ents[j].n })
+			for _, e := range ents {
+				out[builder] = append(out[builder], e.name)
 			}
 		}
 		break
@@ -97,12 +95,9 @@ func CanbuildDirOptions(fs VFS) map[string][]string {
 		name := strings.TrimSuffix(path.Base(lower), ".tdf")
 		prio := 1 << 20
 		if data, err := fs.ReadFile(p); err == nil {
-			if doc, err := tdf.Parse(bytes.NewReader(data)); err == nil {
-				if m := doc.Section("Menu"); m != nil {
-					if v, err := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(m.String("Priority"), ";"))); err == nil {
-						prio = v
-					}
-				}
+			var grant tak.CanBuildGrant
+			if err := tdf.Unmarshal(data, &grant); err == nil && grant.Menu.Priority != 0 {
+				prio = grant.Menu.Priority
 			}
 		}
 		byBuilder[builder] = append(byBuilder[builder], ent{prio, name})
@@ -141,26 +136,18 @@ func DownloadMenuOptions(fs VFS) map[string][]string {
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.Parse(bytes.NewReader(data))
-		if err != nil {
+		var dl common.DownloadFile
+		if err := tdf.Unmarshal(data, &dl); err != nil {
 			continue
 		}
-		for _, sec := range doc.Sections() {
-			if !strings.HasPrefix(strings.ToUpper(sec.Name()), "MENUENTRY") {
-				continue
-			}
-			get := func(k string) string {
-				return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(sec.String(k)), ";"))
-			}
-			builder := strings.ToUpper(get("UNITMENU"))
-			name := get("UNITNAME")
+		for _, m := range dl.Entries {
+			builder := strings.ToUpper(strings.TrimSpace(m.UnitMenu))
+			name := strings.ToLower(strings.TrimSpace(m.UnitName))
 			if builder == "" || name == "" {
 				continue
 			}
-			menu, _ := strconv.Atoi(get("MENU"))
-			button, _ := strconv.Atoi(get("BUTTON"))
 			seq++
-			byBuilder[builder] = append(byBuilder[builder], ent{menu, button, seq, name})
+			byBuilder[builder] = append(byBuilder[builder], ent{m.Menu, m.Button, seq, name})
 		}
 	}
 	out := map[string][]string{}
