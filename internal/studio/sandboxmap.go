@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"image"
 	"image/png"
 	"net/http"
 	"path"
@@ -178,11 +179,16 @@ func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "parse TNT: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	img := m.RenderTileMap(sess.palettes().TerrainPalette(mapPath))
-	if img == nil && m.IsTAK {
+	// TA:K first — RenderTileMap on a section-based map yields a non-nil
+	// 0x0 image (no tile grid), which would slip past a nil check and die
+	// at the PNG encoder.
+	var img *image.RGBA
+	if m.IsTAK {
 		img, _ = sess.renderTAKTerrain(mapPath)
+	} else {
+		img = m.RenderTileMap(sess.palettes().TerrainPalette(mapPath))
 	}
-	if img == nil {
+	if img == nil || img.Bounds().Empty() {
 		http.Error(w, "render failed", http.StatusInternalServerError)
 		return
 	}
