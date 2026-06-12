@@ -20,6 +20,36 @@ let currentTakMapPath = null
 
 export function setCurrentTakMap(path) {
   currentTakMapPath = path || null
+  _stampLog.length = 0
+}
+
+// _stampLog records every stamp applied since the map opened so a backdrop
+// arriving LATER (the async full-res swap) can replay them — without this,
+// stamping before the crisp render lands either pinned the editor at the
+// fast low-res first paint or lost the stamps from the new backdrop.
+const _stampLog = []
+
+// registerTakBackdrop installs a freshly-loaded backdrop image for the
+// active map, replaying any stamps that landed while it was in flight.
+// Ignored when the user has switched maps since the request started.
+export function registerTakBackdrop(img, forMapPath) {
+  if (!currentTakMapPath || forMapPath !== currentTakMapPath) return
+  let target = img
+  if (_stampLog.length > 0) {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0)
+    target = canvas
+  }
+  state.sectionImages.set(TAK_TERRAIN_KEY, target)
+  for (const st of _stampLog) {
+    patchTakBackdrop(st.sectionPath, st.gx, st.gy)
+  }
+  invalidateMinimapBase()
+  hostCallbacks.renderCanvas?.()
+  hostCallbacks.scheduleMinimapRender?.()
 }
 
 // isTakMapActive reports whether the active map is a loaded TA:K map (so the
@@ -166,6 +196,7 @@ export async function stampTakSection(sectionPath, gx, gy) {
     // reload re-composites and re-decodes the whole map (seconds on big
     // maps) for every stamp. Falls back to the reload when the section
     // image isn't cached yet.
+    _stampLog.push({ sectionPath, gx, gy })
     if (!patchTakBackdrop(sectionPath, gx, gy)) {
       await reloadTakBackdrop()
     }

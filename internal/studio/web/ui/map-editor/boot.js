@@ -95,7 +95,7 @@
 
 import { $, state, tabs, tabState, hostCallbacks, MapDoc, setStatus, clamp } from '../host-context.js'
 import { TAK_TERRAIN_KEY, TAK_TERRAIN_EDITOR_MAX } from './constants.js'
-import { setCurrentTakMap } from './tak-edit.js'
+import { setCurrentTakMap, registerTakBackdrop } from './tak-edit.js'
 import {
   undoStack,
   redoStack,
@@ -297,13 +297,11 @@ export async function openLoadedMap(data, card) {
     img.src = `${data.terrainUrl}${sep}max=512`
     state.sectionImages.set(TAK_TERRAIN_KEY, img)
     const full = new Image()
+    const forMap = data.path
     full.addEventListener('load', () => {
-      // Only swap if this map is still the active backdrop.
-      if (state.sectionImages.get(TAK_TERRAIN_KEY) === img) {
-        state.sectionImages.set(TAK_TERRAIN_KEY, full)
-        invalidateMinimapBase()
-        hostCallbacks.renderCanvas?.()
-      }
+      // tak-edit owns the swap: it drops the image if the user changed
+      // maps and replays any stamps that landed while this was in flight.
+      registerTakBackdrop(full, forMap)
     }, { once: true })
     full.src = `${data.terrainUrl}${sep}max=${TAK_TERRAIN_EDITOR_MAX}`
   } else {
