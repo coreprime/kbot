@@ -2123,15 +2123,18 @@ export class SandboxView {
       return
     }
     // No unit under the cursor — plain ground-click with a live
-    // selection issues a Move.  This replaces the old "no-op + Esc
-    // to deselect" behaviour: clicking a destination is the most
-    // common follow-up gesture after selecting a unit, so making
-    // it the default beats the old "must arm Move first" flow.
-    // Selection stays put (the user usually wants to chain orders).
-    // No selection / no world projection (clicked the sky) → no-op.
+    // selection issues a Move; with Shift held it QUEUES the move
+    // behind the unit's current orders (a shift-click that turns into
+    // a drag is the rectangle-select gesture instead — the 6px
+    // discriminator in #beginDragSelect routes between them).  This
+    // replaces the old "no-op + Esc to deselect" behaviour: clicking
+    // a destination is the most common follow-up gesture after
+    // selecting a unit. Selection stays put (the user usually wants
+    // to chain orders). No selection / clicked the sky → no-op.
     if (world && this.scene.selected.size > 0) {
-      const n = this.issueMove(world)
-      this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
+      const queued = !!e.shiftKey
+      const n = this.issueMove(world, queued)
+      this.#setStatus(`${queued ? 'Move queued' : 'Move'} — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
     }
   }
 
