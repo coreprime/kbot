@@ -127,9 +127,12 @@ function update() {
       _sig = '' // force a rebuild against the narrowed selection
     })
   }
-  // Build cells construct the unit next to the builder. The sandbox builds
-  // instantly — build time / nanolathe staging is a future refinement; the
-  // point here is that WHAT a unit can build comes from the game data.
+  // Build cells construct the unit at the builder. A factory (an immobile
+  // builder) does the TA thing: the unit appears on the pad and ROLLS OFF to
+  // a clear spot near the exit, so back-to-back builds never stack. Mobile
+  // builders still place beside themselves — the walk-up-and-lathe build
+  // cycle is a separate refinement. Build time / economy are not modelled;
+  // the point here is that WHAT a unit can build comes from the game data.
   const builder = units.length === 1 ? units[0] : null
   let buildSeq = 0
   for (const el of root.querySelectorAll('.roster-build-cell')) {
@@ -137,17 +140,71 @@ function update() {
       const v = hostCallbacks.getActiveSandboxView?.()
       if (!v || !v.scene || !builder) return
       const name = el.dataset.build
-      const angle = (buildSeq++ * 0.9) + 0.6
-      const x = builder.pos.x + Math.cos(angle) * 55
-      const z = builder.pos.z + Math.sin(angle) * 55
       try {
         const model = await v.loader.load(name)
-        await v.scene.addUnit({ name, model, x, z, side: builder.side })
-        setStatus(`Built ${name} (instant — sandbox).`)
+        const isFactory = builder.meta && builder.meta.canMove === false
+        if (isFactory) {
+          // Spawn on the pad slightly toward the exit, facing out, then
+          // roll off to the nearest clear spot.
+          const h = builder.heading || 0
+          const u = await v.scene.addUnit({
+            name, model,
+            x: builder.pos.x + Math.sin(h) * 14,
+            z: builder.pos.z + Math.cos(h) * 14,
+            headingRad: h,
+            side: builder.side,
+          })
+          const spot = findRolloffSpot(v.scene, builder, h)
+          if (u && spot) u.moveTarget = { x: spot.x, z: spot.z }
+          setStatus(`Built ${name} — rolling off.`)
+        } else {
+          const angle = (buildSeq++ * 0.9) + 0.6
+          const x = builder.pos.x + Math.cos(angle) * 55
+          const z = builder.pos.z + Math.sin(angle) * 55
+          await v.scene.addUnit({ name, model, x, z, side: builder.side })
+          setStatus(`Built ${name} (instant — sandbox).`)
+        }
       } catch (e) {
         setStatus(`Build failed: ${e?.message || e}`)
       }
     })
+  }
+}
+
+// rolloffClearance — minimum distance (wu) a rolloff spot keeps from every
+// other live unit, sized to a vehicle footprint so freshly-built units park
+// beside each other instead of inside each other.
+const ROLLOFF_CLEARANCE = 30
+
+// findRolloffSpot scans rings in front of the factory (preferring straight
+// out the exit, fanning sideways, then widening) for a spot clear of every
+// live unit. A unit's spot is where it IS — its latest sim pose (_p1, synced
+// every tick; display pos only refreshes on painted frames) — and where it
+// is GOING (its move destination), so back-to-back builds don't all pick the
+// same square while the first tank is still rolling toward it. Falls back to
+// straight ahead so a crowded base still gets a destination.
+function findRolloffSpot(scene, builder, heading) {
+  const blockers = []
+  for (const u of scene.units()) {
+    if (!u || u.dead || u === builder) continue
+    const p = u._p1 || u.pos
+    blockers.push([p.x, p.z])
+    const mt = u.moveTarget
+    if (mt) blockers.push([mt.x, mt.z])
+  }
+  const clearAt = (x, z) =>
+    blockers.every(([bx, bz]) => Math.hypot(bx - x, bz - z) >= ROLLOFF_CLEARANCE)
+  for (const r of [70, 100, 130, 160]) {
+    for (const da of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, Math.PI]) {
+      const a = heading + da
+      const x = builder.pos.x + Math.sin(a) * r
+      const z = builder.pos.z + Math.cos(a) * r
+      if (clearAt(x, z)) return { x, z }
+    }
+  }
+  return {
+    x: builder.pos.x + Math.sin(heading) * 90,
+    z: builder.pos.z + Math.cos(heading) * 90,
   }
 }
 
