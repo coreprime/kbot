@@ -60,9 +60,11 @@ type UnitState struct {
 	SelfDestructMs int64
 }
 
-// ResourceState is one side's resource usage figures for the HUD: totals
-// spent so far and the current drain per second. Pools are infinite in the
-// sandbox — nothing gates on these.
+// ResourceState is one side's economy figures for the HUD: totals spent so
+// far, the current drain per second, the live stock and storage capacity
+// (from the standing units' FBI storage fields), and the generation rate
+// (solar/mex output, mana recharge). Pools are infinite in the sandbox —
+// nothing gates on these.
 type ResourceState struct {
 	Side        int
 	MetalSpent  fixed.Fixed
@@ -71,6 +73,15 @@ type ResourceState struct {
 	MetalRate   fixed.Fixed
 	EnergyRate  fixed.Fixed
 	ManaRate    fixed.Fixed
+	MetalStock  fixed.Fixed
+	EnergyStock fixed.Fixed
+	ManaStock   fixed.Fixed
+	MetalCap    fixed.Fixed
+	EnergyCap   fixed.Fixed
+	ManaCap     fixed.Fixed
+	MetalGen    fixed.Fixed
+	EnergyGen   fixed.Fixed
+	ManaGen     fixed.Fixed
 }
 
 // ProjectileState is one in-flight model projectile (missile/rocket/bomb).

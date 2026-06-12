@@ -45,6 +45,12 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.StandFire = uint8(getInt(o, "standingFireOrder"))
 	m.Explode = blastFromJS(o.Get("explodeWeapon"))
 	m.SelfD = blastFromJS(o.Get("selfDestructWeapon"))
+	m.MakeMetal = fixed.FromFloat(getFloat(o, "makesMetal"))
+	m.MakeEnergy = fixed.FromFloat(getFloat(o, "makesEnergy"))
+	m.MakeMana = fixed.FromFloat(getFloat(o, "makesMana"))
+	m.StoreMetal = fixed.FromFloat(getFloat(o, "storesMetal"))
+	m.StoreEnergy = fixed.FromFloat(getFloat(o, "storesEnergy"))
+	m.StoreMana = fixed.FromFloat(getFloat(o, "storesMana"))
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
@@ -563,6 +569,15 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 				"metalRate":   r.MetalRate.Float(),
 				"energyRate":  r.EnergyRate.Float(),
 				"manaRate":    r.ManaRate.Float(),
+				"metalStock":  r.MetalStock.Float(),
+				"energyStock": r.EnergyStock.Float(),
+				"manaStock":   r.ManaStock.Float(),
+				"metalCap":    r.MetalCap.Float(),
+				"energyCap":   r.EnergyCap.Float(),
+				"manaCap":     r.ManaCap.Float(),
+				"metalGen":    r.MetalGen.Float(),
+				"energyGen":   r.EnergyGen.Float(),
+				"manaGen":     r.ManaGen.Float(),
 			})
 		}
 		out["resources"] = res

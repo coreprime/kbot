@@ -56,6 +56,16 @@ type UnitMeta struct {
 	Explode Blast
 	SelfD   Blast
 
+	// Economy contributions per second while the unit stands (generation)
+	// and the storage capacity it adds to its side's pools. The sandbox
+	// never gates on stock — these feed the economy bar's accounting only.
+	MakeMetal   fixed.Fixed
+	MakeEnergy  fixed.Fixed
+	MakeMana    fixed.Fixed
+	StoreMetal  fixed.Fixed
+	StoreEnergy fixed.Fixed
+	StoreMana   fixed.Fixed
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero

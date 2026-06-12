@@ -1,14 +1,14 @@
 // resources-hud.js
 //
-// Sandbox resource readout. The sim drains each unit's FBI price linearly
-// over its construction and reports per-side spent totals + current
-// drain-per-second on every snapshot; pools are INFINITE in the sandbox, so
-// this is a usage meter, not a constraint — the ∞ stock makes that explicit.
-// Which resources exist (TA metal+energy, TA:K mana) comes from the game
-// adapter's resources table.
+// Sandbox economy bar, bottom-left. Per game-adapter resource (TA
+// metal+energy, TA:K mana) it shows the side's live STOCK against its
+// storage CAPACITY (a fill bar, both summed from the standing units' FBI
+// storage fields), the generation rate (+solar/mex output, mana recharge)
+// and the current build drain (−). Stocks integrate for real sim-side, but
+// the sandbox never gates on them — the ∞ badge marks builds as free.
 //
 // Rides the shared 4 Hz inspector tick like the roster strip; only repaints
-// when the rendered text actually changes.
+// when the rendered numbers actually change.
 
 import { hostCallbacks } from '../host-context.js'
 import { subscribeTick } from '../common/refresh-tick.js'
@@ -22,24 +22,30 @@ function ensureRoot() {
   const dlg = document.getElementById('model-viewer-dialog')
   if (!dlg) return null
   _root = document.createElement('div')
-  _root.id = 'sandbox-resource-hud'
+  _root.id = 'sandbox-economy-bar'
   _root.hidden = true
   dlg.appendChild(_root)
   return _root
 }
 
-// rateFor sums the named rate across every side — the sandbox has no "local
-// player", and the meter is about what the field is consuming overall.
-function sumField(resources, field) {
+// Field triplets per resource key: [stock, cap, gen, drainRate, spent].
+const FIELDS = {
+  metal: ['metalStock', 'metalCap', 'metalGen', 'metalRate', 'metalSpent'],
+  energy: ['energyStock', 'energyCap', 'energyGen', 'energyRate', 'energySpent'],
+  mana: ['manaStock', 'manaCap', 'manaGen', 'manaRate', 'manaSpent'],
+}
+
+// sum aggregates a field across every side — the sandbox has no "local
+// player"; the bar reads the whole field's economy.
+function sum(resources, field) {
   let v = 0
   for (const r of resources) v += r[field] || 0
   return v
 }
 
-const FIELDS = {
-  metal: ['metalRate', 'metalSpent'],
-  energy: ['energyRate', 'energySpent'],
-  mana: ['manaRate', 'manaSpent'],
+function fmt(n) {
+  if (n >= 10000) return `${(n / 1000).toFixed(1)}k`
+  return String(Math.round(n))
 }
 
 function update() {
@@ -48,32 +54,32 @@ function update() {
   const sandboxActive = dlg && dlg.classList.contains('sandbox-mode') && !dlg.classList.contains('hidden')
   const root = ensureRoot()
   if (!root) return
-  if (!sandboxActive || !view || !view.scene) {
+  const defs = activeGame().resources || []
+  if (!sandboxActive || !view || !view.scene || defs.length === 0) {
     if (!root.hidden) { root.hidden = true; _last = '' }
     return
   }
   const resources = view.scene.resources || []
-  const defs = activeGame().resources || []
-  if (defs.length === 0) {
-    if (!root.hidden) { root.hidden = true; _last = '' }
-    return
-  }
-  const parts = []
+  const rows = []
   for (const def of defs) {
-    const [rateField, spentField] = FIELDS[def.key] || []
-    if (!rateField) continue
-    const rate = sumField(resources, rateField)
-    const spent = sumField(resources, spentField)
-    parts.push(
-      `<span class="res-item" title="${def.label} — infinite stock; drain reflects active builds">`
-      + `<span class="res-label" style="color:${def.color}">${def.label}</span>`
-      + `<span class="res-stock">∞</span>`
-      + `<span class="res-rate">${rate > 0.05 ? `−${rate.toFixed(1)}/s` : '—'}</span>`
-      + `<span class="res-spent">${spent >= 1 ? `${Math.round(spent)} used` : ''}</span>`
-      + '</span>',
+    const [stockF, capF, genF, rateF] = FIELDS[def.key] || []
+    if (!stockF) continue
+    const stock = sum(resources, stockF)
+    const cap = sum(resources, capF)
+    const gen = sum(resources, genF)
+    const drain = sum(resources, rateF)
+    const fill = cap > 0 ? Math.max(0, Math.min(1, stock / cap)) : 0
+    rows.push(
+      `<div class="eco-row" title="${def.label} — stock ${fmt(stock)} of ${fmt(cap)} capacity; +${gen.toFixed(1)}/s generated, −${drain.toFixed(1)}/s building. Builds never stall (∞).">`
+      + `<span class="eco-label" style="color:${def.color}">${def.label}</span>`
+      + `<span class="eco-bar"><span class="eco-fill" style="width:${(fill * 100).toFixed(1)}%;background:${def.color}"></span></span>`
+      + `<span class="eco-stock">${fmt(stock)}<span class="eco-cap">/${fmt(cap)}</span></span>`
+      + `<span class="eco-rates">+${gen.toFixed(1)} −${drain.toFixed(1)}</span>`
+      + '<span class="eco-inf" title="Infinite — costs are accounted but never gate">∞</span>'
+      + '</div>',
     )
   }
-  const html = parts.join('')
+  const html = rows.join('')
   if (html === _last && !root.hidden) return
   _last = html
   root.hidden = false

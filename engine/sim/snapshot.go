@@ -78,7 +78,9 @@ func (w *World) Snapshot() frame.Snapshot {
 	var resources []frame.ResourceState
 	for side := 0; side < maxSides; side++ {
 		s, r := w.resSpent[side], w.resRate[side]
-		if s == (resourceTally{}) && r == (resourceTally{}) {
+		st, c, g := w.resStock[side], w.resCap[side], w.resGen[side]
+		if s == (resourceTally{}) && r == (resourceTally{}) &&
+			c == (resourceTally{}) && g == (resourceTally{}) {
 			continue
 		}
 		resources = append(resources, frame.ResourceState{
@@ -89,6 +91,15 @@ func (w *World) Snapshot() frame.Snapshot {
 			MetalRate:   r.Metal,
 			EnergyRate:  r.Energy,
 			ManaRate:    r.Mana,
+			MetalStock:  st.Metal,
+			EnergyStock: st.Energy,
+			ManaStock:   st.Mana,
+			MetalCap:    c.Metal,
+			EnergyCap:   c.Energy,
+			ManaCap:     c.Mana,
+			MetalGen:    g.Metal,
+			EnergyGen:   g.Energy,
+			ManaGen:     g.Mana,
 		})
 	}
 	evts := w.events

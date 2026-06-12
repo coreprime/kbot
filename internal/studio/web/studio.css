@@ -7208,30 +7208,41 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 }
 .roster-cost-sep { opacity: 0.45; }
 
-/* Resource usage HUD — top-centre of the sandbox viewport. Pools are
-   infinite (∞); the rate shows the field's current build drain. */
-#sandbox-resource-hud {
+/* Economy bar — bottom-left of the sandbox viewport. Stock vs storage
+   capacity per resource (summed from standing units' FBI fields), with
+   +generation / −build-drain rates. ∞ marks the sandbox's non-gating pools. */
+#sandbox-economy-bar {
   position: absolute;
-  left: 50%;
-  top: 10px;
-  transform: translateX(-50%);
+  left: 14px;
+  bottom: 14px;
   display: flex;
-  gap: 14px;
-  padding: 4px 12px;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 10px;
   background: rgba(12, 13, 20, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   z-index: 30;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 14px;
   font-variant-numeric: tabular-nums;
-  pointer-events: none;
+  pointer-events: auto;
+  min-width: 250px;
 }
-#sandbox-resource-hud .res-item { display: flex; gap: 5px; align-items: baseline; }
-#sandbox-resource-hud .res-label { font-weight: 700; }
-#sandbox-resource-hud .res-stock { opacity: 0.85; font-size: 13px; }
-#sandbox-resource-hud .res-rate { color: #f0a44a; min-width: 48px; }
-#sandbox-resource-hud .res-spent { opacity: 0.6; font-size: 10px; }
+#sandbox-economy-bar .eco-row { display: flex; align-items: center; gap: 7px; }
+#sandbox-economy-bar .eco-label { font-weight: 700; width: 46px; }
+#sandbox-economy-bar .eco-bar {
+  flex: 1;
+  height: 7px;
+  background: rgba(0, 0, 0, 0.65);
+  border-radius: 4px;
+  overflow: hidden;
+}
+#sandbox-economy-bar .eco-fill { display: block; height: 100%; opacity: 0.85; transition: width 240ms linear; }
+#sandbox-economy-bar .eco-stock { min-width: 66px; text-align: right; }
+#sandbox-economy-bar .eco-cap { opacity: 0.55; font-size: 10px; }
+#sandbox-economy-bar .eco-rates { color: #f0a44a; min-width: 70px; font-size: 10px; }
+#sandbox-economy-bar .eco-inf { opacity: 0.8; font-size: 13px; }
 
 /* Fixed-width action slots so icons align across rows */
 .fx-actions-cell { white-space: nowrap; }

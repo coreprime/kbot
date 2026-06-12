@@ -74,6 +74,39 @@ func (w *World) Step(rt Runtime) {
 	}
 	w.stepCollisions()
 	w.stepProjectiles()
+	w.stepEconomy()
+}
+
+// stepEconomy recomputes each side's storage capacity and generation from
+// its standing units, then integrates the stock by one tick: gen in, build
+// drain out, clamped into [0, capacity]. The sandbox never gates on stock —
+// this purely feeds the economy bar.
+func (w *World) stepEconomy() {
+	for i := range w.resCap {
+		w.resCap[i] = resourceTally{}
+		w.resGen[i] = resourceTally{}
+	}
+	for _, id := range w.order {
+		u := w.units[id]
+		if u == nil || u.Dead || u.Meta == nil || u.underConstruction() ||
+			u.Side < 0 || u.Side >= maxSides {
+			continue
+		}
+		m := u.Meta
+		w.resCap[u.Side].Metal += m.StoreMetal
+		w.resCap[u.Side].Energy += m.StoreEnergy
+		w.resCap[u.Side].Mana += m.StoreMana
+		w.resGen[u.Side].Metal += m.MakeMetal
+		w.resGen[u.Side].Energy += m.MakeEnergy
+		w.resGen[u.Side].Mana += m.MakeMana
+	}
+	dt := dtSec
+	for side := range w.resStock {
+		s := &w.resStock[side]
+		s.Metal = fixed.Clamp(s.Metal+(w.resGen[side].Metal-w.resRate[side].Metal).Mul(dt), 0, w.resCap[side].Metal)
+		s.Energy = fixed.Clamp(s.Energy+(w.resGen[side].Energy-w.resRate[side].Energy).Mul(dt), 0, w.resCap[side].Energy)
+		s.Mana = fixed.Clamp(s.Mana+(w.resGen[side].Mana-w.resRate[side].Mana).Mul(dt), 0, w.resCap[side].Mana)
+	}
 }
 
 // buildSinkWU is how far a buildee starts below grade: it rises out of the

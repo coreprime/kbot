@@ -248,8 +248,14 @@ type World struct {
 	// price linearly over its construction; the sandbox pools are infinite,
 	// so this only feeds the usage HUD — nothing gates on it. resRate is
 	// rebuilt every tick (drain per second right now); resSpent accumulates.
+	// resStock integrates generation minus drain (clamped into the side's
+	// live storage capacity); resCap and resGen are recomputed each tick
+	// from the standing units' FBI economy fields.
 	resSpent [maxSides]resourceTally
 	resRate  [maxSides]resourceTally
+	resStock [maxSides]resourceTally
+	resCap   [maxSides]resourceTally
+	resGen   [maxSides]resourceTally
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).

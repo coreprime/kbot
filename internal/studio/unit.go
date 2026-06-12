@@ -136,6 +136,17 @@ type unitMetaJSON struct {
 	ExplodeWeapon     *explosionJSON `json:"explodeWeapon,omitempty"`
 	SelfDestructWeapn *explosionJSON `json:"selfDestructWeapon,omitempty"`
 
+	// Economy contributions, per second while the unit stands: generation
+	// (TA energymake / metalmake+makesmetal+extractsmetal; TA:K
+	// manarechargerate+mogriumincome) and storage capacity (TA
+	// energystorage/metalstorage; TA:K maxmana).
+	MakesMetal  float64 `json:"makesMetal,omitempty"`
+	MakesEnergy float64 `json:"makesEnergy,omitempty"`
+	MakesMana   float64 `json:"makesMana,omitempty"`
+	StoresMetal float64 `json:"storesMetal,omitempty"`
+	StoresEnergy float64 `json:"storesEnergy,omitempty"`
+	StoresMana  float64 `json:"storesMana,omitempty"`
+
 	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
@@ -491,6 +502,18 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.CostMana = float64(info.BuildCost)
 	out.StandingMoveOrder = info.StandingMoveOrder
 	out.StandingFireOrder = info.StandingFireOrder
+	out.MakesMetal = info.MetalMake + info.MakesMetal + info.ExtractsMetal
+	// Solar-style generators express output as NEGATIVE EnergyUse (the sign
+	// lets the engine stop the income when the structure is toggled off);
+	// EnergyMake is the always-on form. Sum both shapes of income.
+	out.MakesEnergy = info.EnergyMake
+	if info.EnergyUse < 0 {
+		out.MakesEnergy -= info.EnergyUse
+	}
+	out.MakesMana = info.ManaRechargeRate + info.MogriumIncome
+	out.StoresMetal = float64(info.MetalStorage)
+	out.StoresEnergy = float64(info.EnergyStorage)
+	out.StoresMana = float64(info.MaxMana)
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
 	for _, tok := range info.Category {
