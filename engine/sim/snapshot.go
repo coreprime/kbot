@@ -151,6 +151,7 @@ func (w *World) Hash() uint64 {
 		// pending production run.
 		mix(uint64(u.BuildPercent))
 		mix(uint64(u.buildState))
+		mix(uint64(u.buildGateMs))
 		// Standing orders steer autonomous behaviour, so a divergent stance
 		// or post must surface as a desync.
 		mix(uint64(u.moveMode)<<8 | uint64(u.fireMode))

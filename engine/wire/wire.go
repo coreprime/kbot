@@ -177,6 +177,7 @@ type UnitSnap struct {
 	BuildSiteX    fixed.Fixed `json:"buildSiteX,omitempty"`
 	BuildSiteZ    fixed.Fixed `json:"buildSiteZ,omitempty"`
 	BuildTargetID uint32      `json:"buildTargetId,omitempty"`
+	BuildGateMs   int64       `json:"buildGateMs,omitempty"`
 	ProdQueue     []string    `json:"prodQueue,omitempty"`
 	// Standing orders + working state (posts, patrol/auto-engage flags).
 	MoveMode    uint8       `json:"moveMode"`

@@ -127,7 +127,9 @@ var buildSinkWU = fixed.FromInt(10)
 func (w *World) stepBuilder(u *Unit) {
 	switch u.buildState {
 	case buildIdle:
-		// Factory with work queued: take the head onto the pad.
+		// Factory with work queued: take the head onto the pad. With an
+		// Activate script the doors animate open first — the pad raise
+		// waits for YARD_OPEN (or the grace deadline).
 		if len(u.prodQueue) > 0 && !u.Meta.CanMove {
 			name := u.prodQueue[0]
 			u.prodQueue = u.prodQueue[1:]
@@ -136,6 +138,16 @@ func (w *World) stepBuilder(u *Unit) {
 			}
 			u.buildName = name
 			u.buildSite = w.factoryPad(u)
+			if u.binding != nil && u.binding.HasScript("Activate") {
+				u.binding.Start("Activate")
+				u.buildState = buildOpening
+				u.buildGateMs = w.simMs + buildGateGraceMs
+			} else {
+				w.startRaising(u)
+			}
+		}
+	case buildOpening:
+		if portValue(u, cobPortYardOpen) != 0 || w.simMs >= u.buildGateMs {
 			w.startRaising(u)
 		}
 	case buildApproach:
@@ -155,6 +167,12 @@ func (w *World) stepBuilder(u *Unit) {
 		b := w.units[u.buildeeID]
 		if b == nil || b.Dead {
 			w.cancelBuild(u)
+			return
+		}
+		// A mobile builder works only once its StartBuilding script has
+		// deployed the nano arm (INBUILDSTANCE), within the grace window.
+		if u.Meta.CanMove && u.binding != nil && u.binding.HasScript("StartBuilding") &&
+			portValue(u, cobPortInBuildStance) == 0 && w.simMs < u.buildGateMs {
 			return
 		}
 		// Percent per tick: 100% over (buildee buildtime / builder workertime)
@@ -188,6 +206,12 @@ func (w *World) stepBuilder(u *Unit) {
 			b.hasMove = true
 			b.moveTarget = w.rolloffSpot(u, b)
 		}
+		// Line drained: close the doors. With more queued the yard stays
+		// open and the next entry pops straight onto the pad.
+		if !u.Meta.CanMove && len(u.prodQueue) == 0 &&
+			u.binding != nil && u.binding.HasScript("Deactivate") {
+			u.binding.Start("Deactivate")
+		}
 		u.buildState = buildIdle
 		u.buildName = ""
 		u.buildeeID = 0
@@ -216,6 +240,7 @@ func (w *World) startRaising(u *Unit) {
 	b.PosY = -buildSinkWU
 	u.buildeeID = id
 	u.buildState = buildRaising
+	u.buildGateMs = w.simMs + buildGateGraceMs
 	if u.binding != nil && u.binding.HasScript("StartBuilding") {
 		u.binding.Start("StartBuilding")
 	}
@@ -741,6 +766,28 @@ func (w *World) stepMovement(u *Unit) {
 // own copy of the number rather than importing engine/script (the dependency
 // arrow points the other way); it must match script.UVCurrentSpeed.
 const cobPortCurrentSpeed = 29
+
+// TA unit-value ports the build cycle reads: INBUILDSTANCE is set by a
+// construction unit's StartBuilding script once its nano arm is deployed;
+// YARD_OPEN is set by a factory's Activate script once its doors finish
+// opening. Both gate build progress so the animations lead the work.
+const (
+	cobPortInBuildStance = 5
+	cobPortYardOpen      = 18
+)
+
+// buildGateGraceMs caps how long the build cycle waits on a script port
+// before proceeding anyway, so a script that never reports readiness
+// (or a TA:K convention without the port) cannot wedge construction.
+const buildGateGraceMs = 3000
+
+// portValue reads a COB unit-value port off the binding (0 without one).
+func portValue(u *Unit, port int) int32 {
+	if p, ok := u.binding.(CobPorts); ok {
+		return p.UnitValuePort(port)
+	}
+	return 0
+}
 
 // TA:K setSFXoccupy states. The retail scripts only test airborne (5); the
 // grounded value just needs to differ so the flight loops disengage.

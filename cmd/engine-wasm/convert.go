@@ -182,6 +182,7 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				BuildName:     getString(u, "buildName"),
 				BuildSite:     fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
 				BuildTargetID: uint32(getInt(u, "buildTargetId")),
+				BuildGateMs:   getInt64(u, "buildGateMs"),
 				ProdQueue:     stringSliceFromJS(u.Get("prodQueue")),
 				MoveMode:      uint8(getInt(u, "moveMode")),
 				FireMode:      uint8(getInt(u, "fireMode")),
@@ -463,6 +464,9 @@ func snapshotToWireJS(inst *instance) js.Value {
 			entry["buildSiteX"] = float64(ru.BuildSite.X)
 			entry["buildSiteZ"] = float64(ru.BuildSite.Z)
 			entry["buildTargetId"] = int(ru.BuildTargetID)
+		}
+		if ru.BuildGateMs != 0 {
+			entry["buildGateMs"] = float64(ru.BuildGateMs)
 		}
 		if len(ru.ProdQueue) > 0 {
 			pq := make([]any, len(ru.ProdQueue))

@@ -228,7 +228,8 @@ func (w *World) stepYards() {
 		if s == nil || s.Dead || !hasYard(s) {
 			continue
 		}
-		open := s.buildState != buildIdle || len(s.prodQueue) > 0
+		open := s.buildState != buildIdle || len(s.prodQueue) > 0 ||
+			portValue(s, cobPortYardOpen) != 0
 		if !open {
 			hx, hz := yardHalfExtents(s.Meta)
 			for _, oid := range w.order {

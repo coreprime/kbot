@@ -127,6 +127,12 @@ type Unit struct {
 	// job whenever the pad is idle.
 	prodQueue []string
 
+	// buildGateMs is the deadline for the current build-readiness gate: a
+	// factory waiting on its Activate doors (YARD_OPEN), or a mobile
+	// builder waiting on its nano arm (INBUILDSTANCE). Progress resumes
+	// when the script reports ready or the deadline passes. 0 = no gate.
+	buildGateMs int64
+
 	// Standing orders + their working state. moveMode/fireMode follow the
 	// order.Move*/Fire* values (seeded from FBI defaults at spawn). homePos
 	// anchors Maneuver's leash and post-combat return; autoEngaged marks an
@@ -222,6 +228,7 @@ const (
 	buildIdle     buildPhase = iota
 	buildApproach            // walking into builddistance of the site
 	buildRaising             // standing at the site, raising the buildee
+	buildOpening             // factory doors opening (Activate) before the pad raises
 )
 
 // underConstruction reports whether the unit is a buildee that has not yet
@@ -759,6 +766,7 @@ type RestoredUnit struct {
 	BuildName     string
 	BuildSite     fixed.Vec2
 	BuildTargetID uint32
+	BuildGateMs   int64
 	ProdQueue     []string
 	// Standing orders + their working state, so a joiner's units keep the
 	// same stances, posts and patrol/auto-engage status.
@@ -887,6 +895,7 @@ func (w *World) ExportUnits() []RestoredUnit {
 			BuildName:     u.buildName,
 			BuildSite:     u.buildSite,
 			BuildTargetID: u.buildeeID,
+			BuildGateMs:   u.buildGateMs,
 			ProdQueue:     append([]string(nil), u.prodQueue...),
 			MoveMode:      u.moveMode,
 			FireMode:      u.fireMode,
@@ -1005,6 +1014,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			buildName:    ru.BuildName,
 			buildSite:    ru.BuildSite,
 			buildeeID:    ru.BuildTargetID,
+			buildGateMs:  ru.BuildGateMs,
 			prodQueue:    append([]string(nil), ru.ProdQueue...),
 			moveMode:     ru.MoveMode,
 			fireMode:     ru.FireMode,
@@ -1302,6 +1312,9 @@ func (w *World) cancelBuild(u *Unit) {
 			u.binding.Start("StopBuilding")
 		}
 		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: u.buildeeID, Anchor: u.Pos()})
+	}
+	if !u.Meta.CanMove && u.binding != nil && u.binding.HasScript("Deactivate") {
+		u.binding.Start("Deactivate")
 	}
 	u.buildState = buildIdle
 	u.buildName = ""
