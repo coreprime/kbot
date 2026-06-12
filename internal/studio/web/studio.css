@@ -7186,3 +7186,18 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 .roster-pic-wrap-sm { height: 30px; }
 .roster-pic-sm { height: 30px; }
 .roster-build-cell:hover .roster-pic { filter: brightness(1.4) drop-shadow(0 0 4px rgba(124, 92, 255, 0.8)); }
+
+/* Fixed-width action slots so icons align across rows */
+.fx-actions-cell { white-space: nowrap; }
+.fx-actions-cell .fx-row-action {
+  display: inline-flex;
+  width: 26px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+}
+.fx-row-action-spacer { visibility: hidden; }
+.fx-row-action-edit { background: none; border: none; cursor: pointer; opacity: 0.75; }
+.fx-row-action-edit:hover { opacity: 1; }
+.fx-edit-btn { background: none; border: 1px solid var(--accent); color: var(--accent); cursor: pointer; }
+.fx-edit-btn:hover { background: rgba(124, 92, 255, 0.12); }

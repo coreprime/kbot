@@ -12,6 +12,7 @@ import { htm as html } from '@kbot/ui/htm-bind'
 import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
 import { metadata, rawURL, renderURL, extOf, deleteFile, parentDir } from '../api.js'
 import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { editKind, openInEditor } from '../edit-actions.js'
 import { useRawText } from '../components/async.js'
 import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
 import { HexView } from '@kbot/ui/hex-view'
@@ -256,6 +257,10 @@ export function ViewPage({ path, source: initialSource, onOpenFile, onOpenDir })
           ${src ? html`<span class="fx-source-badge">📚 ${src}</span>` : null}
         </div>
         <div class="fx-view-actions">
+          ${editKind(path) ? html`
+            <button type="button" class="fx-dl-btn fx-edit-btn"
+                    title=${editKind(path) === 'map' ? 'Edit in the map editor' : 'Open in the unit editor'}
+                    onClick=${() => openInEditor(path)}>✏️ Edit</button>` : null}
           <${DownloadMenu} name=${meta.name} origHref=${rawURL(path, src)}
                            extras=${extraFormats(kind, path, meta.name, src)} />
           ${meta.deletable ? html`

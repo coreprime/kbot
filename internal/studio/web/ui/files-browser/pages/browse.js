@@ -11,6 +11,7 @@
 import { htm as html } from '@kbot/ui/htm-bind'
 import { useCallback, useMemo, useState } from 'preact/hooks'
 import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { editKind, openInEditor } from '../edit-actions.js'
 import {
   browse, deleteFile, formatSize, extOf, baseName, rawURL,
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
@@ -77,13 +78,19 @@ function FileRow({ entry, onOpenFile, onDelete }) {
       <td class="fx-type-cell">${ext ? ext.toUpperCase() : '—'}</td>
       <td class="fx-source-cell">${entry.source ? html`<span class="fx-layer-chip" title=${`Effective layer: ${entry.source}`}>${entry.source}</span>` : ''}</td>
       <td class="fx-actions-cell">
+        ${editKind(entry.path) ? html`
+          <button type="button" class="fx-row-action fx-row-action-edit"
+                  title=${editKind(entry.path) === 'map' ? 'Edit in the map editor' : 'Open in the unit editor'}
+                  onClick=${(e) => { e.stopPropagation(); openInEditor(entry.path) }}>✏️</button>`
+          : html`<span class="fx-row-action fx-row-action-spacer"></span>`}
         <a class="fx-row-action" download=${baseName(entry.path)} href=${rawURL(entry.path)} title="Download" onClick=${(e) => e.stopPropagation()}>⬇</a>
         ${entry.deletable ? html`
           <button type="button" class="fx-row-action fx-row-action-danger"
                   title=${entry.revertsToBase
                     ? 'Delete the workspace copy — the base version underneath shows through again'
                     : 'Delete this workspace file'}
-                  onClick=${(e) => { e.stopPropagation(); onDelete(entry) }}>🗑</button>` : null}
+                  onClick=${(e) => { e.stopPropagation(); onDelete(entry) }}>🗑</button>`
+          : html`<span class="fx-row-action fx-row-action-spacer"></span>`}
       </td>
     </tr>
   `
