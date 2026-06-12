@@ -29,7 +29,7 @@ import (
 // classic 1/2 wu per height unit.
 const (
 	sandboxCellWU      = 16.0
-	sandboxHeightScale = 0.5
+	sandboxHeightScale = 1.0
 	pxPerWU            = 1.0
 )
 
@@ -46,6 +46,9 @@ type sandboxMapJSON struct {
 	WorldH      float64 `json:"worldH"`
 	// Heights is the raw row-major heightmap bytes, base64-encoded.
 	Heights string `json:"heights"`
+	// Voids marks carved-out cells (1 = void), base64-encoded, same layout
+	// as Heights. Omitted when the map has none.
+	Voids string `json:"voids,omitempty"`
 	// StartPositions are the first schema's player starts in world units,
 	// origin at the map's top-left corner.
 	StartPositions []sandboxStartPos `json:"startPositions"`
@@ -93,8 +96,17 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		out.W, out.H = m.AttrW, m.AttrH
 		out.SeaLevel = int(m.Header.SeaLevel)
 		heights = make([]byte, len(m.TileAttr))
+		voids := make([]byte, len(m.TileAttr))
+		anyVoid := false
 		for i, a := range m.TileAttr {
 			heights[i] = a.Height
+			if a.Feature == 0xFFFC {
+				voids[i] = 1
+				anyVoid = true
+			}
+		}
+		if anyVoid {
+			out.Voids = base64.StdEncoding.EncodeToString(voids)
 		}
 	}
 	if len(heights) < out.W*out.H || out.W == 0 || out.H == 0 {
