@@ -40,6 +40,13 @@ const (
 	// SelfDestruct toggles UnitIDs' 5-second self-destruct fuse: armed units
 	// disarm, idle units start counting down to their selfdestructas blast.
 	KindSelfDestruct
+	// Load sends transports (UnitIDs) to pick up TargetUnit: they move into
+	// pickup range and carry it. Repeated Loads queue more passengers up to
+	// the transport's slot count.
+	KindLoad
+	// Unload sends transports (UnitIDs) to Target and sets their cargo down
+	// on clear ground around it.
+	KindUnload
 )
 
 // Standing-order values carried by a Stance order.
@@ -140,6 +147,16 @@ func Stance(units []uint32, moveMode, fireMode int) Order {
 // SelfDestruct toggles the units' self-destruct fuses.
 func SelfDestruct(units []uint32) Order {
 	return Order{Kind: KindSelfDestruct, UnitIDs: units}
+}
+
+// Load sends transports to pick up a unit.
+func Load(transports []uint32, targetUnit uint32) Order {
+	return Order{Kind: KindLoad, UnitIDs: transports, TargetUnit: targetUnit}
+}
+
+// Unload sends transports to set their cargo down at a ground point.
+func Unload(transports []uint32, target fixed.Vec2) Order {
+	return Order{Kind: KindUnload, UnitIDs: transports, Target: target}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

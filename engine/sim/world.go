@@ -147,6 +147,16 @@ type Unit struct {
 	// Ctrl+D toggles it; the countdown surfaces on the render snapshot.
 	selfDAtMs int64
 
+	// Transport state. carriedBy pins this unit to a carrier (it is inert,
+	// uncollidable and untargetable while aboard); a transport's own
+	// carrying list, active pickup target and pending drop site drive
+	// stepTransport.
+	carriedBy  uint32
+	carrying   []uint32
+	loadTarget uint32
+	hasUnload  bool
+	unloadAt   fixed.Vec2
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
@@ -753,6 +763,13 @@ type RestoredUnit struct {
 	AutoEngaged bool
 	CurIsPatrol bool
 	SelfDAtMs   int64
+	// Transport links: who carries this unit, who it carries, and any
+	// in-flight pickup / drop job.
+	CarriedBy  uint32
+	Carrying   []uint32
+	LoadTarget uint32
+	HasUnload  bool
+	UnloadAt   fixed.Vec2
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -872,6 +889,11 @@ func (w *World) ExportUnits() []RestoredUnit {
 			AutoEngaged:   u.autoEngaged,
 			CurIsPatrol:   u.curIsPatrol,
 			SelfDAtMs:     u.selfDAtMs,
+			CarriedBy:     u.carriedBy,
+			Carrying:      append([]uint32(nil), u.carrying...),
+			LoadTarget:    u.loadTarget,
+			HasUnload:     u.hasUnload,
+			UnloadAt:      u.unloadAt,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
@@ -985,6 +1007,11 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			autoEngaged:  ru.AutoEngaged,
 			curIsPatrol:  ru.CurIsPatrol,
 			selfDAtMs:    ru.SelfDAtMs,
+			carriedBy:    ru.CarriedBy,
+			carrying:     append([]uint32(nil), ru.Carrying...),
+			loadTarget:   ru.LoadTarget,
+			hasUnload:    ru.HasUnload,
+			unloadAt:     ru.UnloadAt,
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
 			IsMoving:     ru.HasMove,
@@ -1219,6 +1246,18 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 	case order.KindRemove:
 		w.RemoveUnit(o.UnitID)
+	case order.KindLoad:
+		for _, id := range o.UnitIDs {
+			if t := w.units[id]; t != nil && !t.Dead && !t.underConstruction() {
+				w.applyLoad(t, o.TargetUnit)
+			}
+		}
+	case order.KindUnload:
+		for _, id := range o.UnitIDs {
+			if t := w.units[id]; t != nil && !t.Dead {
+				w.applyUnload(t, o.Target)
+			}
+		}
 	case order.KindBuild:
 		u := w.units[o.UnitID]
 		if u == nil || u.Dead || u.underConstruction() ||
@@ -1302,6 +1341,17 @@ func (w *World) advanceQueue(u *Unit) {
 				u.attackTarget = c.targetUnit
 				return
 			}
+		case order.KindLoad:
+			if cargo := w.units[c.targetUnit]; loadable(u, cargo) {
+				u.loadTarget = c.targetUnit
+				return
+			}
+		case order.KindUnload:
+			if len(u.carrying) > 0 {
+				u.hasUnload = true
+				u.unloadAt = c.target
+				return
+			}
 		}
 	}
 	if len(u.queue) == 0 {
@@ -1323,6 +1373,8 @@ func (w *World) stopUnit(id uint32) {
 	u.prodQueue = nil
 	u.curIsPatrol = false
 	u.autoEngaged = false
+	u.loadTarget = 0
+	u.hasUnload = false
 	// Standing here is the unit's new post.
 	u.homePos = u.loco.Pos
 	w.cancelBuild(u)
@@ -1337,7 +1389,7 @@ func (w *World) stopUnit(id uint32) {
 // ApplyDamage subtracts dmg from target HP, emitting hit and (on lethal) death.
 func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 	t := w.units[targetID]
-	if t == nil || t.Dead {
+	if t == nil || t.Dead || t.carriedBy != 0 {
 		return false
 	}
 	// Health runs on a 0..100 percent scale; when the target carries its

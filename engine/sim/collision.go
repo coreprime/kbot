@@ -29,7 +29,8 @@ var avoidSideMarginWU = fixed.FromInt(10)
 // collidable reports whether a unit participates in surface collision:
 // alive, statted, and not an aircraft.
 func collidable(u *Unit) bool {
-	return u != nil && !u.Dead && u.Meta != nil && !u.Meta.IsAircraft
+	return u != nil && !u.Dead && u.Meta != nil && !u.Meta.IsAircraft &&
+		u.carriedBy == 0
 }
 
 // canBePushed reports whether separation may move the unit: structures and

@@ -186,6 +186,14 @@ type UnitSnap struct {
 	AutoEngaged bool        `json:"autoEngaged,omitempty"`
 	CurIsPatrol bool        `json:"curIsPatrol,omitempty"`
 	SelfDAtMs   int64       `json:"selfDAtMs,omitempty"`
+	// Transport links: the carrier this unit rides, its own passengers, and
+	// any in-flight pickup / drop job. All omitempty on both ends.
+	CarriedBy  uint32      `json:"carriedBy,omitempty"`
+	Carrying   []uint32    `json:"carrying,omitempty"`
+	LoadTarget uint32      `json:"loadTarget,omitempty"`
+	HasUnload  bool        `json:"hasUnload,omitempty"`
+	UnloadX    fixed.Fixed `json:"unloadX,omitempty"`
+	UnloadZ    fixed.Fixed `json:"unloadZ,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry

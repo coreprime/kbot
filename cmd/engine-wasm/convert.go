@@ -38,6 +38,7 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.BuildDistance = fixed.FromFloat(getFloat(o, "buildDistance"))
 	m.FootprintX = getInt(o, "footprintX")
 	m.FootprintZ = getInt(o, "footprintZ")
+	m.TransportSlots = getInt(o, "transportSlots")
 	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
 	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))
 	m.CostMana = fixed.FromFloat(getFloat(o, "costMana"))
@@ -187,6 +188,15 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				AutoEngaged:   getBool(u, "autoEngaged"),
 				CurIsPatrol:   getBool(u, "curIsPatrol"),
 				SelfDAtMs:     getInt64(u, "selfDAtMs"),
+				CarriedBy:     uint32(getInt(u, "carriedBy")),
+				LoadTarget:    uint32(getInt(u, "loadTarget")),
+				HasUnload:     getBool(u, "hasUnload"),
+				UnloadAt:      fixed.Vec2{X: fixed.Fixed(getInt64(u, "unloadX")), Z: fixed.Fixed(getInt64(u, "unloadZ"))},
+			}
+			if cs := u.Get("carrying"); cs.Type() == js.TypeObject && !cs.IsNull() {
+				for i := 0; i < cs.Length(); i++ {
+					ru.Carrying = append(ru.Carrying, uint32(cs.Index(i).Int()))
+				}
 			}
 			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
 				for i := 0; i < qs.Length(); i++ {
@@ -428,6 +438,24 @@ func snapshotToWireJS(inst *instance) js.Value {
 		if ru.SelfDAtMs != 0 {
 			entry["selfDAtMs"] = float64(ru.SelfDAtMs)
 		}
+		if ru.CarriedBy != 0 {
+			entry["carriedBy"] = int(ru.CarriedBy)
+		}
+		if len(ru.Carrying) > 0 {
+			ids := make([]any, len(ru.Carrying))
+			for i, cid := range ru.Carrying {
+				ids[i] = int(cid)
+			}
+			entry["carrying"] = ids
+		}
+		if ru.LoadTarget != 0 {
+			entry["loadTarget"] = int(ru.LoadTarget)
+		}
+		if ru.HasUnload {
+			entry["hasUnload"] = true
+			entry["unloadX"] = float64(ru.UnloadAt.X)
+			entry["unloadZ"] = float64(ru.UnloadAt.Z)
+		}
 		if ru.BuildState != 0 {
 			entry["buildState"] = int(ru.BuildState)
 			entry["buildName"] = ru.BuildName
@@ -610,6 +638,17 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"fireMode":       int(u.FireMode),
 		"selfDestructMs": int(u.SelfDestructMs),
 		"piecesPacked":   pieces,
+	}
+	// Transport links, for the cargo badge + carried-unit gestures.
+	if u.CarriedBy != 0 {
+		out["carriedBy"] = int(u.CarriedBy)
+	}
+	if len(u.Carrying) > 0 {
+		ids := make([]any, len(u.Carrying))
+		for i, cid := range u.Carrying {
+			ids[i] = int(cid)
+		}
+		out["carrying"] = ids
 	}
 	// Production state, for the build-menu counters: the type currently
 	// raising on the pad plus the factory's pending run in click order.

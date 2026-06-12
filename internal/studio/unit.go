@@ -140,6 +140,11 @@ type unitMetaJSON struct {
 	// (TA energymake / metalmake+makesmetal+extractsmetal; TA:K
 	// manarechargerate+mogriumincome) and storage capacity (TA
 	// energystorage/metalstorage; TA:K maxmana).
+	// TransportSlots — how many units this transport can carry (the FBI's
+	// transmaxunits when set, else its size budget divided by the largest
+	// unit it accepts). 0 = not a transport.
+	TransportSlots int `json:"transportSlots,omitempty"`
+
 	MakesMetal  float64 `json:"makesMetal,omitempty"`
 	MakesEnergy float64 `json:"makesEnergy,omitempty"`
 	MakesMana   float64 `json:"makesMana,omitempty"`
@@ -502,6 +507,19 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.CostMana = float64(info.BuildCost)
 	out.StandingMoveOrder = info.StandingMoveOrder
 	out.StandingFireOrder = info.StandingFireOrder
+	if info.TransportCapacity > 0 || info.TransMaxUnits > 0 {
+		out.TransportSlots = info.TransMaxUnits
+		if out.TransportSlots == 0 {
+			size := info.TransportSize
+			if size <= 0 {
+				size = 1
+			}
+			out.TransportSlots = info.TransportCapacity / size
+		}
+		if out.TransportSlots < 1 {
+			out.TransportSlots = 1
+		}
+	}
 	out.MakesMetal = info.MetalMake + info.MakesMetal + info.ExtractsMetal
 	// Solar-style generators express output as NEGATIVE EnergyUse (the sign
 	// lets the engine stop the income when the structure is toggled off);

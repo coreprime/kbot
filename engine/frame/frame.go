@@ -58,6 +58,10 @@ type UnitState struct {
 	// SelfDestructMs is the remaining fuse time (0 = no fuse armed) for the
 	// countdown overlay.
 	SelfDestructMs int64
+	// Transport links: the carrier this unit rides (0 = on the ground) and,
+	// for a transport, the passengers aboard in load order.
+	CarriedBy uint32
+	Carrying  []uint32
 }
 
 // ResourceState is one side's economy figures for the HUD: totals spent so

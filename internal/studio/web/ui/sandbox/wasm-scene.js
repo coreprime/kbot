@@ -1110,6 +1110,10 @@ export class WasmSandboxScene {
       // Armed self-destruct fuse remaining (ms; 0 = off) for the countdown
       // overlay above the unit.
       u.selfDestructMs = su.selfDestructMs | 0
+      // Transport links: the carrier this unit rides (0 = grounded) and a
+      // transport's passenger list, for the load/unload gestures + badge.
+      u.carriedBy = su.carriedBy | 0
+      u.carrying = su.carrying || []
       if (su.hasMove) {
         if (!u._moveTarget) u._moveTarget = { x: su.moveX, z: su.moveZ }
         else { u._moveTarget.x = su.moveX; u._moveTarget.z = su.moveZ }

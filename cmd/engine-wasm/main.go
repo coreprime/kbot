@@ -57,6 +57,8 @@ func main() {
 		"submitPatrol": js.FuncOf(submitPatrol),
 		"submitStance": js.FuncOf(submitStance),
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
+		"submitLoad":   js.FuncOf(submitLoad),
+		"submitUnload": js.FuncOf(submitUnload),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
@@ -295,6 +297,27 @@ func submitSelfDestruct(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.SelfDestruct(uint32Slice(args[1]))))
+}
+
+// submitLoad(handle, transportIds[], targetUnit) -> execTick. Sends the
+// transports to pick up the target unit.
+func submitLoad(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.sess.Submit(order.Load(uint32Slice(args[1]), uint32(args[2].Int()))))
+}
+
+// submitUnload(handle, transportIds[], tx, tz) -> execTick. Sends the
+// transports to set their cargo down at the ground point.
+func submitUnload(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	target := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
+	return int(inst.sess.Submit(order.Unload(uint32Slice(args[1]), target)))
 }
 
 // submitStop(handle, unitIds[]) -> execTick.

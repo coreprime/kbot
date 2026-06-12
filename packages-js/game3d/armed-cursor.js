@@ -127,7 +127,8 @@ export class ArmedCursor {
   // #normalizeSlot returns one of the known names or null.  Centralised
   // so setSlot / setArmed / setAmbient share the validation.
   #normalizeSlot(slot) {
-    if (slot === 'move' || slot === 'attack' ||
+    if (slot === 'move' || slot === 'attack' || slot === 'patrol' ||
+        slot === 'load' || slot === 'unload' ||
         slot === 'primary' || slot === 'secondary' || slot === 'tertiary' ||
         slot === 'select' || slot === 'normal') return slot
     return null
@@ -190,6 +191,10 @@ export class ArmedCursor {
       // Patrol shares the move glyph — neither game ships a dedicated
       // patrol cursor GAF.
       case 'patrol': srcName = 'cursormove'; break
+      // Transport gestures use the game's pickup / unload glyphs when it
+      // ships them (TA's cursors.gaf carries both).
+      case 'load':   srcName = 'cursorpickup'; break
+      case 'unload': srcName = 'cursorunload'; break
       case 'select': srcName = 'cursorselect'; break
       case 'normal': srcName = 'cursornormal'; break
       // primary / secondary / tertiary / attack share the attack glyph by

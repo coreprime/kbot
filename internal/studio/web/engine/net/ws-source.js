@@ -427,6 +427,16 @@ export class WsFrameSource extends FrameSource {
     this._send({ Kind: 10, UnitIDs: unitIds })
   }
 
+  // load sends transports to pick up a unit (Kind 11); unload sets their
+  // cargo down at a ground point (Kind 12).
+  load(transportIds, targetUnit) {
+    this._send({ Kind: 11, UnitIDs: transportIds, TargetUnit: targetUnit >>> 0 })
+  }
+
+  unload(transportIds, x, z) {
+    this._send({ Kind: 12, UnitIDs: transportIds, Target: { X: toFixed(x), Z: toFixed(z) } })
+  }
+
   // spawn requests a new unit by type name at a world point. Like every order
   // it round-trips through the authority, which stamps an execution tick and
   // broadcasts a command frame; the unit then materializes on every client at

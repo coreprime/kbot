@@ -58,20 +58,24 @@ func (w *World) Step(rt Runtime) {
 			continue
 		}
 		// A buildee under construction is inert until it reaches 100%: no
-		// orders bind to it, and it steps neither movement nor weapons.
-		if u.underConstruction() {
+		// orders bind to it, and it steps neither movement nor weapons. A
+		// carried passenger is likewise inert — it rides its transport
+		// (which pins its pose in stepTransport).
+		if u.underConstruction() || u.carriedBy != 0 {
 			continue
 		}
 		w.stepSelfDestruct(u)
 		if u.Dead {
 			continue
 		}
+		w.stepTransport(u)
 		w.stepBuilder(u)
 		w.stepStance(u)
 		w.stepAttack(u)
 		w.stepMovement(u)
 		w.stepWeapons(u)
 	}
+	w.pinCargo()
 	w.stepCollisions()
 	w.stepProjectiles()
 	w.stepEconomy()

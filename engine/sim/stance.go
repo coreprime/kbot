@@ -190,7 +190,8 @@ func (w *World) nearestEnemy(u *Unit, within, homeLimit fixed.Fixed) *Unit {
 	var bestDist fixed.Fixed
 	for _, id := range w.order {
 		o := w.units[id]
-		if o == nil || o == u || o.Dead || o.Side == u.Side || o.underConstruction() {
+		if o == nil || o == u || o.Dead || o.Side == u.Side || o.underConstruction() ||
+			o.carriedBy != 0 {
 			continue
 		}
 		d := u.loco.Pos.DistTo(o.loco.Pos)

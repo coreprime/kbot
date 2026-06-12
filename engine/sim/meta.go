@@ -36,6 +36,10 @@ type UnitMeta struct {
 	FootprintX int
 	FootprintZ int
 
+	// TransportSlots — how many units this transport carries (0 = not a
+	// transport).
+	TransportSlots int
+
 	// Resource prices, drained over the unit's build (TA metal+energy,
 	// TA:K mana). Pools are infinite in the sandbox; the drain feeds the
 	// per-side usage stats only.

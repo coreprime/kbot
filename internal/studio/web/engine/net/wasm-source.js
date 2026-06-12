@@ -158,6 +158,11 @@ export class WasmFrameSource extends FrameSource {
   stance(unitIds, moveMode, fireMode) { return this._engine.submitStance(this._handle, unitIds, moveMode, fireMode) }
   selfDestruct(unitIds) { return this._engine.submitSelfDestruct(this._handle, unitIds) }
 
+  // load sends transports to pick up a unit; unload sets their cargo down
+  // at a ground point.
+  load(transportIds, targetUnit) { return this._engine.submitLoad(this._handle, transportIds, targetUnit) }
+  unload(transportIds, x, z) { return this._engine.submitUnload(this._handle, transportIds, x, z) }
+
   // scheduleAt queues an authoritative order at an exact tick.  The networked
   // source uses it to apply command frames the server broadcasts.
   scheduleAt(tick, order) { this._engine.scheduleAt(this._handle, tick, order) }

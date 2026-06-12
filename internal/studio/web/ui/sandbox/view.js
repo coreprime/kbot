@@ -1248,7 +1248,15 @@ export class SandboxView {
   //                               arm-then-target semantics).
   setPendingCommand(cmd) {
     const valid = (cmd === 'move' || cmd === 'attack' || cmd === 'patrol' ||
+                   cmd === 'load' || cmd === 'unload' ||
                    cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
+    // Load/Unload only make sense with a transport in the selection.
+    if ((cmd === 'load' || cmd === 'unload') && this.#selectedTransports().length === 0) {
+      this._pendingCmd = null
+      this.#refreshDefaultCursor()
+      this.#setStatus(`${cmd[0].toUpperCase() + cmd.slice(1)} — no transport selected.`)
+      return
+    }
     // A weapon slot can only be armed when at least one selected unit actually
     // carries a weapon in that slot.  Firing an empty slot is a no-op in the
     // engine, so arming it (and showing its cursor) would be a lie — refuse and
@@ -1270,7 +1278,9 @@ export class SandboxView {
     if (this._pendingCmd) {
       const what = (cmd === 'move') ? 'a destination'
         : (cmd === 'patrol') ? 'patrol waypoints (Esc to finish)'
-          : 'a target unit'
+          : (cmd === 'load') ? 'a unit to pick up'
+            : (cmd === 'unload') ? 'a drop point'
+              : 'a target unit'
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
@@ -1754,6 +1764,19 @@ export class SandboxView {
         this.setPendingCommand('patrol')
         return
       }
+      // L arms Load (transport picks up the next-clicked unit); U arms
+      // Unload (cargo sets down at the next-clicked ground point). Both
+      // refuse via setPendingCommand when no transport is selected.
+      if ((e.key === 'l' || e.key === 'L') && this.scene && this.scene.selected.size > 0) {
+        e.preventDefault()
+        this.setPendingCommand('load')
+        return
+      }
+      if ((e.key === 'u' || e.key === 'U') && this.scene && this.scene.selected.size > 0) {
+        e.preventDefault()
+        this.setPendingCommand('unload')
+        return
+      }
       // Backquote toggles the persistent health-bar layer for selected
       // units (hover bars always show). Bespoke rather than wireHotkeys
       // because it must work with an empty selection too.
@@ -1940,6 +1963,19 @@ export class SandboxView {
     // the classic RTS waypoint/target chain.
     const queued = !!e.shiftKey
     if (hit && !this.scene.selected.has(hit.id)) {
+      // Transport gesture: right-clicking a friendly mobile unit with a
+      // transport selected means "pick it up", not "attack an ally".
+      const carriers = this.#selectedTransports()
+      const selUnits = [...this.scene.selected].map((id) => this.scene.unitById(id)).filter((u) => u && !u.dead)
+      const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === (hit.side | 0))
+      if (carriers.length > 0 && sameSide && hit.meta && hit.meta.canMove !== false &&
+          !(hit.meta.transportSlots > 0)) {
+        const n = this.issueLoad(hit)
+        if (n > 0) {
+          this.#setStatus(`Load — transport picking up ${hit.name}.`)
+          return
+        }
+      }
       // issueAttack (below) handles the per-unit attackTarget fanout
       // + ok1-bank ack on the first pursuer.  Centralised so every
       // attack-issuing gesture in the sandbox converges on it.
@@ -2022,6 +2058,33 @@ export class SandboxView {
     // to selecting the nearest unit by screen-projected distance.
     const world = this.#screenToGround(sx, sy)
     // If a command is pending (Move / Attack), consume it.
+    if (this._pendingCmd === 'load' && this.scene.selected.size > 0) {
+      const hit = this.#pickUnitAt(sx, sy)
+      this._pendingCmd = null
+      this.#refreshDefaultCursor()
+      if (hit) {
+        const n = this.issueLoad(hit)
+        this.#setStatus(n > 0
+          ? `Load — transport picking up ${hit.name}.`
+          : `Load — ${hit.name} can't be carried (or no room).`)
+      } else {
+        this.#setStatus('Load cancelled — click a unit to pick up.')
+      }
+      return
+    }
+    if (this._pendingCmd === 'unload' && this.scene.selected.size > 0) {
+      this._pendingCmd = null
+      this.#refreshDefaultCursor()
+      if (world) {
+        const n = this.issueUnload(world)
+        this.#setStatus(n > 0
+          ? `Unload — ${n} transport(s) dropping cargo at (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`
+          : 'Unload — no loaded transport selected.')
+      } else {
+        this.#setStatus('Unload cancelled — click a drop point.')
+      }
+      return
+    }
     if (this._pendingCmd === 'patrol' && world && this.scene.selected.size > 0) {
       // Patrol waypoints lay click by click and the command STAYS armed —
       // consecutive points loop the route sim-side; Esc finishes.
@@ -2505,6 +2568,45 @@ export class SandboxView {
     this.scene.source.patrol(units.map((u) => u.id), point[0], point[2])
     this.playUnitSoundRandom(units[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return units.length
+  }
+
+  // #selectedTransports returns the live selected units that can carry
+  // passengers (meta.transportSlots > 0).
+  #selectedTransports() {
+    return this.getSelectedUnits().filter((u) =>
+      !u.dead && u.meta && (u.meta.transportSlots | 0) > 0)
+  }
+
+  // issueLoad sends the first selected transport with room toward the
+  // target unit; the sim walks it into pickup range and attaches.
+  issueLoad(target) {
+    if (!target || !this.scene.source.load) return 0
+    const carriers = this.#selectedTransports().filter((u) => {
+      const aboard = (u.carrying || []).length
+      return u.id !== target.id && aboard < (u.meta.transportSlots | 0)
+    })
+    if (!carriers.length) return 0
+    // One pickup, one carrier: fan a multi-transport selection by giving
+    // the job to the nearest with room rather than racing them all.
+    carriers.sort((a, b) => {
+      const da = (a.pos.x - target.pos.x) ** 2 + (a.pos.z - target.pos.z) ** 2
+      const db = (b.pos.x - target.pos.x) ** 2 + (b.pos.z - target.pos.z) ** 2
+      return da - db
+    })
+    this.scene.source.load([carriers[0].id], target.id)
+    this.playUnitSoundRandom(carriers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return 1
+  }
+
+  // issueUnload points every loaded (or load-pending) selected transport at
+  // the drop site; the sim fans the cargo onto clear ground on arrival.
+  issueUnload(point) {
+    if (!point || !this.scene.source.unload) return 0
+    const carriers = this.#selectedTransports().filter((u) => (u.carrying || []).length > 0)
+    if (!carriers.length) return 0
+    this.scene.source.unload(carriers.map((u) => u.id), point[0], point[2])
+    this.playUnitSoundRandom(carriers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return carriers.length
   }
 
   // stop halts every selected unit through engine.stopUnits — the

@@ -49,6 +49,8 @@ func (w *World) Snapshot() frame.Snapshot {
 			MoveMode:       u.moveMode,
 			FireMode:       u.fireMode,
 			SelfDestructMs: selfDMs,
+			CarriedBy:      u.carriedBy,
+			Carrying:       u.carrying,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -161,6 +163,18 @@ func (w *World) Hash() uint64 {
 			mix(3)
 		}
 		mix(uint64(u.selfDAtMs))
+		// Transport links are authoritative: a passenger rides its carrier.
+		mix(uint64(u.carriedBy))
+		mix(uint64(u.loadTarget))
+		if u.hasUnload {
+			mix(4)
+			mix(uint64(u.unloadAt.X))
+			mix(uint64(u.unloadAt.Z))
+		}
+		mix(uint64(len(u.carrying)))
+		for _, cid := range u.carrying {
+			mix(uint64(cid))
+		}
 		mix(uint64(len(u.prodQueue)))
 		for _, name := range u.prodQueue {
 			for i := 0; i < len(name); i++ {

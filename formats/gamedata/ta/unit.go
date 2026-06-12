@@ -31,6 +31,12 @@ type UnitInfo struct {
 	DamageModifier float64 `tdf:"damagemodifier,omitempty"` // Assuming float, due to name/usage
 	MinWaterDepth  int     `tdf:"minwaterdepth,omitempty"`
 
+	// Transports: capacity is the total size budget, size the largest single
+	// unit accepted, TransMaxUnits a hard unit-count cap (the Atlas's 1).
+	TransportCapacity int `tdf:"transportcapacity,omitempty"`
+	TransportSize     int `tdf:"transportsize,omitempty"`
+	TransMaxUnits     int `tdf:"transmaxunits,omitempty"`
+
 	EnergyUse     float64 `tdf:"energyuse,omitempty"`     // Assuming float, due to name/usage
 	EnergyMake    float64 `tdf:"energymake,omitempty"`    // Assuming float, due to name/usage
 	MetalMake     float64 `tdf:"metalmake,omitempty"`     // Assuming float, due to name/usage
