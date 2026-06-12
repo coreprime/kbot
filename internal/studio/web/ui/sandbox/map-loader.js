@@ -20,6 +20,12 @@ export async function loadSandboxMap(view, path) {
   const bin = atob(info.heights)
   const heights = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) heights[i] = bin.charCodeAt(i)
+  let voids = null
+  if (info.voids) {
+    const vbin = atob(info.voids)
+    voids = new Uint8Array(vbin.length)
+    for (let i = 0; i < vbin.length; i++) voids[i] = vbin.charCodeAt(i)
+  }
 
   // Sim first — the height field must be in before any unit moves on it.
   if (view.scene?.source?.setTerrain) {
@@ -28,6 +34,7 @@ export async function loadSandboxMap(view, path) {
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
       data: heights,
+      voids,
     })
   }
 

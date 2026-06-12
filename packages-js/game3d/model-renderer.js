@@ -2567,7 +2567,10 @@ export class ModelRenderer {
     // modes; sea pass already paints water + seabed and shouldn't
     // be displaced.  Inner clearing scales with the unit's bounding
     // span so a Krogoth doesn't get hemmed in.
-    const bgActive = this.optBgTerrain && this.groundMode !== 'sea' && this.groundMode !== 'off'
+    // A loaded battlefield owns the landscape: the procedural mountain
+    // ring would bulge the infinite plane THROUGH the real map (phantom
+    // hills in places the heightmap says are flat), so it stands down.
+    const bgActive = this.optBgTerrain && this.groundMode !== 'sea' && this.groundMode !== 'off' && !this._mapTerrain
     gl.uniform1f(this.uGroundMountainActive, bgActive ? 1 : 0)
     if (bgActive) {
       // Mountain-ring clearing scales with whatever sits at the

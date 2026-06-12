@@ -65,6 +65,19 @@ function ensureRoot() {
   _root.addEventListener('mouseleave', dockReset)
   _root.addEventListener('mouseover', tipShow)
   _root.addEventListener('mouseout', tipHide)
+  // mouseout never fires when focus leaves the window or a pointerdown
+  // re-renders the strip under the cursor, so the tip needs belt-and-braces
+  // dismissal on both.
+  _root.addEventListener('pointerleave', () => { if (_tip) _tip.hidden = true })
+  window.addEventListener('blur', () => { if (_tip) _tip.hidden = true })
+  // Last-resort sweep: any pointer travel outside the strip dismisses the
+  // tip, catching paths where the browser never delivered mouseout (focus
+  // stolen mid-hover, DOM swapped under a stationary cursor).
+  const sweep = (e) => {
+    if (_tip && !_tip.hidden && _root && !_root.contains(e.target)) _tip.hidden = true
+  }
+  document.addEventListener('pointermove', sweep, { passive: true })
+  document.addEventListener('mousemove', sweep, { passive: true })
   dlg.appendChild(_root)
   return _root
 }
@@ -130,12 +143,13 @@ function tipShow(e) {
   if (meta === undefined) {
     setTimeout(() => {
       if (!_tip || _tip.hidden) return
-      if (cell.matches(':hover')) tipShow({ target: cell })
+      if (cell.isConnected && cell.matches(':hover') && _root && _root.matches(':hover')) tipShow({ target: cell })
+      else _tip.hidden = true
     }, 350)
   }
   const title = (meta && meta.title) || name
   let html = `<div class="roster-tip-name">${title}</div>`
-  if (cell.dataset.build && cell.dataset.costtip === '1') {
+  if (cell.dataset.build) {
     const cost = costLineHTML(name)
     if (cost.includes('span')) html += cost
   }
@@ -178,17 +192,15 @@ function costLineHTML(name) {
 }
 
 // buildCellHTML — one constructible unit in the single-builder build row
-// and (for factories) the production-run counter. A factory's resource
-// costs move into the hover tip (costtip), keeping the dock row compact;
-// a mobile builder keeps them inline beneath the icon.
-function buildCellHTML(name, queued, costInTip) {
+// and (for factories) the production-run counter. Resource costs live in
+// the hover tip for every builder, keeping the dock row compact.
+function buildCellHTML(name, queued) {
   return `
-    <div class="roster-cell roster-build-cell" data-build="${name}" data-costtip="${costInTip ? 1 : 0}">
+    <div class="roster-cell roster-build-cell" data-build="${name}">
       <div class="roster-pic-wrap roster-pic-wrap-sm">
         <img class="roster-pic roster-pic-sm" data-unit="${name}" alt="${name}" />
         ${queued > 0 ? `<span class="roster-count">${queued}</span>` : ''}
       </div>
-      ${costInTip ? '' : costLineHTML(name)}
     </div>`
 }
 
@@ -226,6 +238,7 @@ function update() {
     : []
   if (units.length === 0) {
     if (!root.hidden) { root.hidden = true; _sig = '' }
+    if (_tip) _tip.hidden = true
     return
   }
 
@@ -258,11 +271,13 @@ function update() {
   if (sig === _sig && !root.hidden) return
   _sig = sig
   root.hidden = false
-  const builderIsFactory = !!(builder && builder.meta && builder.meta.canMove === false)
   root.innerHTML = cells.map((c) => cellHTML(c)).join('')
     + (buildOpts.length
-      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n, queuedCount(builder, n), builderIsFactory)).join('')}`
+      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n, queuedCount(builder, n))).join('')}`
       : '')
+  // The rebuild replaced every cell node, so a tip anchored to a removed
+  // cell would float forever — hide it and let the next hover re-show it.
+  if (_tip) _tip.hidden = true
   // Set image sources as PROPERTY writes after the markup lands: the
   // workspace URL shim rewrites src assignments to carry the /workspaces/
   // prefix, but it cannot see attributes baked into innerHTML.

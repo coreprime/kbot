@@ -149,7 +149,7 @@ export class WasmFrameSource extends FrameSource {
 
   // build sends one mobile builder to construct unit type `name` at the
   // ground point — walk into builddistance, then raise the buildee to 100%.
-  build(builderId, name, x, z) { return this._engine.submitBuild(this._handle, builderId, name, x, z) }
+  build(builderId, name, x, z, queued = false) { return this._engine.submitBuild(this._handle, builderId, name, x, z, queued) }
 
   // patrol appends a patrol waypoint to each unit's queue (consecutive
   // patrol legs loop); stance sets the standing move/fire orders;

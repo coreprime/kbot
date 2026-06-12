@@ -408,8 +408,8 @@ export class WsFrameSource extends FrameSource {
   // build sends one mobile builder to construct unit type `name` at a ground
   // point (Kind 7). The buildee spawns sim-side when the builder reaches the
   // site; the meta registers via the command-frame hook on every client.
-  build(builderId, name, x, z) {
-    this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) } })
+  build(builderId, name, x, z, queued = false) {
+    this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) }, Queued: !!queued })
   }
 
   // patrol appends a patrol waypoint (Kind 8); stance sets the standing

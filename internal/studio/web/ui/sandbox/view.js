@@ -621,8 +621,13 @@ export class SandboxView {
       // drag-derived heading; the sim orients a buildee itself.
       if (p.buildFor) {
         try {
-          await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2])
-          this.#setStatus(`Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
+          // Shift queues the site behind the builder's current job (and
+          // keeps placement armed — see the single-shot gate above), so
+          // the user can lay out a whole base plan in one pass.
+          await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2], !!ev.shiftKey)
+          this.#setStatus(ev.shiftKey
+            ? `Build queued — ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}); shift-click to queue more.`
+            : `Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
         } catch (err) {
           this.#setStatus(`Build order failed: ${err?.message || err}`)
         }
@@ -1496,6 +1501,45 @@ export class SandboxView {
       // the side index, team-colors.js maps it to the renderer's
       // [r,g,b] tuple (or null for side 0, the "no recolour" sentinel
       // that keeps the model's authored ARM blue).
+      // Transport attach visuals. A passenger inside a surface transport
+      // (the Bear's hold) is hidden entirely; sling cargo under an air
+      // transport hangs flush beneath the carrier's airframe — the sim
+      // pins X/Z/heading, the renderer derives the exact hang from the
+      // two models' bounds so the cargo reads as attached, not floating.
+      let posX = u.pos.x
+      let posY = u.pos.y
+      let posZ = u.pos.z
+      if (u.carriedBy) {
+        const carrier = this.scene.unitById(u.carriedBy)
+        if (carrier && carrier.meta) {
+          if (!carrier.meta.isAircraft) continue // hidden in the hold
+          const carrierModel = this._localModels.get(carrier.name)
+          if (carrierModel) {
+            const beltY = carrier.pos.y + (carrierModel.bounds.min[1] || 0)
+            posY = beltY - (localModel.bounds.max[1] || 0) - 1
+          }
+        }
+      }
+      // A factory buildee rides the build plate: pin it to the builder's
+      // QueryBuildInfo piece (pad spin and lift carry through) instead of
+      // the sim's static site position.
+      let padHeading = null
+      if (u.buildPercent < 100 && this.scene.buildAttachFor) {
+        const attach = this.scene.buildAttachFor(u.id)
+        if (attach && attach.pieceName) {
+          const bInst = this._localInstances.get(attach.builder.id)
+          const bModel = bInst && bInst.model
+          const piece = bModel && bModel.findPiece(attach.pieceName)
+          if (piece && bModel.resolvePieceWorld) {
+            const bPos = attach.builder.pos
+            const wp = bModel.resolvePieceWorld(piece, bPos.x, bPos.y, bPos.z, attach.builder.heading + Math.PI)
+            if (wp) {
+              posX = wp[0]; posY = wp[1]; posZ = wp[2]
+              padHeading = attach.builder.heading + Math.PI
+            }
+          }
+        }
+      }
       entities.push({
         model: localModel,
         binding: u.binding,
@@ -1504,7 +1548,7 @@ export class SandboxView {
         // colour over the hull while buildPercent < 100 (TA nano green,
         // TA:K casting gold — straight from the game adapter).
         buildFxColor: (activeGame().buildFx && activeGame().buildFx.color) || null,
-        transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
+        transform: { x: posX, y: posY, z: posZ, headingRad: padHeading != null ? padHeading : u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
         // Inspector hover highlight — the Sync Diagnostics panel flags the
         // unit its hovered row points at, so the renderer outlines it.
@@ -1530,6 +1574,25 @@ export class SandboxView {
     if (this._localInstances.size > liveIds.size) {
       for (const id of this._localInstances.keys()) {
         if (!liveIds.has(id)) this._localInstances.delete(id)
+      }
+    }
+    // Queued construction sites — while Shift is held, every selected
+    // builder's deferred Build orders render as ghost wireframes at their
+    // sites, so the user previews the whole queued base plan.
+    if (this._shiftPreview && this.scene) {
+      for (const id of this.scene.selected) {
+        const u = this.scene.unitById(id)
+        if (!u || u.dead || !Array.isArray(u.queue)) continue
+        for (const q of u.queue) {
+          if (q.kind !== 7 || !q.name) continue
+          const gm = this._localModels.get(q.name)
+          if (!gm) { this.#ensureLocalModel(q.name); continue }
+          entities.push({
+            model: gm,
+            transform: { x: q.x, y: 0, z: q.z, headingRad: Math.PI },
+            ghost: true,
+          })
+        }
       }
     }
     // Placement ghost — appended LAST so it draws over the live units

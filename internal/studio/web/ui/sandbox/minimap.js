@@ -5,11 +5,11 @@
 // ±300wu so a small skirmish doesn't fill the frame). Selected units ring
 // white.
 //
-// Clicks command: clicking a unit selects it; with a selection held,
-// clicking an OPPOSING unit orders the attack instead (shift queues it) —
-// the same semantics as clicking the unit in the 3D view. Clicking empty
-// map ground with a selection issues a move (shift queues), so the map
-// doubles as a long-range order surface.
+// Left-click navigates: clicking a unit dot selects it, clicking empty
+// ground jumps the camera there — the classic minimap-as-viewport gesture.
+// Right-click commands: on an opposing unit with a selection held it
+// orders the attack, on empty ground it issues a move (shift queues both),
+// so the map doubles as a long-range order surface.
 //
 // Redraws on the shared 4 Hz inspector tick.
 
@@ -38,7 +38,7 @@ function ensureRoot() {
   _canvas.height = SIZE
   _root.appendChild(_canvas)
   _canvas.addEventListener('click', onClick)
-  _canvas.addEventListener('contextmenu', (e) => e.preventDefault())
+  _canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); onOrder(e) })
   dlg.appendChild(_root)
   return _root
 }
@@ -73,40 +73,56 @@ function mapToWorld(px, py) {
   ]
 }
 
-function onClick(e) {
-  const view = activeView()
-  if (!view) return
+// clickPoint converts an event to map-pixel coords + the nearest unit dot.
+function clickPoint(view, e) {
   const rect = _canvas.getBoundingClientRect()
   const px = (e.clientX - rect.left) * (SIZE / rect.width)
   const py = (e.clientY - rect.top) * (SIZE / rect.height)
-  // Nearest unit within a comfortable thumb radius.
   let hit = null
-  let hitD = 10 // px
+  let hitD = 10 // px — comfortable thumb radius
   for (const u of liveUnits(view)) {
     const [ux, uy] = worldToMap(u.pos.x, u.pos.z)
     const d = Math.hypot(ux - px, uy - py)
     if (d < hitD) { hit = u; hitD = d }
   }
-  const sel = view.getSelectedUnits()
+  return { px, py, hit }
+}
+
+function onClick(e) {
+  const view = activeView()
+  if (!view) return
+  const { px, py, hit } = clickPoint(view, e)
   if (hit) {
-    const sameTeam = sel.length > 0 && sel.every((s) => (s.side | 0) === (hit.side | 0))
-    if (sel.length > 0 && !view.scene.selected.has(hit.id) && !sameTeam) {
-      const queued = !!e.shiftKey
-      const n = view.issueAttack(hit, queued)
-      view.setStatus(`${queued ? 'Attack queued' : 'Attack'} via mini-map — ${n} unit(s) on ${hit.name}.`)
-      return
-    }
     view.scene.selectClear()
     view.scene.selectAdd(hit.id)
     view.setStatus(`Selected ${hit.name} via mini-map.`)
     return
   }
-  if (sel.length > 0) {
-    const [wx, wz] = mapToWorld(px, py)
-    const queued = !!e.shiftKey
-    const n = view.issueMove([wx, 0, wz], queued)
-    view.setStatus(`${queued ? 'Move queued' : 'Move'} via mini-map — ${n} unit(s) to (${wx.toFixed(0)}, ${wz.toFixed(0)}).`)
+  // Empty ground: jump the camera there — the minimap as a viewport.
+  const [wx, wz] = mapToWorld(px, py)
+  if (view.camera) {
+    view.camera.target[0] = wx
+    view.camera.target[2] = wz
+    view.setStatus(`Camera to (${wx.toFixed(0)}, ${wz.toFixed(0)}).`)
   }
+}
+
+function onOrder(e) {
+  const view = activeView()
+  if (!view) return
+  const { px, py, hit } = clickPoint(view, e)
+  const sel = view.getSelectedUnits()
+  if (sel.length === 0) return
+  const queued = !!e.shiftKey
+  if (hit && !view.scene.selected.has(hit.id) &&
+      !sel.every((s) => (s.side | 0) === (hit.side | 0))) {
+    const n = view.issueAttack(hit, queued)
+    view.setStatus(`${queued ? 'Attack queued' : 'Attack'} via mini-map — ${n} unit(s) on ${hit.name}.`)
+    return
+  }
+  const [wx, wz] = mapToWorld(px, py)
+  const n = view.issueMove([wx, 0, wz], queued)
+  view.setStatus(`${queued ? 'Move queued' : 'Move'} via mini-map — ${n} unit(s) to (${wx.toFixed(0)}, ${wz.toFixed(0)}).`)
 }
 
 function draw() {

@@ -627,7 +627,7 @@ export class WasmSandboxScene {
   // builddistance, so the type's meta (with COB bytes) must be resolvable
   // synchronously by then — pre-fetch it into the spawn cache (local) or the
   // transport's meta registry (join) before submitting the order.
-  async build(builderId, name, x, z) {
+  async build(builderId, name, x, z, queued = false) {
     await this._readyPromise
     if (this._join) {
       if (this.source.registerMeta && !this.source.hasMeta(name)) {
@@ -636,7 +636,7 @@ export class WasmSandboxScene {
     } else if (!this._spawnMetas.has(name)) {
       this._spawnMetas.set(name, await this._fetchMeta(name))
     }
-    this.source.build(builderId, name, x, z)
+    this.source.build(builderId, name, x, z, queued)
   }
 
   // spawnRemote requests a unit from the authority (join mode). It prefetches
@@ -1045,21 +1045,30 @@ export class WasmSandboxScene {
   _tickBuildFx(snap) {
     if (!this._activeBuilds || this._activeBuilds.size === 0) return
     const tick = snap.tick | 0
-    if (tick % 5) return // 8 Hz pulse at the 40 Hz sim rate
+    if (tick % 2) return // 20 Hz pulse at the 40 Hz sim rate
     const color = (activeGame().buildFx && activeGame().buildFx.color) || [0.5, 1.7, 0.7, 1.0]
-    for (const [builderId, buildeeId] of this._activeBuilds) {
+    for (const [builderId, job] of this._activeBuilds) {
       const builder = this._units.get(builderId)
-      const buildee = this._units.get(buildeeId)
+      const buildee = this._units.get(job.buildeeId)
       const b = builder && builder.binding
       if (!builder || !buildee || !b || !b.particles) continue
       const sp = builder._p1 || builder.pos
       const bp = buildee._p1 || buildee.pos
+      // Spray stream: dense pulses along the builder→buildee line...
+      for (let i = 0; i < 4; i++) {
+        const t = 0.25 + 0.75 * (((tick / 2) + i) % 4) / 4
+        const x = sp.x + (bp.x - sp.x) * t + (((tick * 7 + i * 13) % 9) - 4)
+        const z = sp.z + (bp.z - sp.z) * t + (((tick * 5 + i * 17) % 9) - 4)
+        const y = Math.max(bp.y || 0, 0) + 6 + (((tick / 2) + i) % 3) * 6
+        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 10, lifeMs: 380, color })
+      }
+      // ...plus a shimmer over the rising frame itself, so the buildee
+      // visibly crackles with the construction energy.
       for (let i = 0; i < 3; i++) {
-        const t = 0.35 + 0.65 * (((tick / 5) + i) % 3) / 3
-        const x = sp.x + (bp.x - sp.x) * t + (((tick * 7 + i * 13) % 11) - 5)
-        const z = sp.z + (bp.z - sp.z) * t + (((tick * 5 + i * 17) % 11) - 5)
-        const y = Math.max(bp.y || 0, 0) + 5 + (((tick / 5) + i) % 3) * 5
-        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 7, lifeMs: 280, color })
+        const x = bp.x + (((tick * 11 + i * 23) % 25) - 12)
+        const z = bp.z + (((tick * 13 + i * 19) % 25) - 12)
+        const y = Math.max(bp.y || 0, 0) + 4 + ((tick * 3 + i * 29) % 22)
+        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 8, lifeMs: 300, color })
       }
     }
   }
@@ -1234,6 +1243,25 @@ export class WasmSandboxScene {
     })
   }
 
+  // buildAttachFor reports the live construction job holding a buildee, if
+  // any: the builder adapter, the pad piece name to pin the buildee to
+  // (QueryBuildInfo; null when the builder has no pad), and the builder's
+  // piece-name table index. The view uses it to ride a factory buildee on
+  // the build plate while it rises.
+  buildAttachFor(buildeeId) {
+    if (!this._activeBuilds) return null
+    for (const [builderId, job] of this._activeBuilds) {
+      if (job.buildeeId !== buildeeId) continue
+      const builder = this._units.get(builderId)
+      if (!builder) return null
+      const names = builder._cobPieceNames || []
+      const pieceName = (job.fromPiece >= 0 && job.fromPiece < names.length)
+        ? names[job.fromPiece] : null
+      return { builder, pieceName }
+    }
+    return null
+  }
+
   // _muzzleOffsetFor computes the world delta from a shot's sim spawn point (the
   // unit origin) to the actual firing piece, using the owner model's
   // resolvePieceWorld with the same +π render convention _muzzleAnchor uses. Any
@@ -1324,7 +1352,12 @@ export class WasmSandboxScene {
           // matching buildStop. Keyed by builder so a re-ordered builder
           // swaps cleanly to its new job.
           if (!this._activeBuilds) this._activeBuilds = new Map()
-          this._activeBuilds.set(ev.unitId, ev.targetId)
+          this._activeBuilds.set(ev.unitId, {
+            buildeeId: ev.targetId,
+            // Factory pad piece (QueryBuildInfo) the buildee rides during
+            // construction; -1 when the builder has no pad query.
+            fromPiece: ev.fromPiece == null ? -1 : ev.fromPiece,
+          })
           const b = this._units.get(ev.unitId)
           if (b) this.playUnitSound(b, 'build')
           break
