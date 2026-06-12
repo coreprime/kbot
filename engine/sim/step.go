@@ -76,6 +76,7 @@ func (w *World) Step(rt Runtime) {
 		w.stepWeapons(u)
 	}
 	w.pinCargo()
+	w.stepYards()
 	w.stepCollisions()
 	w.stepProjectiles()
 	w.stepEconomy()
@@ -272,6 +273,14 @@ func (w *World) rolloffSpot(factory, b *Unit) fixed.Vec2 {
 		for _, id := range w.order {
 			o := w.units[id]
 			if o == nil || o == b || o == factory || !collidable(o) {
+				continue
+			}
+			// Structures block by their yardmap cells, not a centre circle,
+			// so rolloff spots hug a building's true silhouette.
+			if hasYard(o) {
+				if yardCircleOverlaps(o, p, clearance) {
+					return false
+				}
 				continue
 			}
 			if o.loco.Pos.DistTo(p) < clearance {

@@ -66,6 +66,12 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		if o == nil || o == u || !collidable(o) {
 			continue
 		}
+		// An open yard is meant to be driven through — its passable channel
+		// would defeat circle-based avoidance, so skip it and let the cell
+		// separation handle any solid edges the mover grazes.
+		if hasYard(o) && o.yardOpen {
+			continue
+		}
 		od := o.loco.Pos.Sub(u.loco.Pos)
 		t := od.X.Mul(nx) + od.Z.Mul(nz) // projection along the path ray
 		if t <= 0 || t > lookahead {
@@ -130,7 +136,20 @@ func (w *World) stepCollisions() {
 }
 
 // separate pushes two overlapping bodies apart along their centre axis.
+// Structure-vs-mobile pairs resolve against the structure's yardmap cells
+// instead of a circle, so footprints (and their rotation) collide true.
 func (w *World) separate(a, b *Unit) {
+	ay, by := hasYard(a), hasYard(b)
+	switch {
+	case ay && by:
+		return // standing structures never overlap-resolve each other
+	case ay:
+		w.separateFromYard(b, a)
+		return
+	case by:
+		w.separateFromYard(a, b)
+		return
+	}
 	sumR := a.Meta.collisionRadius() + b.Meta.collisionRadius()
 	d := b.loco.Pos.Sub(a.loco.Pos)
 	// Cheap reject before the sqrt.
@@ -170,6 +189,28 @@ func (w *World) separate(a, b *Unit) {
 	}
 	w.relaxArrival(a, b, sumR)
 	w.relaxArrival(b, a, sumR)
+}
+
+// separateFromYard pushes a mobile body out of a structure's blocking yard
+// cells. The structure holds its ground; only the mover shifts.
+func (w *World) separateFromYard(m, s *Unit) {
+	if !canBePushed(m) {
+		return
+	}
+	r := m.Meta.collisionRadius()
+	push, hit := yardResolve(s, m.loco.Pos, r)
+	if !hit {
+		return
+	}
+	m.loco.Pos.X += push.X
+	m.loco.Pos.Z += push.Z
+	// Park-beside-it arrival only applies when the destination itself sits
+	// in the structure's blocked cells — a mover grazing a wall on its way
+	// PAST the building must keep its order.
+	if yardCircleOverlaps(s, m.moveTarget, r) {
+		hx, hz := yardHalfExtents(s.Meta)
+		w.relaxArrival(m, s, r+fixed.Max(hx, hz))
+	}
 }
 
 // relaxArrival completes u's move order when it is pressing against a body

@@ -55,7 +55,10 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		IsBuilder:   info.Builder == 1,
 		OnOffable:   info.OnOffable == 1,
 		MaxHealth:   fixed.FromInt(info.MaxDamage),
+		FootprintX:  info.FootprintX,
+		FootprintZ:  info.FootprintZ,
 	}
+	m.Yard = sim.ParseYardMap(info.YardMap, info.FootprintX, info.FootprintZ)
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	cats := map[string]bool{}
 	for _, c := range info.Category {

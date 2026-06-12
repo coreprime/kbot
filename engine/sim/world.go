@@ -157,6 +157,11 @@ type Unit struct {
 	hasUnload  bool
 	unloadAt   fixed.Vec2
 
+	// yardOpen marks a structure's yard as passable this tick (factory
+	// producing, or a unit standing inside it). Derived in stepYards from
+	// hashed state each tick, so it is not itself hashed or exported.
+	yardOpen bool
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive

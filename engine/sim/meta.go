@@ -40,6 +40,11 @@ type UnitMeta struct {
 	// transport).
 	TransportSlots int
 
+	// Yard is the parsed YardMap occupancy grid (row-major FootprintZ rows ×
+	// FootprintX cols). Nil means the whole footprint is solid. Only standing
+	// structures collide by yard; mobile units stay on the circle model.
+	Yard []yardCell
+
 	// Resource prices, drained over the unit's build (TA metal+energy,
 	// TA:K mana). Pools are infinite in the sandbox; the drain feeds the
 	// per-side usage stats only.

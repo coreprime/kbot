@@ -38,6 +38,7 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.BuildDistance = fixed.FromFloat(getFloat(o, "buildDistance"))
 	m.FootprintX = getInt(o, "footprintX")
 	m.FootprintZ = getInt(o, "footprintZ")
+	m.Yard = sim.ParseYardMap(getString(o, "yardMap"), m.FootprintX, m.FootprintZ)
 	m.TransportSlots = getInt(o, "transportSlots")
 	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
 	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))

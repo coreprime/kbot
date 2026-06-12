@@ -156,6 +156,10 @@ type unitMetaJSON struct {
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
 	FootprintZ int `json:"footprintZ,omitempty"`
+	// YardMap — the FBI's per-square occupancy string (o = solid, c = open
+	// with the yard, y = passable); the sim parses it into the footprint
+	// grid that drives structure collision and factory walk-through.
+	YardMap string `json:"yardMap,omitempty"`
 
 	// Categories — the FBI Category token list, upper-cased. The selection
 	// hotkeys reference these (TA:K's "SelectUnits BALLISTIC", TA's literal
@@ -534,6 +538,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.StoresMana = float64(info.MaxMana)
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
+	out.YardMap = strings.Join(strings.Fields(info.YardMap), " ")
 	for _, tok := range info.Category {
 		if t := strings.ToUpper(strings.TrimSpace(tok)); t != "" {
 			out.Categories = append(out.Categories, t)
