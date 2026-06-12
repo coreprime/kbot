@@ -148,7 +148,7 @@ func (w WeaponMeta) flies() bool {
 }
 
 // collisionRadius derives the unit's body circle from its FBI footprint
-// (squares of 8 world units; the radius is half the wider side). Units with
+// (squares of 16 world units; the radius is half the wider side). Units with
 // no footprint get a small vehicle-sized default.
 func (m *UnitMeta) collisionRadius() fixed.Fixed {
 	f := m.FootprintX
@@ -156,9 +156,9 @@ func (m *UnitMeta) collisionRadius() fixed.Fixed {
 		f = m.FootprintZ
 	}
 	if f <= 0 {
-		return fixed.FromInt(8)
+		return fixed.FromInt(12)
 	}
-	return fixed.Clamp(fixed.FromInt(f*4), fixed.FromInt(6), fixed.FromInt(48))
+	return fixed.Clamp(fixed.FromInt(f*8), fixed.FromInt(10), fixed.FromInt(96))
 }
 
 // movement-rate conversions. TA simulates locomotion at 30 Hz, so an FBI

@@ -612,8 +612,24 @@ export class SandboxView {
       }
       this.#refreshEntities()
       this.#refreshDefaultCursor()
-      // Commit the spawn — pointer-down position, drag-derived heading.  The
-      // wasm world runs the unit's Create script itself on spawn.
+      // Commit. A construction-site pick (p.buildFor — the build-menu
+      // path for a mobile builder) issues a Build order: the builder
+      // walks over and raises the unit through the sim's gradual build
+      // cycle. Every real pointer gesture lands HERE (pointerup), not in
+      // #onClick, so without this branch the dock's build flow
+      // instant-spawned finished units. Plain spawns keep the
+      // drag-derived heading; the sim orients a buildee itself.
+      if (p.buildFor) {
+        try {
+          await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2])
+          this.#setStatus(`Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
+        } catch (err) {
+          this.#setStatus(`Build order failed: ${err?.message || err}`)
+        }
+        this.#refreshEntities()
+        return
+      }
+      // The wasm world runs the unit's Create script itself on spawn.
       await this.#spawnUnit({
         name: p.name,
         model: p.model,
@@ -2303,7 +2319,7 @@ export class SandboxView {
       // a fixed 32px disc at its centre, which made big factories appear
       // to ignore clicks entirely.
       const fp = u.meta ? Math.max(u.meta.footprintX || 0, u.meta.footprintZ || 0) : 0
-      const radWU = Math.max(fp * 4, 10)
+      const radWU = Math.max(fp * 8, 12)
       const feet = this.#worldToScreen(u.pos.x, u.pos.y, u.pos.z)
       const head = this.#worldToScreen(u.pos.x, u.pos.y + Math.max(24, radWU), u.pos.z)
       if (!feet || !head) continue

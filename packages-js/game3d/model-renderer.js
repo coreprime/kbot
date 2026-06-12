@@ -2042,7 +2042,14 @@ export class ModelRenderer {
         // set in _castsShadow above; reading it lets the lighting
         // decision stay in lockstep without re-classifying distance.
         this._lightingTierCheap = (ent._lodShadowOn === false)
+        // Under-construction entities render DARK and brighten with build
+        // progress (the unlit-hull look), so a freshly-placed frame never
+        // reads as a finished unit popping into existence.
+        const _bpFrac = Math.max(0, Math.min(1, (this.buildPercent ?? 100) / 100))
+        const _savedExposure = this.exposure
+        if (_bpFrac < 1) this.exposure = (this.exposure ?? 1) * (0.22 + 0.78 * _bpFrac)
         this.#renderMain(this.renderMode === 'flat')
+        this.exposure = _savedExposure
         this._lodHideFlares = false
         this._lightingTierCheap = false
         // Construction shell — an under-construction entity wears a

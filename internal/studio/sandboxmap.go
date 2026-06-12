@@ -23,13 +23,14 @@ import (
 // terrain render (TA tile composite or TA:K texture composite) downscaled
 // for use as the ground texture.
 //
-// World scale: TA world coordinates are map pixels, and the studio renders
-// units at half pixel scale (a 2×2-footprint Peewee is 32 px and 16 wu), so
-// one 16-px attribute cell is 8 wu and heights land at 1/4 wu per unit.
+// World scale: the studio renders one map pixel as one world unit — a
+// 2×2-footprint Peewee model is ~32 wu wide, matching its 32 px in-game
+// footprint — so one 16-px attribute cell is 16 wu and heights land at the
+// classic 1/2 wu per height unit.
 const (
-	sandboxCellWU      = 8.0
-	sandboxHeightScale = 0.25
-	pxPerWU            = 2.0
+	sandboxCellWU      = 16.0
+	sandboxHeightScale = 0.5
+	pxPerWU            = 1.0
 )
 
 // sandboxMapJSON is the /api/studio/sandbox-map response.

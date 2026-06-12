@@ -120,7 +120,11 @@ func (w *World) stepEconomy() {
 
 // buildSinkWU is how far a buildee starts below grade: it rises out of the
 // ground as its build percentage climbs, the sim-side visual of construction.
-var buildSinkWU = fixed.FromInt(10)
+var buildSinkWU = fixed.FromInt(20)
+
+// padSpinPerTick is the factory pad's display rotation while assembling a
+// unit (~22 seconds per turn at the 40 Hz tick rate).
+var padSpinPerTick = fixed.FromInt(72)
 
 // stepBuilder advances a builder's construction job. A mobile builder walks
 // to within builddistance of its ordered site; a factory pops the next entry
@@ -194,15 +198,25 @@ func (w *World) stepBuilder(u *Unit) {
 		pctPerTick := fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz)))
 		b.BuildPercent += pctPerTick
 		w.drainBuildCost(u.Side, b.Meta, pctPerTick)
+		ground := w.groundHeight(b.loco.Pos)
 		if b.BuildPercent < fixed.FromInt(100) {
-			if !b.Meta.IsAircraft {
-				b.PosY = -buildSinkWU.Mul(fixed.FromInt(100) - b.BuildPercent).Div(fixed.FromInt(100))
+			if u.Meta.CanMove {
+				// Mobile builder: the frame rises out of the ground —
+				// relative to the terrain, never below it on a hill.
+				if !b.Meta.IsAircraft {
+					b.PosY = ground - buildSinkWU.Mul(fixed.FromInt(100)-b.BuildPercent).Div(fixed.FromInt(100))
+				}
+			} else {
+				// Factory: the unit sits ON the pad and slowly turns with
+				// it while it is assembled (the vehicle-plant pad spin).
+				b.PosY = ground
+				b.loco.Heading += padSpinPerTick
 			}
 			return
 		}
 		b.BuildPercent = fixed.FromInt(100)
 		if !b.Meta.IsAircraft {
-			b.PosY = 0
+			b.PosY = ground
 		}
 		if u.binding != nil && u.binding.HasScript("StopBuilding") {
 			u.binding.Start("StopBuilding")
@@ -261,7 +275,11 @@ func (w *World) startRaising(u *Unit) {
 	id := w.AddUnit(u.buildName, meta, binding, u.buildSite, u.Heading(), u.Side)
 	b := w.units[id]
 	b.BuildPercent = 0
-	b.PosY = -buildSinkWU
+	if u.Meta.CanMove {
+		b.PosY = w.groundHeight(b.loco.Pos) - buildSinkWU
+	} else {
+		b.PosY = w.groundHeight(b.loco.Pos)
+	}
 	u.buildeeID = id
 	u.buildState = buildRaising
 	u.buildGateMs = w.simMs + buildGateGraceMs

@@ -53,8 +53,8 @@ func TestYardChannelOpensWithYard(t *testing.T) {
 	s := w.UnitByID(id)
 	r := fixed.FromInt(6)
 	channel := fixed.Vec2{}                     // dead centre, on the channel
-	flank := fixed.Vec2{X: fixed.FromInt(-20)}  // solid west columns
-	corner := fixed.Vec2{X: fixed.FromInt(-23), Z: fixed.FromInt(-23)}
+	flank := fixed.Vec2{X: fixed.FromInt(-24)}  // solid west columns
+	corner := fixed.Vec2{X: fixed.FromInt(-44), Z: fixed.FromInt(-44)}
 	if !yardCircleOverlaps(s, channel, r) {
 		t.Fatalf("closed channel should block")
 	}
@@ -87,9 +87,9 @@ func TestYardRotationCollides(t *testing.T) {
 	upright := w.UnitByID(w.AddUnit("wall", m, nil, fixed.Vec2{}, 0, 0))
 	turned := w.UnitByID(w.AddUnit("wall", m, nil, fixed.Vec2{X: fixed.FromInt(500)}, 16384, 0))
 
-	// 20 wu out along world X: outside the upright's 8 wu half-width,
-	// inside the turned one's 24 wu reach.
-	probe := fixed.FromInt(20)
+	// 40 wu out along world X: outside the upright's 16 wu half-width,
+	// inside the turned one's 48 wu reach.
+	probe := fixed.FromInt(40)
 	r := fixed.FromInt(4)
 	if yardCircleOverlaps(upright, fixed.Vec2{X: probe}, r) {
 		t.Fatalf("upright wall should be clear 20wu out on X")
@@ -109,19 +109,24 @@ func TestYardRotationCollides(t *testing.T) {
 // straight through a closed lab is held out of its solid cells every tick.
 func TestMoverNeverEntersClosedYard(t *testing.T) {
 	w := New(Config{Seed: 83})
-	w.AddUnit("lab", labMeta(), nil, fixed.Vec2{}, 0, 0)
-	kb := w.AddUnit("kbot", testMeta("kbot"), nil, fixed.Vec2{X: fixed.FromInt(-120)}, 0, 0)
+	lab := w.UnitByID(w.AddUnit("lab", labMeta(), nil, fixed.Vec2{}, 0, 0))
+	kb := w.AddUnit("kbot", testMeta("kbot"), nil, fixed.Vec2{X: fixed.FromInt(-200)}, 0, 0)
 	w.ApplyOrder(order.Stance([]uint32{kb}, order.MoveHold, order.FireHold))
-	w.ApplyOrder(order.Move([]uint32{kb}, fixed.Vec2{X: fixed.FromInt(120)}))
+	w.ApplyOrder(order.Move([]uint32{kb}, fixed.Vec2{X: fixed.FromInt(200)}))
 	u := w.UnitByID(kb)
-	for i := 0; i < 800; i++ {
+	hx, hz := yardHalfExtents(lab.Meta)
+	for i := 0; i < 1000; i++ {
 		w.Step(nil)
-		// The mover's centre must never reach the solid flank columns
-		// (|x| in 8..24 of the footprint, any |z| < 24).
-		x, z := u.loco.Pos.X.Abs(), u.loco.Pos.Z.Abs()
-		if x < fixed.FromInt(23) && x > fixed.FromInt(9) && z < fixed.FromInt(23) {
-			t.Fatalf("tick %d: mover inside solid yard at (%v, %v)",
-				i, u.loco.Pos.X.Float(), u.loco.Pos.Z.Float())
+		// The mover's centre must never land in a cell the closed yard
+		// blocks (the passable y-corners are legal shortcuts).
+		l := yardLocal(lab, u.loco.Pos)
+		if l.X.Abs() < hx && l.Z.Abs() < hz {
+			cx := (l.X + hx).Div(yardSquareWU).Int()
+			cz := (l.Z + hz).Div(yardSquareWU).Int()
+			if yardCellBlocks(lab, cx, cz) {
+				t.Fatalf("tick %d: mover inside blocked cell (%d,%d) at (%v, %v)",
+					i, cx, cz, u.loco.Pos.X.Float(), u.loco.Pos.Z.Float())
+			}
 		}
 	}
 }

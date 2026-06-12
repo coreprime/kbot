@@ -19,8 +19,9 @@ const (
 	yardOpenable                 // blocks only while the yard is closed
 )
 
-// yardSquareWU is the side of one footprint square in world units.
-var yardSquareWU = fixed.FromInt(8)
+// yardSquareWU is the side of one footprint square in world units (one
+// 16-px TA footprint slot at the render scale of 1 px = 1 wu).
+var yardSquareWU = fixed.FromInt(16)
 
 // ParseYardMap converts an FBI YardMap string into a row-major fz×fx cell
 // grid. Whitespace separates rows visually but cells are consumed in reading
@@ -106,7 +107,7 @@ func yardLocal(s *Unit, p fixed.Vec2) fixed.Vec2 {
 
 // yardHalfExtents returns the footprint rectangle's half sides in wu.
 func yardHalfExtents(m *UnitMeta) (hx, hz fixed.Fixed) {
-	return fixed.FromInt(m.FootprintX * 4), fixed.FromInt(m.FootprintZ * 4)
+	return fixed.FromInt(m.FootprintX * 8), fixed.FromInt(m.FootprintZ * 8)
 }
 
 // yardCircleOverlaps reports whether a body circle at world point p with
