@@ -61,6 +61,9 @@ type Session struct {
 	takTerrainPNG map[string][]byte
 	takTerrainImg map[string]*image.RGBA
 
+	tilePoolMu  sync.Mutex
+	tilePoolPNG map[string][]byte
+
 	scanFeaturesCacheMu sync.Mutex
 	scanFeaturesList    []featureEntry
 	scanFeaturesByName  map[string]featureEntry

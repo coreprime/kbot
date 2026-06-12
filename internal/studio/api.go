@@ -823,26 +823,55 @@ func (sess *Session) handleMapTilePool(w http.ResponseWriter, r *http.Request) {
 		}
 		sess.cacheTNT(mapPath, m)
 	}
-	pal := sess.loadVFSPalette()
-	cols := tilePoolCols(len(m.Tiles))
-	rows := (len(m.Tiles) + cols - 1) / cols
-	if rows < 1 {
-		rows = 1
+	// The atlas only changes when the map's tile pool changes (a save),
+	// so memoise the encoded PNG — compositing + encoding a big pool costs
+	// the better part of a second and the editor refetches on every open.
+	sess.tilePoolMu.Lock()
+	if sess.tilePoolPNG == nil {
+		sess.tilePoolPNG = map[string][]byte{}
 	}
-	img := image.NewRGBA(image.Rect(0, 0, cols*32, rows*32))
-	for i, tile := range m.Tiles {
-		px := (i % cols) * 32
-		py := (i / cols) * 32
-		for y := 0; y < 32; y++ {
-			for x := 0; x < 32; x++ {
-				idx := tile[y*32+x]
-				img.Set(px+x, py+y, pal[idx])
+	cached := sess.tilePoolPNG[mapPath]
+	sess.tilePoolMu.Unlock()
+	if cached == nil {
+		pal := sess.loadVFSPalette()
+		cols := tilePoolCols(len(m.Tiles))
+		rows := (len(m.Tiles) + cols - 1) / cols
+		if rows < 1 {
+			rows = 1
+		}
+		img := image.NewRGBA(image.Rect(0, 0, cols*32, rows*32))
+		for i, tile := range m.Tiles {
+			px := (i % cols) * 32
+			py := (i / cols) * 32
+			for y := 0; y < 32; y++ {
+				for x := 0; x < 32; x++ {
+					idx := tile[y*32+x]
+					img.Set(px+x, py+y, pal[idx])
+				}
 			}
 		}
+		var buf bytes.Buffer
+		enc := png.Encoder{CompressionLevel: png.BestSpeed}
+		if err := enc.Encode(&buf, img); err != nil {
+			http.Error(w, "encode atlas: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cached = buf.Bytes()
+		sess.tilePoolMu.Lock()
+		sess.tilePoolPNG[mapPath] = cached
+		sess.tilePoolMu.Unlock()
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = png.Encode(w, img)
+	_, _ = w.Write(cached)
+}
+
+// invalidateTilePool drops a map's cached atlas after a save rewrites its
+// tile pool.
+func (sess *Session) invalidateTilePool(mapPath string) {
+	sess.tilePoolMu.Lock()
+	delete(sess.tilePoolPNG, mapPath)
+	sess.tilePoolMu.Unlock()
 }
 
 // joinInts renders the typed NumPlayers list back to the comma-joined
@@ -1733,6 +1762,7 @@ func (sess *Session) saveMapToWorkspace(req saveRequest) ([]string, error) {
 	}
 	name := strings.ToLower(req.MapName)
 	tntPath, otaPath := "maps/"+name+".tnt", "maps/"+name+".ota"
+	sess.invalidateTilePool(tntPath)
 	if err := sess.vfs.WriteFile(tntPath, tntBytes); err != nil {
 		return nil, err
 	}

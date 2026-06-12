@@ -305,10 +305,14 @@ export async function openLoadedMap(data, card) {
     }, { once: true })
     full.src = `${data.terrainUrl}${sep}max=${TAK_TERRAIN_EDITOR_MAX}`
   } else {
+    // TA tile-pool atlas: don't block boot on the (multi-MB) decode — the
+    // tile pass paints placeholder cells and re-renders when the atlas is
+    // ready (whenImageReady in drawTiles), so the editor appears at once.
+    img.addEventListener('load', () => hostCallbacks.renderCanvas?.(), { once: true })
     img.src = data.tilePoolUrl
     state.sectionImages.set(data.tilePoolKey, img)
   }
-  await ready
+  if (data.textureMapped) await ready
 
   $('#open-dialog').classList.add('hidden')
   $('#welcome-dialog').classList.add('hidden')
