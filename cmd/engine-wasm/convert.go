@@ -613,6 +613,9 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 				"metalGen":    r.MetalGen.Float(),
 				"energyGen":   r.EnergyGen.Float(),
 				"manaGen":     r.ManaGen.Float(),
+				"metalProduced":  r.MetalProduced.Float(),
+				"energyProduced": r.EnergyProduced.Float(),
+				"manaProduced":   r.ManaProduced.Float(),
 			})
 		}
 		out["resources"] = res

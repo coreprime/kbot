@@ -63,6 +63,8 @@ function ensureRoot() {
   _root.hidden = true
   _root.addEventListener('mousemove', dockMagnify)
   _root.addEventListener('mouseleave', dockReset)
+  _root.addEventListener('mouseover', tipShow)
+  _root.addEventListener('mouseout', tipHide)
   dlg.appendChild(_root)
   return _root
 }
@@ -93,6 +95,64 @@ function dockReset() {
   for (const cell of _root.children) {
     if (cell.style) cell.style.transform = ''
   }
+  if (_tip) _tip.hidden = true
+}
+
+// ── Hover tooltip ───────────────────────────────────────────────────
+//
+// One floating tip above the hovered cell: the unit's human-readable name
+// (meta.title, falling back to the codename) and — on a factory's build
+// row — the resource costs, which live here instead of under the icon.
+
+let _tip = null
+
+function ensureTip() {
+  if (_tip && _tip.isConnected) return _tip
+  const dlg = document.getElementById('model-viewer-dialog')
+  if (!dlg) return null
+  _tip = document.createElement('div')
+  _tip.id = 'roster-tip'
+  _tip.hidden = true
+  dlg.appendChild(_tip)
+  return _tip
+}
+
+function tipShow(e) {
+  const cell = e.target.closest?.('.roster-cell')
+  if (!cell || !_root || !_root.contains(cell)) return
+  const tip = ensureTip()
+  if (!tip) return
+  const name = cell.dataset.build || cell.dataset.unit
+  if (!name) return
+  const meta = buildMeta(name)
+  // First hover races the meta fetch — retry shortly so the display name
+  // and costs replace the codename once the cache fills.
+  if (meta === undefined) {
+    setTimeout(() => {
+      if (!_tip || _tip.hidden) return
+      if (cell.matches(':hover')) tipShow({ target: cell })
+    }, 350)
+  }
+  const title = (meta && meta.title) || name
+  let html = `<div class="roster-tip-name">${title}</div>`
+  if (cell.dataset.build && cell.dataset.costtip === '1') {
+    const cost = costLineHTML(name)
+    if (cost.includes('span')) html += cost
+  }
+  tip.innerHTML = html
+  tip.hidden = false
+  const host = tip.parentElement.getBoundingClientRect()
+  const r = cell.getBoundingClientRect()
+  tip.style.left = `${r.left + r.width / 2 - host.left}px`
+  const strip = _root.getBoundingClientRect()
+  tip.style.bottom = `${host.bottom - strip.top + 10}px`
+}
+
+function tipHide(e) {
+  if (!_tip) return
+  const into = e.relatedTarget
+  if (into && _root && _root.contains(into) && into.closest?.('.roster-cell')) return
+  _tip.hidden = true
 }
 
 function healthFrac(u) {
@@ -117,23 +177,25 @@ function costLineHTML(name) {
   return `<div class="roster-cost">${parts.join('<span class="roster-cost-sep">·</span>')}</div>`
 }
 
-// buildCellHTML — one constructible unit in the single-builder build row,
-// with its resource costs and (for factories) the production-run counter.
-function buildCellHTML(name, queued) {
+// buildCellHTML — one constructible unit in the single-builder build row
+// and (for factories) the production-run counter. A factory's resource
+// costs move into the hover tip (costtip), keeping the dock row compact;
+// a mobile builder keeps them inline beneath the icon.
+function buildCellHTML(name, queued, costInTip) {
   return `
-    <div class="roster-cell roster-build-cell" data-build="${name}" title="Build ${name}">
+    <div class="roster-cell roster-build-cell" data-build="${name}" data-costtip="${costInTip ? 1 : 0}">
       <div class="roster-pic-wrap roster-pic-wrap-sm">
         <img class="roster-pic roster-pic-sm" data-unit="${name}" alt="${name}" />
         ${queued > 0 ? `<span class="roster-count">${queued}</span>` : ''}
       </div>
-      ${costLineHTML(name)}
+      ${costInTip ? '' : costLineHTML(name)}
     </div>`
 }
 
-function cellHTML({ name, title, count, frac }) {
+function cellHTML({ name, count, frac }) {
   const pct = Math.round(frac * 100)
   return `
-    <div class="roster-cell" data-unit="${name}" title="${title || name}${count > 1 ? ` ×${count}` : ''} — ${pct}% health">
+    <div class="roster-cell" data-unit="${name}">
       <div class="roster-pic-wrap">
         <img class="roster-pic" data-unit="${name}" alt="${name}" />
         ${count > 1 ? `<span class="roster-count">${count}</span>` : ''}
@@ -196,9 +258,10 @@ function update() {
   if (sig === _sig && !root.hidden) return
   _sig = sig
   root.hidden = false
+  const builderIsFactory = !!(builder && builder.meta && builder.meta.canMove === false)
   root.innerHTML = cells.map((c) => cellHTML(c)).join('')
     + (buildOpts.length
-      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n, queuedCount(builder, n))).join('')}`
+      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n, queuedCount(builder, n), builderIsFactory)).join('')}`
       : '')
   // Set image sources as PROPERTY writes after the markup lands: the
   // workspace URL shim rewrites src assignments to carry the /workspaces/

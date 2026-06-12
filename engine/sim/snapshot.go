@@ -99,9 +99,12 @@ func (w *World) Snapshot() frame.Snapshot {
 			MetalCap:    c.Metal,
 			EnergyCap:   c.Energy,
 			ManaCap:     c.Mana,
-			MetalGen:    g.Metal,
-			EnergyGen:   g.Energy,
-			ManaGen:     g.Mana,
+			MetalGen:       g.Metal,
+			EnergyGen:      g.Energy,
+			ManaGen:        g.Mana,
+			MetalProduced:  w.resProduced[side].Metal,
+			EnergyProduced: w.resProduced[side].Energy,
+			ManaProduced:   w.resProduced[side].Mana,
 		})
 	}
 	evts := w.events

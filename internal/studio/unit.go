@@ -38,6 +38,9 @@ func (sess *Session) registerUnitAPI(mux *http.ServeMux) {
 // converts to per-second for live interpolation.
 type unitMetaJSON struct {
 	Name string `json:"name"`
+	// Title is the unit's human-readable FBI name ("Fido"), with the FBI
+	// description appended for tooltips ("Fido — Assault Kbot").
+	Title string `json:"title,omitempty"`
 
 	// Movement (from FBI [UNITINFO]).  CanMove is true when the unit
 	// has a non-zero MaxVelocity AND its Category doesn't mark it as
@@ -539,6 +542,14 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
 	out.YardMap = strings.Join(strings.Fields(info.YardMap), " ")
+	out.Title = strings.TrimSpace(info.Name)
+	if d := strings.TrimSpace(info.Description); d != "" {
+		if out.Title != "" {
+			out.Title += " — " + d
+		} else {
+			out.Title = d
+		}
+	}
 	for _, tok := range info.Category {
 		if t := strings.ToUpper(strings.TrimSpace(tok)); t != "" {
 			out.Categories = append(out.Categories, t)

@@ -28,11 +28,11 @@ function ensureRoot() {
   return _root
 }
 
-// Field triplets per resource key: [stock, cap, gen, drainRate, spent].
+// Field tuples per resource key: [stock, cap, gen, drainRate, produced].
 const FIELDS = {
-  metal: ['metalStock', 'metalCap', 'metalGen', 'metalRate', 'metalSpent'],
-  energy: ['energyStock', 'energyCap', 'energyGen', 'energyRate', 'energySpent'],
-  mana: ['manaStock', 'manaCap', 'manaGen', 'manaRate', 'manaSpent'],
+  metal: ['metalStock', 'metalCap', 'metalGen', 'metalRate', 'metalProduced'],
+  energy: ['energyStock', 'energyCap', 'energyGen', 'energyRate', 'energyProduced'],
+  mana: ['manaStock', 'manaCap', 'manaGen', 'manaRate', 'manaProduced'],
 }
 
 // sum aggregates a field across every side — the sandbox has no "local
@@ -43,9 +43,16 @@ function sum(resources, field) {
   return v
 }
 
+// fmt renders friendly units: 200000 -> 200k, 1500000 -> 1.5M.
 function fmt(n) {
-  if (n >= 10000) return `${(n / 1000).toFixed(1)}k`
+  if (n >= 1e6) return `${trim((n / 1e6).toFixed(1))}M`
+  if (n >= 1e5) return `${Math.round(n / 1000)}k`
+  if (n >= 1e3) return `${trim((n / 1000).toFixed(1))}k`
   return String(Math.round(n))
+}
+
+function trim(s) {
+  return s.endsWith('.0') ? s.slice(0, -2) : s
 }
 
 function update() {
@@ -62,20 +69,28 @@ function update() {
   const resources = view.scene.resources || []
   const rows = []
   for (const def of defs) {
-    const [stockF, capF, genF, rateF] = FIELDS[def.key] || []
+    const [stockF, capF, genF, rateF, prodF] = FIELDS[def.key] || []
     if (!stockF) continue
     const stock = sum(resources, stockF)
     const cap = sum(resources, capF)
     const gen = sum(resources, genF)
     const drain = sum(resources, rateF)
+    const produced = sum(resources, prodF)
+    const net = gen - drain
     const fill = cap > 0 ? Math.max(0, Math.min(1, stock / cap)) : 0
+    const netCls = net >= 0 ? 'eco-rate-pos' : 'eco-rate-neg'
+    const netTxt = `${net >= 0 ? '+' : '−'}${fmt(Math.abs(net))}/s`
     rows.push(
-      `<div class="eco-row" title="${def.label} — stock ${fmt(stock)} of ${fmt(cap)} capacity; +${gen.toFixed(1)}/s generated, −${drain.toFixed(1)}/s building. Builds never stall (∞).">`
+      `<div class="eco-row" title="${def.label} — ${fmt(stock)} of ${fmt(cap)} storage; +${fmt(gen)}/s generated, −${fmt(drain)}/s building; ${fmt(produced)} produced in total. Builds never stall (∞).">`
       + `<span class="eco-label" style="color:${def.color}">${def.label}</span>`
-      + `<span class="eco-bar"><span class="eco-fill" style="width:${(fill * 100).toFixed(1)}%;background:${def.color}"></span></span>`
-      + `<span class="eco-stock">${fmt(stock)}<span class="eco-cap">/${fmt(cap)}</span></span>`
-      + `<span class="eco-rates">+${gen.toFixed(1)} −${drain.toFixed(1)}</span>`
-      + '<span class="eco-inf" title="Infinite — costs are accounted but never gate">∞</span>'
+      + '<span class="eco-bar">'
+      + `<span class="eco-fill" style="width:${(fill * 100).toFixed(1)}%;background:${def.color}"></span>`
+      + `<span class="eco-bartext">${fmt(stock)} / ${fmt(cap)}</span>`
+      + '</span>'
+      + '<span class="eco-side">'
+      + `<span class="eco-rate ${netCls}">${netTxt}</span>`
+      + `<span class="eco-total">Σ ${fmt(produced)}</span>`
+      + '</span>'
       + '</div>',
     )
   }

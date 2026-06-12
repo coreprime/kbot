@@ -107,6 +107,10 @@ func (w *World) stepEconomy() {
 	}
 	dt := dtSec
 	for side := range w.resStock {
+		p := &w.resProduced[side]
+		p.Metal += w.resGen[side].Metal.Mul(dt)
+		p.Energy += w.resGen[side].Energy.Mul(dt)
+		p.Mana += w.resGen[side].Mana.Mul(dt)
 		s := &w.resStock[side]
 		s.Metal = fixed.Clamp(s.Metal+(w.resGen[side].Metal-w.resRate[side].Metal).Mul(dt), 0, w.resCap[side].Metal)
 		s.Energy = fixed.Clamp(s.Energy+(w.resGen[side].Energy-w.resRate[side].Energy).Mul(dt), 0, w.resCap[side].Energy)

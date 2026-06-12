@@ -278,6 +278,9 @@ type World struct {
 	resStock [maxSides]resourceTally
 	resCap   [maxSides]resourceTally
 	resGen   [maxSides]resourceTally
+	// resProduced accumulates gross generation over the session, the
+	// economy bar's lifetime-production figure.
+	resProduced [maxSides]resourceTally
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).

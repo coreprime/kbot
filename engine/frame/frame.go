@@ -86,6 +86,10 @@ type ResourceState struct {
 	MetalGen    fixed.Fixed
 	EnergyGen   fixed.Fixed
 	ManaGen     fixed.Fixed
+	// Lifetime gross production, for the economy bar's totals line.
+	MetalProduced  fixed.Fixed
+	EnergyProduced fixed.Fixed
+	ManaProduced   fixed.Fixed
 }
 
 // ProjectileState is one in-flight model projectile (missile/rocket/bomb).

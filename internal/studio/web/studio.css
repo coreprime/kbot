@@ -7157,8 +7157,9 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   z-index: 30;
-  max-width: 70%;
-  overflow-x: auto;
+  max-width: 92%;
+  /* Magnified icons swell past the bar — never clip them. */
+  overflow: visible;
 }
 .roster-cell {
   display: flex;
@@ -7190,6 +7191,27 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 }
 .roster-bar { width: 100%; height: 4px; background: rgba(0, 0, 0, 0.7); border-radius: 2px; overflow: hidden; }
 .roster-bar-fill { height: 100%; }
+
+/* Hover tip above the roster strip: unit display name + (factory build
+   rows) the resource costs that no longer sit under the icons. */
+#roster-tip {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 9px;
+  background: rgba(12, 13, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  z-index: 40;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.roster-tip-name { font-weight: 700; }
+#roster-tip .roster-cost { font-size: 10px; }
 
 /* Build row inside the roster strip */
 .roster-divider { width: 1px; align-self: stretch; background: rgba(255, 255, 255, 0.18); margin: 0 4px; }
@@ -7239,10 +7261,27 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   overflow: hidden;
 }
 #sandbox-economy-bar .eco-fill { display: block; height: 100%; opacity: 0.85; transition: width 240ms linear; }
-#sandbox-economy-bar .eco-stock { min-width: 66px; text-align: right; }
-#sandbox-economy-bar .eco-cap { opacity: 0.55; font-size: 10px; }
-#sandbox-economy-bar .eco-rates { color: #f0a44a; min-width: 70px; font-size: 10px; }
-#sandbox-economy-bar .eco-inf { opacity: 0.8; font-size: 13px; }
+#sandbox-economy-bar .eco-bar { position: relative; height: 13px; }
+#sandbox-economy-bar .eco-bartext {
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  font-size: 10px;
+  line-height: 13px;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+#sandbox-economy-bar .eco-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 64px;
+  line-height: 12px;
+}
+#sandbox-economy-bar .eco-rate { font-size: 11px; font-weight: 700; }
+#sandbox-economy-bar .eco-rate-pos { color: #5ecf6a; }
+#sandbox-economy-bar .eco-rate-neg { color: #e25b52; }
+#sandbox-economy-bar .eco-total { font-size: 10px; color: rgba(255, 255, 255, 0.45); }
 
 /* Mini-map — bottom-right. Team-coloured dots; click selects, click an
    opposing unit attacks (shift queues), empty ground moves. */
