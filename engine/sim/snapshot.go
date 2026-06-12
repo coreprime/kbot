@@ -26,7 +26,7 @@ func (w *World) Snapshot() frame.Snapshot {
 		if len(u.queue) > 0 {
 			queue = make([]frame.QueuedOrder, 0, len(u.queue))
 			for _, c := range u.queue {
-				queue = append(queue, frame.QueuedOrder{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
+				queue = append(queue, frame.QueuedOrder{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit, Name: c.name})
 			}
 		}
 		units = append(units, frame.UnitState{
@@ -193,6 +193,9 @@ func (w *World) Hash() uint64 {
 			mix(uint64(c.target.X))
 			mix(uint64(c.target.Z))
 			mix(uint64(c.targetUnit))
+			for i := 0; i < len(c.name); i++ {
+				mix(uint64(c.name[i]))
+			}
 		}
 	}
 	return h

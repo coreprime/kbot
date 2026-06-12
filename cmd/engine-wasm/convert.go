@@ -212,6 +212,7 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 						Kind:       uint8(getInt(q, "kind")),
 						Target:     fixed.Vec2{X: fixed.Fixed(getInt64(q, "tx")), Z: fixed.Fixed(getInt64(q, "tz"))},
 						TargetUnit: uint32(getInt(q, "targetUnit")),
+						Name:       getString(q, "name"),
 					})
 				}
 			}
@@ -485,12 +486,16 @@ func snapshotToWireJS(inst *instance) js.Value {
 		if len(ru.Queue) > 0 {
 			queue := make([]any, len(ru.Queue))
 			for i, q := range ru.Queue {
-				queue[i] = map[string]any{
+				entryQ := map[string]any{
 					"kind":       int(q.Kind),
 					"tx":         float64(q.Target.X),
 					"tz":         float64(q.Target.Z),
 					"targetUnit": int(q.TargetUnit),
 				}
+				if q.Name != "" {
+					entryQ["name"] = q.Name
+				}
+				queue[i] = entryQ
 			}
 			entry["queue"] = queue
 		}
@@ -680,12 +685,16 @@ func unitToJS(u *frame.UnitState) map[string]any {
 	if len(u.Queue) > 0 {
 		queue := make([]any, len(u.Queue))
 		for i, q := range u.Queue {
-			queue[i] = map[string]any{
+			entry := map[string]any{
 				"kind":     int(q.Kind),
 				"x":        q.Target.X.Float(),
 				"z":        q.Target.Z.Float(),
 				"targetId": int(q.TargetUnit),
 			}
+			if q.Name != "" {
+				entry["name"] = q.Name
+			}
+			queue[i] = entry
 		}
 		out["queue"] = queue
 	}

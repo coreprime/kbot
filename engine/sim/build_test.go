@@ -108,3 +108,32 @@ func TestBuildCancelledByStop(t *testing.T) {
 		t.Fatalf("abandoned buildee kept rising: %v -> %v", pct.Float(), b.BuildPercent.Float())
 	}
 }
+
+// TestQueuedBuildChain pins the shift-queued base plan: a mobile builder
+// given one immediate and two queued Build orders raises all three in
+// order, pulling the next site off its queue as each completes.
+func TestQueuedBuildChain(t *testing.T) {
+	w := buildWorld()
+	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
+	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(200)}))
+	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(320)}))
+	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(440)}))
+
+	u := w.UnitByID(bld)
+	if len(u.queue) != 2 {
+		t.Fatalf("queued builds did not defer: queue len %d", len(u.queue))
+	}
+	done := 0
+	for i := 0; i < 30000 && done < 3; i++ {
+		w.Step(nil)
+		done = 0
+		for _, id := range w.order {
+			if o := w.units[id]; o != nil && o.Name == "solar" && !o.underConstruction() {
+				done++
+			}
+		}
+	}
+	if done != 3 {
+		t.Fatalf("queued build chain stalled: %d of 3 finished", done)
+	}
+}

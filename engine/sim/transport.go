@@ -13,7 +13,15 @@ import (
 // the slot count; passengers detach in load order.
 
 // transportPickupWU pads the pickup range past the pair's body radii.
-var transportPickupWU = fixed.FromInt(14)
+var transportPickupWU = fixed.FromInt(24)
+
+// transportApproachWU / transportApproachSpeed slow a transport down when
+// it nears its pickup or drop point — at cruise speed a hover transport's
+// turn radius overshoots the target and it circles for laps.
+var (
+	transportApproachWU    = fixed.FromInt(160)
+	transportApproachSpeed = fixed.FromInt(70)
+)
 
 // isTransport reports whether the unit can carry passengers.
 func isTransport(u *Unit) bool {
@@ -97,9 +105,13 @@ func (w *World) stepTransport(u *Unit) {
 			w.advanceQueue(u)
 		} else {
 			reach := u.Meta.collisionRadius() + cargo.Meta.collisionRadius() + transportPickupWU
-			if u.loco.Pos.DistTo(cargo.loco.Pos) > reach {
+			dist := u.loco.Pos.DistTo(cargo.loco.Pos)
+			if dist > reach {
 				u.hasMove = true
 				u.moveTarget = cargo.loco.Pos
+				if dist < transportApproachWU && u.loco.Speed > transportApproachSpeed {
+					u.loco.Speed = transportApproachSpeed
+				}
 			} else {
 				// Attach: the passenger stops being an actor until set down.
 				u.hasMove = false
@@ -114,9 +126,13 @@ func (w *World) stepTransport(u *Unit) {
 			}
 		}
 	} else if u.hasUnload {
-		if u.loco.Pos.DistTo(u.unloadAt) > fixed.FromInt(24) {
+		dist := u.loco.Pos.DistTo(u.unloadAt)
+		if dist > fixed.FromInt(32) {
 			u.hasMove = true
 			u.moveTarget = u.unloadAt
+			if dist < transportApproachWU && u.loco.Speed > transportApproachSpeed {
+				u.loco.Speed = transportApproachSpeed
+			}
 		} else {
 			u.hasMove = false
 			u.hasUnload = false

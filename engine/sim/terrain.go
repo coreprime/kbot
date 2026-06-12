@@ -18,6 +18,10 @@ type Terrain struct {
 	HeightScale fixed.Fixed // world Y per height unit (TA renders at 1/2)
 	SeaLevel    int         // height units; cells below it are underwater
 	Data        []uint8     // row-major heights, len = W*H
+	// Void marks cells the map carves out entirely (the TNT 0xFFFC
+	// sentinel): nothing stands, walks or builds there. Optional —
+	// nil means no voids.
+	Void []uint8
 }
 
 // SetTerrain installs (or clears, with nil) the world's height field.
@@ -30,6 +34,17 @@ func (w *World) SetTerrain(t *Terrain) {
 
 // Terrain returns the installed height field (nil = flat sandbox grid).
 func (w *World) Terrain() *Terrain { return w.terrain }
+
+// cellVoid reports whether cell (cx, cz) is carved out of the map.
+func (t *Terrain) cellVoid(cx, cz int) bool {
+	if t.Void == nil {
+		return false
+	}
+	if cx < 0 || cz < 0 || cx >= t.W || cz >= t.H {
+		return true // off-map counts as void
+	}
+	return t.Void[cz*t.W+cx] != 0
+}
 
 // cellHeight reads the raw height byte at cell (cx, cz), clamped at the rim
 // so off-map queries extend the edge rather than falling to zero.
@@ -123,6 +138,9 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	if w.terrain == nil || m == nil || m.IsAircraft {
 		return true
 	}
+	if w.terrain.cellVoid(p.X.Div(w.terrain.CellWU).Int(), p.Z.Div(w.terrain.CellWU).Int()) {
+		return false
+	}
 	depth := w.waterDepthAt(p)
 	if m.IsShip || m.IsSub {
 		min := m.MinWaterDepth
@@ -185,6 +203,10 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 	lo, hi := 255, 0
 	for dz := -fz / 2; dz <= fz/2; dz++ {
 		for dx := -fx / 2; dx <= fx/2; dx++ {
+			// Any carved-out cell under the footprint kills the plot.
+			if t.cellVoid(cx+dx, cz+dz) {
+				return false
+			}
 			h := t.cellHeight(cx+dx, cz+dz)
 			if h < lo {
 				lo = h

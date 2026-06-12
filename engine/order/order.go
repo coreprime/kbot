@@ -134,6 +134,12 @@ func Build(builder uint32, name string, target fixed.Vec2) Order {
 	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target}
 }
 
+// BuildQueued appends the construction job behind the builder's current
+// orders (the shift-click site chain).
+func BuildQueued(builder uint32, name string, target fixed.Vec2) Order {
+	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target, Queued: true}
+}
+
 // Patrol appends a patrol waypoint to each unit's queue.
 func Patrol(units []uint32, target fixed.Vec2) Order {
 	return Order{Kind: KindPatrol, UnitIDs: units, Target: target}

@@ -445,7 +445,7 @@ func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 			us.Cob = ru.Cob
 		}
 		for _, q := range ru.Queue {
-			us.Queue = append(us.Queue, wire.QueuedSnap{Kind: q.Kind, TX: q.Target.X, TZ: q.Target.Z, TargetUnit: q.TargetUnit})
+			us.Queue = append(us.Queue, wire.QueuedSnap{Kind: q.Kind, TX: q.Target.X, TZ: q.Target.Z, TargetUnit: q.TargetUnit, Name: q.Name})
 		}
 		for i := range ru.Weapons {
 			rw := ru.Weapons[i]

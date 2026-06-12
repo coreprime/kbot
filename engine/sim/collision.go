@@ -39,6 +39,19 @@ func canBePushed(u *Unit) bool {
 	return u.Meta.CanMove && !u.underConstruction()
 }
 
+// steeringRadius is the clearance avoidance keeps from an obstacle's
+// centre. A closed structure detours around its WHOLE footprint rectangle
+// (circumradius), not the inscribed body circle — with the smaller radius
+// the tangent point lands inside the building's corner and the mover
+// grinds against the wall.
+func steeringRadius(o *Unit) fixed.Fixed {
+	if hasYard(o) {
+		hx, hz := yardHalfExtents(o.Meta)
+		return fixed.Vec2{X: hx, Z: hz}.Len()
+	}
+	return o.Meta.collisionRadius()
+}
+
 // avoidanceTarget returns the point stepMovement should steer toward: the
 // unit's move target, or a tangent point beside the nearest unit sitting on
 // the straight-line path to it. A blocker parked ON the destination is not
@@ -72,6 +85,7 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		if hasYard(o) && o.yardOpen {
 			continue
 		}
+		oRad := steeringRadius(o)
 		od := o.loco.Pos.Sub(u.loco.Pos)
 		t := od.X.Mul(nx) + od.Z.Mul(nz) // projection along the path ray
 		if t <= 0 || t > lookahead {
@@ -80,7 +94,7 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		lx := od.X - nx.Mul(t)
 		lz := od.Z - nz.Mul(t)
 		lat := fixed.Vec2{X: lx, Z: lz}.Len()
-		if lat >= ur+o.Meta.collisionRadius()+fixed.FromInt(4) {
+		if lat >= ur+oRad+fixed.FromInt(4) {
 			continue
 		}
 		if blocker == nil || t < blockT {
@@ -93,7 +107,8 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 	}
 	// Blocker effectively at the destination: head straight, let the
 	// crowded-arrival relax finish the move beside it.
-	if dist-blockT < ur+blocker.Meta.collisionRadius()+fixed.FromInt(6) {
+	bRad := steeringRadius(blocker)
+	if dist-blockT < ur+bRad+fixed.FromInt(6) {
 		return target
 	}
 	// Steer for the tangent point on the side OPPOSITE the blocker's lateral
@@ -107,7 +122,7 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 	} else if lat == 0 && (u.ID+blocker.ID)%2 == 1 {
 		side = fixed.FromInt(1)
 	}
-	clear := ur + blocker.Meta.collisionRadius() + avoidSideMarginWU
+	clear := ur + bRad + avoidSideMarginWU
 	return fixed.Vec2{
 		X: blocker.loco.Pos.X + nz.Mul(side).Mul(clear),
 		Z: blocker.loco.Pos.Z - nx.Mul(side).Mul(clear),

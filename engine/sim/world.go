@@ -212,6 +212,8 @@ type Unit struct {
 // queuedCommand is one deferred order on a unit's shift-queue. Only Move and
 // Attack queue; everything else applies immediately.
 type queuedCommand struct {
+	// name carries a queued Build's unit type (empty otherwise).
+	name string
 	kind       order.Kind
 	target     fixed.Vec2 // Move destination
 	targetUnit uint32     // Attack subject
@@ -819,6 +821,7 @@ type RestoredQueued struct {
 	Kind       uint8
 	Target     fixed.Vec2
 	TargetUnit uint32
+	Name       string
 }
 
 // RestoredWeapon is one weapon slot's standing aim/fire order, carried across a
@@ -917,7 +920,7 @@ func (w *World) ExportUnits() []RestoredUnit {
 			UnloadAt:      u.unloadAt,
 		}
 		for _, c := range u.queue {
-			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
+			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit, Name: c.name})
 		}
 		for i := range u.weapons {
 			s := &u.weapons[i]
@@ -1042,7 +1045,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			binding:      binding,
 		}
 		for _, c := range ru.Queue {
-			u.queue = append(u.queue, queuedCommand{kind: order.Kind(c.Kind), target: c.Target, targetUnit: c.TargetUnit})
+			u.queue = append(u.queue, queuedCommand{kind: order.Kind(c.Kind), target: c.Target, targetUnit: c.TargetUnit, name: c.Name})
 		}
 		// Re-arm any standing weapon orders so the joiner's prediction re-aims and
 		// fires them (replaying the firing animation) instead of leaving the unit
@@ -1308,6 +1311,16 @@ func (w *World) ApplyOrder(o order.Order) {
 				return
 			}
 		}
+		// A shift-queued Build on a busy mobile builder defers behind the
+		// current job; advanceQueue starts it when the queue reaches it.
+		if o.Queued {
+			if u := w.units[o.UnitID]; u != nil && !u.Dead && u.Meta != nil &&
+				u.Meta.CanMove && u.Meta.IsBuilder &&
+				(u.busy() || u.buildState != buildIdle) {
+				u.enqueue(queuedCommand{kind: order.KindBuild, name: o.Name, target: o.Target})
+				return
+			}
+		}
 		u := w.units[o.UnitID]
 		if u == nil || u.Dead || u.underConstruction() ||
 			u.Meta == nil || !u.Meta.IsBuilder || o.Name == "" {
@@ -1403,6 +1416,13 @@ func (w *World) advanceQueue(u *Unit) {
 				u.hasMove = false
 				u.hasAttack = true
 				u.attackTarget = c.targetUnit
+				return
+			}
+		case order.KindBuild:
+			if c.name != "" && u.Meta != nil && u.Meta.CanMove && u.Meta.IsBuilder {
+				u.buildName = c.name
+				u.buildSite = c.target
+				u.buildState = buildApproach
 				return
 			}
 		case order.KindLoad:

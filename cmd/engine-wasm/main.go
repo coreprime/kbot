@@ -266,6 +266,9 @@ func submitBuild(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	target := fixed.Vec2{X: fixed.FromFloat(args[3].Float()), Z: fixed.FromFloat(args[4].Float())}
+	if len(args) > 5 && args[5].Truthy() {
+		return int(inst.sess.Submit(order.BuildQueued(uint32(args[1].Int()), args[2].String(), target)))
+	}
 	return int(inst.sess.Submit(order.Build(uint32(args[1].Int()), args[2].String(), target)))
 }
 
@@ -348,6 +351,13 @@ func setTerrain(_ js.Value, args []js.Value) any {
 	}
 	t.Data = make([]uint8, n)
 	js.CopyBytesToGo(t.Data, data)
+	if voids := o.Get("voids"); !voids.IsUndefined() && !voids.IsNull() {
+		vn := voids.Get("length").Int()
+		if vn >= t.W*t.H {
+			t.Void = make([]uint8, vn)
+			js.CopyBytesToGo(t.Void, voids)
+		}
+	}
 	inst.world.SetTerrain(t)
 	return true
 }

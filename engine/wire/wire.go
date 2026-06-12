@@ -209,6 +209,7 @@ type QueuedSnap struct {
 	TX         fixed.Fixed `json:"tx,omitempty"`
 	TZ         fixed.Fixed `json:"tz,omitempty"`
 	TargetUnit uint32      `json:"targetUnit,omitempty"`
+	Name       string      `json:"name,omitempty"`
 }
 
 // WeaponSnap is one weapon slot's standing aim/fire order in a join snapshot.

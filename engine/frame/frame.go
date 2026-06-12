@@ -26,6 +26,7 @@ type QueuedOrder struct {
 	Kind       uint8
 	Target     fixed.Vec2 // move destination (move entries)
 	TargetUnit uint32     // attack subject (attack entries)
+	Name       string     // queued Build's unit type (build entries)
 }
 
 // UnitState is everything the renderer needs to draw one unit.
