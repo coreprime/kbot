@@ -41,15 +41,16 @@ export async function loadSandboxMap(view, path) {
 
   // Mini-map backdrop + fixed extent.
   const minimap = await loadImage(wsUrl(info.minimapUrl)).catch(() => null)
+  // Camera (and the faction leader's spawn) at the first player start,
+  // or the map centre when the OTA carries none.
+  const start = (info.startPositions && info.startPositions[0])
+    || { x: info.worldW / 2, z: info.worldH / 2 }
   view._sandboxMap = {
     path, name: info.name,
     worldW: info.worldW, worldH: info.worldH,
     minimapImage: minimap,
+    start,
   }
-
-  // Camera to the first player start (or the map centre).
-  const start = (info.startPositions && info.startPositions[0])
-    || { x: info.worldW / 2, z: info.worldH / 2 }
   if (view.camera) {
     view.camera.target[0] = start.x
     view.camera.target[1] = 0
@@ -63,6 +64,19 @@ export function clearSandboxMap(view) {
   view.scene?.source?.setTerrain?.(null)
   view.renderer?.clearMapTerrain?.()
   view._sandboxMap = null
+}
+
+// spawnFactionLeader drops the chosen faction's leader unit (commander /
+// monarch) at the battlefield's player 1 start — the origin on The Grid.
+export async function spawnFactionLeader(view, commander, sideIndex = 0) {
+  if (!commander || !view.scene) return
+  const start = view._sandboxMap?.start || { x: 0, z: 0 }
+  const model = await view.loader.load(commander)
+  await view.scene.addUnit({
+    name: commander, model,
+    x: start.x, z: start.z,
+    side: sideIndex | 0,
+  })
 }
 
 function loadImage(url) {

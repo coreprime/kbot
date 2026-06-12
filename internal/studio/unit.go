@@ -109,6 +109,8 @@ type unitMetaJSON struct {
 	//                script presence.
 	IsBuilder bool `json:"isBuilder"`
 	OnOffable bool `json:"onoffable"`
+	// ActivateWhenBuilt — run Activate automatically on build completion.
+	ActivateWhenBuilt bool `json:"activateWhenBuilt,omitempty"`
 
 	// Construction stats for the build cycle:
 	//   BuildTime     — FBI buildtime, the unit's build-effort points (how
@@ -512,6 +514,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// only needs the boolean for panel gating; per-class behaviour
 	// (factory vs construction) isn't differentiated here.
 	out.IsBuilder = info.Builder == 1
+	out.ActivateWhenBuilt = info.ActivateWhenBuilt == 1
 	out.BuildTime = float64(info.BuildTime)
 	out.WorkerTime = info.WorkerTime
 	out.BuildDistance = info.BuildDistance

@@ -29,6 +29,7 @@ import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { loadSelectionKeys, selectionKeys, keyTokenForEvent, commandClauses, unitMatchesToken } from './select-keys.js'
 import { attachOrbitControls } from '@kbot/game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
+import { activeGame } from '../common/game-registry.js'
 import { ArmedCursor } from '@kbot/game3d/armed-cursor'
 import { ExplosionOverlay } from '@kbot/game3d/explosion-overlay'
 import { teamColorForSide } from '@kbot/game3d/team-colors'
@@ -1483,6 +1484,10 @@ export class SandboxView {
         model: localModel,
         binding: u.binding,
         buildPercent: u.buildPercent,
+        // Construction-shell tint: the renderer fades a wireframe of this
+        // colour over the hull while buildPercent < 100 (TA nano green,
+        // TA:K casting gold — straight from the game adapter).
+        buildFxColor: (activeGame().buildFx && activeGame().buildFx.color) || null,
         transform: { x: u.pos.x, y: u.pos.y, z: u.pos.z, headingRad: u.heading + Math.PI },
         selected: this.scene.isSelected(u.id),
         // Inspector hover highlight — the Sync Diagnostics panel flags the

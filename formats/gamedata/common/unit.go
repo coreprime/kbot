@@ -24,8 +24,9 @@ type UnitInfoBase struct {
 	FootprintZ int `tdf:"footprintz,omitempty"`
 	BuildAngle int `tdf:"buildangle,omitempty"`
 
-	WorkerTime    int `tdf:"workertime,omitempty"`
-	BuildDistance int `tdf:"builddistance,omitempty"`
+	WorkerTime        int `tdf:"workertime,omitempty"`
+	BuildDistance     int `tdf:"builddistance,omitempty"`
+	ActivateWhenBuilt int `tdf:"activatewhenbuilt,omitempty"`
 
 	MaxDamage     int     `tdf:"maxdamage,omitempty"`
 	MaxWaterDepth int     `tdf:"maxwaterdepth,omitempty"`

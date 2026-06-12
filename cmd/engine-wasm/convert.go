@@ -33,6 +33,7 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 		IsHovercraft: getBool(o, "isHovercraft"),
 		IsBuilder:   getBool(o, "isBuilder"),
 		OnOffable:   getBool(o, "onoffable"),
+		ActivateWhenBuilt: getBool(o, "activateWhenBuilt"),
 	}
 	m.BuildTime = fixed.FromFloat(getFloat(o, "buildTime"))
 	m.WorkerTime = getInt(o, "workerTime")

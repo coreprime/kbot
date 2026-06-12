@@ -143,7 +143,14 @@ export function openSandboxStub(opts = {}) {
   const displayName = opts.displayName || `Sandbox ${_sandboxLabelCounter}`
   // opts.mapPath (set by the welcome battlefield picker) loads that TNT
   // as the tab's terrain once the scene is ready; absent = The Grid.
-  hostCallbacks.openTab?.('sandbox', { displayName, joinUrl: opts.joinUrl || null, mapPath: opts.mapPath || null })
+  // opts.faction ({name, commander, index}) spawns the chosen side's
+  // leader at the player 1 start.
+  hostCallbacks.openTab?.('sandbox', {
+    displayName,
+    joinUrl: opts.joinUrl || null,
+    mapPath: opts.mapPath || null,
+    faction: opts.faction || null,
+  })
 }
 
 export async function activateSandboxTab(tab) {
@@ -244,17 +251,26 @@ export async function activateSandboxTab(tab) {
     })
     await v.open()
     tab.panes.set(tab.activePaneId, v)
-    // Welcome-picker battlefield: apply the chosen map to the freshly
-    // opened scene (sim height field + draped terrain + camera at the
-    // first player start). Once per tab — re-activations keep it.
-    if (tab._mapPath && !tab._mapApplied) {
+    // Welcome-picker battlefield + faction: apply the chosen map to the
+    // freshly opened scene (sim height field + draped terrain + camera at
+    // the first player start), then spawn the faction's leader unit
+    // there. Once per tab — re-activations keep both.
+    if ((tab._mapPath || tab._faction) && !tab._mapApplied) {
       tab._mapApplied = true
       try {
-        const { loadSandboxMap } = await import('./map-loader.js')
-        const info = await loadSandboxMap(v, tab._mapPath)
-        v.setStatus?.(`Battlefield: ${info.name} — camera at player 1 start.`)
+        const { loadSandboxMap, spawnFactionLeader } = await import('./map-loader.js')
+        let where = 'The Grid'
+        if (tab._mapPath) {
+          const info = await loadSandboxMap(v, tab._mapPath)
+          where = info.name
+        }
+        if (tab._faction && tab._faction.commander) {
+          await spawnFactionLeader(v, tab._faction.commander, tab._faction.index)
+        }
+        const who = tab._faction ? ` — ${tab._faction.name} leader deployed` : ''
+        v.setStatus?.(`Battlefield: ${where}${who}.`)
       } catch (e) {
-        v.setStatus?.(`Map load failed: ${e?.message || e}`)
+        v.setStatus?.(`Battlefield setup failed: ${e?.message || e}`)
       }
     }
   }

@@ -30,6 +30,9 @@ type UnitMeta struct {
 
 	IsBuilder bool
 	OnOffable bool
+	// ActivateWhenBuilt — the unit's Activate script runs the moment its
+	// construction completes (FBI activatewhenbuilt; ARM Solar's panels).
+	ActivateWhenBuilt bool
 
 	// Construction stats. BuildTime is the unit's own build-effort points
 	// (FBI buildtime — how long IT takes to construct); WorkerTime is the

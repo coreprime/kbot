@@ -18,6 +18,7 @@ import { htm as html } from '@kbot/ui/htm-bind'
 import { configurePanelPersistence, setPanelVisible } from '@kbot/ui/panel-store'
 import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
+import { SandboxLaunchFlow } from '/ui/screens/welcome/welcome-screen.js'
 import {
   SandboxRibbon, configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
   setSandboxGraphicsState,
@@ -251,6 +252,9 @@ export function mountDialogs() {
   _mountInto('dialogs-open-unit', () => html`<${OpenUnitDialog} />`, document.body)
   _mountInto('dialogs-open-map',  () => html`<${OpenMapDialog} />`, document.body)
   _mountInto('dialogs-weapon-pick', () => html`<${WeaponPickerDialog} />`, document.body)
+  // Sandbox launch flow (battlefield + faction pickers) — body-level so
+  // the modals are never clipped by the welcome dialog's card slot.
+  _mountInto('dialogs-sandbox-launch', () => html`<${SandboxLaunchFlow} />`, document.body)
 }
 
 // ConfirmDialogMount — confirm-dialog.js mounts lazily inside its own

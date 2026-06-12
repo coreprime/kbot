@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/tdf"
 	"github.com/coreprime/kbot/formats/tnt"
 )
 
@@ -183,4 +185,40 @@ func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(buf.Bytes())
+}
+// sandboxSideJSON is one playable faction for the launch picker: the
+// sidedata name plus its leader unit (commander / monarch).
+type sandboxSideJSON struct {
+	Index     int    `json:"index"`
+	Name      string `json:"name"`
+	Commander string `json:"commander,omitempty"`
+}
+
+// handleSandboxSides lists the game's playable sides from
+// gamedata/sidedata.tdf — dynamic, so TA reports ARM/CORE and TA:K its five
+// kingdoms without any hardcoding.
+func (sess *Session) handleSandboxSides(w http.ResponseWriter, _ *http.Request) {
+	out := []sandboxSideJSON{}
+	for _, p := range []string{"gamedata/sidedata.tdf", "gamedata/SIDEDATA.tdf", "GameData/sidedata.tdf"} {
+		data, err := sess.vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var sd ta.SideData
+		if err := tdf.Unmarshal(data, &sd); err != nil {
+			continue
+		}
+		for i, s := range sd.Sides {
+			name := strings.TrimSpace(s.Name)
+			cmdr := strings.ToLower(strings.TrimSpace(s.Commander))
+			// Only sides with a leader unit are playable — TA:K's sidedata
+			// also lists LIFEFORMS / WANDERING_MONSTERS entries.
+			if name == "" || cmdr == "" {
+				continue
+			}
+			out = append(out, sandboxSideJSON{Index: i, Name: name, Commander: cmdr})
+		}
+		break
+	}
+	writeJSON(w, out)
 }

@@ -151,6 +151,7 @@ func (w *World) stepBuilder(u *Unit) {
 			}
 		}
 	case buildOpening:
+		w.buggerOff(u)
 		if portValue(u, cobPortYardOpen) != 0 || w.simMs >= u.buildGateMs {
 			w.startRaising(u)
 		}
@@ -168,6 +169,9 @@ func (w *World) stepBuilder(u *Unit) {
 		u.hasMove = false
 		w.startRaising(u)
 	case buildRaising:
+		if !u.Meta.CanMove {
+			w.buggerOff(u)
+		}
 		b := w.units[u.buildeeID]
 		if b == nil || b.Dead {
 			w.cancelBuild(u)
@@ -202,6 +206,16 @@ func (w *World) stepBuilder(u *Unit) {
 		}
 		if u.binding != nil && u.binding.HasScript("StopBuilding") {
 			u.binding.Start("StopBuilding")
+		}
+		// FBI activatewhenbuilt: the new unit switches itself on the moment
+		// it completes (a solar collector unfolding its panels).
+		if b.Meta.ActivateWhenBuilt && b.binding != nil {
+			if b.binding.HasScript("Activate") {
+				b.binding.Start("Activate")
+			}
+			if p, ok := b.binding.(CobPorts); ok {
+				p.SetUnitValuePort(1, 1) // ACTIVATION
+			}
 		}
 		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: b.ID, Anchor: b.Pos()})
 		// A factory rolls the finished unit off its pad to clear ground so
@@ -252,7 +266,17 @@ func (w *World) startRaising(u *Unit) {
 	u.buildState = buildRaising
 	u.buildGateMs = w.simMs + buildGateGraceMs
 	if u.binding != nil && u.binding.HasScript("StartBuilding") {
-		u.binding.Start("StartBuilding")
+		// Construction units take (heading, pitch): the torso turn toward
+		// the site and the nano-arm elevation — the same TA-angle frame the
+		// weapon aim threads use. Factories take no arguments.
+		if u.Meta.CanMove {
+			d := u.buildSite.Sub(u.loco.Pos)
+			heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+			pitch := fixed.ShortestArc(fixed.Atan2(b.PosY-u.PosY, d.Len()))
+			u.binding.Start("StartBuilding", int(heading), int(pitch))
+		} else {
+			u.binding.Start("StartBuilding")
+		}
 	}
 	site := fixed.Vec3{X: u.buildSite.X, Z: u.buildSite.Z}
 	w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: id, Anchor: site})
@@ -283,6 +307,48 @@ func (w *World) drainBuildCost(side int, m *UnitMeta, pctPerTick fixed.Fixed) {
 	}
 }
 
+// cobPortBuggerOff is TA's BUGGER_OFF unit-value port: the engine raises it
+// on a factory whose yard is obstructed so the script (and nearby units) know
+// to clear out.
+const cobPortBuggerOff = 19
+
+// buggerOff clears squatters from a working factory's yard: the BUGGER_OFF
+// port goes high while any outside unit overlaps the footprint, and idle
+// trespassers are shooed to a clear spot so production never wedges on a
+// blocked pad. Throttled to every 8th tick — yard scans are O(units).
+func (w *World) buggerOff(u *Unit) {
+	if w.tick%8 != 0 {
+		return
+	}
+	hx, hz := yardHalfExtents(u.Meta)
+	blocked := false
+	for _, oid := range w.order {
+		o := w.units[oid]
+		if o == nil || o == u || o.ID == u.buildeeID || !collidable(o) ||
+			o.Meta == nil || !o.Meta.CanMove || o.underConstruction() {
+			continue
+		}
+		l := yardLocal(u, o.loco.Pos)
+		if l.X.Abs() >= hx || l.Z.Abs() >= hz {
+			continue
+		}
+		blocked = true
+		// Shoo an idle squatter toward clear ground; busy units are on
+		// their way somewhere already.
+		if !o.hasMove && !o.hasAttack && len(o.queue) == 0 {
+			o.hasMove = true
+			o.moveTarget = w.rolloffSpot(u, o)
+		}
+	}
+	if p, ok := u.binding.(CobPorts); ok {
+		v := int32(0)
+		if blocked {
+			v = 1
+		}
+		p.SetUnitValuePort(cobPortBuggerOff, v)
+	}
+}
+
 // factoryPad is where a factory raises its buildee: just inside the front
 // edge of its footprint, along its facing.
 func (w *World) factoryPad(u *Unit) fixed.Vec2 {
@@ -302,7 +368,14 @@ var rolloffAngles = [...]int32{0, 5215, -5215, 10430, -10430, 15645, -15645, 327
 // stacking. Falls back to straight ahead.
 func (w *World) rolloffSpot(factory, b *Unit) fixed.Vec2 {
 	clearance := b.Meta.collisionRadius().Mul(fixed.FromInt(2)) + fixed.FromInt(6)
+	// Roll well past the whole footprint (not just the body circle) so the
+	// finished unit clears the exit channel and never blocks the doors for
+	// the next one off the line.
 	base := factory.Meta.collisionRadius() + b.Meta.collisionRadius() + fixed.FromInt(12)
+	if hasYard(factory) {
+		hx, hz := yardHalfExtents(factory.Meta)
+		base = fixed.Max(hx, hz) + b.Meta.collisionRadius().Mul(fixed.FromInt(2)) + fixed.FromInt(24)
+	}
 	heading := int32(factory.Heading())
 	clearAt := func(p fixed.Vec2) bool {
 		if !w.canStand(b.Meta, p) {

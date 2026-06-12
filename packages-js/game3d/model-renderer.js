@@ -2045,6 +2045,27 @@ export class ModelRenderer {
         this.#renderMain(this.renderMode === 'flat')
         this._lodHideFlares = false
         this._lightingTierCheap = false
+        // Construction shell — an under-construction entity wears a
+        // wireframe over the hull that fades out as the build nears
+        // completion (the classic TA nanolathe frame; the colour comes
+        // from the entity's per-game build-FX tint, so TA reads green
+        // nano and TA:K reads gold casting).
+        if (this.buildPercent < 100) {
+          const frac = Math.max(0, Math.min(1, this.buildPercent / 100))
+          const c = ent.buildFxColor || [0.35, 1.0, 0.6]
+          const g = this.gl
+          g.enable(g.BLEND)
+          g.blendFunc(g.SRC_ALPHA, g.ONE_MINUS_SRC_ALPHA)
+          g.depthMask(false)
+          const prevW = this.wireframeWidth
+          this.wireframeWidth = 1.5
+          this.#renderWireframe([
+            Math.min(1, c[0]), Math.min(1, c[1]), Math.min(1, c[2]),
+            0.12 + 0.82 * (1 - frac),
+          ])
+          this.wireframeWidth = prevW
+          g.depthMask(true)
+        }
         // Inspector hover highlight — when a panel row points at this
         // entity (unit or projectile), trace its silhouette in a bright
         // wireframe so the user can locate it on the field.  Drawn here,

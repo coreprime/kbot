@@ -20,6 +20,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { htm as html } from '@kbot/ui/htm-bind'
+import { PickerModal } from '@kbot/ui/picker-modal'
 
 // _hostWsUrl builds a websocket URL onto the in-process game host
 // (mounted at /host/ws on the same origin the studio is served from).
@@ -137,56 +138,140 @@ function _JoinPicker({ onOpenSandbox, onBack }) {
   `
 }
 
-// _BattlefieldPicker — the map-choice step in front of Local Sandbox:
-// The Grid (the classic blank floor) or any TNT from the workspace,
-// each with its embedded minimap as the thumbnail.  Picking one hands
-// { mapPath } up through onOpenSandbox (The Grid passes none) and the
-// sandbox activation applies it once the scene is ready.
-function _BattlefieldPicker({ onOpenSandbox, onBack }) {
-  const [state, setState] = useState({ status: 'loading', maps: [], error: null })
-  useEffect(() => {
-    let ok = true
-    fetch('/api/studio/maps')
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
-      .then((d) => { if (ok) setState({ status: 'ready', maps: (d && d.maps) || [], error: null }) })
-      .catch((e) => { if (ok) setState({ status: 'error', maps: [], error: String(e && e.message || e) }) })
-    return () => { ok = false }
-  }, [])
-  const pick = (mapPath) => {
-    _sandboxView.value = 'menu'
-    if (!onOpenSandbox) return
-    onOpenSandbox(mapPath ? { mapPath } : {})
+// Local-sandbox launch flow — two PickerModal steps in front of the
+// sandbox: choose a battlefield (The Grid, or any workspace map with its
+// minimap thumbnail — searchable, the same selector the Map editor uses),
+// then choose a faction (dynamic from gamedata/sidedata.tdf: ARM/CORE in
+// TA, the kingdoms in TA:K, each fronted by its leader's build picture).
+// Confirming hands { mapPath, faction } to onOpenSandbox; the sandbox
+// activation loads the map and spawns the leader at player 1's start.
+const _launch = signal(null)
+
+const _wsBase = () => (typeof window !== 'undefined' && window.__WS_BASE__) || ''
+
+function _startLaunchFlow(onOpenSandbox) {
+  _launch.value = { step: 'map', maps: null, sides: null, mapPath: null, query: '', selectedKey: null, onOpenSandbox }
+  fetch('/api/studio/maps')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      const cur = _launch.value
+      if (cur) _launch.value = { ...cur, maps: (d && d.maps) || [] }
+    })
+    .catch(() => { const cur = _launch.value; if (cur) _launch.value = { ...cur, maps: [] } })
+  fetch('/api/studio/sandbox-sides')
+    .then((r) => (r.ok ? r.json() : []))
+    .then((sides) => {
+      const cur = _launch.value
+      if (cur) _launch.value = { ...cur, sides: Array.isArray(sides) ? sides : [] }
+    })
+    .catch(() => { const cur = _launch.value; if (cur) _launch.value = { ...cur, sides: [] } })
+}
+
+const _GRID_ITEM = { path: '', name: 'The Grid', gridItem: true }
+
+export function SandboxLaunchFlow() {
+  const st = _launch.value
+  if (!st) return null
+  const onOpenSandbox = st.onOpenSandbox
+  const cancel = () => { _launch.value = null }
+  if (st.step === 'map') {
+    const items = [_GRID_ITEM, ...(st.maps || [])]
+    const q = (st.query || '').trim().toLowerCase()
+    const filtered = q
+      ? items.filter((m) => `${m.name} ${m.missionName || ''} ${m.planet || ''}`.toLowerCase().includes(q))
+      : items
+    const selected = items.find((m) => (m.path || '__grid__') === st.selectedKey) || null
+    const choose = (m) => {
+      const sides = st.sides || []
+      if (sides.length > 1) {
+        _launch.value = { ...st, step: 'faction', mapPath: m.path || null, mapName: m.name, query: '', selectedKey: null }
+      } else {
+        // Single (or unknown) faction roster: launch straight away.
+        const f = sides[0] || null
+        _launch.value = null
+        onOpenSandbox && onOpenSandbox({ mapPath: m.path || null, faction: f })
+      }
+    }
+    const renderItem = (m) => {
+      const key = m.path || '__grid__'
+      const cls = ['open-list-item', key === st.selectedKey ? 'selected' : ''].filter(Boolean).join(' ')
+      const meta = m.gridItem
+        ? 'Blank floor — no terrain rules'
+        : [m.planet || null, m.numPlayers ? `${m.numPlayers} players` : null].filter(Boolean).join(' · ')
+      return html`
+        <button type="button" class=${cls} key=${key}
+                onClick=${() => { _launch.value = { ...st, selectedKey: key } }}
+                onDblClick=${() => choose(m)}>
+          ${m.gridItem
+            ? html`<div class="thumb welcome-map-grid"></div>`
+            : html`<img class="thumb" loading="lazy" alt=""
+                        src=${`${_wsBase()}/api/studio/minimap/${m.path}`}
+                        onError=${(e) => { e.currentTarget.style.visibility = 'hidden' }} />`}
+          <div class="title">${m.missionName || m.name}</div>
+          <div class="meta">${meta}</div>
+        </button>
+      `
+    }
+    return html`
+      <${PickerModal} open=${true}
+                      title="Choose a battlefield"
+                      sub="The Grid for a blank field, or any map in this workspace."
+                      filterPlaceholder="Filter by name, planet, or player count"
+                      filterValue=${st.query}
+                      onFilterChange=${(v) => { _launch.value = { ...st, query: v } }}
+                      loading=${st.maps == null}
+                      emptyMessage=${st.maps == null ? 'Loading maps…' : 'No maps match.'}
+                      items=${filtered}
+                      selectedKey=${st.selectedKey}
+                      onSelect=${(m) => { _launch.value = { ...st, selectedKey: m.path || '__grid__' } }}
+                      onConfirm=${() => { if (selected) choose(selected) }}
+                      onCancel=${cancel}
+                      confirmDisabled=${!selected}
+                      renderItem=${renderItem}
+                      itemKey=${(m) => m.path || '__grid__'} />
+    `
   }
-  const base = (typeof window !== 'undefined' && window.__WS_BASE__) || ''
+  // Faction step.
+  const sides = st.sides || []
+  const selected = sides.find((f) => String(f.index) === st.selectedKey) || null
+  const choose = (f) => {
+    _launch.value = null
+    onOpenSandbox && onOpenSandbox({ mapPath: st.mapPath, faction: f })
+  }
+  const renderItem = (f) => {
+    const key = String(f.index)
+    const cls = ['open-list-item', key === st.selectedKey ? 'selected' : ''].filter(Boolean).join(' ')
+    return html`
+      <button type="button" class=${cls} key=${key}
+              onClick=${() => { _launch.value = { ...st, selectedKey: key } }}
+              onDblClick=${() => choose(f)}>
+        ${f.commander
+          ? html`<img class="thumb" loading="lazy" alt=""
+                      src=${`${_wsBase()}/api/studio/buildpic/${f.commander}`}
+                      onError=${(e) => { e.currentTarget.style.visibility = 'hidden' }} />`
+          : html`<div class="thumb"></div>`}
+        <div class="title">${f.name}</div>
+        <div class="meta">${f.commander ? `Leader: ${f.commander}` : ''}</div>
+      </button>
+    `
+  }
   return html`
-    <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox-map">
-      <div class="welcome-join-head">
-        <button class="welcome-link-btn" onClick=${() => onBack && onBack()}>← Back</button>
-        <span class="welcome-join-msg">Choose a battlefield</span>
-      </div>
-      <ul class="welcome-join-list welcome-map-list">
-        <li key="__grid__">
-          <button class="welcome-join-row" onClick=${() => pick(null)}>
-            <span class="welcome-map-thumb welcome-map-grid"></span>
-            <span class="welcome-join-name">The Grid</span>
-            <span class="welcome-join-meta">Blank floor — no terrain rules</span>
-          </button>
-        </li>
-        ${state.status === 'loading' ? html`<li><p class="welcome-join-msg">Loading maps…</p></li>` : null}
-        ${state.status === 'error' ? html`<li><p class="welcome-join-msg welcome-join-err">Couldn't list maps: ${state.error}</p></li>` : null}
-        ${state.maps.map((m) => html`
-          <li key=${m.path}>
-            <button class="welcome-join-row" onClick=${() => pick(m.path)}>
-              <img class="welcome-map-thumb" loading="lazy" alt=""
-                   src=${`${base}/api/studio/minimap/${m.path}`}
-                   onError=${(e) => { e.currentTarget.style.visibility = 'hidden' }} />
-              <span class="welcome-join-name">${m.name || m.path}</span>
-              ${m.numPlayers ? html`<span class="welcome-join-meta">${m.numPlayers} players</span>` : null}
-            </button>
-          </li>
-        `)}
-      </ul>
-    </div>
+    <${PickerModal} open=${true}
+                    title="Choose your faction"
+                    sub=${`Battlefield: ${st.mapName || 'The Grid'} — your leader unit spawns at the player 1 start.`}
+                    filterPlaceholder="Filter factions"
+                    filterValue=${st.query}
+                    onFilterChange=${(v) => { _launch.value = { ...st, query: v } }}
+                    loading=${st.sides == null}
+                    emptyMessage=${st.sides == null ? 'Loading factions…' : 'No playable factions found.'}
+                    items=${sides}
+                    selectedKey=${st.selectedKey}
+                    onSelect=${(f) => { _launch.value = { ...st, selectedKey: String(f.index) } }}
+                    onConfirm=${() => { if (selected) choose(selected) }}
+                    onCancel=${() => { _launch.value = { ...st, step: 'map', query: '', selectedKey: null } }}
+                    confirmDisabled=${!selected}
+                    renderItem=${renderItem}
+                    itemKey=${(f) => String(f.index)} />
   `
 }
 
@@ -277,19 +362,14 @@ export function WelcomeScreen({
         onOpenSandbox=${onOpenSandbox}
         onBack=${() => { _sandboxView.value = 'menu' }} />
     ` : null}
-    ${active === 'sandbox' && _sandboxView.value === 'map' ? html`
-      <${_BattlefieldPicker}
-        onOpenSandbox=${onOpenSandbox}
-        onBack=${() => { _sandboxView.value = 'menu' }} />
-    ` : null}
-    ${active === 'sandbox' && _sandboxView.value !== 'join' && _sandboxView.value !== 'map' ? html`
+    ${active === 'sandbox' && _sandboxView.value !== 'join' ? html`
       <div class="welcome-tab-panel" data-welcome-tab-panel="sandbox">
         <div class="welcome-options" ref=${cardRowRef}>
           <${_Card}
             icon="🪖"
             title="Local Sandbox"
             sub="Pick a battlefield and test units live, in-browser."
-            onClick=${() => { _sandboxView.value = 'map' }} />
+            onClick=${() => _startLaunchFlow(onOpenSandbox)} />
           <${_Card}
             icon="🌐"
             title="New Hosted"

@@ -152,6 +152,55 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	return true
 }
 
+// canBuildAt reports whether a structure of the given stats may be founded
+// at a world point. Water rules match canStand; the slope rule differs from
+// movement: a building cares about the height SPREAD across its whole
+// footprint (is the plot flat enough?), not the steepest single step — the
+// per-cell rule would refuse almost every site on naturally bumpy maps.
+func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
+	t := w.terrain
+	if t == nil || m == nil {
+		return true
+	}
+	depth := w.waterDepthAt(p)
+	if m.IsShip || m.IsSub {
+		min := m.MinWaterDepth
+		if min <= 0 {
+			min = 12
+		}
+		return depth >= min
+	}
+	if depth > m.MaxWaterDepth {
+		return false
+	}
+	fx, fz := m.FootprintX, m.FootprintZ
+	if fx <= 0 {
+		fx = 2
+	}
+	if fz <= 0 {
+		fz = 2
+	}
+	cx := p.X.Div(t.CellWU).Int()
+	cz := p.Z.Div(t.CellWU).Int()
+	lo, hi := 255, 0
+	for dz := -fz / 2; dz <= fz/2; dz++ {
+		for dx := -fx / 2; dx <= fx/2; dx++ {
+			h := t.cellHeight(cx+dx, cz+dz)
+			if h < lo {
+				lo = h
+			}
+			if h > hi {
+				hi = h
+			}
+		}
+	}
+	maxSlope := m.MaxSlope
+	if maxSlope <= 0 {
+		maxSlope = 16
+	}
+	return hi-lo <= maxSlope
+}
+
 // settleOnTerrain pins a surface unit's Y to the ground (ships ride the
 // waterline, subs the seabed); aircraft handle altitude in stepAltitude.
 func (w *World) settleOnTerrain(u *Unit) {

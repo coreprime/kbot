@@ -41,9 +41,11 @@ class SandboxTabInstance {
     // websocket URL.  activateSandboxTab reads it off the tab to back
     // the shared scene with a WsFrameSource.  Null for Local mode.
     tab._joinUrl = this.spec.joinUrl || null
-    // Battlefield choice from the welcome picker — activateSandboxTab
-    // loads it into the scene on first activation. Null = The Grid.
+    // Battlefield + faction choice from the welcome picker —
+    // activateSandboxTab loads the map and spawns the leader on first
+    // activation. Null mapPath = The Grid.
     tab._mapPath = this.spec.mapPath || null
+    tab._faction = this.spec.faction || null
   }
 
   displayName() {

@@ -1301,9 +1301,10 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 	case order.KindBuild:
 		// A site the buildee cannot legally occupy (sonar on land, a plant
-		// in deep water, a cliff face) refuses the order outright.
+		// in deep water, a plot too uneven for its footprint) refuses the
+		// order outright.
 		if w.spawn != nil && w.terrain != nil {
-			if bm, _ := w.spawn(o.Name); bm != nil && !w.canStand(bm, o.Target) {
+			if bm, _ := w.spawn(o.Name); bm != nil && !w.canBuildAt(bm, o.Target) {
 				return
 			}
 		}
