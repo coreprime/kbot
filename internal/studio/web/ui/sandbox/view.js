@@ -771,30 +771,72 @@ export class SandboxView {
   // check happens at the start of the gesture; we mirror it by
   // peeking at the global last-shift state if available, else just
   // replace).
+  // #applyDragRectSelection resolves a finished marquee. With nothing
+  // selected it replace-selects the boxed units (TA convention). With a
+  // live selection it EXPANDS — boxed friendlies join the set — unless the
+  // selection is a single team and the box holds only enemies, in which
+  // case the gesture is a mass attack: every selected unit chains attack
+  // orders on all boxed enemies, nearest-first from its own position.
   #applyDragRectSelection(x0, y0, x1, y1) {
     const lo = { x: Math.min(x0, x1), y: Math.min(y0, y1) }
     const hi = { x: Math.max(x0, x1), y: Math.max(y0, y1) }
     if (!this.scene) return
-    // Replace selection by default — TA convention.  (No shift-add
-    // wiring yet; the gesture grabs pointer events directly via
-    // capture so e.shiftKey isn't easily threaded here.  Punt to
-    // a follow-up if needed.)
-    this.scene.selectClear()
-    let n = 0
+    const rect = this.canvas.getBoundingClientRect()
+    const boxed = []
     for (const u of this.scene.units()) {
       if (u.dead) continue
       const screen = this.#worldToScreen(u.pos.x, u.pos.y + 12, u.pos.z)
       if (!screen) continue
-      const rect = this.canvas.getBoundingClientRect()
       const vx = screen[0] + rect.left
       const vy = screen[1] + rect.top
       if (vx >= lo.x && vx <= hi.x && vy >= lo.y && vy <= hi.y) {
-        this.scene.selectAdd(u.id)
-        n++
+        boxed.push(u)
       }
     }
-    if (n > 0) {
-      this.#setStatus(`Selected ${n} unit${n === 1 ? '' : 's'}.`)
+    const selUnits = this.getSelectedUnits()
+    if (selUnits.length > 0 && boxed.length > 0) {
+      const sides = new Set(selUnits.map((u) => u.side | 0))
+      const team = sides.size === 1 ? [...sides][0] : null
+      const enemies = boxed.filter((u) => team !== null && (u.side | 0) !== team)
+      if (team !== null && enemies.length === boxed.length) {
+        // Single-team selection over an all-enemy box → attack chain.
+        // queueAttack applies immediately on an idle unit and appends on
+        // a busy one, so the whole box lands in each unit's queue
+        // nearest-target-first.
+        for (const a of selUnits) {
+          const sorted = [...enemies].sort((p, q) =>
+            Math.hypot(p.pos.x - a.pos.x, p.pos.z - a.pos.z)
+            - Math.hypot(q.pos.x - a.pos.x, q.pos.z - a.pos.z))
+          for (const t of sorted) {
+            if (typeof a.queueAttack === 'function') a.queueAttack(t)
+            else a.attackTarget = t
+          }
+        }
+        this.playUnitSoundRandom(selUnits[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+        this.#setStatus(`Attack chain — ${selUnits.length} unit(s) engaging ${enemies.length} target(s), nearest first.`)
+        return
+      }
+      // Mixed or friendly box → expand the selection with the boxed
+      // friendlies (enemies in a mixed box are ignored — selecting the
+      // opposition alongside your own units is never what's meant).
+      let added = 0
+      for (const u of boxed) {
+        if (this.scene.selected.has(u.id)) continue
+        if (team !== null && (u.side | 0) !== team) continue
+        this.scene.selectAdd(u.id)
+        added++
+      }
+      this.#setStatus(added > 0
+        ? `Selection expanded — ${added} more unit${added === 1 ? '' : 's'} (${this.scene.selected.size} total).`
+        : `Selection unchanged (${this.scene.selected.size} unit${this.scene.selected.size === 1 ? '' : 's'}).`)
+      if (added > 0) this.#playSelectAck()
+      return
+    }
+    // No prior selection — replace.
+    this.scene.selectClear()
+    for (const u of boxed) this.scene.selectAdd(u.id)
+    if (boxed.length > 0) {
+      this.#setStatus(`Selected ${boxed.length} unit${boxed.length === 1 ? '' : 's'}.`)
       // Play the TA select1-bank ack on the FIRST unit in the new
       // selection.  Single voice rather than N voices so a drag-rect
       // grabbing a dozen Peewees doesn't fire a dozen acks at once.
