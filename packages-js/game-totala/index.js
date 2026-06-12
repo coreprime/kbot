@@ -64,6 +64,14 @@ export const game = {
     spark: (t) => `rgba(180, 255, 150, ${t * 0.95})`,
   },
 
+  // In-world construction effect — the sandbox sprays these particles along
+  // the builder→buildee line while a unit is under construction. TA's
+  // signature green nanolathe. Colour channels run 0..2 (additive bloom).
+  buildFx: {
+    name: 'nanolathe',
+    color: [0.5, 1.8, 0.6, 1.0],
+  },
+
   weapons: {
     slots: WEAPON_SLOTS,
     // TA has no shared parameterized weapon set — every slot has its own

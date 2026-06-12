@@ -105,6 +105,10 @@ func (w *World) Hash() uint64 {
 		if u.Dead {
 			mix(1)
 		}
+		// Build progress is authoritative — it gates when a buildee becomes
+		// commandable — as is the builder's job state.
+		mix(uint64(u.BuildPercent))
+		mix(uint64(u.buildState))
 		// The shift-queue is authoritative — it dictates where the unit goes
 		// next — so a divergent queue must surface as a desync.
 		mix(uint64(len(u.queue)))

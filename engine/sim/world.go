@@ -111,6 +111,16 @@ type Unit struct {
 	// dies. Any non-queued Move/Attack (and Stop) clears it.
 	queue []queuedCommand
 
+	// Mobile-builder build-cycle state. buildState tracks the job phase
+	// (approach the site, then raise the buildee); buildName/buildSite are
+	// the order parameters and buildeeID the under-construction unit once it
+	// exists. A unit whose own BuildPercent is below 100 is inert — not
+	// commandable, not stepping movement or weapons — until complete.
+	buildState buildPhase
+	buildName  string
+	buildSite  fixed.Vec2
+	buildeeID  uint32
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
@@ -163,6 +173,21 @@ type queuedCommand struct {
 // maxOrderQueue bounds a unit's shift-queue so a runaway client can't grow
 // unbounded authoritative state.
 const maxOrderQueue = 32
+
+// buildPhase is the mobile builder's job state.
+type buildPhase uint8
+
+const (
+	buildIdle     buildPhase = iota
+	buildApproach            // walking into builddistance of the site
+	buildRaising             // standing at the site, raising the buildee
+)
+
+// underConstruction reports whether the unit is a buildee that has not yet
+// reached 100% — inert: it takes no orders and steps no movement or weapons.
+func (u *Unit) underConstruction() bool {
+	return !u.Dead && u.BuildPercent < fixed.FromInt(100)
+}
 
 // Pos returns the unit's world position.
 func (u *Unit) Pos() fixed.Vec3 {
@@ -646,6 +671,14 @@ type RestoredUnit struct {
 	// world advances through the same waypoint chain as the authority.
 	Queue   []RestoredQueued
 	Weapons [3]RestoredWeapon
+	// BuildPercent carries construction progress (a buildee below 100% stays
+	// inert on the joiner too); the Build* fields carry a builder's live job
+	// so the joiner keeps raising the same buildee.
+	BuildPercent  fixed.Fixed
+	BuildState    uint8
+	BuildName     string
+	BuildSite     fixed.Vec2
+	BuildTargetID uint32
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -741,18 +774,23 @@ func (w *World) ExportUnits() []RestoredUnit {
 			continue
 		}
 		ru := RestoredUnit{
-			ID:           u.ID,
-			Name:         u.Name,
-			Side:         u.Side,
-			Pos:          u.Pos(),
-			Heading:      u.loco.Heading,
-			Speed:        u.loco.Speed,
-			HasMove:      u.hasMove,
-			MoveTarget:   u.moveTarget,
-			Health:       u.Health,
-			Dead:         u.Dead,
-			HasAttack:    u.hasAttack,
-			AttackTarget: u.attackTarget,
+			ID:            u.ID,
+			Name:          u.Name,
+			Side:          u.Side,
+			Pos:           u.Pos(),
+			Heading:       u.loco.Heading,
+			Speed:         u.loco.Speed,
+			HasMove:       u.hasMove,
+			MoveTarget:    u.moveTarget,
+			Health:        u.Health,
+			Dead:          u.Dead,
+			HasAttack:     u.hasAttack,
+			AttackTarget:  u.attackTarget,
+			BuildPercent:  u.BuildPercent,
+			BuildState:    uint8(u.buildState),
+			BuildName:     u.buildName,
+			BuildSite:     u.buildSite,
+			BuildTargetID: u.buildeeID,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
@@ -841,6 +879,12 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 		if w.spawn != nil {
 			meta, binding = w.spawn(ru.Name)
 		}
+		buildPct := ru.BuildPercent
+		if buildPct == 0 && ru.BuildState == 0 && ru.BuildName == "" {
+			// Snapshots predating build-cycle state carry no percent; a live
+			// unit there is always complete.
+			buildPct = fixed.FromInt(100)
+		}
 		u := &Unit{
 			ID:           ru.ID,
 			Name:         ru.Name,
@@ -848,7 +892,11 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			Meta:         meta,
 			Health:       ru.Health,
 			Dead:         ru.Dead,
-			BuildPercent: fixed.FromInt(100),
+			BuildPercent: buildPct,
+			buildState:   buildPhase(ru.BuildState),
+			buildName:    ru.BuildName,
+			buildSite:    ru.BuildSite,
+			buildeeID:    ru.BuildTargetID,
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
 			IsMoving:     ru.HasMove,
@@ -986,7 +1034,7 @@ func (w *World) ApplyOrder(o order.Order) {
 	switch o.Kind {
 	case order.KindMove:
 		for _, id := range o.UnitIDs {
-			if u := w.units[id]; u != nil && !u.Dead {
+			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() {
 				if o.Queued && u.busy() {
 					u.enqueue(queuedCommand{kind: order.KindMove, target: o.Target})
 					continue
@@ -1001,7 +1049,7 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 	case order.KindAttack:
 		for _, id := range o.UnitIDs {
-			if u := w.units[id]; u != nil && !u.Dead {
+			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() {
 				if t := w.units[o.TargetUnit]; t != nil && !t.Dead && t != u {
 					if o.Queued && u.busy() {
 						u.enqueue(queuedCommand{kind: order.KindAttack, targetUnit: o.TargetUnit})
@@ -1038,7 +1086,37 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 	case order.KindRemove:
 		w.RemoveUnit(o.UnitID)
+	case order.KindBuild:
+		if u := w.units[o.UnitID]; u != nil && !u.Dead && !u.underConstruction() &&
+			u.Meta != nil && u.Meta.CanMove && u.Meta.IsBuilder && o.Name != "" {
+			// A new job replaces any current one (the half-built buildee stays,
+			// inert, where it was abandoned — as in TA).
+			w.cancelBuild(u)
+			u.buildState = buildApproach
+			u.buildName = o.Name
+			u.buildSite = o.Target
+			u.hasAttack = false
+			u.queue = nil
+		}
 	}
+}
+
+// cancelBuild abandons a builder's job: the StopBuilding script retracts the
+// nano/casting pose and the client tears down its lathe effect on the stop
+// event. A partially-raised buildee is left where it stands, inert.
+func (w *World) cancelBuild(u *Unit) {
+	if u.buildState == buildIdle {
+		return
+	}
+	if u.buildState == buildRaising {
+		if u.binding != nil && u.binding.HasScript("StopBuilding") {
+			u.binding.Start("StopBuilding")
+		}
+		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: u.buildeeID, Anchor: u.Pos()})
+	}
+	u.buildState = buildIdle
+	u.buildName = ""
+	u.buildeeID = 0
 }
 
 // busy reports whether a unit has a current order a queued one would wait
@@ -1094,6 +1172,7 @@ func (w *World) stopUnit(id uint32) {
 	u.attackTarget = 0
 	u.atkActive = false
 	u.bombRunActive = false
+	w.cancelBuild(u)
 	for i := range u.weapons {
 		w.clearWeaponSlot(u, i)
 	}

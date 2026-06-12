@@ -25,6 +25,7 @@
 
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
+import { activeGame } from '../common/game-registry.js'
 import { gatherSceneLights } from '../../engine/scene-lights.js'
 import { AudioPool } from '@kbot/game3d/audio-pool'
 import { ParticlePool } from '../../engine/cob-particles.js'
@@ -183,7 +184,16 @@ export class WasmSandboxScene {
     // Join mode when a transport is injected; otherwise own an isolated wasm world.
     this._join = !!source
     this._modelResolver = modelResolver
-    this.source = source || new WasmFrameSource({ seed: seed >>> 0, inputDelay: 0 })
+    // Synchronous meta cache backing the local engine's spawn resolver: a
+    // Build order spawns its buildee sim-side when the builder reaches the
+    // site, so the type's meta must already be registered (scene.build()
+    // pre-fetches it). Join mode resolves through the transport instead.
+    this._spawnMetas = new Map()
+    this.source = source || new WasmFrameSource({
+      seed: seed >>> 0,
+      inputDelay: 0,
+      spawnResolver: (name) => this._spawnMetas.get(name) || null,
+    })
     // In join mode, let the transport hydrate any unit type it sees in the
     // command stream or a join snapshot but that this client never spawned
     // itself — otherwise the authority's Spawn would resolve to a nil meta and
@@ -601,6 +611,23 @@ export class WasmSandboxScene {
     if (!this._modelResolver) this._modelResolver = fn
   }
 
+  // build sends one mobile builder to construct unit type `name` at a ground
+  // point. The buildee spawns sim-side once the builder walks into
+  // builddistance, so the type's meta (with COB bytes) must be resolvable
+  // synchronously by then — pre-fetch it into the spawn cache (local) or the
+  // transport's meta registry (join) before submitting the order.
+  async build(builderId, name, x, z) {
+    await this._readyPromise
+    if (this._join) {
+      if (this.source.registerMeta && !this.source.hasMeta(name)) {
+        this.source.registerMeta(name, await this._fetchMeta(name))
+      }
+    } else if (!this._spawnMetas.has(name)) {
+      this._spawnMetas.set(name, await this._fetchMeta(name))
+    }
+    this.source.build(builderId, name, x, z)
+  }
+
   // spawnRemote requests a unit from the authority (join mode). It prefetches
   // the type's meta + COB so the client's prediction engine can resolve the
   // Spawn order synchronously when the command frame arrives, then sends the
@@ -984,7 +1011,36 @@ export class WasmSandboxScene {
     this._syncUnits(snap)
     this._syncProjectiles(snap)
     this._dispatchEvents(snap)
+    this._tickBuildFx(snap)
     return snap
+  }
+
+  // _tickBuildFx sprinkles the per-game construction effect over every live
+  // build: pulses of bright particles along the builder→buildee line and over
+  // the rising frame. The colour comes from the game adapter's buildFx — TA
+  // reads as nanolathe spray, TA:K as golden casting sparkles. Pseudo-random
+  // scatter derives from the tick so it stays deterministic per client (it is
+  // render-only either way).
+  _tickBuildFx(snap) {
+    if (!this._activeBuilds || this._activeBuilds.size === 0) return
+    const tick = snap.tick | 0
+    if (tick % 5) return // 8 Hz pulse at the 40 Hz sim rate
+    const color = (activeGame().buildFx && activeGame().buildFx.color) || [0.5, 1.7, 0.7, 1.0]
+    for (const [builderId, buildeeId] of this._activeBuilds) {
+      const builder = this._units.get(builderId)
+      const buildee = this._units.get(buildeeId)
+      const b = builder && builder.binding
+      if (!builder || !buildee || !b || !b.particles) continue
+      const sp = builder._p1 || builder.pos
+      const bp = buildee._p1 || buildee.pos
+      for (let i = 0; i < 3; i++) {
+        const t = 0.35 + 0.65 * (((tick / 5) + i) % 3) / 3
+        const x = sp.x + (bp.x - sp.x) * t + (((tick * 7 + i * 13) % 11) - 5)
+        const z = sp.z + (bp.z - sp.z) * t + (((tick * 5 + i * 17) % 11) - 5)
+        const y = Math.max(bp.y || 0, 0) + 5 + (((tick / 5) + i) % 3) * 5
+        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 7, lifeMs: 280, color })
+      }
+    }
   }
 
   _syncUnits(snap) {
@@ -992,10 +1048,10 @@ export class WasmSandboxScene {
     for (const su of units) {
       let u = this._units.get(su.id)
       if (!u) {
-        // Local mode creates adapters in addUnit; an unknown id there is a
-        // transient race, so skip it. Join mode discovers units only through
-        // the authority's snapshots, so adopt an adapter on first sighting.
-        if (!this._join) continue
+        // Local mode creates adapters in addUnit, but engine-spawned units —
+        // a builder's buildee materializing at its construction site — first
+        // appear here, exactly like join mode's authority snapshots: adopt an
+        // adapter and hydrate its model/meta asynchronously.
         u = this._adoptRemoteUnit(su)
       }
       // Shift the last tick's pose into _p0 and record the new one in _p1; the
@@ -1196,6 +1252,20 @@ export class WasmSandboxScene {
           }
           break
         }
+        case 'buildStart': {
+          // Builder reached its site and the buildee exists — run the
+          // per-game construction effect (nanolathe / casting) until the
+          // matching buildStop. Keyed by builder so a re-ordered builder
+          // swaps cleanly to its new job.
+          if (!this._activeBuilds) this._activeBuilds = new Map()
+          this._activeBuilds.set(ev.unitId, ev.targetId)
+          const b = this._units.get(ev.unitId)
+          if (b) this.playUnitSound(b, 'build')
+          break
+        }
+        case 'buildStop':
+          if (this._activeBuilds) this._activeBuilds.delete(ev.unitId)
+          break
         default:
           break
       }

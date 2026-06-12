@@ -65,6 +65,14 @@ export const game = {
     smoke: (a) => [`rgba(255, 228, 170, ${a * 0.9})`, `rgba(186, 130, 255, ${a})`, 'rgba(90, 60, 160, 0)'],
   },
 
+  // In-world construction effect — TA:K units are conjured, not lathed:
+  // warm gold casting sparkles rather than TA's green nano spray. Colour
+  // channels run 0..2 (additive bloom).
+  buildFx: {
+    name: 'casting',
+    color: [1.8, 1.3, 0.5, 1.0],
+  },
+
   weapons: {
     ...totala.weapons,
     shared: SHARED,

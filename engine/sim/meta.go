@@ -23,6 +23,14 @@ type UnitMeta struct {
 	IsBuilder bool
 	OnOffable bool
 
+	// Construction stats. BuildTime is the unit's own build-effort points
+	// (FBI buildtime — how long IT takes to construct); WorkerTime is the
+	// builder's effort output per second (FBI workertime); BuildDistance is
+	// how close (wu) a mobile builder must stand to its construction site.
+	BuildTime     fixed.Fixed
+	WorkerTime    int
+	BuildDistance fixed.Fixed
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero

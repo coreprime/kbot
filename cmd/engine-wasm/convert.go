@@ -31,6 +31,9 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 		IsBuilder:   getBool(o, "isBuilder"),
 		OnOffable:   getBool(o, "onoffable"),
 	}
+	m.BuildTime = fixed.FromFloat(getFloat(o, "buildTime"))
+	m.WorkerTime = getInt(o, "workerTime")
+	m.BuildDistance = fixed.FromFloat(getFloat(o, "buildDistance"))
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
@@ -139,6 +142,11 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				Dead:         getBool(u, "dead"),
 				HasAttack:    getBool(u, "hasAttack"),
 				AttackTarget: uint32(getInt(u, "attackTarget")),
+				BuildPercent: fixed.Fixed(getInt64(u, "buildPercent")),
+				BuildState:   uint8(getInt(u, "buildState")),
+				BuildName:    getString(u, "buildName"),
+				BuildSite:    fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
+				BuildTargetID: uint32(getInt(u, "buildTargetId")),
 			}
 			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
 				for i := 0; i < qs.Length(); i++ {
@@ -350,6 +358,15 @@ func snapshotToWireJS(inst *instance) js.Value {
 			"hasAttack":    ru.HasAttack,
 			"attackTarget": int(ru.AttackTarget),
 			"weapons":      weapons,
+			"buildPercent": float64(ru.BuildPercent),
+		}
+		// Mirror the wire's omitempty for the builder-job fields.
+		if ru.BuildState != 0 {
+			entry["buildState"] = int(ru.BuildState)
+			entry["buildName"] = ru.BuildName
+			entry["buildSiteX"] = float64(ru.BuildSite.X)
+			entry["buildSiteZ"] = float64(ru.BuildSite.Z)
+			entry["buildTargetId"] = int(ru.BuildTargetID)
 		}
 		// Mirror the wire's omitempty: only a non-empty queue serializes, so
 		// the Diagnose field diff stays symmetric with the server snapshot.
@@ -535,6 +552,8 @@ var eventNames = map[frame.EventKind]string{
 	frame.EvPlaySound:       "playSound",
 	frame.EvExplode:         "explode",
 	frame.EvCorpseSpawn:     "corpseSpawn",
+	frame.EvBuildStart:      "buildStart",
+	frame.EvBuildStop:       "buildStop",
 }
 
 func eventToJS(e *frame.Event) map[string]any {

@@ -147,6 +147,10 @@ export class WasmFrameSource extends FrameSource {
 
   stop(unitIds) { return this._engine.submitStop(this._handle, unitIds) }
 
+  // build sends one mobile builder to construct unit type `name` at the
+  // ground point — walk into builddistance, then raise the buildee to 100%.
+  build(builderId, name, x, z) { return this._engine.submitBuild(this._handle, builderId, name, x, z) }
+
   // scheduleAt queues an authoritative order at an exact tick.  The networked
   // source uses it to apply command frames the server broadcasts.
   scheduleAt(tick, order) { this._engine.scheduleAt(this._handle, tick, order) }

@@ -25,6 +25,10 @@ const (
 	KindSpawn
 	// Remove despawns a unit.
 	KindRemove
+	// Build sends a mobile builder (UnitID) to construct unit type Name at
+	// ground point Target: walk into builddistance, then gradually raise the
+	// buildee's build percentage until it is complete and commandable.
+	KindBuild
 )
 
 // Order is a tagged command. Only the fields relevant to Kind are populated;
@@ -90,6 +94,11 @@ func AttackQueued(units []uint32, targetUnit uint32) Order {
 // Stop builds a stop order.
 func Stop(units []uint32) Order {
 	return Order{Kind: KindStop, UnitIDs: units}
+}
+
+// Build sends one mobile builder to construct unit type name at a ground point.
+func Build(builder uint32, name string, target fixed.Vec2) Order {
+	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

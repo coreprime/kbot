@@ -168,6 +168,15 @@ type UnitSnap struct {
 	// through the same waypoint chain. omitempty on both ends (the client-side
 	// export also skips an empty queue) keeps the Diagnose diff symmetric.
 	Queue []QueuedSnap `json:"queue,omitempty"`
+	// Construction state: a buildee's progress (below 100 it stays inert on
+	// the joiner) and a builder's live job. The Build* job fields are
+	// omitempty on both ends like Queue.
+	BuildPercent  fixed.Fixed `json:"buildPercent"`
+	BuildState    uint8       `json:"buildState,omitempty"`
+	BuildName     string      `json:"buildName,omitempty"`
+	BuildSiteX    fixed.Fixed `json:"buildSiteX,omitempty"`
+	BuildSiteZ    fixed.Fixed `json:"buildSiteZ,omitempty"`
+	BuildTargetID uint32      `json:"buildTargetId,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry

@@ -253,13 +253,15 @@ export class SandboxView {
         // The palette is the global TA palette (identical across panes), so
         // last-writer-wins is harmless.
         if (!this.scene.palette && this.palette) this.scene.palette = this.palette
-        // Join scenes are created at tab level (before any pane), so
-        // they have no model resolver yet — the resolver needs a
-        // pane's GL-bound loader.  The first pane to open registers
-        // its loader; setModelResolver is idempotent so siblings are
-        // no-ops.  Without this an adopted remote unit's u.model stays
+        // Tab-level scenes are created before any pane, so they have no
+        // model resolver yet — the resolver needs a pane's GL-bound
+        // loader.  The first pane to open registers its loader;
+        // setModelResolver is idempotent so siblings are no-ops.  Both
+        // modes need it: join scenes hydrate adopted remote units through
+        // it, and local scenes hydrate engine-spawned units (a builder's
+        // buildee materializing at its site).  Without it u.model stays
         // null and the unit never renders.
-        if (this.scene._join && typeof this.scene.setModelResolver === 'function') {
+        if (typeof this.scene.setModelResolver === 'function') {
           this.scene.setModelResolver((name) => this.loader.load(name).then((m) => m.cloneForInstance()))
         }
       } else {
@@ -505,6 +507,20 @@ export class SandboxView {
       this.#setStatus(`Load failed: ${err.message || err}`)
       return false
     }
+  }
+
+  // beginBuildPlacement arms the placement ghost as a CONSTRUCTION SITE
+  // picker for a mobile builder: the commit click issues a Build order (the
+  // builder walks into builddistance and raises the unit gradually) instead
+  // of an instant spawn. Same ghost / cancel mechanics as beginPlacement.
+  async beginBuildPlacement(name, builder) {
+    if (!builder) return false
+    const ok = await this.beginPlacement(name, { side: builder.side | 0 })
+    if (ok && this._placement) {
+      this._placement.buildFor = builder.id
+      this.#setStatus(`Placing ${name} — click a site for ${builder.name || 'the builder'} to build, Esc to cancel.`)
+    }
+    return ok
   }
 
   // cancelPlacement drops the ghost without spawning.
@@ -1808,6 +1824,19 @@ export class SandboxView {
       const world = this.#screenToGround(sx, sy)
       const x = world ? world[0] : p.pos.x
       const z = world ? world[2] : p.pos.z
+      // Construction-site pick (mobile builder): issue a Build order — the
+      // builder walks into builddistance and raises the unit through the
+      // sim's build cycle — rather than spawning instantly.
+      if (p.buildFor) {
+        const builderId = p.buildFor
+        Promise.resolve(this.scene.build?.(builderId, p.name, x, z)).then(() => {
+          this.#setStatus(`Build ordered — constructing ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}).`)
+        }).catch((e) => {
+          this.#setStatus(`Build order failed: ${e?.message || e}`)
+        })
+        this.cancelPlacement()
+        return
+      }
       // The wasm world fetches the unit's meta + COB and runs Create on spawn;
       // refresh the field + status once the add resolves.
       this.#spawnUnit({

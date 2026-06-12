@@ -129,23 +129,23 @@ function update() {
   }
   // Build cells construct the unit at the builder. A factory (an immobile
   // builder) does the TA thing: the unit appears on the pad and ROLLS OFF to
-  // a clear spot near the exit, so back-to-back builds never stack. Mobile
-  // builders still place beside themselves — the walk-up-and-lathe build
-  // cycle is a separate refinement. Build time / economy are not modelled;
-  // the point here is that WHAT a unit can build comes from the game data.
+  // a clear spot near the exit, so back-to-back builds never stack. A MOBILE
+  // builder arms the placement ghost instead — the user picks the site, the
+  // builder walks into builddistance and runs the gradual build cycle
+  // (StartBuilding, rising buildee, per-game lathe/casting FX). Economy is
+  // not modelled; WHAT a unit can build comes from the game data.
   const builder = units.length === 1 ? units[0] : null
-  let buildSeq = 0
   for (const el of root.querySelectorAll('.roster-build-cell')) {
     el.addEventListener('click', async () => {
       const v = hostCallbacks.getActiveSandboxView?.()
       if (!v || !v.scene || !builder) return
       const name = el.dataset.build
       try {
-        const model = await v.loader.load(name)
         const isFactory = builder.meta && builder.meta.canMove === false
         if (isFactory) {
           // Spawn on the pad slightly toward the exit, facing out, then
           // roll off to the nearest clear spot.
+          const model = await v.loader.load(name)
           const h = builder.heading || 0
           const u = await v.scene.addUnit({
             name, model,
@@ -157,12 +157,9 @@ function update() {
           const spot = findRolloffSpot(v.scene, builder, h)
           if (u && spot) u.moveTarget = { x: spot.x, z: spot.z }
           setStatus(`Built ${name} — rolling off.`)
-        } else {
-          const angle = (buildSeq++ * 0.9) + 0.6
-          const x = builder.pos.x + Math.cos(angle) * 55
-          const z = builder.pos.z + Math.sin(angle) * 55
-          await v.scene.addUnit({ name, model, x, z, side: builder.side })
-          setStatus(`Built ${name} (instant — sandbox).`)
+        } else if (typeof v.beginBuildPlacement === 'function') {
+          await v.beginBuildPlacement(name, builder)
+          setStatus(`Place ${name} — click a site; ${builder.name} will walk over and build it.`)
         }
       } catch (e) {
         setStatus(`Build failed: ${e?.message || e}`)

@@ -51,11 +51,98 @@ func (w *World) Step(rt Runtime) {
 		if u == nil || u.Dead {
 			continue
 		}
+		// A buildee under construction is inert until it reaches 100%: no
+		// orders bind to it, and it steps neither movement nor weapons.
+		if u.underConstruction() {
+			continue
+		}
+		w.stepBuilder(u)
 		w.stepAttack(u)
 		w.stepMovement(u)
 		w.stepWeapons(u)
 	}
 	w.stepProjectiles()
+}
+
+// buildSinkWU is how far a buildee starts below grade: it rises out of the
+// ground as its build percentage climbs, the sim-side visual of construction.
+var buildSinkWU = fixed.FromInt(10)
+
+// stepBuilder advances a mobile builder's construction job: walk to within
+// builddistance of the site, spawn the buildee at 0%, then raise its build
+// percentage at the TA rate (buildee buildtime points / builder workertime
+// points-per-second) until it is complete and commandable.
+func (w *World) stepBuilder(u *Unit) {
+	switch u.buildState {
+	case buildIdle:
+		return
+	case buildApproach:
+		dist := u.loco.Pos.DistTo(u.buildSite)
+		bd := u.Meta.BuildDistance
+		if bd <= 0 {
+			bd = fixed.FromInt(50)
+		}
+		if dist > bd {
+			u.hasMove = true
+			u.moveTarget = u.buildSite
+			return
+		}
+		u.hasMove = false
+		if w.spawn == nil {
+			u.buildState = buildIdle
+			return
+		}
+		meta, binding := w.spawn(u.buildName)
+		if meta == nil {
+			u.buildState = buildIdle
+			return
+		}
+		// Spawn the buildee at 0% facing the builder's heading and sunk below
+		// grade; it rises as the build progresses.
+		id := w.AddUnit(u.buildName, meta, binding, u.buildSite, u.Heading(), u.Side)
+		b := w.units[id]
+		b.BuildPercent = 0
+		b.PosY = -buildSinkWU
+		u.buildeeID = id
+		u.buildState = buildRaising
+		if u.binding != nil && u.binding.HasScript("StartBuilding") {
+			u.binding.Start("StartBuilding")
+		}
+		site := fixed.Vec3{X: u.buildSite.X, Z: u.buildSite.Z}
+		w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: id, Anchor: site})
+	case buildRaising:
+		b := w.units[u.buildeeID]
+		if b == nil || b.Dead {
+			w.cancelBuild(u)
+			return
+		}
+		// Percent per tick: 100% over (buildee buildtime / builder workertime)
+		// seconds, the TA pacing. Missing data falls back to 8 seconds.
+		bt := b.Meta.BuildTime
+		wt := u.Meta.WorkerTime
+		durSec := fixed.FromInt(8)
+		if bt > 0 && wt > 0 {
+			durSec = fixed.Clamp(bt.Div(fixed.FromInt(wt)), fixed.FromInt(2), fixed.FromInt(60))
+		}
+		b.BuildPercent += fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz)))
+		if b.BuildPercent < fixed.FromInt(100) {
+			if !b.Meta.IsAircraft {
+				b.PosY = -buildSinkWU.Mul(fixed.FromInt(100) - b.BuildPercent).Div(fixed.FromInt(100))
+			}
+			return
+		}
+		b.BuildPercent = fixed.FromInt(100)
+		if !b.Meta.IsAircraft {
+			b.PosY = 0
+		}
+		if u.binding != nil && u.binding.HasScript("StopBuilding") {
+			u.binding.Start("StopBuilding")
+		}
+		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: b.ID, Anchor: b.Pos()})
+		u.buildState = buildIdle
+		u.buildName = ""
+		u.buildeeID = 0
+	}
 }
 
 // effectfulBinding is the optional surface a script binding exposes to hand the

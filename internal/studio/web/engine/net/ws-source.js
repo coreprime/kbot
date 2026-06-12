@@ -234,7 +234,10 @@ export class WsFrameSource extends FrameSource {
           // A Spawn (Kind 5) for a type this client never registered would
           // resolve to a nil meta and be dropped; fetch+register it and hold the
           // step barrier at its exec tick until the meta lands.
-          if (order.Kind === 5 && order.Name) this._ensureSpawnMeta(order.Name, frame.tick)
+          // Spawn (5) materializes at the frame's tick; Build (7) spawns its
+          // buildee later, when the builder reaches the site — register the
+          // meta now so that deferred spawn resolves on this replica too.
+          if ((order.Kind === 5 || order.Kind === 7) && order.Name) this._ensureSpawnMeta(order.Name, frame.tick)
           this._local.scheduleAt(frame.tick, order)
         }
         break
@@ -400,6 +403,13 @@ export class WsFrameSource extends FrameSource {
 
   stop(unitIds) {
     this._send({ Kind: 3, UnitIDs: unitIds })
+  }
+
+  // build sends one mobile builder to construct unit type `name` at a ground
+  // point (Kind 7). The buildee spawns sim-side when the builder reaches the
+  // site; the meta registers via the command-frame hook on every client.
+  build(builderId, name, x, z) {
+    this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) } })
   }
 
   // spawn requests a new unit by type name at a world point. Like every order

@@ -430,6 +430,9 @@ func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 			HasMove: ru.HasMove, TX: ru.MoveTarget.X, TZ: ru.MoveTarget.Z,
 			Health: ru.Health, Dead: ru.Dead,
 			HasAttack: ru.HasAttack, AttackTarget: ru.AttackTarget,
+			BuildPercent: ru.BuildPercent, BuildState: ru.BuildState,
+			BuildName: ru.BuildName, BuildSiteX: ru.BuildSite.X, BuildSiteZ: ru.BuildSite.Z,
+			BuildTargetID: ru.BuildTargetID,
 		}
 		if full {
 			us.Cob = ru.Cob

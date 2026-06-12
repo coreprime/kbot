@@ -107,6 +107,16 @@ type unitMetaJSON struct {
 	IsBuilder bool `json:"isBuilder"`
 	OnOffable bool `json:"onoffable"`
 
+	// Construction stats for the build cycle:
+	//   BuildTime     — FBI buildtime, the unit's build-effort points (how
+	//                   long IT takes to construct).
+	//   WorkerTime    — FBI workertime, the builder's effort/sec output.
+	//   BuildDistance — FBI builddistance, how close (wu) a mobile builder
+	//                   must stand to its construction site.
+	BuildTime     float64 `json:"buildTime,omitempty"`
+	WorkerTime    int     `json:"workerTime,omitempty"`
+	BuildDistance int     `json:"buildDistance,omitempty"`
+
 	// Sounds — flattened from sound.tdf's section for the unit's
 	// SoundCategory field.  The map's keys are the canonical TA
 	// event names (select1, ok1, arrived1, activate, deactivate,
@@ -444,6 +454,9 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// only needs the boolean for panel gating; per-class behaviour
 	// (factory vs construction) isn't differentiated here.
 	out.IsBuilder = info.Builder == 1
+	out.BuildTime = float64(info.BuildTime)
+	out.WorkerTime = info.WorkerTime
+	out.BuildDistance = info.BuildDistance
 	// onoffable=1 — unit can be manually toggled on/off by the
 	// player (Radar, Solar, Adv Fusion).
 	out.OnOffable = info.OnOffable == 1

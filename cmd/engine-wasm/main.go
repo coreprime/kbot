@@ -53,6 +53,7 @@ func main() {
 		"submitAttack": js.FuncOf(submitAttack),
 		"submitFire":   js.FuncOf(submitFire),
 		"submitStop":   js.FuncOf(submitStop),
+		"submitBuild":  js.FuncOf(submitBuild),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
@@ -249,6 +250,17 @@ func submitFire(_ js.Value, args []js.Value) any {
 	}
 	pt := fixed.Vec2{X: fixed.FromFloat(args[4].Float()), Z: fixed.FromFloat(args[5].Float())}
 	return int(inst.sess.Submit(order.FireAtPoint(unit, slot, pt)))
+}
+
+// submitBuild(handle, builderId, name, tx, tz) -> execTick. Sends a mobile
+// builder to construct unit type name at the ground point.
+func submitBuild(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	target := fixed.Vec2{X: fixed.FromFloat(args[3].Float()), Z: fixed.FromFloat(args[4].Float())}
+	return int(inst.sess.Submit(order.Build(uint32(args[1].Int()), args[2].String(), target)))
 }
 
 // submitStop(handle, unitIds[]) -> execTick.
