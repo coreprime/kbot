@@ -15,15 +15,21 @@
 import { htm as html } from '@kbot/ui/htm-bind'
 import { FloatingPanel } from '@kbot/ui/floating-panel'
 
-export function SandboxPanel({ onSpawn }) {
+export function SandboxPanel({ onSpawn, onMap }) {
   const handleSpawnClick = (e) => {
     if (typeof onSpawn === 'function') onSpawn(e.currentTarget)
+  }
+  const handleMapClick = (e) => {
+    if (typeof onMap === 'function') onMap(e.currentTarget)
   }
   return html`
     <${FloatingPanel} id="sandbox-panel" title="Sandbox">
       <div class="mv-controls-actions" style="grid-template-columns: 1fr;">
         <button class="mv-ctrl-action" id="sandbox-spawn" onClick=${handleSpawnClick}>
           <span class="ico">🛠</span><span class="lbl">Spawn Unit</span>
+        </button>
+        <button class="mv-ctrl-action" id="sandbox-map" onClick=${handleMapClick}>
+          <span class="ico">🗺</span><span class="lbl">Battlefield</span>
         </button>
       </div>
     <//>

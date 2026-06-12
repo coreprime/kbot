@@ -158,6 +158,10 @@ export class WasmFrameSource extends FrameSource {
   stance(unitIds, moveMode, fireMode) { return this._engine.submitStance(this._handle, unitIds, moveMode, fireMode) }
   selfDestruct(unitIds) { return this._engine.submitSelfDestruct(this._handle, unitIds) }
 
+  // setTerrain installs (or clears, with null) the map height field the
+  // sim samples for elevation, movement legality and terrain hits.
+  setTerrain(t) { return this._engine.setTerrain(this._handle, t) }
+
   // load sends transports to pick up a unit; unload sets their cargo down
   // at a ground point.
   load(transportIds, targetUnit) { return this._engine.submitLoad(this._handle, transportIds, targetUnit) }

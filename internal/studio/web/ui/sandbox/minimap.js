@@ -119,9 +119,16 @@ function draw() {
   }
   const units = liveUnits(view)
   root.hidden = false
-  // Auto-fit: square extent covering every unit, floored at MIN_EXTENT.
+  // Extent: a loaded battlefield pins the view to the whole map (its
+  // terrain render is the backdrop); The Grid keeps the unit auto-fit,
+  // floored at MIN_EXTENT.
+  const smap = view._sandboxMap
   let cx = 0, cz = 0, half = MIN_EXTENT
-  if (units.length > 0) {
+  if (smap) {
+    cx = smap.worldW / 2
+    cz = smap.worldH / 2
+    half = Math.max(smap.worldW, smap.worldH) / 2
+  } else if (units.length > 0) {
     let loX = Infinity, hiX = -Infinity, loZ = Infinity, hiZ = -Infinity
     for (const u of units) {
       loX = Math.min(loX, u.pos.x); hiX = Math.max(hiX, u.pos.x)
@@ -136,6 +143,13 @@ function draw() {
   ctx.clearRect(0, 0, SIZE, SIZE)
   ctx.fillStyle = 'rgba(8, 10, 14, 0.92)'
   ctx.fillRect(0, 0, SIZE, SIZE)
+  // Battlefield backdrop: the map's own minimap, mapped through the same
+  // world→map transform the dots use so positions line up exactly.
+  if (smap && smap.minimapImage) {
+    const [x0, y0] = worldToMap(0, 0)
+    const [x1, y1] = worldToMap(smap.worldW, smap.worldH)
+    try { ctx.drawImage(smap.minimapImage, x0, y0, x1 - x0, y1 - y0) } catch { /* decode race */ }
+  }
   // Light grid for scale reading: lines every 200wu.
   ctx.strokeStyle = 'rgba(80, 200, 120, 0.18)'
   ctx.lineWidth = 1

@@ -2596,7 +2596,80 @@ export class ModelRenderer {
     } else {
       gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
     }
+    // Loaded battlefield: draw the baked-height map mesh on top of the
+    // infinite plane (which keeps painting the surroundings). Same
+    // program, mode 4 — the vert trusts the baked Y, the frag drapes the
+    // map render across uMapRect.
+    const mt = this._mapTerrain
+    if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
+      gl.bindBuffer(gl.ARRAY_BUFFER, mt.vbo)
+      gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
+      gl.uniform1i(this.uGroundModeId, 4)
+      gl.uniform4fv(this.uGroundMapRect, mt.rect)
+      gl.activeTexture(gl.TEXTURE4)
+      gl.bindTexture(gl.TEXTURE_2D, mt.tex)
+      gl.uniform1i(this.uGroundMapTex, 4)
+      gl.disable(gl.BLEND)
+      gl.drawArrays(gl.TRIANGLES, 0, mt.count)
+      gl.enable(gl.BLEND)
+    }
     gl.disableVertexAttribArray(this.aGroundPos)
+  }
+
+  // setMapTerrain installs a battlefield: a regular mesh with the
+  // heightmap baked into vertex Y (one vertex per cell, decimated only
+  // past ~90k quads) plus the full map render as its texture. The
+  // existing ground plane keeps drawing beneath it for the surroundings.
+  setMapTerrain({ image, heights, w, h, cellWU, heightScale, originX = 0, originZ = 0 }) {
+    const gl = this.gl
+    this.clearMapTerrain()
+    if (!image || !heights || !w || !h) return
+    const stride = Math.max(1, Math.ceil(Math.sqrt((w * h) / 90000)))
+    const cols = Math.floor((w - 1) / stride)
+    const rows = Math.floor((h - 1) / stride)
+    const verts = new Float32Array(cols * rows * 18)
+    const Y = (cx, cz) => heights[Math.min(cz, h - 1) * w + Math.min(cx, w - 1)] * heightScale
+    let o = 0
+    for (let r = 0; r < rows; r++) {
+      const cz0 = r * stride, cz1 = cz0 + stride
+      const z0 = originZ + cz0 * cellWU, z1 = originZ + cz1 * cellWU
+      for (let c = 0; c < cols; c++) {
+        const cx0 = c * stride, cx1 = cx0 + stride
+        const x0 = originX + cx0 * cellWU, x1 = originX + cx1 * cellWU
+        const y00 = Y(cx0, cz0), y10 = Y(cx1, cz0), y01 = Y(cx0, cz1), y11 = Y(cx1, cz1)
+        verts[o++] = x0; verts[o++] = y00; verts[o++] = z0
+        verts[o++] = x1; verts[o++] = y10; verts[o++] = z0
+        verts[o++] = x1; verts[o++] = y11; verts[o++] = z1
+        verts[o++] = x0; verts[o++] = y00; verts[o++] = z0
+        verts[o++] = x1; verts[o++] = y11; verts[o++] = z1
+        verts[o++] = x0; verts[o++] = y01; verts[o++] = z1
+      }
+    }
+    const vbo = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW)
+    const tex = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
+    // NPOT-safe sampling: clamp + linear, no mips.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    this._mapTerrain = {
+      vbo, tex,
+      count: cols * rows * 6,
+      rect: [originX, originZ, w * cellWU, h * cellWU],
+    }
+  }
+
+  clearMapTerrain() {
+    const gl = this.gl
+    const mt = this._mapTerrain
+    if (!mt) return
+    try { gl.deleteBuffer(mt.vbo) } catch { /* context loss */ }
+    try { gl.deleteTexture(mt.tex) } catch { /* context loss */ }
+    this._mapTerrain = null
   }
 
   // ── Frame: reflection pass for Studio Mode on Sea ───────────
@@ -3506,6 +3579,10 @@ export class ModelRenderer {
     this.uGroundPulseLightColor = gl.getUniformLocation(prog, 'uPulseLightColor[0]')
     this.uGroundPulseLightRange = gl.getUniformLocation(prog, 'uPulseLightRange[0]')
     this.uGroundPulseLightCount = gl.getUniformLocation(prog, 'uPulseLightCount')
+    // Map-terrain draw (uGroundMode 4): the loaded battlefield's render
+    // draped over a baked-height mesh. See setMapTerrain.
+    this.uGroundMapTex = gl.getUniformLocation(prog, 'uMapTex')
+    this.uGroundMapRect = gl.getUniformLocation(prog, 'uMapRect')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at

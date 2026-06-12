@@ -1,0 +1,186 @@
+package studio
+
+import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"image/png"
+	"net/http"
+	"path"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/coreprime/kbot/formats/tnt"
+)
+
+// Sandbox map support: the battlefield endpoints behind the sandbox's map
+// picker. /api/studio/sandbox-map describes a TNT for the 3D sandbox — the
+// attribute-resolution heightmap (base64), the world scale, sea level and
+// start positions — and /api/studio/sandbox-map-texture serves the full
+// terrain render (TA tile composite or TA:K texture composite) downscaled
+// for use as the ground texture.
+//
+// World scale: TA world coordinates are map pixels, and the studio renders
+// units at half pixel scale (a 2×2-footprint Peewee is 32 px and 16 wu), so
+// one 16-px attribute cell is 8 wu and heights land at 1/4 wu per unit.
+const (
+	sandboxCellWU      = 8.0
+	sandboxHeightScale = 0.25
+	pxPerWU            = 2.0
+)
+
+// sandboxMapJSON is the /api/studio/sandbox-map response.
+type sandboxMapJSON struct {
+	Path        string  `json:"path"`
+	Name        string  `json:"name"`
+	W           int     `json:"w"` // heightmap cells
+	H           int     `json:"h"`
+	CellWU      float64 `json:"cellWU"`
+	HeightScale float64 `json:"heightScale"`
+	SeaLevel    int     `json:"seaLevel"`
+	WorldW      float64 `json:"worldW"` // world units
+	WorldH      float64 `json:"worldH"`
+	// Heights is the raw row-major heightmap bytes, base64-encoded.
+	Heights string `json:"heights"`
+	// StartPositions are the first schema's player starts in world units,
+	// origin at the map's top-left corner.
+	StartPositions []sandboxStartPos `json:"startPositions"`
+	TextureURL     string            `json:"textureUrl"`
+	MinimapURL     string            `json:"minimapUrl"`
+}
+
+type sandboxStartPos struct {
+	Number int     `json:"number"`
+	X      float64 `json:"x"`
+	Z      float64 `json:"z"`
+}
+
+func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
+	mapPath := r.URL.Query().Get("path")
+	if mapPath == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	data, err := sess.vfs.ReadFile(mapPath)
+	if err != nil {
+		http.Error(w, "map not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	m, err := tnt.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		http.Error(w, "parse TNT: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	out := sandboxMapJSON{
+		Path:        mapPath,
+		Name:        strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath)),
+		CellWU:      sandboxCellWU,
+		HeightScale: sandboxHeightScale,
+		TextureURL:  "/api/studio/sandbox-map-texture?path=" + mapPath,
+		MinimapURL:  "/api/studio/minimap/" + mapPath,
+	}
+	var heights []byte
+	if m.IsTAK {
+		out.W, out.H = m.TAKW, m.TAKH
+		heights = make([]byte, len(m.TAKHeight))
+		copy(heights, m.TAKHeight)
+	} else {
+		out.W, out.H = m.AttrW, m.AttrH
+		out.SeaLevel = int(m.Header.SeaLevel)
+		heights = make([]byte, len(m.TileAttr))
+		for i, a := range m.TileAttr {
+			heights[i] = a.Height
+		}
+	}
+	if len(heights) < out.W*out.H || out.W == 0 || out.H == 0 {
+		http.Error(w, "map has no usable heightmap", http.StatusUnprocessableEntity)
+		return
+	}
+	out.WorldW = float64(out.W) * sandboxCellWU
+	out.WorldH = float64(out.H) * sandboxCellWU
+	out.Heights = base64.StdEncoding.EncodeToString(heights)
+
+	// OTA — sea level (TA:K, where the TNT field is repurposed) and the
+	// first schema's start positions, converted map-pixels → world units.
+	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
+	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
+		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
+			if m.IsTAK || out.SeaLevel == 0 {
+				out.SeaLevel = ota.SeaLevel
+			}
+			if len(ota.Schemas) > 0 {
+				for _, sp := range ota.Schemas[0].StartPos {
+					out.StartPositions = append(out.StartPositions, sandboxStartPos{
+						Number: sp.Number,
+						X:      float64(sp.X) / pxPerWU,
+						Z:      float64(sp.Z) / pxPerWU,
+					})
+				}
+			}
+		}
+	}
+	writeJSON(w, out)
+}
+
+// sandboxTextureCache memoizes the downscaled terrain renders — a full TA
+// tile composite can be 8k×8k before scaling, so each (path, max) pair is
+// rendered once per session.
+var (
+	sandboxTexMu    sync.Mutex
+	sandboxTexCache = map[string][]byte{}
+)
+
+func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Request) {
+	mapPath := r.URL.Query().Get("path")
+	if mapPath == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	maxDim := 2048
+	if v, err := strconv.Atoi(r.URL.Query().Get("max")); err == nil && v >= 256 && v <= 8192 {
+		maxDim = v
+	}
+	key := fmt.Sprintf("%s|%d", mapPath, maxDim)
+	sandboxTexMu.Lock()
+	cached := sandboxTexCache[key]
+	sandboxTexMu.Unlock()
+	if cached != nil {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(cached)
+		return
+	}
+
+	data, err := sess.vfs.ReadFile(mapPath)
+	if err != nil {
+		http.Error(w, "map not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	m, err := tnt.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		http.Error(w, "parse TNT: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	img := m.RenderTileMap(sess.palettes().TerrainPalette(mapPath))
+	if img == nil && m.IsTAK {
+		img, _ = sess.renderTAKTerrain(mapPath)
+	}
+	if img == nil {
+		http.Error(w, "render failed", http.StatusInternalServerError)
+		return
+	}
+	img = downscaleRGBA(img, maxDim)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		http.Error(w, "encode: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sandboxTexMu.Lock()
+	sandboxTexCache[key] = buf.Bytes()
+	sandboxTexMu.Unlock()
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(buf.Bytes())
+}

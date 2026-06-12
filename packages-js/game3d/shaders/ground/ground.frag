@@ -21,6 +21,10 @@ varying float vMountainHNorm;   // normalised peak height at this fragment
 uniform sampler2D uShadowMap;
 uniform sampler2D uShadowMap2;  // twin-sun environments
 uniform sampler2D uTerrainTex;
+// Map-terrain (uGroundMode == 4): the full map render draped over the
+// baked-height mesh. uMapRect is (originX, originZ, sizeX, sizeZ) in wu.
+uniform sampler2D uMapTex;
+uniform vec4 uMapRect;
 uniform float uShadowEnabled;
 uniform float uShadowStrength; // 0..1 scales shadow darkness — used for the construction fade (translucent shadow at low buildPercent, solid at 100)
 uniform vec3 uLightColor2;      // when non-zero, the second sun also casts shadows
@@ -196,6 +200,17 @@ void main() {
               : 1.0;
   float shadow = sampleShadow();
 
+  if (uGroundMode == 4) {
+    vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
+    vec3 base = texture2D(uMapTex, uv).rgb;
+    base *= mix(1.0, shadow, 0.85);
+    float dCamM = length(uEyePos - vWorldPos);
+    base = mix(base, uHorizonColor, smoothstep(1800.0, 5500.0, dCamM) * 0.78);
+    base += pulseLightContribution(vWorldPos);
+    base *= mix(vec3(1.0), uSunTint, 0.45);
+    gl_FragColor = vec4(base * uExposure, 1.0);
+    return;
+  }
   if (uGroundMode == 0) {
     // Grid mode: Tron-style — a near-black floor with a faint green
     // tint and bright cyan-green tile lines that glow.  fwidth would

@@ -23,6 +23,7 @@
 // later rounds.
 
 import { TEAM_SIDES } from '@kbot/game3d/team-colors'
+import { openSandboxMapPicker } from './map-loader.js'
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { setMvInspectorVisible } from '../common/inspectors.js'
 
@@ -44,6 +45,7 @@ export async function ensureSandboxPanel() {
   if (!ui) return
   ui.mountSandboxPanel({
     onSpawn: (sourceEl) => openSandboxSpawnPicker(sourceEl),
+    onMap: () => openSandboxMapPicker(),
   })
 }
 

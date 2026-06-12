@@ -166,8 +166,8 @@ export function configureUi(persistence) {
 // onSpawn — host callback invoked when the user clicks Spawn Unit.
 // Receives the button element so the side picker can be anchored
 // next to the gesture.
-export function mountSandboxPanel({ onSpawn } = {}) {
-  _mountInto('sandbox-panel', () => html`<${SandboxPanel} onSpawn=${onSpawn} />`)
+export function mountSandboxPanel({ onSpawn, onMap } = {}) {
+  _mountInto('sandbox-panel', () => html`<${SandboxPanel} onSpawn=${onSpawn} onMap=${onMap} />`)
 }
 
 // mountSandboxRibbon — render the React sandbox-mode ribbon into the

@@ -717,10 +717,19 @@ func (w *World) stepMovement(u *Unit) {
 		u.IsMoving = moving
 		// Terrain legality: a step into ground the unit cannot traverse
 		// (too steep, too deep, dry land for a ship) is refused — the unit
-		// holds at the boundary instead of crossing it.
+		// stops at the boundary and drops the order rather than marching
+		// in place against the shoreline.
 		if !arrived && w.terrain != nil && !w.canStand(u.Meta, u.loco.Pos) && w.canStand(u.Meta, prePos) {
 			u.loco.Pos = prePos
 			u.loco.Speed = 0
+			u.hasMove = false
+			u.IsMoving = false
+			if u.curIsPatrol {
+				u.curIsPatrol = false
+			}
+			if !u.hasAttack {
+				w.advanceQueue(u)
+			}
 		}
 		if arrived && steer != u.moveTarget {
 			u.IsMoving = true

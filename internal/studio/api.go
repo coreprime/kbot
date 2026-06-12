@@ -33,6 +33,8 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)
 	mux.HandleFunc("/api/studio/tilesets", sess.handleTilesets)
 	mux.HandleFunc("/api/studio/maps", sess.handleMapsList)
+	mux.HandleFunc("/api/studio/sandbox-map", sess.handleSandboxMap)
+	mux.HandleFunc("/api/studio/sandbox-map-texture", sess.handleSandboxMapTexture)
 	mux.HandleFunc("/api/studio/minimap/", sess.handleMapMinimap)
 	mux.HandleFunc("/api/studio/map-render/", sess.handleMapRender)
 	mux.HandleFunc("/api/studio/tak-stamp", sess.handleTAKStamp)

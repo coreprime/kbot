@@ -7283,6 +7283,59 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 #sandbox-economy-bar .eco-rate-neg { color: #e25b52; }
 #sandbox-economy-bar .eco-total { font-size: 10px; color: rgba(255, 255, 255, 0.45); }
 
+/* Sandbox battlefield picker — list of maps with minimap thumbnails. */
+#sandbox-map-picker {
+  position: absolute;
+  left: 64px;
+  top: 120px;
+  width: 280px;
+  max-height: 70%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(12, 13, 20, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  z-index: 60;
+  overflow: hidden;
+}
+#sandbox-map-picker .map-picker-title {
+  padding: 8px 12px;
+  font-weight: 700;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+#sandbox-map-picker .map-picker-list { overflow-y: auto; }
+#sandbox-map-picker .map-picker-loading { padding: 12px; opacity: 0.6; font-size: 12px; }
+#sandbox-map-picker .map-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+#sandbox-map-picker .map-picker-row:hover { background: rgba(124, 92, 255, 0.18); }
+#sandbox-map-picker .map-picker-row.active { background: rgba(124, 92, 255, 0.30); }
+#sandbox-map-picker .map-picker-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.5);
+  flex: none;
+}
+#sandbox-map-picker .map-picker-grid {
+  background:
+    linear-gradient(rgba(32, 192, 88, 0.55) 1px, transparent 1px) 0 0 / 8px 8px,
+    linear-gradient(90deg, rgba(32, 192, 88, 0.55) 1px, transparent 1px) 0 0 / 8px 8px,
+    #04130a;
+}
+#sandbox-map-picker .map-picker-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Mini-map — bottom-right. Team-coloured dots; click selects, click an
    opposing unit attacks (shift queues), empty ground moves. */
 #sandbox-minimap {
