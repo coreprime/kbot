@@ -36,6 +36,9 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.BuildDistance = fixed.FromFloat(getFloat(o, "buildDistance"))
 	m.FootprintX = getInt(o, "footprintX")
 	m.FootprintZ = getInt(o, "footprintZ")
+	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
+	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))
+	m.CostMana = fixed.FromFloat(getFloat(o, "costMana"))
 	m.CruiseAltitude = fixed.FromFloat(getFloat(o, "cruiseAltitude"))
 	m.MaxHealth = fixed.FromFloat(getFloat(o, "maxDamage"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
@@ -149,6 +152,7 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				BuildName:    getString(u, "buildName"),
 				BuildSite:    fixed.Vec2{X: fixed.Fixed(getInt64(u, "buildSiteX")), Z: fixed.Fixed(getInt64(u, "buildSiteZ"))},
 				BuildTargetID: uint32(getInt(u, "buildTargetId")),
+				ProdQueue:     stringSliceFromJS(u.Get("prodQueue")),
 			}
 			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
 				for i := 0; i < qs.Length(); i++ {
@@ -262,6 +266,20 @@ func int32SliceFromJS(arr js.Value) []int32 {
 	return out
 }
 
+// stringSliceFromJS copies a JS string array into a []string, returning nil
+// for a missing or null array.
+func stringSliceFromJS(arr js.Value) []string {
+	if arr.Type() != js.TypeObject || arr.IsNull() {
+		return nil
+	}
+	n := arr.Length()
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = arr.Index(i).String()
+	}
+	return out
+}
+
 // intSliceFromJS copies a JS number array into an []int, returning nil for a
 // missing or null array.
 func intSliceFromJS(arr js.Value) []int {
@@ -369,6 +387,13 @@ func snapshotToWireJS(inst *instance) js.Value {
 			entry["buildSiteX"] = float64(ru.BuildSite.X)
 			entry["buildSiteZ"] = float64(ru.BuildSite.Z)
 			entry["buildTargetId"] = int(ru.BuildTargetID)
+		}
+		if len(ru.ProdQueue) > 0 {
+			pq := make([]any, len(ru.ProdQueue))
+			for i, n := range ru.ProdQueue {
+				pq[i] = n
+			}
+			entry["prodQueue"] = pq
 		}
 		// Mirror the wire's omitempty: only a non-empty queue serializes, so
 		// the Diagnose field diff stays symmetric with the server snapshot.
@@ -480,12 +505,30 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 	for i := range s.Events {
 		events = append(events, eventToJS(&s.Events[i]))
 	}
-	return js.ValueOf(map[string]any{
+	out := map[string]any{
 		"tick":   int(s.Tick),
 		"units":  units,
 		"projos": projos,
 		"events": events,
-	})
+	}
+	// Per-side resource usage for the HUD (infinite pools — display only).
+	if len(s.Resources) > 0 {
+		res := make([]any, 0, len(s.Resources))
+		for i := range s.Resources {
+			r := &s.Resources[i]
+			res = append(res, map[string]any{
+				"side":        r.Side,
+				"metalSpent":  r.MetalSpent.Float(),
+				"energySpent": r.EnergySpent.Float(),
+				"manaSpent":   r.ManaSpent.Float(),
+				"metalRate":   r.MetalRate.Float(),
+				"energyRate":  r.EnergyRate.Float(),
+				"manaRate":    r.ManaRate.Float(),
+			})
+		}
+		out["resources"] = res
+	}
+	return js.ValueOf(out)
 }
 
 func unitToJS(u *frame.UnitState) map[string]any {
@@ -520,6 +563,18 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"moveX":        u.MoveTarget.X.Float(),
 		"moveZ":        u.MoveTarget.Z.Float(),
 		"pieces":       pieces,
+	}
+	// Production state, for the build-menu counters: the type currently
+	// raising on the pad plus the factory's pending run in click order.
+	if u.Building != "" {
+		out["building"] = u.Building
+	}
+	if len(u.ProdQueue) > 0 {
+		pq := make([]any, len(u.ProdQueue))
+		for i, n := range u.ProdQueue {
+			pq[i] = n
+		}
+		out["prodQueue"] = pq
 	}
 	// Queued follow-up orders, for the order overlay's waypoint chain. kind
 	// follows order.Kind: 1 = move (x/z destination), 2 = attack (targetId).

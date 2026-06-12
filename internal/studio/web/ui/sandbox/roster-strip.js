@@ -1,27 +1,58 @@
 // roster-strip.js
 //
-// Bottom-centre selection roster for the sandbox. With fewer than five
-// units selected every unit gets its own cell — build picture + an
+// Bottom-centre selection roster for the sandbox, dock-style. With fewer
+// than five units selected every unit gets its own cell — build picture + an
 // individual health bar; five or more collapse into one cell per unit TYPE
 // with a count badge and a bar showing the group's AVERAGE health. Build
 // pictures come from /api/studio/buildpic/<name> (the game's own art, so
 // TA's and TA:K's differing aspect ratios carry through — the img scales by
 // height only).
 //
-// Updates ride the shared 4 Hz inspector tick (subscribeTick) rather than a
-// per-frame hook: selection and health change at sim cadence, and the DOM
-// only rebuilds when the roster's signature (ids + rounded healths)
-// actually changes, so hover/animation frames never churn it.
+// A single selected BUILDER appends its build menu: each buildable type as a
+// cell with the unit's resource costs beneath (labels from the game
+// adapter's resources table) and, on factories, a counter of copies queued
+// in the production run. Clicking queues on a factory (repeat clicks stack,
+// types mix freely — the sim owns the run) or arms the placement ghost on a
+// mobile builder.
 //
-// Clicking a cell narrows the selection to that unit (or that type).
+// Hovering magnifies icons macOS-dock style: the pointered icon swells and
+// neighbours scale off smoothly with distance (see #dockMagnify).
+//
+// Updates ride the shared 4 Hz inspector tick (subscribeTick) rather than a
+// per-frame hook: selection, health and queue state change at sim cadence,
+// and the DOM only rebuilds when the roster's signature actually changes,
+// so hover/animation frames never churn it.
 
 import { hostCallbacks, setStatus } from '../host-context.js'
 import { subscribeTick } from '../common/refresh-tick.js'
+import { activeGame } from '../common/game-registry.js'
 
 const GROUP_THRESHOLD = 5
 
 let _root = null
 let _sig = ''
+
+// Per-type meta cache for the build row's cost lines. A miss kicks an async
+// fetch and re-renders when it lands; null marks "no meta" so a 404 is
+// probed at most once.
+const _metaCache = new Map()
+const _metaInflight = new Set()
+
+function buildMeta(name) {
+  if (_metaCache.has(name)) return _metaCache.get(name)
+  if (!_metaInflight.has(name)) {
+    _metaInflight.add(name)
+    fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((meta) => {
+        _metaCache.set(name, meta)
+        _metaInflight.delete(name)
+        _sig = '' // costs arrived — rebuild on the next tick
+      })
+  }
+  return undefined
+}
 
 function ensureRoot() {
   if (_root && _root.isConnected) return _root
@@ -30,8 +61,38 @@ function ensureRoot() {
   _root = document.createElement('div')
   _root.id = 'sandbox-roster-strip'
   _root.hidden = true
+  _root.addEventListener('mousemove', dockMagnify)
+  _root.addEventListener('mouseleave', dockReset)
   dlg.appendChild(_root)
   return _root
+}
+
+// ── Dock magnification ──────────────────────────────────────────────
+//
+// Classic dock falloff: the icon under the pointer scales to ~1.5×, decaying
+// by a gaussian of horizontal distance so neighbours swell and contract as
+// the cursor sweeps. Transform-origin is the strip's baseline so icons grow
+// upward out of the bar.
+
+const DOCK_MAX_BOOST = 0.5
+const DOCK_FALLOFF_PX = 70
+
+function dockMagnify(e) {
+  if (!_root) return
+  for (const cell of _root.children) {
+    if (!cell.classList || !cell.classList.contains('roster-cell')) continue
+    const r = cell.getBoundingClientRect()
+    const d = Math.abs(e.clientX - (r.left + r.width / 2))
+    const s = 1 + DOCK_MAX_BOOST * Math.exp(-(d * d) / (DOCK_FALLOFF_PX * DOCK_FALLOFF_PX))
+    cell.style.transform = `scale(${s.toFixed(3)})`
+  }
+}
+
+function dockReset() {
+  if (!_root) return
+  for (const cell of _root.children) {
+    if (cell.style) cell.style.transform = ''
+  }
 }
 
 function healthFrac(u) {
@@ -42,13 +103,30 @@ function barColor(frac) {
   return `hsl(${Math.round(120 * frac)}, 85%, 45%)`
 }
 
-// buildCellHTML — one constructible unit in the single-builder build row.
-function buildCellHTML(name) {
+// costLineHTML renders a buildable type's resource prices using the game
+// adapter's resource table ("118 · 1536" for TA metal·energy, "285" for
+// TA:K mana). Empty until the meta cache resolves.
+function costLineHTML(name) {
+  const meta = buildMeta(name)
+  if (!meta) return '<div class="roster-cost"></div>'
+  const parts = []
+  for (const res of activeGame().resources || []) {
+    const v = meta[res.costField]
+    if (v > 0) parts.push(`<span style="color:${res.color}" title="${res.label}">${Math.round(v)}</span>`)
+  }
+  return `<div class="roster-cost">${parts.join('<span class="roster-cost-sep">·</span>')}</div>`
+}
+
+// buildCellHTML — one constructible unit in the single-builder build row,
+// with its resource costs and (for factories) the production-run counter.
+function buildCellHTML(name, queued) {
   return `
     <div class="roster-cell roster-build-cell" data-build="${name}" title="Build ${name}">
       <div class="roster-pic-wrap roster-pic-wrap-sm">
         <img class="roster-pic roster-pic-sm" data-unit="${name}" alt="${name}" />
+        ${queued > 0 ? `<span class="roster-count">${queued}</span>` : ''}
       </div>
+      ${costLineHTML(name)}
     </div>`
 }
 
@@ -62,6 +140,17 @@ function cellHTML({ name, title, count, frac }) {
       </div>
       <div class="roster-bar"><div class="roster-bar-fill" style="width:${pct}%;background:${barColor(frac)}"></div></div>
     </div>`
+}
+
+// queuedCount tallies how many of a type the builder has in flight: the
+// pending production run plus the unit currently raising on the pad.
+function queuedCount(builder, name) {
+  let n = 0
+  for (const q of builder.prodQueue || []) {
+    if (q === name) n++
+  }
+  if (builder.building === name) n++
+  return n
 }
 
 function update() {
@@ -95,18 +184,21 @@ function update() {
 
   // Single builder selected → append its build menu (the game adapter's
   // canbuild data rides the unit meta as buildOptions).
-  const buildOpts = (units.length === 1 && units[0].meta && Array.isArray(units[0].meta.buildOptions))
-    ? units[0].meta.buildOptions
+  const builder = units.length === 1 ? units[0] : null
+  const buildOpts = (builder && builder.meta && Array.isArray(builder.meta.buildOptions))
+    ? builder.meta.buildOptions
     : []
 
   const sig = cells.map((c) => `${c.name}:${c.count}:${Math.round(c.frac * 50)}`).join('|')
-    + (buildOpts.length ? '+build:' + units[0].name : '')
+    + (buildOpts.length
+      ? `+build:${builder.name}:${builder.building || ''}:${(builder.prodQueue || []).join(',')}`
+      : '')
   if (sig === _sig && !root.hidden) return
   _sig = sig
   root.hidden = false
   root.innerHTML = cells.map((c) => cellHTML(c)).join('')
     + (buildOpts.length
-      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n)).join('')}`
+      ? `<div class="roster-divider"></div>${buildOpts.map((n) => buildCellHTML(n, queuedCount(builder, n))).join('')}`
       : '')
   // Set image sources as PROPERTY writes after the markup lands: the
   // workspace URL shim rewrites src assignments to carry the /workspaces/
@@ -127,14 +219,10 @@ function update() {
       _sig = '' // force a rebuild against the narrowed selection
     })
   }
-  // Build cells construct the unit at the builder. A factory (an immobile
-  // builder) does the TA thing: the unit appears on the pad and ROLLS OFF to
-  // a clear spot near the exit, so back-to-back builds never stack. A MOBILE
-  // builder arms the placement ghost instead — the user picks the site, the
-  // builder walks into builddistance and runs the gradual build cycle
-  // (StartBuilding, rising buildee, per-game lathe/casting FX). Economy is
-  // not modelled; WHAT a unit can build comes from the game data.
-  const builder = units.length === 1 ? units[0] : null
+  // Build cells: a factory QUEUES the unit on its sim-side production run
+  // (repeat clicks stack copies, mixed types interleave in click order; the
+  // counter badge tracks the run). A mobile builder arms the placement
+  // ghost — the user picks the site and the builder walks over to raise it.
   for (const el of root.querySelectorAll('.roster-build-cell')) {
     el.addEventListener('click', async () => {
       const v = hostCallbacks.getActiveSandboxView?.()
@@ -143,20 +231,10 @@ function update() {
       try {
         const isFactory = builder.meta && builder.meta.canMove === false
         if (isFactory) {
-          // Spawn on the pad slightly toward the exit, facing out, then
-          // roll off to the nearest clear spot.
-          const model = await v.loader.load(name)
-          const h = builder.heading || 0
-          const u = await v.scene.addUnit({
-            name, model,
-            x: builder.pos.x + Math.sin(h) * 14,
-            z: builder.pos.z + Math.cos(h) * 14,
-            headingRad: h,
-            side: builder.side,
-          })
-          const spot = findRolloffSpot(v.scene, builder, h)
-          if (u && spot) u.moveTarget = { x: spot.x, z: spot.z }
-          setStatus(`Built ${name} — rolling off.`)
+          await v.scene.build(builder.id, name, builder.pos.x, builder.pos.z)
+          const n = queuedCount(builder, name) + 1
+          setStatus(`Queued ${name} — ${n} in this factory's production run.`)
+          _sig = '' // refresh the counter on the next tick
         } else if (typeof v.beginBuildPlacement === 'function') {
           await v.beginBuildPlacement(name, builder)
           setStatus(`Place ${name} — click a site; ${builder.name} will walk over and build it.`)
@@ -165,43 +243,6 @@ function update() {
         setStatus(`Build failed: ${e?.message || e}`)
       }
     })
-  }
-}
-
-// rolloffClearance — minimum distance (wu) a rolloff spot keeps from every
-// other live unit, sized to a vehicle footprint so freshly-built units park
-// beside each other instead of inside each other.
-const ROLLOFF_CLEARANCE = 30
-
-// findRolloffSpot scans rings in front of the factory (preferring straight
-// out the exit, fanning sideways, then widening) for a spot clear of every
-// live unit. A unit's spot is where it IS — its latest sim pose (_p1, synced
-// every tick; display pos only refreshes on painted frames) — and where it
-// is GOING (its move destination), so back-to-back builds don't all pick the
-// same square while the first tank is still rolling toward it. Falls back to
-// straight ahead so a crowded base still gets a destination.
-function findRolloffSpot(scene, builder, heading) {
-  const blockers = []
-  for (const u of scene.units()) {
-    if (!u || u.dead || u === builder) continue
-    const p = u._p1 || u.pos
-    blockers.push([p.x, p.z])
-    const mt = u.moveTarget
-    if (mt) blockers.push([mt.x, mt.z])
-  }
-  const clearAt = (x, z) =>
-    blockers.every(([bx, bz]) => Math.hypot(bx - x, bz - z) >= ROLLOFF_CLEARANCE)
-  for (const r of [70, 100, 130, 160]) {
-    for (const da of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, Math.PI]) {
-      const a = heading + da
-      const x = builder.pos.x + Math.sin(a) * r
-      const z = builder.pos.z + Math.cos(a) * r
-      if (clearAt(x, z)) return { x, z }
-    }
-  }
-  return {
-    x: builder.pos.x + Math.sin(heading) * 90,
-    z: builder.pos.z + Math.cos(heading) * 90,
   }
 }
 

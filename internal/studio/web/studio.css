@@ -7160,7 +7160,17 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   max-width: 70%;
   overflow-x: auto;
 }
-.roster-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
+.roster-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  /* Dock magnification: roster-strip.js drives scale() from cursor
+     distance; icons grow upward out of the bar. */
+  transform-origin: bottom center;
+  transition: transform 110ms ease-out;
+}
 .roster-cell:hover .roster-pic { filter: brightness(1.25); }
 .roster-pic-wrap { position: relative; height: 38px; display: flex; align-items: center; }
 .roster-pic { height: 38px; width: auto; image-rendering: pixelated; border-radius: 3px; display: block; }
@@ -7186,6 +7196,42 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 .roster-pic-wrap-sm { height: 30px; }
 .roster-pic-sm { height: 30px; }
 .roster-build-cell:hover .roster-pic { filter: brightness(1.4) drop-shadow(0 0 4px rgba(124, 92, 255, 0.8)); }
+.roster-cost {
+  display: flex;
+  gap: 3px;
+  min-height: 11px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.95;
+}
+.roster-cost-sep { opacity: 0.45; }
+
+/* Resource usage HUD — top-centre of the sandbox viewport. Pools are
+   infinite (∞); the rate shows the field's current build drain. */
+#sandbox-resource-hud {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 14px;
+  padding: 4px 12px;
+  background: rgba(12, 13, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  z-index: 30;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+#sandbox-resource-hud .res-item { display: flex; gap: 5px; align-items: baseline; }
+#sandbox-resource-hud .res-label { font-weight: 700; }
+#sandbox-resource-hud .res-stock { opacity: 0.85; font-size: 13px; }
+#sandbox-resource-hud .res-rate { color: #f0a44a; min-width: 48px; }
+#sandbox-resource-hud .res-spent { opacity: 0.6; font-size: 10px; }
 
 /* Fixed-width action slots so icons align across rows */
 .fx-actions-cell { white-space: nowrap; }

@@ -46,6 +46,24 @@ type UnitState struct {
 	HasMove    bool
 	MoveTarget fixed.Vec2
 	Queue      []QueuedOrder
+	// Production state, for the build-menu counters: the type currently
+	// raising on this builder's pad (empty when idle) and the factory's
+	// pending production run in click order.
+	Building  string
+	ProdQueue []string
+}
+
+// ResourceState is one side's resource usage figures for the HUD: totals
+// spent so far and the current drain per second. Pools are infinite in the
+// sandbox — nothing gates on these.
+type ResourceState struct {
+	Side        int
+	MetalSpent  fixed.Fixed
+	EnergySpent fixed.Fixed
+	ManaSpent   fixed.Fixed
+	MetalRate   fixed.Fixed
+	EnergyRate  fixed.Fixed
+	ManaRate    fixed.Fixed
 }
 
 // ProjectileState is one in-flight model projectile (missile/rocket/bomb).
@@ -224,4 +242,7 @@ type Snapshot struct {
 	Units  []UnitState
 	Projos []ProjectileState
 	Events []Event
+	// Resources lists each active side's usage figures (only sides with any
+	// spend or drain are included).
+	Resources []ResourceState
 }

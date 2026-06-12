@@ -177,6 +177,7 @@ type UnitSnap struct {
 	BuildSiteX    fixed.Fixed `json:"buildSiteX,omitempty"`
 	BuildSiteZ    fixed.Fixed `json:"buildSiteZ,omitempty"`
 	BuildTargetID uint32      `json:"buildTargetId,omitempty"`
+	ProdQueue     []string    `json:"prodQueue,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry

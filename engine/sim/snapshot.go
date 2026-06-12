@@ -38,6 +38,8 @@ func (w *World) Snapshot() frame.Snapshot {
 			HasMove:      u.hasMove,
 			MoveTarget:   u.moveTarget,
 			Queue:        queue,
+			Building:     u.buildName,
+			ProdQueue:    u.prodQueue,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -64,13 +66,30 @@ func (w *World) Snapshot() frame.Snapshot {
 			})
 		}
 	}
+	var resources []frame.ResourceState
+	for side := 0; side < maxSides; side++ {
+		s, r := w.resSpent[side], w.resRate[side]
+		if s == (resourceTally{}) && r == (resourceTally{}) {
+			continue
+		}
+		resources = append(resources, frame.ResourceState{
+			Side:        side,
+			MetalSpent:  s.Metal,
+			EnergySpent: s.Energy,
+			ManaSpent:   s.Mana,
+			MetalRate:   r.Metal,
+			EnergyRate:  r.Energy,
+			ManaRate:    r.Mana,
+		})
+	}
 	evts := w.events
 	w.events = nil
 	return frame.Snapshot{
-		Tick:   w.tick,
-		Units:  units,
-		Projos: projos,
-		Events: evts,
+		Tick:      w.tick,
+		Units:     units,
+		Projos:    projos,
+		Events:    evts,
+		Resources: resources,
 	}
 }
 
@@ -106,9 +125,16 @@ func (w *World) Hash() uint64 {
 			mix(1)
 		}
 		// Build progress is authoritative — it gates when a buildee becomes
-		// commandable — as is the builder's job state.
+		// commandable — as are the builder's job state and a factory's
+		// pending production run.
 		mix(uint64(u.BuildPercent))
 		mix(uint64(u.buildState))
+		mix(uint64(len(u.prodQueue)))
+		for _, name := range u.prodQueue {
+			for i := 0; i < len(name); i++ {
+				mix(uint64(name[i]))
+			}
+		}
 		// The shift-queue is authoritative — it dictates where the unit goes
 		// next — so a divergent queue must surface as a desync.
 		mix(uint64(len(u.queue)))

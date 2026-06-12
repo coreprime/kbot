@@ -72,6 +72,14 @@ export const game = {
     color: [0.5, 1.8, 0.6, 1.0],
   },
 
+  // Economy resources, in HUD display order. Each names the unit-meta cost
+  // field that prices a build in that resource; the sandbox drains it over
+  // construction against an infinite pool.
+  resources: [
+    { key: 'metal', label: 'Metal', costField: 'costMetal', color: '#9fb4c7' },
+    { key: 'energy', label: 'Energy', costField: 'costEnergy', color: '#f3d933' },
+  ],
+
   // Selection hotkeys in keys.tdf grammar. TA ships no keys.tdf — the retail
   // executable hardcoded these bindings — so the adapter carries the table;
   // units opt into each class through literal CTRL_x tokens in their FBI

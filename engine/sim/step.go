@@ -30,6 +30,11 @@ type Runtime interface {
 func (w *World) Step(rt Runtime) {
 	w.tick++
 	w.simMs += TickMs
+	// Resource drain rates are instantaneous figures: rebuilt from this
+	// tick's active builds (spent totals accumulate across ticks).
+	for i := range w.resRate {
+		w.resRate[i] = resourceTally{}
+	}
 	if rt != nil {
 		rt.Tick(w.simMs)
 	}
@@ -69,14 +74,26 @@ func (w *World) Step(rt Runtime) {
 // ground as its build percentage climbs, the sim-side visual of construction.
 var buildSinkWU = fixed.FromInt(10)
 
-// stepBuilder advances a mobile builder's construction job: walk to within
-// builddistance of the site, spawn the buildee at 0%, then raise its build
-// percentage at the TA rate (buildee buildtime points / builder workertime
-// points-per-second) until it is complete and commandable.
+// stepBuilder advances a builder's construction job. A mobile builder walks
+// to within builddistance of its ordered site; a factory pops the next entry
+// of its production queue onto its own pad. Either way the buildee spawns at
+// 0% and rises at the TA pace (buildee buildtime points / builder workertime
+// points-per-second), draining its resource price linearly, until complete
+// and commandable. Factory completions roll the new unit off to clear ground.
 func (w *World) stepBuilder(u *Unit) {
 	switch u.buildState {
 	case buildIdle:
-		return
+		// Factory with work queued: take the head onto the pad.
+		if len(u.prodQueue) > 0 && !u.Meta.CanMove {
+			name := u.prodQueue[0]
+			u.prodQueue = u.prodQueue[1:]
+			if len(u.prodQueue) == 0 {
+				u.prodQueue = nil
+			}
+			u.buildName = name
+			u.buildSite = w.factoryPad(u)
+			w.startRaising(u)
+		}
 	case buildApproach:
 		dist := u.loco.Pos.DistTo(u.buildSite)
 		bd := u.Meta.BuildDistance
@@ -89,28 +106,7 @@ func (w *World) stepBuilder(u *Unit) {
 			return
 		}
 		u.hasMove = false
-		if w.spawn == nil {
-			u.buildState = buildIdle
-			return
-		}
-		meta, binding := w.spawn(u.buildName)
-		if meta == nil {
-			u.buildState = buildIdle
-			return
-		}
-		// Spawn the buildee at 0% facing the builder's heading and sunk below
-		// grade; it rises as the build progresses.
-		id := w.AddUnit(u.buildName, meta, binding, u.buildSite, u.Heading(), u.Side)
-		b := w.units[id]
-		b.BuildPercent = 0
-		b.PosY = -buildSinkWU
-		u.buildeeID = id
-		u.buildState = buildRaising
-		if u.binding != nil && u.binding.HasScript("StartBuilding") {
-			u.binding.Start("StartBuilding")
-		}
-		site := fixed.Vec3{X: u.buildSite.X, Z: u.buildSite.Z}
-		w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: id, Anchor: site})
+		w.startRaising(u)
 	case buildRaising:
 		b := w.units[u.buildeeID]
 		if b == nil || b.Dead {
@@ -125,7 +121,9 @@ func (w *World) stepBuilder(u *Unit) {
 		if bt > 0 && wt > 0 {
 			durSec = fixed.Clamp(bt.Div(fixed.FromInt(wt)), fixed.FromInt(2), fixed.FromInt(60))
 		}
-		b.BuildPercent += fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz)))
+		pctPerTick := fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz)))
+		b.BuildPercent += pctPerTick
+		w.drainBuildCost(u.Side, b.Meta, pctPerTick)
 		if b.BuildPercent < fixed.FromInt(100) {
 			if !b.Meta.IsAircraft {
 				b.PosY = -buildSinkWU.Mul(fixed.FromInt(100) - b.BuildPercent).Div(fixed.FromInt(100))
@@ -140,10 +138,121 @@ func (w *World) stepBuilder(u *Unit) {
 			u.binding.Start("StopBuilding")
 		}
 		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: b.ID, Anchor: b.Pos()})
+		// A factory rolls the finished unit off its pad to clear ground so
+		// the next queue entry has room to raise.
+		if !u.Meta.CanMove && b.Meta.CanMove {
+			b.hasMove = true
+			b.moveTarget = w.rolloffSpot(u, b)
+		}
 		u.buildState = buildIdle
 		u.buildName = ""
 		u.buildeeID = 0
 	}
+}
+
+// startRaising spawns the active job's buildee at 0% — facing the builder's
+// heading, sunk below grade — and flips the builder into the raising phase.
+// A failed meta resolve drops the job (and lets a factory try its next entry
+// rather than wedging the pad).
+func (w *World) startRaising(u *Unit) {
+	if w.spawn == nil {
+		u.buildState = buildIdle
+		u.buildName = ""
+		return
+	}
+	meta, binding := w.spawn(u.buildName)
+	if meta == nil {
+		u.buildState = buildIdle
+		u.buildName = ""
+		return
+	}
+	id := w.AddUnit(u.buildName, meta, binding, u.buildSite, u.Heading(), u.Side)
+	b := w.units[id]
+	b.BuildPercent = 0
+	b.PosY = -buildSinkWU
+	u.buildeeID = id
+	u.buildState = buildRaising
+	if u.binding != nil && u.binding.HasScript("StartBuilding") {
+		u.binding.Start("StartBuilding")
+	}
+	site := fixed.Vec3{X: u.buildSite.X, Z: u.buildSite.Z}
+	w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: id, Anchor: site})
+}
+
+// drainBuildCost charges this tick's slice of the buildee's resource price
+// to the side's tally. Pools are infinite — this only feeds the usage HUD.
+func (w *World) drainBuildCost(side int, m *UnitMeta, pctPerTick fixed.Fixed) {
+	if side < 0 || side >= maxSides || m == nil {
+		return
+	}
+	frac := pctPerTick.Div(fixed.FromInt(100))
+	perSec := fixed.FromInt(TickHz)
+	if m.CostMetal > 0 {
+		d := m.CostMetal.Mul(frac)
+		w.resSpent[side].Metal += d
+		w.resRate[side].Metal += d.Mul(perSec)
+	}
+	if m.CostEnergy > 0 {
+		d := m.CostEnergy.Mul(frac)
+		w.resSpent[side].Energy += d
+		w.resRate[side].Energy += d.Mul(perSec)
+	}
+	if m.CostMana > 0 {
+		d := m.CostMana.Mul(frac)
+		w.resSpent[side].Mana += d
+		w.resRate[side].Mana += d.Mul(perSec)
+	}
+}
+
+// factoryPad is where a factory raises its buildee: just inside the front
+// edge of its footprint, along its facing.
+func (w *World) factoryPad(u *Unit) fixed.Vec2 {
+	r := u.Meta.collisionRadius().Div(fixed.FromInt(2))
+	sin, cos := fixed.SinCos(int32(u.Heading()))
+	return fixed.Vec2{X: u.loco.Pos.X + sin.Mul(r), Z: u.loco.Pos.Z + cos.Mul(r)}
+}
+
+// rolloffAngles are the candidate bearings (TA-angle offsets from the
+// factory's facing) a finished unit tries when rolling off: straight out the
+// exit, fanning sideways, then straight back. ~0.5 rad per step.
+var rolloffAngles = [...]int32{0, 5215, -5215, 10430, -10430, 15645, -15645, 32768}
+
+// rolloffSpot finds clear ground near the factory exit for a finished unit:
+// ring search over distance and bearing, blocked by every collidable body's
+// position AND destination so consecutive completions fan out instead of
+// stacking. Falls back to straight ahead.
+func (w *World) rolloffSpot(factory, b *Unit) fixed.Vec2 {
+	clearance := b.Meta.collisionRadius().Mul(fixed.FromInt(2)) + fixed.FromInt(6)
+	base := factory.Meta.collisionRadius() + b.Meta.collisionRadius() + fixed.FromInt(12)
+	heading := int32(factory.Heading())
+	clearAt := func(p fixed.Vec2) bool {
+		for _, id := range w.order {
+			o := w.units[id]
+			if o == nil || o == b || o == factory || !collidable(o) {
+				continue
+			}
+			if o.loco.Pos.DistTo(p) < clearance {
+				return false
+			}
+			if o.hasMove && o.moveTarget.DistTo(p) < clearance {
+				return false
+			}
+		}
+		return true
+	}
+	for ring := 0; ring < 4; ring++ {
+		r := base + fixed.FromInt(30*ring)
+		for _, da := range rolloffAngles {
+			sin, cos := fixed.SinCos(heading + da)
+			p := fixed.Vec2{X: factory.loco.Pos.X + sin.Mul(r), Z: factory.loco.Pos.Z + cos.Mul(r)}
+			if clearAt(p) {
+				return p
+			}
+		}
+	}
+	sin, cos := fixed.SinCos(heading)
+	r := base + fixed.FromInt(60)
+	return fixed.Vec2{X: factory.loco.Pos.X + sin.Mul(r), Z: factory.loco.Pos.Z + cos.Mul(r)}
 }
 
 // effectfulBinding is the optional surface a script binding exposes to hand the

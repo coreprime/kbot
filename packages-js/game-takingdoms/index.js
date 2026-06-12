@@ -73,6 +73,12 @@ export const game = {
     color: [1.8, 1.3, 0.5, 1.0],
   },
 
+  // Economy resource: TA:K's units are conjured from mana alone (FBI
+  // buildcost). Same HUD contract as TA's metal/energy pair.
+  resources: [
+    { key: 'mana', label: 'Mana', costField: 'costMana', color: '#ba82ff' },
+  ],
+
   // Fallback selection hotkeys, mirroring the retail keys.tdf's [CUSTOMKEYS]
   // selection entries. TA:K ships the real file at the VFS root and that
   // always wins; this table only stands in when a stripped install or custom

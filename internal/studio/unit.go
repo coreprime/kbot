@@ -117,6 +117,13 @@ type unitMetaJSON struct {
 	WorkerTime    int     `json:"workerTime,omitempty"`
 	BuildDistance int     `json:"buildDistance,omitempty"`
 
+	// Resource prices: TA pays metal + energy (buildcostmetal /
+	// buildcostenergy); TA:K pays mana (buildcost). The game adapter
+	// declares which of these the HUD shows.
+	CostMetal  float64 `json:"costMetal,omitempty"`
+	CostEnergy float64 `json:"costEnergy,omitempty"`
+	CostMana   float64 `json:"costMana,omitempty"`
+
 	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
@@ -467,6 +474,9 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.BuildTime = float64(info.BuildTime)
 	out.WorkerTime = info.WorkerTime
 	out.BuildDistance = info.BuildDistance
+	out.CostMetal = info.BuildCostMetal
+	out.CostEnergy = float64(info.BuildCostEnergy)
+	out.CostMana = float64(info.BuildCost)
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
 	for _, tok := range info.Category {

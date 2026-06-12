@@ -36,6 +36,13 @@ type UnitMeta struct {
 	FootprintX int
 	FootprintZ int
 
+	// Resource prices, drained over the unit's build (TA metal+energy,
+	// TA:K mana). Pools are infinite in the sandbox; the drain feeds the
+	// per-side usage stats only.
+	CostMetal  fixed.Fixed
+	CostEnergy fixed.Fixed
+	CostMana   fixed.Fixed
+
 	// MaxHealth is the unit's absolute hit points (FBI maxdamage). The sim's
 	// health bar stays on a 0..100 scale; ApplyDamage divides each weapon's
 	// absolute damage by this to land TDF-faithful percentage hits. Zero

@@ -1012,6 +1012,9 @@ export class WasmSandboxScene {
     this._syncProjectiles(snap)
     this._dispatchEvents(snap)
     this._tickBuildFx(snap)
+    // Per-side resource usage (spent totals + current drain/sec) for the
+    // HUD. Infinite pools — display only.
+    this.resources = snap.resources || this.resources || []
     return snap
   }
 
@@ -1086,6 +1089,10 @@ export class WasmSandboxScene {
       // adopt both each tick so the waypoint overlay tracks queue advancement
       // (a queued leg arming after arrival never went through the setter).
       u.queue = su.queue || []
+      // Production state for the build-menu counters: the type currently
+      // raising on this builder's pad plus a factory's pending run.
+      u.building = su.building || ''
+      u.prodQueue = su.prodQueue || []
       if (su.hasMove) {
         if (!u._moveTarget) u._moveTarget = { x: su.moveX, z: su.moveZ }
         else { u._moveTarget.x = su.moveX; u._moveTarget.z = su.moveZ }

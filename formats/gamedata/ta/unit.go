@@ -19,6 +19,10 @@ type UnitInfo struct {
 	BuildCostEnergy int     `tdf:"buildcostenergy,omitempty"`
 	BuildCostMetal  float64 `tdf:"buildcostmetal,omitempty"` // Assuming float, due to name/usage
 	BuildTime       int     `tdf:"buildtime,omitempty"`
+	// BuildCost is TA:Kingdoms' single-resource (mana) price. It lives here
+	// because this schema doubles as the studio's universal FBI parse
+	// target; a TA file simply never sets it.
+	BuildCost int `tdf:"buildcost,omitempty"`
 
 	DamageModifier float64 `tdf:"damagemodifier,omitempty"` // Assuming float, due to name/usage
 	MinWaterDepth  int     `tdf:"minwaterdepth,omitempty"`

@@ -2148,11 +2148,15 @@ export class SandboxView {
       if (u.dead) continue
       // Project the unit's vertical axis (feet → head) and measure the
       // click's distance to that SEGMENT. The acceptance gate scales with
-      // the projected height, so a unit filling 200px when zoomed in is
-      // clickable across its whole body, not just a fixed 32px disc near
-      // its feet (which made torso clicks fall through to the ground).
+      // the projected height AND the unit's footprint radius, so a tall
+      // unit is clickable along its body and a sprawling building (a TA
+      // factory pad, a TA:K keep) is clickable across its roof — not just
+      // a fixed 32px disc at its centre, which made big factories appear
+      // to ignore clicks entirely.
+      const fp = u.meta ? Math.max(u.meta.footprintX || 0, u.meta.footprintZ || 0) : 0
+      const radWU = Math.max(fp * 4, 10)
       const feet = this.#worldToScreen(u.pos.x, u.pos.y, u.pos.z)
-      const head = this.#worldToScreen(u.pos.x, u.pos.y + 24, u.pos.z)
+      const head = this.#worldToScreen(u.pos.x, u.pos.y + Math.max(24, radWU), u.pos.z)
       if (!feet || !head) continue
       const ax = feet[0], ay = feet[1]
       const bx = head[0], by = head[1]
@@ -2162,7 +2166,9 @@ export class SandboxView {
       t = Math.max(0, Math.min(1, t))
       const px = ax + abx * t, py = ay + aby * t
       const dist = Math.hypot(sx - px, sy - py)
-      const gate = Math.max(24, 0.6 * Math.sqrt(abLen2))
+      const side = this.#worldToScreen(u.pos.x + radWU, u.pos.y, u.pos.z)
+      const radPx = side ? Math.hypot(side[0] - ax, side[1] - ay) : 0
+      const gate = Math.max(24, 0.6 * Math.sqrt(abLen2), radPx)
       if (dist >= gate) continue
       // Among gated candidates prefer the closest relative to its gate so
       // a small far unit isn't shadowed by a huge near one.

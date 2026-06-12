@@ -111,15 +111,21 @@ type Unit struct {
 	// dies. Any non-queued Move/Attack (and Stop) clears it.
 	queue []queuedCommand
 
-	// Mobile-builder build-cycle state. buildState tracks the job phase
-	// (approach the site, then raise the buildee); buildName/buildSite are
-	// the order parameters and buildeeID the under-construction unit once it
-	// exists. A unit whose own BuildPercent is below 100 is inert — not
-	// commandable, not stepping movement or weapons — until complete.
+	// Build-cycle state, shared by mobile builders and factories. buildState
+	// tracks the job phase (approach the site, then raise the buildee);
+	// buildName/buildSite are the active job's parameters and buildeeID the
+	// under-construction unit once it exists. A unit whose own BuildPercent
+	// is below 100 is inert — not commandable, not stepping movement or
+	// weapons — until complete.
 	buildState buildPhase
 	buildName  string
 	buildSite  fixed.Vec2
 	buildeeID  uint32
+
+	// prodQueue is a factory's pending production run, in click order —
+	// mixed types queue freely. stepBuilder pops the head into the active
+	// job whenever the pad is idle.
+	prodQueue []string
 
 	weapons [3]weaponSlot
 
@@ -217,6 +223,23 @@ type World struct {
 	// metaProvider resolves a unit type name to its stat block + binding when
 	// a Spawn order arrives. Injected so the core stays asset-agnostic.
 	spawn SpawnFunc
+
+	// Resource accounting, per side (0..7). Builds drain each unit's FBI
+	// price linearly over its construction; the sandbox pools are infinite,
+	// so this only feeds the usage HUD — nothing gates on it. resRate is
+	// rebuilt every tick (drain per second right now); resSpent accumulates.
+	resSpent [maxSides]resourceTally
+	resRate  [maxSides]resourceTally
+}
+
+// maxSides is the per-side resource-tally array bound (TA's 8 team slots).
+const maxSides = 8
+
+// resourceTally is one side's resource figures: TA metal+energy, TA:K mana.
+type resourceTally struct {
+	Metal  fixed.Fixed
+	Energy fixed.Fixed
+	Mana   fixed.Fixed
 }
 
 // SpawnFunc builds the meta and (optional) script binding for a unit type.
@@ -673,12 +696,14 @@ type RestoredUnit struct {
 	Weapons [3]RestoredWeapon
 	// BuildPercent carries construction progress (a buildee below 100% stays
 	// inert on the joiner too); the Build* fields carry a builder's live job
-	// so the joiner keeps raising the same buildee.
+	// so the joiner keeps raising the same buildee; ProdQueue a factory's
+	// pending production run.
 	BuildPercent  fixed.Fixed
 	BuildState    uint8
 	BuildName     string
 	BuildSite     fixed.Vec2
 	BuildTargetID uint32
+	ProdQueue     []string
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -791,6 +816,7 @@ func (w *World) ExportUnits() []RestoredUnit {
 			BuildName:     u.buildName,
 			BuildSite:     u.buildSite,
 			BuildTargetID: u.buildeeID,
+			ProdQueue:     append([]string(nil), u.prodQueue...),
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
@@ -897,6 +923,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			buildName:    ru.BuildName,
 			buildSite:    ru.BuildSite,
 			buildeeID:    ru.BuildTargetID,
+			prodQueue:    append([]string(nil), ru.ProdQueue...),
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
 			IsMoving:     ru.HasMove,
@@ -1087,16 +1114,28 @@ func (w *World) ApplyOrder(o order.Order) {
 	case order.KindRemove:
 		w.RemoveUnit(o.UnitID)
 	case order.KindBuild:
-		if u := w.units[o.UnitID]; u != nil && !u.Dead && !u.underConstruction() &&
-			u.Meta != nil && u.Meta.CanMove && u.Meta.IsBuilder && o.Name != "" {
-			// A new job replaces any current one (the half-built buildee stays,
-			// inert, where it was abandoned — as in TA).
+		u := w.units[o.UnitID]
+		if u == nil || u.Dead || u.underConstruction() ||
+			u.Meta == nil || !u.Meta.IsBuilder || o.Name == "" {
+			return
+		}
+		if u.Meta.CanMove {
+			// Mobile builder: a new job replaces any current one (the
+			// half-built buildee stays, inert, where it was abandoned — as
+			// in TA).
 			w.cancelBuild(u)
 			u.buildState = buildApproach
 			u.buildName = o.Name
 			u.buildSite = o.Target
 			u.hasAttack = false
 			u.queue = nil
+			return
+		}
+		// Factory: every order APPENDS to the production run — repeat clicks
+		// queue copies, mixed types queue freely. stepBuilder pops the head
+		// onto the pad whenever it goes idle.
+		if len(u.prodQueue) < maxOrderQueue {
+			u.prodQueue = append(u.prodQueue, o.Name)
 		}
 	}
 }
@@ -1172,6 +1211,7 @@ func (w *World) stopUnit(id uint32) {
 	u.attackTarget = 0
 	u.atkActive = false
 	u.bombRunActive = false
+	u.prodQueue = nil
 	w.cancelBuild(u)
 	for i := range u.weapons {
 		w.clearWeaponSlot(u, i)
