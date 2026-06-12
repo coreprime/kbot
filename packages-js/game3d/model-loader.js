@@ -81,15 +81,18 @@ export class ModelLoader {
         p.lodHide = true
       }
     }
-    // Sprite-on-a-stick detection: a piece whose own geometry is one big
-    // quad standing roughly upright (TA:K lodestones, banner-style props
-    // authored for the game's fixed camera) gets billboarded so it stays
-    // visible from any angle in the free camera. Tight gates keep normal
-    // 3D pieces and tiny muzzle-flare quads out:
-    //   - exactly one quad's worth of vertices,
-    //   - tall (height the dominant extent, above sprite scale),
-    //   - not lying flat (ground plates must stay put),
-    //   - not a known cosmetic anchor (flares are lodHide-tagged anyway).
+    // Sprite detection: a piece whose own geometry is one big quad authored
+    // for the game's fixed camera (TA:K lodestones, banner-style props)
+    // gets billboarded so it stays readable from any angle in the free
+    // camera. Two signatures qualify:
+    //   upright — height the dominant extent (a sprite on a stick);
+    //   tilted  — the quad's plane leans between flat and vertical (the
+    //             lodestone glyph is 54wu wide but only 29 tall, leaned
+    //             ~30° toward TA:K's camera, so height-dominance alone
+    //             misses it).
+    // Flat ground plates (normal straight up), true architecture walls
+    // (normal horizontal, not height-dominant), sub-sprite-scale quads and
+    // cosmetic anchors all stay put.
     for (const p of model.flat) {
       if (p.lodHide || !p.sourceVertices || p.sourceVertices.length !== 12) continue
       const vs = p.sourceVertices
@@ -99,7 +102,15 @@ export class ModelLoader {
       const ext = (a) => Math.max(...a) - Math.min(...a)
       const h = ext(ys)
       if (h < 24) continue
-      if (h < ext(xs) * 0.8 && h < ext(zs) * 0.8) continue // lying flat
+      const upright = h >= ext(xs) * 0.8 || h >= ext(zs) * 0.8
+      // Quad plane normal from the first two edges; |ny|/|n| is 1 for a
+      // flat plate, 0 for a vertical wall, in between for a leaned sprite.
+      const e1x = vs[3] - vs[0], e1y = vs[4] - vs[1], e1z = vs[5] - vs[2]
+      const e2x = vs[6] - vs[0], e2y = vs[7] - vs[1], e2z = vs[8] - vs[2]
+      const ny = e1z * e2x - e1x * e2z
+      const nl = Math.hypot(e1y * e2z - e1z * e2y, ny, e1x * e2y - e1y * e2x) || 1
+      const tilt = Math.abs(ny) / nl
+      if (!upright && !(tilt > 0.25 && tilt < 0.95)) continue
       p.billboard = true
     }
     // Pass through the server's textureSources map (texture name →
