@@ -305,6 +305,9 @@ func (w *World) rolloffSpot(factory, b *Unit) fixed.Vec2 {
 	base := factory.Meta.collisionRadius() + b.Meta.collisionRadius() + fixed.FromInt(12)
 	heading := int32(factory.Heading())
 	clearAt := func(p fixed.Vec2) bool {
+		if !w.canStand(b.Meta, p) {
+			return false
+		}
 		for _, id := range w.order {
 			o := w.units[id]
 			if o == nil || o == b || o == factory || !collidable(o) {
@@ -386,6 +389,17 @@ func (w *World) stepProjectiles() {
 			}
 		}
 		p.stepProjectile(fixed.Zero)
+		// Terrain blocks the flight path: a shot dipping below the ground
+		// detonates on the slope it hit (clipping the arc that would have
+		// reached a target up on a cliff).
+		if !p.dead && w.terrain != nil && p.ageSec > fixed.FromFloat(0.1) {
+			g := w.groundHeight(fixed.Vec2{X: p.pos.X, Z: p.pos.Z})
+			if p.pos.Y < g {
+				p.pos.Y = g
+				p.dead = true
+				p.hit = true
+			}
+		}
 		if p.dead {
 			w.detonate(p)
 			continue
@@ -698,8 +712,16 @@ func (w *World) stepMovement(u *Unit) {
 		// against the REAL target; touching a detour point just keeps driving
 		// (the detour is recomputed from the live field every tick).
 		steer := w.avoidanceTarget(u)
+		prePos := u.loco.Pos
 		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
 		u.IsMoving = moving
+		// Terrain legality: a step into ground the unit cannot traverse
+		// (too steep, too deep, dry land for a ship) is refused — the unit
+		// holds at the boundary instead of crossing it.
+		if !arrived && w.terrain != nil && !w.canStand(u.Meta, u.loco.Pos) && w.canStand(u.Meta, prePos) {
+			u.loco.Pos = prePos
+			u.loco.Speed = 0
+		}
 		if arrived && steer != u.moveTarget {
 			u.IsMoving = true
 		} else if arrived {
@@ -730,6 +752,8 @@ func (w *World) stepMovement(u *Unit) {
 
 	if u.Meta.IsAircraft {
 		w.stepAltitude(u)
+	} else {
+		w.settleOnTerrain(u)
 	}
 
 	if u.IsMoving && !wasMoving {
@@ -826,9 +850,12 @@ func (w *World) stepAltitude(u *Unit) {
 			cruise = fixed.FromInt(100)
 		}
 	}
-	altTarget := fixed.Zero
+	// Altitude rides the terrain: cruise height is measured above the
+	// ground (and a landed aircraft parks ON it, not at sea-floor zero).
+	ground := w.groundHeight(u.loco.Pos)
+	altTarget := ground
 	if airborne {
-		altTarget = cruise
+		altTarget = ground + cruise
 	}
 	accel := u.Meta.Accel
 	if accel <= 0 {

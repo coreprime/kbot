@@ -59,6 +59,9 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		FootprintZ:  info.FootprintZ,
 	}
 	m.Yard = sim.ParseYardMap(info.YardMap, info.FootprintX, info.FootprintZ)
+	m.MaxSlope = info.MaxSlope
+	m.MaxWaterDepth = info.MaxWaterDepth
+	m.MinWaterDepth = info.MinWaterDepth
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	cats := map[string]bool{}
 	for _, c := range info.Category {
@@ -80,6 +83,9 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	}
 	if cats["SUB"] || cats["UNDERWATER"] {
 		m.IsSub = true
+	}
+	if cats["HOVER"] && !m.IsAircraft {
+		m.IsHovercraft = true
 	}
 	m.IsHover = info.HoverAttack == 1
 	if m.IsAircraft {

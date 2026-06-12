@@ -281,6 +281,10 @@ type World struct {
 	// resProduced accumulates gross generation over the session, the
 	// economy bar's lifetime-production figure.
 	resProduced [maxSides]resourceTally
+
+	// terrain is the installed map height field (nil = flat sandbox grid).
+	// Configuration like meta, identical on every peer, never hashed.
+	terrain *Terrain
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).
@@ -1296,6 +1300,13 @@ func (w *World) ApplyOrder(o order.Order) {
 			}
 		}
 	case order.KindBuild:
+		// A site the buildee cannot legally occupy (sonar on land, a plant
+		// in deep water, a cliff face) refuses the order outright.
+		if w.spawn != nil && w.terrain != nil {
+			if bm, _ := w.spawn(o.Name); bm != nil && !w.canStand(bm, o.Target) {
+				return
+			}
+		}
 		u := w.units[o.UnitID]
 		if u == nil || u.Dead || u.underConstruction() ||
 			u.Meta == nil || !u.Meta.IsBuilder || o.Name == "" {

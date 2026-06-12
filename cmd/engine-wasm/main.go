@@ -59,6 +59,7 @@ func main() {
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
 		"submitLoad":   js.FuncOf(submitLoad),
 		"submitUnload": js.FuncOf(submitUnload),
+		"setTerrain":   js.FuncOf(setTerrain),
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
@@ -318,6 +319,37 @@ func submitUnload(_ js.Value, args []js.Value) any {
 	}
 	target := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
 	return int(inst.sess.Submit(order.Unload(uint32Slice(args[1]), target)))
+}
+
+// setTerrain(handle, {w, h, cellWU, heightScale, seaLevel, data:Uint8Array})
+// installs the map height field every lockstep peer must share; null clears
+// back to the flat grid. Returns true on success.
+func setTerrain(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	o := args[1]
+	if o.IsNull() || o.IsUndefined() {
+		inst.world.SetTerrain(nil)
+		return true
+	}
+	t := &sim.Terrain{
+		W:           o.Get("w").Int(),
+		H:           o.Get("h").Int(),
+		CellWU:      fixed.FromFloat(o.Get("cellWU").Float()),
+		HeightScale: fixed.FromFloat(o.Get("heightScale").Float()),
+		SeaLevel:    o.Get("seaLevel").Int(),
+	}
+	data := o.Get("data")
+	n := data.Get("length").Int()
+	if n < t.W*t.H {
+		return false
+	}
+	t.Data = make([]uint8, n)
+	js.CopyBytesToGo(t.Data, data)
+	inst.world.SetTerrain(t)
+	return true
 }
 
 // submitStop(handle, unitIds[]) -> execTick.

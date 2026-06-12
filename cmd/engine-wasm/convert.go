@@ -30,6 +30,7 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 		IsHover:     getBool(o, "isHover"),
 		IsShip:      getBool(o, "isShip"),
 		IsSub:       getBool(o, "isSub"),
+		IsHovercraft: getBool(o, "isHovercraft"),
 		IsBuilder:   getBool(o, "isBuilder"),
 		OnOffable:   getBool(o, "onoffable"),
 	}
@@ -40,6 +41,9 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.FootprintZ = getInt(o, "footprintZ")
 	m.Yard = sim.ParseYardMap(getString(o, "yardMap"), m.FootprintX, m.FootprintZ)
 	m.TransportSlots = getInt(o, "transportSlots")
+	m.MaxSlope = getInt(o, "maxSlope")
+	m.MaxWaterDepth = getInt(o, "maxWaterDepth")
+	m.MinWaterDepth = getInt(o, "minWaterDepth")
 	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
 	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))
 	m.CostMana = fixed.FromFloat(getFloat(o, "costMana"))

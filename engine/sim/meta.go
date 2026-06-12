@@ -18,7 +18,15 @@ type UnitMeta struct {
 	IsHover        bool
 	IsShip         bool
 	IsSub          bool
+	IsHovercraft   bool
 	CruiseAltitude fixed.Fixed
+
+	// Terrain limits (FBI maxslope / maxwaterdepth / minwaterdepth, in
+	// height units): the steepest cell delta the unit climbs, the deepest
+	// water a surface unit wades, the shallowest water a ship needs.
+	MaxSlope      int
+	MaxWaterDepth int
+	MinWaterDepth int
 
 	IsBuilder bool
 	OnOffable bool

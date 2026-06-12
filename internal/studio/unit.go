@@ -155,6 +155,12 @@ type unitMetaJSON struct {
 	StoresEnergy float64 `json:"storesEnergy,omitempty"`
 	StoresMana  float64 `json:"storesMana,omitempty"`
 
+	// Terrain limits (FBI maxslope / maxwaterdepth / minwaterdepth, height
+	// units) — the sim's movement and build-site legality on loaded maps.
+	MaxSlope      int `json:"maxSlope,omitempty"`
+	MaxWaterDepth int `json:"maxWaterDepth,omitempty"`
+	MinWaterDepth int `json:"minWaterDepth,omitempty"`
+
 	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
 	// its collision body from it.
 	FootprintX int `json:"footprintX,omitempty"`
@@ -542,6 +548,9 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
 	out.YardMap = strings.Join(strings.Fields(info.YardMap), " ")
+	out.MaxSlope = info.MaxSlope
+	out.MaxWaterDepth = info.MaxWaterDepth
+	out.MinWaterDepth = info.MinWaterDepth
 	out.Title = strings.TrimSpace(info.Name)
 	if d := strings.TrimSpace(info.Description); d != "" {
 		if out.Title != "" {
