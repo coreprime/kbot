@@ -100,12 +100,14 @@ import { openWelcomeTab } from '../screens/welcome/tab.js'
 import { setWelcomeTab, setSandboxView } from '../screens/welcome/welcome-screen.js'
 import { wireRosterStrip } from './roster-strip.js'
 import { wireResourcesHud } from './resources-hud.js'
+import { wireMinimap } from './minimap.js'
 
-// Selection roster strip (bottom-centre build-pic summary) and the resource
-// usage HUD — one global subscriber each on the shared inspector tick,
-// wired at module load.
+// Selection roster strip (bottom-centre build-pic summary), the economy
+// bar and the mini-map — one global subscriber each on the shared
+// inspector tick, wired at module load.
 wireRosterStrip()
 wireResourcesHud()
+wireMinimap()
 
 // _sbxMatchId / _sbxHostWsUrl mirror the welcome screen's New-Hosted
 // helpers so the "+" menu can host a match without the welcome UI.

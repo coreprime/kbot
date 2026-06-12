@@ -7244,6 +7244,24 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 #sandbox-economy-bar .eco-rates { color: #f0a44a; min-width: 70px; font-size: 10px; }
 #sandbox-economy-bar .eco-inf { opacity: 0.8; font-size: 13px; }
 
+/* Mini-map — bottom-right. Team-coloured dots; click selects, click an
+   opposing unit attacks (shift queues), empty ground moves. */
+#sandbox-minimap {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  padding: 4px;
+  background: rgba(12, 13, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  z-index: 30;
+}
+#sandbox-minimap canvas {
+  display: block;
+  border-radius: 5px;
+  cursor: crosshair;
+}
+
 /* Fixed-width action slots so icons align across rows */
 .fx-actions-cell { white-space: nowrap; }
 .fx-actions-cell .fx-row-action {
