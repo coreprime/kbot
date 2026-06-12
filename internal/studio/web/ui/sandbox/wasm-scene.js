@@ -980,6 +980,12 @@ export class WasmSandboxScene {
     let alpha
     if (rate <= 0) {
       alpha = this._interpAlpha || 0
+    } else if (!this._join) {
+      // Local mode: the step accumulator IS the phase into the next tick —
+      // exact regardless of display rate, playback rate or how many steps a
+      // frame folded, where a wall-clock estimate drifts against the fold
+      // loop and reads as micro-stutter.
+      alpha = this._acc / TICK_MS
     } else {
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
       const interval = TICK_MS / rate
@@ -1007,6 +1013,7 @@ export class WasmSandboxScene {
       while (dh > Math.PI) dh -= Math.PI * 2
       while (dh < -Math.PI) dh += Math.PI * 2
       u.heading = p0.h + dh * alpha
+      this._applyPieces(u, alpha)
     }
   }
 
@@ -1120,36 +1127,61 @@ export class WasmSandboxScene {
       } else if (u._moveTarget) {
         u._moveTarget = null
       }
-      this._applyPieces(u, su.piecesPacked)
+      this._bufferPieces(u, su.piecesPacked)
     }
   }
 
-  // _applyPieces writes the snapshot's per-piece transforms onto the unit's
-  // model clone.  The bridge packs them as a Float32 stride-7 buffer
-  // (ox, oy, oz, rx, ry, rz, visible) — one typed-array copy per unit
-  // instead of one JS object per piece, the wasm boundary's old hot spot.
-  // The model loader X-flips geometry, so Z-translation and X/Y rotation
-  // flip sign while Z-rotation does not. Piece lookups are cached per model
-  // clone so the per-tick path never re-walks the piece tree.
-  _applyPieces(u, packed) {
-    if (!u.model || !packed) return
+  // _bufferPieces double-buffers a unit's packed piece transforms so the
+  // per-frame interpolation pass can lerp the COB animation (walk gaits,
+  // turret turns) between sim ticks instead of snapping at the tick rate.
+  _bufferPieces(u, packed) {
+    if (!packed) return
+    const f = new Float32Array(packed.buffer, packed.byteOffset, packed.byteLength >> 2)
+    if (!u._pieces1 || u._pieces1.length !== f.length) {
+      u._pieces1 = new Float32Array(f)
+      u._pieces0 = new Float32Array(f)
+      return
+    }
+    const tmp = u._pieces0
+    u._pieces0 = u._pieces1
+    u._pieces1 = tmp
+    u._pieces1.set(f)
+  }
+
+  // _applyPieces writes each piece's display transform onto the unit's model
+  // clone as a lerp between the
+  // previous and latest tick buffers (packed Float32 stride-7:
+  // ox, oy, oz, rx, ry, rz, visible). Rotations take the wrap-aware shortest
+  // arc in TA-angle space so a spinning radar crossing the seam doesn't whip
+  // the long way round; visibility is a hard switch from the latest tick. The
+  // model loader X-flips geometry, so Z-translation and X/Y rotation flip
+  // sign while Z-rotation does not; piece lookups stay cached per clone.
+  _applyPieces(u, alpha) {
+    const f0 = u._pieces0, f1 = u._pieces1
+    if (!u.model || !f1) return
     if (u._pieceCacheModel !== u.model) {
       u._pieceCacheModel = u.model
       u._pieceCache = u._cobPieceNames.map((name) => (name ? u.model.findPiece(name) : null))
     }
-    const f = new Float32Array(packed.buffer, packed.byteOffset, packed.byteLength >> 2)
-    const n = Math.min(u._pieceCache.length, (f.length / 7) | 0)
+    const n = Math.min(u._pieceCache.length, (f1.length / 7) | 0)
+    const HALF = 32768, FULL = 65536
+    const arc = (a0, a1) => {
+      let d = (a1 - a0) % FULL
+      if (d > HALF) d -= FULL
+      else if (d < -HALF) d += FULL
+      return a0 + d * alpha
+    }
     for (let i = 0; i < n; i++) {
       const piece = u._pieceCache[i]
       if (!piece) continue
       const o = i * 7
-      piece.move[0] = f[o]
-      piece.move[1] = f[o + 1]
-      piece.move[2] = -f[o + 2]
-      piece.rotate[0] = -ANGLE_TO_RAD * f[o + 3]
-      piece.rotate[1] = -ANGLE_TO_RAD * f[o + 4]
-      piece.rotate[2] = ANGLE_TO_RAD * f[o + 5]
-      piece.visible = f[o + 6] !== 0
+      piece.move[0] = f0[o] + (f1[o] - f0[o]) * alpha
+      piece.move[1] = f0[o + 1] + (f1[o + 1] - f0[o + 1]) * alpha
+      piece.move[2] = -(f0[o + 2] + (f1[o + 2] - f0[o + 2]) * alpha)
+      piece.rotate[0] = -ANGLE_TO_RAD * arc(f0[o + 3], f1[o + 3])
+      piece.rotate[1] = -ANGLE_TO_RAD * arc(f0[o + 4], f1[o + 4])
+      piece.rotate[2] = ANGLE_TO_RAD * arc(f0[o + 5], f1[o + 5])
+      piece.visible = f1[o + 6] !== 0
     }
   }
 
