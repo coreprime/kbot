@@ -899,13 +899,17 @@ export class SandboxView {
     //   - 6 trail icons evenly spaced from unit pos → move target
     let elIdx = 0
     const pool = this._shiftPreviewEls
+    // cssText-baked background URLs bypass the page's src shim, so the
+    // workspace prefix must be applied by hand or the glyphs 404 under
+    // /workspaces/<id>/ and the whole overlay renders as bare badges.
+    const cursorUrl = (kind) => `${window.__WS_BASE__ || ''}/api/studio/cursor/${kind}`
     const ensureEl = (kind, badge = null) => {
       let entry
       if (elIdx < pool.length) {
         entry = pool[elIdx]
         if (entry.kind !== kind) {
           // Re-skin the existing element — cheaper than re-creating.
-          entry.el.style.backgroundImage = `url('/api/studio/cursor/${kind}')`
+          entry.el.style.backgroundImage = `url('${cursorUrl(kind)}')`
           entry.kind = kind
         }
         entry.el.style.display = ''
@@ -919,7 +923,7 @@ export class SandboxView {
           'background-repeat: no-repeat',
           'pointer-events: none',
           'image-rendering: pixelated',
-          `background-image: url('/api/studio/cursor/${kind}')`,
+          `background-image: url('${cursorUrl(kind)}')`,
         ].join('; ')
         host.appendChild(el)
         entry = { kind, el, badge: null }
