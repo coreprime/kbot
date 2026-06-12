@@ -644,7 +644,12 @@ func (u *Unit) startScript(caller *thread, childIdx, argCount int) {
 			ex.dead = true
 		}
 	}
-	u.threads = append(u.threads, u.newThread(childIdx, args))
+	child := u.newThread(childIdx, args)
+	// A started script inherits the caller's signal mask (the TA contract
+	// behind StartMoving: set-signal-mask SIG_MOVEMENT; start-script walk();
+	// — StopMoving's signal must reach the walk loop or the gait never ends).
+	child.signalMask = caller.signalMask
+	u.threads = append(u.threads, child)
 }
 
 func (u *Unit) callScript(t *thread, childIdx, argCount int) {

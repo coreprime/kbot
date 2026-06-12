@@ -409,3 +409,46 @@ func TestDeterministicRandomDrivesIdenticalPieces(t *testing.T) {
 		}
 	}
 }
+
+// TestStartedScriptInheritsSignalMask pins the TA StartMoving/StopMoving
+// contract: a thread spawned with start-script inherits its caller's signal
+// mask, so the StopMoving signal reaches the walk loop it started. Without
+// inheritance the gait loops forever after the unit halts (the Fido bug).
+func TestStartedScriptInheritsSignalMask(t *testing.T) {
+	p := prog(twoPieces(), 0,
+		ScriptSource{
+			Name: "Walk",
+			Insts: []Instruction{
+				i1(scripting.OP_PUSH_IMMEDIATE, 100000),
+				i0(scripting.OP_SLEEP),
+			},
+		},
+		ScriptSource{
+			Name: "StartMoving",
+			Insts: []Instruction{
+				i1(scripting.OP_PUSH_IMMEDIATE, 2), // SIG_MOVEMENT
+				i0(scripting.OP_SET_SIGNAL_MASK),
+				i2(scripting.OP_START_SCRIPT, 0, 0), // start Walk
+			},
+		},
+		ScriptSource{
+			Name: "StopMoving",
+			Insts: []Instruction{
+				i1(scripting.OP_PUSH_IMMEDIATE, 2),
+				i0(scripting.OP_SIGNAL),
+			},
+		},
+	)
+	rt := NewRuntime(1)
+	u := rt.NewUnit(p, nil)
+	u.Start("StartMoving")
+	rt.Tick(25) // StartMoving sets mask, spawns Walk; Walk parks on its sleep
+	if u.countScript("Walk") != 1 {
+		t.Fatalf("Walk should be running")
+	}
+	u.Start("StopMoving")
+	rt.Tick(50) // signal 2 must reach the inherited-mask Walk thread
+	if u.countScript("Walk") != 0 {
+		t.Fatalf("Walk survived StopMoving's signal — mask not inherited")
+	}
+}
