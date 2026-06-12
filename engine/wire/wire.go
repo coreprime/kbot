@@ -164,11 +164,24 @@ type UnitSnap struct {
 	HasAttack    bool          `json:"hasAttack"`
 	AttackTarget uint32        `json:"attackTarget"`
 	Weapons      [3]WeaponSnap `json:"weapons,omitempty"`
+	// Queue is the unit's shift-queued follow-up orders, so a joiner advances
+	// through the same waypoint chain. omitempty on both ends (the client-side
+	// export also skips an empty queue) keeps the Diagnose diff symmetric.
+	Queue []QueuedSnap `json:"queue,omitempty"`
 	// Cob carries the unit's full live script VM state so the joiner resumes the
 	// authority's exact piece poses (turret aim, mid-recoil) rather than
 	// re-deriving them from a Create/StartMoving replay. Only join snapshots carry
 	// it; periodic backstop snapshots omit it to avoid a bandwidth spike.
 	Cob *frame.CobSnapshot `json:"cob,omitempty"`
+}
+
+// QueuedSnap is one deferred order on a unit's shift-queue in a join snapshot.
+// Kind mirrors order.Kind numerically (1 = move, 2 = attack).
+type QueuedSnap struct {
+	Kind       uint8       `json:"kind"`
+	TX         fixed.Fixed `json:"tx,omitempty"`
+	TZ         fixed.Fixed `json:"tz,omitempty"`
+	TargetUnit uint32      `json:"targetUnit,omitempty"`
 }
 
 // WeaponSnap is one weapon slot's standing aim/fire order in a join snapshot.

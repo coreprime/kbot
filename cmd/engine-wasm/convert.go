@@ -93,6 +93,7 @@ func orderFromJS(o js.Value) order.Order {
 		UnitID:        uint32(getInt(o, "UnitID")),
 		TargetUnit:    uint32(getInt(o, "TargetUnit")),
 		HasTargetUnit: getBool(o, "HasTargetUnit"),
+		Queued:        getBool(o, "Queued"),
 		Slot:          getInt(o, "Slot"),
 		Name:          getString(o, "Name"),
 		Heading:       int32(getInt(o, "Heading")),
@@ -138,6 +139,16 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				Dead:         getBool(u, "dead"),
 				HasAttack:    getBool(u, "hasAttack"),
 				AttackTarget: uint32(getInt(u, "attackTarget")),
+			}
+			if qs := u.Get("queue"); qs.Type() == js.TypeObject && !qs.IsNull() {
+				for i := 0; i < qs.Length(); i++ {
+					q := qs.Index(i)
+					ru.Queue = append(ru.Queue, sim.RestoredQueued{
+						Kind:       uint8(getInt(q, "kind")),
+						Target:     fixed.Vec2{X: fixed.Fixed(getInt64(q, "tx")), Z: fixed.Fixed(getInt64(q, "tz"))},
+						TargetUnit: uint32(getInt(q, "targetUnit")),
+					})
+				}
 			}
 			if ws := u.Get("weapons"); ws.Type() == js.TypeObject && !ws.IsNull() {
 				for s := 0; s < len(ru.Weapons) && s < ws.Length(); s++ {
@@ -322,7 +333,7 @@ func snapshotToWireJS(inst *instance) js.Value {
 				"lastFireMs": float64(rw.LastFireMs),
 			}
 		}
-		units = append(units, map[string]any{
+		entry := map[string]any{
 			"id":           int(ru.ID),
 			"name":         ru.Name,
 			"side":         ru.Side,
@@ -339,7 +350,22 @@ func snapshotToWireJS(inst *instance) js.Value {
 			"hasAttack":    ru.HasAttack,
 			"attackTarget": int(ru.AttackTarget),
 			"weapons":      weapons,
-		})
+		}
+		// Mirror the wire's omitempty: only a non-empty queue serializes, so
+		// the Diagnose field diff stays symmetric with the server snapshot.
+		if len(ru.Queue) > 0 {
+			queue := make([]any, len(ru.Queue))
+			for i, q := range ru.Queue {
+				queue[i] = map[string]any{
+					"kind":       int(q.Kind),
+					"tx":         float64(q.Target.X),
+					"tz":         float64(q.Target.Z),
+					"targetUnit": int(q.TargetUnit),
+				}
+			}
+			entry["queue"] = queue
+		}
+		units = append(units, entry)
 	}
 	projos := make([]any, 0)
 	for _, rp := range w.ExportProjectiles() {
@@ -457,7 +483,7 @@ func unitToJS(u *frame.UnitState) map[string]any {
 			"visible": p.Visible,
 		})
 	}
-	return map[string]any{
+	out := map[string]any{
 		"id":           int(u.ID),
 		"name":         u.Name,
 		"side":         u.Side,
@@ -471,8 +497,26 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"dead":         u.Dead,
 		"buildPercent": u.BuildPercent.Float(),
 		"isMoving":     u.IsMoving,
+		"hasMove":      u.HasMove,
+		"moveX":        u.MoveTarget.X.Float(),
+		"moveZ":        u.MoveTarget.Z.Float(),
 		"pieces":       pieces,
 	}
+	// Queued follow-up orders, for the order overlay's waypoint chain. kind
+	// follows order.Kind: 1 = move (x/z destination), 2 = attack (targetId).
+	if len(u.Queue) > 0 {
+		queue := make([]any, len(u.Queue))
+		for i, q := range u.Queue {
+			queue[i] = map[string]any{
+				"kind":     int(q.Kind),
+				"x":        q.Target.X.Float(),
+				"z":        q.Target.Z.Float(),
+				"targetId": int(q.TargetUnit),
+			}
+		}
+		out["queue"] = queue
+	}
+	return out
 }
 
 // eventNames maps the engine's event kinds to the string names the JS effects

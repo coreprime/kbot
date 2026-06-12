@@ -1001,6 +1001,54 @@ export class SandboxView {
           }
         }
       }
+      // Queued follow-ups — the shift-queued order chain the sim
+      // reports on each snapshot.  Numbered markers (the active order
+      // is implicitly #1) connected by sparse static dots so the full
+      // planned path reads at a glance.  Attack entries sit on their
+      // live target; dead/despawned targets are skipped (the sim will
+      // skip them on advance too).
+      if (Array.isArray(u.queue) && u.queue.length) {
+        let prevX = u.moveTarget ? u.moveTarget.x : u.pos.x
+        let prevZ = u.moveTarget ? u.moveTarget.z : u.pos.z
+        for (let qi = 0; qi < u.queue.length; qi++) {
+          const q = u.queue[qi]
+          let qx, qz, kind
+          if (q.kind === 2) {
+            const qt = this.scene.unitById(q.targetId)
+            if (!qt || qt.dead) continue
+            qx = qt.pos.x; qz = qt.pos.z; kind = 'cursorattack'
+          } else {
+            qx = q.x; qz = q.z; kind = 'cursormove'
+          }
+          const qps = projW(qx, 0, qz)
+          if (qps) {
+            const el = ensureEl(kind, String(qi + 2))
+            resetGlyph(el)
+            el.style.opacity = '0.75'
+            el.style.left = qps[0] + 'px'
+            el.style.top  = qps[1] + 'px'
+          }
+          const dx = qx - prevX, dz = qz - prevZ
+          const dist = Math.hypot(dx, dz)
+          if (dist > 60) {
+            const N = Math.min(5, Math.floor(dist / 60))
+            for (let i = 1; i <= N; i++) {
+              const t = i / (N + 1)
+              const dps = projW(prevX + dx * t, 0, prevZ + dz * t)
+              if (!dps) continue
+              const dot = ensureEl('pathicon')
+              dot.style.left = dps[0] + 'px'
+              dot.style.top  = dps[1] + 'px'
+              dot.style.opacity = '0.4'
+              dot.style.width = '14px'
+              dot.style.height = '14px'
+              dot.style.marginLeft = '-7px'
+              dot.style.marginTop = '-7px'
+            }
+          }
+          prevX = qx; prevZ = qz
+        }
+      }
       // Attack markers — one per active weapon slot.  Sources:
       //   1. u.attackTarget    → autonomous attack pursuit (slot 0)
       //   2. weaponSlots[N]    → engine SM's current aim point per
@@ -1717,12 +1765,15 @@ export class SandboxView {
     // NOT in the selection set, it's an attack target.  Otherwise we
     // fall through to a ground-move at the click location.
     const hit = this.#pickUnitAt(sx, sy)
+    // Shift-right-click queues the order behind the unit's current one —
+    // the classic RTS waypoint/target chain.
+    const queued = !!e.shiftKey
     if (hit && !this.scene.selected.has(hit.id)) {
       // issueAttack (below) handles the per-unit attackTarget fanout
       // + ok1-bank ack on the first pursuer.  Centralised so every
       // attack-issuing gesture in the sandbox converges on it.
-      const n = this.issueAttack(hit)
-      this.#setStatus(`Attack — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
+      const n = this.issueAttack(hit, queued)
+      this.#setStatus(`${queued ? 'Attack queued' : 'Attack'} — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
       return
     }
     const world = this.#screenToGround(sx, sy)
@@ -1730,8 +1781,8 @@ export class SandboxView {
     // Right-click Move dispatches through issueMove — same shared
     // path the M-then-click flow uses, including the ok1-bank ack
     // on the first unit.
-    const n = this.issueMove(world)
-    this.#setStatus(`Move — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
+    const n = this.issueMove(world, queued)
+    this.#setStatus(`${queued ? 'Move queued' : 'Move'} — ${n} unit(s) heading to (${world[0].toFixed(0)}, ${world[2].toFixed(0)}).`)
   }
 
   #onClick(e) {
@@ -1793,11 +1844,16 @@ export class SandboxView {
       // slots, and plays the ok1-bank ack on the first unit — same
       // path the right-click Move + the M-then-click flow converge
       // on so every Move gesture in the sandbox is one code path.
-      const n = this.issueMove(world)
-      this._pendingCmd = null
-      if (this._armedCursor) this._armedCursor.setSlot(null)
-      this.#refreshDefaultCursor()
-      this.#setStatus(`Move order issued to ${n} unit(s).`)
+      // Shift queues the leg AND keeps the Move command armed so the
+      // user can lay a whole waypoint chain click by click.
+      const queued = !!e.shiftKey
+      const n = this.issueMove(world, queued)
+      if (!queued) {
+        this._pendingCmd = null
+        if (this._armedCursor) this._armedCursor.setSlot(null)
+        this.#refreshDefaultCursor()
+      }
+      this.#setStatus(`${queued ? 'Move queued for' : 'Move order issued to'} ${n} unit(s).`)
       return
     }
     if (this._pendingCmd === 'attack' || this._pendingCmd === 'primary' ||
@@ -1929,9 +1985,11 @@ export class SandboxView {
         // Attack — issueAttack arms #stepAttack on every selected
         // (non-self) unit and plays the ok1-bank ack so the engage
         // feels TA-native.  Selection stays put so the user can re-
-        // issue commands without losing it.
-        const n = this.issueAttack(picked)
-        this.#setStatus(`Attack — ${n} unit(s) engaging ${picked.name} (HP ${picked.health}).`)
+        // issue commands without losing it.  Shift queues the attack
+        // behind each unit's current order.
+        const queued = !!e.shiftKey
+        const n = this.issueAttack(picked, queued)
+        this.#setStatus(`${queued ? 'Attack queued' : 'Attack'} — ${n} unit(s) engaging ${picked.name} (HP ${picked.health}).`)
       } else if (sel.size === 0 || onlySelf) {
         this.scene.selectOnly(picked.id)
         this.#playSelectAck()
@@ -2159,7 +2217,10 @@ export class SandboxView {
   // Formation move: when multiple units are selected, each unit walks
   // to (point + (unit.pos - centroid)) instead of stacking onto a
   // single tile.  Single-unit selection trivially has offset = 0.
-  issueMove(point) {
+  // queued (shift held on the gesture) appends the move to each unit's
+  // sim-side order queue instead of replacing its current orders — the
+  // unit drives the chain leg by leg, advancing on arrival.
+  issueMove(point, queued = false) {
     const engine = this.engine
     const units = this.getSelectedUnits()
     if (!engine || !units.length || !point) return 0
@@ -2173,7 +2234,13 @@ export class SandboxView {
     for (const u of live) {
       const offX = u.pos.x - cx
       const offZ = u.pos.z - cz
-      u.moveTarget = { x: point[0] + offX, z: point[2] + offZ }
+      const target = { x: point[0] + offX, z: point[2] + offZ }
+      if (queued && typeof u.queueMove === 'function') {
+        u.queueMove(target)
+        n++
+        continue
+      }
+      u.moveTarget = target
       u.attackTarget = null
       if (u.weaponSlots) {
         for (let slot = 0; slot < 3; slot++) {
@@ -2194,14 +2261,18 @@ export class SandboxView {
   // its slot 0 weapon target so firing happens automatically once
   // aligned.  Skips self-targeting + plays the ok1-bank ack on the
   // first pursuer (single voice).
-  issueAttack(targetUnit) {
+  issueAttack(targetUnit, queued = false) {
     const units = this.getSelectedUnits()
     if (!units.length || !targetUnit) return 0
     let n = 0
     let firstPursuer = null
     for (const u of units) {
       if (!u || u.dead || u === targetUnit) continue
-      u.attackTarget = targetUnit
+      if (queued && typeof u.queueAttack === 'function') {
+        u.queueAttack(targetUnit)
+      } else {
+        u.attackTarget = targetUnit
+      }
       if (!firstPursuer) firstPursuer = u
       n++
     }

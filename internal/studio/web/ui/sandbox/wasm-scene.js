@@ -120,6 +120,7 @@ class WasmUnit {
     this.weaponSlots = null // wasm snapshot carries no per-slot aim state
     this._moveTarget = null
     this._attackTarget = null
+    this.queue = [] // shift-queued follow-ups from the snapshot (waypoint overlay)
     this.binding = null
   }
 
@@ -147,6 +148,21 @@ class WasmUnit {
       this.weaponSlots = null
       this._scene.source.attack([this.id], v.id)
     }
+  }
+
+  // queueMove / queueAttack append to the unit's sim-side order queue (the
+  // shift-click gesture). Unlike the setters above they neither stop the unit
+  // nor clear standing orders — the queued order runs when the current one
+  // completes. The queue itself comes back on each snapshot (this.queue) for
+  // the waypoint overlay.
+  queueMove(v) {
+    if (!v) return
+    this._scene.source.move([this.id], v.x, v.z, true)
+  }
+
+  queueAttack(t) {
+    if (!t) return
+    this._scene.source.attack([this.id], t.id, true)
   }
 }
 
@@ -1010,6 +1026,16 @@ export class WasmSandboxScene {
       // unit truly reaches its destination.
       const t = u._attackTarget
       if (t && (t.dead || !this._units.has(t.id))) u._attackTarget = null
+      // The sim is the authority on the order queue and the current move leg:
+      // adopt both each tick so the waypoint overlay tracks queue advancement
+      // (a queued leg arming after arrival never went through the setter).
+      u.queue = su.queue || []
+      if (su.hasMove) {
+        if (!u._moveTarget) u._moveTarget = { x: su.moveX, z: su.moveZ }
+        else { u._moveTarget.x = su.moveX; u._moveTarget.z = su.moveZ }
+      } else if (u._moveTarget) {
+        u._moveTarget = null
+      }
       this._applyPieces(u, su.pieces)
     }
   }

@@ -19,6 +19,15 @@ type PieceState struct {
 	Visible bool       // HIDE/SHOW state
 }
 
+// QueuedOrder is one deferred order on a unit's shift-queue, surfaced on the
+// render snapshot so the client can draw the queued waypoint chain. Kind
+// mirrors order.Kind numerically (1 = move, 2 = attack) without importing it.
+type QueuedOrder struct {
+	Kind       uint8
+	Target     fixed.Vec2 // move destination (move entries)
+	TargetUnit uint32     // attack subject (attack entries)
+}
+
 // UnitState is everything the renderer needs to draw one unit.
 type UnitState struct {
 	ID           uint32
@@ -32,6 +41,11 @@ type UnitState struct {
 	BuildPercent fixed.Fixed // 0..100
 	IsMoving     bool
 	Pieces       []PieceState
+	// Current move destination + the shift-queued follow-ups, for the order
+	// overlay (waypoint chain). Render-only; never hashed here.
+	HasMove    bool
+	MoveTarget fixed.Vec2
+	Queue      []QueuedOrder
 }
 
 // ProjectileState is one in-flight model projectile (missile/rocket/bomb).

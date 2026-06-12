@@ -16,6 +16,13 @@ func (w *World) Snapshot() frame.Snapshot {
 		if u.binding != nil {
 			pieces = u.binding.Pieces()
 		}
+		var queue []frame.QueuedOrder
+		if len(u.queue) > 0 {
+			queue = make([]frame.QueuedOrder, 0, len(u.queue))
+			for _, c := range u.queue {
+				queue = append(queue, frame.QueuedOrder{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
+			}
+		}
 		units = append(units, frame.UnitState{
 			ID:           u.ID,
 			Name:         u.Name,
@@ -28,6 +35,9 @@ func (w *World) Snapshot() frame.Snapshot {
 			BuildPercent: u.BuildPercent,
 			IsMoving:     u.IsMoving,
 			Pieces:       pieces,
+			HasMove:      u.hasMove,
+			MoveTarget:   u.moveTarget,
+			Queue:        queue,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -94,6 +104,15 @@ func (w *World) Hash() uint64 {
 		mix(uint64(u.Health))
 		if u.Dead {
 			mix(1)
+		}
+		// The shift-queue is authoritative — it dictates where the unit goes
+		// next — so a divergent queue must surface as a desync.
+		mix(uint64(len(u.queue)))
+		for _, c := range u.queue {
+			mix(uint64(c.kind))
+			mix(uint64(c.target.X))
+			mix(uint64(c.target.Z))
+			mix(uint64(c.targetUnit))
 		}
 	}
 	return h

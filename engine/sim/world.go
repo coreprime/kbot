@@ -106,6 +106,11 @@ type Unit struct {
 	hasAttack    bool
 	attackTarget uint32
 
+	// queue holds the shift-queued follow-up orders. The head runs when the
+	// current order completes — a move on arrival, an attack when its target
+	// dies. Any non-queued Move/Attack (and Stop) clears it.
+	queue []queuedCommand
+
 	weapons [3]weaponSlot
 
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
@@ -146,6 +151,18 @@ type Unit struct {
 
 	binding Binding
 }
+
+// queuedCommand is one deferred order on a unit's shift-queue. Only Move and
+// Attack queue; everything else applies immediately.
+type queuedCommand struct {
+	kind       order.Kind
+	target     fixed.Vec2 // Move destination
+	targetUnit uint32     // Attack subject
+}
+
+// maxOrderQueue bounds a unit's shift-queue so a runaway client can't grow
+// unbounded authoritative state.
+const maxOrderQueue = 32
 
 // Pos returns the unit's world position.
 func (u *Unit) Pos() fixed.Vec3 {
@@ -625,7 +642,10 @@ type RestoredUnit struct {
 	// mid-recoil snaps back to rest on the joining client.
 	HasAttack    bool
 	AttackTarget uint32
-	Weapons      [3]RestoredWeapon
+	// Queue carries the unit's shift-queued follow-up orders so a joiner's
+	// world advances through the same waypoint chain as the authority.
+	Queue   []RestoredQueued
+	Weapons [3]RestoredWeapon
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -647,6 +667,14 @@ type cobExporter interface {
 // previously exported VM state in place of running its Create script.
 type cobImporter interface {
 	ImportCob(frame.CobSnapshot)
+}
+
+// RestoredQueued is one deferred order on a unit's shift-queue, carried across
+// a join. Kind mirrors order.Kind numerically (1 = move, 2 = attack).
+type RestoredQueued struct {
+	Kind       uint8
+	Target     fixed.Vec2
+	TargetUnit uint32
 }
 
 // RestoredWeapon is one weapon slot's standing aim/fire order, carried across a
@@ -725,6 +753,9 @@ func (w *World) ExportUnits() []RestoredUnit {
 			Dead:         u.Dead,
 			HasAttack:    u.hasAttack,
 			AttackTarget: u.attackTarget,
+		}
+		for _, c := range u.queue {
+			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit})
 		}
 		for i := range u.weapons {
 			s := &u.weapons[i]
@@ -824,6 +855,9 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			hasAttack:    ru.HasAttack,
 			attackTarget: ru.AttackTarget,
 			binding:      binding,
+		}
+		for _, c := range ru.Queue {
+			u.queue = append(u.queue, queuedCommand{kind: order.Kind(c.Kind), target: c.Target, targetUnit: c.TargetUnit})
 		}
 		// Re-arm any standing weapon orders so the joiner's prediction re-aims and
 		// fires them (replaying the firing animation) instead of leaving the unit
@@ -953,6 +987,11 @@ func (w *World) ApplyOrder(o order.Order) {
 	case order.KindMove:
 		for _, id := range o.UnitIDs {
 			if u := w.units[id]; u != nil && !u.Dead {
+				if o.Queued && u.busy() {
+					u.enqueue(queuedCommand{kind: order.KindMove, target: o.Target})
+					continue
+				}
+				u.queue = nil
 				u.hasMove = true
 				u.moveTarget = o.Target
 				// Move cancels an autonomous attack (as in TA); a committed bomb
@@ -964,6 +1003,11 @@ func (w *World) ApplyOrder(o order.Order) {
 		for _, id := range o.UnitIDs {
 			if u := w.units[id]; u != nil && !u.Dead {
 				if t := w.units[o.TargetUnit]; t != nil && !t.Dead && t != u {
+					if o.Queued && u.busy() {
+						u.enqueue(queuedCommand{kind: order.KindAttack, targetUnit: o.TargetUnit})
+						continue
+					}
+					u.queue = nil
 					u.hasAttack = true
 					u.attackTarget = o.TargetUnit
 				}
@@ -997,11 +1041,54 @@ func (w *World) ApplyOrder(o order.Order) {
 	}
 }
 
+// busy reports whether a unit has a current order a queued one would wait
+// behind. With nothing in flight a queued order applies immediately.
+func (u *Unit) busy() bool {
+	return u.hasMove || u.hasAttack || len(u.queue) > 0
+}
+
+// enqueue appends a deferred order, bounded by maxOrderQueue (excess orders
+// are dropped — the same cap retail TA applied to its queue memory).
+func (u *Unit) enqueue(c queuedCommand) {
+	if len(u.queue) >= maxOrderQueue {
+		return
+	}
+	u.queue = append(u.queue, c)
+}
+
+// advanceQueue pops deferred orders until one takes effect: a queued move
+// arms locomotion; a queued attack arms pursuit if its target is still alive,
+// else it is skipped and the next entry is tried.
+func (w *World) advanceQueue(u *Unit) {
+	for len(u.queue) > 0 {
+		c := u.queue[0]
+		u.queue = u.queue[1:]
+		switch c.kind {
+		case order.KindMove:
+			u.hasMove = true
+			u.moveTarget = c.target
+			u.hasAttack = false
+			return
+		case order.KindAttack:
+			if t := w.units[c.targetUnit]; t != nil && !t.Dead && t != u {
+				u.hasMove = false
+				u.hasAttack = true
+				u.attackTarget = c.targetUnit
+				return
+			}
+		}
+	}
+	if len(u.queue) == 0 {
+		u.queue = nil
+	}
+}
+
 func (w *World) stopUnit(id uint32) {
 	u := w.units[id]
 	if u == nil {
 		return
 	}
+	u.queue = nil
 	u.hasMove = false
 	u.hasAttack = false
 	u.attackTarget = 0

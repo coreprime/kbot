@@ -50,6 +50,13 @@ type Order struct {
 	// ground point.
 	HasTargetUnit bool
 
+	// Queued appends a Move/Attack to each unit's order queue (the shift-click
+	// gesture) instead of replacing the current order. The queued order runs
+	// when its predecessor completes — a move on arrival, an attack when the
+	// target dies. A non-queued order replaces both the current order and the
+	// whole queue.
+	Queued bool
+
 	// Slot is the weapon slot (0..2) for Fire.
 	Slot int
 
@@ -65,9 +72,19 @@ func Move(units []uint32, target fixed.Vec2) Order {
 	return Order{Kind: KindMove, UnitIDs: units, Target: target}
 }
 
+// MoveQueued builds a move order appended to each unit's queue (shift-click).
+func MoveQueued(units []uint32, target fixed.Vec2) Order {
+	return Order{Kind: KindMove, UnitIDs: units, Target: target, Queued: true}
+}
+
 // Attack builds an attack order.
 func Attack(units []uint32, targetUnit uint32) Order {
 	return Order{Kind: KindAttack, UnitIDs: units, TargetUnit: targetUnit}
+}
+
+// AttackQueued builds an attack order appended to each unit's queue.
+func AttackQueued(units []uint32, targetUnit uint32) Order {
+	return Order{Kind: KindAttack, UnitIDs: units, TargetUnit: targetUnit, Queued: true}
 }
 
 // Stop builds a stop order.

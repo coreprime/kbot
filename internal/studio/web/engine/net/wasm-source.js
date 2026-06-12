@@ -133,8 +133,10 @@ export class WasmFrameSource extends FrameSource {
 
   removeUnit(id) { this._engine.removeUnit(this._handle, id) }
 
-  move(unitIds, x, z) { return this._engine.submitMove(this._handle, unitIds, x, z) }
-  attack(unitIds, targetId) { return this._engine.submitAttack(this._handle, unitIds, targetId) }
+  // queued (the shift-click gesture) appends the order to each unit's queue
+  // instead of replacing its current orders.
+  move(unitIds, x, z, queued = false) { return this._engine.submitMove(this._handle, unitIds, x, z, !!queued) }
+  attack(unitIds, targetId, queued = false) { return this._engine.submitAttack(this._handle, unitIds, targetId, !!queued) }
 
   // fire force-fires one unit's weapon slot.  A nonzero targetUnit aims the slot
   // at that unit; otherwise it fires at the ground point (px, pz) — the

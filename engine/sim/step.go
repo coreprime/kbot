@@ -160,6 +160,11 @@ func (w *World) stepAttack(u *Unit) {
 					w.clearWeaponSlot(u, slot)
 				}
 			}
+			// The attack completed (target died/despawned) — start the next
+			// shift-queued order. Any chase move still armed is stale; the
+			// queue entry overwrites or clears it.
+			u.hasMove = false
+			w.advanceQueue(u)
 		}
 	}
 
@@ -400,6 +405,12 @@ func (w *World) stepMovement(u *Unit) {
 		if arrived {
 			u.hasMove = false
 			u.IsMoving = false
+			// A player move completing starts the next shift-queued order. A
+			// chase move (stepAttack walking into range) arrives with hasAttack
+			// still set — the attack is the active order, so its queue waits.
+			if !u.hasAttack {
+				w.advanceQueue(u)
+			}
 		}
 	} else if u.Meta.IsAircraft && u.atkActive && u.Meta.CanMove {
 		// stepAttack already flew this aircraft's maneuver — it advanced pos and

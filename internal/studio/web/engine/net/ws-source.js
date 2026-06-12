@@ -372,12 +372,14 @@ export class WsFrameSource extends FrameSource {
   // Orders are not applied locally; they are sent to the authority, which
   // stamps an execution tick and broadcasts a command frame the local engine
   // applies in lockstep with every other client.
-  move(unitIds, x, z) {
-    this._send({ Kind: 1, UnitIDs: unitIds, Target: { X: toFixed(x), Z: toFixed(z) } })
+  // queued (the shift-click gesture) appends the order to each unit's queue on
+  // the authority instead of replacing its current orders.
+  move(unitIds, x, z, queued = false) {
+    this._send({ Kind: 1, UnitIDs: unitIds, Target: { X: toFixed(x), Z: toFixed(z) }, Queued: !!queued })
   }
 
-  attack(unitIds, targetId) {
-    this._send({ Kind: 2, UnitIDs: unitIds, TargetUnit: targetId >>> 0 })
+  attack(unitIds, targetId, queued = false) {
+    this._send({ Kind: 2, UnitIDs: unitIds, TargetUnit: targetId >>> 0, Queued: !!queued })
   }
 
   // fire force-fires one unit's weapon slot (Kind 4). A nonzero targetUnit aims

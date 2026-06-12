@@ -204,7 +204,8 @@ func removeUnit(_ js.Value, args []js.Value) any {
 	return nil
 }
 
-// submitMove(handle, unitIds[], tx, tz) -> execTick.
+// submitMove(handle, unitIds[], tx, tz, queued?) -> execTick. A truthy queued
+// appends the move to each unit's shift-queue instead of replacing its orders.
 func submitMove(_ js.Value, args []js.Value) any {
 	inst := instances[args[0].Int()]
 	if inst == nil {
@@ -212,16 +213,22 @@ func submitMove(_ js.Value, args []js.Value) any {
 	}
 	ids := uint32Slice(args[1])
 	target := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
+	if len(args) > 4 && args[4].Truthy() {
+		return int(inst.sess.Submit(order.MoveQueued(ids, target)))
+	}
 	return int(inst.sess.Submit(order.Move(ids, target)))
 }
 
-// submitAttack(handle, unitIds[], targetUnitId) -> execTick.
+// submitAttack(handle, unitIds[], targetUnitId, queued?) -> execTick.
 func submitAttack(_ js.Value, args []js.Value) any {
 	inst := instances[args[0].Int()]
 	if inst == nil {
 		return 0
 	}
 	ids := uint32Slice(args[1])
+	if len(args) > 3 && args[3].Truthy() {
+		return int(inst.sess.Submit(order.AttackQueued(ids, uint32(args[2].Int()))))
+	}
 	return int(inst.sess.Submit(order.Attack(ids, uint32(args[2].Int()))))
 }
 
