@@ -1499,7 +1499,42 @@ export class SandboxView {
       const tgt = e.target
       if (tgt && /^(INPUT|TEXTAREA|SELECT)$/.test(tgt.tagName)) return
       if (tgt && tgt.isContentEditable) return
+      // Control groups, TA convention: Ctrl+1..9 assigns the current
+      // selection to a numbered group; the bare digit recalls it. Stored
+      // per view; dead units fall out on recall. Checked BEFORE the
+      // modifier gate (assignment needs Ctrl held).
+      const digit = /^[1-9]$/.test(e.key) ? e.key : null
+      if (digit && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault()
+        if (!this._ctrlGroups) this._ctrlGroups = new Map()
+        const ids = this.scene ? [...this.scene.selected] : []
+        if (ids.length === 0) {
+          this._ctrlGroups.delete(digit)
+          this.#setStatus(`Group ${digit} cleared.`)
+        } else {
+          this._ctrlGroups.set(digit, ids)
+          this.#setStatus(`Group ${digit} set — ${ids.length} unit${ids.length === 1 ? '' : 's'}.`)
+        }
+        return
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (digit && !e.shiftKey) {
+        const ids = (this._ctrlGroups && this._ctrlGroups.get(digit)) || []
+        const live = ids.filter((id) => {
+          const u = this.scene && this.scene.unitById(id)
+          return u && !u.dead
+        })
+        if (live.length === 0) {
+          if (ids.length > 0) this.#setStatus(`Group ${digit} is empty (units lost).`)
+          return
+        }
+        e.preventDefault()
+        this.scene.selectClear()
+        for (const id of live) this.scene.selectAdd(id)
+        this.#playSelectAck()
+        this.#setStatus(`Group ${digit} — ${live.length} unit${live.length === 1 ? '' : 's'} selected.`)
+        return
+      }
       // Backquote toggles the persistent health-bar layer for selected
       // units (hover bars always show). Bespoke rather than wireHotkeys
       // because it must work with an empty selection too.
