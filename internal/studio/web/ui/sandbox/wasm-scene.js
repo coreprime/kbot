@@ -1116,30 +1116,36 @@ export class WasmSandboxScene {
       } else if (u._moveTarget) {
         u._moveTarget = null
       }
-      this._applyPieces(u, su.pieces)
+      this._applyPieces(u, su.piecesPacked)
     }
   }
 
   // _applyPieces writes the snapshot's per-piece transforms onto the unit's
-  // model clone.  The model loader X-flips geometry, so Z-translation and
-  // X/Y rotation flip sign while Z-rotation does not.
-  _applyPieces(u, pieces) {
-    if (!u.model || !pieces) return
-    const names = u._cobPieceNames
-    const n = pieces.length
+  // model clone.  The bridge packs them as a Float32 stride-7 buffer
+  // (ox, oy, oz, rx, ry, rz, visible) — one typed-array copy per unit
+  // instead of one JS object per piece, the wasm boundary's old hot spot.
+  // The model loader X-flips geometry, so Z-translation and X/Y rotation
+  // flip sign while Z-rotation does not. Piece lookups are cached per model
+  // clone so the per-tick path never re-walks the piece tree.
+  _applyPieces(u, packed) {
+    if (!u.model || !packed) return
+    if (u._pieceCacheModel !== u.model) {
+      u._pieceCacheModel = u.model
+      u._pieceCache = u._cobPieceNames.map((name) => (name ? u.model.findPiece(name) : null))
+    }
+    const f = new Float32Array(packed.buffer, packed.byteOffset, packed.byteLength >> 2)
+    const n = Math.min(u._pieceCache.length, (f.length / 7) | 0)
     for (let i = 0; i < n; i++) {
-      const name = names[i]
-      if (!name) continue
-      const piece = u.model.findPiece(name)
+      const piece = u._pieceCache[i]
       if (!piece) continue
-      const p = pieces[i]
-      piece.move[0] = p.ox
-      piece.move[1] = p.oy
-      piece.move[2] = -p.oz
-      piece.rotate[0] = -ANGLE_TO_RAD * p.rx
-      piece.rotate[1] = -ANGLE_TO_RAD * p.ry
-      piece.rotate[2] = ANGLE_TO_RAD * p.rz
-      piece.visible = p.visible
+      const o = i * 7
+      piece.move[0] = f[o]
+      piece.move[1] = f[o + 1]
+      piece.move[2] = -f[o + 2]
+      piece.rotate[0] = -ANGLE_TO_RAD * f[o + 3]
+      piece.rotate[1] = -ANGLE_TO_RAD * f[o + 4]
+      piece.rotate[2] = ANGLE_TO_RAD * f[o + 5]
+      piece.visible = f[o + 6] !== 0
     }
   }
 

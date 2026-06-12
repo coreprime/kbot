@@ -3,6 +3,8 @@
 package main
 
 import (
+	"encoding/binary"
+	"math"
 	"strconv"
 	"syscall/js"
 
@@ -586,19 +588,7 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 }
 
 func unitToJS(u *frame.UnitState) map[string]any {
-	pieces := make([]any, 0, len(u.Pieces))
-	for i := range u.Pieces {
-		p := &u.Pieces[i]
-		pieces = append(pieces, map[string]any{
-			"ox":      p.Offset.X.Float(),
-			"oy":      p.Offset.Y.Float(),
-			"oz":      p.Offset.Z.Float(),
-			"rx":      int(p.Rot[0]),
-			"ry":      int(p.Rot[1]),
-			"rz":      int(p.Rot[2]),
-			"visible": p.Visible,
-		})
-	}
+	pieces := piecesToPackedJS(u.Pieces)
 	out := map[string]any{
 		"id":             int(u.ID),
 		"name":           u.Name,
@@ -619,7 +609,7 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"moveMode":       int(u.MoveMode),
 		"fireMode":       int(u.FireMode),
 		"selfDestructMs": int(u.SelfDestructMs),
-		"pieces":         pieces,
+		"piecesPacked":   pieces,
 	}
 	// Production state, for the build-menu counters: the type currently
 	// raising on the pad plus the factory's pending run in click order.
@@ -648,6 +638,47 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		out["queue"] = queue
 	}
 	return out
+}
+
+// pieceScratch is the reused pack buffer piecesToPackedJS fills each call,
+// so the per-tick marshal allocates nothing on the Go side.
+var pieceScratch []byte
+
+// piecesToPackedJS packs a unit's piece transforms into a Float32 stride-7
+// buffer (ox, oy, oz, rx, ry, rz, visible) handed to JS as a single
+// Uint8Array — one allocation and one memcpy instead of one JS map per
+// piece, which dominated the bridge cost on busy fields.
+func piecesToPackedJS(pieces []frame.PieceState) js.Value {
+	need := len(pieces) * 7 * 4
+	if need == 0 {
+		return js.Null()
+	}
+	if cap(pieceScratch) < need {
+		pieceScratch = make([]byte, need)
+	}
+	buf := pieceScratch[:need]
+	off := 0
+	put := func(f float32) {
+		binary.LittleEndian.PutUint32(buf[off:], math.Float32bits(f))
+		off += 4
+	}
+	for i := range pieces {
+		p := &pieces[i]
+		put(float32(p.Offset.X.Float()))
+		put(float32(p.Offset.Y.Float()))
+		put(float32(p.Offset.Z.Float()))
+		put(float32(p.Rot[0]))
+		put(float32(p.Rot[1]))
+		put(float32(p.Rot[2]))
+		if p.Visible {
+			put(1)
+		} else {
+			put(0)
+		}
+	}
+	arr := js.Global().Get("Uint8Array").New(need)
+	js.CopyBytesToJS(arr, buf)
+	return arr
 }
 
 // eventNames maps the engine's event kinds to the string names the JS effects
