@@ -63,6 +63,7 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	sess.registerModelAPI(mux)
 	sess.registerCobAPI(mux)
 	sess.registerUnitAPI(mux)
+	sess.registerKeysAPI(mux)
 }
 
 // ── /api/studio/heartbeat ──────────────────────────────────────────────────

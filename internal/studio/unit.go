@@ -122,6 +122,11 @@ type unitMetaJSON struct {
 	FootprintX int `json:"footprintX,omitempty"`
 	FootprintZ int `json:"footprintZ,omitempty"`
 
+	// Categories — the FBI Category token list, upper-cased. The selection
+	// hotkeys reference these (TA:K's "SelectUnits BALLISTIC", TA's literal
+	// CTRL_x membership tokens).
+	Categories []string `json:"categories,omitempty"`
+
 	// Sounds — flattened from sound.tdf's section for the unit's
 	// SoundCategory field.  The map's keys are the canonical TA
 	// event names (select1, ok1, arrived1, activate, deactivate,
@@ -464,6 +469,11 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.BuildDistance = info.BuildDistance
 	out.FootprintX = info.FootprintX
 	out.FootprintZ = info.FootprintZ
+	for _, tok := range info.Category {
+		if t := strings.ToUpper(strings.TrimSpace(tok)); t != "" {
+			out.Categories = append(out.Categories, t)
+		}
+	}
 	// onoffable=1 — unit can be manually toggled on/off by the
 	// player (Radar, Solar, Adv Fusion).
 	out.OnOffable = info.OnOffable == 1

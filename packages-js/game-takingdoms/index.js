@@ -73,6 +73,37 @@ export const game = {
     color: [1.8, 1.3, 0.5, 1.0],
   },
 
+  // Fallback selection hotkeys, mirroring the retail keys.tdf's [CUSTOMKEYS]
+  // selection entries. TA:K ships the real file at the VFS root and that
+  // always wins; this table only stands in when a stripped install or custom
+  // game omits it. Tokens reference unit attributes — FBI Category tokens
+  // (BALLISTIC, Monarch, ATTACK) and derived classes (BUILDER, FACTORY, FLY).
+  defaultKeys: {
+    CTRL_A: 'SelectAllUnits',
+    CTRL_B: 'SelectUnits BUILDER',
+    CTRL_E: 'SelectUnits MELEE',
+    CTRL_F: 'SelectUnits FACTORY',
+    CTRL_G: 'SelectUnits MAGIC',
+    CTRL_M: 'SelectUnits Monarch, TrackUnit',
+    CTRL_N: 'SelectUnits BOAT',
+    CTRL_R: 'SelectUnits BALLISTIC',
+    CTRL_T: 'SelectUnits TROOPS',
+    CTRL_U: 'SelectUnitsOnScreen',
+    CTRL_W: 'SelectUnits ATTACK',
+    CTRL_Y: 'SelectUnits FLY',
+    CTRL_Z: 'SelectAllUnitsSelectedType',
+    CTRLSHIFT_B: 'SelectUnitsAdd BUILDER',
+    CTRLSHIFT_E: 'SelectUnitsAdd MELEE',
+    CTRLSHIFT_F: 'SelectUnitsAdd FACTORY',
+    CTRLSHIFT_G: 'SelectUnitsAdd MAGIC',
+    CTRLSHIFT_M: 'SelectUnitsAdd Monarch',
+    CTRLSHIFT_N: 'SelectUnitsAdd NAVAL',
+    CTRLSHIFT_R: 'SelectUnitsAdd BALLISTIC',
+    CTRLSHIFT_T: 'SelectUnitsAdd TROOPS',
+    CTRLSHIFT_W: 'SelectUnitsAdd ATTACK',
+    CTRLSHIFT_Y: 'SelectUnitsAdd FLY',
+  },
+
   weapons: {
     ...totala.weapons,
     shared: SHARED,

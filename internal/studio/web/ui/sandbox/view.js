@@ -26,6 +26,7 @@ import { TextureCache } from '@kbot/game3d/texture-cache'
 import { TAPalette } from '@kbot/game3d/palette'
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
+import { loadSelectionKeys, selectionKeys, keyTokenForEvent, commandClauses, unitMatchesToken } from './select-keys.js'
 import { attachOrbitControls } from '@kbot/game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import { ArmedCursor } from '@kbot/game3d/armed-cursor'
@@ -1521,9 +1522,92 @@ export class SandboxView {
     this.renderer.setEntities(entities)
   }
 
+  // ── Game-defined selection hotkeys ─────────────────────────────────
+  //
+  // keys.tdf (TA:K ships one; a TA mod may) or the game adapter's default
+  // table maps key chords onto SelectUnits-family commands whose tokens
+  // reference unit attributes: literal FBI Category membership (BALLISTIC,
+  // Monarch, TA's CTRL_B opt-ins) plus derived classes (BUILDER, FACTORY,
+  // FLY). Non-selection verbs (UnitCommand, squads, save/load) belong to
+  // other layers and fall through untouched.
+  #handleSelectionKey(e) {
+    const keys = selectionKeys()
+    if (!keys || !this.scene) return false
+    const token = keyTokenForEvent(e)
+    if (!token) return false
+    const cmd = keys[token]
+    if (!cmd) return false
+    let handled = false
+    for (const { verb, args } of commandClauses(cmd)) {
+      switch (verb) {
+        case 'selectallunits':
+          handled = this.#selectWhere(() => true, false, 'live') || handled
+          break
+        case 'selectunits':
+          handled = this.#selectWhere((u) => unitMatchesToken(u, args[0]), false, args[0]) || handled
+          break
+        case 'selectunitsadd':
+          handled = this.#selectWhere((u) => unitMatchesToken(u, args[0]), true, args[0]) || handled
+          break
+        case 'selectallunitsselectedtype': {
+          const names = new Set([...this.scene.selected]
+            .map((id) => this.scene.unitById(id))
+            .filter((u) => u && !u.dead)
+            .map((u) => u.name))
+          if (names.size === 0) break
+          handled = this.#selectWhere((u) => names.has(u.name), false, 'same-type') || handled
+          break
+        }
+        case 'selectunitsonscreen':
+          handled = this.#selectWhere((u) => this.#unitOnScreen(u), false, 'on-screen') || handled
+          break
+        case 'trackunit':
+          // Secondary clause ("SelectUnits Monarch, TrackUnit") — only acts
+          // when a selection clause in the same binding already fired.
+          if (handled) this.trackFirstSelected()
+          break
+        default:
+          break
+      }
+    }
+    if (handled) e.preventDefault()
+    return handled
+  }
+
+  // #selectWhere replaces (or, with add, extends) the selection with every
+  // live, completed unit matching pred. Returns true whenever the command
+  // was meaningful — even a zero-match select consumes its key.
+  #selectWhere(pred, add, label) {
+    let n = 0
+    if (!add) this.scene.selectClear()
+    for (const u of this.scene.units()) {
+      if (!u || u.dead) continue
+      if (u.buildPercent != null && u.buildPercent < 100) continue
+      if (!pred(u)) continue
+      this.scene.selectAdd(u.id)
+      n++
+    }
+    if (n > 0) this.#playSelectAck()
+    this.#setStatus(n > 0
+      ? `Selected ${n} ${label} unit${n === 1 ? '' : 's'}.`
+      : `No ${label} units on the field.`)
+    return true
+  }
+
+  // #unitOnScreen reports whether the unit projects inside this pane's
+  // canvas — the SelectUnitsOnScreen scope.
+  #unitOnScreen(u) {
+    const s = this.#worldToScreen(u.pos.x, u.pos.y, u.pos.z)
+    if (!s) return false
+    const r = this.canvas.getBoundingClientRect()
+    return s[0] >= 0 && s[1] >= 0 && s[0] <= r.width && s[1] <= r.height
+  }
+
   #wirePointer() {
     if (this._pointerWired) return
     this._pointerWired = true
+    // Resolve the game's key table up front so the first chord lands.
+    loadSelectionKeys()
     const canvas = this.canvas
     canvas.addEventListener('click', (e) => this.#onClick(e))
     canvas.addEventListener('contextmenu', (e) => this.#onContextMenu(e))
@@ -1581,6 +1665,10 @@ export class SandboxView {
         }
         return
       }
+      // Game-defined selection hotkeys (keys.tdf, or the adapter's default
+      // table) — SelectUnits <token> and friends. Tried before the modifier
+      // gate because most bindings are Ctrl+letter chords.
+      if (this.#handleSelectionKey(e)) return
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (digit && !e.shiftKey) {
         const ids = (this._ctrlGroups && this._ctrlGroups.get(digit)) || []

@@ -72,6 +72,29 @@ export const game = {
     color: [0.5, 1.8, 0.6, 1.0],
   },
 
+  // Selection hotkeys in keys.tdf grammar. TA ships no keys.tdf — the retail
+  // executable hardcoded these bindings — so the adapter carries the table;
+  // units opt into each class through literal CTRL_x tokens in their FBI
+  // Category list (Category=ARM KBOT ... CTRL_B). A VFS keys.tdf, when a mod
+  // ships one, overrides this wholesale.
+  defaultKeys: {
+    CTRL_A: 'SelectAllUnits',
+    CTRL_B: 'SelectUnits CTRL_B', // construction units
+    CTRL_C: 'SelectUnits CTRL_C, TrackUnit', // the commander
+    CTRL_F: 'SelectUnits CTRL_F', // factories
+    CTRL_P: 'SelectUnits CTRL_P', // aircraft
+    CTRL_R: 'SelectUnits CTRL_R', // radar / sensor units
+    CTRL_V: 'SelectUnits CTRL_V', // vehicles
+    CTRL_W: 'SelectUnits CTRL_W', // armed units
+    CTRL_S: 'SelectUnitsOnScreen',
+    CTRL_Z: 'SelectAllUnitsSelectedType',
+    CTRLSHIFT_B: 'SelectUnitsAdd CTRL_B',
+    CTRLSHIFT_F: 'SelectUnitsAdd CTRL_F',
+    CTRLSHIFT_P: 'SelectUnitsAdd CTRL_P',
+    CTRLSHIFT_V: 'SelectUnitsAdd CTRL_V',
+    CTRLSHIFT_W: 'SelectUnitsAdd CTRL_W',
+  },
+
   weapons: {
     slots: WEAPON_SLOTS,
     // TA has no shared parameterized weapon set — every slot has its own
