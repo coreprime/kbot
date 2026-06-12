@@ -2567,7 +2567,10 @@ export class SandboxView {
   // issuePatrol appends a looping patrol waypoint for every selected mobile
   // unit (the sim cycles consecutive patrol entries until reordered).
   issuePatrol(point) {
-    const units = this.getSelectedUnits().filter((u) => !u.meta || u.meta.canMove !== false)
+    // Mobile units patrol themselves; an immobile BUILDER (factory) takes
+    // the leg into its rally template for produced units.
+    const units = this.getSelectedUnits().filter((u) =>
+      !u.meta || u.meta.canMove !== false || u.meta.isBuilder)
     if (!units.length || !point || !this.scene.source.patrol) return 0
     this.scene.source.patrol(units.map((u) => u.id), point[0], point[2])
     this.playUnitSoundRandom(units[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])

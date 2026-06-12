@@ -209,6 +209,12 @@ func (w *World) stepBuilder(u *Unit) {
 		if !u.Meta.CanMove && b.Meta.CanMove {
 			b.hasMove = true
 			b.moveTarget = w.rolloffSpot(u, b)
+			// The factory's rally template (its own order queue) becomes the
+			// new unit's initial orders: move waypoints walk once, patrol
+			// legs loop. Runs after the rolloff so the pad clears first.
+			for _, c := range u.queue {
+				b.enqueue(c)
+			}
 		}
 		// Line drained: close the doors. With more queued the yard stays
 		// open and the next entry pops straight onto the pad.

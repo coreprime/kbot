@@ -1168,6 +1168,16 @@ func (w *World) ApplyOrder(o order.Order) {
 	case order.KindMove:
 		for _, id := range o.UnitIDs {
 			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() {
+				// A factory can't move — a Move sets its rally template
+				// instead: the waypoint chain every produced unit inherits
+				// on rolloff. Plain Move replaces the chain, shift extends.
+				if isRallyHolder(u) {
+					if !o.Queued {
+						u.queue = nil
+					}
+					u.enqueue(queuedCommand{kind: order.KindMove, target: o.Target})
+					continue
+				}
 				if o.Queued && u.busy() {
 					u.enqueue(queuedCommand{kind: order.KindMove, target: o.Target})
 					continue
@@ -1187,8 +1197,17 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 	case order.KindPatrol:
 		for _, id := range o.UnitIDs {
-			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() &&
-				u.Meta != nil && u.Meta.CanMove {
+			u := w.units[id]
+			if u == nil || u.Dead || u.underConstruction() || u.Meta == nil {
+				continue
+			}
+			// Factory patrol legs extend the rally template; produced units
+			// inherit and loop them.
+			if isRallyHolder(u) {
+				u.enqueue(queuedCommand{kind: order.KindPatrol, target: o.Target})
+				continue
+			}
+			if u.Meta.CanMove {
 				// Patrol waypoints always queue; the first one starts at once
 				// when the unit has nothing in flight.
 				idle := !u.busy()
@@ -1339,11 +1358,23 @@ func (u *Unit) enqueue(c queuedCommand) {
 	u.queue = append(u.queue, c)
 }
 
+// isRallyHolder reports whether the unit keeps its order queue as a rally
+// template for produced units (an immobile builder — a factory) rather than
+// consuming it itself.
+func isRallyHolder(u *Unit) bool {
+	return u.Meta != nil && !u.Meta.CanMove && u.Meta.IsBuilder
+}
+
 // advanceQueue pops deferred orders until one takes effect: a queued move or
 // patrol leg arms locomotion (a patrol leg re-queues itself on arrival); a
 // queued attack arms pursuit if its target is still alive, else it is
 // skipped and the next entry is tried.
 func (w *World) advanceQueue(u *Unit) {
+	// A factory's queue is its rally template — produced units consume a
+	// copy; the factory itself never drains it.
+	if isRallyHolder(u) {
+		return
+	}
 	u.curIsPatrol = false
 	for len(u.queue) > 0 {
 		c := u.queue[0]

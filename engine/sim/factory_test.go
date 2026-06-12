@@ -118,3 +118,53 @@ func TestFactoryStopClearsQueue(t *testing.T) {
 		t.Fatalf("stop did not clear production: queue=%d state=%d", len(u.prodQueue), u.buildState)
 	}
 }
+
+// TestFactoryRallyOrders pins the initial-order chain: move and patrol
+// waypoints ordered on a factory become every produced unit's starting
+// queue — the move walks once, the patrol legs loop — while the factory's
+// own template never drains.
+func TestFactoryRallyOrders(t *testing.T) {
+	w := factoryWorld()
+	fac := w.AddUnit("factory", factoryMeta(), nil, fixed.Vec2{}, 0, 0)
+	rally := fixed.Vec2{X: fixed.FromInt(200)}
+	patrolA := fixed.Vec2{X: fixed.FromInt(200), Z: fixed.FromInt(150)}
+	w.ApplyOrder(order.Move([]uint32{fac}, rally))
+	w.ApplyOrder(order.Patrol([]uint32{fac}, patrolA))
+	u := w.UnitByID(fac)
+	if len(u.queue) != 2 {
+		t.Fatalf("factory rally template should hold 2 entries, got %d", len(u.queue))
+	}
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+	var tank *Unit
+	for i := 0; i < 40*60 && tank == nil; i++ {
+		w.Step(nil)
+		w.ForEachUnit(func(b *Unit) {
+			if b.Name == "tank" && b.BuildPercent >= fixed.FromInt(100) {
+				tank = b
+			}
+		})
+	}
+	if tank == nil {
+		t.Fatalf("tank never completed")
+	}
+	if len(tank.queue) != 2 {
+		t.Fatalf("tank should inherit the 2-entry rally chain, got %d", len(tank.queue))
+	}
+	if len(u.queue) != 2 {
+		t.Fatalf("factory template drained to %d entries", len(u.queue))
+	}
+	// The tank walks the chain: it reaches the rally point, then loops the
+	// patrol leg indefinitely (curIsPatrol with the leg re-queued).
+	reachedRally := false
+	for i := 0; i < 40*60; i++ {
+		w.Step(nil)
+		if tank.loco.Pos.DistTo(rally) < fixed.FromInt(12) {
+			reachedRally = true
+		}
+		if reachedRally && tank.curIsPatrol {
+			return
+		}
+	}
+	t.Fatalf("tank never walked the rally chain: reachedRally=%v curIsPatrol=%v pos=(%v,%v)",
+		reachedRally, tank.curIsPatrol, tank.loco.Pos.X.Float(), tank.loco.Pos.Z.Float())
+}
