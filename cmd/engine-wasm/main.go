@@ -203,7 +203,13 @@ func addUnit(_ js.Value, args []js.Value) any {
 	heading := fixed.RadiansToAngle(args[4].Float())
 	side := args[5].Int()
 	binding := inst.bindingFor(meta.Name, args[1])
-	return int(inst.world.AddUnit(meta.Name, meta, binding, at, heading, side))
+	id := inst.world.AddUnit(meta.Name, meta, binding, at, heading, side)
+	// A directly-placed structure is complete the instant it lands, so settle
+	// its on/off state now: an ActivateWhenBuilt solar opens and reads on, any
+	// other toggleable unit reads off. (Buildees raise through the construction
+	// path and activate on completion instead, so they never pass here.)
+	inst.world.InitOnOff(id)
+	return int(id)
 }
 
 func removeUnit(_ js.Value, args []js.Value) any {

@@ -290,14 +290,11 @@ func (w *World) stepBuilder(u *Unit) {
 			u.binding.Start("StopBuilding")
 		}
 		// FBI activatewhenbuilt: the new unit switches itself on the moment
-		// it completes (a solar collector unfolding its panels).
-		if b.Meta.ActivateWhenBuilt && b.binding != nil {
-			if b.binding.HasScript("Activate") {
-				b.binding.Start("Activate")
-			}
-			if p, ok := b.binding.(CobPorts); ok {
-				p.SetUnitValuePort(1, 1) // ACTIVATION
-			}
+		// it completes (a solar collector unfolding its panels). setActivation
+		// runs the Activate script and pins the ACTIVATION port together so the
+		// studio's Active pill reads on.
+		if b.Meta.ActivateWhenBuilt {
+			w.setActivation(b, true)
 		}
 		w.emit(frame.Event{Kind: frame.EvBuildStop, UnitID: u.ID, TargetID: b.ID, Anchor: b.Pos()})
 		// A factory rolls the finished unit off its pad to clear ground so

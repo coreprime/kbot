@@ -765,6 +765,62 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	return id
 }
 
+// setActivation drives a unit's on/off state authoritatively: it runs the
+// Activate / Deactivate COB entry (so the structure visibly opens or folds) and
+// writes the ACTIVATION unit-value port so GET_UNIT_VALUE — and the studio's
+// "Active" pill, which reads it — reflect the real state. The two must move
+// together: the COB tracks open/closed in its own static vars, while
+// GET_UNIT_VALUE(ACTIVATION) otherwise rests at TA's default of 1 and would
+// report a folded solar as on. A unit with no Activate/Deactivate script or no
+// port surface is left untouched.
+func (w *World) setActivation(u *Unit, on bool) {
+	if u == nil || u.binding == nil {
+		return
+	}
+	name := "Deactivate"
+	if on {
+		name = "Activate"
+	}
+	if s, ok := u.binding.(CobScripts); ok && s.HasScript(name) {
+		s.Start(name)
+	}
+	if p, ok := u.binding.(CobPorts); ok {
+		p.SetUnitValuePort(1, boolPort(on))
+	}
+}
+
+// boolPort maps an on/off flag to the COB unit-value convention (1 = on).
+func boolPort(on bool) int32 {
+	if on {
+		return 1
+	}
+	return 0
+}
+
+// InitOnOff settles a freshly-placed on/off-able unit's activation so the
+// studio's Active pill matches what's drawn: an ActivateWhenBuilt structure (a
+// solar collector) opens at once and reads on, while any other toggleable unit
+// pins the ACTIVATION port to off so the pill doesn't inherit GET_UNIT_VALUE's
+// resting default of 1 and lie about a closed unit. No-op for units that can't
+// be toggled, and only meaningful for a completed unit — buildees raise through
+// the construction path, which activates them on completion instead. Called
+// from the direct-placement entry point; networked buildees never pass here.
+func (w *World) InitOnOff(id uint32) {
+	u := w.units[id]
+	if u == nil || u.Meta == nil || !u.Meta.OnOffable || u.binding == nil {
+		return
+	}
+	on := u.Meta.ActivateWhenBuilt
+	if on {
+		w.setActivation(u, true)
+		return
+	}
+	// Rest closed but make the port explicit so the pill reads off.
+	if p, ok := u.binding.(CobPorts); ok {
+		p.SetUnitValuePort(1, 0)
+	}
+}
+
 // startSetMaxReloadTime tells a TA:K script its slowest weapon's reload time
 // in milliseconds. TA:K units size their restore-after-delay timers from it
 // (typically sleeping a multiple of the value); TA scripts have no such entry
