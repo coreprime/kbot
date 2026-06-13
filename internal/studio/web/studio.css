@@ -7149,7 +7149,8 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   position: absolute;
   left: 50%;
   bottom: 14px;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
   display: flex;
   gap: 8px;
   padding: 6px 10px;
@@ -7160,6 +7161,19 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   max-width: 92%;
   /* Magnified icons swell past the bar — never clip them. */
   overflow: visible;
+  /* Slide up from the bottom edge when shown; slide back down on hide
+     (the [hidden] state below). */
+  transition: transform 220ms cubic-bezier(0.2, 0.85, 0.25, 1), opacity 180ms ease;
+}
+/* Keep the strip laid out while "hidden" so the slide can animate — the
+     [hidden] attribute would otherwise force display:none and kill the
+     transition.  The bar parks below the viewport edge and ignores
+     pointer events until it slides back up. */
+#sandbox-roster-strip[hidden] {
+  display: flex;
+  transform: translateX(-50%) translateY(150%);
+  opacity: 0;
+  pointer-events: none;
 }
 .roster-cell {
   display: flex;

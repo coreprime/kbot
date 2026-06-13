@@ -169,33 +169,39 @@ export function refreshMvInspectors(dtMs = 16) {
       btn.disabled = !ctrlEnabled[action]
     }
   }
-  if (!mv) return
-  // Publish the freshly-computed proxy + sandbox flags to the React
-  // inspector store.  Every migrated panel (Static Vars, Audio) is
-  // subscribed to these signals via @preact/signals and re-renders
-  // automatically when its inputs change.  Skipping the per-panel
-  // imperative renderMvXxxPanel call below for migrated panels is
-  // intentional — the React tree owns those bodies now.
-  const ui = getReactUi()
-  if (ui && typeof ui.publishInspectorState === 'function') {
-    const selSize = (sandbox && sandbox.scene && sandbox.scene.selected)
-      ? sandbox.scene.selected.size
-      : 0
-    ui.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
+  // The mv-dependent publishes only run when a unit is actually
+  // focused.  The subscriber fan-out below, however, must run on EVERY
+  // tick even when mv is null — subscribers like the sandbox roster
+  // strip react to the selection going EMPTY (hide themselves), and an
+  // early return here would freeze them visible after a deselect.
+  if (mv) {
+    // Publish the freshly-computed proxy + sandbox flags to the React
+    // inspector store.  Every migrated panel (Static Vars, Audio) is
+    // subscribed to these signals via @preact/signals and re-renders
+    // automatically when its inputs change.  Skipping the per-panel
+    // imperative renderMvXxxPanel call below for migrated panels is
+    // intentional — the React tree owns those bodies now.
+    const ui = getReactUi()
+    if (ui && typeof ui.publishInspectorState === 'function') {
+      const selSize = (sandbox && sandbox.scene && sandbox.scene.selected)
+        ? sandbox.scene.selected.size
+        : 0
+      ui.publishInspectorState({ mv, sandboxActive: !!sandboxActive, sandboxSelSize: selSize })
+    }
+    // Per-tick lifecycle advancement for the focused unit — promotes
+    // 'creating' → 'created' when the Create thread has died and auto-
+    // fires Activate once build% reaches 100.  Takes mv (not mv.cob) so
+    // the advance can read the build-percent gate on the auto-Activate
+    // transition.  The sandbox additionally walks ALL its units in its
+    // own onAfterFrame hook so non-focused units lifecycle-advance too.
+    hostCallbacks.syncMvActionsRunning?.(mv)
+    hostCallbacks.syncCobRibbonRunning?.(mv.cob)
   }
-  // Per-tick lifecycle advancement for the focused unit — promotes
-  // 'creating' → 'created' when the Create thread has died and auto-
-  // fires Activate once build% reaches 100.  Takes mv (not mv.cob) so
-  // the advance can read the build-percent gate on the auto-Activate
-  // transition.  The sandbox additionally walks ALL its units in its
-  // own onAfterFrame hook so non-focused units lifecycle-advance too.
-  hostCallbacks.syncMvActionsRunning?.(mv)
-  hostCallbacks.syncCobRibbonRunning?.(mv.cob)
   // Section-specific tick consumers (e.g. unit-editor's debugger
-  // panels) get their turn now.  Each subscriber receives the same
-  // mv proxy + the dt since the last publish and is responsible for
-  // its own DOM scope.  Errors are swallowed so one broken consumer
-  // doesn't strand the rest.
+  // panels, the sandbox roster strip) get their turn now.  Each
+  // subscriber receives the current mv proxy (possibly null) + the dt
+  // since the last publish and is responsible for its own DOM scope.
+  // Errors are swallowed so one broken consumer doesn't strand the rest.
   for (const fn of _tickListeners) {
     try { fn(mv, 250) } catch (e) { /* per-subscriber failures are non-fatal */ void e }
   }
