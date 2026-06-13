@@ -636,6 +636,10 @@ export class SandboxView {
           // keeps placement armed — see the single-shot gate above), so
           // the user can lay out a whole base plan in one pass.
           await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2], !!ev.shiftKey, drag ? drag.headingRad : 0)
+          // Order-ack on the builder, same as a Move/Attack click — building
+          // a structure was previously silent until the nanolathe started.
+          const builder = this.scene.unitById?.(p.buildFor)
+          if (builder) this.playUnitSoundRandom(builder, ['ok1', 'ok2', 'ok3', 'ok4', 'ok5', 'build'])
           this.#setStatus(ev.shiftKey
             ? `Build queued — ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}); shift-click to queue more.`
             : `Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
