@@ -1,28 +1,19 @@
 // minimap-panel.js
 //
-// Preact wrapper that hosts the sandbox mini-map canvas inside the
-// standard FloatingPanel chrome (drag, persisted position, collapse) —
-// with the close button removed: the mini-map is core battlefield UI,
-// not an optional inspector. The canvas itself is drawn by minimap.js,
-// which looks the element up by id on its shared refresh tick.
+// The sandbox mini-map as a fixed game-UI element (top-right), NOT a
+// draggable inspector panel — it's core battlefield UI, framed like the
+// economy bar / unit HUD rather than the FloatingPanel chrome. The canvas
+// is drawn by minimap.js, which looks it up by id on the shared refresh
+// tick and toggles the frame's visibility with sandbox mode.
 
 import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
 
 export const MINIMAP_CANVAS_ID = 'sandbox-minimap-canvas'
 
 export function SandboxMinimapPanel() {
-  // Default to the bottom-right corner (where the legacy fixed mini-map
-  // lived); FloatingPanel persists wherever the user drags it after.
-  const defaultPos = {
-    left: Math.max(12, (window.innerWidth || 1200) - 230),
-    top: Math.max(12, (window.innerHeight || 800) - 330),
-  }
   return html`
-    <${FloatingPanel} id="sandbox-minimap" title="Mini-map" noClose
-                      defaultPos=${defaultPos}>
-      <canvas id=${MINIMAP_CANVAS_ID} width="184" height="184"
-              style="display:block; width:184px; height:184px;"></canvas>
-    <//>
+    <div id="sandbox-minimap" class="sandbox-minimap-hud">
+      <canvas id=${MINIMAP_CANVAS_ID} width="184" height="184"></canvas>
+    </div>
   `
 }

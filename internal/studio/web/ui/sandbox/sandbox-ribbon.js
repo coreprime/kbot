@@ -234,38 +234,6 @@ export function SandboxRibbon() {
           <//>
         </div>
       <//>
-      <${RibbonSection} label="Orders">
-        <${RibbonButton}
-          id="sandbox-rb-move"
-          icon="🚶"
-          label="Move"
-          title="Move — arm the next ground click as a move order for the current selection (right-click works without arming)."
-          onClick=${() => _bridge.setPendingCommand('move')} />
-        <${RibbonButton}
-          id="sandbox-rb-attack"
-          icon="🎯"
-          label="Attack"
-          title="Attack — arm the next unit click as an attack order for the current selection (right-click an enemy works without arming)."
-          onClick=${() => _bridge.setPendingCommand('attack')} />
-        <${RibbonButton}
-          id="sandbox-rb-patrol"
-          icon="🚩"
-          label="Patrol"
-          title="Patrol — arm patrol; each ground click lays a looping waypoint for the selection (Esc finishes the route)."
-          onClick=${() => _bridge.setPendingCommand('patrol')} />
-        <${RibbonButton}
-          id="sandbox-rb-repair"
-          icon="🔧"
-          label="Repair"
-          title="Repair — arm repair; click a friendly unit still under construction and the selected mobile builders walk over to finish it."
-          onClick=${() => _bridge.setPendingCommand('repair')} />
-        <${RibbonButton}
-          id="sandbox-rb-stop"
-          icon="✋"
-          label="Stop"
-          title="Stop — clear move + attack orders on every selected unit."
-          onClick=${() => _bridge.stopSelected()} />
-      <//>
       <${RibbonSection} label="Selection">
         <${RibbonButton}
           id="sandbox-rb-select-all"

@@ -1794,7 +1794,7 @@ export class ModelRenderer {
       // anchors at the world origin.
       if (this.camera) {
         const aspect = gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight)
-        this.camera.updateMatrices(aspect, 0.5, 8000)
+        this.camera.updateMatrices(aspect, 0.5, 16000)
       }
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
       gl.clearColor(this.skyBottom[0], this.skyBottom[1], this.skyBottom[2], 1)
@@ -1881,8 +1881,10 @@ export class ModelRenderer {
     )
     // Far plane has to reach the new ~2.5 km sea horizon — the
     // ground tessellation extends much further than the unit so the
-    // water + seabed are visible all the way out.
-    this.camera.updateMatrices(aspect, Math.max(0.05, span * 0.01), Math.max(6000, span * 30 + 1000))
+    // water + seabed are visible all the way out. Doubled draw
+    // distance so large maps don't clip terrain as the camera pulls
+    // back or pans across them.
+    this.camera.updateMatrices(aspect, Math.max(0.05, span * 0.01), Math.max(12000, span * 60 + 2000))
 
     // Shadow pass is meaningful only when the main pass actually uses
     // shadows.  In Flat / Wireframe modes we skip it to save GPU.
@@ -1910,6 +1912,11 @@ export class ModelRenderer {
     }
     gl.disable(gl.DEPTH_TEST)
     gl.disable(gl.BLEND)
+    // Explicit black clear: the shadow pass leaves clearColor at white
+    // (its depth-encoding clear), so without resetting it here the
+    // visible framebuffer clears white and shows through anywhere the
+    // sky/scene doesn't cover — an unrendered scene reads black now.
+    gl.clearColor(0, 0, 0, 1)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
     this.#renderSky()

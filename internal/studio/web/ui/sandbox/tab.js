@@ -101,13 +101,15 @@ import { setWelcomeTab, setSandboxView } from '../screens/welcome/welcome-screen
 import { wireRosterStrip } from './roster-strip.js'
 import { wireResourcesHud } from './resources-hud.js'
 import { wireMinimap } from './minimap.js'
+import { wireOrdersPalette } from './orders-palette.js'
 
 // Selection roster strip (bottom-centre build-pic summary), the economy
-// bar and the mini-map — one global subscriber each on the shared
-// inspector tick, wired at module load.
+// bar, the mini-map and the left-side orders command card — one global
+// subscriber each on the shared inspector tick, wired at module load.
 wireRosterStrip()
 wireResourcesHud()
 wireMinimap()
+wireOrdersPalette()
 
 // _sbxMatchId / _sbxHostWsUrl mirror the welcome screen's New-Hosted
 // helpers so the "+" menu can host a match without the welcome UI.

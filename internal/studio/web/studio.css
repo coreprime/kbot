@@ -7321,6 +7321,49 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 #sandbox-economy-bar .eco-rate-neg { color: #e25b52; }
 #sandbox-economy-bar .eco-total { font-size: 10px; color: rgba(255, 255, 255, 0.45); }
 
+/* Orders command card — middle-left of the sandbox viewport. A vertical
+   strip of order buttons, game-UI styled (not a ribbon/menu); only the
+   orders valid for the current selection are shown, and the armed one
+   highlights. Hidden when nothing is selected. */
+#sandbox-orders-palette {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 30;
+  pointer-events: auto;
+}
+#sandbox-orders-palette .orders-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 118px;
+  padding: 7px 10px;
+  background: rgba(12, 13, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+#sandbox-orders-palette .orders-btn:hover {
+  background: rgba(124, 92, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+#sandbox-orders-palette .orders-btn.armed {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+#sandbox-orders-palette .orders-icon { font-size: 15px; line-height: 1; }
+#sandbox-orders-palette .orders-label { flex: 1; }
+
 /* Welcome battlefield chooser — map rows with minimap thumbnails. */
 .welcome-map-list .welcome-join-row { display: flex; align-items: center; gap: 12px; }
 .welcome-map-thumb {
@@ -7392,17 +7435,19 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   text-overflow: ellipsis;
 }
 
-/* Mini-map — bottom-right. Team-coloured dots; click selects, click an
-   opposing unit attacks (shift queues), empty ground moves. */
+/* Mini-map — fixed game-UI element, top-right. Team-coloured dots; click
+   selects, click an opposing unit attacks (shift queues), empty ground
+   moves. Not a draggable panel — core battlefield UI like the economy bar. */
 #sandbox-minimap {
   position: absolute;
   right: 14px;
-  bottom: 14px;
+  top: 14px;
   padding: 4px;
   background: rgba(12, 13, 20, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   z-index: 30;
+  pointer-events: auto;
 }
 #sandbox-minimap canvas {
   display: block;
