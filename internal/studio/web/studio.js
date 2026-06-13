@@ -41,6 +41,7 @@ import {
 } from './ui/common/prefs.js'
 
 import { startServerHeartbeat } from './ui/common/heartbeat.js'
+import { startBuildWatcher } from './ui/common/build-watcher.js'
 
 // Unsaved-changes Save / Discard / Cancel prompt — awaited from
 // closeTab when a dirty map is being closed.
@@ -475,6 +476,10 @@ document.addEventListener('DOMContentLoaded', () => {
   // even on the Welcome screen so the user finds out the server died
   // before they pick a map.
   startServerHeartbeat()
+  // Reload the tab if the server redeploys a new web bundle, so an open
+  // session never sits on stale JS after a rebuild (the recurring "I rebuilt
+  // but it still shows the old behaviour" trap).
+  startBuildWatcher()
   // ?initial_map=<name> skips the Welcome dialog and jumps straight
   // into the named map.  Match is case-insensitive against either the
   // file name or the OTA mission name so URL-friendly slugs like

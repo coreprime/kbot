@@ -126,8 +126,39 @@ func (m *WorkspaceManager) register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hub/open", m.handleOpen)
 	mux.HandleFunc("/api/hub/forget", m.handleForget)
 	mux.HandleFunc("/api/hub/export", m.handleExport)
+	mux.HandleFunc("/api/build-id", handleBuildID)
 	mux.HandleFunc("/workspaces/", m.handleWorkspace)
 	mux.HandleFunc("/", m.handleRoot)
+}
+
+var (
+	buildIDOnce sync.Once
+	buildIDVal  string
+)
+
+// buildID fingerprints the embedded web bundle. index.html references every
+// hashed asset (the JS chunks AND the wasm engine), so its bytes shift on any
+// rebuild — making its hash a one-line "is this the current build?" token. The
+// client polls /api/build-id and reloads when it changes, so a server restart
+// with a new build never silently leaves an open tab running stale JS.
+func buildID() string {
+	buildIDOnce.Do(func() {
+		buildIDVal = "dev"
+		if sub, err := fs.Sub(webFS, "web/dist"); err == nil {
+			if data, err := fs.ReadFile(sub, "index.html"); err == nil {
+				h := fnv.New64a()
+				_, _ = h.Write(data)
+				buildIDVal = fmt.Sprintf("%016x", h.Sum64())
+			}
+		}
+	})
+	return buildIDVal
+}
+
+func handleBuildID(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = fmt.Fprintf(w, `{"id":%q}`, buildID())
 }
 
 // handleWorkspace dispatches /workspaces/<id>/... to the session: API/host
@@ -376,7 +407,14 @@ func serveEmbedFile(w http.ResponseWriter, name string) {
 		name = "index.html"
 	}
 	w.Header().Set("Content-Type", contentTypeFor(name))
-	w.Header().Set("Cache-Control", "no-cache")
+	// index.html is the entry that names the hashed assets; never let a stale
+	// copy stick (it would keep pointing a tab at an old bundle). Hashed assets
+	// keep no-cache (revalidated) since their names already bust on change.
+	if name == "index.html" {
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	_, _ = w.Write(data)
 }
 
