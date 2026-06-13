@@ -625,8 +625,16 @@ void main() {
   if (uReflectionTint < 0.5) {
     float underDepth = uWaterY - vWorldPos.y;
     if (underDepth > 0.0) {
-      vec3 wtint = mix(uWaterShallow, uWaterDeep, clamp(underDepth / 40.0, 0.0, 1.0));
-      col = mix(col, wtint, clamp(underDepth / 22.0, 0.0, 0.85));
+      // Tint submerged geometry toward the water's hue by MULTIPLYING the
+      // unit's own colour (not replacing it with flat water colour, which
+      // would camouflage the unit into the sea and hide it). This keeps the
+      // hull's shading + form readable while shifting it blue and darkening
+      // it with depth, so it clearly reads as "beneath the water". Deeper
+      // geometry leans toward the abyssal tint.
+      vec3 hue = mix(uWaterShallow, uWaterDeep, clamp(underDepth / 30.0, 0.0, 1.0));
+      vec3 wmul = hue * 2.4 + 0.12;               // unit-colour multiplier
+      float t = clamp(0.35 + underDepth / 16.0, 0.0, 0.85);
+      col = mix(col, col * wmul, t);
     }
   }
   if (uReflectionTint > 0.5) {

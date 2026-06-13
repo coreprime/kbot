@@ -2566,10 +2566,11 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.10, 0.40, 0.72])
     gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.04, 0.18, 0.45])
     gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.01, 0.05, 0.20])
-    // Pull the surface a touch more opaque than the per-world value — the
-    // sandbox read as "too clear", units under it looking like they floated
-    // in air. The submerged-unit tint (main.frag) does the rest of the work.
-    gl.uniform1f(this.uGroundWaterTranslucency, (env.waterTranslucency ?? 1.0) * 0.7)
+    // Keep the surface translucent enough to SEE submerged units through it —
+    // an earlier pass made it more opaque, which hid them entirely. The
+    // submerged-geometry tint (main.frag) is what reads as "underwater"; the
+    // water just needs to let the tinted hull show through.
+    gl.uniform1f(this.uGroundWaterTranslucency, env.waterTranslucency ?? 1.0)
     gl.uniform3fv(this.uGroundSeabedSand,    env.seabedSand    || [0.25, 0.32, 0.30])
     gl.uniform3fv(this.uGroundSeabedRock,    env.seabedRock    || [0.14, 0.18, 0.18])
     gl.uniform3fv(this.uGroundSeabedCaustic, env.seabedCaustic || [0.35, 0.65, 0.95])
