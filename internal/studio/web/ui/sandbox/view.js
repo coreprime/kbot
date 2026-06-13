@@ -2485,9 +2485,15 @@ export class SandboxView {
       hud = document.createElement('canvas')
       hud.className = 'sandbox-health-hud'
       hud.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:5'
-      if (this.canvas.parentElement) this.canvas.parentElement.appendChild(hud)
       this._hudCanvas = hud
     }
+    // Keep the overlay attached to the LIVE canvas parent every frame. If the
+    // parent didn't exist when the HUD was first created, or a pane/layout swap
+    // re-parented the GL canvas, an orphaned HUD lays out at 0x0 — the bars get
+    // drawn to its backing store but never display (the "health bars don't show"
+    // bug). Re-home it whenever it's detached or under the wrong parent.
+    const parent = this.canvas.parentElement
+    if (parent && hud.parentElement !== parent) parent.appendChild(hud)
     const w = Math.max(1, Math.round(rect.width))
     const h = Math.max(1, Math.round(rect.height))
     if (hud.width !== w || hud.height !== h) { hud.width = w; hud.height = h }
