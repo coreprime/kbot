@@ -1439,10 +1439,16 @@ func (w *World) ApplyOrder(o order.Order) {
 		}
 		// A site the buildee cannot legally occupy (sonar on land, a plant
 		// in deep water, a plot too uneven for its footprint) refuses the
-		// order outright.
+		// order outright. This legality probe applies ONLY to mobile builders
+		// placing a structure at a chosen ground site: a factory's order
+		// targets the factory's OWN position, where canBuildAt would always
+		// fail (the buildee's footprint overlaps the factory itself) — the
+		// factory raises its unit on the pad regardless, so it must skip this.
 		if w.spawn != nil && w.terrain != nil {
-			if bm, _ := w.spawn(o.Name); bm != nil && !w.canBuildAt(bm, o.Target) {
-				return
+			if ub := w.units[o.UnitID]; ub != nil && ub.Meta != nil && ub.Meta.CanMove {
+				if bm, _ := w.spawn(o.Name); bm != nil && !w.canBuildAt(bm, o.Target) {
+					return
+				}
 			}
 		}
 		// A shift-queued Build on a busy mobile builder defers behind the

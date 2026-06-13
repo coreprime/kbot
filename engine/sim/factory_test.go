@@ -30,6 +30,37 @@ func factoryWorld() *World {
 	return New(Config{Seed: 41, Spawn: spawn})
 }
 
+// TestFactoryProducesWithTerrain is the regression for the recurring "factories
+// don't build on real maps" bug. A factory's build order targets the factory's
+// OWN position, where canBuildAt rejects the buildee (its footprint overlaps the
+// factory itself). That legality probe is gated on w.terrain != nil, so it never
+// fired on The Grid (where the bug was invisible) but rejected every factory
+// order on a loaded map. The probe must apply only to mobile builders; with
+// terrain installed a factory must still queue and produce.
+func TestFactoryProducesWithTerrain(t *testing.T) {
+	w := factoryWorld()
+	w.SetTerrain(testTerrain(60, 60, 0, func(_, _ int) uint8 { return 0 }))
+	pos := fixed.Vec2{X: fixed.FromInt(480), Z: fixed.FromInt(480)}
+	fac := w.AddUnit("factory", factoryMeta(), nil, pos, 0, 0)
+	w.ApplyOrder(order.Build(fac, "tank", pos, 0)) // order targets the factory's own position
+	u := w.UnitByID(fac)
+	if len(u.prodQueue) != 1 {
+		t.Fatalf("factory on terrain refused its build order (queue=%d): canBuildAt rejected the own-position target", len(u.prodQueue))
+	}
+	produced := false
+	for i := 0; i < 40*30 && !produced; i++ {
+		w.Step(nil)
+		w.ForEachUnit(func(b *Unit) {
+			if b.ID != fac && b.BuildPercent >= fixed.FromInt(100) {
+				produced = true
+			}
+		})
+	}
+	if !produced {
+		t.Fatalf("factory on terrain never produced a unit (state=%d queue=%d)", u.buildState, len(u.prodQueue))
+	}
+}
+
 // TestFactoryProducesQueueInOrder pins the production contract: repeat build
 // orders queue (mixed types in click order), each unit raises on the pad at
 // the buildtime/workertime pace, rolls off to clear ground on completion,
