@@ -89,12 +89,14 @@ export function wireSandboxRibbon() {
         const ids = [...scene.units()].map((u) => u.id)
         for (const id of ids) scene.removeUnit(id)
       },
-      // Classic Camera — the original TA framing: a fixed 45-degree
-      // look-down at the current target, keeping yaw + distance.
+      // Classic Camera — the original TA framing: square-on (yaw 0),
+      // 45-degree look-down, pulled back to a sensible battle distance.
       classicCamera: () => {
         const view = sb()
         if (!view || !view.camera) return
+        view.camera.yaw = 0
         view.camera.pitch = 45 * Math.PI / 180
+        view.camera.distance = 1700
       },
       // Contour-line overlay over a loaded battlefield's terrain.
       setContours: (on) => {

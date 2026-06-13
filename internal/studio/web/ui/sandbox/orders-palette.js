@@ -1,12 +1,18 @@
 // orders-palette.js
 //
-// Sandbox command card — a vertical strip of order buttons pinned to the
-// middle-left, styled as game UI (like the economy bar) rather than a top-menu
-// ribbon. Only the orders valid for the current selection are shown:
-// Move/Patrol for anything mobile, Attack for anything armed, Repair for
-// mobile builders, Stop whenever a unit is selected. The armed command
-// highlights. Rides the shared 4 Hz inspector tick; rebuilds only when the
-// visible set or the armed command changes, and hides with an empty selection.
+// Sandbox command card — a boxed, vertical strip of order buttons pinned to the
+// middle-left, styled as game UI (not a top-menu ribbon). The whole box slides
+// in from the left when units are selected and slides back out when the
+// selection clears. Icons are the game's own command cursors (per-game
+// appropriate) where one exists; Stop gets an inline glyph.
+//
+// Only orders valid for the WHOLE selection are shown — the intersection of
+// capabilities, so a mixed bag only offers what every selected unit can do:
+// Move/Patrol need every unit mobile, Attack needs every unit armed, Repair
+// needs every unit a mobile builder. Stop shows whenever anything is selected.
+//
+// Rides the shared 4 Hz inspector tick; rebuilds the button row only when the
+// visible set or the armed command changes.
 
 import { hostCallbacks } from '../host-context.js'
 import { subscribeTick } from '../common/refresh-tick.js'
@@ -15,14 +21,15 @@ let _root = null
 let _last = ''
 let _wiredClicks = false
 
-// Order definitions mirror the legacy ribbon's Orders section. `cmd` is the
-// SandboxView pending-command id (Stop is special-cased — it clears targets).
+// `cursor` is the game's command-cursor stem served at /api/studio/cursor/<x>;
+// null falls back to the inline glyph. `cmd` is the SandboxView pending-command
+// (Stop is special-cased — it clears targets).
 const ORDERS = [
-  { cmd: 'move',   icon: '🚶', label: 'Move' },
-  { cmd: 'attack', icon: '🎯', label: 'Attack' },
-  { cmd: 'patrol', icon: '🚩', label: 'Patrol' },
-  { cmd: 'repair', icon: '🔧', label: 'Repair' },
-  { cmd: 'stop',   icon: '✋', label: 'Stop' },
+  { cmd: 'move',   label: 'Move',   cursor: 'cursormove',   glyph: '🚶' },
+  { cmd: 'attack', label: 'Attack', cursor: 'cursorattack', glyph: '🎯' },
+  { cmd: 'patrol', label: 'Patrol', cursor: 'cursorpatrol', glyph: '🚩' },
+  { cmd: 'repair', label: 'Repair', cursor: 'cursorrepair', glyph: '🔧' },
+  { cmd: 'stop',   label: 'Stop',   cursor: null,           glyph: '■' },
 ]
 
 function ensureRoot() {
@@ -31,32 +38,24 @@ function ensureRoot() {
   if (!dlg) return null
   _root = document.createElement('div')
   _root.id = 'sandbox-orders-palette'
-  _root.hidden = true
   dlg.appendChild(_root)
   return _root
 }
 
-// capabilities — union over the selection: an order shows if ANY selected unit
-// supports it, matching the command-card convention. Move/Patrol need a mobile
-// unit; Attack needs a declared weapon; Repair needs a mobile builder.
+// capabilities — INTERSECTION over the selection: an order shows only if every
+// selected unit supports it ("commonly available"). Move/Patrol need a mobile
+// unit; Attack a declared weapon; Repair a mobile builder.
 function capabilities(units) {
-  let move = false, attack = false, build = false
-  for (const u of units) {
-    const m = u && u.meta
-    if (!m) continue
-    const mobile = m.canMove !== false
-    if (mobile) move = true
-    if (Array.isArray(m.weapons) && m.weapons.some((w) => w && w.name)) attack = true
-    if (mobile && Array.isArray(m.buildOptions) && m.buildOptions.length > 0) build = true
-  }
-  return { move, attack, patrol: move, repair: build, stop: units.length > 0 }
+  const mobile = (m) => m && m.canMove !== false
+  const armed = (m) => m && Array.isArray(m.weapons) && m.weapons.some((w) => w && w.name)
+  const builder = (m) => mobile(m) && Array.isArray(m.buildOptions) && m.buildOptions.length > 0
+  const all = (fn) => units.length > 0 && units.every((u) => fn(u && u.meta))
+  const move = all(mobile)
+  return { move, attack: all(armed), patrol: move, repair: all(builder), stop: units.length > 0 }
 }
 
 function dispatch(view, cmd) {
   if (cmd === 'stop') {
-    // Wipe move + attack targets on every selected unit so the sandbox driver
-    // sees "no command" next tick (mirrors the old ribbon Stop), then disarm
-    // any pending click-command.
     const scene = view.scene
     if (scene) {
       for (const id of scene.selected) {
@@ -70,6 +69,16 @@ function dispatch(view, cmd) {
   view.setPendingCommand(cmd)
 }
 
+// iconHTML — the game's command cursor as the button glyph. innerHTML-built
+// <img> bypasses the page's src shim, so the workspace base is applied by hand.
+function iconHTML(o) {
+  if (o.cursor) {
+    const base = (typeof window !== 'undefined' && window.__WS_BASE__) || ''
+    return `<img class="orders-icon" src="${base}/api/studio/cursor/${o.cursor}" alt="" draggable="false">`
+  }
+  return `<span class="orders-icon orders-icon-glyph">${o.glyph}</span>`
+}
+
 function update() {
   const view = hostCallbacks.getActiveSandboxView?.()
   const dlg = document.getElementById('model-viewer-dialog')
@@ -79,22 +88,25 @@ function update() {
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []
-  if (units.length === 0) {
-    if (!root.hidden) { root.hidden = true; _last = '' }
+  const caps = capabilities(units)
+  const shown = ORDERS.filter((o) => caps[o.cmd])
+  if (shown.length === 0) {
+    // Slide the box out (kept in the DOM so the transition plays); next show
+    // rebuilds the row, so forget the last signature.
+    if (root.classList.contains('shown')) { root.classList.remove('shown'); _last = '' }
     return
   }
-  const caps = capabilities(units)
   const armed = view._pendingCmd || ''
-  const shown = ORDERS.filter((o) => caps[o.cmd])
   const sig = shown.map((o) => o.cmd).join(',') + '|' + armed
-  if (sig === _last && !root.hidden) return
-  _last = sig
-  root.hidden = false
-  root.innerHTML = shown.map((o) =>
-    `<button class="orders-btn${armed === o.cmd ? ' armed' : ''}" data-cmd="${o.cmd}" title="${o.label}">`
-    + `<span class="orders-icon">${o.icon}</span><span class="orders-label">${o.label}</span>`
-    + '</button>',
-  ).join('')
+  if (sig !== _last) {
+    _last = sig
+    root.innerHTML = shown.map((o) =>
+      `<button class="orders-btn${armed === o.cmd ? ' armed' : ''}" data-cmd="${o.cmd}" title="${o.label}">`
+      + iconHTML(o) + `<span class="orders-label">${o.label}</span>`
+      + '</button>',
+    ).join('')
+  }
+  root.classList.add('shown')
   if (!_wiredClicks) {
     _wiredClicks = true
     root.addEventListener('click', (e) => {

@@ -28,10 +28,10 @@ import (
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/heartbeat", handleHeartbeat)
-	// Build fingerprint, also under the session prefix so the in-page API shim
-	// (which scopes /api/studio/* to /workspaces/<id>/...) reaches it — the
-	// build-watcher polls this to reload a tab after a redeploy.
-	mux.HandleFunc("/api/studio/build-id", handleBuildID)
+	// Build fingerprint lives only at the global root /api/build-id (hub mux) —
+	// it's a server-wide fact, not workspace-scoped. The build-watcher fetches
+	// it via the origin root (bypassing the workspace API shim), so no
+	// session-prefixed route is needed here.
 	mux.HandleFunc("/api/studio/session-info", sess.handleSessionInfo)
 	mux.HandleFunc("/api/studio/feature-origins", sess.handleFeatureOrigins)
 	mux.HandleFunc("/api/studio/defaults", handleDefaults)

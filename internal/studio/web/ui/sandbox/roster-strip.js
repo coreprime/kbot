@@ -32,6 +32,18 @@ const GROUP_THRESHOLD = 5
 let _root = null
 let _sig = ''
 
+// Last pointer position (recorded by the document capture-phase sweep). The tip
+// is dismissed by GEOMETRY against this point rather than the :hover pseudo —
+// :hover desyncs when the dock's innerHTML re-renders under a stationary cursor
+// (the build row rebuilds every tick), which stranded the build/cost tip.
+let _ptrX = -1
+let _ptrY = -1
+function pointerOverDock() {
+  if (!_root || _ptrX < 0) return false
+  const r = _root.getBoundingClientRect()
+  return _ptrX >= r.left && _ptrX <= r.right && _ptrY >= r.top && _ptrY <= r.bottom
+}
+
 // Per-type meta cache for the build row's cost lines. A miss kicks an async
 // fetch and re-renders when it lands; null marks "no meta" so a 404 is
 // probed at most once.
@@ -74,6 +86,7 @@ function ensureRoot() {
   // tip, catching paths where the browser never delivered mouseout (focus
   // stolen mid-hover, DOM swapped under a stationary cursor).
   const sweep = (e) => {
+    _ptrX = e.clientX; _ptrY = e.clientY
     if (_tip && !_tip.hidden && _root && !_root.contains(e.target)) _tip.hidden = true
   }
   // Capture phase: the 3D canvas registers its own pointer/mouse handlers and
@@ -245,7 +258,7 @@ function update() {
   // the tip is up but the strip isn't actually hovered, drop it. Runs every
   // tick (≈4 Hz) so a stuck hint clears within ~250 ms. The tip is
   // pointer-events:none, so :hover here reflects the dock alone.
-  if (_tip && !_tip.hidden && !root.matches(':hover')) _tip.hidden = true
+  if (_tip && !_tip.hidden && !pointerOverDock()) _tip.hidden = true
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []

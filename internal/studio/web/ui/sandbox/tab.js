@@ -102,6 +102,20 @@ import { wireRosterStrip } from './roster-strip.js'
 import { wireResourcesHud } from './resources-hud.js'
 import { wireMinimap } from './minimap.js'
 import { wireOrdersPalette } from './orders-palette.js'
+import { panelSignals } from '@kbot/ui/panel-store'
+
+// Developer/inspector overlays default HIDDEN in sandbox — the user rarely
+// needs them; they're re-shown on demand via the ribbon's Configure Panels
+// menu. Game-UI elements (mini-map, economy, roster, orders) and the Sandbox
+// Controls spawn panel are NOT in this set. Applied once per tab on first
+// activation (runtime signal only, not persisted, so the unit editor's own
+// defaults are untouched and a user's in-session toggles survive tab swaps).
+const SANDBOX_HIDDEN_DEV_PANELS = [
+  'mv-inspector-scripts', 'mv-inspector-projectiles', 'mv-inspector-network',
+  'mv-inspector-camera', 'mv-inspector-effects', 'mv-inspector-music',
+  'mv-inspector-audio', 'mv-inspector-movement', 'mv-inspector-unit-ports',
+  'mv-inspector-staticvars',
+]
 
 // Selection roster strip (bottom-centre build-pic summary), the economy
 // bar, the mini-map and the left-side orders command card — one global
@@ -161,6 +175,13 @@ export async function activateSandboxTab(tab) {
   // same canvas but with its own chrome.  Reuse the model-viewer
   // dialog so the canvas + ribbon are already mounted.
   $('#model-viewer-dialog')?.classList.remove('hidden')
+  // Default the developer overlays hidden the first time this tab opens.
+  if (!tab._devPanelsDefaulted) {
+    tab._devPanelsDefaulted = true
+    for (const id of SANDBOX_HIDDEN_DEV_PANELS) {
+      try { panelSignals(id).visible.value = false } catch { /* panel store not ready */ }
+    }
+  }
   // Launch loading screen — raised here, before any of the heavy
   // initialisation (the wasm engine boot, WebGL context, terrain render,
   // leader load) so the game's loading art covers the whole wait instead

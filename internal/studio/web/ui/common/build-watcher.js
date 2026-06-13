@@ -16,7 +16,9 @@ let stopped = false
 
 async function fetchBuildId() {
   try {
-    const r = await fetch('/api/build-id', { cache: 'no-store' })
+    // Build-id is a global server fact, not workspace-scoped — always hit the
+    // origin root so a workspace page doesn't resolve it under its own prefix.
+    const r = await fetch(`${location.origin}/api/build-id`, { cache: 'no-store' })
     if (!r.ok) return null
     const j = await r.json()
     return (j && j.id) || null

@@ -7321,30 +7321,44 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 #sandbox-economy-bar .eco-rate-neg { color: #e25b52; }
 #sandbox-economy-bar .eco-total { font-size: 10px; color: rgba(255, 255, 255, 0.45); }
 
-/* Orders command card — middle-left of the sandbox viewport. A vertical
-   strip of order buttons, game-UI styled (not a ribbon/menu); only the
-   orders valid for the current selection are shown, and the armed one
-   highlights. Hidden when nothing is selected. */
+/* Orders command card — a boxed, vertical strip of order buttons on the
+   middle-left, game-UI styled (not a ribbon/menu). The whole box slides in
+   from the left when units are selected and slides back out when the
+   selection clears. Only the orders valid for the WHOLE selection show;
+   the armed one highlights. Icons are the game's own command cursors. */
 #sandbox-orders-palette {
   position: absolute;
   left: 14px;
   top: 50%;
-  transform: translateY(-50%);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  padding: 8px;
+  background: rgba(12, 13, 20, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   z-index: 30;
+  /* Start parked off the left edge, faded out; .shown flies it in. */
+  transform: translate(calc(-100% - 28px), -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 220ms cubic-bezier(0.2, 0.7, 0.2, 1), opacity 180ms ease;
+}
+#sandbox-orders-palette.shown {
+  transform: translate(0, -50%);
+  opacity: 1;
   pointer-events: auto;
 }
 #sandbox-orders-palette .orders-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 118px;
-  padding: 7px 10px;
-  background: rgba(12, 13, 20, 0.82);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
+  gap: 9px;
+  width: 122px;
+  padding: 6px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
@@ -7354,14 +7368,27 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 }
 #sandbox-orders-palette .orders-btn:hover {
   background: rgba(124, 92, 255, 0.22);
-  border-color: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 #sandbox-orders-palette .orders-btn.armed {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
-#sandbox-orders-palette .orders-icon { font-size: 15px; line-height: 1; }
+#sandbox-orders-palette .orders-icon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  image-rendering: pixelated;
+}
+#sandbox-orders-palette .orders-icon-glyph {
+  font-size: 13px;
+  line-height: 1;
+  color: #e25b52;
+}
 #sandbox-orders-palette .orders-label { flex: 1; }
 
 /* Welcome battlefield chooser — map rows with minimap thumbnails. */
