@@ -191,3 +191,45 @@ func TestBuildRefusedOnIllegalSite(t *testing.T) {
 		t.Fatalf("illegal build site still spawned a buildee (units=%d)", count)
 	}
 }
+
+// TestShorelineTurnaround pins the boundary-turn trap: a unit that walked to
+// its depth limit (order dropped at the boundary) must be able to turn
+// around and walk back out — the mid-turn forward creep over the boundary
+// must not drop the outbound order.
+func TestShorelineTurnaround(t *testing.T) {
+	w := New(Config{Seed: 31})
+	// Heights descend westward: x cell 0..63 → height 10..73; sea level 60
+	// puts everything west of cell ~25 underwater, deepening westward.
+	data := make([]uint8, 64*64)
+	for cz := 0; cz < 64; cz++ {
+		for cx := 0; cx < 64; cx++ {
+			data[cz*64+cx] = uint8(10 + cx)
+		}
+	}
+	w.SetTerrain(&Terrain{W: 64, H: 64, CellWU: fixed.FromInt(16), HeightScale: fixed.FromInt(1), SeaLevel: 60, Data: data})
+	m := testMeta("amphib")
+	m.Weapons[0] = WeaponMeta{}
+	m.MaxSlope = 20
+	m.MaxWaterDepth = 30
+	id := w.AddUnit("amphib", m, nil, fixed.Vec2{X: fixed.FromInt(800), Z: fixed.FromInt(512)}, 0, 0)
+	u := w.UnitByID(id)
+	// Wade west until the depth limit stops him.
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(100), Z: fixed.FromInt(512)}))
+	for i := 0; i < 4000 && u.hasMove; i++ {
+		w.Step(nil)
+	}
+	if u.hasMove {
+		t.Fatal("never reached the depth boundary")
+	}
+	atShore := u.loco.Pos
+	// Now walk back east — the turn at the boundary must not strand him.
+	goal := fixed.Vec2{X: fixed.FromInt(800), Z: fixed.FromInt(512)}
+	w.ApplyOrder(order.Move([]uint32{id}, goal))
+	for i := 0; i < 6000 && u.hasMove; i++ {
+		w.Step(nil)
+	}
+	if u.loco.Pos.DistTo(goal) > fixed.FromInt(40) {
+		t.Fatalf("unit stranded at the shoreline: stopped (%v,%v), was at (%v,%v)",
+			u.loco.Pos.X.Float(), u.loco.Pos.Z.Float(), atShore.X.Float(), atShore.Z.Float())
+	}
+}

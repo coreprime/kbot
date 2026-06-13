@@ -439,6 +439,8 @@ func (m *Match) buildSnapshot(full bool) *wire.Snapshot {
 			SelfDAtMs: ru.SelfDAtMs,
 			CarriedBy: ru.CarriedBy, Carrying: ru.Carrying,
 			LoadTarget: ru.LoadTarget, HasUnload: ru.HasUnload,
+			StallTicks: ru.StallTicks, AvoidFlip: ru.AvoidFlip,
+			ProgressX: ru.ProgressX, ProgressZ: ru.ProgressZ,
 			UnloadX: ru.UnloadAt.X, UnloadZ: ru.UnloadAt.Z,
 		}
 		if full {

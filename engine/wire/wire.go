@@ -192,6 +192,10 @@ type UnitSnap struct {
 	CarriedBy  uint32      `json:"carriedBy,omitempty"`
 	Carrying   []uint32    `json:"carrying,omitempty"`
 	LoadTarget uint32      `json:"loadTarget,omitempty"`
+	StallTicks uint16      `json:"stallTicks,omitempty"`
+	AvoidFlip  bool        `json:"avoidFlip,omitempty"`
+	ProgressX  fixed.Fixed `json:"progressX,omitempty"`
+	ProgressZ  fixed.Fixed `json:"progressZ,omitempty"`
 	HasUnload  bool        `json:"hasUnload,omitempty"`
 	UnloadX    fixed.Fixed `json:"unloadX,omitempty"`
 	UnloadZ    fixed.Fixed `json:"unloadZ,omitempty"`

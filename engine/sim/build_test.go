@@ -100,12 +100,23 @@ func TestBuildCancelledByStop(t *testing.T) {
 	if u.buildState != buildIdle {
 		t.Fatalf("stop did not cancel the build job")
 	}
+	// Abandoned, the frame must decay (half build pace) — never keep
+	// rising — and once it falls to zero it collapses entirely.
 	pct := b.BuildPercent
 	for i := 0; i < 100; i++ {
 		w.Step(nil)
 	}
-	if b.BuildPercent != pct {
+	if b.BuildPercent > pct {
 		t.Fatalf("abandoned buildee kept rising: %v -> %v", pct.Float(), b.BuildPercent.Float())
+	}
+	if !b.Dead && b.BuildPercent >= pct {
+		t.Fatalf("abandoned buildee did not decay: %v -> %v", pct.Float(), b.BuildPercent.Float())
+	}
+	for i := 0; i < 20000 && !b.Dead; i++ {
+		w.Step(nil)
+	}
+	if !b.Dead {
+		t.Fatalf("fully decayed frame never collapsed (at %v%%)", b.BuildPercent.Float())
 	}
 }
 
@@ -135,5 +146,43 @@ func TestQueuedBuildChain(t *testing.T) {
 	}
 	if done != 3 {
 		t.Fatalf("queued build chain stalled: %d of 3 finished", done)
+	}
+}
+
+// TestRepairResumesAbandonedFrame pins the repair gesture: a builder ordered
+// at an existing under-construction frame walks back and finishes IT (no
+// duplicate buildee), beating the abandonment decay.
+func TestRepairResumesAbandonedFrame(t *testing.T) {
+	w := buildWorld()
+	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
+	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(60)}))
+	u := w.UnitByID(bld)
+	for i := 0; i < 600 && u.buildeeID == 0; i++ {
+		w.Step(nil)
+	}
+	b := w.UnitByID(u.buildeeID)
+	if b == nil {
+		t.Fatal("build never started")
+	}
+	for i := 0; i < 200 && b.BuildPercent < fixed.FromInt(30); i++ {
+		w.Step(nil)
+	}
+	w.ApplyOrder(order.Stop([]uint32{bld}))
+	for i := 0; i < 100; i++ {
+		w.Step(nil) // decay a little
+	}
+	pct := b.BuildPercent
+	if pct >= fixed.FromInt(30) {
+		t.Fatalf("abandoned frame did not decay (at %v%%)", pct.Float())
+	}
+	w.ApplyOrder(order.Repair(bld, b.ID))
+	for i := 0; i < 6000 && b.underConstruction(); i++ {
+		w.Step(nil)
+	}
+	if b.Dead || b.underConstruction() {
+		t.Fatalf("repair never completed the frame: dead=%v pct=%v", b.Dead, b.BuildPercent.Float())
+	}
+	if u.buildeeID != 0 && u.buildeeID != b.ID {
+		t.Fatalf("repair spawned a different buildee (%d)", u.buildeeID)
 	}
 }

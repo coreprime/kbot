@@ -79,11 +79,15 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		if o == nil || o == u || !collidable(o) {
 			continue
 		}
-		// An open yard is meant to be driven through — its passable channel
-		// would defeat circle-based avoidance, so skip it and let the cell
-		// separation handle any solid edges the mover grazes.
+		// An open yard is transparent only to traffic actually USING it —
+		// a unit inside driving out through the channel, or one whose
+		// destination is inside (pad approach). Everyone else still
+		// detours around the footprint: an open factory's side walls are
+		// as solid as a closed one's.
 		if hasYard(o) && o.yardOpen {
-			continue
+			if yardContainsPoint(o, u.loco.Pos) || yardContainsPoint(o, target) {
+				continue
+			}
 		}
 		oRad := steeringRadius(o)
 		od := o.loco.Pos.Sub(u.loco.Pos)
@@ -111,6 +115,16 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 	if dist-blockT < ur+bRad+fixed.FromInt(6) {
 		return target
 	}
+	// Structures route around their footprint rectangle's CORNERS — a
+	// side tangent at the centreline wedges movers on the corners, where
+	// the yard pushback cancels their step forever. Units (circles) keep
+	// the cheap side tangent.
+	if hasYard(blocker) {
+		if p, ok := w.yardDetour(u, blocker, target); ok {
+			return p
+		}
+		return target
+	}
 	// Steer for the tangent point on the side OPPOSITE the blocker's lateral
 	// offset (pass on the open side); a dead-centre blocker breaks the tie by
 	// id parity so two units meeting head-on pick complementary sides.
@@ -127,6 +141,146 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		X: blocker.loco.Pos.X + nz.Mul(side).Mul(clear),
 		Z: blocker.loco.Pos.Z - nx.Mul(side).Mul(clear),
 	}
+}
+
+// yardDetour routes a mover around a structure's expanded footprint
+// rectangle via its corners: pick the corner waypoint minimizing the
+// pos→corner→target path among corners the mover can reach without
+// cutting back through the rectangle (and can legally stand on). The
+// wedge-recovery flip (stall detector) selects the runner-up corner so a
+// mover pinned against one corner tries the route around the other side.
+func (w *World) yardDetour(u, s *Unit, target fixed.Vec2) (fixed.Vec2, bool) {
+	hx, hz := yardHalfExtents(s.Meta)
+	ur := u.Meta.collisionRadius()
+	pad := ur + avoidSideMarginWU
+	ex, ez := hx+pad, hz+pad
+	lp := yardLocal(s, u.loco.Pos)
+	lt := yardLocal(s, target)
+	// The crossing decision tests the rect inflated by the unit's body
+	// radius: a centreline that grazes the corner gap still drags the
+	// hull through the wall.
+	if !segmentCrossesRect(lp, lt, hx+ur, hz+ur) {
+		return fixed.Vec2{}, false
+	}
+	corners := [4]fixed.Vec2{{X: ex, Z: ez}, {X: ex, Z: -ez}, {X: -ex, Z: -ez}, {X: -ex, Z: ez}}
+	// Crossing tests run against the TRUE footprint, not the expanded
+	// rect: legs may cut through the padding ring (a mover pressed against
+	// a wall starts inside it), just never through the building itself.
+	inEx := hx
+	inEz := hz
+	best, second := -1, -1
+	var bestCost, secondCost fixed.Fixed
+	for i, c := range corners {
+		if segmentCrossesRect(lp, c, inEx, inEz) {
+			continue // the leg to this corner cuts through the building
+		}
+		world := yardToWorld(s, c)
+		// The corner AND the walk to it must be terrain-legal — a corridor
+		// pinched by a cliff or shoreline rules its whole flank out.
+		if w.terrain != nil && !w.legLegal(u, world) {
+			continue
+		}
+		cost := lp.DistTo(c) + c.DistTo(lt)
+		// A corner whose EXIT leg still crosses the building needs a
+		// second corner after it — cost in the extra side length so a
+		// straight-exit corner always wins over parking on a corner that
+		// can't see the target.
+		if segmentCrossesRect(c, lt, inEx, inEz) {
+			cost += ex + ez
+		}
+		switch {
+		case best == -1 || cost < bestCost:
+			second, secondCost = best, bestCost
+			best, bestCost = i, cost
+		case second == -1 || cost < secondCost:
+			second, secondCost = i, cost
+		}
+	}
+	if best == -1 {
+		return fixed.Vec2{}, false
+	}
+	pick := best
+	if u.avoidFlip && second != -1 {
+		pick = second
+	}
+	return yardToWorld(s, corners[pick]), true
+}
+
+// legLegal samples the straight walk from the unit to p (every ~20wu plus
+// the endpoint) against terrain legality, so route candidates that thread
+// an impassable corridor are rejected before the unit wedges in them.
+func (w *World) legLegal(u *Unit, p fixed.Vec2) bool {
+	if !w.canStand(u.Meta, p) {
+		return false
+	}
+	d := p.Sub(u.loco.Pos)
+	l := d.Len()
+	step := fixed.FromInt(20)
+	if l <= step {
+		return true
+	}
+	n := l.Div(step).Int()
+	for i := 1; i <= n; i++ {
+		t := fixed.FromInt(i).Mul(step).Div(l)
+		q := fixed.Vec2{X: u.loco.Pos.X + d.X.Mul(t), Z: u.loco.Pos.Z + d.Z.Mul(t)}
+		if !w.canStand(u.Meta, q) {
+			return false
+		}
+	}
+	return true
+}
+
+// yardToWorld is the inverse of yardLocal: structure-local → world.
+func yardToWorld(s *Unit, l fixed.Vec2) fixed.Vec2 {
+	sin, cos := fixed.SinCos(int32(s.Heading()))
+	return fixed.Vec2{
+		X: s.loco.Pos.X + l.X.Mul(cos) + l.Z.Mul(sin),
+		Z: s.loco.Pos.Z - l.X.Mul(sin) + l.Z.Mul(cos),
+	}
+}
+
+// segmentCrossesRect reports whether the segment a→b (in rect-local space)
+// passes through the axis-aligned rectangle |x|<ex, |z|<ez — a standard
+// slab clip.
+func segmentCrossesRect(a, b fixed.Vec2, ex, ez fixed.Fixed) bool {
+	// Both endpoints inside is trivially a crossing.
+	inside := func(p fixed.Vec2) bool { return p.X.Abs() < ex && p.Z.Abs() < ez }
+	if inside(a) || inside(b) {
+		return true
+	}
+	d := b.Sub(a)
+	tmin := fixed.Fixed(0)
+	tmax := fixed.FromInt(1)
+	// Liang–Barsky against the four slabs: each entry encodes q*t <= p.
+	type slab struct{ q, p fixed.Fixed }
+	slabs := [4]slab{
+		{q: -d.X, p: a.X + ex}, // x >= -ex
+		{q: d.X, p: ex - a.X},  // x <= ex
+		{q: -d.Z, p: a.Z + ez}, // z >= -ez
+		{q: d.Z, p: ez - a.Z},  // z <= ez
+	}
+	for _, sl := range slabs {
+		if sl.q == 0 {
+			if sl.p < 0 {
+				return false
+			}
+			continue
+		}
+		t := sl.p.Div(sl.q)
+		if sl.q < 0 {
+			if t > tmin {
+				tmin = t
+			}
+		} else {
+			if t < tmax {
+				tmax = t
+			}
+		}
+		if tmin > tmax {
+			return false
+		}
+	}
+	return true
 }
 
 // stepCollisions resolves body overlap pairwise in insertion order and

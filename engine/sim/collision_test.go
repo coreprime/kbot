@@ -125,3 +125,31 @@ func TestCollisionDeterminism(t *testing.T) {
 		t.Fatalf("collision passes broke determinism: %x != %x", h1, h2)
 	}
 }
+
+// TestMoverSteersAroundOpenYard pins the open-factory case: a lab whose
+// yard is held open (a unit parked inside keeps it so) still detours
+// crossing traffic around its solid walls — only traffic actually using
+// the channel may pass through the rectangle.
+func TestMoverSteersAroundOpenYard(t *testing.T) {
+	w := New(Config{Seed: 24})
+	lab := footMeta("lab", 6, false)
+	lab.Yard = ParseYardMap("yoccoy ooccoo ooccoo ooccoo ooccoo yoccoy", 6, 6)
+	labID := w.AddUnit("lab", lab, nil, fixed.Vec2{X: fixed.FromInt(180)}, 0, 0)
+	// A squatter inside the channel keeps the yard open.
+	squat := footMeta("squat", 2, true)
+	w.AddUnit("squat", squat, nil, fixed.Vec2{X: fixed.FromInt(180), Z: fixed.FromInt(20)}, 0, 0)
+	mover := w.AddUnit("m", footMeta("m", 2, true), nil, fixed.Vec2{}, 0, 0)
+	goal := fixed.Vec2{X: fixed.FromInt(400)}
+	w.ApplyOrder(order.Move([]uint32{mover}, goal))
+	um := w.UnitByID(mover)
+	ul := w.UnitByID(labID)
+	for i := 0; i < 4000 && um.hasMove; i++ {
+		w.Step(nil)
+		if i == 10 && !ul.yardOpen {
+			t.Fatal("test setup: yard should be open (squatter inside)")
+		}
+	}
+	if um.loco.Pos.DistTo(goal) > fixed.FromInt(40) {
+		t.Fatalf("mover never cleared the open yard: (%v,%v)", um.loco.Pos.X.Float(), um.loco.Pos.Z.Float())
+	}
+}

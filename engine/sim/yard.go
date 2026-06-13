@@ -63,6 +63,14 @@ func ParseYardMap(s string, fx, fz int) []yardCell {
 // hasYard reports whether the unit collides as a footprint rectangle: a
 // standing (immobile, surface) structure with a footprint. Mobile units stay
 // on the circle model.
+// yardContainsPoint reports whether a world point lies inside the
+// structure's footprint rectangle.
+func yardContainsPoint(s *Unit, p fixed.Vec2) bool {
+	hx, hz := yardHalfExtents(s.Meta)
+	l := yardLocal(s, p)
+	return l.X.Abs() < hx && l.Z.Abs() < hz
+}
+
 func hasYard(u *Unit) bool {
 	return u.Meta != nil && !u.Meta.CanMove && !u.Meta.IsAircraft &&
 		u.Meta.FootprintX > 0 && u.Meta.FootprintZ > 0

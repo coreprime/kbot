@@ -120,6 +120,22 @@ type Unit struct {
 	buildState buildPhase
 	buildName  string
 	buildSite  fixed.Vec2
+	// Wedge recovery: stallTicks counts consecutive ticks a moving unit
+	// made no real progress (commanded speed, no displacement — pinned on
+	// a structure corner); past the threshold avoidFlip toggles, sending
+	// the next avoidance detour around the OTHER side of the blocker.
+	stallTicks uint16
+	avoidFlip  bool
+	// progressPos is the unit's position at the previous movement tick
+	// (post-collision), so the stall check measures NET displacement —
+	// a locomotion step that a structure pushback cancels counts as no
+	// progress.
+	progressPos fixed.Vec2
+	// buildResumeID points at an EXISTING under-construction frame this
+	// builder was ordered to continue (the repair gesture); startRaising
+	// adopts it instead of spawning a fresh buildee. Transient command
+	// state — reset whenever a job starts or is cancelled.
+	buildResumeID uint32
 	buildeeID  uint32
 
 	// prodQueue is a factory's pending production run, in click order —
@@ -280,6 +296,10 @@ type World struct {
 	resStock [maxSides]resourceTally
 	resCap   [maxSides]resourceTally
 	resGen   [maxSides]resourceTally
+	// resSeeded marks sides whose economy has been initialised: the first
+	// time a side fields a unit it receives the base storage pre-filled
+	// (the classic 1000/1000 start).
+	resSeeded [maxSides]bool
 	// resProduced accumulates gross generation over the session, the
 	// economy bar's lifetime-production figure.
 	resProduced [maxSides]resourceTally
@@ -790,6 +810,10 @@ type RestoredUnit struct {
 	CarriedBy  uint32
 	Carrying   []uint32
 	LoadTarget uint32
+	StallTicks uint16
+	AvoidFlip  bool
+	ProgressX  fixed.Fixed
+	ProgressZ  fixed.Fixed
 	HasUnload  bool
 	UnloadAt   fixed.Vec2
 	// Cob carries the unit's full live script VM state (piece animators, threads,
@@ -916,6 +940,10 @@ func (w *World) ExportUnits() []RestoredUnit {
 			CarriedBy:     u.carriedBy,
 			Carrying:      append([]uint32(nil), u.carrying...),
 			LoadTarget:    u.loadTarget,
+			StallTicks:    u.stallTicks,
+			AvoidFlip:     u.avoidFlip,
+			ProgressX:     u.progressPos.X,
+			ProgressZ:     u.progressPos.Z,
 			HasUnload:     u.hasUnload,
 			UnloadAt:      u.unloadAt,
 		}
@@ -1035,6 +1063,9 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			carriedBy:    ru.CarriedBy,
 			carrying:     append([]uint32(nil), ru.Carrying...),
 			loadTarget:   ru.LoadTarget,
+			stallTicks:   ru.StallTicks,
+			avoidFlip:    ru.AvoidFlip,
+			progressPos:  fixed.Vec2{X: ru.ProgressX, Z: ru.ProgressZ},
 			hasUnload:    ru.HasUnload,
 			unloadAt:     ru.UnloadAt,
 			hasMove:      ru.HasMove,
@@ -1303,6 +1334,25 @@ func (w *World) ApplyOrder(o order.Order) {
 			}
 		}
 	case order.KindBuild:
+		// Resume gesture: a Build naming an existing under-construction
+		// frame (TargetUnit) sends the builder to that frame and continues
+		// raising IT instead of spawning a fresh one.
+		if o.TargetUnit != 0 {
+			u := w.units[o.UnitID]
+			b := w.units[o.TargetUnit]
+			if u == nil || u.Dead || u.Meta == nil || !u.Meta.IsBuilder || !u.Meta.CanMove ||
+				b == nil || b.Dead || !b.underConstruction() {
+				return
+			}
+			w.cancelBuild(u)
+			u.buildState = buildApproach
+			u.buildName = b.Name
+			u.buildSite = b.loco.Pos
+			u.buildResumeID = b.ID
+			u.hasAttack = false
+			u.queue = nil
+			return
+		}
 		// A site the buildee cannot legally occupy (sonar on land, a plant
 		// in deep water, a plot too uneven for its footprint) refuses the
 		// order outright.
@@ -1334,6 +1384,7 @@ func (w *World) ApplyOrder(o order.Order) {
 			u.buildState = buildApproach
 			u.buildName = o.Name
 			u.buildSite = o.Target
+			u.buildResumeID = 0
 			u.hasAttack = false
 			u.queue = nil
 			return

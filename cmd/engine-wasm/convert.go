@@ -81,10 +81,13 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		burst = 1
 	}
 	return sim.WeaponMeta{
-		Name:     name,
-		Range:    fixed.FromFloat(getFloat(o, "rangeWU")),
-		ReloadMs: int(getFloat(o, "reloadSec") * 1000),
-		Burst:    burst,
+		Name:        name,
+		Range:       fixed.FromFloat(getFloat(o, "rangeWU")),
+		ReloadMs:    int(getFloat(o, "reloadSec") * 1000),
+		Burst:       burst,
+		CommandFire: getBool(o, "commandFire"),
+		EnergyShot:  fixed.FromFloat(getFloat(o, "energyPerShot")),
+		MetalShot:   fixed.FromFloat(getFloat(o, "metalPerShot")),
 		// damageDefault is the [DAMAGE] table's `default=` — the weapon's
 		// absolute per-shot damage (the `damage` key is the per-target map).
 		Damage:  fixed.FromFloat(getFloat(o, "damageDefault")),
@@ -197,6 +200,10 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				SelfDAtMs:     getInt64(u, "selfDAtMs"),
 				CarriedBy:     uint32(getInt(u, "carriedBy")),
 				LoadTarget:    uint32(getInt(u, "loadTarget")),
+				StallTicks:    uint16(getInt(u, "stallTicks")),
+				AvoidFlip:     getBool(u, "avoidFlip"),
+				ProgressX:     fixed.Fixed(getInt64(u, "progressX")),
+				ProgressZ:     fixed.Fixed(getInt64(u, "progressZ")),
 				HasUnload:     getBool(u, "hasUnload"),
 				UnloadAt:      fixed.Vec2{X: fixed.Fixed(getInt64(u, "unloadX")), Z: fixed.Fixed(getInt64(u, "unloadZ"))},
 			}
@@ -458,6 +465,16 @@ func snapshotToWireJS(inst *instance) js.Value {
 		}
 		if ru.LoadTarget != 0 {
 			entry["loadTarget"] = int(ru.LoadTarget)
+		}
+		if ru.StallTicks != 0 {
+			entry["stallTicks"] = int(ru.StallTicks)
+		}
+		if ru.AvoidFlip {
+			entry["avoidFlip"] = true
+		}
+		if ru.ProgressX != 0 || ru.ProgressZ != 0 {
+			entry["progressX"] = float64(ru.ProgressX)
+			entry["progressZ"] = float64(ru.ProgressZ)
 		}
 		if ru.HasUnload {
 			entry["hasUnload"] = true

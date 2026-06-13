@@ -58,6 +58,7 @@ func main() {
 		"submitStance": js.FuncOf(submitStance),
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
 		"submitLoad":   js.FuncOf(submitLoad),
+		"submitRepair": js.FuncOf(submitRepair),
 		"submitUnload": js.FuncOf(submitUnload),
 		"setTerrain":   js.FuncOf(setTerrain),
 		"scheduleAt":   js.FuncOf(scheduleAt),
@@ -301,6 +302,16 @@ func submitSelfDestruct(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.SelfDestruct(uint32Slice(args[1]))))
+}
+
+// submitRepair(handle, builderId, targetUnit) -> execTick. Sends a mobile
+// builder to an existing under-construction frame to continue raising it.
+func submitRepair(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.sess.Submit(order.Repair(uint32(args[1].Int()), uint32(args[2].Int()))))
 }
 
 // submitLoad(handle, transportIds[], targetUnit) -> execTick. Sends the

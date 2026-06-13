@@ -170,6 +170,14 @@ func (w *World) Hash() uint64 {
 		// Transport links are authoritative: a passenger rides its carrier.
 		mix(uint64(u.carriedBy))
 		mix(uint64(u.loadTarget))
+		mix(uint64(u.stallTicks))
+		mix(uint64(u.progressPos.X))
+		mix(uint64(u.progressPos.Z))
+		if u.avoidFlip {
+			mix(1)
+		} else {
+			mix(0)
+		}
 		if u.hasUnload {
 			mix(4)
 			mix(uint64(u.unloadAt.X))

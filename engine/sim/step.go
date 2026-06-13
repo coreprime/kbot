@@ -80,6 +80,7 @@ func (w *World) Step(rt Runtime) {
 	w.stepCollisions()
 	w.stepProjectiles()
 	w.stepEconomy()
+	w.stepBuildDecay()
 }
 
 // stepEconomy recomputes each side's storage capacity and generation from
@@ -91,6 +92,7 @@ func (w *World) stepEconomy() {
 		w.resCap[i] = resourceTally{}
 		w.resGen[i] = resourceTally{}
 	}
+	var active [maxSides]bool
 	for _, id := range w.order {
 		u := w.units[id]
 		if u == nil || u.Dead || u.Meta == nil || u.underConstruction() ||
@@ -98,12 +100,31 @@ func (w *World) stepEconomy() {
 			continue
 		}
 		m := u.Meta
+		active[u.Side] = true
 		w.resCap[u.Side].Metal += m.StoreMetal
 		w.resCap[u.Side].Energy += m.StoreEnergy
 		w.resCap[u.Side].Mana += m.StoreMana
 		w.resGen[u.Side].Metal += m.MakeMetal
 		w.resGen[u.Side].Energy += m.MakeEnergy
 		w.resGen[u.Side].Mana += m.MakeMana
+	}
+	// Base storage: classic TA grants every player a stocked reserve from
+	// the engine, not the FBI (the commander declares none). Each active
+	// side gets it on top of its units' storage, pre-filled the first time
+	// the side fields anything.
+	for side := range w.resCap {
+		if !active[side] {
+			continue
+		}
+		w.resCap[side].Metal += resBaseStorage
+		w.resCap[side].Energy += resBaseStorage
+		w.resCap[side].Mana += resBaseStorage
+		if !w.resSeeded[side] {
+			w.resSeeded[side] = true
+			w.resStock[side].Metal += resBaseStorage
+			w.resStock[side].Energy += resBaseStorage
+			w.resStock[side].Mana += resBaseStorage
+		}
 	}
 	dt := dtSec
 	for side := range w.resStock {
@@ -119,6 +140,56 @@ func (w *World) stepEconomy() {
 }
 
 
+
+// resBaseStorage is the engine-granted per-side storage floor (and the
+// starting stock), matching the classic 1000-metal/1000-energy opening.
+var resBaseStorage = fixed.FromInt(1000)
+
+// stepBuildDecay rolls back every under-construction frame that no builder
+// is actively working: progress (and the armour that grew with it) decays
+// at half the standard build pace — the spent resources are simply lost —
+// and a frame that falls back to zero collapses entirely.
+func (w *World) stepBuildDecay() {
+	var worked map[uint32]bool
+	for _, id := range w.order {
+		u := w.units[id]
+		if u == nil || u.Dead || u.buildState != buildRaising || u.buildeeID == 0 {
+			continue
+		}
+		if worked == nil {
+			worked = make(map[uint32]bool)
+		}
+		worked[u.buildeeID] = true
+	}
+	var collapsed []uint32
+	for _, id := range w.order {
+		b := w.units[id]
+		if b == nil || b.Dead || b.Meta == nil || !b.underConstruction() || worked[b.ID] {
+			continue
+		}
+		// Half the pace a default (workertime-100) builder raises at.
+		bt := b.Meta.BuildTime
+		durSec := fixed.FromInt(8)
+		if bt > 0 {
+			durSec = fixed.Clamp(bt.Div(fixed.FromInt(100)), fixed.FromInt(2), fixed.FromInt(60))
+		}
+		decay := fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz))).Div(fixed.FromInt(2))
+		b.BuildPercent -= decay
+		b.Health -= decay
+		if b.Health < fixed.FromInt(1) {
+			b.Health = fixed.FromInt(1)
+		}
+		if b.BuildPercent <= 0 {
+			collapsed = append(collapsed, b.ID)
+		}
+	}
+	for _, id := range collapsed {
+		if b := w.units[id]; b != nil {
+			b.Dead = true // for callers holding the pointer
+		}
+		w.RemoveUnit(id)
+	}
+}
 
 // stepBuilder advances a builder's construction job. A mobile builder walks
 // to within builddistance of its ordered site; a factory pops the next entry
@@ -258,6 +329,28 @@ func (w *World) stepBuilder(u *Unit) {
 // A failed meta resolve drops the job (and lets a factory try its next entry
 // rather than wedging the pad).
 func (w *World) startRaising(u *Unit) {
+	// Resume: adopt the existing frame the repair order pointed at. If it
+	// finished or collapsed while we walked over, the job simply ends.
+	if u.buildResumeID != 0 {
+		b := w.units[u.buildResumeID]
+		u.buildResumeID = 0
+		if b == nil || b.Dead || !b.underConstruction() {
+			u.buildState = buildIdle
+			u.buildName = ""
+			return
+		}
+		u.buildeeID = b.ID
+		u.buildState = buildRaising
+		u.buildGateMs = w.simMs + buildGateGraceMs
+		if u.binding != nil && u.binding.HasScript("StartBuilding") {
+			d := b.loco.Pos.Sub(u.loco.Pos)
+			heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+			pitch := fixed.ShortestArc(fixed.Atan2(b.PosY-u.PosY, d.Len()))
+			u.binding.Start("StartBuilding", int(heading), int(pitch))
+		}
+		w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: b.ID, Anchor: b.Pos(), FromPiece: -1})
+		return
+	}
 	if w.spawn == nil {
 		u.buildState = buildIdle
 		u.buildName = ""
@@ -617,6 +710,9 @@ func (w *World) stepAttack(u *Unit) {
 	// In range — stop walking and point slot 0 at the enemy. Re-pushing the same
 	// target each tick is a no-op, so the live aim thread survives across ticks.
 	u.hasMove = false
+	if u.Meta.Weapons[0].CommandFire {
+		return // command-fire weapons never join a standing attack
+	}
 	s := &u.weapons[0]
 	s.hasTarget = true
 	s.source = "attack"
@@ -807,24 +903,51 @@ func (w *World) stepMovement(u *Unit) {
 		// tangent point beside a unit blocking the path. Arrival only counts
 		// against the REAL target; touching a detour point just keeps driving
 		// (the detour is recomputed from the live field every tick).
+		// Wedge recovery: an ordered unit that makes no NET progress
+		// across ticks is pinned — a structure pushback or the terrain
+		// blocked-step revert cancelling its locomotion every tick.
+		// Measured at tick ENTRY (last tick's post-collision position) so
+		// the cancellation is visible. Past ~1.2s — comfortably longer
+		// than any turn-in-place — flip its avoidance side so the detour
+		// routes around the blocker's other flank.
+		if u.loco.Pos.DistTo(u.progressPos) < fixed.FromFloat(0.08) {
+			u.stallTicks++
+			if u.stallTicks >= 50 {
+				u.stallTicks = 0
+				u.avoidFlip = !u.avoidFlip
+			}
+		} else if u.stallTicks > 0 {
+			u.stallTicks = 0
+		}
+		u.progressPos = u.loco.Pos
 		steer := w.avoidanceTarget(u)
 		prePos := u.loco.Pos
 		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
 		u.IsMoving = moving
 		// Terrain legality: a step into ground the unit cannot traverse
-		// (too steep, too deep, dry land for a ship) is refused — the unit
-		// stops at the boundary and drops the order rather than marching
-		// in place against the shoreline.
+		// (too steep, too deep, dry land for a ship) is refused. The order
+		// is only DROPPED when the unit was squarely marching at its real
+		// destination — mid-turn creep (a unit at a shoreline swinging
+		// around still noses forward over the boundary) and avoidance
+		// detour legs keep the order and retry next tick.
 		if !arrived && w.terrain != nil && !w.canStand(u.Meta, u.loco.Pos) && w.canStand(u.Meta, prePos) {
 			u.loco.Pos = prePos
 			u.loco.Speed = 0
-			u.hasMove = false
 			u.IsMoving = false
-			if u.curIsPatrol {
-				u.curIsPatrol = false
+			d := steer.Sub(prePos)
+			arc := fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+			if arc < 0 {
+				arc = -arc
 			}
-			if !u.hasAttack {
-				w.advanceQueue(u)
+			aligned := arc < 8192 // within ~45° of the steer bearing
+			if aligned && steer == u.moveTarget {
+				u.hasMove = false
+				if u.curIsPatrol {
+					u.curIsPatrol = false
+				}
+				if !u.hasAttack {
+					w.advanceQueue(u)
+				}
 			}
 		}
 		if arrived && steer != u.moveTarget {
@@ -832,6 +955,8 @@ func (w *World) stepMovement(u *Unit) {
 		} else if arrived {
 			u.hasMove = false
 			u.IsMoving = false
+			u.avoidFlip = false
+			u.stallTicks = 0
 			// A completed patrol leg re-queues itself at the tail, so N
 			// consecutive patrol commands loop the route indefinitely.
 			if u.curIsPatrol {
@@ -1047,6 +1172,16 @@ func (w *World) stepWeapons(u *Unit) {
 			continue
 		}
 		s.lastFireMs = w.simMs
+		// Per-shot economy drain (energypershot / metalpershot): the shot
+		// spends from the side's stock; the pool never gates fire in the
+		// sandbox, so an empty stock just floors at zero.
+		if (wm.EnergyShot > 0 || wm.MetalShot > 0) && u.Side >= 0 && u.Side < maxSides {
+			st := &w.resStock[u.Side]
+			st.Energy = fixed.Max(0, st.Energy-wm.EnergyShot)
+			st.Metal = fixed.Max(0, st.Metal-wm.MetalShot)
+			w.resSpent[u.Side].Energy += wm.EnergyShot
+			w.resSpent[u.Side].Metal += wm.MetalShot
+		}
 		anchor := u.Pos()
 		anchor.Y += fixed.FromInt(12)
 		aimPoint := fixed.Vec3{X: targetPos.X, Y: targetY, Z: targetPos.Z}
@@ -1092,6 +1227,12 @@ func (w *World) stepWeapons(u *Unit) {
 				dmg = defaultHitDamage
 			}
 			w.ApplyDamage(u.ID, s.targetUnit, dmg)
+		}
+		// A command-fire weapon (the D-gun) discharges exactly once per
+		// explicit order: release the slot so it never repeats on reload.
+		if wm.CommandFire {
+			w.clearWeaponSlot(u, slot)
+			continue
 		}
 		// Bomb-run bookkeeping for an aircraft's dropped weapon. The first shot
 		// snapshots the aim point + total bomb count so subsequent shots keep

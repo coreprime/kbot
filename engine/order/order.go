@@ -140,6 +140,12 @@ func BuildQueued(builder uint32, name string, target fixed.Vec2) Order {
 	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target, Queued: true}
 }
 
+// Repair sends a mobile builder to an existing under-construction frame to
+// continue raising it (the hover-a-half-built-structure gesture).
+func Repair(builder uint32, target uint32) Order {
+	return Order{Kind: KindBuild, UnitID: builder, TargetUnit: target}
+}
+
 // Patrol appends a patrol waypoint to each unit's queue.
 func Patrol(units []uint32, target fixed.Vec2) Order {
 	return Order{Kind: KindPatrol, UnitIDs: units, Target: target}

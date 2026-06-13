@@ -110,6 +110,12 @@ type WeaponMeta struct {
 	Burst    int         // shots per burst (>=1)
 	Damage   fixed.Fixed // per shot
 	Present  bool
+	// CommandFire weapons (the D-gun) discharge only on an explicit fire
+	// order — one shot per order, never as part of a standing attack.
+	CommandFire bool
+	// Per-shot economy drain (TDF energypershot / metalpershot).
+	EnergyShot fixed.Fixed
+	MetalShot  fixed.Fixed
 
 	// Tolerance is the weapon's firing arc in TA-angle units (65536 = full
 	// turn); 0 = no arc constraint. Aircraft aim by pointing the whole airframe
