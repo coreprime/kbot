@@ -76,8 +76,13 @@ function ensureRoot() {
   const sweep = (e) => {
     if (_tip && !_tip.hidden && _root && !_root.contains(e.target)) _tip.hidden = true
   }
-  document.addEventListener('pointermove', sweep, { passive: true })
-  document.addEventListener('mousemove', sweep, { passive: true })
+  // Capture phase: the 3D canvas registers its own pointer/mouse handlers and
+  // can stopPropagation on them, which starves a bubble-phase document listener
+  // — the documented reason the tip used to strand. A capture listener fires
+  // top-down before the canvas sees the event, so no downstream stopPropagation
+  // can suppress it; any pointer travel off the strip now always clears the tip.
+  document.addEventListener('pointermove', sweep, { passive: true, capture: true })
+  document.addEventListener('mousemove', sweep, { passive: true, capture: true })
   dlg.appendChild(_root)
   return _root
 }
