@@ -12,11 +12,16 @@ import { hostCallbacks, setStatus } from '../host-context.js'
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
 // loadSandboxMap fetches /api/studio/sandbox-map for the path and installs
-// it on the active view. Returns the map info object.
-export async function loadSandboxMap(view, path) {
+// it on the active view. Returns the map info object. onStep(local, label)
+// is an optional progress callback (local 0..1 within the map load) the
+// launch loading screen drives.
+export async function loadSandboxMap(view, path, onStep) {
+  const step = (local, label) => { try { onStep?.(local, label) } catch { /* ignore */ } }
+  step(0.04, 'Reading battlefield…')
   const res = await fetch(`/api/studio/sandbox-map?path=${encodeURIComponent(path)}`)
   if (!res.ok) throw new Error(`map load failed (${res.status})`)
   const info = await res.json()
+  step(0.18, 'Building terrain…')
   const bin = atob(info.heights)
   const heights = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) heights[i] = bin.charCodeAt(i)
@@ -38,7 +43,11 @@ export async function loadSandboxMap(view, path) {
     })
   }
 
-  // Renderer: drape the full map render over a baked-height mesh.
+  // Renderer: drape the full map render over a baked-height mesh. The
+  // terrain composite is the heaviest fetch in the launch — first render
+  // of a full TA tile map can take a beat — so it owns the bulk of the
+  // map-load progress span.
+  step(0.25, 'Rendering terrain…')
   const image = await loadImage(wsUrl(info.textureUrl))
   view.renderer?.setMapTerrain({
     image, heights,
@@ -46,9 +55,11 @@ export async function loadSandboxMap(view, path) {
     cellWU: info.cellWU, heightScale: info.heightScale,
     seaLevel: info.seaLevel | 0,
   })
+  step(0.85, 'Drawing mini-map…')
 
   // Mini-map backdrop + fixed extent.
   const minimap = await loadImage(wsUrl(info.minimapUrl)).catch(() => null)
+  step(1, 'Battlefield ready.')
   // Camera (and the faction leader's spawn) at the first player start,
   // or the map centre when the OTA carries none.
   const start = (info.startPositions && info.startPositions[0])

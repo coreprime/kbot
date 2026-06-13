@@ -189,7 +189,7 @@ export function SandboxLaunchFlow() {
         // Single (or unknown) faction roster: launch straight away.
         const f = sides[0] || null
         _launch.value = null
-        onOpenSandbox && onOpenSandbox({ mapPath: m.path || null, faction: f })
+        onOpenSandbox && onOpenSandbox({ mapPath: m.path || null, mapName: m.name || null, faction: f })
       }
     }
     const renderItem = (m) => {
@@ -236,7 +236,7 @@ export function SandboxLaunchFlow() {
   const selected = sides.find((f) => String(f.index) === st.selectedKey) || null
   const choose = (f) => {
     _launch.value = null
-    onOpenSandbox && onOpenSandbox({ mapPath: st.mapPath, faction: f })
+    onOpenSandbox && onOpenSandbox({ mapPath: st.mapPath, mapName: st.mapName || null, faction: f })
   }
   const renderItem = (f) => {
     const key = String(f.index)

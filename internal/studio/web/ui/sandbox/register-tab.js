@@ -45,6 +45,7 @@ class SandboxTabInstance {
     // activateSandboxTab loads the map and spawns the leader on first
     // activation. Null mapPath = The Grid.
     tab._mapPath = this.spec.mapPath || null
+    tab._mapName = this.spec.mapName || null
     tab._faction = this.spec.faction || null
   }
 

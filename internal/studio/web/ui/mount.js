@@ -20,6 +20,7 @@ import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
 import { SandboxMinimapPanel } from '/ui/sandbox/minimap-panel.js'
 import { SandboxLaunchFlow } from '/ui/screens/welcome/welcome-screen.js'
+import { SandboxLoadingOverlay } from '/ui/sandbox/loading-overlay.js'
 import {
   SandboxRibbon, configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
   setSandboxGraphicsState,
@@ -259,6 +260,9 @@ export function mountDialogs() {
   // Sandbox launch flow (battlefield + faction pickers) — body-level so
   // the modals are never clipped by the welcome dialog's card slot.
   _mountInto('dialogs-sandbox-launch', () => html`<${SandboxLaunchFlow} />`, document.body)
+  // Sandbox launch loading screen — body-level, above the floating panels,
+  // so it covers the initialising 3D canvas while a battlefield preloads.
+  _mountInto('sandbox-loading-overlay', () => html`<${SandboxLoadingOverlay} />`, document.body)
 }
 
 // ConfirmDialogMount — confirm-dialog.js mounts lazily inside its own

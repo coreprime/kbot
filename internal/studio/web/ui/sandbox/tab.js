@@ -149,6 +149,7 @@ export function openSandboxStub(opts = {}) {
     displayName,
     joinUrl: opts.joinUrl || null,
     mapPath: opts.mapPath || null,
+    mapName: opts.mapName || null,
     faction: opts.faction || null,
   })
 }
@@ -158,6 +159,24 @@ export async function activateSandboxTab(tab) {
   // same canvas but with its own chrome.  Reuse the model-viewer
   // dialog so the canvas + ribbon are already mounted.
   $('#model-viewer-dialog')?.classList.remove('hidden')
+  // Launch loading screen — raised here, before any of the heavy
+  // initialisation (the wasm engine boot, WebGL context, terrain render,
+  // leader load) so the game's loading art covers the whole wait instead
+  // of flashing a half-built canvas first. Only on the first activation
+  // that actually has a battlefield/faction to preload; re-activations
+  // (tab switches) skip it. Hidden in the map-apply block below.
+  const willPreload = (tab._mapPath || tab._faction) && !tab._mapApplied
+  let loadingOverlay = null
+  if (willPreload) {
+    try {
+      loadingOverlay = await import('./loading-overlay.js')
+      const fn = tab._faction ? tab._faction.name : null
+      loadingOverlay.showLoadingOverlay({
+        title: 'Preparing the battlefield',
+        sub: [tab._mapName || (tab._mapPath ? null : 'The Grid'), fn].filter(Boolean).join('  ·  '),
+      })
+    } catch { /* overlay optional — launch proceeds without it */ }
+  }
   const modelViewerInstance = hostCallbacks.getActiveModelViewer?.()
   // Stop the regular ModelViewer's renderer if it's running so we
   // don't have two RAF loops fighting over the canvas.  Also silence
@@ -251,27 +270,30 @@ export async function activateSandboxTab(tab) {
     })
     await v.open()
     tab.panes.set(tab.activePaneId, v)
-    // Welcome-picker battlefield + faction: apply the chosen map to the
-    // freshly opened scene (sim height field + draped terrain + camera at
-    // the first player start), then spawn the faction's leader unit
-    // there. Once per tab — re-activations keep both.
+    // Welcome-picker battlefield + faction: preload the chosen map +
+    // faction (terrain, the leader, its buildable units) behind the
+    // game's loading screen, then reveal the ready field. Once per tab —
+    // re-activations keep both and skip the overlay.
     if ((tab._mapPath || tab._faction) && !tab._mapApplied) {
       tab._mapApplied = true
       try {
-        const { loadSandboxMap, spawnFactionLeader } = await import('./map-loader.js')
-        let where = 'The Grid'
-        if (tab._mapPath) {
-          const info = await loadSandboxMap(v, tab._mapPath)
-          where = info.name
-        }
-        if (tab._faction && tab._faction.commander) {
-          await spawnFactionLeader(v, tab._faction.commander, tab._faction.index)
-        }
+        const { runSandboxPreload } = await import('./preload.js')
+        const { where } = await runSandboxPreload(
+          v,
+          { mapPath: tab._mapPath, faction: tab._faction },
+          (frac, label) => loadingOverlay?.setLoadingProgress(frac, label),
+        )
         const who = tab._faction ? ` — ${tab._faction.name} leader deployed` : ''
         v.setStatus?.(`Battlefield: ${where}${who}.`)
+        loadingOverlay?.hideLoadingOverlay()
       } catch (e) {
         v.setStatus?.(`Battlefield setup failed: ${e?.message || e}`)
+        loadingOverlay?.loadingError(e?.message || e)
       }
+    } else if (loadingOverlay) {
+      // Edge: overlay was raised but no preload ran (pane already existed) —
+      // never strand it on screen.
+      loadingOverlay.hideLoadingOverlay()
     }
   }
   // Swap the module-local + legacy tab.viewer so the rest of the

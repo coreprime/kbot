@@ -34,6 +34,11 @@ type Session struct {
 	renderer *assetrender.Renderer
 	gameHost *gameserver.Server
 
+	// sandbox loading-screen art (loadscreen.go): the game's loading
+	// splash rendered to PNG once and memoised for the launch overlay.
+	loadScreenOnce sync.Once
+	loadScreenPNG  []byte
+
 	// moveinfo.tdf movement classes, lazily parsed once per session and
 	// keyed by class Name (upper-cased) — unit metas resolve their
 	// MovementClass traversal profile through this.
