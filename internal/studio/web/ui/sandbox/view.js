@@ -2461,7 +2461,14 @@ export class SandboxView {
       ctx.fillText(String(secs), head[0], head[1])
     }
     const ids = new Set()
-    if (this._healthBars) for (const id of this.scene.selected) ids.add(id)
+    // Toggle on → bars over EVERY live unit (TA convention: the key reveals
+    // the whole field's health, not just the current selection — which is
+    // why "health bars on" looked empty whenever nothing was selected).
+    // Hover always adds its own unit so health stays inspectable with the
+    // toggle off.
+    if (this._healthBars) {
+      for (const u of this.scene.units()) { if (u && !u.dead) ids.add(u.id) }
+    }
     if (this._lastHoverUnitId) ids.add(this._lastHoverUnitId)
     if (ids.size === 0) return
     for (const id of ids) {
