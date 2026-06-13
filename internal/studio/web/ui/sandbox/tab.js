@@ -41,7 +41,7 @@
 import { $, hostCallbacks, liveStatusEl } from '../host-context.js'
 import { mvSetSimulationSpeed } from '../common/sim-controls.js'
 import { setMvInspectorVisible } from '../common/inspectors.js'
-import { ensureSandboxPanel, showSandboxPanel } from './spawn-picker.js'
+import { ensureSandboxPanel, showSandboxPanel, setSandboxPanelVisible } from './spawn-picker.js'
 import { wireSandboxRibbon } from './ribbon-bridge.js'
 import { wireSandboxControlsIntercept } from './controls-intercept.js'
 import { resetSandboxFocusedUnit } from '../common/refresh-tick.js'
@@ -102,14 +102,13 @@ import { wireRosterStrip } from './roster-strip.js'
 import { wireResourcesHud } from './resources-hud.js'
 import { wireMinimap } from './minimap.js'
 import { wireOrdersPalette } from './orders-palette.js'
-import { panelSignals } from '@kbot/ui/panel-store'
 
 // Developer/inspector overlays default HIDDEN in sandbox — the user rarely
 // needs them; they're re-shown on demand via the ribbon's Configure Panels
 // menu. Game-UI elements (mini-map, economy, roster, orders) and the Sandbox
 // Controls spawn panel are NOT in this set. Applied once per tab on first
-// activation (runtime signal only, not persisted, so the unit editor's own
-// defaults are untouched and a user's in-session toggles survive tab swaps).
+// activation, routed through setSandboxPanelVisible so it hits the React
+// inspector island's own store (and keeps the ribbon checkboxes in sync).
 const SANDBOX_HIDDEN_DEV_PANELS = [
   'mv-inspector-scripts', 'mv-inspector-projectiles', 'mv-inspector-network',
   'mv-inspector-camera', 'mv-inspector-effects', 'mv-inspector-music',
@@ -175,13 +174,6 @@ export async function activateSandboxTab(tab) {
   // same canvas but with its own chrome.  Reuse the model-viewer
   // dialog so the canvas + ribbon are already mounted.
   $('#model-viewer-dialog')?.classList.remove('hidden')
-  // Default the developer overlays hidden the first time this tab opens.
-  if (!tab._devPanelsDefaulted) {
-    tab._devPanelsDefaulted = true
-    for (const id of SANDBOX_HIDDEN_DEV_PANELS) {
-      try { panelSignals(id).visible.value = false } catch { /* panel store not ready */ }
-    }
-  }
   // Launch loading screen — raised here, before any of the heavy
   // initialisation (the wasm engine boot, WebGL context, terrain render,
   // leader load) so the game's loading art covers the whole wait instead
@@ -475,5 +467,19 @@ export async function activateSandboxTab(tab) {
   if (typeof window !== 'undefined') {
     window.__sandboxView = _sandboxViewInstance
     window.__activeViewer = _sandboxViewInstance
+  }
+  // Default the developer overlays hidden the first time this tab opens — the
+  // panels are mounted by now; a second pass shortly after covers the React
+  // inspector island finishing its mount a beat later. setSandboxPanelVisible
+  // routes through the island's store so it sticks (and syncs the ribbon).
+  if (!tab._devPanelsDefaulted) {
+    tab._devPanelsDefaulted = true
+    const hideDevPanels = () => {
+      for (const id of SANDBOX_HIDDEN_DEV_PANELS) {
+        try { setSandboxPanelVisible(id, false) } catch { /* ignore */ }
+      }
+    }
+    hideDevPanels()
+    setTimeout(hideDevPanels, 300)
   }
 }
