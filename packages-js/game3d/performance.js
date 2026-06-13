@@ -58,7 +58,12 @@ export const DEFAULT_SHADOW_LOD_ENABLED = true
 //   * a unit at > ~1000 wu drops shadows
 //   * the user can fly far enough out to cull 80%+ of casters in a
 //     50-unit sandbox without a visible step change at the boundary.
-export const SHADOW_LOD_MIN_PX = 40
+export const SHADOW_LOD_MIN_PX = 20
+
+// Camera distance (wu) past which unit shadows have fully faded out; the
+// fade starts at half this. Pairs with the halved SHADOW_LOD_MIN_PX so the
+// per-unit LOD gate stops culling shadows before the global fade finishes.
+export const SHADOW_ZOOM_FADE_MAX = 3200
 
 // ── LOD hysteresis ────────────────────────────────────────────────────
 

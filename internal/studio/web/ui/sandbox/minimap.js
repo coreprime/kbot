@@ -26,20 +26,19 @@ let _canvas = null
 // handler: world = (px - SIZE/2) / scale + cx.
 let _view = { cx: 0, cz: 0, scale: 1 }
 
+// ensureRoot adopts the canvas the React MinimapPanel mounted (standard
+// floating-panel chrome, no close button). The panel element is the
+// hide/show handle; the canvas is the draw + click surface.
 function ensureRoot() {
-  if (_root && _root.isConnected) return _root
-  const dlg = document.getElementById('model-viewer-dialog')
-  if (!dlg) return null
-  _root = document.createElement('div')
-  _root.id = 'sandbox-minimap'
-  _root.hidden = true
-  _canvas = document.createElement('canvas')
-  _canvas.width = SIZE
-  _canvas.height = SIZE
-  _root.appendChild(_canvas)
-  _canvas.addEventListener('click', onClick)
-  _canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); onOrder(e) })
-  dlg.appendChild(_root)
+  const panel = document.getElementById('sandbox-minimap')
+  const canvas = document.getElementById('sandbox-minimap-canvas')
+  if (!panel || !canvas) return null
+  if (_canvas !== canvas) {
+    _canvas = canvas
+    _canvas.addEventListener('click', onClick)
+    _canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); onOrder(e) })
+  }
+  _root = panel
   return _root
 }
 
@@ -125,16 +124,50 @@ function onOrder(e) {
   view.setStatus(`${queued ? 'Move queued' : 'Move'} via mini-map — ${n} unit(s) to (${wx.toFixed(0)}, ${wz.toFixed(0)}).`)
 }
 
+// cameraGroundQuad intersects the camera's four corner rays with the
+// y=0 ground plane, returning [[x,z] x4] in world units (or null when
+// the camera/matrices aren't ready). Rays pointing above the horizon
+// clamp to a distant point so the quad stays drawable.
+function cameraGroundQuad(view) {
+  const cam = view.camera
+  if (!cam || !cam.invViewProj) return null
+  const ivp = cam.invViewProj()
+  if (!ivp) return null
+  const un = (ndcX, ndcY, ndcZ) => {
+    const v = [ndcX, ndcY, ndcZ, 1]
+    const o = [0, 0, 0, 0]
+    for (let r = 0; r < 4; r++) {
+      o[r] = ivp[r] * v[0] + ivp[r + 4] * v[1] + ivp[r + 8] * v[2] + ivp[r + 12] * v[3]
+    }
+    if (Math.abs(o[3]) < 1e-9) return null
+    return [o[0] / o[3], o[1] / o[3], o[2] / o[3]]
+  }
+  const corners = [[-1, 1], [1, 1], [1, -1], [-1, -1]] // TL TR BR BL in NDC
+  const out = []
+  for (const [nx, ny] of corners) {
+    const near = un(nx, ny, -1)
+    const far = un(nx, ny, 1)
+    if (!near || !far) return null
+    const dy = far[1] - near[1]
+    let t = Math.abs(dy) > 1e-6 ? -near[1] / dy : 1
+    if (!(t > 0)) t = 1            // above horizon: clamp to the far plane
+    t = Math.min(t, 1)
+    out.push([near[0] + (far[0] - near[0]) * t, near[2] + (far[2] - near[2]) * t])
+  }
+  return out
+}
+
 function draw() {
   const view = activeView()
   const root = ensureRoot()
   if (!root) return
   if (!view) {
-    if (!root.hidden) root.hidden = true
+    root.style.display = 'none'
     return
   }
   const units = liveUnits(view)
-  root.hidden = false
+  root.style.display = ''
+
   // Extent: a loaded battlefield pins the view to the whole map (its
   // terrain render is the backdrop); The Grid keeps the unit auto-fit,
   // floored at MIN_EXTENT.
@@ -165,6 +198,24 @@ function draw() {
     const [x0, y0] = worldToMap(0, 0)
     const [x1, y1] = worldToMap(smap.worldW, smap.worldH)
     try { ctx.drawImage(smap.minimapImage, x0, y0, x1 - x0, y1 - y0) } catch { /* decode race */ }
+  }
+  // Camera viewport: the true ground footprint of the perspective
+  // frustum — each screen corner's view ray intersected with the ground
+  // plane — so the shape reads as the real trapezoid of what the camera
+  // sees, not an abstract rectangle. Rays that miss the ground (looking
+  // at the sky) clamp to a far point along the ray.
+  const frustum = cameraGroundQuad(view)
+  if (frustum) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)'
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    for (let i = 0; i < frustum.length; i++) {
+      const [fx, fy] = worldToMap(frustum[i][0], frustum[i][1])
+      if (i === 0) ctx.moveTo(fx, fy)
+      else ctx.lineTo(fx, fy)
+    }
+    ctx.closePath()
+    ctx.stroke()
   }
   // Light grid for scale reading: lines every 200wu.
   ctx.strokeStyle = 'rgba(80, 200, 120, 0.18)'

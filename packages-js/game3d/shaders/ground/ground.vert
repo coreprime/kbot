@@ -132,9 +132,9 @@ void main() {
     y = uSeabedY + seabedHeight(aPos.xz, uSeabedHeightMul, uSeabedScaleMul, uSeabedRockChance);
   } else if (uGroundMode == 2) {
     y = uGroundY + seaWaveHS(aPos.xz, uTime).x * uWavesIntensity;
-  } else if (uGroundMode == 4) {
-    // Map-terrain mesh: heights are baked into the vertex Y by the
-    // renderer (one vertex per heightmap cell), so no displacement —
+  } else if (uGroundMode == 4 || uGroundMode == 5) {
+    // Map-terrain mesh (4) and its water plane (5): heights / sea level
+    // are baked into the vertex Y by the renderer, so no displacement —
     // and no mountain ring bulging the battlefield.
     y = aPos.y;
   } else {

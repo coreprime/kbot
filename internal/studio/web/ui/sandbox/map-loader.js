@@ -44,6 +44,7 @@ export async function loadSandboxMap(view, path) {
     image, heights,
     w: info.w, h: info.h,
     cellWU: info.cellWU, heightScale: info.heightScale,
+    seaLevel: info.seaLevel | 0,
   })
 
   // Mini-map backdrop + fixed extent.
@@ -77,13 +78,31 @@ export function clearSandboxMap(view) {
 // monarch) at the battlefield's player 1 start — the origin on The Grid.
 export async function spawnFactionLeader(view, commander, sideIndex = 0) {
   if (!commander || !view.scene) return
-  const start = view._sandboxMap?.start || { x: 0, z: 0 }
+  const map = view._sandboxMap
+  const start = map?.start || { x: 0, z: 0 }
+  // Face the action: the leader spawns looking at the map centre, and
+  // the camera settles behind its shoulder looking the same way, so the
+  // first thing the player sees is the direction of the battlefield.
+  const cx = map ? map.worldW / 2 : 0
+  const cz = map ? map.worldH / 2 : 0
+  const dx = cx - start.x
+  const dz = cz - start.z
+  const headingRad = (dx || dz) ? Math.atan2(dx, dz) : 0
   const model = await view.loader.load(commander)
   await view.scene.addUnit({
     name: commander, model,
     x: start.x, z: start.z,
+    headingRad,
     side: sideIndex | 0,
   })
+  if (view.camera && (dx || dz)) {
+    view.camera.target = [start.x, 20, start.z]
+    // Eye sits opposite the look direction: yaw such that the camera
+    // looks from behind the leader toward the centre.
+    view.camera.yaw = Math.atan2(-dx, -dz)
+    view.camera.pitch = 32 * Math.PI / 180
+    view.camera.distance = 420
+  }
 }
 
 function loadImage(url) {

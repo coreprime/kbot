@@ -18,6 +18,7 @@ import { htm as html } from '@kbot/ui/htm-bind'
 import { configurePanelPersistence, setPanelVisible } from '@kbot/ui/panel-store'
 import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
+import { SandboxMinimapPanel } from '/ui/sandbox/minimap-panel.js'
 import { SandboxLaunchFlow } from '/ui/screens/welcome/welcome-screen.js'
 import {
   SandboxRibbon, configureSandboxRibbonBridge, closeSandboxRibbonDropdowns,
@@ -169,6 +170,9 @@ export function configureUi(persistence) {
 // next to the gesture.
 export function mountSandboxPanel({ onSpawn, onMap } = {}) {
   _mountInto('sandbox-panel', () => html`<${SandboxPanel} onSpawn=${onSpawn} onMap=${onMap} />`)
+  // The mini-map rides along with the sandbox panel mount — same panel
+  // chrome, but non-closable (it only hides with sandbox mode itself).
+  _mountInto('sandbox-minimap', () => html`<${SandboxMinimapPanel} />`)
 }
 
 // mountSandboxRibbon — render the React sandbox-mode ribbon into the

@@ -33,6 +33,10 @@ import { getGraphicsOptions, persistGraphicsOptions } from '/ui/common/graphics-
 // (prefs may load after this module is first evaluated).
 const _gfx = signal(getGraphicsOptions())
 
+// _contours — the View menu's contour-lines toggle state (render-side
+// only; reapplied through the bridge whenever flipped).
+const _contours = signal(false)
+
 // setSandboxGraphicsState — partial merge into the Graphics Options
 // state.  Called by the menu rows (to keep ticks in sync with the
 // user's choice) and by the host when it applies persisted prefs.
@@ -279,6 +283,18 @@ export function SandboxRibbon() {
               title="Reset Camera — recentre the camera on the spawn ring with the default angle and zoom."
               dropdownId="sandbox-rb-view-dropdown"
               onClick=${() => _bridge.resetCamera()} />
+            <${MenuRow}
+              icon="🎞"
+              label="Classic Camera"
+              title="Classic Camera — tilt to the original 45-degree top-down battle angle."
+              dropdownId="sandbox-rb-view-dropdown"
+              onClick=${() => _bridge.classicCamera()} />
+            <${MenuToggleRow}
+              icon="🗺"
+              label="Contour Lines"
+              title="Contour Lines — overlay elevation contours on the battlefield terrain."
+              on=${_contours.value}
+              onChange=${(next) => { _contours.value = next; _bridge.setContours(next) }} />
             <${SplitMenuItems}
               dropdownId="sandbox-rb-view-dropdown"
               onSplitH=${() => _bridge.splitActive('h')}

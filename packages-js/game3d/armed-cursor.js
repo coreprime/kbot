@@ -196,6 +196,9 @@ export class ArmedCursor {
       case 'load':   srcName = 'cursorpickup'; break
       case 'unload': srcName = 'cursorunload'; break
       case 'select': srcName = 'cursorselect'; break
+      // Builder hovering an under-construction frame — clicking resumes
+      // the build (both games ship a repair glyph).
+      case 'repair': srcName = 'cursorrepair'; break
       case 'normal': srcName = 'cursornormal'; break
       // primary / secondary / tertiary / attack share the attack glyph by
       // default — but a `dropped` weapon (TDF dropped=1) is a bomb run, so

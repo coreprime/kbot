@@ -25,6 +25,14 @@ uniform sampler2D uTerrainTex;
 // baked-height mesh. uMapRect is (originX, originZ, sizeX, sizeZ) in wu.
 uniform sampler2D uMapTex;
 uniform vec4 uMapRect;
+// Battlefield extras: the raw heightmap as a texture (red channel =
+// height byte / 255), the world-unit scale of one height step, the sea
+// surface Y, plus the fog + contour toggles.
+uniform sampler2D uMapHeightTex;
+uniform float uMapHeightScale;
+uniform float uMapSeaY;
+uniform float uMapFog;       // 1 = horizon haze on battlefields, 0 = clear to the edge
+uniform float uMapContours;  // 1 = overlay elevation contour lines
 uniform float uShadowEnabled;
 uniform float uShadowStrength; // 0..1 scales shadow darkness — used for the construction fade (translucent shadow at low buildPercent, solid at 100)
 uniform vec3 uLightColor2;      // when non-zero, the second sun also casts shadows
@@ -204,11 +212,66 @@ void main() {
     vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
     vec3 base = texture2D(uMapTex, uv).rgb;
     base *= mix(1.0, shadow, 0.85);
+    // Elevation contours: a line at every height interval, derived from
+    // the mesh's own Y so they hug the real terrain. Anti-aliased by
+    // distance so zoomed-out views don't moiré.
+    if (uMapContours > 0.5) {
+      float interval = 8.0 * max(uMapHeightScale, 0.25);
+      float f = abs(fract(vWorldPos.y / interval + 0.5) - 0.5) * interval;
+      float dCamC = length(uEyePos - vWorldPos);
+      float lineW = mix(0.45, 1.6, smoothstep(200.0, 2400.0, dCamC));
+      float line = 1.0 - smoothstep(0.0, lineW, f);
+      base = mix(base, vec3(1.0, 0.85, 0.25), line * 0.35);
+    }
     float dCamM = length(uEyePos - vWorldPos);
-    base = mix(base, uHorizonColor, smoothstep(1800.0, 5500.0, dCamM) * 0.78);
+    base = mix(base, uHorizonColor, smoothstep(1800.0, 5500.0, dCamM) * 0.78 * uMapFog);
     base += pulseLightContribution(vWorldPos);
     base *= mix(vec3(1.0), uSunTint, 0.45);
     gl_FragColor = vec4(base * uExposure, 1.0);
+    return;
+  }
+  if (uGroundMode == 5) {
+    // Battlefield water surface: a translucent animated sheet at sea
+    // level over the real seabed terrain (the map mesh below keeps its
+    // painted bed). Wave energy and opacity both scale with the true
+    // water depth at this point, so puddles lie glassy and near-clear
+    // while open sea rolls and saturates toward the deep tint.
+    vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
+    float bedY = texture2D(uMapHeightTex, uv).r * 255.0 * uMapHeightScale;
+    float depth = uMapSeaY - bedY;
+    if (depth <= 0.3) discard; // dry land pokes through the sheet
+    float t = uTime;
+    float bodyAmp = smoothstep(2.0, 26.0, depth); // small/shallow bodies stay calm
+    vec3 hs = seaWaveHS(vWorldPos.xz, t);
+    float amp = uWavesIntensity * bodyAmp;
+    float h = hs.x * amp;
+    float dhx = hs.y * amp;
+    float dhz = hs.z * amp;
+    float dCam = length(uEyePos - vWorldPos);
+    float closeUp = 1.0 - smoothstep(120.0, 900.0, dCam);
+    vec3 wn = normalize(vec3(-dhx * closeUp, 1.0, -dhz * closeUp));
+
+    float deepMix = smoothstep(1.0, 30.0, depth);
+    vec3 waterCol = mix(uWaterShallow, mix(uWaterMid, uWaterDeep, smoothstep(0.45, 1.0, deepMix)), deepMix);
+
+    vec3 V = normalize(uEyePos - vWorldPos);
+    float ndv = max(0.0, dot(wn, V));
+    float fresnel = pow(1.0 - ndv, 4.0);
+    vec3 L = normalize(uLightDir);
+    vec3 H = normalize(L + V);
+    float ndh = max(0.0, dot(wn, H));
+    float spec = (pow(ndh, 28.0) * 0.25 + pow(ndh, 160.0) * 0.7) * closeUp * uOptSpecular * bodyAmp;
+    vec3 surface = mix(waterCol, uHorizonColor, fresnel * 0.5);
+    surface += spec * vec3(1.45, 1.25, 0.95);
+    // Crest foam only where the body is big enough to raise real waves.
+    float foam = smoothstep(1.0, 2.0, h) * 0.8 * bodyAmp * closeUp;
+    surface = mix(surface, vec3(1.05, 1.08, 1.10), foam);
+    surface *= mix(1.0, shadow, 0.25);
+    surface *= mix(vec3(1.0), uSunTint, 0.35);
+
+    float aOut = mix(0.30, 0.80, deepMix);
+    aOut = mix(aOut, 0.92, fresnel * 0.5);
+    gl_FragColor = vec4(surface * uExposure, aOut * uWaterTranslucency);
     return;
   }
   if (uGroundMode == 0) {

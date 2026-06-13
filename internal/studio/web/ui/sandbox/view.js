@@ -1226,7 +1226,11 @@ export class SandboxView {
       if (hasSelection && hovered && !sel.has(hovered.id)) {
         const selUnits = [...sel].map((id) => this.scene.unitById(id)).filter(Boolean)
         const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((hovered.side | 0)))
-        ambient = sameSide ? 'select' : 'attack'
+        // A mobile builder over a friendly half-built frame reads as the
+        // repair gesture: clicking resumes that construction.
+        const canRepair = sameSide && hovered.buildPercent < 100 &&
+          selUnits.some((u) => u.meta && u.meta.isBuilder && u.meta.canMove !== false)
+        ambient = canRepair ? 'repair' : (sameSide ? 'select' : 'attack')
       } else {
         ambient = 'select'
       }
@@ -2051,6 +2055,18 @@ export class SandboxView {
     // the classic RTS waypoint/target chain.
     const queued = !!e.shiftKey
     if (hit && !this.scene.selected.has(hit.id)) {
+      // Repair gesture: right-clicking a friendly under-construction frame
+      // with mobile builders selected sends them to finish raising it.
+      const selUnits0 = [...this.scene.selected].map((id) => this.scene.unitById(id)).filter((u) => u && !u.dead)
+      const sameSide0 = selUnits0.length > 0 && selUnits0.every((u) => (u.side | 0) === (hit.side | 0))
+      if (sameSide0 && hit.buildPercent < 100) {
+        const builders = selUnits0.filter((u) => u.meta && u.meta.isBuilder && u.meta.canMove !== false)
+        if (builders.length > 0) {
+          for (const b of builders) this.scene.source.repair?.(b.id, hit.id)
+          this.#setStatus(`Repair — ${builders.length} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`)
+          return
+        }
+      }
       // Transport gesture: right-clicking a friendly mobile unit with a
       // transport selected means "pick it up", not "attack an ally".
       const carriers = this.#selectedTransports()

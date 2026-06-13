@@ -151,6 +151,10 @@ export class WasmFrameSource extends FrameSource {
   // ground point — walk into builddistance, then raise the buildee to 100%.
   build(builderId, name, x, z, queued = false) { return this._engine.submitBuild(this._handle, builderId, name, x, z, queued) }
 
+  // repair sends one mobile builder to an existing under-construction frame
+  // to continue raising it (the hover-a-half-built-structure gesture).
+  repair(builderId, targetId) { return this._engine.submitRepair(this._handle, builderId, targetId) }
+
   // patrol appends a patrol waypoint to each unit's queue (consecutive
   // patrol legs loop); stance sets the standing move/fire orders;
   // selfDestruct toggles the 5-second fuse.

@@ -26,6 +26,7 @@ import {
   PARTICLE_CULL_RADIUS_PADDING_WU,
   DEFAULT_SHADOW_LOD_ENABLED,
   SHADOW_LOD_MIN_PX,
+  SHADOW_ZOOM_FADE_MAX,
   LOD_HYSTERESIS,
   TIER_FULL_MIN_PX,
   TIER_MID_MIN_PX,
@@ -407,6 +408,11 @@ export class ModelRenderer {
     // self-shadowing on).
     this.shadowsEnabled = true
     this.shadowStrength = 1.0
+    // Battlefield view options: distance fog over loaded maps (off by
+    // default so zooming out keeps the whole world visible) and the
+    // elevation contour-line overlay (a gameplay-menu toggle).
+    this.mapFogEnabled = false
+    this.contoursEnabled = false
     this.selfShadow = true
     // Distance-LOD toggle for the MAIN pass — at mid tier an entity's
     // cosmetic pieces (flares, muzzles, exhausts; tagged with
@@ -982,6 +988,18 @@ export class ModelRenderer {
     const halfH = this.gl.drawingBufferHeight * 0.5
     const hft = this.camera.halfFovTan || Math.tan(35 * Math.PI / 180 * 0.5)
     return (r / dist) * (halfH / hft)
+  }
+
+  // _shadowZoomFade — global shadow opacity vs camera zoom: shadows hold
+  // full strength out to half the maximum shadow distance, then fade
+  // linearly to nothing at the maximum. Keeps the zoom-out transition
+  // smooth instead of every silhouette popping off at once.
+  _shadowZoomFade() {
+    const d = this.camera?.distance || 0
+    const max = SHADOW_ZOOM_FADE_MAX
+    if (d <= max * 0.5) return 1
+    if (d >= max) return 0
+    return 1 - (d - max * 0.5) / (max * 0.5)
   }
 
   // _castsShadow — distance-based shadow LOD with hysteresis.  Decides
@@ -2497,7 +2515,7 @@ export class ModelRenderer {
     // until the build is nearly done, then snaps to full presence.
     // Then scaled by the Graphics Options shadow-intensity slider.
     const _bps = (this.buildPercent ?? 100) / 100
-    gl.uniform1f(this.uGroundShadowStrength, _bps * _bps * _bps * this.shadowStrength)
+    gl.uniform1f(this.uGroundShadowStrength, _bps * _bps * _bps * this.shadowStrength * this._shadowZoomFade())
     if (this._shadowFBO) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -2610,39 +2628,57 @@ export class ModelRenderer {
     // water column reads as a real ocean depth.
     const seabedY = groundY - 45.0
     gl.uniform1f(this.uGroundSeabedY, seabedY)
-    if (this.groundMode === 'sea') {
-      if (!this._groundPass || this._groundPass === 'seabed') {
-        // Pass 1: seabed (opaque).  Write depth normally so the
-        // reflection + water passes can depth-test against it —
-        // anything geometrically below the bed gets clipped.
-        gl.uniform1f(this.uGroundSeabedActive, 1)
-        gl.disable(gl.BLEND)
-        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
-        gl.enable(gl.BLEND)
-        gl.uniform1f(this.uGroundSeabedActive, 0)
-      }
-      if (!this._groundPass || this._groundPass === 'water') {
-        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
-      }
-    } else {
-      gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
-    }
-    // Loaded battlefield: draw the baked-height map mesh on top of the
-    // infinite plane (which keeps painting the surroundings). Same
-    // program, mode 4 — the vert trusts the baked Y, the frag drapes the
-    // map render across uMapRect.
+    // A loaded battlefield replaces the infinite plane entirely — the
+    // world is exactly the map's extent, not an oversized backdrop.
     const mt = this._mapTerrain
+    if (!mt) {
+      if (this.groundMode === 'sea') {
+        if (!this._groundPass || this._groundPass === 'seabed') {
+          // Pass 1: seabed (opaque).  Write depth normally so the
+          // reflection + water passes can depth-test against it —
+          // anything geometrically below the bed gets clipped.
+          gl.uniform1f(this.uGroundSeabedActive, 1)
+          gl.disable(gl.BLEND)
+          gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+          gl.enable(gl.BLEND)
+          gl.uniform1f(this.uGroundSeabedActive, 0)
+        }
+        if (!this._groundPass || this._groundPass === 'water') {
+          gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+        }
+      } else {
+        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+      }
+    }
+    // Loaded battlefield: the baked-height map mesh (mode 4) and, when
+    // the map declares a sea, a translucent animated water sheet at sea
+    // level (mode 5) the real seabed shows through.
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
-      gl.bindBuffer(gl.ARRAY_BUFFER, mt.vbo)
-      gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
-      gl.uniform1i(this.uGroundModeId, 4)
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
+      gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
+      gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
+      gl.uniform1f(this.uGroundMapHeightScale, mt.heightScale || 1)
       gl.activeTexture(gl.TEXTURE4)
       gl.bindTexture(gl.TEXTURE_2D, mt.tex)
       gl.uniform1i(this.uGroundMapTex, 4)
+      gl.activeTexture(gl.TEXTURE5)
+      gl.bindTexture(gl.TEXTURE_2D, mt.heightTex)
+      gl.uniform1i(this.uGroundMapHeightTex, 5)
+      gl.bindBuffer(gl.ARRAY_BUFFER, mt.vbo)
+      gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
+      gl.uniform1i(this.uGroundModeId, 4)
       gl.disable(gl.BLEND)
       gl.drawArrays(gl.TRIANGLES, 0, mt.count)
       gl.enable(gl.BLEND)
+      if (mt.waterVbo) {
+        gl.uniform1i(this.uGroundModeId, 5)
+        gl.uniform1f(this.uGroundMapSeaY, mt.seaY)
+        gl.bindBuffer(gl.ARRAY_BUFFER, mt.waterVbo)
+        gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
+        gl.depthMask(false)
+        gl.drawArrays(gl.TRIANGLES, 0, 6)
+        gl.depthMask(true)
+      }
     }
     gl.disableVertexAttribArray(this.aGroundPos)
   }
@@ -2651,7 +2687,7 @@ export class ModelRenderer {
   // heightmap baked into vertex Y (one vertex per cell, decimated only
   // past ~90k quads) plus the full map render as its texture. The
   // existing ground plane keeps drawing beneath it for the surroundings.
-  setMapTerrain({ image, heights, w, h, cellWU, heightScale, originX = 0, originZ = 0 }) {
+  setMapTerrain({ image, heights, w, h, cellWU, heightScale, seaLevel = 0, originX = 0, originZ = 0 }) {
     const gl = this.gl
     this.clearMapTerrain()
     if (!image || !heights || !w || !h) return
@@ -2681,14 +2717,55 @@ export class ModelRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW)
     const tex = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, tex)
+    // Pixel-store flags are GLOBAL state: the ground-tile loader uploads
+    // with FLIP_Y on, and inheriting that here mirrors the battlefield
+    // texture vertically against the height mesh (the hill slides off
+    // its texture). Pin both flags for this upload.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
     // NPOT-safe sampling: clamp + linear, no mips.
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    // Raw heightmap as a texture (red byte = height) — the water shader
+    // reads the true bed depth per fragment from it.
+    const heightTex = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, heightTex)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, w, h, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, heights)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    // Water sheet: one quad across the map at sea level. Drawn only when
+    // the map actually declares a sea (seaLevel > 0) — the fragment
+    // shader discards over dry land.
+    let waterVbo = null
+    let seaY = 0
+    let hasWater = false
+    if (seaLevel > 0) {
+      for (let i = 0; i < heights.length; i++) {
+        if (heights[i] < seaLevel) { hasWater = true; break }
+      }
+    }
+    if (hasWater) {
+      seaY = seaLevel * heightScale
+      const x0 = originX, z0 = originZ
+      const x1 = originX + w * cellWU, z1 = originZ + h * cellWU
+      const wq = new Float32Array([
+        x0, seaY, z0,  x1, seaY, z0,  x1, seaY, z1,
+        x0, seaY, z0,  x1, seaY, z1,  x0, seaY, z1,
+      ])
+      waterVbo = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, waterVbo)
+      gl.bufferData(gl.ARRAY_BUFFER, wq, gl.STATIC_DRAW)
+    }
     this._mapTerrain = {
-      vbo, tex,
+      vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
     }
@@ -2700,6 +2777,8 @@ export class ModelRenderer {
     if (!mt) return
     try { gl.deleteBuffer(mt.vbo) } catch { /* context loss */ }
     try { gl.deleteTexture(mt.tex) } catch { /* context loss */ }
+    try { if (mt.heightTex) gl.deleteTexture(mt.heightTex) } catch { /* context loss */ }
+    try { if (mt.waterVbo) gl.deleteBuffer(mt.waterVbo) } catch { /* context loss */ }
     this._mapTerrain = null
   }
 
@@ -2927,7 +3006,7 @@ export class ModelRenderer {
     // Graphics Options shadow controls — uShadowStrength scales the
     // self-shadow darkness, uSelfShadow gates it off entirely.  Both
     // multiply into the unit's shadow term in main.frag.
-    gl.uniform1f(this.uShadowStrength, this.shadowStrength)
+    gl.uniform1f(this.uShadowStrength, this.shadowStrength * this._shadowZoomFade())
     gl.uniform1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
     // Baseline specular scale — the per-batch draw loop overrides this
     // with each group's specScale (from hints-textures.js) for metal-
@@ -3614,6 +3693,11 @@ export class ModelRenderer {
     // draped over a baked-height mesh. See setMapTerrain.
     this.uGroundMapTex = gl.getUniformLocation(prog, 'uMapTex')
     this.uGroundMapRect = gl.getUniformLocation(prog, 'uMapRect')
+    this.uGroundMapHeightTex = gl.getUniformLocation(prog, 'uMapHeightTex')
+    this.uGroundMapHeightScale = gl.getUniformLocation(prog, 'uMapHeightScale')
+    this.uGroundMapSeaY = gl.getUniformLocation(prog, 'uMapSeaY')
+    this.uGroundMapFog = gl.getUniformLocation(prog, 'uMapFog')
+    this.uGroundMapContours = gl.getUniformLocation(prog, 'uMapContours')
     // Lazy-allocate; #renderGround sizes the quad on each draw to keep
     // it large enough for the current model.  For now, a 400×400 plane
     // at y=0 works for every TA unit (largest mass is the Krogoth at
@@ -3856,10 +3940,11 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
     gl.uniform2f(this.uWirePixelOffset, 0, 0)
-    // ARM-green hairline.  Slight transparency keeps the ring from
-    // drowning out the unit underneath; depth still on so taller
-    // foreground geometry (cliffs, other units) properly occludes.
+    // ARM-green hairline.  Depth test OFF: the selection square is UI,
+    // not scenery — it must read over terrain bumps, water and walls
+    // wherever the unit stands.
     gl.uniform4f(this.uWireColor, 0.25, 1.0, 0.40, 0.95)
+    gl.disable(gl.DEPTH_TEST)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._selRingVBO)
     gl.enableVertexAttribArray(this.aWirePos)
     gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
@@ -3899,10 +3984,13 @@ export class ModelRenderer {
       mat[0] =  c * r2; mat[1] = 0;  mat[2]  = -s * r2; mat[3]  = 0
       mat[4] =  0;      mat[5] = 1;  mat[6]  =  0;      mat[7]  = 0
       mat[8] =  s * r2; mat[9] = 0;  mat[10] =  c * r2; mat[11] = 0
-      mat[12] = +t.x || 0; mat[13] = 0.25; mat[14] = +t.z || 0; mat[15] = 1
+      // Ride the unit's own elevation (terrain height / deck) instead of
+      // the world origin plane, which buried rings under any hill.
+      mat[12] = +t.x || 0; mat[13] = (+t.y || 0) + 0.6; mat[14] = +t.z || 0; mat[15] = 1
       gl.uniformMatrix4fv(this.uWireWorld, false, mat)
       gl.drawArrays(gl.LINE_LOOP, 0, 4)
     }
+    gl.enable(gl.DEPTH_TEST)
   }
 
   // #renderParticles emits the alive prefix of the pool as a single

@@ -412,6 +412,12 @@ export class WsFrameSource extends FrameSource {
     this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) }, Queued: !!queued })
   }
 
+  // repair resumes an existing under-construction frame (Build with a
+  // TargetUnit instead of a site).
+  repair(builderId, targetId) {
+    this._send({ Kind: 7, UnitID: builderId >>> 0, TargetUnit: targetId >>> 0 })
+  }
+
   // patrol appends a patrol waypoint (Kind 8); stance sets the standing
   // move/fire orders (Kind 9).
   patrol(unitIds, x, z) {

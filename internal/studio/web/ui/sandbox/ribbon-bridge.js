@@ -89,6 +89,22 @@ export function wireSandboxRibbon() {
         const ids = [...scene.units()].map((u) => u.id)
         for (const id of ids) scene.removeUnit(id)
       },
+      // Classic Camera — the original TA framing: a fixed 45-degree
+      // look-down at the current target, keeping yaw + distance.
+      classicCamera: () => {
+        const view = sb()
+        if (!view || !view.camera) return
+        view.camera.pitch = 45 * Math.PI / 180
+      },
+      // Contour-line overlay over a loaded battlefield's terrain.
+      setContours: (on) => {
+        const view = sb()
+        if (view && view.renderer) view.renderer.contoursEnabled = !!on
+      },
+      getContours: () => {
+        const view = sb()
+        return !!(view && view.renderer && view.renderer.contoursEnabled)
+      },
       resetCamera: () => {
         // Restore the default orbit pose the SandboxView starts at —
         // matches the camera's `open()` initialisation in
