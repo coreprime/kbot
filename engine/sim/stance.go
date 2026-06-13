@@ -120,6 +120,7 @@ func (w *World) stepStance(u *Unit) {
 				u.loco.Pos.DistTo(u.homePos) > fixed.FromInt(12) {
 				u.hasMove = true
 				u.moveTarget = u.homePos
+				u.clearPath()
 			}
 		} else if u.Meta.CanMove && u.moveMode == MoveRoam && u.fireMode != FireHold {
 			w.stepRoamWander(u)

@@ -102,6 +102,16 @@ type Unit struct {
 	IsMoving   bool
 	hasMove    bool
 	moveTarget fixed.Vec2
+	// Global pathfinding (pathfind.go): path is the smoothed waypoint chain
+	// from a Move/Patrol/Build order to its destination, walked in order.
+	// pathTried gates the lazy compute (so a no-path unit doesn't retry
+	// every tick); pathFails counts stall-driven recomputes before the order
+	// is abandoned as unreachable. Derived from deterministic state — not
+	// serialised; a late joiner recomputes from its restored position.
+	path      []fixed.Vec2
+	pathIdx   int
+	pathTried bool
+	pathFails uint8
 
 	hasAttack    bool
 	attackTarget uint32
@@ -307,6 +317,12 @@ type World struct {
 	// terrain is the installed map height field (nil = flat sandbox grid).
 	// Configuration like meta, identical on every peer, never hashed.
 	terrain *Terrain
+
+	// pathScratch is the reusable A* working set (pathfind.go); pathBudget
+	// caps how many units may compute a fresh path per tick so a big group
+	// move spreads its searches over a few ticks instead of one hitch.
+	pathScratch *pathScratch
+	pathBudget  int
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).
@@ -1223,6 +1239,7 @@ func (w *World) ApplyOrder(o order.Order) {
 				u.queue = nil
 				u.hasMove = true
 				u.moveTarget = o.Target
+				u.clearPath()
 				// Move cancels an autonomous attack (as in TA); a committed bomb
 				// run survives so the bomb-and-bail tactic still lays its string.
 				u.hasAttack = false
@@ -1459,6 +1476,7 @@ func (w *World) advanceQueue(u *Unit) {
 		case order.KindMove, order.KindPatrol:
 			u.hasMove = true
 			u.moveTarget = c.target
+			u.clearPath()
 			u.hasAttack = false
 			u.curIsPatrol = c.kind == order.KindPatrol
 			return

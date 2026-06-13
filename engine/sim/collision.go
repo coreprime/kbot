@@ -57,11 +57,16 @@ func steeringRadius(o *Unit) fixed.Fixed {
 // the straight-line path to it. A blocker parked ON the destination is not
 // orbited — the mover heads straight in and the crowded-arrival relax in
 // stepCollisions completes the order.
-func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
-	target := u.moveTarget
+func (w *World) avoidanceTarget(u *Unit, goal fixed.Vec2) fixed.Vec2 {
+	target := goal
 	if u.Meta.IsAircraft {
 		return target
 	}
+	// When a global path is driving, it already routes around every static
+	// structure with clearance — so only DYNAMIC units (other movers) need
+	// local detours here. Skipping the yard-detour avoids the path and the
+	// local steerer fighting over the same building.
+	pathDriving := len(u.path) > 0
 	d := target.Sub(u.loco.Pos)
 	dist := d.Len()
 	if dist < fixed.FromInt(2) {
@@ -84,8 +89,12 @@ func (w *World) avoidanceTarget(u *Unit) fixed.Vec2 {
 		// destination is inside (pad approach). Everyone else still
 		// detours around the footprint: an open factory's side walls are
 		// as solid as a closed one's.
-		if hasYard(o) && o.yardOpen {
-			if yardContainsPoint(o, u.loco.Pos) || yardContainsPoint(o, target) {
+		if hasYard(o) {
+			// Path is handling static structures — ignore them here.
+			if pathDriving {
+				continue
+			}
+			if o.yardOpen && (yardContainsPoint(o, u.loco.Pos) || yardContainsPoint(o, target)) {
 				continue
 			}
 		}

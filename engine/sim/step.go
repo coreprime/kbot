@@ -36,6 +36,10 @@ func (w *World) Step(rt Runtime) {
 	for i := range w.resRate {
 		w.resRate[i] = resourceTally{}
 	}
+	// Per-tick A* budget: a group move triggers many path searches, so cap
+	// how many run this tick — the rest steer directly and pick up a path on
+	// a later tick (deterministic: units are walked in w.order).
+	w.pathBudget = 8
 	if rt != nil {
 		rt.Tick(w.simMs)
 	}
@@ -233,6 +237,7 @@ func (w *World) stepBuilder(u *Unit) {
 		if dist > bd {
 			u.hasMove = true
 			u.moveTarget = u.buildSite
+			u.clearPath()
 			return
 		}
 		u.hasMove = false
@@ -899,28 +904,46 @@ func (u *Unit) inBombDropWindow(slot int, wm WeaponMeta, targetPos fixed.Vec2) b
 func (w *World) stepMovement(u *Unit) {
 	wasMoving := u.IsMoving
 	if u.hasMove && u.Meta.CanMove {
-		// Steer toward the avoidance target — the real destination, or a
-		// tangent point beside a unit blocking the path. Arrival only counts
-		// against the REAL target; touching a detour point just keeps driving
-		// (the detour is recomputed from the live field every tick).
-		// Wedge recovery: an ordered unit that makes no NET progress
-		// across ticks is pinned — a structure pushback or the terrain
-		// blocked-step revert cancelling its locomotion every tick.
-		// Measured at tick ENTRY (last tick's post-collision position) so
-		// the cancellation is visible. Past ~1.2s — comfortably longer
-		// than any turn-in-place — flip its avoidance side so the detour
-		// routes around the blocker's other flank.
+		// Global path: a Move/Patrol/Build destination routes around terrain
+		// (spiral ramps, cliffs) and static structures via A* (pathfind.go);
+		// the unit walks its smoothed waypoints. Local avoidance below layers
+		// dynamic-unit detours on top of the current waypoint.
+		w.ensurePath(u)
+		goal := u.currentGoal()
+		// Wedge recovery: an ordered unit that makes no NET progress across
+		// ticks is pinned (a pushback or the terrain blocked-step revert
+		// cancelling its step). Measured at tick ENTRY so the cancellation is
+		// visible. Past ~1.2s — longer than any turn-in-place — force a path
+		// recompute from here; after a few fruitless retries the destination
+		// is unreachable and the order is abandoned.
 		if u.loco.Pos.DistTo(u.progressPos) < fixed.FromFloat(0.08) {
 			u.stallTicks++
 			if u.stallTicks >= 50 {
 				u.stallTicks = 0
 				u.avoidFlip = !u.avoidFlip
+				u.pathTried = false
+				u.path = nil
+				u.pathIdx = 0
+				u.pathFails++
+				if u.pathFails > 3 {
+					// Genuinely stuck — drop the order.
+					u.hasMove = false
+					u.IsMoving = false
+					u.clearPath()
+					if u.curIsPatrol {
+						u.curIsPatrol = false
+					}
+					if !u.hasAttack {
+						w.advanceQueue(u)
+					}
+					return
+				}
 			}
 		} else if u.stallTicks > 0 {
 			u.stallTicks = 0
 		}
 		u.progressPos = u.loco.Pos
-		steer := w.avoidanceTarget(u)
+		steer := w.avoidanceTarget(u, goal)
 		prePos := u.loco.Pos
 		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
 		u.IsMoving = moving
@@ -931,11 +954,9 @@ func (w *World) stepMovement(u *Unit) {
 			rise := w.groundHeight(u.loco.Pos) - w.groundHeight(prePos)
 			run := u.loco.Pos.DistTo(prePos)
 			if rise > 0 && run > 0 {
-				maxSlope := u.Meta.MaxSlope
-				if maxSlope <= 0 {
-					maxSlope = 16
-				}
-				// Steepness in height units per cell width, against the limit.
+				// Steepness in height units per cell width, against the unit's
+				// scaled climb limit (same limit traversal + pathing use).
+				maxSlope := effectiveMaxSlope(u.Meta)
 				steep := rise.Mul(w.terrain.CellWU).Div(run).Div(fixed.FromInt(maxSlope))
 				mul := fixed.FromInt(1) - fixed.Clamp(steep, 0, fixed.FromInt(1)).Mul(fixed.FromFloat(0.55))
 				cap := u.Meta.maxSpeed().Mul(mul)
@@ -945,48 +966,46 @@ func (w *World) stepMovement(u *Unit) {
 			}
 		}
 		// Terrain legality: a step onto ground the unit cannot traverse
-		// (climb too steep for its movement class, too deep, dry land for
-		// a ship) is refused. The order is only DROPPED when the unit was
-		// squarely marching at its real destination — mid-turn creep (a
-		// unit at a shoreline swinging around still noses forward over the
-		// boundary) and avoidance detour legs keep the order and retry.
+		// (climb too steep for its class, too deep, dry land for a ship) is
+		// refused — the unit holds at the boundary and recomputes its route,
+		// since the path either didn't foresee this (a dynamic shove off it)
+		// or there is no path. The stall detector drops the order if no route
+		// out exists.
 		if !arrived && w.terrain != nil && !w.canTraverse(u.Meta, prePos, u.loco.Pos) && w.canStand(u.Meta, prePos) {
 			u.loco.Pos = prePos
 			u.loco.Speed = 0
 			u.IsMoving = false
-			d := steer.Sub(prePos)
-			arc := fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
-			if arc < 0 {
-				arc = -arc
-			}
-			aligned := arc < 8192 // within ~45° of the steer bearing
-			if aligned && steer == u.moveTarget {
+			u.pathTried = false
+			u.path = nil
+			u.pathIdx = 0
+		}
+		if arrived {
+			if steer != goal {
+				// Reached a dynamic-avoidance detour point beside a mover —
+				// keep driving toward the waypoint.
+				u.IsMoving = true
+			} else if !u.goalIsFinal() {
+				// Reached an intermediate path waypoint — advance to the next.
+				u.pathIdx++
+				u.IsMoving = true
+			} else {
+				// Final arrival.
 				u.hasMove = false
+				u.IsMoving = false
+				u.avoidFlip = false
+				u.stallTicks = 0
+				u.clearPath()
+				// A completed patrol leg re-queues itself at the tail, so N
+				// consecutive patrol commands loop the route indefinitely.
 				if u.curIsPatrol {
-					u.curIsPatrol = false
+					u.enqueue(queuedCommand{kind: order.KindPatrol, target: u.moveTarget})
 				}
+				// A player move completing starts the next shift-queued order. A
+				// chase move (stepAttack walking into range) arrives with hasAttack
+				// still set — the attack is the active order, so its queue waits.
 				if !u.hasAttack {
 					w.advanceQueue(u)
 				}
-			}
-		}
-		if arrived && steer != u.moveTarget {
-			u.IsMoving = true
-		} else if arrived {
-			u.hasMove = false
-			u.IsMoving = false
-			u.avoidFlip = false
-			u.stallTicks = 0
-			// A completed patrol leg re-queues itself at the tail, so N
-			// consecutive patrol commands loop the route indefinitely.
-			if u.curIsPatrol {
-				u.enqueue(queuedCommand{kind: order.KindPatrol, target: u.moveTarget})
-			}
-			// A player move completing starts the next shift-queued order. A
-			// chase move (stepAttack walking into range) arrives with hasAttack
-			// still set — the attack is the active order, so its queue waits.
-			if !u.hasAttack {
-				w.advanceQueue(u)
 			}
 		}
 	} else if u.Meta.IsAircraft && u.atkActive && u.Meta.CanMove {
