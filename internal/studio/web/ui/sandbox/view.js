@@ -2564,27 +2564,75 @@ export class SandboxView {
     return [ (ndcX * 0.5 + 0.5) * rect.width, (1 - (ndcY * 0.5 + 0.5)) * rect.height ]
   }
 
-  // #screenToGround inverts a screen click to a world-space ground
-  // point (y = 0 plane intersect).  Returns [wx, 0, wz] or null when
-  // the click ray doesn't reach the ground.
+  // #terrainHeightAt samples the loaded battlefield's height field at a world
+  // XZ, matching the renderer's mesh Y (heights[idx] * heightScale). Returns 0
+  // when no map terrain is installed (The Grid) so callers fall back to the
+  // flat plane.
+  #terrainHeightAt(wx, wz) {
+    const t = this._terrain
+    if (!t || !t.heights) return 0
+    const cw = t.cellWU || 16
+    let cx = Math.floor(wx / cw)
+    let cz = Math.floor(wz / cw)
+    if (cx < 0) cx = 0; else if (cx > t.w - 1) cx = t.w - 1
+    if (cz < 0) cz = 0; else if (cz > t.h - 1) cz = t.h - 1
+    return t.heights[cz * t.w + cx] * (t.heightScale || 1)
+  }
+
+  // #screenToGround inverts a screen click to a world-space ground point.
+  // With a battlefield loaded it ray-marches the pick ray against the terrain
+  // surface so clicking an elevated feature (a hilltop seen from an angle)
+  // lands ON that feature rather than on the flat y=0 plane far behind it.
+  // Returns [wx, y, wz] (y is the terrain height there) or null. Falls back to
+  // the y=0 plane on The Grid or when no terrain is present.
   #screenToGround(sx, sy) {
     const cam = this.camera
     if (!cam || !cam.eye) return null
     const rect = this.canvas.getBoundingClientRect()
     const ndcX = (sx / rect.width) * 2 - 1
     const ndcY = 1 - (sy / rect.height) * 2
-    // Build inverse view-proj from cam matrices.  OrbitCamera
-    // exposes invViewMatrix + invProjMatrix; fall back to identity
-    // if not available.
     const ivp = (cam.invViewProj && cam.invViewProj()) || null
     if (!ivp) {
       // Crude fallback — assume the click is the camera target XZ.
       return [cam.target?.[0] || 0, 0, cam.target?.[2] || 0]
     }
-    // Two ray-points in clip space (near + far), unproject + ground intersect.
     const nearP = this.#unprojectClip(ivp, ndcX, ndcY, -1)
     const farP  = this.#unprojectClip(ivp, ndcX, ndcY,  1)
     if (!nearP || !farP) return null
+    // Terrain ray-march: step from the near point toward the far point and
+    // stop at the first sample whose ray height has dropped to or below the
+    // terrain surface, then bisect for a clean hit. Only runs when a height
+    // field is loaded; otherwise the y=0 solve below handles The Grid.
+    if (this._terrain && this._terrain.heights) {
+      const STEPS = 256
+      let prevT = 0
+      let prevAbove = nearP[1] - this.#terrainHeightAt(nearP[0], nearP[2])
+      for (let i = 1; i <= STEPS; i++) {
+        const tt = i / STEPS
+        const px = nearP[0] + (farP[0] - nearP[0]) * tt
+        const py = nearP[1] + (farP[1] - nearP[1]) * tt
+        const pz = nearP[2] + (farP[2] - nearP[2]) * tt
+        const above = py - this.#terrainHeightAt(px, pz)
+        if (above <= 0 && prevAbove > 0) {
+          // Crossed the surface between prevT and tt — bisect a few times.
+          let lo = prevT, hi = tt
+          for (let k = 0; k < 12; k++) {
+            const mid = (lo + hi) * 0.5
+            const mx = nearP[0] + (farP[0] - nearP[0]) * mid
+            const my = nearP[1] + (farP[1] - nearP[1]) * mid
+            const mz = nearP[2] + (farP[2] - nearP[2]) * mid
+            if (my - this.#terrainHeightAt(mx, mz) <= 0) hi = mid; else lo = mid
+          }
+          const hx = nearP[0] + (farP[0] - nearP[0]) * hi
+          const hz = nearP[2] + (farP[2] - nearP[2]) * hi
+          return [hx, this.#terrainHeightAt(hx, hz), hz]
+        }
+        prevT = tt
+        prevAbove = above
+      }
+      // No terrain crossing (ray over the void / off-map) — fall through to
+      // the flat-plane solve so an order still lands somewhere sensible.
+    }
     // Ground at y = 0 — parametric ray (1-t)*near + t*far, solve for y=0.
     const dy = farP[1] - nearP[1]
     if (Math.abs(dy) < 1e-6) return null

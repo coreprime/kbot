@@ -70,6 +70,14 @@ export async function loadSandboxMap(view, path, onStep) {
     minimapImage: minimap,
     start,
   }
+  // Keep the height field on the view so click-to-ground picks can ray-march
+  // against the real terrain surface (clicking a hilltop from an angle should
+  // land on the hill, not on the flat y=0 plane far behind it). Matches the
+  // renderer's mesh Y = heights[idx] * heightScale.
+  view._terrain = {
+    heights, w: info.w, h: info.h,
+    cellWU: info.cellWU, heightScale: info.heightScale,
+  }
   if (view.camera) {
     view.camera.target[0] = start.x
     view.camera.target[1] = 0
@@ -83,6 +91,7 @@ export function clearSandboxMap(view) {
   view.scene?.source?.setTerrain?.(null)
   view.renderer?.clearMapTerrain?.()
   view._sandboxMap = null
+  view._terrain = null
 }
 
 // spawnFactionLeader drops the chosen faction's leader unit (commander /
