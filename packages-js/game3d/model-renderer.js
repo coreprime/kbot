@@ -2028,7 +2028,9 @@ export class ModelRenderer {
           gl.depthMask(false)
           const prevWidth = this.wireframeWidth
           this.wireframeWidth = 2
-          this.#renderWireframe([0.3, 1.0, 0.45, 0.85 * pulse])
+          // Red skeleton on an illegal build site, green on a clear one.
+          const rgb = ent.ghostInvalid ? [1.0, 0.28, 0.28] : [0.3, 1.0, 0.45]
+          this.#renderWireframe([rgb[0], rgb[1], rgb[2], 0.85 * pulse])
           this.wireframeWidth = prevWidth
           gl.depthMask(true)
           continue

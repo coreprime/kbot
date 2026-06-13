@@ -1608,7 +1608,7 @@ export class SandboxView {
           if (!gm) { this.#ensureLocalModel(q.name); continue }
           entities.push({
             model: gm,
-            transform: { x: q.x, y: 0, z: q.z, headingRad: Math.PI },
+            transform: { x: q.x, y: this.#terrainHeightAt(q.x, q.z), z: q.z, headingRad: Math.PI },
             ghost: true,
           })
         }
@@ -1620,9 +1620,11 @@ export class SandboxView {
     // solid main pass.
     if (this._placement && this._placement.model) {
       const p = this._placement
-      // Ghost matches the spawned unit's grounding rule — no lift,
-      // feet at y=0.  Symmetric with the live-unit loop above.
-      const lift = 0
+      // Ghost sits on the ground it will be founded on: sample the
+      // battlefield height field at the cursor XZ so the skeleton rests on
+      // the hilltop / shoreline under it instead of hovering at the y=0
+      // sea-plane.  Falls back to 0 on The Grid (flat).
+      const lift = this.#terrainHeightAt(p.pos.x, p.pos.z)
       // Ghost heading — defaults to π (the renderer's +π offset
       // produces a unit facing +Z, the conventional "up" on the
       // overhead grid).  When the user click-drags during placement
@@ -1636,6 +1638,9 @@ export class SandboxView {
         model: p.model,
         transform: { x: p.pos.x, y: lift, z: p.pos.z, headingRad },
         ghost: true,
+        // Red skeleton when the site can't take the structure (too steep,
+        // underwater, overlapping, void); green when it's clear.
+        ghostInvalid: p.canBuild === false,
       })
     }
     // In-flight model-projectiles (missiles / rockets / bombs).  The engine
