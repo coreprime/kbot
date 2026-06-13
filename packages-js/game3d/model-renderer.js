@@ -2795,14 +2795,14 @@ export class ModelRenderer {
     // the composite over the sea cells (which already carry the planet's liquid
     // colour) so greenworld reads blue, lava red, acid green, metal near-black.
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
-    // Cell-centre texture registration. The mesh hangs each cell's height AND
-    // its tile graphic on the cell's corner vertex, so the texture transitions
-    // half a cell early and the shoreline/cliff art rides up a Z-facing wall.
-    // Nudge the texture sample toward the cell centre to re-seat it on the
-    // baked geometry. Expressed in cells; converted to UV. Z only — a half-cell
-    // X slide travels along a wall face, not up it, so X reads correct in-game.
+    // Texture-vs-mesh registration. The draped texture sat shifted from the
+    // baked-height mesh along Z — the shoreline/cliff art rode up Z-facing
+    // walls. Calibrated against the geometry (contour reference) on Bertha
+    // Cleansing: the texture needed pulling 2 cells seaward to seat on the
+    // walls. Expressed in cells, converted to UV. Z only — an X slide travels
+    // along a wall face rather than up it, so X reads correct in-game.
     const TEX_CELL_SHIFT_X = 0
-    const TEX_CELL_SHIFT_Z = 0.5
+    const TEX_CELL_SHIFT_Z = -2
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
