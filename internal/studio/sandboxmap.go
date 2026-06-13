@@ -112,6 +112,12 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		out.W, out.H = m.TAKW, m.TAKH
 		heights = make([]byte, len(m.TAKHeight))
 		copy(heights, m.TAKHeight)
+		// TA:K stores its sea level in the repurposed PTRMapData header slot
+		// (the SeaLevel field holds the U-mapping table instead). Without this
+		// the sim sees no water: ships/sea buildings can't be placed and the
+		// underwater unit tint never triggers. The OTA carries no sealevel for
+		// TA:K, so the header is the only source.
+		out.SeaLevel = int(m.Header.PTRMapData)
 	} else {
 		out.W, out.H = m.AttrW, m.AttrH
 		out.SeaLevel = int(m.Header.SeaLevel)
@@ -142,7 +148,10 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
 	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
 		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
-			if m.IsTAK || out.SeaLevel == 0 {
+			// The OTA sealevel overrides only when it actually carries one;
+			// TA:K OTAs omit it (the level lives in the TNT PTRMapData slot,
+			// already read above), so don't let a zero clobber the header value.
+			if ota.SeaLevel > 0 && (m.IsTAK || out.SeaLevel == 0) {
 				out.SeaLevel = ota.SeaLevel
 			}
 			if len(ota.Schemas) > 0 {

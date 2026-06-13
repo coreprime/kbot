@@ -1427,6 +1427,17 @@ export class ModelRenderer {
     return base
   }
 
+  // _effectiveWaterY is the world-Y of the water surface for the submerged-
+  // geometry tint + reflection clip. In the sandbox a loaded map terrain
+  // defines one sea plane for EVERY unit (use its seaY), so a unit standing in
+  // the sea is tinted below the waterline. _getWaterY() is bounds-relative to a
+  // single model and only makes sense in the unit viewer (no map terrain), where
+  // it returns 0 in multi-entity mode — which left every sandbox unit untinted.
+  _effectiveWaterY() {
+    if (this._mapTerrain) return this._mapTerrain.seaY
+    return this._getWaterY()
+  }
+
   // _fillColor returns the cinematic fill light tint — a cool, ~30% blue
   // tinge of the sky's ambient.  Cool fill against a warm key reads as
   // the classic 3-point film lighting (key=sun, fill=skylight bounce,
@@ -2845,7 +2856,7 @@ export class ModelRenderer {
     // off for this pass.
     gl.uniform1f(this.uSeaActive, 0)
     gl.uniform1f(this.uMainTime, this._fxTimeSec())
-    gl.uniform1f(this.uMainWaterY, this._getWaterY())
+    gl.uniform1f(this.uMainWaterY, this._effectiveWaterY())
     gl.uniform1f(this.uMainWaterOnHull, 0)
     {
       // Submerged-geometry tint colours — share the active environment's
@@ -3043,12 +3054,16 @@ export class ModelRenderer {
     // screen size).
     gl.uniform1f(this.uLightingTier, this._lightingTierCheap ? 1 : 0)
     gl.uniform1f(this.uShadowBias, 0.0025)
-    // Sea bounce/shimmer: only paint onto the hull when the unit is
-    // actually sitting on water AND we're in full studio mode.  Flat
-    // and wireframe modes bypass it.
-    gl.uniform1f(this.uSeaActive, (!flat && this.groundMode === 'sea') ? 1 : 0)
+    // Sea bounce/shimmer: paint the caustic onto the hull in the unit-viewer
+    // Sea backdrop AND on a sandbox map that has water (so a unit wading into
+    // the sea picks up the underwater shimmer). The shader gates the caustic on
+    // water-proximity, so land units well above the surface stay dry. Flat and
+    // wireframe modes bypass it.
+    const seaFx = !flat && (this.groundMode === 'sea' ||
+      (this._mapTerrain != null && this._mapTerrain.seaY > 0))
+    gl.uniform1f(this.uSeaActive, seaFx ? 1 : 0)
     gl.uniform1f(this.uMainTime, this._fxTimeSec())
-    gl.uniform1f(this.uMainWaterY, this._getWaterY())
+    gl.uniform1f(this.uMainWaterY, this._effectiveWaterY())
     gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
