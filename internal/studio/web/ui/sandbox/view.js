@@ -1761,6 +1761,9 @@ export class SandboxView {
     canvas.addEventListener('click', (e) => this.#onClick(e))
     canvas.addEventListener('contextmenu', (e) => this.#onContextMenu(e))
     canvas.addEventListener('mousemove', (e) => this.#onMouseMove(e))
+    // Leaving the canvas drops the hover tooltip so it never strands over
+    // the floating panels.
+    canvas.addEventListener('mouseleave', () => this.#hideResourceTip())
     // Esc cancels placement.  T toggles camera tracking of the first
     // selected unit (mirrors the unit-editor's T-key behaviour, but
     // resolves the target via the scene's selection set since there's
@@ -2001,6 +2004,7 @@ export class SandboxView {
     // updating p.pos to wherever the cursor was, dragging the unit
     // around the field instead of just spinning it.
     if (this._placement) {
+      this.#hideResourceTip()
       if (!this._placementDrag) {
         const world = this.#screenToGround(sx, sy)
         if (world) {
@@ -2024,6 +2028,11 @@ export class SandboxView {
         this._lastHoverUnitId = hoverId
         this.#refreshDefaultCursor()
       }
+      // Resource producers/consumers (solar, mex, factory, fusion, …) show a
+      // small tooltip of their standing metal/energy/mana rates at the cursor.
+      this.#refreshResourceTip(picked, sx, sy)
+    } else {
+      this.#hideResourceTip()
     }
     // Shift-preview — when the user holds Shift with units selected,
     // overlay each selected unit's move-destination + attack-target
@@ -2485,6 +2494,55 @@ export class SandboxView {
       ctx.fillStyle = `hsl(${Math.round(120 * frac)}, 85%, 45%)`
       ctx.fillRect(x, y, Math.round(bw * frac), bh)
     }
+  }
+
+  // #refreshResourceTip shows a small floating tooltip of a hovered unit's
+  // standing resource rates — production (+, green) and consumption (−, red)
+  // for each of the game's economy resources. Nothing draws for a unit with
+  // no economy (most combat units), so the tip only appears over generators,
+  // extractors, factories and the like.
+  #refreshResourceTip(unit, sx, sy) {
+    const meta = unit && !unit.dead && unit.meta
+    if (!meta) { this.#hideResourceTip(); return }
+    const reses = (activeGame() && activeGame().resources) || []
+    const fmt = (v) => (Math.round(v * 10) / 10).toString()
+    let rows = ''
+    for (const r of reses) {
+      const cap = r.key.charAt(0).toUpperCase() + r.key.slice(1)
+      const makes = +meta['makes' + cap] || 0
+      const uses = +meta['uses' + cap] || 0
+      if (makes > 0) {
+        rows += `<div class="restip-row"><span class="restip-val" style="color:#3fb950">+${fmt(makes)}/s</span>` +
+          `<span class="restip-lbl" style="color:${r.color}">${r.label}</span></div>`
+      }
+      if (uses > 0) {
+        rows += `<div class="restip-row"><span class="restip-val" style="color:#f85149">−${fmt(uses)}/s</span>` +
+          `<span class="restip-lbl" style="color:${r.color}">${r.label}</span></div>`
+      }
+    }
+    if (!rows) { this.#hideResourceTip(); return }
+    let tip = this._resourceTip
+    if (!tip || !tip.isConnected) {
+      tip = document.createElement('div')
+      tip.className = 'sandbox-resource-tip'
+      const host = this.canvas && this.canvas.parentElement
+      if (!host) return
+      host.appendChild(tip)
+      this._resourceTip = tip
+    }
+    tip.innerHTML = rows
+    tip.hidden = false
+    // Offset from the cursor; flip to the left near the right edge so it
+    // never spills out of the viewport.
+    const host = tip.parentElement.getBoundingClientRect()
+    const right = sx + 18 + 120 > host.width
+    tip.style.left = right ? `${sx - 18}px` : `${sx + 18}px`
+    tip.style.top = `${sy + 14}px`
+    tip.style.transform = right ? 'translateX(-100%)' : 'none'
+  }
+
+  #hideResourceTip() {
+    if (this._resourceTip) this._resourceTip.hidden = true
   }
 
   #worldToScreen(wx, wy, wz) {

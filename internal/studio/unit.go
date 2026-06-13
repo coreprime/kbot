@@ -153,6 +153,11 @@ type unitMetaJSON struct {
 	MakesMetal  float64 `json:"makesMetal,omitempty"`
 	MakesEnergy float64 `json:"makesEnergy,omitempty"`
 	MakesMana   float64 `json:"makesMana,omitempty"`
+	// UsesEnergy is the standing energy drain (FBI energyuse when positive —
+	// metal makers, radar, jammers). Negative energyuse is solar-style income
+	// and folds into MakesEnergy instead. Surfaced so the hover tooltip can
+	// show consumption alongside production.
+	UsesEnergy float64 `json:"usesEnergy,omitempty"`
 	StoresMetal float64 `json:"storesMetal,omitempty"`
 	StoresEnergy float64 `json:"storesEnergy,omitempty"`
 	StoresMana  float64 `json:"storesMana,omitempty"`
@@ -543,6 +548,8 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.MakesEnergy = info.EnergyMake
 	if info.EnergyUse < 0 {
 		out.MakesEnergy -= info.EnergyUse
+	} else if info.EnergyUse > 0 {
+		out.UsesEnergy = info.EnergyUse
 	}
 	out.MakesMana = info.ManaRechargeRate + info.MogriumIncome
 	out.StoresMetal = float64(info.MetalStorage)

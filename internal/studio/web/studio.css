@@ -7244,6 +7244,28 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 }
 .roster-cost-sep { opacity: 0.45; }
 .roster-cost-item { display: inline-flex; align-items: baseline; gap: 3px; }
+
+/* Per-unit resource-rate tooltip — floats at the cursor while hovering a
+   generator / consumer in the sandbox. */
+.sandbox-resource-tip {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  padding: 4px 7px;
+  background: rgba(12, 13, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sandbox-resource-tip[hidden] { display: none; }
+.restip-row { display: flex; justify-content: space-between; gap: 8px; }
+.restip-val { font-weight: 700; }
+.restip-lbl { font-weight: 600; opacity: 0.85; }
 .roster-cost-label { font-weight: 500; opacity: 0.75; font-size: 8px; text-transform: uppercase; letter-spacing: 0.03em; }
 
 /* Economy bar — bottom-left of the sandbox viewport. Stock vs storage
