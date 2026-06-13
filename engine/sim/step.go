@@ -959,7 +959,7 @@ func (w *World) stepMovement(u *Unit) {
 			if rise > 0 && run > 0 {
 				// Steepness in height units per cell width, against the unit's
 				// scaled climb limit (same limit traversal + pathing use).
-				maxSlope := effectiveMaxSlope(u.Meta)
+				maxSlope := effectiveMaxSlope(u.Meta, w.slopeScalePct())
 				steep := rise.Mul(w.terrain.CellWU).Div(run).Div(fixed.FromInt(maxSlope))
 				mul := fixed.FromInt(1) - fixed.Clamp(steep, 0, fixed.FromInt(1)).Mul(fixed.FromFloat(0.55))
 				cap := u.Meta.maxSpeed().Mul(mul)

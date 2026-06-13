@@ -46,6 +46,34 @@ func TestCanBuildAtRejectsOverlap(t *testing.T) {
 	}
 }
 
+// TestCanBuildAtUnderwaterStructure pins the water-fit rule for a structure
+// that declares MinWaterDepth (an underwater storage / mex): it may only be
+// founded where the sea is deep enough, and is rejected on land — the mirror
+// of a land building's MaxWaterDepth ceiling. Regression for the bug where
+// such a unit (MaxWaterDepth defaulting to 0) read as land-only.
+func TestCanBuildAtUnderwaterStructure(t *testing.T) {
+	w := New(Config{Seed: 7})
+	// Sea level 40: the left half is seabed at height 0 (depth 40), the right
+	// half is dry land at height 60.
+	w.SetTerrain(testTerrain(40, 40, 40, func(cx, _ int) uint8 {
+		if cx < 20 {
+			return 0
+		}
+		return 60
+	}))
+	uw := footMeta("uwms", 4, false)
+	uw.MinWaterDepth = 31
+	uw.MaxSlope = 50
+	deep := fixed.Vec2{X: fixed.FromInt(8 * 16), Z: fixed.FromInt(20 * 16)}
+	land := fixed.Vec2{X: fixed.FromInt(32 * 16), Z: fixed.FromInt(20 * 16)}
+	if !w.canBuildAt(uw, deep) {
+		t.Fatalf("underwater storage should be buildable in deep water")
+	}
+	if w.canBuildAt(uw, land) {
+		t.Fatalf("underwater storage should be rejected on dry land")
+	}
+}
+
 // TestBuildCycleRaisesUnit pins the mobile-builder contract: the builder
 // walks into builddistance of the site, the buildee appears at 0% and rises
 // to 100% at the buildtime/workertime pace, and only then takes orders.
@@ -206,5 +234,37 @@ func TestRepairResumesAbandonedFrame(t *testing.T) {
 	}
 	if u.buildeeID != 0 && u.buildeeID != b.ID {
 		t.Fatalf("repair spawned a different buildee (%d)", u.buildeeID)
+	}
+}
+
+// TestSlopeScalePerTerrain pins the game-aware slope scale: a GROUND2-class
+// unit (MaxSlope 30) must climb a ~25-byte/cell step on a TA:K-scale heightmap
+// (SlopeScalePct 100 → effective 30) — the Athri-Cay island-edge case — yet
+// the same step is refused on a TA-scale grid (40 → effective 12).
+func TestSlopeScalePerTerrain(t *testing.T) {
+	// A 25-unit step up at cell x=10.
+	mk := func(scale int) *Terrain {
+		tr := testTerrain(40, 40, 0, func(cx, _ int) uint8 {
+			if cx >= 10 {
+				return 25
+			}
+			return 0
+		})
+		tr.SlopeScalePct = scale
+		return tr
+	}
+	m := footMeta("araking", 2, true)
+	m.MaxSlope = 30
+	from := fixed.Vec2{X: fixed.FromInt(9*16 + 8), Z: fixed.FromInt(20 * 16)}
+	to := fixed.Vec2{X: fixed.FromInt(10*16 + 8), Z: fixed.FromInt(20 * 16)}
+
+	w := New(Config{Seed: 1})
+	w.SetTerrain(mk(100))
+	if !w.canTraverse(m, from, to) {
+		t.Fatalf("TA:K scale (100): MaxSlope-30 unit should climb a 25-byte step")
+	}
+	w.SetTerrain(mk(40))
+	if w.canTraverse(m, from, to) {
+		t.Fatalf("TA scale (40): a 25-byte step exceeds the 12-effective limit, should be refused")
 	}
 }

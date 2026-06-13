@@ -38,6 +38,9 @@ export async function loadSandboxMap(view, path, onStep) {
       w: info.w, h: info.h,
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
+      // MaxSlope→delta scale for this heightmap (TA 40 / TA:K 100); the sim
+      // defaults it when absent, so older payloads stay TA-calibrated.
+      slopeScalePct: info.slopeScalePct | 0,
       data: heights,
       voids,
     })

@@ -22,6 +22,15 @@ type Terrain struct {
 	// sentinel): nothing stands, walks or builds there. Optional —
 	// nil means no voids.
 	Void []uint8
+	// SlopeScalePct scales a unit's declared MaxSlope onto THIS heightmap's
+	// per-cell delta scale, as a percentage (0 → defaultSlopeScalePct). TA's
+	// coarse attribute grid inflates per-cell deltas ~2.5x relative to the
+	// MaxSlope authoring scale, so TA maps use 40 (the 2/5 calibration that
+	// makes KOTH's spiral ramps the only way up). TA:Kingdoms maps carry a
+	// native heightmap whose deltas sit on the MaxSlope scale directly and run
+	// far steeper (Athri-Cay island edges hit ~30 vs KOTH's ~11), so they use
+	// 100 — otherwise GROUND2 units (MaxSlope 30 → 12) can't climb any island.
+	SlopeScalePct int
 }
 
 // SetTerrain installs (or clears, with nil) the world's height field.
@@ -162,7 +171,7 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	if dh < 0 {
 		dh = -dh
 	}
-	return dh <= effectiveMaxSlope(m)
+	return dh <= effectiveMaxSlope(m, w.slopeScalePct())
 }
 
 // canStepLoco is canTraverse with a small slope margin, used only by the
@@ -192,29 +201,35 @@ func (w *World) canStepLoco(m *UnitMeta, from, to fixed.Vec2) bool {
 	if dh < 0 {
 		dh = -dh
 	}
-	return dh <= effectiveMaxSlope(m)+4
+	return dh <= effectiveMaxSlope(m, w.slopeScalePct())+4
 }
 
-// slopeLimitNum/slopeLimitDen scale the FBI/moveinfo MaxSlope (TA height-byte
-// units, defined over TA's native finer heightfield) onto our coarser 16-wu
-// attribute-cell grid, whose per-step height deltas run ~2.5x larger. Without
-// the scale a commander's MaxSlope=32 lets it climb near-vertical faces; at
-// 2/5 the spiral ramps on maps like King of the Hill become the only way up,
-// as the map designers intended. Calibrated against KOTH's spiral arms.
-const (
-	slopeLimitNum = 2
-	slopeLimitDen = 5
-)
+// defaultSlopeScalePct is the MaxSlope→per-cell-delta scale for a TA-style
+// coarse attribute grid (40 = the 2/5 calibration; see Terrain.SlopeScalePct).
+// Applied whenever a terrain doesn't state its own scale (incl. the flat grid).
+const defaultSlopeScalePct = 40
 
-// effectiveMaxSlope is the per-cell height-delta limit a unit may climb,
-// after scaling its declared MaxSlope onto our heightmap resolution. Shared
-// by traversal, the pathfinder, and the climb slowdown so all three agree.
-func effectiveMaxSlope(m *UnitMeta) int {
+// slopeScalePct is the active MaxSlope scale for the installed height field.
+func (w *World) slopeScalePct() int {
+	if w.terrain != nil && w.terrain.SlopeScalePct > 0 {
+		return w.terrain.SlopeScalePct
+	}
+	return defaultSlopeScalePct
+}
+
+// effectiveMaxSlope is the per-cell height-delta limit a unit may climb, after
+// scaling its declared MaxSlope onto the installed heightmap's delta scale.
+// Shared by traversal, the pathfinder (via canTraverse) and the climb slowdown
+// so all three agree. scalePct comes from the terrain (w.slopeScalePct()).
+func effectiveMaxSlope(m *UnitMeta, scalePct int) int {
 	ms := m.MaxSlope
 	if ms <= 0 {
 		ms = 16
 	}
-	e := ms * slopeLimitNum / slopeLimitDen
+	if scalePct <= 0 {
+		scalePct = defaultSlopeScalePct
+	}
+	e := ms * scalePct / 100
 	if e < 1 {
 		e = 1
 	}
@@ -264,7 +279,16 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 		}
 		return depth >= min
 	}
-	if depth > m.MaxWaterDepth {
+	// A structure that declares MinWaterDepth (an underwater storage / mex /
+	// fusion) must sit in at least that depth — the mirror of a land building's
+	// MaxWaterDepth ceiling. Without this branch its MaxWaterDepth defaults to 0,
+	// so every water cell is rejected and it reads as land-only. The footprint
+	// flatness check below still runs against the seabed.
+	if m.MinWaterDepth > 0 {
+		if depth < m.MinWaterDepth {
+			return false
+		}
+	} else if depth > m.MaxWaterDepth {
 		return false
 	}
 	fx, fz := m.FootprintX, m.FootprintZ

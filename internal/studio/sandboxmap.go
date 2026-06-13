@@ -29,8 +29,16 @@ import (
 // footprint — so one 16-px attribute cell is 16 wu and heights land at the
 // classic 1/2 wu per height unit.
 const (
-	sandboxCellWU      = 16.0
-	sandboxHeightScale = 1.0
+	sandboxCellWU = 16.0
+	// sandboxHeightScale is the world-Y per raw height unit, fed identically to
+	// the sim height field, the rendered mesh, and the click-pick terrain (see
+	// map-loader.js), so they always agree and units sit on the ground. Held at
+	// 0.61 — a 39% cut from the former 1.0 — because the full relief read far
+	// too tall in-game (most glaring on TA:Kingdoms maps). This is a purely
+	// visual/elevation scale: slope, water-depth and build-legality all work on
+	// the raw height bytes, so flattening the look does NOT change what a unit
+	// can climb or where it can build.
+	sandboxHeightScale = 0.61
 	pxPerWU            = 1.0
 )
 
@@ -42,7 +50,11 @@ type sandboxMapJSON struct {
 	H           int     `json:"h"`
 	CellWU      float64 `json:"cellWU"`
 	HeightScale float64 `json:"heightScale"`
-	SeaLevel    int     `json:"seaLevel"`
+	// SlopeScalePct scales unit MaxSlope onto this heightmap's per-cell delta
+	// scale (see sim.Terrain). TA's coarse attribute grid → 40; TA:K's native,
+	// far steeper heightmap → 100, or its GROUND units can't climb island edges.
+	SlopeScalePct int `json:"slopeScalePct"`
+	SeaLevel      int `json:"seaLevel"`
 	WorldW      float64 `json:"worldW"` // world units
 	WorldH      float64 `json:"worldH"`
 	// Heights is the raw row-major heightmap bytes, base64-encoded.
@@ -80,13 +92,20 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TA:K's native heightmap runs ~2.5x steeper per cell than TA's attribute
+	// grid, so it takes MaxSlope at full scale; TA keeps the 2/5 calibration.
+	slopeScalePct := 40
+	if m.IsTAK {
+		slopeScalePct = 100
+	}
 	out := sandboxMapJSON{
-		Path:        mapPath,
-		Name:        strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath)),
-		CellWU:      sandboxCellWU,
-		HeightScale: sandboxHeightScale,
-		TextureURL:  "/api/studio/sandbox-map-texture?path=" + mapPath,
-		MinimapURL:  "/api/studio/minimap/" + mapPath,
+		Path:          mapPath,
+		Name:          strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath)),
+		CellWU:        sandboxCellWU,
+		HeightScale:   sandboxHeightScale,
+		SlopeScalePct: slopeScalePct,
+		TextureURL:    "/api/studio/sandbox-map-texture?path=" + mapPath,
+		MinimapURL:    "/api/studio/minimap/" + mapPath,
 	}
 	var heights []byte
 	if m.IsTAK {

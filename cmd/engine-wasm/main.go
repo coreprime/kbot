@@ -372,11 +372,12 @@ func setTerrain(_ js.Value, args []js.Value) any {
 		return true
 	}
 	t := &sim.Terrain{
-		W:           o.Get("w").Int(),
-		H:           o.Get("h").Int(),
-		CellWU:      fixed.FromFloat(o.Get("cellWU").Float()),
-		HeightScale: fixed.FromFloat(o.Get("heightScale").Float()),
-		SeaLevel:    o.Get("seaLevel").Int(),
+		W:             o.Get("w").Int(),
+		H:             o.Get("h").Int(),
+		CellWU:        fixed.FromFloat(o.Get("cellWU").Float()),
+		HeightScale:   fixed.FromFloat(o.Get("heightScale").Float()),
+		SeaLevel:      o.Get("seaLevel").Int(),
+		SlopeScalePct: o.Get("slopeScalePct").Int(),
 	}
 	data := o.Get("data")
 	n := data.Get("length").Int()
