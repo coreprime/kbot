@@ -2576,9 +2576,18 @@ export class ModelRenderer {
     // an environment that doesn't override a particular stop still
     // looks like temperate ocean.
     const env = this.activeEnvironment || ENVIRONMENT_PRESETS.greenworld
-    gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.10, 0.40, 0.72])
-    gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.04, 0.18, 0.45])
-    gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.01, 0.05, 0.20])
+    // Prefer the per-map water colour sampled from the loaded map's own art
+    // (planet-correct: blue greenworld, red lava, green acid, near-black metal)
+    // over the static environment preset; mid is the shallow→deep midpoint.
+    const wmap = this._mapTerrain
+    const wShallow = (wmap && wmap.waterShallow) || env.waterShallow || [0.10, 0.40, 0.72]
+    const wDeep = (wmap && wmap.waterDeep) || env.waterDeep || [0.01, 0.05, 0.20]
+    const wMid = (wmap && wmap.waterShallow)
+      ? [(wShallow[0] + wDeep[0]) * 0.5, (wShallow[1] + wDeep[1]) * 0.5, (wShallow[2] + wDeep[2]) * 0.5]
+      : (env.waterMid || [0.04, 0.18, 0.45])
+    gl.uniform3fv(this.uGroundWaterShallow, wShallow)
+    gl.uniform3fv(this.uGroundWaterMid,     wMid)
+    gl.uniform3fv(this.uGroundWaterDeep,    wDeep)
     // Keep the surface translucent enough to SEE submerged units through it —
     // an earlier pass made it more opaque, which hid them entirely. The
     // submerged-geometry tint (main.frag) is what reads as "underwater"; the
@@ -2781,10 +2790,47 @@ export class ModelRenderer {
       gl.bindBuffer(gl.ARRAY_BUFFER, waterVbo)
       gl.bufferData(gl.ARRAY_BUFFER, wq, gl.STATIC_DRAW)
     }
+    // Water tint comes from the map's own art, not a hardcoded preset: sample
+    // the composite over the sea cells (which already carry the planet's liquid
+    // colour) so greenworld reads blue, lava red, acid green, metal near-black.
+    const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
+      waterShallow: water && water.shallow,
+      waterDeep: water && water.deep,
+    }
+  }
+
+  // _sampleWaterColor derives the water tint from the map's own composite by
+  // averaging the texture over the cells the sea covers (heights below sea
+  // level), which already hold the planet's liquid colour. Returns
+  // {shallow, deep} in 0..1 RGB, or null with no sea / an unreadable image
+  // (callers fall back to the environment preset). Averaging is orientation-
+  // agnostic, so it's immune to any heightmap/texture axis convention.
+  _sampleWaterColor(image, heights, w, h, seaLevel) {
+    if (!seaLevel || !image || !w || !h) return null
+    try {
+      const cv = (typeof OffscreenCanvas !== 'undefined')
+        ? new OffscreenCanvas(w, h) : document.createElement('canvas')
+      cv.width = w; cv.height = h
+      const ctx = cv.getContext('2d', { willReadFrequently: true })
+      if (!ctx) return null
+      ctx.drawImage(image, 0, 0, w, h) // decimate to one texel per cell
+      const px = ctx.getImageData(0, 0, w, h).data
+      let r = 0, g = 0, b = 0, n = 0
+      for (let i = 0; i < w * h && i * 4 < px.length; i++) {
+        if (heights[i] >= seaLevel) continue // dry land — skip
+        r += px[i * 4]; g += px[i * 4 + 1]; b += px[i * 4 + 2]; n++
+      }
+      if (n === 0) return null
+      r = r / n / 255; g = g / n / 255; b = b / n / 255
+      // Surface = the sampled liquid colour; deeper water darkens toward the
+      // same hue (the shallow→deep gradient the shaders blend along).
+      return { shallow: [r, g, b], deep: [r * 0.18, g * 0.18, b * 0.18] }
+    } catch {
+      return null // tainted/cross-origin canvas — fall back to the preset
     }
   }
 
@@ -2863,8 +2909,9 @@ export class ModelRenderer {
       // water stops so a unit underwater fades toward the same hue as the
       // sea surface above it.
       const wenv = this.activeEnvironment || ENVIRONMENT_PRESETS.greenworld
-      gl.uniform3fv(this.uMainWaterShallow, wenv.waterShallow || [0.10, 0.40, 0.72])
-      gl.uniform3fv(this.uMainWaterDeep, wenv.waterDeep || [0.01, 0.05, 0.20])
+      const wmt = this._mapTerrain
+      gl.uniform3fv(this.uMainWaterShallow, (wmt && wmt.waterShallow) || wenv.waterShallow || [0.10, 0.40, 0.72])
+      gl.uniform3fv(this.uMainWaterDeep, (wmt && wmt.waterDeep) || wenv.waterDeep || [0.01, 0.05, 0.20])
     }
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
