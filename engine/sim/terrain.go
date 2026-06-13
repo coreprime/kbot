@@ -162,11 +162,33 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	if dh < 0 {
 		dh = -dh
 	}
-	maxSlope := m.MaxSlope
-	if maxSlope <= 0 {
-		maxSlope = 16
+	return dh <= effectiveMaxSlope(m)
+}
+
+// slopeLimitNum/slopeLimitDen scale the FBI/moveinfo MaxSlope (TA height-byte
+// units, defined over TA's native finer heightfield) onto our coarser 16-wu
+// attribute-cell grid, whose per-step height deltas run ~2.5x larger. Without
+// the scale a commander's MaxSlope=32 lets it climb near-vertical faces; at
+// 2/5 the spiral ramps on maps like King of the Hill become the only way up,
+// as the map designers intended. Calibrated against KOTH's spiral arms.
+const (
+	slopeLimitNum = 2
+	slopeLimitDen = 5
+)
+
+// effectiveMaxSlope is the per-cell height-delta limit a unit may climb,
+// after scaling its declared MaxSlope onto our heightmap resolution. Shared
+// by traversal, the pathfinder, and the climb slowdown so all three agree.
+func effectiveMaxSlope(m *UnitMeta) int {
+	ms := m.MaxSlope
+	if ms <= 0 {
+		ms = 16
 	}
-	return dh <= maxSlope
+	e := ms * slopeLimitNum / slopeLimitDen
+	if e < 1 {
+		e = 1
+	}
+	return e
 }
 
 // canBuildAt reports whether a structure of the given stats may be founded

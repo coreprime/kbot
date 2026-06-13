@@ -24,9 +24,10 @@ func testTerrain(w, h, seaLevel int, fill func(cx, cz int) uint8) *Terrain {
 // carries the interpolated ground height in PosY.
 func TestTerrainElevation(t *testing.T) {
 	w := New(Config{Seed: 61})
-	// Ramp rising 10 height units per cell along +X.
+	// Ramp rising 6 height units per cell along +X — within the walker's
+	// scaled climb limit (MaxSlope 20 -> ~8).
 	w.SetTerrain(testTerrain(32, 32, 0, func(cx, _ int) uint8 {
-		v := cx * 10
+		v := cx * 6
 		if v > 255 {
 			v = 255
 		}
@@ -36,12 +37,12 @@ func TestTerrainElevation(t *testing.T) {
 	m.MaxSlope = 20
 	id := w.AddUnit("walker", m, nil, fixed.Vec2{X: fixed.FromInt(32), Z: fixed.FromInt(64)}, 0, 0)
 	w.ApplyOrder(order.Stance([]uint32{id}, order.MoveHold, order.FireHold))
-	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(200), Z: fixed.FromInt(64)}))
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(360), Z: fixed.FromInt(64)}))
 	u := w.UnitByID(id)
-	for i := 0; i < 600 && u.hasMove; i++ {
+	for i := 0; i < 900 && u.hasMove; i++ {
 		w.Step(nil)
 	}
-	// At x≈200 the cell height is (200/16)*10 = 125 units -> Y ≈ 62.5.
+	// At x≈360 the cell height is (360/16)*6 ≈ 135 units -> Y ≈ 67.
 	want := w.groundHeight(u.loco.Pos)
 	if u.PosY != want || u.PosY < fixed.FromInt(50) {
 		t.Fatalf("walker PosY=%v, want ground %v (>50)", u.PosY.Float(), want.Float())
@@ -52,10 +53,11 @@ func TestTerrainElevation(t *testing.T) {
 // not a high-maxslope climber starting from the same side.
 func TestTerrainBlocksSteepSlope(t *testing.T) {
 	w := New(Config{Seed: 62})
-	// Flat 0 until x-cell 12, then a 200-unit cliff.
+	// Flat 0 until x-cell 12, then a 60-unit step — a wall to the tank
+	// (scaled limit ~6), a climbable ramp to the high-slope spider (~102).
 	w.SetTerrain(testTerrain(32, 32, 0, func(cx, _ int) uint8 {
 		if cx >= 12 {
-			return 200
+			return 60
 		}
 		return 0
 	}))
