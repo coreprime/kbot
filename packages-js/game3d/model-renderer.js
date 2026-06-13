@@ -2798,11 +2798,11 @@ export class ModelRenderer {
     // Texture-vs-mesh registration. The draped texture sat shifted from the
     // baked-height mesh along Z — the shoreline/cliff art rode up Z-facing
     // walls. Calibrated against the geometry (contour reference) on Bertha
-    // Cleansing: the texture needed pulling 2 cells seaward to seat on the
+    // Cleansing: the texture needed pulling 4 cells seaward to seat on the
     // walls. Expressed in cells, converted to UV. Z only — an X slide travels
     // along a wall face rather than up it, so X reads correct in-game.
     const TEX_CELL_SHIFT_X = 0
-    const TEX_CELL_SHIFT_Z = -2
+    const TEX_CELL_SHIFT_Z = -4
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
