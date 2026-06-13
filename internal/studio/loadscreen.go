@@ -107,8 +107,22 @@ func (sess *Session) renderGAFScreen(data []byte, vpath, seqName string) []byte 
 	if len(target.Frames) == 0 {
 		return nil
 	}
-	name := strings.TrimSuffix(path.Base(strings.ToLower(vpath)), ".gaf")
-	pal := sess.palettes().FeaturePalette(name)
+	// TA:K ships each loading GAF's palette in a sibling <stem>.pcx — a 1×1
+	// palette-carrier file, not an image. Render the frame through it; using
+	// the game's global/feature palette instead is what left the TA:K loading
+	// splash mis-coloured and corrupted. Fall back to the feature palette when
+	// no sibling PCX is present (TA's loadgame.gaf path).
+	var pal *gaf.Palette
+	pcxPath := strings.TrimSuffix(vpath, path.Ext(vpath)) + ".pcx"
+	if pdata, perr := sess.vfs.ReadFile(pcxPath); perr == nil {
+		if pr, rerr := pcx.LoadFromReader(bytes.NewReader(pdata)); rerr == nil && pr.HasEmbeddedPalette() {
+			pal = pr.EmbeddedPalette()
+		}
+	}
+	if pal == nil {
+		name := strings.TrimSuffix(path.Base(strings.ToLower(vpath)), ".gaf")
+		pal = sess.palettes().FeaturePalette(name)
+	}
 	var buf bytes.Buffer
 	if err := target.Frames[len(target.Frames)-1].ToPNG(pal, &buf); err != nil {
 		return nil
