@@ -150,14 +150,26 @@ const _launch = signal(null)
 const _wsBase = () => (typeof window !== 'undefined' && window.__WS_BASE__) || ''
 
 function _startLaunchFlow(onOpenSandbox) {
-  _launch.value = { step: 'map', maps: null, sides: null, mapPath: null, query: '', selectedKey: null, onOpenSandbox }
-  fetch('/api/studio/maps')
-    .then((r) => (r.ok ? r.json() : null))
-    .then((d) => {
-      const cur = _launch.value
-      if (cur) _launch.value = { ...cur, maps: (d && d.maps) || [] }
-    })
-    .catch(() => { const cur = _launch.value; if (cur) _launch.value = { ...cur, maps: [] } })
+  _launch.value = { step: 'map', maps: null, mapsLoading: true, sides: null, mapPath: null, query: '', selectedKey: null, onOpenSandbox }
+  // The server builds the map catalogue (minimap thumbnails) in the
+  // background, returning a `loading` flag until it's done. Poll while it's
+  // loading so maps + thumbnails appear progressively instead of freezing on
+  // whatever the first response happened to carry.
+  const pollMaps = () => {
+    const cur = _launch.value
+    if (!cur || cur.step !== 'map') return // dialog closed / advanced
+    fetch('/api/studio/maps')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const c = _launch.value
+        if (!c || c.step !== 'map') return
+        const stillLoading = !!(d && d.loading)
+        _launch.value = { ...c, maps: (d && d.maps) || [], mapsLoading: stillLoading }
+        if (stillLoading) setTimeout(pollMaps, 700)
+      })
+      .catch(() => { const c = _launch.value; if (c) _launch.value = { ...c, maps: c.maps || [], mapsLoading: false } })
+  }
+  pollMaps()
   fetch('/api/studio/sandbox-sides')
     .then((r) => (r.ok ? r.json() : []))
     .then((sides) => {
@@ -215,7 +227,9 @@ export function SandboxLaunchFlow() {
     return html`
       <${PickerModal} open=${true}
                       title="Choose a battlefield"
-                      sub="The Grid for a blank field, or any map in this workspace."
+                      sub=${st.mapsLoading
+                        ? 'The Grid for a blank field, or any map in this workspace.  ⟳ loading more maps…'
+                        : 'The Grid for a blank field, or any map in this workspace.'}
                       filterPlaceholder="Filter by name, planet, or player count"
                       filterValue=${st.query}
                       onFilterChange=${(v) => { _launch.value = { ...st, query: v } }}
