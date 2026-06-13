@@ -2757,12 +2757,38 @@ export class ModelRenderer {
     // its texture). Pin both flags for this upload.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
-    // NPOT-safe sampling: clamp + linear, no mips.
+    // Upload to a power-of-two SQUARE so WebGL1 can mipmap it. The square is a
+    // non-uniform resize of the map rect, but the ground shader maps UV 0..1
+    // over that same rect, so the stretch cancels on sample. Mipmaps + max
+    // anisotropy give smoothly-blended distance LOD with no shimmer — and they
+    // are what makes the texture seat on the mesh: the old fixed downscale +
+    // no-mip LINEAR sampling of the busy composite produced a map-dependent
+    // aliasing artifact that READ as a registration offset (the -2..-3 cell
+    // "shift" we chased). At full mip detail there is no offset, so texShift
+    // is 0. The canvas resize is a clean centred resample (no offset of its own).
+    const potSize = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096)
+    let texSrc = image
+    if (image.width !== potSize || image.height !== potSize) {
+      const cv = document.createElement('canvas')
+      cv.width = potSize; cv.height = potSize
+      const ctx2 = cv.getContext('2d')
+      ctx2.imageSmoothingEnabled = true
+      if ('imageSmoothingQuality' in ctx2) ctx2.imageSmoothingQuality = 'high'
+      ctx2.drawImage(image, 0, 0, potSize, potSize)
+      texSrc = cv
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texSrc)
+    gl.generateMipmap(gl.TEXTURE_2D)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    const anisoExt = gl.getExtension('EXT_texture_filter_anisotropic') ||
+      gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
+    if (anisoExt) {
+      gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT,
+        gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT))
+    }
     // Raw heightmap as a texture (red byte = height) — the water shader
     // reads the true bed depth per fragment from it.
     const heightTex = gl.createTexture()
@@ -2802,24 +2828,16 @@ export class ModelRenderer {
     // the composite over the sea cells (which already carry the planet's liquid
     // colour) so greenworld reads blue, lava red, acid green, metal near-black.
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
-    // Texture-vs-mesh registration. The draped texture sits shifted from the
-    // baked-height mesh along Z (shoreline/cliff art rides up Z-facing walls).
-    // The shift tracks the texture DOWNSCALE, not a fixed cell count: the
-    // sandbox terrain render is capped at ~2048px on its long edge, and the
-    // registration error in cells equals the downscale factor (source px per
-    // texel) = (world width in px) / (downscaled texture width) = 1/ratio.
-    //   Bertha Cleansing  6176px → 2048  ⇒ ~3.0 cells
-    //   Metal Heck        4192px → 2048  ⇒ ~2.0 cells
-    // A fixed −3 was right on Bertha but drifted ~1 cell south on Metal Heck;
-    // deriving it from the image makes both correct (and any aspect, since the
-    // downscale is uniform). Z only — an X slide travels along a wall face.
-    const imgW = (image && image.width) || (w * cellWU)
-    const shiftCellsZ = -(w * cellWU) / imgW
+    // Texture-vs-mesh registration: none needed. With full mipmap detail the
+    // draped texture seats on the baked-height mesh exactly. The earlier
+    // per-map "offset" (the -2..-3 cell shifts) was a no-mip LINEAR aliasing
+    // artifact on the downscaled composite, not a geometric error — mipmapping
+    // (above) removes it, verified on Bertha Cleansing and Metal Heck.
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
-      texShift: [0, shiftCellsZ / h],
+      texShift: [0, 0],
       waterShallow: water && water.shallow,
       waterDeep: water && water.deep,
     }

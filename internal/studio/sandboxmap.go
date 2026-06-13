@@ -182,7 +182,10 @@ func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "missing path", http.StatusBadRequest)
 		return
 	}
-	maxDim := 2048
+	// 4096 long edge: the client uploads the render to a power-of-two square and
+	// mipmaps it, so it wants real detail to build the mip chain from (the old
+	// 2048 cap left distant terrain shimmering under plain LINEAR sampling).
+	maxDim := 4096
 	if v, err := strconv.Atoi(r.URL.Query().Get("max")); err == nil && v >= 256 && v <= 8192 {
 		maxDim = v
 	}
