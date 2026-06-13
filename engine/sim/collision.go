@@ -217,17 +217,19 @@ func (w *World) legLegal(u *Unit, p fixed.Vec2) bool {
 	l := d.Len()
 	step := fixed.FromInt(20)
 	if l <= step {
-		return true
+		return w.canTraverse(u.Meta, u.loco.Pos, p)
 	}
 	n := l.Div(step).Int()
+	prev := u.loco.Pos
 	for i := 1; i <= n; i++ {
 		t := fixed.FromInt(i).Mul(step).Div(l)
 		q := fixed.Vec2{X: u.loco.Pos.X + d.X.Mul(t), Z: u.loco.Pos.Z + d.Z.Mul(t)}
-		if !w.canStand(u.Meta, q) {
+		if !w.canTraverse(u.Meta, prev, q) {
 			return false
 		}
+		prev = q
 	}
-	return true
+	return w.canTraverse(u.Meta, prev, p)
 }
 
 // yardToWorld is the inverse of yardLocal: structure-local → world.

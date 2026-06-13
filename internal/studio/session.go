@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/tnt"
 	"github.com/coreprime/kbot/games"
 	"github.com/coreprime/kbot/internal/assetrender"
@@ -32,6 +33,12 @@ type Session struct {
 	vfs      *filesystem.VirtualFileSystem
 	renderer *assetrender.Renderer
 	gameHost *gameserver.Server
+
+	// moveinfo.tdf movement classes, lazily parsed once per session and
+	// keyed by class Name (upper-cased) — unit metas resolve their
+	// MovementClass traversal profile through this.
+	moveClassOnce sync.Once
+	moveClassMap  map[string]*ta.MovementClass
 
 	// map catalog + section/feature preview caches (api.go)
 	mapCatalog          *mapCatalogState

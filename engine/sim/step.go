@@ -924,13 +924,33 @@ func (w *World) stepMovement(u *Unit) {
 		prePos := u.loco.Pos
 		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
 		u.IsMoving = moving
-		// Terrain legality: a step into ground the unit cannot traverse
-		// (too steep, too deep, dry land for a ship) is refused. The order
-		// is only DROPPED when the unit was squarely marching at its real
-		// destination — mid-turn creep (a unit at a shoreline swinging
-		// around still noses forward over the boundary) and avoidance
-		// detour legs keep the order and retry next tick.
-		if !arrived && w.terrain != nil && !w.canStand(u.Meta, u.loco.Pos) && w.canStand(u.Meta, prePos) {
+		// Climb slowdown: rising ground bleeds speed in proportion to its
+		// steepness relative to the unit's slope limit — a tank labours up
+		// a hill a spider skips over. Descents and flats run free.
+		if w.terrain != nil && u.IsMoving {
+			rise := w.groundHeight(u.loco.Pos) - w.groundHeight(prePos)
+			run := u.loco.Pos.DistTo(prePos)
+			if rise > 0 && run > 0 {
+				maxSlope := u.Meta.MaxSlope
+				if maxSlope <= 0 {
+					maxSlope = 16
+				}
+				// Steepness in height units per cell width, against the limit.
+				steep := rise.Mul(w.terrain.CellWU).Div(run).Div(fixed.FromInt(maxSlope))
+				mul := fixed.FromInt(1) - fixed.Clamp(steep, 0, fixed.FromInt(1)).Mul(fixed.FromFloat(0.55))
+				cap := u.Meta.maxSpeed().Mul(mul)
+				if cap > 0 && u.loco.Speed > cap {
+					u.loco.Speed = cap
+				}
+			}
+		}
+		// Terrain legality: a step onto ground the unit cannot traverse
+		// (climb too steep for its movement class, too deep, dry land for
+		// a ship) is refused. The order is only DROPPED when the unit was
+		// squarely marching at its real destination — mid-turn creep (a
+		// unit at a shoreline swinging around still noses forward over the
+		// boundary) and avoidance detour legs keep the order and retry.
+		if !arrived && w.terrain != nil && !w.canTraverse(u.Meta, prePos, u.loco.Pos) && w.canStand(u.Meta, prePos) {
 			u.loco.Pos = prePos
 			u.loco.Speed = 0
 			u.IsMoving = false

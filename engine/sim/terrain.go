@@ -106,30 +106,6 @@ func (w *World) waterDepthAt(p fixed.Vec2) int {
 	return d
 }
 
-// slopeAt returns the steepest height delta (height units) between the cell
-// under a world point and its four neighbours — the figure FBI maxslope is
-// compared against.
-func (w *World) slopeAt(p fixed.Vec2) int {
-	t := w.terrain
-	if t == nil {
-		return 0
-	}
-	cx := p.X.Div(t.CellWU).Int()
-	cz := p.Z.Div(t.CellWU).Int()
-	h := t.cellHeight(cx, cz)
-	max := 0
-	for _, d := range [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
-		dh := t.cellHeight(cx+d[0], cz+d[1]) - h
-		if dh < 0 {
-			dh = -dh
-		}
-		if dh > max {
-			max = dh
-		}
-	}
-	return max
-}
-
 // canStand reports whether a unit of the given stats may occupy a world
 // point under the installed terrain: ships and subs need their minimum
 // water depth, surface units respect their maximum depth and slope limits,
@@ -158,16 +134,39 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	if depth > maxDepth {
 		return false
 	}
-	if depth == 0 || m.IsHovercraft {
-		maxSlope := m.MaxSlope
-		if maxSlope <= 0 {
-			maxSlope = 16
-		}
-		if w.slopeAt(p) > maxSlope {
-			return false
-		}
-	}
 	return true
+}
+
+// canTraverse reports whether a unit may STEP from one world point to
+// another: the destination must satisfy canStand (void / water rules) and,
+// when the step crosses into a different terrain cell, the height delta
+// between the two cells must be within the unit's slope limit. The check
+// is directional on purpose — standing beside a cliff and walking along
+// its base is level ground, only climbing it costs slope.
+func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
+	if !w.canStand(m, to) {
+		return false
+	}
+	t := w.terrain
+	if t == nil || m == nil || m.IsAircraft || m.IsShip || m.IsSub {
+		return true
+	}
+	fx := from.X.Div(t.CellWU).Int()
+	fz := from.Z.Div(t.CellWU).Int()
+	tx := to.X.Div(t.CellWU).Int()
+	tz := to.Z.Div(t.CellWU).Int()
+	if fx == tx && fz == tz {
+		return true
+	}
+	dh := t.cellHeight(tx, tz) - t.cellHeight(fx, fz)
+	if dh < 0 {
+		dh = -dh
+	}
+	maxSlope := m.MaxSlope
+	if maxSlope <= 0 {
+		maxSlope = 16
+	}
+	return dh <= maxSlope
 }
 
 // canBuildAt reports whether a structure of the given stats may be founded

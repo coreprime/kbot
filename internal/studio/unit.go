@@ -554,6 +554,21 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	out.MaxSlope = info.MaxSlope
 	out.MaxWaterDepth = info.MaxWaterDepth
 	out.MinWaterDepth = info.MinWaterDepth
+	// A unit naming a MovementClass takes its traversal profile from
+	// gamedata/moveinfo.tdf — the class is authoritative for pathing in
+	// both games (the commander's own MaxSlope=20 is overridden by
+	// TANKDS2's 32, which is why he climbs hills the bare FBI forbids).
+	if mc := sess.moveClass(info.MovementClass); mc != nil {
+		if mc.MaxSlope > 0 {
+			out.MaxSlope = mc.MaxSlope
+		}
+		if mc.MaxWaterDepth > 0 {
+			out.MaxWaterDepth = mc.MaxWaterDepth
+		}
+		if mc.MinWaterDepth > 0 {
+			out.MinWaterDepth = mc.MinWaterDepth
+		}
+	}
 	out.Title = strings.TrimSpace(info.Name)
 	if d := strings.TrimSpace(info.Description); d != "" {
 		if out.Title != "" {
@@ -690,6 +705,36 @@ var soundEventKeys = []string{
 // case-insensitive match.  Unit names in the file system are
 // frequently mixed-case (e.g. ARMCOM.FBI) so we don't trust a
 // straight ReadFile.
+// moveClass resolves a unit's MovementClass name against the game's
+// gamedata/moveinfo.tdf (parsed once per session). Returns nil for an
+// empty name, an unknown class, or a game without the file.
+func (sess *Session) moveClass(name string) *ta.MovementClass {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" {
+		return nil
+	}
+	sess.moveClassOnce.Do(func() {
+		sess.moveClassMap = map[string]*ta.MovementClass{}
+		for _, p := range []string{"gamedata/moveinfo.tdf", "gamedata/MOVEINFO.TDF", "GameData/moveinfo.tdf"} {
+			data, err := sess.vfs.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			var classes []ta.MovementClass
+			if err := tdf.Unmarshal(data, &classes); err != nil {
+				continue
+			}
+			for i := range classes {
+				if n := strings.ToUpper(strings.TrimSpace(classes[i].Name)); n != "" {
+					sess.moveClassMap[n] = &classes[i]
+				}
+			}
+			break
+		}
+	})
+	return sess.moveClassMap[name]
+}
+
 func (sess *Session) loadUnitFBI(name string) (*ta.Unit, error) {
 	data, err := sess.loadUnitFBIBytes(name)
 	if err != nil {

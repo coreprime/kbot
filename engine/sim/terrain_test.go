@@ -233,3 +233,45 @@ func TestShorelineTurnaround(t *testing.T) {
 			u.loco.Pos.X.Float(), u.loco.Pos.Z.Float(), atShore.X.Float(), atShore.Z.Float())
 	}
 }
+
+// TestWalkAlongCliffBase pins directional slope semantics: ground running
+// flat alongside a cliff is walkable even though the adjacent cells tower
+// over it — only CLIMBING costs slope.
+func TestWalkAlongCliffBase(t *testing.T) {
+	w := New(Config{Seed: 33})
+	// A cliff wall along z: cells with x >= 32 are 200 high, the west
+	// plain is 10. Walking north-south at the base (x cell 31) is flat.
+	data := make([]uint8, 64*64)
+	for cz := 0; cz < 64; cz++ {
+		for cx := 0; cx < 64; cx++ {
+			h := uint8(10)
+			if cx >= 32 {
+				h = 200
+			}
+			data[cz*64+cx] = h
+		}
+	}
+	w.SetTerrain(&Terrain{W: 64, H: 64, CellWU: fixed.FromInt(16), HeightScale: fixed.FromInt(1), Data: data})
+	m := testMeta("tank")
+	m.Weapons[0] = WeaponMeta{}
+	m.MaxSlope = 14
+	id := w.AddUnit("tank", m, nil, fixed.Vec2{X: fixed.FromInt(500), Z: fixed.FromInt(200)}, 0, 0)
+	u := w.UnitByID(id)
+	goal := fixed.Vec2{X: fixed.FromInt(500), Z: fixed.FromInt(800)}
+	w.ApplyOrder(order.Move([]uint32{id}, goal))
+	for i := 0; i < 4000 && u.hasMove; i++ {
+		w.Step(nil)
+	}
+	if u.loco.Pos.DistTo(goal) > fixed.FromInt(40) {
+		t.Fatalf("tank could not walk along the cliff base: stopped at (%v,%v)",
+			u.loco.Pos.X.Float(), u.loco.Pos.Z.Float())
+	}
+	// And the cliff itself stays unclimbable.
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(700), Z: fixed.FromInt(800)}))
+	for i := 0; i < 2000 && u.hasMove; i++ {
+		w.Step(nil)
+	}
+	if u.loco.Pos.X > fixed.FromInt(520) {
+		t.Fatalf("tank climbed a 190-unit cliff (x=%v)", u.loco.Pos.X.Float())
+	}
+}
