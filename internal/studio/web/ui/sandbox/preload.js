@@ -8,6 +8,7 @@
 // logs and advances rather than stalling the bar.
 
 import { loadSandboxMap, spawnFactionLeader } from './map-loader.js'
+import { withCobBytes } from '../../engine/net/cob-bytes.js'
 
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
@@ -87,9 +88,15 @@ export async function runSandboxPreload(view, { mapPath, faction }, onProgress) 
       const MAX = 400 // runaway guard
       while (queue.length && all.length < MAX) {
         const name = queue.shift()
-        const meta = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+        const raw = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
           .then((r) => (r.ok ? r.json() : null)).catch(() => null)
-        if (!meta) continue
+        if (!raw) continue
+        // Attach the unit's COB bytecode now so the meta the engine's spawn
+        // resolver reads is script-ready: a buildee or resolver-spawned unit
+        // runs Create/Activate/aim threads without a first-use fetch (and so
+        // an ActivateWhenBuilt structure actually opens). Best-effort — a
+        // unit with no script is returned unchanged.
+        const meta = await withCobBytes(name, raw).catch(() => raw)
         all.push(name)
         try { view.scene?._spawnMetas?.set(name, meta) } catch { /* best-effort */ }
         for (const opt of (Array.isArray(meta.buildOptions) ? meta.buildOptions : [])) {
@@ -101,6 +108,9 @@ export async function runSandboxPreload(view, { mapPath, faction }, onProgress) 
         await Promise.allSettled([
           _preloadImage(wsUrl(`/api/studio/buildpic/${encodeURIComponent(name)}`)),
           view.loader ? view.loader.load(name).catch(() => null) : Promise.resolve(),
+          // Warm the decompiled-COB endpoint the renderer reads for the
+          // piece-name map, so the first spawn's pose binding is instant.
+          fetch(`/api/studio/cob/${encodeURIComponent(name)}?decompile=0`).catch(() => null),
         ])
         done++
         ustep(0.4 + 0.6 * (done / Math.max(1, all.length)), `Preloading units… (${done}/${all.length})`)
