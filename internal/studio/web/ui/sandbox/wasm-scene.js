@@ -110,6 +110,22 @@ class WasmUnit {
       set moveOrders(v) { self._scene.source.stance([self.id], v | 0, self._stance.fire) },
       get fireOrders() { return self._stance.fire },
       set fireOrders(v) { self._scene.source.stance([self.id], self._stance.move, v | 0) },
+      // Activation — the "Active" pill. Reads the unit's real COB ACTIVATION
+      // port (so an auto-activated solar reads On, not the previously-missing
+      // undefined→Off). Writing toggles it: run the Activate/Deactivate script
+      // so the structure visibly opens/closes, then set the port so the read
+      // and the pill stay in sync.
+      get activation() {
+        const src = self._scene.source
+        return (src && src.getUnitValue) ? (src.getUnitValue(self.id, 1) | 0) : 0
+      },
+      set activation(v) {
+        const on = !!(v | 0)
+        const src = self._scene.source
+        if (!src) return
+        if (src.startScript) src.startScript(self.id, on ? 'Activate' : 'Deactivate')
+        if (src.setUnitValue) src.setUnitValue(self.id, 1, on ? 1 : 0)
+      },
     }
     this._cobPieceNames = []
     this.pos = { x: 0, y: 0, z: 0 }
