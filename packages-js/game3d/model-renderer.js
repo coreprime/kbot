@@ -2566,7 +2566,10 @@ export class ModelRenderer {
     gl.uniform3fv(this.uGroundWaterShallow, env.waterShallow || [0.10, 0.40, 0.72])
     gl.uniform3fv(this.uGroundWaterMid,     env.waterMid     || [0.04, 0.18, 0.45])
     gl.uniform3fv(this.uGroundWaterDeep,    env.waterDeep    || [0.01, 0.05, 0.20])
-    gl.uniform1f(this.uGroundWaterTranslucency, env.waterTranslucency ?? 1.0)
+    // Pull the surface a touch more opaque than the per-world value — the
+    // sandbox read as "too clear", units under it looking like they floated
+    // in air. The submerged-unit tint (main.frag) does the rest of the work.
+    gl.uniform1f(this.uGroundWaterTranslucency, (env.waterTranslucency ?? 1.0) * 0.7)
     gl.uniform3fv(this.uGroundSeabedSand,    env.seabedSand    || [0.25, 0.32, 0.30])
     gl.uniform3fv(this.uGroundSeabedRock,    env.seabedRock    || [0.14, 0.18, 0.18])
     gl.uniform3fv(this.uGroundSeabedCaustic, env.seabedCaustic || [0.35, 0.65, 0.95])
@@ -2841,6 +2844,14 @@ export class ModelRenderer {
     gl.uniform1f(this.uMainTime, this._fxTimeSec())
     gl.uniform1f(this.uMainWaterY, this._getWaterY())
     gl.uniform1f(this.uMainWaterOnHull, 0)
+    {
+      // Submerged-geometry tint colours — share the active environment's
+      // water stops so a unit underwater fades toward the same hue as the
+      // sea surface above it.
+      const wenv = this.activeEnvironment || ENVIRONMENT_PRESETS.greenworld
+      gl.uniform3fv(this.uMainWaterShallow, wenv.waterShallow || [0.10, 0.40, 0.72])
+      gl.uniform3fv(this.uMainWaterDeep, wenv.waterDeep || [0.01, 0.05, 0.20])
+    }
     gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
     gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
@@ -3547,6 +3558,8 @@ export class ModelRenderer {
     this.uSeaActive = gl.getUniformLocation(prog, 'uSeaActive')
     this.uMainTime = gl.getUniformLocation(prog, 'uTime')
     this.uMainWaterY = gl.getUniformLocation(prog, 'uWaterY')
+    this.uMainWaterShallow = gl.getUniformLocation(prog, 'uWaterShallow')
+    this.uMainWaterDeep = gl.getUniformLocation(prog, 'uWaterDeep')
     this.uMainWavesIntensity = gl.getUniformLocation(prog, 'uWavesIntensity')
     this.uMainWaterOnHull = gl.getUniformLocation(prog, 'uWaterOnHull')
     this.uMainTeamColor = gl.getUniformLocation(prog, 'uTeamColor')

@@ -56,6 +56,8 @@ uniform float uSeaActive;     // 1 in Sea mode - adds caustic bounce light + sun
 uniform float uTime;          // shared sea time (for the bounce light to animate with the water)
 uniform float uWaterY;        // world Y of the water plane - fades reflections out above it
 uniform float uWaterOnHull;   // Water Surface Reflections toggle - 0 disables hull bounce/shimmer
+uniform vec3  uWaterShallow;  // sunlit near-surface water tint (submerged-geometry colouring)
+uniform vec3  uWaterDeep;     // abyssal water tint - geometry deeper than the surface fades toward it
 uniform vec3 uTeamColor;      // selected team colour in linear RGB
 uniform float uTeamColorEnable; // 0 = original blue (no recolour), 1 = hue-shift toward uTeamColor
 uniform float uSpecScale;       // per-batch specular multiplier — >1 on Surface-Hints-detected metal textures, 1 elsewhere
@@ -614,6 +616,19 @@ void main() {
   // piece-light-overrides table; pulse intensity is computed JS-side
   // and baked into the alpha channel, leaving the shader pure.
   col += uPieceGlow.rgb * uPieceGlow.a;
+  // Underwater tint — geometry below the water plane fades toward the water's
+  // own colour (shallow tint near the surface, deep tint further down), the
+  // blend strengthening with depth.  A unit wading at the shoreline gets
+  // coloured feet and a clear head; one fully submerged reads as wholly under
+  // water rather than floating clear in invisible water.  Skipped in the
+  // reflection pass, which has its own underwater hue shift below.
+  if (uReflectionTint < 0.5) {
+    float underDepth = uWaterY - vWorldPos.y;
+    if (underDepth > 0.0) {
+      vec3 wtint = mix(uWaterShallow, uWaterDeep, clamp(underDepth / 40.0, 0.0, 1.0));
+      col = mix(col, wtint, clamp(underDepth / 22.0, 0.0, 0.85));
+    }
+  }
   if (uReflectionTint > 0.5) {
     // Mirror reflection underwater: shift toward the deep-water
     // hue but keep most of the original brightness so the
