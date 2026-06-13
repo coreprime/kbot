@@ -48,7 +48,7 @@ export function startBuildWatcher() {
   if (started) return
   started = true
   check()
-  setInterval(check, 12000)
+  setInterval(check, 10000)
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) check()
   })
