@@ -2797,12 +2797,14 @@ export class ModelRenderer {
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
     // Texture-vs-mesh registration. The draped texture sat shifted from the
     // baked-height mesh along Z — the shoreline/cliff art rode up Z-facing
-    // walls. Calibrated against the geometry (contour reference) on Bertha
-    // Cleansing: the texture needed pulling 4 cells seaward to seat on the
-    // walls. Expressed in cells, converted to UV. Z only — an X slide travels
-    // along a wall face rather than up it, so X reads correct in-game.
+    // walls. Calibrated live against the geometry (contour reference) and
+    // confirmed on both a TA metal map (Bertha Cleansing) and a TA:K map: the
+    // texture seats on the walls pulled 3 cells seaward in Z. Per-cell (1/h),
+    // so the same constant lands correctly across map sizes and both games.
+    // Z only — an X slide travels along a wall face rather than up it, so X
+    // reads correct in-game.
     const TEX_CELL_SHIFT_X = 0
-    const TEX_CELL_SHIFT_Z = -4
+    const TEX_CELL_SHIFT_Z = -3
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
