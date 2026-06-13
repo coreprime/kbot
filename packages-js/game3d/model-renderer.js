@@ -2802,21 +2802,24 @@ export class ModelRenderer {
     // the composite over the sea cells (which already carry the planet's liquid
     // colour) so greenworld reads blue, lava red, acid green, metal near-black.
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
-    // Texture-vs-mesh registration. The draped texture sat shifted from the
-    // baked-height mesh along Z — the shoreline/cliff art rode up Z-facing
-    // walls. Calibrated live against the geometry (contour reference) and
-    // confirmed on both a TA metal map (Bertha Cleansing) and a TA:K map: the
-    // texture seats on the walls pulled 3 cells seaward in Z. Per-cell (1/h),
-    // so the same constant lands correctly across map sizes and both games.
-    // Z only — an X slide travels along a wall face rather than up it, so X
-    // reads correct in-game.
-    const TEX_CELL_SHIFT_X = 0
-    const TEX_CELL_SHIFT_Z = -3
+    // Texture-vs-mesh registration. The draped texture sits shifted from the
+    // baked-height mesh along Z (shoreline/cliff art rides up Z-facing walls).
+    // The shift tracks the texture DOWNSCALE, not a fixed cell count: the
+    // sandbox terrain render is capped at ~2048px on its long edge, and the
+    // registration error in cells equals the downscale factor (source px per
+    // texel) = (world width in px) / (downscaled texture width) = 1/ratio.
+    //   Bertha Cleansing  6176px → 2048  ⇒ ~3.0 cells
+    //   Metal Heck        4192px → 2048  ⇒ ~2.0 cells
+    // A fixed −3 was right on Bertha but drifted ~1 cell south on Metal Heck;
+    // deriving it from the image makes both correct (and any aspect, since the
+    // downscale is uniform). Z only — an X slide travels along a wall face.
+    const imgW = (image && image.width) || (w * cellWU)
+    const shiftCellsZ = -(w * cellWU) / imgW
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
-      texShift: [TEX_CELL_SHIFT_X / w, TEX_CELL_SHIFT_Z / h],
+      texShift: [0, shiftCellsZ / h],
       waterShallow: water && water.shallow,
       waterDeep: water && water.deep,
     }
