@@ -75,26 +75,37 @@ export async function runSandboxPreload(view, { mapPath, faction }, onProgress) 
     const ustep = phase(w.units, 'Preloading units…')
     try {
       ustep(0.02)
-      const meta = await fetch(`/api/studio/unit/${encodeURIComponent(faction.commander)}`)
-        .then((r) => (r.ok ? r.json() : null))
-      const opts = (meta && Array.isArray(meta.buildOptions)) ? meta.buildOptions : []
-      if (opts.length === 0) {
-        ustep(1)
-      } else {
-        let done = 0
-        for (const name of opts) {
-          await Promise.allSettled([
-            // Unit meta (build costs, footprint, weapons, its own buildOptions).
-            fetch(`/api/studio/unit/${encodeURIComponent(name)}`).then((r) => r.ok && r.json()).catch(() => null),
-            // Build picture for the dock cell.
-            _preloadImage(wsUrl(`/api/studio/buildpic/${encodeURIComponent(name)}`)),
-            // Model geometry + textures into the renderer's loader cache.
-            view.loader ? view.loader.load(name).catch(() => null) : Promise.resolve(),
-          ])
-          done++
-          ustep(done / opts.length, `Preloading units… (${done}/${opts.length})`)
+      // Walk the WHOLE build tree (commander → factories → their units → …),
+      // not just the commander's direct options, so selecting a factory or
+      // hovering/building anything never triggers a first-use fetch. Metas are
+      // registered into the scene's spawn-meta cache (the local engine's
+      // resolver plus the build / canBuildAt / resource-tooltip paths read it),
+      // and build pictures + model geometry warm into their caches.
+      const seen = new Set([faction.commander])
+      const queue = [faction.commander]
+      const all = []
+      const MAX = 400 // runaway guard
+      while (queue.length && all.length < MAX) {
+        const name = queue.shift()
+        const meta = await fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+          .then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        if (!meta) continue
+        all.push(name)
+        try { view.scene?._spawnMetas?.set(name, meta) } catch { /* best-effort */ }
+        for (const opt of (Array.isArray(meta.buildOptions) ? meta.buildOptions : [])) {
+          if (!seen.has(opt)) { seen.add(opt); queue.push(opt) }
         }
       }
+      let done = 0
+      for (const name of all) {
+        await Promise.allSettled([
+          _preloadImage(wsUrl(`/api/studio/buildpic/${encodeURIComponent(name)}`)),
+          view.loader ? view.loader.load(name).catch(() => null) : Promise.resolve(),
+        ])
+        done++
+        ustep(0.4 + 0.6 * (done / Math.max(1, all.length)), `Preloading units… (${done}/${all.length})`)
+      }
+      ustep(1)
     } catch (e) {
       ustep(1)
       console.warn('preload: units failed', e)
