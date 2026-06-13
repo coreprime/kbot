@@ -197,8 +197,33 @@ func effectiveMaxSlope(m *UnitMeta) int {
 // footprint (is the plot flat enough?), not the steepest single step — the
 // per-cell rule would refuse almost every site on naturally bumpy maps.
 func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
+	if m == nil {
+		return true
+	}
+	// Buildings can't stack — reject a footprint that overlaps an existing
+	// standing structure. Runs first, in world units, so it applies on The
+	// Grid (no height field) as well as on loaded maps.
+	phx, phz := yardHalfExtents(m)
+	for _, id := range w.order {
+		o := w.units[id]
+		if o == nil || o.Dead || o.Meta == nil || o.Meta.CanMove {
+			continue
+		}
+		ohx, ohz := yardHalfExtents(o.Meta)
+		dx := p.X - o.loco.Pos.X
+		if dx < 0 {
+			dx = -dx
+		}
+		dz := p.Z - o.loco.Pos.Z
+		if dz < 0 {
+			dz = -dz
+		}
+		if dx < phx+ohx && dz < phz+ohz {
+			return false
+		}
+	}
 	t := w.terrain
-	if t == nil || m == nil {
+	if t == nil {
 		return true
 	}
 	depth := w.waterDepthAt(p)
@@ -242,6 +267,21 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 		maxSlope = 16
 	}
 	return hi-lo <= maxSlope
+}
+
+// CanBuildAt reports whether unit type `name` may legally occupy the ground
+// point — the exported form the studio client calls to colour the build
+// placement ghost (green vs red). Unknown types stay neutral (true) so a
+// missing spawn fn never paints a false negative.
+func (w *World) CanBuildAt(name string, x, z fixed.Fixed) bool {
+	if w.spawn == nil {
+		return true
+	}
+	m, _ := w.spawn(name)
+	if m == nil {
+		return true
+	}
+	return w.canBuildAt(m, fixed.Vec2{X: x, Z: z})
 }
 
 // settleOnTerrain pins a surface unit's Y to the ground (ships ride the

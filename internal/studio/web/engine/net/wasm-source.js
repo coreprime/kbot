@@ -149,7 +149,14 @@ export class WasmFrameSource extends FrameSource {
 
   // build sends one mobile builder to construct unit type `name` at the
   // ground point — walk into builddistance, then raise the buildee to 100%.
-  build(builderId, name, x, z, queued = false) { return this._engine.submitBuild(this._handle, builderId, name, x, z, queued) }
+  build(builderId, name, x, z, queued = false, headingRad = 0) { return this._engine.submitBuild(this._handle, builderId, name, x, z, queued, headingRad) }
+
+  // canBuildAt is a read-only legality probe (terrain fit + no building
+  // overlap) the client uses to colour the build-placement ghost. Returns
+  // true on any error so the ghost never falsely reads as blocked.
+  canBuildAt(name, x, z) {
+    try { return !!this._engine.canBuildAt(this._handle, name, x, z) } catch { return true }
+  }
 
   // repair sends one mobile builder to an existing under-construction frame
   // to continue raising it (the hover-a-half-built-structure gesture).

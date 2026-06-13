@@ -37,9 +37,9 @@ func factoryWorld() *World {
 func TestFactoryProducesQueueInOrder(t *testing.T) {
 	w := factoryWorld()
 	fac := w.AddUnit("factory", factoryMeta(), nil, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
-	w.ApplyOrder(order.Build(fac, "jeep", fixed.Vec2{}))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
+	w.ApplyOrder(order.Build(fac, "jeep", fixed.Vec2{}, 0))
 
 	u := w.UnitByID(fac)
 	if len(u.prodQueue) != 3 {
@@ -104,7 +104,7 @@ func TestFactoryStopClearsQueue(t *testing.T) {
 	w := factoryWorld()
 	fac := w.AddUnit("factory", factoryMeta(), nil, fixed.Vec2{}, 0, 0)
 	for i := 0; i < 4; i++ {
-		w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+		w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
 	}
 	u := w.UnitByID(fac)
 	for i := 0; i < 40 && u.buildState != buildRaising; i++ {
@@ -134,7 +134,7 @@ func TestFactoryRallyOrders(t *testing.T) {
 	if len(u.queue) != 2 {
 		t.Fatalf("factory rally template should hold 2 entries, got %d", len(u.queue))
 	}
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
 	var tank *Unit
 	for i := 0; i < 40*60 && tank == nil; i++ {
 		w.Step(nil)

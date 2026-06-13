@@ -144,7 +144,7 @@ func TestFactoryYardOpensWhileProducing(t *testing.T) {
 	if u.yardOpen {
 		t.Fatalf("idle factory yard should be closed")
 	}
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
 	w.Step(nil)
 	if !u.yardOpen {
 		t.Fatalf("producing factory yard should be open")

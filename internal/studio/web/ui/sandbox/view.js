@@ -501,7 +501,18 @@ export class SandboxView {
       // takes over from the first event onwards.
       const tx = (this.camera && this.camera.target) ? this.camera.target[0] : 0
       const tz = (this.camera && this.camera.target) ? this.camera.target[2] : 0
-      this._placement = { name, model, cobScript, side: (side | 0), pos: { x: tx, z: tz } }
+      this._placement = { name, model, cobScript, side: (side | 0), pos: { x: tx, z: tz }, canBuild: true, foot: null }
+      // Footprint (FBI footprintx/z, map squares) for the ground build-square
+      // outline. Fetched once per placement; the outline falls back to a 2×2
+      // square until it lands.
+      fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((meta) => {
+          if (this._placement && this._placement.name === name && meta) {
+            this._placement.foot = { x: meta.footprintX || 2, z: meta.footprintZ || 2 }
+          }
+        })
+        .catch(() => { /* outline uses the 2×2 default */ })
       this.#refreshEntities()
       this.#setStatus(`Placing ${name} — click to confirm, Esc to cancel.`)
       return true
@@ -624,7 +635,7 @@ export class SandboxView {
           // Shift queues the site behind the builder's current job (and
           // keeps placement armed — see the single-shot gate above), so
           // the user can lay out a whole base plan in one pass.
-          await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2], !!ev.shiftKey)
+          await this.scene.build?.(p.buildFor, p.name, startWorld[0], startWorld[2], !!ev.shiftKey, drag ? drag.headingRad : 0)
           this.#setStatus(ev.shiftKey
             ? `Build queued — ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}); shift-click to queue more.`
             : `Build ordered — constructing ${p.name} at (${startWorld[0].toFixed(0)}, ${startWorld[2].toFixed(0)}).`)
@@ -2010,6 +2021,13 @@ export class SandboxView {
         if (world) {
           this._placement.pos.x = world[0]
           this._placement.pos.z = world[2]
+          // Legality for the build-square colour (green = buildable, red =
+          // blocked: water/void/slope/overlap). Only the construction-site
+          // flow gates on this; a plain spawn ghost stays neutral. Queried on
+          // move (not per frame) so the wasm round-trip is cheap.
+          if (this._placement.buildFor && this.scene && this.scene.canBuildAt) {
+            try { this._placement.canBuild = !!this.scene.canBuildAt(this._placement.name, world[0], world[2]) } catch { /* keep last */ }
+          }
           this.#refreshEntities()
         }
       }
@@ -2469,6 +2487,11 @@ export class SandboxView {
       ctx.strokeText(String(secs), head[0], head[1])
       ctx.fillText(String(secs), head[0], head[1])
     }
+    // Build-square outlines draw on the same overlay (before the health-bar
+    // early-out, since they show with nothing selected): the live placement
+    // ghost's footprint (green = buildable, red = blocked) and every selected
+    // builder's queued construction sites while Shift is held.
+    this.#drawBuildSquares(ctx)
     const ids = new Set()
     // Toggle on → bars over EVERY live unit (TA convention: the key reveals
     // the whole field's health, not just the current selection — which is
@@ -2543,6 +2566,78 @@ export class SandboxView {
 
   #hideResourceTip() {
     if (this._resourceTip) this._resourceTip.hidden = true
+  }
+
+  // #footFor returns a unit type's footprint (FBI footprintx/z, map squares),
+  // cached. A miss kicks one fetch and returns a 2×2 default meanwhile so the
+  // build square always has something to draw.
+  #footFor(name) {
+    if (!this._footCache) this._footCache = new Map()
+    const hit = this._footCache.get(name)
+    if (hit) return hit
+    if (!this._footCache.has(name)) {
+      this._footCache.set(name, null) // probe at most once
+      fetch(`/api/studio/unit/${encodeURIComponent(name)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((m) => { if (m) this._footCache.set(name, { x: m.footprintX || 2, z: m.footprintZ || 2 }) })
+        .catch(() => { /* default stays */ })
+    }
+    return { x: 2, z: 2 }
+  }
+
+  // #strokeFootprint paints one ground build-square: the footprint rectangle
+  // (half-extent = squares × 8 wu) centred at (wx,wz), rotated by headingRad,
+  // projected to the overlay and stroked in `color`. Skipped if any corner is
+  // behind the camera.
+  #strokeFootprint(ctx, wx, wz, foot, headingRad, color) {
+    const hx = (foot?.x || 2) * 8
+    const hz = (foot?.z || 2) * 8
+    const wy = this.#terrainHeightAt(wx, wz)
+    const c = Math.cos(headingRad || 0), s = Math.sin(headingRad || 0)
+    const corners = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]]
+    const pts = []
+    for (const [lx, lz] of corners) {
+      const rx = lx * c - lz * s
+      const rz = lx * s + lz * c
+      const p = this.#worldToScreen(wx + rx, wy, wz + rz)
+      if (!p) return
+      pts.push(p)
+    }
+    ctx.save()
+    ctx.lineWidth = 2
+    ctx.strokeStyle = color
+    ctx.fillStyle = color.replace(/[\d.]+\)$/, '0.12)')
+    ctx.beginPath()
+    ctx.moveTo(pts[0][0], pts[0][1])
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1])
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // #drawBuildSquares overlays the construction footprints: the active
+  // placement ghost (green buildable / red blocked) and, while Shift is held,
+  // every selected builder's queued build sites.
+  #drawBuildSquares(ctx) {
+    if (!this.scene) return
+    const p = this._placement
+    if (p && p.buildFor) {
+      const heading = (this._placementDrag && Number.isFinite(this._placementDrag.headingRad))
+        ? this._placementDrag.headingRad : 0
+      const color = p.canBuild === false ? 'rgba(248,81,73,0.95)' : 'rgba(63,185,80,0.95)'
+      this.#strokeFootprint(ctx, p.pos.x, p.pos.z, p.foot || this.#footFor(p.name), heading, color)
+    }
+    if (this._shiftPreview) {
+      for (const id of this.scene.selected) {
+        const u = this.scene.unitById(id)
+        if (!u || u.dead || !Array.isArray(u.queue)) continue
+        for (const q of u.queue) {
+          if (q.kind !== 7 || !q.name) continue
+          this.#strokeFootprint(ctx, q.x, q.z, this.#footFor(q.name), 0, 'rgba(124,180,255,0.9)')
+        }
+      }
+    }
   }
 
   #worldToScreen(wx, wy, wz) {

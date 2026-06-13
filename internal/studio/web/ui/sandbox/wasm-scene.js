@@ -627,7 +627,7 @@ export class WasmSandboxScene {
   // builddistance, so the type's meta (with COB bytes) must be resolvable
   // synchronously by then — pre-fetch it into the spawn cache (local) or the
   // transport's meta registry (join) before submitting the order.
-  async build(builderId, name, x, z, queued = false) {
+  async build(builderId, name, x, z, queued = false, headingRad = 0) {
     await this._readyPromise
     if (this._join) {
       if (this.source.registerMeta && !this.source.hasMeta(name)) {
@@ -636,7 +636,28 @@ export class WasmSandboxScene {
     } else if (!this._spawnMetas.has(name)) {
       this._spawnMetas.set(name, await this._fetchMeta(name))
     }
-    this.source.build(builderId, name, x, z, queued)
+    this.source.build(builderId, name, x, z, queued, headingRad)
+  }
+
+  // canBuildAt forwards the source's legality probe (terrain fit + no building
+  // overlap) for the build-placement ghost colouring. The wasm probe needs the
+  // type registered in the spawn resolver to read its footprint, so ensure the
+  // meta is fetched into _spawnMetas first; until it lands the answer is
+  // neutral (buildable). Join mode resolves through the transport already.
+  canBuildAt(name, x, z) {
+    if (!this.source?.canBuildAt) return true
+    if (!this._join && !this._spawnMetas.has(name)) {
+      if (!this._cbFetching) this._cbFetching = new Set()
+      if (!this._cbFetching.has(name)) {
+        this._cbFetching.add(name)
+        this._fetchMeta(name)
+          .then((m) => { if (m) this._spawnMetas.set(name, m) })
+          .catch(() => { /* stays neutral */ })
+          .finally(() => this._cbFetching.delete(name))
+      }
+      return true
+    }
+    return this.source.canBuildAt(name, x, z)
   }
 
   // spawnRemote requests a unit from the authority (join mode). It prefetches

@@ -183,7 +183,7 @@ func TestBuildRefusedOnIllegalSite(t *testing.T) {
 	bm.WorkerTime = 100
 	bm.MaxSlope = 50
 	bld := w.AddUnit("builder", bm, nil, fixed.Vec2{X: fixed.FromInt(64), Z: fixed.FromInt(64)}, 0, 0)
-	w.ApplyOrder(order.Build(bld, "sonar", fixed.Vec2{X: fixed.FromInt(120), Z: fixed.FromInt(64)}))
+	w.ApplyOrder(order.Build(bld, "sonar", fixed.Vec2{X: fixed.FromInt(120), Z: fixed.FromInt(64)}, 0))
 	for i := 0; i < 200; i++ {
 		w.Step(nil)
 	}

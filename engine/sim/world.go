@@ -130,6 +130,12 @@ type Unit struct {
 	buildState buildPhase
 	buildName  string
 	buildSite  fixed.Vec2
+	// buildHeading is the TA-angle the buildee should face, from the order's
+	// drag-to-rotate gesture. buildHeadingSet distinguishes "face this way"
+	// from the default (buildee inherits the builder's heading) so the factory
+	// path is unaffected.
+	buildHeading    int32
+	buildHeadingSet bool
 	// Wedge recovery: stallTicks counts consecutive ticks a moving unit
 	// made no real progress (commanded speed, no displacement — pinned on
 	// a structure corner); past the threshold avoidFlip toggles, sending
@@ -243,6 +249,10 @@ type queuedCommand struct {
 	kind       order.Kind
 	target     fixed.Vec2 // Move destination
 	targetUnit uint32     // Attack subject
+	// heading is the queued Build's buildee facing (TA-angle); headingSet
+	// flags whether it was supplied.
+	heading    int32
+	headingSet bool
 }
 
 // maxOrderQueue bounds a unit's shift-queue so a runaway client can't grow
@@ -1365,6 +1375,7 @@ func (w *World) ApplyOrder(o order.Order) {
 			u.buildState = buildApproach
 			u.buildName = b.Name
 			u.buildSite = b.loco.Pos
+			u.buildHeadingSet = false
 			u.buildResumeID = b.ID
 			u.hasAttack = false
 			u.queue = nil
@@ -1384,7 +1395,8 @@ func (w *World) ApplyOrder(o order.Order) {
 			if u := w.units[o.UnitID]; u != nil && !u.Dead && u.Meta != nil &&
 				u.Meta.CanMove && u.Meta.IsBuilder &&
 				(u.busy() || u.buildState != buildIdle) {
-				u.enqueue(queuedCommand{kind: order.KindBuild, name: o.Name, target: o.Target})
+				u.enqueue(queuedCommand{kind: order.KindBuild, name: o.Name, target: o.Target,
+					heading: o.Heading, headingSet: true})
 				return
 			}
 		}
@@ -1401,6 +1413,8 @@ func (w *World) ApplyOrder(o order.Order) {
 			u.buildState = buildApproach
 			u.buildName = o.Name
 			u.buildSite = o.Target
+			u.buildHeading = o.Heading
+			u.buildHeadingSet = true
 			u.buildResumeID = 0
 			u.hasAttack = false
 			u.queue = nil
@@ -1434,6 +1448,7 @@ func (w *World) cancelBuild(u *Unit) {
 	u.buildState = buildIdle
 	u.buildName = ""
 	u.buildeeID = 0
+	u.buildHeadingSet = false
 }
 
 // busy reports whether a unit has a current order a queued one would wait
@@ -1491,6 +1506,8 @@ func (w *World) advanceQueue(u *Unit) {
 			if c.name != "" && u.Meta != nil && u.Meta.CanMove && u.Meta.IsBuilder {
 				u.buildName = c.name
 				u.buildSite = c.target
+				u.buildHeading = c.heading
+				u.buildHeadingSet = c.headingSet
 				u.buildState = buildApproach
 				return
 			}

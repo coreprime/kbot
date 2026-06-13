@@ -33,7 +33,7 @@ func TestFactoryActivateGatesPad(t *testing.T) {
 		scripts: map[string]bool{"Activate": true, "Deactivate": true},
 	}}
 	fac := w.AddUnit("factory", factoryMeta(), bind, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
 	u := w.UnitByID(fac)
 
 	w.Step(nil)
@@ -74,7 +74,7 @@ func TestFactoryGateGraceTimeout(t *testing.T) {
 		scripts: map[string]bool{"Activate": true},
 	}}
 	fac := w.AddUnit("factory", factoryMeta(), bind, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}))
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
 	u := w.UnitByID(fac)
 	for i := 0; i < TickHz*4 && u.buildState != buildRaising; i++ {
 		w.Step(nil)
@@ -102,7 +102,7 @@ func TestBuilderWaitsForBuildStance(t *testing.T) {
 	bm.WorkerTime = 100
 	bm.BuildDistance = fixed.FromInt(60)
 	bld := w.AddUnit("builder", bm, bind, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(bld, "hut", fixed.Vec2{X: fixed.FromInt(40)}))
+	w.ApplyOrder(order.Build(bld, "hut", fixed.Vec2{X: fixed.FromInt(40)}, 0))
 	u := w.UnitByID(bld)
 	for i := 0; i < 60 && u.buildState != buildRaising; i++ {
 		w.Step(nil)

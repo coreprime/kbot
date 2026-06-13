@@ -129,15 +129,16 @@ func Stop(units []uint32) Order {
 	return Order{Kind: KindStop, UnitIDs: units}
 }
 
-// Build sends one mobile builder to construct unit type name at a ground point.
-func Build(builder uint32, name string, target fixed.Vec2) Order {
-	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target}
+// Build sends one mobile builder to construct unit type name at a ground
+// point, the buildee facing heading (a TA-angle from the placement drag).
+func Build(builder uint32, name string, target fixed.Vec2, heading int32) Order {
+	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target, Heading: heading}
 }
 
 // BuildQueued appends the construction job behind the builder's current
-// orders (the shift-click site chain).
-func BuildQueued(builder uint32, name string, target fixed.Vec2) Order {
-	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target, Queued: true}
+// orders (the shift-click site chain), the buildee facing heading.
+func BuildQueued(builder uint32, name string, target fixed.Vec2, heading int32) Order {
+	return Order{Kind: KindBuild, UnitID: builder, Name: name, Target: target, Heading: heading, Queued: true}
 }
 
 // Repair sends a mobile builder to an existing under-construction frame to

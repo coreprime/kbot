@@ -367,7 +367,13 @@ func (w *World) startRaising(u *Unit) {
 		u.buildName = ""
 		return
 	}
-	id := w.AddUnit(u.buildName, meta, binding, u.buildSite, u.Heading(), u.Side)
+	// A mobile builder's drag gesture sets the buildee facing; otherwise it
+	// inherits the builder's heading (the factory-pad path keeps its spin).
+	buildeeHeading := u.Heading()
+	if u.buildHeadingSet {
+		buildeeHeading = u.buildHeading
+	}
+	id := w.AddUnit(u.buildName, meta, binding, u.buildSite, buildeeHeading, u.Side)
 	b := w.units[id]
 	b.BuildPercent = 0
 	b.Health = fixed.FromInt(1)

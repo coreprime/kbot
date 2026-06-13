@@ -54,6 +54,7 @@ func main() {
 		"submitFire":   js.FuncOf(submitFire),
 		"submitStop":   js.FuncOf(submitStop),
 		"submitBuild":  js.FuncOf(submitBuild),
+		"canBuildAt":   js.FuncOf(queryCanBuildAt),
 		"submitPatrol": js.FuncOf(submitPatrol),
 		"submitStance": js.FuncOf(submitStance),
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
@@ -267,10 +268,26 @@ func submitBuild(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	target := fixed.Vec2{X: fixed.FromFloat(args[3].Float()), Z: fixed.FromFloat(args[4].Float())}
-	if len(args) > 5 && args[5].Truthy() {
-		return int(inst.sess.Submit(order.BuildQueued(uint32(args[1].Int()), args[2].String(), target)))
+	var heading int32
+	if len(args) > 6 {
+		heading = fixed.RadiansToAngle(args[6].Float())
 	}
-	return int(inst.sess.Submit(order.Build(uint32(args[1].Int()), args[2].String(), target)))
+	if len(args) > 5 && args[5].Truthy() {
+		return int(inst.sess.Submit(order.BuildQueued(uint32(args[1].Int()), args[2].String(), target, heading)))
+	}
+	return int(inst.sess.Submit(order.Build(uint32(args[1].Int()), args[2].String(), target, heading)))
+}
+
+// queryCanBuildAt(handle, name, x, z) -> bool. Read-only legality probe the
+// client uses to colour the build-placement ghost; no order is submitted.
+func queryCanBuildAt(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return true
+	}
+	x := fixed.FromFloat(args[2].Float())
+	z := fixed.FromFloat(args[3].Float())
+	return inst.world.CanBuildAt(args[1].String(), x, z)
 }
 
 // submitPatrol(handle, unitIds[], tx, tz) -> execTick. Appends a patrol

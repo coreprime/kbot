@@ -408,9 +408,17 @@ export class WsFrameSource extends FrameSource {
   // build sends one mobile builder to construct unit type `name` at a ground
   // point (Kind 7). The buildee spawns sim-side when the builder reaches the
   // site; the meta registers via the command-frame hook on every client.
-  build(builderId, name, x, z, queued = false) {
-    this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) }, Queued: !!queued })
+  build(builderId, name, x, z, queued = false, headingRad = 0) {
+    // Heading is the buildee's facing as a TA-angle (65536 = full turn), to
+    // match the authoritative sim's order.Heading.
+    const heading = Math.round((headingRad / (2 * Math.PI)) * 65536) | 0
+    this._send({ Kind: 7, UnitID: builderId >>> 0, Name: name, Target: { X: toFixed(x), Z: toFixed(z) }, Queued: !!queued, Heading: heading })
   }
+
+  // canBuildAt has no cheap authoritative answer over the wire, so the hosted
+  // client leaves the build ghost neutral (always buildable); the server still
+  // refuses an illegal site when the order arrives.
+  canBuildAt() { return true }
 
   // repair resumes an existing under-construction frame (Build with a
   // TargetUnit instead of a site).

@@ -24,6 +24,28 @@ func buildWorld() *World {
 	return New(Config{Seed: 11, Spawn: spawn})
 }
 
+// TestCanBuildAtRejectsOverlap pins that a building footprint can't be placed
+// over an existing structure's footprint, while a clear plot still passes.
+func TestCanBuildAtRejectsOverlap(t *testing.T) {
+	w := New(Config{Seed: 31})
+	w.SetTerrain(testTerrain(40, 40, 0, func(_, _ int) uint8 { return 0 }))
+	// A standing 4×4 structure centred near (320,320).
+	struc := footMeta("keep", 4, false)
+	w.AddUnit("keep", struc, nil, fixed.Vec2{X: fixed.FromInt(320), Z: fixed.FromInt(320)}, 0, 0)
+	probe := footMeta("hut", 4, false)
+	// Dead-centre overlap, and a one-cell nudge that still overlaps, are
+	// rejected; a plot a couple of footprints away is allowed.
+	if w.canBuildAt(probe, fixed.Vec2{X: fixed.FromInt(320), Z: fixed.FromInt(320)}) {
+		t.Fatalf("expected overlap at the structure centre to be rejected")
+	}
+	if w.canBuildAt(probe, fixed.Vec2{X: fixed.FromInt(340), Z: fixed.FromInt(320)}) {
+		t.Fatalf("expected a partial footprint overlap to be rejected")
+	}
+	if !w.canBuildAt(probe, fixed.Vec2{X: fixed.FromInt(460), Z: fixed.FromInt(320)}) {
+		t.Fatalf("expected a clear plot clear of the structure to be allowed")
+	}
+}
+
 // TestBuildCycleRaisesUnit pins the mobile-builder contract: the builder
 // walks into builddistance of the site, the buildee appears at 0% and rises
 // to 100% at the buildtime/workertime pace, and only then takes orders.
@@ -31,7 +53,7 @@ func TestBuildCycleRaisesUnit(t *testing.T) {
 	w := buildWorld()
 	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
 	site := fixed.Vec2{X: fixed.FromInt(300)}
-	w.ApplyOrder(order.Build(bld, "armpw", site))
+	w.ApplyOrder(order.Build(bld, "armpw", site, 0))
 
 	u := w.UnitByID(bld)
 	var buildee *Unit
@@ -87,7 +109,7 @@ func TestBuildCycleRaisesUnit(t *testing.T) {
 func TestBuildCancelledByStop(t *testing.T) {
 	w := buildWorld()
 	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(bld, "armpw", fixed.Vec2{X: fixed.FromInt(40)}))
+	w.ApplyOrder(order.Build(bld, "armpw", fixed.Vec2{X: fixed.FromInt(40)}, 0))
 	u := w.UnitByID(bld)
 	for i := 0; i < 200 && u.buildState != buildRaising; i++ {
 		w.Step(nil)
@@ -126,9 +148,9 @@ func TestBuildCancelledByStop(t *testing.T) {
 func TestQueuedBuildChain(t *testing.T) {
 	w := buildWorld()
 	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(200)}))
-	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(320)}))
-	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(440)}))
+	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(200)}, 0))
+	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(320)}, 0))
+	w.ApplyOrder(order.BuildQueued(bld, "solar", fixed.Vec2{X: fixed.FromInt(440)}, 0))
 
 	u := w.UnitByID(bld)
 	if len(u.queue) != 2 {
@@ -155,7 +177,7 @@ func TestQueuedBuildChain(t *testing.T) {
 func TestRepairResumesAbandonedFrame(t *testing.T) {
 	w := buildWorld()
 	bld := w.AddUnit("builder", builderMeta(), nil, fixed.Vec2{}, 0, 0)
-	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(60)}))
+	w.ApplyOrder(order.Build(bld, "solar", fixed.Vec2{X: fixed.FromInt(60)}, 0))
 	u := w.UnitByID(bld)
 	for i := 0; i < 600 && u.buildeeID == 0; i++ {
 		w.Step(nil)
