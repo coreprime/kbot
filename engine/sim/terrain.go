@@ -165,6 +165,36 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	return dh <= effectiveMaxSlope(m)
 }
 
+// canStepLoco is canTraverse with a small slope margin, used only by the
+// locomotion's blocked-step revert. A unit tracing a turning curve along its
+// (strictly-validated) path can momentarily clip a cell a hair steeper than
+// its pathing limit; reverting on that overshoot strands it mid-climb even
+// though the route is sound. The pathfinder stays strict — routes only run on
+// clearly-traversable ground — while the mover tolerates this small excess so
+// it can actually follow the route through a pinch. Still far below a true
+// cliff, so a unit can't scale a wall through the margin.
+func (w *World) canStepLoco(m *UnitMeta, from, to fixed.Vec2) bool {
+	if !w.canStand(m, to) {
+		return false
+	}
+	t := w.terrain
+	if t == nil || m == nil || m.IsAircraft || m.IsShip || m.IsSub {
+		return true
+	}
+	fx := from.X.Div(t.CellWU).Int()
+	fz := from.Z.Div(t.CellWU).Int()
+	tx := to.X.Div(t.CellWU).Int()
+	tz := to.Z.Div(t.CellWU).Int()
+	if fx == tx && fz == tz {
+		return true
+	}
+	dh := t.cellHeight(tx, tz) - t.cellHeight(fx, fz)
+	if dh < 0 {
+		dh = -dh
+	}
+	return dh <= effectiveMaxSlope(m)+4
+}
+
 // slopeLimitNum/slopeLimitDen scale the FBI/moveinfo MaxSlope (TA height-byte
 // units, defined over TA's native finer heightfield) onto our coarser 16-wu
 // attribute-cell grid, whose per-step height deltas run ~2.5x larger. Without

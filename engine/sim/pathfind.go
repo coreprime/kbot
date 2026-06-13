@@ -322,25 +322,50 @@ func (w *World) smoothPath(m *UnitMeta, chain []fixed.Vec2, blocked func(cx, cz 
 // building-blocked grid.
 func (w *World) lineClear(m *UnitMeta, a, b fixed.Vec2, blocked func(cx, cz int) bool) bool {
 	t := w.terrain
+	half := t.CellWU.Div(fixed.FromInt(2))
+	centre := func(cx, cz int) fixed.Vec2 {
+		return fixed.Vec2{X: fixed.FromInt(cx).Mul(t.CellWU) + half, Z: fixed.FromInt(cz).Mul(t.CellWU) + half}
+	}
 	d := b.Sub(a)
 	l := d.Len()
-	stepLen := t.CellWU.Div(fixed.FromInt(2))
+	// Walk the segment cell-by-cell. Sampling at a quarter cell (rather than a
+	// half) means no cell the line crosses is skipped, and each cell change is
+	// validated cell-to-cell — with the A* diagonal corner rule — exactly as
+	// the A* expansion does. The old half-cell sampling could thread between
+	// cells and approve a smoothed leg the per-tick locomotion then refused (a
+	// corner cut across a cliff edge), leaving the unit reverting in place and
+	// dropping its order half-way up a hill.
+	stepLen := t.CellWU.Div(fixed.FromInt(4))
 	n := l.Div(stepLen).Int()
 	if n < 1 {
 		n = 1
 	}
-	prev := a
+	pcx, pcz := a.X.Div(t.CellWU).Int(), a.Z.Div(t.CellWU).Int()
 	for i := 1; i <= n; i++ {
 		f := fixed.FromInt(i).Div(fixed.FromInt(n))
 		p := fixed.Vec2{X: a.X + d.X.Mul(f), Z: a.Z + d.Z.Mul(f)}
 		cx, cz := p.X.Div(t.CellWU).Int(), p.Z.Div(t.CellWU).Int()
+		if cx == pcx && cz == pcz {
+			continue
+		}
 		if cx < 0 || cz < 0 || cx >= t.W || cz >= t.H || blocked(cx, cz) {
 			return false
 		}
-		if !w.canTraverse(m, prev, p) {
+		cc := centre(pcx, pcz)
+		if cx != pcx && cz != pcz {
+			// Diagonal cell step — both shared orthogonal cells must be open and
+			// traversable, so the line can't slip across a cliff corner.
+			if blocked(pcx, cz) || blocked(cx, pcz) {
+				return false
+			}
+			if !w.canTraverse(m, cc, centre(pcx, cz)) || !w.canTraverse(m, cc, centre(cx, pcz)) {
+				return false
+			}
+		}
+		if !w.canTraverse(m, cc, centre(cx, cz)) {
 			return false
 		}
-		prev = p
+		pcx, pcz = cx, cz
 	}
 	return true
 }

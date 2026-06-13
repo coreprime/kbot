@@ -977,13 +977,19 @@ func (w *World) stepMovement(u *Unit) {
 		// since the path either didn't foresee this (a dynamic shove off it)
 		// or there is no path. The stall detector drops the order if no route
 		// out exists.
-		if !arrived && w.terrain != nil && !w.canTraverse(u.Meta, prePos, u.loco.Pos) && w.canStand(u.Meta, prePos) {
+		if !arrived && w.terrain != nil && !w.canStepLoco(u.Meta, prePos, u.loco.Pos) && w.canStand(u.Meta, prePos) {
+			// A step onto un-traversable ground is refused — but KEEP the path and
+			// just hold at the boundary. The locomotion keeps turning toward the
+			// waypoint, so over the next ticks the approach straightens and the
+			// step (which the path validated as walkable cell-to-cell) becomes
+			// traversable again — the unit was only clipping a cell on a turning
+			// curve. Nulling + recomputing here every tick instead thrashed the
+			// pathfinder and stranded the unit mid-climb. A genuine dead-end is
+			// still caught by the stall detector above (no NET progress → retry,
+			// then abandon).
 			u.loco.Pos = prePos
 			u.loco.Speed = 0
 			u.IsMoving = false
-			u.pathTried = false
-			u.path = nil
-			u.pathIdx = 0
 		}
 		if arrived {
 			if steer != goal {
