@@ -25,6 +25,10 @@ uniform sampler2D uTerrainTex;
 // baked-height mesh. uMapRect is (originX, originZ, sizeX, sizeZ) in wu.
 uniform sampler2D uMapTex;
 uniform vec4 uMapRect;
+// Half-cell (or tuned) UV nudge that re-registers the draped texture with the
+// baked-height mesh: per-cell graphics hang on corner vertices, so a cell's
+// texture transitions half a cell early and rides up Z-facing walls without it.
+uniform vec2 uMapTexShift;
 // Battlefield extras: the raw heightmap as a texture (red channel =
 // height byte / 255), the world-unit scale of one height step, the sea
 // surface Y, plus the fog + contour toggles.
@@ -209,7 +213,7 @@ void main() {
   float shadow = sampleShadow();
 
   if (uGroundMode == 4) {
-    vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
+    vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw + uMapTexShift;
     vec3 base = texture2D(uMapTex, uv).rgb;
     base *= mix(1.0, shadow, 0.85);
     // Elevation contours: a line at every height interval, derived from

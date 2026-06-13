@@ -2681,6 +2681,7 @@ export class ModelRenderer {
     // level (mode 5) the real seabed shows through.
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
+      gl.uniform2fv(this.uGroundMapTexShift, mt.texShift || [0, 0])
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapHeightScale, mt.heightScale || 1)
@@ -2794,10 +2795,19 @@ export class ModelRenderer {
     // the composite over the sea cells (which already carry the planet's liquid
     // colour) so greenworld reads blue, lava red, acid green, metal near-black.
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
+    // Cell-centre texture registration. The mesh hangs each cell's height AND
+    // its tile graphic on the cell's corner vertex, so the texture transitions
+    // half a cell early and the shoreline/cliff art rides up a Z-facing wall.
+    // Nudge the texture sample toward the cell centre to re-seat it on the
+    // baked geometry. Expressed in cells; converted to UV. Z only — a half-cell
+    // X slide travels along a wall face, not up it, so X reads correct in-game.
+    const TEX_CELL_SHIFT_X = 0
+    const TEX_CELL_SHIFT_Z = 0.5
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
+      texShift: [TEX_CELL_SHIFT_X / w, TEX_CELL_SHIFT_Z / h],
       waterShallow: water && water.shallow,
       waterDeep: water && water.deep,
     }
@@ -3771,6 +3781,7 @@ export class ModelRenderer {
     // draped over a baked-height mesh. See setMapTerrain.
     this.uGroundMapTex = gl.getUniformLocation(prog, 'uMapTex')
     this.uGroundMapRect = gl.getUniformLocation(prog, 'uMapRect')
+    this.uGroundMapTexShift = gl.getUniformLocation(prog, 'uMapTexShift')
     this.uGroundMapHeightTex = gl.getUniformLocation(prog, 'uMapHeightTex')
     this.uGroundMapHeightScale = gl.getUniformLocation(prog, 'uMapHeightScale')
     this.uGroundMapSeaY = gl.getUniformLocation(prog, 'uMapSeaY')
