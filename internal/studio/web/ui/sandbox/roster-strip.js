@@ -178,15 +178,16 @@ function barColor(frac) {
 }
 
 // costLineHTML renders a buildable type's resource prices using the game
-// adapter's resource table ("118 · 1536" for TA metal·energy, "285" for
-// TA:K mana). Empty until the meta cache resolves.
+// adapter's resource table ("118 Metal · 1536 Energy" for TA, "285 Mana" for
+// TA:K). Each value carries its resource name so the colour isn't the only
+// cue for which figure is which. Empty until the meta cache resolves.
 function costLineHTML(name) {
   const meta = buildMeta(name)
   if (!meta) return '<div class="roster-cost"></div>'
   const parts = []
   for (const res of activeGame().resources || []) {
     const v = meta[res.costField]
-    if (v > 0) parts.push(`<span style="color:${res.color}" title="${res.label}">${Math.round(v)}</span>`)
+    if (v > 0) parts.push(`<span class="roster-cost-item" style="color:${res.color}">${Math.round(v)}<span class="roster-cost-label">${res.label}</span></span>`)
   }
   return `<div class="roster-cost">${parts.join('<span class="roster-cost-sep">·</span>')}</div>`
 }

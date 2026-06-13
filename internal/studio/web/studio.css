@@ -7229,6 +7229,8 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
   opacity: 0.95;
 }
 .roster-cost-sep { opacity: 0.45; }
+.roster-cost-item { display: inline-flex; align-items: baseline; gap: 3px; }
+.roster-cost-label { font-weight: 500; opacity: 0.75; font-size: 8px; text-transform: uppercase; letter-spacing: 0.03em; }
 
 /* Economy bar — bottom-left of the sandbox viewport. Stock vs storage
    capacity per resource (summed from standing units' FBI fields), with
