@@ -234,6 +234,13 @@ function update() {
   const sandboxActive = dlg && dlg.classList.contains('sandbox-mode') && !dlg.classList.contains('hidden')
   const root = ensureRoot()
   if (!root) return
+  // Self-heal a stranded hover tip: the mousemove-driven dismissals miss when
+  // the browser drops the mouseout (DOM swapped under a stationary cursor) or
+  // the 3D canvas stops the event before the document-level sweep sees it. If
+  // the tip is up but the strip isn't actually hovered, drop it. Runs every
+  // tick (≈4 Hz) so a stuck hint clears within ~250 ms. The tip is
+  // pointer-events:none, so :hover here reflects the dock alone.
+  if (_tip && !_tip.hidden && !root.matches(':hover')) _tip.hidden = true
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []
