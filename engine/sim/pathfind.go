@@ -11,9 +11,12 @@ import "github.com/coreprime/kbot/engine/fixed"
 // the follower stalls; deterministic, so every client that applies the same
 // orders walks the same route.
 
-// pathMaxExpand caps A* node pops so an unreachable goal (or a pathological
-// map) can't stall a tick — the caller falls back to direct steering.
-const pathMaxExpand = 140000
+// pathMaxExpand is the hard ceiling on A* cell expansions — a backstop for
+// pathologically huge maps so an unreachable goal can't stall a tick. The
+// effective budget is the grid's cell count (each cell is expanded at most
+// once via the closed set), clamped to this; it's set well above any real
+// TA/TA:K map so a reachable goal across a full-size map is always found.
+const pathMaxExpand = 1_000_000
 
 // pathScratch holds the reusable A* working set, sized to the installed
 // terrain. Generation stamps (cur) mark which cells were touched this run so
@@ -23,6 +26,7 @@ type pathScratch struct {
 	cur     uint32
 	gen     []uint32 // gen[i]==cur → visited this run; gScore/parent valid
 	block   []uint32 // block[i]==cur → a building footprint covers cell i
+	closed  []uint32 // closed[i]==cur → already expanded this run (skip on pop)
 	gScore  []int32
 	parent  []int32
 	heap    []pfNode
@@ -44,6 +48,7 @@ func (w *World) ensurePathScratch() *pathScratch {
 			w: t.W, h: t.H,
 			gen:    make([]uint32, n),
 			block:  make([]uint32, n),
+			closed: make([]uint32, n),
 			gScore: make([]int32, n),
 			parent: make([]int32, n),
 		}
@@ -203,6 +208,15 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 	hpush(ps, pfNode{f: int32(octile(sx, sz, gx, gz)), idx: startIdx})
 
 	dirs := [8][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
+	// Expansion budget: every cell is expanded at most once (the closed-set
+	// below skips stale heap entries), so the whole grid is the true ceiling.
+	// The old fixed cap (140000) was smaller than a large map's cell count, so
+	// a reachable goal across a big map (the King of the Hill spiral) gave up
+	// early and the unit fell back to direct steering into a cliff.
+	cap := W * ps.h
+	if cap > pathMaxExpand {
+		cap = pathMaxExpand
+	}
 	expanded := 0
 	found := false
 	for len(ps.heap) > 0 {
@@ -211,8 +225,13 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 			found = true
 			break
 		}
+		// Skip stale heap entries — a cell already expanded via a cheaper path.
+		if ps.closed[cur.idx] == ps.cur {
+			continue
+		}
+		ps.closed[cur.idx] = ps.cur
 		expanded++
-		if expanded > pathMaxExpand {
+		if expanded > cap {
 			return nil
 		}
 		ccx := int(cur.idx) % W
