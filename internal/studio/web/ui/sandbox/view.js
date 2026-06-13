@@ -1293,7 +1293,7 @@ export class SandboxView {
   //                               arm-then-target semantics).
   setPendingCommand(cmd) {
     const valid = (cmd === 'move' || cmd === 'attack' || cmd === 'patrol' ||
-                   cmd === 'load' || cmd === 'unload' ||
+                   cmd === 'repair' || cmd === 'load' || cmd === 'unload' ||
                    cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
     // Load/Unload only make sense with a transport in the selection.
     if ((cmd === 'load' || cmd === 'unload') && this.#selectedTransports().length === 0) {
@@ -1323,9 +1323,10 @@ export class SandboxView {
     if (this._pendingCmd) {
       const what = (cmd === 'move') ? 'a destination'
         : (cmd === 'patrol') ? 'patrol waypoints (Esc to finish)'
-          : (cmd === 'load') ? 'a unit to pick up'
-            : (cmd === 'unload') ? 'a drop point'
-              : 'a target unit'
+          : (cmd === 'repair') ? 'a unit to finish building'
+            : (cmd === 'load') ? 'a unit to pick up'
+              : (cmd === 'unload') ? 'a drop point'
+                : 'a target unit'
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
@@ -2093,13 +2094,10 @@ export class SandboxView {
     if (hit && !this.scene.selected.has(hit.id)) {
       // Repair gesture: right-clicking a friendly under-construction frame
       // with mobile builders selected sends them to finish raising it.
-      const selUnits0 = [...this.scene.selected].map((id) => this.scene.unitById(id)).filter((u) => u && !u.dead)
-      const sameSide0 = selUnits0.length > 0 && selUnits0.every((u) => (u.side | 0) === (hit.side | 0))
-      if (sameSide0 && hit.buildPercent < 100) {
-        const builders = selUnits0.filter((u) => u.meta && u.meta.isBuilder && u.meta.canMove !== false)
-        if (builders.length > 0) {
-          for (const b of builders) this.scene.source.repair?.(b.id, hit.id)
-          this.#setStatus(`Repair — ${builders.length} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`)
+      if (hit.buildPercent < 100) {
+        const n = this.issueRepair(hit)
+        if (n > 0) {
+          this.#setStatus(`Repair — ${n} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`)
           return
         }
       }
@@ -2230,6 +2228,23 @@ export class SandboxView {
       // consecutive points loop the route sim-side; Esc finishes.
       const n = this.issuePatrol(world)
       this.#setStatus(`Patrol waypoint added for ${n} unit(s) — keep clicking to extend the loop, Esc to finish.`)
+      return
+    }
+    if (this._pendingCmd === 'repair' && this.scene.selected.size > 0) {
+      // Repair sends the selected mobile builders to finish raising the
+      // clicked friendly under-construction frame — the armed-button form of
+      // the right-click repair gesture.
+      const hit = this.#pickUnitAt(sx, sy)
+      this._pendingCmd = null
+      this.#refreshDefaultCursor()
+      if (hit) {
+        const n = this.issueRepair(hit)
+        this.#setStatus(n > 0
+          ? `Repair — ${n} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`
+          : `Repair — ${hit.name} needs no repair, or no mobile builder is selected.`)
+      } else {
+        this.#setStatus('Repair cancelled — click a unit under construction.')
+      }
       return
     }
     if (this._pendingCmd === 'move' && world && this.scene.selected.size > 0) {
@@ -2854,6 +2869,27 @@ export class SandboxView {
       n++
     }
     if (n > 0) this.playUnitSoundRandom(live[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return n
+  }
+
+  // issueRepair sends every selected mobile builder to finish raising a
+  // friendly under-construction frame (the engine's repair order resumes the
+  // buildee's construction). Returns how many builders were dispatched — 0 if
+  // the target is complete or no mobile builder is selected. Shared by the
+  // armed Repair button and the right-click repair gesture.
+  issueRepair(target) {
+    if (!target || target.dead || !(target.buildPercent < 100)) return 0
+    const builders = this.getSelectedUnits().filter(
+      (u) => u && !u.dead && (u.side | 0) === (target.side | 0) &&
+        u.meta && u.meta.isBuilder && u.meta.canMove !== false)
+    let n = 0
+    for (const b of builders) {
+      if (typeof this.scene.source?.repair === 'function') {
+        this.scene.source.repair(b.id, target.id)
+        n++
+      }
+    }
+    if (n > 0) this.playUnitSoundRandom(builders[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return n
   }
 

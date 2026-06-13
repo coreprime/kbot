@@ -12,6 +12,14 @@ import { withCobBytes } from '../../engine/net/cob-bytes.js'
 
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
+// The command-cursor glyphs the sandbox's armed-cursor overlay can show
+// (see game3d/armed-cursor.js). Preloaded so the first gesture never waits
+// on a fetch; a game that ships no GAF for one just 404s harmlessly.
+const CURSOR_NAMES = [
+  'cursornormal', 'cursorselect', 'cursormove', 'cursorattack',
+  'cursorrepair', 'cursorpickup', 'cursorunload', 'cursorairstrike',
+]
+
 // Phase weights (must sum to ~1). The Grid (no map) collapses the terrain
 // phases to zero and the rest absorb the slack — see _weights().
 function _weights(hasMap, hasFaction) {
@@ -55,6 +63,10 @@ export async function runSandboxPreload(view, { mapPath, faction }, onProgress) 
   {
     const step = phase(w.side, 'Loading side data…')
     try { await fetch('/api/studio/sandbox-sides').then((r) => (r.ok ? r.json() : null)) } catch { /* ignore */ }
+    // Warm every command cursor the armed-cursor overlay swaps in, so the
+    // first Move / Attack / Patrol / Repair / transport gesture shows its
+    // glyph immediately instead of flashing a blank frame on first fetch.
+    for (const c of CURSOR_NAMES) _preloadImage(wsUrl(`/api/studio/cursor/${c}`))
     step(1)
   }
 

@@ -128,7 +128,7 @@ export class ArmedCursor {
   // so setSlot / setArmed / setAmbient share the validation.
   #normalizeSlot(slot) {
     if (slot === 'move' || slot === 'attack' || slot === 'patrol' ||
-        slot === 'load' || slot === 'unload' ||
+        slot === 'repair' || slot === 'load' || slot === 'unload' ||
         slot === 'primary' || slot === 'secondary' || slot === 'tertiary' ||
         slot === 'select' || slot === 'normal') return slot
     return null
