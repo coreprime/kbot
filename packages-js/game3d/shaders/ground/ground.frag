@@ -216,22 +216,37 @@ void main() {
   float shadow = sampleShadow();
 
   if (uGroundMode == 4) {
-    // vMapUV carries TA's height/2 north shift, applied PER-VERTEX (ground.vert)
-    // and interpolated here — so it can't fold into a smear on walls / block
-    // tops the way a per-fragment shift did. It's already height-shifted and
-    // edge-clamped.
-    vec3 base = texture2D(uMapTex, vMapUV).rgb;
-    // Near-detail clipmap: reconstruct the (already shifted) world XZ from the
-    // interpolated UV, map it into the cache window, and cross-fade base→clip
-    // across a rim margin. Outside the window (or when off) base + mips carry
-    // the distance — native detail up close, bounded VRAM.
+    // Top-down (registered) projection: the height-shifted drape (vMapUV, per-
+    // vertex in ground.vert) plus the near-detail clipmap cache.
+    vec3 topCol = texture2D(uMapTex, vMapUV).rgb;
     if (uMapClipOn > 0.5) {
       vec2 effWorld = vMapUV * uMapRect.zw + uMapRect.xy;
       vec2 cUV = (effWorld - uMapClipRect.xy) / uMapClipRect.zw;
       vec2 e0 = smoothstep(vec2(0.0), vec2(0.06), cUV);
       vec2 e1 = smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - cUV);
       float cw = e0.x * e0.y * e1.x * e1.y;
-      if (cw > 0.0) base = mix(base, texture2D(uMapClipTex, cUV).rgb, cw);
+      if (cw > 0.0) topCol = mix(topCol, texture2D(uMapClipTex, cUV).rgb, cw);
+    }
+    // Triplanar: a top-down drape stretches one texel column down the near-
+    // vertical walls kbot synthesizes from TA's heightmap. Blend in side
+    // projections of the same composite (tiled) weighted by the geometric
+    // normal — flats keep the registered drape, walls show coherent texture
+    // instead of a smear. Normal from the heightmap gradient (cell = 16 wu).
+    vec3 base = topCol;
+    vec2 cuvH = vec2(16.0 / uMapRect.z, 16.0 / uMapRect.w);
+    vec2 buv0 = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
+    float hC = texture2D(uMapHeightTex, buv0).r;
+    float hX = texture2D(uMapHeightTex, buv0 + vec2(cuvH.x, 0.0)).r;
+    float hZ = texture2D(uMapHeightTex, buv0 + vec2(0.0, cuvH.y)).r;
+    vec3 nrm = normalize(vec3((hC - hX) * 255.0 * uMapHeightScale, 16.0,
+                              (hC - hZ) * 255.0 * uMapHeightScale));
+    vec3 tw = pow(abs(nrm), vec3(6.0));
+    tw /= max(tw.x + tw.y + tw.z, 1e-4);
+    if (tw.y < 0.985) {                       // skip on flats (perf + exact drape)
+      const float sideScale = 128.0;          // wu per composite tile on walls
+      vec3 sideX = texture2D(uMapTex, vWorldPos.zy / sideScale).rgb;
+      vec3 sideZ = texture2D(uMapTex, vWorldPos.xy / sideScale).rgb;
+      base = tw.y * topCol + tw.x * sideX + tw.z * sideZ;
     }
     base *= mix(1.0, shadow, 0.85);
     // Elevation contours: a line at every height interval, derived from
