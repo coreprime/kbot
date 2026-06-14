@@ -226,11 +226,24 @@ void main() {
     // height-128 mound, ~7-8 on a 240-byte peak. uMapRect.w = map size in Z
     // (wu); rawH*0.5 is the north shift in wu.
     float rawH = texture2D(uMapHeightTex, baseUV).r * 255.0;
-    // Clamp the north shift to the texture extent: a tall feature on the very
-    // north edge would otherwise pull its UV past v=0 and smear the clamped
-    // edge texel out beyond the map (overdrawing the ground past where the
-    // texture ends). min() lets the shift ramp up from the edge instead.
-    float shiftZ = min((rawH * 0.5) / uMapRect.w, baseUV.y);
+    // TA's height/2 north shift only makes sense on near-FLAT ground (it
+    // positions flat tiles in the 2.5D view). kbot builds REAL 3D walls from
+    // the heightmap; applying the per-fragment shift across a steep face shears
+    // the draped texture into vertical smears (the mound/pit walls on metal
+    // maps — there the shift exceeds the wall's own UV width). So taper the
+    // shift to zero on slopes via the local height gradient: flats keep their
+    // registration, walls drape cleanly. uMapRect.z/.w are the map size in wu,
+    // so 16/size is one cell in UV.
+    vec2 cellUV = vec2(16.0 / uMapRect.z, 16.0 / uMapRect.w);
+    float gz = abs(texture2D(uMapHeightTex, baseUV + vec2(0.0, cellUV.y)).r
+                 - texture2D(uMapHeightTex, baseUV - vec2(0.0, cellUV.y)).r);
+    float gx = abs(texture2D(uMapHeightTex, baseUV + vec2(cellUV.x, 0.0)).r
+                 - texture2D(uMapHeightTex, baseUV - vec2(cellUV.x, 0.0)).r);
+    float grad = max(gz, gx) * 255.0 * 0.5;          // height units per cell
+    float flatT = 1.0 - smoothstep(4.0, 24.0, grad); // 1 on flats, 0 on walls
+    // Clamp the (tapered) north shift to the texture extent so a tall feature on
+    // the very north edge can't pull its UV past v=0 and smear the edge texel.
+    float shiftZ = min((rawH * 0.5) / uMapRect.w * flatT, baseUV.y);
     vec2 uv = baseUV - vec2(0.0, shiftZ);
     vec3 base = texture2D(uMapTex, uv).rgb;
     // Near-detail clipmap: where the fragment falls inside the cache window,
@@ -240,7 +253,7 @@ void main() {
     // exactly as before — native detail up close, bounded VRAM.
     if (uMapClipOn > 0.5) {
       vec2 cBase = (vWorldPos.xz - uMapClipRect.xy) / uMapClipRect.zw;
-      vec2 cUV = cBase - vec2(0.0, (rawH * 0.5) / uMapClipRect.w);
+      vec2 cUV = cBase - vec2(0.0, (rawH * 0.5) / uMapClipRect.w * flatT);
       vec2 e0 = smoothstep(vec2(0.0), vec2(0.06), cBase);
       vec2 e1 = smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - cBase);
       float cw = e0.x * e0.y * e1.x * e1.y;
