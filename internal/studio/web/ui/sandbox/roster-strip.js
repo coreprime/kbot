@@ -136,6 +136,22 @@ function dockReset() {
 // row — the resource costs, which live here instead of under the icon.
 
 let _tip = null
+let _tipWatch = 0
+
+// armTipWatch polls the pointer geometry on a timer (NOT the render tick) and
+// drops the tip the moment the cursor is no longer over the dock. The tick-
+// driven self-heal in update() misses whenever frames stop (idle scene) or the
+// 3D canvas swallows the pointer event, which is how the tip stranded; a
+// standalone timeout keeps healing regardless. It re-arms while genuinely
+// hovered, so it never hides a tip the cursor is still on.
+function armTipWatch() {
+  clearTimeout(_tipWatch)
+  _tipWatch = setTimeout(() => {
+    if (!_tip || _tip.hidden) return
+    if (pointerOverDock()) armTipWatch()
+    else _tip.hidden = true
+  }, 400)
+}
 
 function ensureTip() {
   if (_tip && _tip.isConnected) return _tip
@@ -173,6 +189,7 @@ function tipShow(e) {
   }
   tip.innerHTML = html
   tip.hidden = false
+  armTipWatch()
   const host = tip.parentElement.getBoundingClientRect()
   const r = cell.getBoundingClientRect()
   tip.style.left = `${r.left + r.width / 2 - host.left}px`
