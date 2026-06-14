@@ -43,7 +43,16 @@ uniform int uMountainStyle;
 uniform float uSeabedHeightMul;
 uniform float uSeabedScaleMul;
 uniform float uSeabedRockChance;
+// Map-terrain (uGroundMode==4): TA's height/2 north texture shift, computed
+// PER-VERTEX here and interpolated. Per-fragment shifting (from the heightmap)
+// sheared the texture on steep walls and tall block tops — the shift could
+// exceed a face's UV width and fold over into a smear. A per-vertex UV offset
+// interpolates monotonically, so it can't fold: walls drape cleanly, flat tops
+// translate uniformly, edges ramp without piling up.
+uniform vec4 uMapRect;          // originX, originZ, sizeX, sizeZ (wu)
+uniform float uMapHeightScale;  // world Y per height unit (aPos.y = rawH * this)
 varying vec3 vWorldPos;
+varying vec2 vMapUV;            // per-vertex composite UV, height-shifted + clamped
 varying vec4 vLightSpacePos;
 varying vec4 vLightSpacePos2;   // sun2 shadow proj (twin-sun envs)
 varying float vMountainAmt;     // 0 inside the clearing, smoothstepped to 1 in full mountains
@@ -150,6 +159,21 @@ void main() {
   vMountainHNorm = mountHNorm;
   vec3 worldPos = vec3(aPos.x, y, aPos.z);
   vWorldPos = worldPos;
+  // Per-vertex composite UV with TA's north height-shift (mode 4 only). aPos.y
+  // is the baked height (rawH * uMapHeightScale); pull v north by rawH/2 (wu),
+  // clamped so a tall north-edge vertex can't sample past the texture top.
+  vMapUV = vec2(0.0);
+  if (uGroundMode == 4) {
+    vec2 buv = (worldPos.xz - uMapRect.xy) / uMapRect.zw;
+    float rawH = uMapHeightScale > 0.0 ? aPos.y / uMapHeightScale : 0.0;
+    // North shift = rawH/2 wu. Ramp it to zero approaching the north texture
+    // edge (smoothstep over the max possible shift) instead of hard-clamping —
+    // a clamp piles many edge vertices onto v=0 (the band smear on tall
+    // edge blocks); the ramp keeps v >= 0 smoothly with no pile-up.
+    float maxShift = (255.0 * 0.5) / uMapRect.w;
+    float shiftV = (rawH * 0.5) / uMapRect.w;
+    vMapUV = vec2(buv.x, buv.y - shiftV * smoothstep(0.0, maxShift, buv.y));
+  }
   vLightSpacePos = uLightSpace * vec4(worldPos, 1.0);
   vLightSpacePos2 = uLightSpace2 * vec4(worldPos, 1.0);
   gl_Position = uProj * uView * vec4(worldPos, 1.0);

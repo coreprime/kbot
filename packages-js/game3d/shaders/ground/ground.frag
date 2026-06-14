@@ -14,6 +14,7 @@ precision highp int;
 #include "../lib/sea-waves.glsl"
 
 varying vec3 vWorldPos;
+varying vec2 vMapUV;   // per-vertex map-composite UV (height-shifted), mode 4
 varying vec4 vLightSpacePos;
 varying vec4 vLightSpacePos2;
 varying float vMountainAmt;     // matches the vertex shader's ring fade
@@ -215,47 +216,20 @@ void main() {
   float shadow = sampleShadow();
 
   if (uGroundMode == 4) {
-    vec2 baseUV = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
-    // TA renders each terrain point shifted NORTH on screen by height/2 px
-    // (the 2.5D elevation fake — cf. nTA game_Terrain: Screen.y = y*16 - h/2),
-    // and the map art was authored in that shifted view. Replaying it here —
-    // pulling the UV north (−Z) by rawHeight/2 world units — seats painted
-    // shores and cliff edges on the baked-height mesh. The shift is
-    // height-DEPENDENT (taller ground shifts more), which is why no constant
-    // offset ever fit every map: ~3 cells at a sea-level shore, ~4 at a
-    // height-128 mound, ~7-8 on a 240-byte peak. uMapRect.w = map size in Z
-    // (wu); rawH*0.5 is the north shift in wu.
-    float rawH = texture2D(uMapHeightTex, baseUV).r * 255.0;
-    // TA's height/2 north shift only makes sense on near-FLAT ground (it
-    // positions flat tiles in the 2.5D view). kbot builds REAL 3D walls from
-    // the heightmap; applying the per-fragment shift across a steep face shears
-    // the draped texture into vertical smears (the mound/pit walls on metal
-    // maps — there the shift exceeds the wall's own UV width). So taper the
-    // shift to zero on slopes via the local height gradient: flats keep their
-    // registration, walls drape cleanly. uMapRect.z/.w are the map size in wu,
-    // so 16/size is one cell in UV.
-    vec2 cellUV = vec2(16.0 / uMapRect.z, 16.0 / uMapRect.w);
-    float gz = abs(texture2D(uMapHeightTex, baseUV + vec2(0.0, cellUV.y)).r
-                 - texture2D(uMapHeightTex, baseUV - vec2(0.0, cellUV.y)).r);
-    float gx = abs(texture2D(uMapHeightTex, baseUV + vec2(cellUV.x, 0.0)).r
-                 - texture2D(uMapHeightTex, baseUV - vec2(cellUV.x, 0.0)).r);
-    float grad = max(gz, gx) * 255.0 * 0.5;          // height units per cell
-    float flatT = 1.0 - smoothstep(4.0, 24.0, grad); // 1 on flats, 0 on walls
-    // Clamp the (tapered) north shift to the texture extent so a tall feature on
-    // the very north edge can't pull its UV past v=0 and smear the edge texel.
-    float shiftZ = min((rawH * 0.5) / uMapRect.w * flatT, baseUV.y);
-    vec2 uv = baseUV - vec2(0.0, shiftZ);
-    vec3 base = texture2D(uMapTex, uv).rgb;
-    // Near-detail clipmap: where the fragment falls inside the cache window,
-    // sample the high-res slice (same height-shift, scaled to the window) and
-    // cross-fade base→clip across a rim margin so there's no visible seam.
-    // Outside the window (or when off) the base + mips carry the distance,
-    // exactly as before — native detail up close, bounded VRAM.
+    // vMapUV carries TA's height/2 north shift, applied PER-VERTEX (ground.vert)
+    // and interpolated here — so it can't fold into a smear on walls / block
+    // tops the way a per-fragment shift did. It's already height-shifted and
+    // edge-clamped.
+    vec3 base = texture2D(uMapTex, vMapUV).rgb;
+    // Near-detail clipmap: reconstruct the (already shifted) world XZ from the
+    // interpolated UV, map it into the cache window, and cross-fade base→clip
+    // across a rim margin. Outside the window (or when off) base + mips carry
+    // the distance — native detail up close, bounded VRAM.
     if (uMapClipOn > 0.5) {
-      vec2 cBase = (vWorldPos.xz - uMapClipRect.xy) / uMapClipRect.zw;
-      vec2 cUV = cBase - vec2(0.0, (rawH * 0.5) / uMapClipRect.w * flatT);
-      vec2 e0 = smoothstep(vec2(0.0), vec2(0.06), cBase);
-      vec2 e1 = smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - cBase);
+      vec2 effWorld = vMapUV * uMapRect.zw + uMapRect.xy;
+      vec2 cUV = (effWorld - uMapClipRect.xy) / uMapClipRect.zw;
+      vec2 e0 = smoothstep(vec2(0.0), vec2(0.06), cUV);
+      vec2 e1 = smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - cUV);
       float cw = e0.x * e0.y * e1.x * e1.y;
       if (cw > 0.0) base = mix(base, texture2D(uMapClipTex, cUV).rgb, cw);
     }
