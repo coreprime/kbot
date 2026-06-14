@@ -8,6 +8,7 @@
 // the map's first player start.
 
 import { hostCallbacks, setStatus } from '../host-context.js'
+import { reapplyContours } from './ribbon-bridge.js'
 
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
@@ -58,6 +59,9 @@ export async function loadSandboxMap(view, path, onStep) {
     cellWU: info.cellWU, heightScale: info.heightScale,
     seaLevel: info.seaLevel | 0,
   })
+  // A fresh renderer terrain starts with contours off; honour the View menu's
+  // remembered choice so a ticked Contour Lines box actually shows the overlay.
+  reapplyContours(view)
   step(0.85, 'Drawing mini-map…')
 
   // Mini-map backdrop + fixed extent.

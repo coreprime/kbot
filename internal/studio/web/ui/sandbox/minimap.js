@@ -24,7 +24,7 @@ let _root = null
 let _canvas = null
 // Live world→map transform from the latest draw, reused by the click
 // handler: world = (px - SIZE/2) / scale + cx.
-let _view = { cx: 0, cz: 0, scale: 1 }
+let _view = { cx: 0, cz: 0, scale: 1, cw: SIZE, ch: SIZE }
 
 // ensureRoot adopts the canvas the React MinimapPanel mounted (standard
 // floating-panel chrome, no close button). The panel element is the
@@ -58,25 +58,27 @@ function liveUnits(view) {
 }
 
 // mapToWorld / worldToMap convert through the last draw's fitted transform.
+// The canvas is sized to the map's aspect (see draw), so the centre uses the
+// per-axis pixel dims rather than a fixed square.
 function worldToMap(x, z) {
   return [
-    SIZE / 2 + (x - _view.cx) * _view.scale,
-    SIZE / 2 + (z - _view.cz) * _view.scale,
+    _view.cw / 2 + (x - _view.cx) * _view.scale,
+    _view.ch / 2 + (z - _view.cz) * _view.scale,
   ]
 }
 
 function mapToWorld(px, py) {
   return [
-    (px - SIZE / 2) / _view.scale + _view.cx,
-    (py - SIZE / 2) / _view.scale + _view.cz,
+    (px - _view.cw / 2) / _view.scale + _view.cx,
+    (py - _view.ch / 2) / _view.scale + _view.cz,
   ]
 }
 
 // clickPoint converts an event to map-pixel coords + the nearest unit dot.
 function clickPoint(view, e) {
   const rect = _canvas.getBoundingClientRect()
-  const px = (e.clientX - rect.left) * (SIZE / rect.width)
-  const py = (e.clientY - rect.top) * (SIZE / rect.height)
+  const px = (e.clientX - rect.left) * (_canvas.width / rect.width)
+  const py = (e.clientY - rect.top) * (_canvas.height / rect.height)
   let hit = null
   let hitD = 10 // px — comfortable thumb radius
   for (const u of liveUnits(view)) {
@@ -173,10 +175,16 @@ function draw() {
   // floored at MIN_EXTENT.
   const smap = view._sandboxMap
   let cx = 0, cz = 0, half = MIN_EXTENT
+  // Canvas aspect: a loaded battlefield sizes the mini-map to the map's own
+  // worldW:worldH so its proportions match (a wide map gets a wide mini-map),
+  // with the longer axis pinned to SIZE. The Grid stays square.
+  let cw = SIZE, ch = SIZE
   if (smap) {
     cx = smap.worldW / 2
     cz = smap.worldH / 2
     half = Math.max(smap.worldW, smap.worldH) / 2
+    if (smap.worldW >= smap.worldH) ch = Math.round(SIZE * smap.worldH / smap.worldW)
+    else cw = Math.round(SIZE * smap.worldW / smap.worldH)
   } else if (units.length > 0) {
     let loX = Infinity, hiX = -Infinity, loZ = Infinity, hiZ = -Infinity
     for (const u of units) {
@@ -187,11 +195,15 @@ function draw() {
     cz = (loZ + hiZ) / 2
     half = Math.max(MIN_EXTENT, (hiX - loX) / 2 * 1.2, (hiZ - loZ) / 2 * 1.2)
   }
-  _view = { cx, cz, scale: (SIZE / 2 - 6) / half }
+  // Uniform scale fits the longer axis to SIZE (minus padding); the shorter
+  // axis then exactly fills its now-proportional canvas dimension.
+  _view = { cx, cz, scale: (SIZE / 2 - 6) / half, cw, ch }
+  if (_canvas.width !== cw) _canvas.width = cw
+  if (_canvas.height !== ch) _canvas.height = ch
   const ctx = _canvas.getContext('2d')
-  ctx.clearRect(0, 0, SIZE, SIZE)
+  ctx.clearRect(0, 0, cw, ch)
   ctx.fillStyle = 'rgba(8, 10, 14, 0.92)'
-  ctx.fillRect(0, 0, SIZE, SIZE)
+  ctx.fillRect(0, 0, cw, ch)
   // Battlefield backdrop: the map's own minimap, mapped through the same
   // world→map transform the dots use so positions line up exactly.
   if (smap && smap.minimapImage) {
@@ -222,11 +234,11 @@ function draw() {
   ctx.lineWidth = 1
   const step = 200 * _view.scale
   if (step > 8) {
-    const ox = (SIZE / 2 - (cx % 200) * _view.scale + SIZE * 10) % step
-    const oz = (SIZE / 2 - (cz % 200) * _view.scale + SIZE * 10) % step
+    const ox = (cw / 2 - (cx % 200) * _view.scale + cw * 10) % step
+    const oz = (ch / 2 - (cz % 200) * _view.scale + ch * 10) % step
     ctx.beginPath()
-    for (let x = ox; x < SIZE; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, SIZE) }
-    for (let y = oz; y < SIZE; y += step) { ctx.moveTo(0, y); ctx.lineTo(SIZE, y) }
+    for (let x = ox; x < cw; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, ch) }
+    for (let y = oz; y < ch; y += step) { ctx.moveTo(0, y); ctx.lineTo(cw, y) }
     ctx.stroke()
   }
   for (const u of units) {

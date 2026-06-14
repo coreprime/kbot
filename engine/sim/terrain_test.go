@@ -277,3 +277,30 @@ func TestWalkAlongCliffBase(t *testing.T) {
 		t.Fatalf("tank climbed a 190-unit cliff (x=%v)", u.loco.Pos.X.Float())
 	}
 }
+
+// TestHardMapBorderClampsGroundUnit pins the battlefield border: a ground unit
+// ordered off the map edge has its destination pulled to the edge and its body
+// kept fully inside — it cannot cross into the void past the map.
+func TestHardMapBorderClampsGroundUnit(t *testing.T) {
+	w := New(Config{Seed: 7})
+	w.SetTerrain(testTerrain(20, 20, 0, func(_, _ int) uint8 { return 0 })) // 320×320 wu
+	id := w.AddUnit("tank", testMeta("tank"), nil,
+		fixed.Vec2{X: fixed.FromInt(300), Z: fixed.FromInt(160)}, 0, 0)
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(5000), Z: fixed.FromInt(160)}))
+	u := w.UnitByID(id)
+	maxX := fixed.FromInt(20 * 16)
+	if u.moveTarget.X > maxX {
+		t.Fatalf("move target not clamped to map: %v > %v", u.moveTarget.X.Float(), maxX.Float())
+	}
+	for i := 0; i < 600; i++ {
+		w.Step(nil)
+	}
+	r := u.Meta.collisionRadius()
+	if u.loco.Pos.X > maxX-r+fixed.One {
+		t.Fatalf("ground unit crossed the east border: x=%v (max %v, radius %v)",
+			u.loco.Pos.X.Float(), maxX.Float(), r.Float())
+	}
+	if u.loco.Pos.X < fixed.FromInt(305) {
+		t.Fatalf("unit did not advance toward the border: x=%v", u.loco.Pos.X.Float())
+	}
+}

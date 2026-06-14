@@ -1028,6 +1028,18 @@ func (w *World) stepMovement(u *Unit) {
 		u.loco.Speed = 0
 	}
 
+	// Hard map border: the playable world is the loaded map's extent. Ground,
+	// sea and hover units cannot cross it — momentum, pushback or avoidance
+	// that would shove them past the edge is clamped to the boundary (their
+	// body kept fully inside). Aircraft may fly past mid-maneuver (an attack
+	// run, a banking turn) but cannot come to rest outside, so a landed/idle
+	// flier is pulled back in.
+	if w.terrain != nil && u.Meta != nil {
+		if !u.Meta.IsAircraft || (!u.IsMoving && !u.atkActive) {
+			u.loco.Pos = w.clampToMap(u.loco.Pos, u.Meta.collisionRadius())
+		}
+	}
+
 	if u.Meta.IsAircraft {
 		w.stepAltitude(u)
 	} else {

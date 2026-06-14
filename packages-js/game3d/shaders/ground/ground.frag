@@ -220,7 +220,12 @@ void main() {
     // height-128 mound, ~7-8 on a 240-byte peak. uMapRect.w = map size in Z
     // (wu); rawH*0.5 is the north shift in wu.
     float rawH = texture2D(uMapHeightTex, baseUV).r * 255.0;
-    vec2 uv = baseUV - vec2(0.0, (rawH * 0.5) / uMapRect.w);
+    // Clamp the north shift to the texture extent: a tall feature on the very
+    // north edge would otherwise pull its UV past v=0 and smear the clamped
+    // edge texel out beyond the map (overdrawing the ground past where the
+    // texture ends). min() lets the shift ramp up from the edge instead.
+    float shiftZ = min((rawH * 0.5) / uMapRect.w, baseUV.y);
+    vec2 uv = baseUV - vec2(0.0, shiftZ);
     vec3 base = texture2D(uMapTex, uv).rgb;
     base *= mix(1.0, shadow, 0.85);
     // Elevation contours: a line at every height interval, derived from

@@ -44,6 +44,28 @@ func (w *World) SetTerrain(t *Terrain) {
 // Terrain returns the installed height field (nil = flat sandbox grid).
 func (w *World) Terrain() *Terrain { return w.terrain }
 
+// clampToMap pins a position inside the loaded map's world-unit extent,
+// keeping `margin` (typically a unit's collision radius) clear of every edge so
+// the body stays fully on-map. The hard battlefield border. With no terrain
+// (The Grid) the world is unbounded and the point is returned unchanged.
+func (w *World) clampToMap(p fixed.Vec2, margin fixed.Fixed) fixed.Vec2 {
+	if w.terrain == nil {
+		return p
+	}
+	maxX := w.terrain.CellWU.Mul(fixed.FromInt(w.terrain.W)) - margin
+	maxZ := w.terrain.CellWU.Mul(fixed.FromInt(w.terrain.H)) - margin
+	// Degenerate guard: a map smaller than two margins collapses to its centre.
+	if maxX < margin {
+		maxX, margin = w.terrain.CellWU.Mul(fixed.FromInt(w.terrain.W)).Div(fixed.FromInt(2)), 0
+	}
+	if maxZ < margin {
+		maxZ = w.terrain.CellWU.Mul(fixed.FromInt(w.terrain.H)).Div(fixed.FromInt(2))
+	}
+	p.X = fixed.Clamp(p.X, margin, maxX)
+	p.Z = fixed.Clamp(p.Z, margin, maxZ)
+	return p
+}
+
 // cellVoid reports whether cell (cx, cz) is carved out of the map.
 func (t *Terrain) cellVoid(cx, cz int) bool {
 	if t.Void == nil {

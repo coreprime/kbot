@@ -19,6 +19,19 @@ import { openSandboxSpawnPicker, setSandboxPanelVisible } from './spawn-picker.j
 import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
 import { setEnhanceMeshEnabled } from '@kbot/game3d/enhance-mesh'
 
+// _wantContours — the user's per-session contour-overlay choice from the View
+// menu. Held at module scope (not on a renderer) because each view/pane owns a
+// renderer that starts with contours off; reapplyContours() pushes this onto a
+// view's renderer after it gets fresh terrain so the menu and the overlay agree.
+let _wantContours = false
+
+// reapplyContours pushes the remembered contour-overlay choice onto a view's
+// renderer — called from the map loader after setMapTerrain so a freshly loaded
+// battlefield honours an already-ticked Contour Lines box.
+export function reapplyContours(view) {
+  if (view && view.renderer) view.renderer.contoursEnabled = _wantContours
+}
+
 // wireSandboxRibbon — install the host bridge + mount the ribbon's
 // React tree.  Idempotent; safe to call before / after the React UI
 // module has resolved (the early-return guard bails until the UI
@@ -98,15 +111,17 @@ export function wireSandboxRibbon() {
         view.camera.pitch = 45 * Math.PI / 180
         view.camera.distance = 1700
       },
-      // Contour-line overlay over a loaded battlefield's terrain.
+      // Contour-line overlay over a loaded battlefield's terrain. The menu's
+      // checked state is per-session (the _contours signal), but each view owns
+      // its own renderer whose contoursEnabled starts false — so opening a new
+      // sandbox / loading a map left the box ticked while the overlay was off.
+      // Remember the wanted state here and reapplyContours() on every map load.
       setContours: (on) => {
+        _wantContours = !!on
         const view = sb()
-        if (view && view.renderer) view.renderer.contoursEnabled = !!on
+        if (view && view.renderer) view.renderer.contoursEnabled = _wantContours
       },
-      getContours: () => {
-        const view = sb()
-        return !!(view && view.renderer && view.renderer.contoursEnabled)
-      },
+      getContours: () => _wantContours,
       resetCamera: () => {
         // Restore the default orbit pose the SandboxView starts at —
         // matches the camera's `open()` initialisation in

@@ -1286,6 +1286,10 @@ func (w *World) RemoveUnit(id uint32) {
 func (w *World) ApplyOrder(o order.Order) {
 	switch o.Kind {
 	case order.KindMove:
+		// Hard border: a move destination off the map is pulled to the edge, so
+		// no unit can be navigated past it (aircraft fly their own maneuvers and
+		// are governed separately in stepMovement).
+		o.Target = w.clampToMap(o.Target, 0)
 		for _, id := range o.UnitIDs {
 			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() {
 				// A factory can't move — a Move sets its rally template
@@ -1317,6 +1321,7 @@ func (w *World) ApplyOrder(o order.Order) {
 			}
 		}
 	case order.KindPatrol:
+		o.Target = w.clampToMap(o.Target, 0)
 		for _, id := range o.UnitIDs {
 			u := w.units[id]
 			if u == nil || u.Dead || u.underConstruction() || u.Meta == nil {
