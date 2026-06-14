@@ -2688,7 +2688,6 @@ export class ModelRenderer {
     // level (mode 5) the real seabed shows through.
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
-      gl.uniform2fv(this.uGroundMapTexShift, mt.texShift || [0, 0])
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapHeightScale, mt.heightScale || 1)
@@ -2726,16 +2725,31 @@ export class ModelRenderer {
     this.clearMapTerrain()
     if (!image || !heights || !w || !h) return
     const stride = Math.max(1, Math.ceil(Math.sqrt((w * h) / 90000)))
-    const cols = Math.floor((w - 1) / stride)
-    const rows = Math.floor((h - 1) / stride)
+    // Tile the FULL map rect [0, w*cellWU] × [0, h*cellWU] — the same extent the
+    // texture (UV 0..1) and the water sheet span. Cell boundaries step by
+    // `stride`, with the final boundary SNAPPED to the map edge (w / h) so the
+    // mesh reaches UV 1.0. The old floor((w-1)/stride) column count stopped the
+    // mesh up to a full stride of cells short on the far edges, so the texture
+    // (mapped over the whole rect) overhung the smaller surface — undrawn
+    // terrain whose margin varied with w mod stride / h mod stride, i.e. with
+    // map size. Snapping the last span also keeps the surface its true size, so
+    // unit-to-map scale no longer shrinks by that margin.
+    const edges = (n) => {
+      const e = []
+      for (let i = 0; i < n; i += stride) e.push(i)
+      if (e[e.length - 1] !== n) e.push(n)
+      return e
+    }
+    const xe = edges(w), ze = edges(h)
+    const cols = xe.length - 1, rows = ze.length - 1
     const verts = new Float32Array(cols * rows * 18)
     const Y = (cx, cz) => heights[Math.min(cz, h - 1) * w + Math.min(cx, w - 1)] * heightScale
     let o = 0
     for (let r = 0; r < rows; r++) {
-      const cz0 = r * stride, cz1 = cz0 + stride
+      const cz0 = ze[r], cz1 = ze[r + 1]
       const z0 = originZ + cz0 * cellWU, z1 = originZ + cz1 * cellWU
       for (let c = 0; c < cols; c++) {
-        const cx0 = c * stride, cx1 = cx0 + stride
+        const cx0 = xe[c], cx1 = xe[c + 1]
         const x0 = originX + cx0 * cellWU, x1 = originX + cx1 * cellWU
         const y00 = Y(cx0, cz0), y10 = Y(cx1, cz0), y01 = Y(cx0, cz1), y11 = Y(cx1, cz1)
         verts[o++] = x0; verts[o++] = y00; verts[o++] = z0
@@ -2760,12 +2774,8 @@ export class ModelRenderer {
     // Upload to a power-of-two SQUARE so WebGL1 can mipmap it. The square is a
     // non-uniform resize of the map rect, but the ground shader maps UV 0..1
     // over that same rect, so the stretch cancels on sample. Mipmaps + max
-    // anisotropy give smoothly-blended distance LOD with no shimmer — and they
-    // are what makes the texture seat on the mesh: the old fixed downscale +
-    // no-mip LINEAR sampling of the busy composite produced a map-dependent
-    // aliasing artifact that READ as a registration offset (the -2..-3 cell
-    // "shift" we chased). At full mip detail there is no offset, so texShift
-    // is 0. The canvas resize is a clean centred resample (no offset of its own).
+    // anisotropy give smoothly-blended distance LOD with no shimmer on the busy
+    // composite. The canvas resize is a clean centred resample.
     const potSize = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096)
     let texSrc = image
     if (image.width !== potSize || image.height !== potSize) {
@@ -2828,16 +2838,14 @@ export class ModelRenderer {
     // the composite over the sea cells (which already carry the planet's liquid
     // colour) so greenworld reads blue, lava red, acid green, metal near-black.
     const water = this._sampleWaterColor(image, heights, w, h, seaLevel)
-    // Texture-vs-mesh registration: none needed. With full mipmap detail the
-    // draped texture seats on the baked-height mesh exactly. The earlier
-    // per-map "offset" (the -2..-3 cell shifts) was a no-mip LINEAR aliasing
-    // artifact on the downscaled composite, not a geometric error — mipmapping
-    // (above) removes it, verified on Bertha Cleansing and Metal Heck.
+    // Texture-vs-mesh registration is handled per-fragment in ground.frag: the
+    // tile art was authored in TA's 2.5D view (each point shifted north on
+    // screen by height/2 px), so the shader pulls the UV north by rawHeight/2
+    // when sampling the draped composite. No constant offset is needed here.
     this._mapTerrain = {
       vbo, tex, heightTex, waterVbo, seaY, heightScale,
       count: cols * rows * 6,
       rect: [originX, originZ, w * cellWU, h * cellWU],
-      texShift: [0, 0],
       waterShallow: water && water.shallow,
       waterDeep: water && water.deep,
     }
@@ -3811,7 +3819,6 @@ export class ModelRenderer {
     // draped over a baked-height mesh. See setMapTerrain.
     this.uGroundMapTex = gl.getUniformLocation(prog, 'uMapTex')
     this.uGroundMapRect = gl.getUniformLocation(prog, 'uMapRect')
-    this.uGroundMapTexShift = gl.getUniformLocation(prog, 'uMapTexShift')
     this.uGroundMapHeightTex = gl.getUniformLocation(prog, 'uMapHeightTex')
     this.uGroundMapHeightScale = gl.getUniformLocation(prog, 'uMapHeightScale')
     this.uGroundMapSeaY = gl.getUniformLocation(prog, 'uMapSeaY')

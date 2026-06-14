@@ -25,10 +25,6 @@ uniform sampler2D uTerrainTex;
 // baked-height mesh. uMapRect is (originX, originZ, sizeX, sizeZ) in wu.
 uniform sampler2D uMapTex;
 uniform vec4 uMapRect;
-// Half-cell (or tuned) UV nudge that re-registers the draped texture with the
-// baked-height mesh: per-cell graphics hang on corner vertices, so a cell's
-// texture transitions half a cell early and rides up Z-facing walls without it.
-uniform vec2 uMapTexShift;
 // Battlefield extras: the raw heightmap as a texture (red channel =
 // height byte / 255), the world-unit scale of one height step, the sea
 // surface Y, plus the fog + contour toggles.
@@ -213,7 +209,18 @@ void main() {
   float shadow = sampleShadow();
 
   if (uGroundMode == 4) {
-    vec2 uv = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw + uMapTexShift;
+    vec2 baseUV = (vWorldPos.xz - uMapRect.xy) / uMapRect.zw;
+    // TA renders each terrain point shifted NORTH on screen by height/2 px
+    // (the 2.5D elevation fake — cf. nTA game_Terrain: Screen.y = y*16 - h/2),
+    // and the map art was authored in that shifted view. Replaying it here —
+    // pulling the UV north (−Z) by rawHeight/2 world units — seats painted
+    // shores and cliff edges on the baked-height mesh. The shift is
+    // height-DEPENDENT (taller ground shifts more), which is why no constant
+    // offset ever fit every map: ~3 cells at a sea-level shore, ~4 at a
+    // height-128 mound, ~7-8 on a 240-byte peak. uMapRect.w = map size in Z
+    // (wu); rawH*0.5 is the north shift in wu.
+    float rawH = texture2D(uMapHeightTex, baseUV).r * 255.0;
+    vec2 uv = baseUV - vec2(0.0, (rawH * 0.5) / uMapRect.w);
     vec3 base = texture2D(uMapTex, uv).rgb;
     base *= mix(1.0, shadow, 0.85);
     // Elevation contours: a line at every height interval, derived from
