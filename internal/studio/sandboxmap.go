@@ -185,8 +185,13 @@ func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Requ
 	// 4096 long edge: the client uploads the render to a power-of-two square and
 	// mipmaps it, so it wants real detail to build the mip chain from (the old
 	// 2048 cap left distant terrain shimmering under plain LINEAR sampling).
+	// The client loads the composite ONCE at high resolution and keeps it in
+	// memory, slicing the near-camera window into a bounded GPU clipmap cache
+	// in-process — so this is a single up-front fetch, never a runtime stream.
+	// Ceiling raised to the GPU max so that one fetch can carry near-native
+	// detail; downscaleRGBA only ever shrinks, so a small map stays native.
 	maxDim := 4096
-	if v, err := strconv.Atoi(r.URL.Query().Get("max")); err == nil && v >= 256 && v <= 8192 {
+	if v, err := strconv.Atoi(r.URL.Query().Get("max")); err == nil && v >= 256 && v <= 16384 {
 		maxDim = v
 	}
 	key := fmt.Sprintf("%s|%d", mapPath, maxDim)
@@ -236,6 +241,7 @@ func (sess *Session) handleSandboxMapTexture(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(buf.Bytes())
 }
+
 // sandboxSideJSON is one playable faction for the launch picker: the
 // sidedata name plus its leader unit (commander / monarch).
 type sandboxSideJSON struct {

@@ -2687,6 +2687,8 @@ export class ModelRenderer {
     // the map declares a sea, a translucent animated water sheet at sea
     // level (mode 5) the real seabed shows through.
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
+      // Keep the near-detail clipmap centred on the camera's ground focus.
+      this._maybeRecenterClip()
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
@@ -2697,6 +2699,16 @@ export class ModelRenderer {
       gl.activeTexture(gl.TEXTURE5)
       gl.bindTexture(gl.TEXTURE_2D, mt.heightTex)
       gl.uniform1i(this.uGroundMapHeightTex, 5)
+      // Near-detail clipmap cache: when active, the shader samples it (instead
+      // of the lower-res base) inside its world window, cross-fading at the rim.
+      const clipOn = mt.clipActive && mt.clipTex && mt.clipRect
+      gl.uniform1f(this.uGroundMapClipOn, clipOn ? 1 : 0)
+      if (clipOn) {
+        gl.uniform4fv(this.uGroundMapClipRect, mt.clipRect)
+        gl.activeTexture(gl.TEXTURE6)
+        gl.bindTexture(gl.TEXTURE_2D, mt.clipTex)
+        gl.uniform1i(this.uGroundMapClipTex, 6)
+      }
       gl.bindBuffer(gl.ARRAY_BUFFER, mt.vbo)
       gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
       gl.uniform1i(this.uGroundModeId, 4)
@@ -2799,6 +2811,27 @@ export class ModelRenderer {
       gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT,
         gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT))
     }
+    // ── Ground clipmap (near-detail cache) ──────────────────────────────
+    // `image` is the full composite, loaded ONCE and kept in memory. The base
+    // `tex` above is a 4096 whole-map mip chain (the far/fallback). Here we set
+    // up a second bounded POT cache (`clipTex`) that holds only the camera's
+    // near window, re-sliced from `image` IN-PROCESS as the camera pans — no
+    // server access after this load. So near ground shows native source detail
+    // while VRAM stays fixed (base + cache) regardless of map size. When the
+    // source is no larger than the cache the base already has all the detail,
+    // so the clip is disabled.
+    const CLIP_SIZE = Math.min(4096, gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096)
+    const srcLong = Math.max(image.width, image.height)
+    const clipFrac = CLIP_SIZE / srcLong
+    const clipActive = clipFrac < 0.95
+    let clipTex = null
+    let clipCanvas = null
+    if (clipActive) {
+      clipTex = gl.createTexture()
+      clipCanvas = document.createElement('canvas')
+      clipCanvas.width = CLIP_SIZE
+      clipCanvas.height = CLIP_SIZE
+    }
     // Raw heightmap as a texture (red byte = height) — the water shader
     // reads the true bed depth per fragment from it.
     const heightTex = gl.createTexture()
@@ -2848,7 +2881,69 @@ export class ModelRenderer {
       rect: [originX, originZ, w * cellWU, h * cellWU],
       waterShallow: water && water.shallow,
       waterDeep: water && water.deep,
+      // Clipmap near-detail cache (see above). srcImage stays in memory for
+      // in-process re-slicing; clipRect/clipCenter track the current window.
+      srcImage: image, clipTex, clipCanvas, clipSize: CLIP_SIZE, clipFrac, clipActive,
+      clipRect: null, clipCenter: null,
     }
+    if (clipActive) {
+      // Seed the cache on the map centre; draw() re-centres it on the camera.
+      this.updateGroundClipmap(originX + w * cellWU / 2, originZ + h * cellWU / 2)
+    }
+  }
+
+  // updateGroundClipmap re-slices the camera's near window out of the in-memory
+  // composite into the bounded GPU cache (clipTex). Called on map load and when
+  // the camera focus drifts far enough across the window (see _maybeRecenterClip).
+  // Pure in-process work — no server access.
+  updateGroundClipmap(cx, cz) {
+    const gl = this.gl
+    const mt = this._mapTerrain
+    if (!mt || !mt.clipActive || !mt.srcImage || !mt.clipTex) return
+    const ox = mt.rect[0], oz = mt.rect[1], mw = mt.rect[2], mh = mt.rect[3]
+    const winW = mw * mt.clipFrac, winH = mh * mt.clipFrac
+    // Centre the window on (cx,cz), clamped so it never leaves the map.
+    let x0 = (cx - ox) - winW / 2, z0 = (cz - oz) - winH / 2
+    x0 = Math.max(0, Math.min(mw - winW, x0))
+    z0 = Math.max(0, Math.min(mh - winH, z0))
+    const src = mt.srcImage
+    const sx = (x0 / mw) * src.width, sy = (z0 / mh) * src.height
+    const sw = (winW / mw) * src.width, sh = (winH / mh) * src.height
+    const ctx2 = mt.clipCanvas.getContext('2d')
+    ctx2.imageSmoothingEnabled = true
+    if ('imageSmoothingQuality' in ctx2) ctx2.imageSmoothingQuality = 'high'
+    ctx2.drawImage(src, sx, sy, sw, sh, 0, 0, mt.clipSize, mt.clipSize)
+    gl.bindTexture(gl.TEXTURE_2D, mt.clipTex)
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mt.clipCanvas)
+    gl.generateMipmap(gl.TEXTURE_2D)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    const ext = gl.getExtension('EXT_texture_filter_anisotropic') ||
+      gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
+    if (ext) {
+      gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT,
+        gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT))
+    }
+    mt.clipRect = [ox + x0, oz + z0, winW, winH]
+    mt.clipCenter = [ox + x0 + winW / 2, oz + z0 + winH / 2]
+    this.requestRedraw()
+  }
+
+  // _maybeRecenterClip re-slices the clipmap when the camera's ground focus
+  // has drifted past ~30% of the window from its centre — cheap distance gate
+  // so we re-upload on real panning, not every frame.
+  _maybeRecenterClip() {
+    const mt = this._mapTerrain
+    if (!mt || !mt.clipActive || !this.camera || !this.camera.target) return
+    const tx = this.camera.target[0], tz = this.camera.target[2]
+    if (!mt.clipCenter) { this.updateGroundClipmap(tx, tz); return }
+    const winW = mt.rect[2] * mt.clipFrac
+    const dx = tx - mt.clipCenter[0], dz = tz - mt.clipCenter[1]
+    if (Math.hypot(dx, dz) > winW * 0.3) this.updateGroundClipmap(tx, tz)
   }
 
   // _sampleWaterColor derives the water tint from the map's own composite by
@@ -2888,6 +2983,7 @@ export class ModelRenderer {
     if (!mt) return
     try { gl.deleteBuffer(mt.vbo) } catch { /* context loss */ }
     try { gl.deleteTexture(mt.tex) } catch { /* context loss */ }
+    try { if (mt.clipTex) gl.deleteTexture(mt.clipTex) } catch { /* context loss */ }
     try { if (mt.heightTex) gl.deleteTexture(mt.heightTex) } catch { /* context loss */ }
     try { if (mt.waterVbo) gl.deleteBuffer(mt.waterVbo) } catch { /* context loss */ }
     this._mapTerrain = null
@@ -3819,6 +3915,9 @@ export class ModelRenderer {
     // draped over a baked-height mesh. See setMapTerrain.
     this.uGroundMapTex = gl.getUniformLocation(prog, 'uMapTex')
     this.uGroundMapRect = gl.getUniformLocation(prog, 'uMapRect')
+    this.uGroundMapClipTex = gl.getUniformLocation(prog, 'uMapClipTex')
+    this.uGroundMapClipRect = gl.getUniformLocation(prog, 'uMapClipRect')
+    this.uGroundMapClipOn = gl.getUniformLocation(prog, 'uMapClipOn')
     this.uGroundMapHeightTex = gl.getUniformLocation(prog, 'uMapHeightTex')
     this.uGroundMapHeightScale = gl.getUniformLocation(prog, 'uMapHeightScale')
     this.uGroundMapSeaY = gl.getUniformLocation(prog, 'uMapSeaY')

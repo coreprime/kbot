@@ -52,7 +52,13 @@ export async function loadSandboxMap(view, path, onStep) {
   // of a full TA tile map can take a beat — so it owns the bulk of the
   // map-load progress span.
   step(0.25, 'Rendering terrain…')
-  const image = await loadImage(wsUrl(info.textureUrl))
+  // Load the composite ONCE at (near-)native resolution and keep it in memory:
+  // the renderer's clipmap slices the camera's near window out of it in-process
+  // for crisp near detail, so this single up-front fetch is the only server
+  // touch for the ground texture. Long edge = cells×16 px, capped at the GL max.
+  const srcLong = Math.min(16384, Math.max(info.w, info.h) * 16)
+  const texUrl = info.textureUrl + (info.textureUrl.includes('?') ? '&' : '?') + 'max=' + srcLong
+  const image = await loadImage(wsUrl(texUrl))
   view.renderer?.setMapTerrain({
     image, heights,
     w: info.w, h: info.h,

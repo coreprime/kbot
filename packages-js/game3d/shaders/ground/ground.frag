@@ -25,6 +25,12 @@ uniform sampler2D uTerrainTex;
 // baked-height mesh. uMapRect is (originX, originZ, sizeX, sizeZ) in wu.
 uniform sampler2D uMapTex;
 uniform vec4 uMapRect;
+// Near-detail clipmap cache: a high-res slice of the composite covering the
+// camera's window (uMapClipRect = originX,originZ,sizeX,sizeZ in wu). Sampled
+// instead of the lower-res base inside that window, cross-faded at the rim.
+uniform sampler2D uMapClipTex;
+uniform vec4 uMapClipRect;
+uniform float uMapClipOn;
 // Battlefield extras: the raw heightmap as a texture (red channel =
 // height byte / 255), the world-unit scale of one height step, the sea
 // surface Y, plus the fog + contour toggles.
@@ -227,6 +233,19 @@ void main() {
     float shiftZ = min((rawH * 0.5) / uMapRect.w, baseUV.y);
     vec2 uv = baseUV - vec2(0.0, shiftZ);
     vec3 base = texture2D(uMapTex, uv).rgb;
+    // Near-detail clipmap: where the fragment falls inside the cache window,
+    // sample the high-res slice (same height-shift, scaled to the window) and
+    // cross-fade base→clip across a rim margin so there's no visible seam.
+    // Outside the window (or when off) the base + mips carry the distance,
+    // exactly as before — native detail up close, bounded VRAM.
+    if (uMapClipOn > 0.5) {
+      vec2 cBase = (vWorldPos.xz - uMapClipRect.xy) / uMapClipRect.zw;
+      vec2 cUV = cBase - vec2(0.0, (rawH * 0.5) / uMapClipRect.w);
+      vec2 e0 = smoothstep(vec2(0.0), vec2(0.06), cBase);
+      vec2 e1 = smoothstep(vec2(0.0), vec2(0.06), vec2(1.0) - cBase);
+      float cw = e0.x * e0.y * e1.x * e1.y;
+      if (cw > 0.0) base = mix(base, texture2D(uMapClipTex, cUV).rgb, cw);
+    }
     base *= mix(1.0, shadow, 0.85);
     // Elevation contours: a line at every height interval, derived from
     // the mesh's own Y so they hug the real terrain. Anti-aliased by
