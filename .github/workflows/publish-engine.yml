@@ -64,7 +64,7 @@ jobs:
         run: trivy fs --scanners vuln --exit-code 0 pack-verify/extracted
 
       - name: Publish verified tarball
-        run: npm publish pack-verify/*.tgz
+        run: npm publish ./pack-verify/*.tgz
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
