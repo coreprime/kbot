@@ -55,7 +55,7 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
 
       - name: Secret scan (trufflehog)
-        run: trufflehog filesystem pack-verify/extracted --results=verified,unknown --fail
+        run: trufflehog --no-update filesystem pack-verify/extracted --results=verified,unknown --fail
 
       - name: Secret scan (trivy)
         run: trivy fs --scanners secret --exit-code 1 pack-verify/extracted
