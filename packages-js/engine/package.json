@@ -1,0 +1,39 @@
+{
+  "name": "@kbot/engine",
+  "version": "0.1.0",
+  "description": "Deterministic KBot simulation engine (Go compiled to WebAssembly) with a small ESM loader for browsers and Node.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./engine.wasm": "./wasm/engine.wasm"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "wasm/engine.wasm",
+    "wasm/wasm_exec.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build-wasm.mjs",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/coreprime/kbot.git",
+    "directory": "packages-js/engine"
+  }
+}

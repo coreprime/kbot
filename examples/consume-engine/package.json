@@ -1,0 +1,13 @@
+{
+  "name": "consume-engine-example",
+  "private": true,
+  "description": "Installs the published engine package from GitHub Packages and drives it headless in Node.",
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@coreprime/kbot-engine": "0.1.0"
+  }
+}

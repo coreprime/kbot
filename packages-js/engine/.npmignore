@@ -1,0 +1,11 @@
+# Defense in depth: package.json "files" is the allow-list; this deny-list
+# backstops it so secrets and junk can never ship in the tarball.
+.npmrc
+.env
+.env.*
+.git*
+*.pem
+*.key
+*.tgz
+node_modules/
+scripts/
