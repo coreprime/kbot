@@ -45,6 +45,16 @@ session.setUnitState(id, { pos: { x: 250, y: 0, z: 300 }, heading: Math.PI / 2, 
 global API); run multiple simulations by creating multiple sessions. In Node
 the parked wasm runtime keeps the event loop alive — exit explicitly when done.
 
+Every heading crossing this API follows the game's convention (the one
+recordings carry): a uint16 TA angle maps 0 → facing −Z (map north), 0x4000 →
+−X (west), 65536 per turn; radians parameters/fields are that angle times
+2π/65536 with **no offsets** — convert with `@kbot/game3d`'s
+`headingToRadians`. Snapshot units carry `piecesPacked` (stride-7 Float32:
+move x/y/z in world units, turn x/y/z in TA angles, visible flag) indexed by
+the unit's COB piece table (`session.pieceNames(unitId)`); apply it by NAME
+via `@kbot/game3d`'s `applyPackedPieces` — COB table order is not the model
+hierarchy order.
+
 ## Building from source
 
 The wasm binary is generated from the repo's Go code and is not committed:

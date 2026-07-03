@@ -103,7 +103,9 @@ export interface SnapshotUnit {
   x: number
   y: number
   z: number
+  /** Game-convention uint16 TA angle: 0 faces -Z (north), 65536/turn. */
   heading: number
+  /** heading in radians — feeds game3d transform.headingRad directly. */
   headingRad: number
   speed: number
   health: number
@@ -217,6 +219,8 @@ export class Session {
   killThreadsByName(unitId: number, name: string): void
   /** The unit type's COB entry-point names in script-index order. */
   scriptNames(unitId: number): string[]
+  /** COB piece table in piece-index order (pairs with piecesPacked). */
+  pieceNames(unitId: number): string[]
   renderState(): Snapshot
   exportSnapshot(): Record<string, unknown>
   hash(): string

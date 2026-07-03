@@ -247,6 +247,15 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 	return tick, units, projectilesFromJS(o.Get("projectiles")), uint32(getInt64(o, "runtimeRng"))
 }
 
+// The JS boundary speaks TA's game/wire heading convention — heading 0 faces
+// -Z (north), 0x4000 west, matching what recordings carry and what the
+// renderer's rotateY takes for nose-toward--Z models. The sim's internal
+// parameterization points the opposite way (heading 0 = +Z), so every
+// heading crossing the boundary shifts by a half turn, in one place, here.
+func headingToWire(h int32) int32 { return fixed.NormalizeAngle(h + fixed.HalfCircle) }
+
+func headingFromWire(h int32) int32 { return fixed.NormalizeAngle(h + fixed.HalfCircle) }
+
 // unitStateFromJS reads the replay driver's per-unit override object into a
 // sim.UnitStateOverride. Values follow the loader's float conventions — world
 // units for pos, radians for heading, wu/sec for vel, the 0..100 scales for hp
@@ -267,7 +276,7 @@ func unitStateFromJS(o js.Value) sim.UnitStateOverride {
 	}
 	if v := o.Get("heading"); v.Type() == js.TypeNumber {
 		ov.HasHeading = true
-		ov.Heading = fixed.FromInt(int(fixed.RadiansToAngle(v.Float())))
+		ov.Heading = fixed.FromInt(int(headingFromWire(fixed.RadiansToAngle(v.Float()))))
 	}
 	if v := o.Get("vel"); v.Type() == js.TypeNumber {
 		ov.HasSpeed = true
@@ -638,7 +647,7 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 			"x":         p.Pos.X.Float(),
 			"y":         p.Pos.Y.Float(),
 			"z":         p.Pos.Z.Float(),
-			"heading":   int(p.Heading),
+			"heading":   int(headingToWire(p.Heading)),
 			"pitch":     int(p.Pitch),
 			"fromPiece": int(p.FromPiece),
 			// Inspection fields the Projectiles panel reads to plot the
@@ -712,8 +721,8 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"x":              u.Pos.X.Float(),
 		"y":              u.Pos.Y.Float(),
 		"z":              u.Pos.Z.Float(),
-		"heading":        int(u.Heading),
-		"headingRad":     fixed.AngleToRadians(u.Heading),
+		"heading":        int(headingToWire(u.Heading)),
+		"headingRad":     fixed.AngleToRadians(headingToWire(u.Heading)),
 		"speed":          u.Speed.Float(),
 		"health":         u.Health.Float(),
 		"dead":           u.Dead,
@@ -834,6 +843,12 @@ var eventNames = map[frame.EventKind]string{
 }
 
 func eventToJS(e *frame.Event) map[string]any {
+	// A corpse event rides the body heading in SfxType — shift it to the
+	// boundary's game convention like every other heading crossing.
+	sfx := e.SfxType
+	if e.Kind == frame.EvCorpseSpawn {
+		sfx = int(headingToWire(int32(sfx)))
+	}
 	return map[string]any{
 		"kind":      eventNames[e.Kind],
 		"unitId":    int(e.UnitID),
@@ -841,7 +856,7 @@ func eventToJS(e *frame.Event) map[string]any {
 		"slot":      e.Slot,
 		"weapon":    e.Weapon,
 		"sound":     e.Sound,
-		"sfxType":   e.SfxType,
+		"sfxType":   sfx,
 		"x":         e.Anchor.X.Float(),
 		"y":         e.Anchor.Y.Float(),
 		"z":         e.Anchor.Z.Float(),

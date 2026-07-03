@@ -102,7 +102,12 @@ export class Session {
     return this.#handle
   }
 
-  /** Insert a unit directly; returns its unit id. */
+  /**
+   * Insert a unit directly; returns its unit id. headingRad follows the
+   * game convention every boundary heading uses: 0 faces -Z (map north),
+   * the unit moves along (-sin, -cos) of it — convert a recording's uint16
+   * heading with @kbot/game3d's headingToRadians and pass it straight in.
+   */
   addUnit(meta, x, z, headingRad = 0, side = 1) {
     return this.#api.addUnit(this.#handle, meta, x, z, headingRad, side)
   }
@@ -193,9 +198,11 @@ export class Session {
   /**
    * Authoritatively overwrite one live unit's pose/state — the per-tick hook
    * replay uses to pin units to decoded wire truth. Only the keys present on
-   * state are applied: pos {x,y,z} in world units, heading in radians, vel in
-   * world units/sec, hp and build on their 0..100 scales. The unit must
-   * already exist; returns false for a missing id (create it first).
+   * state are applied: pos {x,y,z} in world units, heading in radians (game
+   * convention: 0 faces -Z / north — headingToRadians of the wire value, no
+   * offsets), vel in world units/sec, hp and build on their 0..100 scales.
+   * The unit must already exist; returns false for a missing id (create it
+   * first).
    */
   setUnitState(unitId, state) {
     return this.#api.setUnitState(this.#handle, unitId, state)
@@ -233,6 +240,17 @@ export class Session {
    */
   scriptNames(unitId) {
     return this.#api.scriptNames(this.#handle, unitId)
+  }
+
+  /**
+   * The unit's COB piece table in piece-index order — the names that pair
+   * with the snapshot's packed piece transforms (piecesPacked) so per-piece
+   * state applies BY NAME. COB table order is not the model hierarchy
+   * order; index-blind application puts a Samson's hidden build flares on
+   * its body. Empty for script-less units.
+   */
+  pieceNames(unitId) {
+    return this.#api.unitPieceNames(this.#handle, unitId)
   }
 
   /** Render snapshot at the current tick without advancing. */

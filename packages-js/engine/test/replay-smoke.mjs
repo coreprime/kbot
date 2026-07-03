@@ -81,12 +81,14 @@ assert.ok(drift <= (pin.vel * n) / 40 + 1e-3, `unit drifted ${drift} WU from the
 // driver), coasts along the heading at the pinned vel, and `moving: false`
 // releases it. The unit has no COB here, so this asserts the sim-side flag
 // and coast only; the script transitions are covered by the Go sim tests.
+// Heading follows the game convention: 0 faces -Z (north), so the coast
+// DECREASES z — a raw recorded heading drives the sim with no offset.
 session.setUnitState(id, { pos: { x: 400, y: 0, z: 400 }, heading: 0, vel: 2, moving: true })
 const pinnedMoving = session.stepTo(session.tick() + 10).units.find((u) => u.id === id)
 assert.equal(pinnedMoving.isMoving, true, 'motion pin did not latch isMoving')
 assert.ok(
-  Math.abs(pinnedMoving.z - (400 + (2 * 10) / 40)) < 1e-3,
-  `pinned unit did not coast along heading: z=${pinnedMoving.z}`,
+  Math.abs(pinnedMoving.z - (400 - (2 * 10) / 40)) < 1e-3,
+  `pinned unit did not coast along heading (0 = north / -Z): z=${pinnedMoving.z}`,
 )
 session.setUnitState(id, { moving: false })
 const pinnedStopped = session.stepTo(session.tick() + 2).units.find((u) => u.id === id)

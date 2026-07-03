@@ -102,6 +102,7 @@ func main() {
 		"restartScript":     js.FuncOf(restartScript),
 		"killThreadsByName": js.FuncOf(killThreadsByName),
 		"scriptNames":       js.FuncOf(scriptNames),
+		"unitPieceNames":    js.FuncOf(unitPieceNames),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -196,6 +197,8 @@ func compileCOB(b []byte) *script.Program {
 
 // addUnit(handle, metaObj, x, z, headingRad, side) -> unitId. Direct insertion
 // for the offline/authoring path; networked clients receive Spawn orders.
+// headingRad follows the boundary's game convention — 0 faces -Z (north),
+// see headingFromWire.
 func addUnit(_ js.Value, args []js.Value) any {
 	inst := instances[args[0].Int()]
 	if inst == nil {
@@ -203,7 +206,7 @@ func addUnit(_ js.Value, args []js.Value) any {
 	}
 	meta := metaFromJS(args[1])
 	at := fixed.Vec2{X: fixed.FromFloat(args[2].Float()), Z: fixed.FromFloat(args[3].Float())}
-	heading := fixed.RadiansToAngle(args[4].Float())
+	heading := headingFromWire(fixed.RadiansToAngle(args[4].Float()))
 	side := args[5].Int()
 	binding := inst.bindingFor(meta.Name, args[1])
 	id := inst.world.AddUnit(meta.Name, meta, binding, at, heading, side)
@@ -279,7 +282,7 @@ func submitBuild(_ js.Value, args []js.Value) any {
 	target := fixed.Vec2{X: fixed.FromFloat(args[3].Float()), Z: fixed.FromFloat(args[4].Float())}
 	var heading int32
 	if len(args) > 6 {
-		heading = fixed.RadiansToAngle(args[6].Float())
+		heading = headingFromWire(fixed.RadiansToAngle(args[6].Float()))
 	}
 	if len(args) > 5 && args[5].Truthy() {
 		return int(inst.sess.Submit(order.BuildQueued(uint32(args[1].Int()), args[2].String(), target, heading)))
@@ -705,6 +708,23 @@ func scriptNames(_ js.Value, args []js.Value) any {
 		return js.ValueOf([]any{})
 	}
 	names := inst.world.UnitScriptNames(uint32(args[1].Int()))
+	out := make([]any, len(names))
+	for i, n := range names {
+		out[i] = n
+	}
+	return js.ValueOf(out)
+}
+
+// unitPieceNames(handle, unitId) lists a unit's COB piece table in piece-index
+// order — the names a renderer pairs with the snapshot's packed piece
+// transforms so per-piece state lands by NAME (COB table order is not the
+// model hierarchy order). Empty for script-less units.
+func unitPieceNames(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.ValueOf([]any{})
+	}
+	names := inst.world.UnitPieceNames(uint32(args[1].Int()))
 	out := make([]any, len(names))
 	for i, n := range names {
 		out[i] = n
