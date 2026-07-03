@@ -61,6 +61,13 @@ export class ModelLoader {
     // team/logo textures resolve against the unit's own side GAF. The query
     // is baked into every texture key this load produces.
     this._texQuery = data.textureQuery || ''
+    // Model-level geometry accumulator: every piece's draw groups append
+    // their interleaved vertices here and record a [first, count) slice.
+    // ONE VBO per model then serves every group — the renderer binds and
+    // points the attribute arrays once per geometry walk instead of once
+    // per group, which is what makes a 300-unit field's submission cost
+    // scale with units instead of with (pieces × textures).
+    this._geoAcc = { floats: [], groups: [] }
     const root = this.#buildPiece(data.root)
     // X-flip the bounds to match the per-piece flip applied above,
     // otherwise camera framing centres on the un-flipped X midpoint.
@@ -69,6 +76,16 @@ export class ModelLoader {
       max: [-data.bounds.min[0], data.bounds.max[1], data.bounds.max[2]],
     } : data.bounds
     const model = new Model({ name: data.name, root, bounds: flippedBounds })
+    // Upload the accumulated geometry as the model's single shared VBO.
+    if (this._geoAcc.floats.length) {
+      const gl = this.gl
+      const vbo = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this._geoAcc.floats), gl.STATIC_DRAW)
+      for (const g of this._geoAcc.groups) g.vbo = vbo
+      model.sharedVbo = vbo
+    }
+    this._geoAcc = null
     // Phase 2 LOD — tag cosmetic-only pieces so the renderer's mid
     // tier (units small on screen) can skip their draw groups.
     // Heuristic: names match the TA convention for sub-pixel detail
@@ -484,11 +501,13 @@ export class ModelLoader {
           synthetic: !!bucket.synthetic,
         }
         applyResolvedHints(group, bucket.texture)
-        const arr = new Float32Array(bucket.interleaved)
-        group.vbo = gl.createBuffer()
-        gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)
-        gl.bufferData(gl.ARRAY_BUFFER, arr, gl.STATIC_DRAW)
-        group.vertexCount = arr.length / FLOATS_PER_VERTEX
+        // Append into the model-level accumulator; the VBO is shared and
+        // assigned after the whole tree is built (see load()).
+        const acc = this._geoAcc
+        group.first = (acc.floats.length / FLOATS_PER_VERTEX) | 0
+        for (let i = 0; i < bucket.interleaved.length; i++) acc.floats.push(bucket.interleaved[i])
+        group.vertexCount = bucket.interleaved.length / FLOATS_PER_VERTEX
+        acc.groups.push(group)
         if (group.isDecal) decal.push(group)
         else opaque.push(group)
       }

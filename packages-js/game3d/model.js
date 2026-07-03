@@ -105,10 +105,13 @@ export class Model {
     // here would break every other live unit sharing the geometry.
     // Only the canonical loader-cached model owns the buffers.
     if (this.isInstance) return
+    // Draw-group geometry lives in ONE shared VBO per model; delete it
+    // once (per-group vbo fields all alias it).
+    if (this.sharedVbo) {
+      gl.deleteBuffer(this.sharedVbo)
+      this.sharedVbo = null
+    }
     for (const p of this.flat) {
-      for (const g of p.drawGroups) {
-        if (g.vbo) gl.deleteBuffer(g.vbo)
-      }
       p.drawGroups = []
       if (p.wireframe?.vbo) {
         gl.deleteBuffer(p.wireframe.vbo)

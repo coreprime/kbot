@@ -1796,6 +1796,8 @@ export class ModelRenderer {
     // so the Renderer panel's "drew/culled/total" rows reflect THIS
     // frame's sphere-vs-frustum tests below.  Reads are cheap so the
     // panel can poll every refresh tick without coordination.
+    this._frameStamp = (this._frameStamp || 0) + 1
+    this.#uCacheReset()
     this._cullStats.drew = 0
     this._cullStats.culled = 0
     this._cullStats.shadowed = 0
@@ -2371,6 +2373,7 @@ export class ModelRenderer {
   }
 
   #renderHoverHighlight() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
@@ -2567,6 +2570,7 @@ export class ModelRenderer {
   // ── Frame: sky pass ─────────────────────────────────────────────────
 
   #renderSky() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     gl.useProgram(this.programSky)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._skyVBO)
@@ -2610,6 +2614,7 @@ export class ModelRenderer {
   // ── Frame: ground plane pass ───────────────────────────────────────
 
   #renderGround() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     gl.useProgram(this.programGround)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._groundVBO)
@@ -3167,6 +3172,11 @@ export class ModelRenderer {
   // this pass doesn't look like a full duplicate of the unit.
   #renderReflection() {
     const gl = this.gl
+    // This pass sets main-program uniforms directly (mirrored matrices,
+    // reflection tint); reset the elision cache so the raw writes can't
+    // desync it, and again on exit for the entity loop that follows.
+    this.#uCacheReset()
+    this._mainSetupFrame = -1
     gl.useProgram(this.programMain)
     gl.uniformMatrix4fv(this.uProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uView, false, this.camera.viewMatrix)
@@ -3304,6 +3314,10 @@ export class ModelRenderer {
     gl.enable(gl.POLYGON_OFFSET_FILL)
     gl.polygonOffset(1.0, 1.0)
     this.#drawGeometry(this.model.root, refl, false)
+    // The raw uniform writes above bypassed the elision cache — reset it
+    // (and force a fresh frame setup) before the ordinary main pass runs.
+    this.#uCacheReset()
+    this._mainSetupFrame = -1
     gl.polygonOffset(0.0, 0.0)
     gl.disable(gl.POLYGON_OFFSET_FILL)
 
@@ -3317,6 +3331,7 @@ export class ModelRenderer {
   // shots).  Saves + restores the unit's model / transform / build% so any
   // post-frame reader (inspectors, jump-to-piece) still sees the unit.
   #renderOverlayProjectiles() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const savedModel = this.model
     const savedBp = this.buildPercent
     const savedHide = this._lodHideFlares
@@ -3355,7 +3370,81 @@ export class ModelRenderer {
 
   // ── Frame: main scene pass ─────────────────────────────────────────
 
-  #renderMain(flat) {
+  // ── Redundant-GL-state elision ──────────────────────────────────────
+  //
+  // At battle scale the main pass submits thousands of per-piece /
+  // per-group draws, and most of their uniform + texture state repeats
+  // (same unit types, same textures, same hint values).  These helpers
+  // skip the gl call when the value already matches what was last set —
+  // per-program state survives useProgram switches, so the cache lives
+  // for the whole frame (reset at the top of draw()).  All writers of the
+  // cached uniforms go through the helpers, keeping cache and GL in sync.
+  #uCacheReset() {
+    if (!this._uCache) this._uCache = new Map()
+    else this._uCache.clear()
+    this._texBound0 = null
+    this._texBound4 = null
+    this._activeTexUnit = -1
+    this._boundGeoVbo = null
+  }
+
+  #u1f(loc, v) {
+    if (!loc) return
+    if (this._uCache.get(loc) === v) return
+    this._uCache.set(loc, v)
+    this.gl.uniform1f(loc, v)
+  }
+
+  #u1i(loc, v) {
+    if (!loc) return
+    if (this._uCache.get(loc) === v) return
+    this._uCache.set(loc, v)
+    this.gl.uniform1i(loc, v)
+  }
+
+  #u2f(loc, a, b) {
+    if (!loc) return
+    const c = this._uCache.get(loc)
+    if (c && c[0] === a && c[1] === b) return
+    this._uCache.set(loc, [a, b])
+    this.gl.uniform2f(loc, a, b)
+  }
+
+  #u3f(loc, a, b, c) {
+    if (!loc) return
+    const p = this._uCache.get(loc)
+    if (p && p[0] === a && p[1] === b && p[2] === c) return
+    this._uCache.set(loc, [a, b, c])
+    this.gl.uniform3f(loc, a, b, c)
+  }
+
+  #u4f(loc, a, b, c, d) {
+    if (!loc) return
+    const p = this._uCache.get(loc)
+    if (p && p[0] === a && p[1] === b && p[2] === c && p[3] === d) return
+    this._uCache.set(loc, [a, b, c, d])
+    this.gl.uniform4f(loc, a, b, c, d)
+  }
+
+  #bindTex(unit, tex) {
+    const gl = this.gl
+    const cached = unit === 0 ? this._texBound0 : this._texBound4
+    if (cached === tex) return
+    if (this._activeTexUnit !== unit) {
+      gl.activeTexture(unit === 0 ? gl.TEXTURE0 : gl.TEXTURE4)
+      this._activeTexUnit = unit
+    }
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    if (unit === 0) this._texBound0 = tex
+    else this._texBound4 = tex
+  }
+
+  // #mainFrameSetup uploads the main program's FRAME-CONSTANT uniforms
+  // (lights, shadow params, sea/time, pulse lights, sampler ints, shadow
+  // texture binds) once per frame; the per-entity #renderMain then only
+  // touches what actually varies per unit.  At 300 entities this removes
+  // ~15k redundant uniform calls per frame.
+  #mainFrameSetup(flat) {
     const gl = this.gl
     gl.useProgram(this.programMain)
     gl.uniformMatrix4fv(this.uProj, false, this.camera.projMatrix)
@@ -3371,67 +3460,54 @@ export class ModelRenderer {
     gl.uniform3fv(this.uMainEyePos, this.camera.eye)
     gl.uniform3fv(this.uMainFillColor, this._fillColor())
     gl.uniform3fv(this.uMainBackColor, this._backColor())
-    // Flat mode bypasses the directional + ambient + shadow path so
-    // the renderer prints the raw texture / palette colour.
-    gl.uniform1f(this.uFlatLighting, flat ? 1 : 0)
-    gl.uniform1f(this.uExposure, this.exposure)
-    gl.uniform1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
-    gl.uniform1f(this.uSpecularStrength, this.specularStrength)
-    gl.uniform1f(this.uRLStrength, this.rlStrength)
-    gl.uniform1f(this.uRLPhaseBuckets, RUNNING_LIGHT_TIMING_BUCKETS)
-    gl.uniform1f(this.uBumpStrength, this.bumpStrength)
-    gl.uniform1f(this.uRLFadeOut, 0.2)
-    gl.uniform1f(this.uBumpSmooth, 1.5)
-    gl.uniform1f(this.uBumpThreshold, 0.12)
-    gl.uniform1f(this.uBumpScale, 1.0)
-    gl.uniform2f(this.uTexel, 1 / 256, 1 / 256)
-    gl.uniform1f(this.uReflectionTint, 0)
-    gl.uniform1f(this.uShadowEnabled, (this._shadowFBO && !flat && this.shadowsEnabled) ? 1 : 0)
-    // Graphics Options shadow controls — uShadowStrength scales the
-    // self-shadow darkness, uSelfShadow gates it off entirely.  Both
-    // multiply into the unit's shadow term in main.frag.
-    gl.uniform1f(this.uShadowStrength, this.shadowStrength * this._shadowZoomFade())
-    gl.uniform1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
-    // Baseline specular scale — the per-batch draw loop overrides this
-    // with each group's specScale (from hints-textures.js) for metal-
-    // tagged groups when Surface Hints is on.  Set here so any main-
-    // program draw that doesn't hit the per-group path still has a sane
-    // (non-zero) value.
-    gl.uniform1f(this.uSpecScale, 1.0)
-    // Baseline the per-batch surface-hint effects off; the per-group draw
-    // loop turns them on for the tiles that opt in (hints-textures.js).
-    gl.uniform1f(this.uRunningLights, 0)
-    gl.uniform1f(this.uLampMapValid, 0)
-    gl.uniform1f(this.uRLEmit, 0)
-    gl.uniform1f(this.uBump, 0)
-    gl.uniform1f(this.uBumpIntensity, 0)
-    // Phase 2 lighting LOD — when the per-entity flag is set the
-    // shader skips rim / back-light / Blinn-Phong specular.  Set by
-    // the entity loop in lockstep with the shadow LOD: any entity
-    // small enough to skip the shadow pass also gets the cheap
-    // lighting path (the visible difference is negligible at that
-    // screen size).
-    gl.uniform1f(this.uLightingTier, this._lightingTierCheap ? 1 : 0)
-    gl.uniform1f(this.uShadowBias, 0.0025)
-    // Sea bounce/shimmer: paint the caustic onto the hull in the unit-viewer
-    // Sea backdrop AND on a sandbox map that has water (so a unit wading into
-    // the sea picks up the underwater shimmer). The shader gates the caustic on
-    // water-proximity, so land units well above the surface stay dry. Flat and
-    // wireframe modes bypass it.
+    this.#u1f(this.uFlatLighting, flat ? 1 : 0)
+    this.#u1f(this.uSpecularEnabled, this.optSpecular ? 1 : 0)
+    this.#u1f(this.uSpecularStrength, this.specularStrength)
+    this.#u1f(this.uRLStrength, this.rlStrength)
+    this.#u1f(this.uRLPhaseBuckets, RUNNING_LIGHT_TIMING_BUCKETS)
+    this.#u1f(this.uBumpStrength, this.bumpStrength)
+    this.#u1f(this.uReflectionTint, 0)
+    this.#u1f(this.uShadowEnabled, (this._shadowFBO && !flat && this.shadowsEnabled) ? 1 : 0)
+    this.#u1f(this.uShadowStrength, this.shadowStrength * this._shadowZoomFade())
+    this.#u1f(this.uSelfShadow, this.selfShadow ? 1 : 0)
+    this.#u1f(this.uShadowBias, 0.0025)
     const seaFx = !flat && (this.groundMode === 'sea' ||
       (this._mapTerrain != null && this._mapTerrain.seaY > 0))
-    gl.uniform1f(this.uSeaActive, seaFx ? 1 : 0)
-    gl.uniform1f(this.uMainTime, this._fxTimeSec())
-    gl.uniform1f(this.uMainWaterY, this._effectiveWaterY())
-    gl.uniform1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
-    gl.uniform1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
-    gl.uniform3fv(this.uMainTeamColor, this.teamColor || [0, 0, 1])
-    gl.uniform1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
-    // Dynamic pulse lights — fed by setPulseLights() from the controller each
-    // frame.  Unused slots upload range 0 so the shader skips them when no
-    // weapon is firing.  Same uniforms in main + reflection passes so the
-    // weapon glow reflects off water too.
+    this.#u1f(this.uSeaActive, seaFx ? 1 : 0)
+    this.#u1f(this.uMainTime, this._fxTimeSec())
+    this.#u1f(this.uMainWaterY, this._effectiveWaterY())
+    this.#u1f(this.uMainWaterOnHull, this.optWaterReflections ? 1 : 0)
+    this.#u1f(this.uMainWavesIntensity, this.optWaves ? this.wavesIntensity : 0.0)
     this.#uploadPulseLights(gl, this.uPulseLightPos, this.uPulseLightColor, this.uPulseLightRange, this.uPulseLightCount)
+    if (this._shadowFBO && !flat) {
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
+      gl.uniform1i(this.uShadowMap, 1)
+      gl.activeTexture(gl.TEXTURE3)
+      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex2 || this._shadowTex)
+      gl.uniform1i(this.uShadowMap2, 3)
+      this._activeTexUnit = -1
+    }
+    this._mainSetupFrame = this._frameStamp
+    this._mainSetupFlat = flat
+  }
+
+  #renderMain(flat) {
+    const gl = this.gl
+    gl.useProgram(this.programMain)
+    if (this._mainSetupFrame !== this._frameStamp || this._mainSetupFlat !== flat) {
+      this.#mainFrameSetup(flat)
+    }
+    // Per-entity uniforms only — everything frame-constant moved into
+    // #mainFrameSetup above.
+    this.#u1f(this.uExposure, this.exposure)
+    // Phase 2 lighting LOD — when the per-entity flag is set the
+    // shader skips rim / back-light / Blinn-Phong specular, in lockstep
+    // with the shadow LOD decision.
+    this.#u1f(this.uLightingTier, this._lightingTierCheap ? 1 : 0)
+    const tc = this.teamColor || [0, 0, 1]
+    this.#u3f(this.uMainTeamColor, tc[0], tc[1], tc[2])
+    this.#u1f(this.uMainTeamColorEnable, this.teamColorEnable ? 1 : 0)
     // Unit centre + radius for the pulse-light self-occlusion test.
     // Centre = model bbox centroid translated by the unit transform
     // (so it follows a walking unit).  Radius = bbox diagonal/2 with
@@ -3462,26 +3538,14 @@ export class ModelRenderer {
     // (flying debris fade-out) multiplies in.
     const _entOpacity = this._entityOpacity != null ? this._entityOpacity : 1
     if (this._buildCut != null) {
-      gl.uniform1f(this.uBuildCutOn, 1)
-      gl.uniform1f(this.uBuildCutY, this._buildCut)
-      gl.uniform3fv(this.uBuildFxColor, this._buildFxColor || [0.35, 1.0, 0.6])
-      gl.uniform1f(this.uMainOutputAlpha, _entOpacity)
+      this.#u1f(this.uBuildCutOn, 1)
+      this.#u1f(this.uBuildCutY, this._buildCut)
+      const bc = this._buildFxColor || [0.35, 1.0, 0.6]
+      this.#u3f(this.uBuildFxColor, bc[0], bc[1], bc[2])
+      this.#u1f(this.uMainOutputAlpha, _entOpacity)
     } else {
-      gl.uniform1f(this.uBuildCutOn, 0)
-      gl.uniform1f(this.uMainOutputAlpha, _bp * _bp * _bp * _entOpacity)
-    }
-    if (this._shadowFBO && !flat) {
-      gl.activeTexture(gl.TEXTURE1)
-      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
-      gl.uniform1i(this.uShadowMap, 1)
-      // Bind the second light's shadow map regardless of whether
-      // it's actively in use — the shader's branch on uLightColor2
-      // determines whether the sample contributes.  Pointing the
-      // sampler at a real texture (even if it's a stale frame's
-      // content) keeps WebGL happy.
-      gl.activeTexture(gl.TEXTURE3)
-      gl.bindTexture(gl.TEXTURE_2D, this._shadowTex2 || this._shadowTex)
-      gl.uniform1i(this.uShadowMap2, 3)
+      this.#u1f(this.uBuildCutOn, 0)
+      this.#u1f(this.uMainOutputAlpha, _bp * _bp * _bp * _entOpacity)
     }
     this.#drawGeometry(this.model.root, this._modelMatrix, false)
   }
@@ -3493,6 +3557,7 @@ export class ModelRenderer {
   // shoving each pass by ±1 pixel in screen space — a poor man's
   // "thick lines" that actually shows up cross-platform.
   #renderWireframe(color) {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     const width = Math.max(1, this.wireframeWidth | 0)
     gl.useProgram(this.programWire)
@@ -3545,6 +3610,12 @@ export class ModelRenderer {
   // pointers and uniforms get updated.
   #drawGeometry(rootPiece, parentWorld, shadowPass) {
     const gl = this.gl
+    // Other passes (ground, sky, post) drive gl.activeTexture directly;
+    // re-sync the elision cache's notion of the active unit on entry so
+    // #bindTex can't bind into a stale unit.  Bound-texture caches stay
+    // valid: no other pass binds into units 0 / 4 between geometry walks
+    // within a frame (reflection + frame start reset them fully).
+    this._activeTexUnit = -1
     // Phase 2 LOD — when the renderer's `_lodHideFlares` flag is set
     // (by the entity loop for mid/far tier units), skip any piece
     // tagged `lodHide` at load time.  Cosmetic-only pieces (flares,
@@ -3571,6 +3642,12 @@ export class ModelRenderer {
       const fade = Math.max(1, EFFECT_LOD_FADE_WU)
       fxSurf = Math.max(0, Math.min(1, (EFFECT_LOD_SURFACE_MAX_WU - dist) / fade))
       fxRL = Math.max(0, Math.min(1, (EFFECT_LOD_RUNNINGLIGHTS_MAX_WU - dist) / fade))
+      // Quantise the distance fades to 1/32 steps: visually identical, but
+      // now identical unit types at similar ranges produce IDENTICAL
+      // uniform values, so the redundant-state elision below can skip the
+      // whole per-group hint block across entities.
+      fxSurf = Math.round(fxSurf * 32) / 32
+      fxRL = Math.round(fxRL * 32) / 32
     }
     // Piece-light override pre-check — most units have no overrides
     // at all, so a single Map.has() up front saves a per-piece lookup
@@ -3581,6 +3658,18 @@ export class ModelRenderer {
     const unitName = this.model && this.model.name
     const hasGlowOverrides = !shadowPass && hasOverridesFor(unitName)
     const glowTimeSec = hasGlowOverrides ? this._fxTimeSec() : 0
+    // Attribute arrays are enabled ONCE per geometry walk (they are global
+    // GL state, not per-buffer); each group still re-points them after its
+    // bindBuffer.  Saves 3-4 enable calls per group across the whole tree.
+    if (shadowPass) {
+      gl.enableVertexAttribArray(this.aShadowPos)
+      gl.enableVertexAttribArray(this.aShadowUV)
+    } else {
+      gl.enableVertexAttribArray(this.aPos)
+      gl.enableVertexAttribArray(this.aNormal)
+      gl.enableVertexAttribArray(this.aUV)
+      if (this.aAO >= 0) gl.enableVertexAttribArray(this.aAO)
+    }
     const draw = (piece, parent) => {
       if (!piece) return
       piece.computeWorldMatrix(parent, this._worldScratch)
@@ -3599,16 +3688,33 @@ export class ModelRenderer {
             const ov = pieceLightFor(unitName, piece.name)
             if (ov) {
               const a = pulseAlpha(ov, glowTimeSec)
-              gl.uniform4f(this.uPieceGlow, ov.color[0], ov.color[1], ov.color[2], a)
+              this.#u4f(this.uPieceGlow, ov.color[0], ov.color[1], ov.color[2], a)
             } else {
-              gl.uniform4f(this.uPieceGlow, 0, 0, 0, 0)
+              this.#u4f(this.uPieceGlow, 0, 0, 0, 0)
             }
           } else {
-            gl.uniform4f(this.uPieceGlow, 0, 0, 0, 0)
+            this.#u4f(this.uPieceGlow, 0, 0, 0, 0)
           }
         }
         for (const group of piece.drawGroups) {
-          gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)
+          // One shared VBO per model: bind + re-point the attribute
+          // arrays only when the buffer actually changes (once per model
+          // per walk in practice; groups draw [first, count) slices).
+          if (group.vbo !== this._boundGeoVbo) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, group.vbo)
+            this._boundGeoVbo = group.vbo
+            if (shadowPass) {
+              gl.vertexAttribPointer(this.aShadowPos, 3, gl.FLOAT, false, VERTEX_STRIDE, POS_OFFSET)
+              gl.vertexAttribPointer(this.aShadowUV, 2, gl.FLOAT, false, VERTEX_STRIDE, UV_OFFSET)
+            } else {
+              gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, VERTEX_STRIDE, POS_OFFSET)
+              gl.vertexAttribPointer(this.aNormal, 3, gl.FLOAT, false, VERTEX_STRIDE, NRM_OFFSET)
+              gl.vertexAttribPointer(this.aUV, 2, gl.FLOAT, false, VERTEX_STRIDE, UV_OFFSET)
+              if (this.aAO >= 0) {
+                gl.vertexAttribPointer(this.aAO, 1, gl.FLOAT, false, VERTEX_STRIDE, AO_OFFSET)
+              }
+            }
+          }
           // Coplanar layers: apply a polygon offset proportional to
           // the group's tier so they win the depth test cleanly
           // instead of z-fighting against the base.  Tier 0 means
@@ -3628,48 +3734,29 @@ export class ModelRenderer {
             gl.disable(gl.POLYGON_OFFSET_FILL)
           }
           if (shadowPass) {
-            gl.enableVertexAttribArray(this.aShadowPos)
-            gl.enableVertexAttribArray(this.aShadowUV)
-            gl.vertexAttribPointer(this.aShadowPos, 3, gl.FLOAT, false, VERTEX_STRIDE, POS_OFFSET)
-            gl.vertexAttribPointer(this.aShadowUV, 2, gl.FLOAT, false, VERTEX_STRIDE, UV_OFFSET)
             if (group.textureName && this.textureCache) {
               const entry = this.textureCache.get(group.textureName)
-              gl.activeTexture(gl.TEXTURE0)
-              gl.bindTexture(gl.TEXTURE_2D, entry.tex)
-              gl.uniform1i(this.uShadowTex, 0)
-              gl.uniform1i(this.uShadowMode, 0)
+              this.#bindTex(0, entry.tex)
+              this.#u1i(this.uShadowTex, 0)
+              this.#u1i(this.uShadowMode, 0)
             } else {
-              gl.uniform1i(this.uShadowMode, 1)
+              this.#u1i(this.uShadowMode, 1)
             }
           } else {
-            gl.enableVertexAttribArray(this.aPos)
-            gl.enableVertexAttribArray(this.aNormal)
-            gl.enableVertexAttribArray(this.aUV)
-            gl.vertexAttribPointer(this.aPos, 3, gl.FLOAT, false, VERTEX_STRIDE, POS_OFFSET)
-            gl.vertexAttribPointer(this.aNormal, 3, gl.FLOAT, false, VERTEX_STRIDE, NRM_OFFSET)
-            gl.vertexAttribPointer(this.aUV, 2, gl.FLOAT, false, VERTEX_STRIDE, UV_OFFSET)
-            // aAO may bind to -1 if the driver optimised the attribute
-            // away (e.g. when the AO term is dead-code-eliminated in
-            // future shader changes) — guard the enable to stay safe.
-            if (this.aAO >= 0) {
-              gl.enableVertexAttribArray(this.aAO)
-              gl.vertexAttribPointer(this.aAO, 1, gl.FLOAT, false, VERTEX_STRIDE, AO_OFFSET)
-            }
             if (group.textureName && this.textureCache) {
               const entry = this.textureCache.get(group.textureName)
-              gl.activeTexture(gl.TEXTURE0)
-              gl.bindTexture(gl.TEXTURE_2D, entry.tex)
-              gl.uniform1i(this.uTex, 0)
-              gl.uniform1i(this.uMode, 0)
+              this.#bindTex(0, entry.tex)
+              this.#u1i(this.uTex, 0)
+              this.#u1i(this.uMode, 0)
               // Texel step for texture-space bump sampling — from the real
               // tile dimensions so the relief tracks one texel exactly.
-              gl.uniform2f(this.uTexel, 1 / (entry.width || 64), 1 / (entry.height || 64))
+              this.#u2f(this.uTexel, 1 / (entry.width || 64), 1 / (entry.height || 64))
             } else if (group.color) {
-              gl.uniform4fv(this.uTint, group.color)
-              gl.uniform1i(this.uMode, 1)
+              this.#u4f(this.uTint, group.color[0], group.color[1], group.color[2], group.color[3])
+              this.#u1i(this.uMode, 1)
             } else {
-              gl.uniform4fv(this.uTint, [0.45, 0.45, 0.5, 1])
-              gl.uniform1i(this.uMode, 1)
+              this.#u4f(this.uTint, 0.45, 0.45, 0.5, 1)
+              this.#u1i(this.uMode, 1)
             }
             // Per-batch material hints (hints-textures.js), each behind its
             // own Graphics Options toggle so they're independently switchable:
@@ -3683,11 +3770,11 @@ export class ModelRenderer {
             // effects.  Setting uBump / uRunningLights to 0 lets the shader
             // short-circuit the whole block, not just dim its output.
             const specBase = (this.optMetalSpec && group.metallic) ? (group.specScale || 1.0) : 1.0
-            gl.uniform1f(this.uSpecScale, specBase * fxSurf)
+            this.#u1f(this.uSpecScale, specBase * fxSurf)
             const rlOn = (this.optRunningLights && group.runningLights && fxRL > 0.01) ? 1 : 0
-            gl.uniform1f(this.uRunningLights, rlOn)
-            gl.uniform1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) * fxRL : 0)
-            gl.uniform1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.2)
+            this.#u1f(this.uRunningLights, rlOn)
+            this.#u1f(this.uRLEmit, rlOn ? (group.rlEmit || 0) * fxRL : 0)
+            this.#u1f(this.uRLFadeOut, (group.rlFadeOut != null) ? group.rlFadeOut : 0.2)
             // Running lights now read a CPU-built lamp atlas (texture-cache +
             // lamp-map.js): proximal/touching texels are grouped into one
             // component carrying a single dominant colour, so the whole lamp
@@ -3707,21 +3794,20 @@ export class ModelRenderer {
                 colorMergePx: RUNNING_LIGHT_COLOR_MERGE_PX,
               })
               if (lm && lm.ready) {
-                gl.activeTexture(gl.TEXTURE4)
-                gl.bindTexture(gl.TEXTURE_2D, lm.tex)
-                gl.uniform1i(this.uLampMap, 4)
+                this.#bindTex(4, lm.tex)
+                this.#u1i(this.uLampMap, 4)
                 lampValid = 1
               }
             }
-            gl.uniform1f(this.uLampMapValid, lampValid)
+            this.#u1f(this.uLampMapValid, lampValid)
             const bumpOn = (this.optBump && group.bump && this._derivExt && fxSurf > 0.01) ? 1 : 0
-            gl.uniform1f(this.uBump, bumpOn)
-            gl.uniform1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) * fxSurf : 0)
-            gl.uniform1f(this.uBumpSmooth, (group.bumpSmooth != null) ? group.bumpSmooth : 1.5)
-            gl.uniform1f(this.uBumpThreshold, (group.bumpThreshold != null) ? group.bumpThreshold : 0.12)
-            gl.uniform1f(this.uBumpScale, (group.bumpScale != null) ? group.bumpScale : 1.0)
+            this.#u1f(this.uBump, bumpOn)
+            this.#u1f(this.uBumpIntensity, bumpOn ? (group.bumpIntensity || 0) * fxSurf : 0)
+            this.#u1f(this.uBumpSmooth, (group.bumpSmooth != null) ? group.bumpSmooth : 1.5)
+            this.#u1f(this.uBumpThreshold, (group.bumpThreshold != null) ? group.bumpThreshold : 0.12)
+            this.#u1f(this.uBumpScale, (group.bumpScale != null) ? group.bumpScale : 1.0)
           }
-          gl.drawArrays(group.mode, 0, group.vertexCount)
+          gl.drawArrays(group.mode, group.first || 0, group.vertexCount)
         }
         // Reset polygon offset after each piece so it doesn't bleed
         // into subsequent unrelated draws (ground plane, etc.).
@@ -4153,6 +4239,7 @@ export class ModelRenderer {
   // One draw per segment keeps the path trivial; weapon effects are few
   // and short-lived, so batching would buy nothing measurable.
   #renderWeaponEffects() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const fx = this._weaponEffects
     if (!fx || !fx.length || !this.programWire || !this.camera) return
     const gl = this.gl
@@ -4296,6 +4383,7 @@ export class ModelRenderer {
   }
 
   #renderFeatures() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     if (!this.programFeat || !this.camera) return
     gl.useProgram(this.programFeat)
@@ -4353,6 +4441,7 @@ export class ModelRenderer {
   }
 
   #renderExplosions() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     if (!this.programFx || !this.camera || !this._explosionData) return
     const count = this._explosionVertCount
@@ -4486,6 +4575,7 @@ export class ModelRenderer {
   // entity loop + selection-ring pass so impostors composite over
   // the ground but under particles + UI.
   #renderImpostorBatch() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     if (this._impCount === 0 || !this.programImpostor) return
     gl.useProgram(this.programImpostor)
@@ -4524,6 +4614,7 @@ export class ModelRenderer {
   // For 50 units that's 200 verts, well under the cost of one main
   // pass on a single unit.
   #renderSelectionRings(entities) {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     if (!entities || !entities.length) return
     if (!this.programWire) return
     const gl = this.gl
@@ -4616,6 +4707,7 @@ export class ModelRenderer {
   // appear in headless captures like any other scene-pass geometry.
   // Depth test off — status UI must read over terrain bumps and hulls.
   #renderUnitOverlays() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const items = this._unitOverlays
     if (!items || !items.length || !this.programWire || !this.camera) return
     const gl = this.gl
@@ -4726,6 +4818,7 @@ export class ModelRenderer {
   // pass so particles composite over the unit/ground.  Skipped when
   // no pool is bound or it's empty.
   #renderParticles() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const pool = this._particlePool
     if (!pool || pool.count === 0 || !this.programParticles) return
     const gl = this.gl
@@ -4929,6 +5022,7 @@ export class ModelRenderer {
   // correctly under it; the additive blend means ordering between the
   // bright sprite and its trail isn't visually critical.
   #renderSpriteParticles() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const pool = this._particlePool
     if (!pool || pool.count === 0 || !this.programSprites) return
     if (!this._sprRegistry || this._sprRegistry.size === 0) return
@@ -5124,6 +5218,7 @@ export class ModelRenderer {
   // Stage 2 (FXAA): only when anti-aliasing is on, the LDR FBO is edge-
   // smoothed into the default framebuffer.
   #runPostChain() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     if (!this.programDoF || !this._sceneFBO) return
     // Bloom first — fills _bloomTex (or clears it) so the composite's
@@ -5326,6 +5421,7 @@ export class ModelRenderer {
   // _bloomTex for the composite stage to add on top.  No-op (clears
   // _bloomTex) when the FBOs can't be allocated.
   #renderBloom() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
     const gl = this.gl
     if (!this.programBright || !this.programBlur || !this.#ensureBloomFBOs()) {
       this._bloomTex = null
