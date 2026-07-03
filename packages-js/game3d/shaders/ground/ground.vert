@@ -25,6 +25,14 @@ uniform float uGroundY;
 uniform float uSeabedY;
 uniform float uSeabedActive;
 uniform int uGroundMode;
+// World-space recentre for the ground pad.  The pad's VBO is a fixed
+// tessellated quad around the origin (studio scenes live there), but
+// driven scenes — replays — can play anywhere in world space, so the
+// renderer slides the pad under the camera target.  Snapped to the
+// ground tile size on the CPU so the texture pattern (anchored to
+// vWorldPos) never swims as the shift updates.  Zero for sea/seabed
+// and baked map meshes.
+uniform vec3 uGroundShift;
 uniform float uTime;
 uniform float uWavesIntensity;
 // Background mountain controls.  uMountainActive=0 disables the
@@ -134,13 +142,17 @@ void main() {
   //     quad in 3D so the silhouette actually crests.
   //   * Other ground modes - flat plane at uGroundY, optionally
   //     bulged outward by the background mountain ring.
+  // World-space vertex XZ: the origin-centred VBO plus the renderer's
+  // recentre shift (zero except for the flat ground modes, so sea/seabed
+  // noise and baked map meshes are untouched).
+  vec2 xz = aPos.xz + uGroundShift.xz;
   float y;
   float mountAmt = 0.0;
   float mountHNorm = 0.0;
   if (uSeabedActive > 0.5) {
-    y = uSeabedY + seabedHeight(aPos.xz, uSeabedHeightMul, uSeabedScaleMul, uSeabedRockChance);
+    y = uSeabedY + seabedHeight(xz, uSeabedHeightMul, uSeabedScaleMul, uSeabedRockChance);
   } else if (uGroundMode == 2) {
-    y = uGroundY + seaWaveHS(aPos.xz, uTime).x * uWavesIntensity;
+    y = uGroundY + seaWaveHS(xz, uTime).x * uWavesIntensity;
   } else if (uGroundMode == 4 || uGroundMode == 5) {
     // Map-terrain mesh (4) and its water plane (5): heights / sea level
     // are baked into the vertex Y by the renderer, so no displacement —
@@ -149,15 +161,15 @@ void main() {
   } else {
     y = uGroundY;
     if (uMountainActive > 0.5) {
-      float d = length(aPos.xz - uClearCenter.xz);
+      float d = length(xz - uClearCenter.xz);
       mountAmt = smoothstep(uClearRadius, uClearRadius + uClearFalloff, d);
-      mountHNorm = mountainHeight(aPos.xz, uMountainStyle, uMountainScale);
+      mountHNorm = mountainHeight(xz, uMountainStyle, uMountainScale);
       y += mountHNorm * uMountainHeight * mountAmt;
     }
   }
   vMountainAmt = mountAmt;
   vMountainHNorm = mountHNorm;
-  vec3 worldPos = vec3(aPos.x, y, aPos.z);
+  vec3 worldPos = vec3(xz.x, y, xz.y);
   vWorldPos = worldPos;
   // Per-vertex composite UV with TA's north height-shift (mode 4 only). aPos.y
   // is the baked height (rawH * uMapHeightScale); pull v north by rawH/2 (wu),

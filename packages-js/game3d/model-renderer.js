@@ -2560,6 +2560,19 @@ export class ModelRenderer {
       : 3
     gl.uniform1i(this.uGroundModeId, modeId)
     gl.uniform1f(this.uGroundTileSize, 16)
+    // Recentre the origin-anchored pad VBO under the ground footprint
+    // centre for the flat ground modes — driven scenes (replays) play
+    // anywhere in world space, far beyond the pad's fixed extent.
+    // Snapped to the tile size so the world-anchored texture pattern
+    // never swims as the centre moves.  Sea/seabed keep the fixed pad
+    // (their vertex noise isn't tile-periodic) and baked map meshes
+    // carry their own world-space geometry.
+    const shiftable = modeId === 0 || modeId === 1 || modeId === 3
+    gl.uniform3fv(this.uGroundShift, [
+      shiftable ? Math.round(cx / 16) * 16 : 0,
+      0,
+      shiftable ? Math.round(cz / 16) * 16 : 0,
+    ])
     gl.uniform1f(this.uGroundTerrainReady, this._terrainReady ? 1 : 0)
     // Sea-surface waves run on the pausable, speed-scaled effect clock — the
     // SAME clock the unit's CPU sea-bob samples — so the hull stays seated on
@@ -2690,6 +2703,9 @@ export class ModelRenderer {
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
       // Keep the near-detail clipmap centred on the camera's ground focus.
       this._maybeRecenterClip()
+      // The map mesh carries real world-space geometry — clear the flat
+      // pad's recentre shift set earlier in this pass.
+      gl.uniform3fv(this.uGroundShift, [0, 0, 0])
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
@@ -3864,6 +3880,7 @@ export class ModelRenderer {
     this.uGroundColorB = gl.getUniformLocation(prog, 'uColorB')
     this.uGroundCenter = gl.getUniformLocation(prog, 'uCenter')
     this.uGroundRadius = gl.getUniformLocation(prog, 'uRadius')
+    this.uGroundShift = gl.getUniformLocation(prog, 'uGroundShift')
     this.uGroundY = gl.getUniformLocation(prog, 'uGroundY')
     this.uGroundModeId = gl.getUniformLocation(prog, 'uGroundMode')
     this.uGroundTileSize = gl.getUniformLocation(prog, 'uTileSize')
