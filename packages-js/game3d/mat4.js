@@ -148,6 +148,15 @@ export class Mat4 {
     return out
   }
 
+  // scale applies a UNIFORM scale k to the basis columns of m (equivalent
+  // to m * scaleMatrix(k)).  Uniform-only so normals stay valid under the
+  // renderer's normal-matrix assumption (rigid + uniform transforms).
+  static scale(out, m, k) {
+    if (out !== m) Mat4.copy(out, m)
+    for (let i = 0; i < 12; i++) out[i] *= k
+    return out
+  }
+
   static rotateX(out, m, rad) {
     const s = Math.sin(rad), c = Math.cos(rad)
     const a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7]

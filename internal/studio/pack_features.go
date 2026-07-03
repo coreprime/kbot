@@ -14,7 +14,6 @@ package studio
 
 import (
 	"bytes"
-	"sort"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/gaf"
@@ -153,15 +152,4 @@ func (sess *Session) featureGafDims(cache map[string]gafFrameDims, filename stri
 		dims[name] = [4]int{int(fr.Width), int(fr.Height), int(fr.OriginX), int(fr.OriginY)}
 	}
 	return dims
-}
-
-// sortedFeatureIDs returns the catalogue's ids in stable order for
-// deterministic dependent walks (model packing).
-func sortedFeatureIDs(catalog map[string]packFeatureJSON) []string {
-	ids := make([]string, 0, len(catalog))
-	for id := range catalog {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
 }

@@ -472,6 +472,8 @@ export class ModelRenderer {
       this.#initParticlesProgram(sources.particles.vs, sources.particles.fs)
       this.#initSpritesProgram(sources.sprites.vs, sources.sprites.fs)
       this.#initImpostorProgram(sources.impostor.vs, sources.impostor.fs)
+      this.#initFeatProgram(sources.feat.vs, sources.feat.fs)
+      this.#initFxProgram(sources.fx.vs, sources.fx.fs)
       if (this._depthExt) {
         this.#initShadowFBO()
         // DoF needs the same depth-texture extension as shadows -
@@ -2003,6 +2005,13 @@ export class ModelRenderer {
       this.#renderGround()
     }
 
+    // Map features — baked stand-in batches drawn opaque over the
+    // battlefield mesh (depth-written so units + water composite
+    // correctly against them).
+    if (this._featBatches && this.featuresEnabled !== false) {
+      this.#renderFeatures()
+    }
+
     if (this.renderMode === 'wireframe') {
       this.#renderWireframe([0.85, 0.92, 1.0, 1.0])
     } else if (this._entities) {
@@ -2075,6 +2084,12 @@ export class ModelRenderer {
         if (t.rollRad) {
           Mat4.rotateZ(this._modelMatrix, this._modelMatrix, t.rollRad)
         }
+        // Optional uniform scale — reclaimed wrecks shrink through this
+        // channel.  Applied after the rotations so the scale is about the
+        // entity's own pivot.
+        if (t.scale != null && t.scale !== 1 && t.scale > 0) {
+          Mat4.scale(this._modelMatrix, this._modelMatrix, t.scale)
+        }
         // Per-entity locomotion pose overlay — sandbox hovercraft gyrate +
         // aircraft bank into their turns, same as the single-unit path.  Each
         // entity keeps its own prev-transform/smoothing state keyed by id.
@@ -2140,8 +2155,24 @@ export class ModelRenderer {
         // reads as a finished unit popping into existence.
         const _bpFrac = Math.max(0, Math.min(1, (this.buildPercent ?? 100) / 100))
         const _savedExposure = this.exposure
-        if (_bpFrac < 1) this.exposure = (this.exposure ?? 1) * (0.22 + 0.78 * _bpFrac)
+        // The nanolathe build-cut (solid geometry rises with build %) is
+        // the entity-mode construction visual; when active the dark-hull
+        // exposure ramp softens so the built portion reads fully lit at
+        // the lathe line.  ent.buildFadeOnly opts an entity out of the
+        // cut and into a plain alpha fade instead (flying debris).
+        this._entityOpacity = (ent.opacity != null) ? Math.max(0, Math.min(1, ent.opacity)) : 1
+        if (_bpFrac < 1 && !ent.buildFadeOnly && this.model && this.model.bounds) {
+          const _bb = this.model.bounds
+          this._buildCut = t.y + _bb.min[1] + (_bb.max[1] - _bb.min[1]) * _bpFrac + 0.01
+          this._buildFxColor = ent.buildFxColor || [0.35, 1.0, 0.6]
+          if (_bpFrac < 1) this.exposure = (this.exposure ?? 1) * (0.55 + 0.45 * _bpFrac)
+        } else {
+          this._buildCut = null
+          if (_bpFrac < 1) this.exposure = (this.exposure ?? 1) * (0.22 + 0.78 * _bpFrac)
+        }
         this.#renderMain(this.renderMode === 'flat')
+        this._buildCut = null
+        this._entityOpacity = 1
         this.exposure = _savedExposure
         this._lodHideFlares = false
         this._lightingTierCheap = false
@@ -2257,6 +2288,9 @@ export class ModelRenderer {
     // geometry, before highlights/particles) so they show up in headless
     // captures and depth-clip against the world like real light streaks.
     if (this._weaponEffects) this.#renderWeaponEffects()
+    // Polygonal explosion meshes — additive emissive triangles rebuilt
+    // per frame by the world's explosion manager (create-world).
+    if (this._explosionVertCount > 0) this.#renderExplosions()
     if (this._hoveredPieceName || this._hoveredTexture) {
       // Hover highlight: bright red wireframe on the hovered piece
       // (with its descendants) AND/OR every piece whose drawGroups
@@ -2418,6 +2452,10 @@ export class ModelRenderer {
     const gl = this.gl
     if (this.model) this.model.dispose(gl)
     if (this.programMain) gl.deleteProgram(this.programMain)
+    if (this.programFeat) gl.deleteProgram(this.programFeat)
+    if (this.programFx) gl.deleteProgram(this.programFx)
+    if (this._fxTriVBO) gl.deleteBuffer(this._fxTriVBO)
+    this.clearMapFeatures()
     if (this.programShadow) gl.deleteProgram(this.programShadow)
     if (this.programSky) gl.deleteProgram(this.programSky)
     if (this.programGround) gl.deleteProgram(this.programGround)
@@ -2509,6 +2547,9 @@ export class ModelRenderer {
         }
         if (t.rollRad) {
           Mat4.rotateZ(this._modelMatrix, this._modelMatrix, t.rollRad)
+        }
+        if (t.scale != null && t.scale !== 1 && t.scale > 0) {
+          Mat4.scale(this._modelMatrix, this._modelMatrix, t.scale)
         }
         this.#drawGeometry(this.model.root, this._modelMatrix, true)
       }
@@ -3084,6 +3125,7 @@ export class ModelRenderer {
   }
 
   clearMapTerrain() {
+    this.clearMapFeatures()
     const gl = this.gl
     const mt = this._mapTerrain
     if (!mt) return
@@ -3412,7 +3454,20 @@ export class ModelRenderer {
     // is fully opaque.  Cubic ease so the fade-in feels weighty
     // toward the end of construction rather than linearly bright.
     const _bp = (this.buildPercent ?? 100) / 100
-    gl.uniform1f(this.uMainOutputAlpha, _bp * _bp * _bp)
+    // Build-cut mode (entity path): solid geometry below the lathe line at
+    // full alpha, nothing above (main.frag discards).  Legacy path keeps
+    // the cubic alpha fade.  Either way the per-entity opacity channel
+    // (flying debris fade-out) multiplies in.
+    const _entOpacity = this._entityOpacity != null ? this._entityOpacity : 1
+    if (this._buildCut != null) {
+      gl.uniform1f(this.uBuildCutOn, 1)
+      gl.uniform1f(this.uBuildCutY, this._buildCut)
+      gl.uniform3fv(this.uBuildFxColor, this._buildFxColor || [0.35, 1.0, 0.6])
+      gl.uniform1f(this.uMainOutputAlpha, _entOpacity)
+    } else {
+      gl.uniform1f(this.uBuildCutOn, 0)
+      gl.uniform1f(this.uMainOutputAlpha, _bp * _bp * _bp * _entOpacity)
+    }
     if (this._shadowFBO && !flat) {
       gl.activeTexture(gl.TEXTURE1)
       gl.bindTexture(gl.TEXTURE_2D, this._shadowTex)
@@ -3915,6 +3970,9 @@ export class ModelRenderer {
     // doesn't carry an override emits no glow.
     this.uPieceGlow = gl.getUniformLocation(prog, 'uPieceGlow')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
+    this.uBuildCutOn = gl.getUniformLocation(prog, 'uBuildCutOn')
+    this.uBuildCutY = gl.getUniformLocation(prog, 'uBuildCutY')
+    this.uBuildFxColor = gl.getUniformLocation(prog, 'uBuildFxColor')
     // Phase 2 lighting LOD — 0 = full (rim + back/fill + Blinn-Phong
     // specular), 1 = cheap (Lambertian + ambient only).  Set by the
     // entity loop per-entity based on the shadow LOD decision.
@@ -4173,6 +4231,162 @@ export class ModelRenderer {
   // Detach by passing null when the unit changes.
   setParticlePool(pool) { this._particlePool = pool || null }
 
+  // ── Map features (baked stand-in batches) ──────────────────────────
+  //
+  // setMapFeatures installs the battlefield's feature geometry: an array
+  // of { data: Float32Array, count } batches whose vertices are already
+  // in world space, interleaved pos(3) + normal(3) + colour(3) — the
+  // output of buildFeatureField (map-features.js).  Batches upload once
+  // into STATIC_DRAW VBOs; the per-frame cost is one draw call per batch
+  // with zero CPU geometry work, which is what lets a dense forest map
+  // carry thousands of trees inside the frame budget.
+  setMapFeatures(batches) {
+    this.clearMapFeatures()
+    if (!Array.isArray(batches) || !batches.length) return
+    const gl = this.gl
+    const out = []
+    for (const b of batches) {
+      if (!b || !b.data || !(b.count > 0)) continue
+      const vbo = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, b.data, gl.STATIC_DRAW)
+      out.push({ vbo, count: b.count })
+    }
+    this._featBatches = out.length ? out : null
+    this.requestRedraw()
+  }
+
+  clearMapFeatures() {
+    if (!this._featBatches) return
+    const gl = this.gl
+    for (const b of this._featBatches) {
+      try { gl.deleteBuffer(b.vbo) } catch { /* context loss */ }
+    }
+    this._featBatches = null
+  }
+
+  // setFeaturesEnabled toggles the feature pass without discarding the
+  // uploaded batches — the world-level "show features" switch.
+  setFeaturesEnabled(on) {
+    this.featuresEnabled = !!on
+    this.requestRedraw()
+  }
+
+  #initFeatProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programFeat = prog
+    const gl = this.gl
+    this.aFeatPos = gl.getAttribLocation(prog, 'aPos')
+    this.aFeatNormal = gl.getAttribLocation(prog, 'aNormal')
+    this.aFeatColor = gl.getAttribLocation(prog, 'aColor')
+    this.uFeatProj = gl.getUniformLocation(prog, 'uProj')
+    this.uFeatView = gl.getUniformLocation(prog, 'uView')
+    this.uFeatLightDir = gl.getUniformLocation(prog, 'uLightDir')
+    this.uFeatSunTint = gl.getUniformLocation(prog, 'uSunTint')
+    this.uFeatHorizon = gl.getUniformLocation(prog, 'uHorizonColor')
+    this.uFeatEyePos = gl.getUniformLocation(prog, 'uEyePos')
+    this.uFeatExposure = gl.getUniformLocation(prog, 'uExposure')
+    this.uFeatMapFog = gl.getUniformLocation(prog, 'uMapFog')
+    this.uFeatPulsePos = gl.getUniformLocation(prog, 'uPulseLightPos')
+    this.uFeatPulseColor = gl.getUniformLocation(prog, 'uPulseLightColor')
+    this.uFeatPulseRange = gl.getUniformLocation(prog, 'uPulseLightRange')
+    this.uFeatPulseCount = gl.getUniformLocation(prog, 'uPulseLightCount')
+  }
+
+  #renderFeatures() {
+    const gl = this.gl
+    if (!this.programFeat || !this.camera) return
+    gl.useProgram(this.programFeat)
+    gl.uniformMatrix4fv(this.uFeatProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uFeatView, false, this.camera.viewMatrix)
+    gl.uniform3fv(this.uFeatLightDir, this.lightDir)
+    const _lc = this.lightColor || [1, 1, 1]
+    const _lm = Math.max(_lc[0], _lc[1], _lc[2], 1e-4)
+    gl.uniform3f(this.uFeatSunTint, _lc[0] / _lm, _lc[1] / _lm, _lc[2] / _lm)
+    gl.uniform3fv(this.uFeatHorizon, this.skyScheme.horizon)
+    gl.uniform3fv(this.uFeatEyePos, this.camera.eye)
+    gl.uniform1f(this.uFeatExposure, this.exposure ?? 1.0)
+    gl.uniform1f(this.uFeatMapFog, this.mapFogEnabled ? 1 : 0)
+    this.#uploadPulseLights(gl, this.uFeatPulsePos, this.uFeatPulseColor, this.uFeatPulseRange, this.uFeatPulseCount)
+    gl.disable(gl.BLEND)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LEQUAL)
+    const stride = 9 * 4
+    for (const b of this._featBatches) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, b.vbo)
+      gl.enableVertexAttribArray(this.aFeatPos)
+      gl.vertexAttribPointer(this.aFeatPos, 3, gl.FLOAT, false, stride, 0)
+      gl.enableVertexAttribArray(this.aFeatNormal)
+      gl.vertexAttribPointer(this.aFeatNormal, 3, gl.FLOAT, false, stride, 3 * 4)
+      gl.enableVertexAttribArray(this.aFeatColor)
+      gl.vertexAttribPointer(this.aFeatColor, 3, gl.FLOAT, false, stride, 6 * 4)
+      gl.drawArrays(gl.TRIANGLES, 0, b.count)
+    }
+    gl.disableVertexAttribArray(this.aFeatPos)
+    gl.disableVertexAttribArray(this.aFeatNormal)
+    gl.disableVertexAttribArray(this.aFeatColor)
+    gl.enable(gl.BLEND)
+  }
+
+  // ── Explosion meshes (additive emissive triangles) ─────────────────
+  //
+  // setExplosionTris installs this frame's explosion geometry — one
+  // interleaved Float32Array (pos3 + rgba4 per vertex, world space) the
+  // explosion manager rebuilds each step.  vertCount 0 clears the pass.
+  setExplosionTris(data, vertCount) {
+    this._explosionData = data || null
+    this._explosionVertCount = vertCount | 0
+  }
+
+  #initFxProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc)
+    this.programFx = prog
+    const gl = this.gl
+    this.aFxPos = gl.getAttribLocation(prog, 'aPos')
+    this.aFxColor = gl.getAttribLocation(prog, 'aColor')
+    this.uFxProj = gl.getUniformLocation(prog, 'uProj')
+    this.uFxView = gl.getUniformLocation(prog, 'uView')
+    this._fxTriVBO = gl.createBuffer()
+    this._fxTriCapacity = 0
+  }
+
+  #renderExplosions() {
+    const gl = this.gl
+    if (!this.programFx || !this.camera || !this._explosionData) return
+    const count = this._explosionVertCount
+    if (!(count > 0)) return
+    gl.useProgram(this.programFx)
+    gl.uniformMatrix4fv(this.uFxProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uFxView, false, this.camera.viewMatrix)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._fxTriVBO)
+    const bytes = count * 7 * 4
+    if (bytes > this._fxTriCapacity) {
+      gl.bufferData(gl.ARRAY_BUFFER, this._explosionData.byteLength, gl.DYNAMIC_DRAW)
+      this._fxTriCapacity = this._explosionData.byteLength
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._explosionData.subarray(0, count * 7))
+    } else {
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, this._explosionData.subarray(0, count * 7))
+    }
+    const stride = 7 * 4
+    gl.enableVertexAttribArray(this.aFxPos)
+    gl.vertexAttribPointer(this.aFxPos, 3, gl.FLOAT, false, stride, 0)
+    gl.enableVertexAttribArray(this.aFxColor)
+    gl.vertexAttribPointer(this.aFxColor, 4, gl.FLOAT, false, stride, 3 * 4)
+    // Additive, depth-tested, no depth write: fire adds light over the
+    // scene but never occludes it, and terrain still clips a blast that
+    // detonates behind a ridge.
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthMask(false)
+    gl.disable(gl.CULL_FACE)
+    gl.drawArrays(gl.TRIANGLES, 0, count)
+    gl.depthMask(true)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.disableVertexAttribArray(this.aFxPos)
+    gl.disableVertexAttribArray(this.aFxColor)
+  }
+
   // #initImpostorProgram — Phase 3 far-tier batch.  Each entity below
   // TIER_MID_MIN_PX (≈ 12 px on screen) collapses to a single
   // GL_POINTS sprite of its team / fallback colour.  All impostors
@@ -4415,13 +4629,21 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uWireWorld, false, IDENTITY_MAT4)
-    gl.disable(gl.DEPTH_TEST)
+    // Depth-tested (LEQUAL, no write): a unit tucked behind a terrain
+    // ridge or a feature shows NO bar — the status UI never leaks
+    // through the world.  The per-item anchors below are pulled toward
+    // the camera by the unit's own bounding radius (plus a pad) so the
+    // unit's OWN hull can't z-fight its bar away; only genuinely
+    // interposed scene geometry occludes it.
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LEQUAL)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.depthMask(false)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._fxLineVBO)
     gl.enableVertexAttribArray(this.aWirePos)
     gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+    const eye = this.camera.eye
     const vw = gl.drawingBufferWidth || 1
     const vh = gl.drawingBufferHeight || 1
     const seg = (ax, ay, az, bx, by, bz, color, alpha, widthPx) => {
@@ -4441,11 +4663,19 @@ export class ModelRenderer {
       if (!it) continue
       const r = Math.max(6, +it.rWU || 12)
       const barW = Math.max(12, Math.min(48, r * 1.5))
-      // Anchor: unit position dropped below the hull along camera-up.
+      // Anchor: unit position dropped below the hull along camera-up,
+      // then biased toward the camera by the unit's bounding radius so
+      // the depth test clears the unit's own geometry.
       const drop = r * 0.9 + 3
-      const cx = it.x - ux * drop
-      const cy = it.y - uy * drop
-      const cz = it.z - uz * drop
+      let cx = it.x - ux * drop
+      let cy = it.y - uy * drop
+      let cz = it.z - uz * drop
+      let ex = eye[0] - cx, ey = eye[1] - cy, ez = eye[2] - cz
+      const eLen = Math.hypot(ex, ey, ez) || 1
+      const bias = Math.min(r * 1.2 + 4, eLen * 0.5)
+      cx += (ex / eLen) * bias
+      cy += (ey / eLen) * bias
+      cz += (ez / eLen) * bias
       const x0 = cx - rx * barW * 0.5, y0 = cy - ry * barW * 0.5, z0 = cz - rz * barW * 0.5
       const hp = it.hp01
       const showBar = hp != null && hp < 1
@@ -4482,7 +4712,6 @@ export class ModelRenderer {
     }
     gl.uniform2f(this.uWirePixelOffset, 0, 0)
     gl.depthMask(true)
-    gl.enable(gl.DEPTH_TEST)
   }
 
   // #renderParticles emits the alive prefix of the pool as a single

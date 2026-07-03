@@ -79,6 +79,13 @@ uniform float uBumpScale;       // SIGNED relief depth: + = features protrude to
 uniform vec2  uTexel;           // 1 / texture size — texel step for texture-space bump sampling
 uniform float uExposure;        // scene light-intensity / exposure (Graphics Options Brightness slider); 1 = default
 uniform float uOutputAlpha;   // 1 = fully opaque (default); < 1 fades the textured pass for the build-progress nano-frame effect
+// Nanolathe build-cut — when uBuildCutOn, fragments above uBuildCutY are
+// discarded (the solid hull "rises" with build percent under the green
+// wireframe shell) and a thin emissive band at the cut line glows in the
+// game's build-FX colour, reading as the active lathe edge.
+uniform float uBuildCutOn;
+uniform float uBuildCutY;
+uniform vec3  uBuildFxColor;
 // uLightingTier — Phase 2 perf knob.  0 = full (rim + back/fill +
 // Blinn-Phong specular all contribute), 1 = cheap (Lambertian +
 // ambient only).  The renderer sets this to 1 for entities that the
@@ -650,5 +657,10 @@ void main() {
   // reflection nearly invisible.  The output alpha gates the build-
   // progress fade — below 100% build, uOutputAlpha = build/100
   // so the textured model fades in as construction completes.
+  if (uBuildCutOn > 0.5) {
+    if (vWorldPos.y > uBuildCutY) discard;
+    float latheBand = 1.0 - smoothstep(0.0, 2.2, uBuildCutY - vWorldPos.y);
+    col = mix(col, uBuildFxColor * 1.6, latheBand * 0.75);
+  }
   gl_FragColor = vec4(col, uOutputAlpha);
 }
