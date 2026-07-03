@@ -135,9 +135,18 @@ export function loadMapTerrain(provider: AssetProvider, name: string): Promise<{
   startPositions: Array<{ number: number; x: number; z: number }>
   features: Array<{ name: string; ax: number; ay: number }>
   name: string
+  /** OTA planet keyword (e.g. "Acid", "Lava"); drives the auto-selected sky. */
+  planet: string | null
   minimapUrl: string | null
   ota: object | null
 }>
+
+/**
+ * Map a TA OTA "planet" keyword to a renderer ENVIRONMENT_PRESETS key (or
+ * null for unknown), so an installed battlefield can auto-pick a
+ * map-appropriate sky/cloud layer when the caller didn't pin an environment.
+ */
+export function planetEnvironment(planet: string | null | undefined): string | null
 
 /**
  * CPU sampler over a battlefield height field with the renderer mesh's
@@ -453,8 +462,16 @@ export interface World {
    * pieceNames.  Null when the unit / model / piece can't be resolved.
    */
   unitPieceWorldPos(id: number | string, piece: string | number): [number, number, number] | null
-  /** Apply a renderer quality preset: 'standard' | 'cinematic'. */
+  /** Apply a renderer quality preset: 'standard' | 'cinematic'. The
+   * 'cinematic' preset also pushes the draw distance to 4×. */
   setQuality(name: string): boolean
+  /** Offscreen supersample factor for recorded renders (SSAA). 1 = native
+   * (interactive default); a 1080p render harness sets 2 for cleaner unit
+   * edges and less texture shimmer. Clamped 1..4. */
+  setSuperSample(factor: number): void
+  /** Far-plane multiplier so distant units keep geometry in wide shots.
+   * Clamped 1..8; the 'cinematic' quality preset already sets 4. */
+  setDrawDistanceScale(scale: number): void
   /** Most recent frame's cull counters: { drew, culled, total, … }. */
   stats(): { drew: number; culled: number; total: number; shadowed: number; full: number; mid: number; far: number }
   units(): Array<number | string>
@@ -560,6 +577,14 @@ export class ModelRenderer {
   setMapFeatures(batches: Array<{ data: Float32Array; count: number }> | null): void
   clearMapFeatures(): void
   setFeaturesEnabled(on: boolean): void
+  /** Far-plane multiplier so distant units keep geometry in wide shots
+   * (clamped 1..8). Paired with the logarithmic depth buffer to avoid
+   * z-fighting at the extended range. */
+  setDrawDistanceScale(scale: number): void
+  /** Offscreen supersample factor for recorded renders (clamped 1..4). The
+   * scene renders at factor× the canvas and is downsampled by the post/FXAA
+   * blit — a cheap SSAA. 1 = native. */
+  setSuperSample(factor: number): void
   /** Install this frame's explosion triangles (ExplosionManager tris/vertCount). */
   setExplosionTris(data: Float32Array | null, vertCount: number): void
   requestRedraw(): void

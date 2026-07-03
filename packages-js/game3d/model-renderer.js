@@ -285,6 +285,16 @@ export class ModelRenderer {
     this.optGodBeams = true          // light shafts from the sun(s)
     this.optWaves = true             // animate sea surface; false → flat sea
     this.voidGridEnabled = true      // dark Tron grid beyond an installed battlefield
+    // Draw-distance multiplier on the far clip plane. 1 = the base horizon;
+    // the replay/cinematic harness raises it (setDrawDistanceScale, default
+    // 4 there) so far units keep geometry in wide shots. Paired with the
+    // logarithmic depth buffer so the longer range doesn't z-fight.
+    this.drawDistanceScale = 1
+    // Supersample factor for offscreen renders — the scene FBO is allocated
+    // at this multiple of the canvas and downsampled by the FXAA/blit pass,
+    // a cheap SSAA that sharpens unit edges + kills texture shimmer for
+    // recorded renders. 1 = native; the harness sets 2 for 1080p renders.
+    this.superSample = 1
     // Slider-controlled multipliers — all default to 1.0 (no scaling).
     this.bobAmount = 1.0             // scales heave + pitch + roll
     this.bobSpeed = 1.0              // scales the bob's time progression
@@ -299,6 +309,14 @@ export class ModelRenderer {
     // browsers the studio targets; when absent we leave the bump batches
     // un-flagged so the shader's gated branch never runs.
     this._derivExt = ctx.getExtension('OES_standard_derivatives')
+    // Fragment depth write — gates logarithmic depth. With a far plane now
+    // pushed out ~4× for wide establishing shots, the standard perspective
+    // depth buffer has almost no precision at distance and distant models
+    // (wind turbines, terrain seams, coplanar decals) z-fight/flicker.
+    // Logarithmic depth spends its precision far more evenly across the
+    // range, which kills the distance z-fighting. Available on essentially
+    // all desktop WebGL1; when absent we fall back to a raised near plane.
+    this._fragDepthExt = ctx.getExtension('EXT_frag_depth')
     const aniso = ctx.getExtension('EXT_texture_filter_anisotropic') || ctx.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
     if (aniso && textureCache) textureCache.setAnisotropicExt(aniso)
 
@@ -1618,6 +1636,26 @@ export class ModelRenderer {
   // FXAA-resolved even when no other post-effect is active.
   setAntialiasEnabled(on) { this.optAntialias = !!on; this.requestRedraw() }
 
+  // setDrawDistanceScale multiplies the far clip plane (and the effect-LOD
+  // cutoff distances) so far units keep geometry in wide shots. 1 = base
+  // horizon; the replay harness uses ~4. Clamped to a sane band so a bad
+  // value can't collapse the near/far ratio or overflow the log-depth Fc.
+  setDrawDistanceScale(scale) {
+    const s = Number(scale)
+    this.drawDistanceScale = Number.isFinite(s) ? Math.max(1, Math.min(8, s)) : 1
+    this.requestRedraw()
+  }
+
+  // setSuperSample sets the offscreen supersample factor for recorded
+  // renders — the scene renders at factor× the canvas and is downsampled by
+  // the post/FXAA blit (cheap SSAA). 1 = native. The harness sets 2 for
+  // clean 1080p output. Forces the post/FBO path on (see #postActive).
+  setSuperSample(factor) {
+    const f = Number(factor)
+    this.superSample = Number.isFinite(f) ? Math.max(1, Math.min(4, f)) : 1
+    this.requestRedraw()
+  }
+
   // setExposure sets the master scene light-intensity multiplier applied
   // to the lit unit colour before the tone curve (Graphics Options
   // Brightness slider).  Clamped to a sane 0.1..3.0 so the slider can't
@@ -1627,7 +1665,21 @@ export class ModelRenderer {
   // #postActive — true when any post-process effect needs the scene
   // rendered into the offscreen FBO + composited.  Gates the FBO path.
   #postActive() {
-    return this.optDof || this.optCinematic || this.optBloom || this.optLensFlare || this.optAntialias
+    return this.optDof || this.optCinematic || this.optBloom || this.optLensFlare ||
+      this.optAntialias || (this.superSample || 1) > 1
+  }
+
+  // #targetDims returns the pixel dimensions of the framebuffer the scene is
+  // CURRENTLY rendering into. When the supersampled scene FBO is bound this is
+  // the enlarged size, so point-sprite passes (particles, sprites) that scale
+  // gl_PointSize against the viewport size draw at the right physical size
+  // instead of half-size in a 2× buffer.
+  #targetDims() {
+    const gl = this.gl
+    if (this._usingScenePass && this._sceneW && this._sceneH) {
+      return [this._sceneW, this._sceneH]
+    }
+    return [gl.drawingBufferWidth, gl.drawingBufferHeight]
   }
 
   // setBgTerrainEnabled toggles the background-mountain ring.  When
@@ -1904,6 +1956,8 @@ export class ModelRenderer {
       if (this.camera) {
         const aspect = gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight)
         this.camera.updateMatrices(aspect, 0.5, 16000)
+        this._cameraFar = 16000
+        this._logDepthFC = 2.0 / Math.log2(16000 + 1.0)
       }
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight)
       gl.clearColor(this.skyBottom[0], this.skyBottom[1], this.skyBottom[2], 1)
@@ -1990,10 +2044,27 @@ export class ModelRenderer {
     )
     // Far plane has to reach the new ~2.5 km sea horizon — the
     // ground tessellation extends much further than the unit so the
-    // water + seabed are visible all the way out. Doubled draw
-    // distance so large maps don't clip terrain as the camera pulls
-    // back or pans across them.
-    this.camera.updateMatrices(aspect, Math.max(0.05, span * 0.01), Math.max(12000, span * 60 + 2000))
+    // water + seabed are visible all the way out. drawDistanceScale
+    // (default 4 on the cinematic/replay path) pushes the far plane out
+    // so distant units keep real geometry in wide establishing shots
+    // instead of dropping to impostors/culling early. Logarithmic depth
+    // (#renderLogDepth) is what keeps that extended range z-fight-free.
+    const ddScale = this.drawDistanceScale || 1
+    const baseFar = Math.max(12000, span * 60 + 2000)
+    const far = baseFar * ddScale
+    // Near plane: with log depth active we can keep it tight (precision is
+    // spread by the log remap). Without the extension, a tight near plane
+    // over a 48 km far plane has almost no usable precision, so raise the
+    // near floor substantially to claw depth precision back — the camera in
+    // replays sits far from the geometry, so a metre-scale near plane is
+    // invisible but hugely improves the near/far ratio.
+    const nearFloor = this._fragDepthExt ? 0.05 : 1.0
+    const near = Math.max(nearFloor, span * 0.01)
+    this._cameraFar = far
+    // Logarithmic depth constant Fc = 2 / log2(far + 1). Shared by every
+    // world-depth pass so their depths agree.
+    this._logDepthFC = 2.0 / (Math.log2(far + 1.0))
+    this.camera.updateMatrices(aspect, near, far)
 
     // Shadow pass is meaningful only when the main pass actually uses
     // shadows.  In Flat / Wireframe modes we skip it to save GPU.
@@ -2012,6 +2083,7 @@ export class ModelRenderer {
     // FBO and run #runPostChain below; otherwise the direct-to-screen
     // path keeps its MSAA + zero overhead.
     const useScenePass = this.#postActive() && this.#ensureSceneFBO()
+    this._usingScenePass = useScenePass
     if (useScenePass) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, this._sceneFBO)
       gl.viewport(0, 0, this._sceneW, this._sceneH)
@@ -2445,6 +2517,7 @@ export class ModelRenderer {
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uWireLogDepthFC)
     gl.uniform4fv(this.uWireColor, [1.0, 0.25, 0.30, 1.0])
     gl.uniform2f(this.uWirePixelOffset, 0, 0)
     // Disable depth test so the highlight survives even when the
@@ -2674,6 +2747,21 @@ export class ModelRenderer {
     // external-clock driver.
     gl.uniform1f(this.uSkyTime, this._fxTimeSec())
     gl.uniform1f(this.uSkyOptGodBeams, this.optGodBeams ? 1 : 0)
+    // Infinite void grid: painted into the sky pass's lower hemisphere when a
+    // battlefield is installed and the void grid is enabled. Because it's
+    // reconstructed per fragment from the camera ray hitting the deck plane,
+    // it extends to the true horizon at any pitch and never clips out — the
+    // old finite-pad void grid rode a ±2500 wu VBO that showed an edge.
+    const mtGrid = this._mapTerrain
+    const gridOn = !!mtGrid && this.voidGridEnabled !== false
+    gl.uniform1f(this.uSkyGridOn, gridOn ? 1 : 0)
+    if (gridOn) {
+      // Deck sits just below the map (matches the old mode-6 level) so the
+      // battlefield reads as floating over the void, TA-style.
+      gl.uniform1f(this.uSkyGridLevel, -10)
+      gl.uniform4fv(this.uSkyGridRect, mtGrid.rect)
+      gl.uniform1f(this.uSkyGridCell, 64)
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 6)
     gl.disableVertexAttribArray(this.aSkyPos)
   }
@@ -2689,6 +2777,7 @@ export class ModelRenderer {
     gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
     gl.uniformMatrix4fv(this.uGroundProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uGroundView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uGroundLogDepthFC)
     gl.uniformMatrix4fv(this.uGroundLightSpace, false, this._lightSpace)
     gl.uniformMatrix4fv(this.uGroundLightSpace2, false, this._lightSpace2)
     gl.uniform3fv(this.uGroundColorA, this.groundColorA)
@@ -2899,27 +2988,12 @@ export class ModelRenderer {
       // Keep the near-detail clipmap centred on the camera's ground focus.
       this._maybeRecenterClip()
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
-      // Void grid: the infinite dark Tron-style plane surrounding the
-      // battlefield (ground mode 6).  Reuses the flat pad VBO (still
-      // bound from the top of this pass), recentred under the camera
-      // focus so the void follows the view everywhere; the fragment
-      // shader discards everything inside the map rect, so the grid only
-      // exists OUTSIDE the gameplay area.  Sits below height 0 — the
-      // battlefield reads as floating over the void, TA-style.
-      if (this.voidGridEnabled !== false) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, this._groundVBO)
-        gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
-        gl.uniform1i(this.uGroundModeId, 6)
-        gl.uniform1f(this.uGroundY, -10)
-        gl.uniform3fv(this.uGroundShift, [
-          Math.round(cx / 64) * 64, 0, Math.round(cz / 64) * 64,
-        ])
-        gl.disable(gl.BLEND)
-        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
-        gl.enable(gl.BLEND)
-      }
-      // The map mesh carries real world-space geometry — clear the flat
-      // pad's recentre shift set for the void plane.
+      // The void grid that surrounds the battlefield is now drawn as a truly
+      // infinite ray-plane grid inside the sky pass (#renderSky, uGridOn), so
+      // it reaches the horizon at any camera angle instead of ending at the
+      // old finite pad's ±2500 wu edge. Nothing to draw here.
+      // The map mesh carries real world-space geometry — clear any recentre
+      // shift left set on the flat pad.
       gl.uniform3fv(this.uGroundShift, [0, 0, 0])
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
@@ -3268,6 +3342,7 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uLightSpace, false, this._lightSpace)
     gl.uniformMatrix4fv(this.uLightSpace2, false, this._lightSpace2)
+    this.#setLogDepthFC(this.uMainLogDepthFC)
     gl.uniform3fv(this.uLightDir, this.lightDir)
     gl.uniform3fv(this.uLightColor, this.lightColor)
     gl.uniform3fv(this.uLightDir2, this.lightDir2)
@@ -3537,6 +3612,7 @@ export class ModelRenderer {
     gl.uniformMatrix4fv(this.uView, false, this.camera.viewMatrix)
     gl.uniformMatrix4fv(this.uLightSpace, false, this._lightSpace)
     gl.uniformMatrix4fv(this.uLightSpace2, false, this._lightSpace2)
+    this.#setLogDepthFC(this.uMainLogDepthFC)
     gl.uniform3fv(this.uLightDir, this.lightDir)
     gl.uniform3fv(this.uLightColor, this.lightColor)
     gl.uniform3fv(this.uLightDir2, this.lightDir2)
@@ -3649,6 +3725,7 @@ export class ModelRenderer {
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uWireLogDepthFC)
     gl.uniform4fv(this.uWireColor, color)
     try { gl.lineWidth(width) } catch { /* spec says only width 1 is required */ }
     const vw = gl.drawingBufferWidth || 1
@@ -3725,9 +3802,13 @@ export class ModelRenderer {
       const dy = eye[1] - parentWorld[13]
       const dz = eye[2] - parentWorld[14]
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
-      const fade = Math.max(1, EFFECT_LOD_FADE_WU)
-      fxSurf = Math.max(0, Math.min(1, (EFFECT_LOD_SURFACE_MAX_WU - dist) / fade))
-      fxRL = Math.max(0, Math.min(1, (EFFECT_LOD_RUNNINGLIGHTS_MAX_WU - dist) / fade))
+      // Push the surface / running-light cutoff distances out with the draw-
+      // distance scale so wide establishing shots keep unit detail (bump,
+      // specular, running lights) on units that are now meant to stay drawn.
+      const dd = this.drawDistanceScale || 1
+      const fade = Math.max(1, EFFECT_LOD_FADE_WU * dd)
+      fxSurf = Math.max(0, Math.min(1, (EFFECT_LOD_SURFACE_MAX_WU * dd - dist) / fade))
+      fxRL = Math.max(0, Math.min(1, (EFFECT_LOD_RUNNINGLIGHTS_MAX_WU * dd - dist) / fade))
       // Quantise the distance fades to 1/32 steps: visually identical, but
       // now identical unit types at similar ranges produce IDENTICAL
       // uniform values, so the redundant-state elision below can skip the
@@ -4063,9 +4144,10 @@ export class ModelRenderer {
   // ── Shader/program setup ───────────────────────────────────────────
 
   #initMainProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programMain = prog
     const gl = this.gl
+    this.uMainLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this.aPos = gl.getAttribLocation(prog, 'aPos')
     this.aNormal = gl.getAttribLocation(prog, 'aNormal')
     this.aUV = gl.getAttribLocation(prog, 'aUV')
@@ -4187,6 +4269,10 @@ export class ModelRenderer {
     this.uSkyCloudSpd = gl.getUniformLocation(prog, 'uCloudSpeed')
     this.uSkyTime     = gl.getUniformLocation(prog, 'uTime')
     this.uSkyOptGodBeams = gl.getUniformLocation(prog, 'uOptGodBeams')
+    this.uSkyGridOn    = gl.getUniformLocation(prog, 'uGridOn')
+    this.uSkyGridLevel = gl.getUniformLocation(prog, 'uGridLevel')
+    this.uSkyGridRect  = gl.getUniformLocation(prog, 'uGridRect')
+    this.uSkyGridCell  = gl.getUniformLocation(prog, 'uGridCell')
     // Full-screen triangle pair in NDC.
     const buf = gl.createBuffer()
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
@@ -4202,9 +4288,10 @@ export class ModelRenderer {
   }
 
   #initGroundProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programGround = prog
     const gl = this.gl
+    this.uGroundLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this.aGroundPos = gl.getAttribLocation(prog, 'aPos')
     this.uGroundProj = gl.getUniformLocation(prog, 'uProj')
     this.uGroundView = gl.getUniformLocation(prog, 'uView')
@@ -4336,6 +4423,7 @@ export class ModelRenderer {
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uWireLogDepthFC)
     gl.uniformMatrix4fv(this.uWireWorld, false, IDENTITY_MAT4)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
@@ -4367,7 +4455,7 @@ export class ModelRenderer {
   }
 
   #initWireProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programWire = prog
     const gl = this.gl
     this.aWirePos = gl.getAttribLocation(prog, 'aPos')
@@ -4376,6 +4464,7 @@ export class ModelRenderer {
     this.uWireWorld = gl.getUniformLocation(prog, 'uWorld')
     this.uWireColor = gl.getUniformLocation(prog, 'uColor')
     this.uWirePixelOffset = gl.getUniformLocation(prog, 'uPixelOffset')
+    this.uWireLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
   }
 
   // #initParticlesProgram links the COB-SFX particle program and
@@ -4448,9 +4537,10 @@ export class ModelRenderer {
   }
 
   #initFeatProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programFeat = prog
     const gl = this.gl
+    this.uFeatLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this.aFeatPos = gl.getAttribLocation(prog, 'aPos')
     this.aFeatNormal = gl.getAttribLocation(prog, 'aNormal')
     this.aFeatColor = gl.getAttribLocation(prog, 'aColor')
@@ -4475,6 +4565,7 @@ export class ModelRenderer {
     gl.useProgram(this.programFeat)
     gl.uniformMatrix4fv(this.uFeatProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uFeatView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uFeatLogDepthFC)
     gl.uniform3fv(this.uFeatLightDir, this.lightDir)
     const _lc = this.lightColor || [1, 1, 1]
     const _lm = Math.max(_lc[0], _lc[1], _lc[2], 1e-4)
@@ -4576,7 +4667,7 @@ export class ModelRenderer {
   // doubles on overflow).  DYNAMIC_DRAW because the batch is rebuilt
   // every frame from the entity loop.
   #initImpostorProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programImpostor = prog
     const gl = this.gl
     this.aImpPos = gl.getAttribLocation(prog, 'aPos')
@@ -4584,6 +4675,7 @@ export class ModelRenderer {
     this.aImpSize = gl.getAttribLocation(prog, 'aSize')
     this.uImpProj = gl.getUniformLocation(prog, 'uProj')
     this.uImpView = gl.getUniformLocation(prog, 'uView')
+    this.uImpLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this._impCapacity = 256
     this._impInterleaved = new Float32Array(this._impCapacity * 7)
     this._impCount = 0
@@ -4676,6 +4768,7 @@ export class ModelRenderer {
     gl.vertexAttribPointer(this.aImpSize, 1, gl.FLOAT, false, stride, 6 * 4)
     gl.uniformMatrix4fv(this.uImpProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uImpView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uImpLogDepthFC)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.enable(gl.DEPTH_TEST)
@@ -4730,6 +4823,7 @@ export class ModelRenderer {
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uWireLogDepthFC)
     gl.uniform2f(this.uWirePixelOffset, 0, 0)
     // ARM-green hairline.  Depth test OFF: the selection square is UI,
     // not scenery — it must read over terrain bumps, water and walls
@@ -4809,6 +4903,7 @@ export class ModelRenderer {
     gl.useProgram(this.programWire)
     gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uWireLogDepthFC)
     gl.uniformMatrix4fv(this.uWireWorld, false, IDENTITY_MAT4)
     // Depth-tested (LEQUAL, no write): a unit tucked behind a terrain
     // ridge or a feature shows NO bar — the status UI never leaks
@@ -4972,7 +5067,7 @@ export class ModelRenderer {
     gl.vertexAttribPointer(this.aPartSize, 1, gl.FLOAT, false, STRIDE, 7 * 4)
     gl.uniformMatrix4fv(this.uPartProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uPartView, false, this.camera.viewMatrix)
-    gl.uniform2f(this.uPartViewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    { const [tw, th] = this.#targetDims(); gl.uniform2f(this.uPartViewport, tw, th) }
     // Premultiplied-alpha additive blend: src * 1 + dst * 1.
     // The shader already pre-multiplies colour by alpha (colour-
     // values stay >1 for bright effects so they self-clamp at the
@@ -5162,7 +5257,7 @@ export class ModelRenderer {
     gl.useProgram(this.programSprites)
     gl.uniformMatrix4fv(this.uSprProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uSprView, false, this.camera.viewMatrix)
-    gl.uniform2f(this.uSprViewport, gl.drawingBufferWidth, gl.drawingBufferHeight)
+    { const [tw, th] = this.#targetDims(); gl.uniform2f(this.uSprViewport, tw, th) }
     gl.uniform1i(this.uSprAtlas, 0)
     gl.activeTexture(gl.TEXTURE0)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._sprVBO)
@@ -5260,8 +5355,14 @@ export class ModelRenderer {
   #ensureSceneFBO() {
     if (!this._depthExt || !this.programDoF) return false
     const gl = this.gl
-    const w = gl.drawingBufferWidth | 0
-    const h = gl.drawingBufferHeight | 0
+    // Supersample: allocate the scene target at superSample× the canvas so
+    // the whole scene is rendered at higher resolution and downsampled by
+    // the final post/FXAA blit (bilinear color attachment) — a cheap SSAA
+    // that sharpens unit silhouettes and suppresses texture shimmer for
+    // recorded renders. ss=1 keeps the native path unchanged.
+    const ss = Math.max(1, Math.min(4, this.superSample || 1))
+    const w = (gl.drawingBufferWidth * ss) | 0
+    const h = (gl.drawingBufferHeight * ss) | 0
     if (w <= 0 || h <= 0) return false
     if (this._sceneFBO && this._sceneW === w && this._sceneH === h) return true
     if (this._sceneFBO) gl.deleteFramebuffer(this._sceneFBO)
@@ -5667,11 +5768,35 @@ export class ModelRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
   }
 
-  #linkProgram(vsSrc, fsSrc) {
+  // #logDepthPreamble builds the GLSL injected ahead of a shader's source
+  // to enable logarithmic depth. Returns { vs, fs } prefixes. The fragment
+  // prefix must lead with the #extension pragma (GLSL ES requires all
+  // #extension directives before any other statement), so it's prepended to
+  // the whole fragment source. Both halves define LOGDEPTH so the shared
+  // lib/logdepth.glsl branches compile in; without the extension the
+  // renderer passes no preamble and the LOGDEPTH branches stay dead.
+  #logDepthPrefix(type) {
     const gl = this.gl
+    if (type === gl.FRAGMENT_SHADER) {
+      return '#extension GL_EXT_frag_depth : enable\n#define LOGDEPTH 1\n#define LOGDEPTH_FRAGMENT 1\n'
+    }
+    return '#define LOGDEPTH 1\n#define LOGDEPTH_VERTEX 1\n'
+  }
+
+  // #setLogDepthFC uploads the per-frame logarithmic-depth constant to a
+  // program's uLogDepthFC. A no-op when the extension is absent (loc is null,
+  // and gl.uniform1f(null, …) is silently ignored per the WebGL spec).
+  #setLogDepthFC(loc) {
+    if (loc && this._fragDepthExt) this.gl.uniform1f(loc, this._logDepthFC || 1.0)
+  }
+
+  #linkProgram(vsSrc, fsSrc, opts = {}) {
+    const gl = this.gl
+    const logDepth = !!opts.logDepth && !!this._fragDepthExt
     const compile = (src, type) => {
       const sh = gl.createShader(type)
-      gl.shaderSource(sh, src)
+      const full = logDepth ? this.#logDepthPrefix(type) + src : src
+      gl.shaderSource(sh, full)
       gl.compileShader(sh)
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
         const info = gl.getShaderInfoLog(sh)

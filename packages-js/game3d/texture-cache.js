@@ -9,8 +9,9 @@
 // Texture wrapping: TA's 3DO faces are unit-quad mapped — the texture
 // is meant to be applied 1:1 to a face, never tiled.  We bind every
 // texture with CLAMP_TO_EDGE on both axes so sub-pixel UVs along a face
-// edge never bleed in the neighbour's column / row.  Filtering stays at
-// NEAREST to preserve TA's chunky paletted look.
+// edge never bleed in the neighbour's column / row.  Filtering is
+// trilinear (LINEAR_MIPMAP_LINEAR) with the hardware-max anisotropy so
+// distant / oblique faces stay crisp and don't shimmer under motion.
 
 import { buildLampAtlas } from './lamp-map.js'
 import { requireAssetProvider, toTexImageSource } from './assets.js'
@@ -147,7 +148,9 @@ export class TextureCache {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     if (this.anisoExt && this.anisoMax > 1) {
-      gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, this.anisoMax))
+      // Use the hardware maximum (typically 16) — renders can afford it and
+      // TA's tiny textures shimmer badly at oblique angles without it.
+      gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(16, this.anisoMax))
     }
     this.entries.set(key, {
       tex,
