@@ -187,8 +187,8 @@ func TestBuildPackV3Assets(t *testing.T) {
 
 	var manifest packManifest
 	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
-	if manifest.FormatVersion != 3 {
-		t.Fatalf("formatVersion = %d, want 3", manifest.FormatVersion)
+	if manifest.FormatVersion != 4 {
+		t.Fatalf("formatVersion = %d, want 4", manifest.FormatVersion)
 	}
 	if manifest.Weapons != "weapons.json" {
 		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
@@ -256,6 +256,97 @@ func TestBuildPackV3Assets(t *testing.T) {
 		if _, ok := wf.Weapons[id]; !ok {
 			t.Fatalf("unit weapon %q missing from weapons.json", id)
 		}
+	}
+}
+
+// TestBuildPackV4Assets covers the format-v4 additions: base + enhanced
+// model variants, the extended weapons.json driver fields (trajectory
+// flags, raw colour indices, blast/range, sound stems), catalogue-wide
+// projectile meshes, and the corpse-chain models a death swap renders.
+func TestBuildPackV4Assets(t *testing.T) {
+	install := testutil.UnpackedPath(t)
+	dir := t.TempDir()
+	_, err := BuildPack(install, dir, PackOptions{
+		Game:  "totala",
+		Units: []string{"armpw", "armrock"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	// Both geometry variants exist and parse; the enhanced one is the
+	// hidden-face reconstruction, so it can never be smaller than base.
+	var base, enhanced modelJSON
+	mustJSON(t, filepath.Join(dir, "models/armpw.json"), &base)
+	mustJSON(t, filepath.Join(dir, "models-enhanced/armpw.json"), &enhanced)
+	baseBytes, _ := os.ReadFile(filepath.Join(dir, "models/armpw.json"))
+	enhBytes, _ := os.ReadFile(filepath.Join(dir, "models-enhanced/armpw.json"))
+	if len(enhBytes) < len(baseBytes) {
+		t.Fatalf("enhanced model (%d bytes) smaller than base (%d bytes)", len(enhBytes), len(baseBytes))
+	}
+
+	// Corpse chain: armpw's FBI corpse feature resolves to a packed wreck
+	// model in BOTH variants, and unitdb meta carries the linkage.
+	var db packUnitDBJSON
+	mustJSON(t, filepath.Join(dir, "unitdb.json"), &db)
+	var pw *packUnitJSON
+	for i := range db.Units {
+		if db.Units[i].Name == "armpw" {
+			pw = &db.Units[i]
+		}
+	}
+	if pw == nil || pw.Meta == nil {
+		t.Fatalf("armpw missing from unitdb")
+	}
+	if pw.Meta.CorpseObject == "" {
+		t.Fatalf("armpw meta lacks corpseObject")
+	}
+	for _, sub := range []string{"models", "models-enhanced"} {
+		wreck := filepath.Join(dir, sub, packStem(pw.Meta.CorpseObject)+".json")
+		var wm modelJSON
+		mustJSON(t, wreck, &wm)
+		if wm.Root == nil {
+			t.Fatalf("corpse model %s has no geometry root", wreck)
+		}
+	}
+
+	// weapons.json v4 driver fields on a smoke-trailed missile weapon
+	// (armrock's rocket) — and its projectile mesh packed from the
+	// catalogue walk, not the unit selection.
+	var wf packWeaponsFileJSON
+	mustJSON(t, filepath.Join(dir, "weapons.json"), &wf)
+	rocket, ok := wf.Weapons["armrl_missile"]
+	if !ok {
+		// Rocko's TDF id differs across installs; fall back to scanning for
+		// any smoke-trailed weapon with a model.
+		for id, w := range wf.Weapons {
+			if w.SmokeTrail && w.Model != "" {
+				rocket, ok = w, true
+				_ = id
+				break
+			}
+		}
+	}
+	if !ok {
+		t.Fatalf("no smoke-trailed model weapon in weapons.json")
+	}
+	if rocket.RangeWU <= 0 || rocket.AreaOfEffectWU <= 0 {
+		t.Fatalf("rocket range/aoe missing: %+v", rocket)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "models", packStem(rocket.Model)+".json")); err != nil {
+		t.Fatalf("catalogue projectile model %s not packed: %v", rocket.Model, err)
+	}
+	if rocket.SoundStart != "" {
+		if _, err := os.Stat(filepath.Join(dir, "sounds", packStem(rocket.SoundStart)+".wav")); err != nil {
+			t.Fatalf("catalogue weapon sound %s not packed: %v", rocket.SoundStart, err)
+		}
+	}
+
+	// Raw colour index rides beside the resolved triple (the laser tint /
+	// bitmap slot input).
+	laser, ok := wf.Weapons["armcomlaser"]
+	if !ok || laser.ColorIdx == nil || *laser.ColorIdx <= 0 {
+		t.Fatalf("armcomlaser colorIdx missing: %+v", laser)
 	}
 }
 

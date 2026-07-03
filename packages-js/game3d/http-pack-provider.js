@@ -15,6 +15,7 @@
 // Pack layout (mirrors `kbot pack --help`):
 //   manifest.json / unitdb.json / palette.json / weapons.json
 //   models/<name>.json        cob/<name>.json
+//   models-enhanced/<name>.json  hidden-face variants (formatVersion 4+)
 //   textures/<name>.png       (name--<side>.png for per-side variants)
 //   sounds/<stem>.wav         weaponbitmaps/<weapon>.json
 //   cursors/<sequence>.png    groundtiles/<tileset>.png
@@ -88,11 +89,18 @@ export class HttpPackProvider {
     return json.palette || []
   }
 
-  // enhanceMesh is accepted for contract parity but ignored: packs bake
-  // the enhanced (hole-capped) geometry at extraction time, which is what
-  // the sandbox renders by default anyway.
-  async model(name) {
-    return this.fetchJson(`models/${packStem(name)}.json`, `model ${name}`)
+  // model resolves the unit's base geometry (models/), or — with
+  // {enhanceMesh:true} — the hidden-face-reconstructed variant a v4 pack
+  // ships at models-enhanced/.  Packs older than formatVersion 4 carry no
+  // enhanced files, so the request degrades to the base geometry, the
+  // same soft-fallback the studio's Enhanced Mesh toggle expects.
+  async model(name, { enhanceMesh = false } = {}) {
+    const stem = packStem(name)
+    if (enhanceMesh) {
+      const enhanced = await this.fetchJson(`models-enhanced/${stem}.json`, `model ${name}`, { optional: true })
+      if (enhanced) return enhanced
+    }
+    return this.fetchJson(`models/${stem}.json`, `model ${name}`)
   }
 
   // name may carry a resolver query ("armkbot4?side=ara") — per-side

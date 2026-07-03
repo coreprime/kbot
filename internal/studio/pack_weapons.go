@@ -29,6 +29,13 @@ type packWeaponJSON struct {
 	// against the install palette; absent when the TDF omits the field.
 	Color  *[3]int `json:"color,omitempty"`
 	Color2 *[3]int `json:"color2,omitempty"`
+	// ColorIdx / Color2Idx are the RAW color=/color2= values (format v4).
+	// A renderer needs the raw index for two things the resolved triple
+	// can't do: palette-driven beam tints through its own palette, and the
+	// rendertype=4 sprite SLOT (where color= selects an fx.gaf sequence,
+	// not a tint).  Pointer-typed for the same absence/zero distinction.
+	ColorIdx  *int `json:"colorIdx,omitempty"`
+	Color2Idx *int `json:"color2Idx,omitempty"`
 	// DurationSec is the beam/shot lifetime (TDF duration=); zero means the
 	// weapon doesn't specify one and is omitted.
 	DurationSec float64 `json:"durationSec,omitempty"`
@@ -37,9 +44,29 @@ type packWeaponJSON struct {
 	VelocityWU      float64 `json:"velocityWU"`
 	StartVelocityWU float64 `json:"startVelocityWU,omitempty"`
 	// Model is the projectile 3DO name (lower-case), when the weapon flies
-	// a mesh rather than a beam/sprite.
+	// a mesh rather than a beam/sprite.  Format v4 packs the named mesh at
+	// models/<model>.json so replay drivers can fly the real projectile.
 	Model      string `json:"model,omitempty"`
 	BeamWeapon bool   `json:"beamWeapon,omitempty"`
+
+	// Trajectory + muzzle/impact presentation fields (format v4) — the rest
+	// of what a renderer needs to reproduce the weapon's look from the id
+	// alone: ballistic arcs, missile smoke trails and their cadence, the
+	// muzzle startsmoke puff, the D-Gun's commandfire identity, blast
+	// diameter for impact sizing, and range for time-of-flight.
+	Ballistic      bool    `json:"ballistic,omitempty"`
+	Dropped        bool    `json:"dropped,omitempty"`
+	Guidance       bool    `json:"guidance,omitempty"`
+	SmokeTrail     bool    `json:"smokeTrail,omitempty"`
+	SmokeDelaySec  float64 `json:"smokeDelaySec,omitempty"`
+	StartSmoke     bool    `json:"startSmoke,omitempty"`
+	CommandFire    bool    `json:"commandFire,omitempty"`
+	AreaOfEffectWU float64 `json:"areaOfEffectWU,omitempty"`
+	RangeWU        float64 `json:"rangeWU,omitempty"`
+	// SoundStart / SoundHit are the fire/impact wav stems (sounds/<stem>.wav
+	// in the pack — format v4 packs the whole catalogue's sounds).
+	SoundStart string `json:"soundStart,omitempty"`
+	SoundHit   string `json:"soundHit,omitempty"`
 }
 
 // packWeaponsFileJSON is the weapons.json document shape.  A JSON object
@@ -109,13 +136,26 @@ func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 				StartVelocityWU: sec.StartVelocity,
 				Model:           strings.ToLower(strings.TrimSpace(sec.Model)),
 				BeamWeapon:      sec.BeamWeapon != 0,
+				Ballistic:       sec.Ballistic != 0,
+				Dropped:         sec.Dropped != 0,
+				Guidance:        sec.Guidance != 0,
+				SmokeTrail:      sec.SmokeTrail != 0,
+				SmokeDelaySec:   sec.SmokeDelay,
+				StartSmoke:      sec.StartSmoke != 0,
+				CommandFire:     sec.CommandFire != 0,
+				AreaOfEffectWU:  float64(sec.AreaOfEffect),
+				RangeWU:         float64(sec.Range),
+				SoundStart:      strings.ToLower(strings.TrimSpace(sec.SoundStart)),
+				SoundHit:        strings.ToLower(strings.TrimSpace(sec.SoundHit)),
 			}
 			if pr, ok := colorProbe[id]; ok {
 				if pr.Color != nil {
 					w.Color = paletteTriple(pal, *pr.Color)
+					w.ColorIdx = pr.Color
 				}
 				if pr.Color2 != nil {
 					w.Color2 = paletteTriple(pal, *pr.Color2)
+					w.Color2Idx = pr.Color2
 				}
 			}
 			out[id] = w

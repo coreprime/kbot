@@ -16,7 +16,8 @@ package studio
 //	palette.json                     {"palette": [[r,g,b] × 256]}
 //	README.md                        this layout, for humans unpacking a pack
 //	unitpics/<name>.png              unit build pictures (PCX decoded at native size)
-//	models/<name>.json               ModelLoader geometry (enhanced mesh baked in)
+//	models/<name>.json               ModelLoader geometry (authored faces)
+//	models-enhanced/<name>.json      ModelLoader geometry with reconstructed faces
 //	textures/<name>.png              3DO texture (name--<side>.png for per-side variants)
 //	cob/<name>.json                  disassembled COB animation script
 //	cob/<name>.cob                   raw COB bytecode (the engine's runnable form)
@@ -333,7 +334,13 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		if entry.Path == "" {
 			return "", false
 		}
-		mj, err := sess.buildModelJSON(entry, true)
+		// Base geometry (models/) is the authored 3DO faces; the enhanced
+		// variant (models-enhanced/, format v4) additionally reconstructs
+		// the faces TA's artists deleted as a fill-rate optimisation.  Both
+		// are written so a static pack can serve the studio's Enhanced Mesh
+		// toggle: HttpPackProvider.model(name, {enhanceMesh:true}) fetches
+		// the enhanced file and falls back to base when a pack predates v4.
+		mj, err := sess.buildModelJSON(entry, false)
 		if err != nil {
 			warnf("model %s: %v", entry.Name, err)
 			return "", false
@@ -346,6 +353,15 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		if err := pw.write("models/"+packStem(entry.Name)+".json", data); err != nil {
 			warnf("write model %s: %v", entry.Name, err)
 			return "", false
+		}
+		if emj, eerr := sess.buildModelJSON(entry, true); eerr == nil {
+			if edata, jerr := packJSON(emj); jerr == nil {
+				if werr := pw.write("models-enhanced/"+packStem(entry.Name)+".json", edata); werr != nil {
+					warnf("write enhanced model %s: %v", entry.Name, werr)
+				}
+			}
+		} else {
+			warnf("enhanced model %s: %v", entry.Name, eerr)
 		}
 		side := strings.TrimPrefix(mj.TextureQuery, "side=")
 		if side == mj.TextureQuery {
@@ -559,6 +575,33 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 			return nil, err
 		}
 		weaponsFile = "weapons.json"
+		// Catalogue-referenced presentation assets (format v4).  A replay can
+		// name ANY weapon id, not just the selected units' slots, so the
+		// projectile 3DO meshes (missiles, bombs, the dgun ball), fire/impact
+		// sounds, and rendertype=4 sprite strips are packed for the whole
+		// catalogue.  Sorted ids keep the walk deterministic.
+		ids := make([]string, 0, len(catalog))
+		for id := range catalog {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			w := catalog[id]
+			if w.Model != "" {
+				if ce, ok := sess.resolveModelEntry(w.Model); ok {
+					writeModel(ce)
+				}
+			}
+			writeSound(w.SoundStart)
+			writeSound(w.SoundHit)
+			if w.RenderType == 4 {
+				if body, err := sess.buildWeaponBitmapJSON(w.ID); err == nil {
+					if werr := pw.write("weaponbitmaps/"+packStem(w.ID)+".json", body); werr != nil {
+						warnf("write weapon bitmap %s: %v", w.ID, werr)
+					}
+				}
+			}
+		}
 	}
 	if reader, seqs, err := sess.loadCursorSequences(); err == nil {
 		for _, s := range seqs {
@@ -629,8 +672,14 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// the unitdb cobBin field).  FormatVersion 3 added unitpics/<name>.png
 		// build pictures (unitdb unitPic field), the weapons.json render
 		// catalogue (manifest weapons field) and the unitdb per-unit
-		// slot-ordered weapons array.  Older readers ignore all of them.
-		FormatVersion: 3,
+		// slot-ordered weapons array.  FormatVersion 4 split model geometry
+		// into base (models/) + enhanced (models-enhanced/) variants,
+		// extended weapons.json with the trajectory/muzzle/impact fields a
+		// renderer needs (ballistic, smokeTrail, startSmoke, commandFire,
+		// areaOfEffectWU, rangeWU, raw colour indices, sound stems), and
+		// packed the whole weapon catalogue's projectile meshes, sounds and
+		// bitmap sprite strips.  Older readers ignore all of them.
+		FormatVersion: 4,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -843,14 +892,21 @@ Files:
   FBI/TDF-derived stats (buildTime, maxDamage, weapons, economy,
   footprint, sounds, corpse chain).
 - weapons.json — every weapon definition in the install keyed by
-  lower-case id: render type, palette-resolved beam colours, projectile
-  model, velocity and beam duration.  Each unitdb entry's "weapons"
-  array maps its fire slots onto these keys.
+  lower-case id: render type, palette-resolved beam colours (plus the
+  raw colour indices), projectile model, velocity, beam duration,
+  trajectory flags (ballistic, smokeTrail, startSmoke, commandFire),
+  blast diameter, range and fire/impact sound stems.  Each unitdb
+  entry's "weapons" array maps its fire slots onto these keys; every
+  catalogue-referenced projectile mesh, sound and bitmap sprite strip
+  is packed alongside.
 - palette.json — {"palette": [[r,g,b] x 256]}.
 - unitpics/<name>.png — unit build pictures, decoded from the install's
   PCX/JPEG originals at native size.
-- models/<name>.json — preprocessed model geometry (enhanced mesh baked
-  in) in the @kbot/game3d ModelLoader shape.
+- models/<name>.json — preprocessed model geometry (authored faces) in
+  the @kbot/game3d ModelLoader shape.
+- models-enhanced/<name>.json — the same geometry with the faces TA's
+  artists deleted reconstructed (the studio's Enhanced Mesh toggle);
+  clients request it via model(name, {enhanceMesh:true}).
 - textures/<name>.png — model textures ("<name>--<side>.png" for
   per-side variants).
 - cob/<name>.json — disassembled COB animation scripts (debug/viewer form).

@@ -46,7 +46,7 @@ Pack layout (all filenames lower-case; characters outside [a-z0-9._-]
 become "_"):
 
   manifest.json                game id, sides, unit list, contentHash
-                               (formatVersion 3)
+                               (formatVersion 4)
   unitdb.json                  per-unit database: pack ordinal id, raw FBI
                                movementClass + derived motionDomain
                                (ground/air/sea/building), build picture +
@@ -54,11 +54,15 @@ become "_"):
                                (buildTime, maxDamage, weapons, economy,
                                footprint, sounds, corpse chain)
   weapons.json                 every weapon in the install keyed by id:
-                               render type, palette-resolved colours,
-                               projectile model, velocity, beam duration
+                               render type, colours (resolved + raw index),
+                               projectile model, velocity, beam duration,
+                               trajectory flags, blast diameter, range and
+                               sound stems; catalogue projectile meshes,
+                               sounds and sprite strips pack alongside
   palette.json                 {"palette": [[r,g,b] x 256]}
   unitpics/<name>.png          unit build pictures (native size)
-  models/<name>.json           model geometry (enhanced mesh baked in)
+  models/<name>.json           model geometry (authored faces)
+  models-enhanced/<name>.json  geometry with reconstructed hidden faces
   textures/<name>.png          model textures (name--<side>.png variants)
   cob/<name>.json              disassembled COB animation scripts
   sounds/<stem>.wav            unit + weapon sound effects
