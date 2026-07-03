@@ -12,19 +12,21 @@ seed plus the same order stream produces the same world hash everywhere.
 
 ## Install
 
-This package is hosted on GitHub Packages, which requires a token even for
-public packages. Add to your project's `.npmrc` (the token comes from the
-environment — never commit a literal token):
+This package is published publicly on npmjs.org, so no registry or auth
+configuration is needed to consume it:
 
 ```
-@coreprime:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+npm install @kbot/engine
 ```
+
+(Publishing needs a token — CI authenticates with
+`//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`, sourced from the
+environment; never commit a literal token.)
 
 ## Use
 
 ```js
-import { loadEngine } from '@coreprime/kbot-engine'
+import { loadEngine } from '@kbot/engine'
 
 const engine = await loadEngine() // bundled engine.wasm; pass { wasmUrl } to override
 const session = engine.createSession({ seed: 42 })
