@@ -201,6 +201,40 @@ export class Session {
     return this.#api.setUnitState(this.#handle, unitId, state)
   }
 
+  /**
+   * Play a unit's aim + fire COB scripts pointed at the world-unit target —
+   * the replay driver's WeaponFire hook (turret swing, recoil, muzzle
+   * flash). Presentation only: no projectile spawns and no damage applies.
+   * Returns false for a missing or script-less unit so the driver can fall
+   * back to a renderer-side tracer.
+   */
+  playWeaponFire(unitId, slot, tx, ty, tz) {
+    return this.#api.playWeaponFire(this.#handle, unitId, slot, tx, ty, tz)
+  }
+
+  /** Spawn a thread on the named COB entry point with integer args. */
+  startScript(unitId, name, args = []) {
+    this.#api.startScript(this.#handle, unitId, name, args)
+  }
+
+  /** Start the named script after cancelling any live instance of it. */
+  restartScript(unitId, name, args = []) {
+    this.#api.restartScript(this.#handle, unitId, name, args)
+  }
+
+  /** Kill every live thread running the named script. */
+  killThreadsByName(unitId, name) {
+    this.#api.killThreadsByName(this.#handle, unitId, name)
+  }
+
+  /**
+   * The unit type's COB entry-point names in script-index order — the table
+   * that resolves a recorded CobScriptCall's numeric index to a name.
+   */
+  scriptNames(unitId) {
+    return this.#api.scriptNames(this.#handle, unitId)
+  }
+
   /** Render snapshot at the current tick without advancing. */
   renderState() {
     return this.#api.renderState(this.#handle)

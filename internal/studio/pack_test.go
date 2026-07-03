@@ -1,11 +1,14 @@
 package studio
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/coreprime/kbot/engine/script"
+	"github.com/coreprime/kbot/formats/scripting"
 	"github.com/coreprime/kbot/internal/testutil"
 )
 
@@ -115,10 +118,35 @@ func TestBuildPackContents(t *testing.T) {
 		"palette.json",
 		"models/armcom.json",
 		"cob/armcom.json",
+		"cob/armcom.cob",
 		"README.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
 			t.Fatalf("pack missing %s: %v", rel, err)
+		}
+	}
+
+	// The raw COB is the RUNNABLE form: it must point from the unitdb entry
+	// and parse through the same loader the engine's script VM uses, with a
+	// real script table (Create/StartMoving live here).
+	if u.CobBin != "cob/armcom.cob" {
+		t.Fatalf("unitdb cobBin = %q, want cob/armcom.cob", u.CobBin)
+	}
+	rawCob, err := os.ReadFile(filepath.Join(dir, "cob/armcom.cob"))
+	if err != nil {
+		t.Fatalf("read raw cob: %v", err)
+	}
+	cob, err := scripting.LoadFromReader(bytes.NewReader(rawCob))
+	if err != nil {
+		t.Fatalf("packed cob does not parse: %v", err)
+	}
+	prog, err := script.FromCOB(cob)
+	if err != nil {
+		t.Fatalf("packed cob does not compile into a VM program: %v", err)
+	}
+	for _, want := range []string{"Create", "StartMoving", "StopMoving", "AimPrimary", "FirePrimary"} {
+		if !prog.HasScript(want) {
+			t.Fatalf("armcom program lacks the %s entry point", want)
 		}
 	}
 

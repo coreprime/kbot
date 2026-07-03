@@ -102,6 +102,11 @@ type Unit struct {
 	IsMoving   bool
 	hasMove    bool
 	moveTarget fixed.Vec2
+	// motionPin is the replay driver's authoritative motion flag (see
+	// UnitStateOverride.Moving). While non-none, stepMovement's order-driven
+	// locomotion yields to stepPinnedMovement: the flag owns IsMoving and a
+	// pinned-moving unit coasts along its heading at the injected speed.
+	motionPin uint8
 	// Global pathfinding (pathfind.go): path is the smoothed waypoint chain
 	// from a Move/Patrol/Build order to its destination, walked in order.
 	// pathTried gates the lazy compute (so a no-path unit doesn't retry
@@ -692,6 +697,41 @@ func (w *World) UnitRestartScript(id uint32, name string, args ...int) {
 	}
 }
 
+// UnitPlayWeaponFire plays the aim + fire entry points for a wire-reported
+// shot: it re-drives the slot's aim script pointed at the target (the turret
+// and barrel swing onto the bearing) and starts the fire script (recoil,
+// muzzle flash, barrel cycling). Presentation only — no projectile spawns and
+// no damage applies; a replay driver conveys the shot's outcome through its
+// own state corrections. The weapon-script convention (TA per-slot triples vs
+// TA:K's shared parameterized set) is resolved from the COB exactly as live
+// combat does, and the aim geometry mirrors aimWeapon's, so the animation a
+// replay plays is the one the game would have. Deterministic: pure integer
+// math into the script VM. Returns false for a missing, script-less or
+// aim/fire-less unit so drivers can fall back to a renderer-side tracer only.
+func (w *World) UnitPlayWeaponFire(id uint32, slot int, target fixed.Vec3) bool {
+	u := w.units[id]
+	if u == nil || u.binding == nil {
+		return false
+	}
+	if slot < 0 || slot >= len(u.weapons) {
+		slot = 0
+	}
+	conv := conventionFor(u.binding)
+	played := false
+	if name := conv.aimScript(slot); name != "" && u.binding.HasScript(name) {
+		d := fixed.Vec2{X: target.X, Z: target.Z}.Sub(u.loco.Pos)
+		heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+		pitch := fixed.ShortestArc(fixed.Atan2(target.Y-(u.PosY+muzzleAimHeight), d.Len()))
+		u.binding.Restart(name, conv.aimArgs(heading, pitch, slot)...)
+		played = true
+	}
+	if name := conv.fireScript(slot); name != "" && u.binding.HasScript(name) {
+		u.binding.Start(name, conv.fireArgs(slot)...)
+		played = true
+	}
+	return played
+}
+
 // UnitKillThreadsByName marks dead every live thread running the named script.
 func (w *World) UnitKillThreadsByName(id uint32, name string) {
 	if s := w.scripts(id); s != nil {
@@ -898,6 +938,10 @@ type RestoredUnit struct {
 	ProgressZ  fixed.Fixed
 	HasUnload  bool
 	UnloadAt   fixed.Vec2
+	// MotionPin carries a replay driver's authoritative motion flag (see
+	// UnitStateOverride.Moving) so a seek keyframe restore resumes the same
+	// walk/idle animation state the pin was holding.
+	MotionPin uint8
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -1028,6 +1072,7 @@ func (w *World) ExportUnits() []RestoredUnit {
 			ProgressZ:     u.progressPos.Z,
 			HasUnload:     u.hasUnload,
 			UnloadAt:      u.unloadAt,
+			MotionPin:     u.motionPin,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit, Name: c.name})
@@ -1152,7 +1197,8 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			unloadAt:     ru.UnloadAt,
 			hasMove:      ru.HasMove,
 			moveTarget:   ru.MoveTarget,
-			IsMoving:     ru.HasMove,
+			IsMoving:     ru.HasMove || ru.MotionPin == motionPinMoving,
+			motionPin:    ru.MotionPin,
 			hasAttack:    ru.HasAttack,
 			attackTarget: ru.AttackTarget,
 			binding:      binding,
@@ -1204,8 +1250,10 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			// authority; the move-start transition that kicks StartMoving already
 			// fired before the snapshot, so re-arm it here or the restored unit glides
 			// to its destination frozen in its Create-time rest pose (legs/tracks not
-			// moving).
-			if u.hasMove && binding != nil && binding.HasScript("StartMoving") {
+			// moving). A replay motion pin caught in the moving state re-arms the
+			// same way.
+			if (u.hasMove || u.motionPin == motionPinMoving) &&
+				binding != nil && binding.HasScript("StartMoving") {
 				binding.Start("StartMoving")
 			}
 		}

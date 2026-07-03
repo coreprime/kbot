@@ -27,7 +27,26 @@ type UnitStateOverride struct {
 	// replay shows a frame being raised exactly as the wire reports it.
 	HasBuildPercent bool
 	BuildPercent    fixed.Fixed
+	// Moving pins the unit's motion flag to the wire's in-motion truth. The
+	// pin persists across ticks until the next Moving override: a pinned-
+	// moving unit coasts along its heading at the injected Speed and keeps
+	// its walk/drive animation running (the StartMoving/StopMoving COB
+	// transitions fire exactly as the flag flips), while a pinned-stopped
+	// unit holds still with its gait wound down. Without the pin an order-
+	// less unit reads idle every tick, so wire-driven motion could never
+	// animate.
+	HasMoving bool
+	Moving    bool
 }
+
+// Motion-pin states. None is the default for every unit the simulation
+// itself drives; a replay's first Moving override flips the unit to driver-
+// owned motion for the rest of its life (or until a world Restore drops it).
+const (
+	motionPinNone uint8 = iota
+	motionPinStopped
+	motionPinMoving
+)
 
 // SetUnitState authoritatively overwrites one live unit's pose/state. The unit
 // must already exist — creation stays on the AddUnit/Spawn path, which carries
@@ -59,7 +78,22 @@ func (w *World) SetUnitState(id uint32, ov UnitStateOverride) bool {
 		u.Health = ov.Health
 	}
 	if ov.HasBuildPercent {
+		// A wire-reported completion runs the same activation the
+		// construction path performs, so a structure that finishes raising
+		// in a replay visibly opens (an ActivateWhenBuilt solar unfolds)
+		// instead of staying in its buildee pose.
+		completed := u.BuildPercent < fixed.FromInt(100) && ov.BuildPercent >= fixed.FromInt(100)
 		u.BuildPercent = ov.BuildPercent
+		if completed && u.Meta != nil && u.Meta.OnOffable && u.Meta.ActivateWhenBuilt {
+			w.setActivation(u, true)
+		}
+	}
+	if ov.HasMoving {
+		if ov.Moving {
+			u.motionPin = motionPinMoving
+		} else {
+			u.motionPin = motionPinStopped
+		}
 	}
 	return true
 }

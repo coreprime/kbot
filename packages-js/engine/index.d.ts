@@ -146,6 +146,13 @@ export interface UnitStateOverride {
   hp?: number
   /** Construction progress 0..100 (below 100 the unit is inert). */
   build?: number
+  /**
+   * Pin the unit's motion flag to the wire's in-motion truth. The pin
+   * persists until the next `moving` override: pinned-moving units coast
+   * along their heading at `vel` and run their walk-cycle COB (StartMoving
+   * fires on the transition), pinned-stopped units hold still (StopMoving).
+   */
+  moving?: boolean
 }
 
 export interface CreateSessionOptions {
@@ -195,6 +202,21 @@ export class Session {
    * the unit does not exist.
    */
   setUnitState(unitId: number, state: UnitStateOverride): boolean
+  /**
+   * Play a unit's aim + fire COB scripts pointed at the world-unit target —
+   * the replay driver's WeaponFire hook (turret swing, recoil, muzzle
+   * flash). Presentation only: no projectile spawns and no damage applies.
+   * Returns false for a missing or script-less unit.
+   */
+  playWeaponFire(unitId: number, slot: number, tx: number, ty: number, tz: number): boolean
+  /** Spawn a thread on the named COB entry point with integer args. */
+  startScript(unitId: number, name: string, args?: number[]): void
+  /** Start the named script after cancelling any live instance of it. */
+  restartScript(unitId: number, name: string, args?: number[]): void
+  /** Kill every live thread running the named script. */
+  killThreadsByName(unitId: number, name: string): void
+  /** The unit type's COB entry-point names in script-index order. */
+  scriptNames(unitId: number): string[]
   renderState(): Snapshot
   exportSnapshot(): Record<string, unknown>
   hash(): string

@@ -17,6 +17,7 @@ package studio
 //	models/<name>.json               ModelLoader geometry (enhanced mesh baked in)
 //	textures/<name>.png              3DO texture (name--<side>.png for per-side variants)
 //	cob/<name>.json                  disassembled COB animation script
+//	cob/<name>.cob                   raw COB bytecode (the engine's runnable form)
 //	sounds/<stem>.wav                unit/weapon sound effects
 //	weaponbitmaps/<weapon>.json      rendertype=4 projectile sprite strips
 //	cursors/<sequence>.png           cursor glyphs (APNG when animated)
@@ -93,6 +94,11 @@ type packUnitJSON struct {
 	// cob/<script>.json) when the unit ships them.
 	Model  string `json:"model,omitempty"`
 	Script string `json:"script,omitempty"`
+	// CobBin is the pack-relative path of the unit's RAW COB bytecode
+	// (cob/<name>.cob) — the runnable form the engine's script VM compiles
+	// via FromCOB, as opposed to the debug-oriented JSON disassembly named
+	// by Script. Empty when the unit ships no script.
+	CobBin string `json:"cobBin,omitempty"`
 	// MovementClass is the raw FBI movementclass= name (resolves against
 	// gamedata/moveinfo.tdf); MotionDomain classifies the unit's motion
 	// blob family: "ground", "air", "sea" or "building".
@@ -409,6 +415,18 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 				}
 			}
 		}
+		// Raw COB bytecode alongside the disassembly: the runnable form the
+		// engine's script VM consumes (a replay attaches it to the unit meta
+		// so piece animation runs), served byte-identical to the install's
+		// scripts/<name>.cob.
+		if raw, ok := sess.resolveCobBytes(name); ok {
+			rel := "cob/" + packStem(name) + ".cob"
+			if werr := pw.write(rel, raw); werr == nil {
+				u.CobBin = rel
+			} else {
+				warnf("write cob bytes %s: %v", name, werr)
+			}
+		}
 
 		// Sounds: the FBI sound-category events plus each weapon's
 		// fire/hit/water effects.
@@ -504,8 +522,10 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	}
 	sort.Strings(sides)
 	manifest := packManifest{
-		Format:        "kbot-pack",
-		FormatVersion: 1,
+		Format: "kbot-pack",
+		// FormatVersion 2 added the raw cob/<name>.cob bytecode files (and
+		// the unitdb cobBin field); version-1 readers ignore both.
+		FormatVersion: 2,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -720,7 +740,10 @@ Files:
   in) in the @kbot/game3d ModelLoader shape.
 - textures/<name>.png — model textures ("<name>--<side>.png" for
   per-side variants).
-- cob/<name>.json — disassembled COB animation scripts.
+- cob/<name>.json — disassembled COB animation scripts (debug/viewer form).
+- cob/<name>.cob — raw COB bytecode, byte-identical to the install's
+  scripts/<name>.cob; the runnable form the engine's script VM loads so
+  units animate (walk cycles, turrets, build poses).
 - sounds/<stem>.wav — unit + weapon sound effects.
 - weaponbitmaps/<weapon>.json — sprite-strip metadata for bitmap
   (rendertype=4) projectiles.

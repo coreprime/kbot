@@ -23,6 +23,8 @@ export interface AssetProvider {
 
   /** COB animation script (parsed form); null ⇒ unit renders statically. */
   script?(name: string, opts?: { decompile?: boolean }): Promise<unknown | null>
+  /** RAW COB bytecode (the engine script VM's runnable form); null ⇒ no script. */
+  scriptBytes?(name: string): Promise<Uint8Array | null>
   /** Tileable flat-terrain texture for an environment tileset. */
   groundTile?(tileset: string): Promise<Blob | TexSource>
   /** Streamable URL for a sound stem (preferred over sound()). */
@@ -100,6 +102,7 @@ export class HttpPackProvider implements AssetProvider {
   model(name: string, opts?: { enhanceMesh?: boolean }): Promise<ModelGeometry>
   texture(name: string): Promise<TexSource>
   script(name: string, opts?: { decompile?: boolean }): Promise<unknown | null>
+  scriptBytes(name: string): Promise<Uint8Array | null>
   groundTile(tileset: string): Promise<TexSource>
   soundUrl(stem: string): string
   cursorUrl(name: string): string

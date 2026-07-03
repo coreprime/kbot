@@ -66,8 +66,9 @@ func main() {
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
 		"stepTo":       js.FuncOf(stepTo),
-		"setUnitState": js.FuncOf(setUnitState),
-		"renderState":  js.FuncOf(renderState),
+		"setUnitState":   js.FuncOf(setUnitState),
+		"playWeaponFire": js.FuncOf(playWeaponFire),
+		"renderState":    js.FuncOf(renderState),
 		"hash":           js.FuncOf(hashOf),
 		"tick":           js.FuncOf(tickOf),
 		"cobState":       js.FuncOf(cobState),
@@ -476,6 +477,23 @@ func setUnitState(_ js.Value, args []js.Value) any {
 		return false
 	}
 	return inst.sess.SetUnitState(uint32(args[1].Int()), unitStateFromJS(args[2]))
+}
+
+// playWeaponFire(handle, unitId, slot, tx, ty, tz) -> bool plays a unit's aim
+// + fire scripts pointed at the world-unit target — the replay driver's
+// WeaponFire hook (turret swing, recoil, muzzle flash). Presentation only: no
+// projectile spawns and no damage applies.
+func playWeaponFire(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	target := fixed.Vec3{
+		X: fixed.FromFloat(args[3].Float()),
+		Y: fixed.FromFloat(args[4].Float()),
+		Z: fixed.FromFloat(args[5].Float()),
+	}
+	return inst.world.UnitPlayWeaponFire(uint32(args[1].Int()), args[2].Int(), target)
 }
 
 // renderState(handle) returns the render snapshot of the world at its current

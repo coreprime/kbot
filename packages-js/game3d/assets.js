@@ -45,6 +45,12 @@
  *   COB animation script for a model name (the studio's parsed JSON
  *   form).  null / rejection ⇒ the unit renders statically.
  *
+ * @property {(name: string) => Promise<Uint8Array|null>} [scriptBytes]
+ *   RAW COB bytecode for a unit name — the runnable form the engine's
+ *   script VM compiles (a replay/lobby driver attaches it to the engine
+ *   unit meta as `meta.cob` so piece animation runs).  null ⇒ the unit
+ *   ships no script and falls back to script-less motion.
+ *
  * @property {(tileset: string) => Promise<Blob|ImageBitmap|HTMLImageElement|HTMLCanvasElement>} [groundTile]
  *   Tileable flat-terrain texture for the active environment's tileset.
  *   Missing ⇒ the procedural ground fallback stays.

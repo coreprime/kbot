@@ -905,6 +905,10 @@ func (u *Unit) inBombDropWindow(slot int, wm WeaponMeta, targetPos fixed.Vec2) b
 // stepMovement integrates one tick of locomotion plus aircraft altitude and
 // emits move-start/move-stop. Ported from game-engine.js #stepMovement.
 func (w *World) stepMovement(u *Unit) {
+	if u.motionPin != motionPinNone {
+		w.stepPinnedMovement(u)
+		return
+	}
 	wasMoving := u.IsMoving
 	if u.hasMove && u.Meta.CanMove {
 		// Global path: a Move/Patrol/Build destination routes around terrain
@@ -1046,6 +1050,14 @@ func (w *World) stepMovement(u *Unit) {
 		w.settleOnTerrain(u)
 	}
 
+	w.announceMotion(u, wasMoving)
+}
+
+// announceMotion fires the COB transitions and render events for a change of
+// the unit's motion flag since wasMoving, then publishes the CURRENT_SPEED
+// port. Shared by the order-driven locomotion and the replay motion pin, so
+// walk cycles start and stop through one code path however motion is decided.
+func (w *World) announceMotion(u *Unit, wasMoving bool) {
 	if u.IsMoving && !wasMoving {
 		if u.binding != nil && u.binding.HasScript("StartMoving") {
 			u.binding.Start("StartMoving")
@@ -1084,6 +1096,32 @@ func (w *World) stepMovement(u *Unit) {
 	if p, ok := u.binding.(CobPorts); ok {
 		p.SetUnitValuePort(cobPortCurrentSpeed, int32(u.loco.Speed.Int()))
 	}
+}
+
+// stepPinnedMovement drives a unit whose motion flag is pinned by a replay
+// driver (UnitStateOverride.Moving). Wire truth owns the pose, so none of the
+// order-driven locomotion applies — no pathing, arrival, terrain settling or
+// map clamping; the next authoritative correction re-pins whatever drifts. A
+// pinned-moving unit coasts along its heading at the injected speed (the
+// between-corrections interpolation) so its motion stays smooth at the wire's
+// correction cadence, and the shared announceMotion fires StartMoving /
+// StopMoving exactly on the flag's transitions — the walk cycle the pin
+// exists to drive.
+func (w *World) stepPinnedMovement(u *Unit) {
+	wasMoving := u.IsMoving
+	moving := u.motionPin == motionPinMoving
+	u.IsMoving = moving
+	if moving {
+		if u.loco.Speed > 0 {
+			step := u.loco.Speed.Mul(dtSec)
+			sin, cos := headingVec(u.loco.Heading)
+			u.loco.Pos.X += sin.Mul(step)
+			u.loco.Pos.Z += cos.Mul(step)
+		}
+	} else {
+		u.loco.Speed = 0
+	}
+	w.announceMotion(u, wasMoving)
 }
 
 // cobPortCurrentSpeed is TA:K's CURRENT_SPEED unit-value port. sim keeps its

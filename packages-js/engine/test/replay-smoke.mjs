@@ -77,7 +77,31 @@ const after = session.stepTo(session.tick() + n).units.find((u) => u.id === id)
 const drift = Math.hypot(after.x - 250, after.z - 300)
 assert.ok(drift <= (pin.vel * n) / 40 + 1e-3, `unit drifted ${drift} WU from the injected pose`)
 
-console.log(`OK: stepTo+setUnitState verified; world hash ${session.hash()} at tick ${session.tick()}`)
+// Motion pin: `moving: true` latches IsMoving with no order (the walk-cycle
+// driver), coasts along the heading at the pinned vel, and `moving: false`
+// releases it. The unit has no COB here, so this asserts the sim-side flag
+// and coast only; the script transitions are covered by the Go sim tests.
+session.setUnitState(id, { pos: { x: 400, y: 0, z: 400 }, heading: 0, vel: 2, moving: true })
+const pinnedMoving = session.stepTo(session.tick() + 10).units.find((u) => u.id === id)
+assert.equal(pinnedMoving.isMoving, true, 'motion pin did not latch isMoving')
+assert.ok(
+  Math.abs(pinnedMoving.z - (400 + (2 * 10) / 40)) < 1e-3,
+  `pinned unit did not coast along heading: z=${pinnedMoving.z}`,
+)
+session.setUnitState(id, { moving: false })
+const pinnedStopped = session.stepTo(session.tick() + 2).units.find((u) => u.id === id)
+assert.equal(pinnedStopped.isMoving, false, 'motion pin did not release')
+assert.equal(pinnedStopped.speed, 0, 'pinned-stopped unit kept speed')
+
+// Script surface: a script-less unit lists no entry points and plays no
+// weapon fire (drivers fall back to tracers); the calls must not throw.
+assert.deepEqual(session.scriptNames(id), [], 'script-less unit listed COB entry points')
+assert.equal(session.playWeaponFire(id, 0, 500, 0, 500), false, 'script-less unit claimed weapon-fire playback')
+session.startScript(id, 'Create')
+session.restartScript(id, 'Create')
+session.killThreadsByName(id, 'Create')
+
+console.log(`OK: stepTo+setUnitState+motionPin verified; world hash ${session.hash()} at tick ${session.tick()}`)
 session.destroy()
 // The parked wasm runtime keeps the event loop alive; exit explicitly.
 process.exit(0)

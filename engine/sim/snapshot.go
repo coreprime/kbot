@@ -166,6 +166,12 @@ func (w *World) Hash() uint64 {
 		if u.autoEngaged {
 			mix(3)
 		}
+		// A replay motion pin steers evolution (IsMoving + heading coast), so
+		// divergent pins must surface as a desync. Mixed only when set, so
+		// worlds that never pin — every live game — hash exactly as before.
+		if u.motionPin != motionPinNone {
+			mix(uint64(0xB0) + uint64(u.motionPin))
+		}
 		mix(uint64(u.selfDAtMs))
 		// Transport links are authoritative: a passenger rides its carrier.
 		mix(uint64(u.carriedBy))

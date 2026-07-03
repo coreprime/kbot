@@ -206,6 +206,7 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 				ProgressZ:     fixed.Fixed(getInt64(u, "progressZ")),
 				HasUnload:     getBool(u, "hasUnload"),
 				UnloadAt:      fixed.Vec2{X: fixed.Fixed(getInt64(u, "unloadX")), Z: fixed.Fixed(getInt64(u, "unloadZ"))},
+				MotionPin:     uint8(getInt(u, "motionPin")),
 			}
 			if cs := u.Get("carrying"); cs.Type() == js.TypeObject && !cs.IsNull() {
 				for i := 0; i < cs.Length(); i++ {
@@ -279,6 +280,12 @@ func unitStateFromJS(o js.Value) sim.UnitStateOverride {
 	if v := o.Get("build"); v.Type() == js.TypeNumber {
 		ov.HasBuildPercent = true
 		ov.BuildPercent = fixed.FromFloat(v.Float())
+	}
+	// moving pins the unit's motion flag to the wire's in-motion truth (walk
+	// cycle on/off); see sim.UnitStateOverride.Moving for the semantics.
+	if v := o.Get("moving"); v.Type() == js.TypeBoolean {
+		ov.HasMoving = true
+		ov.Moving = v.Bool()
 	}
 	return ov
 }
@@ -518,6 +525,11 @@ func snapshotToWireJS(inst *instance) js.Value {
 			entry["unloadX"] = float64(ru.UnloadAt.X)
 			entry["unloadZ"] = float64(ru.UnloadAt.Z)
 		}
+		// Replay-only motion pin; live units never carry one, so the Diagnose
+		// diff (which walks an explicit field list) is unaffected.
+		if ru.MotionPin != 0 {
+			entry["motionPin"] = int(ru.MotionPin)
+		}
 		if ru.BuildState != 0 {
 			entry["buildState"] = int(ru.BuildState)
 			entry["buildName"] = ru.BuildName
@@ -601,6 +613,10 @@ func snapshotToWireJS(inst *instance) js.Value {
 		"hash":        formatUint(w.Hash()),
 		"units":       units,
 		"projectiles": projos,
+		// The script RNG's draw position, so a replay keyframe restore keeps
+		// OP_RAND-driven animation deterministic (restore() already adopts
+		// it, mirroring the server's join snapshot).
+		"runtimeRng": int(inst.rt.SnapshotRng()),
 	})
 }
 

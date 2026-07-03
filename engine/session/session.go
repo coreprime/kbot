@@ -10,6 +10,7 @@ package session
 import (
 	"sort"
 
+	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/frame"
 	"github.com/coreprime/kbot/engine/order"
 	"github.com/coreprime/kbot/engine/sim"
@@ -113,6 +114,13 @@ func (s *Session) StepTo(target uint64) frame.Snapshot {
 // sim.UnitStateOverride for the field contract.
 func (s *Session) SetUnitState(id uint32, ov sim.UnitStateOverride) bool {
 	return s.world.SetUnitState(id, ov)
+}
+
+// PlayWeaponFire plays a unit's aim + fire scripts for a wire-reported shot —
+// the replay driver's WeaponFire hook. Presentation only: no projectile, no
+// damage. See sim.World.UnitPlayWeaponFire.
+func (s *Session) PlayWeaponFire(id uint32, slot int, target fixed.Vec3) bool {
+	return s.world.UnitPlayWeaponFire(id, slot, target)
 }
 
 // Restore reinitializes the world from an authoritative snapshot and discards

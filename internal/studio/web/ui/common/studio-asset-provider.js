@@ -60,6 +60,15 @@ export class StudioAssetProvider {
     return resp.json()
   }
 
+  // scriptBytes resolves the unit's raw COB bytecode (the engine VM's
+  // runnable form) as a Uint8Array, or null when the unit ships no script.
+  async scriptBytes(name) {
+    const resp = await fetch(`/api/studio/cob-bytes/${encodeURIComponent(name)}`)
+    if (!resp.ok) return null
+    const buf = await resp.arrayBuffer()
+    return buf && buf.byteLength > 0 ? new Uint8Array(buf) : null
+  }
+
   groundTile(tileset) {
     return loadImage(`/api/studio/ground-tile/${encodeURIComponent(tileset)}`)
   }
