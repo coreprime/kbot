@@ -25,6 +25,7 @@ package studio
 //	weaponbitmaps/<weapon>.json      rendertype=4 projectile sprite strips
 //	cursors/<sequence>.png           cursor glyphs (APNG when animated)
 //	groundtiles/<tileset>.png        seamless flat-terrain tiles
+//	featuresprites/<id>.png          flat ground features' real GAF art (alpha)
 //	maps/<name>.json                 map data (+ sibling .tiles.png / .minimap.png)
 //
 // Determinism: the same install + options produce byte-identical packs
@@ -637,8 +638,13 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	// them regardless of which maps this pack carries.  Skipped when the
 	// install defines none.
 	featuresFile := ""
-	featureCatalog := sess.buildPackFeatureCatalog()
+	featureCatalog, featureGafRefs := sess.buildPackFeatureCatalog()
 	if len(featureCatalog) > 0 {
+		// Extract flat ground features' real sprite art (metal deposits,
+		// steam vents, scars…) to featuresprites/<id>.png so the renderer
+		// paints the authored art onto the terrain rather than faking it;
+		// stamps each entry's Sprite path before features.json is written.
+		sess.packFeatureSprites(featureCatalog, featureGafRefs, pw, warnf)
 		body, err := packJSONIndent(packFeaturesFileJSON{Features: featureCatalog})
 		if err != nil {
 			return nil, fmt.Errorf("encode features: %w", err)
@@ -715,8 +721,14 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// feature catalogue (manifest features field), packed the 3DO models
 		// of map-referenced object features, and extended weapons.json with
 		// the guided-flight fields (turnRate, waterWeapon, accelerationWU,
-		// flightTimeSec).  Older readers ignore all of them.
-		FormatVersion: 5,
+		// flightTimeSec).  FormatVersion 6 packs the real first-frame GAF
+		// sprite (with alpha) of every FLAT ground feature — metal deposits,
+		// steam vents, scars, tracks, craters, holes — to
+		// featuresprites/<id>.png (features.json sprite field) so the
+		// renderer paints the authored art onto the terrain as a decal
+		// instead of a procedural placeholder.  Older readers ignore all of
+		// them.
+		FormatVersion: 6,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -959,7 +971,8 @@ Files:
   lower-case id: category, footprint, height, the 3DO object name for
   model features (wrecks, dragon teeth — the maps' referenced objects
   are packed under models/), and the GAF sprite's first-frame pixel
-  size + hotspot for sprite features.  Map placements resolve here.
+  size + hotspot for sprite features, and the "sprite" path to the packed
+  real GAF art for flat ground features.  Map placements resolve here.
 - palette.json — {"palette": [[r,g,b] x 256]}.
 - unitpics/<name>.png — unit build pictures, decoded from the install's
   PCX/JPEG originals at native size.
@@ -979,6 +992,9 @@ Files:
   (rendertype=4) projectiles.
 - cursors/<sequence>.png — cursor glyphs (APNG when animated).
 - groundtiles/<tileset>.png — seamless 32x32 flat-terrain tiles.
+- featuresprites/<id>.png — the first-frame GAF art (with alpha) of flat
+  ground features (metal deposits, steam vents, scars, tracks, craters,
+  holes); the renderer paints it onto the terrain as a decal.
 - maps/<name>.json (+ .tiles.png / .minimap.png) — map heights, voids,
   tile placements, features and rendered atlases.
 

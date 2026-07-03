@@ -188,8 +188,8 @@ func TestBuildPackV3Assets(t *testing.T) {
 
 	var manifest packManifest
 	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
-	if manifest.FormatVersion != 5 {
-		t.Fatalf("formatVersion = %d, want 5", manifest.FormatVersion)
+	if manifest.FormatVersion != 6 {
+		t.Fatalf("formatVersion = %d, want 6", manifest.FormatVersion)
 	}
 	if manifest.Weapons != "weapons.json" {
 		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
@@ -444,6 +444,69 @@ func TestBuildPackV5Assets(t *testing.T) {
 	}
 	if !torpedo {
 		t.Fatalf("no waterWeapon torpedo in weapons.json")
+	}
+}
+
+// TestBuildPackV6FeatureSprites asserts format v6: flat ground features
+// (metal deposits, steam vents, scars…) carry a real GAF sprite PNG packed
+// under featuresprites/<id>.png, while upright features (trees, rocks) do
+// not — the renderer paints the flat ones' authored art onto the terrain.
+func TestBuildPackV6FeatureSprites(t *testing.T) {
+	install := testutil.UnpackedPath(t)
+	dir := t.TempDir()
+	if _, err := BuildPack(install, dir, PackOptions{
+		Game:  "totala",
+		Units: []string{"armpw"},
+		Maps:  []string{"checker ponds"},
+	}); err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var manifest packManifest
+	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
+	if manifest.FormatVersion < 6 {
+		t.Fatalf("manifest formatVersion = %d, want >= 6", manifest.FormatVersion)
+	}
+
+	var ff packFeaturesFileJSON
+	mustJSON(t, filepath.Join(dir, "features.json"), &ff)
+
+	// Every flat ground feature that names a GAF sprite must carry a sprite
+	// path, the PNG must exist on disk and decode with an alpha channel
+	// (the authored transparency the decal feathers against).  Upright and
+	// object features must NOT carry a sprite.
+	flatWithSprite := 0
+	for id, f := range ff.Features {
+		flat := isFlatGroundFeature(f)
+		if f.Sprite == "" {
+			if flat && f.SpriteW > 0 {
+				// A flat feature with real GAF dims should have been packed.
+				t.Fatalf("flat feature %q (cat %s) missing sprite despite dims %dx%d",
+					id, f.Category, f.SpriteW, f.SpriteH)
+			}
+			continue
+		}
+		if !flat {
+			t.Fatalf("upright/object feature %q (cat %s) should not carry a sprite: %q",
+				id, f.Category, f.Sprite)
+		}
+		p := filepath.Join(dir, filepath.FromSlash(f.Sprite))
+		data, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("feature sprite %q not on disk: %v", f.Sprite, err)
+		}
+		img, derr := png.Decode(bytes.NewReader(data))
+		if derr != nil {
+			t.Fatalf("feature sprite %q not a PNG: %v", f.Sprite, derr)
+		}
+		b := img.Bounds()
+		if b.Dx() <= 0 || b.Dy() <= 0 {
+			t.Fatalf("feature sprite %q has empty bounds", f.Sprite)
+		}
+		flatWithSprite++
+	}
+	if flatWithSprite == 0 {
+		t.Fatalf("no flat ground feature carried a packed sprite (checker ponds has metal patches)")
 	}
 }
 

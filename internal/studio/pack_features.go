@@ -14,6 +14,7 @@ package studio
 
 import (
 	"bytes"
+	"sort"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/gaf"
@@ -45,6 +46,47 @@ type packFeatureJSON struct {
 	SpriteH     int     `json:"spriteH,omitempty"`
 	SpriteOX    int     `json:"spriteOX,omitempty"`
 	SpriteOY    int     `json:"spriteOY,omitempty"`
+	// Sprite is the packed PNG of the feature's first GAF frame with alpha
+	// (featuresprites/<id>.png), extracted for FLAT ground features
+	// (metal deposits, steam vents, scars, tracks, craters, holes) so the
+	// renderer can paint the feature's real authored art onto the terrain
+	// surface as a texture-conforming decal instead of faking it with
+	// procedural geometry.  Empty for upright features (trees, rocks,
+	// buildings…) which render as 3D stand-ins, and for object-only
+	// features (their visual truth is the packed 3DO).
+	Sprite string `json:"sprite,omitempty"`
+}
+
+// featureGafRef records the GAF file + sequence a feature's first frame
+// lives in, so the pack write phase can extract its sprite PNG after the
+// catalogue is built.  Keyed by lower-case feature id.
+type featureGafRef struct {
+	Filename string // anims/<filename>.gaf (no extension, lower-case)
+	SeqName  string // sequence name within the GAF
+}
+
+// flatGroundFeatureCategories are the feature families TA draws as flat art
+// laid into the ground — the ones the renderer paints as real-sprite decals
+// rather than 3D stand-ins.  Kept in step with the game3d categoryBuilder's
+// flat-decal routing (metal / vent / scar families).
+var flatGroundFeatureCategories = map[string]bool{
+	"metal":      true,
+	"steamvents": true,
+	"scars":      true,
+	"smudges":    true,
+	"tracks":     true,
+	"craters":    true,
+	"holes":      true,
+}
+
+// isFlatGroundFeature reports whether a feature (by category) should be
+// packed as a real-sprite ground decal.  Object-bearing features never are
+// — they render as their packed 3DO.
+func isFlatGroundFeature(f packFeatureJSON) bool {
+	if f.Object != "" {
+		return false
+	}
+	return flatGroundFeatureCategories[f.Category]
 }
 
 // packFeaturesFileJSON is the features.json document shape — an object keyed
@@ -62,8 +104,9 @@ type gafFrameDims map[string][4]int
 // the id → catalogue entry map.  Duplicate ids keep the first definition, the
 // same rule the studio's feature scan applies.  GAF sprite dimensions are
 // read once per referenced anims/<filename>.gaf.
-func (sess *Session) buildPackFeatureCatalog() map[string]packFeatureJSON {
+func (sess *Session) buildPackFeatureCatalog() (map[string]packFeatureJSON, map[string]featureGafRef) {
 	out := map[string]packFeatureJSON{}
+	refs := map[string]featureGafRef{}
 	gafCache := map[string]gafFrameDims{}
 	for _, p := range sess.vfs.List() {
 		lower := strings.ToLower(p)
@@ -110,11 +153,48 @@ func (sess *Session) buildPackFeatureCatalog() map[string]packFeatureJSON {
 					entry.SpriteOX = dims[2]
 					entry.SpriteOY = dims[3]
 				}
+				refs[id] = featureGafRef{Filename: strings.ToLower(fn), SeqName: sq}
 			}
 			out[id] = entry
 		}
 	}
-	return out
+	return out, refs
+}
+
+// packFeatureSprites extracts the first-frame PNG (with alpha) of every
+// FLAT ground feature in the catalogue and writes it to
+// featuresprites/<id>.png, stamping the entry's Sprite field.  Upright and
+// object features are skipped (they render as 3D stand-ins / real 3DOs).
+// Extraction is deterministic — the map walks in sorted id order and the
+// PNG bytes are a pure function of the GAF frame + palette.
+func (sess *Session) packFeatureSprites(catalog map[string]packFeatureJSON, refs map[string]featureGafRef, pw *packWriter, warnf func(string, ...any)) {
+	ids := make([]string, 0, len(catalog))
+	for id := range catalog {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		entry := catalog[id]
+		if !isFlatGroundFeature(entry) {
+			continue
+		}
+		ref, ok := refs[id]
+		if !ok || ref.Filename == "" || ref.SeqName == "" {
+			continue
+		}
+		pngBytes, err := sess.renderFeatureStaticPNG(ref.Filename, ref.SeqName)
+		if err != nil {
+			warnf("feature sprite %s: %v", id, err)
+			continue
+		}
+		rel := "featuresprites/" + packStem(id) + ".png"
+		if werr := pw.write(rel, pngBytes); werr != nil {
+			warnf("write feature sprite %s: %v", id, werr)
+			continue
+		}
+		entry.Sprite = rel
+		catalog[id] = entry
+	}
 }
 
 // featureGafDims loads (or returns the cached) sequence-dimension table for

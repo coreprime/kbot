@@ -46,7 +46,7 @@ Pack layout (all filenames lower-case; characters outside [a-z0-9._-]
 become "_"):
 
   manifest.json                game id, sides, unit list, contentHash
-                               (formatVersion 5)
+                               (formatVersion 6)
   unitdb.json                  per-unit database: pack ordinal id, raw FBI
                                movementClass + derived motionDomain
                                (ground/air/sea/building), build picture +
@@ -62,7 +62,8 @@ become "_"):
   features.json                every map-feature definition keyed by id:
                                category, footprint, height, 3DO object
                                name (map-referenced objects pack under
-                               models/) and GAF sprite size + hotspot
+                               models/), GAF sprite size + hotspot, and the
+                               real sprite PNG path for flat ground features
   palette.json                 {"palette": [[r,g,b] x 256]}
   unitpics/<name>.png          unit build pictures (native size)
   models/<name>.json           model geometry (authored faces)
@@ -73,6 +74,7 @@ become "_"):
   weaponbitmaps/<weapon>.json  bitmap-projectile sprite strips
   cursors/<sequence>.png       cursor glyphs (APNG when animated)
   groundtiles/<tileset>.png    seamless flat-terrain tiles
+  featuresprites/<id>.png      flat ground features' real GAF art (alpha)
   maps/<name>.json             map data (+ .tiles.png / .minimap.png)
 
 Determinism: the same install and options always produce a byte-identical
