@@ -68,6 +68,7 @@ func main() {
 		"stepTo":       js.FuncOf(stepTo),
 		"setUnitState":   js.FuncOf(setUnitState),
 		"playWeaponFire": js.FuncOf(playWeaponFire),
+		"setUnitActivation": js.FuncOf(setUnitActivation),
 		"renderState":    js.FuncOf(renderState),
 		"hash":           js.FuncOf(hashOf),
 		"tick":           js.FuncOf(tickOf),
@@ -497,6 +498,18 @@ func playWeaponFire(_ js.Value, args []js.Value) any {
 		Z: fixed.FromFloat(args[5].Float()),
 	}
 	return inst.world.UnitPlayWeaponFire(uint32(args[1].Int()), args[2].Int(), target)
+}
+
+// setUnitActivation(handle, unitId, on) -> bool runs a unit's Activate /
+// Deactivate COB entry point and pins the ACTIVATION port — the replay
+// driver's building-activity hook (extractor rotors, solar collectors).
+// Presentation only: scripts animate pieces, no sim rules change.
+func setUnitActivation(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	return inst.world.SetUnitActivation(uint32(args[1].Int()), args[2].Bool())
 }
 
 // renderState(handle) returns the render snapshot of the world at its current

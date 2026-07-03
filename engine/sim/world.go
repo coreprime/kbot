@@ -855,6 +855,21 @@ func boolPort(on bool) int32 {
 	return 0
 }
 
+// SetUnitActivation drives a unit's Activate/Deactivate presentation
+// externally — the replay driver's hook for building activity (a metal
+// extractor's rotor spinning up, a solar collector opening) reported by the
+// wire stream. Runs the COB entry point and pins the ACTIVATION port
+// together, exactly like the internal factory path. Returns false for a
+// missing or binding-less unit.
+func (w *World) SetUnitActivation(id uint32, on bool) bool {
+	u := w.units[id]
+	if u == nil || u.binding == nil {
+		return false
+	}
+	w.setActivation(u, on)
+	return true
+}
+
 // InitOnOff settles a freshly-placed on/off-able unit's activation so the
 // studio's Active pill matches what's drawn: an ActivateWhenBuilt structure (a
 // solar collector) opens at once and reads on, while any other toggleable unit
