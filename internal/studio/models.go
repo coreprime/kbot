@@ -357,6 +357,22 @@ type primitiveJSON struct {
 // around ~50 units across, which the client orbits comfortably.
 const scale3DO = 1.0 / 65536.0
 
+// resolveModelEntry resolves a model name against the FBI-driven index,
+// falling back to a bare objects3d/<name>.3do lookup for wreck / feature
+// 3DOs (corpse swaps, props) that ship without a unit definition.
+func (sess *Session) resolveModelEntry(name string) (modelEntry, bool) {
+	name = strings.ToLower(strings.TrimSuffix(name, ".3do"))
+	_, byID := sess.ensureModelIndex()
+	if entry, ok := byID[name]; ok {
+		return entry, true
+	}
+	p := "objects3d/" + name + ".3do"
+	if sess.vfs.Exists(p) {
+		return modelEntry{Name: name, Path: p}, true
+	}
+	return modelEntry{}, false
+}
+
 func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimPrefix(r.URL.Path, "/api/studio/model/")
 	name, err := url.PathUnescape(raw)
@@ -364,37 +380,38 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "missing model name", http.StatusBadRequest)
 		return
 	}
-	name = strings.ToLower(strings.TrimSuffix(name, ".3do"))
-	_, byID := sess.ensureModelIndex()
-	entry, ok := byID[name]
-	if !ok {
-		// Not a unit — wreck / feature 3DOs (corpse swaps, props) live in
-		// objects3d/ without an FBI, so resolve them by path directly.
-		p := "objects3d/" + name + ".3do"
-		if sess.vfs.Exists(p) {
-			entry = modelEntry{Name: name, Path: p}
-			ok = true
-		}
-	}
+	entry, ok := sess.resolveModelEntry(name)
 	if !ok {
 		http.Error(w, "model not found", http.StatusNotFound)
 		return
 	}
+	out, err := sess.buildModelJSON(entry, r.URL.Query().Get("enhanceMesh") == "1")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	writeJSON(w, out)
+}
+
+// buildModelJSON parses a model entry's 3DO and converts it to the wire
+// format the browser-side ModelLoader consumes. Shared by the live
+// /api/studio/model endpoint and the static pack extractor so both emit
+// byte-identical geometry.
+func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJSON, error) {
 	data, err := sess.vfs.ReadFile(entry.Path)
 	if err != nil {
-		http.Error(w, "read model: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("read model: %w", err)
 	}
 	model, err := objects3d.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
-		http.Error(w, "parse model: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("parse model: %w", err)
 	}
-	// ?enhanceMesh=1 reconstructs the faces TA's artists deleted as a
+	// enhanceMesh reconstructs the faces TA's artists deleted as a
 	// fill-rate optimisation (open box bottoms, hollow shells) so the unit
 	// renders solid from every angle. Synthetic caps flow through the
 	// normal primitive path below; the client treats them like any face.
-	if r.URL.Query().Get("enhanceMesh") == "1" {
+	if enhanceMesh {
 		objects3d.FillModel(model, objects3d.FillOptions{})
 	}
 	out := &modelJSON{Name: entry.Name}
@@ -515,8 +532,7 @@ func (sess *Session) handleModelGeometry(w http.ResponseWriter, r *http.Request)
 		bounds.Max = [3]float32{0, 0, 0}
 	}
 	out.Bounds = bounds
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	writeJSON(w, out)
+	return out, nil
 }
 
 // ── /api/studio/texture/{name} ─────────────────────────────────────────────
@@ -855,6 +871,19 @@ func (sess *Session) handleGroundTile(w http.ResponseWriter, r *http.Request) {
 	if tileset == "" {
 		tileset = "greenworld"
 	}
+	pngBytes, err := sess.renderGroundTilePNG(tileset)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(pngBytes)
+}
+
+// renderGroundTilePNG renders a tileset's seamless 32×32 flat-terrain tile.
+// Shared by the live ground-tile endpoint and the pack extractor.
+func (sess *Session) renderGroundTilePNG(tileset string) ([]byte, error) {
 	// Probe the conventional location for flat tiles first; fall back
 	// to whatever flat-named SCT we can find in that tileset so future
 	// mods don't need a fixed filename.
@@ -880,18 +909,15 @@ func (sess *Session) handleGroundTile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if sctPath == "" {
-		http.Error(w, "no flat tile for tileset "+tileset, http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("no flat tile for tileset %s", tileset)
 	}
 	data, err := sess.vfs.ReadFile(sctPath)
 	if err != nil {
-		http.Error(w, "read tile: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("read tile: %w", err)
 	}
 	section, err := sct.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
-		http.Error(w, "parse tile: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("parse tile: %w", err)
 	}
 	// First 32×32 tile of the section's tile grid — the same primitive
 	// the studio map editor uses for stamping.  Smaller than the whole
@@ -911,9 +937,11 @@ func (sess *Session) handleGroundTile(w http.ResponseWriter, r *http.Request) {
 			tile.Set(x, y, full.At(x, y))
 		}
 	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_ = png.Encode(w, tile)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, tile); err != nil {
+		return nil, fmt.Errorf("encode png: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // ── /api/studio/palette ────────────────────────────────────────────────────
@@ -924,13 +952,19 @@ func (sess *Session) handleGroundTile(w http.ResponseWriter, r *http.Request) {
 // (per-face flat colour, no UVs) without round-tripping back to the
 // server for every shaded face.
 func (sess *Session) handlePaletteJSON(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	writeJSON(w, map[string]any{"palette": sess.paletteRGB()})
+}
+
+// paletteRGB returns the active palette as 256 RGB triples — the shape both
+// the live palette endpoint and the pack's palette.json serialise.
+func (sess *Session) paletteRGB() [][3]int {
 	data := sess.loadPaletteBytes()
 	out := make([][3]int, 256)
 	for i := 0; i < 256 && i*4+2 < len(data); i++ {
 		out[i] = [3]int{int(data[i*4]), int(data[i*4+1]), int(data[i*4+2])}
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	writeJSON(w, map[string]any{"palette": out})
+	return out
 }
 
 // ── /api/studio/buildpic/{name} ────────────────────────────────────────────

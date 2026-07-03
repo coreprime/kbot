@@ -40,6 +40,19 @@ func (sess *Session) handleSound(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no vfs mounted", http.StatusNotFound)
 		return
 	}
+	data, ok := sess.resolveSoundBytes(slug)
+	if !ok {
+		http.Error(w, "sound not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
+// resolveSoundBytes finds sounds/<slug>.wav case-insensitively.  Shared by
+// the live sound endpoint and the pack extractor.
+func (sess *Session) resolveSoundBytes(slug string) ([]byte, bool) {
 	// Probe the conventional location first, then fall back to a
 	// case-insensitive walk through sounds/ — TA mixes casing across
 	// the original release + mods, and ReadFile is path-sensitive on
@@ -49,33 +62,22 @@ func (sess *Session) handleSound(w http.ResponseWriter, r *http.Request) {
 		path.Join("sounds", strings.ToUpper(slug)+".WAV"),
 		path.Join("Sounds", slug+".wav"),
 	}
-	var data []byte
 	for _, p := range candidates {
 		if b, err := sess.vfs.ReadFile(p); err == nil {
-			data = b
-			break
+			return b, true
 		}
 	}
-	if data == nil {
-		want := slug + ".wav"
-		for _, p := range sess.vfs.List() {
-			lower := strings.ToLower(p)
-			if !strings.HasPrefix(lower, "sounds/") {
-				continue
-			}
-			if strings.ToLower(path.Base(lower)) == want {
-				if b, err := sess.vfs.ReadFile(p); err == nil {
-					data = b
-					break
-				}
+	want := slug + ".wav"
+	for _, p := range sess.vfs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "sounds/") {
+			continue
+		}
+		if strings.ToLower(path.Base(lower)) == want {
+			if b, err := sess.vfs.ReadFile(p); err == nil {
+				return b, true
 			}
 		}
 	}
-	if data == nil {
-		http.Error(w, "sound not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	_, _ = w.Write(data)
+	return nil, false
 }

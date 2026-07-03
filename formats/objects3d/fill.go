@@ -123,28 +123,19 @@ func fillObject(o *Object, opts FillOptions) (loopsFilled, facesAdded, vertsAdde
 		}
 	}
 
-	// Boundary edges are used by exactly one face; build an adjacency map
-	// over just those edges so we can walk them into closed loops.
-	adj := make(map[int][]int)
-	boundary := make(map[[2]int]bool)
+	// Boundary edges are used by exactly one face. Collect them in sorted
+	// order FIRST — both the loop-start iteration below and the adjacency
+	// lists traceLoop walks must be built deterministically, or the greedy
+	// loop tracing (and therefore the synthetic caps) varies run to run
+	// with Go's map iteration order.
+	keys := make([][2]int, 0, len(edges))
 	for key, e := range edges {
-		if e.count != 1 {
-			continue
+		if e.count == 1 {
+			keys = append(keys, key)
 		}
-		boundary[key] = true
-		adj[key[0]] = append(adj[key[0]], key[1])
-		adj[key[1]] = append(adj[key[1]], key[0])
 	}
-	if len(boundary) == 0 {
+	if len(keys) == 0 {
 		return 0, 0, 0
-	}
-
-	objCentroid := objectCentroid(o)
-
-	// Deterministic iteration: sort boundary edges so output is stable.
-	keys := make([][2]int, 0, len(boundary))
-	for key := range boundary {
-		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i][0] != keys[j][0] {
@@ -152,6 +143,15 @@ func fillObject(o *Object, opts FillOptions) (loopsFilled, facesAdded, vertsAdde
 		}
 		return keys[i][1] < keys[j][1]
 	})
+	adj := make(map[int][]int)
+	boundary := make(map[[2]int]bool)
+	for _, key := range keys {
+		boundary[key] = true
+		adj[key[0]] = append(adj[key[0]], key[1])
+		adj[key[1]] = append(adj[key[1]], key[0])
+	}
+
+	objCentroid := objectCentroid(o)
 
 	for _, start := range keys {
 		if !boundary[start] {

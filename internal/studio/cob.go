@@ -2,6 +2,7 @@ package studio
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,13 +102,45 @@ func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing cob name", http.StatusBadRequest)
 		return
 	}
+	// Skip the decompile entirely when ?decompile=0 (or =false / =no) is
+	// in the query string.  The studio uses that on the initial
+	// model-load fetch so the unit pops onto screen without waiting for
+	// the slow decompile pass; the debugger fetches a second time (with
+	// decompile=1) the first time it opens.
+	wantDecompile := true
+	switch strings.ToLower(r.URL.Query().Get("decompile")) {
+	case "0", "false", "no", "off":
+		wantDecompile = false
+	}
+	out, err := sess.buildCobScriptJSON(name, wantDecompile)
+	if err != nil {
+		if err == errCOBNotFound {
+			// Surface a 404 so the JS client can degrade gracefully -
+			// many TA assets ship without a per-unit script, in which
+			// case the viewer just shows the static 3DO with no animation.
+			http.Error(w, "cob not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, out)
+}
+
+// errCOBNotFound is the sentinel for a unit that ships no script.
+var errCOBNotFound = &cobNotFoundError{}
+
+type cobNotFoundError struct{}
+
+func (*cobNotFoundError) Error() string { return "cob not found" }
+
+// buildCobScriptJSON parses + disassembles a unit's COB into the JSON shape
+// the browser-side runtime walks.  Shared by the live /api/studio/cob
+// endpoint and the pack extractor.
+func (sess *Session) buildCobScriptJSON(name string, wantDecompile bool) (*cobScriptJSON, error) {
 	data, ok := sess.resolveCobBytes(name)
 	if !ok {
-		// Surface a 404 so the JS client can degrade gracefully -
-		// many TA assets ship without a per-unit script, in which
-		// case the viewer just shows the static 3DO with no animation.
-		http.Error(w, "cob not found", http.StatusNotFound)
-		return
+		return nil, errCOBNotFound
 	}
 	// The canonical key is the lowercased, extension-less unit name (matches
 	// /api/studio/model/).
@@ -115,8 +148,7 @@ func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 
 	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
-		http.Error(w, "parse cob: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("parse cob: %w", err)
 	}
 
 	out := &cobScriptJSON{
@@ -130,8 +162,7 @@ func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 	for i := range cob.ScriptNames {
 		insts, derr := cob.Disassemble(i)
 		if derr != nil {
-			http.Error(w, "disassemble: "+derr.Error(), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("disassemble: %w", derr)
 		}
 		script := cobScriptDef{Name: cob.ScriptNames[i]}
 		script.Instructions = make([]cobInstruction, 0, len(insts))
@@ -147,21 +178,10 @@ func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 		out.Scripts = append(out.Scripts, script)
 	}
 	// Decompile is best-effort — if the decompiler bails on some
-	// exotic instruction sequence the studio still gets the
+	// exotic instruction sequence the caller still gets the
 	// disassembly above, so we DON'T error out the whole response.
 	// Surface the error as a comment in the source so the user knows
 	// why the right pane is empty.
-	//
-	// Skip the decompile entirely when ?decompile=0 (or =false /
-	// =no) is in the query string.  The studio uses that on the
-	// initial model-load fetch so the unit pops onto screen without
-	// waiting for the slow decompile pass; the debugger fetches a
-	// second time (with decompile=1) the first time it opens.
-	wantDecompile := true
-	switch strings.ToLower(r.URL.Query().Get("decompile")) {
-	case "0", "false", "no", "off":
-		wantDecompile = false
-	}
 	if wantDecompile {
 		if dec := decompiler.NewDecompiler(cob); dec != nil {
 			if bos, derr := dec.Decompile(); derr == nil {
@@ -171,5 +191,5 @@ func (sess *Session) handleCobScript(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, out)
+	return out, nil
 }

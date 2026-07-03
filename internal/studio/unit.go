@@ -2,6 +2,7 @@ package studio
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -421,14 +422,34 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing unit name", http.StatusBadRequest)
 		return
 	}
-	name = strings.ToLower(strings.TrimSuffix(name, ".fbi"))
-	unit, err := sess.loadUnitFBI(name)
+	// Per-slot weapon overrides from the query string
+	// (`?weapon1=NAME&weapon2=NAME&weapon3=NAME`) — the studio's "Change
+	// Weapon" picker swaps one slot's data without touching the FBI on disk.
+	var overrides [3]string
+	for i, key := range []string{"weapon1", "weapon2", "weapon3"} {
+		overrides[i] = strings.TrimSpace(r.URL.Query().Get(key))
+	}
+	out, err := sess.buildUnitMeta(name, overrides)
 	if err != nil {
 		// 404 for missing FBI — many 3DOs ship without a unit ref
 		// (props / features).  Client treats absence as "no controls
 		// available" and the buttons stay greyed out.
 		http.Error(w, "unit fbi not found", http.StatusNotFound)
 		return
+	}
+	writeJSON(w, out)
+}
+
+// buildUnitMeta resolves a unit's FBI (plus its weapon TDFs, movement class,
+// sounds, build options and corpse chain) into the unitMetaJSON shape.
+// Shared by the live /api/studio/unit endpoint and the pack extractor.
+// overrides carries optional per-slot weapon-name substitutions; empty
+// strings keep the FBI values.
+func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJSON, error) {
+	name = strings.ToLower(strings.TrimSuffix(name, ".fbi"))
+	unit, err := sess.loadUnitFBI(name)
+	if err != nil {
+		return nil, err
 	}
 	info := &unit.Info
 	out := unitMetaJSON{
@@ -609,23 +630,23 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 	// weapons/*.tdf file.  loadWeaponTDF walks the weapons folder for
 	// a case-insensitive match.
 	//
-	// Query-parameter overrides (`?weapon1=NAME&weapon2=NAME&weapon3=NAME`)
-	// let the studio's "Change Weapon" picker swap one slot's data
-	// without touching the FBI on disk.  When set, the override beats
-	// the FBI value for that slot.  Empty / "NONE" / "-" clears the
-	// slot (useful to disable a weapon for testing).
+	// Per-slot overrides (the endpoint's ?weapon1=NAME&weapon2=NAME&
+	// weapon3=NAME query parameters) let the studio's "Change Weapon"
+	// picker swap one slot's data without touching the FBI on disk.
+	// When set, the override beats the FBI value for that slot.  A value
+	// of "NONE" / "-" clears the slot (useful to disable a weapon for
+	// testing).
 	out.Weapons = []unitWeaponJSON{
 		{Slot: "primary", Index: 1},
 		{Slot: "secondary", Index: 2},
 		{Slot: "tertiary", Index: 3},
 	}
-	overrideKeys := []string{"weapon1", "weapon2", "weapon3"}
 	fbiWeapons := []string{info.Weapon1, info.Weapon2, info.Weapon3}
 	for i := range fbiWeapons {
 		w := strings.ToUpper(strings.TrimSpace(fbiWeapons[i]))
-		// Per-slot override from the query string — wins over FBI.
-		if ov := strings.TrimSpace(r.URL.Query().Get(overrideKeys[i])); ov != "" {
-			w = strings.ToUpper(ov)
+		// Per-slot override — wins over FBI.
+		if overrides[i] != "" {
+			w = strings.ToUpper(overrides[i])
 		}
 		if w == "" || w == "NONE" || w == "-" {
 			continue
@@ -688,7 +709,7 @@ func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, out)
+	return &out, nil
 }
 
 // soundEventKeys is the set of TA sound-event names the studio
@@ -1048,6 +1069,19 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing cursor name", http.StatusBadRequest)
 		return
 	}
+	pngBytes, err := sess.renderCursorPNG(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(pngBytes)
+}
+
+// loadCursorSequences opens the game's cursors GAF and returns its
+// sequences.  The returned reader must be closed by the caller.
+func (sess *Session) loadCursorSequences() (*gaf.Reader, []*gaf.Sequence, error) {
 	// Anims/cursors.gaf is the standard location; some assets use
 	// the lowercased path.  Walk a small candidate list.
 	gafCandidates := []string{
@@ -1062,20 +1096,31 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if data == nil {
-		http.Error(w, "cursors.gaf not found", http.StatusNotFound)
-		return
+		return nil, nil, errCursorsNotFound
 	}
 	reader, err := gaf.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
-		http.Error(w, "load gaf: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, nil, fmt.Errorf("load gaf: %w", err)
 	}
-	defer func() { _ = reader.Close() }()
 	seqs, err := reader.ReadSequences()
 	if err != nil {
-		http.Error(w, "read sequences: "+err.Error(), http.StatusInternalServerError)
-		return
+		_ = reader.Close()
+		return nil, nil, fmt.Errorf("read sequences: %w", err)
 	}
+	return reader, seqs, nil
+}
+
+var errCursorsNotFound = fmt.Errorf("cursors.gaf not found")
+
+// renderCursorPNG renders a named cursor sequence to PNG (APNG when the
+// sequence animates).  Shared by the live cursor endpoint and the pack
+// extractor.
+func (sess *Session) renderCursorPNG(name string) ([]byte, error) {
+	reader, seqs, err := sess.loadCursorSequences()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = reader.Close() }()
 	want := strings.ToLower(strings.TrimSpace(name))
 	var target *gaf.Sequence
 	for _, s := range seqs {
@@ -1085,9 +1130,14 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target == nil || len(target.Frames) == 0 {
-		http.Error(w, "cursor sequence not found", http.StatusNotFound)
-		return
+		return nil, fmt.Errorf("cursor sequence not found")
 	}
+	return sess.encodeCursorSequencePNG(target)
+}
+
+// encodeCursorSequencePNG encodes one cursor sequence as PNG/APNG with the
+// game's cursor palette + transparency conventions.
+func (sess *Session) encodeCursorSequencePNG(target *gaf.Sequence) ([]byte, error) {
 	// The game adapter supplies a cursor palette when the game ships one
 	// (TA:K's anims/cursors.pcx sidecar); nil means use the global palette,
 	// which is TA's convention.
@@ -1095,8 +1145,7 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 	if pal == nil {
 		p, err := gaf.LoadPaletteFromBytes(sess.loadPaletteBytes())
 		if err != nil {
-			http.Error(w, "load palette: "+err.Error(), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("load palette: %w", err)
 		}
 		pal = p
 	}
@@ -1115,16 +1164,12 @@ func (sess *Session) handleCursorImage(w http.ResponseWriter, r *http.Request) {
 	// animation just show the first frame.
 	if len(target.Frames) > 1 {
 		if err := target.ToAPNGWith(pal, opts, &buf); err != nil {
-			http.Error(w, "encode apng: "+err.Error(), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("encode apng: %w", err)
 		}
 	} else {
 		if err := target.Frames[0].ToPNGWith(pal, opts, &buf); err != nil {
-			http.Error(w, "encode png: "+err.Error(), http.StatusInternalServerError)
-			return
+			return nil, fmt.Errorf("encode png: %w", err)
 		}
 	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	_, _ = w.Write(buf.Bytes())
+	return buf.Bytes(), nil
 }

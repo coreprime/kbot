@@ -123,40 +123,10 @@ func (sess *Session) handleWeaponBitmap(w http.ResponseWriter, r *http.Request) 
 	}
 	sess.weaponBitmapMu.Unlock()
 
-	sec := sess.loadWeaponSection(name)
-	if sec == nil {
-		sess._cacheWeaponBitmapMiss(key)
-		http.Error(w, "weapon not found", http.StatusNotFound)
-		return
-	}
-	if sec.RenderType != 4 {
-		// Not a bitmap weapon — caller should be checking renderType
-		// before hitting this endpoint, but a defensive 404 here keeps
-		// the contract clean.
-		sess._cacheWeaponBitmapMiss(key)
-		http.Error(w, "weapon is not rendertype=4 bitmap", http.StatusNotFound)
-		return
-	}
-	colorSlot := sec.Color
-	seqName, ok := colorSlotToFxSequence[colorSlot]
-	if !ok || seqName == "" {
-		sess._cacheWeaponBitmapMiss(key)
-		http.Error(w, fmt.Sprintf("no fx.gaf sequence mapped for color=%d", colorSlot), http.StatusNotFound)
-		return
-	}
-
-	resp, err := sess.buildWeaponBitmapSheet(seqName)
+	body, err := sess.buildWeaponBitmapJSON(name)
 	if err != nil {
 		sess._cacheWeaponBitmapMiss(key)
 		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	resp.Sequence = seqName
-
-	body, err := json.Marshal(resp)
-	if err != nil {
-		sess._cacheWeaponBitmapMiss(key)
-		http.Error(w, "json encode failed", http.StatusInternalServerError)
 		return
 	}
 	sess.weaponBitmapMu.Lock()
@@ -165,6 +135,37 @@ func (sess *Session) handleWeaponBitmap(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	_, _ = w.Write(body)
+}
+
+// buildWeaponBitmapJSON resolves a weapon name to its rendertype=4 sprite
+// strip and returns the marshalled weaponBitmapResponse.  Shared by the
+// live weapon-bitmap endpoint and the pack extractor; errors cover every
+// "no bitmap projectile for this weapon" case.
+func (sess *Session) buildWeaponBitmapJSON(name string) ([]byte, error) {
+	sec := sess.loadWeaponSection(name)
+	if sec == nil {
+		return nil, fmt.Errorf("weapon not found")
+	}
+	if sec.RenderType != 4 {
+		// Not a bitmap weapon — caller should be checking renderType
+		// first, but a defensive error here keeps the contract clean.
+		return nil, fmt.Errorf("weapon is not rendertype=4 bitmap")
+	}
+	colorSlot := sec.Color
+	seqName, ok := colorSlotToFxSequence[colorSlot]
+	if !ok || seqName == "" {
+		return nil, fmt.Errorf("no fx.gaf sequence mapped for color=%d", colorSlot)
+	}
+	resp, err := sess.buildWeaponBitmapSheet(seqName)
+	if err != nil {
+		return nil, err
+	}
+	resp.Sequence = seqName
+	body, err := json.Marshal(resp)
+	if err != nil {
+		return nil, fmt.Errorf("json encode failed")
+	}
+	return body, nil
 }
 
 // buildWeaponBitmapSheet reads anims/fx.gaf, locates the named

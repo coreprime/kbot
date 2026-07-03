@@ -17,6 +17,7 @@ import (
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot/cmd/kbot/mcp"
 	"github.com/coreprime/kbot/cmd/kbot/mount"
+	"github.com/coreprime/kbot/cmd/kbot/pack"
 	"github.com/coreprime/kbot/cmd/kbot/pal"
 	"github.com/coreprime/kbot/cmd/kbot/pcx"
 	"github.com/coreprime/kbot/cmd/kbot/sct"
@@ -49,6 +50,7 @@ Sub-commands operate on specific file formats:
   bik      Bink video files — TA: Kingdoms cutscenes (info, to-mp4)
   zrb      Smacker/ZRB video files (info, to-mp4, from-mp4)
   mcp      Run kbot as a Model Context Protocol server
+  pack     Extract a game install into a static asset pack
   studio   Web-based map editor (KBot Studio)
   host     Authoritative multiplayer game server
   document Regenerate the TA reference catalogue (units, weapons, build tree)`,
@@ -73,6 +75,7 @@ Sub-commands operate on specific file formats:
 		zrb.NewCommand(),
 		mount.NewCommand(),
 		mcp.NewCommand(),
+		pack.NewCommand(),
 		studio.NewCommand(),
 		newHostCommand(),
 	)
