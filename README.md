@@ -666,8 +666,11 @@ kbot pack ~/games/kingdoms ./tak-pack --game tak
 
 A pack contains `manifest.json` (game id, sides, unit list, content hash),
 `unitdb.json` (per-unit movement class + motion domain, build/HP/weapon
-stats), `palette.json`, and per-asset files under `models/`, `textures/`,
-`cob/`, `sounds/`, `weaponbitmaps/`, `cursors/`, `groundtiles/` and `maps/`.
+stats, build-pic path and slot-ordered weapon ids), `palette.json`,
+`weapons.json` (weapon-TDF render data: rendertype, palette-resolved RGB
+colors, beam duration, velocity), and per-asset files under `models/`,
+`textures/`, `cob/`, `sounds/`, `weaponbitmaps/`, `unitpics/`, `cursors/`,
+`groundtiles/` and `maps/` (map JSON + tile atlas + authentic minimap PNG).
 Output is deterministic — the same install always produces a byte-identical
 pack, and the manifest's `contentHash` is the pack's identity. See
 `kbot pack --help` for the full layout.

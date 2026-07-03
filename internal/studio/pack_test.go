@@ -3,6 +3,7 @@ package studio
 import (
 	"bytes"
 	"encoding/json"
+	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -166,6 +167,95 @@ func TestBuildPackContents(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("none of armcom's textures were packed: %v", model.Textures)
+	}
+}
+
+// TestBuildPackV3Assets covers the format-v3 additions: the unit build
+// picture (unitpics/<name>.png + unitdb unitPic), the weapons.json render
+// catalogue (manifest weapons ref, palette-resolved colours) and the
+// unitdb slot-ordered weapons array a replayer maps WeaponFire slots with.
+func TestBuildPackV3Assets(t *testing.T) {
+	install := testutil.UnpackedPath(t)
+	dir := t.TempDir()
+	_, err := BuildPack(install, dir, PackOptions{
+		Game:  "totala",
+		Units: []string{"armcom"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var manifest packManifest
+	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
+	if manifest.FormatVersion != 3 {
+		t.Fatalf("formatVersion = %d, want 3", manifest.FormatVersion)
+	}
+	if manifest.Weapons != "weapons.json" {
+		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
+	}
+
+	// Build picture: a real PNG at native (non-zero) size.
+	picFile, err := os.Open(filepath.Join(dir, "unitpics", "armcom.png"))
+	if err != nil {
+		t.Fatalf("open build pic: %v", err)
+	}
+	defer func() { _ = picFile.Close() }()
+	img, err := png.Decode(picFile)
+	if err != nil {
+		t.Fatalf("decode build pic: %v", err)
+	}
+	if b := img.Bounds(); b.Dx() <= 0 || b.Dy() <= 0 {
+		t.Fatalf("build pic has empty bounds: %v", b)
+	}
+
+	// Weapon catalogue: armcom's laser must resolve with a beam colour.
+	var wf packWeaponsFileJSON
+	mustJSON(t, filepath.Join(dir, "weapons.json"), &wf)
+	if len(wf.Weapons) == 0 {
+		t.Fatalf("weapons.json is empty")
+	}
+	laser, ok := wf.Weapons["armcomlaser"]
+	if !ok {
+		t.Fatalf("weapons.json lacks armcomlaser (%d entries)", len(wf.Weapons))
+	}
+	if laser.ID != "armcomlaser" || laser.RenderType != 0 || !laser.BeamWeapon {
+		t.Fatalf("armcomlaser fields wrong: %+v", laser)
+	}
+	if laser.Name == "" {
+		t.Fatalf("armcomlaser should carry its TDF name")
+	}
+	if laser.Color == nil {
+		t.Fatalf("armcomlaser color= should resolve to an RGB triple")
+	}
+	// TDF color=232 — a green in TA's palette; assert the resolution really
+	// went through the palette rather than echoing the raw index.
+	if laser.Color[1] == 0 {
+		t.Fatalf("armcomlaser beam colour %v has no green component", *laser.Color)
+	}
+	if laser.VelocityWU <= 0 || laser.DurationSec <= 0 {
+		t.Fatalf("armcomlaser velocity/duration missing: %+v", laser)
+	}
+
+	// unitdb: the v3 per-unit fields.
+	var db packUnitDBJSON
+	mustJSON(t, filepath.Join(dir, "unitdb.json"), &db)
+	if len(db.Units) != 1 {
+		t.Fatalf("expected 1 unitdb entry, got %d", len(db.Units))
+	}
+	u := db.Units[0]
+	if u.UnitPic != "unitpics/armcom.png" {
+		t.Fatalf("unitPic = %q, want unitpics/armcom.png", u.UnitPic)
+	}
+	if len(u.Weapons) == 0 || u.Weapons[0] != "armcomlaser" {
+		t.Fatalf("slot-ordered weapons wrong: %v", u.Weapons)
+	}
+	for _, id := range u.Weapons {
+		if id == "" {
+			continue // interior empty slot — position padding, no catalogue entry
+		}
+		if _, ok := wf.Weapons[id]; !ok {
+			t.Fatalf("unit weapon %q missing from weapons.json", id)
+		}
 	}
 }
 

@@ -12,8 +12,10 @@ package studio
 //
 //	manifest.json                    game id, sides, unit list, content hash
 //	unitdb.json                      per-unit definition database (see packUnitJSON)
+//	weapons.json                     weapon id → render fields catalogue (see pack_weapons.go)
 //	palette.json                     {"palette": [[r,g,b] × 256]}
 //	README.md                        this layout, for humans unpacking a pack
+//	unitpics/<name>.png              unit build pictures (PCX decoded at native size)
 //	models/<name>.json               ModelLoader geometry (enhanced mesh baked in)
 //	textures/<name>.png              3DO texture (name--<side>.png for per-side variants)
 //	cob/<name>.json                  disassembled COB animation script
@@ -104,6 +106,15 @@ type packUnitJSON struct {
 	// blob family: "ground", "air", "sea" or "building".
 	MovementClass string `json:"movementClass,omitempty"`
 	MotionDomain  string `json:"motionDomain"`
+	// UnitPic is the pack-relative path of the unit's build picture
+	// (unitpics/<name>.png); empty when the install ships none.
+	UnitPic string `json:"unitPic,omitempty"`
+	// Weapons lists the unit's weapon ids (lower-case weapons.json keys) in
+	// SLOT order — index 0 is primary, 1 secondary, 2 tertiary — so a
+	// replayer can map a WeaponFire slot number straight onto the catalogue.
+	// Interior empty slots stay as "" to preserve slot positions; trailing
+	// empties are trimmed, and a weaponless unit omits the field entirely.
+	Weapons []string `json:"weapons,omitempty"`
 	// Meta is the full per-unit detail (movement numbers, buildTime,
 	// maxDamage, economy, footprint, weapons, sounds, corpse chain) —
 	// identical to the studio's /api/studio/unit/{name} response.
@@ -132,6 +143,9 @@ type packManifest struct {
 	GameUnitCount int      `json:"gameUnitCount"`
 	Units         []string `json:"units"`
 	Maps          []string `json:"maps,omitempty"`
+	// Weapons names the weapon catalogue file ("weapons.json"); empty when
+	// the install defines no weapons (nothing is written in that case).
+	Weapons string `json:"weapons,omitempty"`
 	// ContentHash is sha256 over every pack file except manifest.json
 	// (sorted by path; see BuildPack) — the pack's identity.
 	ContentHash string `json:"contentHash"`
@@ -342,6 +356,63 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		}
 		return entry.Name, true
 	}
+	// Build pictures are indexed once (stem → VFS path) rather than probed
+	// per unit: the VFS list walk is the expensive part and the filenames
+	// are mixed-case in real installs, so a straight ReadFile can't be
+	// trusted.  Lower rank wins so TA's unitpics/<unit>.pcx beats the
+	// TA:Kingdoms anims/buildpic/ layouts when both somehow exist.
+	buildPicPath := map[string]string{}
+	buildPicRank := map[string]int{}
+	for _, p := range sess.vfs.List() {
+		lower := strings.ToLower(p)
+		var rank int
+		switch {
+		case strings.HasPrefix(lower, "unitpics/") && strings.HasSuffix(lower, ".pcx"):
+			rank = 0
+		case strings.HasPrefix(lower, "anims/buildpic/") && strings.HasSuffix(lower, ".jpg"):
+			rank = 1
+		case strings.HasPrefix(lower, "anims/buildpic/") && strings.HasSuffix(lower, ".jpeg"):
+			rank = 2
+		case strings.HasPrefix(lower, "anims/buildpic/") && strings.HasSuffix(lower, ".pcx"):
+			rank = 3
+		default:
+			continue
+		}
+		base := path.Base(lower)
+		stem := base[:len(base)-len(path.Ext(base))]
+		if prev, ok := buildPicRank[stem]; ok && prev <= rank {
+			continue // keep the earlier/better find
+		}
+		buildPicPath[stem] = p
+		buildPicRank[stem] = rank
+	}
+	writeBuildPic := func(name string) (string, bool) {
+		src, ok := buildPicPath[name]
+		if !ok {
+			return "", false
+		}
+		data, err := sess.vfs.ReadFile(src)
+		if err != nil {
+			warnf("build pic %s: %v", name, err)
+			return "", false
+		}
+		img, err := decodeBuildPic(src, data)
+		if err != nil {
+			warnf("build pic %s: %v", name, err)
+			return "", false
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			warnf("build pic %s: encode: %v", name, err)
+			return "", false
+		}
+		rel := "unitpics/" + packStem(name) + ".png"
+		if err := pw.write(rel, buf.Bytes()); err != nil {
+			warnf("write build pic %s: %v", name, err)
+			return "", false
+		}
+		return rel, true
+	}
 	soundDone := map[string]bool{}
 	writeSound := func(stem string) {
 		stem = strings.ToLower(strings.TrimSpace(stem))
@@ -390,6 +461,22 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		}
 		if entry.Side != "" {
 			sidesSeen[strings.ToUpper(entry.Side)] = true
+		}
+		// Slot-ordered weapon ids (weapons.json keys).  Interior gaps stay
+		// as "" so slot 3 keeps index 2 (armcom: laser, -, disintegrator);
+		// only trailing empties are dropped.
+		slots := make([]string, 0, len(meta.Weapons))
+		for _, w := range meta.Weapons {
+			slots = append(slots, strings.ToLower(w.Name))
+		}
+		for len(slots) > 0 && slots[len(slots)-1] == "" {
+			slots = slots[:len(slots)-1]
+		}
+		if len(slots) > 0 {
+			u.Weapons = slots
+		}
+		if rel, ok := writeBuildPic(name); ok {
+			u.UnitPic = rel
 		}
 
 		if model, ok := writeModel(entry); ok {
@@ -458,6 +545,21 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 			return nil, werr
 		}
 	}
+	// weapons.json — the full install catalogue, not just the selected
+	// units' weapons: a subset pack must still resolve any weapon id a
+	// recording mentions.  Skipped entirely when the install defines no
+	// weapon TDFs (TA:Kingdoms inlines weapons in the FBIs instead).
+	weaponsFile := ""
+	if catalog := sess.buildPackWeaponCatalog(); len(catalog) > 0 {
+		body, err := packJSONIndent(packWeaponsFileJSON{Weapons: catalog})
+		if err != nil {
+			return nil, fmt.Errorf("encode weapons: %w", err)
+		}
+		if err := pw.write("weapons.json", body); err != nil {
+			return nil, err
+		}
+		weaponsFile = "weapons.json"
+	}
 	if reader, seqs, err := sess.loadCursorSequences(); err == nil {
 		for _, s := range seqs {
 			if len(s.Frames) == 0 {
@@ -524,8 +626,11 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	manifest := packManifest{
 		Format: "kbot-pack",
 		// FormatVersion 2 added the raw cob/<name>.cob bytecode files (and
-		// the unitdb cobBin field); version-1 readers ignore both.
-		FormatVersion: 2,
+		// the unitdb cobBin field).  FormatVersion 3 added unitpics/<name>.png
+		// build pictures (unitdb unitPic field), the weapons.json render
+		// catalogue (manifest weapons field) and the unitdb per-unit
+		// slot-ordered weapons array.  Older readers ignore all of them.
+		FormatVersion: 3,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -534,6 +639,7 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		GameUnitCount: len(allUnits),
 		Units:         selected,
 		Maps:          mapsPacked,
+		Weapons:       weaponsFile,
 		ContentHash:   hash,
 	}
 	manBytes, err := packJSONIndent(manifest)
@@ -733,9 +839,16 @@ Files:
 - manifest.json — game id, sides, unit list and the pack contentHash
   (sha256 over every other file in sorted path order; the pack identity).
 - unitdb.json — per-unit definitions: pack ordinal id, movement class +
-  motion domain, and full FBI/TDF-derived stats (buildTime, maxDamage,
-  weapons, economy, footprint, sounds, corpse chain).
+  motion domain, build picture + slot-ordered weapon ids, and full
+  FBI/TDF-derived stats (buildTime, maxDamage, weapons, economy,
+  footprint, sounds, corpse chain).
+- weapons.json — every weapon definition in the install keyed by
+  lower-case id: render type, palette-resolved beam colours, projectile
+  model, velocity and beam duration.  Each unitdb entry's "weapons"
+  array maps its fire slots onto these keys.
 - palette.json — {"palette": [[r,g,b] x 256]}.
+- unitpics/<name>.png — unit build pictures, decoded from the install's
+  PCX/JPEG originals at native size.
 - models/<name>.json — preprocessed model geometry (enhanced mesh baked
   in) in the @kbot/game3d ModelLoader shape.
 - textures/<name>.png — model textures ("<name>--<side>.png" for
