@@ -95,6 +95,34 @@ export const TIER_MID_MIN_PX  = 12   // ≥ 12 px → mid path; below → Phase 
 // treat projectiles like ordinary units; raise for "stay drawn longer".
 export const PROJECTILE_LOD_MULTIPLIER = 3
 
+// ── Additive-particle luminance budget ──────────────────────────────────
+//
+// The particle pass blends ONE/ONE (additive), so N overlapping bright
+// sprites are N× brighter — a mass laser barrage used to stack into a
+// white sheet that hid the terrain.  The renderer sums each LUMINOUS
+// particle's contribution (alpha × size, the additive footprint) and,
+// past this budget, scales every luminous particle's alpha by
+// budget/load — total additive light saturates at the budget instead of
+// growing without bound, and the scene stays readable under any barrage.
+// ~1200 ≈ two-and-a-half full-brightness laser beams (40 pulses × size
+// 12); a couple of concurrent shots render exactly as before, a barrage
+// saturates at that level.  Tuned against the commander-death stress
+// harness: 30 beams + deaths per frame must leave terrain + silhouettes
+// readable (< 8% of the frame white-saturated).
+export const PARTICLE_ADDITIVE_BUDGET = 1200
+
+// Same discipline for the dynamic pulse lights the particles cast on the
+// world: total light strength (wu reach) across all slots saturates here —
+// createWorld scales every light down proportionally past it.  ~600 ≈ two
+// D-gun-class lights or a dozen laser pulses at full strength.
+export const PULSE_LIGHT_ENERGY_BUDGET = 600
+
+// Particle kinds that count against (and get scaled by) the budget:
+// sparks, muzzle/impact flashes, every projectile family and the nano
+// stream.  Smoke's sub-1 colour barely adds; it stays un-governed so
+// battle haze never vanishes.
+export const LUMINOUS_PARTICLE_KINDS = new Set([3, 4, 16, 200, 201, 202, 203, 204, 205, 206])
+
 // ── Phase 3 — far-unit impostor ──────────────────────────────────────
 
 // Selected far-tier units flicker their impostor sprite on/off so

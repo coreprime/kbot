@@ -39,6 +39,8 @@ import {
   RUNNING_LIGHT_TIMING_BUCKETS,
   HOVERCRAFT_WOBBLE_SCALE,
   AIRCRAFT_BANK_SCALE,
+  PARTICLE_ADDITIVE_BUDGET,
+  LUMINOUS_PARTICLE_KINDS,
 } from './performance.js'
 import { displayRgbForSide } from './team-colors.js'
 import {
@@ -4670,6 +4672,11 @@ export class ModelRenderer {
       let cx = it.x - ux * drop
       let cy = it.y - uy * drop
       let cz = it.z - uz * drop
+      // At low camera angles the drop is nearly world-down, which would
+      // push a grounded unit's bar underground — where the depth test
+      // (correctly) buries it.  Keep the anchor just above the surface.
+      const groundY = this.terrainHeightAt(cx, cz)
+      if (cy < groundY + 1.5) cy = groundY + 1.5
       let ex = eye[0] - cx, ey = eye[1] - cy, ez = eye[2] - cz
       const eLen = Math.hypot(ex, ey, ez) || 1
       const bias = Math.min(r * 1.2 + 4, eLen * 0.5)
@@ -4729,6 +4736,17 @@ export class ModelRenderer {
       gl.bindBuffer(gl.ARRAY_BUFFER, this._partVBO)
       gl.bufferData(gl.ARRAY_BUFFER, this._partInterleaved.byteLength, gl.DYNAMIC_DRAW)
     }
+    // Luminance governor: additive blending means overlapping bright
+    // sprites stack without bound, so a barrage of beams used to white
+    // out the frame.  Sum the luminous kinds' additive footprint
+    // (alpha × size) and scale their alphas so the total saturates at
+    // PARTICLE_ADDITIVE_BUDGET — deterministic (pure pool-state
+    // function) and invisible below ~5 concurrent full beams.
+    let lumLoad = 0
+    for (let i = 0; i < pool.count; i++) {
+      if (LUMINOUS_PARTICLE_KINDS.has(pool.kind[i])) lumLoad += pool.a[i] * pool.size[i]
+    }
+    const lumScale = lumLoad > PARTICLE_ADDITIVE_BUDGET ? PARTICLE_ADDITIVE_BUDGET / lumLoad : 1
     // Pack alive particles into the interleaved layout the shader
     // attributes expect: [px, py, pz, r, g, b, a, size] × N.
     const data = this._partInterleaved
@@ -4740,7 +4758,9 @@ export class ModelRenderer {
       data[o + 3] = pool.r[i]
       data[o + 4] = pool.g[i]
       data[o + 5] = pool.b[i]
-      data[o + 6] = pool.a[i]
+      data[o + 6] = lumScale < 1 && LUMINOUS_PARTICLE_KINDS.has(pool.kind[i])
+        ? pool.a[i] * lumScale
+        : pool.a[i]
       data[o + 7] = pool.size[i]
     }
     gl.useProgram(this.programParticles)

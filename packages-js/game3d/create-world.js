@@ -64,6 +64,7 @@ import {
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
 import { ExplosionManager } from './explosion-fx.js'
+import { PULSE_LIGHT_ENERGY_BUDGET } from './performance.js'
 
 // Loaded models rest nose toward -Z (the direction a raw game heading of 0
 // faces — see cob-pose.js), so the default display pose for a bare addUnit
@@ -410,6 +411,17 @@ export async function createWorld(canvas, {
     for (const l of worldBinding.explosions.lights()) lights.push(l)
     for (const s of tracers) {
       lights.push({ pos: [s.x, s.y, s.z], color: s.color, strength: s.strength })
+    }
+    // Light-energy budget: the shader's per-light wash is additive, so a
+    // barrage's worth of full-strength beam lights floodlights the ground
+    // white.  Total reach saturates at PULSE_LIGHT_ENERGY_BUDGET — every
+    // light dims proportionally past it (readability discipline; see
+    // explosion-fx.js).
+    let lightEnergy = 0
+    for (const l of lights) lightEnergy += l.strength
+    if (lightEnergy > PULSE_LIGHT_ENERGY_BUDGET) {
+      const k = PULSE_LIGHT_ENERGY_BUDGET / lightEnergy
+      for (const l of lights) l.strength *= k
     }
     renderer.setPulseLights(lights)
     renderer.setWeaponEffects(weaponFxSegments())
