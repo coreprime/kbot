@@ -46,10 +46,11 @@ export class Model {
 
   // resolvePieceWorld returns the WORLD position [x, y, z] of `piece`
   // when this model is placed at (x, y, z) world units with body yaw
-  // `headingRad`.  It walks the whole tree recomputing every piece's
-  // worldMatrix against a root of translate(x,y,z) · rotateY(headingRad)
-  // — exactly the chain the renderer builds for an entity — but does so
-  // headlessly (no GL context).
+  // `headingRad` (and optional pitch / roll / uniform scale).  It walks
+  // the whole tree recomputing every piece's worldMatrix against a root
+  // of translate(x,y,z) · rotateY(heading) · rotateX(pitch) ·
+  // rotateZ(roll) · scale — exactly the chain the renderer builds for an
+  // entity — but does so headlessly (no GL context).
   //
   // Why this is needed: the sim engine animates a per-instance model
   // CLONE that it never draws itself (in the sandbox each pane's
@@ -62,11 +63,14 @@ export class Model {
   // emit from the firing piece at the unit's current location.
   //
   // Returns null when there's no root or the piece carries no matrix.
-  resolvePieceWorld(piece, x, y, z, headingRad) {
+  resolvePieceWorld(piece, x, y, z, headingRad, pitchRad = 0, rollRad = 0, scale = 1) {
     if (!piece || !this.root) return null
     const root = Mat4.identity(Mat4.create())
     Mat4.translate(root, root, x || 0, y || 0, z || 0)
     if (headingRad) Mat4.rotateY(root, root, headingRad)
+    if (pitchRad) Mat4.rotateX(root, root, pitchRad)
+    if (rollRad) Mat4.rotateZ(root, root, rollRad)
+    if (scale != null && scale !== 1 && scale > 0) Mat4.scale(root, root, scale)
     const scratch = Mat4.create()
     const walk = (p, parent) => {
       p.computeWorldMatrix(parent, scratch)

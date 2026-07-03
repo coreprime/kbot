@@ -214,6 +214,7 @@ export async function createWorld(canvas, {
   // context); one cloneForInstance() per unit so each instance owns its
   // animated piece tree.
   const modelCache = new Map()   // name → Promise<Model>
+  const modelReady = new Map()   // name → resolved base Model (sync re-attach)
   const units = new Map()        // id → unit record
   const corpses = new Map()      // id → persistent wreck record
   const featureModels = []       // 3DO map features (static, from setTerrain)
@@ -231,6 +232,7 @@ export async function createWorld(canvas, {
   let fxTimeMs = 0               // world fx clock (sum of step dtMs)
   let nextId = 1
   let disposed = false
+  let scriptPieceQuery = null    // (unitId, fnName) → COB piece index | -1
 
   // World-level effects binding: ONE shared particle pool for every
   // weapon / impact / damage-smoke emission (the studio uses per-unit
@@ -261,7 +263,16 @@ export async function createWorld(canvas, {
   }
 
   const loadBaseModel = (name) => {
-    if (!modelCache.has(name)) modelCache.set(name, loader.load(name))
+    if (!modelCache.has(name)) {
+      const p = loader.load(name)
+      modelCache.set(name, p)
+      // Remember the resolved base so a later re-add of the same type can
+      // attach its model clone SYNCHRONOUSLY.  The promise path defers the
+      // attach past the caller's own step(), which renders the unit
+      // invisible for at least one frame — visible as whole-unit pop-in
+      // whenever a driver's snapshot drops and re-lists a unit.
+      p.then((base) => { if (!disposed) modelReady.set(name, base) }).catch(() => {})
+    }
     return modelCache.get(name)
   }
 
@@ -644,17 +655,96 @@ export async function createWorld(canvas, {
     }
   }
 
+  // _pieceWorldPos computes a live unit piece's WORLD position through the
+  // rendered transform chain (position + heading/pitch/roll + the piece
+  // tree's current COB pose).  `pieceRef` is a piece NAME, or a COB piece-
+  // table INDEX resolved through the unit's pieceNames (applyState).  Null
+  // when the unit, its model, or the piece can't be resolved.
+  const _pieceWorldPos = (id, pieceRef) => {
+    const u = units.get(id)
+    if (!u || !u.model) return null
+    let piece = null
+    if (typeof pieceRef === 'number') {
+      // Numeric refs are COB piece-table indexes — they only map onto the
+      // model through the unit's piece-name table (COB order is NOT the
+      // model hierarchy order, so a flat-order fallback would silently
+      // pick the wrong piece).
+      const nm = Array.isArray(u.pieceNames) ? u.pieceNames[pieceRef] : null
+      if (nm) piece = u.model.findPiece(nm)
+    } else if (pieceRef != null) {
+      piece = u.model.findPiece(String(pieceRef))
+    }
+    if (!piece) return null
+    const pose = _unitPose(u)
+    return u.model.resolvePieceWorld(
+      piece, pose.x, pose.y, pose.z, pose.headingRad, pose.pitchRad, pose.rollRad)
+  }
+
+  // _midHull is the generic beam/effect anchor: the unit origin plus a
+  // small vertical offset to mid-hull — the graceful fallback whenever a
+  // COB query / piece lookup can't resolve a real emitter piece.
+  const _midHull = (u) => {
+    const pose = _unitPose(u)
+    const cy = u.model && u.model.boundsCentre ? u.model.boundsCentre[1] : 6
+    return [pose.x, pose.y + cy, pose.z]
+  }
+
+  // _queryPiece asks the installed script-piece resolver (an engine
+  // session's queryScriptPiece, wired via setScriptPieceQuery) for a COB
+  // Query* function's piece index.  -1 when no resolver is installed or
+  // the query fails — callers fall back to the unit origin.
+  const _queryPiece = (unitId, fnName) => {
+    if (typeof scriptPieceQuery !== 'function') return -1
+    try {
+      const idx = scriptPieceQuery(unitId, fnName)
+      return Number.isFinite(idx) ? idx : -1
+    } catch {
+      return -1
+    }
+  }
+
+  // Weapon slots resolve muzzles through TA's per-slot COB queries.
+  const QUERY_SLOT_FN = ['QueryPrimary', 'QuerySecondary', 'QueryTertiary']
+
+  // _nanoPiece resolves a builder's nanolathe emitter piece index via its
+  // COB QueryNanoPiece, or null for the mid-hull fallback.  Resolved once
+  // per beam start (each start re-queries, so multi-nozzle builders cycle
+  // emitters between build orders the way the game's spray does).
+  const _nanoPiece = (unitId) => {
+    const idx = _queryPiece(unitId, 'QueryNanoPiece')
+    return idx >= 0 ? idx : null
+  }
+
+  // _resolveMuzzle returns the world position a slot's shot exits from: the
+  // COB Query<slot> piece when the resolver + piece table can supply it,
+  // else the unit's mid-hull (origin + small vertical offset).  Null only
+  // when the unit itself is gone.
+  const _resolveMuzzle = (unitId, slot) => {
+    const u = units.get(unitId)
+    if (!u) return null
+    const fn = QUERY_SLOT_FN[slot | 0] || QUERY_SLOT_FN[0]
+    const idx = _queryPiece(unitId, fn)
+    if (idx >= 0) {
+      const pos = _pieceWorldPos(unitId, idx)
+      if (pos) return pos
+    }
+    return _midHull(u)
+  }
+
   // _resolveBeamEnd turns a beam endpoint spec into a live world position:
-  // { unitId } tracks the unit (mid-hull), { corpseId } tracks a wreck,
-  // { pos: [x,y,z] } is fixed.  Null when the referent is gone.
+  // { unitId } tracks the unit (mid-hull; with `piece` set, that piece's
+  // live world position), { corpseId } tracks a wreck, { pos: [x,y,z] } is
+  // fixed.  Null when the referent is gone.
   const _resolveBeamEnd = (end) => {
     if (!end) return null
     if (end.unitId != null) {
       const u = units.get(end.unitId)
       if (!u) return null
-      const pose = _unitPose(u)
-      const cy = u.model && u.model.boundsCentre ? u.model.boundsCentre[1] : 6
-      return [pose.x, pose.y + cy, pose.z]
+      if (end.piece != null) {
+        const p = _pieceWorldPos(end.unitId, end.piece)
+        if (p) return p
+      }
+      return _midHull(u)
     }
     if (end.corpseId != null) {
       const c = corpses.get(end.corpseId)
@@ -951,6 +1041,29 @@ export async function createWorld(canvas, {
     // terrainNormalAt returns the smoothed surface normal at a world XZ.
     terrainNormalAt(x, z) { return terrainNormalAt(x, z) },
 
+    // setScriptPieceQuery installs the COB Query* resolver the weapon /
+    // lathe conveniences use to find emitter pieces:
+    //   world.setScriptPieceQuery((unitId, fnName) => session.queryScriptPiece(unitId, fnName))
+    // fn returns the COB piece-table index the unit's Query function
+    // reported, or -1.  Pass null to uninstall (everything falls back to
+    // unit-origin anchors).  The world stays renderer-only: it never
+    // imports the engine, it just calls whatever the driver wires in.
+    setScriptPieceQuery(fn) {
+      scriptPieceQuery = typeof fn === 'function' ? fn : null
+    },
+
+    // unitPieceWorldPos returns the CURRENT world position [x, y, z] of one
+    // of a unit's model pieces, composed through the full rendered
+    // transform chain — unit position, heading/pitch/roll (slope tilt +
+    // hit-rock included) and the piece tree's live COB pose.  `piece` is a
+    // piece NAME, or a COB piece-table INDEX (an engine queryScriptPiece /
+    // FromPiece value), resolved through the unit's pieceNames from
+    // applyState.  Null when the unit / model / piece can't be resolved —
+    // callers fall back to the unit origin.
+    unitPieceWorldPos(id, piece) {
+      return _pieceWorldPos(id, piece)
+    },
+
     // applyState replaces the whole rendered world from a sim snapshot
     // (the engine's frame.Snapshot shape):
     //   { units: [{ id, model|name, x, y, z, heading, pitch?, roll?,
@@ -1015,9 +1128,19 @@ export async function createWorld(canvas, {
         if (!u || u.name !== name) {
           u = { id: su.id, name, model: null, x: 0, y: 0, z: 0, headingRad: REST_HEADING, pitchRad: 0, rollRad: 0 }
           units.set(su.id, u)
-          loadBaseModel(name).then((base) => {
-            if (!disposed && units.get(su.id) === u) u.model = base.cloneForInstance()
-          }).catch(() => units.delete(su.id))
+          // Attach the model clone synchronously when the base is already
+          // loaded — the promise path defers past this applyState's own
+          // step(), leaving the unit invisible for a frame (whole-unit
+          // pop-in on every snapshot re-add).  Only a type's genuinely
+          // first sighting still loads async.
+          const ready = modelReady.get(name)
+          if (ready) {
+            u.model = ready.cloneForInstance()
+          } else {
+            loadBaseModel(name).then((base) => {
+              if (!disposed && units.get(su.id) === u) u.model = base.cloneForInstance()
+            }).catch(() => units.delete(su.id))
+          }
         }
         // Motion latch — a position/heading change after the FIRST
         // placement marks the unit as having moved, which the structure
@@ -1102,9 +1225,11 @@ export async function createWorld(canvas, {
           pitchRad: sp.pitch != null ? -sp.pitch : 0,
         }
         if (sp.model) {
-          const cached = modelCache.get(sp.model)
-          if (cached) {
-            cached.then((m) => { rec.model = m }).catch(() => {})
+          const ready = modelReady.get(sp.model)
+          if (ready) {
+            rec.model = ready
+          } else if (modelCache.has(sp.model)) {
+            modelCache.get(sp.model).then((m) => { rec.model = m }).catch(() => {})
           } else {
             loadBaseModel(sp.model).catch(() => {})
           }
@@ -1265,11 +1390,17 @@ export async function createWorld(canvas, {
     // Endpoints: fromUnitId/toUnitId track live units, from/to are fixed
     // [x,y,z] positions (a build site before the frame exists).  The
     // stream is deterministic (seeded per key, fx-clock cadence).
+    //
+    // A fromUnitId resolves the builder's nano-spray emitter through its
+    // COB QueryNanoPiece (via the setScriptPieceQuery resolver) once at
+    // beam start; the spray then tracks that piece's LIVE world position —
+    // a construction arm's nozzle, not the hull centre.  Missing resolver
+    // / script / piece falls back to the mid-hull anchor as before.
     latheBeam(key, { fromUnitId = null, toUnitId = null, from = null, to = null, on = true, color = null } = {}) {
       if (!on) { beams.delete(key); return }
       beams.set(key, {
         kind: 'build',
-        from: fromUnitId != null ? { unitId: fromUnitId } : { pos: from },
+        from: fromUnitId != null ? { unitId: fromUnitId, piece: _nanoPiece(fromUnitId) } : { pos: from },
         to: toUnitId != null ? { unitId: toUnitId } : { pos: to },
         color: color || [0.45, 1.9, 0.85, 0.9],
         accMs: 0,
@@ -1286,7 +1417,7 @@ export async function createWorld(canvas, {
       if (!on) { beams.delete(key); return }
       beams.set(key, {
         kind: 'reclaim',
-        from: fromUnitId != null ? { unitId: fromUnitId } : { pos: from },
+        from: fromUnitId != null ? { unitId: fromUnitId, piece: _nanoPiece(fromUnitId) } : { pos: from },
         to: corpseId != null ? { corpseId } : (toUnitId != null ? { unitId: toUnitId } : { pos: to }),
         color: color || [0.55, 1.7, 0.55, 0.9],
         accMs: 0,
@@ -1360,7 +1491,20 @@ export async function createWorld(canvas, {
     // 'beam'|'laser' draws a fading line beam and 'tracer' a bright streak
     // (the original renderer-line path, kept for callers that pass raw
     // geometry).
-    async weaponEffect({ type = null, from, to, color = null, durationMs = null, velocity = null, width = null, weapon = null } = {}) {
+    //
+    // MUZZLE resolution: pass `fromUnit: { id, weaponSlot }` instead of
+    // (or as well as) `from` and the shot originates at the unit's COB
+    // muzzle piece — Query<Primary|Secondary|Tertiary> via the
+    // setScriptPieceQuery resolver, positioned through the live piece
+    // transform chain (so a swung turret's barrel tip is where the bolt
+    // leaves).  Falls back gracefully to the unit's origin + a small
+    // vertical offset when the resolver / query / piece is missing; an
+    // explicit `from` is only used when the unit itself is gone.
+    async weaponEffect({ type = null, from = null, to, color = null, durationMs = null, velocity = null, width = null, weapon = null, fromUnit = null } = {}) {
+      if (fromUnit && fromUnit.id != null) {
+        const muzzle = _resolveMuzzle(fromUnit.id, fromUnit.weaponSlot | 0)
+        if (muzzle) from = muzzle
+      }
       if (!Array.isArray(from) || !Array.isArray(to)) return
       let def = null
       if (weapon) {

@@ -107,6 +107,7 @@ func main() {
 		"killThreadsByName": js.FuncOf(killThreadsByName),
 		"scriptNames":       js.FuncOf(scriptNames),
 		"unitPieceNames":    js.FuncOf(unitPieceNames),
+		"queryScriptPiece":  js.FuncOf(queryScriptPiece),
 	}
 	js.Global().Set("KbotEngine", js.ValueOf(api))
 
@@ -776,6 +777,20 @@ func unitPieceNames(_ js.Value, args []js.Value) any {
 		out[i] = n
 	}
 	return js.ValueOf(out)
+}
+
+// queryScriptPiece(handle, unitId, name, [args]) -> pieceIndex | -1 runs a
+// COB Query* entry point (QueryPrimary / QueryNanoPiece / QueryBuildInfo, …)
+// synchronously and returns the piece index the script reported — an index
+// into the unit's COB piece table (unitPieceNames), so the renderer resolves
+// the muzzle / nano-spray / build-pad piece BY NAME. -1 for a missing unit,
+// script-less unit, unknown entry point, or a query that would yield.
+func queryScriptPiece(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return -1
+	}
+	return int(inst.world.UnitQueryScriptPiece(uint32(args[1].Int()), args[2].String(), scriptArgs(args, 3)...))
 }
 
 // scriptArgs reads an optional JS integer array at args[idx] into the variadic

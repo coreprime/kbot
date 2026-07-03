@@ -371,6 +371,14 @@ export class ModelRenderer {
     // (keyed by entity id) so every flier banks + every hovercraft wobbles.
     this._locoState = { heading: 0, x: 0, z: 0, y: 0, t: 0, init: false, pitch: 0, roll: 0, heave: 0 }
     this._entOrient = new Map()
+    // Per-entity LOD hysteresis memory, keyed by entity id.  The tier /
+    // shadow decisions need PERSISTENT prev-state for their hysteresis
+    // bands to bite — createWorld rebuilds its entity objects every frame,
+    // so state stashed on the entity itself evaporates and a unit sitting
+    // exactly on a tier threshold would flip between geometry and impostor
+    // (or shadow on/off) frame to frame: whole-unit flicker.  Entries are
+    // stamped per frame and pruned lazily (see _lodMemFor).
+    this._lodMem = new Map()
     // Multi-entity mode — when an array is set here, draw() iterates
     // over each entity and renders its model independently after the
     // shared sky/ground pass.  Each entity is
@@ -1007,14 +1015,14 @@ export class ModelRenderer {
   // entity's bounding sphere in CSS pixels.  Uses the cached
   // halfFovTan from OrbitCamera.updateMatrices so the per-frame cost
   // is one sqrt + two divides.  Returns +Infinity when the camera is
-  // inside the sphere (treat as max-detail), 0 when the model has no
-  // bounds yet (treat as max-detail so the shadow LOD doesn't pop a
-  // freshly-loaded unit's shadow off until the next frame).
+  // inside the sphere OR the model has no bounds yet — both read as
+  // max-detail, so a freshly-loaded unit renders full geometry with its
+  // shadow instead of popping in as a far-tier impostor dot.
   _pxRadius(ent) {
-    if (!ent || !ent.model) return 0
+    if (!ent || !ent.model) return Infinity
     const m = ent.model
     const r = m.boundsRadius
-    if (!(r > 0)) return 0
+    if (!(r > 0)) return Infinity
     const t = ent.transform || _IDENTITY_T
     const cx = t.x + (m.boundsCentre ? m.boundsCentre[0] : 0)
     const cy = t.y + (m.boundsCentre ? m.boundsCentre[1] : 0)
@@ -1041,6 +1049,28 @@ export class ModelRenderer {
     return 1 - (d - max * 0.5) / (max * 0.5)
   }
 
+  // _lodMemFor returns the persistent LOD memory record for an entity id,
+  // creating it on first sight.  Records carry the previous frame's tier /
+  // shadow decision so the hysteresis bands survive callers (createWorld)
+  // that rebuild their entity objects every frame.  Stale ids (entities
+  // gone from the scene) are pruned opportunistically once the map grows
+  // well past the live entity count.
+  _lodMemFor(id) {
+    let m = this._lodMem.get(id)
+    if (!m) {
+      if (this._lodMem.size > 4096) {
+        const cutoff = (this._frameStamp || 0) - 60
+        for (const [k, v] of this._lodMem) {
+          if (v.stamp < cutoff) this._lodMem.delete(k)
+        }
+      }
+      m = { tier: null, shadowOn: null, stamp: 0 }
+      this._lodMem.set(id, m)
+    }
+    m.stamp = this._frameStamp || 0
+    return m
+  }
+
   // _castsShadow — distance-based shadow LOD with hysteresis.  Decides
   // whether `ent` runs the shadow pass this frame.  When shadow LOD
   // is off, always true (every entity casts).  Otherwise the entity
@@ -1061,7 +1091,12 @@ export class ModelRenderer {
     // single thing on the map casting a shadow.  The selection
     // is communicated by the dot itself.
     const px = this._pxRadius(ent)
-    const prev = ent._lodShadowOn !== false  // default ON when undefined
+    // Previous decision from the renderer's persistent per-id memory —
+    // entity objects may be rebuilt per frame, so ent._lodShadowOn alone
+    // would default every frame and the hysteresis band would never bite.
+    const mem = ent.id != null ? this._lodMemFor(ent.id) : null
+    const prevVal = mem && mem.shadowOn != null ? mem.shadowOn : ent._lodShadowOn
+    const prev = prevVal !== false // default ON when undefined
     // Projectiles get the same multiplier as the main-pass tiers, so a
     // bomb's shadow doesn't disappear right after release — the silhouette
     // on the ground is what makes a bomb-run readable.
@@ -1079,6 +1114,7 @@ export class ModelRenderer {
       next = px >= shadowPx
     }
     ent._lodShadowOn = next
+    if (mem) mem.shadowOn = next
     return next
   }
 
@@ -1110,7 +1146,12 @@ export class ModelRenderer {
     if (!ent || !ent.model) return LOD_TIER_FULL
     if (ent.ghost) return LOD_TIER_FULL
     const px = this._pxRadius(ent)
-    const prev = ent._lodTier != null ? ent._lodTier : LOD_TIER_FULL
+    // Previous tier from the persistent per-id memory (see _lodMemFor) —
+    // without it, per-frame entity rebuilds reset prev to FULL and a unit
+    // at the MID/FAR boundary flickers between geometry and impostor dot.
+    const mem = ent.id != null ? this._lodMemFor(ent.id) : null
+    const prevVal = mem && mem.tier != null ? mem.tier : ent._lodTier
+    const prev = prevVal != null ? prevVal : LOD_TIER_FULL
     // In-flight model projectiles (bombs, missiles, rockets) have tiny
     // bounding spheres compared to their host unit, so by the unit-tier
     // thresholds they pop down to the impostor dot long before they reach
@@ -1145,6 +1186,7 @@ export class ModelRenderer {
            : LOD_TIER_FAR
     }
     ent._lodTier = next
+    if (mem) mem.tier = next
     return next
   }
 
@@ -1169,14 +1211,23 @@ export class ModelRenderer {
     const m = ent.model
     if (!m.boundsCentre || !(m.boundsRadius > 0)) return true
     const t = ent.transform || _IDENTITY_T
-    // Object → world translation only — the bounding sphere is
-    // rotation-invariant, so heading + sea-bob don't affect the
-    // centre+radius test.  Sea-bob can lift the sphere by ~5 wu;
-    // pad the radius slightly to absorb it.
-    const cx = t.x + m.boundsCentre[0]
-    const cy = t.y + m.boundsCentre[1]
-    const cz = t.z + m.boundsCentre[2]
-    const r = m.boundsRadius + CULL_RADIUS_PADDING_WU  // padding for sea-bob / heading wobble
+    // Object → world translation only.  The sphere itself is rotation-
+    // invariant, but its CENTRE is an object-space offset from the entity
+    // origin, and the entity's yaw / pitch / roll rotate that offset —
+    // adding the offset unrotated can misplace the test sphere by up to
+    // |centre| and cull a model whose geometry is still on screen (whole-
+    // unit pop-out at close range, where the frustum planes cut nearby).
+    // Rather than rotate per entity, widen the radius by the horizontal
+    // centre offset (what yaw can swing) plus, only when the entity is
+    // actually tilted, the vertical offset (what pitch / roll can swing).
+    // Models with near-origin centres — most units — pay ~nothing.
+    const c = m.boundsCentre
+    const cx = t.x + c[0]
+    const cy = t.y + c[1]
+    const cz = t.z + c[2]
+    let slack = Math.hypot(c[0], c[2])
+    if (t.pitchRad || t.rollRad) slack += Math.abs(c[1])
+    const r = m.boundsRadius + slack + CULL_RADIUS_PADDING_WU  // + padding for sea-bob
     return this.camera.sphereInFrustum(cx, cy, cz, r)
   }
 
@@ -2052,7 +2103,14 @@ export class ModelRenderer {
         }
         this._cullStats.drew += 1
         this.model = ent.model
-        if (typeof ent.buildPercent === 'number') this.buildPercent = ent.buildPercent
+        // Per-entity build% — entities that don't carry one are COMPLETE
+        // (100), never inheriting the previous entity's value.  The old
+        // conditional assignment let an under-construction unit's low
+        // build% bleed into every later percent-less entity in the loop
+        // (corpses, debris, projectiles), whose output alpha (bp³) then
+        // rendered them near-invisible: whole models flickering out
+        // whenever anything on the field was being built.
+        this.buildPercent = typeof ent.buildPercent === 'number' ? ent.buildPercent : 100
         // Per-entity team colour — caller passes ent.teamColor as
         // either an [r,g,b] tuple (recolour) or null (use the model's
         // authored ARM-blue pixels untouched).  Unset entry = inherit

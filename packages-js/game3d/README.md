@@ -143,6 +143,29 @@ world read like the game, all presentation-only — no sim state, no hashes:
   (extractor rotors, solar collectors) is driven through the ENGINE —
   `Session.setUnitActivation(unitId, on)` runs the unit's real COB
   Activate/Deactivate entry points.
+- **COB emitter anchors** — wire the engine in once with
+  `world.setScriptPieceQuery((id, fn) => session.queryScriptPiece(id, fn))`
+  and effects originate from the piece the unit's own script names instead
+  of the hull centre: `weaponEffect({ fromUnit: { id, weaponSlot }, to,
+  weapon })` fires from the COB `Query<Primary|Secondary|Tertiary>` muzzle
+  (per-barrel cycling included), `latheBeam`/`reclaimBeam` `fromUnitId`
+  sprays from the `QueryNanoPiece` nozzle, and
+  `world.unitPieceWorldPos(id, pieceNameOrIndex)` answers any piece's live
+  world position through the full transform chain (position, heading /
+  pitch / roll, current COB pose).  Everything degrades gracefully to the
+  unit-origin anchor when the resolver, script or piece is missing.
+- **Factory builds** — factories OPEN while building and the nascent unit
+  rides the build pad:
+  1. build start — `session.setUnitActivation(factoryId, true)` (COB
+     Activate: doors open, arms deploy) and
+     `session.startScript(factoryId, 'StartBuilding')` (the pad spins);
+  2. while `buildPercent < 100` — place the nascent unit at
+     `world.unitPieceWorldPos(factoryId,
+     session.queryScriptPiece(factoryId, 'QueryBuildInfo'))` (the pad
+     piece), feeding its rising `buildPercent` through applyState;
+  3. completion — `session.startScript(factoryId, 'StopBuilding')` then
+     `session.setUnitActivation(factoryId, false)` (COB Deactivate closes
+     the factory).
 - **Grounding + slope tilt** — applyState/addUnit `grounded: true` clamps a
   unit's render Y to the battlefield surface (`world.terrainHeightAt`) and
   pitches/rolls it to the terrain normal.  Recorded wire Y is TA world

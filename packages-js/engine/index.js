@@ -253,6 +253,41 @@ export class Session {
     return this.#api.setUnitActivation(this.#handle, unitId, !!on)
   }
 
+  /**
+   * Run one of a unit's COB Query* entry points (QueryPrimary /
+   * QuerySecondary / QueryTertiary, QueryNanoPiece, QueryBuildInfo, …)
+   * synchronously and return the piece index the script reported, or -1
+   * when the unit / script is missing or the query would yield. The index
+   * is into the unit's COB piece table (pieceNames), so a renderer maps it
+   * to a model piece BY NAME — pair with @kbot/game3d's
+   * world.unitPieceWorldPos(unitId, index) for the piece's world position.
+   *
+   * Weapon muzzles: queryScriptPiece(id, 'QueryPrimary') (Secondary /
+   * Tertiary for slots 1 / 2) returns the muzzle piece a shot exits from;
+   * each call advances any per-barrel cycle the script keeps, exactly as
+   * live fire does. Nanolathe spray origin: 'QueryNanoPiece'.
+   *
+   * Factory build recipe (what a replay driver plays around a factory):
+   *   1. build start  — setUnitActivation(factoryId, true) opens the
+   *      factory (COB Activate: doors, arms), and
+   *      startScript(factoryId, 'StartBuilding') spins the pad.
+   *   2. while building — place the nascent unit at
+   *      world.unitPieceWorldPos(factoryId,
+   *        queryScriptPiece(factoryId, 'QueryBuildInfo'))
+   *      (the build-pad piece) with its rising buildPercent.
+   *   3. completion — startScript(factoryId, 'StopBuilding') then
+   *      setUnitActivation(factoryId, false) closes the factory
+   *      (COB Deactivate).
+   *
+   * `args` is rarely needed: with none, the TA convention applies (one
+   * out-local the script writes the piece into). Pass extras for shared
+   * parameterized queries (TA:K QueryWeapon takes the weapon index after
+   * the out-local: args = [0, slot]).
+   */
+  queryScriptPiece(unitId, name, args = []) {
+    return this.#api.queryScriptPiece(this.#handle, unitId, name, args)
+  }
+
   /** Spawn a thread on the named COB entry point with integer args. */
   startScript(unitId, name, args = []) {
     this.#api.startScript(this.#handle, unitId, name, args)

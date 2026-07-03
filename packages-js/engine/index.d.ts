@@ -228,6 +228,17 @@ export class Session {
    * Presentation only; returns false for a missing or script-less unit.
    */
   setUnitActivation(unitId: number, on: boolean): boolean
+  /**
+   * Run a COB Query* entry point (QueryPrimary / QueryNanoPiece /
+   * QueryBuildInfo, …) synchronously; returns the piece index the script
+   * reported (into pieceNames), or -1 when the unit / script is missing or
+   * the query would yield. Each call advances any per-barrel muzzle cycle
+   * the script keeps. Factory recipe: setUnitActivation(id, true) +
+   * startScript(id, 'StartBuilding') on build start, nascent unit at the
+   * QueryBuildInfo piece while it raises, startScript(id, 'StopBuilding')
+   * + setUnitActivation(id, false) on completion.
+   */
+  queryScriptPiece(unitId: number, name: string, args?: number[]): number
   /** Spawn a thread on the named COB entry point with integer args. */
   startScript(unitId: number, name: string, args?: number[]): void
   /** Start the named script after cancelling any live instance of it. */

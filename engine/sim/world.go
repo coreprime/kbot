@@ -732,6 +732,36 @@ func (w *World) UnitPlayWeaponFire(id uint32, slot int, target fixed.Vec3) bool 
 	return played
 }
 
+// UnitQueryScriptPiece runs one of a unit's COB Query* entry points
+// (QueryPrimary / QuerySecondary / QueryTertiary, QueryNanoPiece,
+// QueryBuildInfo, …) synchronously and returns the piece the script reported
+// through its out-parameter — an index into the unit's COB piece table
+// (UnitPieceNames), which is how a renderer maps it onto a model piece BY
+// NAME. Returns -1 for a missing unit, a script-less binding, an unknown
+// entry point, or a query that would yield (the synchronous contract of
+// RunQuery). With no explicit args the TA convention applies: one out-local
+// the script writes the piece into; extra args ride after it (TA:K's shared
+// QueryWeapon takes the weapon index second). Running a query advances any
+// per-barrel cycle the script keeps, exactly as live fire does — successive
+// calls on a multi-barrel weapon report alternating muzzles.
+func (w *World) UnitQueryScriptPiece(id uint32, name string, args ...int) int32 {
+	u := w.units[id]
+	if u == nil || u.binding == nil || !u.binding.HasScript(name) {
+		return -1
+	}
+	qb, ok := u.binding.(queryBinding)
+	if !ok {
+		return -1
+	}
+	if len(args) == 0 {
+		args = []int{0}
+	}
+	if piece, ok := qb.RunQuery(name, args...); ok {
+		return piece
+	}
+	return -1
+}
+
 // UnitKillThreadsByName marks dead every live thread running the named script.
 func (w *World) UnitKillThreadsByName(id uint32, name string) {
 	if s := w.scripts(id); s != nil {

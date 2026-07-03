@@ -342,13 +342,21 @@ export interface World {
    */
   weaponEffect(opts: {
     type?: 'beam' | 'laser' | 'tracer' | null
-    from: [number, number, number]
+    from?: [number, number, number] | null
     to: [number, number, number]
     color?: [number, number, number] | null
     durationMs?: number | null
     velocity?: number | null
     width?: number | null
     weapon?: string | null
+    /**
+     * Resolve the shot origin from the unit's COB muzzle piece
+     * (Query<Primary|Secondary|Tertiary> via the setScriptPieceQuery
+     * resolver, positioned through the live piece transform chain).
+     * Falls back to the unit origin + a small vertical offset when the
+     * resolver / query / piece is missing.
+     */
+    fromUnit?: { id: number | string; weaponSlot?: number } | null
   }): Promise<void>
   /**
    * Play a unit's death: severity < 50 leaves the intact `corpse` wreck
@@ -395,6 +403,10 @@ export interface World {
    * onto the build target (whose rising wireframe→solid treatment rides
    * its buildPercent).  Keyed per build order; { on:false } stops it.
    * Endpoints track units (fromUnitId/toUnitId) or fix positions (from/to).
+   * A fromUnitId resolves the builder's COB QueryNanoPiece emitter (via
+   * the setScriptPieceQuery resolver) once at beam start and the spray
+   * tracks that piece's live world position; missing resolver / script
+   * falls back to the mid-hull anchor.
    */
   latheBeam(key: string | number, opts: {
     fromUnitId?: number | string | null
@@ -425,6 +437,22 @@ export interface World {
   terrainHeightAt(x: number, z: number): number
   /** Smoothed surface normal at a world XZ. */
   terrainNormalAt(x: number, z: number): [number, number, number]
+  /**
+   * Install the COB Query* resolver the weapon / lathe conveniences use to
+   * find emitter pieces — typically an engine session's queryScriptPiece:
+   *   world.setScriptPieceQuery((id, fn) => session.queryScriptPiece(id, fn))
+   * fn returns the COB piece-table index, or -1.  null uninstalls
+   * (everything falls back to unit-origin anchors).
+   */
+  setScriptPieceQuery(fn: ((unitId: number | string, fnName: string) => number) | null): void
+  /**
+   * CURRENT world position of one of a unit's model pieces through the full
+   * rendered transform chain (position, heading/pitch/roll, live COB piece
+   * pose).  `piece` is a piece name, or a COB piece-table index (an engine
+   * queryScriptPiece / FromPiece value) resolved through the unit's
+   * pieceNames.  Null when the unit / model / piece can't be resolved.
+   */
+  unitPieceWorldPos(id: number | string, piece: string | number): [number, number, number] | null
   /** Apply a renderer quality preset: 'standard' | 'cinematic'. */
   setQuality(name: string): boolean
   /** Most recent frame's cull counters: { drew, culled, total, … }. */
