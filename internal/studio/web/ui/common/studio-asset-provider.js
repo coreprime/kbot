@@ -86,6 +86,21 @@ export class StudioAssetProvider {
     if (!resp.ok) return null
     return resp.json()
   }
+
+  // unitPic resolves a unit's build picture through the studio's buildpic
+  // endpoint, or null when the install ships none — contract parity with
+  // HttpPackProvider.unitPic (pack v3).
+  async unitPic(name) {
+    try {
+      return await loadImage(`/api/studio/buildpic/${encodeURIComponent(name)}`)
+    } catch {
+      return null
+    }
+  }
+
+  unitPicUrl(name) {
+    return `/api/studio/buildpic/${encodeURIComponent(name)}`
+  }
 }
 
 export const studioAssetProvider = new StudioAssetProvider()

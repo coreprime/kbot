@@ -688,8 +688,11 @@ export class WasmSandboxScene {
     if (!this.source.hasMeta(name)) {
       this.source.registerMeta(name, await this._fetchMeta(name))
     }
-    // Spawn orders carry an integer TA-angle heading (not radians).
-    const heading = (Math.round(headingRad / ANGLE_TO_RAD) % 65536 + 65536) % 65536
+    // Spawn orders carry an integer TA-angle heading (not radians) in the
+    // SIM's internal parameterization, which sits a half turn from the
+    // boundary's game convention (heading 0 = north / -Z) — the same shift
+    // the wasm addUnit path applies inside the bridge.
+    const heading = ((Math.round(headingRad / ANGLE_TO_RAD) + 32768) % 65536 + 65536) % 65536
     this.source.spawn({ name, x, z, heading, side })
   }
 
@@ -1199,9 +1202,11 @@ export class WasmSandboxScene {
   // previous and latest tick buffers (packed Float32 stride-7:
   // ox, oy, oz, rx, ry, rz, visible). Rotations take the wrap-aware shortest
   // arc in TA-angle space so a spinning radar crossing the seam doesn't whip
-  // the long way round; visibility is a hard switch from the latest tick. The
-  // model loader X-flips geometry, so Z-translation and X/Y rotation flip
-  // sign while Z-rotation does not; piece lookups stay cached per clone.
+  // the long way round; visibility is a hard switch from the latest tick.
+  // The engine→renderer channel conversion (Z-translation and X-rotation
+  // flip sign, the rest pass through) is @kbot/game3d's enginePieceToPose
+  // contract — inlined here because the lerp must happen in raw engine
+  // space before converting; piece lookups stay cached per clone.
   _applyPieces(u, alpha) {
     const f0 = u._pieces0, f1 = u._pieces1
     if (!u.model || !f1) return
@@ -1225,7 +1230,7 @@ export class WasmSandboxScene {
       piece.move[1] = f0[o + 1] + (f1[o + 1] - f0[o + 1]) * alpha
       piece.move[2] = -(f0[o + 2] + (f1[o + 2] - f0[o + 2]) * alpha)
       piece.rotate[0] = -ANGLE_TO_RAD * arc(f0[o + 3], f1[o + 3])
-      piece.rotate[1] = -ANGLE_TO_RAD * arc(f0[o + 4], f1[o + 4])
+      piece.rotate[1] = ANGLE_TO_RAD * arc(f0[o + 4], f1[o + 4])
       piece.rotate[2] = ANGLE_TO_RAD * arc(f0[o + 5], f1[o + 5])
       piece.visible = f1[o + 6] !== 0
     }
@@ -1315,7 +1320,7 @@ export class WasmSandboxScene {
     if (!model || typeof model.findPiece !== 'function' || typeof model.resolvePieceWorld !== 'function') return zero
     const piece = model.findPiece(names[idx])
     if (!piece) return zero
-    const w = model.resolvePieceWorld(piece, owner.pos.x, owner.pos.y, owner.pos.z, owner.heading + Math.PI)
+    const w = model.resolvePieceWorld(piece, owner.pos.x, owner.pos.y, owner.pos.z, owner.heading)
     if (!w) return zero
     return { dx: w[0] - p.x, dy: w[1] - p.y, dz: w[2] - p.z }
   }
@@ -1481,7 +1486,7 @@ export class WasmSandboxScene {
     const piece = model.findPiece(names[idx])
     if (!piece) return fallback
     if (typeof model.resolvePieceWorld === 'function') {
-      const w = model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading + Math.PI)
+      const w = model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading)
       if (w) return w
     }
     return fallback

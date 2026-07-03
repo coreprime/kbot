@@ -602,7 +602,9 @@ export class SandboxView {
       // Below a small threshold (~3 wu) keep the previous heading —
       // jittery sub-wu motion shouldn't flip the ghost orientation.
       if (dx * dx + dz * dz < 9) return
-      this._placementDrag.headingRad = Math.atan2(dx, dz)
+      // Heading convention: facing along (dx, dz) is atan2(-dx, -dz) — a
+      // unit at heading θ faces (-sin θ, -cos θ).
+      this._placementDrag.headingRad = Math.atan2(-dx, -dz)
       this.#refreshEntities()
     }
     const onUp = async (ev) => {
@@ -1557,10 +1559,10 @@ export class SandboxView {
           const piece = bModel && bModel.findPiece(attach.pieceName)
           if (piece && bModel.resolvePieceWorld) {
             const bPos = attach.builder.pos
-            const wp = bModel.resolvePieceWorld(piece, bPos.x, bPos.y, bPos.z, attach.builder.heading + Math.PI)
+            const wp = bModel.resolvePieceWorld(piece, bPos.x, bPos.y, bPos.z, attach.builder.heading)
             if (wp) {
               posX = wp[0]; posY = wp[1]; posZ = wp[2]
-              padHeading = attach.builder.heading + Math.PI
+              padHeading = attach.builder.heading
             }
           }
         }
@@ -1573,7 +1575,7 @@ export class SandboxView {
         // colour over the hull while buildPercent < 100 (TA nano green,
         // TA:K casting gold — straight from the game adapter).
         buildFxColor: (activeGame().buildFx && activeGame().buildFx.color) || null,
-        transform: { x: posX, y: posY, z: posZ, headingRad: padHeading != null ? padHeading : u.heading + Math.PI },
+        transform: { x: posX, y: posY, z: posZ, headingRad: padHeading != null ? padHeading : u.heading },
         selected: this.scene.isSelected(u.id),
         // Inspector hover highlight — the Sync Diagnostics panel flags the
         // unit its hovered row points at, so the renderer outlines it.
@@ -1638,7 +1640,7 @@ export class SandboxView {
       // the ghost with that direction so the user previews where the
       // unit will face on release.
       const headingRad = (this._placementDrag && Number.isFinite(this._placementDrag.headingRad))
-        ? this._placementDrag.headingRad + Math.PI
+        ? this._placementDrag.headingRad
         : Math.PI
       entities.push({
         model: p.model,
@@ -1663,23 +1665,12 @@ export class SandboxView {
         model: pm,
         transform: {
           x: proj.pos.x, y: proj.pos.y, z: proj.pos.z,
-          // Orientation derivation.  Empirically (from the armmhmsl.3do
-          // bounds: z ∈ [-19.25, 2.5] — the body extends into -Z with the
-          // small pointy nose at +Z) the missile is authored facing +Z,
-          // unlike units which are authored facing -Z and so need the +π
-          // yaw compensator.  The renderer applies Rx(pitch) FIRST in
-          // object space then Ry(heading), so for a model whose initial
-          // forward is (0, 0, +1) the final forward direction works out to
-          //   (cos(pitch) sin(heading), -sin(pitch), cos(pitch) cos(heading))
-          // and we want this to equal the velocity direction
-          //   (cos(p) sin(h),  sin(p),  cos(p) cos(h))
-          // with p = proj.pitch and h = proj.heading.  Solving:
-          //   pitch_render   = -proj.pitch
-          //   heading_render = +proj.heading       (no π flip)
-          // The π flip used for units was the cause of the missile flying
-          // arse-first after pitching over: it rotated the nose 180° on
-          // the yaw axis, which only became visually obvious once the
-          // missile had transitioned out of the vertical pose.
+          // Raw game-convention heading: projectile models author their
+          // nose toward +Z (opposite of unit models), and the renderer
+          // applies the compensating half-turn itself for entities flagged
+          // isProjectile — so the missile flies nose-first with no caller
+          // side fix-up. Pitch negates because a climbing shot (engine
+          // pitch positive-up) tips the +Z-authored nose via Rx(-pitch).
           headingRad: proj.heading,
           pitchRad:   -proj.pitch,
         },

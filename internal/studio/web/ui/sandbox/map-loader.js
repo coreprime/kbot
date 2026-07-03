@@ -120,7 +120,9 @@ export async function spawnFactionLeader(view, commander, sideIndex = 0) {
   const cz = map ? map.worldH / 2 : 0
   const dx = cx - start.x
   const dz = cz - start.z
-  const headingRad = (dx || dz) ? Math.atan2(dx, dz) : 0
+  // Game heading convention: a unit at heading θ faces (-sin θ, -cos θ), so
+  // facing along (dx, dz) means θ = atan2(-dx, -dz).
+  const headingRad = (dx || dz) ? Math.atan2(-dx, -dz) : 0
   const model = await view.loader.load(commander)
   await view.scene.addUnit({
     name: commander, model,
