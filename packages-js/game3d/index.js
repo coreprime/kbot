@@ -21,8 +21,10 @@ export {
   enginePieceToPose,
   unpackEnginePieces,
   applyPackedPieces,
+  lerpPackedPieces,
 } from './cob-pose.js'
 export { loadMapTerrain, MAP_CELL_WU, MAP_HEIGHT_SCALE } from './map-terrain.js'
+export { createTerrainSampler } from './terrain-sample.js'
 
 // Core renderer stack
 export { Mat4 } from './mat4.js'
@@ -57,9 +59,17 @@ export {
   playWeaponSound,
 } from './weapon-driver.js'
 export { loadWeaponBitmap, clearWeaponBitmapCache } from './weapon-bitmap-loader.js'
+export {
+  normalizePackWeaponDef,
+  weaponVisualPlan,
+  spawnWeaponVisual,
+  impactBurst,
+  resolveDeathPlan,
+  damageSmokeIntervalMs,
+} from './world-fx.js'
 
 // Team + texture configuration
-export { TEAM_SIDES, setTeamSides, teamColorForSide, displayRgbForSide, sideForKey } from './team-colors.js'
+export { TEAM_SIDES, TA_TEAM_SIDES, setTeamSides, teamColorForSide, displayRgbForSide, sideForKey } from './team-colors.js'
 export { setEnhanceMeshEnabled, enhanceMeshEnabled, onEnhanceMeshChanged } from './enhance-mesh.js'
 export {
   resolveTextureHints,

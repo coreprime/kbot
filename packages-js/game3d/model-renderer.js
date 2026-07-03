@@ -48,6 +48,7 @@ import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
 import { MAX_PULSE_LIGHTS, setMaxSceneLights } from './scene-lights.js'
 import { getAssetProvider, toTexImageSource } from './assets.js'
+import { createTerrainSampler } from './terrain-sample.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Scratch buffers for the dynamic pulse-light uniform arrays, sized to
@@ -535,6 +536,19 @@ export class ModelRenderer {
   // them like any other scene geometry.
   setWeaponEffects(segments) {
     this._weaponEffects = Array.isArray(segments) && segments.length ? segments : null
+    this.requestRedraw()
+  }
+
+  // setUnitOverlays installs this frame's per-unit status billboards —
+  // health bars + veteran-rank chevrons drawn world-anchored in the scene
+  // pass (so headless captures include them).  Each entry:
+  //   { x, y, z,          — the unit's world position
+  //     rWU,              — half-width anchor (bounding radius, world units)
+  //     hp01?,            — 0..1 health fraction; bar drawn only when < 1
+  //     rank? }           — 0..5 veteran rank; chevrons drawn when > 0
+  // Pass null/empty to clear.  Drawn by #renderUnitOverlays.
+  setUnitOverlays(items) {
+    this._unitOverlays = Array.isArray(items) && items.length ? items : null
     this.requestRedraw()
   }
 
@@ -1731,6 +1745,12 @@ export class ModelRenderer {
     const now = performance.now()
     const dt = now - this._fxLastMs
     this._fxLastMs = now
+    // External-clock mode: a driver (replay renderer, headless capture)
+    // advances the clock explicitly via advanceFxClock so every animated
+    // effect (running-light blink, sea bob, hover wobble) is a pure
+    // function of the driven timeline — deterministic across runs and
+    // frozen only when the driver stops feeding time.
+    if (this._fxExternal) return
     const rt = this.cobBinding && this.cobBinding.runtime
     const paused = !!(rt && rt.paused)
     this._fxPaused = paused
@@ -1747,6 +1767,17 @@ export class ModelRenderer {
   // in _syncFxClock, once per frame).
   _fxTimeSec() {
     return this._fxTimeMs / 1000
+  }
+
+  // setFxClockExternal switches the effect clock from wall-time to
+  // caller-driven: _syncFxClock stops advancing it and the driver feeds
+  // time through advanceFxClock (createWorld's step(dtMs) does this for
+  // explicitly-stepped worlds so blink/wobble phase follows sim time).
+  setFxClockExternal(on) { this._fxExternal = !!on }
+
+  // advanceFxClock adds dtMs of effect time in external-clock mode.
+  advanceFxClock(dtMs) {
+    this._fxTimeMs += Math.max(0, +dtMs || 0)
   }
 
   draw() {
@@ -2034,11 +2065,15 @@ export class ModelRenderer {
         if (entYaw !== 0) {
           Mat4.rotateY(this._modelMatrix, this._modelMatrix, entYaw)
         }
-        // Optional pitch — model-projectiles (missiles / bombs) tilt their
-        // nose along the flight path; units leave pitchRad unset.  Applied
-        // after the yaw so the mesh banks then dives like the real round.
+        // Optional pitch/roll — model-projectiles tilt their nose along the
+        // flight path, grounded units pitch + roll to the terrain normal
+        // under them, and hit-rock impulses ride the same channels.
+        // Applied after the yaw so the tilt happens in the unit's own frame.
         if (t.pitchRad) {
           Mat4.rotateX(this._modelMatrix, this._modelMatrix, t.pitchRad)
+        }
+        if (t.rollRad) {
+          Mat4.rotateZ(this._modelMatrix, this._modelMatrix, t.rollRad)
         }
         // Per-entity locomotion pose overlay — sandbox hovercraft gyrate +
         // aircraft bank into their turns, same as the single-unit path.  Each
@@ -2170,6 +2205,9 @@ export class ModelRenderer {
       // taller foreground geometry).  Only meaningful in multi-entity
       // mode — single-entity mode never sets `selected`.
       this.#renderSelectionRings(this._entities)
+      // Health bars + veteran rank chevrons — world-anchored status UI,
+      // drawn with the entities so replay captures carry them.
+      this.#renderUnitOverlays()
       // Phase 3 — render the impostor batch AFTER the full / mid
       // entity loop so far-tier coloured dots composite on top of
       // the ground (their natural visual stack) but under particles
@@ -2238,6 +2276,13 @@ export class ModelRenderer {
     // each call.
     if (this._entities) {
       const savedPool = this._particlePool
+      // World-level pool first (createWorld's weapon/death/damage effects
+      // live in ONE shared pool installed via setParticlePool) so per-entity
+      // binding pools composite over it.
+      if (savedPool && savedPool.count > 0) {
+        this.#renderParticles()
+        this.#renderSpriteParticles()
+      }
       for (const ent of this._entities) {
         const pool = ent.binding && ent.binding.particles
         // Cull particle pools whose owning entity is well outside the
@@ -2453,8 +2498,17 @@ export class ModelRenderer {
         if (t.x !== 0 || t.y !== 0 || t.z !== 0) {
           Mat4.translate(this._modelMatrix, this._modelMatrix, t.x, t.y, t.z)
         }
-        if (t.headingRad !== 0) {
-          Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
+        // Same yaw + tilt chain as the main pass (including the projectile
+        // nose flip) so a tilted unit's shadow matches its silhouette.
+        const shadowYaw = (+t.headingRad || 0) + (ent.isProjectile ? Math.PI : 0)
+        if (shadowYaw !== 0) {
+          Mat4.rotateY(this._modelMatrix, this._modelMatrix, shadowYaw)
+        }
+        if (t.pitchRad) {
+          Mat4.rotateX(this._modelMatrix, this._modelMatrix, t.pitchRad)
+        }
+        if (t.rollRad) {
+          Mat4.rotateZ(this._modelMatrix, this._modelMatrix, t.rollRad)
         }
         this.#drawGeometry(this.model.root, this._modelMatrix, true)
       }
@@ -2501,7 +2555,10 @@ export class ModelRenderer {
     gl.uniform1f(this.uSkyCloudCov, s.cloudCoverage)
     gl.uniform1f(this.uSkyCloudDen, s.cloudDensity)
     gl.uniform1f(this.uSkyCloudSpd, s.cloudSpeed)
-    gl.uniform1f(this.uSkyTime, (performance.now() - this._t0) / 1000)
+    // Sky animation rides the effect clock (not raw wall time) so cloud
+    // drift pauses with the sim and stays deterministic under an
+    // external-clock driver.
+    gl.uniform1f(this.uSkyTime, this._fxTimeSec())
     gl.uniform1f(this.uSkyOptGodBeams, this.optGodBeams ? 1 : 0)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
     gl.disableVertexAttribArray(this.aSkyPos)
@@ -2925,6 +2982,10 @@ export class ModelRenderer {
       // in-process re-slicing; clipRect/clipCenter track the current window.
       srcImage: image, clipTex, clipCanvas, clipSize: CLIP_SIZE, clipFrac, clipActive,
       clipRect: null, clipCenter: null,
+      // CPU-side surface sampler over the SOURCE-resolution height field —
+      // terrainHeightAt / terrainNormalAt answer from it so grounded units,
+      // wrecks and ground picks sit exactly on the drawn mesh.
+      sampler: createTerrainSampler({ heights, w, h, cellWU, heightScale, originX, originZ }),
     }
     if (clipActive) {
       // Seed the cache on the map centre; draw() re-centres it on the camera.
@@ -3032,6 +3093,22 @@ export class ModelRenderer {
     try { if (mt.heightTex) gl.deleteTexture(mt.heightTex) } catch { /* context loss */ }
     try { if (mt.waterVbo) gl.deleteBuffer(mt.waterVbo) } catch { /* context loss */ }
     this._mapTerrain = null
+  }
+
+  // terrainHeightAt samples the installed battlefield's surface Y at a world
+  // XZ — the same Y the drawn mesh has there (heights × heightScale over the
+  // mesh's own triangulation).  Returns 0 with no map terrain installed so
+  // callers on the flat pad keep their ground at the origin plane.
+  terrainHeightAt(x, z) {
+    const mt = this._mapTerrain
+    return mt && mt.sampler ? mt.sampler.heightAt(x, z) : 0
+  }
+
+  // terrainNormalAt returns the smoothed surface normal at a world XZ, or
+  // straight-up on the flat pad.  Drives grounded units' slope tilt.
+  terrainNormalAt(x, z) {
+    const mt = this._mapTerrain
+    return mt && mt.sampler ? mt.sampler.normalAt(x, z) : [0, 1, 0]
   }
 
   // ── Frame: reflection pass for Studio Mode on Sea ───────────
@@ -4311,6 +4388,100 @@ export class ModelRenderer {
       gl.uniformMatrix4fv(this.uWireWorld, false, mat)
       gl.drawArrays(gl.LINE_LOOP, 0, 4)
     }
+    gl.enable(gl.DEPTH_TEST)
+  }
+
+  // #renderUnitOverlays draws the installed per-unit status billboards:
+  // a green→red health bar under the unit (only when hp01 < 1) and up to
+  // five gold veteran chevrons beside it.  Segments are built in the
+  // camera's screen plane (world-anchored, camera-right for the bar run,
+  // camera-up for the drop below the hull) through the wire program with
+  // pixel-thickened lines, so the bars stay crisp at any resolution and
+  // appear in headless captures like any other scene-pass geometry.
+  // Depth test off — status UI must read over terrain bumps and hulls.
+  #renderUnitOverlays() {
+    const items = this._unitOverlays
+    if (!items || !items.length || !this.programWire || !this.camera) return
+    const gl = this.gl
+    if (!this._fxLineVBO) {
+      this._fxLineVBO = gl.createBuffer()
+      this._fxLineData = new Float32Array(6)
+    }
+    const v = this.camera.viewMatrix
+    // Camera basis in world space (rotation rows of the view matrix).
+    const rx = v[0], ry = v[4], rz = v[8]
+    const ux = v[1], uy = v[5], uz = v[9]
+    gl.useProgram(this.programWire)
+    gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    gl.uniformMatrix4fv(this.uWireWorld, false, IDENTITY_MAT4)
+    gl.disable(gl.DEPTH_TEST)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.depthMask(false)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._fxLineVBO)
+    gl.enableVertexAttribArray(this.aWirePos)
+    gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+    const vw = gl.drawingBufferWidth || 1
+    const vh = gl.drawingBufferHeight || 1
+    const seg = (ax, ay, az, bx, by, bz, color, alpha, widthPx) => {
+      const d = this._fxLineData
+      d[0] = ax; d[1] = ay; d[2] = az
+      d[3] = bx; d[4] = by; d[5] = bz
+      gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW)
+      gl.uniform4f(this.uWireColor, color[0], color[1], color[2], alpha)
+      const width = Math.max(1, widthPx | 0)
+      const offsets = width <= 1 ? [[0, 0]] : this.#thickLineOffsets(width, vw, vh)
+      for (const [dx, dy] of offsets) {
+        gl.uniform2f(this.uWirePixelOffset, dx, dy)
+        gl.drawArrays(gl.LINES, 0, 2)
+      }
+    }
+    for (const it of items) {
+      if (!it) continue
+      const r = Math.max(6, +it.rWU || 12)
+      const barW = Math.max(12, Math.min(48, r * 1.5))
+      // Anchor: unit position dropped below the hull along camera-up.
+      const drop = r * 0.9 + 3
+      const cx = it.x - ux * drop
+      const cy = it.y - uy * drop
+      const cz = it.z - uz * drop
+      const x0 = cx - rx * barW * 0.5, y0 = cy - ry * barW * 0.5, z0 = cz - rz * barW * 0.5
+      const hp = it.hp01
+      const showBar = hp != null && hp < 1
+      if (showBar) {
+        const frac = Math.max(0, Math.min(1, hp))
+        // Backing slab, then the green→red fill on top.
+        seg(x0, y0, z0, x0 + rx * barW, y0 + ry * barW, z0 + rz * barW, [0, 0, 0], 0.6, 5)
+        if (frac > 0.01) {
+          const fill = [Math.min(1, 2 * (1 - frac)), Math.min(1, 2 * frac), 0.08]
+          const fw = barW * frac
+          seg(x0, y0, z0, x0 + rx * fw, y0 + ry * fw, z0 + rz * fw, fill, 0.95, 3)
+        }
+      }
+      const rank = Math.max(0, Math.min(5, it.rank | 0))
+      if (rank > 0) {
+        // Gold chevrons marching right from the bar's end (or the anchor
+        // when no bar shows).  Each is a ^ built from two segments.
+        const gold = [1.0, 0.84, 0.25]
+        const step = 3.4
+        const half = 1.5
+        const rise = 2.0
+        let bx = x0 + rx * (barW + 3), by = y0 + ry * (barW + 3), bz = z0 + rz * (barW + 3)
+        for (let i = 0; i < rank; i++) {
+          const ax0 = bx, ay0 = by, az0 = bz
+          const apx = bx + rx * half + ux * rise
+          const apy = by + ry * half + uy * rise
+          const apz = bz + rz * half + uz * rise
+          const ex = bx + rx * half * 2, ey = by + ry * half * 2, ez = bz + rz * half * 2
+          seg(ax0, ay0, az0, apx, apy, apz, gold, 0.95, 2)
+          seg(apx, apy, apz, ex, ey, ez, gold, 0.95, 2)
+          bx += rx * step; by += ry * step; bz += rz * step
+        }
+      }
+    }
+    gl.uniform2f(this.uWirePixelOffset, 0, 0)
+    gl.depthMask(true)
     gl.enable(gl.DEPTH_TEST)
   }
 

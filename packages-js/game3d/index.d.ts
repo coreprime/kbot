@@ -104,6 +104,18 @@ export function applyPackedPieces(
   packed: Uint8Array | Float32Array,
   cache?: Map<string, unknown> | null,
 ): void
+/**
+ * Interpolate two engine packed piece buffers (stride-7) by alpha:
+ * offsets lerp linearly, rotations take the shortest arc in TA-angle
+ * space (65536/turn), visibility switches hard from `next`.  Feeds
+ * applyState's piecesPacked for smooth between-tick output frames.
+ */
+export function lerpPackedPieces(
+  prevPacked: Uint8Array | Float32Array | null | undefined,
+  nextPacked: Uint8Array | Float32Array | null | undefined,
+  alpha: number,
+  out?: Float32Array,
+): Float32Array | null
 
 // Packed-map terrain (map-terrain.js): turn a pack's maps/<name>.json +
 // tile atlas into ModelRenderer.setMapTerrain() arguments.
@@ -126,6 +138,25 @@ export function loadMapTerrain(provider: AssetProvider, name: string): Promise<{
   minimapUrl: string | null
   ota: object | null
 }>
+
+/**
+ * CPU sampler over a battlefield height field with the renderer mesh's
+ * exact triangulation.  heightAt answers in display world-Y (raw height ×
+ * heightScale); rawHeightAt in source units; normalAt is smoothed.
+ */
+export function createTerrainSampler(t: {
+  heights: ArrayLike<number>
+  w: number
+  h: number
+  cellWU?: number
+  heightScale?: number
+  originX?: number
+  originZ?: number
+}): {
+  heightAt: (x: number, z: number) => number
+  rawHeightAt: (x: number, z: number) => number
+  normalAt: (x: number, z: number) => [number, number, number]
+}
 
 export function setAssetProvider(provider: AssetProvider | null): void
 export function getAssetProvider(): AssetProvider | null
@@ -166,6 +197,12 @@ export interface UnitPlacement {
   side?: number
   teamColor?: [number, number, number] | null
   buildPercent?: number
+  /** Clamp render Y to the terrain surface + slope-tilt to its normal. */
+  grounded?: boolean
+  /** 0..1 health fraction — health bar (when < 1) + damage smoke. */
+  hp01?: number | null
+  /** 0..5 veteran rank chevrons. */
+  rank?: number
 }
 
 export interface SnapshotPieceState {
@@ -182,16 +219,28 @@ export interface SnapshotUnit {
   x?: number
   y?: number
   z?: number
-  /** Radians, game convention: 0 faces -Z (north) — headingToRadians of a wire heading, or the engine snapshot's headingRad. */
+  /** Radians, game convention: 0 faces -Z (north) — headingToRadians of a wire heading, or the engine snapshot's headingRad. Externally-lerped values render as-is. */
   heading?: number
   pitch?: number
+  roll?: number
   buildPercent?: number
   side?: number
   teamColor?: [number, number, number]
+  /** Clamp render Y to terrain + slope-tilt (set tilt:false to keep flat). */
+  grounded?: boolean
+  tilt?: boolean
+  /** 0..1 health fraction — health bar (when < 1) + damage smoke. */
+  hp01?: number | null
+  /** 0..5 veteran rank chevrons beside the health bar. */
+  rank?: number
+  /** dead:true on a live unit triggers unitDeath(id, { severity: deathSeverity, corpse, heapCorpse }) once. */
   dead?: boolean
+  deathSeverity?: number
+  corpse?: string | null
+  heapCorpse?: string | null
   /** COB piece table (index-aligned with piecesPacked); static per type. */
   pieceNames?: string[]
-  /** Engine stride-7 packed piece transforms, applied by name via pieceNames. */
+  /** Engine stride-7 packed piece transforms, applied by name via pieceNames (optionally pre-blended with lerpPackedPieces). */
   piecesPacked?: Uint8Array | Float32Array
   /** Pre-converted renderer channels: Model.flat order, or COB order when pieceNames is set. */
   pieces?: SnapshotPieceState[]
@@ -207,9 +256,21 @@ export interface SnapshotProjectile {
   pitch?: number
 }
 
+export interface SnapshotSfxEvent {
+  /** 'emitSfx' (COB emit-sfx smoke/bubbles) or 'explode' (COB EXPLODE flash); other kinds no-op. */
+  kind: string
+  unitId?: number
+  sfxType?: number
+  x?: number
+  y?: number
+  z?: number
+}
+
 export interface WorldSnapshot {
   units?: SnapshotUnit[]
   projectiles?: SnapshotProjectile[]
+  /** Engine render events — forwarded unfiltered; see World.sfxEvent. */
+  events?: SnapshotSfxEvent[]
 }
 
 export interface World {
@@ -239,9 +300,13 @@ export interface World {
     lifeMs?: number
   }): void
   /**
-   * Spawn a presentation-only weapon visual (beam / ballistic tracer) drawn
-   * in the scene pass. Data-driven from pack weapon defs when `weapon`
-   * names a weapons.json id; explicit fields win.
+   * Spawn a presentation-only weapon visual.  With `weapon` (a pack
+   * weapons.json id) the shot renders through the studio's visual
+   * pipeline: palette-tinted laser pulse beams, the D-gun fireball +
+   * flame trail, packed projectile meshes with TDF-cadenced smoke
+   * trails, fx.gaf bitmap bolts, AoE-scaled particle tracers, muzzle
+   * flash/start-smoke and impact bursts.  Without a resolvable weapon,
+   * `type` picks the legacy line beam/tracer.  Explicit fields override.
    */
   weaponEffect(opts: {
     type?: 'beam' | 'laser' | 'tracer' | null
@@ -253,6 +318,38 @@ export interface World {
     width?: number | null
     weapon?: string | null
   }): Promise<void>
+  /**
+   * Play a unit's death: severity < 50 leaves the intact `corpse` wreck
+   * (sunk slightly, persists until removeCorpse/clearCorpses); 50..99
+   * throws polygon debris + leaves `heapCorpse`; ≥ 100 debris only.
+   * Corpse names come from the pack unitdb meta (corpseObject /
+   * corpseHeapObject).  Removes the live unit; returns false if unknown.
+   */
+  unitDeath(id: number | string, opts?: {
+    severity?: number
+    corpse?: string | null
+    heapCorpse?: string | null
+    redraw?: boolean
+  }): boolean
+  removeCorpse(id: number | string): void
+  clearCorpses(): void
+  corpseIds(): Array<number | string>
+  /**
+   * Presentation-only hit-rock: the unit shudders on a damped pitch/roll
+   * spring.  dirX/dirZ is the impact push direction in world space; mag
+   * 1 ≈ light round, 4 ≈ heavy shell.
+   */
+  unitImpulse(id: number | string, opts: { dirX?: number; dirZ?: number; mag?: number }): void
+  /** Render one engine render event ('emitSfx' smoke / 'explode' flash). */
+  sfxEvent(ev: SnapshotSfxEvent): void
+  /** Install (or clear with null) a battlefield — the loadMapTerrain payload. */
+  setTerrain(terrain: object | null): void
+  /** Surface Y at a world XZ (0 on the flat pad) — what `grounded` clamps to. */
+  terrainHeightAt(x: number, z: number): number
+  /** Smoothed surface normal at a world XZ. */
+  terrainNormalAt(x: number, z: number): [number, number, number]
+  /** Apply a renderer quality preset: 'standard' | 'cinematic'. */
+  setQuality(name: string): boolean
   /** Most recent frame's cull counters: { drew, culled, total, … }. */
   stats(): { drew: number; culled: number; total: number; shadowed: number; full: number; mid: number; far: number }
   units(): Array<number | string>
@@ -264,11 +361,14 @@ export function createWorld(
   opts: {
     assets: AssetProvider
     game?: {
+      /** Defaults to the TA player palette (TA_TEAM_SIDES) when omitted. */
       teamSides?: unknown[]
       lodHidePatterns?: RegExp[]
       projectileFallbackColors?: Record<string, unknown>
     }
     environment?: string | object | null
+    /** Renderer quality preset: 'standard' (default) | 'cinematic'. */
+    quality?: string
     controls?: boolean
     autoStart?: boolean
     contextAttributes?: WebGLContextAttributes
@@ -408,7 +508,19 @@ export function playWeaponSound(opts: object): void
 export function loadWeaponBitmap(weaponName: string): Promise<object | null>
 export function clearWeaponBitmapCache(): void
 
+// World FX (world-fx.js) — the data-driven weapon/death presentation
+// createWorld's weaponEffect/unitDeath build on; exported for drivers and
+// headless tests.
+export function normalizePackWeaponDef(id: string, def: object | null): object | null
+export function weaponVisualPlan(w: object | null): 'beam' | 'model' | 'particle'
+export function spawnWeaponVisual(opts: object): object | null
+export function impactBurst(binding: object, pos: number[], opts?: { aoe?: number; sparks?: boolean }): void
+export function resolveDeathPlan(opts?: { severity?: number; corpse?: string | null; heapCorpse?: string | null }): { debris: boolean; corpse: string | null }
+export function damageSmokeIntervalMs(hp01: number | null | undefined): number | null
+
 // Team + texture configuration
+/** TA's player-colour table (side 0..7) — the default createWorld installs; map a recording's player slot onto `side` with it. */
+export const TA_TEAM_SIDES: Array<{ side: number; key: string; label: string; rgb: [number, number, number] | null; swatchCss: string }>
 export const TEAM_SIDES: unknown[]
 export function setTeamSides(sides: unknown[] | null | undefined): void
 export function teamColorForSide(side: number): [number, number, number]

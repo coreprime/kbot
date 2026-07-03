@@ -112,6 +112,74 @@ export function unpackEnginePieces(packed) {
 }
 
 /**
+ * lerpPackedPieces interpolates between two engine packed piece buffers
+ * (stride-7 Float32: ox, oy, oz world-unit offsets, rx, ry, rz TA-angle
+ * rotations, visible flag) by alpha ∈ [0, 1] — the tool a replay driver
+ * uses to sample COB piece poses BETWEEN engine ticks so walk gaits and
+ * turret slews render smoothly at any output frame rate.
+ *
+ * Offsets lerp linearly.  Rotations take the wrap-aware SHORTEST ARC in
+ * TA-angle space (65536 per turn), so a spinning radar crossing the wrap
+ * seam eases straight through it instead of whipping the long way round.
+ * Visibility is a hard switch from the `next` buffer (hide/show is an
+ * instant script action, not a fade).
+ *
+ * The result feeds applyState's `piecesPacked` unchanged; positions and
+ * headings interpolated the same way (linear + shortest-arc) pair with it
+ * — applyState renders externally-lerped values as-is.
+ *
+ * Buffer-length mismatches (a piece table swap mid-seek) fall back to the
+ * `next` buffer so the caller never renders a half-blended wrong table.
+ *
+ * @param {Uint8Array|Float32Array|null|undefined} prevPacked
+ * @param {Uint8Array|Float32Array|null|undefined} nextPacked
+ * @param {number} alpha  Blend fraction, clamped to [0, 1].
+ * @param {Float32Array} [out]  Optional destination (avoids allocation
+ *   when its length matches); a fresh Float32Array otherwise.
+ * @returns {Float32Array|null}  Stride-7 blended buffer, or null when
+ *   nextPacked is empty.
+ */
+export function lerpPackedPieces(prevPacked, nextPacked, alpha, out = null) {
+  const next = _packedFloats(nextPacked)
+  if (!next) return null
+  const prev = _packedFloats(prevPacked)
+  if (!prev || prev.length !== next.length) {
+    const copy = out && out.length === next.length ? out : new Float32Array(next.length)
+    copy.set(next)
+    return copy
+  }
+  let a = +alpha
+  if (!(a >= 0)) a = 0
+  else if (a > 1) a = 1
+  const dst = out && out.length === next.length ? out : new Float32Array(next.length)
+  const n = (next.length / 7) | 0
+  const HALF = TA_FULL_CIRCLE / 2
+  for (let i = 0; i < n; i++) {
+    const o = i * 7
+    dst[o] = prev[o] + (next[o] - prev[o]) * a
+    dst[o + 1] = prev[o + 1] + (next[o + 1] - prev[o + 1]) * a
+    dst[o + 2] = prev[o + 2] + (next[o + 2] - prev[o + 2]) * a
+    for (let c = 3; c <= 5; c++) {
+      let d = (next[o + c] - prev[o + c]) % TA_FULL_CIRCLE
+      if (d > HALF) d -= TA_FULL_CIRCLE
+      else if (d < -HALF) d += TA_FULL_CIRCLE
+      dst[o + c] = prev[o + c] + d * a
+    }
+    dst[o + 6] = next[o + 6]
+  }
+  return dst
+}
+
+// _packedFloats views a packed piece buffer as Float32 (shared with
+// unpackEnginePieces' input handling).
+function _packedFloats(packed) {
+  if (!packed || !packed.byteLength) return null
+  return packed instanceof Float32Array
+    ? packed
+    : new Float32Array(packed.buffer, packed.byteOffset, packed.byteLength >> 2)
+}
+
+/**
  * applyPackedPieces poses one model instance from an engine snapshot's
  * packed piece transforms, addressing pieces BY NAME through the unit type's
  * COB piece table (hide/show and animation land on the piece the script

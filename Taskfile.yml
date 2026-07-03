@@ -80,13 +80,13 @@ tasks:
     desc: Run all tests
     cmds:
       - go test ./...
-      - node --test packages-js/game-takingdoms/contract.test.js packages-js/game3d/test/cob-pose.test.js "internal/studio/web/ui/map-editor/tak-rotate.test.js"
+      - node --test packages-js/game-takingdoms/contract.test.js "packages-js/game3d/test/*.test.js" "internal/studio/web/ui/map-editor/tak-rotate.test.js"
       - node packages-js/engine/test/replay-smoke.mjs
 
   test-js:
     desc: Run the JS unit tests (adapter contract + pure UI helpers + engine replay smoke)
     cmds:
-      - node --test packages-js/game-takingdoms/contract.test.js packages-js/game3d/test/cob-pose.test.js "internal/studio/web/ui/map-editor/tak-rotate.test.js"
+      - node --test packages-js/game-takingdoms/contract.test.js "packages-js/game3d/test/*.test.js" "internal/studio/web/ui/map-editor/tak-rotate.test.js"
       - node packages-js/engine/test/replay-smoke.mjs
 
   test-verbose:
