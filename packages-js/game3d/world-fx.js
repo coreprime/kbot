@@ -594,13 +594,18 @@ export function latheConeSpray(pool, {
 // world up (the debris base transform carries no pitch/roll), so gravity and
 // terrain bounces integrate exactly in that frame.
 //
-// Spread: each fragment flies a WIDE upward-biased cone.  When the fragment
-// carries a `centroid` (shard model) its outward direction is seeded from the
-// centroid's bearing off the model centre, so the shatter genuinely bursts
-// away from the core in every direction rather than scattering on one axis;
-// legacy piece entries (no centroid) get a random bearing.  Speeds and the
-// three-axis spin rates are all independently randomised per fragment so the
-// shower doesn't corkscrew in unison.
+// Spread: each fragment flies a clean OUTWARD parabola.  When the fragment
+// carries a `centroid` (shard model) its launch direction is the centroid's
+// TRUE radial bearing off the model centre, so every shard arcs straight away
+// from the core; legacy piece entries (no centroid) get a random bearing.
+// The horizontal outward speed is the DOMINANT component (a fragment travels
+// much further out than up) so the motion reads as a spray of arcs, not a
+// loft-and-hang that the eye mistakes for orbiting.  A small per-fragment
+// bearing jitter and independent three-axis spin keep the shower from moving
+// in lockstep, but the jitter is deliberately tiny: a large launch-angle
+// wobble makes each shard's world path curve away from its radial line, and
+// dozens of curving paths read as a vortex.  Spin is a PURELY VISUAL tumble —
+// the geometry is recentred on the shard pivot, so spin adds no translation.
 //
 // Directional bias: when the killing impact came from somewhere, pass
 // impactDir ([x, z], WORLD frame, pointing from the explosion source toward
@@ -612,7 +617,7 @@ export function latheConeSpray(pool, {
 // `rng` defaults to Math.random — deterministic drivers pass a seeded one
 // (createWorld seeds from the unit id + position).
 export function debrisBurst(model, {
-  speed = 55, lift = 90, rng = Math.random,
+  speed = 90, lift = 55, rng = Math.random,
   impactDir = null, impactMag = 0, headingRad = 0,
 } = {}) {
   const pieces = []
@@ -628,14 +633,16 @@ export function debrisBurst(model, {
     pushZ = (sn * wx + c * wz) * mag
   }
   for (const piece of model.flat) {
-    // Outward bearing.  A shard fragment bursts along its offset from the
-    // model centre (centroid direction on the XZ plane); a legacy piece
-    // picks a random bearing.  A small rng wobble on the shard case keeps
-    // co-located shards from launching on identical vectors.
+    // Outward bearing.  A shard fragment launches along its TRUE radial off
+    // the model centre (centroid direction on the XZ plane); a legacy piece
+    // picks a random bearing.  The jitter on the shard case is intentionally
+    // tiny (±~9°) so co-located shards don't launch identically WITHOUT the
+    // path curving away from its radial line — a big launch-angle wobble is
+    // what read as a vortex.
     let dirX, dirZ
     const cen = piece.centroid
     if (Array.isArray(cen) && (cen[0] || cen[2])) {
-      const wob = (rng() - 0.5) * 1.1
+      const wob = (rng() - 0.5) * 0.32   // ±~9°
       const base = Math.atan2(cen[2], cen[0]) + wob
       dirX = Math.cos(base)
       dirZ = Math.sin(base)
@@ -644,22 +651,26 @@ export function debrisBurst(model, {
       dirX = Math.cos(ang)
       dirZ = Math.sin(ang)
     }
-    // Wide speed spread so fragments separate into a cloud rather than a
-    // shell of equal-radius pieces.
-    const mag = speed * (0.35 + rng() * 1.25)
-    // Upward bias, but a full solid-angle spread: some shards rocket up,
-    // some skim outward low — vy ranges from a shallow skim to a high loft.
-    const up = lift * (0.25 + rng() * 1.15)
+    // Outward horizontal speed is the DOMINANT component — every fragment
+    // gets a substantial radial push (floor 0.7·speed) so it clears the unit
+    // and keeps going, spreading the shower into a ring of arcs.
+    const mag = speed * (0.7 + rng() * 0.7)
+    // Upward lift is SECONDARY: a moderate loft (always < the outward speed on
+    // average) so the fragment arcs up-and-out then falls, rather than
+    // rocketing straight up and hanging over the unit.
+    const up = lift * (0.5 + rng() * 0.9)
     pieces.push({
       piece,
       vx: dirX * mag + pushX * (0.6 + rng() * 0.8),
       vy: up,
       vz: dirZ * mag + pushZ * (0.6 + rng() * 0.8),
-      // Independent, wide-range angular velocities per axis (rad/s): each
+      // Independent, moderate angular velocities per axis (rad/s): each
       // fragment tumbles on its own, so the shower never spins in lockstep.
-      sx: (rng() * 2 - 1) * 12,
-      sy: (rng() * 2 - 1) * 12,
-      sz: (rng() * 2 - 1) * 12,
+      // Kept below the old ±12 so the visible spin doesn't outpace the
+      // outward travel (fast spin on a slow-moving shard reads as milling).
+      sx: (rng() * 2 - 1) * 7,
+      sy: (rng() * 2 - 1) * 7,
+      sz: (rng() * 2 - 1) * 7,
       bounces: 0,
       settled: false,
     })
