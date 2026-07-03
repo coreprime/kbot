@@ -44,6 +44,35 @@ world.dispose()
 is importable individually (`@kbot/game3d/model-renderer`, …) and shares
 module state with the root entry.
 
+## Game conventions (headings + COB pieces)
+
+`cob-pose.js` (exported from the root) is the single source of truth for the
+game's pose conventions, matched against the original engine:
+
+- **World axes**: +X east, +Y up, +Z south — a map renders the same way as
+  its minimap.
+- **Heading**: uint16 TA angle, 65536 per turn. Heading 0 faces **−Z
+  (north)**; a unit at heading `h` moves along `(-sin, -cos)` of
+  `h·2π/65536`, and the compass walks north → west → south → east. Feed raw
+  wire/recording headings through `headingToRadians(h)` — no offsets, no
+  sign fix-ups — into `transform.headingRad` / `applyState`'s `heading`.
+- **COB piece transforms**: axis 0 = x (pitch, positive = nose down),
+  1 = y (yaw, positive turns with increasing heading), 2 = z (roll). Convert
+  engine piece state with `enginePieceToPose` / `unpackEnginePieces`, and
+  apply it **by name** through the unit's COB piece table with
+  `applyPackedPieces` — COB table order is not the model hierarchy order
+  (a Samson lists its launcher flares before its body).
+
+Weapon visuals: `world.weaponEffect({ type, from, to, color, durationMs })`
+draws presentation-only beams (`'beam'`/`'laser'`) and ballistic tracers
+(`'tracer'`) in the scene pass; pass `weapon: '<id>'` to resolve type, color
+and timing from the pack's `weapons.json` (`AssetProvider.weaponDefs()`).
+
+Maps: `loadMapTerrain(provider, name)` composites a packed map's tile atlas
+into the full ground texture and returns the arguments
+`renderer.setMapTerrain()` takes, plus sea level, start positions and the
+authentic minimap URL.
+
 ## The AssetProvider seam
 
 Implement this interface against any asset backend and pass it as

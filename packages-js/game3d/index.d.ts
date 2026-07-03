@@ -85,6 +85,48 @@ export interface WeaponBitmapMeta {
   sequence?: string
 }
 
+// Engine <-> renderer pose conventions (cob-pose.js): heading 0 faces -Z
+// (north), 65536 TA angle units per turn; COB piece transforms convert via
+// enginePieceToPose and apply BY NAME through the COB piece table.
+export const TA_FULL_CIRCLE: number
+export const TA_ANGLE_TO_RAD: number
+export function headingToRadians(taHeading: number): number
+export function enginePieceToPose(
+  ox: number, oy: number, oz: number,
+  rx: number, ry: number, rz: number,
+): { move: [number, number, number]; rotate: [number, number, number] }
+export function unpackEnginePieces(
+  packed: Uint8Array | Float32Array | null | undefined,
+): Array<{ move: [number, number, number]; rotate: [number, number, number]; visible: boolean }> | null
+export function applyPackedPieces(
+  model: Model,
+  pieceNames: string[],
+  packed: Uint8Array | Float32Array,
+  cache?: Map<string, unknown> | null,
+): void
+
+// Packed-map terrain (map-terrain.js): turn a pack's maps/<name>.json +
+// tile atlas into ModelRenderer.setMapTerrain() arguments.
+export const MAP_CELL_WU: number
+export const MAP_HEIGHT_SCALE: number
+export function loadMapTerrain(provider: AssetProvider, name: string): Promise<{
+  image: HTMLCanvasElement
+  heights: Uint8Array
+  w: number
+  h: number
+  cellWU: number
+  heightScale: number
+  seaLevel: number
+  worldW: number
+  worldH: number
+  voids: Uint8Array | null
+  startPositions: Array<{ number: number; x: number; z: number }>
+  features: Array<{ name: string; ax: number; ay: number }>
+  name: string
+  minimapUrl: string | null
+  ota: object | null
+}>
+
 export function setAssetProvider(provider: AssetProvider | null): void
 export function getAssetProvider(): AssetProvider | null
 export function requireAssetProvider(): AssetProvider
@@ -140,13 +182,18 @@ export interface SnapshotUnit {
   x?: number
   y?: number
   z?: number
+  /** Radians, game convention: 0 faces -Z (north) — headingToRadians of a wire heading, or the engine snapshot's headingRad. */
   heading?: number
   pitch?: number
   buildPercent?: number
   side?: number
   teamColor?: [number, number, number]
   dead?: boolean
-  /** Indexed like Model.flat. */
+  /** COB piece table (index-aligned with piecesPacked); static per type. */
+  pieceNames?: string[]
+  /** Engine stride-7 packed piece transforms, applied by name via pieceNames. */
+  piecesPacked?: Uint8Array | Float32Array
+  /** Pre-converted renderer channels: Model.flat order, or COB order when pieceNames is set. */
   pieces?: SnapshotPieceState[]
 }
 
@@ -191,6 +238,21 @@ export interface World {
     strength?: number
     lifeMs?: number
   }): void
+  /**
+   * Spawn a presentation-only weapon visual (beam / ballistic tracer) drawn
+   * in the scene pass. Data-driven from pack weapon defs when `weapon`
+   * names a weapons.json id; explicit fields win.
+   */
+  weaponEffect(opts: {
+    type?: 'beam' | 'laser' | 'tracer' | null
+    from: [number, number, number]
+    to: [number, number, number]
+    color?: [number, number, number] | null
+    durationMs?: number | null
+    velocity?: number | null
+    width?: number | null
+    weapon?: string | null
+  }): Promise<void>
   /** Most recent frame's cull counters: { drew, culled, total, … }. */
   stats(): { drew: number; culled: number; total: number; shadowed: number; full: number; mid: number; far: number }
   units(): Array<number | string>

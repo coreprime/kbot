@@ -83,6 +83,11 @@
  * @property {() => Promise<Object>} [manifest]  Game manifest: sides, palettes, unit list.
  * @property {() => Promise<Object>} [unitDB]    Parsed FBI/TDF unit database + movement classes.
  * @property {(name: string) => Promise<Object>} [map]  Map pack: heightmap + tiles + features + minimap.
+ * @property {(name: string) => Promise<Object>} [mapData]  Alias of map() under the pack v3 driver contract.
+ * @property {(name: string) => Promise<HTMLImageElement>} [mapTiles]  The map's 32x32 tile-pool atlas (loadMapTerrain composites the ground texture from it).
+ * @property {(name: string) => (string|null)} [minimap]  URL of the map's authentic TNT minimap PNG.
+ * @property {(name: string) => Promise<HTMLImageElement|null>} [unitPic]  The unit's build picture (null when the install ships none).
+ * @property {() => Promise<Object>} [weaponDefs]  Weapon catalogue keyed by lowercase weapon id: { renderType, color: [r,g,b], color2?, durationSec?, velocityWU?, model?, beamWeapon? } — the render-relevant TDF fields for mapping WeaponFire events onto weaponEffect() visuals.
  *
  * Known implementations:
  *   - StudioAssetProvider (KBot Studio web client) — wraps the studio

@@ -60,6 +60,9 @@ const _PULSE_RANGE = new Float32Array(MAX_PULSE_LIGHTS)
 // referenced by the frustum-cull predicate so the hot path doesn't
 // allocate a fresh object per entity per frame.
 const _IDENTITY_T = Object.freeze({ x: 0, y: 0, z: 0, headingRad: 0 })
+// Identity world matrix for passes whose vertices are already world-space
+// (weapon-effect beam segments).
+const IDENTITY_MAT4 = Mat4.identity(Mat4.create())
 // LOD tier ids — stored on each entity as `_lodTier` between frames so
 // the hysteresis classifier knows the previous tier.  Ordered
 // largest→smallest so a numeric comparison works ("tier > Mid" =
@@ -524,6 +527,17 @@ export class ModelRenderer {
     this.autoRotate = !!on
   }
 
+  // setWeaponEffects installs this frame's weapon-visual line segments —
+  // beams / tracers the world layer ages and positions (create-world's
+  // weaponEffect()). Each entry: { a: [x,y,z], b: [x,y,z], color: [r,g,b],
+  // alpha, width? }. Drawn by #renderWeaponEffects inside the scene pass
+  // (blended, depth-tested, no depth write) so headless captures include
+  // them like any other scene geometry.
+  setWeaponEffects(segments) {
+    this._weaponEffects = Array.isArray(segments) && segments.length ? segments : null
+    this.requestRedraw()
+  }
+
   // setPulseLights pushes up to MAX_PULSE_LIGHTS dynamic point lights into the
   // next main + ground + reflection passes.  `lights` is an array of
   // { pos:[x,y,z], color:[r,g,b], strength } — over-1 colour values are fine
@@ -640,10 +654,10 @@ export class ModelRenderer {
   //     lerping the piece back to its script pose ("snap back").  A later
   //     script TURN / SPIN still re-drives the axis, so the dial never fights
   //     scripting.
-  // Angles are radians; the binding's per-axis sign flip (X/Y negated, Z
-  // passthrough) is mirrored here so the direct write and the synced write
-  // agree on direction.
-  _pieceRotSign(axis) { return axis === 2 ? 1 : -1 }
+  // Angles are radians; the binding's per-axis sign convention (X negated,
+  // Y/Z passthrough — see cob-pose.js enginePieceToPose) is mirrored here so
+  // the direct write and the synced write agree on direction.
+  _pieceRotSign(axis) { return axis === 0 ? -1 : 1 }
   rotatePiece(name, axis, rad) {
     if (!this.model || !this.model.root || axis < 0 || axis > 2) return
     const piece = this.model.root.findByName(name)
@@ -2012,8 +2026,13 @@ export class ModelRenderer {
         if (t.x !== 0 || t.y !== 0 || t.z !== 0) {
           Mat4.translate(this._modelMatrix, this._modelMatrix, t.x, t.y, t.z)
         }
-        if (t.headingRad !== 0) {
-          Mat4.rotateY(this._modelMatrix, this._modelMatrix, t.headingRad)
+        // Projectile 3DOs are authored nose-toward+Z — the OPPOSITE of unit
+        // models, whose rest nose faces -Z (heading 0 = north). One half-turn
+        // here lets every caller feed the same game-convention heading for
+        // both kinds of entity; without it a missile flies tail-first.
+        const entYaw = (+t.headingRad || 0) + (ent.isProjectile ? Math.PI : 0)
+        if (entYaw !== 0) {
+          Mat4.rotateY(this._modelMatrix, this._modelMatrix, entYaw)
         }
         // Optional pitch — model-projectiles (missiles / bombs) tilt their
         // nose along the flight path; units leave pitchRad unset.  Applied
@@ -2196,6 +2215,10 @@ export class ModelRenderer {
     // hull.  No-op (null) in multi-entity mode, where projectiles are
     // ordinary entities in the loop above.
     if (this._overlayProjectiles) this.#renderOverlayProjectiles()
+    // Weapon beams / tracers — part of the scene pass proper (after solid
+    // geometry, before highlights/particles) so they show up in headless
+    // captures and depth-clip against the world like real light streaks.
+    if (this._weaponEffects) this.#renderWeaponEffects()
     if (this._hoveredPieceName || this._hoveredTexture) {
       // Hover highlight: bright red wireframe on the hovered piece
       // (with its descendants) AND/OR every piece whose drawGroups
@@ -3184,7 +3207,9 @@ export class ModelRenderer {
       ut.x = +t.x || 0
       ut.y = +t.y || 0
       ut.z = +t.z || 0
-      ut.headingRad = +t.headingRad || 0
+      // Projectile models author nose+Z (see the entity loop's half-turn
+      // rationale) — add the same flip so overlay missiles fly nose-first.
+      ut.headingRad = (+t.headingRad || 0) + Math.PI
       Mat4.identity(this._modelMatrix)
       Mat4.translate(this._modelMatrix, this._modelMatrix, ut.x, ut.y, ut.z)
       if (ut.headingRad !== 0) Mat4.rotateY(this._modelMatrix, this._modelMatrix, ut.headingRad)
@@ -3976,6 +4001,54 @@ export class ModelRenderer {
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW)
     this._groundVBO = buf
     this._groundVertexCount = verts.length / 3
+  }
+
+  // #renderWeaponEffects draws the installed weapon-visual segments as
+  // GL_LINES through the wire program (identity world matrix — the segment
+  // endpoints are already world-space). Additive blending so overlapping
+  // beams brighten like light does; depth test on / depth write off so a
+  // beam clips behind terrain and hulls but never pollutes the DoF depth.
+  // One draw per segment keeps the path trivial; weapon effects are few
+  // and short-lived, so batching would buy nothing measurable.
+  #renderWeaponEffects() {
+    const fx = this._weaponEffects
+    if (!fx || !fx.length || !this.programWire || !this.camera) return
+    const gl = this.gl
+    if (!this._fxLineVBO) {
+      this._fxLineVBO = gl.createBuffer()
+      this._fxLineData = new Float32Array(6)
+    }
+    gl.useProgram(this.programWire)
+    gl.uniformMatrix4fv(this.uWireProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uWireView, false, this.camera.viewMatrix)
+    gl.uniformMatrix4fv(this.uWireWorld, false, IDENTITY_MAT4)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
+    gl.depthMask(false)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._fxLineVBO)
+    gl.enableVertexAttribArray(this.aWirePos)
+    gl.vertexAttribPointer(this.aWirePos, 3, gl.FLOAT, false, 0, 0)
+    const vw = gl.drawingBufferWidth || 1
+    const vh = gl.drawingBufferHeight || 1
+    for (const seg of fx) {
+      if (!seg || !seg.a || !seg.b) continue
+      const d = this._fxLineData
+      d[0] = seg.a[0]; d[1] = seg.a[1]; d[2] = seg.a[2]
+      d[3] = seg.b[0]; d[4] = seg.b[1]; d[5] = seg.b[2]
+      gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW)
+      const c = seg.color || [1, 1, 1]
+      const alpha = seg.alpha == null ? 1 : seg.alpha
+      gl.uniform4f(this.uWireColor, c[0], c[1], c[2], alpha)
+      const width = Math.max(1, (seg.width || 2) | 0)
+      const offsets = width <= 1 ? [[0, 0]] : this.#thickLineOffsets(width, vw, vh)
+      for (const [dx, dy] of offsets) {
+        gl.uniform2f(this.uWirePixelOffset, dx, dy)
+        gl.drawArrays(gl.LINES, 0, 2)
+      }
+    }
+    gl.uniform2f(this.uWirePixelOffset, 0, 0)
+    gl.depthMask(true)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
   }
 
   #initWireProgram(vsSrc, fsSrc) {

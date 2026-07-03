@@ -13,11 +13,12 @@
 //   })
 //
 // Pack layout (mirrors `kbot pack --help`):
-//   manifest.json / unitdb.json / palette.json
+//   manifest.json / unitdb.json / palette.json / weapons.json
 //   models/<name>.json        cob/<name>.json
 //   textures/<name>.png       (name--<side>.png for per-side variants)
 //   sounds/<stem>.wav         weaponbitmaps/<weapon>.json
 //   cursors/<sequence>.png    groundtiles/<tileset>.png
+//   unitpics/<name>.png       build pictures (formatVersion 3+)
 //   maps/<name>.json          (+ .tiles.png / .minimap.png)
 //
 // Filenames in a pack are lower-case with characters outside
@@ -164,5 +165,47 @@ export class HttpPackProvider {
 
   async map(name) {
     return this.fetchJson(`maps/${packStem(name)}.json`, `map ${name}`)
+  }
+
+  // mapData is map() under the name the pack v3 driver contract uses.
+  async mapData(name) {
+    return this.map(name)
+  }
+
+  // mapTiles resolves the map's 32x32 tile-pool atlas — the texture sheet
+  // loadMapTerrain composites the full ground image from.
+  mapTiles(name) {
+    return loadImage(this.url(`maps/${packStem(name)}.tiles.png`))
+  }
+
+  // minimap returns the URL of the authentic TNT minimap render for a
+  // packed map (an <img>-assignable immutable PNG).
+  minimap(name) {
+    return this.url(`maps/${packStem(name)}.minimap.png`)
+  }
+
+  // unitPic resolves a unit's build picture (unitpics/<name>.png,
+  // formatVersion 3+), or null when the install ships none for it.
+  async unitPic(name) {
+    try {
+      return await loadImage(this.url(`unitpics/${packStem(name)}.png`))
+    } catch {
+      return null
+    }
+  }
+
+  // unitPicUrl is the <img>-assignable fast path for build pictures.
+  unitPicUrl(name) {
+    return this.url(`unitpics/${packStem(name)}.png`)
+  }
+
+  // weaponDefs returns the pack's weapon catalogue (weapons.json,
+  // formatVersion 3+) as an id → definition object: renderType, resolved
+  // [r,g,b] colors, durationSec, velocityWU, model — the fields a driver
+  // maps WeaponFire events onto weaponEffect() visuals with. {} when the
+  // pack predates v3.
+  async weaponDefs() {
+    const json = await this.fetchJson('weapons.json', 'weapon defs', { optional: true })
+    return (json && json.weapons) || {}
   }
 }

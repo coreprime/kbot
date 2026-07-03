@@ -11,6 +11,19 @@ export { createWorld } from './create-world.js'
 export { setAssetProvider, getAssetProvider, requireAssetProvider, toTexImageSource } from './assets.js'
 export { HttpPackProvider } from './http-pack-provider.js'
 
+// Engine <-> renderer pose conventions (heading + COB piece transforms) — the
+// canonical constants/helpers a driver (replayer, lobby) uses to feed raw
+// game data through the renderer with no per-driver sign or offset fix-ups.
+export {
+  TA_FULL_CIRCLE,
+  TA_ANGLE_TO_RAD,
+  headingToRadians,
+  enginePieceToPose,
+  unpackEnginePieces,
+  applyPackedPieces,
+} from './cob-pose.js'
+export { loadMapTerrain, MAP_CELL_WU, MAP_HEIGHT_SCALE } from './map-terrain.js'
+
 // Core renderer stack
 export { Mat4 } from './mat4.js'
 export { TAPalette } from './palette.js'

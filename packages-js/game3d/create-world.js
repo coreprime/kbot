@@ -26,9 +26,11 @@ import { setAssetProvider } from './assets.js'
 import { setTeamSides, teamColorForSide } from './team-colors.js'
 import { setProjectileFallbackColors } from './weapon-driver.js'
 import { loadWorlds } from './worlds.js'
+import { applyPackedPieces } from './cob-pose.js'
 
-// TA 3DOs author the nose toward -Z; the renderer applies heading + π,
-// so a unit spawned at heading π renders its native rest pose facing +Z.
+// Loaded models rest nose toward -Z (the direction a raw game heading of 0
+// faces — see cob-pose.js), so the default display pose for a bare addUnit
+// is a half turn: the unit faces +Z, toward the default camera.
 const REST_HEADING = Math.PI
 
 /**
@@ -93,6 +95,8 @@ export async function createWorld(canvas, {
   const units = new Map()        // id → unit record
   let projectiles = []           // transient snapshot-provided shots
   let tracers = []               // fireWeapon() visual tracers
+  let weaponFx = []              // weaponEffect() beams / ballistic tracers
+  let weaponDefsCache = null     // lazily-loaded pack weapons.json index
   let nextId = 1
   let disposed = false
 
@@ -131,6 +135,47 @@ export async function createWorld(canvas, {
       color: s.color,
       strength: s.strength,
     })))
+    renderer.setWeaponEffects(weaponFxSegments())
+  }
+
+  // weaponFxSegments turns the live weaponEffect() records into the line
+  // segments the renderer's scene pass draws this frame: a beam is its full
+  // muzzle→target span fading out over its duration; a tracer is a short
+  // streak riding the shot's straight-line flight, fading near arrival.
+  const weaponFxSegments = () => {
+    if (!weaponFx.length) return null
+    const out = []
+    for (const fx of weaponFx) {
+      const t = fx.ageMs / fx.durationMs
+      if (fx.type === 'tracer') {
+        const head = Math.min(1, t)
+        const tail = Math.max(0, head - fx.streak)
+        out.push({
+          a: [
+            fx.from[0] + (fx.to[0] - fx.from[0]) * tail,
+            fx.from[1] + (fx.to[1] - fx.from[1]) * tail,
+            fx.from[2] + (fx.to[2] - fx.from[2]) * tail,
+          ],
+          b: [
+            fx.from[0] + (fx.to[0] - fx.from[0]) * head,
+            fx.from[1] + (fx.to[1] - fx.from[1]) * head,
+            fx.from[2] + (fx.to[2] - fx.from[2]) * head,
+          ],
+          color: fx.color,
+          alpha: Math.max(0, 1 - t * t),
+          width: fx.width,
+        })
+      } else {
+        out.push({
+          a: fx.from.slice(),
+          b: fx.to.slice(),
+          color: fx.color,
+          alpha: Math.max(0, 1 - t),
+          width: fx.width,
+        })
+      }
+    }
+    return out
   }
 
   const world = {
@@ -157,6 +202,10 @@ export async function createWorld(canvas, {
           s.lifeMs -= dtMs
         }
         tracers = tracers.filter((s) => s.lifeMs > 0)
+      }
+      if (weaponFx.length) {
+        for (const fx of weaponFx) fx.ageMs += dtMs
+        weaponFx = weaponFx.filter((fx) => fx.ageMs < fx.durationMs)
       }
       syncEntities()
       if (!renderer.running) renderer.draw()
@@ -203,11 +252,24 @@ export async function createWorld(canvas, {
     // (the engine's frame.Snapshot shape):
     //   { units: [{ id, model|name, x, y, z, heading, pitch?,
     //       buildPercent?, side?, teamColor?, dead?,
+    //       pieceNames?: [...],           // the type's COB piece table
+    //       piecesPacked?: Uint8Array,    // engine stride-7 piece buffer
     //       pieces?: [{ move:[x,y,z], rotate:[x,y,z], visible }] }],
     //     projectiles: [{ id, model?, x, y, z, heading?, pitch? }] }
-    // Units keep their per-instance model clones across snapshots;
-    // pieces[] (indexed like Model.flat) poses the clone.  Models still
-    // loading simply skip frames until their geometry lands.
+    //
+    // heading is radians in the game convention — feed a raw TA heading
+    // through headingToRadians (cob-pose.js) or pass the engine snapshot's
+    // headingRad straight through.
+    //
+    // Piece animation prefers the engine's native form: pieceNames (static
+    // per unit type — resend or set once, it's remembered) + piecesPacked
+    // per tick. Pieces are addressed BY NAME because COB piece-table order
+    // is not the model's hierarchy order — index-blind application is how
+    // a Samson's hidden build flares land on its body and make the truck
+    // vanish. The conventions conversion lives in cob-pose.js. The legacy
+    // pieces[] array (pre-converted renderer channels, Model.flat order,
+    // or COB order when pieceNames is present) still applies for callers
+    // that pose pieces themselves.
     applyState(snapshot = {}) {
       const seen = new Set()
       for (const su of snapshot.units || []) {
@@ -231,20 +293,43 @@ export async function createWorld(canvas, {
         if (su.buildPercent != null) u.buildPercent = su.buildPercent
         if (su.teamColor) u.teamColor = su.teamColor
         else if (su.side != null) u.teamColor = teamColorForSide(su.side)
-        if (u.model && Array.isArray(su.pieces)) {
-          const flat = u.model.flat
-          const n = Math.min(flat.length, su.pieces.length)
-          for (let i = 0; i < n; i++) {
-            const ps = su.pieces[i]
-            if (!ps) continue
-            const piece = flat[i]
-            if (Array.isArray(ps.move)) {
-              piece.move[0] = ps.move[0]; piece.move[1] = ps.move[1]; piece.move[2] = ps.move[2]
+        if (Array.isArray(su.pieceNames)) u.pieceNames = su.pieceNames
+        if (u.model) {
+          if (u._pieceCacheModel !== u.model) {
+            u._pieceCacheModel = u.model
+            u._pieceCache = new Map()
+          }
+          if (su.piecesPacked && u.pieceNames) {
+            applyPackedPieces(u.model, u.pieceNames, su.piecesPacked, u._pieceCache)
+          } else if (Array.isArray(su.pieces)) {
+            // Pre-converted renderer channels. With pieceNames the entries
+            // are COB-table-ordered and land by name; without, they map
+            // onto Model.flat by index (single-hierarchy callers).
+            const n = su.pieces.length
+            for (let i = 0; i < n; i++) {
+              const ps = su.pieces[i]
+              if (!ps) continue
+              let piece
+              if (u.pieceNames) {
+                const nm = u.pieceNames[i]
+                if (!nm) continue
+                piece = u._pieceCache.get(nm)
+                if (piece === undefined) {
+                  piece = u.model.findPiece(nm)
+                  u._pieceCache.set(nm, piece || null)
+                }
+              } else {
+                piece = u.model.flat[i]
+              }
+              if (!piece) continue
+              if (Array.isArray(ps.move)) {
+                piece.move[0] = ps.move[0]; piece.move[1] = ps.move[1]; piece.move[2] = ps.move[2]
+              }
+              if (Array.isArray(ps.rotate)) {
+                piece.rotate[0] = ps.rotate[0]; piece.rotate[1] = ps.rotate[1]; piece.rotate[2] = ps.rotate[2]
+              }
+              if (ps.visible != null) piece.visible = !!ps.visible
             }
-            if (Array.isArray(ps.rotate)) {
-              piece.rotate[0] = ps.rotate[0]; piece.rotate[1] = ps.rotate[1]; piece.rotate[2] = ps.rotate[2]
-            }
-            if (ps.visible != null) piece.visible = !!ps.visible
           }
         }
       }
@@ -296,6 +381,60 @@ export async function createWorld(canvas, {
       })
     },
 
+    // weaponEffect spawns a presentation-only weapon visual — no sim
+    // impact, no hashes, just scene-pass geometry that ages out:
+    //   type 'beam'   — a coloured line from muzzle to target fading over
+    //                   durationMs (lasers, lightning).
+    //   type 'tracer' — a short bright streak flying from → to over
+    //                   durationMs (cannon rounds, ballistic shots).
+    // Fields: { type, from: [x,y,z], to: [x,y,z], color?: [r,g,b] 0..1,
+    //   durationMs?, velocity? (wu/sec, tracer flight speed when durationMs
+    //   is unset), width? (px), weapon? }.
+    //
+    // Data-driven form: pass `weapon` (a weapons.json id from the pack —
+    // AssetProvider.weaponDefs()) and the def's rendertype picks the visual
+    // (beam for rendertype 0 lasers, tracer otherwise), its palette-resolved
+    // color colours it, durationSec times a beam and velocityWU a tracer.
+    // Explicit fields always win over the def.
+    async weaponEffect({ type = null, from, to, color = null, durationMs = null, velocity = null, width = null, weapon = null } = {}) {
+      if (!Array.isArray(from) || !Array.isArray(to)) return
+      let def = null
+      if (weapon) {
+        if (!weaponDefsCache) {
+          const provider = assets
+          if (provider && typeof provider.weaponDefs === 'function') {
+            weaponDefsCache = await provider.weaponDefs().catch(() => null) || {}
+          } else {
+            weaponDefsCache = {}
+          }
+        }
+        def = weaponDefsCache[String(weapon).toLowerCase()] || null
+      }
+      const isBeam = type ? (type === 'beam' || type === 'laser') : (def ? def.renderType === 0 : true)
+      let c = color
+      if (!c && def && Array.isArray(def.color)) c = [def.color[0] / 255, def.color[1] / 255, def.color[2] / 255]
+      if (!c) c = isBeam ? [0.4, 1, 0.35] : [1, 0.85, 0.4]
+      let dur = durationMs
+      if (dur == null && isBeam && def && def.durationSec > 0) dur = def.durationSec * 1000
+      if (dur == null && !isBeam) {
+        const dist = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2])
+        const v = velocity || (def && def.velocityWU) || 300
+        dur = (dist / Math.max(1, v)) * 1000
+      }
+      if (dur == null) dur = 150
+      weaponFx.push({
+        type: isBeam ? 'beam' : 'tracer',
+        from: from.slice(0, 3),
+        to: to.slice(0, 3),
+        color: c,
+        durationMs: Math.max(1, dur),
+        ageMs: 0,
+        width: width || (isBeam ? 2 : 2),
+        streak: 0.18,
+      })
+      if (!renderer.running) world.step(0)
+    },
+
     // stats exposes the renderer's per-frame cull counters
     // ({ drew, culled, total, … }) — the draw-count assertion hook.
     stats() {
@@ -314,6 +453,7 @@ export async function createWorld(canvas, {
       units.clear()
       projectiles = []
       tracers = []
+      weaponFx = []
       renderer.dispose()
     },
   }
