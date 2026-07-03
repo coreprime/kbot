@@ -2957,17 +2957,13 @@ export class ModelRenderer {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, mt.clipCanvas)
-    gl.generateMipmap(gl.TEXTURE_2D)
+    // No mipmap chain: the near window is magnified on screen, so LINEAR
+    // is visually equivalent and skips a full-cache generateMipmap on
+    // every recentre (a pipeline stall when the camera pans).
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    const ext = gl.getExtension('EXT_texture_filter_anisotropic') ||
-      gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic')
-    if (ext) {
-      gl.texParameterf(gl.TEXTURE_2D, ext.TEXTURE_MAX_ANISOTROPY_EXT,
-        gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT))
-    }
     mt.clipRect = [ox + x0, oz + z0, winW, winH]
     mt.clipCenter = [ox + x0 + winW / 2, oz + z0 + winH / 2]
     this.requestRedraw()
@@ -2981,8 +2977,17 @@ export class ModelRenderer {
     if (!mt || !mt.clipActive || !this.camera || !this.camera.target) return
     const tx = this.camera.target[0], tz = this.camera.target[2]
     if (!mt.clipCenter) { this.updateGroundClipmap(tx, tz); return }
-    const winW = mt.rect[2] * mt.clipFrac
-    const dx = tx - mt.clipCenter[0], dz = tz - mt.clipCenter[1]
+    // Gate on where the CLAMPED window centre would land, not the raw
+    // focus: near a map edge the clamp pins the centre, so a raw-focus
+    // distance can stay past the threshold forever and re-slice the
+    // 4096 cache EVERY frame (a full-pipeline stall per frame).
+    const ox = mt.rect[0], oz = mt.rect[1], mw = mt.rect[2], mh = mt.rect[3]
+    const winW = mw * mt.clipFrac, winH = mh * mt.clipFrac
+    let x0 = (tx - ox) - winW / 2, z0 = (tz - oz) - winH / 2
+    x0 = Math.max(0, Math.min(mw - winW, x0))
+    z0 = Math.max(0, Math.min(mh - winH, z0))
+    const wx = ox + x0 + winW / 2, wz = oz + z0 + winH / 2
+    const dx = wx - mt.clipCenter[0], dz = wz - mt.clipCenter[1]
     if (Math.hypot(dx, dz) > winW * 0.3) this.updateGroundClipmap(tx, tz)
   }
 
