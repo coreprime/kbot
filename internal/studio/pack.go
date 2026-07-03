@@ -147,6 +147,9 @@ type packManifest struct {
 	// Weapons names the weapon catalogue file ("weapons.json"); empty when
 	// the install defines no weapons (nothing is written in that case).
 	Weapons string `json:"weapons,omitempty"`
+	// Features names the map-feature catalogue file ("features.json",
+	// format v5); empty when the install defines no features.
+	Features string `json:"features,omitempty"`
 	// ContentHash is sha256 over every pack file except manifest.json
 	// (sorted by path; see BuildPack) — the pack's identity.
 	ContentHash string `json:"contentHash"`
@@ -629,12 +632,42 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		}
 	}
 
+	// features.json — the full install feature catalogue (format v5): map
+	// placements name features by id, so the catalogue must resolve any of
+	// them regardless of which maps this pack carries.  Skipped when the
+	// install defines none.
+	featuresFile := ""
+	featureCatalog := sess.buildPackFeatureCatalog()
+	if len(featureCatalog) > 0 {
+		body, err := packJSONIndent(packFeaturesFileJSON{Features: featureCatalog})
+		if err != nil {
+			return nil, fmt.Errorf("encode features: %w", err)
+		}
+		if err := pw.write("features.json", body); err != nil {
+			return nil, err
+		}
+		featuresFile = "features.json"
+	}
+
 	// ── Maps ──
-	mapsPacked, err := buildPackMaps(sess, pw, opts.Maps, warnf)
+	mapsPacked, mapFeatureNames, err := buildPackMaps(sess, pw, opts.Maps, warnf)
 	if err != nil {
 		return nil, err
 	}
 	res.Maps = mapsPacked
+	// Feature 3DO models referenced by the packed maps (wrecks, dragon
+	// teeth, other object= features) so a map's real-model features render
+	// from the pack alone.  Sorted for a deterministic walk.
+	sort.Strings(mapFeatureNames)
+	for _, fname := range mapFeatureNames {
+		f, ok := featureCatalog[fname]
+		if !ok || f.Object == "" {
+			continue
+		}
+		if ce, ok := sess.resolveModelEntry(f.Object); ok {
+			writeModel(ce)
+		}
+	}
 
 	// ── unitdb.json + README ──
 	db := packUnitDBJSON{
@@ -678,8 +711,12 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// renderer needs (ballistic, smokeTrail, startSmoke, commandFire,
 		// areaOfEffectWU, rangeWU, raw colour indices, sound stems), and
 		// packed the whole weapon catalogue's projectile meshes, sounds and
-		// bitmap sprite strips.  Older readers ignore all of them.
-		FormatVersion: 4,
+		// bitmap sprite strips.  FormatVersion 5 added the features.json map-
+		// feature catalogue (manifest features field), packed the 3DO models
+		// of map-referenced object features, and extended weapons.json with
+		// the guided-flight fields (turnRate, waterWeapon, accelerationWU,
+		// flightTimeSec).  Older readers ignore all of them.
+		FormatVersion: 5,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -689,6 +726,7 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		Units:         selected,
 		Maps:          mapsPacked,
 		Weapons:       weaponsFile,
+		Features:      featuresFile,
 		ContentHash:   hash,
 	}
 	manBytes, err := packJSONIndent(manifest)
@@ -705,10 +743,12 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	return res, nil
 }
 
-// buildPackMaps extracts the requested maps ("all" = every maps/*.tnt).
-func buildPackMaps(sess *Session, pw *packWriter, requested []string, warnf func(string, ...any)) ([]string, error) {
+// buildPackMaps extracts the requested maps ("all" = every maps/*.tnt).  The
+// second return lists every feature id the packed maps place (lower-case,
+// de-duplicated, unsorted) so the caller can pack object-feature models.
+func buildPackMaps(sess *Session, pw *packWriter, requested []string, warnf func(string, ...any)) ([]string, []string, error) {
 	if len(requested) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// Index the install's TNTs by lower-case base name.
 	tntByName := map[string]string{}
@@ -733,7 +773,7 @@ func buildPackMaps(sess *Session, pw *packWriter, requested []string, warnf func
 				continue
 			}
 			if _, ok := tntByName[n]; !ok {
-				return nil, fmt.Errorf("unknown map %q (no maps/%s.tnt in this install)", n, n)
+				return nil, nil, fmt.Errorf("unknown map %q (no maps/%s.tnt in this install)", n, n)
 			}
 			names = append(names, n)
 		}
@@ -741,31 +781,42 @@ func buildPackMaps(sess *Session, pw *packWriter, requested []string, warnf func
 	sort.Strings(names)
 
 	var packed []string
+	featureSeen := map[string]bool{}
+	var featureNames []string
 	for _, name := range names {
 		mapPath := tntByName[name]
-		if err := writePackMap(sess, pw, name, mapPath); err != nil {
+		placed, err := writePackMap(sess, pw, name, mapPath)
+		if err != nil {
 			warnf("map %s: %v", name, err)
 			continue
 		}
 		packed = append(packed, name)
+		for _, fname := range placed {
+			if !featureSeen[fname] {
+				featureSeen[fname] = true
+				featureNames = append(featureNames, fname)
+			}
+		}
 	}
-	return packed, nil
+	return packed, featureNames, nil
 }
 
 // writePackMap emits maps/<name>.json plus its tile-pool atlas + minimap
 // PNGs — the same data /api/studio/load and /api/studio/tile-pool serve.
-func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
+// Returns the lower-case feature ids the map places (with duplicates) so the
+// caller can pack their object models.
+func writePackMap(sess *Session, pw *packWriter, name, mapPath string) ([]string, error) {
 	data, err := sess.vfs.ReadFile(mapPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	reader := bytes.NewReader(data)
 	m, err := tnt.LoadFromReader(reader)
 	if err != nil {
-		return fmt.Errorf("parse TNT: %w", err)
+		return nil, fmt.Errorf("parse TNT: %w", err)
 	}
 	if m.IsTAK {
-		return fmt.Errorf("TA:Kingdoms texture-mapped maps are not packed yet")
+		return nil, fmt.Errorf("TA:Kingdoms texture-mapped maps are not packed yet")
 	}
 	features, _ := m.LoadFeatures(reader)
 	placements := m.GetFeaturePlacements()
@@ -784,6 +835,7 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
 		}
 	}
 	outFeatures := make([]loadedFeature, 0, len(placements))
+	placedNames := make([]string, 0, len(placements))
 	for _, p := range placements {
 		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
 			continue
@@ -793,6 +845,7 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
 			continue
 		}
 		outFeatures = append(outFeatures, loadedFeature{Name: fname, AX: p.AttrX, AY: p.AttrY})
+		placedNames = append(placedNames, strings.ToLower(fname))
 	}
 
 	stem := packStem(name)
@@ -829,10 +882,10 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
 	}
 	var atlasBuf bytes.Buffer
 	if err := png.Encode(&atlasBuf, atlas); err != nil {
-		return fmt.Errorf("encode tile pool: %w", err)
+		return nil, fmt.Errorf("encode tile pool: %w", err)
 	}
 	if err := pw.write(out.TilePool, atlasBuf.Bytes()); err != nil {
-		return err
+		return nil, err
 	}
 
 	if m.Minimap != nil {
@@ -841,7 +894,7 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
 			if err := png.Encode(&buf, img); err == nil {
 				out.Minimap = "maps/" + stem + ".minimap.png"
 				if err := pw.write(out.Minimap, buf.Bytes()); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
@@ -849,9 +902,12 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) error {
 
 	body, err := packJSON(out)
 	if err != nil {
-		return fmt.Errorf("encode map json: %w", err)
+		return nil, fmt.Errorf("encode map json: %w", err)
 	}
-	return pw.write("maps/"+stem+".json", body)
+	if err := pw.write("maps/"+stem+".json", body); err != nil {
+		return nil, err
+	}
+	return placedNames, nil
 }
 
 // hashPackFiles computes the pack content hash: sha256 over
@@ -899,6 +955,11 @@ Files:
   entry's "weapons" array maps its fire slots onto these keys; every
   catalogue-referenced projectile mesh, sound and bitmap sprite strip
   is packed alongside.
+- features.json — every map-feature definition in the install keyed by
+  lower-case id: category, footprint, height, the 3DO object name for
+  model features (wrecks, dragon teeth — the maps' referenced objects
+  are packed under models/), and the GAF sprite's first-frame pixel
+  size + hotspot for sprite features.  Map placements resolve here.
 - palette.json — {"palette": [[r,g,b] x 256]}.
 - unitpics/<name>.png — unit build pictures, decoded from the install's
   PCX/JPEG originals at native size.

@@ -46,7 +46,7 @@ Pack layout (all filenames lower-case; characters outside [a-z0-9._-]
 become "_"):
 
   manifest.json                game id, sides, unit list, contentHash
-                               (formatVersion 4)
+                               (formatVersion 5)
   unitdb.json                  per-unit database: pack ordinal id, raw FBI
                                movementClass + derived motionDomain
                                (ground/air/sea/building), build picture +
@@ -59,6 +59,10 @@ become "_"):
                                trajectory flags, blast diameter, range and
                                sound stems; catalogue projectile meshes,
                                sounds and sprite strips pack alongside
+  features.json                every map-feature definition keyed by id:
+                               category, footprint, height, 3DO object
+                               name (map-referenced objects pack under
+                               models/) and GAF sprite size + hotspot
   palette.json                 {"palette": [[r,g,b] x 256]}
   unitpics/<name>.png          unit build pictures (native size)
   models/<name>.json           model geometry (authored faces)

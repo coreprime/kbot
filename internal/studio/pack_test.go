@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coreprime/kbot/engine/script"
@@ -187,8 +188,8 @@ func TestBuildPackV3Assets(t *testing.T) {
 
 	var manifest packManifest
 	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
-	if manifest.FormatVersion != 4 {
-		t.Fatalf("formatVersion = %d, want 4", manifest.FormatVersion)
+	if manifest.FormatVersion != 5 {
+		t.Fatalf("formatVersion = %d, want 5", manifest.FormatVersion)
 	}
 	if manifest.Weapons != "weapons.json" {
 		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
@@ -347,6 +348,102 @@ func TestBuildPackV4Assets(t *testing.T) {
 	laser, ok := wf.Weapons["armcomlaser"]
 	if !ok || laser.ColorIdx == nil || *laser.ColorIdx <= 0 {
 		t.Fatalf("armcomlaser colorIdx missing: %+v", laser)
+	}
+}
+
+// TestBuildPackV5Assets covers the format-v5 additions: the features.json
+// map-feature catalogue (footprints, GAF sprite dims, 3DO object links),
+// the manifest features reference, packed models for a map's object
+// features, and the weapons.json guided-flight fields.
+func TestBuildPackV5Assets(t *testing.T) {
+	install := testutil.UnpackedPath(t)
+	dir := t.TempDir()
+	res, err := BuildPack(install, dir, PackOptions{
+		Game:  "totala",
+		Units: []string{"armpw"},
+		Maps:  []string{"checker ponds"},
+	})
+	if err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+	if len(res.Maps) != 1 {
+		t.Fatalf("expected 1 packed map, got %v", res.Maps)
+	}
+
+	var manifest packManifest
+	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
+	if manifest.Features != "features.json" {
+		t.Fatalf("manifest features = %q, want features.json", manifest.Features)
+	}
+
+	var ff packFeaturesFileJSON
+	mustJSON(t, filepath.Join(dir, "features.json"), &ff)
+	if len(ff.Features) == 0 {
+		t.Fatalf("features.json is empty")
+	}
+
+	// Every feature the packed map places must resolve in the catalogue,
+	// and at least one placed sprite feature must carry GAF pixel dims.
+	var mp packMapJSON
+	mustJSON(t, filepath.Join(dir, "maps/checker_ponds.json"), &mp)
+	if len(mp.Features) == 0 {
+		t.Fatalf("checker ponds packs no feature placements")
+	}
+	spriteDims := false
+	for _, pl := range mp.Features {
+		f, ok := ff.Features[strings.ToLower(pl.Name)]
+		if !ok {
+			t.Fatalf("map feature %q missing from features.json", pl.Name)
+		}
+		if f.SpriteW > 0 && f.SpriteH > 0 {
+			spriteDims = true
+		}
+	}
+	if !spriteDims {
+		t.Fatalf("no placed feature carries GAF sprite dims")
+	}
+
+	// Corpse features exist in the catalogue with 3DO object links (the
+	// reclaim/wreck path a replay renders), and carry a category.
+	corpse, ok := ff.Features["armpw_dead"]
+	if !ok {
+		t.Fatalf("features.json lacks armpw_dead")
+	}
+	if corpse.Object == "" || corpse.Category == "" {
+		t.Fatalf("armpw_dead should carry object + category: %+v", corpse)
+	}
+
+	// Tree-class features carry footprint + height so a stand-in can size
+	// itself without the GAF.
+	hasTree := false
+	for _, f := range ff.Features {
+		if f.Category == "trees" && f.FootprintX > 0 && f.HeightWU > 0 {
+			hasTree = true
+			break
+		}
+	}
+	if !hasTree {
+		t.Fatalf("no tree feature with footprint + height in catalogue")
+	}
+
+	// weapons.json guided-flight fields: at least one guided weapon ships a
+	// positive turnRate, and torpedoes are flagged waterWeapon.
+	var wf packWeaponsFileJSON
+	mustJSON(t, filepath.Join(dir, "weapons.json"), &wf)
+	guided, torpedo := false, false
+	for _, w := range wf.Weapons {
+		if w.Guidance && w.TurnRate > 0 {
+			guided = true
+		}
+		if w.WaterWeapon {
+			torpedo = true
+		}
+	}
+	if !guided {
+		t.Fatalf("no guided weapon with turnRate in weapons.json")
+	}
+	if !torpedo {
+		t.Fatalf("no waterWeapon torpedo in weapons.json")
 	}
 }
 

@@ -63,6 +63,16 @@ type packWeaponJSON struct {
 	CommandFire    bool    `json:"commandFire,omitempty"`
 	AreaOfEffectWU float64 `json:"areaOfEffectWU,omitempty"`
 	RangeWU        float64 `json:"rangeWU,omitempty"`
+	// Guided-flight + water fields (format v5).  TurnRate is the raw TDF
+	// turnrate= in TA angle units per second (65536 = a full circle) — a
+	// renderer steering a guided missile converts to rad/s.  WaterWeapon
+	// marks torpedoes (run at/below the waterline; impacts splash).
+	// AccelerationWU (wu/s²) and FlightTimeSec bound a self-propelled
+	// shot's spin-up and powered flight.
+	TurnRate       int     `json:"turnRate,omitempty"`
+	WaterWeapon    bool    `json:"waterWeapon,omitempty"`
+	AccelerationWU float64 `json:"accelerationWU,omitempty"`
+	FlightTimeSec  float64 `json:"flightTimeSec,omitempty"`
 	// SoundStart / SoundHit are the fire/impact wav stems (sounds/<stem>.wav
 	// in the pack — format v4 packs the whole catalogue's sounds).
 	SoundStart string `json:"soundStart,omitempty"`
@@ -145,6 +155,10 @@ func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 				CommandFire:     sec.CommandFire != 0,
 				AreaOfEffectWU:  float64(sec.AreaOfEffect),
 				RangeWU:         float64(sec.Range),
+				TurnRate:        sec.TurnRate,
+				WaterWeapon:     sec.WaterWeapon != 0,
+				AccelerationWU:  sec.WeaponAcceleration,
+				FlightTimeSec:   sec.FlightTime,
 				SoundStart:      strings.ToLower(strings.TrimSpace(sec.SoundStart)),
 				SoundHit:        strings.ToLower(strings.TrimSpace(sec.SoundHit)),
 			}
