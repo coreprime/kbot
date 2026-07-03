@@ -287,6 +287,17 @@ void main() {
     surface += spec * vec3(1.45, 1.25, 0.95);
     // Crest foam only where the body is big enough to raise real waves.
     float foam = smoothstep(1.0, 2.0, h) * 0.8 * bodyAmp * closeUp;
+    // Shoreline foam: a soft animated band where the bed rises to meet
+    // the surface — two drifting sine phases over the shallow margin so
+    // the lap line breathes instead of sitting as a hard contour.  Runs
+    // on the same fx clock as the waves (deterministic under a driven
+    // render), and fades with distance like the crest foam.
+    float shore = 1.0 - smoothstep(0.35, 3.2, depth);
+    float lap = 0.6
+              + 0.25 * sin(t * 1.6 + (vWorldPos.x + vWorldPos.z) * 0.11)
+              + 0.15 * sin(t * 2.3 - vWorldPos.x * 0.07 + vWorldPos.z * 0.05);
+    foam += shore * lap * 0.55 * closeUp;
+    foam = min(foam, 1.0);
     surface = mix(surface, vec3(1.05, 1.08, 1.10), foam);
     surface *= mix(1.0, shadow, 0.25);
     surface *= mix(vec3(1.0), uSunTint, 0.35);
