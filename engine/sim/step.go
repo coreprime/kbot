@@ -346,7 +346,7 @@ func (w *World) startRaising(u *Unit) {
 		u.buildGateMs = w.simMs + buildGateGraceMs
 		if u.binding != nil && u.binding.HasScript("StartBuilding") {
 			d := b.loco.Pos.Sub(u.loco.Pos)
-			heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+			heading := aimBearing(u, b.loco.Pos)
 			pitch := fixed.ShortestArc(fixed.Atan2(b.PosY-u.PosY, d.Len()))
 			u.binding.Start("StartBuilding", int(heading), int(pitch))
 		}
@@ -384,7 +384,7 @@ func (w *World) startRaising(u *Unit) {
 		// weapon aim threads use. Factories take no arguments.
 		if u.Meta.CanMove {
 			d := u.buildSite.Sub(u.loco.Pos)
-			heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+			heading := aimBearing(u, u.buildSite)
 			pitch := fixed.ShortestArc(fixed.Atan2(b.PosY-u.PosY, d.Len()))
 			u.binding.Start("StartBuilding", int(heading), int(pitch))
 		} else {
@@ -1474,9 +1474,9 @@ func (w *World) queryFirePiece(u *Unit, slot int) int32 {
 // the target, and reports whether the turret has turned far enough to fire.
 // Heading is the bearing to the target relative to the unit's facing and pitch
 // its elevation, both as TA-angle units — the (heading, pitch) the AimWeapon
-// scripts expect. The heading is negated to match the render pipeline, which
-// applies the inverse Y rotation (rot[1] = -ry) when it draws the turret; the
-// original JS engine negated it for the same reason. It re-issues only when the
+// scripts expect. Positive bearings and positive y-axis piece turns rotate the
+// same way (see aimBearing), so no sign fix-up happens here; the renderer's
+// piece transform applies the matching rotation. It re-issues only when the
 // bearing has drifted past aimReissueArc, letting the same-name supersede swap
 // the tracking thread without piling up stale instances.
 //
@@ -1502,7 +1502,7 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 		return true
 	}
 	d := targetPos.Sub(u.loco.Pos)
-	heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+	heading := aimBearing(u, targetPos)
 	pitch := fixed.ShortestArc(fixed.Atan2(targetY-(u.PosY+muzzleAimHeight), d.Len()))
 	drifted := !s.aimIssued ||
 		absAngle(heading-s.aimHeading) >= aimReissueArc ||
@@ -1539,7 +1539,7 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 // to track even when it can't await completion).
 func (w *World) driveAimDrift(u *Unit, s *weaponSlot, slot int, name string, targetPos fixed.Vec2, targetY fixed.Fixed) {
 	d := targetPos.Sub(u.loco.Pos)
-	heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+	heading := aimBearing(u, targetPos)
 	pitch := fixed.ShortestArc(fixed.Atan2(targetY-(u.PosY+muzzleAimHeight), d.Len()))
 	settled := s.aimIssued &&
 		absAngle(heading-s.aimHeading) < aimReissueArc &&
@@ -1554,6 +1554,16 @@ func (w *World) driveAimDrift(u *Unit, s *weaponSlot, slot int, name string, tar
 	s.aimPitch = pitch
 	s.aimLastIssueMs = w.simMs
 	u.binding.Restart(name, conventionFor(u.binding).aimArgs(heading, pitch, slot)...)
+}
+
+// aimBearing is the bearing argument a COB aim/build thread receives: the
+// shortest signed arc from the unit's facing to the target, in TA-angle
+// units. Positive values turn the same way as an increasing heading, which is
+// the direction a positive y-axis TURN slews a piece — so a script that turns
+// its torso "to y-axis heading" points it at the target.
+func aimBearing(u *Unit, targetPos fixed.Vec2) int32 {
+	d := targetPos.Sub(u.loco.Pos)
+	return fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
 }
 
 // absAngle is the absolute value of a TA-angle delta.

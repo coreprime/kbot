@@ -138,9 +138,9 @@ func TestUnitPlayWeaponFire(t *testing.T) {
 		t.Fatalf("aim not re-driven: %+v", bind.restarts)
 	}
 	// Same bearing convention as live combat: due +X from heading 0 is a
-	// negated quarter turn (~-16384 TA-angle units).
-	if h := bind.restarts[0].args[0]; h < -18000 || h > -15000 {
-		t.Fatalf("aim heading = %d, want ~-16384", h)
+	// quarter turn (~16384 TA-angle units).
+	if h := bind.restarts[0].args[0]; h < 15000 || h > 18000 {
+		t.Fatalf("aim heading = %d, want ~16384", h)
 	}
 	if got := countCalls(bind.starts, "FirePrimary"); got != 1 {
 		t.Fatalf("FirePrimary started %d times, want 1", got)

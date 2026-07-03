@@ -41,8 +41,10 @@ func spinnerWorld(seed uint32) *session.Session {
 func TestCOBSeamAnimatesPieces(t *testing.T) {
 	s := spinnerWorld(1)
 
-	// The Create thread arms the spin animator on tick 1, but animators advance
-	// before threads run, so no rotation has accrued after the first step.
+	// Create runs synchronously at spawn (the unit-creation contract: its
+	// initial pose exists before the first rendered frame), so the spin
+	// animator is armed before the first step and step 1 already accrues one
+	// tick of rotation (speed/40 = 1 angle-unit).
 	snap := s.Step()
 	if len(snap.Units) != 1 {
 		t.Fatalf("units = %d, want 1", len(snap.Units))
@@ -50,8 +52,8 @@ func TestCOBSeamAnimatesPieces(t *testing.T) {
 	if got := len(snap.Units[0].Pieces); got != 1 {
 		t.Fatalf("pieces = %d, want 1", got)
 	}
-	if got := snap.Units[0].Pieces[0].Rot[0]; got != 0 {
-		t.Fatalf("rot after step 1 = %d, want 0", got)
+	if got := snap.Units[0].Pieces[0].Rot[0]; got != 1 {
+		t.Fatalf("rot after step 1 = %d, want 1", got)
 	}
 	if !snap.Units[0].Pieces[0].Visible {
 		t.Fatal("piece should default visible")

@@ -720,7 +720,7 @@ func (w *World) UnitPlayWeaponFire(id uint32, slot int, target fixed.Vec3) bool 
 	played := false
 	if name := conv.aimScript(slot); name != "" && u.binding.HasScript(name) {
 		d := fixed.Vec2{X: target.X, Z: target.Z}.Sub(u.loco.Pos)
-		heading := -fixed.ShortestArc(fixed.Atan2(d.X, d.Z) - u.Heading())
+		heading := aimBearing(u, fixed.Vec2{X: target.X, Z: target.Z})
 		pitch := fixed.ShortestArc(fixed.Atan2(target.Y-(u.PosY+muzzleAimHeight), d.Len()))
 		u.binding.Restart(name, conv.aimArgs(heading, pitch, slot)...)
 		played = true
@@ -741,6 +741,24 @@ func (w *World) UnitKillThreadsByName(id uint32, name string) {
 
 // UnitScriptNames lists a unit type's script entry-point names, or nil for a
 // missing / script-less unit.
+// pieceNamesBinding is the optional surface a binding exposes to report its
+// COB piece table. The script VM's *Unit satisfies it.
+type pieceNamesBinding interface {
+	PieceNames() []string
+}
+
+// UnitPieceNames returns a unit's COB piece-name table in piece-index order —
+// the key a renderer uses to apply Pieces() state by NAME rather than by
+// model hierarchy index. Nil for script-less units.
+func (w *World) UnitPieceNames(id uint32) []string {
+	if u := w.units[id]; u != nil {
+		if pb, ok := u.binding.(pieceNamesBinding); ok {
+			return pb.PieceNames()
+		}
+	}
+	return nil
+}
+
 func (w *World) UnitScriptNames(id uint32) []string {
 	if s := w.scripts(id); s != nil {
 		return s.ScriptNames()
@@ -798,7 +816,7 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	w.units[id] = u
 	w.order = append(w.order, id)
 	if binding != nil && binding.HasScript("Create") {
-		binding.Start("Create")
+		startCreate(binding)
 	}
 	startSetMaxReloadTime(meta, binding)
 	w.emit(frame.Event{Kind: frame.EvSpawn, UnitID: id})
@@ -859,6 +877,26 @@ func (w *World) InitOnOff(id uint32) {
 	if p, ok := u.binding.(CobPorts); ok {
 		p.SetUnitValuePort(1, 0)
 	}
+}
+
+// syncStartBinding is the optional surface a binding exposes to run an entry
+// point synchronously to its first yield within the current call, rather than
+// queuing it for the next script tick. The script VM's *Unit satisfies it.
+type syncStartBinding interface {
+	StartNow(name string, args ...int)
+}
+
+// startCreate runs a freshly spawned unit's Create entry point. When the
+// binding supports it, Create executes synchronously to its first yield — the
+// engine contract: a unit's initial pose (hidden build flares, turn-now rest
+// angles) is applied during spawn, before its first frame ever renders. A
+// binding without the surface (test fakes) degrades to a next-tick start.
+func startCreate(binding Binding) {
+	if sb, ok := binding.(syncStartBinding); ok {
+		sb.StartNow("Create")
+		return
+	}
+	binding.Start("Create")
 }
 
 // startSetMaxReloadTime tells a TA:K script its slowest weapon's reload time
@@ -1243,7 +1281,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			// positioned, radar/idle loops never spun up). Piece animation is not
 			// hashed, so re-running Create on the client cannot perturb lockstep.
 			if binding != nil && binding.HasScript("Create") {
-				binding.Start("Create")
+				startCreate(binding)
 			}
 			startSetMaxReloadTime(u.Meta, binding)
 			// A unit caught mid-move was animating its walk/drive cycle on the

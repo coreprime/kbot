@@ -133,11 +133,11 @@ func TestWeaponScriptsDriven(t *testing.T) {
 		t.Fatalf("first restart = %q, want AimPrimary", got)
 	}
 	// Target sits due +X of the attacker (heading 0 = +Z), so the bearing is a
-	// quarter turn (~16384 TA-angle units). The aim heading is negated to match
-	// the render pipeline's inverse Y rotation (piece rot[1] = -ry), so the
-	// script receives ~-16384.
-	if h := bind.restarts[0].args[0]; h < -18000 || h > -15000 {
-		t.Fatalf("aim heading = %d, want ~-16384 (negated quarter turn toward +X)", h)
+	// quarter turn (~16384 TA-angle units). Positive bearings turn the same way
+	// as an increasing heading — the direction a positive y-axis TURN slews a
+	// piece — so the script receives the bearing unmodified.
+	if h := bind.restarts[0].args[0]; h < 15000 || h > 18000 {
+		t.Fatalf("aim heading = %d, want ~16384 (quarter turn toward +X)", h)
 	}
 	if got := countCalls(bind.starts, "FirePrimary"); got == 0 {
 		t.Fatal("FirePrimary was never started on a shot")

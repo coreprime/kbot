@@ -679,6 +679,12 @@ func (u *Unit) signal(n int32) {
 // HasScript reports whether the unit's program defines the named entry point.
 func (u *Unit) HasScript(name string) bool { return u.prog.HasScript(name) }
 
+// PieceNames returns the unit type's COB piece table in index order — the
+// name list a renderer pairs with Pieces() so per-piece state lands on the
+// piece the script addressed (COB table order is not the model's hierarchy
+// order).
+func (u *Unit) PieceNames() []string { return u.prog.PieceNames() }
+
 // ScriptNames returns the unit type's script entry-point names in index order,
 // the list the offline editor's Actions panel turns into a run-script button
 // per entry (Create, Activate, AimPrimary, …).
@@ -693,6 +699,23 @@ func (u *Unit) Start(name string, args ...int) {
 		return
 	}
 	u.threads = append(u.threads, u.newThread(idx, toI32(args)))
+}
+
+// StartNow spawns a thread on the named script and immediately runs it to its
+// first yield (sleep, wait, or completion) within the caller's tick. This is
+// the unit-creation contract: the engine executes a freshly spawned unit's
+// Create synchronously during spawn, so its initial pose — hidden build
+// flares, folded arms, turn-now rest angles — is already applied by the time
+// the unit's first frame renders. Threads Create itself spawns via
+// START_SCRIPT still begin on the next tick, as they would from any thread.
+func (u *Unit) StartNow(name string, args ...int) {
+	idx, ok := u.prog.ScriptIndex(name)
+	if !ok {
+		return
+	}
+	t := u.newThread(idx, toI32(args))
+	u.threads = append(u.threads, t)
+	u.runThread(t)
 }
 
 // Restart spawns a thread on the named script, first marking any live thread
