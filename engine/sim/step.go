@@ -54,6 +54,14 @@ func (w *World) Step(rt Runtime) {
 			if u.Dead && u.corpsePending {
 				w.stepCorpse(u)
 			}
+			// Publish health into the COB HEALTH port so scripts that poll it
+			// (SmokeUnit damage plumes, TA:K ability gates) see real damage.
+			// Every live unit, buildings included — they smoke too.
+			if !u.Dead {
+				if p, ok := u.binding.(CobPorts); ok {
+					p.SetUnitValuePort(cobPortHealth, int32(u.Health.Int()))
+				}
+			}
 		}
 	}
 	for _, id := range w.order {
@@ -1128,6 +1136,13 @@ func (w *World) stepPinnedMovement(u *Unit) {
 // own copy of the number rather than importing engine/script (the dependency
 // arrow points the other way); it must match script.UVCurrentSpeed.
 const cobPortCurrentSpeed = 29
+
+// cobPortHealth is TA's HEALTH unit-value port (script uvHealth). The sim
+// publishes each live unit's health percent into it every tick so the
+// health-polling COB loops observe real damage — most importantly SmokeUnit,
+// whose `get HEALTH` gate decides when a damaged unit starts venting smoke.
+// Port writes never feed the world hash (see CobPorts).
+const cobPortHealth = 4
 
 // TA unit-value ports the build cycle reads: INBUILDSTANCE is set by a
 // construction unit's StartBuilding script once its nano arm is deployed;
