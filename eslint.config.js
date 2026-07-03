@@ -32,7 +32,9 @@ export default [
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
-      globals: { ...globals.node },
+      // Examples mix Node-side harness code with browser-side snippets
+      // (bundled page entries, page.evaluate closures) in one file set.
+      globals: { ...globals.node, ...globals.browser },
     },
   },
   {
