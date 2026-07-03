@@ -68,27 +68,73 @@ into the full ground texture and returns the arguments
 `renderer.setMapTerrain()` (or `world.setTerrain()`) takes, plus sea level,
 start positions and the authentic minimap URL.
 
+**Map features**: `world.setTerrain(terrain)` also installs the map's
+features (toggle with `setFeaturesEnabled(on)`, or pass
+`{ features: false }`).  GAF-sprite features (trees, rocks, metal, kelp,
+props…) become deterministic low-poly 3D stand-ins built per CATEGORY —
+shapes that read correctly from TA's classic angle and survive orbiting —
+sized from the pack's `features.json` (format v5) footprint/height/sprite
+dims and seeded per (name, cell) so every run bakes identical geometry.
+Features with real 3DO models (wrecks, dragon teeth) place the actual
+packed model.  The whole field bakes into a handful of static batches —
+one draw call each, no per-feature frame cost (`buildFeatureField` is
+exported for standalone use).
+
 ## Replay presentation
 
 Everything a state-driven consumer (a replay renderer) needs to make a
 world read like the game, all presentation-only — no sim state, no hashes:
 
 - **Weapon effects** — `world.weaponEffect({ weapon: '<id>', from, to })`
-  resolves the id against the pack's `weapons.json` (format v4) and draws
-  the weapon's authentic visual: palette-tinted laser pulse beams, the
-  D-gun fireball with its flame trail and scene-washing light, the packed
-  projectile 3DO flying a straight or ballistic trajectory with its
-  TDF-cadenced smoke trail, fx.gaf bitmap bolts, or AoE-scaled particle
-  tracers — plus muzzle flash, start-smoke and an AoE-sized impact burst.
-  Explicit `color`/`durationMs`/`velocity` override the def; `type:
+  resolves the id against the pack's `weapons.json` and draws the weapon's
+  authentic visual: palette-tinted laser pulse beams, the D-gun fireball
+  with its flame trail and scene-washing light, the packed projectile 3DO
+  flying a TRUE trajectory — ballistic arcs solved to land on the target,
+  guided missiles steering at the TDF `turnrate` and detonating on
+  proximity, torpedoes holding depth under the sea sheet with bubble
+  trails (format v5 fields) — fx.gaf bitmap bolts, or AoE-scaled particle
+  tracers, plus muzzle flash, start-smoke and the impact.  Impacts route
+  through the polygonal explosion system (below); at/below the waterline
+  they splash (spray + bubbles + foam ring) instead of burning.  Explicit
+  `color`/`durationMs`/`velocity` override the def; `type:
   'beam'|'tracer'` without a weapon keeps the raw line-effect path.
-- **Death** — `world.unitDeath(id, { severity, corpse, heapCorpse })`
-  follows TA's corpsetype ladder: a clean kill (severity < 50) swaps in the
-  wreck 3DO (pack unitdb `meta.corpseObject`), sunk slightly and persistent
-  until `removeCorpse(id)`/`clearCorpses()`; heavier kills throw the unit's
-  pieces as tumbling debris, leaving the damaged heap or nothing.  The
-  applyState form: a live unit re-sent with `dead: true` (+
-  `deathSeverity`/`corpse`/`heapCorpse`) triggers the same path once.
+- **Explosions** — every impact/death detonates a polygonal 3D explosion
+  (expanding emissive fireball polyhedron + spinning shards + ground
+  shockwave ring, additive so the cinematic bloom lifts it) sized by a
+  small/medium/large/huge ladder off `areaOfEffect` + death severity.
+  Readability is enforced: per-hit effects are brief and tight, spawns
+  coalesce per area bucket instead of stacking, a global concurrency cap
+  recycles records, and sqrt-law luminance budgets dim both the additive
+  particles and the dynamic lights as a barrage grows — the field stays
+  readable under any bombardment (see `explosion-fx.js` +
+  `performance.js` for the tunables and rationale).
+- **Death** — `world.unitDeath(id, { severity, corpse, heapCorpse,
+  impactDir, impactMag })` follows TA's corpsetype ladder: a clean kill
+  (severity < 50) swaps in the wreck 3DO (pack unitdb
+  `meta.corpseObject`), sunk slightly and persistent until
+  `removeCorpse(id)`/`clearCorpses()`; heavier kills throw the unit's
+  pieces as tumbling debris — parabolic world-space arcs that spin,
+  bounce off the terrain with energy loss and settle before fading, with
+  `impactDir` ([x,z], source → victim) biasing the scatter away from the
+  killing blow.  Airborne units (`air: true`) instead enter a spiral
+  crash: a spinning, smoking descent that detonates where it meets the
+  terrain or splashes into the sea.  The applyState form: a live unit
+  re-sent with `dead: true` (+ `deathSeverity`/`corpse`/`heapCorpse`/
+  `impactDir`/`impactMag`) triggers the same path once.
+- **Air / sea flags** — applyState `air: true` adds a hover bob,
+  bank-into-turns and contrails at speed (and the spiral-crash death);
+  `hover: true` the hovercraft cushion gyration; `naval: true` a stern
+  foam wake while the vessel is under way on the sea sheet.  Units
+  crossing the waterline splash.
+- **Economy visuals** — `world.latheBeam(key, { fromUnitId, toUnitId })`
+  streams the green nano spray onto a build target while its
+  `buildPercent` drives the rising wireframe→solid hull (the lathe line
+  glows at the cut); `world.reclaimBeam(key, { fromUnitId, corpseId })`
+  reverses the stream and shrinks the wreck while beamed;
+  `world.captureFlash(id)` plays the capture pulse.  Building activity
+  (extractor rotors, solar collectors) is driven through the ENGINE —
+  `Session.setUnitActivation(unitId, on)` runs the unit's real COB
+  Activate/Deactivate entry points.
 - **Grounding + slope tilt** — applyState/addUnit `grounded: true` clamps a
   unit's render Y to the battlefield surface (`world.terrainHeightAt`) and
   pitches/rolls it to the terrain normal.  Recorded wire Y is TA world
@@ -99,8 +145,9 @@ world read like the game, all presentation-only — no sim state, no hashes:
   unit on a damped spring (call it on damage events).
 - **Status** — per-unit `hp01` (0..1) draws a green→red health bar under
   the unit while damaged and drives TA-style damage smoke; `rank` (0..5)
-  draws gold veteran chevrons.  Both render in the scene pass, so headless
-  captures include them.
+  draws gold veteran chevrons.  Both render in the scene pass —
+  depth-tested against the world, so a unit behind a ridge shows no bar —
+  and headless captures include them.
 - **COB smoke** — forward engine render events through
   `applyState({ events })` / `world.sfxEvent(ev)`: `emitSfx` plumes
   (SmokeUnit threads) and `explode` flashes render at their anchors.

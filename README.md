@@ -668,8 +668,12 @@ A pack contains `manifest.json` (game id, sides, unit list, content hash),
 `unitdb.json` (per-unit movement class + motion domain, build/HP/weapon
 stats, corpse chain, build-pic path and slot-ordered weapon ids),
 `palette.json`, `weapons.json` (weapon-TDF render data: rendertype, colors
-— resolved RGB plus raw indices — beam duration, velocity, trajectory
-flags, blast diameter, range, sound stems), and per-asset files under
+— resolved RGB plus raw indices — beam duration, velocity, trajectory and
+guided-flight fields — turn rate, water weapon, acceleration, flight time —
+blast diameter, range, sound stems), `features.json` (every map-feature
+definition: category, footprint, height, 3DO object link and GAF sprite
+dims — what the renderer's 3D feature stand-ins size themselves from; the
+maps' referenced object models pack under `models/`), and per-asset files under
 `models/` (authored geometry), `models-enhanced/` (hidden-face
 reconstruction, the Enhanced Mesh variant), `textures/`, `cob/`, `sounds/`,
 `weaponbitmaps/`, `unitpics/`, `cursors/`, `groundtiles/` and `maps/`
