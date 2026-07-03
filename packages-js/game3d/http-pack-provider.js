@@ -216,4 +216,14 @@ export class HttpPackProvider {
     const json = await this.fetchJson('weapons.json', 'weapon defs', { optional: true })
     return (json && json.weapons) || {}
   }
+
+  // featureDefs returns the pack's map-feature catalogue (features.json,
+  // formatVersion 5+) keyed by lower-case feature id: category, footprint,
+  // height, GAF sprite dims and the 3DO object link — what setTerrain's
+  // feature stand-ins size and classify themselves from. {} when the pack
+  // predates v5 (stand-ins then use category-less defaults).
+  async featureDefs() {
+    const json = await this.fetchJson('features.json', 'feature defs', { optional: true })
+    return (json && json.features) || {}
+  }
 }

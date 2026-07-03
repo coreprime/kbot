@@ -63,10 +63,33 @@ export {
   normalizePackWeaponDef,
   weaponVisualPlan,
   spawnWeaponVisual,
+  stepModelShots,
+  modelShotPose,
   impactBurst,
   resolveDeathPlan,
   damageSmokeIntervalMs,
+  debrisBurst,
+  stepDebris,
+  stepDebrisRecord,
+  TA_TURN_TO_RAD,
 } from './world-fx.js'
+
+// Map-feature stand-ins + polygonal explosions (battlefield presentation)
+export {
+  buildFeatureField,
+  categoryBuilder,
+  featureSizeWU,
+  featureSeed,
+  mulberry32,
+} from './map-features.js'
+export {
+  ExplosionManager,
+  tierFor,
+  MAX_CONCURRENT,
+  MAX_PER_BUCKET,
+  COALESCE_BUCKET_WU,
+  BUDGET_FREE_COUNT,
+} from './explosion-fx.js'
 
 // Team + texture configuration
 export { TEAM_SIDES, TA_TEAM_SIDES, setTeamSides, teamColorForSide, displayRgbForSide, sideForKey } from './team-colors.js'

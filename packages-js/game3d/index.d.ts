@@ -199,10 +199,20 @@ export interface UnitPlacement {
   buildPercent?: number
   /** Clamp render Y to the terrain surface + slope-tilt to its normal. */
   grounded?: boolean
+  /** Airborne / hovercraft / surface-vessel presentation flags. */
+  air?: boolean
+  hover?: boolean
+  naval?: boolean
   /** 0..1 health fraction — health bar (when < 1) + damage smoke. */
   hp01?: number | null
   /** 0..5 veteran rank chevrons. */
   rank?: number
+  /** Airborne: hover bob + bank-into-turns + contrails; death = spiral crash. */
+  air?: boolean
+  /** Hovercraft: cushion gyration overlay. */
+  hover?: boolean
+  /** Surface vessel: stern wake while under way on the sea sheet. */
+  naval?: boolean
 }
 
 export interface SnapshotPieceState {
@@ -233,11 +243,21 @@ export interface SnapshotUnit {
   hp01?: number | null
   /** 0..5 veteran rank chevrons beside the health bar. */
   rank?: number
-  /** dead:true on a live unit triggers unitDeath(id, { severity: deathSeverity, corpse, heapCorpse }) once. */
+  /** Airborne (presentation): hover bob, bank-into-turns, contrails at speed, spiral-crash death. */
+  air?: boolean
+  /** Hovercraft cushion gyration. */
+  hover?: boolean
+  /** Surface vessel: stern wake while moving on the sea sheet. */
+  naval?: boolean
+  /** dead:true on a live unit triggers unitDeath(id, { severity: deathSeverity, corpse, heapCorpse, impactDir, impactMag }) once. */
   dead?: boolean
   deathSeverity?: number
   corpse?: string | null
   heapCorpse?: string | null
+  /** World-frame [x, z] pointing source → victim; biases debris scatter away from the killing blow. */
+  impactDir?: [number, number] | null
+  /** Impact push magnitude (1 ≈ light round … 4 ≈ heavy shell). */
+  impactMag?: number
   /** COB piece table (index-aligned with piecesPacked); static per type. */
   pieceNames?: string[]
   /** Engine stride-7 packed piece transforms, applied by name via pieceNames (optionally pre-blended with lerpPackedPieces). */
@@ -329,6 +349,9 @@ export interface World {
     severity?: number
     corpse?: string | null
     heapCorpse?: string | null
+    /** World-frame [x, z] source → victim: debris scatters away from it. */
+    impactDir?: [number, number] | null
+    impactMag?: number
     redraw?: boolean
   }): boolean
   removeCorpse(id: number | string): void
@@ -342,8 +365,48 @@ export interface World {
   unitImpulse(id: number | string, opts: { dirX?: number; dirZ?: number; mag?: number }): void
   /** Render one engine render event ('emitSfx' smoke / 'explode' flash). */
   sfxEvent(ev: SnapshotSfxEvent): void
-  /** Install (or clear with null) a battlefield — the loadMapTerrain payload. */
-  setTerrain(terrain: object | null): void
+  /**
+   * Install (or clear with null) a battlefield — the loadMapTerrain
+   * payload.  When it carries features[] (packed maps do) the map's
+   * features install too: sprite features as procedural 3D stand-ins
+   * (batched; category/size from the pack's features.json), object
+   * features as their real packed 3DO models.  opts.features:false skips
+   * them; toggle later with setFeaturesEnabled.
+   */
+  setTerrain(terrain: object | null, opts?: { features?: boolean }): void
+  /** Toggle the installed map features without rebuilding them. */
+  setFeaturesEnabled(on: boolean): void
+  /**
+   * Drive the TA construction visual: a green nano spray from the builder
+   * onto the build target (whose rising wireframe→solid treatment rides
+   * its buildPercent).  Keyed per build order; { on:false } stops it.
+   * Endpoints track units (fromUnitId/toUnitId) or fix positions (from/to).
+   */
+  latheBeam(key: string | number, opts: {
+    fromUnitId?: number | string | null
+    toUnitId?: number | string | null
+    from?: [number, number, number] | null
+    to?: [number, number, number] | null
+    on?: boolean
+    color?: [number, number, number, number] | null
+  }): void
+  /**
+   * Reclaim visual: nano particles stream FROM the wreck (corpseId) or
+   * unit/position back INTO the builder, and a corpseId target shrinks
+   * while beamed.  The driver still calls removeCorpse when the recording
+   * says the reclaim finished.
+   */
+  reclaimBeam(key: string | number, opts: {
+    fromUnitId?: number | string | null
+    corpseId?: number | string | null
+    toUnitId?: number | string | null
+    from?: [number, number, number] | null
+    to?: [number, number, number] | null
+    on?: boolean
+    color?: [number, number, number, number] | null
+  }): void
+  /** Capture-complete flash: a brief bright shell pulse + spark shower. */
+  captureFlash(id: number | string): boolean
   /** Surface Y at a world XZ (0 on the flat pad) — what `grounded` clamps to. */
   terrainHeightAt(x: number, z: number): number
   /** Smoothed surface normal at a world XZ. */
@@ -451,6 +514,12 @@ export class ModelRenderer {
   setEntities(entities: object[] | null): void
   setEnvironment(nameOrPreset: string | object): void
   setPulseLights(lights: Array<{ pos: number[]; color: number[]; strength: number }>): void
+  /** Install baked map-feature batches (buildFeatureField output). */
+  setMapFeatures(batches: Array<{ data: Float32Array; count: number }> | null): void
+  clearMapFeatures(): void
+  setFeaturesEnabled(on: boolean): void
+  /** Install this frame's explosion triangles (ExplosionManager tris/vertCount). */
+  setExplosionTris(data: Float32Array | null, vertCount: number): void
   requestRedraw(): void
   getCullStats(): { drew: number; culled: number; total: number; shadowed: number; full: number; mid: number; far: number }
   [key: string]: unknown
@@ -482,6 +551,48 @@ export class AudioPool {
   setPlaybackRate(rate: number): void
   setPaused(paused: boolean): void
   [key: string]: unknown
+}
+
+// ── Map-feature stand-ins + polygonal explosions ───────────────────────
+
+export function featureSeed(name: string, ax: number, ay: number): number
+export function mulberry32(seed: number): () => number
+export function categoryBuilder(category: string): (...args: unknown[]) => void
+export function featureSizeWU(def: object | null): { r: number; h: number }
+/**
+ * Bake a packed map's feature placements into renderer batches + a list of
+ * real-3DO features.  Deterministic per (name, cell); see map-features.js.
+ */
+export function buildFeatureField(opts: {
+  features: Array<{ name: string; ax: number; ay: number }>
+  defs?: Record<string, object>
+  heightAt?: ((x: number, z: number) => number) | null
+  cellWU?: number
+}): {
+  batches: Array<{ data: Float32Array; count: number }>
+  models: Array<{ name: string; x: number; y: number; z: number; heading: number; feature: string }>
+  counts: { placed: number; models: number; skipped: number }
+}
+
+export const MAX_CONCURRENT: number
+export const MAX_PER_BUCKET: number
+export const COALESCE_BUCKET_WU: number
+export const BUDGET_FREE_COUNT: number
+export function tierFor(opts: { aoe?: number; kind?: string; severity?: number }): string
+/**
+ * Capped, coalescing polygonal explosion system (fireball + shards +
+ * shockwave ring as additive triangles) — see explosion-fx.js for the
+ * readability disciplines.  createWorld owns one; standalone drivers can
+ * run their own against ModelRenderer.setExplosionTris.
+ */
+export class ExplosionManager {
+  liveCount: number
+  spawn(pos: [number, number, number], opts?: { aoe?: number; kind?: 'impact' | 'death' | 'splash'; severity?: number }): object | null
+  step(dtMs: number): void
+  tris(): Float32Array
+  vertCount(): number
+  lights(): Array<{ pos: number[]; color: number[]; strength: number }>
+  clear(): void
 }
 
 export class ExplosionOverlay {

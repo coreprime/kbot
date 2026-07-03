@@ -211,6 +211,12 @@ export class Session {
    * Returns false for a missing or script-less unit.
    */
   playWeaponFire(unitId: number, slot: number, tx: number, ty: number, tz: number): boolean
+  /**
+   * Run a unit's Activate (on) / Deactivate (off) COB entry point and pin
+   * the ACTIVATION port — the replay driver's building-activity hook.
+   * Presentation only; returns false for a missing or script-less unit.
+   */
+  setUnitActivation(unitId: number, on: boolean): boolean
   /** Spawn a thread on the named COB entry point with integer args. */
   startScript(unitId: number, name: string, args?: number[]): void
   /** Start the named script after cancelling any live instance of it. */

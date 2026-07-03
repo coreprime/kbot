@@ -45,6 +45,8 @@ import {
   SFX_SMOKE_WHITE,
   SFX_SUB_BUBBLES,
   SFX_FIRE_FLASH,
+  SFX_SPARK,
+  SFX_NANO_PARTICLES,
 } from './cob-particles.js'
 import { gatherSceneLights } from './scene-lights.js'
 import { loadWorlds } from './worlds.js'
@@ -58,8 +60,10 @@ import {
   resolveDeathPlan,
   damageSmokeIntervalMs,
   debrisBurst,
-  stepDebris,
+  stepDebrisRecord,
 } from './world-fx.js'
+import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
+import { ExplosionManager } from './explosion-fx.js'
 
 // Loaded models rest nose toward -Z (the direction a raw game heading of 0
 // faces — see cob-pose.js), so the default display pose for a bare addUnit
@@ -75,9 +79,44 @@ const IMPULSE_SPRING_C = 7
 // moving tank crossing a ridge, slow enough to hide heightfield stairsteps.
 const TILT_SMOOTH_SEC = 0.15
 
-// How long flying-polygon debris persists before it is dropped (the pieces
-// have scattered and largely fallen below the terrain by then).
-const DEBRIS_LIFE_MS = 1300
+// How long flying-polygon debris persists.  Pieces now bounce off the
+// terrain and settle (world-fx stepDebrisRecord), so the window covers the
+// flight + a beat on the ground; the last DEBRIS_FADE_MS alpha-fade the
+// pieces out where they lie.
+const DEBRIS_LIFE_MS = 2600
+const DEBRIS_FADE_MS = 420
+// Global concurrent debris-piece budget: when a mass death pushes past it,
+// the OLDEST records get their remaining life clamped to the fade window —
+// they fade first, keeping the per-frame piece integration bounded.
+const DEBRIS_MAX_PIECES = 320
+
+// Air-unit presentation: hover-bob amplitude/frequency, the speed at which
+// contrails start, and the spiral-crash tuning.
+const AIR_BOB_WU = 1.6
+const AIR_BOB_HZ = 0.45
+const CONTRAIL_MIN_SPEED = 55
+const CONTRAIL_INTERVAL_MS = 60
+const CRASH_SPIN_RAD_S = 2.6
+const CRASH_SINK_ACCEL = 55
+const CRASH_SMOKE_INTERVAL_MS = 70
+
+// Surface-vessel wake cadence + the band around the waterline that counts
+// as "on the surface".
+const WAKE_INTERVAL_MS = 100
+const WAKE_MIN_SPEED = 10
+const SURFACE_BAND_WU = 4
+
+// Nanolathe / reclaim beam cadence + particle speed.
+const LATHE_EMIT_INTERVAL_MS = 26
+const LATHE_PARTICLE_SPEED = 220
+
+// Reclaimed wrecks shrink toward this scale while a reclaim beam holds
+// them (full shrink over RECLAIM_SHRINK_MS of beam time).
+const RECLAIM_MIN_SCALE = 0.12
+const RECLAIM_SHRINK_MS = 3800
+
+// Capture flash duration (bright team-coloured shell pulse).
+const CAPTURE_FLASH_MS = 700
 
 // Wrecks embed slightly into the ground like TA's corpse features do.
 const CORPSE_SINK_WU = 1.5
@@ -167,12 +206,18 @@ export async function createWorld(canvas, {
   const modelCache = new Map()   // name → Promise<Model>
   const units = new Map()        // id → unit record
   const corpses = new Map()      // id → persistent wreck record
+  const featureModels = []       // 3DO map features (static, from setTerrain)
+  const beams = new Map()        // latheBeam/reclaimBeam key → beam record
+  let crashes = []               // air-unit spiral-crash records
   let debris = []                // flying-polygon death records
   let modelShots = []            // weaponEffect() projectile meshes in flight
   let projectiles = []           // transient snapshot-provided shots
   let tracers = []               // fireWeapon() visual tracers
   let weaponFx = []              // legacy explicit beam/tracer line effects
   let weaponDefsCache = null     // id → normalised pack weapon def
+  let featureDefsCache = null    // id → pack feature def (features.json)
+  let featureBuildToken = 0      // cancels stale async feature builds
+  let fxTimeMs = 0               // world fx clock (sum of step dtMs)
   let nextId = 1
   let disposed = false
 
@@ -184,6 +229,10 @@ export async function createWorld(canvas, {
     particles: new ParticlePool(4096),
     audio: null,
     _renderer: renderer,
+    // Polygonal explosion manager — every impactBurst detonation routes
+    // its fireball/shockwave through here (capped + coalesced; see
+    // explosion-fx.js).  Stepped by _stepPresentation on the fx clock.
+    explosions: new ExplosionManager(),
   }
   const smokeTrails = new SmokeTrailManager()
   renderer.setParticlePool(worldBinding.particles)
@@ -219,6 +268,23 @@ export async function createWorld(canvas, {
     return out
   }
 
+  const featureDefs = async () => {
+    if (featureDefsCache) return featureDefsCache
+    let raw = null
+    if (assets && typeof assets.featureDefs === 'function') {
+      raw = await assets.featureDefs().catch(() => null)
+    }
+    featureDefsCache = raw || {}
+    return featureDefsCache
+  }
+
+  // waterY — the installed battlefield's sea surface Y, or null on dry
+  // maps / the flat pad.  Splashes, torpado depth and wakes key on it.
+  const waterY = () => {
+    const mt = renderer._mapTerrain
+    return mt && mt.waterVbo ? mt.seaY : null
+  }
+
   const terrainHeightAt = (x, z) =>
     (typeof renderer.terrainHeightAt === 'function' ? renderer.terrainHeightAt(x, z) : 0)
   const terrainNormalAt = (x, z) =>
@@ -230,6 +296,12 @@ export async function createWorld(canvas, {
   const _unitPose = (u) => {
     let y = u.y
     if (u.grounded) y = terrainHeightAt(u.x, u.z)
+    // Airborne hover bob: a gentle deterministic heave off the fx clock,
+    // phase-offset per unit id so a squadron doesn't pump in unison.
+    if (u.air && !u.grounded) {
+      const phase = (typeof u.id === 'number' ? u.id : 0) * 2.39996
+      y += Math.sin((fxTimeMs / 1000) * AIR_BOB_HZ * Math.PI * 2 + phase) * AIR_BOB_WU
+    }
     const pitch = (u.pitchRad || 0) + (u._tiltP || 0) + (u._imp ? u._imp.p : 0)
     const roll = (u.rollRad || 0) + (u._tiltR || 0) + (u._imp ? u._imp.r : 0)
     return { x: u.x, y, z: u.z, headingRad: u.headingRad, pitchRad: pitch, rollRad: roll }
@@ -240,14 +312,23 @@ export async function createWorld(canvas, {
     const overlays = []
     for (const u of units.values()) {
       if (!u.model) continue
-      entities.push({
+      const ent = {
         id: u.id,
         model: u.model,
         transform: _unitPose(u),
         teamColor: u.teamColor,
         buildPercent: u.buildPercent,
         selected: !!u.selected,
-      })
+      }
+      // Air units bank into their turns and hovercraft gyrate via the
+      // renderer's locomotion overlay (the same path the studio sandbox
+      // uses); the flags arrive on applyState as air / hover.
+      if (u.air || u.hover) {
+        ent.meta = { isAircraft: !!u.air, isHovercraft: !!u.hover, bankScale: 1, pitchScale: 1 }
+      }
+      // Capture flash: a bright wireframe shell pulse for the flash window.
+      if (u._captureMs > 0) ent.highlight = true
+      entities.push(ent)
       if ((u.hp01 != null && u.hp01 < 1) || (u.rank | 0) > 0) {
         const t = entities[entities.length - 1].transform
         overlays.push({
@@ -263,17 +344,40 @@ export async function createWorld(canvas, {
       entities.push({
         id: 'corpse-' + c.id,
         model: c.model,
-        transform: { x: c.x, y: c.y, z: c.z, headingRad: c.headingRad, pitchRad: c.pitchRad || 0, rollRad: c.rollRad || 0 },
+        transform: { x: c.x, y: c.y, z: c.z, headingRad: c.headingRad, pitchRad: c.pitchRad || 0, rollRad: c.rollRad || 0, scale: c.scale != null ? c.scale : 1 },
         teamColor: null,
+      })
+    }
+    for (const fm of featureModels) {
+      if (!fm.model) continue
+      entities.push({
+        id: 'feat-' + fm.idx,
+        model: fm.model,
+        transform: { x: fm.x, y: fm.y, z: fm.z, headingRad: fm.heading },
+        teamColor: null,
+      })
+    }
+    for (const cr of crashes) {
+      if (!cr.model) continue
+      entities.push({
+        id: 'crash-' + cr.id,
+        model: cr.model,
+        transform: { x: cr.x, y: cr.y, z: cr.z, headingRad: cr.headingRad, pitchRad: cr.pitchRad, rollRad: cr.rollRad },
+        teamColor: cr.teamColor || null,
       })
     }
     for (const d of debris) {
       if (!d.model) continue
+      // Fade the pieces out where they lie over the last DEBRIS_FADE_MS.
+      const remain = d.lifeMs - d.ageMs
+      const opacity = remain < DEBRIS_FADE_MS ? Math.max(0, remain / DEBRIS_FADE_MS) : 1
       entities.push({
         id: 'debris-' + d.id,
         model: d.model,
         transform: { x: d.x, y: d.y, z: d.z, headingRad: d.headingRad },
         teamColor: d.teamColor || null,
+        opacity,
+        buildFadeOnly: true,
       })
     }
     for (const s of modelShots) {
@@ -302,11 +406,14 @@ export async function createWorld(canvas, {
     // studio's per-frame gatherSceneLights path — plus the legacy
     // fireWeapon tracer glows.
     const lights = gatherSceneLights([worldBinding.particles])
+    // Explosion lights — the manager's strongest few, already budgeted.
+    for (const l of worldBinding.explosions.lights()) lights.push(l)
     for (const s of tracers) {
       lights.push({ pos: [s.x, s.y, s.z], color: s.color, strength: s.strength })
     }
     renderer.setPulseLights(lights)
     renderer.setWeaponEffects(weaponFxSegments())
+    renderer.setExplosionTris(worldBinding.explosions.tris(), worldBinding.explosions.vertCount())
   }
 
   // weaponFxSegments turns the live legacy weaponEffect() records into the
@@ -355,16 +462,36 @@ export async function createWorld(canvas, {
   const _stepPresentation = (dtMs) => {
     if (!(dtMs > 0)) return
     const dt = dtMs / 1000
+    fxTimeMs += dtMs
     worldBinding.particles.tick(dtMs)
     smokeTrails.tick(dtMs)
-    stepModelShots(modelShots, dtMs)
-    // Debris ages out; its pieces fly in model-local space.
+    worldBinding.explosions.step(dtMs)
+    stepModelShots(modelShots, dtMs, { env: { waterY: waterY(), heightAt: terrainHeightAt } })
+    _stepBeams(dtMs)
+    _stepCrashes(dtMs)
+    // Debris: parabolic world-space flight with terrain bounces; a global
+    // piece budget clamps the OLDEST records into their fade window when a
+    // mass death would blow the frame budget.
     if (debris.length) {
+      let totalPieces = 0
+      for (const d of debris) totalPieces += d.pieces.length
+      if (totalPieces > DEBRIS_MAX_PIECES) {
+        // debris[] is push-ordered — oldest first.
+        let excess = totalPieces - DEBRIS_MAX_PIECES
+        for (const d of debris) {
+          if (excess <= 0) break
+          const remain = d.lifeMs - d.ageMs
+          if (remain > DEBRIS_FADE_MS) {
+            d.lifeMs = d.ageMs + DEBRIS_FADE_MS
+            excess -= d.pieces.length
+          }
+        }
+      }
       let w = 0
       for (const d of debris) {
         d.ageMs += dtMs
         if (d.ageMs >= d.lifeMs) continue
-        stepDebris(d.pieces, dtMs)
+        stepDebrisRecord(d, dtMs, { heightAt: terrainHeightAt })
         debris[w++] = d
       }
       debris.length = w
@@ -397,6 +524,60 @@ export async function createWorld(canvas, {
         u._tiltP = (u._tiltP || 0) * (1 - tiltK)
         u._tiltR = (u._tiltR || 0) * (1 - tiltK)
       }
+      // Motion-derived presentation: speed from position deltas feeds the
+      // aircraft contrail + surface-vessel wake emitters.
+      let speed = 0
+      if (u._pt != null) {
+        const pdt = (fxTimeMs - u._pt) / 1000
+        if (pdt > 1e-4) speed = Math.hypot(u.x - u._px, u.z - u._pz) / pdt
+      }
+      const wy = waterY()
+      // Water-entry splash: the unit's render Y crossed the sea surface
+      // downward since last step (a crashing aircraft, an amphib wading in).
+      if (wy != null && u._py != null && u._py > wy && u.y <= wy) {
+        impactBurst(worldBinding, [u.x, wy, u.z], { aoe: 40, water: true })
+      }
+      u._px = u.x; u._py = u.y; u._pz = u.z; u._pt = fxTimeMs
+      // Aircraft contrail: white wisps behind a fast mover.
+      if (u.air && speed >= CONTRAIL_MIN_SPEED) {
+        u._trailAccMs = (u._trailAccMs || 0) + dtMs
+        if (u._trailAccMs >= CONTRAIL_INTERVAL_MS) {
+          u._trailAccMs -= CONTRAIL_INTERVAL_MS
+          const pose = _unitPose(u)
+          const back = (u.model && u.model.boundsRadius) || 8
+          const bx = u.x + Math.sin(u.headingRad) * back
+          const bz = u.z + Math.cos(u.headingRad) * back
+          worldBinding.particles.emit(SFX_SMOKE_WHITE, [bx, pose.y, bz], {
+            size: 3.5, lifeMs: 700, riseSpeed: 0.3, drift: 0.4,
+            color: [0.95, 0.96, 1.0, 0.30],
+          })
+        }
+      } else {
+        u._trailAccMs = 0
+      }
+      // Surface-vessel wake: foam behind a ship under way on the sheet.
+      if (u.naval && wy != null && Math.abs(u.y - wy) <= SURFACE_BAND_WU && speed >= WAKE_MIN_SPEED) {
+        u._wakeAccMs = (u._wakeAccMs || 0) + dtMs
+        if (u._wakeAccMs >= WAKE_INTERVAL_MS) {
+          u._wakeAccMs -= WAKE_INTERVAL_MS
+          const r = (u.model && u.model.boundsRadius) || 10
+          const sternX = u.x + Math.sin(u.headingRad) * r * 0.8
+          const sternZ = u.z + Math.cos(u.headingRad) * r * 0.8
+          // Two foam puffs peeling off the stern quarters.
+          const px = Math.cos(u.headingRad), pz = -Math.sin(u.headingRad)
+          for (const side of [-1, 1]) {
+            worldBinding.particles.emit(SFX_SMOKE_WHITE, [sternX + px * side * r * 0.35, wy + 0.4, sternZ + pz * side * r * 0.35], {
+              size: 5 + Math.min(6, speed * 0.05), lifeMs: 1200,
+              riseSpeed: 0.1, drift: 0.7,
+              color: [0.95, 0.98, 1.0, 0.40],
+            })
+          }
+        }
+      } else {
+        u._wakeAccMs = 0
+      }
+      // Capture flash timer.
+      if (u._captureMs > 0) u._captureMs -= dtMs
       // Health-driven damage smoke (TA units smoke below ~2/3 health,
       // harder as they near death).
       const interval = damageSmokeIntervalMs(u.hp01)
@@ -414,6 +595,145 @@ export async function createWorld(canvas, {
         u._smokeAccMs = 0
       }
     }
+  }
+
+  // _resolveBeamEnd turns a beam endpoint spec into a live world position:
+  // { unitId } tracks the unit (mid-hull), { corpseId } tracks a wreck,
+  // { pos: [x,y,z] } is fixed.  Null when the referent is gone.
+  const _resolveBeamEnd = (end) => {
+    if (!end) return null
+    if (end.unitId != null) {
+      const u = units.get(end.unitId)
+      if (!u) return null
+      const pose = _unitPose(u)
+      const cy = u.model && u.model.boundsCentre ? u.model.boundsCentre[1] : 6
+      return [pose.x, pose.y + cy, pose.z]
+    }
+    if (end.corpseId != null) {
+      const c = corpses.get(end.corpseId)
+      if (!c) return null
+      return [c.x, c.y + 4, c.z]
+    }
+    if (Array.isArray(end.pos)) return end.pos
+    return null
+  }
+
+  // _stepBeams advances every live lathe/reclaim beam: a deterministic
+  // accumulator drips nano particles along the span (toward the target for
+  // build, back toward the builder for reclaim), sparkles land on the work
+  // end, and a reclaimed wreck shrinks while the beam holds it.
+  const _stepBeams = (dtMs) => {
+    if (!beams.size) return
+    for (const [key, b] of beams) {
+      const from = _resolveBeamEnd(b.from)
+      const to = _resolveBeamEnd(b.to)
+      if (!from || !to) { beams.delete(key); continue }
+      b.accMs += dtMs
+      const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
+      const dist = Math.hypot(dx, dy, dz) || 1
+      const lifeMs = (dist / LATHE_PARTICLE_SPEED) * 1000
+      while (b.accMs >= LATHE_EMIT_INTERVAL_MS) {
+        b.accMs -= LATHE_EMIT_INTERVAL_MS
+        b.count = (b.count || 0) + 1
+        const reclaim = b.kind === 'reclaim'
+        const src = reclaim ? to : from
+        const dir = reclaim ? -1 : 1
+        // Slight per-particle scatter off the beam axis (deterministic rng).
+        const jx = (b.rng() * 2 - 1) * 1.6
+        const jy = (b.rng() * 2 - 1) * 1.6
+        const jz = (b.rng() * 2 - 1) * 1.6
+        worldBinding.particles.emit(SFX_NANO_PARTICLES, [src[0] + jx, src[1] + jy, src[2] + jz], {
+          velocity: [
+            dir * (dx / dist) * LATHE_PARTICLE_SPEED,
+            dir * (dy / dist) * LATHE_PARTICLE_SPEED,
+            dir * (dz / dist) * LATHE_PARTICLE_SPEED,
+          ],
+          lifeMs,
+          color: b.color,
+          size: 2.2,
+          noFade: true,
+        })
+        // Work-end sparkle every few drips.
+        if ((b.count % 4) === 0) {
+          const work = reclaim ? to : to
+          worldBinding.particles.emit(SFX_SPARK, [work[0] + jx, work[1] + jy, work[2] + jz], {
+            color: [b.color[0], b.color[1], b.color[2], 1],
+            lifeMs: 180,
+          })
+        }
+      }
+      if (b.kind === 'reclaim' && b.to && b.to.corpseId != null) {
+        const c = corpses.get(b.to.corpseId)
+        if (c) {
+          const rate = (1 - RECLAIM_MIN_SCALE) * (dtMs / RECLAIM_SHRINK_MS)
+          c.scale = Math.max(RECLAIM_MIN_SCALE, (c.scale != null ? c.scale : 1) - rate)
+        }
+      }
+    }
+  }
+
+  // _spawnDebris pushes one flying-polygon debris record for a model at a
+  // pose.  Seeded from the unit's identity + cell so a replay re-run
+  // scatters identically; impactDir/impactMag bias the pieces away from
+  // the killing blow (world-fx debrisBurst).
+  const _spawnDebris = ({ id, model, teamColor }, pose, { impactDir = null, impactMag = 0 } = {}) => {
+    if (!model) return
+    const rng = mulberry32(featureSeed(String(id), Math.round(pose.x), Math.round(pose.z)))
+    debris.push({
+      id,
+      model, // the per-unit clone — pieces fly in place
+      x: pose.x, y: pose.y, z: pose.z,
+      headingRad: pose.headingRad || 0,
+      teamColor,
+      pieces: debrisBurst(model, { rng, impactDir, impactMag, headingRad: pose.headingRad || 0 }),
+      ageMs: 0,
+      lifeMs: DEBRIS_LIFE_MS,
+    })
+  }
+
+  // _stepCrashes flies the spiral-crash records: an air unit's death dive —
+  // nose down, rolling, spinning around its yaw while it sinks faster and
+  // faster, coughing smoke — until it meets terrain (ground detonation +
+  // debris) or water (splash, then it is gone).
+  const _stepCrashes = (dtMs) => {
+    if (!crashes.length) return
+    const dt = dtMs / 1000
+    const wy = waterY()
+    let w = 0
+    for (const cr of crashes) {
+      cr.headingRad += CRASH_SPIN_RAD_S * dt
+      cr.rollRad = Math.min(0.9, cr.rollRad + 1.1 * dt)
+      cr.pitchRad = Math.max(-0.55, cr.pitchRad - 0.8 * dt)
+      cr.vy -= CRASH_SINK_ACCEL * dt
+      cr.x += cr.vx * dt
+      cr.z += cr.vz * dt
+      cr.y += cr.vy * dt
+      cr.smokeAcc = (cr.smokeAcc || 0) + dtMs
+      while (cr.smokeAcc >= CRASH_SMOKE_INTERVAL_MS) {
+        cr.smokeAcc -= CRASH_SMOKE_INTERVAL_MS
+        worldBinding.particles.emit(SFX_SMOKE_GREY, [cr.x, cr.y, cr.z], { size: 8, lifeMs: 900 })
+        if (cr.rng() < 0.3) {
+          worldBinding.particles.emit(SFX_FIRE_FLASH, [cr.x, cr.y, cr.z], { size: 5, lifeMs: 160 })
+        }
+      }
+      const ground = terrainHeightAt(cr.x, cr.z)
+      if (wy != null && cr.y <= wy && ground < wy) {
+        // Down at sea: one splash, the wreck sinks from sight.
+        impactBurst(worldBinding, [cr.x, wy, cr.z], { aoe: 56, water: true })
+        continue
+      }
+      if (cr.y <= ground) {
+        // Ground impact: real detonation + scattering pieces.
+        const pose = { x: cr.x, y: ground, z: cr.z, headingRad: cr.headingRad }
+        impactBurst(worldBinding, [cr.x, ground + 2, cr.z], { aoe: Math.max(48, cr.r * 2.2), kind: 'death' })
+        _spawnDebris({ id: cr.id, model: cr.model, teamColor: cr.teamColor }, pose, {
+          impactDir: [cr.vx, cr.vz], impactMag: 2,
+        })
+        continue
+      }
+      crashes[w++] = cr
+    }
+    crashes.length = w
   }
 
   const world = {
@@ -462,7 +782,7 @@ export async function createWorld(canvas, {
     // Presentation opts: grounded (clamp render Y to the terrain +
     // slope-tilt), hp01 (0..1 health fraction for the status bar +
     // damage smoke), rank (0..5 veteran chevrons).
-    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined, grounded = false, hp01 = null, rank = 0, redraw = true } = {}) {
+    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined, grounded = false, hp01 = null, rank = 0, air = false, hover = false, naval = false, redraw = true } = {}) {
       const base = await loadBaseModel(name)
       const unitId = id != null ? id : nextId++
       if (unitId >= nextId && typeof unitId === 'number') nextId = unitId + 1
@@ -475,6 +795,9 @@ export async function createWorld(canvas, {
         pitchRad: 0,
         rollRad: 0,
         grounded: !!grounded,
+        air: !!air,
+        hover: !!hover,
+        naval: !!naval,
         hp01,
         rank: rank | 0,
         teamColor: teamColor || (side != null ? teamColorForSide(side) : null),
@@ -507,9 +830,49 @@ export async function createWorld(canvas, {
     // renderer and makes terrainHeightAt/terrainNormalAt answer from it.
     // Equivalent to renderer.setMapTerrain — surfaced on the world so a
     // driver needs no renderer reach-through.  Pass null to clear.
-    setTerrain(terrain) {
+    //
+    // Features: when the payload carries features[] (packed maps do) and
+    // opts.features isn't false, the map's features install too — GAF
+    // sprite features as procedural 3D stand-ins baked into static batches
+    // (map-features.js), object features as their real packed 3DO models.
+    // The features.json catalogue loads from the AssetProvider
+    // (featureDefs()); on a pre-v5 pack every feature falls back to a
+    // category-less default stand-in.  Toggle later via
+    // setFeaturesEnabled(on).
+    setTerrain(terrain, { features = true } = {}) {
+      featureBuildToken++
+      featureModels.length = 0
       if (terrain) renderer.setMapTerrain(terrain)
       else renderer.clearMapTerrain()
+      if (terrain && features && Array.isArray(terrain.features) && terrain.features.length) {
+        const token = featureBuildToken
+        featureDefs().then((defs) => {
+          if (disposed || token !== featureBuildToken) return
+          const field = buildFeatureField({
+            features: terrain.features,
+            defs,
+            heightAt: terrainHeightAt,
+            cellWU: (terrain.cellWU || 16),
+          })
+          renderer.setMapFeatures(field.batches)
+          field.models.forEach((m, idx) => {
+            const rec = { idx, model: null, x: m.x, y: m.y, z: m.z, heading: m.heading, name: m.name }
+            featureModels.push(rec)
+            loadBaseModel(m.name).then((base) => {
+              if (!disposed && token === featureBuildToken) rec.model = base.cloneForInstance()
+            }).catch(() => { /* unpacked object feature — stays invisible */ })
+          })
+          if (!renderer.running) world.step(0)
+        }).catch(() => { /* no feature catalogue — terrain still installed */ })
+      }
+      if (!renderer.running) world.step(0)
+    },
+
+    // setFeaturesEnabled toggles the map-feature pass (stand-in batches +
+    // 3DO feature models) without rebuilding anything.
+    setFeaturesEnabled(on) {
+      renderer.setFeaturesEnabled(on)
+      world._featuresOff = !on
       if (!renderer.running) world.step(0)
     },
 
@@ -570,6 +933,8 @@ export async function createWorld(canvas, {
               severity: su.deathSeverity != null ? su.deathSeverity : (su.severity || 0),
               corpse: su.corpse || null,
               heapCorpse: su.heapCorpse || null,
+              impactDir: su.impactDir || null,
+              impactMag: su.impactMag != null ? su.impactMag : 0,
               redraw: false,
             })
           }
@@ -593,6 +958,9 @@ export async function createWorld(canvas, {
         if (su.pitch != null) u.pitchRad = su.pitch
         if (su.roll != null) u.rollRad = su.roll
         if (su.grounded != null) u.grounded = !!su.grounded
+        if (su.air != null) u.air = !!su.air
+        if (su.hover != null) u.hover = !!su.hover
+        if (su.naval != null) u.naval = !!su.naval
         if (su.tilt != null) u.tilt = !!su.tilt
         if (su.hp01 != null) u.hp01 = su.hp01
         if (su.rank != null) u.rank = su.rank | 0
@@ -730,25 +1098,48 @@ export async function createWorld(canvas, {
     // The live unit is removed immediately (a corpse is not a commandable
     // actor); applyState snapshots that stop listing the unit are the
     // normal driver flow.
-    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, redraw = true } = {}) {
+    // impactDir ([x, z], world frame, source → victim) + impactMag bias the
+    // debris scatter away from the killing blow; a replay driver derives
+    // them from the killer/victim positions on a kill event.  Airborne
+    // units (applyState air:true) don't pop in place: they enter a spiral
+    // crash — a spinning, rolling, smoking descent that detonates (debris
+    // and all) where it meets the terrain, or splashes into the sea.
+    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, impactDir = null, impactMag = 0, redraw = true } = {}) {
       const u = units.get(id)
       if (!u) return false
-      const plan = resolveDeathPlan({ severity, corpse, heapCorpse })
       const pose = _unitPose(u)
       const r = u.model ? (u.model.boundsRadius || 16) : 16
-      // Death flash + smoke — sized by the unit's bulk.
-      impactBurst(worldBinding, [pose.x, pose.y + r * 0.4, pose.z], { aoe: Math.max(24, r * 2.2) })
-      if (plan.debris && u.model) {
-        debris.push({
+      if (u.air && !u.grounded && pose.y > terrainHeightAt(pose.x, pose.z) + r) {
+        // Spiral crash: keep flying the airframe down; the detonation
+        // happens on contact (_stepCrashes).
+        const spd = 40
+        crashes.push({
           id,
-          model: u.model, // the per-unit clone — pieces fly in place
+          model: u.model,
+          teamColor: u.teamColor,
           x: pose.x, y: pose.y, z: pose.z,
           headingRad: u.headingRad,
-          teamColor: u.teamColor,
-          pieces: debrisBurst(u.model),
-          ageMs: 0,
-          lifeMs: DEBRIS_LIFE_MS,
+          pitchRad: 0, rollRad: 0,
+          vx: -Math.sin(u.headingRad) * spd,
+          vz: -Math.cos(u.headingRad) * spd,
+          vy: -12,
+          r,
+          rng: mulberry32(featureSeed(String(id), Math.round(pose.x), Math.round(pose.z))),
+          smokeAcc: 0,
         })
+        // A hit flash where the killing shot landed.
+        worldBinding.particles.emit(SFX_FIRE_FLASH, [pose.x, pose.y, pose.z], { size: 10, lifeMs: 200 })
+        units.delete(id)
+        if (redraw && !renderer.running) world.step(0)
+        return true
+      }
+      const plan = resolveDeathPlan({ severity, corpse, heapCorpse })
+      // Death detonation — severity rides the explosion tier ladder.
+      impactBurst(worldBinding, [pose.x, pose.y + r * 0.4, pose.z], {
+        aoe: Math.max(24, r * 2.2), kind: 'death', severity,
+      })
+      if (plan.debris && u.model) {
+        _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag })
       }
       if (plan.corpse) {
         const rec = {
@@ -774,6 +1165,64 @@ export async function createWorld(canvas, {
     removeCorpse(id) { corpses.delete(id) },
     clearCorpses() { corpses.clear() },
     corpseIds() { return Array.from(corpses.keys()) },
+
+    // latheBeam drives the TA construction visual: a green nano-particle
+    // spray from the builder to the build target, plus the target's own
+    // rising wireframe→solid treatment (which buildPercent drives through
+    // applyState).  Keyed so a driver toggles per build order:
+    //
+    //   world.latheBeam('b1', { fromUnitId, toUnitId })      // on
+    //   world.latheBeam('b1', { on: false })                 // off
+    //
+    // Endpoints: fromUnitId/toUnitId track live units, from/to are fixed
+    // [x,y,z] positions (a build site before the frame exists).  The
+    // stream is deterministic (seeded per key, fx-clock cadence).
+    latheBeam(key, { fromUnitId = null, toUnitId = null, from = null, to = null, on = true, color = null } = {}) {
+      if (!on) { beams.delete(key); return }
+      beams.set(key, {
+        kind: 'build',
+        from: fromUnitId != null ? { unitId: fromUnitId } : { pos: from },
+        to: toUnitId != null ? { unitId: toUnitId } : { pos: to },
+        color: color || [0.45, 1.9, 0.85, 0.9],
+        accMs: 0,
+        rng: mulberry32(featureSeed(String(key), 7, 13)),
+      })
+    },
+
+    // reclaimBeam is the reverse flow: nano particles stream FROM the
+    // wreck (or unit/position) back INTO the builder, and a corpseId
+    // target shrinks while the beam holds it (RECLAIM_MIN_SCALE floor).
+    // The consumer still owns the wreck's actual removal (removeCorpse on
+    // the reclaim-finished event).
+    reclaimBeam(key, { fromUnitId = null, corpseId = null, toUnitId = null, from = null, to = null, on = true, color = null } = {}) {
+      if (!on) { beams.delete(key); return }
+      beams.set(key, {
+        kind: 'reclaim',
+        from: fromUnitId != null ? { unitId: fromUnitId } : { pos: from },
+        to: corpseId != null ? { corpseId } : (toUnitId != null ? { unitId: toUnitId } : { pos: to }),
+        color: color || [0.55, 1.7, 0.55, 0.9],
+        accMs: 0,
+        rng: mulberry32(featureSeed(String(key), 17, 29)),
+      })
+    },
+
+    // captureFlash plays the capture-complete treatment on a unit: a brief
+    // bright wireframe shell pulse + a spark shower.  Call it when the
+    // recording reports the ownership flip (typically alongside applyState
+    // switching the unit's side/teamColor).
+    captureFlash(id) {
+      const u = units.get(id)
+      if (!u) return false
+      u._captureMs = CAPTURE_FLASH_MS
+      const pose = _unitPose(u)
+      const cy = u.model && u.model.boundsCentre ? u.model.boundsCentre[1] : 6
+      for (let i = 0; i < 8; i++) {
+        worldBinding.particles.emit(SFX_SPARK, [pose.x, pose.y + cy, pose.z], {
+          color: [0.5, 1.8, 0.8, 1], lifeMs: 320,
+        })
+      }
+      return true
+    },
 
     // fireWeapon spawns a purely visual tracer: a moving light that
     // travels from `from` toward `to` (or along `vel`) and expires.
@@ -841,6 +1290,7 @@ export async function createWorld(canvas, {
           modelShots,
           gravity: 100,
           overrides: { color, durationMs, velocity, width },
+          env: { waterY: waterY(), heightAt: terrainHeightAt },
         })
         worldBinding._lastFiredWeapon = def
         if (res && res.modelShot) {
@@ -928,12 +1378,16 @@ export async function createWorld(canvas, {
       renderer.stop()
       units.clear()
       corpses.clear()
+      featureModels.length = 0
+      beams.clear()
+      crashes = []
       debris = []
       modelShots = []
       projectiles = []
       tracers = []
       weaponFx = []
       smokeTrails.clear()
+      worldBinding.explosions.clear()
       renderer.dispose()
     },
   }

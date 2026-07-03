@@ -21,7 +21,7 @@ import {
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
 } from './weapon-driver.js'
-import { SFX_SMOKE_GREY, SFX_SPARK } from './cob-particles.js'
+import { SFX_SMOKE_GREY, SFX_SPARK, SFX_SUB_BUBBLES } from './cob-particles.js'
 import {
   WEAPON_RENDERTYPE_DGUN,
   WEAPON_RENDERTYPE_LASER,
@@ -65,8 +65,20 @@ export function normalizePackWeaponDef(id, def) {
     colorRGB: Array.isArray(def.color) ? def.color : null,
     soundStart: def.soundStart || '',
     soundHit: def.soundHit || '',
+    // Guided-flight + water fields (pack format v5; zero on older packs).
+    // turnRate is TA angle units (65536 = full circle) per second — the
+    // converted rad/s value is what the steering integrator consumes.
+    turnRate: def.turnRate | 0,
+    turnRateRad: (def.turnRate | 0) * TA_TURN_TO_RAD,
+    guidance: !!def.guidance,
+    waterWeapon: !!def.waterWeapon,
+    accelerationWU: +def.accelerationWU || 0,
+    flightTimeSec: +def.flightTimeSec || 0,
   }
 }
+
+// TA weapon turnrate= is in TA angle units per second (65536 = 2π).
+export const TA_TURN_TO_RAD = (Math.PI * 2) / 65536
 
 // isBeamDef — instant-hit beam family (laser / mindgun / lightning).  The
 // D-gun ships beamweapon=1 too but flies a visible slow fireball, so it is
@@ -96,31 +108,62 @@ export function weaponVisualPlan(w) {
   return 'particle'
 }
 
-// impactBurst detonates a synthetic impact at `pos`: a bright flash sized by
-// the blast diameter, a spray of sparks, and a lingering smoke puff — the
-// same cluster the studio's projectileHit path paints.  aoe is the TDF
-// blast DIAMETER in world units (defaults to a rifle-round 16).
-export function impactBurst(binding, pos, { aoe = 16, sparks = true } = {}) {
+// impactBurst detonates a synthetic impact at `pos`.  aoe is the TDF blast
+// DIAMETER in world units (defaults to a rifle-round 16).
+//
+// Deliberately RESTRAINED per hit (see explosion-fx.js for the readability
+// disciplines): a small-arms impact is a brief tight flash + a few sparks
+// and a smoke puff; the big fire visuals belong to the polygonal explosion
+// manager, which coalesces and budgets them.  When the binding carries one
+// (binding.explosions — createWorld installs it) the mesh detonation
+// spawns through it; kind/severity ride through for the tier ladder.
+//
+// Water: pass { water: true } (impact at/below the sea surface) and the
+// burst becomes a splash — white spray + bubbles + a foam ring via the
+// manager's splash tier, no fire.
+export function impactBurst(binding, pos, { aoe = 16, sparks = true, kind = 'impact', severity = 0, water = false } = {}) {
   if (!binding || !binding.particles) return
   const p = binding.particles
-  const size = Math.max(14, Math.min(120, aoe * 0.9))
-  const life = Math.max(300, Math.min(1100, 300 + aoe * 6))
+  if (water) {
+    // Splash: upward white spray + rising bubbles; foam ring via the
+    // explosion manager's splash tier.
+    const n = Math.max(3, Math.min(8, Math.round(aoe / 8)))
+    for (let i = 0; i < n; i++) {
+      p.emit(SFX_SMOKE_WHITE, pos, {
+        size: Math.max(3, aoe * 0.18),
+        lifeMs: 420,
+        riseSpeed: 14 + i * 3,
+        drift: 2.2,
+        color: [0.95, 0.98, 1.05, 0.6],
+      })
+    }
+    for (let i = 0; i < 3; i++) {
+      p.emit(SFX_SUB_BUBBLES, [pos[0], pos[1] - 2, pos[2]], {})
+    }
+    if (binding.explosions) binding.explosions.spawn(pos, { aoe, kind: 'splash' })
+    return
+  }
+  // Tight, short flash — sized WELL below the damage circle; the mesh
+  // fireball (below) carries the body of the visual.
+  const size = Math.max(6, Math.min(34, aoe * 0.45))
+  const life = Math.max(180, Math.min(420, 160 + aoe * 1.6))
   p.emit(SFX_FIRE_FLASH, pos, {
     size,
     lifeMs: life,
-    color: [1.9, 0.75, 0.22, 1.0],
-    lightStrength: Math.min(300, aoe * 2.2),
+    color: [1.6, 0.72, 0.24, 0.9],
+    lightStrength: Math.min(90, aoe * 0.9),
   })
   if (sparks) {
-    const n = Math.max(4, Math.min(14, Math.round(aoe / 6)))
+    const n = Math.max(2, Math.min(8, Math.round(aoe / 10)))
     for (let i = 0; i < n; i++) {
       p.emit(SFX_SPARK, pos, {})
     }
   }
   p.emit(SFX_SMOKE_GREY, [pos[0], pos[1] + 2, pos[2]], {
-    size: Math.max(10, aoe * 0.6),
-    lifeMs: 1200,
+    size: Math.max(8, Math.min(40, aoe * 0.5)),
+    lifeMs: 1000,
   })
+  if (binding.explosions) binding.explosions.spawn(pos, { aoe, kind, severity })
 }
 
 // spawnWeaponVisual renders one shot of `weapon` (a normalised def — see
@@ -145,6 +188,7 @@ export function spawnWeaponVisual({
   modelShots = null,
   gravity = 80,
   overrides = {},
+  env = null,
 }) {
   if (!Array.isArray(from) || !Array.isArray(to)) return null
   const w = weapon || null
@@ -169,10 +213,16 @@ export function spawnWeaponVisual({
     const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
     const dist = Math.hypot(dx, dy, dz) || 1
     const ballistic = !!(w && (w.ballistic || w.dropped))
+    const guided = !!(w && w.guidance && w.turnRateRad > 0)
+    const torpedo = !!(w && w.waterWeapon)
+    const waterY = env && Number.isFinite(env.waterY) ? env.waterY : null
     let vel
+    let flightSec
     if (ballistic) {
-      // Lofted launch: aim the horizontal component at the target and give
-      // the arc enough vertical speed that gravity brings it down there.
+      // Lofted launch solved to LAND AT THE TARGET: pick the time of
+      // flight from the horizontal distance at muzzle speed, then give
+      // the arc exactly the vertical speed gravity needs to bring it
+      // down on the target at that time — x(t)=target, y(t)=target.
       const horiz = Math.hypot(dx, dz) || 1
       const t = Math.max(0.4, horiz / v)
       vel = [
@@ -180,12 +230,22 @@ export function spawnWeaponVisual({
         dy / t + 0.5 * gravity * t,
         dz / t,
       ]
+      flightSec = t
+    } else if (torpedo && waterY != null) {
+      // Torpedo: dive to running depth then drive flat at the target —
+      // stepModelShots holds it at/below the waterline.
+      const horiz = Math.hypot(dx, dz) || 1
+      vel = [dx / horiz * v, 0, dz / horiz * v]
+      flightSec = horiz / v
     } else {
       vel = [dx / dist * v, dy / dist * v, dz / dist * v]
+      flightSec = dist / v
     }
+    // Guided shots get life headroom to fly their curve; everything else
+    // expires exactly when the wire says the shot lands.
     const lifeMs = overrides.durationMs != null
       ? overrides.durationMs
-      : Math.max(200, (dist / v) * 1000 * (ballistic ? 1.15 : 1.0))
+      : Math.max(200, flightSec * 1000 * (guided ? 1.6 : 1.0))
     const shot = {
       model: null,           // caller resolves the mesh asynchronously
       modelName: w.model,
@@ -197,6 +257,15 @@ export function spawnWeaponVisual({
       lifeMs,
       aoe,
       binding,
+      // Guided flight: steer toward tx/ty/tz at turnRad rad/s and expire
+      // on proximity (see stepModelShots).
+      guided,
+      turnRad: guided ? w.turnRateRad : 0,
+      tx: to[0], ty: to[1], tz: to[2],
+      // Torpedoes run at periscope depth below the sheet.
+      torpedo,
+      waterY,
+      speed: v,
     }
     modelShots.push(shot)
     if (binding && binding.particles) {
@@ -206,9 +275,16 @@ export function spawnWeaponVisual({
       }
     }
     // Missile wake — same cadence source as the studio (TDF smokedelay).
-    if (smokeTrails && w.smokeTrail) {
+    // Torpedoes drag a bubble trail instead of smoke.
+    if (smokeTrails && (w.smokeTrail || torpedo)) {
       const intervalMs = w.smokeDelaySec > 0 ? w.smokeDelaySec * 1000 : 40
-      smokeTrails.schedule(binding, from, vel, shot.gravity, lifeMs, intervalMs)
+      if (torpedo) {
+        smokeTrails.schedule(binding, from, vel, 0, lifeMs, 60, {
+          puffKind: SFX_SUB_BUBBLES, puffSize: 2.5, puffLife: 900, puffRise: 4, puffDrift: 0.4,
+        })
+      } else {
+        smokeTrails.schedule(binding, from, vel, shot.gravity, lifeMs, intervalMs)
+      }
     }
     return { plan, kind: null, durationMs: lifeMs, modelShot: shot }
   }
@@ -233,23 +309,70 @@ export function spawnWeaponVisual({
   }
 }
 
-// stepModelShots advances the in-flight projectile meshes by dtMs, expiring
-// each at its lifeMs with an impact burst at the final position.  Returns
-// the surviving list (in place).  onExpire(shot) lets the caller add game
-// touches (sounds) without re-deriving the impact point.
-export function stepModelShots(modelShots, dtMs, { onExpire = null } = {}) {
+// stepModelShots advances the in-flight projectile meshes by dtMs.  Flight
+// faithfulness lives here:
+//   * ballistic shots integrate gravity (launched to land on the target);
+//   * guided shots steer toward their target at the weapon's turn rate
+//     (rad/s) and detonate on proximity, so a missile fired off-axis flies
+//     a visible pursuit curve;
+//   * torpedoes clamp to running depth below the waterline;
+//   * a shot that reaches terrain (env.heightAt) or its life detonates,
+//     and an impact at/below env.waterY splashes instead of burning.
+// Returns the surviving list (in place).  onExpire(shot) lets the caller
+// add game touches (sounds) without re-deriving the impact point.
+export function stepModelShots(modelShots, dtMs, { onExpire = null, env = null } = {}) {
   if (!modelShots || !modelShots.length) return modelShots
   const dt = dtMs / 1000
+  const heightAt = env && typeof env.heightAt === 'function' ? env.heightAt : null
+  const envWaterY = env && Number.isFinite(env.waterY) ? env.waterY : null
   let w = 0
   for (let i = 0; i < modelShots.length; i++) {
     const s = modelShots[i]
     s.ageMs += dtMs
+    // Guided steering: rotate the velocity toward the target bearing by at
+    // most turnRad·dt this step, preserving speed.
+    if (s.guided && s.turnRad > 0 && dt > 0) {
+      const speed = Math.hypot(s.vx, s.vy, s.vz) || 1
+      const px = s.tx - s.x, py = s.ty - s.y, pz = s.tz - s.z
+      const pLen = Math.hypot(px, py, pz) || 1
+      const dot = (s.vx * px + s.vy * py + s.vz * pz) / (speed * pLen)
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot)))
+      if (ang > 1e-4) {
+        const k = Math.min(1, (s.turnRad * dt) / ang)
+        // Slerp-lite: blend the unit velocity toward the unit bearing and
+        // renormalise to the weapon speed.
+        let nx = s.vx / speed + (px / pLen - s.vx / speed) * k
+        let ny = s.vy / speed + (py / pLen - s.vy / speed) * k
+        let nz = s.vz / speed + (pz / pLen - s.vz / speed) * k
+        const nLen = Math.hypot(nx, ny, nz) || 1
+        s.vx = nx / nLen * speed
+        s.vy = ny / nLen * speed
+        s.vz = nz / nLen * speed
+      }
+    }
     s.x += s.vx * dt
     s.y += s.vy * dt
     s.z += s.vz * dt
     if (s.gravity) s.vy -= s.gravity * dt
-    if (s.ageMs >= s.lifeMs) {
-      impactBurst(s.binding, [s.x, s.y, s.z], { aoe: s.aoe })
+    // Torpedo running depth: once at/under the waterline, hold a couple of
+    // world units below the sheet and kill any vertical drift.
+    const shotWaterY = Number.isFinite(s.waterY) ? s.waterY : envWaterY
+    if (s.torpedo && shotWaterY != null && s.y <= shotWaterY) {
+      s.y = Math.min(s.y, shotWaterY - 2)
+      if (s.y < shotWaterY - 6) s.y = shotWaterY - 6
+      s.vy = 0
+    }
+    // Detonation checks: proximity (guided), terrain, lifetime.
+    let hit = false
+    if (s.guided) {
+      const dTarget = Math.hypot(s.tx - s.x, s.ty - s.y, s.tz - s.z)
+      const speed = Math.hypot(s.vx, s.vy, s.vz)
+      if (dTarget <= Math.max(4, speed * dt * 1.5)) hit = true
+    }
+    if (!hit && heightAt && s.vy < 0 && s.y <= heightAt(s.x, s.z)) hit = true
+    if (hit || s.ageMs >= s.lifeMs) {
+      const water = shotWaterY != null && s.y <= shotWaterY + 0.5
+      impactBurst(s.binding, [s.x, s.y, s.z], { aoe: s.aoe, water })
       if (onExpire) onExpire(s)
       continue
     }
@@ -298,32 +421,58 @@ export function damageSmokeIntervalMs(hp01) {
 }
 
 // debrisBurst builds per-piece flight for a dying model's piece tree: every
-// piece gets an outward + upward velocity and a tumble, integrated by
-// stepDebris below.  Velocities live in the model's LOCAL frame (the same
-// frame piece.move animates in), which matches how TA's COB EXPLODE throws
-// pieces.  `rng` defaults to Math.random — a deterministic driver virtualises
-// it (the replay render harness does).
-export function debrisBurst(model, { speed = 55, lift = 90, rng = Math.random } = {}) {
+// piece gets an outward + upward velocity and a tumble.  Velocities live in
+// the model's LOCAL frame (the frame piece.move animates in), which matches
+// how TA's COB EXPLODE throws pieces; the local frame's Y is world up (the
+// debris base transform carries no pitch/roll), so gravity and terrain
+// bounces integrate exactly in that frame.
+//
+// Directional bias: when the killing impact came from somewhere, pass
+// impactDir ([x, z], WORLD frame, pointing from the explosion source toward
+// the victim) + impactMag (≈1 light round … 4 heavy shell) and headingRad
+// (the victim's yaw, to rotate the push into the local frame): every
+// piece's launch velocity gains a push AWAY from the source blended over
+// the radial burst, so a unit killed from the west visibly sheds eastward.
+//
+// `rng` defaults to Math.random — deterministic drivers pass a seeded one
+// (createWorld seeds from the unit id + position).
+export function debrisBurst(model, {
+  speed = 55, lift = 90, rng = Math.random,
+  impactDir = null, impactMag = 0, headingRad = 0,
+} = {}) {
   const pieces = []
   if (!model || !Array.isArray(model.flat)) return pieces
+  // World push → the local frame (inverse yaw), scaled by the magnitude.
+  let pushX = 0, pushZ = 0
+  if (Array.isArray(impactDir) && (impactDir[0] || impactDir[1])) {
+    const len = Math.hypot(impactDir[0], impactDir[1]) || 1
+    const wx = impactDir[0] / len, wz = impactDir[1] / len
+    const c = Math.cos(headingRad), sn = Math.sin(headingRad)
+    const mag = speed * 0.8 * Math.min(4, Math.max(0, +impactMag || 0))
+    pushX = (c * wx - sn * wz) * mag
+    pushZ = (sn * wx + c * wz) * mag
+  }
   for (const piece of model.flat) {
     const ang = rng() * Math.PI * 2
     const mag = speed * (0.4 + rng() * 0.9)
     pieces.push({
       piece,
-      vx: Math.cos(ang) * mag,
+      vx: Math.cos(ang) * mag + pushX * (0.6 + rng() * 0.8),
       vy: lift * (0.5 + rng() * 0.8),
-      vz: Math.sin(ang) * mag,
+      vz: Math.sin(ang) * mag + pushZ * (0.6 + rng() * 0.8),
       sx: (rng() * 2 - 1) * 6,
       sy: (rng() * 2 - 1) * 6,
       sz: (rng() * 2 - 1) * 6,
+      bounces: 0,
+      settled: false,
     })
   }
   return pieces
 }
 
 // stepDebris integrates one debris record's pieces by dtMs (gravity on the
-// vertical, spin on all axes).  The caller owns the record's age/lifetime.
+// vertical, spin on all axes) — the legacy no-terrain form, kept for
+// callers without a battlefield.  The caller owns the record's lifetime.
 export function stepDebris(pieces, dtMs, gravity = 120) {
   const dt = dtMs / 1000
   for (const d of pieces) {
@@ -335,4 +484,60 @@ export function stepDebris(pieces, dtMs, gravity = 120) {
     d.piece.rotate[1] += d.sy * dt
     d.piece.rotate[2] += d.sz * dt
   }
+}
+
+// Debris bounce tuning: restitution (vertical energy kept per bounce),
+// ground friction on the horizontal, and how many bounces before a piece
+// settles where it lies.
+export const DEBRIS_RESTITUTION = 0.42
+export const DEBRIS_FRICTION = 0.62
+export const DEBRIS_MAX_BOUNCES = 3
+
+// stepDebrisRecord integrates one death's pieces in WORLD terms: parabolic
+// flight under gravity, spin, and terrain bounces.  rec is the createWorld
+// debris record ({ x, y, z, headingRad, pieces }); env.heightAt samples the
+// battlefield surface (default: the y=rec.y plane).  Each piece bounces
+// with DEBRIS_RESTITUTION up to DEBRIS_MAX_BOUNCES times, losing spin and
+// horizontal speed on every contact, then settles.  Returns true while any
+// piece is still moving (the caller fades the record out after).
+export function stepDebrisRecord(rec, dtMs, { heightAt = null, gravity = 120 } = {}) {
+  const dt = dtMs / 1000
+  if (!(dt > 0)) return true
+  const c = Math.cos(rec.headingRad || 0), sn = Math.sin(rec.headingRad || 0)
+  let moving = false
+  for (const d of rec.pieces) {
+    if (d.settled) continue
+    d.piece.move[0] += d.vx * dt
+    d.piece.move[1] += d.vy * dt
+    d.piece.move[2] += d.vz * dt
+    d.vy -= gravity * dt
+    d.piece.rotate[0] += d.sx * dt
+    d.piece.rotate[1] += d.sy * dt
+    d.piece.rotate[2] += d.sz * dt
+    // World position of the piece's flight offset (local XZ rotated by the
+    // record's yaw; local Y IS world up on a debris record).
+    const lx = d.piece.move[0], lz = d.piece.move[2]
+    const wx = rec.x + (c * lx + sn * lz)
+    const wz = rec.z + (-sn * lx + c * lz)
+    const groundY = heightAt ? heightAt(wx, wz) : rec.y
+    const worldY = rec.y + d.piece.move[1]
+    if (worldY <= groundY && d.vy < 0) {
+      d.piece.move[1] = groundY - rec.y
+      d.bounces += 1
+      if (d.bounces > DEBRIS_MAX_BOUNCES || Math.abs(d.vy) < 8) {
+        d.vx = 0; d.vy = 0; d.vz = 0
+        d.sx = 0; d.sy = 0; d.sz = 0
+        d.settled = true
+        continue
+      }
+      d.vy = -d.vy * DEBRIS_RESTITUTION
+      d.vx *= DEBRIS_FRICTION
+      d.vz *= DEBRIS_FRICTION
+      d.sx *= DEBRIS_FRICTION
+      d.sy *= DEBRIS_FRICTION
+      d.sz *= DEBRIS_FRICTION
+    }
+    moving = true
+  }
+  return moving
 }

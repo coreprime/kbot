@@ -219,6 +219,16 @@ export class Session {
     return this.#api.playWeaponFire(this.#handle, unitId, slot, tx, ty, tz)
   }
 
+  /**
+   * Run a unit's Activate (on) / Deactivate (off) COB entry point and pin
+   * the ACTIVATION port — the replay driver's building-activity hook
+   * (extractor rotor spin, solar collector open/close). Presentation only.
+   * Returns false for a missing or script-less unit.
+   */
+  setUnitActivation(unitId, on) {
+    return this.#api.setUnitActivation(this.#handle, unitId, !!on)
+  }
+
   /** Spawn a thread on the named COB entry point with integer args. */
   startScript(unitId, name, args = []) {
     this.#api.startScript(this.#handle, unitId, name, args)
