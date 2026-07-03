@@ -10,7 +10,15 @@ import {
   featureSizeWU,
   featureSeed,
   mulberry32,
+  isFlatGroundCategory,
+  FEATURE_VERTEX_FLOATS,
+  DECAL_VERTEX_FLOATS,
 } from '../map-features.js'
+
+// Floats per baked vertex — pos3 + normal3 + colour3 + material2.
+const STRIDE = FEATURE_VERTEX_FLOATS
+// Floats per decal vertex — pos3 + normal3 + uv2.
+const DSTRIDE = DECAL_VERTEX_FLOATS
 
 const DEFS = {
   tree1: { id: 'tree1', category: 'trees', footprintX: 2, footprintZ: 2, heightWU: 40, spriteW: 40, spriteH: 52 },
@@ -44,7 +52,7 @@ test('neighbouring placements of the same feature differ (per-cell seeding)', ()
   // Same tree type, adjacent cells: geometry must not be a pure translate —
   // compare Y coordinates (translation-invariant on this axis apart from
   // terrain, which is flat 0 here).
-  const ys = (f) => Array.from(f.batches[0].data).filter((_, i) => i % 9 === 1).join(',')
+  const ys = (f) => Array.from(f.batches[0].data).filter((_, i) => i % STRIDE === 1).join(',')
   assert.notEqual(ys(one), ys(two))
 })
 
@@ -67,7 +75,7 @@ test('placements land at their cell centres on the terrain surface', () => {
   // Gather X/Z bounds of the emitted geometry — the blob must straddle the
   // cell centre (4.5*16, 6.5*16) and sit around y=7.
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity
-  for (let i = 0; i < data.length; i += 9) {
+  for (let i = 0; i < data.length; i += STRIDE) {
     minX = Math.min(minX, data[i]); maxX = Math.max(maxX, data[i])
     minZ = Math.min(minZ, data[i + 2]); maxZ = Math.max(maxZ, data[i + 2])
     minY = Math.min(minY, data[i + 1])
@@ -87,21 +95,56 @@ test('featureSizeWU derives from footprint + height with sane clamps', () => {
   assert.ok(bogus.h <= 120 && bogus.r <= 48, 'dirty mod data clamps')
 })
 
-test('categoryBuilder classifies the TA category survey', () => {
+test('categoryBuilder classifies the full TA/TAK pack category survey', () => {
   const names = (fn) => fn.name
-  assert.equal(names(categoryBuilder('trees')), 'buildTree')
-  assert.equal(names(categoryBuilder('rocks')), 'buildRock')
-  // Metal deposits + steam vents are FLAT ground decals, not 3D clusters.
-  assert.equal(names(categoryBuilder('metal')), 'buildMetalPatch')
-  assert.equal(names(categoryBuilder('steamvents')), 'buildVent')
-  // TAK glyphs / spires keep the crystal read.
-  assert.equal(names(categoryBuilder('glyph')), 'buildCrystals')
-  assert.equal(names(categoryBuilder('spires')), 'buildCrystals')
-  assert.equal(names(categoryBuilder('kelp')), 'buildKelp')
-  assert.equal(names(categoryBuilder('foliage')), 'buildBush')
-  assert.equal(names(categoryBuilder('craters')), 'buildScar')
-  assert.equal(names(categoryBuilder('machines')), 'buildProp')
-  assert.equal(names(categoryBuilder('anything-weird')), 'buildRock')
+  // Every category present in a real pack's features.json maps to a fitting
+  // surrogate family.  (Object-bearing categories — corpses, heaps,
+  // dragonteeth — route to real 3DO models in buildFeatureField and never
+  // reach categoryBuilder; the mappings below are the sprite fallbacks.)
+  const expect = {
+    // Vegetation.
+    trees: 'buildTree',
+    foliage: 'buildBush',
+    plants: 'buildBush',
+    shrubs: 'buildBush',
+    gasplants: 'buildBush',
+    // Reef life.
+    anemones: 'buildCoral',
+    aquacorals: 'buildCoral',
+    corals: 'buildCoral',
+    kelp: 'buildKelp',
+    // Ground-set FLAT decals — never 3D blobs.
+    metal: 'buildMetalPatch',
+    nodes: 'buildProp',
+    steamvents: 'buildVent',
+    scars: 'buildScar',
+    smudges: 'buildScar',
+    tracks: 'buildScar',
+    craters: 'buildScar',
+    holes: 'buildScar',
+    // Vertical landmarks.
+    spires: 'buildSpire',
+    monuments: 'buildSpire',
+    glyph: 'buildCrystals',
+    // Architecture.
+    buildings: 'buildBuilding',
+    building: 'buildBuilding',
+    barriers: 'buildBuilding',
+    ruin: 'buildRuin',
+    // Debris + scatter.
+    heaps: 'buildDebris',
+    machines: 'buildProp',
+    pipes: 'buildProp',
+    cars: 'buildProp',
+    trucks: 'buildProp',
+    rocks: 'buildRock',
+    dragonteeth: 'buildRock',
+    // Unknown → safe rock read.
+    'anything-weird': 'buildRock',
+  }
+  for (const [cat, fn] of Object.entries(expect)) {
+    assert.equal(names(categoryBuilder(cat)), fn, `category ${cat}`)
+  }
 })
 
 test('categoryBuilder falls back to the feature name when category is blank', () => {
@@ -126,7 +169,7 @@ test('a tree feature produces visible above-ground canopy geometry', () => {
   assert.ok(field.batches.length > 0 && field.batches[0].count > 0, 'tree emits geometry')
   let maxY = -Infinity
   for (const b of field.batches) {
-    for (let i = 0; i < b.data.length; i += 9) maxY = Math.max(maxY, b.data[i + 1])
+    for (let i = 0; i < b.data.length; i += STRIDE) maxY = Math.max(maxY, b.data[i + 1])
   }
   assert.ok(maxY > 20, `tree canopy rises above terrain, maxY=${maxY}`)
 })
@@ -135,7 +178,7 @@ test('a tree feature produces visible above-ground canopy geometry', () => {
 const yRange = (field) => {
   let minY = Infinity, maxY = -Infinity
   for (const b of field.batches) {
-    for (let i = 0; i < b.data.length; i += 9) {
+    for (let i = 0; i < b.data.length; i += STRIDE) {
       minY = Math.min(minY, b.data[i + 1])
       maxY = Math.max(maxY, b.data[i + 1])
     }
@@ -167,7 +210,7 @@ test('decals conform to sloped terrain per-vertex', () => {
   const heightAt = (x, z) => 3 + x * 0.15 + z * 0.05
   const field = buildFeatureField({ features: [{ name: 'Shale', ax: 8, ay: 8 }], defs, heightAt })
   for (const b of field.batches) {
-    for (let i = 0; i < b.data.length; i += 9) {
+    for (let i = 0; i < b.data.length; i += STRIDE) {
       const lift = b.data[i + 1] - heightAt(b.data[i], b.data[i + 2])
       assert.ok(lift > 0.1 && lift < 1.0,
         `every vertex floats just above its own terrain sample, lift=${lift}`)
@@ -212,7 +255,7 @@ test('ground decals (metal / vent / scar) present up-facing normals', () => {
     })
     let allUp = true
     for (const b of field.batches) {
-      for (let i = 0; i < b.data.length; i += 9) {
+      for (let i = 0; i < b.data.length; i += STRIDE) {
         if (b.data[i + 4] < -1e-6) { allUp = false }
       }
     }
@@ -226,4 +269,190 @@ test('mulberry32 + featureSeed are stable', () => {
   assert.notEqual(s, featureSeed('tree1', 11, 12))
   const r1 = mulberry32(s), r2 = mulberry32(s)
   for (let i = 0; i < 8; i++) assert.equal(r1(), r2())
+})
+
+// ── Material channel (metalness + emissive) ──────────────────────────────
+
+// Baked vertices carry pos3 + normal3 + colour3 + material2; the material
+// pair is the last two floats of every 11-float vertex.
+const METAL_IDX = 9    // metalness
+const EMISS_IDX = 10   // emissive
+
+// matStats scans a field's vertices for the max metalness / emissive seen.
+const matStats = (field) => {
+  let maxMetal = 0, maxEmiss = 0
+  for (const b of field.batches) {
+    for (let i = 0; i < b.data.length; i += STRIDE) {
+      maxMetal = Math.max(maxMetal, b.data[i + METAL_IDX])
+      maxEmiss = Math.max(maxEmiss, b.data[i + EMISS_IDX])
+    }
+  }
+  return { maxMetal, maxEmiss }
+}
+
+test('vertex layout carries an 11-float stride (pos3+nrm3+col3+mat2)', () => {
+  assert.equal(FEATURE_VERTEX_FLOATS, 11)
+  const field = buildFeatureField({ features: FEATURES, defs: DEFS })
+  for (const b of field.batches) {
+    assert.equal(b.data.length % STRIDE, 0, 'batch data is a whole number of vertices')
+    assert.equal(b.data.length / STRIDE, b.count, 'count matches vertex total')
+  }
+})
+
+test('metal plates are flagged strongly metallic; trees stay matte', () => {
+  const defs = {
+    shale: { id: 'shale', category: 'metal', footprintX: 3, footprintZ: 3, heightWU: 14 },
+    tree1: { id: 'tree1', category: 'trees', footprintX: 2, footprintZ: 2, heightWU: 40 },
+  }
+  const metal = matStats(buildFeatureField({
+    features: [{ name: 'Shale', ax: 4, ay: 6 }], defs, heightAt: () => 7,
+  }))
+  assert.ok(metal.maxMetal > 0.7, `metal patch reads metallic, maxMetal=${metal.maxMetal}`)
+  const tree = matStats(buildFeatureField({
+    features: [{ name: 'Tree1', ax: 4, ay: 6 }], defs, heightAt: () => 7,
+  }))
+  assert.equal(tree.maxMetal, 0, 'tree canopy is matte (no metalness)')
+  assert.equal(tree.maxEmiss, 0, 'tree canopy has no emissive')
+})
+
+test('vent throats carry emissive warmth so they read hot', () => {
+  const defs = { vent1: { id: 'vent1', category: 'steamvents', footprintX: 2, footprintZ: 2, heightWU: 30 } }
+  const vent = matStats(buildFeatureField({
+    features: [{ name: 'Vent1', ax: 3, ay: 5 }], defs, heightAt: () => 4,
+  }))
+  assert.ok(vent.maxEmiss > 0.3, `vent throat glows, maxEmiss=${vent.maxEmiss}`)
+})
+
+test('flat-decal categories produce near-zero-height geometry', () => {
+  // Metal / vent / scar / track / smudge / crater / hole all hug the
+  // terrain: their whole vertical extent stays inside a ~1wu decal band.
+  const flatCats = ['metal', 'steamvents', 'scars', 'smudges', 'tracks', 'craters', 'holes']
+  for (const category of flatCats) {
+    const defs = { f: { id: 'f', category, footprintX: 3, footprintZ: 3, heightWU: 40, spriteH: 60 } }
+    const { minY, maxY } = yRange(buildFeatureField({
+      features: [{ name: 'F', ax: 4, ay: 6 }], defs, heightAt: () => 7,
+    }))
+    assert.ok(maxY - minY < 1.0, `${category} decal is flat: extent=${maxY - minY}`)
+    assert.ok(minY >= 7, `${category} decal sits on terrain y=7: minY=${minY}`)
+  }
+})
+
+test('3D surrogate categories rise above the terrain', () => {
+  const cats3d = ['trees', 'foliage', 'anemones', 'corals', 'spires', 'monuments', 'buildings', 'ruin', 'heaps', 'machines', 'glyph', 'rocks']
+  for (const category of cats3d) {
+    const defs = { f: { id: 'f', category, footprintX: 3, footprintZ: 3, heightWU: 40 } }
+    const { maxY } = yRange(buildFeatureField({
+      features: [{ name: 'F', ax: 4, ay: 6 }], defs, heightAt: () => 7,
+    }))
+    assert.ok(maxY > 9, `${category} surrogate stands above terrain: maxY=${maxY}`)
+  }
+})
+
+// ── Real-sprite ground decals (format v6 packs) ──────────────────────────
+
+// Y-range over a decal batch's vertices (pos.y is index 1 of each vertex).
+const decalYRange = (field) => {
+  let minY = Infinity, maxY = -Infinity
+  for (const d of field.decals || []) {
+    for (let i = 0; i < d.data.length; i += DSTRIDE) {
+      minY = Math.min(minY, d.data[i + 1])
+      maxY = Math.max(maxY, d.data[i + 1])
+    }
+  }
+  return { minY, maxY }
+}
+
+test('isFlatGroundCategory matches the pack extraction set', () => {
+  for (const c of ['metal', 'steamvents', 'scars', 'smudges', 'tracks', 'craters', 'holes']) {
+    assert.ok(isFlatGroundCategory(c), `${c} is flat ground`)
+  }
+  for (const c of ['trees', 'rocks', 'foliage', 'buildings', 'spires', 'corals']) {
+    assert.ok(!isFlatGroundCategory(c), `${c} is upright, not flat ground`)
+  }
+})
+
+test('flat features WITH a packed sprite become textured decals, not geometry', () => {
+  const defs = {
+    ore: { id: 'ore', category: 'metal', footprintX: 3, footprintZ: 3, spriteW: 66, spriteH: 55, sprite: 'featuresprites/ore.png' },
+    vent: { id: 'vent', category: 'steamvents', footprintX: 1, footprintZ: 1, spriteW: 99, spriteH: 94, sprite: 'featuresprites/vent.png' },
+  }
+  const field = buildFeatureField({
+    features: [{ name: 'Ore', ax: 4, ay: 6 }, { name: 'Vent', ax: 9, ay: 9 }],
+    defs, heightAt: () => 7,
+  })
+  // No procedural stand-in geometry: both flat features went to decals.
+  const standInVerts = field.batches.reduce((s, b) => s + b.count, 0)
+  assert.equal(standInVerts, 0, 'flat sprite features emit no stand-in triangles')
+  // Two distinct sprites → two decal batches, each carrying UV geometry.
+  assert.equal(field.decals.length, 2, 'one decal batch per distinct sprite')
+  assert.equal(field.counts.decals, 2)
+  for (const d of field.decals) {
+    assert.ok(d.sprite && d.sprite.startsWith('featuresprites/'), 'decal names its sprite')
+    assert.ok(d.count > 0 && d.data.length === d.count * DSTRIDE, 'decal geometry is well-formed')
+  }
+  // Vent decals still surface a live steam emitter.
+  assert.equal(field.emitters.length, 1, 'the vent decal keeps its steam wisp')
+})
+
+test('sprite decals lie flat on and hug the terrain surface', () => {
+  const defs = { ore: { id: 'ore', category: 'metal', footprintX: 3, footprintZ: 3, spriteW: 66, spriteH: 55, sprite: 'featuresprites/ore.png' } }
+  // Sloped terrain: every decal vertex must float just above its own
+  // terrain sample (the conforming grid drapes over the slope).
+  const heightAt = (x, z) => 3 + x * 0.12 + z * 0.06
+  const field = buildFeatureField({ features: [{ name: 'Ore', ax: 8, ay: 8 }], defs, heightAt })
+  assert.ok(field.decals.length === 1)
+  for (const d of field.decals) {
+    for (let i = 0; i < d.data.length; i += DSTRIDE) {
+      const lift = d.data[i + 1] - heightAt(d.data[i], d.data[i + 2])
+      assert.ok(lift > 0.1 && lift < 1.0, `decal vertex hugs terrain, lift=${lift}`)
+      // Normal faces up so the sun lights it (never black).
+      assert.ok(d.data[i + 4] > 0.9, 'decal normal points up')
+    }
+  }
+  // The decal's vertical span comes only from draping the terrain slope,
+  // not from standing up: it must stay within the terrain height range the
+  // decal footprint spans (plus the small conforming lift), never more.
+  const { minY, maxY } = decalYRange(field)
+  let tMin = Infinity, tMax = -Infinity
+  const d0 = field.decals[0]
+  for (let i = 0; i < d0.data.length; i += DSTRIDE) {
+    const t = heightAt(d0.data[i], d0.data[i + 2])
+    tMin = Math.min(tMin, t); tMax = Math.max(tMax, t)
+  }
+  assert.ok(maxY - minY <= (tMax - tMin) + 1.0,
+    `decal span (${(maxY - minY).toFixed(2)}) follows terrain span (${(tMax - tMin).toFixed(2)})`)
+})
+
+test('flat features WITHOUT a sprite fall back to procedural flat geometry', () => {
+  // A v5 pack (no sprite field) still renders metal/vents as the improved
+  // procedural decals — flat, in the stand-in batches, no textured decals.
+  const defs = { ore: { id: 'ore', category: 'metal', footprintX: 3, footprintZ: 3, heightWU: 14 } }
+  const field = buildFeatureField({ features: [{ name: 'Ore', ax: 4, ay: 6 }], defs, heightAt: () => 7 })
+  assert.equal((field.decals || []).length, 0, 'no textured decals without packed sprite art')
+  assert.ok(field.batches.reduce((s, b) => s + b.count, 0) > 0, 'procedural fallback geometry present')
+})
+
+test('decal batches are deterministic across runs', () => {
+  const defs = { ore: { id: 'ore', category: 'metal', footprintX: 3, footprintZ: 3, spriteW: 66, spriteH: 55, sprite: 'featuresprites/ore.png' } }
+  const feats = [{ name: 'Ore', ax: 4, ay: 6 }, { name: 'Ore', ax: 12, ay: 3 }]
+  const a = buildFeatureField({ features: feats, defs, heightAt: () => 5 })
+  const b = buildFeatureField({ features: feats, defs, heightAt: () => 5 })
+  assert.equal(a.decals.length, b.decals.length)
+  for (let i = 0; i < a.decals.length; i++) {
+    assert.equal(a.decals[i].sprite, b.decals[i].sprite)
+    assert.deepEqual(Array.from(a.decals[i].data), Array.from(b.decals[i].data))
+  }
+})
+
+test('material channel is deterministic across runs', () => {
+  const defs = {
+    shale: { id: 'shale', category: 'metal', footprintX: 3, footprintZ: 3, heightWU: 14 },
+    vent1: { id: 'vent1', category: 'steamvents', footprintX: 2, footprintZ: 2 },
+  }
+  const feats = [{ name: 'Shale', ax: 4, ay: 6 }, { name: 'Vent1', ax: 9, ay: 9 }]
+  const a = buildFeatureField({ features: feats, defs, heightAt: () => 5 })
+  const b = buildFeatureField({ features: feats, defs, heightAt: () => 5 })
+  for (let i = 0; i < a.batches.length; i++) {
+    assert.deepEqual(Array.from(a.batches[i].data), Array.from(b.batches[i].data))
+  }
 })

@@ -31,7 +31,7 @@ import { ModelLoader, setLodHidePatterns } from './model-loader.js'
 import { ModelRenderer } from './model-renderer.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { attachOrbitControls } from './camera-controls.js'
-import { setAssetProvider } from './assets.js'
+import { setAssetProvider, toTexImageSource } from './assets.js'
 import { setTeamSides, teamColorForSide, TA_TEAM_SIDES } from './team-colors.js'
 import {
   setProjectileFallbackColors,
@@ -1026,6 +1026,29 @@ export async function createWorld(canvas, {
             cellWU: (terrain.cellWU || 16),
           })
           renderer.setMapFeatures(field.batches)
+          // Flat ground features (metal deposits, steam vents, scars…):
+          // paint their REAL packed GAF art onto the terrain as textured
+          // decals.  Load each distinct sprite, then install the decal
+          // batches once the images have decoded (deterministic order).
+          if (Array.isArray(field.decals) && field.decals.length && assets && typeof assets.featureSprite === 'function') {
+            Promise.all(field.decals.map(async (d) => {
+              try {
+                const raw = await assets.featureSprite(d.sprite || d.feature)
+                if (!raw) return null
+                const image = await toTexImageSource(raw)
+                return { image, data: d.data, count: d.count }
+              } catch {
+                return null
+              }
+            })).then((loaded) => {
+              if (disposed || token !== featureBuildToken) return
+              const ready = loaded.filter(Boolean)
+              if (ready.length) {
+                renderer.setFeatureDecals(ready)
+                if (!renderer.running) world.step(0)
+              }
+            }).catch(() => { /* sprites missing — procedural fallback already baked */ })
+          }
           // Steam vents: the baked decal is static; the wisp is live.
           // Each vent gets its own deterministic rng + a phase-staggered
           // accumulator so the map's vents don't puff in lockstep.

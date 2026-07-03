@@ -226,4 +226,19 @@ export class HttpPackProvider {
     const json = await this.fetchJson('features.json', 'feature defs', { optional: true })
     return (json && json.features) || {}
   }
+
+  // featureSprite resolves a flat ground feature's real GAF art
+  // (featuresprites/<id>.png, formatVersion 6+) as an <img> with alpha, or
+  // null on a miss — the renderer paints it onto the terrain as a decal.
+  // The relative path is the entry's `sprite` field; fall back to the id.
+  async featureSprite(spriteOrId) {
+    const rel = String(spriteOrId).includes('/')
+      ? String(spriteOrId)
+      : `featuresprites/${packStem(spriteOrId)}.png`
+    try {
+      return await loadImage(this.url(rel))
+    } catch {
+      return null
+    }
+  }
 }

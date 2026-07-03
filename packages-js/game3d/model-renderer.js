@@ -502,6 +502,7 @@ export class ModelRenderer {
       this.#initSpritesProgram(sources.sprites.vs, sources.sprites.fs)
       this.#initImpostorProgram(sources.impostor.vs, sources.impostor.fs)
       this.#initFeatProgram(sources.feat.vs, sources.feat.fs)
+      if (sources.featDecal) this.#initFeatDecalProgram(sources.featDecal.vs, sources.featDecal.fs)
       this.#initFxProgram(sources.fx.vs, sources.fx.fs)
       if (this._depthExt) {
         this.#initShadowFBO()
@@ -2143,6 +2144,11 @@ export class ModelRenderer {
     // correctly against them).
     if (this._featBatches && this.featuresEnabled !== false) {
       this.#renderFeatures()
+    }
+    // Flat ground features' real-sprite decals paint over the terrain +
+    // stand-ins (alpha-blended, depth-tested but not depth-written).
+    if (this._featDecalBatches && this.featuresEnabled !== false) {
+      this.#renderFeatureDecals()
     }
 
     if (this.renderMode === 'wireframe') {
@@ -4521,6 +4527,7 @@ export class ModelRenderer {
   }
 
   clearMapFeatures() {
+    this.clearFeatureDecals()
     if (!this._featBatches) return
     const gl = this.gl
     for (const b of this._featBatches) {
@@ -4544,6 +4551,7 @@ export class ModelRenderer {
     this.aFeatPos = gl.getAttribLocation(prog, 'aPos')
     this.aFeatNormal = gl.getAttribLocation(prog, 'aNormal')
     this.aFeatColor = gl.getAttribLocation(prog, 'aColor')
+    this.aFeatMaterial = gl.getAttribLocation(prog, 'aMaterial')
     this.uFeatProj = gl.getUniformLocation(prog, 'uProj')
     this.uFeatView = gl.getUniformLocation(prog, 'uView')
     this.uFeatLightDir = gl.getUniformLocation(prog, 'uLightDir')
@@ -4578,7 +4586,9 @@ export class ModelRenderer {
     gl.disable(gl.BLEND)
     gl.enable(gl.DEPTH_TEST)
     gl.depthFunc(gl.LEQUAL)
-    const stride = 9 * 4
+    // Vertex layout (map-features.js): pos3 + normal3 + colour3 + material2.
+    const stride = 11 * 4
+    const hasMaterial = this.aFeatMaterial >= 0
     for (const b of this._featBatches) {
       gl.bindBuffer(gl.ARRAY_BUFFER, b.vbo)
       gl.enableVertexAttribArray(this.aFeatPos)
@@ -4587,12 +4597,137 @@ export class ModelRenderer {
       gl.vertexAttribPointer(this.aFeatNormal, 3, gl.FLOAT, false, stride, 3 * 4)
       gl.enableVertexAttribArray(this.aFeatColor)
       gl.vertexAttribPointer(this.aFeatColor, 3, gl.FLOAT, false, stride, 6 * 4)
+      if (hasMaterial) {
+        gl.enableVertexAttribArray(this.aFeatMaterial)
+        gl.vertexAttribPointer(this.aFeatMaterial, 2, gl.FLOAT, false, stride, 9 * 4)
+      }
       gl.drawArrays(gl.TRIANGLES, 0, b.count)
     }
     gl.disableVertexAttribArray(this.aFeatPos)
     gl.disableVertexAttribArray(this.aFeatNormal)
     gl.disableVertexAttribArray(this.aFeatColor)
+    if (hasMaterial) gl.disableVertexAttribArray(this.aFeatMaterial)
     gl.enable(gl.BLEND)
+  }
+
+  // ── Feature sprite decals (real GAF art painted onto the terrain) ───
+  //
+  // setFeatureDecals installs the flat ground features' real-sprite decals:
+  // an array of { image, data: Float32Array, count } batches, one per
+  // distinct feature sprite, whose vertices are world-space terrain-
+  // conforming quads (pos3 + normal3 + uv2) from buildFeatureField's
+  // `decals`.  Each batch uploads its sprite once as a texture and its
+  // geometry once into a STATIC_DRAW VBO, so the whole flat-feature layer
+  // costs one draw call per distinct sprite with zero per-frame CPU work.
+  setFeatureDecals(decals) {
+    this.clearFeatureDecals()
+    if (!Array.isArray(decals) || !decals.length || !this.programFeatDecal) return
+    const gl = this.gl
+    const out = []
+    for (const d of decals) {
+      if (!d || !d.data || !(d.count > 0) || !d.image) continue
+      const vbo = gl.createBuffer()
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, d.data, gl.STATIC_DRAW)
+      const tex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, d.image)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      out.push({ vbo, tex, count: d.count })
+    }
+    this._featDecalBatches = out.length ? out : null
+    this.requestRedraw()
+  }
+
+  clearFeatureDecals() {
+    if (!this._featDecalBatches) return
+    const gl = this.gl
+    for (const b of this._featDecalBatches) {
+      try { gl.deleteBuffer(b.vbo) } catch { /* context loss */ }
+      try { gl.deleteTexture(b.tex) } catch { /* context loss */ }
+    }
+    this._featDecalBatches = null
+  }
+
+  #initFeatDecalProgram(vsSrc, fsSrc) {
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
+    this.programFeatDecal = prog
+    const gl = this.gl
+    this.uFeatDecalLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
+    this.aFeatDecalPos = gl.getAttribLocation(prog, 'aPos')
+    this.aFeatDecalNormal = gl.getAttribLocation(prog, 'aNormal')
+    this.aFeatDecalUV = gl.getAttribLocation(prog, 'aUV')
+    this.uFeatDecalProj = gl.getUniformLocation(prog, 'uProj')
+    this.uFeatDecalView = gl.getUniformLocation(prog, 'uView')
+    this.uFeatDecalSprite = gl.getUniformLocation(prog, 'uSprite')
+    this.uFeatDecalLightDir = gl.getUniformLocation(prog, 'uLightDir')
+    this.uFeatDecalSunTint = gl.getUniformLocation(prog, 'uSunTint')
+    this.uFeatDecalHorizon = gl.getUniformLocation(prog, 'uHorizonColor')
+    this.uFeatDecalEyePos = gl.getUniformLocation(prog, 'uEyePos')
+    this.uFeatDecalExposure = gl.getUniformLocation(prog, 'uExposure')
+    this.uFeatDecalMapFog = gl.getUniformLocation(prog, 'uMapFog')
+    this.uFeatDecalPulsePos = gl.getUniformLocation(prog, 'uPulseLightPos')
+    this.uFeatDecalPulseColor = gl.getUniformLocation(prog, 'uPulseLightColor')
+    this.uFeatDecalPulseRange = gl.getUniformLocation(prog, 'uPulseLightRange')
+    this.uFeatDecalPulseCount = gl.getUniformLocation(prog, 'uPulseLightCount')
+  }
+
+  #renderFeatureDecals() {
+    this._boundGeoVbo = null // this pass rebinds ARRAY_BUFFER + attribute pointers
+    const gl = this.gl
+    if (!this.programFeatDecal || !this.camera || !this._featDecalBatches) return
+    gl.useProgram(this.programFeatDecal)
+    gl.uniformMatrix4fv(this.uFeatDecalProj, false, this.camera.projMatrix)
+    gl.uniformMatrix4fv(this.uFeatDecalView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uFeatDecalLogDepthFC)
+    gl.uniform3fv(this.uFeatDecalLightDir, this.lightDir)
+    const _lc = this.lightColor || [1, 1, 1]
+    const _lm = Math.max(_lc[0], _lc[1], _lc[2], 1e-4)
+    gl.uniform3f(this.uFeatDecalSunTint, _lc[0] / _lm, _lc[1] / _lm, _lc[2] / _lm)
+    gl.uniform3fv(this.uFeatDecalHorizon, this.skyScheme.horizon)
+    gl.uniform3fv(this.uFeatDecalEyePos, this.camera.eye)
+    gl.uniform1f(this.uFeatDecalExposure, this.exposure ?? 1.0)
+    gl.uniform1f(this.uFeatDecalMapFog, this.mapFogEnabled ? 1 : 0)
+    this.#uploadPulseLights(gl, this.uFeatDecalPulsePos, this.uFeatDecalPulseColor, this.uFeatDecalPulseRange, this.uFeatDecalPulseCount)
+    gl.uniform1i(this.uFeatDecalSprite, 0)
+    // Alpha-blended over the terrain + stand-ins, depth-tested but not
+    // depth-written (the decal lies flush on the ground; writing depth would
+    // let it clip units standing on it).  A polygon offset keeps it off the
+    // terrain surface without z-fighting.
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LEQUAL)
+    gl.depthMask(false)
+    if (gl.POLYGON_OFFSET_FILL !== undefined) {
+      gl.enable(gl.POLYGON_OFFSET_FILL)
+      gl.polygonOffset(-1, -1)
+    }
+    const stride = 8 * 4
+    const hasUV = this.aFeatDecalUV >= 0
+    for (const b of this._featDecalBatches) {
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, b.tex)
+      gl.bindBuffer(gl.ARRAY_BUFFER, b.vbo)
+      gl.enableVertexAttribArray(this.aFeatDecalPos)
+      gl.vertexAttribPointer(this.aFeatDecalPos, 3, gl.FLOAT, false, stride, 0)
+      gl.enableVertexAttribArray(this.aFeatDecalNormal)
+      gl.vertexAttribPointer(this.aFeatDecalNormal, 3, gl.FLOAT, false, stride, 3 * 4)
+      if (hasUV) {
+        gl.enableVertexAttribArray(this.aFeatDecalUV)
+        gl.vertexAttribPointer(this.aFeatDecalUV, 2, gl.FLOAT, false, stride, 6 * 4)
+      }
+      gl.drawArrays(gl.TRIANGLES, 0, b.count)
+    }
+    gl.disableVertexAttribArray(this.aFeatDecalPos)
+    gl.disableVertexAttribArray(this.aFeatDecalNormal)
+    if (hasUV) gl.disableVertexAttribArray(this.aFeatDecalUV)
+    if (gl.POLYGON_OFFSET_FILL !== undefined) gl.disable(gl.POLYGON_OFFSET_FILL)
+    gl.depthMask(true)
   }
 
   // ── Explosion meshes (additive emissive triangles) ─────────────────
