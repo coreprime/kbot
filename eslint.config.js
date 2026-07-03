@@ -27,8 +27,9 @@ export default [
   js.configs.recommended,
   {
     // Node-side tooling and examples: the engine package's build/verify
-    // scripts and the headless consume-proof run under Node, not a browser.
-    files: ['packages-js/*/scripts/**/*.mjs', 'examples/**/*.mjs'],
+    // scripts, its Node test scripts, and the headless consume-proof run
+    // under Node, not a browser.
+    files: ['packages-js/*/scripts/**/*.mjs', 'packages-js/*/test/**/*.mjs', 'examples/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

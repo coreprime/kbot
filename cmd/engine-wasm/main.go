@@ -65,6 +65,8 @@ func main() {
 		"scheduleAt":   js.FuncOf(scheduleAt),
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
+		"stepTo":       js.FuncOf(stepTo),
+		"setUnitState": js.FuncOf(setUnitState),
 		"renderState":  js.FuncOf(renderState),
 		"hash":           js.FuncOf(hashOf),
 		"tick":           js.FuncOf(tickOf),
@@ -449,6 +451,31 @@ func step(_ js.Value, args []js.Value) any {
 		return js.Null()
 	}
 	return snapshotToJS(inst.sess.Step())
+}
+
+// stepTo(handle, tick) advances the simulation tick by tick until it reaches
+// the target and returns the last render snapshot — the replay driver's seek
+// clock. A target at or before the current tick steps nothing and returns the
+// current state (rewind goes through restore, never a negative step).
+func stepTo(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToJS(inst.sess.StepTo(uint64(args[1].Int())))
+}
+
+// setUnitState(handle, unitId, stateObj) -> bool authoritatively overwrites one
+// live unit's pose/state — the hook a replay driver uses to pin units to the
+// decoded wire truth each tick. Only the keys present on stateObj are applied
+// (see unitStateFromJS); the unit must already exist, so a false return tells
+// the driver to create it first via addUnit / a Spawn order.
+func setUnitState(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	return inst.sess.SetUnitState(uint32(args[1].Int()), unitStateFromJS(args[2]))
 }
 
 // renderState(handle) returns the render snapshot of the world at its current

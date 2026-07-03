@@ -34,6 +34,11 @@ const session = engine.createSession({ seed: 42 })
 const id = session.addUnit({ name: 'probe', canMove: true, maxVelocity: 1.5, acceleration: 0.5, brakeRate: 1, turnRate: 800 }, 100, 100)
 session.submitMove([id], 100, 400)
 const snapshot = session.step() // one tick; snapshot.units[].x/y/z etc.
+
+// Replay / scripted driving: seek forward to an exact tick, and pin a unit
+// to an authoritative pose (only the keys you pass are applied).
+const at120 = session.stepTo(120)
+session.setUnitState(id, { pos: { x: 250, y: 0, z: 300 }, heading: Math.PI / 2, vel: 1.2, hp: 80, build: 100 })
 ```
 
 `loadEngine()` is a singleton per JS realm (the wasm module registers one

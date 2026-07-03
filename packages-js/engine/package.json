@@ -1,6 +1,6 @@
 {
   "name": "@kbot/engine",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic KBot simulation engine (Go compiled to WebAssembly) with a small ESM loader for browsers and Node.",
   "license": "MIT",
   "type": "module",
@@ -23,6 +23,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-wasm.mjs",
+    "test": "node test/replay-smoke.mjs",
     "prepack": "npm run build"
   },
   "engines": {

@@ -131,6 +131,23 @@ export interface Snapshot {
   [key: string]: unknown
 }
 
+/**
+ * Authoritative per-unit state override applied by setUnitState(). Only the
+ * keys present are written; absent keys leave that part of the unit untouched.
+ */
+export interface UnitStateOverride {
+  /** World position (world units, all three axes). */
+  pos?: { x: number; y: number; z: number }
+  /** Locomotion heading in radians. */
+  heading?: number
+  /** Scalar locomotion velocity in world units per second. */
+  vel?: number
+  /** Hit points on the sim's 0..100 scale. */
+  hp?: number
+  /** Construction progress 0..100 (below 100 the unit is inert). */
+  build?: number
+}
+
 export interface CreateSessionOptions {
   /** Deterministic seed shared by every lockstep peer. */
   seed?: number
@@ -168,6 +185,16 @@ export class Session {
   scheduleAt(tick: number, order: Record<string, unknown>): void
   restore(snapshot: Record<string, unknown>): void
   step(): Snapshot
+  /**
+   * Advance to the target tick and return the last snapshot (the replay seek
+   * clock). A target at or before the current tick steps nothing.
+   */
+  stepTo(tick: number): Snapshot
+  /**
+   * Authoritatively overwrite one live unit's pose/state; returns false when
+   * the unit does not exist.
+   */
+  setUnitState(unitId: number, state: UnitStateOverride): boolean
   renderState(): Snapshot
   exportSnapshot(): Record<string, unknown>
   hash(): string

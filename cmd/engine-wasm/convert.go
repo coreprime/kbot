@@ -246,6 +246,43 @@ func restoreFromJS(o js.Value) (uint64, []sim.RestoredUnit, []sim.RestoredProjec
 	return tick, units, projectilesFromJS(o.Get("projectiles")), uint32(getInt64(o, "runtimeRng"))
 }
 
+// unitStateFromJS reads the replay driver's per-unit override object into a
+// sim.UnitStateOverride. Values follow the loader's float conventions — world
+// units for pos, radians for heading, wu/sec for vel, the 0..100 scales for hp
+// and build — and only the keys present on the object are applied, so a wire
+// record carrying a partial state leaves the rest of the unit untouched.
+func unitStateFromJS(o js.Value) sim.UnitStateOverride {
+	var ov sim.UnitStateOverride
+	if o.Type() != js.TypeObject || o.IsNull() {
+		return ov
+	}
+	if p := o.Get("pos"); p.Type() == js.TypeObject && !p.IsNull() {
+		ov.HasPos = true
+		ov.Pos = fixed.Vec3{
+			X: fixed.FromFloat(getFloat(p, "x")),
+			Y: fixed.FromFloat(getFloat(p, "y")),
+			Z: fixed.FromFloat(getFloat(p, "z")),
+		}
+	}
+	if v := o.Get("heading"); v.Type() == js.TypeNumber {
+		ov.HasHeading = true
+		ov.Heading = fixed.FromInt(int(fixed.RadiansToAngle(v.Float())))
+	}
+	if v := o.Get("vel"); v.Type() == js.TypeNumber {
+		ov.HasSpeed = true
+		ov.Speed = fixed.FromFloat(v.Float())
+	}
+	if v := o.Get("hp"); v.Type() == js.TypeNumber {
+		ov.HasHealth = true
+		ov.Health = fixed.FromFloat(v.Float())
+	}
+	if v := o.Get("build"); v.Type() == js.TypeNumber {
+		ov.HasBuildPercent = true
+		ov.BuildPercent = fixed.FromFloat(v.Float())
+	}
+	return ov
+}
+
 // cobFromJS parses a unit's live COB VM state from a join snapshot into the
 // neutral frame.CobSnapshot the sim hands the script binding's ImportCob. A
 // missing or null "cob" (a periodic backstop snapshot, or a script-less unit)

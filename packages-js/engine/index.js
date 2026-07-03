@@ -180,6 +180,27 @@ export class Session {
     return this.#api.step(this.#handle)
   }
 
+  /**
+   * Advance tick by tick until the world reaches the target tick and return
+   * the last render snapshot — the replay seek clock. A target at or before
+   * the current tick steps nothing and returns the current state (rewind is
+   * restore() + stepTo(), never a negative step).
+   */
+  stepTo(tick) {
+    return this.#api.stepTo(this.#handle, tick)
+  }
+
+  /**
+   * Authoritatively overwrite one live unit's pose/state — the per-tick hook
+   * replay uses to pin units to decoded wire truth. Only the keys present on
+   * state are applied: pos {x,y,z} in world units, heading in radians, vel in
+   * world units/sec, hp and build on their 0..100 scales. The unit must
+   * already exist; returns false for a missing id (create it first).
+   */
+  setUnitState(unitId, state) {
+    return this.#api.setUnitState(this.#handle, unitId, state)
+  }
+
   /** Render snapshot at the current tick without advancing. */
   renderState() {
     return this.#api.renderState(this.#handle)
