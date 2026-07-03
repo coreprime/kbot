@@ -1,7 +1,7 @@
 // enhance-mesh.js
 //
 // Single source of truth for the "Enhanced Mesh" toggle: when on, the
-// ModelLoader requests /api/studio/model/<name>?enhanceMesh=1 and the
+// ModelLoader asks the AssetProvider for model(name, {enhanceMesh:true}) and the
 // server reconstructs the faces TA's artists deleted as a fill-rate
 // optimisation (open box bottoms, hollow shells, missing undersides).
 //

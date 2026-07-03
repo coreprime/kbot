@@ -1,10 +1,10 @@
 // TextureCache fetches and uploads GAF-backed textures to the GPU.
 //
-// 3DO primitives reference textures by name (e.g. "ARMKBOT4");
-// /api/studio/texture/<name> resolves these names against the
-// textures/*.gaf bundle and returns a PNG.  The cache is keyed by the
-// lowercased texture name so calls are deduplicated across pieces and
-// across separate models that share the same atlas entry.
+// 3DO primitives reference textures by name (e.g. "ARMKBOT4"); the
+// configured AssetProvider's texture() resolves those names to decoded
+// images.  The cache is keyed by the lowercased texture name so calls
+// are deduplicated across pieces and across separate models that share
+// the same atlas entry.
 //
 // Texture wrapping: TA's 3DO faces are unit-quad mapped — the texture
 // is meant to be applied 1:1 to a face, never tiled.  We bind every
@@ -13,6 +13,7 @@
 // NEAREST to preserve TA's chunky paletted look.
 
 import { buildLampAtlas } from './lamp-map.js'
+import { requireAssetProvider, toTexImageSource } from './assets.js'
 
 // Cap on cached lamp atlases.  Dragging a running-lights slider mints a
 // fresh atlas per (texture, threshold) combo; evict oldest beyond this so
@@ -100,18 +101,9 @@ export class TextureCache {
       })
     }
     const promise = (async () => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      // Keys may carry a resolver query ("name?side=ara") — split it out so
-      // the name is encoded but the query reaches the server intact.
-      const qi = key.indexOf('?')
-      img.src = qi === -1
-        ? `/api/studio/texture/${encodeURIComponent(key)}`
-        : `/api/studio/texture/${encodeURIComponent(key.slice(0, qi))}?${key.slice(qi + 1)}`
-      await new Promise((resolve, reject) => {
-        img.addEventListener('load', resolve, { once: true })
-        img.addEventListener('error', reject, { once: true })
-      })
+      // Keys may carry a resolver query ("name?side=ara") — the provider
+      // receives the whole key and forwards the query to its lookup.
+      const img = await toTexImageSource(await requireAssetProvider().texture(key))
       this.#upload(key, img)
       this.pending.delete(key)
       if (this.onAnyTextureReady) this.onAnyTextureReady(key)

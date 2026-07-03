@@ -3,17 +3,12 @@ import { cpSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 // KBot Studio is authored as native ES modules with root-absolute import
-// paths (/ui/…, /engine/…, /game3d/…) that mirror the on-disk layout, so
-// Vite resolves them directly once `root` is this directory — no aliases.
+// paths (/ui/…, /engine/…) that mirror the on-disk layout, so Vite
+// resolves them directly once `root` is this directory — no aliases.
+// The 3D renderer comes from the @kbot/game3d workspace package, whose
+// exports map points at its built dist/ (shaders + worlds embedded), so
+// there is no /game3d/* asset tree to serve any more.
 //
-// Two asset trees are pulled in at runtime by fetch() rather than through the
-// module graph, so the bundler never sees them.  They live in the @kbot/game3d
-// package but the studio serves them at stable /game3d/* URLs, so copy them
-// verbatim into dist/game3d/:
-//   - shaders/**  (GLSL fetched + #include-resolved by shader-loader)
-//   - worlds/**   (world manifests fetched by /game3d/worlds/…)
-const game3dPkg = resolve(import.meta.dirname, '../../../packages-js/game3d')
-const runtimeAssetDirs = ['shaders', 'worlds']
 // Brand assets live at the repo root (branding/) — logos/ for the picker header
 // + editor brand, textures/ for the welcome backgrounds. Copy the whole tree
 // into dist/branding/ so the studio serves them at stable /branding/* URLs.
@@ -25,11 +20,6 @@ function copyRuntimeAssets() {
     apply: 'build',
     closeBundle() {
       const out = resolve(import.meta.dirname, 'dist')
-      for (const dir of runtimeAssetDirs) {
-        const from = resolve(game3dPkg, dir)
-        if (!existsSync(from)) continue
-        cpSync(from, resolve(out, 'game3d', dir), { recursive: true })
-      }
       if (existsSync(brandingDir)) {
         cpSync(brandingDir, resolve(out, 'branding'), { recursive: true })
       }

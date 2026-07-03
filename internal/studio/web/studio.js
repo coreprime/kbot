@@ -14,6 +14,11 @@
 // through hostCallbacks.getActiveMvControls.
 let _mvControls = null
 
+// Installs the StudioAssetProvider into @kbot/game3d at module-graph time
+// so every renderer path (sandbox, unit editor, map glamour) resolves its
+// assets through the studio server before anything can draw.
+import './ui/common/studio-asset-provider.js'
+
 import {
   WORLDS,
 } from './ui/map-editor/constants.js'

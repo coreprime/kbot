@@ -17,6 +17,16 @@
 // follows the mouse while it's inside the rendering surface — once
 // the user moves over to the Controls panel the native cursor returns
 // so they can re-click the disarm button.
+//
+// Cursor art comes from the configured AssetProvider: cursorUrl(name)
+// when available (an <img>-assignable animated image URL), otherwise
+// cursor(name) bytes turned into a cached object URL.
+
+import { getAssetProvider } from './assets.js'
+
+// Cursor-name → object URL built from provider.cursor() bytes.  Tiny,
+// bounded by the handful of glyph names; never revoked (page-lifetime).
+const _cursorObjectUrls = new Map()
 
 export class ArmedCursor {
   constructor({ canvas, host }) {
@@ -207,7 +217,14 @@ export class ArmedCursor {
         srcName = (this._kind === 'airstrike') ? 'cursorairstrike' : 'cursorattack'
         break
     }
-    const want = `/api/studio/cursor/${srcName}`
+    const want = this.#cursorUrl(srcName)
+    if (!want) {
+      // Provider serves no cursor art — keep the native pointer rather
+      // than hiding it behind an empty overlay.
+      img.style.display = 'none'
+      if (this.canvas) this.canvas.style.cursor = ''
+      return
+    }
     if (img.dataset.src !== want) {
       img.dataset.src = want
       img.src = want
@@ -218,4 +235,24 @@ export class ArmedCursor {
     // Hide the native cursor — the overlay glyph IS the cursor.
     if (this.canvas) this.canvas.style.cursor = 'none'
   }
+
+  // #cursorUrl resolves a glyph name to an <img>-assignable URL through
+  // the AssetProvider.  Prefers the provider's synchronous cursorUrl();
+  // falls back to async cursor() bytes (the first refresh misses while
+  // the bytes load, the next one hits the cached object URL).
+  #cursorUrl(name) {
+    const provider = getAssetProvider()
+    if (!provider) return null
+    if (typeof provider.cursorUrl === 'function') {
+      return provider.cursorUrl(name) || null
+    }
+    if (typeof provider.cursor !== 'function') return null
+    if (_cursorObjectUrls.has(name)) return _cursorObjectUrls.get(name)
+    _cursorObjectUrls.set(name, null) // in-flight sentinel
+    provider.cursor(name).then((blob) => {
+      if (blob) _cursorObjectUrls.set(name, URL.createObjectURL(blob))
+    }).catch(() => { /* keep the null sentinel — native pointer stays */ })
+    return null
+  }
+
 }

@@ -6,11 +6,6 @@ import (
 	"testing"
 )
 
-// shaderRoot is where the Vite build copies the GLSL tree verbatim inside
-// the embedded bundle.  shader-loader fetches it at /game3d/shaders/ and the
-// studio serves it straight from this embedded path.
-const shaderRoot = "web/dist/game3d/shaders"
-
 // requireBuiltBundle skips a test when the Vite bundle hasn't been produced
 // yet (a fresh checkout embeds only web/dist/.gitkeep).  The canonical flow
 // — `task build` then `task test` — always builds first, so CI still runs
@@ -18,106 +13,51 @@ const shaderRoot = "web/dist/game3d/shaders"
 // of failing on a missing artifact.
 func requireBuiltBundle(t *testing.T) {
 	t.Helper()
-	if _, err := fs.Stat(webFS, shaderRoot); err != nil {
+	entries, err := fs.ReadDir(webFS, "web/dist/assets")
+	if err != nil || len(entries) == 0 {
 		t.Skipf("studio web bundle not built (run `task build`): %v", err)
 	}
 }
 
-// TestShaderAssetsEmbedded asserts that the //go:embed directive in
-// studio.go covers every shader file the renderer needs at runtime.
-// If a file ever moves and the embed pattern can't see it any more,
-// the binary still builds - shaders just disappear at first fetch
-// from the browser, which is a painful failure mode to debug.  This
-// test catches it at `task test` time instead.
-func TestShaderAssetsEmbedded(t *testing.T) {
+// TestShaderSourcesBundled asserts that the renderer's GLSL made it into
+// the embedded web bundle.  The shaders live in @kbot/game3d, embedded
+// into its generated shader-sources module at package build time and then
+// rolled into the Vite output — if that chain breaks (package not built,
+// generated module missed by the bundler) the studio ships a renderer
+// whose init() fails on every shader, which is a painful failure mode to
+// debug.  This test catches it at `task test` time instead by looking for
+// distinctive GLSL anchors in the bundled JS.
+func TestShaderSourcesBundled(t *testing.T) {
 	requireBuiltBundle(t)
-	required := []string{
-		shaderRoot + "/lib/sea-waves.glsl",
-		shaderRoot + "/main/main.vert",
-		shaderRoot + "/main/main.frag",
-		shaderRoot + "/sky/sky.vert",
-		shaderRoot + "/sky/sky.frag",
-		shaderRoot + "/ground/ground.vert",
-		shaderRoot + "/ground/ground.frag",
-		shaderRoot + "/shadow/shadow.vert",
-		shaderRoot + "/shadow/shadow.frag",
-		shaderRoot + "/wire/wire.vert",
-		shaderRoot + "/wire/wire.frag",
-		shaderRoot + "/dof/dof.vert",
-		shaderRoot + "/dof/dof.frag",
-		shaderRoot + "/particles/particles.vert",
-		shaderRoot + "/particles/particles.frag",
-	}
-	for _, path := range required {
-		data, err := fs.ReadFile(webFS, path)
-		if err != nil {
-			t.Errorf("embed missing %q: %v", path, err)
-			continue
-		}
-		if len(data) == 0 {
-			t.Errorf("embedded %q is empty", path)
-		}
-	}
-}
-
-// TestShaderIncludeAnchorsExist guards against an include directive
-// in a shader referring to a missing helper.  We don't compile the
-// shaders here (no GL context), but we can at least confirm that
-// every #include resolves to a file the loader will be able to find.
-func TestShaderIncludeAnchorsExist(t *testing.T) {
-	requireBuiltBundle(t)
-	shaderFiles, err := fs.Glob(webFS, shaderRoot+"/*/*")
+	entries, err := fs.ReadDir(webFS, "web/dist/assets")
 	if err != nil {
-		t.Fatalf("glob: %v", err)
+		t.Fatalf("read embedded assets: %v", err)
 	}
-	if len(shaderFiles) == 0 {
-		t.Fatalf("no shader files found under %s/", shaderRoot)
+	// Anchors: one per load-bearing piece of the chain, chosen to be
+	// strings that only occur in the GLSL sources / shader manifest.
+	anchors := []string{
+		"main/main.vert",     // the shader-loader manifest keys
+		"lib/sea-waves.glsl", // the shared include's path key
+		"gl_FragColor",       // any fragment shader body
 	}
-	for _, path := range shaderFiles {
-		body, err := fs.ReadFile(webFS, path)
+	found := make(map[string]bool, len(anchors))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".js") {
+			continue
+		}
+		body, err := fs.ReadFile(webFS, "web/dist/assets/"+e.Name())
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+			t.Fatalf("read %s: %v", e.Name(), err)
 		}
-		for _, line := range strings.Split(string(body), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "#include") {
-				continue
-			}
-			// #include "../lib/sea-waves.glsl" -> "../lib/sea-waves.glsl"
-			start := strings.Index(line, "\"")
-			end := strings.LastIndex(line, "\"")
-			if start == -1 || end <= start {
-				t.Errorf("%s: malformed include line %q", path, line)
-				continue
-			}
-			ref := line[start+1 : end]
-			// Resolve relative to the shader file's directory.
-			dir := path[:strings.LastIndex(path, "/")]
-			resolved := joinRel(dir, ref)
-			if _, err := fs.ReadFile(webFS, resolved); err != nil {
-				t.Errorf("%s: include %q -> %q not embedded: %v", path, ref, resolved, err)
+		for _, a := range anchors {
+			if strings.Contains(string(body), a) {
+				found[a] = true
 			}
 		}
 	}
-}
-
-// joinRel performs the same path resolution the JS loader does -
-// joining a base directory with a relative path and collapsing any
-// `..` segments.  Lives in the test because there's no other caller
-// in the studio package that needs this kind of path math.
-func joinRel(base, rel string) string {
-	parts := strings.Split(base, "/")
-	for _, seg := range strings.Split(rel, "/") {
-		if seg == ".." {
-			if len(parts) > 0 {
-				parts = parts[:len(parts)-1]
-			}
-			continue
+	for _, a := range anchors {
+		if !found[a] {
+			t.Errorf("embedded web bundle carries no shader anchor %q — was @kbot/game3d built before the Vite bundle?", a)
 		}
-		if seg == "." || seg == "" {
-			continue
-		}
-		parts = append(parts, seg)
 	}
-	return strings.Join(parts, "/")
 }

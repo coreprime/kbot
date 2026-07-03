@@ -24,6 +24,7 @@
 // viewer teardown so the next unit-load starts silent.
 
 import { AUDIO_DEDUP_WINDOW_MS } from './performance.js'
+import { getAssetProvider } from './assets.js'
 
 let _nextId = 1
 
@@ -54,7 +55,7 @@ export class AudioPool {
   // browser refused to construct the Audio element, e.g. autoplay
   // policy on the very first interaction).  Options:
   //
-  //   stem    — file stem under /api/studio/sound/ (no extension)
+  //   stem    — sound file stem passed to the AssetProvider (no extension)
   //   pos     — optional [x, y, z] world coords of the sound source
   //   vol     — 0.0–1.0 playback volume; defaults to 0.7
   //   kind    — one of 'unit', 'weapon-fire', 'weapon-hit', 'ui',
@@ -79,14 +80,37 @@ export class AudioPool {
     const last = this._lastPlayByStem.get(stem) || 0
     if (now - last < AUDIO_DEDUP_WINDOW_MS) return 0
     this._lastPlayByStem.set(stem, now)
+    const provider = getAssetProvider()
     let audio
     try {
-      // Assign src as a property (not via the Audio(url) constructor): the
-      // workspace URL shim in index.html rewrites /api/... paths through the
-      // patched HTMLMediaElement src setter, which the constructor bypasses —
-      // constructor-set URLs 404 at the hub root and the sound never plays.
       audio = new Audio()
-      audio.src = `/api/studio/sound/${encodeURIComponent(stem)}`
+      // Preferred path: the provider hands back a streamable URL.  Assign
+      // src as a property (not via the Audio(url) constructor) so hosts
+      // that patch the HTMLMediaElement src setter (the studio's
+      // workspace URL shim) still see the assignment.
+      const url = provider && typeof provider.soundUrl === 'function' ? provider.soundUrl(stem) : null
+      if (url) {
+        audio.src = url
+      } else if (provider && typeof provider.sound === 'function') {
+        // Byte path: resolve the sound to a Blob and play via an object
+        // URL, revoked once the element can't need it again.
+        provider.sound(stem).then((data) => {
+          if (!data) return
+          const blob = data instanceof Blob ? data : new Blob([data])
+          const objUrl = URL.createObjectURL(blob)
+          audio.addEventListener('ended', () => URL.revokeObjectURL(objUrl), { once: true })
+          audio.addEventListener('error', () => URL.revokeObjectURL(objUrl), { once: true })
+          audio.src = objUrl
+          // The eager play() below ran before src existed — restart it
+          // now the bytes are in, unless the pool paused meanwhile.
+          if (!this._paused) {
+            const pr = audio.play()
+            if (pr && typeof pr.catch === 'function') pr.catch(() => {})
+          }
+        }).catch(() => { /* provider miss — entry expires silently */ })
+      } else {
+        return 0
+      }
     } catch {
       return 0
     }

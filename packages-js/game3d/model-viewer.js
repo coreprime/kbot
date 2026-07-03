@@ -13,9 +13,10 @@ import { TextureCache } from './texture-cache.js'
 import { ModelLoader } from './model-loader.js'
 import { OrbitCamera } from './orbit-camera.js'
 import { ModelRenderer } from './model-renderer.js'
-import { SFX_SPARK, SFX_SMOKE_WHITE } from '/engine/cob-particles.js'
+import { SFX_SPARK, SFX_SMOKE_WHITE } from './cob-particles.js'
 import { attachOrbitControls } from './camera-controls.js'
 import { onEnhanceMeshChanged } from './enhance-mesh.js'
+import { getAssetProvider } from './assets.js'
 
 // TA 3DOs author the nose toward -Z; the wasm engine's heading 0 faces +Z, so
 // the unit spawns at heading π so its native rest pose renders un-rotated (the
@@ -287,7 +288,7 @@ export class ModelViewer {
       // leaving the canvas inert to every camera gesture.
       this._wireInputs()
       // Shaders now live as standalone .vert/.frag files under
-      // shaders/ and load over fetch().  init() resolves once they're
+      // shaders/ (embedded at package build).  init() resolves once they're
       // compiled + linked so the first frame doesn't fire at an
       // un-ready renderer.
       await this.renderer.init()
@@ -324,14 +325,17 @@ export class ModelViewer {
       this._cobJson = null
       this.renderer.setCobBinding(null)
       try {
-        // ?decompile=0 — skip the slow BOS-decompile pass on the
-        // initial unit-load fetch.  The debugger fetches a second
-        // time (decompile=1) the first time it opens, which keeps
+        // decompile:false — skip the slow BOS-decompile pass on the
+        // initial unit-load request.  The debugger asks a second time
+        // (decompile:true) the first time it opens, which keeps
         // model-load latency low for users who never crack open the
-        // thread viewer.
-        const cobResp = await fetch(`/api/studio/cob/${encodeURIComponent(modelName)}?decompile=0`)
-        if (cobResp.ok) {
-          const cobJson = await cobResp.json()
+        // thread viewer.  Providers without script() (or returning
+        // null) leave the unit static.
+        const provider = getAssetProvider()
+        const cobJson = (provider && typeof provider.script === 'function')
+          ? await provider.script(modelName, { decompile: false })
+          : null
+        if (cobJson) {
           this._cobJson = cobJson
           // Reuse one wasm-backed scene across model loads so the wasm
           // module + engine handle survive a swap.  Each load removes
@@ -375,7 +379,7 @@ export class ModelViewer {
           try { this._scene._stepOnce(); this._scene.interpolate() } catch { /* ignore */ }
         }
       } catch (e) {
-        console.warn(`[cob:${modelName}] fetch failed:`, e)
+        console.warn(`[cob:${modelName}] script load failed:`, e)
       }
       if (this.onModelLoaded) this.onModelLoaded(model, this.cob)
       this.#setStatus(`${modelName} · ${model.flat.length} piece${model.flat.length === 1 ? '' : 's'}`)

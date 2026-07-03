@@ -1,9 +1,11 @@
 // TAPalette caches the 256-entry RGB palette TA uses to resolve
 // `IsColored` primitives (flat-shaded faces with no UV-mapped texture).
-// Loaded once per page session from /api/studio/palette; subsequent
-// model loads reuse the cached instance.
+// Loaded once per AssetProvider; subsequent model loads reuse the cached
+// instance.
 
-let inflight = null
+import { requireAssetProvider } from './assets.js'
+
+const inflightByProvider = new WeakMap()
 
 export class TAPalette {
   constructor(rgbTriples) {
@@ -18,13 +20,14 @@ export class TAPalette {
   }
 
   static async load() {
-    if (inflight) return inflight
-    inflight = (async () => {
-      const resp = await fetch('/api/studio/palette')
-      if (!resp.ok) throw new Error(`palette fetch failed: HTTP ${resp.status}`)
-      const json = await resp.json()
-      return new TAPalette(json.palette || [])
+    const provider = requireAssetProvider()
+    const cached = inflightByProvider.get(provider)
+    if (cached) return cached
+    const inflight = (async () => {
+      const triples = await provider.palette()
+      return new TAPalette(triples || [])
     })()
+    inflightByProvider.set(provider, inflight)
     return inflight
   }
 }

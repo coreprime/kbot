@@ -1,29 +1,29 @@
 // weapon-bitmap-loader.js
 //
-// Fetches an animated bitmap projectile sprite from the Go side and
-// caches the result indefinitely.  See internal/studio/weapon_bitmap.go
-// for the matching endpoint + the "color slot = fx.gaf index" hack
-// being faithfully reproduced.
+// Pulls an animated bitmap projectile sprite through the configured
+// AssetProvider (provider.weaponBitmap(name)) and caches the result
+// indefinitely.
 //
-// The fetched payload is a horizontal sprite sheet (PNG) plus frame
-// metadata (frameCount, frameWidth, frameDurationMs, originX/Y).  We
-// decode the PNG into a JS Image() so the renderer can upload it as a
-// texture; metadata + the Image come back together in one resolved
-// Promise so the spawn site just calls `await loadWeaponBitmap(name)`
-// and gets a ready-to-render sprite.
+// The payload is a horizontal sprite sheet (base64 PNG under `sheet`)
+// plus frame metadata (frameCount, frameWidth, frameDurationMs,
+// originX/Y).  We decode the PNG into a JS Image() so the renderer can
+// upload it as a texture; metadata + the Image come back together in
+// one resolved Promise so the spawn site just calls
+// `await loadWeaponBitmap(name)` and gets a ready-to-render sprite.
 //
 // Cache shape: weapon-name (uppercased + trimmed) → Promise<bitmap|null>.
 // `null` means we tried and the server 404'd; the cached null prevents
 // re-querying on every shot of a non-bitmap weapon.
 
-const SPRITE_ENDPOINT = '/api/studio/weapon-bitmap/'
+import { getAssetProvider } from './assets.js'
 
 const _cache = new Map()
 
 // loadWeaponBitmap returns a Promise that resolves to either:
 //   { image, frameCount, frameWidth, frameHeight, sheetWidth,
 //     sheetHeight, frameDurationMs, originX, originY, sequence }
-// or `null` when the weapon has no bitmap projectile.  Always returns
+// or `null` when the weapon has no bitmap projectile (or the provider
+// doesn't serve weapon bitmaps).  Always returns
 // the SAME promise for the same weapon — callers can rely on shared
 // referential identity to dedupe state.
 export function loadWeaponBitmap(weaponName) {
@@ -33,17 +33,11 @@ export function loadWeaponBitmap(weaponName) {
   if (_cache.has(key)) return _cache.get(key)
 
   const promise = (async () => {
-    const url = SPRITE_ENDPOINT + encodeURIComponent(weaponName)
-    let resp
-    try {
-      resp = await fetch(url)
-    } catch {
-      return null
-    }
-    if (!resp.ok) return null
+    const provider = getAssetProvider()
+    if (!provider || typeof provider.weaponBitmap !== 'function') return null
     let meta
     try {
-      meta = await resp.json()
+      meta = await provider.weaponBitmap(weaponName)
     } catch {
       return null
     }

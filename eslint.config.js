@@ -19,13 +19,16 @@ export default [
       'packages-js/*/storybook-static/**',
       'packages-js/engine/wasm/**',
       'packages-js/engine/pack-verify/**',
+      'packages-js/game3d/dist/**',
+      'packages-js/game3d/generated/**',
+      'packages-js/game3d/pack-verify/**',
     ],
   },
   js.configs.recommended,
   {
     // Node-side tooling and examples: the engine package's build/verify
     // scripts and the headless consume-proof run under Node, not a browser.
-    files: ['packages-js/engine/scripts/**/*.mjs', 'examples/**/*.mjs'],
+    files: ['packages-js/*/scripts/**/*.mjs', 'examples/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

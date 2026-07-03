@@ -26,9 +26,9 @@
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { activeGame } from '../common/game-registry.js'
-import { gatherSceneLights } from '../../engine/scene-lights.js'
+import { gatherSceneLights } from '@kbot/game3d/scene-lights'
 import { AudioPool } from '@kbot/game3d/audio-pool'
-import { ParticlePool } from '../../engine/cob-particles.js'
+import { ParticlePool } from '@kbot/game3d/cob-particles'
 import {
   SmokeTrailManager,
   spawnProjectile,

@@ -1,60 +1,62 @@
 // shader-loader.js
-// Fetches GLSL source files served from the embedded web assets and
-// resolves `#include "<relative path>"` directives so shaders can
-// share helper libraries (see shaders/lib/sea-waves.glsl).
+// Resolves the renderer's GLSL programs from the shader sources embedded
+// in the package at build time, including `#include "<relative path>"`
+// directives so shaders can share helper libraries (see
+// shaders/lib/sea-waves.glsl).
 //
-// Why this exists: the studio is served as plain ES modules - no
-// bundler, no build step.  But we still want the shader source in
-// real .vert/.frag/.glsl files so they open in VS Code's GLSL
-// extension with proper highlighting.  The trade-off is that the
-// renderer's first frame is gated on a small handful of network
-// fetches; the loader keeps those parallel and caches the bodies so
-// repeated viewer instances share the same source text.
+// The GLSL lives in real .vert/.frag/.glsl files under shaders/ so they
+// open in an editor with proper highlighting; scripts/gen-assets.mjs
+// embeds them into generated/shader-sources.js as part of the package
+// build.  Embedding (rather than fetching from a served asset tree)
+// keeps the published package self-contained: the renderer's first
+// frame gates on no network fetches and no host asset routes.
 //
 // The loader is intentionally tiny and tolerant - it does NOT try to
 // implement the C preprocessor.  Just one directive, no nesting
 // guards, no #ifdefs.  Cyclic includes are detected and rejected.
 
-// Absolute, origin-rooted base so the fetch URLs stay stable whether this
-// module is served raw or rolled into a hashed bundle chunk (import.meta.url
-// would otherwise point at /assets/… once bundled).  The studio serves the
-// shader tree verbatim at /game3d/shaders/.
-const baseDir = new URL('/game3d/shaders/', window.location.origin)
+import { SHADER_SOURCES } from './generated/shader-sources.js'
 
-// Module-level cache: same shader URL only ever fetches once per page
-// load, even if multiple renderers spin up.
-const fetchCache = new Map() // string URL -> Promise<string>
+// sourceFor returns the raw text of a shaders/-relative path.  Errors
+// surface so the renderer can report a meaningful failure rather than
+// ship a broken shader to the GPU.
+function sourceFor(relPath) {
+  const src = SHADER_SOURCES[relPath]
+  if (typeof src !== 'string') {
+    throw new Error(`shader-loader: no embedded source for ${relPath}`)
+  }
+  return src
+}
 
-// fetchRaw returns the raw text of `url`, memoised.  Errors surface
-// so the renderer can report a meaningful failure rather than ship a
-// broken shader to the GPU.
-function fetchRaw(url) {
-  if (fetchCache.has(url)) return fetchCache.get(url)
-  const p = fetch(url).then(async (resp) => {
-    if (!resp.ok) throw new Error(`shader fetch ${url}: HTTP ${resp.status}`)
-    return resp.text()
-  })
-  fetchCache.set(url, p)
-  return p
+// joinRel resolves an include reference relative to the including
+// file's directory, collapsing `.` / `..` segments — the same path
+// math URL resolution performed when the tree was served over HTTP.
+function joinRel(fromPath, rel) {
+  const parts = fromPath.split('/').slice(0, -1)
+  for (const seg of rel.split('/')) {
+    if (seg === '..') { parts.pop(); continue }
+    if (seg === '.' || seg === '') continue
+    parts.push(seg)
+  }
+  return parts.join('/')
 }
 
 // resolveIncludes walks the source line-by-line.  Whenever it sees
-// `#include "<path>"` it fetches the referenced file (relative to the
-// current file's URL) and substitutes its resolved body.  The visited
+// `#include "<path>"` it looks up the referenced file (relative to the
+// current file's path) and substitutes its resolved body.  The visited
 // set guards against cycles, which would otherwise loop forever.
-async function resolveIncludes(source, currentUrl, visited) {
+function resolveIncludes(source, currentPath, visited) {
   const lines = source.split('\n')
   const out = []
   for (const line of lines) {
     const m = line.match(/^\s*#include\s+"([^"]+)"\s*$/)
     if (!m) { out.push(line); continue }
-    const includeUrl = new URL(m[1], currentUrl).href
-    if (visited.has(includeUrl)) {
-      throw new Error(`shader-loader: cyclic include of ${includeUrl}`)
+    const includePath = joinRel(currentPath, m[1])
+    if (visited.has(includePath)) {
+      throw new Error(`shader-loader: cyclic include of ${includePath}`)
     }
-    visited.add(includeUrl)
-    const body = await fetchRaw(includeUrl)
-    const resolved = await resolveIncludes(body, includeUrl, visited)
+    visited.add(includePath)
+    const resolved = resolveIncludes(sourceFor(includePath), includePath, visited)
     // Add origin markers so compiler errors point back at the file the
     // line actually came from.  WebGL implementations ignore #line in
     // GLSL ES 1.00 by default but Chrome's translator honours it -
@@ -62,22 +64,21 @@ async function resolveIncludes(source, currentUrl, visited) {
     out.push(`// >>> ${m[1]}`)
     out.push(resolved)
     out.push(`// <<< ${m[1]}`)
-    visited.delete(includeUrl)
+    visited.delete(includePath)
   }
   return out.join('\n')
 }
 
-// loadShaderSource fetches a shader file by relative path (relative
+// loadShaderSource resolves a shader file by relative path (relative
 // to the shaders/ directory) and returns the resolved source text.
+// Still async — callers were written against the fetching loader and
+// the renderer awaits these during init().
 export async function loadShaderSource(relativePath) {
-  const url = new URL(relativePath, baseDir).href
-  const raw = await fetchRaw(url)
-  return resolveIncludes(raw, url, new Set([url]))
+  return resolveIncludes(sourceFor(relativePath), relativePath, new Set([relativePath]))
 }
 
-// loadShaderProgram is a tiny convenience helper that fetches both
-// vertex + fragment shaders in parallel and returns them as
-// { vs, fs }.  Saves a few await chains in the renderer.
+// loadShaderProgram is a tiny convenience helper that resolves both
+// vertex + fragment shaders and returns them as { vs, fs }.
 export async function loadShaderProgram(vsPath, fsPath) {
   const [vs, fs] = await Promise.all([
     loadShaderSource(vsPath),
@@ -105,9 +106,9 @@ export const SHADER_MANIFEST = {
   impostor:  { vs: 'impostor/impostor.vert',   fs: 'impostor/impostor.frag' },
 }
 
-// loadAllShaders fetches every shader in the manifest in parallel and
-// returns a map { main: {vs, fs}, sky: {vs, fs}, ... }.  Errors short-
-// circuit the whole load.
+// loadAllShaders resolves every shader in the manifest and returns a
+// map { main: {vs, fs}, sky: {vs, fs}, ... }.  Errors short-circuit
+// the whole load.
 export async function loadAllShaders() {
   const entries = Object.entries(SHADER_MANIFEST)
   const sources = await Promise.all(entries.map(async ([key, paths]) => {

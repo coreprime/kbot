@@ -15,6 +15,7 @@ tasks:
     desc: Build all binaries
     cmds:
       - task: build-studio-web
+      - task: build-game3d
       - task: build-wasm
       - task: bundle-studio-web
       - task: build-kbot
@@ -35,6 +36,11 @@ tasks:
     cmds:
       - npm install
       - task: lint-js
+
+  build-game3d:
+    desc: Build the @kbot/game3d package dist (embedded shaders/worlds + ESM modules)
+    cmds:
+      - npm run build -w @kbot/game3d
 
   bundle-studio-web:
     desc: Bundle the KBot Studio web app with Vite into web/dist (embedded by build-kbot)

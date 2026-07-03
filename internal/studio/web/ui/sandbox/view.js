@@ -19,11 +19,8 @@
 // Command API, camera tracking, unit acks, FX aggregation) lives
 // inside whichever view actually uses it.
 
-import { ModelLoader } from '@kbot/game3d/model-loader'
-import { ModelRenderer } from '@kbot/game3d/model-renderer'
-import { OrbitCamera } from '@kbot/game3d/orbit-camera'
-import { TextureCache } from '@kbot/game3d/texture-cache'
-import { TAPalette } from '@kbot/game3d/palette'
+import { createWorld } from '@kbot/game3d'
+import { studioAssetProvider } from '../common/studio-asset-provider.js'
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { loadSelectionKeys, selectionKeys, keyTokenForEvent, commandClauses, unitMatchesToken } from './select-keys.js'
@@ -164,21 +161,29 @@ export class SandboxView {
       window.addEventListener('kbot-wasm-crash', this._wasmCrashHandler)
     }
     if (!this.renderer) {
-      const palette = await TAPalette.load()
-      this.palette = palette
-      const gl = this.canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false, alpha: false })
-      if (!gl) {
-        this.#setStatus('WebGL unavailable in this browser.')
+      // The @kbot/game3d factory assembles the renderer stack (palette,
+      // texture cache, loader, ModelRenderer, OrbitCamera) against the
+      // studio's AssetProvider.  controls:false — the sandbox attaches
+      // its own gesture handling (placement drag, rect-select, sim-speed
+      // keys) below; autoStart:true — the renderer's own rAF loop drives
+      // frames exactly as before.
+      let world
+      try {
+        world = await createWorld(this.canvas, {
+          assets: studioAssetProvider,
+          controls: false,
+          autoStart: true,
+        })
+      } catch (err) {
+        this.#setStatus(`WebGL unavailable in this browser. (${err.message || err})`)
         return
       }
-      const textureCache = new TextureCache(gl)
-      this.loader = new ModelLoader({ gl, palette, textureCache })
-      this.renderer = new ModelRenderer({ canvas: this.canvas, textureCache, gl })
-      this.camera = new OrbitCamera({})
-      this.renderer.setCamera(this.camera)
+      this._world = world
+      this.palette = world.palette
+      this.loader = world.loader
+      this.renderer = world.renderer
+      this.camera = world.camera
       this.#observeResize()
-      await this.renderer.init()
-      this.renderer.start()
       // Seed this pane's renderer with the persisted Graphics Options
       // (shadows + effects + liquid sim) so every sandbox pane shares
       // the user's chosen look, and reseed the ribbon menu signal in

@@ -24,7 +24,7 @@ import {
   SFX_PROJECTILE_SPRITE,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
-} from '/engine/cob-particles.js'
+} from './cob-particles.js'
 import {
   WEAPON_RENDERTYPE_LASER,
   WEAPON_RENDERTYPE_PROJECTILE,
@@ -35,8 +35,8 @@ import {
   WEAPON_RENDERTYPE_BOMB,
   WEAPON_RENDERTYPE_LIGHTNING,
   hasRenderType,
-} from '/engine/weapon-rendertype.js'
-import { loadWeaponBitmap } from '/engine/weapon-bitmap-loader.js'
+} from './weapon-rendertype.js'
+import { loadWeaponBitmap } from './weapon-bitmap-loader.js'
 
 // Per-kind brightness multipliers applied on top of the palette-derived
 // hue so each projectile family keeps its visual identity even when the

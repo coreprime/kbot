@@ -1,13 +1,13 @@
 // worlds.js
 //
-// World / environment scene definitions, loaded from the editable JSON files
-// under game3d/worlds/.  Each <key>.json describes one world: its sky
+// World / environment scene definitions, authored as the editable JSON
+// files under worlds/.  Each <key>.json describes one world: its sky
 // (gradient + sun colours + positions + clouds), the unit key-light colour +
 // direction, terrain tileset, water column, seabed, mountains, and gravity.
 // Dropping a new JSON in that folder and appending its key to manifest.json
-// adds a world — no code change needed.  (Kept as plain .json, fetched at
-// runtime, so worlds stay readable + hand-editable and can later be shared
-// with the sandbox.)
+// adds a world — no code change needed.  scripts/gen-assets.mjs embeds the
+// JSON into generated/world-data.js at package-build time so the published
+// renderer carries its worlds with it (no host asset routes).
 //
 // The renderer imports the three preset maps below by reference and consumes
 // them exactly as it did the old inline tables, so all existing call sites
@@ -100,25 +100,20 @@ _install({
 
 let _loaded = null
 
-// loadWorlds — fetch the manifest + every world JSON once, filling the preset
-// maps in place.  Returns a cached promise; safe to await repeatedly.  On any
-// fetch error it resolves anyway (leaving the synchronous seed in place) so a
-// missing file degrades to "only Greenworld" rather than a blank renderer.
+// loadWorlds — install the embedded manifest + world data into the preset
+// maps once.  Still async-shaped (callers were written against the fetching
+// loader); returns a cached promise, safe to await repeatedly.  On any
+// malformed world it resolves anyway (leaving the synchronous seed in
+// place) so a bad file degrades to "only Greenworld" rather than a blank
+// renderer.
 export function loadWorlds() {
   if (_loaded) return _loaded
   _loaded = (async () => {
     try {
-      const man = await (await fetch('/game3d/worlds/manifest.json')).json()
-      const entries = await Promise.all(
-        man.worlds.map(async (m) => {
-          try { return await (await fetch(`/game3d/worlds/${m.key}.json`)).json() }
-          catch { return null }
-        }),
-      )
+      const { WORLDS_MANIFEST, WORLD_DATA } = await import('./generated/world-data.js')
       WORLD_LIST.length = 0
-      for (let i = 0; i < man.worlds.length; i++) {
-        const m = man.worlds[i]
-        const w = entries[i]
+      for (const m of WORLDS_MANIFEST.worlds) {
+        const w = WORLD_DATA[m.key]
         if (w) _install(w)
         WORLD_LIST.push({ env: m.key, icon: m.icon, label: m.name, title: m.title })
       }

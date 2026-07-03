@@ -1,4 +1,5 @@
-// ModelLoader fetches /api/studio/model/<name>, walks the JSON tree,
+// ModelLoader pulls model geometry from the configured AssetProvider
+// (provider.model(name)), walks the JSON tree,
 // triangulates each primitive, generates per-vertex UVs (3DO carries
 // none — they're derived from primitive vertex order, see format docs),
 // computes a face normal so the shader can flat-shade non-textured
@@ -22,6 +23,7 @@ import { Piece } from './piece.js'
 import { Model } from './model.js'
 import { applyResolvedHints } from './hints-textures.js'
 import { enhanceMeshEnabled } from './enhance-mesh.js'
+import { requireAssetProvider } from './assets.js'
 
 const FLOATS_PER_VERTEX = 9
 
@@ -48,10 +50,8 @@ export class ModelLoader {
   }
 
   async load(modelName) {
-    const qs = enhanceMeshEnabled() ? '?enhanceMesh=1' : ''
-    const resp = await fetch(`/api/studio/model/${encodeURIComponent(modelName)}${qs}`)
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} loading model ${modelName}`)
-    const data = await resp.json()
+    const data = await requireAssetProvider().model(modelName, { enhanceMesh: enhanceMeshEnabled() })
+    if (!data) throw new Error(`asset provider returned no geometry for model ${modelName}`)
     // decalSet flags textures with alpha-keyed pixels — the loader
     // emits their draw groups AFTER the opaque ones in every piece so
     // the GPU draws coplanar logos/glass/rotors on top of their base

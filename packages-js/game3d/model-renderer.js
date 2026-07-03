@@ -46,7 +46,8 @@ import {
 } from './worlds.js'
 import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
-import { MAX_PULSE_LIGHTS, setMaxSceneLights } from '/engine/scene-lights.js'
+import { MAX_PULSE_LIGHTS, setMaxSceneLights } from './scene-lights.js'
+import { getAssetProvider, toTexImageSource } from './assets.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
 // Scratch buffers for the dynamic pulse-light uniform arrays, sized to
@@ -4848,39 +4849,43 @@ export class ModelRenderer {
     this._bloomTex = this._bloomTexA
   }
 
-  // #loadTerrainTexture pulls the active tileset's flat-tile PNG from
-  // the new /api/studio/ground-tile endpoint, uploads it with REPEAT
+  // #loadTerrainTexture pulls the active tileset's flat-tile image
+  // through the AssetProvider's groundTile(), uploads it with REPEAT
   // wrapping (so the ground shader can tile-sample by world-space
-  // coords), and flips `_terrainReady` so the shader graduates from
-  // its fallback look to real terrain.
+  // coords), and flips `_terrainReady` so the shader graduates from its
+  // fallback look to real terrain.  A provider without groundTile keeps
+  // the procedural fallback ground.
   #loadTerrainTexture() {
     if (this._terrainTex) return
     const gl = this.gl
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.src = `/api/studio/ground-tile/${encodeURIComponent(this.terrainTileset)}`
-    img.addEventListener('load', () => {
-      const tex = gl.createTexture()
-      gl.bindTexture(gl.TEXTURE_2D, tex)
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
-      const pot = (img.naturalWidth & (img.naturalWidth - 1)) === 0 && (img.naturalHeight & (img.naturalHeight - 1)) === 0
-      if (pot) {
-        gl.generateMipmap(gl.TEXTURE_2D)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-      } else {
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-      }
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-      this._terrainTex = tex
-      this._terrainReady = true
-      this.requestRedraw()
-    }, { once: true })
-    img.addEventListener('error', () => {
-      console.warn(`terrain texture failed to load for tileset ${this.terrainTileset}`)
-    }, { once: true })
+    const provider = getAssetProvider()
+    if (!provider || typeof provider.groundTile !== 'function') return
+    Promise.resolve(provider.groundTile(this.terrainTileset))
+      .then((result) => toTexImageSource(result))
+      .then((img) => {
+        const w = img.naturalWidth || img.width
+        const h = img.naturalHeight || img.height
+        const tex = gl.createTexture()
+        gl.bindTexture(gl.TEXTURE_2D, tex)
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
+        const pot = (w & (w - 1)) === 0 && (h & (h - 1)) === 0
+        if (pot) {
+          gl.generateMipmap(gl.TEXTURE_2D)
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+        } else {
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+        }
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+        this._terrainTex = tex
+        this._terrainReady = true
+        this.requestRedraw()
+      })
+      .catch(() => {
+        console.warn(`terrain texture failed to load for tileset ${this.terrainTileset}`)
+      })
   }
 
   #initShadowFBO() {
