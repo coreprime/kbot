@@ -93,6 +93,15 @@ export async function loadMapTerrain(provider, name) {
   let seaLevel = data.seaLevel | 0
   const ota = data.ota || null
   if (ota && ota.seaLevel > 0) seaLevel = ota.seaLevel
+  // Planet keyword from the OTA GlobalHeader (e.g. "Acid", "Green", "Lava",
+  // "Metal", "Moon", "Desert"). Drives the auto-selected sky/environment when
+  // the caller didn't pin one (see planetEnvironment / create-world setTerrain).
+  // Accept a normalised `planet` or the raw header field, and fall back to the
+  // lavaworld flag so a lava map still reads hot even without a planet string.
+  let planet = (ota && (ota.planet || ota.Planet)) || null
+  if (!planet && ota && (ota.lavaworld === 1 || ota.lavaworld === '1' || ota.lavaWorld)) {
+    planet = 'Lava'
+  }
   const startPositions = []
   if (ota && Array.isArray(ota.schemas) && ota.schemas.length) {
     for (const sp of ota.schemas[0].startPositions || []) {
@@ -115,7 +124,27 @@ export async function loadMapTerrain(provider, name) {
     startPositions,
     features: data.features || [],
     name: data.name || name,
+    planet,
     minimapUrl: typeof provider.minimap === 'function' ? provider.minimap(name) : null,
     ota,
   }
+}
+
+// planetEnvironment maps a TA OTA "planet" keyword to one of the renderer's
+// ENVIRONMENT_PRESETS keys, so an installed battlefield can auto-pick a
+// map-appropriate sky/cloud layer when the caller didn't pin an environment.
+// Returns null for an unknown/empty planet so callers keep their default.
+export function planetEnvironment(planet) {
+  const p = String(planet || '').toLowerCase()
+  if (!p) return null
+  if (/lava|inferno|volcan|hell/.test(p)) return 'lava'
+  if (/acid|marsh|swamp|bog/.test(p)) return 'marsh'
+  if (/metal|urban|industr/.test(p)) return 'metal'
+  if (/moon|luna/.test(p)) return 'moon'
+  if (/mars|red/.test(p)) return 'mars'
+  if (/desert|sand|dune|arid/.test(p)) return 'desert'
+  if (/slate|rock|barren|ash/.test(p)) return 'slate'
+  if (/archipel|water|ocean|sea|tropic/.test(p)) return 'archipelago'
+  if (/green|earth|forest|grass|temperate/.test(p)) return 'greenworld'
+  return null
 }

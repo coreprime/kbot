@@ -27,6 +27,19 @@ uniform float uCloudSpeed;
 uniform float uTime;
 uniform float uOptGodBeams; // 0 disables crepuscular rays from the sun(s)
 
+// Infinite void grid (battlefield surround). When uGridOn>0.5 the lower
+// hemisphere (rays that hit the ground plane y=uGridLevel below the horizon)
+// is painted as a Tron-style deck of glowing grid lines instead of the sky
+// gradient. Because the plane is reconstructed per fragment from the camera
+// ray, the grid extends to the true horizon at any camera angle and never
+// shows an edge — it's genuinely infinite. Fragments whose ground hit lands
+// inside the map rect keep the sky value (the opaque battlefield mesh draws
+// over them anyway), so the grid only reads OUTSIDE the gameplay area.
+uniform float uGridOn;
+uniform float uGridLevel;    // world Y of the void deck (below the map)
+uniform vec4 uGridRect;      // map rect originX, originZ, sizeX, sizeZ (wu)
+uniform float uGridCell;     // world units per grid cell
+
 // Hash + value noise + fbm.  Compact enough to fit in WebGL1 and
 // accurate enough that a 5-octave fbm reads as drifting clouds
 // rather than checkerboard noise.
@@ -154,6 +167,46 @@ void main() {
     float gap = mix(0.45, 1.0, 1.0 - smoothstep(0.40, 0.95, cMask));
     float upward = smoothstep(-0.05, 0.20, dir.y);
     col += uSun2Color * beam * coneFall * gap * upward * 1.50;
+  }
+
+  // -- Infinite void grid ------------------------------------------------
+  // Ray-plane intersect against y = uGridLevel. Only rays pointing DOWN
+  // (dir.y < 0) can hit it; everything else keeps the sky (so the dome +
+  // clouds fill the whole upper hemisphere at any pitch, including steep
+  // establishing shots looking down over the map).
+  if (uGridOn > 0.5 && dir.y < -1e-4) {
+    float t = (uGridLevel - uEyePos.y) / dir.y;
+    if (t > 0.0) {
+      vec3 hit = uEyePos + dir * t;
+      // Skip the gameplay rect — the battlefield mesh owns that ground.
+      vec2 rel = hit.xz - uGridRect.xy;
+      bool inRect = rel.x >= 0.0 && rel.y >= 0.0 && rel.x <= uGridRect.z && rel.y <= uGridRect.w;
+      if (!inRect) {
+        float cell = max(1.0, uGridCell);
+        vec2 tile = fract(hit.xz / cell);
+        // Two-tier stroke: a crisp inner line plus a wider soft halo the
+        // cinematic bloom pass lifts into a gentle glow.
+        float lineX = smoothstep(0.0, 0.025, tile.x) * (1.0 - smoothstep(0.975, 1.0, tile.x));
+        float lineY = smoothstep(0.0, 0.025, tile.y) * (1.0 - smoothstep(0.975, 1.0, tile.y));
+        float onLine = 1.0 - lineX * lineY;
+        float gloX = smoothstep(0.0, 0.09, tile.x) * (1.0 - smoothstep(0.91, 1.0, tile.x));
+        float gloY = smoothstep(0.0, 0.09, tile.y) * (1.0 - smoothstep(0.91, 1.0, tile.y));
+        float onGlow = 1.0 - gloX * gloY;
+        vec3 fill = vec3(0.004, 0.008, 0.016);
+        vec3 lineCol = vec3(0.10, 0.55, 1.15);
+        // Distance + horizon fade so the deck melts into the dark toward the
+        // horizon rather than showing a hard lit floor to infinity.
+        float dist = length(hit - uEyePos);
+        float distFade = 1.0 - smoothstep(1200.0, 9000.0, dist);
+        float horizonFade = smoothstep(0.0, 0.06, -dir.y);
+        float fade = distFade * horizonFade;
+        vec3 deck = mix(fill, lineCol, onLine * fade);
+        deck += lineCol * onGlow * 0.14 * fade;
+        // Blend the deck over the sky value using the same fade so the far
+        // rim dissolves into the horizon colour rather than cutting off.
+        col = mix(col, deck, horizonFade);
+      }
+    }
   }
 
   gl_FragColor = vec4(col, 1.0);

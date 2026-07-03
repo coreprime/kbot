@@ -65,6 +65,7 @@ import {
   latheConeSpray,
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
+import { planetEnvironment } from './map-terrain.js'
 import { ExplosionManager } from './explosion-fx.js'
 import { PULSE_LIGHT_ENERGY_BUDGET } from './performance.js'
 
@@ -138,8 +139,8 @@ const CORPSE_SINK_WU = 1.5
 // through the post chain: bloom (weapon glow / running lights bleed),
 // the ACES tonemap + grade, and FXAA.
 const QUALITY_PRESETS = {
-  standard: { bloom: false, cinematic: false, antialias: false },
-  cinematic: { bloom: true, bloomStrength: 1.0, cinematic: true, cinematicStrength: 0.85, antialias: true },
+  standard: { bloom: false, cinematic: false, antialias: false, drawDistance: 1 },
+  cinematic: { bloom: true, bloomStrength: 1.0, cinematic: true, cinematicStrength: 0.85, antialias: true, drawDistance: 4 },
 }
 
 /**
@@ -199,6 +200,11 @@ export async function createWorld(canvas, {
   const camera = new OrbitCamera({})
   renderer.setCamera(camera)
   await renderer.init()
+  // Track whether the caller pinned an environment. If they didn't, an
+  // installed battlefield auto-selects a map-appropriate sky from its OTA
+  // planet (see setTerrain) so the beyond-map background shows a sky/cloud
+  // layer instead of reading blank.
+  const envPinned = !!environment
   if (environment) renderer.setEnvironment(environment)
   const detachControls = controls
     ? attachOrbitControls({ canvas, renderer, camera })
@@ -1001,6 +1007,14 @@ export async function createWorld(canvas, {
       steamVents.length = 0
       if (terrain) renderer.setMapTerrain(terrain)
       else renderer.clearMapTerrain()
+      // Auto-select a map-appropriate sky/environment from the OTA planet when
+      // the caller didn't pin one — so the beyond-map background renders the
+      // right sky dome + cloud layer (acid → marsh, lava → lava, etc.) instead
+      // of the default earth sky. An explicit `environment` option always wins.
+      if (terrain && !envPinned) {
+        const envKey = planetEnvironment(terrain.planet)
+        if (envKey) renderer.setEnvironment(envKey)
+      }
       if (terrain && features && Array.isArray(terrain.features) && terrain.features.length) {
         const token = featureBuildToken
         featureDefs().then((defs) => {
@@ -1598,7 +1612,27 @@ export async function createWorld(canvas, {
       renderer.setCinematic(!!p.cinematic)
       if (p.cinematicStrength != null) renderer.setCinematicStrength(p.cinematicStrength)
       renderer.setAntialiasEnabled(!!p.antialias)
+      // Cinematic renders are wide establishing shots — push the far clip
+      // plane out (paired with the log-depth buffer, so no z-fighting) so
+      // distant units keep real geometry. The supersample factor is left to
+      // the render harness (setSuperSample) since it's a heavy per-render knob.
+      if (p.drawDistance != null && typeof renderer.setDrawDistanceScale === 'function') {
+        renderer.setDrawDistanceScale(p.drawDistance)
+      }
       return true
+    },
+
+    // setSuperSample forwards the render harness's supersample factor to the
+    // renderer (offscreen SSAA). 1 = native (interactive default); the 1080p
+    // render harness sets 2 for cleaner unit edges + less texture shimmer.
+    setSuperSample(factor) {
+      if (typeof renderer.setSuperSample === 'function') renderer.setSuperSample(factor)
+    },
+
+    // setDrawDistanceScale forwards a far-plane multiplier (1..8). The
+    // cinematic quality preset already sets 4; a harness can override.
+    setDrawDistanceScale(scale) {
+      if (typeof renderer.setDrawDistanceScale === 'function') renderer.setDrawDistanceScale(scale)
     },
 
     // stats exposes the renderer's per-frame cull counters
