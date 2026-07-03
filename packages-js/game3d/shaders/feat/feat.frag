@@ -8,6 +8,8 @@
 
 precision mediump float;
 
+#include "../lib/logdepth.glsl"
+
 #define MAX_PULSE_LIGHTS 256
 
 varying vec3 vNormal;
@@ -27,7 +29,16 @@ uniform float uPulseLightRange[MAX_PULSE_LIGHTS];
 uniform int uPulseLightCount;
 
 void main() {
+#ifdef LOGDEPTH_FRAGMENT
+  logDepthFragment();
+#endif
   vec3 n = normalize(vNormal);
+  // Two-sided matte lighting: the low-poly stand-ins are flat-shaded and
+  // some faces (canopy undersides, terrain-conforming decals) can present a
+  // back-face to the camera.  Flip the normal toward the eye so those faces
+  // still catch the sun instead of collapsing to near-black.
+  vec3 toEye = normalize(uEyePos - vWorldPos);
+  if (dot(n, toEye) < 0.0) n = -n;
   float diff = max(0.0, dot(n, normalize(uLightDir)));
   // Hemispheric ambient: up-facing surfaces read brighter (sky fill).
   float amb = 0.34 + 0.16 * max(0.0, n.y);

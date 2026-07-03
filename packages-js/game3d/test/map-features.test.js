@@ -104,6 +104,33 @@ test('categoryBuilder classifies the TA category survey', () => {
   assert.equal(names(categoryBuilder('anything-weird')), 'buildRock')
 })
 
+test('categoryBuilder falls back to the feature name when category is blank', () => {
+  const names = (fn) => fn.name
+  // Pre-catalogue packs leave the category empty; classify by id so trees /
+  // bushes / metal features still route correctly instead of all becoming rocks.
+  assert.equal(names(categoryBuilder('', 'btreea_01')), 'buildTree')
+  assert.equal(names(categoryBuilder('', 'GreenBush3')), 'buildBush')
+  assert.equal(names(categoryBuilder('', 'SmallMetal')), 'buildMetalPatch')
+  assert.equal(names(categoryBuilder('', 'steamvent2')), 'buildVent')
+  // A real category still wins over the name hint.
+  assert.equal(names(categoryBuilder('metal', 'tree_looking_name')), 'buildMetalPatch')
+  // No category AND no useful name → safe rock fallback.
+  assert.equal(names(categoryBuilder('', 'xyzzy')), 'buildRock')
+})
+
+test('a tree feature produces visible above-ground canopy geometry', () => {
+  // Regression guard for "trees not showing": buildTree must emit a canopy
+  // that stands well above the terrain (not a flat/zero-height decal).
+  const defs = { pinetree: { id: 'pinetree', category: 'trees', footprintX: 2, footprintZ: 2, heightWU: 40 } }
+  const field = buildFeatureField({ features: [{ name: 'PineTree', ax: 6, ay: 6 }], defs, heightAt: () => 5 })
+  assert.ok(field.batches.length > 0 && field.batches[0].count > 0, 'tree emits geometry')
+  let maxY = -Infinity
+  for (const b of field.batches) {
+    for (let i = 0; i < b.data.length; i += 9) maxY = Math.max(maxY, b.data[i + 1])
+  }
+  assert.ok(maxY > 20, `tree canopy rises above terrain, maxY=${maxY}`)
+})
+
 // Y-range helper over a field's baked vertices.
 const yRange = (field) => {
   let minY = Infinity, maxY = -Infinity
@@ -166,6 +193,30 @@ test('steam vents surface a deterministic live emitter; metal does not', () => {
     assert.equal(em.kind, 'steam')
     assert.ok(em.y > 4 && em.y < 5, 'emitter sits at the vent mouth')
     assert.ok(Number.isFinite(em.seed))
+  }
+})
+
+test('ground decals (metal / vent / scar) present up-facing normals', () => {
+  // Root cause of the black-metal-patch defect: the terrain-conforming quad
+  // and disc builders emitted downward face normals, so the overhead sun's
+  // diffuse term collapsed to zero. Every flat decal vertex must now carry a
+  // normal whose Y is >= 0 (up-facing), so it lights instead of reading black.
+  const defs = {
+    shale: { id: 'shale', category: 'metal', footprintX: 3, footprintZ: 3, heightWU: 14 },
+    vent1: { id: 'vent1', category: 'steamvents', footprintX: 2, footprintZ: 2 },
+    scar1: { id: 'scar1', category: 'crater', footprintX: 2, footprintZ: 2 },
+  }
+  for (const name of ['Shale', 'Vent1', 'Scar1']) {
+    const field = buildFeatureField({
+      features: [{ name, ax: 8, ay: 8 }], defs, heightAt: (x, z) => 3 + x * 0.15 + z * 0.05,
+    })
+    let allUp = true
+    for (const b of field.batches) {
+      for (let i = 0; i < b.data.length; i += 9) {
+        if (b.data[i + 4] < -1e-6) { allUp = false }
+      }
+    }
+    assert.ok(allUp, `${name} decal must have up-facing (ny >= 0) normals`)
   }
 })
 

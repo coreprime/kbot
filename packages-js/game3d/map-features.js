@@ -70,7 +70,14 @@ class TriSink {
 
   // tri pushes one triangle. a/b/c are [x,y,z]; color is [r,g,b] applied
   // to all three vertices unless ca/cb/cc override per-vertex.
-  tri(a, b, c, color, ca = null, cb = null, cc = null) {
+  //
+  // upFace forces the emitted face normal to point +Y (up).  Ground decals
+  // (metal plates, vent crusts, scars) are terrain-conforming quads/discs
+  // whose winding order can produce a downward-facing geometric normal —
+  // that made the sun-facing lighting term collapse to zero and the plate
+  // read as near-black.  Forcing the normal up for those flat lie-on-the-
+  // ground primitives makes the overhead sun light them correctly.
+  tri(a, b, c, color, ca = null, cb = null, cc = null, upFace = false) {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2]
     const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]
     let nx = uy * vz - uz * vy
@@ -78,6 +85,9 @@ class TriSink {
     let nz = ux * vy - uy * vx
     const len = Math.hypot(nx, ny, nz) || 1
     nx /= len; ny /= len; nz /= len
+    // Flat ground decals must present an up-facing normal so the overhead
+    // sun lights them; flip a downward-pointing face normal.
+    if (upFace && ny < 0) { nx = -nx; ny = -ny; nz = -nz }
     const d = this.data
     const push = (p, col) => {
       d.push(p[0], p[1], p[2], nx, ny, nz, col[0], col[1], col[2])
@@ -179,8 +189,8 @@ function conformingQuad(sink, hAt, { x0, z0, x1, z1, lift, color, shadeLow = nul
   const p = (px, pz) => [px, hAt(px, pz) + lift, pz]
   const a = p(x0, z0), b = p(x1, z0), c = p(x1, z1), d = p(x0, z1)
   const c2 = shadeLow || color
-  sink.tri(a, b, c, color, color, color, c2)
-  sink.tri(a, c, d, color, color, c2, c2)
+  sink.tri(a, b, c, color, color, color, c2, true)
+  sink.tri(a, c, d, color, color, c2, c2, true)
 }
 
 // conformingDisc emits a flat n-gon decal hugging the terrain — like
@@ -198,7 +208,7 @@ function conformingDisc(sink, rng, hAt, { x, z, r, n = 10, lift, color, edgeColo
   }
   const edge = edgeColor || color
   for (let i = 0; i < n; i++) {
-    sink.tri(ring[i], centre, ring[(i + 1) % n], color, edge, color, edge)
+    sink.tri(ring[i], centre, ring[(i + 1) % n], color, edge, color, edge, true)
   }
 }
 
@@ -214,7 +224,7 @@ function disc(sink, rng, { x = 0, y = 0, z = 0, r, n = 8, color }) {
   }
   const edge = shade(color, 1.35)
   for (let i = 0; i < n; i++) {
-    sink.tri(ring[i], centre, ring[(i + 1) % n], color, edge, color, edge)
+    sink.tri(ring[i], centre, ring[(i + 1) % n], color, edge, color, edge, true)
   }
 }
 
@@ -332,8 +342,8 @@ function buildScar(sink, rng, { x, y, z, r }) {
 // a seam-coloured base quad with a grid of shade-jittered panels inset
 // over it, every vertex hugging the terrain.  Corner panels are clipped
 // to an octagon so the patch reads as the classic rounded plate.
-const METAL_PLATE = [0.15, 0.16, 0.185]
-const METAL_SEAM = [0.055, 0.06, 0.075]
+const METAL_PLATE = [0.26, 0.28, 0.32]
+const METAL_SEAM = [0.09, 0.10, 0.125]
 
 function buildMetalPatch(sink, rng, { x, y, z, r, heightAt = null }) {
   const hAt = typeof heightAt === 'function' ? heightAt : () => y
@@ -398,17 +408,32 @@ function buildVent(sink, rng, { x, y, z, r, heightAt = null }) {
 // Metal deposits and steam vents are FLAT terrain decals (the classic
 // ground-plate / vent-mouth look), not 3D clusters; vents additionally
 // get a live steam emitter from buildFeatureField.
-export function categoryBuilder(category) {
-  const c = String(category || '').toLowerCase()
-  if (/tree/.test(c)) return buildTree
-  if (/kelp|coral|anemone|aqua|seaweed|plant.*water/.test(c)) return buildKelp
-  if (/foliage|shrub|plant|gasplant|bush/.test(c)) return buildBush
-  if (/steamvent|geyser|fumarole|vent/.test(c)) return buildVent
-  if (/metal|node/.test(c)) return buildMetalPatch
-  if (/crystal|spire|glyph/.test(c)) return buildCrystals
-  if (/crater|scar|smudge|track|hole/.test(c)) return buildScar
-  if (/machine|pipe|car|truck|building|barrier|monument|ruin/.test(c)) return buildProp
-  if (/rock|heap|dragonteeth/.test(c)) return buildRock
+//
+// `nameHint` is the feature's own id (e.g. "btreea_01").  Packs built
+// before the catalogue carried categories leave `category` blank, which
+// used to collapse every tagless feature — trees included — to the rock
+// read (they "vanished" as far as the user's eye was concerned, since a
+// forest map looked like a boulder field).  When the category is empty or
+// unrecognised we fall back to classifying by the id so a feature literally
+// named "tree"/"bush"/"metal"/… still routes to the right family.
+export function categoryBuilder(category, nameHint = '') {
+  const pick = (c) => {
+    if (/tree/.test(c)) return buildTree
+    if (/kelp|coral|anemone|aqua|seaweed|plant.*water/.test(c)) return buildKelp
+    if (/foliage|shrub|plant|gasplant|bush/.test(c)) return buildBush
+    if (/steamvent|geyser|fumarole|vent/.test(c)) return buildVent
+    if (/metal|node/.test(c)) return buildMetalPatch
+    if (/crystal|spire|glyph/.test(c)) return buildCrystals
+    if (/crater|scar|smudge|track|hole/.test(c)) return buildScar
+    if (/machine|pipe|car|truck|building|barrier|monument|ruin/.test(c)) return buildProp
+    if (/rock|heap|dragonteeth/.test(c)) return buildRock
+    return null
+  }
+  const byCat = pick(String(category || '').toLowerCase())
+  if (byCat) return byCat
+  // Category was blank or unrecognised — try the feature's own name.
+  const byName = pick(String(nameHint || '').toLowerCase())
+  if (byName) return byName
   return buildRock
 }
 
@@ -481,7 +506,7 @@ export function buildFeatureField({ features, defs = {}, heightAt = null, cellWU
       continue
     }
     const { r, h } = featureSizeWU(def)
-    const build = categoryBuilder(def ? def.category : '')
+    const build = categoryBuilder(def ? def.category : '', key)
     build(sink, rng, { x, y, z, r, h, heightAt: hAt })
     // Steam vents carry a live wisp emitter on top of their baked decal —
     // the world drives it off the fx clock (deterministic per placement).
