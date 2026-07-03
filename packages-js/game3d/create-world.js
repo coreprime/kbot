@@ -215,7 +215,7 @@ export async function createWorld(canvas, {
     // places it.  Resolves to the unit id once its geometry is ready.
     // heading defaults to the rest pose (π — TA models author the nose
     // toward -Z, so π renders the unit facing +Z un-rotated).
-    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined } = {}) {
+    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined, redraw = true } = {}) {
       const base = await loadBaseModel(name)
       const unitId = id != null ? id : nextId++
       if (unitId >= nextId && typeof unitId === 'number') nextId = unitId + 1
@@ -229,13 +229,17 @@ export async function createWorld(canvas, {
         teamColor: teamColor || (side != null ? teamColorForSide(side) : null),
         buildPercent,
       })
-      if (!renderer.running) world.step(0)
+      // redraw:false skips the immediate frame — bulk callers (e.g. a
+      // replayer preloading every unit type) otherwise pay one full
+      // scene draw per add/remove, which with a battlefield terrain
+      // installed turns a warm-up loop into minutes of rendering.
+      if (redraw && !renderer.running) world.step(0)
       return unitId
     },
 
-    removeUnit(id) {
+    removeUnit(id, { redraw = true } = {}) {
       units.delete(id)
-      if (!renderer.running) world.step(0)
+      if (redraw && !renderer.running) world.step(0)
     },
 
     moveUnit(id, { x, y, z, heading } = {}) {
