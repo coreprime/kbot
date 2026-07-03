@@ -1,0 +1,65 @@
+package sim
+
+import "github.com/coreprime/kbot/engine/fixed"
+
+// UnitStateOverride is an authoritative single-unit state write, the hook a
+// replay driver uses to pin a unit to decoded wire truth each tick. Each field
+// group is gated by its Has* flag so a wire record that carries only a subset
+// (position but no health, say) leaves the rest of the unit untouched. This is
+// deliberately distinct from Restore — which rebuilds the whole world — and
+// from the COB unit-value ports, which feed script reads rather than sim state.
+type UnitStateOverride struct {
+	// Pos is the unit's world position (raw fixed-point, all three axes).
+	HasPos bool
+	Pos    fixed.Vec3
+	// Heading is the raw fractional TA-angle locomotion heading.
+	HasHeading bool
+	Heading    fixed.Fixed
+	// Speed is the scalar locomotion velocity in world units per second,
+	// applied along the heading by the next Step.
+	HasSpeed bool
+	Speed    fixed.Fixed
+	// Health is the unit's hit points on the sim's 0..100 scale.
+	HasHealth bool
+	Health    fixed.Fixed
+	// BuildPercent is construction progress on the 0..100 scale. A value
+	// below 100 leaves the unit inert (the under-construction gate), so a
+	// replay shows a frame being raised exactly as the wire reports it.
+	HasBuildPercent bool
+	BuildPercent    fixed.Fixed
+}
+
+// SetUnitState authoritatively overwrites one live unit's pose/state. The unit
+// must already exist — creation stays on the AddUnit/Spawn path, which carries
+// the meta and script binding an override cannot — and a missing id returns
+// false. No game logic runs on the write: health is set verbatim (a zero does
+// not trigger death or its blast; the driver conveys deaths through its own
+// events), and the next Step evolves the unit from the injected state exactly
+// as if the simulation had produced it.
+func (w *World) SetUnitState(id uint32, ov UnitStateOverride) bool {
+	u := w.units[id]
+	if u == nil {
+		return false
+	}
+	if ov.HasPos {
+		u.loco.Pos = fixed.Vec2{X: ov.Pos.X, Z: ov.Pos.Z}
+		u.PosY = ov.Pos.Y
+		// Re-anchor the stall detector so the teleport does not read as a
+		// wedged move and trigger avoidance detours.
+		u.progressPos = u.loco.Pos
+		u.stallTicks = 0
+	}
+	if ov.HasHeading {
+		u.loco.Heading = ov.Heading
+	}
+	if ov.HasSpeed {
+		u.loco.Speed = ov.Speed
+	}
+	if ov.HasHealth {
+		u.Health = ov.Health
+	}
+	if ov.HasBuildPercent {
+		u.BuildPercent = ov.BuildPercent
+	}
+	return true
+}

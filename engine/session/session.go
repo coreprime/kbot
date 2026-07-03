@@ -90,6 +90,31 @@ func (s *Session) Step() frame.Snapshot {
 	return snap
 }
 
+// StepTo advances the simulation tick by tick until the world reaches the
+// target tick, returning the last stepped snapshot. This is the replay driver's
+// clock: seek by restoring a keyframe then StepTo the wanted tick. The call is
+// guarded against going backwards — a target at or before the current tick
+// steps nothing and returns the world's current-state snapshot unchanged
+// (rewind is a Restore, never a negative step).
+func (s *Session) StepTo(target uint64) frame.Snapshot {
+	if target <= s.world.Tick() {
+		return s.world.Snapshot()
+	}
+	var snap frame.Snapshot
+	for s.world.Tick() < target {
+		snap = s.Step()
+	}
+	return snap
+}
+
+// SetUnitState authoritatively overwrites one live unit's pose/state — the
+// per-tick hook a replay driver uses to pin units to decoded wire truth. The
+// unit must already exist; a missing id returns false. See
+// sim.UnitStateOverride for the field contract.
+func (s *Session) SetUnitState(id uint32, ov sim.UnitStateOverride) bool {
+	return s.world.SetUnitState(id, ov)
+}
+
 // Restore reinitializes the world from an authoritative snapshot and discards
 // any locally scheduled orders, so a late-joining client resyncs to the
 // server's current tick before applying the command frames that follow. The
