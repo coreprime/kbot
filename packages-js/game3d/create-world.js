@@ -1230,6 +1230,11 @@ export async function createWorld(canvas, {
               heapCorpse: su.heapCorpse || null,
               impactDir: su.impactDir || null,
               impactMag: su.impactMag != null ? su.impactMag : 0,
+              // Death-weapon blast diameter (WU) from the pack unitdb meta —
+              // the driver forwards meta.explodeWeapon.areaOfEffectWU (or the
+              // selfDestructWeapon's for a manual self-destruct). Sizes/styles
+              // the blast: commander AoE → mushroom cloud.
+              deathAoe: su.deathAoe != null ? su.deathAoe : 0,
               redraw: false,
             })
           }
@@ -1431,7 +1436,19 @@ export async function createWorld(canvas, {
     // units (applyState air:true) don't pop in place: they enter a spiral
     // crash — a spinning, rolling, smoking descent that detonates (debris
     // and all) where it meets the terrain, or splashes into the sea.
-    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, impactDir = null, impactMag = 0, redraw = true } = {}) {
+    // deathAoe — the unit's death-explosion blast DIAMETER in world units,
+    // read by the CONSUMER from the pack unitdb's per-unit meta
+    // (meta.explodeWeapon.areaOfEffectWU, or meta.selfDestructWeapon's for a
+    // manual self-destruct — the FBI explodeas / selfdestructas weapon).  This
+    // is the honest data path: the pack already resolves each unit's
+    // ExplodeAs/SelfDestructAs weapon into that AoE, so the replayer passes it
+    // straight through rather than the world re-deriving a size from the model
+    // radius.  It SIZES + STYLES the death detonation: the explosion tier
+    // ladder scales with it (peewee AoE 30 → small/medium; commander
+    // COMMANDER_BLAST AoE 950 → the mushroom-cloud tier).  When omitted the
+    // world falls back to a model-radius estimate (a uniform-ish pop), so old
+    // drivers still work — they just don't get commander-scale blasts.
+    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, impactDir = null, impactMag = 0, deathAoe = 0, redraw = true } = {}) {
       const u = units.get(id)
       if (!u) return false
       const pose = _unitPose(u)
@@ -1461,9 +1478,15 @@ export async function createWorld(canvas, {
         return true
       }
       const plan = resolveDeathPlan({ severity, corpse, heapCorpse })
-      // Death detonation — severity rides the explosion tier ladder.
+      // Death detonation.  Size from the unit's death-explosion weapon AoE
+      // when the driver supplies it (commander >> peewee); otherwise fall
+      // back to a model-radius estimate.  Both AoE and severity ride the
+      // explosion tier ladder (a commander-class AoE selects the mushroom
+      // cloud; see explosion-fx tierFor).  The particle burst (flash/sparks/
+      // smoke) already scales its counts with AoE in impactBurst.
+      const blastAoe = deathAoe > 0 ? deathAoe : Math.max(24, r * 2.2)
       impactBurst(worldBinding, [pose.x, pose.y + r * 0.4, pose.z], {
-        aoe: Math.max(24, r * 2.2), kind: 'death', severity,
+        aoe: blastAoe, kind: 'death', severity,
       })
       if (plan.debris && u.model) {
         _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag, severity })

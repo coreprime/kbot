@@ -53,6 +53,16 @@ export const BUDGET_FREE_COUNT = 8
 // How many of the strongest live records feed scene lights.
 export const MAX_LIGHTS = 5
 
+// ── Mushroom-cloud shape (mushroom tier only) ────────────────────────────
+// The cap is a fan of MUSHROOM_CAP_LOBES billowing lobes; the stem is a
+// tapered column rising from the ground flash to the cap.  Heights/radii are
+// multiples of the record's fireball radius so the whole cloud scales with
+// the death-weapon AoE that picked the tier.
+export const MUSHROOM_CAP_LOBES = 10
+export const MUSHROOM_STEM_RISE = 3.4   // final cap height, × fireball rMax
+export const MUSHROOM_CAP_RADIUS = 1.5  // cap radius, × fireball rMax
+export const MUSHROOM_STEM_RADIUS = 0.4 // stem half-width, × fireball rMax
+
 // ── Size ladder ──────────────────────────────────────────────────────────
 //
 // Tier picks from the weapon's areaOfEffect (blast DIAMETER, wu) and the
@@ -64,15 +74,35 @@ const TIERS = {
   medium: { life: 520,  r0: 2.5, rk: 0.22, rMax: 22, shards: 9,  ring: true,  light: 60,  peak: [1.7, 0.80, 0.30] },
   large:  { life: 850,  r0: 4.0, rk: 0.26, rMax: 44, shards: 14, ring: true,  light: 110, peak: [1.9, 0.75, 0.28] },
   huge:   { life: 1400, r0: 6.0, rk: 0.30, rMax: 90, shards: 22, ring: true,  light: 190, peak: [2.1, 0.80, 0.30] },
+  // Mushroom cloud: a commander / big-AoE catastrophic death.  This tier is
+  // NOT just a bigger fireball — _build renders a distinct rising stem +
+  // billowing cap + ground flash + a wide shockwave ring (see rec.mushroom).
+  // Its `light`/`peak` still obey the luminance budget (the global soft-clip
+  // and MAX_LIGHTS cap apply), so a single hero blast lights the field
+  // without washing it: the cap is the same as `huge`, the shape is what
+  // differs.  rMax is the fireball head; the stem/cap scale off MUSHROOM_*.
+  mushroom: { life: 2200, r0: 8.0, rk: 0.34, rMax: 120, shards: 26, ring: true, light: 210, peak: [2.2, 0.82, 0.32], mushroom: true },
   // Water splash: white/foam ladder — a ring + upward spray shards, no
   // fireball glow to bloom out.
   splash: { life: 620,  r0: 2.0, rk: 0.20, rMax: 26, shards: 8,  ring: true,  light: 0,   peak: [0.85, 0.95, 1.05] },
 }
 
+// MUSHROOM_AOE_THRESHOLD — a DEATH explosion whose weapon AoE (blast diameter,
+// world units) is at or above this renders the mushroom-cloud tier instead of
+// `huge`.  Calibrated from the packed FBI death weapons: the Arm/Core
+// commander COMMANDER_BLAST is AoE 950; the biggest ordinary unit death
+// (BIG_UNITEX) is 110 and heavy weapon AoEs sit well under 480, so only true
+// commander-class / nuke-class deaths cross it.  Impacts (non-death) never
+// take this tier — an in-flight nuke still detonates as `huge`.
+export const MUSHROOM_AOE_THRESHOLD = 480
+
 // tierFor classifies a spawn.  Deaths climb one rung (a dying unit is a
-// real detonation); severity ≥ 100 (self-destruct / commander) tops out.
+// real detonation); a commander-class death (AoE ≥ MUSHROOM_AOE_THRESHOLD)
+// becomes the mushroom cloud; severity ≥ 100 (self-destruct / commander)
+// tops the ordinary ladder out at `huge`.
 export function tierFor({ aoe = 16, kind = 'impact', severity = 0 } = {}) {
   if (kind === 'splash') return 'splash'
+  if (kind === 'death' && aoe >= MUSHROOM_AOE_THRESHOLD) return 'mushroom'
   let t
   if (aoe < 24) t = 'small'
   else if (aoe < 96) t = 'medium'
@@ -86,7 +116,7 @@ export function tierFor({ aoe = 16, kind = 'impact', severity = 0 } = {}) {
   return t
 }
 
-const TIER_RANK = { small: 0, splash: 0, medium: 1, large: 2, huge: 3 }
+const TIER_RANK = { small: 0, splash: 0, medium: 1, large: 2, huge: 3, mushroom: 4 }
 
 // easeOutCubic — fireball expansion: fast fill, slow settle.
 const easeOut = (t) => 1 - Math.pow(1 - t, 3)
@@ -182,6 +212,16 @@ export class ExplosionManager {
     rec.fireJitter = []
     for (let i = 0; i < 6; i++) rec.fireJitter.push(0.75 + rng() * 0.5)
     rec.ringPhase = rng() * Math.PI * 2
+    // Mushroom-cloud shape data (only the mushroom tier reads it): per-lobe
+    // billow radii for the cap and a phase so the cap rolls, all fixed at
+    // spawn for deterministic playback.
+    rec.mushroom = !!tier.mushroom
+    if (rec.mushroom) {
+      rec.capBillow = []
+      for (let i = 0; i < MUSHROOM_CAP_LOBES; i++) rec.capBillow.push(0.8 + rng() * 0.6)
+      rec.stemPhase = rng() * Math.PI * 2
+      rec.groundY = pos[1]
+    }
   }
 
   // step ages the records by fx-clock dtMs and rebuilds the triangle
@@ -253,6 +293,65 @@ export class ExplosionManager {
     this._outVerts += 3
   }
 
+  // _buildMushroom renders the mushroom-cloud tier's distinct shape at
+  // normalised age `t` (0..1): a bright ground flash, a tapered rising stem,
+  // and a billowing cap that expands and lifts as it ages.  `r` is the
+  // fireball head radius (already eased), `cr/cg/cb` the age-cooled colour,
+  // `alpha` the fade × budget-dim term.  All geometry scales off `r`, so a
+  // bigger death-weapon AoE (higher tier rMax) grows the whole cloud.
+  _buildMushroom(rec, t, r, cr, cg, cb, alpha) {
+    const gy = rec.groundY != null ? rec.groundY : rec.y
+    // Stem grows to full height over the first ~60% of life, then holds.
+    const rise = Math.min(1, t / 0.6)
+    const stemH = rec.rMax * MUSHROOM_STEM_RISE * rise
+    const capY = gy + stemH
+    const stemR = rec.rMax * MUSHROOM_STEM_RADIUS
+    // Ground flash: a bright squashed dome at the base (hottest, fades fast).
+    const flashA = alpha * Math.max(0, 1 - t * 2.2)
+    if (flashA > 0.001) {
+      const fr = r * 1.3
+      const fy = gy + fr * 0.4
+      const SEG = 10
+      for (let i = 0; i < SEG; i++) {
+        const a0 = rec.ringPhase + (i / SEG) * Math.PI * 2
+        const a1 = rec.ringPhase + ((i + 1) / SEG) * Math.PI * 2
+        const x0 = rec.x + Math.cos(a0) * fr, z0 = rec.z + Math.sin(a0) * fr
+        const x1 = rec.x + Math.cos(a1) * fr, z1 = rec.z + Math.sin(a1) * fr
+        this._pushTri(x0, gy, z0, x1, gy, z1, rec.x, fy, rec.z, cr * 1.3, cg * 1.2, cb, flashA)
+      }
+    }
+    // Stem: a tapered column from the flash up to the cap, a ring of quads.
+    const SEG = 8
+    for (let i = 0; i < SEG; i++) {
+      const a0 = rec.stemPhase + (i / SEG) * Math.PI * 2
+      const a1 = rec.stemPhase + ((i + 1) / SEG) * Math.PI * 2
+      // Waist pinches slightly toward the top (classic mushroom stem).
+      const rb = stemR * 1.1, rt = stemR * 0.7
+      const bx0 = rec.x + Math.cos(a0) * rb, bz0 = rec.z + Math.sin(a0) * rb
+      const bx1 = rec.x + Math.cos(a1) * rb, bz1 = rec.z + Math.sin(a1) * rb
+      const tx0 = rec.x + Math.cos(a0) * rt, tz0 = rec.z + Math.sin(a0) * rt
+      const tx1 = rec.x + Math.cos(a1) * rt, tz1 = rec.z + Math.sin(a1) * rt
+      this._pushTri(bx0, gy, bz0, bx1, gy, bz1, tx1, capY, tz1, cr * 0.9, cg * 0.8, cb * 0.7, alpha * 0.8)
+      this._pushTri(bx0, gy, bz0, tx1, capY, tz1, tx0, capY, tz0, cr * 0.9, cg * 0.8, cb * 0.7, alpha * 0.8)
+    }
+    // Cap: a billowing lobed dome that widens and lifts as it rolls over.
+    const capR = rec.rMax * MUSHROOM_CAP_RADIUS * (0.5 + 0.5 * rise)
+    const capTop = capY + capR * 0.7
+    const capBase = capY - capR * 0.35
+    const cb0 = rec.capBillow
+    for (let i = 0; i < MUSHROOM_CAP_LOBES; i++) {
+      const a0 = rec.ringPhase + (i / MUSHROOM_CAP_LOBES) * Math.PI * 2
+      const a1 = rec.ringPhase + ((i + 1) / MUSHROOM_CAP_LOBES) * Math.PI * 2
+      const r0 = capR * cb0[i % MUSHROOM_CAP_LOBES]
+      const r1 = capR * cb0[(i + 1) % MUSHROOM_CAP_LOBES]
+      const x0 = rec.x + Math.cos(a0) * r0, z0 = rec.z + Math.sin(a0) * r0
+      const x1 = rec.x + Math.cos(a1) * r1, z1 = rec.z + Math.sin(a1) * r1
+      // Rounded top and a rolled-under lower lip (the mushroom's curl).
+      this._pushTri(x0, capY, z0, x1, capY, z1, rec.x, capTop, rec.z, cr, cg, cb, alpha)
+      this._pushTri(x1, capY, z1, x0, capY, z0, rec.x, capBase, rec.z, cr * 0.6, cg * 0.6, cb * 0.6, alpha * 0.75)
+    }
+  }
+
   _build() {
     this._outVerts = 0
     const dim = this._globalDim()
@@ -269,9 +368,12 @@ export class ExplosionManager {
       const cool = 1 - t * 0.7
       const cr = peak[0] * cool, cg = peak[1] * cool * (1 - t * 0.4), cb = peak[2] * cool * (1 - t * 0.5)
 
-      // ── Fireball: a 6-lobed jittered octahedron fan (8 side faces ×
-      // top/bottom read as a molten polyhedron under additive blend).
-      if (!splash) {
+      // ── Fireball / mushroom cloud.
+      if (rec.mushroom) {
+        this._buildMushroom(rec, t, r, cr, cg, cb, alpha)
+      } else if (!splash) {
+        // A 6-lobed jittered octahedron fan (8 side faces × top/bottom read
+        // as a molten polyhedron under additive blend).
         const jr = rec.fireJitter
         const yTop = rec.y + r * jr[4] * 0.9
         const yBot = rec.y - r * jr[5] * 0.55

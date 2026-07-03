@@ -279,6 +279,14 @@ export interface SnapshotUnit {
   impactDir?: [number, number] | null
   /** Impact push magnitude (1 ≈ light round … 4 ≈ heavy shell). */
   impactMag?: number
+  /**
+   * Death-explosion blast DIAMETER in world units, forwarded from the pack
+   * unitdb's meta.explodeWeapon.areaOfEffectWU (or meta.selfDestructWeapon's
+   * for a manual self-destruct). Sizes and styles the death detonation: the
+   * explosion tier ladder scales with it and a commander-class AoE renders
+   * the mushroom cloud. Omitted → the world estimates from the model radius.
+   */
+  deathAoe?: number
   /** COB piece table (index-aligned with piecesPacked); static per type. */
   pieceNames?: string[]
   /** Engine stride-7 packed piece transforms, applied by name via pieceNames (optionally pre-blended with lerpPackedPieces). */
@@ -381,6 +389,13 @@ export interface World {
     /** World-frame [x, z] source → victim: debris scatters away from it. */
     impactDir?: [number, number] | null
     impactMag?: number
+    /**
+     * Death-explosion blast diameter (WU) from the pack unitdb meta
+     * (explodeWeapon/selfDestructWeapon areaOfEffectWU). Sizes + styles the
+     * blast; a commander-class AoE renders the mushroom cloud. Omitted → the
+     * world estimates from the model radius.
+     */
+    deathAoe?: number
     redraw?: boolean
   }): boolean
   removeCorpse(id: number | string): void

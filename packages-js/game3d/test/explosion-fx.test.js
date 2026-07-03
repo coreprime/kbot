@@ -13,19 +13,87 @@ import {
   MAX_PER_BUCKET,
   COALESCE_BUCKET_WU,
   BUDGET_FREE_COUNT,
+  MUSHROOM_AOE_THRESHOLD,
 } from '../explosion-fx.js'
 
 test('size ladder: aoe + death severity pick sensible tiers', () => {
   assert.equal(tierFor({ aoe: 8 }), 'small')          // small-arms round
   assert.equal(tierFor({ aoe: 48 }), 'medium')        // cannon shell
   assert.equal(tierFor({ aoe: 128 }), 'large')        // heavy plasma
-  assert.equal(tierFor({ aoe: 512 }), 'huge')         // nuke-class
+  assert.equal(tierFor({ aoe: 512 }), 'huge')         // nuke-class in flight
   // Deaths climb a rung; catastrophic severity tops out.
   assert.equal(tierFor({ aoe: 8, kind: 'death' }), 'medium')
   assert.equal(tierFor({ aoe: 48, kind: 'death' }), 'large')
   assert.equal(tierFor({ aoe: 48, kind: 'death', severity: 120 }), 'huge')
   // Water impacts splash regardless of size.
   assert.equal(tierFor({ aoe: 48, kind: 'splash' }), 'splash')
+})
+
+test('death-weapon AoE sizes the blast: commander >> peewee', () => {
+  // Packed FBI death weapons: peewee SMALL_UNITEX AoE 30, tank BIG_UNITEX 110,
+  // commander COMMANDER_BLAST 950.  The tier must grow strictly with AoE.
+  const peewee = tierFor({ aoe: 30, kind: 'death', severity: 100 })
+  const tank = tierFor({ aoe: 110, kind: 'death', severity: 100 })
+  const commander = tierFor({ aoe: 950, kind: 'death', severity: 100 })
+  const rank = { small: 0, medium: 1, large: 2, huge: 3, mushroom: 4 }
+  assert.ok(rank[commander] > rank[tank], `commander (${commander}) > tank (${tank})`)
+  assert.ok(rank[tank] >= rank[peewee], `tank (${tank}) >= peewee (${peewee})`)
+  assert.equal(commander, 'mushroom', 'a commander-class death is a mushroom cloud')
+  assert.notEqual(peewee, 'mushroom', 'a peewee death is NOT a mushroom cloud')
+})
+
+test('mushroom cloud selected only above the AoE threshold, and only for deaths', () => {
+  assert.equal(tierFor({ aoe: MUSHROOM_AOE_THRESHOLD, kind: 'death' }), 'mushroom')
+  assert.equal(tierFor({ aoe: MUSHROOM_AOE_THRESHOLD - 1, kind: 'death', severity: 120 }), 'huge')
+  // A huge AoE that is NOT a death (an in-flight nuke impact) stays `huge` —
+  // the mushroom is a death style, not just a size.
+  assert.equal(tierFor({ aoe: 1000, kind: 'impact' }), 'huge')
+})
+
+test('mushroom tier renders a tall rising cloud, not just a wide fireball', () => {
+  const m = new ExplosionManager()
+  const gy = 40
+  const rec = m.spawn([0, gy, 0], { aoe: 950, kind: 'death', severity: 100 })
+  assert.equal(rec.tier, 'mushroom')
+  // Age it toward the cap's rise and read the built geometry's height extent.
+  m.step(1)
+  m.step(1300) // past 0.6·life so the stem is near full height
+  const d = m.tris()
+  let maxY = -Infinity
+  // Width of the CLOUD body (stem + cap), excluding the thin ground shockwave
+  // ring which legitimately races out wide along y ≈ gy.
+  let bodyR = 0
+  for (let i = 0; i < m.vertCount() * 7; i += 7) {
+    const x = d[i], y = d[i + 1], z = d[i + 2]
+    if (y > maxY) maxY = y
+    if (y > gy + rec.rMax) bodyR = Math.max(bodyR, Math.hypot(x, z))
+  }
+  const height = maxY - gy
+  // A mushroom rises far above the fireball head, and the aloft cloud body is
+  // taller than it is wide (a stem+cap column, not a flat disc).
+  assert.ok(height > rec.rMax * 1.5, `cap rises (${height.toFixed(0)}) well above the fireball head (${rec.rMax})`)
+  assert.ok(height > bodyR, `cloud body is taller (${height.toFixed(0)}) than wide (${bodyR.toFixed(0)})`)
+})
+
+test('mushroom respects the luminance budget (dims under a barrage like every tier)', () => {
+  const maxAlpha = (m) => {
+    m.step(0)
+    const d = m.tris()
+    let a = 0
+    for (let i = 6; i < m.vertCount() * 7; i += 7) a = Math.max(a, d[i])
+    return a
+  }
+  const calm = new ExplosionManager()
+  calm.spawn([0, 0, 0], { aoe: 950, kind: 'death', severity: 100 })
+  calm.step(200)
+  const calmA = maxAlpha(calm)
+  const barrage = new ExplosionManager()
+  for (let i = 0; i < MAX_CONCURRENT * 2; i++) {
+    barrage.spawn([i * COALESCE_BUCKET_WU * 2, 0, i * COALESCE_BUCKET_WU], { aoe: 950, kind: 'death', severity: 100 })
+  }
+  barrage.step(200)
+  assert.ok(barrage.liveCount > BUDGET_FREE_COUNT)
+  assert.ok(maxAlpha(barrage) < calmA, 'a wall of mushroom clouds still soft-clips')
 })
 
 test('a single small hit is brief and tight', () => {
