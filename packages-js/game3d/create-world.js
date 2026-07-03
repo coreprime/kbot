@@ -33,7 +33,12 @@ import { OrbitCamera } from './orbit-camera.js'
 import { attachOrbitControls } from './camera-controls.js'
 import { setAssetProvider } from './assets.js'
 import { setTeamSides, teamColorForSide, TA_TEAM_SIDES } from './team-colors.js'
-import { setProjectileFallbackColors, SmokeTrailManager, SFX_PROJECTILE_LASER } from './weapon-driver.js'
+import {
+  setProjectileFallbackColors,
+  SmokeTrailManager,
+  spawnProjectileInFlight,
+  SFX_PROJECTILE_LASER,
+} from './weapon-driver.js'
 import {
   ParticlePool,
   SFX_SMOKE_GREY,
@@ -839,10 +844,26 @@ export async function createWorld(canvas, {
         })
         worldBinding._lastFiredWeapon = def
         if (res && res.modelShot) {
-          res.modelShot.id = nextId++
-          loadBaseModel(res.modelShot.modelName)
-            .then((m) => { res.modelShot.model = m })
-            .catch(() => { /* mesh missing from the pack — particle-only shot */ })
+          const shot = res.modelShot
+          shot.id = nextId++
+          loadBaseModel(shot.modelName)
+            .then((m) => { shot.model = m })
+            .catch(() => {
+              // Mesh missing (pre-v4 pack): pick the flight up mid-air as a
+              // particle tracer so the shot stays visible.
+              if (disposed || shot.ageMs >= shot.lifeMs) return
+              spawnProjectileInFlight({
+                binding: worldBinding,
+                weapon: def,
+                pos: [shot.x, shot.y, shot.z],
+                vel: [shot.vx, shot.vy, shot.vz],
+                lifeMs: shot.lifeMs - shot.ageMs,
+                palette,
+                gravity: shot.gravity || 0,
+              })
+              const idx = modelShots.indexOf(shot)
+              if (idx !== -1) modelShots.splice(idx, 1)
+            })
         }
         if (!renderer.running) world.step(0)
         return
