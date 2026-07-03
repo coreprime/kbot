@@ -5,10 +5,12 @@
 // geometry instead.  This module builds deterministic low-poly stand-ins
 // per feature CATEGORY: shapes chosen to read correctly from TA's classic
 // high angle AND survive rotation — a tree is a trunk with stacked canopy
-// cones, a rock an irregular seeded polyhedron, a metal deposit a crystal
-// cluster.  Features that ship a real 3DO (wrecks, dragon teeth) are NOT
-// faked: they come back on the `models` list for the world to place as
-// real model instances.
+// cones, a rock an irregular seeded polyhedron.  Ground-set features
+// (metal deposits, steam vents, scars) are FLAT terrain-conforming
+// decals rather than lumps; vents also surface a live steam emitter for
+// the world to drive.  Features that ship a real 3DO (wrecks, dragon
+// teeth) are NOT faked: they come back on the `models` list for the
+// world to place as real model instances.
 //
 // Everything is a pure function of its inputs: each placement seeds its
 // own PRNG from (name, cell), so the same map + catalogue always produces
@@ -169,6 +171,37 @@ function box(sink, rng, { x = 0, y = 0, z = 0, w, h, d, yaw = 0, color }) {
   }
 }
 
+// conformingQuad emits a flat ground quad whose four corners each sample
+// the terrain height — the decal primitive.  Corners are (x0,z0)..(x1,z1)
+// axis-aligned; `lift` floats the decal just above the surface so it
+// draws over the map mesh without z-fighting.
+function conformingQuad(sink, hAt, { x0, z0, x1, z1, lift, color, shadeLow = null }) {
+  const p = (px, pz) => [px, hAt(px, pz) + lift, pz]
+  const a = p(x0, z0), b = p(x1, z0), c = p(x1, z1), d = p(x0, z1)
+  const c2 = shadeLow || color
+  sink.tri(a, b, c, color, color, color, c2)
+  sink.tri(a, c, d, color, color, c2, c2)
+}
+
+// conformingDisc emits a flat n-gon decal hugging the terrain — like
+// disc(), but every ring vertex samples the surface height.
+function conformingDisc(sink, rng, hAt, { x, z, r, n = 10, lift, color, edgeColor = null, wobble = 0.15 }) {
+  const centre = [x, hAt(x, z) + lift, z]
+  const phase = rng() * Math.PI * 2
+  const ring = []
+  for (let i = 0; i < n; i++) {
+    const a = phase + (i / n) * Math.PI * 2
+    const rr = r * (1 - wobble + rng() * wobble * 2)
+    const px = x + Math.cos(a) * rr
+    const pz = z + Math.sin(a) * rr
+    ring.push([px, hAt(px, pz) + lift, pz])
+  }
+  const edge = edgeColor || color
+  for (let i = 0; i < n; i++) {
+    sink.tri(ring[i], centre, ring[(i + 1) % n], color, edge, color, edge)
+  }
+}
+
 // disc emits a flat n-gon lying on the ground — the crater/scar decal.
 function disc(sink, rng, { x = 0, y = 0, z = 0, r, n = 8, color }) {
   const centre = [x, y, z]
@@ -294,15 +327,85 @@ function buildScar(sink, rng, { x, y, z, r }) {
   disc(sink, rng, { x, y: y + 0.15, z, r, n: 8, color: SCAR_DARK })
 }
 
+// Metal deposits: TA draws them as dark metal plates set flush into the
+// ground — a FLAT decal, not a lump.  A slightly-raised paneled plate:
+// a seam-coloured base quad with a grid of shade-jittered panels inset
+// over it, every vertex hugging the terrain.  Corner panels are clipped
+// to an octagon so the patch reads as the classic rounded plate.
+const METAL_PLATE = [0.15, 0.16, 0.185]
+const METAL_SEAM = [0.055, 0.06, 0.075]
+
+function buildMetalPatch(sink, rng, { x, y, z, r, heightAt = null }) {
+  const hAt = typeof heightAt === 'function' ? heightAt : () => y
+  const half = Math.max(6, r * 1.05)
+  // Base plate: an octagonal seam-coloured underlay — the rounded plate
+  // outline — that shows through the panel gaps and clipped corners.
+  conformingDisc(sink, rng, hAt, {
+    x, z, r: half * 1.15, n: 8, lift: 0.3, color: METAL_SEAM, wobble: 0.02,
+  })
+  const n = Math.max(2, Math.min(4, Math.round(half / 5)))
+  const cell = (half * 2) / n
+  const inset = cell * 0.05
+  for (let gz = 0; gz < n; gz++) {
+    for (let gx = 0; gx < n; gx++) {
+      const cx = x - half + (gx + 0.5) * cell
+      const cz = z - half + (gz + 0.5) * cell
+      // Octagon clip: skip panels whose centre falls outside the plate's
+      // rounded outline (corner panels on 3x3+ grids).
+      if (Math.abs(cx - x) + Math.abs(cz - z) > half * 1.3) continue
+      // Panel shade: dark steel with deterministic wear jitter; the odd
+      // panel reads lighter (scuffed) for the plated-yard look.
+      let k = 0.85 + rng() * 0.3
+      if (rng() < 0.12) k *= 1.35
+      conformingQuad(sink, hAt, {
+        x0: cx - cell / 2 + inset, z0: cz - cell / 2 + inset,
+        x1: cx + cell / 2 - inset, z1: cz + cell / 2 - inset,
+        lift: 0.45, color: shade(jitterColor(rng, METAL_PLATE, 0.08), k),
+        shadeLow: shade(METAL_PLATE, k * 0.8),
+      })
+    }
+  }
+}
+
+// Geothermal / steam vents: a FLAT rocky-crust decal with a scorched
+// throat.  The live steam wisp is emitted by the world at the vent's
+// mouth (buildFeatureField returns the emitter list; create-world drives
+// it off the fx clock), so the baked geometry stays static.
+const VENT_CRUST = [0.23, 0.19, 0.16]
+const VENT_SCORCH = [0.08, 0.065, 0.055]
+const VENT_THROAT = [0.03, 0.025, 0.02]
+
+function buildVent(sink, rng, { x, y, z, r, heightAt = null }) {
+  const hAt = typeof heightAt === 'function' ? heightAt : () => y
+  // Outer crust ring (lighter mineral stain), scorch band, then the
+  // near-black throat with a faint ember warmth at its centre.
+  conformingDisc(sink, rng, hAt, {
+    x, z, r: r * 1.05, n: 12, lift: 0.3,
+    color: shade(jitterColor(rng, VENT_CRUST, 0.12), 1.15), edgeColor: shade(VENT_CRUST, 0.9),
+  })
+  conformingDisc(sink, rng, hAt, {
+    x, z, r: r * 0.62, n: 10, lift: 0.42, color: VENT_SCORCH, wobble: 0.2,
+  })
+  conformingDisc(sink, rng, hAt, {
+    x, z, r: r * 0.3, n: 8, lift: 0.55,
+    color: [0.16, 0.07, 0.03], edgeColor: VENT_THROAT, wobble: 0.1,
+  })
+}
+
 // categoryBuilder maps a features.json category onto a shape family.  The
-// category survey of the TA install groups into six visual families; any
+// category survey of the TA install groups into visual families; any
 // unknown category falls back to the rock read (safe from every angle).
+// Metal deposits and steam vents are FLAT terrain decals (the classic
+// ground-plate / vent-mouth look), not 3D clusters; vents additionally
+// get a live steam emitter from buildFeatureField.
 export function categoryBuilder(category) {
   const c = String(category || '').toLowerCase()
   if (/tree/.test(c)) return buildTree
   if (/kelp|coral|anemone|aqua|seaweed|plant.*water/.test(c)) return buildKelp
   if (/foliage|shrub|plant|gasplant|bush/.test(c)) return buildBush
-  if (/metal|node|crystal|spire|steamvent|glyph/.test(c)) return buildCrystals
+  if (/steamvent|geyser|fumarole|vent/.test(c)) return buildVent
+  if (/metal|node/.test(c)) return buildMetalPatch
+  if (/crystal|spire|glyph/.test(c)) return buildCrystals
   if (/crater|scar|smudge|track|hole/.test(c)) return buildScar
   if (/machine|pipe|car|truck|building|barrier|monument|ruin/.test(c)) return buildProp
   if (/rock|heap|dragonteeth/.test(c)) return buildRock
@@ -339,11 +442,18 @@ export function featureSizeWU(def) {
  * @param {number} [opts.cellWU=16] World units per attribute cell.
  * @returns {{ batches: Array<{data: Float32Array, count: number}>,
  *            models: Array<{name: string, x: number, y: number, z: number, heading: number, feature: string}>,
+ *            emitters: Array<{kind: string, x: number, y: number, z: number, r: number, seed: number}>,
  *            counts: {placed: number, models: number, skipped: number} }}
  */
+
+// Live-effect emitter budget: a pathological mod map carpeted in vents
+// shouldn't turn the particle pool into a fog machine.
+const MAX_FIELD_EMITTERS = 128
+
 export function buildFeatureField({ features, defs = {}, heightAt = null, cellWU = FEATURE_CELL_WU } = {}) {
   const batches = []
   const models = []
+  const emitters = []
   let sink = new TriSink()
   let placed = 0
   let skipped = 0
@@ -372,10 +482,15 @@ export function buildFeatureField({ features, defs = {}, heightAt = null, cellWU
     }
     const { r, h } = featureSizeWU(def)
     const build = categoryBuilder(def ? def.category : '')
-    build(sink, rng, { x, y, z, r, h })
+    build(sink, rng, { x, y, z, r, h, heightAt: hAt })
+    // Steam vents carry a live wisp emitter on top of their baked decal —
+    // the world drives it off the fx clock (deterministic per placement).
+    if (build === buildVent && emitters.length < MAX_FIELD_EMITTERS) {
+      emitters.push({ kind: 'steam', x, y: hAt(x, z) + 0.6, z, r, seed: featureSeed(key, f.ax | 0, f.ay | 0) })
+    }
     placed++
     if (sink.verts >= MAX_BATCH_VERTS) flush()
   }
   flush()
-  return { batches, models, counts: { placed, models: models.length, skipped } }
+  return { batches, models, emitters, counts: { placed, models: models.length, skipped } }
 }

@@ -411,6 +411,27 @@ export function resolveDeathPlan({ severity = 0, corpse = null, heapCorpse = nul
   return { debris: false, corpse: corpse || null }
 }
 
+// unitRocksOnImpact — whether the hit-rock impulse (create-world
+// unitImpulse) applies to a unit record.  Structures don't rock: a
+// factory hit by a shell shrugging on its foundations reads absurd,
+// so buildings must stay planted while mobile hulls shudder.
+//
+// The signal, in priority order:
+//   * an explicit `mobile` flag on the unit (addUnit / applyState) —
+//     `mobile:false` marks a structure, `mobile:true` forces mobility;
+//   * with no flag, INFERENCE: a grounded unit that has never changed
+//     position or heading since it appeared (`_moved` latch, set by
+//     applyState / moveUnit) is treated as a structure.  Buildings never
+//     move, so a replay that only passes `grounded` still keeps them
+//     planted; the cost is that a mobile unit parked since spawn won't
+//     rock until it first moves.
+export function unitRocksOnImpact(u) {
+  if (!u) return false
+  if (u.mobile === false) return false
+  if (u.mobile === true) return true
+  return !(u.grounded && !u._moved)
+}
+
 // damageSmokeIntervalMs — the engine-driven damage-smoke cadence for a unit
 // at hp01 (0..1 health fraction).  TA units start smoking below ~2/3 health
 // and smoke harder as they approach death; null means "not smoking".

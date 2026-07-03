@@ -1,6 +1,8 @@
 // Ground / sea-surface / seabed fragment shader.  Companion to
 // ground.vert - the same uGroundMode switch picks between Grid,
-// Terrain (textured), Sea (procedural waves), or the legacy fallback.
+// Terrain (textured), Sea (procedural waves), the legacy fallback,
+// the baked battlefield mesh (4) + its water sheet (5), or the void
+// grid drawn around an installed battlefield (6).
 
 precision highp float;
 precision highp int;
@@ -213,6 +215,45 @@ void main() {
   float fade = (uGroundMode == 0 || uGroundMode == 3)
               ? clamp(1.0 - d / (uRadius * 1.8), 0.0, 1.0)
               : 1.0;
+
+  if (uGroundMode == 6) {
+    // Void grid (battlefield surround): the infinite dark Tron-style
+    // plane drawn OUTSIDE the map rect when a battlefield is installed —
+    // the world beyond the gameplay area reads as a deep dark void with
+    // glowing grid lines instead of the light sky backdrop.  Fragments
+    // inside the map rect are discarded so the grid can never bleed over
+    // (or z-fight under) the real terrain; no shadows, no sun tint —
+    // the void is outside the world.
+    vec2 rel = vWorldPos.xz - uMapRect.xy;
+    if (rel.x >= 0.0 && rel.y >= 0.0 && rel.x <= uMapRect.z && rel.y <= uMapRect.w) discard;
+    // 64-wu cells (4 map squares): a wide deck grid that reads at replay
+    // camera heights.  Two-tier stroke like the studio's Grid mode — a
+    // crisp inner line plus a wider soft halo the bloom pass can pick up.
+    vec2 tile = fract(vWorldPos.xz / 64.0);
+    float lineX = smoothstep(0.0, 0.025, tile.x) * (1.0 - smoothstep(0.975, 1.0, tile.x));
+    float lineY = smoothstep(0.0, 0.025, tile.y) * (1.0 - smoothstep(0.975, 1.0, tile.y));
+    float onLine = 1.0 - lineX * lineY;
+    float gloX = smoothstep(0.0, 0.09, tile.x) * (1.0 - smoothstep(0.91, 1.0, tile.x));
+    float gloY = smoothstep(0.0, 0.09, tile.y) * (1.0 - smoothstep(0.91, 1.0, tile.y));
+    float onGlow = 1.0 - gloX * gloY;
+    // Near-black deck with a cold blue undertone; cyan-blue emissive
+    // lines, slightly over-bright so cinematic bloom gives them a gentle
+    // glow without nuking the frame.
+    vec3 fill = vec3(0.004, 0.008, 0.016);
+    vec3 line = vec3(0.10, 0.55, 1.15);
+    // Depth fade: lines melt into the dark with camera distance so the
+    // void reads as receding into black rather than a lit floor.
+    float dCamV = length(uEyePos - vWorldPos);
+    float lineFade = 1.0 - smoothstep(700.0, 3200.0, dCamV);
+    vec3 base = mix(fill, line, onLine * lineFade);
+    base += line * onGlow * 0.14 * lineFade;
+    // Weapon light spills off the map edge onto the void deck — a cheap,
+    // already-budgeted wash that ties the grid to the battle.
+    base += pulseLightContribution(vWorldPos) * 0.5;
+    gl_FragColor = vec4(base * uExposure, 1.0);
+    return;
+  }
+
   float shadow = sampleShadow();
 
   if (uGroundMode == 4) {

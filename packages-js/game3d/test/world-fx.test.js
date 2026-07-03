@@ -19,6 +19,7 @@ import {
   weaponVisualPlan,
   spawnWeaponVisual,
   resolveDeathPlan,
+  unitRocksOnImpact,
   damageSmokeIntervalMs,
   debrisBurst,
   stepDebris,
@@ -173,4 +174,21 @@ test('debris pieces scatter outward and fall under gravity', () => {
   }
   assert.ok(displaced >= 2, `pieces should scatter outward (${displaced}/3)`)
   assert.equal(falling, 3, 'gravity must be pulling every piece down by 1s in')
+})
+
+test('unitRocksOnImpact keeps structures planted and hulls rocking', () => {
+  // Explicit flag wins in both directions.
+  assert.equal(unitRocksOnImpact({ mobile: false, grounded: true }), false)
+  assert.equal(unitRocksOnImpact({ mobile: false, grounded: false }), false)
+  assert.equal(unitRocksOnImpact({ mobile: true, grounded: true, _moved: false }), true)
+  // Inference: a grounded unit that has never moved reads as a structure…
+  assert.equal(unitRocksOnImpact({ grounded: true }), false)
+  assert.equal(unitRocksOnImpact({ grounded: true, _moved: false }), false)
+  // …but the motion latch flips it to a mobile hull for good.
+  assert.equal(unitRocksOnImpact({ grounded: true, _moved: true }), true)
+  // Non-grounded records (air, hover over water, ships) always rock.
+  assert.equal(unitRocksOnImpact({ grounded: false }), true)
+  assert.equal(unitRocksOnImpact({ air: true }), true)
+  // No record → no rock.
+  assert.equal(unitRocksOnImpact(null), false)
 })

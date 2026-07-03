@@ -66,15 +66,21 @@ game's pose conventions, matched against the original engine:
 Maps: `loadMapTerrain(provider, name)` composites a packed map's tile atlas
 into the full ground texture and returns the arguments
 `renderer.setMapTerrain()` (or `world.setTerrain()`) takes, plus sea level,
-start positions and the authentic minimap URL.
+start positions and the authentic minimap URL.  Beyond the map rect the
+world renders an infinite dark Tron-style void grid (glowing lines, depth
+fade; `renderer.voidGridEnabled = false` to disable) instead of the light
+sky backdrop; the studio's flat-pad scenes are unaffected.
 
 **Map features**: `world.setTerrain(terrain)` also installs the map's
 features (toggle with `setFeaturesEnabled(on)`, or pass
-`{ features: false }`).  GAF-sprite features (trees, rocks, metal, kelp,
+`{ features: false }`).  GAF-sprite features (trees, rocks, kelp,
 props…) become deterministic low-poly 3D stand-ins built per CATEGORY —
 shapes that read correctly from TA's classic angle and survive orbiting —
 sized from the pack's `features.json` (format v5) footprint/height/sprite
 dims and seeded per (name, cell) so every run bakes identical geometry.
+Ground-set categories render as FLAT terrain-conforming decals instead:
+metal deposits as dark paneled plates, geothermal steam vents as a
+scorched vent mouth that puffs a live fx-clock-driven steam wisp.
 Features with real 3DO models (wrecks, dragon teeth) place the actual
 packed model.  The whole field bakes into a handful of static batches —
 one draw call each, no per-feature frame cost (`buildFeatureField` is
@@ -123,7 +129,9 @@ world read like the game, all presentation-only — no sim state, no hashes:
   `impactDir`/`impactMag`) triggers the same path once.
 - **Air / sea flags** — applyState `air: true` adds a hover bob,
   bank-into-turns and contrails at speed (and the spiral-crash death);
-  `hover: true` the hovercraft cushion gyration; `naval: true` a stern
+  `hover: true` the hovercraft cushion gyration — a gentle lean computed
+  about WORLD axes, so the tilt direction holds steady while the craft
+  yaws; `naval: true` a stern
   foam wake while the vessel is under way on the sea sheet.  Units
   crossing the waterline splash.
 - **Economy visuals** — `world.latheBeam(key, { fromUnitId, toUnitId })`
@@ -142,10 +150,15 @@ world read like the game, all presentation-only — no sim state, no hashes:
   terrain flattened by `heightScale` (0.61), so un-clamped Y must be scaled
   by the same factor — `grounded` sidesteps the conversion entirely.
 - **Hit rock** — `world.unitImpulse(id, { dirX, dirZ, mag })` shudders the
-  unit on a damped spring (call it on damage events).
+  unit on a damped spring (call it on damage events).  Structures stay
+  planted: pass `mobile: false` on the unit (addUnit/applyState) — or rely
+  on the built-in inference, which treats a grounded unit that has never
+  moved or yawed as a building.
 - **Status** — per-unit `hp01` (0..1) draws a green→red health bar under
   the unit while damaged and drives TA-style damage smoke; `rank` (0..5)
-  draws gold veteran chevrons.  Both render in the scene pass —
+  draws a row of gold veteran stars beneath the bar — only while the bar
+  itself shows, so a full-health unit carries no rank chrome.  Both
+  render in the scene pass —
   depth-tested against the world, so a unit behind a ridge shows no bar —
   and headless captures include them.
 - **COB smoke** — forward engine render events through

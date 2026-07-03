@@ -205,7 +205,7 @@ export interface UnitPlacement {
   naval?: boolean
   /** 0..1 health fraction — health bar (when < 1) + damage smoke. */
   hp01?: number | null
-  /** 0..5 veteran rank chevrons. */
+  /** 0..5 veteran rank stars — drawn beneath the health bar, only while the bar shows. */
   rank?: number
   /** Airborne: hover bob + bank-into-turns + contrails; death = spiral crash. */
   air?: boolean
@@ -213,6 +213,12 @@ export interface UnitPlacement {
   hover?: boolean
   /** Surface vessel: stern wake while under way on the sea sheet. */
   naval?: boolean
+  /**
+   * false marks a structure — unitImpulse() hit-rock never applies.
+   * Omitted → inferred: a grounded unit that never moves reads as a
+   * structure.  true forces the mobile-hull treatment.
+   */
+  mobile?: boolean | null
 }
 
 export interface SnapshotPieceState {
@@ -241,7 +247,7 @@ export interface SnapshotUnit {
   tilt?: boolean
   /** 0..1 health fraction — health bar (when < 1) + damage smoke. */
   hp01?: number | null
-  /** 0..5 veteran rank chevrons beside the health bar. */
+  /** 0..5 veteran rank stars beneath the health bar — rendered only while the bar shows (unit damaged). */
   rank?: number
   /** Airborne (presentation): hover bob, bank-into-turns, contrails at speed, spiral-crash death. */
   air?: boolean
@@ -249,6 +255,12 @@ export interface SnapshotUnit {
   hover?: boolean
   /** Surface vessel: stern wake while moving on the sea sheet. */
   naval?: boolean
+  /**
+   * false marks a structure — unitImpulse() hit-rock never applies.
+   * Omitted → inferred: a grounded unit whose position/heading never
+   * change across snapshots reads as a structure.  true forces mobility.
+   */
+  mobile?: boolean | null
   /** dead:true on a live unit triggers unitDeath(id, { severity: deathSeverity, corpse, heapCorpse, impactDir, impactMag }) once. */
   dead?: boolean
   deathSeverity?: number
@@ -360,7 +372,9 @@ export interface World {
   /**
    * Presentation-only hit-rock: the unit shudders on a damped pitch/roll
    * spring.  dirX/dirZ is the impact push direction in world space; mag
-   * 1 ≈ light round, 4 ≈ heavy shell.
+   * 1 ≈ light round, 4 ≈ heavy shell.  Structures never rock: a unit
+   * with mobile:false — or, with no flag, a grounded unit that has never
+   * moved or yawed — ignores the impulse entirely.
    */
   unitImpulse(id: number | string, opts: { dirX?: number; dirZ?: number; mag?: number }): void
   /** Render one engine render event ('emitSfx' smoke / 'explode' flash). */

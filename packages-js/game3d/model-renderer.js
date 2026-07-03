@@ -37,7 +37,6 @@ import {
   EFFECT_LOD_FADE_WU,
   RUNNING_LIGHT_COLOR_MERGE_PX,
   RUNNING_LIGHT_TIMING_BUCKETS,
-  HOVERCRAFT_WOBBLE_SCALE,
   AIRCRAFT_BANK_SCALE,
   PARTICLE_ADDITIVE_BUDGET,
   LUMINOUS_PARTICLE_KINDS,
@@ -50,6 +49,7 @@ import { applyResolvedHints } from './hints-textures.js'
 import { pieceLightFor, hasOverridesFor, pulseAlpha } from './piece-light-overrides.js'
 import { MAX_PULSE_LIGHTS, setMaxSceneLights } from './scene-lights.js'
 import { getAssetProvider, toTexImageSource } from './assets.js'
+import { hoverSway } from './hover-sway.js'
 import { createTerrainSampler } from './terrain-sample.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
@@ -284,6 +284,7 @@ export class ModelRenderer {
     this.optBump = true              // derivative auto-bump relief on tagged tiles
     this.optGodBeams = true          // light shafts from the sun(s)
     this.optWaves = true             // animate sea surface; false → flat sea
+    this.voidGridEnabled = true      // dark Tron grid beyond an installed battlefield
     // Slider-controlled multipliers — all default to 1.0 (no scaling).
     this.bobAmount = 1.0             // scales heave + pitch + roll
     this.bobSpeed = 1.0              // scales the bob's time progression
@@ -544,12 +545,13 @@ export class ModelRenderer {
   }
 
   // setUnitOverlays installs this frame's per-unit status billboards —
-  // health bars + veteran-rank chevrons drawn world-anchored in the scene
+  // health bars + veteran-rank stars drawn world-anchored in the scene
   // pass (so headless captures include them).  Each entry:
   //   { x, y, z,          — the unit's world position
   //     rWU,              — half-width anchor (bounding radius, world units)
   //     hp01?,            — 0..1 health fraction; bar drawn only when < 1
-  //     rank? }           — 0..5 veteran rank; chevrons drawn when > 0
+  //     rank? }           — 0..5 veteran rank; a row of stars beneath the
+  //                         bar, drawn only while the bar shows
   // Pass null/empty to clear.  Drawn by #renderUnitOverlays.
   setUnitOverlays(items) {
     this._unitOverlays = Array.isArray(items) && items.length ? items : null
@@ -778,9 +780,11 @@ export class ModelRenderer {
   // (st.pitch / st.roll / st.heave):
   //   * aircraft — roll INTO the turn (turn-rate × FBI BankScale ×
   //     AIRCRAFT_BANK_SCALE) and pitch the nose up/down with climb/descent;
-  //   * hovercraft — a continuous multi-frequency gyration (× the tunable
-  //     HOVERCRAFT_WOBBLE_SCALE) that grows with ground speed, plus a light
-  //     bank into turns, so it visibly floats on its cushion even at rest.
+  //   * hovercraft — a continuous multi-frequency gyration computed about
+  //     WORLD axes (hover-sway.js, × the tunable HOVERCRAFT_WOBBLE_SCALE)
+  //     that grows with ground speed, plus a light bank into turns, so it
+  //     visibly floats on its cushion even at rest and its lean direction
+  //     stays put in the world as the craft yaws.
   // `st` carries both the previous transform and the smoothed overlay, so the
   // single unit and each sandbox entity can keep independent state.  Time is
   // the pausable, speed-scaled fx clock so the wobble freezes on pause and
@@ -818,15 +822,17 @@ export class ModelRenderer {
       targetPitch = Math.max(-maxPitch, Math.min(maxPitch, (climb / 60) * 0.3 * (loco.pitchScale || 1)))
     }
     if (loco.hover) {
-      // Continuous gyration on the air cushion.  Two incommensurate
-      // frequencies per axis so it never reads as a clean loop; heave is a
-      // gentle vertical breathe.  Scaled by the tunable HOVERCRAFT_WOBBLE_SCALE.
+      // Continuous gyration on the air cushion.  The lean is generated in
+      // WORLD space and composed with the unit's heading (hover-sway.js), so
+      // the cushion's tilt direction stays fixed in the world as the craft
+      // yaws — a hull leaning west keeps leaning west through a half-turn,
+      // which its own frame experiences as the mirrored pitch/roll.
       //
-      // The at-rest baseline is cut ~40% from the old constant so a parked
-      // hovercraft barely shivers; the bulk of the wobble now rides a "motion"
-      // factor that blends ground speed with the magnitude of acceleration, so
-      // a craft surging under throttle or braking gyrates harder than one
-      // idling, and a slow craft wobbles less than a fast one.
+      // The at-rest baseline keeps a parked hovercraft barely shivering; the
+      // bulk of the wobble rides a "motion" factor that blends ground speed
+      // with the magnitude of acceleration, so a craft surging under throttle
+      // or braking gyrates harder than one idling, and a slow craft wobbles
+      // less than a fast one.
       const spd = Math.min(1, speed / 40)
       let accelMag = 0
       if (dt > 1e-4) {
@@ -835,10 +841,10 @@ export class ModelRenderer {
         st.prevSpeed = speed
       }
       const motion = Math.min(1, spd + 0.4 * accelMag)
-      const amp = (0.027 + 0.075 * motion) * HOVERCRAFT_WOBBLE_SCALE
-      targetPitch += amp * (Math.sin(t * 1.7) * 0.6 + Math.sin(t * 0.9 + 1.3) * 0.4)
-      targetRoll  += amp * (Math.sin(t * 1.3 + 0.7) * 0.6 + Math.sin(t * 2.1) * 0.4)
-      targetHeave += (0.48 + 1.3 * motion) * HOVERCRAFT_WOBBLE_SCALE * Math.sin(t * 1.1)
+      const sway = hoverSway(t, ut.headingRad, { motion, phase: st.phase || 0 })
+      targetPitch += sway.pitch
+      targetRoll  += sway.roll
+      targetHeave += sway.heave
       // Light bank into turns on top of the idle wobble (same sign as above).
       targetRoll  += Math.max(-0.3, Math.min(0.3, turnRate * 0.18))
       // The hover gyration is procedural (already smooth), so chase it fast.
@@ -2101,7 +2107,10 @@ export class ModelRenderer {
         if (entLoco) {
           let est = this._entOrient.get(ent.id)
           if (!est) {
-            est = { heading: 0, x: 0, z: 0, y: 0, t: 0, init: false, pitch: 0, roll: 0, heave: 0 }
+            // Deterministic per-entity sway phase (golden-angle spread on the
+            // id) so a hover flotilla doesn't rock in unison.
+            const phase = (typeof ent.id === 'number' ? ent.id : 0) * 2.39996
+            est = { heading: 0, x: 0, z: 0, y: 0, t: 0, init: false, pitch: 0, roll: 0, heave: 0, phase }
             this._entOrient.set(ent.id, est)
           }
           const o = this._computeOrientation(entLoco, est, t, this._fxTimeSec())
@@ -2240,7 +2249,7 @@ export class ModelRenderer {
       // taller foreground geometry).  Only meaningful in multi-entity
       // mode — single-entity mode never sets `selected`.
       this.#renderSelectionRings(this._entities)
-      // Health bars + veteran rank chevrons — world-anchored status UI,
+      // Health bars + veteran rank stars — world-anchored status UI,
       // drawn with the entities so replay captures carry them.
       this.#renderUnitOverlays()
       // Phase 3 — render the impostor batch AFTER the full / mid
@@ -2831,10 +2840,29 @@ export class ModelRenderer {
     if (mt && this.groundMode !== 'sea' && this.groundMode !== 'off') {
       // Keep the near-detail clipmap centred on the camera's ground focus.
       this._maybeRecenterClip()
-      // The map mesh carries real world-space geometry — clear the flat
-      // pad's recentre shift set earlier in this pass.
-      gl.uniform3fv(this.uGroundShift, [0, 0, 0])
       gl.uniform4fv(this.uGroundMapRect, mt.rect)
+      // Void grid: the infinite dark Tron-style plane surrounding the
+      // battlefield (ground mode 6).  Reuses the flat pad VBO (still
+      // bound from the top of this pass), recentred under the camera
+      // focus so the void follows the view everywhere; the fragment
+      // shader discards everything inside the map rect, so the grid only
+      // exists OUTSIDE the gameplay area.  Sits below height 0 — the
+      // battlefield reads as floating over the void, TA-style.
+      if (this.voidGridEnabled !== false) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._groundVBO)
+        gl.vertexAttribPointer(this.aGroundPos, 3, gl.FLOAT, false, 0, 0)
+        gl.uniform1i(this.uGroundModeId, 6)
+        gl.uniform1f(this.uGroundY, -10)
+        gl.uniform3fv(this.uGroundShift, [
+          Math.round(cx / 64) * 64, 0, Math.round(cz / 64) * 64,
+        ])
+        gl.disable(gl.BLEND)
+        gl.drawArrays(gl.TRIANGLES, 0, this._groundVertexCount || 6)
+        gl.enable(gl.BLEND)
+      }
+      // The map mesh carries real world-space geometry — clear the flat
+      // pad's recentre shift set for the void plane.
+      gl.uniform3fv(this.uGroundShift, [0, 0, 0])
       gl.uniform1f(this.uGroundMapFog, this.mapFogEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapContours, this.contoursEnabled ? 1 : 0)
       gl.uniform1f(this.uGroundMapHeightScale, mt.heightScale || 1)
@@ -4700,7 +4728,8 @@ export class ModelRenderer {
 
   // #renderUnitOverlays draws the installed per-unit status billboards:
   // a green→red health bar under the unit (only when hp01 < 1) and up to
-  // five gold veteran chevrons beside it.  Segments are built in the
+  // five gold veteran STARS beneath it (only while the bar shows — a
+  // full-health unit renders no rank).  Segments are built in the
   // camera's screen plane (world-anchored, camera-right for the bar run,
   // camera-up for the drop below the hull) through the wire program with
   // pixel-thickened lines, so the bars stay crisp at any resolution and
@@ -4788,24 +4817,41 @@ export class ModelRenderer {
           seg(x0, y0, z0, x0 + rx * fw, y0 + ry * fw, z0 + rz * fw, fill, 0.95, 3)
         }
       }
+      // Veteran rank: a row of small gold STARS (a general's insignia)
+      // centred BENEATH the health bar — and only while the bar itself
+      // shows.  A full-health unit carries no rank chrome at all, so the
+      // battlefield stays clean until a unit is actually hurt.
       const rank = Math.max(0, Math.min(5, it.rank | 0))
-      if (rank > 0) {
-        // Gold chevrons marching right from the bar's end (or the anchor
-        // when no bar shows).  Each is a ^ built from two segments.
+      if (showBar && rank > 0) {
         const gold = [1.0, 0.84, 0.25]
-        const step = 3.4
-        const half = 1.5
-        const rise = 2.0
-        let bx = x0 + rx * (barW + 3), by = y0 + ry * (barW + 3), bz = z0 + rz * (barW + 3)
+        const step = 4.6       // star spacing along the row (camera-right)
+        const sr = 1.9         // star point radius
+        const below = 5.0      // drop from the bar line (camera-up)
+        // Row base: the bar centre dropped below the bar, ground-clamped
+        // like the bar anchor so low camera angles don't bury the row.
+        let bx = cx - ux * below
+        let by = cy - uy * below
+        let bz = cz - uz * below
+        const rowGroundY = this.terrainHeightAt(bx, bz)
+        if (by < rowGroundY + 0.8) by = rowGroundY + 0.8
         for (let i = 0; i < rank; i++) {
-          const ax0 = bx, ay0 = by, az0 = bz
-          const apx = bx + rx * half + ux * rise
-          const apy = by + ry * half + uy * rise
-          const apz = bz + rz * half + uz * rise
-          const ex = bx + rx * half * 2, ey = by + ry * half * 2, ez = bz + rz * half * 2
-          seg(ax0, ay0, az0, apx, apy, apz, gold, 0.95, 2)
-          seg(apx, apy, apz, ex, ey, ez, gold, 0.95, 2)
-          bx += rx * step; by += ry * step; bz += rz * step
+          const off = (i - (rank - 1) / 2) * step
+          const sx = bx + rx * off, sy = by + ry * off, sz = bz + rz * off
+          // Five-pointed star: the pentagram strokes p[j] → p[j+2 mod 5]
+          // laid out in the camera plane (camera-right × camera-up), same
+          // billboard basis as the bar so both face the view together.
+          const px = [], py = [], pz = []
+          for (let j = 0; j < 5; j++) {
+            const a = Math.PI / 2 + (j * 2 * Math.PI) / 5
+            const ca = Math.cos(a) * sr, sa = Math.sin(a) * sr
+            px.push(sx + rx * ca + ux * sa)
+            py.push(sy + ry * ca + uy * sa)
+            pz.push(sz + rz * ca + uz * sa)
+          }
+          for (let j = 0; j < 5; j++) {
+            const k = (j + 2) % 5
+            seg(px[j], py[j], pz[j], px[k], py[k], pz[k], gold, 0.95, 2)
+          }
         }
       }
     }

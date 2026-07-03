@@ -91,12 +91,82 @@ test('categoryBuilder classifies the TA category survey', () => {
   const names = (fn) => fn.name
   assert.equal(names(categoryBuilder('trees')), 'buildTree')
   assert.equal(names(categoryBuilder('rocks')), 'buildRock')
-  assert.equal(names(categoryBuilder('metal')), 'buildCrystals')
+  // Metal deposits + steam vents are FLAT ground decals, not 3D clusters.
+  assert.equal(names(categoryBuilder('metal')), 'buildMetalPatch')
+  assert.equal(names(categoryBuilder('steamvents')), 'buildVent')
+  // TAK glyphs / spires keep the crystal read.
+  assert.equal(names(categoryBuilder('glyph')), 'buildCrystals')
+  assert.equal(names(categoryBuilder('spires')), 'buildCrystals')
   assert.equal(names(categoryBuilder('kelp')), 'buildKelp')
   assert.equal(names(categoryBuilder('foliage')), 'buildBush')
   assert.equal(names(categoryBuilder('craters')), 'buildScar')
   assert.equal(names(categoryBuilder('machines')), 'buildProp')
   assert.equal(names(categoryBuilder('anything-weird')), 'buildRock')
+})
+
+// Y-range helper over a field's baked vertices.
+const yRange = (field) => {
+  let minY = Infinity, maxY = -Infinity
+  for (const b of field.batches) {
+    for (let i = 0; i < b.data.length; i += 9) {
+      minY = Math.min(minY, b.data[i + 1])
+      maxY = Math.max(maxY, b.data[i + 1])
+    }
+  }
+  return { minY, maxY }
+}
+
+test('metal + vent decals lie FLAT on the terrain; crystals stay 3D', () => {
+  const defs = {
+    shale: { id: 'shale', category: 'metal', footprintX: 2, footprintZ: 2, heightWU: 14 },
+    vent1: { id: 'vent1', category: 'steamvents', footprintX: 2, footprintZ: 2, heightWU: 30 },
+    glyph1: { id: 'glyph1', category: 'glyph', footprintX: 2, footprintZ: 2, heightWU: 14 },
+  }
+  const one = (name) => yRange(buildFeatureField({
+    features: [{ name, ax: 4, ay: 6 }], defs, heightAt: () => 7,
+  }))
+  const metal = one('shale')
+  assert.ok(metal.minY > 7 && metal.maxY < 8,
+    `metal decal must hug y=7: [${metal.minY}, ${metal.maxY}]`)
+  const vent = one('vent1')
+  assert.ok(vent.minY > 7 && vent.maxY < 8,
+    `vent decal must hug y=7: [${vent.minY}, ${vent.maxY}]`)
+  const crystals = one('glyph1')
+  assert.ok(crystals.maxY > 10, 'crystal stand-ins stay 3D')
+})
+
+test('decals conform to sloped terrain per-vertex', () => {
+  const defs = { shale: { id: 'shale', category: 'metal', footprintX: 3, footprintZ: 3, heightWU: 14 } }
+  const heightAt = (x, z) => 3 + x * 0.15 + z * 0.05
+  const field = buildFeatureField({ features: [{ name: 'Shale', ax: 8, ay: 8 }], defs, heightAt })
+  for (const b of field.batches) {
+    for (let i = 0; i < b.data.length; i += 9) {
+      const lift = b.data[i + 1] - heightAt(b.data[i], b.data[i + 2])
+      assert.ok(lift > 0.1 && lift < 1.0,
+        `every vertex floats just above its own terrain sample, lift=${lift}`)
+    }
+  }
+})
+
+test('steam vents surface a deterministic live emitter; metal does not', () => {
+  const defs = {
+    vent1: { id: 'vent1', category: 'steamvents', footprintX: 2, footprintZ: 2 },
+    shale: { id: 'shale', category: 'metal', footprintX: 2, footprintZ: 2 },
+  }
+  const features = [
+    { name: 'Vent1', ax: 3, ay: 5 },
+    { name: 'Shale', ax: 9, ay: 9 },
+    { name: 'Vent1', ax: 12, ay: 2 },
+  ]
+  const a = buildFeatureField({ features, defs, heightAt: () => 4 })
+  const b = buildFeatureField({ features, defs, heightAt: () => 4 })
+  assert.equal(a.emitters.length, 2, 'one emitter per vent, none for metal')
+  assert.deepEqual(a.emitters, b.emitters, 'emitters must be deterministic')
+  for (const em of a.emitters) {
+    assert.equal(em.kind, 'steam')
+    assert.ok(em.y > 4 && em.y < 5, 'emitter sits at the vent mouth')
+    assert.ok(Number.isFinite(em.seed))
+  }
 })
 
 test('mulberry32 + featureSeed are stable', () => {

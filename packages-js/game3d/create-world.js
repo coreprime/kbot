@@ -58,6 +58,7 @@ import {
   modelShotPose,
   impactBurst,
   resolveDeathPlan,
+  unitRocksOnImpact,
   damageSmokeIntervalMs,
   debrisBurst,
   stepDebrisRecord,
@@ -110,6 +111,14 @@ const SURFACE_BAND_WU = 4
 // Nanolathe / reclaim beam cadence + particle speed.
 const LATHE_EMIT_INTERVAL_MS = 26
 const LATHE_PARTICLE_SPEED = 220
+
+// Steam-vent wisp cadence + drift.  A lazy geothermal plume: one soft
+// white puff every third of a second rising off the vent throat, phase-
+// staggered per vent.  Velocities come from each vent's own seeded rng
+// so the plume is deterministic under a driven fx clock.
+const STEAM_INTERVAL_MS = 340
+const STEAM_RISE_WU_S = 16
+const STEAM_LIFE_MS = 1700
 
 // Reclaimed wrecks shrink toward this scale while a reclaim beam holds
 // them (full shrink over RECLAIM_SHRINK_MS of beam time).
@@ -208,6 +217,7 @@ export async function createWorld(canvas, {
   const units = new Map()        // id → unit record
   const corpses = new Map()      // id → persistent wreck record
   const featureModels = []       // 3DO map features (static, from setTerrain)
+  const steamVents = []          // live steam-wisp emitters (vent features)
   const beams = new Map()        // latheBeam/reclaimBeam key → beam record
   let crashes = []               // air-unit spiral-crash records
   let debris = []                // flying-polygon death records
@@ -330,7 +340,10 @@ export async function createWorld(canvas, {
       // Capture flash: a bright wireframe shell pulse for the flash window.
       if (u._captureMs > 0) ent.highlight = true
       entities.push(ent)
-      if ((u.hp01 != null && u.hp01 < 1) || (u.rank | 0) > 0) {
+      // Status overlay only while the unit is damaged: the health bar is
+      // the gate, and the veteran-rank stars ride beneath it — a
+      // full-health unit shows neither.
+      if (u.hp01 != null && u.hp01 < 1) {
         const t = entities[entities.length - 1].transform
         overlays.push({
           x: t.x, y: t.y, z: t.z,
@@ -481,6 +494,28 @@ export async function createWorld(canvas, {
     stepModelShots(modelShots, dtMs, { env: { waterY: waterY(), heightAt: terrainHeightAt } })
     _stepBeams(dtMs)
     _stepCrashes(dtMs)
+    // Steam vents: lazy geothermal wisps off each vent throat.  Gated on
+    // the feature toggle so hiding map features silences the plumes too.
+    if (steamVents.length && !world._featuresOff) {
+      for (const v of steamVents) {
+        v.accMs += dtMs
+        while (v.accMs >= STEAM_INTERVAL_MS) {
+          v.accMs -= STEAM_INTERVAL_MS
+          const jx = (v.rng() * 2 - 1) * v.r * 0.2
+          const jz = (v.rng() * 2 - 1) * v.r * 0.2
+          worldBinding.particles.emit(SFX_SMOKE_WHITE, [v.x + jx, v.y, v.z + jz], {
+            size: 3.5 + v.r * 0.12,
+            lifeMs: STEAM_LIFE_MS + v.rng() * 400,
+            color: [0.92, 0.95, 0.98, 0.30],
+            velocity: [
+              (v.rng() * 2 - 1) * 2.5,
+              STEAM_RISE_WU_S * (0.8 + v.rng() * 0.4),
+              (v.rng() * 2 - 1) * 2.5,
+            ],
+          })
+        }
+      }
+    }
     // Debris: parabolic world-space flight with terrain bounces; a global
     // piece budget clamps the OLDEST records into their fade window when a
     // mass death would blow the frame budget.
@@ -793,8 +828,10 @@ export async function createWorld(canvas, {
     // toward -Z, so π renders the unit facing +Z un-rotated).
     // Presentation opts: grounded (clamp render Y to the terrain +
     // slope-tilt), hp01 (0..1 health fraction for the status bar +
-    // damage smoke), rank (0..5 veteran chevrons).
-    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined, grounded = false, hp01 = null, rank = 0, air = false, hover = false, naval = false, redraw = true } = {}) {
+    // damage smoke), rank (0..5 veteran stars, shown only while the
+    // health bar shows), mobile (false marks a
+    // structure — no hit-rock; omitted → inferred, see unitImpulse).
+    async addUnit(name, { id = null, x = 0, y = 0, z = 0, heading = null, side = null, teamColor = null, buildPercent = undefined, grounded = false, hp01 = null, rank = 0, air = false, hover = false, naval = false, mobile = null, redraw = true } = {}) {
       const base = await loadBaseModel(name)
       const unitId = id != null ? id : nextId++
       if (unitId >= nextId && typeof unitId === 'number') nextId = unitId + 1
@@ -810,6 +847,8 @@ export async function createWorld(canvas, {
         air: !!air,
         hover: !!hover,
         naval: !!naval,
+        mobile: mobile == null ? null : !!mobile,
+        _posInit: true, // addUnit placement is explicit — later changes count as motion
         hp01,
         rank: rank | 0,
         teamColor: teamColor || (side != null ? teamColorForSide(side) : null),
@@ -831,6 +870,11 @@ export async function createWorld(canvas, {
     moveUnit(id, { x, y, z, heading } = {}) {
       const u = units.get(id)
       if (!u) return
+      // Motion latch — feeds the structure inference (unitRocksOnImpact).
+      if ((x != null && x !== u.x) || (z != null && z !== u.z) ||
+          (heading != null && heading !== u.headingRad)) {
+        u._moved = true
+      }
       if (x != null) u.x = x
       if (y != null) u.y = y
       if (z != null) u.z = z
@@ -847,6 +891,8 @@ export async function createWorld(canvas, {
     // opts.features isn't false, the map's features install too — GAF
     // sprite features as procedural 3D stand-ins baked into static batches
     // (map-features.js), object features as their real packed 3DO models.
+    // Metal deposits + steam vents bake as FLAT terrain-conforming decals,
+    // and each vent drives a live steam wisp off the fx clock.
     // The features.json catalogue loads from the AssetProvider
     // (featureDefs()); on a pre-v5 pack every feature falls back to a
     // category-less default stand-in.  Toggle later via
@@ -854,6 +900,7 @@ export async function createWorld(canvas, {
     setTerrain(terrain, { features = true } = {}) {
       featureBuildToken++
       featureModels.length = 0
+      steamVents.length = 0
       if (terrain) renderer.setMapTerrain(terrain)
       else renderer.clearMapTerrain()
       if (terrain && features && Array.isArray(terrain.features) && terrain.features.length) {
@@ -867,6 +914,14 @@ export async function createWorld(canvas, {
             cellWU: (terrain.cellWU || 16),
           })
           renderer.setMapFeatures(field.batches)
+          // Steam vents: the baked decal is static; the wisp is live.
+          // Each vent gets its own deterministic rng + a phase-staggered
+          // accumulator so the map's vents don't puff in lockstep.
+          for (const em of field.emitters || []) {
+            if (em.kind !== 'steam') continue
+            const rng = mulberry32(em.seed >>> 0)
+            steamVents.push({ x: em.x, y: em.y, z: em.z, r: em.r, rng, accMs: rng() * STEAM_INTERVAL_MS })
+          }
           field.models.forEach((m, idx) => {
             const rec = { idx, model: null, x: m.x, y: m.y, z: m.z, heading: m.heading, name: m.name }
             featureModels.push(rec)
@@ -901,8 +956,9 @@ export async function createWorld(canvas, {
     //   { units: [{ id, model|name, x, y, z, heading, pitch?, roll?,
     //       buildPercent?, side?, teamColor?,
     //       grounded?,                    // clamp render Y to terrain + slope-tilt
+    //       mobile?,                      // false = structure (no hit-rock); omitted → inferred
     //       hp01?,                        // 0..1 health (status bar + damage smoke)
-    //       rank?,                        // 0..5 veteran chevrons
+    //       rank?,                        // 0..5 veteran stars (rendered only while damaged)
     //       dead?, deathSeverity?, corpse?, heapCorpse?,  // see unitDeath()
     //       pieceNames?: [...],           // the type's COB piece table
     //       piecesPacked?: Uint8Array,    // engine stride-7 piece buffer
@@ -963,6 +1019,19 @@ export async function createWorld(canvas, {
             if (!disposed && units.get(su.id) === u) u.model = base.cloneForInstance()
           }).catch(() => units.delete(su.id))
         }
+        // Motion latch — a position/heading change after the FIRST
+        // placement marks the unit as having moved, which the structure
+        // inference (unitImpulse / unitRocksOnImpact) keys on.  The first
+        // snapshot merely places the fresh record, so it doesn't count.
+        if (u._posInit) {
+          if ((su.x != null && Math.abs(su.x - u.x) > 1e-3) ||
+              (su.z != null && Math.abs(su.z - u.z) > 1e-3) ||
+              (su.heading != null && Math.abs(su.heading - u.headingRad) > 1e-4)) {
+            u._moved = true
+          }
+        } else {
+          u._posInit = true
+        }
         if (su.x != null) u.x = su.x
         if (su.y != null) u.y = su.y
         if (su.z != null) u.z = su.z
@@ -973,6 +1042,7 @@ export async function createWorld(canvas, {
         if (su.air != null) u.air = !!su.air
         if (su.hover != null) u.hover = !!su.hover
         if (su.naval != null) u.naval = !!su.naval
+        if (su.mobile != null) u.mobile = !!su.mobile
         if (su.tilt != null) u.tilt = !!su.tilt
         if (su.hp01 != null) u.hp01 = su.hp01
         if (su.rank != null) u.rank = su.rank | 0
@@ -1076,9 +1146,15 @@ export async function createWorld(canvas, {
     // sim state is touched.  dirX/dirZ is the impact's push direction in
     // world space (from the shooter toward the unit); mag scales the kick
     // (1 ≈ a light autocannon round, 4 ≈ a heavy shell).
+    //
+    // Structures don't rock: a unit with mobile:false (addUnit/applyState),
+    // or — with no flag — a grounded unit that has never moved or yawed
+    // since it appeared, ignores the impulse entirely (world-fx
+    // unitRocksOnImpact).  Drivers that know their buildings should pass
+    // mobile:false; the never-moves inference covers those that don't.
     unitImpulse(id, { dirX = 0, dirZ = 0, mag = 1 } = {}) {
       const u = units.get(id)
-      if (!u) return
+      if (!u || !unitRocksOnImpact(u)) return
       const len = Math.hypot(dirX, dirZ) || 1
       const px = dirX / len, pz = dirZ / len
       // World push → the unit's local frame (inverse yaw).
@@ -1391,6 +1467,7 @@ export async function createWorld(canvas, {
       units.clear()
       corpses.clear()
       featureModels.length = 0
+      steamVents.length = 0
       beams.clear()
       crashes = []
       debris = []

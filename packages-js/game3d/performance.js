@@ -166,8 +166,10 @@ export const RUNNING_LIGHT_TIMING_BUCKETS = 5
 // HOVERCRAFT_WOBBLE_SCALE multiplies the procedural pitch/roll/heave gyration
 // applied to hovercraft (Category HOVER) as they idle + drive on their air
 // cushion.  1 = the baseline amplitude; raise for a more pronounced wobble,
-// drop toward 0 to calm it.  Tune this to taste.
-export const HOVERCRAFT_WOBBLE_SCALE = 3
+// drop toward 0 to calm it.  Tune this to taste.  (Was 3 — hovercraft read
+// as storm-tossed in replay footage; 1 keeps a visible float without the
+// lurch.)
+export const HOVERCRAFT_WOBBLE_SCALE = 1
 
 // AIRCRAFT_BANK_SCALE multiplies how hard aircraft roll into their turns (on
 // top of the per-unit FBI BankScale).  1 = baseline lean; raise for a more
