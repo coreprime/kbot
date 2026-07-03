@@ -103,7 +103,41 @@ session.startScript(id, 'Create')
 session.restartScript(id, 'Create')
 session.killThreadsByName(id, 'Create')
 
-console.log(`OK: stepTo+setUnitState+motionPin verified; world hash ${session.hash()} at tick ${session.tick()}`)
+// Packed-snapshot parity: renderStatePacked() must reproduce renderState()'s
+// unit fields (f32 rounding allowed) — the replay driver's fast path.
+{
+  const classic = session.renderState()
+  const packed = session.renderStatePacked()
+  assert.equal(packed.tick, classic.tick, 'packed tick differs')
+  assert.equal(packed.units.length, classic.units.length, 'packed unit count differs')
+  const close = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-3, `packed ${what}: ${a} vs ${b}`)
+  for (let i = 0; i < classic.units.length; i++) {
+    const c = classic.units[i], p = packed.units[i]
+    assert.equal(p.id, c.id)
+    assert.equal(p.name, c.name)
+    assert.equal(p.side, c.side)
+    assert.equal(p.dead, c.dead)
+    assert.equal(p.isMoving, c.isMoving)
+    close(p.x, c.x, 'x'); close(p.y, c.y, 'y'); close(p.z, c.z, 'z')
+    close(p.headingRad, c.headingRad, 'headingRad')
+    close(p.health, c.health, 'health')
+    close(p.buildPercent, c.buildPercent, 'buildPercent')
+    const cp = c.piecesPacked, pp = p.piecesPacked
+    if (cp == null) {
+      assert.equal(pp, null, 'packed pieces where classic has none')
+    } else {
+      const cf = new Float32Array(cp.buffer, cp.byteOffset, cp.byteLength >> 2)
+      assert.equal(pp.length, cf.length, 'piece float count differs')
+      for (let j = 0; j < cf.length; j++) close(pp[j], cf[j], `piece[${j}]`)
+    }
+  }
+  // stepPacked advances the sim exactly like step().
+  const before = session.tick()
+  const s1 = session.stepPacked()
+  assert.equal(s1.tick, before + 1, 'stepPacked did not advance one tick')
+}
+
+console.log(`OK: stepTo+setUnitState+motionPin+packedParity verified; world hash ${session.hash()} at tick ${session.tick()}`)
 session.destroy()
 // The parked wasm runtime keeps the event loop alive; exit explicitly.
 process.exit(0)

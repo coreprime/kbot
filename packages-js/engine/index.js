@@ -186,6 +186,30 @@ export class Session {
   }
 
   /**
+   * step() through the packed-snapshot fast path: the engine serialises the
+   * whole units array (fixed fields + piece transforms) into ONE byte
+   * buffer instead of a js.Value tree, and this wrapper parses it back into
+   * the classic snapshot shape — same fields, with piecesPacked as
+   * zero-copy Float32Array views into the shared buffer.  At replay scale
+   * (hundreds of units) this cuts the per-tick boundary cost several-fold.
+   * The packed form omits the rarely-consumed extras (carrying, building,
+   * prodQueue, queue) — use step() when you need those.
+   */
+  stepPacked() {
+    return parsePackedSnapshot(this.#api.stepPacked(this.#handle))
+  }
+
+  /** stepTo() through the packed-snapshot fast path (see stepPacked). */
+  stepToPacked(tick) {
+    return parsePackedSnapshot(this.#api.stepToPacked(this.#handle, tick))
+  }
+
+  /** renderState() through the packed-snapshot fast path (see stepPacked). */
+  renderStatePacked() {
+    return parsePackedSnapshot(this.#api.renderStatePacked(this.#handle))
+  }
+
+  /**
    * Advance tick by tick until the world reaches the target tick and return
    * the last render snapshot — the replay seek clock. A target at or before
    * the current tick steps nothing and returns the current state (rewind is
@@ -289,5 +313,65 @@ export class Session {
 
   destroy() {
     this.#api.destroy(this.#handle)
+  }
+}
+
+// ── Packed-snapshot parser ─────────────────────────────────────────────
+//
+// Mirrors cmd/engine-wasm/convert.go snapshotToPackedJS: a 4-word header
+// (version, tick, unitCount, pieceFloatsTotal), unitCount fixed 20-word
+// records, then every unit's stride-7 piece floats back to back.  Unit
+// objects come back in the classic snapshot field shape; piecesPacked are
+// SUBARRAY VIEWS into the shared Float32Array — no per-unit copies.
+const PACKED_UNIT_WORDS = 20
+
+function parsePackedSnapshot(raw) {
+  if (!raw || !raw.unitsPacked) return raw
+  const bytes = raw.unitsPacked
+  const f32 = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2)
+  const u32 = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2)
+  const i32 = new Int32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >> 2)
+  const version = u32[0]
+  if (version !== 1) throw new Error(`packed snapshot version ${version} unsupported`)
+  const unitCount = u32[2]
+  const names = raw.names || []
+  const pieceBase = 4 + unitCount * PACKED_UNIT_WORDS
+  const units = new Array(unitCount)
+  for (let i = 0; i < unitCount; i++) {
+    const w = 4 + i * PACKED_UNIT_WORDS
+    const flags = u32[w + 3]
+    const pieceOff = u32[w + 18]
+    const pieceFloats = u32[w + 19]
+    units[i] = {
+      id: u32[w],
+      name: names[u32[w + 1]] || '',
+      side: i32[w + 2],
+      dead: (flags & 1) !== 0,
+      isMoving: (flags & 2) !== 0,
+      hasMove: (flags & 4) !== 0,
+      x: f32[w + 4],
+      y: f32[w + 5],
+      z: f32[w + 6],
+      headingRad: f32[w + 7],
+      heading: f32[w + 8],
+      speed: f32[w + 9],
+      health: f32[w + 10],
+      buildPercent: f32[w + 11],
+      moveX: f32[w + 12],
+      moveZ: f32[w + 13],
+      moveMode: u32[w + 14],
+      fireMode: u32[w + 15],
+      selfDestructMs: u32[w + 16],
+      carriedBy: u32[w + 17],
+      piecesPacked: pieceFloats > 0
+        ? f32.subarray(pieceBase + pieceOff, pieceBase + pieceOff + pieceFloats)
+        : null,
+    }
+  }
+  return {
+    tick: u32[1],
+    units,
+    projos: raw.projos || [],
+    events: raw.events || [],
   }
 }

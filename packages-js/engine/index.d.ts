@@ -212,6 +212,17 @@ export class Session {
    */
   playWeaponFire(unitId: number, slot: number, tx: number, ty: number, tz: number): boolean
   /**
+   * step() through the packed-snapshot fast path: units cross the wasm
+   * boundary as one byte buffer and parse back into the classic snapshot
+   * shape (piecesPacked as zero-copy Float32Array views).  Omits the
+   * rarely-consumed extras (carrying, building, prodQueue, queue).
+   */
+  stepPacked(): Snapshot
+  /** stepTo() through the packed-snapshot fast path. */
+  stepToPacked(tick: number): Snapshot
+  /** renderState() through the packed-snapshot fast path. */
+  renderStatePacked(): Snapshot
+  /**
    * Run a unit's Activate (on) / Deactivate (off) COB entry point and pin
    * the ACTIVATION port — the replay driver's building-activity hook.
    * Presentation only; returns false for a missing or script-less unit.

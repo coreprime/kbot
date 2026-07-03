@@ -712,6 +712,143 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 	return js.ValueOf(out)
 }
 
+// ── Packed snapshot fast path ───────────────────────────────────────────
+//
+// snapshotToPackedJS is the low-churn form of snapshotToJS for replay-scale
+// unit counts: the whole units array (fixed fields + every unit's piece
+// floats) serialises into ONE byte buffer crossed with a single
+// CopyBytesToJS, killing the per-field js.Value churn that dominated the
+// bridge cost (~3+ ms/call at 300 units).  Events / projectiles / resources
+// stay in their js.Value form — they are small and irregular.
+//
+// Layout (little-endian, 4-byte words):
+//   header:  u32 version (=1), u32 tick, u32 unitCount, u32 pieceFloatsTotal
+//   units:   unitCount records × PACKED_UNIT_WORDS (see below)
+//   pieces:  pieceFloatsTotal f32 — every unit's stride-7 piece floats
+//            back to back; each record's pieceOff/pieceCount index into it.
+//
+// Unit record words (u32 unless noted):
+//   0 id · 1 nameIdx (into the names table) · 2 side(i32) ·
+//   3 flags (1 dead · 2 isMoving · 4 hasMove) ·
+//   4 x · 5 y · 6 z · 7 headingRad · 8 headingWire · 9 speed · 10 health ·
+//   11 buildPercent · 12 moveX · 13 moveZ (all f32) ·
+//   14 moveMode · 15 fireMode · 16 selfDestructMs · 17 carriedBy ·
+//   18 pieceOff (f32 index into the pieces region) · 19 pieceCount (floats)
+//
+// The rarely-consumed extras (carrying, building, prodQueue, queue) are NOT
+// packed — a consumer that needs them uses the classic step() form.
+const packedSnapshotVersion = 1
+const packedUnitWords = 20
+
+var packedScratch []byte
+
+func snapshotToPackedJS(s frame.Snapshot) js.Value {
+	// Per-call name table: unit type names are few; nameIdx references it.
+	names := make([]any, 0, 16)
+	nameIdx := map[string]int{}
+	pieceFloats := 0
+	for i := range s.Units {
+		pieceFloats += len(s.Units[i].Pieces) * 7
+	}
+	need := (4 + len(s.Units)*packedUnitWords + pieceFloats) * 4
+	if cap(packedScratch) < need {
+		packedScratch = make([]byte, need)
+	}
+	buf := packedScratch[:need]
+	putU := func(word int, v uint32) { binary.LittleEndian.PutUint32(buf[word*4:], v) }
+	putF := func(word int, v float32) { binary.LittleEndian.PutUint32(buf[word*4:], math.Float32bits(v)) }
+	putU(0, packedSnapshotVersion)
+	putU(1, uint32(s.Tick))
+	putU(2, uint32(len(s.Units)))
+	putU(3, uint32(pieceFloats))
+	pieceBase := 4 + len(s.Units)*packedUnitWords
+	pieceOff := 0
+	for i := range s.Units {
+		u := &s.Units[i]
+		idx, ok := nameIdx[u.Name]
+		if !ok {
+			idx = len(names)
+			nameIdx[u.Name] = idx
+			names = append(names, u.Name)
+		}
+		w := 4 + i*packedUnitWords
+		putU(w+0, u.ID)
+		putU(w+1, uint32(idx))
+		putU(w+2, uint32(int32(u.Side)))
+		var flags uint32
+		if u.Dead {
+			flags |= 1
+		}
+		if u.IsMoving {
+			flags |= 2
+		}
+		if u.HasMove {
+			flags |= 4
+		}
+		putU(w+3, flags)
+		putF(w+4, float32(u.Pos.X.Float()))
+		putF(w+5, float32(u.Pos.Y.Float()))
+		putF(w+6, float32(u.Pos.Z.Float()))
+		putF(w+7, float32(fixed.AngleToRadians(headingToWire(u.Heading))))
+		putF(w+8, float32(headingToWire(u.Heading)))
+		putF(w+9, float32(u.Speed.Float()))
+		putF(w+10, float32(u.Health.Float()))
+		putF(w+11, float32(u.BuildPercent.Float()))
+		putF(w+12, float32(u.MoveTarget.X.Float()))
+		putF(w+13, float32(u.MoveTarget.Z.Float()))
+		putU(w+14, uint32(u.MoveMode))
+		putU(w+15, uint32(u.FireMode))
+		putU(w+16, uint32(u.SelfDestructMs))
+		putU(w+17, u.CarriedBy)
+		putU(w+18, uint32(pieceOff))
+		putU(w+19, uint32(len(u.Pieces)*7))
+		for j := range u.Pieces {
+			p := &u.Pieces[j]
+			pw := pieceBase + pieceOff
+			putF(pw+0, float32(p.Offset.X.Float()))
+			putF(pw+1, float32(p.Offset.Y.Float()))
+			putF(pw+2, float32(p.Offset.Z.Float()))
+			putF(pw+3, float32(p.Rot[0]))
+			putF(pw+4, float32(p.Rot[1]))
+			putF(pw+5, float32(p.Rot[2]))
+			if p.Visible {
+				putF(pw+6, 1)
+			} else {
+				putF(pw+6, 0)
+			}
+			pieceOff += 7
+		}
+	}
+	arr := js.Global().Get("Uint8Array").New(need)
+	js.CopyBytesToJS(arr, buf)
+
+	projos := make([]any, 0, len(s.Projos))
+	for i := range s.Projos {
+		p := &s.Projos[i]
+		projos = append(projos, map[string]any{
+			"id":      int(p.ID),
+			"kind":    p.Kind,
+			"x":       p.Pos.X.Float(),
+			"y":       p.Pos.Y.Float(),
+			"z":       p.Pos.Z.Float(),
+			"heading": int(headingToWire(p.Heading)),
+			"pitch":   int(p.Pitch),
+			"weapon":  p.Weapon,
+		})
+	}
+	events := make([]any, 0, len(s.Events))
+	for i := range s.Events {
+		events = append(events, eventToJS(&s.Events[i]))
+	}
+	return js.ValueOf(map[string]any{
+		"tick":        int(s.Tick),
+		"unitsPacked": arr,
+		"names":       names,
+		"projos":      projos,
+		"events":      events,
+	})
+}
+
 func unitToJS(u *frame.UnitState) map[string]any {
 	pieces := piecesToPackedJS(u.Pieces)
 	out := map[string]any{

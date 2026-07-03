@@ -66,6 +66,9 @@ func main() {
 		"restore":      js.FuncOf(restore),
 		"step":         js.FuncOf(step),
 		"stepTo":       js.FuncOf(stepTo),
+		"stepPacked":        js.FuncOf(stepPacked),
+		"stepToPacked":      js.FuncOf(stepToPacked),
+		"renderStatePacked": js.FuncOf(renderStatePacked),
 		"setUnitState":   js.FuncOf(setUnitState),
 		"playWeaponFire": js.FuncOf(playWeaponFire),
 		"setUnitActivation": js.FuncOf(setUnitActivation),
@@ -468,6 +471,36 @@ func stepTo(_ js.Value, args []js.Value) any {
 		return js.Null()
 	}
 	return snapshotToJS(inst.sess.StepTo(uint64(args[1].Int())))
+}
+
+// stepPacked(handle) / stepToPacked(handle, tick) / renderStatePacked(handle)
+// are the packed-snapshot twins of step / stepTo / renderState: the units
+// array crosses the wasm boundary as ONE byte buffer (see
+// snapshotToPackedJS) instead of a js.Value tree — the replay driver's
+// per-tick fast path.  The JS Session parses the buffer back into the
+// classic snapshot shape with piecesPacked as zero-copy subarray views.
+func stepPacked(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToPackedJS(inst.sess.Step())
+}
+
+func stepToPacked(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToPackedJS(inst.sess.StepTo(uint64(args[1].Int())))
+}
+
+func renderStatePacked(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return js.Null()
+	}
+	return snapshotToPackedJS(inst.world.Snapshot())
 }
 
 // setUnitState(handle, unitId, stateObj) -> bool authoritatively overwrites one
