@@ -1,6 +1,8 @@
 // Wireframe vertex shader.  uPixelOffset jitters in NDC for the
 // "fake-thick" wireframe (drawn multiple passes at different offsets).
 
+#include "../lib/logdepth.glsl"
+
 attribute vec3 aPos;
 uniform mat4 uProj;
 uniform mat4 uView;
@@ -10,4 +12,7 @@ void main() {
   vec4 p = uProj * uView * uWorld * vec4(aPos, 1.0);
   p.xy += uPixelOffset * p.w;
   gl_Position = p;
+#ifdef LOGDEPTH_VERTEX
+  logDepthVertex();
+#endif
 }

@@ -8,6 +8,9 @@
 // composite over the ground / sky cleanly.
 
 precision mediump float;
+
+#include "../lib/logdepth.glsl"
+
 varying vec3 vColor;
 
 void main() {
@@ -19,4 +22,7 @@ void main() {
   // a one-pixel anti-aliased edge at typical impostor sizes.
   float alpha = smoothstep(0.5, 0.42, r);
   gl_FragColor = vec4(vColor, alpha);
+#ifdef LOGDEPTH_FRAGMENT
+  logDepthFragment();
+#endif
 }

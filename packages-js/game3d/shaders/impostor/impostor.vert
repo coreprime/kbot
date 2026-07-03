@@ -13,6 +13,8 @@
 // gl_PointCoord, so the result reads as a coloured pellet rather
 // than a hard square the way GL_POINTS would give us by default.
 
+#include "../lib/logdepth.glsl"
+
 attribute vec3 aPos;
 attribute vec3 aColor;
 attribute float aSize;
@@ -26,4 +28,7 @@ void main() {
   gl_Position = uProj * uView * vec4(aPos, 1.0);
   gl_PointSize = clamp(aSize, 1.0, 32.0);
   vColor = aColor;
+#ifdef LOGDEPTH_VERTEX
+  logDepthVertex();
+#endif
 }

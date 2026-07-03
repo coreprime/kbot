@@ -1,0 +1,41 @@
+// logdepth.glsl — shared logarithmic-depth helpers.
+//
+// A perspective projection with a distant far plane wastes almost all of
+// its depth precision on the near band (NDC z is ~1/w), so far geometry —
+// wind turbines seen across a big map, terrain seams, decals lying on the
+// terrain — z-fights and flickers. Logarithmic depth remaps the written
+// depth to log2(w), spreading precision evenly across the whole range and
+// removing the distance z-fighting without moving the near plane in.
+//
+// The whole block is gated on LOGDEPTH, which the renderer #defines (and
+// enables GL_EXT_frag_depth for) only when the extension is present. When
+// it's absent the shaders compile unchanged and rely on the renderer's
+// raised-near-plane fallback instead.
+//
+// Usage:
+//   vertex:   after gl_Position is set, call logDepthVertex();
+//   fragment: as the last statement, call logDepthFragment();
+//   both share uLogDepthFC (= 2.0 / log2(far + 1.0)), set per frame.
+
+#ifdef LOGDEPTH
+uniform highp float uLogDepthFC;   // 2.0 / log2(far + 1.0)
+varying highp float vLogZ;         // gl_Position.w + 1.0, interpolated
+#endif
+
+#ifdef LOGDEPTH_VERTEX
+void logDepthVertex() {
+  // Carry w (+1 to keep the log argument >= 1) to the fragment stage.
+  // gl_Position.z is left at its perspective value; the fragment shader
+  // overrides gl_FragDepth so the interpolated, perspective-correct log of
+  // w drives the depth test.
+  vLogZ = 1.0 + gl_Position.w;
+}
+#endif
+
+#ifdef LOGDEPTH_FRAGMENT
+void logDepthFragment() {
+  // half * log2(vLogZ) maps [near..far] onto [0..1] monotonically. clamp
+  // guards against a w that dips just below 1 for geometry at the near plane.
+  gl_FragDepthEXT = log2(max(1e-6, vLogZ)) * (0.5 * uLogDepthFC);
+}
+#endif

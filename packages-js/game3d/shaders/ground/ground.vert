@@ -15,6 +15,7 @@ precision highp float;
 precision highp int;
 
 #include "../lib/sea-waves.glsl"
+#include "../lib/logdepth.glsl"
 
 attribute vec3 aPos;
 uniform mat4 uProj;
@@ -189,4 +190,7 @@ void main() {
   vLightSpacePos = uLightSpace * vec4(worldPos, 1.0);
   vLightSpacePos2 = uLightSpace2 * vec4(worldPos, 1.0);
   gl_Position = uProj * uView * vec4(worldPos, 1.0);
+#ifdef LOGDEPTH_VERTEX
+  logDepthVertex();
+#endif
 }

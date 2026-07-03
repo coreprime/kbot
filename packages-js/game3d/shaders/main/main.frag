@@ -16,6 +16,8 @@
 precision highp float;
 precision highp int;
 
+#include "../lib/logdepth.glsl"
+
 // Dynamic pulse-light slot count — the hard ceiling on simultaneous dynamic
 // lights.  Must stay in lockstep with MAX_PULSE_LIGHTS in
 // engine/scene-lights.js (the controller sizes its uniform-array uploads to
@@ -264,6 +266,9 @@ void main() {
   // texture issues with no shading bias.
   if (uFlatLighting > 0.5) {
     gl_FragColor = vec4(base.rgb, 1.0);
+#ifdef LOGDEPTH_FRAGMENT
+    logDepthFragment();
+#endif
     return;
   }
 
@@ -663,4 +668,7 @@ void main() {
     col = mix(col, uBuildFxColor * 1.6, latheBand * 0.75);
   }
   gl_FragColor = vec4(col, uOutputAlpha);
+#ifdef LOGDEPTH_FRAGMENT
+  logDepthFragment();
+#endif
 }

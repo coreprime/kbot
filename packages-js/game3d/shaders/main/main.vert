@@ -11,6 +11,7 @@
 //     the fragment shader for the ambient term.
 
 #include "../lib/sea-waves.glsl"
+#include "../lib/logdepth.glsl"
 
 attribute vec3 aPos;
 attribute vec3 aNormal;
@@ -55,4 +56,7 @@ void main() {
   vLightSpacePos2 = uLightSpace2 * worldPos;
   gl_Position = uProj * uView * worldPos;
   gl_PointSize = 4.0;
+#ifdef LOGDEPTH_VERTEX
+  logDepthVertex();
+#endif
 }
