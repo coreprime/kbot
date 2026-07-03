@@ -88,6 +88,27 @@ export function getAssetProvider(): AssetProvider | null
 export function requireAssetProvider(): AssetProvider
 export function toTexImageSource(result: Blob | TexSource): Promise<TexSource>
 
+/**
+ * AssetProvider over a static pre-extracted asset pack (`kbot pack`
+ * output) served from a plain HTTP base URL — no studio server.
+ */
+export class HttpPackProvider implements AssetProvider {
+  constructor(baseUrl: string)
+  /** Absolute URL for a pack-relative path. */
+  url(rel: string): string
+  palette(): Promise<PaletteTriples>
+  model(name: string, opts?: { enhanceMesh?: boolean }): Promise<ModelGeometry>
+  texture(name: string): Promise<TexSource>
+  script(name: string, opts?: { decompile?: boolean }): Promise<unknown | null>
+  groundTile(tileset: string): Promise<TexSource>
+  soundUrl(stem: string): string
+  cursorUrl(name: string): string
+  weaponBitmap(weaponName: string): Promise<WeaponBitmapMeta | null>
+  manifest(): Promise<unknown>
+  unitDB(): Promise<unknown>
+  map(name: string): Promise<unknown>
+}
+
 // ── createWorld ────────────────────────────────────────────────────────
 
 export interface UnitPlacement {

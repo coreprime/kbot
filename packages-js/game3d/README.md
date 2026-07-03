@@ -64,8 +64,16 @@ Implementations:
 
 - **StudioAssetProvider** — ships with the KBot Studio web client and wraps
   the studio server's asset API; the studio sandbox runs on it.
-- **HttpPackProvider** *(planned)* — static pre-extracted asset packs over
-  plain HTTP; no server logic needed.
+- **HttpPackProvider** — exported from this package: serves a static
+  pre-extracted asset pack (`kbot pack` output) from a plain HTTP base URL;
+  no server logic needed.
+
+  ```js
+  import { createWorld, HttpPackProvider } from '@kbot/game3d'
+  const world = await createWorld(canvas, {
+    assets: new HttpPackProvider('https://cdn.example.com/packs/ta-31c'),
+  })
+  ```
 - **HpiProvider** *(planned)* — reads original HPI/UFO archives directly in
   the browser.
 

@@ -81,8 +81,9 @@
  * Known implementations:
  *   - StudioAssetProvider (KBot Studio web client) — wraps the studio
  *     server's /api/studio/* asset endpoints.
- *   - HttpPackProvider (planned) — static pre-extracted asset packs over
- *     plain HTTP; the Boneyards replayer's provider.
+ *   - HttpPackProvider (http-pack-provider.js, exported from the package
+ *     root) — static pre-extracted asset packs (`kbot pack` output) over
+ *     plain HTTP; the replayer's provider.
  *   - HpiProvider (planned) — reads HPI/UFO archives directly in the
  *     browser.
  */

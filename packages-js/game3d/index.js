@@ -9,6 +9,7 @@
 
 export { createWorld } from './create-world.js'
 export { setAssetProvider, getAssetProvider, requireAssetProvider, toTexImageSource } from './assets.js'
+export { HttpPackProvider } from './http-pack-provider.js'
 
 // Core renderer stack
 export { Mat4 } from './mat4.js'
