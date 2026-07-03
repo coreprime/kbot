@@ -62,6 +62,7 @@ import {
   damageSmokeIntervalMs,
   debrisBurst,
   stepDebrisRecord,
+  latheConeSpray,
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
 import { ExplosionManager } from './explosion-fx.js'
@@ -773,30 +774,37 @@ export async function createWorld(canvas, {
         b.accMs -= LATHE_EMIT_INTERVAL_MS
         b.count = (b.count || 0) + 1
         const reclaim = b.kind === 'reclaim'
-        const src = reclaim ? to : from
-        const dir = reclaim ? -1 : 1
-        // Slight per-particle scatter off the beam axis (deterministic rng).
-        const jx = (b.rng() * 2 - 1) * 1.6
-        const jy = (b.rng() * 2 - 1) * 1.6
-        const jz = (b.rng() * 2 - 1) * 1.6
-        worldBinding.particles.emit(SFX_NANO_PARTICLES, [src[0] + jx, src[1] + jy, src[2] + jz], {
-          velocity: [
-            dir * (dx / dist) * LATHE_PARTICLE_SPEED,
-            dir * (dy / dist) * LATHE_PARTICLE_SPEED,
-            dir * (dz / dist) * LATHE_PARTICLE_SPEED,
-          ],
-          lifeMs,
-          color: b.color,
-          size: 2.2,
-          noFade: true,
-        })
-        // Work-end sparkle every few drips.
-        if ((b.count % 4) === 0) {
-          const work = reclaim ? to : to
-          worldBinding.particles.emit(SFX_SPARK, [work[0] + jx, work[1] + jy, work[2] + jz], {
-            color: [b.color[0], b.color[1], b.color[2], 1],
-            lifeMs: 180,
+        if (!reclaim) {
+          // BUILD: a dense translucent CONE of fine bright-green motes from
+          // the nano nozzle (from) converging on the build target (to).
+          // Deterministic — seeded off the beam's own rng (fx-clock cadence).
+          latheConeSpray(worldBinding.particles, {
+            from, to, rng: b.rng, color: b.color,
           })
+        } else {
+          // RECLAIM: reverse stream — nano motes flow FROM the work end back
+          // into the builder along the span, with slight axial scatter.
+          const jx = (b.rng() * 2 - 1) * 1.6
+          const jy = (b.rng() * 2 - 1) * 1.6
+          const jz = (b.rng() * 2 - 1) * 1.6
+          worldBinding.particles.emit(SFX_NANO_PARTICLES, [to[0] + jx, to[1] + jy, to[2] + jz], {
+            velocity: [
+              -(dx / dist) * LATHE_PARTICLE_SPEED,
+              -(dy / dist) * LATHE_PARTICLE_SPEED,
+              -(dz / dist) * LATHE_PARTICLE_SPEED,
+            ],
+            lifeMs,
+            color: b.color,
+            size: 2.2,
+            noFade: true,
+          })
+          // Work-end sparkle every few drips.
+          if ((b.count % 4) === 0) {
+            worldBinding.particles.emit(SFX_SPARK, [to[0] + jx, to[1] + jy, to[2] + jz], {
+              color: [b.color[0], b.color[1], b.color[2], 1],
+              lifeMs: 180,
+            })
+          }
         }
       }
       if (b.kind === 'reclaim' && b.to && b.to.corpseId != null) {

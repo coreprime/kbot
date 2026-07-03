@@ -21,7 +21,7 @@ import {
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
 } from './weapon-driver.js'
-import { SFX_SMOKE_GREY, SFX_SPARK, SFX_SUB_BUBBLES } from './cob-particles.js'
+import { SFX_SMOKE_GREY, SFX_SPARK, SFX_SUB_BUBBLES, SFX_NANO_PARTICLES } from './cob-particles.js'
 import {
   WEAPON_RENDERTYPE_DGUN,
   WEAPON_RENDERTYPE_LASER,
@@ -439,6 +439,146 @@ export function damageSmokeIntervalMs(hp01) {
   if (hp01 == null || !(hp01 < 2 / 3)) return null
   const t = Math.max(0, Math.min(1, hp01 / (2 / 3)))   // 1 at threshold → 0 dead
   return 260 + (1400 - 260) * t
+}
+
+// ── Nanolathe construction spray ──────────────────────────────────────
+
+// The build nanolathe is a dense CONE of tiny bright-green particles
+// streaming from the builder's nano piece (`from`) toward the build target
+// (`to`) and converging on it — a translucent fan of fine motes, not a
+// sparse train of discrete blobs.  These tunables shape one emit tick:
+//
+//   LATHE_CONE_PARTICLES  — motes sprayed per active build tick (per beam).
+//   LATHE_CONE_HALF_ANGLE — cone half-angle at the nozzle (radians ≈ 14°).
+//   LATHE_CONE_SPEED      — nominal mote speed toward the target (WU/s).
+//   LATHE_CONE_SPEED_VAR  — ± fractional speed variance per mote.
+//   LATHE_CONE_SIZE_*     — mote size range (small, fine particles).
+//   LATHE_CONE_TARGET_JITTER — radial spread at the target as a fraction of
+//     span length; the cone narrows toward `to` so motes converge on it.
+//   LATHE_CONE_LIFE_SLACK — extra fraction of travel time the mote lives
+//     past arrival, so it decelerates/lingers and fades ON the target.
+export const LATHE_CONE_PARTICLES = 7
+export const LATHE_CONE_HALF_ANGLE = 0.24          // ~14° half-angle
+export const LATHE_CONE_SPEED = 150
+export const LATHE_CONE_SPEED_VAR = 0.35
+export const LATHE_CONE_SIZE_MIN = 1.1
+export const LATHE_CONE_SIZE_MAX = 2.3
+export const LATHE_CONE_TARGET_JITTER = 0.06
+export const LATHE_CONE_LIFE_SLACK = 0.35
+export const LATHE_CONE_LIFE_MIN_MS = 120
+export const LATHE_CONE_LIFE_MAX_MS = 520
+
+// _orthoBasis returns two unit vectors perpendicular to `axis` (assumed
+// unit-length) forming a right-handed basis {u, v, axis}.  Used to fan the
+// cone motes off the beam axis.
+function _orthoBasis(ax, ay, az) {
+  // Pick the world axis least aligned with `axis` for a stable cross.
+  let hx = 0, hy = 0, hz = 0
+  if (Math.abs(ax) <= Math.abs(ay) && Math.abs(ax) <= Math.abs(az)) hx = 1
+  else if (Math.abs(ay) <= Math.abs(az)) hy = 1
+  else hz = 1
+  // u = normalize(h × axis)
+  let ux = hy * az - hz * ay
+  let uy = hz * ax - hx * az
+  let uz = hx * ay - hy * ax
+  const ul = Math.hypot(ux, uy, uz) || 1
+  ux /= ul; uy /= ul; uz /= ul
+  // v = axis × u  (already unit-length)
+  const vx = ay * uz - az * uy
+  const vy = az * ux - ax * uz
+  const vz = ax * uy - ay * ux
+  return [ux, uy, uz, vx, vy, vz]
+}
+
+// latheConeSpray emits ONE build-tick's cone of nano motes into a particle
+// pool.  Pure + deterministic: every random draw comes from `rng` (a seeded
+// mulberry32-style () → [0,1) generator), so a replay re-run under the same
+// fx clock sprays identically — no Date.now/Math.random.
+//
+// The cone originates at `from` (the nano nozzle) and each mote is aimed at
+// a jittered point NEAR `to`: the aim jitter shrinks the fan toward the
+// target, so the stream reads as a translucent green cone converging on the
+// build.  Motes are small, additive-bright green, short-lived, and FADE
+// (no noFade) so the spray is soft rather than a train of hard dots.
+//
+// Returns a descriptor for tests/proofs:
+//   { emitted, axis:[x,y,z], dist, maxAngleRad, converges:boolean }
+// where maxAngleRad is the widest mote deflection off the axis (bounded by
+// the cone half-angle) and converges is true when every mote's aim point
+// lies within the target-jitter radius of `to`.
+export function latheConeSpray(pool, {
+  from,
+  to,
+  rng = Math.random,
+  count = LATHE_CONE_PARTICLES,
+  color = [0.45, 1.9, 0.85, 0.9],
+  halfAngle = LATHE_CONE_HALF_ANGLE,
+  speed = LATHE_CONE_SPEED,
+  speedVar = LATHE_CONE_SPEED_VAR,
+  sizeMin = LATHE_CONE_SIZE_MIN,
+  sizeMax = LATHE_CONE_SIZE_MAX,
+  targetJitter = LATHE_CONE_TARGET_JITTER,
+  lifeSlack = LATHE_CONE_LIFE_SLACK,
+} = {}) {
+  if (!pool || !Array.isArray(from) || !Array.isArray(to)) {
+    return { emitted: 0, axis: [0, 0, 0], dist: 0, maxAngleRad: 0, converges: true }
+  }
+  const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
+  const dist = Math.hypot(dx, dy, dz) || 1
+  const ax = dx / dist, ay = dy / dist, az = dz / dist
+  const [ux, uy, uz, vx, vy, vz] = _orthoBasis(ax, ay, az)
+  const jitterR = dist * targetJitter
+  let maxAngle = 0
+  let converges = true
+  let emitted = 0
+  for (let i = 0; i < count; i++) {
+    // Aim point: `to` displaced by a disc within jitterR (sqrt for an even
+    // areal spread), so the cone narrows onto the target as it converges.
+    const aimAng = rng() * Math.PI * 2
+    const aimRad = Math.sqrt(rng()) * jitterR
+    const ac = Math.cos(aimAng) * aimRad, as = Math.sin(aimAng) * aimRad
+    const aimX = to[0] + ux * ac + vx * as
+    const aimY = to[1] + uy * ac + vy * as
+    const aimZ = to[2] + uz * ac + vz * as
+    if (aimRad > jitterR + 1e-6) converges = false
+    // Direction from nozzle to the aim point (this is the true travel
+    // direction; the cone half-angle bounds how far off-axis it can point).
+    let mdx = aimX - from[0], mdy = aimY - from[1], mdz = aimZ - from[2]
+    const mlen = Math.hypot(mdx, mdy, mdz) || 1
+    mdx /= mlen; mdy /= mlen; mdz /= mlen
+    // Deflection off the axis (for the proof + a soft cone clamp).
+    const dot = Math.max(-1, Math.min(1, mdx * ax + mdy * ay + mdz * az))
+    let ang = Math.acos(dot)
+    if (ang > halfAngle && ang > 1e-6) {
+      // Clamp back into the cone: slerp the direction toward the axis.
+      const k = halfAngle / ang
+      let nx = ax + (mdx - ax) * k
+      let ny = ay + (mdy - ay) * k
+      let nz = az + (mdz - az) * k
+      const nl = Math.hypot(nx, ny, nz) || 1
+      mdx = nx / nl; mdy = ny / nl; mdz = nz / nl
+      ang = halfAngle
+    }
+    if (ang > maxAngle) maxAngle = ang
+    const sp = speed * (1 + (rng() * 2 - 1) * speedVar)
+    // Life: reach the target then linger a touch and fade there.
+    const travelMs = (dist / Math.max(1, sp)) * 1000
+    const life = Math.max(
+      LATHE_CONE_LIFE_MIN_MS,
+      Math.min(LATHE_CONE_LIFE_MAX_MS, travelMs * (1 + lifeSlack)),
+    )
+    const size = sizeMin + rng() * (sizeMax - sizeMin)
+    pool.emit(SFX_NANO_PARTICLES, [from[0], from[1], from[2]], {
+      velocity: [mdx * sp, mdy * sp, mdz * sp],
+      lifeMs: life,
+      color,
+      size,
+      // Fade over life (no noFade) so the cone is a soft translucent haze
+      // of motes, not hard persistent dots.
+    })
+    emitted++
+  }
+  return { emitted, axis: [ax, ay, az], dist, maxAngleRad: maxAngle, converges }
 }
 
 // debrisBurst builds per-piece flight for a dying model's piece tree: every
