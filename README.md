@@ -57,6 +57,7 @@ To develop/code against the project:
   - [`kbot tnt` — TNT Maps](#kbot-tnt--tnt-maps)
   - [`kbot zrb` — Smacker Video](#kbot-zrb--smacker-video)
   - [`kbot mount` — Asset Explorer](#kbot-mount--asset-explorer)
+  - [`kbot pack` — Static Asset Packs](#kbot-pack--static-asset-packs)
   - [`kbot studio` — KBot Studio (Web Workbench)](#kbot-studio--kbot-studio-web-workbench)
   - [`kbot document` — Reference Catalogue Generator](#kbot-document--reference-catalogue-generator)
   - [`kbot mcp` — Model Context Protocol Server](#kbot-mcp--model-context-protocol-server)
@@ -641,6 +642,43 @@ previews:
 - View TNT/SCT maps with minimap/heightmap/tilemap/buildmap/voidmap renders
 - Inspect COB disassembly/decompilation, TDF/FBI/OTA structure, and raw hex
 - Background cache warming with live websocket progress
+
+---
+
+### `kbot pack` — Static Asset Packs
+
+Extract a game install into a static asset pack: the same JSON/PNG payloads
+KBot Studio serves on demand, written once as plain files. Serve the output
+directory over any static HTTP host and point `@kbot/game3d`'s
+`HttpPackProvider` at its base URL — the renderer runs with **no studio
+server** (the seam a replayer or any embedding site consumes).
+
+```bash
+# Pack every unit in a TA install
+kbot pack ~/games/totala ./ta-pack
+
+# A minimal pack for two units plus one map
+kbot pack ~/games/totala ./ta-pack --units armcom,armpw --maps "greenhaven"
+
+# TA:Kingdoms
+kbot pack ~/games/kingdoms ./tak-pack --game tak
+```
+
+A pack contains `manifest.json` (game id, sides, unit list, content hash),
+`unitdb.json` (per-unit movement class + motion domain, build/HP/weapon
+stats), `palette.json`, and per-asset files under `models/`, `textures/`,
+`cob/`, `sounds/`, `weaponbitmaps/`, `cursors/`, `groundtiles/` and `maps/`.
+Output is deterministic — the same install always produces a byte-identical
+pack, and the manifest's `contentHash` is the pack's identity. See
+`kbot pack --help` for the full layout.
+
+```js
+import { createWorld, HttpPackProvider } from '@kbot/game3d'
+const world = await createWorld(canvas, {
+  assets: new HttpPackProvider('https://cdn.example.com/packs/ta-31c'),
+})
+await world.addUnit('armcom', { x: 0, z: 0, side: 1 })
+```
 
 ---
 
