@@ -63,15 +63,59 @@ game's pose conventions, matched against the original engine:
   `applyPackedPieces` — COB table order is not the model hierarchy order
   (a Samson lists its launcher flares before its body).
 
-Weapon visuals: `world.weaponEffect({ type, from, to, color, durationMs })`
-draws presentation-only beams (`'beam'`/`'laser'`) and ballistic tracers
-(`'tracer'`) in the scene pass; pass `weapon: '<id>'` to resolve type, color
-and timing from the pack's `weapons.json` (`AssetProvider.weaponDefs()`).
-
 Maps: `loadMapTerrain(provider, name)` composites a packed map's tile atlas
 into the full ground texture and returns the arguments
-`renderer.setMapTerrain()` takes, plus sea level, start positions and the
-authentic minimap URL.
+`renderer.setMapTerrain()` (or `world.setTerrain()`) takes, plus sea level,
+start positions and the authentic minimap URL.
+
+## Replay presentation
+
+Everything a state-driven consumer (a replay renderer) needs to make a
+world read like the game, all presentation-only — no sim state, no hashes:
+
+- **Weapon effects** — `world.weaponEffect({ weapon: '<id>', from, to })`
+  resolves the id against the pack's `weapons.json` (format v4) and draws
+  the weapon's authentic visual: palette-tinted laser pulse beams, the
+  D-gun fireball with its flame trail and scene-washing light, the packed
+  projectile 3DO flying a straight or ballistic trajectory with its
+  TDF-cadenced smoke trail, fx.gaf bitmap bolts, or AoE-scaled particle
+  tracers — plus muzzle flash, start-smoke and an AoE-sized impact burst.
+  Explicit `color`/`durationMs`/`velocity` override the def; `type:
+  'beam'|'tracer'` without a weapon keeps the raw line-effect path.
+- **Death** — `world.unitDeath(id, { severity, corpse, heapCorpse })`
+  follows TA's corpsetype ladder: a clean kill (severity < 50) swaps in the
+  wreck 3DO (pack unitdb `meta.corpseObject`), sunk slightly and persistent
+  until `removeCorpse(id)`/`clearCorpses()`; heavier kills throw the unit's
+  pieces as tumbling debris, leaving the damaged heap or nothing.  The
+  applyState form: a live unit re-sent with `dead: true` (+
+  `deathSeverity`/`corpse`/`heapCorpse`) triggers the same path once.
+- **Grounding + slope tilt** — applyState/addUnit `grounded: true` clamps a
+  unit's render Y to the battlefield surface (`world.terrainHeightAt`) and
+  pitches/rolls it to the terrain normal.  Recorded wire Y is TA world
+  units where the surface sits at rawHeight × 1.0; the renderer draws
+  terrain flattened by `heightScale` (0.61), so un-clamped Y must be scaled
+  by the same factor — `grounded` sidesteps the conversion entirely.
+- **Hit rock** — `world.unitImpulse(id, { dirX, dirZ, mag })` shudders the
+  unit on a damped spring (call it on damage events).
+- **Status** — per-unit `hp01` (0..1) draws a green→red health bar under
+  the unit while damaged and drives TA-style damage smoke; `rank` (0..5)
+  draws gold veteran chevrons.  Both render in the scene pass, so headless
+  captures include them.
+- **COB smoke** — forward engine render events through
+  `applyState({ events })` / `world.sfxEvent(ev)`: `emitSfx` plumes
+  (SmokeUnit threads) and `explode` flashes render at their anchors.
+- **Smooth frames** — `lerpPackedPieces(prev, next, alpha)` blends engine
+  piece buffers with shortest-arc rotations; applyState renders
+  externally-lerped positions/headings as-is.
+- **Quality** — `createWorld({ quality: 'cinematic' })` (or
+  `world.setQuality`) adds bloom, the ACES grade and FXAA over the
+  always-on specular/metal hints, blinking running lights, god beams and
+  dynamic weapon lights.  Explicitly-stepped worlds drive the renderer's
+  effect clock from `step(dtMs)`, keeping every animated effect a pure
+  function of the fed timeline.
+- **Team colours** — `TA_TEAM_SIDES` (exported) is the default side →
+  colour table; pass a unit `side` (0..7) through applyState and the
+  hue-shift recolour applies.
 
 ## The AssetProvider seam
 
