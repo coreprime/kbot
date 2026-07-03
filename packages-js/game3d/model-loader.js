@@ -507,6 +507,15 @@ export class ModelLoader {
         group.first = (acc.floats.length / FLOATS_PER_VERTEX) | 0
         for (let i = 0; i < bucket.interleaved.length; i++) acc.floats.push(bucket.interleaved[i])
         group.vertexCount = bucket.interleaved.length / FLOATS_PER_VERTEX
+        // Keep a CPU copy of triangle groups' interleaved vertices — the
+        // death-debris shatter (debris-fragments.js) reads them back to
+        // build recentred shard meshes (the VBO can't be read from the GPU
+        // cheaply).  Only TRIANGLES groups carry it; lines/points don't
+        // shatter and would waste memory.  Shared by reference across the
+        // model's instance clones, so the cost is once per canonical model.
+        if (mode === gl.TRIANGLES && bucket.interleaved.length) {
+          group.tris = new Float32Array(bucket.interleaved)
+        }
         acc.groups.push(group)
         if (group.isDecal) decal.push(group)
         else opaque.push(group)

@@ -581,18 +581,32 @@ export function latheConeSpray(pool, {
   return { emitted, axis: [ax, ay, az], dist, maxAngleRad: maxAngle, converges }
 }
 
-// debrisBurst builds per-piece flight for a dying model's piece tree: every
-// piece gets an outward + upward velocity and a tumble.  Velocities live in
-// the model's LOCAL frame (the frame piece.move animates in), which matches
-// how TA's COB EXPLODE throws pieces; the local frame's Y is world up (the
-// debris base transform carries no pitch/roll), so gravity and terrain
-// bounces integrate exactly in that frame.
+// debrisBurst builds the flying-fragment set for a dying model.  It works on
+// the model's `flat` list — either the real COB piece tree (legacy / headless
+// tests) or, in the live path, the many small SHARD fragments produced by
+// debris-fragments.js (each shard is a `flat` entry carrying its own
+// move/rotate channels plus a `centroid`).  Fine fragments are what make a
+// death read as an explosion rather than one big chunk spiralling: dozens of
+// small pieces burst outward + up, each tumbling on its own axis.
+//
+// Velocities live in the model's LOCAL frame (the frame move animates in),
+// which matches how TA's COB EXPLODE throws pieces; the local frame's Y is
+// world up (the debris base transform carries no pitch/roll), so gravity and
+// terrain bounces integrate exactly in that frame.
+//
+// Spread: each fragment flies a WIDE upward-biased cone.  When the fragment
+// carries a `centroid` (shard model) its outward direction is seeded from the
+// centroid's bearing off the model centre, so the shatter genuinely bursts
+// away from the core in every direction rather than scattering on one axis;
+// legacy piece entries (no centroid) get a random bearing.  Speeds and the
+// three-axis spin rates are all independently randomised per fragment so the
+// shower doesn't corkscrew in unison.
 //
 // Directional bias: when the killing impact came from somewhere, pass
 // impactDir ([x, z], WORLD frame, pointing from the explosion source toward
 // the victim) + impactMag (≈1 light round … 4 heavy shell) and headingRad
 // (the victim's yaw, to rotate the push into the local frame): every
-// piece's launch velocity gains a push AWAY from the source blended over
+// fragment's launch velocity gains a push AWAY from the source blended over
 // the radial burst, so a unit killed from the west visibly sheds eastward.
 //
 // `rng` defaults to Math.random — deterministic drivers pass a seeded one
@@ -614,16 +628,38 @@ export function debrisBurst(model, {
     pushZ = (sn * wx + c * wz) * mag
   }
   for (const piece of model.flat) {
-    const ang = rng() * Math.PI * 2
-    const mag = speed * (0.4 + rng() * 0.9)
+    // Outward bearing.  A shard fragment bursts along its offset from the
+    // model centre (centroid direction on the XZ plane); a legacy piece
+    // picks a random bearing.  A small rng wobble on the shard case keeps
+    // co-located shards from launching on identical vectors.
+    let dirX, dirZ
+    const cen = piece.centroid
+    if (Array.isArray(cen) && (cen[0] || cen[2])) {
+      const wob = (rng() - 0.5) * 1.1
+      const base = Math.atan2(cen[2], cen[0]) + wob
+      dirX = Math.cos(base)
+      dirZ = Math.sin(base)
+    } else {
+      const ang = rng() * Math.PI * 2
+      dirX = Math.cos(ang)
+      dirZ = Math.sin(ang)
+    }
+    // Wide speed spread so fragments separate into a cloud rather than a
+    // shell of equal-radius pieces.
+    const mag = speed * (0.35 + rng() * 1.25)
+    // Upward bias, but a full solid-angle spread: some shards rocket up,
+    // some skim outward low — vy ranges from a shallow skim to a high loft.
+    const up = lift * (0.25 + rng() * 1.15)
     pieces.push({
       piece,
-      vx: Math.cos(ang) * mag + pushX * (0.6 + rng() * 0.8),
-      vy: lift * (0.5 + rng() * 0.8),
-      vz: Math.sin(ang) * mag + pushZ * (0.6 + rng() * 0.8),
-      sx: (rng() * 2 - 1) * 6,
-      sy: (rng() * 2 - 1) * 6,
-      sz: (rng() * 2 - 1) * 6,
+      vx: dirX * mag + pushX * (0.6 + rng() * 0.8),
+      vy: up,
+      vz: dirZ * mag + pushZ * (0.6 + rng() * 0.8),
+      // Independent, wide-range angular velocities per axis (rad/s): each
+      // fragment tumbles on its own, so the shower never spins in lockstep.
+      sx: (rng() * 2 - 1) * 12,
+      sy: (rng() * 2 - 1) * 12,
+      sz: (rng() * 2 - 1) * 12,
       bounces: 0,
       settled: false,
     })
@@ -654,6 +690,10 @@ export const DEBRIS_RESTITUTION = 0.42
 export const DEBRIS_FRICTION = 0.62
 export const DEBRIS_MAX_BOUNCES = 3
 
+// Shared zero-origin fallback for legacy debris pieces that carry no static
+// origin (headless test stubs / whole-model-clone pieces animated in place).
+const ZERO3 = [0, 0, 0]
+
 // stepDebrisRecord integrates one death's pieces in WORLD terms: parabolic
 // flight under gravity, spin, and terrain bounces.  rec is the createWorld
 // debris record ({ x, y, z, headingRad, pieces }); env.heightAt samples the
@@ -675,15 +715,18 @@ export function stepDebrisRecord(rec, dtMs, { heightAt = null, gravity = 120 } =
     d.piece.rotate[0] += d.sx * dt
     d.piece.rotate[1] += d.sy * dt
     d.piece.rotate[2] += d.sz * dt
-    // World position of the piece's flight offset (local XZ rotated by the
-    // record's yaw; local Y IS world up on a debris record).
-    const lx = d.piece.move[0], lz = d.piece.move[2]
+    // World position of the fragment's flight offset.  A shard's rest
+    // position is its static origin (the centroid the geometry is recentred
+    // about); `move` is the flight displacement on top of it.  Local XZ is
+    // rotated by the record's yaw; local Y IS world up on a debris record.
+    const org = d.piece.origin || ZERO3
+    const lx = org[0] + d.piece.move[0], lz = org[2] + d.piece.move[2]
     const wx = rec.x + (c * lx + sn * lz)
     const wz = rec.z + (-sn * lx + c * lz)
     const groundY = heightAt ? heightAt(wx, wz) : rec.y
-    const worldY = rec.y + d.piece.move[1]
+    const worldY = rec.y + org[1] + d.piece.move[1]
     if (worldY <= groundY && d.vy < 0) {
-      d.piece.move[1] = groundY - rec.y
+      d.piece.move[1] = groundY - rec.y - org[1]
       d.bounces += 1
       if (d.bounces > DEBRIS_MAX_BOUNCES || Math.abs(d.vy) < 8) {
         d.vx = 0; d.vy = 0; d.vz = 0
