@@ -65,6 +65,9 @@ import {
   latheConeSpray,
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
+import { fragmentGeometry, targetFragmentCount } from './debris-fragments.js'
+import { Piece } from './piece.js'
+import { Model } from './model.js'
 import { planetEnvironment } from './map-terrain.js'
 import { ExplosionManager } from './explosion-fx.js'
 import { PULSE_LIGHT_ENERGY_BUDGET } from './performance.js'
@@ -89,10 +92,14 @@ const TILT_SMOOTH_SEC = 0.15
 // pieces out where they lie.
 const DEBRIS_LIFE_MS = 2600
 const DEBRIS_FADE_MS = 420
-// Global concurrent debris-piece budget: when a mass death pushes past it,
-// the OLDEST records get their remaining life clamped to the fade window —
-// they fade first, keeping the per-frame piece integration bounded.
-const DEBRIS_MAX_PIECES = 320
+// Global concurrent debris-fragment budget: when a mass death pushes past
+// it, the OLDEST records get their remaining life clamped to the fade window
+// — they fade first, keeping the per-frame fragment integration bounded.
+// Deaths now shatter into many small SHARDS (debris-fragments.js — up to
+// FRAG_MAX per death) rather than one record per COB piece, so this is
+// raised accordingly; each shard is a tiny slice draw + one parabola step,
+// so a few dozen concurrent deaths still integrate cheaply.
+const DEBRIS_MAX_PIECES = 1200
 
 // Air-unit presentation: hover-bob amplitude/frequency, the speed at which
 // contrails start, and the spiral-crash tuning.
@@ -555,7 +562,11 @@ export async function createWorld(canvas, {
       let w = 0
       for (const d of debris) {
         d.ageMs += dtMs
-        if (d.ageMs >= d.lifeMs) continue
+        if (d.ageMs >= d.lifeMs) {
+          // Record gone — free its shard VBO (each death owns one).
+          if (d.shardVbo) { gl.deleteBuffer(d.shardVbo); d.shardVbo = null }
+          continue
+        }
         stepDebrisRecord(d, dtMs, { heightAt: terrainHeightAt })
         debris[w++] = d
       }
@@ -823,20 +834,78 @@ export async function createWorld(canvas, {
     }
   }
 
-  // _spawnDebris pushes one flying-polygon debris record for a model at a
-  // pose.  Seeded from the unit's identity + cell so a replay re-run
-  // scatters identically; impactDir/impactMag bias the pieces away from
-  // the killing blow (world-fx debrisBurst).
-  const _spawnDebris = ({ id, model, teamColor }, pose, { impactDir = null, impactMag = 0 } = {}) => {
+  // _buildShardModel shatters `sourceModel` into MANY small recentred shard
+  // meshes (debris-fragments.js) and wraps them in a lightweight synthetic
+  // Model the renderer draws exactly like a unit: each shard is a leaf Piece
+  // whose origin sits at the shard's centroid (so `rotate` tumbles it in
+  // place) and whose single drawGroup slices a freshly-uploaded shard VBO.
+  // The shards keep the source material (texture / colour / hints), so the
+  // debris still looks like shredded unit, not generic rubble.  Returns
+  // { model, shardVbo } — or null when the model has no readable triangle
+  // geometry, so the caller falls back to the legacy per-piece burst.
+  const _buildShardModel = (sourceModel, count, rng) => {
+    const geo = fragmentGeometry(sourceModel, { count, rng })
+    if (!geo) return null
+    const vbo = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+    gl.bufferData(gl.ARRAY_BUFFER, geo.floats, gl.STATIC_DRAW)
+    const root = new Piece({ name: '__debris_root__' })
+    for (const f of geo.fragments) {
+      const p = new Piece({
+        name: '__shard__',
+        originX: f.centroid[0], originY: f.centroid[1], originZ: f.centroid[2],
+      })
+      // The shard bursts along its offset from the model centre — hand
+      // debrisBurst the centroid so the scatter is a real radial explosion.
+      p.centroid = f.centroid
+      const group = {
+        vbo,
+        mode: gl.TRIANGLES,
+        first: f.first,
+        vertexCount: f.vertexCount,
+        textureName: f.textureName,
+        color: f.color,
+        depthTier: f.depthTier || 0,
+        isDecal: !!f.isDecal,
+        synthetic: !!f.synthetic,
+      }
+      if (f.specScale != null) group.specScale = f.specScale
+      if (f.runningLights != null) group.runningLights = f.runningLights
+      if (f.bump != null) group.bump = f.bump
+      p.drawGroups = [group]
+      root.addChild(p)
+    }
+    const model = new Model({ name: '__debris__', root, bounds: sourceModel.bounds })
+    // The shard VBO is this model's own buffer; Model.dispose frees it (we
+    // also free it explicitly when the record leaves — see _stepPresentation).
+    model.sharedVbo = vbo
+    return { model, shardVbo: vbo }
+  }
+
+  // _spawnDebris pushes one flying-fragment debris record for a model at a
+  // pose.  The model is SHATTERED into many small shards (finer than its COB
+  // piece tree) so the death reads as an explosion of pieces flying outward,
+  // not one big chunk spiralling.  Seeded from the unit's identity + cell so
+  // a replay re-run scatters identically; impactDir/impactMag bias the shards
+  // away from the killing blow (world-fx debrisBurst).  `severity` scales the
+  // shard count (a commander blast throws the most).
+  const _spawnDebris = ({ id, model, teamColor }, pose, { impactDir = null, impactMag = 0, severity = 100 } = {}) => {
     if (!model) return
     const rng = mulberry32(featureSeed(String(id), Math.round(pose.x), Math.round(pose.z)))
+    const radius = (model.boundsRadius && model.boundsRadius > 0) ? model.boundsRadius : 24
+    const count = targetFragmentCount(radius, severity)
+    const shard = _buildShardModel(model, count, rng)
+    // Fall back to the whole per-unit clone (its COB pieces fly) when the
+    // geometry can't be read for shattering — still animates, just coarser.
+    const flyModel = shard ? shard.model : model
     debris.push({
       id,
-      model, // the per-unit clone — pieces fly in place
+      model: flyModel,
+      shardVbo: shard ? shard.shardVbo : null,
       x: pose.x, y: pose.y, z: pose.z,
       headingRad: pose.headingRad || 0,
       teamColor,
-      pieces: debrisBurst(model, { rng, impactDir, impactMag, headingRad: pose.headingRad || 0 }),
+      pieces: debrisBurst(flyModel, { rng, impactDir, impactMag, headingRad: pose.headingRad || 0 }),
       ageMs: 0,
       lifeMs: DEBRIS_LIFE_MS,
     })
@@ -1397,7 +1466,7 @@ export async function createWorld(canvas, {
         aoe: Math.max(24, r * 2.2), kind: 'death', severity,
       })
       if (plan.debris && u.model) {
-        _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag })
+        _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag, severity })
       }
       if (plan.corpse) {
         const rec = {
@@ -1679,6 +1748,9 @@ export async function createWorld(canvas, {
       steamVents.length = 0
       beams.clear()
       crashes = []
+      for (const d of debris) {
+        if (d.shardVbo) { try { gl.deleteBuffer(d.shardVbo) } catch { /* ignore */ } }
+      }
       debris = []
       modelShots = []
       projectiles = []
