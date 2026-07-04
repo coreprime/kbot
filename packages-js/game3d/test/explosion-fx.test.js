@@ -76,6 +76,12 @@ test('mushroom tier renders a tall rising cloud, not just a wide fireball', () =
   // taller than it is wide (a stem+cap column, not a flat disc).
   assert.ok(height > rec.rMax * 1.5, `cap rises (${height.toFixed(0)}) well above the fireball head (${rec.rMax})`)
   assert.ok(height > bodyR, `cloud body is taller (${height.toFixed(0)}) than wide (${bodyR.toFixed(0)})`)
+  // The cap reaches a large world-Y — a genuine towering column rising UPWARD
+  // (increasing world Y) from the detonation point, not a ground-level flash.
+  // It scales off the blast (MUSHROOM_STEM_RISE × rMax), so the cap top must
+  // sit multiple fireball-radii above the detonation Y.
+  assert.ok(maxY > gy + rec.rMax * 4,
+    `cap top (worldY ${maxY.toFixed(0)}) towers above the detonation point (gy ${gy})`)
 })
 
 test('mushroom cap overhangs the stem (cap radius >> stem radius)', () => {

@@ -2052,15 +2052,25 @@ export class ModelRenderer {
     // (#renderLogDepth) is what keeps that extended range z-fight-free.
     const ddScale = this.drawDistanceScale || 1
     const baseFar = Math.max(12000, span * 60 + 2000)
-    const far = baseFar * ddScale
+    // With log depth active the far plane can stay extended (the log remap
+    // spreads precision evenly). WITHOUT the extension there is no cheap way
+    // to make a 48 km far plane z-fight-free, so clamp it hard: a far plane
+    // capped near the scene span (plus headroom) keeps the near/far ratio in
+    // a range a 24-bit integer depth buffer can actually resolve, which is
+    // what stops the residual surface flicker on hardware that lacks
+    // EXT_frag_depth. Distant establishing shots lose a little draw distance
+    // in that fallback, but they stop shimmering.
+    const far = this._fragDepthExt
+      ? baseFar * ddScale
+      : Math.min(baseFar * ddScale, Math.max(6000, span * 12 + 1500))
     // Near plane: with log depth active we can keep it tight (precision is
     // spread by the log remap). Without the extension, a tight near plane
-    // over a 48 km far plane has almost no usable precision, so raise the
+    // over a distant far plane has almost no usable precision, so raise the
     // near floor substantially to claw depth precision back — the camera in
     // replays sits far from the geometry, so a metre-scale near plane is
     // invisible but hugely improves the near/far ratio.
-    const nearFloor = this._fragDepthExt ? 0.05 : 1.0
-    const near = Math.max(nearFloor, span * 0.01)
+    const nearFloor = this._fragDepthExt ? 0.05 : 4.0
+    const near = Math.max(nearFloor, span * (this._fragDepthExt ? 0.01 : 0.03))
     this._cameraFar = far
     // Logarithmic depth constant Fc = 2 / log2(far + 1). Shared by every
     // world-depth pass so their depths agree.
@@ -4741,13 +4751,17 @@ export class ModelRenderer {
   }
 
   #initFxProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    // logDepth: true so the explosion pass writes the same log-depth every
+    // other world pass writes — otherwise its depth test against the terrain
+    // is on an incompatible scale and a rising mushroom cloud reads as buried.
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programFx = prog
     const gl = this.gl
     this.aFxPos = gl.getAttribLocation(prog, 'aPos')
     this.aFxColor = gl.getAttribLocation(prog, 'aColor')
     this.uFxProj = gl.getUniformLocation(prog, 'uProj')
     this.uFxView = gl.getUniformLocation(prog, 'uView')
+    this.uFxLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this._fxTriVBO = gl.createBuffer()
     this._fxTriCapacity = 0
   }
@@ -4761,6 +4775,7 @@ export class ModelRenderer {
     gl.useProgram(this.programFx)
     gl.uniformMatrix4fv(this.uFxProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uFxView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uFxLogDepthFC)
     gl.bindBuffer(gl.ARRAY_BUFFER, this._fxTriVBO)
     const bytes = count * 7 * 4
     if (bytes > this._fxTriCapacity) {
