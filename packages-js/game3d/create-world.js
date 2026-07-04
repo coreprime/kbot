@@ -102,15 +102,13 @@ const DEBRIS_FADE_MS = 420
 // so a few dozen concurrent deaths still integrate cheaply.
 const DEBRIS_MAX_PIECES = 1200
 
-// Air-unit presentation: hover-bob amplitude/frequency, the speed at which
-// contrails start, and the spiral-crash tuning.
+// Air-unit presentation: hover-bob amplitude/frequency and the speed at which
+// contrails start.  Aircraft deaths now explode in place + arc debris (the
+// same treatment as ground units), so there is no spiral-crash tuning.
 const AIR_BOB_WU = 1.6
 const AIR_BOB_HZ = 0.45
 const CONTRAIL_MIN_SPEED = 55
 const CONTRAIL_INTERVAL_MS = 60
-const CRASH_SPIN_RAD_S = 2.6
-const CRASH_SINK_ACCEL = 55
-const CRASH_SMOKE_INTERVAL_MS = 70
 
 // Surface-vessel wake cadence + the band around the waterline that counts
 // as "on the surface".
@@ -235,8 +233,7 @@ export async function createWorld(canvas, {
   const featureModels = []       // 3DO map features (static, from setTerrain)
   const steamVents = []          // live steam-wisp emitters (vent features)
   const beams = new Map()        // latheBeam/reclaimBeam key → beam record
-  let crashes = []               // air-unit spiral-crash records
-  let debris = []                // flying-polygon death records
+  let debris = []                // flying-chunk death records
   let modelShots = []            // weaponEffect() projectile meshes in flight
   let projectiles = []           // transient snapshot-provided shots
   let tracers = []               // fireWeapon() visual tracers
@@ -344,6 +341,28 @@ export async function createWorld(canvas, {
     return { x: u.x, y, z: u.z, headingRad: u.headingRad, pitchRad: pitch, rollRad: roll }
   }
 
+  // _unitVelocity estimates a unit's WORLD travel velocity ([vx,vy,vz], WU/s)
+  // from the motion latch (_px/_py/_pz sampled at _pt in fx-clock ms), which
+  // _stepPresentation refreshes every step.  A unit that has moved since the
+  // previous frame carries momentum into its death debris (item: debris throws
+  // along the unit's travel direction).  Returns null when there's no prior
+  // sample (a unit that died the frame it appeared has no measurable motion).
+  const _unitVelocity = (u) => {
+    if (!u || u._pt == null) return null
+    const dt = (fxTimeMs - u._pt) / 1000
+    if (!(dt > 1e-3)) return null
+    const vx = (u.x - u._px) / dt
+    const vy = (u.y - (u._py != null ? u._py : u.y)) / dt
+    const vz = (u.z - u._pz) / dt
+    if (!(Math.abs(vx) + Math.abs(vy) + Math.abs(vz) > 1e-3)) return null
+    // Clamp absurd single-frame jumps (a teleport / re-add) so a snapshot
+    // discontinuity can't fling debris across the map.
+    const MAX = 400
+    const sp = Math.hypot(vx, vy, vz)
+    if (sp > MAX) { const k = MAX / sp; return [vx * k, vy * k, vz * k] }
+    return [vx, vy, vz]
+  }
+
   const syncEntities = () => {
     const entities = []
     const overlays = []
@@ -395,15 +414,6 @@ export async function createWorld(canvas, {
         model: fm.model,
         transform: { x: fm.x, y: fm.y, z: fm.z, headingRad: fm.heading },
         teamColor: null,
-      })
-    }
-    for (const cr of crashes) {
-      if (!cr.model) continue
-      entities.push({
-        id: 'crash-' + cr.id,
-        model: cr.model,
-        transform: { x: cr.x, y: cr.y, z: cr.z, headingRad: cr.headingRad, pitchRad: cr.pitchRad, rollRad: cr.rollRad },
-        teamColor: cr.teamColor || null,
       })
     }
     for (const d of debris) {
@@ -519,7 +529,6 @@ export async function createWorld(canvas, {
     worldBinding.explosions.step(dtMs)
     stepModelShots(modelShots, dtMs, { env: { waterY: waterY(), heightAt: terrainHeightAt } })
     _stepBeams(dtMs)
-    _stepCrashes(dtMs)
     // Steam vents: lazy geothermal wisps off each vent throat.  Gated on
     // the feature toggle so hiding map features silences the plumes too.
     if (steamVents.length && !world._featuresOff) {
@@ -853,27 +862,35 @@ export async function createWorld(canvas, {
     const root = new Piece({ name: '__debris_root__' })
     for (const f of geo.fragments) {
       const p = new Piece({
-        name: '__shard__',
+        name: '__chunk__',
         originX: f.centroid[0], originY: f.centroid[1], originZ: f.centroid[2],
       })
-      // The shard bursts along its offset from the model centre — hand
+      // The chunk bursts along its offset from the model centre — hand
       // debrisBurst the centroid so the scatter is a real radial explosion.
       p.centroid = f.centroid
-      const group = {
-        vbo,
-        mode: gl.TRIANGLES,
-        first: f.first,
-        vertexCount: f.vertexCount,
-        textureName: f.textureName,
-        color: f.color,
-        depthTier: f.depthTier || 0,
-        isDecal: !!f.isDecal,
-        synthetic: !!f.synthetic,
-      }
-      if (f.specScale != null) group.specScale = f.specScale
-      if (f.runningLights != null) group.runningLights = f.runningLights
-      if (f.bump != null) group.bump = f.bump
-      p.drawGroups = [group]
+      // A chunk is a whole COB piece and may carry several draw materials
+      // (multi-texture hull); render each as its own sub-group over the shared
+      // chunk VBO.  Older single-material fragments fall back to the headline.
+      const subs = Array.isArray(f.groups) && f.groups.length
+        ? f.groups
+        : [{ first: f.first, vertexCount: f.vertexCount, textureName: f.textureName, color: f.color, depthTier: f.depthTier || 0, isDecal: !!f.isDecal, synthetic: !!f.synthetic, specScale: f.specScale, runningLights: f.runningLights, bump: f.bump }]
+      p.drawGroups = subs.map((sg) => {
+        const group = {
+          vbo,
+          mode: gl.TRIANGLES,
+          first: sg.first,
+          vertexCount: sg.vertexCount,
+          textureName: sg.textureName,
+          color: sg.color,
+          depthTier: sg.depthTier || 0,
+          isDecal: !!sg.isDecal,
+          synthetic: !!sg.synthetic,
+        }
+        if (sg.specScale != null) group.specScale = sg.specScale
+        if (sg.runningLights != null) group.runningLights = sg.runningLights
+        if (sg.bump != null) group.bump = sg.bump
+        return group
+      })
       root.addChild(p)
     }
     const model = new Model({ name: '__debris__', root, bounds: sourceModel.bounds })
@@ -890,14 +907,14 @@ export async function createWorld(canvas, {
   // a replay re-run scatters identically; impactDir/impactMag bias the shards
   // away from the killing blow (world-fx debrisBurst).  `severity` scales the
   // shard count (a commander blast throws the most).
-  const _spawnDebris = ({ id, model, teamColor }, pose, { impactDir = null, impactMag = 0, severity = 100 } = {}) => {
+  const _spawnDebris = ({ id, model, teamColor }, pose, { impactDir = null, impactMag = 0, severity = 100, velocity = null } = {}) => {
     if (!model) return
     const rng = mulberry32(featureSeed(String(id), Math.round(pose.x), Math.round(pose.z)))
     const radius = (model.boundsRadius && model.boundsRadius > 0) ? model.boundsRadius : 24
     const count = targetFragmentCount(radius, severity)
     const shard = _buildShardModel(model, count, rng)
     // Fall back to the whole per-unit clone (its COB pieces fly) when the
-    // geometry can't be read for shattering — still animates, just coarser.
+    // geometry can't be read for chunking — still animates, just coarser.
     const flyModel = shard ? shard.model : model
     debris.push({
       id,
@@ -906,55 +923,12 @@ export async function createWorld(canvas, {
       x: pose.x, y: pose.y, z: pose.z,
       headingRad: pose.headingRad || 0,
       teamColor,
-      pieces: debrisBurst(flyModel, { rng, impactDir, impactMag, headingRad: pose.headingRad || 0 }),
+      // velocity: the unit's travel velocity at death — the chunks inherit it
+      // (momentum), thrown along the unit's heading on top of the radial burst.
+      pieces: debrisBurst(flyModel, { rng, impactDir, impactMag, headingRad: pose.headingRad || 0, velocity }),
       ageMs: 0,
       lifeMs: DEBRIS_LIFE_MS,
     })
-  }
-
-  // _stepCrashes flies the spiral-crash records: an air unit's death dive —
-  // nose down, rolling, spinning around its yaw while it sinks faster and
-  // faster, coughing smoke — until it meets terrain (ground detonation +
-  // debris) or water (splash, then it is gone).
-  const _stepCrashes = (dtMs) => {
-    if (!crashes.length) return
-    const dt = dtMs / 1000
-    const wy = waterY()
-    let w = 0
-    for (const cr of crashes) {
-      cr.headingRad += CRASH_SPIN_RAD_S * dt
-      cr.rollRad = Math.min(0.9, cr.rollRad + 1.1 * dt)
-      cr.pitchRad = Math.max(-0.55, cr.pitchRad - 0.8 * dt)
-      cr.vy -= CRASH_SINK_ACCEL * dt
-      cr.x += cr.vx * dt
-      cr.z += cr.vz * dt
-      cr.y += cr.vy * dt
-      cr.smokeAcc = (cr.smokeAcc || 0) + dtMs
-      while (cr.smokeAcc >= CRASH_SMOKE_INTERVAL_MS) {
-        cr.smokeAcc -= CRASH_SMOKE_INTERVAL_MS
-        worldBinding.particles.emit(SFX_SMOKE_GREY, [cr.x, cr.y, cr.z], { size: 8, lifeMs: 900 })
-        if (cr.rng() < 0.3) {
-          worldBinding.particles.emit(SFX_FIRE_FLASH, [cr.x, cr.y, cr.z], { size: 5, lifeMs: 160 })
-        }
-      }
-      const ground = terrainHeightAt(cr.x, cr.z)
-      if (wy != null && cr.y <= wy && ground < wy) {
-        // Down at sea: one splash, the wreck sinks from sight.
-        impactBurst(worldBinding, [cr.x, wy, cr.z], { aoe: 56, water: true })
-        continue
-      }
-      if (cr.y <= ground) {
-        // Ground impact: real detonation + scattering pieces.
-        const pose = { x: cr.x, y: ground, z: cr.z, headingRad: cr.headingRad }
-        impactBurst(worldBinding, [cr.x, ground + 2, cr.z], { aoe: Math.max(48, cr.r * 2.2), kind: 'death' })
-        _spawnDebris({ id: cr.id, model: cr.model, teamColor: cr.teamColor }, pose, {
-          impactDir: [cr.vx, cr.vz], impactMag: 2,
-        })
-        continue
-      }
-      crashes[w++] = cr
-    }
-    crashes.length = w
   }
 
   const world = {
@@ -1236,6 +1210,12 @@ export async function createWorld(canvas, {
               // selfDestructWeapon's for a manual self-destruct). Sizes/styles
               // the blast: commander AoE → mushroom cloud.
               deathAoe: su.deathAoe != null ? su.deathAoe : 0,
+              // velocity: optional [vx,vy,vz] WU/s the unit was travelling at
+              // death, so its debris inherits that momentum.  When omitted the
+              // world measures it from the unit's own position history — a
+              // driver only needs to pass it for a unit that died the same
+              // frame it appeared (no motion history to measure).
+              velocity: Array.isArray(su.velocity) ? su.velocity : null,
               redraw: false,
             })
           }
@@ -1449,34 +1429,21 @@ export async function createWorld(canvas, {
     // COMMANDER_BLAST AoE 950 → the mushroom-cloud tier).  When omitted the
     // world falls back to a model-radius estimate (a uniform-ish pop), so old
     // drivers still work — they just don't get commander-scale blasts.
-    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, impactDir = null, impactMag = 0, deathAoe = 0, redraw = true } = {}) {
+    unitDeath(id, { severity = 0, corpse = null, heapCorpse = null, impactDir = null, impactMag = 0, deathAoe = 0, velocity = null, redraw = true } = {}) {
       const u = units.get(id)
       if (!u) return false
       const pose = _unitPose(u)
       const r = u.model ? (u.model.boundsRadius || 16) : 16
-      if (u.air && !u.grounded && pose.y > terrainHeightAt(pose.x, pose.z) + r) {
-        // Spiral crash: keep flying the airframe down; the detonation
-        // happens on contact (_stepCrashes).
-        const spd = 40
-        crashes.push({
-          id,
-          model: u.model,
-          teamColor: u.teamColor,
-          x: pose.x, y: pose.y, z: pose.z,
-          headingRad: u.headingRad,
-          pitchRad: 0, rollRad: 0,
-          vx: -Math.sin(u.headingRad) * spd,
-          vz: -Math.cos(u.headingRad) * spd,
-          vy: -12,
-          r,
-          rng: mulberry32(featureSeed(String(id), Math.round(pose.x), Math.round(pose.z))),
-          smokeAcc: 0,
-        })
-        // A hit flash where the killing shot landed.
-        worldBinding.particles.emit(SFX_FIRE_FLASH, [pose.x, pose.y, pose.z], { size: 10, lifeMs: 200 })
-        units.delete(id)
-        if (redraw && !renderer.running) world.step(0)
-        return true
+      // Momentum: the unit's travel velocity at death, so a moving unit throws
+      // its debris along its heading.  An explicit driver-supplied `velocity`
+      // wins; otherwise measure it from the motion latch (aircraft AND ground).
+      const deathVel = Array.isArray(velocity) ? velocity : _unitVelocity(u)
+      const airborne = u.air && !u.grounded && pose.y > terrainHeightAt(pose.x, pose.z) + r
+      // A high aircraft leaves a brief smoke puff at the detonation point so
+      // the kill still reads from below, but it EXPLODES IN PLACE — no spiral
+      // dive.  Its debris then arcs out and falls to terrain under gravity.
+      if (airborne) {
+        worldBinding.particles.emit(SFX_SMOKE_GREY, [pose.x, pose.y, pose.z], { size: 12, lifeMs: 1100 })
       }
       const plan = resolveDeathPlan({ severity, corpse, heapCorpse })
       // Death detonation.  Size from the unit's death-explosion weapon AoE
@@ -1484,13 +1451,14 @@ export async function createWorld(canvas, {
       // back to a model-radius estimate.  Both AoE and severity ride the
       // explosion tier ladder (a commander-class AoE selects the mushroom
       // cloud; see explosion-fx tierFor).  The particle burst (flash/sparks/
-      // smoke) already scales its counts with AoE in impactBurst.
+      // smoke) already scales its counts with AoE in impactBurst.  The blast
+      // detonates AT the unit's current position — in place, ground or air.
       const blastAoe = deathAoe > 0 ? deathAoe : Math.max(24, r * 2.2)
       impactBurst(worldBinding, [pose.x, pose.y + r * 0.4, pose.z], {
         aoe: blastAoe, kind: 'death', severity,
       })
       if (plan.debris && u.model) {
-        _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag, severity })
+        _spawnDebris({ id, model: u.model, teamColor: u.teamColor }, pose, { impactDir, impactMag, severity, velocity: deathVel })
       }
       if (plan.corpse) {
         const rec = {
@@ -1799,7 +1767,6 @@ export async function createWorld(canvas, {
       featureModels.length = 0
       steamVents.length = 0
       beams.clear()
-      crashes = []
       for (const d of debris) {
         if (d.shardVbo) { try { gl.deleteBuffer(d.shardVbo) } catch { /* ignore */ } }
       }

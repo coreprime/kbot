@@ -647,23 +647,38 @@ export function latheConeSpray(pool, {
 // fragment's launch velocity gains a push AWAY from the source blended over
 // the radial burst, so a unit killed from the west visibly sheds eastward.
 //
+// Momentum inheritance: pass `velocity` ([vx,vy,vz] WORLD frame, the unit's
+// travel velocity at the instant of death) and every chunk's launch gets that
+// bulk velocity ADDED on top of the radial burst — a unit dying while moving
+// throws its pieces along its travel direction (aircraft AND ground units).
+// The world velocity is rotated into the debris local frame (inverse yaw on
+// XZ; local Y is world up) so it composes with the outward scatter exactly.
+//
 // `rng` defaults to Math.random — deterministic drivers pass a seeded one
 // (createWorld seeds from the unit id + position).
 export function debrisBurst(model, {
   speed = 90, lift = 55, rng = Math.random,
-  impactDir = null, impactMag = 0, headingRad = 0,
+  impactDir = null, impactMag = 0, headingRad = 0, velocity = null,
 } = {}) {
   const pieces = []
   if (!model || !Array.isArray(model.flat)) return pieces
+  const c = Math.cos(headingRad), sn = Math.sin(headingRad)
   // World push → the local frame (inverse yaw), scaled by the magnitude.
   let pushX = 0, pushZ = 0
   if (Array.isArray(impactDir) && (impactDir[0] || impactDir[1])) {
     const len = Math.hypot(impactDir[0], impactDir[1]) || 1
     const wx = impactDir[0] / len, wz = impactDir[1] / len
-    const c = Math.cos(headingRad), sn = Math.sin(headingRad)
     const mag = speed * 0.8 * Math.min(4, Math.max(0, +impactMag || 0))
     pushX = (c * wx - sn * wz) * mag
     pushZ = (sn * wx + c * wz) * mag
+  }
+  // Bulk momentum (unit velocity at death) → local frame; Y is world up.
+  let momX = 0, momY = 0, momZ = 0
+  if (Array.isArray(velocity) && (velocity[0] || velocity[1] || velocity[2])) {
+    const wx = velocity[0], wz = velocity[2]
+    momX = c * wx - sn * wz
+    momY = velocity[1] || 0
+    momZ = sn * wx + c * wz
   }
   for (const piece of model.flat) {
     // Outward bearing.  A shard fragment launches along its TRUE radial off
@@ -694,9 +709,10 @@ export function debrisBurst(model, {
     const up = lift * (0.5 + rng() * 0.9)
     pieces.push({
       piece,
-      vx: dirX * mag + pushX * (0.6 + rng() * 0.8),
-      vy: up,
-      vz: dirZ * mag + pushZ * (0.6 + rng() * 0.8),
+      // Radial burst + impact push + inherited bulk momentum (all local frame).
+      vx: dirX * mag + pushX * (0.6 + rng() * 0.8) + momX,
+      vy: up + momY,
+      vz: dirZ * mag + pushZ * (0.6 + rng() * 0.8) + momZ,
       // Independent, moderate angular velocities per axis (rad/s): each
       // fragment tumbles on its own, so the shower never spins in lockstep.
       // Kept below the old ±12 so the visible spin doesn't outpace the

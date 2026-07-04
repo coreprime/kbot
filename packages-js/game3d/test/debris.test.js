@@ -1,8 +1,11 @@
-// debris.test.js — headless proofs for the death-debris shatter: fine
-// fragmentation (finer than the COB piece tree), a wide solid-angle burst
-// with varied per-fragment spin, world-space parabolic flight, terrain
-// bounces with energy loss, directional bias away from the killing impact,
-// the shard-count budget, and determinism.
+// debris.test.js — headless proofs for the death-debris chunking: the model
+// breaks into recognizable UNIT PIECE chunks (a moderate, piece-driven count,
+// NOT 64-shard confetti), a one-piece unit still sheds several chunks by
+// splitting its largest piece, a wide solid-angle burst with varied per-chunk
+// spin, world-space parabolic flight, terrain bounces with energy loss,
+// directional bias away from the killing impact, momentum inheritance (a
+// moving unit throws its chunks along its travel direction), the chunk-count
+// budget, and determinism.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -67,31 +70,77 @@ const makeGeoModel = (nTris = 60, ext = 20, seed = 1) => {
   }
 }
 
-// ── Fine fragmentation ─────────────────────────────────────────────────
+// makeMultiPieceModel builds a model whose `flat` list has `nPieces` distinct
+// COB pieces, each with its own triangle group at a distinct offset — stands
+// in for a loaded unit's piece tree (turret / hull / barrel / legs).
+const makeMultiPieceModel = (nPieces = 5, ext = 20, seed = 1) => {
+  const rng = mulberry32(seed)
+  const flat = []
+  for (let p = 0; p < nPieces; p++) {
+    const ox = (rng() * 2 - 1) * ext
+    const oy = (rng() * 2 - 1) * ext
+    const oz = (rng() * 2 - 1) * ext
+    const floats = []
+    // A handful of triangles per piece, clustered near the piece origin.
+    for (let i = 0; i < 6; i++) {
+      const jx = (rng() * 2 - 1) * 3, jy = (rng() * 2 - 1) * 3, jz = (rng() * 2 - 1) * 3
+      floats.push(...tri(jx, jy, jz, jx + 1, jy, jz, jx, jy + 1, jz))
+    }
+    const group = { mode: 'tris', textureName: 'piece_tex' + p, color: null, tris: new Float32Array(floats) }
+    flat.push({ origin: [ox, oy, oz], parent: null, drawGroups: [group] })
+  }
+  return { name: 'MULTIUNIT', boundsRadius: ext, bounds: { min: [-ext, -ext, -ext], max: [ext, ext, ext] }, flat }
+}
 
-test('a low-piece model still shatters into MANY fragments', () => {
-  // One draw group (≈ one COB piece), but a real shatter throws many shards.
+// ── Piece-chunk breakup ────────────────────────────────────────────────
+
+test('a one-piece unit still throws several chunks (largest piece is split)', () => {
+  // One draw group (≈ one COB piece), but the largest piece splits so a
+  // single-body tank still sheds several recognizable chunks — not one blob.
   const model = makeGeoModel(80, 20)
   const count = targetFragmentCount(model.boundsRadius, 100)
   const geo = fragmentGeometry(model, { count, rng: mulberry32(9) })
-  assert.ok(geo, 'geometry model shatters')
-  assert.ok(geo.fragments.length >= FRAG_MIN, `>= ${FRAG_MIN} shards (got ${geo.fragments.length})`)
-  // Far more shards than source pieces (1) — the whole point.
-  assert.ok(geo.fragments.length > model.flat.length * 4, 'many shards, not per-piece')
+  assert.ok(geo, 'geometry model breaks up')
+  assert.ok(geo.fragments.length >= FRAG_MIN, `>= ${FRAG_MIN} chunks (got ${geo.fragments.length})`)
+  // More than the single source piece — the one body split into parts.
+  assert.ok(geo.fragments.length > model.flat.length, 'splits the lone piece into chunks')
+  // But MODERATE — not the old 64-shard confetti.
+  assert.ok(geo.fragments.length <= FRAG_MAX, `chunky, not confetti (got ${geo.fragments.length})`)
 })
 
-test('fragment count scales with model size and severity, within the cap', () => {
+test('a multi-piece unit throws its actual COB pieces as chunks', () => {
+  // 6 distinct pieces at 6 distinct offsets: the chunks should land near
+  // those piece offsets (recognizable turret/hull/barrel parts), one per
+  // piece when the count target matches the piece count.
+  const model = makeMultiPieceModel(6, 24, 3)
+  const geo = fragmentGeometry(model, { count: 6, rng: mulberry32(3) })
+  assert.equal(geo.fragments.length, 6, 'one chunk per COB piece')
+  // Each chunk centroid is offset from the model centre (it will burst out).
+  for (const f of geo.fragments) {
+    assert.ok(Math.hypot(f.centroid[0], f.centroid[1], f.centroid[2]) > 1, 'chunk sits away from centre')
+  }
+})
+
+test('too many pieces merge down to the moderate cap', () => {
+  const model = makeMultiPieceModel(40, 30, 7)
+  const geo = fragmentGeometry(model, { count: FRAG_MAX, rng: mulberry32(7) })
+  assert.ok(geo.fragments.length <= FRAG_MAX, `capped at ${FRAG_MAX} (got ${geo.fragments.length})`)
+  assert.ok(geo.fragments.length >= FRAG_MIN, 'still several chunks')
+})
+
+test('chunk count scales with model size and severity, within the moderate band', () => {
   const peewee = targetFragmentCount(6, 100)
-  const commander = targetFragmentCount(48, 100)
-  assert.ok(commander > peewee, 'bigger model → more shards')
+  const commander = targetFragmentCount(120, 100)
+  assert.ok(commander > peewee, 'bigger model → more chunks')
   assert.ok(peewee >= FRAG_MIN, 'a small unit still gets the floor')
-  assert.ok(commander <= FRAG_MAX, 'capped for perf')
+  assert.ok(commander <= FRAG_MAX, 'capped for perf (moderate, not confetti)')
   // Severity scales it: a corpse-leaving kill (low severity) sheds fewer
-  // than a catastrophic blast of the same unit.
-  assert.ok(targetFragmentCount(48, 30) < targetFragmentCount(48, 100), 'severity scales count')
+  // than a catastrophic blast of the same unit (picked below the cap so the
+  // difference isn't clipped away).
+  assert.ok(targetFragmentCount(20, 30) < targetFragmentCount(20, 100), 'severity scales count')
 })
 
-test('shard verts are recentred about the fragment centroid (tumble in place)', () => {
+test('chunk verts are recentred about the chunk centroid (tumble in place)', () => {
   const model = makeGeoModel(60, 25)
   const geo = fragmentGeometry(model, { count: 24, rng: mulberry32(4) })
   const STRIDE = 9
@@ -332,6 +381,49 @@ test('impactDir biases the mean launch velocity away from the source', () => {
   for (const d of sym) sx += d.vx
   sx /= sym.length
   assert.ok(Math.abs(sx) < mx * 0.6, `symmetric burst mean vx ${sx} << biased ${mx}`)
+})
+
+test('momentum: a moving unit throws its chunks along its travel direction', () => {
+  const model = makeModel(48)
+  // Unit travelling east at 60 WU/s (world +X), no yaw.  Every chunk's launch
+  // gains that bulk velocity, so the mean launch velocity points +X strongly.
+  const pieces = debrisBurst(model, { rng: mulberry32(21), velocity: [60, 0, 0], headingRad: 0 })
+  let mx = 0, mz = 0
+  for (const d of pieces) { mx += d.vx; mz += d.vz }
+  mx /= pieces.length; mz /= pieces.length
+  assert.ok(mx > 40, `mean vx ${mx.toFixed(1)} carries the unit's eastward momentum`)
+  assert.ok(Math.abs(mz) < mx, 'and dominates the cross axis')
+  // A stationary unit's symmetric burst has near-zero net horizontal drift —
+  // the momentum bias must dominate it.
+  const still = debrisBurst(makeModel(48), { rng: mulberry32(21) })
+  let sx = 0
+  for (const d of still) sx += d.vx
+  sx /= still.length
+  assert.ok(Math.abs(sx) < mx * 0.5, `stationary mean vx ${sx.toFixed(1)} << moving ${mx.toFixed(1)}`)
+})
+
+test('momentum: vertical velocity is inherited too (a climbing/diving unit)', () => {
+  const model = makeModel(48)
+  // A unit diving (world −Y) at death — every chunk's vy is pulled down by
+  // the inherited momentum relative to a level unit's burst.
+  const diving = debrisBurst(model, { rng: mulberry32(22), velocity: [0, -50, 0] })
+  const level = debrisBurst(makeModel(48), { rng: mulberry32(22) })
+  let dv = 0, lv = 0
+  for (const d of diving) dv += d.vy
+  for (const d of level) lv += d.vy
+  dv /= diving.length; lv /= level.length
+  assert.ok(dv < lv - 40, `diving mean vy ${dv.toFixed(1)} sits ~50 below level ${lv.toFixed(1)}`)
+})
+
+test('momentum: world velocity is rotated into the local frame by heading', () => {
+  const model = makeModel(48)
+  // Unit yawed a half turn moving WORLD +X: local frame sees −X, so the
+  // WORLD-frame scatter still carries east.  Local vx = c·wx (c=−1) ⇒ negative.
+  const pieces = debrisBurst(model, { rng: mulberry32(23), velocity: [60, 0, 0], headingRad: Math.PI })
+  let mx = 0
+  for (const d of pieces) mx += d.vx
+  mx /= pieces.length
+  assert.ok(mx < -40, `local mean vx ${mx.toFixed(1)} (world +X after the yaw)`)
 })
 
 test('heading rotates the world-frame bias into the local frame', () => {
