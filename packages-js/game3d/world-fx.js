@@ -130,19 +130,37 @@ export function impactBurst(binding, pos, { aoe = 16, sparks = true, kind = 'imp
   if (!binding || !binding.particles) return
   const p = binding.particles
   if (terrain) {
-    // Dirt splash: a low brown puff kicked off the slope + a couple of
-    // debris sparks.  Deliberately smaller and duller than a real hit — the
-    // shot did no damage, it just chewed the hillside.
-    const size = Math.max(5, Math.min(24, aoe * 0.4))
-    p.emit(SFX_SMOKE_GREY, pos, {
-      size,
-      lifeMs: 620,
-      color: [0.42, 0.32, 0.22, 0.7],
-      riseSpeed: 3,
-      drift: 1.2,
+    // Terrain block: a shot that buried into a hillside (terrain-los.js
+    // retargeted `pos` to the slope) must read as an unmistakable IMPACT on
+    // the hill — dirt + flash + debris scaled to the weapon — NOT a faint
+    // puff and definitely not a hit on the (untouched) shielded target.  It
+    // stays browner/dirtier than a clean unit hit (earth, not a kill), but it
+    // is a real burst, so it's obvious the round struck the ridge.
+    // A short muzzle-warm flash so the strike registers as an impact, dimmer
+    // and browner than the clean-hit fireball above.
+    const flashSize = Math.max(6, Math.min(30, aoe * 0.4))
+    p.emit(SFX_FIRE_FLASH, pos, {
+      size: flashSize,
+      lifeMs: Math.max(150, Math.min(360, 140 + aoe * 1.2)),
+      color: [1.3, 0.68, 0.30, 0.85],
+      lightStrength: Math.min(70, aoe * 0.7),
     })
-    const n = Math.max(2, Math.min(5, Math.round(aoe / 14)))
+    // Dirt kicked off the slope: a brown puff scaled to the blast.
+    p.emit(SFX_SMOKE_GREY, pos, {
+      size: Math.max(8, Math.min(40, aoe * 0.55)),
+      lifeMs: 820,
+      color: [0.42, 0.32, 0.22, 0.85],
+      riseSpeed: 5,
+      drift: 1.6,
+    })
+    // Debris sparks — more of them, scaled by the blast, thrown off the hit.
+    const n = Math.max(4, Math.min(12, Math.round(aoe / 6)))
     for (let i = 0; i < n; i++) p.emit(SFX_SPARK, pos, {})
+    // A real (but non-lethal-looking) polygonal burst at the ridge point via
+    // the explosion manager — the same tier ladder as a hit, so it scales to
+    // the weapon and coalesces under a barrage.  kind 'impact' keeps it off
+    // the death/mushroom rungs.
+    if (binding.explosions) binding.explosions.spawn(pos, { aoe, kind: 'impact' })
     return
   }
   if (water) {

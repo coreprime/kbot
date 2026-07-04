@@ -25,7 +25,12 @@ import {
   stepDebris,
   stepModelShots,
   modelShotPose,
+  impactBurst,
 } from '../world-fx.js'
+import { ExplosionManager } from '../explosion-fx.js'
+import { raycastTerrain } from '../terrain-los.js'
+import { createTerrainSampler } from '../terrain-sample.js'
+import { IMPULSE_KICK_SCALE } from '../create-world.js'
 
 // A palette where index 232 (the ARM laser green) is pure green.
 const palette = new TAPalette(Array.from({ length: 256 }, (_, i) => (i === 232 ? [0, 255, 0] : [128, 128, 128])))
@@ -191,4 +196,47 @@ test('unitRocksOnImpact keeps structures planted and hulls rocking', () => {
   assert.equal(unitRocksOnImpact({ air: true }), true)
   // No record → no rock.
   assert.equal(unitRocksOnImpact(null), false)
+})
+
+test('a terrain-blocked shot bursts AT the ridge hit point, not as a faint puff', () => {
+  // Build the ridge from terrain-los.test.js: a shot from low ground at a
+  // low-ground target behind a tall ridge is blocked ON the ridge face.
+  const w = 21, h = 5
+  const heights = new Array(w * h).fill(0)
+  for (let cz = 0; cz < h; cz++) for (const cx of [9, 10, 11]) heights[cz * w + cx] = 120
+  const { heightAt } = createTerrainSampler({ heights, w, h, cellWU: 16, heightScale: 1 })
+  const from = [8, 30, 32], to = [312, 30, 32]
+  const hit = raycastTerrain(from, to, heightAt)
+  assert.ok(hit, 'the ridge blocks the shot')
+
+  // The impact fires at the raycast hit point (the ridge), scaled to the
+  // weapon, as a REAL burst: particles emitted + a polygonal explosion-manager
+  // detonation at the hit point — not the old lone faint puff.
+  const b = { particles: new ParticlePool(2048), explosions: new ExplosionManager() }
+  impactBurst(b, hit.point, { aoe: 48, terrain: true })
+
+  // A visible burst emits multiple particles (flash + dirt + several sparks),
+  // clearly more than the old 1-puff-plus-2-sparks floor.
+  assert.ok(b.particles.count >= 6, `terrain block should be a real burst, got ${b.particles.count} particles`)
+
+  // The explosion manager detonated exactly at the raycast hit point (the
+  // ridge), NOT at the untouched target far away.
+  assert.equal(b.explosions.liveCount, 1, 'a polygonal burst fires at the block')
+  const rec = b.explosions._live[0]
+  assert.ok(Math.abs(rec.x - hit.point[0]) < 1e-6 && Math.abs(rec.z - hit.point[2]) < 1e-6,
+    `burst sits on the ridge hit (${rec.x.toFixed(0)},${rec.z.toFixed(0)}) not the target (312)`)
+  assert.ok(rec.x < 200, 'the burst is on the ridge, well short of the shielded target')
+
+  // Every emitted particle sits at the ridge, not downrange at the target.
+  for (let i = 0; i < b.particles.count; i++) {
+    assert.ok(b.particles.x[i] < 200, `particle ${i} at x=${b.particles.x[i]} should be on the ridge`)
+  }
+})
+
+test('hit-rock amplitude is scaled to 0.6× (40% gentler lean)', () => {
+  // The kick velocity is linear in the resulting lean, so the amplitude scale
+  // is exactly IMPULSE_KICK_SCALE. It must be 0.6 × the previous 0.55 = 0.33.
+  const PREVIOUS_KICK = 0.55
+  assert.ok(Math.abs(IMPULSE_KICK_SCALE - PREVIOUS_KICK * 0.6) < 1e-9,
+    `kick scale ${IMPULSE_KICK_SCALE} must be 0.6 × ${PREVIOUS_KICK}`)
 })

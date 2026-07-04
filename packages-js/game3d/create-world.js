@@ -82,6 +82,10 @@ const REST_HEADING = Math.PI
 // quick shudder (~2 oscillations over ~0.7 s) rather than a wobble.
 const IMPULSE_SPRING_K = 55
 const IMPULSE_SPRING_C = 7
+// IMPULSE_KICK_SCALE sets the hit-rock AMPLITUDE (the spring K/C above fix the
+// shape; this scales the kick velocity, which the lean is linear in).  0.33 =
+// 0.6 × the earlier 0.55 — the visible rock was 40 % too strong.
+export const IMPULSE_KICK_SCALE = 0.33
 
 // Slope-tilt smoothing time constant (seconds) — fast enough to track a
 // moving tank crossing a ridge, slow enough to hide heightfield stairsteps.
@@ -1387,7 +1391,7 @@ export async function createWorld(canvas, {
       const lx = c * px - s * pz
       const lz = s * px + c * pz
       if (!u._imp) u._imp = { p: 0, r: 0, vp: 0, vr: 0 }
-      const kick = 0.55 * Math.min(4, Math.max(0.1, +mag || 1))
+      const kick = IMPULSE_KICK_SCALE * Math.min(4, Math.max(0.1, +mag || 1))
       // A push along local -Z (from the front) rocks the nose up; a push
       // along local X rolls away from the hit.
       u._imp.vp += -lz * kick
