@@ -14,6 +14,9 @@ import {
   COALESCE_BUCKET_WU,
   BUDGET_FREE_COUNT,
   MUSHROOM_AOE_THRESHOLD,
+  MUSHROOM_SHOCK_REACH,
+  MUSHROOM_CAP_RADIUS,
+  MUSHROOM_STEM_RADIUS,
 } from '../explosion-fx.js'
 
 test('size ladder: aoe + death severity pick sensible tiers', () => {
@@ -73,6 +76,60 @@ test('mushroom tier renders a tall rising cloud, not just a wide fireball', () =
   // taller than it is wide (a stem+cap column, not a flat disc).
   assert.ok(height > rec.rMax * 1.5, `cap rises (${height.toFixed(0)}) well above the fireball head (${rec.rMax})`)
   assert.ok(height > bodyR, `cloud body is taller (${height.toFixed(0)}) than wide (${bodyR.toFixed(0)})`)
+})
+
+test('mushroom cap overhangs the stem (cap radius >> stem radius)', () => {
+  // The cap must be much wider than the stem so it visibly OVERHANGS — that's
+  // what makes it read as a mushroom and not a column of smoke.  The shape
+  // tunables enforce it at the geometry level; the render confirms the aloft
+  // cap band is genuinely wide relative to the stem half-width.
+  assert.ok(MUSHROOM_CAP_RADIUS > MUSHROOM_STEM_RADIUS * 3,
+    `cap (${MUSHROOM_CAP_RADIUS}) must overhang the stem (${MUSHROOM_STEM_RADIUS})`)
+  const m = new ExplosionManager()
+  const gy = 0
+  const rec = m.spawn([0, gy, 0], { aoe: 950, kind: 'death', severity: 100 })
+  m.step(1)
+  m.step(1500) // stem at full height, cap billowed out
+  const d = m.tris()
+  // The cap band sits high (above 4.5·rMax); its horizontal reach must be a
+  // large multiple of the stem's rendered half-width (rMax·STEM_RADIUS).
+  const stemHalfWidth = rec.rMax * MUSHROOM_STEM_RADIUS
+  let capR = 0
+  for (let i = 0; i < m.vertCount() * 7; i += 7) {
+    const y = d[i + 1]
+    if (y > gy + rec.rMax * 4.5) capR = Math.max(capR, Math.hypot(d[i], d[i + 2]))
+  }
+  assert.ok(capR > stemHalfWidth * 3,
+    `cap radius ${capR.toFixed(0)} overhangs the stem half-width ${stemHalfWidth.toFixed(0)}`)
+})
+
+test('mushroom throws a wide concussive shockwave racing along the ground', () => {
+  const m = new ExplosionManager()
+  const gy = 0
+  const rec = m.spawn([0, gy, 0], { aoe: 950, kind: 'death', severity: 100 })
+  m.step(1)
+  m.step(850) // near the shock front's full reach
+  const d = m.tris()
+  // The widest ground-level geometry is the shock ring — it races far beyond
+  // the fireball head and the cap.
+  let groundR = 0
+  for (let i = 0; i < m.vertCount() * 7; i += 7) {
+    const y = d[i + 1]
+    if (Math.abs(y - gy) < rec.rMax * 0.6) groundR = Math.max(groundR, Math.hypot(d[i], d[i + 2]))
+  }
+  // Reaches multiples of the fireball radius out — a concussive blast front,
+  // not just the fireball ring.
+  assert.ok(groundR > rec.rMax * 3, `shock front (${groundR.toFixed(0)}) races well past the fireball head (${rec.rMax})`)
+  assert.ok(MUSHROOM_SHOCK_REACH >= 4, 'shock reach is a wide multiple of rMax')
+})
+
+test('mushroom lingers longer than the ordinary huge blast', () => {
+  const m = new ExplosionManager()
+  const mush = m.spawn([0, 0, 0], { aoe: 950, kind: 'death', severity: 100 })
+  const huge = m.spawn([9999, 0, 0], { aoe: 300, kind: 'death', severity: 120 })
+  assert.equal(mush.tier, 'mushroom')
+  assert.equal(huge.tier, 'huge')
+  assert.ok(mush.lifeMs > huge.lifeMs, `mushroom lingers (${mush.lifeMs}ms > ${huge.lifeMs}ms)`)
 })
 
 test('mushroom respects the luminance budget (dims under a barrage like every tier)', () => {

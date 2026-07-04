@@ -57,11 +57,27 @@ export const MAX_LIGHTS = 5
 // The cap is a fan of MUSHROOM_CAP_LOBES billowing lobes; the stem is a
 // tapered column rising from the ground flash to the cap.  Heights/radii are
 // multiples of the record's fireball radius so the whole cloud scales with
-// the death-weapon AoE that picked the tier.
-export const MUSHROOM_CAP_LOBES = 10
-export const MUSHROOM_STEM_RISE = 3.4   // final cap height, × fireball rMax
-export const MUSHROOM_CAP_RADIUS = 1.5  // cap radius, × fireball rMax
-export const MUSHROOM_STEM_RADIUS = 0.4 // stem half-width, × fireball rMax
+// the death-weapon AoE that picked the tier.  These are deliberately LARGE:
+// a commander's death should read as an unmistakable mushroom that towers
+// over the battlefield, cap overhanging its stem, not a big fireball.
+export const MUSHROOM_CAP_LOBES = 12
+export const MUSHROOM_STEM_RISE = 5.2   // final cap height, × fireball rMax
+export const MUSHROOM_CAP_RADIUS = 2.6  // cap radius, × fireball rMax (>> stem: overhang)
+export const MUSHROOM_STEM_RADIUS = 0.55 // stem half-width, × fireball rMax
+// The cap rolls under itself: an overhanging lower lip drawn as a torus of
+// lobes hanging BELOW the cap base and curling back toward the stem.  This is
+// what reads as "billowing/rolling" rather than a smooth dome.
+export const MUSHROOM_CAP_OVERHANG = 0.55 // lip drop below cap base, × capR
+export const MUSHROOM_CAP_CURL = 0.72     // lip inner radius, × capR (curls in)
+
+// ── Concussive shockwave (mushroom tier) ─────────────────────────────────
+// A ground-hugging pressure dome that RACES outward along the terrain, well
+// ahead of and much wider than the fireball ring — the concussive blast the
+// eye reads as the shock front.  It expands to MUSHROOM_SHOCK_REACH × rMax
+// over the first MUSHROOM_SHOCK_MS of the record's life and fades as it goes.
+export const MUSHROOM_SHOCK_REACH = 6.5  // final ring radius, × fireball rMax
+export const MUSHROOM_SHOCK_MS = 900     // time to reach full radius
+export const MUSHROOM_SHOCK_HEIGHT = 0.5 // dome rise, × current ring radius (low + wide)
 
 // ── Size ladder ──────────────────────────────────────────────────────────
 //
@@ -81,7 +97,7 @@ const TIERS = {
   // and MAX_LIGHTS cap apply), so a single hero blast lights the field
   // without washing it: the cap is the same as `huge`, the shape is what
   // differs.  rMax is the fireball head; the stem/cap scale off MUSHROOM_*.
-  mushroom: { life: 2200, r0: 8.0, rk: 0.34, rMax: 120, shards: 26, ring: true, light: 210, peak: [2.2, 0.82, 0.32], mushroom: true },
+  mushroom: { life: 3200, r0: 8.0, rk: 0.34, rMax: 150, shards: 30, ring: true, light: 220, peak: [2.2, 0.82, 0.32], mushroom: true },
   // Water splash: white/foam ladder — a ring + upward spray shards, no
   // fireball glow to bloom out.
   splash: { life: 620,  r0: 2.0, rk: 0.20, rMax: 26, shards: 8,  ring: true,  light: 0,   peak: [0.85, 0.95, 1.05] },
@@ -219,7 +235,12 @@ export class ExplosionManager {
     if (rec.mushroom) {
       rec.capBillow = []
       for (let i = 0; i < MUSHROOM_CAP_LOBES; i++) rec.capBillow.push(0.8 + rng() * 0.6)
+      // Independent per-lobe billow for the rolled-under lip so the overhang
+      // reads as separate rolling clouds, not a smooth skirt.
+      rec.lipBillow = []
+      for (let i = 0; i < MUSHROOM_CAP_LOBES; i++) rec.lipBillow.push(0.7 + rng() * 0.7)
       rec.stemPhase = rng() * Math.PI * 2
+      rec.shockPhase = rng() * Math.PI * 2
       rec.groundY = pos[1]
     }
   }
@@ -301,17 +322,17 @@ export class ExplosionManager {
   // bigger death-weapon AoE (higher tier rMax) grows the whole cloud.
   _buildMushroom(rec, t, r, cr, cg, cb, alpha) {
     const gy = rec.groundY != null ? rec.groundY : rec.y
-    // Stem grows to full height over the first ~60% of life, then holds.
-    const rise = Math.min(1, t / 0.6)
+    // Stem shoots up FAST — full height by ~45% of life, then holds and drifts.
+    const rise = easeOut(Math.min(1, t / 0.45))
     const stemH = rec.rMax * MUSHROOM_STEM_RISE * rise
     const capY = gy + stemH
     const stemR = rec.rMax * MUSHROOM_STEM_RADIUS
     // Ground flash: a bright squashed dome at the base (hottest, fades fast).
     const flashA = alpha * Math.max(0, 1 - t * 2.2)
     if (flashA > 0.001) {
-      const fr = r * 1.3
+      const fr = r * 1.6
       const fy = gy + fr * 0.4
-      const SEG = 10
+      const SEG = 12
       for (let i = 0; i < SEG; i++) {
         const a0 = rec.ringPhase + (i / SEG) * Math.PI * 2
         const a1 = rec.ringPhase + ((i + 1) / SEG) * Math.PI * 2
@@ -320,13 +341,16 @@ export class ExplosionManager {
         this._pushTri(x0, gy, z0, x1, gy, z1, rec.x, fy, rec.z, cr * 1.3, cg * 1.2, cb, flashA)
       }
     }
-    // Stem: a tapered column from the flash up to the cap, a ring of quads.
-    const SEG = 8
+    // Concussive shockwave: the ground-hugging pressure front + a brief
+    // expanding pressure ripple.  Drawn before the cloud so it reads under it.
+    this._buildConcussion(rec, t, gy, cr, cg, cb, alpha)
+    // Stem: a tapered column from the flash up to the cap, wide at the base and
+    // pinching at the waist (classic mushroom stem).
+    const SEG = 10
     for (let i = 0; i < SEG; i++) {
       const a0 = rec.stemPhase + (i / SEG) * Math.PI * 2
       const a1 = rec.stemPhase + ((i + 1) / SEG) * Math.PI * 2
-      // Waist pinches slightly toward the top (classic mushroom stem).
-      const rb = stemR * 1.1, rt = stemR * 0.7
+      const rb = stemR * 1.25, rt = stemR * 0.8
       const bx0 = rec.x + Math.cos(a0) * rb, bz0 = rec.z + Math.sin(a0) * rb
       const bx1 = rec.x + Math.cos(a1) * rb, bz1 = rec.z + Math.sin(a1) * rb
       const tx0 = rec.x + Math.cos(a0) * rt, tz0 = rec.z + Math.sin(a0) * rt
@@ -334,21 +358,91 @@ export class ExplosionManager {
       this._pushTri(bx0, gy, bz0, bx1, gy, bz1, tx1, capY, tz1, cr * 0.9, cg * 0.8, cb * 0.7, alpha * 0.8)
       this._pushTri(bx0, gy, bz0, tx1, capY, tz1, tx0, capY, tz0, cr * 0.9, cg * 0.8, cb * 0.7, alpha * 0.8)
     }
-    // Cap: a billowing lobed dome that widens and lifts as it rolls over.
-    const capR = rec.rMax * MUSHROOM_CAP_RADIUS * (0.5 + 0.5 * rise)
-    const capTop = capY + capR * 0.7
-    const capBase = capY - capR * 0.35
-    const cb0 = rec.capBillow
+    // Cap: a big billowing lobed dome that widens and lifts as it ages and
+    // OVERHANGS the stem (capR >> stemR), with a rolled-under lower lip that
+    // curls back toward the stem — the "rolling" of a real mushroom cap.
+    const capR = rec.rMax * MUSHROOM_CAP_RADIUS * (0.55 + 0.45 * rise)
+    const capTop = capY + capR * 0.85
+    const capBase = capY - capR * 0.30
+    const lipY = capBase - capR * MUSHROOM_CAP_OVERHANG   // lip hangs below the base
+    const lipR = capR * MUSHROOM_CAP_CURL                 // and curls inward
+    const cbil = rec.capBillow
+    const lbil = rec.lipBillow || rec.capBillow
     for (let i = 0; i < MUSHROOM_CAP_LOBES; i++) {
       const a0 = rec.ringPhase + (i / MUSHROOM_CAP_LOBES) * Math.PI * 2
       const a1 = rec.ringPhase + ((i + 1) / MUSHROOM_CAP_LOBES) * Math.PI * 2
-      const r0 = capR * cb0[i % MUSHROOM_CAP_LOBES]
-      const r1 = capR * cb0[(i + 1) % MUSHROOM_CAP_LOBES]
+      const r0 = capR * cbil[i % MUSHROOM_CAP_LOBES]
+      const r1 = capR * cbil[(i + 1) % MUSHROOM_CAP_LOBES]
       const x0 = rec.x + Math.cos(a0) * r0, z0 = rec.z + Math.sin(a0) * r0
       const x1 = rec.x + Math.cos(a1) * r1, z1 = rec.z + Math.sin(a1) * r1
-      // Rounded top and a rolled-under lower lip (the mushroom's curl).
+      // Rounded billowing top.
       this._pushTri(x0, capY, z0, x1, capY, z1, rec.x, capTop, rec.z, cr, cg, cb, alpha)
-      this._pushTri(x1, capY, z1, x0, capY, z0, rec.x, capBase, rec.z, cr * 0.6, cg * 0.6, cb * 0.6, alpha * 0.75)
+      // Rolled-under lip: from the cap rim (capY) down and IN to a lobed torus
+      // ring hanging below (lipY, lipR) — the overhang that reads as billowing.
+      const lr0 = lipR * lbil[i % MUSHROOM_CAP_LOBES]
+      const lr1 = lipR * lbil[(i + 1) % MUSHROOM_CAP_LOBES]
+      const lx0 = rec.x + Math.cos(a0) * lr0, lz0 = rec.z + Math.sin(a0) * lr0
+      const lx1 = rec.x + Math.cos(a1) * lr1, lz1 = rec.z + Math.sin(a1) * lr1
+      this._pushTri(x0, capY, z0, x1, capY, z1, lx1, lipY, lz1, cr * 0.7, cg * 0.65, cb * 0.6, alpha * 0.85)
+      this._pushTri(x0, capY, z0, lx1, lipY, lz1, lx0, lipY, lz0, cr * 0.7, cg * 0.65, cb * 0.6, alpha * 0.85)
+      // Underside closing back toward the stem (the curl's inner face).
+      this._pushTri(lx0, lipY, lz0, lx1, lipY, lz1, rec.x, capBase, rec.z, cr * 0.5, cg * 0.5, cb * 0.5, alpha * 0.7)
+    }
+  }
+
+  // _buildConcussion renders the mushroom tier's concussive blast: a
+  // ground-hugging pressure DOME/RING racing outward along the terrain, plus a
+  // brief expanding translucent pressure ripple (a hemisphere shell that
+  // balloons out and pops) so the blast reads as concussive from any camera
+  // angle.  All world-space + deterministic; alpha rides the record's budget.
+  _buildConcussion(rec, t, gy, cr, cg, cb, alpha) {
+    void t; void cr; void cg; void cb
+    // Shock front expands over MUSHROOM_SHOCK_MS then holds; fades as it goes.
+    const st = Math.min(1, rec.ageMs / MUSHROOM_SHOCK_MS)
+    const shockR = rec.rMax * MUSHROOM_SHOCK_REACH * easeOut(st)
+    const shockA = alpha * Math.max(0, 1 - st) * 0.5
+    const phase = rec.shockPhase != null ? rec.shockPhase : rec.ringPhase
+    if (shockA > 0.001 && shockR > 0.5) {
+      // A low, wide dome: a lobed ring lifted into a shallow dome that hugs
+      // the ground and races out (translucent bluish-white pressure front).
+      const domeH = shockR * MUSHROOM_SHOCK_HEIGHT
+      const SEG = 18
+      const pr = 1.35, pg = 1.35, pbl = 1.5   // cool pressure-front tint
+      for (let i = 0; i < SEG; i++) {
+        const a0 = phase + (i / SEG) * Math.PI * 2
+        const a1 = phase + ((i + 1) / SEG) * Math.PI * 2
+        const x0 = rec.x + Math.cos(a0) * shockR, z0 = rec.z + Math.sin(a0) * shockR
+        const x1 = rec.x + Math.cos(a1) * shockR, z1 = rec.z + Math.sin(a1) * shockR
+        // Slope up to a low apex above the detonation — a squashed dome.
+        this._pushTri(x0, gy, z0, x1, gy, z1, rec.x, gy + domeH, rec.z, pr, pg, pbl, shockA)
+      }
+    }
+    // Pressure ripple: a very brief hemisphere shell that balloons out and
+    // pops in the first ~half of the shock time — a fast translucent bubble
+    // visible from any angle (the camera-agnostic pressure wave).
+    const rrt = rec.ageMs / (MUSHROOM_SHOCK_MS * 0.55)
+    if (rrt < 1) {
+      const rr = rec.rMax * (1.0 + 2.8 * easeOut(Math.min(1, rrt)))
+      const ra = alpha * Math.max(0, 1 - rrt) * 0.35
+      if (ra > 0.001) {
+        const SEG = 14, RINGS = 4
+        for (let ring = 0; ring < RINGS; ring++) {
+          const el0 = (ring / RINGS) * (Math.PI / 2)
+          const el1 = ((ring + 1) / RINGS) * (Math.PI / 2)
+          const y0 = gy + Math.sin(el0) * rr, y1 = gy + Math.sin(el1) * rr
+          const rad0 = Math.cos(el0) * rr, rad1 = Math.cos(el1) * rr
+          for (let i = 0; i < SEG; i++) {
+            const a0 = phase + (i / SEG) * Math.PI * 2
+            const a1 = phase + ((i + 1) / SEG) * Math.PI * 2
+            const x00 = rec.x + Math.cos(a0) * rad0, z00 = rec.z + Math.sin(a0) * rad0
+            const x10 = rec.x + Math.cos(a1) * rad0, z10 = rec.z + Math.sin(a1) * rad0
+            const x01 = rec.x + Math.cos(a0) * rad1, z01 = rec.z + Math.sin(a0) * rad1
+            const x11 = rec.x + Math.cos(a1) * rad1, z11 = rec.z + Math.sin(a1) * rad1
+            this._pushTri(x00, y0, z00, x10, y0, z10, x11, y1, z11, 1.2, 1.2, 1.35, ra)
+            this._pushTri(x00, y0, z00, x11, y1, z11, x01, y1, z01, 1.2, 1.2, 1.35, ra)
+          }
+        }
+      }
     }
   }
 

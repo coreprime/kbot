@@ -103,11 +103,21 @@ world read like the game, all presentation-only — no sim state, no hashes:
   through the polygonal explosion system (below); at/below the waterline
   they splash (spray + bubbles + foam ring) instead of burning.  Explicit
   `color`/`durationMs`/`velocity` override the def; `type:
-  'beam'|'tracer'` without a weapon keeps the raw line-effect path.
+  'beam'|'tracer'` without a weapon keeps the raw line-effect path.  Every
+  shot is LINE-OF-SIGHT checked against the terrain (`terrain-los.js`): a
+  beam/tracer/projectile fired at a unit behind a ridge terminates ON the
+  slope with a dirt-puff impact instead of reaching the (undamaged) target
+  — so a blocked shot visibly splashes on the hillside.
 - **Explosions** — every impact/death detonates a polygonal 3D explosion
   (expanding emissive fireball polyhedron + spinning shards + ground
   shockwave ring, additive so the cinematic bloom lifts it) sized by a
-  small/medium/large/huge ladder off `areaOfEffect` + death severity.
+  small/medium/large/huge/mushroom ladder off `areaOfEffect` + death
+  severity.  The mushroom tier (commander-class deaths) is a distinct big
+  shape — ground flash → fast tapered rising STEM → large billowing CAP
+  that overhangs the stem and rolls under — plus a CONCUSSIVE blast: a
+  ground-hugging pressure ring racing outward along the terrain and a brief
+  camera-agnostic pressure-ripple bubble.  Everything scales off the
+  death-weapon AoE.
   Readability is enforced: per-hit effects are brief and tight, spawns
   coalesce per area bucket instead of stacking, a global concurrency cap
   recycles records, and sqrt-law luminance budgets dim both the additive
@@ -119,25 +129,33 @@ world read like the game, all presentation-only — no sim state, no hashes:
   clean kill (severity < 50) swaps in the wreck 3DO (pack unitdb
   `meta.corpseObject`), sunk slightly and persistent until
   `removeCorpse(id)`/`clearCorpses()`; heavier kills throw the unit's
-  pieces as tumbling debris — clean OUTWARD parabolas that tumble in
-  place, bounce off the terrain with energy loss and settle before
-  fading, with `impactDir` ([x,z], source → victim) biasing the scatter
-  away from the killing blow.  The death detonation is SIZED from the
-  unit's FBI death-explosion weapon: pass `deathAoe` (blast diameter in
-  WU, from the pack unitdb `meta.explodeWeapon.areaOfEffectWU`, or
-  `meta.selfDestructWeapon`'s for a manual self-destruct) and the
-  explosion tier ladder scales with it — a peewee (AoE 30) pops small
-  while a commander (`COMMANDER_BLAST` AoE 950) renders a full
-  MUSHROOM CLOUD (ground flash + rising stem + billowing cap + shockwave
-  ring), all under the same luminance budget.  Omit `deathAoe` and the
-  blast is estimated from the model radius (a uniform-ish pop).  Airborne
-  units (`air: true`) instead enter a spiral crash: a spinning, smoking
-  descent that detonates where it meets the terrain or splashes into the
-  sea.  The applyState form: a live unit re-sent with `dead: true` (+
-  `deathSeverity`/`corpse`/`heapCorpse`/`impactDir`/`impactMag`/`deathAoe`)
-  triggers the same path once.
+  actual MODEL PIECES as tumbling debris CHUNKS — the model breaks along
+  its own COB piece tree (turret / hull / barrel / legs), a moderate
+  piece-driven count (~4-16, not a shard cloud), with a one-piece unit's
+  largest part split so it still sheds several chunks.  Chunks fly clean
+  OUTWARD parabolas that tumble in place, bounce off the terrain with
+  energy loss and settle before fading, with `impactDir` ([x,z], source →
+  victim) biasing the scatter away from the killing blow.  A moving unit
+  also passes its VELOCITY at death into the burst (momentum): the chunks
+  are thrown along its travel direction on top of the radial spray.  The
+  world measures that velocity from the unit's own position history, or a
+  driver passes it explicitly (`velocity: [vx,vy,vz]` WU/s, both on
+  `unitDeath` and the applyState `su.velocity` field).  The death
+  detonation is SIZED from the unit's FBI death-explosion weapon: pass
+  `deathAoe` (blast diameter in WU, from the pack unitdb
+  `meta.explodeWeapon.areaOfEffectWU`, or `meta.selfDestructWeapon`'s for a
+  manual self-destruct) and the explosion tier ladder scales with it — a
+  peewee (AoE 30) pops small while a commander (`COMMANDER_BLAST` AoE 950)
+  renders the full MUSHROOM CLOUD + concussive shockwave, all under the
+  same luminance budget.  Omit `deathAoe` and the blast is estimated from
+  the model radius (a uniform-ish pop).  Airborne units (`air: true`) get
+  the SAME treatment — they EXPLODE IN PLACE + arc-scatter debris under
+  gravity (no spiral crash), leaving a brief smoke puff if high.  The
+  applyState form: a live unit re-sent with `dead: true` (+
+  `deathSeverity`/`corpse`/`heapCorpse`/`impactDir`/`impactMag`/`deathAoe`/
+  `velocity`) triggers the same path once.
 - **Air / sea flags** — applyState `air: true` adds a hover bob,
-  bank-into-turns and contrails at speed (and the spiral-crash death);
+  bank-into-turns and contrails at speed (and the explode-in-place death);
   `hover: true` the hovercraft cushion gyration — a gentle lean computed
   about WORLD axes, so the tilt direction holds steady while the craft
   yaws; `naval: true` a stern
