@@ -121,9 +121,30 @@ export function weaponVisualPlan(w) {
 // Water: pass { water: true } (impact at/below the sea surface) and the
 // burst becomes a splash — white spray + bubbles + a foam ring via the
 // manager's splash tier, no fire.
-export function impactBurst(binding, pos, { aoe = 16, sparks = true, kind = 'impact', severity = 0, water = false } = {}) {
+//
+// Terrain block: pass { terrain: true } for a shot that buried into a
+// hillside (terrain-los.js) rather than hitting a unit — a brown DIRT PUFF +
+// a few debris sparks, no fire glow and no explosion-manager fireball, so a
+// blocked round visibly splashes on the slope without reading as a kill.
+export function impactBurst(binding, pos, { aoe = 16, sparks = true, kind = 'impact', severity = 0, water = false, terrain = false } = {}) {
   if (!binding || !binding.particles) return
   const p = binding.particles
+  if (terrain) {
+    // Dirt splash: a low brown puff kicked off the slope + a couple of
+    // debris sparks.  Deliberately smaller and duller than a real hit — the
+    // shot did no damage, it just chewed the hillside.
+    const size = Math.max(5, Math.min(24, aoe * 0.4))
+    p.emit(SFX_SMOKE_GREY, pos, {
+      size,
+      lifeMs: 620,
+      color: [0.42, 0.32, 0.22, 0.7],
+      riseSpeed: 3,
+      drift: 1.2,
+    })
+    const n = Math.max(2, Math.min(5, Math.round(aoe / 14)))
+    for (let i = 0; i < n; i++) p.emit(SFX_SPARK, pos, {})
+    return
+  }
   if (water) {
     // Splash: upward white spray + rising bubbles; foam ring via the
     // explosion manager's splash tier.
@@ -178,6 +199,11 @@ export function impactBurst(binding, pos, { aoe = 16, sparks = true, kind = 'imp
 //
 // Overrides: explicit color ([r,g,b] 0..1) / durationMs / velocity /
 // width win over the def-derived values.
+// terrainImpact — when true the shot was blocked by terrain BEFORE the target
+// (terrain-los.js retargeted `to` to the slope): the impact becomes a dirt
+// puff, not a hit on the (untouched) unit.  Beams/particles splash on the
+// slope immediately; model projectiles carry the flag so their flight impact
+// (stepModelShots) splashes dirt too.
 export function spawnWeaponVisual({
   weapon,
   from,
@@ -189,6 +215,7 @@ export function spawnWeaponVisual({
   gravity = 80,
   overrides = {},
   env = null,
+  terrainImpact = false,
 }) {
   if (!Array.isArray(from) || !Array.isArray(to)) return null
   const w = weapon || null
@@ -201,7 +228,7 @@ export function spawnWeaponVisual({
     if (binding && binding.particles) {
       binding.particles.emit(SFX_FIRE_FLASH, from, { size: 9, lifeMs: 120 })
     }
-    impactBurst(binding, to, { aoe, sparks: true })
+    impactBurst(binding, to, { aoe, sparks: true, terrain: terrainImpact })
     const dur = overrides.durationMs != null
       ? overrides.durationMs
       : Math.max(90, (w && w.durationSec > 0 ? w.durationSec * 1000 : 120))
@@ -266,6 +293,9 @@ export function spawnWeaponVisual({
       torpedo,
       waterY,
       speed: v,
+      // Shot aimed past a ridge: its target IS the terrain point, so its
+      // detonation is a dirt puff even before the height check fires.
+      terrainImpact,
     }
     modelShots.push(shot)
     if (binding && binding.particles) {
@@ -372,7 +402,10 @@ export function stepModelShots(modelShots, dtMs, { onExpire = null, env = null }
     if (!hit && heightAt && s.vy < 0 && s.y <= heightAt(s.x, s.z)) hit = true
     if (hit || s.ageMs >= s.lifeMs) {
       const water = shotWaterY != null && s.y <= shotWaterY + 0.5
-      impactBurst(s.binding, [s.x, s.y, s.z], { aoe: s.aoe, water })
+      // A shot blocked by terrain (its aim point was the slope) splashes dirt
+      // wherever it lands, unless it came down in water.
+      const terrain = !!s.terrainImpact && !water
+      impactBurst(s.binding, [s.x, s.y, s.z], { aoe: s.aoe, water, terrain })
       if (onExpire) onExpire(s)
       continue
     }

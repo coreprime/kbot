@@ -65,6 +65,7 @@ import {
   latheConeSpray,
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
+import { raycastTerrain } from './terrain-los.js'
 import { fragmentGeometry, targetFragmentCount } from './debris-fragments.js'
 import { Piece } from './piece.js'
 import { Model } from './model.js'
@@ -1643,6 +1644,28 @@ export async function createWorld(canvas, {
         if (muzzle) from = muzzle
       }
       if (!Array.isArray(from) || !Array.isArray(to)) return
+      // Line-of-sight: if a ridge sits between the muzzle and the aim point
+      // the real engine BLOCKS the round (the target takes no damage), so the
+      // visual must terminate on the slope with a dirt splash, NOT reach the
+      // unit.  Raycast the shot path against the terrain heightfield and, when
+      // it dips below the surface before the target, retarget `to` to that
+      // impact and flag it a terrain hit.  Ballistic/model shots arc/step and
+      // do their own terrain check, but retargeting still shortens their aim
+      // and marks the impact as dirt.  Non-terrain env (headless tests with a
+      // flat sampler) simply never blocks.
+      let terrainImpact = false
+      {
+        const block = raycastTerrain(from, to, terrainHeightAt)
+        if (block) {
+          const toDist = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2])
+          // Only block when the slope is meaningfully closer than the target
+          // (a shot skimming the target's own hilltop shouldn't misfire).
+          if (block.dist < toDist - 1) {
+            to = block.point
+            terrainImpact = true
+          }
+        }
+      }
       let def = null
       if (weapon) {
         const defs = await weaponDefs()
@@ -1660,6 +1683,7 @@ export async function createWorld(canvas, {
           gravity: 100,
           overrides: { color, durationMs, velocity, width },
           env: { waterY: waterY(), heightAt: terrainHeightAt },
+          terrainImpact,
         })
         worldBinding._lastFiredWeapon = def
         if (res && res.modelShot) {
@@ -1707,6 +1731,11 @@ export async function createWorld(canvas, {
         width: width || 2,
         streak: 0.18,
       })
+      // Legacy path terminated on a slope: kick a dirt splash where the beam/
+      // tracer buries into the terrain (no target hit).
+      if (terrainImpact) {
+        impactBurst(worldBinding, to.slice(0, 3), { aoe: 16, terrain: true })
+      }
       if (!renderer.running) world.step(0)
     },
 
