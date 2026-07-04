@@ -38,4 +38,15 @@ void logDepthFragment() {
   // guards against a w that dips just below 1 for geometry at the near plane.
   gl_FragDepthEXT = log2(max(1e-6, vLogZ)) * (0.5 * uLogDepthFC);
 }
+
+// logDepthFragmentBiased writes the same log depth pulled toward the camera by
+// `bias` (a small positive constant in [0..1] depth units). glPolygonOffset
+// biases the interpolated gl_Position.z, which the log-depth path OVERRIDES
+// with gl_FragDepthEXT — so polygon offset is a no-op once log depth is on, and
+// coplanar terrain decals z-fight regardless. Subtracting a firm constant here
+// is the log-depth equivalent: it lifts the decal off the terrain in written
+// depth so it always wins the LEQUAL test against the surface it lies on.
+void logDepthFragmentBiased(float bias) {
+  gl_FragDepthEXT = log2(max(1e-6, vLogZ)) * (0.5 * uLogDepthFC) - bias;
+}
 #endif

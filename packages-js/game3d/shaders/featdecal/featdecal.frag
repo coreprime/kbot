@@ -32,7 +32,10 @@ uniform int uPulseLightCount;
 
 void main() {
 #ifdef LOGDEPTH_FRAGMENT
-  logDepthFragment();
+  // Firm depth bias: this decal lies flush on the terrain, so pull it toward
+  // the camera in written depth. glPolygonOffset can't do this once log depth
+  // overrides gl_FragDepth (see logdepth.glsl).
+  logDepthFragmentBiased(0.0008);
 #endif
   vec4 tex = texture2D(uSprite, vUV);
   // Edge alpha: the sprite's own transparency feathers the decal.  Drop
