@@ -23,10 +23,16 @@ uniform vec2 uViewport;
 varying vec4 vColor;
 varying vec4 vUvRect;
 
+#include "../lib/logdepth.glsl"
+
 void main() {
   vec4 worldPos = vec4(aPos, 1.0);
   vec4 viewPos = uView * worldPos;
   gl_Position = uProj * viewPos;
+  // Write log depth to match the scene buffer (see particles.vert): plain
+  // perspective depth loses the LEQUAL test against the terrain's log-depth
+  // and buries the sprite behind the ground.
+  logDepthVertex();
   // Perspective-correct point sizing matches the regular particle
   // shader so the sprite scales with distance the same way a smoke
   // puff does (no surprise when projectiles fly past the camera).

@@ -53,6 +53,19 @@ import { hoverSway } from './hover-sway.js'
 import { createTerrainSampler } from './terrain-sample.js'
 
 const VERTEX_STRIDE = 9 * 4 // 9 floats × 4 bytes (pos×3, normal×3, uv×2, ao×1)
+
+// Per-coplanar-tier log-depth separation (written-depth units) for unit model
+// faces.  glPolygonOffset is a no-op under log depth (the fragment overrides
+// gl_FragDepth), so overlapping panels z-fight without this; the value is the
+// same order as the terrain-decal bias (featdecal.frag = 0.0008) — firm enough
+// to clear a coplanar panel, small enough not to punch it through a genuinely
+// nearer face.  The shader adds a slope term on top so grazing angles hold.
+const DEPTH_BIAS_UNIT = 0.0008
+
+// Baseline Tron grid-line intensity over the textured terrain — a subtle,
+// always-on wireframe read.  The intro raises it toward ~1 at the start of
+// the zoom-in and eases back to this baseline as the camera settles.
+const TERRAIN_GRID_BASELINE = 0.12
 // Scratch buffers for the dynamic pulse-light uniform arrays, sized to
 // MAX_PULSE_LIGHTS so the per-frame upload never allocates.  Positions and
 // colours are vec3 (3 floats each); ranges are scalar.
@@ -285,6 +298,11 @@ export class ModelRenderer {
     this.optGodBeams = true          // light shafts from the sun(s)
     this.optWaves = true             // animate sea surface; false → flat sea
     this.voidGridEnabled = true      // dark Tron grid beyond an installed battlefield
+    // Tron grid-line intensity laid over the textured terrain surface. A
+    // faint baseline reads the grid pattern on the ground at all times; the
+    // intro drives it up at the start of the zoom-in and eases it back down
+    // (see setTerrainGridIntensity).
+    this.terrainGridIntensity = TERRAIN_GRID_BASELINE
     // Draw-distance multiplier on the far clip plane. 1 = the base horizon;
     // the replay/cinematic harness raises it (setDrawDistanceScale, default
     // 4 there) so far units keep geometry in wide shots. Paired with the
@@ -1647,6 +1665,16 @@ export class ModelRenderer {
     this.requestRedraw()
   }
 
+  // setTerrainGridIntensity sets the Tron grid-line intensity laid over the
+  // textured terrain (0 = off … 1 = strong). The intro drives it high at the
+  // start of the zoom-in and eases toward the faint baseline as the camera
+  // settles. Clamped; NaN/undefined restores the baseline.
+  setTerrainGridIntensity(v) {
+    const n = Number(v)
+    this.terrainGridIntensity = Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : TERRAIN_GRID_BASELINE
+    this.requestRedraw()
+  }
+
   // setSuperSample sets the offscreen supersample factor for recorded
   // renders — the scene renders at factor× the canvas and is downsampled by
   // the post/FXAA blit (cheap SSAA). 1 = native. The harness sets 2 for
@@ -2874,6 +2902,7 @@ export class ModelRenderer {
       shiftable ? Math.round(cz / 16) * 16 : 0,
     ])
     gl.uniform1f(this.uGroundTerrainReady, this._terrainReady ? 1 : 0)
+    gl.uniform1f(this.uGroundTerrainGrid, this.terrainGridIntensity ?? TERRAIN_GRID_BASELINE)
     // Sea-surface waves run on the pausable, speed-scaled effect clock — the
     // SAME clock the unit's CPU sea-bob samples — so the hull stays seated on
     // its wave crest at any Runtime Speed and both freeze together on pause.
@@ -3898,23 +3927,35 @@ export class ModelRenderer {
               }
             }
           }
-          // Coplanar layers: apply a polygon offset proportional to
-          // the group's tier so they win the depth test cleanly
-          // instead of z-fighting against the base.  Tier 0 means
-          // "first / base" — no offset.  Higher tiers nudge toward
-          // the camera (negative factor & units).
+          // Coplanar layers: separate them in depth so they win the test
+          // cleanly instead of z-fighting against the base.  Tier 0 means
+          // "first / base" — no offset.  Higher tiers nudge toward the camera;
+          // synthetic (FillModel-reconstructed) faces are pushed AWAY so the
+          // artist's real geometry always wins.
+          //
+          // TWO mechanisms, because the scene uses log depth: glPolygonOffset
+          // only biases gl_Position.z, which the log-depth fragment OVERRIDES
+          // with gl_FragDepthEXT — so polygon offset is a NO-OP once log depth
+          // is on, and coplanar UNIT panels (e.g. the armcv rear panel) z-fight
+          // regardless.  The fix is a log-depth-domain bias uploaded per group
+          // via uDepthBias, matching how the terrain decals already do it; the
+          // shader's logDepthFragmentBiased also adds a slope term so the
+          // separation holds at GRAZING angles (where a constant is too small).
+          // We keep polygonOffset set too so hardware without the frag-depth
+          // extension (log depth off) still separates via the classic path.
           if (group.depthTier > 0) {
             gl.enable(gl.POLYGON_OFFSET_FILL)
             gl.polygonOffset(-group.depthTier, -group.depthTier)
+            // Toward camera, scaled by tier (log-depth units).
+            this.#u1f(this.uMainDepthBias, DEPTH_BIAS_UNIT * group.depthTier)
           } else if (group.synthetic) {
-            // FillModel reconstructed this face; it sits coplanar with the
-            // artist's original geometry (e.g. the ARM Swatter nose cap on
-            // the team-colour deck plane).  Push it away from the camera so
-            // the real face always wins the depth test — no shimmer/z-fight.
             gl.enable(gl.POLYGON_OFFSET_FILL)
             gl.polygonOffset(1, 1)
+            // Away from camera so the real coplanar face wins.
+            this.#u1f(this.uMainDepthBias, -DEPTH_BIAS_UNIT)
           } else {
             gl.disable(gl.POLYGON_OFFSET_FILL)
+            this.#u1f(this.uMainDepthBias, 0)
           }
           if (shadowPass) {
             if (group.textureName && this.textureCache) {
@@ -4241,6 +4282,7 @@ export class ModelRenderer {
     // zero alpha at the start of each entity's draw so any piece that
     // doesn't carry an override emits no glow.
     this.uPieceGlow = gl.getUniformLocation(prog, 'uPieceGlow')
+    this.uMainDepthBias = gl.getUniformLocation(prog, 'uDepthBias')
     this.uMainOutputAlpha = gl.getUniformLocation(prog, 'uOutputAlpha')
     this.uBuildCutOn = gl.getUniformLocation(prog, 'uBuildCutOn')
     this.uBuildCutY = gl.getUniformLocation(prog, 'uBuildCutY')
@@ -4327,6 +4369,7 @@ export class ModelRenderer {
     this.uGroundModeId = gl.getUniformLocation(prog, 'uGroundMode')
     this.uGroundTileSize = gl.getUniformLocation(prog, 'uTileSize')
     this.uGroundTerrainReady = gl.getUniformLocation(prog, 'uTerrainReady')
+    this.uGroundTerrainGrid = gl.getUniformLocation(prog, 'uTerrainGrid')
     this.uGroundTerrainTex = gl.getUniformLocation(prog, 'uTerrainTex')
     this.uGroundTime = gl.getUniformLocation(prog, 'uTime')
     this.uGroundExposure = gl.getUniformLocation(prog, 'uExposure')
@@ -4489,7 +4532,12 @@ export class ModelRenderer {
   // per particle.  Sized for an initial capacity of 1024 particles
   // — the upload path grows the buffer if a frame ever wants more.
   #initParticlesProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    // logDepth: true so the particle pass writes the SAME logarithmic depth the
+    // ground/unit passes filled the depth buffer with.  Without it the pass
+    // wrote plain perspective depth and every mote lost the LEQUAL test against
+    // the terrain's log-depth value — the nanolathe stream and other
+    // ground-level SFX were silently depth-culled behind the ground.
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programParticles = prog
     const gl = this.gl
     this.aPartPos = gl.getAttribLocation(prog, 'aPos')
@@ -4498,6 +4546,7 @@ export class ModelRenderer {
     this.uPartProj = gl.getUniformLocation(prog, 'uProj')
     this.uPartView = gl.getUniformLocation(prog, 'uView')
     this.uPartViewport = gl.getUniformLocation(prog, 'uViewport')
+    this.uPartLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this._partCapacity = 1024
     this._partInterleaved = new Float32Array(this._partCapacity * 8)
     this._partVBO = gl.createBuffer()
@@ -5217,6 +5266,7 @@ export class ModelRenderer {
     gl.vertexAttribPointer(this.aPartSize, 1, gl.FLOAT, false, STRIDE, 7 * 4)
     gl.uniformMatrix4fv(this.uPartProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uPartView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uPartLogDepthFC)
     { const [tw, th] = this.#targetDims(); gl.uniform2f(this.uPartViewport, tw, th) }
     // Premultiplied-alpha additive blend: src * 1 + dst * 1.
     // The shader already pre-multiplies colour by alpha (colour-
@@ -5251,7 +5301,9 @@ export class ModelRenderer {
   // play at once (PlasmaSm + PlasmaMd), so the typical batch count
   // stays at 1-2 draw calls per frame.
   #initSpritesProgram(vsSrc, fsSrc) {
-    const prog = this.#linkProgram(vsSrc, fsSrc)
+    // logDepth: true — same reason as the particle program: the sprite pass
+    // must write log depth to test correctly against the log-depth scene.
+    const prog = this.#linkProgram(vsSrc, fsSrc, { logDepth: true })
     this.programSprites = prog
     const gl = this.gl
     this.aSprPos = gl.getAttribLocation(prog, 'aPos')
@@ -5262,6 +5314,7 @@ export class ModelRenderer {
     this.uSprView = gl.getUniformLocation(prog, 'uView')
     this.uSprViewport = gl.getUniformLocation(prog, 'uViewport')
     this.uSprAtlas = gl.getUniformLocation(prog, 'uAtlas')
+    this.uSprLogDepthFC = gl.getUniformLocation(prog, 'uLogDepthFC')
     this._sprCapacity = 256
     this._sprInterleaved = new Float32Array(this._sprCapacity * 12)
     this._sprVBO = gl.createBuffer()
@@ -5407,6 +5460,7 @@ export class ModelRenderer {
     gl.useProgram(this.programSprites)
     gl.uniformMatrix4fv(this.uSprProj, false, this.camera.projMatrix)
     gl.uniformMatrix4fv(this.uSprView, false, this.camera.viewMatrix)
+    this.#setLogDepthFC(this.uSprLogDepthFC)
     { const [tw, th] = this.#targetDims(); gl.uniform2f(this.uSprViewport, tw, th) }
     gl.uniform1i(this.uSprAtlas, 0)
     gl.activeTexture(gl.TEXTURE0)
@@ -5928,7 +5982,17 @@ export class ModelRenderer {
   #logDepthPrefix(type) {
     const gl = this.gl
     if (type === gl.FRAGMENT_SHADER) {
-      return '#extension GL_EXT_frag_depth : enable\n#define LOGDEPTH 1\n#define LOGDEPTH_FRAGMENT 1\n'
+      // Screen-space derivatives (dFdx/dFdy/fwidth) let logDepthFragmentBiased
+      // scale its bias by the surface's depth SLOPE — the slope term is what
+      // keeps a coplanar terrain decal off the ground at grazing angles, where
+      // a constant bias is too small and the decal flickers.  The #extension
+      // pragma must precede any statement, so it leads the prefix; the
+      // LOGDEPTH_DERIV define gates the slope path so shaders still compile
+      // where the extension is missing (constant-bias fallback).
+      let p = '#extension GL_EXT_frag_depth : enable\n'
+      if (this._derivExt) p += '#extension GL_OES_standard_derivatives : enable\n#define LOGDEPTH_DERIV 1\n'
+      p += '#define LOGDEPTH 1\n#define LOGDEPTH_FRAGMENT 1\n'
+      return p
     }
     return '#define LOGDEPTH 1\n#define LOGDEPTH_VERTEX 1\n'
   }

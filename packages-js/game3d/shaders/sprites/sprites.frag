@@ -12,6 +12,8 @@ uniform sampler2D uAtlas;
 varying vec4 vColor;
 varying vec4 vUvRect;
 
+#include "../lib/logdepth.glsl"
+
 void main() {
   // gl_PointCoord is (0,0) at top-left → (1,1) at bottom-right of the
   // point sprite.  Map it into the per-frame sub-rect to sample the
@@ -30,4 +32,7 @@ void main() {
   // don't occlude it (matches the existing particle shader's blend
   // convention).
   gl_FragColor = vec4(c.rgb * c.a, c.a);
+  // Match the scene's logarithmic depth buffer so the sprite tests against
+  // the terrain correctly instead of being buried behind it.
+  logDepthFragment();
 }

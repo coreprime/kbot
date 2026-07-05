@@ -6,6 +6,8 @@
 precision mediump float;
 varying vec4 vColor;
 
+#include "../lib/logdepth.glsl"
+
 void main() {
   // gl_PointCoord is in [0,1]; centre the disc.
   vec2 d = gl_PointCoord - vec2(0.5);
@@ -20,4 +22,10 @@ void main() {
   // them.  Soft falloff at the edge still reads as a circular blob
   // because the modulated alpha attenuates the colour smoothly.
   gl_FragColor = vec4(vColor.rgb * alpha, alpha);
+  // Write the SAME logarithmic depth the ground/unit passes wrote, so the
+  // additive point tests correctly against the scene it composites over
+  // (depth write is off in this pass, so this only affects the TEST — a mote
+  // in front of the terrain now passes instead of being buried by the
+  // log-vs-perspective depth mismatch).
+  logDepthFragment();
 }

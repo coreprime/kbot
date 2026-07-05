@@ -130,6 +130,16 @@ uniform float uUnitRadius;
 // are "the piece itself glows," not "the piece is lit by something."
 uniform vec4  uPieceGlow;
 
+// Coplanar-face depth bias (log-depth units).  TA unit models routinely have
+// near-coplanar / overlapping panels (a rear hatch on the hull, a synthetic
+// FillModel cap on the deck) that z-fight because glPolygonOffset is a NO-OP
+// under log depth — the fragment overrides gl_FragDepth, so the rasteriser's
+// offset of gl_Position.z never reaches the depth buffer.  The renderer sets
+// this per draw-group so a higher-tier / synthetic face is pulled a firm
+// constant toward the camera in WRITTEN log depth and stops shimmering against
+// the panel it lies on.  0 for base geometry.
+uniform float uDepthBias;
+
 // rgbToHsv / hsvToRgb come from the standard Sam Hocevar GLSL
 // formulation - branchless, suitable for fragment shaders.  We use
 // them to detect blue-team palette pixels by hue and shift them to
@@ -267,7 +277,7 @@ void main() {
   if (uFlatLighting > 0.5) {
     gl_FragColor = vec4(base.rgb, 1.0);
 #ifdef LOGDEPTH_FRAGMENT
-    logDepthFragment();
+    logDepthFragmentBiased(uDepthBias);
 #endif
     return;
   }
@@ -669,6 +679,6 @@ void main() {
   }
   gl_FragColor = vec4(col, uOutputAlpha);
 #ifdef LOGDEPTH_FRAGMENT
-  logDepthFragment();
+  logDepthFragmentBiased(uDepthBias);
 #endif
 }
