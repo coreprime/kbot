@@ -24,8 +24,8 @@ import {
   mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
   startAllRenderers as commonStartAll, stopAllRenderers as commonStopAll,
   ensureSplitState as commonEnsure,
-} from '@kbot/ui/split-host'
-import { newLeaf, isOnlyLeaf } from '@kbot/ui/split-container'
+} from '@coreprime/kbot-ui/split-host'
+import { newLeaf, isOnlyLeaf } from '@coreprime/kbot-ui/split-container'
 import { applyGraphicsOptionsToRenderer } from '../common/graphics-options-state.js'
 import { ModelObserverView } from './observer-view.js'
 

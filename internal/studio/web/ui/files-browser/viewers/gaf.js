@@ -7,7 +7,7 @@
 // still, and a download).  A transparency control at the top re-renders
 // every preview without a round-trip to a separate page.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { gafPngURL, gafApngURL, gafGifURL, baseName } from '../api.js'
 

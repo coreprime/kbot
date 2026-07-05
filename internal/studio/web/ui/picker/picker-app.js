@@ -8,11 +8,11 @@
 // workspace draws an arrow back to its base context.
 
 import { useState, useRef, useEffect } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
-import { Tag } from '@kbot/ui/tag'
-import { GameChip, GameIcon } from '@kbot/ui/game-icon'
-import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { useAsync, Loading, ErrorMsg } from '@coreprime/kbot-ui/async'
+import { Tag } from '@coreprime/kbot-ui/tag'
+import { GameChip, GameIcon } from '@coreprime/kbot-ui/game-icon'
+import { confirmDialog } from '@coreprime/kbot-ui/confirm-dialog'
 import { CavedogIcon } from './icons.js'
 import { NewWorkspaceDialog } from './new-workspace-dialog.js'
 import { ALL_GAMES } from '/ui/common/game-registry.js'

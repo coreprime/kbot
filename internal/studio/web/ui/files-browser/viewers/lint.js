@@ -4,7 +4,7 @@
 // filter badges, a per-rule breakdown, and a diagnostics table whose
 // rows jump to the offending source line in the code view.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState, useCallback, useMemo } from 'preact/hooks'
 
 function severityIcon(s) {

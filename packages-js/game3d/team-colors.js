@@ -5,7 +5,7 @@
 // carrying its own colour table.
 //
 // The table itself is game configuration, not machinery — the active game's
-// adapter package supplies it (see @kbot/game-totala's view3d.js) and the
+// adapter package supplies it (see @coreprime/kbot-game-totala's view3d.js) and the
 // studio injects it through setTeamSides() at boot. Each entry is
 // { side, key, label, rgb, swatchCss }:
 //   - side 0 with rgb: null is the "no recolour" sentinel — the renderer's
@@ -14,7 +14,7 @@
 //   - label / swatchCss feed tooltips and picker swatches directly.
 
 // TA_TEAM_SIDES — Total Annihilation's player-colour table, indexed by
-// `side` (0..7).  This is the same table @kbot/game-totala's view3d adapter
+// `side` (0..7).  This is the same table @coreprime/kbot-game-totala's view3d adapter
 // installs in the studio; it is exported HERE so pack-driven consumers (the
 // replayer, headless renders) can map a recording's player slots onto sides
 // without depending on the private studio adapter package.  createWorld

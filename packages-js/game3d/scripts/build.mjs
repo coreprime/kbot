@@ -8,7 +8,7 @@
 //   3. index.d.ts + the repo LICENSE are copied alongside.
 //
 // Run automatically by `prepack`; the studio's Vite build resolves
-// @kbot/game3d/* to dist/ via the exports map, so `task build` runs
+// @coreprime/kbot-game3d/* to dist/ via the exports map, so `task build` runs
 // this first.
 
 import { execFileSync } from 'node:child_process'

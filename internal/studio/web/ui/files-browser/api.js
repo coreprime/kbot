@@ -12,10 +12,10 @@
 // viewers can ask for "the PNG of GAF sequence 3, frame 2, with the
 // unit's team palette" without hand-assembling a query string.
 
-// The pure formatting + path helpers live in @kbot/ui so non-studio
+// The pure formatting + path helpers live in @coreprime/kbot-ui so non-studio
 // surfaces can share them; re-export here so the explorer's many
 // callers keep importing them from the VFS client as before.
-export { formatSize, parentDir, baseName, extOf } from '@kbot/ui/format'
+export { formatSize, parentDir, baseName, extOf } from '@coreprime/kbot-ui/format'
 
 const BASE = '/api/vfs/'
 

@@ -4,7 +4,7 @@
 // source layer) above the full structured describe document rendered as
 // a collapsible tree.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { formatSize } from '../api.js'
 import { DataTree } from '../content/data-tree.js'
 

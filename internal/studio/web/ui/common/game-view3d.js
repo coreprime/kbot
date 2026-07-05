@@ -1,6 +1,6 @@
 // game-view3d.js
 //
-// Injects the active game's 3D-view configuration into @kbot/game3d, which
+// Injects the active game's 3D-view configuration into @coreprime/kbot-game3d, which
 // is game-agnostic machinery: it renders whatever team palette, projectile
 // fallback hues, and LOD heuristics it is given. The tables live with each
 // game's adapter package (view3d on the adapter object).
@@ -11,9 +11,9 @@
 // publishes the real game id (a no-op delta for the shipped games, which
 // share TA's tables, but the hook a custom game's overrides arrive through).
 
-import { setTeamSides } from '@kbot/game3d/team-colors'
-import { setLodHidePatterns } from '@kbot/game3d/model-loader'
-import { setProjectileFallbackColors } from '@kbot/game3d/weapon-driver'
+import { setTeamSides } from '@coreprime/kbot-game3d/team-colors'
+import { setLodHidePatterns } from '@coreprime/kbot-game3d/model-loader'
+import { setProjectileFallbackColors } from '@coreprime/kbot-game3d/weapon-driver'
 import { activeGame } from './game-registry.js'
 
 export function applyGameView3D() {

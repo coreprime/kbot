@@ -106,7 +106,7 @@ export class Session {
    * Insert a unit directly; returns its unit id. headingRad follows the
    * game convention every boundary heading uses: 0 faces -Z (map north),
    * the unit moves along (-sin, -cos) of it — convert a recording's uint16
-   * heading with @kbot/game3d's headingToRadians and pass it straight in.
+   * heading with @coreprime/kbot-game3d's headingToRadians and pass it straight in.
    */
   addUnit(meta, x, z, headingRad = 0, side = 1) {
     return this.#api.addUnit(this.#handle, meta, x, z, headingRad, side)
@@ -259,7 +259,7 @@ export class Session {
    * synchronously and return the piece index the script reported, or -1
    * when the unit / script is missing or the query would yield. The index
    * is into the unit's COB piece table (pieceNames), so a renderer maps it
-   * to a model piece BY NAME — pair with @kbot/game3d's
+   * to a model piece BY NAME — pair with @coreprime/kbot-game3d's
    * world.unitPieceWorldPos(unitId, index) for the piece's world position.
    *
    * Weapon muzzles: queryScriptPiece(id, 'QueryPrimary') (Secondary /

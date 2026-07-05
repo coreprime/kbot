@@ -11,11 +11,11 @@
 // button reset the route.  State is intentionally shallow (one object)
 // so a back/forward stack can be layered on later without restructuring.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useCallback, useEffect, useState } from 'preact/hooks'
 import { WarmIndicator } from './content/warm-indicator.js'
-import { SearchBox } from '@kbot/ui/search-box'
-import { Breadcrumbs } from '@kbot/ui/breadcrumbs'
+import { SearchBox } from '@coreprime/kbot-ui/search-box'
+import { Breadcrumbs } from '@coreprime/kbot-ui/breadcrumbs'
 import { HomePage } from './pages/home.js'
 import { BrowsePage } from './pages/browse.js'
 import { ViewPage } from './pages/view.js'

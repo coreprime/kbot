@@ -1,7 +1,7 @@
-// @kbot/game-takingdoms
+// @coreprime/kbot-game-takingdoms
 //
 // TA: Kingdoms' game adapter — the JS twin of the Go games/takingdoms
-// package. Composes over @kbot/game-totala (the TA-format baseline) and
+// package. Composes over @coreprime/kbot-game-totala (the TA-format baseline) and
 // overrides what Kingdoms does differently:
 //
 //   - Weapon scripts: one shared parameterized set (AimWeapon / FireWeapon /
@@ -13,7 +13,7 @@
 //   - Lifecycle: Dying(damagetype) precedes Killed in the v6 death sequence.
 //   - Welcome theme: arcane conjuration smoke instead of the green nanolathe.
 
-import { game as totala } from '@kbot/game-totala'
+import { game as totala } from '@coreprime/kbot-game-totala'
 
 // The shared weapon entry points every retail TA:K COB exports.
 const SHARED = { aim: 'AimWeapon', fire: 'FireWeapon', query: 'QueryWeapon' }

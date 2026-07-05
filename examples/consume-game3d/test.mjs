@@ -1,11 +1,11 @@
-// Headless proof that the packaged @kbot/game3d works outside the repo:
-// bundle browser-entry.mjs (resolving @kbot/game3d from THIS directory's
+// Headless proof that the packaged @coreprime/kbot-game3d works outside the repo:
+// bundle browser-entry.mjs (resolving @coreprime/kbot-game3d from THIS directory's
 // node_modules — i.e. the installed package, not the repo sources), load
 // it into headless Chromium, and assert the renderer painted a non-blank
 // frame and that addUnit() increased the rendered draw count.
 //
 // Expects to run from a scratch directory containing:
-//   node_modules/@kbot/game3d   (installed tarball or npmjs package)
+//   node_modules/@coreprime/kbot-game3d   (installed tarball or npmjs package)
 //   node_modules/esbuild, node_modules/playwright (+ chromium installed)
 //   browser-entry.mjs, test.mjs (copied from examples/consume-game3d)
 

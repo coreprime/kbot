@@ -5,9 +5,9 @@
 // packed vs unpacked size, compression), and a small facts panel.  All
 // numbers come from the ?stats document in one request.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { getStats, formatSize } from '../api.js'
-import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
+import { useAsync, Loading, ErrorMsg } from '@coreprime/kbot-ui/async'
 
 function StatCard({ value, label, accent }) {
   return html`

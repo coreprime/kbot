@@ -26,9 +26,9 @@
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { activeGame } from '../common/game-registry.js'
-import { gatherSceneLights } from '@kbot/game3d/scene-lights'
-import { AudioPool } from '@kbot/game3d/audio-pool'
-import { ParticlePool } from '@kbot/game3d/cob-particles'
+import { gatherSceneLights } from '@coreprime/kbot-game3d/scene-lights'
+import { AudioPool } from '@coreprime/kbot-game3d/audio-pool'
+import { ParticlePool } from '@coreprime/kbot-game3d/cob-particles'
 import {
   SmokeTrailManager,
   spawnProjectile,
@@ -36,7 +36,7 @@ import {
   playWeaponSound,
   SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
-} from '@kbot/game3d/weapon-driver'
+} from '@coreprime/kbot-game3d/weapon-driver'
 
 // One simulation tick in milliseconds (40 Hz), matching the Go engine's
 // sim.TickMs.  The scene advances the wasm world on this fixed grid; the
@@ -1204,7 +1204,7 @@ export class WasmSandboxScene {
   // arc in TA-angle space so a spinning radar crossing the seam doesn't whip
   // the long way round; visibility is a hard switch from the latest tick.
   // The engine→renderer channel conversion (Z-translation and X-rotation
-  // flip sign, the rest pass through) is @kbot/game3d's enginePieceToPose
+  // flip sign, the rest pass through) is @coreprime/kbot-game3d's enginePieceToPose
   // contract — inlined here because the lerp must happen in raw engine
   // space before converting; piece lookups stay cached per clone.
   _applyPieces(u, alpha) {

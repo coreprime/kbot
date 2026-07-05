@@ -1,4 +1,4 @@
-// In-page half of the pack consume proof.  Bundled (with @kbot/game3d
+// In-page half of the pack consume proof.  Bundled (with @coreprime/kbot-game3d
 // resolved from node_modules — the packaged artifact, not repo sources) by
 // test.mjs and injected into a headless page.  Drives the renderer through
 // an HttpPackProvider pointed at a real `kbot pack` extraction served over
@@ -14,7 +14,7 @@
 //      produces measurably different frames, with the red side's frame
 //      redder than the blue side's.
 
-import { createWorld, HttpPackProvider } from '@kbot/game3d'
+import { createWorld, HttpPackProvider } from '@coreprime/kbot-game3d'
 
 // A minimal two-team table (side 0 = "no recolour" sentinel).
 const TEAM_SIDES = [

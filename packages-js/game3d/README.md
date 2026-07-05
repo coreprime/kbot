@@ -8,7 +8,7 @@ no host server.
 
 game3d is the **view only** — it draws whatever unit/projectile state it is
 given and knows no game rules. Simulation (movement, combat, the COB script
-VM) belongs to a driver such as [`@kbot/engine`](https://www.npmjs.com/package/@kbot/engine),
+VM) belongs to a driver such as [`@coreprime/kbot-engine`](https://www.npmjs.com/package/@coreprime/kbot-engine),
 whose per-tick snapshots map straight onto `applyState()`. All asset I/O goes
 through one injected **AssetProvider** — the renderer itself never fetches.
 
@@ -18,7 +18,7 @@ This package is published publicly on npmjs.org, so no registry or auth
 configuration is needed to consume it:
 
 ```
-npm install @kbot/game3d
+npm install @coreprime/kbot-game3d
 ```
 
 (Publishing needs a token — CI authenticates with
@@ -28,7 +28,7 @@ environment; never commit a literal token.)
 ## Use
 
 ```js
-import { createWorld } from '@kbot/game3d'
+import { createWorld } from '@coreprime/kbot-game3d'
 
 const world = await createWorld(canvas, { assets: myProvider })
 const id = await world.addUnit('armpw', { x: 0, z: 0 })
@@ -41,7 +41,7 @@ world.dispose()
 
 `createWorld` also exposes the underlying stack (`renderer`, `camera`,
 `loader`, `palette`, `textureCache`) for deep-integration hosts; every class
-is importable individually (`@kbot/game3d/model-renderer`, …) and shares
+is importable individually (`@coreprime/kbot-game3d/model-renderer`, …) and shares
 module state with the root entry.
 
 ## Game conventions (headings + COB pieces)
@@ -252,7 +252,7 @@ Implementations:
   no server logic needed.
 
   ```js
-  import { createWorld, HttpPackProvider } from '@kbot/game3d'
+  import { createWorld, HttpPackProvider } from '@coreprime/kbot-game3d'
   const world = await createWorld(canvas, {
     assets: new HttpPackProvider('https://cdn.example.com/packs/ta-31c'),
   })

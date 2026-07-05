@@ -17,10 +17,10 @@
 // FPS reading sits in the panel header (right of the title) so the
 // frame-rate stays visible even when both accordions are collapsed.
 
-import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
-import { AccordionSection } from '@kbot/ui/accordion-section'
-import { panelSignals } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { FloatingPanel } from '@coreprime/kbot-ui/floating-panel'
+import { AccordionSection } from '@coreprime/kbot-ui/accordion-section'
+import { panelSignals } from '@coreprime/kbot-ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 import { hostBridge } from '/ui/common/host-bridge.js'
 

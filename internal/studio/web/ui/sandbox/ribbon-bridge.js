@@ -16,8 +16,8 @@
 import { hostCallbacks, getReactUi } from '../host-context.js'
 import { confirmDialog } from '../dialogs/confirm.js'
 import { openSandboxSpawnPicker, setSandboxPanelVisible } from './spawn-picker.js'
-import { splitActivePane, closeActivePane, canCloseActivePane } from '@kbot/ui/split-host'
-import { setEnhanceMeshEnabled } from '@kbot/game3d/enhance-mesh'
+import { splitActivePane, closeActivePane, canCloseActivePane } from '@coreprime/kbot-ui/split-host'
+import { setEnhanceMeshEnabled } from '@coreprime/kbot-game3d/enhance-mesh'
 
 // _wantContours — the user's per-session contour-overlay choice from the View
 // menu. Held at module scope (not on a renderer) because each view/pane owns a

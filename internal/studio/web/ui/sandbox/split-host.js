@@ -18,7 +18,7 @@ import {
   mountSplit, detachSplit, disposeSplit, revivePanes as commonRevive,
   startAllRenderers as commonStartAll, stopAllRenderers as commonStopAll,
   ensureSplitState as commonEnsure,
-} from '@kbot/ui/split-host'
+} from '@coreprime/kbot-ui/split-host'
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { SandboxView } from './view.js'

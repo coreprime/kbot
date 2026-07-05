@@ -1,8 +1,8 @@
 {
-  "name": "@kbot/ui",
+  "name": "@coreprime/kbot-ui",
   "private": true,
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "KBot Studio UI chrome: ribbon, buttons, tabs, floating panels, sidebars, split panes, context menus.",
   "main": "index.js",
   "exports": {
@@ -22,5 +22,8 @@
     "@storybook/preact-vite": "^10.4.1",
     "storybook": "^10.4.1",
     "vite": "^6.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   }
 }

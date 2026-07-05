@@ -5,7 +5,7 @@ package studio
 // A pack is the studio's on-demand asset API materialised as plain files:
 // the same JSON/PNG payloads the /api/studio/* endpoints serve, written
 // once into a directory that any static file host can serve.  The
-// browser-side @kbot/game3d HttpPackProvider implements the AssetProvider
+// browser-side @coreprime/kbot-game3d HttpPackProvider implements the AssetProvider
 // contract over a pack URL, so the renderer runs with no studio server.
 //
 // Layout (all filenames lower-case, sanitised by packStem):
@@ -948,7 +948,7 @@ const packReadme = `# kbot asset pack
 
 A static extraction of a game install, produced by ` + "`kbot pack`" + `.
 Serve this directory over any static HTTP host and point
-@kbot/game3d's HttpPackProvider at its base URL; the renderer needs no
+@coreprime/kbot-game3d's HttpPackProvider at its base URL; the renderer needs no
 other server.
 
 Files:
@@ -977,7 +977,7 @@ Files:
 - unitpics/<name>.png — unit build pictures, decoded from the install's
   PCX/JPEG originals at native size.
 - models/<name>.json — preprocessed model geometry (authored faces) in
-  the @kbot/game3d ModelLoader shape.
+  the @coreprime/kbot-game3d ModelLoader shape.
 - models-enhanced/<name>.json — the same geometry with the faces TA's
   artists deleted reconstructed (the studio's Enhanced Mesh toggle);
   clients request it via model(name, {enhanceMesh:true}).

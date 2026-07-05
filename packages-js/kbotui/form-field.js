@@ -6,7 +6,7 @@
 // use the studio.css design tokens so they match the rest of the chrome
 // in both the app and Storybook.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // FormField — props:
 //   label    — label text (optional)

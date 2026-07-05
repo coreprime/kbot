@@ -5,7 +5,7 @@
 // table; nested sections recurse.  A search box filters the tree to
 // sections (or fields) matching the query and auto-expands the matches.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 
 function sectionMatches(section, query) {

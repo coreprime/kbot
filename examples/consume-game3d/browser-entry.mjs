@@ -1,4 +1,4 @@
-// In-page half of the game3d consume proof.  Bundled (with @kbot/game3d
+// In-page half of the game3d consume proof.  Bundled (with @coreprime/kbot-game3d
 // resolved from node_modules) by test.mjs and injected into a headless
 // page.  Uses a minimal in-memory AssetProvider — a 256-entry synthetic
 // palette and one flat-coloured cube model — so the proof exercises the
@@ -9,7 +9,7 @@
 //      variance across the canvas is > 0.
 //   2. addUnit() increases the rendered entity draw count (stats().drew).
 
-import { createWorld } from '@kbot/game3d'
+import { createWorld } from '@coreprime/kbot-game3d'
 
 // A 20-world-unit flat-shaded cube: 8 vertices, 6 quad faces, palette
 // colour 100.  No textures, no COB — the smallest real model the loader

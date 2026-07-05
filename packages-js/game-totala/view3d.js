@@ -1,6 +1,6 @@
 // view3d.js — Total Annihilation's 3D-view configuration.
 //
-// @kbot/game3d is game-agnostic machinery: it renders whatever models,
+// @coreprime/kbot-game3d is game-agnostic machinery: it renders whatever models,
 // teams, and projectiles it is configured with. The game-flavoured tables it
 // needs — team palette, projectile fallback hues, LOD piece-name heuristics —
 // live here with the rest of TA's adapter, and the studio injects them at
@@ -10,11 +10,11 @@
 // The TA team palette, indexed by `side` (0..7) so the engine + UI +
 // renderer can all refer to a unit's faction by a single integer.
 //
-// The table itself is canonicalised in @kbot/game3d (TA_TEAM_SIDES in
+// The table itself is canonicalised in @coreprime/kbot-game3d (TA_TEAM_SIDES in
 // team-colors.js) so pack-driven consumers — the replayer, headless render
 // harnesses — can reach it without this private adapter package.  Re-export
 // it here so the studio's per-game injection path keeps its shape.
-import { TA_TEAM_SIDES } from '@kbot/game3d/team-colors'
+import { TA_TEAM_SIDES } from '@coreprime/kbot-game3d/team-colors'
 
 export const teamSides = TA_TEAM_SIDES
 

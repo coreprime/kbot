@@ -14,13 +14,13 @@
 // just publishes once and React re-renders the affected sections.
 
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import {
   Ribbon, RibbonSection, RibbonButton,
   RibbonDropdownButton, Dropdown,
   MenuRow, MenuToggleRow, MenuSectionLabel, MenuSubmenuRow,
   closeAllDropdowns, closeDropdownById,
-} from '@kbot/ui/ribbon'
+} from '@coreprime/kbot-ui/ribbon'
 import { ribbonState, mapRibbonBridge } from '/ui/map-editor/store.js'
 
 // _MODES — single source of truth for the Mode dropdown.  Order +

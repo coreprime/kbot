@@ -4,7 +4,7 @@
 // parent-context name, a "current" marker). Tones map to studio.css
 // accent colours.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // Tag — props:
 //   tone     — 'default' | 'accent' (visual emphasis)

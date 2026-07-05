@@ -14,7 +14,7 @@
 // through hostCallbacks.getActiveMvControls.
 let _mvControls = null
 
-// Installs the StudioAssetProvider into @kbot/game3d at module-graph time
+// Installs the StudioAssetProvider into @coreprime/kbot-game3d at module-graph time
 // so every renderer path (sandbox, unit editor, map glamour) resolves its
 // assets through the studio server before anything can draw.
 import './ui/common/studio-asset-provider.js'
@@ -55,7 +55,7 @@ import { unsavedChangesDialog } from './ui/dialogs/unsaved-changes.js'
 // Welcome dialog visual + audio FX — three pure self-contained
 // subsystems that observe #welcome-dialog's hidden class via
 // MutationObserver to suspend / resume on dialog close.
-import { gameIconDataUri } from '@kbot/ui/game-icon'
+import { gameIconDataUri } from '@coreprime/kbot-ui/game-icon'
 import { applyGameView3D } from './ui/common/game-view3d.js'
 import { wireWelcomeNanoFX } from './ui/screens/welcome/fx/nano-fx.js'
 import { wireWelcomeAmbient } from './ui/screens/welcome/fx/ambient.js'

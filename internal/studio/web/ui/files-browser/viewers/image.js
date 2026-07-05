@@ -6,7 +6,7 @@
 // A checkerboard backing makes transparency obvious, and a zoom toggle
 // flips between fit-to-pane and 1:1 pixel-doubled inspection.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { pcxURL, rawURL, imageURL } from '../api.js'
 

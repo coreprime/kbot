@@ -38,9 +38,9 @@ tasks:
       - task: lint-js
 
   build-game3d:
-    desc: Build the @kbot/game3d package dist (embedded shaders/worlds + ESM modules)
+    desc: Build the @coreprime/kbot-game3d package dist (embedded shaders/worlds + ESM modules)
     cmds:
-      - npm run build -w @kbot/game3d
+      - npm run build -w @coreprime/kbot-game3d
 
   bundle-studio-web:
     desc: Bundle the KBot Studio web app with Vite into web/dist (embedded by build-kbot)
@@ -49,16 +49,16 @@ tasks:
     dir: internal/studio/web
 
   storybook:
-    desc: Run the @kbot/ui Storybook dev server (http://localhost:6006)
+    desc: Run the @coreprime/kbot-ui Storybook dev server (http://localhost:6006)
     cmds:
       - npm install
-      - npm run storybook --workspace @kbot/ui
+      - npm run storybook --workspace @coreprime/kbot-ui
 
   build-storybook:
-    desc: Build the @kbot/ui Storybook into a static bundle
+    desc: Build the @coreprime/kbot-ui Storybook into a static bundle
     cmds:
       - npm install
-      - npm run build-storybook --workspace @kbot/ui
+      - npm run build-storybook --workspace @coreprime/kbot-ui
 
   vet:
     desc: Run go vet

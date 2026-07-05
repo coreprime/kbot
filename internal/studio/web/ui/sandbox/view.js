@@ -19,18 +19,18 @@
 // Command API, camera tracking, unit acks, FX aggregation) lives
 // inside whichever view actually uses it.
 
-import { createWorld } from '@kbot/game3d'
+import { createWorld } from '@coreprime/kbot-game3d'
 import { studioAssetProvider } from '../common/studio-asset-provider.js'
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { loadSelectionKeys, selectionKeys, keyTokenForEvent, commandClauses, unitMatchesToken } from './select-keys.js'
-import { attachOrbitControls } from '@kbot/game3d/camera-controls'
+import { attachOrbitControls } from '@coreprime/kbot-game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import { activeGame } from '../common/game-registry.js'
-import { ArmedCursor } from '@kbot/game3d/armed-cursor'
-import { ExplosionOverlay } from '@kbot/game3d/explosion-overlay'
-import { teamColorForSide } from '@kbot/game3d/team-colors'
-import { onEnhanceMeshChanged } from '@kbot/game3d/enhance-mesh'
+import { ArmedCursor } from '@coreprime/kbot-game3d/armed-cursor'
+import { ExplosionOverlay } from '@coreprime/kbot-game3d/explosion-overlay'
+import { teamColorForSide } from '@coreprime/kbot-game3d/team-colors'
+import { onEnhanceMeshChanged } from '@coreprime/kbot-game3d/enhance-mesh'
 import {
   wireHotkeys,
   wrapCobWithAggregate,
@@ -161,7 +161,7 @@ export class SandboxView {
       window.addEventListener('kbot-wasm-crash', this._wasmCrashHandler)
     }
     if (!this.renderer) {
-      // The @kbot/game3d factory assembles the renderer stack (palette,
+      // The @coreprime/kbot-game3d factory assembles the renderer stack (palette,
       // texture cache, loader, ModelRenderer, OrbitCamera) against the
       // studio's AssetProvider.  controls:false — the sandbox attaches
       // its own gesture handling (placement drag, rect-select, sim-speed

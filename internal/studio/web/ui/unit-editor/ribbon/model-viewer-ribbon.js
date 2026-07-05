@@ -32,15 +32,15 @@
 
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { panelSignals } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { panelSignals } from '@coreprime/kbot-ui/panel-store'
 import {
   Ribbon, RibbonSection, RibbonButton,
   RibbonDropdownButton, Dropdown, MenuRow, MenuToggleRow, MenuSubmenuRow,
   MenuSliderRow, MenuSectionLabel, closeDropdownById,
-} from '@kbot/ui/ribbon'
-import { SplitMenuItems } from '@kbot/ui/split-host'
-import { GraphicsOptionsItems } from '@kbot/ui/graphics-options-menu'
+} from '@coreprime/kbot-ui/ribbon'
+import { SplitMenuItems } from '@coreprime/kbot-ui/split-host'
+import { GraphicsOptionsItems } from '@coreprime/kbot-ui/graphics-options-menu'
 import { persistGraphicsOptions } from '/ui/common/graphics-options-state.js'
 import { activeGame } from '/ui/common/game-registry.js'
 

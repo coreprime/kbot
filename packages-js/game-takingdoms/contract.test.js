@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { game as totala } from '@kbot/game-totala'
+import { game as totala } from '@coreprime/kbot-game-totala'
 import { game as takingdoms } from './index.js'
 
 const GAMES = [totala, takingdoms]

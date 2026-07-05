@@ -10,7 +10,7 @@
 //
 // The tab-strip component itself (the Preact JSX, dropdown popups,
 // dirty-marker rendering) is InterfaceTabStrip in
-// @kbot/ui/interface-tab-strip — this module is the host-side bridge
+// @coreprime/kbot-ui/interface-tab-strip — this module is the host-side bridge
 // that feeds it.
 //
 // /ui/ root rather than /ui/common/ because it imports section

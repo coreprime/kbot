@@ -2,7 +2,7 @@ import js from '@eslint/js'
 import globals from 'globals'
 
 // Repo-wide ESLint flat config.  Covers the studio web app
-// (internal/studio/web) plus the @kbot/* workspace packages
+// (internal/studio/web) plus the @coreprime/kbot-* workspace packages
 // (packages-js/*), which the studio bundles via Vite.
 export default [
   {

@@ -8,6 +8,6 @@
     "test": "node test.mjs"
   },
   "dependencies": {
-    "@kbot/engine": "0.1.0"
+    "@coreprime/kbot-engine": "0.1.0"
   }
 }

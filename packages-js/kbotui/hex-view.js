@@ -8,7 +8,7 @@
 // the rendered window; the cap note tells the user when output was
 // truncated.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useEffect, useState } from 'preact/hooks'
 import { formatSize } from './format.js'
 

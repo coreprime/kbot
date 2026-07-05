@@ -1,6 +1,6 @@
 // assets.js — the AssetProvider seam.
 //
-// @kbot/game3d is a renderer: it draws models, textures, palettes and
+// @coreprime/kbot-game3d is a renderer: it draws models, textures, palettes and
 // effects but performs NO network or filesystem I/O of its own.  Every
 // asset it needs arrives through a single injected AssetProvider, so the
 // same renderer runs against any asset source: the KBot Studio server, a
@@ -8,7 +8,7 @@
 //
 // Configure the provider once per page — either directly:
 //
-//   import { setAssetProvider } from '@kbot/game3d'
+//   import { setAssetProvider } from '@coreprime/kbot-game3d'
 //   setAssetProvider(myProvider)
 //
 // or through the top-level factory, which installs it for you:
@@ -118,7 +118,7 @@ export function getAssetProvider() {
 export function requireAssetProvider() {
   if (!_provider) {
     throw new Error(
-      '@kbot/game3d: no AssetProvider configured — pass { assets } to createWorld() or call setAssetProvider() first',
+      '@coreprime/kbot-game3d: no AssetProvider configured — pass { assets } to createWorld() or call setAssetProvider() first',
     )
   }
   return _provider

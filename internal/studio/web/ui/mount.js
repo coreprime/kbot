@@ -14,8 +14,8 @@
 // point.
 
 import { render } from 'preact'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { configurePanelPersistence, setPanelVisible } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { configurePanelPersistence, setPanelVisible } from '@coreprime/kbot-ui/panel-store'
 import { registerReactPanels } from '/ui/common/panel-layout.js'
 import { SandboxPanel } from '/ui/sandbox/sandbox-panel.js'
 import { SandboxMinimapPanel } from '/ui/sandbox/minimap-panel.js'
@@ -32,8 +32,8 @@ import {
 } from '/ui/unit-editor/ribbon/model-viewer-ribbon.js'
 import {
   InterfaceTabStrip, setTabs, configureTabBarBridge,
-} from '@kbot/ui/interface-tab-strip'
-import { InterfaceStatusBar } from '@kbot/ui/interface-status-bar'
+} from '@coreprime/kbot-ui/interface-tab-strip'
+import { InterfaceStatusBar } from '@coreprime/kbot-ui/interface-status-bar'
 import { StaticVarsPanel } from '/ui/panels/static-vars-panel.js'
 import { AudioPanel } from '/ui/panels/audio-panel.js'
 import { EffectsPanel } from '/ui/panels/effects-panel.js'
@@ -46,7 +46,7 @@ import { ControlsPanel } from '/ui/panels/controls-panel.js'
 import { UnitPortsPanel } from '/ui/panels/unit-ports-panel.js'
 import { RuntimePanel } from '/ui/panels/runtime-panel.js'
 import { NetworkPanel, SyncDiagnosticsPanel } from '/ui/panels/network-panel.js'
-import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { confirmDialog } from '@coreprime/kbot-ui/confirm-dialog'
 import {
   SettingsDialog, openSettingsDialog, closeSettingsDialog,
 } from '/ui/dialogs/settings-dialog.js'
@@ -92,7 +92,7 @@ import {
   setControlsDevSectionVisible,
 } from '/ui/common/inspector-store.js'
 import { configureHostBridge } from '/ui/common/host-bridge.js'
-import { rescuePanelIntoStage } from '@kbot/ui/floating-panel'
+import { rescuePanelIntoStage } from '@coreprime/kbot-ui/floating-panel'
 
 // _mountedInspectors — tracks which inspector panels have a Preact
 // root mounted.  Used by the host's setMvInspectorVisible bridge so

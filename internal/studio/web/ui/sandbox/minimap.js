@@ -15,7 +15,7 @@
 
 import { hostCallbacks } from '../host-context.js'
 import { subscribeTick } from '../common/refresh-tick.js'
-import { displayRgbForSide } from '@kbot/game3d/team-colors'
+import { displayRgbForSide } from '@coreprime/kbot-game3d/team-colors'
 
 const SIZE = 184
 const MIN_EXTENT = 300 // wu half-width floor for the auto-fit

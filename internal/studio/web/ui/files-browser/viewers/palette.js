@@ -4,7 +4,7 @@
 // detail readout (index + hex).  The describe doc carries the colours as
 // { index, hex } entries.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 
 export function PaletteViewer({ describe }) {

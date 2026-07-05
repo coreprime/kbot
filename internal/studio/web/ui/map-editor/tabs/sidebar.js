@@ -1,6 +1,6 @@
 // sidebar.js
 //
-// The map-editor's left rail, built on the shared @kbot/ui SideBar
+// The map-editor's left rail, built on the shared @coreprime/kbot-ui SideBar
 // shell: the Sections / Features tab strip, the filter row (search box,
 // "Used only" checkbox, "Include wreckage" checkbox), and the section /
 // feature drawer.
@@ -17,8 +17,8 @@
 // publishes the visibility flags through the store after every
 // switchTab, mirroring the legacy hide/show logic verbatim.
 
-import { htm as html } from '@kbot/ui/htm-bind'
-import { SideBar, FrozenSlot } from '@kbot/ui/side-bar'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { SideBar, FrozenSlot } from '@coreprime/kbot-ui/side-bar'
 import {
   sidebarDrawer, sidebarFilter, sidebarUsedOnly, sidebarWreckage,
   sidebarUsedOnlyVisible, sidebarWreckageVisible,

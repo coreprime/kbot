@@ -11,9 +11,9 @@
 // panel does no per-tick work even though the host's inspector tick
 // keeps publishing fresh mv references at 4 Hz.
 
-import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
-import { panelSignals } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { FloatingPanel } from '@coreprime/kbot-ui/floating-panel'
+import { panelSignals } from '@coreprime/kbot-ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 
 const PANEL_ID = 'mv-inspector-audio'

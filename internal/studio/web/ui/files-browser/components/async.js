@@ -3,9 +3,9 @@
 // useRawText fetches a file's raw bytes as text (optionally from a
 // specific archive layer).  Shared by the text/source/code tabs.  The
 // generic fetch hook + placeholder chrome it builds on now live in
-// @kbot/ui/async; this module just binds it to the VFS raw-bytes URL.
+// @coreprime/kbot-ui/async; this module just binds it to the VFS raw-bytes URL.
 
-import { useAsync } from '@kbot/ui/async'
+import { useAsync } from '@coreprime/kbot-ui/async'
 import { rawURL } from '../api.js'
 
 export function useRawText(path, source) {

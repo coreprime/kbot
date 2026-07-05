@@ -13,8 +13,8 @@
 // (_engineSubs, _smokeTrails, _hotkeysDetach, _unitSoundDebounce)
 // — externalised access, identical semantics.
 
-import { SmokeTrailManager } from '@kbot/game3d/weapon-driver'
-import { attachUnitHotkeys } from '@kbot/game3d/unit-hotkeys'
+import { SmokeTrailManager } from '@coreprime/kbot-game3d/weapon-driver'
+import { attachUnitHotkeys } from '@coreprime/kbot-game3d/unit-hotkeys'
 
 // initSmokeTrails lazily installs a SmokeTrailManager on
 // `view._smokeTrails`.  Idempotent; returns the (possibly pre-

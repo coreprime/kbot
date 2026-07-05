@@ -1,4 +1,4 @@
-// Pull in the studio's stylesheet so @kbot/ui chrome renders with the
+// Pull in the studio's stylesheet so @coreprime/kbot-ui chrome renders with the
 // real design tokens, ribbon/panel/tab styling and dark theme.
 import '../../../internal/studio/web/studio.css'
 import { html } from '../index.js'

@@ -649,7 +649,7 @@ previews:
 
 Extract a game install into a static asset pack: the same JSON/PNG payloads
 KBot Studio serves on demand, written once as plain files. Serve the output
-directory over any static HTTP host and point `@kbot/game3d`'s
+directory over any static HTTP host and point `@coreprime/kbot-game3d`'s
 `HttpPackProvider` at its base URL — the renderer runs with **no studio
 server** (the seam a replayer or any embedding site consumes).
 
@@ -685,7 +685,7 @@ pack, and the manifest's `contentHash` is the pack's identity. See
 `kbot pack --help` for the full layout.
 
 ```js
-import { createWorld, HttpPackProvider } from '@kbot/game3d'
+import { createWorld, HttpPackProvider } from '@coreprime/kbot-game3d'
 const world = await createWorld(canvas, {
   assets: new HttpPackProvider('https://cdn.example.com/packs/ta-31c'),
 })
@@ -1104,11 +1104,11 @@ lives behind a per-game adapter, registered in two registries:
   [`games/takingdoms`](games/takingdoms) register themselves from package
   `init`; sessions resolve one adapter per mounted install via
   `games.Resolve(id)`.
-- **JS** — [`@kbot/game-totala`](packages-js/game-totala) and
-  [`@kbot/game-takingdoms`](packages-js/game-takingdoms) carry the studio's
+- **JS** — [`@coreprime/kbot-game-totala`](packages-js/game-totala) and
+  [`@coreprime/kbot-game-takingdoms`](packages-js/game-takingdoms) carry the studio's
   per-game surfaces: weapon-script conventions, COB quick-action catalogues,
   branding, welcome theming, and the `view3d` tables injected into the
-  game-agnostic `@kbot/game3d` renderer at boot. The studio resolves the
+  game-agnostic `@coreprime/kbot-game3d` renderer at boot. The studio resolves the
   active adapter through `ui/common/game-registry.js`.
 
 Engine behaviour that varies per *unit* rather than per game — TA's per-slot
@@ -1123,8 +1123,8 @@ To build a **custom game** on the TA formats:
    and overriding what differs), call `games.Register` from your package
    `init`, and blank-import the package where the studio wires adapters
    (`internal/studio/palette.go`).
-2. **JS**: create a package composing over `@kbot/game-totala` the way
-   `@kbot/game-takingdoms` does (spread the baseline `game` object, override
+2. **JS**: create a package composing over `@coreprime/kbot-game-totala` the way
+   `@coreprime/kbot-game-takingdoms` does (spread the baseline `game` object, override
    fields), and add it to the registry list in
    `internal/studio/web/ui/common/game-registry.js`. The required surface is
    pinned by the contract tests in

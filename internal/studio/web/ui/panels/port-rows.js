@@ -14,7 +14,7 @@
 // re-render handles the live update via the inspector-store
 // runtimeTick signal.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 const _stopProp = (e) => e.stopPropagation()
 

@@ -4,9 +4,9 @@
 // syntax-highlighted treatment.  Fetches the bytes as text (honouring
 // the active layer) and shows them with line numbers.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useRawText } from '../components/async.js'
-import { Loading, ErrorMsg } from '@kbot/ui/async'
+import { Loading, ErrorMsg } from '@coreprime/kbot-ui/async'
 
 export function TextTab({ path, source }) {
   const { data, loading, error } = useRawText(path, source)

@@ -34,11 +34,11 @@
 // their own R / arrow-key hotkey routing.  They do NOT drive
 // COB scripts and they do NOT own a separate runtime/binding.
 
-import { ModelRenderer } from '@kbot/game3d/model-renderer'
-import { ModelLoader } from '@kbot/game3d/model-loader'
-import { OrbitCamera } from '@kbot/game3d/orbit-camera'
-import { TextureCache } from '@kbot/game3d/texture-cache'
-import { attachOrbitControls } from '@kbot/game3d/camera-controls'
+import { ModelRenderer } from '@coreprime/kbot-game3d/model-renderer'
+import { ModelLoader } from '@coreprime/kbot-game3d/model-loader'
+import { OrbitCamera } from '@coreprime/kbot-game3d/orbit-camera'
+import { TextureCache } from '@coreprime/kbot-game3d/texture-cache'
+import { attachOrbitControls } from '@coreprime/kbot-game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
 
 export class ModelObserverView {

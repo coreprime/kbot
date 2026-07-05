@@ -32,7 +32,7 @@ import { startTabTick } from '../common/tab-tick.js'
 export async function activateModelTab(tab) {
   // Lazy-import the game3d module so users who never click a
   // model tab don't pay for the shader / matrix code.
-  const mod = await import('@kbot/game3d')
+  const mod = await import('@coreprime/kbot-game3d')
   // Stage all OTHER tabs' canvases / split mounts out of the DOM
   // so an inactive tab's surfaces can't bleed through.  Each tab
   // type owns its own attach style: sandbox + unit-editor (since
@@ -70,7 +70,7 @@ export async function activateModelTab(tab) {
     viewer = new mod.ModelViewer({
       canvas,
       statusEl: liveStatusEl,
-      // Inject the wasm-backed scene so @kbot/game3d stays free of any
+      // Inject the wasm-backed scene so @coreprime/kbot-game3d stays free of any
       // dependency back into the studio's ui layer.
       sceneFactory: (opts) => new WasmSandboxScene(opts),
       onModelLoaded: (model, cob) => {

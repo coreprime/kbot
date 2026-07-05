@@ -1,5 +1,5 @@
 {
-  "name": "@kbot/game3d",
+  "name": "@coreprime/kbot-game3d",
   "version": "0.1.0",
   "description": "Self-contained WebGL renderer for Total Annihilation-style scenes: 3DO models, GAF textures, COB-posed pieces, terrain/sky/water and weapon effects, fed through an injected AssetProvider.",
   "license": "MIT",
@@ -26,8 +26,7 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "registry": "https://registry.npmjs.org",
-    "access": "public"
+    "registry": "https://npm.pkg.github.com"
   },
   "repository": {
     "type": "git",

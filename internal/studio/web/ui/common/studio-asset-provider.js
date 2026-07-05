@@ -1,6 +1,6 @@
 // studio-asset-provider.js
 //
-// The studio's implementation of @kbot/game3d's AssetProvider seam: every
+// The studio's implementation of @coreprime/kbot-game3d's AssetProvider seam: every
 // asset the renderer needs is answered from the studio Go server's
 // /api/studio/* endpoints.  The URLs are plain absolute paths on purpose —
 // the workspace URL shim in index.html patches fetch / Image.src /
@@ -12,7 +12,7 @@
 // (module-graph evaluation finishes before anything renders), mirroring
 // how game-view3d.js applies the TA view tables at import time.
 
-import { setAssetProvider } from '@kbot/game3d'
+import { setAssetProvider } from '@coreprime/kbot-game3d'
 
 async function fetchJson(url, what) {
   const resp = await fetch(url)

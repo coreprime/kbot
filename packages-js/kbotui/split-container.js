@@ -12,7 +12,7 @@
 // The caller passes a `renderLeaf(leafId)` callback that returns
 // whatever JSX should fill the cell.  This keeps the split engine
 // free of any host-app imports — it sits as a peer of
-// floating-panel + accordion-section in @kbot/ui, and the same
+// floating-panel + accordion-section in @coreprime/kbot-ui, and the same
 // component can host a 3DO viewer in one tab, a map editor in the
 // next, and a sandbox runtime in a third.
 //

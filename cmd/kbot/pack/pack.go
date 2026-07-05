@@ -1,5 +1,5 @@
 // Package pack implements `kbot pack` — extract a game install into a
-// static asset pack that @kbot/game3d's HttpPackProvider (and the
+// static asset pack that @coreprime/kbot-game3d's HttpPackProvider (and the
 // replayer built on it) can consume with no studio server.
 package pack
 
@@ -39,7 +39,7 @@ func NewCommand() *cobra.Command {
 		Long: `Extract a game install (loose files and/or HPI archives) into a static
 asset pack: the same JSON/PNG payloads KBot Studio serves on demand,
 written once as plain files.  Serve the output directory over any static
-HTTP host and point @kbot/game3d's HttpPackProvider at its base URL —
+HTTP host and point @coreprime/kbot-game3d's HttpPackProvider at its base URL —
 the renderer runs with no studio server.
 
 Pack layout (all filenames lower-case; characters outside [a-z0-9._-]

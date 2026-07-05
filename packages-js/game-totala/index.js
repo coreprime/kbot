@@ -1,4 +1,4 @@
-// @kbot/game-totala
+// @coreprime/kbot-game-totala
 //
 // Total Annihilation's game adapter — the JS twin of the Go games/totala
 // package. Everything the studio varies per game lives on this object:
@@ -7,7 +7,7 @@
 // the studio's game registry and never tests game ids inline.
 //
 // TA is also the baseline for custom games built on the TA formats:
-// @kbot/game-takingdoms composes over this adapter, and a custom game package
+// @coreprime/kbot-game-takingdoms composes over this adapter, and a custom game package
 // can do the same — spread `game`, override the parts that differ, register.
 
 import { view3d } from './view3d.js'
@@ -39,14 +39,14 @@ export const game = {
   id: 'totala',
   label: 'Total Annihilation',
 
-  // 3D-view configuration injected into @kbot/game3d at boot: team palette,
+  // 3D-view configuration injected into @coreprime/kbot-game3d at boot: team palette,
   // projectile fallback hues, LOD piece-name heuristics.
   view3d,
 
   branding: {
     headerLogo: '/branding/logos/kbot-header-ta.png',
     // Chip metadata + the real application icon (lifted from TotalA.exe's
-    // PE resources, 32x32 PNG as a data URI) — registered into @kbot/ui's
+    // PE resources, 32x32 PNG as a data URI) — registered into @coreprime/kbot-ui's
     // game-icon registry at studio boot.
     chip: { short: 'TA', color: '#e0793a' },
     icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABK0lEQVR4nMVWAQ7DIAhE03/PvfwWXd1IBxYo20hNWpS7KypK9GcrkSCMRwRz45UQKc7RrGKKmZyR3veoG+RvpuAUv1rJO0lvhZFN3yTufdO3p0zLlc1ABIDQnkCjNacvLAJGoq+IgJM8VQSC5GkicADwkGsiVgK2lZjGVnt/t9oYO3eHpzSBKY/8+SoTpmkAC7hKLokwC4BjwXkWpisD5AB1jdcEILjVIlv0QwSS9nlYBIwA3lKcKqAlj3FNQ7s4RaaFCCUwoxSHBbQLBWm1WM11oL0DQs1yIFVVDRema3bHHO+JddX58hcqQ/reVqSz9RiL0E2SKB2jHFCbR410HutS7ybwl7Obi/XvJOyjr9KfrYpedtfPsI6lZa0q/KEUR6z+iihky6qVhPEAA3DLX1hqEg8AAAAASUVORK5CYII=',
@@ -120,7 +120,7 @@ export const game = {
   },
 
   // Scene environments for the unit viewer / sandbox Scene menu. env keys
-  // name @kbot/game3d world manifests (worlds/<env>.json); the labels carry
+  // name @coreprime/kbot-game3d world manifests (worlds/<env>.json); the labels carry
   // the game's flavour. First entry is the default scene.
   environments: [
     { env: 'greenworld', icon: '🌳', label: 'Greenworld',

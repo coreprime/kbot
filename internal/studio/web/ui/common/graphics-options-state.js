@@ -22,7 +22,7 @@
 
 import { state } from '../host-context.js'
 import { persistPrefs } from './prefs.js'
-import { setEnhanceMeshEnabled } from '@kbot/game3d/enhance-mesh'
+import { setEnhanceMeshEnabled } from '@coreprime/kbot-game3d/enhance-mesh'
 
 // GRAPHICS_DEFAULTS — the at-rest values, matching the renderer's own
 // constructor defaults so a fresh session paints identically whether

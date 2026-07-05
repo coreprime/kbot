@@ -13,7 +13,7 @@
 // setup error).
 
 import { signal } from '@preact/signals'
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { activeGame } from '../common/game-registry.js'
 
 const wsBase = () => (typeof window !== 'undefined' && window.__WS_BASE__) || ''

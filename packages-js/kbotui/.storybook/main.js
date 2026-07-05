@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 
-// Storybook over @kbot/ui.  The stories import the package's components
+// Storybook over @coreprime/kbot-ui.  The stories import the package's components
 // directly (relative paths inside this package) and render them with the
 // Preact + htm stack the studio uses.  The preview pulls in the studio's
 // stylesheet so the chrome looks identical to the running app.

@@ -13,7 +13,7 @@
 //
 // The world is renderer-only: it draws whatever unit/projectile state
 // it is given and knows no game rules.  Simulation (movement, COB
-// animation, combat) belongs to a driver — typically @kbot/engine,
+// animation, combat) belongs to a driver — typically @coreprime/kbot-engine,
 // whose per-tick snapshot maps straight onto applyState().
 //
 // Presentation extras a replay driver leans on (all documented at their

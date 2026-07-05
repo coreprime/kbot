@@ -16,9 +16,9 @@
 // refresh tick to re-publish.
 
 import { signal } from '@preact/signals'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
-import { panelSignals } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { FloatingPanel } from '@coreprime/kbot-ui/floating-panel'
+import { panelSignals } from '@coreprime/kbot-ui/panel-store'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
 
 const PANEL_ID = 'mv-inspector-effects'

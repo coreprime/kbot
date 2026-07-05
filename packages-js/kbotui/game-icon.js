@@ -11,7 +11,7 @@
 // works in the app and Storybook with no asset serving. Games without an
 // extracted icon (e.g. "custom") fall back to a coloured letter badge.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // Branding registry. The game adapter packages own their iconography (the
 // real application icons lifted from the retail PE resources, chip codes,

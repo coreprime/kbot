@@ -14,7 +14,7 @@
 // state.
 
 import { useEffect, useRef } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // DialogModal — props:
 //   open         — boolean, must be true for the modal to render

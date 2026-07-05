@@ -1,4 +1,4 @@
-// Public entry point for @kbot/game3d — a self-contained WebGL renderer
+// Public entry point for @coreprime/kbot-game3d — a self-contained WebGL renderer
 // for Total Annihilation-style scenes (no three.js, no host server).
 //
 // Everything here draws state it is GIVEN: assets arrive through an

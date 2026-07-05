@@ -1,8 +1,8 @@
 {
-  "name": "@kbot/game-takingdoms",
+  "name": "@coreprime/kbot-game-takingdoms",
   "private": true,
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "TA: Kingdoms game adapter: shared-weapon script conventions, COB quick actions, branding, and welcome theming for KBot Studio.",
   "main": "index.js",
   "exports": {
@@ -10,6 +10,9 @@
     "./*": "./*.js"
   },
   "dependencies": {
-    "@kbot/game-totala": "0.0.0"
+    "@coreprime/kbot-game-totala": "0.1.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   }
 }

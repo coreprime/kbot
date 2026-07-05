@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 // KBot Studio is authored as native ES modules with root-absolute import
 // paths (/ui/…, /engine/…) that mirror the on-disk layout, so Vite
 // resolves them directly once `root` is this directory — no aliases.
-// The 3D renderer comes from the @kbot/game3d workspace package, whose
+// The 3D renderer comes from the @coreprime/kbot-game3d workspace package, whose
 // exports map points at its built dist/ (shaders + worlds embedded), so
 // there is no /game3d/* asset tree to serve any more.
 //
@@ -53,7 +53,7 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8100',
     },
-    // The @kbot/* workspace packages resolve (via node_modules symlinks) to
+    // The @coreprime/kbot-* workspace packages resolve (via node_modules symlinks) to
     // packages-js/ at the repo root, outside this web root — allow the dev
     // server to read them.
     fs: {

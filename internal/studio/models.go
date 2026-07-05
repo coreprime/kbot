@@ -25,7 +25,7 @@ import (
 // registerModelAPI wires the 3DO + texture endpoints into the shared mux.
 // The endpoints are intentionally narrow: list, fetch geometry, fetch
 // texture image — the heavy lifting (animation, scene assembly) lives
-// in the browser's class-based renderer, @kbot/game3d (packages-js/game3d).
+// in the browser's class-based renderer, @coreprime/kbot-game3d (packages-js/game3d).
 func (sess *Session) registerModelAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/models", sess.handleModelsList)
 	mux.HandleFunc("/api/studio/model/", sess.handleModelGeometry)

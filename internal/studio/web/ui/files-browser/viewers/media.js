@@ -4,7 +4,7 @@
 // the server and scrubbed via Range requests; audio (WAV/MP3) is served
 // raw and played by the native <audio> element.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { videoURL, rawURL, extOf } from '../api.js'
 
 // The MP4 download lives in the view bar's download menu (alongside the

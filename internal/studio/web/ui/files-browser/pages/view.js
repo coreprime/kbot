@@ -8,14 +8,14 @@
 // metadata + hex pair for anything unrecognised.  Picking a layer in the
 // Layering tab re-renders the visual tabs from that archive source.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState, useCallback, useMemo, useEffect, useRef } from 'preact/hooks'
 import { metadata, rawURL, renderURL, extOf, deleteFile, parentDir } from '../api.js'
-import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { confirmDialog } from '@coreprime/kbot-ui/confirm-dialog'
 import { editKind, openInEditor } from '../edit-actions.js'
 import { useRawText } from '../components/async.js'
-import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
-import { HexView } from '@kbot/ui/hex-view'
+import { useAsync, Loading, ErrorMsg } from '@coreprime/kbot-ui/async'
+import { HexView } from '@coreprime/kbot-ui/hex-view'
 import { InfoTab } from '../viewers/info.js'
 import { TextTab } from '../viewers/text.js'
 import { GafViewer } from '../viewers/gaf.js'

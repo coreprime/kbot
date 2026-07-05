@@ -8,7 +8,7 @@
 // result rows ({ path, name, isDir }), so the component stays free of
 // any particular backend.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
 import { fileIcon } from './file-icons.js'
 

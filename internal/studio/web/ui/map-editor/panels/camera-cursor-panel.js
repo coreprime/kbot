@@ -15,8 +15,8 @@
 // camera pose) are fundamentally different — sharing chrome would
 // force confusing labels in both directions.
 
-import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { FloatingPanel } from '@coreprime/kbot-ui/floating-panel'
 import { cameraInfo } from '/ui/map-editor/store.js'
 
 const PANEL_ID = 'camera-info-panel'

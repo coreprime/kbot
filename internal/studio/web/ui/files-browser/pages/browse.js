@@ -8,16 +8,16 @@
 // The listing comes from one /api/vfs/<dir>/ request, which already
 // carries breadcrumbs, per-directory roll-up counts, and folder totals.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useCallback, useMemo, useState } from 'preact/hooks'
-import { confirmDialog } from '@kbot/ui/confirm-dialog'
+import { confirmDialog } from '@coreprime/kbot-ui/confirm-dialog'
 import { editKind, openInEditor } from '../edit-actions.js'
 import {
   browse, deleteFile, formatSize, extOf, baseName, rawURL,
   gafPngURL, gafApngURL, pcxURL, mapViewURL, videoThumbURL, videoURL,
 } from '../api.js'
-import { useAsync, Loading, ErrorMsg } from '@kbot/ui/async'
-import { fileIcon, fileKind } from '@kbot/ui/file-icons'
+import { useAsync, Loading, ErrorMsg } from '@coreprime/kbot-ui/async'
+import { fileIcon, fileKind } from '@coreprime/kbot-ui/file-icons'
 
 const PREVIEW_EXTS = new Set(['gaf', 'pcx', 'tnt', 'sct', 'smk', 'zrb', 'bik'])
 

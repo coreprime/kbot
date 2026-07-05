@@ -12,8 +12,8 @@
 // don't import openSandboxSpawnPicker directly so the React island
 // stays uncoupled from studio.js's vast namespace.
 
-import { htm as html } from '@kbot/ui/htm-bind'
-import { FloatingPanel } from '@kbot/ui/floating-panel'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { FloatingPanel } from '@coreprime/kbot-ui/floating-panel'
 
 export function SandboxPanel({ onSpawn, onMap }) {
   const handleSpawnClick = (e) => {

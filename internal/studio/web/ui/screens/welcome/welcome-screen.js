@@ -19,8 +19,8 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { PickerModal } from '@kbot/ui/picker-modal'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { PickerModal } from '@coreprime/kbot-ui/picker-modal'
 
 // _hostWsUrl builds a websocket URL onto the in-process game host
 // (mounted at /host/ws on the same origin the studio is served from).

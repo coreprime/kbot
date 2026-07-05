@@ -1,7 +1,7 @@
 // game-registry.js
 //
 // Resolves the session's game adapter. The per-game packages
-// (@kbot/game-totala, @kbot/game-takingdoms) carry everything the UI varies
+// (@coreprime/kbot-game-totala, @coreprime/kbot-game-takingdoms) carry everything the UI varies
 // by game — weapon-script conventions, COB quick actions, branding, welcome
 // theming — and shared code reads it through here instead of testing game ids
 // inline.
@@ -12,13 +12,13 @@
 // resolve to Total Annihilation, the TA-format baseline (mirroring the Go
 // games registry).
 
-import { registerGameBranding } from '@kbot/ui/game-icon'
-import { game as totala } from '@kbot/game-totala'
-import { game as takingdoms } from '@kbot/game-takingdoms'
+import { registerGameBranding } from '@coreprime/kbot-ui/game-icon'
+import { game as totala } from '@coreprime/kbot-game-totala'
+import { game as takingdoms } from '@coreprime/kbot-game-takingdoms'
 
 const REGISTRY = new Map([totala, takingdoms].map((g) => [g.id, g]))
 
-// Push each adapter's chip metadata + application icon into @kbot/ui's
+// Push each adapter's chip metadata + application icon into @coreprime/kbot-ui's
 // branding registry at module load, so GameIcon/GameChip render the real
 // per-game iconography without kbotui carrying any game data itself.
 for (const g of REGISTRY.values()) {

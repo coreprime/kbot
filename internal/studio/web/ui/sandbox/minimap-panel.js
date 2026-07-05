@@ -6,7 +6,7 @@
 // is drawn by minimap.js, which looks it up by id on the shared refresh
 // tick and toggles the frame's visibility with sandbox mode.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 export const MINIMAP_CANVAS_ID = 'sandbox-minimap-canvas'
 

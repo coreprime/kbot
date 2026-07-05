@@ -1,10 +1,10 @@
-// @kbot/ui — public barrel for KBot Studio's reusable UI chrome.
+// @coreprime/kbot-ui — public barrel for KBot Studio's reusable UI chrome.
 //
 // The ribbon, floating panels, tab strips, split containers, context
 // menus and the accordion section all build on a single Preact-bound
 // `html` tagged template (htm-bind).  Consumers can either pull the
 // whole surface from this barrel or deep-import an individual module
-// (e.g. `@kbot/ui/ribbon`) via the package's wildcard subpath export.
+// (e.g. `@coreprime/kbot-ui/ribbon`) via the package's wildcard subpath export.
 
 // The bound htm template, re-exported as `html` for the conventional
 // `html\`<div/>\`` call site, and as `htm` for callers that bind it

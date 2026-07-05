@@ -3,7 +3,7 @@
 // move, step the sim, and assert the unit actually travelled.
 
 import assert from 'node:assert/strict'
-import { loadEngine } from '@kbot/engine'
+import { loadEngine } from '@coreprime/kbot-engine'
 
 const engine = await loadEngine()
 const session = engine.createSession({ seed: 7 })

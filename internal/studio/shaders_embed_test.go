@@ -20,7 +20,7 @@ func requireBuiltBundle(t *testing.T) {
 }
 
 // TestShaderSourcesBundled asserts that the renderer's GLSL made it into
-// the embedded web bundle.  The shaders live in @kbot/game3d, embedded
+// the embedded web bundle.  The shaders live in @coreprime/kbot-game3d, embedded
 // into its generated shader-sources module at package build time and then
 // rolled into the Vite output — if that chain breaks (package not built,
 // generated module missed by the bundler) the studio ships a renderer
@@ -57,7 +57,7 @@ func TestShaderSourcesBundled(t *testing.T) {
 	}
 	for _, a := range anchors {
 		if !found[a] {
-			t.Errorf("embedded web bundle carries no shader anchor %q — was @kbot/game3d built before the Vite bundle?", a)
+			t.Errorf("embedded web bundle carries no shader anchor %q — was @coreprime/kbot-game3d built before the Vite bundle?", a)
 		}
 	}
 }

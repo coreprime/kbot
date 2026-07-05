@@ -5,7 +5,7 @@
 // build weights as proportional bars and build limits as a chip list.
 // The plan selector only appears when there is more than one plan.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 
 function PlanView({ plan }) {

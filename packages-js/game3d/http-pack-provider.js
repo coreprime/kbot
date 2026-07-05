@@ -7,7 +7,7 @@
 // every asset is one GET of an immutable file, so the whole pack is
 // trivially CDN-cacheable and the renderer runs anywhere.
 //
-//   import { createWorld, HttpPackProvider } from '@kbot/game3d'
+//   import { createWorld, HttpPackProvider } from '@coreprime/kbot-game3d'
 //   const world = await createWorld(canvas, {
 //     assets: new HttpPackProvider('https://cdn.example.com/packs/ta-31c'),
 //   })

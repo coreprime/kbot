@@ -6988,7 +6988,7 @@ canvas {
 .fx .files-warm-fill { background: var(--accent); }
 
 
-/* ── Form controls (@kbot/ui FormField/TextField/SelectField) ───────── */
+/* ── Form controls (@coreprime/kbot-ui FormField/TextField/SelectField) ───────── */
 .form-field { display: grid; gap: 6px; }
 .form-field-label { font-size: 12px; font-weight: 600; color: var(--muted); }
 .kb-input, .kb-select {
@@ -7008,7 +7008,7 @@ canvas {
 .form-field-error { color: #ff8585; }
 .form-grid { display: grid; gap: 14px; padding: 6px 0 2px; }
 
-/* ── Tag pill (@kbot/ui Tag) ─────────────────────────────────────────── */
+/* ── Tag pill (@coreprime/kbot-ui Tag) ─────────────────────────────────────────── */
 .kb-tag {
   display: inline-block; font-size: 11px; line-height: 1.6;
   padding: 1px 8px; border-radius: 6px; margin-right: 6px;
@@ -7048,7 +7048,7 @@ canvas {
 .picker-card-tags { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .picker-path { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* ── Game icon / chip + version tag (@kbot/ui game-icon, Tag) ───────── */
+/* ── Game icon / chip + version tag (@coreprime/kbot-ui game-icon, Tag) ───────── */
 .kb-game-icon { vertical-align: middle; flex: none; }
 .kb-game-chip {
   display: inline-flex; align-items: center; gap: 6px;

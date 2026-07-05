@@ -6,7 +6,7 @@
 // navigates (folders → Browse via onOpenDir); the trailing segment is
 // the current location and renders inert.
 
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // crumbLabel renders the filesystem root as "/ (Root)" and every other
 // segment by its own name.

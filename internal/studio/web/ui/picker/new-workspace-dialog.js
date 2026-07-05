@@ -4,13 +4,13 @@
 // that defaults to <workspaceRoot>/<slug(name)> (OS-specific root from
 // the hub) and auto-tracks the name until the user overrides it.
 //
-// Built on @kbot/ui DialogModal + FormField controls so it matches the
+// Built on @coreprime/kbot-ui DialogModal + FormField controls so it matches the
 // editor's other dialogs.
 
 import { useEffect, useState } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { DialogModal } from '@kbot/ui/dialog-modal'
-import { TextField, SelectField } from '@kbot/ui/form-field'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { DialogModal } from '@coreprime/kbot-ui/dialog-modal'
+import { TextField, SelectField } from '@coreprime/kbot-ui/form-field'
 
 function slugify(s) {
   return String(s).toLowerCase()

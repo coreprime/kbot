@@ -29,7 +29,7 @@
 // through hostCallbacks (registered in studio.js's boot block) so the
 // API surface to non-unit-editor code is unchanged.
 
-import { TEAM_SIDES } from '@kbot/game3d/team-colors'
+import { TEAM_SIDES } from '@coreprime/kbot-game3d/team-colors'
 import { getReactUi } from '../host-context.js'
 
 // modelViewerInstance — the currently-active unit-editor ModelViewer.

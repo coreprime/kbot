@@ -28,8 +28,8 @@
 //     unchanged.
 
 import { render } from 'preact'
-import { htm as html } from '@kbot/ui/htm-bind'
-import { setPanelVisible } from '@kbot/ui/panel-store'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
+import { setPanelVisible } from '@coreprime/kbot-ui/panel-store'
 import { subscribeTick } from '/ui/common/refresh-tick.js'
 import {
   refreshMvThreadCodeHighlight,

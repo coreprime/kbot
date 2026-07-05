@@ -5,7 +5,7 @@
 // and falls back to an original dog-head silhouette until that asset is present.
 
 import { useState } from 'preact/hooks'
-import { htm as html } from '@kbot/ui/htm-bind'
+import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 
 // CavedogIcon — the Cavedog Entertainment logo from /cavedog.png; falls back to
 // an original dog-head silhouette if that file isn't present.

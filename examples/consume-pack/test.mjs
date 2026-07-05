@@ -1,12 +1,12 @@
 // Headless proof that a static `kbot pack` extraction drives the packaged
-// @kbot/game3d renderer end-to-end with NO studio server:
+// @coreprime/kbot-game3d renderer end-to-end with NO studio server:
 //
 //   kbot pack <install> <dir>   →   static HTTP   →   HttpPackProvider
 //                                                        ↓
 //                                        createWorld(canvas, { assets })
 //
 // Serves the pack directory from a throwaway node HTTP server, bundles
-// browser-entry.mjs (resolving @kbot/game3d from THIS directory's
+// browser-entry.mjs (resolving @coreprime/kbot-game3d from THIS directory's
 // node_modules — i.e. the packaged artifact), loads it into headless
 // Chromium and asserts:
 //   1. unitDB() returns the ARM commander's movement class + build fields.
@@ -16,7 +16,7 @@
 //      and the red frame is redder relative to blue.
 //
 // Expects to run from a scratch directory containing:
-//   node_modules/@kbot/game3d   (installed tarball or npmjs package)
+//   node_modules/@coreprime/kbot-game3d   (installed tarball or npmjs package)
 //   node_modules/esbuild, node_modules/playwright (+ chromium installed)
 //   browser-entry.mjs, test.mjs (copied from examples/consume-pack)
 // with the pack directory path in the PACK_DIR env var (or argv[2]).

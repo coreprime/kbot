@@ -1,5 +1,5 @@
-// Type definitions for @kbot/game3d — the root export surface.
-// Subpath modules (`@kbot/game3d/<module>`) mirror these named exports.
+// Type definitions for @coreprime/kbot-game3d — the root export surface.
+// Subpath modules (`@coreprime/kbot-game3d/<module>`) mirror these named exports.
 
 /** A 256-entry palette as [r, g, b] byte triples. */
 export type PaletteTriples = Array<[number, number, number]>
@@ -8,7 +8,7 @@ export type PaletteTriples = Array<[number, number, number]>
 export type TexSource = ImageBitmap | HTMLImageElement | HTMLCanvasElement
 
 /**
- * The asset seam: every byte @kbot/game3d needs arrives through one of
+ * The asset seam: every byte @coreprime/kbot-game3d needs arrives through one of
  * these methods.  Implement against any backend (the KBot Studio
  * server, static pre-extracted packs over HTTP, an in-browser HPI
  * reader) and the renderer neither knows nor cares.
