@@ -1,9 +1,0 @@
-storybook-static/
-.storybook/
-*.stories.js
-*.test.js
-*.spec.js
-__tests__/
-coverage/
-vitest.config.*
-vite.config.*
