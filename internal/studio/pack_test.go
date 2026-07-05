@@ -445,6 +445,24 @@ func TestBuildPackV5Assets(t *testing.T) {
 	if !torpedo {
 		t.Fatalf("no waterWeapon torpedo in weapons.json")
 	}
+
+	// Vertical-launch: the Wombat's rocket (ARMMH_WEAPON) is a vlaunch=1
+	// guided missile — the catalogue must carry the vlaunch flag and its
+	// climb-handover timer so a renderer can draw the vertical ascent before
+	// the missile turns onto its target.
+	rocket, ok := wf.Weapons["armmh_weapon"]
+	if !ok {
+		t.Fatalf("weapons.json lacks armmh_weapon (the Wombat's vlaunch rocket)")
+	}
+	if !rocket.VLaunch {
+		t.Fatalf("armmh_weapon.vlaunch = false, want true (vlaunch=1 in the TDF)")
+	}
+	if rocket.WeaponTimerSec <= 0 {
+		t.Fatalf("armmh_weapon.weaponTimerSec = %v, want > 0 (weapontimer=5)", rocket.WeaponTimerSec)
+	}
+	if !rocket.Guidance || rocket.TurnRate <= 0 {
+		t.Fatalf("armmh_weapon should be a guided missile (guidance=%v turnRate=%d)", rocket.Guidance, rocket.TurnRate)
+	}
 }
 
 // TestBuildPackV6FeatureSprites asserts format v6: flat ground features

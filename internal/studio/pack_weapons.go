@@ -73,6 +73,15 @@ type packWeaponJSON struct {
 	WaterWeapon    bool    `json:"waterWeapon,omitempty"`
 	AccelerationWU float64 `json:"accelerationWU,omitempty"`
 	FlightTimeSec  float64 `json:"flightTimeSec,omitempty"`
+	// VLaunch marks a vertical-launch missile (TDF vlaunch=1): the shot
+	// leaves the tube pointing straight up, climbs on its start velocity /
+	// acceleration, and only then turns onto the target under guidance.
+	// A renderer needs it to reproduce the launch silhouette (the Wombat's
+	// rocket rises before curving over); without it the missile draws a flat
+	// diagonal from launcher to target. WeaponTimerSec bounds the climb-then-
+	// turn handover (TDF weapontimer=, seconds).
+	VLaunch        bool    `json:"vlaunch,omitempty"`
+	WeaponTimerSec float64 `json:"weaponTimerSec,omitempty"`
 	// SoundStart / SoundHit are the fire/impact wav stems (sounds/<stem>.wav
 	// in the pack — format v4 packs the whole catalogue's sounds).
 	SoundStart string `json:"soundStart,omitempty"`
@@ -159,6 +168,8 @@ func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 				WaterWeapon:     sec.WaterWeapon != 0,
 				AccelerationWU:  sec.WeaponAcceleration,
 				FlightTimeSec:   sec.FlightTime,
+				VLaunch:         sec.VLaunch != 0,
+				WeaponTimerSec:  sec.WeaponTimer,
 				SoundStart:      strings.ToLower(strings.TrimSpace(sec.SoundStart)),
 				SoundHit:        strings.ToLower(strings.TrimSpace(sec.SoundHit)),
 			}
