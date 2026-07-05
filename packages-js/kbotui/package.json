@@ -1,6 +1,5 @@
 {
   "name": "@coreprime/kbot-ui",
-  "private": true,
   "type": "module",
   "version": "0.1.0",
   "description": "KBot Studio UI chrome: ribbon, buttons, tabs, floating panels, sidebars, split panes, context menus.",

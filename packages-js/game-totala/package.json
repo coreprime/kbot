@@ -1,6 +1,5 @@
 {
   "name": "@coreprime/kbot-game-totala",
-  "private": true,
   "type": "module",
   "version": "0.1.0",
   "description": "Total Annihilation game adapter: weapon-script conventions, COB quick actions, branding, and welcome theming for KBot Studio.",
