@@ -1,0 +1,100 @@
+name: Publish package (GitHub Packages)
+
+# Publishes one @coreprime/kbot-* package to GitHub Packages (npm.pkg.github.com)
+# on a matching tag, e.g. `kbot-game3d-v0.1.0`. The tarball is built from the
+# workspace, its version is guarded against the tag, secret-scanned over the
+# extracted bytes, and published with the workflow's GITHUB_TOKEN (packages:
+# write) — no personal token needed. Visibility (public/private) is set once
+# on the package in the org package settings.
+
+on:
+  push:
+    tags:
+      - 'kbot-engine-v*'
+      - 'kbot-game3d-v*'
+      - 'kbot-game-totala-v*'
+      - 'kbot-game-takingdoms-v*'
+      - 'kbot-ui-v*'
+  workflow_dispatch:
+    inputs:
+      short:
+        description: 'package short name: engine | game3d | game-totala | game-takingdoms | ui'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve package short name + dir
+        id: pkg
+        run: |
+          if [ -n "${{ github.event.inputs.short }}" ]; then
+            SHORT="${{ github.event.inputs.short }}"; VERSION=""
+          else
+            REF="${GITHUB_REF_NAME}"          # kbot-<short>-v<version>
+            SHORT="${REF#kbot-}"; SHORT="${SHORT%-v*}"
+            VERSION="${REF##*-v}"
+          fi
+          case "$SHORT" in
+            ui) DIR=packages-js/kbotui ;;
+            engine|game3d|game-totala|game-takingdoms) DIR="packages-js/$SHORT" ;;
+            *) echo "unknown package short '$SHORT'"; exit 1 ;;
+          esac
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "dir=$DIR"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: '@coreprime'
+
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install workspace + build (wasm + dist)
+        run: |
+          npm ci
+          task build
+
+      - name: Version guard (tag must equal package.json)
+        if: steps.pkg.outputs.version != ''
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |
+          PKG_V="$(node -p "require('./package.json').version")"
+          if [ "$PKG_V" != "${{ steps.pkg.outputs.version }}" ]; then
+            echo "tag version ${{ steps.pkg.outputs.version }} != package.json $PKG_V" >&2
+            exit 1
+          fi
+
+      - name: Pack + extract for scanning
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: |
+          rm -rf /tmp/pkg /tmp/extract && mkdir -p /tmp/pkg /tmp/extract
+          npm pack --pack-destination /tmp/pkg
+          tar -xzf /tmp/pkg/*.tgz -C /tmp/extract
+
+      - name: Secret scan (trufflehog)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sudo sh -s -- -b /usr/local/bin
+          trufflehog --no-update filesystem /tmp/extract/package --results=verified,unknown --fail
+
+      - name: Publish
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish
