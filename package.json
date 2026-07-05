@@ -4,7 +4,6 @@
   "type": "module",
   "version": "0.0.0",
   "workspaces": [
-    "packages-js/*",
     "internal/studio/web"
   ],
   "scripts": {

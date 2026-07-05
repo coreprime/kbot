@@ -15,16 +15,15 @@ tasks:
     desc: Build all binaries
     cmds:
       - task: build-studio-web
-      - task: build-game3d
       - task: build-wasm
       - task: bundle-studio-web
       - task: build-kbot
 
   build-wasm:
-    desc: Compile the deterministic engine core to wasm for the studio web client
+    desc: Stage the deterministic engine wasm (from the @coreprime/kbot-engine package) for the studio web client
     cmds:
-      - GOOS=js GOARCH=wasm go build -o internal/studio/web/engine/engine.wasm ./cmd/engine-wasm
-      - cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" internal/studio/web/engine/wasm_exec.js
+      - cp node_modules/@coreprime/kbot-engine/wasm/engine.wasm internal/studio/web/engine/engine.wasm
+      - cp node_modules/@coreprime/kbot-engine/wasm/wasm_exec.js internal/studio/web/engine/wasm_exec.js
 
   build-kbot:
     desc: Build the kbot CLI
@@ -32,33 +31,16 @@ tasks:
       - CGO_ENABLED=0 go build -o bin/kbot ./cmd/kbot
 
   build-studio-web:
-    desc: Install the JS workspace (studio web + packages-js) and lint it
+    desc: Install the JS workspace (studio web + registry-published @coreprime/kbot-* packages) and lint it
     cmds:
       - npm install
       - task: lint-js
-
-  build-game3d:
-    desc: Build the @coreprime/kbot-game3d package dist (embedded shaders/worlds + ESM modules)
-    cmds:
-      - npm run build -w @coreprime/kbot-game3d
 
   bundle-studio-web:
     desc: Bundle the KBot Studio web app with Vite into web/dist (embedded by build-kbot)
     cmds:
       - npx vite build
     dir: internal/studio/web
-
-  storybook:
-    desc: Run the @coreprime/kbot-ui Storybook dev server (http://localhost:6006)
-    cmds:
-      - npm install
-      - npm run storybook --workspace @coreprime/kbot-ui
-
-  build-storybook:
-    desc: Build the @coreprime/kbot-ui Storybook into a static bundle
-    cmds:
-      - npm install
-      - npm run build-storybook --workspace @coreprime/kbot-ui
 
   vet:
     desc: Run go vet
@@ -72,7 +54,7 @@ tasks:
       - task: lint-js
 
   lint-js:
-    desc: Run ESLint over the JS workspace (studio web + packages-js)
+    desc: Run ESLint over the studio web app
     cmds:
       - npx eslint . --max-warnings 0
 
@@ -80,14 +62,12 @@ tasks:
     desc: Run all tests
     cmds:
       - go test ./...
-      - node --test packages-js/game-takingdoms/contract.test.js "packages-js/game3d/test/*.test.js" "internal/studio/web/ui/map-editor/tak-rotate.test.js"
-      - node packages-js/engine/test/replay-smoke.mjs
+      - node --test "internal/studio/web/ui/map-editor/tak-rotate.test.js"
 
   test-js:
-    desc: Run the JS unit tests (adapter contract + pure UI helpers + engine replay smoke)
+    desc: Run the monorepo-owned JS unit tests (pure UI helpers)
     cmds:
-      - node --test packages-js/game-takingdoms/contract.test.js "packages-js/game3d/test/*.test.js" "internal/studio/web/ui/map-editor/tak-rotate.test.js"
-      - node packages-js/engine/test/replay-smoke.mjs
+      - node --test "internal/studio/web/ui/map-editor/tak-rotate.test.js"
 
   test-verbose:
     desc: Run all tests
@@ -115,7 +95,7 @@ tasks:
   clean:
     desc: Remove build artifacts
     cmds:
-      - rm -rf bin/ coverage.out coverage.html .cache/ kbot engine-wasm
+      - rm -rf bin/ coverage.out coverage.html .cache/ kbot
 
   install:
     desc: Run the KBot Explorer against the TA assets

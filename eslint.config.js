@@ -2,34 +2,27 @@ import js from '@eslint/js'
 import globals from 'globals'
 
 // Repo-wide ESLint flat config.  Covers the studio web app
-// (internal/studio/web) plus the @coreprime/kbot-* workspace packages
-// (packages-js/*), which the studio bundles via Vite.
+// (internal/studio/web), which bundles the registry-published
+// @coreprime/kbot-* packages via Vite.
 export default [
   {
     // node_modules is ignored by default.  The rest are third-party or
     // generated artifacts that fail any rule looking at code shape:
     //   - vendor: minified Preact / signals / htm bundles
-    //   - engine/wasm_exec.js: Go's generated wasm loader (task build-wasm)
+    //   - engine/wasm_exec.js: Go's generated wasm loader (staged by task build-wasm)
     //   - dist: the Vite bundle (minified output + copied vendor loader)
-    //   - storybook-static: Storybook's static export
     ignores: [
       'internal/studio/web/vendor/**',
       'internal/studio/web/engine/wasm_exec.js',
       'internal/studio/web/dist/**',
-      'packages-js/*/storybook-static/**',
-      'packages-js/engine/wasm/**',
-      'packages-js/engine/pack-verify/**',
-      'packages-js/game3d/dist/**',
-      'packages-js/game3d/generated/**',
-      'packages-js/game3d/pack-verify/**',
     ],
   },
   js.configs.recommended,
   {
-    // Node-side tooling and examples: the engine package's build/verify
-    // scripts, its Node test scripts, and the headless consume-proof run
-    // under Node, not a browser.
-    files: ['packages-js/*/scripts/**/*.mjs', 'packages-js/*/test/**/*.mjs', 'examples/**/*.mjs'],
+    // Node-side tooling and examples: the headless consume-proof runs that
+    // install the published packages and exercise them under Node, not a
+    // browser.
+    files: ['examples/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

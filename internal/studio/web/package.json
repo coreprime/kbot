@@ -13,6 +13,11 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
+    "@coreprime/kbot-engine": "^0.2.1",
+    "@coreprime/kbot-game-takingdoms": "^0.1.1",
+    "@coreprime/kbot-game-totala": "^0.1.1",
+    "@coreprime/kbot-game3d": "^0.1.1",
+    "@coreprime/kbot-ui": "^0.1.1",
     "@preact/signals": "^2.9.1",
     "htm": "^3.1.1",
     "preact": "^10.29.2"
