@@ -63,6 +63,7 @@ import {
   debrisBurst,
   stepDebrisRecord,
   latheConeSpray,
+  nanoPieceNames,
 } from './world-fx.js'
 import { buildFeatureField, mulberry32, featureSeed } from './map-features.js'
 import { raycastTerrain } from './terrain-los.js'
@@ -123,6 +124,10 @@ const SURFACE_BAND_WU = 4
 // Nanolathe / reclaim beam cadence + particle speed.
 const LATHE_EMIT_INTERVAL_MS = 26
 const LATHE_PARTICLE_SPEED = 220
+
+// Build-pad spin rate (rad/s) for a nascent unit under construction on a
+// factory pad — a slow, steady turn (~one revolution every ~10s).
+const BUILD_SPIN_RAD_S = 0.6
 
 // Steam-vent wisp cadence + drift.  A lazy geothermal plume: one soft
 // white puff every third of a second rising off the vent throat, phase-
@@ -342,7 +347,16 @@ export async function createWorld(canvas, {
     }
     const pitch = (u.pitchRad || 0) + (u._tiltP || 0) + (u._imp ? u._imp.p : 0)
     const roll = (u.rollRad || 0) + (u._tiltR || 0) + (u._imp ? u._imp.r : 0)
-    return { x: u.x, y, z: u.z, headingRad: u.headingRad, pitchRad: pitch, rollRad: roll }
+    // Build-pad spin: a nascent factory unit turns steadily about vertical
+    // off the fx clock until the build completes, then hands back to its
+    // driver heading.  Phase-offset per id so a busy plant's builds don't
+    // all face the same way.
+    let heading = u.headingRad
+    if (u.buildSpin && u.buildPercent != null && u.buildPercent < 100) {
+      const phase = (typeof u.id === 'number' ? u.id : 0) * 1.61803
+      heading = (fxTimeMs / 1000) * BUILD_SPIN_RAD_S + phase
+    }
+    return { x: u.x, y, z: u.z, headingRad: heading, pitchRad: pitch, rollRad: roll }
   }
 
   // _unitVelocity estimates a unit's WORLD travel velocity ([vx,vy,vz], WU/s)
@@ -712,6 +726,26 @@ export async function createWorld(canvas, {
       piece, pose.x, pose.y, pose.z, pose.headingRad, pose.pitchRad, pose.rollRad)
   }
 
+  // _pieceWorldPose is _pieceWorldPos plus the piece's live world Y yaw — the
+  // heading the piece points at THIS frame, carrying its COB rotation (e.g. a
+  // factory `pad` piece the engine's StartBuilding spins).  `{ pos, yaw }` or
+  // null.  Used to lock a nascent factory-pad unit to the spinning pad.
+  const _pieceWorldPose = (id, pieceRef) => {
+    const u = units.get(id)
+    if (!u || !u.model) return null
+    let piece = null
+    if (typeof pieceRef === 'number') {
+      const nm = Array.isArray(u.pieceNames) ? u.pieceNames[pieceRef] : null
+      if (nm) piece = u.model.findPiece(nm)
+    } else if (pieceRef != null) {
+      piece = u.model.findPiece(String(pieceRef))
+    }
+    if (!piece) return null
+    const pose = _unitPose(u)
+    return u.model.resolvePieceWorldPose(
+      piece, pose.x, pose.y, pose.z, pose.headingRad, pose.pitchRad, pose.rollRad)
+  }
+
   // _midHull is the generic beam/effect anchor: the unit origin plus a
   // small vertical offset to mid-hull — the graceful fallback whenever a
   // COB query / piece lookup can't resolve a real emitter piece.
@@ -738,13 +772,34 @@ export async function createWorld(canvas, {
   // Weapon slots resolve muzzles through TA's per-slot COB queries.
   const QUERY_SLOT_FN = ['QueryPrimary', 'QuerySecondary', 'QueryTertiary']
 
-  // _nanoPiece resolves a builder's nanolathe emitter piece index via its
-  // COB QueryNanoPiece, or null for the mid-hull fallback.  Resolved once
-  // per beam start (each start re-queries, so multi-nozzle builders cycle
-  // emitters between build orders the way the game's spray does).
-  const _nanoPiece = (unitId) => {
-    const idx = _queryPiece(unitId, 'QueryNanoPiece')
-    return idx >= 0 ? idx : null
+  // _nanoPieces resolves a builder's nanolathe emitter piece refs — ALL of
+  // them.  A construction unit's model names its nozzles `nano1`, `nano2`, …
+  // and its COB QueryNanoPiece alternates between them every call, so the real
+  // spray flickers across every nozzle; a single queried piece captured only
+  // one, which is why a two-arm plant's stream read as half-missing.  We
+  // enumerate the model's `nano*` pieces (returned as NAMES, which
+  // _pieceWorldPos resolves directly) and, as a fallback for a builder whose
+  // emitter isn't named `nano*`, probe QueryNanoPiece a few times and collect
+  // the distinct indices the alternator hands back.  Empty list → the beam
+  // falls back to the mid-hull anchor.
+  const _nanoPieces = (unitId) => {
+    const u = units.get(unitId)
+    const refs = []
+    if (u && u.model && Array.isArray(u.model.flat)) {
+      for (const nm of nanoPieceNames(u.model.flat.map((p) => p && p.name))) {
+        refs.push(nm)
+      }
+    }
+    if (refs.length) return refs
+    // No named nano pieces — fall back to the COB alternator.  Probe a handful
+    // of times; a two-nozzle QueryNanoPiece toggles, so a few calls surface
+    // both indices, and a single-nozzle one just repeats (de-duplicated).
+    const seen = new Set()
+    for (let i = 0; i < 4; i++) {
+      const idx = _queryPiece(unitId, 'QueryNanoPiece')
+      if (idx >= 0 && !seen.has(idx)) { seen.add(idx); refs.push(idx) }
+    }
+    return refs
   }
 
   // _resolveMuzzle returns the world position a slot's shot exits from: the
@@ -787,50 +842,88 @@ export async function createWorld(canvas, {
     return null
   }
 
+  // _beamNanoAnchors returns the builder end's live nozzle world positions —
+  // one per nano piece.  Resolved lazily (the builder's model may still be
+  // loading when the beam starts) and cached on the end spec once the model is
+  // up.  Falls back to a single mid-hull anchor when the unit has no resolvable
+  // nano pieces, so the stream always has somewhere to flow from.
+  const _beamNanoAnchors = (end) => {
+    const u = units.get(end.unitId)
+    if (!u) return null
+    if (end.nano) {
+      // Resolve + cache the nano piece refs once the model is loaded.
+      if (!end._nanoRefs && u.model) {
+        const refs = _nanoPieces(end.unitId)
+        if (refs.length) end._nanoRefs = refs
+      }
+      if (end._nanoRefs && end._nanoRefs.length) {
+        const out = []
+        for (const ref of end._nanoRefs) {
+          const p = _pieceWorldPos(end.unitId, ref)
+          if (p) out.push(p)
+        }
+        if (out.length) return out
+      }
+    }
+    return [_midHull(u)]
+  }
+
   // _stepBeams advances every live lathe/reclaim beam: a deterministic
   // accumulator drips nano particles along the span (toward the target for
   // build, back toward the builder for reclaim), sparkles land on the work
-  // end, and a reclaimed wreck shrinks while the beam holds it.
+  // end, and a reclaimed wreck shrinks while the beam holds it.  A builder
+  // with multiple nano nozzles (a factory has two) sprays a stream from EACH.
   const _stepBeams = (dtMs) => {
     if (!beams.size) return
     for (const [key, b] of beams) {
-      const from = _resolveBeamEnd(b.from)
       const to = _resolveBeamEnd(b.to)
-      if (!from || !to) { beams.delete(key); continue }
+      // Builder-anchored beams spray from every nano nozzle; a fixed-position
+      // `from` (build site before the frame exists) is a single anchor.
+      const froms = b.from && b.from.unitId != null
+        ? _beamNanoAnchors(b.from)
+        : (() => { const p = _resolveBeamEnd(b.from); return p ? [p] : null })()
+      if (!froms || !froms.length || !to) { beams.delete(key); continue }
       b.accMs += dtMs
-      const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
-      const dist = Math.hypot(dx, dy, dz) || 1
-      const lifeMs = (dist / LATHE_PARTICLE_SPEED) * 1000
       while (b.accMs >= LATHE_EMIT_INTERVAL_MS) {
         b.accMs -= LATHE_EMIT_INTERVAL_MS
         b.count = (b.count || 0) + 1
         const reclaim = b.kind === 'reclaim'
         if (!reclaim) {
           // BUILD: a dense translucent CONE of fine bright-green motes from
-          // the nano nozzle (from) converging on the build target (to).
+          // EACH nano nozzle (froms) converging on the build target (to).
           // Deterministic — seeded off the beam's own rng (fx-clock cadence).
-          latheConeSpray(worldBinding.particles, {
-            from, to, rng: b.rng, color: b.color,
-          })
+          for (const from of froms) {
+            latheConeSpray(worldBinding.particles, {
+              from, to, rng: b.rng, color: b.color,
+            })
+          }
         } else {
           // RECLAIM: reverse stream — nano motes flow FROM the work end back
-          // into the builder along the span, with slight axial scatter.
-          const jx = (b.rng() * 2 - 1) * 1.6
-          const jy = (b.rng() * 2 - 1) * 1.6
-          const jz = (b.rng() * 2 - 1) * 1.6
-          worldBinding.particles.emit(SFX_NANO_PARTICLES, [to[0] + jx, to[1] + jy, to[2] + jz], {
-            velocity: [
-              -(dx / dist) * LATHE_PARTICLE_SPEED,
-              -(dy / dist) * LATHE_PARTICLE_SPEED,
-              -(dz / dist) * LATHE_PARTICLE_SPEED,
-            ],
-            lifeMs,
-            color: b.color,
-            size: 2.2,
-            noFade: true,
-          })
+          // into each builder nozzle along the span, with slight axial scatter.
+          for (const from of froms) {
+            const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
+            const dist = Math.hypot(dx, dy, dz) || 1
+            const lifeMs = (dist / LATHE_PARTICLE_SPEED) * 1000
+            const jx = (b.rng() * 2 - 1) * 1.6
+            const jy = (b.rng() * 2 - 1) * 1.6
+            const jz = (b.rng() * 2 - 1) * 1.6
+            worldBinding.particles.emit(SFX_NANO_PARTICLES, [to[0] + jx, to[1] + jy, to[2] + jz], {
+              velocity: [
+                -(dx / dist) * LATHE_PARTICLE_SPEED,
+                -(dy / dist) * LATHE_PARTICLE_SPEED,
+                -(dz / dist) * LATHE_PARTICLE_SPEED,
+              ],
+              lifeMs,
+              color: b.color,
+              size: 2.2,
+              noFade: true,
+            })
+          }
           // Work-end sparkle every few drips.
           if ((b.count % 4) === 0) {
+            const jx = (b.rng() * 2 - 1) * 1.6
+            const jy = (b.rng() * 2 - 1) * 1.6
+            const jz = (b.rng() * 2 - 1) * 1.6
             worldBinding.particles.emit(SFX_SPARK, [to[0] + jx, to[1] + jy, to[2] + jz], {
               color: [b.color[0], b.color[1], b.color[2], 1],
               lifeMs: 180,
@@ -1157,10 +1250,24 @@ export async function createWorld(canvas, {
       return _pieceWorldPos(id, piece)
     },
 
+    // unitPieceWorldPose returns { pos: [x,y,z], yaw } for one of a unit's
+    // model pieces — the piece's live world position AND the world Y heading
+    // it points at this frame, composed through the full rendered transform
+    // chain including the piece tree's live COB pose.  The yaw carries a
+    // spinning piece's rotation (a factory `pad` piece the engine's
+    // StartBuilding turns), so a caller can seat a nascent unit on the pad and
+    // lock its heading to the pad's LIVE spin.  `piece` is a name or COB
+    // piece-table index (as unitPieceWorldPos).  Null when unresolvable.
+    unitPieceWorldPose(id, piece) {
+      return _pieceWorldPose(id, piece)
+    },
+
     // applyState replaces the whole rendered world from a sim snapshot
     // (the engine's frame.Snapshot shape):
     //   { units: [{ id, model|name, x, y, z, heading, pitch?, roll?,
     //       buildPercent?, side?, teamColor?,
+    //       buildSpin?,                   // nascent factory-pad unit spins about
+    //                                     //   vertical until buildPercent hits 100
     //       grounded?,                    // clamp render Y to terrain + slope-tilt
     //       mobile?,                      // false = structure (no hit-rock); omitted → inferred
     //       hp01?,                        // 0..1 health (status bar + damage smoke)
@@ -1274,6 +1381,10 @@ export async function createWorld(canvas, {
         if (su.hp01 != null) u.hp01 = su.hp01
         if (su.rank != null) u.rank = su.rank | 0
         if (su.buildPercent != null) u.buildPercent = su.buildPercent
+        // buildSpin: a nascent unit riding a factory build pad turns slowly
+        // about vertical while under construction (the classic TA "unit on
+        // the spinning pad").  Off for con-built structures, which stay put.
+        if (su.buildSpin != null) u.buildSpin = !!su.buildSpin
         if (su.teamColor) u.teamColor = su.teamColor
         else if (su.side != null) u.teamColor = teamColorForSide(su.side)
         if (Array.isArray(su.pieceNames)) u.pieceNames = su.pieceNames
@@ -1501,18 +1612,21 @@ export async function createWorld(canvas, {
     // [x,y,z] positions (a build site before the frame exists).  The
     // stream is deterministic (seeded per key, fx-clock cadence).
     //
-    // A fromUnitId resolves the builder's nano-spray emitter through its
-    // COB QueryNanoPiece (via the setScriptPieceQuery resolver) once at
-    // beam start; the spray then tracks that piece's LIVE world position —
-    // a construction arm's nozzle, not the hull centre.  Missing resolver
-    // / script / piece falls back to the mid-hull anchor as before.
+    // A fromUnitId resolves the builder's nano-spray emitter pieces through
+    // its model's `nano*` pieces (or COB QueryNanoPiece), and the spray then
+    // tracks each nozzle's LIVE world position — a construction arm's tips,
+    // not the hull centre.  A factory has TWO nano nozzles and the stream
+    // flows from BOTH; a con vehicle has one.  The pieces are resolved
+    // lazily on the first step (the builder's model may still be loading at
+    // beam start) and cached.  Missing resolver / model / pieces falls back
+    // to the mid-hull anchor as before.
     latheBeam(key, { fromUnitId = null, toUnitId = null, from = null, to = null, on = true, color = null } = {}) {
       if (!on) { beams.delete(key); return }
       beams.set(key, {
         kind: 'build',
-        from: fromUnitId != null ? { unitId: fromUnitId, piece: _nanoPiece(fromUnitId) } : { pos: from },
+        from: fromUnitId != null ? { unitId: fromUnitId, nano: true } : { pos: from },
         to: toUnitId != null ? { unitId: toUnitId } : { pos: to },
-        color: color || [0.45, 1.9, 0.85, 0.9],
+        color: color || [0.3, 1.5, 0.55, 1.0],
         accMs: 0,
         rng: mulberry32(featureSeed(String(key), 7, 13)),
       })
@@ -1527,7 +1641,7 @@ export async function createWorld(canvas, {
       if (!on) { beams.delete(key); return }
       beams.set(key, {
         kind: 'reclaim',
-        from: fromUnitId != null ? { unitId: fromUnitId, piece: _nanoPiece(fromUnitId) } : { pos: from },
+        from: fromUnitId != null ? { unitId: fromUnitId, nano: true } : { pos: from },
         to: corpseId != null ? { corpseId } : (toUnitId != null ? { unitId: toUnitId } : { pos: to }),
         color: color || [0.55, 1.7, 0.55, 0.9],
         accMs: 0,
@@ -1749,6 +1863,13 @@ export async function createWorld(canvas, {
     // cinematic quality preset already sets 4; a harness can override.
     setDrawDistanceScale(scale) {
       if (typeof renderer.setDrawDistanceScale === 'function') renderer.setDrawDistanceScale(scale)
+    },
+
+    // setTerrainGridIntensity forwards the Tron grid-line intensity laid over
+    // the terrain surface (0..1). The intro drives it high at the start of the
+    // zoom-in and eases toward the faint baseline as the camera settles.
+    setTerrainGridIntensity(v) {
+      if (typeof renderer.setTerrainGridIntensity === 'function') renderer.setTerrainGridIntensity(v)
     },
 
     // stats exposes the renderer's per-frame cull counters

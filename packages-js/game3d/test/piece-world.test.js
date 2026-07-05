@@ -70,3 +70,46 @@ test('piece world position applies entity pitch, roll and scale', () => {
   // Uniform scale halves every offset about the entity origin.
   close(m.resolvePieceWorld(muzzle, 10, 0, 0, 0, 0, 0, 0.5), [10, 5, 3], 'scaled pose')
 })
+
+// ── pad-spin yaw (BUG B): the seated unit must track the pad's LIVE spin ───
+
+// A factory-style model: a `pad` piece the engine spins about Y (StartBuilding
+// `spin pad around y-axis`). QueryBuildInfo returns this piece; a nascent unit
+// seated on it must inherit the pad's live world yaw so it turns WITH the pad.
+function padModel() {
+  const base = new Piece({ name: 'base' })
+  const pad = new Piece({ name: 'pad', originX: 0, originY: 2, originZ: 0 })
+  base.addChild(pad)
+  return new Model({ name: 'lab', root: base, bounds: { min: [-16, 0, -16], max: [16, 6, 16] } })
+}
+
+test('resolvePieceWorldPose reports the pad piece live world yaw', () => {
+  const m = padModel()
+  const pad = m.findPiece('pad')
+
+  // At rest (no spin, no body heading) the pad points at heading 0.
+  let p = m.resolvePieceWorldPose(pad, 0, 0, 0, 0)
+  assert.ok(Math.abs(p.yaw - 0) < EPS, `rest yaw ${p.yaw}`)
+
+  // Spin the pad a quarter turn about Y (the engine's StartBuilding spin lands
+  // in the piece's COB rotate[1]) — the reported world yaw follows it.
+  pad.rotate[1] = Math.PI / 2
+  p = m.resolvePieceWorldPose(pad, 0, 0, 0, 0)
+  assert.ok(Math.abs(p.yaw - Math.PI / 2) < EPS, `spun yaw ${p.yaw}`)
+
+  // The factory body heading composes with the pad spin: a body yawed π/2 with
+  // the pad spun another π/2 puts the pad at π (the seat inherits BOTH).
+  p = m.resolvePieceWorldPose(pad, 0, 0, 0, Math.PI / 2)
+  assert.ok(Math.abs(Math.abs(p.yaw) - Math.PI) < EPS, `composed yaw ${p.yaw}`)
+
+  // The pad's world POSITION rides the body heading + its origin, same as
+  // resolvePieceWorld — the pose carries position too.
+  pad.rotate[1] = 0
+  p = m.resolvePieceWorldPose(pad, 100, 20, -50, 0)
+  close(p.pos, [100, 22, -50], 'pad world position')
+})
+
+test('resolvePieceWorldPose returns null for a missing piece', () => {
+  const m = padModel()
+  assert.equal(m.resolvePieceWorldPose(null, 0, 0, 0, 0), null)
+})

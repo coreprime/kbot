@@ -46,7 +46,24 @@ void logDepthFragment() {
 // coplanar terrain decals z-fight regardless. Subtracting a firm constant here
 // is the log-depth equivalent: it lifts the decal off the terrain in written
 // depth so it always wins the LEQUAL test against the surface it lies on.
+//
+// A CONSTANT bias alone is not enough at GRAZING angles: there the written
+// depth changes fast across a fragment (a steep screen-space slope), so a
+// coplanar decal and the terrain under it land within the constant of each
+// other and flicker. When screen-space derivatives are available we add a
+// SLOPE-SCALED term — fwidth of the written depth — so the offset grows with
+// the surface's depth gradient, exactly like glPolygonOffset's slope factor
+// but in the log-depth domain. This is what removes the residual grazing-angle
+// z-fight; without the extension it degrades to the constant bias.
 void logDepthFragmentBiased(float bias) {
-  gl_FragDepthEXT = log2(max(1e-6, vLogZ)) * (0.5 * uLogDepthFC) - bias;
+  float d = log2(max(1e-6, vLogZ)) * (0.5 * uLogDepthFC);
+#ifdef LOGDEPTH_DERIV
+  // Slope term: the depth change across one fragment, scaled up so a steep
+  // (grazing) slope firmly clears the decal off the surface it lies on.
+  float slope = fwidth(d) * 2.0;
+  gl_FragDepthEXT = d - bias - slope;
+#else
+  gl_FragDepthEXT = d - bias;
+#endif
 }
 #endif

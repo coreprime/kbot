@@ -249,6 +249,10 @@ export interface SnapshotUnit {
   pitch?: number
   roll?: number
   buildPercent?: number
+  /** Nascent factory-pad unit: spin slowly about vertical until the build
+   * completes (buildPercent reaches 100), then hand back to the driver
+   * heading. Off (default) for con-built structures, which stay put. */
+  buildSpin?: boolean
   side?: number
   teamColor?: [number, number, number]
   /** Clamp render Y to terrain + slope-tilt (set tilt:false to keep flat). */
@@ -477,6 +481,13 @@ export interface World {
    * pieceNames.  Null when the unit / model / piece can't be resolved.
    */
   unitPieceWorldPos(id: number | string, piece: string | number): [number, number, number] | null
+  /** The world position AND live world Y yaw (heading) of one of a unit's
+   * model pieces, through the full rendered transform chain including the
+   * piece tree's live COB pose. The yaw carries a spinning piece's rotation
+   * (a factory `pad` piece the engine's StartBuilding turns), so a caller can
+   * seat a nascent unit on the pad and lock its heading to the pad's live
+   * spin. `piece` is a name or COB piece-table index. Null when unresolvable. */
+  unitPieceWorldPose(id: number | string, piece: string | number): { pos: [number, number, number]; yaw: number } | null
   /** Apply a renderer quality preset: 'standard' | 'cinematic'. The
    * 'cinematic' preset also pushes the draw distance to 4×. */
   setQuality(name: string): boolean
@@ -487,6 +498,10 @@ export interface World {
   /** Far-plane multiplier so distant units keep geometry in wide shots.
    * Clamped 1..8; the 'cinematic' quality preset already sets 4. */
   setDrawDistanceScale(scale: number): void
+  /** Tron grid-line intensity laid over the textured terrain (0..1). Driven
+   * high at the intro zoom-in start and eased toward a faint baseline as the
+   * camera settles. */
+  setTerrainGridIntensity(v: number): void
   /** Most recent frame's cull counters: { drew, culled, total, … }. */
   stats(): { drew: number; culled: number; total: number; shadowed: number; full: number; mid: number; far: number }
   units(): Array<number | string>

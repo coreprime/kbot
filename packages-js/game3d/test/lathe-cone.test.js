@@ -11,8 +11,10 @@ import { ParticlePool, SFX_NANO_PARTICLES } from '../cob-particles.js'
 import { mulberry32 } from '../map-features.js'
 import {
   latheConeSpray,
+  nanoPieceNames,
   LATHE_CONE_PARTICLES,
   LATHE_CONE_HALF_ANGLE,
+  LATHE_CONE_LIFE_MAX_MS,
 } from '../world-fx.js'
 
 const FROM = [0, 10, 0]
@@ -33,7 +35,11 @@ test('emits a burst of motes per tick (a cone, not one blob)', () => {
   const rng = mulberry32(1)
   const res = latheConeSpray(pool, { from: FROM, to: TO, rng })
   assert.equal(res.emitted, LATHE_CONE_PARTICLES)
-  assert.ok(LATHE_CONE_PARTICLES >= 5, 'a cone sprays many motes, not one')
+  // A cone is several motes per tick (not one), streamed every ~26 ms so a
+  // handful per tick accumulates into a dense stream — bigger/brighter motes
+  // carry the read, so the per-tick count stays modest to keep the additive
+  // load (and the luminance governor) sane when many builds run at once.
+  assert.ok(LATHE_CONE_PARTICLES >= 3, 'a cone sprays several motes, not one')
   assert.equal(pool.count, LATHE_CONE_PARTICLES)
   // Every mote is a nano particle.
   for (let i = 0; i < pool.count; i++) {
@@ -90,16 +96,56 @@ test('the cone originates at the nozzle and converges toward the target', () => 
   }
 })
 
-test('motes are fine and short-lived (soft haze, not hard blobs)', () => {
+test('motes are chunky enough to read + short-lived (visible cone, not blobs)', () => {
   const pool = new ParticlePool()
   const rng = mulberry32(99)
   latheConeSpray(pool, { from: FROM, to: TO, rng })
   for (let i = 0; i < pool.count; i++) {
-    assert.ok(pool.size[i] <= 3.0, `mote ${i} is fine (size ${pool.size[i]})`)
-    assert.ok(pool.life[i] > 0 && pool.life[i] <= 520,
-      `mote ${i} is short-lived (life ${pool.life[i]})`)
-    // Motes FADE (no noFade) so the cone is a translucent haze.
+    // Motes are sized to actually READ at gameplay distance — fine 1–2 px
+    // points vanished into the terrain (the construction-spray-invisible
+    // bug). Bounded so the cone is a spray, not a wall of big quads.
+    assert.ok(pool.size[i] >= 2.0 && pool.size[i] <= 7.0,
+      `mote ${i} is a readable spray mote (size ${pool.size[i]})`)
+    // Life covers the whole crossing + slack so the mote reaches the build,
+    // but is still bounded by the ceiling so a long span isn't a persistent
+    // wall of motes.
+    assert.ok(pool.life[i] > 0 && pool.life[i] <= LATHE_CONE_LIFE_MAX_MS,
+      `mote ${i} lives within the ceiling (life ${pool.life[i]})`)
+    // Motes FADE (no noFade) so the cone is a translucent stream.
     assert.equal(pool.noFade[i], 0, `mote ${i} fades over its life`)
+  }
+})
+
+test('every mote lives long enough to REACH the build (stream reaches the target)', () => {
+  // The stream must touch the structure, not stub out partway: a mote's life,
+  // multiplied by its speed, has to cover the whole span at every build
+  // distance (the old fixed speed + 520 ms clamp died at ~66 % of a typical
+  // con→structure span, so the jet never reached the build).
+  for (const to of [[40, 8, 10], TO, [260, 30, -80]]) {
+    const pool = new ParticlePool()
+    latheConeSpray(pool, { from: FROM, to, rng: mulberry32(11) })
+    const span = Math.hypot(to[0] - FROM[0], to[1] - FROM[1], to[2] - FROM[2])
+    for (let i = 0; i < pool.count; i++) {
+      const sp = Math.hypot(pool.vx[i], pool.vy[i], pool.vz[i])
+      const reach = sp * (pool.life[i] / 1000)
+      assert.ok(reach >= span,
+        `span ${span.toFixed(0)}: mote ${i} reaches ${reach.toFixed(0)} >= span`)
+    }
+  }
+})
+
+test('the spray is a BRIGHT green so it reads over the terrain', () => {
+  // The construction cone was invisible partly because the motes were too
+  // dim/small. The default colour must be a bright, green-dominant tint
+  // (green channel clearly the strongest and well above 1 for the additive
+  // glow) so a con→structure / factory build reads on screen.
+  const pool = new ParticlePool()
+  latheConeSpray(pool, { from: FROM, to: TO, rng: mulberry32(7) })
+  assert.ok(pool.count > 0, 'the cone emitted motes')
+  for (let i = 0; i < pool.count; i++) {
+    assert.ok(pool.g[i] >= 1.0, `mote ${i} green is bright (g ${pool.g[i]})`)
+    assert.ok(pool.g[i] > pool.r[i] && pool.g[i] > pool.b[i],
+      `mote ${i} is green-dominant (r${pool.r[i]} g${pool.g[i]} b${pool.b[i]})`)
   }
 })
 
@@ -134,4 +180,28 @@ test('no crash and no emission on degenerate endpoints', () => {
   const res = latheConeSpray(pool, { from: null, to: TO, rng: mulberry32(1) })
   assert.equal(res.emitted, 0)
   assert.equal(pool.count, 0)
+})
+
+// ── nano-piece enumeration (the STREAM must flow from EVERY nozzle) ────────
+
+test('enumerates ALL nano nozzles a builder model carries', () => {
+  // A factory (ARMLAB-style) names two nozzles nano1/nano2; the stream must
+  // flow from both, not one (the COB QueryNanoPiece alternates between them so
+  // a single query captured only half the spray).
+  assert.deepEqual(nanoPieceNames(['base', 'pad', 'beam1', 'beam2', 'nano1', 'nano2']),
+    ['nano1', 'nano2'])
+})
+
+test('a single-nozzle con builder enumerates its one nano piece', () => {
+  assert.deepEqual(nanoPieceNames(['body', 'nano']), ['nano'])
+})
+
+test('nano enumeration is case-insensitive, de-duped and index-ordered', () => {
+  assert.deepEqual(nanoPieceNames(['nano2', 'NANO1', 'nano2', 'turret']), ['NANO1', 'nano2'])
+})
+
+test('a non-builder model yields no nano nozzles (stream falls back to hull)', () => {
+  assert.deepEqual(nanoPieceNames(['body', 'turret', 'wheel1', 'wheel2']), [])
+  assert.deepEqual(nanoPieceNames(null), [])
+  assert.deepEqual(nanoPieceNames([null, undefined, '']), [])
 })

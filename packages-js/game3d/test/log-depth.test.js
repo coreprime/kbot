@@ -46,3 +46,41 @@ test('log depth resolves distant coplanar layers that perspective depth cannot',
   const dLog = Math.abs(logDepth(w1, far) - logDepth(w0, far))
   assert.ok(dLog > dPersp * 5, `log gap (${dLog}) must dwarf perspective gap (${dPersp})`)
 })
+
+// ── BUG C: slope-scaled decal bias kills grazing-angle z-fighting ──────────
+
+// Shader side of logDepthFragmentBiased(bias): a coplanar decal fragment
+// writes its own log depth minus a constant bias minus a slope term. The slope
+// term is fwidth(d) — the depth change across one fragment — scaled by 2. This
+// mirrors the GLSL so we can prove the ordering property headlessly.
+const logDepthBiased = (w, far, bias, slope) => logDepth(w, far) - bias - slope * 2.0
+
+test('a flush decal always wins LEQUAL over the terrain it lies on — even at grazing angles', () => {
+  const far = 48000
+  const bias = 0.0008
+  // A decal and the terrain under it are coplanar, so the terrain fragment and
+  // the decal fragment sit at the SAME distance w. What differs at a grazing
+  // angle is the per-fragment depth slope: adjacent pixels differ by `dw`,
+  // which is small looking straight down and LARGE at a grazing view.
+  for (const [w, dw, label] of [
+    [800, 0.2, 'near-overhead (tiny slope)'],
+    [2500, 8, 'oblique'],
+    [6000, 120, 'grazing (steep slope)'],
+    [12000, 600, 'near-horizon grazing'],
+  ]) {
+    // Per-fragment depth slope the shader sees as fwidth(d): the change in the
+    // WRITTEN log depth across one fragment step of `dw` world units.
+    const slope = Math.abs(logDepth(w + dw, far) - logDepth(w, far))
+    const decal = logDepthBiased(w, far, bias, slope)
+    const terrain = logDepth(w, far)
+    // The decal must be strictly nearer (smaller) than the terrain so LEQUAL
+    // draws it on top with no flicker — at EVERY slope, which the constant
+    // bias alone cannot guarantee once the slope exceeds it.
+    assert.ok(decal < terrain, `decal wins at ${label}: ${decal} < ${terrain}`)
+    // And at a grazing angle the slope term must actually dominate the constant
+    // (that's the whole point — the constant alone was losing there).
+    if (slope * 2.0 > bias) {
+      assert.ok(terrain - decal > bias, `slope term carries the offset at ${label}`)
+    }
+  }
+})

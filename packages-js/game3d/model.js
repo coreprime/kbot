@@ -64,6 +64,32 @@ export class Model {
   //
   // Returns null when there's no root or the piece carries no matrix.
   resolvePieceWorld(piece, x, y, z, headingRad, pitchRad = 0, rollRad = 0, scale = 1) {
+    const wm = this.#resolvePieceMatrix(piece, x, y, z, headingRad, pitchRad, rollRad, scale)
+    if (!wm) return null
+    return [wm[12], wm[13], wm[14]]
+  }
+
+  // resolvePieceWorldPose returns the piece's WORLD position AND its world Y
+  // yaw (heading), through the same transform chain as resolvePieceWorld.  The
+  // yaw carries the piece's LIVE COB rotation (e.g. a factory `pad` piece the
+  // engine's StartBuilding spins about Y) composed with the entity heading —
+  // exactly what a nascent unit seated on that pad must inherit so it turns
+  // WITH the pad instead of sitting at a frozen heading.  yaw follows the
+  // renderer's convention (heading 0 faces -Z; increasing yaw turns toward +X).
+  // Returns null when the piece can't be resolved.
+  resolvePieceWorldPose(piece, x, y, z, headingRad, pitchRad = 0, rollRad = 0, scale = 1) {
+    const wm = this.#resolvePieceMatrix(piece, x, y, z, headingRad, pitchRad, rollRad, scale)
+    if (!wm) return null
+    // Y yaw from the upper-left basis of a column-major matrix: a rotateY(θ)
+    // leaves m[0]=cosθ, m[2]=-sinθ, so θ = atan2(-m[2], m[0]).
+    const yaw = Math.atan2(-wm[2], wm[0])
+    return { pos: [wm[12], wm[13], wm[14]], yaw }
+  }
+
+  // #resolvePieceMatrix walks the tree against the entity's live transform and
+  // returns the target piece's world matrix (or null).  Shared by
+  // resolvePieceWorld / resolvePieceWorldPose.
+  #resolvePieceMatrix(piece, x, y, z, headingRad, pitchRad = 0, rollRad = 0, scale = 1) {
     if (!piece || !this.root) return null
     const root = Mat4.identity(Mat4.create())
     Mat4.translate(root, root, x || 0, y || 0, z || 0)
@@ -77,9 +103,7 @@ export class Model {
       for (const c of p.children) walk(c, p.worldMatrix)
     }
     walk(this.root, root)
-    const wm = piece.worldMatrix
-    if (!wm) return null
-    return [wm[12], wm[13], wm[14]]
+    return piece.worldMatrix || null
   }
 
   // cloneForInstance returns a new Model wrapping a freshly-cloned

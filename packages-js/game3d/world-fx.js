@@ -494,6 +494,37 @@ export function damageSmokeIntervalMs(hp01) {
 
 // ── Nanolathe construction spray ──────────────────────────────────────
 
+// nanoPieceNames returns the builder model's nanolathe emitter piece names,
+// in model order.  TA construction models name their nano nozzles `nano1`,
+// `nano2`, … (a factory like ARMLAB has two; a con vehicle typically one),
+// and the unit's COB QueryNanoPiece ALTERNATES between them every call so the
+// real spray flickers across all of them — a single queried piece captures
+// only one nozzle, which is why a two-arm plant's stream looked half-missing.
+// Enumerating the model's `nano*` pieces lets the world spray from every
+// nozzle at once.  `names` is any iterable of piece names (Model.flat maps to
+// `p.name`); a bare `nano` (no digit) also counts.  De-duplicated, case-
+// insensitive, sorted by trailing index so nano1 precedes nano2.
+export function nanoPieceNames(names) {
+  if (!names) return []
+  const out = []
+  const seen = new Set()
+  for (const raw of names) {
+    if (raw == null) continue
+    const nm = String(raw)
+    if (!/^nano\d*$/i.test(nm)) continue
+    const key = nm.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(nm)
+  }
+  out.sort((a, b) => {
+    const na = parseInt(a.replace(/\D/g, ''), 10) || 0
+    const nb = parseInt(b.replace(/\D/g, ''), 10) || 0
+    return na - nb
+  })
+  return out
+}
+
 // The build nanolathe is a dense CONE of tiny bright-green particles
 // streaming from the builder's nano piece (`from`) toward the build target
 // (`to`) and converging on it — a translucent fan of fine motes, not a
@@ -508,16 +539,35 @@ export function damageSmokeIntervalMs(hp01) {
 //     span length; the cone narrows toward `to` so motes converge on it.
 //   LATHE_CONE_LIFE_SLACK — extra fraction of travel time the mote lives
 //     past arrival, so it decelerates/lingers and fades ON the target.
-export const LATHE_CONE_PARTICLES = 7
+// Fewer but MUCH bigger, brighter motes so the cone reads as a solid green
+// spray at gameplay distance (small fading points vanished into the terrain).
+// Fewer per tick also keeps the additive-luminance governor from crushing the
+// whole cone's alpha when many builds run at once.
+export const LATHE_CONE_PARTICLES = 4
 export const LATHE_CONE_HALF_ANGLE = 0.24          // ~14° half-angle
-export const LATHE_CONE_SPEED = 150
+// A mote must travel the WHOLE span in its life or the stream stubs out
+// partway and never touches the build (the "stream doesn't reach" bug): at
+// the old fixed 150 wu/s + 520 ms clamp a mote died at ~66 % of a typical
+// 120 wu con→structure span.  Speed is now derived from the span so travel
+// time stays bounded regardless of distance (a continuous jet, near or far),
+// with a floor so a point-blank build still reads as a moving stream.
+export const LATHE_CONE_SPEED = 150                // floor speed (wu/s)
+// Target travel time nozzle→build: every mote crosses the whole span in about
+// this long, so the jet is continuous end to end at any range.  Speed scales
+// up from the floor to hit this on long spans.
+export const LATHE_CONE_TRAVEL_MS = 360
 export const LATHE_CONE_SPEED_VAR = 0.35
-export const LATHE_CONE_SIZE_MIN = 1.1
-export const LATHE_CONE_SIZE_MAX = 2.3
+export const LATHE_CONE_SIZE_MIN = 2.6
+export const LATHE_CONE_SIZE_MAX = 5.0
 export const LATHE_CONE_TARGET_JITTER = 0.06
-export const LATHE_CONE_LIFE_SLACK = 0.35
+// Extra fraction of travel time the mote lives past arrival so it decelerates
+// and fades ON the build rather than short of it.
+export const LATHE_CONE_LIFE_SLACK = 0.5
 export const LATHE_CONE_LIFE_MIN_MS = 120
-export const LATHE_CONE_LIFE_MAX_MS = 520
+// Ceiling high enough that a mote's life always covers the full crossing (the
+// jet reaches the target); the per-mote life is still the travel time + slack,
+// so short spans stay short-lived — this only stops a long span being clipped.
+export const LATHE_CONE_LIFE_MAX_MS = 1400
 
 // _orthoBasis returns two unit vectors perpendicular to `axis` (assumed
 // unit-length) forming a right-handed basis {u, v, axis}.  Used to fan the
@@ -562,9 +612,14 @@ export function latheConeSpray(pool, {
   to,
   rng = Math.random,
   count = LATHE_CONE_PARTICLES,
-  color = [0.45, 1.9, 0.85, 0.9],
+  // Bright GREEN that stays green: the additive blend adds rgb×alpha, so a
+  // very high green would saturate to white where motes overlap. Keep green
+  // dominant but bounded, with a touch of blue for the nano tint, and a high
+  // start alpha so the mote stays readable for most of its (fading) life.
+  color = [0.3, 1.5, 0.55, 1.0],
   halfAngle = LATHE_CONE_HALF_ANGLE,
   speed = LATHE_CONE_SPEED,
+  travelMs = LATHE_CONE_TRAVEL_MS,
   speedVar = LATHE_CONE_SPEED_VAR,
   sizeMin = LATHE_CONE_SIZE_MIN,
   sizeMax = LATHE_CONE_SIZE_MAX,
@@ -577,6 +632,10 @@ export function latheConeSpray(pool, {
   const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2]
   const dist = Math.hypot(dx, dy, dz) || 1
   const ax = dx / dist, ay = dy / dist, az = dz / dist
+  // Span-scaled speed: a mote crosses the whole span in ~travelMs, so the jet
+  // reads as continuous end-to-end at any range, never clipped by the life
+  // ceiling.  Floored at `speed` so a point-blank build still moves visibly.
+  const spanSpeed = Math.max(speed, dist / Math.max(1, travelMs) * 1000)
   const [ux, uy, uz, vx, vy, vz] = _orthoBasis(ax, ay, az)
   const jitterR = dist * targetJitter
   let maxAngle = 0
@@ -611,12 +670,14 @@ export function latheConeSpray(pool, {
       ang = halfAngle
     }
     if (ang > maxAngle) maxAngle = ang
-    const sp = speed * (1 + (rng() * 2 - 1) * speedVar)
-    // Life: reach the target then linger a touch and fade there.
-    const travelMs = (dist / Math.max(1, sp)) * 1000
+    const sp = spanSpeed * (1 + (rng() * 2 - 1) * speedVar)
+    // Life: reach the target then linger a touch and fade there.  The life
+    // ceiling is high enough that the crossing time + slack fits under it, so a
+    // long span's motes actually arrive at the build instead of dying en route.
+    const moteTravelMs = (dist / Math.max(1, sp)) * 1000
     const life = Math.max(
       LATHE_CONE_LIFE_MIN_MS,
-      Math.min(LATHE_CONE_LIFE_MAX_MS, travelMs * (1 + lifeSlack)),
+      Math.min(LATHE_CONE_LIFE_MAX_MS, moteTravelMs * (1 + lifeSlack)),
     )
     const size = sizeMin + rng() * (sizeMax - sizeMin)
     pool.emit(SFX_NANO_PARTICLES, [from[0], from[1], from[2]], {

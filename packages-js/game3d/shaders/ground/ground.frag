@@ -53,6 +53,7 @@ uniform float uRadius;
 uniform int uGroundMode;       // 0 = grid, 1 = terrain (textured), 2 = sea (procedural waves), 3 = legacy plain
 uniform float uTileSize;       // world units per repeat (one TA map tile)
 uniform float uTerrainReady;   // 1 once the terrain texture has uploaded
+uniform float uTerrainGrid;    // Tron grid-line intensity laid over the textured terrain (0 = off; driven high at intro start, easing to a faint baseline)
 uniform float uTime;           // seconds since renderer start, drives sea animation
 uniform float uExposure;       // scene brightness / exposure (Graphics Options Brightness) — 1 = default; applied to the final ground/sea colour to match the unit
 uniform vec3  uSunTint;        // world sun colour normalised to max-channel 1 — terrain + seabed are tinted toward it so the ground reads as lit by the world's sun (amber Mars, orange Lava, cool moonlight, …)
@@ -384,6 +385,18 @@ void main() {
     base = mix(base, uHorizonColor, horizonMix * 0.78);
     base += pulseLightContribution(vWorldPos);
     base *= mix(vec3(1.0), uSunTint, 0.45);   // tint terrain by the world's sun hue
+    // Tron grid overlay on the terrain surface: a faint cyan-green wire
+    // lattice on the map-tile grid so the tron-world reads on the ground.
+    // Driven strong at intro start and eased to a subtle baseline; fades
+    // out at grazing distance so it doesn't smear across the horizon haze.
+    if (uTerrainGrid > 0.001) {
+      vec2 gtile = fract(vWorldPos.xz / uTileSize);
+      float gx = smoothstep(0.0, 0.03, gtile.x) * (1.0 - smoothstep(0.97, 1.0, gtile.x));
+      float gy = smoothstep(0.0, 0.03, gtile.y) * (1.0 - smoothstep(0.97, 1.0, gtile.y));
+      float onLine = 1.0 - gx * gy;
+      float gridFade = 1.0 - smoothstep(1400.0, 4200.0, dCamT);
+      base += vec3(0.20, 1.15, 0.55) * onLine * uTerrainGrid * gridFade * (1.0 - horizonMix);
+    }
     gl_FragColor = vec4(base * uExposure, 1.0);
     return;
   }
