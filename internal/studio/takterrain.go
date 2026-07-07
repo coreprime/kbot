@@ -77,6 +77,87 @@ func (sess *Session) renderTAKTerrain(mapPath string) (*image.RGBA, error) {
 	return img, nil
 }
 
+// takPackTerrain is the packable form of a TA:Kingdoms map's texture-mapped
+// surface. It mirrors the TA tile-pool shape so a packed TA:K map loads through
+// the identical browser path as a TA map: TileMap[i] = {SX,SY} indexes a 32×32
+// tile in a poolCols-wide atlas, and the JS loadMapTerrain re-composites the
+// ground by blitting each placed tile. Deduplicating identical (texture,u,v)
+// graphic units keeps the atlas far smaller than the full 32·GUW × 32·GUH
+// composite (repeated water/grass units collapse to one atlas cell).
+type takPackTerrain struct {
+	Atlas    *image.RGBA  // poolCols·32 × rows·32 tile atlas
+	PoolCols int          // atlas columns
+	TileMap  []loadedTile // GUW×GUH cells, row-major, {SX,SY} into the atlas
+	Missing  int          // graphic units whose source JPG failed to resolve
+}
+
+// buildTAKPackTerrain slices a TA:Kingdoms map's Graphic-Unit grid into a
+// deduplicated 32×32 tile atlas + per-cell tile map. tex resolves a terrain
+// name (the map's %08x.jpg key) to its decoded image; units whose texture is
+// unresolved get a blank atlas tile (and are counted in Missing) so a partial
+// terrain still renders rather than aborting the pack.
+func buildTAKPackTerrain(m *tnt.Map, tex func(name uint32) image.Image) *takPackTerrain {
+	const gu = 32
+	cells := m.TAKGUW * m.TAKGUH
+	tileMap := make([]loadedTile, cells)
+
+	// Dedup key: (terrain name, u offset, v offset) — the full identity of a
+	// graphic unit's rendered 32×32 pixels.
+	type guKey struct {
+		name uint32
+		u, v byte
+	}
+	uniqIdx := map[guKey]int{}
+	var uniq []guKey
+	for i := 0; i < cells; i++ {
+		k := guKey{name: m.TAKTerrainNames[i], u: m.TAKUMap[i], v: m.TAKVMap[i]}
+		if _, ok := uniqIdx[k]; !ok {
+			uniqIdx[k] = len(uniq)
+			uniq = append(uniq, k)
+		}
+	}
+
+	cols := tilePoolCols(len(uniq))
+	rows := (len(uniq) + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	atlas := image.NewRGBA(image.Rect(0, 0, cols*gu, rows*gu))
+
+	// Paint each unique tile once, copying its 32×32 block out of the source
+	// texture at the unit's (u,v) offset (mirrors Map.RenderTAKTerrain).
+	cache := map[uint32]image.Image{}
+	missing := 0
+	for i, k := range uniq {
+		px := (i % cols) * gu
+		py := (i / cols) * gu
+		src, seen := cache[k.name]
+		if !seen {
+			src = tex(k.name)
+			cache[k.name] = src
+		}
+		if src == nil {
+			missing++
+			continue // leave the atlas cell transparent
+		}
+		sx := int(k.u) * gu
+		sy := int(k.v) * gu
+		for y := 0; y < gu; y++ {
+			for x := 0; x < gu; x++ {
+				atlas.Set(px+x, py+y, src.At(src.Bounds().Min.X+sx+x, src.Bounds().Min.Y+sy+y))
+			}
+		}
+	}
+
+	for i := 0; i < cells; i++ {
+		k := guKey{name: m.TAKTerrainNames[i], u: m.TAKUMap[i], v: m.TAKVMap[i]}
+		idx := uniqIdx[k]
+		tileMap[i] = loadedTile{SX: idx % cols, SY: idx / cols}
+	}
+
+	return &takPackTerrain{Atlas: atlas, PoolCols: cols, TileMap: tileMap, Missing: missing}
+}
+
 // downscaleRGBA box-averages src down so its longest side is at most maxDim,
 // returning src unchanged when it's already within bounds. Pure Go (no extra
 // image deps); a box filter is plenty for decorative backgrounds.

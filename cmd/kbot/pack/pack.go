@@ -89,8 +89,8 @@ pack keeps the same ids as the full pack.  unitdb.json carries both
 unitCount (units in the pack) and gameUnitCount (units in the install);
 derivations over the game's whole unit-type table must use the latter.
 
-Maps are opt-in via --maps (TA tile-based maps; TA:Kingdoms maps are not
-packed yet).`,
+Maps are opt-in via --maps: TA tile-based maps and TA:Kingdoms
+texture-mapped maps both pack into the same on-disk shape.`,
 		Example: `  # Pack every unit in a TA install
   kbot pack ~/games/totala ./ta-pack
 

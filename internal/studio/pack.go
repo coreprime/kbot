@@ -828,7 +828,7 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) ([]string
 		return nil, fmt.Errorf("parse TNT: %w", err)
 	}
 	if m.IsTAK {
-		return nil, fmt.Errorf("TA:Kingdoms texture-mapped maps are not packed yet")
+		return writeTAKPackMap(sess, pw, name, mapPath, m, reader)
 	}
 	features, _ := m.LoadFeatures(reader)
 	placements := m.GetFeaturePlacements()
@@ -915,6 +915,101 @@ func writePackMap(sess *Session, pw *packWriter, name, mapPath string) ([]string
 	body, err := packJSON(out)
 	if err != nil {
 		return nil, fmt.Errorf("encode map json: %w", err)
+	}
+	if err := pw.write("maps/"+stem+".json", body); err != nil {
+		return nil, err
+	}
+	return placedNames, nil
+}
+
+// writeTAKPackMap emits a TA:Kingdoms texture-mapped map in the same pack
+// shape as a TA map (maps/<name>.json + .tiles.png + .minimap.png) so the
+// browser's loadMapTerrain re-composites its ground identically.
+//
+// TA:K terrain is not a stamped tile mosaic: each 32px Graphic Unit indexes a
+// terrain JPG at a (u,v) offset. buildTAKPackTerrain deduplicates those into a
+// tile atlas + per-cell tile map, giving TileW=GUW, TileH=GUH and the same
+// {sx,sy}-into-atlas placements the TA path produces. Heights and voids are the
+// DataUnit-resolution grid (TAKW×TAKH = 2·GUW × 2·GUH), which the loader reads
+// as tileW*2 × tileH*2 — exactly what a TA map reports. Returns the lower-case
+// feature ids the map places so the caller can pack their object models.
+func writeTAKPackMap(sess *Session, pw *packWriter, name, mapPath string, m *tnt.Map, reader *bytes.Reader) ([]string, error) {
+	if m.TAKTerrainNames == nil || m.TAKGUW == 0 {
+		return nil, fmt.Errorf("TA:K map has no terrain-name table")
+	}
+	features, _ := m.LoadFeatures(reader)
+	placements := m.GetFeaturePlacements()
+
+	terrain := buildTAKPackTerrain(m, sess.takTerrainProvider())
+
+	// Heights + voids at DataUnit resolution (TAKW×TAKH). TA:K carries no TA
+	// void sentinel, so voids stay zero — impassable water is derived from the
+	// heightmap + sea level by the renderer, as in the studio load path.
+	heights := make([]int, len(m.TAKHeight))
+	for i, h := range m.TAKHeight {
+		heights[i] = int(h)
+	}
+	voids := make([]int, len(m.TAKHeight))
+
+	outFeatures := make([]loadedFeature, 0, len(placements))
+	placedNames := make([]string, 0, len(placements))
+	for _, p := range placements {
+		if p.FeatureIdx < 0 || p.FeatureIdx >= len(features) {
+			continue
+		}
+		fname := strings.TrimSpace(features[p.FeatureIdx].Name)
+		if fname == "" {
+			continue
+		}
+		outFeatures = append(outFeatures, loadedFeature{Name: fname, AX: p.AttrX, AY: p.AttrY})
+		placedNames = append(placedNames, strings.ToLower(fname))
+	}
+
+	stem := packStem(name)
+	// The TA:K TNT header's SeaLevel word is a repurposed pointer, not a
+	// usable sea level (real maps read ~900000). The OTA carries the real
+	// value; leave sea level at 0 (surface) until the OTA supplies one.
+	out := packMapJSON{
+		Name:     name,
+		TileW:    m.TAKGUW,
+		TileH:    m.TAKGUH,
+		SeaLevel: 0,
+		Heights:  heights,
+		Voids:    voids,
+		Tiles:    terrain.TileMap,
+		Features: outFeatures,
+		TilePool: "maps/" + stem + ".tiles.png",
+	}
+	if otaData, err := sess.vfs.ReadFile(strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"); err == nil {
+		out.OTA = parseOTA(string(otaData), m.TAKGUW, m.TAKGUH)
+		if out.OTA != nil && out.OTA.SeaLevel > 0 {
+			out.SeaLevel = out.OTA.SeaLevel
+		}
+	}
+
+	var atlasBuf bytes.Buffer
+	if err := png.Encode(&atlasBuf, terrain.Atlas); err != nil {
+		return nil, fmt.Errorf("encode TA:K tile pool: %w", err)
+	}
+	if err := pw.write(out.TilePool, atlasBuf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	if m.Minimap != nil {
+		if img := m.RenderMinimap(sess.palettes().TerrainPalette(mapPath)); img != nil {
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, img); err == nil {
+				out.Minimap = "maps/" + stem + ".minimap.png"
+				if err := pw.write(out.Minimap, buf.Bytes()); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	body, err := packJSON(out)
+	if err != nil {
+		return nil, fmt.Errorf("encode TA:K map json: %w", err)
 	}
 	if err := pw.write("maps/"+stem+".json", body); err != nil {
 		return nil, err

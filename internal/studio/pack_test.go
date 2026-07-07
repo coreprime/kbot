@@ -528,6 +528,79 @@ func TestBuildPackV6FeatureSprites(t *testing.T) {
 	}
 }
 
+// TestBuildPackTAKMap packs a TA:Kingdoms texture-mapped map and asserts it
+// lands in the same on-disk shape as a TA map: a maps/<name>.json with a
+// GU-grid tile placement per cell, a DataUnit-resolution heightmap, a tile
+// atlas the placements index into, and a minimap — the pieces the browser's
+// loadMapTerrain re-composites the ground from.
+func TestBuildPackTAKMap(t *testing.T) {
+	install := testutil.TAKUnpackedPath(t)
+	dir := t.TempDir()
+	const mapName = "athri cay"
+	if _, err := BuildPack(install, dir, PackOptions{
+		Game:  "takingdoms",
+		Units: []string{"araarch"},
+		Maps:  []string{mapName},
+	}); err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var manifest packManifest
+	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
+	if len(manifest.Maps) != 1 || manifest.Maps[0] != mapName {
+		t.Fatalf("manifest maps = %v, want [%q]", manifest.Maps, mapName)
+	}
+
+	stem := packStem(mapName)
+	var m packMapJSON
+	mustJSON(t, filepath.Join(dir, "maps", stem+".json"), &m)
+
+	if m.TileW <= 0 || m.TileH <= 0 {
+		t.Fatalf("bad map dims %dx%d", m.TileW, m.TileH)
+	}
+	// One tile placement per Graphic Unit.
+	if len(m.Tiles) != m.TileW*m.TileH {
+		t.Fatalf("tiles = %d, want tileW*tileH = %d", len(m.Tiles), m.TileW*m.TileH)
+	}
+	// Heights are DataUnit-resolution: twice the GU grid on each axis, exactly
+	// what the loader reads as tileW*2 × tileH*2.
+	if len(m.Heights) != (m.TileW*2)*(m.TileH*2) {
+		t.Fatalf("heights = %d, want (tileW*2)*(tileH*2) = %d", len(m.Heights), (m.TileW*2)*(m.TileH*2))
+	}
+	if len(m.Voids) != len(m.Heights) {
+		t.Fatalf("voids = %d, want %d", len(m.Voids), len(m.Heights))
+	}
+	// The TA:K header sea-level word is a repurposed pointer — it must never
+	// leak into the pack as a real sea level.
+	if m.SeaLevel > 100000 {
+		t.Fatalf("sea level %d looks like a leaked TA:K header pointer", m.SeaLevel)
+	}
+
+	// The tile atlas must exist and be big enough that every placement indexes
+	// a real 32×32 cell inside it.
+	atlasData, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(m.TilePool)))
+	if err != nil {
+		t.Fatalf("tile pool %q not on disk: %v", m.TilePool, err)
+	}
+	atlas, derr := png.Decode(bytes.NewReader(atlasData))
+	if derr != nil {
+		t.Fatalf("tile pool %q not a PNG: %v", m.TilePool, derr)
+	}
+	cols := atlas.Bounds().Dx() / 32
+	rows := atlas.Bounds().Dy() / 32
+	for i, tile := range m.Tiles {
+		if tile.SX < 0 || tile.SX >= cols || tile.SY < 0 || tile.SY >= rows {
+			t.Fatalf("tile %d placement (%d,%d) out of atlas %dx%d cells", i, tile.SX, tile.SY, cols, rows)
+		}
+	}
+	if m.Minimap == "" {
+		t.Fatal("TA:K map packed no minimap")
+	}
+	if _, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(m.Minimap))); err != nil {
+		t.Fatalf("minimap %q not on disk: %v", m.Minimap, err)
+	}
+}
+
 func mustJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := os.ReadFile(path)
