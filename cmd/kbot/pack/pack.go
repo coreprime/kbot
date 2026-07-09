@@ -68,7 +68,8 @@ become "_"):
   unitpics/<name>.png          unit build pictures (native size)
   models/<name>.json           model geometry (authored faces)
   models-enhanced/<name>.json  geometry with reconstructed hidden faces
-  textures/<name>.png          model textures (name--<side>.png variants)
+  textures/<name>.png          model textures (name--<side>.png variants;
+                               team pages add --t<N>.png per player colour)
   cob/<name>.json              disassembled COB animation scripts
   sounds/<stem>.wav            unit + weapon sound effects
   weaponbitmaps/<weapon>.json  bitmap-projectile sprite strips

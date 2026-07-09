@@ -18,7 +18,7 @@ package studio
 //	unitpics/<name>.png              unit build pictures (PCX decoded at native size)
 //	models/<name>.json               ModelLoader geometry (authored faces)
 //	models-enhanced/<name>.json      ModelLoader geometry with reconstructed faces
-//	textures/<name>.png              3DO texture (name--<side>.png for per-side variants)
+//	textures/<name>.png              3DO texture (name--<side>.png for per-side variants; --t<N>.png per-player team pages)
 //	cob/<name>.json                  disassembled COB animation script
 //	cob/<name>.cob                   raw COB bytecode (the engine's runnable form)
 //	sounds/<stem>.wav                unit/weapon sound effects
@@ -332,6 +332,22 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		}
 		if err := pw.write(rel+".png", pngBytes); err != nil {
 			warnf("write texture %s: %v", name, err)
+		}
+		// Team-page sequences additionally pack every per-player colour
+		// frame as <rel>--tN.png so a renderer that knows the owning
+		// player can bind the right page (the base file stays the first
+		// frame — packs and clients that predate team pages keep working).
+		if isTeamPage(src) {
+			for f := 0; f < src.Frames; f++ {
+				fb, ferr := sess.renderTexturePNGFrame(src, side, f)
+				if ferr != nil {
+					warnf("texture %s frame %d: %v", name, f, ferr)
+					continue
+				}
+				if werr := pw.write(fmt.Sprintf("%s--t%d.png", rel, f), fb); werr != nil {
+					warnf("write texture %s frame %d: %v", name, f, werr)
+				}
+			}
 		}
 	}
 	writeModel := func(entry modelEntry) (string, bool) {
@@ -726,9 +742,12 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// steam vents, scars, tracks, craters, holes — to
 		// featuresprites/<id>.png (features.json sprite field) so the
 		// renderer paints the authored art onto the terrain as a decal
-		// instead of a procedural placeholder.  Older readers ignore all of
-		// them.
-		FormatVersion: 6,
+		// instead of a procedural placeholder.  FormatVersion 7 adds
+		// per-player texture pages: model JSON gains teamTextures[] and each
+		// team-page texture packs its colour frames as
+		// textures/<name>[--side]--tN.png alongside the frame-0 base.
+		// Older readers ignore all of them.
+		FormatVersion: 7,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -1077,7 +1096,8 @@ Files:
   artists deleted reconstructed (the studio's Enhanced Mesh toggle);
   clients request it via model(name, {enhanceMesh:true}).
 - textures/<name>.png — model textures ("<name>--<side>.png" for
-  per-side variants).
+  per-side variants; team-page textures add "--t<N>.png" per player
+  colour, frame 0 staying the base file).
 - cob/<name>.json — disassembled COB animation scripts (debug/viewer form).
 - cob/<name>.cob — raw COB bytecode, byte-identical to the install's
   scripts/<name>.cob; the runnable form the engine's script VM loads so

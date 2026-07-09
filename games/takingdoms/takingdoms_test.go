@@ -128,3 +128,17 @@ func TestBuildOptionsFromCanbuildDir(t *testing.T) {
 		t.Fatalf("knight should build nothing, got %v", got)
 	}
 }
+
+// The GOG install ships the base game's sidedata.tdf (no Creon entry) next
+// to the full Iron Plague asset set — Creon's side must still resolve from
+// its shipped palette files, or every CRE unit bakes with the global TA
+// palette and renders as noise.
+func TestCreonSideSynthesizedFromPalettes(t *testing.T) {
+	a := adapterForTest(t)
+	if got := a.TextureSidePrefix("crebomb"); got != "cre" {
+		t.Fatalf("TextureSidePrefix(crebomb) = %q, want cre", got)
+	}
+	if a.TexturePaletteForSide("cre") == nil {
+		t.Fatal("no texture palette for synthesized side cre")
+	}
+}
