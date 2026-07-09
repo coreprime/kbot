@@ -351,6 +351,13 @@ type unitWeaponJSON struct {
 	// renderer pick a projectile family without inspecting the weapon name.
 	RenderType int `json:"renderType"`
 
+	// EffectClass / TakType: the same per-weapon presentation class the
+	// pack's weapons.json carries (see pack_weapons.go) so the studio
+	// sandbox gates light/glow identically — a TA:K arrow stays a dark
+	// physical object in the sandbox too.
+	EffectClass string `json:"effectClass,omitempty"`
+	TakType     string `json:"takType,omitempty"`
+
 	// Trajectory / targeting category flags.
 	Turret       bool `json:"turret"`       // 360° turret-mounted, free pitch
 	LineOfSight  bool `json:"lineOfSight"`  // straight-line shot, gravity ignored
@@ -824,7 +831,14 @@ func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
 	out.ReloadSec = sec.ReloadTime
 	out.RangeWU = float64(sec.Range)
 	out.VelocityWU = sec.WeaponVelocity
-	out.Ballistic = strings.EqualFold(strings.TrimSpace(sec.Type), "ballistic")
+	typ := strings.ToLower(strings.TrimSpace(sec.Type))
+	out.Ballistic = typ == "ballistic" && !strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped")
+	out.Dropped = strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped")
+	out.Guidance = typ == "guided"
+	out.TurnRate = sec.TurnRate
+	out.Model = strings.ToLower(strings.TrimSpace(sec.Model))
+	out.EffectClass = takEffectClass(sec)
+	out.TakType = typ
 	out.Burst = 1
 	out.AreaOfEffectWU = float64(sec.AreaOfEffect)
 	out.EdgeEffectiveness = sec.EdgeEffectiveness
@@ -933,6 +947,7 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 
 	// Render method + trajectory/targeting category flags.
 	out.RenderType = sec.RenderType
+	out.EffectClass = taEffectClass(sec)
 	out.Turret = sec.Turret != 0
 	out.LineOfSight = sec.LineOfSight != 0
 	out.Guidance = sec.Guidance != 0
