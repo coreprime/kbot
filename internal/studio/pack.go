@@ -746,8 +746,12 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// per-player texture pages: model JSON gains teamTextures[] and each
 		// team-page texture packs its colour frames as
 		// textures/<name>[--side]--tN.png alongside the frame-0 base.
+		// FormatVersion 8 adds the per-weapon effectClass (+ TA:K takType)
+		// to weapons.json and, for TA:K installs, builds the catalogue from
+		// the inline FBI [WEAPONn] sections — TA:K packs finally ship a
+		// weapons.json (and the arrow/bolt projectile meshes it names).
 		// Older readers ignore all of them.
-		FormatVersion: 7,
+		FormatVersion: 8,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",

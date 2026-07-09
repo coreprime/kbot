@@ -11,9 +11,11 @@ package studio
 // not a stats database.
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot/formats/gamedata/tak"
 	"github.com/coreprime/kbot/formats/tdf"
 )
 
@@ -86,6 +88,20 @@ type packWeaponJSON struct {
 	// in the pack — format v4 packs the whole catalogue's sounds).
 	SoundStart string `json:"soundStart,omitempty"`
 	SoundHit   string `json:"soundHit,omitempty"`
+	// EffectClass (format v8) is the per-weapon presentation class a renderer
+	// gates light/glow decisions on, derived from each game's own weapon
+	// data — TA's rendertype (+ ballistic flag), TA:K's type=/nimbus=/
+	// lightmap=/hweffect=/damagetype= fields.  Values: "beam", "lightning",
+	// "plasma", "flame", "missile", "ballistic", "fire", "magic", "physical",
+	// "melee".  Physical shots (arrows / stones / bolts) must never emit
+	// light; fire/magic glow warm; beams/plasma keep their energy look.
+	EffectClass string `json:"effectClass,omitempty"`
+	// TakType is the raw TA:K weapon type= ("ballistic", "guided", "line of
+	// sight", "remote effect", "melee", "wandering"), lower-case; absent for
+	// TA packs.  Its presence also tells a renderer the TurnRate field is on
+	// TA:K's scale (stock data 180..360 per guided weapon) rather than TA's
+	// 65536-per-circle angle units (stock data 10000..32768).
+	TakType string `json:"takType,omitempty"`
 }
 
 // packWeaponsFileJSON is the weapons.json document shape.  A JSON object
@@ -183,10 +199,146 @@ func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 					w.Color2Idx = pr.Color2
 				}
 			}
+			w.EffectClass = taEffectClass(sec)
 			out[id] = w
 		}
 	}
+	// TA:Kingdoms defines its weapons as inline [WEAPONn] sections inside
+	// each unit FBI instead of weapons/*.tdf, so the scan above finds
+	// nothing for a TA:K install.  Sweep the FBIs too — a TA install's
+	// FBIs carry no [WEAPONn] sections, so this is a no-op there.
+	sess.appendFBIWeaponCatalog(out)
 	return out
+}
+
+// taEffectClass derives the presentation class for a TA weapon from its
+// rendertype — the same field the engine's projectile draw dispatches on —
+// plus the ballistic flag for the bitmap-sprite class.  Weapons that ship no
+// usable rendertype (rendertype 0 without beamweapon=1 reads as "field
+// omitted") return "" so a renderer keeps its own fallback classification.
+func taEffectClass(sec *ta.Weapon) string {
+	switch sec.RenderType {
+	case 0, 2:
+		// 0 draws the instant twin-line beam; every stock rendertype=0
+		// weapon also ships beamweapon=1, which is how "0" is told apart
+		// from "field omitted".  2 (MINDGUN) has no world visual in the
+		// engine (radar blip only) — classed with the beams, matching how
+		// the catalogue's one specimen is presented today.
+		if sec.BeamWeapon == 0 {
+			return ""
+		}
+		return "beam"
+	case 1:
+		return "missile" // 3DO projectile with the smoke-trail flight
+	case 3:
+		return "plasma" // D-gun energy ball
+	case 4:
+		// Artist-drawn fx.gaf sprite bolt: an arcing round reads as a
+		// shell, a straight one as an energy bolt.
+		if sec.Ballistic != 0 {
+			return "ballistic"
+		}
+		return "plasma"
+	case 5:
+		return "flame"
+	case 6:
+		return "ballistic" // gravity bomb
+	case 7:
+		return "lightning"
+	}
+	return ""
+}
+
+// takEffectClass derives the presentation class for a TA:K inline weapon
+// from the fields the engine itself dispatches on: type= picks the handler
+// (melee / ballistic / guided / line of sight / remote effect / wandering)
+// and the fire/lightning emitter fields (hweffect=, subtype=, damagetype=,
+// firestarter=) plus the glow markers (nimbus=, lightmap=) split the magic
+// from the mundane.  Anything with none of those markers is a plain physical
+// object — arrow, bolt, stone — and must render unlit.
+func takEffectClass(sec *tak.Weapon) string {
+	typ := strings.ToLower(strings.TrimSpace(sec.Type))
+	sub := strings.ToLower(strings.TrimSpace(sec.SubType))
+	hw := strings.ToLower(strings.TrimSpace(sec.HwEffect))
+	if typ == "melee" {
+		return "melee"
+	}
+	if strings.Contains(hw, "lightning") || strings.Contains(hw, "lightbeam") || sub == "lightning" {
+		return "lightning"
+	}
+	if hw == "fire" || sub == "fire" || sub == "bluefire" || sub == "dieselflame" ||
+		strings.EqualFold(strings.TrimSpace(sec.DamageType), "fire") || sec.FireStarter > 0 {
+		return "fire"
+	}
+	if sec.Nimbus != 0 || strings.TrimSpace(sec.LightMap) != "" || hw != "" ||
+		typ == "remote effect" || typ == "wandering" {
+		return "magic"
+	}
+	return "physical"
+}
+
+// appendFBIWeaponCatalog adds every inline [WEAPONn] section found in
+// units/*.fbi to the catalogue, keyed by lower-case weapon name= — the same
+// key the unitdb per-unit weapons array carries for TA:K (see the slot loop
+// in buildPack).  First definition wins, matching the TDF scan above; the
+// VFS walk is sorted so the winner is deterministic.
+func (sess *Session) appendFBIWeaponCatalog(out map[string]packWeaponJSON) {
+	paths := make([]string, 0)
+	for _, p := range sess.vfs.List() {
+		lower := strings.ToLower(p)
+		if strings.HasPrefix(lower, "units/") && strings.HasSuffix(lower, ".fbi") {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		data, err := sess.vfs.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var ku tak.Unit
+		if err := tdf.Unmarshal(data, &ku); err != nil {
+			continue
+		}
+		for _, sec := range []*tak.Weapon{ku.Weapon1, ku.Weapon2, ku.Weapon3} {
+			if sec == nil {
+				continue
+			}
+			id := strings.ToLower(strings.TrimSpace(sec.Name))
+			if id == "" {
+				continue
+			}
+			if _, dup := out[id]; dup {
+				continue
+			}
+			typ := strings.ToLower(strings.TrimSpace(sec.Type))
+			w := packWeaponJSON{
+				ID:             id,
+				Name:           strings.TrimSpace(sec.Name),
+				VelocityWU:     sec.WeaponVelocity,
+				Model:          strings.ToLower(strings.TrimSpace(sec.Model)),
+				Ballistic:      typ == "ballistic" && !strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped"),
+				Dropped:        strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped"),
+				Guidance:       typ == "guided",
+				AreaOfEffectWU: float64(sec.AreaOfEffect),
+				RangeWU:        float64(sec.Range),
+				TurnRate:       sec.TurnRate,
+				SoundHit:       strings.ToLower(strings.TrimSpace(sec.SoundHit)),
+				EffectClass:    takEffectClass(sec),
+				TakType:        typ,
+			}
+			// TA:K colours are literal "R G B" triples (the lightning
+			// beam's inner/outer bands), not palette indices — resolved
+			// RGB only, no ColorIdx.
+			if c := sec.InnerColor; c != nil {
+				w.Color = &[3]int{c.R, c.G, c.B}
+			}
+			if c := sec.OuterColor; c != nil {
+				w.Color2 = &[3]int{c.R, c.G, c.B}
+			}
+			out[id] = w
+		}
+	}
 }
 
 // paletteTriple resolves a palette index to its RGB triple, or nil for an

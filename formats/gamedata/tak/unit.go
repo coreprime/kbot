@@ -98,6 +98,14 @@ type Weapon struct {
 	ExplosionClass      string `tdf:"explosionclass,omitempty"`
 	WaterExplosionClass string `tdf:"waterexplosionclass,omitempty"`
 
+	// Projectile presentation flags. Nimbus marks the glow halo the engine
+	// draws around magic projectiles; LightMap ("small"/"medium"/"large")
+	// sizes the light splash the shot casts on the ground; HwEffect names a
+	// hardware-rendered stream effect ("fire", "lightning", ...).
+	Nimbus   int    `tdf:"nimbus,omitempty"`
+	LightMap string `tdf:"lightmap,omitempty"`
+	HwEffect string `tdf:"hweffect,omitempty"`
+
 	// Tracer/beam colours, stored as space-separated "R G B" triples.
 	InnerColor  *common.RGBString `tdf:"innercolor,omitempty"`
 	MiddleColor *common.RGBString `tdf:"middlecolor,omitempty"`
