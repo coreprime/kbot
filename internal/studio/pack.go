@@ -1081,7 +1081,10 @@ Files:
   lower-case id: render type, palette-resolved beam colours (plus the
   raw colour indices), projectile model, velocity, beam duration,
   trajectory flags (ballistic, smokeTrail, startSmoke, commandFire),
-  blast diameter, range and fire/impact sound stems.  Each unitdb
+  blast diameter, range, fire/impact sound stems and the per-weapon
+  effectClass presentation class (physical shots draw dark and unlit;
+  fire/magic glow warm; beams stay beams).  TA:Kingdoms weapons come
+  from the inline FBI [WEAPONn] sections and add takType.  Each unitdb
   entry's "weapons" array maps its fire slots onto these keys; every
   catalogue-referenced projectile mesh, sound and bitmap sprite strip
   is packed alongside.
