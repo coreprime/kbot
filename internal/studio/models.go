@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot/formats/gaf"
@@ -319,7 +320,13 @@ type modelJSON struct {
 	// TextureQuery is the query string clients append to each
 	// /api/studio/texture/<name> fetch so per-side texture names resolve
 	// against this unit's own side GAF ("side=ara"); empty for TA.
-	TextureQuery string      `json:"textureQuery,omitempty"`
+	TextureQuery string `json:"textureQuery,omitempty"`
+	// TeamTextures is the subset of Textures whose GAF sequence is a
+	// per-player colour page (one frame per player slot, shipped in the
+	// team-logo GAFs).  Renderers that know the owning player's colour can
+	// bind the matching page (texture?team=N → textures/<name>--tN.png in a
+	// pack) instead of the baked first frame.
+	TeamTextures []string    `json:"teamTextures,omitempty"`
 	Bounds       *boundsJSON `json:"bounds"` // axis-aligned bounds across the whole model in piece-local frames
 }
 
@@ -518,12 +525,16 @@ func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJ
 		}
 		if src, ok := sess.resolveTextureSource(t, texSide); ok {
 			out.TextureSources[t] = path.Base(src.GAFPath)
+			if isTeamPage(src) {
+				out.TeamTextures = append(out.TeamTextures, t)
+			}
 		} else {
 			out.TextureSources[t] = ""
 		}
 	}
 	sort.Strings(out.Textures)
 	sort.Strings(out.Decals)
+	sort.Strings(out.TeamTextures)
 	out.Pieces = pieceNames
 	// Guard against a model with no geometry — surface zeroed bounds so
 	// the client's framing math doesn't blow up dividing by 1e9.
@@ -541,6 +552,25 @@ type textureSource struct {
 	GAFPath   string
 	SeqName   string
 	UseShadow bool // true for texture sequences where the shadow palette index 0 should stay transparent
+	Frames    int  // frame count of the sequence (team-page detection)
+}
+
+// teamPageFrames is the frame count of a per-player texture page: the game
+// engines ship one frame per player colour slot in the team-logo GAFs.
+const teamPageFrames = 10
+
+// isTeamPage reports whether a texture sequence is a per-player colour page
+// rather than a time-animated strip.  Both kinds are multi-frame, so frame
+// count alone can't tell them apart — team pages live in the *logo* GAFs
+// (logos.gaf, aralogo.gaf, tarlogo.gaf, …) and always carry one frame per
+// player slot, while animated strips (lode crystals, lightning arcs, water
+// wheels) live in the ordinary texture GAFs.
+func isTeamPage(src textureSource) bool {
+	if src.Frames != teamPageFrames {
+		return false
+	}
+	base := strings.ToLower(path.Base(src.GAFPath))
+	return strings.Contains(base, "logo")
 }
 
 // textureIsDecal returns true when the named texture's GAF frame has any
@@ -629,7 +659,7 @@ func (sess *Session) buildTextureIndex() {
 		}
 		for _, s := range seqs {
 			key := strings.ToLower(s.Name)
-			src := textureSource{GAFPath: p, SeqName: s.Name, UseShadow: true}
+			src := textureSource{GAFPath: p, SeqName: s.Name, UseShadow: true, Frames: len(s.Frames)}
 			// TA:K ships same-named team/logo textures in every side's GAF;
 			// keep every source so per-unit lookups can prefer the unit's own
 			// side (see resolveTextureSource).
@@ -676,9 +706,21 @@ func (sess *Session) handleTextureImage(w http.ResponseWriter, r *http.Request) 
 	// ?side=<prefix> (TA:K): prefer the texture from that side's GAF when
 	// several sides ship the same name (team logos, tunic colours).
 	side := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("side")))
+	// &team=<N>: bind a team-page sequence's Nth player-colour frame.
+	// Ignored (frame 0) for ordinary textures so a stale client query can't
+	// pick a random animation frame.
+	team := -1
+	if tv := strings.TrimSpace(r.URL.Query().Get("team")); tv != "" {
+		if n, err := strconv.Atoi(tv); err == nil && n >= 0 && n < teamPageFrames {
+			team = n
+		}
+	}
 	cacheKey := name
 	if side != "" {
 		cacheKey = name + "|" + side
+	}
+	if team >= 0 {
+		cacheKey += "|t" + strconv.Itoa(team)
 	}
 
 	sess.textureCacheMu.Lock()
@@ -702,7 +744,11 @@ func (sess *Session) handleTextureImage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	pngBytes, err := sess.renderTexturePNG(src, side)
+	frame := 0
+	if team >= 0 && isTeamPage(src) {
+		frame = team
+	}
+	pngBytes, err := sess.renderTexturePNGFrame(src, side, frame)
 	if err != nil {
 		http.Error(w, "render texture: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -720,6 +766,13 @@ func serveTexturePNG(w http.ResponseWriter, data []byte) {
 }
 
 func (sess *Session) renderTexturePNG(src textureSource, side string) ([]byte, error) {
+	return sess.renderTexturePNGFrame(src, side, 0)
+}
+
+// renderTexturePNGFrame renders one frame of a texture sequence — frame 0 is
+// the ordinary case; team-page sequences (isTeamPage) expose their per-player
+// colour variants at frames 1..9.
+func (sess *Session) renderTexturePNGFrame(src textureSource, side string, frame int) ([]byte, error) {
 	data, err := sess.vfs.ReadFile(src.GAFPath)
 	if err != nil {
 		return nil, err
@@ -768,7 +821,10 @@ func (sess *Session) renderTexturePNG(src textureSource, side string) ([]byte, e
 	// RGB bled from their opaque neighbours. An indexed PNG keeps the
 	// colour-key's RGB (TA:K uses magenta) under alpha 0, and the GPU's
 	// bilinear filter then smears pink fringes along every keyed edge.
-	frameImg := target.Frames[0].ToImageWith(pal, opts)
+	if frame < 0 || frame >= len(target.Frames) {
+		frame = 0
+	}
+	frameImg := target.Frames[frame].ToImageWith(pal, opts)
 	rgba := image.NewNRGBA(frameImg.Bounds())
 	draw.Draw(rgba, rgba.Bounds(), frameImg, frameImg.Bounds().Min, draw.Src)
 	// Bleed to completion: any transparent texel left with stale RGB still

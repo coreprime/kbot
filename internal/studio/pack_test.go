@@ -3,6 +3,7 @@ package studio
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -188,8 +189,8 @@ func TestBuildPackV3Assets(t *testing.T) {
 
 	var manifest packManifest
 	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
-	if manifest.FormatVersion != 6 {
-		t.Fatalf("formatVersion = %d, want 6", manifest.FormatVersion)
+	if manifest.FormatVersion != 7 {
+		t.Fatalf("formatVersion = %d, want 7", manifest.FormatVersion)
 	}
 	if manifest.Weapons != "weapons.json" {
 		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
@@ -609,5 +610,68 @@ func mustJSON(t *testing.T, path string, v any) {
 	}
 	if err := json.Unmarshal(data, v); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
+	}
+}
+
+// TestBuildPackV7TeamPages: team-page textures (per-player colour frames in
+// the *logo* GAFs) pack every frame as textures/<name>--<side>--tN.png with
+// distinct pixels per page, and the model JSON lists them in teamTextures.
+// Creon units (whose side the GOG sidedata.tdf never declares) must still
+// resolve a side palette instead of falling back to the TA global palette.
+func TestBuildPackV7TeamPages(t *testing.T) {
+	install := testutil.TAKUnpackedPath(t)
+	dir := t.TempDir()
+	if _, err := BuildPack(install, dir, PackOptions{
+		Game:  "takingdoms",
+		Units: []string{"aralode", "crebomb"},
+	}); err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var model struct {
+		TextureQuery string   `json:"textureQuery"`
+		TeamTextures []string `json:"teamTextures"`
+	}
+	mustJSON(t, filepath.Join(dir, "models", "aralode.json"), &model)
+	if model.TextureQuery != "side=ara" {
+		t.Fatalf("aralode textureQuery = %q, want side=ara", model.TextureQuery)
+	}
+	found := false
+	for _, tex := range model.TeamTextures {
+		if tex == "aralodelogo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("aralode teamTextures = %v, want aralodelogo listed", model.TeamTextures)
+	}
+	var pages [][]byte
+	for n := 0; n < 10; n++ {
+		b, err := os.ReadFile(filepath.Join(dir, "textures", fmt.Sprintf("aralodelogo--ara--t%d.png", n)))
+		if err != nil {
+			t.Fatalf("team page t%d missing: %v", n, err)
+		}
+		pages = append(pages, b)
+	}
+	if bytes.Equal(pages[0], pages[1]) {
+		t.Fatal("team pages t0 and t1 are byte-identical — page frames not applied")
+	}
+	// The base file stays the page-0 frame for pre-v7 readers.
+	base, err := os.ReadFile(filepath.Join(dir, "textures", "aralodelogo--ara.png"))
+	if err != nil {
+		t.Fatalf("base team texture missing: %v", err)
+	}
+	if !bytes.Equal(base, pages[0]) {
+		t.Fatal("base texture differs from page 0")
+	}
+
+	// Creon side synthesis: crebomb must carry a side query (its textures
+	// bake with cre_textures, not the TA global palette).
+	var cre struct {
+		TextureQuery string `json:"textureQuery"`
+	}
+	mustJSON(t, filepath.Join(dir, "models", "crebomb.json"), &cre)
+	if cre.TextureQuery != "side=cre" {
+		t.Fatalf("crebomb textureQuery = %q, want side=cre", cre.TextureQuery)
 	}
 }

@@ -112,10 +112,70 @@ func (a *adapter) loadSides() {
 			buildPalStem: palStem(s.BuildPalette),
 		})
 	}
+	a.discoverPaletteSides()
 	a.sideOrder = append([]side(nil), a.sides...)
 	sort.Slice(a.sides, func(i, j int) bool {
 		return len(a.sides[i].prefix) > len(a.sides[j].prefix)
 	})
+}
+
+// discoverPaletteSides registers sides whose palette files ship in the
+// install but which sidedata.tdf never declares.  Some install layouts keep
+// the base game's sidedata.tdf (no Creon entry) while the Iron Plague
+// palettes and units are all present — without this, every CRE unit falls
+// back to the global TA palette and renders as noise.  A side is synthesized
+// from each palettes/<prefix>_textures.{pcx,pal} not covered by a declared
+// nameprefix; its kingdom name comes from the built-in terrain palette table
+// (aramon, taros, veruna, zhon, creon) when one matches the prefix.
+func (a *adapter) discoverPaletteSides() {
+	known := map[string]bool{}
+	for _, s := range a.sides {
+		known[s.prefix] = true
+	}
+	stems := map[string]bool{}
+	for _, p := range a.fs.List() {
+		lower := strings.ToLower(p)
+		if !strings.HasPrefix(lower, "palettes/") {
+			continue
+		}
+		base := path.Base(lower)
+		ext := path.Ext(base)
+		if ext != ".pcx" && ext != ".pal" {
+			continue
+		}
+		stem := strings.TrimSuffix(base, ext)
+		stems[stem] = true
+	}
+	var found []side
+	for stem := range stems {
+		pfx, ok := strings.CutSuffix(stem, "_textures")
+		if !ok || pfx == "" {
+			continue
+		}
+		prefix := strings.ToUpper(pfx)
+		if known[prefix] {
+			continue
+		}
+		name := ""
+		for kingdom := range assets.TAKPalettes {
+			if strings.HasPrefix(kingdom, strings.ToLower(pfx)) {
+				name = kingdom
+				break
+			}
+		}
+		buildStem := ""
+		if stems[strings.ToLower(pfx)+"bipal"] {
+			buildStem = strings.ToLower(pfx) + "bipal"
+		}
+		found = append(found, side{
+			prefix:       prefix,
+			name:         name,
+			texPalStem:   stem,
+			buildPalStem: buildStem,
+		})
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].prefix < found[j].prefix })
+	a.sides = append(a.sides, found...)
 }
 
 // palStem strips a palette file's directory + extension, leaving the stem used
