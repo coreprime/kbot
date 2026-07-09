@@ -746,8 +746,12 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// per-player texture pages: model JSON gains teamTextures[] and each
 		// team-page texture packs its colour frames as
 		// textures/<name>[--side]--tN.png alongside the frame-0 base.
+		// FormatVersion 8 adds the per-weapon effectClass (+ TA:K takType)
+		// to weapons.json and, for TA:K installs, builds the catalogue from
+		// the inline FBI [WEAPONn] sections — TA:K packs finally ship a
+		// weapons.json (and the arrow/bolt projectile meshes it names).
 		// Older readers ignore all of them.
-		FormatVersion: 7,
+		FormatVersion: 8,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -1077,7 +1081,10 @@ Files:
   lower-case id: render type, palette-resolved beam colours (plus the
   raw colour indices), projectile model, velocity, beam duration,
   trajectory flags (ballistic, smokeTrail, startSmoke, commandFire),
-  blast diameter, range and fire/impact sound stems.  Each unitdb
+  blast diameter, range, fire/impact sound stems and the per-weapon
+  effectClass presentation class (physical shots draw dark and unlit;
+  fire/magic glow warm; beams stay beams).  TA:Kingdoms weapons come
+  from the inline FBI [WEAPONn] sections and add takType.  Each unitdb
   entry's "weapons" array maps its fire slots onto these keys; every
   catalogue-referenced projectile mesh, sound and bitmap sprite strip
   is packed alongside.

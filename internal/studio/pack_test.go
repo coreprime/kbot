@@ -189,8 +189,8 @@ func TestBuildPackV3Assets(t *testing.T) {
 
 	var manifest packManifest
 	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
-	if manifest.FormatVersion != 7 {
-		t.Fatalf("formatVersion = %d, want 7", manifest.FormatVersion)
+	if manifest.FormatVersion != 8 {
+		t.Fatalf("formatVersion = %d, want 8", manifest.FormatVersion)
 	}
 	if manifest.Weapons != "weapons.json" {
 		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
@@ -236,6 +236,9 @@ func TestBuildPackV3Assets(t *testing.T) {
 	}
 	if laser.VelocityWU <= 0 || laser.DurationSec <= 0 {
 		t.Fatalf("armcomlaser velocity/duration missing: %+v", laser)
+	}
+	if laser.EffectClass != "beam" {
+		t.Fatalf("armcomlaser effectClass = %q, want beam", laser.EffectClass)
 	}
 
 	// unitdb: the v3 per-unit fields.
@@ -599,6 +602,85 @@ func TestBuildPackTAKMap(t *testing.T) {
 	}
 	if _, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(m.Minimap))); err != nil {
 		t.Fatalf("minimap %q not on disk: %v", m.Minimap, err)
+	}
+}
+
+// TestBuildPackTAKWeapons covers the format-v8 TA:K weapon catalogue: the
+// inline FBI [WEAPONn] sections become weapons.json entries keyed by the
+// lower-case weapon name (the same ids the unitdb slot arrays carry), each
+// classified into an honest effectClass from the game's own fields — a
+// bowman's arrow is a dark physical object, a mage's breath is fire — and
+// the arrow projectile 3DO lands in models/.
+func TestBuildPackTAKWeapons(t *testing.T) {
+	install := testutil.TAKUnpackedPath(t)
+	dir := t.TempDir()
+	if _, err := BuildPack(install, dir, PackOptions{
+		Game:  "takingdoms",
+		Units: []string{"arabow", "tarmage"},
+	}); err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var manifest packManifest
+	mustJSON(t, filepath.Join(dir, "manifest.json"), &manifest)
+	if manifest.Weapons != "weapons.json" {
+		t.Fatalf("manifest weapons = %q, want weapons.json", manifest.Weapons)
+	}
+	var wf packWeaponsFileJSON
+	mustJSON(t, filepath.Join(dir, "weapons.json"), &wf)
+
+	arrow, ok := wf.Weapons["standard arrow"]
+	if !ok {
+		t.Fatalf("weapons.json lacks the bowman's standard arrow (%d entries)", len(wf.Weapons))
+	}
+	if arrow.EffectClass != "physical" {
+		t.Fatalf("standard arrow effectClass = %q, want physical", arrow.EffectClass)
+	}
+	if arrow.TakType != "ballistic" || !arrow.Ballistic {
+		t.Fatalf("standard arrow type fields wrong: takType=%q ballistic=%v", arrow.TakType, arrow.Ballistic)
+	}
+	if arrow.Model != "araarrow" {
+		t.Fatalf("standard arrow model = %q, want araarrow", arrow.Model)
+	}
+	if arrow.VelocityWU <= 0 {
+		t.Fatalf("standard arrow velocity missing: %+v", arrow)
+	}
+	// The arrow's projectile mesh must be packed for the flight visual.
+	if _, err := os.Stat(filepath.Join(dir, "models", "araarrow.json")); err != nil {
+		t.Fatalf("arrow projectile mesh not packed: %v", err)
+	}
+
+	// The mage's flame breath is fire, its glowing tracking fireball magic.
+	breath, ok := wf.Weapons["death breath"]
+	if !ok {
+		t.Fatalf("weapons.json lacks the mage's death breath")
+	}
+	if breath.EffectClass != "fire" {
+		t.Fatalf("death breath effectClass = %q, want fire", breath.EffectClass)
+	}
+	swirl, ok := wf.Weapons["fire swirl"]
+	if !ok {
+		t.Fatalf("weapons.json lacks the mage's fire swirl")
+	}
+	if swirl.EffectClass != "magic" {
+		t.Fatalf("fire swirl effectClass = %q, want magic (nimbus glow, no fire fields)", swirl.EffectClass)
+	}
+	if !swirl.Guidance || swirl.TurnRate <= 0 {
+		t.Fatalf("fire swirl should be guided with a turn rate: %+v", swirl)
+	}
+
+	// Every unitdb weapon slot id must resolve in the catalogue.
+	var db packUnitDBJSON
+	mustJSON(t, filepath.Join(dir, "unitdb.json"), &db)
+	for _, u := range db.Units {
+		for _, id := range u.Weapons {
+			if id == "" {
+				continue
+			}
+			if _, ok := wf.Weapons[id]; !ok {
+				t.Fatalf("unit %s weapon %q missing from weapons.json", u.Name, id)
+			}
+		}
 	}
 }
 
