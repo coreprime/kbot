@@ -154,6 +154,13 @@ type unitMetaJSON struct {
 	MakesMetal  float64 `json:"makesMetal,omitempty"`
 	MakesEnergy float64 `json:"makesEnergy,omitempty"`
 	MakesMana   float64 `json:"makesMana,omitempty"`
+	// TA:K keeps two distinct mana pools: manarechargerate/maxmana feed a
+	// unit's PRIVATE casting pool, while mogriumincome/mogriumstorage feed
+	// the GLOBAL player economy (the visible Mana counter). MakesMana and
+	// StoresMana above conflate them for compatibility; these two carry the
+	// global-economy side alone.
+	MogriumIncome  float64 `json:"mogriumIncome,omitempty"`
+	MogriumStorage float64 `json:"mogriumStorage,omitempty"`
 	// UsesEnergy is the standing energy drain (FBI energyuse when positive —
 	// metal makers, radar, jammers). Negative energyuse is solar-style income
 	// and folds into MakesEnergy instead. Surfaced so the hover tooltip can
@@ -573,6 +580,8 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 		out.UsesEnergy = info.EnergyUse
 	}
 	out.MakesMana = info.ManaRechargeRate + info.MogriumIncome
+	out.MogriumIncome = info.MogriumIncome
+	out.MogriumStorage = float64(info.MogriumStorage)
 	out.StoresMetal = float64(info.MetalStorage)
 	out.StoresEnergy = float64(info.EnergyStorage)
 	out.StoresMana = float64(info.MaxMana)

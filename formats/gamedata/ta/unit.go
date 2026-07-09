@@ -27,6 +27,7 @@ type UnitInfo struct {
 	ManaRechargeRate float64 `tdf:"manarechargerate,omitempty"`
 	MaxMana          int     `tdf:"maxmana,omitempty"`
 	MogriumIncome    float64 `tdf:"mogriumincome,omitempty"`
+	MogriumStorage   int     `tdf:"mogriumstorage,omitempty"`
 
 	DamageModifier float64 `tdf:"damagemodifier,omitempty"` // Assuming float, due to name/usage
 	MinWaterDepth  int     `tdf:"minwaterdepth,omitempty"`
