@@ -218,15 +218,18 @@ func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 // omitted") return "" so a renderer keeps its own fallback classification.
 func taEffectClass(sec *ta.Weapon) string {
 	switch sec.RenderType {
-	case 0, 2:
+	case 0:
 		// 0 draws the instant twin-line beam; every stock rendertype=0
 		// weapon also ships beamweapon=1, which is how "0" is told apart
-		// from "field omitted".  2 (MINDGUN) has no world visual in the
-		// engine (radar blip only) — classed with the beams, matching how
-		// the catalogue's one specimen is presented today.
+		// from "field omitted" (feature pseudo-weapons like TREEBURN).
 		if sec.BeamWeapon == 0 {
 			return ""
 		}
+		return "beam"
+	case 2:
+		// MINDGUN: the engine draws only a radar blip for it — classed
+		// with the beams, matching how the catalogue's one specimen is
+		// presented today.
 		return "beam"
 	case 1:
 		return "missile" // 3DO projectile with the smoke-trail flight
