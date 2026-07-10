@@ -180,7 +180,38 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		m.Weapons[i] = weaponMetaFromRef(ref, resolveWeapon)
 	}
 	applyTAEcon(m, info)
+	applyWreckDefault(m)
 	return m
+}
+
+// applyWreckDefault fills a unit's corpse featuredef when the FBI does not
+// resolve a named corpse through the feature registry (the sim/games path has
+// no registry). The wreck salvages roughly the unit's metal cost — stock TA
+// corpses reclaim close to the unit's build metal — carries the unit's hit
+// points and footprint, and is reclaimable but non-blocking (movers walk over
+// a corpse; a reclaimer or resurrector consumes it). Aircraft leave no wreck:
+// they fall and break apart. A ground/sea unit with no metal cost still leaves
+// a small reclaimable husk so the wreck chain always has an entity to test.
+func applyWreckDefault(m *sim.UnitMeta) {
+	if m == nil || m.IsAircraft {
+		return
+	}
+	metal := int(m.Econ.BuildCostMetal)
+	if metal < 1 {
+		metal = 1
+	}
+	hp := m.MaxHealth.Int()
+	if hp < 1 {
+		hp = 1
+	}
+	m.Wreck = &sim.FeatureMeta{
+		Name:        m.Name + "_dead",
+		FootprintX:  m.FootprintX,
+		FootprintZ:  m.FootprintZ,
+		Metal:       metal,
+		MaxHP:       hp,
+		Reclaimable: true,
+	}
 }
 
 // applySpecialFlags fills the Block-6 special-mechanic stat block from the

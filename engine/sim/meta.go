@@ -199,6 +199,13 @@ type UnitMeta struct {
 	// falloff polarity (full at the edge).
 	HealAura *AuraMeta
 
+	// Wreck is the corpse featuredef the unit leaves on an ordinary death
+	// (FBI corpse=, resolved through the feature registry): its reclaim
+	// metal/energy yield, hit points and successor-chain name. Nil means the
+	// unit blows apart cleanly (no wreck). The asset bridge fills it; the
+	// death path (blast.go) spawns a FeatureWreck from it.
+	Wreck *FeatureMeta
+
 	Weapons [3]WeaponMeta
 }
 

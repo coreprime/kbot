@@ -141,6 +141,75 @@ func (w *World) applyFeatureReclaim(u *Unit, featureID uint32) {
 	u.hasAttack = false
 }
 
+// applyResurrect arms a resurrect channel against a wreck feature (CORE Necro /
+// TA:K convert): the builder must canresurrect and the target must be a wreck
+// carrying a DeadName (the unit type it raises back). The channel length is
+// fixed once here from the resurrected type's buildtime and the builder's
+// workertime (specials.md §3.3). On completion the unit respawns under the
+// resurrector's side. Now unblocked by the wreck entity that Block 6 lacked.
+func (w *World) applyResurrect(u *Unit, featureID uint32, targetBuildTime float64) {
+	if u == nil || u.Dead || u.underConstruction() || u.Meta == nil || !u.Meta.CanResurrect {
+		return
+	}
+	f := w.features[featureID]
+	if f == nil || f.Kind != FeatureWreck || f.DeadName == "" {
+		return
+	}
+	u.resurrectFeature = featureID
+	u.resurrectAccum = 0
+	u.resurrectChanTicks = resurrectTicks(u.Meta.WorkerTime, targetBuildTime)
+	if u.resurrectChanTicks < 1 {
+		u.resurrectChanTicks = 1
+	}
+	u.hasMove = false
+	u.hasAttack = false
+}
+
+// stepResurrect advances a resurrect channel and, on completion, raises the
+// wreck's DeadName unit type under the resurrector's side (specials.md §3.3):
+// the unit spawns fully built at low HP (maxdamage/10, min 1 → a 10% bar) and
+// the wreck is removed.
+func (w *World) stepResurrect(u *Unit) {
+	f := w.features[u.resurrectFeature]
+	if f == nil || f.DeadName == "" {
+		u.resurrectFeature, u.resurrectAccum, u.resurrectChanTicks = 0, 0, 0
+		return
+	}
+	u.resurrectAccum++
+	if u.resurrectAccum < u.resurrectChanTicks {
+		return
+	}
+	name := f.DeadName
+	at := fixed.Vec2{X: f.Pos.X, Z: f.Pos.Z}
+	heading := f.Heading
+	side := u.Side
+	w.emit(frame.Event{Kind: frame.EvDespawn, UnitID: f.ID, Anchor: f.Pos})
+	w.removeFeature(f.ID)
+	u.resurrectFeature, u.resurrectAccum, u.resurrectChanTicks = 0, 0, 0
+	var binding Binding
+	var meta *UnitMeta
+	if w.spawn != nil {
+		meta, binding = w.spawn(name)
+	}
+	if meta == nil {
+		return
+	}
+	id := w.addUnit(name, meta, binding, at, heading, side, true)
+	// Resurrected units come up on a low health bar (the engines seat them at
+	// maxdamage/10, a 10% bar).
+	if nu := w.units[id]; nu != nil {
+		nu.Health = fixed.FromInt(10)
+	}
+}
+
+// ApplyResurrect is the bridge/harness entry point that arms a resurrect
+// channel: builderID canresurrect raises featureID (a wreck) back into its
+// DeadName unit type, whose buildtime sets the channel length. Deterministic —
+// routed through the session's ordered command stream by the caller.
+func (w *World) ApplyResurrect(builderID, featureID uint32, targetBuildTime float64) {
+	w.applyResurrect(w.units[builderID], featureID, targetBuildTime)
+}
+
 // reclaimChunk is the once-computed per-pulse damage a reclaimer deals its
 // target (specials.md §3.1, the mislabeled sim_ftol_min1):
 //
@@ -180,6 +249,9 @@ func (w *World) stepSpecials(u *Unit) {
 	}
 	if u.reclaimFeature != 0 {
 		w.stepFeatureReclaim(u)
+	}
+	if u.resurrectFeature != 0 {
+		w.stepResurrect(u)
 	}
 }
 

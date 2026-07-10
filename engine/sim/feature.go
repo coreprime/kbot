@@ -228,6 +228,13 @@ func (w *World) stampMetalPatch(f *Feature) {
 // FeatureByID returns a feature or nil.
 func (w *World) FeatureByID(id uint32) *Feature { return w.features[id] }
 
+// RemoveFeature deletes a feature by id — the exported bridge/scenario entry
+// point (a map tool clearing scenery, or a test tearing down state).
+func (w *World) RemoveFeature(id uint32) { w.removeFeature(id) }
+
+// FeatureCount reports how many live features the world holds (harness/inspection).
+func (w *World) FeatureCount() int { return len(w.featureOrder) }
+
 // removeFeature deletes a feature from the world (reclaimed to nothing,
 // resurrected, or eroded off the chain end). Metal-patch stamps are left in
 // the cell grid — the engines never clear a stamped metal cell, and metal
@@ -263,9 +270,7 @@ func (w *World) featureBlocksCell(cx, cz int) bool {
 	return false
 }
 
-// featureAt returns the reclaim/resurrect-eligible feature whose footprint
-// covers world point p and its distance, or nil. Used to resolve a reclaim
-// order aimed at a map feature or wreck.
+// featureAt returns the feature whose footprint covers world point p, or nil.
 func (w *World) featureAt(p fixed.Vec2) *Feature {
 	cell := fixed.FromInt(16)
 	if w.terrain != nil {
@@ -284,6 +289,15 @@ func (w *World) featureAt(p fixed.Vec2) *Feature {
 		}
 	}
 	return nil
+}
+
+// FeatureIDAt resolves the feature id under a world point (the render lane's
+// reclaim/resurrect cursor hit-test), or 0 when the point covers no feature.
+func (w *World) FeatureIDAt(x, z fixed.Fixed) uint32 {
+	if f := w.featureAt(fixed.Vec2{X: x, Z: z}); f != nil {
+		return f.ID
+	}
+	return 0
 }
 
 // featureReclaimTicks is the feature reclaim channel length (world.md §1.5 /
