@@ -97,6 +97,75 @@ func startPosWorldScale(isTAK bool) float64 {
 	return 1.0 / pxPerWU
 }
 
+// sandboxTerrain is the raw height field extracted from a TNT, shared by the
+// /api/studio/sandbox-map JSON (which base64-encodes it for the browser) and
+// the authority-side sim.Terrain builder, so a hosted match and its clients
+// derive an identical grid from the same map file.
+type sandboxTerrain struct {
+	W, H     int
+	SeaLevel int
+	Heights  []byte // row-major, len = W*H
+	Voids    []byte // row-major void flags, or nil when the map carves none
+}
+
+// loadSandboxTerrain parses a map's TNT and pulls the attribute-resolution
+// height field (and void mask) both games share, abstracting the TA/TA:K
+// storage split. It returns an error for an unreadable map or one with no
+// usable heightmap.
+func (sess *Session) loadSandboxTerrain(mapPath string) (*sandboxTerrain, error) {
+	data, err := sess.vfs.ReadFile(mapPath)
+	if err != nil {
+		return nil, fmt.Errorf("map not found: %w", err)
+	}
+	m, err := tnt.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("parse TNT: %w", err)
+	}
+	t := &sandboxTerrain{}
+	if m.IsTAK {
+		t.W, t.H = m.TAKW, m.TAKH
+		t.Heights = make([]byte, len(m.TAKHeight))
+		copy(t.Heights, m.TAKHeight)
+		// TA:K stores its sea level in the repurposed PTRMapData header slot
+		// (the SeaLevel field holds the U-mapping table instead). Without this
+		// the sim sees no water: ships/sea buildings can't be placed and the
+		// underwater unit tint never triggers. The OTA carries no sealevel for
+		// TA:K, so the header is the only source.
+		t.SeaLevel = int(m.Header.PTRMapData)
+	} else {
+		t.W, t.H = m.AttrW, m.AttrH
+		t.SeaLevel = int(m.Header.SeaLevel)
+		t.Heights = make([]byte, len(m.TileAttr))
+		voids := make([]byte, len(m.TileAttr))
+		anyVoid := false
+		for i, a := range m.TileAttr {
+			t.Heights[i] = a.Height
+			if a.Feature == 0xFFFC {
+				voids[i] = 1
+				anyVoid = true
+			}
+		}
+		if anyVoid {
+			t.Voids = voids
+		}
+	}
+	if len(t.Heights) < t.W*t.H || t.W == 0 || t.H == 0 {
+		return nil, fmt.Errorf("map has no usable heightmap")
+	}
+	// The OTA overrides sea level only when it actually carries one; TA:K OTAs
+	// omit it (the level lives in the TNT header, already read above), so a
+	// zero never clobbers the header value.
+	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
+	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
+		if ota := parseOTA(string(otaData), t.W/2, t.H/2); ota != nil {
+			if ota.SeaLevel > 0 && (m.IsTAK || t.SeaLevel == 0) {
+				t.SeaLevel = ota.SeaLevel
+			}
+		}
+	}
+	return t, nil
+}
+
 func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	mapPath := r.URL.Query().Get("path")
 	if mapPath == "" {
@@ -113,6 +182,11 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parse TNT: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	terr, err := sess.loadSandboxTerrain(mapPath)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
 
 	out := sandboxMapJSON{
 		Path:        mapPath,
@@ -121,45 +195,19 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		HeightScale: sandboxHeightScale,
 		TextureURL:  "/api/studio/sandbox-map-texture?path=" + mapPath,
 		MinimapURL:  "/api/studio/minimap/" + mapPath,
+		W:           terr.W,
+		H:           terr.H,
+		SeaLevel:    terr.SeaLevel,
 	}
-	var heights []byte
-	if m.IsTAK {
-		out.W, out.H = m.TAKW, m.TAKH
-		heights = make([]byte, len(m.TAKHeight))
-		copy(heights, m.TAKHeight)
-		// TA:K stores its sea level in the repurposed PTRMapData header slot
-		// (the SeaLevel field holds the U-mapping table instead). Without this
-		// the sim sees no water: ships/sea buildings can't be placed and the
-		// underwater unit tint never triggers. The OTA carries no sealevel for
-		// TA:K, so the header is the only source.
-		out.SeaLevel = int(m.Header.PTRMapData)
-	} else {
-		out.W, out.H = m.AttrW, m.AttrH
-		out.SeaLevel = int(m.Header.SeaLevel)
-		heights = make([]byte, len(m.TileAttr))
-		voids := make([]byte, len(m.TileAttr))
-		anyVoid := false
-		for i, a := range m.TileAttr {
-			heights[i] = a.Height
-			if a.Feature == 0xFFFC {
-				voids[i] = 1
-				anyVoid = true
-			}
-		}
-		if anyVoid {
-			out.Voids = base64.StdEncoding.EncodeToString(voids)
-		}
-	}
-	if len(heights) < out.W*out.H || out.W == 0 || out.H == 0 {
-		http.Error(w, "map has no usable heightmap", http.StatusUnprocessableEntity)
-		return
+	if terr.Voids != nil {
+		out.Voids = base64.StdEncoding.EncodeToString(terr.Voids)
 	}
 	out.WorldW = float64(out.W) * sandboxCellWU
 	out.WorldH = float64(out.H) * sandboxCellWU
-	out.Heights = base64.StdEncoding.EncodeToString(heights)
+	out.Heights = base64.StdEncoding.EncodeToString(terr.Heights)
 
-	// OTA — sea level (TA:K, where the TNT field is repurposed) and the
-	// first schema's start positions, converted to world units. The two games
+	// OTA — the first schema's start positions, converted to world units (the
+	// sea-level override is folded into loadSandboxTerrain above). The two games
 	// store StartPos in different grids: TA writes map-pixels (1 px = 1 wu at
 	// pxPerWU), while TA:K writes DataUnit cells (one per 16-px height cell), so
 	// a TA:K start must scale up by the cell size to land in world units.
@@ -169,12 +217,6 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
 	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
 		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
-			// The OTA sealevel overrides only when it actually carries one;
-			// TA:K OTAs omit it (the level lives in the TNT PTRMapData slot,
-			// already read above), so don't let a zero clobber the header value.
-			if ota.SeaLevel > 0 && (m.IsTAK || out.SeaLevel == 0) {
-				out.SeaLevel = ota.SeaLevel
-			}
 			if len(ota.Schemas) > 0 {
 				for _, sp := range ota.Schemas[0].StartPos {
 					out.StartPositions = append(out.StartPositions, sandboxStartPos{

@@ -106,9 +106,14 @@ function _JoinPicker({ onOpenSandbox, onBack }) {
   useEffect(() => { load() }, [])
   const join = (s) => {
     if (!onOpenSandbox) return
+    // Carry the host's battlefield so the joiner renders the same terrain and
+    // its local prediction installs the matching height field (the host echoes
+    // the map it was created with in the session listing). No faction: a joiner
+    // shares the live world rather than spawning its own leader.
     onOpenSandbox({
       joinUrl: _hostWsUrl({ match: s.id }),
       displayName: s.name || s.id,
+      mapPath: s.map || null,
     })
   }
   return html`
@@ -177,6 +182,29 @@ function _startLaunchFlow(onOpenSandbox) {
       if (cur) _launch.value = { ...cur, sides: Array.isArray(sides) ? sides : [] }
     })
     .catch(() => { const cur = _launch.value; if (cur) _launch.value = { ...cur, sides: [] } })
+}
+
+// startHostedLaunchFlow runs the SAME battlefield + faction pickers the Local
+// Sandbox uses, but finishes by hosting an authoritative match: it mints a
+// match id, threads the chosen map onto the host upgrade (so the authority
+// installs that map's terrain) and hands the join URL — plus the map + faction
+// for the client's own terrain render and leader spawn — to onOpenSandbox.
+// Exported so the tab-bar "+" menu can host with the same prompts.
+export function startHostedLaunchFlow(onOpenSandbox) {
+  _startLaunchFlow((sel) => {
+    if (!onOpenSandbox) return
+    const id = _genMatchId()
+    const name = `Sandbox ${id}`
+    const params = { match: id, name, kind: 'sandbox' }
+    if (sel && sel.mapPath) params.map = sel.mapPath
+    onOpenSandbox({
+      joinUrl: _hostWsUrl(params),
+      displayName: name,
+      mapPath: (sel && sel.mapPath) || null,
+      mapName: (sel && sel.mapName) || null,
+      faction: (sel && sel.faction) || null,
+    })
+  })
 }
 
 const _GRID_ITEM = { path: '', name: 'The Grid', gridItem: true }
@@ -387,15 +415,8 @@ export function WelcomeScreen({
           <${_Card}
             icon="🌐"
             title="New Hosted"
-            sub="Start an authoritative hosted match and join it for multiplayer testing."
-            onClick=${() => {
-              const id = _genMatchId()
-              const name = `Sandbox ${id}`
-              onOpenSandbox && onOpenSandbox({
-                joinUrl: _hostWsUrl({ match: id, name, kind: 'sandbox' }),
-                displayName: name,
-              })
-            }} />
+            sub="Pick a battlefield and faction, then host an authoritative match to join for multiplayer testing."
+            onClick=${() => startHostedLaunchFlow(onOpenSandbox)} />
           <${_Card}
             icon="🔗"
             title="Join Hosted"

@@ -82,6 +82,7 @@ type Match struct {
 	// players and units are updated inside Run and read atomically.
 	name      string
 	kind      string
+	mapPath   string
 	createdAt time.Time
 	players   atomic.Int64
 	units     atomic.Int64
@@ -125,6 +126,7 @@ type SessionInfo struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Kind      string    `json:"kind"`
+	Map       string    `json:"map,omitempty"`
 	Players   int       `json:"players"`
 	Units     int       `json:"units"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -137,12 +139,28 @@ func (m *Match) SetInfo(name, kind string) {
 	m.kind = kind
 }
 
+// SetMap records the battlefield a match was created with so the session
+// listing can echo it to joiners (who load the same height field for their
+// local prediction). It must be called before Run starts.
+func (m *Match) SetMap(mapPath string) { m.mapPath = mapPath }
+
+// SetTerrain installs the authority world's height field. A nil terrain (an
+// unreadable map) leaves the match on the flat grid. It must be called before
+// Run starts, while the match is still single-threaded.
+func (m *Match) SetTerrain(t *sim.Terrain) {
+	if t == nil {
+		return
+	}
+	m.session.World().SetTerrain(t)
+}
+
 // info returns a thread-safe snapshot of the match's listing state.
 func (m *Match) info() SessionInfo {
 	return SessionInfo{
 		ID:        m.id,
 		Name:      m.name,
 		Kind:      m.kind,
+		Map:       m.mapPath,
 		Players:   int(m.players.Load()),
 		Units:     int(m.units.Load()),
 		CreatedAt: m.createdAt,
