@@ -2282,26 +2282,11 @@ export class SandboxView {
       if (this.scene.selected.size === 0) {
         this.#setStatus(`${slotName} — no units selected.`)
       } else if (hit) {
-        // Friendly-fire prevention — if every selected unit shares
-        // the target's side, cancel the attack mode and switch
-        // selection to the clicked unit instead.  Matches TA's
-        // refusal to attack-target a same-team unit; gives the user
-        // a useful fallthrough (pick the unit they actually clicked).
-        const sel = [...this.scene.selected]
-            .map((id) => this.scene.unitById(id))
-            .filter((u) => u && !u.dead)
-        const sameSide = sel.length > 0 && sel.every((u) => (u.side | 0) === ((hit.side | 0)))
-        if (sameSide) {
-          // Cancel armed slot + re-select the clicked unit.  Clear
-          // the armed cursor so the user sees the normal cursor
-          // come back immediately.
-          this._pendingCmd = null
-          if (this._armedCursor) this._armedCursor.setSlot(null)
-          this.scene.selectOnly(hit.id)
-          this.#refreshDefaultCursor()
-          this.#setStatus(`Selected ${hit.name} (same side as selection).`)
-          return
-        }
+        // An armed Attack / Primary / Secondary / Tertiary click is an
+        // explicit force-attack: it fires at whatever was clicked — enemy,
+        // friendly, wreck — and never falls through to selection. This is the
+        // force-fire gesture, so same-side targets are intentional (testing
+        // arcs, clearing your own damaged units, etc.).
         const engine = this.scene.engine
         let targeted = 0
         for (const id of this.scene.selected) {
@@ -2377,12 +2362,13 @@ export class SandboxView {
       const sel = this.scene.selected
       const onlySelf = (sel.size === 1 && sel.has(picked.id))
       if (sel.size > 0 && !sel.has(picked.id)) {
-        // Friendly-fire prevention — same-side clicks switch
-        // selection instead of attacking.  Mirrors the armed-Fire
-        // path so both gestures refuse to target an ally.
+        // Force-attack — holding Shift while clicking a unit is an explicit
+        // attack order at that target, friendly included, and never falls
+        // through to selection. Without Shift, a same-side click switches
+        // selection (TA's friendly-fire guard for the plain gesture).
         const selUnits = [...sel].map((id) => this.scene.unitById(id)).filter((u) => u && !u.dead)
         const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((picked.side | 0)))
-        if (sameSide) {
+        if (sameSide && !e.shiftKey) {
           this.scene.selectOnly(picked.id)
           this.#playSelectAck()
           this.#setStatus(`Selected ${picked.name} (HP ${picked.health}).`)
