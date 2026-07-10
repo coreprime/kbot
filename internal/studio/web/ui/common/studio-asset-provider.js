@@ -87,6 +87,35 @@ export class StudioAssetProvider {
     return resp.json()
   }
 
+  // featureDefs answers the map-feature catalogue keyed by lower-case feature
+  // id — each carries category, footprint, real TA height, GAF sprite dims and
+  // (for real-model features) the 3DO object name. setTerrain's stand-in
+  // builder sizes and classifies each feature from this, so trees stand at
+  // their authored height, rocks at theirs, and flat resource sites (metal,
+  // vents, scars) fall onto the decal path. {} when the workspace ships none —
+  // stand-ins then use the small category-less defaults.
+  async featureDefs() {
+    try {
+      return await fetchJson('/api/studio/feature-defs', 'feature defs')
+    } catch {
+      return {}
+    }
+  }
+
+  // featureSprite resolves a flat-ground feature's real GAF art as an <img>
+  // with alpha, which setTerrain paints onto the terrain as a ground decal.
+  // The feature-preview endpoint renders the feature's first frame; static=1
+  // pins it to a single frame (the decal is a still). Null on a miss.
+  async featureSprite(spriteOrId) {
+    const id = String(spriteOrId || '')
+    if (!id) return null
+    try {
+      return await loadImage(`/api/studio/feature-preview/${encodeURIComponent(id)}?static=1`)
+    } catch {
+      return null
+    }
+  }
+
   // unitPic resolves a unit's build picture through the studio's buildpic
   // endpoint, or null when the install ships none — contract parity with
   // HttpPackProvider.unitPic (pack v3).
