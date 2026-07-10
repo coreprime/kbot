@@ -242,6 +242,7 @@ func reclaimChunk(builder, target *Unit) int {
 func (w *World) stepSpecials(u *Unit) {
 	w.stepPrivateMana(u)
 	w.stepStockpile(u)
+	w.stepCloakProximity(u)
 	if u.capTarget != 0 {
 		w.stepCapture(u)
 	}
@@ -552,12 +553,65 @@ func (w *World) stepPrivateMana(u *Unit) {
 	}
 }
 
+// Decloak-hold windows (specials.md §5.1): firing forces a unit visible for
+// 600 ticks, an enemy within mincloakdistance for 90 ticks. Applied to both
+// engines (TA's figures reused as the TA:K equivalent — TA:K pins only the
+// per-tick drain and its 90-tick mana-shortfall relock).
+const (
+	cloakFireHoldTicks      = 600
+	cloakProximityHoldTicks = 90
+)
+
+// breakCloakOnFire forces a cloak-capable unit visible for the fire hold when
+// it fires a weapon (specials.md §5.1: firing breaks cloak). A no-op for a unit
+// that neither cloaks nor holds a stance.
+func (w *World) breakCloakOnFire(u *Unit) {
+	if u.Meta == nil || (!u.Meta.CanCloak && !u.cloakStance) {
+		return
+	}
+	if hold := w.tick + cloakFireHoldTicks; hold > u.decloakHold {
+		u.decloakHold = hold
+	}
+	u.cloaked = false
+}
+
+// stepCloakProximity forces a cloaked/stanced unit visible when an enemy is
+// within its mincloakdistance (specials.md §5.1: enemy proximity +90). Runs
+// each tick before the drain evaluation; the enemy scan follows insertion
+// order, so it is deterministic.
+func (w *World) stepCloakProximity(u *Unit) {
+	if u.Meta == nil || !u.cloakStance || u.Meta.MinCloakDistance <= 0 {
+		return
+	}
+	rng := fixed.FromInt(u.Meta.MinCloakDistance)
+	for _, id := range w.order {
+		e := w.units[id]
+		if e == nil || e.Dead || e.Side == u.Side || e.carriedBy != 0 {
+			continue
+		}
+		if u.loco.Pos.DistTo(e.loco.Pos) > rng {
+			continue
+		}
+		if hold := w.tick + cloakProximityHoldTicks; hold > u.decloakHold {
+			u.decloakHold = hold
+		}
+		u.cloaked = false
+		return
+	}
+}
+
 // stepCloakSettle runs a TA unit's per-settle cloak drain (specials.md §5.1):
-// while cloaked, an all-or-nothing energy drain of ftol(cloakcost) stationary
-// or ftol(cloakcostmoving) moving. On shortfall the unit decloaks. Called from
-// the TA settle (once per second).
+// while its stance is set and no decloak hold is live, an all-or-nothing energy
+// drain of ftol(cloakcost) stationary or ftol(cloakcostmoving) moving pays for
+// cloak; a paid settle (re)cloaks the unit, a shortfall or an active hold
+// leaves it visible. Called from the TA settle (once per second).
 func (w *World) stepCloakSettle(u *Unit) {
-	if u.Meta == nil || !u.cloaked || u.underConstruction() {
+	if u.Meta == nil || !u.cloakStance || u.underConstruction() {
+		u.cloaked = false
+		return
+	}
+	if w.tick < u.decloakHold {
+		u.cloaked = false // forced visible: no drain while held
 		return
 	}
 	cost := u.Meta.CloakCost
@@ -566,22 +620,23 @@ func (w *World) stepCloakSettle(u *Unit) {
 	}
 	drain := float32(ftol(float64(cost)))
 	if drain <= 0 {
+		u.cloaked = true
 		return
 	}
-	if !w.taConsumeShot(u.Side, drain, 0) {
-		u.cloaked = false // shortfall: decloak
-	}
+	u.cloaked = w.taConsumeShot(u.Side, drain, 0) // shortfall: stays visible
 }
 
 // stepCloakTAK runs a TA:K unit's per-tick cloak drain off the private mana
 // pool (specials.md §5.2): cost is cloakcost/cloakcostmoving already stored
-// ÷30 at parse. On a private-pool shortfall the unit decloaks and takes a
+// ÷30 at parse. A live decloak hold or the shortfall lockout keeps the unit
+// visible; a paid tick cloaks it. On a private-pool shortfall the unit takes a
 // 90-tick re-cloak lockout.
 func (w *World) stepCloakTAK(u *Unit) {
-	if u.Meta == nil || !u.cloaked || u.underConstruction() {
+	if u.Meta == nil || !u.cloakStance || u.underConstruction() {
+		u.cloaked = false
 		return
 	}
-	if w.tick < u.cloakLock {
+	if w.tick < u.decloakHold || w.tick < u.cloakLock {
 		u.cloaked = false
 		return
 	}
@@ -591,10 +646,11 @@ func (w *World) stepCloakTAK(u *Unit) {
 	}
 	if u.privMana < cost {
 		u.cloaked = false
-		u.cloakLock = w.tick + 90
+		u.cloakLock = w.tick + cloakProximityHoldTicks
 		return
 	}
 	u.privMana -= cost
+	u.cloaked = true
 }
 
 // PrivateMana reports a TA:K unit's private mana pool (0 for TA / an absent

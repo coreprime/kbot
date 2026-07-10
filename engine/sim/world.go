@@ -268,10 +268,16 @@ type Unit struct {
 	resurrectFeature   uint32
 	resurrectAccum     int
 	resurrectChanTicks int
-	// cloaked marks the unit's cloak stance (a cloak order set it). cloakLock
-	// is a TA:K re-cloak lockout tick (shortfall relock); relit each shortfall.
-	cloaked   bool
-	cloakLock uint64
+	// cloakStance is the unit's cloak INTENT (a Cloak order toggles it);
+	// cloaked is the derived ACTUAL state read by LOS/targeting. A stance unit
+	// is cloaked only while it can pay the drain and no decloak hold is live.
+	// cloakLock is a TA:K re-cloak lockout tick (mana shortfall relock);
+	// decloakHold forces the unit visible until its tick (firing / an enemy
+	// inside mincloakdistance sets it), specials.md §5.
+	cloakStance bool
+	cloaked     bool
+	cloakLock   uint64
+	decloakHold uint64
 	// paralyzeAccum is the decaying paralyze tick count (§7.2), capped at
 	// 1800; while >0 the unit is stunned (steps no movement/weapons).
 	paralyzeAccum int
@@ -1937,7 +1943,10 @@ func (w *World) ApplyOrder(o order.Order) {
 	case order.KindCloak:
 		for _, id := range o.UnitIDs {
 			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() && u.Meta != nil && u.Meta.CanCloak {
-				u.cloaked = !u.cloaked
+				u.cloakStance = !u.cloakStance
+				// Turning the stance on cloaks optimistically (the drain
+				// maintains or drops it); turning it off decloaks at once.
+				u.cloaked = u.cloakStance
 			}
 		}
 	case order.KindBuild:

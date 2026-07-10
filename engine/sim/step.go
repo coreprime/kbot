@@ -1724,6 +1724,9 @@ func (w *World) stepWeapons(u *Unit) {
 		}
 		s.lastFireMs = w.simMs
 		s.reloadTicks = scaledReloadTicks(u, &wm)
+		// Firing breaks cloak: the shot forces the unit visible for the fire
+		// hold (specials.md §5.1).
+		w.breakCloakOnFire(u)
 		// Per-shot economy drain (energypershot / metalpershot), after the
 		// launch commitment: all-or-nothing straight from the TA pools,
 		// bypassing the settle. The gate above already confirmed the stock.

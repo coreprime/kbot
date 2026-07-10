@@ -119,6 +119,9 @@ func TestCloakedNeverVisible(t *testing.T) {
 	w := New(Config{Seed: 74})
 	atk := addVision(w, "atk", fixed.Vec2{}, 0, int(MoveHold), int(FireAtWill), 300, 0, 0)
 	prey := addVision(w, "prey", fixed.Vec2{X: fixed.FromInt(120)}, 1, int(MoveHold), int(FireHold), 0, 0, 0)
+	// Stance drives the actual cloak state; a zero-cost cloak holds across
+	// settles (specials.go).
+	w.UnitByID(prey).cloakStance = true
 	w.UnitByID(prey).cloaked = true
 
 	for i := 0; i < 300; i++ {
@@ -131,6 +134,7 @@ func TestCloakedNeverVisible(t *testing.T) {
 		t.Fatalf("acquired a cloaked enemy")
 	}
 
+	w.UnitByID(prey).cloakStance = false
 	w.UnitByID(prey).cloaked = false
 	w.Step(nil)
 	if !w.VisibleToSide(0, prey) {

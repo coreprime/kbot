@@ -243,3 +243,86 @@ func TestInterceptorIgnoresFriendlyAndUncovered(t *testing.T) {
 		t.Fatalf("interceptor fired at an uncovered shot: stock %d", got)
 	}
 }
+
+// cloakMeta builds a TA cloakable unit: a small per-settle energy drain and an
+// optional proximity-decloak radius.
+func cloakMeta(name string, cloakCost float32, minCloakDist int) *UnitMeta {
+	m := &UnitMeta{
+		Name: name, CanMove: true, MaxVelocity: fixed.FromFloat(1.2),
+		TurnRate: fixed.FromInt(600), Accel: fixed.FromFloat(0.1), BrakeRate: fixed.FromFloat(0.2),
+		MaxHealth: fixed.FromInt(100), CanCloak: true,
+		CloakCost: cloakCost, CloakCostMoving: cloakCost, MinCloakDistance: minCloakDist,
+	}
+	m.Weapons[0] = WeaponMeta{
+		Name: "gun", Range: fixed.FromInt(300), ReloadMs: 250, Burst: 1,
+		Damage: fixed.FromInt(25), Present: true, DamageDefault: 25, ReloadTicks: 8,
+		VelocityWU: fixed.FromInt(400), AreaOfEffectWU: fixed.FromInt(8),
+	}
+	return m
+}
+
+// TestDecloakOnFire pins the fire-break rule (specials.md §5.1): a cloaked TA
+// unit is forced visible the moment it fires a weapon.
+func TestDecloakOnFire(t *testing.T) {
+	w := New(Config{Seed: 110})
+	// MinCloakDistance 0 isolates the fire path from proximity.
+	shooter := w.AddUnit("shooter", cloakMeta("shooter", 10, 0), nil, fixed.Vec2{}, 0, 0)
+	prey := w.AddUnit("prey", cloakMeta("prey", 10, 0), nil, fixed.Vec2{X: fixed.FromInt(250)}, 1, 1)
+	w.ApplyOrder(order.Stance([]uint32{prey}, int(MoveHold), int(FireHold)))
+	// Hold the shooter's fire so it cloaks (an auto-engagement would decloak it
+	// before the settle); a manual FireAtUnit below still fires under Hold Fire.
+	w.ApplyOrder(order.Stance([]uint32{shooter}, int(MoveHold), int(FireHold)))
+	w.ApplyOrder(order.Cloak([]uint32{shooter}))
+	// One settle cloaks it (stationary, energy on hand).
+	for i := 0; i < 35; i++ {
+		w.Step(nil)
+	}
+	if !w.Cloaked(shooter) {
+		t.Fatal("stationary cloaker never cloaked after a settle")
+	}
+	// Fire and it must decloak.
+	w.ApplyOrder(order.FireAtUnit(shooter, 0, prey))
+	decloaked := false
+	for i := 0; i < 30 && !decloaked; i++ {
+		w.Step(nil)
+		if !w.Cloaked(shooter) {
+			decloaked = true
+		}
+	}
+	if !decloaked {
+		t.Fatal("cloaked unit stayed cloaked through firing")
+	}
+}
+
+// TestDecloakOnProximity pins the proximity-break rule (specials.md §5.1): a
+// cloak-stanced TA unit cannot hold cloak while an enemy is within its
+// mincloakdistance, but cloaks freely when the enemy is beyond it.
+func TestDecloakOnProximity(t *testing.T) {
+	// Enemy inside mincloakdistance (50 < 100): the unit never holds cloak.
+	w := New(Config{Seed: 111})
+	spy := w.AddUnit("spy", cloakMeta("spy", 10, 100), nil, fixed.Vec2{}, 0, 0)
+	near := w.AddUnit("near", cloakMeta("near", 10, 0), nil, fixed.Vec2{X: fixed.FromInt(50)}, 1, 1)
+	w.ApplyOrder(order.Stance([]uint32{spy}, int(MoveHold), int(FireHold)))
+	w.ApplyOrder(order.Stance([]uint32{near}, int(MoveHold), int(FireHold)))
+	w.ApplyOrder(order.Cloak([]uint32{spy}))
+	for i := 0; i < 60; i++ {
+		w.Step(nil)
+		if w.Cloaked(spy) {
+			t.Fatalf("unit cloaked with an enemy inside mincloakdistance (tick %d)", i)
+		}
+	}
+
+	// Enemy beyond mincloakdistance (500 > 100): the unit cloaks normally.
+	w2 := New(Config{Seed: 112})
+	spy2 := w2.AddUnit("spy", cloakMeta("spy", 10, 100), nil, fixed.Vec2{}, 0, 0)
+	far := w2.AddUnit("far", cloakMeta("far", 10, 0), nil, fixed.Vec2{X: fixed.FromInt(500)}, 1, 1)
+	w2.ApplyOrder(order.Stance([]uint32{spy2}, int(MoveHold), int(FireHold)))
+	w2.ApplyOrder(order.Stance([]uint32{far}, int(MoveHold), int(FireHold)))
+	w2.ApplyOrder(order.Cloak([]uint32{spy2}))
+	for i := 0; i < 35; i++ {
+		w2.Step(nil)
+	}
+	if !w2.Cloaked(spy2) {
+		t.Fatal("unit failed to cloak with the only enemy beyond mincloakdistance")
+	}
+}
