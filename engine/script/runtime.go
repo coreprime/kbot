@@ -131,6 +131,10 @@ type Unit struct {
 	// Deterministic state: it only changes through script execution.
 	weaponReady   uint32
 	weaponAborted uint32
+	// weaponLaunch accumulates WEAPON_LAUNCH_NOW writes — the fire
+	// animation's contact/release frame, which is what actually lets a
+	// committed TA:K shot (or melee swing) go.
+	weaponLaunch uint32
 	// finishedDying latches once the Dying script sets FINISHED_DYING —
 	// TA:K's signal that the fall animation has completed.
 	finishedDying bool
@@ -259,6 +263,7 @@ func (u *Unit) ResetState() {
 	}
 	u.weaponReady = 0
 	u.weaponAborted = 0
+	u.weaponLaunch = 0
 	u.finishedDying = false
 }
 
@@ -281,6 +286,8 @@ func (u *Unit) noteWeaponPortWrite(port int, v int32) {
 		u.weaponReady |= 1 << uint(v)
 	case UVWeaponAimAborted:
 		u.weaponAborted |= 1 << uint(v)
+	case UVWeaponLaunchNow:
+		u.weaponLaunch |= 1 << uint(v)
 	}
 }
 
@@ -301,6 +308,21 @@ func (u *Unit) TakeWeaponReady(slot int) bool {
 		return false
 	}
 	u.weaponReady &^= bit
+	return true
+}
+
+// TakeWeaponLaunchNow reports whether the script has signalled
+// WEAPON_LAUNCH_NOW for the given weapon index since the last call, clearing
+// the flag — the release cue the weapon machine holds a committed shot on.
+func (u *Unit) TakeWeaponLaunchNow(slot int) bool {
+	if slot < 0 || slot > 31 {
+		return false
+	}
+	bit := uint32(1) << uint(slot)
+	if u.weaponLaunch&bit == 0 {
+		return false
+	}
+	u.weaponLaunch &^= bit
 	return true
 }
 

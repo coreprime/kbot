@@ -121,7 +121,52 @@ type UnitMeta struct {
 	// means unknown — damage then applies at face value, the legacy scale.
 	MaxHealth fixed.Fixed
 
+	// Combat identity keys, filled by games.EnrichCombatMeta. ObjectName is
+	// the TA FBI objectname (falling back to unitname), lower-cased — the key
+	// a TA weapon's per-target [DAMAGE] table matches when THIS unit is the
+	// victim. DamageCategory is the TA:K category string (lower-cased) that
+	// selects a fractional multiplier row from a TA:K weapon's table.
+	ObjectName     string
+	DamageCategory string
+
+	// CombatBoxHalfX/Z are the splash bounding-box stand-in's half-extents
+	// (wu), derived by the asset bridge from the unit's OWN FBI footprint
+	// (8 wu of box per square) before any movement-class replacement — the
+	// movement class re-sizes the locomotion footprint, not the body splash
+	// distance is measured against. CombatBoxSet distinguishes an explicit
+	// zero (point body) from an unenriched meta.
+	CombatBoxSet   bool
+	CombatBoxHalfX fixed.Fixed
+	CombatBoxHalfZ fixed.Fixed
+
+	// ExperiencePoints is the TA:K per-type experience figure: the XP a
+	// killer earns for destroying this unit AND the divisor this unit levels
+	// against (level = xp/experiencepoints, capped at 10). Zero for TA units
+	// (whose veterancy runs on raw kill counts instead).
+	ExperiencePoints int
+
 	Weapons [3]WeaponMeta
+}
+
+// aabbHalf is the sandbox's stand-in for the engines' per-model bounding box,
+// which splash falloff measures distance to (per-axis clamp, then Euclidean
+// length). The sim carries no model geometry, so the box is derived from the
+// FBI footprint at half the plot-cell pitch per square — 8 wu of box width per
+// footprint square, so a 2x2 vehicle presents an 8 wu half-extent. The
+// vertical half-extent mirrors the wider horizontal one; ground detonations
+// against ground targets land at dy=0 either way. Footprint-less units (TA:K
+// infantry) present a point. Deliberate approximation: the real boxes are
+// model data the asset bridge does not surface — revisit if per-model bounds
+// ever reach UnitMeta.
+func (m *UnitMeta) aabbHalf() (hx, hy, hz fixed.Fixed) {
+	if m.CombatBoxSet {
+		hx, hz = m.CombatBoxHalfX, m.CombatBoxHalfZ
+	} else {
+		hx = fixed.FromInt(m.FootprintX * 4)
+		hz = fixed.FromInt(m.FootprintZ * 4)
+	}
+	hy = fixed.Max(hx, hz)
+	return hx, hy, hz
 }
 
 // Blast is one resolved death-explosion weapon's stat block.
@@ -171,15 +216,65 @@ type WeaponMeta struct {
 	Tracks          bool        // guided: homes on the target
 	SelfProp        bool        // self-propelled (with Tracks + turn rate, homes)
 	Ballistic       bool        // unpowered arc under gravity
-}
 
-// flies reports whether the weapon launches a tracked projectile the sim flies
-// to its target. Only an instant-hit beam (laser) skips the flight path; every
-// other weapon — model missile, model-less cannon shell, EMG bolt — travels
-// through the projectile subsystem and resolves damage on detonation. Tracking
-// the model-less shots authoritatively is what lets them survive a join/restore.
-func (w WeaponMeta) flies() bool {
-	return !w.BeamWeapon
+	// --- Exact firing-cycle / damage fields (games.EnrichCombatMeta) ---
+
+	// ReloadTicks is the reload interval on the 30 Hz tick axis, converted
+	// the way the engines parse it: reloadtime read as a single-precision
+	// float, multiplied by 30, truncated toward zero. The per-slot counter
+	// starts at zero, so the FIRST shot is ready as soon as the aim latch
+	// holds — a fresh weapon never waits out a full reload.
+	ReloadTicks int
+	// BurstRateTicks spaces a burst parent's pellet emissions; Burst (above)
+	// is the pellet count. RandomDecayTicks is the ± half-range jitter on a
+	// pellet's lifetime.
+	BurstRateTicks   int
+	RandomDecayTicks int
+	// SprayAngle scatters each burst pellet's bearing ±spray/2 (TA-angle
+	// units); Accuracy feeds the turret-shot spread formula
+	// spread = accuracy + 0x800 − (hp<<11)/maxhp (then /(kills/12) when that
+	// quotient reaches 2), applied ±spread/2 to bearing and pitch — two sim
+	// RNG draws per turret shot whenever spread ≥ 2.
+	SprayAngle int32
+	Accuracy   int32
+	// Turret marks the TA turret fire handler — the only class the accuracy
+	// spread applies to.
+	Turret bool
+
+	// DamageDefault is the [DAMAGE] default entry in absolute points,
+	// case-folded at parse (retail files mix Default=/default=). DamageTable
+	// holds the TA per-target overrides keyed by lower-cased victim
+	// objectname: a hit REPLACES the default outright. DamageMult holds the
+	// TA:K rows keyed by lower-cased victim damagecategory as fractional
+	// MULTIPLIERS of the default (the fractional retail values — 0.5, 0.75 —
+	// only make sense as scale factors; absolute-value semantics would leave
+	// swords dealing sub-point damage).
+	DamageDefault int
+	DamageTable   map[string]int
+	DamageMult    map[string]float64
+
+	// EdgeEffectiveness is the splash rim fraction e in the shared quadratic
+	// falloff e + (1−e)(1 − d/r)²; default 0.
+	EdgeEffectiveness float64
+
+	// SelfSplash: TA:K applies a shooter's own splash to the shooter; TA
+	// excludes the firing unit from its own blast entirely. Set per weapon by
+	// the asset bridge (TA:K inline weapons true, TA referenced weapons
+	// false) so mixed-convention games resolve per weapon, not per session.
+	SelfSplash bool
+
+	// Instant marks the TA:K no-projectile behaviors (Melee, the Line of
+	// Sight effect emitters, Remote Effect rings): nothing flies, damage
+	// resolves through the detonation path at the aim point. Melee
+	// additionally routes through the swing-gate pacing and the
+	// WEAPON_LAUNCH_NOW contact handshake.
+	Instant bool
+	Melee   bool
+
+	// MinBarrelSin is sin(minbarrelangle) for the ballistic solver's arc
+	// acceptance (low arc must clear the barrel's depression floor). The
+	// engines default the angle to −11.25° when the TDF omits it.
+	MinBarrelSin float64
 }
 
 // collisionRadius derives the unit's body circle from its FBI footprint

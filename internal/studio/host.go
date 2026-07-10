@@ -56,6 +56,9 @@ func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 		// water/slope limits when the unit names one, matching the
 		// engines' load order.
 		games.ApplyMovementClass(meta, sess.simMoveClassTable())
+		// Exact-combat fields: [DAMAGE] tables, tick-domain reload,
+		// spray/accuracy angles, behavior classes, death blasts.
+		games.EnrichCombatMeta(meta, data, sess.resolveWeaponSection)
 		return meta, nil
 	}
 }

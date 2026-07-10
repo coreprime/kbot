@@ -26,8 +26,12 @@ func (w *World) stepSelfDestruct(u *Unit) {
 	w.killUnit(u, 100, u.Meta.SelfD)
 }
 
-// detonateBlast deals one death-blast's splash: every live unit inside the
-// radius takes the weapon's damage scaled linearly down to Edge at the rim.
+// detonateBlast deals one death-blast's splash through the shared detonation
+// math: quadratic falloff e + (1−e)(1 − d/r)² against bounding-box distance,
+// whole-point truncation, and the sub-17 wu single-target rule (a death blast
+// has no direct-hit victim, so a tiny areaofeffect damages nothing). The
+// dying unit is already dead and takes nothing; everyone else — allies
+// included — takes full splash, exactly like a live detonation.
 // Deterministic: stable insertion order, no rng.
 func (w *World) detonateBlast(src *Unit, b Blast) {
 	anchor := src.Pos()
@@ -35,21 +39,24 @@ func (w *World) detonateBlast(src *Unit, b Blast) {
 	if b.Damage <= 0 || b.AoE <= 0 {
 		return
 	}
-	r := b.AoE.Div(fixed.FromInt(2)) // diameter → radius
-	edge := fixed.Clamp(b.Edge, 0, fixed.One)
-	center := src.loco.Pos
+	aoe := b.AoE.Int()
+	if aoe < splashSingleTargetWU {
+		return
+	}
+	r := aoe / 2
+	edge := fixed.Clamp(b.Edge, 0, fixed.One).Float()
+	base := b.Damage.Float()
 	for _, id := range w.order {
 		t := w.units[id]
-		if t == nil || t.Dead || t == src {
+		if t == nil || t.Dead || t == src || t.carriedBy != 0 || t.Meta == nil {
 			continue
 		}
-		d := t.loco.Pos.DistTo(center)
+		d := blastAABBDist(anchor, t)
 		if d > r {
 			continue
 		}
-		frac := fixed.One - (fixed.One - edge).Mul(d).Div(r)
-		if dmg := b.Damage.Mul(frac); dmg > 0 {
-			w.ApplyDamage(src.ID, id, dmg)
+		if pts := int(base * splashWeight(d, r, edge)); pts > 0 {
+			w.ApplyDamage(src.ID, id, fixed.FromInt(pts))
 		}
 	}
 }

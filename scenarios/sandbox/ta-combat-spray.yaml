@@ -1,0 +1,68 @@
+# TA burst spray RNG accounting: every burst pellet emission draws the shared
+# sim MINSTD stream in the engines' projectile-phase order (lifetime jitter
+# first, then sprayangle) — with the small-bound rule: a bound below 2 returns
+# without advancing the stream, so a randomdecay-less weapon draws exactly one
+# spray value per pellet and a full-health accuracy-0 turret draws nothing at
+# fire time.
+# Ground truth: combat spec §3.1.5 (where randomness enters), §4.1 (burst
+# parent emission), substrate RNG small-bound rule.
+name: ta-combat-spray
+game: ta
+system: combat
+spec: combat.md §3.1.5, §4.1
+description: >-
+  A single ARMFLASH force-fires its EMG (burst=3, burstrate .1 -> 3 ticks,
+  sprayangle 1024, no randomdecay, no accuracy) at open ground 150 wu
+  ahead, then gets a stop order before the second trigger pull. The burst
+  parent keeps emitting after the stop: exactly one pull, three pellets,
+  three spray draws.
+seed: 1
+duration: 50
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 16384   # already facing the aim point: the pull lands early
+actions:
+  - at: 0
+    do: fire_at_point
+    unit: flash
+    slot: 0
+    to: [350, 200]
+  - at: 8
+    do: stop
+    unit: flash
+checks:
+  - at: 40
+    observable: world.rng_draws
+    expect: 5
+    label: three pellets draw three spray values
+    derivation: |
+      Unit init consumes 2 draws (one unit). The trigger pull's turret
+      accuracy path draws nothing: spread = accuracy(0) + 0x800 -
+      (hp<<11)/maxhp = 0 at full health, and rand(0) does not advance
+      the stream. Each pellet emission draws lifetime jitter then spray:
+      randomdecay is absent (bound 0 -> no draw), sprayangle=1024 -> one
+      draw per pellet. One pull (t0 in 1..8; the stop at 8 kills the
+      slot before the 12-tick reload re-pulls) -> parent emits pellets
+      at t0+3/6/9 -> 3 draws. Total 2 + 3 = 5.
+    missing_if_zero: true
+  - at: 40
+    unit: flash
+    observable: unit.fire_count
+    expect: 1
+    label: stop order pins the scenario to one trigger pull
+    derivation: |
+      Pulls run at the 12-tick reload from t0 (1..8); the stop at frame
+      8 clears the slot, so the second pull (t0+12 >= 13) never happens.
+      Exactly one fire event.
+  - at: 40
+    observable: world.projectiles
+    expect: 0
+    label: parent and pellets are all gone
+    derivation: |
+      The parent is removed with its third emission (t0+9 <= 17). Each
+      pellet flies 150 wu at 10 wu/frame = 15 frames and detonates at
+      the aim point (last impact t0+24 <= 32); the ground blast damages
+      nothing (no victims). Nothing remains in flight by frame 40.

@@ -35,18 +35,22 @@ actions:
     unit: flash
     target: com
 checks:
-  - at: 35
+  - at: 30
     unit: com
     observable: unit.hp
     expect: 2976
     label: one full burst of three rounds
     derivation: |
       EMG [DAMAGE] default=8; the commander is not ARMORED by default and
-      has 0 kills, so each round lands 8. One trigger pull = burst 3
-      rounds (burstrate .1 s apart), all landed by ~frame 22 (fire ~2,
-      flight 150 wu at 300 wu/s = 15 frames). MaxDamage 3000 - 3*8 = 2976.
-      The second burst impacts ~frame 32-38, so 2952 here reads as burst
-      timing skew, but 2992 (a single 8) means burst clones are absent.
+      has 0 kills, so each round lands 8. One trigger pull spawns a burst
+      parent that emits 3 pellets at burstrate spacing (t0+3/6/9); each
+      flies 150 wu at 10 wu/frame = 15 frames, so impacts land at
+      t0+18/21/24. MaxDamage 3000 - 3*8 = 2976. Sampled at frame 30
+      (corrected from 35 — the original frame sat INSIDE the second
+      burst's impact window t0+30..36, contradicting its own timeline):
+      for any aim latency t0 in 1..6 all three first-burst rounds have
+      landed and the second burst's first pellet (t0+30 > 30) has not.
+      2992 here (a single 8) means burst clones are absent.
   - at: 97
     unit: flash
     observable: unit.fire_count

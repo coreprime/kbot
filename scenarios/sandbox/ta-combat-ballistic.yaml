@@ -1,0 +1,73 @@
+# TA ballistic flight: a gravity-arc weapon must solve its launch elevation
+# (low arc) so the shell actually lands ON the aim point, and detonate on
+# ground/target contact — not fly a straight gravity-dropped line that falls
+# short (the pre-arc sim landed a 200 wu THUD shot ~111 wu short).
+# Ground truth: combat spec §3.1 (fire gates: ballistic arc must solve),
+# §4.1 (ballistic integration: pos += vel; vy -= gravity, default gravity
+# 8155/65536 wu/frame^2), §5.1.1 (area damage at the blast point).
+name: ta-combat-ballistic
+game: ta
+system: combat
+spec: combat.md §4.1, §3.1.4, §5.1.1
+description: >-
+  A CORE THUD (CORE_THUD: ballistic, range 230, weaponvelocity 210,
+  reloadtime 1.9 -> 56 ticks, areaofeffect 48, [DAMAGE] default=80,
+  minbarrelangle -35) attacks a held ARMFLASH 200 wu away on a flat
+  synthetic grid. The low-arc solve puts the shell on the Flash: each
+  impact lands the full 80 (blast touches the target box, weight 1.0).
+seed: 1
+duration: 110
+terrain:
+  width: 64
+  height: 64
+  cell_wu: 16
+  height_scale: 0.5
+  sea_level: 0
+  base_height: 10
+units:
+  - alias: thud
+    type: corthud
+    side: 1
+    pos: [200, 200]
+    heading: 16384   # face the victim so the turret aim is a pitch-only move
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [400, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: flash
+    move: hold
+    fire: hold
+  - at: 0
+    do: attack
+    unit: thud
+    target: flash
+checks:
+  - at: 50
+    unit: flash
+    observable: unit.hp
+    expect: 545
+    label: arc lands the first shell on the target
+    derivation: |
+      Arc solve (v = 210 wu/s = 7 wu/frame, g = 8155/65536 wu/frame^2,
+      h = 200, dy = muzzle 17 - target 5 = 12): the low root gives an
+      elevation of ~15-16 deg and a time of flight of ~30 frames.
+      Direct blast on the Flash: AABB gap 0 -> weight 1.0; the table has
+      no armflash key -> default 80; both sides 0 kills -> 80 exactly.
+      One impact by frame 50 (aim latency t0 <= 20 + ~30 flight); the
+      second shell (56-tick reload) impacts ~t0+86 > 50.
+      MaxDamage 625 - 80 = 545. A straight-line sim lands ~111 wu short
+      and never damages the Flash (625 here).
+  - at: 105
+    unit: flash
+    observable: unit.hp
+    expect: 465
+    label: second shell after the 56-tick reload
+    derivation: |
+      reloadtime 1.9 parses the engines' way — single-precision float
+      times 30, truncated toward zero = 56 ticks (1.9f sits just under
+      1.9). Impacts at ~t0+30 and ~t0+86; both land by 105 for t0 <= 19
+      and the third (~t0+142) cannot. 625 - 2*80 = 465.

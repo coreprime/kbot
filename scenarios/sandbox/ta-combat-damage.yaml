@@ -50,13 +50,17 @@ checks:
       per-hit quantum (200 vs 10) still dominates any miscount.
   - at: 40
     observable: world.rng_draws
-    expect: 6
+    expect: 4
     label: fire path consumes the sim RNG stream
     derivation: |
-      unit_init draws 2 per unit for random initial facing (2 units = 4);
-      each turret shot draws bearing + elevation spread (accuracy path,
-      spread >= 0x800 even at accuracy=0) = 2 per shot; one shot by frame
-      40 (second at ~frame 30 may add 2 — the derivation pins the minimum
-      case). Zero draws = combat consumes no RNG at all, which breaks
-      any attempt to replicate the engines' downstream draw order.
+      Unit initialisation draws 2 per unit for facing randomisation
+      (2 units = 4). The turret accuracy path draws NOTHING here — a
+      correction of this check's original expect=6: the spread formula is
+      accuracy + 0x800 - (hp<<11)/maxhp, and at full HP the health term
+      is exactly 0x800, cancelling the base, so spread = accuracy = 0 for
+      CORPLAS_WEAPON and rand(0) returns without advancing the stream
+      (the small-bound rule). CORPLAS has no burst/sprayangle either, so
+      the stream stands at exactly the 4 init draws at any frame. Zero
+      draws = combat consumes no RNG at all, which breaks any attempt to
+      replicate the engines' downstream draw order.
     missing_if_zero: true

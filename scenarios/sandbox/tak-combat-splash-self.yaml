@@ -1,0 +1,95 @@
+# TA:K shooter inclusion + fractional [DAMAGE] multipliers: a TA:K unit's own
+# splash hits the shooter (no exclusion, unlike TA — see the paired
+# ta-combat-splash-self scenario), and TA:K [DAMAGE] rows key the victim's
+# damagecategory as MULTIPLIERS of the default, not absolute replacements.
+# Ground truth: combat spec §5.2.2 (friendly and self splash applied), §5.2.3
+# ([DAMAGE] keyed by damagecategory, fractional multiplier semantics), §8.
+#
+# Geometry note: the two experiments are spatially separated because TA:K
+# splash spares nobody — cannA's ground blast must not reach cannB — and the
+# movement-class body circles (Cannoneer 4x4, Elsin 5x5) force ~72 wu of
+# centre separation, so the self-splash case fires at open ground near the
+# shooter rather than at an adjacent victim.
+name: tak-combat-splash-self
+game: tak
+system: combat
+spec: combat.md §5.2.2, §5.2.3, §8
+description: >-
+  Two Aramon Cannoneers (ARACAN: type=Ballistic, range 600, reloadtime
+  4.5, weaponvelocity 750, areaofeffect 90, [DAMAGE] default=2000
+  monarch=0.5). cannA force-fires the ground 40 wu from itself and — with
+  no shooter exclusion in TA:K — takes its own rim splash. cannB attacks
+  Elsin (ARAKING, damagecategory Monarch, 16000 HP) 300 wu away: the
+  direct blast lands 2000*0.5 = 1000.
+seed: 1
+duration: 120
+units:
+  - alias: cannA
+    type: aracan
+    side: 0
+    pos: [200, 200]
+    heading: 16384   # facing its aim point: chassis alignment holds from spawn
+  - alias: cannB
+    type: aracan
+    side: 0
+    pos: [200, 400]
+    heading: 16384
+  - alias: king
+    type: araking
+    side: 1
+    pos: [500, 400]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: king
+    move: hold
+    fire: hold
+  - at: 0
+    do: fire_at_point
+    unit: cannA
+    slot: 0
+    to: [240, 200]
+  - at: 0
+    do: attack
+    unit: cannB
+    target: king
+checks:
+  - at: 90
+    unit: cannA
+    observable: unit.fire_count
+    expect: 1
+    label: the point order commits one shell in the window
+    derivation: |
+      reloadtime 4.5 -> 135 ticks: the second pull (>= t0+135) is past
+      the sample, so exactly one fire event lands in the window. This
+      proves the shell actually fired — the self-splash check below
+      cannot be satisfied by a weapon that never shoots.
+  - at: 90
+    unit: cannA
+    observable: unit.hp
+    expect: 2176
+    label: the shooter takes its own splash
+    derivation: |
+      Blast at the aim point 40 wu away; the Cannoneer declares no FBI
+      footprint -> point body, d = 40 < r = 45. Its damagecategory
+      "siege" has no table row -> default 2000. edgeeffectiveness is
+      unparsed on this weapon (the retail file misspells the key, so the
+      engine default 0 applies): weight = (1 - 40/45)^2 = 0.0123457;
+      damage = int(2000 * 0.0123457) = 24. 2200 - 24 = 2176. A TA-style
+      shooter exclusion leaves 2200.
+  - at: 90
+    unit: king
+    observable: unit.hp
+    expect: 15000
+    label: monarch row multiplies the default
+    derivation: |
+      cannB's shell detonates on the king (point body, d = 0 -> weight
+      1.0). The victim's damagecategory "monarch" matches the 0.5 row —
+      a MULTIPLIER of default: 2000 * 0.5 = 1000; both units level 0.
+      16000 - 1000 = 15000 after the first shell (aim + launch frame +
+      ~12 frames of flight all inside frame 90; the 135-tick reload
+      keeps shell 2 out). An absolute-replacement reading lands
+      int(0.5) = 0 (hp 16000); ignoring the row lands 2000 (14000) —
+      15000 pins the fractional-multiplier semantics.
+    missing_if_zero: true

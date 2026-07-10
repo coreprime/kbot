@@ -181,6 +181,9 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 			// water/slope limits when the unit names one — exactly the way
 			// both engines resolve movement classes at load.
 			games.ApplyMovementClass(meta, moveClasses)
+			// Exact-combat fields: [DAMAGE] tables, tick-domain reload,
+			// spray/accuracy, behavior classes, death blasts.
+			games.EnrichCombatMeta(meta, fbi, resolve)
 			metas[key] = meta
 		}
 		prog, ok := programs[key]
@@ -219,6 +222,11 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 		startPos:      map[uint32]fixed.Vec3{},
 		seenUnits:     map[uint32]bool{},
 	}
+	// Sample the draw baseline BEFORE the scenario units spawn: unit
+	// initialisation itself consumes sim-stream draws in the engines, and
+	// the rng_draws observable is meant to see them.
+	st.rngStart = w.RngDraws()
+	st.rngNow = st.rngStart
 	for _, u := range sc.Units {
 		meta, binding, err := loadType(u.Type)
 		if err != nil {
@@ -233,8 +241,6 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 			st.startPos[id] = unit.Pos()
 		}
 	}
-	st.rngStart = w.RngDraws()
-	st.rngNow = st.rngStart
 	return st, nil
 }
 
@@ -257,6 +263,10 @@ func (st *runState) apply(a ActionSpec) {
 		if a.Spawns != "" {
 			st.pendingSpawns[strings.ToLower(a.Build)] = a.Spawns
 		}
+	case "set_kills":
+		// Measurement hook: pin the veterancy counters so consumer math can
+		// be graded at an exact level without staging real kills first.
+		st.world.SetUnitKills(unit, a.Kills)
 	case "stance":
 		mv, okM := map[string]int{"hold": order.MoveHold, "maneuver": order.MoveManeuver, "roam": order.MoveRoam}[a.Move]
 		fr, okF := map[string]int{"hold": order.FireHold, "return": order.FireReturn, "fire_at_will": order.FireAtWill}[a.Fire]

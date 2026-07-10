@@ -1,0 +1,78 @@
+# TA veterancy consumers at a pinned kill count: +6%/level damage dealt,
+# -4%/level damage taken, -6%/level reload — level = kills/5 capped at 5 —
+# plus the kill-credit increment on the lethal blow.
+# Ground truth: combat spec §5.1.2 step 4 (attacker +6%/L), §5.1.3 step 2
+# (defender -4%/L), §3.1.4 gate 5 (reload scale), §7.1 (kill credit).
+name: ta-combat-vet
+game: ta
+system: combat
+spec: combat.md §5.1.2, §5.1.3, §3.1.4, §7.1
+description: >-
+  A CORPLAS tower and its ARMFLASH victim are both pinned at 25 kills
+  (level 5) via the harness hook. Per-name base 200 scales x1.30
+  (attacker) then x0.80 (defender) = 208 per hit; the tower's reload
+  drops from 24 to 16 ticks; the fourth hit kills and credits kill #26.
+seed: 1
+duration: 115
+units:
+  - alias: tower
+    type: corplas
+    side: 1
+    pos: [200, 200]
+    heading: 0
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [300, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: set_kills
+    unit: tower
+    kills: 25
+  - at: 0
+    do: set_kills
+    unit: flash
+    kills: 25
+  - at: 0
+    do: stance
+    unit: flash
+    move: hold
+    fire: hold
+  - at: 0
+    do: attack
+    unit: tower
+    target: flash
+checks:
+  - at: 45
+    unit: flash
+    observable: unit.hp
+    expect: 209
+    label: both damage ladders at level 5
+    derivation: |
+      Base = per-name armflash entry 200 (direct blast, weight 1.0).
+      Attacker level min(25/5,5)=5: 200*(100+30)/100 = 260 (integer).
+      Defender level 5: 260*(25-5)*4/100 = 208. Two impacts by frame 45:
+      reload = floor(floor((100-30)*24/100)*100/100) = 16 ticks, flight
+      100 wu at ~10.3 wu/frame ~= 10 frames -> impacts ~t0+10 and
+      ~t0+26 (aim latency t0 in 4..19). 625 - 2*208 = 209. Unscaled
+      damage (200/hit) reads 225; attacker-only scaling (260) reads 105.
+  - at: 45
+    unit: tower
+    observable: unit.fire_count
+    expect: 3
+    label: level-5 reload runs at 16 ticks
+    derivation: |
+      Reload consumer: floor(70*24/100) = 16 ticks at full health.
+      Pulls at t0, t0+16, t0+32 -> 3 by frame 45 for t0 in 4..13. The
+      unscaled 24-tick cadence yields only 2 (t0, t0+24).
+  - at: 110
+    unit: tower
+    observable: unit.kills
+    expect: 26
+    label: lethal blow credits the kill
+    derivation: |
+      625 HP / 208 per hit -> the 4th impact (~t0+58) kills. The victim
+      was fully built and enemy, so the tower's counter increments from
+      the pinned 25 to 26.
+    missing_if_zero: true

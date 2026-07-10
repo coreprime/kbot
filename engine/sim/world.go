@@ -63,6 +63,23 @@ type weaponSlot struct {
 	source     string // "attack" or "manual"
 	lastFireMs int64
 
+	// reloadTicks is the slot's live reload countdown on the tick axis. It
+	// starts at zero (the first shot is ready as soon as the aim latch
+	// holds), reloads to the veterancy/damage-scaled figure on each shot,
+	// and decrements once per tick ONLY while the slot holds a target — a
+	// cleared slot keeps its remaining count frozen (a commandfire weapon's
+	// second order still waits out the first shot's reload).
+	reloadTicks int
+
+	// launchPending marks a TA:K shot between its fire commitment (reload
+	// restarted, FireWeapon started) and the script's WEAPON_LAUNCH_NOW
+	// port write at the animation's contact/release frame, which is what
+	// actually spawns the projectile or lands the melee contact. The aim
+	// snapshot taken at fire time rides along.
+	launchPending  bool
+	launchTarget   fixed.Vec3
+	launchTargetID uint32
+
 	// aim* track the last COB aim thread the world drove for this slot so the
 	// turret is only re-aimed when its bearing has drifted enough to matter,
 	// letting a settled aim thread run to completion instead of restarting it
@@ -224,6 +241,14 @@ type Unit struct {
 
 	weapons [3]weaponSlot
 
+	// Veterancy counters. kills increments when a unit this one last damaged
+	// dies (fully built, enemy) and drives the TA consumers: +6 %/level
+	// damage dealt, −4 %/level damage taken, −6 %/level reload, the
+	// accuracy divisor, and target leading from 6 kills. xp accumulates the
+	// victims' experiencepoints and drives the TA:K ×vet/÷vet multipliers.
+	kills int
+	xp    int
+
 	// Aircraft attack-maneuver state, mirroring the JS engine's u._atk. atkActive
 	// is the analogue of u._atk being non-null: false until the unit first flies
 	// a maneuver, so the first tick initialises flybySide. flybySide is the side
@@ -383,11 +408,17 @@ type Config struct {
 	Rand *rng.MinStd
 }
 
+// defaultGravity is the engine default projectile gravity on the sandbox's
+// per-second axis: the sim word 8155 (16.16 wu per tick²) × 900 tick²/s² —
+// the 112 wu/s² classic default, expressed exactly as the engine's stored
+// integer scales rather than the rounded figure.
+var defaultGravity = fixed.Fixed(8155 * 900)
+
 // New creates an empty world.
 func New(cfg Config) *World {
 	g := cfg.Gravity
 	if g == 0 {
-		g = fixed.FromInt(80)
+		g = defaultGravity
 	}
 	r := cfg.Rand
 	if r == nil {
@@ -418,6 +449,25 @@ func (w *World) RngDraws() uint64 { return w.rng.Draws() }
 
 // UnitByID returns a unit or nil.
 func (w *World) UnitByID(id uint32) *Unit { return w.units[id] }
+
+// Kills reports the unit's veterancy kill counter.
+func (u *Unit) Kills() int { return u.kills }
+
+// SetUnitKills pins a unit's veterancy counters directly — a measurement /
+// scenario hook so the harness can grade the veterancy consumers at an exact
+// level without staging a five-kill warm-up. xp is pinned to the equivalent
+// TA:K figure (kills × own experiencepoints) so both games' consumers read
+// the same level.
+func (w *World) SetUnitKills(id uint32, kills int) {
+	u := w.units[id]
+	if u == nil || kills < 0 {
+		return
+	}
+	u.kills = kills
+	if u.Meta != nil && u.Meta.ExperiencePoints > 0 {
+		u.xp = kills * u.Meta.ExperiencePoints
+	}
+}
 
 // killedBinding is the optional surface stepCorpse uses to read the
 // corpsetype a tracked Killed thread wrote before it died. The script VM's
@@ -879,6 +929,13 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	u.homePos = at
 	u.loco.Pos = fixed.Vec2{X: fixed.Wrap32(at.X), Z: fixed.Wrap32(at.Z)}
 	u.loco.Heading = fixed.FromInt(int(fixed.WrapAngle(heading)))
+	// Unit initialisation consumes two sim-stream draws (the engine
+	// randomises a fresh unit's facing). The sandbox spawns with explicit
+	// headings, so the values are discarded — the draws exist purely to keep
+	// the shared MINSTD stream's consumption aligned with the engines'
+	// accounting, which downstream draw-order fidelity is measured against.
+	w.rng.Bounded(int32(fixed.FullCircle))
+	w.rng.Bounded(int32(fixed.FullCircle))
 	w.units[id] = u
 	w.order = append(w.order, id)
 	if binding != nil && binding.HasScript("Create") {
@@ -1061,6 +1118,10 @@ type RestoredUnit struct {
 	// UnitStateOverride.Moving) so a seek keyframe restore resumes the same
 	// walk/idle animation state the pin was holding.
 	MotionPin uint8
+	// Veterancy counters — a joiner must reproduce the authority's damage,
+	// reload and accuracy scaling, all of which key off these.
+	Kills int
+	XP    int
 	// Cob carries the unit's full live script VM state (piece animators, threads,
 	// statics, visibility) when the binding can export it. With it the joiner
 	// resumes the exact piece poses the authority holds — a turret's aim angle, a
@@ -1106,6 +1167,9 @@ type RestoredWeapon struct {
 	TargetPt   fixed.Vec3
 	Source     string
 	LastFireMs int64
+	// ReloadTicks carries the live reload countdown so the joiner's next
+	// shot lands on the same tick as the authority's.
+	ReloadTicks int
 }
 
 // RestoredProjectile is one in-flight model weapon (missile/rocket/bomb) carried
@@ -1145,6 +1209,11 @@ type RestoredProjectile struct {
 	Heading   int32
 	Pitch     int32
 	FromPiece int
+	// Burst-parent state: pellets left to emit and the tick spacing. The
+	// parent's weapon stats re-resolve from the owner's meta on restore.
+	BurstLeft  int
+	BurstGap   int
+	BurstSince int
 }
 
 // ExportUnits captures every live unit's full motion state in insertion order,
@@ -1192,6 +1261,8 @@ func (w *World) ExportUnits() []RestoredUnit {
 			HasUnload:     u.hasUnload,
 			UnloadAt:      u.unloadAt,
 			MotionPin:     u.motionPin,
+			Kills:         u.kills,
+			XP:            u.xp,
 		}
 		for _, c := range u.queue {
 			ru.Queue = append(ru.Queue, RestoredQueued{Kind: uint8(c.kind), Target: c.target, TargetUnit: c.targetUnit, Name: c.name})
@@ -1199,11 +1270,12 @@ func (w *World) ExportUnits() []RestoredUnit {
 		for i := range u.weapons {
 			s := &u.weapons[i]
 			ru.Weapons[i] = RestoredWeapon{
-				HasTarget:  s.hasTarget,
-				TargetUnit: s.targetUnit,
-				TargetPt:   s.targetPt,
-				Source:     s.source,
-				LastFireMs: s.lastFireMs,
+				HasTarget:   s.hasTarget,
+				TargetUnit:  s.targetUnit,
+				TargetPt:    s.targetPt,
+				Source:      s.source,
+				LastFireMs:  s.lastFireMs,
+				ReloadTicks: s.reloadTicks,
 			}
 		}
 		if ce, ok := u.binding.(cobExporter); ok {
@@ -1250,10 +1322,13 @@ func (w *World) ExportProjectiles() []RestoredProjectile {
 			AgeSec:    p.ageSec,
 			LifeSec:   p.lifeSec,
 			LastDist:  p.lastDistT,
-			Closing:   p.closing,
-			Heading:   p.heading,
-			Pitch:     p.pitch,
-			FromPiece: p.fromPiece,
+			Closing:    p.closing,
+			Heading:    p.heading,
+			Pitch:      p.pitch,
+			FromPiece:  p.fromPiece,
+			BurstLeft:  p.burstLeft,
+			BurstGap:   p.burstGap,
+			BurstSince: p.burstSince,
 		})
 	}
 	return out
@@ -1320,6 +1395,8 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			motionPin:    ru.MotionPin,
 			hasAttack:    ru.HasAttack,
 			attackTarget: ru.AttackTarget,
+			kills:        ru.Kills,
+			xp:           ru.XP,
 			binding:      binding,
 		}
 		for _, c := range ru.Queue {
@@ -1341,7 +1418,8 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 				source:     rw.Source,
 				// Inherit the authority's reload clock so the joiner's next shot
 				// lands on the same tick instead of restarting the reload cycle.
-				lastFireMs: rw.LastFireMs,
+				lastFireMs:  rw.LastFireMs,
+				reloadTicks: rw.ReloadTicks,
 			}
 		}
 		u.loco.Pos = fixed.Vec2{X: ru.Pos.X, Z: ru.Pos.Z}
@@ -1385,6 +1463,26 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 	w.nextID = maxID + 1
 }
 
+// weaponMetaFor re-resolves a restored projectile's weapon stat block from
+// its owner's meta so detonation keeps its damage table and splash rules
+// across a join. When the owner (or the slot's weapon) is gone, the flight
+// record's own aoe/damage figures stand in.
+func (w *World) weaponMetaFor(ownerID uint32, slot int, name string, aoe, damage fixed.Fixed) WeaponMeta {
+	if u := w.units[ownerID]; u != nil && u.Meta != nil && slot >= 0 && slot < len(u.Meta.Weapons) {
+		wm := u.Meta.Weapons[slot]
+		if wm.Present && (name == "" || wm.Name == name) {
+			return wm
+		}
+	}
+	return WeaponMeta{
+		Name:           name,
+		Present:        true,
+		AreaOfEffectWU: aoe,
+		Damage:         damage,
+		DamageDefault:  damage.Int(),
+	}
+}
+
 // restoreProjectiles rebuilds the in-flight model weapons from a snapshot,
 // copying each flight record back verbatim, and advances nextProjID past every
 // restored id so later shots keep unique render identities. Caller holds the
@@ -1420,11 +1518,15 @@ func (w *World) restoreProjectiles(projectiles []RestoredProjectile) {
 			damage:    rp.Damage,
 			ageSec:    rp.AgeSec,
 			lifeSec:   rp.LifeSec,
-			lastDistT: rp.LastDist,
-			closing:   rp.Closing,
-			heading:   rp.Heading,
-			pitch:     rp.Pitch,
-			fromPiece: rp.FromPiece,
+			lastDistT:  rp.LastDist,
+			closing:    rp.Closing,
+			heading:    rp.Heading,
+			pitch:      rp.Pitch,
+			fromPiece:  rp.FromPiece,
+			burstLeft:  rp.BurstLeft,
+			burstGap:   rp.BurstGap,
+			burstSince: rp.BurstSince,
+			wm:         w.weaponMetaFor(rp.OwnerID, rp.Slot, rp.Weapon, rp.AoE, rp.Damage),
 		})
 		if rp.ID > maxID {
 			maxID = rp.ID
@@ -1814,6 +1916,16 @@ func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 	t.provokedMs = w.simMs
 	w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
 	if t.Health <= 0 {
+		// Kill credit: the attacker delivering the lethal blow earns a kill
+		// (and the victim's experience value) when the victim was an enemy
+		// and fully built — the counters every veterancy consumer reads.
+		if killer := w.units[sourceID]; killer != nil && killer != t &&
+			killer.Side != t.Side && t.BuildPercent >= fixed.FromInt(100) {
+			killer.kills++
+			if t.Meta != nil {
+				killer.xp += t.Meta.ExperiencePoints
+			}
+		}
 		// severity is the killing blow as a percentage of the unit's full
 		// health bar — the figure TA's Killed(severity, corpsetype) scripts
 		// threshold on (<=25 leaves a clean corpse, <=50 a damaged one,

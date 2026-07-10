@@ -600,15 +600,33 @@ func (w *World) drainEffects(u *Unit) {
 	}
 }
 
-// stepProjectiles advances every in-flight model weapon one tick, refreshes a
-// guided shot's aim at its live target, and detonates the ones that arrive or
-// expire this tick.
+// stepProjectiles advances every in-flight model weapon one tick, emits burst
+// parents' pellets, refreshes a guided shot's aim at its live target, and
+// detonates the ones that arrive or expire this tick. Projectiles run AFTER
+// the per-unit pass, so a shot launched this tick gets its first move this
+// tick and impact damage lands after unit movement — the engines' phase order.
 func (w *World) stepProjectiles() {
 	if len(w.projectiles) == 0 {
 		return
 	}
+	var spawned []*projectile
 	alive := w.projectiles[:0]
 	for _, p := range w.projectiles {
+		if p.mode == projBurstParent {
+			// The parent is a static invisible emitter: one flying pellet
+			// every burstGap ticks (the first a full gap after launch), then
+			// removal when the count runs out.
+			p.burstSince++
+			if p.burstSince >= p.burstGap {
+				p.burstSince = 0
+				spawned = append(spawned, w.emitBurstPellet(p))
+				p.burstLeft--
+			}
+			if p.burstLeft > 0 {
+				alive = append(alive, p)
+			}
+			continue
+		}
 		if p.targetID != 0 {
 			if t := w.units[p.targetID]; t != nil && !t.Dead {
 				p.target = t.Pos()
@@ -632,34 +650,63 @@ func (w *World) stepProjectiles() {
 		}
 		alive = append(alive, p)
 	}
-	w.projectiles = alive
+	w.projectiles = append(alive, spawned...)
+}
+
+// emitBurstPellet clones one flying pellet off a burst parent. Two sim-stream
+// draws happen here in the engines' projectile-phase order — lifetime jitter
+// (±randomdecay/2 ticks) first, then the sprayangle bearing scatter
+// (±spray/2) — each skipped without advancing the stream when its bound is
+// below 2, the shared RNG's small-bound rule.
+func (w *World) emitBurstPellet(parent *projectile) *projectile {
+	wm := parent.wm
+	lifeJitterTicks := 0
+	if d := int32(wm.RandomDecayTicks); d >= 2 {
+		lifeJitterTicks = int(w.rng.Bounded(d) - d/2)
+	}
+	bearing := parent.heading
+	if sp := wm.SprayAngle; sp >= 2 {
+		bearing += w.rng.Bounded(sp) - sp/2
+	}
+	// The pellet flies the parent's launch geometry at the scattered
+	// bearing: same pitch, same speed, aim re-projected to the original
+	// target distance. The parent's unit target rides along so the
+	// single-target damage path credits the victim (the sandbox has no
+	// per-cell flight collision yet — hit resolution stays aim-point based,
+	// so a scattered pellet still credits its target; the muzzle is also
+	// not re-queried per emission, since the sim carries no piece geometry).
+	dx := parent.target.X - parent.origin.X
+	dz := parent.target.Z - parent.origin.Z
+	horiz := fixed.Hypot(dx, dz)
+	sb, cb := fixed.SinCos(fixed.NormalizeAngle(bearing))
+	target := fixed.Vec3{
+		X: parent.origin.X + sb.Mul(horiz),
+		Y: parent.target.Y,
+		Z: parent.origin.Z + cb.Mul(horiz),
+	}
+	pellet := w.makeProjectile(parent.ownerID, parent.targetID, parent.slot, wm, parent.origin, target, parent.fromPiece)
+	w.nextProjID++
+	if lifeJitterTicks != 0 {
+		pellet.lifeSec += fixed.FromInt(lifeJitterTicks).Div(fxTickHz)
+		if pellet.lifeSec < 0 {
+			pellet.lifeSec = 0
+		}
+	}
+	w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: parent.ownerID, Slot: parent.slot, TargetID: parent.targetID, Anchor: parent.origin, Weapon: wm.Name})
+	return pellet
 }
 
 // detonate emits the projectile's hit event and, if it actually reached its
-// target (rather than timing out), applies damage — to everything inside the
-// blast radius for an area weapon, or to the single target otherwise.
+// target or the ground (rather than timing out), routes the landed shot
+// through the shared damage pipeline — the per-target table, the sub-17 wu
+// single-target shortcut, quadratic splash with bounding-box distance and the
+// per-game shooter rule.
 func (w *World) detonate(p *projectile) {
 	w.emit(frame.Event{Kind: frame.EvProjectileHit, UnitID: p.ownerID, Slot: p.slot, TargetID: p.targetID, Anchor: p.pos, Weapon: p.weapon})
 	if !p.hit {
 		return
 	}
-	if p.aoe > 0 {
-		r := p.aoe.Div(fixed.FromInt(2)) // diameter -> radius
-		center := fixed.Vec2{X: p.pos.X, Z: p.pos.Z}
-		for _, id := range w.order {
-			t := w.units[id]
-			if t == nil || t.Dead {
-				continue
-			}
-			if t.loco.Pos.DistTo(center) <= r {
-				w.ApplyDamage(p.ownerID, id, p.damage)
-			}
-		}
-		return
-	}
-	if p.targetID != 0 {
-		w.ApplyDamage(p.ownerID, p.targetID, p.damage)
-	}
+	w.detonateWeapon(p.ownerID, p.targetID, &p.wm, p.pos)
 }
 
 // stepAttack drives the explicit Attack-order path: it points a unit at its
@@ -719,7 +766,7 @@ func (w *World) stepAttack(u *Unit) {
 	if t == nil || t.Dead {
 		return
 	}
-	rngF := u.Meta.Weapons[0].Range
+	rngF := engageRange(u.Meta.Weapons[0])
 	if rngF <= 0 {
 		rngF = fixed.FromInt(220)
 	}
@@ -751,6 +798,9 @@ func (w *World) stepAttack(u *Unit) {
 		return // command-fire weapons never join a standing attack
 	}
 	s := &u.weapons[0]
+	if s.hasTarget && s.source == "manual" {
+		return // an explicit force-fire order owns the slot
+	}
 	s.hasTarget = true
 	s.source = "attack"
 	s.targetUnit = u.attackTarget
@@ -1241,17 +1291,31 @@ func (w *World) stepAltitude(u *Unit) {
 	}
 }
 
-// stepWeapons runs each slot's fire cadence: in range + reloaded -> fire and
-// apply damage. It also drives each slot's COB aim thread so turrets track and
-// barrels recoil; the script effects are render-only and never feed the hash,
-// so they stay deterministic as long as every client issues the same calls.
+// stepWeapons runs each slot's firing cycle on the engines' shape: decrement
+// the reload counter (only while the slot holds a target), resolve the aim
+// point (with veteran target leading), drive the COB aim thread, then walk
+// the fire gates in the engines' order — reload, range (ballistic arcs must
+// solve), resources (full per-shot cost in stock or the shot blocks), aim
+// latch/arc — and on success restart the scaled reload, drain the pools and
+// release the shot (immediately for TA conventions; via the script's
+// WEAPON_LAUNCH_NOW contact frame for TA:K).
 func (w *World) stepWeapons(u *Unit) {
 	for slot := range u.weapons {
 		s := &u.weapons[slot]
+		wm := u.Meta.Weapons[slot]
+		// A committed TA:K shot waits for the fire animation's release frame
+		// even if the slot's target has since cleared.
+		if s.launchPending {
+			w.pollWeaponLaunch(u, s, slot, wm)
+		}
 		if !s.hasTarget {
 			continue
 		}
-		wm := u.Meta.Weapons[slot]
+		// Reload runs down only while the slot is targeted; a cleared slot
+		// freezes its remaining count.
+		if s.reloadTicks > 0 {
+			s.reloadTicks--
+		}
 		var targetPos fixed.Vec2
 		var targetY fixed.Fixed
 		if s.targetUnit != 0 {
@@ -1262,30 +1326,62 @@ func (w *World) stepWeapons(u *Unit) {
 			}
 			targetPos = t.loco.Pos
 			targetY = t.Pos().Y
+			// Veteran target leading: from 6 kills a TA unit aims ahead of a
+			// moving target by 0.8 × travel time (skipped for cruise
+			// weapons, which fly a fixed dogleg).
+			if u.kills >= 6 && wm.VelocityWU > 0 && t.IsMoving && t.loco.Speed > 0 {
+				lead := t.loco.Pos.DistTo(u.loco.Pos).Div(wm.VelocityWU.Div(fxTickHz))
+				sh, ch := fixed.SinCos(int32(t.Heading()))
+				adv := t.loco.Speed.Mul(lead).Mul(fixed.FromFloat(0.8))
+				targetPos.X += sh.Mul(adv)
+				targetPos.Z += ch.Mul(adv)
+			}
 		} else {
 			targetPos = fixed.Vec2{X: s.targetPt.X, Z: s.targetPt.Z}
 			targetY = s.targetPt.Y
-		}
-		reload := int64(wm.ReloadMs)
-		if reload <= 0 {
-			reload = 750
+			// Ground fire aims at the terrain surface, never below it.
+			if g := w.groundHeight(targetPos); targetY < g {
+				targetY = g
+			}
 		}
 		// Track the target with the turret/barrel while closing and in range, so
 		// the aim animation is live before the shot resolves. aimReady reports
-		// whether the turret has actually turned to bear; fire waits on it.
-		aimReady := w.aimWeapon(u, s, slot, targetPos, targetY, reload)
+		// whether the aim latch holds (TA: the aim thread returned TRUE; TA:K:
+		// the script wrote WEAPON_READY); fire waits on it.
+		aimReady := w.aimWeapon(u, s, slot, targetPos, targetY)
 		// Body-aimed units (TA:K ground units, which have no turret scripts)
 		// additionally pivot the whole unit toward the target and hold fire
 		// until the body bears.
 		if conventionFor(u.binding).bodyAim(u.Meta) && !w.faceWeaponTarget(u, targetPos) {
 			aimReady = false
 		}
-		rngF := wm.Range
+		rngF := engageRange(wm)
 		if rngF <= 0 {
 			rngF = fixed.FromInt(180)
 		}
+		// Range: planar distance only — altitude never extends or shrinks it.
 		if u.loco.Pos.DistTo(targetPos) > rngF {
 			continue
+		}
+		anchor := u.Pos()
+		anchor.Y += muzzleAimHeight
+		// A ballistic weapon may only fire when the gravity arc to the aim
+		// point solves (the unsolvable case is treated as out of range).
+		if wm.Ballistic && wm.VelocityWU > 0 {
+			d := targetPos.Sub(u.loco.Pos)
+			if _, _, ok := solveBallisticLaunch(d.Len().Float(), (anchor.Y - targetY).Float(),
+				wm.VelocityWU.Float(), w.gravity.Float(), wm.MinBarrelSin); !ok {
+				continue
+			}
+		}
+		// Resource gate: the FULL per-shot cost must be in stock before the
+		// shot; the drain happens after launch, all-or-nothing, never
+		// partial. (TA:K's mana-per-shot gate waits on the mana pool model.)
+		if (wm.EnergyShot > 0 || wm.MetalShot > 0) && u.Side >= 0 && u.Side < maxSides {
+			st := w.resStock[u.Side]
+			if st.Energy < wm.EnergyShot || st.Metal < wm.MetalShot {
+				continue
+			}
 		}
 		// Aircraft must have the airframe lined up within the weapon's firing arc
 		// before they open fire (no rotating turret); and a bomber only starts a
@@ -1299,13 +1395,19 @@ func (w *World) stepWeapons(u *Unit) {
 		if !aimReady {
 			continue
 		}
-		if w.simMs < s.lastFireMs+reload {
+		if s.reloadTicks > 0 || s.launchPending {
+			continue
+		}
+		// Melee swing pacing: while engaged, each tick rolls the shared
+		// stream and only a zero starts the swing — the RNG cadence layered
+		// on top of the reload interval.
+		if wm.Melee && w.rng.Bounded(3) != 0 {
 			continue
 		}
 		s.lastFireMs = w.simMs
-		// Per-shot economy drain (energypershot / metalpershot): the shot
-		// spends from the side's stock; the pool never gates fire in the
-		// sandbox, so an empty stock just floors at zero.
+		s.reloadTicks = scaledReloadTicks(u, &wm)
+		// Per-shot economy drain (energypershot / metalpershot), after the
+		// launch commitment.
 		if (wm.EnergyShot > 0 || wm.MetalShot > 0) && u.Side >= 0 && u.Side < maxSides {
 			st := &w.resStock[u.Side]
 			st.Energy = fixed.Max(0, st.Energy-wm.EnergyShot)
@@ -1313,51 +1415,32 @@ func (w *World) stepWeapons(u *Unit) {
 			w.resSpent[u.Side].Energy += wm.EnergyShot
 			w.resSpent[u.Side].Metal += wm.MetalShot
 		}
-		anchor := u.Pos()
-		anchor.Y += fixed.FromInt(12)
 		aimPoint := fixed.Vec3{X: targetPos.X, Y: targetY, Z: targetPos.Z}
 		// Recoil / muzzle-flash animation: the COB Fire thread moves the barrel
 		// and emits its own muzzle SFX, which DrainEffects folds into the render
 		// stream. It self-terminates, so a plain Start (no supersede) is right.
 		// Run it before the query so a script that cycles its barrel from the Fire
 		// thread has toggled by the time Query reports the muzzle, matching TA.
+		takLaunch := false
 		if u.binding != nil {
 			conv := conventionFor(u.binding)
 			if name := conv.fireScript(slot); name != "" && u.binding.HasScript(name) {
 				u.binding.Start(name, conv.fireArgs(slot)...)
+				// TA:K's shot releases when the fire animation writes
+				// WEAPON_LAUNCH_NOW at its contact frame; TA launches now.
+				if _, ok := u.binding.(takLaunchBinding); ok && conv.fireScript(slot) == "FireWeapon" {
+					takLaunch = true
+				}
 			}
 		}
-		// Resolve which piece the shot exits from via the Query<slot> script. The
-		// sim has no geometry, so it forwards the piece index and the renderer
-		// computes the muzzle world position; running the query also advances any
-		// per-barrel cycle so multi-barrel weapons alternate muzzles.
 		fromPiece := w.queryFirePiece(u, slot)
 		w.emit(frame.Event{Kind: frame.EvFire, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Target: aimPoint, FromPiece: fromPiece, Weapon: wm.Name})
-		if wm.flies() {
-			// Every non-beam weapon flies a tracked projectile and resolves damage
-			// on detonation; the flight is stepped in stepProjectiles. Model
-			// missiles draw a 3DO mesh, model-less cannon/EMG shots fly the same
-			// path invisibly server-side (the client paints their tracer vfx). A
-			// shot that exists as authoritative state survives a join/restore.
-			target3 := fixed.Vec3{X: targetPos.X, Z: targetPos.Z}
-			if s.targetUnit != 0 {
-				if t := w.units[s.targetUnit]; t != nil {
-					target3.Y = t.Pos().Y
-				}
-			} else {
-				target3.Y = s.targetPt.Y
-			}
-			p := w.makeProjectile(u.ID, s.targetUnit, slot, wm, anchor, target3, int(fromPiece))
-			w.nextProjID++
-			w.projectiles = append(w.projectiles, p)
-			w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: u.ID, Slot: slot, TargetID: s.targetUnit, Anchor: anchor, Weapon: wm.Name})
-		} else if s.targetUnit != 0 {
-			// Instant-hit beam (laser): resolve damage now; nothing flies.
-			dmg := wm.Damage
-			if dmg <= 0 {
-				dmg = defaultHitDamage
-			}
-			w.ApplyDamage(u.ID, s.targetUnit, dmg)
+		if takLaunch {
+			s.launchPending = true
+			s.launchTarget = aimPoint
+			s.launchTargetID = s.targetUnit
+		} else {
+			w.releaseShot(u, slot, wm, anchor, aimPoint, s.targetUnit, fromPiece)
 		}
 		// A command-fire weapon (the D-gun) discharges exactly once per
 		// explicit order: release the slot so it never repeats on reload.
@@ -1418,6 +1501,127 @@ func (w *World) stepWeapons(u *Unit) {
 	}
 }
 
+// engageRange is a weapon's effective engagement distance. Melee carries the
+// engine's tile-quantised floor: the swing-range check works on 16-wu tile
+// coordinates with a minimum of two tiles, so contact reaches to 32 wu of
+// centre distance even when the TDF range is shorter — which is also what
+// lets two colliding bodies (whose separation floor exceeds the raw range)
+// come to blows at all.
+func engageRange(wm WeaponMeta) fixed.Fixed {
+	r := wm.Range
+	if wm.Melee {
+		r = fixed.Max(r, fixed.FromInt(32))
+	}
+	return r
+}
+
+// takLaunchBinding is the optional script surface for TA:K's fire-release
+// handshake: the attack animation writes the weapon index into the
+// WEAPON_LAUNCH_NOW port at its contact frame, and the weapon machine
+// consumes it here to actually let the shot go.
+type takLaunchBinding interface {
+	TakeWeaponLaunchNow(slot int) bool
+}
+
+// pollWeaponLaunch waits out a committed TA:K shot's fire animation and
+// releases it — projectile spawn, or melee contact damage — when the script
+// signals the contact frame. There is no timeout: a script that never writes
+// the port never releases the shot, exactly the engine's contract (every
+// retail attack script writes it).
+func (w *World) pollWeaponLaunch(u *Unit, s *weaponSlot, slot int, wm WeaponMeta) {
+	lb, ok := u.binding.(takLaunchBinding)
+	if !ok {
+		// Binding cannot signal a release frame — degrade to an immediate
+		// launch so scriptless TA:K units still fight.
+		s.launchPending = false
+		anchor := u.Pos()
+		anchor.Y += muzzleAimHeight
+		w.releaseShot(u, slot, wm, anchor, s.launchTarget, s.launchTargetID, -1)
+		return
+	}
+	if !lb.TakeWeaponLaunchNow(slot) {
+		return
+	}
+	s.launchPending = false
+	anchor := u.Pos()
+	anchor.Y += muzzleAimHeight
+	target := s.launchTarget
+	targetID := s.launchTargetID
+	// Contact lands at the victim's CURRENT position when it is still alive
+	// — the swing follows the brawl.
+	if targetID != 0 {
+		if t := w.units[targetID]; t != nil && !t.Dead {
+			target = t.Pos()
+		}
+	}
+	w.releaseShot(u, slot, wm, anchor, target, targetID, -1)
+}
+
+// releaseShot lets one committed shot go: instant behaviors (TA:K melee and
+// the effect emitters) resolve through the detonation path at the aim point
+// with nothing ever in flight; everything else spawns a projectile — a
+// static burst parent when the weapon bursts, the flying shot itself
+// otherwise. Turret accuracy scatter draws happen here, bearing then pitch,
+// on the shared sim stream (each skipped without a draw when the spread
+// bound is below 2 — at full health an accuracy-0 turret shoots true).
+func (w *World) releaseShot(u *Unit, slot int, wm WeaponMeta, anchor, aimPoint fixed.Vec3, targetID uint32, fromPiece int32) {
+	if wm.Instant {
+		w.detonateWeapon(u.ID, targetID, &wm, aimPoint)
+		return
+	}
+	if wm.Turret {
+		if spread := turretSpread(u, &wm); spread >= 2 {
+			db := w.rng.Bounded(spread) - spread/2
+			dp := w.rng.Bounded(spread) - spread/2
+			aimPoint = scatterAim(anchor, aimPoint, db, dp)
+		}
+	}
+	if wm.Burst > 1 {
+		// Static invisible parent at the muzzle: it emits one flying pellet
+		// every burstrate ticks (the first a full interval after launch).
+		gap := wm.BurstRateTicks
+		if gap < 1 {
+			gap = 1
+		}
+		parent := w.makeProjectile(u.ID, targetID, slot, wm, anchor, aimPoint, int(fromPiece))
+		w.nextProjID++
+		parent.mode = projBurstParent
+		parent.burstLeft = wm.Burst
+		parent.burstGap = gap
+		parent.burstSince = 0
+		w.projectiles = append(w.projectiles, parent)
+		return
+	}
+	p := w.makeProjectile(u.ID, targetID, slot, wm, anchor, aimPoint, int(fromPiece))
+	w.nextProjID++
+	w.projectiles = append(w.projectiles, p)
+	w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: u.ID, Slot: slot, TargetID: targetID, Anchor: anchor, Weapon: wm.Name})
+}
+
+// scatterAim rebuilds an aim point after angular jitter: the bearing and
+// pitch from the muzzle to the original point each shift by their draw, and
+// the point re-projects at the original 3-D distance.
+func scatterAim(anchor, aim fixed.Vec3, dBearing, dPitch int32) fixed.Vec3 {
+	dx := aim.X - anchor.X
+	dy := aim.Y - anchor.Y
+	dz := aim.Z - anchor.Z
+	horiz := fixed.Hypot(dx, dz)
+	dist := fixed.Hypot(horiz, dy)
+	if dist <= 0 {
+		return aim
+	}
+	bearing := fixed.Atan2(dx, dz) + dBearing
+	pitch := fixed.Atan2(dy, horiz) + dPitch
+	sb, cb := fixed.SinCos(fixed.NormalizeAngle(bearing))
+	sp, cp := fixed.SinCos(fixed.NormalizeAngle(pitch))
+	h := cp.Mul(dist)
+	return fixed.Vec3{
+		X: anchor.X + sb.Mul(h),
+		Y: anchor.Y + sp.Mul(dist),
+		Z: anchor.Z + cb.Mul(h),
+	}
+}
+
 // muzzleAimHeight lifts the aim origin off the unit's footprint so the pitch to
 // a same-height target is ~0 rather than aiming up from the ground; it matches
 // the fire-event anchor offset.
@@ -1472,7 +1676,16 @@ func (w *World) faceWeaponTarget(u *Unit, targetPos fixed.Vec2) bool {
 func (w *World) clearWeaponSlot(u *Unit, slot int) {
 	s := &u.weapons[slot]
 	hadTarget := s.hasTarget
-	*s = weaponSlot{}
+	// The reload countdown and any committed-but-unreleased shot are SLOT
+	// state, not target state: clearing the target freezes the remaining
+	// reload (it resumes against the next target) and a swing already past
+	// its fire commitment still lands at its contact frame.
+	*s = weaponSlot{
+		reloadTicks:    s.reloadTicks,
+		launchPending:  s.launchPending,
+		launchTarget:   s.launchTarget,
+		launchTargetID: s.launchTargetID,
+	}
 	if hadTarget && u.binding != nil && u.binding.HasScript("TargetCleared") {
 		u.binding.Start("TargetCleared", slot)
 	}
@@ -1514,11 +1727,10 @@ func (w *World) queryFirePiece(u *Unit, slot int) int32 {
 // the tracking thread without piling up stale instances.
 //
 // Fire is gated on the aim thread's completion: a turret with an AimWeapon
-// script does not fire until that thread returns TRUE (or the stuck-timeout of
-// 2x reload elapses, so a script that never signals completion can't deadlock
-// the weapon). A unit with no aim script — or a binding that can't report aim
-// status — fires as soon as it is in range, as before.
-func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2, targetY fixed.Fixed, reloadMs int64) bool {
+// script does not fire until that thread returns TRUE — the latch is
+// absolute, with no fire-anyway fallback. A unit with no aim script — or a
+// binding that can't report aim status — fires as soon as it is in range.
+func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2, targetY fixed.Fixed) bool {
 	if u.binding == nil {
 		return true
 	}
@@ -1557,13 +1769,12 @@ func (w *World) aimWeapon(u *Unit, s *weaponSlot, slot int, targetPos fixed.Vec2
 		s.aimThread = ab.StartAim(name, conv.aimArgs(heading, pitch, slot)...)
 	}
 	// Consume the convention's aim-completion signal: TA reads the thread's
-	// return value, TA:K the WEAPON_READY / WEAPON_AIM_ABORTED ports.
+	// return value, TA:K the WEAPON_READY / WEAPON_AIM_ABORTED ports. The
+	// latch is absolute — a script that never signals a held aim never
+	// fires; there is no fire-anyway fallback (the periodic re-issue above
+	// keeps offering the thread fresh angles, so a transient FALSE recovers
+	// on a later pass).
 	conv.pollAimReady(u.binding, ab, s, slot, w.simMs)
-	if !s.aimReady && w.simMs-s.aimStartMs >= 2*reloadMs {
-		// The aim thread never reported completion within twice the reload
-		// window; fire anyway rather than stalling the weapon indefinitely.
-		s.aimReady = true
-	}
 	return s.aimReady
 }
 

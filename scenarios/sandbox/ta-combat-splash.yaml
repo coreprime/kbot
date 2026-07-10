@@ -44,7 +44,12 @@ units:
   - alias: far
     type: armflash
     side: 0
-    pos: [440, 200]
+    pos: [400, 240]   # 40 wu from the aim point along Z. Corrected from
+                      # [440, 200]: the original collinear spot sat 28 wu
+                      # from the near Flash, inside the pair's 32 wu
+                      # body-circle separation, so the collision pass
+                      # shoved both props off their derived positions
+                      # before the first shell landed.
     heading: 0
 actions:
   - at: 0
@@ -85,8 +90,8 @@ checks:
     expect: 623
     label: rim clip via AABB distance at 40 wu
     derivation: |
-      Center distance 40 exceeds the 35 radius, but the AABB face sits
-      at 40-8 = 32 < 35: mult = (1 - 32/35)^2 = (3/35)^2 = 0.0073469;
-      per hit = ftol(200 * 0.0073469) = 1. Two impacts by frame 55 ->
-      hp = 623. A model testing center distance against the radius deals
-      0 here (hp 625) — the delta isolates the bbox rule.
+      Center distance 40 (along Z) exceeds the 35 radius, but the AABB
+      face sits at 40-8 = 32 < 35: mult = (1 - 32/35)^2 = (3/35)^2 =
+      0.0073469; per hit = ftol(200 * 0.0073469) = 1. Two impacts by
+      frame 55 -> hp = 623. A model testing center distance against the
+      radius deals 0 here (hp 625) — the delta isolates the bbox rule.

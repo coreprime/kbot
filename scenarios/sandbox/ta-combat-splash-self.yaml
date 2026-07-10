@@ -1,0 +1,51 @@
+# TA shooter exclusion: a unit is entirely excluded from its own splash —
+# not scaled down, excluded — while the same geometry in TA:K damages the
+# shooter (the paired tak-combat-splash-self scenario).
+# Ground truth: combat spec §5.1.6 (owner compare excludes the shooter),
+# §5.1.1 (quadratic falloff), §8 variance table (TA excludes / TA:K includes).
+name: ta-combat-splash-self
+game: ta
+system: combat
+spec: combat.md §5.1.6, §5.1.1, §8
+description: >-
+  A CORPLAS tower force-fires at the ground 12 wu from its own centre —
+  inside its own 3x3-footprint box, so an unexcluded model would land the
+  full default 10 per shot (blast touches the box, weight 1.0). The tower
+  must take zero across four shots.
+seed: 1
+duration: 100
+units:
+  - alias: tower
+    type: corplas
+    side: 1
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: fire_at_point
+    unit: tower
+    slot: 0
+    to: [212, 200]
+checks:
+  - at: 97
+    unit: tower
+    observable: unit.fire_count
+    expect: 4
+    label: the point order fires on the 24-tick reload
+    derivation: |
+      reloadtime .8 -> 24 ticks; a ground force-fire repeats until
+      cleared. Pulls at t0, t0+24, t0+48, t0+72 -> 4 by frame 97 for aim
+      latency t0 in 2..25. This check proves the shots actually happen,
+      so the zero-damage check below cannot pass by the weapon simply
+      never firing.
+  - at: 97
+    unit: tower
+    observable: unit.hp
+    expect: 842
+    label: shooter takes none of its own splash
+    derivation: |
+      Blast at 12 wu from centre; the tower's 3x3 footprint presents a
+      12 wu half-extent box -> AABB gap 0 -> weight 1.0 -> an included
+      shooter would take the [DAMAGE] default 10 per shot (no corplas
+      key), i.e. hp 842 - 4*10 = 802 by frame 97. TA excludes the
+      firing unit from its own blast entirely: MaxDamage 842 unchanged.

@@ -30,11 +30,12 @@ const taAnglesPerRadian = 65536.0 / 6.283185307179586 // ≈ 10430.378
 type projMode uint8
 
 const (
-	projStraight  projMode = iota // constant-heading powered shot (unguided rockets)
-	projDropped                   // gravity bomb: released with no thrust
-	projVLaunch                   // vertical launch: climbs, then pitches over and homes
-	projGuided                    // self-propelled + tracking: homes on the target
-	projBallistic                 // unpowered arc under gravity (mortars)
+	projStraight    projMode = iota // constant-heading powered shot (unguided rockets)
+	projDropped                     // gravity bomb: released with no thrust
+	projVLaunch                     // vertical launch: climbs, then pitches over and homes
+	projGuided                      // self-propelled + tracking: homes on the target
+	projBallistic                   // unpowered arc under gravity (mortars)
+	projBurstParent                 // static invisible burst emitter: clones pellets, never flies
 )
 
 // String names the flight mode for the inspection snapshot the studio's
@@ -49,6 +50,8 @@ func (m projMode) String() string {
 		return "guided"
 	case projBallistic:
 		return "ballistic"
+	case projBurstParent:
+		return "burst"
 	default:
 		return "straight"
 	}
@@ -111,6 +114,19 @@ type projectile struct {
 	// launch. The sim has no geometry so it spawns from the unit origin; this is
 	// carried purely so the renderer can offset the model to the real muzzle.
 	fromPiece int
+
+	// wm carries the launching weapon's full stat block so detonation can
+	// resolve the per-target damage table, splash falloff and shooter rule
+	// even after the firing unit is gone.
+	wm WeaponMeta
+
+	// Burst-parent bookkeeping: pellets left, the tick spacing, and ticks
+	// since the last emission. The parent sits at the muzzle emitting one
+	// flying pellet every burstGap ticks; it is removed once the count runs
+	// out. Zero on ordinary shots.
+	burstLeft  int
+	burstGap   int
+	burstSince int
 }
 
 // projectileModeFor picks a flight behaviour from the weapon flags.
@@ -177,6 +193,33 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 		vel = fixed.Vec3{Y: fixed.Max(fixed.One, speed0)} // straight up off the rail
 	case projDropped:
 		vel = fixed.Vec3{} // bombs fall straight; no inherited thrust
+	case projBallistic:
+		// Gravity-arc launch: the closed-form elevation solve picks the low
+		// arc that intercepts the target under this world's gravity. The
+		// launch velocity carries the whole solution — flight is then pure
+		// pos += vel; vy −= g integration. Two engine refinements are
+		// deliberately absent pending resolved constants: the launch droop
+		// pre-compensation term (its per-slot source value is unresolved)
+		// and the wind vector (whose 5-10 s re-roll would also consume
+		// shared-stream draws); both are sub-tick landing-point trims.
+		horiz := fixed.Hypot(dx, dz)
+		if vh, vy, ok := solveBallisticLaunch(
+			horiz.Float(), (anchor.Y - target.Y).Float(),
+			vmax.Float(), w.gravity.Float(), wm.MinBarrelSin); ok && horiz > 0 {
+			vel = fixed.Vec3{
+				X: dx.Mul(fixed.FromFloat(vh)).Div(horiz),
+				Y: fixed.FromFloat(vy),
+				Z: dz.Mul(fixed.FromFloat(vh)).Div(horiz),
+			}
+		} else {
+			// No solvable arc (the fire gate normally rejects this shot
+			// before launch): degrade to a direct lob at the target.
+			vel = fixed.Vec3{
+				X: dx.Mul(speed0).Div(d),
+				Y: dy.Mul(speed0).Div(d),
+				Z: dz.Mul(speed0).Div(d),
+			}
+		}
 	default:
 		vel = fixed.Vec3{
 			X: dx.Mul(speed0).Div(d),
@@ -225,6 +268,18 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 	if lifeSec <= 0 {
 		lifeSec = fixed.Max(fixed.FromFloat(0.4), rng.Div(vmax).Mul(slack))
 	}
+	if mode == projBallistic {
+		// An arc's flight time exceeds range/velocity (the shot travels the
+		// curve, not the chord); give it the full time-of-flight with slack
+		// so a legal shell never expires mid-arc. Ground impact and target
+		// arrival are the real terminators.
+		horiz := fixed.Hypot(dx, dz)
+		if vel.X != 0 || vel.Z != 0 {
+			if vh := fixed.Hypot(vel.X, vel.Z); vh > 0 {
+				lifeSec = fixed.Max(lifeSec, horiz.Div(vh).Mul(fixed.FromInt(2)))
+			}
+		}
+	}
 
 	grav := fixed.Zero
 	if mode == projBallistic || mode == projDropped {
@@ -248,6 +303,7 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 	}
 
 	return &projectile{
+		wm:        wm,
 		id:        w.nextProjID,
 		ownerID:   ownerID,
 		targetID:  targetID,

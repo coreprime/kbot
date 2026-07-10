@@ -23,6 +23,7 @@ import (
 //	unit.build_percent            whole percent 0..100
 //	unit.fire_count               cumulative fire events for the unit
 //	unit.projectile_spawns        cumulative projectile entities the unit launched
+//	unit.kills                    veterancy kill counter
 //	side.metal / energy / mana    stock, raw 16.16
 //	world.projectiles             in-flight projectile count
 //	world.rng_draws               cumulative sim-stream (MINSTD) draws since start
@@ -119,6 +120,12 @@ func (st *runState) sampleUnit(alias, obs string) (int64, bool, string) {
 	}
 	if obs == "unit.projectile_spawns" {
 		return st.projSpawns[id], true, ""
+	}
+	if obs == "unit.kills" {
+		if u := st.world.UnitByID(id); u != nil {
+			return int64(u.Kills()), true, ""
+		}
+		return 0, true, "unit despawned; kill counter gone"
 	}
 	if obs == "unit.alive" {
 		if u != nil && !u.Dead {

@@ -21,6 +21,19 @@ import (
 // schedules Roam's idle wander. Explicit player orders always outrank it —
 // it only ever acts on units with nothing in flight (or on engagements it
 // started itself, tagged autoEngaged).
+//
+// FIDELITY SEAM — acquisition model. This is the minimal model firing
+// correctness needs: deterministic nearest-enemy within reach, explicit
+// orders sticky over autonomous picks. The engines' full acquisition is
+// richer and remains unimplemented here: TA staggers each unit's scan to
+// ~once a second on a per-player round-robin, scores candidates with
+// rand(d^2) draws (stochastically nearest), buckets targets through the
+// per-slot badTargetCategory masks (deprioritized, not excluded), honours
+// shootme/noChaseCategory/kamikaze special cases, and gates everything on
+// the vision/radar layers (cloaked units untargetable, radar dots only with
+// a targeting facility); TA:K paces its re-scan by shared-stream RNG draws.
+// Those pieces land with the vision/LOS subsystem — until then this scan is
+// omniscient and draw-free, a documented divergence.
 
 // Convenience aliases so the sim reads the same names the order package
 // defines.
@@ -130,6 +143,14 @@ func (w *World) stepStance(u *Unit) {
 	// or patrolling unit hunts on its own.
 	if u.hasMove && !u.curIsPatrol {
 		return
+	}
+	// A manually-ordered weapon slot (force-fire) is an explicit player
+	// order: auto-targeting never steals it — a slot holding its ordered
+	// target keeps it until the player clears it.
+	for i := range u.weapons {
+		if u.weapons[i].hasTarget && u.weapons[i].source == "manual" {
+			return
+		}
 	}
 	switch u.fireMode {
 	case FireHold:

@@ -98,6 +98,9 @@ func (p *fbiProvider) loadUnit(name string) *sim.UnitMeta {
 	// limits when the unit names one, matching the engines' load order.
 	p.ensureWeapons()
 	games.ApplyMovementClass(m, p.moveClasses)
+	// Exact-combat fields: [DAMAGE] tables, tick-domain reload, spray /
+	// accuracy angles, behavior classes, death blasts.
+	games.EnrichCombatMeta(m, data, p.resolveWeapon)
 	return m
 }
 

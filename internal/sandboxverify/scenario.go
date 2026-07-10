@@ -76,7 +76,7 @@ type UnitSpec struct {
 // check that requires them grades missing.
 type ActionSpec struct {
 	At   int    `yaml:"at"` // engine frame
-	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|cloak|capture
+	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|stance|set_kills|cloak|capture
 	ID   string `yaml:"id"` // optional handle for requires_action
 	Unit string `yaml:"unit"`
 	// To is the move / fire / build destination in world units.
@@ -93,6 +93,9 @@ type ActionSpec struct {
 	// hold|maneuver|roam and hold|return|fire_at_will.
 	Move string `yaml:"move"`
 	Fire string `yaml:"fire"`
+	// Kills pins the unit's veterancy counters (set_kills action) so the
+	// consumer formulas can be graded at an exact level.
+	Kills int `yaml:"kills"`
 }
 
 // CheckSpec samples one observable at a spec tick and grades it.
