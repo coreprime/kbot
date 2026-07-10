@@ -56,12 +56,20 @@ export async function loadSandboxMap(view, path, onStep) {
   const srcLong = Math.min(16384, Math.max(info.w, info.h) * 16)
   const texUrl = info.textureUrl + (info.textureUrl.includes('?') ? '&' : '?') + 'max=' + srcLong
   const image = await loadImage(wsUrl(texUrl))
-  view.renderer?.setMapTerrain({
+  const terrain = {
     image, heights,
     w: info.w, h: info.h,
     cellWU: info.cellWU, heightScale: info.heightScale,
     seaLevel: info.seaLevel | 0,
-  })
+    // Placed scenery: the map's trees / rocks / metal / geo vents as
+    // procedural 3D stand-ins baked at their cell centres and terrain height.
+    features: Array.isArray(info.features) ? info.features : [],
+  }
+  // Prefer the world's high-level installer: it drapes the terrain AND bakes
+  // the feature surrogates (and metal/steam decals + live vents) in one pass.
+  // Fall back to the bare renderer if no world is present.
+  if (view._world?.setTerrain) view._world.setTerrain(terrain)
+  else view.renderer?.setMapTerrain(terrain)
   // A fresh renderer terrain starts with contours off; honour the View menu's
   // remembered choice so a ticked Contour Lines box actually shows the overlay.
   reapplyContours(view)
@@ -99,7 +107,10 @@ export async function loadSandboxMap(view, path, onStep) {
 // clearSandboxMap reverts the view to The Grid.
 export function clearSandboxMap(view) {
   view.scene?.source?.setTerrain?.(null)
-  view.renderer?.clearMapTerrain?.()
+  // world.setTerrain(null) also tears down the feature surrogates + vents;
+  // fall back to the bare renderer clear when no world is present.
+  if (view._world?.setTerrain) view._world.setTerrain(null)
+  else view.renderer?.clearMapTerrain?.()
   view._sandboxMap = null
   view._terrain = null
 }

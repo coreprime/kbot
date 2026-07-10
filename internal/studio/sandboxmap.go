@@ -63,6 +63,19 @@ type sandboxMapJSON struct {
 	StartPositions []sandboxStartPos `json:"startPositions"`
 	TextureURL     string            `json:"textureUrl"`
 	MinimapURL     string            `json:"minimapUrl"`
+	// Features are the map's placed scenery (trees, rocks, metal, geo vents…)
+	// in attribute-cell coordinates. The client turns each into a procedural
+	// 3D stand-in anchored at its cell centre + terrain height. Same 16px cell
+	// grid for both games. Omitted when the map has no feature table.
+	Features []sandboxFeature `json:"features,omitempty"`
+}
+
+// sandboxFeature is one placed scenery instance: the raw TNT feature name and
+// its attribute-cell position. The client maps the name to a surrogate.
+type sandboxFeature struct {
+	Name string `json:"name"`
+	AX   int    `json:"ax"`
+	AY   int    `json:"ay"`
 }
 
 type sandboxStartPos struct {
@@ -171,6 +184,22 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 			}
+		}
+	}
+
+	// Placed scenery → attribute-cell positions for the 3D surrogates. The name
+	// table lives at a different header offset per game, but GetFeaturePlacements
+	// abstracts the grid. Non-fatal: a featureless map still loads its terrain.
+	if feats, ferr := m.LoadFeatures(bytes.NewReader(data)); ferr == nil && len(feats) > 0 {
+		for _, p := range m.GetFeaturePlacements() {
+			if p.FeatureIdx < 0 || p.FeatureIdx >= len(feats) {
+				continue
+			}
+			name := strings.TrimSpace(feats[p.FeatureIdx].Name)
+			if name == "" {
+				continue
+			}
+			out.Features = append(out.Features, sandboxFeature{Name: name, AX: p.AttrX, AY: p.AttrY})
 		}
 	}
 	writeJSON(w, out)
