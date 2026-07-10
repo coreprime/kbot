@@ -59,6 +59,7 @@ func main() {
 		"submitStance":       js.FuncOf(submitStance),
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
 		"submitLoad":         js.FuncOf(submitLoad),
+		"submitKamikaze":     js.FuncOf(submitKamikaze),
 		"submitRepair":       js.FuncOf(submitRepair),
 		"submitReclaim":      js.FuncOf(submitReclaim),
 		"submitResurrect":    js.FuncOf(submitResurrect),
@@ -457,6 +458,16 @@ func submitLoad(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.Load(uint32Slice(args[1]), uint32(args[2].Int()))))
+}
+
+// submitKamikaze(handle, unitIds[], targetId) -> execTick. Sends kamikaze units
+// to close on the target and self-destruct on top of it.
+func submitKamikaze(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	return int(inst.sess.Submit(order.Kamikaze(uint32Slice(args[1]), uint32(args[2].Int()))))
 }
 
 // submitUnload(handle, transportIds[], tx, tz) -> execTick. Sends the

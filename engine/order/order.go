@@ -58,6 +58,10 @@ const (
 	// cloak cost per settle (TA energy) / per tick (TA:K private mana) and
 	// leaves LOS. A second Cloak order decloaks.
 	KindCloak
+	// Kamikaze sends a kamikaze unit (UnitIDs) to close on TargetUnit to within
+	// max(kamikazedistance, 16) wu and then self-destruct, detonating its
+	// selfdestructas blast on top of the target.
+	KindKamikaze
 )
 
 // Standing-order values carried by a Stance order.
@@ -196,6 +200,11 @@ func Reclaim(units []uint32, targetUnit uint32) Order {
 // Cloak toggles the units' cloak stance.
 func Cloak(units []uint32) Order {
 	return Order{Kind: KindCloak, UnitIDs: units}
+}
+
+// Kamikaze sends kamikaze units to close on a target and self-destruct.
+func Kamikaze(units []uint32, targetUnit uint32) Order {
+	return Order{Kind: KindKamikaze, UnitIDs: units, TargetUnit: targetUnit}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

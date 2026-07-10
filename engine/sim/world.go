@@ -281,6 +281,10 @@ type Unit struct {
 	// paralyzeAccum is the decaying paralyze tick count (§7.2), capped at
 	// 1800; while >0 the unit is stunned (steps no movement/weapons).
 	paralyzeAccum int
+	// kamiTarget is the unit this kamikaze is closing on to detonate (0 = no
+	// kamikaze run); it moves to within max(kamikazedistance,16) wu then
+	// self-destructs (specials.md §6.1.3).
+	kamiTarget uint32
 	// privMana is the TA:K unit-private mana pool (+0xd8): spawns empty,
 	// recharges free per tick to Meta.MaxMana, drained by spells and cloak.
 	privMana float32
@@ -1948,6 +1952,10 @@ func (w *World) ApplyOrder(o order.Order) {
 				// maintains or drops it); turning it off decloaks at once.
 				u.cloaked = u.cloakStance
 			}
+		}
+	case order.KindKamikaze:
+		for _, id := range o.UnitIDs {
+			w.applyKamikaze(w.units[id], o.TargetUnit)
 		}
 	case order.KindBuild:
 		// Resume gesture: a Build naming an existing under-construction

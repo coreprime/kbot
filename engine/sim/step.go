@@ -129,6 +129,14 @@ func (w *World) Step(rt Runtime) {
 		w.stepBuilder(u)
 		w.stepStance(u)
 		w.stepAttack(u)
+		// A kamikaze run overrides the ordinary move/attack: it closes on its
+		// target and detonates on arrival (specials.md §6.1.3).
+		if u.kamiTarget != 0 {
+			w.stepKamikaze(u)
+			if u.Dead {
+				continue
+			}
+		}
 		// Weapons fire before the unit moves — the engines' per-unit phase
 		// order — so a shot launches from the pre-integration position.
 		w.stepWeapons(u)

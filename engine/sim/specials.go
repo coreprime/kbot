@@ -398,6 +398,69 @@ func (w *World) transferOwnership(t *Unit, newSide int, reason int) {
 	}
 }
 
+// kamikazeMinDistance is the floor on a kamikaze run's approach radius
+// (specials.md §6.1.3: goalRadius = max(kamikazedistance, 16) wu).
+const kamikazeMinDistance = 16
+
+// applyKamikaze arms a kamikaze run: a kamikaze-flagged unit closes on the
+// target and detonates. Only a unit whose FBI declares the kamikaze flag takes
+// the order (specials.md §6.1.3).
+func (w *World) applyKamikaze(u *Unit, targetID uint32) {
+	if u == nil || u.Dead || u.underConstruction() || u.Meta == nil || !u.Meta.Kamikaze {
+		return
+	}
+	t := w.units[targetID]
+	if t == nil || t.Dead || t == u {
+		return
+	}
+	u.kamiTarget = targetID
+	u.hasAttack = false
+	u.queue = nil
+}
+
+// kamikazeGoalRadius is a kamikaze unit's approach radius: max(kamikazedistance,
+// 16) wu (specials.md §6.1.3, the asm `cmp ax,0x10; jae` clamp).
+func kamikazeGoalRadius(m *UnitMeta) int {
+	r := m.KamikazeDistance
+	if r < kamikazeMinDistance {
+		r = kamikazeMinDistance
+	}
+	return r
+}
+
+// stepKamikaze advances a kamikaze run (specials.md §6.1.3): the unit chases
+// the live target position until it is within max(kamikazedistance, 16) wu,
+// then self-destructs on top of it (its selfdestructas blast, the reason-3
+// death path). A dead or vanished target ends the run.
+func (w *World) stepKamikaze(u *Unit) {
+	if u.kamiTarget == 0 {
+		return
+	}
+	t := w.units[u.kamiTarget]
+	if t == nil || t.Dead {
+		u.kamiTarget = 0
+		u.hasMove = false
+		return
+	}
+	goal := fixed.FromInt(kamikazeGoalRadius(u.Meta))
+	if u.loco.Pos.DistTo(t.loco.Pos) > goal {
+		u.hasMove = true
+		u.moveTarget = t.loco.Pos
+		return
+	}
+	// Arrived: detonate. The self-destruct blast (selfdestructas) goes off on
+	// top of the target; the run ends with the unit's death.
+	u.kamiTarget = 0
+	u.hasMove = false
+	w.killUnit(u, 100, u.Meta.SelfD)
+}
+
+// ApplyKamikaze is the bridge/harness entry point that sends a kamikaze unit to
+// close on a target and detonate.
+func (w *World) ApplyKamikaze(unitID, targetID uint32) {
+	w.applyKamikaze(w.units[unitID], targetID)
+}
+
 // paralyzeMaxTicks is the 60-second (1800-tick) cap on a Paralyze order's
 // accumulator (specials.md §7.2).
 const paralyzeMaxTicks = 1800

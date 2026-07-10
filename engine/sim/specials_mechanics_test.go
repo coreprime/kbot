@@ -326,3 +326,70 @@ func TestDecloakOnProximity(t *testing.T) {
 		t.Fatal("unit failed to cloak with the only enemy beyond mincloakdistance")
 	}
 }
+
+// kamikazeMeta builds a weaponless kamikaze unit that closes to standoffWU and
+// detonates a self-destruct blast.
+func kamikazeMeta(name string, standoffWU int) *UnitMeta {
+	m := &UnitMeta{
+		Name: name, CanMove: true, MaxVelocity: fixed.FromFloat(3.0),
+		TurnRate: fixed.FromInt(2000), Accel: fixed.FromFloat(0.5), BrakeRate: fixed.FromFloat(0.5),
+		MaxHealth: fixed.FromInt(100), Kamikaze: true, KamikazeDistance: standoffWU,
+	}
+	m.SelfD = Blast{Damage: fixed.FromInt(400), AoE: fixed.FromInt(96), Edge: fixed.FromFloat(0.25)}
+	return m
+}
+
+// TestKamikazeClosesAndDetonates pins the order trigger (specials.md §6.1.3): a
+// kamikaze-ordered unit closes to within max(kamikazedistance, 16) wu of the
+// target, then self-destructs — killing itself and blasting the target.
+func TestKamikazeClosesAndDetonates(t *testing.T) {
+	w := New(Config{Seed: 120})
+	// A 40 wu standoff clears the two bodies' collision separation so the run
+	// can reach its goal radius and detonate.
+	bomb := w.AddUnit("bomb", kamikazeMeta("bomb", 40), nil, fixed.Vec2{}, 0, 0)
+	victim := w.AddUnit("victim", cloakMeta("victim", 0, 0), nil, fixed.Vec2{X: fixed.FromInt(400)}, 1, 1)
+	w.ApplyOrder(order.Stance([]uint32{victim}, int(MoveHold), int(FireHold)))
+	w.ApplyOrder(order.Kamikaze([]uint32{bomb}, victim))
+
+	for i := 0; i < 400 && !w.UnitByID(bomb).Dead; i++ {
+		w.Step(nil)
+	}
+	if !w.UnitByID(bomb).Dead {
+		d := w.UnitByID(bomb).loco.Pos.DistTo(w.UnitByID(victim).loco.Pos)
+		t.Fatalf("kamikaze never detonated (dist %v)", d.Float())
+	}
+	if hp := w.UnitByID(victim).Health; hp >= fixed.FromInt(100) {
+		t.Fatalf("kamikaze blast did not damage the target: HP %v", hp.Float())
+	}
+}
+
+// TestKamikazeDistanceFloor pins the 16 wu floor: a kamikaze with a smaller
+// declared distance still detonates (goal radius is max(kamikazedistance, 16)).
+func TestKamikazeDistanceFloor(t *testing.T) {
+	if got := kamikazeGoalRadius(&UnitMeta{KamikazeDistance: 4}); got != 16 {
+		t.Fatalf("goal radius floored to %d, want 16", got)
+	}
+	if got := kamikazeGoalRadius(&UnitMeta{KamikazeDistance: 64}); got != 64 {
+		t.Fatalf("goal radius %d, want 64", got)
+	}
+}
+
+// TestKamikazeAbortsOnDeadTarget pins the fail path: if the target dies before
+// arrival, the run ends without detonating.
+func TestKamikazeAbortsOnDeadTarget(t *testing.T) {
+	w := New(Config{Seed: 121})
+	bomb := w.AddUnit("bomb", kamikazeMeta("bomb", 16), nil, fixed.Vec2{}, 0, 0)
+	victim := w.AddUnit("victim", cloakMeta("victim", 0, 0), nil, fixed.Vec2{X: fixed.FromInt(4000)}, 1, 1)
+	w.ApplyOrder(order.Kamikaze([]uint32{bomb}, victim))
+	w.Step(nil)
+	w.RemoveUnit(victim)
+	for i := 0; i < 30; i++ {
+		w.Step(nil)
+	}
+	if w.UnitByID(bomb).Dead {
+		t.Fatal("kamikaze detonated even though its target was gone")
+	}
+	if w.UnitByID(bomb).kamiTarget != 0 {
+		t.Fatal("kamikaze run not cleared after target loss")
+	}
+}
