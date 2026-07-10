@@ -299,6 +299,9 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 // movement: a building cares about the height SPREAD across its whole
 // footprint (is the plot flat enough?), not the steepest single step — the
 // per-cell rule would refuse almost every site on naturally bumpy maps.
+// Resource extractors add a site rule: a metal extractor must overlap a metal
+// cell and a geothermal plant a geothermal vent (partial footprint overlap is
+// enough); ordinary buildings carry neither requirement.
 func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 	if m == nil {
 		return true
@@ -358,21 +361,37 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 	}
 	cx := p.X.Div(t.CellWU).Int()
 	cz := p.Z.Div(t.CellWU).Int()
+	// Resource-site requirements read off the buildee's FBI: a metal extractor
+	// (extractsmetal>0) must overlap a metal cell, a geothermal plant (yardmap
+	// laid in 'G') must overlap a geothermal vent. Partial overlap is enough —
+	// a single footprint cell on the resource qualifies. The vent, though a
+	// blocking feature, does not block the geothermal plant it powers.
+	needMetal := m.Econ.ExtractsMetal > 0
+	needGeo := m.Geothermal
+	gotMetal, gotGeo := false, false
 	lo, hi := 255, 0
 	for dz := -fz / 2; dz <= fz/2; dz++ {
 		for dx := -fx / 2; dx <= fx/2; dx++ {
+			ccx, ccz := cx+dx, cz+dz
 			// Any carved-out cell under the footprint kills the plot.
-			if t.cellVoid(cx+dx, cz+dz) {
+			if t.cellVoid(ccx, ccz) {
 				return false
 			}
 			// A blocking feature (tree/rock/wreck/metal patch/sacred stone)
 			// under the footprint refuses the build — the site must be
 			// cleared first. Reclaimable, non-blocking scenery coexists with
-			// the building (the engines do not auto-clear it).
-			if w.featureBlocksCell(cx+dx, cz+dz) {
+			// the building (the engines do not auto-clear it). A geothermal
+			// plant is exempt from the vent it is founded over.
+			if w.featureBlocksBuild(ccx, ccz, needGeo) {
 				return false
 			}
-			h := t.cellHeight(cx+dx, cz+dz)
+			if needMetal && w.cellMetal(ccx, ccz) > 0 {
+				gotMetal = true
+			}
+			if needGeo && w.featureGeothermalCell(ccx, ccz) {
+				gotGeo = true
+			}
+			h := t.cellHeight(ccx, ccz)
 			if h < lo {
 				lo = h
 			}
@@ -380,6 +399,12 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 				hi = h
 			}
 		}
+	}
+	if needMetal && !gotMetal {
+		return false
+	}
+	if needGeo && !gotGeo {
+		return false
 	}
 	maxSlope := m.MaxSlope
 	if maxSlope <= 0 {

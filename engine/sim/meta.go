@@ -205,6 +205,13 @@ type UnitMeta struct {
 	// feature's sacredsite value (world.md §2.5 / economy.md §4.3).
 	SacredProducer bool
 
+	// Geothermal marks a TA geothermal power plant: its FBI yardmap is laid
+	// out entirely in 'G' (geothermal) cells, so the plant may be founded only
+	// where its footprint overlaps a geothermal vent — the buried heat source
+	// it taps. The vent is a geothermal-flagged map feature; canBuildAt refuses
+	// the plant on any site the footprint misses one.
+	Geothermal bool
+
 	// Wreck is the corpse featuredef the unit leaves on an ordinary death
 	// (FBI corpse=, resolved through the feature registry): its reclaim
 	// metal/energy yield, hit points and successor-chain name. Nil means the

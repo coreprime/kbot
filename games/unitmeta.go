@@ -141,6 +141,12 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	if strings.ContainsRune(info.YardMap, 'S') {
 		m.SacredProducer = true
 	}
+	// A yardmap laid entirely in 'G' cells marks a TA geothermal power plant:
+	// it may be founded only over a geothermal vent. TA:K uses no 'G' yardmaps,
+	// so this only ever fires for TA geo plants (armgeo/corgeo and mod kin).
+	if strings.ContainsRune(info.YardMap, 'G') {
+		m.Geothermal = true
+	}
 	m.MaxSlope = info.MaxSlope
 	m.MaxWaterDepth = info.MaxWaterDepth
 	m.MinWaterDepth = info.MinWaterDepth

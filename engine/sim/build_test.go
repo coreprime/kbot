@@ -81,6 +81,75 @@ func TestCanBuildAtUnderwaterStructure(t *testing.T) {
 	}
 }
 
+// TestCanBuildAtMetalExtractorRequiresMetal pins the extractor site rule: a
+// unit with extractsmetal>0 may be founded only where its footprint overlaps a
+// metal cell (partial overlap qualifies), while an ordinary building carries no
+// such requirement.
+func TestCanBuildAtMetalExtractorRequiresMetal(t *testing.T) {
+	w := New(Config{Seed: 41})
+	ter := testTerrain(40, 40, 0, func(_, _ int) uint8 { return 0 })
+	ter.Metal = make([]uint8, ter.W*ter.H)
+	ter.Metal[20*ter.W+20] = 40 // a single metal cell at (20, 20)
+	w.SetTerrain(ter)
+
+	mex := footMeta("mex", 3, false)
+	mex.Econ.ExtractsMetal = 0.001
+	mex.MaxSlope = 50
+
+	// Off-metal: a 3×3 footprint centred on cell 25 covers 24..26 — no metal.
+	off := fixed.Vec2{X: fixed.FromInt(25 * 16), Z: fixed.FromInt(25 * 16)}
+	if w.canBuildAt(mex, off) {
+		t.Fatalf("extractor off a metal site should be rejected")
+	}
+	// Partial overlap: centred on cell 21/20 covers 20..22 × 19..21, catching
+	// the lone metal cell (20, 20).
+	on := fixed.Vec2{X: fixed.FromInt(21 * 16), Z: fixed.FromInt(20 * 16)}
+	if !w.canBuildAt(mex, on) {
+		t.Fatalf("extractor with a partial metal overlap should be allowed")
+	}
+	// An ordinary building has no metal requirement — buildable off-metal.
+	hut := footMeta("hut", 3, false)
+	hut.MaxSlope = 50
+	if !w.canBuildAt(hut, off) {
+		t.Fatalf("ordinary building should not require a metal site")
+	}
+}
+
+// TestCanBuildAtGeothermalRequiresVent pins the geothermal site rule: a plant
+// flagged geothermal (yardmap all 'G') may be founded only where its footprint
+// overlaps a geothermal vent — and the vent, though an indestructible blocking
+// feature, does not block the plant it powers. An ordinary building is still
+// blocked by the vent.
+func TestCanBuildAtGeothermalRequiresVent(t *testing.T) {
+	w := New(Config{Seed: 42})
+	w.SetTerrain(testTerrain(40, 40, 0, func(_, _ int) uint8 { return 0 }))
+	// A geothermal vent at cell (20, 20): 1×1, indestructible and blocking as
+	// the real map feature is.
+	vent := &FeatureMeta{Name: "vent", FootprintX: 1, FootprintZ: 1, Geothermal: true, Blocking: true, Indestructible: true}
+	w.AddFeature("vent", vent, FeatureProp, fixed.Vec2{X: fixed.FromInt(20 * 16), Z: fixed.FromInt(20 * 16)}, 0, -1)
+
+	geo := footMeta("geo", 4, false)
+	geo.Geothermal = true
+	geo.MaxSlope = 50
+
+	// Off-vent: footprint clear of the vent — rejected.
+	off := fixed.Vec2{X: fixed.FromInt(30 * 16), Z: fixed.FromInt(30 * 16)}
+	if w.canBuildAt(geo, off) {
+		t.Fatalf("geothermal plant off a vent should be rejected")
+	}
+	// On the vent: footprint overlaps it — allowed, and the vent does not block.
+	on := fixed.Vec2{X: fixed.FromInt(20 * 16), Z: fixed.FromInt(20 * 16)}
+	if !w.canBuildAt(geo, on) {
+		t.Fatalf("geothermal plant over a vent should be allowed")
+	}
+	// A geothermal vent still blocks an ordinary building on the same plot.
+	hut := footMeta("hut", 4, false)
+	hut.MaxSlope = 50
+	if w.canBuildAt(hut, on) {
+		t.Fatalf("ordinary building should be blocked by the vent feature")
+	}
+}
+
 // TestBuildCycleRaisesUnit pins the mobile-builder contract: the builder
 // walks into builddistance of the site, the buildee appears at 0% and rises
 // to 100% at the buildtime/workertime pace, and only then takes orders.

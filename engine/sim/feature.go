@@ -93,6 +93,12 @@ type FeatureMeta struct {
 	// mogriumincome × SacredSite to its income.
 	SacredSite float64
 
+	// Geothermal marks a geothermal vent (featuredef geothermal=1) — the heat
+	// source a TA geothermal power plant taps. A geothermal building may be
+	// founded only where its footprint overlaps such a feature, and the vent
+	// (though indestructible) never blocks that building's plot.
+	Geothermal bool
+
 	// FeatureDead is the successor feature name a destructible feature
 	// transitions to when it dies or is reclaimed one stage down the wreck
 	// heap chain (FBI featuredead). Empty = the cell simply empties.
@@ -252,14 +258,49 @@ func (w *World) removeFeature(id uint32) {
 	}
 }
 
+// isGeothermal reports whether the feature is a geothermal vent (featuredef
+// geothermal=1) — the heat source a geothermal power plant is founded over.
+func (f *Feature) isGeothermal() bool {
+	return f != nil && f.Meta != nil && f.Meta.Geothermal
+}
+
 // featureBlocksCell reports whether any blocking feature occupies terrain cell
 // (cx, cz). Movers and build sites consult it. Linear over the feature list —
 // the sandbox map holds a modest feature count and the check runs only on cell
 // crossings, so a per-cell index is unnecessary until feature counts grow.
 func (w *World) featureBlocksCell(cx, cz int) bool {
+	return w.featureBlocksBuild(cx, cz, false)
+}
+
+// featureBlocksBuild reports whether any blocking feature occupies terrain cell
+// (cx, cz) for a build site. exemptGeo skips geothermal vents so a geothermal
+// power plant can be founded over the vent it taps (the vent is indestructible
+// and would otherwise block the plot). Movement passes exemptGeo=false via
+// featureBlocksCell so a mover still stops at a vent.
+func (w *World) featureBlocksBuild(cx, cz int, exemptGeo bool) bool {
 	for _, id := range w.featureOrder {
 		f := w.features[id]
 		if f == nil || !f.blocks() {
+			continue
+		}
+		if exemptGeo && f.isGeothermal() {
+			continue
+		}
+		fx, fz := f.footprint()
+		if cx >= f.Cx && cx < f.Cx+fx && cz >= f.Cz && cz < f.Cz+fz {
+			return true
+		}
+	}
+	return false
+}
+
+// featureGeothermalCell reports whether a geothermal vent covers terrain cell
+// (cx, cz) — the marker a geothermal power plant's footprint must overlap to be
+// buildable.
+func (w *World) featureGeothermalCell(cx, cz int) bool {
+	for _, id := range w.featureOrder {
+		f := w.features[id]
+		if !f.isGeothermal() {
 			continue
 		}
 		fx, fz := f.footprint()

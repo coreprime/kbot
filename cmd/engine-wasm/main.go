@@ -390,10 +390,12 @@ func submitResurrect(_ js.Value, args []js.Value) any {
 
 // addFeature(handle, {name, kind, x, z, heading, footprintX, footprintZ,
 // metal, energy, maxHP, blocking, reclaimable, indestructible, sacredSite,
-// featureDead, owner}) places a map feature (scenery, metal patch, sacred site)
-// and returns its id. kind: 0 prop, 1 metalPatch, 2 wreck, 3 sacredSite. Metal
-// patches stamp their metal into the cell grid so the extractor income picks
-// them up. Owner defaults to -1 (a neutral map feature).
+// geothermal, featureDead, owner}) places a map feature (scenery, metal patch,
+// sacred site, geothermal vent) and returns its id. kind: 0 prop, 1 metalPatch,
+// 2 wreck, 3 sacredSite. Metal patches stamp their metal into the cell grid so
+// the extractor income picks them up; a geothermal vent (geothermal:true) marks
+// the site a geothermal plant may be founded over. Owner defaults to -1 (a
+// neutral map feature).
 func addFeature(_ js.Value, args []js.Value) any {
 	inst := instances[args[0].Int()]
 	if inst == nil {
@@ -415,6 +417,7 @@ func addFeature(_ js.Value, args []js.Value) any {
 		Reclaimable:    getBool(o, "reclaimable"),
 		Indestructible: getBool(o, "indestructible"),
 		SacredSite:     getFloat(o, "sacredSite"),
+		Geothermal:     getBool(o, "geothermal"),
 		FeatureDead:    getString(o, "featureDead"),
 	}
 	at := fixed.Vec2{X: fixed.FromFloat(o.Get("x").Float()), Z: fixed.FromFloat(o.Get("z").Float())}
