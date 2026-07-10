@@ -427,6 +427,11 @@ export class WsFrameSource extends FrameSource {
     this._send({ Kind: 7, UnitID: builderId >>> 0, TargetUnit: targetId >>> 0 })
   }
 
+  // reclaim sends reclaimers to consume a target for resources (Kind 14).
+  reclaim(unitIds, targetId) {
+    this._send({ Kind: 14, UnitIDs: unitIds, TargetUnit: targetId >>> 0 })
+  }
+
   // patrol appends a patrol waypoint (Kind 8); stance sets the standing
   // move/fire orders (Kind 9).
   patrol(unitIds, x, z) {

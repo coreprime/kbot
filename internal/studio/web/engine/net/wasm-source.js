@@ -174,6 +174,10 @@ export class WasmFrameSource extends FrameSource {
   // to continue raising it (the hover-a-half-built-structure gesture).
   repair(builderId, targetId) { return this._engine.submitRepair(this._handle, builderId, targetId) }
 
+  // reclaim sends the reclaimers to consume the target unit / wreck / feature
+  // for resources — the mobile-builder reclaim gesture.
+  reclaim(unitIds, targetId) { return this._engine.submitReclaim(this._handle, unitIds, targetId) }
+
   // patrol appends a patrol waypoint to each unit's queue (consecutive
   // patrol legs loop); stance sets the standing move/fire orders;
   // selfDestruct toggles the 5-second fuse.

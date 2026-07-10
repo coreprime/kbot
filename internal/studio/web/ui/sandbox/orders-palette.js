@@ -29,6 +29,7 @@ const ORDERS = [
   { cmd: 'attack', label: 'Attack', cursor: 'cursorattack', glyph: '🎯' },
   { cmd: 'patrol', label: 'Patrol', cursor: 'cursorpatrol', glyph: '🚩' },
   { cmd: 'repair', label: 'Repair', cursor: 'cursorrepair', glyph: '🔧' },
+  { cmd: 'reclaim', label: 'Reclaim', cursor: 'cursorreclamate', glyph: '♻' },
   { cmd: 'stop',   label: 'Stop',   cursor: null,           glyph: '■' },
 ]
 
@@ -49,9 +50,11 @@ function capabilities(units) {
   const mobile = (m) => m && m.canMove !== false
   const armed = (m) => m && Array.isArray(m.weapons) && m.weapons.some((w) => w && w.name)
   const builder = (m) => mobile(m) && Array.isArray(m.buildOptions) && m.buildOptions.length > 0
+  // A reclaimer is a mobile builder carrying the FBI canreclamate bit.
+  const reclaimer = (m) => mobile(m) && !!(m && m.canReclaim)
   const all = (fn) => units.length > 0 && units.every((u) => fn(u && u.meta))
   const move = all(mobile)
-  return { move, attack: all(armed), patrol: move, repair: all(builder), stop: units.length > 0 }
+  return { move, attack: all(armed), patrol: move, repair: all(builder), reclaim: all(reclaimer), stop: units.length > 0 }
 }
 
 function dispatch(view, cmd) {

@@ -1300,7 +1300,7 @@ export class SandboxView {
   //                               arm-then-target semantics).
   setPendingCommand(cmd) {
     const valid = (cmd === 'move' || cmd === 'attack' || cmd === 'patrol' ||
-                   cmd === 'repair' || cmd === 'load' || cmd === 'unload' ||
+                   cmd === 'repair' || cmd === 'reclaim' || cmd === 'load' || cmd === 'unload' ||
                    cmd === 'primary' || cmd === 'secondary' || cmd === 'tertiary')
     // Load/Unload only make sense with a transport in the selection.
     if ((cmd === 'load' || cmd === 'unload') && this.#selectedTransports().length === 0) {
@@ -1331,9 +1331,10 @@ export class SandboxView {
       const what = (cmd === 'move') ? 'a destination'
         : (cmd === 'patrol') ? 'patrol waypoints (Esc to finish)'
           : (cmd === 'repair') ? 'a unit to finish building'
-            : (cmd === 'load') ? 'a unit to pick up'
-              : (cmd === 'unload') ? 'a drop point'
-                : 'a target unit'
+            : (cmd === 'reclaim') ? 'a unit, wreck or feature to reclaim'
+              : (cmd === 'load') ? 'a unit to pick up'
+                : (cmd === 'unload') ? 'a drop point'
+                  : 'a target unit'
       const label = cmd[0].toUpperCase() + cmd.slice(1)
       this.#setStatus(`${label} — click ${what}.`)
     }
@@ -2244,6 +2245,25 @@ export class SandboxView {
       }
       return
     }
+    if (this._pendingCmd === 'reclaim' && this.scene.selected.size > 0) {
+      // Reclaim consumes the clicked target for resources — friendly, enemy,
+      // wreck or feature alike. The armed command is an explicit force-order:
+      // it issues on whatever unit was clicked and never falls through to
+      // selection.
+      const hit = this.#pickUnitAt(sx, sy)
+      this._pendingCmd = null
+      if (this._armedCursor) this._armedCursor.setSlot(null)
+      this.#refreshDefaultCursor()
+      if (hit) {
+        const n = this.issueReclaim(hit)
+        this.#setStatus(n > 0
+          ? `Reclaim — ${n} builder(s) consuming ${hit.name}.`
+          : `Reclaim — ${hit.name} can't be reclaimed, or no reclaimer is selected.`)
+      } else {
+        this.#setStatus('Reclaim cancelled — click a unit, wreck or feature.')
+      }
+      return
+    }
     if (this._pendingCmd === 'move' && world && this.scene.selected.size > 0) {
       // issueMove fans the Move order out to every selected unit,
       // clears autonomous attack pursuit, preserves manual weapon
@@ -2880,6 +2900,22 @@ export class SandboxView {
     }
     if (n > 0) this.playUnitSoundRandom(builders[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return n
+  }
+
+  // issueReclaim sends every selected reclaimer (a builder with the FBI
+  // canreclamate bit) to consume the target unit / wreck / feature for
+  // resources. Friendly, enemy or neutral — reclaim ignores ownership. Returns
+  // the number of reclaimers dispatched. Shared by the armed Reclaim button and
+  // the right-click reclaim gesture.
+  issueReclaim(target) {
+    if (!target || target.dead) return 0
+    const reclaimers = this.getSelectedUnits().filter(
+      (u) => u && !u.dead && u !== target &&
+        u.meta && u.meta.canReclaim && u.meta.canMove !== false)
+    if (!reclaimers.length || typeof this.scene.source?.reclaim !== 'function') return 0
+    this.scene.source.reclaim(reclaimers.map((u) => u.id), target.id)
+    this.playUnitSoundRandom(reclaimers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
+    return reclaimers.length
   }
 
   // issueAttack arms the autonomous attack-loop on a unit target.

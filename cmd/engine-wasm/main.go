@@ -45,38 +45,39 @@ var (
 
 func main() {
 	api := map[string]any{
-		"create":       js.FuncOf(create),
-		"destroy":      js.FuncOf(destroy),
-		"addUnit":      js.FuncOf(addUnit),
-		"removeUnit":   js.FuncOf(removeUnit),
-		"submitMove":   js.FuncOf(submitMove),
-		"submitAttack": js.FuncOf(submitAttack),
-		"submitFire":   js.FuncOf(submitFire),
-		"submitStop":   js.FuncOf(submitStop),
-		"submitBuild":  js.FuncOf(submitBuild),
-		"canBuildAt":   js.FuncOf(queryCanBuildAt),
-		"submitPatrol": js.FuncOf(submitPatrol),
-		"submitStance": js.FuncOf(submitStance),
+		"create":             js.FuncOf(create),
+		"destroy":            js.FuncOf(destroy),
+		"addUnit":            js.FuncOf(addUnit),
+		"removeUnit":         js.FuncOf(removeUnit),
+		"submitMove":         js.FuncOf(submitMove),
+		"submitAttack":       js.FuncOf(submitAttack),
+		"submitFire":         js.FuncOf(submitFire),
+		"submitStop":         js.FuncOf(submitStop),
+		"submitBuild":        js.FuncOf(submitBuild),
+		"canBuildAt":         js.FuncOf(queryCanBuildAt),
+		"submitPatrol":       js.FuncOf(submitPatrol),
+		"submitStance":       js.FuncOf(submitStance),
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
-		"submitLoad":   js.FuncOf(submitLoad),
-		"submitRepair": js.FuncOf(submitRepair),
-		"submitUnload": js.FuncOf(submitUnload),
-		"setTerrain":   js.FuncOf(setTerrain),
-		"scheduleAt":   js.FuncOf(scheduleAt),
-		"restore":      js.FuncOf(restore),
-		"step":         js.FuncOf(step),
-		"stepTo":       js.FuncOf(stepTo),
-		"stepPacked":        js.FuncOf(stepPacked),
-		"stepToPacked":      js.FuncOf(stepToPacked),
-		"renderStatePacked": js.FuncOf(renderStatePacked),
-		"setUnitState":   js.FuncOf(setUnitState),
-		"playWeaponFire": js.FuncOf(playWeaponFire),
-		"setUnitActivation": js.FuncOf(setUnitActivation),
-		"renderState":    js.FuncOf(renderState),
-		"hash":           js.FuncOf(hashOf),
-		"tick":           js.FuncOf(tickOf),
-		"cobState":       js.FuncOf(cobState),
-		"exportSnapshot": js.FuncOf(exportSnapshot),
+		"submitLoad":         js.FuncOf(submitLoad),
+		"submitRepair":       js.FuncOf(submitRepair),
+		"submitReclaim":      js.FuncOf(submitReclaim),
+		"submitUnload":       js.FuncOf(submitUnload),
+		"setTerrain":         js.FuncOf(setTerrain),
+		"scheduleAt":         js.FuncOf(scheduleAt),
+		"restore":            js.FuncOf(restore),
+		"step":               js.FuncOf(step),
+		"stepTo":             js.FuncOf(stepTo),
+		"stepPacked":         js.FuncOf(stepPacked),
+		"stepToPacked":       js.FuncOf(stepToPacked),
+		"renderStatePacked":  js.FuncOf(renderStatePacked),
+		"setUnitState":       js.FuncOf(setUnitState),
+		"playWeaponFire":     js.FuncOf(playWeaponFire),
+		"setUnitActivation":  js.FuncOf(setUnitActivation),
+		"renderState":        js.FuncOf(renderState),
+		"hash":               js.FuncOf(hashOf),
+		"tick":               js.FuncOf(tickOf),
+		"cobState":           js.FuncOf(cobState),
+		"exportSnapshot":     js.FuncOf(exportSnapshot),
 		// Developer commands — sandbox-only script control for the Runtime panel.
 		"killAllThreads":  js.FuncOf(killAllThreads),
 		"killUnitThreads": js.FuncOf(killUnitThreads),
@@ -357,6 +358,17 @@ func submitRepair(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.Repair(uint32(args[1].Int()), uint32(args[2].Int()))))
+}
+
+// submitReclaim(handle, unitIds[], targetUnitId) -> execTick. Sends the
+// reclaimers to consume the target unit / wreck / feature for resources.
+func submitReclaim(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	ids := uint32Slice(args[1])
+	return int(inst.sess.Submit(order.Reclaim(ids, uint32(args[2].Int()))))
 }
 
 // submitLoad(handle, transportIds[], targetUnit) -> execTick. Sends the
