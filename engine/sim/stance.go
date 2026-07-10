@@ -24,16 +24,16 @@ import (
 //
 // FIDELITY SEAM — acquisition model. This is the minimal model firing
 // correctness needs: deterministic nearest-enemy within reach, explicit
-// orders sticky over autonomous picks. The engines' full acquisition is
-// richer and remains unimplemented here: TA staggers each unit's scan to
-// ~once a second on a per-player round-robin, scores candidates with
-// rand(d^2) draws (stochastically nearest), buckets targets through the
-// per-slot badTargetCategory masks (deprioritized, not excluded), honours
-// shootme/noChaseCategory/kamikaze special cases, and gates everything on
-// the vision/radar layers (cloaked units untargetable, radar dots only with
-// a targeting facility); TA:K paces its re-scan by shared-stream RNG draws.
-// Those pieces land with the vision/LOS subsystem — until then this scan is
-// omniscient and draw-free, a documented divergence.
+// orders sticky over autonomous picks, GATED on the per-side vision layer
+// (sight.go) so a unit only auto-acquires enemies it currently sees. The
+// engines' full acquisition is richer and remains unimplemented here: TA
+// staggers each unit's scan to ~once a second on a per-player round-robin,
+// scores candidates with rand(d^2) draws (stochastically nearest), buckets
+// targets through the per-slot badTargetCategory masks (deprioritized, not
+// excluded), and honours shootme/noChaseCategory/kamikaze special cases;
+// TA:K paces its re-scan by shared-stream RNG draws. Those pieces are a
+// documented divergence; this scan is draw-free and picks the nearest visible
+// enemy.
 
 // Convenience aliases so the sim reads the same names the order package
 // defines.
@@ -214,6 +214,15 @@ func (w *World) nearestEnemy(u *Unit, within, homeLimit fixed.Fixed) *Unit {
 		o := w.units[id]
 		if o == nil || o == u || o.Dead || o.Side == u.Side || o.underConstruction() ||
 			o.carriedBy != 0 {
+			continue
+		}
+		// Vision gate: a unit only auto-acquires enemies its side currently
+		// has in line of sight. A radar-only contact (detected, not visible)
+		// is a blip the unit cannot auto-fire on — TA gates that on a
+		// Targeting Facility the sandbox does not model (sight.go). Explicit
+		// Attack / force-fire orders are not routed here, so they still bypass
+		// the gate.
+		if !w.autoVisible(u.Side, o) {
 			continue
 		}
 		d := u.loco.Pos.DistTo(o.loco.Pos)

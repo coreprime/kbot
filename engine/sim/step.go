@@ -90,6 +90,10 @@ func (w *World) Step(rt Runtime) {
 			}
 		}
 	}
+	// Refresh the per-side vision layer before the per-unit pass so autonomous
+	// acquisition (stepStance) only sees enemies its side currently has in
+	// line of sight. Pure function of unit positions — no RNG, no hash effect.
+	w.updateSight()
 	for _, id := range w.order {
 		u := w.units[id]
 		if u == nil || u.Dead {

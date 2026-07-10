@@ -47,6 +47,15 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.MaxSlope = getInt(o, "maxSlope")
 	m.MaxWaterDepth = getInt(o, "maxWaterDepth")
 	m.MinWaterDepth = getInt(o, "minWaterDepth")
+	// Vision figures (world units): the sight radius each unit reveals to its
+	// side and the radar/sonar/jam radii it contributes, gating autonomous
+	// acquisition (engine/sim/sight.go). Absent keys read as 0 — a unit with
+	// no sight data leaves its side omniscient, so a meta that predates the
+	// vision plumbing behaves exactly as before.
+	m.SightDistance = getInt(o, "sightDistance")
+	m.RadarDistance = getInt(o, "radarDistance")
+	m.SonarDistance = getInt(o, "sonarDistance")
+	m.RadarDistanceJam = getInt(o, "radarDistanceJam")
 	m.CostMetal = fixed.FromFloat(getFloat(o, "costMetal"))
 	m.CostEnergy = fixed.FromFloat(getFloat(o, "costEnergy"))
 	m.CostMana = fixed.FromFloat(getFloat(o, "costMana"))
@@ -883,6 +892,9 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 	if len(s.Features) > 0 {
 		out["features"] = featuresToJS(s.Features)
 	}
+	if v := visibilityToJS(s.Visibility); !v.IsUndefined() {
+		out["visibility"] = v
+	}
 	// Per-side resource usage for the HUD (infinite pools — display only).
 	if len(s.Resources) > 0 {
 		res := make([]any, 0, len(s.Resources))
@@ -1093,6 +1105,50 @@ func featuresToJS(fs []frame.FeatureState) []any {
 	return out
 }
 
+// visibilityToJS marshals the per-side fog-of-war grid the render lane draws.
+// The shape is:
+//
+//	{ cols, rows, cellWU, sides: [ { side, sight, radar, explored } ] }
+//
+// where each of sight / radar / explored is a row-major Uint8Array of length
+// cols*rows — 1 where the layer covers cell (col,row), 0 elsewhere. Cell
+// (col,row) covers world X in [col*cellWU, (col+1)*cellWU) and likewise Z.
+// The renderer picks its viewer side's entry to draw the sight/radar mask and
+// dims the explored-but-not-visible cells. Undefined when no map is installed
+// (no fog without terrain). Read-only render state; never networked.
+func visibilityToJS(v *frame.VisibilityState) js.Value {
+	if v == nil || len(v.Sides) == 0 {
+		return js.Undefined()
+	}
+	sides := make([]any, 0, len(v.Sides))
+	for i := range v.Sides {
+		sv := &v.Sides[i]
+		sides = append(sides, map[string]any{
+			"side":     sv.Side,
+			"sight":    bytesToJS(sv.Sight),
+			"radar":    bytesToJS(sv.Radar),
+			"explored": bytesToJS(sv.Explored),
+		})
+	}
+	return js.ValueOf(map[string]any{
+		"cols":   v.Cols,
+		"rows":   v.Rows,
+		"cellWU": v.CellWU.Float(),
+		"sides":  sides,
+	})
+}
+
+// bytesToJS copies a Go byte slice into a fresh Uint8Array, or null when
+// empty, for the fog-layer transfer.
+func bytesToJS(b []uint8) js.Value {
+	if len(b) == 0 {
+		return js.Null()
+	}
+	arr := js.Global().Get("Uint8Array").New(len(b))
+	js.CopyBytesToJS(arr, b)
+	return arr
+}
+
 func unitToJS(u *frame.UnitState) map[string]any {
 	pieces := piecesToPackedJS(u.Pieces)
 	out := map[string]any{
@@ -1120,6 +1176,12 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"fireMode":       int(u.FireMode),
 		"selfDestructMs": int(u.SelfDestructMs),
 		"piecesPacked":   pieces,
+		// Per-side vision bitmasks (bit s = visible to / detected by side s).
+		// The renderer, knowing its viewer side, draws the full model when the
+		// visible bit is set, a radar blip when only the detected bit is set,
+		// and hides the unit otherwise (engine/sim/sight.go).
+		"visibleMask":  int(u.VisibleMask),
+		"detectedMask": int(u.DetectedMask),
 	}
 	// Transport links, for the cargo badge + carried-unit gestures.
 	if u.CarriedBy != 0 {

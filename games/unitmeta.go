@@ -150,6 +150,14 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	m.MaxSlope = info.MaxSlope
 	m.MaxWaterDepth = info.MaxWaterDepth
 	m.MinWaterDepth = info.MinWaterDepth
+	// Vision figures (FBI, world units): the sight radius the unit reveals to
+	// its side each tick and the radar/sonar/jam radii it contributes (the
+	// sim's sight.go gates autonomous acquisition on them). radardistancejam
+	// is a TA-only inline field, so it reads through the ta.UnitInfo view.
+	m.SightDistance = info.SightDistance
+	m.RadarDistance = info.RadarDistance
+	m.SonarDistance = info.SonarDistance
+	m.RadarDistanceJam = info.RadarDistanceJam
 	applyLocoInfo(m, info)
 	applySpecialFlags(m, info)
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))

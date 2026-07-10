@@ -69,6 +69,38 @@ type UnitState struct {
 	// for a transport, the passengers aboard in load order.
 	CarriedBy uint32
 	Carrying  []uint32
+	// VisibleMask / DetectedMask are the per-side vision bits (bit s set =
+	// this unit is in side s's true line of sight / registers on side s's
+	// radar as a blip). A viewer renders this unit's full model when its own
+	// side's VisibleMask bit is set; else, if the DetectedMask bit is set, a
+	// radar blip (position, no identity); else it is fogged and hidden. A unit
+	// is always visible to its own side.
+	VisibleMask  uint16
+	DetectedMask uint16
+}
+
+// SideVisibility is one side's fog-of-war layers over the LOS grid (see
+// VisibilityState). Each slice is row-major, len = Cols*Rows, one byte per
+// cell: 1 where the layer covers the cell, 0 elsewhere. Sight is the live
+// line-of-sight this tick; Radar the live radar/sonar coverage; Explored the
+// sticky "seen at least once" layer that never clears.
+type SideVisibility struct {
+	Side     int
+	Sight    []uint8
+	Radar    []uint8
+	Explored []uint8
+}
+
+// VisibilityState is the per-side fog-of-war grid for the render lane, present
+// only when a map is installed (nil otherwise — no fog without terrain). The
+// grid is axis-aligned XZ at CellWU per cell (32 world units, one LOS tile);
+// cell (col,row) covers world X in [col·CellWU, (col+1)·CellWU) and likewise
+// Z. It is derived render state, never hashed or sent over the wire.
+type VisibilityState struct {
+	Cols   int
+	Rows   int
+	CellWU fixed.Fixed
+	Sides  []SideVisibility
 }
 
 // ResourceState is one side's economy figures for the HUD: totals spent so
@@ -308,4 +340,8 @@ type Snapshot struct {
 	// sacred stones, wrecks) for the render lane to draw and offer as
 	// reclaim/resurrect targets.
 	Features []FeatureState
+	// Visibility is the per-side fog-of-war grid, nil when no map is installed.
+	// Render-only; the per-unit VisibleMask/DetectedMask carry the same vision
+	// decision at unit granularity.
+	Visibility *VisibilityState
 }

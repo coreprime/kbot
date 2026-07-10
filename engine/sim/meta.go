@@ -130,6 +130,20 @@ type UnitMeta struct {
 	// means unknown — damage then applies at face value, the legacy scale.
 	MaxHealth fixed.Fixed
 
+	// Vision figures (FBI, world units). SightDistance is the radius the unit
+	// reveals on its side's line-of-sight layer each tick; RadarDistance /
+	// SonarDistance the radii it contributes to its side's radar/sonar
+	// coverage (TA only — TA:K parses radardistance but runs no detection
+	// layer, so it is vestigial there). RadarDistanceJam is the radius over
+	// which the unit blanks enemy radar contacts (TA jamming). A zero
+	// SightDistance marks the vision data absent: the side stays omniscient
+	// (no fog) so metas that predate the vision plumbing behave as before.
+	// See sight.go for the whole subsystem.
+	SightDistance    int
+	RadarDistance    int
+	SonarDistance    int
+	RadarDistanceJam int
+
 	// Combat identity keys, filled by games.EnrichCombatMeta. ObjectName is
 	// the TA FBI objectname (falling back to unitname), lower-cased — the key
 	// a TA weapon's per-target [DAMAGE] table matches when THIS unit is the

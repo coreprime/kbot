@@ -1,6 +1,9 @@
 package sim
 
-import "github.com/coreprime/kbot/engine/frame"
+import (
+	"github.com/coreprime/kbot/engine/fixed"
+	"github.com/coreprime/kbot/engine/frame"
+)
 
 // Snapshot builds the render snapshot for the current tick and drains the
 // events accumulated since the last call. The local renderer consumes this; it
@@ -55,6 +58,10 @@ func (w *World) Snapshot() frame.Snapshot {
 			SelfDestructMs: selfDMs,
 			CarriedBy:      u.carriedBy,
 			Carrying:       u.carrying,
+			// Own side is always visible, even before the first Step has run
+			// updateSight (a freshly placed unit rendered via renderState).
+			VisibleMask:  u.visibleMask | maskBit(u.Side),
+			DetectedMask: u.detectedMask,
 		})
 	}
 	var projos []frame.ProjectileState
@@ -124,13 +131,70 @@ func (w *World) Snapshot() frame.Snapshot {
 	evts := w.events
 	w.events = nil
 	return frame.Snapshot{
-		Tick:      w.tick,
-		Units:     units,
-		Projos:    projos,
-		Events:    evts,
-		Resources: resources,
-		Features:  features,
+		Tick:       w.tick,
+		Units:      units,
+		Projos:     projos,
+		Events:     evts,
+		Resources:  resources,
+		Features:   features,
+		Visibility: w.visibilityState(),
 	}
+}
+
+// maskBit returns the per-side vision bit for a side (0 for an out-of-range
+// side so a stray side index can't shift out of the uint16).
+func maskBit(side int) uint16 {
+	if side < 0 || side >= maxSides {
+		return 0
+	}
+	return 1 << uint(side)
+}
+
+// visibilityState builds the render lane's per-side fog grid, or nil when no
+// map is installed. Only sides that field a vision source contribute a layer,
+// so an empty side adds nothing. The byte slices reference the live fog
+// buffers — the caller marshals them out immediately (the next tick rebuilds
+// in place), never retaining the slice across a Step.
+func (w *World) visibilityState() *frame.VisibilityState {
+	if w.fogCols == 0 || w.fogRows == 0 {
+		return nil
+	}
+	var sides []frame.SideVisibility
+	for s := 0; s < maxSides; s++ {
+		if len(w.fogSight[s]) == 0 {
+			continue
+		}
+		// Skip a side that has never seen anything (all layers empty), so the
+		// export carries only meaningful players.
+		if !w.sideSightAware[s] && !w.sideRadarAware[s] && !anyByteSet(w.fogSeen[s]) {
+			continue
+		}
+		sides = append(sides, frame.SideVisibility{
+			Side:     s,
+			Sight:    w.fogSight[s],
+			Radar:    w.fogRadar[s],
+			Explored: w.fogSeen[s],
+		})
+	}
+	if len(sides) == 0 {
+		return nil
+	}
+	return &frame.VisibilityState{
+		Cols:   w.fogCols,
+		Rows:   w.fogRows,
+		CellWU: fixed.FromInt(losCellWU),
+		Sides:  sides,
+	}
+}
+
+// anyByteSet reports whether any cell in a fog layer is set.
+func anyByteSet(b []uint8) bool {
+	for _, v := range b {
+		if v != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Hash returns a deterministic digest of the authoritative unit state. The

@@ -128,6 +128,9 @@ func (w *World) SetTerrain(t *Terrain) {
 		return
 	}
 	w.terrain = t
+	// Resize the per-side fog layers to the new map (or drop them when
+	// cleared): the LOS grid tracks the installed extent (sight.go).
+	w.ensureFogGrids()
 }
 
 // Terrain returns the installed height field (nil = flat sandbox grid).

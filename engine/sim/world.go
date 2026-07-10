@@ -289,6 +289,15 @@ type Unit struct {
 
 	weapons [3]weaponSlot
 
+	// visibleMask / detectedMask are the per-side vision bits updateSight
+	// stamps each tick (bit s set = this unit is in side s's true LOS /
+	// registers on side s's radar as a blip). Derived from position every
+	// tick, so never hashed or serialised. The acquisition gate reads
+	// visibleMask; the render lane reads both to draw fog and hide unseen
+	// enemies (sight.go).
+	visibleMask  uint16
+	detectedMask uint16
+
 	// Veterancy counters. kills increments when a unit this one last damaged
 	// dies (fully built, enemy) and drives the TA consumers: +6 %/level
 	// damage dealt, −4 %/level damage taken, −6 %/level reload, the
@@ -468,6 +477,23 @@ type World struct {
 	// (destroy-plus-respawn) for a post-loop drain so RemoveUnit's iteration
 	// mutation never disturbs the per-unit tick walk (specials.go).
 	pendingTransfers []pendingTransfer
+
+	// Vision layer (sight.go), rebuilt every tick from unit positions. All of
+	// it is derived state — a pure function of the hashed unit set — so none
+	// of it is hashed or serialised. sightSrc/radarSrc are the per-side source
+	// lists (reused across ticks); sideSightAware/sideRadarAware mark a side
+	// that fields any vision-bearing unit (a side with none stays omniscient);
+	// the fog* grids are the per-side LOS fog layers exposed to the render
+	// lane, sized to the installed map (nil without one).
+	sightSrc       [maxSides][]sightSource
+	radarSrc       [maxSides][]radarSource
+	sideSightAware [maxSides]bool
+	sideRadarAware [maxSides]bool
+	fogCols        int
+	fogRows        int
+	fogSight       [maxSides][]uint8
+	fogRadar       [maxSides][]uint8
+	fogSeen        [maxSides][]uint8
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).
