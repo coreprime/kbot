@@ -1,0 +1,72 @@
+# TA:K cloak: a cloaked unit drains its UNIT-PRIVATE mana pool per tick (not
+# the player pool), stored cloakcost/30 at parse; the private pool spawns EMPTY
+# and recharges for free at manarechargerate/30 per tick. While cloaked the net
+# per-tick change is (recharge - cloakcost)/30 (specials.md §5.2, §7.1).
+# The Spy (ARASPY) never runs dry here, so it stays cloaked; the pool bleeds at
+# the net rate. mind-control/spell drains and the 90-tick relock-on-shortfall
+# share the same private pool but are exercised elsewhere.
+# Ground truth: specials spec §5.2, §7.1.
+name: tak-cloak
+game: tak
+system: specials
+spec: specials.md §5.2, §7.1
+description: >-
+  The Taros Spy (ARASPY: MaxMana=1000, ManaRechargeRate=10, CloakCost=14)
+  recharges its private pool for free, then cloaks at frame 60 and bleeds
+  the pool at the net (10-14)/30 = -0.1333 mana/tick.
+seed: 1
+duration: 200
+units:
+  - alias: spy
+    type: araspy
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 60
+    do: cloak
+    id: cloak-order
+    unit: spy
+checks:
+  - at: 59
+    unit: spy
+    observable: unit.private_mana
+    expect: 19
+    label: free private-mana recharge before cloaking
+    derivation: |
+      The private pool spawns EMPTY and recharges free at
+      ManaRechargeRate/30 = 10/30 = 0.33333 mana/tick (never debiting the
+      player pool). By frame 59 (59 recharges): 59 * 0.33333 = 19.67 ->
+      truncated to 19. No cloak yet, so no drain.
+    requires_action: cloak-order
+  - at: 90
+    unit: spy
+    observable: unit.private_mana
+    expect: 15
+    label: private-mana drain over 30 cloaked ticks
+    derivation: |
+      Cloak is issued at frame 60; from then the pool changes by
+      (recharge - cloakcost)/30 = (10 - 14)/30 = -0.13333/tick. From the
+      ~19.53 at frame 60 (that tick's first drain nets ~0), 30 cloaked
+      ticks to frame 90 remove 30*0.13333 = 4 -> ~15.53 -> 15.
+    requires_action: cloak-order
+  - at: 150
+    unit: spy
+    observable: unit.private_mana
+    expect: 7
+    label: continued private-mana drain, still cloaked
+    derivation: |
+      90 cloaked ticks from frame 60 to 150 remove 90*0.13333 = 12 from
+      the ~19.53 at frame 60 -> ~7.53 -> 7. The pool never reached zero, so
+      no decloak / no 90-tick relock fired.
+    requires_action: cloak-order
+  - at: 150
+    unit: spy
+    observable: unit.cloaked
+    expect: 1
+    label: unit remains cloaked while the private pool holds
+    derivation: |
+      The private pool stayed positive throughout, so the cloak stance held
+      (a shortfall would decloak and set a 90-tick relock lockout,
+      specials.md §5.2). At frame 150 the unit is still cloaked.
+    requires_action: cloak-order

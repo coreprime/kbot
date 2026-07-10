@@ -297,6 +297,23 @@ func (st *runState) apply(a ActionSpec) {
 			return
 		}
 		st.world.ApplyOrder(order.Stance([]uint32{unit}, mv, fr))
+	case "set_paralyze":
+		// Measurement hook: inject paralyze ticks directly so the accumulator
+		// cap (1800) and decay grade on the mechanic's own math, free of the
+		// paralyzer firing chain's aim/reload/flight variables.
+		st.world.InjectParalyze(unit, a.Amount)
+	case "set_health":
+		// Measurement hook: pin a unit's health-bar percent (Amount) so a
+		// heal mechanic's restoration is observable from a known deficit.
+		st.world.SetHealthPercent(unit, a.Amount)
+	case "capture":
+		st.world.ApplyOrder(order.Capture([]uint32{unit}, target))
+	case "reclaim":
+		st.world.ApplyOrder(order.Reclaim([]uint32{unit}, target))
+	case "cloak":
+		st.world.ApplyOrder(order.Cloak([]uint32{unit}))
+	case "self_destruct":
+		st.world.ApplyOrder(order.SelfDestruct([]uint32{unit}))
 	default:
 		// The order vocabulary has no such command — the mechanic is absent
 		// from the sandbox (cloak, capture, ...). That absence is the finding.

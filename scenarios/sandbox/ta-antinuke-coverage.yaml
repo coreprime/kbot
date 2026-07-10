@@ -1,0 +1,71 @@
+# TA anti-nuke coverage: the interception acquisition test is a 2D SQUARE box,
+# |dx| <= coverage AND |dz| <= coverage — NOT a circle and NOT 3D (specials.md
+# §6.1.2). The full interceptor-vs-projectile pipeline is not modelled (DELTA
+# §7); the geometry of the coverage test — the one novel invariant — is graded
+# through the coverage_covers accessor. The corner case is decisive: a point
+# well outside the circular radius is still covered because the box is
+# axis-aligned.
+# Ground truth: specials spec §6.1.2.
+name: ta-antinuke-coverage
+game: ta
+system: specials
+spec: specials.md §6.1.2
+description: >-
+  An Advanced Missile Defense (ARMAMD, AMD_ROCKET coverage=2000) at world
+  (1000,1000). Its square coverage box covers |dx|<=2000 AND |dz|<=2000.
+seed: 1
+duration: 3
+units:
+  - alias: amd
+    type: armamd
+    side: 0
+    pos: [1000, 1000]
+    heading: 0
+checks:
+  - at: 1
+    unit: amd
+    observable: unit.coverage_covers
+    args: [1500, 1500]
+    expect: 1
+    label: point inside the box is covered
+    derivation: |
+      dx = |1500-1000| = 500 <= 2000 AND dz = |1500-1000| = 500 <= 2000
+      -> covered (1).
+  - at: 1
+    unit: amd
+    observable: unit.coverage_covers
+    args: [3100, 1000]
+    expect: 0
+    label: point beyond the box on X is not covered
+    derivation: |
+      dx = |3100-1000| = 2100 > 2000 -> not covered (0), even though dz=0.
+      Both axes must be within coverage.
+  - at: 1
+    unit: amd
+    observable: unit.coverage_covers
+    args: [1000, 3100]
+    expect: 0
+    label: point beyond the box on Z is not covered
+    derivation: |
+      dz = |3100-1000| = 2100 > 2000 -> not covered (0), even though dx=0.
+  - at: 1
+    unit: amd
+    observable: unit.coverage_covers
+    args: [2900, 2900]
+    expect: 1
+    label: box corner covers what a circle would miss
+    derivation: |
+      dx = dz = |2900-1000| = 1900 <= 2000 -> covered (1). The Euclidean
+      distance from (1000,1000) to (2900,2900) is sqrt(1900^2+1900^2) =
+      2687 > 2000, so a CIRCULAR coverage of radius 2000 would EXCLUDE
+      this point. The square box includes it — the decisive proof the test
+      is |dx|<=cov AND |dz|<=cov, not a radial check.
+  - at: 1
+    observable: world.stockpile_cap
+    expect: 200
+    label: per-slot stockpile ceiling is 200
+    derivation: |
+      A stockpile weapon's per-slot stock byte saturates at 200
+      (specials.md §6.1.1) — the ceiling the build-up counts toward. The
+      invariant is pinned here alongside the interceptor's coverage
+      geometry (both belong to the anti-nuke / stockpile system).

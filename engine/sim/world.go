@@ -224,6 +224,28 @@ type Unit struct {
 	// Ctrl+D toggles it; the countdown surfaces on the render snapshot.
 	selfDAtMs int64
 
+	// Special-mechanic order state (Block 6; specials.go).
+	//
+	// capTarget / capAccum drive an active capture channel: capTarget is the
+	// victim, capAccum the tick accumulator that climbs to the once-computed
+	// capTime (0 = no capture running). reclaimTarget / reclaimAccum drive an
+	// active reclaim: the accumulator pulses damage every 16 ticks.
+	capTarget     uint32
+	capAccum      int
+	capTime       int
+	reclaimTarget uint32
+	reclaimAccum  int
+	// cloaked marks the unit's cloak stance (a cloak order set it). cloakLock
+	// is a TA:K re-cloak lockout tick (shortfall relock); relit each shortfall.
+	cloaked   bool
+	cloakLock uint64
+	// paralyzeAccum is the decaying paralyze tick count (§7.2), capped at
+	// 1800; while >0 the unit is stunned (steps no movement/weapons).
+	paralyzeAccum int
+	// privMana is the TA:K unit-private mana pool (+0xd8): spawns empty,
+	// recharges free per tick to Meta.MaxMana, drained by spells and cloak.
+	privMana float32
+
 	// Transport state. carriedBy pins this unit to a carrier (it is inert,
 	// uncollidable and untargetable while aboard); a transport's own
 	// carrying list, active pickup target and pending drop site drive
@@ -391,6 +413,11 @@ type World struct {
 	// move spreads its searches over a few ticks instead of one hitch.
 	pathScratch *pathScratch
 	pathBudget  int
+
+	// pendingTransfers queues completed capture/conversion ownership changes
+	// (destroy-plus-respawn) for a post-loop drain so RemoveUnit's iteration
+	// mutation never disturbs the per-unit tick walk (specials.go).
+	pendingTransfers []pendingTransfer
 }
 
 // maxSides is the per-side resource-tally array bound (TA's 8 team slots).
@@ -1769,6 +1796,20 @@ func (w *World) ApplyOrder(o order.Order) {
 		for _, id := range o.UnitIDs {
 			if t := w.units[id]; t != nil && !t.Dead {
 				w.applyUnload(t, o.Target)
+			}
+		}
+	case order.KindCapture:
+		for _, id := range o.UnitIDs {
+			w.applyCapture(w.units[id], o.TargetUnit)
+		}
+	case order.KindReclaim:
+		for _, id := range o.UnitIDs {
+			w.applyReclaim(w.units[id], o.TargetUnit)
+		}
+	case order.KindCloak:
+		for _, id := range o.UnitIDs {
+			if u := w.units[id]; u != nil && !u.Dead && !u.underConstruction() && u.Meta != nil && u.Meta.CanCloak {
+				u.cloaked = !u.cloaked
 			}
 		}
 	case order.KindBuild:

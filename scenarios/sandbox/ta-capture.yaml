@@ -26,6 +26,11 @@ units:
     heading: 0
 actions:
   - at: 0
+    do: stance
+    unit: com
+    move: hold
+    fire: hold
+  - at: 0
     do: capture
     id: capture-order
     unit: com
@@ -43,5 +48,31 @@ checks:
       192 ticks of channel (+ a few frames of order startup). At frame
       230 the capture has completed: a fresh side-0 ARMSOLAR exists and
       the ORIGINAL side-1 unit was destroyed (kind 4, no wreck) — its
-      alive flag reads 0. No resource cost anywhere in the channel.
+      alive flag reads 0. The capturer holds fire so only the capture
+      channel (not its laser) accounts for the original's removal. No
+      resource cost anywhere in the channel.
+    requires_action: capture-order
+  - at: 230
+    side: 0
+    unit: armsolar
+    observable: side.unit_count
+    expect: 1
+    label: solar respawned under the capturer's side
+    derivation: |
+      Ownership transfer is destroy-plus-respawn (specials.md §2.1): the
+      captured ARMSOLAR reappears under side 0 (the capturer's side) at the
+      same position. Side 0 opened with only the Commander (no armsolar), so
+      after the capture it owns exactly one armsolar.
+    requires_action: capture-order
+  - at: 230
+    side: 1
+    unit: armsolar
+    observable: side.unit_count
+    expect: 0
+    label: original owner loses the unit
+    derivation: |
+      The captured unit left side 1: side 1 owned one armsolar before the
+      capture and zero after (the id was destroyed, the body respawned
+      under side 0). The flip is exact and the kills counter is NOT carried
+      across (a fresh body).
     requires_action: capture-order

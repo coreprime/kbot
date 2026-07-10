@@ -305,6 +305,16 @@ func (w *World) settleTA() {
 		rotateAxis(&u.econE, ratioNewE[s], ratioCarryE[s])
 		rotateAxis(&u.econM, ratioNewM[s], ratioCarryM[s])
 	}
+
+	// TA cloak drain runs once per settle, after income has landed and the
+	// pools clamped: an all-or-nothing energy debit of ftol(cloakcost)
+	// (stationary) / ftol(cloakcostmoving) (moving) against the settled stock
+	// (specials.md §5.1). Shortfall decloaks the unit.
+	for _, id := range w.order {
+		if u := w.units[id]; u != nil && !u.Dead && u.cloaked {
+			w.stepCloakSettle(u)
+		}
+	}
 }
 
 // taUnitIncomeTick is one unit's income pass at the settle, the branch
@@ -362,8 +372,9 @@ func (w *World) taUnitIncomeTick(u *Unit, prodE, prodM *float64) {
 		*prodE += float64(ec.EnergyMake)
 		*prodM += float64(ec.MetalMake)
 	}
-	// Cloak drain would run here (all-or-nothing energy, once per settle);
-	// cloak is Block 6's mechanic and stays unmodelled with it.
+	// The cloak energy drain runs once per settle at the tail of settleTA,
+	// after this window's income has landed and the pools have clamped
+	// (specials.md §5.1) — see stepCloakSettle.
 }
 
 // settleAxis runs one axis's settle: avail = production + stored, the

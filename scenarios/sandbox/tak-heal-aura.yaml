@@ -1,0 +1,70 @@
+# TA:K heal aura (AdjustJoy): a priest heals nearby allies every 30 ticks with
+# the falloff polarity INVERTED vs every other falloff in either engine — full
+# effect at the EDGE of the radius, EdgeEffectiveness weighting the CENTER
+# (specials.md §7.4). Each pulse heals maxHP*(factor/N)/buildtime, with
+# factor = Adjustment*factor0 and factor0 = Edge + (1-Edge)*(dist/radius).
+# Two identically-damaged allies at different ranges prove the inversion: the
+# one AT the rim heals MORE than the one halfway in.
+# Ground truth: specials spec §7.4.
+name: tak-heal-aura
+game: tak
+system: specials
+spec: specials.md §7.4
+description: >-
+  A Priest (ARAPRIES AdjustJoy: adjustment=250, radius=200, edge=0.6,
+  affectsenemy=0) at (500,500) heals two damaged Bowmen (ARABOW:
+  maxdamage=1350, buildtime=170), one at the rim (dist 200) and one at mid
+  (dist 100), both pre-damaged to 10% HP.
+seed: 1
+duration: 40
+units:
+  - alias: priest
+    type: arapries
+    side: 0
+    pos: [500, 500]
+    heading: 0
+  - alias: rim
+    type: arabow
+    side: 0
+    pos: [500, 700]
+    heading: 0
+  - alias: mid
+    type: arabow
+    side: 0
+    pos: [500, 600]
+    heading: 0
+actions:
+  - at: 0
+    do: set_health
+    unit: rim
+    amount: 10
+  - at: 0
+    do: set_health
+    unit: mid
+    amount: 10
+checks:
+  - at: 30
+    unit: rim
+    observable: unit.hp
+    expect: 1127
+    label: rim ally heals fullest (inverted falloff)
+    derivation: |
+      dist(priest, rim) = 200 = radius, so factor0 = Edge + (1-Edge)*
+      (200/200) = 0.6 + 0.4*1.0 = 1.0 (FULL at the edge). factor =
+      Adjustment*factor0 = 250*1.0 = 250. Two eligible built allies -> N=2.
+      One 30-tick pulse heals maxHP*(factor/N)/buildtime =
+      1350*(250/2)/170 = 1350*125/170 = 992.6 HP as a percent add:
+      992.6*100/1350 = 73.53% -> health 10% + 73.53% = 83.53% -> HP =
+      83.53%*1350 = 1127.
+  - at: 30
+    unit: mid
+    observable: unit.hp
+    expect: 929
+    label: mid ally heals less (center is weaker)
+    derivation: |
+      dist(priest, mid) = 100 = radius/2, so factor0 = 0.6 + 0.4*
+      (100/200) = 0.6 + 0.2 = 0.8 (weaker toward the centre). factor =
+      250*0.8 = 200. heal = 1350*(200/2)/170 = 1350*100/170 = 794.1 HP ->
+      58.82% -> health 10% + 58.82% = 68.82% -> HP = 929. Because the mid
+      ally (closer to the priest) heals LESS than the rim ally (1127), the
+      falloff polarity is inverted exactly as §7.4 pins it.

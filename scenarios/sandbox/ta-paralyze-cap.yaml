@@ -1,0 +1,53 @@
+# Paralyze accumulator: a paralyzer weapon's damage accumulates a decaying tick
+# count on the victim's Paralyze ORDER, capped at 0x708 = 1800 ticks (60 s);
+# the value decrements one per tick and the unit is frozen while it is positive
+# (specials.md §7.2). The set_paralyze measurement hook injects the amount
+# directly, so the cap and the decay are graded on the accumulator's own math
+# without the paralyzer firing chain's aim/reload/flight variables.
+# Ground truth: specials spec §7.2.
+name: ta-paralyze-cap
+game: ta
+system: specials
+spec: specials.md §7.2
+description: >-
+  Two paralyze applications of 1000 ticks each are injected onto one unit;
+  the accumulator clamps to the 1800-tick cap and then decays one per tick.
+seed: 1
+duration: 100
+units:
+  - alias: victim
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: set_paralyze
+    id: para-1
+    unit: victim
+    amount: 1000
+  - at: 0
+    do: set_paralyze
+    unit: victim
+    amount: 1000
+checks:
+  - at: 0
+    unit: victim
+    observable: unit.paralyze_ticks
+    expect: 1800
+    label: accumulator clamps to the 1800-tick cap
+    derivation: |
+      Two applications of 1000 sum to 2000, clamped to the 0x708 = 1800
+      tick (60 s) cap (specials.md §7.2). At frame 0 (before any decay)
+      the accumulator reads exactly 1800.
+    requires_action: para-1
+  - at: 50
+    unit: victim
+    observable: unit.paralyze_ticks
+    expect: 1750
+    label: accumulator decays one per tick
+    derivation: |
+      The value is a decaying tick count: -1 per tick. From 1800 at frame
+      0, fifty ticks to frame 50 leave 1800 - 50 = 1750. The unit is
+      frozen (steps no orders or weapons) the whole while.
+    requires_action: para-1

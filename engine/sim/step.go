@@ -106,6 +106,21 @@ func (w *World) Step(rt Runtime) {
 		if u.Dead {
 			continue
 		}
+		// Special order-channels (capture/reclaim) and per-tick special state
+		// (private mana recharge, TA:K cloak drain, paralyze decay) advance
+		// before the ordinary order phases. A paralyzed unit is frozen: it
+		// steps neither its orders nor its weapons this tick.
+		w.stepSpecials(u)
+		if u.Dead {
+			continue
+		}
+		if w.econModel == EconomyTAK {
+			w.stepCloakTAK(u)
+		}
+		if u.paralyzeAccum > 0 {
+			u.paralyzeAccum--
+			continue
+		}
 		w.stepTransport(u)
 		w.stepBuilder(u)
 		w.stepStance(u)
@@ -115,6 +130,7 @@ func (w *World) Step(rt Runtime) {
 		w.stepWeapons(u)
 		w.stepMovement(u)
 	}
+	w.drainTransfers()
 	w.pinCargo()
 	w.stepYards()
 	w.stepCollisions()
@@ -126,6 +142,11 @@ func (w *World) Step(rt Runtime) {
 	// TA:K instead finalizes every tick: negative and over-capacity pool
 	// values clamp, metering the discard as waste.
 	if w.econModel == EconomyTAK {
+		// TA:K healing auras (AdjustJoy) pulse every 30 ticks (specials.md
+		// §7.4), before the pool finalizer clamps the tick's mana movement.
+		if w.tick%healAuraInterval == 0 {
+			w.applyHealAuras()
+		}
 		w.stepManaFinalize()
 	} else if w.tick%taSettleTicks == 0 {
 		w.settleTA()
@@ -1206,7 +1227,7 @@ func (w *World) stepAltitude(u *Unit) {
 	if (altTarget - cur).Abs() <= step {
 		u.PosY = altTarget
 	} else {
-		u.PosY = fixed.Wrap32(cur + fixed.FromInt((altTarget-cur).Sign()).Mul(step))
+		u.PosY = fixed.Wrap32(cur + fixed.FromInt((altTarget - cur).Sign()).Mul(step))
 	}
 }
 

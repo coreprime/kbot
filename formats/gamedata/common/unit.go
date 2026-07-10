@@ -71,6 +71,21 @@ type UnitInfoBase struct {
 
 	YardMap string `tdf:"yardmap,omitempty"`
 
+	// Special mechanics (both games; see the sim's Block 6 stat block). Cloak
+	// drain (cloakcost/cloakcostmoving energy-or-mana, mincloakdistance
+	// proximity decloak). CanCloak is TA cloak / TA:K cancloak. Kamikaze +
+	// kamikazedistance drive the order-driven self-detonation. Commander /
+	// cantbecaptured gate capture / mind-control immunity.
+	CanCloak              int     `tdf:"cloak,omitempty"`
+	CloakCost             float64 `tdf:"cloakcost,omitempty"`
+	CloakCostMoving       float64 `tdf:"cloakcostmoving,omitempty"`
+	MinCloakDistance      int     `tdf:"mincloakdistance,omitempty"`
+	Kamikaze              int     `tdf:"kamikaze,omitempty"`
+	KamikazeDistance      int     `tdf:"kamikazedistance,omitempty"`
+	SelfDestructCountdown int     `tdf:"selfdestructcountdown,omitempty"`
+	Commander             int     `tdf:"commander,omitempty"`
+	CantBeCaptured        int     `tdf:"cantbecaptured,omitempty"`
+
 	// Remaining preserves every other key=value so the file round-trips.
 	Remaining map[string]string `tdf:",remaining"`
 }

@@ -67,6 +67,48 @@ func applyTAKEcon(m *sim.UnitMeta, ku *tak.Unit) {
 	m.Econ.HealTime = float32(ku.Info.HealTime)
 	// The fixed-point HUD price for the mana pool.
 	m.CostMana = fixed.FromInt(ku.Info.BuildCost)
+
+	// TA:K unit-private mana pool: MaxMana is the cap, manarechargerate is
+	// stored ×(1/30) at parse (double @0x5f25d8) so the drain/recharge is
+	// per-tick. The pool spawns empty and recharges for free.
+	if ku.Info.MaxMana > 0 {
+		m.MaxMana = float32(ku.Info.MaxMana)
+	}
+	if ku.Info.ManaRechargeRate > 0 {
+		m.ManaRechargeTick = float32(ku.Info.ManaRechargeRate / 30)
+	}
+	// TA:K reclaim capability (own key).
+	if ku.Info.CanReclaim == 1 {
+		m.CanReclaim = true
+	}
+	// TA:K cloak cost is PER-TICK mana off the private pool, stored ÷30 at
+	// parse (double @0x5f25d8) — vs TA's per-settle energy stored raw. When
+	// this is a Kingdoms unit (mana pool present), re-scale the raw FBI
+	// cloakcost/cloakcostmoving into the per-tick mana figures.
+	if ku.Info.MaxMana > 0 {
+		m.CloakCost = float32(ku.Info.CloakCost) / 30
+		m.CloakCostMoving = float32(ku.Info.CloakCostMoving) / 30
+	}
+	// TA:K default selfdestructcountdown is 2 (vs TA's 5). Only re-default
+	// when the FBI omitted the key (applySpecialFlags left the TA default 5)
+	// and this is recognisably a Kingdoms unit (mana economy present).
+	if ku.Info.SelfDestructCountdown <= 0 && (ku.Info.MaxMana > 0 || ku.Info.BuildCost > 0) {
+		m.SelfDestructCountdown = 2
+	}
+	// AdjustJoy healing aura (§7.4): full at the edge, EdgeEffectiveness
+	// weights the centre. Adjustment defaults to 1.0 when the section omits it.
+	if aj := ku.Info.AdjustJoy; aj != nil {
+		adj := aj.Adjustment
+		if adj == 0 {
+			adj = 1
+		}
+		m.HealAura = &sim.AuraMeta{
+			Adjustment:   adj,
+			RadiusWU:     aj.Radius,
+			Edge:         aj.EdgeEffectiveness,
+			AffectsEnemy: aj.AffectsEnemy == 1,
+		}
+	}
 }
 
 // MetaFromUnitInfo converts a parsed FBI [UNITINFO] block into the simulation's
@@ -95,6 +137,7 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	m.MaxWaterDepth = info.MaxWaterDepth
 	m.MinWaterDepth = info.MinWaterDepth
 	applyLocoInfo(m, info)
+	applySpecialFlags(m, info)
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	cats := map[string]bool{}
 	for _, c := range info.Category {
@@ -137,6 +180,40 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	}
 	applyTAEcon(m, info)
 	return m
+}
+
+// applySpecialFlags fills the Block-6 special-mechanic stat block from the
+// FBI. The shared cloak/kamikaze/countdown/immunity keys live on the common
+// base; the TA capture/reclaim/resurrect capability keys are TA-specific and
+// filled here through the ta.UnitInfo view. CloakCost/CloakCostMoving are
+// per-settle energy in TA and re-read as per-tick mana in the TA:K pass; the
+// raw FBI figure is stored here and each economy divides as its game requires.
+func applySpecialFlags(m *sim.UnitMeta, info *ta.UnitInfo) {
+	b := &info.UnitInfoBase
+	// A unit is cloakable when it carries the cloak flag OR (as the Commander
+	// does) simply declares a cloak cost — TA gates the cloak command on a
+	// positive cloakcost, not on a dedicated key (armcom.fbi omits the flag).
+	m.CanCloak = b.CanCloak == 1 || b.CloakCost > 0 || b.CloakCostMoving > 0
+	m.CloakCost = float32(b.CloakCost)
+	m.CloakCostMoving = float32(b.CloakCostMoving)
+	m.MinCloakDistance = b.MinCloakDistance
+	m.Kamikaze = b.Kamikaze == 1
+	m.KamikazeDistance = b.KamikazeDistance
+	// selfdestructcountdown is a 3-bit field: the engines mask atoi & 7. TA
+	// defaults an absent key to 5, TA:K to 2; the TA:K econ pass re-defaults
+	// below when it detects a Kingdoms unit (mana economy present).
+	if b.SelfDestructCountdown > 0 {
+		m.SelfDestructCountdown = b.SelfDestructCountdown & 7
+	} else {
+		m.SelfDestructCountdown = 5
+	}
+	m.Commander = b.Commander == 1
+	m.CantBeCaptured = b.CantBeCaptured == 1
+
+	// TA capability bits.
+	m.CanCapture = info.CanCapture == 1
+	m.CanReclaim = info.CanReclamate == 1
+	m.CanResurrect = info.CanResurrect == 1
 }
 
 // applyTAEcon fills the construction/build-pace fields (used by both the

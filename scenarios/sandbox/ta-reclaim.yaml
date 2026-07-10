@@ -1,0 +1,77 @@
+# TA reclaim: a builder consumes an enemy unit for resources. The drain is a
+# damage pulse of a once-computed chunk applied every 16 ticks (the accumulator
+# climbs 2 per 2-tick visit and fires on accum>14 — the sized-for-15 off-by-one
+# the sandbox replicates); metal salvage credits at the target's death.
+# The reclaimer holds fire so only the reclaim pulses drive the target's HP.
+# Ground truth: specials spec §3.1, economy spec §3.4.
+name: ta-reclaim
+game: ta
+system: specials
+spec: specials.md §3.1, economy.md §3.4
+description: >-
+  The Commander (WorkerTime=300, 0 kills, Hold Fire so its laser stays
+  quiet) reclaims an enemy Flash (ARMFLASH: MaxDamage=625,
+  BuildCostMetal=106, fully built). The side opens with an empty metal
+  pool so the salvage credit is visible instead of overflowing the cap.
+seed: 1
+start_metal: -1
+duration: 200
+units:
+  - alias: com
+    type: armcom
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: flash
+    type: armflash
+    side: 1
+    pos: [240, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: com
+    move: hold
+    fire: hold
+  - at: 0
+    do: reclaim
+    id: reclaim-order
+    unit: com
+    target: flash
+checks:
+  - at: 100
+    unit: flash
+    observable: unit.alive
+    expect: 1
+    label: target still alive after six pulses
+    derivation: |
+      chunk = ftol((1+0/5)*300*625*15/(max(106,10)*300)) = ftol(88.44) =
+      88. The accumulator gains 2 per 2-tick visit and fires when it
+      exceeds 14 (accum 16 at tick 16) then every 16 ticks: pulses at
+      ticks 16,32,48,64,80,96 = 6 pulses * 88 = 528 dmg of 625 HP by tick
+      100 (next pulse tick 112). 625-528 = 97 HP remains -> alive.
+    requires_action: reclaim-order
+  - at: 135
+    unit: flash
+    observable: unit.alive
+    expect: 0
+    label: target consumed by the eighth pulse
+    derivation: |
+      Pulse 7 (tick 112): 616 total; pulse 8 (tick 128): 704 >= 625 -> the
+      Flash dies. By frame 135 it is gone. Eight 88-point pulses.
+    requires_action: reclaim-order
+  - at: 135
+    side: 0
+    observable: side.metal
+    expect: 7208960
+    label: metal salvage plus passive income
+    derivation: |
+      At the Flash's death (tick 128) the reclaimer's side gains
+      (1-buildRem)*BuildCostMetal = 1*106 = 106 metal, metal only, no
+      energy (specials.md §3.1). The pool opened empty; on top of the
+      salvage the commander's own MetalMake=1 credits once per settle over
+      the four settles through frame 135 (ticks 30/60/90/120) = +4 metal.
+      Total stock = 106 + 4 = 110: raw 110*65536 = 7208960. The salvage
+      itself is exactly the (1-frac)*BCM metal-only credit under test; the
+      +4 is the reclaimer's independent passive income.
+    requires_action: reclaim-order

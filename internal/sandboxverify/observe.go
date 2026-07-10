@@ -2,9 +2,11 @@ package sandboxverify
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/frame"
+	"github.com/coreprime/kbot/engine/sim"
 )
 
 // evaluate samples one check's observable at the current (already stepped and
@@ -63,6 +65,43 @@ func (st *runState) sample(c CheckSpec) (int64, bool, string) {
 		return int64(len(st.lastSnap.Projos)), true, ""
 	case "world.rng_draws":
 		return int64(st.rngNow - st.rngStart), true, ""
+	case "world.stockpile_cap":
+		return int64(st.world.StockpileCap()), true, ""
+	}
+	if c.Observable == "side.unit_count" {
+		if c.Side == nil {
+			return 0, false, "side.unit_count needs a side"
+		}
+		// The Unit field, when set on a side.unit_count check, names the type
+		// filter (lower-cased type name) rather than an alias.
+		return st.sampleSideCount(*c.Side, strings.ToLower(c.Unit))
+	}
+	switch c.Observable {
+	case "unit.coverage_covers":
+		// Args = [x, z] world-unit point the interceptor's square box is
+		// tested against (slot 0). Reports 1 when covered, else 0.
+		if len(c.Args) != 2 {
+			return 0, false, "unit.coverage_covers needs args [x, z]"
+		}
+		id, ok := st.aliases[c.Unit]
+		if !ok {
+			return 0, false, fmt.Sprintf("alias %q never bound", c.Unit)
+		}
+		if st.world.CoverageCovers(id, 0, c.Args[0], c.Args[1]) {
+			return 1, true, ""
+		}
+		return 0, true, ""
+	case "unit.resurrect_ticks":
+		// Args = [targetBuildTime]; reports the resurrect channel length for
+		// the named builder raising a unit of that buildtime.
+		if len(c.Args) != 1 {
+			return 0, false, "unit.resurrect_ticks needs args [targetBuildTime]"
+		}
+		id, ok := st.aliases[c.Unit]
+		if !ok {
+			return 0, false, fmt.Sprintf("alias %q never bound", c.Unit)
+		}
+		return int64(st.world.ResurrectTicks(id, float64(c.Args[0]))), true, ""
 	}
 	if c.Side != nil {
 		return st.sampleSide(*c.Side, c.Observable)
@@ -71,6 +110,23 @@ func (st *runState) sample(c CheckSpec) (int64, bool, string) {
 		return st.sampleUnit(c.Unit, c.Observable)
 	}
 	return 0, false, fmt.Sprintf("observable %q needs a unit or side", c.Observable)
+}
+
+// sampleUnitCount counts the live units on a side, optionally filtered to a
+// type name — the observable a capture/conversion scenario reads to see
+// ownership flip (the transferred unit respawns under the new side).
+func (st *runState) sideUnitCount(side int, typeName string) int64 {
+	var n int64
+	st.world.ForEachUnit(func(u *sim.Unit) {
+		if u.Side != side || u.Dead {
+			return
+		}
+		if typeName != "" && u.Name != typeName {
+			return
+		}
+		n++
+	})
+	return n
 }
 
 func (st *runState) sampleSide(side int, obs string) (int64, bool, string) {
@@ -100,6 +156,13 @@ func (st *runState) sampleSide(side int, obs string) (int64, bool, string) {
 		return int64(rs.ManaProduced), true, ""
 	}
 	return 0, false, fmt.Sprintf("unknown side observable %q", obs)
+}
+
+// sampleSideCount is the side.unit_count path: it reads the live-unit count on
+// a side (the CheckSpec's Unit field, when set, names a type filter — the
+// unit type whose ownership a capture/conversion moved).
+func (st *runState) sampleSideCount(side int, typeName string) (int64, bool, string) {
+	return st.sideUnitCount(side, typeName), true, ""
 }
 
 func (st *runState) sampleUnit(alias, obs string) (int64, bool, string) {
@@ -133,6 +196,29 @@ func (st *runState) sampleUnit(alias, obs string) (int64, bool, string) {
 			return int64(u.Kills()), true, ""
 		}
 		return 0, true, "unit despawned; kill counter gone"
+	}
+	if obs == "unit.private_mana" {
+		// TA:K unit-private pool, truncated to whole mana (the pool the
+		// spells and TA:K cloak drain).
+		return int64(st.world.PrivateMana(id)), true, ""
+	}
+	if obs == "unit.cloaked" {
+		if st.world.Cloaked(id) {
+			return 1, true, ""
+		}
+		return 0, true, ""
+	}
+	if obs == "unit.paralyze_ticks" {
+		return int64(st.world.ParalyzeTicks(id)), true, ""
+	}
+	if obs == "unit.side" {
+		if s := st.world.SideOf(id); s >= 0 {
+			return int64(s), true, ""
+		}
+		return 0, true, "unit gone"
+	}
+	if obs == "unit.mind_control_threshold" {
+		return int64(st.world.MindControlThreshold(id)), true, ""
 	}
 	if obs == "unit.alive" {
 		if u != nil && !u.Dead {

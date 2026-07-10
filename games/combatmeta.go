@@ -127,6 +127,13 @@ func enrichTA(m *sim.UnitMeta, info *ta.UnitInfo, resolve WeaponResolver) {
 		wm.MinBarrelSin = minBarrelSin(sec.MinBarrelAngle)
 		// TA weapons never splash their own shooter.
 		wm.SelfSplash = false
+		// Stockpile / anti-nuke (specials.md §6.1): coverage is the raw wu
+		// square-box half-extent; interceptor/targetable/stockpile are flags.
+		wm.Stockpile = sec.Stockpile != 0
+		wm.Targetable = sec.Targetable != 0
+		wm.Interceptor = sec.Interceptor != 0
+		wm.CoverageWU = sec.Coverage
+		wm.Paralyzer = sec.Paralyzer != 0
 	}
 }
 
@@ -164,6 +171,9 @@ func enrichTAK(m *sim.UnitMeta, ku *tak.Unit) {
 		wm.MinBarrelSin = minBarrelSin(0)
 		// TA:K applies a shooter's own splash to the shooter — no exclusion.
 		wm.SelfSplash = true
+		// Spell weapons consume the firer's unit-private mana (§7.1); the
+		// figure is veteran-discounted at consume time.
+		wm.ManaPerShot = sec.ManaPerShot
 		switch strings.ToLower(strings.TrimSpace(sec.Type)) {
 		case "melee":
 			// Instant contact behavior: no projectile entity, damage
@@ -174,6 +184,14 @@ func enrichTAK(m *sim.UnitMeta, ku *tak.Unit) {
 		case "line of sight", "remote effect":
 			// Effect-emitter classes: no flight, resolve at the aim point.
 			wm.Instant = true
+		}
+		// Spell subtypes: mindcontrol/turntostone/turntofrozen share the
+		// per-hit conversion stick-chance roll (§2.2); paralyzer stuns.
+		switch strings.ToLower(strings.TrimSpace(sec.SubType)) {
+		case "mindcontrol", "turntostone", "turntofrozen":
+			wm.MindControl = true
+		case "paralyze", "paralyzer":
+			wm.Paralyzer = true
 		}
 	}
 }

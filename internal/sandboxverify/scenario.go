@@ -96,7 +96,7 @@ type UnitSpec struct {
 // check that requires them grades missing.
 type ActionSpec struct {
 	At   int    `yaml:"at"` // engine frame
-	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|repair|stance|set_kills|cloak|capture
+	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|repair|stance|set_kills|set_paralyze|cloak|capture|reclaim|self_destruct
 	ID   string `yaml:"id"` // optional handle for requires_action
 	Unit string `yaml:"unit"`
 	// To is the move / fire / build destination in world units.
@@ -116,6 +116,9 @@ type ActionSpec struct {
 	// Kills pins the unit's veterancy counters (set_kills action) so the
 	// consumer formulas can be graded at an exact level.
 	Kills int `yaml:"kills"`
+	// Amount is a scalar the measurement-hook actions carry (set_paralyze
+	// injects this many paralyze ticks).
+	Amount int `yaml:"amount"`
 }
 
 // CheckSpec samples one observable at a spec tick and grades it.
@@ -144,6 +147,12 @@ type CheckSpec struct {
 	// RequiresAction names an ActionSpec ID; if that action was unsupported
 	// by the sim the check grades missing without sampling.
 	RequiresAction string `yaml:"requires_action"`
+	// Args carries scalar parameters for the parametric observables that need
+	// values a plain unit/side sample can't supply: unit.coverage_covers reads
+	// [x, z] (world units) to probe an interceptor's square coverage box;
+	// unit.resurrect_ticks reads [targetBuildTime] to compute the resurrect
+	// channel length against that buildtime.
+	Args []int `yaml:"args"`
 }
 
 // Load reads one scenario file.

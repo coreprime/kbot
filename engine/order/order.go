@@ -47,6 +47,17 @@ const (
 	// Unload sends transports (UnitIDs) to Target and sets their cargo down
 	// on clear ground around it.
 	KindUnload
+	// Capture sends a capturer (UnitIDs) to channel an enemy TargetUnit into
+	// its own ownership — a timed, free, cost-less nanolathe transfer (TA);
+	// TA:K mind-control runs through the weapon path, not this order.
+	KindCapture
+	// Reclaim sends a reclaimer (UnitIDs) to consume TargetUnit for resources:
+	// pulsed damage every 16 ticks until the target dies, crediting metal.
+	KindReclaim
+	// Cloak toggles a unit's cloak stance (UnitIDs): a cloaked unit drains its
+	// cloak cost per settle (TA energy) / per tick (TA:K private mana) and
+	// leaves LOS. A second Cloak order decloaks.
+	KindCloak
 )
 
 // Standing-order values carried by a Stance order.
@@ -170,6 +181,21 @@ func Load(transports []uint32, targetUnit uint32) Order {
 // Unload sends transports to set their cargo down at a ground point.
 func Unload(transports []uint32, target fixed.Vec2) Order {
 	return Order{Kind: KindUnload, UnitIDs: transports, Target: target}
+}
+
+// Capture sends capturers to channel-capture an enemy target unit.
+func Capture(units []uint32, targetUnit uint32) Order {
+	return Order{Kind: KindCapture, UnitIDs: units, TargetUnit: targetUnit}
+}
+
+// Reclaim sends reclaimers to consume a target unit for resources.
+func Reclaim(units []uint32, targetUnit uint32) Order {
+	return Order{Kind: KindReclaim, UnitIDs: units, TargetUnit: targetUnit}
+}
+
+// Cloak toggles the units' cloak stance.
+func Cloak(units []uint32) Order {
+	return Order{Kind: KindCloak, UnitIDs: units}
 }
 
 // FireAtUnit points one unit's weapon slot at a target unit (manual force-fire

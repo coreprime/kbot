@@ -1,0 +1,37 @@
+# TA resurrect: the CORE Necromancer (the one stock canresurrect unit) rebuilds
+# a unit from its wreck. Duration = ftol(0.3*targetBuildtime/(workertime/30))
+# with integer division inside the float; the resurrected unit is fully built
+# at HP 1, free of resource cost. The sandbox has no feature/wreck entities to
+# run a full resurrect against (DELTA §4), so the channel arithmetic is graded
+# through the resurrect_ticks accessor — the exact formula the engine computes.
+# Ground truth: specials spec §3.3 (worked example §11.2).
+name: ta-resurrect
+game: ta
+system: specials
+spec: specials.md §3.3, §11.2
+description: >-
+  The CORE Necromancer (CORNECRO, WorkerTime=160) resurrects a Flash wreck
+  (ARMFLASH buildtime=1676). rate = 160/30 = 5 (integer); ticks =
+  ftol(0.3*1676/5.0) = ftol(100.56) = 100.
+seed: 1
+duration: 5
+units:
+  - alias: necro
+    type: cornecro
+    side: 0
+    pos: [200, 200]
+    heading: 0
+checks:
+  - at: 1
+    unit: necro
+    observable: unit.resurrect_ticks
+    args: [1676]
+    expect: 100
+    label: resurrect channel length for a Flash
+    derivation: |
+      rate = float(WorkerTime/30) = float(160/30) = float(5) = 5.0 (the
+      integer division happens INSIDE the float, so 160/30 truncates to 5
+      before the divide). ticks = ftol(0.3 * buildtime / rate) =
+      ftol(0.3 * 1676 / 5.0) = ftol(502.8 / 5.0) = ftol(100.56) = 100.
+      This matches specials.md's worked example §11.2 exactly. Free of
+      resource cost; the resurrected unit spawns fully built at HP 1.

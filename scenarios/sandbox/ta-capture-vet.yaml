@@ -1,0 +1,68 @@
+# TA capture veterancy resistance: the capture channel time scales by
+# (10 + targetKills/5)/10, UNCAPPED — a veteran TARGET takes proportionally
+# longer to capture (specials.md §2.1 T, §4.1 consumer a5). A 25-kill Solar
+# stretches the base 192-tick channel by +50% to 288 ticks. The capturer holds
+# fire so only the capture channel (not its laser) removes the original.
+# Ground truth: specials spec §2.1, §4.1 a5, worked example §11.1.
+name: ta-capture-vet
+game: ta
+system: specials
+spec: specials.md §2.1, §4.1
+description: >-
+  The Commander captures a 25-kill enemy Solar Collector (ARMSOLAR:
+  BuildCostEnergy=760, BuildCostMetal=145, MaxDamage=326, full HP). The
+  target's veterancy stretches the channel; completion lands at exactly
+  288 ticks.
+seed: 1
+duration: 320
+units:
+  - alias: com
+    type: armcom
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: solar
+    type: armsolar
+    side: 1
+    pos: [250, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: com
+    move: hold
+    fire: hold
+  - at: 0
+    do: set_kills
+    unit: solar
+    kills: 25
+  - at: 0
+    do: capture
+    id: capture-order
+    unit: com
+    target: solar
+checks:
+  - at: 286
+    unit: solar
+    observable: unit.alive
+    expect: 1
+    label: still channeling at 286 ticks (veterancy stretch)
+    derivation: |
+      T0 = trunc(0.015*760 + (3/14)*145 + 150) = trunc(11.4 + 31.071 +
+      150) = 192; T1 = 192. Full HP: T2 = (326+326)*192/(2*326) = 192.
+      Target veterancy: T = ((25/5 + 10)*192*10)/100 = (15*192*10)/100 =
+      288 ticks (UNCAPPED, +50% for 25 kills). The 2-per-2-tick accumulator
+      reaches 288 at tick 288, so at frame 286 the capture is NOT yet
+      complete: the original is still alive.
+    requires_action: capture-order
+  - at: 290
+    unit: solar
+    observable: unit.alive
+    expect: 0
+    label: capture completes at 288 ticks
+    derivation: |
+      At tick 288 the accumulator reaches T=288 and the transfer fires:
+      the original is destroyed (kind 4, no wreck). By frame 290 its alive
+      flag reads 0. The veteran target took 288 ticks vs the 192 a
+      zero-kill Solar would (ta-capture) — the +50% resistance is exact.
+    requires_action: capture-order

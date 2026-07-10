@@ -150,7 +150,66 @@ type UnitMeta struct {
 	// (whose veterancy runs on raw kill counts instead).
 	ExperiencePoints int
 
+	// --- Special-mechanic flags & figures (Block 6; specials.md) ---
+
+	// CanCapture / CanReclaim / CanResurrect are the FBI capability bits.
+	// CanCapture also serves as the immunity gate: a target that itself
+	// cancapture cannot be captured OR reclaimed (why Commanders are immune to
+	// both). Commander marks the TA:K monarch / cantbecaptured mind-control
+	// immunity.
+	CanCapture   bool
+	CanReclaim   bool
+	CanResurrect bool
+	Commander    bool
+	// CantBeCaptured is the TA:K per-unit conversion immunity (FBI
+	// cantbecaptured); TA has no such per-unit flag (cancapture doubles as it).
+	CantBeCaptured bool
+
+	// Cloak drain (TA cloakcost / cloakcostmoving, energy per settle;
+	// MinCloakDistance the proximity decloak radius in wu). TA:K reads
+	// CloakCost/CloakCostMoving as PER-TICK mana off the unit-private pool.
+	CanCloak         bool
+	CloakCost        float32
+	CloakCostMoving  float32
+	MinCloakDistance int
+
+	// TA:K unit-private mana pool: MaxMana is the cap, ManaRechargeTick the
+	// per-tick free recharge (FBI manarechargerate ÷ 30). The pool spawns
+	// EMPTY and recharges for free; spells and TA:K cloak drain it.
+	MaxMana          float32
+	ManaRechargeTick float32
+
+	// SelfDestructCountdown is the FBI selfdestructcountdown step count (the
+	// 3-bit field, TA default 5 / TA:K default 2); the fuse runs 30 ticks per
+	// step then a rand(15) final jitter tick.
+	SelfDestructCountdown int
+
+	// Kamikaze marks an order-driven kamikaze unit; KamikazeDistance is the
+	// standoff radius (wu) the move-to-detonate order approaches to, floored at
+	// 16 wu.
+	Kamikaze         bool
+	KamikazeDistance int
+
+	// HealAura carries a TA:K AdjustJoy healing-aura block when the unit
+	// declares one (nil = no aura). Applied every 30 ticks with the inverted
+	// falloff polarity (full at the edge).
+	HealAura *AuraMeta
+
 	Weapons [3]WeaponMeta
+}
+
+// AuraMeta is a resolved TA:K AdjustJoy/AdjustArmor/AdjustAttack aura block.
+// The sandbox models the AdjustJoy healing aura (§7.4); the armor/attack
+// accumulator auras remain a combat-tick seam.
+type AuraMeta struct {
+	// Adjustment is the aura strength (FBI Adjustment, default 1.0);
+	// RadiusWU the effect radius in world units (FBI Radius << … resolves to
+	// wu directly here); Edge the EdgeEffectiveness weighting (§7.4 —
+	// polarity inverted, so Edge weights the CENTER, full effect at the rim).
+	Adjustment   float64
+	RadiusWU     int
+	Edge         float64
+	AffectsEnemy bool
 }
 
 // EconMeta carries the FBI economy fields at the width the engines compute
@@ -318,6 +377,30 @@ type WeaponMeta struct {
 	// acceptance (low arc must clear the barrel's depression floor). The
 	// engines default the angle to −11.25° when the TDF omits it.
 	MinBarrelSin float64
+
+	// --- Stockpile / anti-nuke (Block 6; specials.md §6.1) ---
+
+	// Stockpile marks a weapon that must be built up before firing (nukes):
+	// firing decrements the per-slot stock (cap 200), no E/M charge at fire.
+	// Targetable marks a projectile an interceptor can shoot down.
+	// Interceptor marks the anti-nuke launcher; CoverageWU is its square
+	// coverage box half-extent (|Δx|≤cov AND |Δz|≤cov, 2D, not circular).
+	Stockpile   bool
+	Targetable  bool
+	Interceptor bool
+	CoverageWU  int
+
+	// --- TA:K spell layer (Block 6; specials.md §2.2, §7.1) ---
+
+	// ManaPerShot is the unit-private mana a TA:K spell weapon consumes per
+	// shot (veteran-discounted ÷(1+0.1L) at consume time).
+	ManaPerShot float64
+	// MindControl marks the conversion behavior (mindcontrol/turntostone/
+	// turntofrozen share the stick-chance roll shape).
+	MindControl bool
+	// Paralyzer marks a stun weapon: its damage accumulates on a Paralyze
+	// order (cap 1800 ticks) rather than subtracting HP.
+	Paralyzer bool
 }
 
 // collisionRadius derives the unit's body circle from its FBI footprint

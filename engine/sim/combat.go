@@ -41,17 +41,7 @@ func taVetLevel(u *Unit) int {
 // xp / own experiencepoints (integer division), capped at 10. Units with no
 // experiencepoints figure never level.
 func takVetMul(u *Unit) float64 {
-	if u == nil || u.Meta == nil || u.Meta.ExperiencePoints <= 0 {
-		return 1.0
-	}
-	level := u.xp / u.Meta.ExperiencePoints
-	if level > 10 {
-		level = 10
-	}
-	if level < 0 {
-		level = 0
-	}
-	return 1.0 + 0.1*float64(level)
+	return 1.0 + 0.1*float64(takLevel(u))
 }
 
 // baseTableDamage resolves the weapon's [DAMAGE] figure against one victim.
@@ -150,10 +140,24 @@ func weaponDamagePoints(wm *WeaponMeta, attacker, victim *Unit, weight float64) 
 }
 
 // applyWeaponHit routes one victim's resolved damage into the world, carrying
-// the attacker attribution that feeds kill credit.
+// the attacker attribution that feeds kill credit. Special weapon classes
+// divert off the HP-damage path: a paralyzer accumulates a stun tick count on
+// the victim's Paralyze order (specials.md §7.2), and a mind-control weapon
+// rolls the veterancy-scaled stick chance and, on success, queues an ownership
+// conversion under the attacker (specials.md §2.2).
 func (w *World) applyWeaponHit(attackerID uint32, wm *WeaponMeta, victim *Unit, weight float64) {
 	attacker := w.units[attackerID]
 	pts := weaponDamagePoints(wm, attacker, victim, weight)
+	if wm.Paralyzer {
+		if pts > 0 {
+			w.applyParalyze(victim, pts)
+		}
+		return
+	}
+	if wm.MindControl {
+		w.tryMindControl(attacker, victim, weight)
+		return
+	}
 	if pts <= 0 {
 		return
 	}

@@ -1,0 +1,71 @@
+# TA:K mind control: a conversion weapon's per-hit stick chance scales with the
+# TARGET's veteran level — min((level+16)*5, 99) percent — so higher-level units
+# are MORE likely to be converted, not less (specials.md §2.2, §4.2 consumer 4).
+# The stochastic roll draws on the engines' CRT stream, which the sandbox does
+# not carry (a documented seam; it draws on the shared MINSTD sim stream
+# instead); the gradeable invariant is the THRESHOLD, pinned here at three
+# levels by fixing the target's veterancy.
+# Ground truth: specials spec §2.2, §4.2, worked example §11.3.
+name: tak-mind-control
+game: tak
+system: specials
+spec: specials.md §2.2, §4.2, §11.3
+description: >-
+  A Taros mind-control caster (TARMIND) and a victim (ARAKING) whose
+  veteran level is pinned to read the conversion stick-chance threshold at
+  L0, L1 and L4. TARMIND ExperiencePoints is irrelevant here; the victim's
+  own ExperiencePoints is the level divisor.
+seed: 1
+duration: 4
+units:
+  - alias: caster
+    type: tarmind
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: victim
+    type: araking
+    side: 1
+    pos: [260, 200]
+    heading: 0
+actions:
+  - at: 1
+    do: set_kills
+    unit: victim
+    kills: 0
+  - at: 2
+    do: set_kills
+    unit: victim
+    kills: 1
+  - at: 3
+    do: set_kills
+    unit: victim
+    kills: 4
+checks:
+  - at: 1
+    unit: victim
+    observable: unit.mind_control_threshold
+    expect: 80
+    label: stick chance at level 0
+    derivation: |
+      set_kills 0 pins xp = 0 -> level = xp/experiencepoints = 0.
+      threshold = min((0+16)*5, 99) = min(80, 99) = 80 percent (§11.3's L0
+      figure).
+  - at: 2
+    unit: victim
+    observable: unit.mind_control_threshold
+    expect: 85
+    label: stick chance at level 1
+    derivation: |
+      set_kills pins xp = kills*experiencepoints, so 1 kill lands the
+      victim at exactly level 1 (xp/experiencepoints = 1). threshold =
+      min((1+16)*5, 99) = min(85, 99) = 85 percent.
+  - at: 3
+    unit: victim
+    observable: unit.mind_control_threshold
+    expect: 99
+    label: stick chance saturates at level 4
+    derivation: |
+      4 kills -> level 4. threshold = min((4+16)*5, 99) = min(100, 99) =
+      99 percent -> the ladder saturates at 99 for L>=4 (§11.3's L4
+      figure). Veterancy makes the special MORE likely to stick.
