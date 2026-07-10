@@ -1,0 +1,60 @@
+# TA reload cadence and burst fire: reloadtime parses to whole ticks
+# (trunc(s*30)); each trigger pull of a burst weapon emits `burst` rounds.
+# Ground truth: combat spec §3.1.4 gate 5 (reload formula), §3.1.6 (parse
+# conversions), §3.1.7; EMG: reloadtime=.4, burst=3, damage default=8.
+name: ta-combat-reload
+game: ta
+system: combat
+spec: combat.md §3.1.4, §3.1.6
+description: >-
+  An ARMFLASH attacks the enemy Commander (hold/hold) from 150 wu, inside
+  the EMG's 180 range so it fires from standstill. Full-HP, zero-kill
+  reload = trunc(0.4*30) = 12 ticks exactly; every trigger pull bursts 3
+  EMG rounds at 8 damage each.
+seed: 1
+duration: 100
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: com
+    type: armcom
+    side: 1
+    pos: [200, 350]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: com
+    move: hold
+    fire: hold
+  - at: 0
+    do: attack
+    unit: flash
+    target: com
+checks:
+  - at: 35
+    unit: com
+    observable: unit.hp
+    expect: 2976
+    label: one full burst of three rounds
+    derivation: |
+      EMG [DAMAGE] default=8; the commander is not ARMORED by default and
+      has 0 kills, so each round lands 8. One trigger pull = burst 3
+      rounds (burstrate .1 s apart), all landed by ~frame 22 (fire ~2,
+      flight 150 wu at 300 wu/s = 15 frames). MaxDamage 3000 - 3*8 = 2976.
+      The second burst impacts ~frame 32-38, so 2952 here reads as burst
+      timing skew, but 2992 (a single 8) means burst clones are absent.
+  - at: 97
+    unit: flash
+    observable: unit.fire_count
+    expect: 8
+    label: trigger pulls at the 12-tick reload
+    derivation: |
+      Reload = floor(floor((100-0)*12/100) * (120 - 20*hp/maxhp)/100) =
+      floor(12 * 100/100) = 12 ticks at full HP, 0 kills. Trigger pulls at
+      t0, t0+12, ... with t0 ~= 2 (aim latency, assumed 1..11): pulls at
+      2,14,...,98 -> count in [0,97] = 8. One fire event per PULL (the
+      three burst rounds share it), so the count compares across engines.

@@ -380,6 +380,11 @@ func New(cfg Config) *World {
 // Tick returns the current simulation tick number.
 func (w *World) Tick() uint64 { return w.tick }
 
+// RngState exposes the world RNG's raw state word. It exists for external
+// measurement harnesses (draw counting between two observations); gameplay
+// code must keep drawing through w.rng.
+func (w *World) RngState() uint32 { return w.rng.Snapshot() }
+
 // UnitByID returns a unit or nil.
 func (w *World) UnitByID(id uint32) *Unit { return w.units[id] }
 

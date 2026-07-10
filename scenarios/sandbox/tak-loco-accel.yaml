@@ -1,0 +1,41 @@
+# TA:K ground locomotion: infantry bang-bang between 0 and the cap.
+# Ground truth: locomotion spec §1.4 (same skeleton as TA), §9.2 (ARASWORD).
+name: tak-loco-accel
+game: tak
+system: locomotion
+spec: locomotion.md §1.4, §9.2
+description: >-
+  Aramon swordsman (maxvelocity=1.1, acceleration=10) ordered to a far
+  point. The first speed += delta overshoots the cap and clamps, so frame 1
+  already runs at full speed - TA:K infantry start instantly.
+seed: 1
+duration: 40
+units:
+  - alias: sword
+    type: arasword
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: sword
+    to: [200, 2000]
+checks:
+  - at: 1
+    unit: sword
+    observable: unit.speed
+    expect: 72089
+    label: full speed on the first frame
+    derivation: |
+      maxvelocity=1.1 parses as trunc(1.1 * 65536) = 72089 raw wu/frame.
+      acceleration=10 -> 0xA0000 per frame; first update: speed = 0 +
+      0xA0000, then cap-clamp to 72089. Flat ground band 0 -> 100%.
+  - at: 10
+    unit: sword
+    observable: unit.dist_from_start
+    expect: 720890
+    label: distance after 10 frames at cap
+    derivation: |
+      Every frame moves exactly 72089 raw (speed constant from frame 1).
+      10 * 72089 = 720890 raw = 10.99991 wu, straight line.

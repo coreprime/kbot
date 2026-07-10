@@ -1,0 +1,53 @@
+# TA ground locomotion: brake to a stop when the move target is cancelled.
+# Ground truth: locomotion spec §1.1-1.2 (no coast state; -brakerate per frame).
+name: ta-loco-brake
+game: ta
+system: locomotion
+spec: locomotion.md §1.1, §1.2, §9.1
+description: >-
+  ARMFLASH is run up to top speed toward a far waypoint, then given Stop.
+  With no target the engine sets turn rate 0 and applies -BrakeRate every
+  frame until the >=0 clamp; there is no instant stop and no coast.
+seed: 1
+duration: 300
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [200, 3000]
+  - at: 150          # frame 150: at top speed since frame 118
+    do: stop
+    unit: flash
+checks:
+  - at: 151
+    unit: flash
+    observable: unit.speed
+    expect: 129762
+    label: one frame after stop order
+    derivation: |
+      FBI BrakeRate=0.02 -> trunc(0.02 * 65536) = 1310 raw wu/frame^2.
+      At the stop order speed = 0x20000 (top). Each subsequent frame:
+      speed -= 1310. speed(151) = 131072 - 1310 = 129762. An instant zero
+      here means the sim replaced the brake law with a hard stop.
+  - at: 200
+    unit: flash
+    observable: unit.speed
+    expect: 65572
+    label: 50 frames into the brake ramp
+    derivation: |
+      speed = 131072 - 50 * 1310 = 65572 raw (1.0005 wu/frame).
+  - at: 251
+    unit: flash
+    observable: unit.speed
+    expect: 0
+    label: stationary at frame 101 of braking
+    derivation: |
+      Frames to stop: ceil(131072 / 1310) = 101 (speed reaches 131072 -
+      100*1310 = 72 raw at frame 100, clamps to 0 on frame 101).
+      Sampled at stop+101 = frame 251.

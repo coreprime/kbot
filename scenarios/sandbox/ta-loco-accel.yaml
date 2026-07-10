@@ -1,0 +1,53 @@
+# TA ground locomotion: rest -> maxvelocity under the bang-bang integrator.
+# Ground truth: locomotion spec §1.1-1.2, §9.1 (worked example, ARMFLASH).
+name: ta-loco-accel
+game: ta
+system: locomotion
+spec: locomotion.md §1.1, §1.2, §9.1
+description: >-
+  ARMFLASH accelerates from rest toward a far waypoint on flat ground with
+  its heading already aligned. The engine adds +acceleration to the speed
+  scalar every frame and integrates pos += speed the same frame.
+seed: 1
+duration: 150
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0        # facing +Z in the sandbox convention; target dead ahead
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [200, 3000]   # 2800 wu ahead: far beyond brake distance for the whole run
+checks:
+  - at: 10
+    unit: flash
+    observable: unit.speed
+    expect: 11140
+    label: speed after 10 frames of thrust
+    derivation: |
+      FBI Acceleration=0.017 parses as trunc(0.017 * 65536) = 1114 raw 16.16
+      wu/frame^2 (the x65536 fmul + __ftol chop of the loader). Bang-bang law:
+      speed += 1114 each frame while accelerating, flat ground cap =
+      MaxVelocity=2 -> 0x20000 not yet reached. speed(10) = 10 * 1114 = 11140.
+  - at: 10
+    unit: flash
+    observable: unit.dist_from_start
+    expect: 61270
+    label: distance covered in 10 frames
+    derivation: |
+      pos += speed runs after the speed update in the same frame, so distance
+      after n frames = sum_{k=1..n} 1114*k. n=10: 1114 * 55 = 61270 raw
+      (0.93497 wu). Straight line (heading aligned), so XZ distance equals
+      the accumulated speed sum.
+  - at: 118
+    unit: flash
+    observable: unit.speed
+    expect: 131072
+    label: top speed reached at frame 118
+    derivation: |
+      Frames to reach the cap: ceil(0x20000 / 1114) = ceil(117.66) = 118.
+      From frame 118 on the +accel is applied then clamped back to the cap,
+      so speed sits exactly at 131072 raw (2.0 wu/frame).

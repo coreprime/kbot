@@ -1,0 +1,66 @@
+# TA:K melee: an "Attack Melee" order drives instant weapon-contact swings
+# (no projectile entity) whose [DAMAGE] applies through the shared
+# detonation path with a splash swing (aoe 24, edge 0.7).
+# Ground truth: combat spec §6 (melee), §5.2/§8 (identical quadratic
+# falloff; TA:K includes the shooter's allies in splash).
+name: tak-melee
+game: tak
+system: combat
+spec: combat.md §6, §8
+description: >-
+  An Aramon swordsman attacks another (held) swordsman. Sword: type=Melee,
+  range 30, reloadtime 1.7, damage default 360, areaofeffect 24,
+  edgeeffectiveness 0.7. Expected here: the sandbox has no melee behavior
+  class, so contact damage and the no-projectile contract are expected to
+  grade missing/wrong. (A swing-splash bystander check was considered and
+  dropped: 1x1-footprint tile occupancy pins the minimum unit spacing to
+  16 wu and the infantry AABB is unpinned, so no exact expected value can
+  be derived for splash on a neighbour.)
+seed: 1
+duration: 120
+units:
+  - alias: attacker
+    type: arasword
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: victim
+    type: arasword
+    side: 1
+    pos: [240, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: victim
+    move: hold
+    fire: hold
+  - at: 0
+    do: attack
+    unit: attacker
+    target: victim
+checks:
+  - at: 60
+    unit: victim
+    observable: unit.hp
+    expect: 2140
+    label: first swing contact damage
+    derivation: |
+      The attacker closes 40 -> 30 wu (10 wu at 1.1 wu/frame ~= 9 frames)
+      and swings; melee is instant contact, so the full [DAMAGE] default
+      360 lands the swing frame (direct contact, multiplier 1.0).
+      MaxDamage 2500 - 360 = 2140. Reload 1.7 s = 51 ticks keeps swing 2
+      past frame 60 (swing 1 ~frame 10-13). Zero damage by frame 60 =
+      the melee mechanic never resolves at all.
+    missing_if_zero: true
+  - at: 60
+    unit: attacker
+    observable: unit.projectile_spawns
+    expect: 0
+    label: melee spawns no projectile entity
+    derivation: |
+      The Melee behavior is instant (is_instant vtable) — contact resolves
+      through the detonation path with nothing ever in flight. The
+      cumulative projectile-spawn count for the attacker must stay 0; any
+      spawn means melee was approximated as a flying shot (even a fast,
+      transient one).

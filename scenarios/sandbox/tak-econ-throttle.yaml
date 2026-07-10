@@ -1,0 +1,50 @@
+# TA:K mana throttle: an empty pool SLOWS construction proportionally,
+# never stops it, and never over-draws.
+# Ground truth: economy spec §5.3 (throttle-first applicator: eff scaled by
+# pool[2], then clamped to live pool[0]), §4.3 (pool[2] forecast ratio).
+name: tak-econ-throttle
+game: tak
+system: economy
+spec: economy.md §4.3, §5.3
+description: >-
+  The tak-econ-mana build left to run 30 seconds. Demand (30.4 mana/s)
+  dwarfs income (1 mana/s), so after the 100-mana grant is spent the build
+  crawls at the income-limited rate — the TA:K shortage model is a smooth
+  proportional slow-down, unlike TA's all-or-nothing stall.
+seed: 1
+duration: 910
+units:
+  - alias: builder
+    type: arabuild
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: build
+    unit: builder
+    build: aralode
+    to: [230, 200]
+    spawns: lode
+checks:
+  - at: 900
+    unit: lode
+    observable: unit.build_percent
+    expect: 46
+    label: income-limited progress at 30 s
+    derivation: |
+      Mana available by frame 900 = 100 grant + 900 * 0.03333333 = 130;
+      cost prorates at buildcost/buildtime, so progress ~= spent/280.
+      The exact f32 walk (per-tick: pool += 0.0333333; pool2 =
+      min(pool/1.0144926, 1); eff = pool2*0.0036231880 clamped to pool;
+      pool -= eff*280) gives 46.43% at frame 900 -> integer 46.
+      100% here means the sim ignored the pool entirely.
+  - at: 900
+    side: 0
+    observable: side.mana
+    expect: 0
+    label: pool pinned at empty under excess demand
+    derivation: |
+      Steady state: each tick's income is immediately consumed by the
+      clamped drain, so pool[0] hovers at ~1e-7 mana — raw 16.16 truncates
+      to 0. A four-digit stock here means drains never touched the pool.

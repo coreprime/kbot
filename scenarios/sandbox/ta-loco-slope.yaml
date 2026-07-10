@@ -1,0 +1,49 @@
+# TA slope speed clamp: the pitch-band percent table caps the speed scalar.
+# Ground truth: locomotion spec §3.1-3.2 (table {25,55,70,85,100,100,75,50,
+# 25,20,15}, band = pitch>>11 clamped +-5), substrate spec §1.2.
+name: ta-loco-slope
+game: ta
+system: locomotion
+spec: locomotion.md §3.1, §3.2
+description: >-
+  ARMFLASH climbs a uniform ramp rising 7 height units per 16-wu cell
+  (height scale 0.5 -> 3.5 wu rise per cell, pitch 12.3 deg = 2246 angle
+  units = band +1). The engine caps speed at MaxVelocity * 75 / 100 on
+  band +1. The scenario measures the steady climb speed.
+seed: 1
+duration: 240
+terrain:
+  width: 64
+  height: 64
+  cell_wu: 16
+  height_scale: 0.5
+  sea_level: 0
+  ramp_axis: z
+  ramp_step: 7
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [512, 96]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [512, 960]    # straight up the ramp
+checks:
+  - at: 200
+    unit: flash
+    observable: unit.speed
+    expect: 98304
+    label: steady climb speed on pitch band +1
+    derivation: |
+      Ramp: 7 height units per cell * 0.5 wu/unit = 3.5 wu rise per 16 wu
+      run -> pitch = atan2(3.5, 16) = 12.34 deg = 2246 TA-angle units.
+      Band = 2246 >> 11 = +1 -> slope table 75%.
+      cap = MaxVelocity 0x20000 * 75 / 100 = 98304 raw (1.5 wu/frame).
+      Flash reaches any cap <= 98304 by frame ceil(98304/1114) = 89, so
+      frame 200 samples the steady state. A zero here means the sim's
+      terrain legality refuses the climb outright; any other value is its
+      substitute slope model.
+    missing_if_zero: true

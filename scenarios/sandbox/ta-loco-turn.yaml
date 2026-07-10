@@ -1,0 +1,50 @@
+# TA turning: heading += clamp(bearingError, +-TurnRate) per frame.
+# Ground truth: locomotion spec §2 (turn law), §9.1 (Flash TurnRate=475).
+name: ta-loco-turn
+game: ta
+system: locomotion
+spec: locomotion.md §2
+description: >-
+  ARMFLASH facing heading 0 is ordered to a waypoint 90 degrees to its
+  right (bearing 16384). While |error| > TurnRate the heading advances by
+  exactly TurnRate=475 angle units per frame; the small bearing drift from
+  the unit's own curved motion only matters near completion, so early- and
+  mid-turn samples are exact.
+seed: 1
+duration: 60
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [3200, 200]   # due +X, 3000 wu away: initial bearing exactly 16384
+checks:
+  - at: 20
+    unit: flash
+    observable: unit.heading
+    expect: 9500
+    label: mid-turn heading (rate-saturated)
+    derivation: |
+      FBI TurnRate=475 (int16, angle units per frame). Bearing error starts
+      at 16384; while |err| > 475 each frame turns exactly +475.
+      heading(20) = 20 * 475 = 9500. Remaining error ~6900 dwarfs the
+      bearing drift from ~2 wu of curved motion at this point, so the
+      saturated-turn assumption holds. Spec frame 20 = 666.7 ms; the sim
+      samples its nearest own tick, so a rate-correct 40 Hz integrator
+      still lands 9618 here — the delta exposes tick-cadence quantisation.
+  - at: 30
+    unit: flash
+    observable: unit.heading
+    expect: 14250
+    label: heading at the 1-second boundary
+    derivation: |
+      heading(30) = 30 * 475 = 14250 (error still ~2100 > 475, saturated).
+      Frame 30 = exactly 1.0 s, where a per-second-equivalent turn
+      integrator at any tick rate lands on the same angle sum — this check
+      passing while the mid-turn check fails isolates cadence quantisation
+      from turn-rate scaling.

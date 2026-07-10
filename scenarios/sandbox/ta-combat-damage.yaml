@@ -1,0 +1,62 @@
+# TA damage resolution: the [DAMAGE] table keys on the TARGET's objectname
+# and replaces the default outright; direct hits use multiplier 1.0.
+# Ground truth: combat spec §5.1.1 (direct hit mult 1.0), §5.1.2 (per-name
+# table), §3.1.5 (fire-path RNG draws on the sim MINSTD stream).
+name: ta-combat-damage
+game: ta
+system: combat
+spec: combat.md §5.1.1, §5.1.2, §3.1.5
+description: >-
+  A CORPLAS tower (CORPLAS_WEAPON: default=10, armflash=200, reload 0.8s)
+  is ordered to attack an ARMFLASH held 100 wu away (hold/hold stance so
+  the victim neither flees nor returns fire). The per-name entry must
+  land 200 per hit — a sim reading only the default deals 10.
+seed: 1
+duration: 100
+units:
+  - alias: tower
+    type: corplas
+    side: 1
+    pos: [200, 200]
+    heading: 0
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [300, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: stance
+    unit: flash
+    move: hold
+    fire: hold
+  - at: 0
+    do: attack
+    unit: tower
+    target: flash
+checks:
+  - at: 40
+    unit: flash
+    observable: unit.hp
+    expect: 425
+    label: one direct hit with the per-name table
+    derivation: |
+      base = per-name entry for objectname ARMFLASH = 200 (replaces
+      default=10). Direct hit multiplier 1.0; attacker veterancy 0 kills;
+      defender not ARMORED and vet 0 -> damage = 200 exactly.
+      MaxDamage 625 - 200 = 425. Timing: shot ~frame 1-5, flight 100 wu
+      at 310 wu/s ~= 10 frames -> first impact well before frame 40;
+      second shot impacts ~frame 35+ so sample may straddle it — the
+      per-hit quantum (200 vs 10) still dominates any miscount.
+  - at: 40
+    observable: world.rng_draws
+    expect: 6
+    label: fire path consumes the sim RNG stream
+    derivation: |
+      unit_init draws 2 per unit for random initial facing (2 units = 4);
+      each turret shot draws bearing + elevation spread (accuracy path,
+      spread >= 0x800 even at accuracy=0) = 2 per shot; one shot by frame
+      40 (second at ~frame 30 may add 2 — the derivation pins the minimum
+      case). Zero draws = combat consumes no RNG at all, which breaks
+      any attempt to replicate the engines' downstream draw order.
+    missing_if_zero: true

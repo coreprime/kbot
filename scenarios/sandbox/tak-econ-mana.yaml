@@ -1,0 +1,72 @@
+# TA:K mana pool: spawn grant, per-tick income, per-tick build drain.
+# Ground truth: economy spec §4.3 (income = rate * 0.03333333 per tick),
+# §4.4 (spawn grant = starting units' mogriumstorage), §5.3 (applicator),
+# §9.2 (worked example: builder workertime=10, lodestone buildtime=92,
+# buildcost=280).
+name: tak-econ-mana
+game: tak
+system: economy
+spec: economy.md §4.3, §4.4, §5.3, §9.2
+description: >-
+  An Aramon builder (mogriumstorage=100, mogriumincome=1, workertime=10)
+  raises a Lodestone (buildtime=92, buildcost=280) 30 wu away. The spawn
+  grant seeds the pool with exactly the builder's storage 100; income adds
+  1 * 0.03333333 per tick; the build drains eff*buildcost = 1.0144926
+  mana per tick, throttled only when the pool runs dry.
+seed: 1
+duration: 320
+units:
+  - alias: builder
+    type: arabuild
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: build
+    unit: builder
+    build: aralode
+    to: [230, 200]
+    spawns: lode
+checks:
+  - at: 3
+    side: 0
+    observable: side.mana
+    expect: 6560153
+    label: spawn grant plus three ticks of income
+    derivation: |
+      Spawn grant: pool[0] = builder mogriumstorage = 100.0 exactly.
+      Income: += f32(1 * 0.03333333) per tick; after 3 ticks (before the
+      build's first drain lands, work-start latency >= 1 frame) pool =
+      100.0999984741 (f32) -> raw trunc(100.0999984741 * 65536) = 6560153.
+      (Build drain, if already active, lowers this — the dominant signal
+      is the 100-vs-1000 starting grant.)
+  - at: 60
+    side: 0
+    observable: side.mana
+    baseline: 6553600
+    expect: -3858084
+    label: build drain against the pool
+    derivation: |
+      Per tick: eff = (10 * 0.03333333) * f32(1/92) = 0.0036231880;
+      cost = eff * 280 = 1.0144926 mana. Pool stays above the per-tick
+      demand until ~frame 97, so no throttle by frame 60 (work assumed to
+      begin frame 1):
+      pool(60) = f32(100 + 60*0.03333333 - 60*1.0144926) = 41.130310
+      -> raw 2695516; effect vs the 100 grant (raw 6553600) =
+      2695516 - 6553600 = -3858084. Zero movement = builds never touch
+      the mana pool.
+    missing_if_zero: true
+  - at: 200
+    unit: lode
+    observable: unit.build_percent
+    expect: 38
+    label: pool-limited build pace
+    derivation: |
+      Progress per tick = eff = 0.36231884% while the pool covers the
+      1.0144926 cost. The pool (100 grant + 0.0333/tick income) empties at
+      ~frame 97; from then on the throttle ratio pool[2] and the live
+      pool[0]-clamp hold work to the income-limited rate (~3.29% of full).
+      The f32 walk of §4.3+§5.3 (income add, pool[2] = pool/demand_tick,
+      clamp cost to pool) gives progress(200) = 38.095% -> integer 38.
+      An unthrottled sim shows ~72 here; a fixed-8s-pace sim shows ~100.

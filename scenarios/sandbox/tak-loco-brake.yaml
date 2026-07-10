@@ -1,0 +1,35 @@
+# TA:K braking: brakerate=10 zeroes infantry speed in one frame.
+# Ground truth: locomotion spec §1.4, §9.2 ("any brake frame zeroes it").
+name: tak-loco-brake
+game: tak
+system: locomotion
+spec: locomotion.md §1.4, §9.2
+description: >-
+  A moving swordsman is given Stop. brakerate=10 (0xA0000/frame) exceeds
+  the 72089-raw speed, so the >=0 clamp lands in a single frame — the one
+  place a hard stop is also the engine's exact behavior.
+seed: 1
+duration: 40
+units:
+  - alias: sword
+    type: arasword
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: sword
+    to: [200, 2000]
+  - at: 20
+    do: stop
+    unit: sword
+checks:
+  - at: 21
+    unit: sword
+    observable: unit.speed
+    expect: 0
+    label: stationary one frame after stop
+    derivation: |
+      speed(20) = 72089 raw; brake frame: 72089 - 655360 < 0 -> clamp 0.
+      trunc(10 * 65536) = 655360. One frame suffices.

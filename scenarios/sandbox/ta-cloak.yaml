@@ -1,0 +1,39 @@
+# TA cloak: a per-settle all-or-nothing energy drain that decloaks on
+# failed payment; cloaked units leave LOS and become untargetable.
+# Ground truth: specials spec §5.1, economy spec §1.5 (cloak drain),
+# combat spec §2.1.6.
+name: ta-cloak
+game: ta
+system: specials
+spec: specials.md §5.1, economy.md §1.5
+description: >-
+  The Commander (CloakCost=200, CloakCostMoving=1000) is ordered to cloak
+  and stands still. Each 1 Hz settle must drain trunc(200) energy
+  all-or-nothing from the pool. The sandbox has no cloak order at all —
+  the expected verdict is missing.
+seed: 1
+duration: 130
+units:
+  - alias: com
+    type: armcom
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: cloak
+    id: cloak-order
+    unit: com
+checks:
+  - at: 125
+    side: 0
+    observable: side.energy
+    baseline: 65536000
+    expect: -45875200
+    label: stationary cloak drain over four settles
+    derivation: |
+      Per settle: cloak drains ftol(CloakCost 200) = 200 energy
+      (stationary; the unit is idle), the commander's EnergyMake credits
+      25. Four settles (frames 30..120): effect = 4 * (-200 + 25) = -700
+      -> raw -700 * 65536 = -45875200 vs the 1000 start.
+    requires_action: cloak-order
