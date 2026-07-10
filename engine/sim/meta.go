@@ -318,6 +318,12 @@ type WeaponMeta struct {
 	Tracks          bool        // guided: homes on the target
 	SelfProp        bool        // self-propelled (with Tracks + turn rate, homes)
 	Ballistic       bool        // unpowered arc under gravity
+	// NoExplode marks the disintegrator (D-gun) class: the shot applies its
+	// detonation on contact but keeps flying, sweeping units along its whole
+	// path. Each detonation's splash catches allies and enemies alike, so the
+	// D-gun disintegrates chains of units — friendlies included — and a shot
+	// fired near the floor keeps travelling instead of fizzling into terrain.
+	NoExplode bool
 
 	// --- Exact firing-cycle / damage fields (games.EnrichCombatMeta) ---
 

@@ -175,6 +175,7 @@ func weaponFromJS(o js.Value) sim.WeaponMeta {
 		Tracks:          getBool(o, "tracks"),
 		SelfProp:        getBool(o, "selfProp"),
 		Ballistic:       getBool(o, "ballistic"),
+		NoExplode:       getBool(o, "noExplode"),
 
 		// Exact firing-cycle / damage fields from the studio's shared combat
 		// enrichment (games.EnrichCombatMeta), so browser combat matches the

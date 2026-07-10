@@ -677,6 +677,20 @@ func (w *World) stepProjectiles() {
 			}
 		}
 		p.stepProjectile(fixed.Zero)
+		// A disintegrator (D-gun) sweeps its whole path: on contact with an
+		// enemy body it detonates but keeps flying, so it disintegrates a chain
+		// of units — each detonation's splash catching friendlies too — and a
+		// shot fired near the floor keeps travelling instead of fizzling. It is
+		// exempt from the terrain-block clip below; it expires only on lifeSec.
+		if p.noExplode {
+			w.sweepDisintegrator(p)
+			if p.dead { // ran out of flight time
+				w.detonate(p)
+				continue
+			}
+			alive = append(alive, p)
+			continue
+		}
 		// Terrain blocks the flight path: a shot dipping below the ground
 		// detonates on the slope it hit (clipping the arc that would have
 		// reached a target up on a cliff).
@@ -738,6 +752,75 @@ func (w *World) emitBurstPellet(parent *projectile) *projectile {
 	}
 	w.emit(frame.Event{Kind: frame.EvProjectileSpawn, UnitID: parent.ownerID, Slot: parent.slot, TargetID: parent.targetID, Anchor: parent.origin, Weapon: wm.Name})
 	return pellet
+}
+
+// sweepDisintegrator advances a D-gun shot's pass-through this tick. The shot
+// keeps flying (noexplode), so instead of dying on the aim point it detonates
+// on contact and travels on. It fires a fresh detonation when it reaches its
+// aim point and when it first enters each enemy body along the path; every
+// detonation runs the normal splash, which catches allies and enemies within
+// the blast, so the D-gun disintegrates chains of units — friendlies included.
+// It never fizzles into terrain; only its flight-time expiry ends it.
+func (w *World) sweepDisintegrator(p *projectile) {
+	// Reaching the aim point is a detonation, not the end of flight: clear the
+	// stop stepProjectile raised so the ball sweeps on to whatever is behind.
+	reached := false
+	if p.dead && p.hit && p.ageSec < p.lifeSec {
+		p.dead = false
+		p.hit = false
+		reached = true
+	}
+	if p.dead {
+		return // flight-time expiry: let the caller run the final detonation
+	}
+	// Enter-body contact against enemy units (friendly bodies are transparent
+	// to the shot in flight; their allegiance-blind death comes from the splash
+	// of a detonation triggered by an enemy hit or the aim point).
+	directHit := uint32(0)
+	contact := false
+	for _, id := range w.order {
+		t := w.units[id]
+		if t == nil || t.Dead || t.Meta == nil || t.carriedBy != 0 ||
+			t.ID == p.ownerID || t.Side == w.ownerSide(p.ownerID) {
+			continue
+		}
+		if p.sweepHit[t.ID] {
+			continue
+		}
+		if !projInBody(p.pos, t) {
+			continue
+		}
+		if p.sweepHit == nil {
+			p.sweepHit = map[uint32]bool{}
+		}
+		p.sweepHit[t.ID] = true
+		if directHit == 0 {
+			directHit = t.ID
+		}
+		contact = true
+	}
+	if reached || contact {
+		w.emit(frame.Event{Kind: frame.EvProjectileHit, UnitID: p.ownerID, Slot: p.slot, TargetID: directHit, Anchor: p.pos, Weapon: p.weapon})
+		w.detonateWeapon(p.ownerID, directHit, &p.wm, p.pos)
+	}
+}
+
+// ownerSide returns a projectile owner's side, or a sentinel that matches no
+// unit when the owner is gone — so a disintegrator outliving its firer still
+// treats everyone as an enemy body to sweep.
+func (w *World) ownerSide(ownerID uint32) int {
+	if o := w.units[ownerID]; o != nil {
+		return o.Side
+	}
+	return -1
+}
+
+// projInBody reports whether a point lies inside a unit's splash bounding box —
+// the in-flight collision volume for the disintegrator sweep.
+func projInBody(pt fixed.Vec3, t *Unit) bool {
+	hx, hy, hz := t.Meta.aabbHalf()
+	p := t.Pos()
+	return (pt.X - p.X).Abs() <= hx && (pt.Y - p.Y).Abs() <= hy && (pt.Z - p.Z).Abs() <= hz
 }
 
 // detonate emits the projectile's hit event and, if it actually reached its

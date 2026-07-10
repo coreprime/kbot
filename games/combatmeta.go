@@ -122,6 +122,7 @@ func enrichTA(m *sim.UnitMeta, info *ta.UnitInfo, resolve WeaponResolver) {
 		wm.Accuracy = int32(sec.Accuracy)
 		wm.Turret = sec.Turret != 0
 		wm.CommandFire = sec.CommandFire != 0
+		wm.NoExplode = sec.NoExplode != 0
 		wm.EnergyShot = fixed.FromFloat(sec.EnergyPerShot)
 		wm.MetalShot = fixed.FromInt(sec.MetalPerShot)
 		wm.MinBarrelSin = minBarrelSin(sec.MinBarrelAngle)

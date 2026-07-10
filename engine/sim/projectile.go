@@ -120,6 +120,13 @@ type projectile struct {
 	// even after the firing unit is gone.
 	wm WeaponMeta
 
+	// noExplode marks a disintegrator (D-gun) shot: on contact with an enemy
+	// body it detonates but keeps flying, so it sweeps units along its whole
+	// path. sweepHit records the enemy bodies it has already detonated on so a
+	// multi-tick pass through one body fires exactly once per victim.
+	noExplode bool
+	sweepHit  map[uint32]bool
+
 	// Burst-parent bookkeeping: pellets left, the tick spacing, and ticks
 	// since the last emission. The parent sits at the muzzle emitting one
 	// flying pellet every burstGap ticks; it is removed once the count runs
@@ -330,6 +337,7 @@ func (w *World) makeProjectile(ownerID, targetID uint32, slot int, wm WeaponMeta
 		pitch:     pitchInit,
 		lastDistT: d,
 		fromPiece: fromPiece,
+		noExplode: wm.NoExplode,
 	}
 }
 
