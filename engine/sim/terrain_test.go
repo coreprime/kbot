@@ -304,3 +304,65 @@ func TestHardMapBorderClampsGroundUnit(t *testing.T) {
 		t.Fatalf("unit did not advance toward the border: x=%v", u.loco.Pos.X.Float())
 	}
 }
+
+// TestWaterMapLandAndShipLegality pins the raw-byte water-depth unit system a
+// water map (TA:K style) drives: sea level and cell heights are the same raw
+// bytes, and depth = sea − height with no HeightScale in the comparison. A
+// land unit with a finite max depth stands and drives on the high shelf but
+// not out in deep water; a ship is the exact inverse. Reproduces the "leader
+// stuck on a water map" class of bug at the legality layer: were depth scaled
+// against unscaled heights the land shelf would read as flooded and the deep
+// water as dry, flipping both verdicts.
+func TestWaterMapLandAndShipLegality(t *testing.T) {
+	w := New(Config{Seed: 71})
+	// Sea level 58 (Athri Cay's). Deep water (height 0) fills x-cells < 16;
+	// a dry land shelf (height 200, well above sea) fills the rest.
+	const seaLevel = 58
+	w.SetTerrain(testTerrain(40, 40, seaLevel, func(cx, _ int) uint8 {
+		if cx < 16 {
+			return 0
+		}
+		return 200
+	}))
+	// Land unit: GROUND2-style max depth 20 (a land monarch's resolved value).
+	land := testMeta("land")
+	land.MaxWaterDepth = 20
+	land.MaxSlope = 255
+	// Ship: needs at least its min depth of water under it.
+	ship := testMeta("ship")
+	ship.IsShip = true
+	ship.MinWaterDepth = 13
+
+	// Cell centres: a dry-land cell (cell 30) and a deep-water cell (cell 4).
+	landPt := fixed.Vec2{X: fixed.FromInt(30*16 + 8), Z: fixed.FromInt(20*16 + 8)}
+	waterPt := fixed.Vec2{X: fixed.FromInt(4*16 + 8), Z: fixed.FromInt(20*16 + 8)}
+
+	// Sanity: the depth read is in raw bytes (58 out in deep water, 0 on land).
+	if d := w.waterDepthAt(waterPt); d != seaLevel {
+		t.Fatalf("deep-water depth = %d, want %d (raw sea−height)", d, seaLevel)
+	}
+	if d := w.waterDepthAt(landPt); d != 0 {
+		t.Fatalf("dry-land depth = %d, want 0", d)
+	}
+
+	// Land unit: legal on the shelf, illegal in deep water (58 > 20).
+	if !w.canStand(land, landPt) {
+		t.Fatal("land unit cannot stand on the dry shelf")
+	}
+	if w.canStand(land, waterPt) {
+		t.Fatal("land unit stands in deep water (depth 58 > max 20)")
+	}
+	// And it may drive across the shelf (a cell-to-cell step on flat land).
+	shelfNext := fixed.Vec2{X: landPt.X + fixed.FromInt(16), Z: landPt.Z}
+	if !w.canTraverse(land, landPt, shelfNext) {
+		t.Fatal("land unit cannot traverse flat land — would spawn stuck")
+	}
+
+	// Ship: the mirror image — floats in deep water, cannot beach on the shelf.
+	if !w.canStand(ship, waterPt) {
+		t.Fatal("ship cannot float in deep water")
+	}
+	if w.canStand(ship, landPt) {
+		t.Fatal("ship stands on dry land (depth 0 < min 13)")
+	}
+}

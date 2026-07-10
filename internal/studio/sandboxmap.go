@@ -71,6 +71,19 @@ type sandboxStartPos struct {
 	Z      float64 `json:"z"`
 }
 
+// startPosWorldScale is the factor that turns a schema's OTA StartPos into
+// sandbox world units. The two games store the coordinate in different grids:
+// TA writes map-pixels (1 px = 1 wu at pxPerWU), while TA:K writes DataUnit
+// cells (one per 16-px height cell), so a TA:K start scales up by the cell
+// size. Missing the TA:K scaling shrinks a start to a pixel offset near the
+// map corner — frequently deep water — and the spawned leader lands stuck.
+func startPosWorldScale(isTAK bool) float64 {
+	if isTAK {
+		return sandboxCellWU
+	}
+	return 1.0 / pxPerWU
+}
+
 func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	mapPath := r.URL.Query().Get("path")
 	if mapPath == "" {
@@ -133,7 +146,13 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	out.Heights = base64.StdEncoding.EncodeToString(heights)
 
 	// OTA — sea level (TA:K, where the TNT field is repurposed) and the
-	// first schema's start positions, converted map-pixels → world units.
+	// first schema's start positions, converted to world units. The two games
+	// store StartPos in different grids: TA writes map-pixels (1 px = 1 wu at
+	// pxPerWU), while TA:K writes DataUnit cells (one per 16-px height cell), so
+	// a TA:K start must scale up by the cell size to land in world units.
+	// Without the TA:K scaling a start reads as a tiny pixel offset near the
+	// map corner — often deep water — and the leader spawns stuck.
+	startScale := startPosWorldScale(m.IsTAK)
 	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
 	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
 		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
@@ -147,8 +166,8 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 				for _, sp := range ota.Schemas[0].StartPos {
 					out.StartPositions = append(out.StartPositions, sandboxStartPos{
 						Number: sp.Number,
-						X:      float64(sp.X) / pxPerWU,
-						Z:      float64(sp.Z) / pxPerWU,
+						X:      float64(sp.X) * startScale,
+						Z:      float64(sp.Z) * startScale,
 					})
 				}
 			}
