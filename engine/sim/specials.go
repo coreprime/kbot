@@ -514,6 +514,27 @@ func (w *World) MindControlThreshold(id uint32) int {
 	return 0
 }
 
+// spellManaCost is the private mana a TA:K spell weapon debits per shot: the
+// weapon's ManaPerShot divided by the caster's veteran multiplier (1 + 0.1·L),
+// so a levelled caster casts cheaper (specials.md §7.1 / §4.2 consumer 1). Zero
+// for a non-spell weapon.
+func spellManaCost(u *Unit, wm *WeaponMeta) float64 {
+	if wm == nil || wm.ManaPerShot <= 0 {
+		return 0
+	}
+	return wm.ManaPerShot / takVetMul(u)
+}
+
+// SpellManaCost exposes the veteran-discounted per-shot mana price of a unit's
+// weapon slot — the harness grades the discount ladder exactly.
+func (w *World) SpellManaCost(id uint32, slot int) float64 {
+	u := w.units[id]
+	if u == nil || u.Meta == nil || slot < 0 || slot >= len(u.Meta.Weapons) {
+		return 0
+	}
+	return spellManaCost(u, &u.Meta.Weapons[slot])
+}
+
 // stepPrivateMana recharges a TA:K unit's private mana pool (§7.1): free,
 // per-tick, clamped to MaxMana, only while active and fully built. TA units
 // (MaxMana == 0) never accumulate.
@@ -582,6 +603,23 @@ func (w *World) PrivateMana(id uint32) float32 {
 		return u.privMana
 	}
 	return 0
+}
+
+// SetPrivateMana pins a TA:K unit's private mana pool directly — a measurement
+// hook so a scenario can seat a caster's pool before observing a spell drain
+// without stepping out the free recharge. Clamped to [0, MaxMana].
+func (w *World) SetPrivateMana(id uint32, mana float32) {
+	u := w.units[id]
+	if u == nil {
+		return
+	}
+	if mana < 0 {
+		mana = 0
+	}
+	if u.Meta != nil && u.Meta.MaxMana > 0 && mana > u.Meta.MaxMana {
+		mana = u.Meta.MaxMana
+	}
+	u.privMana = mana
 }
 
 // Cloaked reports whether a unit is currently cloaked.

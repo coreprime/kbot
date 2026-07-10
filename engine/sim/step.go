@@ -1680,6 +1680,12 @@ func (w *World) stepWeapons(u *Unit) {
 				continue
 			}
 		}
+		// TA:K spell gate: a mana-priced weapon refuses to aim/fire unless the
+		// caster's PRIVATE pool holds the veteran-discounted ManaPerShot
+		// (specials.md §7.1 aim tolerance) — an empty caster cannot cast.
+		if w.econModel == EconomyTAK && wm.ManaPerShot > 0 && u.privMana < float32(spellManaCost(u, &wm)) {
+			continue
+		}
 		// Aircraft must have the airframe lined up within the weapon's firing arc
 		// before they open fire (no rotating turret); and a bomber only starts a
 		// run once it is inside the drop window so the string straddles the target.
@@ -1710,6 +1716,15 @@ func (w *World) stepWeapons(u *Unit) {
 			e, m := float32(wm.EnergyShot.Float()), float32(wm.MetalShot.Float())
 			if w.taConsumeShot(u.Side, e, m) {
 				w.tallySpend(u.Side, float64(m), float64(e), 0)
+			}
+		}
+		// TA:K spell drain: the caster's private mana pays the veteran-discounted
+		// ManaPerShot at the launch commitment (specials.md §7.1 — the private
+		// pool, not the player pool).
+		if w.econModel == EconomyTAK && wm.ManaPerShot > 0 {
+			u.privMana -= float32(spellManaCost(u, &wm))
+			if u.privMana < 0 {
+				u.privMana = 0
 			}
 		}
 		aimPoint := fixed.Vec3{X: targetPos.X, Y: targetY, Z: targetPos.Z}
