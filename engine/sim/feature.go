@@ -300,6 +300,47 @@ func (w *World) FeatureIDAt(x, z fixed.Fixed) uint32 {
 	return 0
 }
 
+// sacredMultiplierFor returns the TA:K sacred-site mana multiplier a producer
+// draws at its footprint, or 0 when no sacred stone is fully covered (world.md
+// §2.5): the WHOLE stone must sit under the producer's footprint — partial
+// coverage contributes nothing. Only meaningful for a SacredProducer unit; the
+// caller gates on that flag.
+func (w *World) sacredMultiplierFor(u *Unit) float64 {
+	if u == nil || u.Meta == nil {
+		return 0
+	}
+	fx, fz := u.Meta.FootprintX, u.Meta.FootprintZ
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	ux, uz := w.featureAnchorCell(fixed.Vec2{X: u.loco.Pos.X, Z: u.loco.Pos.Z}, fx, fz)
+	for _, id := range w.featureOrder {
+		f := w.features[id]
+		if f == nil || f.Meta == nil || f.Meta.SacredSite <= 0 {
+			continue
+		}
+		sfx, sfz := f.footprint()
+		// Count how many of the stone's cells fall under the producer's
+		// footprint; the whole stone (sfx·sfz cells) must be covered.
+		covered := 0
+		for dz := 0; dz < sfz; dz++ {
+			for dx := 0; dx < sfx; dx++ {
+				cx, cz := f.Cx+dx, f.Cz+dz
+				if cx >= ux && cx < ux+fx && cz >= uz && cz < uz+fz {
+					covered++
+				}
+			}
+		}
+		if covered >= sfx*sfz {
+			return f.Meta.SacredSite
+		}
+	}
+	return 0
+}
+
 // featureReclaimTicks is the feature reclaim channel length (world.md §1.5 /
 // specials.md §3.2): ftol((metal + energy)/2 + 15) ticks. Independent of the
 // reclaimer's worker time — a feature reclaims in a flat, def-driven time.

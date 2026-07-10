@@ -28,6 +28,25 @@ type Terrain struct {
 	// bare ground everywhere. Extractor yield samples it once, at
 	// placement.
 	Metal []uint8
+	// LavaWorld marks a lava map (OTA lavaworld=1): every cell whose height
+	// sits at or below sea level is unpathable/unbuildable — lava, unlike
+	// TA water, is not traversable (world.md §1.3/§2.4).
+	LavaWorld bool
+	// WaterDoesDamage / WaterDamage carry the OTA water-attrition keys: when
+	// both are non-zero, a non-hover/non-floater unit standing underwater
+	// takes WaterDamage every 30 ticks (world.md §1.3). Also drives lava
+	// attrition (same keys under lavaworld).
+	WaterDoesDamage bool
+	WaterDamage     int
+}
+
+// cellIsLava reports whether cell (cx, cz) is unpathable lava: a lavaworld map
+// where the cell's height is at or below sea level.
+func (t *Terrain) cellIsLava(cx, cz int) bool {
+	if !t.LavaWorld {
+		return false
+	}
+	return t.cellHeight(cx, cz) <= t.SeaLevel
 }
 
 // cellMetal reads the metal byte at cell (cx, cz); off-map and metal-less
@@ -194,6 +213,11 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	cx := p.X.Div(w.terrain.CellWU).Int()
 	cz := p.Z.Div(w.terrain.CellWU).Int()
 	if w.terrain.cellVoid(cx, cz) {
+		return false
+	}
+	// Lava (a lavaworld map's below-sea cells) is unpathable for everything,
+	// ground and sea alike — unlike TA water, which ships and subs ride.
+	if w.terrain.cellIsLava(cx, cz) {
 		return false
 	}
 	// A blocking feature (tree, rock, wreck, metal patch) occupies its
@@ -377,6 +401,38 @@ func (w *World) CanBuildAt(name string, x, z fixed.Fixed) bool {
 		return true
 	}
 	return w.canBuildAt(m, fixed.Vec2{X: x, Z: z})
+}
+
+// stepWaterDamage applies the periodic water/lava attrition (world.md §1.3 /
+// §2.4): every 30 ticks, on a map with WaterDoesDamage and a non-zero
+// WaterDamage, a unit whose integer Y sits at or below sea level takes the
+// damage — unless it hovers or floats (ships/floaters and hovercraft are
+// exempt). The same keys drive lava attrition on a lavaworld map. Deterministic:
+// stable insertion order, no rng; the damage is dealt ownerless (source 0).
+func (w *World) stepWaterDamage() {
+	t := w.terrain
+	if t == nil || !t.WaterDoesDamage || t.WaterDamage <= 0 {
+		return
+	}
+	if w.tick%30 != 0 {
+		return
+	}
+	sea := fixed.FromInt(t.SeaLevel).Mul(t.HeightScale)
+	for _, id := range append([]uint32(nil), w.order...) {
+		u := w.units[id]
+		if u == nil || u.Dead || u.Meta == nil || u.carriedBy != 0 {
+			continue
+		}
+		m := u.Meta
+		// Aircraft fly above; hovercraft ride the cushion; floaters/ships sit
+		// on the surface by design — all exempt from water attrition.
+		if m.IsAircraft || m.CanHover || m.IsHovercraft || m.IsShip || m.Floater {
+			continue
+		}
+		if u.PosY <= sea {
+			w.ApplyDamage(0, id, fixed.FromInt(t.WaterDamage))
+		}
+	}
 }
 
 // settleOnTerrain is the terrain snap that runs after each unit's move:

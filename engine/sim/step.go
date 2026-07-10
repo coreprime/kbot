@@ -131,6 +131,7 @@ func (w *World) Step(rt Runtime) {
 		w.stepMovement(u)
 	}
 	w.drainTransfers()
+	w.stepWaterDamage()
 	w.pinCargo()
 	w.stepYards()
 	w.stepCollisions()

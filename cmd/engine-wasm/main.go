@@ -486,6 +486,17 @@ func setTerrain(_ js.Value, args []js.Value) any {
 		HeightScale: fixed.FromFloat(o.Get("heightScale").Float()),
 		SeaLevel:    o.Get("seaLevel").Int(),
 	}
+	// OTA terrain flags: lavaworld (below-sea cells unpathable) and the
+	// water/lava attrition keys. Absent fields default off.
+	if v := o.Get("lavaWorld"); !v.IsUndefined() && !v.IsNull() {
+		t.LavaWorld = v.Bool()
+	}
+	if v := o.Get("waterDoesDamage"); !v.IsUndefined() && !v.IsNull() {
+		t.WaterDoesDamage = v.Bool()
+	}
+	if v := o.Get("waterDamage"); !v.IsUndefined() && !v.IsNull() {
+		t.WaterDamage = v.Int()
+	}
 	data := o.Get("data")
 	n := data.Get("length").Int()
 	if n < t.W*t.H {

@@ -324,6 +324,106 @@ func TestSlopeTiltPitchRoll(t *testing.T) {
 	}
 }
 
+// TestSacredSiteIncome pins the TA:K lodestone rule: a sacred-site producer
+// standing fully on a sacred stone draws mogriumincome × sacredsite; a
+// producer NOT covering a stone (or with only partial coverage) draws nothing.
+func TestSacredSiteIncome(t *testing.T) {
+	makeWorld := func() *World {
+		w := New(Config{Seed: 80, Economy: EconomyTAK})
+		w.SetTerrain(testTerrain(32, 32, 0, func(_, _ int) uint8 { return 40 }))
+		return w
+	}
+	lode := func(name string) *UnitMeta {
+		m := testMeta(name)
+		m.CanMove = false
+		m.FootprintX, m.FootprintZ = 2, 2
+		m.SacredProducer = true
+		m.Econ.ManaIncome = 10
+		m.Econ.BuildTimeF = 100
+		return m
+	}
+	// A 2x2 swarthy stone (sacredsite 1.5) at cell (4,4) -> world centre (72,72).
+	stoneAt := func(w *World, cx, cz int) {
+		s := &FeatureMeta{Name: "stone", FootprintX: 2, FootprintZ: 2, SacredSite: 1.5, Indestructible: true}
+		w.AddFeature("stone", s, FeatureSacred, fixed.Vec2{X: fixed.FromInt(cx*16 + 16), Z: fixed.FromInt(cz*16 + 16)}, 0, -1)
+	}
+
+	// Producer fully on the stone: income = 10 × 1.5 = 15 mana/s.
+	w := makeWorld()
+	stoneAt(w, 4, 4)
+	id := w.AddUnit("lode", lode("lode"), nil, fixed.Vec2{X: fixed.FromInt(80), Z: fixed.FromInt(80)}, 0, 0)
+	on := w.UnitByID(id)
+	if got := w.sacredMultiplierFor(on); got != 1.5 {
+		t.Fatalf("producer on the stone: multiplier=%v, want 1.5", got)
+	}
+	for i := 0; i < 30; i++ {
+		w.Step(nil)
+	}
+	incomeOn := w.econView(0).produced.Mana.Float()
+
+	// Producer far from any stone: no sacred income.
+	w2 := makeWorld()
+	stoneAt(w2, 4, 4)
+	id2 := w2.AddUnit("lode", lode("lode"), nil, fixed.Vec2{X: fixed.FromInt(400), Z: fixed.FromInt(400)}, 0, 0)
+	if got := w2.sacredMultiplierFor(w2.UnitByID(id2)); got != 0 {
+		t.Fatalf("producer off the stone: multiplier=%v, want 0", got)
+	}
+	for i := 0; i < 30; i++ {
+		w2.Step(nil)
+	}
+	incomeOff := w2.econView(0).produced.Mana.Float()
+
+	if incomeOn <= incomeOff {
+		t.Fatalf("sacred producer on the stone should out-earn one off it: on=%v off=%v", incomeOn, incomeOff)
+	}
+	if incomeOff != 0 {
+		t.Fatalf("a sacred producer off any stone should earn no mana: got %v", incomeOff)
+	}
+}
+
+// TestLavaBlocksAndDamages pins the lavaworld terrain rules: below-sea lava
+// cells are unpathable, and water/lava attrition damages a ground unit sitting
+// in them every 30 ticks.
+func TestLavaBlocksAndDamages(t *testing.T) {
+	w := New(Config{Seed: 81})
+	// A pit: cells below sea (height 0, sea 20) form a lava trough at x-cell < 8.
+	terr := testTerrain(32, 32, 20, func(cx, _ int) uint8 {
+		if cx < 8 {
+			return 0
+		}
+		return 40
+	})
+	terr.LavaWorld = true
+	terr.WaterDoesDamage = true
+	terr.WaterDamage = 30
+	w.SetTerrain(terr)
+
+	m := testMeta("tank")
+	m.MaxSlope = 255
+	m.MaxHealth = fixed.FromInt(100)
+	// A cell inside the lava trough must be unstandable.
+	lavaPt := fixed.Vec2{X: fixed.FromInt(48), Z: fixed.FromInt(160)}
+	if w.canStand(m, lavaPt) {
+		t.Fatalf("lava must be unpathable")
+	}
+	dryPt := fixed.Vec2{X: fixed.FromInt(240), Z: fixed.FromInt(160)}
+	if !w.canStand(m, dryPt) {
+		t.Fatalf("dry high ground must be standable")
+	}
+
+	// A unit forced into the lava (spawned there) takes attrition over 30 ticks.
+	id := w.AddUnit("tank", m, nil, lavaPt, 0, 0)
+	u := w.UnitByID(id)
+	u.PosY = fixed.FromInt(0) // sitting at the pit floor, below sea
+	before := u.Health
+	for i := 0; i < 31; i++ {
+		w.Step(nil)
+	}
+	if u.Health >= before {
+		t.Fatalf("lava attrition dealt no damage: %v -> %v", before.Float(), u.Health.Float())
+	}
+}
+
 func abs32(v int32) int32 {
 	if v < 0 {
 		return -v

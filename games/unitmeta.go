@@ -134,6 +134,13 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		FootprintZ:        info.FootprintZ,
 	}
 	m.Yard = sim.ParseYardMap(info.YardMap, info.FootprintX, info.FootprintZ)
+	// A yardmap 'S' cell marks a TA:K sacred-site producer (lodestone): its
+	// mogriumincome is gated on standing fully atop a sacred stone. TA yardmaps
+	// never use 'S' (they use 'G' for geothermal), so this is a harmless no-op
+	// for TA units.
+	if strings.ContainsRune(info.YardMap, 'S') {
+		m.SacredProducer = true
+	}
 	m.MaxSlope = info.MaxSlope
 	m.MaxWaterDepth = info.MaxWaterDepth
 	m.MinWaterDepth = info.MinWaterDepth

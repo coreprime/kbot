@@ -432,11 +432,17 @@ func (w *World) stepManaPhaseB() {
 		}
 		s := u.Side
 		if u.buildRem == 0 {
-			// Lodestone sacred-site gating (income only while the yardmap's
-			// 'S' cells fully cover a sacredsite feature) is a feature-world
-			// mechanic; until the feature block lands, mogriumincome credits
-			// ungated (seam: Block 7 replaces this with the footprint scan).
-			income[s] += float64(u.Meta.Econ.ManaIncome)
+			// A sacred-site producer (yardmap 'S') credits mogriumincome only
+			// while its footprint fully covers a sacred stone, multiplied by
+			// that stone's sacredsite value (world.md §2.5). Non-producers add
+			// the flat mogriumincome as before.
+			if u.Meta.SacredProducer {
+				if mult := w.sacredMultiplierFor(u); mult > 0 {
+					income[s] += float64(u.Meta.Econ.ManaIncome) * mult
+				}
+			} else {
+				income[s] += float64(u.Meta.Econ.ManaIncome)
+			}
 			capacity[s] += float64(u.Meta.Econ.ManaStorage)
 		}
 		// Demand forecast: builders with the actively-building state flag

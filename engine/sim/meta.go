@@ -199,6 +199,12 @@ type UnitMeta struct {
 	// falloff polarity (full at the edge).
 	HealAura *AuraMeta
 
+	// SacredProducer marks a TA:K unit whose yardmap declares an 'S' (sacred)
+	// cell (unitdef+0x264 bit 31): its mogriumincome is credited only when its
+	// footprint fully covers a sacred-site feature, multiplied by that
+	// feature's sacredsite value (world.md §2.5 / economy.md §4.3).
+	SacredProducer bool
+
 	// Wreck is the corpse featuredef the unit leaves on an ordinary death
 	// (FBI corpse=, resolved through the feature registry): its reclaim
 	// metal/energy yield, hit points and successor-chain name. Nil means the

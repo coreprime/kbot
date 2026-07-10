@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"math"
 	"strconv"
+	"strings"
 	"syscall/js"
 
 	"github.com/coreprime/kbot/engine/fixed"
@@ -89,6 +90,9 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 	m.SelfDestructCountdown = getInt(o, "selfDestructCountdown")
 	m.Kamikaze = getBool(o, "kamikaze")
 	m.KamikazeDistance = getInt(o, "kamikazeDistance")
+	// A yardmap 'S' cell marks a TA:K sacred-site producer; the studio meta
+	// sets this, and it also derives from the yardmap string as a fallback.
+	m.SacredProducer = getBool(o, "sacredProducer") || strings.ContainsRune(getString(o, "yardMap"), 'S')
 	econFromJS(m, o.Get("econ"))
 	if w := o.Get("weapons"); w.Type() == js.TypeObject && !w.IsNull() {
 		n := w.Length()
