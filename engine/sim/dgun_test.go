@@ -10,17 +10,17 @@ import (
 // "dgun" ball, big blast, huge damage, noexplode (keeps flying), commandfire.
 func dgunMeta() WeaponMeta {
 	return WeaponMeta{
-		Name:           "ARM_DISINTEGRATOR",
-		Present:        true,
-		CommandFire:    true,
-		NoExplode:      true,
-		Model:          "dgun",
-		Range:          fixed.FromInt(240),
-		VelocityWU:     fixed.FromInt(200),
-		AreaOfEffectWU: fixed.FromInt(48),
-		FlightTimeSec:  fixed.FromInt(4),
-		DamageDefault:  5500,
-		Damage:         fixed.FromInt(5500),
+		Name:              "ARM_DISINTEGRATOR",
+		Present:           true,
+		CommandFire:       true,
+		NoExplode:         true,
+		Model:             "dgun",
+		Range:             fixed.FromInt(240),
+		VelocityWU:        fixed.FromInt(200),
+		AreaOfEffectWU:    fixed.FromInt(48),
+		FlightTimeSec:     fixed.FromInt(4),
+		DamageDefault:     5500,
+		Damage:            fixed.FromInt(5500),
 		EdgeEffectiveness: 0.5,
 	}
 }

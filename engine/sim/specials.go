@@ -107,12 +107,36 @@ func (w *World) applyReclaim(u *Unit, targetID uint32) {
 	if u == nil || u.Dead || u.underConstruction() || u.Meta == nil || !u.Meta.CanReclaim {
 		return
 	}
+	// A feature-range target id names a wreck or map feature, not a unit —
+	// arm the flat-time feature reclaim channel instead.
+	if isFeatureID(targetID) {
+		w.applyFeatureReclaim(u, targetID)
+		return
+	}
 	t := w.units[targetID]
 	if t == nil || t.Dead || t == u || t.Meta == nil || t.Meta.CanCapture {
 		return
 	}
 	u.reclaimTarget = targetID
 	u.reclaimAccum = 0
+	u.reclaimFeature = 0
+	u.hasMove = false
+	u.hasAttack = false
+}
+
+// applyFeatureReclaim arms a reclaim channel against a map feature or wreck:
+// the reclaimer must canreclamate and the feature must be reclaimable and not
+// indestructible. The channel length is fixed once, here at arming, from the
+// featuredef metal/energy yield (feature.go, world.md §1.5).
+func (w *World) applyFeatureReclaim(u *Unit, featureID uint32) {
+	f := w.features[featureID]
+	if f == nil || f.Meta == nil || !f.Meta.Reclaimable || f.Meta.Indestructible {
+		return
+	}
+	u.reclaimFeature = featureID
+	u.reclaimTarget = 0
+	u.reclaimAccum = 0
+	u.reclaimFeatureTicks = featureReclaimTicks(f.Meta)
 	u.hasMove = false
 	u.hasAttack = false
 }
@@ -154,6 +178,29 @@ func (w *World) stepSpecials(u *Unit) {
 	if u.reclaimTarget != 0 {
 		w.stepReclaim(u)
 	}
+	if u.reclaimFeature != 0 {
+		w.stepFeatureReclaim(u)
+	}
+}
+
+// stepFeatureReclaim advances a feature reclaim channel: the accumulator climbs
+// once per tick to the once-computed channel length, and on completion removes
+// the feature and credits its metal+energy yield to the reclaimer's side (TA
+// lumps both; TA:K credits nothing — creditFeatureReclaim is a no-op there).
+func (w *World) stepFeatureReclaim(u *Unit) {
+	f := w.features[u.reclaimFeature]
+	if f == nil {
+		u.reclaimFeature, u.reclaimAccum, u.reclaimFeatureTicks = 0, 0, 0
+		return
+	}
+	u.reclaimAccum++
+	if u.reclaimAccum < u.reclaimFeatureTicks {
+		return
+	}
+	w.creditFeatureReclaim(u.Side, f.Meta)
+	w.emit(frame.Event{Kind: frame.EvDespawn, UnitID: f.ID, Anchor: f.Pos})
+	w.removeFeature(f.ID)
+	u.reclaimFeature, u.reclaimAccum, u.reclaimFeatureTicks = 0, 0, 0
 }
 
 // stepCapture advances the capture channel by two accumulator counts per
@@ -641,4 +688,19 @@ func (w *World) creditMetal(side int, metal float32) {
 	}
 	p.stockM = f32(float64(p.stockM) + float64(metal))
 	p.producedM += float64(metal)
+}
+
+// creditEnergy adds a lump energy gain to a side's TA pool (the energy half of
+// a feature reclaim yield). Settle-clamped like all income: the pool is bumped
+// and the next settle's storage clamp meters any overflow.
+func (w *World) creditEnergy(side int, energy float32) {
+	if side < 0 || side >= maxSides || energy <= 0 {
+		return
+	}
+	p := &w.econTA[side]
+	if !p.seeded {
+		w.seedSideEconomy(side)
+	}
+	p.stockE = f32(float64(p.stockE) + float64(energy))
+	p.producedE += float64(energy)
 }

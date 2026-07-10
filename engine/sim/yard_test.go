@@ -52,8 +52,8 @@ func TestYardChannelOpensWithYard(t *testing.T) {
 	id := w.AddUnit("lab", labMeta(), nil, fixed.Vec2{}, 0, 0)
 	s := w.UnitByID(id)
 	r := fixed.FromInt(6)
-	channel := fixed.Vec2{}                     // dead centre, on the channel
-	flank := fixed.Vec2{X: fixed.FromInt(-24)}  // solid west columns
+	channel := fixed.Vec2{}                    // dead centre, on the channel
+	flank := fixed.Vec2{X: fixed.FromInt(-24)} // solid west columns
 	corner := fixed.Vec2{X: fixed.FromInt(-44), Z: fixed.FromInt(-44)}
 	if !yardCircleOverlaps(s, channel, r) {
 		t.Fatalf("closed channel should block")

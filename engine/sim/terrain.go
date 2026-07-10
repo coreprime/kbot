@@ -180,7 +180,17 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	if w.terrain == nil || m == nil || m.IsAircraft {
 		return true
 	}
-	if w.terrain.cellVoid(p.X.Div(w.terrain.CellWU).Int(), p.Z.Div(w.terrain.CellWU).Int()) {
+	cx := p.X.Div(w.terrain.CellWU).Int()
+	cz := p.Z.Div(w.terrain.CellWU).Int()
+	if w.terrain.cellVoid(cx, cz) {
+		return false
+	}
+	// A blocking feature (tree, rock, wreck, metal patch) occupies its
+	// footprint cells: a ground mover cannot stand where one sits. Ships,
+	// subs and hovercraft ride over the water-side features the same way the
+	// engines let them, so the block applies only to the surface-ground
+	// classes handled below the water gate.
+	if !m.IsShip && !m.IsSub && w.featureBlocksCell(cx, cz) {
 		return false
 	}
 	depth := w.waterDepthAt(p)
@@ -318,6 +328,13 @@ func (w *World) canBuildAt(m *UnitMeta, p fixed.Vec2) bool {
 		for dx := -fx / 2; dx <= fx/2; dx++ {
 			// Any carved-out cell under the footprint kills the plot.
 			if t.cellVoid(cx+dx, cz+dz) {
+				return false
+			}
+			// A blocking feature (tree/rock/wreck/metal patch/sacred stone)
+			// under the footprint refuses the build — the site must be
+			// cleared first. Reclaimable, non-blocking scenery coexists with
+			// the building (the engines do not auto-clear it).
+			if w.featureBlocksCell(cx+dx, cz+dz) {
 				return false
 			}
 			h := t.cellHeight(cx+dx, cz+dz)

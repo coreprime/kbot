@@ -120,6 +120,28 @@ type ProjectileState struct {
 	FromPiece int32
 }
 
+// FeatureState is one placed map feature (tree, rock, metal patch, sacred
+// stone or unit wreck) the renderer draws and the player interacts with
+// (reclaim / resurrect). Features are sim state, so — unlike terrain — they
+// appear and disappear across ticks; the render lane keys them by ID. Kind
+// mirrors sim.FeatureKind numerically (0 prop, 1 metal patch, 2 wreck,
+// 3 sacred site) without importing the sim package.
+type FeatureState struct {
+	ID      uint32
+	Name    string     // featuredef name (the client resolves the 3DO/sprite art)
+	Kind    uint8      // FeatureKind: 0 prop, 1 metal, 2 wreck, 3 sacred
+	Pos     fixed.Vec3 // world position (footprint centre, ground-snapped)
+	Heading int32      // TA-angle orientation (a wreck keeps the dead unit's facing)
+	HP      int        // current hit points (a wreck erodes down its heap chain)
+	Owner   int        // owning side for a wreck (-1 = neutral map feature)
+	// Interaction hints for the render lane's reclaim/resurrect cursors.
+	Blocking      bool   // occupies its footprint cells (movement/placement blocker)
+	Reclaimable   bool   // a valid reclaim target
+	ReclaimMetal  int    // metal salvage a full reclaim yields (0 when not reclaimable)
+	ReclaimEnergy int    // energy salvage a full reclaim yields
+	DeadName      string // unit type a wreck resurrects back into ("" = none)
+}
+
 // EventKind enumerates the discrete events the renderer's effects layer reacts
 // to. These mirror the JS engine's event bus exactly.
 type EventKind uint8
@@ -276,4 +298,8 @@ type Snapshot struct {
 	// Resources lists each active side's usage figures (only sides with any
 	// spend or drain are included).
 	Resources []ResourceState
+	// Features lists every live placed map feature (scenery, metal patches,
+	// sacred stones, wrecks) for the render lane to draw and offer as
+	// reclaim/resurrect targets.
+	Features []FeatureState
 }

@@ -243,6 +243,12 @@ type Unit struct {
 	capTime       int
 	reclaimTarget uint32
 	reclaimAccum  int
+	// reclaimFeature / reclaimFeatureTicks drive a feature/wreck reclaim
+	// channel: the target feature id and the once-computed channel length
+	// (ftol((metal+energy)/2 + 15) ticks). The accumulator reuses
+	// reclaimAccum, so a unit reclaims a unit XOR a feature at a time.
+	reclaimFeature      uint32
+	reclaimFeatureTicks int
 	// cloaked marks the unit's cloak stance (a cloak order set it). cloakLock
 	// is a TA:K re-cloak lockout tick (shortfall relock); relit each shortfall.
 	cloaked   bool
@@ -432,6 +438,14 @@ type World struct {
 	// Configuration like meta, identical on every peer, never hashed.
 	terrain *Terrain
 
+	// features are the live placed map objects (scenery, metal patches, sacred
+	// stones and unit wrecks). Unlike terrain they are sim STATE — created and
+	// destroyed during play — so they back the render snapshot and the world
+	// hash. Iteration follows the insertion-ordered slice (feature.go).
+	features      map[uint32]*Feature
+	featureOrder  []uint32
+	nextFeatureID uint32
+
 	// pathScratch is the reusable A* working set (pathfind.go); pathBudget
 	// caps how many units may compute a fresh path per tick so a big group
 	// move spreads its searches over a few ticks instead of one hitch.
@@ -512,15 +526,17 @@ func New(cfg Config) *World {
 		se = 0
 	}
 	return &World{
-		units:       make(map[uint32]*Unit),
-		nextID:      1,
-		nextProjID:  1,
-		rng:         r,
-		gravity:     g,
-		spawn:       cfg.Spawn,
-		econModel:   cfg.Economy,
-		startMetal:  sm,
-		startEnergy: se,
+		units:         make(map[uint32]*Unit),
+		features:      make(map[uint32]*Feature),
+		nextID:        1,
+		nextProjID:    1,
+		nextFeatureID: featureIDBase,
+		rng:           r,
+		gravity:       g,
+		spawn:         cfg.Spawn,
+		econModel:     cfg.Economy,
+		startMetal:    sm,
+		startEnergy:   se,
 	}
 }
 
@@ -1004,10 +1020,10 @@ func (w *World) addUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	id := w.nextID
 	w.nextID++
 	u := &Unit{
-		ID:           id,
-		Name:         name,
-		Side:         side,
-		Meta:         meta,
+		ID:            id,
+		Name:          name,
+		Side:          side,
+		Meta:          meta,
 		Health:        fixed.FromInt(100),
 		BuildPercent:  fixed.FromInt(100),
 		binding:       binding,
@@ -1487,43 +1503,43 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			buildPct = fixed.FromInt(100)
 		}
 		u := &Unit{
-			ID:           ru.ID,
-			Name:         ru.Name,
-			Side:         ru.Side,
-			Meta:         meta,
-			Health:       ru.Health,
-			Dead:         ru.Dead,
-			BuildPercent: buildPct,
+			ID:            ru.ID,
+			Name:          ru.Name,
+			Side:          ru.Side,
+			Meta:          meta,
+			Health:        ru.Health,
+			Dead:          ru.Dead,
+			BuildPercent:  buildPct,
 			buildState:    buildPhase(ru.BuildState),
 			buildName:     ru.BuildName,
 			buildSite:     ru.BuildSite,
 			buildeeID:     ru.BuildTargetID,
 			buildPadPiece: -1,
-			buildGateMs:  ru.BuildGateMs,
-			prodQueue:    append([]string(nil), ru.ProdQueue...),
-			moveMode:     ru.MoveMode,
-			fireMode:     ru.FireMode,
-			homePos:      ru.HomePos,
-			autoEngaged:  ru.AutoEngaged,
-			curIsPatrol:  ru.CurIsPatrol,
-			selfDAtMs:    ru.SelfDAtMs,
-			carriedBy:    ru.CarriedBy,
-			carrying:     append([]uint32(nil), ru.Carrying...),
-			loadTarget:   ru.LoadTarget,
-			stallTicks:   ru.StallTicks,
-			avoidFlip:    ru.AvoidFlip,
-			progressPos:  fixed.Vec2{X: ru.ProgressX, Z: ru.ProgressZ},
-			hasUnload:    ru.HasUnload,
-			unloadAt:     ru.UnloadAt,
-			hasMove:      ru.HasMove,
-			moveTarget:   ru.MoveTarget,
-			IsMoving:     ru.HasMove || ru.MotionPin == motionPinMoving,
-			motionPin:    ru.MotionPin,
-			hasAttack:    ru.HasAttack,
-			attackTarget: ru.AttackTarget,
-			kills:        ru.Kills,
-			xp:           ru.XP,
-			binding:      binding,
+			buildGateMs:   ru.BuildGateMs,
+			prodQueue:     append([]string(nil), ru.ProdQueue...),
+			moveMode:      ru.MoveMode,
+			fireMode:      ru.FireMode,
+			homePos:       ru.HomePos,
+			autoEngaged:   ru.AutoEngaged,
+			curIsPatrol:   ru.CurIsPatrol,
+			selfDAtMs:     ru.SelfDAtMs,
+			carriedBy:     ru.CarriedBy,
+			carrying:      append([]uint32(nil), ru.Carrying...),
+			loadTarget:    ru.LoadTarget,
+			stallTicks:    ru.StallTicks,
+			avoidFlip:     ru.AvoidFlip,
+			progressPos:   fixed.Vec2{X: ru.ProgressX, Z: ru.ProgressZ},
+			hasUnload:     ru.HasUnload,
+			unloadAt:      ru.UnloadAt,
+			hasMove:       ru.HasMove,
+			moveTarget:    ru.MoveTarget,
+			IsMoving:      ru.HasMove || ru.MotionPin == motionPinMoving,
+			motionPin:     ru.MotionPin,
+			hasAttack:     ru.HasAttack,
+			attackTarget:  ru.AttackTarget,
+			kills:         ru.Kills,
+			xp:            ru.XP,
+			binding:       binding,
 		}
 		for _, c := range ru.Queue {
 			u.queue = append(u.queue, queuedCommand{kind: order.Kind(c.Kind), target: c.Target, targetUnit: c.TargetUnit, name: c.Name})

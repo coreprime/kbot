@@ -820,7 +820,7 @@ func (w *World) ownerSide(ownerID uint32) int {
 func projInBody(pt fixed.Vec3, t *Unit) bool {
 	hx, hy, hz := t.Meta.aabbHalf()
 	p := t.Pos()
-	return (pt.X - p.X).Abs() <= hx && (pt.Y - p.Y).Abs() <= hy && (pt.Z - p.Z).Abs() <= hz
+	return (pt.X-p.X).Abs() <= hx && (pt.Y-p.Y).Abs() <= hy && (pt.Z-p.Z).Abs() <= hz
 }
 
 // detonate emits the projectile's hit event and, if it actually reached its

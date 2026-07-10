@@ -22,14 +22,14 @@ const pathMaxExpand = 1_000_000
 // terrain. Generation stamps (cur) mark which cells were touched this run so
 // successive searches need no full clear; only the heap is reset.
 type pathScratch struct {
-	w, h    int
-	cur     uint32
-	gen     []uint32 // gen[i]==cur → visited this run; gScore/parent valid
-	block   []uint32 // block[i]==cur → a building footprint covers cell i
-	closed  []uint32 // closed[i]==cur → already expanded this run (skip on pop)
-	gScore  []int32
-	parent  []int32
-	heap    []pfNode
+	w, h   int
+	cur    uint32
+	gen    []uint32 // gen[i]==cur → visited this run; gScore/parent valid
+	block  []uint32 // block[i]==cur → a building footprint covers cell i
+	closed []uint32 // closed[i]==cur → already expanded this run (skip on pop)
+	gScore []int32
+	parent []int32
+	heap   []pfNode
 }
 
 type pfNode struct {
