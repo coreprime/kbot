@@ -40,6 +40,17 @@ func (w *World) cellMetal(cx, cz int) uint8 {
 	return t.Metal[cz*t.W+cx]
 }
 
+// UnitTilt reports a unit's terrain pitch and roll (TA-angle s16), the
+// ground-plate tilt the slope-speed law and the renderer read. Zero for a
+// missing unit or one that never tilts (upright kbots, subs). A harness /
+// inspection accessor.
+func (w *World) UnitTilt(id uint32) (pitch, roll int32) {
+	if u := w.units[id]; u != nil {
+		return u.pitch, u.roll
+	}
+	return 0, 0
+}
+
 // SetTerrain installs (or clears, with nil) the world's height field.
 func (w *World) SetTerrain(t *Terrain) {
 	if t != nil && (t.W <= 0 || t.H <= 0 || len(t.Data) < t.W*t.H) {
@@ -380,10 +391,12 @@ func (w *World) settleOnTerrain(u *Unit) {
 	if m.IsShip || m.Floater {
 		// Floaters ride the surface: Y = waterline·0xffff + seaLevel in the
 		// engines' raw height units (the 0xffff — not 0x10000 — multiplier is
-		// the engines' own quirk, preserved); world Y scales from there.
+		// the engines' own quirk, preserved); world Y scales from there. Ships
+		// still take the ground-plate tilt so a boat rocks with the swell/
+		// shoreline (the engines' ship bob rides on top of this — render only).
 		y := fixed.Fixed((int64(m.WaterLine)*0xffff)>>16) + fixed.FromInt(t.SeaLevel)
 		u.PosY = y.Mul(t.HeightScale)
-		u.pitch = 0
+		u.pitch, u.roll = w.groundTilt(u)
 		return
 	}
 	// Buildees keep their construction sink offset below grade.
@@ -396,7 +409,7 @@ func (w *World) settleOnTerrain(u *Unit) {
 		// stands in for the engine's minimum-depth clamp off the unitdef
 		// depth field.
 		u.PosY = w.groundHeight(u.loco.Pos)
-		u.pitch = 0
+		u.pitch, u.roll = 0, 0
 		return
 	}
 	ground := w.groundHeight(u.loco.Pos)
@@ -412,23 +425,24 @@ func (w *World) settleOnTerrain(u *Unit) {
 	u.PosY = ground
 	if m.Upright {
 		// Upright units (kbots) snap Y only — they stand vertical, their
-		// pitch stays 0 and the slope table never slows them. (UNKNOWN-7b:
-		// whether something else writes their pitch is unresolved; the
-		// terrain-snap dispatch is implemented as decompiled.)
-		u.pitch = 0
+		// pitch and roll stay 0 and the slope table never slows them.
+		// (UNKNOWN-7b: whether something else writes their pitch is
+		// unresolved; the terrain-snap dispatch is implemented as decompiled.)
+		u.pitch, u.roll = 0, 0
 		return
 	}
-	u.pitch = w.groundPitch(u)
+	u.pitch, u.roll = w.groundTilt(u)
 }
 
-// groundPitch measures the unit's pitch from the terrain: the footprint
-// corners, rotated by heading, each sample the heightmap bilinearly in RAW
-// height units (hover corners floored at sea level), and the pitch is
-// atan2 of the front/back height delta over the footprint length in wu —
-// the engines' unit conventions exactly (raw heights over wu runs). The
-// positive-pitch-equals-climbing orientation follows the slope table's
-// asymmetry (spec UNKNOWN-7a pins it empirically).
-func (w *World) groundPitch(u *Unit) int32 {
+// groundTilt measures the unit's pitch AND roll from the terrain ground plate
+// (world.md §1.2 footprint settle): the four footprint corners, rotated by
+// heading, each sample the heightmap bilinearly in RAW height units (hover
+// corners floored at sea level). Pitch is atan2 of the front/back height delta
+// over the footprint length; roll (bank) is atan2 of the left/right delta over
+// the footprint width — both raw heights over wu runs, the engines' unit
+// convention. Positive pitch = climbing uphill; positive roll = the left side
+// riding high. Upright units, floaters and subs never call this (they keep 0).
+func (w *World) groundTilt(u *Unit) (pitch, roll int32) {
 	t := w.terrain
 	m := u.Meta
 	fx, fz := m.FootprintX, m.FootprintZ
@@ -453,8 +467,15 @@ func (w *World) groundPitch(u *Unit) int32 {
 		}
 		return h
 	}
-	front := corner(hl, -hw) + corner(hl, hw)
-	back := corner(-hl, -hw) + corner(-hl, hw)
-	rise := (front - back).Div(fixed.FromInt(2))
-	return fixed.ShortestArc(fixed.Atan2(rise, fixed.FromInt(fz*16)))
+	// dr = −hw is the left side, +hw the right; df = +hl the front, −hl back.
+	frontLeft := corner(hl, -hw)
+	frontRight := corner(hl, hw)
+	backLeft := corner(-hl, -hw)
+	backRight := corner(-hl, hw)
+	rise := ((frontLeft + frontRight) - (backLeft + backRight)).Div(fixed.FromInt(2))
+	pitch = fixed.ShortestArc(fixed.Atan2(rise, fixed.FromInt(fz*16)))
+	// Left-minus-right height delta over the plate width: positive = left high.
+	lean := ((frontLeft + backLeft) - (frontRight + backRight)).Div(fixed.FromInt(2))
+	roll = fixed.ShortestArc(fixed.Atan2(lean, fixed.FromInt(fx*16)))
+	return pitch, roll
 }

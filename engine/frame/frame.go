@@ -31,11 +31,17 @@ type QueuedOrder struct {
 
 // UnitState is everything the renderer needs to draw one unit.
 type UnitState struct {
-	ID           uint32
-	Name         string
-	Side         int
-	Pos          fixed.Vec3
-	Heading      int32
+	ID      uint32
+	Name    string
+	Side    int
+	Pos     fixed.Vec3
+	Heading int32
+	// Pitch / Roll are the unit's terrain tilt in TA-angle units (s16), from
+	// the ground-plate settle: pitch positive climbing, roll positive left-
+	// side-high. Upright units, floaters (except ships, which rock) and subs
+	// report 0. Render-only — the client tilts the model on top of Heading.
+	Pitch        int32
+	Roll         int32
 	Speed        fixed.Fixed // current locomotion speed (world units/sec)
 	Health       fixed.Fixed // 0..100
 	Dead         bool

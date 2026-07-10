@@ -118,6 +118,11 @@ type Unit struct {
 	// next frame. Upright units, floaters and subs keep 0. Derived from
 	// hashed state each terrain snap, so never serialised.
 	pitch int32
+	// roll is the unit's terrain bank (s16 TA-angle), the ground-plate's
+	// side-to-side tilt measured from the footprint corners' left/right height
+	// delta — positive = left side high (world.md §1.2 bank). Render-only, like
+	// pitch: it re-derives from position every settle, so it never serialises.
+	roll int32
 	// motionTier caches the last announced walk-animation tier (§7) and
 	// lastTurnSign the last TurnDirection edge state (TA:K), both
 	// transition-edge detectors. motionDialect caches the COB-resolved
@@ -249,6 +254,13 @@ type Unit struct {
 	// reclaimAccum, so a unit reclaims a unit XOR a feature at a time.
 	reclaimFeature      uint32
 	reclaimFeatureTicks int
+	// resurrectFeature / resurrectTicks drive a resurrect channel: the wreck
+	// feature being raised and the once-computed channel length
+	// (ftol(0.3·buildtime / (workertime/30)) ticks). On completion the wreck's
+	// DeadName unit type respawns under the resurrector's side at low HP.
+	resurrectFeature   uint32
+	resurrectAccum     int
+	resurrectChanTicks int
 	// cloaked marks the unit's cloak stance (a cloak order set it). cloakLock
 	// is a TA:K re-cloak lockout tick (shortfall relock); relit each shortfall.
 	cloaked   bool
@@ -598,8 +610,49 @@ func (w *World) emitCorpse(u *Unit, corpsetype int32) {
 		SfxType: int(u.Heading()),
 		Anchor:  u.Pos(),
 	})
+	// Leave the persistent, reclaimable wreck the corpse choice calls for:
+	// type 1 an intact corpse, type 2 the damaged heap (its featuredead), type
+	// 3 nothing at all. The wreck is a real sim feature — a reclaim/resurrect
+	// target with hit points and an owner — not just a render event.
+	w.spawnWreck(u, corpsetype)
 	u.corpsePending = false
 	u.dyingPending = false
+}
+
+// spawnWreck creates the persistent wreck feature a dying unit leaves, per its
+// settled corpsetype (1 intact, 2 damaged heap, 3 nothing). The wreck keeps the
+// unit's exact position and heading and records the dead owner, so a reclaimer
+// salvages it and a resurrector can raise the original unit type back. A unit
+// with no resolved corpse featuredef (Meta.Wreck nil) blows apart cleanly.
+func (w *World) spawnWreck(u *Unit, corpsetype int32) {
+	if u.Meta == nil || u.Meta.Wreck == nil || corpsetype >= 3 {
+		return
+	}
+	base := u.Meta.Wreck
+	meta := base
+	if corpsetype == 2 {
+		// The damaged heap: half the salvage and hit points of the intact
+		// corpse (the featuredead stage down the chain). Cloned so the shared
+		// featuredef is never mutated.
+		heap := *base
+		heap.Metal = base.Metal / 2
+		heap.Energy = base.Energy / 2
+		if base.MaxHP > 0 {
+			heap.MaxHP = base.MaxHP / 2
+		}
+		if base.FeatureDead != "" {
+			heap.FeatureDead = ""
+		}
+		meta = &heap
+	}
+	at := fixed.Vec2{X: u.loco.Pos.X, Z: u.loco.Pos.Z}
+	id := w.AddFeature(meta.Name, meta, FeatureWreck, at, u.Heading(), u.Side)
+	// A resurrector raises the wreck back into the unit type that died, so the
+	// wreck records the dead unit's name (only the intact corpse resurrects;
+	// the damaged heap loses that lineage).
+	if f := w.features[id]; f != nil && corpsetype == 1 {
+		f.DeadName = u.Name
+	}
 }
 
 // dyingBinding is the optional surface a binding exposes so the corpse poll

@@ -35,6 +35,8 @@ func (w *World) Snapshot() frame.Snapshot {
 			Side:    u.Side,
 			Pos:     u.Pos(),
 			Heading: int32(u.loco.Heading.Int()),
+			Pitch:   u.pitch,
+			Roll:    u.roll,
 			// The wire/render speed contract stays wu per second; the sim
 			// holds the engines' per-frame scalar internally.
 			Speed:          u.loco.Speed.Mul(fxTickHz),
@@ -227,20 +229,22 @@ func (w *World) Hash() uint64 {
 	}
 	// Features are authoritative sim state: a reclaimed/eroded feature or a
 	// wreck left on a death diverges the world, so the feature set feeds the
-	// hash. A world with no features (every current live game until the map
-	// loader stamps them) mixes only the zero count, so it hashes exactly as
-	// before this block existed.
-	mix(uint64(len(w.featureOrder)))
-	for _, id := range w.featureOrder {
-		f := w.features[id]
-		if f == nil {
-			continue
+	// hash. Mixed ONLY when the world actually holds features, so a world that
+	// never places one (every current live game and the existing golden
+	// replays) hashes exactly as it did before this block existed.
+	if len(w.featureOrder) > 0 {
+		mix(uint64(len(w.featureOrder)))
+		for _, id := range w.featureOrder {
+			f := w.features[id]
+			if f == nil {
+				continue
+			}
+			mix(uint64(f.ID))
+			mix(uint64(uint32(f.HP)))
+			mix(uint64(int64(f.Cx)))
+			mix(uint64(int64(f.Cz)))
+			mix(uint64(int64(f.Owner)))
 		}
-		mix(uint64(f.ID))
-		mix(uint64(uint32(f.HP)))
-		mix(uint64(int64(f.Cx)))
-		mix(uint64(int64(f.Cz)))
-		mix(uint64(int64(f.Owner)))
 	}
 	return h
 }
