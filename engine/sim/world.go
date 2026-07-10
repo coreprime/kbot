@@ -100,6 +100,13 @@ type weaponSlot struct {
 	// eventually returns the turret to its home pose while a target is still
 	// being tracked.
 	aimLastIssueMs int64
+
+	// stock / stockBuild drive a stockpile weapon (nuke launcher): stock is the
+	// built-up round count (cap 200), decremented one per launch; stockBuild is
+	// the per-tick build accumulator that rolls a new round into stock every
+	// reload interval (specials.md §6.1.1). Both stay zero on ordinary weapons.
+	stock      int
+	stockBuild int
 }
 
 // Unit is one live simulated unit.

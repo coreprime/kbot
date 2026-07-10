@@ -140,6 +140,10 @@ func (w *World) Step(rt Runtime) {
 	w.stepYards()
 	w.stepCollisions()
 	w.stepProjectiles()
+	// Anti-nuke interception: after the shots fly, interceptors fire at any
+	// incoming targetable enemy projectile inside their square coverage box
+	// (specials.md §6.1.2).
+	w.stepInterceptors()
 	w.stepBuildDecay()
 	// TA settles its economy once per second — every unit's window of
 	// income and posted demand pays out with the shared proportional
@@ -1599,6 +1603,12 @@ func (w *World) stepWeapons(u *Unit) {
 	for slot := range u.weapons {
 		s := &u.weapons[slot]
 		wm := u.Meta.Weapons[slot]
+		// An interceptor slot never fires at units through the ordinary weapon
+		// path: it acquires live projectiles instead (stepInterceptors,
+		// specials.md §6.1.2), so it is skipped here entirely.
+		if wm.Interceptor {
+			continue
+		}
 		// A committed TA:K shot waits for the fire animation's release frame
 		// even if the slot's target has since cleared.
 		if s.launchPending {
@@ -1686,6 +1696,11 @@ func (w *World) stepWeapons(u *Unit) {
 		if w.econModel == EconomyTAK && wm.ManaPerShot > 0 && u.privMana < float32(spellManaCost(u, &wm)) {
 			continue
 		}
+		// Stockpile gate: a stockpiled weapon (nuke) launches only from built
+		// stock — no stock, no launch (specials.md §6.1.1).
+		if wm.Stockpile && u.weapons[slot].stock <= 0 {
+			continue
+		}
 		// Aircraft must have the airframe lined up within the weapon's firing arc
 		// before they open fire (no rotating turret); and a bomber only starts a
 		// run once it is inside the drop window so the string straddles the target.
@@ -1726,6 +1741,11 @@ func (w *World) stepWeapons(u *Unit) {
 			if u.privMana < 0 {
 				u.privMana = 0
 			}
+		}
+		// Stockpile decrement: launching a stockpiled weapon spends one round of
+		// built stock (specials.md §6.1.1) — no E/M charge at fire.
+		if wm.Stockpile && u.weapons[slot].stock > 0 {
+			u.weapons[slot].stock--
 		}
 		aimPoint := fixed.Vec3{X: targetPos.X, Y: targetY, Z: targetPos.Z}
 		// Recoil / muzzle-flash animation: the COB Fire thread moves the barrel

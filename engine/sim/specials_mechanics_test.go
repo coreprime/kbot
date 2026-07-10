@@ -91,3 +91,155 @@ func TestSpellVeteranDiscount(t *testing.T) {
 		t.Fatalf("veteran spell cost %v, want 40 (60/1.5)", got)
 	}
 }
+
+// nukeMeta builds a TA stockpile launcher: weapon 0 is a targetable, straight-
+// flying stockpiled shot with a short (5-tick) build interval.
+func nukeMeta(name string) *UnitMeta { return nukeMetaReload(name, 5) }
+
+// nukeMetaReload builds a stockpile launcher whose round build interval is
+// reloadTicks — a large value keeps the launcher a single-shot for the length
+// of an interception test (no rebuild refilling mid-flight).
+func nukeMetaReload(name string, reloadTicks int) *UnitMeta {
+	m := &UnitMeta{Name: name, MaxHealth: fixed.FromInt(100)}
+	m.Weapons[0] = WeaponMeta{
+		Name: "nuke", Range: fixed.FromInt(6000), ReloadMs: 200, Burst: 1,
+		Damage: fixed.FromInt(500), Present: true, DamageDefault: 500,
+		ReloadTicks: reloadTicks, VelocityWU: fixed.FromInt(120), AreaOfEffectWU: fixed.FromInt(64),
+		Stockpile: true, Targetable: true,
+	}
+	return m
+}
+
+// interceptorMeta builds a TA anti-nuke: weapon 0 is an interceptor with a
+// square coverage box.
+func interceptorMeta(name string, coverageWU int) *UnitMeta {
+	m := &UnitMeta{Name: name, MaxHealth: fixed.FromInt(100)}
+	m.Weapons[0] = WeaponMeta{
+		Name: "antinuke", Range: fixed.FromInt(coverageWU), ReloadMs: 200, Burst: 1,
+		Damage: fixed.FromInt(10), Present: true, ReloadTicks: 5,
+		VelocityWU: fixed.FromInt(400), AreaOfEffectWU: fixed.FromInt(32),
+		Interceptor: true, CoverageWU: coverageWU,
+	}
+	return m
+}
+
+// TestStockpileBuildsAndCaps pins the build cadence and 200-round ceiling
+// (specials.md §6.1.1): a launcher rolls one round into stock every reload
+// interval and saturates at 200.
+func TestStockpileBuildsAndCaps(t *testing.T) {
+	w := New(Config{Seed: 100})
+	nuke := w.AddUnit("nuke", nukeMeta("nuke"), nil, fixed.Vec2{}, 0, 0)
+	for i := 0; i < 5; i++ {
+		w.Step(nil)
+	}
+	if got := w.WeaponStock(nuke, 0); got != 1 {
+		t.Fatalf("after one 5-tick interval stock=%d, want 1", got)
+	}
+	for i := 0; i < 5; i++ {
+		w.Step(nil)
+	}
+	if got := w.WeaponStock(nuke, 0); got != 2 {
+		t.Fatalf("after two intervals stock=%d, want 2", got)
+	}
+	w.SetWeaponStock(nuke, 0, 200)
+	for i := 0; i < 20; i++ {
+		w.Step(nil)
+	}
+	if got := w.WeaponStock(nuke, 0); got != 200 {
+		t.Fatalf("stock exceeded cap: %d", got)
+	}
+}
+
+// TestNukeLaunchConsumesStock pins the launch/decrement (specials.md §6.1.1):
+// a fire order launches a flying projectile and spends one round; an empty
+// launcher never fires.
+func TestNukeLaunchConsumesStock(t *testing.T) {
+	w := New(Config{Seed: 101})
+	nuke := w.AddUnit("nuke", nukeMeta("nuke"), nil, fixed.Vec2{}, 0, 0)
+	w.SetWeaponStock(nuke, 0, 1)
+	w.ApplyOrder(order.FireAtPoint(nuke, 0, fixed.Vec2{X: fixed.FromInt(1500)}))
+	launched := false
+	for i := 0; i < 20 && !launched; i++ {
+		w.Step(nil)
+		if len(w.projectiles) > 0 {
+			launched = true
+		}
+	}
+	if !launched {
+		t.Fatal("stocked launcher never launched a projectile")
+	}
+	if got := w.WeaponStock(nuke, 0); got != 0 {
+		t.Fatalf("launch did not consume stock: %d", got)
+	}
+}
+
+// TestInterceptorKillsNuke pins the anti-nuke pipeline (specials.md §6.1.2): an
+// interceptor holding stock fires at an incoming targetable enemy shot inside
+// its square coverage box, spends a round, and detonates the nuke in flight.
+func TestInterceptorKillsNuke(t *testing.T) {
+	w := New(Config{Seed: 102})
+	// A single-shot launcher (huge rebuild interval) fires one nuke down-range;
+	// the interceptor sits at x=1000 so the shot flies before entering coverage.
+	nuke := w.AddUnit("nuke", nukeMetaReload("nuke", 100000), nil, fixed.Vec2{}, 0, 0)
+	inter := w.AddUnit("anti", interceptorMeta("anti", 200), nil, fixed.Vec2{X: fixed.FromInt(1000)}, 1, 1)
+	w.SetWeaponStock(nuke, 0, 1)
+	w.SetWeaponStock(inter, 0, 1)
+	w.ApplyOrder(order.FireAtPoint(nuke, 0, fixed.Vec2{X: fixed.FromInt(5000)}))
+
+	sawFlight := false
+	killed := false
+	for i := 0; i < 400; i++ {
+		w.Step(nil)
+		switch {
+		case len(w.projectiles) > 0:
+			sawFlight = true
+		case sawFlight:
+			killed = true
+		}
+		if killed {
+			break
+		}
+	}
+	if !sawFlight {
+		t.Fatal("nuke never launched / flew")
+	}
+	if !killed {
+		t.Fatal("interceptor never destroyed the incoming nuke")
+	}
+	if got := w.WeaponStock(inter, 0); got != 0 {
+		t.Fatalf("interceptor did not spend a round: stock %d", got)
+	}
+}
+
+// TestInterceptorIgnoresFriendlyAndUncovered pins the acquisition gates: an
+// interceptor never fires at a friendly shot, and never at a shot outside its
+// coverage box.
+func TestInterceptorIgnoresFriendlyAndUncovered(t *testing.T) {
+	// Friendly shot (same side) must be ignored.
+	w := New(Config{Seed: 103})
+	nuke := w.AddUnit("nuke", nukeMeta("nuke"), nil, fixed.Vec2{}, 0, 0)
+	inter := w.AddUnit("anti", interceptorMeta("anti", 400), nil, fixed.Vec2{X: fixed.FromInt(200)}, 0, 0)
+	w.SetWeaponStock(nuke, 0, 1)
+	w.SetWeaponStock(inter, 0, 1)
+	w.ApplyOrder(order.FireAtPoint(nuke, 0, fixed.Vec2{X: fixed.FromInt(1500)}))
+	for i := 0; i < 15; i++ {
+		w.Step(nil)
+	}
+	if got := w.WeaponStock(inter, 0); got != 1 {
+		t.Fatalf("interceptor fired at a friendly shot: stock %d", got)
+	}
+
+	// Enemy shot but interceptor coverage too small to reach it.
+	w2 := New(Config{Seed: 104})
+	nuke2 := w2.AddUnit("nuke", nukeMeta("nuke"), nil, fixed.Vec2{}, 0, 0)
+	inter2 := w2.AddUnit("anti", interceptorMeta("anti", 20), nil, fixed.Vec2{X: fixed.FromInt(2000)}, 1, 1)
+	w2.SetWeaponStock(nuke2, 0, 1)
+	w2.SetWeaponStock(inter2, 0, 1)
+	w2.ApplyOrder(order.FireAtPoint(nuke2, 0, fixed.Vec2{X: fixed.FromInt(1500)}))
+	for i := 0; i < 15; i++ {
+		w2.Step(nil)
+	}
+	if got := w2.WeaponStock(inter2, 0); got != 1 {
+		t.Fatalf("interceptor fired at an uncovered shot: stock %d", got)
+	}
+}

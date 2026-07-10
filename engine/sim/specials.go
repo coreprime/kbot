@@ -241,6 +241,7 @@ func reclaimChunk(builder, target *Unit) int {
 // decay. Called from the per-unit phase in Step.
 func (w *World) stepSpecials(u *Unit) {
 	w.stepPrivateMana(u)
+	w.stepStockpile(u)
 	if u.capTarget != 0 {
 		w.stepCapture(u)
 	}
@@ -750,10 +751,145 @@ func (w *World) ResurrectTicks(builderID uint32, targetBuildTime float64) int {
 }
 
 // StockpileCap is the per-slot stockpile ceiling (specials.md §6.1.1): the
-// stock byte a stockpile weapon builds toward saturates at 200. The full
-// stockpile firing pipeline is a later block (DELTA §7); this pins the cap the
-// spec fixes, exposed for the harness to grade as the invariant.
+// stock byte a stockpile weapon builds toward saturates at 200.
 func (w *World) StockpileCap() int { return 200 }
+
+// stepStockpile advances every stockpile weapon slot's build: the per-tick
+// accumulator climbs to the weapon's reload interval and, each time it reaches
+// it, rolls one round into the slot's stock, capped at 200 (specials.md
+// §6.1.1). The build runs while the unit is active and fully built — the
+// launcher tops itself up whether or not it currently holds a fire target.
+func (w *World) stepStockpile(u *Unit) {
+	if u.Meta == nil || u.underConstruction() {
+		return
+	}
+	for slot := range u.Meta.Weapons {
+		wm := &u.Meta.Weapons[slot]
+		if !wm.Stockpile {
+			continue
+		}
+		s := &u.weapons[slot]
+		if s.stock >= stockpileCap {
+			s.stockBuild = 0
+			continue
+		}
+		interval := wm.ReloadTicks
+		if interval < 1 {
+			interval = 1
+		}
+		s.stockBuild++
+		if s.stockBuild >= interval {
+			s.stockBuild = 0
+			s.stock++
+		}
+	}
+}
+
+// stockpileCap is the 200-round ceiling a stockpile weapon builds toward.
+const stockpileCap = 200
+
+// WeaponStock reports a unit's built stockpile round count for a weapon slot —
+// a harness/inspection accessor (0 for a non-stockpile slot).
+func (w *World) WeaponStock(id uint32, slot int) int {
+	u := w.units[id]
+	if u == nil || slot < 0 || slot >= len(u.weapons) {
+		return 0
+	}
+	return u.weapons[slot].stock
+}
+
+// SetWeaponStock pins a unit's stockpile round count directly — a measurement
+// hook so a scenario can seat a loaded launcher before observing a launch or an
+// interception without stepping out the whole build. Clamped to [0, 200].
+func (w *World) SetWeaponStock(id uint32, slot, stock int) {
+	u := w.units[id]
+	if u == nil || slot < 0 || slot >= len(u.weapons) {
+		return
+	}
+	if stock < 0 {
+		stock = 0
+	}
+	if stock > stockpileCap {
+		stock = stockpileCap
+	}
+	u.weapons[slot].stock = stock
+}
+
+// stepInterceptors runs the anti-nuke firing pipeline (specials.md §6.1.2):
+// each interceptor weapon slot holding stock scans the live projectiles for an
+// enemy shot whose weapon is targetable and which sits inside the interceptor's
+// 2D square coverage box; on a match it spends one interceptor round and
+// detonates the incoming shot in place (the nuke goes off with its own full
+// AoE at the interception point). No projectile is double-targeted — two
+// interceptors never intercept the same missile in one tick. Runs after the
+// projectile flight step so coverage is tested against this tick's positions.
+func (w *World) stepInterceptors() {
+	if len(w.projectiles) == 0 {
+		return
+	}
+	claimed := map[uint32]bool{}
+	for _, id := range w.order {
+		u := w.units[id]
+		if u == nil || u.Dead || u.Meta == nil || u.underConstruction() {
+			continue
+		}
+		for slot := range u.Meta.Weapons {
+			wm := &u.Meta.Weapons[slot]
+			if !wm.Interceptor || wm.CoverageWU <= 0 {
+				continue
+			}
+			s := &u.weapons[slot]
+			if s.stock <= 0 {
+				continue
+			}
+			p := w.acquireInterceptTarget(u, wm, claimed)
+			if p == nil {
+				continue
+			}
+			claimed[p.id] = true
+			s.stock--
+			w.emit(frame.Event{Kind: frame.EvFire, UnitID: u.ID, Slot: slot, Anchor: u.Pos(), Target: p.pos, Weapon: wm.Name})
+			p.dead = true
+			p.hit = true
+			w.detonate(p)
+		}
+	}
+	// Reap the intercepted shots so they do not also fly on this tick.
+	if len(claimed) > 0 {
+		alive := w.projectiles[:0]
+		for _, p := range w.projectiles {
+			if p.dead && claimed[p.id] {
+				continue
+			}
+			alive = append(alive, p)
+		}
+		w.projectiles = alive
+	}
+}
+
+// acquireInterceptTarget finds the first live enemy targetable projectile
+// inside an interceptor's square coverage box that no other interceptor has
+// claimed this tick (specials.md §6.1.2 acquisition). Insertion order is
+// stable, so the choice is deterministic.
+func (w *World) acquireInterceptTarget(u *Unit, wm *WeaponMeta, claimed map[uint32]bool) *projectile {
+	origin := u.Pos()
+	for _, p := range w.projectiles {
+		if p == nil || p.dead || claimed[p.id] {
+			continue
+		}
+		if !p.wm.Targetable {
+			continue
+		}
+		if w.ownerSide(p.ownerID) == u.Side {
+			continue // only enemy shots
+		}
+		if !coverageCovers(wm.CoverageWU, (p.pos.X - origin.X).Int(), (p.pos.Z - origin.Z).Int()) {
+			continue
+		}
+		return p
+	}
+	return nil
+}
 
 // coverageCovers is the anti-nuke 2D SQUARE box coverage test (specials.md
 // §6.1.2): a target at world offset (dx, dz) from the interceptor is covered
