@@ -1547,10 +1547,12 @@ export class SandboxView {
           }
         }
       }
-      // A factory buildee rides the build plate: pin it to the builder's
-      // QueryBuildInfo piece (pad spin and lift carry through) instead of
-      // the sim's static site position.
-      let padHeading = null
+      // A factory buildee rides the build plate: pin its POSITION to the
+      // builder's QueryBuildInfo piece (pad lift carries through). Its FACING
+      // stays the buildee's own sim heading — which the sim spins with the pad
+      // each tick (ridePad) — so the unit visibly rotates on the plate and
+      // rolls off pointing the way the sim left it, rather than snapping to the
+      // factory's fixed heading.
       if (u.buildPercent < 100 && this.scene.buildAttachFor) {
         const attach = this.scene.buildAttachFor(u.id)
         if (attach && attach.pieceName) {
@@ -1562,7 +1564,6 @@ export class SandboxView {
             const wp = bModel.resolvePieceWorld(piece, bPos.x, bPos.y, bPos.z, attach.builder.heading)
             if (wp) {
               posX = wp[0]; posY = wp[1]; posZ = wp[2]
-              padHeading = attach.builder.heading
             }
           }
         }
@@ -1575,7 +1576,7 @@ export class SandboxView {
         // colour over the hull while buildPercent < 100 (TA nano green,
         // TA:K casting gold — straight from the game adapter).
         buildFxColor: (activeGame().buildFx && activeGame().buildFx.color) || null,
-        transform: { x: posX, y: posY, z: posZ, headingRad: padHeading != null ? padHeading : u.heading },
+        transform: { x: posX, y: posY, z: posZ, headingRad: u.heading },
         selected: this.scene.isSelected(u.id),
         // Inspector hover highlight — the Sync Diagnostics panel flags the
         // unit its hovered row points at, so the renderer outlines it.
