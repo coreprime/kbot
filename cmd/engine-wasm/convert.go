@@ -20,20 +20,20 @@ import (
 // tick loop only ever sees integers.
 func metaFromJS(o js.Value) *sim.UnitMeta {
 	m := &sim.UnitMeta{
-		Name:        getString(o, "name"),
-		MaxVelocity: fixed.FromFloat(getFloat(o, "maxVelocity")),
-		TurnRate:    fixed.FromFloat(getFloat(o, "turnRate")),
-		Accel:       fixed.FromFloat(getFloat(o, "acceleration")),
-		BrakeRate:   fixed.FromFloat(getFloat(o, "brakeRate")),
-		CanMove:     getBool(o, "canMove"),
-		IsAircraft:  getBool(o, "isAircraft"),
-		IsHover:     getBool(o, "isHover"),
-		IsShip:      getBool(o, "isShip"),
-		IsSub:       getBool(o, "isSub"),
-		IsHovercraft: getBool(o, "isHovercraft"),
-		IsBuilder:   getBool(o, "isBuilder"),
-		OnOffable:   getBool(o, "onoffable"),
-		IsAirBase:   getBool(o, "isAirBase"),
+		Name:              getString(o, "name"),
+		MaxVelocity:       fixed.FromFloat(getFloat(o, "maxVelocity")),
+		TurnRate:          fixed.FromFloat(getFloat(o, "turnRate")),
+		Accel:             fixed.FromFloat(getFloat(o, "acceleration")),
+		BrakeRate:         fixed.FromFloat(getFloat(o, "brakeRate")),
+		CanMove:           getBool(o, "canMove"),
+		IsAircraft:        getBool(o, "isAircraft"),
+		IsHover:           getBool(o, "isHover"),
+		IsShip:            getBool(o, "isShip"),
+		IsSub:             getBool(o, "isSub"),
+		IsHovercraft:      getBool(o, "isHovercraft"),
+		IsBuilder:         getBool(o, "isBuilder"),
+		OnOffable:         getBool(o, "onoffable"),
+		IsAirBase:         getBool(o, "isAirBase"),
 		ActivateWhenBuilt: getBool(o, "activateWhenBuilt"),
 	}
 	m.BuildTime = fixed.FromFloat(getFloat(o, "buildTime"))
@@ -96,7 +96,60 @@ func metaFromJS(o js.Value) *sim.UnitMeta {
 			m.Weapons[i] = weaponFromJS(w.Index(i))
 		}
 	}
+	m.Wreck = wreckFromJS(m, o.Get("wreck"))
 	return m
+}
+
+// wreckFromJS resolves the unit's corpse featuredef the death path spawns as a
+// reclaimable wreck. When the meta carries an explicit "wreck" object (the
+// studio resolving the FBI corpse= through its feature registry), those fields
+// win; otherwise a build-cost-derived default stands in (metal ≈ the unit's
+// build metal, HP = maxdamage, footprint = the unit's), mirroring the games
+// asset bridge. Aircraft leave no wreck. A returned nil means "blow apart
+// cleanly".
+func wreckFromJS(m *sim.UnitMeta, o js.Value) *sim.FeatureMeta {
+	if m.IsAircraft {
+		return nil
+	}
+	if o.Type() == js.TypeObject && !o.IsNull() {
+		name := getString(o, "name")
+		if name == "" {
+			name = m.Name + "_dead"
+		}
+		fx, fz := getInt(o, "footprintX"), getInt(o, "footprintZ")
+		if fx <= 0 {
+			fx = m.FootprintX
+		}
+		if fz <= 0 {
+			fz = m.FootprintZ
+		}
+		return &sim.FeatureMeta{
+			Name:        name,
+			FootprintX:  fx,
+			FootprintZ:  fz,
+			Metal:       getInt(o, "metal"),
+			Energy:      getInt(o, "energy"),
+			MaxHP:       getInt(o, "maxHP"),
+			Reclaimable: true,
+			FeatureDead: getString(o, "featureDead"),
+		}
+	}
+	metal := int(m.Econ.BuildCostMetal)
+	if metal < 1 {
+		metal = 1
+	}
+	hp := m.MaxHealth.Int()
+	if hp < 1 {
+		hp = 1
+	}
+	return &sim.FeatureMeta{
+		Name:        m.Name + "_dead",
+		FootprintX:  m.FootprintX,
+		FootprintZ:  m.FootprintZ,
+		Metal:       metal,
+		MaxHP:       hp,
+		Reclaimable: true,
+	}
 }
 
 // econFromJS fills the exact float32 economy stat block from the meta's nested
@@ -823,28 +876,31 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 		"projos": projos,
 		"events": events,
 	}
+	if len(s.Features) > 0 {
+		out["features"] = featuresToJS(s.Features)
+	}
 	// Per-side resource usage for the HUD (infinite pools — display only).
 	if len(s.Resources) > 0 {
 		res := make([]any, 0, len(s.Resources))
 		for i := range s.Resources {
 			r := &s.Resources[i]
 			res = append(res, map[string]any{
-				"side":        r.Side,
-				"metalSpent":  r.MetalSpent.Float(),
-				"energySpent": r.EnergySpent.Float(),
-				"manaSpent":   r.ManaSpent.Float(),
-				"metalRate":   r.MetalRate.Float(),
-				"energyRate":  r.EnergyRate.Float(),
-				"manaRate":    r.ManaRate.Float(),
-				"metalStock":  r.MetalStock.Float(),
-				"energyStock": r.EnergyStock.Float(),
-				"manaStock":   r.ManaStock.Float(),
-				"metalCap":    r.MetalCap.Float(),
-				"energyCap":   r.EnergyCap.Float(),
-				"manaCap":     r.ManaCap.Float(),
-				"metalGen":    r.MetalGen.Float(),
-				"energyGen":   r.EnergyGen.Float(),
-				"manaGen":     r.ManaGen.Float(),
+				"side":           r.Side,
+				"metalSpent":     r.MetalSpent.Float(),
+				"energySpent":    r.EnergySpent.Float(),
+				"manaSpent":      r.ManaSpent.Float(),
+				"metalRate":      r.MetalRate.Float(),
+				"energyRate":     r.EnergyRate.Float(),
+				"manaRate":       r.ManaRate.Float(),
+				"metalStock":     r.MetalStock.Float(),
+				"energyStock":    r.EnergyStock.Float(),
+				"manaStock":      r.ManaStock.Float(),
+				"metalCap":       r.MetalCap.Float(),
+				"energyCap":      r.EnergyCap.Float(),
+				"manaCap":        r.ManaCap.Float(),
+				"metalGen":       r.MetalGen.Float(),
+				"energyGen":      r.EnergyGen.Float(),
+				"manaGen":        r.ManaGen.Float(),
 				"metalProduced":  r.MetalProduced.Float(),
 				"energyProduced": r.EnergyProduced.Float(),
 				"manaProduced":   r.ManaProduced.Float(),
@@ -865,18 +921,20 @@ func snapshotToJS(s frame.Snapshot) js.Value {
 // stay in their js.Value form — they are small and irregular.
 //
 // Layout (little-endian, 4-byte words):
-//   header:  u32 version (=1), u32 tick, u32 unitCount, u32 pieceFloatsTotal
-//   units:   unitCount records × PACKED_UNIT_WORDS (see below)
-//   pieces:  pieceFloatsTotal f32 — every unit's stride-7 piece floats
-//            back to back; each record's pieceOff/pieceCount index into it.
+//
+//	header:  u32 version (=1), u32 tick, u32 unitCount, u32 pieceFloatsTotal
+//	units:   unitCount records × PACKED_UNIT_WORDS (see below)
+//	pieces:  pieceFloatsTotal f32 — every unit's stride-7 piece floats
+//	         back to back; each record's pieceOff/pieceCount index into it.
 //
 // Unit record words (u32 unless noted):
-//   0 id · 1 nameIdx (into the names table) · 2 side(i32) ·
-//   3 flags (1 dead · 2 isMoving · 4 hasMove) ·
-//   4 x · 5 y · 6 z · 7 headingRad · 8 headingWire · 9 speed · 10 health ·
-//   11 buildPercent · 12 moveX · 13 moveZ (all f32) ·
-//   14 moveMode · 15 fireMode · 16 selfDestructMs · 17 carriedBy ·
-//   18 pieceOff (f32 index into the pieces region) · 19 pieceCount (floats)
+//
+//	0 id · 1 nameIdx (into the names table) · 2 side(i32) ·
+//	3 flags (1 dead · 2 isMoving · 4 hasMove) ·
+//	4 x · 5 y · 6 z · 7 headingRad · 8 headingWire · 9 speed · 10 health ·
+//	11 buildPercent · 12 moveX · 13 moveZ (all f32) ·
+//	14 moveMode · 15 fireMode · 16 selfDestructMs · 17 carriedBy ·
+//	18 pieceOff (f32 index into the pieces region) · 19 pieceCount (floats)
 //
 // The rarely-consumed extras (carrying, building, prodQueue, queue) are NOT
 // packed — a consumer that needs them uses the classic step() form.
@@ -983,13 +1041,52 @@ func snapshotToPackedJS(s frame.Snapshot) js.Value {
 	for i := range s.Events {
 		events = append(events, eventToJS(&s.Events[i]))
 	}
-	return js.ValueOf(map[string]any{
+	out := map[string]any{
 		"tick":        int(s.Tick),
 		"unitsPacked": arr,
 		"names":       names,
 		"projos":      projos,
 		"events":      events,
-	})
+	}
+	if len(s.Features) > 0 {
+		out["features"] = featuresToJS(s.Features)
+	}
+	return js.ValueOf(out)
+}
+
+// featuresToJS marshals the placed map features (scenery, metal patches, sacred
+// stones, wrecks) the render lane draws and offers as reclaim/resurrect
+// targets. The shape mirrors the sim.Feature fields the render agent consumes:
+//
+//	{ id, name, kind, x, y, z, heading, headingRad, hp, owner, blocking,
+//	  reclaimable, reclaimMetal, reclaimEnergy, deadName }
+//
+// kind: 0 prop, 1 metalPatch, 2 wreck, 3 sacredSite. Feature ids live in a
+// high range (>= 0x40000000) disjoint from unit ids, so a reclaim order can
+// carry a feature id in the same target field a unit id would.
+func featuresToJS(fs []frame.FeatureState) []any {
+	out := make([]any, 0, len(fs))
+	for i := range fs {
+		f := &fs[i]
+		out = append(out, map[string]any{
+			"id":            int(f.ID),
+			"name":          f.Name,
+			"kind":          int(f.Kind),
+			"x":             f.Pos.X.Float(),
+			"y":             f.Pos.Y.Float(),
+			"z":             f.Pos.Z.Float(),
+			"heading":       int(headingToWire(f.Heading)),
+			"headingRad":    fixed.AngleToRadians(headingToWire(f.Heading)),
+			"hp":            f.HP,
+			"owner":         f.Owner,
+			"blocking":      f.Blocking,
+			"reclaimable":   f.Reclaimable,
+			"reclaimMetal":  f.ReclaimMetal,
+			"reclaimEnergy": f.ReclaimEnergy,
+			"deadName":      f.DeadName,
+		})
+	}
+	return out
 }
 
 func unitToJS(u *frame.UnitState) map[string]any {
@@ -1003,6 +1100,10 @@ func unitToJS(u *frame.UnitState) map[string]any {
 		"z":              u.Pos.Z.Float(),
 		"heading":        int(headingToWire(u.Heading)),
 		"headingRad":     fixed.AngleToRadians(headingToWire(u.Heading)),
+		"pitch":          int(u.Pitch),
+		"roll":           int(u.Roll),
+		"pitchRad":       fixed.AngleToRadians(u.Pitch),
+		"rollRad":        fixed.AngleToRadians(u.Roll),
 		"speed":          u.Speed.Float(),
 		"health":         u.Health.Float(),
 		"dead":           u.Dead,

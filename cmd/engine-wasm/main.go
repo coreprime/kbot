@@ -61,8 +61,12 @@ func main() {
 		"submitLoad":         js.FuncOf(submitLoad),
 		"submitRepair":       js.FuncOf(submitRepair),
 		"submitReclaim":      js.FuncOf(submitReclaim),
+		"submitResurrect":    js.FuncOf(submitResurrect),
 		"submitUnload":       js.FuncOf(submitUnload),
 		"setTerrain":         js.FuncOf(setTerrain),
+		"addFeature":         js.FuncOf(addFeature),
+		"removeFeature":      js.FuncOf(removeFeatureBridge),
+		"featureAt":          js.FuncOf(featureAtBridge),
 		"scheduleAt":         js.FuncOf(scheduleAt),
 		"restore":            js.FuncOf(restore),
 		"step":               js.FuncOf(step),
@@ -369,6 +373,76 @@ func submitReclaim(_ js.Value, args []js.Value) any {
 	}
 	ids := uint32Slice(args[1])
 	return int(inst.sess.Submit(order.Reclaim(ids, uint32(args[2].Int()))))
+}
+
+// submitResurrect(handle, builderId, featureId, targetBuildTime) arms a
+// resurrect channel: a canresurrect builder raises the wreck named by featureId
+// back into its dead unit type (whose buildtime sets the channel length). The
+// feature id is the high-range id the feature snapshot exports.
+func submitResurrect(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	inst.world.ApplyResurrect(uint32(args[1].Int()), uint32(args[2].Int()), args[3].Float())
+	return true
+}
+
+// addFeature(handle, {name, kind, x, z, heading, footprintX, footprintZ,
+// metal, energy, maxHP, blocking, reclaimable, indestructible, sacredSite,
+// featureDead, owner}) places a map feature (scenery, metal patch, sacred site)
+// and returns its id. kind: 0 prop, 1 metalPatch, 2 wreck, 3 sacredSite. Metal
+// patches stamp their metal into the cell grid so the extractor income picks
+// them up. Owner defaults to -1 (a neutral map feature).
+func addFeature(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	o := args[1]
+	owner := -1
+	if v := o.Get("owner"); !v.IsUndefined() && !v.IsNull() {
+		owner = v.Int()
+	}
+	meta := &sim.FeatureMeta{
+		Name:           getString(o, "name"),
+		FootprintX:     getInt(o, "footprintX"),
+		FootprintZ:     getInt(o, "footprintZ"),
+		Metal:          getInt(o, "metal"),
+		Energy:         getInt(o, "energy"),
+		MaxHP:          getInt(o, "maxHP"),
+		Blocking:       getBool(o, "blocking"),
+		Reclaimable:    getBool(o, "reclaimable"),
+		Indestructible: getBool(o, "indestructible"),
+		SacredSite:     getFloat(o, "sacredSite"),
+		FeatureDead:    getString(o, "featureDead"),
+	}
+	at := fixed.Vec2{X: fixed.FromFloat(o.Get("x").Float()), Z: fixed.FromFloat(o.Get("z").Float())}
+	kind := sim.FeatureKind(getInt(o, "kind"))
+	id := inst.world.AddFeature(meta.Name, meta, kind, at, int32(getInt(o, "heading")), owner)
+	return int(id)
+}
+
+// featureAtBridge(handle, x, z) resolves the feature id under a world point (the
+// reclaim/resurrect cursor hit-test), or 0 when nothing is there.
+func featureAtBridge(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return 0
+	}
+	id := inst.world.FeatureIDAt(fixed.FromFloat(args[1].Float()), fixed.FromFloat(args[2].Float()))
+	return int(id)
+}
+
+// removeFeatureBridge(handle, featureId) deletes a placed feature (a map editor
+// / scenario tool clearing scenery). Returns true.
+func removeFeatureBridge(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	inst.world.RemoveFeature(uint32(args[1].Int()))
+	return true
 }
 
 // submitLoad(handle, transportIds[], targetUnit) -> execTick. Sends the
