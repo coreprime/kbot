@@ -98,11 +98,16 @@ export class WasmFrameSource extends FrameSource {
   // the engine calls to back a Spawn order (the networked path, where the
   // authoritative command stream introduces units by type name).  It must be
   // synchronous and deterministic, so callers pre-populate a meta cache.
-  constructor({ seed = 0, inputDelay = 0, spawnResolver = null } = {}) {
+  // economy selects the per-side resource law the world runs — 0 = TA (metal +
+  // energy), 1 = TA:K (single mana pool) — matching sim.EconomyModel's ordering
+  // and the engine's create() 4th argument. Callers thread the running game's
+  // economy through it so a TA:K sandbox meters mana and a TA one metal/energy.
+  constructor({ seed = 0, inputDelay = 0, spawnResolver = null, economy = 0 } = {}) {
     super()
     this._seed = seed >>> 0
     this._inputDelay = inputDelay >>> 0
     this._spawnResolver = spawnResolver
+    this._economy = economy | 0
     this._engine = null
     this._handle = -1
     this._ready = null
@@ -110,13 +115,20 @@ export class WasmFrameSource extends FrameSource {
 
   // ready resolves once the wasm module is loaded and this source owns a live
   // engine handle.  Callers must await it before issuing orders or stepping.
+  //
+  // create takes (seed, inputDelay, spawnResolver?, econModel?). The resolver
+  // slot must be present for the economy argument to land in the right
+  // position, so pass undefined explicitly when this source has none.
   ready() {
     if (!this._ready) {
       this._ready = loadGo().then((engine) => {
         this._engine = engine
-        this._handle = this._spawnResolver
-          ? engine.create(this._seed, this._inputDelay, this._spawnResolver)
-          : engine.create(this._seed, this._inputDelay)
+        this._handle = engine.create(
+          this._seed,
+          this._inputDelay,
+          this._spawnResolver || undefined,
+          this._economy,
+        )
       })
     }
     return this._ready

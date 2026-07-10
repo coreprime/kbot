@@ -20,10 +20,10 @@ tasks:
       - task: build-kbot
 
   build-wasm:
-    desc: Stage the deterministic engine wasm (from the @coreprime/kbot-engine package) for the studio web client
+    desc: Build the deterministic engine wasm locally from the in-repo engine/sim and stage it (with its matching wasm_exec.js) for the studio web client
     cmds:
-      - cp node_modules/@coreprime/kbot-engine/wasm/engine.wasm internal/studio/web/engine/engine.wasm
-      - cp node_modules/@coreprime/kbot-engine/wasm/wasm_exec.js internal/studio/web/engine/wasm_exec.js
+      - GOOS=js GOARCH=wasm go build -o internal/studio/web/engine/engine.wasm ./cmd/engine-wasm
+      - cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" internal/studio/web/engine/wasm_exec.js
 
   build-kbot:
     desc: Build the kbot CLI
@@ -62,12 +62,18 @@ tasks:
     desc: Run all tests
     cmds:
       - go test ./...
-      - node --test "internal/studio/web/ui/map-editor/tak-rotate.test.js"
+      - task: test-js
 
   test-js:
-    desc: Run the monorepo-owned JS unit tests (pure UI helpers)
+    desc: Run the monorepo-owned JS unit tests (pure UI helpers) and the wasm spawn smoke gate
     cmds:
+      # Build the studio wasm first so the spawn smoke test loads the sim built
+      # from the CURRENT engine/sim, not a stale artifact — this is the gate
+      # that turns a future engine change breaking the studio wasm into a CI
+      # failure instead of an in-browser spawn crash.
+      - task: build-wasm
       - node --test "internal/studio/web/ui/map-editor/tak-rotate.test.js"
+      - node --test "internal/studio/web/engine/spawn-smoke.test.js"
 
   test-verbose:
     desc: Run all tests

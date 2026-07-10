@@ -22,9 +22,11 @@
 
 import { TA_TURNS_PER_CIRCLE } from './cob-opcodes.js'
 
-// TA simulates unit locomotion at 30 Hz, so every FBI per-frame rate converts
-// to a per-second rate by × 30.  This is deliberately NOT the COB script tick
-// (40 Hz) — movement and scripting run on different clocks in TA.
+// The simulation runs unit locomotion at 30 Hz (sim.TickHz), so every FBI
+// per-frame rate converts to a per-second rate by × 30. Movement and COB
+// scripting share this one 30 Hz clock — the engine advances both on the same
+// tick — so these helpers and the wasm sim agree on the per-frame→per-second
+// scaling.
 const TA_MOVE_HZ = 30
 
 // Convert FBI MaxVelocity (world-units / frame) → wu / second.

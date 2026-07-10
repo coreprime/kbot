@@ -127,10 +127,10 @@ export const UV_ARMORED          = 20
 export const TA_TURNS_PER_CIRCLE = 65536
 export const TA_LINEAR_SCALE     = 65536 // movement / position units (1 wu = 65536)
 
-// TA's game loop runs at a fixed 40 Hz tick (25 ms per tick).  COB
-// sleep values are in MILLISECONDS but the engine only resumes a
-// sleeping thread on a tick boundary, so a `sleep 200` deterministically
-// waits 8 ticks (200 / 25 = 8) = exactly 5 wake-ups per second.
+// The simulation clock runs at a fixed 30 Hz tick (33.33 ms per tick),
+// matching the Go engine's sim.TickHz. COB sleep values are in MILLISECONDS
+// but the engine only resumes a sleeping thread on a tick boundary, so a
+// `sleep 200` deterministically waits a whole number of ticks.
 // Quantising our runtime to the same step makes animations and timed
 // sequences (turret restore-after-delay, factory door cadence,
 // smoke-unit polling) play at the exact pacing TA gameplay shows

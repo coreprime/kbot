@@ -221,6 +221,10 @@ export class WasmSandboxScene {
       seed: seed >>> 0,
       inputDelay: 0,
       spawnResolver: (name) => this._spawnMetas.get(name) || null,
+      // Run the world under the active game's economy law so a TA:K sandbox
+      // meters its single mana pool and a TA one metal+energy — matching the
+      // authoritative host. sim.EconomyModel: 0 = TA, 1 = TA:K.
+      economy: activeGame().id === 'takingdoms' ? 1 : 0,
     })
     // In join mode, let the transport hydrate any unit type it sees in the
     // command stream or a join snapshot but that this client never spawned

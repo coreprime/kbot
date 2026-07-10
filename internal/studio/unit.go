@@ -13,6 +13,7 @@ import (
 	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/gamedata/tak"
 	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot/games"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the
@@ -227,6 +228,42 @@ type unitMetaJSON struct {
 	// featuredead follow-up (the damaged wreck a heavier kill leaves).
 	CorpseObject     string `json:"corpseObject,omitempty"`
 	CorpseHeapObject string `json:"corpseHeapObject,omitempty"`
+
+	// --- Authoritative sim stat block, from the shared games meta builder ---
+	//
+	// These carry the fields the in-browser sim reads that the raw-FBI path
+	// above does not surface: the exact float32 economy block, the combat
+	// identity keys the veterancy/[DAMAGE] paths match on, and the Block-6
+	// special-mechanic figures. They are computed by the same
+	// games.UnitMetaFromFBI + EnrichCombatMeta pipeline the authoritative host
+	// runs, so a unit spawned in the browser gets identical stats.
+
+	// Econ is the exact economy stat block (nil when the builder produced none).
+	Econ *econJSON `json:"econ,omitempty"`
+
+	// ObjectName is the TA per-target [DAMAGE] victim key; DamageCategory the
+	// TA:K fractional-multiplier key; ExperiencePoints the TA:K level divisor.
+	ObjectName       string `json:"objectName,omitempty"`
+	DamageCategory   string `json:"damageCategory,omitempty"`
+	ExperiencePoints int    `json:"experiencePoints,omitempty"`
+
+	// Special-mechanic capability flags + figures (Block 6). Cloak drain is
+	// game-scaled (TA per-settle energy / TA:K per-tick mana) by the builder,
+	// so the JSON carries the resolved figures.
+	CanCapture            bool    `json:"canCapture,omitempty"`
+	CanReclaim            bool    `json:"canReclaim,omitempty"`
+	CanResurrect          bool    `json:"canResurrect,omitempty"`
+	Commander             bool    `json:"commander,omitempty"`
+	CantBeCaptured        bool    `json:"cantBeCaptured,omitempty"`
+	CanCloak              bool    `json:"canCloak,omitempty"`
+	CloakCost             float64 `json:"cloakCost,omitempty"`
+	CloakCostMoving       float64 `json:"cloakCostMoving,omitempty"`
+	MinCloakDistance      int     `json:"minCloakDistance,omitempty"`
+	MaxMana               float64 `json:"maxMana,omitempty"`
+	ManaRechargeTick      float64 `json:"manaRechargeTick,omitempty"`
+	SelfDestructCountdown int     `json:"selfDestructCountdown,omitempty"`
+	Kamikaze              bool    `json:"kamikaze,omitempty"`
+	KamikazeDistance      int     `json:"kamikazeDistance,omitempty"`
 }
 
 type unitWeaponJSON struct {
@@ -427,6 +464,52 @@ type unitWeaponJSON struct {
 	// dealt to a given target.
 	DamageDefault int            `json:"damageDefault"`
 	Damage        map[string]int `json:"damage,omitempty"`
+
+	// --- Exact-combat fields (from the authoritative games.EnrichCombatMeta
+	// pass), so a browser-spawned unit fights with the same numbers the host
+	// does rather than a lossy re-derivation. DamageMult carries the TA:K
+	// per-category fractional multipliers (distinct from the TA absolute
+	// Damage table above). ReloadTicks/BurstRateTicks/RandomDecayTicks are the
+	// tick-domain firing-cycle figures; Melee/Instant/Paralyzer/MindControl the
+	// TA:K behavior classes; SelfSplash whether the shooter eats its own blast.
+	DamageMult       map[string]float64 `json:"damageMult,omitempty"`
+	ReloadTicks      int                `json:"reloadTicks,omitempty"`
+	BurstRateTicks   int                `json:"burstRateTicks,omitempty"`
+	RandomDecayTicks int                `json:"randomDecayTicks,omitempty"`
+	MinBarrelSin     float64            `json:"minBarrelSin,omitempty"`
+	SelfSplash       bool               `json:"selfSplash,omitempty"`
+	Melee            bool               `json:"melee,omitempty"`
+	Instant          bool               `json:"instant,omitempty"`
+	MindControl      bool               `json:"mindControl,omitempty"`
+	ManaPerShot      float64            `json:"manaPerShot,omitempty"`
+}
+
+// econJSON is the exact float32 economy stat block (sim.EconMeta) surfaced so a
+// browser-spawned unit runs the same economy math the authoritative host does.
+// Every field is a float32 widened to a JSON number; absent keys read as zero.
+type econJSON struct {
+	EnergyMake     float64 `json:"energyMake,omitempty"`
+	MetalMake      float64 `json:"metalMake,omitempty"`
+	EnergyUse      float64 `json:"energyUse,omitempty"`
+	ExtractsMetal  float64 `json:"extractsMetal,omitempty"`
+	MakesMetal     float64 `json:"econMakesMetal,omitempty"`
+	WindGenerator  float64 `json:"windGenerator,omitempty"`
+	TidalGenerator float64 `json:"tidalGenerator,omitempty"`
+	EnergyStorage  float64 `json:"energyStorage,omitempty"`
+	MetalStorage   float64 `json:"metalStorage,omitempty"`
+
+	BuildTime       int     `json:"econBuildTime,omitempty"`
+	WorkerTime      int     `json:"econWorkerTime,omitempty"`
+	BuildCostEnergy float64 `json:"buildCostEnergy,omitempty"`
+	BuildCostMetal  float64 `json:"buildCostMetal,omitempty"`
+
+	ManaIncome     float64 `json:"manaIncome,omitempty"`
+	ManaStorage    float64 `json:"manaStorage,omitempty"`
+	BuildCost      float64 `json:"buildCost,omitempty"`
+	BuildTimeF     float64 `json:"buildTimeF,omitempty"`
+	BuildTimeRecip float64 `json:"buildTimeRecip,omitempty"`
+	WorkerTimeF    float64 `json:"workerTimeF,omitempty"`
+	HealTime       float64 `json:"healTime,omitempty"`
 }
 
 func (sess *Session) handleUnitMeta(w http.ResponseWriter, r *http.Request) {
@@ -725,7 +808,115 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 			}
 		}
 	}
+	// Authoritative sim stat block: run the shared games meta builder over the
+	// same FBI so the in-browser sim gets the exact economy/combat/specials
+	// fields the host computes, then copy them onto the JSON. Best-effort — a
+	// unit whose FBI won't build simply ships the raw-FBI fields above.
+	sess.enrichMetaJSON(&out, name)
 	return &out, nil
+}
+
+// enrichMetaJSON layers the authoritative games meta (economy, exact combat,
+// special mechanics) onto the JSON so a browser-spawned unit runs the same
+// stat block the host does. It re-reads the unit's FBI through the shared
+// games.UnitMetaFromFBI + EnrichCombatMeta pipeline (the very code the
+// authoritative host's spawn provider runs) and mirrors the resulting fields
+// into the JSON shape the wasm bridge decodes.
+func (sess *Session) enrichMetaJSON(out *unitMetaJSON, name string) {
+	fbi, err := sess.loadUnitFBIBytes(name)
+	if err != nil {
+		return
+	}
+	meta, err := games.UnitMetaFromFBI(name, fbi, sess.resolveWeaponSection)
+	if err != nil || meta == nil {
+		return
+	}
+	games.ApplyMovementClass(meta, sess.simMoveClassTable())
+	games.EnrichCombatMeta(meta, fbi, sess.resolveWeaponSection)
+
+	out.Econ = &econJSON{
+		EnergyMake:      float64(meta.Econ.EnergyMake),
+		MetalMake:       float64(meta.Econ.MetalMake),
+		EnergyUse:       float64(meta.Econ.EnergyUse),
+		ExtractsMetal:   float64(meta.Econ.ExtractsMetal),
+		MakesMetal:      float64(meta.Econ.MakesMetal),
+		WindGenerator:   float64(meta.Econ.WindGenerator),
+		TidalGenerator:  float64(meta.Econ.TidalGenerator),
+		EnergyStorage:   float64(meta.Econ.EnergyStorage),
+		MetalStorage:    float64(meta.Econ.MetalStorage),
+		BuildTime:       int(meta.Econ.BuildTime),
+		WorkerTime:      int(meta.Econ.WorkerTime),
+		BuildCostEnergy: float64(meta.Econ.BuildCostEnergy),
+		BuildCostMetal:  float64(meta.Econ.BuildCostMetal),
+		ManaIncome:      float64(meta.Econ.ManaIncome),
+		ManaStorage:     float64(meta.Econ.ManaStorage),
+		BuildCost:       float64(meta.Econ.BuildCost),
+		BuildTimeF:      float64(meta.Econ.BuildTimeF),
+		BuildTimeRecip:  float64(meta.Econ.BuildTimeRecip),
+		WorkerTimeF:     float64(meta.Econ.WorkerTimeF),
+		HealTime:        float64(meta.Econ.HealTime),
+	}
+	out.ObjectName = meta.ObjectName
+	out.DamageCategory = meta.DamageCategory
+	out.ExperiencePoints = meta.ExperiencePoints
+	out.CanCapture = meta.CanCapture
+	out.CanReclaim = meta.CanReclaim
+	out.CanResurrect = meta.CanResurrect
+	out.Commander = meta.Commander
+	out.CantBeCaptured = meta.CantBeCaptured
+	out.CanCloak = meta.CanCloak
+	out.CloakCost = float64(meta.CloakCost)
+	out.CloakCostMoving = float64(meta.CloakCostMoving)
+	out.MinCloakDistance = meta.MinCloakDistance
+	out.MaxMana = float64(meta.MaxMana)
+	out.ManaRechargeTick = float64(meta.ManaRechargeTick)
+	out.SelfDestructCountdown = meta.SelfDestructCountdown
+	out.Kamikaze = meta.Kamikaze
+	out.KamikazeDistance = meta.KamikazeDistance
+
+	// Per-weapon exact-combat fields, aligned by slot.
+	for i := range out.Weapons {
+		if i >= len(meta.Weapons) || !meta.Weapons[i].Present {
+			continue
+		}
+		wm := &meta.Weapons[i]
+		wj := &out.Weapons[i]
+		if len(wm.DamageTable) > 0 {
+			wj.Damage = mergeDamageTable(wj.Damage, wm.DamageDefault, wm.DamageTable)
+		}
+		if wm.DamageDefault != 0 {
+			wj.DamageDefault = wm.DamageDefault
+		}
+		if len(wm.DamageMult) > 0 {
+			wj.DamageMult = wm.DamageMult
+		}
+		wj.ReloadTicks = wm.ReloadTicks
+		wj.BurstRateTicks = wm.BurstRateTicks
+		wj.RandomDecayTicks = wm.RandomDecayTicks
+		wj.MinBarrelSin = wm.MinBarrelSin
+		wj.SelfSplash = wm.SelfSplash
+		wj.Melee = wm.Melee
+		wj.Instant = wm.Instant
+		wj.MindControl = wm.MindControl
+		wj.Paralyzer = wm.Paralyzer
+		wj.ManaPerShot = wm.ManaPerShot
+	}
+}
+
+// mergeDamageTable folds the authoritative per-target [DAMAGE] table and its
+// default into the JSON's damage map (lower-cased keys, with "default"
+// carrying the default entry) so the client resolves per-victim damage the same
+// way the host does.
+func mergeDamageTable(existing map[string]int, def int, table map[string]int) map[string]int {
+	out := make(map[string]int, len(table)+1)
+	for k, v := range existing {
+		out[k] = v
+	}
+	out["default"] = def
+	for k, v := range table {
+		out[k] = v
+	}
+	return out
 }
 
 // soundEventKeys is the set of TA sound-event names the studio
