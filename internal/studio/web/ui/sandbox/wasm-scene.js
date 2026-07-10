@@ -35,9 +35,15 @@ import {
   spawnProjectile,
   spawnProjectileInFlight,
   playWeaponSound,
-  SFX_FIRE_FLASH,
   SFX_SMOKE_WHITE,
 } from '@coreprime/kbot-game3d/weapon-driver'
+import { ExplosionManager } from '@coreprime/kbot-game3d/explosion-fx'
+import {
+  impactBurst,
+  latheConeSpray,
+  nanoPieceNames,
+  resolveDeathPlan,
+} from '@coreprime/kbot-game3d/world-fx'
 
 // One simulation tick in milliseconds (30 Hz), matching the Go engine's
 // sim.TickHz.  The scene advances the wasm world on this fixed grid; the
@@ -82,6 +88,13 @@ const INTERP_SNAP_WU = 256
 
 // Per-(unit, eventKey) sound debounce window, ms — see playUnitSound.
 const UNIT_SOUND_DEBOUNCE_MS = 80
+
+// Death-event reason codes the engine's special channels ride in the death
+// event's sfxType (0 = an ordinary lethal kill). A captured / given-away unit
+// (4) or a reclaimed one (5) is an ownership flip / removal, not a destruction
+// — it leaves no wreck and throws no blast, so its death fires no FX.
+const DEATH_REASON_CAPTURED = 4
+const DEATH_REASON_RECLAIMED = 5
 
 // WasmUnit adapts one simulated unit into the shape SandboxView reads.  Motion
 // state (pos / heading / health / …) is refreshed from each snapshot; the
@@ -264,6 +277,20 @@ export class WasmSandboxScene {
     // Smoke trails for in-flight missiles — scene-owned so all panes share one
     // set of puffs rather than each pushing duplicates.
     this.smokeTrails = new SmokeTrailManager()
+    // World-level FX binding shared by every death / impact detonation:
+    //   particles  — one scene-wide pool so a blast's fireball + sparks +
+    //                smoke plume live independently of the (possibly already
+    //                despawned) unit that died, and every pane sees them.
+    //   explosions — the polygonal ExplosionManager the game3d world driver
+    //                uses: a capped, coalesced fireball/shockwave (and the
+    //                mushroom-cloud tier for commander-scale blasts). Its
+    //                triangle buffer + lights are surfaced to the renderer by
+    //                the view each frame (fxExplosionTris / getSceneLights).
+    this._fxBinding = {
+      particles: new ParticlePool(2048),
+      explosions: new ExplosionManager(),
+      worldOffset: { x: 0, y: 0, z: 0 },
+    }
     this._unitSoundDebounce = new Map()
     // Fixed-timestep accumulator.
     this._acc = 0
@@ -930,7 +957,23 @@ export class WasmSandboxScene {
       const p = u.binding && u.binding.particles
       if (p) pools.push(p)
     }
-    return gatherSceneLights(pools)
+    // The scene-wide detonation pool lights the field even after the unit that
+    // died is gone, so its fireball still throws a glow.
+    pools.push(this._fxBinding.particles)
+    const lights = gatherSceneLights(pools)
+    // The polygonal ExplosionManager exposes its own dominant lights (each
+    // live fireball, pre-dimmed against a global budget); fold them in so a
+    // commander mushroom floods the scene the way it does in the replayer.
+    for (const l of this._fxBinding.explosions.lights()) lights.push(l)
+    return lights
+  }
+
+  // fxExplosionTris exposes the polygonal explosion geometry (a stride-7
+  // Float32 triangle soup + its vertex count) for the view to hand to
+  // renderer.setExplosionTris each frame. Scene-owned so every pane draws the
+  // same detonations from one manager.
+  fxExplosionTris() {
+    return { tris: this._fxBinding.explosions.tris(), vertCount: this._fxBinding.explosions.vertCount() }
   }
 
   // getSceneLight returns the single strongest light for callers still on the
@@ -1007,6 +1050,11 @@ export class WasmSandboxScene {
       if (b.audio) b.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
     }
     this.smokeTrails.tick(dt)
+    // Age the scene-wide detonation FX (fireball smoke/sparks + the polygonal
+    // ExplosionManager) on the same rate-scaled clock, so a paused sandbox
+    // freezes its blasts too and a slow-mo sandbox plays them in slow motion.
+    this._fxBinding.particles.tick(dt)
+    this._fxBinding.explosions.step(dt)
     return snap
   }
 
@@ -1081,12 +1129,13 @@ export class WasmSandboxScene {
     return snap
   }
 
-  // _tickBuildFx sprinkles the per-game construction effect over every live
-  // build: pulses of bright particles along the builder→buildee line and over
-  // the rising frame. The colour comes from the game adapter's buildFx — TA
-  // reads as nanolathe spray, TA:K as golden casting sparkles. Pseudo-random
-  // scatter derives from the tick so it stays deterministic per client (it is
-  // render-only either way).
+  // _tickBuildFx drives the per-game construction visual over every live build:
+  // a nanolathe cone spray from each of the builder's nano nozzles to the
+  // buildee — the same latheConeSpray the game3d world driver uses. The colour
+  // comes from the game adapter's buildFx (TA green nano spray, TA:K golden
+  // casting sparkles); the spray tracks each nozzle's LIVE world position (a
+  // factory's two nano pieces, a con vehicle's one) rather than the hull centre.
+  // Render-only, so the tick-seeded jitter inside latheConeSpray stays fine.
   _tickBuildFx(snap) {
     if (!this._activeBuilds || this._activeBuilds.size === 0) return
     const tick = snap.tick | 0
@@ -1097,25 +1146,39 @@ export class WasmSandboxScene {
       const buildee = this._units.get(job.buildeeId)
       const b = builder && builder.binding
       if (!builder || !buildee || !b || !b.particles) continue
-      const sp = builder._p1 || builder.pos
       const bp = buildee._p1 || buildee.pos
-      // Spray stream: dense pulses along the builder→buildee line...
-      for (let i = 0; i < 4; i++) {
-        const t = 0.25 + 0.75 * (((tick / 2) + i) % 4) / 4
-        const x = sp.x + (bp.x - sp.x) * t + (((tick * 7 + i * 13) % 9) - 4)
-        const z = sp.z + (bp.z - sp.z) * t + (((tick * 5 + i * 17) % 9) - 4)
-        const y = Math.max(bp.y || 0, 0) + 6 + (((tick / 2) + i) % 3) * 6
-        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 10, lifeMs: 380, color })
-      }
-      // ...plus a shimmer over the rising frame itself, so the buildee
-      // visibly crackles with the construction energy.
-      for (let i = 0; i < 3; i++) {
-        const x = bp.x + (((tick * 11 + i * 23) % 25) - 12)
-        const z = bp.z + (((tick * 13 + i * 19) % 25) - 12)
-        const y = Math.max(bp.y || 0, 0) + 4 + ((tick * 3 + i * 29) % 22)
-        b.particles.emit(SFX_FIRE_FLASH, [x, y, z], { size: 8, lifeMs: 300, color })
+      // Aim the cone at the rising frame's mid-height so the spray converges on
+      // the body, not its footprint.
+      const to = [bp.x, Math.max(bp.y || 0, 0) + this._unitRadius(buildee) * 0.5, bp.z]
+      const froms = this._nanoAnchors(builder)
+      if (!this._buildRng) this._buildRng = () => Math.random()
+      for (const from of froms) {
+        latheConeSpray(b.particles, { from, to, rng: this._buildRng, color })
       }
     }
+  }
+
+  // _nanoAnchors resolves a builder's nanolathe emitter world positions: its
+  // model's `nano*` pieces (nano1, nano2, …) composed through the live COB
+  // pose, so the spray leaves the moving/animated nozzle tips. Falls back to
+  // the builder's mid-hull when the model has no nano pieces or hasn't
+  // hydrated yet.
+  _nanoAnchors(u) {
+    const model = u.model
+    const mid = [u.pos.x, u.pos.y + this._unitRadius(u) * 0.5, u.pos.z]
+    if (!model || typeof model.findPiece !== 'function' || typeof model.resolvePieceWorld !== 'function') {
+      return [mid]
+    }
+    const flat = Array.isArray(model.flat) ? model.flat : []
+    const names = nanoPieceNames(flat.map((p) => p && p.name))
+    const out = []
+    for (const nm of names) {
+      const piece = model.findPiece(nm)
+      if (!piece) continue
+      const w = model.resolvePieceWorld(piece, u.pos.x, u.pos.y, u.pos.z, u.heading)
+      if (w) out.push(w)
+    }
+    return out.length ? out : [mid]
   }
 
   _syncUnits(snap) {
@@ -1351,14 +1414,16 @@ export class WasmSandboxScene {
           this._onDeath(ev)
           break
         case 'explode':
-          // COB EXPLODE opcode (death-throes debris from a Killed script).
-          this._flash(ev.unitId, ev, 24, 500, [1.6, 0.6, 0.2, 1.0])
+          // COB EXPLODE opcode (death-throes debris from a Killed script) —
+          // a small impact-tier fireball punctuating the death sequence.
+          this._flash(ev, 24)
           break
         case 'emitSfx':
           this._sfx(ev.unitId, SFX_SMOKE_WHITE, ev)
           break
         case 'projectileHit':
-          this._flash(ev.unitId, ev, 56, 800, [1.9, 0.7, 0.2, 1.0])
+          // A shot landing on a unit — a medium impact detonation.
+          this._flash(ev, 56)
           break
         case 'corpseSpawn':
           // The Killed script settled its corpsetype (carried in slot):
@@ -1412,14 +1477,15 @@ export class WasmSandboxScene {
         case 'buildStop':
           if (this._activeBuilds) this._activeBuilds.delete(ev.unitId)
           break
-        case 'blast': {
-          // Death explosion (explodeas / selfdestructas) — sized from the
-          // weapon's blast diameter (sfxType, world units) so a commander
-          // blast reads catastrophically bigger than a peewee pop.
-          const aoe = Math.max(32, ev.sfxType | 0)
-          this._flash(ev.unitId, ev, aoe, 950, [1.9, 0.8, 0.25, 1.0])
+        case 'blast':
+          // A death blast (explodeas / selfdestructas) rides alongside the
+          // unit's 'death' event in the same tick — the engine's killUnit emits
+          // both, 'death' first. _onDeath already fires the full death-tier
+          // detonation, sized from the unit's ExplodeAs/SelfDestructAs AoE (the
+          // same TDF weapon whose diameter this event carries in sfxType), so
+          // the fireball must NOT be re-spawned here or every death double-pops.
+          // The splash-damage bookkeeping is the sim's; the visual is death's.
           break
-        }
         default:
           break
       }
@@ -1515,17 +1581,84 @@ export class WasmSandboxScene {
     u.wreckName = object
   }
 
+  // _onDeath plays a unit's destruction: a death-tier detonation sized from
+  // the unit's own ExplodeAs/SelfDestructAs blast diameter (so a peewee pops
+  // and a commander throws a mushroom cloud), then hands the view a death plan
+  // — the TA severity ladder (debris + which wreck survives) plus the blast
+  // metrics — so it can scatter the unit's model into flying polygons in its
+  // own GL context. corpseSpawn still owns the persistent wreck swap.
   _onDeath(ev) {
     const u = this._units.get(ev.unitId)
-    this._flash(ev.unitId, ev, 32, 600, [1.6, 0.6, 0.2, 1.0])
-    this._emit('death', { unit: u, anchor: [ev.x, ev.y, ev.z] })
+    const anchor = [ev.x, ev.y, ev.z]
+    // A suppressed-reason death is an ownership flip, not a destruction: a
+    // captured / given-away unit (reason 4) or a reclaimed one (reason 5)
+    // leaves no wreck and throws no blast in the sim, so it must not detonate
+    // or shatter here either — the body simply changes hands / vanishes. The
+    // engine rides the reason word in the death event's sfxType (0 = an
+    // ordinary lethal kill). Mirrors the replayer's cause-skip.
+    const reason = ev.sfxType | 0
+    if (reason === DEATH_REASON_CAPTURED || reason === DEATH_REASON_RECLAIMED) {
+      this._emit('death', { unit: u, anchor, severity: 0, aoe: 0, plan: { debris: false, corpse: null } })
+      return
+    }
+    const aoe = this._deathAoe(u)
+    const severity = this._deathSeverity(u)
+    // Lift the blast to the unit's mid-hull so the fireball engulfs the body
+    // rather than erupting from its feet.
+    const r = this._unitRadius(u)
+    this._detonate([anchor[0], anchor[1] + r * 0.4, anchor[2]], { aoe, kind: 'death', severity })
+    const plan = resolveDeathPlan({
+      severity,
+      corpse: (u && u.meta && u.meta.corpseObject) || null,
+      heapCorpse: (u && u.meta && u.meta.corpseHeapObject) || null,
+    })
+    this._emit('death', { unit: u, anchor, severity, aoe, plan })
   }
 
-  _flash(unitId, ev, size, lifeMs, color) {
-    const u = this._units.get(unitId)
-    const b = u && u.binding
-    if (!b || !b.particles) return
-    b.particles.emit(SFX_FIRE_FLASH, [ev.x, ev.y, ev.z], { size, lifeMs, color })
+  // _detonate routes a blast through the game3d world-fx pipeline: the
+  // scene-wide particle pool gets the fireball flash + sparks + smoke plume,
+  // and the polygonal ExplosionManager gets a tiered fireball/shockwave (or a
+  // mushroom cloud past the AoE threshold). One binding drives both.
+  _detonate(pos, opts) {
+    try { impactBurst(this._fxBinding, pos, opts) } catch { /* vis must not stall the sim */ }
+  }
+
+  // _deathAoe reads the unit's resolved death-weapon blast DIAMETER (world
+  // units) from its FBI ExplodeAs (or SelfDestructAs when the fuse fired the
+  // kill), matching the honest data path the replayer passes to unitDeath. A
+  // model-radius estimate backs a unit with no explode weapon.
+  _deathAoe(u) {
+    const meta = u && u.meta
+    const selfD = (u && u.selfDestructMs > 0)
+    const w = meta && ((selfD && meta.selfDestructWeapon) || meta.explodeWeapon || meta.selfDestructWeapon)
+    const aoe = w && +w.areaOfEffectWU
+    if (Number.isFinite(aoe) && aoe > 0) return aoe
+    return Math.max(24, this._unitRadius(u) * 2.2)
+  }
+
+  // _deathSeverity picks the TA corpsetype ladder input: a commander or a
+  // manual self-destruct vaporises (100 → debris only, no wreck), an ordinary
+  // combat kill leaves the intact corpse (30), matching the replayer's tiers.
+  _deathSeverity(u) {
+    if (!u) return 30
+    if (u.selfDestructMs > 0) return 100
+    const cats = (u.meta && u.meta.categories) || ''
+    if (/commander/i.test(cats) || /commander/i.test(u.name || '')) return 100
+    return 30
+  }
+
+  // _unitRadius returns the loaded model's bounds radius, or a default when the
+  // model hasn't hydrated (a unit that died the tick it appeared).
+  _unitRadius(u) {
+    const m = u && u.model
+    const r = m && m.boundsRadius
+    return Number.isFinite(r) && r > 0 ? r : 16
+  }
+
+  // _flash detonates a small impact-tier blast at an event anchor (COB EXPLODE
+  // debris, projectile hits). The aoe hint scales the burst fed to impactBurst.
+  _flash(ev, aoe) {
+    this._detonate([ev.x, ev.y, ev.z], { aoe, kind: 'impact' })
   }
 
   _sfx(unitId, kind, ev) {
@@ -1539,6 +1672,7 @@ export class WasmSandboxScene {
 
   dispose() {
     try { this.smokeTrails.clear() } catch { /* ignore */ }
+    try { this._fxBinding.explosions.clear() } catch { /* ignore */ }
     this._unitSoundDebounce.clear()
     this._units.clear()
     this._projectiles = []

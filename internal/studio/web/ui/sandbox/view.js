@@ -29,6 +29,7 @@ import { stepSimSpeed } from '../common/sim-controls.js'
 import { activeGame } from '../common/game-registry.js'
 import { ArmedCursor } from '@coreprime/kbot-game3d/armed-cursor'
 import { ExplosionOverlay } from '@coreprime/kbot-game3d/explosion-overlay'
+import { DebrisField } from './debris-field.js'
 import { teamColorForSide } from '@coreprime/kbot-game3d/team-colors'
 import { onEnhanceMeshChanged } from '@coreprime/kbot-game3d/enhance-mesh'
 import {
@@ -345,6 +346,30 @@ export class SandboxView {
         }) || null
       }
     }
+    // Debris field — per-pane flying-polygon death shards, built + torn apart
+    // in THIS pane's GL context (a shard mesh is a VBO upload, which can only
+    // happen here). The scene stays headless and emits a 'death' event with the
+    // killed unit's model + the TA severity plan; we shatter it into gravity-
+    // driven fragments that settle on the ground and fade out. Only the first
+    // pane to attach owns the field for a shared scene (idempotent thereafter),
+    // matching the single-overlay rule above — split panes share the shower.
+    if (!this._debris && this._world) {
+      this._debris = new DebrisField({
+        gl: this._world.gl,
+        heightAt: (x, z) => this.#terrainHeightAt(x, z),
+      })
+      if (this.scene && typeof this.scene.on === 'function') {
+        this._deathUnsub = this.scene.on('death', (ev) => {
+          if (!ev || !ev.plan || !ev.plan.debris) return
+          const u = ev.unit
+          if (!u || !u.model) return
+          const a = ev.anchor || [u.pos.x, u.pos.y, u.pos.z]
+          this._debris.spawn(u.model, { x: a[0], y: a[1], z: a[2], headingRad: u.heading }, {
+            severity: ev.severity != null ? ev.severity : 100,
+          })
+        }) || null
+      }
+    }
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
     // which leaves spawned units floating above wherever the bumpy
@@ -386,7 +411,7 @@ export class SandboxView {
     // pulse, this pane's entities array, this pane's shift-preview
     // overlay, this pane's armed cursor.  Pre-draw (not post) so the
     // model + tracking camera read one frame-correct pose together.
-    this.renderer.onBeforeFrame = () => {
+    this.renderer.onBeforeFrame = (dtMs = 16.7) => {
       // Sample render interpolation for THIS frame's instant first, so both
       // the entity transforms built below and the tracking camera (which
       // reads the unit position inside draw()) see one coherent, frame-
@@ -409,6 +434,23 @@ export class SandboxView {
           ? this.scene.engine.getSceneLights()
           : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
         this.renderer.setPulseLights(lights)
+      }
+      // Advance this pane's debris shards on the sim's playback clock (frozen
+      // when paused, slowed in slow-mo) so a shattered unit's fragments fall
+      // and settle in step with the rest of the world. The scene owns the rate;
+      // read it so a backgrounded / paused pane's debris holds still.
+      if (this._debris) {
+        const rt = this.scene && this.scene.runtime
+        const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
+        this._debris.step(dtMs * rate)
+      }
+      // Polygonal explosion geometry — the scene's ExplosionManager rebuilt its
+      // fireball/shockwave triangle soup on the sim tick; hand this frame's
+      // buffer to the renderer so the detonations draw. Every pane reads the
+      // one shared manager, so all panes show the same blasts.
+      if (this.scene && typeof this.scene.fxExplosionTris === 'function' && typeof this.renderer.setExplosionTris === 'function') {
+        const ex = this.scene.fxExplosionTris()
+        this.renderer.setExplosionTris(ex.tris, ex.vertCount)
       }
       this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
@@ -1686,6 +1728,14 @@ export class SandboxView {
         // without the boost they pop to the impostor dot mid-flight.
         isProjectile: true,
       })
+    }
+    // Death debris — flying-polygon shards from destroyed units, each fading
+    // over its last stretch of life. Appended after the live units so a shard
+    // cloud draws over the ground it's scattering across. The shard models own
+    // their VBOs in this pane's context (built at spawn), so no local-cache
+    // substitution is needed.
+    if (this._debris) {
+      for (const d of this._debris.entities()) entities.push(d)
     }
     this.renderer.setEntities(entities)
   }
@@ -3376,6 +3426,16 @@ export class SandboxView {
     if (this._explosionOverlay) {
       try { this._explosionOverlay.dispose() } catch { /* ignore */ }
       this._explosionOverlay = null
+    }
+    // Debris teardown — drop the death subscription and release every live
+    // shard VBO before the GL context goes.
+    if (this._deathUnsub) {
+      try { this._deathUnsub() } catch { /* ignore */ }
+      this._deathUnsub = null
+    }
+    if (this._debris) {
+      try { this._debris.clear() } catch { /* ignore */ }
+      this._debris = null
     }
     if (this.renderer) this.renderer.dispose()
     this.renderer = null
