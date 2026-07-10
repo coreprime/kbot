@@ -471,11 +471,24 @@ func (m *UnitMeta) moveRate2() fixed.Fixed {
 }
 
 // waterMult is the TA:K in-water stat multiplier with its engine default
-// (1.0) when the FBI omits it. RoadMult (default 1.2) waits on a road-surface
-// raster — the world block — before anything can consult it.
+// (1.0) when the FBI omits it.
 func (m *UnitMeta) waterMult() fixed.Fixed {
 	if m.WaterMult > 0 {
 		return m.WaterMult
 	}
 	return fixed.One
+}
+
+// takRoadMultDefault is the engine's roadmultiplier default (+0x172, 0x13333 =
+// 1.2) applied when the FBI omits the field.
+const takRoadMultDefault = fixed.Fixed(0x13333)
+
+// roadMult is the TA:K on-road stat multiplier with its engine default (1.2)
+// when the FBI omits it — read by a unit standing on a road cell and by the
+// pathfinder's road-cost discount.
+func (m *UnitMeta) roadMult() fixed.Fixed {
+	if m.RoadMult > 0 {
+		return m.RoadMult
+	}
+	return takRoadMultDefault
 }

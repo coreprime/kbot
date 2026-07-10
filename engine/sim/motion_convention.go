@@ -67,16 +67,22 @@ func (u *Unit) motionConvention() motionConvention {
 
 // takStatScale is the TA:K per-unit stat multiplier for the unit's current
 // footing: the FBI watermultiplier while it stands in water, the
-// roadmultiplier once a road raster exists (world block), 1.0 on dry ground.
-// The decompile shows every kinematic stat read filtered through this
-// multiply, but the exact operand pairing is UNKNOWN-6 — this implements the
-// believed reading. TA units ignore it (scaleStat is identity there).
+// roadmultiplier while it stands on a road cell, 1.0 on dry cross-country
+// ground. The decompile shows every kinematic stat read (maxvelocity /
+// brakerate / acceleration / turnrate) filtered through this multiply keyed on
+// the entity's terrain-state flags (§1.4-1, UNKNOWN-6); water takes precedence
+// over road (an underwater cell is never a road). TA units ignore the result
+// (scaleStat is identity, turnPerFrame drops the scale there), and a TA map
+// carries no road raster, so this is a pure TA:K effect.
 func (w *World) takStatScale(u *Unit) fixed.Fixed {
 	if u.Meta == nil || u.Meta.IsAircraft {
 		return fixed.One
 	}
 	if w.unitUnderwater(u) {
 		return u.Meta.waterMult()
+	}
+	if w.unitOnRoad(u) {
+		return u.Meta.roadMult()
 	}
 	return fixed.One
 }

@@ -200,12 +200,40 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 	}
 	goalIdx := idxOf(gx, gz)
 
+	// Road-cost model (TA:K): a road cell is faster ground, so entering one
+	// costs less A*. Traversal cost stands in for travel time (distance ÷
+	// speed), and a road multiplies speed by the unit's roadmultiplier, so the
+	// road step cost is the base cost divided by that same multiplier — the
+	// pathfinder's discount is the exact reciprocal of the locomotion boost,
+	// derived from the one RE'd tuning value (no invented number). A slightly
+	// longer road route then beats a shorter cross-country one when, and only
+	// when, the speed gain covers the extra cells. The heuristic drops to the
+	// road-discounted per-step costs so it stays an admissible lower bound and
+	// the search still finds the optimal (road-preferring) path. With no road
+	// raster (every TA map) roadOrth/roadDiag equal the base 10/14 and the
+	// search is byte-identical to before.
+	const baseOrth, baseDiag int32 = 10, 14
+	roadOrth, roadDiag := baseOrth, baseDiag
+	hasRoad := t.Road != nil
+	if hasRoad {
+		if rm := m.roadMult(); rm > fixed.One {
+			roadOrth = int32(int64(baseOrth) * int64(fixed.One) / int64(rm))
+			roadDiag = int32(int64(baseDiag) * int64(fixed.One) / int64(rm))
+			if roadOrth < 1 {
+				roadOrth = 1
+			}
+			if roadDiag < roadOrth {
+				roadDiag = roadOrth
+			}
+		}
+	}
+
 	// A*.
 	startIdx := idxOf(sx, sz)
 	ps.gen[startIdx] = ps.cur
 	ps.gScore[startIdx] = 0
 	ps.parent[startIdx] = -1
-	hpush(ps, pfNode{f: int32(octile(sx, sz, gx, gz)), idx: startIdx})
+	hpush(ps, pfNode{f: octile(sx, sz, gx, gz, roadOrth, roadDiag), idx: startIdx})
 
 	dirs := [8][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {1, -1}, {-1, 1}, {-1, -1}}
 	// Expansion budget: every cell is expanded at most once (the closed-set
@@ -262,10 +290,15 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 			// stand-in pending the passability block, which brings the
 			// engines' exact costs (orth 0x10, diag 0x16 TA / 0x17 TA:K,
 			// heuristic unresolved) together with the per-class blocker
-			// raster and its penalty tier.
-			step := int32(10)
+			// raster and its penalty tier. A road destination cell (TA:K)
+			// takes the discounted cost so the route prefers roads.
+			oc, dc := baseOrth, baseDiag
+			if hasRoad && t.cellRoad(nx, nz) {
+				oc, dc = roadOrth, roadDiag
+			}
+			step := oc
 			if diag {
-				step = 14
+				step = dc
 			}
 			ng := cg + step
 			nIdx := idxOf(nx, nz)
@@ -275,7 +308,7 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 			ps.gen[nIdx] = ps.cur
 			ps.gScore[nIdx] = ng
 			ps.parent[nIdx] = cur.idx
-			hpush(ps, pfNode{f: ng + int32(octile(nx, nz, gx, gz)), idx: nIdx})
+			hpush(ps, pfNode{f: ng + octile(nx, nz, gx, gz, roadOrth, roadDiag), idx: nIdx})
 		}
 	}
 	if !found {
@@ -326,9 +359,12 @@ func (w *World) nearestOpenCell(m *UnitMeta, gx, gz int, blocked func(cx, cz int
 	return 0, 0, false
 }
 
-// octile is the 8-connected admissible heuristic in step-cost units (orth 10,
-// diag 14).
-func octile(ax, az, bx, bz int) int {
+// octile is the 8-connected admissible heuristic in step-cost units, given the
+// cheapest orthogonal and diagonal step the search can take (orth 10 / diag 14
+// on plain ground; the road-discounted costs when a road raster is present, so
+// the estimate never exceeds the true remaining cost of an all-road path and
+// A* still returns an optimal, road-preferring route).
+func octile(ax, az, bx, bz int, orth, diag int32) int32 {
 	dx := ax - bx
 	if dx < 0 {
 		dx = -dx
@@ -341,7 +377,7 @@ func octile(ax, az, bx, bz int) int {
 	if mn > mx {
 		mn, mx = mx, mn
 	}
-	return 10*mx + 4*mn // 10*(max-min) + 14*min
+	return orth*int32(mx) + (diag-orth)*int32(mn) // orth*(max-min) + diag*min
 }
 
 // ur2cells converts a body radius to a cell-count inflation for footprint

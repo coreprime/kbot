@@ -64,6 +64,7 @@ func main() {
 		"submitResurrect":    js.FuncOf(submitResurrect),
 		"submitUnload":       js.FuncOf(submitUnload),
 		"setTerrain":         js.FuncOf(setTerrain),
+		"setRoad":            js.FuncOf(setRoad),
 		"addFeature":         js.FuncOf(addFeature),
 		"removeFeature":      js.FuncOf(removeFeatureBridge),
 		"featureAt":          js.FuncOf(featureAtBridge),
@@ -514,8 +515,29 @@ func setTerrain(_ js.Value, args []js.Value) any {
 			js.CopyBytesToGo(t.Void, voids)
 		}
 	}
+	// Optional per-cell road raster (TA:K): 1 = road, 0 = cross-country. The
+	// studio derives it from the map's TA:K terrain-type data; TA maps omit it.
+	if roads := o.Get("roads"); !roads.IsUndefined() && !roads.IsNull() {
+		rn := roads.Get("length").Int()
+		if rn >= t.W*t.H {
+			t.Road = make([]uint8, rn)
+			js.CopyBytesToGo(t.Road, roads)
+		}
+	}
 	inst.world.SetTerrain(t)
 	return true
+}
+
+// setRoad(handle, cx, cz, on) marks (on=true) or clears a single terrain cell
+// as road, allocating the road raster on first use — the incremental hook the
+// studio uses to paint roads onto an already-installed map. Returns true on
+// success.
+func setRoad(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	return inst.world.SetRoadCell(args[1].Int(), args[2].Int(), args[3].Bool())
 }
 
 // submitStop(handle, unitIds[]) -> execTick.

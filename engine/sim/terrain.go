@@ -28,6 +28,13 @@ type Terrain struct {
 	// bare ground everywhere. Extractor yield samples it once, at
 	// placement.
 	Metal []uint8
+	// Road marks the per-cell road bit (TA:K only): a ground unit standing on
+	// a road cell reads its FBI roadmultiplier as the kinematic stat scale, and
+	// the pathfinder discounts a road cell's A* traversal cost so a road route
+	// wins when the speed gain outweighs the extra distance (locomotion.md
+	// §1.4/§3.4). Optional — nil means no roads (every TA map, and any TA:K map
+	// with none); TA has no road concept, so a TA terrain never carries one.
+	Road []uint8
 	// LavaWorld marks a lava map (OTA lavaworld=1): every cell whose height
 	// sits at or below sea level is unpathable/unbuildable — lava, unlike
 	// TA water, is not traversable (world.md §1.3/§2.4).
@@ -47,6 +54,51 @@ func (t *Terrain) cellIsLava(cx, cz int) bool {
 		return false
 	}
 	return t.cellHeight(cx, cz) <= t.SeaLevel
+}
+
+// cellRoad reports whether cell (cx, cz) is flagged road in the raster;
+// off-map and raster-less worlds read false.
+func (t *Terrain) cellRoad(cx, cz int) bool {
+	if t.Road == nil || cx < 0 || cz < 0 || cx >= t.W || cz >= t.H {
+		return false
+	}
+	return t.Road[cz*t.W+cx] != 0
+}
+
+// unitOnRoad reports whether the unit's current footprint cell is road. TA
+// maps carry no road raster, so this is always false there; only TA:K units
+// standing on a road cell take the roadmultiplier stat scale.
+func (w *World) unitOnRoad(u *Unit) bool {
+	t := w.terrain
+	if t == nil || t.Road == nil {
+		return false
+	}
+	cx, cz := t.cellAt(u.loco.Pos)
+	return t.cellRoad(cx, cz)
+}
+
+// SetRoadCell marks (on) or clears a single terrain cell as road, lazily
+// allocating the raster on the first set. It is terrain configuration — every
+// lockstep peer must apply the identical road layer before stepping (the
+// studio populates it from the map's TA:K terrain-type data). Returns false
+// when there is no terrain or the cell is off-map.
+func (w *World) SetRoadCell(cx, cz int, on bool) bool {
+	t := w.terrain
+	if t == nil || cx < 0 || cz < 0 || cx >= t.W || cz >= t.H {
+		return false
+	}
+	if t.Road == nil {
+		if !on {
+			return true
+		}
+		t.Road = make([]uint8, t.W*t.H)
+	}
+	if on {
+		t.Road[cz*t.W+cx] = 1
+	} else {
+		t.Road[cz*t.W+cx] = 0
+	}
+	return true
 }
 
 // cellMetal reads the metal byte at cell (cx, cz); off-map and metal-less
