@@ -44,7 +44,7 @@ func TestSessionListing(t *testing.T) {
 	defer s.Stop()
 
 	// A freshly created match carries the metadata supplied at creation.
-	m := s.match("arena", 1, 3, "My Sandbox", "sandbox")
+	m := s.match("arena", 1, 3, "My Sandbox", "sandbox", "")
 	got, ok := sessionByID(s.Sessions(), "arena")
 	if !ok {
 		t.Fatal("created match not listed")
@@ -75,7 +75,7 @@ func TestSessionListing(t *testing.T) {
 	})
 
 	// A second match created without metadata still lists, with empty fields.
-	s.match("default", 1, 3, "", "")
+	s.match("default", 1, 3, "", "", "")
 	if _, ok := sessionByID(s.Sessions(), "default"); !ok {
 		t.Fatal("second match not listed")
 	}
@@ -90,7 +90,7 @@ func TestIdleReaper(t *testing.T) {
 
 	// A just-created, never-joined match is idle but inside the grace window,
 	// so an immediate reap leaves it alone.
-	idle := s.match("idle", 1, 3, "", "sandbox")
+	idle := s.match("idle", 1, 3, "", "sandbox", "")
 	s.reapIdle(time.Now())
 	if _, ok := sessionByID(s.Sessions(), "idle"); !ok {
 		t.Fatal("idle match reaped before grace elapsed")
@@ -104,7 +104,7 @@ func TestIdleReaper(t *testing.T) {
 	}
 
 	// An occupied match is never reaped, even with the clock pushed far ahead.
-	busy := s.match("busy", 1, 3, "", "sandbox")
+	busy := s.match("busy", 1, 3, "", "sandbox", "")
 	lb := newLoopback()
 	busy.AddConn(serverConn{lb: lb})
 	lb.toServer <- wire.ClientMsg{Type: wire.MsgJoin, Join: &wire.JoinReq{MatchID: "busy"}}
@@ -124,7 +124,7 @@ func TestExplicitLeave(t *testing.T) {
 	s := NewServer(testSpawn, nil, 1, 3)
 	defer s.Stop()
 
-	m := s.match("room", 1, 3, "", "sandbox")
+	m := s.match("room", 1, 3, "", "sandbox", "")
 	lb := newLoopback()
 	m.AddConn(serverConn{lb: lb})
 	lb.toServer <- wire.ClientMsg{Type: wire.MsgJoin, Join: &wire.JoinReq{MatchID: "room"}}

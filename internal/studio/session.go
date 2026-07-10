@@ -62,6 +62,11 @@ type Session struct {
 	featureCacheMu sync.Mutex
 	featureCache   map[string][]byte
 	featureCacheBy map[string]featureEntry
+	// featureDefsCache memoizes the live feature catalogue (id → def) the 3D
+	// renderer sizes/textures its map-feature stand-ins from; the walk over
+	// every features/*.tdf is done once per session.
+	featureDefsOnce   sync.Once
+	featureDefsCached map[string]packFeatureJSON
 
 	// decoded GAF texture images per 3DO texture name, for object previews
 	objTexMu sync.Mutex

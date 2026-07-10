@@ -14,6 +14,7 @@ package studio
 
 import (
 	"bytes"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -21,6 +22,42 @@ import (
 	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/formats/tdf"
 )
+
+// featureDefsForRenderer builds (once per session) the id → def catalogue the
+// 3D renderer's map-feature stand-ins size, classify and texture themselves
+// from. It reuses the pack catalogue builder — same footprints, heights, GAF
+// sprite dims and 3DO object links — but stamps a live sprite handle on every
+// FLAT ground feature (metal patches, geothermal vents, scars…) that carries
+// GAF art, so the renderer paints the feature's real sprite onto the terrain
+// as a decal instead of faking it (or, worse, standing it up as a 3D lump).
+func (sess *Session) featureDefsForRenderer() map[string]packFeatureJSON {
+	sess.featureDefsOnce.Do(func() {
+		catalog, refs := sess.buildPackFeatureCatalog()
+		for id, entry := range catalog {
+			if !isFlatGroundFeature(entry) {
+				continue
+			}
+			// game3d only takes the flat-decal path when the def carries a
+			// sprite handle; stamp the id (resolved live via featureSprite →
+			// the feature-preview endpoint) for flat features with real art.
+			if ref, ok := refs[id]; ok && ref.Filename != "" && ref.SeqName != "" {
+				entry.Sprite = id
+				catalog[id] = entry
+			}
+		}
+		sess.featureDefsCached = catalog
+	})
+	return sess.featureDefsCached
+}
+
+// handleFeatureDefs serves the live feature catalogue (game3d's featureDefs
+// AssetProvider seam) keyed by lower-case feature id. Without it the renderer
+// has no footprint/height/category per feature and falls back to tiny,
+// mislabelled surrogates; with it trees stand at their real TA height, rocks
+// at theirs, and flat resource sites render as ground decals.
+func (sess *Session) handleFeatureDefs(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, sess.featureDefsForRenderer())
+}
 
 // packFeatureJSON is one features.json entry.  Footprints are in TA feature
 // cells (16 px / 16 wu per cell); heightWU is the TDF height= (the LOS

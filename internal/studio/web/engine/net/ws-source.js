@@ -122,6 +122,25 @@ export class WsFrameSource extends FrameSource {
     this._bwLastSent = 0
     this._bwLastRecv = 0
     this._bwTimer = null
+    // Pending terrain latch. The authority installs its height field at match
+    // creation (tick 0); the local prediction replica must share the identical
+    // grid or the two diverge. setTerrain may be called before the local engine
+    // exists (the map fetch can beat join_accept), so the grid is stashed here
+    // and installed the moment the replica is created — always before any unit
+    // spawns, since the faction leader's Spawn order only follows the map load.
+    this._pendingTerrain = null
+  }
+
+  // setTerrain installs (or clears, with null) the map height field on the local
+  // prediction engine so it steps the same lockstep grid the authority runs. The
+  // host builds its own terrain from the map path named on the upgrade, so this
+  // only mirrors it locally — nothing is sent upstream. Latched until the local
+  // engine exists (see the join_accept handler).
+  setTerrain(t) {
+    this._pendingTerrain = t
+    if (this._local && typeof this._local.setTerrain === 'function') {
+      this._local.setTerrain(t)
+    }
   }
 
   // setMetaProvider installs an async (name) -> meta resolver the source uses to
@@ -203,6 +222,11 @@ export class WsFrameSource extends FrameSource {
         spawnResolver: (name) => this._metas[name] || null,
       })
       await this._local.ready()
+      // Install any terrain that arrived before the engine existed, before the
+      // first step, so the replica's grid matches the authority's from tick 0.
+      if (this._pendingTerrain !== null && typeof this._local.setTerrain === 'function') {
+        this._local.setTerrain(this._pendingTerrain)
+      }
       if (a.tickRate) { this._baseTickMs = 1000 / a.tickRate; this._tickMs = this._baseTickMs / this._rate }
       this._joined = true
       // A join above tick 0 is mid-game: hold stepping until the snapshot has

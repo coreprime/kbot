@@ -131,13 +131,22 @@ export async function spawnFactionLeader(view, commander, sideIndex = 0) {
   // Game heading convention: a unit at heading θ faces (-sin θ, -cos θ), so
   // facing along (dx, dz) means θ = atan2(-dx, -dz).
   const headingRad = (dx || dz) ? Math.atan2(-dx, -dz) : 0
-  const model = await view.loader.load(commander)
-  await view.scene.addUnit({
-    name: commander, model,
-    x: start.x, z: start.z,
-    headingRad,
-    side: sideIndex | 0,
-  })
+  // Route through the view's spawn path so the local/join split is handled:
+  // in a hosted match the leader round-trips a Spawn order through the
+  // authority (and materializes on the next snapshot) instead of being
+  // inserted into a local-only world. Falls back to a direct scene insert if
+  // the view exposes no spawn helper.
+  if (typeof view.spawn === 'function') {
+    await view.spawn(commander, { x: start.x, z: start.z, headingRad, side: sideIndex | 0 })
+  } else {
+    const model = await view.loader.load(commander)
+    await view.scene.addUnit({
+      name: commander, model,
+      x: start.x, z: start.z,
+      headingRad,
+      side: sideIndex | 0,
+    })
+  }
   if (view.camera && (dx || dz)) {
     view.camera.target = [start.x, 20, start.z]
     // Eye sits opposite the look direction: yaw such that the camera

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/sim"
 	"github.com/coreprime/kbot/formats/gamedata/ta"
 	"github.com/coreprime/kbot/games"
@@ -24,6 +25,35 @@ const (
 // when a client first spawns a unit.
 func (sess *Session) startGameHost() {
 	sess.gameHost = gameserver.NewServer(sess.vfsSpawnFunc(), sess.resolveCobBytes, hostSeed, hostInputDelay)
+	// A hosted match that names a battlefield gets its authority world's height
+	// field installed at creation, so the lockstep sim runs on the real map (its
+	// bounds, slopes and water) rather than the flat grid. Clients derive the
+	// identical grid from the same map file via /api/studio/sandbox-map.
+	sess.gameHost.SetTerrainProvider(sess.buildHostTerrain)
+}
+
+// buildHostTerrain resolves a map path into the authority's sim height field.
+// It reuses the same TNT extraction the sandbox-map JSON serves the browser —
+// identical W/H/heights/sea level, at the shared cell size and height scale —
+// so the host and every client step the same lockstep grid. A map that fails
+// to load yields nil, leaving the match on the flat grid.
+func (sess *Session) buildHostTerrain(mapPath string) *sim.Terrain {
+	if mapPath == "" {
+		return nil
+	}
+	terr, err := sess.loadSandboxTerrain(mapPath)
+	if err != nil {
+		return nil
+	}
+	return &sim.Terrain{
+		W:           terr.W,
+		H:           terr.H,
+		CellWU:      fixed.FromFloat(sandboxCellWU),
+		HeightScale: fixed.FromFloat(sandboxHeightScale),
+		SeaLevel:    terr.SeaLevel,
+		Data:        terr.Heights,
+		Void:        terr.Voids,
+	}
 }
 
 // registerHostAPI mounts the game host's websocket endpoint and the
