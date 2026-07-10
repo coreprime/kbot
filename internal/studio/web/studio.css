@@ -7610,6 +7610,50 @@ body:not([data-tab="map"]) #camera-info-panel { display: none !important; }
 .slo-phase-pct { font-variant-numeric: tabular-nums; color: #9fb0c4; font-weight: 600; }
 .slo-phase-error .slo-phase-label { color: var(--danger); font-weight: 600; }
 
+/* Sequential category readout — the classic "now loading X" list that lights
+   up section by section as the launch progresses. Two-column flow so the six
+   categories sit compactly above the bar. */
+.slo-sections {
+  list-style: none;
+  margin: 2px 0 2px;
+  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 20px;
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+.slo-section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: ui-monospace, "SF Mono", "Consolas", monospace;
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #6f7a89;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  transition: color 200ms ease;
+}
+.slo-section-tick {
+  width: 12px;
+  text-align: center;
+  font-weight: 700;
+  color: inherit;
+}
+.slo-section-pending { color: #58616e; }
+.slo-section-done { color: #9fb6c6; }
+.slo-section-active {
+  color: #7ce68c;
+  font-weight: 700;
+  animation: slo-section-pulse 1s ease-in-out infinite;
+}
+@keyframes slo-section-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
+
+.sandbox-loading[data-game="takingdoms"] .slo-section-active { color: #f0cf7f; }
+.sandbox-loading[data-game="takingdoms"] .slo-section-done { color: #cbb789; }
+
 /* TA:Kingdoms — warmer, gold-on-parchment accents to match its branding. */
 .sandbox-loading[data-game="takingdoms"] .slo-card { border-color: #6b5326; }
 .sandbox-loading[data-game="takingdoms"] .slo-bar-fill {

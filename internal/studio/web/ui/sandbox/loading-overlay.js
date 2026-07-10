@@ -21,6 +21,46 @@ const wsBase = () => (typeof window !== 'undefined' && window.__WS_BASE__) || ''
 // _state: null when hidden, else { frac, label, title, sub, art, error }.
 const _state = signal(null)
 
+// The classic loading readout: a fixed list of load categories that light up
+// in sequence as the launch progresses, echoing the game's own sequential
+// "now loading X" screen. Each entry's `to` is the global progress fraction at
+// which that category is considered complete — so a section is DONE below its
+// own threshold's predecessor, ACTIVE while the bar is inside its band, and
+// PENDING beyond it. The bands roughly track the preload's real phase order
+// (terrain → side/graphics → leader → the whole build tree → finish).
+const SECTIONS = {
+  totala: [
+    { key: 'gaf', name: 'Graphics', to: 0.14 },
+    { key: 'map', name: 'Maps', to: 0.42 },
+    { key: 'weap', name: 'Weapons', to: 0.52 },
+    { key: 'unit', name: 'Units', to: 0.72 },
+    { key: 'obj', name: '3D Objects', to: 0.9 },
+    { key: 'snd', name: 'Sound', to: 1.0 },
+  ],
+  takingdoms: [
+    { key: 'gaf', name: 'Artwork', to: 0.14 },
+    { key: 'map', name: 'Realms', to: 0.42 },
+    { key: 'spell', name: 'Spells', to: 0.52 },
+    { key: 'unit', name: 'Creatures', to: 0.72 },
+    { key: 'obj', name: '3D Models', to: 0.9 },
+    { key: 'snd', name: 'Sound', to: 1.0 },
+  ],
+}
+
+// sectionsFor resolves the readout for a game id (TA by default) and tags each
+// entry with its live state from the current progress fraction.
+function sectionsFor(gameId, frac) {
+  const list = SECTIONS[gameId] || SECTIONS.totala
+  let prevTo = 0
+  return list.map((s) => {
+    let state = 'pending'
+    if (frac >= s.to) state = 'done'
+    else if (frac >= prevTo) state = 'active'
+    prevTo = s.to
+    return { ...s, state }
+  })
+}
+
 // _MIN_VISIBLE_MS keeps the overlay up long enough to read even when a
 // battlefield preloads almost instantly (The Grid), so it doesn't flash.
 const _MIN_VISIBLE_MS = 550
@@ -76,8 +116,12 @@ export function SandboxLoadingOverlay() {
   if (!st) return null
   const pct = Math.round(st.frac * 100)
   const game = activeGame()
+  const gameId = game?.id || 'totala'
+  // The sequential category readout freezes on error so the failed frame is
+  // legible; otherwise it tracks the live progress fraction.
+  const sections = st.error ? [] : sectionsFor(gameId, st.frac)
   return html`
-    <div class="sandbox-loading" data-game=${game?.id || 'totala'}>
+    <div class="sandbox-loading" data-game=${gameId}>
       <div class="slo-card">
         <img class="slo-art" alt="" src=${st.art}
              onError=${(e) => { e.currentTarget.style.display = 'none' }} />
@@ -85,6 +129,16 @@ export function SandboxLoadingOverlay() {
         <div class="slo-body">
           <div class="slo-title">${st.title}</div>
           ${st.sub ? html`<div class="slo-sub">${st.sub}</div>` : null}
+          ${sections.length ? html`
+            <ul class="slo-sections">
+              ${sections.map((s) => html`
+                <li key=${s.key} class=${`slo-section slo-section-${s.state}`}>
+                  <span class="slo-section-tick">${s.state === 'done' ? '✓' : s.state === 'active' ? '▸' : '·'}</span>
+                  <span class="slo-section-name">${s.name}</span>
+                </li>
+              `)}
+            </ul>
+          ` : null}
           <div class="slo-bar" role="progressbar" aria-valuenow=${pct} aria-valuemin="0" aria-valuemax="100">
             <div class="slo-bar-fill" style=${`width:${pct}%`}></div>
           </div>
