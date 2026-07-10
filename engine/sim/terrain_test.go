@@ -180,7 +180,7 @@ func TestBuildRefusedOnIllegalSite(t *testing.T) {
 	w.SetTerrain(testTerrain(32, 32, 0, func(_, _ int) uint8 { return 100 })) // bone dry
 	bm := testMeta("builder")
 	bm.IsBuilder = true
-	bm.WorkerTime = 100
+	setWorkerTime(bm, 100)
 	bm.MaxSlope = 50
 	bld := w.AddUnit("builder", bm, nil, fixed.Vec2{X: fixed.FromInt(64), Z: fixed.FromInt(64)}, 0, 0)
 	w.ApplyOrder(order.Build(bld, "sonar", fixed.Vec2{X: fixed.FromInt(120), Z: fixed.FromInt(64)}, 0))

@@ -1,0 +1,57 @@
+# TA storage clamp: pool income above the storage cap is discarded at the
+# settle (metered as lifetime "wasted"), and the stock pins at the cap.
+# Ground truth: economy spec §2.2 step 5 (storage clamp), §2.5 (cap floor
+# max(start,200)).
+name: ta-econ-storage-cap
+game: ta
+system: economy
+spec: economy.md §2.2, §2.5
+description: >-
+  A lone ARMMEX (ExtractsMetal=0.001, metalstorage=0) on a metal-40 patch
+  opens with exactly 200 metal -- its own storage cap (max(start,200)=200,
+  the mex adds no metalstorage). Every settle credits +0.369 metal income
+  but the pool is already at the cap, so the whole credit overflows and is
+  clamped off; the stock never rises above 200. Energy starts full to keep
+  the extractor's energyOK gate satisfied.
+seed: 1
+duration: 310
+start_metal: 200
+start_energy: 1000
+terrain:
+  width: 32
+  height: 32
+  metal_patches:
+    - cell_x: 11
+      cell_z: 11
+      width: 3
+      height: 3
+      metal: 40
+units:
+  - alias: mex
+    type: armmex
+    side: 0
+    pos: [200, 200]
+    heading: 0
+checks:
+  - at: 305
+    side: 0
+    observable: side.metal
+    expect: 13107200
+    label: metal stock pinned at the storage cap
+    derivation: |
+      Cap = max(start_metal 200, 200) + metalstorage 0 = 200. The opening
+      stock is 200 = cap, so each settle's +0.369 income overflows and is
+      clamped off (metered as wasted). Stock stays at 200 -> raw
+      200 * 65536 = 13107200. A rising stock here means the storage clamp
+      is missing (income would accumulate unbounded).
+  - at: 305
+    side: 0
+    observable: side.metal_produced
+    expect: 241827
+    label: gross income still metered though wasted
+    derivation: |
+      The clamp discards the OVERFLOW but the extractor still produces its
+      yield each settle; lifetime gross production accumulates the full
+      ten-settle income = f32 3.6899998 -> raw 241827 (the same figure the
+      mex-income scenario lands in the pool when it opens empty). Zero here
+      would mean income was never computed at all.

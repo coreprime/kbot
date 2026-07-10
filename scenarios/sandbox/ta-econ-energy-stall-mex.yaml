@@ -1,0 +1,59 @@
+# TA energy-stall gate on extraction: a metal extractor whose energy axis is
+# stalled produces NO metal (the energyOK gate). Ground truth: economy spec
+# §1.5 branch 1 (extractor income gated on energyOK) and §2.3 (an
+# energy-stalled extractor yields nothing).
+name: ta-econ-energy-stall-mex
+game: ta
+system: economy
+spec: economy.md §1.5, §2.3
+description: >-
+  A lone ARMMEX (ExtractsMetal=0.001, EnergyUse=3) on a metal-40 patch opens
+  with an EMPTY energy pool. Its 3-energy/settle demand can never be paid.
+  The stall model grants one window of overdraft: the first settle still
+  produces metal (the energy carryover is only written at that settle's
+  rotation), but from the second settle on energyOK is false and extraction
+  is gated off. So the mex yields exactly ONE settle of metal, then freezes.
+seed: 1
+duration: 130
+# Both pools empty: no energy to satisfy the extractor's energyOK gate.
+start_metal: -1
+start_energy: -1
+terrain:
+  width: 32
+  height: 32
+  metal_patches:
+    - cell_x: 11
+      cell_z: 11
+      width: 3
+      height: 3
+      metal: 40
+units:
+  - alias: mex
+    type: armmex
+    side: 0
+    pos: [200, 200]
+    heading: 0
+checks:
+  - at: 125
+    side: 0
+    observable: side.metal
+    expect: 24182
+    label: extraction frozen after one settle by the energy stall
+    derivation: |
+      Settle 1 (frame 30): energyOK reads (carry <= 0) = true (carry is
+      still 0), so the extractor produces one yield = f32(0.001 * 9*(40+1))
+      = 0.36899999 -> raw 24182. That settle's rotation then writes energy
+      carryover = 3 (the unpaid EnergyUse demand). Settles 2..4 (frames
+      60/90/120) all read energyOK = false and skip extraction. So the
+      metal stock holds at exactly ONE settle's yield = 24182 through
+      frame 120. A value near 4x this (96728) means the energy-stall gate
+      never engaged; 0 means the one-window overdraft was mismodelled.
+  - at: 125
+    side: 0
+    observable: side.metal_produced
+    expect: 24182
+    label: gross income is exactly one settle's yield
+    derivation: |
+      Lifetime gross metal production equals the single settle-1 yield
+      (24182) and never grows -- the stalled extractor produces nothing
+      after the first window.

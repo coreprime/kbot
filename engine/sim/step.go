@@ -56,6 +56,12 @@ func (w *World) Step(rt Runtime) {
 	for i := range w.resRate {
 		w.resRate[i] = resourceTally{}
 	}
+	// TA:K recomputes its mana economy every tick BEFORE the unit phase:
+	// income lands, capacity rebuilds, and the demand forecast sets the
+	// throttle ratio the tick's build drains are scaled by.
+	if w.econModel == EconomyTAK {
+		w.stepManaPhaseB()
+	}
 	// Per-tick A* budget: a group move triggers many path searches, so cap
 	// how many run this tick — the rest steer directly and pick up a path on
 	// a later tick (deterministic: units are walked in w.order).
@@ -113,106 +119,52 @@ func (w *World) Step(rt Runtime) {
 	w.stepYards()
 	w.stepCollisions()
 	w.stepProjectiles()
-	w.stepEconomy()
 	w.stepBuildDecay()
-}
-
-// stepEconomy recomputes each side's storage capacity and generation from
-// its standing units, then integrates the stock by one tick: gen in, build
-// drain out, clamped into [0, capacity]. The sandbox never gates on stock —
-// this purely feeds the economy bar.
-func (w *World) stepEconomy() {
-	for i := range w.resCap {
-		w.resCap[i] = resourceTally{}
-		w.resGen[i] = resourceTally{}
-	}
-	var active [maxSides]bool
-	for _, id := range w.order {
-		u := w.units[id]
-		if u == nil || u.Dead || u.Meta == nil || u.underConstruction() ||
-			u.Side < 0 || u.Side >= maxSides {
-			continue
-		}
-		m := u.Meta
-		active[u.Side] = true
-		w.resCap[u.Side].Metal += m.StoreMetal
-		w.resCap[u.Side].Energy += m.StoreEnergy
-		w.resCap[u.Side].Mana += m.StoreMana
-		w.resGen[u.Side].Metal += m.MakeMetal
-		w.resGen[u.Side].Energy += m.MakeEnergy
-		w.resGen[u.Side].Mana += m.MakeMana
-	}
-	// Base storage: classic TA grants every player a stocked reserve from
-	// the engine, not the FBI (the commander declares none). Each active
-	// side gets it on top of its units' storage, pre-filled the first time
-	// the side fields anything.
-	for side := range w.resCap {
-		if !active[side] {
-			continue
-		}
-		w.resCap[side].Metal += resBaseStorage
-		w.resCap[side].Energy += resBaseStorage
-		w.resCap[side].Mana += resBaseStorage
-		if !w.resSeeded[side] {
-			w.resSeeded[side] = true
-			w.resStock[side].Metal += resBaseStorage
-			w.resStock[side].Energy += resBaseStorage
-			w.resStock[side].Mana += resBaseStorage
-		}
-	}
-	for side := range w.resStock {
-		p := &w.resProduced[side]
-		p.Metal += perTick(w.resGen[side].Metal)
-		p.Energy += perTick(w.resGen[side].Energy)
-		p.Mana += perTick(w.resGen[side].Mana)
-		s := &w.resStock[side]
-		s.Metal = fixed.Clamp(s.Metal+perTick(w.resGen[side].Metal-w.resRate[side].Metal), 0, w.resCap[side].Metal)
-		s.Energy = fixed.Clamp(s.Energy+perTick(w.resGen[side].Energy-w.resRate[side].Energy), 0, w.resCap[side].Energy)
-		s.Mana = fixed.Clamp(s.Mana+perTick(w.resGen[side].Mana-w.resRate[side].Mana), 0, w.resCap[side].Mana)
+	// TA settles its economy once per second — every unit's window of
+	// income and posted demand pays out with the shared proportional
+	// ratios, the pools clamp into storage, and the stall carryover rolls.
+	// TA:K instead finalizes every tick: negative and over-capacity pool
+	// values clamp, metering the discard as waste.
+	if w.econModel == EconomyTAK {
+		w.stepManaFinalize()
+	} else if w.tick%taSettleTicks == 0 {
+		w.settleTA()
 	}
 }
-
-
-
-// resBaseStorage is the engine-granted per-side storage floor (and the
-// starting stock), matching the classic 1000-metal/1000-energy opening.
-var resBaseStorage = fixed.FromInt(1000)
 
 // stepBuildDecay rolls back every under-construction frame that no builder
-// is actively working: progress (and the armour that grew with it) decays
-// at half the standard build pace — the spent resources are simply lost —
-// and a frame that falls back to zero collapses entirely.
+// touched, with each engine's exact law: a TA frame idles for 30 ticks and
+// then loses 11/buildcostenergy of total progress per 11-tick pulse (metal
+// refunded into the frame's own accumulator); a TA:K frame decays 0.5 build
+// points on every unworked tick, refunding mana at the full buildcost rate.
+// Either way a frame that regresses to remaining >= 1.0 collapses with no
+// wreck.
 func (w *World) stepBuildDecay() {
-	var worked map[uint32]bool
-	for _, id := range w.order {
-		u := w.units[id]
-		if u == nil || u.Dead || u.buildState != buildRaising || u.buildeeID == 0 {
-			continue
-		}
-		if worked == nil {
-			worked = make(map[uint32]bool)
-		}
-		worked[u.buildeeID] = true
-	}
 	var collapsed []uint32
 	for _, id := range w.order {
 		b := w.units[id]
-		if b == nil || b.Dead || b.Meta == nil || !b.underConstruction() || worked[b.ID] {
+		if b == nil || b.Dead || b.Meta == nil || !b.underConstruction() {
 			continue
 		}
-		// Half the pace a default (workertime-100) builder raises at.
-		bt := b.Meta.BuildTime
-		durSec := fixed.FromInt(8)
-		if bt > 0 {
-			durSec = fixed.Clamp(bt.Div(fixed.FromInt(100)), fixed.FromInt(2), fixed.FromInt(60))
+		if b.lastNanoTick >= w.tick {
+			continue // a builder (even a stalled one) touched it this tick
 		}
-		decay := fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz))).Div(fixed.FromInt(2))
-		b.BuildPercent -= decay
-		b.Health -= decay
-		if b.Health < fixed.FromInt(1) {
-			b.Health = fixed.FromInt(1)
+		if w.econModel == EconomyTAK {
+			if w.takApplyDecay(b) {
+				collapsed = append(collapsed, b.ID)
+			}
+			continue
 		}
-		if b.BuildPercent <= 0 {
+		idle := w.tick - b.lastNanoTick
+		if idle < 30 || (idle-30)%11 != 0 {
+			// The engine's getbuilt order sleeps 30 ticks per builder touch
+			// and then pulses on an 11-tick timer; the exact phase of the
+			// first pulse relative to the last touch is not pinned — the
+			// sandbox fires it the tick the grace expires and every 11
+			// ticks after.
+			continue
+		}
+		if w.taApplyDecayPulse(b) {
 			collapsed = append(collapsed, b.ID)
 		}
 	}
@@ -286,34 +238,26 @@ func (w *World) stepBuilder(u *Unit) {
 			portValue(u, cobPortInBuildStance) == 0 && w.simMs < u.buildGateMs {
 			return
 		}
-		// Percent per tick: 100% over (buildee buildtime / builder workertime)
-		// seconds, the TA pacing. Missing data falls back to 8 seconds.
-		bt := b.Meta.BuildTime
-		wt := u.Meta.WorkerTime
-		durSec := fixed.FromInt(8)
-		if bt > 0 && wt > 0 {
-			durSec = fixed.Clamp(bt.Div(fixed.FromInt(wt)), fixed.FromInt(2), fixed.FromInt(60))
+		// One tick of the exact nanolathe applicator: it advances progress by
+		// floor(workertime/30)/buildtime (TA) or the throttled workertime rate
+		// (TA:K), drains the prorated buildcost through the pool authority,
+		// climbs the integer HP ladder, and republishes BuildPercent/Health.
+		// It stamps the nanolathed keep-alive so a worked frame never decays.
+		var done bool
+		if w.econModel == EconomyTAK {
+			done = w.takApplyBuild(u, b)
+		} else {
+			done = w.taApplyBuild(u, b)
 		}
-		pctPerTick := fixed.FromInt(100).Div(durSec.Mul(fixed.FromInt(TickHz)))
-		b.BuildPercent += pctPerTick
-		// Armour grows with the frame: a 10%-built unit has 10% of its
-		// health (damage taken during construction persists — the gain is
-		// an increment, not an assignment).
-		b.Health = fixed.Min(fixed.FromInt(100), b.Health+pctPerTick)
-		w.drainBuildCost(u.Side, b.Meta, pctPerTick)
+		// The frame sits at ground level throughout — the wireframe shell,
+		// dark hull and nanolathe carry the visual; nothing rises out of the
+		// earth.
 		ground := w.groundHeight(b.loco.Pos)
-		if b.BuildPercent < fixed.FromInt(100) {
-			// The frame sits at ground level throughout — the wireframe
-			// shell, dark hull and nanolathe carry the visual; nothing
-			// rises out of the earth.
-			if !b.Meta.IsAircraft {
-				b.PosY = ground
-			}
-			return
-		}
-		b.BuildPercent = fixed.FromInt(100)
 		if !b.Meta.IsAircraft {
 			b.PosY = ground
+		}
+		if !done {
+			return
 		}
 		if u.binding != nil && u.binding.HasScript("StopBuilding") {
 			u.binding.Start("StopBuilding")
@@ -399,10 +343,10 @@ func (w *World) startRaising(u *Unit) {
 	if u.buildHeadingSet {
 		buildeeHeading = u.buildHeading
 	}
-	id := w.AddUnit(u.buildName, meta, binding, u.buildSite, buildeeHeading, u.Side)
+	// The buildee raises as a nanoframe: build-remaining 1.0, HP 0, inert —
+	// the applicator (not this spawn) pays for it as it rises.
+	id := w.addUnit(u.buildName, meta, binding, u.buildSite, buildeeHeading, u.Side, false)
 	b := w.units[id]
-	b.BuildPercent = 0
-	b.Health = fixed.FromInt(1)
 	b.PosY = w.groundHeight(b.loco.Pos)
 	u.buildeeID = id
 	u.buildState = buildRaising
@@ -433,31 +377,6 @@ func (w *World) startRaising(u *Unit) {
 	}
 	site := fixed.Vec3{X: u.buildSite.X, Z: u.buildSite.Z}
 	w.emit(frame.Event{Kind: frame.EvBuildStart, UnitID: u.ID, TargetID: id, Anchor: site, FromPiece: padPiece})
-}
-
-// drainBuildCost charges this tick's slice of the buildee's resource price
-// to the side's tally. Pools are infinite — this only feeds the usage HUD.
-func (w *World) drainBuildCost(side int, m *UnitMeta, pctPerTick fixed.Fixed) {
-	if side < 0 || side >= maxSides || m == nil {
-		return
-	}
-	frac := pctPerTick.Div(fixed.FromInt(100))
-	perSec := fixed.FromInt(TickHz)
-	if m.CostMetal > 0 {
-		d := m.CostMetal.Mul(frac)
-		w.resSpent[side].Metal += d
-		w.resRate[side].Metal += d.Mul(perSec)
-	}
-	if m.CostEnergy > 0 {
-		d := m.CostEnergy.Mul(frac)
-		w.resSpent[side].Energy += d
-		w.resRate[side].Energy += d.Mul(perSec)
-	}
-	if m.CostMana > 0 {
-		d := m.CostMana.Mul(frac)
-		w.resSpent[side].Mana += d
-		w.resRate[side].Mana += d.Mul(perSec)
-	}
 }
 
 // cobPortBuggerOff is TA's BUGGER_OFF unit-value port: the engine raises it
@@ -1376,10 +1295,11 @@ func (w *World) stepWeapons(u *Unit) {
 		}
 		// Resource gate: the FULL per-shot cost must be in stock before the
 		// shot; the drain happens after launch, all-or-nothing, never
-		// partial. (TA:K's mana-per-shot gate waits on the mana pool model.)
-		if (wm.EnergyShot > 0 || wm.MetalShot > 0) && u.Side >= 0 && u.Side < maxSides {
-			st := w.resStock[u.Side]
-			if st.Energy < wm.EnergyShot || st.Metal < wm.MetalShot {
+		// partial. Only TA bills the player pools per shot — TA:K pays a
+		// weapon's ManaPerShot out of the unit's private caster mana (not
+		// modelled here), so its player pool never gates fire.
+		if w.econModel == EconomyTA && (wm.EnergyShot > 0 || wm.MetalShot > 0) {
+			if !w.taCanAffordShot(u.Side, float32(wm.EnergyShot.Float()), float32(wm.MetalShot.Float())) {
 				continue
 			}
 		}
@@ -1407,13 +1327,13 @@ func (w *World) stepWeapons(u *Unit) {
 		s.lastFireMs = w.simMs
 		s.reloadTicks = scaledReloadTicks(u, &wm)
 		// Per-shot economy drain (energypershot / metalpershot), after the
-		// launch commitment.
-		if (wm.EnergyShot > 0 || wm.MetalShot > 0) && u.Side >= 0 && u.Side < maxSides {
-			st := &w.resStock[u.Side]
-			st.Energy = fixed.Max(0, st.Energy-wm.EnergyShot)
-			st.Metal = fixed.Max(0, st.Metal-wm.MetalShot)
-			w.resSpent[u.Side].Energy += wm.EnergyShot
-			w.resSpent[u.Side].Metal += wm.MetalShot
+		// launch commitment: all-or-nothing straight from the TA pools,
+		// bypassing the settle. The gate above already confirmed the stock.
+		if w.econModel == EconomyTA && (wm.EnergyShot > 0 || wm.MetalShot > 0) {
+			e, m := float32(wm.EnergyShot.Float()), float32(wm.MetalShot.Float())
+			if w.taConsumeShot(u.Side, e, m) {
+				w.tallySpend(u.Side, float64(m), float64(e), 0)
+			}
 		}
 		aimPoint := fixed.Vec3{X: targetPos.X, Y: targetY, Z: targetPos.Z}
 		// Recoil / muzzle-flash animation: the COB Fire thread moves the barrel

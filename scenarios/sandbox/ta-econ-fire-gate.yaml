@@ -50,15 +50,36 @@ checks:
       -800 + 3*25 = -725 -> raw -725 * 65536 = -47513600.
       Zero movement = per-shot drains don't reach the pool at all.
     missing_if_zero: true
-  - at: 295
+  - at: 200
     unit: com
     observable: unit.fire_count
     expect: 2
-    label: third shot gated on a full 400 stock
+    label: third shot still gated while stock below 400
     derivation: |
-      commandfire = one discharge per explicit order. After shot 2 the
-      pool holds 225 (200 + the frame-60 settle). The frame-120 order
-      pends at the resource gate (evaluated per tick) until
-      225 + k*25 >= 400 -> k = 7 more settles -> frame 300. At frame 295
-      exactly 2 shots have fired. A count of 3+ here means the sim fires
-      without checking stock (and/or repeats a commandfire order).
+      commandfire = one discharge per explicit order; the D-gun re-aims
+      between orders, so shot 1 releases on frame 14 and shot 2 on frame 95
+      (each -400 immediately). After shot 2 the pool is at 275 and climbs
+      +25/settle. The frame-120 order pends at the per-tick resource gate
+      until the pool reaches a FULL 400. At frame 200 the pool holds 350
+      (< 400), so exactly 2 shots have fired. A count of 3 here means the
+      sim fires without checking stock.
+  - at: 240
+    side: 0
+    observable: side.energy
+    expect: 26214400
+    label: pool reaches the 400 gate threshold
+    derivation: |
+      From 275 after shot 2, +25/settle income refills the pool. It first
+      equals energypershot=400 at frame 240 -> raw 400 * 65536 = 26214400.
+      The gate releases the pending shot on the very next tick.
+  - at: 250
+    unit: com
+    observable: unit.fire_count
+    expect: 3
+    label: third shot fires once a full 400 is in stock
+    derivation: |
+      The gate held the frame-120 order for 120+ ticks until stock rebuilt
+      to 400 at frame 240; the shot releases on frame 241, draining the
+      pool to 0. By frame 250 all three shots have fired. This confirms the
+      gate delays (not drops) the shot until the full per-shot cost is
+      affordable.

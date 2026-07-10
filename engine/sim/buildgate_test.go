@@ -90,7 +90,7 @@ func TestFactoryGateGraceTimeout(t *testing.T) {
 func TestBuilderWaitsForBuildStance(t *testing.T) {
 	spawn := func(name string) (*UnitMeta, Binding) {
 		m := testMeta(name)
-		m.BuildTime = fixed.FromInt(100)
+		setBuildStats(m, 100, 100, 20)
 		return m, nil
 	}
 	w := New(Config{Seed: 91, Spawn: spawn})
@@ -99,7 +99,7 @@ func TestBuilderWaitsForBuildStance(t *testing.T) {
 	}}
 	bm := testMeta("builder")
 	bm.IsBuilder = true
-	bm.WorkerTime = 100
+	setWorkerTime(bm, 100)
 	bm.BuildDistance = fixed.FromInt(60)
 	bld := w.AddUnit("builder", bm, bind, fixed.Vec2{}, 0, 0)
 	w.ApplyOrder(order.Build(bld, "hut", fixed.Vec2{X: fixed.FromInt(40)}, 0))

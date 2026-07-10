@@ -85,6 +85,7 @@ func (w *World) SetUnitState(id uint32, ov UnitStateOverride) bool {
 		// instead of staying in its buildee pose.
 		completed := u.BuildPercent < fixed.FromInt(100) && ov.BuildPercent >= fixed.FromInt(100)
 		u.BuildPercent = ov.BuildPercent
+		u.syncRemFromPercent()
 		if completed && u.Meta != nil && u.Meta.OnOffable && u.Meta.ActivateWhenBuilt {
 			w.setActivation(u, true)
 		}

@@ -32,29 +32,30 @@ checks:
   - at: 3
     side: 0
     observable: side.mana
-    expect: 6560153
-    label: spawn grant plus three ticks of income
+    expect: 6424997
+    label: spawn grant of 100, then income minus early build drain
     derivation: |
-      Spawn grant: pool[0] = builder mogriumstorage = 100.0 exactly.
-      Income: += f32(1 * 0.03333333) per tick; after 3 ticks (before the
-      build's first drain lands, work-start latency >= 1 frame) pool =
-      100.0999984741 (f32) -> raw trunc(100.0999984741 * 65536) = 6560153.
-      (Build drain, if already active, lowers this — the dominant signal
-      is the 100-vs-1000 starting grant.)
+      Spawn grant: pool[0] = builder mogriumstorage = 100.0 exactly (raw
+      6553600), NOT the 1000-style TA start — the 100-vs-1000 opening stock
+      is the dominant signal this check pins. The build order applies on
+      frame 0; the first Step (tick 1) posts the grant and no drain yet
+      (pool = 100.0 exactly at tick 1), then income (+f32(1*0.03333333) per
+      tick) and the applicator's cost (1.0144926 mana/tick) run from tick 2.
+      By tick 3 = 100 + 3*0.0333333 income - 2*1.0144926 drain = 98.0374
+      (f32) -> raw trunc(98.0374 * 65536) = 6424997.
   - at: 60
     side: 0
     observable: side.mana
     baseline: 6553600
-    expect: -3858084
+    expect: -3793783
     label: build drain against the pool
     derivation: |
       Per tick: eff = (10 * 0.03333333) * f32(1/92) = 0.0036231880;
-      cost = eff * 280 = 1.0144926 mana. Pool stays above the per-tick
-      demand until ~frame 97, so no throttle by frame 60 (work assumed to
-      begin frame 1):
-      pool(60) = f32(100 + 60*0.03333333 - 60*1.0144926) = 41.130310
-      -> raw 2695516; effect vs the 100 grant (raw 6553600) =
-      2695516 - 6553600 = -3858084. Zero movement = builds never touch
+      cost = eff * 280 = 1.0144926 mana. The pool stays above the per-tick
+      demand (no throttle) through frame 60. With income from tick 1 and
+      drain from tick 2, the f32 walk of §4.3+§5.3 lands pool(60) = 42.1112
+      -> raw 2759817; effect vs the 100 grant (raw 6553600) =
+      2759817 - 6553600 = -3793783. Zero movement = builds never touch
       the mana pool.
     missing_if_zero: true
   - at: 200

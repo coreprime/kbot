@@ -35,8 +35,38 @@ func UnitMetaFromFBI(name string, fbi []byte, resolve WeaponResolver) (*sim.Unit
 	if err := tdf.Unmarshal(fbi, &ku); err == nil {
 		ApplyTAKWeapons(m, &ku)
 		applyTAKLocoInfo(m, &ku)
+		applyTAKEcon(m, &ku)
 	}
 	return m, nil
+}
+
+// applyTAKEcon fills the TA:K half of the economy stat block from the unit's
+// inline mana fields. buildtime defaults to 100 when unset; buildcost falls
+// back to buildtime; the f32 reciprocal is computed once here (the engine
+// never re-divides). A TA:K FBI carries no metal/energy prices, so this leaves
+// the TA econ group as parsed (zero) and the world's TA:K model reads only
+// these fields.
+func applyTAKEcon(m *sim.UnitMeta, ku *tak.Unit) {
+	if m == nil || ku == nil {
+		return
+	}
+	bt := float32(ku.Info.BuildTime)
+	if bt <= 0 {
+		bt = 100
+	}
+	bc := float32(ku.Info.BuildCost)
+	if bc <= 0 {
+		bc = bt
+	}
+	m.Econ.BuildTimeF = bt
+	m.Econ.BuildCost = bc
+	m.Econ.BuildTimeRecip = 1 / bt
+	m.Econ.WorkerTimeF = float32(ku.Info.WorkerTime)
+	m.Econ.ManaIncome = float32(ku.Info.MogriumIncome)
+	m.Econ.ManaStorage = float32(ku.Info.MogriumStorage)
+	m.Econ.HealTime = float32(ku.Info.HealTime)
+	// The fixed-point HUD price for the mana pool.
+	m.CostMana = fixed.FromInt(ku.Info.BuildCost)
 }
 
 // MetaFromUnitInfo converts a parsed FBI [UNITINFO] block into the simulation's
@@ -47,18 +77,18 @@ func UnitMetaFromFBI(name string, fbi []byte, resolve WeaponResolver) (*sim.Unit
 // of where the bytes were read from.
 func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref string) (ta.Weapon, bool)) *sim.UnitMeta {
 	m := &sim.UnitMeta{
-		Name:        name,
-		MaxVelocity: fixed.FromFloat(info.MaxVelocity),
-		TurnRate:    fixed.FromInt(info.TurnRate),
-		Accel:       fixed.FromFloat(info.Acceleration),
-		BrakeRate:   fixed.FromFloat(info.BrakeRate),
-		CanMove:     info.MaxVelocity > 0,
-		IsBuilder:   info.Builder == 1,
-		OnOffable:   info.OnOffable == 1,
+		Name:              name,
+		MaxVelocity:       fixed.FromFloat(info.MaxVelocity),
+		TurnRate:          fixed.FromInt(info.TurnRate),
+		Accel:             fixed.FromFloat(info.Acceleration),
+		BrakeRate:         fixed.FromFloat(info.BrakeRate),
+		CanMove:           info.MaxVelocity > 0,
+		IsBuilder:         info.Builder == 1,
+		OnOffable:         info.OnOffable == 1,
 		ActivateWhenBuilt: info.ActivateWhenBuilt == 1,
-		MaxHealth:   fixed.FromInt(info.MaxDamage),
-		FootprintX:  info.FootprintX,
-		FootprintZ:  info.FootprintZ,
+		MaxHealth:         fixed.FromInt(info.MaxDamage),
+		FootprintX:        info.FootprintX,
+		FootprintZ:        info.FootprintZ,
 	}
 	m.Yard = sim.ParseYardMap(info.YardMap, info.FootprintX, info.FootprintZ)
 	m.MaxSlope = info.MaxSlope
@@ -105,7 +135,41 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	for i, ref := range []string{info.Weapon1, info.Weapon2, info.Weapon3} {
 		m.Weapons[i] = weaponMetaFromRef(ref, resolveWeapon)
 	}
+	applyTAEcon(m, info)
 	return m
+}
+
+// applyTAEcon fills the construction/build-pace fields (used by both the
+// fixed-point HUD and the exact float32 economy) and the TA economy stat
+// block from an FBI. The float32 Econ group is what the world's TA economy
+// law reads; the fixed CostMetal/CostEnergy and BuildTime/WorkerTime figures
+// stay for the studio/HUD. A TA:K FBI simply never sets these keys.
+func applyTAEcon(m *sim.UnitMeta, info *ta.UnitInfo) {
+	// Build-pace figures (fixed-point HUD copies).
+	m.BuildTime = fixed.FromInt(info.BuildTime)
+	m.WorkerTime = info.WorkerTime
+	m.BuildDistance = fixed.FromInt(info.BuildDistance)
+	m.CostMetal = fixed.FromFloat(info.BuildCostMetal)
+	m.CostEnergy = fixed.FromInt(info.BuildCostEnergy)
+
+	// Exact float32 economy block.
+	e := &m.Econ
+	e.EnergyMake = float32(info.EnergyMake)
+	e.MetalMake = float32(info.MetalMake)
+	e.EnergyUse = float32(info.EnergyUse)
+	e.ExtractsMetal = float32(info.ExtractsMetal)
+	e.MakesMetal = float32(info.MakesMetal)
+	// windgenerator/tidalgenerator are not surfaced by the FBI parser; the
+	// world's wind system is a later block and tidal defaults apply, so the
+	// EconMeta wind/tidal fields stay zero (no scenario exercises them).
+	e.EnergyStorage = float32(info.EnergyStorage)
+	e.MetalStorage = float32(info.MetalStorage)
+	e.BuildTime = int32(info.BuildTime)
+	if info.WorkerTime > 0 {
+		e.WorkerTime = uint32(info.WorkerTime)
+	}
+	e.BuildCostEnergy = float32(info.BuildCostEnergy)
+	e.BuildCostMetal = float32(info.BuildCostMetal)
 }
 
 // ApplyTAKWeapons fills any empty weapon slots from a TA:Kingdoms unit's

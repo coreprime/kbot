@@ -11,7 +11,7 @@ func factoryMeta() *UnitMeta {
 	m := testMeta("factory")
 	m.CanMove = false
 	m.IsBuilder = true
-	m.WorkerTime = 100
+	setWorkerTime(m, 100)
 	m.FootprintX = 6
 	m.FootprintZ = 6
 	return m
@@ -20,7 +20,10 @@ func factoryMeta() *UnitMeta {
 func factoryWorld() *World {
 	spawn := func(name string) (*UnitMeta, Binding) {
 		m := testMeta(name)
-		m.BuildTime = fixed.FromInt(400) // 400/100 = 4s per unit
+		// 400/floor(100/30)=400/3 ticks per unit; buildcostenergy 200 keeps
+		// three sequential builds affordable from the 1000-energy opening
+		// pool (this factory has no income).
+		setBuildStats(m, 400, 200, 20)
 		m.FootprintX = 2
 		m.FootprintZ = 2
 		m.CostMetal = fixed.FromInt(50)
@@ -118,17 +121,16 @@ func TestFactoryProducesQueueInOrder(t *testing.T) {
 			}
 		}
 	}
-	// Resource drain accrued the full price of the run: 3 units at 50 metal /
-	// 500 energy each.
-	// Tolerance: the last tick of each build drains a whole per-tick quantum
-	// even when less than that remained, so the accrual overshoots by up to
-	// one 30 Hz tick's slice per unit.
+	// Resource drain accrued the full buildcost of the run: 3 units at
+	// buildcostmetal 20 / buildcostenergy 200 each = 60 metal / 600 energy.
+	// The applicator prorates the price linearly over the build, so a full
+	// run posts exactly buildcost per axis (small f32 residue only).
 	spent := w.resSpent[0]
-	if spent.Metal < fixed.FromInt(148) || spent.Metal > fixed.FromInt(152) {
-		t.Fatalf("metal drain off: %v (want ~150)", spent.Metal.Float())
+	if spent.Metal < fixed.FromInt(59) || spent.Metal > fixed.FromInt(61) {
+		t.Fatalf("metal drain off: %v (want ~60)", spent.Metal.Float())
 	}
-	if spent.Energy < fixed.FromInt(1480) || spent.Energy > fixed.FromInt(1520) {
-		t.Fatalf("energy drain off: %v (want ~1500)", spent.Energy.Float())
+	if spent.Energy < fixed.FromInt(595) || spent.Energy > fixed.FromInt(605) {
+		t.Fatalf("energy drain off: %v (want ~600)", spent.Energy.Float())
 	}
 }
 

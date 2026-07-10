@@ -85,12 +85,17 @@ type UnitMeta struct {
 	// structures collide by yard; mobile units stay on the circle model.
 	Yard []yardCell
 
-	// Resource prices, drained over the unit's build (TA metal+energy,
-	// TA:K mana). Pools are infinite in the sandbox; the drain feeds the
-	// per-side usage stats only.
+	// Resource prices (TA metal+energy, TA:K mana), kept in fixed point for
+	// the HUD/usage stats. The authoritative economy math reads the
+	// float32 Econ block below instead — both engines run their economies
+	// in IEEE single precision, which Q16.16 cannot represent exactly
+	// (e.g. extractsmetal=0.001).
 	CostMetal  fixed.Fixed
 	CostEnergy fixed.Fixed
 	CostMana   fixed.Fixed
+
+	// Econ is the exact float32 economy stat block (see EconMeta).
+	Econ EconMeta
 
 	// Default standing orders the unit spawns with (FBI standingmoveorder /
 	// standingfireorder, already resolved to the game defaults — Maneuver /
@@ -146,6 +151,44 @@ type UnitMeta struct {
 	ExperiencePoints int
 
 	Weapons [3]WeaponMeta
+}
+
+// EconMeta carries the FBI economy fields at the width the engines compute
+// with: IEEE float32 (both economies are single-precision x87 end to end),
+// plus the integer build-effort figures TA divides without rounding. The
+// asset bridge fills the TA and TA:K groups from whichever keys the FBI
+// declares; the world's economy model decides which group it reads.
+type EconMeta struct {
+	// TA income & storage, per settle (= per second).
+	EnergyMake     float32
+	MetalMake      float32
+	EnergyUse      float32 // >0 demand, <0 production (solar); ACTIVE-gated
+	ExtractsMetal  float32
+	MakesMetal     float32 // metal-maker output; energy-satisfied gate
+	WindGenerator  float32
+	TidalGenerator float32
+	EnergyStorage  float32
+	MetalStorage   float32
+
+	// TA construction: buildtime is an int32 the engine fild-s, workertime a
+	// u16 the callers divide by 30 with unsigned INTEGER division (fractional
+	// build power is discarded; workertime 29 cannot build at all).
+	BuildTime       int32
+	WorkerTime      uint32
+	BuildCostEnergy float32
+	BuildCostMetal  float32
+
+	// TA:K mana economy. BuildCost/BuildTimeF carry the parse defaults
+	// (buildtime <= 0 -> 100; buildcost <= 0 -> buildtime); BuildTimeRecip
+	// is the f32 reciprocal computed once at parse and reused (the engine
+	// never re-divides).
+	ManaIncome     float32
+	ManaStorage    float32
+	BuildCost      float32
+	BuildTimeF     float32
+	BuildTimeRecip float32
+	WorkerTimeF    float32
+	HealTime       float32
 }
 
 // aabbHalf is the sandbox's stand-in for the engines' per-model bounding box,

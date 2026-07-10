@@ -21,6 +21,35 @@ func testMeta(name string) *UnitMeta {
 	return m
 }
 
+// setWorkerTime pins a builder's effort rate on both the fixed HUD field and
+// the exact Econ block the applicator reads (the asset bridge fills both from
+// the FBI; synthetic test metas mirror that here).
+func setWorkerTime(m *UnitMeta, wt int) {
+	m.WorkerTime = wt
+	m.Econ.WorkerTime = uint32(wt)
+	m.Econ.WorkerTimeF = float32(wt)
+}
+
+// setBuildStats pins a buildee's build-effort points and per-axis price on the
+// HUD fields and the exact Econ block. costE/costM are the per-axis resource
+// prices the applicator drains as the frame rises.
+func setBuildStats(m *UnitMeta, buildTime int, costE, costM float32) {
+	m.BuildTime = fixed.FromInt(buildTime)
+	m.Econ.BuildTime = int32(buildTime)
+	m.Econ.BuildCostEnergy = costE
+	m.Econ.BuildCostMetal = costM
+	// TA:K derived group (harmless for TA metas): reciprocal + mana price.
+	bt := float32(buildTime)
+	if bt <= 0 {
+		bt = 100
+	}
+	m.Econ.BuildTimeF = bt
+	m.Econ.BuildTimeRecip = 1 / bt
+	if m.Econ.BuildCost == 0 {
+		m.Econ.BuildCost = bt
+	}
+}
+
 func runScenario(seed uint32) *World {
 	w := New(Config{Seed: seed})
 	a := w.AddUnit("mover", testMeta("mover"), nil, fixed.Vec2{}, 0, 0)

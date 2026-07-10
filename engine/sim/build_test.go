@@ -10,7 +10,7 @@ import (
 func builderMeta() *UnitMeta {
 	m := testMeta("builder")
 	m.IsBuilder = true
-	m.WorkerTime = 200
+	setWorkerTime(m, 200)
 	m.BuildDistance = fixed.FromInt(60)
 	return m
 }
@@ -18,7 +18,14 @@ func builderMeta() *UnitMeta {
 func buildWorld() *World {
 	spawn := func(name string) (*UnitMeta, Binding) {
 		m := testMeta(name)
-		m.BuildTime = fixed.FromInt(800) // 800/200 = 4s at the builder's pace
+		// 800/floor(200/30)=800/6 -> ~134 ticks at the builder's pace.
+		// buildcostenergy 300 keeps three sequential builds affordable from
+		// the 1000-energy opening pool (these synthetic buildees have no
+		// income), while making the TA abandonment decay 11/300 of total
+		// progress per 11-tick pulse: gentle enough that the repair test
+		// observes a little decay without the frame collapsing, yet fast
+		// enough to fully collapse within the cancel test's step budget.
+		setBuildStats(m, 800, 300, 30)
 		return m, nil
 	}
 	return New(Config{Seed: 11, Spawn: spawn})

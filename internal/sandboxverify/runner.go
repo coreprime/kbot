@@ -206,7 +206,24 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 	// Share the script runtime's MINSTD stream with the world — one sim
 	// stream for COB RAND and world draws, the engines' discipline — so the
 	// rng_draws observable counts total sim-stream consumption.
-	w := sim.New(sim.Config{Seed: sc.Seed, Spawn: spawn, Rand: rt.Rand()})
+	econ := sim.EconomyTA
+	if sc.Game == "tak" {
+		econ = sim.EconomyTAK
+	}
+	// A scenario declares its opening stock explicitly. Zero keeps the
+	// skirmish default (1000); a negative request maps to an exact 0 stock
+	// (income sources then accumulate visibly rather than overflowing).
+	startM, startE := sc.StartMetal, sc.StartEnergy
+	if startM < 0 {
+		startM = -1
+	}
+	if startE < 0 {
+		startE = -1
+	}
+	w := sim.New(sim.Config{
+		Seed: sc.Seed, Spawn: spawn, Rand: rt.Rand(), Economy: econ,
+		StartMetal: startM, StartEnergy: startE,
+	})
 	if t := makeTerrain(sc.Terrain); t != nil {
 		w.SetTerrain(t)
 	}
@@ -263,6 +280,11 @@ func (st *runState) apply(a ActionSpec) {
 		if a.Spawns != "" {
 			st.pendingSpawns[strings.ToLower(a.Build)] = a.Spawns
 		}
+	case "repair":
+		// Repair/assist resumes an existing under-construction frame (the
+		// Target alias) — the engines' assist path: additive, uncapped, each
+		// assister running its own applicator into the shared buildee.
+		st.world.ApplyOrder(order.Repair(unit, target))
 	case "set_kills":
 		// Measurement hook: pin the veterancy counters so consumer math can
 		// be graded at an exact level without staging real kills first.
@@ -460,6 +482,28 @@ func makeTerrain(ts *TerrainSpec) *sim.Terrain {
 			data[z*w+x] = uint8(v)
 		}
 	}
+	var metal []uint8
+	if len(ts.MetalPatches) > 0 {
+		metal = make([]uint8, w*h)
+		for _, p := range ts.MetalPatches {
+			for dz := 0; dz < p.Height; dz++ {
+				for dx := 0; dx < p.Width; dx++ {
+					cx, cz := p.CellX+dx, p.CellZ+dz
+					if cx < 0 || cz < 0 || cx >= w || cz >= h {
+						continue
+					}
+					v := p.Metal
+					if v < 0 {
+						v = 0
+					}
+					if v > 255 {
+						v = 255
+					}
+					metal[cz*w+cx] = uint8(v)
+				}
+			}
+		}
+	}
 	return &sim.Terrain{
 		W:           w,
 		H:           h,
@@ -467,5 +511,6 @@ func makeTerrain(ts *TerrainSpec) *sim.Terrain {
 		HeightScale: fixed.FromFloat(scale),
 		SeaLevel:    ts.SeaLevel,
 		Data:        data,
+		Metal:       metal,
 	}
 }

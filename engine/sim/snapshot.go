@@ -81,10 +81,9 @@ func (w *World) Snapshot() frame.Snapshot {
 	}
 	var resources []frame.ResourceState
 	for side := 0; side < maxSides; side++ {
+		v := w.econView(side)
 		s, r := w.resSpent[side], w.resRate[side]
-		st, c, g := w.resStock[side], w.resCap[side], w.resGen[side]
-		if s == (resourceTally{}) && r == (resourceTally{}) &&
-			c == (resourceTally{}) && g == (resourceTally{}) {
+		if !v.seeded && s == (resourceTally{}) && r == (resourceTally{}) {
 			continue
 		}
 		resources = append(resources, frame.ResourceState{
@@ -95,18 +94,18 @@ func (w *World) Snapshot() frame.Snapshot {
 			MetalRate:      r.Metal,
 			EnergyRate:     r.Energy,
 			ManaRate:       r.Mana,
-			MetalStock:     st.Metal,
-			EnergyStock:    st.Energy,
-			ManaStock:      st.Mana,
-			MetalCap:       c.Metal,
-			EnergyCap:      c.Energy,
-			ManaCap:        c.Mana,
-			MetalGen:       g.Metal,
-			EnergyGen:      g.Energy,
-			ManaGen:        g.Mana,
-			MetalProduced:  w.resProduced[side].Metal,
-			EnergyProduced: w.resProduced[side].Energy,
-			ManaProduced:   w.resProduced[side].Mana,
+			MetalStock:     v.stock.Metal,
+			EnergyStock:    v.stock.Energy,
+			ManaStock:      v.stock.Mana,
+			MetalCap:       v.cap.Metal,
+			EnergyCap:      v.cap.Energy,
+			ManaCap:        v.cap.Mana,
+			MetalGen:       v.income.Metal,
+			EnergyGen:      v.income.Energy,
+			ManaGen:        v.income.Mana,
+			MetalProduced:  v.produced.Metal,
+			EnergyProduced: v.produced.Energy,
+			ManaProduced:   v.produced.Mana,
 		})
 	}
 	evts := w.events

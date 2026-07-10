@@ -42,6 +42,12 @@ type Scenario struct {
 	Seed uint32 `yaml:"seed"`
 	// Duration is the run length in engine frames (30 Hz).
 	Duration int `yaml:"duration"`
+	// StartMetal / StartEnergy override the TA opening stock per side (the
+	// lobby / SkirmishInfo start values). 0 uses the skirmish default (1000).
+	// A negative value pins the pool to empty at start (below any storage
+	// cap), so income sources become observable instead of overflowing.
+	StartMetal  int `yaml:"start_metal"`
+	StartEnergy int `yaml:"start_energy"`
 
 	Terrain *TerrainSpec `yaml:"terrain"`
 	Units   []UnitSpec   `yaml:"units"`
@@ -60,6 +66,20 @@ type TerrainSpec struct {
 	RampAxis    string  `yaml:"ramp_axis"` // "x" or "z"; empty = flat
 	RampStep    int     `yaml:"ramp_step"` // height units per cell
 	BaseHeight  int     `yaml:"base_height"`
+	// MetalPatches stamp per-cell metal values into the plot-cell metal field
+	// an extractor's placement scan samples (economy.md §1.5 branch 1). Omitted
+	// = bare ground (metal byte 0 everywhere).
+	MetalPatches []MetalPatch `yaml:"metal_patches"`
+}
+
+// MetalPatch fills a rectangle of plot cells (in cell coordinates, 16 wu per
+// cell) with a metal byte value.
+type MetalPatch struct {
+	CellX  int `yaml:"cell_x"`
+	CellZ  int `yaml:"cell_z"`
+	Width  int `yaml:"width"`
+	Height int `yaml:"height"`
+	Metal  int `yaml:"metal"`
 }
 
 // UnitSpec places one unit at scenario start. Units spawn fully built.
@@ -76,7 +96,7 @@ type UnitSpec struct {
 // check that requires them grades missing.
 type ActionSpec struct {
 	At   int    `yaml:"at"` // engine frame
-	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|stance|set_kills|cloak|capture
+	Do   string `yaml:"do"` // move|stop|attack|fire_at_point|build|repair|stance|set_kills|cloak|capture
 	ID   string `yaml:"id"` // optional handle for requires_action
 	Unit string `yaml:"unit"`
 	// To is the move / fire / build destination in world units.

@@ -38,7 +38,7 @@ func TestFactoryRealCobProduces(t *testing.T) {
 	spawn := func(name string) (*UnitMeta, Binding) {
 		m := testMeta(name)
 		m.CanMove = true
-		m.BuildTime = fixed.FromInt(200)
+		setBuildStats(m, 200, 50, 50)
 		m.FootprintX = 2
 		m.FootprintZ = 2
 		m.CostMetal = fixed.FromInt(50)
@@ -50,7 +50,7 @@ func TestFactoryRealCobProduces(t *testing.T) {
 	fm := testMeta("armlab")
 	fm.CanMove = false
 	fm.IsBuilder = true
-	fm.WorkerTime = 200
+	setWorkerTime(fm, 200)
 	fm.FootprintX = 6
 	fm.FootprintZ = 6
 	fac := w.AddUnit("armlab", fm, loadCobUnit(t, rt, "ARMLAB.cob"), fixed.Vec2{}, 0, 0)

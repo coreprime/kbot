@@ -191,7 +191,7 @@ type Unit struct {
 	// adopts it instead of spawning a fresh buildee. Transient command
 	// state — reset whenever a job starts or is cancelled.
 	buildResumeID uint32
-	buildeeID  uint32
+	buildeeID     uint32
 
 	// prodQueue is a factory's pending production run, in click order —
 	// mixed types queue freely. stepBuilder pops the head into the active
@@ -273,6 +273,23 @@ type Unit struct {
 	bombRunLeft   int
 	bombRunSource string
 
+	// Exact economy state. buildRem is the engines' authoritative build
+	// fraction (float32: 1.0 = fresh nanoframe, 0.0 = complete; the fixed
+	// BuildPercent stays derived from it for the HUD/wire). buildHP is the
+	// integer hit-point ladder the applicator climbs from 0 to exactly
+	// maxdamage — authoritative while under construction. active mirrors
+	// the engines' ACTIVE bit, which gates energyuse and the production
+	// suites. mexYield is the extractor income cached once at placement.
+	// lastNanoTick is the last tick any builder's applicator touched this
+	// frame (the nanolathed keep-alive that holds off abandonment decay).
+	// econE/econM are the two axes of the TA per-unit econ slot.
+	buildRem     float32
+	buildHP      int32
+	active       bool
+	mexYield     float32
+	lastNanoTick uint64
+	econE, econM econAxis
+
 	// Corpse bookkeeping: killedThread tracks the Killed script started on
 	// death so stepCorpse can read the corpsetype it wrote (its second
 	// local) once the death sequence finishes; corpsePending holds the poll
@@ -292,7 +309,7 @@ type Unit struct {
 // Attack queue; everything else applies immediately.
 type queuedCommand struct {
 	// name carries a queued Build's unit type (empty otherwise).
-	name string
+	name       string
 	kind       order.Kind
 	target     fixed.Vec2 // Move destination
 	targetUnit uint32     // Attack subject
@@ -318,8 +335,10 @@ const (
 
 // underConstruction reports whether the unit is a buildee that has not yet
 // reached 100% — inert: it takes no orders and steps no movement or weapons.
+// The float32 build-remaining is the engines' authoritative fraction (the
+// fixed BuildPercent is its derived HUD copy).
 func (u *Unit) underConstruction() bool {
-	return !u.Dead && u.BuildPercent < fixed.FromInt(100)
+	return !u.Dead && u.buildRem != 0
 }
 
 // Pos returns the unit's world position.
@@ -351,25 +370,17 @@ type World struct {
 	// a Spawn order arrives. Injected so the core stays asset-agnostic.
 	spawn SpawnFunc
 
-	// Resource accounting, per side (0..7). Builds drain each unit's FBI
-	// price linearly over its construction; the sandbox pools are infinite,
-	// so this only feeds the usage HUD — nothing gates on it. resRate is
-	// rebuilt every tick (drain per second right now); resSpent accumulates.
-	// resStock integrates generation minus drain (clamped into the side's
-	// live storage capacity); resCap and resGen are recomputed each tick
-	// from the standing units' FBI economy fields.
-	resSpent [maxSides]resourceTally
-	resRate  [maxSides]resourceTally
-	resStock [maxSides]resourceTally
-	resCap   [maxSides]resourceTally
-	resGen   [maxSides]resourceTally
-	// resSeeded marks sides whose economy has been initialised: the first
-	// time a side fields a unit it receives the base storage pre-filled
-	// (the classic 1000/1000 start).
-	resSeeded [maxSides]bool
-	// resProduced accumulates gross generation over the session, the
-	// economy bar's lifetime-production figure.
-	resProduced [maxSides]resourceTally
+	// The authoritative per-side economy (economy.go). econModel selects
+	// which game's law runs; the TA pools seed startMetal/startEnergy when
+	// a side first fields a unit. resSpent/resRate remain fixed-point HUD
+	// tallies fed alongside the float32 pools (display only).
+	econModel   EconomyModel
+	startMetal  int
+	startEnergy int
+	econTA      [maxSides]sideEconTA
+	econTAK     [maxSides]sideEconTAK
+	resSpent    [maxSides]resourceTally
+	resRate     [maxSides]resourceTally
 
 	// terrain is the installed map height field (nil = flat sandbox grid).
 	// Configuration like meta, identical on every peer, never hashed.
@@ -406,6 +417,15 @@ type Config struct {
 	// draws consume one generator in call order, the engines' single-stream
 	// discipline. Nil seeds a private stream from Seed.
 	Rand *rng.MinStd
+	// Economy selects the per-side resource law (default EconomyTA).
+	Economy EconomyModel
+	// StartMetal / StartEnergy are the TA opening stock per side (the
+	// lobby / SkirmishInfo start values); 0 applies the skirmish default
+	// of 1000 each, a negative value opens with an exact empty pool (so an
+	// income source is not masked by the pool sitting at its storage cap).
+	// The storage-cap bonus derives as max(start, 200).
+	StartMetal  int
+	StartEnergy int
 }
 
 // defaultGravity is the engine default projectile gravity on the sandbox's
@@ -424,13 +444,32 @@ func New(cfg Config) *World {
 	if r == nil {
 		r = rng.NewMinStd(cfg.Seed)
 	}
+	// 0 applies the skirmish default (1000); a negative request means an
+	// exact empty opening stock (so an income source is not masked by the
+	// pool sitting at its storage cap).
+	sm, se := cfg.StartMetal, cfg.StartEnergy
+	switch {
+	case sm == 0:
+		sm = taDefaultStart
+	case sm < 0:
+		sm = 0
+	}
+	switch {
+	case se == 0:
+		se = taDefaultStart
+	case se < 0:
+		se = 0
+	}
 	return &World{
-		units:      make(map[uint32]*Unit),
-		nextID:     1,
-		nextProjID: 1,
-		rng:        r,
-		gravity:    g,
-		spawn:      cfg.Spawn,
+		units:       make(map[uint32]*Unit),
+		nextID:      1,
+		nextProjID:  1,
+		rng:         r,
+		gravity:     g,
+		spawn:       cfg.Spawn,
+		econModel:   cfg.Economy,
+		startMetal:  sm,
+		startEnergy: se,
 	}
 }
 
@@ -899,8 +938,18 @@ func (w *World) ForEachUnit(fn func(*Unit)) {
 // emit records a discrete event for this tick's render snapshot.
 func (w *World) emit(e frame.Event) { w.events = append(w.events, e) }
 
-// AddUnit registers a new unit and returns its id.
+// AddUnit registers a new, fully built unit and returns its id. Complete
+// spawns carry the economy's spawn semantics: TA:K credits the unit's own
+// mogriumstorage to the owner's pool (the scenario starting-kit grant), and
+// an activatewhenbuilt unit stands ACTIVE from the start.
 func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.Vec2, heading int32, side int) uint32 {
+	return w.addUnit(name, meta, binding, at, heading, side, true)
+}
+
+// addUnit is the shared spawn path; complete=false raises the engines'
+// nanoframe state instead — build-remaining 1.0, HP 0, inert — without any
+// spawn grant (construction pays for the unit as it rises).
+func (w *World) addUnit(name string, meta *UnitMeta, binding Binding, at fixed.Vec2, heading int32, side int, complete bool) uint32 {
 	id := w.nextID
 	w.nextID++
 	u := &Unit{
@@ -938,6 +987,23 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 	w.rng.Bounded(int32(fixed.FullCircle))
 	w.units[id] = u
 	w.order = append(w.order, id)
+	// Economy spawn semantics. Both spawn shapes seed the side's pools on
+	// first field and cache the extractor yield (computed once, at
+	// placement — a nanoframe's plot is its placement).
+	w.seedSideEconomy(side)
+	w.cacheExtractorYield(u)
+	if complete {
+		u.buildHP = maxDamage(meta)
+		w.grantSpawnMana(u)
+		if meta != nil && meta.ActivateWhenBuilt {
+			u.active = true
+		}
+	} else {
+		w.setBuildRem(u, 1)
+		u.buildHP = 0
+		u.Health = 0
+		u.lastNanoTick = w.tick
+	}
 	if binding != nil && binding.HasScript("Create") {
 		startCreate(binding)
 	}
@@ -955,7 +1021,14 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 // report a folded solar as on. A unit with no Activate/Deactivate script or no
 // port surface is left untouched.
 func (w *World) setActivation(u *Unit, on bool) {
-	if u == nil || u.binding == nil {
+	if u == nil {
+		return
+	}
+	// The ACTIVE bit is economy-authoritative: it gates energyuse demand
+	// and the structure production suites (extractor/metal-maker/wind/
+	// tidal income) at each settle.
+	u.active = on
+	if u.binding == nil {
 		return
 	}
 	name := "Deactivate"
@@ -1298,30 +1371,30 @@ func (w *World) ExportProjectiles() []RestoredProjectile {
 			continue
 		}
 		out = append(out, RestoredProjectile{
-			ID:        p.id,
-			OwnerID:   p.ownerID,
-			TargetID:  p.targetID,
-			Slot:      p.slot,
-			Mode:      uint8(p.mode),
-			Phase:     uint8(p.phase),
-			Model:     p.model,
-			Weapon:    p.weapon,
-			Pos:       p.pos,
-			Vel:       p.vel,
-			Origin:    p.origin,
-			Target:    p.target,
-			LaunchY:   p.launchY,
-			Speed:     p.speed,
-			VMax:      p.vmax,
-			Accel:     p.accel,
-			TurnAng:   p.turnAng,
-			HomingR:   p.homingR,
-			Gravity:   p.gravity,
-			AoE:       p.aoe,
-			Damage:    p.damage,
-			AgeSec:    p.ageSec,
-			LifeSec:   p.lifeSec,
-			LastDist:  p.lastDistT,
+			ID:         p.id,
+			OwnerID:    p.ownerID,
+			TargetID:   p.targetID,
+			Slot:       p.slot,
+			Mode:       uint8(p.mode),
+			Phase:      uint8(p.phase),
+			Model:      p.model,
+			Weapon:     p.weapon,
+			Pos:        p.pos,
+			Vel:        p.vel,
+			Origin:     p.origin,
+			Target:     p.target,
+			LaunchY:    p.launchY,
+			Speed:      p.speed,
+			VMax:       p.vmax,
+			Accel:      p.accel,
+			TurnAng:    p.turnAng,
+			HomingR:    p.homingR,
+			Gravity:    p.gravity,
+			AoE:        p.aoe,
+			Damage:     p.damage,
+			AgeSec:     p.ageSec,
+			LifeSec:    p.lifeSec,
+			LastDist:   p.lastDistT,
 			Closing:    p.closing,
 			Heading:    p.heading,
 			Pitch:      p.pitch,
@@ -1426,6 +1499,14 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 		u.loco.Heading = ru.Heading
 		u.loco.Speed = ru.Speed
 		u.PosY = ru.Pos.Y
+		// Economy state derives from the wire's fixed-point axes; the side
+		// pools seed exactly as a fresh spawn would (the authority's live
+		// pool values travel outside the unit list).
+		u.syncRemFromPercent()
+		u.active = meta != nil && meta.ActivateWhenBuilt && u.buildRem == 0
+		w.seedSideEconomy(u.Side)
+		w.cacheExtractorYield(u)
+		u.lastNanoTick = tick
 		if ci, ok := binding.(cobImporter); ok && ru.Cob != nil {
 			// Adopt the authority's exact live VM state — every piece animator,
 			// thread and static — so the joiner's poses match to the angle instead
@@ -1495,29 +1576,29 @@ func (w *World) restoreProjectiles(projectiles []RestoredProjectile) {
 	}
 	for _, rp := range projectiles {
 		w.projectiles = append(w.projectiles, &projectile{
-			id:        rp.ID,
-			ownerID:   rp.OwnerID,
-			targetID:  rp.TargetID,
-			slot:      rp.Slot,
-			mode:      projMode(rp.Mode),
-			phase:     projPhase(rp.Phase),
-			model:     rp.Model,
-			weapon:    rp.Weapon,
-			pos:       rp.Pos,
-			vel:       rp.Vel,
-			origin:    rp.Origin,
-			target:    rp.Target,
-			launchY:   rp.LaunchY,
-			speed:     rp.Speed,
-			vmax:      rp.VMax,
-			accel:     rp.Accel,
-			turnAng:   rp.TurnAng,
-			homingR:   rp.HomingR,
-			gravity:   rp.Gravity,
-			aoe:       rp.AoE,
-			damage:    rp.Damage,
-			ageSec:    rp.AgeSec,
-			lifeSec:   rp.LifeSec,
+			id:         rp.ID,
+			ownerID:    rp.OwnerID,
+			targetID:   rp.TargetID,
+			slot:       rp.Slot,
+			mode:       projMode(rp.Mode),
+			phase:      projPhase(rp.Phase),
+			model:      rp.Model,
+			weapon:     rp.Weapon,
+			pos:        rp.Pos,
+			vel:        rp.Vel,
+			origin:     rp.Origin,
+			target:     rp.Target,
+			launchY:    rp.LaunchY,
+			speed:      rp.Speed,
+			vmax:       rp.VMax,
+			accel:      rp.Accel,
+			turnAng:    rp.TurnAng,
+			homingR:    rp.HomingR,
+			gravity:    rp.Gravity,
+			aoe:        rp.AoE,
+			damage:     rp.Damage,
+			ageSec:     rp.AgeSec,
+			lifeSec:    rp.LifeSec,
 			lastDistT:  rp.LastDist,
 			closing:    rp.Closing,
 			heading:    rp.Heading,
@@ -1896,6 +1977,22 @@ func (w *World) stopUnit(id uint32) {
 func (w *World) ApplyDamage(sourceID, targetID uint32, dmg fixed.Fixed) bool {
 	t := w.units[targetID]
 	if t == nil || t.Dead || t.carriedBy != 0 {
+		return false
+	}
+	// A frame under construction runs on the integer HP ladder: combat
+	// damage lowers the ladder value (build progress is untouched — damage
+	// only costs hit points), and the frame dies with no wreck below 1 HP.
+	if t.underConstruction() && t.Meta != nil && t.Meta.MaxHealth > 0 {
+		t.buildHP -= int32(dmg.Int())
+		if t.buildHP < 1 {
+			t.provokedMs = w.simMs
+			w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
+			w.killUnit(t, 100, Blast{})
+			return true
+		}
+		w.syncBuildHealth(t)
+		t.provokedMs = w.simMs
+		w.emit(frame.Event{Kind: frame.EvHit, UnitID: sourceID, TargetID: targetID})
 		return false
 	}
 	// Health runs on a 0..100 percent scale; when the target carries its

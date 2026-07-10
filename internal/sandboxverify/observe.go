@@ -25,6 +25,7 @@ import (
 //	unit.projectile_spawns        cumulative projectile entities the unit launched
 //	unit.kills                    veterancy kill counter
 //	side.metal / energy / mana    stock, raw 16.16
+//	side.*_produced               lifetime gross production, raw 16.16
 //	world.projectiles             in-flight projectile count
 //	world.rng_draws               cumulative sim-stream (MINSTD) draws since start
 func (st *runState) evaluate(sc *Scenario, c CheckSpec, tick uint64) CheckResult {
@@ -91,6 +92,12 @@ func (st *runState) sampleSide(side int, obs string) (int64, bool, string) {
 		return int64(rs.EnergyStock), true, ""
 	case "side.mana":
 		return int64(rs.ManaStock), true, ""
+	case "side.metal_produced":
+		return int64(rs.MetalProduced), true, ""
+	case "side.energy_produced":
+		return int64(rs.EnergyProduced), true, ""
+	case "side.mana_produced":
+		return int64(rs.ManaProduced), true, ""
 	}
 	return 0, false, fmt.Sprintf("unknown side observable %q", obs)
 }

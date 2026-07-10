@@ -1,0 +1,55 @@
+# TA:K assist stacking: two builders on one frame each run the applicator
+# independently within the tick, summing their build power (additive,
+# uncapped) while the pool has mana to cover both. Ground truth: economy
+# spec §5.3 (assist is additive and uncapped; pool[2] is fixed for the tick
+# but pool[0] is live across the per-builder drains).
+name: tak-econ-assist
+game: tak
+system: economy
+spec: economy.md §4.3, §5.3
+description: >-
+  Two Aramon builders (workertime=10, mogriumstorage=100 each) raise one
+  Lodestone (buildtime=92, buildcost=280). Two spawn grants seed the pool
+  with 200 mana -- ample for the early build -- so both applicators run at
+  the full throttle=1 rate and the frame rises at twice the single-builder
+  pace until the pool starts to bite.
+seed: 1
+duration: 60
+units:
+  - alias: b1
+    type: arabuild
+    side: 0
+    pos: [200, 200]
+    heading: 0
+  - alias: b2
+    type: arabuild
+    side: 0
+    pos: [250, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: build
+    unit: b1
+    build: aralode
+    to: [230, 200]
+    spawns: lode
+  - at: 5
+    do: repair
+    unit: b2
+    target: lode
+checks:
+  - at: 30
+    unit: lode
+    observable: unit.build_percent
+    expect: 19
+    label: two builders raise the frame at double the single-builder pace
+    derivation: |
+      Single builder: eff = (10*0.03333333)*f32(1/92) = 0.0036231880 =
+      0.36232% progress per tick while pool[2]=1 (pool ample). b1 works from
+      tick 2 (build order applied frame 0); b2's assist order (frame 5)
+      joins around frame 6, from which both applicators stack additively to
+      0.72464%/tick. The 200-mana grant (two spawn grants of 100) keeps
+      pool[2]=1 through frame 30 (200 - 28*2.03 = ~143 mana left). Progress
+      at frame 30 = b1 solo ticks 2..5 (4 * 0.36232 = 1.4%) + both ticks
+      6..30 (25 * 0.72464 = 18.1%) ~= 19% (f32, truncated). A single
+      builder would show only ~10% here; the extra is the additive assist.

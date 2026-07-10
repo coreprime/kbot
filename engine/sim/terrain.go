@@ -22,6 +22,22 @@ type Terrain struct {
 	// sentinel): nothing stands, walks or builds there. Optional —
 	// nil means no voids.
 	Void []uint8
+	// Metal carries the per-cell metal byte (the plot-cell field the map
+	// loader floods from SurfaceMetal and stamps metal-patch features
+	// into; cell metal never changes at runtime). Optional — nil means
+	// bare ground everywhere. Extractor yield samples it once, at
+	// placement.
+	Metal []uint8
+}
+
+// cellMetal reads the metal byte at cell (cx, cz); off-map and metal-less
+// worlds read zero (the extractor formula's +1 floor still applies there).
+func (w *World) cellMetal(cx, cz int) uint8 {
+	t := w.terrain
+	if t == nil || t.Metal == nil || cx < 0 || cz < 0 || cx >= t.W || cz >= t.H {
+		return 0
+	}
+	return t.Metal[cz*t.W+cx]
 }
 
 // SetTerrain installs (or clears, with nil) the world's height field.
