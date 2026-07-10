@@ -193,6 +193,14 @@ type Unit struct {
 	buildResumeID uint32
 	buildeeID     uint32
 
+	// buildPadPiece is the factory pad piece (QueryBuildInfo) the current
+	// buildee rides while it raises; -1 = no pad (mobile builder, or a
+	// factory whose script does not name one). buildPadRest is the buildee's
+	// rest offset from the factory centre at spawn, so the raise can orbit it
+	// around the pad's live spin instead of pinning it to a static point.
+	buildPadPiece int32
+	buildPadRest  fixed.Vec2
+
 	// prodQueue is a factory's pending production run, in click order —
 	// mixed types queue freely. stepBuilder pops the head into the active
 	// job whenever the pad is idle.
@@ -984,9 +992,10 @@ func (w *World) addUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 		Name:         name,
 		Side:         side,
 		Meta:         meta,
-		Health:       fixed.FromInt(100),
-		BuildPercent: fixed.FromInt(100),
-		binding:      binding,
+		Health:        fixed.FromInt(100),
+		BuildPercent:  fixed.FromInt(100),
+		binding:       binding,
+		buildPadPiece: -1,
 	}
 	// Standing-order defaults: the FBI's standingmoveorder/standingfireorder
 	// when set, else the game defaults (Maneuver / Fire at Will). An FBI 0 is
@@ -1469,10 +1478,11 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 			Health:       ru.Health,
 			Dead:         ru.Dead,
 			BuildPercent: buildPct,
-			buildState:   buildPhase(ru.BuildState),
-			buildName:    ru.BuildName,
-			buildSite:    ru.BuildSite,
-			buildeeID:    ru.BuildTargetID,
+			buildState:    buildPhase(ru.BuildState),
+			buildName:     ru.BuildName,
+			buildSite:     ru.BuildSite,
+			buildeeID:     ru.BuildTargetID,
+			buildPadPiece: -1,
 			buildGateMs:  ru.BuildGateMs,
 			prodQueue:    append([]string(nil), ru.ProdQueue...),
 			moveMode:     ru.MoveMode,
@@ -1906,6 +1916,7 @@ func (w *World) cancelBuild(u *Unit) {
 	u.buildState = buildIdle
 	u.buildName = ""
 	u.buildeeID = 0
+	u.buildPadPiece = -1
 	u.buildHeadingSet = false
 }
 

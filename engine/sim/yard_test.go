@@ -156,3 +156,61 @@ func TestFactoryYardOpensWhileProducing(t *testing.T) {
 		t.Fatalf("yard never closed after the line drained")
 	}
 }
+
+// TestFactoryHoldsWhileYardBlocked pins the occupancy gate: a mobile unit
+// parked in the factory's yard footprint stops it raising the next frame, so
+// nothing spawns on top of the squatter and shoves it. Once the unit clears
+// the yard, production resumes.
+func TestFactoryHoldsWhileYardBlocked(t *testing.T) {
+	w := factoryWorld()
+	fm := factoryMeta()
+	fm.Yard = ParseYardMap(labYard, 6, 6)
+	fac := w.AddUnit("factory", fm, nil, fixed.Vec2{}, 0, 0)
+	u := w.UnitByID(fac)
+
+	// Park a mover dead-centre in the yard, then queue a build.
+	blocker := w.UnitByID(w.AddUnit("kbot", testMeta("kbot"), nil, fixed.Vec2{}, 0, 0))
+	blocker.hasMove = false
+	w.ApplyOrder(order.Build(fac, "tank", fixed.Vec2{}, 0))
+
+	// Hold: through many ticks the factory must not create a buildee while the
+	// yard is occupied. (The blocker is pinned in place so buggerOff's shoo is
+	// re-cleared each tick.)
+	for i := 0; i < 40*3; i++ {
+		blocker.hasMove = false
+		blocker.moveTarget = fixed.Vec2{}
+		w.Step(nil)
+		if u.buildeeID != 0 {
+			t.Fatalf("factory raised a frame while its yard was blocked (tick %d)", i)
+		}
+		var produced bool
+		w.ForEachUnit(func(b *Unit) {
+			if b.ID != fac && b.ID != blocker.ID {
+				produced = true
+			}
+		})
+		if produced {
+			t.Fatalf("factory spawned a unit while its yard was blocked (tick %d)", i)
+		}
+	}
+
+	// Clear the yard: teleport the blocker well outside the footprint and let
+	// production run. A unit must now complete.
+	blocker.loco.Pos = fixed.Vec2{X: fixed.FromInt(600), Z: fixed.FromInt(600)}
+	var done bool
+	for i := 0; i < 40*60; i++ {
+		w.Step(nil)
+		w.ForEachUnit(func(b *Unit) {
+			if b.ID != fac && b.ID != blocker.ID && b.BuildPercent >= fixed.FromInt(100) {
+				done = true
+			}
+		})
+		if done {
+			break
+		}
+	}
+	if !done {
+		t.Fatalf("factory never produced after its yard cleared: state=%d queue=%d",
+			u.buildState, len(u.prodQueue))
+	}
+}

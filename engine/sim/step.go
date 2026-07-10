@@ -208,8 +208,11 @@ func (w *World) stepBuilder(u *Unit) {
 	case buildIdle:
 		// Factory with work queued: take the head onto the pad. With an
 		// Activate script the doors animate open first — the pad raise
-		// waits for YARD_OPEN (or the grace deadline).
-		if len(u.prodQueue) > 0 && !u.Meta.CanMove {
+		// waits for YARD_OPEN (or the grace deadline). A unit sitting in the
+		// yard footprint blocks the raise entirely — the doors stay open and
+		// the factory holds until the squatter clears, so a new frame never
+		// spawns on top of a parked unit and shoves it.
+		if len(u.prodQueue) > 0 && !u.Meta.CanMove && !w.yardBlocked(u, 0) {
 			name := u.prodQueue[0]
 			u.prodQueue = u.prodQueue[1:]
 			if len(u.prodQueue) == 0 {
@@ -227,6 +230,13 @@ func (w *World) stepBuilder(u *Unit) {
 		}
 	case buildOpening:
 		w.buggerOff(u)
+		// Hold at the open doors while the yard is occupied: the frame must
+		// not spawn onto a unit still standing on the pad. buggerOff is already
+		// shooing it; once clear (and the doors report open, or the grace
+		// deadline passes) the raise proceeds.
+		if w.yardBlocked(u, 0) {
+			return
+		}
 		if portValue(u, cobPortYardOpen) != 0 || w.simMs >= u.buildGateMs {
 			w.startRaising(u)
 		}
@@ -274,6 +284,15 @@ func (w *World) stepBuilder(u *Unit) {
 		} else {
 			done = w.taApplyBuild(u, b)
 		}
+		// Parent a factory buildee to its spinning build pad: rotate its rest
+		// offset about the factory centre by the pad piece's live y-spin and
+		// carry the same spin into the buildee's heading, so its authoritative
+		// pose turns with the plate and the rolloff leaves from the pad's true
+		// position rather than a static site (which would look like a jump the
+		// instant construction completes and the renderer switches to sim pos).
+		if !u.Meta.CanMove {
+			w.ridePad(u, b)
+		}
 		// The frame sits at ground level throughout — the wireframe shell,
 		// dark hull and nanolathe carry the visual; nothing rises out of the
 		// earth.
@@ -316,6 +335,7 @@ func (w *World) stepBuilder(u *Unit) {
 		u.buildState = buildIdle
 		u.buildName = ""
 		u.buildeeID = 0
+		u.buildPadPiece = -1
 		// A mobile builder pulls its next shift-queued order — typically
 		// the next construction site in a queued base plan.
 		if u.Meta.CanMove {
@@ -391,12 +411,27 @@ func (w *World) startRaising(u *Unit) {
 	}
 	// A factory's QueryBuildInfo names the pad piece the buildee rides;
 	// the renderer attaches the frame to that piece's live transform so
-	// it sits on the plate and turns with it. -1 = no query script.
+	// it sits on the plate and turns with it. -1 = no query script. The
+	// same piece drives the sim: the raise orbits the buildee about the
+	// pad's live spin so its authoritative pose matches the plate and the
+	// rolloff leaves from where it was actually built (no completion jump).
 	padPiece := int32(-1)
+	u.buildPadPiece = -1
 	if !u.Meta.CanMove {
 		if qb, ok := u.binding.(queryBinding); ok {
 			if idx, ok2 := qb.RunQuery("QueryBuildInfo"); ok2 {
 				padPiece = idx
+				u.buildPadPiece = idx
+				// The pad piece pivots at the factory centre, so the buildee
+				// rides it centred and spins in place — matching TA, where the
+				// unit sits on the plate rather than orbiting a forward point.
+				// Centring also keeps it in the yard's open exit channel, so a
+				// finished unit walks out cleanly instead of being shoved out
+				// of the solid flanks by the collision separation pass.
+				u.buildPadRest = fixed.Vec2{}
+				b.loco.Pos = u.loco.Pos
+				b.PosY = w.groundHeight(b.loco.Pos)
+				u.buildSite = u.loco.Pos
 			}
 		}
 	}
@@ -444,6 +479,71 @@ func (w *World) buggerOff(u *Unit) {
 		}
 		p.SetUnitValuePort(cobPortBuggerOff, v)
 	}
+}
+
+// ridePad parents a factory buildee to its build plate for the tick: the
+// buildee's rest offset from the factory centre is rotated by the pad piece's
+// live y-axis spin, and that spin is added to the factory heading to spin the
+// buildee in place on the plate. This keeps the authoritative pose on the pad
+// (matching the renderer, which pins the frame to the same piece) so that when
+// construction completes and control passes to the sim position, the finished
+// unit is already where the plate left it and simply walks off — no teleport.
+func (w *World) ridePad(u, b *Unit) {
+	// A restored factory has no cached pad piece; re-derive it once from the
+	// script, mirroring the spawn path, so a join mid-build still rides.
+	if u.buildPadPiece < 0 {
+		if qb, ok := u.binding.(queryBinding); ok {
+			if idx, ok2 := qb.RunQuery("QueryBuildInfo"); ok2 {
+				u.buildPadPiece = idx
+				u.buildPadRest = b.loco.Pos.Sub(u.loco.Pos)
+			}
+		}
+		if u.buildPadPiece < 0 {
+			return
+		}
+	}
+	if u.binding == nil {
+		return
+	}
+	pieces := u.binding.Pieces()
+	if int(u.buildPadPiece) >= len(pieces) {
+		return
+	}
+	spin := pieces[u.buildPadPiece].Rot[1]
+	sin, cos := fixed.SinCos(spin)
+	off := u.buildPadRest
+	rot := fixed.Vec2{
+		X: off.X.Mul(cos) - off.Z.Mul(sin),
+		Z: off.X.Mul(sin) + off.Z.Mul(cos),
+	}
+	b.loco.Pos = fixed.Vec2{X: u.loco.Pos.X + rot.X, Z: u.loco.Pos.Z + rot.Z}
+	b.loco.Heading = fixed.FromInt(int(fixed.WrapAngle(int32(u.Heading()) + spin)))
+	b.buildSite = b.loco.Pos
+}
+
+// yardBlocked reports whether a live, mobile unit (other than the optional
+// exclude id — the current buildee) overlaps the factory's yard footprint. A
+// blocked yard holds production: the factory will not pop its next queue entry
+// or raise a frame while a unit occupies the pad, so a finished unit parked on
+// the plate (or one a player walked into an open Kbot Lab) is never overlapped
+// and shoved by the next spawn.
+func (w *World) yardBlocked(u *Unit, exclude uint32) bool {
+	if !hasYard(u) {
+		return false
+	}
+	hx, hz := yardHalfExtents(u.Meta)
+	for _, oid := range w.order {
+		o := w.units[oid]
+		if o == nil || o == u || o.ID == exclude || !collidable(o) ||
+			o.Meta == nil || !o.Meta.CanMove || o.underConstruction() {
+			continue
+		}
+		l := yardLocal(u, o.loco.Pos)
+		if l.X.Abs() < hx && l.Z.Abs() < hz {
+			return true
+		}
+	}
+	return false
 }
 
 // factoryPad is where a factory raises its buildee: just inside the front
