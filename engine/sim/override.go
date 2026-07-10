@@ -72,7 +72,8 @@ func (w *World) SetUnitState(id uint32, ov UnitStateOverride) bool {
 		u.loco.Heading = ov.Heading
 	}
 	if ov.HasSpeed {
-		u.loco.Speed = ov.Speed
+		// The wire carries wu/sec; the sim's speed scalar is wu/frame.
+		u.loco.Speed = ov.Speed.Div(fxTickHz)
 	}
 	if ov.HasHealth {
 		u.Health = ov.Health

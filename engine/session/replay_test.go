@@ -17,8 +17,10 @@ import (
 // reach at tick 150 on every architecture and on every run. The engine is
 // integer-only (Q16.16 fixed point), so this value is a cross-platform
 // constant; a change means the simulation's evolution changed and every
-// recorded replay's render would silently shift.
-const replayGoldenHash uint64 = 2961949521211098164
+// recorded replay's render would silently shift. Re-pinned when the
+// locomotion fidelity pass replaced the invented mover with the engines'
+// per-frame bang-bang law (trajectories legitimately changed).
+const replayGoldenHash uint64 = 17979379380546300362
 
 func replaySpawn(name string) (*sim.UnitMeta, sim.Binding) {
 	if name != "u" {
@@ -167,8 +169,11 @@ func TestSetUnitState(t *testing.T) {
 		if u.Heading != 12345 {
 			t.Fatalf("heading = %d, want 12345", u.Heading)
 		}
-		if u.Speed != ov.Speed {
-			t.Fatalf("speed = %v, want %v", u.Speed, ov.Speed)
+		// The wire speed is wu/sec but the sim stores the engines' per-frame
+		// scalar, so an injected speed round-trips quantized to a whole
+		// per-frame value: trunc(81920/30)·30 = 81900.
+		if want := ov.Speed.Div(fixed.FromInt(30)).Mul(fixed.FromInt(30)); u.Speed != want {
+			t.Fatalf("speed = %v, want %v", u.Speed, want)
 		}
 		if u.Health != ov.Health {
 			t.Fatalf("health = %v, want %v", u.Health, ov.Health)

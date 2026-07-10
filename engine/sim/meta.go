@@ -21,6 +21,35 @@ type UnitMeta struct {
 	IsHovercraft   bool
 	CruiseAltitude fixed.Fixed
 
+	// Locomotion capability flags straight off the FBI. CanHover|Floater is
+	// the engines' exemption mask for the underwater half-speed cap; Upright
+	// units terrain-snap Y only (they stand vertical), so their pitch stays 0
+	// and the slope-speed table never bites them.
+	CanHover bool
+	Floater  bool
+	Upright  bool
+
+	// WaterLine (FBI waterline, height units) is how high above the sea-level
+	// byte a floater's hull rides; it pins a ship's Y.
+	WaterLine fixed.Fixed
+
+	// MoveRate1/2 are the walk-animation tier thresholds (wu/frame, 16.16).
+	// Zero means the FBI omitted them; the engines default both to
+	// 2×maxvelocity at load, so stock units never leave tier 1.
+	MoveRate1 fixed.Fixed
+	MoveRate2 fixed.Fixed
+
+	// TA:K per-unit stat multipliers (16.16): watermultiplier scales the
+	// kinematic stats while the unit stands in water (default 1.0),
+	// roadmultiplier while on a road (default 1.2). Zero = FBI omitted.
+	WaterMult fixed.Fixed
+	RoadMult  fixed.Fixed
+
+	// MovementClass names the moveinfo.tdf traversal profile; when it
+	// resolves, the class's footprint/water-depth/slope fields replace the
+	// FBI's own values entirely (games.ApplyMovementClass).
+	MovementClass string
+
 	// Terrain limits (FBI maxslope / maxwaterdepth / minwaterdepth, in
 	// height units): the steepest cell delta the unit climbs, the deepest
 	// water a surface unit wades, the shallowest water a ship needs.
@@ -167,45 +196,35 @@ func (m *UnitMeta) collisionRadius() fixed.Fixed {
 	return fixed.Clamp(fixed.FromInt(f*8), fixed.FromInt(10), fixed.FromInt(96))
 }
 
-// movement-rate conversions. FBI kinematic fields are per-30Hz-frame values;
-// the accessors scale them to per-second rates (×30), and the tick loop takes
-// each tick's share back out with perTick (÷30). On the 30 Hz tick the round
-// trip is exact, so per-tick quantities equal the raw FBI values — the
-// engines' native per-frame units. The defaults and clamps below are sandbox
-// inventions the locomotion fidelity pass will retire.
-const taMoveHz = TickHz
+// Ground kinematics use the FBI fields raw: MaxVelocity/Accel/BrakeRate are
+// wu-per-frame 16.16 quantities and TurnRate an angle-units-per-frame integer,
+// exactly as both engines load them — no defaults, no clamps (the previous
+// sandbox-invented accel/brake clamps and per-second conversion round trip are
+// gone). Aircraft keep a behavioural stand-in with its own defaults in
+// aircraft.go until the real flight law lands.
 
-func (m *UnitMeta) maxSpeed() fixed.Fixed {
-	v := m.MaxVelocity
-	if v <= 0 {
-		v = fixed.One
+// moveRate1 / moveRate2 are the walk-anim tier thresholds with the engines'
+// load-time default of 2×maxvelocity when the FBI omits them.
+func (m *UnitMeta) moveRate1() fixed.Fixed {
+	if m.MoveRate1 > 0 {
+		return m.MoveRate1
 	}
-	return v.Mul(fixed.FromInt(taMoveHz))
+	return fixed.Wrap32(m.MaxVelocity << 1)
 }
 
-// turnRatePerSec returns the turn rate in TA-angle units per second.
-func (m *UnitMeta) turnRatePerSec() fixed.Fixed {
-	t := m.TurnRate
-	if t <= 0 {
-		t = fixed.FromInt(600)
+func (m *UnitMeta) moveRate2() fixed.Fixed {
+	if m.MoveRate2 > 0 {
+		return m.MoveRate2
 	}
-	return t.Mul(fixed.FromInt(taMoveHz))
+	return fixed.Wrap32(m.MaxVelocity << 1)
 }
 
-func (m *UnitMeta) accel() fixed.Fixed {
-	a := m.Accel
-	if a <= 0 {
-		a = fixed.FromFloat(0.05)
+// waterMult is the TA:K in-water stat multiplier with its engine default
+// (1.0) when the FBI omits it. RoadMult (default 1.2) waits on a road-surface
+// raster — the world block — before anything can consult it.
+func (m *UnitMeta) waterMult() fixed.Fixed {
+	if m.WaterMult > 0 {
+		return m.WaterMult
 	}
-	v := a.Mul(fixed.FromInt(taMoveHz * taMoveHz))
-	return fixed.Clamp(v, fixed.FromInt(8), fixed.FromInt(240))
-}
-
-func (m *UnitMeta) brake() fixed.Fixed {
-	b := m.BrakeRate
-	if b <= 0 {
-		b = fixed.FromFloat(0.1)
-	}
-	v := b.Mul(fixed.FromInt(taMoveHz * taMoveHz))
-	return fixed.Clamp(v, fixed.FromInt(12), fixed.FromInt(400))
+	return fixed.One
 }

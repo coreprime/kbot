@@ -34,6 +34,7 @@ func UnitMetaFromFBI(name string, fbi []byte, resolve WeaponResolver) (*sim.Unit
 	var ku tak.Unit
 	if err := tdf.Unmarshal(fbi, &ku); err == nil {
 		ApplyTAKWeapons(m, &ku)
+		applyTAKLocoInfo(m, &ku)
 	}
 	return m, nil
 }
@@ -63,6 +64,7 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 	m.MaxSlope = info.MaxSlope
 	m.MaxWaterDepth = info.MaxWaterDepth
 	m.MinWaterDepth = info.MinWaterDepth
+	applyLocoInfo(m, info)
 	tedClass := strings.ToUpper(strings.TrimSpace(info.TEDClass))
 	cats := map[string]bool{}
 	for _, c := range info.Category {

@@ -22,15 +22,6 @@ type Terrain struct {
 	// sentinel): nothing stands, walks or builds there. Optional —
 	// nil means no voids.
 	Void []uint8
-	// SlopeScalePct scales a unit's declared MaxSlope onto THIS heightmap's
-	// per-cell delta scale, as a percentage (0 → defaultSlopeScalePct). TA's
-	// coarse attribute grid inflates per-cell deltas ~2.5x relative to the
-	// MaxSlope authoring scale, so TA maps use 40 (the 2/5 calibration that
-	// makes KOTH's spiral ramps the only way up). TA:Kingdoms maps carry a
-	// native heightmap whose deltas sit on the MaxSlope scale directly and run
-	// far steeper (Athri-Cay island edges hit ~30 vs KOTH's ~11), so they use
-	// 100 — otherwise GROUND2 units (MaxSlope 30 → 12) can't climb any island.
-	SlopeScalePct int
 }
 
 // SetTerrain installs (or clears, with nil) the world's height field.
@@ -93,23 +84,27 @@ func (t *Terrain) cellHeight(cx, cz int) int {
 	return int(t.Data[cz*t.W+cx])
 }
 
-// groundHeight samples the terrain's world-Y at a world point, bilinearly
-// interpolated between the four surrounding cells in fixed-point (so every
-// lockstep peer computes the identical elevation).
-func (w *World) groundHeight(p fixed.Vec2) fixed.Fixed {
-	t := w.terrain
-	if t == nil {
-		return 0
-	}
-	fx := p.X.Div(t.CellWU)
-	fz := p.Z.Div(t.CellWU)
-	cx, cz := fx.Int(), fz.Int()
+// cellAt maps a world point onto the terrain cell grid (floor convention).
+func (t *Terrain) cellAt(p fixed.Vec2) (cx, cz int) {
+	cx = p.X.Div(t.CellWU).Int()
+	cz = p.Z.Div(t.CellWU).Int()
 	if p.X < 0 {
 		cx--
 	}
 	if p.Z < 0 {
 		cz--
 	}
+	return cx, cz
+}
+
+// rawHeightAt samples the heightmap bilinearly at a world point in RAW height
+// units (16.16) — the engines' own sim Y axis: a unit's integer Y compares
+// directly against the map's sea-level byte, and the slope pitch mixes these
+// raw heights with wu runs. HeightScale applies only at the world-Y boundary.
+func (t *Terrain) rawHeightAt(p fixed.Vec2) fixed.Fixed {
+	fx := p.X.Div(t.CellWU)
+	fz := p.Z.Div(t.CellWU)
+	cx, cz := t.cellAt(p)
 	ax := fx - fixed.FromInt(cx)
 	az := fz - fixed.FromInt(cz)
 	h00 := fixed.FromInt(t.cellHeight(cx, cz))
@@ -118,7 +113,31 @@ func (w *World) groundHeight(p fixed.Vec2) fixed.Fixed {
 	h11 := fixed.FromInt(t.cellHeight(cx+1, cz+1))
 	top := h00 + (h10 - h00).Mul(ax)
 	bot := h01 + (h11 - h01).Mul(ax)
-	return (top + (bot - top).Mul(az)).Mul(t.HeightScale)
+	return top + (bot - top).Mul(az)
+}
+
+// groundHeight samples the terrain's world-Y at a world point, bilinearly
+// interpolated between the four surrounding cells in fixed-point (so every
+// lockstep peer computes the identical elevation).
+func (w *World) groundHeight(p fixed.Vec2) fixed.Fixed {
+	t := w.terrain
+	if t == nil {
+		return 0
+	}
+	return t.rawHeightAt(p).Mul(t.HeightScale)
+}
+
+// unitUnderwater reports whether the unit counts as underwater for the speed
+// law: integer Y below the map's sea-level byte. Ground units ride the
+// terrain, so the raw ground height at their position stands in for the
+// engines' unit-Y read (which comes off the footprint median — the same
+// value up to interpolation detail).
+func (w *World) unitUnderwater(u *Unit) bool {
+	t := w.terrain
+	if t == nil {
+		return false
+	}
+	return t.rawHeightAt(u.loco.Pos).Int() < t.SeaLevel
 }
 
 // waterDepthAt returns how far underwater the terrain sits at a world point,
@@ -156,13 +175,10 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 		}
 		return depth >= min
 	}
-	maxDepth := m.MaxWaterDepth
-	if m.IsHovercraft {
-		// A hovercraft rides its cushion over any water but still cannot
-		// climb cliffs.
-		maxDepth = 1 << 16
-	}
-	if depth > maxDepth {
+	// Hovercraft ride any water through their movement class's permissive
+	// depth window (moveinfo classes omit maxwaterdepth; the load default is
+	// permissive) — no special case here, the meta carries the resolved value.
+	if depth > m.MaxWaterDepth {
 		return false
 	}
 	return true
@@ -170,10 +186,14 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 
 // canTraverse reports whether a unit may STEP from one world point to
 // another: the destination must satisfy canStand (void / water rules) and,
-// when the step crosses into a different terrain cell, the height delta
-// between the two cells must be within the unit's slope limit. The check
-// is directional on purpose — standing beside a cliff and walking along
-// its base is level ground, only climbing it costs slope.
+// when the step crosses into a different terrain cell, the cell-pair height
+// delta must be within the unit's slope limit — raw height units against the
+// raw FBI/moveinfo maxslope, ≤ comparison (a delta exactly at maxslope is
+// legal). The badslope penalty band, the per-class blocker raster and its
+// 3×3 min-filter inflation belong to the passability block; until it lands
+// this pairwise test is the legality stand-in the mover and pathfinder share.
+// The check is directional on purpose — standing beside a cliff and walking
+// along its base is level ground, only climbing it costs slope.
 func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	if !w.canStand(m, to) {
 		return false
@@ -182,10 +202,8 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	if t == nil || m == nil || m.IsAircraft || m.IsShip || m.IsSub {
 		return true
 	}
-	fx := from.X.Div(t.CellWU).Int()
-	fz := from.Z.Div(t.CellWU).Int()
-	tx := to.X.Div(t.CellWU).Int()
-	tz := to.Z.Div(t.CellWU).Int()
+	fx, fz := t.cellAt(from)
+	tx, tz := t.cellAt(to)
 	if fx == tx && fz == tz {
 		return true
 	}
@@ -193,69 +211,7 @@ func (w *World) canTraverse(m *UnitMeta, from, to fixed.Vec2) bool {
 	if dh < 0 {
 		dh = -dh
 	}
-	return dh <= effectiveMaxSlope(m, w.slopeScalePct())
-}
-
-// canStepLoco is canTraverse with a small slope margin, used only by the
-// locomotion's blocked-step revert. A unit tracing a turning curve along its
-// (strictly-validated) path can momentarily clip a cell a hair steeper than
-// its pathing limit; reverting on that overshoot strands it mid-climb even
-// though the route is sound. The pathfinder stays strict — routes only run on
-// clearly-traversable ground — while the mover tolerates this small excess so
-// it can actually follow the route through a pinch. Still far below a true
-// cliff, so a unit can't scale a wall through the margin.
-func (w *World) canStepLoco(m *UnitMeta, from, to fixed.Vec2) bool {
-	if !w.canStand(m, to) {
-		return false
-	}
-	t := w.terrain
-	if t == nil || m == nil || m.IsAircraft || m.IsShip || m.IsSub {
-		return true
-	}
-	fx := from.X.Div(t.CellWU).Int()
-	fz := from.Z.Div(t.CellWU).Int()
-	tx := to.X.Div(t.CellWU).Int()
-	tz := to.Z.Div(t.CellWU).Int()
-	if fx == tx && fz == tz {
-		return true
-	}
-	dh := t.cellHeight(tx, tz) - t.cellHeight(fx, fz)
-	if dh < 0 {
-		dh = -dh
-	}
-	return dh <= effectiveMaxSlope(m, w.slopeScalePct())+4
-}
-
-// defaultSlopeScalePct is the MaxSlope→per-cell-delta scale for a TA-style
-// coarse attribute grid (40 = the 2/5 calibration; see Terrain.SlopeScalePct).
-// Applied whenever a terrain doesn't state its own scale (incl. the flat grid).
-const defaultSlopeScalePct = 40
-
-// slopeScalePct is the active MaxSlope scale for the installed height field.
-func (w *World) slopeScalePct() int {
-	if w.terrain != nil && w.terrain.SlopeScalePct > 0 {
-		return w.terrain.SlopeScalePct
-	}
-	return defaultSlopeScalePct
-}
-
-// effectiveMaxSlope is the per-cell height-delta limit a unit may climb, after
-// scaling its declared MaxSlope onto the installed heightmap's delta scale.
-// Shared by traversal, the pathfinder (via canTraverse) and the climb slowdown
-// so all three agree. scalePct comes from the terrain (w.slopeScalePct()).
-func effectiveMaxSlope(m *UnitMeta, scalePct int) int {
-	ms := m.MaxSlope
-	if ms <= 0 {
-		ms = 16
-	}
-	if scalePct <= 0 {
-		scalePct = defaultSlopeScalePct
-	}
-	e := ms * scalePct / 100
-	if e < 1 {
-		e = 1
-	}
-	return e
+	return dh <= m.MaxSlope
 }
 
 // canBuildAt reports whether a structure of the given stats may be founded
@@ -360,20 +316,93 @@ func (w *World) CanBuildAt(name string, x, z fixed.Fixed) bool {
 	return w.canBuildAt(m, fixed.Vec2{X: x, Z: z})
 }
 
-// settleOnTerrain pins a surface unit's Y to the ground (ships ride the
-// waterline, subs the seabed); aircraft handle altitude in stepAltitude.
+// settleOnTerrain is the terrain snap that runs after each unit's move:
+// it pins a surface unit's Y and measures the pitch the slope-speed law
+// consumes next frame. Aircraft handle altitude in stepAltitude.
 func (w *World) settleOnTerrain(u *Unit) {
 	t := w.terrain
 	if t == nil || u.Meta == nil || u.Meta.IsAircraft || u.carriedBy != 0 {
 		return
 	}
-	if u.Meta.IsShip {
-		u.PosY = fixed.FromInt(t.SeaLevel).Mul(t.HeightScale)
+	m := u.Meta
+	if m.IsShip || m.Floater {
+		// Floaters ride the surface: Y = waterline·0xffff + seaLevel in the
+		// engines' raw height units (the 0xffff — not 0x10000 — multiplier is
+		// the engines' own quirk, preserved); world Y scales from there.
+		y := fixed.Fixed((int64(m.WaterLine)*0xffff)>>16) + fixed.FromInt(t.SeaLevel)
+		u.PosY = y.Mul(t.HeightScale)
+		u.pitch = 0
 		return
 	}
 	// Buildees keep their construction sink offset below grade.
 	if u.underConstruction() {
 		return
 	}
-	u.PosY = w.groundHeight(u.loco.Pos)
+	if m.IsSub {
+		// Subs take the Y-only snap: depth is a static function of the
+		// seabed (no dynamic depth-holding in the engines); the seabed pin
+		// stands in for the engine's minimum-depth clamp off the unitdef
+		// depth field.
+		u.PosY = w.groundHeight(u.loco.Pos)
+		u.pitch = 0
+		return
+	}
+	ground := w.groundHeight(u.loco.Pos)
+	if m.CanHover || m.IsHovercraft {
+		// A hovercraft's cushion floors every sample at sea level, so it
+		// rides the water surface. (The engines add a speed-damped idle bob
+		// on top — render-only, so the sim skips it.)
+		sea := fixed.FromInt(t.SeaLevel).Mul(t.HeightScale)
+		if ground < sea {
+			ground = sea
+		}
+	}
+	u.PosY = ground
+	if m.Upright {
+		// Upright units (kbots) snap Y only — they stand vertical, their
+		// pitch stays 0 and the slope table never slows them. (UNKNOWN-7b:
+		// whether something else writes their pitch is unresolved; the
+		// terrain-snap dispatch is implemented as decompiled.)
+		u.pitch = 0
+		return
+	}
+	u.pitch = w.groundPitch(u)
+}
+
+// groundPitch measures the unit's pitch from the terrain: the footprint
+// corners, rotated by heading, each sample the heightmap bilinearly in RAW
+// height units (hover corners floored at sea level), and the pitch is
+// atan2 of the front/back height delta over the footprint length in wu —
+// the engines' unit conventions exactly (raw heights over wu runs). The
+// positive-pitch-equals-climbing orientation follows the slope table's
+// asymmetry (spec UNKNOWN-7a pins it empirically).
+func (w *World) groundPitch(u *Unit) int32 {
+	t := w.terrain
+	m := u.Meta
+	fx, fz := m.FootprintX, m.FootprintZ
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	hw := fixed.FromInt(fx * 8) // half width in wu (16 wu cells)
+	hl := fixed.FromInt(fz * 8) // half length in wu
+	sin, cos := fixed.SinCos(int32(u.Heading()))
+	sea := fixed.FromInt(t.SeaLevel)
+	corner := func(df, dr fixed.Fixed) fixed.Fixed {
+		p := fixed.Vec2{
+			X: u.loco.Pos.X + sin.Mul(df) + cos.Mul(dr),
+			Z: u.loco.Pos.Z + cos.Mul(df) - sin.Mul(dr),
+		}
+		h := t.rawHeightAt(p)
+		if (m.CanHover || m.IsHovercraft) && h < sea {
+			h = sea
+		}
+		return h
+	}
+	front := corner(hl, -hw) + corner(hl, hw)
+	back := corner(-hl, -hw) + corner(-hl, hw)
+	rise := (front - back).Div(fixed.FromInt(2))
+	return fixed.ShortestArc(fixed.Atan2(rise, fixed.FromInt(fz*16)))
 }

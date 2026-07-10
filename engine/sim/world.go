@@ -96,6 +96,23 @@ type Unit struct {
 	PosY   fixed.Fixed
 	Health fixed.Fixed // 0..100
 
+	// pitch is the unit's terrain pitch (s16 TA-angle) measured by the
+	// footprint ground-follow after each move; the slope-speed band reads it
+	// next frame. Upright units, floaters and subs keep 0. Derived from
+	// hashed state each terrain snap, so never serialised.
+	pitch int32
+	// motionTier caches the last announced walk-animation tier (§7) and
+	// lastTurnSign the last TurnDirection edge state (TA:K), both
+	// transition-edge detectors. motionDialect caches the COB-resolved
+	// movement dialect (motion_convention.go).
+	motionTier    uint8
+	lastTurnSign  int8
+	motionDialect motionDialect
+	// commandedSpeed is the TA:K squad speed-match clamp (wu/frame, 0 =
+	// none). No squad/formation layer feeds it yet — the velocity law
+	// already honours it so the order-layer block only has to set it.
+	commandedSpeed fixed.Fixed
+
 	Dead         bool
 	BuildPercent fixed.Fixed
 

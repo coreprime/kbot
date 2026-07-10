@@ -13,11 +13,55 @@ const (
 	atkEgress
 )
 
+// Aircraft flight is a behavioural stand-in (locomotion spec §10.7): the real
+// law is the drag/vertical-slew/steering-accel model of §6.1, a later block.
+// The stand-in keeps the sandbox's invented defaults and clamps, expressed on
+// the per-frame speed axis the rest of the sim now runs on. Air is not in the
+// ground-fidelity critical path.
+
+// airMaxSpeed / airTurnPerFrame / airAccel / airBrake are the stand-in's
+// per-frame kinematics: raw FBI values with fallback defaults for aircraft
+// whose FBI omits them, accel/brake clamped into the stand-in's flyable band
+// (the old per-second [8,240] / [12,400] wu/s² windows, ÷900 onto wu/frame²).
+func airMaxSpeed(m *UnitMeta) fixed.Fixed {
+	if m.MaxVelocity > 0 {
+		return m.MaxVelocity
+	}
+	return fixed.One
+}
+
+func airTurnPerFrame(m *UnitMeta) fixed.Fixed {
+	if m.TurnRate > 0 {
+		return m.TurnRate
+	}
+	return fixed.FromInt(600)
+}
+
+func airAccel(m *UnitMeta) fixed.Fixed {
+	a := m.Accel
+	if a <= 0 {
+		a = fixed.FromInt(1).Div(fixed.FromInt(20))
+	}
+	return fixed.Clamp(a,
+		fixed.FromInt(8).Div(fixed.FromInt(900)),
+		fixed.FromInt(240).Div(fixed.FromInt(900)))
+}
+
+func airBrake(m *UnitMeta) fixed.Fixed {
+	b := m.BrakeRate
+	if b <= 0 {
+		b = fixed.FromInt(1).Div(fixed.FromInt(10))
+	}
+	return fixed.Clamp(b,
+		fixed.FromInt(12).Div(fixed.FromInt(900)),
+		fixed.FromInt(400).Div(fixed.FromInt(900)))
+}
+
 // turnToward rotates the heading toward want (a TA-angle) at the unit's FBI
 // turn rate, never snapping past it.
 func turnToward(st *locoState, want fixed.Fixed, m *UnitMeta) {
 	dh := shortestArcFx(want - st.Heading)
-	step := perTick(m.turnRatePerSec())
+	step := airTurnPerFrame(m)
 	if dh.Abs() > step {
 		st.setHeading(st.Heading + fixed.FromInt(dh.Sign()).Mul(step))
 	} else {
@@ -30,15 +74,15 @@ func turnToward(st *locoState, want fixed.Fixed, m *UnitMeta) {
 // and closing gunships use.
 func flyForward(st *locoState, want fixed.Fixed, m *UnitMeta) {
 	turnToward(st, want, m)
-	target := m.maxSpeed()
+	target := airMaxSpeed(m)
 	s := st.Speed
 	if s < target {
-		s = fixed.Min(target, s+perTick(m.accel()))
+		s = fixed.Min(target, s+airAccel(m))
 	} else {
-		s = fixed.Max(target, s-perTick(m.brake()))
+		s = fixed.Max(target, s-airBrake(m))
 	}
 	st.Speed = fixed.Wrap32(s)
-	st.advance(perTick(s))
+	st.advance(s)
 }
 
 // attackManeuver flies an aircraft's attack pattern around the engagement at
@@ -85,11 +129,11 @@ func (u *Unit) attackManeuver(tx, tz, rangeF fixed.Fixed, bomberMode bool, passt
 		mdz := desZ - st.Pos.Z
 		md := fixed.Vec2{X: mdx, Z: mdz}.Len()
 		eps := fixed.FromFloat(1e-3)
-		step := fixed.Min(md, perTick(u.Meta.maxSpeed()))
+		step := fixed.Min(md, airMaxSpeed(u.Meta))
 		if md > eps {
 			st.Pos.X = fixed.Wrap32(st.Pos.X + mdx.Div(md).Mul(step))
 			st.Pos.Z = fixed.Wrap32(st.Pos.Z + mdz.Div(md).Mul(step))
-			st.Speed = u.Meta.maxSpeed()
+			st.Speed = airMaxSpeed(u.Meta)
 		} else {
 			st.Speed = 0
 		}

@@ -52,8 +52,33 @@ func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 		if err != nil {
 			return nil, nil
 		}
+		// The moveinfo.tdf class replaces the FBI's footprint and
+		// water/slope limits when the unit names one, matching the
+		// engines' load order.
+		games.ApplyMovementClass(meta, sess.simMoveClassTable())
 		return meta, nil
 	}
+}
+
+// simMoveClassTable lazily parses the game's gamedata/moveinfo.tdf into the
+// presence-aware class table the sim meta path resolves movement classes
+// through; nil when the VFS ships none.
+func (sess *Session) simMoveClassTable() games.MovementClasses {
+	sess.simMoveClassOnce.Do(func() {
+		for _, p := range []string{"gamedata/moveinfo.tdf", "gamedata/MOVEINFO.TDF", "GameData/moveinfo.tdf"} {
+			data, err := sess.vfs.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			classes, err := games.LoadMovementClasses(data)
+			if err != nil {
+				continue
+			}
+			sess.simMoveClasses = classes
+			return
+		}
+	})
+	return sess.simMoveClasses
 }
 
 // resolveWeaponSection adapts the studio VFS weapon loader to the meta

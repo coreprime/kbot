@@ -28,26 +28,33 @@ checks:
   - at: 151
     unit: flash
     observable: unit.speed
-    expect: 129762
+    expect: 128452
     label: one frame after stop order
     derivation: |
       FBI BrakeRate=0.02 -> trunc(0.02 * 65536) = 1310 raw wu/frame^2.
-      At the stop order speed = 0x20000 (top). Each subsequent frame:
-      speed -= 1310. speed(151) = 131072 - 1310 = 129762. An instant zero
-      here means the sim replaced the brake law with a hard stop.
+      An action at frame N applies before frame N runs (the same harness
+      convention the accel scenario's at:0 checks rely on), so frame 150
+      is the FIRST braking frame. At the order speed = 0x20000 (top);
+      speed(150) = 131072 - 1310, speed(151) = 131072 - 2*1310 = 128452.
+      (Original derivation put the first brake frame at 151 — an
+      off-by-one against the pinned action timing, corrected.) An
+      instant zero here means the sim replaced the brake law with a
+      hard stop.
   - at: 200
     unit: flash
     observable: unit.speed
-    expect: 65572
-    label: 50 frames into the brake ramp
+    expect: 64262
+    label: 51 frames into the brake ramp
     derivation: |
-      speed = 131072 - 50 * 1310 = 65572 raw (1.0005 wu/frame).
+      Brake frames 150..200 inclusive = 51 updates:
+      speed = 131072 - 51 * 1310 = 64262 raw (0.9806 wu/frame).
+      (Corrected with the first-brake-frame fix above.)
   - at: 251
     unit: flash
     observable: unit.speed
     expect: 0
-    label: stationary at frame 101 of braking
+    label: stationary within 102 frames of braking
     derivation: |
-      Frames to stop: ceil(131072 / 1310) = 101 (speed reaches 131072 -
-      100*1310 = 72 raw at frame 100, clamps to 0 on frame 101).
-      Sampled at stop+101 = frame 251.
+      Frames to stop from 0x20000: ceil(131072 / 1310) = 101 braking
+      updates, so speed clamps to 0 by frame 250 and stays 0 at the
+      frame-251 sample (first brake frame 150).

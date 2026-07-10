@@ -153,6 +153,7 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 	if err != nil {
 		return nil, err
 	}
+	moveClasses := loadMoveClasses(root)
 	rt := script.NewRuntime(sc.Seed)
 	metas := map[string]*sim.UnitMeta{}
 	programs := map[string]*script.Program{}
@@ -176,6 +177,10 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 			if err != nil {
 				return nil, nil, fmt.Errorf("unit %s: %w", name, err)
 			}
+			// The moveinfo.tdf class replaces the FBI's footprint and
+			// water/slope limits when the unit names one — exactly the way
+			// both engines resolve movement classes at load.
+			games.ApplyMovementClass(meta, moveClasses)
 			metas[key] = meta
 		}
 		prog, ok := programs[key]
@@ -340,6 +345,24 @@ func loadWeaponIndex(root string) (map[string]ta.Weapon, error) {
 		}
 	}
 	return out, nil
+}
+
+// loadMoveClasses parses gamedata/moveinfo.tdf under the root; nil (no class
+// resolution) when the game ships none.
+func loadMoveClasses(root string) games.MovementClasses {
+	path, err := findFile(root, filepath.Join("gamedata", "moveinfo.tdf"))
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	classes, err := games.LoadMovementClasses(data)
+	if err != nil {
+		return nil
+	}
+	return classes
 }
 
 // loadProgram compiles scripts/<name>.cob into a runnable program, nil when

@@ -44,6 +44,10 @@ type Session struct {
 	// MovementClass traversal profile through this.
 	moveClassOnce sync.Once
 	moveClassMap  map[string]*ta.MovementClass
+	// simMoveClasses is the presence-aware moveinfo parse the sim meta path
+	// resolves classes through (games.ApplyMovementClass), lazily loaded.
+	simMoveClassOnce sync.Once
+	simMoveClasses   games.MovementClasses
 
 	// map catalog + section/feature preview caches (api.go)
 	mapCatalog          *mapCatalogState

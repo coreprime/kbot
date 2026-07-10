@@ -15,7 +15,14 @@ import "github.com/coreprime/kbot/engine/fixed"
 // Everything is fixed-point over the stable insertion order — no floats, no
 // rng — so the passes are deterministic across server and predicting clients.
 // Aircraft fly above it all and are exempt. Body radii derive from the FBI
-// footprint (UnitMeta.collisionRadius). Map obstacles are a later layer.
+// footprint (UnitMeta.collisionRadius).
+//
+// Divergent stand-in: neither engine has body circles, push-apart or tangent
+// steering — occupancy is one unit id per 16 wu footprint cell, and a mover
+// whose next cell is claimed takes the locomotion blocked-slide. This whole
+// layer is scheduled to be replaced by footprint cell claims with the
+// passability block; the avoidance behaviours then re-emerge from the slide
+// plus the order layer.
 
 // avoidLookaheadWU caps how far ahead a mover scans for path blockers; beyond
 // it terrain steering would dominate anyway and the cost stays bounded.

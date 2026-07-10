@@ -48,7 +48,11 @@ func TestTAKRetailScriptFires(t *testing.T) {
 	}
 
 	w := New(Config{Seed: 31})
-	atk := w.AddUnit("araknigh", testMeta("araknigh"), bind, fixed.Vec2{}, 0, 0)
+	// Face the defender from the start (bearing 16384): the retail-script
+	// handshake is under test, and the TA:K body pivot now turns at the
+	// engines' turnrate>>3 per frame (locomotion spec UNKNOWN-14) — slower
+	// than the return fire that would otherwise kill the knight mid-pivot.
+	atk := w.AddUnit("araknigh", testMeta("araknigh"), bind, fixed.Vec2{}, 16384, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
 

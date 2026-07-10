@@ -237,21 +237,21 @@ func TestRepairResumesAbandonedFrame(t *testing.T) {
 	}
 }
 
-// TestSlopeScalePerTerrain pins the game-aware slope scale: a GROUND2-class
-// unit (MaxSlope 30) must climb a ~25-byte/cell step on a TA:K-scale heightmap
-// (SlopeScalePct 100 → effective 30) — the Athri-Cay island-edge case — yet
-// the same step is refused on a TA-scale grid (40 → effective 12).
-func TestSlopeScalePerTerrain(t *testing.T) {
-	// A 25-unit step up at cell x=10.
-	mk := func(scale int) *Terrain {
-		tr := testTerrain(40, 40, 0, func(cx, _ int) uint8 {
+// TestSlopeLegalityRaw pins the engines' slope legality (locomotion spec
+// §3.3): the cell-pair height delta compares RAW against the unit's raw
+// maxslope with a ≤ comparison — a delta exactly at maxslope is legal, one
+// above it is not. No per-map calibration exists; both games run the same
+// raw-byte rule (the old SlopeScalePct 40/100 scaling was a sandbox
+// invention, retired by the locomotion fidelity pass).
+func TestSlopeLegalityRaw(t *testing.T) {
+	// A step up at cell x=10 of the given height delta.
+	mk := func(delta uint8) *Terrain {
+		return testTerrain(40, 40, 0, func(cx, _ int) uint8 {
 			if cx >= 10 {
-				return 25
+				return delta
 			}
 			return 0
 		})
-		tr.SlopeScalePct = scale
-		return tr
 	}
 	m := footMeta("araking", 2, true)
 	m.MaxSlope = 30
@@ -259,12 +259,12 @@ func TestSlopeScalePerTerrain(t *testing.T) {
 	to := fixed.Vec2{X: fixed.FromInt(10*16 + 8), Z: fixed.FromInt(20 * 16)}
 
 	w := New(Config{Seed: 1})
-	w.SetTerrain(mk(100))
+	w.SetTerrain(mk(30))
 	if !w.canTraverse(m, from, to) {
-		t.Fatalf("TA:K scale (100): MaxSlope-30 unit should climb a 25-byte step")
+		t.Fatalf("delta 30 vs MaxSlope 30: exactly-at-limit must be legal (≤ comparison)")
 	}
-	w.SetTerrain(mk(40))
+	w.SetTerrain(mk(31))
 	if w.canTraverse(m, from, to) {
-		t.Fatalf("TA scale (40): a 25-byte step exceeds the 12-effective limit, should be refused")
+		t.Fatalf("delta 31 vs MaxSlope 30: above the limit must be refused")
 	}
 }

@@ -1,0 +1,53 @@
+# TA turning under way: turning is unconditional and there is NO thrust
+# fade by heading error — a unit ordered directly behind itself keeps
+# accelerating while it comes about; only the §1.2 turn-hardness brake
+# test (far from biting at this distance) could shed speed.
+# Ground truth: locomotion spec §2 (turn law), §1.2 (no coast, no fade).
+name: ta-loco-turn-thrust
+game: ta
+system: locomotion
+spec: locomotion.md §2, §1.2
+description: >-
+  ARMFLASH facing +Z is ordered to a point 2800 wu directly BEHIND it.
+  The engine turns at the full 475/frame clamp AND applies +Acceleration
+  every frame (the turn-hardness test passes at this distance), so the
+  tank sweeps a curve at growing speed. A sim with a thrust fade or a
+  pivot-in-place state reads speed 0 here.
+seed: 1
+duration: 40
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 3000]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [200, 200]    # bearing ~32768: directly astern
+checks:
+  - at: 20
+    unit: flash
+    observable: unit.heading
+    expect: 9500
+    label: full-rate turn while the error is saturated
+    derivation: |
+      Bearing to a target dead astern is ~32768 (the integer atan2 of a
+      pure -Z delta); the wrapped error stays far above TurnRate=475 for
+      the whole window, so each frame turns exactly +475:
+      heading(20) = 20 * 475 = 9500. The unit's own curved motion moves
+      the bearing by well under one turn step at this range.
+  - at: 30
+    unit: flash
+    observable: unit.speed
+    expect: 33420
+    label: full thrust while turning hard
+    derivation: |
+      Every frame passes both go-tests, so speed(k) = 1114k and
+      speed(30) = 33420 raw (0.51 wu/frame). Worst case at frame 30:
+      turnQty = speed*|err|/turnrate = 32306 * 18992 / 475 ~= 1,291,590
+      raw (19.7 wu) -> 4*hi32(turnQty^2) = 1552 < hi32(dist^2) ~= 7.7e6
+      (dist ~2790 wu), and brakeDist ~6 wu << dist. Any speed below
+      33420 means an invented heading-error thrust fade or turn-radius
+      slowdown survived.

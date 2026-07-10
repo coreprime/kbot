@@ -6,10 +6,12 @@ game: ta
 system: locomotion
 spec: locomotion.md §3.1, §3.2
 description: >-
-  ARMFLASH climbs a uniform ramp rising 7 height units per 16-wu cell
-  (height scale 0.5 -> 3.5 wu rise per cell, pitch 12.3 deg = 2246 angle
-  units = band +1). The engine caps speed at MaxVelocity * 75 / 100 on
-  band +1. The scenario measures the steady climb speed.
+  ARMFLASH climbs a uniform ramp rising 7 height units per 16-wu cell.
+  The engine's pitch mixes RAW heightmap units with wu runs (its sim Y
+  axis IS the height-byte scale), so the 2x2 footprint reads a 14-unit
+  front/back delta over 32 wu: pitch 23.6 deg = 4301 angle units =
+  band +2 -> speed cap MaxVelocity * 50 / 100. The scenario measures
+  the steady climb speed.
 seed: 1
 duration: 240
 terrain:
@@ -35,15 +37,22 @@ checks:
   - at: 200
     unit: flash
     observable: unit.speed
-    expect: 98304
-    label: steady climb speed on pitch band +1
+    expect: 65536
+    label: steady climb speed on pitch band +2
     derivation: |
-      Ramp: 7 height units per cell * 0.5 wu/unit = 3.5 wu rise per 16 wu
-      run -> pitch = atan2(3.5, 16) = 12.34 deg = 2246 TA-angle units.
-      Band = 2246 >> 11 = +1 -> slope table 75%.
-      cap = MaxVelocity 0x20000 * 75 / 100 = 98304 raw (1.5 wu/frame).
-      Flash reaches any cap <= 98304 by frame ceil(98304/1114) = 89, so
-      frame 200 samples the steady state. A zero here means the sim's
-      terrain legality refuses the climb outright; any other value is its
+      The engine sim Y axis is the raw heightmap unit: a unit's integer Y
+      compares directly against the map sea-level byte, and the footprint
+      corners sample the raw byte grid — no render scale enters the sim.
+      (The original derivation scaled heights by the 0.5 render factor
+      before the atan2, halving the pitch — a unit error, corrected.)
+      Ramp: 7 height units per 16-wu cell; ARMFLASH footprint is 2x2
+      cells (movementclass TANKSH2), so front/back corners 32 wu apart
+      read a delta of 32 * 7/16 = 14 units.
+      pitch = atan2(14, 32) = 23.63 deg = 4301 TA-angle units.
+      Band = 4301 >> 11 = +2 -> slope table 50%.
+      cap = MaxVelocity 0x20000 * 50 / 100 = 65536 raw (1.0 wu/frame).
+      Flash reaches the cap by frame ceil(65536/1114) = 59, so frame 200
+      samples the steady state. A zero here means the sim's terrain
+      legality refuses the climb outright; any other value is its
       substitute slope model.
     missing_if_zero: true

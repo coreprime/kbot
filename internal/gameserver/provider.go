@@ -23,6 +23,9 @@ type fbiProvider struct {
 	units   map[string]*sim.UnitMeta // lower-cased name -> meta (nil = known-missing)
 	weapons map[string]ta.Weapon     // upper-cased section key -> weapon
 	loaded  bool
+	// moveinfo.tdf movement classes, loaded with the weapons index; a unit's
+	// FBI movementclass resolves through them at meta build.
+	moveClasses games.MovementClasses
 }
 
 // newFBIProvider builds a provider rooted at a flattened asset directory.
@@ -91,6 +94,10 @@ func (p *fbiProvider) loadUnit(name string) *sim.UnitMeta {
 	if err != nil {
 		return nil
 	}
+	// The moveinfo.tdf class replaces the FBI's footprint and water/slope
+	// limits when the unit names one, matching the engines' load order.
+	p.ensureWeapons()
+	games.ApplyMovementClass(m, p.moveClasses)
 	return m
 }
 
@@ -110,6 +117,13 @@ func (p *fbiProvider) ensureWeapons() {
 	}
 	p.loaded = true
 	p.weapons = make(map[string]ta.Weapon)
+	if path := p.findFile(filepath.Join("gamedata", "moveinfo.tdf")); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			if classes, err := games.LoadMovementClasses(data); err == nil {
+				p.moveClasses = classes
+			}
+		}
+	}
 	dir := p.findFile("weapons")
 	if dir == "" {
 		return

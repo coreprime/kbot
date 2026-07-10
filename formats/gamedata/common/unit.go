@@ -51,6 +51,8 @@ type UnitInfoBase struct {
 	BankScale           float64 `tdf:"bankscale,omitempty"`  // Assuming float, due to name/usage
 	PitchScale          float64 `tdf:"pitchscale,omitempty"` // Assuming float, due to name/usage
 	Upright             int     `tdf:"upright,omitempty"`
+	MoveRate1           float64 `tdf:"moverate1,omitempty"` // walk-anim tier threshold, wu/frame
+	MoveRate2           float64 `tdf:"moverate2,omitempty"`
 
 	// Aircraft.
 	CanFly    int     `tdf:"canfly,omitempty"`

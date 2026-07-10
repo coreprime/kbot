@@ -793,7 +793,7 @@ func (w *World) stepAircraftAttack(u *Unit) {
 	bomberMode := wm.Dropped
 	var passthrough fixed.Fixed
 	if bomberMode {
-		_, halfRun := bombRunGeometry(u.loco.Speed, wm)
+		_, halfRun := bombRunGeometry(u.loco.Speed.Mul(fxTickHz), wm)
 		passthrough = fixed.Min(fixed.FromInt(600), halfRun+fixed.FromInt(30))
 	}
 
@@ -927,7 +927,7 @@ func (u *Unit) inBombDropWindow(slot int, wm WeaponMeta, targetPos fixed.Vec2) b
 	if u.bombRunActive && u.bombRunSlot == slot {
 		return true
 	}
-	_, halfRun := bombRunGeometry(u.loco.Speed, wm)
+	_, halfRun := bombRunGeometry(u.loco.Speed.Mul(fxTickHz), wm)
 	return u.loco.Pos.DistTo(targetPos) <= halfRun
 }
 
@@ -945,7 +945,6 @@ func (w *World) stepMovement(u *Unit) {
 		// the unit walks its smoothed waypoints. Local avoidance below layers
 		// dynamic-unit detours on top of the current waypoint.
 		w.ensurePath(u)
-		goal := u.currentGoal()
 		// Wedge recovery: an ordered unit that makes no NET progress across
 		// ticks is pinned (a pushback or the terrain blocked-step revert
 		// cancelling its step). Measured at tick ENTRY so the cancellation is
@@ -979,75 +978,37 @@ func (w *World) stepMovement(u *Unit) {
 			u.stallTicks = 0
 		}
 		u.progressPos = u.loco.Pos
+		// Intermediate waypoints complete within the engines' ~5-cell consume
+		// radius; the 80 wu pull-in below corner-cuts toward the next one —
+		// together they are what smooths raw waypoint chains (the engines
+		// have no smoothing pass).
+		w.consumeWaypoints(u)
+		goal := u.currentGoal()
 		steer := w.avoidanceTarget(u, goal)
-		prePos := u.loco.Pos
-		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta)
-		u.IsMoving = moving
-		// Climb slowdown: rising ground bleeds speed in proportion to its
-		// steepness relative to the unit's slope limit — a tank labours up
-		// a hill a spider skips over. Descents and flats run free.
-		if w.terrain != nil && u.IsMoving {
-			rise := w.groundHeight(u.loco.Pos) - w.groundHeight(prePos)
-			run := u.loco.Pos.DistTo(prePos)
-			if rise > 0 && run > 0 {
-				// Steepness in height units per cell width, against the unit's
-				// scaled climb limit (same limit traversal + pathing use).
-				maxSlope := effectiveMaxSlope(u.Meta, w.slopeScalePct())
-				steep := rise.Mul(w.terrain.CellWU).Div(run).Div(fixed.FromInt(maxSlope))
-				mul := fixed.FromInt(1) - fixed.Clamp(steep, 0, fixed.FromInt(1)).Mul(fixed.FromFloat(0.55))
-				cap := u.Meta.maxSpeed().Mul(mul)
-				if cap > 0 && u.loco.Speed > cap {
-					u.loco.Speed = cap
-				}
+		var next *fixed.Vec2
+		if steer == goal && u.pathEligible() && u.pathIdx+1 < len(u.path) {
+			nv := u.path[u.pathIdx+1]
+			next = &nv
+		}
+		w.stepGroundToward(u, steer, next)
+		u.IsMoving = u.walkTier() > 0
+		// Final arrival: only against the true destination, never a detour
+		// point (the avoidance layer re-steers every tick on its own).
+		if steer == goal && u.goalIsFinal() && arrivedFinal(&u.loco, goal) {
+			u.hasMove = false
+			u.avoidFlip = false
+			u.stallTicks = 0
+			u.clearPath()
+			// A completed patrol leg re-queues itself at the tail, so N
+			// consecutive patrol commands loop the route indefinitely.
+			if u.curIsPatrol {
+				u.enqueue(queuedCommand{kind: order.KindPatrol, target: u.moveTarget})
 			}
-		}
-		// Terrain legality: a step onto ground the unit cannot traverse
-		// (climb too steep for its class, too deep, dry land for a ship) is
-		// refused — the unit holds at the boundary and recomputes its route,
-		// since the path either didn't foresee this (a dynamic shove off it)
-		// or there is no path. The stall detector drops the order if no route
-		// out exists.
-		if !arrived && w.terrain != nil && !w.canStepLoco(u.Meta, prePos, u.loco.Pos) && w.canStand(u.Meta, prePos) {
-			// A step onto un-traversable ground is refused — but KEEP the path and
-			// just hold at the boundary. The locomotion keeps turning toward the
-			// waypoint, so over the next ticks the approach straightens and the
-			// step (which the path validated as walkable cell-to-cell) becomes
-			// traversable again — the unit was only clipping a cell on a turning
-			// curve. Nulling + recomputing here every tick instead thrashed the
-			// pathfinder and stranded the unit mid-climb. A genuine dead-end is
-			// still caught by the stall detector above (no NET progress → retry,
-			// then abandon).
-			u.loco.Pos = prePos
-			u.loco.Speed = 0
-			u.IsMoving = false
-		}
-		if arrived {
-			if steer != goal {
-				// Reached a dynamic-avoidance detour point beside a mover —
-				// keep driving toward the waypoint.
-				u.IsMoving = true
-			} else if !u.goalIsFinal() {
-				// Reached an intermediate path waypoint — advance to the next.
-				u.pathIdx++
-				u.IsMoving = true
-			} else {
-				// Final arrival.
-				u.hasMove = false
-				u.IsMoving = false
-				u.avoidFlip = false
-				u.stallTicks = 0
-				u.clearPath()
-				// A completed patrol leg re-queues itself at the tail, so N
-				// consecutive patrol commands loop the route indefinitely.
-				if u.curIsPatrol {
-					u.enqueue(queuedCommand{kind: order.KindPatrol, target: u.moveTarget})
-				}
-				// A player move completing starts the next shift-queued order. A
-				// chase move (stepAttack walking into range) arrives with hasAttack
-				// still set — the attack is the active order, so its queue waits.
-				if !u.hasAttack {
-					w.advanceQueue(u)
-				}
+			// A player move completing starts the next shift-queued order. A
+			// chase move (stepAttack walking into range) arrives with hasAttack
+			// still set — the attack is the active order, so its queue waits.
+			if !u.hasAttack {
+				w.advanceQueue(u)
 			}
 		}
 	} else if u.Meta.IsAircraft && u.atkActive && u.Meta.CanMove {
@@ -1056,6 +1017,12 @@ func (w *World) stepMovement(u *Unit) {
 		// plain else below would zero speed, restarting the maneuver from a
 		// standstill so the aircraft could never accelerate or fly its arc.
 		u.IsMoving = true
+	} else if u.Meta.CanMove && !u.Meta.IsAircraft {
+		// No steering target: the engines brake to a stop rather than
+		// halting — the unit coasts through its brake ramp along its
+		// heading until the ≥0 clamp lands.
+		w.stepGroundIdle(u)
+		u.IsMoving = u.walkTier() > 0
 	} else {
 		u.IsMoving = false
 		u.loco.Speed = 0
@@ -1082,15 +1049,14 @@ func (w *World) stepMovement(u *Unit) {
 	w.announceMotion(u, wasMoving)
 }
 
-// announceMotion fires the COB transitions and render events for a change of
-// the unit's motion flag since wasMoving, then publishes the CURRENT_SPEED
-// port. Shared by the order-driven locomotion and the replay motion pin, so
-// walk cycles start and stop through one code path however motion is decided.
+// announceMotion drives the walk-animation contract (§7) plus the render
+// move events. Shared by the order-driven locomotion and the replay motion
+// pin, so walk cycles start and stop through one code path however motion is
+// decided.
 func (w *World) announceMotion(u *Unit, wasMoving bool) {
+	// Render event stream + the TA:K flier takeoff/landing announcements ride
+	// the coarse moving flag's edges.
 	if u.IsMoving && !wasMoving {
-		if u.binding != nil && u.binding.HasScript("StartMoving") {
-			u.binding.Start("StartMoving")
-		}
 		// TA:K fliers have no StartMoving: the engine announces takeoff via
 		// BeginFlight and marks the unit airborne through setSFXoccupy(5) —
 		// the state the dragons' FlightControl loop gates its wing-flap
@@ -1103,9 +1069,6 @@ func (w *World) announceMotion(u *Unit, wasMoving bool) {
 		}
 		w.emit(frame.Event{Kind: frame.EvMoveStart, UnitID: u.ID})
 	} else if !u.IsMoving && wasMoving {
-		if u.binding != nil && u.binding.HasScript("StopMoving") {
-			u.binding.Start("StopMoving")
-		}
 		// TA:K fliers: announce the landing sequence and drop the airborne
 		// occupation state so the flap loop folds the wings.
 		if u.binding != nil && u.binding.HasScript("BeginLanding") {
@@ -1117,14 +1080,45 @@ func (w *World) announceMotion(u *Unit, wasMoving bool) {
 		w.emit(frame.Event{Kind: frame.EvMoveStop, UnitID: u.ID})
 	}
 
-	// TA:K units have no StartMoving/StopMoving: their MoveWatcher loop polls
-	// the CURRENT_SPEED port to switch the walk gait on and off. Publish the
-	// unit's speed (world units/sec) so those loops observe real motion; the
-	// scripts gate on small thresholds (> 5), which a walking unit clears by
-	// an order of magnitude.
-	if p, ok := u.binding.(CobPorts); ok {
-		p.SetUnitValuePort(cobPortCurrentSpeed, int32(u.loco.Speed.Int()))
+	// Walk-anim tier (§7): 0 while blocked or fully at rest (speed 0 AND not
+	// turning — pivoting in place counts as moving), else 1..3 against the
+	// MoveRate1/2 thresholds. Emission is strictly transition-edged, and the
+	// dialect decides the calls: TA fires StartMoving/StopMoving/MoveRate1-3,
+	// TA:K a single parameterised MoveRate(tier); TA:K additionally notifies
+	// TurnDirection on any turn start/stop/sign flip.
+	tier := u.walkTier()
+	if tier != int(u.motionTier) {
+		u.motionConvention().announceTier(u.binding, int(u.motionTier), tier)
+		u.motionTier = uint8(tier)
 	}
+	u.motionConvention().announceTurn(u)
+
+	// CURRENT_SPEED publishes in world units per SECOND: the TA:K MoveWatcher
+	// loops gate their walk on `get CURRENT_SPEED > 5`, which only works on a
+	// per-second scale (a swordsman's 1.1 wu/frame reads 33) — the engine's
+	// own scaling of this read is UNKNOWN-4; wu/sec satisfies the verified
+	// script contract.
+	if p, ok := u.binding.(CobPorts); ok {
+		p.SetUnitValuePort(cobPortCurrentSpeed, int32(u.loco.Speed.Mul(fxTickHz).Int()))
+	}
+}
+
+// walkTier computes the unit's walk-animation tier (§7.1): tier 0 for a
+// blocked slide or full rest, else 1 plus one per MoveRate threshold the
+// per-frame speed strictly exceeds.
+func (u *Unit) walkTier() int {
+	st := &u.loco
+	if st.Blocked || (st.Speed == 0 && st.Turn == 0) {
+		return 0
+	}
+	t := 1
+	if st.Speed > u.Meta.moveRate1() {
+		t = 2
+	}
+	if st.Speed > u.Meta.moveRate2() {
+		t = 3
+	}
+	return t
 }
 
 // stepPinnedMovement drives a unit whose motion flag is pinned by a replay
@@ -1142,7 +1136,7 @@ func (w *World) stepPinnedMovement(u *Unit) {
 	u.IsMoving = moving
 	if moving {
 		if u.loco.Speed > 0 {
-			u.loco.advance(perTick(u.loco.Speed))
+			u.loco.advance(u.loco.Speed)
 		}
 	} else {
 		u.loco.Speed = 0
@@ -1186,6 +1180,12 @@ func portValue(u *Unit, port int) int32 {
 
 // TA:K setSFXoccupy states. The retail scripts only test airborne (5); the
 // grounded value just needs to differ so the flight loops disengage.
+//
+// Ground/naval water occupation states (0 idle, 1 shallow, 2 at waterline,
+// 3 submerged past waterline, 4 above water) exist in both engines, but the
+// spec pins only the value list — the exact depth comparisons behind them
+// are unverified, so emitting them waits on that detail rather than guessing
+// a mapping the unit scripts would act on.
 const (
 	takOccupyLand = 1
 	takOccupyAir  = 5
@@ -1373,7 +1373,7 @@ func (w *World) stepWeapons(u *Unit) {
 		// thread are preserved so the reload cadence holds.
 		if wm.Dropped && u.Meta.IsAircraft {
 			if !u.bombRunActive {
-				bombs, _ := bombRunGeometry(u.loco.Speed, wm)
+				bombs, _ := bombRunGeometry(u.loco.Speed.Mul(fxTickHz), wm)
 				src := s.source
 				if src == "" {
 					src = "attack"
@@ -1453,8 +1453,8 @@ func (w *World) faceWeaponTarget(u *Unit, targetPos fixed.Vec2) bool {
 	want := fixed.FromInt(int(fixed.Atan2(d.X, d.Z)))
 	if !u.IsMoving {
 		dh := shortestArcFx(want - u.loco.Heading)
-		turnStep := perTick(u.Meta.turnRatePerSec())
-		if dh.Abs() > turnStep {
+		turnStep := fixed.FromInt(int(w.turnPerFrame(u)))
+		if turnStep > 0 && dh.Abs() > turnStep {
 			u.loco.setHeading(u.loco.Heading + fixed.FromInt(dh.Sign()).Mul(turnStep))
 		} else {
 			u.loco.setHeading(want)

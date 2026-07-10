@@ -258,6 +258,11 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 			if !w.canTraverse(m, cc, ncentre) {
 				continue
 			}
+			// Step costs 10/14 with the octile heuristic — the sandbox
+			// stand-in pending the passability block, which brings the
+			// engines' exact costs (orth 0x10, diag 0x16 TA / 0x17 TA:K,
+			// heuristic unresolved) together with the per-class blocker
+			// raster and its penalty tier.
 			step := int32(10)
 			if diag {
 				step = 14
@@ -277,8 +282,13 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 		return nil
 	}
 
-	// Reconstruct start→goal cell chain, then smooth it with line-of-sight
-	// string-pulling so the unit walks long straight legs, not a staircase.
+	// Reconstruct the start→goal cell chain and return it DENSE — one
+	// waypoint per path cell, the engines' contract (a 64-entry ring in the
+	// real pathfinders, unbounded here). There is no smoothing pass: smooth
+	// motion is emergent from the mover's 80 wu aim pull-in and its ~5-cell
+	// waypoint consume radius, both of which assume adjacent waypoints are
+	// never more than a cell apart (a sparse smoothed chain would let the
+	// consume radius jump the steering target across a wall corner).
 	var chain []fixed.Vec2
 	for i := goalIdx; i != -1; i = ps.parent[i] {
 		chain = append(chain, centre(int(i)%W, int(i)/W))
@@ -290,88 +300,16 @@ func (w *World) findPath(m *UnitMeta, from, to fixed.Vec2) []fixed.Vec2 {
 	for l, r := 0, len(chain)-1; l < r; l, r = l+1, r-1 {
 		chain[l], chain[r] = chain[r], chain[l]
 	}
-	chain[0] = from
-	chain[len(chain)-1] = to
-	if !w.canStand(m, to) {
-		chain[len(chain)-1] = centre(gx, gz)
+	if w.canStand(m, to) {
+		chain[len(chain)-1] = to
 	}
-	return w.smoothPath(m, chain, blocked)
-}
-
-// smoothPath string-pulls the cell chain: keep a waypoint only where the
-// straight line from the last kept anchor to the next point is not clear.
-// Drops the start (the unit is already there); always keeps the final point.
-func (w *World) smoothPath(m *UnitMeta, chain []fixed.Vec2, blocked func(cx, cz int) bool) []fixed.Vec2 {
-	if len(chain) <= 2 {
-		return chain[1:]
-	}
-	out := make([]fixed.Vec2, 0, 8)
-	anchor := 0
-	for i := 2; i < len(chain); i++ {
-		if !w.lineClear(m, chain[anchor], chain[i], blocked) {
-			out = append(out, chain[i-1])
-			anchor = i - 1
-		}
-	}
-	out = append(out, chain[len(chain)-1])
-	return out
-}
-
-// lineClear reports whether the straight segment a→b is fully traversable —
-// sampled at half-cell steps against directional slope, water/void, and the
-// building-blocked grid.
-func (w *World) lineClear(m *UnitMeta, a, b fixed.Vec2, blocked func(cx, cz int) bool) bool {
-	t := w.terrain
-	half := t.CellWU.Div(fixed.FromInt(2))
-	centre := func(cx, cz int) fixed.Vec2 {
-		return fixed.Vec2{X: fixed.FromInt(cx).Mul(t.CellWU) + half, Z: fixed.FromInt(cz).Mul(t.CellWU) + half}
-	}
-	d := b.Sub(a)
-	l := d.Len()
-	// Walk the segment cell-by-cell. Sampling at a quarter cell (rather than a
-	// half) means no cell the line crosses is skipped, and each cell change is
-	// validated cell-to-cell — with the A* diagonal corner rule — exactly as
-	// the A* expansion does. The old half-cell sampling could thread between
-	// cells and approve a smoothed leg the per-tick locomotion then refused (a
-	// corner cut across a cliff edge), leaving the unit reverting in place and
-	// dropping its order half-way up a hill.
-	stepLen := t.CellWU.Div(fixed.FromInt(4))
-	n := l.Div(stepLen).Int()
-	if n < 1 {
-		n = 1
-	}
-	pcx, pcz := a.X.Div(t.CellWU).Int(), a.Z.Div(t.CellWU).Int()
-	for i := 1; i <= n; i++ {
-		f := fixed.FromInt(i).Div(fixed.FromInt(n))
-		p := fixed.Vec2{X: a.X + d.X.Mul(f), Z: a.Z + d.Z.Mul(f)}
-		cx, cz := p.X.Div(t.CellWU).Int(), p.Z.Div(t.CellWU).Int()
-		if cx == pcx && cz == pcz {
-			continue
-		}
-		if cx < 0 || cz < 0 || cx >= t.W || cz >= t.H || blocked(cx, cz) {
-			return false
-		}
-		cc := centre(pcx, pcz)
-		if cx != pcx && cz != pcz {
-			// Diagonal cell step — both shared orthogonal cells must be open and
-			// traversable, so the line can't slip across a cliff corner.
-			if blocked(pcx, cz) || blocked(cx, pcz) {
-				return false
-			}
-			if !w.canTraverse(m, cc, centre(pcx, cz)) || !w.canTraverse(m, cc, centre(cx, pcz)) {
-				return false
-			}
-		}
-		if !w.canTraverse(m, cc, centre(cx, cz)) {
-			return false
-		}
-		pcx, pcz = cx, cz
-	}
-	return true
+	return chain[1:]
 }
 
 // nearestOpenCell spirals outward from (gx,gz) for the closest standable,
 // unblocked cell — used to snap a goal that landed on a building or in water.
+// Divergent stand-in: the engines run a boundary-trace (wall-following)
+// fallback here instead; it arrives with the passability block.
 func (w *World) nearestOpenCell(m *UnitMeta, gx, gz int, blocked func(cx, cz int) bool, centre func(cx, cz int) fixed.Vec2, inb func(cx, cz int) bool) (int, int, bool) {
 	for r := 1; r <= 10; r++ {
 		for cz := gz - r; cz <= gz+r; cz++ {

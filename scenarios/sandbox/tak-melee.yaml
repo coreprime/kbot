@@ -23,7 +23,10 @@ units:
     type: arasword
     side: 0
     pos: [200, 200]
-    heading: 0
+    heading: 16384   # facing the victim: the derivation's close-and-swing
+                     # timeline assumes no turn phase (turnrate semantics
+                     # are locomotion UNKNOWN-14; a 90-degree pivot under
+                     # the >>3 reading alone would eat the check window)
   - alias: victim
     type: arasword
     side: 1

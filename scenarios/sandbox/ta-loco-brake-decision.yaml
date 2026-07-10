@@ -1,0 +1,63 @@
+# TA brake decision: the stopping-distance test flips accel -> brake one
+# frame before the unit could no longer stop in time — never later.
+# Ground truth: locomotion spec §1.2 (brakeDist = v²/(2b), both sides
+# compared as the HIGH dwords of 64-bit squares), §9.1.
+name: ta-loco-brake-decision
+game: ta
+system: locomotion
+spec: locomotion.md §1.2, §9.1
+description: >-
+  ARMFLASH drives at a waypoint 600 wu dead ahead on flat ground. It must
+  hold full speed until the exact frame the squared stopping-distance test
+  fails, then ride the -BrakeRate ramp with no re-acceleration chatter.
+seed: 1
+duration: 340
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [200, 800]    # 600 wu ahead
+checks:
+  - at: 309
+    unit: flash
+    observable: unit.speed
+    expect: 131072
+    label: still at full speed one frame before the brake point
+    derivation: |
+      Accel phase: speed(k) = 1114k, clamped to 0x20000 on frame 118;
+      travelled(117) = 1114 * (117*118/2) = 1114 * 6903 = 7,689,942 raw.
+      Cruise: travelled(n) = 7,689,942 + (n-117) * 131072 for n >= 118.
+      Stopping distance at top speed: bd = ((131072^2 >> 16) << 16) /
+      (2*1310) = 6,557,201 raw (100.05 wu); hi32(bd^2) = 10010 wu^2.
+      Frame n's decision uses dist = 39,321,600 - travelled(n-1):
+      frame 309 sees dist = 6,596,906 -> hi32(dist^2) = 10132 > 10010,
+      so it still accelerates (clamped back to the cap): speed = 131072.
+  - at: 310
+    unit: flash
+    observable: unit.speed
+    expect: 129762
+    label: first braking frame lands exactly at the spec boundary
+    derivation: |
+      Frame 310 sees dist = 39,321,600 - travelled(309) = 6,465,834 ->
+      hi32(dist^2) = 9733 <= 10010 = hi32(bd^2): the squared
+      stopping-distance test fails for the first time and the frame
+      applies -BrakeRate: speed = 131072 - 1310 = 129762. A later first
+      brake frame means the sim overshoots; an earlier one means it
+      brakes too conservatively.
+  - at: 312
+    unit: flash
+    observable: unit.speed
+    expect: 127142
+    label: brake ramp holds (no accel chatter)
+    derivation: |
+      After the first brake frame the stopping distance shrinks with v^2
+      while dist shrinks only by v per frame, and the test keeps failing:
+      frame 311: bd = 6,426,780 vs dist = 6,336,072 -> brake;
+      frame 312: bd = 6,297,659 vs dist = 6,207,620 -> brake.
+      speed(312) = 131072 - 3 * 1310 = 127142.

@@ -1,0 +1,51 @@
+# TA underwater speed: a submerged ground unit runs at exactly half its
+# slope-band cap; canhover/floater are exempt, amphibious is NOT.
+# Ground truth: locomotion spec §1.1 (cap × 0x8000 >> 16 when the unit's
+# integer Y sits below the map sea-level byte), §3.4.
+name: ta-loco-underwater
+game: ta
+system: locomotion
+spec: locomotion.md §1.1, §3.4
+description: >-
+  ARMFLASH fords flat ground 10 height units below sea level (within its
+  TANKSH2 class MaxWaterDepth 12). Flat pitch keeps the slope cap at
+  MaxVelocity; the underwater rule halves it, so the tank tops out at
+  exactly 1.0 wu/frame.
+seed: 1
+duration: 120
+terrain:
+  width: 64
+  height: 64
+  cell_wu: 16
+  height_scale: 0.5
+  sea_level: 10
+  base_height: 0
+units:
+  - alias: flash
+    type: armflash
+    side: 0
+    pos: [200, 200]
+    heading: 0
+actions:
+  - at: 0
+    do: move
+    unit: flash
+    to: [200, 900]
+checks:
+  - at: 100
+    unit: flash
+    observable: unit.speed
+    expect: 65536
+    label: half-speed cap while submerged
+    derivation: |
+      The unit's Y rides the terrain at raw height 0, and 0 < sea-level
+      byte 10, so it counts as underwater (§1.1 compares the integer Y
+      against the sea-level byte — raw height units, no render scale).
+      ARMFLASH carries neither canhover nor floater (the only exemptions;
+      its amphibious-capable class does not exempt it), so the flat-band
+      cap halves: cap = (0x20000 * 100/100 * 0x8000) >> 16 = 65536 raw
+      (1.0 wu/frame). speed reaches the cap by frame ceil(65536/1114) =
+      59 and holds; frame 100 samples the steady state. 131072 here means
+      the underwater rule is missing; a refusal to enter the shallows
+      (speed 0) means the depth window ignored the movement class.
+    missing_if_zero: true

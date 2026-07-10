@@ -19,8 +19,9 @@ var transportPickupWU = fixed.FromInt(24)
 // it nears its pickup or drop point — at cruise speed a hover transport's
 // turn radius overshoots the target and it circles for laps.
 var (
-	transportApproachWU    = fixed.FromInt(160)
-	transportApproachSpeed = fixed.FromInt(70)
+	transportApproachWU = fixed.FromInt(160)
+	// 70 wu/sec on the per-frame speed axis.
+	transportApproachSpeed = fixed.FromInt(70).Div(fxTickHz)
 )
 
 // isTransport reports whether the unit can carry passengers.

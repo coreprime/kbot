@@ -50,11 +50,7 @@ type sandboxMapJSON struct {
 	H           int     `json:"h"`
 	CellWU      float64 `json:"cellWU"`
 	HeightScale float64 `json:"heightScale"`
-	// SlopeScalePct scales unit MaxSlope onto this heightmap's per-cell delta
-	// scale (see sim.Terrain). TA's coarse attribute grid → 40; TA:K's native,
-	// far steeper heightmap → 100, or its GROUND units can't climb island edges.
-	SlopeScalePct int `json:"slopeScalePct"`
-	SeaLevel      int `json:"seaLevel"`
+	SeaLevel    int     `json:"seaLevel"`
 	WorldW      float64 `json:"worldW"` // world units
 	WorldH      float64 `json:"worldH"`
 	// Heights is the raw row-major heightmap bytes, base64-encoded.
@@ -92,20 +88,13 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TA:K's native heightmap runs ~2.5x steeper per cell than TA's attribute
-	// grid, so it takes MaxSlope at full scale; TA keeps the 2/5 calibration.
-	slopeScalePct := 40
-	if m.IsTAK {
-		slopeScalePct = 100
-	}
 	out := sandboxMapJSON{
-		Path:          mapPath,
-		Name:          strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath)),
-		CellWU:        sandboxCellWU,
-		HeightScale:   sandboxHeightScale,
-		SlopeScalePct: slopeScalePct,
-		TextureURL:    "/api/studio/sandbox-map-texture?path=" + mapPath,
-		MinimapURL:    "/api/studio/minimap/" + mapPath,
+		Path:        mapPath,
+		Name:        strings.TrimSuffix(path.Base(mapPath), path.Ext(mapPath)),
+		CellWU:      sandboxCellWU,
+		HeightScale: sandboxHeightScale,
+		TextureURL:  "/api/studio/sandbox-map-texture?path=" + mapPath,
+		MinimapURL:  "/api/studio/minimap/" + mapPath,
 	}
 	var heights []byte
 	if m.IsTAK {

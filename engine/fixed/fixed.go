@@ -128,8 +128,27 @@ func isqrt(n int64) int64 {
 	return x
 }
 
-// Hypot returns sqrt(x*x + y*y) without the intermediate overflowing for the
-// coordinate magnitudes the sim uses.
+// Hypot returns sqrt(x*x + y*y), computed on the raw 64-bit sum of squares so
+// no low bits are shed before the root (a Q16.16 pre-shift would truncate and
+// read one raw unit short on exact distances — the engines compute move
+// distances through the FPU, which keeps them exact at this scale). The
+// uint64 sum cannot overflow for any pair of 32-bit-wrapped coordinates.
 func Hypot(x, y Fixed) Fixed {
-	return (x.Mul(x) + y.Mul(y)).Sqrt()
+	xx, yy := int64(x), int64(y)
+	s := uint64(xx*xx) + uint64(yy*yy)
+	return Fixed(usqrt(s))
+}
+
+// usqrt is the integer square root (floor) of a uint64.
+func usqrt(n uint64) int64 {
+	if n == 0 {
+		return 0
+	}
+	x := n
+	y := (x + 1) >> 1
+	for y < x {
+		x = y
+		y = (x + n/x) >> 1
+	}
+	return int64(x)
 }

@@ -318,7 +318,11 @@ func TestTAKWeaponConvention(t *testing.T) {
 		}},
 		readyAfterAims: 1,
 	}
-	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 0, 0)
+	// Spawn facing the defender (bearing 16384 = due +X): the test pins the
+	// TA:K aim/fire handshake, not the body pivot — which now runs at the
+	// engines' turnrate>>3 per frame (locomotion spec UNKNOWN-14) and would
+	// otherwise spend the whole window turning.
+	atk := w.AddUnit("atk", testMeta("atk"), bind, fixed.Vec2{}, 16384, 0)
 	def := w.AddUnit("def", testMeta("def"), nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 1)
 	w.ApplyOrder(order.Stance([]uint32{def}, order.MoveHold, order.FireHold))
 	w.ApplyOrder(order.Attack([]uint32{atk}, def))
