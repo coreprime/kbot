@@ -186,7 +186,10 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, co
 		}
 		return meta, rt.NewUnit(prog, nil)
 	}
-	w := sim.New(sim.Config{Seed: seed, Spawn: bound})
+	// The world shares the runtime's MINSTD stream so COB RAND and world-side
+	// draws consume one generator in call order — the engines' single-stream
+	// discipline (and one snapshot word covers both on resync).
+	w := sim.New(sim.Config{Seed: seed, Spawn: bound, Rand: rt.Rand()})
 	now := time.Now()
 	m := &Match{
 		id:         id,
@@ -246,14 +249,14 @@ func (m *Match) Run() {
 }
 
 // tickInterval is the wall-clock period between authoritative ticks at the
-// current pacing rate. The per-tick simulation step is always a fixed sim.TickMs
+// current pacing rate. The per-tick simulation step is always one fixed tick
 // of game time; rate only changes how often it fires in real time.
 func (m *Match) tickInterval() time.Duration {
 	rate := m.rate
 	if rate <= 0 {
 		rate = 1
 	}
-	d := time.Duration(float64(sim.TickMs) / rate * float64(time.Millisecond))
+	d := time.Duration(float64(sim.TickDuration) / rate)
 	if d < time.Millisecond {
 		d = time.Millisecond
 	}

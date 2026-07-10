@@ -1,7 +1,9 @@
-// Package rng is the deterministic PRNG every random draw in the simulation
-// routes through. It is a direct port of the engine's Mulberry32 generator:
-// a tiny splittable PRNG with a single uint32 of state, adequate for aim
-// jitter, target selection and particle offsets. Not cryptographic.
+// Package rng holds the deterministic PRNGs the simulation draws from.
+//
+// MinStd (minstd.go) is the authoritative sim stream — the Park–Miller
+// generator both target engines use, with their exact seed transform and
+// reduction quirks — and Crt models their second, C-runtime stream. Rng
+// below is the legacy Mulberry32 generator kept for non-sim consumers.
 //
 // Determinism is the point — given the same seed and the same sequence of
 // draws, the server and a wasm client produce identical results, which is what

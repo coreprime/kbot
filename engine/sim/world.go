@@ -293,7 +293,7 @@ type World struct {
 	units   map[uint32]*Unit
 	order   []uint32 // insertion order for deterministic iteration
 	nextID  uint32
-	rng     *rng.Rng
+	rng     *rng.MinStd
 	tick    uint64
 	simMs   int64
 	gravity fixed.Fixed
@@ -359,6 +359,11 @@ type Config struct {
 	Seed    uint32
 	Gravity fixed.Fixed
 	Spawn   SpawnFunc
+	// Rand optionally supplies the MINSTD sim stream to draw from — pass the
+	// script runtime's stream (script.Runtime.Rand) so COB RAND and world
+	// draws consume one generator in call order, the engines' single-stream
+	// discipline. Nil seeds a private stream from Seed.
+	Rand *rng.MinStd
 }
 
 // New creates an empty world.
@@ -367,11 +372,15 @@ func New(cfg Config) *World {
 	if g == 0 {
 		g = fixed.FromInt(80)
 	}
+	r := cfg.Rand
+	if r == nil {
+		r = rng.NewMinStd(cfg.Seed)
+	}
 	return &World{
 		units:      make(map[uint32]*Unit),
 		nextID:     1,
 		nextProjID: 1,
-		rng:        rng.New(cfg.Seed),
+		rng:        r,
 		gravity:    g,
 		spawn:      cfg.Spawn,
 	}
@@ -380,10 +389,15 @@ func New(cfg Config) *World {
 // Tick returns the current simulation tick number.
 func (w *World) Tick() uint64 { return w.tick }
 
-// RngState exposes the world RNG's raw state word. It exists for external
-// measurement harnesses (draw counting between two observations); gameplay
-// code must keep drawing through w.rng.
+// RngState exposes the sim RNG's raw state word for replay checkpointing and
+// divergence checks; gameplay code must keep drawing through w.rng.
 func (w *World) RngState() uint32 { return w.rng.Snapshot() }
+
+// RngDraws reports how many MINSTD draws the sim stream has made — the
+// measurement harness samples it before and after a window to count
+// consumption. When the stream is shared with the script runtime the count
+// includes COB RAND draws, matching the engines' single-stream accounting.
+func (w *World) RngDraws() uint64 { return w.rng.Draws() }
 
 // UnitByID returns a unit or nil.
 func (w *World) UnitByID(id uint32) *Unit { return w.units[id] }
@@ -846,8 +860,8 @@ func (w *World) AddUnit(name string, meta *UnitMeta, binding Binding, at fixed.V
 		}
 	}
 	u.homePos = at
-	u.loco.Pos = at
-	u.loco.Heading = fixed.FromInt(int(fixed.NormalizeAngle(heading)))
+	u.loco.Pos = fixed.Vec2{X: fixed.Wrap32(at.X), Z: fixed.Wrap32(at.Z)}
+	u.loco.Heading = fixed.FromInt(int(fixed.WrapAngle(heading)))
 	w.units[id] = u
 	w.order = append(w.order, id)
 	if binding != nil && binding.HasScript("Create") {
@@ -1239,7 +1253,7 @@ func (w *World) Restore(tick uint64, units []RestoredUnit, projectiles []Restore
 	w.units = make(map[uint32]*Unit, len(units))
 	w.order = w.order[:0]
 	w.tick = tick
-	w.simMs = int64(tick) * TickMs // simMs is derived purely from the tick count
+	w.simMs = TickToMs(tick) // simMs is derived purely from the tick count
 	w.events = nil
 	w.restoreProjectiles(projectiles)
 	var maxID uint32

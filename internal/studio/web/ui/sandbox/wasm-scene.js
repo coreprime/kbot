@@ -25,6 +25,7 @@
 
 import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
+import { TA_TICK_MS } from '../../engine/tick-rate.js'
 import { activeGame } from '../common/game-registry.js'
 import { gatherSceneLights } from '@coreprime/kbot-game3d/scene-lights'
 import { AudioPool } from '@coreprime/kbot-game3d/audio-pool'
@@ -38,11 +39,11 @@ import {
   SFX_SMOKE_WHITE,
 } from '@coreprime/kbot-game3d/weapon-driver'
 
-// One simulation tick in milliseconds (40 Hz), matching the Go engine's
-// sim.TickMs.  The scene advances the wasm world on this fixed grid; the
+// One simulation tick in milliseconds (30 Hz), matching the Go engine's
+// sim.TickHz.  The scene advances the wasm world on this fixed grid; the
 // renderer's variable wall-clock dt only drives the accumulator + particle
 // ageing, never the deterministic step count.
-const TICK_MS = 25
+const TICK_MS = TA_TICK_MS
 
 // Cap the catch-up burst so a long stall (tab backgrounded, GC pause) doesn't
 // run hundreds of sim steps in one frame and freeze the UI — drop the surplus
@@ -75,7 +76,7 @@ const MUZZLE_DECAY_SEC = 0.3
 // A single-tick positional delta larger than this (world units) is treated as
 // a teleport (respawn / restore / map wrap) rather than continuous motion, so
 // render interpolation snaps to it instead of sliding the unit across the map.
-// Even the fastest aircraft travel only a few tens of WU per 25 ms tick, so
+// Even the fastest aircraft travel only a few tens of WU per sim tick, so
 // this comfortably clears legitimate motion.
 const INTERP_SNAP_WU = 256
 
@@ -130,7 +131,7 @@ class WasmUnit {
     this._cobPieceNames = []
     this.pos = { x: 0, y: 0, z: 0 }
     this.heading = 0       // radians
-    // Render-interpolation endpoints.  The sim ticks at 40 Hz but the renderer
+    // Render-interpolation endpoints.  The sim ticks at 30 Hz but the renderer
     // paints on rAF (~60+ Hz), so reading the raw tick position straight into
     // pos makes the unit hold still between ticks and then jump — visible
     // stutter, worst when the camera tracks a fast aircraft.  Each tick shifts
@@ -937,7 +938,7 @@ export class WasmSandboxScene {
 
   // ── Per-frame tick ────────────────────────────────────────────────
 
-  // tick advances the wasm world on the fixed 25 ms grid for however much
+  // tick advances the wasm world on the fixed TICK_MS grid for however much
   // wall-clock time `dtMs` (scaled by playback rate) has accumulated, then ages
   // particles / audio / smoke trails by the same scaled dt.
   tick(dtMs) {
@@ -1085,7 +1086,7 @@ export class WasmSandboxScene {
   _tickBuildFx(snap) {
     if (!this._activeBuilds || this._activeBuilds.size === 0) return
     const tick = snap.tick | 0
-    if (tick % 2) return // 20 Hz pulse at the 40 Hz sim rate
+    if (tick % 2) return // half-rate pulse on the 30 Hz sim tick
     const color = (activeGame().buildFx && activeGame().buildFx.color) || [0.5, 1.7, 0.7, 1.0]
     for (const [builderId, job] of this._activeBuilds) {
       const builder = this._units.get(builderId)

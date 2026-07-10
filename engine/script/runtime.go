@@ -8,19 +8,20 @@ import (
 	"github.com/coreprime/kbot/engine/rng"
 )
 
-// stepMs is one TA tick in milliseconds (40 Hz). Sleeps and animators advance
-// on this fixed grid so timed sequences play at TA's cadence regardless of the
-// host's frame rate.
+// stepMs is one nominal sim tick in milliseconds (30 Hz, truncated); used
+// only to present remaining sleep time in milliseconds — scheduling itself
+// runs on whole ticks.
 const stepMs int64 = 1000 / ticksPerSecond
 
 // Runtime hosts every unit's script VM for one world and advances them in
-// lockstep on a fixed tick. It owns the deterministic RNG that OP_RAND draws
-// from, so the whole simulation reproduces from a seed. It satisfies
-// sim.Runtime: the world calls Tick once per simulated tick with its running
-// millisecond clock.
+// lockstep on a fixed tick. It owns the deterministic MINSTD stream that
+// OP_RAND draws from — the engines route COB RAND through the single sim RNG,
+// so a world sharing this stream (sim.Config.Rand) reproduces their one-stream
+// discipline. It satisfies sim.Runtime: the world calls Tick once per
+// simulated tick with its running millisecond clock.
 type Runtime struct {
 	units   []*Unit
-	rng     *rng.Rng
+	rng     *rng.MinStd
 	lastMs  int64
 	started bool
 }
@@ -28,7 +29,12 @@ type Runtime struct {
 // NewRuntime builds a runtime whose script RNG is seeded deterministically.
 // Every client seeded identically draws the same script randomness in the same
 // order, which is what keeps script-driven outcomes in lockstep.
-func NewRuntime(seed uint32) *Runtime { return &Runtime{rng: rng.New(seed)} }
+func NewRuntime(seed uint32) *Runtime { return &Runtime{rng: rng.NewMinStd(seed)} }
+
+// Rand exposes the runtime's MINSTD stream so the world can share it — one
+// sim stream consumed by both COB RAND and world-side draws, mirroring the
+// engines' single global generator.
+func (r *Runtime) Rand() *rng.MinStd { return r.rng }
 
 // NewUnit instantiates a unit of the given program with an optional Host and
 // registers it for ticking. The returned *Unit satisfies sim.Binding.
@@ -59,22 +65,21 @@ func (r *Runtime) Reset() {
 	r.started = false
 }
 
-// Tick advances script time to the world's millisecond clock in fixed steps.
-// The world increments its clock by exactly one tick before each call, so in
-// steady state this runs a single step; the loop only matters if the clock ever
-// jumps forward, and a fresh runtime aligns to the first observed time rather
-// than fast-forwarding through history.
+// Tick advances script time by exactly one sim tick whenever the world's
+// millisecond clock has moved forward — the engines run one script pass per
+// sim tick, so the VM steps 1:1 with World.Step rather than chasing the ms
+// grid (whose 30 Hz increments are not integral). A fresh runtime aligns to
+// the first observed time; a clock that jumps forward (a resync) still runs a
+// single step, since the imported COB state already reflects the gap.
 func (r *Runtime) Tick(ms int64) {
-	if !r.started {
-		r.lastMs = ms - stepMs
-		r.started = true
+	if r.started && ms <= r.lastMs {
+		return
 	}
-	for r.lastMs+stepMs <= ms {
-		r.lastMs += stepMs
-		snap := append([]*Unit(nil), r.units...)
-		for _, u := range snap {
-			u.tickStep()
-		}
+	r.lastMs = ms
+	r.started = true
+	snap := append([]*Unit(nil), r.units...)
+	for _, u := range snap {
+		u.tickStep()
 	}
 }
 
@@ -353,7 +358,7 @@ func (u *Unit) StepThread(id int32) {
 	if t == nil || t.dead {
 		return
 	}
-	t.sleepMs = 0
+	t.sleepTicks = 0
 	t.waitOn = nil
 	t.breakpointHit = false
 	t.bpResume = false
@@ -391,7 +396,7 @@ func (u *Unit) SetThreadPC(id int32, pc int) {
 		pc = n
 	}
 	t.pc = pc
-	t.sleepMs = 0
+	t.sleepTicks = 0
 	t.waitOn = nil
 	t.breakpointHit = false
 }
@@ -531,17 +536,16 @@ func (u *Unit) tickStep() {
 		if t.waitOn != nil {
 			if u.animDone(t.waitOn) {
 				t.waitOn = nil
-				t.sleepMs = 0
+				t.sleepTicks = 0
 			} else {
 				continue
 			}
 		}
-		if t.sleepMs > 0 {
-			t.sleepMs -= stepMs
-			if t.sleepMs > 0 {
+		if t.sleepTicks > 0 {
+			t.sleepTicks--
+			if t.sleepTicks > 0 {
 				continue
 			}
-			t.sleepMs = 0
 		}
 		u.runThread(t)
 	}
@@ -871,7 +875,7 @@ func (u *Unit) CobState() frame.CobUnitState {
 			Script:        sd.name,
 			PC:            t.pc,
 			Offset:        offset,
-			SleepMs:       int(t.sleepMs),
+			SleepMs:       int(t.sleepTicks * stepMs),
 			SignalMask:    int(t.signalMask),
 			Locals:        append([]int32(nil), t.locals...),
 			Stack:         append([]int32(nil), t.stack...),

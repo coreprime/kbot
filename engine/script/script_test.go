@@ -107,13 +107,14 @@ func TestTurnReachesTargetThenDone(t *testing.T) {
 }
 
 func TestSleepDelaysSubsequentOps(t *testing.T) {
-	// HIDE immediately, sleep 50ms, then SHOW. The piece stays hidden until the
-	// sleep elapses (two 25ms ticks).
+	// HIDE immediately, sleep 100ms, then SHOW. A sleep converts to whole sim
+	// ticks as trunc(ms*30/1000) — 100ms = 3 ticks — so the piece stays hidden
+	// through the third tick after the sleep and shows on the fourth.
 	p := prog(twoPieces(), 0, ScriptSource{
 		Name: "Blink",
 		Insts: []Instruction{
 			i1(scripting.OP_HIDE, 0),
-			i1(scripting.OP_PUSH_IMMEDIATE, 50),
+			i1(scripting.OP_PUSH_IMMEDIATE, 100),
 			i0(scripting.OP_SLEEP),
 			i1(scripting.OP_SHOW, 0),
 		},
@@ -122,17 +123,15 @@ func TestSleepDelaysSubsequentOps(t *testing.T) {
 	u := rt.NewUnit(p, nil)
 	u.Start("Blink")
 
-	rt.Tick(25)
-	if u.visible[0] {
-		t.Fatalf("after tick 1: piece should be hidden")
+	for tick := 1; tick <= 3; tick++ {
+		rt.Tick(int64(tick) * 34)
+		if u.visible[0] {
+			t.Fatalf("after tick %d: still sleeping, piece should be hidden", tick)
+		}
 	}
-	rt.Tick(50)
-	if u.visible[0] {
-		t.Fatalf("after tick 2: still sleeping, piece should be hidden")
-	}
-	rt.Tick(75)
+	rt.Tick(4 * 34)
 	if !u.visible[0] {
-		t.Fatalf("after tick 3: sleep elapsed, piece should be shown")
+		t.Fatalf("after tick 4: sleep elapsed, piece should be shown")
 	}
 }
 

@@ -392,7 +392,7 @@ export class SandboxView {
       // reads the unit position inside draw()) see one coherent, frame-
       // correct pose.  Doing this pre-draw is what keeps a tracked aircraft
       // from stuttering on displays whose refresh rate isn't a clean multiple
-      // of the 40 Hz sim — the sim still steps on its own cadence, but every
+      // of the 30 Hz sim — the sim still steps on its own cadence, but every
       // painted frame shows the exact interpolated position/heading for the
       // moment it's displayed.
       if (this.scene && typeof this.scene.interpolate === 'function') {

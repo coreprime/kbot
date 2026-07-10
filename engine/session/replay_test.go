@@ -18,7 +18,7 @@ import (
 // integer-only (Q16.16 fixed point), so this value is a cross-platform
 // constant; a change means the simulation's evolution changed and every
 // recorded replay's render would silently shift.
-const replayGoldenHash uint64 = 7612541647061945162
+const replayGoldenHash uint64 = 2961949521211098164
 
 func replaySpawn(name string) (*sim.UnitMeta, sim.Binding) {
 	if name != "u" {
@@ -187,7 +187,7 @@ func TestSetUnitState(t *testing.T) {
 	s.StepTo(s.World().Tick() + n)
 	u := s.World().UnitByID(id)
 	pos := u.Pos()
-	maxDrift := ov.Speed.Mul(fixed.FromInt(sim.TickMs)).Div(fixed.FromInt(1000)).Mul(fixed.FromInt(n))
+	maxDrift := ov.Speed.Div(fixed.FromInt(sim.TickHz)).Mul(fixed.FromInt(n))
 	dx, dz := pos.X-ov.Pos.X, pos.Z-ov.Pos.Z
 	if dx < 0 {
 		dx = -dx

@@ -294,7 +294,7 @@ func (p *projectile) steerToward() {
 	if rate <= 0 {
 		rate = halfTurn
 	}
-	step := int32(fixed.FromInt(int(rate)).Mul(dtSec).Int())
+	step := int32(perTick(fixed.FromInt(int(rate))).Int())
 	if step < 1 {
 		step = 1
 	}
@@ -325,11 +325,11 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 	if p.dead {
 		return
 	}
-	p.ageSec += dtSec
+	p.ageSec += perTick(fixed.One)
 
 	// Ramp toward top speed under acceleration (instant when accel = 0).
 	if p.accel > 0 {
-		p.speed = fixed.Min(p.vmax, p.speed+p.accel.Mul(dtSec))
+		p.speed = fixed.Min(p.vmax, p.speed+perTick(p.accel))
 	} else {
 		p.speed = p.vmax
 	}
@@ -347,7 +347,7 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 			p.phase = phaseHome
 		}
 	case p.mode == projDropped || p.mode == projBallistic:
-		p.vel.Y -= p.gravity.Mul(dtSec) // unpowered: gravity bends the path
+		p.vel.Y = fixed.Wrap32(p.vel.Y - perTick(p.gravity)) // unpowered: gravity bends the path
 	default:
 		// Straight powered shot — rescale the heading vector to the ramped speed.
 		s := hypot3(p.vel.X, p.vel.Y, p.vel.Z)
@@ -359,9 +359,9 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 		p.vel.Z = p.vel.Z.Mul(p.speed).Div(s)
 	}
 
-	p.pos.X += p.vel.X.Mul(dtSec)
-	p.pos.Y += p.vel.Y.Mul(dtSec)
-	p.pos.Z += p.vel.Z.Mul(dtSec)
+	p.pos.X = fixed.Wrap32(p.pos.X + perTick(p.vel.X))
+	p.pos.Y = fixed.Wrap32(p.pos.Y + perTick(p.vel.Y))
+	p.pos.Z = fixed.Wrap32(p.pos.Z + perTick(p.vel.Z))
 
 	// Unsteered modes derive orientation from velocity; the steered modes wrote
 	// it directly above and re-deriving would re-introduce singularity noise.
@@ -378,7 +378,7 @@ func (p *projectile) stepProjectile(groundY fixed.Fixed) {
 	// registers the pass instead of tunnelling), hit the ground while falling,
 	// or ran out its flight time.
 	distT := hypot3(p.target.X-p.pos.X, p.target.Y-p.pos.Y, p.target.Z-p.pos.Z)
-	reach := p.speed.Mul(dtSec)
+	reach := perTick(p.speed)
 	// A guided shot turns on a radius far wider than one tick's travel, so a
 	// pinpoint "within reach" capture lets it sail past and orbit the target
 	// forever. Let it detonate anywhere inside its own blast radius instead.

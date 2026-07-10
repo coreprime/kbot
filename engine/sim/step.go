@@ -1,20 +1,36 @@
 package sim
 
 import (
+	"time"
+
 	"github.com/coreprime/kbot/engine/fixed"
 	"github.com/coreprime/kbot/engine/frame"
 	"github.com/coreprime/kbot/engine/order"
 )
 
 const (
-	// TickHz is the simulation rate; one tick is 25ms, matching TA's loop.
-	TickHz = 40
-	// TickMs is the millisecond duration of a single tick.
-	TickMs = 1000 / TickHz
+	// TickHz is the nominal simulation rate — both engines tick at 30 Hz
+	// (scaled by gamespeed/10, which affects only how often a tick runs,
+	// never the per-tick math). One tick is 33.33ms of game time.
+	TickHz = 30
+	// TickDuration is the wall-clock length of one tick at nominal speed;
+	// hosts pacing the sim in real time divide it by their speed rate.
+	TickDuration = time.Second / TickHz
 )
 
-// dtSec is the fixed per-tick time step in seconds (0.025).
-var dtSec = fixed.FromInt(TickMs).Div(fixed.FromInt(1000))
+// TickToMs converts a tick count to the running millisecond clock. 1000 is
+// not divisible by 30, so the clock is derived from the tick count (exact,
+// monotone) instead of accumulating a truncated per-tick increment.
+func TickToMs(tick uint64) int64 { return int64(tick) * 1000 / TickHz }
+
+// fxTickHz is the tick rate as a fixed-point divisor.
+var fxTickHz = fixed.FromInt(TickHz)
+
+// perTick converts a per-second rate to this tick's share: v/30. FBI rates
+// are per-30Hz-frame values scaled to per-second at load (×30), so the
+// division here cancels that scaling exactly and per-tick quantities equal
+// the engines' native per-frame values.
+func perTick(v fixed.Fixed) fixed.Fixed { return v.Div(fxTickHz) }
 
 // defaultHitDamage matches the JS engine's constant for weapons whose TDF
 // damage field has not been wired through yet.
@@ -27,10 +43,14 @@ type Runtime interface {
 }
 
 // Step advances the simulation exactly one fixed tick. It is the only time
-// source the world has; callers must invoke it once per TickMs.
+// source the world has; callers must invoke it once per TickDuration (scaled
+// by game speed). The subsystem order below follows the engines' tick shape:
+// scripts and their outputs first, then the per-unit pass (weapons before
+// movement, as both engines run them), then projectiles, then the player-level
+// economy, then decay.
 func (w *World) Step(rt Runtime) {
 	w.tick++
-	w.simMs += TickMs
+	w.simMs = TickToMs(w.tick)
 	// Resource drain rates are instantaneous figures: rebuilt from this
 	// tick's active builds (spent totals accumulate across ticks).
 	for i := range w.resRate {
@@ -84,8 +104,10 @@ func (w *World) Step(rt Runtime) {
 		w.stepBuilder(u)
 		w.stepStance(u)
 		w.stepAttack(u)
-		w.stepMovement(u)
+		// Weapons fire before the unit moves — the engines' per-unit phase
+		// order — so a shot launches from the pre-integration position.
 		w.stepWeapons(u)
+		w.stepMovement(u)
 	}
 	w.pinCargo()
 	w.stepYards()
@@ -138,16 +160,15 @@ func (w *World) stepEconomy() {
 			w.resStock[side].Mana += resBaseStorage
 		}
 	}
-	dt := dtSec
 	for side := range w.resStock {
 		p := &w.resProduced[side]
-		p.Metal += w.resGen[side].Metal.Mul(dt)
-		p.Energy += w.resGen[side].Energy.Mul(dt)
-		p.Mana += w.resGen[side].Mana.Mul(dt)
+		p.Metal += perTick(w.resGen[side].Metal)
+		p.Energy += perTick(w.resGen[side].Energy)
+		p.Mana += perTick(w.resGen[side].Mana)
 		s := &w.resStock[side]
-		s.Metal = fixed.Clamp(s.Metal+(w.resGen[side].Metal-w.resRate[side].Metal).Mul(dt), 0, w.resCap[side].Metal)
-		s.Energy = fixed.Clamp(s.Energy+(w.resGen[side].Energy-w.resRate[side].Energy).Mul(dt), 0, w.resCap[side].Energy)
-		s.Mana = fixed.Clamp(s.Mana+(w.resGen[side].Mana-w.resRate[side].Mana).Mul(dt), 0, w.resCap[side].Mana)
+		s.Metal = fixed.Clamp(s.Metal+perTick(w.resGen[side].Metal-w.resRate[side].Metal), 0, w.resCap[side].Metal)
+		s.Energy = fixed.Clamp(s.Energy+perTick(w.resGen[side].Energy-w.resRate[side].Energy), 0, w.resCap[side].Energy)
+		s.Mana = fixed.Clamp(s.Mana+perTick(w.resGen[side].Mana-w.resRate[side].Mana), 0, w.resCap[side].Mana)
 	}
 }
 
@@ -817,7 +838,7 @@ func (w *World) stepAircraftAttack(u *Unit) {
 			u.flybySide = -1
 		}
 	}
-	u.attackManeuver(ex, ez, rngF, dtSec, bomberMode, passthrough)
+	u.attackManeuver(ex, ez, rngF, bomberMode, passthrough)
 	u.hasMove = false // the maneuver owns movement; don't double-drive in stepMovement
 
 	// Auto-arm slot 0 only for an autonomous unit pursuit — a force-fire slot is
@@ -960,7 +981,7 @@ func (w *World) stepMovement(u *Unit) {
 		u.progressPos = u.loco.Pos
 		steer := w.avoidanceTarget(u, goal)
 		prePos := u.loco.Pos
-		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta, dtSec)
+		arrived, moving := stepSurfaceLocomotion(&u.loco, steer, u.Meta)
 		u.IsMoving = moving
 		// Climb slowdown: rising ground bleeds speed in proportion to its
 		// steepness relative to the unit's slope limit — a tank labours up
@@ -1121,10 +1142,7 @@ func (w *World) stepPinnedMovement(u *Unit) {
 	u.IsMoving = moving
 	if moving {
 		if u.loco.Speed > 0 {
-			step := u.loco.Speed.Mul(dtSec)
-			sin, cos := headingVec(u.loco.Heading)
-			u.loco.Pos.X += sin.Mul(step)
-			u.loco.Pos.Z += cos.Mul(step)
+			u.loco.advance(perTick(u.loco.Speed))
 		}
 	} else {
 		u.loco.Speed = 0
@@ -1215,11 +1233,11 @@ func (w *World) stepAltitude(u *Unit) {
 	if altTarget > cur {
 		rate = climbRate
 	}
-	step := rate.Mul(dtSec)
+	step := perTick(rate)
 	if (altTarget - cur).Abs() <= step {
 		u.PosY = altTarget
 	} else {
-		u.PosY = cur + fixed.FromInt((altTarget - cur).Sign()).Mul(step)
+		u.PosY = fixed.Wrap32(cur + fixed.FromInt((altTarget-cur).Sign()).Mul(step))
 	}
 }
 
@@ -1435,11 +1453,11 @@ func (w *World) faceWeaponTarget(u *Unit, targetPos fixed.Vec2) bool {
 	want := fixed.FromInt(int(fixed.Atan2(d.X, d.Z)))
 	if !u.IsMoving {
 		dh := shortestArcFx(want - u.loco.Heading)
-		turnStep := u.Meta.turnRatePerSec().Mul(dtSec)
+		turnStep := perTick(u.Meta.turnRatePerSec())
 		if dh.Abs() > turnStep {
-			u.loco.Heading += fixed.FromInt(dh.Sign()).Mul(turnStep)
+			u.loco.setHeading(u.loco.Heading + fixed.FromInt(dh.Sign()).Mul(turnStep))
 		} else {
-			u.loco.Heading = want
+			u.loco.setHeading(want)
 		}
 	}
 	dh := shortestArcFx(want - u.loco.Heading)

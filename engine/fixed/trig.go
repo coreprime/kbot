@@ -1,26 +1,20 @@
 package fixed
 
 // Angles use Total Annihilation's native unit: a full turn is 65536, matching
-// the COB integer angle scale. Storing headings as int32 TA-angles (rather
-// than radians) keeps the whole sim in integers and reproducible.
+// the COB integer angle scale. The engines store orientation angles in 16-bit
+// fields and rely on natural two's-complement wraparound; WrapAngle applies
+// that storage convention. Sine and cosine come from the shared 512-entry
+// amplitude-8192 sine table with the engines' exact index and product
+// rounding, so trig results are bit-identical to the originals.
 const (
 	FullCircle    int32 = 65536
 	HalfCircle    int32 = 32768
 	QuarterCircle int32 = 16384
 )
 
-// cordicAtan is atan(2^-i) expressed in TA-angle units (65536 = full turn),
-// hardcoded so the table is identical on every build target. Computing it at
-// init via math.Atan would reintroduce the cross-platform float divergence
-// this package exists to avoid.
-var cordicAtan = [16]int32{
-	8192, 4836, 2556, 1297, 651, 326, 163, 81,
-	41, 20, 10, 5, 3, 1, 1, 0,
-}
-
-// cordicGain is the CORDIC scaling constant K (~0.60725) in Q16.16, used as the
-// initial x so the rotated vector comes out unit-length.
-const cordicGain Fixed = 39797
+// WrapAngle folds a TA-angle into the engines' int16 storage convention
+// [-32768, 32767] via two's-complement truncation.
+func WrapAngle(a int32) int32 { return int32(int16(a)) }
 
 // NormalizeAngle folds any TA-angle into [0, 65536).
 func NormalizeAngle(a int32) int32 {
@@ -44,58 +38,57 @@ func ShortestArc(a int32) int32 {
 	return a
 }
 
-// cordicRot rotates the unit vector by r (TA-angle in [0, QuarterCircle]) and
-// returns (sin, cos) in Q16.16. r must lie in the first quadrant.
-func cordicRot(r int32) (sin, cos Fixed) {
-	x, y := cordicGain, Fixed(0)
-	z := r
-	for i := 0; i < 16; i++ {
-		dx := x >> uint(i)
-		dy := y >> uint(i)
-		if z >= 0 {
-			x -= dy
-			y += dx
-			z -= cordicAtan[i]
-		} else {
-			x += dy
-			y -= dx
-			z += cordicAtan[i]
-		}
-	}
-	return y, x
+// sinEntry reads the table entry for a TA-angle using the engines' rounded
+// byte-offset indexing: offset ((a+0x20)>>6)&0x3fe into the int16 table (the
+// +0x20 rounds to the nearest of the 512 steps; the mask wraps the circle and
+// clears the odd byte). Amplitude is 8192 = 1.0.
+func sinEntry(angle int32) int32 {
+	off := ((angle + 0x20) >> 6) & 0x3fe
+	return int32(sineTable[off>>1])
+}
+
+// SinScaled returns sin(angle)*scale with the engines' exact product rounding:
+// the amplitude-8192 table entry times the 16.16 scale, +0x1000 half-up, >>13.
+// The result is in the same 16.16 domain as scale.
+func SinScaled(angle int32, scale Fixed) Fixed {
+	return Fixed((int64(sinEntry(angle))*int64(scale) + 0x1000) >> 13)
+}
+
+// CosScaled is SinScaled a quarter circle ahead (the engines bias the angle by
+// 0x4020 = quarter circle + index rounding, which sinEntry's own +0x20 covers).
+func CosScaled(angle int32, scale Fixed) Fixed {
+	return SinScaled(angle+QuarterCircle, scale)
 }
 
 // SinCos returns the sine and cosine of a TA-angle as Q16.16 values in
-// [-One, One]. It reduces to the first quadrant and applies exact symmetry,
-// keeping CORDIC inside its convergence range.
+// [-One, One], read from the engine sine table (13-bit amplitude widened by
+// <<3, so results are quantized to multiples of 8).
 func SinCos(angle int32) (sin, cos Fixed) {
-	a := NormalizeAngle(angle)
-	quad := a / QuarterCircle
-	r := a % QuarterCircle
-	s, c := cordicRot(r)
-	switch quad {
-	case 0:
-		return s, c
-	case 1:
-		return c, -s
-	case 2:
-		return -s, -c
-	default:
-		return -c, s
-	}
+	return Sin(angle), Cos(angle)
 }
 
-// Sin returns the sine of a TA-angle in Q16.16.
-func Sin(angle int32) Fixed { s, _ := SinCos(angle); return s }
+// Sin returns the sine of a TA-angle in Q16.16, table-quantized.
+func Sin(angle int32) Fixed { return Fixed(int64(sinEntry(angle)) << 3) }
 
-// Cos returns the cosine of a TA-angle in Q16.16.
-func Cos(angle int32) Fixed { _, c := SinCos(angle); return c }
+// Cos returns the cosine of a TA-angle in Q16.16, table-quantized.
+func Cos(angle int32) Fixed { return Fixed(int64(sinEntry(angle+QuarterCircle)) << 3) }
+
+// cordicAtan is atan(2^-i) expressed in TA-angle units (65536 = full turn),
+// hardcoded so the table is identical on every build target. Computing it at
+// init via math.Atan would reintroduce the cross-platform float divergence
+// this package exists to avoid.
+var cordicAtan = [16]int32{
+	8192, 4836, 2556, 1297, 651, 326, 163, 81,
+	41, 20, 10, 5, 3, 1, 1, 0,
+}
 
 // Atan2 returns the TA-angle of the vector (x, y) measured the way the engine's
 // heading convention expects: it mirrors JS Math.atan2(y, x). Pass the
 // "sine-side" component as y and the "cosine-side" as x. Heading toward a
 // target at delta (dx, dz) is therefore Atan2(dx, dz). The result is in
-// [0, 65536).
+// [0, 65536). Still CORDIC: the originals compute bearings through x87 fpatan,
+// whose exact bit behaviour is an open item (substrate UNKNOWN TA-6), so this
+// integer approximation stands until a validated replica exists.
 func Atan2(y, x Fixed) int32 {
 	if x == 0 && y == 0 {
 		return 0

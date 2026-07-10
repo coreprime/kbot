@@ -3,11 +3,13 @@ package sim
 import "github.com/coreprime/kbot/engine/fixed"
 
 // locoState is the mutable motion state stepped each tick. Heading is a
-// fractional TA-angle (the integer part feeds fixed.SinCos); speed is in
-// world-units per second.
+// fractional TA-angle held in the engines' int16 wrap convention (the integer
+// part feeds the sine table); position and speed are 16.16 values truncated
+// to the engines' 32-bit storage width on every store. Speed is in
+// world-units per second (per-tick share taken via perTick).
 type locoState struct {
 	Pos     fixed.Vec2
-	Heading fixed.Fixed // TA-angle, fractional
+	Heading fixed.Fixed // TA-angle, fractional, int16-wrapped
 	Speed   fixed.Fixed // wu/sec
 }
 
@@ -32,16 +34,32 @@ func shortestArcFx(a fixed.Fixed) fixed.Fixed {
 	return a
 }
 
-// headingVec returns the forward unit vector for a heading: (sin, cos), matching
-// the engine convention heading 0 = +Z.
+// headingVec returns the forward unit vector for a heading: (sin, cos) read
+// from the engine sine table, matching the convention heading 0 = +Z.
 func headingVec(heading fixed.Fixed) (sin, cos fixed.Fixed) {
 	return fixed.SinCos(int32(heading.Int()))
 }
 
+// advance integrates one tick of motion along the heading: the engines'
+// sine-table decomposition with their exact product rounding, stores wrapped
+// to 32 bits. step is the per-tick distance in 16.16 world units. The sandbox
+// keeps its own sign convention (heading 0 = +Z, +sin on X); the engines
+// negate both components — a render/wire boundary concern, not a sim one.
+func (st *locoState) advance(step fixed.Fixed) {
+	h := int32(st.Heading.Int())
+	st.Pos.X = fixed.Wrap32(st.Pos.X + fixed.SinScaled(h, step))
+	st.Pos.Z = fixed.Wrap32(st.Pos.Z + fixed.CosScaled(h, step))
+}
+
+// setHeading stores a heading in the int16 wrap convention.
+func (st *locoState) setHeading(h fixed.Fixed) {
+	st.Heading = fixed.WrapAngleFx(h)
+}
+
 // stepSurfaceLocomotion advances one tick of drive-and-steer movement toward
 // the target. It mutates st in place and reports whether the unit arrived and
-// whether it is still moving. Ported from locomotion.js.
-func stepSurfaceLocomotion(st *locoState, target fixed.Vec2, m *UnitMeta, dtSec fixed.Fixed) (arrived, moving bool) {
+// whether it is still moving.
+func stepSurfaceLocomotion(st *locoState, target fixed.Vec2, m *UnitMeta) (arrived, moving bool) {
 	const arriveDistF = 0.5
 	arriveDist := fixed.FromFloat(arriveDistF)
 
@@ -56,27 +74,24 @@ func stepSurfaceLocomotion(st *locoState, target fixed.Vec2, m *UnitMeta, dtSec 
 
 	// Inside the arrival radius: bleed off momentum and glide to a stop.
 	if dist < arriveDist {
-		speed = fixed.Max(0, speed-brake.Mul(dtSec))
-		st.Speed = speed
+		speed = fixed.Max(0, speed-perTick(brake))
+		st.Speed = fixed.Wrap32(speed)
 		if speed <= fixed.FromFloat(0.05) {
 			st.Speed = 0
 			return true, false
 		}
-		glide := fixed.Min(dist, speed.Mul(dtSec))
-		sin, cos := headingVec(st.Heading)
-		st.Pos.X += sin.Mul(glide)
-		st.Pos.Z += cos.Mul(glide)
+		st.advance(fixed.Min(dist, perTick(speed)))
 		return false, true
 	}
 
 	// Steer toward the target at the FBI turn rate (rate-limited).
 	want := fixed.FromInt(int(fixed.Atan2(d.X, d.Z)))
 	dh := shortestArcFx(want - st.Heading)
-	turnStep := turn.Mul(dtSec)
+	turnStep := perTick(turn)
 	if dh.Abs() > turnStep {
-		st.Heading += fixed.FromInt(dh.Sign()).Mul(turnStep)
+		st.setHeading(st.Heading + fixed.FromInt(dh.Sign()).Mul(turnStep))
 	} else {
-		st.Heading = want
+		st.setHeading(want)
 	}
 
 	// Forward thrust scale: full within 90 degrees of the target, fading to
@@ -105,15 +120,12 @@ func stepSurfaceLocomotion(st *locoState, target fixed.Vec2, m *UnitMeta, dtSec 
 
 	// Ramp actual speed toward desired under accel/brake.
 	if speed < desired {
-		speed = fixed.Min(desired, speed+accel.Mul(dtSec))
+		speed = fixed.Min(desired, speed+perTick(accel))
 	} else {
-		speed = fixed.Max(desired, speed-brake.Mul(dtSec))
+		speed = fixed.Max(desired, speed-perTick(brake))
 	}
-	st.Speed = speed
+	st.Speed = fixed.Wrap32(speed)
 
-	step := fixed.Min(dist, speed.Mul(dtSec))
-	sin, cos := headingVec(st.Heading)
-	st.Pos.X += sin.Mul(step)
-	st.Pos.Z += cos.Mul(step)
+	st.advance(fixed.Min(dist, perTick(speed)))
 	return false, true
 }

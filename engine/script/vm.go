@@ -10,10 +10,11 @@ import (
 // same scale COB angle operands use.
 const taTurnsPerCircle = 65536
 
-// ticksPerSecond is the simulation rate the VM advances at. COB speeds are
-// expressed per second, so each fixed tick moves an animator by speed/40. It
-// matches sim.TickHz; the VM keeps its own copy to avoid importing sim.
-const ticksPerSecond = 40
+// ticksPerSecond is the simulation rate the VM advances at — the engines'
+// 30 Hz nominal tick. COB speeds are expressed per second, so each fixed tick
+// moves an animator by speed/30. It matches sim.TickHz; the VM keeps its own
+// copy to avoid importing sim.
+const ticksPerSecond = 30
 
 // animator kinds.
 const (
@@ -102,7 +103,7 @@ type thread struct {
 	locals      []int32
 	signalMask  int32
 	dead        bool
-	sleepMs     int64
+	sleepTicks  int64
 	waitOn      *waitCond
 	callStack   []callFrame
 	returnValue int32
@@ -126,11 +127,23 @@ func (t *thread) pop() int32 {
 	return v
 }
 
-// dtStep returns the per-tick advance for a per-second speed: speed/40, kept in
+// dtStep returns the per-tick advance for a per-second speed: speed/30, kept in
 // fixed-point so the fractional remainder carries between ticks deterministically.
 var ticksPerSec = fixed.FromInt(ticksPerSecond)
 
 func dtStep(speed fixed.Fixed) fixed.Fixed { return speed.Div(ticksPerSec) }
+
+// sleepMsToTicks converts a COB sleep duration in milliseconds to whole sim
+// ticks (truncating); sleepTicksToMs is its transfer-boundary inverse, rounding
+// up so a ms round-trip lands back on the same tick count.
+func sleepMsToTicks(ms int64) int64 { return ms * ticksPerSecond / 1000 }
+
+func sleepTicksToMs(ticks int64) int64 {
+	if ticks <= 0 {
+		return 0
+	}
+	return (ticks*1000 + ticksPerSecond - 1) / ticksPerSecond
+}
 
 func abs(v fixed.Fixed) fixed.Fixed {
 	if v < 0 {
@@ -403,7 +416,9 @@ func (u *Unit) exec(t *thread, ins Instruction) bool {
 
 	// ── Waits ────────────────────────────────────────────────────
 	case scripting.OP_SLEEP:
-		t.sleepMs = int64(t.pop())
+		// The operand is milliseconds; the scheduler runs on whole sim ticks,
+		// so the duration converts to ticks (truncating) at sleep time.
+		t.sleepTicks = sleepMsToTicks(int64(t.pop()))
 		return true
 	case scripting.OP_WAIT_FOR_TURN:
 		t.waitOn = &waitCond{rot: true, key: animKey(int(ins.P1), int(ins.P2))}

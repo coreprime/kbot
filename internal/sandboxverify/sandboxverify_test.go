@@ -4,22 +4,20 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/coreprime/kbot/engine/rng"
 )
 
 func TestSpecToSimTick(t *testing.T) {
-	// 30 Hz spec frames onto the sandbox's 40 Hz axis: 3 spec frames = 4
-	// sim ticks exactly; intermediate frames round to nearest.
-	cases := map[int]uint64{0: 0, 1: 1, 3: 4, 10: 13, 30: 40, 90: 120}
-	for spec, want := range cases {
-		if got := specToSimTick(spec); got != want {
-			t.Errorf("specToSimTick(%d) = %d, want %d", spec, got, want)
+	// The sandbox ticks on the engines' 30 Hz axis, so spec frames map 1:1
+	// onto sim ticks with zero cadence skew at every sample point.
+	for _, spec := range []int{0, 1, 3, 10, 30, 90, 900} {
+		if got := specToSimTick(spec); got != uint64(spec) {
+			t.Errorf("specToSimTick(%d) = %d, want %d", spec, got, spec)
 		}
-	}
-	if s := skewMs(30, specToSimTick(30)); s != 0 {
-		t.Errorf("1s boundary should have zero skew, got %d", s)
-	}
-	if s := skewMs(10, specToSimTick(10)); s == 0 {
-		t.Errorf("frame 10 cannot align on a 40 Hz axis; want nonzero skew")
+		if s := skewMs(spec, specToSimTick(spec)); s != 0 {
+			t.Errorf("frame %d skew = %dms, want 0 on the aligned axis", spec, s)
+		}
 	}
 }
 
@@ -47,18 +45,16 @@ func TestGradeRules(t *testing.T) {
 	}
 }
 
-func TestMulberryDrawCount(t *testing.T) {
-	// The draw counter inverts the per-draw state increment; check the
-	// modular inverse constant against the generator's step.
-	step, inv := mulberryStep, mulberryStepInv
-	if step*inv != 1 {
-		t.Fatalf("mulberryStepInv is not the inverse of the step")
-	}
-	var state uint32 = 12345
-	var draws uint32 = 7
-	after := state + draws*step
-	if got := (after - state) * inv; got != draws {
-		t.Errorf("recovered %d draws, want %d", got, draws)
+func TestRngDrawCount(t *testing.T) {
+	// The rng_draws observable reads the MINSTD stream's own advance counter;
+	// a bound below 2 must not register as a draw (the engines' short-circuit
+	// skips the state update entirely).
+	m := rng.NewMinStd(1)
+	m.Bounded(100)
+	m.Bounded(1) // no advance
+	m.Bounded(65536)
+	if got := m.Draws(); got != 2 {
+		t.Errorf("draw counter = %d, want 2 (bound<2 must not count)", got)
 	}
 }
 

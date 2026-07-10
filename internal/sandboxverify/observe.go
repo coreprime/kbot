@@ -7,14 +7,6 @@ import (
 	"github.com/coreprime/kbot/engine/frame"
 )
 
-// mulberryStep is the Mulberry32 per-draw state increment; mulberryStepInv is
-// its multiplicative inverse mod 2^32, recovering the exact draw count from a
-// state delta (the increment is odd, hence invertible).
-const (
-	mulberryStep    uint32 = 0x6D2B79F5
-	mulberryStepInv uint32 = 0xDC58AA5D
-)
-
 // evaluate samples one check's observable at the current (already stepped and
 // observed) world state and grades it.
 //
@@ -33,7 +25,7 @@ const (
 //	unit.projectile_spawns        cumulative projectile entities the unit launched
 //	side.metal / energy / mana    stock, raw 16.16
 //	world.projectiles             in-flight projectile count
-//	world.rng_draws               cumulative world-RNG draws since start
+//	world.rng_draws               cumulative sim-stream (MINSTD) draws since start
 func (st *runState) evaluate(sc *Scenario, c CheckSpec, tick uint64) CheckResult {
 	res := CheckResult{
 		Label:      c.Label,
@@ -68,8 +60,7 @@ func (st *runState) sample(c CheckSpec) (int64, bool, string) {
 	case "world.projectiles":
 		return int64(len(st.lastSnap.Projos)), true, ""
 	case "world.rng_draws":
-		delta := st.rngNow - st.rngStart
-		return int64(delta * mulberryStepInv), true, ""
+		return int64(st.rngNow - st.rngStart), true, ""
 	}
 	if c.Side != nil {
 		return st.sampleSide(*c.Side, c.Observable)

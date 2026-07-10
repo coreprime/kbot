@@ -18,12 +18,13 @@
 
 import { FrameSource } from './frame-source.js'
 import { WasmFrameSource } from './wasm-source.js'
+import { TA_TICK_HZ, TA_TICK_MS } from '../tick-rate.js'
 
 const FRAC = 65536 // Q16.16 — world float -> fixed-point for the wire.
 
 // Beyond this long without a verified-matching authoritative hash, the client
 // is treated as severely out of sync and the panel raises its warning. The
-// authority emits a hash every 8 ticks (~200ms at 40Hz), so a multi-second gap
+// authority emits a hash every 8 ticks (~267ms at 30Hz), so a multi-second gap
 // means hash verification has stopped landing — a real divergence or stall.
 const SEVERE_DESYNC_MS = 2000
 
@@ -49,8 +50,8 @@ export class WsFrameSource extends FrameSource {
     this._serverHashes = new Map() // tick -> hash string, pending verification
     this._backlog = []      // messages buffered while the local engine loads
     this._seeded = false    // has an initial snapshot seeded the local world
-    this._baseTickMs = 1000 / 40 // server's real-time tick period at rate 1
-    this._tickMs = 1000 / 40 // current tick period = baseTickMs / rate
+    this._baseTickMs = TA_TICK_MS // server's real-time tick period at rate 1 (overridden by join_accept tickRate)
+    this._tickMs = TA_TICK_MS // current tick period = baseTickMs / rate
     this._srvTick = 0       // newest authoritative tick observed
     this._srvWall = 0       // wall-clock (ms) when _srvTick was observed
     // Shared-clock state mirrored from the authority's MsgControl. While paused
@@ -617,12 +618,12 @@ export class WsFrameSource extends FrameSource {
     const serverTimeMs = this._srvClockWall
       ? Math.round(this._srvClockMs + (now - this._srvClockWall))
       : 0
-    const tickHz = this._baseTickMs > 0 ? 1000 / this._baseTickMs : 40
+    const tickHz = this._baseTickMs > 0 ? 1000 / this._baseTickMs : TA_TICK_HZ
     const haveSync = this._lastSyncTick > 0
     const lastSyncTicksAgo = haveSync ? Math.max(0, (this.tick | 0) - this._lastSyncTick) : null
     const lastSyncAgoSec = lastSyncTicksAgo === null ? null : lastSyncTicksAgo / tickHz
     const hadDesync = this._lastDesyncTick > this._lastSyncTick
-    const severeTicks = this._baseTickMs > 0 ? SEVERE_DESYNC_MS / this._baseTickMs : 80
+    const severeTicks = this._baseTickMs > 0 ? SEVERE_DESYNC_MS / this._baseTickMs : SEVERE_DESYNC_MS / TA_TICK_MS
     const stale = lastSyncTicksAgo !== null && lastSyncTicksAgo > severeTicks
     return {
       joined: this._joined,

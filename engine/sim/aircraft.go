@@ -14,33 +14,31 @@ const (
 )
 
 // turnToward rotates the heading toward want (a TA-angle) at the unit's FBI
-// turn rate, never snapping past it. Mirrors locomotion.js _turnToward.
-func turnToward(st *locoState, want fixed.Fixed, m *UnitMeta, dtSec fixed.Fixed) {
+// turn rate, never snapping past it.
+func turnToward(st *locoState, want fixed.Fixed, m *UnitMeta) {
 	dh := shortestArcFx(want - st.Heading)
-	step := m.turnRatePerSec().Mul(dtSec)
+	step := perTick(m.turnRatePerSec())
 	if dh.Abs() > step {
-		st.Heading += fixed.FromInt(dh.Sign()).Mul(step)
+		st.setHeading(st.Heading + fixed.FromInt(dh.Sign()).Mul(step))
 	} else {
-		st.Heading = want
+		st.setHeading(want)
 	}
 }
 
 // flyForward turns toward want and drives forward along the heading at the
 // unit's (ramped) max speed — the "always flying" motion fixed-wing aircraft
-// and closing gunships use. Mirrors locomotion.js _flyForward.
-func flyForward(st *locoState, want fixed.Fixed, m *UnitMeta, dtSec fixed.Fixed) {
-	turnToward(st, want, m, dtSec)
+// and closing gunships use.
+func flyForward(st *locoState, want fixed.Fixed, m *UnitMeta) {
+	turnToward(st, want, m)
 	target := m.maxSpeed()
 	s := st.Speed
 	if s < target {
-		s = fixed.Min(target, s+m.accel().Mul(dtSec))
+		s = fixed.Min(target, s+perTick(m.accel()))
 	} else {
-		s = fixed.Max(target, s-m.brake().Mul(dtSec))
+		s = fixed.Max(target, s-perTick(m.brake()))
 	}
-	st.Speed = s
-	sin, cos := headingVec(st.Heading)
-	st.Pos.X += sin.Mul(s.Mul(dtSec))
-	st.Pos.Z += cos.Mul(s.Mul(dtSec))
+	st.Speed = fixed.Wrap32(s)
+	st.advance(perTick(s))
 }
 
 // attackManeuver flies an aircraft's attack pattern around the engagement at
@@ -55,7 +53,7 @@ func flyForward(st *locoState, want fixed.Fixed, m *UnitMeta, dtSec fixed.Fixed)
 //     A bomber (bomberMode) holds heading through the drop window so its bomb
 //     string lays on a straight line, banking away only once it has cleared the
 //     far edge (target + passthrough).
-func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool, passthrough fixed.Fixed) {
+func (u *Unit) attackManeuver(tx, tz, rangeF fixed.Fixed, bomberMode bool, passthrough fixed.Fixed) {
 	st := &u.loco
 	dx := tx - st.Pos.X
 	dz := tz - st.Pos.Z
@@ -67,7 +65,7 @@ func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool
 		if dist > rangeF {
 			// Out of range — close in head-on.
 			u.atkPhase = atkApproach
-			flyForward(st, bearing, u.Meta, dtSec)
+			flyForward(st, bearing, u.Meta)
 			return
 		}
 		// In range — strafe an arc around the target, nose always on it.
@@ -77,7 +75,7 @@ func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool
 			u.sweepCenter = fixed.FromInt(int(fixed.Atan2(st.Pos.X-tx, st.Pos.Z-tz)))
 			u.sweepPhase = 0
 		}
-		u.sweepPhase += dtSec.Mul(fixed.FromFloat(0.8 * taAnglesPerRadian))
+		u.sweepPhase += perTick(fixed.FromFloat(0.8 * taAnglesPerRadian))
 		sinPhase := fixed.Sin(int32(u.sweepPhase.Int()))
 		ang := u.sweepCenter + sinPhase.Mul(fixed.FromFloat(0.7*taAnglesPerRadian)) // +/-40 deg sweep
 		sinAng, cosAng := fixed.SinCos(int32(ang.Int()))
@@ -87,15 +85,15 @@ func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool
 		mdz := desZ - st.Pos.Z
 		md := fixed.Vec2{X: mdx, Z: mdz}.Len()
 		eps := fixed.FromFloat(1e-3)
-		step := fixed.Min(md, u.Meta.maxSpeed().Mul(dtSec))
+		step := fixed.Min(md, perTick(u.Meta.maxSpeed()))
 		if md > eps {
-			st.Pos.X += mdx.Div(md).Mul(step)
-			st.Pos.Z += mdz.Div(md).Mul(step)
+			st.Pos.X = fixed.Wrap32(st.Pos.X + mdx.Div(md).Mul(step))
+			st.Pos.Z = fixed.Wrap32(st.Pos.Z + mdz.Div(md).Mul(step))
 			st.Speed = u.Meta.maxSpeed()
 		} else {
 			st.Speed = 0
 		}
-		turnToward(st, bearing, u.Meta, dtSec) // face the target while strafing
+		turnToward(st, bearing, u.Meta) // face the target while strafing
 		return
 	}
 
@@ -112,7 +110,7 @@ func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool
 		if bomberMode && dist <= passthrough {
 			want = st.Heading
 		}
-		flyForward(st, want, u.Meta, dtSec)
+		flyForward(st, want, u.Meta)
 		// Past-target test: forward . (target - pos) negative => crossed the aim
 		// point. Bombers also wait until clear of the far drop-zone edge.
 		sinH, cosH := headingVec(st.Heading)
@@ -142,7 +140,7 @@ func (u *Unit) attackManeuver(tx, tz, rangeF, dtSec fixed.Fixed, bomberMode bool
 	// Egress: fly to the turn-around point, then come back for another run.
 	ex := u.egX - st.Pos.X
 	ez := u.egZ - st.Pos.Z
-	flyForward(st, fixed.FromInt(int(fixed.Atan2(ex, ez))), u.Meta, dtSec)
+	flyForward(st, fixed.FromInt(int(fixed.Atan2(ex, ez))), u.Meta)
 	if (fixed.Vec2{X: ex, Z: ez}).Len() < fixed.FromInt(40) {
 		u.atkPhase = atkApproach
 	}

@@ -167,10 +167,13 @@ func (m *UnitMeta) collisionRadius() fixed.Fixed {
 	return fixed.Clamp(fixed.FromInt(f*8), fixed.FromInt(10), fixed.FromInt(96))
 }
 
-// movement-rate conversions. TA simulates locomotion at 30 Hz, so an FBI
-// per-frame rate becomes a per-second rate by multiplying by 30. These mirror
-// locomotion.js exactly, in fixed-point.
-const taMoveHz = 30
+// movement-rate conversions. FBI kinematic fields are per-30Hz-frame values;
+// the accessors scale them to per-second rates (×30), and the tick loop takes
+// each tick's share back out with perTick (÷30). On the 30 Hz tick the round
+// trip is exact, so per-tick quantities equal the raw FBI values — the
+// engines' native per-frame units. The defaults and clamps below are sandbox
+// inventions the locomotion fidelity pass will retire.
+const taMoveHz = TickHz
 
 func (m *UnitMeta) maxSpeed() fixed.Fixed {
 	v := m.MaxVelocity

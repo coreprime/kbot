@@ -56,8 +56,8 @@ func TestMotionPinDrivesWalkScripts(t *testing.T) {
 	if !u.IsMoving {
 		t.Fatal("pinned-moving unit reads idle")
 	}
-	// Coast: heading 0 = +Z, so Z advances by speed·dt per tick and X holds.
-	wantZ := before.Z + fixed.FromFloat(speed).Mul(dtSec).Mul(fixed.FromInt(n))
+	// Coast: heading 0 = +Z, so Z advances by speed/TickHz per tick and X holds.
+	wantZ := before.Z + fixed.FromFloat(speed).Div(fixed.FromInt(TickHz)).Mul(fixed.FromInt(n))
 	after := u.Pos()
 	if after.Z != wantZ {
 		t.Fatalf("coast Z = %v, want %v", after.Z.Float(), wantZ.Float())

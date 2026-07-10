@@ -62,7 +62,7 @@ function StatsBlock({ rt }) {
   return html`
     <div class="mv-runtime-stats" title="Live runtime telemetry — refreshed 4× per second.">
       <div class="mv-runtime-stats-row mv-runtime-stats-row-3">
-        <span class="mv-runtime-stat" title="Total fixed 25 ms ticks executed since the runtime started.">
+        <span class="mv-runtime-stat" title="Total fixed sim ticks executed since the runtime started.">
           <span class="mv-runtime-stat-label">Tick</span>
           <span class="mv-runtime-stat-value">${tick}</span>
         </span>
@@ -127,7 +127,7 @@ function ControlsBar({ rt }) {
         ${paused ? '▶ Resume' : '⏸ Pause'}
       </button>
       <button class="mv-runtime-ctrl mv-threads-step"
-              title="Step — advance one fixed-rate tick (25 ms of script time) across every unit."
+              title="Step — advance one fixed-rate tick of script time across every unit."
               onClick=${(e) => { _stopProp(e); hostBridge.stepRuntime() }}
               onPointerDown=${_stopProp}
               onMouseDown=${_stopProp}>

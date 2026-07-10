@@ -62,7 +62,10 @@ func (u *Unit) ExportCob() frame.CobSnapshot {
 			Stack:       append([]int32(nil), t.stack...),
 			Locals:      append([]int32(nil), t.locals...),
 			SignalMask:  t.signalMask,
-			SleepMs:     t.sleepMs,
+			// The wire carries milliseconds; the scheduler runs on whole ticks.
+			// Round up so the ms->ticks conversion on import restores the exact
+			// remaining tick count.
+			SleepMs:     sleepTicksToMs(t.sleepTicks),
 			ReturnValue: t.returnValue,
 		}
 		if t.waitOn != nil {
@@ -140,7 +143,7 @@ func (u *Unit) ImportCob(snap frame.CobSnapshot) {
 			stack:       append([]int32(nil), ts.Stack...),
 			locals:      append([]int32(nil), ts.Locals...),
 			signalMask:  ts.SignalMask,
-			sleepMs:     ts.SleepMs,
+			sleepTicks:  sleepMsToTicks(ts.SleepMs),
 			returnValue: ts.ReturnValue,
 		}
 		if ts.Waiting {

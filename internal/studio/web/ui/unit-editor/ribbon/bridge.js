@@ -300,7 +300,7 @@ export function wireUnitEditorHostBridge(reactUi) {
       // dtSec, smoke trails, simRate helper) treats this as exactly
       // one TA tick regardless of the user's sim-speed setting.  At
       // 0.5× the runtime's accumulator would only see 12.5 ms per
-      // step and would never reach the 25 ms TA_TICK_MS threshold —
+      // step and would never reach the TA_TICK_MS threshold —
       // multiple clicks would advance one tick.  At 2× the
       // accumulator would see 50 ms and drain two ticks per click.
       // Both wrong: Step is meant to be a "freeze-frame advance",

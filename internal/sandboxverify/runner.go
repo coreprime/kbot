@@ -41,13 +41,17 @@ func (r *Runner) Run(scenarios []*Scenario) *Report {
 	return rep
 }
 
-// specToSimTick maps an engine frame (30 Hz) onto the nearest sandbox tick.
+// specToSimTick maps an engine frame (30 Hz) onto the sandbox tick axis.
+// Since the substrate transplant the sandbox ticks at the engines' 30 Hz, so
+// the mapping is 1:1 (the rounding survives as a guard should the rates ever
+// diverge again).
 func specToSimTick(specTick int) uint64 {
 	return uint64(math.Round(float64(specTick) * float64(sim.TickHz) / float64(SpecTickHz)))
 }
 
 // skewMs is the wall-clock misalignment between a spec tick and the sandbox
-// tick it was sampled at — the substrate cadence residue.
+// tick it was sampled at — the substrate cadence residue. Zero everywhere on
+// the aligned 30 Hz axis.
 func skewMs(specTick int, simTick uint64) int64 {
 	specMs := int64(specTick) * 1000 / SpecTickHz
 	simMs := int64(simTick) * 1000 / int64(sim.TickHz)
@@ -68,8 +72,8 @@ type runState struct {
 	fireCounts  map[uint32]int64
 	projSpawns  map[uint32]int64
 	startPos    map[uint32]fixed.Vec3
-	rngStart    uint32
-	rngNow      uint32
+	rngStart    uint64
+	rngNow      uint64
 	lastSnap    frame.Snapshot
 	seenUnits   map[uint32]bool
 }
@@ -191,7 +195,10 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 		}
 		return meta, binding
 	}
-	w := sim.New(sim.Config{Seed: sc.Seed, Spawn: spawn})
+	// Share the script runtime's MINSTD stream with the world — one sim
+	// stream for COB RAND and world draws, the engines' discipline — so the
+	// rng_draws observable counts total sim-stream consumption.
+	w := sim.New(sim.Config{Seed: sc.Seed, Spawn: spawn, Rand: rt.Rand()})
 	if t := makeTerrain(sc.Terrain); t != nil {
 		w.SetTerrain(t)
 	}
@@ -221,7 +228,7 @@ func buildWorld(sc *Scenario, root string) (*runState, error) {
 			st.startPos[id] = unit.Pos()
 		}
 	}
-	st.rngStart = w.RngState()
+	st.rngStart = w.RngDraws()
 	st.rngNow = st.rngStart
 	return st, nil
 }
@@ -273,7 +280,7 @@ func (st *runState) markUnsupported(a ActionSpec, reason string) {
 func (st *runState) observe() {
 	snap := st.world.Snapshot()
 	st.lastSnap = snap
-	st.rngNow = st.world.RngState()
+	st.rngNow = st.world.RngDraws()
 	for _, e := range snap.Events {
 		switch e.Kind {
 		case frame.EvFire:

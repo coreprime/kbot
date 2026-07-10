@@ -221,13 +221,13 @@ func TestAimReDrivenWhileTracking(t *testing.T) {
 	u := w.units[atk]
 	u.weapons[0] = weaponSlot{hasTarget: true, targetPt: fixed.Vec3{X: fixed.FromInt(100)}, source: "manual"}
 
-	const ticks = 130 // aimRefreshMs (1000ms) is 40 ticks, so this spans ~3 windows
+	const ticks = 100 // aimRefreshMs (1000ms) is 30 ticks, so this spans ~3 windows
 	for i := 0; i < ticks; i++ {
 		w.Step(nil)
 	}
 
 	aimCalls := countCalls(bind.restarts, "AimPrimary")
-	wantMin := ticks * TickMs / int(aimRefreshMs) // one re-drive per refresh window
+	wantMin := ticks * 1000 / TickHz / int(aimRefreshMs) // one re-drive per refresh window
 	if aimCalls < wantMin {
 		t.Fatalf("AimPrimary issued %d times over %d ticks, want >= %d (cadence re-drive)", aimCalls, ticks, wantMin)
 	}
