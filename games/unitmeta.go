@@ -127,6 +127,7 @@ func MetaFromUnitInfo(name string, info *ta.UnitInfo, resolveWeapon func(ref str
 		CanMove:           info.MaxVelocity > 0,
 		IsBuilder:         info.Builder == 1,
 		OnOffable:         info.OnOffable == 1,
+		IsAirBase:         info.IsAirBase == 1,
 		ActivateWhenBuilt: info.ActivateWhenBuilt == 1,
 		MaxHealth:         fixed.FromInt(info.MaxDamage),
 		FootprintX:        info.FootprintX,

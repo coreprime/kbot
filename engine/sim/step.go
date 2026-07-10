@@ -1231,29 +1231,13 @@ func (w *World) stepMovement(u *Unit) {
 // pin, so walk cycles start and stop through one code path however motion is
 // decided.
 func (w *World) announceMotion(u *Unit, wasMoving bool) {
-	// Render event stream + the TA:K flier takeoff/landing announcements ride
-	// the coarse moving flag's edges.
+	// Render move events ride the coarse moving flag's edges. Aircraft
+	// takeoff/landing pose scripts are NOT fired here — they hang off the true
+	// grounded↔airborne altitude edge (stepAltitude → announceFlight), which a
+	// firing-in-place hovering flier reaches without ever setting IsMoving.
 	if u.IsMoving && !wasMoving {
-		// TA:K fliers have no StartMoving: the engine announces takeoff via
-		// BeginFlight and marks the unit airborne through setSFXoccupy(5) —
-		// the state the dragons' FlightControl loop gates its wing-flap
-		// cycle on.
-		if u.binding != nil && u.binding.HasScript("BeginFlight") {
-			u.binding.Start("BeginFlight")
-		}
-		if u.Meta != nil && u.Meta.IsAircraft && u.binding != nil && u.binding.HasScript("setSFXoccupy") {
-			u.binding.Start("setSFXoccupy", takOccupyAir)
-		}
 		w.emit(frame.Event{Kind: frame.EvMoveStart, UnitID: u.ID})
 	} else if !u.IsMoving && wasMoving {
-		// TA:K fliers: announce the landing sequence and drop the airborne
-		// occupation state so the flap loop folds the wings.
-		if u.binding != nil && u.binding.HasScript("BeginLanding") {
-			u.binding.Start("BeginLanding")
-		}
-		if u.Meta != nil && u.Meta.IsAircraft && u.binding != nil && u.binding.HasScript("setSFXoccupy") {
-			u.binding.Start("setSFXoccupy", takOccupyLand)
-		}
 		w.emit(frame.Event{Kind: frame.EvMoveStop, UnitID: u.ID})
 	}
 
@@ -1383,6 +1367,16 @@ func (w *World) stepAltitude(u *Unit) {
 		}
 	}
 	airborne := u.IsMoving || hasFireOrder
+
+	// Grounded↔airborne edge fires the flight pose exactly once per transition:
+	// takeoff opens the wings (TA Activate / TA:K BeginFlight), landing folds
+	// them. The engine drives this off the move-state byte flipping to/from
+	// airborne; this edge stands in for it.
+	if airborne != u.wasAirborne {
+		u.motionConvention().announceFlight(u.binding, airborne)
+		u.wasAirborne = airborne
+	}
+
 	cruise := u.Meta.CruiseAltitude
 	if cruise <= 0 {
 		if u.Meta.IsHover {
@@ -1391,6 +1385,22 @@ func (w *World) stepAltitude(u *Unit) {
 			cruise = fixed.FromInt(100)
 		}
 	}
+
+	if airborne {
+		u.landSpotSet = false
+		w.releasePad(u)
+	} else if w.stepAircraftPad(u) {
+		// Held on an air-repair pad: parked at the pad, no land-spot drift.
+	} else {
+		// Landing: an aircraft must touch down on legal land, never on open
+		// water. When the parking cell is illegal (deep water under the flier),
+		// drift horizontally toward the nearest legal touchdown before dropping,
+		// so an idle fighter settles onto the shore instead of hovering — then
+		// sinking — over the sea. Reject-water landing legality reuses the same
+		// canStand water-depth machinery ground units land under.
+		w.settleLandingSpot(u)
+	}
+
 	// Altitude rides the terrain: cruise height is measured above the
 	// ground (and a landed aircraft parks ON it, not at sea-floor zero).
 	ground := w.groundHeight(u.loco.Pos)
@@ -1419,6 +1429,157 @@ func (w *World) stepAltitude(u *Unit) {
 	} else {
 		u.PosY = fixed.Wrap32(cur + fixed.FromInt((altTarget - cur).Sign()).Mul(step))
 	}
+}
+
+// padServiceRange is how close (wu) an idle aircraft must be to a friendly
+// air-repair pad to set down on it.
+var padServiceRange = fixed.FromInt(96)
+
+// stepAircraftPad lands an idle aircraft on a nearby friendly air-repair pad
+// and holds it there, parking it on the pad and pinning its altitude to the pad
+// unit. Returns true while the flier is held. This is the movement/landing-hold
+// core of the pad; the rearm + repair-over-HealTime SERVICE cycle the real pad
+// runs on the held aircraft (heal its HP at the pad's heal rate, restock its
+// ammo, then release) is a documented seam — the sim has no self-heal channel
+// yet, so a held flier simply rests until it is given somewhere to be.
+func (w *World) stepAircraftPad(u *Unit) bool {
+	// Already attached: stay parked on the pad unless the pad died or moved
+	// out from under the flier.
+	if u.padHost != 0 {
+		if pad := w.units[u.padHost]; pad != nil && !pad.Dead {
+			u.loco.Pos = fixed.Vec2{X: fixed.Wrap32(pad.loco.Pos.X), Z: fixed.Wrap32(pad.loco.Pos.Z)}
+			u.PosY = pad.PosY
+			return true
+		}
+		u.padHost = 0
+	}
+	// Free and idle: look for the nearest friendly pad in range to set down on.
+	if pad := w.nearestAirPad(u); pad != nil {
+		u.padHost = pad.ID
+		u.loco.Pos = fixed.Vec2{X: fixed.Wrap32(pad.loco.Pos.X), Z: fixed.Wrap32(pad.loco.Pos.Z)}
+		u.PosY = pad.PosY
+		return true
+	}
+	return false
+}
+
+// nearestAirPad returns the closest live friendly air-repair pad within service
+// range of the aircraft, or nil.
+func (w *World) nearestAirPad(u *Unit) *Unit {
+	var best *Unit
+	var bestD fixed.Fixed
+	for _, id := range w.order {
+		p := w.units[id]
+		if p == nil || p.Dead || p.Meta == nil || !p.Meta.IsAirBase || p.Side != u.Side {
+			continue
+		}
+		if p.underConstruction() {
+			continue
+		}
+		d := p.loco.Pos.DistTo(u.loco.Pos)
+		if d > padServiceRange {
+			continue
+		}
+		if best == nil || d < bestD {
+			best, bestD = p, d
+		}
+	}
+	return best
+}
+
+// releasePad frees an aircraft from its pad when it takes off / gets an order.
+func (w *World) releasePad(u *Unit) {
+	u.padHost = 0
+}
+
+// settleLandingSpot steers a landing aircraft toward legal ground when it is
+// idling over water. If the flier already sits over dry land nothing moves —
+// it drops straight in. Over water it picks (once per descent) the nearest
+// legal touchdown cell by an outward ring search and glides horizontally to it
+// at cruise speed before the altitude drop lands it, so an idle aircraft never
+// parks on — and sinks into — the sea. With no terrain (The Grid) every point
+// is land and this is a no-op.
+func (w *World) settleLandingSpot(u *Unit) {
+	if w.terrain == nil || w.canLandAt(u.loco.Pos) {
+		u.landSpotSet = false
+		return
+	}
+	if !u.landSpotSet {
+		if spot, ok := w.nearestLandingCell(u.loco.Pos); ok {
+			u.landSpot = spot
+			u.landSpotSet = true
+		} else {
+			return // nowhere legal to land — hold position
+		}
+	}
+	dx := u.landSpot.X - u.loco.Pos.X
+	dz := u.landSpot.Z - u.loco.Pos.Z
+	dist := fixed.Vec2{X: dx, Z: dz}.Len()
+	if dist <= fixed.One {
+		u.loco.Pos = fixed.Vec2{X: fixed.Wrap32(u.landSpot.X), Z: fixed.Wrap32(u.landSpot.Z)}
+		return
+	}
+	step := fixed.Min(dist, airMaxSpeed(u.Meta))
+	u.loco.Pos.X = fixed.Wrap32(u.loco.Pos.X + dx.Div(dist).Mul(step))
+	u.loco.Pos.Z = fixed.Wrap32(u.loco.Pos.Z + dz.Div(dist).Mul(step))
+}
+
+// nearestLandingCell finds the closest dry-land cell centre to a world point by
+// an outward ring search over the terrain grid — a deterministic, lockstep-safe
+// stand-in for the engine's random-cell landing-spot sampler. Returns the cell
+// centre and true, or false if no legal cell exists within the search bound.
+func (w *World) nearestLandingCell(p fixed.Vec2) (fixed.Vec2, bool) {
+	t := w.terrain
+	cell := t.CellWU
+	half := cell.Div(fixed.FromInt(2))
+	cx := p.X.Div(cell).Int()
+	cz := p.Z.Div(cell).Int()
+	centre := func(gx, gz int) fixed.Vec2 {
+		return fixed.Vec2{
+			X: fixed.FromInt(gx).Mul(cell) + half,
+			Z: fixed.FromInt(gz).Mul(cell) + half,
+		}
+	}
+	// Search rings of increasing Chebyshev radius; the map's larger dimension
+	// bounds it so an all-water map terminates.
+	maxR := t.W
+	if t.H > maxR {
+		maxR = t.H
+	}
+	for r := 0; r <= maxR; r++ {
+		var best fixed.Vec2
+		found := false
+		var bestD fixed.Fixed
+		consider := func(gx, gz int) {
+			if gx < 0 || gz < 0 || gx >= t.W || gz >= t.H {
+				return
+			}
+			c := centre(gx, gz)
+			if !w.canLandAt(c) {
+				return
+			}
+			d := c.DistTo(p)
+			if !found || d < bestD {
+				best, bestD, found = c, d, true
+			}
+		}
+		if r == 0 {
+			consider(cx, cz)
+		} else {
+			for gx := cx - r; gx <= cx+r; gx++ {
+				consider(gx, cz-r)
+				consider(gx, cz+r)
+			}
+			for gz := cz - r + 1; gz <= cz+r-1; gz++ {
+				consider(cx-r, gz)
+				consider(cx+r, gz)
+			}
+		}
+		if found {
+			return best, true
+		}
+	}
+	return fixed.Vec2{}, false
 }
 
 // stepWeapons runs each slot's firing cycle on the engines' shape: decrement

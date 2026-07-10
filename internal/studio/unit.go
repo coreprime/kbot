@@ -111,6 +111,9 @@ type unitMetaJSON struct {
 	//                script presence.
 	IsBuilder bool `json:"isBuilder"`
 	OnOffable bool `json:"onoffable"`
+	// IsAirBase — FBI isairbase=1: an air repair pad aircraft land on to
+	// rearm/repair; the sim uses it to attach and hold a serviced aircraft.
+	IsAirBase bool `json:"isAirBase,omitempty"`
 	// ActivateWhenBuilt — run Activate automatically on build completion.
 	ActivateWhenBuilt bool `json:"activateWhenBuilt,omitempty"`
 
@@ -637,6 +640,7 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	// only needs the boolean for panel gating; per-class behaviour
 	// (factory vs construction) isn't differentiated here.
 	out.IsBuilder = info.Builder == 1
+	out.IsAirBase = info.IsAirBase == 1
 	out.ActivateWhenBuilt = info.ActivateWhenBuilt == 1
 	out.BuildTime = float64(info.BuildTime)
 	out.WorkerTime = info.WorkerTime

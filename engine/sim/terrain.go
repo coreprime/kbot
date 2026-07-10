@@ -200,6 +200,25 @@ func (w *World) canStand(m *UnitMeta, p fixed.Vec2) bool {
 	return true
 }
 
+// canLandAt reports whether an aircraft may touch down at a world point: the
+// cell must exist (not void / off-map) and be dry land, never open water — TA
+// aircraft select a land spot and refuse to land on the sea. This is the
+// airborne mirror of canStand's water gate (which exempts aircraft outright
+// because they fly over everything); landing re-imposes the ground rule for
+// the touchdown cell only. With no terrain (The Grid) everything is land.
+func (w *World) canLandAt(p fixed.Vec2) bool {
+	t := w.terrain
+	if t == nil {
+		return true
+	}
+	cx := p.X.Div(t.CellWU).Int()
+	cz := p.Z.Div(t.CellWU).Int()
+	if t.cellVoid(cx, cz) {
+		return false
+	}
+	return w.waterDepthAt(p) <= 0
+}
+
 // canTraverse reports whether a unit may STEP from one world point to
 // another: the destination must satisfy canStand (void / water rules) and,
 // when the step crosses into a different terrain cell, the cell-pair height

@@ -65,6 +65,10 @@ type UnitInfo struct {
 	HoverAttack int `tdf:"hoverattack,omitempty"`
 	OnOffable   int `tdf:"onoffable,omitempty"`
 
+	// IsAirBase marks an air repair pad: aircraft land on it to rearm and
+	// repair, and it holds them while they service.
+	IsAirBase int `tdf:"isairbase,omitempty"`
+
 	// Orders / behaviour flags.
 	CanReclamate      int    `tdf:"canreclamate,omitempty"`
 	CanCapture        int    `tdf:"cancapture,omitempty"`

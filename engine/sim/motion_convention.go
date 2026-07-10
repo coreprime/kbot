@@ -29,6 +29,12 @@ type motionConvention interface {
 	// announceTurn fires the dialect's turn notification (TA:K
 	// TurnDirection) on a turn start/stop/sign flip.
 	announceTurn(u *Unit)
+	// announceFlight fires the dialect's aircraft takeoff/landing pose script
+	// on the grounded↔airborne edge: takeoff (airborne=true) opens the flight
+	// pose — a TA fighter parts its wings — and landing folds it. The engine
+	// drives this off the move-state byte flipping to/from airborne (2), which
+	// this edge stands in for.
+	announceFlight(b Binding, airborne bool)
 }
 
 // motionDialect caches a unit's resolved convention (0 = unresolved).
@@ -121,6 +127,24 @@ func (taMotion) announceTier(b Binding, prev, tier int) {
 // announceTurn: TA has no turn notification.
 func (taMotion) announceTurn(*Unit) {}
 
+// announceFlight: a TA aircraft's takeoff runs Activate — the activatescr
+// door/wing sequence that swings the fighter's wings out to flight pose — and
+// its landing runs Deactivate to fold them back. Aircraft carry these scripts
+// for exactly this pose change (no factory doors), so the shared activation
+// scripts double as the flight pose without a dedicated takeoff export.
+func (taMotion) announceFlight(b Binding, airborne bool) {
+	if b == nil {
+		return
+	}
+	name := "Deactivate"
+	if airborne {
+		name = "Activate"
+	}
+	if b.HasScript(name) {
+		b.Start(name)
+	}
+}
+
 // ── TA:K dialect ────────────────────────────────────────────────────
 
 type takMotion struct{}
@@ -189,5 +213,25 @@ func (takMotion) announceTurn(u *Unit) {
 	u.lastTurnSign = s
 	if u.binding != nil && u.binding.HasScript("TurnDirection") {
 		u.binding.Start("TurnDirection", int(u.loco.Turn)/0xb6)
+	}
+}
+
+// announceFlight: TA:K fliers announce takeoff via BeginFlight and mark the
+// unit airborne through setSFXoccupy(5) — the state a dragon's FlightControl
+// loop gates its wing-flap cycle on — and reverse both on landing (BeginLanding
+// + the grounded occupation state) so the flap loop folds the wings.
+func (takMotion) announceFlight(b Binding, airborne bool) {
+	if b == nil {
+		return
+	}
+	seq, occ := "BeginLanding", takOccupyLand
+	if airborne {
+		seq, occ = "BeginFlight", takOccupyAir
+	}
+	if b.HasScript(seq) {
+		b.Start(seq)
+	}
+	if b.HasScript("setSFXoccupy") {
+		b.Start("setSFXoccupy", occ)
 	}
 }

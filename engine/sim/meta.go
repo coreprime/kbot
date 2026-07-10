@@ -59,6 +59,10 @@ type UnitMeta struct {
 
 	IsBuilder bool
 	OnOffable bool
+	// IsAirBase marks an air repair pad (FBI isairbase): a landed aircraft
+	// attaches to it to rearm and repair, and the pad holds the aircraft until
+	// servicing finishes.
+	IsAirBase bool
 	// ActivateWhenBuilt — the unit's Activate script runs the moment its
 	// construction completes (FBI activatewhenbuilt; ARM Solar's panels).
 	ActivateWhenBuilt bool

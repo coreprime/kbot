@@ -67,6 +67,115 @@ func groundMeta(name string) *UnitMeta {
 	return &UnitMeta{Name: name, CanMove: false}
 }
 
+// TestTakeoffFiresFlightPose pins the wing-open pose contract: a grounded TA
+// fighter that gets a Move order lifts off and fires its Activate script (the
+// activatescr wing-open sequence), and folds them again with Deactivate once it
+// settles back down. The transition fires exactly once per edge.
+func TestTakeoffFiresFlightPose(t *testing.T) {
+	w := New(Config{Seed: 21})
+	bind := &recordingBinding{scripts: map[string]bool{"Activate": true, "Deactivate": true}}
+	id := w.AddUnit("hawk", fighterMeta("hawk"), bind, fixed.Vec2{X: fixed.FromInt(64), Z: fixed.FromInt(64)}, 0, 0)
+	// One idle tick to latch the grounded state before takeoff.
+	w.Step(nil)
+	if n := countCalls(bind.starts, "Activate"); n != 0 {
+		t.Fatalf("Activate fired %d times before takeoff, want 0", n)
+	}
+	// Take off: fly across the field.
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(600), Z: fixed.FromInt(64)}))
+	u := w.UnitByID(id)
+	tookOff := false
+	for i := 0; i < 120 && !tookOff; i++ {
+		w.Step(nil)
+		if u.wasAirborne {
+			tookOff = true
+		}
+	}
+	if !tookOff {
+		t.Fatal("fighter never went airborne")
+	}
+	if n := countCalls(bind.starts, "Activate"); n != 1 {
+		t.Fatalf("takeoff fired Activate %d times, want exactly 1 (wings open once)", n)
+	}
+	// Let it arrive and settle: the air→ground edge folds the wings.
+	for i := 0; i < 600 && u.wasAirborne; i++ {
+		w.Step(nil)
+	}
+	if u.wasAirborne {
+		t.Fatal("fighter never landed")
+	}
+	if n := countCalls(bind.starts, "Deactivate"); n != 1 {
+		t.Fatalf("landing fired Deactivate %d times, want exactly 1 (wings fold once)", n)
+	}
+}
+
+// TestAircraftLandsOnLandNotWater pins the no-water-landing rule: an idle
+// aircraft hovering over open water drifts to the nearest dry land to set down,
+// rather than parking — and sinking to the seabed — over the sea. Reuses the
+// raw-byte water-depth machinery from the terrain water gate.
+func TestAircraftLandsOnLandNotWater(t *testing.T) {
+	w := New(Config{Seed: 22})
+	// Sea (height 0) for x-cells < 20, dry land (height 80, above sea 40)
+	// beyond. World is 40×40 cells of 16 wu = 640×640 wu.
+	w.SetTerrain(testTerrain(40, 40, 40, func(cx, _ int) uint8 {
+		if cx < 20 {
+			return 0
+		}
+		return 80
+	}))
+	// Confirm the landing gate reads the water/land split as expected.
+	waterPt := fixed.Vec2{X: fixed.FromInt(5*16 + 8), Z: fixed.FromInt(20*16 + 8)}
+	landPt := fixed.Vec2{X: fixed.FromInt(30*16 + 8), Z: fixed.FromInt(20*16 + 8)}
+	if w.canLandAt(waterPt) {
+		t.Fatal("water cell reported as a legal landing spot")
+	}
+	if !w.canLandAt(landPt) {
+		t.Fatal("dry-land cell rejected as a landing spot")
+	}
+	// Park an idle flier over the water; it should migrate to land and settle.
+	id := w.AddUnit("hawk", fighterMeta("hawk"), nil, waterPt, 0, 0)
+	u := w.UnitByID(id)
+	for i := 0; i < 400; i++ {
+		w.Step(nil)
+	}
+	if w.waterDepthAt(u.loco.Pos) > 0 {
+		t.Fatalf("idle aircraft settled over water at x=%v (depth %d)",
+			u.loco.Pos.X.Float(), w.waterDepthAt(u.loco.Pos))
+	}
+	if !w.canLandAt(u.loco.Pos) {
+		t.Fatalf("idle aircraft did not reach a legal landing spot: x=%v", u.loco.Pos.X.Float())
+	}
+}
+
+// TestAircraftHeldOnAirPad pins the pad-hold core: an idle aircraft next to a
+// friendly air-repair pad sets down on it and is parked at the pad until it is
+// given somewhere to be, at which point it releases.
+func TestAircraftHeldOnAirPad(t *testing.T) {
+	w := New(Config{Seed: 23})
+	padMeta := &UnitMeta{Name: "airpad", CanMove: false, IsAirBase: true, MaxHealth: fixed.FromInt(1000)}
+	pad := w.AddUnit("airpad", padMeta, nil, fixed.Vec2{X: fixed.FromInt(200), Z: fixed.FromInt(200)}, 0, 0)
+	// Flier idle just inside service range of the pad.
+	id := w.AddUnit("hawk", fighterMeta("hawk"), nil, fixed.Vec2{X: fixed.FromInt(240), Z: fixed.FromInt(200)}, 0, 0)
+	u := w.UnitByID(id)
+	for i := 0; i < 30; i++ {
+		w.Step(nil)
+	}
+	if u.padHost != pad {
+		t.Fatalf("idle aircraft did not attach to the air pad (padHost=%d, pad=%d)", u.padHost, pad)
+	}
+	padPos := w.UnitByID(pad).loco.Pos
+	if u.loco.Pos.DistTo(padPos) > fixed.One {
+		t.Fatalf("held aircraft not parked on the pad: %v vs pad %v", u.loco.Pos, padPos)
+	}
+	// Ordered away: it releases the pad and flies off.
+	w.ApplyOrder(order.Move([]uint32{id}, fixed.Vec2{X: fixed.FromInt(500), Z: fixed.FromInt(500)}))
+	for i := 0; i < 60; i++ {
+		w.Step(nil)
+	}
+	if u.padHost != 0 {
+		t.Fatalf("aircraft still held on pad after a move order (padHost=%d)", u.padHost)
+	}
+}
+
 // TestFixedWingFliesByAndLoops drives a fighter at a stationary target and
 // confirms it behaves like a real fly-by attacker: it closes the distance,
 // lines up and fires its missile, overshoots, then banks out to a turn-around

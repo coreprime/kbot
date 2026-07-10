@@ -292,6 +292,22 @@ type Unit struct {
 	egX, egZ    fixed.Fixed
 	flybySide   int
 
+	// Aircraft grounded/airborne edge. wasAirborne latches the last altitude
+	// state so the ground→air and air→ground transitions each fire exactly
+	// once — takeoff opens the flight pose (Activate / BeginFlight), landing
+	// folds it (Deactivate / BeginLanding). landSpot is the legal (non-water)
+	// touchdown point an idle flier settles toward instead of parking over
+	// open sea; landSpotSet marks it chosen for the current descent.
+	wasAirborne bool
+	landSpot    fixed.Vec2
+	landSpotSet bool
+
+	// padHost is the air-repair-pad unit this aircraft is landed on and held
+	// by (0 = free). While held the flier parks at the pad and is released the
+	// moment it gets somewhere to be. The rearm/repair-over-HealTime service
+	// cycle the real pad runs is a documented seam (stepAircraftPad).
+	padHost uint32
+
 	// Bomb-run bookkeeping for an aircraft's dropped weapon, mirroring the JS
 	// engine's u._bombRun. Snapshotted on the first bomb so the run lays its
 	// whole string at the cached aim point and persists even if the player
