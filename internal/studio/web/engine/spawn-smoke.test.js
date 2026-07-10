@@ -17,6 +17,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { runInThisContext } from 'node:vm'
@@ -195,4 +197,97 @@ test('TA:K unit spawns, survives 120 ticks, and moves when ordered', async () =>
   // Under the TA:K economy the single mana pool must be reported.
   assert.ok(Array.isArray(resources) && resources.length > 0, 'no per-side resources reported')
   assert.ok('manaStock' in resources[0], 'TA:K resource block missing mana field')
+})
+
+// A cheap script-less structure the construction kbot raises. Low cost so the
+// default 1000/1000 opening stock covers two in a row without stalling.
+function structureMeta(name) {
+  return {
+    name,
+    canMove: false,
+    isBuilder: false,
+    maxDamage: 120,
+    footprintX: 2,
+    footprintZ: 2,
+    costMetal: 20,
+    costEnergy: 20,
+    buildTime: 60,
+    objectName: name,
+    econ: {
+      buildTime: 60,
+      buildCostMetal: 20,
+      buildCostEnergy: 20,
+      energyStorage: 0,
+      metalStorage: 0,
+    },
+    weapons: [{ name: '' }, { name: '' }, { name: '' }],
+  }
+}
+
+// A mobile ARM construction kbot meta carrying its real armck.cob so the studio
+// build handshake (StartBuilding / the arm's RequestState machine) runs exactly
+// as it does in-browser. cob is the raw COB byte array, the same field the
+// studio's /api/studio/unit attaches.
+function builderMeta(cob) {
+  return {
+    name: 'armck',
+    canMove: true,
+    isBuilder: true,
+    maxVelocity: 1.5,
+    turnRate: 1200,
+    acceleration: 0.1,
+    brakeRate: 0.2,
+    maxDamage: 240,
+    footprintX: 2,
+    footprintZ: 2,
+    workerTime: 300,
+    buildDistance: 80,
+    objectName: 'armck',
+    econ: { workerTime: 300, econWorkerTime: 300, workerTimeF: 300 },
+    weapons: [{ name: '' }, { name: '' }, { name: '' }],
+    cob,
+  }
+}
+
+// Two structures built in a row by one mobile construction kbot must BOTH
+// complete. This is the exact studio symptom the sequential-build parity bug
+// produced: the arm's INBUILDSTANCE latch stranded on alternate jobs, leaving
+// every other structure frozen at 0% as a permanent nanoframe. Requires the
+// flattened TA install (TA_UNPACKED_PATH) for the real armck.cob; skipped when
+// it is absent so the smoke still runs in a bare CI checkout.
+test('one construction kbot builds two structures in a row, both complete', async () => {
+  const taRoot = globalThis.process?.env?.TA_UNPACKED_PATH
+  const cobPath = taRoot ? path.join(taRoot, 'scripts', 'armck.cob') : null
+  if (!cobPath || !existsSync(cobPath)) {
+    console.log('skipping sequential-build smoke: TA_UNPACKED_PATH/scripts/armck.cob not found')
+    return
+  }
+  const cob = new Uint8Array(await readFile(cobPath))
+
+  const { api, state } = await loadEngine()
+  // The spawn resolver backs the queued Build orders' buildees (script-less
+  // structures), keyed by the name the build order carries.
+  const resolver = (name) => structureMeta(name)
+  const handle = api.create(2, 0, resolver, ECON_TA)
+
+  const builder = api.addUnit(handle, builderMeta(cob), 0, 0, 0, 1)
+  assert.ok(builder > 0, 'construction kbot failed to spawn')
+
+  // Queue two structures at spaced sites so the builder walks between them and
+  // the StartBuilding/StopBuilding cycle fully turns over per job.
+  api.submitBuild(handle, builder, 'smoke_solar_a', 160, 0, true)
+  api.submitBuild(handle, builder, 'smoke_solar_b', 320, 0, true)
+
+  const complete = new Set()
+  for (let t = 0; t < 40 * 60; t++) {
+    const snap = api.step(handle)
+    assert.ok(snap && Array.isArray(snap.units), `step ${t} returned no snapshot`)
+    assert.ok(!state.crashed, `wasm engine exited during step ${t}`)
+    for (const u of snap.units) {
+      if (u.id !== builder && u.buildPercent >= 100) complete.add(u.id)
+    }
+    if (complete.size >= 2) break
+  }
+  api.destroy(handle)
+  assert.equal(complete.size, 2, 'both queued structures must reach 100% (sequential-build parity)')
 })

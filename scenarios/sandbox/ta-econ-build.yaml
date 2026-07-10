@@ -28,7 +28,7 @@ actions:
     to: [240, 200]
     spawns: mex
 checks:
-  - at: 113
+  - at: 91
     unit: mex
     observable: unit.build_percent
     expect: 50
@@ -37,19 +37,20 @@ checks:
       amount = floor(WorkerTime 300 / 30) = 10 build points per tick
       (unsigned integer division — fractional worker power discarded).
       Progress per tick = 10/1800; total = 1800/10 = 180 work ticks.
-      The commander's retail StartBuilding COB deploys the nanolathe arm
-      before work begins: INBUILDSTANCE is raised on frame 23, so the
-      applicator advances progress from frame 24 on. Progress at frame T
-      (T >= 24) = (T-23) * 10/1800. Mid-build 50% = 90 work ticks =
-      frame 24+90-1 = 113.
-  - at: 203
+      The engine applies work the tick after the order reaches its site:
+      frame 1 spawns the nanoframe (approach -> raising), the applicator
+      runs from frame 2 (§9.1's per-tick table, tick 1 = remaining 0.99444,
+      HP 1). The StartBuilding COB only animates the nano arm — it does not
+      gate the applicator. Progress at frame T = (T-1) * 10/1800; mid-build
+      50% = 90 work ticks = frame 91.
+  - at: 181
     unit: mex
     observable: unit.build_percent
     expect: 100
     label: complete after 180 work ticks
     derivation: |
-      Work runs frames 24..203 (180 ticks); the extractor completes exactly
-      on frame 203 (24 + 180 - 1), progress = 100%.
+      Work runs frames 2..181 (§9.1: total = exactly 180 ticks); the
+      extractor completes exactly on frame 181, progress = 100%.
   - at: 400
     unit: mex
     observable: unit.hp
@@ -63,31 +64,32 @@ checks:
     side: 0
     observable: side.energy
     baseline: 65536000
-    expect: -4052312
+    expect: -7914928
     label: energy pool movement over two settles
     derivation: |
       Per-tick demand posts costE = f32(10/1800) * 521 = 2.8944445, from
-      frame 24 (post nano-arm-deploy). Settles land at frames 30 and 60.
-      Window ending 30 covers work frames 24..30 = 7 ticks (demand 20.26 E);
-      window ending 60 covers frames 31..60 = 30 ticks (demand 86.83 E).
-      Each settle also credits EnergyMake=25 and clamps into the 1000 cap
-      (commander declares no energystorage). Settle 30: 1000 + 25 - 20.26 =
-      1004.7 -> clamped to cap 1000. Settle 60: 1000 + 25 - 86.83 = 938.17.
-      Effect vs the 1000 start = -61.83 -> raw 61483688 - 65536000 =
-      -4052312. (f32 x87 vs fixed cannot agree bit-for-bit; the magnitude
-      grades the drain + settle-cap model.) Zero movement means the build
-      never drained the pool at all.
+      frame 2 (the first applicator tick; the arm animation does not gate
+      it). Settles land at frames 30 and 60. Window ending 30 covers work
+      frames 2..30 = 29 ticks (demand 83.94 E); window ending 60 covers
+      frames 31..60 = 30 ticks (demand 86.83 E). Each settle also credits
+      EnergyMake=25 and clamps into the 1000 cap (commander declares no
+      energystorage). Settle 30: 1000 + 25 - 83.94 = 941.06. Settle 60:
+      941.06 + 25 - 86.83 = 879.23. Effect vs the 1000 start = -120.77
+      (f32 x87 vs fixed cannot agree bit-for-bit; the magnitude grades the
+      drain + settle-cap model). Zero movement means the build never drained
+      the pool at all.
     missing_if_zero: true
   - at: 65
     side: 0
     observable: side.metal
     baseline: 65536000
-    expect: -560696
+    expect: -942988
     label: metal pool movement over two settles
     derivation: |
-      costM = f32(10/1800) * 50 = 0.2777778/tick, from frame 24. Window
-      ending 30 = 7 ticks (1.944 M demand); window ending 60 = 30 ticks
+      costM = f32(10/1800) * 50 = 0.2777778/tick, from frame 2. Window
+      ending 30 = 29 ticks (8.056 M demand); window ending 60 = 30 ticks
       (8.333 M). Income MetalMake=1/settle; cap 1000. Settle 30:
-      1000 + 1 - 1.944 = 999.06. Settle 60: 999.06 + 1 - 8.333 = 991.72
-      -> raw 64975304; effect = 64975304 - 65536000 = -560696.
+      1000 + 1 - 8.056 = 992.94. Settle 60: 992.94 + 1 - 8.333 = 985.61;
+      effect vs the 1000 start = -14.39. Zero movement means the build
+      never drained the pool.
     missing_if_zero: true

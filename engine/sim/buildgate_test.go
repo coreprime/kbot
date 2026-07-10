@@ -84,10 +84,13 @@ func TestFactoryGateGraceTimeout(t *testing.T) {
 	}
 }
 
-// TestBuilderWaitsForBuildStance pins the nano-arm handshake: a mobile
-// builder with a StartBuilding script makes no progress until the script
-// sets INBUILDSTANCE.
-func TestBuilderWaitsForBuildStance(t *testing.T) {
+// TestBuilderFiresStartBuildingAndProgresses pins the mobile-builder nano-arm
+// contract: reaching the site fires StartBuilding as an animation notification
+// and the engine's applicator makes progress every tick from then on — it does
+// NOT wait for the script to report INBUILDSTANCE. (The engine raises the
+// actively-building flag itself; the earlier COB progress gate stranded the
+// arm's re-entrancy latch and froze alternate queue jobs at 0%.)
+func TestBuilderFiresStartBuildingAndProgresses(t *testing.T) {
 	spawn := func(name string) (*UnitMeta, Binding) {
 		m := testMeta(name)
 		setBuildStats(m, 100, 100, 20)
@@ -113,20 +116,14 @@ func TestBuilderWaitsForBuildStance(t *testing.T) {
 	if countCalls(bind.starts, "StartBuilding") != 1 {
 		t.Fatalf("StartBuilding not driven")
 	}
+	// Progress accrues without the script ever writing INBUILDSTANCE.
 	b := w.UnitByID(u.buildeeID)
 	pct := b.BuildPercent
 	for i := 0; i < 10; i++ {
 		w.Step(nil)
 	}
-	if b.BuildPercent != pct {
-		t.Fatalf("build progressed before INBUILDSTANCE: %v -> %v",
-			pct.Float(), b.BuildPercent.Float())
-	}
-	bind.SetUnitValuePort(cobPortInBuildStance, 1)
-	for i := 0; i < 10; i++ {
-		w.Step(nil)
-	}
 	if b.BuildPercent <= pct {
-		t.Fatalf("build did not progress after INBUILDSTANCE")
+		t.Fatalf("build did not progress (INBUILDSTANCE never set): %v -> %v",
+			pct.Float(), b.BuildPercent.Float())
 	}
 }

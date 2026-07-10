@@ -40,17 +40,18 @@ checks:
   - at: 100
     unit: mex
     observable: unit.build_percent
-    expect: 65
+    expect: 88
     label: assist doubles the build rate
     derivation: |
-      com1 works from frame 24 at 10/1800 per tick. com2's repair/assist
-      order (issued frame 40) deploys its own nano arm and joins around
-      frame 55, from which the frame rises at the additive 20/1800 per tick
-      (two independent applicators, no combined-rate math, no cap). By
-      frame 100: com1 solo frames 24..54 = 31 ticks * 10/1800 = 17.2%, then
-      both frames 55..100 = 46 ticks * 20/1800 = 51.1%, total ~= 65% (f32,
-      truncated). A single builder would sit at only (100-23)*10/1800 = 42%
-      here -- the extra progress is the assist.
+      com1 works from frame 2 at 10/1800 per tick (the applicator starts the
+      tick after the frame spawns; the arm animation does not gate it). com2's
+      repair/assist order (issued frame 40) joins around frame 42, from which
+      the frame rises at the additive 20/1800 per tick (two independent
+      applicators, no combined-rate math, no cap). By frame 100: com1 solo
+      frames 2..41 = 40 ticks * 10/1800 = 22.2%, then both frames 42..100 =
+      59 ticks * 20/1800 = 65.6%, total ~= 88% (f32, truncated). A single
+      builder would sit at only (100-1)*10/1800 = 55% here -- the extra
+      progress is the assist.
   - at: 140
     unit: mex
     observable: unit.build_percent

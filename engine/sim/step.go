@@ -253,12 +253,16 @@ func (w *World) stepBuilder(u *Unit) {
 			w.cancelBuild(u)
 			return
 		}
-		// A mobile builder works only once its StartBuilding script has
-		// deployed the nano arm (INBUILDSTANCE), within the grace window.
-		if u.Meta.CanMove && u.binding != nil && u.binding.HasScript("StartBuilding") &&
-			portValue(u, cobPortInBuildStance) == 0 && w.simMs < u.buildGateMs {
-			return
-		}
+		// The engine drives building itself: reaching the site raises the
+		// actively-building state flag (unit+0x114 bit 8) and runs the applicator
+		// every tick, firing StartBuilding purely as an animation notification —
+		// it does NOT wait for the script to report the arm deployed. Gating
+		// progress on the COB writing INBUILDSTANCE back made construction hostage
+		// to the arm's RequestState machine, whose re-entrancy latch strands when
+		// a StopBuilding thread is superseded before it clears, permanently
+		// freezing INBUILDSTANCE at 0 on alternate jobs in a build queue. The
+		// nano-arm animation still plays; only the false progress gate is gone.
+		//
 		// One tick of the exact nanolathe applicator: it advances progress by
 		// floor(workertime/30)/buildtime (TA) or the throttled workertime rate
 		// (TA:K), drains the prorated buildcost through the pool authority,
@@ -1146,18 +1150,21 @@ const cobPortCurrentSpeed = 29
 // Port writes never feed the world hash (see CobPorts).
 const cobPortHealth = 4
 
-// TA unit-value ports the build cycle reads: INBUILDSTANCE is set by a
-// construction unit's StartBuilding script once its nano arm is deployed;
-// YARD_OPEN is set by a factory's Activate script once its doors finish
-// opening. Both gate build progress so the animations lead the work.
+// TA unit-value ports the build cycle observes. YARD_OPEN is set by a factory's
+// Activate script once its doors finish opening and gates the pad RAISE (the
+// buildOpening state) so a factory does not spawn its buildee before the doors
+// part. INBUILDSTANCE is set by a construction unit's StartBuilding script once
+// its nano arm is deployed — it drives the arm ANIMATION only and does not gate
+// build progress (the engine raises its own actively-building flag and runs the
+// applicator regardless; gating on it stranded the arm's script state machine).
 const (
 	cobPortInBuildStance = 5
 	cobPortYardOpen      = 18
 )
 
-// buildGateGraceMs caps how long the build cycle waits on a script port
-// before proceeding anyway, so a script that never reports readiness
-// (or a TA:K convention without the port) cannot wedge construction.
+// buildGateGraceMs caps how long the factory door cycle waits on YARD_OPEN
+// before raising the pad anyway, so a script that never reports readiness (or a
+// TA:K convention without the port) cannot wedge production.
 const buildGateGraceMs = 3000
 
 // portValue reads a COB unit-value port off the binding (0 without one).
