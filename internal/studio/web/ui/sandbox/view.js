@@ -1513,8 +1513,13 @@ export class SandboxView {
       const attach = scene.buildAttachFor(u.id)
       if (!attach || !attach.pieceName || !attach.builder) return null
       if (typeof world.unitPieceWorldPose !== 'function') return null
+      // unitPieceWorldPose reports the piece pose as { pos: [x, y, z], yaw };
+      // read the pos triple (a plain {x,y,z} read lands undefined, which parked
+      // every nascent factory buildee at NaN — invisible until it finished and
+      // stopped riding the pad, the "units pop in only when done" bug).
       const wp = world.unitPieceWorldPose(attach.builder.id, attach.pieceName)
-      return wp ? [wp.x, wp.y, wp.z] : null
+      if (wp && Array.isArray(wp.pos)) return [wp.pos[0], wp.pos[1], wp.pos[2]]
+      return (wp && wp.x != null) ? [wp.x, wp.y, wp.z] : null
     }
     const state = snapshotToWorldState(scene, {
       alpha,
