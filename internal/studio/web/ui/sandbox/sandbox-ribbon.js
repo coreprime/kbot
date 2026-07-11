@@ -37,6 +37,10 @@ const _gfx = signal(getGraphicsOptions())
 // only; reapplied through the bridge whenever flipped).
 const _contours = signal(false)
 
+// _muted — the View menu's master-mute toggle. Drives scene.setSilenced
+// through the bridge so every unit voice, weapon and blast falls silent.
+const _muted = signal(false)
+
 // setSandboxGraphicsState — partial merge into the Graphics Options
 // state.  Called by the menu rows (to keep ticks in sync with the
 // user's choice) and by the host when it applies persisted prefs.
@@ -67,6 +71,7 @@ const _bridge = {
   closeActive:       () => {},
   canClose:          () => false,
   setPanelVisible:   (_panelId, _visible) => {},
+  setSilenced:       (_on) => {},
 
   // Graphics Options — applied scene-wide across every sandbox pane.
   setEnhanceMesh:       (_on) => {},
@@ -275,6 +280,12 @@ export function SandboxRibbon() {
               title="Contour Lines — overlay elevation contours on the battlefield terrain."
               on=${_contours.value}
               onChange=${(next) => { _contours.value = next; _bridge.setContours(next) }} />
+            <${MenuToggleRow}
+              icon="🔇"
+              label="Mute Sound"
+              title="Mute Sound — silence every sandbox sound: unit voices, weapon fire and explosions."
+              on=${_muted.value}
+              onChange=${(next) => { _muted.value = next; _bridge.setSilenced(next) }} />
             <${SplitMenuItems}
               dropdownId="sandbox-rb-view-dropdown"
               onSplitH=${() => _bridge.splitActive('h')}

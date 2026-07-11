@@ -32,6 +32,18 @@ export function reapplyContours(view) {
   if (view && view.renderer) view.renderer.contoursEnabled = _wantContours
 }
 
+// _wantSilenced — the View menu's master-mute choice. Scene-level (not per
+// renderer), reapplied when a fresh battlefield's scene comes up so the menu
+// and the actual audio agree across map loads.
+let _wantSilenced = false
+
+// reapplySilence pushes the remembered mute choice onto a view's scene —
+// called from the map loader so a reload doesn't quietly un-mute the sandbox.
+export function reapplySilence(view) {
+  const scene = view && view.scene
+  if (scene && typeof scene.setSilenced === 'function') scene.setSilenced(_wantSilenced)
+}
+
 // wireSandboxRibbon — install the host bridge + mount the ribbon's
 // React tree.  Idempotent; safe to call before / after the React UI
 // module has resolved (the early-return guard bails until the UI
@@ -122,6 +134,13 @@ export function wireSandboxRibbon() {
         if (view && view.renderer) view.renderer.contoursEnabled = _wantContours
       },
       getContours: () => _wantContours,
+      // Master mute — scene-wide (every pane observes one shared scene), and
+      // remembered so a map reload keeps the sandbox silent.
+      setSilenced: (on) => {
+        _wantSilenced = !!on
+        const scene = sb()?.scene
+        if (scene && typeof scene.setSilenced === 'function') scene.setSilenced(_wantSilenced)
+      },
       resetCamera: () => {
         // Restore the default orbit pose the SandboxView starts at —
         // matches the camera's `open()` initialisation in

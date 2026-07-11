@@ -934,7 +934,7 @@ var soundEventKeys = []string{
 	"cant1", "cant2",
 	"underattack",
 	"activate", "deactivate",
-	"build", "repair", "working",
+	"build", "repair", "working", "unitcomplete",
 	"count0", "count1", "count2", "count3", "count4", "count5",
 	"canceldestruct",
 }

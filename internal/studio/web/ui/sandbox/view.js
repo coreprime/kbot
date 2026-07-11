@@ -1527,6 +1527,11 @@ export class SandboxView {
     world.setGhosts(this.#ghostList())
     world.applyState(state)
     world.step(dtMs * rate)
+    // Feed the shared scene this pane's audio vantage point (camera focus +
+    // zoom) so combat sounds fade with distance from what the user watches.
+    if (this.camera && typeof scene.setListener === 'function') {
+      scene.setListener(this.camera.target, this.camera.distance)
+    }
   }
 
   // #syncLatheBeams diffs the scene's live build set against the beams already

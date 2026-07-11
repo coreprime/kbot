@@ -86,6 +86,10 @@ const INTERP_SNAP_WU = 256
 // Per-(unit, eventKey) sound debounce window, ms — see playUnitSound.
 const UNIT_SOUND_DEBOUNCE_MS = 80
 
+// A unit re-cries "under attack" no more than this often, so a sustained
+// beating (a beam weapon lands damage every tick) doesn't stutter the warning.
+const UNDERATTACK_COOLDOWN_MS = 3500
+
 // Death-event reason codes the engine's special channels ride in the death
 // event's sfxType (0 = an ordinary lethal kill). A captured / given-away unit
 // (4) or a reclaimed one (5) is an ownership flip / removal, not a destruction
@@ -276,6 +280,11 @@ export class WasmSandboxScene {
     this._highlightProjos = new Set()
     this._spawnCount = 0
     this._silenced = false
+    // Audio listener — the active pane feeds its camera focus + zoom here each
+    // frame (setListener) so combat sounds (weapon fire, blasts) fade with
+    // distance from what the user is looking at. null until a pane drives it.
+    this._listenerPos = null
+    this._listenerRef = 260
     // Renderer-owned gravity; the ballistic visuals read it.
     this.gravity = 80
     // Smoke trails for in-flight missiles — scene-owned so all panes share one
@@ -937,7 +946,47 @@ export class WasmSandboxScene {
     }
   }
 
-  playUnitSound(unit, eventKey) {
+  // setListener records the audio vantage point — the active pane passes its
+  // camera focus (world XZ) and orbit distance each frame. Combat sounds fade
+  // with distance from it; refDist ties the fade radius to the zoom so a
+  // pulled-back view still hears the whole field.
+  setListener(pos, refDist) {
+    if (Array.isArray(pos)) this._listenerPos = pos
+    const r = +refDist
+    if (Number.isFinite(r) && r > 0) this._listenerRef = r
+  }
+
+  // _combatAtten returns a 0..1 volume scale for a sound at world (x,z): full
+  // within a near radius, then a gentle inverse-distance rolloff floored so a
+  // far-off blast stays faintly audible. 1 when no listener is driving.
+  _combatAtten(x, z) {
+    const lp = this._listenerPos
+    if (!lp || x == null) return 1
+    const dx = x - lp[0], dz = z - (lp[2] != null ? lp[2] : 0)
+    const dist = Math.hypot(dx, dz)
+    const near = this._listenerRef * 0.5
+    const a = dist <= near ? 1 : near / dist
+    return Math.max(0.12, Math.min(1, a))
+  }
+
+  // _applyCombatFalloff rescales every live weapon-fire / blast entry's volume
+  // by camera distance. Runs after the pools tick so a sound that has just
+  // moved (a shooter walking, a shell in flight voiced at its muzzle) tracks
+  // the listener. Unit voices + acks (kind 'unit') keep their full volume.
+  _applyCombatFalloff() {
+    if (!this._listenerPos) return
+    const scale = (pool) => {
+      if (!pool || !pool.entries) return
+      for (const e of pool.entries.values()) {
+        if (!e.audio || e.x == null || !(e.kind && e.kind.startsWith('weapon'))) continue
+        try { e.audio.volume = Math.max(0, Math.min(1, e.vol * this._combatAtten(e.x, e.z))) } catch { /* ignore */ }
+      }
+    }
+    for (const u of this._units.values()) scale(u.binding && u.binding.audio)
+    scale(this._fxBinding.audio)
+  }
+
+  playUnitSound(unit, eventKey, minGapMs = UNIT_SOUND_DEBOUNCE_MS) {
     if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
     const stem = unit.meta.sounds[eventKey]
     if (!stem) return false
@@ -945,7 +994,7 @@ export class WasmSandboxScene {
     const now = (typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now()
     const last = this._unitSoundDebounce.get(key) || 0
-    if (now - last < UNIT_SOUND_DEBOUNCE_MS) return false
+    if (now - last < minGapMs) return false
     this._unitSoundDebounce.set(key, now)
     const pool = unit.binding.audio
     if (!pool) return false
@@ -1038,6 +1087,8 @@ export class WasmSandboxScene {
     if (this._fxBinding.audio) {
       this._fxBinding.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
     }
+    // Distance-attenuate combat sounds against the active pane's camera focus.
+    this._applyCombatFalloff()
     return snap
   }
 
@@ -1400,6 +1451,14 @@ export class WasmSandboxScene {
         case 'emitSfx':
           this._sfx(ev.unitId, SFX_SMOKE_WHITE, ev)
           break
+        case 'hit': {
+          // A shot landed on a unit (unitId = attacker, targetId = victim) —
+          // the victim cries "under attack", throttled so a sustained beating
+          // doesn't stutter the warning. Soft when the unit ships no such sound.
+          const victim = this._units.get(ev.targetId)
+          if (victim) this.playUnitSound(victim, 'underattack', UNDERATTACK_COOLDOWN_MS)
+          break
+        }
         case 'corpseSpawn':
           // The Killed script settled its corpsetype (carried in slot):
           // 1 = intact corpse feature, 2 = the damaged featuredead wreck,
@@ -1449,9 +1508,20 @@ export class WasmSandboxScene {
           if (b) this.playUnitSound(b, 'build')
           break
         }
-        case 'buildStop':
+        case 'buildStop': {
           if (this._activeBuilds) this._activeBuilds.delete(ev.unitId)
+          // buildStop fires for both a finished unit and an abandoned one, with
+          // the same shape — a completed buildee is present and fully raised
+          // (buildPercent >= 100), a cancelled one is gone or still partial. On
+          // a genuine completion the builder acknowledges. Soft when it ships
+          // no unit-complete voice (stock TA units don't; a mod may).
+          const buildee = this._units.get(ev.targetId)
+          if (buildee && !buildee.dead && (buildee.buildPercent == null || buildee.buildPercent >= 100)) {
+            const builder = this._units.get(ev.unitId)
+            if (builder) this.playUnitSound(builder, 'unitcomplete')
+          }
           break
+        }
         case 'blast':
           // A death blast (explodeas / selfdestructas) rides alongside the
           // unit's 'death' event in the same tick — the engine's killUnit emits
