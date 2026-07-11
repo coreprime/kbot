@@ -20,7 +20,6 @@ import (
 	"github.com/coreprime/kbot/cmd/kbot/pack"
 	"github.com/coreprime/kbot/cmd/kbot/pal"
 	"github.com/coreprime/kbot/cmd/kbot/pcx"
-	"github.com/coreprime/kbot/cmd/kbot/sandboxverify"
 	"github.com/coreprime/kbot/cmd/kbot/sct"
 	"github.com/coreprime/kbot/cmd/kbot/studio"
 	"github.com/coreprime/kbot/cmd/kbot/taf"
@@ -79,7 +78,6 @@ Sub-commands operate on specific file formats:
 		pack.NewCommand(),
 		studio.NewCommand(),
 		newHostCommand(),
-		sandboxverify.NewCommand(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
