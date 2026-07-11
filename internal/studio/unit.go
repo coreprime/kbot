@@ -1050,6 +1050,10 @@ type explosionJSON struct {
 	Damage            float64 `json:"damage"`
 	AreaOfEffectWU    float64 `json:"areaOfEffectWU"`
 	EdgeEffectiveness float64 `json:"edgeEffectiveness"`
+	// SoundHit is the death-blast weapon's impact wav stem (sounds/<stem>.wav,
+	// no extension) so the client can voice the explosion when the unit dies.
+	// Empty when the weapon TDF ships no SoundHit.
+	SoundHit string `json:"soundHit,omitempty"`
 }
 
 // resolveExplosion loads a death-blast weapon ref into its stat block, or
@@ -1069,6 +1073,7 @@ func (sess *Session) resolveExplosion(name string) *explosionJSON {
 		Damage:            float64(w.DamageDefault),
 		AreaOfEffectWU:    w.AreaOfEffectWU,
 		EdgeEffectiveness: w.EdgeEffectiveness,
+		SoundHit:          w.SoundHit,
 	}
 }
 

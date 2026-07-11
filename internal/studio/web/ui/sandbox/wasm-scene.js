@@ -296,6 +296,10 @@ export class WasmSandboxScene {
     this._fxBinding = {
       particles: new ParticlePool(2048),
       explosions: new ExplosionManager(),
+      // Scene-wide voice for death blasts + impact detonations. The dying
+      // unit's own pool is torn down with it, so the explosion is voiced here
+      // where the fireball and debris live — one pool the whole scene shares.
+      audio: this._audioFactory(),
       worldOffset: { x: 0, y: 0, z: 0 },
     }
     this._unitSoundDebounce = new Map()
@@ -943,6 +947,10 @@ export class WasmSandboxScene {
         try { a.setPaused(s) } catch { /* ignore */ }
       }
     }
+    const fx = this._fxBinding && this._fxBinding.audio
+    if (fx && typeof fx.setPaused === 'function') {
+      try { fx.setPaused(s) } catch { /* ignore */ }
+    }
   }
 
   playUnitSound(unit, eventKey) {
@@ -1085,6 +1093,9 @@ export class WasmSandboxScene {
     // freezes its blasts too and a slow-mo sandbox plays them in slow motion.
     this._fxBinding.particles.tick(dt)
     this._fxBinding.explosions.step(dt)
+    if (this._fxBinding.audio) {
+      this._fxBinding.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
+    }
     return snap
   }
 
@@ -1650,7 +1661,20 @@ export class WasmSandboxScene {
     // Lift the blast to the unit's mid-hull so the fireball engulfs the body
     // rather than erupting from its feet.
     const r = this._unitRadius(u)
-    this._detonate([anchor[0], anchor[1] + r * 0.4, anchor[2]], { aoe, kind: 'death', severity })
+    const blastAt = [anchor[0], anchor[1] + r * 0.4, anchor[2]]
+    this._detonate(blastAt, { aoe, kind: 'death', severity })
+    // Voice the blast through the scene-wide fx pool (the dying unit's own pool
+    // is disposed with it). The stem is the ExplodeAs/SelfDestructAs weapon's
+    // SoundHit; a stock explosion sized to the blast covers a unit with none.
+    const stem = this._deathSoundStem(u, aoe)
+    if (stem && this._fxBinding.audio) {
+      this._fxBinding.audio.play(stem, {
+        vol: 0.9,
+        kind: 'weapon-hit',
+        source: `${(u && u.name) || 'Unit'}: death`,
+        pos: blastAt,
+      })
+    }
     const plan = resolveDeathPlan({
       severity,
       corpse: (u && u.meta && u.meta.corpseObject) || null,
@@ -1678,6 +1702,21 @@ export class WasmSandboxScene {
     const aoe = w && +w.areaOfEffectWU
     if (Number.isFinite(aoe) && aoe > 0) return aoe
     return Math.max(24, this._unitRadius(u) * 2.2)
+  }
+
+  // _deathSoundStem resolves the wav a unit's destruction voices: the
+  // ExplodeAs/SelfDestructAs weapon's SoundHit (same weapon _deathAoe sizes the
+  // blast from), or a stock explosion scaled to the blast when the death weapon
+  // ships no sound / the unit names no ExplodeAs at all.
+  _deathSoundStem(u, aoe) {
+    const meta = u && u.meta
+    const selfD = (u && u.selfDestructMs > 0)
+    const w = meta && ((selfD && meta.selfDestructWeapon) || meta.explodeWeapon || meta.selfDestructWeapon)
+    const hit = w && w.soundHit
+    if (hit) return hit
+    if (aoe >= 96) return 'xplolrg1'
+    if (aoe >= 40) return 'xplomed1'
+    return 'xplosml1'
   }
 
   // _deathSeverity picks the TA corpsetype ladder input: a commander or a
@@ -1717,6 +1756,7 @@ export class WasmSandboxScene {
   dispose() {
     try { this.smokeTrails.clear() } catch { /* ignore */ }
     try { this._fxBinding.explosions.clear() } catch { /* ignore */ }
+    try { if (this._fxBinding.audio) this._fxBinding.audio.dispose() } catch { /* ignore */ }
     this._unitSoundDebounce.clear()
     this._units.clear()
     this._projectiles = []
