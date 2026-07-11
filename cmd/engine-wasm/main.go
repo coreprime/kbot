@@ -60,6 +60,7 @@ func main() {
 		"submitSelfDestruct": js.FuncOf(submitSelfDestruct),
 		"submitLoad":         js.FuncOf(submitLoad),
 		"submitKamikaze":     js.FuncOf(submitKamikaze),
+		"sideDefeated":       js.FuncOf(sideDefeated),
 		"submitRepair":       js.FuncOf(submitRepair),
 		"submitReclaim":      js.FuncOf(submitReclaim),
 		"submitResurrect":    js.FuncOf(submitResurrect),
@@ -122,12 +123,15 @@ func main() {
 	select {}
 }
 
-// create(seed, inputDelay, spawnResolver?, econModel?) -> handle. spawnResolver
-// is an optional JS function (name) -> metaObject used to back Spawn orders.
-// econModel selects the per-side resource law the world runs — 0 = TA (metal +
-// energy), 1 = TA:K (single mana pool) — matching sim.EconomyModel's ordering.
-// The studio threads its running game through it so a TA:K sandbox meters mana
-// and a TA one meters metal/energy, exactly as the authoritative host does.
+// create(seed, inputDelay, spawnResolver?, econModel?, monarchDeath?) -> handle.
+// spawnResolver is an optional JS function (name) -> metaObject used to back
+// Spawn orders. econModel selects the per-side resource law the world runs —
+// 0 = TA (metal + energy), 1 = TA:K (single mana pool) — matching
+// sim.EconomyModel's ordering. monarchDeath is the TA:K MonarchDeath lobby
+// option (boolean, default false): with it on, a side whose monarch dies loses
+// every remaining unit. The studio threads its running game through it so a
+// TA:K sandbox meters mana and a TA one meters metal/energy, exactly as the
+// authoritative host does.
 func create(_ js.Value, args []js.Value) any {
 	seed := uint32(0)
 	delay := uint64(0)
@@ -145,11 +149,14 @@ func create(_ js.Value, args []js.Value) any {
 	if len(args) > 3 && args[3].Type() == js.TypeNumber && args[3].Int() == int(sim.EconomyTAK) {
 		econ = sim.EconomyTAK
 	}
+	// The MonarchDeath lobby option (TA:K): a 5th boolean arg. Off by default
+	// ("Monarch Expendable").
+	monarchDeath := len(args) > 4 && args[4].Type() == js.TypeBoolean && args[4].Bool()
 	inst.rt = script.NewRuntime(seed)
 	// Share the script runtime's MINSTD stream with the world so COB RAND and
 	// world draws consume one generator in call order — the engines' single-
 	// stream discipline the fidelity harness measures against.
-	w := sim.New(sim.Config{Seed: seed, Spawn: inst.spawnFunc(), Rand: inst.rt.Rand(), Economy: econ})
+	w := sim.New(sim.Config{Seed: seed, Spawn: inst.spawnFunc(), Rand: inst.rt.Rand(), Economy: econ, MonarchDeath: monarchDeath})
 	inst.world = w
 	inst.sess = session.New(session.Config{World: w, Runtime: inst.rt, InputDelay: delay})
 	id := nextID
@@ -468,6 +475,17 @@ func submitKamikaze(_ js.Value, args []js.Value) any {
 		return 0
 	}
 	return int(inst.sess.Submit(order.Kamikaze(uint32Slice(args[1]), uint32(args[2].Int()))))
+}
+
+// sideDefeated(handle, side) -> bool. Reports whether a side has been defeated
+// (its monarch died with the MonarchDeath option on) — the render/UI reads it
+// to draw the defeat banner.
+func sideDefeated(_ js.Value, args []js.Value) any {
+	inst := instances[args[0].Int()]
+	if inst == nil {
+		return false
+	}
+	return inst.world.SideDefeated(args[1].Int())
 }
 
 // submitUnload(handle, transportIds[], tx, tz) -> execTick. Sends the

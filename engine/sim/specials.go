@@ -324,6 +324,50 @@ func (w *World) drainTransfers() {
 	}
 }
 
+// drainDefeats applies every queued side defeat (monarch death, specials.md
+// §7.3): each newly-defeated side is recorded, a defeat event emitted, and
+// every remaining unit that side owns is killed. Called once per tick after the
+// per-unit phase so the mass kill never disturbs the tick walk.
+func (w *World) drainDefeats() {
+	if len(w.pendingDefeats) == 0 {
+		return
+	}
+	pending := w.pendingDefeats
+	w.pendingDefeats = w.pendingDefeats[:0]
+	for _, side := range pending {
+		if side < 0 || side >= maxSides || w.defeatedSides[side] {
+			continue
+		}
+		w.defeatedSides[side] = true
+		w.emit(frame.Event{Kind: frame.EvDefeat, Slot: side})
+		w.killPlayerUnits(side)
+	}
+}
+
+// killPlayerUnits kills every living unit a side owns — the game_kill_player_
+// units effect a monarch death triggers (specials.md §7.3). The dying units get
+// a plain death (no secondary blast) so a defeat does not chain explosions
+// across the whole army; iteration is over a snapshot of the insertion order.
+func (w *World) killPlayerUnits(side int) {
+	ids := append([]uint32(nil), w.order...)
+	for _, id := range ids {
+		u := w.units[id]
+		if u == nil || u.Dead || u.Side != side {
+			continue
+		}
+		w.killUnit(u, 100, Blast{})
+	}
+}
+
+// SideDefeated reports whether a side has been defeated (its monarch died with
+// the MonarchDeath option on) — a harness/UI accessor.
+func (w *World) SideDefeated(side int) bool {
+	if side < 0 || side >= maxSides {
+		return false
+	}
+	return w.defeatedSides[side]
+}
+
 // stepReclaim advances the reclaim pulse: the accumulator climbs 2 per 2-tick
 // visit and, when it exceeds 14 — every 16 ticks, the sized-for-15 off-by-one
 // — applies one chunk of reason-5 damage. At the target's death the metal

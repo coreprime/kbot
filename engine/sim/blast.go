@@ -93,4 +93,11 @@ func (w *World) killUnit(t *Unit, severity int, b Blast) {
 	if t.Meta != nil {
 		w.detonateBlast(t, b)
 	}
+	// Monarch death = defeat: with the MonarchDeath lobby option on, the death
+	// of a commander-flagged unit defeats its side (specials.md §7.3). Queued
+	// for a post-loop drain so the mass kill never disturbs the tick walk.
+	if w.monarchDeath && t.Meta != nil && t.Meta.Commander &&
+		t.Side >= 0 && t.Side < maxSides && !w.defeatedSides[t.Side] {
+		w.pendingDefeats = append(w.pendingDefeats, t.Side)
+	}
 }

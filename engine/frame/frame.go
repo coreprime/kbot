@@ -212,6 +212,11 @@ const (
 	// the blast centre and SfxType carries the blast diameter in world
 	// units, so the client sizes its explosion visual from the game data.
 	EvBlast
+	// EvDefeat fires when a side is defeated (its monarch died with the
+	// MonarchDeath lobby option on): Slot carries the defeated side and UnitID
+	// the monarch whose death triggered it. The client uses it to draw the
+	// defeat banner and grey out the side.
+	EvDefeat
 )
 
 // Event is a discrete occurrence during a tick. Only the fields meaningful for

@@ -495,6 +495,14 @@ type World struct {
 	// mutation never disturbs the per-unit tick walk (specials.go).
 	pendingTransfers []pendingTransfer
 
+	// monarchDeath is the MonarchDeath lobby option (TA:K): with it on, a
+	// side whose monarch (commander-flagged unit) dies is defeated — every unit
+	// it owns dies (specials.md §7.3). pendingDefeats queues those side defeats
+	// for a post-loop drain; defeatedSides records which sides have fallen.
+	monarchDeath   bool
+	pendingDefeats []int
+	defeatedSides  [maxSides]bool
+
 	// Vision layer (sight.go), rebuilt every tick from unit positions. All of
 	// it is derived state — a pure function of the hashed unit set — so none
 	// of it is hashed or serialised. sightSrc/radarSrc are the per-side source
@@ -546,6 +554,9 @@ type Config struct {
 	// The storage-cap bonus derives as max(start, 200).
 	StartMetal  int
 	StartEnergy int
+	// MonarchDeath is the TA:K MonarchDeath lobby option: with it on, a side
+	// whose monarch dies loses every remaining unit (specials.md §7.3).
+	MonarchDeath bool
 }
 
 // defaultGravity is the engine default projectile gravity on the sandbox's
@@ -592,6 +603,7 @@ func New(cfg Config) *World {
 		econModel:     cfg.Economy,
 		startMetal:    sm,
 		startEnergy:   se,
+		monarchDeath:  cfg.MonarchDeath,
 	}
 }
 

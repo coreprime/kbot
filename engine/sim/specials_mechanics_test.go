@@ -393,3 +393,51 @@ func TestKamikazeAbortsOnDeadTarget(t *testing.T) {
 		t.Fatal("kamikaze run not cleared after target loss")
 	}
 }
+
+// monarchMeta builds a commander-flagged unit (the TA:K monarch).
+func monarchMeta(name string) *UnitMeta {
+	m := &UnitMeta{Name: name, CanMove: true, MaxVelocity: fixed.FromFloat(1.0),
+		TurnRate: fixed.FromInt(600), Accel: fixed.FromFloat(0.1), BrakeRate: fixed.FromFloat(0.2),
+		MaxHealth: fixed.FromInt(100), Commander: true}
+	return m
+}
+
+// TestMonarchDeathDefeatsSide pins the MonarchDeath lobby option (specials.md
+// §7.3): with the option on, killing a side's monarch defeats that side and
+// every unit it owns dies; the enemy side is untouched.
+func TestMonarchDeathDefeatsSide(t *testing.T) {
+	w := New(Config{Seed: 130, Economy: EconomyTAK, MonarchDeath: true})
+	king := w.AddUnit("king", monarchMeta("king"), nil, fixed.Vec2{}, 0, 0)
+	pawn := w.AddUnit("pawn", cloakMeta("pawn", 0, 0), nil, fixed.Vec2{X: fixed.FromInt(60)}, 0, 0)
+	foe := w.AddUnit("foe", cloakMeta("foe", 0, 0), nil, fixed.Vec2{X: fixed.FromInt(400)}, 1, 1)
+
+	w.killUnit(w.UnitByID(king), 100, Blast{})
+	w.Step(nil)
+
+	if !w.SideDefeated(0) {
+		t.Fatal("side 0 not marked defeated after its monarch died")
+	}
+	if !w.UnitByID(pawn).Dead {
+		t.Fatal("defeated side's other unit survived")
+	}
+	if w.SideDefeated(1) || w.UnitByID(foe).Dead {
+		t.Fatal("enemy side was wrongly defeated")
+	}
+	_ = king
+}
+
+// TestMonarchDeathOptionOff pins the gate: with the option off, a monarch death
+// defeats nobody.
+func TestMonarchDeathOptionOff(t *testing.T) {
+	w := New(Config{Seed: 131, Economy: EconomyTAK, MonarchDeath: false})
+	king := w.AddUnit("king", monarchMeta("king"), nil, fixed.Vec2{}, 0, 0)
+	pawn := w.AddUnit("pawn", cloakMeta("pawn", 0, 0), nil, fixed.Vec2{X: fixed.FromInt(60)}, 0, 0)
+	w.killUnit(w.UnitByID(king), 100, Blast{})
+	w.Step(nil)
+	if w.SideDefeated(0) {
+		t.Fatal("side defeated with MonarchDeath off")
+	}
+	if w.UnitByID(pawn).Dead {
+		t.Fatal("other unit died with MonarchDeath off")
+	}
+}
