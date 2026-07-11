@@ -16,6 +16,7 @@ metal/height PCXes) live alongside but are not part of the TNT.`,
 
 	cmd.AddCommand(
 		newTNTDescribeCommand(),
+		newTNTFeaturesCommand(),
 		newTNTUnpackCommand(),
 		newTNTPackCommand(),
 		newTNTImageCommand(),
