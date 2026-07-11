@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot/internal/maplint"
 )
 

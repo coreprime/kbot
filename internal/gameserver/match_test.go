@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreprime/kbot/engine/fixed"
-	"github.com/coreprime/kbot/engine/order"
-	"github.com/coreprime/kbot/engine/session"
-	"github.com/coreprime/kbot/engine/sim"
-	"github.com/coreprime/kbot/engine/wire"
+	"github.com/coreprime/kbot-engine/engine/fixed"
+	"github.com/coreprime/kbot-engine/engine/order"
+	"github.com/coreprime/kbot-engine/engine/session"
+	"github.com/coreprime/kbot-engine/engine/sim"
+	"github.com/coreprime/kbot-engine/engine/wire"
 )
 
 // loopback is an in-memory Conn pair: the match holds one end, the test driver

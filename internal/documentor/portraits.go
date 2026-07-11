@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/pcx"
 )
 
 // PortraitResult summarises a portrait batch conversion run.

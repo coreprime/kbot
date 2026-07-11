@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/smacker"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/smacker"
 	"github.com/coreprime/kbot/internal/assetrender"
 )
 

@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/pcx"
 )
 
 func newPCXConvertCommand() *cobra.Command {

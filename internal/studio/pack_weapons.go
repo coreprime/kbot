@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/gamedata/tak"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/gamedata/tak"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // packWeaponJSON is one weapons.json entry.  Colour fields are resolved

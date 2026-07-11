@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // TestBuildMapMinimal verifies an empty map (no section stamps) produces a

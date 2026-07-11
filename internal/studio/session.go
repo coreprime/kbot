@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/games"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot/internal/assetrender"
 	"github.com/coreprime/kbot/internal/gameserver"
 )

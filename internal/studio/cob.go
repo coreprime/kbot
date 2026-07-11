@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/scripting"
-	"github.com/coreprime/kbot/formats/scripting/decompiler"
+	"github.com/coreprime/kbot-io/formats/scripting"
+	"github.com/coreprime/kbot-io/formats/scripting/decompiler"
 )
 
 // registerCobAPI wires the /api/studio/cob/{name} endpoint into the

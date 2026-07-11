@@ -15,7 +15,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/tsf"
+	"github.com/coreprime/kbot-io/formats/tsf"
 )
 
 // tafTicksPerSecond is the TAF playback clock — durations are expressed in

@@ -15,11 +15,11 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/maplint"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
@@ -287,7 +287,7 @@ func loadTNT(path string) (*tnt.Map, []tnt.Feature, []byte, error) {
 }
 
 func tntServerPalette() (color.Palette, error) {
-	p, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	p, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +473,7 @@ func makeTNTPreviewHandler(r *Resolver) server.ToolHandlerFunc {
 			if vfsErr != nil {
 				return errorResult(fmt.Errorf("open game-data vfs: %w", vfsErr)), nil
 			}
-			spritePal, palErr := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+			spritePal, palErr := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 			if palErr != nil {
 				return errorResult(palErr), nil
 			}

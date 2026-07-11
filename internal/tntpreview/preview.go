@@ -17,10 +17,10 @@ import (
 	"path"
 	"strings"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // Stats summarises what the preview compositor did so callers can surface

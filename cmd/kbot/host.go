@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/coreprime/kbot/engine/sim"
+	"github.com/coreprime/kbot-engine/engine/sim"
 	"github.com/coreprime/kbot/internal/gameserver"
 	"github.com/spf13/cobra"
 )

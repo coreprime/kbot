@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/objects3d"
+	"github.com/coreprime/kbot-io/formats/objects3d"
 )
 
 // Spin-preview tuning for wreckage / object features.

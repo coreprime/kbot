@@ -15,12 +15,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/objects3d"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/sct"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/objects3d"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/sct"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // registerModelAPI wires the 3DO + texture endpoints into the shared mux.

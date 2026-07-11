@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/formats/hpi"
+	"github.com/coreprime/kbot-io/formats/hpi"
 	"github.com/coreprime/kbot/internal/workspace"
 )
 

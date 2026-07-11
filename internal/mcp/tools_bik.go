@@ -9,7 +9,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/bik"
+	"github.com/coreprime/kbot-io/formats/bik"
 )
 
 func registerBIKTools(s *server.MCPServer, r *Resolver) {

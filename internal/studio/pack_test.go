@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/engine/script"
-	"github.com/coreprime/kbot/formats/scripting"
-	"github.com/coreprime/kbot/internal/testutil"
+	"github.com/coreprime/kbot-engine/engine/script"
+	"github.com/coreprime/kbot-io/formats/scripting"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 // TestBuildPackDeterministic packs the same small unit set twice from the

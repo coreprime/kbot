@@ -10,9 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot/internal/maplint"
 )
 

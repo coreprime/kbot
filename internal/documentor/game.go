@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coreprime/kbot/games"
-	_ "github.com/coreprime/kbot/games/takingdoms"
-	_ "github.com/coreprime/kbot/games/totala"
+	"github.com/coreprime/kbot-engine/games"
+	_ "github.com/coreprime/kbot-game-takingdoms"
+	_ "github.com/coreprime/kbot-game-totala"
 )
 
 // Game identifies which title's reference catalogue we're rendering. Values

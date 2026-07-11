@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/fnt"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pal"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/sct"
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/fnt"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pal"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/sct"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // RenderRequest captures the query options a representation URL can carry. The

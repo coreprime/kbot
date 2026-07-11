@@ -9,7 +9,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/crt"
+	"github.com/coreprime/kbot-io/formats/crt"
 )
 
 func registerCRTTools(s *server.MCPServer, r *Resolver) {

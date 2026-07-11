@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/sct"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/sct"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
@@ -1286,7 +1286,7 @@ func (sess *Session) loadPaletteBytes() []byte {
 	if data, err := sess.vfs.ReadFile("palettes/palette.pal"); err == nil && len(data) >= 1024 {
 		return data
 	}
-	return assets.DefaultPalette
+	return palettes.DefaultPalette
 }
 
 // handleSectionHeights returns the section's per-attribute-cell heights
@@ -1883,7 +1883,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 func (sess *Session) loadVFSPalette() color.Palette {
 	palData, err := sess.vfs.ReadFile("palettes/palette.pal")
 	if err != nil {
-		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 		if err != nil {
 			return nil
 		}

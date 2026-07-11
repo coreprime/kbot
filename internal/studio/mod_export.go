@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
-	hpiv2 "github.com/coreprime/kbot/formats/hpi/v2"
+	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
+	hpiv2 "github.com/coreprime/kbot-io/formats/hpi/v2"
 	"github.com/coreprime/kbot/internal/workspace"
 )
 

@@ -7,16 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // TNTPalette returns the embedded TA palette as a color.Palette.
 func TNTPalette() (color.Palette, error) {
-	pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return nil, fmt.Errorf("load TA palette: %w", err)
 	}
@@ -27,7 +27,7 @@ func TNTPalette() (color.Palette, error) {
 // for a kingdom name (aramon, taros, veruna, zhon, creon). TA:K bakes its
 // minimap with the per-kingdom texture palette rather than a single global one.
 func TAKKingdomPalette(kingdom string) (color.Palette, error) {
-	raw, ok := assets.TAKPalettes[strings.ToLower(strings.TrimSpace(kingdom))]
+	raw, ok := palettes.TAKPalettes[strings.ToLower(strings.TrimSpace(kingdom))]
 	if !ok {
 		return nil, fmt.Errorf("unknown TA:K kingdom %q (want aramon, taros, veruna, zhon, or creon)", kingdom)
 	}

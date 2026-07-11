@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 )
 
 // setupVFSAPI writes a small loose-file tree to a temp dir, mounts it, and

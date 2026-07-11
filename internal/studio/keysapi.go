@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gamedata/common"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/gamedata/common"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 func (sess *Session) registerKeysAPI(mux *http.ServeMux) {

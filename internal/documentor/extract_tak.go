@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // extractUnitsTAK parses every .fbi under units/ in a flattened TA: Kingdoms

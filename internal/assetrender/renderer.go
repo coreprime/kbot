@@ -18,9 +18,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/cache"
 	"github.com/coreprime/kbot/internal/palettepick"
 )
@@ -182,7 +182,7 @@ func (r *Renderer) CacheKey(path string, data []byte) string {
 func (r *Renderer) ResolvePalette(gafPath, override string) (*gaf.Palette, string) {
 	res, err := palettepick.Resolve(r.vfs, gafPath, override)
 	if err != nil || res.Palette == nil {
-		fallback, _ := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		fallback, _ := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 		return fallback, "embedded"
 	}
 	tag := res.Source.String()
@@ -202,7 +202,7 @@ func (r *Renderer) GlobalPalette() color.Palette {
 			return paletteFromRGBA(palData)
 		}
 	}
-	pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return nil
 	}

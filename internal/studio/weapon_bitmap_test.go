@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 )
 
 // taPathForSmoke returns the TA install root used by the smoke tests.

@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/gamedata/tak"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/games"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/gamedata/tak"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-engine/games"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the

@@ -1,8 +1,8 @@
 package gameserver
 
 import (
-	"github.com/coreprime/kbot/engine/fixed"
-	"github.com/coreprime/kbot/engine/sim"
+	"github.com/coreprime/kbot-engine/engine/fixed"
+	"github.com/coreprime/kbot-engine/engine/sim"
 )
 
 // Demo unit stats. These exact float values are mirrored by the browser demo

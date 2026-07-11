@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/tsf"
+	"github.com/coreprime/kbot-io/formats/tsf"
 )
 
 func newTAFListCommand() *cobra.Command {

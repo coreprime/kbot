@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // SlotsPerPage is TA's per-page build-menu grid (2 columns × 3 rows).

@@ -7,10 +7,10 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/scripting"
-	"github.com/coreprime/kbot/formats/scripting/assembly"
-	"github.com/coreprime/kbot/formats/scripting/decompiler"
-	"github.com/coreprime/kbot/formats/scripting/linter"
+	"github.com/coreprime/kbot-io/formats/scripting"
+	"github.com/coreprime/kbot-io/formats/scripting/assembly"
+	"github.com/coreprime/kbot-io/formats/scripting/decompiler"
+	"github.com/coreprime/kbot-io/formats/scripting/linter"
 )
 
 // ── tool registration ─────────────────────────────────────────────────────

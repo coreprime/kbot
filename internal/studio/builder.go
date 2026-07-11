@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
-	"github.com/coreprime/kbot/formats/sct"
-	"github.com/coreprime/kbot/formats/tnt"
+	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
+	"github.com/coreprime/kbot-io/formats/sct"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // blankTileByte is the palette index used for empty tile cells.  The TA

@@ -16,8 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 func newGAFBuildCommand() *cobra.Command {
@@ -131,7 +131,7 @@ Examples:
 // An empty path means use the embedded default TA palette.
 func loadBuildPalette(path string) (*gaf.Palette, error) {
 	if path == "" {
-		palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		palette, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load default palette: %w", err)
 		}

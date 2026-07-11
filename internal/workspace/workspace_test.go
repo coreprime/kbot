@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot/internal/kbotctx"
 )
 

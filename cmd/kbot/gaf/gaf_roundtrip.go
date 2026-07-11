@@ -11,8 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 func newGAFRoundtripCommand() *cobra.Command {
@@ -107,7 +107,7 @@ func runGAFRoundtrip(root string, detailed bool) error {
 	fmt.Fprintf(os.Stderr, "\n  %s Scanning %s — %d file(s)\n\n",
 		"🔍", root, len(gafFiles))
 
-	palette, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	palette, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return fmt.Errorf("failed to load default palette: %w", err)
 	}

@@ -13,7 +13,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/fnt"
+	"github.com/coreprime/kbot-io/formats/fnt"
 )
 
 func registerFNTTools(s *server.MCPServer, r *Resolver) {

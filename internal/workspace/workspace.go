@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot/internal/kbotctx"
 )
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/bik"
+	"github.com/coreprime/kbot-io/formats/bik"
 )
 
 func newBIKToMP4Command() *cobra.Command {

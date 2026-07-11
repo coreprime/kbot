@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/smacker"
+	"github.com/coreprime/kbot-io/formats/smacker"
 )
 
 func newZRBFromMP4Command() *cobra.Command {

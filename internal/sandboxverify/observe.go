@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coreprime/kbot/engine/fixed"
-	"github.com/coreprime/kbot/engine/frame"
-	"github.com/coreprime/kbot/engine/sim"
+	"github.com/coreprime/kbot-engine/engine/fixed"
+	"github.com/coreprime/kbot-engine/engine/frame"
+	"github.com/coreprime/kbot-engine/engine/sim"
 )
 
 // evaluate samples one check's observable at the current (already stepped and

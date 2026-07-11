@@ -9,8 +9,8 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
-	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
-	"github.com/coreprime/kbot/internal/testutil"
+	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 // TestTNTLintHandler runs the tnt_lint MCP tool against a stock TA

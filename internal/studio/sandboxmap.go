@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coreprime/kbot/formats/gamedata/ta"
-	"github.com/coreprime/kbot/formats/tdf"
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // Sandbox map support: the battlefield endpoints behind the sandbox's map

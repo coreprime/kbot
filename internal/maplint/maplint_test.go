@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // TestCheckDuplicateTilesDetectsRepeat seeds a tile pool with two

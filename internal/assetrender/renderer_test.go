@@ -3,8 +3,8 @@ package assetrender
 import (
 	"testing"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
 )
 
 // newTestRenderer builds a Renderer over an empty temp directory. With no

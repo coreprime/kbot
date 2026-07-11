@@ -9,7 +9,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/sct"
+	"github.com/coreprime/kbot-io/formats/sct"
 )
 
 func registerSCTTools(s *server.MCPServer, r *Resolver) {

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/spf13/cobra"
 )
 

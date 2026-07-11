@@ -8,9 +8,9 @@ import (
 	"image/png"
 	"net/http"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -51,7 +51,7 @@ func (sess *Session) handleExportFullRender(w http.ResponseWriter, r *http.Reque
 		writePNGResponse(w, base)
 		return
 	}
-	spritePal, palErr := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	spritePal, palErr := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if palErr != nil {
 		http.Error(w, fmt.Sprintf("load sprite palette: %v", palErr), http.StatusInternalServerError)
 		return

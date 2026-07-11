@@ -10,7 +10,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/pcx"
 )
 
 func registerPCXTools(s *server.MCPServer, r *Resolver) {

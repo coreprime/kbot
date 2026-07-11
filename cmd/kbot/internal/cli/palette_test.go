@@ -6,14 +6,14 @@ import (
 	"testing"
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // TestTAKKingdomPalettesLoad confirms every embedded TA: Kingdoms palette is a
 // well-formed 256-colour palette and resolves through the helper.
 func TestTAKKingdomPalettesLoad(t *testing.T) {
 	for _, k := range []string{"aramon", "taros", "veruna", "zhon", "creon"} {
-		raw, ok := assets.TAKPalettes[k]
+		raw, ok := palettes.TAKPalettes[k]
 		if !ok {
 			t.Errorf("missing embedded palette for kingdom %q", k)
 			continue

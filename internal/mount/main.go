@@ -12,12 +12,12 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/ai"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/scripting"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/ai"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/scripting"
+	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )

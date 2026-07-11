@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gaf"
 )
 
 // weapon_bitmap.go

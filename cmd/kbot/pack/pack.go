@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coreprime/kbot/games"
+	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot/internal/studio"
 	"github.com/spf13/cobra"
 
 	// The shipped games register themselves from their package inits.
-	_ "github.com/coreprime/kbot/games/takingdoms"
-	_ "github.com/coreprime/kbot/games/totala"
+	_ "github.com/coreprime/kbot-game-takingdoms"
+	_ "github.com/coreprime/kbot-game-totala"
 )
 
 var (

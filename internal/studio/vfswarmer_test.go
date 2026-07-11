@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 )
 
 func TestVFSEventHubFanout(t *testing.T) {

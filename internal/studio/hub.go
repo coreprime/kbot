@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/coreprime/kbot/internal/workspace"
 )

@@ -11,7 +11,7 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/coreprime/kbot/internal/testutil"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 func TestNewServer_NoMount(t *testing.T) {

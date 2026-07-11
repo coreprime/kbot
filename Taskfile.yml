@@ -20,9 +20,9 @@ tasks:
       - task: build-kbot
 
   build-wasm:
-    desc: Build the deterministic engine wasm locally from the in-repo engine/sim and stage it (with its matching wasm_exec.js) for the studio web client
+    desc: Build the deterministic engine wasm locally from the kbot-engine module and stage it (with its matching wasm_exec.js) for the studio web client
     cmds:
-      - GOOS=js GOARCH=wasm go build -o internal/studio/web/engine/engine.wasm ./cmd/engine-wasm
+      - GOOS=js GOARCH=wasm go build -o internal/studio/web/engine/engine.wasm github.com/coreprime/kbot-engine/cmd/engine-wasm
       - cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" internal/studio/web/engine/wasm_exec.js
 
   build-kbot:

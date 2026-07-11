@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/tnt"
+	"github.com/coreprime/kbot-io/formats/tnt"
 )
 
 // Tunable thresholds shared across all callers.  Documented here so a

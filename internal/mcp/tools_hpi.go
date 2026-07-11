@@ -11,7 +11,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/hpi"
+	"github.com/coreprime/kbot-io/formats/hpi"
 )
 
 // ── tool registration ─────────────────────────────────────────────────────

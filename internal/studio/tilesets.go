@@ -3,7 +3,7 @@ package studio
 import (
 	"net/http"
 
-	"github.com/coreprime/kbot/games"
+	"github.com/coreprime/kbot-engine/games"
 )
 
 // handleTilesets returns the terrain sets selectable when creating a new map.

@@ -11,9 +11,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 func newGAFExportCommand() *cobra.Command {
@@ -35,7 +35,7 @@ Use --format to choose between PNG (animated APNG) and GIF.
 Output goes to --target or defaults to <input>.<format>.
 
 By default the embedded TA palette is used, which is correct for Total
-Annihilation assets. TA: Kingdoms ships per-asset palettes in same-named
+Annihilation palettes. TA: Kingdoms ships per-asset palettes in same-named
 .pcx sidecars (e.g. anims/actionbuttons.pcx for anims/actionbuttons.gaf)
 or side palettes under palettes/{aramon,taros,veruna,zhon,aiden,creon}.pcx.
 Point --palette at the .pal or .pcx file that matches the GAF being
@@ -136,7 +136,7 @@ Examples:
 // unrecognised extension is attempted as .pal first then .pcx.
 func loadGAFRenderPalette(path string) (*gaf.Palette, error) {
 	if path == "" {
-		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 		if err != nil {
 			return nil, fmt.Errorf("load embedded palette: %w", err)
 		}

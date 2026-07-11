@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/coreprime/kbot/engine/wire"
+	"github.com/coreprime/kbot-engine/engine/wire"
 )
 
 const (

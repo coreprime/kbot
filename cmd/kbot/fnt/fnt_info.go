@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/fnt"
+	"github.com/coreprime/kbot-io/formats/fnt"
 )
 
 func newFNTInfoCommand() *cobra.Command {

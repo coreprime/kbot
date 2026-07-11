@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreprime/kbot/engine/fixed"
-	"github.com/coreprime/kbot/engine/order"
-	"github.com/coreprime/kbot/engine/wire"
+	"github.com/coreprime/kbot-engine/engine/fixed"
+	"github.com/coreprime/kbot-engine/engine/order"
+	"github.com/coreprime/kbot-engine/engine/wire"
 )
 
 // waitFor polls cond until it holds or the deadline passes. Match state is

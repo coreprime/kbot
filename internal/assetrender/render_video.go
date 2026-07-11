@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/bik"
-	"github.com/coreprime/kbot/formats/smacker"
+	"github.com/coreprime/kbot-io/formats/bik"
+	"github.com/coreprime/kbot-io/formats/smacker"
 )
 
 // videoExts are the source movie formats the renderer can transcode. Smacker

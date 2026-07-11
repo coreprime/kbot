@@ -6,10 +6,10 @@ import (
 	"path"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/ai"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/ai"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // describer turns a file's bytes into a structured, JSON-serialisable map of

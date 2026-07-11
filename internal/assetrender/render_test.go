@@ -5,7 +5,7 @@ import (
 	"image/png"
 	"testing"
 
-	"github.com/coreprime/kbot/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gaf"
 )
 
 // buildGAF encodes a tiny two-frame sequence so the render paths have real

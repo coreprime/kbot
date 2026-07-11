@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/pcx"
 )
 
 // Glamour image slideshow source: TA ships ~50 PCX splash artworks

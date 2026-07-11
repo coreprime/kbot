@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/coreprime/kbot/engine/rng"
+	"github.com/coreprime/kbot-engine/engine/rng"
 )
 
 func TestSpecToSimTick(t *testing.T) {

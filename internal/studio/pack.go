@@ -48,9 +48,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/games"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-engine/games"
 )
 
 // PackOptions configures a BuildPack run.

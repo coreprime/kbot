@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/coreprime/kbot/filesystem"
+	"github.com/coreprime/kbot-io/filesystem"
 )
 
 // GameData represents a single Total Annihilation (or TA: Kingdoms) install

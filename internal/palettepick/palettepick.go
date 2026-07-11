@@ -31,9 +31,9 @@ import (
 	"path"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // VFS is the subset of a virtual filesystem the resolver needs. Both the
@@ -207,7 +207,7 @@ func Resolve(vfs VFS, gafPath, override string) (Result, error) {
 	}
 
 	// 5. Embedded fallback.
-	pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return Result{}, fmt.Errorf("load embedded palette: %w", err)
 	}

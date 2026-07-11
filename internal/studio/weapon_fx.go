@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 )
 
 // weapon_fx.go

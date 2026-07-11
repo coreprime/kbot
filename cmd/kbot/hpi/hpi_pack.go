@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/formats/hpi"
-	hpiv1 "github.com/coreprime/kbot/formats/hpi/v1"
-	hpiv2 "github.com/coreprime/kbot/formats/hpi/v2"
+	"github.com/coreprime/kbot-io/formats/hpi"
+	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
+	hpiv2 "github.com/coreprime/kbot-io/formats/hpi/v2"
 )
 
 // packWriter is the minimal surface the pack command needs from a version

@@ -7,7 +7,7 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 func registerTDFTools(s *server.MCPServer, r *Resolver) {

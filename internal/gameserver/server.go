@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coreprime/kbot/engine/sim"
+	"github.com/coreprime/kbot-engine/engine/sim"
 )
 
 const (

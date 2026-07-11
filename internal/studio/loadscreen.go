@@ -6,8 +6,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/pcx"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pcx"
 )
 
 // Sandbox loading-screen art: both games ship a loading splash in their

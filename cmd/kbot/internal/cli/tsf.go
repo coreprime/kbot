@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/coreprime/kbot/filesystem"
+import "github.com/coreprime/kbot-io/filesystem"
 
 // ResolveTSFInput locates a .tsf script the user named, mounting the active
 // context's VFS so bare names under anims/ resolve. It returns the resolved

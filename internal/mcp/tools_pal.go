@@ -10,15 +10,15 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/pal"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/pal"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // embeddedTAPalette loads the embedded Cavedog TA palette as a *pal.Palette.
 // Used by every render handler that needs a default palette when the caller
 // doesn't supply one.
 func embeddedTAPalette() (*pal.Palette, error) {
-	p, err := pal.LoadFromBytes(assets.DefaultPalette)
+	p, err := pal.LoadFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return nil, fmt.Errorf("load embedded TA palette: %w", err)
 	}

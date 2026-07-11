@@ -14,10 +14,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
-	"github.com/coreprime/kbot/filesystem"
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/formats/tnt"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -208,7 +208,7 @@ func vfsOrEmbeddedPalette(vfs *filesystem.VirtualFileSystem) (*gaf.Palette, erro
 }
 
 func tntPaletteRaw() (*gaf.Palette, error) {
-	pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 	if err != nil {
 		return nil, fmt.Errorf("load TA palette: %w", err)
 	}

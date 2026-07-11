@@ -11,8 +11,8 @@ import (
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/coreprime/kbot/formats/gaf"
-	"github.com/coreprime/kbot/internal/assets"
+	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/palettepick"
 )
 
@@ -243,7 +243,7 @@ func resolveMCPGAFPalette(r *Resolver, gameData, gafVirtualPath, override string
 		if override != "" {
 			return nil, palettepick.Result{}, fmt.Errorf("palette override %q requires a game-data folder", override)
 		}
-		pal, err := gaf.LoadPaletteFromBytes(assets.DefaultPalette)
+		pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
 		if err != nil {
 			return nil, palettepick.Result{}, fmt.Errorf("load embedded palette: %w", err)
 		}

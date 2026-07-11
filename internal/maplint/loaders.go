@@ -3,7 +3,7 @@ package maplint
 import (
 	"strings"
 
-	"github.com/coreprime/kbot/formats/tdf"
+	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
 // ParseOTA reads a TA .ota file's text and extracts the fields the
