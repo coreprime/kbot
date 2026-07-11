@@ -116,9 +116,6 @@ type Session struct {
 	weaponBitmapMu    sync.Mutex
 	weaponBitmapCache map[string][]byte
 
-	weaponFxMu    sync.Mutex
-	weaponFxCache map[string][]byte
-
 	// asset warm queue + VFS warm event hub
 	assetQueueOnce sync.Once
 	assetQueue     *AssetQueue
@@ -165,7 +162,6 @@ func newSession(id, name string, vfs *filesystem.VirtualFileSystem, cacheDir str
 		textureCache:        map[string][]byte{},
 		textureDecalCache:   map[string]bool{},
 		weaponBitmapCache:   map[string][]byte{},
-		weaponFxCache:       map[string][]byte{},
 		glamourPNG:          map[string][]byte{},
 		vfsEvents:           newVFSEventHub(),
 	}

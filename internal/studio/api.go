@@ -66,7 +66,6 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/sound/", sess.handleSound)
 	mux.HandleFunc("/api/studio/music", sess.handleMusicList)
 	mux.HandleFunc("/api/studio/music/", sess.handleMusicStream)
-	mux.HandleFunc("/api/studio/weapon-fx/", sess.handleWeaponFx)
 	mux.HandleFunc("/api/studio/weapon-bitmap/", sess.handleWeaponBitmap)
 	mux.HandleFunc("/api/studio/export-mod", sess.handleExportMod)
 	sess.registerModelAPI(mux)

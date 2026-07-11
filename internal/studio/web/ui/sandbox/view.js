@@ -38,8 +38,6 @@ import { attachOrbitControls } from '@coreprime/kbot-game3d/camera-controls'
 import { stepSimSpeed } from '../common/sim-controls.js'
 import { activeGame } from '../common/game-registry.js'
 import { ArmedCursor } from '@coreprime/kbot-game3d/armed-cursor'
-import { ExplosionOverlay } from '@coreprime/kbot-game3d/explosion-overlay'
-import { DebrisField } from '@coreprime/kbot-game3d/debris-field'
 import { teamColorForSide } from '@coreprime/kbot-game3d/team-colors'
 import { onEnhanceMeshChanged } from '@coreprime/kbot-game3d/enhance-mesh'
 import {
@@ -63,12 +61,8 @@ export class SandboxView {
     // WasmSandboxScene on first paint.  This is the inversion that lets
     // a tab host N viewports against one engine.
     this._externalScene = scene
-    // World-driver rendering: this pane feeds game3d's high-level
-    // world.applyState / step (the replayer's path) rather than
-    // hand-assembling renderer entities + FX. Default on; set
-    // window.__KBOT_WORLD_DRIVER = false before opening a pane to fall back
-    // to the legacy hand-orchestration for an A/B comparison.
-    this._worldDriver = (typeof window === 'undefined') || window.__KBOT_WORLD_DRIVER !== false
+    // This pane feeds game3d's high-level world.applyState / step (the
+    // replayer's path) rather than hand-assembling renderer entities + FX.
     // Per-key nanolathe beams currently lit in this pane's world (build key →
     // { builderId, buildeeId }); diffed each frame against the scene's live
     // build set to toggle world.latheBeam on/off.
@@ -328,82 +322,13 @@ export class SandboxView {
       if (typeof this.renderer.getGravity === 'function') {
         this.scene.engine.setGravity(this.renderer.getGravity())
       }
-      // Cross-unit dynamic-light aggregation is pull-side (Phase D):
-      // the per-frame onBeforeFrame hook below queries
-      // engine.getSceneLight() and forwards the result to
-      // this.renderer.setPulseLight.  The engine itself stays headless.
-    }
-    // ExplosionOverlay — DOM <img> layer that plays the real TA GAF
-    // explosion sprites at impact (see /api/studio/weapon-fx).  Each
-    // binding's _onParticleExpire path attempts to load the named
-    // weapon's APNG and play it through this overlay; on miss the
-    // synthetic particle cluster still fires.  Multi-pane: only one
-    // overlay can be active per binding, so the first-attaching pane
-    // wins — split panes share the visual through whichever canvas's
-    // parent the overlay was appended to.
-    if (!this._worldDriver && !this._explosionOverlay && this.renderer && this.renderer.canvas) {
-      this._explosionOverlay = new ExplosionOverlay(
-        this.renderer.canvas,
-        // project closure — pixel scale stays constant (4 px/wu) for
-        // the MVP; a future pass can derive it from camera distance to
-        // make the sprite track its real world-space footprint.
-        (world) => {
-          const p = this.renderer.worldToCanvas(world)
-          if (!p) return null
-          return { x: p.x, y: p.y, depth: 1, pxPerWU: 4 }
-        }
-      )
-      // Install on every binding the engine has already spawned (case
-      // where the view re-attaches to an existing scene), then keep up
-      // by subscribing to future spawns.  Also attach a reference to
-      // the renderer itself so weapon-driver.spawnProjectile can look
-      // up registered fx.gaf bitmap sprites (rendertype=4 weapons).
-      if (this.scene && this.scene.engine) {
-        for (const u of this.scene.engine.units?.() || []) {
-          if (u && u.binding) {
-            if (!u.binding._explosionOverlay) u.binding._explosionOverlay = this._explosionOverlay
-            if (!u.binding._renderer) u.binding._renderer = this.renderer
-          }
-        }
-        this._explosionSpawnUnsub = this.scene.engine.on?.('spawn', (ev) => {
-          const inst = ev && ev.unit
-          if (inst && inst.binding) {
-            if (!inst.binding._explosionOverlay) inst.binding._explosionOverlay = this._explosionOverlay
-            if (!inst.binding._renderer) inst.binding._renderer = this.renderer
-          }
-        }) || null
-      }
-    }
-    // Debris field — per-pane flying-polygon death shards, built + torn apart
-    // in THIS pane's GL context (a shard mesh is a VBO upload, which can only
-    // happen here). The scene stays headless and emits a 'death' event with the
-    // killed unit's model + the TA severity plan; we shatter it into gravity-
-    // driven fragments that settle on the ground and fade out. Only the first
-    // pane to attach owns the field for a shared scene (idempotent thereafter),
-    // matching the single-overlay rule above — split panes share the shower.
-    if (!this._worldDriver && !this._debris && this._world) {
-      this._debris = new DebrisField({
-        gl: this._world.gl,
-        heightAt: (x, z) => this.#terrainHeightAt(x, z),
-      })
-      if (this.scene && typeof this.scene.on === 'function') {
-        this._deathUnsub = this.scene.on('death', (ev) => {
-          if (!ev || !ev.plan || !ev.plan.debris) return
-          const u = ev.unit
-          if (!u || !u.model) return
-          const a = ev.anchor || [u.pos.x, u.pos.y, u.pos.z]
-          this._debris.spawn(u.model, { x: a[0], y: a[1], z: a[2], headingRad: u.heading }, {
-            severity: ev.severity != null ? ev.severity : 100,
-          })
-        }) || null
-      }
     }
     // World-driver FX events: the scene stays the shared sim + event source,
     // and THIS pane replays each destruction / weapon shot into its own
     // world so the driver renders debris, wreck, blast (mushroom for a
     // commander-scale AoE), and the weapon visual in this pane's context.
-    // One subscription per pane, matching the legacy per-pane debris field.
-    if (this._worldDriver && this._world && !this._worldFxUnsubs && this.scene && typeof this.scene.on === 'function') {
+    // One subscription per pane.
+    if (this._world && !this._worldFxUnsubs && this.scene && typeof this.scene.on === 'function') {
       this._worldFxUnsubs = []
       this._worldFxUnsubs.push(this.scene.on('death', (ev) => {
         const u = ev && ev.unit
@@ -502,35 +427,14 @@ export class SandboxView {
       if (this.scene && typeof this.scene.interpolate === 'function') {
         this.scene.interpolate()
       }
-      if (this._worldDriver) {
-        // High-level driver path: hand the whole rendered world (units,
-        // pieces, projectiles, build wireframes, selection, ghosts) plus the
-        // sub-tick FX (scene lights, explosion geometry, debris, nanolathe,
-        // weapon shots, deaths) to game3d's world.applyState / step — the
-        // same driver the replayer runs. The wasm sim still owns the frames;
-        // this only reshapes each interpolated frame into the driver's
-        // contract, so the #119 no-drift cadence is unchanged.
-        this.#driveWorld(dtMs)
-      } else {
-        // Legacy hand-orchestration path (retained behind
-        // window.__KBOT_WORLD_DRIVER === false for A/B comparison).
-        if (this.scene && this.scene.engine && typeof this.renderer.setPulseLights === 'function') {
-          const lights = typeof this.scene.engine.getSceneLights === 'function'
-            ? this.scene.engine.getSceneLights()
-            : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
-          this.renderer.setPulseLights(lights)
-        }
-        if (this._debris) {
-          const rt = this.scene && this.scene.runtime
-          const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
-          this._debris.step(dtMs * rate)
-        }
-        if (this.scene && typeof this.scene.fxExplosionTris === 'function' && typeof this.renderer.setExplosionTris === 'function') {
-          const ex = this.scene.fxExplosionTris()
-          this.renderer.setExplosionTris(ex.tris, ex.vertCount)
-        }
-        this.#refreshEntities()
-      }
+      // High-level driver path: hand the whole rendered world (units,
+      // pieces, projectiles, build wireframes, selection, ghosts) plus the
+      // sub-tick FX (scene lights, explosion geometry, debris, nanolathe,
+      // weapon shots, deaths) to game3d's world.applyState / step — the
+      // same driver the replayer runs. The wasm sim still owns the frames;
+      // this only reshapes each interpolated frame into the driver's
+      // contract, so the #119 no-drift cadence is unchanged.
+      this.#driveWorld(dtMs)
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
       // isn't active (early-out inside).
@@ -1951,14 +1855,6 @@ export class SandboxView {
         // without the boost they pop to the impostor dot mid-flight.
         isProjectile: true,
       })
-    }
-    // Death debris — flying-polygon shards from destroyed units, each fading
-    // over its last stretch of life. Appended after the live units so a shard
-    // cloud draws over the ground it's scattering across. The shard models own
-    // their VBOs in this pane's context (built at spawn), so no local-cache
-    // substitution is needed.
-    if (this._debris) {
-      for (const d of this._debris.entities()) entities.push(d)
     }
     this.renderer.setEntities(entities)
   }
@@ -3752,27 +3648,6 @@ export class SandboxView {
     // base _localModels entries / the renderer's GL context teardown;
     // clones only alias them, so there's nothing to GPU-free here).
     this._localInstances.clear()
-    // Explosion overlay teardown — removes the DOM root + any live
-    // sprites, and detaches the spawn subscription so future spawns
-    // don't try to wire a destroyed overlay onto a binding.
-    if (this._explosionSpawnUnsub) {
-      try { this._explosionSpawnUnsub() } catch { /* ignore */ }
-      this._explosionSpawnUnsub = null
-    }
-    if (this._explosionOverlay) {
-      try { this._explosionOverlay.dispose() } catch { /* ignore */ }
-      this._explosionOverlay = null
-    }
-    // Debris teardown — drop the death subscription and release every live
-    // shard VBO before the GL context goes.
-    if (this._deathUnsub) {
-      try { this._deathUnsub() } catch { /* ignore */ }
-      this._deathUnsub = null
-    }
-    if (this._debris) {
-      try { this._debris.clear() } catch { /* ignore */ }
-      this._debris = null
-    }
     if (this.renderer) this.renderer.dispose()
     this.renderer = null
     this.scene = null

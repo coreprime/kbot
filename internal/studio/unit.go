@@ -219,9 +219,9 @@ type unitMetaJSON struct {
 	//   SelfDestructAs  — TDF `SelfDestructAs`: weapon name whose explosion
 	//                     art plays when the unit is manually self-destructed
 	//                     (the bigger 5-second-timer blast).
-	// Both are weapon-by-name references; the client passes the resolved
-	// name to /api/studio/weapon-fx/{weapon}/{variant} to fetch the real
-	// GAF animation.  Empty when the FBI omits the field.
+	// Both are weapon-by-name references the client resolves through the
+	// death-FX path so a killed unit throws its authored blast.  Empty when
+	// the FBI omits the field.
 	ExplodeAs      string `json:"explodeAs,omitempty"`
 	SelfDestructAs string `json:"selfDestructAs,omitempty"`
 
@@ -775,10 +775,9 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 		}
 	}
 	// Death explosion FBI refs — surfaced for the client's death-FX
-	// path.  Uppercased so the eventual /api/studio/weapon-fx/<name>
-	// fetch matches the weapon-by-name resolver (which lowercases for
-	// comparison anyway).  The resolved blast stats ride alongside so the
-	// sim deals data-faithful splash damage on death.
+	// path.  Uppercased so the name matches the weapon-by-name resolver
+	// (which lowercases for comparison anyway).  The resolved blast stats
+	// ride alongside so the sim deals data-faithful splash damage on death.
 	out.ExplodeWeapon = sess.resolveExplosion(info.ExplodeAs)
 	out.SelfDestructWeapn = sess.resolveExplosion(info.SelfDestructAs)
 	out.ExplodeAs = strings.ToUpper(strings.TrimSpace(info.ExplodeAs))

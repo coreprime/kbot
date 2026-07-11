@@ -27,7 +27,6 @@ import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { TA_TICK_MS } from '../../engine/tick-rate.js'
 import { activeGame } from '../common/game-registry.js'
-import { gatherSceneLights } from '@coreprime/kbot-game3d/scene-lights'
 import { AudioPool } from '@coreprime/kbot-game3d/audio-pool'
 import { ParticlePool } from '@coreprime/kbot-game3d/cob-particles'
 import {
@@ -37,9 +36,7 @@ import {
   playWeaponSound,
   SFX_SMOKE_WHITE,
 } from '@coreprime/kbot-game3d/weapon-driver'
-import { ExplosionManager } from '@coreprime/kbot-game3d/explosion-fx'
 import {
-  impactBurst,
   latheConeSpray,
   nanoPieceNames,
   resolveDeathPlan,
@@ -284,23 +281,12 @@ export class WasmSandboxScene {
     // Smoke trails for in-flight missiles — scene-owned so all panes share one
     // set of puffs rather than each pushing duplicates.
     this.smokeTrails = new SmokeTrailManager()
-    // World-level FX binding shared by every death / impact detonation:
-    //   particles  — one scene-wide pool so a blast's fireball + sparks +
-    //                smoke plume live independently of the (possibly already
-    //                despawned) unit that died, and every pane sees them.
-    //   explosions — the polygonal ExplosionManager the game3d world driver
-    //                uses: a capped, coalesced fireball/shockwave (and the
-    //                mushroom-cloud tier for commander-scale blasts). Its
-    //                triangle buffer + lights are surfaced to the renderer by
-    //                the view each frame (fxExplosionTris / getSceneLights).
+    // Scene-wide voice for death blasts + impact detonations. The dying
+    // unit's own pool is torn down with it, so the explosion is voiced here —
+    // one pool the whole scene shares. The blast geometry + debris themselves
+    // are rendered per-pane by the game3d world driver (world.unitDeath).
     this._fxBinding = {
-      particles: new ParticlePool(2048),
-      explosions: new ExplosionManager(),
-      // Scene-wide voice for death blasts + impact detonations. The dying
-      // unit's own pool is torn down with it, so the explosion is voiced here
-      // where the fireball and debris live — one pool the whole scene shares.
       audio: this._audioFactory(),
-      worldOffset: { x: 0, y: 0, z: 0 },
     }
     this._unitSoundDebounce = new Map()
     // Fixed-timestep accumulator.
@@ -511,8 +497,8 @@ export class WasmSandboxScene {
   ready() { return this._readyPromise }
 
   // engine alias — the view reaches through scene.engine for a handful of
-  // calls (setGravity / on / units / getSceneLight / setWeaponTarget /
-  // stopUnits).  They all live on the scene, so the scene IS the engine here.
+  // calls (setGravity / on / units / setWeaponTarget / stopUnits).  They all
+  // live on the scene, so the scene IS the engine here.
   get engine() { return this }
 
   get runtime() { return this._runtime }
@@ -778,8 +764,6 @@ export class WasmSandboxScene {
       _lifecycle: 'created',
       hasScript: () => false,
       start: () => {},
-      getSceneLight: () => null,
-      getSceneLights: () => [],
     }
     if (this._silenced && typeof binding.audio.setPaused === 'function') {
       try { binding.audio.setPaused(true) } catch { /* ignore */ }
@@ -982,45 +966,6 @@ export class WasmSandboxScene {
     return this.playUnitSound(unit, pick)
   }
 
-  // getSceneLights scans every live unit's particle pool and returns the
-  // strongest light-emitting particles (up to MAX_PULSE_LIGHTS) for the
-  // renderer's dynamic light slots.  Returning several — rather than a single
-  // winner — lets every concurrent shot light the scene at once, so a
-  // rapid-firing battleship's volley each casts its own glow instead of only
-  // the first shell.  Mirrors the GameEngine path through the shared collector.
-  getSceneLights() {
-    const pools = []
-    for (const u of this._units.values()) {
-      if (u.dead) continue
-      const p = u.binding && u.binding.particles
-      if (p) pools.push(p)
-    }
-    // The scene-wide detonation pool lights the field even after the unit that
-    // died is gone, so its fireball still throws a glow.
-    pools.push(this._fxBinding.particles)
-    const lights = gatherSceneLights(pools)
-    // The polygonal ExplosionManager exposes its own dominant lights (each
-    // live fireball, pre-dimmed against a global budget); fold them in so a
-    // commander mushroom floods the scene the way it does in the replayer.
-    for (const l of this._fxBinding.explosions.lights()) lights.push(l)
-    return lights
-  }
-
-  // fxExplosionTris exposes the polygonal explosion geometry (a stride-7
-  // Float32 triangle soup + its vertex count) for the view to hand to
-  // renderer.setExplosionTris each frame. Scene-owned so every pane draws the
-  // same detonations from one manager.
-  fxExplosionTris() {
-    return { tris: this._fxBinding.explosions.tris(), vertCount: this._fxBinding.explosions.vertCount() }
-  }
-
-  // getSceneLight returns the single strongest light for callers still on the
-  // one-slot path; null when nothing is lit.
-  getSceneLight() {
-    const lights = this.getSceneLights()
-    return lights.length ? lights[0] : null
-  }
-
   // ── Per-frame tick ────────────────────────────────────────────────
 
   // tick advances the wasm world on the fixed TICK_MS grid for however much
@@ -1088,11 +1033,8 @@ export class WasmSandboxScene {
       if (b.audio) b.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
     }
     this.smokeTrails.tick(dt)
-    // Age the scene-wide detonation FX (fireball smoke/sparks + the polygonal
-    // ExplosionManager) on the same rate-scaled clock, so a paused sandbox
-    // freezes its blasts too and a slow-mo sandbox plays them in slow motion.
-    this._fxBinding.particles.tick(dt)
-    this._fxBinding.explosions.step(dt)
+    // Age the scene-wide detonation voice on the same rate-scaled clock, so a
+    // paused sandbox freezes its blasts too and a slow-mo one plays them slow.
     if (this._fxBinding.audio) {
       this._fxBinding.audio.tick(rt.playbackRate || 1, this._silenced || rt.paused)
     }
@@ -1455,17 +1397,8 @@ export class WasmSandboxScene {
         case 'death':
           this._onDeath(ev)
           break
-        case 'explode':
-          // COB EXPLODE opcode (death-throes debris from a Killed script) —
-          // a small impact-tier fireball punctuating the death sequence.
-          this._flash(ev, 24)
-          break
         case 'emitSfx':
           this._sfx(ev.unitId, SFX_SMOKE_WHITE, ev)
-          break
-        case 'projectileHit':
-          // A shot landing on a unit — a medium impact detonation.
-          this._flash(ev, 56)
           break
         case 'corpseSpawn':
           // The Killed script settled its corpsetype (carried in slot):
@@ -1658,11 +1591,10 @@ export class WasmSandboxScene {
     }
     const aoe = this._deathAoe(u)
     const severity = this._deathSeverity(u)
-    // Lift the blast to the unit's mid-hull so the fireball engulfs the body
-    // rather than erupting from its feet.
+    // Lift the blast to the unit's mid-hull so the voice + forwarded death FX
+    // key off the body's centre rather than its feet.
     const r = this._unitRadius(u)
     const blastAt = [anchor[0], anchor[1] + r * 0.4, anchor[2]]
-    this._detonate(blastAt, { aoe, kind: 'death', severity })
     // Voice the blast through the scene-wide fx pool (the dying unit's own pool
     // is disposed with it). The stem is the ExplodeAs/SelfDestructAs weapon's
     // SoundHit; a stock explosion sized to the blast covers a unit with none.
@@ -1681,14 +1613,6 @@ export class WasmSandboxScene {
       heapCorpse: (u && u.meta && u.meta.corpseHeapObject) || null,
     })
     this._emit('death', { unit: u, anchor, severity, aoe, plan })
-  }
-
-  // _detonate routes a blast through the game3d world-fx pipeline: the
-  // scene-wide particle pool gets the fireball flash + sparks + smoke plume,
-  // and the polygonal ExplosionManager gets a tiered fireball/shockwave (or a
-  // mushroom cloud past the AoE threshold). One binding drives both.
-  _detonate(pos, opts) {
-    try { impactBurst(this._fxBinding, pos, opts) } catch { /* vis must not stall the sim */ }
   }
 
   // _deathAoe reads the unit's resolved death-weapon blast DIAMETER (world
@@ -1738,12 +1662,6 @@ export class WasmSandboxScene {
     return Number.isFinite(r) && r > 0 ? r : 16
   }
 
-  // _flash detonates a small impact-tier blast at an event anchor (COB EXPLODE
-  // debris, projectile hits). The aoe hint scales the burst fed to impactBurst.
-  _flash(ev, aoe) {
-    this._detonate([ev.x, ev.y, ev.z], { aoe, kind: 'impact' })
-  }
-
   _sfx(unitId, kind, ev) {
     const u = this._units.get(unitId)
     const b = u && u.binding
@@ -1755,7 +1673,6 @@ export class WasmSandboxScene {
 
   dispose() {
     try { this.smokeTrails.clear() } catch { /* ignore */ }
-    try { this._fxBinding.explosions.clear() } catch { /* ignore */ }
     try { if (this._fxBinding.audio) this._fxBinding.audio.dispose() } catch { /* ignore */ }
     this._unitSoundDebounce.clear()
     this._units.clear()
