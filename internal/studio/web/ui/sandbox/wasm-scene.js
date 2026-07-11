@@ -1598,7 +1598,20 @@ export class WasmSandboxScene {
     // ordinary lethal kill). Mirrors the replayer's cause-skip.
     const reason = ev.sfxType | 0
     if (reason === DEATH_REASON_CAPTURED || reason === DEATH_REASON_RECLAIMED) {
-      this._emit('death', { unit: u, anchor, severity: 0, aoe: 0, plan: { debris: false, corpse: null } })
+      // suppressed: the world-driver FX fan-out must NOT run its unitDeath for
+      // this event — that path detonates a blast unconditionally (its impactBurst
+      // fires even at severity/AoE 0), so a reclaimed building would still
+      // explode. The body just leaves the unit set and vanishes on the next
+      // applyState.
+      this._emit('death', { unit: u, anchor, severity: 0, aoe: 0, suppressed: true, plan: { debris: false, corpse: null } })
+      // The sim removed the body outright — a reclaim leaves no wreck, and a
+      // capture respawns a fresh unit under the new owner (a new id). No corpse
+      // event follows to retire the adapter, and an absent unit is never pruned
+      // from the snapshot loop, so drop it here or it lingers as a frozen ghost
+      // frozen at its last pose. A normal kill keeps its unit as the wreck.
+      this._units.delete(ev.unitId)
+      this.selected.delete(ev.unitId)
+      this._emit('despawn', { unitId: ev.unitId })
       return
     }
     const aoe = this._deathAoe(u)

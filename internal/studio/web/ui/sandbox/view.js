@@ -408,6 +408,11 @@ export class SandboxView {
         const u = ev && ev.unit
         const id = u ? u.id : (ev && ev.unitId)
         if (id == null) return
+        // A suppressed death (a reclaim or a capture / give-away) is not a
+        // destruction: no blast, no debris, no wreck. unitDeath detonates
+        // unconditionally, so skip it entirely and let the removed unit simply
+        // drop out of the next applyState.
+        if (ev.suppressed) return
         // unitDeath runs the TA severity ladder (debris + surviving wreck)
         // and sizes the blast from the pack-sourced death-weapon AoE the
         // scene forwards — a commander's COMMANDER_BLAST selects the
@@ -434,7 +439,12 @@ export class SandboxView {
         const to = ev.target || ev.anchor
         if (!Array.isArray(from) || !Array.isArray(to)) return
         try {
-          this._world.weaponEffect({ weapon: w.name, from, to })
+          // Forward the whole sim weapon meta (not just its name): the world
+          // has no pack weapon catalogue in the sandbox, so a name alone can't
+          // resolve a rendertype and every shot falls back to a laser beam.
+          // The meta already carries rendertype / velocity / ballistic / colour,
+          // so weaponEffect renders the authentic projectile from it.
+          this._world.weaponEffect({ weapon: w, from, to })
         } catch { /* visual only */ }
       }) || (() => {}))
     }
