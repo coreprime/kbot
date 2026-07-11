@@ -13,7 +13,10 @@
 //     while an ordinary building has no such requirement.
 //   - A geothermal vent pushed as a geothermal site reaches the sim: an
 //     ordinary building is refused its plot (the vent blocks) and buildable
-//     clear of it — the plumbing that lets a geothermal plant's own gate fire.
+//     clear of it.
+//   - A geothermal plant (yardmap laid in 'G') is gated onto that vent by the
+//     wasm meta bridge's Geothermal derivation: refused off the vent, buildable
+//     over it, and unblocked by the vent it is founded upon.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -60,9 +63,13 @@ const DEFS = {
 
 // A metal-extractor buildee (extractsmetal>0) and a plain building, backing the
 // canBuildAt resolver the wasm session calls to resolve a build name → meta.
+// A geothermal plant carries a yardmap laid in 'G' — the wasm meta bridge
+// derives its Geothermal flag from that, the same way the native games meta
+// does — so canBuildAt gates it onto a vent.
 const RESOLVER = (name) => ({
   mex: { name: 'mex', canMove: false, footprintX: 3, footprintZ: 3, maxSlope: 50, econ: { extractsMetal: 0.001 } },
   hut: { name: 'hut', canMove: false, footprintX: 3, footprintZ: 3, maxSlope: 50 },
+  geo: { name: 'geo', canMove: false, footprintX: 3, footprintZ: 3, maxSlope: 50, yardMap: 'GGG GGG GGG' },
 }[name] || null)
 
 test('map resource features gate the studio build preview through the wasm path', async () => {
@@ -98,6 +105,11 @@ test('map resource features gate the studio build preview through the wasm path'
   // (the vent is a solid obstacle) yet buildable clear of it.
   assert.equal(can('hut', 34, 34), false, 'ordinary building must be blocked by the vent feature')
   assert.equal(can('hut', 10, 34), true, 'clear of the vent the plot builds')
+
+  // Geothermal plant: refused clear of the vent, buildable where its footprint
+  // catches it, and the vent it is founded over does not block it.
+  assert.equal(can('geo', 10, 34), false, 'geothermal plant off the vent must read REFUSED')
+  assert.equal(can('geo', 34, 34), true, 'geothermal plant on the vent must read BUILDABLE')
 
   api.destroy(handle)
 })
