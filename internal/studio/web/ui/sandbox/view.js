@@ -1605,20 +1605,22 @@ export class SandboxView {
   #ghostList() {
     const list = []
     if (!this.scene) return list
-    // Queued construction sites for every selected builder while Shift is held.
-    if (this._shiftPreview) {
-      for (const id of this.scene.selected) {
-        const u = this.scene.unitById(id)
-        if (!u || u.dead || !Array.isArray(u.queue)) continue
-        for (const q of u.queue) {
-          if (q.kind !== 7 || !q.name) continue
-          const gm = this.#ghostModel(q.name)
-          if (!gm) continue
-          list.push({
-            model: gm,
-            transform: { x: q.x, y: this.#terrainHeightAt(q.x, q.z), z: q.z, headingRad: Math.PI },
-          })
-        }
+    // Queued construction sites for every selected builder — a wireframe ghost
+    // stands at each not-yet-started building so the whole build plan is
+    // visible while the builder walks the route. Shown whenever a builder is
+    // selected (not only while Shift is held): the plan persists after the user
+    // releases Shift, until each frame's construction actually begins.
+    for (const id of this.scene.selected) {
+      const u = this.scene.unitById(id)
+      if (!u || u.dead || !Array.isArray(u.queue)) continue
+      for (const q of u.queue) {
+        if (q.kind !== 7 || !q.name) continue
+        const gm = this.#ghostModel(q.name)
+        if (!gm) continue
+        list.push({
+          model: gm,
+          transform: { x: q.x, y: this.#terrainHeightAt(q.x, q.z), z: q.z, headingRad: Math.PI },
+        })
       }
     }
     // Placement preview — the founding skeleton the next click commits.
@@ -2414,12 +2416,22 @@ export class SandboxView {
       // sim's build cycle — rather than spawning instantly.
       if (p.buildFor) {
         const builderId = p.buildFor
-        Promise.resolve(this.scene.build?.(builderId, p.name, x, z)).then(() => {
-          this.#setStatus(`Build ordered — constructing ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}).`)
+        // Shift chains a whole build plan: the order queues behind the
+        // builder's current job and placement stays armed for the next site, so
+        // the user lays a row of buildings click by click (each shows a
+        // wireframe ghost until the builder reaches it — see #ghostList). A
+        // plain click is a single immediate build and ends placement.
+        const queued = !!e.shiftKey
+        Promise.resolve(this.scene.build?.(builderId, p.name, x, z, queued)).then(() => {
+          this.#setStatus(`${queued ? 'Build queued' : 'Build ordered'} — ${p.name} at (${x.toFixed(0)}, ${z.toFixed(0)}).`)
         }).catch((e) => {
           this.#setStatus(`Build order failed: ${e?.message || e}`)
         })
-        this.cancelPlacement()
+        if (queued) {
+          this.#refreshEntities()
+        } else {
+          this.cancelPlacement()
+        }
         return
       }
       // The wasm world fetches the unit's meta + COB and runs Create on spawn;
