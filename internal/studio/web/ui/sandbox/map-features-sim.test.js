@@ -60,14 +60,32 @@ test('an aquaore-named deposit under category=rocks is still a metal patch', () 
   assert.equal(s.blocking, false)
 })
 
-test('trees, reclaim rocks, and destructible metal-named scenery are not pushed', () => {
+test('a reclaimable tree becomes a blocking, reclaimable scenery prop', () => {
+  const specs = simFeatureSpecs([{ name: 'GreenTree1', ax: 5, ay: 5 }], defs, 16)
+  assert.equal(specs.length, 1)
+  const s = specs[0]
+  assert.equal(s.kind, 0, 'a tree is a scenery prop, not a metal patch')
+  assert.equal(s.reclaimable, true, 'reclaimable flag threaded so a builder can salvage it')
+  assert.equal(s.blocking, true, 'a tree occupies its plot per the FBI blocking flag')
+  assert.equal(s.indestructible, false)
+  assert.equal(s.metal, 0)
+  assert.equal(s.energy, 0)
+  assert.equal(s.footprintX, 1)
+})
+
+test('reclaim rocks and destructible reclaimable scenery are pushed as reclaimable props, not mex sites', () => {
   const specs = simFeatureSpecs([
-    { name: 'GreenTree1', ax: 5, ay: 5 },
     { name: 'Rock1a', ax: 6, ay: 6 },
-    // MetalTower is metal-named but destructible — decorative, not a mex site.
+    // MetalTower is metal-named but destructible — reclaimable scenery, not a mex site.
     { name: 'MetalTower01', ax: 7, ay: 7 },
   ], defs, 16)
-  assert.equal(specs.length, 0, 'non-deposit scenery carries no build gate and must stay decorative')
+  assert.equal(specs.length, 2)
+  // Neither is a metal patch (kind 1); both are reclaimable scenery props (kind 0).
+  for (const s of specs) {
+    assert.equal(s.kind, 0, 'destructible reclaimable scenery is a prop, never a mex site')
+    assert.equal(s.reclaimable, true)
+    assert.equal(s.indestructible, false)
+  }
 })
 
 test('a TA:K sacred stone becomes a non-blocking sacred site carrying its multiplier', () => {
@@ -96,12 +114,14 @@ test('features with no catalogue entry, and non-feature junk, are skipped', () =
   assert.equal(specs.length, 0)
 })
 
-test('a mixed field yields only the metal + vent, positioned at their cells', () => {
+test('a mixed field yields the tree prop, the metal patch and the vent', () => {
   const specs = simFeatureSpecs([
     { name: 'GreenTree1', ax: 0, ay: 0 },
     { name: 'RockMetal1', ax: 4, ay: 8 },
     { name: 'MetalVent01', ax: 12, ay: 3 },
   ], defs, 16)
-  assert.equal(specs.length, 2)
-  assert.deepEqual(specs.map((s) => s.kind).sort(), [0, 1])
+  assert.equal(specs.length, 3)
+  // Two prop-kind features (the reclaimable tree and the geothermal vent) plus
+  // the one metal patch.
+  assert.deepEqual(specs.map((s) => s.kind).sort(), [0, 0, 1])
 })

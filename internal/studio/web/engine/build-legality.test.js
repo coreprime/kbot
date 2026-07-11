@@ -80,15 +80,16 @@ test('map resource features gate the studio build preview through the wasm path'
   const w = 48, h = 48
   api.setTerrain(handle, { w, h, cellWU: CELL, heightScale: 0.61, seaLevel: 0, data: new Uint8Array(w * h), voids: null })
 
-  // A metal deposit at cell (20,20), a geothermal vent at (34,34), plus a tree
-  // that must be ignored — the exact {name, ax, ay} shape the map JSON carries.
+  // A metal deposit at cell (20,20), a geothermal vent at (34,34), plus a
+  // reclaimable tree at (5,40) well clear of the build tests below — the exact
+  // {name, ax, ay} shape the map JSON carries.
   const placed = [
     { name: 'GreenMetal01', ax: 20, ay: 20 },
     { name: 'MetalVent01', ax: 34, ay: 34 },
     { name: 'GreenTree1', ax: 5, ay: 40 },
   ]
   const specs = simFeatureSpecs(placed, DEFS, CELL)
-  assert.equal(specs.length, 2, 'only the deposit + vent are pushed (the tree is decorative)')
+  assert.equal(specs.length, 3, 'the deposit, the vent and the reclaimable tree are all pushed')
   for (const spec of specs) assert.ok(api.addFeature(handle, spec) > 0, `addFeature ${spec.name} returned no id`)
   assert.ok(!state.crashed, 'wasm engine exited while placing features')
 

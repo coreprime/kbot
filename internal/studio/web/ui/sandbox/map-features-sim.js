@@ -22,9 +22,16 @@
 //     (TDF blocking=0), so it is pushed non-blocking — the producer founds
 //     directly on top of it, exactly as a metal extractor sits on a deposit.
 //
-// Trees, rocks and other scenery are deliberately left out: they carry no build
-// gate and pushing them would turn the sandbox's decorative props into sim
-// obstacles. The transform is pure so it can be unit-tested without a wasm world.
+//   - Reclaimable scenery (featuredef reclaimable=1) — trees, reclaim rocks,
+//     kelp — enters as a scenery prop (kind 0) carrying its reclaim yield and
+//     its FBI blocking flag, so a construction unit can salvage it for
+//     metal/energy and clear the plot. The renderer still draws the object from
+//     the map's own feature layer; the sim feature is the reclaim/collision
+//     surrogate for it.
+//
+// Non-reclaimable decorative scenery carries no build gate and no reclaim value,
+// so it is left out entirely. The transform is pure so it can be unit-tested
+// without a wasm world.
 
 // FeatureKind ordinals, matching sim.FeatureKind exported by the wasm bridge.
 const KIND_PROP = 0
@@ -76,7 +83,36 @@ export function simFeatureSpecs(features, defs = {}, cellWU = 16) {
     if (!f || typeof f.name !== 'string') continue
     const def = defs[f.name.toLowerCase()]
     const kindTag = classifyMapFeature(def, f.name)
-    if (!kindTag) continue
+    // Not a build-gating resource, but a reclaimable prop (a tree, a reclaim
+    // rock, kelp): push it as a scenery feature carrying its reclaim yield so a
+    // construction unit can salvage it for metal/energy and clear the cell. The
+    // sim feature is invisible on its own — the renderer already draws the
+    // placed scenery from the map's feature layer — it exists only so reclaim /
+    // blocking see the object.
+    if (!kindTag) {
+      if (!def || !def.reclaimable) continue
+      const ax = f.ax | 0
+      const ay = f.ay | 0
+      specs.push({
+        name: f.name,
+        x: (ax + 0.5) * cellWU,
+        z: (ay + 0.5) * cellWU,
+        heading: 0,
+        footprintX: def.footprintX | 0,
+        footprintZ: def.footprintZ | 0,
+        kind: KIND_PROP,
+        metal: Math.max(0, Math.round(def.metal || 0)),
+        energy: Math.max(0, Math.round(def.energy || 0)),
+        // Real TA scenery blocks per its FBI flag (movers path around a tree);
+        // honour it so the reclaimable prop occupies its plot exactly as it
+        // renders. A reclaimed prop clears the cell.
+        blocking: !!def.blocking,
+        reclaimable: true,
+        indestructible: false,
+        featureDead: typeof def.featureDead === 'string' ? def.featureDead : '',
+      })
+      continue
+    }
     const ax = f.ax | 0
     const ay = f.ay | 0
     const base = {

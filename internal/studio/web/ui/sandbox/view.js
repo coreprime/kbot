@@ -1527,10 +1527,42 @@ export class SandboxView {
     world.setGhosts(this.#ghostList())
     world.applyState(state)
     world.step(dtMs * rate)
+    // Drop the baked scenery stand-in for any reclaimable feature the sim has
+    // just consumed, so a reclaimed tree/rock vanishes visually with its sim
+    // feature (the renderer bakes scenery statically at map load and otherwise
+    // never hears about a mid-game removal).
+    this.#reconcileReclaimedFeatures()
     // Feed the shared scene this pane's audio vantage point (camera focus +
     // zoom) so combat sounds fade with distance from what the user watches.
     if (this.camera && typeof scene.setListener === 'function') {
       scene.setListener(this.camera.target, this.camera.distance)
+    }
+  }
+
+  // #reconcileReclaimedFeatures diffs the scene's reclaimable feature set
+  // against the set this pane last saw and asks the pane's world to drop the
+  // baked stand-in for any that have left (reclaimed, burnt, removed). The
+  // renderer bakes map scenery once at load, so without this a reclaimed tree
+  // keeps its 3D prop even though its sim feature is gone. Per pane: each pane's
+  // world keeps its own scenery batches, so each removes independently.
+  #reconcileReclaimedFeatures() {
+    const scene = this.scene
+    const world = this._world
+    if (!scene || !world || typeof scene.features !== 'function' ||
+        typeof world.removeMapFeatureAt !== 'function') return
+    const known = this._knownReclaimFeatures || (this._knownReclaimFeatures = new Map())
+    const seen = this._reclaimSeen || (this._reclaimSeen = new Set())
+    seen.clear()
+    for (const f of scene.features()) {
+      if (!f || !f.reclaimable) continue
+      seen.add(f.id)
+      if (!known.has(f.id)) known.set(f.id, { x: f.x, z: f.z })
+    }
+    if (known.size === 0) return
+    for (const [id, pos] of known) {
+      if (seen.has(id)) continue
+      world.removeMapFeatureAt(pos.x, pos.z)
+      known.delete(id)
     }
   }
 
