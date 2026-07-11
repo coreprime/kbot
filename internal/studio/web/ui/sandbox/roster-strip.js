@@ -367,6 +367,17 @@ function update() {
   }
 }
 
+// hideRosterTip force-dismisses the floating build tooltip (and the poll that
+// re-arms it) without waiting for pointer travel or the render tick. The tip's
+// only other clears ride pointer events or update()'s tick self-heal; when the
+// build menu is discarded by a panel-hide / tab switch the tick is torn down
+// and no pointer event fires, so the tip strands. Call this at those discard
+// boundaries so it leaves with the menu.
+export function hideRosterTip() {
+  clearTimeout(_tipWatch)
+  if (_tip) _tip.hidden = true
+}
+
 // wireRosterStrip registers the tick subscriber. Called once from the
 // sandbox tab module at boot; idempotent.
 let _wired = false

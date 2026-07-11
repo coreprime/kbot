@@ -14,6 +14,7 @@ import {
   clearActiveSandboxView,
 } from './tab.js'
 import { disposeSandboxSplit, detachSandboxSplit } from './split-host.js'
+import { hideRosterTip } from './roster-strip.js'
 import { stopTabTick } from '../common/tab-tick.js'
 
 const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
@@ -121,6 +122,11 @@ class SandboxTabInstance {
     // would keep ticking — runtime time + smoke trails + projectile
     // age would all advance even though the tab is invisible.
     stopTabTick(tab)
+    // The build tooltip is a child of the shared model-viewer dialog, not of
+    // this tab's surface, so it survives the detach below. Its pointer/tick
+    // clears can't fire once the tick above is stopped, so drop it explicitly
+    // or it strands over whatever tab comes forward.
+    hideRosterTip()
     // Pull the per-tab split mount OUT of the stage so an incoming
     // unit-editor or map tab doesn't see a stale sandbox surface
     // overlaid on its own content.  Pre-split the legacy single
@@ -140,6 +146,7 @@ class SandboxTabInstance {
     // Stop the tab-owned tick loop first so it can't fire mid-
     // teardown and dereference structures we're about to dispose.
     stopTabTick(tab)
+    hideRosterTip()
     // Silence + pause the shared scene first so nothing keeps ticking
     // mid-teardown.  Then sweep every pane's view (renderer + GL
     // context + canvas), then drop the scene + split mount.
