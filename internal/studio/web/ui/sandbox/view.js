@@ -1367,14 +1367,19 @@ export class SandboxView {
       if (hasSelection && hovered && !sel.has(hovered.id)) {
         const selUnits = [...sel].map((id) => this.scene.unitById(id)).filter(Boolean)
         const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((hovered.side | 0)))
-        // A mobile builder over a friendly half-built frame reads as the
-        // repair gesture: clicking resumes that construction.
-        const canRepair = sameSide && hovered.buildPercent < 100 &&
+        // A mobile builder over a friendly frame that needs nanolathe work
+        // reads as the repair gesture: clicking resumes a half-built frame or
+        // heals a fully-built but damaged hull.
+        const canRepair = sameSide && (hovered.buildPercent < 100 || hovered.health < 100) &&
           selUnits.some((u) => u.meta && u.meta.isBuilder && u.meta.canMove !== false)
         ambient = canRepair ? 'repair' : (sameSide ? 'select' : 'attack')
       } else {
         ambient = 'select'
       }
+    } else if (this._lastHoverFeatureId && hasSelection && this.#selectionHasReclaimer()) {
+      // Hovering a reclaimable feature (tree / rock / wreck) with a reclaimer
+      // selected — clicking will reclaim it.
+      ambient = 'reclaim'
     } else {
       // Hovering ground — clicking moves the selection (if any) or
       // is a no-op (if not).
@@ -2291,8 +2296,13 @@ export class SandboxView {
     if (!this._pendingCmd) {
       const picked = this.#pickUnitAt(sx, sy)
       const hoverId = picked ? picked.id : 0
-      if (hoverId !== this._lastHoverUnitId) {
+      // Off a unit, test for a reclaimable feature under the cursor so the
+      // ambient cursor can read as reclaim over a tree / rock / wreck.
+      const feat = hoverId ? null : this.#pickFeatureAt(sx, sy)
+      const featId = feat ? feat.id : 0
+      if (hoverId !== this._lastHoverUnitId || featId !== this._lastHoverFeatureId) {
         this._lastHoverUnitId = hoverId
+        this._lastHoverFeatureId = featId
         this.#refreshDefaultCursor()
       }
       // Resource producers/consumers (solar, mex, factory, fusion, …) show a
@@ -2331,12 +2341,13 @@ export class SandboxView {
     // the classic RTS waypoint/target chain.
     const queued = !!e.shiftKey
     if (hit && !this.scene.selected.has(hit.id)) {
-      // Repair gesture: right-clicking a friendly under-construction frame
-      // with mobile builders selected sends them to finish raising it.
-      if (hit.buildPercent < 100) {
-        const n = this.issueRepair(hit)
+      // Repair gesture: right-clicking a friendly frame that needs nanolathe
+      // work (half-built, or fully-built but damaged) with mobile builders
+      // selected sends them to resume it or heal it back to full.
+      if (hit.buildPercent < 100 || hit.health < 100) {
+        const n = this.issueRepair(hit, queued)
         if (n > 0) {
-          this.#setStatus(`Repair — ${n} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`)
+          this.#setStatus(`${queued ? 'Repair queued' : 'Repair'} — ${n} builder(s) ${this.#repairVerb(hit)}.`)
           return
         }
       }
@@ -2359,6 +2370,19 @@ export class SandboxView {
       const n = this.issueAttack(hit, queued)
       this.#setStatus(`${queued ? 'Attack queued' : 'Attack'} — ${n} unit(s) targeting ${hit.name} (HP ${hit.health}).`)
       return
+    }
+    // Reclaim gesture: right-clicking a reclaimable feature (tree / rock /
+    // wreck) with a reclaimer selected salvages it for resources. Only when no
+    // unit was under the cursor, so a unit target still wins.
+    if (!hit) {
+      const feat = this.#pickFeatureAt(sx, sy)
+      if (feat && this.#selectionHasReclaimer()) {
+        const n = this.issueReclaim(feat, queued)
+        if (n > 0) {
+          this.#setStatus(`${queued ? 'Reclaim queued' : 'Reclaim'} — ${n} builder(s) consuming ${feat.name || 'feature'}.`)
+          return
+        }
+      }
     }
     const world = this.#screenToGround(sx, sy)
     if (!world) return
@@ -2474,15 +2498,16 @@ export class SandboxView {
       // clicked friendly under-construction frame — the armed-button form of
       // the right-click repair gesture.
       const hit = this.#pickUnitAt(sx, sy)
+      const queued = !!e.shiftKey
       this._pendingCmd = null
       this.#refreshDefaultCursor()
       if (hit) {
-        const n = this.issueRepair(hit)
+        const n = this.issueRepair(hit, queued)
         this.#setStatus(n > 0
-          ? `Repair — ${n} builder(s) resuming ${hit.name} (${Math.round(hit.buildPercent)}%).`
+          ? `${queued ? 'Repair queued' : 'Repair'} — ${n} builder(s) ${this.#repairVerb(hit)}.`
           : `Repair — ${hit.name} needs no repair, or no mobile builder is selected.`)
       } else {
-        this.#setStatus('Repair cancelled — click a unit under construction.')
+        this.#setStatus('Repair cancelled — click a unit under construction or a damaged friendly.')
       }
       return
     }
@@ -2491,15 +2516,19 @@ export class SandboxView {
       // wreck or feature alike. The armed command is an explicit force-order:
       // it issues on whatever unit was clicked and never falls through to
       // selection.
-      const hit = this.#pickUnitAt(sx, sy)
+      const queued = !!e.shiftKey
+      // A unit target wins; off any unit, fall back to a reclaimable feature
+      // (tree / rock / wreck) under the cursor.
+      const target = this.#pickUnitAt(sx, sy) || this.#pickFeatureAt(sx, sy)
       this._pendingCmd = null
       if (this._armedCursor) this._armedCursor.setSlot(null)
       this.#refreshDefaultCursor()
-      if (hit) {
-        const n = this.issueReclaim(hit)
+      if (target) {
+        const label = target.name || 'feature'
+        const n = this.issueReclaim(target, queued)
         this.#setStatus(n > 0
-          ? `Reclaim — ${n} builder(s) consuming ${hit.name}.`
-          : `Reclaim — ${hit.name} can't be reclaimed, or no reclaimer is selected.`)
+          ? `${queued ? 'Reclaim queued' : 'Reclaim'} — ${n} builder(s) consuming ${label}.`
+          : `Reclaim — ${label} can't be reclaimed, or no reclaimer is selected.`)
       } else {
         this.#setStatus('Reclaim cancelled — click a unit, wreck or feature.')
       }
@@ -2715,6 +2744,44 @@ export class SandboxView {
       if (score > bestScore) { bestScore = score; best = u }
     }
     return best
+  }
+
+  // #pickFeatureAt projects each reclaimable map feature / wreck to screen space
+  // and returns the nearest one within a click-pixel gate — the reclaim
+  // hit-test for trees, rocks and the corpses dead units leave. Only
+  // reclaim-valid features (reclaimable, not indestructible — the snapshot's
+  // `reclaimable` flag already folds both in) are pickable; metal patches,
+  // vents and sacred sites are skipped. Returns null off any feature.
+  #pickFeatureAt(sx, sy) {
+    if (!this.scene || !this.camera || typeof this.scene.features !== 'function') return null
+    let best = null
+    let bestDist = Infinity
+    for (const f of this.scene.features()) {
+      if (!f || !f.reclaimable) continue
+      const feet = this.#worldToScreen(f.x, f.y, f.z)
+      if (!feet) continue
+      // Gate scales a little with the feature's footprint and screen height so a
+      // sprawling wreck is clickable across its bulk, not just a fixed disc.
+      const fp = Math.max(1, (f.footprintX || 0), (f.footprintZ || 0))
+      const top = this.#worldToScreen(f.x, f.y + Math.max(20, fp * 8), f.z)
+      const h = top ? Math.hypot(top[0] - feet[0], top[1] - feet[1]) : 0
+      const dist = Math.hypot(sx - feet[0], sy - feet[1])
+      const gate = Math.max(22, h)
+      if (dist < gate && dist < bestDist) { bestDist = dist; best = f }
+    }
+    return best
+  }
+
+  // #selectionHasReclaimer reports whether the current selection holds at least
+  // one mobile reclaimer (a construction unit with the FBI canreclamate bit) —
+  // the gate for the reclaim cursor + right-click reclaim over a feature.
+  #selectionHasReclaimer() {
+    if (!this.scene) return false
+    for (const id of this.scene.selected) {
+      const u = this.scene.unitById(id)
+      if (u && !u.dead && u.meta && u.meta.canReclaim && u.meta.canMove !== false) return true
+    }
+    return false
   }
 
   // #drawHealthBars paints the health-bar HUD onto a 2D canvas overlay
@@ -3127,20 +3194,22 @@ export class SandboxView {
     return n
   }
 
-  // issueRepair sends every selected mobile builder to finish raising a
-  // friendly under-construction frame (the engine's repair order resumes the
-  // buildee's construction). Returns how many builders were dispatched — 0 if
-  // the target is complete or no mobile builder is selected. Shared by the
-  // armed Repair button and the right-click repair gesture.
-  issueRepair(target) {
-    if (!target || target.dead || !(target.buildPercent < 100)) return 0
+  // issueRepair sends every selected mobile builder to a friendly unit that
+  // needs nanolathe work: an under-construction frame is resumed, a fully-built
+  // but damaged hull is healed back to full. Returns how many builders were
+  // dispatched — 0 if the target needs no work or no mobile builder is
+  // selected. Shared by the armed Repair button and the right-click gesture.
+  issueRepair(target, queued = false) {
+    if (!target || target.dead) return 0
+    const needsWork = target.buildPercent < 100 || target.health < 100
+    if (!needsWork) return 0
     const builders = this.getSelectedUnits().filter(
       (u) => u && !u.dead && (u.side | 0) === (target.side | 0) &&
         u.meta && u.meta.isBuilder && u.meta.canMove !== false)
     let n = 0
     for (const b of builders) {
       if (typeof this.scene.source?.repair === 'function') {
-        this.scene.source.repair(b.id, target.id)
+        this.scene.source.repair(b.id, target.id, queued)
         n++
       }
     }
@@ -3148,18 +3217,28 @@ export class SandboxView {
     return n
   }
 
+  // #repairVerb describes a repair target for the status line: an
+  // under-construction frame is "resuming" (with its build percent), a
+  // fully-built but damaged hull is "repairing" (with its health percent).
+  #repairVerb(target) {
+    if (target.buildPercent < 100) {
+      return `resuming ${target.name} (${Math.round(target.buildPercent)}%)`
+    }
+    return `repairing ${target.name} (HP ${Math.round(target.health)}%)`
+  }
+
   // issueReclaim sends every selected reclaimer (a builder with the FBI
   // canreclamate bit) to consume the target unit / wreck / feature for
   // resources. Friendly, enemy or neutral — reclaim ignores ownership. Returns
   // the number of reclaimers dispatched. Shared by the armed Reclaim button and
   // the right-click reclaim gesture.
-  issueReclaim(target) {
+  issueReclaim(target, queued = false) {
     if (!target || target.dead) return 0
     const reclaimers = this.getSelectedUnits().filter(
       (u) => u && !u.dead && u !== target &&
         u.meta && u.meta.canReclaim && u.meta.canMove !== false)
     if (!reclaimers.length || typeof this.scene.source?.reclaim !== 'function') return 0
-    this.scene.source.reclaim(reclaimers.map((u) => u.id), target.id)
+    this.scene.source.reclaim(reclaimers.map((u) => u.id), target.id, queued)
     this.playUnitSoundRandom(reclaimers[0], ['ok1', 'ok2', 'ok3', 'ok4', 'ok5'])
     return reclaimers.length
   }

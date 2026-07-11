@@ -170,13 +170,15 @@ export class WasmFrameSource extends FrameSource {
     try { return !!this._engine.canBuildAt(this._handle, name, x, z) } catch { return true }
   }
 
-  // repair sends one mobile builder to an existing under-construction frame
-  // to continue raising it (the hover-a-half-built-structure gesture).
-  repair(builderId, targetId) { return this._engine.submitRepair(this._handle, builderId, targetId) }
+  // repair sends one mobile builder to an existing unit: resume an
+  // under-construction frame or heal a damaged completed friendly. queued (the
+  // shift-click gesture) appends the job to the builder's queue.
+  repair(builderId, targetId, queued = false) { return this._engine.submitRepair(this._handle, builderId, targetId, !!queued) }
 
   // reclaim sends the reclaimers to consume the target unit / wreck / feature
-  // for resources — the mobile-builder reclaim gesture.
-  reclaim(unitIds, targetId) { return this._engine.submitReclaim(this._handle, unitIds, targetId) }
+  // for resources — the mobile-builder reclaim gesture. queued appends it to
+  // each reclaimer's queue.
+  reclaim(unitIds, targetId, queued = false) { return this._engine.submitReclaim(this._handle, unitIds, targetId, !!queued) }
 
   // patrol appends a patrol waypoint to each unit's queue (consecutive
   // patrol legs loop); stance sets the standing move/fire orders;

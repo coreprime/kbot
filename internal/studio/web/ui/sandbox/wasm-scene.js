@@ -256,6 +256,13 @@ export class WasmSandboxScene {
     // Live unit adapters keyed by sim id, in no particular order (the view
     // tolerates iteration order; the deterministic order lives in the engine).
     this._units = new Map()
+    // Live map features / wrecks keyed by feature id (the high-range ids the
+    // snapshot exports). These are the reclaim targets the view hit-tests for
+    // the default-order reclaim cursor and the right-click reclaim gesture;
+    // their meshes are drawn by the map-feature layer (scenery) or the dead
+    // unit's swapped corpse model (wrecks), so this map is pick state, not a
+    // render list. Populated from each snapshot's features[] by _syncFeatures.
+    this._features = new Map()
     // In-flight model-projectiles from the latest snapshot, in the shape the
     // view's projectile renderer expects.
     this._projectiles = []
@@ -820,7 +827,30 @@ export class WasmSandboxScene {
   units() { return this._units.values() }
   unitById(id) { return this._units.get(id) || null }
   unitCount() { return this._units.size }
+  features() { return this._features.values() }
+  featureById(id) { return this._features.get(id) || null }
   projectiles() { return this._projectiles }
+
+  // _syncFeatures folds the snapshot's feature list into the pick-state map:
+  // map scenery, metal patches, sacred sites and the wrecks dead units leave.
+  // New features are recorded, existing ones refreshed (position/reclaimable),
+  // and any that vanished are dropped — a reclaimed wreck's body is retired by
+  // the engine's reason-5 death event, so nothing extra is needed here.
+  _syncFeatures(snap) {
+    const list = snap.features || []
+    if (list.length === 0 && this._features.size === 0) return
+    const seen = new Set()
+    for (const sf of list) {
+      if (!sf || sf.id == null) continue
+      seen.add(sf.id)
+      this._features.set(sf.id, sf)
+    }
+    if (this._features.size !== seen.size) {
+      for (const id of this._features.keys()) {
+        if (!seen.has(id)) this._features.delete(id)
+      }
+    }
+  }
 
   // ── Commands ──────────────────────────────────────────────────────
   //
@@ -1120,6 +1150,7 @@ export class WasmSandboxScene {
     this._lastStepAtMs = (typeof performance !== 'undefined' ? performance.now() : Date.now())
     this._runtime.simTimeMs = (snap.tick || 0) * TICK_MS
     this._syncUnits(snap)
+    this._syncFeatures(snap)
     this._syncProjectiles(snap)
     this._dispatchEvents(snap)
     this._tickBuildFx(snap)

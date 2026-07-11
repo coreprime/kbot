@@ -445,15 +445,17 @@ export class WsFrameSource extends FrameSource {
   // refuses an illegal site when the order arrives.
   canBuildAt() { return true }
 
-  // repair resumes an existing under-construction frame (Build with a
-  // TargetUnit instead of a site).
-  repair(builderId, targetId) {
-    this._send({ Kind: 7, UnitID: builderId >>> 0, TargetUnit: targetId >>> 0 })
+  // repair resumes an under-construction frame or heals a damaged completed
+  // friendly (Build with a TargetUnit instead of a site). queued appends it to
+  // the builder's shift-queue.
+  repair(builderId, targetId, queued = false) {
+    this._send({ Kind: 7, UnitID: builderId >>> 0, TargetUnit: targetId >>> 0, Queued: !!queued })
   }
 
   // reclaim sends reclaimers to consume a target for resources (Kind 14).
-  reclaim(unitIds, targetId) {
-    this._send({ Kind: 14, UnitIDs: unitIds, TargetUnit: targetId >>> 0 })
+  // queued appends it to each reclaimer's shift-queue.
+  reclaim(unitIds, targetId, queued = false) {
+    this._send({ Kind: 14, UnitIDs: unitIds, TargetUnit: targetId >>> 0, Queued: !!queued })
   }
 
   // patrol appends a patrol waypoint (Kind 8); stance sets the standing
