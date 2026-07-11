@@ -17,7 +17,7 @@ const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 // it on the active view. Returns the map info object. onStep(local, label)
 // is an optional progress callback (local 0..1 within the map load) the
 // launch loading screen drives.
-export async function loadSandboxMap(view, path, onStep) {
+export async function loadSandboxMap(view, path, onStep, { installSim = true } = {}) {
   const step = (local, label) => { try { onStep?.(local, label) } catch { /* ignore */ } }
   step(0.04, 'Reading battlefield…')
   const res = await fetch(`/api/studio/sandbox-map?path=${encodeURIComponent(path)}`)
@@ -34,8 +34,12 @@ export async function loadSandboxMap(view, path, onStep) {
     for (let i = 0; i < vbin.length; i++) voids[i] = vbin.charCodeAt(i)
   }
 
-  // Sim first — the height field must be in before any unit moves on it.
-  const source = view.scene?.source
+  // Sim first — the height field must be in before any unit moves on it. Only
+  // the FIRST pane installs the shared sim state; a re-apply for an extra split
+  // pane (installSim:false) skips this block so the map's deposits/features are
+  // not double-stamped into the one shared sim (each pane still gets its own
+  // renderer terrain + minimap below).
+  const source = installSim ? view.scene?.source : null
   if (source?.setTerrain) {
     source.setTerrain({
       w: info.w, h: info.h,

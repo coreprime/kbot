@@ -22,6 +22,7 @@ import {
 import { WasmSandboxScene } from './wasm-scene.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { SandboxView } from './view.js'
+import { loadSandboxMap } from './map-loader.js'
 import { liveStatusEl } from '../host-context.js'
 
 // SANDBOX_ADAPTER — the per-editor plug for the generic split-host.
@@ -48,6 +49,18 @@ const SANDBOX_ADAPTER = {
       statusEl: liveStatusEl,
     })
     await v.open()
+    // A newly-split pane owns its own game3d world; #146's per-pane worlds fix
+    // the GL-context sharing but leave a fresh pane on the bare grid because the
+    // map terrain was only ever applied to the first pane. Re-apply the tab's
+    // already-loaded map to this pane's world (terrain + renderer features +
+    // minimap) so every pane shows the battlefield. installSim:false skips the
+    // shared-sim install — the first pane already stamped the map's deposits and
+    // features into the one shared sim, so re-running it would double-stamp.
+    try {
+      const curPath = tab.viewer?._sandboxMap?.path
+        || [...(tab.panes?.values?.() || [])].map((p) => p?._sandboxMap?.path).find(Boolean)
+      if (curPath) await loadSandboxMap(v, curPath, null, { installSim: false })
+    } catch { /* leave the new pane on the grid rather than fail the split */ }
     return v
   },
   // Sandbox uses the default canCloseLeaf (disabled only when this
