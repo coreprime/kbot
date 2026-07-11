@@ -17,7 +17,7 @@ import { disposeSandboxSplit, detachSandboxSplit } from './split-host.js'
 import { hideRosterTip } from './roster-strip.js'
 import { stopTabTick } from '../common/tab-tick.js'
 
-const MODEL_HINTS = 'Drag — orbit · Wheel — zoom · <kbd>Shift</kbd> / right-drag — pan · Click a piece to centre on it'
+const MODEL_HINTS = 'Left-drag — select · Right-click — order · Middle-drag — orbit · Right-drag / <kbd>Ctrl</kbd> — pan · Wheel — zoom'
 const SANDBOX_STATUS = 'Sandbox ready — click "Spawn Unit" to add a unit to the field.'
 
 class SandboxTabInstance {

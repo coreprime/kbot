@@ -248,18 +248,19 @@ export class SandboxView {
         },
         // Sandbox claims:
         //   - placement-drag while a unit is queued for spawn
-        //   - SHIFT + left-drag for the rectangle-select gesture
-        //     (camera-controls.js no longer treats shift as a pan
-        //     modifier, so the gesture is ours to grab)
-        // Every other left-drag falls through to camera-controls so
-        // plain left-drag orbits exactly like the unit editor.
+        //   - PLAIN left-drag for the rectangle-select marquee — TA's
+        //     core selection gesture. Shift-drag adds the boxed units
+        //     to the existing selection. Camera orbit moves to middle-
+        //     mouse-drag (right-drag still pans, ctrl/cmd-drag ground-
+        //     pans), matching TA where a plain drag selects, not orbits.
         // _pendingCmd / _placement take priority — their commit-on-
-        // click flow shouldn't be eaten by a stray drag-select.
+        // click flow shouldn't be eaten by a stray drag-select. ctrl/
+        // cmd modifiers never reach here (camera-controls keeps those
+        // for ground-pan), so those drags still scroll the battlefield.
         onLeftDragStart: (e) => {
           if (this._pendingCmd) return false
           if (this._placement) return this.#beginPlacementDrag(e)
-          if (e.shiftKey) return this.#beginDragSelect(e)
-          return false
+          return this.#beginDragSelect(e)
         },
         // Plain +/- step the sandbox runtime's playback rate (Shift+/-
         // zooms instead — handled inside camera-controls).
@@ -849,7 +850,9 @@ export class SandboxView {
         // — otherwise pure-empty drags would clear the selection we
         // just made.  Flag is consumed on the next click.
         this._suppressNextClick = true
-        this.#applyDragRectSelection(state.startX, state.startY, state.x, state.y)
+        // Shift held on RELEASE adds the boxed units to the current
+        // selection (TA convention); a plain drag replaces it.
+        this.#applyDragRectSelection(state.startX, state.startY, state.x, state.y, !!ev.shiftKey)
       }
     }
     canvas.addEventListener('pointermove', onMove)
@@ -934,13 +937,13 @@ export class SandboxView {
   // check happens at the start of the gesture; we mirror it by
   // peeking at the global last-shift state if available, else just
   // replace).
-  // #applyDragRectSelection resolves a finished marquee. With nothing
-  // selected it replace-selects the boxed units (TA convention). With a
-  // live selection it EXPANDS — boxed friendlies join the set — unless the
-  // selection is a single team and the box holds only enemies, in which
-  // case the gesture is a mass attack: every selected unit chains attack
-  // orders on all boxed enemies, nearest-first from its own position.
-  #applyDragRectSelection(x0, y0, x1, y1) {
+  // #applyDragRectSelection resolves a finished marquee. A PLAIN drag
+  // replace-selects the boxed units (TA convention); a SHIFT drag adds the
+  // boxed friendlies to the current selection instead. One bonus stays: a
+  // plain drag from a single-team selection over an all-enemy box is a mass
+  // attack — every selected unit chains attack orders on all boxed enemies,
+  // nearest-first from its own position.
+  #applyDragRectSelection(x0, y0, x1, y1, shiftAdd = false) {
     const lo = { x: Math.min(x0, x1), y: Math.min(y0, y1) }
     const hi = { x: Math.max(x0, x1), y: Math.max(y0, y1) }
     if (!this.scene) return
@@ -957,12 +960,13 @@ export class SandboxView {
       }
     }
     const selUnits = this.getSelectedUnits()
-    if (selUnits.length > 0 && boxed.length > 0) {
+    // Plain drag from a live single-team selection over an all-enemy box →
+    // attack chain (a shift-drag is an explicit ADD, so it never attacks).
+    if (!shiftAdd && selUnits.length > 0 && boxed.length > 0) {
       const sides = new Set(selUnits.map((u) => u.side | 0))
       const team = sides.size === 1 ? [...sides][0] : null
       const enemies = boxed.filter((u) => team !== null && (u.side | 0) !== team)
       if (team !== null && enemies.length === boxed.length) {
-        // Single-team selection over an all-enemy box → attack chain.
         // queueAttack applies immediately on an idle unit and appends on
         // a busy one, so the whole box lands in each unit's queue
         // nearest-target-first.
@@ -979,9 +983,13 @@ export class SandboxView {
         this.#setStatus(`Attack chain — ${selUnits.length} unit(s) engaging ${enemies.length} target(s), nearest first.`)
         return
       }
-      // Mixed or friendly box → expand the selection with the boxed
-      // friendlies (enemies in a mixed box are ignored — selecting the
-      // opposition alongside your own units is never what's meant).
+    }
+    // Shift-drag with a live selection → EXPAND: add the boxed friendlies
+    // (matching the current selection's team when it's single-team, so the
+    // opposition is never dragged into your own army).
+    if (shiftAdd && selUnits.length > 0) {
+      const sides = new Set(selUnits.map((u) => u.side | 0))
+      const team = sides.size === 1 ? [...sides][0] : null
       let added = 0
       for (const u of boxed) {
         if (this.scene.selected.has(u.id)) continue
@@ -995,7 +1003,7 @@ export class SandboxView {
       if (added > 0) this.#playSelectAck()
       return
     }
-    // No prior selection — replace.
+    // Plain drag → replace the selection with the boxed units.
     this.scene.selectClear()
     for (const u of boxed) this.scene.selectAdd(u.id)
     if (boxed.length > 0) {
@@ -1007,6 +1015,25 @@ export class SandboxView {
     } else {
       this.#setStatus('Selection cleared.')
     }
+  }
+
+  // #centerCameraOnUnits slides the camera's orbit target onto the centroid
+  // of the given units (ids) without touching distance / yaw / pitch — a
+  // pan-to, not a reframe.  Drives the control-group double-tap "jump to my
+  // army" gesture.  Drops any live unit-tracking first so the manual centre
+  // isn't immediately fought by the tracker.
+  #centerCameraOnUnits(ids) {
+    if (!this.camera || !this.scene || !Array.isArray(ids) || ids.length === 0) return
+    let cx = 0, cy = 0, cz = 0, n = 0
+    for (const id of ids) {
+      const u = this.scene.unitById(id)
+      if (!u || u.dead || !u.pos) continue
+      cx += u.pos.x; cy += u.pos.y; cz += u.pos.z; n++
+    }
+    if (n === 0) return
+    if (this.camera.trackedTarget && typeof this.setTracking === 'function') this.setTracking(false)
+    this.camera.target = [cx / n, cy / n, cz / n]
+    if (this.renderer && !this.renderer.running) this.renderer.requestRedraw?.()
   }
 
   // #playSelectAck plays the TA select1-bank sound (select1/2/...)
@@ -2025,6 +2052,12 @@ export class SandboxView {
     const canvas = this.canvas
     canvas.addEventListener('click', (e) => this.#onClick(e))
     canvas.addEventListener('contextmenu', (e) => this.#onContextMenu(e))
+    // Middle-mouse-drag is now the camera-orbit gesture (plain left-drag
+    // draws the selection marquee). Suppress the browser's middle-click
+    // autoscroll so a middle-drag orbits cleanly instead of dropping the
+    // scroll-anchor puck over the battlefield.
+    canvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault() })
+    canvas.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault() })
     canvas.addEventListener('mousemove', (e) => this.#onMouseMove(e))
     // Leaving the canvas drops the hover tooltip so it never strands over
     // the floating panels.
@@ -2114,7 +2147,19 @@ export class SandboxView {
         this.scene.selectClear()
         for (const id of live) this.scene.selectAdd(id)
         this.#playSelectAck()
-        this.#setStatus(`Group ${digit} — ${live.length} unit${live.length === 1 ? '' : 's'} selected.`)
+        // Double-tapping the same group number (within 400ms) centres the
+        // camera on the group's centroid — TA's "jump to my army" gesture.
+        // Zoom + angle are left alone; only the orbit target slides over.
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+        const doubleTap = this._lastGroupTap && this._lastGroupTap.digit === digit &&
+          (now - this._lastGroupTap.time) < 400
+        this._lastGroupTap = { digit, time: now }
+        if (doubleTap) {
+          this.#centerCameraOnUnits(live)
+          this.#setStatus(`Group ${digit} — centred on ${live.length} unit${live.length === 1 ? '' : 's'}.`)
+        } else {
+          this.#setStatus(`Group ${digit} — ${live.length} unit${live.length === 1 ? '' : 's'} selected.`)
+        }
         return
       }
       // P arms Patrol — subsequent clicks lay looping waypoints (the
@@ -2363,6 +2408,16 @@ export class SandboxView {
           this.#setStatus(`Load — transport picking up ${hit.name}.`)
           return
         }
+      }
+      // Friendly, full-health unit (nothing to repair, no transport pickup):
+      // right-click is a regroup gesture — the selection walks to the ally's
+      // position. TA's Guard order would live here, but the sandbox engine
+      // exposes no guard verb, so Move-to is the honest fallback (a friendly
+      // click must never fall through to friendly-fire).
+      if (sameSide) {
+        const n = this.issueMove([hit.pos.x, hit.pos.y, hit.pos.z], queued)
+        this.#setStatus(`${queued ? 'Move queued' : 'Move'} — ${n} unit(s) regrouping on ${hit.name}.`)
+        return
       }
       // issueAttack (below) handles the per-unit attackTarget fanout
       // + ok1-bank ack on the first pursuer.  Centralised so every
