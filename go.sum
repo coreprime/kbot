@@ -2,6 +2,8 @@ github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9
 github.com/coder/websocket v1.8.14/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/coreprime/kbot-engine v0.5.0 h1:S4/zYQesPT4ihp7WNVlwEkkncEt8TQRACI0lyU+uBIE=
 github.com/coreprime/kbot-engine v0.5.0/go.mod h1:uL4I8FwYAt4do2j8W2Er9ITd0hfXRHucTpIBL8aM1Iw=
+github.com/coreprime/kbot-engine v0.6.0 h1:QBZuX4SI+B6raizZIObAoGV2SbBUUs90I4fST6eHs7M=
+github.com/coreprime/kbot-engine v0.6.0/go.mod h1:uL4I8FwYAt4do2j8W2Er9ITd0hfXRHucTpIBL8aM1Iw=
 github.com/coreprime/kbot-game-takingdoms v0.2.0 h1:2RLK5K5ZUF/TlJ4Q0YYQ2tfp5DwkDJNmjcHNxEiPjTU=
 github.com/coreprime/kbot-game-takingdoms v0.2.0/go.mod h1:U0PoUt6C4mCn2d6m24FhrSBu42Kdyb51gAM9BSjWJQU=
 github.com/coreprime/kbot-game-totala v0.2.0 h1:yIzvgzDQKuK12k7kAOqRpRJJhZGYpUCuhzQeGD5FW2Y=

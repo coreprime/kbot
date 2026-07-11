@@ -41,6 +41,11 @@ export async function loadSandboxMap(view, path, onStep) {
       w: info.w, h: info.h,
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
+      // The map's plot-cell metal density: the sim floods every cell with it so
+      // a metal extractor is buildable on open ground (metal-patch features
+      // stamp richer deposits on top). Absent/zero (e.g. TA:K) leaves the grid
+      // metal-less and an extractor's overlap rule then refuses every plot.
+      surfaceMetal: info.surfaceMetal | 0,
       data: heights,
       voids,
     })
