@@ -15,7 +15,7 @@
   "dependencies": {
     "@coreprime/kbot-game-takingdoms": "^0.1.1",
     "@coreprime/kbot-game-totala": "^0.1.1",
-    "@coreprime/kbot-game3d": "^0.1.1",
+    "@coreprime/kbot-game3d": "file:../../../../kbot-game3d",
     "@coreprime/kbot-ui": "^0.1.1",
     "@preact/signals": "^2.9.1",
     "htm": "^3.1.1",

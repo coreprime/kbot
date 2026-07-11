@@ -18,6 +18,15 @@
 // called explicitly from both views.  Everything else (per-view
 // Command API, camera tracking, unit acks, FX aggregation) lives
 // inside whichever view actually uses it.
+//
+// Layering boundary: RENDER PRIMITIVES (mesh/VBO uploads, particle pools,
+// explosion + debris shard meshes, projectile/beam visuals, shaders) belong to
+// @coreprime/kbot-game3d and are imported from it — never re-implemented here.
+// The sandbox is a DRIVER: it feeds sim state/events into game3d and orchestrates
+// game3d's exported effects. A new FX or mesh capability goes into kbot-game3d,
+// not into this repo. game3d is consumed from the LOCAL sibling checkout
+// (studio-web depends on `file:../../../../kbot-game3d`) so the renderer and its
+// driver stay editable in one tree and cannot drift against a frozen release.
 
 import { createWorld } from '@coreprime/kbot-game3d'
 import { studioAssetProvider } from '../common/studio-asset-provider.js'
@@ -29,7 +38,7 @@ import { stepSimSpeed } from '../common/sim-controls.js'
 import { activeGame } from '../common/game-registry.js'
 import { ArmedCursor } from '@coreprime/kbot-game3d/armed-cursor'
 import { ExplosionOverlay } from '@coreprime/kbot-game3d/explosion-overlay'
-import { DebrisField } from './debris-field.js'
+import { DebrisField } from '@coreprime/kbot-game3d/debris-field'
 import { teamColorForSide } from '@coreprime/kbot-game3d/team-colors'
 import { onEnhanceMeshChanged } from '@coreprime/kbot-game3d/enhance-mesh'
 import {
