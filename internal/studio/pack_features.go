@@ -65,17 +65,27 @@ func (sess *Session) handleFeatureDefs(w http.ResponseWriter, _ *http.Request) {
 // pixel geometry (1 px ≈ 1 wu at TA scale) — absent for object-only
 // features, whose visual truth is the 3DO named by object.
 type packFeatureJSON struct {
-	ID          string  `json:"id"`
-	Category    string  `json:"category,omitempty"`
-	World       string  `json:"world,omitempty"`
-	FootprintX  int     `json:"footprintX,omitempty"`
-	FootprintZ  int     `json:"footprintZ,omitempty"`
-	HeightWU    int     `json:"heightWU,omitempty"`
-	Object      string  `json:"object,omitempty"`
-	Animating   bool    `json:"animating,omitempty"`
-	Blocking    bool    `json:"blocking,omitempty"`
-	Reclaimable bool    `json:"reclaimable,omitempty"`
-	Permanent   bool    `json:"permanent,omitempty"`
+	ID          string `json:"id"`
+	Category    string `json:"category,omitempty"`
+	World       string `json:"world,omitempty"`
+	FootprintX  int    `json:"footprintX,omitempty"`
+	FootprintZ  int    `json:"footprintZ,omitempty"`
+	HeightWU    int    `json:"heightWU,omitempty"`
+	Object      string `json:"object,omitempty"`
+	Animating   bool   `json:"animating,omitempty"`
+	Blocking    bool   `json:"blocking,omitempty"`
+	Reclaimable bool   `json:"reclaimable,omitempty"`
+	// Indestructible marks a feature that can never be cleared or reclaimed
+	// (metal deposits, geothermal vents, sacred stones). The sim treats it as
+	// a build/movement obstacle, so the client uses it to decide whether a
+	// pushed resource feature should occupy its plot.
+	Indestructible bool `json:"indestructible,omitempty"`
+	Permanent      bool `json:"permanent,omitempty"`
+	// Geothermal marks a steam vent (featuredef geothermal=1): the heat source
+	// a geothermal power plant must be founded over. Surfaced so the sandbox can
+	// push the vent into the sim as a geothermal site for the build-legality
+	// probe.
+	Geothermal  bool    `json:"geothermal,omitempty"`
 	Metal       float64 `json:"metal,omitempty"`
 	Energy      float64 `json:"energy,omitempty"`
 	FeatureDead string  `json:"featureDead,omitempty"`
@@ -168,20 +178,22 @@ func (sess *Session) buildPackFeatureCatalog() (map[string]packFeatureJSON, map[
 				continue
 			}
 			entry := packFeatureJSON{
-				ID:          id,
-				Category:    strings.ToLower(strings.TrimSpace(f.Category)),
-				World:       strings.ToLower(strings.TrimSpace(f.World)),
-				FootprintX:  f.FootprintX,
-				FootprintZ:  f.FootprintZ,
-				HeightWU:    f.Height,
-				Object:      strings.ToLower(strings.TrimSpace(f.Object)),
-				Animating:   f.Animating != 0,
-				Blocking:    f.Blocking != 0,
-				Reclaimable: f.Reclaimable != 0,
-				Permanent:   f.Permanent != 0,
-				Metal:       f.Metal,
-				Energy:      f.Energy,
-				FeatureDead: strings.ToLower(strings.TrimSpace(f.FeatureDead)),
+				ID:             id,
+				Category:       strings.ToLower(strings.TrimSpace(f.Category)),
+				World:          strings.ToLower(strings.TrimSpace(f.World)),
+				FootprintX:     f.FootprintX,
+				FootprintZ:     f.FootprintZ,
+				HeightWU:       f.Height,
+				Object:         strings.ToLower(strings.TrimSpace(f.Object)),
+				Animating:      f.Animating != 0,
+				Blocking:       f.Blocking != 0,
+				Reclaimable:    f.Reclaimable != 0,
+				Indestructible: f.Indestructible != 0,
+				Permanent:      f.Permanent != 0,
+				Geothermal:     f.Geothermal != 0,
+				Metal:          f.Metal,
+				Energy:         f.Energy,
+				FeatureDead:    strings.ToLower(strings.TrimSpace(f.FeatureDead)),
 			}
 			if fn, sq := strings.TrimSpace(f.Filename), strings.TrimSpace(f.SeqName); fn != "" && sq != "" {
 				if dims, ok := sess.featureGafDims(gafCache, fn)[strings.ToLower(sq)]; ok {

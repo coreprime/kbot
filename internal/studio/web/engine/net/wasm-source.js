@@ -189,6 +189,17 @@ export class WasmFrameSource extends FrameSource {
   // sim samples for elevation, movement legality and terrain hits.
   setTerrain(t) { return this._engine.setTerrain(this._handle, t) }
 
+  // addFeature places one map feature (scenery, metal patch, geothermal vent)
+  // into the sim and returns its id. A metal patch (kind 1, metal>0) stamps its
+  // metal into the terrain cell grid, so setTerrain MUST run first; a geothermal
+  // vent (geothermal:true) marks a site a geothermal plant may be founded over.
+  // Returns 0 on any error or before the engine has a handle so a map load never
+  // throws over a missing feature.
+  addFeature(spec) {
+    if (!this._engine || this._handle < 0) return 0
+    try { return this._engine.addFeature(this._handle, spec) } catch { return 0 }
+  }
+
   // load sends transports to pick up a unit; unload sets their cargo down
   // at a ground point.
   load(transportIds, targetUnit) { return this._engine.submitLoad(this._handle, transportIds, targetUnit) }

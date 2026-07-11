@@ -73,7 +73,9 @@ tasks:
       # failure instead of an in-browser spawn crash.
       - task: build-wasm
       - node --test "internal/studio/web/ui/map-editor/tak-rotate.test.js"
+      - node --test "internal/studio/web/ui/sandbox/map-features-sim.test.js"
       - node --test "internal/studio/web/engine/spawn-smoke.test.js"
+      - node --test "internal/studio/web/engine/build-legality.test.js"
 
   test-verbose:
     desc: Run all tests

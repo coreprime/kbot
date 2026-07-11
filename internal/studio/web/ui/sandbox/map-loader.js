@@ -9,6 +9,7 @@
 
 import { hostCallbacks, setStatus } from '../host-context.js'
 import { reapplyContours } from './ribbon-bridge.js'
+import { simFeatureSpecs } from './map-features-sim.js'
 
 const wsUrl = (p) => `${window.__WS_BASE__ || ''}${p}`
 
@@ -34,14 +35,24 @@ export async function loadSandboxMap(view, path, onStep) {
   }
 
   // Sim first — the height field must be in before any unit moves on it.
-  if (view.scene?.source?.setTerrain) {
-    view.scene.source.setTerrain({
+  const source = view.scene?.source
+  if (source?.setTerrain) {
+    source.setTerrain({
       w: info.w, h: info.h,
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
       data: heights,
       voids,
     })
+    // Push the map's resource features into the sim so the build-placement
+    // probe can see them: a metal deposit stamps metal into the cell grid (a
+    // metal extractor founded off-metal then reads RED), and a geothermal vent
+    // marks the only site a geothermal plant may be founded over. Runs AFTER
+    // setTerrain so a metal patch has a cell grid to stamp. Non-fatal — a map
+    // whose feature-defs fail to load still installs its terrain.
+    if (source.addFeature) {
+      await pushSimResourceFeatures(source, info)
+    }
   }
 
   // Renderer: drape the full map render over a baked-height mesh. The
@@ -155,6 +166,34 @@ export async function spawnFactionLeader(view, commander, sideIndex = 0) {
     view.camera.pitch = 32 * Math.PI / 180
     view.camera.distance = 420
   }
+}
+
+// _featureDefsCache memoizes the /api/studio/feature-defs catalogue (the id →
+// featuredef table); the endpoint is session-cached server-side, but this also
+// spares a second fetch when several maps load in a row.
+let _featureDefsCache = null
+
+async function fetchFeatureDefs() {
+  if (_featureDefsCache) return _featureDefsCache
+  try {
+    const res = await fetch('/api/studio/feature-defs')
+    _featureDefsCache = res.ok ? await res.json() : {}
+  } catch {
+    _featureDefsCache = {}
+  }
+  return _featureDefsCache
+}
+
+// pushSimResourceFeatures resolves each placed feature's featuredef and installs
+// the metal deposits + geothermal vents into the sim via addFeature. Errors are
+// swallowed per the map-load contract — a missing catalogue just leaves the sim
+// without resource sites, exactly as before this plumbing existed.
+async function pushSimResourceFeatures(source, info) {
+  const features = Array.isArray(info.features) ? info.features : []
+  if (!features.length) return
+  const defs = await fetchFeatureDefs()
+  const specs = simFeatureSpecs(features, defs, info.cellWU || 16)
+  for (const spec of specs) source.addFeature(spec)
 }
 
 function loadImage(url) {
