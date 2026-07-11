@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/coreprime/kbot-io/formats/tnt"
-	"github.com/coreprime/kbot/internal/maplint"
+	"github.com/coreprime/kbot-io/maplint"
 )
 
 // qualityIssue is the JSON shape the studio Quality Checker dialog

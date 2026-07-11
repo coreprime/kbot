@@ -19,8 +19,8 @@ import (
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/maplint"
 	"github.com/coreprime/kbot-io/palettes"
-	"github.com/coreprime/kbot/internal/maplint"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -238,15 +238,15 @@ type tntImageOutput struct {
 }
 
 type tntPreviewOutput struct {
-	Path            string `json:"path"`
-	Output          string `json:"output"`
-	Width           int    `json:"width"`
-	Height          int    `json:"height"`
-	SpritesPainted  int    `json:"sprites_painted"`
-	SpritesMissing  int    `json:"sprites_missing"`
-	StartPositions  int    `json:"start_positions"`
-	SisterOTAFound  bool   `json:"sister_ota_found"`
-	OverlayApplied  bool   `json:"overlay_applied"`
+	Path           string `json:"path"`
+	Output         string `json:"output"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	SpritesPainted int    `json:"sprites_painted"`
+	SpritesMissing int    `json:"sprites_missing"`
+	StartPositions int    `json:"start_positions"`
+	SisterOTAFound bool   `json:"sister_ota_found"`
+	OverlayApplied bool   `json:"overlay_applied"`
 }
 
 type tntASCIIOutput struct {
@@ -787,16 +787,16 @@ func makeTNTOptimizeHandler(r *Resolver) server.ToolHandlerFunc {
 
 // tntLintOutput is the JSON shape returned by the tnt_lint MCP tool.
 type tntLintOutput struct {
-	Path              string                  `json:"path"`
-	Source            string                  `json:"source,omitempty"`
-	TileGraphics      int                     `json:"tile_graphics"`
-	AttrWidth         int                     `json:"attr_width"`
-	AttrHeight        int                     `json:"attr_height"`
-	OTAPath           string                  `json:"ota_path,omitempty"`
-	FeatureRegistryOK bool                    `json:"feature_registry_loaded"`
-	TilePool          []tntLintTilePoolEntry  `json:"tile_pool_diagnostics"`
-	Quality           []tntLintQualityEntry   `json:"quality"`
-	IssueCount        int                     `json:"issue_count"`
+	Path              string                 `json:"path"`
+	Source            string                 `json:"source,omitempty"`
+	TileGraphics      int                    `json:"tile_graphics"`
+	AttrWidth         int                    `json:"attr_width"`
+	AttrHeight        int                    `json:"attr_height"`
+	OTAPath           string                 `json:"ota_path,omitempty"`
+	FeatureRegistryOK bool                   `json:"feature_registry_loaded"`
+	TilePool          []tntLintTilePoolEntry `json:"tile_pool_diagnostics"`
+	Quality           []tntLintQualityEntry  `json:"quality"`
+	IssueCount        int                    `json:"issue_count"`
 }
 
 type tntLintTilePoolEntry struct {

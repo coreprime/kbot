@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
-	"github.com/coreprime/kbot/internal/maplint"
+	"github.com/coreprime/kbot-io/maplint"
+	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 )
 
 func newTNTLintCommand() *cobra.Command {
