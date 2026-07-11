@@ -29,13 +29,31 @@ func isTransport(u *Unit) bool {
 	return u.Meta != nil && u.Meta.TransportSlots > 0 && u.Meta.CanMove
 }
 
+// transportCapacity is how many passengers a transport carries: an air (VTOL)
+// transport is hard-limited to one (the engine's +0x8a != 0 pickup gate,
+// specials.md §1.1.3), every other transport carries its declared slot count.
+func transportCapacity(t *Unit) int {
+	if t.Meta.IsAircraft {
+		return 1
+	}
+	return t.Meta.TransportSlots
+}
+
 // loadable reports whether a unit can be picked up by the transport: alive,
 // finished, mobile ground stock (no aircraft, ships or buildings), not
-// already aboard something, and small enough to be plausible cargo.
+// already aboard something, and — when the transport declares a transportsize —
+// small enough for it (passenger FootprintX ≤ transportsize, specials.md
+// §1.1.2 gate 4).
 func loadable(t, cargo *Unit) bool {
-	return cargo != nil && !cargo.Dead && cargo != t && !cargo.underConstruction() &&
-		cargo.carriedBy == 0 && cargo.Meta != nil && cargo.Meta.CanMove &&
-		!cargo.Meta.IsAircraft && !cargo.Meta.IsShip && !cargo.Meta.IsSub
+	if cargo == nil || cargo.Dead || cargo == t || cargo.underConstruction() ||
+		cargo.carriedBy != 0 || cargo.Meta == nil || !cargo.Meta.CanMove ||
+		cargo.Meta.IsAircraft || cargo.Meta.IsShip || cargo.Meta.IsSub {
+		return false
+	}
+	if t.Meta.TransportSize > 0 && cargo.Meta.FootprintX > t.Meta.TransportSize {
+		return false // too large for this transport
+	}
+	return true
 }
 
 // applyLoad handles a Load order on one transport: the first target becomes
@@ -58,7 +76,7 @@ func (w *World) applyLoad(t *Unit, targetID uint32) {
 			pending++
 		}
 	}
-	if len(t.carrying)+pending >= t.Meta.TransportSlots {
+	if len(t.carrying)+pending >= transportCapacity(t) {
 		return
 	}
 	if t.loadTarget == 0 && !t.hasUnload {

@@ -157,3 +157,66 @@ func TestCarriedUnitUntargetable(t *testing.T) {
 		t.Fatalf("carried cargo lost health: %v", hp.Float())
 	}
 }
+
+// TestVTOLCarriesExactlyOne pins the air-transport rule (specials.md §1.1.3):
+// a VTOL transport carries exactly one unit regardless of its declared slot
+// count, so a second Load never queues.
+func TestVTOLCarriesExactlyOne(t *testing.T) {
+	w := New(Config{Seed: 90})
+	// Slots claims 4, but as an aircraft the effective capacity is 1.
+	tr := w.AddUnit("atlas", transportMeta("atlas", 4, true), nil, fixed.Vec2{}, 0, 0)
+	c1 := passiveCargo(w, "peewee1", fixed.Vec2{X: fixed.FromInt(120)}, 0)
+	c2 := passiveCargo(w, "peewee2", fixed.Vec2{X: fixed.FromInt(160)}, 0)
+
+	w.ApplyOrder(order.Load([]uint32{tr}, c1))
+	w.ApplyOrder(order.Load([]uint32{tr}, c2)) // must be rejected (capacity 1)
+	for i := 0; i < 800 && w.UnitByID(c1).carriedBy == 0; i++ {
+		w.Step(nil)
+	}
+	if w.UnitByID(c1).carriedBy != tr {
+		t.Fatalf("first cargo never attached")
+	}
+	if w.UnitByID(c2).carriedBy != 0 {
+		t.Fatal("VTOL took on a second passenger past its one-unit limit")
+	}
+	for i := 0; i < 200; i++ {
+		w.Step(nil)
+	}
+	if got := len(w.UnitByID(tr).carrying); got != 1 {
+		t.Fatalf("VTOL carrying %d units, want exactly 1", got)
+	}
+}
+
+// TestTransportSizeGate pins the per-item size gate (specials.md §1.1.2 gate 4):
+// a transport declaring a transportsize refuses cargo whose footprint exceeds
+// it, but accepts cargo within it.
+func TestTransportSizeGate(t *testing.T) {
+	w := New(Config{Seed: 91})
+	m := transportMeta("bear", 6, false)
+	m.TransportSize = 2 // accepts footprint <= 2
+	tr := w.AddUnit("bear", m, nil, fixed.Vec2{}, 0, 0)
+
+	smallM := testMeta("small")
+	smallM.Weapons[0] = WeaponMeta{}
+	smallM.FootprintX = 2
+	small := w.AddUnit("small", smallM, nil, fixed.Vec2{X: fixed.FromInt(40)}, 0, 0)
+	w.ApplyOrder(order.Stance([]uint32{small}, order.MoveHold, order.FireHold))
+
+	bigM := testMeta("big")
+	bigM.Weapons[0] = WeaponMeta{}
+	bigM.FootprintX = 4 // too large
+	big := w.AddUnit("big", bigM, nil, fixed.Vec2{X: fixed.FromInt(80)}, 0, 0)
+	w.ApplyOrder(order.Stance([]uint32{big}, order.MoveHold, order.FireHold))
+
+	w.ApplyOrder(order.Load([]uint32{tr}, big))   // rejected (footprint 4 > 2)
+	w.ApplyOrder(order.Load([]uint32{tr}, small)) // accepted (footprint 2 <= 2)
+	for i := 0; i < 400 && w.UnitByID(small).carriedBy == 0; i++ {
+		w.Step(nil)
+	}
+	if w.UnitByID(small).carriedBy != tr {
+		t.Fatal("within-size cargo never loaded")
+	}
+	if w.UnitByID(big).carriedBy != 0 {
+		t.Fatal("oversize cargo was loaded past the transportsize gate")
+	}
+}

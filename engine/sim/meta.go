@@ -81,8 +81,16 @@ type UnitMeta struct {
 	FootprintZ int
 
 	// TransportSlots — how many units this transport carries (0 = not a
-	// transport).
+	// transport). An air (VTOL) transport always carries exactly one regardless
+	// of this count (specials.md §1.1.3).
 	TransportSlots int
+
+	// TransportSize is the largest passenger footprint (FBI transportsize) this
+	// transport accepts: a candidate loads only if its FootprintX does not
+	// exceed it (specials.md §1.1.2 gate 4). Zero means the FBI bridge did not
+	// surface it — the size gate then does not apply (load stays footprint-blind,
+	// the pre-Block-6 behaviour).
+	TransportSize int
 
 	// Yard is the parsed YardMap occupancy grid (row-major FootprintZ rows ×
 	// FootprintX cols). Nil means the whole footprint is solid. Only standing
