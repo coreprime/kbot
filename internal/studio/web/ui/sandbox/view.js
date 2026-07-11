@@ -2455,8 +2455,14 @@ export class SandboxView {
       // the right-click repair gesture.
       const hit = this.#pickUnitAt(sx, sy)
       const queued = !!e.shiftKey
-      this._pendingCmd = null
-      this.#refreshDefaultCursor()
+      // Shift KEEPS repair armed so a whole chain of repairs lays click by
+      // click (mirroring Move / Patrol); a plain click is single-shot and
+      // disarms. Staying armed under Shift is what keeps the SECOND shift-click
+      // a repair rather than falling through to the default force-attack.
+      if (!queued) {
+        this._pendingCmd = null
+        this.#refreshDefaultCursor()
+      }
       if (hit) {
         const n = this.issueRepair(hit, queued)
         this.#setStatus(n > 0
@@ -2476,9 +2482,14 @@ export class SandboxView {
       // A unit target wins; off any unit, fall back to a reclaimable feature
       // (tree / rock / wreck) under the cursor.
       const target = this.#pickUnitAt(sx, sy) || this.#pickFeatureAt(sx, sy)
-      this._pendingCmd = null
-      if (this._armedCursor) this._armedCursor.setSlot(null)
-      this.#refreshDefaultCursor()
+      // Shift keeps reclaim armed for a chain of salvage orders (Move-style);
+      // plain click is single-shot. Staying armed under Shift keeps a repeated
+      // shift-click a reclaim rather than falling through to force-attack.
+      if (!queued) {
+        this._pendingCmd = null
+        if (this._armedCursor) this._armedCursor.setSlot(null)
+        this.#refreshDefaultCursor()
+      }
       if (target) {
         const label = target.name || 'feature'
         const n = this.issueReclaim(target, queued)
@@ -2614,6 +2625,20 @@ export class SandboxView {
         // selection (TA's friendly-fire guard for the plain gesture).
         const selUnits = [...sel].map((id) => this.scene.unitById(id)).filter((u) => u && !u.dead)
         const sameSide = selUnits.length > 0 && selUnits.every((u) => (u.side | 0) === ((picked.side | 0)))
+        // Repair gesture (plain LEFT-click): a builder in the selection over a
+        // DAMAGED or under-construction friendly resumes / heals it rather than
+        // switching selection to it — the left-click twin of the right-click
+        // repair, so a con clicked onto a hurt ally always nanolathes it (Shift
+        // queues). A healthy friendly still falls through to the plain select
+        // below, so ordinary selection is unchanged.
+        if (sameSide && (picked.buildPercent < 100 || picked.health < 100)) {
+          const queued = !!e.shiftKey
+          const n = this.issueRepair(picked, queued)
+          if (n > 0) {
+            this.#setStatus(`${queued ? 'Repair queued' : 'Repair'} — ${n} builder(s) ${this.#repairVerb(picked)}.`)
+            return
+          }
+        }
         if (sameSide && !e.shiftKey) {
           this.scene.selectOnly(picked.id)
           this.#playSelectAck()
