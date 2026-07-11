@@ -6,8 +6,8 @@ import (
 	// The shipped games register themselves with the games registry from
 	// their package inits; the blank imports make sure both are linked into
 	// the studio regardless of what else references them.
-	_ "github.com/coreprime/kbot-game-takingdoms"
-	_ "github.com/coreprime/kbot-game-totala"
+	_ "github.com/coreprime/kbot-game-takingdoms/takingdoms"
+	_ "github.com/coreprime/kbot-game-totala/totala"
 )
 
 // palettes returns the session's game adapter, constructed once from the

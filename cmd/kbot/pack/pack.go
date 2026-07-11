@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 
 	// The shipped games register themselves from their package inits.
-	_ "github.com/coreprime/kbot-game-takingdoms"
-	_ "github.com/coreprime/kbot-game-totala"
+	_ "github.com/coreprime/kbot-game-takingdoms/takingdoms"
+	_ "github.com/coreprime/kbot-game-totala/totala"
 )
 
 var (
