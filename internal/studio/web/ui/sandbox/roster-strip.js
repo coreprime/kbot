@@ -49,6 +49,25 @@ function pointerOverDock() {
   return !!(el && el.closest && el.closest('.roster-cell'))
 }
 
+// dockHovered reports the browser's LIVE :hover state for the strip — the
+// authoritative "is the cursor over a build cell right now" signal that stays
+// correct even when no pointermove was delivered after the cursor left (a
+// coalesced move, a cursor teleport, focus stolen mid-hover). The geometry
+// probe above reads the LAST recorded point, which strands stale on the old
+// cell in exactly those cases; :hover does not. The two are combined so a tip
+// is kept only while BOTH agree the cursor is on a cell, and dismissed the
+// moment EITHER says it has left — which is what makes the dismissal reliable.
+function dockHovered() {
+  return !!(_root && typeof _root.matches === 'function' && _root.matches(':hover'))
+}
+
+// stillOverDock is the keep-the-tip predicate: the cursor is genuinely over a
+// build cell only when the recorded geometry AND the live :hover agree. Either
+// one going false dismisses the tip, so a stale point can no longer strand it.
+function stillOverDock() {
+  return pointerOverDock() && dockHovered()
+}
+
 // Per-type meta cache for the build row's cost lines. A miss kicks an async
 // fetch and re-renders when it lands; null marks "no meta" so a 404 is
 // probed at most once.
@@ -156,7 +175,7 @@ function armTipWatch() {
   clearTimeout(_tipWatch)
   _tipWatch = setTimeout(() => {
     if (!_tip || _tip.hidden) return
-    if (pointerOverDock()) armTipWatch()
+    if (stillOverDock()) armTipWatch()
     else _tip.hidden = true
   }, 400)
 }
@@ -283,7 +302,7 @@ function update() {
   // the tip is up but the strip isn't actually hovered, drop it. Runs every
   // tick (≈4 Hz) so a stuck hint clears within ~250 ms. The tip is
   // pointer-events:none, so :hover here reflects the dock alone.
-  if (_tip && !_tip.hidden && !pointerOverDock()) _tip.hidden = true
+  if (_tip && !_tip.hidden && !stillOverDock()) _tip.hidden = true
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []
