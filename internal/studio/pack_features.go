@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot-io/formats/gaf"
@@ -85,7 +86,14 @@ type packFeatureJSON struct {
 	// a geothermal power plant must be founded over. Surfaced so the sandbox can
 	// push the vent into the sim as a geothermal site for the build-legality
 	// probe.
-	Geothermal  bool    `json:"geothermal,omitempty"`
+	Geothermal bool `json:"geothermal,omitempty"`
+	// SacredSite is the TA:Kingdoms mana multiplier a sacred stone carries
+	// (featuredef sacredsite, 0 = not a sacred site). It is the TA:K analog of
+	// a metal deposit's metal yield: a mana-producing building (yardmap 'S')
+	// founded fully over the stone draws mogriumincome × SacredSite. Surfaced
+	// so the sandbox can push the stone into the sim as a sacred site and paint
+	// its real GAF art flat on the ground.
+	SacredSite  float64 `json:"sacredSite,omitempty"`
 	Metal       float64 `json:"metal,omitempty"`
 	Energy      float64 `json:"energy,omitempty"`
 	FeatureDead string  `json:"featureDead,omitempty"`
@@ -135,7 +143,18 @@ func isFlatGroundFeature(f packFeatureJSON) bool {
 	if f.Object != "" {
 		return false
 	}
-	return flatGroundFeatureCategories[f.Category] || isMetalDepositFeature(f)
+	return flatGroundFeatureCategories[f.Category] || isMetalDepositFeature(f) || isManaSiteFeature(f)
+}
+
+// isManaSiteFeature reports whether a feature is a TA:Kingdoms sacred site —
+// the mana-resource stone a producer building (yardmap 'S') is founded over,
+// the TA:K analog of a TA metal deposit. Sacred stones sit flush on the ground
+// (height 0) and carry a sacredsite= multiplier; the defining, unambiguous
+// trait is that multiplier, which cleanly separates them from the upright,
+// blocking standing-stones (the henge features, also category=mana) that carry
+// no sacredsite and read as rock scatter. Object-bearing features never apply.
+func isManaSiteFeature(f packFeatureJSON) bool {
+	return f.Object == "" && f.SacredSite > 0
 }
 
 // isMetalDepositFeature reports whether a feature is a permanent metal
@@ -216,6 +235,15 @@ func (sess *Session) buildPackFeatureCatalog() (map[string]packFeatureJSON, map[
 				Metal:          f.Metal,
 				Energy:         f.Energy,
 				FeatureDead:    strings.ToLower(strings.TrimSpace(f.FeatureDead)),
+			}
+			// sacredsite= is a TA:Kingdoms-only featuredef key, so it lands in
+			// the shared FeatureBase Remaining catch-all rather than a typed
+			// field on ta.Feature. Recover it so mana sacred stones surface as
+			// resource sites (the TA:K analog of a metal deposit's metal=).
+			if sv, ok := f.Remaining["sacredsite"]; ok {
+				if val, perr := strconv.ParseFloat(strings.TrimSpace(sv), 64); perr == nil {
+					entry.SacredSite = val
+				}
 			}
 			if fn, sq := strings.TrimSpace(f.Filename), strings.TrimSpace(f.SeqName); fn != "" && sq != "" {
 				if dims, ok := sess.featureGafDims(gafCache, fn)[strings.ToLower(sq)]; ok {

@@ -15,6 +15,12 @@
 //     footprint overlaps such a vent; the vent stays indestructible/blocking so
 //     an ordinary building is still refused the plot (the plant it powers is
 //     exempt inside the engine).
+//   - TA:Kingdoms sacred sites (featuredef sacredsite>0) → a sacred site (kind
+//     3, sacredSite:multiplier). A mana-producing lodestone building (yardmap
+//     'S') credits mogriumincome × the stone's sacredsite while its footprint
+//     fully covers the stone. The stone lies flush on the ground and is passable
+//     (TDF blocking=0), so it is pushed non-blocking — the producer founds
+//     directly on top of it, exactly as a metal extractor sits on a deposit.
 //
 // Trees, rocks and other scenery are deliberately left out: they carry no build
 // gate and pushing them would turn the sandbox's decorative props into sim
@@ -23,6 +29,7 @@
 // FeatureKind ordinals, matching sim.FeatureKind exported by the wasm bridge.
 const KIND_PROP = 0
 const KIND_METAL_PATCH = 1
+const KIND_SACRED_SITE = 3
 
 // classifyMapFeature decides how (or whether) one placed feature enters the sim,
 // given its resolved featuredef and its placed name. Returns 'metal',
@@ -40,6 +47,11 @@ const KIND_METAL_PATCH = 1
 function classifyMapFeature(def, name = '') {
   if (!def) return null
   if (def.geothermal) return 'geothermal'
+  // A TA:K sacred site is defined by its sacredsite multiplier, not its
+  // category (the upright henge standing-stones share category=mana but carry
+  // no multiplier and stay decorative scenery). The multiplier alone is the
+  // unambiguous gate.
+  if (def.sacredSite > 0 && !def.object) return 'mana'
   if (def.metal > 0) {
     const cat = String(def.category || '').toLowerCase()
     if (cat === 'metal') return 'metal'
@@ -81,6 +93,17 @@ export function simFeatureSpecs(features, defs = {}, cellWU = 16) {
         kind: KIND_METAL_PATCH,
         metal: Math.round(def.metal),
         // Passable: the extractor sits on the deposit, so it must not block.
+        blocking: false,
+        indestructible: false,
+      })
+    } else if (kindTag === 'mana') {
+      specs.push({
+        ...base,
+        kind: KIND_SACRED_SITE,
+        sacredSite: def.sacredSite,
+        // Passable: the lodestone producer founds directly over the stone (the
+        // engine reads its sacredsite multiplier from the covered feature), so
+        // it must not block its own plot — mirroring the metal-patch push.
         blocking: false,
         indestructible: false,
       })

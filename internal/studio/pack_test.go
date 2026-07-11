@@ -605,6 +605,61 @@ func TestBuildPackTAKMap(t *testing.T) {
 	}
 }
 
+// TestBuildPackTAKSacredSites asserts the TA:Kingdoms mana-resource sites: a
+// sacred stone (featuredef sacredsite>0) is classified flat-ground and carries
+// its real GAF sprite packed under featuresprites/<id>.png — the TA:K analog of
+// a TA metal deposit — while an upright henge standing-stone (same category
+// "mana", no sacredsite) stays a 3D stand-in and carries no sprite.
+func TestBuildPackTAKSacredSites(t *testing.T) {
+	install := testutil.TAKUnpackedPath(t)
+	dir := t.TempDir()
+	if _, err := BuildPack(install, dir, PackOptions{
+		Game:  "takingdoms",
+		Units: []string{"aramana"},
+		Maps:  []string{"athri cay"},
+	}); err != nil {
+		t.Fatalf("BuildPack: %v", err)
+	}
+
+	var ff packFeaturesFileJSON
+	mustJSON(t, filepath.Join(dir, "features.json"), &ff)
+
+	sacredWithSprite := 0
+	for id, f := range ff.Features {
+		isSacred := f.SacredSite > 0
+		if isSacred {
+			if !isManaSiteFeature(f) || !isFlatGroundFeature(f) {
+				t.Fatalf("sacred site %q (sacredsite %v) must be a flat-ground mana site", id, f.SacredSite)
+			}
+			if f.Sprite == "" {
+				t.Fatalf("sacred site %q carries no packed sprite", id)
+			}
+			p := filepath.Join(dir, filepath.FromSlash(f.Sprite))
+			data, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatalf("sacred-site sprite %q not on disk: %v", f.Sprite, err)
+			}
+			if _, derr := png.Decode(bytes.NewReader(data)); derr != nil {
+				t.Fatalf("sacred-site sprite %q not a PNG: %v", f.Sprite, derr)
+			}
+			sacredWithSprite++
+		}
+		// An upright henge standing-stone shares category "mana" but is not a
+		// sacred site and must never be routed to the flat-decal sprite path.
+		if strings.Contains(id, "henge") {
+			if isManaSiteFeature(f) {
+				t.Fatalf("henge %q must not classify as a mana site", id)
+			}
+			if f.Sprite != "" {
+				t.Fatalf("henge %q (upright standing-stone) should carry no sprite: %q", id, f.Sprite)
+			}
+		}
+	}
+	if sacredWithSprite == 0 {
+		t.Fatal("no TA:K sacred site carried a packed sprite (aramon features include AraMana01-03)")
+	}
+}
+
 // TestBuildPackTAKWeapons covers the format-v8 TA:K weapon catalogue: the
 // inline FBI [WEAPONn] sections become weapons.json entries keyed by the
 // lower-case weapon name (the same ids the unitdb slot arrays carry), each

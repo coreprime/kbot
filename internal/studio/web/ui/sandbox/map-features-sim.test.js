@@ -18,6 +18,11 @@ const defs = {
   greentree1: { category: 'trees', footprintX: 1, footprintZ: 1, blocking: true, reclaimable: true },
   rock1a: { category: 'rocks', metal: 100, footprintX: 2, footprintZ: 2, reclaimable: true },
   metaltower01: { category: 'building', metal: 150, footprintX: 2, footprintZ: 2, reclaimable: true },
+  // TA:Kingdoms mana features: a sacred stone (sacredsite multiplier, the mana
+  // resource site) and an upright henge standing-stone (category=mana but no
+  // multiplier — decorative, blocking, must NOT be pushed as a resource site).
+  aramana02: { category: 'mana', sacredSite: 1.5, footprintX: 2, footprintZ: 2, indestructible: true },
+  arahenge01: { category: 'mana', footprintX: 4, footprintZ: 3, heightWU: 74, blocking: true, indestructible: true },
 }
 
 test('metal deposit becomes a non-blocking metal patch that stamps metal', () => {
@@ -63,6 +68,23 @@ test('trees, reclaim rocks, and destructible metal-named scenery are not pushed'
     { name: 'MetalTower01', ax: 7, ay: 7 },
   ], defs, 16)
   assert.equal(specs.length, 0, 'non-deposit scenery carries no build gate and must stay decorative')
+})
+
+test('a TA:K sacred stone becomes a non-blocking sacred site carrying its multiplier', () => {
+  const specs = simFeatureSpecs([{ name: 'AraMana02', ax: 8, ay: 8 }], defs, 16)
+  assert.equal(specs.length, 1)
+  const s = specs[0]
+  assert.equal(s.kind, 3, 'sacred site kind')
+  assert.equal(s.sacredSite, 1.5, 'sacredsite multiplier carried through for the producer income')
+  assert.equal(s.blocking, false, 'the stone is passable so the lodestone founds on top of it')
+  assert.equal(s.indestructible, false)
+  assert.equal(s.footprintX, 2)
+  assert.equal(s.footprintZ, 2)
+})
+
+test('an upright henge standing-stone shares category=mana but is not a resource site', () => {
+  const specs = simFeatureSpecs([{ name: 'AraHenge01', ax: 3, ay: 3 }], defs, 16)
+  assert.equal(specs.length, 0, 'a henge carries no sacredsite multiplier and stays decorative scenery')
 })
 
 test('features with no catalogue entry, and non-feature junk, are skipped', () => {
