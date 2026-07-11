@@ -60,14 +60,13 @@ export class MvControls {
       tertiary: null,
     }
     // Live unit state.  Position is XZ delta from the spawn origin.
-    // Heading is the body's CURRENT visual world-heading measured as
-    // atan2 from +Z CCW.  TA 3DOs ship with the nose at -Z so the
-    // unit's natural "out-of-the-box" pose is heading = π — that
-    // way _applyRendererTransform passes π + π = 0 to setUnitTransform
-    // (i.e., no rotation applied) and the model stays at its native
-    // pose until the user actually moves.  As soon as Move runs, the
-    // heading turns toward the target and the renderer applies the
-    // matching rotation.
+    // Heading mirrors the engine unit's heading (radians) in the same
+    // convention the renderer + weapon aim use — heading 0 faces -Z,
+    // increasing turns north→west→south→east.  It feeds the renderer
+    // straight through (no offset, no sign flip): the body, its turret
+    // pieces and every shot then share one frame, so an armed barrel
+    // points exactly where the shell flies.  The engine seeds a fresh
+    // unit at π; _readPoseFromEngine keeps this in step each tick.
     //
     // `alt` is the unit's altitude offset (wu above ground).  Only
     // aircraft modulate this — it lerps toward CruiseAltitude on
@@ -828,7 +827,7 @@ export class MvControls {
     this._wakeAccumMs = (this._wakeAccumMs || 0) + dtSimMs
     while (this._wakeAccumMs >= 100) {
       this._wakeAccumMs -= 100
-      cob._emitShipWake([this.pos.x, this.alt || 0, this.pos.z], this.heading + Math.PI)
+      cob._emitShipWake([this.pos.x, this.alt || 0, this.pos.z], this.heading)
     }
   }
 
@@ -1030,19 +1029,15 @@ export class MvControls {
   }
 
   _applyRendererTransform() {
-    // Heading-to-render conversion.  TA 3DOs author the unit with
-    // its nose toward -Z, the model loader X-flips vertex positions,
-    // and Mat4.rotateY uses the standard right-handed sign.  The
-    // empirically-correct rotation that makes the unit walk +Z when
-    // heading=0 (atan2(dx=0, dz=+1) = 0) is `heading + π` — without
-    // the offset the unit shows its rear to the target.  The user-
-    // reported "all inverted" behaviour traces to the canvas click
-    // handler's target-projection (see _wireCanvas), where the
-    // unproject occasionally maps a click to the OPPOSITE world
-    // point relative to the unit's pos because of camera-orbit yaw.
-    // Pose direction is correct; investigate target projection on
-    // any further reports of swapped directions.
-    this.viewer.renderer?.setUnitTransform(this.pos.x, this.alt, this.pos.z, this.heading + Math.PI)
+    // The engine heading feeds setUnitTransform straight through — the
+    // renderer already rests the model nose toward -Z and rotates it by
+    // Mat4.rotateY(heading), the same frame the weapon aim and the shot
+    // overlay use. An extra +π here rotated only the drawn body (and its
+    // turret children) a half-turn away from that frame, so the barrel
+    // armed 180° from where the projectile flew and a moving unit crabbed
+    // backward. Passing the raw heading keeps body, barrel and shell in
+    // one frame.
+    this.viewer.renderer?.setUnitTransform(this.pos.x, this.alt, this.pos.z, this.heading)
     // Camera follows the unit so it stays in frame as it walks /
     // flies away.  Without this, ground units that walked past the
     // initial framing bounds (and especially aircraft that lifted
