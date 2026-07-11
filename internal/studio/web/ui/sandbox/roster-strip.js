@@ -40,8 +40,13 @@ let _ptrX = -1
 let _ptrY = -1
 function pointerOverDock() {
   if (!_root || _ptrX < 0) return false
-  const r = _root.getBoundingClientRect()
-  return _ptrX >= r.left && _ptrX <= r.right && _ptrY >= r.top && _ptrY <= r.bottom
+  // Anchor the tip's life to the actual build/roster CELL under the cursor, not
+  // the dock CONTAINER: the container spans a wide/tall region over the map, so
+  // a container-rect test read a cursor on empty ground as "still over the dock"
+  // and the watch re-armed forever — the tip stranded after the mouse moved off
+  // a build icon. elementFromPoint pins it to a real cell.
+  const el = document.elementFromPoint(_ptrX, _ptrY)
+  return !!(el && el.closest && el.closest('.roster-cell'))
 }
 
 // Per-type meta cache for the build row's cost lines. A miss kicks an async
@@ -87,7 +92,10 @@ function ensureRoot() {
   // stolen mid-hover, DOM swapped under a stationary cursor).
   const sweep = (e) => {
     _ptrX = e.clientX; _ptrY = e.clientY
-    if (_tip && !_tip.hidden && _root && !_root.contains(e.target)) _tip.hidden = true
+    // Dismiss the moment the pointer isn't over an actual cell — not merely
+    // outside the (over-large) dock container — so moving off a build icon onto
+    // the map clears the tip immediately.
+    if (_tip && !_tip.hidden && !e.target?.closest?.('.roster-cell')) _tip.hidden = true
   }
   // Capture phase: the 3D canvas registers its own pointer/mouse handlers and
   // can stopPropagation on them, which starves a bubble-phase document listener
