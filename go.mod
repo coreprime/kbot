@@ -12,7 +12,7 @@ require (
 )
 
 require (
-	github.com/coreprime/kbot-engine v0.7.0
+	github.com/coreprime/kbot-engine v0.8.0
 	github.com/coreprime/kbot-game-takingdoms v0.3.0
 	github.com/coreprime/kbot-game-totala v0.3.0
 	github.com/coreprime/kbot-io v0.2.0
