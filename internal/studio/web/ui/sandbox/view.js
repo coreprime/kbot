@@ -2689,8 +2689,13 @@ export class SandboxView {
     const corners = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]]
     const pts = []
     for (const [lx, lz] of corners) {
-      const rx = lx * c - lz * s
-      const rz = lx * s + lz * c
+      // Rotate the footprint corners the SAME way the renderer turns the unit
+      // model and its selection square (a left-handed Y rotation, matching
+      // game3d Mat4.rotateY / #renderSelectionRings). The plain +θ form spun
+      // the outline the mirrored way, so it disagreed with both the ghost and
+      // the finished building's facing; this makes all three follow the drag.
+      const rx = lx * c + lz * s
+      const rz = -lx * s + lz * c
       const p = this.#worldToScreen(wx + rx, wy, wz + rz)
       if (!p) return
       pts.push(p)

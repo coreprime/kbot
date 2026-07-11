@@ -28,18 +28,26 @@ const KIND_METAL_PATCH = 1
 // given its resolved featuredef and its placed name. Returns 'metal',
 // 'geothermal' or null.
 //
-// TA authors metal deposits as metal-named features (RockMetal1-4, WaterMetal,
-// MetalTower…) — NOT a distinct category=metal, which no stock featuredef
-// carries; the green deposits are category=rocks, MetalTower is category=building.
-// Ordinary reclaim rocks (Rock, Rock1a, Boulder…) never carry "metal" in the
-// name, so a metal yield plus a metal-named feature cleanly picks out the build
-// sites without dragging in every reclaimable rock.
+// A genuine metal deposit — the only thing a metal extractor may be founded on —
+// is an INDESTRUCTIBLE, metal-bearing, sprite (no 3DO) resource site. Most are
+// filed under category=metal (the archipelago / mars patches), but the green-
+// planet deposits are authored under category=rocks with metal- or aquaore-named
+// ids (greenaquaore1-3, rockmetal1-4). This mirrors the render layer's rule in
+// pack_features.go isMetalDepositFeature so those loose-category deposits are not
+// missed. The indestructible gate keeps decorative-but-metal-named scenery out:
+// MetalTower* (category=building) and the reclaim rocks are destructible, so they
+// stay ordinary scenery and never masquerade as a mex site.
 function classifyMapFeature(def, name = '') {
   if (!def) return null
   if (def.geothermal) return 'geothermal'
   if (def.metal > 0) {
     const cat = String(def.category || '').toLowerCase()
-    if (cat === 'metal' || /metal/i.test(name)) return 'metal'
+    if (cat === 'metal') return 'metal'
+    const id = String(def.id || name).toLowerCase()
+    if (def.indestructible && !def.object &&
+        (id.includes('metal') || id.includes('aquaore'))) {
+      return 'metal'
+    }
   }
   return null
 }

@@ -5,15 +5,19 @@ import assert from 'node:assert/strict'
 import { simFeatureSpecs } from './map-features-sim.js'
 
 // A representative slice of the /api/studio/feature-defs catalogue, matching
-// real TA feature-def shapes: metal deposits are category=rocks with a metal
-// yield AND a metal-bearing name (RockMetal1-4, WaterMetal…); a geothermal steam
-// vent; a plain tree; and an ORDINARY reclaim rock (name carries no "metal", so
-// it must NOT be treated as a build site even though it reclaims to metal).
+// real TA feature-def shapes: a genuine deposit is INDESTRUCTIBLE and metal-
+// bearing. Most (rockmetal1-4) carry a metal-named id under category=rocks;
+// the green-planet ones (greenaquaore1-3) carry an aquaore-named id. A
+// geothermal steam vent; a plain tree; an ORDINARY reclaim rock (destructible,
+// no metal in the name); and MetalTower01 — a metal-NAMED but destructible
+// decorative building that must NOT be mistaken for a mex site.
 const defs = {
-  rockmetal1: { category: 'rocks', metal: 127, footprintX: 3, footprintZ: 3, reclaimable: true },
+  rockmetal1: { category: 'rocks', metal: 127, footprintX: 3, footprintZ: 3, reclaimable: true, indestructible: true },
+  greenaquaore1: { category: 'rocks', metal: 116, footprintX: 3, footprintZ: 3, indestructible: true },
   metalvent01: { category: 'steamvents', geothermal: true, footprintX: 3, footprintZ: 3, indestructible: true },
   greentree1: { category: 'trees', footprintX: 1, footprintZ: 1, blocking: true, reclaimable: true },
   rock1a: { category: 'rocks', metal: 100, footprintX: 2, footprintZ: 2, reclaimable: true },
+  metaltower01: { category: 'building', metal: 150, footprintX: 2, footprintZ: 2, reclaimable: true },
 }
 
 test('metal deposit becomes a non-blocking metal patch that stamps metal', () => {
@@ -42,12 +46,23 @@ test('geothermal vent becomes a geothermal-flagged blocking site', () => {
   assert.equal(s.z, 168)
 })
 
-test('trees and ordinary reclaim rocks are not pushed into the sim', () => {
+test('an aquaore-named deposit under category=rocks is still a metal patch', () => {
+  const specs = simFeatureSpecs([{ name: 'GreenAquaore1', ax: 20, ay: 30 }], defs, 16)
+  assert.equal(specs.length, 1)
+  const s = specs[0]
+  assert.equal(s.kind, 1, 'metal patch kind')
+  assert.equal(s.metal, 116, 'aquaore deposit metal carried through for the cell stamp')
+  assert.equal(s.blocking, false)
+})
+
+test('trees, reclaim rocks, and destructible metal-named scenery are not pushed', () => {
   const specs = simFeatureSpecs([
     { name: 'GreenTree1', ax: 5, ay: 5 },
     { name: 'Rock1a', ax: 6, ay: 6 },
+    // MetalTower is metal-named but destructible — decorative, not a mex site.
+    { name: 'MetalTower01', ax: 7, ay: 7 },
   ], defs, 16)
-  assert.equal(specs.length, 0, 'non-metal scenery carries no build gate and must stay decorative')
+  assert.equal(specs.length, 0, 'non-deposit scenery carries no build gate and must stay decorative')
 })
 
 test('features with no catalogue entry, and non-feature junk, are skipped', () => {

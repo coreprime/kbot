@@ -41,11 +41,11 @@ export async function loadSandboxMap(view, path, onStep) {
       w: info.w, h: info.h,
       cellWU: info.cellWU, heightScale: info.heightScale,
       seaLevel: info.seaLevel | 0,
-      // The map's plot-cell metal density: the sim floods every cell with it so
-      // a metal extractor is buildable on open ground (metal-patch features
-      // stamp richer deposits on top). Absent/zero (e.g. TA:K) leaves the grid
-      // metal-less and an extractor's overlap rule then refuses every plot.
-      surfaceMetal: info.surfaceMetal | 0,
+      // No uniform surface-metal flood: the sandbox runs the discrete
+      // "extractors only on real deposits" model, so the cell-metal grid is
+      // populated ONLY by metal-deposit features (pushSimResourceFeatures →
+      // stampMetalPatch). With no deposit under its footprint, an extractor's
+      // overlap rule refuses the plot; on one, its yield samples the stamp.
       data: heights,
       voids,
     })

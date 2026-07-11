@@ -51,14 +51,8 @@ type sandboxMapJSON struct {
 	CellWU      float64 `json:"cellWU"`
 	HeightScale float64 `json:"heightScale"`
 	SeaLevel    int     `json:"seaLevel"`
-	// SurfaceMetal is the map's OTA plot-cell metal density. The sim floods
-	// every terrain cell with it so a metal extractor is buildable on open
-	// ground and its income scales with what sits beneath; metal-patch features
-	// stamp richer deposits on top. TA maps default to 3; TA:K (mana economy,
-	// no metal extractors) carries 0.
-	SurfaceMetal int     `json:"surfaceMetal"`
-	WorldW       float64 `json:"worldW"` // world units
-	WorldH       float64 `json:"worldH"`
+	WorldW      float64 `json:"worldW"` // world units
+	WorldH      float64 `json:"worldH"`
 	// Heights is the raw row-major heightmap bytes, base64-encoded.
 	Heights string `json:"heights"`
 	// Voids marks carved-out cells (1 = void), base64-encoded, same layout
@@ -212,13 +206,6 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	out.WorldH = float64(out.H) * sandboxCellWU
 	out.Heights = base64.StdEncoding.EncodeToString(terr.Heights)
 
-	// Metal baseline: TA's stock SurfaceMetal is 3 (mexes buildable + productive
-	// on open ground); the OTA overrides it below. TA:K runs on mana with no
-	// metal extractors, so it stays 0.
-	if !m.IsTAK {
-		out.SurfaceMetal = 3
-	}
-
 	// OTA — the first schema's start positions, converted to world units (the
 	// sea-level override is folded into loadSandboxTerrain above). The two games
 	// store StartPos in different grids: TA writes map-pixels (1 px = 1 wu at
@@ -237,9 +224,6 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 						X:      float64(sp.X) * startScale,
 						Z:      float64(sp.Z) * startScale,
 					})
-				}
-				if sm := ota.Schemas[0].SurfaceMetal; sm > 0 {
-					out.SurfaceMetal = sm
 				}
 			}
 		}
