@@ -28,9 +28,10 @@
 // (studio-web depends on `file:../../../../kbot-game3d`) so the renderer and its
 // driver stay editable in one tree and cannot drift against a frozen release.
 
-import { createWorld } from '@coreprime/kbot-game3d'
+import { createWorld, gameViewConfig } from '@coreprime/kbot-game3d'
 import { studioAssetProvider } from '../common/studio-asset-provider.js'
 import { WasmSandboxScene } from './wasm-scene.js'
+import { snapshotToWorldState } from './world-state-adapter.js'
 import { WsFrameSource } from '../../engine/net/ws-source.js'
 import { loadSelectionKeys, selectionKeys, keyTokenForEvent, commandClauses, unitMatchesToken } from './select-keys.js'
 import { attachOrbitControls } from '@coreprime/kbot-game3d/camera-controls'
@@ -62,6 +63,19 @@ export class SandboxView {
     // WasmSandboxScene on first paint.  This is the inversion that lets
     // a tab host N viewports against one engine.
     this._externalScene = scene
+    // World-driver rendering: this pane feeds game3d's high-level
+    // world.applyState / step (the replayer's path) rather than
+    // hand-assembling renderer entities + FX. Default on; set
+    // window.__KBOT_WORLD_DRIVER = false before opening a pane to fall back
+    // to the legacy hand-orchestration for an A/B comparison.
+    this._worldDriver = (typeof window === 'undefined') || window.__KBOT_WORLD_DRIVER !== false
+    // Per-key nanolathe beams currently lit in this pane's world (build key →
+    // { builderId, buildeeId }); diffed each frame against the scene's live
+    // build set to toggle world.latheBeam on/off.
+    this._latheBeams = new Map()
+    // Ghost models loaded into THIS pane's world context for the placement
+    // preview + queued-build plan overlays (name → Model | Promise).
+    this._ghostModels = new Map()
     // joinUrl — when set, open() backs the scene with a WsFrameSource
     // connected to an authoritative host instead of an in-process wasm
     // world. Units then arrive through the host's snapshots and spawning
@@ -183,6 +197,10 @@ export class SandboxView {
           assets: studioAssetProvider,
           controls: false,
           autoStart: true,
+          // Per-game presentation config (team-side palette, nanolathe /
+          // build style) so the high-level driver paints TA nano green vs
+          // TA:K casting gold to match the active game.
+          game: gameViewConfig(activeGame().id),
         })
       } catch (err) {
         this.#setStatus(`WebGL unavailable in this browser. (${err.message || err})`)
@@ -322,7 +340,7 @@ export class SandboxView {
     // overlay can be active per binding, so the first-attaching pane
     // wins — split panes share the visual through whichever canvas's
     // parent the overlay was appended to.
-    if (!this._explosionOverlay && this.renderer && this.renderer.canvas) {
+    if (!this._worldDriver && !this._explosionOverlay && this.renderer && this.renderer.canvas) {
       this._explosionOverlay = new ExplosionOverlay(
         this.renderer.canvas,
         // project closure — pixel scale stays constant (4 px/wu) for
@@ -362,7 +380,7 @@ export class SandboxView {
     // driven fragments that settle on the ground and fade out. Only the first
     // pane to attach owns the field for a shared scene (idempotent thereafter),
     // matching the single-overlay rule above — split panes share the shower.
-    if (!this._debris && this._world) {
+    if (!this._worldDriver && !this._debris && this._world) {
       this._debris = new DebrisField({
         gl: this._world.gl,
         heightAt: (x, z) => this.#terrainHeightAt(x, z),
@@ -378,6 +396,47 @@ export class SandboxView {
           })
         }) || null
       }
+    }
+    // World-driver FX events: the scene stays the shared sim + event source,
+    // and THIS pane replays each destruction / weapon shot into its own
+    // world so the driver renders debris, wreck, blast (mushroom for a
+    // commander-scale AoE), and the weapon visual in this pane's context.
+    // One subscription per pane, matching the legacy per-pane debris field.
+    if (this._worldDriver && this._world && !this._worldFxUnsubs && this.scene && typeof this.scene.on === 'function') {
+      this._worldFxUnsubs = []
+      this._worldFxUnsubs.push(this.scene.on('death', (ev) => {
+        const u = ev && ev.unit
+        const id = u ? u.id : (ev && ev.unitId)
+        if (id == null) return
+        // unitDeath runs the TA severity ladder (debris + surviving wreck)
+        // and sizes the blast from the pack-sourced death-weapon AoE the
+        // scene forwards — a commander's COMMANDER_BLAST selects the
+        // mushroom-cloud tier.
+        const meta = u && u.meta
+        try {
+          this._world.unitDeath(id, {
+            severity: ev.severity != null ? ev.severity : 30,
+            deathAoe: ev.aoe != null ? ev.aoe : 0,
+            corpse: (meta && meta.corpseObject) || null,
+            heapCorpse: (meta && meta.corpseHeapObject) || null,
+          })
+        } catch { /* a visual failure must never stall the sim */ }
+      }) || (() => {}))
+      this._worldFxUnsubs.push(this.scene.on('fire', (ev) => {
+        const w = ev && ev.weapon
+        if (!w || !w.name) return
+        // A model weapon (missile / rocket / bomb) is flown by the sim and
+        // drawn from the projectile snapshot through applyState — spawning a
+        // driver model-shot too would double it. Beam / laser / D-gun /
+        // particle weapons have no sim mesh, so the driver renders them.
+        if (w.model && !w.beamWeapon) return
+        const from = ev.anchor
+        const to = ev.target || ev.anchor
+        if (!Array.isArray(from) || !Array.isArray(to)) return
+        try {
+          this._world.weaponEffect({ weapon: w.name, from, to })
+        } catch { /* visual only */ }
+      }) || (() => {}))
     }
     // Sandbox uses the FLAT TA-tile grid as its ground — the textured
     // terrain mode that ModelRenderer defaults to has rolling hills,
@@ -432,36 +491,35 @@ export class SandboxView {
       if (this.scene && typeof this.scene.interpolate === 'function') {
         this.scene.interpolate()
       }
-      // Pull-side scene lights: ask the engine for the brightest live
-      // light-emitting particles across all units and push them into THIS
-      // renderer's dynamic-light slots.  Several at once so each concurrent
-      // shot (a battleship's volley) casts its own glow rather than only the
-      // first.  Each pane reads independently so per-pane camera framing
-      // computes each light's NDC position correctly.
-      if (this.scene && this.scene.engine && typeof this.renderer.setPulseLights === 'function') {
-        const lights = typeof this.scene.engine.getSceneLights === 'function'
-          ? this.scene.engine.getSceneLights()
-          : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
-        this.renderer.setPulseLights(lights)
+      if (this._worldDriver) {
+        // High-level driver path: hand the whole rendered world (units,
+        // pieces, projectiles, build wireframes, selection, ghosts) plus the
+        // sub-tick FX (scene lights, explosion geometry, debris, nanolathe,
+        // weapon shots, deaths) to game3d's world.applyState / step — the
+        // same driver the replayer runs. The wasm sim still owns the frames;
+        // this only reshapes each interpolated frame into the driver's
+        // contract, so the #119 no-drift cadence is unchanged.
+        this.#driveWorld(dtMs)
+      } else {
+        // Legacy hand-orchestration path (retained behind
+        // window.__KBOT_WORLD_DRIVER === false for A/B comparison).
+        if (this.scene && this.scene.engine && typeof this.renderer.setPulseLights === 'function') {
+          const lights = typeof this.scene.engine.getSceneLights === 'function'
+            ? this.scene.engine.getSceneLights()
+            : (() => { const l = this.scene.engine.getSceneLight && this.scene.engine.getSceneLight(); return l ? [l] : [] })()
+          this.renderer.setPulseLights(lights)
+        }
+        if (this._debris) {
+          const rt = this.scene && this.scene.runtime
+          const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
+          this._debris.step(dtMs * rate)
+        }
+        if (this.scene && typeof this.scene.fxExplosionTris === 'function' && typeof this.renderer.setExplosionTris === 'function') {
+          const ex = this.scene.fxExplosionTris()
+          this.renderer.setExplosionTris(ex.tris, ex.vertCount)
+        }
+        this.#refreshEntities()
       }
-      // Advance this pane's debris shards on the sim's playback clock (frozen
-      // when paused, slowed in slow-mo) so a shattered unit's fragments fall
-      // and settle in step with the rest of the world. The scene owns the rate;
-      // read it so a backgrounded / paused pane's debris holds still.
-      if (this._debris) {
-        const rt = this.scene && this.scene.runtime
-        const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
-        this._debris.step(dtMs * rate)
-      }
-      // Polygonal explosion geometry — the scene's ExplosionManager rebuilt its
-      // fireball/shockwave triangle soup on the sim tick; hand this frame's
-      // buffer to the renderer so the detonations draw. Every pane reads the
-      // one shared manager, so all panes show the same blasts.
-      if (this.scene && typeof this.scene.fxExplosionTris === 'function' && typeof this.renderer.setExplosionTris === 'function') {
-        const ex = this.scene.fxExplosionTris()
-        this.renderer.setExplosionTris(ex.tris, ex.vertCount)
-      }
-      this.#refreshEntities()
       // Re-position the shift-preview overlays every frame so they
       // track moving units + animated paths.  Cheap when the preview
       // isn't active (early-out inside).
@@ -1488,6 +1546,120 @@ export class SandboxView {
     const dc = dst.children
     const n = Math.min(sc.length, dc.length)
     for (let i = 0; i < n; i++) this.#copyPieceState(sc[i], dc[i])
+  }
+
+  // #driveWorld feeds THIS pane's game3d world one interpolated sim frame:
+  // reshape the scene's live adapter state into applyState's worldState, keep
+  // the nanolathe beams in sync with the live build set, publish the ghost
+  // overlays, then applyState + step so the driver renders units, pieces,
+  // projectiles, build wireframes, selection, scene lights and explosion FX.
+  #driveWorld(dtMs) {
+    const world = this._world
+    if (!world) return
+    const scene = this.scene
+    const rt = scene && scene.runtime
+    const rate = rt ? (rt.paused ? 0 : (rt.playbackRate || 1)) : 1
+    const alpha = scene && Number.isFinite(scene._interpAlpha) ? scene._interpAlpha : 1
+    // Pad-seat resolver: pin a nascent factory buildee to the builder's live
+    // build-pad piece, computed through THIS world's own animated clone.
+    const padSeat = (u) => {
+      if (!scene || typeof scene.buildAttachFor !== 'function') return null
+      const attach = scene.buildAttachFor(u.id)
+      if (!attach || !attach.pieceName || !attach.builder) return null
+      if (typeof world.unitPieceWorldPose !== 'function') return null
+      const wp = world.unitPieceWorldPose(attach.builder.id, attach.pieceName)
+      return wp ? [wp.x, wp.y, wp.z] : null
+    }
+    const state = snapshotToWorldState(scene, {
+      alpha,
+      isSelected: (id) => scene.isSelected(id),
+      isHighlighted: (id) => (scene.isUnitHighlighted ? scene.isUnitHighlighted(id) : false),
+      padSeat,
+      carrierOf: (id) => scene.unitById(id),
+    })
+    this.#syncLatheBeams()
+    world.setGhosts(this.#ghostList())
+    world.applyState(state)
+    world.step(dtMs * rate)
+  }
+
+  // #syncLatheBeams diffs the scene's live build set against the beams already
+  // lit in this pane's world and toggles world.latheBeam on for new builds /
+  // off for finished ones. The builder's nano-nozzle emitters resolve inside
+  // the world from its model's nano* pieces; the buildee's rising wireframe
+  // rides its buildPercent through applyState.
+  #syncLatheBeams() {
+    const world = this._world
+    const active = (this.scene && this.scene._activeBuilds) || null
+    const lit = this._latheBeams
+    if (active) {
+      for (const [builderId, job] of active) {
+        const key = 'b' + builderId
+        if (!lit.has(key)) {
+          world.latheBeam(key, { fromUnitId: builderId, toUnitId: job.buildeeId, on: true })
+          lit.set(key, { builderId, buildeeId: job.buildeeId })
+        }
+      }
+    }
+    for (const key of [...lit.keys()]) {
+      const rec = lit.get(key)
+      if (!active || !active.has(rec.builderId)) {
+        world.latheBeam(key, { on: false })
+        lit.delete(key)
+      }
+    }
+  }
+
+  // #ghostList builds the translucent skeleton overlays this pane hands
+  // world.setGhosts: the queued-build plan (while Shift is held) and the
+  // placement preview riding the cursor. Ghost models load into this pane's
+  // own world loader so their geometry lives in the right GL context.
+  #ghostList() {
+    const list = []
+    if (!this.scene) return list
+    // Queued construction sites for every selected builder while Shift is held.
+    if (this._shiftPreview) {
+      for (const id of this.scene.selected) {
+        const u = this.scene.unitById(id)
+        if (!u || u.dead || !Array.isArray(u.queue)) continue
+        for (const q of u.queue) {
+          if (q.kind !== 7 || !q.name) continue
+          const gm = this.#ghostModel(q.name)
+          if (!gm) continue
+          list.push({
+            model: gm,
+            transform: { x: q.x, y: this.#terrainHeightAt(q.x, q.z), z: q.z, headingRad: Math.PI },
+          })
+        }
+      }
+    }
+    // Placement preview — the founding skeleton the next click commits.
+    if (this._placement && this._placement.model) {
+      const p = this._placement
+      const lift = this.#terrainHeightAt(p.pos.x, p.pos.z)
+      const headingRad = (this._placementDrag && Number.isFinite(this._placementDrag.headingRad))
+        ? this._placementDrag.headingRad
+        : Math.PI
+      list.push({
+        model: p.model,
+        transform: { x: p.pos.x, y: lift, z: p.pos.z, headingRad },
+        ghostInvalid: p.canBuild === false,
+      })
+    }
+    return list
+  }
+
+  // #ghostModel returns a build-plan ghost's model from this pane's world
+  // loader, kicking off a one-shot lazy load on first sight (the ghost simply
+  // skips a frame until its geometry is uploaded).
+  #ghostModel(name) {
+    const cached = this._ghostModels.get(name)
+    if (cached && cached.root) return cached
+    if (!cached && this.loader) {
+      this._ghostModels.set(name, null)
+      this.loader.load(name).then((m) => this._ghostModels.set(name, m)).catch(() => this._ghostModels.delete(name))
+    }
+    return null
   }
 
   #refreshEntities() {
@@ -3383,6 +3555,12 @@ export class SandboxView {
     if (typeof this._unsubEnhance === 'function') {
       try { this._unsubEnhance() } catch { /* ignore */ }
       this._unsubEnhance = null
+    }
+    // Drop this pane's world-driver FX subscriptions (death / fire) so a
+    // closed pane stops replaying destructions + shots into a dead world.
+    if (Array.isArray(this._worldFxUnsubs)) {
+      for (const off of this._worldFxUnsubs) { try { off() } catch { /* ignore */ } }
+      this._worldFxUnsubs = null
     }
     if (this._resizeObserver) this._resizeObserver.disconnect()
     this._resizeObserver = null

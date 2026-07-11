@@ -1503,7 +1503,7 @@ export class WasmSandboxScene {
     const anchor = this._muzzleAnchor(u, ev)
     // Notify external listeners (test harness, HUD) for parity with the
     // legacy GameEngine, which surfaced every muzzle as a 'fire' event.
-    this._emit('fire', { unit: u, slot: ev.slot, weapon, anchor, targetId: ev.targetId })
+    this._emit('fire', { unit: u, slot: ev.slot, weapon, anchor, target: this._targetPoint(ev), targetId: ev.targetId })
     try {
       // A model weapon (missile / rocket / bomb) is flown by the sim and drawn
       // as a 3DO mesh from the projectile list — just voice the muzzle here.
