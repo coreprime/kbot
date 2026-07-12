@@ -351,28 +351,60 @@ function update() {
       _sig = '' // force a rebuild against the narrowed selection
     })
   }
-  // Build cells: a factory QUEUES the unit on its sim-side production run
-  // (repeat clicks stack copies, mixed types interleave in click order; the
-  // counter badge tracks the run). A mobile builder arms the placement
-  // ghost — the user picks the site and the builder walks over to raise it.
+  // Build cells. On a FACTORY the cell manages the sim-side production run
+  // with mouse gestures — left-click queues +1, Shift+left-click +5,
+  // right-click dequeues 1, Shift+right-click dequeues 5 (mixed types
+  // interleave in click order; the counter badge tracks the run). A mobile
+  // builder's cell instead arms the placement ghost on left-click — the user
+  // picks the site and the builder walks over to raise it. The browser
+  // context menu is suppressed over build cells so right-click is ours.
+  const queueOnFactory = async (v, name, n) => {
+    for (let i = 0; i < n; i++) {
+      await v.scene.build(builder.id, name, builder.pos.x, builder.pos.z)
+    }
+    const total = queuedCount(builder, name) + n
+    setStatus(`Queued ${n > 1 ? `${n}× ` : ''}${name} — ${total} in this factory's production run.`)
+    _sig = '' // refresh the counter on the next tick
+  }
   for (const el of root.querySelectorAll('.roster-build-cell')) {
-    el.addEventListener('click', async () => {
+    const name = el.dataset.build
+    el.addEventListener('click', async (e) => {
       const v = hostCallbacks.getActiveSandboxView?.()
       if (!v || !v.scene || !builder) return
-      const name = el.dataset.build
       try {
         const isFactory = builder.meta && builder.meta.canMove === false
         if (isFactory) {
-          await v.scene.build(builder.id, name, builder.pos.x, builder.pos.z)
-          const n = queuedCount(builder, name) + 1
-          setStatus(`Queued ${name} — ${n} in this factory's production run.`)
-          _sig = '' // refresh the counter on the next tick
+          await queueOnFactory(v, name, e.shiftKey ? 5 : 1)
         } else if (typeof v.beginBuildPlacement === 'function') {
           await v.beginBuildPlacement(name, builder)
           setStatus(`Place ${name} — click a site; ${builder.name} will walk over and build it.`)
         }
-      } catch (e) {
-        setStatus(`Build failed: ${e?.message || e}`)
+      } catch (err) {
+        setStatus(`Build failed: ${err?.message || err}`)
+      }
+    })
+    // Right-click dequeues from a factory's production run. Always suppress the
+    // browser context menu so the gesture is ours (mobile-builder cells keep
+    // placement on left-click and simply ignore the right-click). The sim's
+    // prodQueue is append-only today — there is no per-unit dequeue order, only
+    // a full Stop that clears the whole run — so drive the scene's dequeue
+    // bridge when it exists and report the gap until the engine ships one.
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      const v = hostCallbacks.getActiveSandboxView?.()
+      if (!v || !v.scene || !builder) return
+      const isFactory = builder.meta && builder.meta.canMove === false
+      if (!isFactory) return
+      const n = e.shiftKey ? 5 : 1
+      if (typeof v.scene.unbuild === 'function') {
+        Promise.resolve(v.scene.unbuild(builder.id, name, n))
+          .then(() => {
+            setStatus(`Removed ${n > 1 ? `${n}× ` : ''}${name} from this factory's production run.`)
+            _sig = ''
+          })
+          .catch((err) => setStatus(`Dequeue failed: ${err?.message || err}`))
+      } else {
+        setStatus('Dequeue needs an engine production-run verb — not available yet.')
       }
     })
   }
