@@ -14,7 +14,10 @@ package studio
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +113,21 @@ type packFeatureJSON struct {
 	// buildings…) which render as 3D stand-ins, and for object-only
 	// features (their visual truth is the packed 3DO).
 	Sprite string `json:"sprite,omitempty"`
+	// Tier is the sprite-replacement render tier a feature was assigned by the
+	// asset pipeline (format v9, only when built with --feature-assets):
+	//   "model3d"   → a real 3D surrogate (Model3D geometry replaces the sprite)
+	//   "decal"     → short feature (<15 wu) painted flat on the terrain (Sprite)
+	//   "billboard" → tall feature with no approved model, drawn as an upright
+	//                 camera-facing sprite quad (Sprite)
+	// Empty for features the pipeline has no art for (they keep the legacy
+	// object / flat-decal / procedural routing). Object features are never
+	// re-tiered — their 3DO is the visual truth.
+	Tier string `json:"tier,omitempty"`
+	// Model3D is the packed baked-geometry file for a "model3d" tier feature
+	// (featuremodels/<assetkey>.json): flat-shaded, per-vertex-coloured,
+	// unit-height triangles the renderer scales to HeightWU and bakes into the
+	// map-feature batch. Empty unless Tier == "model3d".
+	Model3D string `json:"model3d,omitempty"`
 }
 
 // featureGafRef records the GAF file + sequence a feature's first frame
@@ -182,6 +200,91 @@ func isMetalDepositFeature(f packFeatureJSON) bool {
 // deterministic for the pack content hash).
 type packFeaturesFileJSON struct {
 	Features map[string]packFeatureJSON `json:"features"`
+}
+
+// featureAssetEntry is one entry in a sprite-replacements feature-pack
+// index.json (the --feature-assets bundle): the render tier chosen for a TDF
+// feature id, and — for the model3d tier — the baked-geometry asset key.
+type featureAssetEntry struct {
+	Tier   string `json:"tier"`
+	Model  string `json:"model,omitempty"`
+	Height int    `json:"height,omitempty"`
+}
+
+// featureAssetIndexFile is the <feature-assets>/<game>/index.json document.
+type featureAssetIndexFile struct {
+	Game     string                       `json:"game"`
+	Features map[string]featureAssetEntry `json:"features"`
+}
+
+// loadFeatureAssetIndex reads the per-game feature-asset index produced by the
+// sprite-replacements pipeline (build_feature_pack.py). Returns (nil, nil) when
+// no bundle is configured or the game has none, so packing degrades to the
+// legacy feature routing.
+func loadFeatureAssetIndex(dir, game string) (map[string]featureAssetEntry, error) {
+	if dir == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filepath.Join(dir, game, "index.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var idx featureAssetIndexFile
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return nil, err
+	}
+	return idx.Features, nil
+}
+
+// enrichFeaturesWithAssets stamps each catalogue entry with its sprite-
+// replacement render tier (and the baked-model path for model3d). Object
+// features are left untouched — a real 3DO is always the visual truth.
+func enrichFeaturesWithAssets(catalog map[string]packFeatureJSON, assets map[string]featureAssetEntry) {
+	for id, a := range assets {
+		entry, ok := catalog[id]
+		if !ok || entry.Object != "" {
+			continue
+		}
+		entry.Tier = a.Tier
+		if a.Tier == "model3d" && a.Model != "" {
+			entry.Model3D = "featuremodels/" + packStem(a.Model) + ".json"
+		}
+		catalog[id] = entry
+	}
+}
+
+// packFeatureModels copies each referenced baked-geometry file from the
+// feature-asset bundle into featuremodels/<assetkey>.json, deduped by model key
+// (many feature ids can share one asset). Deterministic: walks ids sorted.
+func (sess *Session) packFeatureModels(catalog map[string]packFeatureJSON, assets map[string]featureAssetEntry, assetDir, game string, pw *packWriter, warnf func(string, ...any)) {
+	ids := make([]string, 0, len(catalog))
+	for id := range catalog {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	seen := map[string]bool{}
+	for _, id := range ids {
+		entry := catalog[id]
+		if entry.Model3D == "" {
+			continue
+		}
+		a := assets[id]
+		if a.Model == "" || seen[a.Model] {
+			continue
+		}
+		seen[a.Model] = true
+		data, err := os.ReadFile(filepath.Join(assetDir, game, "models", a.Model+".json"))
+		if err != nil {
+			warnf("feature model %s: %v", a.Model, err)
+			continue
+		}
+		if werr := pw.write(entry.Model3D, data); werr != nil {
+			warnf("write feature model %s: %v", a.Model, werr)
+		}
+	}
 }
 
 // gafFrameDims caches one GAF file's sequences: lower-case sequence name →
@@ -274,7 +377,10 @@ func (sess *Session) packFeatureSprites(catalog map[string]packFeatureJSON, refs
 	sort.Strings(ids)
 	for _, id := range ids {
 		entry := catalog[id]
-		if !isFlatGroundFeature(entry) {
+		// Flat resource sites always decal; the asset pipeline additionally
+		// routes short scenery (decal tier) and tall-but-unapproved scenery
+		// (billboard tier) to the sprite, so those need their GAF art too.
+		if !isFlatGroundFeature(entry) && entry.Tier != "decal" && entry.Tier != "billboard" {
 			continue
 		}
 		ref, ok := refs[id]

@@ -17,10 +17,11 @@ import (
 )
 
 var (
-	flagGame  string
-	flagUnits string
-	flagMaps  string
-	flagForce bool
+	flagGame          string
+	flagUnits         string
+	flagMaps          string
+	flagForce         bool
+	flagFeatureAssets string
 )
 
 // gameAliases maps the CLI's short game names onto the games-registry ids.
@@ -76,6 +77,7 @@ become "_"):
   cursors/<sequence>.png       cursor glyphs (APNG when animated)
   groundtiles/<tileset>.png    seamless flat-terrain tiles
   featuresprites/<id>.png      flat ground features' real GAF art (alpha)
+  featuremodels/<key>.json     baked 3D-surrogate feature geometry (v9)
   maps/<name>.json             map data (+ .tiles.png / .minimap.png)
 
 Determinism: the same install and options always produce a byte-identical
@@ -107,6 +109,7 @@ texture-mapped maps both pack into the same on-disk shape.`,
 	cmd.Flags().StringVar(&flagUnits, "units", "all", `units to pack: "all" or a comma-separated name list`)
 	cmd.Flags().StringVar(&flagMaps, "maps", "", `maps to pack: "all" or a comma-separated base-name list (default none)`)
 	cmd.Flags().BoolVar(&flagForce, "force", false, "replace a non-empty output directory")
+	cmd.Flags().StringVar(&flagFeatureAssets, "feature-assets", "", "path to a sprite-replacements feature-pack bundle; enriches features.json with 3D-model/decal/billboard render tiers (format v9)")
 	return cmd
 }
 
@@ -126,8 +129,9 @@ func runPack(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown game %q (expected one of: ta, tak, %s)", flagGame, strings.Join(games.IDs(), ", "))
 	}
 	opts := studio.PackOptions{
-		Game:  gameID,
-		Force: flagForce,
+		Game:          gameID,
+		Force:         flagForce,
+		FeatureAssets: strings.TrimSpace(flagFeatureAssets),
 	}
 	if u := strings.ToLower(strings.TrimSpace(flagUnits)); u != "" && u != "all" {
 		opts.Units = splitList(flagUnits)

@@ -26,6 +26,7 @@ package studio
 //	cursors/<sequence>.png           cursor glyphs (APNG when animated)
 //	groundtiles/<tileset>.png        seamless flat-terrain tiles
 //	featuresprites/<id>.png          flat ground features' real GAF art (alpha)
+//	featuremodels/<assetkey>.json    baked 3D-surrogate feature geometry (v9)
 //	maps/<name>.json                 map data (+ sibling .tiles.png / .minimap.png)
 //
 // Determinism: the same install + options produce byte-identical packs
@@ -66,6 +67,12 @@ type PackOptions struct {
 	// Force allows writing into an existing non-empty output directory
 	// (its previous contents are removed first).
 	Force bool
+	// FeatureAssets is the path to a sprite-replacements feature-pack bundle
+	// (build_feature_pack.py output). When set, features.json is enriched with
+	// per-feature render tiers (model3d / decal / billboard) and the baked
+	// model geometry is copied into featuremodels/ (format v9). Empty keeps the
+	// legacy object / flat-decal / procedural feature routing.
+	FeatureAssets string
 }
 
 // PackResult reports what BuildPack wrote.
@@ -656,10 +663,21 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	featuresFile := ""
 	featureCatalog, featureGafRefs := sess.buildPackFeatureCatalog()
 	if len(featureCatalog) > 0 {
+		// Enrich with sprite-replacement render tiers (3D models / decals /
+		// billboards) before sprite + model extraction, so the sprite gate and
+		// the model copy see each feature's tier (format v9).
+		if opts.FeatureAssets != "" {
+			if assets, aerr := loadFeatureAssetIndex(opts.FeatureAssets, opts.Game); aerr != nil {
+				warnf("feature assets: %v", aerr)
+			} else if assets != nil {
+				enrichFeaturesWithAssets(featureCatalog, assets)
+				sess.packFeatureModels(featureCatalog, assets, opts.FeatureAssets, opts.Game, pw, warnf)
+			}
+		}
 		// Extract flat ground features' real sprite art (metal deposits,
-		// steam vents, scars…) to featuresprites/<id>.png so the renderer
-		// paints the authored art onto the terrain rather than faking it;
-		// stamps each entry's Sprite path before features.json is written.
+		// steam vents, scars…) plus the decal/billboard-tier scenery to
+		// featuresprites/<id>.png so the renderer paints the authored art
+		// rather than faking it; stamps each entry's Sprite path first.
 		sess.packFeatureSprites(featureCatalog, featureGafRefs, pw, warnf)
 		body, err := packJSONIndent(packFeaturesFileJSON{Features: featureCatalog})
 		if err != nil {
@@ -750,8 +768,15 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// to weapons.json and, for TA:K installs, builds the catalogue from
 		// the inline FBI [WEAPONn] sections — TA:K packs finally ship a
 		// weapons.json (and the arrow/bolt projectile meshes it names).
+		// FormatVersion 9 (only when packed with --feature-assets) adds the
+		// sprite-replacement render tiers to features.json — a per-feature
+		// tier (model3d / decal / billboard), a model3d path into
+		// featuremodels/<assetkey>.json (baked flat-shaded per-vertex-coloured
+		// geometry that stands in for the 2D feature), and featuresprites art
+		// for the decal/billboard scenery tiers. Older readers ignore them and
+		// keep the legacy object / flat-decal / procedural routing.
 		// Older readers ignore all of them.
-		FormatVersion: 8,
+		FormatVersion: 9,
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
@@ -1116,7 +1141,11 @@ Files:
 - groundtiles/<tileset>.png — seamless 32x32 flat-terrain tiles.
 - featuresprites/<id>.png — the first-frame GAF art (with alpha) of flat
   ground features (metal deposits, steam vents, scars, tracks, craters,
-  holes); the renderer paints it onto the terrain as a decal.
+  holes) plus the decal/billboard-tier scenery; the renderer paints it onto
+  the terrain as a decal or stands it up as a camera-facing billboard.
+- featuremodels/<assetkey>.json — baked flat-shaded, per-vertex-coloured
+  feature geometry (format v9, --feature-assets): the 3D surrogate that
+  replaces a 2D feature's sprite (features.json tier "model3d").
 - maps/<name>.json (+ .tiles.png / .minimap.png) — map heights, voids,
   tile placements, features and rendered atlases.
 
