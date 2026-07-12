@@ -155,6 +155,11 @@ export class WasmFrameSource extends FrameSource {
   // ground point — walk into builddistance, then raise the buildee to 100%.
   build(builderId, name, x, z, queued = false, headingRad = 0) { return this._engine.submitBuild(this._handle, builderId, name, x, z, queued, headingRad) }
 
+  // unbuild removes up to `count` not-yet-started queued copies of unit type
+  // `name` from the builder's production queue (newest first). The in-progress
+  // build is untouched.
+  unbuild(builderId, name, count = 1) { return this._engine.submitUnbuild(this._handle, builderId, name, count) }
+
   // canBuildAt is a read-only legality probe (terrain fit + no building
   // overlap) the client uses to colour the build-placement ghost. Returns
   // true on any error so the ghost never falsely reads as blocked.

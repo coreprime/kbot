@@ -693,6 +693,14 @@ export class WasmSandboxScene {
     this.source.build(builderId, name, x, z, queued, headingRad)
   }
 
+  // unbuild cancels up to `count` not-yet-started queued copies of unit type
+  // `name` from a builder/factory's production queue (most-recently-queued
+  // first). The copy currently under construction is left alone — scrapping an
+  // in-progress build is reclaim's job, not the queue's.
+  unbuild(builderId, name, count = 1) {
+    this.source.unbuild(builderId, name, count)
+  }
+
   // canBuildAt forwards the source's legality probe (terrain fit + no building
   // overlap) for the build-placement ghost colouring. The wasm probe needs the
   // type registered in the spawn resolver to read its footprint, so ensure the
