@@ -2374,9 +2374,13 @@ export class SandboxView {
       return
     }
     // Reclaim gesture: right-clicking a reclaimable feature (tree / rock /
-    // wreck) with a reclaimer selected salvages it for resources. Only when no
-    // unit was under the cursor, so a unit target still wins.
-    if (!hit) {
+    // wreck) with a reclaimer selected salvages it for resources. This fires
+    // when no DISTINCT unit target was hit — either empty ground, or one of our
+    // own selected units. A reclaimer standing next to (or on) the feature it
+    // was ordered to salvage must not shadow that feature: an enemy / ally unit
+    // target still wins (handled above), but our own selected reclaimer sitting
+    // on the clicked spot is not a target, so the feature under the cursor does.
+    if (!hit || this.scene.selected.has(hit.id)) {
       const feat = this.#pickFeatureAt(sx, sy)
       if (feat && this.#selectionHasReclaimer()) {
         const n = this.issueReclaim(feat, queued)
@@ -2535,9 +2539,15 @@ export class SandboxView {
       // it issues on whatever unit was clicked and never falls through to
       // selection.
       const queued = !!e.shiftKey
-      // A unit target wins; off any unit, fall back to a reclaimable feature
-      // (tree / rock / wreck) under the cursor.
-      const target = this.#pickUnitAt(sx, sy) || this.#pickFeatureAt(sx, sy)
+      // A DISTINCT unit target wins; off any such unit, fall back to a
+      // reclaimable feature (tree / rock / wreck) under the cursor. A reclaimer
+      // of ours standing on the clicked spot must not shadow the feature it was
+      // ordered to salvage, so when the only unit under the cursor is one of our
+      // own selected units the feature takes precedence.
+      const pickedUnit = this.#pickUnitAt(sx, sy)
+      const target = (pickedUnit && !this.scene.selected.has(pickedUnit.id))
+        ? pickedUnit
+        : (this.#pickFeatureAt(sx, sy) || pickedUnit)
       // Shift keeps reclaim armed for a chain of salvage orders (Move-style);
       // plain click is single-shot. Staying armed under Shift keeps a repeated
       // shift-click a reclaim rather than falling through to force-attack.
