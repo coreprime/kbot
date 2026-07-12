@@ -5,15 +5,20 @@
 // the authoritative server, which is what lets a client predict locally and
 // reconcile against server snapshots without drift.
 //
-// The wasm module is loaded once per page and shared by every session.  Build
-// it with `task build-wasm`, which emits engine.wasm + wasm_exec.js alongside
-// this file.
+// The wasm module is loaded once per page and shared by every session.  The
+// engine binary ships in the published @coreprime/kbot-engine package; Vite
+// emits it as a hashed asset from the `?url` import below. The npm engine
+// version is pinned to the exact go.mod engine version so the browser
+// prediction stays byte-identical to the server.
 
 import { FrameSource } from './frame-source.js'
+// Side-effect import: the package's entry pulls in its matching wasm_exec.js
+// shim, defining globalThis.Go (and the globalThis.fs the crash capture wraps).
+import '@coreprime/kbot-engine'
 
-// Module path of the compiled engine, relative to this file.
-const WASM_URL = new URL('../engine.wasm', import.meta.url)
-const WASM_EXEC_URL = new URL('../wasm_exec.js', import.meta.url)
+// URL of the compiled engine, resolved from the pinned @coreprime/kbot-engine
+// package's one exported wasm subpath rather than a sibling file.
+import WASM_URL from '@coreprime/kbot-engine/engine.wasm?url'
 
 let goReady = null
 
@@ -49,19 +54,16 @@ function _captureWasmOutput() {
   }
 }
 
-// loadGo injects Go's wasm_exec.js (a classic script that defines globalThis.Go)
-// and instantiates the engine module.  Returns a promise that resolves once
-// globalThis.KbotEngine is live.  Cached so repeated source construction shares
-// one module instance.
+// loadGo instantiates the engine module against the globalThis.Go the package's
+// wasm_exec.js shim installed (via the side-effect import above). Returns a
+// promise that resolves once globalThis.KbotEngine is live. Cached so repeated
+// source construction shares one module instance.
 function loadGo() {
   if (goReady) return goReady
   goReady = (async () => {
-    if (typeof globalThis.Go === 'undefined') {
-      await injectScript(WASM_EXEC_URL.href)
-    }
     _captureWasmOutput()
     const go = new globalThis.Go()
-    const result = await WebAssembly.instantiateStreaming(fetch(WASM_URL.href), go.importObject)
+    const result = await WebAssembly.instantiateStreaming(fetch(WASM_URL), go.importObject)
     // go.run never resolves while the module is parked in select{}; that is
     // intentional — it keeps the exported KbotEngine callable for the page's
     // lifetime.  We don't await it.  If it DOES resolve the engine panicked
@@ -81,16 +83,6 @@ function loadGo() {
     return globalThis.KbotEngine
   })()
   return goReady
-}
-
-function injectScript(src) {
-  return new Promise((resolve, reject) => {
-    const el = document.createElement('script')
-    el.src = src
-    el.onload = () => resolve()
-    el.onerror = () => reject(new Error(`failed to load ${src}`))
-    document.head.appendChild(el)
-  })
 }
 
 export class WasmFrameSource extends FrameSource {

@@ -1,10 +1,10 @@
 // spawn-smoke.test.js
 //
-// Headless spawn gate for the studio's in-browser sim. It loads the freshly
-// built engine.wasm through the same two files the studio's wasm-source.js
-// loads at runtime (wasm_exec.js + engine.wasm, siblings of this file), creates
-// a session per game, spawns a realistic unit, drives it for a couple of
-// seconds of sim time, and asserts the module never died.
+// Headless spawn gate for the studio's in-browser sim. It loads the published
+// engine.wasm through the same two files the studio's wasm-source.js loads at
+// runtime (wasm_exec.js + engine.wasm from the pinned @coreprime/kbot-engine
+// package), creates a session per game, spawns a realistic unit, drives it for
+// a couple of seconds of sim time, and asserts the module never died.
 //
 // The bug this guards against: an engine/sim change that shifts the JS<->wasm
 // contract makes the module panic on the first spawn and the Go runtime prints
@@ -19,12 +19,16 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { runInThisContext } from 'node:vm'
 
-const WASM_URL = new URL('./engine.wasm', import.meta.url)
-const WASM_EXEC_URL = new URL('./wasm_exec.js', import.meta.url)
+// The engine binary and its wasm_exec.js shim come from the pinned
+// @coreprime/kbot-engine package (present under node_modules after npm install),
+// the same source the studio's wasm-source.js loads at runtime. Only engine.wasm
+// is an exported subpath, so resolve it and take wasm_exec.js from its directory.
+const _require = createRequire(import.meta.url)
+const WASM_PATH = _require.resolve('@coreprime/kbot-engine/engine.wasm')
+const WASM_EXEC_PATH = path.join(path.dirname(WASM_PATH), 'wasm_exec.js')
 
 // EconomyModel ordinals, matching sim.EconomyModel (0 = TA, 1 = TA:K).
 const ECON_TA = 0
@@ -40,13 +44,13 @@ let enginePromise = null
 function loadEngine() {
   if (enginePromise) return enginePromise
   enginePromise = (async () => {
-    const shim = await readFile(fileURLToPath(WASM_EXEC_URL), 'utf8')
+    const shim = await readFile(WASM_EXEC_PATH, 'utf8')
     // wasm_exec.js references require/module in some Node code paths; give it
     // this file's require so the classic script evaluates cleanly.
-    globalThis.require = createRequire(import.meta.url)
+    globalThis.require = _require
     runInThisContext(shim)
     const go = new globalThis.Go()
-    const bytes = await readFile(fileURLToPath(WASM_URL))
+    const bytes = await readFile(WASM_PATH)
     const { instance } = await WebAssembly.instantiate(bytes, go.importObject)
     const state = { crashed: false }
     go.run(instance).then(() => { state.crashed = true })

@@ -21,23 +21,28 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 import { runInThisContext } from 'node:vm'
 import { simFeatureSpecs } from '../ui/sandbox/map-features-sim.js'
 
-const WASM_URL = new URL('./engine.wasm', import.meta.url)
-const WASM_EXEC_URL = new URL('./wasm_exec.js', import.meta.url)
+// The engine binary and its wasm_exec.js shim come from the pinned
+// @coreprime/kbot-engine package (present under node_modules after npm install),
+// the same source the studio's wasm-source.js loads at runtime. Only engine.wasm
+// is an exported subpath, so resolve it and take wasm_exec.js from its directory.
+const _require = createRequire(import.meta.url)
+const WASM_PATH = _require.resolve('@coreprime/kbot-engine/engine.wasm')
+const WASM_EXEC_PATH = path.join(path.dirname(WASM_PATH), 'wasm_exec.js')
 
 let enginePromise = null
 function loadEngine() {
   if (enginePromise) return enginePromise
   enginePromise = (async () => {
-    const shim = await readFile(fileURLToPath(WASM_EXEC_URL), 'utf8')
-    globalThis.require = createRequire(import.meta.url)
+    const shim = await readFile(WASM_EXEC_PATH, 'utf8')
+    globalThis.require = _require
     runInThisContext(shim)
     const go = new globalThis.Go()
-    const bytes = await readFile(fileURLToPath(WASM_URL))
+    const bytes = await readFile(WASM_PATH)
     const { instance } = await WebAssembly.instantiate(bytes, go.importObject)
     const state = { crashed: false }
     go.run(instance).then(() => { state.crashed = true })
