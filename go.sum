@@ -8,6 +8,8 @@ github.com/coreprime/kbot-engine v0.8.11 h1:BzGcy73vGA1TnyIDuSp+xnlTLiyZKfS/pbUe
 github.com/coreprime/kbot-engine v0.8.11/go.mod h1:uL4I8FwYAt4do2j8W2Er9ITd0hfXRHucTpIBL8aM1Iw=
 github.com/coreprime/kbot-engine v0.8.12 h1:qMuvBnyi4iNQD3LJo3MwMYVILeHEJFNAmsmpmyQwquE=
 github.com/coreprime/kbot-engine v0.8.12/go.mod h1:uL4I8FwYAt4do2j8W2Er9ITd0hfXRHucTpIBL8aM1Iw=
+github.com/coreprime/kbot-engine v0.8.13 h1:5ciIjDxLvqyk1II/8tuw61+PxAYqpPlQogCI1/YEIkE=
+github.com/coreprime/kbot-engine v0.8.13/go.mod h1:uL4I8FwYAt4do2j8W2Er9ITd0hfXRHucTpIBL8aM1Iw=
 github.com/coreprime/kbot-game-takingdoms v0.3.0 h1:zLg0GxgwTCBXFUU87nClHO2ndR0As5IM6w8fMo6+eGc=
 github.com/coreprime/kbot-game-takingdoms v0.3.0/go.mod h1:U0PoUt6C4mCn2d6m24FhrSBu42Kdyb51gAM9BSjWJQU=
 github.com/coreprime/kbot-game-totala v0.3.0 h1:XE5Azj+abHagZo4xjdKUAMaImAGtf0RsqeDJmWsJZJQ=
