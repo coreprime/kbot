@@ -254,7 +254,14 @@ export class SandboxView {
         onLeftDragStart: (e) => {
           if (this._pendingCmd) return false
           if (this._placement) return this.#beginPlacementDrag(e)
-          return this.#beginDragSelect(e)
+          // Plain left-drag ORBITS the camera — the control users reach for
+          // first, and what the unit editor does, so the two views stay
+          // consistent. The rectangle-select marquee is on SHIFT+left-drag
+          // (right-drag still pans, ctrl/cmd-drag ground-pans). Claiming
+          // plain drags for select stole the orbit gesture, which read as
+          // "the camera broke".
+          if (e.shiftKey) return this.#beginDragSelect(e)
+          return false
         },
         // Plain +/- step the sandbox runtime's playback rate (Shift+/-
         // zooms instead — handled inside camera-controls).

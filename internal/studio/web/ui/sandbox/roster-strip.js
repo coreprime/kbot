@@ -49,25 +49,6 @@ function pointerOverDock() {
   return !!(el && el.closest && el.closest('.roster-cell'))
 }
 
-// dockHovered reports the browser's LIVE :hover state for the strip — the
-// authoritative "is the cursor over a build cell right now" signal that stays
-// correct even when no pointermove was delivered after the cursor left (a
-// coalesced move, a cursor teleport, focus stolen mid-hover). The geometry
-// probe above reads the LAST recorded point, which strands stale on the old
-// cell in exactly those cases; :hover does not. The two are combined so a tip
-// is kept only while BOTH agree the cursor is on a cell, and dismissed the
-// moment EITHER says it has left — which is what makes the dismissal reliable.
-function dockHovered() {
-  return !!(_root && typeof _root.matches === 'function' && _root.matches(':hover'))
-}
-
-// stillOverDock is the keep-the-tip predicate: the cursor is genuinely over a
-// build cell only when the recorded geometry AND the live :hover agree. Either
-// one going false dismisses the tip, so a stale point can no longer strand it.
-function stillOverDock() {
-  return pointerOverDock() && dockHovered()
-}
-
 // Per-type meta cache for the build row's cost lines. A miss kicks an async
 // fetch and re-renders when it lands; null marks "no meta" so a 404 is
 // probed at most once.
@@ -111,10 +92,20 @@ function ensureRoot() {
   // stolen mid-hover, DOM swapped under a stationary cursor).
   const sweep = (e) => {
     _ptrX = e.clientX; _ptrY = e.clientY
-    // Dismiss the moment the pointer isn't over an actual cell — not merely
-    // outside the (over-large) dock container — so moving off a build icon onto
-    // the map clears the tip immediately.
-    if (_tip && !_tip.hidden && !e.target?.closest?.('.roster-cell')) _tip.hidden = true
+    if (!_tip) return
+    // THE SINGLE SOURCE OF TRUTH for the tip: recompute the cell under the LIVE
+    // cursor on every pointer move. elementFromPoint returns the true topmost
+    // element (the tip is pointer-events:none, so it is skipped), so there is no
+    // stale point, no :hover desync, and no re-arming poll that can get stuck —
+    // moving off a build icon onto the map clears the tip on the very next move,
+    // and a DOM rebuild under a stationary cursor can't strand it either.
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const cell = el && el.closest && el.closest('.roster-cell')
+    if (cell && _root.contains(cell) && (cell.dataset.build || cell.dataset.unit)) {
+      tipShowForCell(cell)
+    } else if (!_tip.hidden) {
+      _tip.hidden = true
+    }
   }
   // Capture phase: the 3D canvas registers its own pointer/mouse handlers and
   // can stopPropagation on them, which starves a bubble-phase document listener
@@ -163,22 +154,6 @@ function dockReset() {
 // row — the resource costs, which live here instead of under the icon.
 
 let _tip = null
-let _tipWatch = 0
-
-// armTipWatch polls the pointer geometry on a timer (NOT the render tick) and
-// drops the tip the moment the cursor is no longer over the dock. The tick-
-// driven self-heal in update() misses whenever frames stop (idle scene) or the
-// 3D canvas swallows the pointer event, which is how the tip stranded; a
-// standalone timeout keeps healing regardless. It re-arms while genuinely
-// hovered, so it never hides a tip the cursor is still on.
-function armTipWatch() {
-  clearTimeout(_tipWatch)
-  _tipWatch = setTimeout(() => {
-    if (!_tip || _tip.hidden) return
-    if (stillOverDock()) armTipWatch()
-    else _tip.hidden = true
-  }, 400)
-}
 
 function ensureTip() {
   if (_tip && _tip.isConnected) return _tip
@@ -192,20 +167,30 @@ function ensureTip() {
 }
 
 function tipShow(e) {
-  const cell = e.target.closest?.('.roster-cell')
+  const cell = e.target?.closest?.('.roster-cell')
+  if (cell) tipShowForCell(cell)
+}
+
+// tipShowForCell renders the tip for a specific cell. Its VISIBILITY is owned
+// entirely by the live-cursor sweep (below) — this only builds/positions the
+// content; the sweep decides show-vs-hide on every pointer move. No timer,
+// no :hover, so nothing here can strand the tip.
+function tipShowForCell(cell) {
   if (!cell || !_root || !_root.contains(cell)) return
   const tip = ensureTip()
   if (!tip) return
   const name = cell.dataset.build || cell.dataset.unit
   if (!name) return
   const meta = buildMeta(name)
-  // First hover races the meta fetch — retry shortly so the display name
-  // and costs replace the codename once the cache fills.
+  // First hover races the meta fetch — retry shortly so the display name and
+  // costs replace the codename once the cache fills, but ONLY if the live
+  // cursor is still on this exact cell (checked via elementFromPoint, not a
+  // stale point or :hover).
   if (meta === undefined) {
     setTimeout(() => {
       if (!_tip || _tip.hidden) return
-      if (cell.isConnected && cell.matches(':hover') && _root && _root.matches(':hover')) tipShow({ target: cell })
-      else _tip.hidden = true
+      const el = document.elementFromPoint(_ptrX, _ptrY)
+      if (el && el.closest && el.closest('.roster-cell') === cell) tipShowForCell(cell)
     }, 350)
   }
   const title = (meta && meta.title) || name
@@ -216,7 +201,6 @@ function tipShow(e) {
   }
   tip.innerHTML = html
   tip.hidden = false
-  armTipWatch()
   const host = tip.parentElement.getBoundingClientRect()
   const r = cell.getBoundingClientRect()
   tip.style.left = `${r.left + r.width / 2 - host.left}px`
@@ -302,7 +286,7 @@ function update() {
   // the tip is up but the strip isn't actually hovered, drop it. Runs every
   // tick (≈4 Hz) so a stuck hint clears within ~250 ms. The tip is
   // pointer-events:none, so :hover here reflects the dock alone.
-  if (_tip && !_tip.hidden && !stillOverDock()) _tip.hidden = true
+  if (_tip && !_tip.hidden && !pointerOverDock()) _tip.hidden = true
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []
@@ -401,7 +385,6 @@ function update() {
 // and no pointer event fires, so the tip strands. Call this at those discard
 // boundaries so it leaves with the menu.
 export function hideRosterTip() {
-  clearTimeout(_tipWatch)
   if (_tip) _tip.hidden = true
 }
 
