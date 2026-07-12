@@ -23,9 +23,10 @@ import (
 
 func newTNTPreviewCommand() *cobra.Command {
 	var (
-		target  string
-		vfsRoot string
-		schema  int
+		target    string
+		vfsRoot   string
+		schema    int
+		noMarkers bool
 	)
 	cmd := &cobra.Command{
 		Use:   "preview <file.tnt>",
@@ -59,6 +60,7 @@ tile-grid render (no overlays).`,
 			}
 
 			if m.IsTAK {
+				// TA:K previews don't draw start-position markers.
 				return runTAKPreview(tntPath, data, m, features, vfsRoot, target)
 			}
 
@@ -89,7 +91,7 @@ tile-grid render (no overlays).`,
 				otaText := readOnDiskSisterOTA(tntPath)
 				basename := strings.TrimSuffix(filepath.Base(tntPath), filepath.Ext(tntPath))
 
-				stats, err := tntpreview.ComposeWith(base, m, features, vfs, palette, basename, otaText, tntpreview.Options{SchemaIndex: schema})
+				stats, err := tntpreview.ComposeWith(base, m, features, vfs, palette, basename, otaText, tntpreview.Options{SchemaIndex: schema, HideStartPositions: noMarkers})
 				if err != nil {
 					return err
 				}
@@ -117,6 +119,8 @@ tile-grid render (no overlays).`,
 		"Path to a flattened TA install / VFS root used to resolve feature sprites and the sister .ota (defaults to active kbot context)")
 	cmd.Flags().IntVar(&schema, "schema", 0,
 		"Schema index whose StartPos markers are drawn (0-based; default 0)")
+	cmd.Flags().BoolVar(&noMarkers, "no-start-markers", false,
+		"Suppress the numbered StartPos marker circles (terrain + feature sprites only)")
 	return cmd
 }
 

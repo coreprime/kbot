@@ -40,6 +40,11 @@ type Options struct {
 	// equivalent to the CLI / MCP behaviour before the per-schema selector
 	// existed.
 	SchemaIndex int
+
+	// HideStartPositions suppresses the numbered StartPos marker circles, so
+	// the render shows only terrain + feature sprites (used when the markers
+	// would be noise, e.g. compositing assets for review).
+	HideStartPositions bool
 }
 
 // Compose paints feature sprites and start position markers onto base using
@@ -73,7 +78,7 @@ func ComposeWith(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *file
 			otaText = t
 		}
 	}
-	if otaText != "" {
+	if otaText != "" && !opts.HideStartPositions {
 		stats.HasSisterOTA = true
 		starts := ExtractStartPositionsForSchema(otaText, opts.SchemaIndex)
 		drawStartPositionCircles(base, starts, m.TileW*32, m.TileH*32)
