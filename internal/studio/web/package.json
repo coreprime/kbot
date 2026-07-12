@@ -16,7 +16,7 @@
     "@coreprime/kbot-engine": "0.8.14",
     "@coreprime/kbot-game-takingdoms": "^0.3.0",
     "@coreprime/kbot-game-totala": "^0.3.0",
-    "@coreprime/kbot-game3d": "^0.2.13",
+    "@coreprime/kbot-game3d": "^0.2.14",
     "@coreprime/kbot-ui": "^0.1.1",
     "@preact/signals": "^2.9.1",
     "htm": "^3.1.1",
