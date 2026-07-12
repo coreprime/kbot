@@ -286,7 +286,13 @@ function update() {
   // the tip is up but the strip isn't actually hovered, drop it. Runs every
   // tick (≈4 Hz) so a stuck hint clears within ~250 ms. The tip is
   // pointer-events:none, so :hover here reflects the dock alone.
-  if (_tip && !_tip.hidden && !pointerOverDock()) _tip.hidden = true
+  // Also drop it the instant a build placement is armed: the user has left the
+  // menu to pick a site, so the browse tip has served its purpose — and the
+  // cursor may sit motionless over the field (no sweep fires) or still over the
+  // just-clicked build cell (pointerOverDock() reads that cell as hovered), and
+  // either strands the tip through placement and beyond.
+  const placing = !!(view && view._placement)
+  if (_tip && !_tip.hidden && (placing || !pointerOverDock())) _tip.hidden = true
   const units = (sandboxActive && view && typeof view.getSelectedUnits === 'function')
     ? view.getSelectedUnits().filter((u) => u && !u.dead)
     : []
@@ -369,6 +375,9 @@ function update() {
   for (const el of root.querySelectorAll('.roster-build-cell')) {
     const name = el.dataset.build
     el.addEventListener('click', async (e) => {
+      // The gesture ends the browse: kill the hover tip now, before placement
+      // arms or the queue rebuilds, so it can't strand on a stationary cursor.
+      if (_tip) _tip.hidden = true
       const v = hostCallbacks.getActiveSandboxView?.()
       if (!v || !v.scene || !builder) return
       try {
@@ -391,6 +400,7 @@ function update() {
     // bridge when it exists and report the gap until the engine ships one.
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault()
+      if (_tip) _tip.hidden = true
       const v = hostCallbacks.getActiveSandboxView?.()
       if (!v || !v.scene || !builder) return
       const isFactory = builder.meta && builder.meta.canMove === false
