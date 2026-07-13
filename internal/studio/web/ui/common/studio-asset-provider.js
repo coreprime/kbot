@@ -116,6 +116,20 @@ export class StudioAssetProvider {
     }
   }
 
+  // featureModel resolves a model3d-tier feature's baked geometry from the
+  // stand-in bundle (--standins), the studio analogue of the pack's
+  // featuremodels/<key>.json. The def's model3d field is the bare asset key.
+  // Null on a miss → the feature falls back to a procedural stand-in.
+  async featureModel(pathOrKey) {
+    const key = String(pathOrKey || '').replace(/^.*\//, '').replace(/\.json$/, '')
+    if (!key) return null
+    try {
+      return await fetchJson(`/api/studio/feature-model/${encodeURIComponent(key)}`, 'feature model')
+    } catch {
+      return null
+    }
+  }
+
   // unitPic resolves a unit's build picture through the studio's buildpic
   // endpoint, or null when the install ships none — contract parity with
   // HttpPackProvider.unitPic (pack v3).

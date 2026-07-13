@@ -53,6 +53,7 @@ func (sess *Session) registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/studio/section-heights/", sess.handleSectionHeights)
 	mux.HandleFunc("/api/studio/features", sess.handleFeatures)
 	mux.HandleFunc("/api/studio/feature-defs", sess.handleFeatureDefs)
+	mux.HandleFunc("/api/studio/feature-model/", sess.handleFeatureModel)
 	mux.HandleFunc("/api/studio/feature-preview/", sess.handleFeaturePreview)
 	mux.HandleFunc("/api/studio/save", sess.handleSave)
 	mux.HandleFunc("/api/studio/save-loose", sess.handleSaveLoose)

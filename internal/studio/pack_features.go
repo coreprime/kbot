@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
@@ -49,9 +50,78 @@ func (sess *Session) featureDefsForRenderer() map[string]packFeatureJSON {
 				catalog[id] = entry
 			}
 		}
+		// When a stand-in bundle is configured (--standins), stamp each feature
+		// with its render tier so live sandbox play renders the 3D surrogates /
+		// billboards / decals just like a packed replay does.
+		if idx := sess.standins(); idx != nil {
+			enrichFeatureDefsStandins(catalog, idx)
+		}
 		sess.featureDefsCached = catalog
 	})
 	return sess.featureDefsCached
+}
+
+// standins lazily loads the per-game stand-in index from the configured bundle
+// (--standins). Returns nil when no bundle is set or the game has none, so the
+// live feature path degrades to procedural stand-ins.
+func (sess *Session) standins() map[string]featureAssetEntry {
+	sess.standinsOnce.Do(func() {
+		if sess.standinsDir == "" || sess.game == "" {
+			return
+		}
+		if idx, err := loadFeatureAssetIndex(sess.standinsDir, games.Resolve(sess.game).ID()); err == nil {
+			sess.standinsIndex = idx
+		}
+	})
+	return sess.standinsIndex
+}
+
+// enrichFeatureDefsStandins stamps each catalogue entry with its stand-in render
+// tier for the studio live path. model3d carries the bare asset key (the web
+// StudioAssetProvider.featureModel resolves it via /api/studio/feature-model);
+// decal/billboard set Sprite to the feature id (featureSprite renders it live
+// through the feature-preview endpoint). Object features keep their 3DO.
+func enrichFeatureDefsStandins(catalog map[string]packFeatureJSON, index map[string]featureAssetEntry) {
+	for id, a := range index {
+		entry, ok := catalog[id]
+		if !ok || entry.Object != "" {
+			continue
+		}
+		entry.Tier = a.Tier
+		switch a.Tier {
+		case "model3d":
+			if a.Model != "" {
+				entry.Model3D = a.Model
+			}
+		case "decal", "billboard":
+			entry.Sprite = id
+		}
+		catalog[id] = entry
+	}
+}
+
+// handleFeatureModel serves a model3d-tier feature's baked geometry from the
+// stand-in bundle (models/<key>.json), the studio analogue of the pack's
+// featuremodels/. The web provider fetches it by the bare asset key stamped on
+// the def's model3d field.
+func (sess *Session) handleFeatureModel(w http.ResponseWriter, r *http.Request) {
+	if sess.standinsDir == "" || sess.game == "" {
+		http.NotFound(w, r)
+		return
+	}
+	key := filepath.Base(strings.TrimPrefix(r.URL.Path, "/api/studio/feature-model/"))
+	key = strings.TrimSuffix(key, ".json")
+	if key == "" || key == "." {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := os.ReadFile(filepath.Join(sess.standinsDir, games.Resolve(sess.game).ID(), "models", key+".json"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
 }
 
 // handleFeatureDefs serves the live feature catalogue (game3d's featureDefs

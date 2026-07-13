@@ -28,6 +28,15 @@ import (
 var webFS embed.FS
 
 var serverPort int
+var standinsDir string
+var flagGame string
+
+// gameAliases maps the CLI's short game names onto the games-registry ids
+// (mirrors `kbot pack --game`).
+var gameAliases = map[string]string{
+	"ta": "totala", "totala": "totala",
+	"tak": "takingdoms", "takingdoms": "takingdoms",
+}
 
 // NewCommand returns the `kbot studio` subcommand.
 func NewCommand() *cobra.Command {
@@ -47,11 +56,17 @@ and start designing.`,
 		RunE: runStudio,
 	}
 	cmd.Flags().IntVarP(&serverPort, "port", "p", 8100, "Web server port (default 8100)")
+	cmd.Flags().StringVar(&standinsDir, "standins", "", "root of sprite-replacement stand-in bundles (a dir with <game>/index.json + models/ + sprites/); features render as 3D surrogates / billboards / decals instead of procedural stand-ins")
+	cmd.Flags().StringVar(&flagGame, "game", "", "game the local install is (ta|tak) — required with --standins for the `kbot studio <path>` form (contexts/workspaces already know their game)")
 	return cmd
 }
 
 func runStudio(_ *cobra.Command, args []string) error {
 	mgr := newWorkspaceManager(".cache")
+	if standinsDir != "" {
+		mgr.standinsDir = standinsDir
+		fmt.Printf("  [standins] 3D feature stand-ins from %s\n", standinsDir)
+	}
 
 	fmt.Printf("KBot Studio — TA/TAK content editor\n\n")
 
@@ -62,7 +77,11 @@ func runStudio(_ *cobra.Command, args []string) error {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return fmt.Errorf("path does not exist: %s", path)
 		}
-		sess, err := mgr.openLocalPath("local", "Local", path)
+		localGame := gameAliases[strings.ToLower(strings.TrimSpace(flagGame))]
+		if standinsDir != "" && localGame == "" {
+			fmt.Printf("  [standins] note: pass --game ta|tak so the local install's stand-ins resolve\n")
+		}
+		sess, err := mgr.openLocalPath("local", "Local", path, localGame)
 		if err != nil {
 			return fmt.Errorf("failed to open %s: %w", path, err)
 		}

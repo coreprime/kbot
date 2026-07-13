@@ -68,6 +68,14 @@ type Session struct {
 	featureDefsOnce   sync.Once
 	featureDefsCached map[string]packFeatureJSON
 
+	// sprite-replacement stand-in bundle root (set from `kbot studio
+	// --standins` via the WorkspaceManager). featureDefsForRenderer enriches
+	// each def with the bundle's render tier (model3d/decal/billboard), and
+	// /api/studio/feature-model serves the baked geometry.
+	standinsDir   string
+	standinsOnce  sync.Once
+	standinsIndex map[string]featureAssetEntry
+
 	// decoded GAF texture images per 3DO texture name, for object previews
 	objTexMu sync.Mutex
 	objTex   map[string]*image.RGBA

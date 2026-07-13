@@ -24,6 +24,11 @@ type WorkspaceManager struct {
 	mu        sync.Mutex
 	sessions  map[string]*Session
 	cacheRoot string
+	// standinsDir is the optional root of the sprite-replacement stand-in
+	// bundles (a dir with <game>/index.json + models/ + sprites/, e.g. a clone
+	// of coreprime/standins-<game>). Empty disables stand-ins — features render
+	// as procedural stand-ins. Set from `kbot studio --standins`.
+	standinsDir string
 }
 
 func newWorkspaceManager(cacheRoot string) *WorkspaceManager {
@@ -58,6 +63,7 @@ func (m *WorkspaceManager) adopt(id string, build func() (*Session, error)) (*Se
 		return existing, nil
 	}
 	s.id = id
+	s.standinsDir = m.standinsDir
 	m.sessions[id] = s
 	m.mu.Unlock()
 	s.start()
@@ -70,13 +76,15 @@ func (m *WorkspaceManager) cacheDir(id string) string {
 
 // openLocalPath opens a read-only session over a single directory (the explicit
 // `kbot studio <path>` form).
-func (m *WorkspaceManager) openLocalPath(id, name, path string) (*Session, error) {
+func (m *WorkspaceManager) openLocalPath(id, name, path, game string) (*Session, error) {
 	return m.adopt(id, func() (*Session, error) {
 		vfs, err := filesystem.NewVirtualFileSystem(path, studioFSConfig())
 		if err != nil {
 			return nil, err
 		}
-		return newSession(id, name, vfs, m.cacheDir(id)), nil
+		s := newSession(id, name, vfs, m.cacheDir(id))
+		s.game = game // known for contexts/workspaces; supplied via --game here
+		return s, nil
 	})
 }
 

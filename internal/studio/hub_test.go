@@ -50,7 +50,7 @@ func TestHubWorkspaceRouting(t *testing.T) {
 	}
 
 	mgr := newWorkspaceManager(t.TempDir())
-	if _, err := mgr.openLocalPath("local", "Local", base); err != nil {
+	if _, err := mgr.openLocalPath("local", "Local", base, "totala"); err != nil {
 		t.Fatalf("openLocalPath: %v", err)
 	}
 	mux := http.NewServeMux()
