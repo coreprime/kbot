@@ -138,16 +138,19 @@ func generateVideoThumb(ext string, data []byte, dst string) error {
 	}
 	defer func() { _ = os.RemoveAll(frameDir) }()
 
+	// -fps_mode is the per-stream spelling of the old global -vsync flag,
+	// which ffmpeg 9 no longer accepts; vfr keeps only the frames the select
+	// filter passes instead of duplicating to a constant rate.
 	selectExpr := fmt.Sprintf("not(mod(n\\,%d))", interval)
-	if err := exec.Command("ffmpeg",
+	if out, err := exec.Command("ffmpeg",
 		"-y", "-v", "error",
 		"-i", src,
 		"-vf", fmt.Sprintf("select='%s',scale=128:-1:flags=neighbor", selectExpr),
-		"-vsync", "vfr",
+		"-fps_mode", "vfr",
 		"-frames:v", "20",
 		filepath.Join(frameDir, "frame_%03d.png"),
-	).Run(); err != nil {
-		return fmt.Errorf("ffmpeg frame extraction failed: %w", err)
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("ffmpeg frame extraction failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
 	if err := exec.Command("ffmpeg",

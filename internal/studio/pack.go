@@ -163,6 +163,18 @@ type packManifest struct {
 	ContentHash string `json:"contentHash"`
 }
 
+// packFormatVersion reports the manifest format the pack was written in.
+// Format 9 is only claimed when the feature-asset render tiers are actually
+// packed; a pack built without --feature-assets carries exactly the format-8
+// content and says so, so readers can trust the version rather than probing
+// for featuremodels/.
+func packFormatVersion(opts PackOptions) int {
+	if opts.FeatureAssets != "" {
+		return 9
+	}
+	return 8
+}
+
 type packMapJSON struct {
 	Name     string          `json:"name"`
 	TileW    int             `json:"tileW"`
@@ -776,7 +788,7 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		// for the decal/billboard scenery tiers. Older readers ignore them and
 		// keep the legacy object / flat-decal / procedural routing.
 		// Older readers ignore all of them.
-		FormatVersion: 9,
+		FormatVersion: packFormatVersion(opts),
 		Game:          db.Game,
 		Sides:         sides,
 		Palette:       "palette.json",
