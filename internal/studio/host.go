@@ -6,8 +6,8 @@ import (
 
 	"github.com/coreprime/kbot-engine/engine/fixed"
 	"github.com/coreprime/kbot-engine/engine/sim"
-	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-engine/games"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot/internal/gameserver"
 )
 

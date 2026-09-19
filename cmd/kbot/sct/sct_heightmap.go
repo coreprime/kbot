@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot-io/formats/sct"
+	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 )
 
 func newSCTHeightmapCommand() *cobra.Command {

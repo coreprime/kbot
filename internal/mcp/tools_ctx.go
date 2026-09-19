@@ -42,12 +42,12 @@ func registerCtxTools(s *server.MCPServer, r *Resolver) {
 // ── ctx_list ──────────────────────────────────────────────────────────────
 
 type ctxListEntry struct {
-	Alias    string `json:"alias"`
-	Path     string `json:"path"`
-	Game     string `json:"game,omitempty"`
-	Version  string `json:"version,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Current  bool   `json:"current"`
+	Alias   string `json:"alias"`
+	Path    string `json:"path"`
+	Game    string `json:"game,omitempty"`
+	Version string `json:"version,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Current bool   `json:"current"`
 }
 
 type ctxListOutput struct {
@@ -108,4 +108,3 @@ func makeCtxCurrentHandler(r *Resolver) server.ToolHandlerFunc {
 		})
 	}
 }
-

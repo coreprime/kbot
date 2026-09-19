@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot-io/formats/scripting"
 	"github.com/coreprime/kbot-io/formats/scripting/assembly"
 	"github.com/coreprime/kbot-io/formats/scripting/compiler"
 	"github.com/coreprime/kbot-io/formats/scripting/decompiler"
+	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 )
 
 func newCobRoundtripCommand() *cobra.Command {

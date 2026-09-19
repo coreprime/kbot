@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
 )
 
 // TestTAKKingdomPalettesLoad confirms every embedded TA: Kingdoms palette is a

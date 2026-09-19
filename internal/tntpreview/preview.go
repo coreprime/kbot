@@ -401,8 +401,8 @@ func (c *featureSpriteCache) loadGAF(name string) *gafFile {
 // units (16 px per attribute cell, matching the base image's 32-px-per-
 // tile render):
 //
-//   anchorX = AttrX*16 + (FootprintX*8)
-//   anchorY = AttrY*16 + (FootprintZ*8) - (Height/2)
+//	anchorX = AttrX*16 + (FootprintX*8)
+//	anchorY = AttrY*16 + (FootprintZ*8) - (Height/2)
 //
 // The Height/2 lift is the same trick Cavedog used in TA's renderer
 // (see Kinboat's classTAMap.cls:3340) — without it, every feature

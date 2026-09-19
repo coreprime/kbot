@@ -147,7 +147,7 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Printf("mount:%s> ", currentDir)
-		
+
 		if !scanner.Scan() {
 			break
 		}
@@ -164,32 +164,32 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 		switch command {
 		case "help", "?":
 			showHelp()
-		
+
 		case "ls":
 			handleLS(args)
-		
+
 		case "cd":
 			handleCD(args)
-		
+
 		case "pwd":
 			handlePWD()
-		
+
 		case "cat":
 			handleCAT(args)
-		
+
 		case "describe":
 			handleDescribe(args)
-		
+
 		case "archives":
 			handleArchives()
-		
+
 		case "stats":
 			handleStats()
-		
+
 		case "exit", "quit", "q":
 			fmt.Println("Goodbye!")
 			return nil
-		
+
 		default:
 			fmt.Printf("Unknown command: %s (type 'help' for available commands)\n", command)
 		}
@@ -358,22 +358,22 @@ func handleDescribe(args []string) {
 	switch ext {
 	case ".fbi", ".tdf", ".gui":
 		describeTDF(filePath)
-	
+
 	case ".gaf":
 		describeGAF(filePath)
-	
+
 	case ".hpi", ".ufo", ".ccx", ".gp3":
 		describeHPI(filePath)
-	
+
 	case ".pcx":
 		describePCX(filePath)
-	
+
 	case ".cob":
 		describeCOB(filePath)
-	
+
 	case ".bos", ".h":
 		describeBOS(filePath)
-	
+
 	case ".ai", ".txt":
 		// Check if it's an AI file
 		data, err := vfs.ReadFile(filePath)
@@ -388,7 +388,7 @@ func handleDescribe(args []string) {
 		} else {
 			fmt.Printf("File type: %s (no metadata parser available)\n", ext)
 		}
-	
+
 	default:
 		fmt.Printf("File type: %s (no metadata parser available)\n", ext)
 	}
@@ -416,11 +416,11 @@ func describeTDF(filePath string) {
 	// Show section details
 	for _, section := range sections {
 		fmt.Printf("[%s]\n", section.Name())
-		
+
 		fields := section.Fields()
 		if len(fields) > 0 {
 			fmt.Printf("  Fields: %d\n", len(fields))
-			
+
 			// Show first few fields
 			count := 0
 			for _, field := range fields {
@@ -445,37 +445,37 @@ func describeTDF(filePath string) {
 	if ext == ".fbi" || ext == ".gui" {
 		if unitInfo := doc.Section("UNITINFO"); unitInfo != nil {
 			fmt.Println("Unit Information:")
-			
+
 			name := unitInfo.String("UnitName")
 			if name != "" {
 				fmt.Printf("  Name: %s\n", name)
 			}
-			
+
 			desc := unitInfo.String("Description")
 			if desc != "" {
 				fmt.Printf("  Description: %s\n", desc)
 			}
-			
+
 			side := unitInfo.String("Side")
 			if side != "" {
 				fmt.Printf("  Side: %s\n", side)
 			}
-			
+
 			metal := unitInfo.Int("BuildCostMetal")
 			if metal > 0 {
 				fmt.Printf("  Metal Cost: %d\n", metal)
 			}
-			
+
 			energy := unitInfo.Int("BuildCostEnergy")
 			if energy > 0 {
 				fmt.Printf("  Energy Cost: %d\n", energy)
 			}
-			
+
 			hp := unitInfo.Int("MaxDamage")
 			if hp > 0 {
 				fmt.Printf("  Hit Points: %d\n", hp)
 			}
-			
+
 			speed := unitInfo.Float("MaxVelocity")
 			if speed > 0 {
 				fmt.Printf("  Max Speed: %.2f\n", speed)
@@ -522,16 +522,16 @@ func describeGAF(filePath string) {
 	for i, seq := range sequences {
 		fmt.Printf("[%d] %s\n", i, seq.Name)
 		fmt.Printf("    Frames: %d\n", len(seq.Frames))
-		
+
 		if len(seq.Frames) > 0 {
 			// Show first frame details
 			frame := seq.Frames[0]
 			fmt.Printf("    Dimensions: %dx%d\n", frame.Width, frame.Height)
 			fmt.Printf("    Origin: (%d, %d)\n", frame.OriginX, frame.OriginY)
 			fmt.Printf("    Transparency Index: %d\n", frame.TransparencyIndex)
-			fmt.Printf("    Frame Duration: %d ticks (%.2f sec)\n", 
+			fmt.Printf("    Frame Duration: %d ticks (%.2f sec)\n",
 				frame.Duration, float64(frame.Duration)/30.0)
-			
+
 			// Show frame size variation if any
 			if len(seq.Frames) > 1 {
 				minW, maxW := frame.Width, frame.Width
@@ -564,7 +564,7 @@ func describeHPI(filePath string) {
 	// This is more complex as it's not in the VFS
 	fmt.Printf("Format: HPI/UFO/CCX archive\n")
 	fmt.Printf("(Archive metadata requires direct file access)\n")
-	
+
 	// Try to get basic info
 	info, err := vfs.Stat(filePath)
 	if err == nil {
@@ -575,7 +575,7 @@ func describeHPI(filePath string) {
 func handleArchives() {
 	archives := vfs.Archives()
 	fmt.Printf("Loaded Archives (%d):\n\n", len(archives))
-	
+
 	for _, archive := range archives {
 		fmt.Printf("  %s\n", archive)
 	}
@@ -583,7 +583,7 @@ func handleArchives() {
 
 func handleStats() {
 	stats := vfs.Stats()
-	
+
 	fmt.Println("Filesystem Statistics:")
 	fmt.Println()
 	fmt.Printf("  Base Path: %s\n", stats["base_path"])
@@ -593,7 +593,7 @@ func handleStats() {
 	fmt.Printf("  Physical Files: %d\n", stats["physical_files"])
 	fmt.Printf("  Directories: %d\n", stats["directories"])
 	fmt.Println()
-	
+
 	archives := stats["archive_names"].([]string)
 	if len(archives) > 0 {
 		fmt.Println("Loaded Archives:")
@@ -607,7 +607,7 @@ func handleStats() {
 func resolvePath(path string) string {
 	// Normalize path separators
 	path = filepath.ToSlash(path)
-	
+
 	// Handle absolute paths (starts with /)
 	if strings.HasPrefix(path, "/") {
 		// Remove leading slash and return
@@ -649,13 +649,13 @@ func formatSize(bytes int64) string {
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
 	}
-	
+
 	div, exp := int64(unit), 0
 	for n := bytes / unit; n >= unit; n /= unit {
 		div *= unit
 		exp++
 	}
-	
+
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
@@ -676,10 +676,10 @@ func describePCX(filePath string) {
 	fmt.Println("Format: PCX Image")
 	fmt.Printf("Resolution: %dx%d pixels\n", pcxReader.Width(), pcxReader.Height())
 	fmt.Printf("Bit Depth: %d-bit\n", pcxReader.BitsPerPixel())
-	
+
 	header := pcxReader.Header()
 	fmt.Printf("Color Planes: %d\n", header.NumPlanes)
-	
+
 	// Determine color type
 	bpp := pcxReader.BitsPerPixel()
 	colorType := "Unknown"
@@ -707,7 +707,7 @@ func describeAI(filePath string, data []byte) {
 
 	for _, plan := range aiFile.Plans {
 		fmt.Printf("=== %s Plan ===\n", cases.Title(language.English).String(strings.ToLower(plan.Name)))
-		
+
 		if len(plan.Weights) > 0 {
 			fmt.Printf("\nUnit Build Weights:\n")
 			maxWeight := 0.0
@@ -716,14 +716,14 @@ func describeAI(filePath string, data []byte) {
 					maxWeight = w.Weight
 				}
 			}
-			
+
 			for _, w := range plan.Weights {
 				barWidth := int((w.Weight / maxWeight) * 30)
 				bar := strings.Repeat("█", barWidth)
 				fmt.Printf("  %-30s %6.1f %s\n", w.UnitName, w.Weight, bar)
 			}
 		}
-		
+
 		if len(plan.Limits) > 0 {
 			fmt.Printf("\nBuild Limits:\n")
 			for _, l := range plan.Limits {
@@ -734,7 +734,7 @@ func describeAI(filePath string, data []byte) {
 				fmt.Printf("  %-30s %s\n", l.UnitName, limit)
 			}
 		}
-		
+
 		fmt.Println()
 	}
 }
@@ -803,7 +803,7 @@ func describeBOS(filePath string) {
 	lines := strings.Split(string(data), "\n")
 	fmt.Printf("Lines: %d\n", len(lines))
 	fmt.Printf("Size: %d bytes\n", len(data))
-	
+
 	// Count non-empty, non-comment lines
 	codeLines := 0
 	commentLines := 0
@@ -818,7 +818,7 @@ func describeBOS(filePath string) {
 			codeLines++
 		}
 	}
-	
+
 	fmt.Printf("Code Lines: %d\n", codeLines)
 	fmt.Printf("Comment Lines: %d\n", commentLines)
 }

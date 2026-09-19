@@ -31,16 +31,16 @@ func makePAL(seed byte) []byte {
 // The PCX header is small enough to encode by hand.
 func makePCX(seed byte) []byte {
 	out := make([]byte, 128) // header
-	out[0] = 0x0A             // manufacturer
-	out[1] = 0x05             // version
-	out[2] = 0x01             // RLE
-	out[3] = 0x08             // bits per pixel
+	out[0] = 0x0A            // manufacturer
+	out[1] = 0x05            // version
+	out[2] = 0x01            // RLE
+	out[3] = 0x08            // bits per pixel
 	// XMax = 0, YMax = 0 (so width = height = 1)
-	out[65] = 1 // planes
-	out[66] = 1 // bytes per line
-	out = append(out, 0xC1)   // 1 byte of RLE: single literal value (we won't decode it)
-	out = append(out, 0x00)   // pixel value
-	out = append(out, 0x0C)   // embedded palette marker
+	out[65] = 1             // planes
+	out[66] = 1             // bytes per line
+	out = append(out, 0xC1) // 1 byte of RLE: single literal value (we won't decode it)
+	out = append(out, 0x00) // pixel value
+	out = append(out, 0x0C) // embedded palette marker
 	for i := 0; i < 256; i++ {
 		out = append(out, seed, seed+1, seed+2)
 	}
@@ -49,9 +49,9 @@ func makePCX(seed byte) []byte {
 
 func TestResolveSidecarPCXWins(t *testing.T) {
 	vfs := fakeVFS{
-		"anims/foo.gaf":             []byte("gaf"),
-		"anims/foo.pcx":             makePCX(0x10),
-		"palettes/palette.pal":      makePAL(0x99),
+		"anims/foo.gaf":        []byte("gaf"),
+		"anims/foo.pcx":        makePCX(0x10),
+		"palettes/palette.pal": makePAL(0x99),
 	}
 	r, err := Resolve(vfs, "anims/foo.gaf", "")
 	if err != nil {
@@ -118,9 +118,9 @@ func TestResolveFallsBackToGlobalThenEmbedded(t *testing.T) {
 
 func TestResolveOverrideHonored(t *testing.T) {
 	vfs := fakeVFS{
-		"anims/foo.gaf":           []byte("gaf"),
-		"anims/foo.pcx":           makePCX(0x10),
-		"palettes/taros.pcx":      makePCX(0x77),
+		"anims/foo.gaf":      []byte("gaf"),
+		"anims/foo.pcx":      makePCX(0x10),
+		"palettes/taros.pcx": makePCX(0x77),
 	}
 	r, err := Resolve(vfs, "anims/foo.gaf", "palettes/taros.pcx")
 	if err != nil {

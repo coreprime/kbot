@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/gamedata/tak"
 	"github.com/coreprime/kbot-io/formats/tdf"
-	"github.com/coreprime/kbot-engine/games"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the
@@ -169,10 +169,10 @@ type unitMetaJSON struct {
 	// metal makers, radar, jammers). Negative energyuse is solar-style income
 	// and folds into MakesEnergy instead. Surfaced so the hover tooltip can
 	// show consumption alongside production.
-	UsesEnergy float64 `json:"usesEnergy,omitempty"`
-	StoresMetal float64 `json:"storesMetal,omitempty"`
+	UsesEnergy   float64 `json:"usesEnergy,omitempty"`
+	StoresMetal  float64 `json:"storesMetal,omitempty"`
 	StoresEnergy float64 `json:"storesEnergy,omitempty"`
-	StoresMana  float64 `json:"storesMana,omitempty"`
+	StoresMana   float64 `json:"storesMana,omitempty"`
 
 	// Terrain limits (FBI maxslope / maxwaterdepth / minwaterdepth, height
 	// units) — the sim's movement and build-site legality on loaded maps.

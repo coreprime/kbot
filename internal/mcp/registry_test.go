@@ -71,9 +71,9 @@ func TestRegistry_RejectsBadPath(t *testing.T) {
 
 func TestSplitGameDataSpec(t *testing.T) {
 	cases := []struct {
-		spec       string
-		wantName   string
-		wantPath   string
+		spec     string
+		wantName string
+		wantPath string
 	}{
 		{"foo=/bar", "foo", "/bar"},
 		{"/bar", "", "/bar"},

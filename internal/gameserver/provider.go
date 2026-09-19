@@ -7,9 +7,9 @@ import (
 	"sync"
 
 	"github.com/coreprime/kbot-engine/engine/sim"
+	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
-	"github.com/coreprime/kbot-engine/games"
 )
 
 // fbiProvider resolves unit type names against a flattened game-asset tree

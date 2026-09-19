@@ -283,14 +283,14 @@ type vfsStatLayer struct {
 }
 
 type vfsStatOutput struct {
-	GameData      string         `json:"game_data"`
-	Query         string         `json:"query"`
-	VirtualPath   string         `json:"virtual_path"`
-	ActiveSource  string         `json:"active_source"`
-	Size          int64          `json:"size"`
-	Layers        []vfsStatLayer `json:"layers"`
-	MultipleHits  []vfsFindHit   `json:"multiple_hits,omitempty"`
-	NotFound      bool           `json:"not_found,omitempty"`
+	GameData     string         `json:"game_data"`
+	Query        string         `json:"query"`
+	VirtualPath  string         `json:"virtual_path"`
+	ActiveSource string         `json:"active_source"`
+	Size         int64          `json:"size"`
+	Layers       []vfsStatLayer `json:"layers"`
+	MultipleHits []vfsFindHit   `json:"multiple_hits,omitempty"`
+	NotFound     bool           `json:"not_found,omitempty"`
 }
 
 func makeVFSStatHandler(r *Resolver) server.ToolHandlerFunc {

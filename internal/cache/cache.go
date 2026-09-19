@@ -40,24 +40,24 @@ func (c *Cache) Has(data []byte, ext string) (string, bool) {
 func (c *Cache) Put(sourceData []byte, ext string, resultPath string) (string, error) {
 	hash := hashData(sourceData)
 	cachePath := c.GetPath(hash, ext)
-	
+
 	// Copy result to cache
 	src, err := os.Open(resultPath)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = src.Close() }()
-	
+
 	dst, err := os.Create(cachePath)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = dst.Close() }()
-	
+
 	if _, err := io.Copy(dst, src); err != nil {
 		return "", err
 	}
-	
+
 	return cachePath, nil
 }
 

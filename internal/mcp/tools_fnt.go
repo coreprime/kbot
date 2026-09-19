@@ -67,16 +67,16 @@ func registerFNTTools(s *server.MCPServer, r *Resolver) {
 }
 
 type fntDescribeOutput struct {
-	Path        string `json:"path"`
-	Source      string `json:"source,omitempty"`
-	FileSize    int64  `json:"file_size"`
-	Height      int    `json:"height"`
-	Flags       uint16 `json:"flags"`
-	GlyphCount  int    `json:"glyph_count"`
-	MinWidth    int    `json:"min_width"`
-	MaxWidth    int    `json:"max_width"`
-	MeanWidth   float64 `json:"mean_width"`
-	Ranges      string `json:"ranges"`
+	Path       string  `json:"path"`
+	Source     string  `json:"source,omitempty"`
+	FileSize   int64   `json:"file_size"`
+	Height     int     `json:"height"`
+	Flags      uint16  `json:"flags"`
+	GlyphCount int     `json:"glyph_count"`
+	MinWidth   int     `json:"min_width"`
+	MaxWidth   int     `json:"max_width"`
+	MeanWidth  float64 `json:"mean_width"`
+	Ranges     string  `json:"ranges"`
 }
 
 type fntImageOutput struct {
