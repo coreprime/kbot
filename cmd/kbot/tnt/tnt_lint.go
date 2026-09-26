@@ -10,10 +10,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot-io/filesystem"
-	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/maplint"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/mapmeta"
 )
 
 func newTNTLintCommand() *cobra.Command {
@@ -341,31 +341,12 @@ func readSiblingOTA(arg string, hit *cli.VFSInputHit, otaOverride string, vfs *f
 	return nil, ""
 }
 
-// scanFeatureRegistry walks features/*.tdf in the VFS and returns a
-// lowercased-feature-name → metal-yield map.
+// scanFeatureRegistry returns the metal each feature in the VFS yields,
+// keyed by lower-cased name, as the game stores it (see
+// mapmeta.FeatureMetal): metal=56.8 is 56, and a name's first definition
+// wins.
 func scanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
-	out := map[string]int{}
-	for _, p := range vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
-		data, err := vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
-			continue
-		}
-		for _, s := range doc.Sections() {
-			metal := s.Int("metal")
-			if metal > 0 {
-				out[strings.ToLower(s.Name())] = metal
-			}
-		}
-	}
-	return out
+	return mapmeta.FeatureMetal(vfs)
 }
 
 // filePathExt returns the extension of a path including the dot.

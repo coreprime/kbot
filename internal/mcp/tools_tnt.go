@@ -17,10 +17,10 @@ import (
 
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/gaf"
-	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/maplint"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/mapmeta"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -966,30 +966,10 @@ func tntLintReadOTAVia(r *Resolver, p, gameData string) ([]byte, string) {
 	return data, otaRF.displayPath()
 }
 
-// tntScanFeatureRegistry walks features/*.tdf in the supplied VFS and
-// returns a lowercased-feature-name → metal-yield map for use by the
-// maplint metal-proximity check.
+// tntScanFeatureRegistry returns the metal each feature in the supplied
+// VFS yields, keyed by lower-cased name, for the maplint metal-proximity
+// check: the value the game stores (see mapmeta.FeatureMetal), so
+// metal=56.8 is 56 and a name's first definition wins.
 func tntScanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
-	out := map[string]int{}
-	for _, p := range vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
-		data, err := vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
-			continue
-		}
-		for _, s := range doc.Sections() {
-			metal := s.Int("metal")
-			if metal > 0 {
-				out[strings.ToLower(s.Name())] = metal
-			}
-		}
-	}
-	return out
+	return mapmeta.FeatureMetal(vfs)
 }

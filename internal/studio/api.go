@@ -1476,7 +1476,7 @@ func (sess *Session) scanFeatures() ([]featureEntry, map[string]featureEntry) {
 				Seqname:     f.SeqName,
 				Object:      f.Object,
 				FeatureDead: f.FeatureDead,
-				Metal:       int(f.Metal),
+				Metal:       f.EffectiveMetal(),
 			}
 			if entry.Filename != "" && entry.Seqname != "" {
 				entry.PreviewURL = "/api/studio/feature-preview/" + url.PathEscape(name)
