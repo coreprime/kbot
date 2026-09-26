@@ -409,8 +409,10 @@ kbot crt describe --verbose "savannah hunt.crt"
 ### `kbot pal` — Palettes & Lookup Tables
 
 Inspect and convert Total Annihilation `.PAL` palettes, plus the related
-1024-byte `.ALP` / `.LHT` / `.SHD` 256×4 color-index lookup tables used for
-shadow blending and light levels.
+color-index lookup tables built from them: `.ALP` (65,536 bytes, 256×256
+half-and-half blends) and `.SHD` / `.LHT` (8,192 bytes, 32 shade or light
+levels of 256 colors). The game ignores a table of any other size, and so
+does `kbot pal lookup`.
 
 ```bash
 # One-line summary (size, unique colors, duplicates, TA-style flag)
@@ -419,8 +421,8 @@ kbot pal info palette.pal
 # Every entry with hex + RGB
 kbot pal describe palette.pal
 
-# 16x16 PNG swatch grid (index 0 hatched with magenta to highlight the
-# transparent sentinel)
+# 16x16 PNG swatch grid (index 0 hatched with magenta so it stands out;
+# the game draws it as ordinary black in terrain and backdrops)
 kbot pal swatch palette.pal --target palette.png --cell 16
 
 # Convert to editor-friendly formats
@@ -428,8 +430,8 @@ kbot pal convert palette.pal --target palette.gpl              # GIMP Palette
 kbot pal convert palette.pal --target palette.txt --format jasc  # JASC-PAL text
 kbot pal convert palette.pal --target re-emitted.pal --format pal  # binary TA .PAL
 
-# Render an .ALP/.LHT/.SHD lookup table as a 256x4 PNG using the embedded
-# palette (or pass --palette to use a specific one)
+# Render a lookup table as a PNG swatch (.ALP 256×256 cells, .SHD/.LHT
+# 256×32 cells) using the embedded palette (or pass --palette)
 kbot pal lookup palette.alp --target alp.png
 kbot pal lookup palette.lht --palette palette.pal --target lht.png
 ```

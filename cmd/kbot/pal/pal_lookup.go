@@ -3,6 +3,8 @@ package pal
 import (
 	"fmt"
 	"image/png"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -15,16 +17,38 @@ func newPALLookupCommand() *cobra.Command {
 		target      string
 		palettePath string
 		cellSize    int
+		kindFlag    string
 	)
 	cmd := &cobra.Command{
 		Use:   "lookup <file.alp|.lht|.shd>",
-		Short: "Render a color-index lookup table as a 256x4 PNG swatch",
-		Long: `Render a 1024-byte TA color-index lookup table (.ALP / .LHT / .SHD) as a
-256-wide x 4-tall swatch image.  Each byte in the table is mapped through the
-provided --palette (defaults to the embedded TA palette) for display.`,
+		Short: "Render a palette lookup table (.ALP, .SHD, .LHT) as a PNG swatch",
+		Long: `Render a TA palette lookup table as a PNG swatch.  Every byte of a table
+is a palette index; each cell is filled with the --palette colour its byte
+selects (default: the embedded TA palette).  Columns are the 256 source
+colours:
+
+  .ALP  65,536 bytes, 256 rows: row a, column b is the colour nearest the
+        average of colours a and b (a 256x256-cell image)
+  .SHD   8,192 bytes, 32 rows: row r darkens or brightens each colour by
+        r x 0.06875 (256x32 cells)
+  .LHT   8,192 bytes, 32 rows: row r brightens each colour by 1 + r/30
+        (256x32 cells)
+
+The game uses a table only when its size is exact and rebuilds it from the
+palette otherwise, so a file of any other size is rejected.  The kind comes
+from the file extension, or from --kind.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			table, err := pal.LoadLookupFromFile(args[0])
+			kind, err := lookupKind(args[0], kindFlag)
+			if err != nil {
+				return err
+			}
+			f, err := os.Open(args[0])
+			if err != nil {
+				return fmt.Errorf("read lookup: %w", err)
+			}
+			table, err := pal.ReadTable(kind, f)
+			_ = f.Close()
 			if err != nil {
 				return fmt.Errorf("read lookup: %w", err)
 			}
@@ -42,7 +66,7 @@ provided --palette (defaults to the embedded TA palette) for display.`,
 				}
 			}
 
-			img, err := pal.RenderLookupSwatch(table, p, cellSize)
+			img, err := table.RenderSwatch(p, cellSize)
 			if err != nil {
 				return err
 			}
@@ -57,5 +81,25 @@ provided --palette (defaults to the embedded TA palette) for display.`,
 	cmd.Flags().StringVar(&target, "target", "", "Output PNG path (default: stdout)")
 	cmd.Flags().StringVar(&palettePath, "palette", "", "Optional .PAL file to use for index→RGB mapping")
 	cmd.Flags().IntVar(&cellSize, "cell", 4, "Pixel size of each cell")
+	cmd.Flags().StringVar(&kindFlag, "kind", "", "Table kind when the extension does not say: alp, shd or lht")
 	return cmd
+}
+
+// lookupKind picks the table kind from --kind or the file extension.
+func lookupKind(path, flag string) (pal.TableKind, error) {
+	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(flag), ".")) {
+	case "":
+	case "alp", "alpha":
+		return pal.AlphaTable, nil
+	case "shd", "shade":
+		return pal.ShadeTable, nil
+	case "lht", "light":
+		return pal.LightTable, nil
+	default:
+		return 0, fmt.Errorf("--kind must be alp, shd or lht, got %q", flag)
+	}
+	if k, ok := pal.TableKindFromPath(path); ok {
+		return k, nil
+	}
+	return 0, fmt.Errorf("%s: cannot tell the table kind from the extension; pass --kind alp|shd|lht", path)
 }
