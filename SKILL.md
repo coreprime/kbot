@@ -126,7 +126,7 @@ kbot pal info     <file.pal>                                           # size, u
 kbot pal describe <file.pal>                                           # every entry with hex + RGB
 kbot pal swatch   <file.pal> [--target pal.png] [--cell 16]            # 16x16 PNG swatch grid
 kbot pal convert  <file.pal> --target out.gpl                          # to JASC-PAL / GIMP (.gpl) / TA .PAL
-kbot pal lookup   <file.alp|.lht|.shd> [--palette ref.pal] [--target lut.png]   # .alp 256x256, .shd/.lht 256x32 cells
+kbot pal lookup   <file.alp|.lht|.shd> [--palette ref.pal|ref.pcx] [--target lut.png]   # .alp 256x256, .shd/.lht 256x32 cells
 ```
 
 ### `kbot tnt` — TNT maps

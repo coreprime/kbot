@@ -12,6 +12,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/pal"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/palettepick"
 )
 
 // embeddedTAPalette loads the embedded Cavedog TA palette as a *pal.Palette.
@@ -82,13 +83,13 @@ func registerPALTools(s *server.MCPServer, r *Resolver) {
 				"Render a TA palette lookup table as a PNG swatch: .ALP (65,536 bytes, "+
 					"256x256 cells: row a, column b is the colour nearest the average of colours "+
 					"a and b) or .SHD / .LHT (8,192 bytes, 256x32 cells: one row per shade or "+
-					"light level).  Each byte indexes into 'palette' (defaults to the embedded TA "+
-					"palette) for display.  The game uses a table only when its size is exact, so "+
+					"light level).  Each byte indexes into 'palette' (a .pal or .pcx; defaults to the "+
+					"embedded TA palette) for display.  The game uses a table only when its size is exact, so "+
 					"other sizes are rejected.  The kind comes from the extension or 'kind'.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .alp/.lht/.shd file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
-			mcplib.WithString("palette", mcplib.Description("Optional .pal file to use for index→RGB mapping.")),
+			mcplib.WithString("palette", mcplib.Description("Optional .pal or .pcx palette for index→RGB mapping (TA: Kingdoms keeps most palettes in PCX files, e.g. palettes/aramon.pcx for palettes/aramon.alp).")),
 			mcplib.WithNumber("cell", mcplib.Description("Pixel size of each cell (default 4).")),
 			mcplib.WithString("kind", mcplib.Description("Table kind when the extension does not say: 'alp', 'shd' or 'lht'.")),
 			withGameData(),
@@ -326,7 +327,7 @@ func makePALLookupHandler(r *Resolver) server.ToolHandlerFunc {
 				return errorResult(fmt.Errorf("palette: %w", err)), nil
 			}
 			defer func() { _ = rp.Close() }()
-			p, err = pal.LoadFromFile(rp.LocalPath)
+			p, err = palettepick.LoadFile(rp.LocalPath)
 			if err != nil {
 				return errorResult(fmt.Errorf("load palette: %w", err)), nil
 			}

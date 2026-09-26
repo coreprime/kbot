@@ -221,3 +221,31 @@ func TestGamePaletteLoadsLikeTheGame(t *testing.T) {
 		t.Errorf("nil VFS: %+v", res)
 	}
 }
+
+func TestLoadFileReadsPALAndPCX(t *testing.T) {
+	dir := t.TempDir()
+	pcxPath := filepath.Join(dir, "aramon.PCX")
+	if err := os.WriteFile(pcxPath, makePCX(0x30), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadFile(pcxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := p.Colors[5]; c.R != 0x30 || c.G != 0x31 || c.B != 0x32 {
+		t.Errorf("PCX entry 5 = %v, want 30 31 32", c)
+	}
+
+	palPath := filepath.Join(dir, "long.pal")
+	long := append(makePAL(0x20), make([]byte, 40)...)
+	if err := os.WriteFile(palPath, long, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err = LoadFile(palPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := p.Colors[5]; c.R != 0x20 {
+		t.Errorf("PAL entry 5 = %v, want the first 1,024 bytes", c)
+	}
+}

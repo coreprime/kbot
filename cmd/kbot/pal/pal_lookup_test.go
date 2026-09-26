@@ -1,6 +1,7 @@
 package pal
 
 import (
+	"image/color"
 	"image/png"
 	"io"
 	"os"
@@ -114,5 +115,51 @@ func TestDescribeDoesNotCallIndexZeroTransparent(t *testing.T) {
 	}
 	if strings.Contains(string(out), "transparent sentinel") {
 		t.Errorf("describe still calls index 0 a transparent sentinel:\n%s", out)
+	}
+}
+
+// pcxPalette returns a 1x1 PCX whose palette entry i is (i, g, b).
+func pcxPalette(g, b byte) []byte {
+	data := make([]byte, 128)
+	data[0], data[1], data[2], data[3] = 0x0A, 5, 1, 8
+	data[65], data[66] = 1, 1
+	data = append(data, 0xC1, 0, 0x0C)
+	for i := 0; i < 256; i++ {
+		data = append(data, byte(i), g, b)
+	}
+	return data
+}
+
+// TestLookupTakesPCXPalette checks that --palette accepts a PCX, as TA:
+// Kingdoms keeps most palettes next to their tables in PCX files.
+func TestLookupTakesPCXPalette(t *testing.T) {
+	dir := t.TempDir()
+	palPath := filepath.Join(dir, "aramon.pcx")
+	if err := os.WriteFile(palPath, pcxPalette(7, 9), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	table := make([]byte, 8192)
+	for i := range table {
+		table[i] = 3
+	}
+	src := filepath.Join(dir, "aramon.lht")
+	if err := os.WriteFile(src, table, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out.png")
+	if err := runLookup(t, src, "--palette", palPath, "--cell", "1", "--target", out); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := color.RGBAModel.Convert(img.At(10, 5)).(color.RGBA); got != (color.RGBA{3, 7, 9, 255}) {
+		t.Errorf("cell colour = %v, want the PCX's entry 3 {3 7 9 255}", got)
 	}
 }

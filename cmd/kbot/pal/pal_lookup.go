@@ -10,6 +10,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/pal"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/palettepick"
 )
 
 func newPALLookupCommand() *cobra.Command {
@@ -24,8 +25,10 @@ func newPALLookupCommand() *cobra.Command {
 		Short: "Render a palette lookup table (.ALP, .SHD, .LHT) as a PNG swatch",
 		Long: `Render a TA palette lookup table as a PNG swatch.  Every byte of a table
 is a palette index; each cell is filled with the --palette colour its byte
-selects (default: the embedded TA palette).  Columns are the 256 source
-colours:
+selects (default: the embedded TA palette).  --palette takes a .pal or a
+.pcx; TA: Kingdoms keeps most of its palettes in PCX files next to their
+tables (palettes/aramon.pcx for palettes/aramon.alp).  Columns are the 256
+source colours:
 
   .ALP  65,536 bytes, 256 rows: row a, column b is the colour nearest the
         average of colours a and b (a 256x256-cell image)
@@ -36,7 +39,12 @@ colours:
 
 The game uses a table only when its size is exact and rebuilds it from the
 palette otherwise, so a file of any other size is rejected.  The kind comes
-from the file extension, or from --kind.`,
+from the file extension, or from --kind.
+
+Examples:
+  kbot pal lookup palettes/palette.alp --palette palettes/palette.pal --target alp.png
+  kbot pal lookup palettes/palette.shd --target shd.png
+  kbot pal lookup palettes/aramon.lht --palette palettes/aramon.pcx --target lht.png`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			kind, err := lookupKind(args[0], kindFlag)
@@ -55,7 +63,7 @@ from the file extension, or from --kind.`,
 
 			var p *pal.Palette
 			if palettePath != "" {
-				p, err = pal.LoadFromFile(palettePath)
+				p, err = palettepick.LoadFile(palettePath)
 				if err != nil {
 					return fmt.Errorf("load palette: %w", err)
 				}
@@ -79,7 +87,7 @@ from the file extension, or from --kind.`,
 		},
 	}
 	cmd.Flags().StringVar(&target, "target", "", "Output PNG path (default: stdout)")
-	cmd.Flags().StringVar(&palettePath, "palette", "", "Optional .PAL file to use for index→RGB mapping")
+	cmd.Flags().StringVar(&palettePath, "palette", "", "Optional .pal or .pcx palette for index→RGB mapping")
 	cmd.Flags().IntVar(&cellSize, "cell", 4, "Pixel size of each cell")
 	cmd.Flags().StringVar(&kindFlag, "kind", "", "Table kind when the extension does not say: alp, shd or lht")
 	return cmd

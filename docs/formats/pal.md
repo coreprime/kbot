@@ -27,6 +27,8 @@
 > # .alp as 256×256 cells, .shd / .lht as 256×32 cells
 > kbot pal lookup   palettes/palette.alp --palette palettes/palette.pal --target alp.png
 > kbot pal lookup   palettes/palette.shd --target shd.png
+> # TA: Kingdoms: the palette is usually a PCX next to its tables
+> kbot pal lookup   palettes/aramon.alp --palette palettes/aramon.pcx --target aramon.png
 >
 > # Round-trip to editor-friendly formats
 > kbot pal convert  palettes/palette.pal -o palette.gpl                  # GIMP
@@ -130,7 +132,9 @@ that mathematical mix.
 The game uses a table file only when its size is exact; a missing table
 or one of any other size is rebuilt from the palette. `kbot pal lookup`
 therefore rejects files of any other size. TA: Kingdoms ships tables of
-the same sizes for each of its palettes.
+the same sizes for nearly every palette in its `palettes/` folder; most
+of those palettes are PCX files, and `kbot pal lookup --palette` takes a
+`.pcx` as well as a `.pal`.
 
 > [!IMPORTANT]
 > **A lookup table is not a palette.** Rendering a `.alp` with `kbot pal

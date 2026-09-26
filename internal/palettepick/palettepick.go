@@ -31,7 +31,9 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/coreprime/kbot-io/formats/gaf"
@@ -310,4 +312,19 @@ func loadPaletteFromPath(vfs VFS, p string) (*gaf.Palette, string, error) {
 	}
 	pal, err := tryPCXPalette(vfs, p)
 	return pal, label, err
+}
+
+// LoadFile loads a palette file for display: a .pcx gives the colours the
+// game takes from it (its last 768 bytes; see pal.FromPCX), anything else is
+// read as a .pal (the first 1,024 bytes). TA: Kingdoms keeps most of its
+// palettes in PCX files. path is a file on disk.
+func LoadFile(path string) (*pal.Palette, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(filepath.Ext(path), ".pcx") {
+		return pal.FromPCX(data)
+	}
+	return pal.LoadFromBytes(data)
 }

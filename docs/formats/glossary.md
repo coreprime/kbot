@@ -80,10 +80,14 @@ earlier archives. Load order is (lowest to highest priority):
 `.hpi` → `.ufo` → `.ccx` → `.gp3`.
 
 ### Lookup table
-A `.alp`, `.lht`, or `.shd` file. 1024 bytes structured as 256 × 4
-**palette indices** (not RGB). The engine indexes into them by current
-colour and lighting/shadow bucket; the result is another palette index
-that can be drawn through the regular 8bpp pipeline. See [PAL](pal.md).
+A `.alp`, `.lht`, or `.shd` file: rows of 256 **palette indices** (not
+RGB), one column per source colour. A `.alp` is 65,536 bytes (256 rows,
+one per blend partner); a `.shd` or `.lht` is 8,192 bytes (32 rows, one
+per shade or light level). The engine looks up the current colour in the
+row it needs, and the result is another palette index that can be drawn
+through the regular 8bpp pipeline. The game uses a table only when its
+size is exact; a missing table, or one of any other size, is rebuilt
+from the palette. See [PAL](pal.md).
 
 ### LZ77
 The sliding-window compression used in [HPI](hpi.md) chunks when

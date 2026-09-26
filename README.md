@@ -437,9 +437,11 @@ kbot pal convert palette.pal --target palette.txt --format jasc  # JASC-PAL text
 kbot pal convert palette.pal --target re-emitted.pal --format pal  # binary TA .PAL
 
 # Render a lookup table as a PNG swatch (.ALP 256×256 cells, .SHD/.LHT
-# 256×32 cells) using the embedded palette (or pass --palette)
+# 256×32 cells) using the embedded palette (or pass --palette, a .pal or
+# .pcx; TA: Kingdoms keeps most palettes in PCX files next to their tables)
 kbot pal lookup palette.alp --target alp.png
 kbot pal lookup palette.lht --palette palette.pal --target lht.png
+kbot pal lookup palettes/aramon.alp --palette palettes/aramon.pcx --target aramon-alp.png
 ```
 
 ---

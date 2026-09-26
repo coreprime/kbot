@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -148,6 +149,45 @@ func TestPALLookupToolUsesGameSizes(t *testing.T) {
 		if !tc.wantErr && (out.Width != tc.w || out.Height != tc.h) {
 			t.Errorf("%s: swatch %dx%d, want %dx%d", tc.name, out.Width, out.Height, tc.w, tc.h)
 		}
+	}
+}
+
+// TestPALLookupToolTakesPCXPalette checks that 'palette' may be a PCX, as
+// TA: Kingdoms keeps most palettes in PCX files.
+func TestPALLookupToolTakesPCXPalette(t *testing.T) {
+	root := mediaRoot(t)
+	r := mediaResolver(t, root)
+	pcxData := make([]byte, 128)
+	pcxData[0], pcxData[1], pcxData[2], pcxData[3] = 0x0A, 5, 1, 8
+	pcxData[65], pcxData[66] = 1, 1
+	pcxData = append(pcxData, 0xC1, 0, 0x0C)
+	for i := 0; i < 256; i++ {
+		pcxData = append(pcxData, byte(i), 7, 9)
+	}
+	palPath := writeFile(t, filepath.Join(root, "aramon.pcx"), pcxData)
+	table := make([]byte, 8192)
+	for i := range table {
+		table[i] = 3
+	}
+	src := writeFile(t, filepath.Join(root, "aramon.shd"), table)
+	outPath := filepath.Join(root, "aramon.png")
+	var out palImageOutput
+	if res := callTool(t, makePALLookupHandler(r), "pal_lookup", map[string]any{
+		"path": src, "output": outPath, "cell": 1.0, "palette": palPath,
+	}, &out); res.IsError {
+		t.Fatal(textOf(res))
+	}
+	f, err := os.Open(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := color.RGBAModel.Convert(img.At(10, 5)).(color.RGBA); got != (color.RGBA{3, 7, 9, 255}) {
+		t.Errorf("cell colour = %v, want the PCX's entry 3 {3 7 9 255}", got)
 	}
 }
 
