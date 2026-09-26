@@ -9,6 +9,8 @@ package gameserver
 
 import (
 	"bytes"
+	"log"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +30,41 @@ import (
 // prediction during combat — without it, the script-less server diverges from
 // the COB-running clients the moment a fight starts.
 type CobSource func(name string) ([]byte, bool)
+
+// logMatchPanic reports a panic the match recovered from. It is a variable so
+// tests can capture the message.
+var logMatchPanic = func(format string, args ...any) { log.Printf(format, args...) }
+
+// loadProgram fetches and compiles a unit type's COB, returning nil (a
+// script-less unit) when there is none, when it does not parse, or when
+// reading or compiling it panics — a malformed mod script must cost that
+// unit its animation, not take down the match.
+func loadProgram(name string, cob CobSource) (prog *script.Program) {
+	if cob == nil {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			logMatchPanic("gameserver: scripts/%s.cob: unit runs without its script after a panic: %v", name, r)
+			prog = nil
+		}
+	}()
+	b, _ := cob(name)
+	return compileCOB(b)
+}
+
+// spawnMeta resolves a unit type's metadata, returning nil (the unit is not
+// spawned) when resolving it panics on a malformed unit definition.
+func spawnMeta(spawn sim.SpawnFunc, name string) (meta *sim.UnitMeta) {
+	defer func() {
+		if r := recover(); r != nil {
+			logMatchPanic("gameserver: unit %s: not spawned after a panic loading its definition: %v", name, r)
+			meta = nil
+		}
+	}()
+	meta, _ = spawn(name)
+	return meta
+}
 
 // compileCOB disassembles raw COB bytes into a shared program, returning nil
 // when the bytes are absent or unparseable so the unit degrades to script-less.
@@ -186,17 +223,13 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, co
 	// authority goroutine (spawn resolves during session.Step / Restore).
 	programs := map[string]*script.Program{}
 	bound := func(name string) (*sim.UnitMeta, sim.Binding) {
-		meta, _ := spawn(name)
+		meta := spawnMeta(spawn, name)
 		if meta == nil {
 			return nil, nil
 		}
 		prog, ok := programs[name]
 		if !ok {
-			var b []byte
-			if cob != nil {
-				b, _ = cob(name)
-			}
-			prog = compileCOB(b)
+			prog = loadProgram(name, cob)
 			programs[name] = prog
 		}
 		if prog == nil {
@@ -233,8 +266,10 @@ func NewMatch(id string, seed uint32, inputDelay uint64, spawn sim.SpawnFunc, co
 }
 
 // Run drives the authority loop until Stop. It must run on its own goroutine;
-// it is the sole owner of the session, so no locking is needed.
+// it is the sole owner of the session, so no locking is needed. A panic in the
+// loop ends this match (see recoverRun), not the process hosting it.
 func (m *Match) Run() {
+	defer m.recoverRun()
 	ticker := time.NewTicker(m.tickInterval())
 	defer func() { ticker.Stop() }()
 	for {
@@ -326,13 +361,38 @@ func (m *Match) broadcastControl() {
 // reaper and an explicit Server.Stop can both target the same match.
 func (m *Match) Stop() { m.stopOnce.Do(func() { close(m.quit) }) }
 
+// recoverRun ends a match whose authority loop panicked. Its state may be
+// half-updated, so it is not resumed: the panic is logged, the match stops
+// (each client's connection closes), and it is marked idle so the reaper
+// removes it and the next connection to its id starts a fresh match.
+func (m *Match) recoverRun() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	logMatchPanic("gameserver: match %s stopped after a panic: %v\n%s", m.id, r, debug.Stack())
+	m.Stop()
+	m.emptySince.Store(1)
+}
+
+// post hands v to the authority goroutine on ch, and reports false instead of
+// blocking once the match has stopped.
+func post[T any](m *Match, ch chan<- T, v T) bool {
+	select {
+	case ch <- v:
+		return true
+	case <-m.quit:
+		return false
+	}
+}
+
 func (m *Match) onJoin(c *client) {
 	c.slot = m.nextSlot
 	m.nextSlot++
 	m.clients[c] = struct{}{}
 	m.players.Store(int64(len(m.clients)))
 	m.emptySince.Store(0)
-	go c.writePump()
+	go c.writePump(m.quit)
 	c.send(wire.ServerMsg{Type: wire.MsgJoinAccept, JoinAccept: &wire.JoinAccept{
 		PlayerSlot: c.slot,
 		TickRate:   sim.TickHz,
@@ -521,29 +581,33 @@ func (c *client) readPump(m *Match) {
 		msg, err := c.conn.Recv()
 		if err != nil {
 			if registered {
-				m.unregister <- c
+				post(m, m.unregister, c)
 			}
 			return
 		}
+		// Every hand-off to the authority goroutine gives up once the match
+		// has stopped, so the read loop ends instead of blocking forever.
 		switch msg.Type {
 		case wire.MsgJoin:
 			if !registered {
-				m.register <- c
+				if !post(m, m.register, c) {
+					return
+				}
 				registered = true
 			}
 		case wire.MsgOrder:
-			if registered {
-				m.orders <- clientOrder{from: c, ord: msg}
+			if registered && !post(m, m.orders, clientOrder{from: c, ord: msg}) {
+				return
 			}
 		case wire.MsgControl:
-			if registered && msg.Control != nil {
-				m.control <- *msg.Control
+			if registered && msg.Control != nil && !post(m, m.control, *msg.Control) {
+				return
 			}
 		case wire.MsgLeave:
 			// Voluntary departure: free the slot and end the read loop so the
 			// match can be reaped without waiting on a transport timeout.
 			if registered {
-				m.unregister <- c
+				post(m, m.unregister, c)
 			}
 			return
 		case wire.MsgPing:
@@ -563,14 +627,14 @@ func (c *client) readPump(m *Match) {
 		case wire.MsgResync:
 			// Force Sync: route to the authority goroutine, the sole reader of
 			// session state, to build and push a fresh full snapshot.
-			if registered {
-				m.resync <- c
+			if registered && !post(m, m.resync, c) {
+				return
 			}
 		case wire.MsgDiagnose:
 			// Diagnose: route to the authority goroutine for a read-only full
 			// snapshot the client diffs against its predicted state. No re-seed.
-			if registered {
-				m.diagnose <- c
+			if registered && !post(m, m.diagnose, c) {
+				return
 			}
 		case wire.MsgAck:
 			// flow control hook; no-op for now.
@@ -578,13 +642,23 @@ func (c *client) readPump(m *Match) {
 	}
 }
 
-func (c *client) writePump() {
-	for msg := range c.out {
-		if err := c.conn.Send(msg); err != nil {
+// writePump sends the client's queued messages until the match drops the
+// client (closing out) or stops, then closes the connection.
+func (c *client) writePump(quit <-chan struct{}) {
+	defer func() { _ = c.conn.Close() }()
+	for {
+		select {
+		case msg, ok := <-c.out:
+			if !ok {
+				return
+			}
+			if err := c.conn.Send(msg); err != nil {
+				return
+			}
+		case <-quit:
 			return
 		}
 	}
-	_ = c.conn.Close()
 }
 
 // send queues a message for the client, dropping it if the buffer is full so a
