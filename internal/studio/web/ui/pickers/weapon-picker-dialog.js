@@ -1,10 +1,11 @@
 // weapon-picker-dialog.js
 //
-// React-rendered Change Weapon picker.  Lists every TDF weapon
-// section the kbot server returns via /api/studio/weapons with the
-// same key stats the active Weapons panel surfaces — range,
-// velocity, reload, burst, model, plus a colour swatch and chips
-// for the beam/smoke/cmd-fire/tracks/ballistic/self-prop flags.
+// React-rendered Change Weapon picker.  Lists every weapon a unit can
+// name in the game's weapon table, as /api/studio/weapons returns it,
+// with the same key stats the active Weapons panel surfaces — range,
+// velocity, reload (in the whole ticks the game applies), burst,
+// model, plus a colour swatch and chips for the
+// beam/smoke/cmd-fire/tracks/ballistic/self-prop flags.
 // The currently-installed weapon for the active slot is marked
 // "(current)" and highlighted via `.active`.
 //
@@ -16,6 +17,7 @@
 import { signal } from '@preact/signals'
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { PickerModal } from '@coreprime/kbot-ui/picker-modal'
+import { formatReload } from '../unit-editor/weapon-stats.js'
 
 const _state = signal(null)
 
@@ -101,7 +103,7 @@ export function WeaponPickerDialog() {
              style=${swatchStyle || null}></div>
         <div class="title">${w.name}${isCurrent ? '  (current)' : ''}</div>
         <div class="meta">
-          Reload ${fmt(w.reloadSec, 's')} · Range ${fmt(w.rangeWU, 'wu')} · Velocity ${fmt(w.velocityWU, 'wu/s')}
+          Reload ${formatReload(w)} · Range ${fmt(w.rangeWU, 'wu')} · Velocity ${fmt(w.velocityWU, 'wu/s')}
         </div>
         <div class="meta">
           ${(w.burst > 1) ? `Burst ${w.burst}×${fmt(w.burstRateSec, 's')}` : 'Single shot'} · Model ${w.model || '—'}
