@@ -11,6 +11,7 @@ import (
 
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/palettes"
 )
 
@@ -90,6 +91,81 @@ func TestFeatureSpriteKeepsCornerColours(t *testing.T) {
 	for i, idx := range sp.img.Pix {
 		if _, _, _, a := sp.img.Palette[idx].RGBA(); a != 0xffff {
 			t.Fatalf("pixel %d is transparent; the game draws it", i)
+		}
+	}
+}
+
+// composeOneFeature paints the feature "Rock1" (a 2x2 raw frame of index 79
+// whose key, 9, does not occur) on a one-cell map over white terrain,
+// through the TA or TA: Kingdoms entry point, and returns the result.
+func composeOneFeature(t *testing.T, kingdoms bool) (*image.RGBA, Stats) {
+	t.Helper()
+	frame := &gaf.Frame{
+		Width: 2, Height: 2, TransparencyIndex: 9, Duration: 1,
+		Storage: gaf.StorageRaw, Pixels: []byte{79, 79, 79, 79},
+	}
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vfs := spriteVFS(t, frame)
+	features := []tnt.Feature{{Index: 0, Name: "Rock1"}}
+	base := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	draw.Draw(base, base.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)
+
+	var stats Stats
+	if kingdoms {
+		m := &tnt.Map{IsTAK: true, TAKW: 1, TAKH: 1, TAKFeatureGrid: []uint16{0}, TAKHeight: []byte{0}}
+		m.Header.TileAnims = 1
+		stats, err = ComposeTAK(base, m, features, vfs, pal)
+	} else {
+		m := &tnt.Map{AttrW: 1, AttrH: 1, TileAttr: []tnt.TileAttr{{Feature: 0}}}
+		m.Header.TileAnims = 1
+		stats, err = ComposeWith(base, m, features, vfs, pal, "", "", Options{})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base, stats
+}
+
+// TestComposeDrawsTAFeaturesWithTheGameRule checks the TA preview's choice
+// of transparency: the game draws every pixel of a raw frame whose key does
+// not occur, even when its corners agree.
+func TestComposeDrawsTAFeaturesWithTheGameRule(t *testing.T) {
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := color.RGBAModel.Convert(pal.Colors[79]).(color.RGBA)
+	want.A = 255
+	img, stats := composeOneFeature(t, false)
+	if stats.SpritesPainted != 1 {
+		t.Fatalf("painted %d sprites, want 1", stats.SpritesPainted)
+	}
+	n := 0
+	for i := 0; i < len(img.Pix); i += 4 {
+		if (color.RGBA{img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3]}) == want {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Errorf("%d pixels show the sprite colour, want all 4 of the frame", n)
+	}
+}
+
+// TestComposeTAKGuessesRawKeys checks the TA: Kingdoms preview's choice:
+// its raw atlases often store a key that differs from their background, so
+// a uniform-cornered raw frame whose key does not occur is drawn with the
+// corner colour transparent.
+func TestComposeTAKGuessesRawKeys(t *testing.T) {
+	img, stats := composeOneFeature(t, true)
+	if stats.SpritesPainted != 1 {
+		t.Fatalf("painted %d sprites, want 1", stats.SpritesPainted)
+	}
+	for i := 0; i < len(img.Pix); i += 4 {
+		if (color.RGBA{img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3]}) != (color.RGBA{255, 255, 255, 255}) {
+			t.Fatalf("pixel %d is not the terrain; the corner colour should be transparent", i/4)
 		}
 	}
 }
