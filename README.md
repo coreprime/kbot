@@ -595,17 +595,16 @@ The shared implementation lives in [`internal/maplint`](internal/maplint) so the
 Work with Smacker (.smk/.zrb) video files.
 
 ```bash
-# Show video information
+# Show video information (stored and display size, present audio tracks)
 kbot zrb info video.smk
 
-# Convert to MP4
-kbot zrb to-mp4 video.smk --target video.mp4
-
-# Convert from MP4
-kbot zrb from-mp4 video.mp4 --target video.smk
+# Convert to MP4 at the height the game shows (640x240 interlaced → 640x480)
+kbot zrb to-mp4 video.smk video.mp4
+kbot zrb to-mp4 video.smk video.mp4 --line-double   # repeat lines instead of black
+kbot zrb to-mp4 video.smk video.mp4 --stored-height # keep 640x240
 ```
 
-Requires FFmpeg for conversions.
+Requires FFmpeg for conversions. There is no MP4 → Smacker conversion: stock FFmpeg has no Smacker encoder or muxer and kbot has no Smacker writer, so `kbot zrb from-mp4` reports that and stops. Make SMK2 movies for TA with RAD Game Tools' Smacker tools.
 
 ---
 
@@ -907,9 +906,9 @@ These tools inspect and convert the original TA Smacker/ZRB cutscenes (see [docs
 
 | Tool | Purpose |
 |------|---------|
-| `zrb_info` | Header JSON: signature, geometry, frame count, frame rate, duration and present audio tracks. Native parse, no ffmpeg. |
-| `zrb_to_mp4` | Decode a `.zrb`/`.smk` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. |
-| `zrb_from_mp4` | Re-encode an MP4 back to Smacker via ffmpeg's smackvid/smackaud encoders (best-effort; not in every ffmpeg build). |
+| `zrb_info` | Header JSON: signature, stored and display geometry, frame count, frame rate, duration and the present audio tracks (rate, channels, sample size, compression). Native parse, no ffmpeg. |
+| `zrb_to_mp4` | Decode a `.zrb`/`.smk` to MP4 (H.264/AAC) via ffmpeg at the height the game shows (640x240 interlaced → 640x480) and write it to `output`. |
+| `zrb_from_mp4` | Reports that no Smacker encoder exists: stock ffmpeg has no Smacker encoder or muxer and kbot has no Smacker writer (only an ffmpeg that lists both is tried). |
 
 #### Scenario tools
 

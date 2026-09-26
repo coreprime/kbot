@@ -7,12 +7,14 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 // mediaRoot returns a temp folder, with symlinks resolved, that the path
@@ -223,5 +225,36 @@ func TestFNTToolsFollowTheGame(t *testing.T) {
 	if res := callTool(t, makeFNTRenderHandler(r), "fnt_render",
 		map[string]any{"path": src, "output": filepath.Join(root, "x.png"), "text": "A", "codepage": "klingon"}, nil); !res.IsError {
 		t.Error("an unknown code page was accepted")
+	}
+}
+
+func TestZRBToolsDecodeTheHeader(t *testing.T) {
+	src := testutil.UnpackedFile(t, "data", "1.zrb")
+	r := mediaResolver(t, filepath.Dir(src))
+
+	var info zrbInfoOutput
+	if res := callTool(t, makeZRBInfoHandler(r), "zrb_info", map[string]any{"path": src}, &info); res.IsError {
+		t.Fatal(textOf(res))
+	}
+	if len(info.AudioTracks) != 1 {
+		t.Fatalf("audio tracks = %+v, want the one present track", info.AudioTracks)
+	}
+	if tr := info.AudioTracks[0]; tr.SampleRate != 22050 || tr.Channels != 2 {
+		t.Errorf("track 0 = %+v, want 22050 Hz stereo", tr)
+	}
+	if info.Height != 240 || info.DisplayHeight != 480 || info.HeightMode != "interlaced" {
+		t.Errorf("height %d display %d mode %q, want 240, 480, interlaced", info.Height, info.DisplayHeight, info.HeightMode)
+	}
+
+	out := filepath.Join(t.TempDir(), "x.smk")
+	root := mediaRoot(t)
+	r2 := mediaResolver(t, root)
+	in := writeFile(t, filepath.Join(root, "in.mp4"), []byte("not really"))
+	res := callTool(t, makeZRBFromMP4Handler(r2), "zrb_from_mp4", map[string]any{"path": in, "output": filepath.Join(root, filepath.Base(out))}, nil)
+	if !res.IsError {
+		t.Skip("the installed FFmpeg can write Smacker")
+	}
+	if !strings.Contains(textOf(res), "no Smacker encoder is available") {
+		t.Errorf("zrb_from_mp4 error = %q", textOf(res))
 	}
 }

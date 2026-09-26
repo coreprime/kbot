@@ -9,17 +9,17 @@
 > | `.smk` | Generic Smacker tooling | Standard RAD format. |
 > | `.zrb` | TA's `data/*.zrb` payload | Cavedog renamed Smacker files to `.zrb` to discourage casual extraction. The binary contents are byte-identical. |
 >
-> The Smacker format itself was reverse-engineered by the FFmpeg
-> project years ago and is well-supported by modern tools. kbot uses
-> **FFmpeg** as the conversion engine (it ships built-in Smacker
-> decoders and, on most builds, encoders too).
+> FFmpeg decodes Smacker natively, and kbot uses it as the conversion
+> engine for Smacker → MP4. **Nothing converts the other way:** stock
+> FFmpeg has no Smacker encoder or muxer and kbot has no Smacker writer.
+> SMK2 movies for TA are made with RAD Game Tools' Smacker tools.
 
 > [!TIP]
 > **Try it yourself.**
 > ```bash
 > kbot zrb info     data/1.zrb               # header summary
-> kbot zrb to-mp4   data/1.zrb -t intro.mp4  # decode to MP4 (requires ffmpeg)
-> kbot zrb from-mp4 intro.mp4 -t out.zrb     # re-encode to Smacker
+> kbot zrb to-mp4   data/1.zrb intro.mp4     # decode to a 640x480 MP4 (requires ffmpeg)
+> kbot zrb from-mp4 intro.mp4 out.zrb        # reports that no Smacker encoder exists
 > ```
 >
 > **From Go.** Use [`formats/smacker`](../../formats/smacker/smacker.go):
@@ -42,8 +42,11 @@ $ ls $(kbot ctx path)/data/*.zrb
 ```
 
 Each numbered file is a cinematic — the original "Arm vs Core" intro
-sequence, mission briefings, etc. Resolution is typically **640 × 240**
-(letterboxed 4:3 with VGA-mode squashing) at **30 fps**.
+sequence, mission briefings, etc. The frames are stored at **640 × 240**
+with the **interlaced** flag set, so the game shows them at **640 × 480**
+with every second line black, at **30 fps**. `kbot zrb to-mp4`, the MCP
+`zrb_to_mp4` tool and the studio's video player (and its thumbnails) show
+them the same way.
 
 ---
 
@@ -68,14 +71,21 @@ typedef struct {
     uint32 MClrSize;
     uint32 FullSize;
     uint32 TypeSize;
-    uint32 AudioRate[7];
-    uint32 dummy;            // 4-byte reserved
-    uint32 AudioFlags[7];    // Bits 0-15: format; bits 16-23: channels
-    // …followed by:
-    uint32 FrameSizes[Frames];
-    uint8  FrameTypes[Frames];
+    uint32 AudioRate[7];     // packed: rate in bits 0-23, flags in bits 24-31
+    uint32 dummy;            // 4-byte reserved; the header ends here (104 bytes)
+    // …followed by one entry per frame, plus one for the ring frame
+    // when Flags bit 0 is set:
+    uint32 FrameSizes[Frames (+1)];
+    uint8  FrameTypes[Frames (+1)];
     uint8  HuffmanTrees[TreesSize];
 } SmackerHeader;
+```
+
+`Flags` bits: `0x01` ring frame (one extra frame after the last, for
+looping), `0x02` interlaced (shown at twice the height with every second
+line black), `0x04` doubled (shown at twice the height with every line
+repeated). With both `0x02` and `0x04` set the movie is shown at its
+stored height.
 ```
 
 ### Decoding the frame rate
@@ -84,9 +94,9 @@ The sign of `FrameRate` chooses between two encodings:
 
 | Value | Meaning |
 |------:|---------|
-| `> 0` | Microseconds per frame: `fps = 1_000_000 / FrameRate`. |
-| `< 0` | Negative deci-microseconds: `fps = 100_000 / abs(FrameRate)`. |
-| `0` | No frame-rate info — kbot defaults to 15 fps. |
+| `> 0` | Milliseconds per frame: `fps = 1000 / FrameRate`. |
+| `< 0` | Hundred-thousandths of a second per frame: `fps = 100_000 / abs(FrameRate)`. |
+| `0` | No defined timing — kbot uses 15 fps. |
 
 For 30 fps you'll usually see `-3333` (≈ `-100000/30`).
 
@@ -94,20 +104,25 @@ For 30 fps you'll usually see `-3333` (≈ `-100000/30`).
 
 - **`SMK2`** — original Smacker format. Almost all Cavedog cinematics
   use this.
-- **`SMK4`** — extended format with improved compression. Rare in TA;
-  occasionally seen in mods using newer RAD tooling.
+- **`SMK4`** — extended format with improved compression, from newer RAD
+  tooling. **TA 3.1c plays SMK2 only.**
 
-kbot accepts both; the FFmpeg path handles both transparently.
+kbot reads both (and notes an SMK4 file); FFmpeg decodes both.
 
 ### Audio tracks
 
-Up to 7 simultaneous audio tracks. Each track has its own sample rate
-(`AudioRate[i]`) and a `AudioFlags[i]` word splitting format bits and
-channel count. A track is "present" only if `AudioFlags[i] != 0`.
+Up to 7 audio tracks. Each `AudioRate[i]` word packs the sample rate
+(bits 0–23) and the track's flags (bits 24–31): `0x80` compressed,
+`0x40` present, `0x20` 16-bit (else 8-bit), `0x10` stereo (else mono).
+**The game uses a track only when its present bit is set**, whatever its
+rate. There is no separate flags table: the seven words after the header
+are the frame-size table.
 
 > [!NOTE]
-> **Cavedog's ZRB files often have a single mono track in slot 0** at
-> 22.05 kHz. The other six slots are zeroed.
+> **Cavedog's ZRB files have a single track in slot 0**: the word
+> `0xD0005622` — present, 22,050 Hz, stereo, 8-bit, compressed. The other
+> six slots are zeroed. `kbot zrb info` and the MCP `zrb_info` tool list
+> the present tracks only.
 
 ---
 
@@ -128,29 +143,27 @@ cp data/1.zrb /tmp/intro.smk && ffplay /tmp/intro.smk
 
 ## Conversion pipelines
 
-`kbot zrb to-mp4` invokes FFmpeg with sensible defaults:
+`kbot zrb to-mp4` reads the header, then has FFmpeg decode the movie to
+H.264 (CRF 18) and AAC **as the game shows it**: at the display height
+(an interlaced 640×240 movie becomes 640×480 with every second line
+black), with square pixels, stopping at the header's frame count (a ring
+frame is not shown).
 
-```
-ffmpeg -i in.zrb \
-       -c:v libx264 -preset fast -crf 18 \
-       -c:a aac -b:a 192k \
-       -y out.mp4
-```
+| Flag | Effect |
+|------|--------|
+| `--line-double` | Fill an interlaced movie's extra lines by repeating each stored line instead of black. |
+| `--stored-height` | Keep the stored frame height (640×240). |
 
-These flags target visually-lossless quality (CRF 18) at high audio
-fidelity. Adjust if you need smaller files.
-
-The reverse direction (`from-mp4`) requires an FFmpeg build with the
-`smackvid` / `smackaud` encoders enabled. Many distributions ship
-without those — the error message will tell you so. RAD's own SmkUtil /
-Bink tools remain the gold standard for re-encoding.
+The studio's video player uses the same conversion, and its thumbnails
+keep the 4:3 display shape (128×96, lines doubled).
 
 > [!IMPORTANT]
-> **`from-mp4` is a best-effort path.** Smacker's compression scheme is
-> tuned for very low-CPU playback rather than fidelity; even when
-> encoding works, expect quantisation noise on gradients. For final
-> shipping cinematics, run a separate pass through RAD's official
-> tools.
+> **There is no MP4 → Smacker path.** Stock FFmpeg has no Smacker
+> encoder (`smackvid` / `smackaud`) or muxer, and kbot has no Smacker
+> writer. `kbot zrb from-mp4` and the MCP `zrb_from_mp4` tool report
+> exactly that (and only try FFmpeg when it lists both a `smackvid`
+> encoder and an `smk` muxer). Make SMK2 movies for TA with RAD Game
+> Tools' Smacker tools.
 
 ---
 
@@ -158,20 +171,18 @@ Bink tools remain the gold standard for re-encoding.
 
 | Asset | Resolution | Frames | Duration | File size |
 |-------|-----------|--------|----------|-----------|
-| Intro cinematic (`data/1.zrb`) | 640 × 240 | 599 | ~20 s | ~3 MB |
-| Short mission brief (`data/N.zrb`) | 640 × 240 | 100–300 | 3–10 s | 0.5–2 MB |
+| Intro cinematic (`data/1.zrb`) | 640 × 240 (shown 640 × 480) | 599 | ~20 s | ~7 MB |
+| Other cinematics (`data/2.zrb`–`5.zrb`) | 640 × 240 (shown 640 × 480) | — | — | 10–41 MB |
 
 ---
 
 ## Gotchas
 
 > [!WARNING]
-> **`AudioRate` and `AudioFlags` slots may contain stale data** even
-> when the corresponding track is not used. Only treat track `i` as
-> present if `AudioFlags[i] != 0`. kbot's `Info()` output prints all
-> seven slots regardless, which is why you'll see lines like
-> `Track 0: 3489682978 Hz, 1 channels` — the 3.4 GHz "sample rate" is
-> uninitialised memory the file ships with, not a real value.
+> **`AudioRate` is a packed word, not a rate.** Read as a plain number the
+> retail word `0xD0005622` is 3,489,682,978 "Hz". Mask the low 24 bits for
+> the rate and test bit `0x40000000` for presence. Tools that read seven
+> more "flags" words after the header are reading the frame-size table.
 
 - **Smacker is not Bink.** RAD released Smacker first, then Bink as
   its successor. TA only uses Smacker; TA: Kingdoms switched to Bink.
@@ -179,10 +190,11 @@ Bink tools remain the gold standard for re-encoding.
 - **`SMK4` Huffman trees are not backward-compatible with `SMK2`
   decoders.** FFmpeg handles both, but older third-party libraries
   may not.
-- **A few Cavedog cinematics ship with negative `FrameRate` values that
-  decode to non-integer fps** (e.g. `-3300` → 30.30 fps). MP4
-  converters generally clamp to integer fps — drop your shutter to
-  `30000/1001` if you care about exact timing.
+- **The shipped cinematics store `-3333`** (100,000 / 3,333 ≈ 30.003
+  fps).
+- **The stored height is not the shown height.** Check the interlaced
+  and doubled flags; playing the retail movies at 640×240 squashes them
+  to half height.
 - **Renaming `.zrb` ↔ `.smk` is harmless** but the game expects `.zrb`
   in the `data/` directory. Don't ship `.smk`-named files to the
   engine.
