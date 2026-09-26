@@ -14,6 +14,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/maplint"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 func newTNTLintCommand() *cobra.Command {
@@ -325,15 +326,13 @@ func readSiblingOTA(arg string, hit *cli.VFSInputHit, otaOverride string, vfs *f
 	return nil, ""
 }
 
-// scanFeatureRegistry walks features/*.tdf in the VFS and returns a
-// lowercased-feature-name → metal-yield map.
+// scanFeatureRegistry walks features/**/*.tdf in the VFS, in game
+// enumeration order, and returns a lowercased-feature-name → metal-yield
+// map.  The first definition of a name wins, as in the game.
 func scanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
 	out := map[string]int{}
-	for _, p := range vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	seen := map[string]bool{}
+	for _, p := range gamevfs.FeatureFiles(vfs) {
 		data, err := vfs.ReadFile(p)
 		if err != nil {
 			continue
@@ -343,9 +342,13 @@ func scanFeatureRegistry(vfs *filesystem.VirtualFileSystem) map[string]int {
 			continue
 		}
 		for _, s := range doc.Sections() {
-			metal := s.Int("metal")
-			if metal > 0 {
-				out[strings.ToLower(s.Name())] = metal
+			name := strings.ToLower(s.Name())
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			if metal := s.Int("metal"); metal > 0 {
+				out[name] = metal
 			}
 		}
 	}

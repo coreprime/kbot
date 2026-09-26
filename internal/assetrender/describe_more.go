@@ -21,6 +21,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // init registers the heavier structured / script-analysis describers. Keeping
@@ -484,17 +485,16 @@ func describeTNT(r *Renderer, vpath string, data []byte, out map[string]any) {
 	}
 }
 
-// lookupFeatureTDF scans features/*.tdf for the named feature and returns its
-// presentation metadata. Empty strings mean the feature wasn't found.
+// lookupFeatureTDF scans features/**/*.tdf, in game enumeration order, for
+// the named feature and returns the presentation metadata of its first
+// definition, the one the game uses. Empty strings mean the feature wasn't
+// found.
 func (r *Renderer) lookupFeatureTDF(name string) (description, category, filename, seqname string) {
 	if r.vfs == nil {
 		return
 	}
 	upper := strings.ToUpper(name)
-	for _, fp := range r.vfs.List() {
-		if !strings.HasPrefix(fp, "features/") || !strings.HasSuffix(strings.ToLower(fp), ".tdf") {
-			continue
-		}
+	for _, fp := range gamevfs.FeatureFiles(r.vfs) {
 		data, err := r.vfs.ReadFile(fp)
 		if err != nil {
 			continue

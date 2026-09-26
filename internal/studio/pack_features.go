@@ -26,6 +26,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // featureDefsForRenderer builds (once per session) the id → def catalogue the
@@ -361,19 +362,16 @@ func (sess *Session) packFeatureModels(catalog map[string]packFeatureJSON, asset
 // [w, h, originX, originY] of the first frame.
 type gafFrameDims map[string][4]int
 
-// buildPackFeatureCatalog walks every features/*.tdf in the VFS and returns
-// the id → catalogue entry map.  Duplicate ids keep the first definition, the
-// same rule the studio's feature scan applies.  GAF sprite dimensions are
+// buildPackFeatureCatalog walks every features/**/*.tdf in the VFS, in the
+// order the game enumerates them (gamevfs.FeatureFiles), and returns the id →
+// catalogue entry map.  Duplicate ids keep the first definition, as the game
+// does and as the studio's feature scan does.  GAF sprite dimensions are
 // read once per referenced anims/<filename>.gaf.
 func (sess *Session) buildPackFeatureCatalog() (map[string]packFeatureJSON, map[string]featureGafRef) {
 	out := map[string]packFeatureJSON{}
 	refs := map[string]featureGafRef{}
 	gafCache := map[string]gafFrameDims{}
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	for _, p := range gamevfs.FeatureFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue

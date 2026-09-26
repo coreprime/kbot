@@ -19,8 +19,10 @@ import (
 
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // Stats summarises what the preview compositor did so callers can surface
@@ -282,33 +284,40 @@ func newFeatureSpriteCache(vfs *filesystem.VirtualFileSystem, palette *gaf.Palet
 	}
 }
 
+// loadTDFIndex indexes every feature definition by lower-case name, the
+// way the game resolves them: features/**/*.tdf in game enumeration order
+// (gamevfs.FeatureFiles) with the first definition of a name winning.
+// Retail CarScar05, defined in both features/urban/cars2.tdf and cars.tdf,
+// therefore draws from anims/cars2.gaf. A first definition without a
+// filename= leaves the feature without a sprite, as in the game.
 func (c *featureSpriteCache) loadTDFIndex() {
 	if c.tdfLoaded {
 		return
 	}
 	c.tdfLoaded = true
-	for _, p := range c.vfs.List() {
-		lp := strings.ToLower(p)
-		if !strings.HasPrefix(lp, "features/") || !strings.HasSuffix(lp, ".tdf") {
-			continue
-		}
+	for _, p := range gamevfs.FeatureFiles(c.vfs) {
 		data, err := c.vfs.ReadFile(p)
 		if err != nil {
 			continue
 		}
-		doc, err := tdf.ParseString(string(data))
-		if err != nil {
+		var defs []ta.Feature
+		if err := tdf.Unmarshal(data, &defs); err != nil {
 			continue
 		}
-		for _, sec := range doc.Sections() {
-			ref := featureRef{
-				gafName:    sec.String("filename"),
-				seqName:    sec.String("seqname"),
-				footprintX: sec.Int("footprintx"),
-				footprintZ: sec.Int("footprintz"),
-			}
-			if ref.gafName == "" {
+		for i := range defs {
+			d := &defs[i]
+			key := strings.ToLower(strings.TrimSpace(d.Key))
+			if key == "" {
 				continue
+			}
+			if _, dup := c.tdfIndex[key]; dup {
+				continue
+			}
+			ref := featureRef{
+				gafName:    strings.TrimSpace(d.Filename),
+				seqName:    strings.TrimSpace(d.SeqName),
+				footprintX: d.FootprintX,
+				footprintZ: d.FootprintZ,
 			}
 			// Empty / missing footprint defaults to 1×1 — matches the
 			// studio's featureAnchorWorld fallback (footprintX || 1).
@@ -318,7 +327,7 @@ func (c *featureSpriteCache) loadTDFIndex() {
 			if ref.footprintZ <= 0 {
 				ref.footprintZ = 1
 			}
-			c.tdfIndex[strings.ToLower(sec.Name())] = ref
+			c.tdfIndex[key] = ref
 		}
 	}
 }
@@ -330,7 +339,7 @@ func (c *featureSpriteCache) sprite(name string) *spriteImage {
 	}
 	c.loadTDFIndex()
 	ref, ok := c.tdfIndex[key]
-	if !ok {
+	if !ok || ref.gafName == "" {
 		c.sprites[key] = nil
 		return nil
 	}

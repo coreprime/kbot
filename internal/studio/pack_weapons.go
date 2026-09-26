@@ -11,12 +11,12 @@ package studio
 // not a stats database.
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/gamedata/tak"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // packWeaponJSON is one weapons.json entry.  Colour fields are resolved
@@ -121,18 +121,16 @@ type packWeaponColorProbe struct {
 }
 
 // buildPackWeaponCatalog enumerates every weapon section in every
-// weapons/*.tdf in the VFS (the TDF section header IS the weapon id) and
+// weapons/*.tdf in the VFS (the TDF section header IS the weapon id), in the
+// order the game lists them (top level only; gamevfs.WeaponFiles), and
 // returns the id → render-fields catalogue.  Duplicate ids keep the first
-// definition encountered, matching how loadWeaponSection resolves per-unit
-// refs, so unitdb weapon slots and this catalogue always agree.
+// definition encountered, as the game does and as loadWeaponSection
+// resolves per-unit refs, so unitdb weapon slots and this catalogue always
+// agree.
 func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 	pal := sess.paletteRGB()
 	out := map[string]packWeaponJSON{}
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	for _, p := range gamevfs.WeaponFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
@@ -283,18 +281,10 @@ func takEffectClass(sec *tak.Weapon) string {
 // appendFBIWeaponCatalog adds every inline [WEAPONn] section found in
 // units/*.fbi to the catalogue, keyed by lower-case weapon name= — the same
 // key the unitdb per-unit weapons array carries for TA:K (see the slot loop
-// in buildPack).  First definition wins, matching the TDF scan above; the
-// VFS walk is sorted so the winner is deterministic.
+// in buildPack).  First definition wins, matching the TDF scan above, with
+// the unit files taken in game enumeration order (gamevfs.UnitFiles).
 func (sess *Session) appendFBIWeaponCatalog(out map[string]packWeaponJSON) {
-	paths := make([]string, 0)
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if strings.HasPrefix(lower, "units/") && strings.HasSuffix(lower, ".fbi") {
-			paths = append(paths, p)
-		}
-	}
-	sort.Strings(paths)
-	for _, p := range paths {
+	for _, p := range gamevfs.UnitFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue

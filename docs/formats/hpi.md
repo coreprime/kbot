@@ -90,6 +90,20 @@
 > loose file at the same path, so the resolution short-circuits at the
 > top of the stack.
 
+> ### Which definition wins
+>
+> Features, weapons and units are loaded by listing a directory:
+> `features/**/*.tdf` (subfolders included), `weapons/*.tdf` and
+> `units/*.fbi` (top level only — a `weapons/old/` subfolder is never
+> read). The listing runs loose files first, then each mounted archive in
+> mount order with its entries in **stored order**, and the **first**
+> definition of a name wins; later ones are ignored. Retail `CarScar05` is
+> defined in `features/urban/cars2.tdf` and again in `cars.tdf`, and
+> `cars2.tdf` is stored first, so the game draws it from
+> `anims/cars2.gaf`. The studio (feature palette, sandbox, packs, unit and
+> weapon lists), `kbot tnt preview` and `kbot tnt lint`, and the MCP tools
+> apply the same rule.
+
 ---
 
 ## At a glance

@@ -14,6 +14,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/gamedata/tak"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the
@@ -1077,16 +1078,13 @@ func (sess *Session) resolveExplosion(name string) *explosionJSON {
 }
 
 // loadWeaponSection finds the weapons/*.tdf section whose key
-// matches `name` (case-insensitive).  Returns nil when no weapons
-// folder ships or the ref doesn't resolve — the client treats that
-// as "use default reload" and the Fire button still works.
+// matches `name` (case-insensitive): the first definition in the order the
+// game lists weapons/*.tdf (top level only; gamevfs.WeaponFiles).  Returns
+// nil when no weapons folder ships or the ref doesn't resolve — the client
+// treats that as "use default reload" and the Fire button still works.
 func (sess *Session) loadWeaponSection(name string) *ta.Weapon {
 	want := strings.ToUpper(strings.TrimSpace(name))
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	for _, p := range gamevfs.WeaponFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue
@@ -1224,11 +1222,8 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 func (sess *Session) buildWeaponsList() []unitWeaponJSON {
 	seen := map[string]bool{}
 	out := []unitWeaponJSON{}
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	// First definition in game enumeration order wins (gamevfs.WeaponFiles).
+	for _, p := range gamevfs.WeaponFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue

@@ -24,6 +24,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
@@ -1446,11 +1447,9 @@ func (sess *Session) scanFeatures() ([]featureEntry, map[string]featureEntry) {
 
 	var out []featureEntry
 	byName := make(map[string]featureEntry)
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "features/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
+	// Game enumeration order plus first-definition-wins gives each id the
+	// definition TA 3.1c uses (retail CarScar05 comes from cars2.tdf).
+	for _, p := range gamevfs.FeatureFiles(sess.vfs) {
 		data, err := sess.vfs.ReadFile(p)
 		if err != nil {
 			continue

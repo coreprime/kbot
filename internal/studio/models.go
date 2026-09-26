@@ -21,6 +21,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/pcx"
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // registerModelAPI wires the 3DO + texture endpoints into the shared mux.
@@ -111,10 +112,11 @@ func (sess *Session) buildModelIndex() {
 			stem := path.Base(lower)
 			stem = stem[:len(stem)-len(path.Ext(stem))]
 			seen.buildPic[stem] = true
-		case strings.HasPrefix(lower, "units/") && strings.HasSuffix(lower, ".fbi"):
-			seen.fbi = append(seen.fbi, p)
 		}
 	}
+	// Unit definitions: units/*.fbi at the top level only, in the order the
+	// game lists them, so the first definition of a unit name is the game's.
+	seen.fbi = gamevfs.UnitFiles(sess.vfs)
 
 	byID := make(map[string]modelEntry)
 
