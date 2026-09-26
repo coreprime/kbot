@@ -104,6 +104,10 @@ func TestWarmSizeCheckRejectsImpossibleHeaders(t *testing.T) {
 		{"sct tile graphics past EOF", "sct", "sections/x.sct", le(3, 0, 0xFFFFFFFF, 28, 1, 1, 28)},
 		{"tnt attribute grid past EOF", "tnt", "maps/x.tnt", append(le(0x2000, 0xFFFFFFFF, 0xFFFFFFFF, 64, 64, 64), make([]byte, 64)...)},
 		{"tnt unknown version", "tnt", "maps/x.tnt", make([]byte, 64)},
+		// 0x80000000 * 0x80000000 * 4 is 2^64, which wraps to 0 in 64 bits.
+		{"tnt attribute grid size over 64 bits", "tnt", "maps/x.tnt", append(le(0x2000, 0x80000000, 0x80000000, 0, 64, 64, 0), make([]byte, 36)...)},
+		// 268912474 * 3810976486 cells * 18 bytes wraps to 2936 in 64 bits.
+		{"sct tile map size over 64 bits", "sct", "sections/x.sct", append(le(3, 0, 0, 28, 268912474, 3810976486, 28), make([]byte, 2936)...)},
 		{"smk not a movie", "video", "video/x.smk", []byte("not a smacker file at all")},
 	}
 	for _, c := range cases {
