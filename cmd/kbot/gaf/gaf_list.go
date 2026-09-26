@@ -19,7 +19,8 @@ func newGAFListCommand() *cobra.Command {
 		Use:   "list <file.gaf>",
 		Short: "List sequences in a GAF file",
 		Long: `Print a table of all sequences in a GAF file showing the sequence
-name, frame count, and total duration.`,
+name, frame count, whether the game loops it, and the time one pass takes
+(each frame shows for its duration in ticks of 1/30 s, at least one tick).`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, err := cli.ReadInput(args, stream)
@@ -40,22 +41,26 @@ name, frame count, and total duration.`,
 
 			header := reader.Header()
 			fmt.Fprintf(os.Stderr, "GAF: %d sequence(s), version 0x%08X\n\n",
-				header.SequenceCount, header.Version)
+				len(sequences), header.Version)
+			for _, warn := range reader.Warnings() {
+				fmt.Fprintf(os.Stderr, "⚠ %s\n", warn)
+			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(w, "#\tName\tFrames\tDuration (ticks)\tDuration (sec)")
-			_, _ = fmt.Fprintln(w, "─\t────\t──────\t────────────────\t──────────────")
+			_, _ = fmt.Fprintln(w, "#\tName\tFrames\tLoops\tDuration (ticks)\tDuration (sec)")
+			_, _ = fmt.Fprintln(w, "─\t────\t──────\t─────\t────────────────\t──────────────")
 
 			totalFrames := 0
 			for i, seq := range sequences {
 				frames := len(seq.Frames)
 				totalFrames += frames
-				ticks := uint32(0)
-				for _, f := range seq.Frames {
-					ticks += f.Duration
+				ticks := seq.TotalTicks()
+				secs := float64(ticks) / gaf.TicksPerSecond
+				loops := "no"
+				if seq.Loops() {
+					loops = "yes"
 				}
-				secs := float64(ticks) / 30.0
-				_, _ = fmt.Fprintf(w, "%d\t%s\t%d\t%d\t%.2f\n", i, seq.Name, frames, ticks, secs)
+				_, _ = fmt.Fprintf(w, "%d\t%s\t%d\t%s\t%d\t%.2f\n", i, seq.Name, frames, loops, ticks, secs)
 			}
 			_ = w.Flush()
 

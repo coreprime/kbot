@@ -3,7 +3,6 @@ package gaf
 import (
 	"bytes"
 	"fmt"
-	"image/gif"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,21 +17,32 @@ import (
 
 func newGAFExportCommand() *cobra.Command {
 	var (
-		stream      bool
-		target      string
-		format      string
-		sequence    int
-		palettePath string
+		stream       bool
+		target       string
+		format       string
+		sequence     int
+		palettePath  string
+		transparency string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "export <file.gaf>",
 		Short: "Export a GAF sequence as PNG or GIF",
-		Long: `Export one or all sequences from a GAF file.
+		Long: `Export one sequence from a GAF file as an animated PNG (APNG, the
+default) or GIF.
 
 When --sequence is omitted, the first sequence (index 0) is exported.
-Use --format to choose between PNG (animated APNG) and GIF.
 Output goes to --target or defaults to <input>.<format>.
+
+Frames are drawn as the game draws them (--transparency game): a raw
+frame's pixels equal to its key and a compressed frame's skipped pixels
+are transparent, and palette index 0 is opaque black. Each frame shows
+for its duration in ticks of 1/30 s, and the animation loops only when
+the sequence's loop byte is set, otherwise it plays once.
+--transparency heuristic guesses the key of raw frames from their
+corner pixels, which suits TA: Kingdoms texture atlases whose stored
+key does not match the background; --transparency none draws every
+pixel.
 
 By default the embedded TA palette is used, which is correct for Total
 Annihilation palettes. TA: Kingdoms ships per-asset palettes in same-named
@@ -42,8 +52,8 @@ Point --palette at the .pal or .pcx file that matches the GAF being
 exported.
 
 Examples:
-  kbot gaf export units.gaf --format gif
-  kbot gaf export units.gaf --format png --sequence 3
+  kbot gaf export units.gaf
+  kbot gaf export units.gaf --format gif --sequence 3
   kbot gaf export units.gaf --format gif --target walk.gif
   kbot gaf export anims/actionbuttons.gaf --palette anims/actionbuttons.pcx
   kbot gaf export units/araat.gaf --palette palettes/aramon.pcx`,
@@ -78,6 +88,10 @@ Examples:
 			if err != nil {
 				return err
 			}
+			opts, err := parseTransparencyFlag(transparency)
+			if err != nil {
+				return err
+			}
 
 			seq := sequences[sequence]
 
@@ -100,16 +114,12 @@ Examples:
 
 			switch format {
 			case "gif":
-				g, err := seq.ToGIF(palette)
-				if err != nil {
-					return fmt.Errorf("GIF conversion failed: %w", err)
-				}
-				if err := gif.EncodeAll(outFile, g); err != nil {
+				if err := seq.WriteGIFWith(outFile, palette, opts); err != nil {
 					return fmt.Errorf("GIF encode failed: %w", err)
 				}
 
 			case "png":
-				if err := seq.ToAPNG(palette, outFile); err != nil {
+				if err := seq.ToAPNGWith(palette, opts, outFile); err != nil {
 					return fmt.Errorf("APNG conversion failed: %w", err)
 				}
 			}
@@ -122,12 +132,27 @@ Examples:
 
 	cmd.Flags().BoolVar(&stream, "stream", false, "Read input from stdin")
 	cmd.Flags().StringVar(&target, "target", "", "Output file path (default: <input>.<format>)")
-	cmd.Flags().StringVar(&format, "format", "gif", "Output format: png or gif")
+	cmd.Flags().StringVar(&format, "format", "png", "Output format: png (animated PNG) or gif")
 	cmd.Flags().IntVar(&sequence, "sequence", 0, "Sequence index to export (default: 0)")
 	cmd.Flags().StringVar(&palettePath, "palette", "",
 		"Palette source: .pal file or .pcx with embedded palette (default: embedded TA palette)")
+	cmd.Flags().StringVar(&transparency, "transparency", "game",
+		"Transparent pixels: game (the stored key and skipped pixels), heuristic (corner guess for TA: Kingdoms raw frames) or none")
 
 	return cmd
+}
+
+// parseTransparencyFlag maps --transparency to render options.
+func parseTransparencyFlag(v string) (gaf.RenderOptions, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "game", "metadata":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, nil
+	case "heuristic":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeHeuristic}, nil
+	case "none":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}, nil
+	}
+	return gaf.RenderOptions{}, fmt.Errorf("--transparency must be game, heuristic or none, got %q", v)
 }
 
 // loadGAFRenderPalette resolves a palette for CLI GAF rendering. When path is
@@ -160,6 +185,10 @@ func loadGAFRenderPalette(path string) (*gaf.Palette, error) {
 }
 
 func paletteFromPALBytes(data []byte, src string) (*gaf.Palette, error) {
+	// Like the game, use the first 1,024 bytes of a longer file.
+	if len(data) > 1024 {
+		data = data[:1024]
+	}
 	pal, err := gaf.LoadPaletteFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse palette %s: %w", src, err)

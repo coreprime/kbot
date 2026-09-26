@@ -249,21 +249,26 @@ All read commands support `--stream` to read the archive from stdin.
 Work with GAF animation files containing sprite sequences.
 
 ```bash
-# List sequences
+# List sequences (frame count, whether the game loops it, duration)
 kbot gaf list sprites.gaf
 
-# Export a sequence as GIF or PNG
-kbot gaf export sprites.gaf --format gif
-kbot gaf export sprites.gaf --format png --sequence 3
+# Export a sequence as an animated PNG (default) or GIF
+kbot gaf export sprites.gaf
+kbot gaf export sprites.gaf --format gif --sequence 3
 
-# Dump all sequences and frames to a folder
-kbot gaf dump sprites.gaf --target ./sprites --format png
+# Dump all sequences and frames to a folder (PNG by default)
+kbot gaf dump sprites.gaf --target ./sprites
 
 # Build a GAF from a dump folder
 kbot gaf build ./sprites --target rebuilt.gaf
+
+# Check that decode→encode and dump→build keep what the game reads
+kbot gaf roundtrip ./anims
 ```
 
-The dump output includes a `frames.csv` in each sequence folder with timing metadata. The build command reads this CSV to reconstruct frame durations.
+Frames are exported as the game draws them: a raw frame's key pixels and a compressed frame's skipped pixels are transparent, palette index 0 is opaque black, frames show for their duration in 1/30 s ticks, and an animation loops only when the sequence's loop byte is set.
+
+Each sequence folder of a dump holds the frame images, a `frames.csv` (size, origin, key, duration, storage and the +11 byte of every frame) and a `sequence.csv` (position, exact name, loop word and +4 word). The build command reads both back, so a dump/build cycle keeps what the game reads. A sequence without a `sequence.csv` loops, like every stock sequence. Frames without a storage are compressed, except that every frame written to `textures/*.gaf` or `anims/vismasks.gaf` is raw, because the game reads those as plain pixel arrays (`--storage` overrides). Composite (layered) frames are written flattened.
 
 ---
 
