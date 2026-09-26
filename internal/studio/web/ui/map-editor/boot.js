@@ -112,6 +112,7 @@ import { resetPickerDrag } from './modes/picker.js'
 import { cancelPan } from './cursor.js'
 import { bumpContentVersion } from './content-cache.js'
 import { defaultOTAState } from './helpers.js'
+import { editorOTAState } from './ota-state.js'
 import { pickedPlayerCounts } from './dialogs/dice-picker.js'
 import {
   invalidateMinimapBase,
@@ -267,7 +268,10 @@ export async function openLoadedMap(data, card) {
       originY: cat?.originY || 0,
     })
   }
-  state.ota = data.ota || defaultOTAState(state.name, state.planet, w, h)
+  // The .ota the server read (its schemas and start positions as the game
+  // numbers them, plus the file itself so a save edits it in place); one it
+  // could not read keeps the file and its error, and a save leaves it as is.
+  state.ota = editorOTAState(data.ota, defaultOTAState(state.name, state.planet, w, h))
   state.activeSchema = 0
   // Bump again now that features are populated — the spatial /
   // name indices need to rebuild after the bulk load.
@@ -345,7 +349,9 @@ export async function openLoadedMap(data, card) {
   // will rebuild on the next renderCanvas tick.
   resetGL()
   renderCanvas()
-  setStatus(`Opened ${state.name} (${w}×${h}).`)
+  setStatus(state.ota?.error
+    ? `Opened ${state.name} (${w}×${h}), but its .ota could not be read (${state.ota.error}); saving will leave the .ota unchanged.`
+    : `Opened ${state.name} (${w}×${h}).`)
 }
 
 export async function startEditor() {

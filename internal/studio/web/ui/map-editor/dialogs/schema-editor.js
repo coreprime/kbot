@@ -10,11 +10,18 @@
 // stays purely functional (and the value isn't a stale closure if
 // Open is called twice without an Apply in between).
 //
+// Apply stores what the game reads: text trimmed, the meteor density,
+// duration and interval as fractions, and refuses text the game would read
+// back differently (see ota-state.js), so a save that edits the .ota in
+// place changes only what the user changed.
+//
 // Cross-module deps via hostCallbacks:
 //   - refreshSchemaSelector() — rerender the dropdown after rename
 
 import { state, $, hostCallbacks } from '../../host-context.js'
 import { beginTransaction, commitTransaction } from '../undo.js'
+import { cleanOTAText, firstOTAValueError, parseOTANumber } from '../ota-state.js'
+import { showDialogMessage } from './ota.js'
 
 const _state = { schemaBeingEdited: -1 }
 
@@ -36,6 +43,7 @@ export function openSchemaEditor(index) {
   $('#se-meteor-density').value = s.meteorDensity || 0
   $('#se-meteor-duration').value = s.meteorDuration || 0
   $('#se-meteor-interval').value = s.meteorInterval || 0
+  showDialogMessage('#se-error', '')
   // Close the schema dropdown so it doesn't sit on top of the dialog.
   $('#schema-dropdown-popup')?.classList.add('hidden')
   $('#schema-edit-dialog').classList.remove('hidden')
@@ -57,22 +65,36 @@ export function applySchemaEditor() {
     closeSchemaEditor()
     return
   }
+  const text = {
+    type: cleanOTAText($('#se-type').value),
+    aiProfile: cleanOTAText($('#se-ai-profile').value),
+    meteorWeapon: cleanOTAText($('#se-meteor-weapon').value),
+  }
+  const problem = firstOTAValueError({
+    Type: text.type,
+    'AI profile': text.aiProfile,
+    'Meteor weapon': text.meteorWeapon,
+  })
+  if (problem) {
+    showDialogMessage('#se-error', problem)
+    return
+  }
   beginTransaction()
   const s = state.ota.schemas[idx]
-  s.name = $('#se-name').value.trim() || 'Default'
-  s.type = $('#se-type').value.trim() || 'Network 1'
-  s.aiProfile = $('#se-ai-profile').value
-  s.surfaceMetal = parseInt($('#se-surface-metal').value, 10) || 0
-  s.mohoMetal = parseInt($('#se-moho-metal').value, 10) || 0
-  s.humanMetal = parseInt($('#se-human-metal').value, 10) || 0
-  s.computerMetal = parseInt($('#se-computer-metal').value, 10) || 0
-  s.humanEnergy = parseInt($('#se-human-energy').value, 10) || 0
-  s.computerEnergy = parseInt($('#se-computer-energy').value, 10) || 0
-  s.meteorWeapon = $('#se-meteor-weapon').value.trim()
-  s.meteorRadius = parseInt($('#se-meteor-radius').value, 10) || 0
-  s.meteorDensity = parseInt($('#se-meteor-density').value, 10) || 0
-  s.meteorDuration = parseInt($('#se-meteor-duration').value, 10) || 0
-  s.meteorInterval = parseInt($('#se-meteor-interval').value, 10) || 0
+  // The name only labels the schema in the editor; the file numbers
+  // schemas Schema 0, Schema 1, ... by their order.
+  s.name = $('#se-name').value.trim() || s.name || 'Default'
+  Object.assign(s, text)
+  s.surfaceMetal = parseOTANumber($('#se-surface-metal').value)
+  s.mohoMetal = parseOTANumber($('#se-moho-metal').value)
+  s.humanMetal = parseOTANumber($('#se-human-metal').value)
+  s.computerMetal = parseOTANumber($('#se-computer-metal').value)
+  s.humanEnergy = parseOTANumber($('#se-human-energy').value)
+  s.computerEnergy = parseOTANumber($('#se-computer-energy').value)
+  s.meteorRadius = parseOTANumber($('#se-meteor-radius').value)
+  s.meteorDensity = parseOTANumber($('#se-meteor-density').value, true)
+  s.meteorDuration = parseOTANumber($('#se-meteor-duration').value, true)
+  s.meteorInterval = parseOTANumber($('#se-meteor-interval').value, true)
   commitTransaction(`Edit schema: ${s.name}`)
   hostCallbacks.refreshSchemaSelector?.()
   closeSchemaEditor()

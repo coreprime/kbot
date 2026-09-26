@@ -1023,6 +1023,14 @@ body[data-game="takingdoms"] #welcome-dialog .welcome-tab.active {
   font-size: 13px;
   margin-bottom: 16px;
 }
+/* One-line notes in a dialog: .dialog-error for input the dialog refuses,
+   .dialog-warning for a problem with the file being edited. */
+.dialog-message {
+  font-size: 13px;
+  margin: 8px 0;
+}
+.dialog-error { color: var(--danger); }
+.dialog-warning { color: #d29922; }
 .field {
   display: block;
   margin-bottom: 12px;

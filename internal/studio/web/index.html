@@ -520,7 +520,8 @@
   <div id="ota-dialog" class="dialog hidden">
     <div class="dialog-card dialog-card-wide">
       <h1>Map properties</h1>
-      <p class="dialog-sub">These fields are written to the map's <code>.ota</code> file and shown to players in the multiplayer lobby.</p>
+      <p class="dialog-sub">These fields are written to the map's <code>.ota</code> file and shown to players in the multiplayer lobby. Saving changes only the values you edit; everything else in the file is kept.</p>
+      <p id="ota-source-error" class="dialog-message dialog-warning hidden"></p>
       <div class="ota-grid">
         <label class="field">
           <span>Mission name</span>
@@ -545,7 +546,7 @@
         </label>
         <label class="field">
           <span>Tidal strength</span>
-          <input type="number" id="ota-tidal" min="0" max="500" />
+          <input type="number" id="ota-tidal" min="0" max="500" step="any" />
         </label>
         <label class="field">
           <span>Solar strength</span>
@@ -565,7 +566,7 @@
         </label>
         <label class="field">
           <span>Kill multiplier</span>
-          <input type="number" id="ota-killmul" min="0" max="500" />
+          <input type="number" id="ota-killmul" min="0" max="500" step="any" />
         </label>
         <label class="field">
           <span>Lava world</span>
@@ -575,7 +576,7 @@
           </select>
         </label>
         <label class="field">
-          <span>Sea level (0–255)</span>
+          <span>Sea level (0–255, saved in the .tnt)</span>
           <input type="number" id="ota-sea-level" min="0" max="255" />
         </label>
         <label class="field">
@@ -593,6 +594,7 @@
           </select>
         </label>
       </div>
+      <p id="ota-error" class="dialog-message dialog-error hidden"></p>
       <div class="dialog-actions">
         <button id="ota-cancel" class="btn">Cancel</button>
         <button id="ota-apply" class="btn primary">Apply</button>
@@ -651,17 +653,18 @@
         </label>
         <label class="field">
           <span>Meteor density</span>
-          <input type="number" id="se-meteor-density" min="0" max="100000" />
+          <input type="number" id="se-meteor-density" min="0" max="100000" step="any" />
         </label>
         <label class="field">
           <span>Meteor duration</span>
-          <input type="number" id="se-meteor-duration" min="0" max="100000" />
+          <input type="number" id="se-meteor-duration" min="0" max="100000" step="any" />
         </label>
         <label class="field">
           <span>Meteor interval</span>
-          <input type="number" id="se-meteor-interval" min="0" max="100000" />
+          <input type="number" id="se-meteor-interval" min="0" max="100000" step="any" />
         </label>
       </div>
+      <p id="se-error" class="dialog-message dialog-error hidden"></p>
       <div class="dialog-actions">
         <button id="se-cancel" class="btn">Cancel</button>
         <button id="se-apply" class="btn primary">Apply</button>

@@ -42,7 +42,8 @@ import { beginTransaction, commitTransaction } from './undo.js'
 import { renderCanvas } from './canvas/render.js'
 import { confirmDialog } from '../dialogs/confirm.js'
 import { SCHEMA_PLAYER_COUNTS } from './constants.js'
-import { playerCountLabel } from './helpers.js'
+import { playerCountLabel, defaultSchema } from './helpers.js'
+import { newSchemaFrom } from './ota-state.js'
 import { openSchemaEditor } from './dialogs/schema-editor.js'
 
 // Schemas are addressed by their player count (the "Network N" the
@@ -190,15 +191,17 @@ export function refreshSchemaSelector() {
 // `Network <playerCount>` for engine compatibility.
 export function addSchemaWithPlayers(playerCount) {
   if (!state.ota) return
-  const proto = state.ota.schemas[state.activeSchema] || state.ota.schemas[0]
+  const proto = state.ota.schemas[state.activeSchema] || state.ota.schemas[0] ||
+    defaultSchema('', '', state.tileW, state.tileH)
   const nextName = nextAvailableSchemaName(state.ota.schemas)
   beginTransaction()
-  const newSchema = {
-    ...proto,
+  // A new schema copies the current one's economy settings but is new to
+  // the .ota file (newSchemaFrom drops the copied schema's identity).
+  const newSchema = newSchemaFrom(proto, {
     name: nextName,
     type: `Network ${playerCount}`,
     startPositions: [],
-  }
+  })
   state.ota.schemas.push(newSchema)
   state.activeSchema = state.ota.schemas.length - 1
   state.selectedStartPos = -1
