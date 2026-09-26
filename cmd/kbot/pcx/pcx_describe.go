@@ -2,6 +2,7 @@ package pcx
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -12,9 +13,17 @@ import (
 func newPCXDescribeCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "describe <file.pcx>",
-		Short: "Describe a PCX file",
-		Long:  `Display detailed information about a PCX file including resolution and bit depth.`,
-		Args:  cobra.ExactArgs(1),
+		Short: "Describe a PCX file and what TA does with it",
+		Long: `Display detailed information about a PCX file including resolution and
+bit depth, followed by what Total Annihilation 3.1c will do with it.
+
+The game loads only version 5 files, decodes every file as 8-bit single-plane
+data with exactly width bytes per row (BytesPerLine is ignored, so padding
+shifts later rows), takes the palette from the last 768 bytes whether or not
+a 0x0C marker precedes them, and draws backdrops opaque. Image editors read
+such files differently, so a file can look right in kbot's previews and
+wrong, or not at all, in the game.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			filename := args[0]
 
@@ -58,8 +67,32 @@ func newPCXDescribeCommand() *cobra.Command {
 			}
 			fmt.Printf("  Color Type: %s\n", colorType)
 
+			fmt.Println()
+			printPCXCompat(os.Stdout, reader.Compat())
 			return nil
 		},
+	}
+}
+
+// printPCXCompat prints what TA 3.1c will do with the file: whether it
+// loads it and every way it draws it differently from a standard reader.
+func printPCXCompat(w io.Writer, rep pcx.CompatReport) {
+	_, _ = fmt.Fprintln(w, "TA 3.1c:")
+	switch {
+	case rep.OK():
+		_, _ = fmt.Fprintln(w, "  ✓ The game loads this file and draws it as shown.")
+		return
+	case !rep.GameLoads():
+		_, _ = fmt.Fprintln(w, "  ✗ The game will refuse to load this file.")
+	default:
+		_, _ = fmt.Fprintln(w, "  ⚠ The game will load this file but draw it differently:")
+	}
+	for _, issue := range rep.Issues {
+		mark := "⚠"
+		if issue.Severity == pcx.CompatError {
+			mark = "✗"
+		}
+		_, _ = fmt.Fprintf(w, "    %s %s\n", mark, issue.Message)
 	}
 }
 

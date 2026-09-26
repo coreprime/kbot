@@ -221,6 +221,11 @@ func (sess *Session) handleVFSRender(w http.ResponseWriter, r *http.Request, vpa
 		return
 	}
 
+	if req.Transparency == "" && sess.isKingdoms() {
+		// TA: Kingdoms raw atlases often store a key that differs from
+		// their background; TA frames use the game's rule (the default).
+		req.Transparency = "heuristic"
+	}
 	out, err := sess.renderer.Render(vpath, data, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

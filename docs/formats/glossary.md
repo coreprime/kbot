@@ -80,10 +80,14 @@ earlier archives. Load order is (lowest to highest priority):
 `.hpi` → `.ufo` → `.ccx` → `.gp3`.
 
 ### Lookup table
-A `.alp`, `.lht`, or `.shd` file. 1024 bytes structured as 256 × 4
-**palette indices** (not RGB). The engine indexes into them by current
-colour and lighting/shadow bucket; the result is another palette index
-that can be drawn through the regular 8bpp pipeline. See [PAL](pal.md).
+A `.alp`, `.lht`, or `.shd` file: rows of 256 **palette indices** (not
+RGB), one column per source colour. A `.alp` is 65,536 bytes (256 rows,
+one per blend partner); a `.shd` or `.lht` is 8,192 bytes (32 rows, one
+per shade or light level). The engine looks up the current colour in the
+row it needs, and the result is another palette index that can be drawn
+through the regular 8bpp pipeline. The game uses a table only when its
+size is exact; a missing table, or one of any other size, is rebuilt
+from the palette. See [PAL](pal.md).
 
 ### LZ77
 The sliding-window compression used in [HPI](hpi.md) chunks when
@@ -91,9 +95,10 @@ The sliding-window compression used in [HPI](hpi.md) chunks when
 
 ### Magic pink
 Palette index 9 in the canonical TA palette (`#5454FC`). Used by editor
-tools as a fill colour for transparent regions in source PCX/GAF files;
-at runtime it is treated as opaque. The *engine's* transparent sentinel
-is palette index 0, not index 9.
+tools as a fill colour for transparent regions in source PCX/GAF files,
+and the stored key of many GAF frames, which makes it transparent in
+those frames. Elsewhere it is an ordinary colour. See
+[Transparency key](#transparency-key).
 
 ### Object name
 The lowercased base name shared by a unit's [3DO](3do.md),
@@ -169,11 +174,15 @@ A 32×32-pixel chunk of map graphics. The fundamental display unit for
 [TNT](tnt.md) and [SCT](sct.md). The tile grid is indexed in `uint16`,
 allowing up to 65,536 unique tiles per map in theory.
 
-### Transparent sentinel
-Palette index 0. Always rendered as fully transparent regardless of the
-RGB stored at that index. Universal across [PCX](pcx.md), [GAF](gaf.md),
-and all paletted bitmaps. Truecolor [TAF](taf.md) frames have no
-sentinel — transparency comes from the per-pixel alpha channel instead.
+### Transparency key
+The palette index a [GAF](gaf.md) frame stores as transparent. The game
+leaves a raw frame's pixels of that value undrawn; a compressed frame's
+transparent pixels are its skip runs, and its other pixels are drawn
+even when they equal the key. There is no palette-wide transparent
+index: terrain, minimaps, [PCX](pcx.md) backdrops and model textures
+draw every index, palette index 0 (black) included. Truecolor
+[TAF](taf.md) frames have no key — transparency comes from the
+per-pixel alpha channel instead.
 
 ### Truecolor
 A bitmap that stores a colour (and alpha) per pixel rather than an index

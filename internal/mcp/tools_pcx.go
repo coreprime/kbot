@@ -18,7 +18,11 @@ func registerPCXTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("pcx_describe",
 			mcplib.WithDescription(
 				"Inspect a PCX image: version, encoding, dimensions, bit depth, "+
-					"plane count, DPI and a friendly colour-type description.",
+					"plane count, DPI and a friendly colour-type description, plus what "+
+					"Total Annihilation 3.1c will do with it (game_loads, game_issues): the "+
+					"game loads only version 5, decodes every file as 8-bit single-plane data "+
+					"with width bytes per row (BytesPerLine is ignored) and takes the palette "+
+					"from the last 768 bytes whether or not a 0x0C marker precedes them.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -67,6 +71,11 @@ type pcxDescribeOutput struct {
 	HorzDPI      uint16 `json:"horz_dpi"`
 	VertDPI      uint16 `json:"vert_dpi"`
 	ColorType    string `json:"color_type"`
+	// GameLoads says whether TA 3.1c loads the file; GameIssues lists every
+	// way the game refuses it or draws it differently from a standard
+	// reader, as "warning: …" or "error: …".
+	GameLoads  bool     `json:"game_loads"`
+	GameIssues []string `json:"game_issues"`
 }
 
 func makePCXDescribeHandler(r *Resolver) server.ToolHandlerFunc {
@@ -124,6 +133,12 @@ func makePCXDescribeHandler(r *Resolver) server.ToolHandlerFunc {
 			HorzDPI:      header.HorzDPI,
 			VertDPI:      header.VertDPI,
 			ColorType:    colorType,
+			GameIssues:   []string{},
+		}
+		compat := reader.Compat()
+		out.GameLoads = compat.GameLoads()
+		for _, issue := range compat.Issues {
+			out.GameIssues = append(out.GameIssues, issue.String())
 		}
 		if stat != nil {
 			out.FileSize = stat.Size()

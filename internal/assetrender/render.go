@@ -42,11 +42,20 @@ func (req RenderRequest) IsRender() bool {
 		req.Sequence >= 0 || req.SequenceName != ""
 }
 
+// renderRevision changes whenever the renders themselves change for the same
+// request (for example GAF frames drawn with the game's transparency rule,
+// terrain drawn with an opaque palette, or movies at their display height).
+// It is part of every on-disk cache directory name and of CacheTag, so
+// neither the disk cache nor a browser revalidating an older render gets
+// the old bytes.
+const renderRevision = "r2"
+
 // CacheTag is a short, stable digest of the request options. Folded into an
 // HTTP ETag it ensures a palette/view/frame change yields a distinct validator
 // so browsers don't serve a stale representation from a 304.
 func (req RenderRequest) CacheTag() string {
 	return paletteCacheSuffix(strings.Join([]string{
+		renderRevision,
 		req.Format, req.View, strconv.Itoa(req.Sequence), req.SequenceName,
 		strconv.Itoa(req.Frame), req.Text, req.Palette, req.Transparency,
 	}, "|"))
@@ -272,7 +281,8 @@ func (r *Renderer) renderFNT(vpath string, data []byte, req RenderRequest) (Rend
 			if err != nil {
 				return nil, fmt.Errorf("parse font: %w", err)
 			}
-			return encodePNG(font.RenderText(req.Text, fg, bg))
+			// The game indexes glyphs by Windows-1252 byte.
+			return encodePNG(font.RenderText(fnt.EncodeCP1252(req.Text), fg, bg))
 		})
 		return Rendered{ContentType: "image/png", Body: body}, err
 	}

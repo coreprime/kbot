@@ -254,21 +254,26 @@ game reads — is extracted.
 Work with GAF animation files containing sprite sequences.
 
 ```bash
-# List sequences
+# List sequences (frame count, whether the game loops it, duration)
 kbot gaf list sprites.gaf
 
-# Export a sequence as GIF or PNG
-kbot gaf export sprites.gaf --format gif
-kbot gaf export sprites.gaf --format png --sequence 3
+# Export a sequence as an animated PNG (default) or GIF
+kbot gaf export sprites.gaf
+kbot gaf export sprites.gaf --format gif --sequence 3
 
-# Dump all sequences and frames to a folder
-kbot gaf dump sprites.gaf --target ./sprites --format png
+# Dump all sequences and frames to a folder (PNG by default)
+kbot gaf dump sprites.gaf --target ./sprites
 
 # Build a GAF from a dump folder
 kbot gaf build ./sprites --target rebuilt.gaf
+
+# Check that decode→encode and dump→build keep what the game reads
+kbot gaf roundtrip ./anims
 ```
 
-The dump output includes a `frames.csv` in each sequence folder with timing metadata. The build command reads this CSV to reconstruct frame durations.
+Frames are exported as the game draws them: a raw frame's key pixels and a compressed frame's skipped pixels are transparent, palette index 0 is opaque black, frames show for their duration in 1/30 s ticks, and an animation loops only when the sequence's loop byte is set.
+
+Each sequence folder of a dump holds the frame images, a `frames.csv` (size, origin, key, duration, storage and the +11 byte of every frame) and a `sequence.csv` (position, exact name, loop word and +4 word). The build command reads both back, so a dump/build cycle keeps what the game reads. A sequence without a `sequence.csv` loops, like every stock sequence. Frames without a storage are compressed, except that every frame written to `textures/*.gaf` or `anims/vismasks.gaf` is raw, because the game reads those as plain pixel arrays (`--storage` overrides). Composite (layered) frames are written flattened. A frame with no pixels gets no image; its `frames.csv` row rebuilds it. A sub-folder with neither CSV file is skipped with a warning; any other sub-folder the build cannot read stops the build rather than leaving that sequence out.
 
 ---
 
@@ -323,7 +328,7 @@ kbot tsf lint anims/titlescreen.tsf
 Inspect and convert PCX image files.
 
 ```bash
-# Describe a PCX file (detailed metadata)
+# Describe a PCX file (detailed metadata, then what TA 3.1c will do with it)
 kbot pcx describe image.pcx
 
 # Convert to PNG, GIF, or BMP
@@ -333,6 +338,8 @@ kbot pcx convert image.pcx --format png --target output.png
 # One-line info summary
 kbot pcx info image.pcx
 ```
+
+TA 3.1c reads PCX files differently from image editors: it loads version 5 only, ignores `BytesPerLine` (padded rows shift), decodes everything as 8-bit single-plane data and takes the palette from the last 768 bytes. `kbot pcx describe`, the MCP `pcx_describe` tool and the studio's asset explorer (a badge next to the preview) report every such difference. See [docs/formats/pcx.md](docs/formats/pcx.md).
 
 ---
 
@@ -345,13 +352,16 @@ holds up to 256 glyphs sharing a single height; widths vary per glyph.
 # One-line summary
 kbot fnt info comix.fnt
 
-# Detailed metadata (height, flags, glyph count, code-point coverage)
+# Detailed metadata (height, baseline, first character code, glyph
+# count, character-code coverage)
 kbot fnt describe comix.fnt
 kbot fnt describe comix.fnt --list      # also enumerate every defined glyph
 
-# Render a string to PNG
+# Render a string to PNG, laid out as the game does (text converted to
+# Windows-1252 by default; --codepage picks another, raw passes bytes through)
 kbot fnt render comix.fnt --text "Hello TA" --target hello.png
 kbot fnt render armfont.fnt --text "Commander" --fg "#ffff00" --bg transparent
+kbot fnt render comix.fnt --text "Привет" --codepage cp1251 --target ru.png
 
 # Render every defined glyph as a 16-column sprite sheet
 kbot fnt sheet comix.fnt --target sheet.png
@@ -361,6 +371,7 @@ kbot fnt dump comix.fnt --target ./glyphs
 ```
 
 Colors accept `#rrggbb`, `#rrggbbaa`, or the literal `transparent` / `none`.
+Rendering follows the game: each character byte selects the glyph with that code, a glyph advances by exactly its width, a character with no glyph adds nothing, and drawing stops at the first newline.
 
 ---
 
@@ -409,8 +420,10 @@ kbot crt describe --verbose "savannah hunt.crt"
 ### `kbot pal` — Palettes & Lookup Tables
 
 Inspect and convert Total Annihilation `.PAL` palettes, plus the related
-1024-byte `.ALP` / `.LHT` / `.SHD` 256×4 color-index lookup tables used for
-shadow blending and light levels.
+color-index lookup tables built from them: `.ALP` (65,536 bytes, 256×256
+half-and-half blends) and `.SHD` / `.LHT` (8,192 bytes, 32 shade or light
+levels of 256 colors). The game ignores a table of any other size, and so
+does `kbot pal lookup`.
 
 ```bash
 # One-line summary (size, unique colors, duplicates, TA-style flag)
@@ -419,8 +432,8 @@ kbot pal info palette.pal
 # Every entry with hex + RGB
 kbot pal describe palette.pal
 
-# 16x16 PNG swatch grid (index 0 hatched with magenta to highlight the
-# transparent sentinel)
+# 16x16 PNG swatch grid (index 0 hatched with magenta so it stands out;
+# the game draws it as ordinary black in terrain and backdrops)
 kbot pal swatch palette.pal --target palette.png --cell 16
 
 # Convert to editor-friendly formats
@@ -428,10 +441,12 @@ kbot pal convert palette.pal --target palette.gpl              # GIMP Palette
 kbot pal convert palette.pal --target palette.txt --format jasc  # JASC-PAL text
 kbot pal convert palette.pal --target re-emitted.pal --format pal  # binary TA .PAL
 
-# Render an .ALP/.LHT/.SHD lookup table as a 256x4 PNG using the embedded
-# palette (or pass --palette to use a specific one)
+# Render a lookup table as a PNG swatch (.ALP 256×256 cells, .SHD/.LHT
+# 256×32 cells) using the embedded palette (or pass --palette, a .pal or
+# .pcx; TA: Kingdoms keeps most palettes in PCX files next to their tables)
 kbot pal lookup palette.alp --target alp.png
 kbot pal lookup palette.lht --palette palette.pal --target lht.png
+kbot pal lookup palettes/aramon.alp --palette palettes/aramon.pcx --target aramon-alp.png
 ```
 
 ---
@@ -592,17 +607,16 @@ The shared implementation lives in [`internal/maplint`](internal/maplint) so the
 Work with Smacker (.smk/.zrb) video files.
 
 ```bash
-# Show video information
+# Show video information (stored and display size, present audio tracks)
 kbot zrb info video.smk
 
-# Convert to MP4
-kbot zrb to-mp4 video.smk --target video.mp4
-
-# Convert from MP4
-kbot zrb from-mp4 video.mp4 --target video.smk
+# Convert to MP4 at the height the game shows (640x240 interlaced → 640x480)
+kbot zrb to-mp4 video.smk video.mp4
+kbot zrb to-mp4 video.smk video.mp4 --line-double   # repeat lines instead of black
+kbot zrb to-mp4 video.smk video.mp4 --stored-height # keep 640x240
 ```
 
-Requires FFmpeg for conversions.
+Requires FFmpeg for conversions. There is no MP4 → Smacker conversion: stock FFmpeg has no Smacker encoder or muxer and kbot has no Smacker writer, so `kbot zrb from-mp4` reports that and stops. Make SMK2 movies for TA with RAD Game Tools' Smacker tools.
 
 ---
 
@@ -621,8 +635,9 @@ kbot bik to-mp4 movies/takmission14_ph.bik intro.mp4
 ```
 
 `to-mp4` requires FFmpeg (which ships a Bink decoder). Conversion is
-**decode-only** — no open-source Bink encoder exists, so unlike `kbot zrb`
-there is no `from-mp4` counterpart.
+**decode-only**: no open-source Bink encoder exists, so there is no
+`from-mp4`. Smacker is no different in practice: `kbot zrb from-mp4` only
+reports that no Smacker encoder exists.
 
 ---
 
@@ -939,9 +954,9 @@ These tools inspect and convert the original TA Smacker/ZRB cutscenes (see [docs
 
 | Tool | Purpose |
 |------|---------|
-| `zrb_info` | Header JSON: signature, geometry, frame count, frame rate, duration and present audio tracks. Native parse, no ffmpeg. |
-| `zrb_to_mp4` | Decode a `.zrb`/`.smk` to MP4 (H.264/AAC) via ffmpeg and write it to `output`. |
-| `zrb_from_mp4` | Re-encode an MP4 back to Smacker via ffmpeg's smackvid/smackaud encoders (best-effort; not in every ffmpeg build). |
+| `zrb_info` | Header JSON: signature, stored and display geometry, frame count, frame rate, duration and the present audio tracks (rate, channels, sample size, compression). Native parse, no ffmpeg. |
+| `zrb_to_mp4` | Decode a `.zrb`/`.smk` to MP4 (H.264/AAC) via ffmpeg at the height the game shows (640x240 interlaced → 640x480) and write it to `output`. |
+| `zrb_from_mp4` | Reports that no Smacker encoder exists: stock ffmpeg has no Smacker encoder or muxer and kbot has no Smacker writer (only an ffmpeg that lists both is tried). |
 
 #### Scenario tools
 

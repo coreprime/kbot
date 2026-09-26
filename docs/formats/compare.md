@@ -22,7 +22,7 @@ tool needs to support.
 | **`.kmp` campaign archives** | N/A | HPI v2 with renamed extension; bundles per-mission map + scripts + GAFs | ✅ Read |
 | **GAF / TAF** sprite animations | `.gaf`, palette comes from `palettes/palette.pal` | Paletted `.taf` (same binary format), palette from per-side `.pcx`; **plus** a truecolor `.taf`/`.tsf` variant (16-bit ARGB, see [taf.md](taf.md)) | ✅ Read all; ✅ write GAF & truecolor TAF/TSF |
 | **PCX** images | `unitpics/<name>.pcx` for unit portraits (96×96 paletted) | Used as 1×1 palette carrier next to `.taf` | ✅ Read/write |
-| **PAL / ALP / LHT / SHD** | Global TA palette + lookup tables | Per-side palettes inside PCX carriers; no `.alp`/`.lht`/`.shd` tables observed in install | ✅ TA; N/A TA:K |
+| **PAL / ALP / LHT / SHD** | Global TA palette + lookup tables | Per-side and per-terrain palettes, mostly inside PCX carriers; `palettes/` also holds a `.alp` (65,536 bytes) and `.shd` / `.lht` (8,192 bytes) of the same layout for nearly every one of them (41 sets) | ✅ Both (`kbot pal lookup --palette` takes a `.pal` or `.pcx`) |
 | **FNT** bitmap fonts | `fonts/*.fnt` 1bpp glyphs | Same format, larger glyph set typical | ✅ Read |
 | **SCT** map sections | `sections/<biome>/*.sct` reusable tile blocks for the TAE editor | Not used — TA:K's tile system is different | ✅ TA; N/A TA:K |
 | **TNT** map terrain | `IDVersion == 0x2000`, tile-grid + heightmap + features + minimap | `IDVersion == 0x4000` (variant); same overall structure, different tile decoder | ✅ TA; ⚠️ TA:K (header reads, tiles undecoded) |
@@ -90,7 +90,10 @@ Same bytes, same parser, same Go types:
 - **2×3 build-menu grid** with `BUTTON` 0–5 (top-left to bottom-right).
 - **Separate `weapons/` directory** of TDFs referenced by name.
 - **SCT (section) editor format** — TAE specific.
-- **Global TA palette + ALP/LHT/SHD lookup tables.**
+- **One global palette** (`palettes/palette.pal`) that every asset is
+  drawn with, and one set of `.alp` / `.shd` / `.lht` tables. TA:
+  Kingdoms has a palette per side and terrain set, most with tables of
+  the same layout.
 
 ## Things only TA: Kingdoms has
 

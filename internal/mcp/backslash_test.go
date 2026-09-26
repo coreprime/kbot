@@ -46,7 +46,7 @@ func TestBackslashPaths(t *testing.T) {
 	_ = rd.Close()
 
 	var stat vfsStatOutput
-	if err := json.Unmarshal([]byte(callTool(t, makeVFSStatHandler(r), "vfs_stat", map[string]any{"path": `units\ARMCOM.FBI`})), &stat); err != nil {
+	if err := json.Unmarshal([]byte(callToolText(t, makeVFSStatHandler(r), "vfs_stat", map[string]any{"path": `units\ARMCOM.FBI`})), &stat); err != nil {
 		t.Fatal(err)
 	}
 	if stat.NotFound || stat.VirtualPath != "units/ARMCOM.FBI" || stat.ActiveSource != "rev31.gp3" || len(stat.Layers) != 1 {
@@ -54,7 +54,7 @@ func TestBackslashPaths(t *testing.T) {
 	}
 
 	var list vfsListOutput
-	if err := json.Unmarshal([]byte(callTool(t, makeVFSListHandler(r), "vfs_list", map[string]any{"path": `units\`})), &list); err != nil {
+	if err := json.Unmarshal([]byte(callToolText(t, makeVFSListHandler(r), "vfs_list", map[string]any{"path": `units\`})), &list); err != nil {
 		t.Fatal(err)
 	}
 	if list.Path != "units" || list.Count != 2 {

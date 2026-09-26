@@ -4,13 +4,16 @@
 //   - PCX           : server-converted to PNG (optionally re-palettised).
 //   - native images : png/jpg/gif/bmp served raw to the browser.
 // A checkerboard backing makes transparency obvious, and a zoom toggle
-// flips between fit-to-pane and 1:1 pixel-doubled inspection.
+// flips between fit-to-pane and 1:1 pixel-doubled inspection.  PCX files
+// carry a badge saying what Total Annihilation 3.1c will do with them
+// (pcx-compat.js); hover it for the details.
 
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { pcxURL, rawURL, imageURL } from '../api.js'
+import { pcxCompatBadge } from './pcx-compat.js'
 
-function Stage({ src, alt, describe }) {
+function Stage({ src, alt, describe, badge }) {
   const [zoom, setZoom] = useState(false)
   const dims = describe && describe.width
     ? html`<span class="fx-img-dims">${describe.width}×${describe.height}${describe.bitsPerPixel ? ` · ${describe.bitsPerPixel}bpp` : ''}</span>`
@@ -20,6 +23,7 @@ function Stage({ src, alt, describe }) {
       <div class="fx-ctl-row">
         <button type="button" class=${'fx-ctl-btn' + (zoom ? ' active' : '')} onClick=${() => setZoom(!zoom)}>${zoom ? '1:1 pixels' : 'Fit'}</button>
         ${dims}
+        ${badge ? html`<span class=${'fx-compat-badge ' + badge.level} title=${badge.title}>${badge.label}</span>` : null}
       </div>
       <div class=${'fx-img-stage' + (zoom ? ' pixel' : '')}><img class="fx-img" src=${src} alt=${alt} /></div>
     </div>
@@ -27,7 +31,7 @@ function Stage({ src, alt, describe }) {
 }
 
 export function PcxViewer({ path, describe, source }) {
-  return html`<${Stage} src=${pcxURL(path, '', source)} alt=${path} describe=${describe} />`
+  return html`<${Stage} src=${pcxURL(path, '', source)} alt=${path} describe=${describe} badge=${pcxCompatBadge(describe)} />`
 }
 
 export function NativeImageViewer({ path, source }) {
@@ -40,7 +44,7 @@ export function FontViewer({ path, describe, source }) {
   return html`
     <div class="fx-viewer">
       <div class="fx-ctl-row">
-        ${d.glyphCount != null ? html`<span class="fx-img-dims">${d.glyphCount} glyphs · ${d.height}px tall</span>` : null}
+        ${d.glyphCount != null ? html`<span class="fx-img-dims">${d.glyphCount} glyphs · ${d.height}px tall${d.baseline != null ? ` · baseline ${d.baseline}` : ''}</span>` : null}
       </div>
       <div class="fx-img-stage"><img class="fx-img" src=${imageURL(path, 'png', source)} alt=${path} /></div>
     </div>

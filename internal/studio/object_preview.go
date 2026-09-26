@@ -37,6 +37,9 @@ func (m *objectMaterial) PaletteColor(index int) (color.RGBA, bool) {
 	return color.RGBA{}, false
 }
 
+// Texture resolves a texture name case-insensitively; an unresolved name
+// reports false, and the renderer then fills the face with palette index
+// 0xd1, as the game does.
 func (m *objectMaterial) Texture(name string) (*image.RGBA, bool) {
 	img := m.sess.objectTexture(name)
 	return img, img != nil
@@ -87,8 +90,18 @@ func toRGBAImage(src image.Image) *image.RGBA {
 // for TA:Kingdoms that's the model's per-side texture palette, else the VFS
 // global palette. (Textures themselves are resolved per-source-GAF inside the
 // material's Texture method.)
+//
+// The renderer follows the game's drawing rules: back faces are culled,
+// only quads are textured, a face whose texture does not resolve is filled
+// with palette index 0xd1 (the material's Texture reports it missing and
+// PaletteColor supplies the colour), and the selection primitive is hidden.
+// TA: Kingdoms models also carry textured triangles and keyed textures, so
+// they use the Kingdoms options.
 func (sess *Session) baseObjectOptions(object string) objects3d.RenderOptions {
 	opts := objects3d.DefaultRenderOptions()
+	if sess.isKingdoms() {
+		opts = objects3d.KingdomsRenderOptions()
+	}
 	opts.Material = &objectMaterial{sess: sess, pal: sess.palettes().ModelColorPalette(object)}
 	return opts
 }

@@ -9,19 +9,24 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/coreprime/kbot-io/formats/fnt"
+	"github.com/coreprime/kbot/internal/codepage"
 )
 
 func registerFNTTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("fnt_describe",
 			mcplib.WithDescription(
-				"Inspect a TA bitmap font: glyph height, flag bits, defined-glyph count, "+
-					"min/mean/max glyph width and the code-point ranges that have glyph data.",
+				"Inspect a TA bitmap font: glyph height (header byte 0, also the line height), "+
+					"baseline (byte 2, signed: rows the glyphs extend above the pen), first "+
+					"character code (byte 3), defined-glyph count, min/mean/max glyph width, the "+
+					"character-code ranges that have glyph data and any glyphs the game would "+
+					"draw as garbage.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -35,16 +40,21 @@ func registerFNTTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("fnt_render",
 			mcplib.WithDescription(
-				"Render a UTF-8 string in the given bitmap font to a PNG.  Codepoints "+
-					"beyond U+00FF wrap mod-256 to match how Cavedog's text systems index "+
-					"the glyph table.  Foreground and background colors accept #rrggbb, "+
-					"#rrggbbaa or 'transparent'.",
+				"Render a UTF-8 string in the given bitmap font to a PNG, laid out as the "+
+					"game does: the text is converted to a single-byte code page ('codepage', "+
+					"default cp1252, the retail game's; characters without a byte become '?'), "+
+					"each byte selects the glyph with that code, a glyph advances by exactly its "+
+					"width, a missing glyph adds nothing and drawing stops at the first newline.  "+
+					"Foreground and background colors accept #rrggbb, #rrggbbaa or 'transparent'.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .fnt file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
 			mcplib.WithString("text", mcplib.Required(), mcplib.Description("Text to render.")),
 			mcplib.WithString("fg", mcplib.Description("Foreground color (default #ffffff).")),
 			mcplib.WithString("bg", mcplib.Description("Background color (default 'transparent').")),
+			mcplib.WithString("codepage", mcplib.Description(
+				"Code page the text is converted to: "+strings.Join(codepage.Names(), ", ")+
+					" (default cp1252; 'raw' passes the bytes through).")),
 			withGameData(),
 		),
 		makeFNTRenderHandler(r),
@@ -67,16 +77,18 @@ func registerFNTTools(s *server.MCPServer, r *Resolver) {
 }
 
 type fntDescribeOutput struct {
-	Path       string  `json:"path"`
-	Source     string  `json:"source,omitempty"`
-	FileSize   int64   `json:"file_size"`
-	Height     int     `json:"height"`
-	Flags      uint16  `json:"flags"`
-	GlyphCount int     `json:"glyph_count"`
-	MinWidth   int     `json:"min_width"`
-	MaxWidth   int     `json:"max_width"`
-	MeanWidth  float64 `json:"mean_width"`
-	Ranges     string  `json:"ranges"`
+	Path       string   `json:"path"`
+	Source     string   `json:"source,omitempty"`
+	FileSize   int64    `json:"file_size"`
+	Height     int      `json:"height"`
+	Baseline   int      `json:"baseline"`
+	FirstChar  int      `json:"first_char"`
+	GlyphCount int      `json:"glyph_count"`
+	MinWidth   int      `json:"min_width"`
+	MaxWidth   int      `json:"max_width"`
+	MeanWidth  float64  `json:"mean_width"`
+	Ranges     string   `json:"ranges"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 type fntImageOutput struct {
@@ -171,12 +183,14 @@ func makeFNTDescribeHandler(r *Resolver) server.ToolHandlerFunc {
 			Source:     rf.Source,
 			FileSize:   size,
 			Height:     f.Height,
-			Flags:      f.Flags,
+			Baseline:   f.Baseline,
+			FirstChar:  f.FirstChar,
 			GlyphCount: f.GlyphCount(),
 			MinWidth:   minW,
 			MaxWidth:   maxW,
 			MeanWidth:  mean,
 			Ranges:     fntRanges(f),
+			Warnings:   f.Warnings,
 		})
 	}
 }
@@ -220,7 +234,11 @@ func makeFNTRenderHandler(r *Resolver) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
-		img := f.RenderText(text, fg, bg)
+		encoded, err := codepage.Encode(req.GetString("codepage", ""), text)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		img := f.RenderText(encoded, fg, bg)
 
 		if err := writeRenderedPNG(outPath, img); err != nil {
 			return errorResult(err), nil

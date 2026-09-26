@@ -306,11 +306,17 @@ func (sess *Session) inferSubmersionMode(info *ta.UnitInfo) string {
 // client gets pure float meshes; piece offsets are reported the same way
 // so the hierarchy can be assembled with a straight translate.
 type modelJSON struct {
-	Name     string     `json:"name"`
-	Root     *pieceJSON `json:"root"`
-	Pieces   []string   `json:"pieces"`   // flat list of piece names in DFS order
-	Textures []string   `json:"textures"` // unique texture names referenced
-	Decals   []string   `json:"decals"`   // subset of Textures known to carry alpha-keyed pixels (logos, glass, etc.) — clients render these last so they don't depth-occlude the opaque base when two primitives share a face
+	Name string     `json:"name"`
+	Root *pieceJSON `json:"root"`
+	// RootSiblings are the pieces on the root's sibling chain, each with
+	// its subtree, in file order. The game loads and draws them after the
+	// root's subtree; its piece transform starts at the root and never
+	// reaches them, so they are drawn at their own vertex coordinates and
+	// every origin in these subtrees is zero. No retail model has any.
+	RootSiblings []*pieceJSON `json:"rootSiblings,omitempty"`
+	Pieces       []string     `json:"pieces"`   // flat list of piece names in the game's piece order (root subtree, then each root sibling's subtree)
+	Textures     []string     `json:"textures"` // unique texture names referenced (lower-case)
+	Decals       []string     `json:"decals"`   // subset of Textures known to carry alpha-keyed pixels (logos, glass, etc.) — clients render these last so they don't depth-occlude the opaque base when two primitives share a face
 	// TextureSources maps each referenced texture name (lowercase)
 	// to the basename of the GAF file it lives in (e.g.
 	// "armhawk.gaf" or "kbot1.gaf").  Used by the Textures tab in
@@ -347,17 +353,39 @@ type pieceJSON struct {
 	IsEmitterPoint bool            `json:"isEmitterPoint"` // vertex-only piece, used by COB emit-sfx/explode
 }
 
+// primitiveJSON is one drawn face. Faces the game never draws (an
+// uncoloured face with no texture, a textured face with other than four
+// corners in TA, a point or a line) are left out of the list; the selection
+// primitive the game hides is kept, flagged Hidden, so a piece's selection
+// index still names it.
 type primitiveJSON struct {
-	Indices     []uint16 `json:"indices"`
-	Texture     string   `json:"texture,omitempty"`
-	ColorIndex  int      `json:"colorIndex"`
-	IsColored   bool     `json:"isColored"`
-	VertexCount int      `json:"vertexCount"`         // 1=point, 2=line, 3=tri, 4+=polygon
-	Synthetic   bool     `json:"synthetic,omitempty"` // reconstructed by FillModel, not original art
-	// ColorRGB is the server-resolved colour for an IsColored face, looked
-	// up through the game's palette resolver (TA: global palette; TA:K: the
-	// unit's side palette). Without it the client falls back to indexing
-	// its single global palette, which paints TA:K faces with TA colours.
+	Indices []uint16 `json:"indices"`
+	// Texture is the stored texture name. For a face whose texture does not
+	// resolve (Style "filled", FillIndex 0xd1) it is kept so tools can list
+	// missing textures, but the face is filled, not textured.
+	Texture string `json:"texture,omitempty"`
+	// ColorIndex is the palette index of a coloured face: the low byte of
+	// the stored colour word, as the game reads it.
+	ColorIndex int `json:"colorIndex"`
+	// IsColored is bit 0 of the stored is_colored word, the only bit the
+	// game reads (retail models store other values in the rest).
+	IsColored   bool `json:"isColored"`
+	VertexCount int  `json:"vertexCount"`         // 3=tri, 4=quad, 5+=polygon
+	Synthetic   bool `json:"synthetic,omitempty"` // reconstructed by FillModel, not original art
+	// Style is how the game draws the face: "textured" or "filled" (or
+	// "hidden" for the Hidden primitive when nothing else would draw it).
+	Style string `json:"style"`
+	// FillIndex is the palette index a filled face is drawn with: ColorIndex
+	// for a coloured face, 0xd1 for a face whose texture does not resolve.
+	FillIndex int `json:"fillIndex"`
+	// Hidden marks the primitive the game never draws: the piece's
+	// selection primitive, which the game moves into slot 0 and skips.
+	Hidden bool `json:"hidden,omitempty"`
+	// ColorRGB is the server-resolved colour of a filled face (palette entry
+	// FillIndex), looked up through the game's palette resolver (TA: global
+	// palette; TA:K: the unit's side palette). Without it the client falls
+	// back to indexing its single global palette, which paints TA:K faces
+	// with TA colours.
 	ColorRGB *[3]int `json:"colorRGB,omitempty"`
 }
 
@@ -365,6 +393,37 @@ type primitiveJSON struct {
 // TA's convention is 65536 = 1 world unit; that puts ARMSY-class units
 // around ~50 units across, which the client orbits comfortably.
 const scale3DO = 1.0 / 65536.0
+
+// gamePrimitive converts a primitive to its wire form following the game's
+// drawing rules (objects3d.Primitive.Style): a face whose texture does not
+// resolve is filled with palette index 0xd1, a coloured face with the low
+// byte of its colour word, only four-corner faces are textured, and an
+// uncoloured face with no texture is not drawn. textureFound says whether
+// the texture name resolved. texturePolygons textures uncoloured faces of
+// any corner count from three up, as TA: Kingdoms models need. Faces added
+// by FillModel are textured whatever their corner count. It reports whether
+// the game draws the face; points and lines are never drawn.
+func gamePrimitive(prim objects3d.Primitive, textureFound, texturePolygons bool) (primitiveJSON, bool) {
+	style, fill := prim.Style(textureFound)
+	if style == objects3d.FaceHidden && textureFound && !prim.IsColored &&
+		len(prim.VertexIndices) >= 3 && (texturePolygons || prim.Synthetic) {
+		style = objects3d.FaceTextured
+	}
+	pj := primitiveJSON{
+		Indices:     make([]uint16, len(prim.VertexIndices)),
+		Texture:     prim.TextureName,
+		ColorIndex:  prim.ColorIndex,
+		IsColored:   prim.IsColored,
+		VertexCount: len(prim.VertexIndices),
+		Synthetic:   prim.Synthetic,
+		Style:       style.String(),
+		FillIndex:   int(fill),
+	}
+	if style != objects3d.FaceFilled {
+		pj.FillIndex = 0
+	}
+	return pj, style != objects3d.FaceHidden
+}
 
 // resolveModelEntry resolves a model name against the FBI-driven index,
 // falling back to a bare objects3d/<name>.3do lookup for wreck / feature
@@ -437,8 +496,21 @@ func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJ
 		Min: [3]float32{float32(1e9), float32(1e9), float32(1e9)},
 		Max: [3]float32{float32(-1e9), float32(-1e9), float32(-1e9)},
 	}
-	var convert func(o *objects3d.Object, parentX, parentY, parentZ float32) *pieceJSON
-	convert = func(o *objects3d.Object, parentX, parentY, parentZ float32) *pieceJSON {
+	// Texture names resolve case-insensitively, as in the game; remember
+	// each lookup so a model's primitives share it.
+	found := map[string]bool{}
+	textureFound := func(name string) bool {
+		key := strings.ToLower(name)
+		ok, seen := found[key]
+		if !seen {
+			_, ok = sess.resolveTextureSource(key, texSide)
+			found[key] = ok
+		}
+		return ok
+	}
+	texturePolygons := sess.isKingdoms()
+	var convert func(o *objects3d.Object, parentX, parentY, parentZ float32, noOffsets bool) *pieceJSON
+	convert = func(o *objects3d.Object, parentX, parentY, parentZ float32, noOffsets bool) *pieceJSON {
 		p := &pieceJSON{
 			Name: o.Name,
 			Origin: [3]float32{
@@ -446,7 +518,10 @@ func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJ
 				float32(o.YFromParent) * scale3DO,
 				float32(o.ZFromParent) * scale3DO,
 			},
-			SelectionPrim: o.SelectionPrim,
+			SelectionPrim: -1,
+		}
+		if noOffsets {
+			p.Origin = [3]float32{}
 		}
 		pieceNames = append(pieceNames, o.Name)
 		absX := parentX + p.Origin[0]
@@ -481,17 +556,17 @@ func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJ
 			}
 		}
 		p.IsEmitterPoint = len(o.Primitives) == 0 && len(o.Vertices) == 1
-		for _, prim := range o.Primitives {
-			pj := primitiveJSON{
-				Indices:     make([]uint16, len(prim.VertexIndices)),
-				Texture:     prim.TextureName,
-				ColorIndex:  prim.ColorIndex,
-				IsColored:   prim.IsColored,
-				VertexCount: len(prim.VertexIndices),
-				Synthetic:   prim.Synthetic,
+		hidden := o.HiddenPrimitive()
+		for pi, prim := range o.Primitives {
+			pj, draw := gamePrimitive(prim, prim.TextureName != "" && textureFound(prim.TextureName), texturePolygons)
+			if pi == hidden {
+				pj.Hidden = true
+				p.SelectionPrim = int32(len(p.Primitives))
+			} else if !draw {
+				continue
 			}
-			if prim.IsColored && prim.ColorIndex >= 0 && prim.ColorIndex < len(colorPal) {
-				cr, cg, cb, _ := colorPal[prim.ColorIndex].RGBA()
+			if pj.Style == objects3d.FaceFilled.String() && pj.FillIndex < len(colorPal) {
+				cr, cg, cb, _ := colorPal[pj.FillIndex].RGBA()
 				pj.ColorRGB = &[3]int{int(cr >> 8), int(cg >> 8), int(cb >> 8)}
 			}
 			for i, idx := range prim.VertexIndices {
@@ -507,11 +582,16 @@ func (sess *Session) buildModelJSON(entry modelEntry, enhanceMesh bool) (*modelJ
 			p.Primitives = append(p.Primitives, pj)
 		}
 		for _, c := range o.Children {
-			p.Children = append(p.Children, convert(c, absX, absY, absZ))
+			p.Children = append(p.Children, convert(c, absX, absY, absZ, noOffsets))
 		}
 		return p
 	}
-	out.Root = convert(model.Root, 0, 0, 0)
+	out.Root = convert(model.Root, 0, 0, 0, false)
+	// The game draws root siblings at their own vertex coordinates: its
+	// piece transform never reaches them.
+	for _, sib := range model.RootSiblings {
+		out.RootSiblings = append(out.RootSiblings, convert(sib, 0, 0, 0, true))
+	}
 	// Resolve GAF source per texture so the Textures tab can group
 	// by parent GAF.  Done now (one walk over the textures map)
 	// instead of from the texture endpoint so the client has the

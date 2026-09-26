@@ -47,25 +47,31 @@
 ## On-disk layout
 
 ```
-┌─ 4-byte header ────────┐
-│ uint16  Height         │   shared by every glyph
-│ uint16  Flags          │   purpose unknown; treat as opaque
-├─ 256 × uint16 offsets ─┤   absolute file offsets; 0 = glyph not defined
-├─ Glyph data ───────────┤   for each defined glyph:
-│   uint8  Width         │   pixel width (1..128)
-│   ⌈Width × Height/8⌉   │   1bpp pixels, MSB-first bit stream
-└────────────────────────┘
+┌─ 4-byte header ──────────┐
+│ uint8   Height           │   byte 0: shared by every glyph; the line height
+│ uint8   (ignored)        │   byte 1: not part of the height
+│ int8    Baseline         │   byte 2: rows the glyphs extend above the pen
+│ uint8   FirstChar        │   byte 3: code of the first offset-table entry
+├─ (256 − FirstChar) × u16 ┤   file offsets; 0 = glyph not defined
+├─ Glyph data ─────────────┤   for each defined glyph:
+│   uint8  Width           │   pixel width (1..255), also the pen advance
+│   ⌈Width × Height/8⌉     │   1bpp pixels, MSB-first bit stream
+└──────────────────────────┘
 ```
 
-Total header + offset table is `4 + 256 × 2 = 516` bytes. Glyph data
-starts immediately after.
+Every retail font has `FirstChar = 0`, so its header + offset table is
+`4 + 256 × 2 = 516` bytes and glyph data starts immediately after.
 
 | Field | Notes |
 |-------|-------|
-| `Height` | Pixel height shared by every glyph in the font (typically 8–24). Reject heights > 128. |
-| `Flags` | Origin unknown. The kbot reader preserves the value verbatim for round-trip; the renderer ignores it. |
-| `Offsets[256]` | Indexed by character code (Windows-1252 / CP-437 codepage). `0` means *no glyph for this character*. Non-zero values are absolute file offsets pointing at the glyph's `Width` byte. |
-| Glyph `Width` | 0 (or `>128`) is treated as malformed and skipped by the reader. |
+| `Height` | Byte 0 only. Pixel height shared by every glyph in the font (9–17 in the retail fonts). |
+| `Baseline` | Byte 2, signed. Text drawn with the pen at row `y` puts the glyphs' top row at `y − Baseline`. Retail fonts store 1–3. |
+| `FirstChar` | Byte 3. Character `c` uses offset-table entry `c − FirstChar`; codes below it have no glyph. Retail fonts store 0. |
+| `Offsets[]` | Indexed by character byte (the retail game's text is Windows-1252). `0` means *no glyph for this character*. Non-zero values are offsets from the start of the font pointing at the glyph's `Width` byte. |
+| Glyph `Width` | 1–255. A width of 0 makes the game advance by 0 and draw garbage; kbot skips such glyphs and reports them. |
+
+Older tools read bytes 2–3 as one opaque "flags" word; they are two
+separate fields.
 
 ---
 
@@ -91,10 +97,19 @@ def read_glyph(file, offset, height):
     return Glyph(width, height, pixels)
 ```
 
-There is no kerning data, no baseline offset, no advance width separate
-from `Width` — characters are simply rendered side-by-side with their
-declared width. The TA renderer leaves a 1-pixel gap between glyphs;
-`kbot fnt render` does the same by default.
+There is no kerning data and no advance width separate from `Width`.
+The game lays text out like this, and `kbot fnt render`, the MCP
+`fnt_render` tool and the asset explorer's text preview do the same:
+
+- each **byte** of the text selects the glyph with that code (convert
+  UTF-8 text to the game's code page first; `kbot fnt render --codepage`
+  defaults to Windows-1252);
+- a glyph advances the pen by **exactly its width**, with no gap;
+- a character with no glyph draws nothing and advances by **0**;
+- drawing stops at the first **NUL or newline**.
+
+A 13-row font with a 10-pixel `A` and no space glyph therefore draws
+`"A A"` 20 pixels wide.
 
 > [!NOTE]
 > **There is no padding between rows.** Each scan line continues from
@@ -109,7 +124,8 @@ declared width. The TA renderer leaves a 1-pixel gap between glyphs;
 ```
 $ kbot fnt describe fonts/comix.fnt
 Height:        14 px
-Flags:         0x0001
+Baseline:      1 (glyph rows start this many rows above the pen)
+First char:    0x00
 Glyphs:        94 / 256 defined
 Glyph width:   min=3 max=13 mean=5.9
 Ranges:        0x20-0x7D
@@ -142,14 +158,14 @@ You can dump the same thing with `kbot fnt describe --list`.
 
 | Flag | Effect |
 |------|--------|
-| `--text "..."` | The string to render. Multi-line via embedded `\n`. |
+| `--text "..."` | The string to render: one line; drawing stops at the first newline, as in the game. |
+| `--codepage NAME` | Code page the UTF-8 text is converted to: `cp1252` (default, the retail game's), `cp1250`, `cp1251`, `cp437`, `cp850`, `iso-8859-1`, `iso-8859-15`, or `raw` to pass the bytes through. Characters without a byte become `?`. |
 | `--fg #rrggbb[aa]` | Foreground colour. Default: white. |
-| `--bg #rrggbb[aa]` &#124; `transparent` | Background. Default: opaque black. |
-| `--scale N` | Integer pixel doubling. Useful for high-DPI screenshots. |
+| `--bg #rrggbb[aa]` &#124; `transparent` | Background. Default: transparent. |
 | `--target PATH` | Output PNG path. Stdout otherwise. |
 
-Any character not present in the font is rendered as a blank space of
-the font's mean width.
+A character not present in the font draws nothing and takes no space,
+as in the game.
 
 ---
 
@@ -165,9 +181,11 @@ the font's mean width.
   common convention in modern bitmap fonts; don't assume.
 - **Bit stream is continuous between rows** — there's no padding to a
   byte boundary at the end of each scan line.
-- **`Flags` is unstable.** Different fonts use different values
-  (`0x0000`, `0x0001`, `0x0080`) and we don't have a working theory.
-  Preserve on write; ignore on read.
+- **Bytes 2 and 3 are the baseline and the first character code**, not
+  a flags word. A non-zero first character code shortens the offset
+  table.
+- **Characters are bytes, not Unicode code points.** `€` is byte `0x80`
+  in Windows-1252; taking a code point modulo 256 picks the wrong glyph.
 - **No metadata about which characters are supported.** You have to
   iterate the offset table to discover the glyph set.
 
@@ -179,7 +197,7 @@ the font's mean width.
 |-------|-----------------------------------------|
 | File size | 700 B – 4 KB |
 | Header + offset table | always 516 bytes |
-| Glyph height | 8–24 px |
+| Glyph height | 9–17 px |
 | Glyph width | 3–13 px |
 | Defined glyphs per font | 60–120 (most are printable ASCII only) |
 | Per-glyph data | typically 5–30 bytes (1 width byte + packed bits) |

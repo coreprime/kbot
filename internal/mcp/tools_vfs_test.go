@@ -34,7 +34,7 @@ func writeMCPArchive(t *testing.T, path string, noTrailer bool, pairs ...string)
 	}
 }
 
-func callTool(t *testing.T, h func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error), name string, args map[string]any) string {
+func callToolText(t *testing.T, h func(context.Context, mcplib.CallToolRequest) (*mcplib.CallToolResult, error), name string, args map[string]any) string {
 	t.Helper()
 	res, err := h(context.Background(), mcplib.CallToolRequest{Params: mcplib.CallToolParams{Name: name, Arguments: args}})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestVFSGameDataReportsMountOrder(t *testing.T) {
 	r := makeResolver(t, root)
 
 	var out gameDataOutput
-	if err := json.Unmarshal([]byte(callTool(t, makeVFSGameDataHandler(r), "vfs_game_data", nil)), &out); err != nil {
+	if err := json.Unmarshal([]byte(callToolText(t, makeVFSGameDataHandler(r), "vfs_game_data", nil)), &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(out.GameData) != 1 {

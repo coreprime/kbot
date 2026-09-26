@@ -39,7 +39,7 @@ function SequenceAccordion({ path, seq, index, transparency, source }) {
              src=${gafApngURL(path, index, '', transparency, source)} alt=${seq.name} />
         <div class="fx-gaf-acc-info">
           <span class="fx-gaf-name">${seq.name || `Sequence ${index}`}</span>
-          <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}</span>
+          <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}${seq.loops === false ? ' · plays once' : ''}</span>
         </div>
         <div class="fx-gaf-acc-actions" onClick=${(e) => e.stopPropagation()}>
           <a class="fx-dl" download=${`${stem}_${seqName}.gif`} href=${gafGifURL(path, index, '', transparency, source)} title="Download GIF">⬇ GIF</a>
@@ -88,8 +88,9 @@ export function GafViewer({ path, describe, source }) {
         <label class="fx-ctl">
           <span class="fx-ctl-label">Transparency</span>
           <select value=${transparency} onChange=${(e) => setTransparency(e.target.value)}>
-            <option value="">Auto (corner-detect)</option>
-            <option value="metadata">Metadata (raw TI)</option>
+            <option value="">Default (game rule; corner guess for TA: Kingdoms)</option>
+            <option value="game">Game rule (key / skipped pixels)</option>
+            <option value="heuristic">Corner guess (TA: Kingdoms atlases)</option>
             <option value="none">None (opaque)</option>
           </select>
         </label>

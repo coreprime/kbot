@@ -265,7 +265,7 @@ func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapRespon
 		if f.Width == 0 || f.Height == 0 {
 			continue
 		}
-		img := f.ToImage(pal)
+		img := f.ToImageWith(pal, sess.spriteRenderOptions())
 		if img == nil {
 			continue
 		}
@@ -275,9 +275,10 @@ func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapRespon
 		dstX := cellX + originX - int(f.OriginX)
 		dstY := originY - int(f.OriginY)
 		// image.Paletted carries its own colour model; draw.Over honours
-		// transparency from the palette's RGBA entries (the transparency
-		// index resolves to a zero-alpha colour by Frame.ToImage's
-		// conversion path).
+		// transparency from the palette's RGBA entries. The export marks
+		// exactly the pixels the game leaves transparent (a raw frame's
+		// key, a compressed frame's skips) with its one zero-alpha slot;
+		// palette index 0 stays opaque black.
 		draw.Draw(
 			sheet,
 			image.Rect(dstX, dstY, dstX+int(f.Width), dstY+int(f.Height)),

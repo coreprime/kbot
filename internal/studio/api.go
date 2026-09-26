@@ -23,9 +23,9 @@ import (
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
-	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/mapmeta"
+	"github.com/coreprime/kbot/internal/palettepick"
 )
 
 func (sess *Session) registerAPI(mux *http.ServeMux) {
@@ -1140,7 +1140,7 @@ func (sess *Session) renderFeatureStaticPNG(gafFilename, seqName string) ([]byte
 	}
 	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
-	if err := target.Frames[0].ToPNG(pal, &buf); err != nil {
+	if err := target.Frames[0].ToPNGWith(pal, sess.spriteRenderOptions(), &buf); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
 	return buf.Bytes(), nil
@@ -1177,19 +1177,23 @@ func (sess *Session) renderFeatureAPNG(gafFilename, seqName string) ([]byte, err
 	}
 	pal := sess.palettes().FeaturePalette(gafFilename)
 	var buf bytes.Buffer
-	if err := target.ToAPNG(pal, &buf); err != nil {
+	// Frame delays are the game's ticks/30 s and the animation loops only
+	// when the sequence's loop byte is set, as in the game.
+	if err := target.ToAPNGWith(pal, sess.spriteRenderOptions(), &buf); err != nil {
 		return nil, fmt.Errorf("encode apng: %w", err)
 	}
 	return buf.Bytes(), nil
 }
 
-// loadPaletteBytes returns the raw 1024-byte palette (RGBA × 256).  Prefers
-// the VFS copy if available, else falls back to the embedded TA palette.
+// loadPaletteBytes returns the install's global palette as 1,024 .PAL
+// bytes (RGBx × 256), loaded as loadVFSPalette loads it.
 func (sess *Session) loadPaletteBytes() []byte {
-	if data, err := sess.vfs.ReadFile("palettes/palette.pal"); err == nil && len(data) >= 1024 {
-		return data
+	p := palettepick.GamePalette(sess.vfs).Palette
+	out := make([]byte, 1024)
+	for i, c := range p.Colors {
+		out[i*4], out[i*4+1], out[i*4+2] = c.R, c.G, c.B
 	}
-	return palettes.DefaultPalette
+	return out
 }
 
 // handleSectionHeights returns the section's per-attribute-cell heights
@@ -1806,24 +1810,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// loadVFSPalette returns the install's global palette for terrain tiles,
+// section previews and exported map images. It is loaded the way the game
+// loads palettes/palette.pal (palettes/palette.pcx stands in for an empty
+// or missing file) and every entry is opaque: the game draws terrain with
+// palette index 0 as black.
 func (sess *Session) loadVFSPalette() color.Palette {
-	palData, err := sess.vfs.ReadFile("palettes/palette.pal")
-	if err != nil {
-		pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
-		if err != nil {
-			return nil
-		}
-		return pal.ColorModel()
-	}
-	palette := make(color.Palette, 256)
-	for i := 0; i < 256 && i*4+2 < len(palData); i++ {
-		a := uint8(255)
-		if i == 0 {
-			a = 0
-		}
-		palette[i] = color.RGBA{palData[i*4], palData[i*4+1], palData[i*4+2], a}
-	}
-	return palette
+	return palettepick.GamePalette(sess.vfs).Palette.ColorModel()
 }
 
 func sanitiseMapName(name string) string {

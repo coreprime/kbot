@@ -15,8 +15,13 @@ func newFNTDescribeCommand() *cobra.Command {
 	var listGlyphs bool
 	cmd := &cobra.Command{
 		Use:   "describe <file.fnt>",
-		Short: "Describe a font in detail (height, flags, glyph coverage)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Describe a font in detail (height, baseline, glyph coverage)",
+		Long: `Describe a TA bitmap font: its height (header byte 0, also the line
+height), baseline (byte 2, signed: the rows glyphs extend above the pen),
+first character code (byte 3: codes below it have no glyph), glyph widths
+and the character codes that have glyphs. Glyphs the game would draw as
+garbage (zero width, cut short by the end of the file) are reported.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			data, err := os.ReadFile(args[0])
 			if err != nil {
@@ -51,10 +56,14 @@ func newFNTDescribeCommand() *cobra.Command {
 			fmt.Printf("FNT File: %s\n", args[0])
 			fmt.Printf("File Size: %d bytes\n\n", len(data))
 			fmt.Printf("Height:        %d px\n", f.Height)
-			fmt.Printf("Flags:         0x%04X\n", f.Flags)
+			fmt.Printf("Baseline:      %d (glyph rows start this many rows above the pen)\n", f.Baseline)
+			fmt.Printf("First char:    0x%02X\n", f.FirstChar)
 			fmt.Printf("Glyphs:        %d / 256 defined\n", f.GlyphCount())
 			fmt.Printf("Glyph width:   min=%d max=%d mean=%.1f\n", minW, maxW, meanW)
 			fmt.Printf("Ranges:        %s\n", ranges)
+			for _, w := range f.Warnings {
+				fmt.Printf("Warning:       %s\n", w)
+			}
 
 			if listGlyphs {
 				fmt.Printf("\nDefined glyphs:\n")

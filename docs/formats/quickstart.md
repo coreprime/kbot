@@ -107,8 +107,9 @@ open /tmp/ta-palette.png
 
 16 × 16 grid of every colour in the game. Useful as a quick reference
 when you're working on a unit skin or trying to pick a HUD colour
-index. The hatched cell in the top-left is index 0 — the engine-wide
-transparent sentinel.
+index. The hatched cell in the top-left is index 0 (black), hatched so it
+stands out; the game draws it as ordinary black in terrain and backdrops,
+and sprites choose their own transparent key per frame.
 
 See [pal.md](pal.md), and [pcx.md](pcx.md) for how TA: Kingdoms
 distributes palettes through 1×1 PCX carriers.

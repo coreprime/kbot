@@ -12,6 +12,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/pal"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/palettepick"
 )
 
 // embeddedTAPalette loads the embedded Cavedog TA palette as a *pal.Palette.
@@ -47,9 +48,9 @@ func registerPALTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("pal_swatch",
 			mcplib.WithDescription(
-				"Render a TA palette as a 16x16 PNG swatch grid.  Index 0 (the transparent "+
-					"sentinel) is drawn with a magenta hatch so it is visible next to the "+
-					"other entries.",
+				"Render a TA palette as a 16x16 PNG swatch grid.  Index 0 is drawn with a "+
+					"magenta hatch so it stands out; the game draws it as ordinary black in "+
+					"terrain and backdrops, and sprite frames choose their own transparent key.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .pal file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
@@ -79,14 +80,18 @@ func registerPALTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("pal_lookup",
 			mcplib.WithDescription(
-				"Render a 1024-byte TA color-index lookup table (.ALP, .LHT, .SHD) as a "+
-					"256x4 PNG swatch.  Each byte indexes into --palette (defaults to the "+
-					"embedded TA palette) for display.",
+				"Render a TA palette lookup table as a PNG swatch: .ALP (65,536 bytes, "+
+					"256x256 cells: row a, column b is the colour nearest the average of colours "+
+					"a and b) or .SHD / .LHT (8,192 bytes, 256x32 cells: one row per shade or "+
+					"light level).  Each byte indexes into 'palette' (a .pal or .pcx; defaults to the "+
+					"embedded TA palette) for display.  The game uses a table only when its size is exact, so "+
+					"other sizes are rejected.  The kind comes from the extension or 'kind'.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .alp/.lht/.shd file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
-			mcplib.WithString("palette", mcplib.Description("Optional .pal file to use for index→RGB mapping.")),
+			mcplib.WithString("palette", mcplib.Description("Optional .pal or .pcx palette for index→RGB mapping (TA: Kingdoms keeps most palettes in PCX files, e.g. palettes/aramon.pcx for palettes/aramon.alp).")),
 			mcplib.WithNumber("cell", mcplib.Description("Pixel size of each cell (default 4).")),
+			mcplib.WithString("kind", mcplib.Description("Table kind when the extension does not say: 'alp', 'shd' or 'lht'.")),
 			withGameData(),
 		),
 		makePALLookupHandler(r),
@@ -301,7 +306,16 @@ func makePALLookupHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 
-		table, err := pal.LoadLookupFromFile(rf.LocalPath)
+		kind, err := palTableKind(rf.LocalPath, rf.VirtualPath, req.GetString("kind", ""))
+		if err != nil {
+			return errorResult(err), nil
+		}
+		f, err := os.Open(rf.LocalPath)
+		if err != nil {
+			return errorResult(err), nil
+		}
+		table, err := pal.ReadTable(kind, f)
+		_ = f.Close()
 		if err != nil {
 			return errorResult(err), nil
 		}
@@ -313,7 +327,7 @@ func makePALLookupHandler(r *Resolver) server.ToolHandlerFunc {
 				return errorResult(fmt.Errorf("palette: %w", err)), nil
 			}
 			defer func() { _ = rp.Close() }()
-			p, err = pal.LoadFromFile(rp.LocalPath)
+			p, err = palettepick.LoadFile(rp.LocalPath)
 			if err != nil {
 				return errorResult(fmt.Errorf("load palette: %w", err)), nil
 			}
@@ -325,7 +339,7 @@ func makePALLookupHandler(r *Resolver) server.ToolHandlerFunc {
 		}
 
 		cell := int(req.GetFloat("cell", 4))
-		img, err := pal.RenderLookupSwatch(table, p, cell)
+		img, err := table.RenderSwatch(p, cell)
 		if err != nil {
 			return errorResult(err), nil
 		}
@@ -340,4 +354,26 @@ func makePALLookupHandler(r *Resolver) server.ToolHandlerFunc {
 			Height: img.Bounds().Dy(),
 		})
 	}
+}
+
+// palTableKind picks a lookup table's kind from the 'kind' argument, else
+// from the extension of the resolved or requested path.
+func palTableKind(localPath, virtualPath, kind string) (pal.TableKind, error) {
+	switch strings.ToLower(strings.TrimPrefix(strings.TrimSpace(kind), ".")) {
+	case "":
+	case "alp", "alpha":
+		return pal.AlphaTable, nil
+	case "shd", "shade":
+		return pal.ShadeTable, nil
+	case "lht", "light":
+		return pal.LightTable, nil
+	default:
+		return 0, fmt.Errorf("kind must be alp, shd or lht, got %q", kind)
+	}
+	for _, p := range []string{virtualPath, localPath} {
+		if k, ok := pal.TableKindFromPath(p); ok {
+			return k, nil
+		}
+	}
+	return 0, fmt.Errorf("cannot tell the table kind from the extension; pass kind alp, shd or lht")
 }

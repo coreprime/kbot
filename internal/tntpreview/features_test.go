@@ -1,6 +1,7 @@
 package tntpreview
 
 import (
+	"github.com/coreprime/kbot-io/formats/gaf"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +54,7 @@ func TestFeatureIndexKeepsFirstDefinition(t *testing.T) {
 	}
 	defer func() { _ = vfs.Close() }()
 
-	c := newFeatureSpriteCache(vfs, nil)
+	c := newFeatureSpriteCache(vfs, nil, gaf.VariantTA.DefaultRenderOptions())
 	c.loadTDFIndex()
 	if got := c.tdfIndex["carscar05"]; got.gafName != "cars2" || got.footprintX != 2 || got.footprintZ != 1 {
 		t.Errorf("CarScar05 = %+v, want the cars2.tdf definition", got)

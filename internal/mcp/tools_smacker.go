@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,8 +18,11 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("zrb_info",
 			mcplib.WithDescription(
 				"Inspect a Smacker (.zrb/.smk) video — the cutscene format the original "+
-					"Total Annihilation ships under data/*.zrb. Returns signature, geometry, "+
-					"frame count, frame rate, duration and present audio tracks.",
+					"Total Annihilation ships under data/*.zrb. Returns signature, stored and "+
+					"display geometry (the retail 640x240 movies are interlaced and shown as "+
+					"640x480), frame count, frame rate, duration and the audio tracks the game "+
+					"plays (those with the present bit set), each with sample rate, channels, "+
+					"sample size and compression.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -33,8 +37,10 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("zrb_to_mp4",
 			mcplib.WithDescription(
 				"Decode a Smacker (.zrb/.smk) video to MP4 (H.264/AAC) using FFmpeg, which "+
-					"ships a native Smacker decoder. Output paths are anchored to the "+
-					"game-data folder when relative.",
+					"ships a native Smacker decoder. The MP4 shows the movie as the game does: "+
+					"at its display height (an interlaced 640x240 movie becomes 640x480 with "+
+					"every second line black) with square pixels. Output paths are anchored to "+
+					"the game-data folder when relative.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -44,6 +50,12 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 				mcplib.Required(),
 				mcplib.Description("Destination path for the .mp4 file."),
 			),
+			mcplib.WithBoolean("line_double",
+				mcplib.Description("Fill an interlaced movie's extra lines by repeating each line instead of black (default false)."),
+			),
+			mcplib.WithBoolean("stored_height",
+				mcplib.Description("Keep the stored frame height instead of the height the game shows (default false)."),
+			),
 			withGameData(),
 		),
 		makeZRBToMP4Handler(r),
@@ -52,9 +64,11 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("zrb_from_mp4",
 			mcplib.WithDescription(
-				"Re-encode an MP4 back to Smacker (.zrb/.smk) using FFmpeg's smackvid/smackaud "+
-					"encoders. Best-effort: many FFmpeg builds omit these encoders, in which case "+
-					"the tool returns a clear error. Unlike Bink, an open-source Smacker encoder exists.",
+				"MP4 to Smacker (.zrb/.smk) is not available: no Smacker encoder exists. Stock "+
+					"FFmpeg has no smackvid/smackaud encoder and no SMK muxer, and kbot has no Smacker "+
+					"writer, so this tool returns an error saying so; it only attempts a conversion "+
+					"when the installed FFmpeg lists both a smackvid encoder and an smk muxer. TA "+
+					"plays SMK2 movies made with RAD Game Tools' Smacker tools.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -71,21 +85,26 @@ func registerSmackerTools(s *server.MCPServer, r *Resolver) {
 }
 
 type zrbAudioTrack struct {
-	Track      int    `json:"track"`
-	SampleRate uint32 `json:"sample_rate"`
-	Channels   uint32 `json:"channels"`
+	Track         int    `json:"track"`
+	SampleRate    uint32 `json:"sample_rate"`
+	Channels      int    `json:"channels"`
+	BitsPerSample int    `json:"bits_per_sample"`
+	Compressed    bool   `json:"compressed"`
 }
 
 type zrbInfoOutput struct {
-	Path        string          `json:"path"`
-	Source      string          `json:"source,omitempty"`
-	Signature   string          `json:"signature"`
-	Width       int             `json:"width"`
-	Height      int             `json:"height"`
-	Frames      int             `json:"frames"`
-	FrameRate   float64         `json:"frame_rate"`
-	Duration    float64         `json:"duration_seconds"`
-	AudioTracks []zrbAudioTrack `json:"audio_tracks"`
+	Path          string          `json:"path"`
+	Source        string          `json:"source,omitempty"`
+	Signature     string          `json:"signature"`
+	Width         int             `json:"width"`
+	Height        int             `json:"height"`
+	DisplayHeight int             `json:"display_height"`
+	HeightMode    string          `json:"height_mode"`
+	RingFrame     bool            `json:"ring_frame"`
+	Frames        int             `json:"frames"`
+	FrameRate     float64         `json:"frame_rate"`
+	Duration      float64         `json:"duration_seconds"`
+	AudioTracks   []zrbAudioTrack `json:"audio_tracks"`
 }
 
 func makeZRBInfoHandler(r *Resolver) server.ToolHandlerFunc {
@@ -107,28 +126,27 @@ func makeZRBInfoHandler(r *Resolver) server.ToolHandlerFunc {
 		defer func() { _ = reader.Close() }()
 
 		out := zrbInfoOutput{
-			Path:      rf.displayPath(),
-			Source:    rf.Source,
-			Signature: reader.SignatureString(),
-			Width:     reader.Width(),
-			Height:    reader.Height(),
-			Frames:    reader.FrameCount(),
-			FrameRate: reader.FrameRate(),
-			Duration:  reader.Duration(),
+			Path:          rf.displayPath(),
+			Source:        rf.Source,
+			Signature:     reader.SignatureString(),
+			Width:         reader.Width(),
+			Height:        reader.Height(),
+			DisplayHeight: reader.DisplayHeight(),
+			HeightMode:    reader.HeightMode().String(),
+			RingFrame:     reader.HasRingFrame(),
+			Frames:        reader.FrameCount(),
+			FrameRate:     reader.FrameRate(),
+			Duration:      reader.Duration(),
+			AudioTracks:   []zrbAudioTrack{},
 		}
-		h := reader.Header()
-		for i := 0; i < len(h.AudioFlags); i++ {
-			if h.AudioFlags[i] == 0 {
-				continue
-			}
-			channels := (h.AudioFlags[i] >> 16) & 0xFF
-			if channels == 0 {
-				channels = 1
-			}
+		// Only tracks with the present bit set are played by the game.
+		for _, tr := range reader.AudioTracks() {
 			out.AudioTracks = append(out.AudioTracks, zrbAudioTrack{
-				Track:      i,
-				SampleRate: h.AudioRate[i],
-				Channels:   channels,
+				Track:         tr.Index,
+				SampleRate:    tr.SampleRate,
+				Channels:      tr.Channels(),
+				BitsPerSample: tr.BitsPerSample(),
+				Compressed:    tr.Compressed,
 			})
 		}
 		return jsonResult(out)
@@ -143,13 +161,34 @@ type zrbConvertOutput struct {
 
 func makeZRBToMP4Handler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		return runZRBConvert(r, req, smacker.ConvertToMP4)
+		opts := smacker.MP4Options{StoredHeight: req.GetBool("stored_height", false)}
+		if req.GetBool("line_double", false) {
+			opts.Interlace = smacker.InterlaceLineDouble
+		}
+		return runZRBConvert(r, req, func(in, out string) error {
+			return smacker.ConvertToMP4WithOptions(in, out, opts)
+		})
 	}
 }
 
+// errNoSmackerEncoder is what zrb_from_mp4 reports when nothing can write
+// Smacker: stock FFmpeg has no Smacker encoder or muxer.
+var errNoSmackerEncoder = errors.New("no Smacker encoder is available: FFmpeg has no Smacker encoder or muxer and kbot has no Smacker writer; make SMK2 movies with RAD's Smacker tools")
+
 func makeZRBFromMP4Handler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		return runZRBConvert(r, req, smacker.ConvertFromMP4)
+		return runZRBConvert(r, req, func(in, out string) error {
+			if !smacker.FFmpegAvailable() {
+				return errNoSmackerEncoder
+			}
+			if err := smacker.ConvertFromMP4(in, out); err != nil {
+				if errors.Is(err, smacker.ErrNoSmackerWriter) {
+					return errNoSmackerEncoder
+				}
+				return err
+			}
+			return nil
+		})
 	}
 }
 

@@ -107,10 +107,10 @@ ffmpeg -i in.bik \
        -y out.mp4
 ```
 
-There is **no `from-mp4`**. Unlike Smacker — where some FFmpeg builds carry
-the `smackvid`/`smackaud` encoders — **no open-source Bink encoder exists**.
-Only RAD's proprietary tools produce `.bik` files. This is the one capability
-Bink support cannot match the [Smacker/ZRB](smacker.md) command on.
+There is **no `from-mp4`**: **no open-source Bink encoder exists**, and only
+RAD's proprietary tools produce `.bik` files. The same is true of Smacker in
+practice — stock FFmpeg has no Smacker encoder or muxer either (see
+[Smacker/ZRB](smacker.md)).
 
 > [!WARNING]
 > **Odd dimensions.** Several `movies/gui/*.bik` clips have dimensions that

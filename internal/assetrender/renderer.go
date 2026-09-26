@@ -75,6 +75,9 @@ func (r *Renderer) VFS() *filesystem.VirtualFileSystem { return r.vfs }
 // Cache returns the named on-disk cache (e.g. "gaf-png"), creating it on first
 // use. It returns nil when caching is disabled or the directory can't be
 // created, so callers must tolerate a nil cache and simply render fresh.
+//
+// The directory name carries the render revision, so renders made before
+// a change to what is drawn (see renderRevision) are never served.
 func (r *Renderer) Cache(name string) *cache.Cache {
 	if r.noCache {
 		return nil
@@ -84,7 +87,7 @@ func (r *Renderer) Cache(name string) *cache.Cache {
 	if c, ok := r.caches[name]; ok {
 		return c
 	}
-	c, err := cache.New(filepath.Join(r.cacheDir, name))
+	c, err := cache.New(filepath.Join(r.cacheDir, name+"-"+renderRevision))
 	if err != nil {
 		return nil
 	}
@@ -193,32 +196,17 @@ func (r *Renderer) ResolvePalette(gafPath, override string) (*gaf.Palette, strin
 }
 
 // GlobalPalette returns the install-wide color.Palette used to render index
-// formats that carry no palette of their own (TNT, SCT). It reads
-// palettes/palette.pal from the VFS and falls back to the embedded TA palette.
-// Index 0 is forced transparent to match the game's treatment of the void.
+// formats that carry no palette of their own (TNT, SCT). It loads
+// palettes/palette.pal the way the game does (palettes/palette.pcx stands in
+// for an empty or missing file) and falls back to the embedded TA palette.
+// Every entry is opaque: the game draws terrain and minimaps with palette
+// index 0 as black.
 func (r *Renderer) GlobalPalette() color.Palette {
+	var vfs palettepick.VFS
 	if r.vfs != nil {
-		if palData, err := r.vfs.ReadFile("palettes/palette.pal"); err == nil && len(palData) >= 256*4 {
-			return paletteFromRGBA(palData)
-		}
+		vfs = r.vfs
 	}
-	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
-	if err != nil {
-		return nil
-	}
-	return pal.ColorModel()
-}
-
-func paletteFromRGBA(data []byte) color.Palette {
-	palette := make(color.Palette, 256)
-	for i := 0; i < 256 && i*4+2 < len(data); i++ {
-		a := uint8(255)
-		if i == 0 {
-			a = 0
-		}
-		palette[i] = color.RGBA{data[i*4], data[i*4+1], data[i*4+2], a}
-	}
-	return palette
+	return palettepick.GamePalette(vfs).Palette.ColorModel()
 }
 
 // RawContentType maps a file extension to the MIME type used when serving the
@@ -254,22 +242,30 @@ func RawContentType(ext string) (string, bool) {
 }
 
 // TransparencyFromQuery converts the ?transparency= query value into a
-// gaf.RenderOptions plus a short cache tag. Accepted forms: "" / "auto"
-// (heuristic), "metadata", "none", or a "0".."255" palette index. Unknown
-// values fall back to auto so a stale query can't break rendering.
+// gaf.RenderOptions plus a short cache tag. Accepted forms: "" / "game" (and
+// the older "auto" / "metadata") for the game's rule, "heuristic" for the
+// corner guess TA: Kingdoms raw atlases need, "none", or a "0".."255"
+// palette index. Unknown values fall back to the game's rule so a stale
+// query can't break rendering.
+//
+// The game's rule makes a raw frame's pixels equal to its key and a
+// compressed frame's skipped pixels transparent, and draws palette index 0
+// as opaque black. The cache tags differ from those of earlier versions,
+// whose default guessed a key from the corner pixels and dropped black, so
+// renders cached by them are not served.
 func TransparencyFromQuery(q string) (gaf.RenderOptions, string) {
 	switch strings.ToLower(q) {
-	case "", "auto":
-		return gaf.RenderOptions{Mode: gaf.TransparencyModeAuto}, "t-auto"
-	case "metadata", "meta":
-		return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, "t-meta"
+	case "", "game", "auto", "metadata", "meta":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, "t-game"
+	case "heuristic", "corner":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeHeuristic}, "t-heur"
 	case "none", "opaque", "off":
-		return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}, "t-none"
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}, "t-opq"
 	}
 	if n, err := strconv.Atoi(q); err == nil && n >= 0 && n <= 255 {
-		return gaf.RenderOptions{Mode: gaf.TransparencyModeIndex, Index: uint8(n)}, "t-i" + pad3(n)
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeIndex, Index: uint8(n)}, "t-x" + pad3(n)
 	}
-	return gaf.RenderOptions{Mode: gaf.TransparencyModeAuto}, "t-auto"
+	return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, "t-game"
 }
 
 // paletteCacheSuffix derives a short, fixed-width hash from a palette tag so it

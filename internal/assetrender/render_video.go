@@ -1,6 +1,7 @@
 package assetrender
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,6 +30,10 @@ func isVideoExt(ext string) bool { return videoExts[ext] }
 // "apng" produces a lightweight animated thumbnail sampled across the clip.
 // Both results are cached on disk and served by path so the HTTP layer can
 // honour Range requests for scrubbing.
+//
+// Smacker movies are shown at the height the game shows them: the retail
+// 640x240 movies are interlaced and appear as 640x480, so the MP4 carries
+// the game's black lines and the thumbnail keeps the 4:3 picture.
 func (r *Renderer) renderVideo(vpath string, data []byte, req RenderRequest) (Rendered, error) {
 	ext := strings.ToLower(path.Ext(vpath))
 	format := strings.ToLower(req.Format)
@@ -94,7 +99,24 @@ func transcodeToMP4(ext string, data []byte, dst string) error {
 	if ext == ".bik" {
 		return bik.ConvertToMP4(src, dst)
 	}
+	// ConvertToMP4 reads the header and converts to the display height,
+	// with the black lines of an interlaced movie, as the game shows it.
 	return smacker.ConvertToMP4(src, dst)
+}
+
+// thumbDisplayFilter returns the FFmpeg filters that bring a movie's frames
+// to the shape the game shows before the thumbnail is scaled: for Smacker,
+// the display height (an interlaced movie's lines doubled, so the small
+// thumbnail stays legible) with square pixels. Other formats need none.
+func thumbDisplayFilter(ext string, data []byte) (string, error) {
+	if ext != ".smk" && ext != ".zrb" {
+		return "", nil
+	}
+	r, err := smacker.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("read smacker header: %w", err)
+	}
+	return smacker.DisplayFilter(r.Header(), smacker.InterlaceLineDouble) + ",", nil
 }
 
 // generateVideoThumb builds a small animated APNG by sampling ~20 frames evenly
@@ -104,6 +126,10 @@ func transcodeToMP4(ext string, data []byte, dst string) error {
 func generateVideoThumb(ext string, data []byte, dst string) error {
 	if !smacker.FFmpegAvailable() {
 		return fmt.Errorf("ffmpeg not found in PATH")
+	}
+	display, err := thumbDisplayFilter(ext, data)
+	if err != nil {
+		return err
 	}
 	src, err := writeTempSource(ext, data)
 	if err != nil {
@@ -145,7 +171,7 @@ func generateVideoThumb(ext string, data []byte, dst string) error {
 	if out, err := exec.Command("ffmpeg",
 		"-y", "-v", "error",
 		"-i", src,
-		"-vf", fmt.Sprintf("select='%s',scale=128:-1:flags=neighbor", selectExpr),
+		"-vf", fmt.Sprintf("select='%s',%sscale=128:-1:flags=neighbor", selectExpr, display),
 		"-fps_mode", "vfr",
 		"-frames:v", "20",
 		filepath.Join(frameDir, "frame_%03d.png"),

@@ -6670,6 +6670,16 @@ canvas {
 }
 .fx-ctl-btn.active { border-color: var(--accent); color: var(--accent-hover); }
 .fx-img-dims { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.fx-compat-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: help;
+}
+.fx-compat-badge.ok { color: var(--good); border-color: var(--good); }
+.fx-compat-badge.warn { color: #d29922; border-color: #d29922; }
+.fx-compat-badge.error { color: var(--danger); border-color: var(--danger); }
 .fx-img-stage {
   display: flex;
   align-items: center;

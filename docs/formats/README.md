@@ -42,7 +42,7 @@ real files alongside the prose.
 | [GAF](gaf.md) | `.gaf` `.taf` | Indexed-colour sprite animations (cursors, explosions, unit gadgets, features) | TA ✅ &nbsp; TA:K ✅ |
 | [TAF / TSF](taf.md) | `.taf` `.tsf` | TA: Kingdoms **truecolor** (16-bit ARGB) animations — spell effects, explosions, menu backgrounds — plus their editable text form | TA:K ✅ |
 | [PCX](pcx.md) | `.pcx` | ZSoft Paintbrush bitmap — unit portraits, GUI panels, and TA:K palette carriers | TA ✅ &nbsp; TA:K ✅ |
-| [PAL / ALP / LHT / SHD](pal.md) | `.pal` `.alp` `.lht` `.shd` | 256-entry colour palette and 256×4 colour lookup tables | TA ✅ |
+| [PAL / ALP / LHT / SHD](pal.md) | `.pal` `.alp` `.lht` `.shd` | 256-entry colour palette (1,024 bytes) and colour lookup tables: `.alp` 256×256 (65,536 bytes), `.shd` / `.lht` 32×256 (8,192 bytes) | TA ✅ &nbsp; TA:K ✅ |
 | [FNT](fnt.md) | `.fnt` | 1-bit-per-pixel variable-width bitmap font | TA ✅ |
 | [Smacker / ZRB](smacker.md) | `.smk` `.zrb` | Cutscene video (RAD Game Tools Smacker, renamed `.zrb`) | TA ✅ |
 | [Bink](bik.md) | `.bik` | TA: Kingdoms cutscene video (RAD Bink 1) — Smacker's successor | TA:K ✅ |
@@ -141,7 +141,7 @@ overrides them:
 | **Coordinate origin** | Images, tile grids, attribute grids — `(0, 0)` is the **top-left**. 3DO meshes use Y as **vertical** (up). |
 | **3D fixed-point scale** | 3DO models use 16-bit fractional fixed-point: `value / 65536.0` ≈ world-space units. |
 | **Game tick rate** | 30 ticks/second. Most timing fields in COB and GAF use ticks. |
-| **Transparent colour** | Palette index 0 is the engine-wide transparent sentinel. The colour at that index varies between palettes but is treated as "show through" everywhere. |
+| **Transparent colour** | There is no palette-wide transparent index. A GAF frame names its own key (often 9, sometimes 0) and a compressed frame's skipped pixels are transparent; terrain, minimaps, backdrops and model textures draw every index, palette index 0 (black) included. |
 
 > [!IMPORTANT]
 > **Always validate magic numbers before trusting an offset.** Several

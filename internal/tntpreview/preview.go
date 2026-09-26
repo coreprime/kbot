@@ -71,7 +71,7 @@ func ComposeWith(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *file
 		return Stats{}, fmt.Errorf("vfs is required")
 	}
 
-	cache := newFeatureSpriteCache(vfs, spritePalette)
+	cache := newFeatureSpriteCache(vfs, spritePalette, gaf.VariantTA.DefaultRenderOptions())
 	painted, missing := compositeFeatureSprites(base, m, features, cache)
 
 	stats := Stats{SpritesPainted: painted, SpritesMissing: missing}
@@ -107,7 +107,7 @@ func ComposeTAK(base *image.RGBA, m *tnt.Map, features []tnt.Feature, vfs *files
 	if vfs == nil {
 		return Stats{}, fmt.Errorf("vfs is required")
 	}
-	cache := newFeatureSpriteCache(vfs, spritePalette)
+	cache := newFeatureSpriteCache(vfs, spritePalette, gaf.VariantTAK.DefaultRenderOptions())
 	painted, missing := compositeTAKFeatureSprites(base, m, features, cache)
 	return Stats{SpritesPainted: painted, SpritesMissing: missing}, nil
 }
@@ -220,8 +220,13 @@ func loadSisterOTAFromVFS(tntBasename string, vfs *filesystem.VirtualFileSystem)
 // chaining feature-name -> TDF lookup -> GAF load -> sequence index -> frame.
 // Results (including misses) are memoised so the per-placement loop is cheap.
 type featureSpriteCache struct {
-	vfs       *filesystem.VirtualFileSystem
-	palette   *gaf.Palette
+	vfs     *filesystem.VirtualFileSystem
+	palette *gaf.Palette
+	// render says which frame pixels are transparent. For TA it is the
+	// game's rule (a raw frame's key, a compressed frame's skips), so
+	// palette index 0 is drawn as opaque black; TA: Kingdoms raw frames
+	// also get the corner guess for keys that do not match the background.
+	render    gaf.RenderOptions
 	tdfIndex  map[string]featureRef
 	tdfLoaded bool
 	gafCache  map[string]*gafFile
@@ -248,10 +253,11 @@ type spriteImage struct {
 	footprintZ int // attribute cells, Y
 }
 
-func newFeatureSpriteCache(vfs *filesystem.VirtualFileSystem, palette *gaf.Palette) *featureSpriteCache {
+func newFeatureSpriteCache(vfs *filesystem.VirtualFileSystem, palette *gaf.Palette, render gaf.RenderOptions) *featureSpriteCache {
 	return &featureSpriteCache{
 		vfs:      vfs,
 		palette:  palette,
+		render:   render,
 		tdfIndex: make(map[string]featureRef),
 		gafCache: make(map[string]*gafFile),
 		sprites:  make(map[string]*spriteImage),
@@ -337,7 +343,7 @@ func (c *featureSpriteCache) sprite(name string) *spriteImage {
 	}
 	frame := seq.Frames[0]
 	sp := &spriteImage{
-		img:        frame.ToImage(c.palette),
+		img:        frame.ToImageWith(c.palette, c.render),
 		originX:    int(frame.OriginX),
 		originY:    int(frame.OriginY),
 		footprintX: ref.footprintX,

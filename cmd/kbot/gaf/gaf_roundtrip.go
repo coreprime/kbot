@@ -22,19 +22,28 @@ func newGAFRoundtripCommand() *cobra.Command {
 		Use:   "roundtrip [path]",
 		Short: "Validate roundtrip fidelity for GAF files",
 		Long: `Scan a directory for .gaf files and verify that both the
-decode→encode and dump→build pipelines preserve every frame's palette
-indices and metadata.
+decode→encode and dump→build pipelines keep what the game reads.
 
   decode→encode  Parse the GAF in memory, re-serialise with WriteGAF,
-                 re-parse, and compare sequences/frames/pixels.
-                 Byte-identity is also reported but not required:
-                 the original Cavedog encoder makes different
-                 compression choices that don't affect pixel data.
+                 re-parse, and compare.  The header fields the game
+                 reads are compared straight from the bytes of both
+                 files: each sequence's loop word (+2) and +4 word,
+                 and each frame's size, origin, key, storage (raw or
+                 compressed), layer count (+10), +11 byte and duration
+                 (low 16 bits).  Every frame's pixels and the pixels
+                 it draws are compared too.  Byte-identity is reported
+                 but not required: the original Cavedog encoder makes
+                 different compression choices that don't affect what
+                 is drawn.
 
-  dump→build     Dump every frame to a temp folder using PNG, run the
-                 build pipeline back into a GAF, and re-parse.  This
-                 validates the full CLI dump/build cycle including
-                 image palettisation.
+  dump→build     Dump every sequence to a temp folder exactly as
+                 "kbot gaf dump" does by default (PNG, frames.csv,
+                 sequence.csv), build it back as "kbot gaf build"
+                 does, and compare the same fields and pixels.  The
+                 dump stores each frame as one image, so composite
+                 (layered) frames come back flattened; their layer
+                 count is not compared, and the number of flattened
+                 frames is reported.
 
 When <path> is omitted, the active kbot context is scanned (see
 'kbot ctx').
@@ -79,6 +88,9 @@ type gafRoundtripResult struct {
 
 	BuildOK  bool
 	BuildErr string
+	// Flattened counts the composite frames the dump/build leg wrote as
+	// simple frames (informational).
+	Flattened int
 }
 
 // ── runner ─────────────────────────────────────────────────────────────────
@@ -146,8 +158,9 @@ func runGAFRoundtrip(root string, detailed bool) error {
 
 	// ── summary ────────────────────────────────────────────────────────
 	totalFiles := len(results)
-	encodePass, buildPass, byteIdent := 0, 0, 0
+	encodePass, buildPass, byteIdent, flattened := 0, 0, 0, 0
 	for _, r := range results {
+		flattened += r.Flattened
 		if r.EncodeOK {
 			encodePass++
 		}
@@ -171,6 +184,7 @@ func runGAFRoundtrip(root string, detailed bool) error {
 	fmt.Fprintf(os.Stderr, "  | %-45s|\n", fmt.Sprintf("Decode -> Encode:         %-11s %s", encFrac, cli.PassFail(encodePass == totalFiles)))
 	fmt.Fprintf(os.Stderr, "  | %-45s|\n", fmt.Sprintf("Dump -> Build:            %-11s %s", buildFrac, cli.PassFail(buildPass == totalFiles)))
 	fmt.Fprintf(os.Stderr, "  | %-45s|\n", fmt.Sprintf("Byte-identical (info):    %s", byteFrac))
+	fmt.Fprintf(os.Stderr, "  | %-45s|\n", fmt.Sprintf("Flattened by build (info): %d frames", flattened))
 	if allPass {
 		fmt.Fprintln(os.Stderr, "  |                                              |")
 		fmt.Fprintf(os.Stderr, "  | %-45s|\n", "All roundtrips passed!")
@@ -230,6 +244,14 @@ func testOneGAF(path string, palette *gaf.Palette, detailed bool) gafRoundtripRe
 		fmt.Fprintf(os.Stderr, "  %s\n", name)
 	}
 
+	origRaw, err := readRawFields(origData)
+	if err != nil {
+		r.EncodeErr = "raw headers"
+		r.BuildErr = "raw headers"
+		log("    ⚠️  header walk: %v\n", err)
+		return r
+	}
+
 	// ── decode → encode ────────────────────────────────────────────────
 	log("    → Re-encoding\n")
 	var encBuf bytes.Buffer
@@ -242,27 +264,28 @@ func testOneGAF(path string, palette *gaf.Palette, detailed bool) gafRoundtripRe
 		r.EncodeHash = cli.MD5Hex(encBytes)
 		r.EncodeBytes = bytes.Equal(origData, encBytes)
 
-		reSeqs, err := loadGAFSequences(encBytes)
-		if err != nil {
-			r.EncodeErr = "reparse"
-			log("    ⚠️  reparse error: %v\n", err)
-		} else if diff := compareSequences(origSeqs, reSeqs); diff != "" {
+		if diff := compareEncoded(origSeqs, origRaw, encBytes, rawCompareOptions{}); diff != "" {
 			r.EncodeErr = "mismatch"
-			log("    ⚠️  semantic mismatch: %s\n", diff)
+			log("    ⚠️  mismatch: %s\n", diff)
 		} else {
 			r.EncodeOK = true
-			log("    ✓ encode+reparse semantically equal (%d → %d bytes)\n", r.OrigSize, r.EncodeSize)
+			log("    ✓ encode+reparse keeps headers and pixels (%d → %d bytes)\n", r.OrigSize, r.EncodeSize)
 		}
 	}
 
 	// ── dump → build ───────────────────────────────────────────────────
 	log("    → Dump/build\n")
-	if err := dumpBuildRoundtrip(origSeqs, palette); err != nil {
+	r.Flattened = countComposites(origRaw)
+	if err := dumpBuildRoundtrip(origSeqs, origRaw, palette, path); err != nil {
 		r.BuildErr = err.Error()
 		log("    ⚠️  dump/build: %v\n", err)
 	} else {
 		r.BuildOK = true
-		log("    ✓ dump/build semantically equal\n")
+		if r.Flattened > 0 {
+			log("    ✓ dump/build keeps headers and pixels (%d composite frame(s) flattened)\n", r.Flattened)
+		} else {
+			log("    ✓ dump/build keeps headers and pixels\n")
+		}
 	}
 
 	if detailed {
@@ -304,8 +327,27 @@ func loadGAFSequences(data []byte) ([]*gaf.Sequence, error) {
 	return reader.ReadSequences()
 }
 
-// compareSequences returns "" if the two sequence slices are pixel-equal,
-// otherwise a short description of the first divergence found.
+// compareEncoded re-parses encoded and compares it with the original: the
+// raw header fields first, then every frame's pixels and coverage.
+func compareEncoded(orig []*gaf.Sequence, origRaw []rawSequence, encoded []byte, opts rawCompareOptions) string {
+	encRaw, err := readRawFields(encoded)
+	if err != nil {
+		return "header walk: " + err.Error()
+	}
+	if diff := compareRawFields(origRaw, encRaw, opts); diff != "" {
+		return diff
+	}
+	reSeqs, err := loadGAFSequences(encoded)
+	if err != nil {
+		return "reparse: " + err.Error()
+	}
+	return compareSequences(orig, reSeqs)
+}
+
+// compareSequences returns "" if the two sequence slices draw the same
+// pixels, otherwise a short description of the first divergence found.
+// Each frame's pixel values and the pixels the game draws (see
+// Frame.PixelOpaque) must match.
 func compareSequences(a, b []*gaf.Sequence) string {
 	if len(a) != len(b) {
 		return fmt.Sprintf("sequence count %d → %d", len(a), len(b))
@@ -313,6 +355,9 @@ func compareSequences(a, b []*gaf.Sequence) string {
 	for i := range a {
 		if a[i].Name != b[i].Name {
 			return fmt.Sprintf("seq[%d] name %q → %q", i, a[i].Name, b[i].Name)
+		}
+		if a[i].LoopFlags != b[i].LoopFlags {
+			return fmt.Sprintf("seq[%d] loop word 0x%04X → 0x%04X", i, a[i].LoopFlags, b[i].LoopFlags)
 		}
 		if len(a[i].Frames) != len(b[i].Frames) {
 			return fmt.Sprintf("seq[%d] frame count %d → %d", i, len(a[i].Frames), len(b[i].Frames))
@@ -329,13 +374,18 @@ func compareSequences(a, b []*gaf.Sequence) string {
 			case fa.TransparencyIndex != fb.TransparencyIndex:
 				return fmt.Sprintf("seq[%d] frame[%d] transp %d → %d",
 					i, fi, fa.TransparencyIndex, fb.TransparencyIndex)
-			case fa.Duration != fb.Duration:
+			case fa.DisplayTicks() != fb.DisplayTicks() || uint16(fa.Duration) != uint16(fb.Duration):
 				return fmt.Sprintf("seq[%d] frame[%d] duration %d → %d",
 					i, fi, fa.Duration, fb.Duration)
 			}
 			if !bytes.Equal(fa.Pixels, fb.Pixels) {
 				idx := firstPixelDiff(fa.Pixels, fb.Pixels)
 				return fmt.Sprintf("seq[%d] frame[%d] pixels diverge at index %d", i, fi, idx)
+			}
+			for p := range fa.Pixels {
+				if fa.PixelOpaque(p) != fb.PixelOpaque(p) {
+					return fmt.Sprintf("seq[%d] frame[%d] pixel %d drawn=%v → %v", i, fi, p, fa.PixelOpaque(p), fb.PixelOpaque(p))
+				}
 			}
 		}
 	}
@@ -355,71 +405,44 @@ func firstPixelDiff(a, b []byte) int {
 	return n
 }
 
-// dumpBuildRoundtrip exercises the full dump→build pipeline through the
-// filesystem in a temp directory, then compares the rebuilt sequences against
-// the originals at the palette-index level.
-func dumpBuildRoundtrip(seqs []*gaf.Sequence, palette *gaf.Palette) error {
+// dumpBuildRoundtrip runs the CLI's dump and build code with their default
+// flags through a temp directory, then compares the rebuilt file with the
+// original. gafPath is the source file's path, which decides the default
+// frame storage exactly as the build's --target would.
+func dumpBuildRoundtrip(seqs []*gaf.Sequence, origRaw []rawSequence, palette *gaf.Palette, gafPath string) error {
 	tmp, err := os.MkdirTemp("", "gaf-roundtrip-*")
 	if err != nil {
 		return fmt.Errorf("mkdir tmp: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
-	for si, seq := range seqs {
-		// Use the sequence index as the directory name so build emits the
-		// sequences in the same order (sort.Strings on the directory listing).
-		seqDir := filepath.Join(tmp, fmt.Sprintf("%04d_%s", si, safeName(seq.Name)))
-		if err := os.MkdirAll(seqDir, 0o755); err != nil {
-			return fmt.Errorf("mkdir seq: %w", err)
-		}
-
-		for fi, frame := range seq.Frames {
-			framePath := filepath.Join(seqDir, fmt.Sprintf("%d.png", fi))
-			// Use TransparencyModeNone on dump so every palette slot stays
-			// opaque in the PNG. The build's palettize fast-path remaps any
-			// pixel whose palette entry has alpha<0x8000 to the metadata TI
-			// — useful for display, but it destroys the index-level mapping
-			// needed for a faithful round-trip. With all entries opaque the
-			// build copies indices through verbatim.
-			if err := writeFrameWith(frame, palette, "png", framePath,
-				gaf.RenderOptions{Mode: gaf.TransparencyModeNone}); err != nil {
-				return fmt.Errorf("dump frame: %w", err)
-			}
-		}
-
-		csvPath := filepath.Join(seqDir, "frames.csv")
-		if err := writeFramesCSV(seq, csvPath); err != nil {
-			return fmt.Errorf("write csv: %w", err)
-		}
+	// The animated previews are not read back by the build, so skip them.
+	if _, err := dumpSequences(seqs, palette, tmp, dumpOptions{Format: "png"}); err != nil {
+		return fmt.Errorf("dump: %w", err)
 	}
 
-	// Build sequences back from disk using the same code path the CLI uses.
-	palModel := palette.ColorModel()
-	entries, err := os.ReadDir(tmp)
+	policy, err := parseStoragePolicy("auto", gafPath)
 	if err != nil {
-		return fmt.Errorf("read tmp: %w", err)
+		return err
 	}
-	var seqDirs []string
-	for _, e := range entries {
-		if e.IsDir() {
-			seqDirs = append(seqDirs, e.Name())
+	var buildErr error
+	built, err := buildSequences(tmp, palette, policy, func(dir string, _ *gaf.Sequence, err error) {
+		if err != nil && buildErr == nil {
+			buildErr = fmt.Errorf("build %s: %w", dir, err)
 		}
+	})
+	if buildErr != nil {
+		return buildErr
 	}
-	sort.Strings(seqDirs)
-
-	builtSeqs := make([]*gaf.Sequence, 0, len(seqDirs))
-	for i, dirName := range seqDirs {
-		built, err := buildSequence(filepath.Join(tmp, dirName), seqs[i].Name, palModel, palette)
-		if err != nil {
-			return fmt.Errorf("build %s: %w", dirName, err)
-		}
-		// Preserve the original sequence name (the directory name was
-		// prefixed with an ordering key).
-		built.Name = seqs[i].Name
-		builtSeqs = append(builtSeqs, built)
+	if err != nil {
+		return fmt.Errorf("build: %w", err)
 	}
 
-	if diff := compareSequences(seqs, builtSeqs); diff != "" {
+	var buf bytes.Buffer
+	if err := gaf.WriteGAFWith(&buf, built, policy.writeOptions()); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	if diff := compareEncoded(seqs, origRaw, buf.Bytes(), rawCompareOptions{Flattened: true}); diff != "" {
 		return fmt.Errorf("%s", diff)
 	}
 	return nil

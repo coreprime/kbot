@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"image/gif"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/coreprime/kbot/internal/palettepick"
 )
 
@@ -21,7 +21,9 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("gaf_list",
 			mcplib.WithDescription(
 				"List sequences in a GAF (Graphics Animation Format) file. "+
-					"Each sequence reports its name, frame count and total duration.",
+					"Each sequence reports its name, frame count, whether the game loops it "+
+					"(the low byte of its loop word; otherwise it plays once) and the time one "+
+					"pass takes (each frame shows for its duration in 1/30 s ticks, at least one tick).",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -35,7 +37,15 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("gaf_export",
 			mcplib.WithDescription(
-				"Export one sequence from a GAF file as an animated GIF or APNG. "+
+				"Export one sequence from a GAF file as an animated PNG (APNG, default) or GIF. "+
+					"Frames are drawn as the game draws them: a raw frame's key pixels and a "+
+					"compressed frame's skipped pixels are transparent and palette index 0 is "+
+					"opaque black; frame delays are the game's 1/30 s ticks and the animation "+
+					"loops only when the sequence's loop byte is set. When the game-data folder "+
+					"is registered as TA: Kingdoms (a 'takingdoms' kbot context) and "+
+					"'transparency' is omitted, raw frames use the corner guess instead, as the "+
+					"studio does, because TA: Kingdoms raw atlases often store a key that differs "+
+					"from their background. "+
 					"Output paths are anchored to the game-data folder when relative. "+
 					"When 'palette' is omitted, kbot auto-detects a palette from the "+
 					"game-data VFS (TA: Kingdoms ships per-asset palettes); pass an "+
@@ -49,7 +59,14 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 				mcplib.Description("Sequence index to export (default 0)."),
 			),
 			mcplib.WithString("format",
-				mcplib.Description("Output format: 'gif' (default) or 'png' (APNG)."),
+				mcplib.Description("Output format: 'png' (APNG, default) or 'gif'."),
+			),
+			mcplib.WithString("transparency",
+				mcplib.Description(
+					"Transparent pixels: 'game' (the stored key and skipped pixels; the default), "+
+						"'heuristic' (corner guess for raw frames; the default for a TA: Kingdoms "+
+						"game-data folder) or 'none'.",
+				),
 			),
 			mcplib.WithString("output",
 				mcplib.Required(),
@@ -71,7 +88,9 @@ type gafSeqInfo struct {
 	Index         int     `json:"index"`
 	Name          string  `json:"name"`
 	Frames        int     `json:"frames"`
-	DurationTicks uint32  `json:"duration_ticks"`
+	Loops         bool    `json:"loops"`
+	LoopFlags     uint16  `json:"loop_flags"`
+	DurationTicks int     `json:"duration_ticks"`
 	DurationSecs  float64 `json:"duration_seconds"`
 }
 
@@ -114,16 +133,15 @@ func makeGAFListHandler(r *Resolver) server.ToolHandlerFunc {
 			Sequences: make([]gafSeqInfo, 0, len(seqs)),
 		}
 		for i, seq := range seqs {
-			var ticks uint32
-			for _, f := range seq.Frames {
-				ticks += f.Duration
-			}
+			ticks := seq.TotalTicks()
 			out.Sequences = append(out.Sequences, gafSeqInfo{
 				Index:         i,
 				Name:          seq.Name,
 				Frames:        len(seq.Frames),
+				Loops:         seq.Loops(),
+				LoopFlags:     seq.LoopFlags,
 				DurationTicks: ticks,
-				DurationSecs:  float64(ticks) / 30.0,
+				DurationSecs:  float64(ticks) / gaf.TicksPerSecond,
 			})
 		}
 		return jsonResult(out)
@@ -138,6 +156,7 @@ type gafExportOutput struct {
 	Frames        int    `json:"frames"`
 	Output        string `json:"output"`
 	Format        string `json:"format"`
+	Transparency  string `json:"transparency"`
 	Palette       string `json:"palette,omitempty"`
 	PaletteSource string `json:"palette_source,omitempty"`
 }
@@ -153,11 +172,22 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(err), nil
 		}
 		sequence := int(req.GetFloat("sequence", 0))
-		format := strings.ToLower(req.GetString("format", "gif"))
+		format := strings.ToLower(req.GetString("format", "png"))
 		if format != "gif" && format != "png" {
-			return errorResult(fmt.Errorf("format must be gif or png, got %q", format)), nil
+			return errorResult(fmt.Errorf("format must be png or gif, got %q", format)), nil
 		}
 		gameData := req.GetString("game_data", "")
+		transparency := req.GetString("transparency", "")
+		if strings.TrimSpace(transparency) == "" {
+			transparency = "game"
+			if r.isKingdoms(gameData) {
+				transparency = "heuristic"
+			}
+		}
+		opts, err := gafTransparencyOption(transparency)
+		if err != nil {
+			return errorResult(err), nil
+		}
 		paletteOverride := req.GetString("palette", "")
 
 		rf, err := r.ResolveFile(path, gameData)
@@ -205,15 +235,11 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 		seq := seqs[sequence]
 		switch format {
 		case "gif":
-			g, gerr := seq.ToGIF(palette)
-			if gerr != nil {
-				return errorResult(fmt.Errorf("gif conversion: %w", gerr)), nil
-			}
-			if gerr := gif.EncodeAll(dst, g); gerr != nil {
+			if gerr := seq.WriteGIFWith(dst, palette, opts); gerr != nil {
 				return errorResult(fmt.Errorf("gif encode: %w", gerr)), nil
 			}
 		case "png":
-			if perr := seq.ToAPNG(palette, dst); perr != nil {
+			if perr := seq.ToAPNGWith(palette, opts, dst); perr != nil {
 				return errorResult(fmt.Errorf("apng conversion: %w", perr)), nil
 			}
 		}
@@ -226,10 +252,32 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 			Frames:        len(seq.Frames),
 			Output:        resolvedOut,
 			Format:        format,
+			Transparency:  strings.ToLower(strings.TrimSpace(transparency)),
 			Palette:       paletteRes.Path,
 			PaletteSource: string(paletteRes.Source),
 		})
 	}
+}
+
+// isKingdoms reports whether the game-data folder a request uses (the named
+// one, or the first registered) is registered as TA: Kingdoms.
+func (r *Resolver) isKingdoms(gameData string) bool {
+	gd, err := r.registry.Get(gameData)
+	return err == nil && gd != nil && strings.EqualFold(gd.Game, kbotctx.GameTAKingdoms)
+}
+
+// gafTransparencyOption maps the gaf_export 'transparency' argument to
+// render options; an empty value is the game's rule.
+func gafTransparencyOption(v string) (gaf.RenderOptions, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "game", "metadata":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeMetadata}, nil
+	case "heuristic":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeHeuristic}, nil
+	case "none":
+		return gaf.RenderOptions{Mode: gaf.TransparencyModeNone}, nil
+	}
+	return gaf.RenderOptions{}, fmt.Errorf("transparency must be game, heuristic or none, got %q", v)
 }
 
 // resolveMCPGAFPalette picks the rendering palette for an MCP gaf_export call.

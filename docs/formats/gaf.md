@@ -17,9 +17,9 @@
 > [!TIP]
 > **Try it yourself.**
 > ```bash
-> kbot gaf list   anims/cursors.gaf                                      # sequences + frame counts
-> kbot gaf export anims/cursors.gaf --format gif --sequence 0 -o cursor.gif
-> kbot gaf dump   anims/cursors.gaf --target ./cursors --format png      # one PNG per frame
+> kbot gaf list   anims/cursors.gaf                                      # sequences, frame counts, loop flag
+> kbot gaf export anims/cursors.gaf --format gif --sequence 0 --target cursor.gif
+> kbot gaf dump   anims/cursors.gaf --target ./cursors                   # one PNG per frame
 > ```
 > See the CLI [`kbot gaf` reference](../../README.md#kbot-gaf--sprite-animations)
 > for every flag.
@@ -49,7 +49,8 @@
 └───┬─────────────────────┘
     ▼
 ┌─ SequenceHeader (40B) ─┐
-│ frameCount, name[32]   │
+│ frameCount, loop word, │
+│ +4 word, name[32]      │
 └─────────┬──────────────┘
           ▼
 ┌─ FrameListItem (8B) × frameCount ─┐  ptr + tick duration
@@ -59,7 +60,7 @@
 │ size, origin,     │
 │ transparency,     │
 │ compressed?,      │
-│ subFrameCount     │
+│ layers, +11 byte  │
 │ ptrPixelData      │
 └─────┬─────────────┘
       ▼
@@ -87,8 +88,8 @@ typedef struct {
 
 | Field | Notes |
 |-------|-------|
-| `Version` | `0x00010100` for all third-party tooling. **Cavedog's `anims/terrain.gaf` and `anims/vismasks.gaf` ship with `Version == 0`** — accept both. |
-| `SequenceCount` | Followed immediately by `SequenceCount × uint32` of absolute file offsets, each pointing at a `SequenceHeader`. |
+| `Version` | `0x00010100` for all third-party tooling. **Cavedog's `anims/terrain.gaf` and `anims/vismasks.gaf` ship with `Version == 0`.** The game does not check the word; kbot reads any value (an unfamiliar one is reported as a warning) and writes `0x00010100`. |
+| `SequenceCount` | Followed immediately by `SequenceCount × uint32` of absolute file offsets, each pointing at a `SequenceHeader`. The game uses only the low 16 bits, read as a signed value: 1–32767 sequences, none for zero or a negative value. |
 | `Unknown1` | Always zero; emit zero on write. |
 
 ---
@@ -98,20 +99,29 @@ typedef struct {
 ```c
 typedef struct {
     uint16 FrameCount;
-    uint16 Unknown1;
-    uint32 Unknown2;
+    uint16 LoopFlags;      // +2: low byte non-zero = the sequence loops
+    uint32 Unknown4;       // +4: not used by the game; stock files store 0
     char   Name[32];       // NUL-padded, case-preserved
 } GAFSequence;
 ```
+
+The game loops a sequence when the low byte of `LoopFlags` is set and
+plays it once (then stops on the last frame) when it is 0. **Every stock
+sequence stores 1.** kbot keeps both words when it rewrites a file, and
+`kbot gaf build` gives a sequence without a `sequence.csv` the stock
+value 1.
 
 Followed by `FrameCount × FrameListItem`:
 
 ```c
 typedef struct {
     uint32 PtrFrameInfo;   // → FrameInfo
-    uint32 Duration;       // Game ticks (30 ticks = 1 second)
+    uint32 Duration;       // Game ticks (30 ticks = 1 second); low 16 bits used
 } FrameListItem;
 ```
+
+The game reads only the low 16 bits of `Duration` and shows a frame for
+`max(Duration, 1)` ticks of its 30 Hz animation clock.
 
 Sequence names matter — the game looks up animations by name (e.g.
 `UnitInfo` references `corpyro_smoke` from the `corpyro.gaf` script).
@@ -127,10 +137,11 @@ typedef struct {
     uint16 Height;
     int16  OriginX;            // Render anchor, may be negative
     int16  OriginY;
-    uint8  TransparencyIndex;  // Palette index treated as transparent
-    uint8  Compressed;         // 0 = raw bitmap, 1 = run-encoded
-    uint16 LayerCount;         // 0 = simple frame, >0 = composite of sub-frames
-    uint32 Unknown2;           // Editor scratch; emit 0
+    uint8  TransparencyIndex;  // Key: transparent in raw frames
+    uint8  Compressed;         // 0 = raw bitmap, non-zero = run-encoded
+    uint8  LayerCount;         // +10: 0 = simple frame, >0 = composite of layers
+    uint8  Blend;              // +11: set on a layer = drawn translucently
+    uint32 Unknown2;           // +12: editor scratch, not used by the game
     uint32 PtrFrameData;       // → pixel bytes OR layer pointer table
     uint32 Unknown3;           // Always 0
 } FrameInfo;
@@ -143,9 +154,12 @@ centre of the blast; for a cursor it's the hotspot pixel.
 ### Layered frames
 
 When `LayerCount > 0`, `PtrFrameData` is an array of `LayerCount × uint32`
-pointers to **nested `FrameInfo`s**, not pixel data. Each sub-frame is
-composited in array order (back-to-front). The outer frame's `Width`,
-`Height`, and `Origin*` should still be honoured as the bounding box.
+pointers to **nested `FrameInfo`s**, not pixel data. Each layer is
+drawn in array order (back-to-front) with its hotspot on the outer
+frame's hotspot. A layer whose `+11` byte is set is drawn through the
+translucency table instead of being copied (no stock file sets it).
+Byte `+10` and byte `+11` are separate fields: reading them as one 16-bit
+count turns a set `+11` byte into 256 layers.
 
 ### Pixel data
 
@@ -155,9 +169,13 @@ others.
 
 #### Uncompressed (`Compressed == 0`)
 
-`Width × Height` bytes, top-down, left-to-right.
+`Width × Height` bytes, top-down, left-to-right. The game draws every
+pixel except those equal to `TransparencyIndex`. Unit textures
+(`textures/*.gaf`) and the sight masks (`anims/vismasks.gaf`) are read
+as plain pixel arrays, so their frames must be raw; every stock frame
+there is.
 
-#### Compressed (`Compressed == 1`) — TA Run-Length Encoding
+#### Compressed (`Compressed != 0`) — TA Run-Length Encoding
 
 Pixel data is a sequence of `Height` independent rows. Each row starts
 with a `uint16 lineLength` followed by a run-length-encoded byte stream
@@ -166,15 +184,18 @@ with a 1-byte **mask** whose low two bits select the chunk kind:
 
 | Mask test | Chunk kind | Length (pixels) | Following bytes |
 |-----------|-----------|-----------------|-----------------|
-| `mask & 0x01` | Transparent run | `count = mask >> 1` | (none — fills with `TransparencyIndex`) |
+| `mask & 0x01` | Transparent run | `count = mask >> 1` | (none — the pixels are skipped) |
 | `mask & 0x02` | Repeat run | `count = (mask >> 2) + 1` | 1 byte — the colour index to repeat |
 | neither | Literal copy | `count = (mask >> 2) + 1` | `count` bytes — the literal pixels |
 
 So the maximum run lengths are 127 transparent pixels, 64 repeat
-pixels, and 64 literal pixels per chunk. If the encoded row is shorter
-than `Width`, the remaining pixels are filled with `TransparencyIndex`.
-Sub-frames may be smaller than the outer frame and are positioned by
-their own `OriginX/Y`.
+pixels, and 64 literal pixels per chunk. **Only skipped pixels are
+transparent:** a repeated or literal pixel is drawn even when its value
+equals `TransparencyIndex`, and palette index 0 is ordinary opaque
+black. If the encoded row ends before `Width`, kbot pads it with
+transparent pixels and reports it; the game would read on into the
+following bytes. Layers may be smaller than the outer frame and are
+positioned by their own `OriginX/Y`.
 
 Reference: [`formats/gaf/gaf.go` `readCompressed`](../../formats/gaf/gaf.go)
 and [`formats/gaf/writer.go` `compressRow`](../../formats/gaf/writer.go).
@@ -186,8 +207,8 @@ and [`formats/gaf/writer.go` `compressRow`](../../formats/gaf/writer.go).
 > that lives outside the GAF. See [TA: Kingdoms palette resolution]
 > (#ta-kingdoms--palette-resolution) and [TA: Kingdoms transparency
 > quirk](#ta-kingdoms--transparency-quirk) for the TAK-specific machinery.
-> `kbot gaf export` defaults to the embedded TA palette and the
-> corner-detect transparency heuristic; both are overridable.
+> `kbot gaf export` defaults to the embedded TA palette and the game's
+> transparency rule; both are overridable.
 
 ---
 
@@ -276,15 +297,14 @@ appears in the actual pixel data — meanwhile the artist filled the
 A literal reading of the metadata renders an opaque coloured background
 where TA's renderer would have produced transparency.
 
-kbot's GAF renderer applies a **corner-detect heuristic** to
-`EffectiveTransparencyIndex` (see
-[`formats/gaf/gaf.go`](../../formats/gaf/gaf.go)):
+TA's renderer never guesses: it uses the stored key for raw frames and
+the skip commands for compressed ones. For TAK atlases kbot offers an
+opt-in **corner-detect heuristic** (`TransparencyModeHeuristic`, see
+`EffectiveTransparencyIndex` in kbot-io's `formats/gaf`), which applies
+to raw frames only:
 
-1. If `TransparencyIndex` is present anywhere in the pixel buffer —
-   the common case, and the only case for TA GAFs — trust the
-   metadata. This is also true for compressed frames whose RLE
-   "transparent run" opcode emits exactly that index, so compressed
-   frames never trip the heuristic.
+1. If `TransparencyIndex` is present anywhere in the pixel buffer,
+   trust the metadata.
 2. Otherwise sample the four corners. If all four agree on a value,
    use that value as the effective transparent index. This rescues
    TAK uncompressed frames where the artist drew a uniform border.
@@ -293,25 +313,43 @@ kbot's GAF renderer applies a **corner-detect heuristic** to
    whose corners are unit pixels — auto-detection correctly declines
    to override).
 
-The on-disk byte is never overwritten — round-trip writers see the
-original value.
+Compressed and composite frames always use their skipped pixels. The
+on-disk byte is never overwritten — round-trip writers see the original
+value. A fully opaque TA frame with a uniform border would lose that
+border under the heuristic, so TA renders never use it.
 
 ### Overriding transparency at render time
 
-`gaf.RenderOptions` exposes four modes:
+`gaf.RenderOptions` exposes these modes:
 
 | Mode | Behaviour | Use case |
 |------|-----------|----------|
-| `TransparencyModeAuto` | Corner-detect heuristic, falling back to metadata (default). | Display. |
-| `TransparencyModeMetadata` | Use `Frame.TransparencyIndex` verbatim. | Investigation; verifying disk content. |
-| `TransparencyModeNone` | Treat every palette slot as opaque. | **Round-trip pipelines** (paletted PNG dump + build); avoids the build step remapping pixels through the metadata TI. |
+| `TransparencyModeAuto` / `TransparencyModeMetadata` | The game's rule: a raw frame's key pixels and a compressed frame's skipped pixels are transparent; index 0 is opaque black (the zero value, and the default everywhere in kbot for TA). | Display, dumps, round trips. |
+| `TransparencyModeHeuristic` | Corner guess for raw frames (above), the game's rule otherwise. What the studio uses for TA: Kingdoms sprites. | TAK texture atlases. |
+| `TransparencyModeNone` | Every pixel is opaque. | Inspecting the key colour. |
 | `TransparencyModeIndex` | Use a caller-supplied index. | UI override; debugging. |
 
-The web GAF viewer exposes `Auto / Metadata / None` as a dropdown
-alongside the palette picker, threading the choice through as
-`?transparency=auto|metadata|none|<N>` on every PNG/GIF/APNG request.
+Every exported palette entry is opaque except one transparent slot per
+export, normally the frame's key. When a frame draws pixels whose value
+equals its key (or frames of one animation use each other's keys as
+colours), an index no drawn pixel uses becomes the slot instead, so the
+image keeps every palette index.
+
+The asset explorer's GAF viewer offers `Default / Game rule / Corner
+guess / None` as a dropdown alongside the palette picker, threading the
+choice through as `?transparency=game|heuristic|none|<N>` on every
+PNG/GIF/APNG request. The default is the game rule for TA and the corner
+guess for TA: Kingdoms installs.
 The cache key includes the transparency tag, so swapping modes
 doesn't serve stale renders.
+
+The MCP `gaf_export` tool follows the same default: the game rule,
+except that a game-data folder registered as TA: Kingdoms (a
+`takingdoms` kbot context) gets the corner guess; its result names the
+mode used. `kbot gaf export` reads a plain file with no game context, so
+it defaults to the game rule; pass `--transparency heuristic` for TA:
+Kingdoms atlases. `kbot gaf dump` always uses the game rule, since
+`kbot gaf build` reads the stored keys back from the images.
 
 ---
 
@@ -321,11 +359,11 @@ doesn't serve stale renders.
 $ kbot gaf list anims/cursors.gaf
 GAF: 22 sequence(s), version 0x00010100
 
-#   Name             Frames  Duration (ticks)  Duration (sec)
-─   ────             ──────  ────────────────  ──────────────
-0   cursormove       8       64                2.13
-1   cursorgrn        1       10                0.33
-2   cursorselect     2       12                0.40
+#   Name             Frames  Loops  Duration (ticks)  Duration (sec)
+─   ────             ──────  ─────  ────────────────  ──────────────
+0   cursormove       8       yes    64                2.13
+1   cursorgrn        1       yes    10                0.33
+2   cursorselect     2       yes    12                0.40
 ...
 ```
 
@@ -336,7 +374,7 @@ Width:       32
 Height:      32
 OriginX:     16        ← hotspot in the middle of the cursor
 OriginY:     16
-Transparency: 0        ← palette index 0 (the canonical TA transparent)
+Transparency: 0        ← this frame's key (compressed, so only skips are transparent)
 Compressed:  1         ← run-encoded
 LayerCount:  0         ← flat (no sub-frames)
 ```
@@ -348,25 +386,47 @@ LayerCount:  0         ← flat (no sub-frames)
 `kbot gaf dump` writes a directory layout that `kbot gaf build` reads back:
 
 ```
-my-sprite/
-├── gaf.json            ← version + sequence list
+cursors/
 ├── cursormove/
-│   ├── frames.csv      ← duration_ticks,origin_x,origin_y,transparency,compressed
-│   ├── 000.png
-│   ├── 001.png
+│   ├── sequence.csv    ← index,name,loop_flags,unknown4
+│   ├── frames.csv      ← frame,width,height,origin_x,origin_y,transparency,
+│   │                     duration_ticks,duration_sec,storage,blend
+│   ├── animated.png    ← preview only; not read back
+│   ├── 0.png
+│   ├── 1.png
 │   └── ...
 └── ...
 ```
 
 ```bash
-kbot gaf dump  anims/cursors.gaf --target ./cursors --format png
-# edit some PNGs / tweak frames.csv
+kbot gaf dump  anims/cursors.gaf --target ./cursors
+# edit some PNGs / tweak frames.csv or sequence.csv
 kbot gaf build ./cursors --target ./cursors-rebuilt.gaf
+kbot gaf roundtrip anims/                     # check dump/build keeps what the game reads
 ```
 
-The build step re-quantises any RGBA PNGs back to the TA palette using a
-nearest-colour match against the embedded palette; anything that hits the
-`TransparencyIndex` is preserved as transparent.
+Frame images are indexed PNGs (or GIFs with `--format gif`) drawn with
+the game's rule, so every pixel keeps its palette index and only the
+transparent pixels are marked. The build step copies those indices back
+and turns transparent pixels into the frame's key; RGBA images are
+matched to the nearest palette colour instead, avoiding the key.
+
+- `sequence.csv` restores the sequence order, its exact name, its loop
+  word and its +4 word. Without one, the folder name is the sequence
+  name and the sequence loops, like every stock sequence.
+- `storage` (`raw` or `compressed`) and `blend` (the +11 byte) restore
+  each frame's header. Frames without a storage are compressed, except
+  that every frame written to `textures/*.gaf` or `anims/vismasks.gaf`
+  is raw, because the game reads those as plain pixel arrays.
+  `--storage raw|compressed` overrides both.
+- Composite (layered) frames are dumped as one flattened image and
+  built back as simple frames; `kbot gaf roundtrip` reports how many.
+- A frame with no pixels (width or height 0) has no image; its
+  `frames.csv` row alone rebuilds it.
+- A sub-folder with neither `frames.csv` nor `sequence.csv` is skipped
+  with a warning. Any other sub-folder that cannot be built (a missing
+  or unreadable image, a bad CSV value) stops the build, so a sequence
+  is never silently left out.
 
 > [!NOTE]
 > **TA & TA:K GAFs are byte-identical.** The container is identical;
@@ -379,22 +439,24 @@ nearest-colour match against the embedded palette; anything that hits the
 ## Gotchas
 
 > [!WARNING]
-> **Some sequences ship with frame durations of `0`.** That's intentional
-> — the game treats them as static / event-driven (the engine advances
-> them in response to script calls). Don't "fix" them to a default.
+> **A sequence whose loop byte is 0 plays once and stops.** Tools that
+> write the +2 word as zero freeze every animated feature they touch.
+> kbot keeps the word, and new sequences built by kbot loop.
 
-- **Compressed pixel rows can be shorter than `Width`.** The trailing
-  pixels are implicitly transparent. A bug in older GafBuilder Pro
-  versions silently drops these rows entirely on resave; if a GAF lost
-  frames after editing, it's that bug — use kbot's pipeline instead.
-- **Sub-frame origins are absolute** (relative to the parent frame's
-  origin), not deltas.
+- **Some sequences ship with frame durations of `0`.** The game shows
+  such a frame for one tick, like a duration of 1. Don't "fix" them to
+  a default.
+- **Compressed pixel rows can be shorter than `Width`.** The game reads
+  on into the next bytes as commands; kbot pads the row with transparent
+  pixels and reports it. No stock file has such rows.
+- **Layer origins are hotspots**: each layer is placed so its origin
+  lands on the outer frame's origin.
 - **TA: Kingdoms `.taf` comes in two flavours.** kbot reads a *paletted*
   `.taf` as a vanilla GAF, but TA:K also ships **truecolor** `.taf` files
   (16-bit ARGB pixels, no palette). Check the frame format byte to tell
   them apart and see [TAF / TSF](taf.md) for the truecolor variant.
 - **`anims/terrain.gaf` and `anims/vismasks.gaf` have `Version == 0`.**
-  Treat zero as a valid synonym for `0x00010100`.
+  The game ignores the version word.
 - **Frames per sequence are not bounded** — `cursorteleport` has 46 frames.
   Don't assume a fixed cap when sizing buffers.
 

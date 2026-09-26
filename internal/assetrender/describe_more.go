@@ -290,15 +290,22 @@ func describeCRT(_ *Renderer, _ string, data []byte, out map[string]any) {
 	out["players"] = players
 }
 
+// describe3DO reports a model's totals, piece tree and texture names. The
+// counts and tree include the root's siblings, which the game loads and
+// draws as further top-level pieces; texture names are listed once each,
+// compared case-insensitively as the game looks them up. A truncated or
+// damaged file is reported as an error instead of partial counts.
 func describe3DO(_ *Renderer, _ string, data []byte, out map[string]any) {
+	out["format"] = "3DO Model"
 	model, err := objects3d.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
+		out["error"] = err.Error()
 		return
 	}
-	out["format"] = "3DO Model"
 	out["totalObjects"] = len(model.AllObjects)
 	out["totalVertices"] = model.TotalVertices()
 	out["totalPrimitives"] = model.TotalPrimitives()
+	out["rootSiblings"] = len(model.RootSiblings)
 	out["textures"] = model.Textures()
 
 	type object struct {
@@ -319,7 +326,9 @@ func describe3DO(_ *Renderer, _ string, data []byte, out map[string]any) {
 			walk(c, depth+1)
 		}
 	}
-	walk(model.Root, 0)
+	for _, top := range model.TopLevel() {
+		walk(top, 0)
+	}
 	out["objects"] = objects
 }
 
@@ -375,8 +384,12 @@ func describeFNT(_ *Renderer, _ string, data []byte, out map[string]any) {
 	}
 	out["format"] = "TA Font"
 	out["height"] = font.Height
+	out["baseline"] = font.Baseline
+	out["firstChar"] = font.FirstChar
 	out["glyphCount"] = font.GlyphCount()
-	out["flags"] = font.Flags
+	if len(font.Warnings) > 0 {
+		out["warnings"] = font.Warnings
+	}
 
 	type glyph struct {
 		Char  int `json:"char"`

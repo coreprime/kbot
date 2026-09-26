@@ -124,7 +124,7 @@ func (sess *Session) renderGAFScreen(data []byte, vpath, seqName string) []byte 
 		pal = sess.palettes().FeaturePalette(name)
 	}
 	var buf bytes.Buffer
-	if err := target.Frames[len(target.Frames)-1].ToPNG(pal, &buf); err != nil {
+	if err := target.Frames[len(target.Frames)-1].ToPNGWith(pal, sess.spriteRenderOptions(), &buf); err != nil {
 		return nil
 	}
 	return buf.Bytes()
