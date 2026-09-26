@@ -98,6 +98,54 @@ func TestBuildWithoutUnitTable(t *testing.T) {
 	}
 }
 
+func TestBuildFlagsCategoriesNoUnitHas(t *testing.T) {
+	profile := "plan easy\nWeight ARM 0.5\nWeight ARMRADD 0.5\nLimit LEVL3 0\nLimit ALL 50\nLimit CORFORT 2\n"
+	p := Build([]byte(profile), testUnits)
+	none := map[string]bool{}
+	for _, w := range p.Plans[0].Weights {
+		none[w.Target] = w.MatchesNone
+	}
+	for _, l := range p.Plans[0].Limits {
+		none[l.Target] = l.MatchesNone
+	}
+	want := map[string]bool{"ARM": false, "ARMRADD": true, "LEVL3": true, "ALL": false, "CORFORT": false}
+	for target, w := range want {
+		if none[target] != w {
+			t.Errorf("%s: MatchesNone = %v, want %v", target, none[target], w)
+		}
+	}
+	// Without a unit table nothing can be said about a target.
+	for _, w := range Build([]byte(profile), nil).Plans[0].Weights {
+		if w.MatchesNone {
+			t.Errorf("%s flagged without a unit table", w.Target)
+		}
+	}
+}
+
+func TestWrittenNoteComparesNumbers(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		read float64
+		want string
+	}{
+		{".1", 0.1, ""},
+		{"0.10", 0.1, ""},
+		{"0.20", 0.2, ""},
+		{"+4", 4, ""},
+		{"-1", -1, ""},
+		{"5.0", 5, ""},
+		{"O", 0, `written "O"`},
+		{"DECOM", 0, `written "DECOM"`},
+		{"12abc", 12, `written "12abc"`},
+		{"1e2", 1, `written "1e2"`},
+		{"", 0, "no value: reads as 0"},
+	} {
+		if got := WrittenNote(c.raw, c.read); got != c.want {
+			t.Errorf("WrittenNote(%q, %v) = %q, want %q", c.raw, c.read, got, c.want)
+		}
+	}
+}
+
 func TestLimitLabel(t *testing.T) {
 	for max, want := range map[int]string{-1: "unlimited", 0: "disabled", -2: "disabled", -100: "disabled", 4: "max 4"} {
 		if got := LimitLabel(max); got != want {
@@ -145,5 +193,20 @@ func TestRetailKrogothProfile(t *testing.T) {
 	}
 	if !sawCategory || !sawCorfort {
 		t.Errorf("ARM as a category: %v; Limit CORFORT O forbids: %v", sawCategory, sawCorfort)
+	}
+	// ARMFMIN1 is not a retail unit name, so its lines match nothing.
+	var sawUnmatched bool
+	for _, pl := range p.Plans {
+		for _, l := range pl.Limits {
+			if l.Target == "ARMFMIN1" {
+				sawUnmatched = l.Kind == KindCategory && l.MatchesNone
+			}
+			if l.Target == "CORFORT" && l.MatchesNone {
+				t.Errorf("unit CORFORT flagged as matching nothing")
+			}
+		}
+	}
+	if !sawUnmatched {
+		t.Error("Limit ARMFMIN1 is not flagged as a category that matches no unit")
 	}
 }

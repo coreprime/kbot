@@ -31,11 +31,13 @@ export function weightBarPercent(weight) {
   return Math.min(weight * 100, 100)
 }
 
-// kindLabel names what a directive's target is.
-export function kindLabel(kind) {
+// kindLabel names what a directive's target is.  matchesNone marks a
+// category no unit in the install has, so the line does nothing (often a
+// misspelt unit name).
+export function kindLabel(kind, matchesNone = false) {
   switch (kind) {
     case 'unit': return 'unit'
-    case 'category': return 'category'
+    case 'category': return matchesNone ? 'category, matches no unit' : 'category'
     case 'all': return 'all units'
     case 'none': return 'no target'
     default: return ''

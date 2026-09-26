@@ -36,6 +36,19 @@ test('targets are labelled unit, category or all', () => {
   assert.equal(kindLabel(''), '')
 })
 
+test('a category no unit has is flagged', () => {
+  assert.equal(kindLabel('category', true), 'category, matches no unit')
+  assert.equal(kindLabel('category', false), 'category')
+  assert.equal(kindLabel('unit', true), 'unit')
+})
+
+test('a number written another way gets no note', () => {
+  assert.equal(writtenNote('.1', 0.1), '')
+  assert.equal(writtenNote('0.10', 0.1), '')
+  assert.equal(writtenNote('+4', 4), '')
+  assert.equal(writtenNote('1e2', 1), 'written “1e2”')
+})
+
 test('values the game reads as a prefix are explained', () => {
   assert.equal(writtenNote('O', 0), 'written “O”')
   assert.equal(writtenNote('DECOM', 0), 'written “DECOM”')

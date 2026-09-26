@@ -4,7 +4,8 @@
 //
 //   - lines before the first plan line are ignored when a game starts;
 //   - a target is a unit name, a category word matched against each unit's
-//     FBI Category, or ALL, and a unit line locks that unit;
+//     FBI Category, or ALL, and a unit line locks that unit; a category no
+//     unit has (often a misspelt unit name) does nothing and is flagged;
 //   - a limit of -1 is unlimited, 0 and any other negative value forbid;
 //   - values are numeric prefixes ("O" reads as 0), which the parser's
 //     diagnostics explain.
@@ -42,6 +43,10 @@ type Weight struct {
 	// Kind is KindUnit, KindCategory, KindAll or KindNone; empty when no
 	// unit table was available to tell units from categories.
 	Kind string `json:"kind,omitempty"`
+	// MatchesNone is set when Kind is KindCategory and no unit in the table
+	// has that category: the line does nothing (often a misspelt unit
+	// name).
+	MatchesNone bool `json:"matchesNone,omitempty"`
 	// Weight is the multiplier the game reads.
 	Weight float64 `json:"weight"`
 	// Raw is the value word as written.
@@ -53,6 +58,8 @@ type Weight struct {
 type Limit struct {
 	Target string `json:"unit"`
 	Kind   string `json:"kind,omitempty"`
+	// MatchesNone is as for Weight.
+	MatchesNone bool `json:"matchesNone,omitempty"`
 	// Maximum is the value the game reads: -1 unlimited, 0 or any other
 	// negative value forbids, N caps the count.
 	Maximum   int    `json:"maximum"`
@@ -176,13 +183,16 @@ func Build(data []byte, units []ai.Unit) *Profile {
 func convertPlan(src *ai.DifficultyPlan, res *ai.Resolver) Plan {
 	pl := Plan{Name: src.Name, Line: src.Line, Weights: []Weight{}, Limits: []Limit{}}
 	for _, w := range src.Weights {
+		k := kind(res, w.UnitName)
 		pl.Weights = append(pl.Weights, Weight{
-			Target: w.UnitName, Kind: kind(res, w.UnitName), Weight: w.Weight, Raw: w.RawValue, Line: w.Line,
+			Target: w.UnitName, Kind: k, MatchesNone: matchesNone(res, k, w.UnitName),
+			Weight: w.Weight, Raw: w.RawValue, Line: w.Line,
 		})
 	}
 	for _, l := range src.Limits {
+		k := kind(res, l.UnitName)
 		pl.Limits = append(pl.Limits, Limit{
-			Target: l.UnitName, Kind: kind(res, l.UnitName), Maximum: l.Maximum,
+			Target: l.UnitName, Kind: k, MatchesNone: matchesNone(res, k, l.UnitName), Maximum: l.Maximum,
 			Unlimited: l.Unlimited(), Forbids: l.Forbids(), Raw: l.RawValue, Line: l.Line,
 		})
 	}
@@ -208,6 +218,12 @@ func kind(res *ai.Resolver, target string) string {
 	}
 }
 
+// matchesNone reports whether a category target applies to no unit in the
+// table.
+func matchesNone(res *ai.Resolver, kind, target string) bool {
+	return res != nil && kind == KindCategory && len(res.Matches(target)) == 0
+}
+
 func effective(settings map[string]ai.Setting, d ai.Difficulty) Effective {
 	e := Effective{Difficulty: d.String(), Units: []Setting{}}
 	for name, s := range settings {
@@ -221,6 +237,21 @@ func effective(settings map[string]ai.Setting, d ai.Difficulty) Effective {
 	}
 	sort.Slice(e.Units, func(i, j int) bool { return e.Units[i].Unit < e.Units[j].Unit })
 	return e
+}
+
+// WrittenNote explains a value word the game reads differently from how it
+// looks, given the value the game reads: "written \"O\"" when the word is
+// not a number or is a different number (the game reads only its numeric
+// prefix), "no value: reads as 0" when the line has no value word, and ""
+// when the word is that number however it is written (".1", "0.10", "+4").
+func WrittenNote(raw string, read float64) string {
+	if raw == "" {
+		return "no value: reads as 0"
+	}
+	if v, err := strconv.ParseFloat(raw, 64); err == nil && v == read {
+		return ""
+	}
+	return "written " + strconv.Quote(raw)
 }
 
 // LimitLabel renders a limit the way the game treats it: "unlimited" for -1,

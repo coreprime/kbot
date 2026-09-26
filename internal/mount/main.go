@@ -713,9 +713,10 @@ func describeAI(_ string, data []byte) {
 
 // writeAIProfile prints a computer-player profile the way TA 3.1c reads it:
 // the lines before the first plan (ignored when a game starts), each plan's
-// weights and limits with their targets labelled unit, category or ALL, the
-// parser's notes on lines the game reads differently from how they look, and
-// how many units each difficulty changes.
+// weights and limits with their targets labelled unit, category or ALL (a
+// category no unit has is flagged, since the line does nothing), the parser's
+// notes on lines the game reads differently from how they look, and how many
+// units each difficulty changes.
 func writeAIProfile(w io.Writer, p *aiprofile.Profile) {
 	_, _ = fmt.Fprintf(w, "Format: AI Profile\n")
 	_, _ = fmt.Fprintf(w, "Plans: %d\n", len(p.Plans))
@@ -770,24 +771,30 @@ func writeAIPlan(w io.Writer, pl *aiprofile.Plan) {
 		}
 		return fmt.Sprintf("%-24s", t)
 	}
-	written := func(raw, read string) string {
-		if raw != read {
-			return fmt.Sprintf("   (written %q)", raw)
+	// notes lists, after a directive, how the game reads its value word and
+	// whether its category matches any unit.
+	notes := func(raw string, read float64, matchesNone bool) string {
+		var out string
+		if n := aiprofile.WrittenNote(raw, read); n != "" {
+			out += "   (" + n + ")"
 		}
-		return ""
+		if matchesNone {
+			out += "   (matches no unit)"
+		}
+		return out
 	}
 	if len(pl.Weights) > 0 {
 		_, _ = fmt.Fprintf(w, "\nWeights (multiply build priority; a unit line locks the unit):\n")
 		for _, wt := range pl.Weights {
 			read := strconv.FormatFloat(wt.Weight, 'g', -1, 64)
-			_, _ = fmt.Fprintf(w, "  %s x%s%s\n", target(wt.Target, wt.Kind), read, written(wt.Raw, read))
+			_, _ = fmt.Fprintf(w, "  %s x%s%s\n", target(wt.Target, wt.Kind), read, notes(wt.Raw, wt.Weight, wt.MatchesNone))
 		}
 	}
 	if len(pl.Limits) > 0 {
 		_, _ = fmt.Fprintf(w, "\nLimits (-1 unlimited; 0 or any other negative value forbids):\n")
 		for _, l := range pl.Limits {
 			_, _ = fmt.Fprintf(w, "  %s %s%s\n", target(l.Target, l.Kind), aiprofile.LimitLabel(l.Maximum),
-				written(l.Raw, strconv.Itoa(l.Maximum)))
+				notes(l.Raw, float64(l.Maximum), l.MatchesNone))
 		}
 	}
 	_, _ = fmt.Fprintln(w)

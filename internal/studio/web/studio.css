@@ -6804,6 +6804,7 @@ canvas {
   white-space: nowrap;
 }
 .fx-ai-kind-category, .fx-ai-kind-all { border-color: var(--accent); color: var(--accent); }
+.fx-ai-kind.fx-ai-kind-unmatched { border-color: var(--danger); color: var(--danger); }
 .fx-ai-written { color: var(--muted); font-size: 11px; font-style: italic; }
 .fx-ai-note { color: var(--muted); font-size: 12px; max-width: 640px; }
 .fx-ai-diags ul { margin: 0; padding-left: 18px; font-size: 12px; }

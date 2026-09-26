@@ -129,7 +129,7 @@ to 5 % and locks it; `Weight PLANT 2` brings each Arm factory back from
 > **Category aliases are matched against the unit's `Category=` token
 > list, not against any taxonomy file.** A category alias only "exists"
 > if at least one unit declares it. Misspell `LEVL3` and the directive
-> silently does nothing.
+> silently does nothing (kbot's viewers mark it *matches no unit*).
 
 ---
 
@@ -323,8 +323,8 @@ mistaken for one.
 > category that matches no unit and does nothing; a value that is not a
 > number reads as 0 (so a limit forbids the target); lines before the
 > first `plan` are ignored at game start. The first sign of a broken
-> profile is usually "the AI is behaving strangely". kbot's viewers list
-> these lines (see below).
+> profile is usually "the AI is behaving strangely". kbot's viewers flag
+> each of these (see below).
 
 - **`Limit 0`, or any negative limit other than `-1`**, forbids the AI
   from building that target. `-1` lifts the cap.
@@ -350,13 +350,17 @@ The studio's asset explorer (*AI Profile* tab) and `kbot mount`'s
 - **Before first plan** — the preamble lines, labelled as ignored when
   a game starts.
 - **One tab per plan**, each target marked *unit*, *category* or *all
-  units* against the install's `units/*.fbi` (name and `Category=`).
+  units* against the install's `units/*.fbi` (name and `Category=`). A
+  category no unit has, which is how a misspelt unit name reads, is
+  marked *matches no unit*.
   Weights are shown as multipliers, with a bar for the percentage a unit
   at 100 % is left with; limits as *∞ Unlimited*, *Disabled* (0 or any
   negative value other than -1) or *Max: N*.
 - **Lines the game reads differently** — kbot-io's diagnostics, such as
   a value word that is not a number (`O` reads as 0) or words after the
-  value.
+  value. A value word that is not the number the game reads is shown
+  next to it (*written "O"*); another spelling of the same number, such
+  as `.1` or `0.10`, is not.
 - **At game start** (studio; `kbot mount` prints the counts) — for
   easy, medium and hard, every unit whose weight or limit the profile
   changes, with 🔒 on values a unit line locked.

@@ -12,12 +12,13 @@ import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { useState } from 'preact/hooks'
 import { limitLabel, limitDisabled, weightLabel, weightBarPercent, kindLabel, writtenNote } from './ai-format.js'
 
-function Target({ name, kind }) {
-  const label = kindLabel(kind)
+function Target({ name, kind, matchesNone }) {
+  const label = kindLabel(kind, matchesNone)
+  const cls = 'fx-ai-kind fx-ai-kind-' + kind + (matchesNone ? ' fx-ai-kind-unmatched' : '')
   return html`
     <span class="fx-ai-target">
       <span class="fx-ai-unit">${name || '—'}</span>
-      ${label ? html`<span class=${'fx-ai-kind fx-ai-kind-' + kind}>${label}</span>` : null}
+      ${label ? html`<span class=${cls} title=${matchesNone ? 'No unit has this category: the line does nothing' : null}>${label}</span>` : null}
     </span>`
 }
 
@@ -38,7 +39,7 @@ function PlanView({ plan }) {
           <div class="fx-ai-weights">
             ${weights.map((w, i) => html`
               <div key=${i} class="fx-ai-weight-row" title=${`line ${w.line}`}>
-                <${Target} name=${w.unit} kind=${w.kind} />
+                <${Target} name=${w.unit} kind=${w.kind} matchesNone=${w.matchesNone} />
                 <div class="fx-ai-bar-track">
                   <div class="fx-ai-bar" style=${`width:${Math.max(weightBarPercent(w.weight), 2)}%`}>
                     <span class="fx-ai-bar-val">${weightLabel(w.weight)}</span>
@@ -54,7 +55,7 @@ function PlanView({ plan }) {
           <div class="fx-ai-limits">
             ${limits.map((l, i) => html`
               <div key=${i} class="fx-ai-limit-row" title=${`line ${l.line}`}>
-                <${Target} name=${l.unit} kind=${l.kind} />
+                <${Target} name=${l.unit} kind=${l.kind} matchesNone=${l.matchesNone} />
                 <span class=${'fx-ai-limit-val' + (limitDisabled(l) ? ' disabled' : '')}>
                   ${limitLabel(l)} <${Written} raw=${l.raw} value=${l.maximum} />
                 </span>
