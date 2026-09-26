@@ -75,6 +75,17 @@ func diagsToJSON(diags []linter.Diagnostic) ([]lintDiag, map[string]int) {
 func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
 	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
+		// A COB the reader rejects (tables past the end of the file, …) is
+		// still a COB: show why in the Lint tab rather than as an unknown file.
+		out["format"] = "COB"
+		out["error"] = err.Error()
+		results, summary := diagsToJSON([]linter.Diagnostic{{
+			Rule:     "malformed-cob",
+			Severity: linter.Error,
+			Message:  "the file does not load: " + err.Error(),
+		}})
+		out["lintResults"] = results
+		out["lintSummary"] = summary
 		return
 	}
 	out["format"] = "COB"
@@ -195,12 +206,20 @@ func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
 			out["lintError"] = fmt.Sprintf("preprocessing failed: %v", err)
 			return
 		}
-		cob, err := compiler.NewCompiler(processed).Compile()
+		comp := compiler.NewCompiler(processed)
+		cob, err := comp.Compile()
 		if err != nil {
 			out["lintError"] = fmt.Sprintf("compilation failed: %v", err)
 			return
 		}
-		results, summary := diagsToJSON(linter.New().Lint(cob))
+		// The compiler's own warnings (a function defined twice, % under
+		// .version 6) come first; the linter then runs the style rules and,
+		// for a TA script, the TA 3.1c compatibility rules.
+		diags := make([]linter.Diagnostic, 0, len(comp.Warnings()))
+		for _, w := range comp.Warnings() {
+			diags = append(diags, linter.Diagnostic{Rule: "compiler", Severity: linter.Warning, Message: w})
+		}
+		results, summary := diagsToJSON(append(diags, linter.New().Lint(cob)...))
 		out["lintResults"] = results
 		out["lintSummary"] = summary
 	}

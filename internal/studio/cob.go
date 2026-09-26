@@ -142,6 +142,14 @@ func (sess *Session) buildCobScriptJSON(name string, wantDecompile bool) (*cobSc
 	if !ok {
 		return nil, errCOBNotFound
 	}
+	return cobScriptFromBytes(name, data, wantDecompile)
+}
+
+// cobScriptFromBytes parses and disassembles raw COB bytes into the JSON
+// shape of buildCobScriptJSON. Instruction names are kbot-io's mnemonics for
+// what the game runs (0x10037000 is XOR, 0x10038000 NOT); a word with stray
+// low bits, which the game runs as its base instruction, is named NAME@0x....
+func cobScriptFromBytes(name string, data []byte, wantDecompile bool) (*cobScriptJSON, error) {
 	// The canonical key is the lowercased, extension-less unit name (matches
 	// /api/studio/model/).
 	name = strings.ToLower(strings.TrimSuffix(name, ".cob"))
@@ -170,7 +178,7 @@ func (sess *Session) buildCobScriptJSON(name string, wantDecompile bool) (*cobSc
 			script.Instructions = append(script.Instructions, cobInstruction{
 				Offset: ins.Offset,
 				Op:     ins.Opcode,
-				Name:   scripting.OpcodeName(ins.Opcode),
+				Name:   ins.Mnemonic(),
 				P1:     ins.Operand,
 				P2:     ins.Operand2,
 			})
