@@ -21,9 +21,9 @@ import (
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/aiprofile"
 	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/mapmeta"
-	"github.com/coreprime/kbot/internal/aiprofile"
 )
 
 // init registers the heavier structured / script-analysis describers. Keeping

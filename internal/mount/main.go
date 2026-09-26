@@ -20,8 +20,8 @@ import (
 	"github.com/coreprime/kbot-io/formats/pcx"
 	"github.com/coreprime/kbot-io/formats/scripting"
 	"github.com/coreprime/kbot-io/formats/tdf"
-	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/aiprofile"
+	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
