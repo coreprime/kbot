@@ -43,6 +43,12 @@ written once as plain files.  Serve the output directory over any static
 HTTP host and point @coreprime/kbot-game3d's HttpPackProvider at its base URL —
 the renderer runs with no studio server.
 
+The install is mounted the way the game mounts it: for --game ta, TA
+3.1c's archive order (loose files, rev31.gp3, *.ccx, *.ufo, the first ten
+*.hpi, then the *.hpi past that limit), so every file is the copy the
+game reads.  A unit, weapon or feature defined more than once keeps the
+first definition in the game's enumeration order.
+
 Pack layout (all filenames lower-case; characters outside [a-z0-9._-]
 become "_"):
 
