@@ -9,6 +9,8 @@ import (
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // registerVFSTools exposes the game-data introspection tools the model uses
@@ -19,9 +21,13 @@ func registerVFSTools(s *server.MCPServer, r *Resolver) {
 			mcplib.WithDescription(
 				"List the game-data folders this server knows about.  The first "+
 					"entry is the default used when a tool call omits game_data.  "+
-					"Each entry reports its name, base path, archive count and "+
-					"total file count (loading the VFS on first call may take a "+
-					"few seconds on a full install).",
+					"Each entry reports its name, base path, archive count, total "+
+					"file count, the archive discovery mode, the mounted archives "+
+					"in lookup order (a file held by several archives comes from "+
+					"the first) and the archives that were not mounted with the "+
+					"reason (for Total Annihilation: past the ten-*.hpi limit, no "+
+					"Cavedog trailer, a TA: Kingdoms archive).  Loading the VFS on "+
+					"first call may take a few seconds on a full install.",
 			),
 		),
 		makeVFSGameDataHandler(r),
@@ -99,6 +105,11 @@ type gameDataEntry struct {
 	Files     int    `json:"files,omitempty"`
 	Loaded    bool   `json:"loaded"`
 	LoadError string `json:"load_error,omitempty"`
+	// Discovery, MountOrder and SkippedArchives describe how the folder was
+	// mounted (see gamevfs.MountReport).
+	Discovery       string                   `json:"discovery,omitempty"`
+	MountOrder      []gamevfs.MountedArchive `json:"mount_order,omitempty"`
+	SkippedArchives []gamevfs.SkippedArchive `json:"skipped_archives,omitempty"`
 }
 
 type gameDataOutput struct {
@@ -127,6 +138,10 @@ func makeVFSGameDataHandler(r *Resolver) server.ToolHandlerFunc {
 				entry.Loaded = true
 				entry.Archives = len(vfs.Archives())
 				entry.Files = len(vfs.List())
+				rep := gamevfs.Report(vfs)
+				entry.Discovery = rep.Discovery
+				entry.MountOrder = rep.Mounted
+				entry.SkippedArchives = rep.Skipped
 			} else {
 				entry.LoadError = err.Error()
 			}

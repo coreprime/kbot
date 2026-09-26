@@ -1,12 +1,14 @@
 // layers.js
 //
 // The Layering tab: lists every archive layer that carries this path,
-// ordered by priority (the winning, active layer first).  Clicking a
-// layer re-renders the file's other tabs from that specific source so
-// you can see what a lower-priority archive holds for the same name.
+// ordered by priority (the winning, active layer first), with each
+// archive's position in the mount order.  Clicking a layer re-renders
+// the file's other tabs from that specific source so you can see what a
+// lower-priority archive holds for the same name.
 
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { formatSize } from '../api.js'
+import { layerPlacement } from '../mount-info.js'
 
 // Layer records arrive as Go structs (PascalCase); tolerate camelCase too.
 function lSource(l) { return l.source ?? l.Source ?? '' }
@@ -20,7 +22,7 @@ export function LayersTab({ layers, activeSource, onSwitch }) {
   const winning = activeSource || lSource(items[0])
   return html`
     <div class="fx-layers">
-      <p class="fx-layers-note">This file exists in ${items.length} source${items.length !== 1 ? 's' : ''}. Click a layer to view its bytes.</p>
+      <p class="fx-layers-note">This file exists in ${items.length} source${items.length !== 1 ? 's' : ''}; the game reads the first. Click a layer to view its bytes.</p>
       <div class="fx-layer-list">
         ${items.map((layer, i) => {
           const src = lSource(layer)
@@ -32,6 +34,7 @@ export function LayersTab({ layers, activeSource, onSwitch }) {
                 ${isActive ? html`<span class="fx-layer-active-tag">● active</span>` : null}
               </div>
               <div class="fx-layer-meta">
+                ${layerPlacement(layer) ? html`<span>${layerPlacement(layer)}</span>` : null}
                 <span>${formatSize(lSize(layer))}</span>
                 <span>Priority ${lPriority(layer)}</span>
               </div>

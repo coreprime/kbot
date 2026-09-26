@@ -19,6 +19,13 @@ relevant format page.
   in `totala1.hpi`. The
   [layering diagram in hpi.md](hpi.md#load-order-layering) shows the
   full priority stack.
+- **Among archives, the first one mounted wins, and only ten `*.hpi`
+  mount.** TA 3.1c mounts `rev31.gp3`, then `*.ccx`, `*.ufo` and the
+  first ten `*.hpi` that open, each group in ASCII upper-case name
+  order. A mod shipped as `zz_mod.hpi` ranks below every retail archive
+  and, on an install that already has ten `*.hpi` sorting before it,
+  mounts only through the disc scan, below everything. Ship mods as
+  `.ufo`.
 - **HPI v1 pointers are absolute to file start, not to the directory
   start.** Subtract nothing. The canonical-parser trick is to allocate
   a `DirectorySize`-byte buffer and decrypt the directory into it at

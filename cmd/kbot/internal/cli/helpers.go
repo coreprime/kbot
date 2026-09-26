@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/kbotctx"
 )
 
@@ -144,25 +145,34 @@ func hasAnyPrefix(s string, prefixes []string) bool {
 // return with a nil error means no path is available and the caller
 // should produce its own "path required" diagnostic.
 func ResolveVFSPath(explicit string) (path, source string, err error) {
+	path, _, source, err = ResolveVFSContext(explicit)
+	return path, source, err
+}
+
+// ResolveVFSContext is ResolveVFSPath plus the game the directory holds:
+// the active context's game (taken from its parent chain when the context
+// itself is "custom"), or "" for an explicit path, whose game is unknown.
+// The game picks the archive mount order (see gamevfs.Config).
+func ResolveVFSContext(explicit string) (path, game, source string, err error) {
 	if explicit != "" {
-		return explicit, "flag", nil
+		return explicit, "", "flag", nil
 	}
 	cfg, err := kbotctx.Load()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	alias, ctx, src, ok := cfg.Active()
 	if !ok {
 		if alias != "" && src == "env" {
-			return "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
+			return "", "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
 		}
-		return "", "", nil
+		return "", "", "", nil
 	}
 	label := fmt.Sprintf("context %q", alias)
 	if src == "env" {
 		label = fmt.Sprintf("context %q (via %s)", alias, kbotctx.EnvVar)
 	}
-	return ctx.Path, label, nil
+	return ctx.Path, gamevfs.ChainGame(cfg, alias), label, nil
 }
 
 // ReportContextSource prints a short note to stderr about where a
@@ -179,21 +189,18 @@ func ReportContextSource(source string) {
 // commands can resolve bare filenames and virtual paths.  Priority is the
 // explicit --vfs flag, then the active kbot context.  A nil VFS with a nil
 // error means no root is available and the caller should fall back to plain
-// local-disk handling.
+// local-disk handling.  The install is mounted with kbot's shared mount
+// configuration (gamevfs.Config): TA 3.1c's archive order for Total
+// Annihilation, archives the game would refuse skipped rather than fatal.
 func OpenContextVFS(explicit string) (*filesystem.VirtualFileSystem, string, error) {
-	root, source, err := ResolveVFSPath(explicit)
+	root, game, source, err := ResolveVFSContext(explicit)
 	if err != nil {
 		return nil, "", err
 	}
 	if root == "" {
 		return nil, "", nil
 	}
-	vfs, err := filesystem.NewVirtualFileSystem(root, &filesystem.Config{
-		Extensions:        []string{".hpi", ".ccx", ".gp3", ".ufo"},
-		ExcludeExtensions: []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-		ExcludePrefixes:   []string{"goggame"},
-		SkipErrors:        true,
-	})
+	vfs, err := gamevfs.Open(root, game)
 	if err != nil {
 		return nil, "", fmt.Errorf("mount vfs at %s: %w", root, err)
 	}

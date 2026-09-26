@@ -8,12 +8,13 @@ import (
 	"sync"
 
 	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // GameData represents a single Total Annihilation (or TA: Kingdoms) install
-// rooted at BasePath.  The on-demand VirtualFileSystem layers any HPI/UFO/CCX/GP3
-// archives found in the tree on top of physical files, mirroring how the game
-// itself sees its content.
+// rooted at BasePath.  The on-demand VirtualFileSystem layers the install's
+// HPI/UFO/CCX/GP3 archives under its physical files in the order the game
+// mounts them, mirroring how the game itself sees its content.
 //
 // A GameData also indexes top-level archive files by basename so that callers
 // can refer to e.g. "totala1.hpi" without knowing the absolute path.
@@ -89,16 +90,15 @@ func NewGameData(name, basePath string, opts ...GameDataOption) (*GameData, erro
 	return gd, nil
 }
 
-// VFS returns the lazily-loaded virtual filesystem.  The first call walks the
-// game-data tree, opens every archive, and starts background MD5 hashing —
-// this can take a few seconds on a full TA install.  Subsequent calls return
-// the cached instance.
+// VFS returns the lazily-loaded virtual filesystem.  The first call scans
+// the game-data folder, opens its archives, and starts background MD5
+// hashing — this can take a few seconds on a full TA install.  Subsequent
+// calls return the cached instance.  The folder is mounted with kbot's
+// shared mount configuration (gamevfs.Config), so a Total Annihilation
+// install resolves every path to the archive TA 3.1c reads it from.
 func (g *GameData) VFS() (*filesystem.VirtualFileSystem, error) {
 	g.once.Do(func() {
-		g.vfs, g.err = filesystem.NewVirtualFileSystem(g.BasePath, &filesystem.Config{
-			Extensions: []string{".hpi", ".ccx", ".gp3", ".ufo"},
-			SkipErrors: true,
-		})
+		g.vfs, g.err = gamevfs.Open(g.BasePath, g.Game)
 	})
 	return g.vfs, g.err
 }

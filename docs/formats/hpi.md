@@ -4,16 +4,16 @@
 > every game asset. The same on-disk layout is reused with different
 > extensions:
 >
-> | Extension | Purpose | Behaviour |
-> |-----------|---------|-----------|
-> | `.hpi` | Base game archives (`totala1.hpi`, `worlds.hpi`) | Loaded first |
-> | `.ufo` | Unit/feature add-ons (`AFark.ufo`) | Layered on top of `.hpi` |
-> | `.ccx` | Core Contingency expansion (`ccdata.ccx`, `ccmaps.ccx`) | Layered on top of `.ufo` |
-> | `.gp3` | TA "Battle Tactics" / patch overlays (`rev31.gp3`) | Layered on top of `.ccx` |
+> | Extension | Purpose | TA 3.1c mount order |
+> |-----------|---------|---------------------|
+> | `.gp3` | The 3.1 patch overlay (`rev31.gp3`) | Mounted **first**; other `*.gp3` are ignored |
+> | `.ccx` | Core Contingency / Battle Tactics data (`btdata.ccx`, `ccdata.ccx`) | After `rev31.gp3` |
+> | `.ufo` | Unit/feature add-ons (`AFark.ufo`) | After every `.ccx`; no count limit |
+> | `.hpi` | Base game archives (`totala1.hpi`, `tactics1.hpi`) | Last; only the first **ten** that open |
 >
-> All four are byte-identical formats — only the load order differs. The
-> game folds them into a single virtual filesystem at boot, with later
-> archives shadowing earlier ones.
+> All four are byte-identical formats — only the mount order differs. The
+> game folds them into a single virtual filesystem at boot, and **the first
+> archive mounted that holds a path wins**.
 
 > [!IMPORTANT]
 > **Two on-disk dialects.** *Total Annihilation* writes **HPI v1**
@@ -22,44 +22,73 @@
 > **HPI v2** (`Version == 0x00020000`) — a different, simpler layout
 > with no XOR cipher and a single SQSH chunk per file or directory
 > block. The v2 specifics live in their own section near the bottom of
-> this page: [TA: Kingdoms HPI v2](#ta-kingdoms--hpi-v2).
+> this page: [TA: Kingdoms HPI v2](#ta-kingdoms--hpi-v2). TA 3.1c mounts
+> v1 archives only.
 
 > ### Load-order layering
 >
-> When the engine resolves a path like `units/ARMCOM.fbi`, it walks
-> sources in priority order and takes the first hit. **Physical
-> (loose) files in the install root always win** — that's the
-> mechanism mods exploit when shipping a file directly on disk
-> (e.g. `units/MYUNIT.fbi`) without packing it. Among archives, later
-> tiers override earlier ones, so a `.ufo` add-on can shadow a
-> base-game `.hpi` file with the same path.
+> TA 3.1c scans only the **top level** of its game directory (archives in
+> subfolders such as `Backup/` are never mounted) and mounts, in this
+> order:
+>
+> 1. `rev31.gp3`;
+> 2. every `*.ccx`;
+> 3. every `*.ufo`;
+> 4. the first **ten** `*.hpi` that open;
+> 5. the `*.hpi` files at the top level of the game CD, with no count
+>    limit.
+>
+> Within each group the game takes names in **ASCII upper-case order**
+> (the order its directory listing returns: `_` sorts after the letters,
+> `AFark.ufo` before `zeta.ufo`). When it resolves a path like
+> `units/ARMCOM.fbi`, **loose files in the install win**, then the first
+> mounted archive that holds the path. An archive only counts as mounted
+> if it is a version 1 archive ending with the Cavedog copyright trailer
+> (see [Trailer](#trailer)) whose directory reads; any other file is
+> skipped and does not use up one of the ten `*.hpi` slots.
 >
 > ```text
 >    Query: units/ARMCOM.fbi
 >
->    priority ↑   physical files in install root        if found → use this
->            │   ┌───────────────────────────────┐
->            │   │ .gp3 (Battle Tactics patches) │     else fall through
->            │   ├───────────────────────────────┤
->            │   │ .ccx (Core Contingency)       │     else fall through
->            │   ├───────────────────────────────┤
->            │   │ .ufo (mod add-ons)            │     else fall through
->            │   ├───────────────────────────────┤
->            │   │ .hpi (base game)              │     else fall through
->            │   └───────────────────────────────┘
+>    priority ↑   loose files in the install root       if found → use this
+>            │   ┌─────────────────────────────────────┐
+>            │   │ rev31.gp3 (3.1 patch)               │  else fall through
+>            │   ├─────────────────────────────────────┤
+>            │   │ *.ccx in name order                 │  else fall through
+>            │   ├─────────────────────────────────────┤
+>            │   │ *.ufo in name order                 │  else fall through
+>            │   ├─────────────────────────────────────┤
+>            │   │ first ten *.hpi in name order       │  else fall through
+>            │   ├─────────────────────────────────────┤
+>            │   │ *.hpi on the disc (no limit)        │  else fall through
+>            │   └─────────────────────────────────────┘
 >    priority ↓   "not found"
 > ```
 >
-> Within a tier, archives are loaded in **filesystem-listing order** —
-> which on Windows is alphabetical, but is not guaranteed. Don't rely
-> on `aaa-mymod.ufo` consistently beating `zzz-othermod.ufo`; if two
-> mods conflict, the safe answer is to merge them.
+> On the GOG release the ten `*.hpi` slots are taken by `tactics1`–`8.hpi`,
+> `totala1.hpi` and `totala2.hpi`. `totala3.hpi`, `totala4.hpi` (the
+> retail maps) and `worlds.hpi` (the map sections) are the disc archives:
+> a GOG install keeps them in the game directory, which stands in for the
+> disc, so the game mounts them **after every other archive**. The same
+> applies to any `*.hpi` a mod adds: one whose name sorts after the tenth
+> slot is reached only through that disc scan, below everything else.
+> Ship mods as `.ufo` (no limit, above every `.hpi`) to avoid this.
 >
-> The "physical-files-win" rule is why `kbot mount --flatten` produces
-> a directory that behaves identically to the layered set: every file
-> the engine would have resolved through the archive stack is present
-> as a loose file at the same path, so the resolution short-circuits
-> at the top of the stack.
+> kbot mounts Total Annihilation contexts the same way, everywhere: the
+> studio, `kbot mount`, `kbot mount flatten`, `kbot pack`, `kbot tnt`
+> and the MCP server. The Files tab's Home page and Layering tab,
+> `kbot mount`'s `archives` and `stats` commands and the MCP
+> `vfs_game_data` tool list the mount order and every archive that was
+> not mounted, with the reason. *TA: Kingdoms* contexts keep kbot's
+> overlay order (every archive by extension and name, a later one
+> overriding an earlier one), which that game's `IPData.hpi` over
+> `data.hpi` layering needs.
+>
+> The "loose files win" rule is why `kbot mount flatten` produces a
+> directory that behaves identically to the layered set: every file the
+> engine would have resolved through the archive stack is present as a
+> loose file at the same path, so the resolution short-circuits at the
+> top of the stack.
 
 ---
 

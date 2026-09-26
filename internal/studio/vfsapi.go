@@ -127,10 +127,12 @@ func (sess *Session) readVFS(vpath, source string) ([]byte, error) {
 }
 
 // handleVFSStats returns a filesystem overview (archive count, file/dir
-// totals, packed/unpacked sizes, compression) for the explorer Home page.
+// totals, packed/unpacked sizes, compression) for the explorer Home page,
+// plus how the install was mounted: the discovery mode, the archives in
+// lookup order and the archives that were skipped, with the reason.
 func (sess *Session) handleVFSStats(w http.ResponseWriter) {
 	s := sess.vfs.Stats()
-	writeJSON(w, map[string]any{
+	out := map[string]any{
 		"basePath":         s["base_path"],
 		"archives":         s["archives"],
 		"totalFiles":       s["total_files"],
@@ -140,7 +142,11 @@ func (sess *Session) handleVFSStats(w http.ResponseWriter) {
 		"unpackedSize":     s["total_unpacked_size"],
 		"packedSize":       s["total_packed_size"],
 		"compressionRatio": s["compression_ratio"],
-	})
+	}
+	for k, v := range sess.mountSummary() {
+		out[k] = v
+	}
+	writeJSON(w, out)
 }
 
 // handleVFSSearch does a substring match over every VFS path, returning the
@@ -365,7 +371,8 @@ func (sess *Session) handleVFSDescribe(w http.ResponseWriter, vpath, source stri
 }
 
 // handleVFSLayering reports which archive layers contribute this path, ordered
-// by priority (the active file first).
+// by priority (the active file first), with each archive's place in the
+// mount order.
 func (sess *Session) handleVFSLayering(w http.ResponseWriter, vpath string) {
 	if _, err := sess.vfs.Stat(vpath); err != nil {
 		jsonError(w, "file not found", http.StatusNotFound)
@@ -374,7 +381,7 @@ func (sess *Session) handleVFSLayering(w http.ResponseWriter, vpath string) {
 	writeJSON(w, map[string]any{
 		"path":   vpath,
 		"name":   path.Base(vpath),
-		"layers": sess.vfs.GetFileLayers(vpath),
+		"layers": sess.fileLayers(vpath),
 	})
 }
 
@@ -408,7 +415,7 @@ func (sess *Session) handleVFSMetadata(w http.ResponseWriter, vpath, source stri
 		"name":          path.Base(vpath),
 		"size":          len(data),
 		"source":        shown,
-		"layering":      sess.vfs.GetFileLayers(vpath),
+		"layering":      sess.fileLayers(vpath),
 		"describe":      describe,
 		"deletable":     hasLocal,
 		"revertsToBase": hasLocal && layers > 1,

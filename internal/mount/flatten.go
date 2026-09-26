@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/spf13/cobra"
 )
 
@@ -21,8 +22,10 @@ func newFlattenCommand() *cobra.Command {
 		Short: "Flatten VFS to directory with effective files",
 		Long: `Extract the effective set of all files from the virtual filesystem to a target directory.
 
-This creates a flattened view showing which file version "wins" after applying all
-archive priorities (Physical > GP3 > CCX > HPI).
+This creates a flattened view holding the copy of each file the game reads: loose
+files win over every archive, and Total Annihilation installs rank their archives the
+way TA 3.1c does (rev31.gp3, then *.ccx, *.ufo and the first ten *.hpi, each group in
+ASCII upper-case name order, then the *.hpi past that limit).
 
 When <source-path> is omitted, the active kbot context (see 'kbot ctx')
 is used as the source.
@@ -33,7 +36,7 @@ Example:
   kbot mount flatten --target /tmp/ta-flat                # uses active context`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sourcePath, note, err := resolveContextPath(args)
+			sourcePath, game, note, err := resolveContextPath(args)
 			if err != nil {
 				return err
 			}
@@ -41,16 +44,7 @@ Example:
 				fmt.Println(note)
 			}
 
-			// Create VFS
-			cfg := &filesystem.Config{
-				Extensions:         []string{".hpi", ".ccx", ".gp3", ".ufo"},
-				SkipErrors:         true,
-				ExcludeDirectories: []string{"Docs"},
-				ExcludeExtensions:  []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-				ExcludePrefixes:    []string{"goggame"},
-			}
-
-			vfs, err := filesystem.NewVirtualFileSystem(sourcePath, cfg)
+			vfs, err := gamevfs.Open(sourcePath, game)
 			if err != nil {
 				return fmt.Errorf("failed to create VFS: %w", err)
 			}

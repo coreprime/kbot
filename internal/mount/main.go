@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,33 +19,35 @@ import (
 	"github.com/coreprime/kbot-io/formats/pcx"
 	"github.com/coreprime/kbot-io/formats/scripting"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
 
 // resolveContextPath resolves a working directory from an explicit
 // argument (when provided) or the active kbot context.  Returns the
-// resolved path and a human-readable note about where it came from.
-func resolveContextPath(args []string) (string, string, error) {
+// resolved path, the game it holds ("" for an explicit path, whose game is
+// unknown) and a human-readable note about where it came from.
+func resolveContextPath(args []string) (path, game, note string, err error) {
 	if len(args) > 0 && args[0] != "" {
-		return args[0], "", nil
+		return args[0], "", "", nil
 	}
 	cfg, err := kbotctx.Load()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	alias, ctx, src, ok := cfg.Active()
 	if !ok {
 		if alias != "" && src == "env" {
-			return "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
+			return "", "", "", fmt.Errorf("%s=%s names an unknown kbot context (run `kbot ctx list`)", kbotctx.EnvVar, alias)
 		}
-		return "", "", fmt.Errorf("no path provided and no kbot context configured (run `kbot ctx add` or pass an explicit path)")
+		return "", "", "", fmt.Errorf("no path provided and no kbot context configured (run `kbot ctx add` or pass an explicit path)")
 	}
-	note := fmt.Sprintf("Using context %q (%s)", alias, ctx.Path)
+	note = fmt.Sprintf("Using context %q (%s)", alias, ctx.Path)
 	if src == "env" {
 		note = fmt.Sprintf("Using context %q via %s (%s)", alias, kbotctx.EnvVar, ctx.Path)
 	}
-	return ctx.Path, note, nil
+	return ctx.Path, gamevfs.ChainGame(cfg, alias), note, nil
 }
 
 var (
@@ -65,14 +68,24 @@ When <path> is omitted, the active kbot context (see 'kbot ctx') is
 mounted instead.  Set KBOT_CONTEXT=<alias> to pick a different
 registered context for this invocation.
 
+Total Annihilation installs are mounted the way TA 3.1c mounts them:
+loose files first, then rev31.gp3, every *.ccx, every *.ufo and the first
+ten *.hpi, each group in ASCII upper-case name order; the first archive
+holding a file wins.  The *.hpi past the ten-archive limit (totala3.hpi,
+totala4.hpi and worlds.hpi on a GOG install) are mounted last, as the
+game's disc scan mounts them.  Archives the game would refuse (no Cavedog
+trailer, TA: Kingdoms version 2) are skipped and listed with the reason.
+TA: Kingdoms installs keep the overlay order that game needs.
+
 Terminal Mode Commands:
   ls [path]           - List directory contents
   cd <path>           - Change directory
   pwd                 - Print working directory
   cat <file>          - Display file contents
   describe <file>     - Show metadata for TDF/FBI/GAF files
-  archives            - List loaded archives
-  stats               - Show filesystem statistics
+  archives            - List mounted archives in lookup order, and the
+                        archives the game would skip
+  stats               - Show filesystem statistics and mount order
   help                - Show available commands
   exit/quit           - Exit the browser
 
@@ -88,7 +101,7 @@ tab in 'kbot studio'.`,
 }
 
 func runBrowser(cmd *cobra.Command, args []string) error {
-	basePath, note, err := resolveContextPath(args)
+	basePath, game, note, err := resolveContextPath(args)
 	if err != nil {
 		return err
 	}
@@ -104,16 +117,7 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 	fmt.Printf("KBot Explorer - Total Annihilation Asset Browser\n")
 	fmt.Printf("Loading archives from: %s\n\n", basePath)
 
-	// Create VFS
-	config := &filesystem.Config{
-		Extensions:         []string{".hpi", ".ccx", ".gp3", ".ufo"},
-		ExcludeDirectories: []string{"Docs"},
-		ExcludeExtensions:  []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-		ExcludePrefixes:    []string{"goggame"},
-		SkipErrors:         true,
-	}
-
-	vfs, err = filesystem.NewVirtualFileSystem(basePath, config)
+	vfs, err = gamevfs.Open(basePath, game)
 	if err != nil {
 		return fmt.Errorf("failed to create VFS: %w", err)
 	}
@@ -121,24 +125,13 @@ func runBrowser(cmd *cobra.Command, args []string) error {
 
 	// Show stats
 	stats := vfs.Stats()
-	fmt.Printf("✓ Loaded %d archives\n", stats["archives"])
+	fmt.Printf("✓ Mounted %d archives\n", stats["archives"])
 	fmt.Printf("✓ %d files available\n", stats["total_files"])
 	fmt.Printf("✓ %d directories\n\n", stats["directories"])
 
-	// Show archives
-	archives := vfs.Archives()
-	if len(archives) > 0 {
-		fmt.Printf("Archives loaded (%d):\n", len(archives))
-		for i, archive := range archives {
-			if i < 10 {
-				fmt.Printf("  - %s\n", archive)
-			} else if i == 10 {
-				fmt.Printf("  ... and %d more\n", len(archives)-10)
-				break
-			}
-		}
-		fmt.Println()
-	}
+	// Show the archives in lookup order and the ones the game would skip.
+	gamevfs.Report(vfs).Print(os.Stdout)
+	fmt.Println()
 
 	currentDir = ""
 	fmt.Printf("Type 'help' for available commands\n\n")
@@ -205,8 +198,8 @@ func showHelp() {
 	fmt.Println("  pwd                 - Print working directory")
 	fmt.Println("  cat <file>          - Display file contents")
 	fmt.Println("  describe <file>     - Show metadata for TDF/FBI/GAF files")
-	fmt.Println("  archives            - List all loaded archives")
-	fmt.Println("  stats               - Show filesystem statistics")
+	fmt.Println("  archives            - List mounted archives in lookup order and skipped archives")
+	fmt.Println("  stats               - Show filesystem statistics and mount order")
 	fmt.Println("  help                - Show this help")
 	fmt.Println("  exit/quit           - Exit browser")
 }
@@ -573,34 +566,30 @@ func describeHPI(filePath string) {
 }
 
 func handleArchives() {
-	archives := vfs.Archives()
-	fmt.Printf("Loaded Archives (%d):\n\n", len(archives))
-
-	for _, archive := range archives {
-		fmt.Printf("  %s\n", archive)
-	}
+	gamevfs.Report(vfs).Print(os.Stdout)
 }
 
 func handleStats() {
+	printStats(os.Stdout, vfs)
+}
+
+// printStats writes the `stats` command's output: the filesystem totals,
+// then the mounted archives in lookup order and the skipped archives with
+// the reason for each.
+func printStats(w io.Writer, vfs *filesystem.VirtualFileSystem) {
 	stats := vfs.Stats()
 
-	fmt.Println("Filesystem Statistics:")
-	fmt.Println()
-	fmt.Printf("  Base Path: %s\n", stats["base_path"])
-	fmt.Printf("  Archives: %d\n", stats["archives"])
-	fmt.Printf("  Total Files: %d\n", stats["total_files"])
-	fmt.Printf("  Archive Files: %d\n", stats["archive_files"])
-	fmt.Printf("  Physical Files: %d\n", stats["physical_files"])
-	fmt.Printf("  Directories: %d\n", stats["directories"])
-	fmt.Println()
-
-	archives := stats["archive_names"].([]string)
-	if len(archives) > 0 {
-		fmt.Println("Loaded Archives:")
-		for _, archive := range archives {
-			fmt.Printf("  - %s\n", archive)
-		}
-	}
+	_, _ = fmt.Fprintln(w, "Filesystem Statistics:")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintf(w, "  Base Path: %s\n", stats["base_path"])
+	_, _ = fmt.Fprintf(w, "  Archives: %d\n", stats["archives"])
+	_, _ = fmt.Fprintf(w, "  Skipped Archives: %d\n", len(gamevfs.Report(vfs).Skipped))
+	_, _ = fmt.Fprintf(w, "  Total Files: %d\n", stats["total_files"])
+	_, _ = fmt.Fprintf(w, "  Archive Files: %d\n", stats["archive_files"])
+	_, _ = fmt.Fprintf(w, "  Physical Files: %d\n", stats["physical_files"])
+	_, _ = fmt.Fprintf(w, "  Directories: %d\n", stats["directories"])
+	_, _ = fmt.Fprintln(w)
+	gamevfs.Report(vfs).Print(w)
 }
 
 // resolvePath resolves a path relative to current directory

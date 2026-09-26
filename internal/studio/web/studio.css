@@ -6268,6 +6268,15 @@ canvas {
 .fx-facts-row:last-child { border-bottom: 0; }
 .fx-facts-key { color: var(--muted); width: 160px; flex: 0 0 auto; }
 .fx-facts-val { font-family: var(--mono); word-break: break-all; }
+.fx-facts-val.fx-facts-text { font-family: inherit; word-break: normal; }
+.fx-mount { margin-top: 16px; padding: 10px 18px; }
+.fx-mount-group summary { cursor: pointer; padding: 6px 0; color: var(--muted); }
+.fx-mount-list { margin: 4px 0 10px; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.fx-mount-list li { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+.fx-mount-pos { color: var(--muted); width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+.fx-mount-name { font-family: var(--mono); }
+.fx-mount-tag { font-size: 11px; border: 1px solid var(--border); border-radius: 10px; padding: 0 8px; }
+.fx-mount-note { color: var(--muted); font-size: 12px; }
 
 /* ── breadcrumbs ───────────────────────────────────────────────────── */
 .fx-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 14px; }

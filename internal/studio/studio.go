@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/spf13/cobra"
 )
 
@@ -140,18 +139,6 @@ func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 		return h.Hijack()
 	}
 	return nil, nil, fmt.Errorf("hijack not supported")
-}
-
-// studioFSConfig returns the VFS config the studio mounts contexts with:
-// TA archive extensions, excluding the non-asset files an install ships.
-func studioFSConfig() *filesystem.Config {
-	return &filesystem.Config{
-		Extensions:         []string{".hpi", ".ccx", ".gp3", ".ufo"},
-		ExcludeDirectories: []string{"Docs"},
-		ExcludeExtensions:  []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-		ExcludePrefixes:    []string{"goggame"},
-		SkipErrors:         true,
-	}
 }
 
 // isTerminal returns true when f appears to be a character device

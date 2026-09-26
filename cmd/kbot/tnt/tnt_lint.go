@@ -243,23 +243,7 @@ func emitTNTLintSARIF(hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiag
 
 // openLintVFS mounts the right virtual filesystem for a lint invocation.
 func openLintVFS(explicit string) (*filesystem.VirtualFileSystem, string, error) {
-	root, source, err := cli.ResolveVFSPath(explicit)
-	if err != nil {
-		return nil, "", err
-	}
-	if root == "" {
-		return nil, "", nil
-	}
-	vfs, err := filesystem.NewVirtualFileSystem(root, &filesystem.Config{
-		Extensions:        []string{".hpi", ".ccx", ".gp3", ".ufo"},
-		ExcludeExtensions: []string{".dll", ".exe", ".ico", ".hlp", ".zip", ".msg", ".dat", ".lnk", ".sdb", ".db", ".ds_store"},
-		ExcludePrefixes:   []string{"goggame"},
-		SkipErrors:        true,
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("mount vfs at %s: %w", root, err)
-	}
-	return vfs, source, nil
+	return cli.OpenContextVFS(explicit)
 }
 
 // buildMaplintInputFromCLI gathers the optional inputs the quality

@@ -633,6 +633,13 @@ kbot mount flatten --target ./flat
 
 **Terminal commands:** `ls`, `cd`, `pwd`, `cat`, `describe`, `archives`, `stats`, `exit`
 
+Total Annihilation installs are mounted in TA 3.1c's archive order (loose
+files, `rev31.gp3`, `*.ccx`, `*.ufo`, the first ten `*.hpi`, then the
+`*.hpi` past that limit — see [HPI load order](docs/formats/hpi.md#load-order-layering)),
+so every path resolves to the copy the game reads. `archives` and `stats`
+list the mount order and every archive the game would skip (no Cavedog
+trailer, a TA: Kingdoms archive, an unreadable file), with the reason.
+
 For a graphical asset explorer, use the **Files** tab in `kbot studio` (see
 below). It browses the VFS with per-folder listings and adds rich per-format
 previews:
@@ -839,7 +846,7 @@ kbot mcp --http 127.0.0.1:8765 --game-data ~/games/totala
 kbot mcp
 ```
 
-**`--game-data NAME=PATH`** (or just `PATH`, name derived from the basename) registers a Total Annihilation / TA: Kingdoms install as a named virtual filesystem. The folder is walked once, every `.hpi` / `.ufo` / `.ccx` / `.gp3` archive is opened, and contents are layered over physical files exactly as the game sees them. The first `--game-data` is the default the assistant uses when a tool call omits `game_data`. Each game-data base is added implicitly to the path guard, so on-disk paths inside it also resolve.
+**`--game-data NAME=PATH`** (or just `PATH`, name derived from the basename) registers a Total Annihilation / TA: Kingdoms install as a named virtual filesystem. The folder is scanned once and its `.hpi` / `.ufo` / `.ccx` / `.gp3` archives are layered under its physical files in the order the game mounts them (for Total Annihilation, TA 3.1c's order: `rev31.gp3`, `*.ccx`, `*.ufo`, the first ten `*.hpi`, then the `*.hpi` past that limit; see [HPI load order](docs/formats/hpi.md#load-order-layering)). `vfs_game_data` lists the mount order and any archive the game would skip, with the reason. The first `--game-data` is the default the assistant uses when a tool call omits `game_data`. Each game-data base is added implicitly to the path guard, so on-disk paths inside it also resolve.
 
 Once a game-data folder is configured, every tool's `path` argument accepts:
 

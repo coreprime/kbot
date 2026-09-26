@@ -50,8 +50,8 @@ import (
 	"strings"
 
 	"github.com/coreprime/kbot-engine/games"
-	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // PackOptions configures a BuildPack run.
@@ -267,7 +267,7 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
 
-	vfs, err := filesystem.NewVirtualFileSystem(installPath, studioFSConfig())
+	vfs, err := gamevfs.Open(installPath, opts.Game)
 	if err != nil {
 		return nil, fmt.Errorf("mount install: %w", err)
 	}

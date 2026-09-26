@@ -18,8 +18,20 @@ import (
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/gamevfs"
+	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
+
+// previewGame returns the game the preview mounts its VFS for: the
+// context's game when known, else the map's own game (an explicit --vfs
+// path carries no game).
+func previewGame(contextGame, mapGame string) string {
+	if contextGame != "" {
+		return contextGame
+	}
+	return mapGame
+}
 
 func newTNTPreviewCommand() *cobra.Command {
 	var (
@@ -70,13 +82,13 @@ tile-grid render (no overlays).`,
 			}
 			base := m.RenderTileMap(pal)
 
-			resolvedRoot, source, err := cli.ResolveVFSPath(vfsRoot)
+			resolvedRoot, game, source, err := cli.ResolveVFSContext(vfsRoot)
 			if err != nil {
 				return err
 			}
 			if resolvedRoot != "" {
 				cli.ReportContextSource(source)
-				vfs, err := filesystem.NewVirtualFileSystem(resolvedRoot, nil)
+				vfs, err := gamevfs.Open(resolvedRoot, previewGame(game, kbotctx.GameTotalA))
 				if err != nil {
 					return fmt.Errorf("mount vfs at %s: %w", resolvedRoot, err)
 				}
@@ -130,7 +142,7 @@ tile-grid render (no overlays).`,
 // --vfs or the active context) is required to resolve the feature TDFs/GAFs and
 // the feature palette; without one only the bare terrain is emitted.
 func runTAKPreview(tntPath string, data []byte, m *tnt.Map, features []tnt.Feature, vfsRoot, target string) error {
-	resolvedRoot, source, err := cli.ResolveVFSPath(vfsRoot)
+	resolvedRoot, game, source, err := cli.ResolveVFSContext(vfsRoot)
 	if err != nil {
 		return err
 	}
@@ -138,7 +150,7 @@ func runTAKPreview(tntPath string, data []byte, m *tnt.Map, features []tnt.Featu
 	var base *image.RGBA
 	if resolvedRoot != "" {
 		cli.ReportContextSource(source)
-		vfs, err := filesystem.NewVirtualFileSystem(resolvedRoot, nil)
+		vfs, err := gamevfs.Open(resolvedRoot, previewGame(game, kbotctx.GameTAKingdoms))
 		if err != nil {
 			return fmt.Errorf("mount vfs at %s: %w", resolvedRoot, err)
 		}

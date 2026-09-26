@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/coreprime/kbot/internal/workspace"
 )
@@ -78,7 +79,7 @@ func (m *WorkspaceManager) cacheDir(id string) string {
 // `kbot studio <path>` form).
 func (m *WorkspaceManager) openLocalPath(id, name, path, game string) (*Session, error) {
 	return m.adopt(id, func() (*Session, error) {
-		vfs, err := filesystem.NewVirtualFileSystem(path, studioFSConfig())
+		vfs, err := gamevfs.Open(path, game)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +97,7 @@ func (m *WorkspaceManager) openContext(cfg *kbotctx.Config, alias string) (*Sess
 		if err != nil {
 			return nil, err
 		}
-		vfs, err := filesystem.NewLayered(srcs, studioFSConfig())
+		vfs, err := gamevfs.OpenLayered(srcs, gamevfs.ChainGame(cfg, alias))
 		if err != nil {
 			return nil, err
 		}
@@ -114,7 +115,7 @@ func (m *WorkspaceManager) openWorkspace(cfg *kbotctx.Config, dir string) (*Sess
 	}
 	id := "ws-" + slug(man.Name) + "-" + shortHash(man.Dir())
 	return m.adopt(id, func() (*Session, error) {
-		vfs, err := man.OpenVFS(cfg, studioFSConfig())
+		vfs, err := openWorkspaceVFS(cfg, man)
 		if err != nil {
 			return nil, err
 		}
@@ -124,6 +125,25 @@ func (m *WorkspaceManager) openWorkspace(cfg *kbotctx.Config, dir string) (*Sess
 		s.exportFormat = man.Export.Format
 		return s, nil
 	})
+}
+
+// workspaceGame returns the game a workspace's base install holds: the
+// base context chain's game, or the manifest's when the chain has none.
+func workspaceGame(cfg *kbotctx.Config, man *workspace.Manifest) string {
+	if g := gamevfs.ChainGame(cfg, man.Base); g != "" && g != kbotctx.GameCustom {
+		return g
+	}
+	return man.Game
+}
+
+// openWorkspaceVFS mounts a workspace's work folder over its base context
+// chain with the shared mount configuration.
+func openWorkspaceVFS(cfg *kbotctx.Config, man *workspace.Manifest) (*filesystem.VirtualFileSystem, error) {
+	srcs, err := man.ResolveSources(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return gamevfs.OpenLayered(srcs, workspaceGame(cfg, man))
 }
 
 // register wires the hub routes onto mux.
