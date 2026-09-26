@@ -343,6 +343,14 @@ guess for TA: Kingdoms installs.
 The cache key includes the transparency tag, so swapping modes
 doesn't serve stale renders.
 
+The MCP `gaf_export` tool follows the same default: the game rule,
+except that a game-data folder registered as TA: Kingdoms (a
+`takingdoms` kbot context) gets the corner guess; its result names the
+mode used. `kbot gaf export` reads a plain file with no game context, so
+it defaults to the game rule; pass `--transparency heuristic` for TA:
+Kingdoms atlases. `kbot gaf dump` always uses the game rule, since
+`kbot gaf build` reads the stored keys back from the images.
+
 ---
 
 ## Worked example — `cursors.gaf`

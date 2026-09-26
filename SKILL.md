@@ -191,7 +191,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `hpi_info` | `path` | — | header + content summary (version, file count, compression ratio) |
 | `hpi_extract_file` | `path`, `entry` (in-archive path), `output` (on-disk dest) | — | bytes written + resolved output path |
 | `gaf_list` | `path` | — | sequences with name, frame count, `loops`, duration in ticks (each frame at least one) |
-| `gaf_export` | `path`, `output` | `sequence` (index, default 0), `format` (`png` = APNG default, `gif`), `transparency` (`game` default, `heuristic`, `none`) | path to rendered image |
+| `gaf_export` | `path`, `output` | `sequence` (index, default 0), `format` (`png` = APNG default, `gif`), `transparency` (`game`, the default, or `heuristic` by default for a TA: Kingdoms game-data folder; `none`) | path to rendered image |
 | `pcx_describe` | `path` | — | version, encoding, dimensions, bit depth, plane count, DPI, colour-type, `game_loads` and `game_issues` (what TA 3.1c does with the file) |
 | `pcx_convert` | `path`, `output` | `format` (`png`/`gif`/`bmp`; inferred from extension when omitted) | path to converted image |
 | `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order |

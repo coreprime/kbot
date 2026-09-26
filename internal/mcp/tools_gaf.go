@@ -12,6 +12,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/coreprime/kbot/internal/palettepick"
 )
 
@@ -40,7 +41,11 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 					"Frames are drawn as the game draws them: a raw frame's key pixels and a "+
 					"compressed frame's skipped pixels are transparent and palette index 0 is "+
 					"opaque black; frame delays are the game's 1/30 s ticks and the animation "+
-					"loops only when the sequence's loop byte is set. "+
+					"loops only when the sequence's loop byte is set. When the game-data folder "+
+					"is registered as TA: Kingdoms (a 'takingdoms' kbot context) and "+
+					"'transparency' is omitted, raw frames use the corner guess instead, as the "+
+					"studio does, because TA: Kingdoms raw atlases often store a key that differs "+
+					"from their background. "+
 					"Output paths are anchored to the game-data folder when relative. "+
 					"When 'palette' is omitted, kbot auto-detects a palette from the "+
 					"game-data VFS (TA: Kingdoms ships per-asset palettes); pass an "+
@@ -58,8 +63,9 @@ func registerGAFTools(s *server.MCPServer, r *Resolver) {
 			),
 			mcplib.WithString("transparency",
 				mcplib.Description(
-					"Transparent pixels: 'game' (default: the stored key and skipped pixels), "+
-						"'heuristic' (corner guess for TA: Kingdoms raw frames) or 'none'.",
+					"Transparent pixels: 'game' (the stored key and skipped pixels; the default), "+
+						"'heuristic' (corner guess for raw frames; the default for a TA: Kingdoms "+
+						"game-data folder) or 'none'.",
 				),
 			),
 			mcplib.WithString("output",
@@ -150,6 +156,7 @@ type gafExportOutput struct {
 	Frames        int    `json:"frames"`
 	Output        string `json:"output"`
 	Format        string `json:"format"`
+	Transparency  string `json:"transparency"`
 	Palette       string `json:"palette,omitempty"`
 	PaletteSource string `json:"palette_source,omitempty"`
 }
@@ -169,11 +176,18 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 		if format != "gif" && format != "png" {
 			return errorResult(fmt.Errorf("format must be png or gif, got %q", format)), nil
 		}
-		opts, err := gafTransparencyOption(req.GetString("transparency", ""))
+		gameData := req.GetString("game_data", "")
+		transparency := req.GetString("transparency", "")
+		if strings.TrimSpace(transparency) == "" {
+			transparency = "game"
+			if r.isKingdoms(gameData) {
+				transparency = "heuristic"
+			}
+		}
+		opts, err := gafTransparencyOption(transparency)
 		if err != nil {
 			return errorResult(err), nil
 		}
-		gameData := req.GetString("game_data", "")
 		paletteOverride := req.GetString("palette", "")
 
 		rf, err := r.ResolveFile(path, gameData)
@@ -238,14 +252,22 @@ func makeGAFExportHandler(r *Resolver) server.ToolHandlerFunc {
 			Frames:        len(seq.Frames),
 			Output:        resolvedOut,
 			Format:        format,
+			Transparency:  strings.ToLower(strings.TrimSpace(transparency)),
 			Palette:       paletteRes.Path,
 			PaletteSource: string(paletteRes.Source),
 		})
 	}
 }
 
+// isKingdoms reports whether the game-data folder a request uses (the named
+// one, or the first registered) is registered as TA: Kingdoms.
+func (r *Resolver) isKingdoms(gameData string) bool {
+	gd, err := r.registry.Get(gameData)
+	return err == nil && gd != nil && strings.EqualFold(gd.Game, kbotctx.GameTAKingdoms)
+}
+
 // gafTransparencyOption maps the gaf_export 'transparency' argument to
-// render options; the default is the game's rule.
+// render options; an empty value is the game's rule.
 func gafTransparencyOption(v string) (gaf.RenderOptions, error) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "", "game", "metadata":

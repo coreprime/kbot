@@ -124,6 +124,67 @@ func TestGAFToolsFollowTheGame(t *testing.T) {
 	}
 }
 
+// TestGAFExportDefaultFollowsTheGameData checks the default transparency of
+// gaf_export: the game's rule, except for a game-data folder registered as
+// TA: Kingdoms, whose raw atlases the studio draws with the corner guess.
+func TestGAFExportDefaultFollowsTheGameData(t *testing.T) {
+	// A raw frame whose key (9) does not occur and whose corners agree.
+	var buf bytes.Buffer
+	if err := gaf.WriteGAF(&buf, []*gaf.Sequence{{Name: "atlas", LoopFlags: 1, Frames: []*gaf.Frame{{
+		Width: 3, Height: 1, TransparencyIndex: 9, Duration: 1, Storage: gaf.StorageRaw,
+		Pixels: []byte{5, 40, 5},
+	}}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		game, arg, want string
+		cornerAlpha     uint32
+	}{
+		{"totala", "", "game", 0xffff},
+		{"", "", "game", 0xffff},
+		{"takingdoms", "", "heuristic", 0},
+		{"takingdoms", "game", "game", 0xffff},
+	} {
+		root := mediaRoot(t)
+		src := writeFile(t, filepath.Join(root, "anims", "atlas.gaf"), buf.Bytes())
+		reg := NewRegistry()
+		if _, err := reg.AddNamed("install", root, WithGame(tc.game)); err != nil {
+			t.Fatal(err)
+		}
+		guard, err := NewPathGuard([]string{root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := NewResolver(guard, reg)
+		out := filepath.Join(root, "atlas.png")
+		args := map[string]any{"path": src, "output": out}
+		if tc.arg != "" {
+			args["transparency"] = tc.arg
+		}
+		var exp gafExportOutput
+		if res := callTool(t, makeGAFExportHandler(r), "gaf_export", args, &exp); res.IsError {
+			t.Fatalf("%s/%q: %s", tc.game, tc.arg, textOf(res))
+		}
+		if exp.Transparency != tc.want {
+			t.Errorf("game %q, transparency %q: used %q, want %q", tc.game, tc.arg, exp.Transparency, tc.want)
+		}
+		data, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, a := img.At(0, 0).RGBA(); a != tc.cornerAlpha {
+			t.Errorf("game %q, transparency %q: corner alpha %d, want %d", tc.game, tc.arg, a, tc.cornerAlpha)
+		}
+		if _, _, _, a := img.At(1, 0).RGBA(); a != 0xffff {
+			t.Errorf("game %q, transparency %q: centre pixel is transparent", tc.game, tc.arg)
+		}
+	}
+}
+
 func TestPALLookupToolUsesGameSizes(t *testing.T) {
 	root := mediaRoot(t)
 	r := mediaResolver(t, root)
