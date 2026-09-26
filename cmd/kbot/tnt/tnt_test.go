@@ -3,6 +3,7 @@ package tnt
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,5 +220,40 @@ func TestPackRefusesBadIndices(t *testing.T) {
 		if err == nil {
 			t.Errorf("pack accepted tile index %s", bad)
 		}
+	}
+}
+
+// TestPlacementsOnlyWhereTheGamePlaces checks describe and features count
+// only the cells the game places a feature on: a word naming a table entry,
+// not a word past the table, void (0xFFFC) or another sentinel.
+func TestPlacementsOnlyWhereTheGamePlaces(t *testing.T) {
+	m := testMap(t, true)
+	m.TileAttr[0].Feature = 0 // Rock1
+	m.TileAttr[1].Feature = 5 // past the one-entry table
+	m.TileAttr[2].Feature = tnt.FeatureVoid
+	m.TileAttr[3].Feature = 0xFFFD
+	var buf bytes.Buffer
+	features := []tnt.Feature{{Index: 0, Name: "Rock1"}}
+	if err := m.SaveWithOptions(&buf, features, tnt.SaveOptions{AllowUnresolvedIndices: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "feats.tnt")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := run(t, newTNTDescribeCommand(), path)
+	if err != nil || !strings.Contains(out, "Features:    1 in table, 1 placements") {
+		t.Errorf("describe: %v\n%s", err, out)
+	}
+	out, _, err = run(t, newTNTFeaturesCommand(), path)
+	if err != nil {
+		t.Fatalf("features: %v", err)
+	}
+	var doc featuresDoc
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("decode: %v\n%s", err, out)
+	}
+	if len(doc.Placements) != 1 || doc.Placements[0].Name != "Rock1" {
+		t.Errorf("placements = %+v, want only Rock1", doc.Placements)
 	}
 }

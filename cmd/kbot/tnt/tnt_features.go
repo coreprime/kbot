@@ -38,7 +38,9 @@ func newTNTFeaturesCommand() *cobra.Command {
 pixel coordinates) for the given map. Works for both Total Annihilation and
 TA: Kingdoms maps; pixel coordinates are anchored to the same render produced
 by 'kbot tnt image' / 'kbot tnt preview', so they can be used to crop a
-feature out of a rendered map.`,
+feature out of a rendered map.  Only the cells the game places a feature on
+are listed: words naming an entry of the feature table (void cells and
+words past the table place nothing).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
@@ -76,7 +78,7 @@ feature out of a rendered map.`,
 				})
 			}
 
-			enc := json.NewEncoder(os.Stdout)
+			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", " ")
 			return enc.Encode(doc)
 		},
