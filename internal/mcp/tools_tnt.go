@@ -153,8 +153,13 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 					"tile-pool diagnostics (mirroring tnt_optimize — duplicate, similar, unused "+
 					"tile graphics) and map-quality checks identical to Studio's Quality Checker "+
 					"(missing OTA metadata, unreachable / void start positions, schema player-slot "+
-					"coverage, metal proximity, void islands, height discontinuities, duplicate "+
-					"tile graphics).  Returns a JSON list of diagnostics with severity + message.  "+
+					"coverage by the schema the game picks, metal proximity with feature metal read "+
+					"as the game stores it, void islands, height discontinuities, duplicate "+
+					"tile graphics).  The tile-pool list also carries map-data warnings: tile "+
+					"indices past the tile set (bad-tile-index), feature words naming no table "+
+					"entry (unresolved-feature), oversized maps (interchange-bounds) and a missing "+
+					"or undersized minimap (minimap).  Returns a JSON list of diagnostics with "+
+					"severity + message.  "+
 					"`path` accepts an absolute disk path, a virtual path inside the supplied "+
 					"`game_data` (e.g. \"maps/the pass.tnt\"), or a bare basename (\"the pass.tnt\") "+
 					"which is searched against the VFS.  The sibling .ota and the metal-proximity "+

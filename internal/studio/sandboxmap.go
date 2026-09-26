@@ -15,6 +15,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/mapmeta"
 )
 
 // Sandbox map support: the battlefield endpoints behind the sandbox's map
@@ -58,8 +59,9 @@ type sandboxMapJSON struct {
 	// Voids marks carved-out cells (1 = void), base64-encoded, same layout
 	// as Heights. Omitted when the map has none.
 	Voids string `json:"voids,omitempty"`
-	// StartPositions are the first schema's player starts in world units,
-	// origin at the map's top-left corner.
+	// StartPositions are the player starts of the schema the game uses, in
+	// player-slot order, in world units with the origin at the map's top-left
+	// corner.
 	StartPositions []sandboxStartPos `json:"startPositions"`
 	TextureURL     string            `json:"textureUrl"`
 	MinimapURL     string            `json:"minimapUrl"`
@@ -79,9 +81,33 @@ type sandboxFeature struct {
 }
 
 type sandboxStartPos struct {
-	Number int     `json:"number"`
-	X      float64 `json:"x"`
-	Z      float64 `json:"z"`
+	Number int `json:"number"`
+	// Slot is the player slot the game places at the position: Number-1,
+	// or 0 for StartPos0. The list is in slot order, so the first entry is
+	// player 1's start.
+	Slot int     `json:"slot"`
+	X    float64 `json:"x"`
+	Z    float64 `json:"z"`
+}
+
+// sandboxStarts returns the start positions of the schema the game uses for
+// a map, as mapmeta reads them: for TA the schema a skirmish or multiplayer
+// game picks (or a campaign mission's medium-difficulty schema), for TA:K
+// the [Map Data] setup. Positions come in player-slot order, in the OTA's
+// units (TA pixels, TA:K data units). An OTA kbot-io cannot read gives none.
+func sandboxStarts(otaData []byte, isTAK bool) []ta.StartPosition {
+	if isTAK {
+		setup, err := mapmeta.KingdomsSetup(otaData)
+		if err != nil {
+			return nil
+		}
+		return mapmeta.StartPositions(setup)
+	}
+	m, err := mapmeta.ReadOTA(otaData)
+	if err != nil {
+		return nil
+	}
+	return mapmeta.StartPositions(mapmeta.StartSchema(&m.Header))
 }
 
 // startPosWorldScale is the factor that turns a schema's OTA StartPos into
@@ -152,14 +178,15 @@ func (sess *Session) loadSandboxTerrain(mapPath string) (*sandboxTerrain, error)
 	if len(t.Heights) < t.W*t.H || t.W == 0 || t.H == 0 {
 		return nil, fmt.Errorf("map has no usable heightmap")
 	}
-	// The OTA overrides sea level only when it actually carries one; TA:K OTAs
-	// omit it (the level lives in the TNT header, already read above), so a
-	// zero never clobbers the header value.
-	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
-	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
-		if ota := parseOTA(string(otaData), t.W/2, t.H/2); ota != nil {
-			if ota.SeaLevel > 0 && (m.IsTAK || t.SeaLevel == 0) {
-				t.SeaLevel = ota.SeaLevel
+	// TA takes its sea level from the TNT header alone and never reads the
+	// OTA's sealevel key. For TA:K the OTA overrides the header only when it
+	// actually carries one; TA:K OTAs normally omit it, so a zero never
+	// clobbers the header value.
+	if m.IsTAK {
+		otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
+		if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
+			if om, err := mapmeta.ReadOTA(otaData); err == nil && om.Header.SeaLevel > 0 {
+				t.SeaLevel = om.Header.SeaLevel
 			}
 		}
 	}
@@ -206,26 +233,26 @@ func (sess *Session) handleSandboxMap(w http.ResponseWriter, r *http.Request) {
 	out.WorldH = float64(out.H) * sandboxCellWU
 	out.Heights = base64.StdEncoding.EncodeToString(terr.Heights)
 
-	// OTA — the first schema's start positions, converted to world units (the
-	// sea-level override is folded into loadSandboxTerrain above). The two games
-	// store StartPos in different grids: TA writes map-pixels (1 px = 1 wu at
-	// pxPerWU), while TA:K writes DataUnit cells (one per 16-px height cell), so
-	// a TA:K start must scale up by the cell size to land in world units.
-	// Without the TA:K scaling a start reads as a tiny pixel offset near the
-	// map corner — often deep water — and the leader spawns stuck.
+	// OTA — the start positions of the schema the game uses (see
+	// sandboxStarts), in player-slot order and converted to world units. The
+	// two games store StartPos in different grids: TA writes map-pixels
+	// (1 px = 1 wu at pxPerWU), while TA:K writes DataUnit cells (one per
+	// 16-px height cell), so a TA:K start must scale up by the cell size to
+	// land in world units. Without the TA:K scaling a start reads as a tiny
+	// pixel offset near the map corner — often deep water — and the leader
+	// spawns stuck. A map whose OTA offers no start lists none: the client
+	// then starts at the map centre.
 	startScale := startPosWorldScale(m.IsTAK)
 	otaPath := strings.TrimSuffix(mapPath, path.Ext(mapPath)) + ".ota"
+	out.StartPositions = []sandboxStartPos{}
 	if otaData, err := sess.vfs.ReadFile(otaPath); err == nil {
-		if ota := parseOTA(string(otaData), out.W/2, out.H/2); ota != nil {
-			if len(ota.Schemas) > 0 {
-				for _, sp := range ota.Schemas[0].StartPos {
-					out.StartPositions = append(out.StartPositions, sandboxStartPos{
-						Number: sp.Number,
-						X:      float64(sp.X) * startScale,
-						Z:      float64(sp.Z) * startScale,
-					})
-				}
-			}
+		for _, p := range sandboxStarts(otaData, m.IsTAK) {
+			out.StartPositions = append(out.StartPositions, sandboxStartPos{
+				Number: p.Number,
+				Slot:   p.Slot,
+				X:      float64(p.X) * startScale,
+				Z:      float64(p.Z) * startScale,
+			})
 		}
 	}
 

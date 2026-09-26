@@ -35,7 +35,10 @@ func newTNTPreviewCommand() *cobra.Command {
 flattened TA install (or any VFS root containing features/ and anims/),
 composite each placed feature's sprite onto the map and draw a numbered
 circle at every StartPos in the chosen schema (default Schema 0; pass
---schema <n> for a different one).
+--schema <n> for a different one).  The .ota is read as the game reads it:
+schema and key names ignore case, StartPos0 and unnumbered StartPos entries
+count, and a schema after a gap in the numbering (Schema 0, 1, 3) is never
+read, so it draws no markers.
 
 If --vfs is omitted, the active kbot context (see 'kbot ctx') is used
 as the VFS root.  Set KBOT_CONTEXT=<alias> to pick a different
@@ -118,7 +121,7 @@ tile-grid render (no overlays).`,
 	cmd.Flags().StringVar(&vfsRoot, "vfs", "",
 		"Path to a flattened TA install / VFS root used to resolve feature sprites and the sister .ota (defaults to active kbot context)")
 	cmd.Flags().IntVar(&schema, "schema", 0,
-		"Schema index whose StartPos markers are drawn (0-based; default 0)")
+		"Number N of the schema (\"Schema N\") whose StartPos markers are drawn (default 0)")
 	cmd.Flags().BoolVar(&noMarkers, "no-start-markers", false,
 		"Suppress the numbered StartPos marker circles (terrain + feature sprites only)")
 	return cmd

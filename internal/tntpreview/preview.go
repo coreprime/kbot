@@ -21,6 +21,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/mapmeta"
 )
 
 // Stats summarises what the preview compositor did so callers can surface
@@ -35,10 +36,10 @@ type Stats struct {
 // Options tunes Compose.  The zero value is the previous default: Schema 0,
 // auto-resolved sister .ota.
 type Options struct {
-	// SchemaIndex picks which schema's StartPos entries get drawn (0-based).
-	// Values out of range fall back to schema 0 — the historical default,
-	// equivalent to the CLI / MCP behaviour before the per-schema selector
-	// existed.
+	// SchemaIndex picks which schema's StartPos entries get drawn: the one
+	// the game finds as "Schema <SchemaIndex>".  The game reads Schema 0,
+	// Schema 1, ... up to the first missing number, so a schema after a gap
+	// (or an index with no schema) draws no markers.
 	SchemaIndex int
 
 	// HideStartPositions suppresses the numbered StartPos marker circles, so
@@ -173,50 +174,23 @@ func ExtractStartPositions(otaText string) []StartPos {
 	return ExtractStartPositionsForSchema(otaText, 0)
 }
 
-// ExtractStartPositionsForSchema pulls the StartPos entries out of an
-// .ota's GlobalHeader / Schema <n> / specials section.  When the
-// requested schema doesn't exist (or the .ota's schema list is empty),
-// returns nil — drawing zero markers is the right behaviour rather
-// than silently falling back to a different schema's positions.
+// ExtractStartPositionsForSchema returns the start positions of the schema
+// the game finds as "Schema <schemaIndex>", read the game's way (see
+// mapmeta): schema and [specials] names ignore case, specialwhat matches
+// StartPos ignoring case, StartPos0 and entries with no number are kept and
+// numbered as the game numbers them, and coordinates keep 16 bits.  The
+// positions come in player-slot order.  A schema the game never reads
+// (after a gap in the numbering, or a missing index) gives nil — drawing
+// zero markers is the right behaviour rather than silently falling back to
+// a different schema's positions.
 func ExtractStartPositionsForSchema(otaText string, schemaIndex int) []StartPos {
-	doc, err := tdf.ParseString(otaText)
+	m, err := mapmeta.ReadOTA([]byte(otaText))
 	if err != nil {
 		return nil
 	}
-	global := doc.Section("GlobalHeader")
-	if global == nil {
-		return nil
-	}
-	wanted := fmt.Sprintf("schema %d", schemaIndex)
-	var schema *tdf.Section
-	for _, s := range global.Sections() {
-		if strings.EqualFold(s.Name(), wanted) {
-			schema = s
-			break
-		}
-	}
-	if schema == nil {
-		return nil
-	}
-	var specials *tdf.Section
-	for _, s := range schema.Sections() {
-		if strings.EqualFold(s.Name(), "specials") {
-			specials = s
-			break
-		}
-	}
-	if specials == nil {
-		return nil
-	}
 	var out []StartPos
-	for _, sp := range specials.Sections() {
-		what := sp.String("specialwhat")
-		if !strings.HasPrefix(what, "StartPos") {
-			continue
-		}
-		num := 0
-		_, _ = fmt.Sscanf(strings.TrimPrefix(what, "StartPos"), "%d", &num)
-		out = append(out, StartPos{Number: num, X: sp.Int("XPos"), Y: sp.Int("ZPos")})
+	for _, p := range mapmeta.StartPositions(mapmeta.GameSchema(&m.Header, schemaIndex)) {
+		out = append(out, StartPos{Number: p.Number, X: p.X, Y: p.Z})
 	}
 	return out
 }
