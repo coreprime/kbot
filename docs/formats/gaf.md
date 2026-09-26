@@ -413,6 +413,12 @@ matched to the nearest palette colour instead, avoiding the key.
   `--storage raw|compressed` overrides both.
 - Composite (layered) frames are dumped as one flattened image and
   built back as simple frames; `kbot gaf roundtrip` reports how many.
+- A frame with no pixels (width or height 0) has no image; its
+  `frames.csv` row alone rebuilds it.
+- A sub-folder with neither `frames.csv` nor `sequence.csv` is skipped
+  with a warning. Any other sub-folder that cannot be built (a missing
+  or unreadable image, a bad CSV value) stops the build, so a sequence
+  is never silently left out.
 
 > [!NOTE]
 > **TA & TA:K GAFs are byte-identical.** The container is identical;

@@ -44,7 +44,8 @@ Frames are drawn as the game draws them: a raw frame's pixels equal to its
 key and a compressed frame's skipped pixels are transparent, and palette
 index 0 is opaque black. Each image keeps its palette indices, so a
 re-build gives back the same pixels. Composite (layered) frames are dumped
-flattened.
+flattened. A frame with no pixels (width or height 0) has no image; its
+frames.csv row carries it.
 
 Directory layout:
   <target>/
@@ -140,9 +141,11 @@ type dumpOptions struct {
 
 // dumpSequences writes the dump folder layout "kbot gaf build" reads: one
 // sub-folder per sequence holding its frame images, frames.csv and
-// sequence.csv. It returns the number of frame images written. Frame images
-// that fail to encode are reported on stderr and skipped; folder and CSV
-// errors stop the dump.
+// sequence.csv. It returns the number of frame images written. A frame with
+// no pixels gets no image (frames.csv records it). A frame image that fails
+// to encode, or a folder or CSV error, stops the dump: a missing image
+// would make the build lose the sequence. An animated preview that fails is
+// only reported.
 func dumpSequences(sequences []*gaf.Sequence, palette *gaf.Palette, target string, opts dumpOptions) (int, error) {
 	totalFrames := 0
 	used := map[string]bool{}
@@ -160,16 +163,22 @@ func dumpSequences(sequences []*gaf.Sequence, palette *gaf.Palette, target strin
 			return totalFrames, fmt.Errorf("failed to create directory %s: %w", seqDir, err)
 		}
 
+		drawable := false
 		for fi, frame := range seq.Frames {
+			if frame.Width == 0 || frame.Height == 0 {
+				// No image can hold it; frames.csv records the empty frame
+				// and the build restores it from there.
+				continue
+			}
+			drawable = true
 			framePath := filepath.Join(seqDir, fmt.Sprintf("%d.%s", fi, opts.Format))
 			if err := writeFrame(frame, palette, opts.Format, framePath); err != nil {
-				fmt.Fprintf(os.Stderr, "  ⚠ seq %d frame %d: %v\n", si, fi, err)
-				continue
+				return totalFrames, fmt.Errorf("seq %d frame %d: %w", si, fi, err)
 			}
 			totalFrames++
 		}
 
-		if opts.Animated && len(seq.Frames) > 0 {
+		if opts.Animated && drawable {
 			animPath := filepath.Join(seqDir, "animated."+opts.Format)
 			if err := writeAnimated(seq, palette, opts.Format, animPath); err != nil {
 				fmt.Fprintf(os.Stderr, "  ⚠ seq %d animated: %v\n", si, err)
@@ -199,22 +208,25 @@ func safeName(name string) string {
 	return s
 }
 
-// writeFrame dumps one frame drawn with the game's transparency rule.
+// writeFrame dumps one frame drawn with the game's transparency rule. The
+// image is encoded in memory first, so a frame that cannot be encoded
+// leaves no file behind.
 func writeFrame(frame *gaf.Frame, palette *gaf.Palette, format, path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
+	var buf bytes.Buffer
 	switch format {
 	case "png":
-		return frame.ToPNGWith(palette, dumpRenderOptions, f)
+		if err := frame.ToPNGWith(palette, dumpRenderOptions, &buf); err != nil {
+			return err
+		}
 	case "gif":
 		img := frame.ToImageWith(palette, dumpRenderOptions)
-		return gif.Encode(f, img, nil)
+		if err := gif.Encode(&buf, img, nil); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
 	}
-	return fmt.Errorf("unsupported format: %s", format)
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
 func writeAnimated(seq *gaf.Sequence, palette *gaf.Palette, format, path string) error {

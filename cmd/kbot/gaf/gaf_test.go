@@ -2,6 +2,7 @@ package gaf
 
 import (
 	"bytes"
+	"errors"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/palettes"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 func testPalette(t *testing.T) *gaf.Palette {
@@ -326,5 +328,152 @@ func TestDumpKeepsSameNamedSequencesApart(t *testing.T) {
 	got := dumpAndBuild(t, orig, "dup.gaf")
 	if diff := compareSequences(orig, got); diff != "" {
 		t.Fatalf("same-named sequences collided: %s", diff)
+	}
+}
+
+// TestDumpBuildKeepsUniformCorners checks a raw frame whose four corners
+// share a colour (index 0) and whose key does not occur. The game draws
+// every pixel of it; a corner guess would make the corners transparent,
+// and the build would then write the key over them.
+func TestDumpBuildKeepsUniformCorners(t *testing.T) {
+	f := &gaf.Frame{
+		Width: 3, Height: 3, TransparencyIndex: 9, Duration: 1,
+		Storage: gaf.StorageRaw,
+		Pixels: []byte{
+			0, 40, 0,
+			40, 40, 40,
+			0, 40, 0,
+		},
+	}
+	orig, err := loadGAFSequences(encode(t, []*gaf.Sequence{{Name: "plate", LoopFlags: 1, Frames: []*gaf.Frame{f}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if _, err := dumpSequences(orig, testPalette(t), dir, dumpOptions{Format: "png"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "plate", "0.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for y := 0; y < 3; y++ {
+		for x := 0; x < 3; x++ {
+			if _, _, _, a := img.At(x, y).RGBA(); a != 0xffff {
+				t.Errorf("pixel %d,%d alpha = %d, want opaque", x, y, a)
+			}
+		}
+	}
+
+	got := dumpAndBuild(t, orig, "plate.gaf")
+	if diff := compareSequences(orig, got); diff != "" {
+		t.Fatalf("dump/build changed the frame: %s", diff)
+	}
+	if g := got[0].Frames[0]; g.Pixels[0] != 0 || !g.PixelOpaque(0) {
+		t.Errorf("corner came back as %d (drawn %v), want 0 drawn", g.Pixels[0], g.PixelOpaque(0))
+	}
+}
+
+// TestDumpBuildKeepsEmptyFrames checks that a frame with no pixels survives
+// dump and build: it gets no image, and the build restores it from
+// frames.csv instead of dropping its sequence.
+func TestDumpBuildKeepsEmptyFrames(t *testing.T) {
+	seqs := []*gaf.Sequence{
+		{Name: "blink", LoopFlags: 1, Frames: []*gaf.Frame{
+			{Width: 1, Height: 1, TransparencyIndex: 9, Duration: 2, Storage: gaf.StorageCompressed, Pixels: []byte{5}},
+			{Width: 0, Height: 0, OriginX: 3, OriginY: -1, TransparencyIndex: 9, Duration: 4, Storage: gaf.StorageCompressed},
+		}},
+		{Name: "nothing", LoopFlags: 1, Frames: []*gaf.Frame{
+			{Width: 0, Height: 0, TransparencyIndex: 9, Duration: 1, Storage: gaf.StorageRaw},
+		}},
+	}
+	orig, err := loadGAFSequences(encode(t, seqs))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if _, err := dumpSequences(orig, testPalette(t), dir, dumpOptions{Format: "png", Animated: true}); err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "blink", "1.png")); !os.IsNotExist(err) {
+		t.Errorf("an image was written for the empty frame (stat err %v)", err)
+	}
+
+	got := dumpAndBuild(t, orig, "blink.gaf")
+	if len(got) != 2 {
+		t.Fatalf("built %d sequences, want 2", len(got))
+	}
+	if diff := compareSequences(orig, got); diff != "" {
+		t.Fatalf("dump/build changed the sequences: %s", diff)
+	}
+	if f := got[0].Frames[1]; f.Width != 0 || f.Height != 0 || f.OriginX != 3 || f.OriginY != -1 || f.Duration != 4 {
+		t.Errorf("empty frame came back %dx%d origin %d,%d duration %d", f.Width, f.Height, f.OriginX, f.OriginY, f.Duration)
+	}
+}
+
+// TestBuildFailsRatherThanDropASequence checks that a sequence folder the
+// build cannot read stops the build, while a folder that is not a sequence
+// folder at all is skipped.
+func TestBuildFailsRatherThanDropASequence(t *testing.T) {
+	orig, err := loadGAFSequences(encode(t, testSequences()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pal := testPalette(t)
+	if _, err := dumpSequences(orig, pal, dir, dumpOptions{Format: "png"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "notes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := parseStoragePolicy("auto", "fx.gaf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skipped []string
+	built, err := buildSequences(dir, pal, policy, func(d string, _ *gaf.Sequence, err error) {
+		if errors.Is(err, errNotSequenceFolder) {
+			skipped = append(skipped, d)
+		}
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(built) != 2 || len(skipped) != 1 || skipped[0] != "notes" {
+		t.Errorf("built %d sequences, skipped %v; want 2 and [notes]", len(built), skipped)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "Spin", "1.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildSequences(dir, pal, policy, nil); err == nil || !strings.Contains(err.Error(), "Spin") {
+		t.Errorf("build with a missing frame image: err = %v, want a failure naming Spin", err)
+	}
+}
+
+// TestRoundtripRetailGAFs runs both roundtrip legs on retail files whose
+// raw frames have uniform, non-key corners (logos, exp1, armcamo) and on
+// files the game reads as plain pixel arrays (vismasks, textures).
+func TestRoundtripRetailGAFs(t *testing.T) {
+	pal := testPalette(t)
+	for _, rel := range [][]string{
+		{"anims", "logos.gaf"},
+		{"anims", "exp1.gaf"},
+		{"anims", "armcamo.gaf"},
+		{"anims", "vismasks.gaf"},
+		{"textures", "wreckage.gaf"},
+	} {
+		path := testutil.UnpackedFile(t, rel...)
+		r := testOneGAF(path, pal, false)
+		if !r.EncodeOK || !r.BuildOK {
+			t.Errorf("%s: encode=%v (%s) build=%v (%s)", filepath.Join(rel...), r.EncodeOK, r.EncodeErr, r.BuildOK, r.BuildErr)
+		}
 	}
 }

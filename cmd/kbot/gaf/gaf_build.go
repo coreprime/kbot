@@ -42,9 +42,13 @@ build command reads:
                 sequence)
   sequence.csv  Position, exact name, loop word and +4 word of the
                 sequence (optional)
-  0.png         Frame images (png or gif, numbered from 0)
-  1.png
+  0.png         Frame images (png or gif, numbered from 0); a frame
+  1.png         whose frames.csv width or height is 0 needs none
   ...
+
+A sub-folder with neither frames.csv nor sequence.csv is skipped with a
+warning. Any other sub-folder that cannot be built stops the build, so a
+sequence is never silently left out.
 
 The images are palettized against the standard TA palette by default.
 Pass --palette <file.pal> to palettize against a custom 1024-byte TA
@@ -210,8 +214,8 @@ func loadBuildPalette(path string) (*gaf.Palette, error) {
 
 type frameMeta struct {
 	Index        int
-	Width        int
-	Height       int
+	Width        int // -1 when frames.csv does not give it
+	Height       int // -1 when frames.csv does not give it
 	OriginX      int
 	OriginY      int
 	Transparency int
@@ -237,10 +241,16 @@ type seqDirEntry struct {
 	meta sequenceMeta
 }
 
+// errNotSequenceFolder is reported for a sub-folder that holds neither
+// frames.csv nor sequence.csv; the build skips it.
+var errNotSequenceFolder = errors.New("not a sequence folder (no " + framesCSVName + " or " + sequenceCSVName + "), skipped")
+
 // buildSequences builds every sequence sub-folder of srcDir. Folders are
-// ordered by the index in their sequence.csv, then by name. report, when
-// set, is called for each folder with the built sequence or the error that
-// made the build skip it.
+// ordered by the index in their sequence.csv, then by name. A folder with
+// neither frames.csv nor sequence.csv is skipped; any other folder that
+// fails to build fails the whole build. report, when set, is called for
+// each folder with the built sequence, or with errNotSequenceFolder for a
+// skipped folder.
 func buildSequences(srcDir string, palette *gaf.Palette, policy *storagePolicy, report func(dir string, seq *gaf.Sequence, err error)) ([]*gaf.Sequence, error) {
 	entries, err := os.ReadDir(srcDir)
 	if err != nil {
@@ -250,6 +260,13 @@ func buildSequences(srcDir string, palette *gaf.Palette, policy *storagePolicy, 
 	var dirs []seqDirEntry
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		if !fileExists(filepath.Join(srcDir, e.Name(), framesCSVName)) &&
+			!fileExists(filepath.Join(srcDir, e.Name(), sequenceCSVName)) {
+			if report != nil {
+				report(e.Name(), nil, errNotSequenceFolder)
+			}
 			continue
 		}
 		meta, err := readSequenceCSV(filepath.Join(srcDir, e.Name(), sequenceCSVName))
@@ -281,10 +298,7 @@ func buildSequences(srcDir string, palette *gaf.Palette, policy *storagePolicy, 
 		}
 		seq, err := buildSequence(filepath.Join(srcDir, d.dir), name, palModel, policy)
 		if err != nil {
-			if report != nil {
-				report(d.dir, nil, err)
-			}
-			continue
+			return nil, fmt.Errorf("%s: %w", d.dir, err)
 		}
 		// Every stock sequence loops; a sequence whose loop byte is 0 plays
 		// once in the game and then stops.
@@ -321,15 +335,6 @@ func buildSequence(dir, name string, palModel color.Palette, policy *storagePoli
 	frames := make([]*gaf.Frame, 0, len(metas))
 
 	for _, meta := range metas {
-		imgPath := findFrameImage(dir, meta.Index)
-		if imgPath == "" {
-			return nil, fmt.Errorf("frame %d: image file not found", meta.Index)
-		}
-
-		img, err := loadImage(imgPath)
-		if err != nil {
-			return nil, fmt.Errorf("frame %d: %w", meta.Index, err)
-		}
 		if meta.Transparency < 0 || meta.Transparency > 255 {
 			return nil, fmt.Errorf("frame %d: transparency %d is not a palette index", meta.Index, meta.Transparency)
 		}
@@ -341,18 +346,36 @@ func buildSequence(dir, name string, palModel color.Palette, policy *storagePoli
 		}
 
 		key := uint8(meta.Transparency)
-		pixels, opaque := palettizeImage(img, palModel, key)
-
-		bounds := img.Bounds()
 		frame := &gaf.Frame{
-			Width:             uint16(bounds.Dx()),
-			Height:            uint16(bounds.Dy()),
 			OriginX:           int16(meta.OriginX),
 			OriginY:           int16(meta.OriginY),
 			TransparencyIndex: key,
 			Duration:          uint32(meta.Duration),
-			Pixels:            pixels,
 			Blend:             uint8(meta.Blend),
+		}
+		var opaque []bool
+		if meta.Width == 0 || meta.Height == 0 {
+			// A frame with no pixels: no image can hold it, so frames.csv
+			// alone describes it.
+			if meta.Width < 0 || meta.Width > 0xFFFF || meta.Height < 0 || meta.Height > 0xFFFF {
+				return nil, fmt.Errorf("frame %d: size %dx%d is outside 0..65535", meta.Index, meta.Width, meta.Height)
+			}
+			frame.Width, frame.Height = uint16(meta.Width), uint16(meta.Height)
+		} else {
+			imgPath := findFrameImage(dir, meta.Index)
+			if imgPath == "" {
+				return nil, fmt.Errorf("frame %d: image file not found", meta.Index)
+			}
+			img, err := loadImage(imgPath)
+			if err != nil {
+				return nil, fmt.Errorf("frame %d: %w", meta.Index, err)
+			}
+			bounds := img.Bounds()
+			if bounds.Dx() > 0xFFFF || bounds.Dy() > 0xFFFF {
+				return nil, fmt.Errorf("frame %d: image %dx%d is larger than a GAF frame can be", meta.Index, bounds.Dx(), bounds.Dy())
+			}
+			frame.Width, frame.Height = uint16(bounds.Dx()), uint16(bounds.Dy())
+			frame.Pixels, opaque = palettizeImage(img, palModel, key)
 		}
 		policy.apply(frame, meta.Storage)
 		// A pixel equal to the key is drawn only by a compressed frame, and
@@ -386,6 +409,10 @@ func readFramesCSV(path string) ([]frameMeta, error) {
 	var metas []frameMeta
 	for n, row := range records[1:] {
 		m := frameMeta{
+			// Width and height come from the image unless frames.csv
+			// gives 0, which marks a frame with no pixels.
+			Width:        -1,
+			Height:       -1,
 			Transparency: 9, // TA default
 			Duration:     10,
 		}
@@ -499,6 +526,11 @@ func csvColumns(header []string) map[string]int {
 		col[strings.TrimSpace(strings.ToLower(h))] = i
 	}
 	return col
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func findFrameImage(dir string, index int) string {

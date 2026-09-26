@@ -268,7 +268,7 @@ kbot gaf roundtrip ./anims
 
 Frames are exported as the game draws them: a raw frame's key pixels and a compressed frame's skipped pixels are transparent, palette index 0 is opaque black, frames show for their duration in 1/30 s ticks, and an animation loops only when the sequence's loop byte is set.
 
-Each sequence folder of a dump holds the frame images, a `frames.csv` (size, origin, key, duration, storage and the +11 byte of every frame) and a `sequence.csv` (position, exact name, loop word and +4 word). The build command reads both back, so a dump/build cycle keeps what the game reads. A sequence without a `sequence.csv` loops, like every stock sequence. Frames without a storage are compressed, except that every frame written to `textures/*.gaf` or `anims/vismasks.gaf` is raw, because the game reads those as plain pixel arrays (`--storage` overrides). Composite (layered) frames are written flattened.
+Each sequence folder of a dump holds the frame images, a `frames.csv` (size, origin, key, duration, storage and the +11 byte of every frame) and a `sequence.csv` (position, exact name, loop word and +4 word). The build command reads both back, so a dump/build cycle keeps what the game reads. A sequence without a `sequence.csv` loops, like every stock sequence. Frames without a storage are compressed, except that every frame written to `textures/*.gaf` or `anims/vismasks.gaf` is raw, because the game reads those as plain pixel arrays (`--storage` overrides). Composite (layered) frames are written flattened. A frame with no pixels gets no image; its `frames.csv` row rebuilds it. A sub-folder with neither CSV file is skipped with a warning; any other sub-folder the build cannot read stops the build rather than leaving that sequence out.
 
 ---
 
