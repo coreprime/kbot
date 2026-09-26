@@ -181,3 +181,43 @@ type diskVFS string
 func (d diskVFS) ReadFile(p string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(string(d), filepath.FromSlash(p)))
 }
+
+// TestGamePaletteLoadsLikeTheGame covers the ways the game loads
+// palettes/palette.pal: the first 1,024 bytes of a longer file, the PCX for
+// an empty or missing one, and nothing usable from a short one.
+func TestGamePaletteLoadsLikeTheGame(t *testing.T) {
+	long := append(makePAL(0x20), make([]byte, 50)...)
+	cases := []struct {
+		name    string
+		vfs     fakeVFS
+		source  Source
+		path    string
+		wantRed byte
+	}{
+		{"long pal", fakeVFS{"palettes/palette.pal": long}, SourceGlobal, "palettes/palette.pal", 0x20},
+		{"empty pal", fakeVFS{"palettes/palette.pal": {}, "palettes/palette.pcx": makePCX(0x40)}, SourceGlobal, "palettes/palette.pcx", 0x40},
+		{"missing pal", fakeVFS{"palettes/palette.pcx": makePCX(0x41)}, SourceGlobal, "palettes/palette.pcx", 0x41},
+		{"short pal", fakeVFS{"palettes/palette.pal": make([]byte, 500), "palettes/palette.pcx": makePCX(0x42)}, SourceEmbedded, "", 0},
+		{"nothing", fakeVFS{}, SourceEmbedded, "", 0},
+	}
+	for _, tc := range cases {
+		res := GamePalette(tc.vfs)
+		if res.Palette == nil {
+			t.Fatalf("%s: nil palette", tc.name)
+		}
+		if res.Source != tc.source || res.Path != tc.path {
+			t.Errorf("%s: source %s path %q, want %s %q", tc.name, res.Source, res.Path, tc.source, tc.path)
+		}
+		if tc.source == SourceGlobal && res.Palette.Colors[5].R != tc.wantRed {
+			t.Errorf("%s: colour 5 red = %#x, want %#x", tc.name, res.Palette.Colors[5].R, tc.wantRed)
+		}
+		for i, c := range res.Palette.Colors {
+			if c.A != 0xff {
+				t.Fatalf("%s: entry %d alpha %d; terrain palettes are opaque", tc.name, i, c.A)
+			}
+		}
+	}
+	if res := GamePalette(nil); res.Source != SourceEmbedded || res.Palette == nil {
+		t.Errorf("nil VFS: %+v", res)
+	}
+}

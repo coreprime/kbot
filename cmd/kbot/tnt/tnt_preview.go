@@ -16,8 +16,8 @@ import (
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/tnt"
-	"github.com/coreprime/kbot-io/palettes"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/palettepick"
 	"github.com/coreprime/kbot/internal/tntpreview"
 )
 
@@ -82,10 +82,7 @@ tile-grid render (no overlays).`,
 				}
 				defer func() { _ = vfs.Close() }()
 
-				palette, err := vfsOrEmbeddedPalette(vfs)
-				if err != nil {
-					return err
-				}
+				palette := vfsOrEmbeddedPalette(vfs)
 
 				// Prefer the on-disk sister .ota so a local edit beats the VFS copy.
 				otaText := readOnDiskSisterOTA(tntPath)
@@ -201,22 +198,13 @@ func takTerrainProvider(vfs *filesystem.VirtualFileSystem) func(name uint32) ima
 	}
 }
 
-// vfsOrEmbeddedPalette prefers palettes/palette.pal from the VFS, falling
-// back to the embedded TA palette so previews still work against minimal VFS
-// roots that don't ship a palette file.
-func vfsOrEmbeddedPalette(vfs *filesystem.VirtualFileSystem) (*gaf.Palette, error) {
-	if data, err := vfs.ReadFile("palettes/palette.pal"); err == nil {
-		return gaf.LoadPaletteFromBytes(data)
-	}
-	return tntPaletteRaw()
-}
-
-func tntPaletteRaw() (*gaf.Palette, error) {
-	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
-	if err != nil {
-		return nil, fmt.Errorf("load TA palette: %w", err)
-	}
-	return pal, nil
+// vfsOrEmbeddedPalette loads palettes/palette.pal from the VFS the way the
+// game does (palettes/palette.pcx stands in for an empty or missing file),
+// falling back to the embedded TA palette so previews still work against
+// minimal VFS roots that don't ship a palette file. Feature sprites drawn
+// with it keep palette index 0 as opaque black.
+func vfsOrEmbeddedPalette(vfs *filesystem.VirtualFileSystem) *gaf.Palette {
+	return palettepick.GamePalette(vfs).Palette
 }
 
 // readOnDiskSisterOTA returns the text of the .ota next to tntPath on disk, or

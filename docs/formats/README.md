@@ -141,7 +141,7 @@ overrides them:
 | **Coordinate origin** | Images, tile grids, attribute grids — `(0, 0)` is the **top-left**. 3DO meshes use Y as **vertical** (up). |
 | **3D fixed-point scale** | 3DO models use 16-bit fractional fixed-point: `value / 65536.0` ≈ world-space units. |
 | **Game tick rate** | 30 ticks/second. Most timing fields in COB and GAF use ticks. |
-| **Transparent colour** | Palette index 0 is the engine-wide transparent sentinel. The colour at that index varies between palettes but is treated as "show through" everywhere. |
+| **Transparent colour** | There is no palette-wide transparent index. A GAF frame names its own key (often 9, sometimes 0) and a compressed frame's skipped pixels are transparent; terrain, minimaps, backdrops and model textures draw every index, palette index 0 (black) included. |
 
 > [!IMPORTANT]
 > **Always validate magic numbers before trusting an offset.** Several

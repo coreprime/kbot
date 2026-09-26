@@ -17,7 +17,9 @@
 //     palettes/<gafname>.pal).
 //  4. Side prefix heuristic on the GAF basename — ara*/tar*/ver*/zon*/aid*/cre*
 //     map to the four kingdoms + the two Iron Plague factions.
-//  5. palettes/palette.pal from the VFS (matches what TA shipped).
+//  5. palettes/palette.pal from the VFS (matches what TA shipped), loaded as
+//     the game loads it (see GamePalette): palettes/palette.pcx stands in
+//     for an empty or missing .pal.
 //  6. The embedded TA palette as a last-resort fallback.
 //
 // Resolve never returns a nil palette: it always at least surfaces the
@@ -28,10 +30,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"image/color"
 	"path"
 	"strings"
 
 	"github.com/coreprime/kbot-io/formats/gaf"
+	"github.com/coreprime/kbot-io/formats/pal"
 	"github.com/coreprime/kbot-io/formats/pcx"
 	"github.com/coreprime/kbot-io/palettes"
 )
@@ -200,9 +204,9 @@ func Resolve(vfs VFS, gafPath, override string) (Result, error) {
 			break // matched prefix but file missing — don't try other sides
 		}
 
-		// 4. palettes/palette.pal from VFS.
-		if pal, err := tryPALPalette(vfs, "palettes/palette.pal"); err == nil && pal != nil {
-			return Result{Palette: pal, Source: SourceGlobal, Path: "palettes/palette.pal", Label: "palette.pal"}, nil
+		// 4. palettes/palette.pal from VFS, as the game loads it.
+		if res := GamePalette(vfs); res.Source == SourceGlobal {
+			return res, nil
 		}
 	}
 
@@ -246,7 +250,45 @@ func paletteFromPCX(data []byte) (*gaf.Palette, error) {
 }
 
 func paletteFromPAL(data []byte) (*gaf.Palette, error) {
-	return gaf.LoadPaletteFromBytes(data)
+	p, err := pal.LoadFromBytes(data)
+	if err != nil {
+		return nil, err
+	}
+	return toGAFPalette(p), nil
+}
+
+// toGAFPalette converts a .PAL palette to the opaque palette the renderers
+// take.
+func toGAFPalette(p *pal.Palette) *gaf.Palette {
+	out := &gaf.Palette{}
+	for i, c := range p.Colors {
+		out.Colors[i] = color.RGBA{R: c.R, G: c.G, B: c.B, A: 0xff}
+	}
+	return out
+}
+
+// GamePalette loads the install's global palette the way the game loads
+// palettes/palette.pal: the first 1,024 bytes of a file that long, or, when
+// the .pal is empty or missing, the last 768 bytes of palettes/palette.pcx.
+// A .pal of 1 to 1,023 bytes, which the game cannot use, or no usable file
+// at all gives the embedded TA palette. The result never has a nil palette,
+// and every entry is opaque: terrain, minimaps and backdrops draw palette
+// index 0 as black.
+func GamePalette(vfs VFS) Result {
+	if vfs != nil {
+		if p, src, err := pal.LoadNamed(vfs.ReadFile, "palette"); err == nil {
+			res := Result{Palette: toGAFPalette(p), Source: SourceGlobal, Path: "palettes/palette.pal", Label: "palette.pal"}
+			if src == pal.SourcePCX {
+				res.Path, res.Label = "palettes/palette.pcx", "palette.pcx"
+			}
+			return res
+		}
+	}
+	embedded, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
+	if err != nil {
+		embedded = gaf.FallbackPalette()
+	}
+	return Result{Palette: embedded, Source: SourceEmbedded, Label: "embedded TA palette"}
 }
 
 // loadPaletteFromPath chooses .pal vs .pcx based on the path extension, with a

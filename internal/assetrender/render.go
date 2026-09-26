@@ -44,8 +44,10 @@ func (req RenderRequest) IsRender() bool {
 
 // renderRevision changes whenever the renders themselves change for the same
 // request (for example GAF frames drawn with the game's transparency rule,
-// or movies at their display height), so browsers revalidating an older
-// render get the new one instead of a 304.
+// terrain drawn with an opaque palette, or movies at their display height).
+// It is part of every on-disk cache directory name and of CacheTag, so
+// neither the disk cache nor a browser revalidating an older render gets
+// the old bytes.
 const renderRevision = "r2"
 
 // CacheTag is a short, stable digest of the request options. Folded into an

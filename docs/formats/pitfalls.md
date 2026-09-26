@@ -134,17 +134,22 @@ relevant format page.
 
 ## GAF — sprite animations
 
-- **Some sequences ship with frame durations of `0`** — intentional;
-  the engine treats them as event-driven. Don't "fix" them to a
-  default.
-- **Compressed pixel rows can be shorter than `Width`.** The trailing
-  pixels are implicitly transparent. Old GafBuilder Pro versions
-  silently drop these rows entirely on resave; if a GAF lost frames
-  after editing, that bug is the cause — use kbot's pipeline instead.
-- **Sub-frame origins are absolute** (relative to the parent frame's
-  origin), not deltas.
+- **A sequence loops only when the low byte of its +2 word is set**;
+  with 0 it plays once and stops. Every stock sequence stores 1, so a
+  tool that writes zero freezes animated features.
+- **Frames in `textures/*.gaf` and `anims/vismasks.gaf` must be raw.**
+  The game reads them as plain pixel arrays.
+- **Some sequences ship with frame durations of `0`**; the game shows
+  such a frame for one tick. Don't "fix" them to a default.
+- **Palette index 0 is not transparent by itself.** Only a raw frame's
+  key and a compressed frame's skip runs are.
+- **Compressed pixel rows can be shorter than `Width`.** The game reads
+  on into the next bytes; kbot pads the row with transparent pixels and
+  warns. No stock file has such rows.
+- **Layer origins are hotspots**: each layer of a composite frame is
+  placed so its origin lands on the frame's origin.
 - **`anims/terrain.gaf` and `anims/vismasks.gaf` have `Version == 0`**
-  in their headers. Accept zero as a valid synonym for `0x00010100`.
+  in their headers. The game ignores the version word.
 - **TA: Kingdoms `.taf` comes in two kinds.** A *paletted* `.taf` IS a
   GAF — same on-disk format, except TAK pulls the palette from a
   per-side `.pcx` rather than the global TA palette. A *truecolor*
@@ -187,12 +192,16 @@ relevant format page.
   byte Cavedog always set to `0x00`. Open-source palette tools that
   treat it as alpha refuse to render the palette (alpha=0 → all
   transparent).
-- **Index 0 is transparent everywhere.** Even though `palette.pal`
-  contains plenty of other blacks, only index 0 is treated as
-  alpha=0 by the renderer.
-- **`.alp` / `.lht` / `.shd` are NOT RGB palettes** — they're 256×4
-  lookup tables of palette indices. Rendering them with `kbot pal
-  describe` shows garbage; use `kbot pal lookup` instead.
+- **Index 0 is black, not transparent.** Terrain, minimaps and
+  backdrops draw it opaque; sprites pick their own transparent key.
+- **An empty or missing `palette.pal` is replaced by `palette.pcx`**
+  (its last 768 bytes); a `.pal` longer than 1,024 bytes is read up to
+  byte 1,024.
+- **`.alp` / `.lht` / `.shd` are NOT RGB palettes** — `.alp` is a
+  256×256 and `.shd` / `.lht` are 32×256 tables of palette indices, and
+  the game ignores (and rebuilds) a table of any other size. Rendering
+  them with `kbot pal describe` shows garbage; use `kbot pal lookup`
+  instead.
 - **The TA palette has 13 duplicate RGB triplets.** If your editor
   deduplicates on import (some do), you lose entries and the palette
   silently becomes 243-entry.

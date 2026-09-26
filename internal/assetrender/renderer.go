@@ -75,6 +75,9 @@ func (r *Renderer) VFS() *filesystem.VirtualFileSystem { return r.vfs }
 // Cache returns the named on-disk cache (e.g. "gaf-png"), creating it on first
 // use. It returns nil when caching is disabled or the directory can't be
 // created, so callers must tolerate a nil cache and simply render fresh.
+//
+// The directory name carries the render revision, so renders made before
+// a change to what is drawn (see renderRevision) are never served.
 func (r *Renderer) Cache(name string) *cache.Cache {
 	if r.noCache {
 		return nil
@@ -84,7 +87,7 @@ func (r *Renderer) Cache(name string) *cache.Cache {
 	if c, ok := r.caches[name]; ok {
 		return c
 	}
-	c, err := cache.New(filepath.Join(r.cacheDir, name))
+	c, err := cache.New(filepath.Join(r.cacheDir, name+"-"+renderRevision))
 	if err != nil {
 		return nil
 	}
@@ -193,32 +196,17 @@ func (r *Renderer) ResolvePalette(gafPath, override string) (*gaf.Palette, strin
 }
 
 // GlobalPalette returns the install-wide color.Palette used to render index
-// formats that carry no palette of their own (TNT, SCT). It reads
-// palettes/palette.pal from the VFS and falls back to the embedded TA palette.
-// Index 0 is forced transparent to match the game's treatment of the void.
+// formats that carry no palette of their own (TNT, SCT). It loads
+// palettes/palette.pal the way the game does (palettes/palette.pcx stands in
+// for an empty or missing file) and falls back to the embedded TA palette.
+// Every entry is opaque: the game draws terrain and minimaps with palette
+// index 0 as black.
 func (r *Renderer) GlobalPalette() color.Palette {
+	var vfs palettepick.VFS
 	if r.vfs != nil {
-		if palData, err := r.vfs.ReadFile("palettes/palette.pal"); err == nil && len(palData) >= 256*4 {
-			return paletteFromRGBA(palData)
-		}
+		vfs = r.vfs
 	}
-	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
-	if err != nil {
-		return nil
-	}
-	return pal.ColorModel()
-}
-
-func paletteFromRGBA(data []byte) color.Palette {
-	palette := make(color.Palette, 256)
-	for i := 0; i < 256 && i*4+2 < len(data); i++ {
-		a := uint8(255)
-		if i == 0 {
-			a = 0
-		}
-		palette[i] = color.RGBA{data[i*4], data[i*4+1], data[i*4+2], a}
-	}
-	return palette
+	return palettepick.GamePalette(vfs).Palette.ColorModel()
 }
 
 // RawContentType maps a file extension to the MIME type used when serving the

@@ -1,6 +1,10 @@
 package assetrender
 
 import (
+	"image/color"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coreprime/kbot-io/filesystem"
@@ -127,13 +131,72 @@ func TestResolvePaletteFallsBackToEmbedded(t *testing.T) {
 	}
 }
 
+// TestGlobalPaletteFallback checks the embedded fallback: terrain and
+// minimaps draw palette index 0 as opaque black, as the game does.
 func TestGlobalPaletteFallback(t *testing.T) {
 	r := newTestRenderer(t)
 	pal := r.GlobalPalette()
 	if len(pal) != 256 {
 		t.Fatalf("global palette has %d entries, want 256", len(pal))
 	}
-	if _, _, _, a := pal[0].RGBA(); a != 0 {
-		t.Errorf("palette index 0 should be transparent, got alpha %d", a)
+	for i, c := range pal {
+		if _, _, _, a := c.RGBA(); a != 0xffff {
+			t.Fatalf("palette index %d has alpha %d; terrain is drawn opaque", i, a)
+		}
+	}
+}
+
+// rendererOver mounts files as a loose tree for a Renderer.
+func rendererOver(t *testing.T, files map[string][]byte) *Renderer {
+	t.Helper()
+	root := t.TempDir()
+	for rel, data := range files {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vfs, err := filesystem.NewVirtualFileSystem(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = vfs.Close() })
+	return New(vfs, Options{CacheDir: t.TempDir()})
+}
+
+// TestGlobalPaletteLoadsLikeTheGame checks palettes/palette.pal handling: a
+// longer file gives its first 1,024 bytes and an empty one falls back to
+// palettes/palette.pcx.
+func TestGlobalPaletteLoadsLikeTheGame(t *testing.T) {
+	long := make([]byte, 1100)
+	long[4], long[5], long[6] = 10, 20, 30
+	r := rendererOver(t, map[string][]byte{"palettes/palette.pal": long})
+	if got := r.GlobalPalette()[1]; got != (color.RGBA{10, 20, 30, 255}) {
+		t.Errorf("long palette.pal: index 1 = %v, want {10 20 30 255}", got)
+	}
+
+	pcxData := make([]byte, 128)
+	pcxData[0], pcxData[1], pcxData[2], pcxData[3] = 0x0A, 5, 1, 8
+	pcxData[65], pcxData[66] = 1, 1
+	pcxData = append(pcxData, 0xC1, 0x00, 0x0C)
+	for i := 0; i < 256; i++ {
+		pcxData = append(pcxData, byte(i), 7, 9)
+	}
+	r = rendererOver(t, map[string][]byte{"palettes/palette.pal": {}, "palettes/palette.pcx": pcxData})
+	if got := r.GlobalPalette()[3]; got != (color.RGBA{3, 7, 9, 255}) {
+		t.Errorf("empty palette.pal: index 3 = %v, want the PCX colour {3 7 9 255}", got)
+	}
+}
+
+// TestRenderCacheCarriesRevision checks that on-disk render caches are
+// separated by render revision, so renders drawn under older rules (index
+// 0 transparent, corner-guessed GAF keys) are not served.
+func TestRenderCacheCarriesRevision(t *testing.T) {
+	r := newTestRenderer(t)
+	if !strings.Contains(r.Cache("tnt-png").GetPath("k", ".png"), "tnt-png-"+renderRevision) {
+		t.Error("render cache directories do not carry the render revision")
 	}
 }
