@@ -28,6 +28,7 @@ import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { TA_TICK_MS } from '../../engine/tick-rate.js'
 import { activeGame } from '../common/game-registry.js'
 import { spawnStance } from './standing-orders.js'
+import { pickSoundKey } from '../common/unit-sounds.js'
 import { AudioPool } from '@coreprime/kbot-game3d/audio-pool'
 import { ParticlePool } from '@coreprime/kbot-game3d/cob-particles'
 import {
@@ -1000,9 +1001,21 @@ export class WasmSandboxScene {
     scale(this._fxBinding.audio)
   }
 
+  // playUnitSound plays one of the unit's sounds for a game event ('ok',
+  // 'underattack', ...) — picked among the event's keys as the game picks
+  // (see unit-sounds.js) — or for an explicit key ('select2'). A silent
+  // choice plays nothing.
   playUnitSound(unit, eventKey, minGapMs = UNIT_SOUND_DEBOUNCE_MS) {
     if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
-    const stem = unit.meta.sounds[eventKey]
+    const pick = pickSoundKey(unit.meta.sounds, [eventKey])
+    return pick ? this._playUnitSoundKey(unit, pick, eventKey, minGapMs) : false
+  }
+
+  // _playUnitSoundKey plays the sound under one exact key of the unit's sound
+  // map, debounced per (unit, event).
+  _playUnitSoundKey(unit, soundKey, eventKey, minGapMs = UNIT_SOUND_DEBOUNCE_MS) {
+    if (!unit || !unit.meta || !unit.meta.sounds || !unit.binding) return false
+    const stem = unit.meta.sounds[soundKey]
     if (!stem) return false
     const key = `${unit.id}:${eventKey}`
     const now = (typeof performance !== 'undefined' && performance.now)
@@ -1021,12 +1034,13 @@ export class WasmSandboxScene {
     return true
   }
 
+  // playUnitSoundRandom plays one sound picked among every key of the given
+  // events (and explicit keys) — e.g. ['ok', 'build'] for a builder's
+  // acknowledgement.
   playUnitSoundRandom(unit, eventKeys) {
     if (!unit || !unit.meta || !unit.meta.sounds) return false
-    const present = eventKeys.filter((k) => unit.meta.sounds[k])
-    if (present.length === 0) return false
-    const pick = present[Math.floor(Math.random() * present.length)]
-    return this.playUnitSound(unit, pick)
+    const pick = pickSoundKey(unit.meta.sounds, eventKeys)
+    return pick ? this._playUnitSoundKey(unit, pick, pick) : false
   }
 
   // ── Per-frame tick ────────────────────────────────────────────────
@@ -1502,7 +1516,7 @@ export class WasmSandboxScene {
             // Authoritative arrival — drop the move hint so the shift-drag
             // destination glyph clears now that the unit has reached its target.
             u._moveTarget = null
-            this.playUnitSoundRandom(u, ['arrived1', 'arrived2', 'arrived3', 'arrived4', 'arrived5'])
+            this.playUnitSoundRandom(u, ['arrived'])
           }
           break
         }
