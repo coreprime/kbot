@@ -415,6 +415,15 @@ func describeTDF(filePath string) {
 	sections := doc.Sections()
 	fmt.Printf("Format: TDF/FBI\n")
 	fmt.Printf("Sections: %d\n\n", len(sections))
+	// The document is read with the game's grammar; its diagnostics note
+	// text the game reads differently from how it looks.
+	if diags := doc.Diagnostics(); len(diags) > 0 {
+		fmt.Printf("How the game reads unusual text:\n")
+		for _, d := range diags {
+			fmt.Printf("  %s\n", d)
+		}
+		fmt.Println()
+	}
 
 	// Show section details
 	for _, section := range sections {

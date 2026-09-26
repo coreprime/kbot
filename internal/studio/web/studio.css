@@ -6814,6 +6814,8 @@ canvas {
 
 /* ── sections (TDF/FBI/GUI/OTA) ────────────────────────────────────── */
 .fx-sections { display: flex; flex-direction: column; gap: 10px; }
+.fx-sec-diags { color: var(--muted); font-size: 12px; }
+.fx-sec-diags ul { margin: 4px 0 0; padding-left: 18px; font-family: var(--mono); }
 .fx-sec-toolbar { display: flex; }
 .fx-sec-search { width: 100%; max-width: 320px; }
 .fx-sec-list { display: flex; flex-direction: column; gap: 6px; }

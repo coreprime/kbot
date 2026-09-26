@@ -42,13 +42,22 @@ function SectionNode({ section, defaultOpen }) {
   `
 }
 
-export function SectionsViewer({ sections }) {
+// SectionsViewer shows the sections as the game reads them (the describe
+// endpoint parses with the game's grammar); diagnostics lists kbot-io's notes
+// on text the game reads differently from how it looks.
+export function SectionsViewer({ sections, diagnostics }) {
   const [search, setSearch] = useState('')
   const all = sections || []
+  const notes = diagnostics || []
   const q = search.trim().toLowerCase()
   const filtered = q ? all.filter((s) => sectionMatches(s, q)) : all
   return html`
     <div class="fx-sections">
+      ${notes.length ? html`
+        <details class="fx-sec-diags">
+          <summary>⚠️ ${notes.length} note${notes.length !== 1 ? 's' : ''} on how the game reads this file</summary>
+          <ul>${notes.map((d, i) => html`<li key=${i}>${d}</li>`)}</ul>
+        </details>` : null}
       <div class="fx-sec-toolbar">
         <input type="text" class="fx-sec-search" placeholder="Search sections…" value=${search} onInput=${(e) => setSearch(e.target.value)} />
       </div>

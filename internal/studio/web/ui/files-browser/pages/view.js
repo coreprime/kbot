@@ -227,7 +227,7 @@ export function ViewPage({ path, source: initialSource, onOpenFile, onOpenDir })
           case 'sct': return html`<${SctMapTab} path=${path} describe=${describe} source=${src} />`
           case 'bos': return html`<${BosCodeTab} path=${path} source=${src} lintLines=${lintLines} highlightLine=${highlightLine} onOpenFile=${onOpenFile} />`
           default:
-            if (Array.isArray(describe.sections) && describe.sections.length) return html`<${SectionsViewer} sections=${describe.sections} />`
+            if (Array.isArray(describe.sections) && describe.sections.length) return html`<${SectionsViewer} sections=${describe.sections} diagnostics=${describe.tdfDiagnostics} />`
             return html`<${TextTab} path=${path} source=${src} />`
         }
       case 'features': return html`<${TntFeaturesTab} path=${path} describe=${describe} />`

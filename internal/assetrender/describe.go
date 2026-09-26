@@ -51,6 +51,10 @@ func (r *Renderer) Describe(vpath string, data []byte) (map[string]any, bool) {
 	return out, true
 }
 
+// describeTDF shows a TDF, FBI, GUI or OTA as the game reads it: kbot-io's
+// Document uses the game's grammar (comments blanked, a value runs to the
+// next ';', one-line `[NAME] {}` sections), and its diagnostics note text the
+// game reads differently from how it looks.
 func describeTDF(_ *Renderer, vpath string, data []byte, out map[string]any) {
 	doc, err := tdf.ParseString(string(data))
 	if err != nil {
@@ -88,6 +92,11 @@ func describeTDF(_ *Renderer, vpath string, data []byte, out map[string]any) {
 		sections = append(sections, convert(s))
 	}
 	out["sections"] = sections
+	diags := make([]string, 0, len(doc.Diagnostics()))
+	for _, d := range doc.Diagnostics() {
+		diags = append(diags, d.String())
+	}
+	out["tdfDiagnostics"] = diags
 }
 
 func describeGAF(_ *Renderer, _ string, data []byte, out map[string]any) {
