@@ -12,6 +12,9 @@ import (
 // Resolver turns the (`path`, `game_data`) arguments that every kbot MCP tool
 // accepts into a concrete on-disk path the underlying format loaders can use.
 //
+// Relative paths may use '\' as well as '/' as the separator on every host
+// ("units\ARMCOM.FBI", the game's own spelling); see vfsArgPath.
+//
 // Resolution order for ResolveFile(path, gameData):
 //  1. If path exists on disk and passes the PathGuard, return it as-is.
 //  2. If a game-data folder is selected, try to interpret path as virtual:
@@ -103,6 +106,8 @@ func (r *Resolver) ResolveFile(path, gameData string) (*ResolvedFile, error) {
 		}
 		// fall through — maybe a relative-looking absolute that's only in a VFS
 	}
+
+	path = vfsArgPath(path)
 
 	gd, err := r.registry.Get(gameData)
 	if err != nil {
@@ -319,6 +324,8 @@ func (r *Resolver) ResolveDir(path, gameData string, exts []string) (*ResolvedDi
 		}
 	}
 
+	path = vfsArgPath(path)
+
 	gd, err := r.registry.Get(gameData)
 	if err != nil {
 		return nil, err
@@ -399,6 +406,21 @@ func (r *Resolver) resolveDiskDir(dir string, exts []string) (*ResolvedDir, erro
 		return nil, fmt.Errorf("no files with extensions %v found under %s", exts, dir)
 	}
 	return rd, nil
+}
+
+// vfsArgPath rewrites a relative path argument into the form VFS keys
+// use: '\' separators become '/' on every host (backslash is the game's
+// native separator, as in "units\ARMCOM.FBI") and leading "./" and "/"
+// are dropped. Absolute host paths are returned unchanged.
+func vfsArgPath(p string) string {
+	if filepath.IsAbs(p) {
+		return p
+	}
+	p = strings.ReplaceAll(p, `\`, "/")
+	for strings.HasPrefix(p, "./") {
+		p = p[2:]
+	}
+	return strings.TrimLeft(p, "/")
 }
 
 func matchAnyExt(path string, exts []string) bool {

@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -82,7 +81,7 @@ func registerVFSTools(s *server.MCPServer, r *Resolver) {
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
-				mcplib.Description("Virtual path or bare filename to inspect."),
+				mcplib.Description("Virtual path or bare filename to inspect.  '\\' and '/' both separate path segments (units\\ARMCOM.FBI)."),
 			),
 			mcplib.WithString("game_data",
 				mcplib.Description("Game-data folder name.  Defaults to the first --game-data folder."),
@@ -174,6 +173,7 @@ func makeVFSFindHandler(r *Resolver) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(err), nil
 		}
+		query = vfsArgPath(query)
 		gameData := req.GetString("game_data", "")
 		limit := int(req.GetFloat("limit", 50))
 		if limit <= 0 {
@@ -244,8 +244,7 @@ type vfsListOutput struct {
 
 func makeVFSListHandler(r *Resolver) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-		path := req.GetString("path", "")
-		path = strings.Trim(filepath.ToSlash(path), "/")
+		path := strings.Trim(vfsArgPath(req.GetString("path", "")), "/")
 		gameData := req.GetString("game_data", "")
 
 		gd, err := r.Registry().Get(gameData)
@@ -330,6 +329,7 @@ func makeVFSStatHandler(r *Resolver) server.ToolHandlerFunc {
 		}
 
 		out := vfsStatOutput{GameData: gd.Name, Query: query}
+		query = vfsArgPath(query)
 
 		// Direct hit first.
 		if vfs.Exists(query) && !vfs.IsDir(query) {

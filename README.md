@@ -869,7 +869,7 @@ kbot mcp
 Once a game-data folder is configured, every tool's `path` argument accepts:
 
 - an absolute on-disk path (e.g. `/Users/me/games/totala/units/ARMCOM.fbi`),
-- a virtual path inside the VFS (e.g. `units/ARMCOM.fbi`), or
+- a virtual path inside the VFS (e.g. `units/ARMCOM.fbi`; the game's own `units\ARMCOM.fbi` spelling works on every host), or
 - a bare filename (e.g. `ARMCOM.bos`) that the resolver searches for across every archive and physical file. Ambiguous matches return a list so the assistant can pick.
 
 When a hit lives inside an archive, kbot extracts it to a temp file for the duration of the call and cleans up afterwards. Physical files are passed through directly.
