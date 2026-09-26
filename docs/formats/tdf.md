@@ -65,16 +65,26 @@ nested sections.
 Rules:
 
 - **Section names** are in square brackets; everything that follows
-  until the matching `}` belongs to that section.
-- **Values end with a semicolon `;`**. Multi-line values are not
-  supported.
+  until the matching `}` belongs to that section. A section may sit on
+  one line (`[special0] { specialwhat=StartPos1; XPos=464; ZPos=216; }`).
+- **A value runs from the `=` to the next `;`**, across line breaks:
+  nothing else ends it, so braces, brackets and `=` inside a value are
+  plain text, and a value can never contain a `;`. Spaces, tabs and
+  line breaks at either end of a key or value are trimmed. A key
+  assigned twice keeps its last value.
 - **Keys are case-insensitive.** `UnitName`, `unitname` and `UNITNAME`
   all refer to the same field; tools commonly canonicalise to lowercase
-  on read.
-- **Values are strings** by default. Numeric values are decimal
-  integers or floats; lists are comma-separated (e.g.
-  `Category=NOTSUB COMMANDER NOTAIR ...`).
-- **Comments** start with `//` and run to end-of-line.
+  on read. Section names are compared ignoring case too.
+- **Values are strings** by default. Numbers are read the C way, from
+  the leading digits: `12abc` reads as 12 and `56.8` as 56 where the
+  game wants a whole number (fields such as `killmul` and
+  `tidalstrength` are read as fractions). Lists are space-separated
+  (e.g. `Category=NOTSUB COMMANDER NOTAIR ...`).
+- **Comments** are blanked out before anything else is read: `//` to the
+  end of the line, and `/* ... */` blocks, which may span lines. So
+  `missiondescription=See http://tauniverse.com;` loses everything from
+  `//` onwards, including its `;`, and the value runs on into the next
+  line. kbot refuses to write a value containing `;`, `//` or `/*`.
 - **Whitespace and blank lines are ignored.**
 
 Nested sections (like `[SOUNDS]` inside `[UNITINFO]` above) are common
@@ -283,7 +293,7 @@ needs to *play* the map (as opposed to render its terrain):
 [GlobalHeader]
 {
     missionname=Metal Heck;
-    missiondescription=A small, brutal metal map.
+    missiondescription=A small, brutal metal map.;
     planet=metal;
     tidalstrength=0;
     solarstrength=20;
@@ -314,14 +324,49 @@ needs to *play* the map (as opposed to render its terrain):
 ```
 
 `kbot tnt preview` reads the matching `.ota` and draws numbered markers
-at each `StartPosN` it finds.
+at each start position of the chosen schema.
+
+How the game reads the schemas and start positions (every kbot view —
+the studio map editor, the sandbox, the asset explorer, `kbot tnt
+preview`, `kbot tnt lint` and the Quality Checker — reads them the same
+way, through kbot-io's OTA game view):
+
+- **Schemas are found by name, `Schema 0`, `Schema 1`, … up to the first
+  missing number.** Names are compared ignoring case (`[schema 1]` counts),
+  but the number must be written plainly: `[Schema0]` or `[Schema 01]` is
+  never found, and a schema after a gap (`Schema 0`, `Schema 1`,
+  `Schema 3`) is never read. `SCHEMACOUNT` is ignored.
+- **Skirmish and multiplayer games pick a schema by `Type` and start
+  count, not by position.** Only `Network 1` to `Network 4` schemas
+  (compared ignoring case) with at least one start position qualify. For
+  N players the game prefers the last qualifying schema with exactly N
+  start positions, otherwise the one with the most. A campaign mission
+  picks by difficulty (`Easy`, `Medium`, `Hard`). `numplayers` is only
+  text shown in the lobby (`2, 4`, `2-8` and `Any` all load).
+- **Start positions are the `[specials]` entries whose `specialwhat`
+  starts with `StartPos`** (ignoring case). `StartPosN` is player slot
+  N-1, `StartPos0` is slot 0 too, and an entry with no number after
+  `StartPos` takes the next number of its own (the first is 1). `XPos` and
+  `ZPos` are map pixels, kept to 16 bits.
+- **Missing keys have defaults, not zeros:** a missing
+  `missiondescription` shows "No description available", a missing
+  `maxunits` (campaigns only) means 200, and a pre-placed feature
+  (`[features]`) with no `XPos` or `ZPos` is skipped, so one at column or
+  row 0 needs an explicit `0`.
 
 > [!NOTE]
-> **`Schema 0`, `Schema 1`, etc. are alternate setups for the same
-> map** — usually different start-position layouts for different player
-> counts. The game UI lets you pick a schema in the lobby; mods that
-> add Schema 1+ should mirror the slot numbering convention used by
-> Cavedog (`numplayers=2,4,6,8,10` ⇒ schemas 0..4).
+> **The studio map editor edits a map's `.ota` in place.** Saving changes
+> only the values you edited (and adds or removes the schemas and start
+> positions you added or removed); everything else — victory and trigger
+> keys, `useonlyunits`, `[units]`, `[features]`, other `[specials]`,
+> fractions such as `killmul=0.5`, comments — is written back as it was.
+> Removing a schema or a start position rewrites the file in kbot-io's
+> layout (same content, comments dropped) and renumbers later schemas so
+> the game still finds them. An `.ota` kbot cannot read is shown with its
+> error and left unchanged on save, and dialog text containing `;`, `//`
+> or `/*` is refused. The game takes the sea level from the `.tnt`
+> header; the editor keeps an existing `sealevel=` key in step but never
+> adds one.
 
 ---
 
@@ -403,7 +448,8 @@ kbot hpi pack ./mymod --target myturret.ufo
 - **List values are space-separated** (`Category=COMMANDER MOBILE WEAPON`)
   — not comma-separated. The engine splits on any whitespace.
 - **Some OTA fields use commas**, however: `numplayers=2,4,6,8,10`. There
-  isn't a single list-delimiter convention.
+  isn't a single list-delimiter convention, and the game never parses
+  `numplayers` at all — it only shows the text.
 - **Nested sections have no formal depth limit**, but Cavedog never
   shipped anything more than 3 deep. Editors that assume 2-deep will
   fail on a handful of weapon TDFs with `[WEAPON][DAMAGE][category]`-

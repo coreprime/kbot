@@ -451,7 +451,8 @@ kbot tnt minimap   "metal heck.tnt" --target mini.png        # embedded minimap
 # any directory containing features/*.tdf and anims/*.gaf).
 kbot tnt preview "metal heck.tnt" --vfs ~/ta-flattened --target preview.png
 
-# Pick a different schema's StartPos set (0-based; default 0).
+# Pick a different schema's StartPos set: the one the game finds as
+# "Schema 2" (default 0; a schema after a gap in the numbering draws none).
 kbot tnt preview "metal heck.tnt" --schema 2 --target preview-s2.png
 
 # --vfs may be omitted when a kbot context is active (see `kbot ctx`)
@@ -515,7 +516,7 @@ A transparent PNG at attribute-cell resolution.  Cells with `Feature == 0xFFFC` 
 > | Export Minimap | client canvas snapshot | (n/a) |
 > | Export Full Render | `tnt.RenderTileMap` + `tntpreview.ComposeWith` (active schema's StartPos markers) | `kbot tnt preview --schema <ActiveSchema>` / `tnt_preview` |
 > | Export Map Image | `tnt.RenderTileMap` (bare tile grid, no overlays) | `kbot tnt image` / `tnt_image` |
-> | Export Buildmap | `tnt.RenderBuildMap` | `kbot tnt buildmap` / `tnt_buildmap` |
+> | Export Buildmap | `tnt.RenderBuildMapFor` (placed features block their cells) | `kbot tnt buildmap` / `tnt_buildmap` |
 > | Export Voidmap | `tnt.RenderVoidMap` | `kbot tnt voidmap` / `tnt_voidmap` |
 
 **Linting a map:**
@@ -565,11 +566,15 @@ Checks (each emits a row, ✅ / ⚠️ / ❌ icon, one-line summary):
 | Tile pool | `duplicate-tiles` | Byte-identical tile graphics |
 | Tile pool | `similar-tiles` | Visually-similar graphics sharing a heightmap footprint (configurable via `--similarity`) |
 | Tile pool | `unused-tiles` | Tile graphics no cell references |
+| Map data | `bad-tile-index` | Tile map cells naming a tile beyond the tile set (the game reads past its tile set there) |
+| Map data | `unresolved-feature` | Cells whose feature word names no entry of the feature table (the game places nothing there) |
+| Map data | `interchange-bounds` | A map larger than other map tools accept |
+| Map data | `minimap` | No stored minimap, or one too small for the game's radar |
 | Quality | `dedupTiles` | Same as `duplicate-tiles`, surfaced via the Studio quality dialog id |
 | Quality | `otaFields` | Lobby-required OTA metadata missing |
 | Quality | `startsInBounds` | Start positions outside the map or sitting on a void cell |
-| Quality | `schemaSlots` | An advertised `numplayers` count no schema can host (insufficient StartPos entries) |
-| Quality | `metalProximity` | Start without a metal-producing feature within 24 tiles (skipped on metal-rich schemas) |
+| Quality | `schemaSlots` | An advertised `numplayers` count the schema the game picks for it cannot host (the game reads Network 1..4 schemas from Schema 0 up to the first gap; schemas it never reads are listed) |
+| Quality | `metalProximity` | Start without a metal-producing feature within 24 tiles (skipped on metal-rich schemas; feature metal read as the game stores it, so `metal=56.8` is 56) |
 | Quality | `voidIslands` | Passable cells unreachable from any start (≥ 20 cells) |
 | Quality | `heightDiscontinuities` | Cliffs > 32 height units between adjacent cells — likely to block ground pathing |
 
@@ -726,7 +731,13 @@ features, sculpt the heightmap, mark engine voids, and set per-schema start
 positions.  Split panes, undo/redo, a ruler, and symmetry tools aid editing; a
 Quality Checker lints the map (with auto-fixes) before you save.  The export
 menu bundles a downloadable `.hpi` (or loose TNT/OTA) plus full renders,
-minimaps, heightmaps, buildmaps, and voidmaps.
+minimaps, heightmaps, buildmaps, and voidmaps.  Saving an opened map edits its
+`.ota` in place: only the values you change are rewritten, and everything the
+editor does not show (victory conditions, pre-placed units and features,
+fractions, other keys) is kept; an `.ota` it cannot read is left unchanged.
+Schemas and start positions are read the way the game reads them, and the
+saved `.tnt` carries a minimap laid out as the game's own (with its minimap
+flag set).
 
 **Sandbox Mode** — drop units onto a battlefield and test them live.  A WASM
 physics core simulates movement, commands, weapon fire, and damage with team
@@ -862,7 +873,7 @@ These tools render various artefacts from a `.tnt` to PNG.  Each accepts `path` 
 | `tnt_buildmap` | Per-cell buildability classification — black/red/blue/yellow/green key (see the CLI section above).  Optional `sealevel` overrides the .tnt header's value (0 disables the underwater check). |
 | `tnt_voidmap` | Engine-void mask — cells with `Feature == 0xFFFC` painted red, everything else transparent. |
 | `tnt_minimap` | Embedded 252×252 minimap (paletted PNG when `paletted=true`). |
-| `tnt_preview` | `tnt_image` plus composited feature sprites and numbered StartPos markers for the schema chosen by `schema` (0-based; defaults to 0).  Requires `game_data` so feature sprites and the sister `.ota` resolve. |
+| `tnt_preview` | `tnt_image` plus composited feature sprites and numbered StartPos markers for the schema the game finds as "Schema `schema`" (defaults to 0).  Requires `game_data` so feature sprites and the sister `.ota` resolve. |
 
 #### TAF / TSF animation tools
 
