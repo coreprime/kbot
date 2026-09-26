@@ -50,6 +50,17 @@ A unit's [FBI](tdf.md) declares its `MovementClass=KBOTSS2` (or similar);
 the engine looks up that class in `moveinfo.tdf` to decide which
 terrain it can traverse.
 
+TA 3.1c reads only the sections `[CLASS0]` to `[CLASS31]` (the first
+section of each of those names) and finds a class by its `Name=`,
+ignoring case, lowest slot first. When the unit's class resolves, the
+class's values **replace** the unit's own `FootprintX`/`FootprintZ`,
+`MaxWaterDepth`, `MinWaterDepth` and slope keys entirely — the commander's
+`MaxSlope=20` gives way to `TANKDS2`'s 32 — and a key the class leaves out
+takes the game's default below, not the FBI's value. A unit with no
+class, or naming one the game cannot find, reads its own FBI keys with
+the same defaults. KBot Studio's unit meta, sandbox and hosted matches
+resolve movement this way.
+
 ```ini
 [CLASS0]
 {
@@ -76,13 +87,13 @@ terrain it can traverse.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `Name` | string | Class identifier referenced from `MovementClass=` in unit FBIs. Case-insensitive. |
-| `FootprintX`, `FootprintZ` | int | Pathing footprint, in 16-px attribute cells. Must match the unit's FBI footprint. |
-| `MaxWaterDepth` | int | Deepest water (in terrain-height units) the unit can enter. `0` = strictly land. |
-| `MinWaterDepth` | int | Minimum water depth required (boats, submarines). Mutually exclusive with `MaxWaterDepth`. |
-| `MaxSlope` | int | Steepest slope the unit can climb on land (units = `2π / 256` radians). |
-| `BadSlope` | int | Slope at which the unit moves at reduced speed (slower but not blocked). Defaults to `MaxSlope`. |
-| `MaxWaterSlope` | int | Same as `MaxSlope`, applied when underwater. `255` = no limit (used for hovercraft). |
-| `BadWaterSlope` | int | Underwater equivalent of `BadSlope`. |
+| `FootprintX`, `FootprintZ` | int | Pathing footprint, in 16-px attribute cells. Replaces the unit's FBI footprint; `0` when the class leaves it out. |
+| `MaxWaterDepth` | int | Deepest water (in terrain-height units) the unit can enter. `0` = strictly land. Default `10000` (any depth) — hovercraft classes leave it out, so a hovercraft rides any water whatever its FBI says. |
+| `MinWaterDepth` | int | Minimum water depth required (boats, submarines). Default `-10000` (no minimum). |
+| `MaxSlope` | int | Steepest slope the unit can climb on land (units = `2π / 256` radians). Default `255`; capped by `MaxWaterSlope`. |
+| `BadSlope` | int | Slope at which the unit moves at reduced speed (slower but not blocked). Defaults to half of `MaxSlope`; capped by `MaxSlope`. |
+| `MaxWaterSlope` | int | Same as `MaxSlope`, applied when underwater. Default `255` (no limit, used for hovercraft). |
+| `BadWaterSlope` | int | Underwater equivalent of `BadSlope`; defaults to half of `MaxWaterSlope`. |
 
 ### Naming conventions
 
@@ -220,9 +231,42 @@ for the per-page layout of every constructor in the base game.
 ## `weapons.tdf` — Weapon TDF reference
 
 Despite the name, `gamedata/weapons.tdf` is **mostly comments** — it's
-Cavedog's published reference for the weapon-TDF grammar. The actual
-weapon definitions live in `weapons/*.tdf`, one section per weapon
-(see [TDF](tdf.md)).
+Cavedog's published reference for the weapon-TDF grammar, and the game
+never loads it. The actual weapon definitions live in `weapons/*.tdf`,
+one section per weapon (see [TDF](tdf.md)).
+
+### The weapon table
+
+TA 3.1c builds a table of 256 weapon slots from the `.tdf` files
+directly in `weapons/` (not its subdirectories), in the order it lists
+them:
+
+- A section goes into the slot its `ID=` names, `0`–`255`. A section
+  with no `ID`, or one outside that range, is skipped.
+- A later section with the same `ID` — in the same file or a later one —
+  replaces the earlier one.
+- A unit's `Weapon1`/`Weapon2`/`Weapon3`, `ExplodeAs` and
+  `SelfDestructAs` name a section; the name (ignoring case) resolves to
+  the **lowest** slot holding a section of that name.
+- Values read as number prefixes: `weaponacceleration=13O;` is 13, and a
+  bad value never drops the rest of the file.
+- A missing `range` is `32767`; a missing `minbarrelangle` is `-11.25`
+  degrees; `reloadtime` counts in whole ticks (30 a second,
+  `reloadtime*30` truncated: `0.35` reloads after 10 ticks, 0.333 s);
+  `turnrate` is in angle units per second (65536 = a full circle).
+
+KBot Studio, packs and `kbot host` all resolve weapons through this
+table. Sections the game skips or replaces are reported as warnings
+(`kbot pack` prints them; the studio serves them at
+`/api/studio/weapons/warnings`).
+
+### `rendertype=4` sprites
+
+A `rendertype=4` weapon flies a 2D sprite from `anims/fx.gaf`, and its
+`color=` picks which: `0` cannonshell, `1` plasmasm, `2` plasmamd, `3`
+ultrashell, `4` plasmasm again; any other value (such as EARTHQUAKE's
+`color=255`) draws no sprite. The sprite steps one frame per game tick
+from the moment the shot fires, whatever durations the GAF frames carry.
 
 The reference comments document:
 
@@ -251,9 +295,10 @@ modifiers** live:
 }
 ```
 
-Keys in `[DAMAGE]` correspond to **`UnitName`s** (specific units) or
-**category aliases** (any token from a unit's `Category=`). The engine
-picks the most specific match.
+Keys in `[DAMAGE]` are **unit names**: a unit listed takes that damage
+instead of `default=`, every other unit takes `default=`. Values are kept
+to 16 bits. Death blasts (`ExplodeAs`, `SelfDestructAs`) use the same
+table — `CORPYRO_BLAST` deals 60 by default but 15 to a Pyro.
 
 ---
 
@@ -281,7 +326,9 @@ gameplay.
 Covered in [WAV / Sound](sound.md). In summary:
 
 - **`sound.tdf`** — per-unit-category sound bindings (the `[ARM_COM]`,
-  `[ARM_KBOT]` sections). Referenced by FBI `SoundCategory=`.
+  `[ARM_KBOT]` sections). Referenced by FBI `SoundCategory=`. The game
+  reads 23 events, each as `KEY` then `KEY1`, `KEY2`, … up to the first
+  missing number.
 - **`allsound.tdf`** — global UI sound bindings (`[BIGBUTTON]`,
   `[SKIRMISH]`, `[BGM]`).
 
@@ -294,7 +341,7 @@ To create a "boat that can ford very shallow water" class:
 1. Append to `gamedata/moveinfo.tdf`:
 
    ```ini
-   [CLASS99]
+   [CLASS20]
    {
        Name=AMPHIB3;
        FootprintX=3;
@@ -309,9 +356,10 @@ To create a "boat that can ford very shallow water" class:
 
    ```ini
    MovementClass=AMPHIB3;
-   FootprintX=3;
-   FootprintZ=3;
    ```
+
+   The class's footprint and limits replace the FBI's own, so the unit's
+   `FootprintX`/`FootprintZ`/`MaxWaterDepth` keys no longer matter.
 
 3. Pack:
 
@@ -322,10 +370,11 @@ To create a "boat that can ford very shallow water" class:
 The unit will now traverse both land and water seamlessly.
 
 > [!NOTE]
-> **`[CLASS<N>]` section numbers don't have to be sequential or unique
-> across mods.** The engine reads `Name=` and ignores the bracketed
-> number — but mods commonly use high numbers (`CLASS100+`) to avoid
-> colliding with stock classes.
+> **Only `[CLASS0]` to `[CLASS31]` are ever read.** A class in
+> `[CLASS32]`, `[CLASS100]` or `[HOVERXL]` is never found, and units naming
+> it fall back to their own FBI keys. Pick a free slot below 32 (retail
+> uses `CLASS0` to `CLASS14`); a second section with the same slot name
+> is ignored.
 
 ---
 
@@ -350,9 +399,8 @@ The unit will now traverse both land and water seamlessly.
 > the lobby is not enough. This catches a lot of modders out who think
 > their change "didn't take".
 
-- **Section numbering is not checked.** Numbers in `[CLASS5]` /
-  `[CLASS99]` are labels; only `Name=` matters. Sequential numbering
-  is a convention, not a requirement.
+- **Movement-class slots are fixed.** Only `[CLASS0]` to `[CLASS31]`
+  are read; numbering gaps inside that range are fine.
 - **Comments use `//`, not `/*…*/`** in most files — but
   `weapons.tdf` uses both. Test parsers tolerate both; some
   third-party tools don't.
@@ -362,9 +410,9 @@ The unit will now traverse both land and water seamlessly.
 - **`[CANBUILD]` slot numbers** beyond 12 add extra pages; the engine
   doesn't error if you go to 11 then 14 with a gap. The gap shows as
   a blank slot.
-- **Each `MovementClass` must be declared in `moveinfo.tdf` before any
-  FBI references it.** Loading an FBI with an undefined class
-  silently makes the unit stationary.
+- **A `MovementClass` the game cannot find is not an error.** The unit
+  silently uses its own FBI keys, with the game's defaults for missing
+  ones — a unit with no `MaxWaterDepth` then wades to depth 10000.
 
 ---
 

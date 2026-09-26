@@ -186,7 +186,11 @@ name:
 
 `weapons/*.tdf` follow the same pattern, with `[WEAPON_NAME]` sections.
 The FBI's `Weapon1=COMMANDER_WEAPON` field resolves to the
-`[COMMANDER_WEAPON]` section in some TDF in `weapons/`. The community
+`[COMMANDER_WEAPON]` section in some TDF in `weapons/`, through the game's
+ID-indexed weapon table: each section needs an `ID=` in `0`–`255`, a later
+section with the same ID replaces an earlier one, and a name resolves to
+the lowest slot holding it (see
+[Gamedata: the weapon table](gamedata.md#the-weapon-table)). The community
 weapons guide documents about 60 distinct fields; the meaty ones are
 `ballistic`/`lineofsight`/`dropped` (the weapon archetype),
 `weapontimer`, `weaponvelocity`, `areaofeffect`, `edgeeffectiveness`,
@@ -471,8 +475,8 @@ Fields not listed here are either editor scratch (`UnitNumber`,
 | `MetalMake` | int | Metal produced per tick. |
 | `EnergyStorage` | int | Storage capacity. Blank for non-storage units. |
 | `MetalStorage` | int | Storage capacity. Blank for non-storage units. |
-| `MakesMetal` | int | Per-tick metal manufactured (different from `MetalMake` — used by metal-makers). |
-| `ExtractsMetal` | int | Per-tick metal pulled from a deposit (metal extractors). |
+| `MakesMetal` | int | Metal a metal maker converts per second while it is on and its energy is paid; read as a whole number (`1.9` is 1). Separate from `MetalMake`, which is always on. |
+| `ExtractsMetal` | float | Metal an extractor yields per unit of map metal under its footprint, while it is on and powered. |
 | `TidalGenerator` | bool | This unit's energy output scales with the map's `tidalstrength`. |
 | `WindGenerator` | bool | Output scales with the map's wind speed range. |
 | `Builder` | bool | Can build other units. |
@@ -504,9 +508,9 @@ Fields not listed here are either editor scratch (`UnitNumber`,
 | `HideDamage` | bool | Hides the damage bar from the enemy. |
 | `kamikaze` | bool | Detonates on contact instead of firing. |
 | `firestandorders` | bool | Has the standing-fire-order toggle. |
-| `StandingFireOrder` | enum | Default fire stance: `0` = hold, `1` = return, `2` = at will. |
+| `StandingFireOrder` | enum | Default fire stance: `0` = hold, `1` = return, `2` = at will. A missing key is `2`; an explicit value keeps its low two bits, so `0` really is Hold Fire. |
 | `mobilestandorders` | bool | Has the standing-move-order toggle. |
-| `StandingMoveOrder` | enum | Default move stance: `0` = hold, `1` = manoeuvre, `2` = roam. |
+| `StandingMoveOrder` | enum | Default move stance: `0` = hold, `1` = manoeuvre, `2` = roam. A missing key is `2`; an explicit value keeps its low two bits (the commanders' `0` is Hold Position). |
 | `ShootMe` | bool | Hint to AI/computer opponents: prioritise targeting this unit. |
 | `Commander` | bool | Marks this as a commander unit (loses game when killed). |
 
@@ -518,13 +522,13 @@ Fields not listed here are either editor scratch (`UnitNumber`,
 | `Acceleration` | float | Speed gained per tick. |
 | `BrakeRate` | float | Speed lost per tick when stopping. |
 | `TurnRate` | int | Rotation speed in `2π/65536` units per tick. |
-| `MaxSlope` | int | Steepest land slope the unit can climb. |
-| `MaxWaterDepth` | int | Deepest water the unit can enter. `0` = strictly land. |
-| `MinWaterDepth` | int | Minimum water depth (boats only). |
-| `MovementClass` | str | Class name in `gamedata/moveinfo.tdf`. Drives detailed pathing. |
+| `MaxSlope` | int | Steepest land slope the unit can climb. Default `255`. |
+| `MaxWaterDepth` | int | Deepest water the unit can enter. `0` = strictly land; default `10000`. |
+| `MinWaterDepth` | int | Minimum water depth (boats only). Default `-10000`. |
+| `MovementClass` | str | Class name in `gamedata/moveinfo.tdf` (`[CLASS0]`–`[CLASS31]`). When it resolves, the class's footprint, water depths and slopes replace the FBI's own keys (see [Gamedata](gamedata.md#moveinfotdf--movement-classes)). |
 | `SteeringMode` | enum | `0`/`1`/`2` — turn-then-move vs. arc vs. instant. |
 | `Upright` | bool | Renders the unit standing (kbots) or flat (vehicles). |
-| `BankScale` | float | How aggressively the unit rolls when turning (aircraft). |
+| `BankScale` | float | How aggressively the unit rolls when turning (aircraft). Default `1`; an explicit `0` never banks. |
 | `PitchScale` | float | How aggressively the unit pitches when accelerating. |
 | `Scale` | float | Visual scale multiplier (`1.0` = normal). |
 | `CanFly` | bool | Aircraft flag. |

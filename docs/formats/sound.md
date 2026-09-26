@@ -96,10 +96,17 @@ The TDF binds engine events to WAV filenames within a category:
 }
 ```
 
-Note the **`1` suffix** on most event names. Many event keys come as
-families (`select1`, `select2`, `select3`, …); the engine picks one at
-random for variety. With only `select1` defined, the same line plays
-every time.
+Note the **`1` suffix** on most event names. Every event can have a
+family of choices: the plain key (`select`) and the numbered keys
+`select1`, `select2`, `select3`, …; the engine picks one at random for
+variety. With only `select1` defined, the same line plays every time.
+
+TA 3.1c reads, for each event, the plain key when present, then
+`KEY1`, `KEY2`, … **up to the first missing number**: with
+`select1=kbarmsel; select3=kbarmse2;` only `kbarmsel` ever plays, because
+the missing `select2` ends the list. (A missing plain key does not stop
+the numbered ones.) An empty value is a silent choice. Keys that are not
+one of the events below are never played.
 
 ### Layer 3 — `sounds/<name>.wav`
 
@@ -115,27 +122,33 @@ up `sounds/<stem>.wav` in the virtual filesystem.
 
 ## Standard event keys
 
-The most useful keys in a unit's `[SOUNDS]` block — either inlined into
-the FBI or routed via the `SoundCategory` lookup:
+TA 3.1c reads 23 events from a unit's sound category, each as the plain
+key plus the numbered family described above (`ok`, `ok1`, `ok2`, …):
 
-| Key | When it fires |
-|-----|---------------|
-| `select1`–`selectN` | Unit selected. |
-| `ok1`–`okN` | Movement order accepted. |
-| `arrived1`–`arrivedN` | Unit completes move. |
-| `cant1`–`cantN` | Order rejected (terrain, build queue, etc.). |
+| Event | When it fires |
+|-------|---------------|
+| `select` | Unit selected. |
 | `underattack` | Unit takes damage. |
-| `count0`–`count5` | Self-destruct countdown ticks. |
-| `canceldestruct` | Self-destruct aborted. |
+| `activate` / `deactivate` | On/off toggle (radar, jammer, fortifications). |
+| `ok` | Order accepted. |
+| `arrived` | Unit completes a move. |
+| `cant` | Order rejected (terrain, build queue, etc.). |
+| `unitcomplete` | Unit finished building. |
 | `build` | Constructor begins building. |
 | `repair` | Constructor begins repairing. |
 | `working` | Constructor reclaiming/resurrecting. |
+| `load` / `unload` | Transport picks up / drops a unit. |
+| `cloak` / `uncloak` | Unit cloaks / decloaks (the commanders). |
 | `capture` | Commander/capture-capable unit begins capturing. |
-| `activate` / `deactivate` | On/off toggle (radar, jammer, fortifications). |
-| `pcktle1`–`pcktleN` | "Picked from group", spoken when multi-selecting. |
+| `count5` … `count0` | Self-destruct countdown ticks. |
+| `canceldestruct` | Self-destruct aborted. |
 
-The full list lives in Cavedog's `gamedata/allsound.tdf`, which is a
-single flat reference of every event the engine emits.
+Each key may have a matching `KEYtext` entry (`select1text`) with the
+line's subtitle. Other keys in the category are ignored.
+
+KBot Studio's unit viewer and sandbox follow the same rules: the unit
+meta (`/api/studio/unit/{name}`) carries exactly the keys the game plays
+for these events, and each event plays one of its keys at random.
 
 ---
 
