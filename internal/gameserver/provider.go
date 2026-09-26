@@ -10,6 +10,7 @@ import (
 	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/unitdefs"
 )
 
 // fbiProvider resolves unit type names against a flattened game-asset tree
@@ -21,11 +22,11 @@ type fbiProvider struct {
 
 	mu      sync.Mutex
 	units   map[string]*sim.UnitMeta // lower-cased name -> meta (nil = known-missing)
-	weapons map[string]ta.Weapon     // upper-cased section key -> weapon
+	weapons *unitdefs.WeaponTable    // the game's weapon table, by ID
 	loaded  bool
-	// moveinfo.tdf movement classes, loaded with the weapons index; a unit's
+	// moveinfo.tdf movement classes, loaded with the weapon table; a unit's
 	// FBI movementclass resolves through them at meta build.
-	moveClasses games.MovementClasses
+	moveClasses []ta.MovementClass
 }
 
 // newFBIProvider builds a provider rooted at a flattened asset directory.
@@ -94,63 +95,63 @@ func (p *fbiProvider) loadUnit(name string) *sim.UnitMeta {
 	if err != nil {
 		return nil
 	}
-	// The moveinfo.tdf class replaces the FBI's footprint and water/slope
-	// limits when the unit names one, matching the engines' load order.
 	p.ensureWeapons()
-	games.ApplyMovementClass(m, p.moveClasses)
 	// Exact-combat fields: [DAMAGE] tables, tick-domain reload, spray /
 	// accuracy angles, behavior classes, death blasts.
 	games.EnrichCombatMeta(m, data, p.resolveWeapon)
+	// The game's rules for the unit: footprint and terrain limits from its
+	// movement class (or its own keys) with the game's defaults, resolved
+	// standing orders, whole-tick reloads — the same step the studio host
+	// and /api/studio/unit apply, so every side of a match agrees.
+	var u ta.Unit
+	if err := tdf.Unmarshal(data, &u); err == nil {
+		unitdefs.ApplyToSimMeta(m, &u.Info, p.moveClasses, p.resolveWeapon)
+	}
 	return m
 }
 
-// resolveWeapon looks up an FBI weapon reference in the cached weapons index.
-// Caller holds p.mu (toMeta runs under it).
+// resolveWeapon looks up an FBI weapon reference in the game's weapon table:
+// the lowest slot with that section name, with the game's defaults for a
+// missing range or minimum barrel angle. Caller holds p.mu (toMeta runs under
+// it).
 func (p *fbiProvider) resolveWeapon(ref string) (ta.Weapon, bool) {
 	p.ensureWeapons()
-	sec, ok := p.weapons[strings.ToUpper(strings.TrimSpace(ref))]
-	return sec, ok
+	return p.weapons.Resolve(ref)
 }
 
-// ensureWeapons walks weapons/*.tdf once and indexes every section by key.
-// Caller holds p.mu.
+// ensureWeapons builds the weapon table once from the .tdf files directly in
+// weapons/ (in the order the game lists loose files: by upper-cased name) and
+// loads gamedata/moveinfo.tdf. Caller holds p.mu.
 func (p *fbiProvider) ensureWeapons() {
 	if p.loaded {
 		return
 	}
 	p.loaded = true
-	p.weapons = make(map[string]ta.Weapon)
 	if path := p.findFile(filepath.Join("gamedata", "moveinfo.tdf")); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			if classes, err := games.LoadMovementClasses(data); err == nil {
+			if classes, err := unitdefs.LoadMoveClasses(data); err == nil {
 				p.moveClasses = classes
 			}
 		}
 	}
-	dir := p.findFile("weapons")
-	if dir == "" {
-		return
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".tdf") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var weapons []ta.Weapon
-		if err := tdf.Unmarshal(data, &weapons); err != nil {
-			continue
-		}
-		for i := range weapons {
-			p.weapons[strings.ToUpper(strings.TrimSpace(weapons[i].Key))] = weapons[i]
+	var files []unitdefs.WeaponFile
+	if dir := p.findFile("weapons"); dir != "" {
+		if entries, err := os.ReadDir(dir); err == nil {
+			var names []string
+			for _, e := range entries {
+				if !e.IsDir() && ta.IsWeaponFile("weapons/"+e.Name()) {
+					names = append(names, e.Name())
+				}
+			}
+			unitdefs.SortLooseNames(names)
+			for _, n := range names {
+				if data, err := os.ReadFile(filepath.Join(dir, n)); err == nil {
+					files = append(files, unitdefs.WeaponFile{Path: "weapons/" + n, Data: data})
+				}
+			}
 		}
 	}
+	p.weapons = unitdefs.BuildWeaponTable(files)
 }
 
 // findFile resolves a path under the asset root case-insensitively, returning
