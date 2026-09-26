@@ -178,6 +178,7 @@ func (p *preloadTracker) finish() {
 // background goroutine after the server boots; the TTY progress bar
 // (when stdout is a terminal) follows the preloadProgress counters.
 func (sess *Session) startAssetPreload() {
+	defer sess.recoverPreload()
 	pal := sess.loadVFSPalette()
 	paths := sess.vfs.List()
 
@@ -191,13 +192,17 @@ func (sess *Session) startAssetPreload() {
 	}
 	sess.preloadProgress.set("maps", 0, len(tntPaths))
 	for i, p := range tntPaths {
-		entry, mini := sess.summariseMapWithMinimap(p)
-		sess.mapCatalog.mu.Lock()
-		sess.mapCatalog.entries = append(sess.mapCatalog.entries, entry)
-		if mini != nil {
-			sess.mapCatalog.minimaps[p] = mini
+		var entry mapEntry
+		var mini []byte
+		// A map whose parse panics is left out of the catalogue.
+		if recoverAsset("map catalogue", p, func() { entry, mini = sess.summariseMapWithMinimap(p) }) {
+			sess.mapCatalog.mu.Lock()
+			sess.mapCatalog.entries = append(sess.mapCatalog.entries, entry)
+			if mini != nil {
+				sess.mapCatalog.minimaps[p] = mini
+			}
+			sess.mapCatalog.mu.Unlock()
 		}
-		sess.mapCatalog.mu.Unlock()
 		sess.preloadProgress.set("maps", i+1, len(tntPaths))
 	}
 	sess.mapCatalog.mu.Lock()
@@ -234,39 +239,51 @@ func (sess *Session) startAssetPreload() {
 	for _, s := range sections {
 		path := s.Path
 		q.Submit(priorityLow, func() {
+			// Counted even when the render panics, so the drain below ends.
+			defer func() {
+				n := sectionsDone.Add(1)
+				sess.preloadProgress.set("sections", int(n), len(sections))
+			}()
 			// Skip if a HIGH-priority handler raced ahead and cached
 			// this section already — no point burning a worker.
 			sess.sectionPreviewMu.RLock()
 			cached := sess.sectionPreviewCache[path] != nil
 			sess.sectionPreviewMu.RUnlock()
 			if !cached {
-				if b := sess.renderSectionPreviewPNG(path, pal); b != nil {
+				var b []byte
+				recoverAsset("section preview", path, func() { b = sess.renderSectionPreviewPNG(path, pal) })
+				if b != nil {
 					sess.sectionPreviewMu.Lock()
 					sess.sectionPreviewCache[path] = b
 					sess.sectionPreviewMu.Unlock()
 				}
 			}
-			n := sectionsDone.Add(1)
-			sess.preloadProgress.set("sections", int(n), len(sections))
 		})
 	}
 
 	for _, f := range withFile {
 		feat := f
 		q.Submit(priorityLow, func() {
+			defer func() {
+				n := featuresDone.Add(1)
+				sess.preloadProgress.set("features", int(n), len(withFile))
+			}()
 			key := strings.ToLower(feat.Name) + "|static"
 			sess.featureCacheMu.Lock()
 			_, already := sess.featureCache[key]
 			sess.featureCacheMu.Unlock()
 			if !already {
-				if data, err := sess.renderFeatureStaticPNG(feat.Filename, feat.Seqname); err == nil {
+				var data []byte
+				var err error
+				recoverAsset("feature thumbnail", feat.Filename, func() {
+					data, err = sess.renderFeatureStaticPNG(feat.Filename, feat.Seqname)
+				})
+				if err == nil && data != nil {
 					sess.featureCacheMu.Lock()
 					sess.featureCache[key] = data
 					sess.featureCacheMu.Unlock()
 				}
 			}
-			n := featuresDone.Add(1)
-			sess.preloadProgress.set("features", int(n), len(withFile))
 		})
 	}
 

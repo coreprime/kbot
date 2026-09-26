@@ -37,7 +37,8 @@ const (
 
 type assetJob struct {
 	priority int
-	seq      int64 // FIFO tiebreaker within the same priority
+	seq      int64  // FIFO tiebreaker within the same priority
+	key      string // Run's key, naming the asset in a panic report
 	run      func()
 	done     chan struct{}
 }
@@ -116,6 +117,7 @@ func (q *AssetQueue) Run(key string, run func()) {
 		heap.Push(&q.pq, &assetJob{
 			priority: priorityHigh,
 			seq:      q.seq,
+			key:      key,
 			run:      run,
 			done:     done,
 		})
@@ -140,14 +142,20 @@ func (q *AssetQueue) workerLoop() {
 		q.mu.Unlock()
 		// Run outside the lock so other workers stay free to pick the
 		// next job — and so a slow render can't stall HIGH-priority
-		// submissions waiting to be queued.
+		// submissions waiting to be queued. A job that panics on a
+		// malformed asset is logged and dropped; the worker carries on and
+		// a waiting Run caller is released.
 		func() {
 			defer func() {
 				if job.done != nil {
 					close(job.done)
 				}
 			}()
-			job.run()
+			key := job.key
+			if key == "" {
+				key = "(background job)"
+			}
+			recoverAsset("asset job", key, job.run)
 		}()
 	}
 }
