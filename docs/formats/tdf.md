@@ -364,7 +364,13 @@ way, through kbot-io's OTA game view):
 > layout (same content, comments dropped) and renumbers later schemas so
 > the game still finds them. An `.ota` kbot cannot read is shown with its
 > error and left unchanged on save, and dialog text containing `;`, `//`
-> or `/*` is refused. The game takes the sea level from the `.tnt`
+> or `/*` is refused. So is a save that would make the game read a schema
+> it skips now: adding a schema takes the lowest free number, so in a file
+> with `[Schema 0]` and `[Schema 2]` the new `[Schema 1]` would bring
+> `[Schema 2]` into play; the error names the section to rename or
+> remove. A fraction too large to hold (`killmul=1e999`, which the game
+> reads as infinity) shows as the largest number and is kept as written
+> unless you change it. The game takes the sea level from the `.tnt`
 > header; the editor keeps an existing `sealevel=` key in step but never
 > adds one.
 

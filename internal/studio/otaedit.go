@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -33,7 +34,9 @@ import (
 // then decoded into kbot-io's ta structs, whose Meta keeps every key and
 // value as read, the entries are removed and the file is written back in
 // kbot-io's layout. A file kbot-io cannot read or edit is never overwritten:
-// the save keeps it unchanged and reports why.
+// the save keeps it unchanged and reports why. A save that would make the
+// game read a schema section it skips now is refused (see
+// schemasMadeReadable).
 
 // Key spellings written for keys the source does not have yet, following
 // the game's own maps.
@@ -42,15 +45,34 @@ const (
 	otaStartPosPrefix = "StartPos"
 )
 
-// otaTextError reports editor text that cannot be written into an .ota
-// because the game would read something else back (see tdf.CheckValue).
-type otaTextError struct {
+// otaEditError reports an editor change the .ota cannot take, which the
+// user can correct: text the game would read back differently (see
+// tdf.CheckValue), or schemas the save would number so that the game reads
+// a section it skips now.
+type otaEditError struct {
 	field string
 	err   error
 }
 
-func (e *otaTextError) Error() string { return fmt.Sprintf("%s: %v", e.field, e.err) }
-func (e *otaTextError) Unwrap() error { return e.err }
+func (e *otaEditError) Error() string { return fmt.Sprintf("%s: %v", e.field, e.err) }
+func (e *otaEditError) Unwrap() error { return e.err }
+
+// editorFloat returns a fraction as the editor holds it. The game reads a
+// value too large for a double, such as 1e999, as infinity, which JSON
+// cannot carry: the editor holds it as the largest double, and a save
+// leaves such a value as the file has it unless the user changes it (see
+// setFloat).
+func editorFloat(v float64) float64 {
+	switch {
+	case math.IsInf(v, 1):
+		return math.MaxFloat64
+	case math.IsInf(v, -1):
+		return -math.MaxFloat64
+	case math.IsNaN(v):
+		return 0
+	}
+	return v
+}
 
 // readOTAState reads a Total Annihilation .ota into the editor's state. The
 // schemas are the ones the game finds, in number order; each one's start
@@ -58,7 +80,7 @@ func (e *otaTextError) Unwrap() error { return e.err }
 // (ignoring case), numbered as the game numbers them (StartPos0 and entries
 // with no number kept) and listed in player-slot order. Values the game reads
 // as fractions (tidalstrength, killmul, timemul and the meteor settings) keep
-// their fractions.
+// their fractions; an infinite one is held as editorFloat gives it.
 //
 // A file kbot-io cannot read gives a state with Error set, Source holding the
 // file and nothing else; a save then leaves the file unchanged.
@@ -82,11 +104,11 @@ func readOTAState(data []byte) *otaState {
 	st.Memory = h.Memory
 	st.LineOfSight = h.LineOfSight
 	st.Mapping = h.Mapping
-	st.TidalStrength = h.EffectiveTidalStrength()
+	st.TidalStrength = editorFloat(h.EffectiveTidalStrength())
 	st.SolarStrength = h.SolarStrength
 	st.LavaWorld = h.LavaWorld
-	st.Killmul = h.EffectiveKillMul()
-	st.Timemul = h.EffectiveTimeMul()
+	st.Killmul = editorFloat(h.EffectiveKillMul())
+	st.Timemul = editorFloat(h.EffectiveTimeMul())
 	st.MinWindSpeed = h.MinWindSpeed
 	st.MaxWindSpeed = h.MaxWindSpeed
 	st.Gravity = h.Gravity
@@ -147,9 +169,9 @@ func schemaState(s *ta.Schema, scale int) otaSchema {
 		ComputerEnergy: s.ComputerEnergy,
 		MeteorWeapon:   s.MeteorWeapon,
 		MeteorRadius:   s.MeteorRadius,
-		MeteorDensity:  s.MeteorDensity,
-		MeteorDuration: s.EffectiveMeteorDuration(),
-		MeteorInterval: s.EffectiveMeteorInterval(),
+		MeteorDensity:  editorFloat(s.MeteorDensity),
+		MeteorDuration: editorFloat(s.EffectiveMeteorDuration()),
+		MeteorInterval: editorFloat(s.EffectiveMeteorInterval()),
 		StartPos:       []saveStartPos{},
 	}
 	for _, p := range mapmeta.StartPositions(s) {
@@ -183,6 +205,10 @@ type otaEditor struct {
 	doc   *tdf.Document
 	fresh bool // a new file: every modelled key is written
 
+	// from[i] is the source schema number the editor's schema i was read
+	// from, or -1 for a schema the save adds (see planSchemas)
+	from []int
+
 	// removals the text splice cannot make, applied afterwards
 	dropSchemas  []int         // source schema numbers
 	dropSpecials map[int][]int // source schema number -> [specials] indices
@@ -191,9 +217,9 @@ type otaEditor struct {
 // editOTA returns the .ota text for the editor state st. With a source file
 // (src non-nil) it is that file edited in place, as described at the top of
 // this file; without one it is a new file holding every modelled key. It
-// returns an *otaTextError for editor text the file cannot hold, and another
-// error when the source cannot be read or edited; the caller then keeps the
-// source unchanged.
+// returns an *otaEditError for editor text the file cannot hold or schemas
+// the game would read differently, and another error when the source cannot
+// be read or edited; the caller then keeps the source unchanged.
 func editOTA(src []byte, st *otaState) ([]byte, error) {
 	e := &otaEditor{dropSpecials: map[int][]int{}}
 	var game []*ta.Schema
@@ -202,12 +228,23 @@ func editOTA(src []byte, st *otaState) ([]byte, error) {
 		e.fresh = true
 		e.doc = tdf.NewDocument()
 		hdr = e.doc.AddSection("GlobalHeader")
+		e.from, _ = planSchemas(st, 0)
 	} else {
 		m, err := mapmeta.ReadOTA(src)
 		if err != nil {
 			return nil, err
 		}
 		game = m.Header.GameSchemas()
+		e.from, e.dropSchemas = planSchemas(st, len(game))
+		added := 0
+		for _, n := range e.from {
+			if n < 0 {
+				added++
+			}
+		}
+		if names := schemasMadeReadable(&m.Header, added, e.dropSchemas); len(names) > 0 {
+			return nil, schemasMadeReadableError(names)
+		}
 		if e.doc, err = tdf.Parse(bytes.NewReader(src)); err != nil {
 			return nil, err
 		}
@@ -290,7 +327,7 @@ func (e *otaEditor) setText(s *tdf.Section, key, want string) error {
 		return nil
 	}
 	if err := tdf.CheckValue(want); err != nil {
-		return &otaTextError{field: key, err: err}
+		return &otaEditError{field: key, err: err}
 	}
 	s.Set(key, want)
 	return nil
@@ -307,10 +344,11 @@ func (e *otaEditor) setInt(s *tdf.Section, key string, want int) {
 }
 
 // setFloat sets a fraction that differs from the section's value as the
-// game reads it (Atof; a missing key reads as 0).
+// game reads it (Atof; a missing key reads as 0), compared as the editor
+// holds it (editorFloat).
 func (e *otaEditor) setFloat(s *tdf.Section, key string, want float64) {
 	cur, ok := s.Get(key)
-	if !e.fresh && tdf.Atof(cur) == want && (ok || want == 0) {
+	if !e.fresh && editorFloat(tdf.Atof(cur)) == want && (ok || want == 0) {
 		return
 	}
 	s.SetFloat(key, want)
@@ -320,17 +358,15 @@ func (e *otaEditor) setFloat(s *tdf.Section, key string, want float64) {
 const schemaPrefix = "Schema "
 
 // schemas edits the schemas the source had, adds the editor's new ones and
-// records the source schemas the editor removed.
+// records the source schemas the editor removed (see planSchemas).
 func (e *otaEditor) schemas(h *tdf.Section, st *otaState, game []*ta.Schema) error {
-	kept := make([]bool, len(game))
 	before := countSchemaSections(h)
 	if e.fresh {
 		h.SetInt(otaKeySchemaCount, len(st.Schemas))
 	}
 	for i := range st.Schemas {
 		s := &st.Schemas[i]
-		if n := sourceSchema(s, len(game)); n >= 0 && !kept[n] {
-			kept[n] = true
+		if n := e.from[i]; n >= 0 {
 			sec := h.Section(schemaPrefix + strconv.Itoa(n))
 			if sec == nil {
 				return fmt.Errorf("schema %d not found in the .ota text", n)
@@ -343,19 +379,12 @@ func (e *otaEditor) schemas(h *tdf.Section, st *otaState, game []*ta.Schema) err
 			}
 			continue
 		}
-		names := schemaSectionNames(h)
-		name := tdf.ElementNames(schemaPrefix, append(names, ""))[len(names)]
-		sec := h.AddSection(name)
+		sec := h.AddSection(nextSchemaName(schemaSectionNames(h)))
 		if err := e.schema(sec, s, true); err != nil {
 			return err
 		}
 		if err := e.starts(sec, s, -1, nil); err != nil {
 			return err
-		}
-	}
-	for n, k := range kept {
-		if !k {
-			e.dropSchemas = append(e.dropSchemas, n)
 		}
 	}
 	// The game ignores SCHEMACOUNT; like kbot-io, keep an existing one in
@@ -364,6 +393,132 @@ func (e *otaEditor) schemas(h *tdf.Section, st *otaState, game []*ta.Schema) err
 		h.SetInt(otaKeySchemaCount, after)
 	}
 	return nil
+}
+
+// planSchemas maps the editor's schemas onto the source's count game
+// schemas: from[i] is the source number the editor's schema i was read
+// from, or -1 for a schema the save adds (as is a second schema claiming
+// the same source), and drop lists the source numbers no editor schema
+// keeps, in increasing order.
+func planSchemas(st *otaState, count int) (from, drop []int) {
+	kept := make([]bool, count)
+	from = make([]int, len(st.Schemas))
+	for i := range st.Schemas {
+		n := sourceSchema(&st.Schemas[i], count)
+		if n >= 0 && kept[n] {
+			n = -1
+		}
+		if n >= 0 {
+			kept[n] = true
+		}
+		from[i] = n
+	}
+	for n, k := range kept {
+		if !k {
+			drop = append(drop, n)
+		}
+	}
+	return from, drop
+}
+
+// nextSchemaName returns the name a new schema section is written under:
+// "Schema N" with N the lowest number no section in names uses (compared
+// ignoring case, see tdf.ElementNames).
+func nextSchemaName(names []string) string {
+	return tdf.ElementNames(schemaPrefix, append(names[:len(names):len(names)], ""))[len(names)]
+}
+
+// schemasMadeReadable returns the names of the source header's schema
+// sections the game skips now but would read after a save that adds added
+// schemas and removes the game schemas numbered in drop. Adding a schema
+// takes the lowest free number, which fills the first gap in the numbering,
+// so the game then reads on into the sections after the gap; removing one
+// renumbers the game's schemas after it, which can put a section repeating a
+// number first. It runs the save's own numbering (the additions editOTA
+// splices in, then dropGameSchema) on the section names alone.
+func schemasMadeReadable(h *ta.GlobalHeader, added int, drop []int) []string {
+	read := map[*ta.Schema]bool{}
+	for _, s := range h.GameSchemas() {
+		read[s] = true
+	}
+	sim := &ta.GlobalHeader{}
+	var skipped []string // per sim schema: its name when the game skips it now
+	for i := range h.Schemas {
+		sim.Schemas = append(sim.Schemas, ta.Schema{Key: h.Schemas[i].Key})
+		name := ""
+		if !read[&h.Schemas[i]] {
+			name = h.Schemas[i].Key
+		}
+		skipped = append(skipped, name)
+	}
+	for ; added > 0; added-- {
+		names := make([]string, len(sim.Schemas))
+		for i := range sim.Schemas {
+			names[i] = sim.Schemas[i].Key
+		}
+		sim.Schemas = append(sim.Schemas, ta.Schema{Key: nextSchemaName(names)})
+		skipped = append(skipped, "")
+	}
+	for _, n := range descending(drop) {
+		i, ok := dropGameSchema(sim, n)
+		if !ok {
+			return nil
+		}
+		skipped = append(skipped[:i:i], skipped[i+1:]...)
+	}
+	var out []string
+	for _, s := range sim.GameSchemas() {
+		for i := range sim.Schemas {
+			if &sim.Schemas[i] == s && skipped[i] != "" {
+				out = append(out, skipped[i])
+			}
+		}
+	}
+	return out
+}
+
+// schemasMadeReadableError tells the user which skipped schema sections a
+// save would bring into the game's reach (see schemasMadeReadable).
+func schemasMadeReadableError(names []string) error {
+	them := "it"
+	if len(names) > 1 {
+		them = "them"
+	}
+	return &otaEditError{field: "schemas", err: fmt.Errorf(
+		"this save would make the game read [%s], which it skips now (after a gap in the schema numbers, or as a repeated number); "+
+			"rename or remove %s in the .ota, or save without adding or removing schemas",
+		strings.Join(names, "], ["), them)}
+}
+
+// dropGameSchema removes the schema the game reads as Schema n from h and
+// renames the game's schemas after it down a number, so the game still
+// reads each of them; sections the game skips keep their names. It returns
+// the index the removed schema had in h.Schemas, or false when the game
+// reads no Schema n.
+func dropGameSchema(h *ta.GlobalHeader, n int) (int, bool) {
+	game := h.GameSchemas()
+	if n < 0 || n >= len(game) {
+		return 0, false
+	}
+	// Rename the later game schemas before removing, while the pointers
+	// still address them.
+	for j := len(game) - 1; j > n; j-- {
+		game[j].Key = schemaPrefix + strconv.Itoa(j-1)
+	}
+	for i := range h.Schemas {
+		if &h.Schemas[i] == game[n] {
+			h.Schemas = append(h.Schemas[:i:i], h.Schemas[i+1:]...)
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// descending returns a sorted copy of ns, largest first.
+func descending(ns []int) []int {
+	out := append([]int(nil), ns...)
+	sort.Sort(sort.Reverse(sort.IntSlice(out)))
+	return out
 }
 
 // sourceSchema returns the source schema number an editor schema was read
@@ -513,7 +668,7 @@ func unnumberedStart(what string) bool {
 // section as read), removes the start positions and schemas and writes the
 // file back. The schemas after a removed one move down a number, so the game
 // still finds every one; schemas the game already never read keep their
-// names.
+// names (see dropGameSchema).
 func (e *otaEditor) remove(text []byte) ([]byte, error) {
 	m, err := ta.ReadMap(text)
 	if err != nil {
@@ -533,27 +688,12 @@ func (e *otaEditor) remove(text []byte) ([]byte, error) {
 			s.Specials.Items = append(s.Specials.Items[:i:i], s.Specials.Items[i+1:]...)
 		}
 	}
-	drop := append([]int(nil), e.dropSchemas...)
-	sort.Sort(sort.Reverse(sort.IntSlice(drop)))
-	for _, n := range drop {
-		game := h.GameSchemas()
-		if n >= len(game) {
+	for _, n := range descending(e.dropSchemas) {
+		if _, ok := dropGameSchema(h, n); !ok {
 			return nil, fmt.Errorf("schema %d not found", n)
 		}
-		// Rename the later game schemas down by one before removing, while
-		// the pointers still address them.
-		for j := len(game) - 1; j > n; j-- {
-			game[j].Key = schemaPrefix + strconv.Itoa(j-1)
-		}
-		target := game[n]
-		for i := range h.Schemas {
-			if &h.Schemas[i] == target {
-				h.Schemas = append(h.Schemas[:i:i], h.Schemas[i+1:]...)
-				break
-			}
-		}
 	}
-	if len(drop) > 0 {
+	if len(e.dropSchemas) > 0 {
 		for k := range h.Remaining {
 			if strings.EqualFold(k, otaKeySchemaCount) {
 				h.Remaining[k] = strconv.Itoa(len(h.Schemas))
@@ -636,7 +776,8 @@ func loadedOTAState(data []byte, m *tnt.Map) *otaState {
 
 // otaForSave returns the .ota a save writes for req, and a warning for the
 // user when the source file is kept unchanged because it could not be read
-// or edited in place. Editor text the file cannot hold is an *otaTextError.
+// or edited in place. An editor change the file cannot take is an
+// *otaEditError.
 // A request with no source file (a new map) gets a new .ota.
 func otaForSave(req saveRequest) ([]byte, string, error) {
 	if req.OTA != nil && req.OTA.Source != "" {
@@ -645,8 +786,8 @@ func otaForSave(req saveRequest) ([]byte, string, error) {
 			return nil, "", fmt.Errorf("ota source: %w", err)
 		}
 		out, err := editOTA(src, req.OTA)
-		var textErr *otaTextError
-		if errors.As(err, &textErr) {
+		var editErr *otaEditError
+		if errors.As(err, &editErr) {
 			return nil, "", err
 		}
 		if err != nil {
@@ -660,11 +801,11 @@ func otaForSave(req saveRequest) ([]byte, string, error) {
 	return out, "", err
 }
 
-// saveErrorStatus is the HTTP status for a failed save: 400 for editor text
-// the .ota cannot hold, which the user can fix, 500 otherwise.
+// saveErrorStatus is the HTTP status for a failed save: 400 for an editor
+// change the .ota cannot take, which the user can fix, 500 otherwise.
 func saveErrorStatus(err error) int {
-	var textErr *otaTextError
-	if errors.As(err, &textErr) {
+	var editErr *otaEditError
+	if errors.As(err, &editErr) {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError

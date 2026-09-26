@@ -3,7 +3,10 @@ package studio
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -319,9 +322,9 @@ func TestEditOTAValidatesText(t *testing.T) {
 		st := loadEditorState(t, editorOTA)
 		st.MissionDescription = bad
 		_, err := editOTA([]byte(editorOTA), st)
-		var textErr *otaTextError
-		if !errors.As(err, &textErr) || textErr.field != "missiondescription" {
-			t.Errorf("%q: err = %v, want an otaTextError for missiondescription", bad, err)
+		var editErr *otaEditError
+		if !errors.As(err, &editErr) || editErr.field != "missiondescription" {
+			t.Errorf("%q: err = %v, want an otaEditError for missiondescription", bad, err)
 		}
 		if saveErrorStatus(err) != http.StatusBadRequest {
 			t.Errorf("%q: status %d, want 400", bad, saveErrorStatus(err))
@@ -331,6 +334,111 @@ func TestEditOTAValidatesText(t *testing.T) {
 	st.Schemas[1].Type = "Network 2 // two"
 	if _, err := editOTA([]byte(editorOTA), st); err == nil {
 		t.Errorf("schema type with a comment was accepted")
+	}
+}
+
+// schemaOTA builds an .ota whose [GlobalHeader] holds one schema section
+// per name, in order, each with its name as its Type and one start
+// position.
+func schemaOTA(names ...string) string {
+	var b strings.Builder
+	b.WriteString("[GlobalHeader]\n{\nmissionname=Gaps;\n")
+	for _, n := range names {
+		fmt.Fprintf(&b, "[%s]\n{\nType=%s;\n[specials]\n{\n[special0] { specialwhat=StartPos1; XPos=16; ZPos=16; }\n}\n}\n", n, n)
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// TestEditOTARefusesSchemasMadeReadable checks a save that would number the
+// schemas so that the game reads a section it skips now is refused with an
+// error naming that section (a 400 the user sees, with nothing written),
+// instead of losing the save's other edits; saves that leave the skipped
+// sections skipped go through.
+func TestEditOTARefusesSchemasMadeReadable(t *testing.T) {
+	added := otaSchema{Type: "Network 2", StartPos: []saveStartPos{{Number: 1, X: 32, Z: 32}}}
+	cases := []struct {
+		name string
+		src  string
+		edit func(st *otaState)
+		want string // the section named in the error; "" for a save that goes through
+	}{
+		{"add fills a one-number gap", schemaOTA("Schema 0", "Schema 2"),
+			func(st *otaState) { st.Schemas = append(st.Schemas, added) }, "[Schema 2]"},
+		{"add to a file with no Schema 0", schemaOTA("Schema 1"),
+			func(st *otaState) { st.Schemas = append(st.Schemas, added) }, "[Schema 1]"},
+		{"remove puts a repeated number first", schemaOTA("Schema 0", "Schema 1", "schema 1", "Schema 2"),
+			func(st *otaState) { st.Schemas = st.Schemas[1:] }, "[schema 1]"},
+		{"add before a wider gap", schemaOTA("Schema 0", "Schema 3"),
+			func(st *otaState) { st.Schemas = append(st.Schemas, added) }, ""},
+		{"remove before a gap", schemaOTA("Schema 0", "Schema 1", "Schema 3"),
+			func(st *otaState) { st.Schemas = st.Schemas[1:] }, ""},
+		{"remove the last before a one-number gap", schemaOTA("Schema 0", "Schema 2"),
+			func(st *otaState) { st.Schemas = nil }, ""},
+	}
+	for _, c := range cases {
+		st := loadEditorState(t, c.src)
+		st.MissionName = "Edited"
+		c.edit(st)
+		out, err := editOTA([]byte(c.src), st)
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
+			} else if !strings.Contains(string(out), "missionname=Edited;") {
+				t.Errorf("%s: the edit was not written:\n%s", c.name, out)
+			}
+			continue
+		}
+		var editErr *otaEditError
+		if !errors.As(err, &editErr) || editErr.field != "schemas" || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want an otaEditError naming %s", c.name, err, c.want)
+			continue
+		}
+		if saveErrorStatus(err) != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", c.name, saveErrorStatus(err))
+		}
+		if out, warning, err := otaForSave(saveRequest{MapName: "gaps", TileW: 16, TileH: 16, OTA: st}); err == nil {
+			t.Errorf("%s: otaForSave kept going (%d bytes, warning %q); want the error", c.name, len(out), warning)
+		}
+	}
+}
+
+// TestOTAStateInfiniteFractions checks a fraction the game reads as
+// infinity (1e999) still gives the editor and the pack JSON they can
+// encode, and that an untouched save keeps the value as the file has it.
+func TestOTAStateInfiniteFractions(t *testing.T) {
+	src := "[GlobalHeader]\n{\nmissionname=Huge;\nkillmul=1e999;\ntimemul=-1e999;\n[Schema 0]\n{\nType=Network 1;\n" +
+		"MeteorDensity=1e999;\nMeteorInterval=-1e999;\n}\n}\n"
+	st := loadEditorState(t, src)
+	if st.Killmul != math.MaxFloat64 || st.Timemul != -math.MaxFloat64 {
+		t.Errorf("killmul %v timemul %v, want the largest double and its negative", st.Killmul, st.Timemul)
+	}
+	if s := st.Schemas[0]; s.MeteorDensity != math.MaxFloat64 || s.MeteorInterval != -math.MaxFloat64 {
+		t.Errorf("meteor density %v interval %v", s.MeteorDensity, s.MeteorInterval)
+	}
+	body, err := json.Marshal(st)
+	if err != nil {
+		t.Fatalf("editor state does not encode: %v", err)
+	}
+	var back otaState
+	if err := json.Unmarshal(body, &back); err != nil {
+		t.Fatal(err)
+	}
+	out, err := editOTA([]byte(src), &back)
+	if err != nil || string(out) != src {
+		t.Errorf("untouched save: %v\n%s", err, out)
+	}
+	back.MissionName = "Huger"
+	if out, err = editOTA([]byte(src), &back); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"killmul=1e999;", "timemul=-1e999;", "MeteorDensity=1e999;", "MeteorInterval=-1e999;", "missionname=Huger;"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("edited save lost %q:\n%s", want, out)
+		}
+	}
+	if _, err := json.Marshal(packOTAState([]byte(src), false)); err != nil {
+		t.Errorf("pack state does not encode: %v", err)
 	}
 }
 

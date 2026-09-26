@@ -3,6 +3,7 @@ package studio
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,6 +149,47 @@ func TestMapEditorSaveEditsOTAInPlace(t *testing.T) {
 	req.OTA.MissionDescription = "a;b"
 	if rec := postSave(t, sess, req); rec.Code != http.StatusBadRequest {
 		t.Errorf("text with ';': status %d (%s), want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// TestMapEditorSaveRefusesSchemaMadeReadable checks adding a schema to an
+// .ota with a one-number gap in its schema numbers fails with a 400 naming
+// the skipped schema, and writes nothing, so the editor keeps the user's
+// edits instead of the save dropping them.
+func TestMapEditorSaveRefusesSchemaMadeReadable(t *testing.T) {
+	sess, work := setupMapWorkspace(t, schemaOTA("Schema 0", "Schema 2"), 25)
+	resp, req := loadTestMap(t, sess)
+	if resp.OTA == nil || len(resp.OTA.Schemas) != 1 || len(resp.OTA.UnreachableSchemas) != 1 {
+		t.Fatalf("load OTA = %+v, want one game schema and Schema 2 unreachable", resp.OTA)
+	}
+	req.OTA.MissionName = "Edited"
+	req.OTA.Schemas = append(req.OTA.Schemas, otaSchema{Type: "Network 2", StartPos: []saveStartPos{{Number: 1, X: 32, Z: 32}}})
+	rec := postSave(t, sess, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "[Schema 2]") {
+		t.Fatalf("save: %d %s, want 400 naming [Schema 2]", rec.Code, rec.Body.String())
+	}
+	for _, name := range []string{"test.ota", "test.tnt"} {
+		if _, err := os.Stat(filepath.Join(work, "maps", name)); !os.IsNotExist(err) {
+			t.Errorf("the refused save wrote %s (err %v)", name, err)
+		}
+	}
+}
+
+// TestMapEditorLoadInfiniteFraction checks a map whose .ota holds a
+// fraction the game reads as infinity (killmul=1e999) opens in the editor,
+// and an untouched save leaves the .ota alone.
+func TestMapEditorLoadInfiniteFraction(t *testing.T) {
+	ota := "[GlobalHeader]\n{\nmissionname=Huge;\nkillmul=1e999;\n[Schema 0]\n{\nType=Network 1;\nMeteorDuration=1e999;\n}\n}\n"
+	sess, work := setupMapWorkspace(t, ota, 25)
+	resp, req := loadTestMap(t, sess)
+	if resp.OTA == nil || resp.OTA.Killmul != math.MaxFloat64 || resp.OTA.Schemas[0].MeteorDuration != math.MaxFloat64 {
+		t.Fatalf("load OTA = %+v, want killmul and meteor duration as the largest double", resp.OTA)
+	}
+	if rec := postSave(t, sess, req); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(work, "maps", "test.ota")); !os.IsNotExist(err) {
+		t.Errorf("an untouched save rewrote the .ota (err %v)", err)
 	}
 }
 
