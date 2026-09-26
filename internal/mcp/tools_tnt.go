@@ -212,7 +212,8 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 // tntDescribeOutput is the tnt_describe result. Format names the game that
 // reads the map: "ta" (0x2000), "ta-legacy" (the older 0x1020 layout, which
 // TA reads) or "kingdoms" (0x4000, TA: Kingdoms only; TA cannot load it).
-// MinimapFlags is the 0x2c header word; the game reads the stored minimap
+// MinimapFlags is the header word at 0x2c (0x3c in a 0x1020 map; always 0
+// for a TA: Kingdoms map, which has none); the game reads the stored minimap
 // only when bit 0 is set.
 type tntDescribeOutput struct {
 	Path             string                  `json:"path"`

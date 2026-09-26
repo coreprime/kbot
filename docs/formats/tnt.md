@@ -189,13 +189,13 @@ reclaim value, etc.
 ## Minimap (`PtrMiniMap`)
 
 ```c
-uint32 Width;   // 252 (36 retail maps store 252×256)
-uint32 Height;  // 252
+uint32 Width;   // 252
+uint32 Height;  // 252 (33 of the 275 retail maps store 256)
 uint8  pixels[Width * Height];  // Palette indices
 ```
 
 The game reads the stored minimap only when **bit 0 of the header word at
-`0x2c` (`MinimapFlags`) is set**; otherwise it builds the radar picture
+`0x2c` (`MinimapFlags`; `0x3c` in a `0x1020` map) is set**; otherwise it builds the radar picture
 from the tiles. All 275 retail maps set it, and so does every map the
 studio saves. The game's radar uses a stored minimap only when both of
 its sides are at least 252.
@@ -332,8 +332,9 @@ edits an opened map's `.ota` in place on save.
   `bad-tile-index`.
 - **Minimap padding is palette index `0x64`**; the engine ignores
   pixels outside the map region.
-- **`MinimapFlags` (`0x2c`) bit 0 must be set** or the game ignores the
-  stored minimap. Keep the other bits as found.
+- **`MinimapFlags` (`0x2c`, or `0x3c` in a `0x1020` map) bit 0 must be
+  set** or the game ignores the stored minimap. Keep the other bits as
+  found.
 - **The four `pad` fields are always zero.** Some third-party editors
   write non-zero values; the game appears to ignore them but kbot will
   preserve whatever it finds.
@@ -352,7 +353,7 @@ edits an opened map's `.ota` in place on save.
 | Feature placements | 10 – 600 |
 | Feature definitions in table | 5 – 50 |
 | Header overhead | always 64 bytes |
-| Minimap (252×252 paletted; 36 maps 252×256) | 63504 bytes |
+| Minimap (252×252 paletted; 33 retail maps 252×256) | 63504 bytes |
 | Companion `.ota` text size | 1 – 8 KB |
 
 ---

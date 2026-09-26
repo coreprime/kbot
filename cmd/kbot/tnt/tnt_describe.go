@@ -24,7 +24,8 @@ the older TA layout (TA reads it; kbot writes it back as 0x2000) and 0x4000
 a TA: Kingdoms map, which TA cannot load.  Placements count only the cells
 the game places a feature on: words below the feature-table size (0xFFFC
 marks a void cell, and other high words place nothing).  MinimapFlags is the
-0x2c header word; the game reads the stored minimap only when bit 0 is set.`,
+header word at 0x2c (0x3c in a 0x1020 map); the game reads the stored minimap
+only when bit 0 is set.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			w := cmd.OutOrStdout()
