@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gaf"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/gamedata/tak"
 	"github.com/coreprime/kbot-io/formats/tdf"
+	"github.com/coreprime/kbot/internal/unitdefs"
 )
 
 // registerUnitAPI wires the per-unit metadata endpoint.  Returns the
@@ -26,6 +26,10 @@ func (sess *Session) registerUnitAPI(mux *http.ServeMux) {
 	// full list of weapon TDF sections in the loaded VFS (used by the
 	// "Change Weapon" picker in the Weapons panel).
 	mux.HandleFunc("/api/studio/weapons", sess.handleWeaponsList)
+	// /api/studio/weapons/warnings lists what the game skips or replaces
+	// while building its weapon table (sections without a valid ID, IDs
+	// reused by a later section, unreadable tails of files).
+	mux.HandleFunc("/api/studio/weapons/warnings", sess.handleWeaponWarnings)
 	// /api/studio/sound/ is owned by sound.go (registered in api.go) —
 	// it already serves the FBI SoundCategory sounds the Controls
 	// overlay needs.  See sound.go for the case-insensitive resolver.
@@ -134,11 +138,12 @@ type unitMetaJSON struct {
 	CostEnergy float64 `json:"costEnergy,omitempty"`
 	CostMana   float64 `json:"costMana,omitempty"`
 
-	// Default standing orders (FBI standingmoveorder / standingfireorder).
-	// 0 in the FBI is indistinguishable from absent, so 0 here means "use
-	// the game default" (Maneuver / Fire at Will) — the sim resolves it.
-	StandingMoveOrder int `json:"standingMoveOrder,omitempty"`
-	StandingFireOrder int `json:"standingFireOrder,omitempty"`
+	// Standing orders the unit starts with, as the game resolves the FBI's
+	// standingmoveorder / standingfireorder: 2 (Roam / Fire at Will) when
+	// the key is missing, otherwise its low two bits, so an explicit 0 is
+	// Hold Position / Hold Fire (1 is Maneuver / Return Fire). Always sent.
+	StandingMoveOrder int `json:"standingMoveOrder"`
+	StandingFireOrder int `json:"standingFireOrder"`
 
 	// Resolved death-blast stats: the explodeas / selfdestructas weapon's
 	// damage, blast diameter and edge falloff, so the sim deals splash on
@@ -146,16 +151,20 @@ type unitMetaJSON struct {
 	ExplodeWeapon     *explosionJSON `json:"explodeWeapon,omitempty"`
 	SelfDestructWeapn *explosionJSON `json:"selfDestructWeapon,omitempty"`
 
-	// Economy contributions, per second while the unit stands: generation
-	// (TA energymake / metalmake+makesmetal+extractsmetal; TA:K
-	// manarechargerate+mogriumincome) and storage capacity (TA
-	// energystorage/metalstorage; TA:K maxmana).
 	// TransportSlots — how many units this transport can carry (the FBI's
 	// transmaxunits when set, else its size budget divided by the largest
 	// unit it accepts). 0 = not a transport.
 	TransportSlots int `json:"transportSlots,omitempty"`
 
-	MakesMetal  float64 `json:"makesMetal,omitempty"`
+	// Economy contributions, per second while the unit stands: energy
+	// generation (TA energymake plus solar-style negative energyuse; TA:K
+	// manarechargerate+mogriumincome) and storage capacity (TA
+	// energystorage/metalstorage; TA:K maxmana). TA's three metal sources
+	// work differently and are not summed: metalmake is always on,
+	// extractsmetal yields per unit of map metal under the footprint while
+	// the extractor is on and powered, and makesmetal is a converter's whole
+	// metal per second while it is on and its energy is paid. They are in
+	// Econ (metalMake, extractsMetal, econMakesMetal).
 	MakesEnergy float64 `json:"makesEnergy,omitempty"`
 	MakesMana   float64 `json:"makesMana,omitempty"`
 	// TA:K keeps two distinct mana pools: manarechargerate/maxmana feed a
@@ -174,14 +183,20 @@ type unitMetaJSON struct {
 	StoresEnergy float64 `json:"storesEnergy,omitempty"`
 	StoresMana   float64 `json:"storesMana,omitempty"`
 
-	// Terrain limits (FBI maxslope / maxwaterdepth / minwaterdepth, height
+	// Terrain limits (maxslope / maxwaterdepth / minwaterdepth, height
 	// units) — the sim's movement and build-site legality on loaded maps.
-	MaxSlope      int `json:"maxSlope,omitempty"`
-	MaxWaterDepth int `json:"maxWaterDepth,omitempty"`
-	MinWaterDepth int `json:"minWaterDepth,omitempty"`
+	// Resolved as the game does: a unit naming a movement class
+	// ([CLASS0]..[CLASS31] of gamedata/moveinfo.tdf) takes the class's
+	// values, and a key missing from the class (or, with no class, from the
+	// FBI) takes the game's default — max water depth 10000, min -10000,
+	// max slope 255 capped by the max water slope. Always sent.
+	MaxSlope      int `json:"maxSlope"`
+	MaxWaterDepth int `json:"maxWaterDepth"`
+	MinWaterDepth int `json:"minWaterDepth"`
 
-	// Footprint — FBI footprintx/footprintz in map squares; the sim derives
-	// its collision body from it.
+	// Footprint in map squares: the movement class's footprintx/footprintz
+	// when the unit names one (0 for a key the class leaves out), else the
+	// FBI's. The sim derives its collision body and yard grid from it.
 	FootprintX int `json:"footprintX,omitempty"`
 	FootprintZ int `json:"footprintZ,omitempty"`
 	// YardMap — the FBI's per-square occupancy string (o = solid, c = open
@@ -365,8 +380,9 @@ type unitWeaponJSON struct {
 	PitchTolerance int `json:"pitchTolerance"`
 	// TurnRate: TDF `turnrate`, in TA angle units / frame — the missile's
 	// own homing turn rate (distinct from the unit FBI TurnRate).  Guided
-	// projectiles curve toward the target at this rate; 0 = unguided.
-	TurnRate int `json:"turnRate"`
+	// projectiles curve toward the target at this rate; 0 = unguided. Read
+	// as a fraction, as the game reads it.
+	TurnRate float64 `json:"turnRate"`
 	// FlightTimeSec: TDF `weapontimer`, seconds the projectile self-destructs
 	// after if it hasn't hit — caps a guided missile's pursuit.  0 = use the
 	// range/velocity time-of-flight fallback.
@@ -430,11 +446,14 @@ type unitWeaponJSON struct {
 	EnergyCost     int `json:"energyCost"`     // TDF `energy` (build/stockpile cost)
 	MetalCost      int `json:"metalCost"`      // TDF `metal` (build/stockpile cost)
 	ShakeMagnitude int `json:"shakeMagnitude"` // screen-shake strength on fire
-	MinBarrelAngle int `json:"minBarrelAngle"` // min barrel pitch, degrees (may be negative)
-	SprayAngle     int `json:"sprayAngle"`     // burst spread, TA angle units
-	Accuracy       int `json:"accuracy"`       // inaccuracy, TA angle units (0 = perfect)
-	AimRate        int `json:"aimRate"`        // aim speed, TA angle units / sec
-	HoldTime       int `json:"holdTime"`       // TDF `holdtime`
+	// MinBarrelAngle is the minimum barrel pitch in degrees (may be
+	// negative): TDF minbarrelangle, or the game's -11.25 when the key is
+	// missing.
+	MinBarrelAngle float64 `json:"minBarrelAngle"`
+	SprayAngle     int     `json:"sprayAngle"` // burst spread, TA angle units
+	Accuracy       int     `json:"accuracy"`   // inaccuracy, TA angle units (0 = perfect)
+	AimRate        int     `json:"aimRate"`    // aim speed, TA angle units / sec
+	HoldTime       int     `json:"holdTime"`   // TDF `holdtime`
 
 	// Floating-point timing / falloff fields (seconds unless noted).
 	EdgeEffectiveness float64 `json:"edgeEffectiveness"` // damage fraction at AoE edge (0..1)
@@ -473,8 +492,11 @@ type unitWeaponJSON struct {
 	// does rather than a lossy re-derivation. DamageMult carries the TA:K
 	// per-category fractional multipliers (distinct from the TA absolute
 	// Damage table above). ReloadTicks/BurstRateTicks/RandomDecayTicks are the
-	// tick-domain firing-cycle figures; Melee/Instant/Paralyzer/MindControl the
-	// TA:K behavior classes; SelfSplash whether the shooter eats its own blast.
+	// tick-domain firing-cycle figures (ReloadTicks is reloadtime*30
+	// truncated to whole ticks, as the game counts it: 0.35 s is 10 ticks,
+	// 0.333 s; the Weapons tab shows and times the reload from it);
+	// Melee/Instant/Paralyzer/MindControl the TA:K behavior classes;
+	// SelfSplash whether the shooter eats its own blast.
 	DamageMult       map[string]float64 `json:"damageMult,omitempty"`
 	ReloadTicks      int                `json:"reloadTicks,omitempty"`
 	BurstRateTicks   int                `json:"burstRateTicks,omitempty"`
@@ -490,6 +512,11 @@ type unitWeaponJSON struct {
 // econJSON is the exact float32 economy stat block (sim.EconMeta) surfaced so a
 // browser-spawned unit runs the same economy math the authoritative host does.
 // Every field is a float32 widened to a JSON number; absent keys read as zero.
+// TA's metal sources stay separate, as the game runs them: MetalMake is always
+// on, ExtractsMetal yields per unit of map metal under the extractor while it
+// is on and powered, and MakesMetal (econMakesMetal) is a converter's whole
+// metal per second — the FBI value read as a whole number — while it is on
+// and its energy is paid. The storages are the FBI values as fractions.
 type econJSON struct {
 	EnergyMake     float64 `json:"energyMake,omitempty"`
 	MetalMake      float64 `json:"metalMake,omitempty"`
@@ -622,14 +649,12 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	// plane but ride an air cushion, so the studio gives them a procedural
 	// hover sway.  Don't treat aircraft as hovercraft.
 	out.IsHovercraft = catTokens["HOVER"] && !out.IsAircraft
-	// BankScale / PitchScale — only meaningful for aircraft.  TA defaults both
-	// to 1 when the FBI omits them, so surface 1 for any flier and 0 otherwise
-	// (the renderer skips banking when the scale is 0).
+	// BankScale / PitchScale — only meaningful for aircraft, 0 for everything
+	// else (the renderer skips banking when the scale is 0). The game reads a
+	// missing BankScale as 1 and keeps an explicit value, 0 included (a
+	// flier that never banks); PitchScale defaults to 1 as well.
 	if out.IsAircraft {
-		out.BankScale = info.BankScale
-		if out.BankScale <= 0 {
-			out.BankScale = 1
-		}
+		out.BankScale = info.EffectiveBankScale()
 		out.PitchScale = info.PitchScale
 		if out.PitchScale <= 0 {
 			out.PitchScale = 1
@@ -648,8 +673,12 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	out.CostMetal = info.BuildCostMetal
 	out.CostEnergy = float64(info.BuildCostEnergy)
 	out.CostMana = float64(info.BuildCost)
-	out.StandingMoveOrder = info.StandingMoveOrder
-	out.StandingFireOrder = info.StandingFireOrder
+	if sess.taRules() {
+		out.StandingMoveOrder, out.StandingFireOrder = unitdefs.StandingOrders(info)
+	} else {
+		out.StandingMoveOrder = info.StandingMoveOrder
+		out.StandingFireOrder = info.StandingFireOrder
+	}
 	if info.TransportCapacity > 0 || info.TransMaxUnits > 0 {
 		out.TransportSlots = info.TransMaxUnits
 		if out.TransportSlots == 0 {
@@ -663,7 +692,6 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 			out.TransportSlots = 1
 		}
 	}
-	out.MakesMetal = info.MetalMake + info.MakesMetal + info.ExtractsMetal
 	// Solar-style generators express output as NEGATIVE EnergyUse (the sign
 	// lets the engine stop the income when the structure is toggled off);
 	// EnergyMake is the always-on form. Sum both shapes of income.
@@ -676,28 +704,40 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	out.MakesMana = info.ManaRechargeRate + info.MogriumIncome
 	out.MogriumIncome = info.MogriumIncome
 	out.MogriumStorage = float64(info.MogriumStorage)
-	out.StoresMetal = float64(info.MetalStorage)
-	out.StoresEnergy = float64(info.EnergyStorage)
+	out.StoresMetal = info.EffectiveMetalStorage()
+	out.StoresEnergy = info.EffectiveEnergyStorage()
 	out.StoresMana = float64(info.MaxMana)
-	out.FootprintX = info.FootprintX
-	out.FootprintZ = info.FootprintZ
 	out.YardMap = strings.Join(strings.Fields(info.YardMap), " ")
-	out.MaxSlope = info.MaxSlope
-	out.MaxWaterDepth = info.MaxWaterDepth
-	out.MinWaterDepth = info.MinWaterDepth
-	// A unit naming a MovementClass takes its traversal profile from
-	// gamedata/moveinfo.tdf — the class is authoritative for pathing in
-	// both games (the commander's own MaxSlope=20 is overridden by
-	// TANKDS2's 32, which is why he climbs hills the bare FBI forbids).
-	if mc := sess.moveClass(info.MovementClass); mc != nil {
-		if mc.MaxSlope > 0 {
-			out.MaxSlope = mc.MaxSlope
-		}
-		if mc.MaxWaterDepth > 0 {
-			out.MaxWaterDepth = mc.MaxWaterDepth
-		}
-		if mc.MinWaterDepth > 0 {
-			out.MinWaterDepth = mc.MinWaterDepth
+	if sess.taRules() {
+		// A unit naming a movement class ([CLASS0]..[CLASS31] of
+		// gamedata/moveinfo.tdf) takes all of the class's footprint, water
+		// depth and slope values — the commander's own MaxSlope=20 gives way
+		// to TANKDS2's 32 — and a key the class leaves out takes the game's
+		// default: hovercraft classes carry no MaxWaterDepth, so ARMCH rides
+		// water to depth 10000 whatever its FBI's MaxWaterDepth=0 says. A
+		// unit without a class (or naming none of those slots) reads its own
+		// keys with the same defaults.
+		lim, _ := info.Movement(sess.moveClasses())
+		out.FootprintX, out.FootprintZ = lim.FootprintX, lim.FootprintZ
+		out.MaxSlope = lim.MaxSlope
+		out.MaxWaterDepth = lim.MaxWaterDepth
+		out.MinWaterDepth = lim.MinWaterDepth
+	} else {
+		out.FootprintX = info.FootprintX
+		out.FootprintZ = info.FootprintZ
+		out.MaxSlope = info.MaxSlope
+		out.MaxWaterDepth = info.MaxWaterDepth
+		out.MinWaterDepth = info.MinWaterDepth
+		if mc := sess.moveClassByName(info.MovementClass); mc != nil {
+			if mc.MaxSlope > 0 {
+				out.MaxSlope = mc.MaxSlope
+			}
+			if mc.MaxWaterDepth > 0 {
+				out.MaxWaterDepth = mc.MaxWaterDepth
+			}
+			if mc.MinWaterDepth > 0 {
+				out.MinWaterDepth = mc.MinWaterDepth
+			}
 		}
 	}
 	out.Title = strings.TrimSpace(info.Name)
@@ -729,9 +769,9 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 			}
 		}
 	}
-	// Weapons — three slots.  Each name is the section key in some
-	// weapons/*.tdf file.  loadWeaponTDF walks the weapons folder for
-	// a case-insensitive match.
+	// Weapons — three slots.  Each name is the section key of a weapon in
+	// the game's weapon table (weapons/*.tdf by ID); a name resolves to the
+	// lowest slot holding it, ignoring case.
 	//
 	// Per-slot overrides (the endpoint's ?weapon1=NAME&weapon2=NAME&
 	// weapon3=NAME query parameters) let the studio's "Change Weapon"
@@ -744,6 +784,7 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 		{Slot: "secondary", Index: 2},
 		{Slot: "tertiary", Index: 3},
 	}
+	table := sess.weaponTable()
 	fbiWeapons := []string{info.Weapon1, info.Weapon2, info.Weapon3}
 	for i := range fbiWeapons {
 		w := strings.ToUpper(strings.TrimSpace(fbiWeapons[i]))
@@ -755,8 +796,8 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 			continue
 		}
 		out.Weapons[i].Name = w
-		if sec := sess.loadWeaponSection(w); sec != nil {
-			populateWeaponJSON(&out.Weapons[i], sec)
+		if sec, slot := table.Find(w); sec != nil {
+			populateWeaponJSON(&out.Weapons[i], sec, slot)
 		}
 	}
 	// TA: Kingdoms inlines each weapon as a top-level [WEAPONn] sibling of
@@ -784,17 +825,10 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	out.SelfDestructAs = strings.ToUpper(strings.TrimSpace(info.SelfDestructAs))
 	// Sounds — the game adapter resolves SoundCategory into an event map
 	// (TA: gamedata/sound.tdf classes; TA:K: per-class soundclasses/ pools
-	// mapped onto the same numbered keys).  The whitelist keeps a mod from
-	// injecting events the client never plays.
+	// mapped onto the same numbered keys); gameSoundKeys keeps the keys the
+	// game plays.
 	if cat := strings.ToUpper(strings.TrimSpace(info.SoundCategory)); cat != "" {
-		if events := sess.palettes().UnitSounds(cat); len(events) > 0 {
-			out.Sounds = make(map[string]string)
-			for _, key := range soundEventKeys {
-				if v := strings.TrimSpace(events[key]); v != "" {
-					out.Sounds[key] = strings.ToLower(v)
-				}
-			}
-		}
+		out.Sounds = gameSoundKeys(sess.palettes().UnitSounds(cat))
 	}
 	out.BuildOptions = sess.palettes().BuildOptions(name)
 	// Corpse chain: FBI corpse= names a wreck feature whose object= is the
@@ -815,7 +849,7 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	// same FBI so the in-browser sim gets the exact economy/combat/specials
 	// fields the host computes, then copy them onto the JSON. Best-effort — a
 	// unit whose FBI won't build simply ships the raw-FBI fields above.
-	sess.enrichMetaJSON(&out, name)
+	sess.enrichMetaJSON(&out, name, overrides)
 	return &out, nil
 }
 
@@ -825,17 +859,23 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 // games.UnitMetaFromFBI + EnrichCombatMeta pipeline (the very code the
 // authoritative host's spawn provider runs) and mirrors the resulting fields
 // into the JSON shape the wasm bridge decodes.
-func (sess *Session) enrichMetaJSON(out *unitMetaJSON, name string) {
+//
+// overrides are the Change Weapon picker's per-slot substitutions: the FBI's
+// reference in an overridden slot resolves to the substitute, so the slot's
+// exact-combat fields describe the weapon the JSON slot carries.
+func (sess *Session) enrichMetaJSON(out *unitMetaJSON, name string, overrides [3]string) {
 	fbi, err := sess.loadUnitFBIBytes(name)
 	if err != nil {
 		return
 	}
-	meta, err := games.UnitMetaFromFBI(name, fbi, sess.resolveWeaponSection)
+	resolve := sess.weaponTable().Resolve
+	if info, ierr := sess.loadUnitFBI(name); ierr == nil {
+		resolve = sess.overrideResolver(&info.Info, overrides)
+	}
+	meta, err := sess.simUnitMeta(name, fbi, resolve)
 	if err != nil || meta == nil {
 		return
 	}
-	games.ApplyMovementClass(meta, sess.simMoveClassTable())
-	games.EnrichCombatMeta(meta, fbi, sess.resolveWeaponSection)
 
 	out.Econ = &econJSON{
 		EnergyMake:      float64(meta.Econ.EnergyMake),
@@ -922,57 +962,39 @@ func mergeDamageTable(existing map[string]int, def int, table map[string]int) ma
 	return out
 }
 
-// soundEventKeys is the set of TA sound-event names the studio
-// surfaces.  Selected from sound.tdf's known fields — narrower than
-// "every key in the section" so a mod can't accidentally inject a
-// weird sound for an event we don't expect.  Ordered by frequency
-// of use so the most common entries land first in the JSON output.
-var soundEventKeys = []string{
-	"select1", "select2", "select3",
-	"ok1", "ok2", "ok3", "ok4", "ok5",
-	"arrived1", "arrived2", "arrived3", "arrived4", "arrived5",
-	"cant1", "cant2",
-	"underattack",
-	"activate", "deactivate",
-	"build", "repair", "working", "unitcomplete",
-	"count0", "count1", "count2", "count3", "count4", "count5",
-	"canceldestruct",
+// gameSoundKeys keeps, from a sound class's event map (lower-case keys), the
+// keys the game plays: for each of ta.SoundEvents, the plain key when present,
+// then KEY1, KEY2, ... up to the first missing number (a missing plain key
+// does not stop the numbered ones). Values are lower-cased; an empty value is
+// kept as the silent choice it is in the game. nil when nothing remains.
+func gameSoundKeys(events map[string]string) map[string]string {
+	var out map[string]string
+	add := func(key string) bool {
+		v, ok := events[key]
+		if !ok {
+			return false
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[key] = strings.ToLower(strings.TrimSpace(v))
+		return true
+	}
+	for _, event := range ta.SoundEvents {
+		add(event)
+		for n := 1; ; n++ {
+			if !add(event + strconv.Itoa(n)) {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // loadUnitFBI finds the units/<name>.fbi by walking the VFS for a
 // case-insensitive match.  Unit names in the file system are
 // frequently mixed-case (e.g. ARMCOM.FBI) so we don't trust a
 // straight ReadFile.
-// moveClass resolves a unit's MovementClass name against the game's
-// gamedata/moveinfo.tdf (parsed once per session). Returns nil for an
-// empty name, an unknown class, or a game without the file.
-func (sess *Session) moveClass(name string) *ta.MovementClass {
-	name = strings.ToUpper(strings.TrimSpace(name))
-	if name == "" {
-		return nil
-	}
-	sess.moveClassOnce.Do(func() {
-		sess.moveClassMap = map[string]*ta.MovementClass{}
-		for _, p := range []string{"gamedata/moveinfo.tdf", "gamedata/MOVEINFO.TDF", "GameData/moveinfo.tdf"} {
-			data, err := sess.vfs.ReadFile(p)
-			if err != nil {
-				continue
-			}
-			var classes []ta.MovementClass
-			if err := tdf.Unmarshal(data, &classes); err != nil {
-				continue
-			}
-			for i := range classes {
-				if n := strings.ToUpper(strings.TrimSpace(classes[i].Name)); n != "" {
-					sess.moveClassMap[n] = &classes[i]
-				}
-			}
-			break
-		}
-	})
-	return sess.moveClassMap[name]
-}
-
 func (sess *Session) loadUnitFBI(name string) (*ta.Unit, error) {
 	data, err := sess.loadUnitFBIBytes(name)
 	if err != nil {
@@ -1029,7 +1051,7 @@ func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
 	out.Ballistic = typ == "ballistic" && !strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped")
 	out.Dropped = strings.EqualFold(strings.TrimSpace(sec.SubType), "dropped")
 	out.Guidance = typ == "guided"
-	out.TurnRate = sec.TurnRate
+	out.TurnRate = float64(sec.TurnRate)
 	out.Model = strings.ToLower(strings.TrimSpace(sec.Model))
 	out.EffectClass = takEffectClass(sec)
 	out.TakType = typ
@@ -1046,9 +1068,13 @@ func populateWeaponJSONFromTAK(out *unitWeaponJSON, sec *tak.Weapon) {
 // selfdestructas weapon's per-shot damage, blast diameter (world units) and
 // edge falloff fraction (damage multiplier at the blast rim, 0..1).
 type explosionJSON struct {
-	Damage            float64 `json:"damage"`
-	AreaOfEffectWU    float64 `json:"areaOfEffectWU"`
-	EdgeEffectiveness float64 `json:"edgeEffectiveness"`
+	// Damage is the [DAMAGE] default= entry; DamageTable the per-unit
+	// entries (lower-case unit name → damage), which replace the default for
+	// those victims — CORPYRO_BLAST deals 60 by default but 15 to a Pyro.
+	Damage            float64        `json:"damage"`
+	DamageTable       map[string]int `json:"damageTable,omitempty"`
+	AreaOfEffectWU    float64        `json:"areaOfEffectWU"`
+	EdgeEffectiveness float64        `json:"edgeEffectiveness"`
 	// SoundHit is the death-blast weapon's impact wav stem (sounds/<stem>.wav,
 	// no extension) so the client can voice the explosion when the unit dies.
 	// Empty when the weapon TDF ships no SoundHit.
@@ -1062,46 +1088,28 @@ func (sess *Session) resolveExplosion(name string) *explosionJSON {
 	if name == "" {
 		return nil
 	}
-	sec := sess.loadWeaponSection(name)
+	sec, slot := sess.weaponTable().Find(name)
 	if sec == nil {
 		return nil
 	}
 	var w unitWeaponJSON
-	populateWeaponJSON(&w, sec)
+	populateWeaponJSON(&w, sec, slot)
 	return &explosionJSON{
 		Damage:            float64(w.DamageDefault),
+		DamageTable:       unitdefs.DamageTable(sec),
 		AreaOfEffectWU:    w.AreaOfEffectWU,
 		EdgeEffectiveness: w.EdgeEffectiveness,
 		SoundHit:          w.SoundHit,
 	}
 }
 
-// loadWeaponSection finds the weapons/*.tdf section whose key
-// matches `name` (case-insensitive).  Returns nil when no weapons
-// folder ships or the ref doesn't resolve — the client treats that
-// as "use default reload" and the Fire button still works.
+// loadWeaponSection returns the weapon a unit's weapon reference names in the
+// game's weapon table (the lowest slot with that section name, ignoring
+// case), or nil when none does — the client then treats the slot as "use
+// default reload" and the Fire button still works.
 func (sess *Session) loadWeaponSection(name string) *ta.Weapon {
-	want := strings.ToUpper(strings.TrimSpace(name))
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
-		data, err := sess.vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var weapons []ta.Weapon
-		if err := tdf.Unmarshal(data, &weapons); err != nil {
-			continue
-		}
-		for i := range weapons {
-			if strings.ToUpper(weapons[i].Key) == want {
-				return &weapons[i]
-			}
-		}
-	}
-	return nil
+	sec, _ := sess.weaponTable().Find(name)
+	return sec
 }
 
 // populateWeaponJSON copies the parsed weapon TDF section into the
@@ -1109,11 +1117,17 @@ func (sess *Session) loadWeaponSection(name string) *ta.Weapon {
 // the catalogue /api/studio/weapons endpoint so both expose the same
 // fields with the same defaults (and the Change Weapon picker can
 // show the same stats the active panel will display after swap).
-func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
+//
+// slot is the weapon's slot in the game's weapon table (its ID). Values the
+// game resolves are sent resolved: the range and minimum barrel angle of a
+// weapon without those keys take the game's defaults, the reload is also
+// given in whole ticks, and the turn rate is read as a fraction.
+func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon, slot int) {
 	lc := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
-	out.WeaponID = sec.ID
+	out.WeaponID = slot
 	out.ReloadSec = sec.ReloadTime
-	out.RangeWU = float64(sec.Range)
+	out.ReloadTicks = unitdefs.ReloadTicks(sec.ReloadTime)
+	out.RangeWU = float64(sec.EffectiveRange())
 	out.VelocityWU = sec.WeaponVelocity
 	out.Ballistic = sec.Ballistic != 0
 	out.SoundStart = lc(sec.SoundStart)
@@ -1139,7 +1153,7 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 	out.VLaunch = sec.VLaunch != 0
 	out.Tolerance = sec.Tolerance
 	out.PitchTolerance = sec.PitchTolerance
-	out.TurnRate = sec.TurnRate
+	out.TurnRate = sec.EffectiveTurnRate()
 	out.FlightTimeSec = sec.WeaponTimer
 	out.Cruise = sec.Cruise != 0
 	out.AreaOfEffectWU = float64(sec.AreaOfEffect)
@@ -1172,13 +1186,13 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 
 	// Integer tuning fields.
 	out.Coverage = sec.Coverage
-	out.Firestarter = int(sec.FireStarter)
+	out.Firestarter = sec.EffectiveFireStarter()
 	out.EnergyPerShot = int(sec.EnergyPerShot)
 	out.MetalPerShot = sec.MetalPerShot
 	out.EnergyCost = sec.Energy
 	out.MetalCost = sec.Metal
 	out.ShakeMagnitude = sec.ShakeMagnitude
-	out.MinBarrelAngle = int(sec.MinBarrelAngle)
+	out.MinBarrelAngle = sec.EffectiveMinBarrelAngle()
 	out.SprayAngle = sec.SprayAngle
 	out.Accuracy = sec.Accuracy
 	out.AimRate = sec.AimRate
@@ -1212,53 +1226,36 @@ func populateWeaponJSON(out *unitWeaponJSON, sec *ta.Weapon) {
 	}
 }
 
-// weaponsListMu / weaponsListOnce / weaponsListCache cache the parsed
-// catalogue for the server lifetime — walking every weapons/*.tdf and
-// re-parsing on each picker open would be wasteful for a list that
-// doesn't change after startup.
-// buildWeaponsList walks every weapons/*.tdf in the VFS and emits one
-// JSON entry per section.  Slot / Index are left zero — the catalogue
-// is unit-agnostic; the client assigns those when the user picks one
-// for a specific slot.  Sorted alphabetically by name so the picker's
-// stable ordering doesn't depend on directory walk order.
+// buildWeaponsList emits one JSON entry per weapon a unit can name in the
+// game's weapon table: for each section name, the weapon in the lowest slot
+// holding it (a later section reusing an ID has already replaced the earlier
+// one, and sections without a valid ID are not in the table). Slot / Index
+// are left zero — the catalogue is unit-agnostic; the client assigns those
+// when the user picks one for a specific slot.  Sorted alphabetically by
+// name so the picker's order is stable.
 func (sess *Session) buildWeaponsList() []unitWeaponJSON {
-	seen := map[string]bool{}
+	table := sess.weaponTable()
 	out := []unitWeaponJSON{}
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
-			continue
-		}
-		data, err := sess.vfs.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		var weapons []ta.Weapon
-		if err := tdf.Unmarshal(data, &weapons); err != nil {
-			continue
-		}
-		for i := range weapons {
-			name := strings.ToUpper(strings.TrimSpace(weapons[i].Key))
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			w := unitWeaponJSON{Name: name}
-			populateWeaponJSON(&w, &weapons[i])
-			out = append(out, w)
-		}
+	for _, sec := range table.Named() {
+		id, _ := sec.EffectiveID()
+		w := unitWeaponJSON{Name: strings.ToUpper(strings.TrimSpace(sec.Key))}
+		populateWeaponJSON(&w, sec, id)
+		out = append(out, w)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// handleWeaponsList serves the cached weapon catalogue.
+// handleWeaponsList serves the weapon catalogue, rebuilt when the weapon
+// files change.
 func (sess *Session) handleWeaponsList(w http.ResponseWriter, _ *http.Request) {
-	sess.weaponsListOnce.Do(func() {
-		sess.weaponsListCache = sess.buildWeaponsList()
-	})
+	sig := sess.weaponFilesSig()
 	sess.weaponsListMu.Lock()
 	defer sess.weaponsListMu.Unlock()
+	if sess.weaponsListCache == nil || sig != sess.weaponsListSig {
+		sess.weaponsListCache = sess.buildWeaponsList()
+		sess.weaponsListSig = sig
+	}
 	writeJSON(w, sess.weaponsListCache)
 }
 

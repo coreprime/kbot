@@ -8,7 +8,9 @@ import (
 	"github.com/coreprime/kbot-engine/engine/sim"
 	"github.com/coreprime/kbot-engine/games"
 	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot/internal/gameserver"
+	"github.com/coreprime/kbot/internal/unitdefs"
 )
 
 // hostSeed and hostInputDelay match the native `kbot host` defaults so a
@@ -75,26 +77,43 @@ func (sess *Session) vfsSpawnFunc() sim.SpawnFunc {
 		if err != nil {
 			return nil, nil
 		}
-		// games.UnitMetaFromFBI runs both weapon passes (TA references +
-		// TA:K inline sections) so the authority fights with the same
-		// stats the browser clients computed from /api/studio/unit.
-		meta, err := games.UnitMetaFromFBI(name, data, sess.resolveWeaponSection)
+		meta, err := sess.simUnitMeta(name, data, sess.weaponTable().Resolve)
 		if err != nil {
 			return nil, nil
 		}
-		// The moveinfo.tdf class replaces the FBI's footprint and
-		// water/slope limits when the unit names one, matching the
-		// engines' load order.
-		games.ApplyMovementClass(meta, sess.simMoveClassTable())
-		// Exact-combat fields: [DAMAGE] tables, tick-domain reload,
-		// spray/accuracy angles, behavior classes, death blasts.
-		games.EnrichCombatMeta(meta, data, sess.resolveWeaponSection)
 		return meta, nil
 	}
 }
 
+// simUnitMeta builds a unit's sim stat block from its FBI bytes: the same
+// pipeline the authoritative host and /api/studio/unit (which the browser
+// clients spawn from) both run, so every side of a match fights and moves
+// with identical stats. games.UnitMetaFromFBI runs both weapon passes (TA
+// references + TA:K inline sections) and games.EnrichCombatMeta adds the
+// exact-combat fields ([DAMAGE] tables, tick-domain reload, spray/accuracy
+// angles, behavior classes, death blasts). For TA the game's rules then set
+// the footprint and terrain limits (movement class with the game's
+// defaults), the standing orders and the whole-tick reload; TA: Kingdoms
+// keeps the class override it had.
+func (sess *Session) simUnitMeta(name string, fbi []byte, resolve games.WeaponResolver) (*sim.UnitMeta, error) {
+	meta, err := games.UnitMetaFromFBI(name, fbi, resolve)
+	if err != nil {
+		return nil, err
+	}
+	games.EnrichCombatMeta(meta, fbi, resolve)
+	if !sess.taRules() {
+		games.ApplyMovementClass(meta, sess.simMoveClassTable())
+		return meta, nil
+	}
+	var u ta.Unit
+	if err := tdf.Unmarshal(fbi, &u); err == nil {
+		unitdefs.ApplyToSimMeta(meta, &u.Info, sess.moveClasses(), resolve)
+	}
+	return meta, nil
+}
+
 // simMoveClassTable lazily parses the game's gamedata/moveinfo.tdf into the
-// presence-aware class table the sim meta path resolves movement classes
+// class table games.ApplyMovementClass resolves TA: Kingdoms movement classes
 // through; nil when the VFS ships none.
 func (sess *Session) simMoveClassTable() games.MovementClasses {
 	sess.simMoveClassOnce.Do(func() {
@@ -114,14 +133,33 @@ func (sess *Session) simMoveClassTable() games.MovementClasses {
 	return sess.simMoveClasses
 }
 
-// resolveWeaponSection adapts the studio VFS weapon loader to the meta
-// converter's resolver signature.
-func (sess *Session) resolveWeaponSection(ref string) (ta.Weapon, bool) {
-	sec := sess.loadWeaponSection(ref)
-	if sec == nil {
-		return ta.Weapon{}, false
+// overrideResolver returns the meta builders' weapon resolver — the session
+// weapon table's Resolve: the weapon a reference names, with the game's
+// defaults for a missing range or minimum barrel angle filled in — with the
+// Change Weapon picker's per-slot substitutions applied: the FBI's reference
+// in an overridden slot resolves to the substitute ("NONE" or "-" to
+// nothing).
+func (sess *Session) overrideResolver(info *ta.UnitInfo, overrides [3]string) games.WeaponResolver {
+	subst := map[string]string{}
+	for i, ref := range []string{info.Weapon1, info.Weapon2, info.Weapon3} {
+		ref = strings.ToUpper(strings.TrimSpace(ref))
+		if ref != "" && overrides[i] != "" {
+			subst[ref] = strings.ToUpper(strings.TrimSpace(overrides[i]))
+		}
 	}
-	return *sec, true
+	resolve := sess.weaponTable().Resolve
+	if len(subst) == 0 {
+		return resolve
+	}
+	return func(ref string) (ta.Weapon, bool) {
+		if o, ok := subst[strings.ToUpper(strings.TrimSpace(ref))]; ok {
+			if o == "NONE" || o == "-" {
+				return ta.Weapon{}, false
+			}
+			ref = o
+		}
+		return resolve(ref)
+	}
 }
 
 // handleSandboxList reports the active sandbox sessions for the Join picker.

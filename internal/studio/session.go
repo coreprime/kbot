@@ -11,6 +11,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot/internal/assetrender"
 	"github.com/coreprime/kbot/internal/gameserver"
+	"github.com/coreprime/kbot/internal/unitdefs"
 )
 
 // Session holds all per-workspace state for a Studio instance. Each open
@@ -39,11 +40,15 @@ type Session struct {
 	loadScreenOnce sync.Once
 	loadScreenPNG  []byte
 
-	// moveinfo.tdf movement classes, lazily parsed once per session and
-	// keyed by class Name (upper-cased) — unit metas resolve their
-	// MovementClass traversal profile through this.
+	// moveinfo.tdf movement classes, lazily decoded once per session — unit
+	// metas resolve their MovementClass through them (gamerules.go).
 	moveClassOnce sync.Once
-	moveClassMap  map[string]*ta.MovementClass
+	moveClassList []ta.MovementClass
+	// weapon table built from weapons/*.tdf the way the game builds it,
+	// rebuilt when the listing of weapon files changes (gamerules.go).
+	weaponTableMu  sync.Mutex
+	weaponTableSig string
+	weaponTableVal *unitdefs.WeaponTable
 	// simMoveClasses is the presence-aware moveinfo parse the sim meta path
 	// resolves classes through (games.ApplyMovementClass), lazily loaded.
 	simMoveClassOnce sync.Once
@@ -118,7 +123,7 @@ type Session struct {
 	// unit/weapon caches (unit.go)
 
 	weaponsListMu    sync.Mutex
-	weaponsListOnce  sync.Once
+	weaponsListSig   string
 	weaponsListCache []unitWeaponJSON
 
 	weaponBitmapMu    sync.Mutex
