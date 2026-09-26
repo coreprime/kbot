@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/coreprime/kbot-io/formats/hpi"
+	"github.com/coreprime/kbot-io/formats/hpi/common"
 	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
 	hpiv2 "github.com/coreprime/kbot-io/formats/hpi/v2"
 )
@@ -20,6 +21,46 @@ type packWriter interface {
 	Close() error
 }
 
+// packV1Options are the v1-only pack flags, checked before any file is
+// written.
+type packV1Options struct {
+	headerKey uint8
+	trailer   string
+	noTrailer bool
+	method    string
+}
+
+// configureV1Writer applies the v1 pack flags to w, refusing values that
+// would produce an archive TA 3.1c reads differently from what was asked
+// for, or does not mount at all.
+func configureV1Writer(w *hpiv1.Writer, o packV1Options) error {
+	switch o.method {
+	case "lz77", "":
+		w.CompressionMethod = hpi.CompressionLZ77
+	case "zlib":
+		w.CompressionMethod = hpi.CompressionZLib
+	case "none":
+		// Written as stored (uncompressed) entries.
+		w.CompressionMethod = hpi.CompressionNone
+	default:
+		return fmt.Errorf("unknown compression method: %s (use lz77, zlib, or none)", o.method)
+	}
+	if o.headerKey == 0xFF {
+		return fmt.Errorf("--key 255 (0xFF) is read by TA 3.1c as \"not encrypted\": pass --key 0 for an unencrypted archive, or another value to encrypt")
+	}
+	w.HeaderKey = o.headerKey
+	switch {
+	case o.noTrailer:
+		w.AllowNonGameTrailer = true
+		w.SetTrailer(nil)
+	case !common.ValidTrailer([]byte(o.trailer)):
+		return fmt.Errorf("--trailer %q: TA 3.1c mounts an archive only when it ends with the 36 bytes \"Copyright ____ Cavedog Entertainment\" (any four year characters); use --no-trailer to write an archive the game will not mount", o.trailer)
+	default:
+		w.SetTrailer([]byte(o.trailer))
+	}
+	return nil
+}
+
 func newHPIPackCommand() *cobra.Command {
 	var (
 		verbose      bool
@@ -29,6 +70,7 @@ func newHPIPackCommand() *cobra.Command {
 		headerKey    uint8
 		encodeChunks bool
 		trailer      string
+		noTrailer    bool
 		format       string
 	)
 
@@ -39,6 +81,15 @@ func newHPIPackCommand() *cobra.Command {
 
 Use --target to write to a file.  When omitted the archive is
 streamed to stdout.
+
+Version 1 (Total Annihilation) archives end with the Cavedog copyright
+trailer TA 3.1c requires ("Copyright 1997 Cavedog Entertainment" unless
+--trailer names another year); --no-trailer omits it and produces an
+archive the game will not mount.  --key 255 is refused because the game
+reads header key 0xFF as "not encrypted"; use --key 0 for that.
+--method none stores files uncompressed.  Paths that differ only in
+letter case (Units/ and units/ on a case-sensitive disk) are merged the
+way the game compares names, and colliding files are reported.
 
 Examples:
   kbot hpi pack ./my_units --target units.hpi
@@ -55,6 +106,14 @@ Examples:
 				return fmt.Errorf("source path must be a directory: %s", sourcePath)
 			}
 
+			if format == "v2" {
+				for _, f := range []string{"key", "trailer", "no-trailer", "encode-chunks"} {
+					if cmd.Flags().Changed(f) {
+						return fmt.Errorf("--%s applies to v1 (Total Annihilation) archives only", f)
+					}
+				}
+			}
+
 			// Write to a temp file first (the HPI writer requires seeking).
 			tmpFile, err := os.CreateTemp("", "kbot-hpi-*.hpi")
 			if err != nil {
@@ -65,6 +124,7 @@ Examples:
 			defer func() { _ = os.Remove(tmpPath) }()
 
 			var writer packWriter
+			var v1 *hpiv1.Writer
 			switch format {
 			case "v1", "":
 				w, err := hpiv1.CreateWriter(tmpPath)
@@ -72,24 +132,15 @@ Examples:
 					return fmt.Errorf("failed to create archive: %w", err)
 				}
 				w.CompressionLevel = compression
-				w.HeaderKey = headerKey
 				w.ChunkEncoded = encodeChunks
-				switch method {
-				case "lz77", "":
-					w.CompressionMethod = hpi.CompressionLZ77
-				case "zlib":
-					w.CompressionMethod = hpi.CompressionZLib
-				case "none":
-					w.CompressionMethod = hpi.CompressionNone
-				default:
-					return fmt.Errorf("unknown compression method: %s (use lz77, zlib, or none)", method)
+				if err := configureV1Writer(w, packV1Options{headerKey: headerKey, trailer: trailer, noTrailer: noTrailer, method: method}); err != nil {
+					_ = w.Close()
+					return err
 				}
-				if trailer != "" {
-					w.SetTrailer([]byte(trailer))
-				} else {
-					w.SetTrailer(nil)
+				if noTrailer {
+					fmt.Fprintln(os.Stderr, "warning: --no-trailer: TA 3.1c will not mount this archive")
 				}
-				writer = w
+				writer, v1 = w, w
 			case "v2":
 				w, err := hpiv2.CreateWriter(tmpPath)
 				if err != nil {
@@ -157,6 +208,11 @@ Examples:
 				return fmt.Errorf("failed to walk directory: %w", err)
 			}
 
+			if v1 != nil {
+				for _, warning := range v1.Warnings() {
+					fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+				}
+			}
 			if err := writer.Close(); err != nil {
 				return fmt.Errorf("failed to finalize archive: %w", err)
 			}
@@ -197,11 +253,13 @@ Examples:
 	cmd.Flags().StringVar(&format, "format", "v1", "HPI format: v1 (Total Annihilation) or v2 (TA: Kingdoms)")
 	cmd.Flags().StringVar(&method, "method", "lz77", "Compression method: lz77, zlib, or none (v2 supports zlib or none)")
 	cmd.Flags().Uint8Var(&headerKey, "key", hpi.DefaultHeaderKey,
-		"HPI HeaderKey for XOR encryption (default matches retail TA; 0 disables encryption)")
+		"HPI HeaderKey for XOR encryption (default matches retail TA; 0 disables encryption; 255 is refused)")
 	cmd.Flags().BoolVar(&encodeChunks, "encode-chunks", true,
 		"Apply the per-chunk add/XOR transform used by shipped TA archives")
 	cmd.Flags().StringVar(&trailer, "trailer", hpi.DefaultTrailer,
-		"Bytes appended after the file data section (empty string writes no trailer)")
+		"Copyright trailer written at the end: \"Copyright <4 characters> Cavedog Entertainment\", which TA 3.1c requires")
+	cmd.Flags().BoolVar(&noTrailer, "no-trailer", false,
+		"Write no trailer (TA 3.1c will not mount the archive)")
 
 	return cmd
 }

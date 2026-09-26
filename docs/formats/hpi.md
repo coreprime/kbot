@@ -173,7 +173,7 @@ typedef struct {
 | `Marker` | `'HAPI'` little-endian. The `'BANK'` variant is used by save games and is **not** covered here. |
 | `Version` | Retail *Total Annihilation* archives use `0x00010000` (v1, this section). *TA: Kingdoms* archives use `0x00020000` (v2); see [TA: Kingdoms HPI v2](#ta-kingdoms--hpi-v2). |
 | `DirectorySize` | Includes the 20 header bytes, so the actual directory blob occupies `DirectorySize − Start` bytes starting at `Start`. |
-| `DecryptKey` | Pass through the transform below to get the byte used as the XOR key. A value of `0` disables encryption entirely. Cavedog's retail archives use `0xBF`. |
+| `DecryptKey` | Pass through the transform below to get the byte used as the XOR key. The key bytes `0` and `0xFF` both mean "not encrypted" to TA 3.1c. Cavedog's retail archives use `0xBF`. |
 | `Start` | Where the directory begins. Has always been `0x14` in observed files. |
 
 ### Deriving the cipher key
@@ -193,10 +193,12 @@ seed advances with the file position**, so you can't decrypt a buffer in
 isolation; you have to know where it came from.
 
 > [!IMPORTANT]
-> **If `DecryptKey == 0`, do not apply the cipher at all.** Some custom
-> archives (and a handful of community mods) are written with no
-> encryption — applying the XOR cipher in that case will scramble what is
-> already plaintext.
+> **If the key byte is `0` or `0xFF`, do not apply the cipher at all.**
+> TA 3.1c reads both as plaintext (for `0xFF` the rotation above would
+> give `0xFF`, but the game does not decrypt). Some custom archives (and a
+> handful of community mods) are written with no encryption — applying the
+> XOR cipher in that case will scramble what is already plaintext.
+> `kbot hpi pack` refuses `--key 255` for this reason; use `--key 0`.
 
 ---
 
@@ -507,11 +509,22 @@ To build a new archive from a directory tree:
 kbot hpi pack ./aflakker-out --target aflakker-new.ufo
 ```
 
-kbot defaults to **ZLib chunked compression** with the standard `0xBF`
-header key and a Cavedog trailer — which produces a binary the retail
-engine accepts. If you need byte-identical round-trips against an existing
-file (e.g. for modding validation), the per-chunk compression choices are
-recorded in `metadata.json`-style sidecars by `kbot mount flatten`.
+kbot defaults to **LZ77 chunked compression** with the standard `0xBF`
+header key and the Cavedog trailer — which produces a binary the retail
+engine accepts. The flags keep it that way:
+
+| Flag | Effect |
+|------|--------|
+| `--method lz77\|zlib\|none` | Chunk compression; `none` writes stored (uncompressed) entries. |
+| `--key N` | Header key byte; `0` writes an unencrypted archive. `255` is refused: the game reads it as "not encrypted". |
+| `--trailer "Copyright 1998 Cavedog Entertainment"` | Another year in the trailer; any other text is refused. |
+| `--no-trailer` | Omit the trailer — the game will **not** mount the result (a warning is printed). |
+| `--format v2` | Write a TA: Kingdoms archive (`--key`, `--trailer`, `--no-trailer` and `--encode-chunks` do not apply). |
+
+Directory names that differ only in letter case (`Units/` and `units/` on a
+case-sensitive disk) are merged the way the game compares names; two files
+whose paths differ only in case are both stored, the game reads the one
+packed last, and `pack` prints a warning.
 
 ---
 

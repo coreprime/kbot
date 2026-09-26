@@ -289,9 +289,9 @@ See [3DO](3do.md) for the on-disk structure if you're building tooling.
 kbot hpi pack ./mymod --target myflash.ufo
 ```
 
-By default kbot uses ZLib chunked compression with the standard Cavedog
-header key and the canonical trailer — i.e. the engine accepts it
-without complaint. Confirm:
+By default kbot uses LZ77 chunked compression with the standard Cavedog
+header key and the Cavedog copyright trailer the game requires — i.e.
+the engine accepts it without complaint. Confirm:
 
 ```bash
 kbot hpi info  myflash.ufo

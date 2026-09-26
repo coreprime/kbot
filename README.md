@@ -233,8 +233,9 @@ kbot hpi extract archive.hpi
 kbot hpi extract archive.hpi -t ./output   # target directory
 kbot hpi extract archive.hpi -p "sounds/*" # extract matching files
 
-# Pack a directory into an archive
+# Pack a directory into an archive (LZ77, key 0xBF, Cavedog trailer)
 kbot hpi pack ./content --target archive.hpi
+kbot hpi pack ./content --target mod.ufo --method none --key 0   # stored, unencrypted
 
 # Show archive details
 kbot hpi info archive.hpi
