@@ -21,6 +21,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot/internal/aiprofile"
 )
 
 // init registers the heavier structured / script-analysis describers. Keeping
@@ -129,41 +130,28 @@ func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
 	}
 }
 
-// describeAI parses a TA / TA: Kingdoms bot profile into its per-difficulty
-// plans (unit weights and build limits) for the AI plan view.
-func describeAI(_ *Renderer, _ string, data []byte, out map[string]any) {
-	aiFile, err := ai.Parse(data)
-	if err != nil {
-		return
+// describeAI parses a TA / TA: Kingdoms computer-player profile for the AI
+// viewer: its plans, the lines before the first plan (which TA ignores when a
+// game starts), each target labelled unit, category or ALL against the
+// install's unit table, the parser's notes on lines the game reads
+// differently from how they look, and the settings each difficulty leaves
+// the units with.
+func describeAI(r *Renderer, _ string, data []byte, out map[string]any) {
+	var units []ai.Unit
+	if r != nil {
+		units = aiprofile.Units(r.vfs)
 	}
+	p := aiprofile.Build(data, units)
 	out["format"] = "AI Profile"
-
-	type weight struct {
-		Unit   string  `json:"unit"`
-		Weight float64 `json:"weight"`
+	out["aiPlans"] = p.Plans
+	if p.Preamble != nil {
+		out["aiPreamble"] = p.Preamble
 	}
-	type limit struct {
-		Unit    string `json:"unit"`
-		Maximum int    `json:"maximum"`
+	out["aiDiagnostics"] = p.Diagnostics
+	out["aiUnitsKnown"] = p.UnitsKnown
+	if p.Effective != nil {
+		out["aiEffective"] = p.Effective
 	}
-	type plan struct {
-		Name    string   `json:"name"`
-		Weights []weight `json:"weights"`
-		Limits  []limit  `json:"limits"`
-	}
-
-	plans := make([]plan, 0, len(aiFile.Plans))
-	for _, p := range aiFile.Plans {
-		pl := plan{Name: p.Name, Weights: make([]weight, 0, len(p.Weights)), Limits: make([]limit, 0, len(p.Limits))}
-		for _, w := range p.Weights {
-			pl.Weights = append(pl.Weights, weight{Unit: w.UnitName, Weight: w.Weight})
-		}
-		for _, l := range p.Limits {
-			pl.Limits = append(pl.Limits, limit{Unit: l.UnitName, Maximum: l.Maximum})
-		}
-		plans = append(plans, pl)
-	}
-	out["aiPlans"] = plans
 }
 
 func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
