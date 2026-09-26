@@ -237,7 +237,7 @@ kbot hpi extract archive.hpi -p "sounds/*" # extract matching files
 kbot hpi pack ./content --target archive.hpi
 kbot hpi pack ./content --target mod.ufo --method none --key 0   # stored, unencrypted
 
-# Show archive details
+# Show archive details, including "TA 3.1c would mount: yes/no, reason"
 kbot hpi info archive.hpi
 ```
 
@@ -929,13 +929,21 @@ These tools inspect and convert the original TA Smacker/ZRB cutscenes (see [docs
 |------|---------|
 | `crt_describe` | Summarise a TA: Kingdoms `.crt` scenario: placed-unit breakdown, per-player rule counts and named trigger regions, returned as JSON. Pass `units: true` for the full per-unit placement list. |
 
+#### Archive tools
+
+| Tool | Purpose |
+|------|---------|
+| `hpi_list` | List the files in an HPI/UFO/CCX archive (glob filter), with a `game_mount` line saying whether TA 3.1c would mount it. |
+| `hpi_info` | Header and content summary; `game_mount` reports whether TA 3.1c would mount the file and why not (no Cavedog trailer, TA: Kingdoms version 2 archive, unreadable directory), the header key as the game reads it and the trailer year. |
+| `hpi_extract_file` | Extract one archive entry to a file. |
+
 #### VFS introspection tools
 
 These tools let the assistant query the virtual filesystem directly:
 
 | Tool | Purpose |
 |------|---------|
-| `vfs_game_data` | List registered game-data folders, their base paths, archive counts and file counts. |
+| `vfs_game_data` | List registered game-data folders, their base paths, archive counts and file counts, the archive discovery mode, the mounted archives in lookup order, and every archive that was not mounted with the reason. |
 | `vfs_find` | Locate files by bare name (`ARMCOM.bos`), basename glob (`*.bos`) or full-path glob (`units/ARM*.fbi`). Returns the virtual path and the source archive for every hit. |
 | `vfs_list` | List virtual files and subdirectories under a given directory. |
 | `vfs_stat` | Show every layer that contains a file — useful when a mod overrides a base-game asset. |

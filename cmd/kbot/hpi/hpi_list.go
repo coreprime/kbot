@@ -9,6 +9,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/hpi"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 func newHPIListCommand() *cobra.Command {
@@ -22,6 +23,9 @@ func newHPIListCommand() *cobra.Command {
 		Use:   "list <archive>",
 		Short: "List files in an HPI/UFO/CCX archive",
 		Long: `List all files contained in an HPI, UFO, or CCX archive.
+
+With --verbose the header also says whether TA 3.1c would mount the
+archive (a version 1 archive ending with the Cavedog trailer).
 
 Pass --stream to read the archive from stdin.
 
@@ -49,6 +53,9 @@ Examples:
 
 			if verbose {
 				fmt.Printf("Archive: %s\n", filepath.Base(path))
+				if verdict, err := gamevfs.ValidateFile(path); err == nil {
+					fmt.Printf("%s\n", verdict.Line)
+				}
 				fmt.Printf("Files: %d\n\n", len(files))
 			}
 

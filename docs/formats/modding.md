@@ -295,7 +295,9 @@ the engine accepts it without complaint. Confirm:
 
 ```bash
 kbot hpi info  myflash.ufo
-# Should show ~5–8 files, marker 0x49504148 (HAPI), decrypt key 0xBF.
+# Should show ~5–8 files, marker 0x49504148 (HAPI), decrypt key 0xBF,
+# and "TA 3.1c would mount: yes". A "no" names the reason (for example
+# a missing Cavedog trailer), and the game would silently skip the file.
 
 kbot hpi list  myflash.ufo -v
 # units/myflash.fbi, scripts/MYFLASH.cob, objects3d/myflash.3do, ...

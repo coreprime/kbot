@@ -12,6 +12,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/coreprime/kbot-io/formats/hpi"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 // ── tool registration ─────────────────────────────────────────────────────
@@ -21,7 +22,9 @@ func registerHPITools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("hpi_list",
 			mcplib.WithDescription(
 				"List files inside an HPI/UFO/CCX archive. "+
-					"Pass a glob pattern to filter (e.g. '*.fbi').",
+					"Pass a glob pattern to filter (e.g. '*.fbi').  The result's "+
+					"game_mount line says whether TA 3.1c would mount the archive "+
+					"(a version 1 archive ending with the Cavedog copyright trailer).",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -39,7 +42,11 @@ func registerHPITools(s *server.MCPServer, r *Resolver) {
 		mcplib.NewTool("hpi_info",
 			mcplib.WithDescription(
 				"Show header and content summary for an HPI/UFO/CCX archive: "+
-					"version, file count, total uncompressed size, compression ratio.",
+					"version, file count, total uncompressed size, compression ratio, "+
+					"and game_mount: whether TA 3.1c would mount the file and why not "+
+					"(missing Cavedog trailer, TA: Kingdoms version 2 archive, "+
+					"unreadable directory), the header key as the game reads it "+
+					"(0 and 0xFF mean not encrypted) and the trailer year.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -85,11 +92,13 @@ type hpiEntryInfo struct {
 }
 
 type hpiListOutput struct {
-	Archive string         `json:"archive"`
-	Source  string         `json:"source,omitempty"`
-	Total   int            `json:"total"`
-	Matched int            `json:"matched"`
-	Entries []hpiEntryInfo `json:"entries"`
+	Archive string `json:"archive"`
+	Source  string `json:"source,omitempty"`
+	// GameMount is "TA 3.1c would mount: yes" or "...: no, <reason>".
+	GameMount string         `json:"game_mount"`
+	Total     int            `json:"total"`
+	Matched   int            `json:"matched"`
+	Entries   []hpiEntryInfo `json:"entries"`
 }
 
 func makeHPIListHandler(r *Resolver) server.ToolHandlerFunc {
@@ -126,13 +135,17 @@ func makeHPIListHandler(r *Resolver) server.ToolHandlerFunc {
 			entries = append(entries, info)
 		}
 
-		return jsonResult(hpiListOutput{
+		out := hpiListOutput{
 			Archive: rf.displayPath(),
 			Source:  rf.Source,
 			Total:   len(all),
 			Matched: len(entries),
 			Entries: entries,
-		})
+		}
+		if v, err := gamevfs.ValidateFile(rf.LocalPath); err == nil {
+			out.GameMount = v.Line
+		}
+		return jsonResult(out)
 	}
 }
 
@@ -147,6 +160,9 @@ type hpiInfoOutput struct {
 	TotalFiles       int    `json:"total_files"`
 	CompressedFiles  int    `json:"compressed_files"`
 	UncompressedSize uint64 `json:"uncompressed_size"`
+	// GameMount says whether TA 3.1c would mount the file (see
+	// gamevfs.MountVerdict).
+	GameMount gamevfs.MountVerdict `json:"game_mount"`
 }
 
 func makeHPIInfoHandler(r *Resolver) server.ToolHandlerFunc {
@@ -165,6 +181,10 @@ func makeHPIInfoHandler(r *Resolver) server.ToolHandlerFunc {
 		if err != nil {
 			return errorResult(fmt.Errorf("stat archive: %w", err)), nil
 		}
+		verdict, err := gamevfs.ValidateFile(rf.LocalPath)
+		if err != nil {
+			return errorResult(fmt.Errorf("read archive: %w", err)), nil
+		}
 
 		reader, err := hpi.OpenReader(rf.LocalPath)
 		if err != nil {
@@ -177,6 +197,7 @@ func makeHPIInfoHandler(r *Resolver) server.ToolHandlerFunc {
 			Source:     rf.Source,
 			FileSize:   stat.Size(),
 			TotalFiles: len(reader.List()),
+			GameMount:  verdict,
 		}
 		if h := reader.Header(); h != nil {
 			out.Version = h.Version

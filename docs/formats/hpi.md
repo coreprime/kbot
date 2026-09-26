@@ -128,7 +128,7 @@ The flow to read an HPI is:
 > [!TIP]
 > **Inspect any HPI without writing a parser.**
 > ```bash
-> kbot hpi info  totala1.hpi          # header + counts
+> kbot hpi info  totala1.hpi          # header, counts, "TA 3.1c would mount: yes/no"
 > kbot hpi list  totala1.hpi -v       # files, sizes, compression
 > kbot hpi list  totala1.hpi -p "*.bos"
 > kbot hpi extract totala1.hpi -p "units/ARMCOM.fbi" -t ./out
@@ -337,6 +337,9 @@ without the trailer is silently absent in the game.
 
 Every archive kbot writes keeps it: `kbot hpi pack` and the studio's
 exports (a workspace's Export mod and the map editor's archive download).
+`kbot hpi info`, `kbot hpi list -v`, the MCP `hpi_info` and `hpi_list`
+tools and the Files tab's metadata for an archive print a
+`TA 3.1c would mount: yes` / `no, <reason>` line.
 
 ---
 

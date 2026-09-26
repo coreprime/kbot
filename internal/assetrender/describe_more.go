@@ -344,6 +344,14 @@ func describeHPI(_ *Renderer, vpath string, data []byte, out map[string]any) {
 
 	out["format"] = "HPI Archive"
 	out["hpiVersion"] = archive.Version()
+	if v, err := gamevfs.ValidateFile(tmp.Name()); err == nil {
+		out["gameMount"] = v.Line
+		out["gameMountable"] = v.Mountable
+		out["trailerValid"] = v.TrailerValid
+		if archive.Version() == hpi.VersionV1 {
+			out["headerKey"] = v.KeyNote()
+		}
+	}
 
 	files := archive.List()
 	out["fileCount"] = len(files)

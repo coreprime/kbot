@@ -8,6 +8,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/hpi"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/gamevfs"
 )
 
 func newHPIInfoCommand() *cobra.Command {
@@ -17,6 +18,11 @@ func newHPIInfoCommand() *cobra.Command {
 		Use:   "info <archive>",
 		Short: "Show detailed information about an archive",
 		Long: `Display detailed information about an HPI, UFO, or CCX archive file.
+
+The Game section says whether TA 3.1c would mount the file and why not:
+the game mounts only version 1 archives that end with the Cavedog
+copyright trailer and whose directory reads.  It also shows the header
+key as the game reads it (0 and 0xFF mean "not encrypted").
 
 Pass --stream to read the archive from stdin.
 
@@ -38,8 +44,14 @@ Examples:
 				return fmt.Errorf("failed to stat file: %w", err)
 			}
 
+			verdict, err := gamevfs.ValidateFile(path)
+			if err != nil {
+				return fmt.Errorf("failed to read archive: %w", err)
+			}
+
 			reader, err := hpi.OpenReader(path)
 			if err != nil {
+				fmt.Fprintln(os.Stderr, verdict.Line)
 				return fmt.Errorf("failed to open archive: %w", err)
 			}
 			defer func() { _ = reader.Close() }()
@@ -73,6 +85,17 @@ Examples:
 			fmt.Printf("  Directory Size: %d bytes\n", header.DirectorySize)
 			fmt.Printf("  Directory Offset: %d (0x%X)\n", header.Offset, header.Offset)
 			fmt.Printf("  Decrypt Key: 0x%08X\n\n", header.DecryptKey)
+
+			fmt.Printf("Game:\n")
+			fmt.Printf("  %s\n", verdict.Line)
+			if header.Version == hpi.VersionV1 {
+				fmt.Printf("  Header Key: %s\n", verdict.KeyNote())
+			}
+			if verdict.TrailerValid {
+				fmt.Printf("  Trailer: Copyright %s Cavedog Entertainment\n\n", verdict.TrailerYear)
+			} else {
+				fmt.Printf("  Trailer: missing (TA 3.1c requires \"Copyright ____ Cavedog Entertainment\")\n\n")
+			}
 
 			fmt.Printf("Contents:\n")
 			fmt.Printf("  Total Files: %d\n", len(files))
