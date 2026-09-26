@@ -605,6 +605,11 @@ func BuildPack(installPath, outDir string, opts PackOptions) (*PackResult, error
 	// recording mentions.  Skipped entirely when the install defines no
 	// weapon TDFs (TA:Kingdoms inlines weapons in the FBIs instead).
 	weaponsFile := ""
+	// Sections the game skips or replaces while building its weapon table
+	// (no ID, an ID outside 0..255, an ID a later section reuses).
+	for _, w := range sess.weaponTable().Warnings {
+		warnf("weapons: %s", w)
+	}
 	if catalog := sess.buildPackWeaponCatalog(); len(catalog) > 0 {
 		body, err := packJSONIndent(packWeaponsFileJSON{Weapons: catalog})
 		if err != nil {
@@ -1113,8 +1118,11 @@ Files:
 - unitdb.json — per-unit definitions: pack ordinal id, movement class +
   motion domain, build picture + slot-ordered weapon ids, and full
   FBI/TDF-derived stats (buildTime, maxDamage, weapons, economy,
-  footprint, sounds, corpse chain).
-- weapons.json — every weapon definition in the install keyed by
+  footprint, sounds, corpse chain), resolved as the game resolves them
+  (movement-class footprint and terrain limits, standing orders, the
+  economy's metalMake / extractsMetal / makesMetal kept apart).
+- weapons.json — every weapon units can name in the game's weapon table
+  (weapons/*.tdf by ID, a name resolving to its lowest slot), keyed by
   lower-case id: render type, palette-resolved beam colours (plus the
   raw colour indices), projectile model, velocity, beam duration,
   trajectory flags (ballistic, smokeTrail, startSmoke, commandFire),

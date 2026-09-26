@@ -65,13 +65,14 @@ type packWeaponJSON struct {
 	CommandFire    bool    `json:"commandFire,omitempty"`
 	AreaOfEffectWU float64 `json:"areaOfEffectWU,omitempty"`
 	RangeWU        float64 `json:"rangeWU,omitempty"`
-	// Guided-flight + water fields (format v5).  TurnRate is the raw TDF
-	// turnrate= in TA angle units per second (65536 = a full circle) — a
-	// renderer steering a guided missile converts to rad/s.  WaterWeapon
+	// Guided-flight + water fields (format v5).  TurnRate is the TDF
+	// turnrate= in TA angle units per second (65536 = a full circle; the
+	// game turns by turnrate/30 each tick), read as a fraction as the game
+	// reads it — a renderer steering a guided missile converts to rad/s.  WaterWeapon
 	// marks torpedoes (run at/below the waterline; impacts splash).
 	// AccelerationWU (wu/s²) and FlightTimeSec bound a self-propelled
 	// shot's spin-up and powered flight.
-	TurnRate       int     `json:"turnRate,omitempty"`
+	TurnRate       float64 `json:"turnRate,omitempty"`
 	WaterWeapon    bool    `json:"waterWeapon,omitempty"`
 	AccelerationWU float64 `json:"accelerationWU,omitempty"`
 	FlightTimeSec  float64 `json:"flightTimeSec,omitempty"`
@@ -111,97 +112,60 @@ type packWeaponsFileJSON struct {
 	Weapons map[string]packWeaponJSON `json:"weapons"`
 }
 
-// packWeaponColorProbe re-reads a weapon section with pointer fields so we
-// can tell "color= absent" apart from "color=0" — the typed ta.Weapon uses
-// plain ints where both collapse to zero.
-type packWeaponColorProbe struct {
-	Key    string `tdf:",name"`
-	Color  *int   `tdf:"color"`
-	Color2 *int   `tdf:"color2"`
-}
-
-// buildPackWeaponCatalog enumerates every weapon section in every
-// weapons/*.tdf in the VFS (the TDF section header IS the weapon id) and
-// returns the id → render-fields catalogue.  Duplicate ids keep the first
-// definition encountered, matching how loadWeaponSection resolves per-unit
-// refs, so unitdb weapon slots and this catalogue always agree.
+// buildPackWeaponCatalog returns the id → render-fields catalogue of every
+// weapon a unit can name in the game's weapon table (weapons/*.tdf by ID; the
+// TDF section header IS the catalogue id): for each name, the weapon in the
+// lowest slot holding it, as unit references resolve, so unitdb weapon slots
+// and this catalogue always agree.
 func (sess *Session) buildPackWeaponCatalog() map[string]packWeaponJSON {
 	pal := sess.paletteRGB()
 	out := map[string]packWeaponJSON{}
-	for _, p := range sess.vfs.List() {
-		lower := strings.ToLower(p)
-		if !strings.HasPrefix(lower, "weapons/") || !strings.HasSuffix(lower, ".tdf") {
+	for _, sec := range sess.weaponTable().Named() {
+		id := strings.ToLower(strings.TrimSpace(sec.Key))
+		if id == "" {
 			continue
 		}
-		data, err := sess.vfs.ReadFile(p)
-		if err != nil {
-			continue
+		w := packWeaponJSON{
+			ID:              id,
+			Name:            strings.TrimSpace(sec.Name),
+			RenderType:      sec.RenderType,
+			DurationSec:     sec.Duration,
+			VelocityWU:      sec.WeaponVelocity,
+			StartVelocityWU: sec.StartVelocity,
+			Model:           strings.ToLower(strings.TrimSpace(sec.Model)),
+			BeamWeapon:      sec.BeamWeapon != 0,
+			Ballistic:       sec.Ballistic != 0,
+			Dropped:         sec.Dropped != 0,
+			Guidance:        sec.Guidance != 0,
+			SmokeTrail:      sec.SmokeTrail != 0,
+			SmokeDelaySec:   sec.SmokeDelay,
+			StartSmoke:      sec.StartSmoke != 0,
+			CommandFire:     sec.CommandFire != 0,
+			AreaOfEffectWU:  float64(sec.AreaOfEffect),
+			RangeWU:         float64(sec.EffectiveRange()),
+			TurnRate:        sec.EffectiveTurnRate(),
+			WaterWeapon:     sec.WaterWeapon != 0,
+			AccelerationWU:  sec.WeaponAcceleration,
+			FlightTimeSec:   sec.FlightTime,
+			VLaunch:         sec.VLaunch != 0,
+			WeaponTimerSec:  sec.WeaponTimer,
+			SoundStart:      strings.ToLower(strings.TrimSpace(sec.SoundStart)),
+			SoundHit:        strings.ToLower(strings.TrimSpace(sec.SoundHit)),
 		}
-		var weapons []ta.Weapon
-		if err := tdf.Unmarshal(data, &weapons); err != nil {
-			continue
+		// "color= absent" and "color=0" stay distinguishable: the
+		// weapon's Meta records which keys the section had.
+		if sec.Meta.Present("color") {
+			c := sec.Color
+			w.Color = paletteTriple(pal, c)
+			w.ColorIdx = &c
 		}
-		// Field-presence probe over the same sections, keyed by id so we
-		// don't depend on the two decodes staying index-aligned.
-		colorProbe := map[string]packWeaponColorProbe{}
-		var probes []packWeaponColorProbe
-		if err := tdf.Unmarshal(data, &probes); err == nil {
-			for _, pr := range probes {
-				id := strings.ToLower(strings.TrimSpace(pr.Key))
-				if _, dup := colorProbe[id]; !dup {
-					colorProbe[id] = pr
-				}
-			}
+		if sec.Meta.Present("color2") {
+			c := sec.Color2
+			w.Color2 = paletteTriple(pal, c)
+			w.Color2Idx = &c
 		}
-		for i := range weapons {
-			sec := &weapons[i]
-			id := strings.ToLower(strings.TrimSpace(sec.Key))
-			if id == "" {
-				continue
-			}
-			if _, dup := out[id]; dup {
-				continue // first definition wins, as in loadWeaponSection
-			}
-			w := packWeaponJSON{
-				ID:              id,
-				Name:            strings.TrimSpace(sec.Name),
-				RenderType:      sec.RenderType,
-				DurationSec:     sec.Duration,
-				VelocityWU:      sec.WeaponVelocity,
-				StartVelocityWU: sec.StartVelocity,
-				Model:           strings.ToLower(strings.TrimSpace(sec.Model)),
-				BeamWeapon:      sec.BeamWeapon != 0,
-				Ballistic:       sec.Ballistic != 0,
-				Dropped:         sec.Dropped != 0,
-				Guidance:        sec.Guidance != 0,
-				SmokeTrail:      sec.SmokeTrail != 0,
-				SmokeDelaySec:   sec.SmokeDelay,
-				StartSmoke:      sec.StartSmoke != 0,
-				CommandFire:     sec.CommandFire != 0,
-				AreaOfEffectWU:  float64(sec.AreaOfEffect),
-				RangeWU:         float64(sec.Range),
-				TurnRate:        sec.TurnRate,
-				WaterWeapon:     sec.WaterWeapon != 0,
-				AccelerationWU:  sec.WeaponAcceleration,
-				FlightTimeSec:   sec.FlightTime,
-				VLaunch:         sec.VLaunch != 0,
-				WeaponTimerSec:  sec.WeaponTimer,
-				SoundStart:      strings.ToLower(strings.TrimSpace(sec.SoundStart)),
-				SoundHit:        strings.ToLower(strings.TrimSpace(sec.SoundHit)),
-			}
-			if pr, ok := colorProbe[id]; ok {
-				if pr.Color != nil {
-					w.Color = paletteTriple(pal, *pr.Color)
-					w.ColorIdx = pr.Color
-				}
-				if pr.Color2 != nil {
-					w.Color2 = paletteTriple(pal, *pr.Color2)
-					w.Color2Idx = pr.Color2
-				}
-			}
-			w.EffectClass = taEffectClass(sec)
-			out[id] = w
-		}
+		w.EffectClass = taEffectClass(sec)
+		out[id] = w
 	}
 	// TA:Kingdoms defines its weapons as inline [WEAPONn] sections inside
 	// each unit FBI instead of weapons/*.tdf, so the scan above finds
@@ -325,7 +289,7 @@ func (sess *Session) appendFBIWeaponCatalog(out map[string]packWeaponJSON) {
 				Guidance:       typ == "guided",
 				AreaOfEffectWU: float64(sec.AreaOfEffect),
 				RangeWU:        float64(sec.Range),
-				TurnRate:       sec.TurnRate,
+				TurnRate:       float64(sec.TurnRate),
 				SoundHit:       strings.ToLower(strings.TrimSpace(sec.SoundHit)),
 				EffectClass:    takEffectClass(sec),
 				TakType:        typ,

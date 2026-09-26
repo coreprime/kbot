@@ -53,8 +53,16 @@ become "_"):
                                (ground/air/sea/building), build picture +
                                slot-ordered weapon ids, and full stats
                                (buildTime, maxDamage, weapons, economy,
-                               footprint, sounds, corpse chain)
-  weapons.json                 every weapon in the install keyed by id:
+                               footprint, sounds, corpse chain) resolved
+                               as the game resolves them: movement-class
+                               footprint and terrain limits, standing
+                               orders, metalMake / extractsMetal /
+                               makesMetal kept apart
+  weapons.json                 every weapon units can name in the game's
+                               weapon table (weapons/*.tdf by ID; a later
+                               section with the same ID replaces an earlier
+                               one, sections without a valid ID are skipped
+                               with a warning), keyed by id:
                                render type, colours (resolved + raw index),
                                projectile model, velocity, beam duration,
                                trajectory flags, blast diameter, range and

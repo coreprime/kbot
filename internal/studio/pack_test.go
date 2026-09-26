@@ -465,7 +465,7 @@ func TestBuildPackV5Assets(t *testing.T) {
 		t.Fatalf("armmh_weapon.weaponTimerSec = %v, want > 0 (weapontimer=5)", rocket.WeaponTimerSec)
 	}
 	if !rocket.Guidance || rocket.TurnRate <= 0 {
-		t.Fatalf("armmh_weapon should be a guided missile (guidance=%v turnRate=%d)", rocket.Guidance, rocket.TurnRate)
+		t.Fatalf("armmh_weapon should be a guided missile (guidance=%v turnRate=%v)", rocket.Guidance, rocket.TurnRate)
 	}
 }
 
