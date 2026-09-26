@@ -138,12 +138,15 @@ type unitMetaJSON struct {
 	CostEnergy float64 `json:"costEnergy,omitempty"`
 	CostMana   float64 `json:"costMana,omitempty"`
 
-	// Standing orders the unit starts with, as the game resolves the FBI's
-	// standingmoveorder / standingfireorder: 2 (Roam / Fire at Will) when
-	// the key is missing, otherwise its low two bits, so an explicit 0 is
-	// Hold Position / Hold Fire (1 is Maneuver / Return Fire). Always sent.
-	StandingMoveOrder int `json:"standingMoveOrder"`
-	StandingFireOrder int `json:"standingFireOrder"`
+	// Standing orders the unit starts with. For TA both are always sent, as
+	// the game resolves the FBI's standingmoveorder / standingfireorder: 2
+	// (Roam / Fire at Will) when the key is missing, otherwise its low two
+	// bits, so an explicit 0 is Hold Position / Hold Fire (1 is Maneuver /
+	// Return Fire), and the sandbox puts a unit whose order is 0 on Hold as
+	// it spawns. A TA: Kingdoms unit sends only a non-zero FBI value; a
+	// missing or 0 order is left out, so the sim's spawn default applies.
+	StandingMoveOrder *int `json:"standingMoveOrder,omitempty"`
+	StandingFireOrder *int `json:"standingFireOrder,omitempty"`
 
 	// Resolved death-blast stats: the explodeas / selfdestructas weapon's
 	// damage, blast diameter and edge falloff, so the sim deals splash on
@@ -674,10 +677,11 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 	out.CostEnergy = float64(info.BuildCostEnergy)
 	out.CostMana = float64(info.BuildCost)
 	if sess.taRules() {
-		out.StandingMoveOrder, out.StandingFireOrder = unitdefs.StandingOrders(info)
+		move, fire := unitdefs.StandingOrders(info)
+		out.StandingMoveOrder, out.StandingFireOrder = &move, &fire
 	} else {
-		out.StandingMoveOrder = info.StandingMoveOrder
-		out.StandingFireOrder = info.StandingFireOrder
+		out.StandingMoveOrder = nonZero(info.StandingMoveOrder)
+		out.StandingFireOrder = nonZero(info.StandingFireOrder)
 	}
 	if info.TransportCapacity > 0 || info.TransMaxUnits > 0 {
 		out.TransportSlots = info.TransMaxUnits
@@ -944,6 +948,15 @@ func (sess *Session) enrichMetaJSON(out *unitMetaJSON, name string, overrides [3
 		wj.Paralyzer = wm.Paralyzer
 		wj.ManaPerShot = wm.ManaPerShot
 	}
+}
+
+// nonZero returns a pointer to v, or nil when v is 0, so an omitempty field
+// leaves a zero out.
+func nonZero(v int) *int {
+	if v == 0 {
+		return nil
+	}
+	return &v
 }
 
 // mergeDamageTable folds the authoritative per-target [DAMAGE] table and its

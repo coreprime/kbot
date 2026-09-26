@@ -8,6 +8,8 @@ import (
 
 	"github.com/coreprime/kbot-engine/engine/fixed"
 	"github.com/coreprime/kbot-engine/engine/sim"
+	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/testutil"
 )
 
 // unitMeta builds /api/studio/unit/{name} for a retail unit.
@@ -36,8 +38,11 @@ func TestUnitMetaStandingOrders(t *testing.T) {
 		{"armsolar", 2, 2}, // no keys: Roam / Fire at Will
 	} {
 		m := unitMeta(t, sess, tc.unit)
-		if m.StandingMoveOrder != tc.move || m.StandingFireOrder != tc.fire {
-			t.Errorf("%s: orders %d/%d, want %d/%d", tc.unit, m.StandingMoveOrder, m.StandingFireOrder, tc.move, tc.fire)
+		if m.StandingMoveOrder == nil || m.StandingFireOrder == nil {
+			t.Fatalf("%s: orders left out, want both sent", tc.unit)
+		}
+		if *m.StandingMoveOrder != tc.move || *m.StandingFireOrder != tc.fire {
+			t.Errorf("%s: orders %d/%d, want %d/%d", tc.unit, *m.StandingMoveOrder, *m.StandingFireOrder, tc.move, tc.fire)
 		}
 	}
 	body, err := json.Marshal(unitMeta(t, sess, "armcom"))
@@ -49,6 +54,46 @@ func TestUnitMetaStandingOrders(t *testing.T) {
 			t.Errorf("armcom JSON lacks %s (an explicit Hold must not be omitted)", want)
 		}
 	}
+}
+
+// TestUnitMetaStandingOrdersTAK: TA: Kingdoms units keep the sim's spawn
+// default for an order their FBI leaves out or sets to 0. The meta sends only
+// a non-zero FBI value, so the sandbox's spawn Hold (which a TA meta's 0
+// asks for) never reaches a Kingdoms unit.
+func TestUnitMetaStandingOrdersTAK(t *testing.T) {
+	sess := mountTAKForTest(t)
+	arch := unitMeta(t, sess, "araarch")
+	if arch.StandingMoveOrder != nil || arch.StandingFireOrder != nil {
+		t.Errorf("araarch orders %v/%v, want both left out", arch.StandingMoveOrder, arch.StandingFireOrder)
+	}
+	body, err := json.Marshal(arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"standingMoveOrder"`, `"standingFireOrder"`} {
+		if strings.Contains(string(body), key) {
+			t.Errorf("araarch JSON carries %s; a Kingdoms unit without the key must leave it out", key)
+		}
+	}
+	// lifcow's FBI says standingmoveorder = 2: an explicit non-zero value is
+	// sent as it stands.
+	cow := unitMeta(t, sess, "lifcow")
+	if cow.StandingMoveOrder == nil || *cow.StandingMoveOrder != 2 || cow.StandingFireOrder != nil {
+		t.Errorf("lifcow orders %v/%v, want 2 and left out", cow.StandingMoveOrder, cow.StandingFireOrder)
+	}
+}
+
+// mountTAKForTest opens a session on the TA: Kingdoms test install.
+func mountTAKForTest(t *testing.T) *Session {
+	t.Helper()
+	v, err := filesystem.NewVirtualFileSystem(testutil.TAKUnpackedPath(t), studioFSConfig())
+	if err != nil {
+		t.Fatalf("mount TA:K VFS: %v", err)
+	}
+	t.Cleanup(func() { _ = v.Close() })
+	sess := newSession("test", "test", v, t.TempDir())
+	sess.game = "takingdoms"
+	return sess
 }
 
 // TestUnitMetaMovementClass: a unit naming a movement class takes all of the
@@ -103,8 +148,10 @@ func TestUnitMetaMatchesHostMeta(t *testing.T) {
 				h.FootprintX, h.FootprintZ, h.MinWaterDepth, h.MaxWaterDepth, h.MaxSlope,
 				j.FootprintX, j.FootprintZ, j.MinWaterDepth, j.MaxWaterDepth, j.MaxSlope)
 		}
-		if int(h.StandMove) != j.StandingMoveOrder || int(h.StandFire) != j.StandingFireOrder {
-			t.Errorf("%s: host orders %d/%d, JSON %d/%d", name, h.StandMove, h.StandFire, j.StandingMoveOrder, j.StandingFireOrder)
+		if j.StandingMoveOrder == nil || j.StandingFireOrder == nil {
+			t.Errorf("%s: JSON leaves out a standing order", name)
+		} else if int(h.StandMove) != *j.StandingMoveOrder || int(h.StandFire) != *j.StandingFireOrder {
+			t.Errorf("%s: host orders %d/%d, JSON %d/%d", name, h.StandMove, h.StandFire, *j.StandingMoveOrder, *j.StandingFireOrder)
 		}
 		if h.CombatBoxHalfX != fixed.FromInt(j.FootprintX*4) || h.CombatBoxHalfZ != fixed.FromInt(j.FootprintZ*4) {
 			t.Errorf("%s: host splash box does not follow the JSON footprint", name)

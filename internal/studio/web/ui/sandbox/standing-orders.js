@@ -7,7 +7,9 @@
 // StandingMoveOrder=0, the Lancet's StandingFireOrder=0 — is Hold Position /
 // Hold Fire. The sim's spawn path takes 1 and 2 from the meta but reads 0 as
 // "use its own default" (Maneuver / Fire at Will), so a unit whose resolved
-// order is Hold needs a Stance order right after it spawns.
+// order is Hold needs a Stance order right after it spawns. A TA: Kingdoms
+// meta sends an order only when its FBI value is non-zero, so its units keep
+// the sim's spawn defaults.
 
 const MOVE_MANEUVER = 1
 const FIRE_AT_WILL = 2

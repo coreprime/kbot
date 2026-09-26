@@ -20,6 +20,11 @@ test('no Stance order when the spawn already applies the resolved orders', () =>
   assert.equal(spawnStance(null), null)
 })
 
+test('a TA: Kingdoms meta (orders left out unless non-zero) gets no Stance order', () => {
+  assert.equal(spawnStance({ name: 'araarch' }), null, 'no keys: the sim defaults')
+  assert.equal(spawnStance({ standingMoveOrder: 2 }), null, 'lifcow: standingmoveorder = 2 only')
+})
+
 test('an order outside 0..2 next to a Hold falls back to the spawn default', () => {
   assert.deepEqual(spawnStance({ standingMoveOrder: 0, standingFireOrder: 3 }), { move: 0, fire: 2 })
   assert.deepEqual(spawnStance({ standingMoveOrder: 3, standingFireOrder: 0 }), { move: 1, fire: 0 })
