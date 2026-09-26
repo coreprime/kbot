@@ -241,6 +241,10 @@ kbot hpi info archive.hpi
 ```
 
 All read commands support `--stream` to read the archive from stdin.
+`extract` writes every file inside the target folder: an entry whose stored
+name has a `.` or `..` segment is skipped with a message, and of several
+entries whose paths differ only in letter case only the last — the one the
+game reads — is extracted.
 
 ---
 

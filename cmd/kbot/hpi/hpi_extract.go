@@ -11,6 +11,7 @@ import (
 
 	"github.com/coreprime/kbot-io/formats/hpi"
 	"github.com/coreprime/kbot/cmd/kbot/internal/cli"
+	"github.com/coreprime/kbot/internal/outpath"
 )
 
 func newHPIExtractCommand() *cobra.Command {
@@ -27,6 +28,12 @@ func newHPIExtractCommand() *cobra.Command {
 		Long: `Extract files from an HPI, UFO, or CCX archive.
 
 Pass --stream to read the archive from stdin.
+
+Every file is written inside the target folder.  An entry whose name
+cannot be written there as stored (an empty, "." or ".." segment, which
+the game treats as an ordinary name) is skipped with a message.  When an
+archive stores several entries whose paths differ only in letter case,
+only the last one is extracted: it is the only one the game can read.
 
 Examples:
   kbot hpi extract units.hpi --target ./extracted
@@ -69,16 +76,35 @@ Examples:
 				return fmt.Errorf("failed to create target directory: %w", err)
 			}
 
-			files := reader.List()
+			// Only the entries a lookup reaches are extracted: of several
+			// entries whose paths differ only in letter case the game reads
+			// the last, and the others would overwrite it (or each other).
+			var reachable []*hpi.Entry
+			total := 0
+			if root := reader.Root(); root != nil {
+				_ = root.Walk(func(e *hpi.Entry) error {
+					if !e.IsDir {
+						total++
+					}
+					return nil
+				})
+				_ = root.WalkReachable(func(e *hpi.Entry) error {
+					if !e.IsDir {
+						reachable = append(reachable, e)
+					}
+					return nil
+				})
+			}
+			shadowed := total - len(reachable)
 
 			if verbose {
-				fmt.Printf("Archive: %s\nTarget: %s\nTotal files: %d\n\n", path, target, len(files))
+				fmt.Printf("Archive: %s\nTarget: %s\nTotal files: %d\n\n", path, target, total)
 			}
 
-			matched := make([]string, 0)
-			for _, f := range files {
-				if hpiMatchPattern(f, pattern) {
-					matched = append(matched, f)
+			matched := make([]*hpi.Entry, 0)
+			for _, e := range reachable {
+				if hpiMatchPattern(e.FullPath(), pattern) {
+					matched = append(matched, e)
 				}
 			}
 			if len(matched) == 0 {
@@ -88,10 +114,16 @@ Examples:
 				fmt.Printf("Matched files: %d\n\n", len(matched))
 			}
 
-			extracted, skipped, failed := 0, 0, 0
+			extracted, skipped, failed, unsafe := 0, 0, 0, 0
 
-			for _, file := range matched {
-				outputPath := filepath.Join(target, filepath.FromSlash(file))
+			for _, entry := range matched {
+				file := entry.FullPath()
+				outputPath, err := outpath.Join(target, file)
+				if err != nil {
+					fmt.Printf("SKIP: %s (%v)\n", file, err)
+					unsafe++
+					continue
+				}
 
 				if !force {
 					if _, err := os.Stat(outputPath); err == nil {
@@ -109,7 +141,7 @@ Examples:
 					continue
 				}
 
-				rc, err := reader.Open(file)
+				rc, err := reader.OpenEntry(entry)
 				if err != nil {
 					fmt.Printf("ERROR: %s: %v\n", file, err)
 					failed++
@@ -144,6 +176,12 @@ Examples:
 			fmt.Fprintf(os.Stderr, "  Extracted: %d\n", extracted)
 			if skipped > 0 {
 				fmt.Fprintf(os.Stderr, "  Skipped: %d\n", skipped)
+			}
+			if unsafe > 0 {
+				fmt.Fprintf(os.Stderr, "  Skipped (name cannot be written inside the target): %d\n", unsafe)
+			}
+			if shadowed > 0 {
+				fmt.Fprintf(os.Stderr, "  Not extracted (a later entry with the same name replaces it): %d\n", shadowed)
 			}
 			if failed > 0 {
 				fmt.Fprintf(os.Stderr, "  Failed: %d\n", failed)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/coreprime/kbot-io/filesystem"
 	"github.com/coreprime/kbot/internal/gamevfs"
+	"github.com/coreprime/kbot/internal/outpath"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +26,9 @@ func newFlattenCommand() *cobra.Command {
 This creates a flattened view holding the copy of each file the game reads: loose
 files win over every archive, and Total Annihilation installs rank their archives the
 way TA 3.1c does (rev31.gp3, then *.ccx, *.ufo and the first ten *.hpi, each group in
-ASCII upper-case name order, then the *.hpi past that limit).
+ASCII upper-case name order, then the *.hpi past that limit).  Every file is written
+inside the target directory; a path that cannot be written there as stored is reported
+and skipped.
 
 When <source-path> is omitted, the active kbot context (see 'kbot ctx')
 is used as the source.
@@ -73,13 +76,18 @@ Example:
 					continue
 				}
 
+				// Write to target, never outside it.
+				targetPath, err := outpath.Join(targetDir, filePath)
+				if err != nil {
+					fmt.Printf("ERROR writing %s: %v\n", filePath, err)
+					failed++
+					continue
+				}
+				targetDirPath := filepath.Dir(targetPath)
+
 				// Calculate MD5
 				hash := md5.Sum(data)
 				hashes[filePath] = hex.EncodeToString(hash[:])
-
-				// Write to target
-				targetPath := filepath.Join(targetDir, filePath)
-				targetDirPath := filepath.Dir(targetPath)
 
 				if err := os.MkdirAll(targetDirPath, 0755); err != nil {
 					fmt.Printf("ERROR creating directory for %s: %v\n", filePath, err)

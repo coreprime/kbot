@@ -246,8 +246,15 @@ walk(buf, header.Start)   # recurses on Flag == 1 entries
 > [!NOTE]
 > **Filename casing is preserved on write but matched case-insensitively
 > on read.** Total Annihilation grew up on Windows 9x; mods commonly mix
-> `armcom.fbi` and `ARMCOM.FBI` even within the same archive. The kbot
-> reader is case-insensitive throughout; assume the engine is too.
+> `armcom.fbi` and `ARMCOM.FBI` even within the same archive. The game
+> folds ASCII letter case only, splits paths on both `\` and `/`, and when
+> one directory stores several entries whose names differ only in case it
+> reads the **last** of them; the others are unreachable. It also treats
+> `.` and `..` as ordinary names. `kbot hpi extract` therefore writes only
+> the reachable entry of such a group, and skips (with a message) any
+> entry whose path could not be written inside the target folder as
+> stored, such as `../../x.txt`; `kbot mount flatten` never writes outside
+> its target either.
 
 ---
 
