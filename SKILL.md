@@ -76,13 +76,20 @@ All read commands accept `--stream`.
 ### `kbot gaf` — sprite animations
 
 ```bash
-kbot gaf list <file.gaf>
-kbot gaf export <file.gaf> --format gif|png [--sequence N]
-kbot gaf dump <file.gaf>   --target ./out [--format png]      # all sequences + frames.csv per folder
-kbot gaf build <dump-dir>  --target rebuilt.gaf               # reads frames.csv for timing
+kbot gaf list <file.gaf>                                      # frames, loop flag, duration
+kbot gaf export <file.gaf> [--format png|gif] [--sequence N]  # png (APNG) is the default
+kbot gaf dump <file.gaf>   --target ./out [--format png|gif]  # frames + frames.csv + sequence.csv per folder
+kbot gaf build <dump-dir>  --target rebuilt.gaf [--storage auto|raw|compressed]
+kbot gaf roundtrip [dir]                                      # check encode and dump/build keep what the game reads
 ```
 
-`png` exports as APNG. `frames.csv` carries per-frame durations used by `build`.
+Exports draw frames as the game does: a raw frame's key and a compressed frame's
+skipped pixels are transparent, palette index 0 is opaque black, delays are
+ticks/30 s, and an animation loops only when its loop byte is set.
+`frames.csv` carries each frame's size, origin, key, duration, storage and +11
+byte; `sequence.csv` the sequence's position, name, loop word and +4 word.
+`build` keeps them (new sequences loop) and writes raw frames for
+`textures/*.gaf` and `anims/vismasks.gaf`.
 
 ### `kbot pcx` — PCX images
 
@@ -96,8 +103,8 @@ kbot pcx convert <file.pcx> --format png|gif|bmp [--target out.png]
 
 ```bash
 kbot fnt info     <file.fnt>                                          # one-line summary
-kbot fnt describe <file.fnt> [--list]                                  # height, flags, glyph ranges, widths
-kbot fnt render   <file.fnt> --text "Hello"  [--target hello.png] [--fg #ffff00 --bg transparent]
+kbot fnt describe <file.fnt> [--list]                                  # height, baseline, first char, glyph ranges, widths
+kbot fnt render   <file.fnt> --text "Hello"  [--target hello.png] [--fg #ffff00 --bg transparent] [--codepage cp1252]
 kbot fnt sheet    <file.fnt> [--target sheet.png]                      # 16-column glyph sprite-sheet
 kbot fnt dump     <file.fnt> --target ./glyphs                         # one PNG per glyph (U+00XX.png)
 ```
@@ -119,7 +126,7 @@ kbot pal info     <file.pal>                                           # size, u
 kbot pal describe <file.pal>                                           # every entry with hex + RGB
 kbot pal swatch   <file.pal> [--target pal.png] [--cell 16]            # 16x16 PNG swatch grid
 kbot pal convert  <file.pal> --target out.gpl                          # to JASC-PAL / GIMP (.gpl) / TA .PAL
-kbot pal lookup   <file.alp|.lht|.shd> [--palette ref.pal] [--target lut.png]   # render 256x4 lookup table
+kbot pal lookup   <file.alp|.lht|.shd> [--palette ref.pal] [--target lut.png]   # .alp 256x256, .shd/.lht 256x32 cells
 ```
 
 ### `kbot tnt` — TNT maps
@@ -146,11 +153,11 @@ kbot tnt ascii    <file.tnt> --cols 64              # ASCII art height map
 
 ```bash
 kbot zrb info <file.smk>
-kbot zrb to-mp4   <file.smk> --target out.mp4
-kbot zrb from-mp4 <in.mp4>   --target out.smk
+kbot zrb to-mp4 <file.smk> <out.mp4>   # at the height the game shows; --line-double, --stored-height
 ```
 
-Requires FFmpeg on `PATH` for conversions.
+Requires FFmpeg on `PATH` for conversions. There is no MP4 → Smacker path
+(`kbot zrb from-mp4` reports that no Smacker encoder exists).
 
 ### `kbot mount` — virtual filesystem / explorer
 
@@ -183,9 +190,9 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `hpi_list` | `path` | `pattern` (glob, e.g. `'*.fbi'`) | file listing |
 | `hpi_info` | `path` | — | header + content summary (version, file count, compression ratio) |
 | `hpi_extract_file` | `path`, `entry` (in-archive path), `output` (on-disk dest) | — | bytes written + resolved output path |
-| `gaf_list` | `path` | — | sequences with name, frame count, total duration |
-| `gaf_export` | `path`, `output` | `sequence` (index, default 0), `format` (`gif` default, `png` = APNG) | path to rendered image |
-| `pcx_describe` | `path` | — | version, encoding, dimensions, bit depth, plane count, DPI, colour-type |
+| `gaf_list` | `path` | — | sequences with name, frame count, `loops`, duration in ticks (each frame at least one) |
+| `gaf_export` | `path`, `output` | `sequence` (index, default 0), `format` (`png` = APNG default, `gif`), `transparency` (`game` default, `heuristic`, `none`) | path to rendered image |
+| `pcx_describe` | `path` | — | version, encoding, dimensions, bit depth, plane count, DPI, colour-type, `game_loads` and `game_issues` (what TA 3.1c does with the file) |
 | `pcx_convert` | `path`, `output` | `format` (`png`/`gif`/`bmp`; inferred from extension when omitted) | path to converted image |
 | `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order |
 | `tnt_describe` | `path` | — | JSON header summary, tile/feature counts, elevation stats, top features |
@@ -195,8 +202,8 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `tnt_minimap` | `path`, `output` | `paletted` (bool, default false) | minimap PNG (RGBA or 8-bit indexed) |
 | `tnt_ascii` | `path` | `cols` (number, default 64) | ASCII-art height map |
 | `tnt_optimize` | `path`, `output` | `similarity` (% of 255, default 1.0; 0 disables), `keep_unused` (bool, default false) | Writes a TNT with exact-duplicate, visually-similar (same heightmap footprint), and unused tile graphics consolidated. JSON result reports `tiles_before/after`, `exact_merges`, `similarity_merges`, `unused_removed`, `tile_bytes_saved`, `output_file_size`. |
-| `fnt_describe` | `path` | — | JSON `{height, flags, glyph_count, min_width, max_width, mean_width, ranges}` |
-| `fnt_render` | `path`, `output`, `text` | `fg`, `bg` (#rrggbb / #rrggbbaa / 'transparent') | rendered text PNG |
+| `fnt_describe` | `path` | — | JSON `{height, baseline, first_char, glyph_count, min_width, max_width, mean_width, ranges, warnings}` |
+| `fnt_render` | `path`, `output`, `text` | `fg`, `bg` (#rrggbb / #rrggbbaa / 'transparent'), `codepage` (default `cp1252`, `raw` for bytes) | rendered text PNG, laid out as the game does |
 | `fnt_sheet` | `path`, `output` | `fg`, `bg` | 16-column glyph sprite-sheet PNG |
 | `sct_describe` | `path` | — | JSON header + tile/attr counts, height stats, minimap presence |
 | `sct_image` | `path`, `output` | — | RGBA tile-grid PNG (32 px/tile) |
@@ -205,7 +212,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `pal_describe` | `path` | `list_entries` (bool, default false) | JSON unique/duplicate counts, TA-style flag, optional 256-entry list |
 | `pal_swatch` | `path`, `output` | `cell` (number, default 16) | 16x16 PNG swatch grid |
 | `pal_convert` | `path`, `output` | `format` (`jasc`/`gpl`/`pal`), `name` | converted palette file |
-| `pal_lookup` | `path`, `output` | `palette` (override .pal), `cell` (default 4) | 256x4 PNG render of an .ALP/.LHT/.SHD lookup table |
+| `pal_lookup` | `path`, `output` | `palette` (override .pal), `cell` (default 4), `kind` (`alp`/`shd`/`lht`) | PNG render of a 65,536-byte .ALP (256x256 cells) or 8,192-byte .SHD/.LHT (256x32); other sizes are rejected |
 
 For everything else (3DO, ZRB, mount/flatten), use the CLI.
 
@@ -266,7 +273,7 @@ kbot hpi extract totala1.hpi -p "units/*.cob" -t ./scripts
 ### Convert TA artwork for external use
 ```bash
 kbot pcx convert weapons.pcx --format png
-kbot gaf export armcom.gaf --format png --sequence 0  # APNG for transparent frames
+kbot gaf export armcom.gaf --sequence 0  # APNG with the game's transparency
 ```
 
 ### Browse interactively
