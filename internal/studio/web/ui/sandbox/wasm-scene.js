@@ -27,6 +27,7 @@ import { WasmFrameSource } from '../../engine/net/wasm-source.js'
 import { withCobBytes } from '../../engine/net/cob-bytes.js'
 import { TA_TICK_MS } from '../../engine/tick-rate.js'
 import { activeGame } from '../common/game-registry.js'
+import { spawnStance } from './standing-orders.js'
 import { AudioPool } from '@coreprime/kbot-game3d/audio-pool'
 import { ParticlePool } from '@coreprime/kbot-game3d/cob-particles'
 import {
@@ -650,6 +651,11 @@ export class WasmSandboxScene {
     const meta = await this._fetchMeta(name)
     const pieceNames = await this._fetchPieceNames(name, cobScript)
     const id = this.source.addUnit({ name, meta, x, z, headingRad, side })
+    // A unit whose resolved standing order is Hold (the commanders' Hold
+    // Position, the Lancet's Hold Fire) starts on it: the sim's spawn reads a
+    // 0 order as its own default, so the Hold goes in as a Stance order.
+    const stance = spawnStance(meta)
+    if (stance && this.source.stance) this.source.stance([id], stance.move, stance.fire)
     const u = new WasmUnit(this, id, name, side)
     u.model = model ? model.cloneForInstance() : null
     u.meta = meta
