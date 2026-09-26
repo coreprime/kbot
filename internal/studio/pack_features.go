@@ -15,6 +15,7 @@ package studio
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -224,9 +225,9 @@ var flatGroundFeatureCategories = map[string]bool{
 
 // isFlatGroundFeature reports whether a feature (by category) should be
 // packed as a real-sprite ground decal.  Object-bearing features never are
-// — they render as their packed 3DO.  Metal deposits that carry a loose
-// category tag (see isMetalDepositFeature) are also flat-ground: the site's
-// own art is painted onto the terrain like any other metal patch.
+// — they render as their packed 3DO.  Metal deposits under another category
+// (see isMetalDepositFeature) are also flat-ground: the site's own art is
+// painted onto the terrain like any other metal patch.
 func isFlatGroundFeature(f packFeatureJSON) bool {
 	if f.Object != "" {
 		return false
@@ -245,24 +246,15 @@ func isManaSiteFeature(f packFeatureJSON) bool {
 	return f.Object == "" && f.SacredSite > 0
 }
 
-// isMetalDepositFeature reports whether a feature is a permanent metal
-// deposit whose TDF filed it under a loose non-metal category.  Several
-// worlds' deposits (the green-planet rockmetal* / greenaquaore* rocks) are
-// authored with category "rocks" even though they are indestructible,
-// metal-bearing resource sites indistinguishable in role from the archipelago
-// / mars "metal" patches — so the category alone routes them to a grey rock
-// stand-in and their real GAF art never reaches the terrain.  We recover them
-// by their defining traits (indestructible, metal-bearing, not a real 3DO)
-// plus the metal/ore naming TA uses for deposit art, which keeps decorative
-// indestructible-but-metal features like the mars glyphs out.
+// isMetalDepositFeature reports whether a feature is a metal deposit by the
+// game's rule: its metal is not 0 and it is indestructible. The game paints
+// such a feature's metal, truncated to a byte, over its footprint into the
+// map's metal, whatever its category, name or model — the archipelago "metal"
+// patches, the green-planet rockmetal* / greenaquaore* rocks filed under
+// "rocks" and the mars glyphs alike. The sandbox's map-features-sim.js
+// isMetalDeposit applies the same rule when it pushes deposits into the sim.
 func isMetalDepositFeature(f packFeatureJSON) bool {
-	if f.Object != "" || !f.Indestructible || f.Metal <= 0 {
-		return false
-	}
-	if flatGroundFeatureCategories[f.Category] {
-		return false // already routed by its own flat-ground category
-	}
-	return strings.Contains(f.ID, "metal") || strings.Contains(f.ID, "aquaore")
+	return f.Indestructible && f.Metal != 0 && !math.IsNaN(f.Metal)
 }
 
 // packFeaturesFileJSON is the features.json document shape — an object keyed
