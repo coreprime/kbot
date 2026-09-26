@@ -64,7 +64,9 @@ PALEntry entries[256];   // 256 × 4 = 1024 bytes
 
 There is no signature and no version. The game loads
 `palettes/<name>.pal` like this (kbot-io's `pal.LoadNamed` does the same,
-and the studio and asset explorer load `palette.pal` through it):
+and the studio and asset explorer load `palette.pal` through it for every
+TA render: tile pool, minimaps, sandbox terrain, features, textures and
+model colours):
 
 - **1,024 bytes or more:** the first 1,024 bytes are the palette; the rest
   is ignored.
