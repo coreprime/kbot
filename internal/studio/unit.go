@@ -204,8 +204,11 @@ type unitMetaJSON struct {
 	Sounds map[string]string `json:"sounds,omitempty"`
 
 	// BuildOptions lists the units this unit can construct, lower-cased and
-	// in the game's menu order — resolved by the game adapter from sidedata
-	// CANBUILD (TA), canbuild/ grants (TA:K), and download menu add-ons.
+	// in the game's menu order. For TA, taBuildLists (gamelists.go) resolves
+	// them with the game's rules: Builder=1 units only, sidedata CANBUILD up
+	// to the first gap (30 at most), then the first five sections of each
+	// download file, 31 units in all. For TA:K the game adapter resolves
+	// canbuild/ grants and download menus.
 	BuildOptions []string `json:"buildOptions,omitempty"`
 
 	// Weapons — each slot exposes the FBI ref string plus the
