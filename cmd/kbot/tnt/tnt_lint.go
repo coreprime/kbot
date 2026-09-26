@@ -3,6 +3,7 @@ package tnt
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -36,12 +37,23 @@ func newTNTLintCommand() *cobra.Command {
                      set to 0 to skip)
     unused-tiles     tile graphics that no map cell references
 
+  Map data (how the game reads the map):
+    bad-tile-index      tile map cells naming a tile beyond the tile set
+                        (the game reads past its tile set there)
+    unresolved-feature  cells whose feature word names no entry of the
+                        feature table (the game places nothing there)
+    interchange-bounds  maps larger than other tools accept
+    minimap             no stored minimap, or one too small for the radar
+
   Map quality (same rules as Studio's Quality Checker):
     dedupTiles               duplicate tile graphics (matches optimize/lint)
     otaFields                lobby-required metadata missing
     startsInBounds           start positions inside the map + not in void
-    schemaSlots              every numplayers value covered by some schema
+    schemaSlots              every numplayers value covered by the schema
+                             the game picks for it (Network 1..4 schemas,
+                             read from Schema 0 up to the first gap)
     metalProximity           metal feature within reach of each start
+                             (feature metal read as the game stores it)
     voidIslands              passable cells unreachable from any start
     heightDiscontinuities    cliff edges that block ground pathing
 
@@ -59,7 +71,7 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			arg := args[0]
 
 			// Mount the VFS first — --vfs > active kbot context.
@@ -114,9 +126,9 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 			}
 
 			if ciMode {
-				return emitTNTLintSARIF(hit, m, poolDiags, qualityDiags)
+				return emitTNTLintSARIF(cmd.OutOrStdout(), hit, poolDiags, qualityDiags)
 			}
-			return printTNTLintHuman(hit, m, poolDiags, qualityDiags, otaSrc, vfsLabel, qualityOff)
+			return printTNTLintHuman(cmd.ErrOrStderr(), hit, m, poolDiags, qualityDiags, otaSrc, vfsLabel, qualityOff)
 		},
 	}
 	cmd.Flags().Float64Var(&similarity, "similarity", 1.0,
@@ -135,19 +147,19 @@ exit code is 1 so the command can be used in CI; clean maps exit 0.`,
 // printTNTLintHuman writes the friendly stderr output the interactive
 // user sees.  Quality-pass sources are already shown in the header,
 // so we don't repeat them in the rule listing.
-func printTNTLintHuman(hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic, otaSrc, vfsLabel string, qualityOff bool) error {
-	fmt.Fprintf(os.Stderr, "TNT file:        %s\n", hit.Source)
-	fmt.Fprintf(os.Stderr, "Tile graphics:   %d\n", len(m.Tiles))
-	fmt.Fprintf(os.Stderr, "Map size:        %dx%d cells (%dx%d tiles)\n",
+func printTNTLintHuman(w io.Writer, hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic, otaSrc, vfsLabel string, qualityOff bool) error {
+	reportf(w, "TNT file:        %s\n", hit.Source)
+	reportf(w, "Tile graphics:   %d\n", len(m.Tiles))
+	reportf(w, "Map size:        %dx%d cells (%dx%d tiles)\n",
 		m.AttrW, m.AttrH, m.TileW, m.TileH)
 	if !qualityOff {
 		if otaSrc != "" {
-			fmt.Fprintf(os.Stderr, ".ota source:     %s\n", otaSrc)
+			reportf(w, ".ota source:     %s\n", otaSrc)
 		} else {
-			fmt.Fprintln(os.Stderr, ".ota source:     (none — metadata + schema + start checks will skip)")
+			reportf(w, ".ota source:     (none — metadata + schema + start checks will skip)\n")
 		}
 		if vfsLabel != "" {
-			fmt.Fprintf(os.Stderr, "Feature VFS:     %s\n", vfsLabel)
+			reportf(w, "Feature VFS:     %s\n", vfsLabel)
 		}
 	}
 
@@ -161,48 +173,82 @@ func printTNTLintHuman(hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDia
 	for _, d := range poolDiags {
 		byRule[d.Rule] = d
 	}
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  Tile-pool diagnostics:")
+	reportf(w, "\n")
+	reportf(w, "  Tile-pool diagnostics:\n")
 	totalCount, totalBytes := 0, 0
 	for _, r := range tntLintPoolRules {
 		if d, ok := byRule[r.id]; ok {
-			fmt.Fprintf(os.Stderr, "    %-3d %-22s %s\n", d.Count, d.Rule, d.Message)
+			reportf(w, "    %-3d %-22s %s\n", d.Count, d.Rule, d.Message)
 			totalCount += d.Count
 			totalBytes += d.BytesSaved
 			issueCount++
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "    %-3d %-22s no %s\n", 0, r.id, r.cleanNoun)
+		reportf(w, "    %-3d %-22s no %s\n", 0, r.id, r.cleanNoun)
 	}
 	if totalCount == 0 {
-		fmt.Fprintln(os.Stderr, "    tile pool is clean — nothing for `kbot tnt optimize` to remove.")
+		reportf(w, "    tile pool is clean — nothing for `kbot tnt optimize` to remove.\n")
 	} else {
-		fmt.Fprintf(os.Stderr,
+		reportf(w,
 			"    %d tile graphic%s (%d bytes) could be removed by `kbot tnt optimize`.\n",
 			totalCount, sIfPlural(totalCount), totalBytes)
 	}
 
+	// Map-data diagnostics: data the game reads differently from what the
+	// map intends (tile indices past the tile set, feature words naming no
+	// table entry), maps beyond the interchange bounds and the minimap.
+	var dataDiags []tnt.LintDiagnostic
+	for _, d := range poolDiags {
+		if !isTNTLintPoolRule(d.Rule) {
+			dataDiags = append(dataDiags, d)
+		}
+	}
+	reportf(w, "\n")
+	reportf(w, "  Map data:\n")
+	if len(dataDiags) == 0 {
+		reportf(w, "    ✓  tile indices, feature words and minimap read as intended\n")
+	}
+	for _, d := range dataDiags {
+		icon := "ℹ"
+		if d.Severity == tnt.LintWarning {
+			icon = "⚠"
+		}
+		reportf(w, "    %s  %-22s %s\n", icon, d.Rule, d.Message)
+		issueCount++
+	}
+
 	if !qualityOff {
-		fmt.Fprintln(os.Stderr)
-		fmt.Fprintln(os.Stderr, "  Map quality:")
+		reportf(w, "\n")
+		reportf(w, "  Map quality:\n")
 		for _, d := range qualityDiags {
-			fmt.Fprintf(os.Stderr, "    %s  %-22s %s\n", maplintIcon(d.Severity), d.ID, d.Message)
+			reportf(w, "    %s  %-22s %s\n", maplintIcon(d.Severity), d.ID, d.Message)
 			if d.Severity != maplint.SeverityOK {
 				issueCount++
 			}
 		}
 	}
 
-	fmt.Fprintln(os.Stderr)
+	reportf(w, "\n")
 	if issueCount == 0 {
 		return nil
 	}
 	return fmt.Errorf("lint found %d issue%s", issueCount, sIfPlural(issueCount))
 }
 
+// isTNTLintPoolRule reports whether a rule is one of the tile-pool rules
+// (the ones `kbot tnt optimize` acts on).
+func isTNTLintPoolRule(rule string) bool {
+	for _, r := range tntLintPoolRules {
+		if r.id == rule {
+			return true
+		}
+	}
+	return false
+}
+
 // emitTNTLintSARIF writes a SARIF 2.1.0 run to stdout.  Stderr stays
 // silent in CI mode so build pipes don't capture the human text.
-func emitTNTLintSARIF(hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic) error {
+func emitTNTLintSARIF(w io.Writer, hit *cli.VFSInputHit, poolDiags []tnt.LintDiagnostic, qualityDiags []maplint.Diagnostic) error {
 	uri := strings.TrimPrefix(hit.Source, "vfs:")
 	results := make([]cli.SARIFResult, 0, len(poolDiags)+len(qualityDiags))
 	for _, d := range poolDiags {
@@ -232,7 +278,7 @@ func emitTNTLintSARIF(hit *cli.VFSInputHit, m *tnt.Map, poolDiags []tnt.LintDiag
 			}},
 		})
 	}
-	if err := cli.WriteSARIF(os.Stdout, "kbot tnt lint", tntLintRuleCatalogue(), results); err != nil {
+	if err := cli.WriteSARIF(w, "kbot tnt lint", tntLintRuleCatalogue(), results); err != nil {
 		return fmt.Errorf("encode sarif: %w", err)
 	}
 	if len(results) > 0 {
@@ -409,6 +455,10 @@ func tntLintRuleCatalogue() []cli.SARIFRule {
 		cli.SARIFShortRule("tnt.duplicate-tiles", "Byte-identical tile graphics found in the TNT pool."),
 		cli.SARIFShortRule("tnt.similar-tiles", "Visually-similar tile graphics sharing the same heightmap footprint."),
 		cli.SARIFShortRule("tnt.unused-tiles", "Tile graphics referenced by no map cell."),
+		cli.SARIFShortRule("tnt.bad-tile-index", "Tile map cells reference tiles beyond the tile set; the game reads past its tile set there."),
+		cli.SARIFShortRule("tnt.unresolved-feature", "Cells hold feature words naming no entry of the feature table; the game places nothing there."),
+		cli.SARIFShortRule("tnt.interchange-bounds", "The map is larger than other map tools accept."),
+		cli.SARIFShortRule("tnt.minimap", "The map stores no minimap, or one too small for the game's radar."),
 		cli.SARIFShortRule("maplint.dedupTiles", "Duplicate tile graphics in the TNT pool."),
 		cli.SARIFShortRule("maplint.otaFields", "Lobby-required OTA metadata missing."),
 		cli.SARIFShortRule("maplint.startsInBounds", "A start position lies outside the map or in a void cell."),

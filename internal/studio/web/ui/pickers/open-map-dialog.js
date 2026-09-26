@@ -2,7 +2,8 @@
 //
 // React-rendered Open Map picker.  Lists every TNT map the kbot
 // server returns via /api/studio/maps with a minimap thumbnail +
-// dimensions / planet / player-count meta line.  Returns the
+// dimensions / planet / player-count meta line (map-meta.js, which also
+// flags TA: Kingdoms and old-format maps).  Returns the
 // picked map record (so the host can route it through the existing
 // confirmOpenMap → fetch /api/studio/load → openLoadedMap pipeline)
 // or null on cancel.
@@ -14,6 +15,7 @@
 import { signal } from '@preact/signals'
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { PickerModal } from '@coreprime/kbot-ui/picker-modal'
+import { mapMetaLine } from './map-meta.js'
 
 const _state = signal(null)
 
@@ -70,11 +72,7 @@ export function OpenMapDialog() {
     const cls = ['open-list-item', m.path === st.selectedPath ? 'selected' : '']
       .filter(Boolean).join(' ')
     const title = m.missionName || m.name
-    const meta = [
-      m.tileW && m.tileH ? `${m.tileW}×${m.tileH}` : null,
-      m.planet || null,
-      m.numPlayers ? `${m.numPlayers} players` : null,
-    ].filter(Boolean).join(' · ')
+    const meta = mapMetaLine(m)
     return html`
       <button type="button" class=${cls} key=${m.path}
               onClick=${() => onSelect(m)}

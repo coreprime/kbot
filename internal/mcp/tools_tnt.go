@@ -28,8 +28,11 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("tnt_describe",
 			mcplib.WithDescription(
-				"Summarise a TNT map file: dimensions, unique tile count, sea level, "+
-					"feature table size, placement count, elevation stats and the most-placed features.",
+				"Summarise a TNT map file: format (ta, ta-legacy for the older 0x1020 layout TA "+
+					"still reads, kingdoms for a TA: Kingdoms map TA cannot load), dimensions, "+
+					"unique tile count, sea level, minimap flags (the game reads the stored minimap "+
+					"only when bit 0 is set), feature table size, placement count (cells the game "+
+					"places a feature on), elevation stats and the most-placed features.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -121,13 +124,14 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 				"Render the TNT terrain layer and overlay it with each placed feature's "+
 					"sprite plus a numbered marker at every StartPos in the selected schema "+
 					"(default Schema 0; pass schema=<n> for a different one) found in the "+
-					"sister .ota.  Requires a game-data folder so feature sprites (features/*.tdf, "+
+					"sister .ota, read as the game reads it: a schema after a gap in the "+
+					"numbering draws no markers, and StartPos0 and unnumbered entries count.  Requires a game-data folder so feature sprites (features/*.tdf, "+
 					"anims/*.gaf) and the .ota can be resolved; without one this degrades to "+
 					"the same render as tnt_image.",
 			),
 			mcplib.WithString("path", mcplib.Required(), mcplib.Description("Path to the .tnt file.")),
 			mcplib.WithString("output", mcplib.Required(), mcplib.Description("Destination PNG path.")),
-			mcplib.WithNumber("schema", mcplib.Description("Schema index whose StartPos markers are drawn (0-based; default 0).")),
+			mcplib.WithNumber("schema", mcplib.Description("Number N of the schema (\"Schema N\") whose StartPos markers are drawn (default 0).")),
 			withGameData(),
 		),
 		makeTNTPreviewHandler(r),
@@ -205,11 +209,17 @@ func registerTNTTools(s *server.MCPServer, r *Resolver) {
 	)
 }
 
+// tntDescribeOutput is the tnt_describe result. Format names the game that
+// reads the map: "ta" (0x2000), "ta-legacy" (the older 0x1020 layout, which
+// TA reads) or "kingdoms" (0x4000, TA: Kingdoms only; TA cannot load it).
+// MinimapFlags is the 0x2c header word; the game reads the stored minimap
+// only when bit 0 is set.
 type tntDescribeOutput struct {
 	Path             string                  `json:"path"`
 	Source           string                  `json:"source,omitempty"`
 	FileSize         int64                   `json:"file_size"`
 	IDVersion        uint32                  `json:"id_version"`
+	Format           string                  `json:"format"`
 	AttrWidth        int                     `json:"attr_width"`
 	AttrHeight       int                     `json:"attr_height"`
 	TileWidth        int                     `json:"tile_width"`
@@ -222,6 +232,7 @@ type tntDescribeOutput struct {
 	Placements       int                     `json:"placements"`
 	MinimapW         int                     `json:"minimap_width"`
 	MinimapH         int                     `json:"minimap_height"`
+	MinimapFlags     uint32                  `json:"minimap_flags"`
 	HeightMin        uint8                   `json:"height_min"`
 	HeightMax        uint8                   `json:"height_max"`
 	HeightMean       float64                 `json:"height_mean"`
@@ -272,6 +283,9 @@ type tntOptimizeOutput struct {
 	UnusedRemoved     int     `json:"unused_removed"`
 	TileBytesSaved    int     `json:"tile_bytes_saved"`
 	OutputFileSize    int64   `json:"output_file_size"`
+	// Warnings reports what the output keeps that the game reads oddly,
+	// such as tile indices past the tile set, and the save's warnings.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func loadTNT(path string) (*tnt.Map, []tnt.Feature, []byte, error) {
@@ -372,6 +386,8 @@ func makeTNTDescribeHandler(r *Resolver) server.ToolHandlerFunc {
 			Source:           rf.Source,
 			FileSize:         int64(len(data)),
 			IDVersion:        m.Header.IDVersion,
+			Format:           tntFormat(m),
+			MinimapFlags:     m.Header.MinimapFlags(),
 			AttrWidth:        m.AttrW,
 			AttrHeight:       m.AttrH,
 			TileWidth:        m.TileW,
@@ -391,6 +407,17 @@ func makeTNTDescribeHandler(r *Resolver) server.ToolHandlerFunc {
 			TopFeatures:      top,
 		})
 	}
+}
+
+// tntFormat names the game that reads a TNT, by its version word.
+func tntFormat(m *tnt.Map) string {
+	switch {
+	case m.IsTAK:
+		return "kingdoms"
+	case m.IsLegacy():
+		return "ta-legacy"
+	}
+	return "ta"
 }
 
 func makeTNTImageHandler(r *Resolver) server.ToolHandlerFunc {
@@ -755,7 +782,23 @@ func makeTNTOptimizeHandler(r *Resolver) server.ToolHandlerFunc {
 			return errorResult(fmt.Errorf("create temp: %w", err)), nil
 		}
 		tmpName := tmp.Name()
-		if err := m.Save(tmp, feats); err != nil {
+		// Indices the map already held past its tile set or feature table
+		// are written back unchanged (the game loads such maps) and
+		// reported in the result, with the save's own warnings (such as a
+		// missing minimap).
+		var warnings []string
+		if diags, lintErr := m.Lint(tnt.LintOptions{}); lintErr == nil {
+			for _, d := range diags {
+				if d.Rule == tnt.LintRuleBadTileIndex || d.Rule == tnt.LintRuleUnresolvedFeature {
+					warnings = append(warnings, d.Message)
+				}
+			}
+		}
+		saveOpts := tnt.SaveOptions{
+			AllowUnresolvedIndices: true,
+			Warn:                   func(msg string) { warnings = append(warnings, msg) },
+		}
+		if err := m.SaveWithOptions(tmp, feats, saveOpts); err != nil {
 			_ = tmp.Close()
 			_ = os.Remove(tmpName)
 			return errorResult(fmt.Errorf("save tnt: %w", err)), nil
@@ -786,6 +829,7 @@ func makeTNTOptimizeHandler(r *Resolver) server.ToolHandlerFunc {
 			UnusedRemoved:     stats.UnusedRemoved,
 			TileBytesSaved:    (stats.TilesBefore - stats.TilesAfter) * tnt.TileGfxSize,
 			OutputFileSize:    outSize,
+			Warnings:          warnings,
 		})
 	}
 }

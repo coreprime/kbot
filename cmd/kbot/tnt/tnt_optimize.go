@@ -3,6 +3,7 @@ package tnt
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -50,7 +51,10 @@ Three passes run by default:
      references is dropped.  Pass --keep-unused to retain them.
 
 The on-disk heightmap and feature placements are preserved verbatim;
-only the tile graphic list and the tilemap indices are rewritten.
+only the tile graphic list and the tilemap indices are rewritten.  Cells
+that name a tile beyond the tile set, or a feature beyond the feature
+table, are kept as they are (the game loads such maps) and reported on
+stderr as warnings, like 'kbot tnt lint' reports them.
 
 Progress is written to stderr and the optimised TNT to stdout by
 default.  Use --target to write the TNT to a file instead.`,
@@ -108,7 +112,10 @@ default.  Use --target to write the TNT to a file instead.`,
 				return err
 			}
 			defer cli.CloseOutput(out, target)
-			if err := m.Save(out, features); err != nil {
+			for _, msg := range keptIndexWarnings(m) {
+				reportf(os.Stderr, "warning: %s\n", msg)
+			}
+			if err := m.SaveWithOptions(out, features, optimizeSaveOptions(os.Stderr)); err != nil {
 				return fmt.Errorf("save tnt: %w", err)
 			}
 			if target != "" {
@@ -124,6 +131,33 @@ default.  Use --target to write the TNT to a file instead.`,
 	cmd.Flags().BoolVar(&keepUnused, "keep-unused", false,
 		"Keep tile graphics that no map cell references")
 	return cmd
+}
+
+// optimizeSaveOptions keeps indices the input map already held unchanged:
+// a tile index past the tile set or a feature word past the feature table
+// is written back as read (the game loads such maps), with a warning.
+func optimizeSaveOptions(warn io.Writer) tnt.SaveOptions {
+	return tnt.SaveOptions{
+		AllowUnresolvedIndices: true,
+		Warn:                   func(msg string) { reportf(warn, "warning: %s\n", msg) },
+	}
+}
+
+// keptIndexWarnings describes the tile indices past the tile set and
+// feature words past the feature table that the optimised map keeps (kbot-io
+// lint's bad-tile-index and unresolved-feature rules).
+func keptIndexWarnings(m *tnt.Map) []string {
+	diags, err := m.Lint(tnt.LintOptions{})
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, d := range diags {
+		if d.Rule == tnt.LintRuleBadTileIndex || d.Rule == tnt.LintRuleUnresolvedFeature {
+			out = append(out, d.Message)
+		}
+	}
+	return out
 }
 
 // optimizeTAK compacts a TA: Kingdoms map's feature-name table (dropping

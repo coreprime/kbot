@@ -128,6 +128,22 @@ type mapEntry struct {
 	Planet      string `json:"planet,omitempty"`
 	NumPlayers  string `json:"numPlayers,omitempty"`
 	MinimapURL  string `json:"minimapUrl,omitempty"`
+	// Format flags a map TA 3.1c does not read as a current TA map (see
+	// mapFormat); empty for a 0x2000 TA map.
+	Format string `json:"format,omitempty"`
+}
+
+// mapFormat names a TNT layout TA 3.1c does not treat as a current TA map:
+// "kingdoms" for a TA: Kingdoms (0x4000) map, which only TA: Kingdoms loads,
+// and "legacy" for the older 0x1020 TA layout, which TA still reads.
+func mapFormat(m *tnt.Map) string {
+	switch {
+	case m.IsTAK:
+		return "kingdoms"
+	case m.IsLegacy():
+		return "legacy"
+	}
+	return ""
 }
 
 // mapCatalog holds the preloaded list of .tnt maps and their rendered
@@ -369,6 +385,7 @@ func (sess *Session) summariseMapWithMinimap(p string) (mapEntry, []byte) {
 		if m, err := tnt.LoadFromReader(bytes.NewReader(data)); err == nil {
 			entry.TileW = m.TileW
 			entry.TileH = m.TileH
+			entry.Format = mapFormat(m)
 			if m.Minimap != nil {
 				entry.MinimapURL = "/api/studio/minimap/" + p
 				// The resolver picks the per-map terrain palette (TA:K bakes its
