@@ -175,16 +175,18 @@ relevant format page.
 
 ## PCX — images
 
-- **`BytesPerLine` is the encoded length, not the image width.** If
-  `BytesPerLine > Width`, trailing bytes per row are padding — drop
-  them. Mishandling produces a horizontally stretched image.
+- **TA ignores `BytesPerLine`.** Standard readers drop the padding when
+  `BytesPerLine > Width`; TA 3.1c decodes exactly `Width` bytes per row,
+  so padded files shift in the game. Write `BytesPerLine == Width`, and
+  check with `kbot pcx describe`.
+- **TA loads version 5 only**, and decodes every file as 8-bit
+  single-plane data.
 - **Literal bytes with the top two bits set must be RLE-escaped.** A
   bare byte of value `0xC0–0xFF` is illegal as a literal; emit it as
   a 1-count run (`0xC1, 0xFF` for a single `0xFF`). Mishandling
   desynchronises decode after one row.
-- **Always check the `0x0C` marker before trusting the trailing 768
-  bytes.** Files without it use the (almost useless) 16-colour
-  header palette.
+- **The game takes the trailing 768 bytes as the palette with or without
+  the `0x0C` marker**; standard readers need the marker.
 
 ## PAL / ALP / LHT / SHD — palettes & lookup tables
 

@@ -323,7 +323,7 @@ kbot tsf lint anims/titlescreen.tsf
 Inspect and convert PCX image files.
 
 ```bash
-# Describe a PCX file (detailed metadata)
+# Describe a PCX file (detailed metadata, then what TA 3.1c will do with it)
 kbot pcx describe image.pcx
 
 # Convert to PNG, GIF, or BMP
@@ -333,6 +333,8 @@ kbot pcx convert image.pcx --format png --target output.png
 # One-line info summary
 kbot pcx info image.pcx
 ```
+
+TA 3.1c reads PCX files differently from image editors: it loads version 5 only, ignores `BytesPerLine` (padded rows shift), decodes everything as 8-bit single-plane data and takes the palette from the last 768 bytes. `kbot pcx describe`, the MCP `pcx_describe` tool and the studio's asset explorer (a badge next to the preview) report every such difference. See [docs/formats/pcx.md](docs/formats/pcx.md).
 
 ---
 

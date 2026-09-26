@@ -195,3 +195,29 @@ func TestRenderGAFUsesGameRuleByDefault(t *testing.T) {
 		t.Errorf("frame delays = %v, want [2/30 3/30]", delays)
 	}
 }
+
+// TestDescribePCXReportsGameCompat checks the compatibility report behind
+// the asset explorer's PCX badge.
+func TestDescribePCXReportsGameCompat(t *testing.T) {
+	// 3x1 image whose BytesPerLine is padded to 4: the game ignores
+	// BytesPerLine and reads 3 bytes per row.
+	data := make([]byte, 128)
+	data[0], data[1], data[2], data[3] = 0x0A, 5, 1, 8
+	data[8] = 2 // XMax
+	data[65], data[66] = 1, 4
+	data = append(data, 0xC1, 1, 0xC1, 2, 0xC1, 3, 0xC1, 0, 0x0C)
+	data = append(data, make([]byte, 768)...)
+
+	r := newTestRenderer(t)
+	out, ok := r.Describe("bitmaps/pad.pcx", data)
+	if !ok {
+		t.Fatal("PCX not described")
+	}
+	c, ok := out["gameCompat"].(pcxCompat)
+	if !ok {
+		t.Fatalf("gameCompat = %#v", out["gameCompat"])
+	}
+	if !c.Loads || c.OK || len(c.Issues) == 0 || c.Issues[0].Code != "bytes-per-line" {
+		t.Errorf("gameCompat = %+v, want a bytes-per-line warning on a loadable file", c)
+	}
+}

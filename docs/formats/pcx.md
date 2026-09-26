@@ -15,7 +15,7 @@
 > [!TIP]
 > **Try it yourself.**
 > ```bash
-> kbot pcx describe unitpics/armcom.pcx        # full header + palette analysis
+> kbot pcx describe unitpics/armcom.pcx        # full header + what TA will do with it
 > kbot pcx info     unitpics/armcom.pcx        # one-line summary
 > kbot pcx convert  unitpics/armcom.pcx -f png -o armcom.png
 > ```
@@ -77,10 +77,10 @@ typedef struct {
 | Field | TA value | Notes |
 |-------|----------|-------|
 | `Manufacturer` | `0x0A` | Reject anything else — not a PCX. |
-| `Version` | typically `5` | Allow `0`–`5`. |
-| `BitsPerPixel × NumPlanes` | `8 × 1 = 8` | The only configuration TA ships. |
-| `Encoding` | `1` | RLE — see below. |
-| `BytesPerLine` | even number ≥ `(XMax − XMin + 1)` | Always pad to an even byte count, even if it exceeds the image width. |
+| `Version` | `5` | TA 3.1c loads version 5 only. |
+| `BitsPerPixel × NumPlanes` | `8 × 1 = 8` | The only configuration TA ships, and the only one the game decodes. |
+| `Encoding` | `1` | RLE — see below. The game RLE-decodes whatever the byte says. |
+| `BytesPerLine` | `XMax − XMin + 1` | **Must equal the width for TA.** The game ignores it and reads exactly width bytes per row; image editors that pad rows to an even count produce files whose rows shift in the game. |
 
 ### Computed image size
 
@@ -89,8 +89,10 @@ Width  = XMax − XMin + 1
 Height = YMax − YMin + 1
 ```
 
-Don't trust `BytesPerLine == Width`; treat any trailing bytes per scanline
-as padding to discard after decode.
+The game computes these in full integers, so a width of 65,536 is
+possible, and refuses a file whose maximum is below its minimum. A
+standard reader treats trailing bytes per scanline (`BytesPerLine −
+Width`) as padding; the game does not (see below).
 
 ---
 
@@ -111,8 +113,10 @@ while (decoded < BytesPerLine) {
 }
 ```
 
-After decoding a scan line, **discard the trailing padding** (`BytesPerLine
-− Width` bytes) — those are alignment padding, not visible pixels.
+A standard reader then **discards the trailing padding** (`BytesPerLine
+− Width` bytes). TA 3.1c instead decodes exactly `Width` pixels per row,
+straight on from the header, so any padding becomes the first pixels of
+the next row; a run that crosses the end of a row is clipped there.
 
 > [!IMPORTANT]
 > **Literal bytes with the top two bits set must be RLE-escaped.** A bare
@@ -132,15 +136,47 @@ After the last RLE byte, the file ends with **769 bytes**:
 ```
 
 To find the palette without parsing the RLE, seek to `fileSize - 769`
-and verify the marker. If the marker isn't there, the file uses only the
-header's 16-colour palette (TA does not produce these but some third-party
-PCX tools do).
+and verify the marker. A standard reader without the marker falls back
+to the header's 16-colour palette (kbot's previews use the TA palette).
+**TA 3.1c always takes the last 768 bytes as the palette, marker or
+not,** and refuses a file shorter than 896 bytes (header plus palette).
 
 > [!NOTE]
 > **In a TA install, the embedded palette will usually be the standard
 > TA palette** — but not always. Mission-specific portraits sometimes
 > ship private palettes, and `palettes/guipal.pcx` is a deliberate
 > 1×1-pixel palette carrier with a custom GUI-tuned variant.
+
+---
+
+## What TA 3.1c does with a PCX
+
+The game reads only the manufacturer, version and extent fields of the
+header:
+
+- It loads **version 5** only and refuses a file whose `XMax`/`YMax` is
+  below its minimum or that is shorter than 896 bytes.
+- It ignores `Encoding`, `BitsPerPixel`, `NumPlanes` and `BytesPerLine`:
+  every file is run-length decoded as 8-bit single-plane data, `Width`
+  bytes per row. A 24-bit file therefore shows as garbage and padded
+  rows shift.
+- The palette is the last 768 bytes, whatever precedes them.
+- Backdrops are drawn **opaque**: palette index 0 is ordinary black.
+- Pixel data that ends early does not stop it: it keeps drawing from the
+  last byte it read.
+
+Image editors read such files the standard way, so a mod backdrop can
+look right in an editor (and in kbot's preview) and wrong in the game.
+`kbot pcx describe` ends with a **TA 3.1c** section listing every
+difference (kbot-io's `pcx.Reader.Compat`), the MCP `pcx_describe` tool
+returns it as `game_loads` / `game_issues`, and the asset explorer shows
+it as a badge next to the preview:
+
+```
+TA 3.1c:
+  ⚠ The game will load this file but draw it differently:
+    ⚠ BytesPerLine is 4 but the width is 3: the game ignores BytesPerLine and decodes 3 bytes per row, so the rows shift
+```
 
 ---
 
@@ -191,14 +227,15 @@ to a PNG so you can compare against the reference.
 ## Gotchas
 
 > [!WARNING]
-> **`BytesPerLine` is the encoded length, not the image width.** If
-> `BytesPerLine > Width`, the trailing bytes per row are padding — drop
-> them, do not emit as visible pixels. Several open-source PCX libraries
-> get this wrong and produce a horizontally-stretched image.
+> **Write `BytesPerLine` equal to the width for TA.** A standard reader
+> drops the padding when `BytesPerLine > Width`, but TA 3.1c ignores
+> `BytesPerLine` and decodes `Width` bytes per row, so the padding skews
+> every later row. `kbot pcx describe` warns about it.
 
-- **Always check the `0x0C` marker before trusting the trailing 768
-  bytes.** Files without it use the (almost useless) 16-colour palette
-  in the header.
+- **The game uses the trailing 768 bytes as the palette whether or not
+  the `0x0C` marker precedes them.** Standard readers without the marker
+  fall back to the 16-colour header palette.
+- **Only version 5 loads in TA.**
 - **The header's `PaletteInfo` field is unreliable.** Treat it as advisory
   only; assume colour palettes unless every R==G==B in the embedded
   palette.

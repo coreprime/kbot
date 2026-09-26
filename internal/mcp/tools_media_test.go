@@ -148,3 +148,22 @@ func TestPALLookupToolUsesGameSizes(t *testing.T) {
 		}
 	}
 }
+
+func TestPCXDescribeReportsGameCompat(t *testing.T) {
+	root := mediaRoot(t)
+	r := mediaResolver(t, root)
+	data := make([]byte, 128)
+	data[0], data[1], data[2], data[3] = 0x0A, 3, 1, 8 // version 3
+	data[65], data[66] = 1, 1
+	data = append(data, 0xC1, 7, 0x0C)
+	data = append(data, make([]byte, 768)...)
+	src := writeFile(t, filepath.Join(root, "old.pcx"), data)
+
+	var out pcxDescribeOutput
+	if res := callTool(t, makePCXDescribeHandler(r), "pcx_describe", map[string]any{"path": src}, &out); res.IsError {
+		t.Fatal(textOf(res))
+	}
+	if out.GameLoads || len(out.GameIssues) == 0 {
+		t.Errorf("version 3 file: game_loads=%v issues=%v, want refused", out.GameLoads, out.GameIssues)
+	}
+}
