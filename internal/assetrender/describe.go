@@ -111,17 +111,22 @@ func describeGAF(_ *Renderer, _ string, data []byte, out map[string]any) {
 		OriginY      int    `json:"originY"`
 		Transparency int    `json:"transparency"`
 		Duration     string `json:"duration"`
+		Storage      string `json:"storage"`          // "raw" or "compressed"
+		Layers       int    `json:"layers,omitempty"` // layer count of a composite frame
 	}
 	type seq struct {
 		Index  int     `json:"index"`
 		Name   string  `json:"name"`
+		Loops  bool    `json:"loops"` // false: the game plays the sequence once
 		Frames []frame `json:"frames"`
 	}
 
 	seqs := make([]seq, 0, len(sequences))
 	for i, s := range sequences {
-		sq := seq{Index: i, Name: s.Name}
+		sq := seq{Index: i, Name: s.Name, Loops: s.Loops()}
 		for j, f := range s.Frames {
+			// The game shows a frame for max(duration, 1) ticks of 1/30 s.
+			ticks := f.DisplayTicks()
 			sq.Frames = append(sq.Frames, frame{
 				Index:        j,
 				Width:        int(f.Width),
@@ -129,7 +134,9 @@ func describeGAF(_ *Renderer, _ string, data []byte, out map[string]any) {
 				OriginX:      int(f.OriginX),
 				OriginY:      int(f.OriginY),
 				Transparency: int(f.TransparencyIndex),
-				Duration:     fmt.Sprintf("%d ticks (%.2fs)", f.Duration, float64(f.Duration)/30.0),
+				Duration:     fmt.Sprintf("%d ticks (%.2fs)", ticks, float64(ticks)/gaf.TicksPerSecond),
+				Storage:      f.Storage.String(),
+				Layers:       len(f.Layers),
 			})
 		}
 		seqs = append(seqs, sq)

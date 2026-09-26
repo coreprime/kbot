@@ -39,7 +39,7 @@ function SequenceAccordion({ path, seq, index, transparency, source }) {
              src=${gafApngURL(path, index, '', transparency, source)} alt=${seq.name} />
         <div class="fx-gaf-acc-info">
           <span class="fx-gaf-name">${seq.name || `Sequence ${index}`}</span>
-          <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}</span>
+          <span class="fx-gaf-meta">${frames.length} frame${frames.length !== 1 ? 's' : ''}${first ? ` · ${first.width}×${first.height}` : ''}${seq.loops === false ? ' · plays once' : ''}</span>
         </div>
         <div class="fx-gaf-acc-actions" onClick=${(e) => e.stopPropagation()}>
           <a class="fx-dl" download=${`${stem}_${seqName}.gif`} href=${gafGifURL(path, index, '', transparency, source)} title="Download GIF">⬇ GIF</a>

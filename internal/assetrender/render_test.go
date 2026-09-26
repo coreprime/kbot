@@ -327,3 +327,27 @@ func TestDescribe3DOFollowsTheGame(t *testing.T) {
 		t.Error("truncated model reports counts")
 	}
 }
+
+// TestDescribeGAFReportsLoopAndStorage checks the GAF facts behind the
+// explorer's viewer: whether the game loops each sequence, each frame's
+// storage, and durations as the game shows them (at least one tick).
+func TestDescribeGAFReportsLoopAndStorage(t *testing.T) {
+	var buf bytes.Buffer
+	seqs := []*gaf.Sequence{
+		{Name: "once", Frames: []*gaf.Frame{{Width: 1, Height: 1, Duration: 0, Storage: gaf.StorageRaw, Pixels: []byte{1}}}},
+		{Name: "loop", LoopFlags: 1, Frames: []*gaf.Frame{{Width: 1, Height: 1, Duration: 3, Pixels: []byte{1}}}},
+	}
+	if err := gaf.WriteGAF(&buf, seqs); err != nil {
+		t.Fatal(err)
+	}
+	out, ok := newTestRenderer(t).Describe("anims/x.gaf", buf.Bytes())
+	if !ok {
+		t.Fatal("GAF not described")
+	}
+	got := fmt.Sprintf("%+v", out["sequences"])
+	for _, want := range []string{"Name:once Loops:false", "Name:loop Loops:true", "Duration:1 ticks (0.03s) Storage:raw", "Duration:3 ticks (0.10s) Storage:compressed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("describe lacks %q:\n%s", want, got)
+		}
+	}
+}
