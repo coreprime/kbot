@@ -22,7 +22,7 @@ import (
 // strip for a `rendertype=4` (BITMAP) weapon as a horizontal sprite
 // sheet (PNG) + frame metadata (JSON).
 //
-// ============================== THE HACK ==============================
+// ======================== THE COLOR= SPRITE SLOT =======================
 //
 // In TA's stock data, `rendertype=4` weapons mean "the projectile is a
 // 2D bitmap sprite from anims/fx.gaf."  The TDF `color=` field, which
@@ -33,21 +33,19 @@ import (
 //
 //     color=2;    /* EMG bitmap shell, its a hack */
 //
-// (See weapons/weapons.tdf, [EMG] section.)  We faithfully reproduce
-// the hack so the Peewee's chunky yellow EMG tracer, the Flak Cannon's
-// little plasma puff, etc., look right.
-//
-// Empirically (256-weapon audit of stock TA 3.1c):
+// The game keeps color= as a signed byte and has sprites for five slots
+// only (see fxSpriteSequences):
 //
 //   color=0 / unset → cannonshell  (regular cannon shot - 71 weapons)
 //   color=1         → PlasmaSm     (small yellow plasma - 9 weapons)
 //   color=2         → PlasmaMd     (medium plasma, the EMG sprite - 1)
-//   color=255       → no art       (EARTHQUAKE: `// (No art)`)
+//   color=3         → ultrashell
+//   color=4         → PlasmaSm again
+//   anything else   → no sprite    (EARTHQUAKE's color=255 is -1)
 //
-// Mod weapons may use higher slot indices to reach the other sprites
-// shipped in fx.gaf (ultrashell, blueshot, redshot, flamestream,
-// parablast).  We map those linearly; if a mod author was clever
-// enough to use a high slot, they get a defensible mapping.
+// The game advances the sprite one fx.gaf frame per game tick (30 a
+// second) from the tick the shot is fired, whatever durations the GAF
+// frames carry, so the strip is served with a 33 ms frame time.
 // ======================================================================
 //
 // Endpoint behavior:
@@ -56,29 +54,37 @@ import (
 //   - 404 when:
 //       * the weapon name doesn't resolve to a known TDF section,
 //       * its rendertype isn't 4,
-//       * its color slot maps to "no art" (255 sentinel), or
+//       * its color slot has no sprite (anything but 0..4), or
 //       * the fx.gaf sequence isn't in the VFS.
 //   - caches hits + known-misses indefinitely (the sprite art is
 //     immutable for the lifetime of the server process).
 
-// colorSlotToFxSequence maps the rendertype=4 `color=` field to its
-// fx.gaf sequence name.  Empty string means "no art shipped" (the
-// 255-slot EARTHQUAKE case — the engine plays no projectile sprite,
-// the weapon is invisible mid-flight and lets its impact carry the
-// visual).
-var colorSlotToFxSequence = map[int]string{
+// fxSpriteSequences is the game's table of rendertype=4 projectile sprites,
+// indexed by the weapon's color= slot: the fx.gaf sequence each of the five
+// slots draws.
+var fxSpriteSequences = [...]string{
 	0: "cannonshell",
 	1: "PlasmaSm",
 	2: "PlasmaMd",
-	// Slots 3-7: best-guess linear walk through the remaining fx.gaf
-	// projectile sequences.  Stock TA never uses these, but a mod
-	// author who set color=3 likely meant "the next sprite over."
 	3: "ultrashell",
-	4: "blueshot",
-	5: "redshot",
-	6: "flamestream",
-	7: "parablast",
+	4: "PlasmaSm",
 }
+
+// fxSpriteSequence returns the fx.gaf sequence a rendertype=4 weapon with the
+// given color= value draws, or "" when it draws none. The game keeps color=
+// as a signed byte, so 255 is -1; only slots 0..4 have a sprite (EARTHQUAKE's
+// color=255 flies invisible and lets its impact carry the visual).
+func fxSpriteSequence(color int) string {
+	slot := int(int8(color))
+	if slot < 0 || slot >= len(fxSpriteSequences) {
+		return ""
+	}
+	return fxSpriteSequences[slot]
+}
+
+// fxFrameMs is how long each fx.gaf frame of a projectile sprite shows: one
+// game tick, as the game steps the sprite one frame per tick.
+const fxFrameMs = 33
 
 // weaponBitmapResponse is the JSON shape the client gets.  All metadata
 // the GL renderer needs to set up animated UV sampling lives here so
@@ -90,7 +96,7 @@ type weaponBitmapResponse struct {
 	FrameHeight     int    `json:"frameHeight"`     // one frame's pixel height
 	SheetWidth      int    `json:"sheetWidth"`      // frameWidth * frameCount
 	SheetHeight     int    `json:"sheetHeight"`     // = frameHeight
-	FrameDurationMs int    `json:"frameDurationMs"` // average per-frame duration
+	FrameDurationMs int    `json:"frameDurationMs"` // per-frame time: one 33 ms game tick
 	OriginX         int    `json:"originX"`         // hotspot within each frame, X
 	OriginY         int    `json:"originY"`         // hotspot within each frame, Y
 	Sequence        string `json:"sequence"`        // diagnostic: the fx.gaf sequence name
@@ -151,10 +157,9 @@ func (sess *Session) buildWeaponBitmapJSON(name string) ([]byte, error) {
 		// first, but a defensive error here keeps the contract clean.
 		return nil, fmt.Errorf("weapon is not rendertype=4 bitmap")
 	}
-	colorSlot := sec.Color
-	seqName, ok := colorSlotToFxSequence[colorSlot]
-	if !ok || seqName == "" {
-		return nil, fmt.Errorf("no fx.gaf sequence mapped for color=%d", colorSlot)
+	seqName := fxSpriteSequence(sec.Color)
+	if seqName == "" {
+		return nil, fmt.Errorf("no fx.gaf sprite for color=%d", sec.Color)
 	}
 	resp, err := sess.buildWeaponBitmapSheet(seqName)
 	if err != nil {
@@ -212,7 +217,6 @@ func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapRespon
 	// would visibly jitter as the artist's per-frame origin shifted.
 	var minX, minY, maxX, maxY int16 = 0, 0, 0, 0
 	first := true
-	totalDuration := uint32(0)
 	for _, f := range target.Frames {
 		if f.Width == 0 || f.Height == 0 {
 			continue
@@ -238,7 +242,6 @@ func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapRespon
 				maxY = bottom
 			}
 		}
-		totalDuration += f.Duration
 	}
 	cw := int(maxX - minX)
 	ch := int(maxY - minY)
@@ -288,17 +291,10 @@ func (sess *Session) buildWeaponBitmapSheet(seqName string) (*weaponBitmapRespon
 	if err := png.Encode(&buf, sheet); err != nil {
 		return nil, fmt.Errorf("encode png: %w", err)
 	}
-	// Average per-frame duration in ms.  GAF stores duration in ticks
-	// of TA's animation clock (1/30 sec each).  Most fx.gaf projectile
-	// sequences use 1-2 ticks per frame; averaging keeps mixed-cadence
-	// sequences from playing at the slowest frame's rate.
-	frameMs := 33
-	if frameCount > 0 && totalDuration > 0 {
-		frameMs = int(float64(totalDuration) / float64(frameCount) * (1000.0 / 30.0))
-		if frameMs < 16 {
-			frameMs = 16 // floor at ~60 Hz — anything faster reads as no animation
-		}
-	}
+	// One frame per game tick: the game ignores the GAF frame durations
+	// (fx.gaf's cannonshell frames say 10 ticks each) and steps a flying
+	// sprite one frame every tick from the shot's firing tick.
+	frameMs := fxFrameMs
 	return &weaponBitmapResponse{
 		Sheet:           base64.StdEncoding.EncodeToString(buf.Bytes()),
 		FrameCount:      frameCount,
