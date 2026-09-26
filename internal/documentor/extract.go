@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/coreprime/kbot-io/formats/gamedata/common"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
 	"github.com/coreprime/kbot-io/formats/tdf"
 )
 
@@ -65,57 +66,161 @@ func Extract(flatRoot string, game Game) (*Dataset, error) {
 	return ds, nil
 }
 
-// extractUnits parses every .fbi under units/ in the install.
-func extractUnits(flatRoot string, ds *Dataset) error {
-	dir := filepath.Join(flatRoot, "units")
+// gameOrderFiles lists the files in dir whose extension is ext (ignoring
+// case) in the order the game enumerates loose files: by name with ASCII
+// letters upper-cased. A missing directory lists nothing.
+func gameOrderFiles(dir, ext string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return nil, nil
 		}
+		return nil, err
+	}
+	var files []string
+	for _, ent := range entries {
+		if !ent.IsDir() && strings.EqualFold(filepath.Ext(ent.Name()), ext) {
+			files = append(files, ent.Name())
+		}
+	}
+	sort.Slice(files, func(i, j int) bool { return strings.ToUpper(files[i]) < strings.ToUpper(files[j]) })
+	return files, nil
+}
+
+// catchAll returns the value of key (ignoring case) from a decoded section's
+// catch-all map.
+func catchAll(m map[string]string, key string) string {
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
+// extractUnits decodes every units/*.fbi with the tdf codec, reading the
+// [UNITINFO] section as the game does: a value runs to the next ';', comments
+// are blanked, and numbers are read as their numeric prefix. A file without
+// a UnitName is skipped; when two files name the same unit the first, in the
+// game's listing order, is the one lookups find.
+func extractUnits(flatRoot string, ds *Dataset) error {
+	dir := filepath.Join(flatRoot, "units")
+	files, err := gameOrderFiles(dir, ".fbi")
+	if err != nil {
 		return err
 	}
-	for _, ent := range entries {
-		if ent.IsDir() || !strings.EqualFold(filepath.Ext(ent.Name()), ".fbi") {
-			continue
-		}
-		doc, err := tdf.ParseFile(filepath.Join(dir, ent.Name()))
+	for _, fn := range files {
+		data, err := os.ReadFile(filepath.Join(dir, fn))
 		if err != nil {
+			return err
+		}
+		var fbi ta.Unit
+		if err := tdf.Unmarshal(data, &fbi); err != nil {
 			// Skip malformed FBIs rather than fail the whole run; mods sometimes ship broken files.
 			continue
 		}
-		info := firstSection(doc, "UNITINFO")
-		if info == nil {
+		info := &fbi.Info
+		if info.UnitName == "" {
 			continue
 		}
+		present := func(key string) bool { return info.Meta.Present(key) }
 		u := Unit{
-			File:        ent.Name(),
-			UnitName:    info.String("UnitName"),
-			Side:        strings.ToUpper(info.String("Side")),
-			Name:        info.String("Name"),
-			Description: info.String("Description"),
-			Designation: info.String("Designation"),
-			Objectname:  info.String("Objectname"),
-			Category:    info.String("Category"),
-			TEDClass:    info.String("TEDClass"),
-			BuildMetal:  info.String("BuildCostMetal"),
-			BuildEnergy: info.String("BuildCostEnergy"),
-			MaxDamage:   info.String("MaxDamage"),
-			Weapon1:     strings.ToUpper(strings.TrimSpace(info.String("Weapon1"))),
-			Weapon2:     strings.ToUpper(strings.TrimSpace(info.String("Weapon2"))),
-			Weapon3:     strings.ToUpper(strings.TrimSpace(info.String("Weapon3"))),
-			IsFeature:   info.String("IsFeature"),
-			Commander:   info.String("Commander"),
+			File:        fn,
+			UnitName:    info.UnitName,
+			Side:        strings.ToUpper(info.Side),
+			Name:        info.Name,
+			Description: info.Description,
+			Designation: info.Designation,
+			Objectname:  info.ObjectName,
+			Category:    strings.Join(info.Category, " "),
+			TEDClass:    info.TEDClass,
+			Weapon1:     strings.ToUpper(strings.TrimSpace(info.Weapon1)),
+			Weapon2:     strings.ToUpper(strings.TrimSpace(info.Weapon2)),
+			Weapon3:     strings.ToUpper(strings.TrimSpace(info.Weapon3)),
+			IsFeature:   catchAll(info.Remaining, "isfeature"),
+			Builder:     info.Builder != 0,
+		}
+		if present("buildcostmetal") {
+			u.BuildMetal = strconv.Itoa(info.EffectiveBuildCostMetal())
+		}
+		if present("buildcostenergy") {
+			u.BuildEnergy = strconv.Itoa(info.EffectiveBuildCostEnergy())
+		}
+		if present("maxdamage") {
+			u.MaxDamage = strconv.Itoa(info.MaxDamage)
+		}
+		if present("commander") {
+			u.Commander = strconv.Itoa(info.Commander)
 		}
 		if u.Name == "" {
 			u.Name = u.Designation
 		}
-		ds.Units = append(ds.Units, u)
-		if k := strings.ToUpper(u.UnitName); k != "" {
-			ds.UnitByKey[k] = u
+		k := strings.ToUpper(u.UnitName)
+		if _, dup := ds.UnitByKey[k]; dup {
+			continue
 		}
+		ds.Units = append(ds.Units, u)
+		ds.UnitByKey[k] = u
 	}
 	sort.Slice(ds.Units, func(i, j int) bool { return ds.Units[i].UnitName < ds.Units[j].UnitName })
+	return nil
+}
+
+// extractWeapons builds the game's weapon table: the sections of every .tdf
+// directly in weapons/ (gamedata/weapons.tdf is not a weapon source), read
+// file by file in listing order and placed in the slot their ID names. A
+// section with no usable ID is not loaded and a later section with the same
+// ID replaces an earlier one; both are recorded in ds.WeaponNotes. Each
+// unit's Weapon1/2/3 is then resolved through the table the way the game
+// resolves it (the lowest slot whose name matches, ignoring case), into
+// ds.WeaponRefs.
+func extractWeapons(flatRoot string, ds *Dataset) error {
+	dir := filepath.Join(flatRoot, "weapons")
+	files, err := gameOrderFiles(dir, ".tdf")
+	if err != nil {
+		return err
+	}
+	table := ta.NewWeaponTable()
+	for _, fn := range files {
+		if !ta.IsWeaponFile("weapons/" + fn) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, fn))
+		if err != nil {
+			return err
+		}
+		var weapons []ta.Weapon
+		if err := tdf.Unmarshal(data, &weapons); err != nil {
+			ds.WeaponNotes = append(ds.WeaponNotes, fmt.Sprintf("%s: %v", fn, err))
+			continue
+		}
+		table.Add(fn, weapons)
+	}
+	for _, w := range table.Warnings {
+		ds.WeaponNotes = append(ds.WeaponNotes, w.String())
+	}
+
+	for id, tw := range table.Slots {
+		if tw == nil {
+			continue
+		}
+		w := weaponRow(tw, id, table.Files[id])
+		ds.Weapons = append(ds.Weapons, w)
+		if key := strings.ToUpper(w.NameKey); key != "" {
+			if _, dup := ds.WeaponByKey[key]; !dup {
+				ds.WeaponByKey[key] = w
+			}
+		}
+	}
+
+	ds.WeaponRefs = map[string]string{}
+	for _, u := range ds.Units {
+		for _, ref := range u.Weapons() {
+			if tw, _ := table.Find(ref); tw != nil {
+				ds.WeaponRefs[ref] = strings.ToUpper(tw.Key)
+			}
+		}
+	}
 	return nil
 }
 
@@ -124,196 +229,179 @@ var archetypeFlags = []string{
 	"selfprop", "twophase", "burnblow", "waterweapon", "noexplode",
 }
 
-// extractWeapons parses every weapon TDF the engine would see.
-func extractWeapons(flatRoot string, ds *Dataset) error {
-	paths := []string{}
-	wdir := filepath.Join(flatRoot, "weapons")
-	if entries, err := os.ReadDir(wdir); err == nil {
-		for _, ent := range entries {
-			if ent.IsDir() || !strings.EqualFold(filepath.Ext(ent.Name()), ".tdf") {
-				continue
-			}
-			paths = append(paths, filepath.Join(wdir, ent.Name()))
+// weaponRow turns one slot of the game's weapon table into a catalogue row,
+// showing the values the game uses (a weapon with no range key has range
+// 32767).
+func weaponRow(tw *ta.Weapon, id int, file string) Weapon {
+	present := func(key string) bool { return tw.Meta.Present(key) }
+	num := func(key string, v float64) string {
+		if !present(key) {
+			return ""
 		}
-	} else if !os.IsNotExist(err) {
-		return err
+		return strconv.FormatFloat(v, 'f', -1, 64)
 	}
-	sort.Strings(paths)
-	// gamedata/weapons.tdf is the engine's reference doc; treat as another source.
-	if gw := filepath.Join(flatRoot, "gamedata", "weapons.tdf"); fileExists(gw) {
-		paths = append(paths, gw)
+	w := Weapon{
+		File:     file,
+		NameKey:  tw.Key,
+		Display:  tw.Name,
+		ID:       strconv.Itoa(id),
+		Range:    strconv.Itoa(tw.EffectiveRange()),
+		Reload:   num("reloadtime", tw.ReloadTime),
+		Velocity: num("weaponvelocity", tw.WeaponVelocity),
+		AOE:      num("areaofeffect", float64(tw.AreaOfEffect)),
 	}
-	seen := make(map[string]bool)
-	for _, p := range paths {
-		doc, err := tdf.ParseFile(p)
-		if err != nil {
-			continue
-		}
-		for _, sec := range doc.Sections() {
-			key := strings.ToUpper(strings.TrimSpace(sec.Name()))
-			if key == "" || seen[key] {
-				continue
-			}
-			seen[key] = true
-			w := Weapon{
-				File:          filepath.Base(p),
-				NameKey:       sec.Name(),
-				Display:       sec.String("name"),
-				ID:            trimSemi(sec.String("ID")),
-				Range:         trimSemi(sec.String("range")),
-				Reload:        trimSemi(sec.String("reloadtime")),
-				Velocity:      trimSemi(sec.String("weaponvelocity")),
-				AOE:           trimSemi(sec.String("areaofeffect")),
-				DefaultDamage: damageDefault(sec),
-				RenderType:    trimSemi(sec.String("rendertype")),
-			}
-			for _, flag := range archetypeFlags {
-				if v := strings.TrimSpace(strings.TrimRight(sec.String(flag), ";")); v != "" && v != "0" {
-					w.Archetypes = append(w.Archetypes, flag)
-				}
-			}
-			ds.Weapons = append(ds.Weapons, w)
-			ds.WeaponByKey[key] = w
+	if present("rendertype") {
+		w.RenderType = strconv.Itoa(tw.RenderType)
+	}
+	for k := range tw.Damage {
+		if strings.EqualFold(k, "default") {
+			w.DefaultDamage = strconv.Itoa(tw.EffectiveDamage(""))
 		}
 	}
-	return nil
+	flags := map[string]int{
+		"ballistic": tw.Ballistic, "lineofsight": tw.LineOfSight, "dropped": tw.Dropped,
+		"beamweapon": tw.BeamWeapon, "guidance": tw.Guidance, "selfprop": tw.SelfProp,
+		"twophase": tw.TwoPhase, "burnblow": tw.BurnBlow, "waterweapon": tw.WaterWeapon,
+		"noexplode": tw.NoExplode,
+	}
+	for _, flag := range archetypeFlags {
+		if flags[flag] != 0 {
+			w.Archetypes = append(w.Archetypes, flag)
+		}
+	}
+	return w
 }
 
-// damageDefault digs out [DAMAGE].default for a weapon, if present.
-func damageDefault(sec *tdf.Section) string {
-	for _, sub := range sec.Sections() {
-		if strings.EqualFold(sub.Name(), "DAMAGE") {
-			return trimSemi(sub.String("default"))
-		}
-	}
-	return ""
-}
-
-// extractBuildData reads sidedata.tdf [CANBUILD] + every download/*.tdf [MENUENTRY].
+// extractBuildData reads the build menus the way the game assembles them.
+//
+// The first [CANBUILD] section of gamedata/sidedata.tdf gives each unit with
+// Builder=1 its list: canbuild1, canbuild2, ... up to the first missing key,
+// names that match no unit skipped, at most 30 (CanBuildBuilder.BuildList).
+// Each download/*.tdf then adds entries from its first five sections,
+// whatever their names (DownloadFile.Menus): an entry counts when its
+// UNITMENU names a builder and its UNITNAME a unit, and a builder's list
+// holds at most 31 units in all. What the game leaves out is recorded in
+// ds.Build.Notes.
 func extractBuildData(flatRoot string, ds *Dataset) error {
-	sidePath := filepath.Join(flatRoot, "gamedata", "sidedata.tdf")
-	if fileExists(sidePath) {
-		doc, err := tdf.ParseFile(sidePath)
-		if err == nil {
-			canbuild := doc.Section("CANBUILD")
-			if canbuild != nil {
-				for _, sub := range canbuild.Sections() {
-					name := strings.ToUpper(sub.Name())
-					units := []string{}
-					// Iterate canbuild1..canbuildN in numeric order until a gap.
-					for i := 1; ; i++ {
-						key := fmt.Sprintf("canbuild%d", i)
-						v := strings.ToUpper(strings.TrimSpace(sub.String(key)))
-						if v == "" {
-							// Allow gaps up to 50 (sometimes a builder skips a slot).
-							gap := false
-							for j := i + 1; j <= i+50; j++ {
-								if w := strings.ToUpper(strings.TrimSpace(sub.String(fmt.Sprintf("canbuild%d", j)))); w != "" {
-									gap = true
-									break
-								}
-							}
-							if !gap {
-								break
-							}
-							i = nextSlotIndex(sub, i)
-							continue
-						}
-						units = append(units, v)
-					}
-					ds.Build.CanBuild[name] = units
-				}
-			}
+	known := func(name string) bool {
+		_, ok := ds.UnitByKey[strings.ToUpper(name)]
+		return ok
+	}
+	isBuilder := map[string]bool{}
+	for _, u := range ds.Units {
+		if u.Builder {
+			isBuilder[strings.ToUpper(u.UnitName)] = true
 		}
 	}
+	count := map[string]int{}
 
-	downloads := filepath.Join(flatRoot, "download")
-	if entries, err := os.ReadDir(downloads); err == nil {
-		var files []string
-		for _, ent := range entries {
-			if ent.IsDir() || !strings.EqualFold(filepath.Ext(ent.Name()), ".tdf") {
-				continue
+	sidePath := filepath.Join(flatRoot, "gamedata", "sidedata.tdf")
+	if data, err := os.ReadFile(sidePath); err == nil {
+		var sd ta.SideData
+		if err := tdf.Unmarshal(data, &sd); err != nil {
+			ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf("gamedata/sidedata.tdf: %v", err))
+		} else {
+			for _, u := range ds.Units {
+				b := sd.CanBuild.Builder(u.UnitName)
+				if b == nil {
+					continue
+				}
+				name := strings.ToUpper(u.UnitName)
+				if !u.Builder {
+					ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+						"[CANBUILD/%s] %s has no Builder=1; the game reads no list for it", b.Name, name))
+					continue
+				}
+				units := []string{}
+				listed := func(v string) bool {
+					if known(v) {
+						return true
+					}
+					ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+						"[CANBUILD/%s] %s names no unit; the game skips it", b.Name, v))
+					return false
+				}
+				for _, v := range b.BuildList(listed) {
+					units = append(units, strings.ToUpper(v))
+				}
+				ds.Build.CanBuild[name] = units
+				count[name] = len(units)
 			}
-			files = append(files, ent.Name())
-		}
-		sort.Strings(files)
-		for _, fn := range files {
-			if err := parseMenuEntries(filepath.Join(downloads, fn), fn, ds); err != nil {
-				return err
+			for _, w := range sd.Check() {
+				if strings.HasPrefix(strings.ToUpper(w.Section), "CANBUILD") {
+					ds.Build.Notes = append(ds.Build.Notes, w.String())
+				}
 			}
 		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return nil
-}
 
-// nextSlotIndex jumps forward past a gap in canbuild numbering, returning the
-// next index that has content.
-func nextSlotIndex(sub *tdf.Section, from int) int {
-	for j := from + 1; j <= from+50; j++ {
-		if w := strings.ToUpper(strings.TrimSpace(sub.String(fmt.Sprintf("canbuild%d", j)))); w != "" {
-			return j - 1 // outer loop will ++ and land on j
-		}
-	}
-	return from + 50
-}
-
-// menuEntryRe extracts a single [MENUENTRY] body.
-var menuEntryRe = regexp.MustCompile(`(?si)\[MENUENTRY\d*\]\s*\{(.*?)\}`)
-
-// fieldRe extracts KEY=VALUE; ensuring KEY is at a word boundary so MENU doesn't match UNITMENU.
-var fieldReTemplate = `(?i)(?:^|[^A-Za-z_])%s\s*=\s*([^;]+);`
-
-// parseMenuEntries reads one download/*.tdf and appends every entry to ds.
-func parseMenuEntries(path, baseName string, ds *Dataset) error {
-	data, err := os.ReadFile(path)
+	dir := filepath.Join(flatRoot, "download")
+	files, err := gameOrderFiles(dir, ".tdf")
 	if err != nil {
 		return err
 	}
-	text := stripComments(string(data))
-	matches := menuEntryRe.FindAllStringSubmatch(text, -1)
-	for _, m := range matches {
-		body := m[1]
-		builder := strings.ToUpper(strings.TrimSpace(extractField(body, "UNITMENU")))
-		unit := strings.ToUpper(strings.TrimSpace(extractField(body, "UNITNAME")))
-		if builder == "" || unit == "" {
+	for _, fn := range files {
+		data, err := os.ReadFile(filepath.Join(dir, fn))
+		if err != nil {
+			return err
+		}
+		var df common.DownloadFile
+		if err := tdf.Unmarshal(data, &df); err != nil {
+			ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf("download/%s: %v", fn, err))
 			continue
 		}
-		menu, _ := strconv.Atoi(strings.TrimSpace(extractField(body, "MENU")))
-		button, _ := strconv.Atoi(strings.TrimSpace(extractField(body, "BUTTON")))
-		ds.Build.MenuEntries = append(ds.Build.MenuEntries, MenuEntry{
-			Builder: builder,
-			Menu:    menu,
-			Button:  button,
-			Unit:    unit,
-			Source:  baseName,
-		})
+		if extra := len(df.Entries) - common.DownloadMenuLimit; extra > 0 {
+			ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+				"download/%s: %d section%s after the first %d; the game reads only the first %d",
+				fn, extra, plural(extra), common.DownloadMenuLimit, common.DownloadMenuLimit))
+		}
+		for _, e := range df.Menus() {
+			builder := strings.ToUpper(e.UnitMenu)
+			unit := strings.ToUpper(e.UnitName)
+			switch {
+			case !known(builder):
+				ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+					"download/%s [%s]: UNITMENU %q names no unit; the game ignores the entry", fn, e.Key, e.UnitMenu))
+				continue
+			case !known(unit):
+				ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+					"download/%s [%s]: UNITNAME %q names no unit; the game adds nothing", fn, e.Key, e.UnitName))
+				continue
+			case !isBuilder[builder]:
+				ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+					"download/%s [%s]: %s has no Builder=1, so it has no build list to add %s to", fn, e.Key, builder, unit))
+				continue
+			case count[builder] >= common.BuildListLimit:
+				ds.Build.Notes = append(ds.Build.Notes, fmt.Sprintf(
+					"download/%s [%s]: %s's build list already holds %d units; the game drops %s",
+					fn, e.Key, builder, common.BuildListLimit, unit))
+				continue
+			}
+			count[builder]++
+			ds.Build.MenuEntries = append(ds.Build.MenuEntries, MenuEntry{
+				Builder: builder,
+				Menu:    int(uint8(e.Menu)),
+				Button:  int(uint8(e.Button)),
+				Unit:    unit,
+				Source:  fn,
+			})
+		}
 	}
 	return nil
 }
 
-func extractField(body, key string) string {
-	re := regexp.MustCompile(fmt.Sprintf(fieldReTemplate, regexp.QuoteMeta(key)))
-	m := re.FindStringSubmatch(body)
-	if len(m) < 2 {
+func plural(n int) string {
+	if n == 1 {
 		return ""
 	}
-	return m[1]
+	return "s"
 }
 
-var (
-	lineCommentRe  = regexp.MustCompile(`(?m)//.*?$`)
-	blockCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/`)
-)
-
-func stripComments(s string) string {
-	s = lineCommentRe.ReplaceAllString(s, "")
-	s = blockCommentRe.ReplaceAllString(s, "")
-	return s
-}
-
-// buildSlots merges CanBuild + MenuEntries into ds.Build.Slots.
+// buildSlots merges CanBuild + MenuEntries into ds.Build.Slots: a CANBUILD
+// entry's position follows from its index in the list, a download entry
+// sits on its MENU page at its BUTTON.
 func buildSlots(ds *Dataset) {
 	for builder, units := range ds.Build.CanBuild {
 		for i, unit := range units {
@@ -362,8 +450,3 @@ func firstSection(doc *tdf.Document, names ...string) *tdf.Section {
 }
 
 func trimSemi(s string) string { return strings.TrimRight(strings.TrimSpace(s), ";") }
-
-func fileExists(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
-}

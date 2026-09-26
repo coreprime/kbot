@@ -14,9 +14,12 @@ func registerTDFTools(s *server.MCPServer, r *Resolver) {
 	s.AddTool(
 		mcplib.NewTool("tdf_parse",
 			mcplib.WithDescription(
-				"Parse a TDF/FBI/OTA text data file into a structured JSON tree. "+
+				"Parse a TDF/FBI/OTA text data file into a structured JSON tree, "+
+					"read the way TA 3.1c reads it: comments (// and /* */) are blanked, "+
+					"a value runs to the next ';', and one-line [NAME] {} sections count. "+
 					"Section names are returned in their original case; field "+
-					"order matches the source.",
+					"order matches the source. diagnostics lists text the game reads "+
+					"differently from how it looks (a missing ';', a duplicate key, ...).",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -42,9 +45,10 @@ type tdfField struct {
 }
 
 type tdfOutput struct {
-	Path     string       `json:"path"`
-	Source   string       `json:"source,omitempty"`
-	Sections []tdfSection `json:"sections"`
+	Path        string       `json:"path"`
+	Source      string       `json:"source,omitempty"`
+	Sections    []tdfSection `json:"sections"`
+	Diagnostics []string     `json:"diagnostics,omitempty"`
 }
 
 func makeTDFParseHandler(r *Resolver) server.ToolHandlerFunc {
@@ -67,6 +71,9 @@ func makeTDFParseHandler(r *Resolver) server.ToolHandlerFunc {
 		out := tdfOutput{Path: rf.displayPath(), Source: rf.Source}
 		for _, s := range doc.Sections() {
 			out.Sections = append(out.Sections, convertTDFSection(s))
+		}
+		for _, d := range doc.Diagnostics() {
+			out.Diagnostics = append(out.Diagnostics, d.String())
 		}
 		return jsonResult(out)
 	}

@@ -25,8 +25,18 @@ func NewCommand() *cobra.Command {
 github.com/coreprime/reference-ta and github.com/coreprime/reference-tak
 repos.
 
-The command walks a flattened game install, parses every FBI/TDF, and
-renders three markdown files plus (for TA) the unit portrait PNGs.
+The command walks a flattened game install, decodes the FBIs and TDFs
+with kbot-io's codec, and renders three markdown files plus (for TA) the
+unit portrait PNGs.
+
+For TA the catalogue follows the game's rules: weapons come only from the
+.tdf files directly in weapons/ (not gamedata/weapons.tdf), placed in the
+game's 256-slot table by ID and resolved from each unit's Weapon1/2/3;
+[CANBUILD] lists apply only to units with Builder=1, stop at the first gap
+in the canbuildN numbering, skip names that match no unit and keep 30;
+each download/*.tdf adds its first five sections, whatever their names;
+a build menu holds at most 31 units. Entries the game leaves out are
+listed at the end of ta-weapons.md and ta-buildtree.md.
 
 For Total Annihilation (--game totala, default):
 

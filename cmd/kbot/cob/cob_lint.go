@@ -29,19 +29,20 @@ func newCobLintCommand() *cobra.Command {
 		Long: `Run static analysis on COB bytecode files to detect potential issues
 such as unused pieces, dead code, invalid script calls, and more.
 
+Every COB that does not declare the TA: Kingdoms version (6) is also
+checked against what TA 3.1c runs (the ta-* rules below, all errors):
+the game faults on TA: Kingdoms instructions, on words it does not run
+and on PUSH/POP flags it does not accept, and corrupts the script's
+stack beyond 32 slots. A file that does not load is reported as a
+malformed-cob error.
+
 When given a directory, all .cob files in it are linted.  When no
 argument is given (and --stream is not used), the active kbot context
 is linted (see 'kbot ctx').  --ci emits SARIF 2.1.0 JSON on stdout
 for ingest by GitHub, GitLab, Harness and other code-scanning UIs.
 
 Rules:
-  unused-piece     Piece declared but never used by any animation command
-  unused-static    Global variable declared but never read or written
-  unused-local     Local variable allocated but never accessed
-  always-true      Redundant condition (if/while with constant 1)
-  dead-code        Impossible condition (if/while with constant 0)
-  long-function    Function exceeds 100 instruction-lines
-  invalid-call     call-script/start-script references non-existent function`,
+` + cobLintRulesHelp(),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stream {
@@ -116,15 +117,7 @@ func lintPath(path string, quiet, verbose, ciMode bool) error {
 			continue
 		}
 
-		cob, err := scripting.LoadFromReader(bytes.NewReader(data))
-		if err != nil {
-			if !ciMode {
-				fmt.Fprintf(os.Stderr, "  ⚠ %s: parse error: %v\n", filepath.Base(f), err)
-			}
-			continue
-		}
-
-		diags := l.Lint(cob)
+		diags := lintCOBBytes(l, data)
 		totalFiles++
 		totalDiags += len(diags)
 
@@ -195,13 +188,7 @@ func lintStream(quiet, verbose, ciMode bool) error {
 		return err
 	}
 
-	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("parse error: %w", err)
-	}
-
-	l := linter.New()
-	diags := l.Lint(cob)
+	diags := lintCOBBytes(linter.New(), data)
 
 	if ciMode {
 		var results []cli.SARIFResult
@@ -247,18 +234,76 @@ func plural(n int) string {
 	return "s"
 }
 
-// cobLintRuleCatalogue is the rule list the cob-lint SARIF run
-// advertises.  Mirrors the rules listed in the command help text.
-func cobLintRuleCatalogue() []cli.SARIFRule {
-	return []cli.SARIFRule{
-		cli.SARIFShortRule("cob.unused-piece", "Piece declared but never used by any animation command."),
-		cli.SARIFShortRule("cob.unused-static", "Global variable declared but never read or written."),
-		cli.SARIFShortRule("cob.unused-local", "Local variable allocated but never accessed."),
-		cli.SARIFShortRule("cob.always-true", "Redundant condition (if/while with constant 1)."),
-		cli.SARIFShortRule("cob.dead-code", "Impossible condition (if/while with constant 0)."),
-		cli.SARIFShortRule("cob.long-function", "Function exceeds 100 instruction-lines."),
-		cli.SARIFShortRule("cob.invalid-call", "call-script / start-script references a non-existent function."),
+// cobLintRule describes one rule of linter.DefaultRules for the help text
+// and the SARIF rule catalogue.
+type cobLintRule struct {
+	name, summary string
+}
+
+// cobLintRules lists every rule 'kbot cob lint' runs, in the order the help
+// text shows them. TestCobLintRulesCoverDefaultRules keeps it in step with
+// kbot-io's linter.DefaultRules.
+var cobLintRules = []cobLintRule{
+	{"unused-piece", "Piece declared but never used by any animation command."},
+	{"unused-static", "Global variable declared but never read or written."},
+	{"unused-local", "Local variable allocated but never accessed."},
+	{"always-true", "Redundant condition (if/while with constant 1)."},
+	{"dead-code", "Impossible condition (if/while with constant 0)."},
+	{"long-function", "Function exceeds 100 instruction-lines."},
+	{"high-complexity", "Function's cyclomatic complexity exceeds 15."},
+	{"invalid-call", "call-script / start-script references a non-existent function."},
+	{"speed-zero", "move/turn with speed <0>; the animation never completes."},
+	{"empty-function", "Function body is only return 0."},
+	{"duplicate-animation", "Two identical animation commands back to back."},
+	{"sleep-only-guard", "if block that contains nothing but sleep."},
+	{"duplicate-if", "Two if statements with the same condition in a row."},
+	{"raw-signal", "signal / set-signal-mask with a raw number instead of a named constant."},
+	{"unnamed-global", "Statics still named global_N."},
+	{"signal-never-signalled", "Script masks a signal no script sends."},
+	{"recursive-call", "call-script cycle."},
+	{"duplicate-function", "Two scripts share a name; the game only calls the first."},
+	{"malformed-cob", "File does not load, a script's code is truncated, or the reader tolerated damaged tables."},
+	{"ta-kingdoms-opcode", "TA: Kingdoms instruction (PLAY_SOUND, MISSION_COMMAND, TAK_MATH_*) in a TA script; TA faults on it."},
+	{"ta-unknown-opcode", "Opcode word no game runs; the script faults there."},
+	{"ta-push-flags", "PUSH/POP flag the game faults on (PUSH takes 1, 2 or 4; POP takes 2 or 4)."},
+	{"ta-stack-limit", "More than the game's 32 stack slots (locals plus pending values)."},
+	{"ta-get-arguments", "GET with fewer than 5 pending values; it takes the rest from the function's locals."},
+	{"ta-stack-underflow", "Instruction pops more values than are pending, or paths join with different stack depths."},
+	{"ta-discard-call", "DISCARD_CALL (0x10063000) with more than 4 arguments; the game's buffer holds 4."},
+}
+
+// cobLintRulesHelp renders cobLintRules as the help text's rule table.
+func cobLintRulesHelp() string {
+	var b strings.Builder
+	for _, r := range cobLintRules {
+		fmt.Fprintf(&b, "  %-23s %s\n", r.name, r.summary)
 	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// cobLintRuleCatalogue is the rule list the cob-lint SARIF run
+// advertises: every rule in cobLintRules, prefixed "cob.".
+func cobLintRuleCatalogue() []cli.SARIFRule {
+	out := make([]cli.SARIFRule, 0, len(cobLintRules))
+	for _, r := range cobLintRules {
+		out = append(out, cli.SARIFShortRule("cob."+r.name, r.summary))
+	}
+	return out
+}
+
+// lintCOBBytes loads a COB and lints it with l. A file that does not load
+// yields a single malformed-cob error instead of being skipped, so a
+// directory run and its SARIF output account for it.
+func lintCOBBytes(l *linter.Linter, data []byte) []linter.Diagnostic {
+	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
+	if err != nil {
+		return []linter.Diagnostic{{
+			Rule:     "malformed-cob",
+			Severity: linter.Error,
+			Message:  fmt.Sprintf("the file does not load: %v", err),
+		}}
+	}
+	return l.Lint(cob)
 }
 
 // cobDiagnosticToSARIF converts a single linter diagnostic to a

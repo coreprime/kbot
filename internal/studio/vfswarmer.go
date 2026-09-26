@@ -69,7 +69,8 @@ func (sess *Session) runVFSWarm() {
 		wg.Add(1)
 		q.Submit(priorityLow, func() {
 			defer wg.Done()
-			cached := sess.warmOne(f)
+			var cached int64
+			recoverAsset("warm-up", f.path, func() { cached = sess.warmOne(f) })
 			st.cached.Add(cached)
 			processed := st.processed.Add(1)
 			sess.vfsEvents.publish(vfsWarmEvent{
@@ -154,6 +155,9 @@ func warmFileType(ext string, videoOK bool) string {
 func (sess *Session) warmOne(f vfsWarmFile) int64 {
 	data, err := sess.vfs.ReadFile(f.path)
 	if err != nil {
+		return 0
+	}
+	if err := warmSizeCheck(f.fileType, f.path, data); err != nil {
 		return 0
 	}
 

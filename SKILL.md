@@ -185,7 +185,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 |---|---|---|---|
 | `cob_decompile` | `path` | — | BOS source text |
 | `cob_disassemble` | `path` | `script` (single function name), `annotated` (bool, default false) | assembly listing text |
-| `cob_lint` | `path` (file or dir) | — | JSON `{diagnostics: [{file, rule, severity, script, line, message}], summary: {rule: count}, files_linted, has_errors}` |
+| `cob_lint` | `path` (file or dir) | — | JSON `{diagnostics: [{file, rule, severity, script, line, message}], summary: {rule: count}, files_linted, has_errors}`. Includes the TA 3.1c compatibility rules (`ta-*`, errors) for every COB not declaring version 6; a file that does not load is a `malformed-cob` error |
 | `cob_info` | `path` | — | JSON `{path, version, num_scripts, num_pieces, num_statics, script_names, piece_names, code_bytes}` — fast, no decompile |
 | `hpi_list` | `path` | `pattern` (glob, e.g. `'*.fbi'`) | file listing |
 | `hpi_info` | `path` | — | header + content summary (version, file count, compression ratio) |
@@ -194,7 +194,7 @@ Exposed when running `kbot mcp`. All `path` and `output` arguments are validated
 | `gaf_export` | `path`, `output` | `sequence` (index, default 0), `format` (`png` = APNG default, `gif`), `transparency` (`game`, the default, or `heuristic` by default for a TA: Kingdoms game-data folder; `none`) | path to rendered image |
 | `pcx_describe` | `path` | — | version, encoding, dimensions, bit depth, plane count, DPI, colour-type, `game_loads` and `game_issues` (what TA 3.1c does with the file) |
 | `pcx_convert` | `path`, `output` | `format` (`png`/`gif`/`bmp`; inferred from extension when omitted) | path to converted image |
-| `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order |
+| `tdf_parse` | `path` | — | structured JSON tree preserving section name case and field order, read with the game's grammar, plus `diagnostics` for text the game reads differently |
 | `tnt_describe` | `path` | — | JSON header summary, tile/feature counts, elevation stats, top features |
 | `tnt_image` | `path`, `output` | — | RGBA PNG render of the tile grid |
 | `tnt_preview` | `path`, `output` | — | RGBA PNG with feature sprites + numbered StartPos markers (needs a game-data folder; falls back to bare tile render otherwise). JSON result includes `sprites_painted`, `sprites_missing`, `start_positions`, `sister_ota_found`, `overlay_applied`. |
@@ -255,7 +255,7 @@ When adding format support: parsers and writers live under `formats/<ext>/`; CLI
 ```bash
 kbot cob info  units/ARMCOM.cob          # quick metadata, no decompile
 kbot cob decompile units/ARMCOM.cob      # full BOS source
-kbot cob lint  units/ARMCOM.cob          # static analysis
+kbot cob lint  units/ARMCOM.cob          # static analysis + TA 3.1c compatibility
 ```
 
 ### Get a flat working copy of a TA install

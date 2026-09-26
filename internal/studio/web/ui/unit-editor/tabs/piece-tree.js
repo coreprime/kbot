@@ -27,7 +27,7 @@ import { signal } from '@preact/signals'
 import { useState, useEffect, useRef } from 'preact/hooks'
 import { htm as html } from '@coreprime/kbot-ui/htm-bind'
 import { mv, runtimeTick } from '/ui/common/inspector-store.js'
-import { TA_TURNS_PER_CIRCLE } from '/engine/cob-opcodes.js'
+import { TA_TURNS_PER_CIRCLE } from '/engine/ta-scale.js'
 
 // _model — the active unit's geometry (model.root piece tree).  Host
 // sets this when a unit loads via setPieceTreeModel(); decoupled from

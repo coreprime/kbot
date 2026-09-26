@@ -23,6 +23,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/tnt"
 	"github.com/coreprime/kbot/internal/gamevfs"
 	"github.com/coreprime/kbot/internal/mapmeta"
+	"github.com/coreprime/kbot/internal/aiprofile"
 )
 
 // init registers the heavier structured / script-analysis describers. Keeping
@@ -77,6 +78,17 @@ func diagsToJSON(diags []linter.Diagnostic) ([]lintDiag, map[string]int) {
 func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
 	cob, err := scripting.LoadFromReader(bytes.NewReader(data))
 	if err != nil {
+		// A COB the reader rejects (tables past the end of the file, …) is
+		// still a COB: show why in the Lint tab rather than as an unknown file.
+		out["format"] = "COB"
+		out["error"] = err.Error()
+		results, summary := diagsToJSON([]linter.Diagnostic{{
+			Rule:     "malformed-cob",
+			Severity: linter.Error,
+			Message:  "the file does not load: " + err.Error(),
+		}})
+		out["lintResults"] = results
+		out["lintSummary"] = summary
 		return
 	}
 	out["format"] = "COB"
@@ -120,41 +132,28 @@ func describeCOB(_ *Renderer, _ string, data []byte, out map[string]any) {
 	}
 }
 
-// describeAI parses a TA / TA: Kingdoms bot profile into its per-difficulty
-// plans (unit weights and build limits) for the AI plan view.
-func describeAI(_ *Renderer, _ string, data []byte, out map[string]any) {
-	aiFile, err := ai.Parse(data)
-	if err != nil {
-		return
+// describeAI parses a TA / TA: Kingdoms computer-player profile for the AI
+// viewer: its plans, the lines before the first plan (which TA ignores when a
+// game starts), each target labelled unit, category or ALL against the
+// install's unit table, the parser's notes on lines the game reads
+// differently from how they look, and the settings each difficulty leaves
+// the units with.
+func describeAI(r *Renderer, _ string, data []byte, out map[string]any) {
+	var units []ai.Unit
+	if r != nil {
+		units = aiprofile.Units(r.vfs)
 	}
+	p := aiprofile.Build(data, units)
 	out["format"] = "AI Profile"
-
-	type weight struct {
-		Unit   string  `json:"unit"`
-		Weight float64 `json:"weight"`
+	out["aiPlans"] = p.Plans
+	if p.Preamble != nil {
+		out["aiPreamble"] = p.Preamble
 	}
-	type limit struct {
-		Unit    string `json:"unit"`
-		Maximum int    `json:"maximum"`
+	out["aiDiagnostics"] = p.Diagnostics
+	out["aiUnitsKnown"] = p.UnitsKnown
+	if p.Effective != nil {
+		out["aiEffective"] = p.Effective
 	}
-	type plan struct {
-		Name    string   `json:"name"`
-		Weights []weight `json:"weights"`
-		Limits  []limit  `json:"limits"`
-	}
-
-	plans := make([]plan, 0, len(aiFile.Plans))
-	for _, p := range aiFile.Plans {
-		pl := plan{Name: p.Name, Weights: make([]weight, 0, len(p.Weights)), Limits: make([]limit, 0, len(p.Limits))}
-		for _, w := range p.Weights {
-			pl.Weights = append(pl.Weights, weight{Unit: w.UnitName, Weight: w.Weight})
-		}
-		for _, l := range p.Limits {
-			pl.Limits = append(pl.Limits, limit{Unit: l.UnitName, Maximum: l.Maximum})
-		}
-		plans = append(plans, pl)
-	}
-	out["aiPlans"] = plans
 }
 
 func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
@@ -197,15 +196,42 @@ func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
 			out["lintError"] = fmt.Sprintf("preprocessing failed: %v", err)
 			return
 		}
-		cob, err := compiler.NewCompiler(processed).Compile()
+		comp := compiler.NewCompiler(processed)
+		cob, err := comp.Compile()
 		if err != nil {
 			out["lintError"] = fmt.Sprintf("compilation failed: %v", err)
 			return
 		}
-		results, summary := diagsToJSON(linter.New().Lint(cob))
+		results, summary := diagsToJSON(bosLintDiagnostics(comp.Warnings(), linter.New().Lint(cob)))
 		out["lintResults"] = results
 		out["lintSummary"] = summary
 	}
+}
+
+// bosLintDiagnostics lists a compiled BOS file's problems once each: the
+// compiler's warnings (such as % under .version 6) first, then the linter's
+// findings (the style rules and, for a TA script, the TA 3.1c compatibility
+// rules). A function defined twice is both a compiler warning and the
+// linter's duplicate-function finding; only the linter's, which carries the
+// line, is kept.
+func bosLintDiagnostics(compilerWarnings []string, lint []linter.Diagnostic) []linter.Diagnostic {
+	var dupPrefixes []string
+	for _, d := range lint {
+		if d.Rule == "duplicate-function" && d.Script != "" {
+			dupPrefixes = append(dupPrefixes, "function "+d.Script+" is defined more than once")
+		}
+	}
+	diags := make([]linter.Diagnostic, 0, len(compilerWarnings)+len(lint))
+warnings:
+	for _, w := range compilerWarnings {
+		for _, p := range dupPrefixes {
+			if strings.HasPrefix(w, p) {
+				continue warnings
+			}
+		}
+		diags = append(diags, linter.Diagnostic{Rule: "compiler", Severity: linter.Warning, Message: w})
+	}
+	return append(diags, lint...)
 }
 
 // describeBOSCallGraph extracts a BOS file's call/signal graph. It prefers a

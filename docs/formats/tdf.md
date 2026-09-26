@@ -268,11 +268,16 @@ entry), but the engine reads every `*.tdf` in `download/`, so the
 filename is purely a hint to the modder. One unit per file is the
 norm.
 
-**Multiple entries.** A single file can hold any number of
-`[MENUENTRY<N>]` sections — Cavedog's `download/Armfort.tdf` uses
-three to make the Arm Fortification Wall buildable from ACK, ACV, and
-ACA. Numbering starts at 1 and must be contiguous; gaps will cause
-later entries to be silently dropped.
+**Multiple entries.** A single file can hold several entries —
+Cavedog's `download/Armfort.tdf` uses three to make the Arm
+Fortification Wall buildable from ACK, ACV, and ACA. TA 3.1c reads the
+**first five sections** of each file, whatever their names
+(`[MENUENTRY1]` is the convention, `[ENTRY0]` works as well); a sixth
+section is never read. An entry whose `UNITMENU` names no unit, or no
+unit with `Builder=1`, is ignored, as is one whose `UNITNAME` names no
+unit. `MENU` and `BUTTON` are kept to 8 bits, and a builder's menu —
+its `[CANBUILD]` list plus the download additions — holds at most 31
+units.
 
 > [!IMPORTANT]
 > **`download/*.tdf` adds to the build menu; it doesn't replace

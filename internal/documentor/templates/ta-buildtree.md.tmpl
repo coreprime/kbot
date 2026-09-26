@@ -8,8 +8,13 @@ How units actually get into the game: which constructor builds
 what, **laid out in the exact 2-column × 3-row grid TA shows**
 in the in-game build menu. Derived from
 `gamedata/sidedata.tdf`'s `[CANBUILD]` table plus every
-`download/*.tdf` `[MENUENTRY]` registration, merged the way the
-engine merges them at boot.
+`download/*.tdf` registration, merged the way the engine merges them
+at boot: a unit gets a `[CANBUILD]` list only when its FBI sets
+`Builder=1`; the list runs `canbuild1`, `canbuild2`, … up to the first
+missing number, skips names that match no unit and holds at most 30;
+each `download/*.tdf` contributes its first five sections, whatever
+their names, when `UNITMENU` and `UNITNAME` both name units; and a
+builder's menu holds at most 31 units in all.
 
 - **{{.TotalBuilders}} builders** across {{len .Sides}} sides.
 - **{{.TotalPairs}} `(builder, unit)` pairs total**, of which
@@ -81,6 +86,15 @@ by mine-layers, or wreckage. Their full stats remain in
 
 {{joinCodes .Unbuildable}}.
 {{end}}
+{{- if .Notes}}
+### Entries the game leaves out
+
+Build-menu entries in the data that the game does not offer.
+
+{{range .Notes -}}
+- {{.}}
+{{end}}
+{{- end}}
 {{- /* ====================================================== */ -}}
 {{- /* Reusable "builder" sub-template — renders one builder   */ -}}
 {{- /* with its portrait + page-by-page grid + summary footer. */ -}}

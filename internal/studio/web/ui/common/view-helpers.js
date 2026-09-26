@@ -181,9 +181,8 @@ export function appendParticleProjectiles(engine, out) {
 export function buildUnitMotion(unit, orient) {
   if (!unit) return null
   // TA's FBI MaxVelocity is wu/frame at the 30 Hz locomotion clock — convert
-  // to wu/s for display alongside the engine's already-per-second speed.
-  // Same conversion the engine uses inside locomotion.js so the dial's
-  // "max" reading matches the unit's actual top speed.
+  // to wu/s for display alongside the engine's already-per-second speed, so
+  // the dial's "max" reading matches the unit's actual top speed.
   const TA_MOVE_HZ = 30
   const meta = unit.meta || {}
   const maxSpeed = (meta.maxVelocity > 0) ? meta.maxVelocity * TA_MOVE_HZ : 0

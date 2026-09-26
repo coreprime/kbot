@@ -25,9 +25,9 @@
 > See the CLI [`kbot cob` reference](../../README.md#kbot-cob--cobbos-scripting)
 > for every flag (and the full lint-rules table).
 >
-> **From Go.** Use [`formats/scripting`](../../formats/scripting/cob.go):
+> **From Go.** Use kbot-io's [`formats/scripting`](https://github.com/coreprime/kbot-io/blob/main/formats/scripting/cob.go):
 > ```go
-> import "github.com/coreprime/kbot/formats/scripting"
+> import "github.com/coreprime/kbot-io/formats/scripting"
 >
 > cob, _ := scripting.LoadFromFile("scripts/ARMCOM.cob")
 > fmt.Printf("%d scripts, %d pieces\n", cob.NumScripts, cob.NumPieces)
@@ -78,6 +78,20 @@ disassemble -a` shows the opcode stream side-by-side with control-flow
 arrows; `kbot cob decompile` does the reverse, recovering BOS that
 *almost always* round-trips byte-identical (`kbot cob roundtrip`
 validates this across the entire game catalogue).
+
+A source compiles as a **TA script** (COB version 4) unless it starts
+with `.version 6`. The compiler refuses what TA 3.1c would mis-run
+rather than writing a placeholder: the TA: Kingdoms constructs
+(`play-sound`, `Mission-Command`, `__tak_math_*`, `.sound_name`) and
+`%` are errors in a TA script (TA has no modulo instruction, and
+`0x10037000`, the word `%` used to become, is its bitwise XOR), as are
+unknown identifiers and functions that need more than the game's 32
+stack slots. What still compiles but deserves a look — a function
+defined twice (every call binds to the first definition, as the
+game's name lookup does) — is printed as a warning, together with any
+finding of the [TA compatibility lint rules](#linting); `--strict`
+makes warnings fail the command. `kbot cob assemble` applies the same
+checks to hand-written listings.
 
 ---
 
@@ -161,10 +175,16 @@ Each opcode is one `uint32` with the layout:
   └─────────┴─────────┴─────────┴─────────┘
 ```
 
-The high byte is always `0x10`; family/op/flags vary per opcode. kbot's
-[`scripting/opcodes.go`](../../formats/scripting/opcodes.go) is the
-authoritative catalogue, lifted directly from the in-game implementation
-plus the Saruman & Switeck reverse-engineering notes.
+The high byte is always `0x10`; family/op/flags vary per opcode. The
+game does not compare the whole word: it dispatches on
+`word & 0x100FF000`, so bits outside that mask are ignored and
+`0x10064001` runs as `JUMP` (kbot's disassembler writes such a word
+`JUMP@0x10064001` so it assembles back unchanged). `PUSH` (`0x10021000`)
+and `POP` (`0x10023000`) then read their source or destination from
+the low three bits. kbot-io's
+[`scripting/opcodes.go`](https://github.com/coreprime/kbot-io/blob/main/formats/scripting/opcodes.go) is the catalogue;
+`scripting.Opcodes()` lists every instruction with its inline operands
+and stack effect.
 
 ### Opcode families
 
@@ -172,20 +192,20 @@ plus the Saruman & Switeck reverse-engineering notes.
 |--------|----------|-------|
 | `0x100x` | `MOVE`, `TURN`, `SPIN`, `SHOW`, `HIDE`, `EMIT_SFX` | Piece animation. Piece# and axis# follow inline. |
 | `0x101x` | `WAIT_FOR_TURN`, `WAIT_FOR_MOVE`, `SLEEP` | Async barriers — the script yields until the condition is met. |
-| `0x102x` | `PUSH_CONSTANT`, `PUSH_LOCAL_VAR`, `PUSH_STATIC`, `POP_*` | Stack manipulation. |
-| `0x103x` | `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `BITWISE_*` | Arithmetic & bitwise. |
-| `0x104x` | `RAND`, `GET_UNIT_VALUE`, `GET` | Engine queries. |
-| `0x105x` | `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, `\|\|`, `^^`, `!` | Comparisons & logical ops. |
-| `0x106x` | `START_SCRIPT`, `CALL_SCRIPT`, `JUMP`, `RETURN`, `JUMP_IF_FALSE`, `SIGNAL`, `SET_SIGNAL_MASK` | Control flow and concurrency. |
-| `0x107x` | `EXPLODE`, `PLAY_SOUND` | Special effects. |
+| `0x102x` | `PUSH_CONST`, `PUSH_LOCAL`, `PUSH_STATIC`, `POP_*` | Stack manipulation. |
+| `0x103x` | `ADD`, `SUB`, `MUL`, `DIV`, `BITWISE_AND`, `BITWISE_OR`, `XOR`, `NOT` | Arithmetic & bitwise. There is no modulo. |
+| `0x104x` | `RAND`, `GET_UNIT_VALUE`, `GET`, `IS_CARRYING_UNIT`, `CARRIER_UNIT_ID` | Engine queries. |
+| `0x105x` | `<`, `<=`, `>`, `>=`, `==`, `!=`, `&&`, `\|\|`, `XOR_ALT`, `!` | Comparisons & logical ops. `XOR_ALT` is a bitwise XOR, not a logical one. |
+| `0x106x` | `START_SCRIPT`, `CALL_SCRIPT`, `DISCARD_CALL`, `JUMP`, `RETURN`, `JUMP_IF_FALSE`, `SIGNAL`, `SET_SIGNAL_MASK` | Control flow and concurrency. |
+| `0x107x` | `EXPLODE`, `PLAY_SOUND` | Special effects. `PLAY_SOUND` is TA: Kingdoms only. |
 | `0x108x` | `SET_VALUE`, `ATTACH_UNIT`, `DROP_UNIT` | Engine mutations. |
 
 A small but representative sampler:
 
 ```
-0x10021001 PUSH_CONSTANT  <value>      ( -- v )
-0x10021002 PUSH_LOCAL_VAR <var#>       ( -- v )
-0x10023002 POP_LOCAL_VAR  <var#>       ( v -- )
+0x10021001 PUSH_CONST     <value>      ( -- v )
+0x10021002 PUSH_LOCAL     <var#>       ( -- v )
+0x10023002 POP_LOCAL      <var#>       ( v -- )
 0x10033000 MUL                         ( a b -- a*b )
 0x10051000 LESS_THAN                   ( a b -- a<b )
 0x10066000 JUMP_IF_FALSE <byteOffset>  ( v -- )    pops; falls through if v != 0
@@ -319,9 +339,11 @@ output is ambiguous.
 
 ## Linting
 
-`kbot cob lint` ships 17 rules drawn from real-world bugs in Cavedog's
-own scripts and from community-submitted mod patches. The full
-catalogue:
+`kbot cob lint` (and the asset explorer's Lint tab) runs kbot-io's
+default rule set: style rules drawn from real-world bugs in Cavedog's
+own scripts and from community-submitted mod patches, two file-level
+checks, and — for every COB that does not declare version 6 — the TA
+3.1c compatibility rules. The style catalogue:
 
 | Rule | Severity | Catches |
 |------|----------|---------|
@@ -339,6 +361,22 @@ catalogue:
 | `unnamed-global` | info | `global_3` instead of a named static. |
 | `signal-never-signalled` | warning | Script masks a signal nobody emits. |
 | `recursive-call` | warning | `call-script` cycle. |
+| `duplicate-function` | warning | Two scripts share a name; the game only calls the first. |
+| `malformed-cob` | error / warning | The file does not load, or a script's code is truncated (error); name tables the reader tolerated (warning). |
+
+The TA compatibility rules report what TA 3.1c faults on or runs
+differently. They are errors, appear in `--ci` SARIF output like the
+others, and skip TA: Kingdoms (version 6) files:
+
+| Rule | Catches |
+|------|---------|
+| `ta-kingdoms-opcode` | `PLAY_SOUND`, `MISSION_COMMAND` or a `TAK_MATH_*` operator in a TA script. TA has no handler for them and the script faults when it reaches one. |
+| `ta-unknown-opcode` | An opcode word no game runs. |
+| `ta-push-flags` | A `PUSH` whose low bits are not 1 (constant), 2 (local) or 4 (static), or a `POP` whose low bits are not 2 or 4 — including the flagless `0x10021000` and `0x10021008` some tools wrote. |
+| `ta-stack-limit` | More than 32 `STACK_ALLOC`s, or locals plus pending values beyond the game's 32 stack slots; the game does not check and overwrites the memory after the script. |
+| `ta-get-arguments` | A `GET` reached with fewer than five pending values. `GET` always pops a port and four arguments, so a one-argument `get` takes the rest from the function's locals and overwrites them. |
+| `ta-stack-underflow` | Any other instruction that pops more values than are pending, or paths that join with different stack depths. |
+| `ta-discard-call` | `DISCARD_CALL` with more than four arguments. |
 
 The full rule descriptions are in the kbot README. The decompiler
 deliberately preserves the original variable and piece numbering so that
@@ -349,11 +387,21 @@ a decompile→lint→fix→compile cycle highlights mods needing maintenance.
 ## Gotchas
 
 > [!WARNING]
-> **`call-script` opcode is `0x10062000`, not `0x10063000`** as the
-> original Cavedog "glossary" leak documents. The original document was
-> drafted against an early build; retail TA uses the value kbot's
-> `opcodes.go` defines. If your decompiler is producing nonsensical
-> `call-script` output, this is probably why.
+> **`call-script` is `0x10062000`.** `0x10063000` is a different
+> instruction, `DISCARD_CALL`: it has the same two inline words
+> (script number and argument count) but pops the arguments and runs
+> nothing. No retail script uses it; kbot's decompiler writes it as
+> `__discard_call(word, args…)`.
+
+> [!WARNING]
+> **Several published opcode tables name the bitwise words wrongly.**
+> TA runs `0x10037000` as bitwise **XOR** (not modulo — TA has no
+> modulo instruction), `0x10038000` as the unary bitwise **NOT** (not
+> XOR), and `0x10059000` as a second bitwise XOR (not a logical XOR:
+> `6 XOR_ALT 3` is 5). `0x1003A000` is a TA: Kingdoms operator that TA
+> faults on. Listings written with the old names (`MOD`,
+> `BITWISE_XOR`, `BITWISE_NOT`, `LOGICAL_XOR`) still assemble to the
+> words they were made from.
 
 - **All offsets in the COB header are *absolute file offsets***, but the
   `ScriptCodeIndexArray` entries are *word offsets within the code
@@ -439,7 +487,7 @@ filenames.
 
 ### kbot's representation
 
-[`scripting.COB`](../../formats/scripting/cob.go) carries the
+[`scripting.COB`](https://github.com/coreprime/kbot-io/blob/main/formats/scripting/cob.go) carries the
 sound names as a structured `[]string` field — no opaque-byte
 preservation. Everything else (the sub-header values, the offset
 table, the per-string offsets in the pool) is reconstructed from
@@ -470,11 +518,13 @@ directive so they survive a round-trip through `.coba` and `.bos`:
 
 ### New opcodes
 
-Four opcodes appear in TAK `.cob` files that have no v4 equivalent.
-Their exact game-side semantics are not documented, but their binary
-layout (size + inline parameter count) was determined by disassembling
-every retail TAK `.cob` — that's enough for the disassemble→assemble
-round-trip to recover the original bytes verbatim. See
+TAK `.cob` files use instructions TA 3.1c has no handler for
+(`PLAY_SOUND`, `MISSION_COMMAND` and the `TAK_MATH_*` operators) plus
+`DONT_SHADOW`, which TA runs as a no-op. Their exact game-side
+semantics are not documented, but their binary layout (size + inline
+parameter count) is known from every retail TAK `.cob`, which is
+enough for the disassemble→assemble round-trip to recover the
+original bytes verbatim. See
 [Appendix C](#appendix-c--ta-kingdoms-opcodes) for the full reference.
 
 ### Round-trip status
@@ -486,9 +536,10 @@ round-trip to recover the original bytes verbatim. See
 
 ### BOS surface for TAK extensions
 
-The decompiler emits four pseudo-calls so TAK COBs round-trip through
-BOS. The compiler accepts the same syntax. Two of them (`dont-shadow`
-and `Mission-Command`) use Scriptor's canonical TAK keywords; the math
+The decompiler emits these pseudo-calls so TAK COBs round-trip through
+BOS. The compiler accepts the same syntax, but only after `.version 6`
+(`dont-shadow` excepted — TA runs it as a no-op). `dont-shadow` and
+`Mission-Command` use Scriptor's canonical TAK keywords; the math
 opcodes have no documented name in Scriptor (it labels them `??` and
 `????`), so kbot keeps the `__tak_math_*` placeholders:
 
@@ -498,9 +549,10 @@ dont-shadow(<piece>);                                  // DONT_SHADOW — disabl
 Mission-Command("sound name", arg1, arg2, …);          // MISSION_COMMAND — engine call (statement form drops the return value)
 return_val = Mission-Command("sound name", args…);     // assignment form keeps the pushed result
 
-// Expression-level (wrap any expression; stack-neutral):
-local_x = __tak_math_09(<expr>);   // TAK_MATH_09 between expr and POP
-local_x = __tak_math_0b(<expr>);   // TAK_MATH_0B
+// Expression-level (binary operators: two values popped, one pushed):
+local_x = __tak_math_09(a, b);   // TAK_MATH_09
+local_x = __tak_math_0a(a, b);   // TAK_MATH_0A
+local_x = __tak_math_0b(a, b);   // TAK_MATH_0B
 ```
 
 `Mission-Command`'s first argument is the **sound name** as a quoted
@@ -550,8 +602,8 @@ readability suffers. Adding TAK port names is tracked separately.
 
 ## Appendix A — Full opcode reference
 
-Every opcode kbot's VM recognises. Source of truth is
-[`formats/scripting/opcodes.go`](../../formats/scripting/opcodes.go).
+Every instruction TA or TA: Kingdoms runs. Source of truth is kbot-io's
+[`formats/scripting/opcodes.go`](https://github.com/coreprime/kbot-io/blob/main/formats/scripting/opcodes.go).
 **Stack notation** uses Forth-style `( before -- after )`. **Inline**
 columns show how many `uint32` words follow the opcode word itself
 (consumed during decode, not from the stack).
@@ -568,6 +620,8 @@ columns show how many `uint32` words follow the opcode word itself
 | `0x10006000` | `HIDE` | 1 (`piece`) | `( -- )` | `hide <piece>;` |
 | `0x10007000` | `CACHE` | 1 (`piece`) | `( -- )` | `cache <piece>;` |
 | `0x10008000` | `DONT_CACHE` | 1 (`piece`) | `( -- )` | `dont-cache <piece>;` |
+| `0x10009000` | `PIECE_OP_09` | 1 (`piece`) | `( a b -- )` | `__piece_op_09(<piece>, a, b);` — TA runs it but its unit scripts do nothing with it; no retail script uses it. |
+| `0x1000A000` | `DONT_SHADOW` | 1 (`piece`) | `( -- )` | `dont-shadow <piece>;` — TA runs it as a no-op; see [Appendix C](#appendix-c--ta-kingdoms-opcodes). |
 | `0x1000B000` | `MOVE_NOW` | 2 (`piece`, `axis`) | `( pos -- )` | `move <piece> to <axis> <pos> now;` |
 | `0x1000C000` | `TURN_NOW` | 2 (`piece`, `axis`) | `( angle -- )` | `turn <piece> to <axis> <angle> now;` |
 | `0x1000D000` | `SHADE` | 1 (`piece`) | `( -- )` | `shade <piece>;` |
@@ -586,13 +640,12 @@ columns show how many `uint32` words follow the opcode word itself
 
 | Opcode | Mnemonic | Inline | Stack effect | BOS syntax |
 |--------|----------|:------:|--------------|------------|
-| `0x10021000` | `PUSH_IMMEDIATE` | 1 (`value`) | `( -- v )` | (compiler) |
-| `0x10021001` | `PUSH_CONSTANT` | 1 (`value`) | `( -- v )` | `<literal>` in any expression |
-| `0x10021002` | `PUSH_LOCAL_VAR` | 1 (`var#`) | `( -- v )` | `local_N` in any expression |
+| `0x10021000` | `PUSH_IMM` | 1 (`value`) | — | Flagless PUSH: the game faults on it (`ta-push-flags`). Never written by the compiler. |
+| `0x10021001` | `PUSH_CONST` | 1 (`value`) | `( -- v )` | `<literal>` in any expression |
+| `0x10021002` | `PUSH_LOCAL` | 1 (`var#`) | `( -- v )` | `local_N` in any expression |
 | `0x10021004` | `PUSH_STATIC` | 1 (`var#`) | `( -- v )` | `global_N` in any expression |
-| `0x10021008` | `CREATE_LOCAL` | 0 | `( -- )` | (implicit — emitted by `var x;`) |
-| `0x10022000` | `STACK_ALLOC` | 0 | `( -- )` | (implicit — function prologue) |
-| `0x10023002` | `POP_LOCAL_VAR` | 1 (`var#`) | `( v -- )` | `local_N = expr;` |
+| `0x10022000` | `STACK_ALLOC` | 0 | `( -- )` | (implicit — one per `var` and parameter) |
+| `0x10023002` | `POP_LOCAL` | 1 (`var#`) | `( v -- )` | `local_N = expr;` |
 | `0x10023004` | `POP_STATIC` | 1 (`var#`) | `( v -- )` | `global_N = expr;` |
 | `0x10024000` | `POP_STACK` | 0 | `( v -- )` | (discards an expression's result) |
 
@@ -606,17 +659,22 @@ columns show how many `uint32` words follow the opcode word itself
 | `0x10034000` | `DIV` | 0 | `( a b -- a/b )` | `a / b` |
 | `0x10035000` | `BITWISE_AND` | 0 | `( a b -- a&b )` | `a & b` |
 | `0x10036000` | `BITWISE_OR` | 0 | `( a b -- a\|b )` | `a \| b` |
-| `0x10037000` | `MOD` | 0 | `( a b -- a%b )` | `a % b` |
-| `0x10038000` | `BITWISE_XOR` | 0 | `( a b -- a^b )` | `a ^ b` |
-| `0x1003A000` | `BITWISE_NOT` | 0 | `( a -- ~a )` | `~a` |
+| `0x10037000` | `XOR` | 0 | `( a b -- a^b )` | `a ^ b` |
+| `0x10038000` | `NOT` | 0 | `( a -- ~a )` | `~a` |
+
+TA has no modulo instruction: `%` is a compile error in a TA script.
+`0x10039000`–`0x1003B000` are the TA: Kingdoms `TAK_MATH_*` operators
+([Appendix C](#appendix-c--ta-kingdoms-opcodes)); TA faults on them.
 
 ### Engine queries (`0x104x`)
 
 | Opcode | Mnemonic | Inline | Stack effect | BOS syntax |
 |--------|----------|:------:|--------------|------------|
 | `0x10041000` | `RAND` | 0 | `( low high -- rnd )` | `rand(low, high)` |
-| `0x10042000` | `GET_UNIT_VALUE` | 0 | `( port -- value )` | `get <PORT_NAME>` |
-| `0x10043000` | `GET` | 0 | `( ... -- value )` | `get <variant>` |
+| `0x10042000` | `GET_UNIT_VALUE` | 0 | `( port -- value )` | `get <PORT>` |
+| `0x10043000` | `GET` | 0 | `( port a b c d -- value )` | `get <PORT>(a, b, …)` / `get(port, …)` — always pops a port and four arguments; the compiler pushes zeros for missing ones |
+| `0x10044000` | `IS_CARRYING_UNIT` | 0 | `( unit -- bool )` | `__is_carrying_unit(unit)` — 1 when that unit rides on this one |
+| `0x10045000` | `CARRIER_UNIT_ID` | 0 | `( -- id )` | `__carrier_unit_id()` — the unit carrying this one, or 0 |
 
 See [Appendix B](#appendix-b--get_unit_value-port-table) for the port
 catalogue.
@@ -633,7 +691,7 @@ catalogue.
 | `0x10056000` | `NOT_EQUAL` | 0 | `( a b -- a!=b )` | `a != b` |
 | `0x10057000` | `LOGICAL_AND` | 0 | `( a b -- a&&b )` | `a AND b` |
 | `0x10058000` | `LOGICAL_OR` | 0 | `( a b -- a\|\|b )` | `a OR b` |
-| `0x10059000` | `LOGICAL_XOR` | 0 | `( a b -- a^^b )` | `a XOR b` |
+| `0x10059000` | `XOR_ALT` | 0 | `( a b -- a^b )` | `a XOR b` — a bitwise XOR like `0x10037000` (`6 XOR 3` is 5), not a logical one |
 | `0x1005A000` | `LOGICAL_NOT` | 0 | `( a -- !a )` | `NOT a` |
 
 ### Control flow & concurrency (`0x106x`)
@@ -642,6 +700,7 @@ catalogue.
 |--------|----------|:------:|--------------|------------|
 | `0x10061000` | `START_SCRIPT` | 2 (`script#`, `argc`) | `( args… -- )` | `start-script Foo(a, b);` |
 | `0x10062000` | `CALL_SCRIPT` | 2 (`script#`, `argc`) | `( args… -- )` | `call-script Foo(a, b);` |
+| `0x10063000` | `DISCARD_CALL` | 2 (`word`, `argc`) | `( args… -- )` | `__discard_call(word, args…);` — pops the arguments (more than four overrun the game's buffer) and runs nothing |
 | `0x10064000` | `JUMP` | 1 (`offset`) | `( -- )` | (compiler — `goto`, loops) |
 | `0x10065000` | `RETURN` | 0 | `( v -- )` | `return v;` |
 | `0x10066000` | `JUMP_IF_FALSE` | 1 (`offset`) | `( v -- )` | (compiler — `if`/`while`) |
@@ -656,7 +715,7 @@ catalogue.
 | Opcode | Mnemonic | Inline | Stack effect | BOS syntax |
 |--------|----------|:------:|--------------|------------|
 | `0x10071000` | `EXPLODE` | 1 (`piece`) | `( type -- )` | `explode <piece> type <type>;` |
-| `0x10072000` | `PLAY_SOUND` | 1 (`vol`) | `( sound -- )` | `play-sound <sound> vol <vol>;` |
+| `0x10072000` | `PLAY_SOUND` | 1 (`vol`) | `( sound -- result )` | `play-sound(<sound>, <vol>);` — TA: Kingdoms only (`.version 6`); TA faults on it |
 
 ### Set operations (`0x108x`)
 
@@ -673,13 +732,18 @@ Every opcode word is `0x10CCSSFF`, where:
 - `CC` = the **category** byte (animation, math, control flow, …).
 - `SS` = the **sub-command** nibble in the high nibble of the second
   byte from the top.
-- `FF` = the **flags** byte. Most opcodes use `0x00`; the `PUSH_*` and
-  `POP_*` family encode source-of-value here (`0x01` = constant,
-  `0x02` = local, `0x04` = static, `0x08` = create-local).
+- `FF` = the **flags** byte.
 
-Unknown opcodes are rendered as `UNKNOWN_0x10xxxxxx` by the
-disassembler; if you find one in a real file, please open an issue
-with the COB sample.
+The game dispatches on `word & 0x100FF000` and ignores the other bits,
+so a word such as `0x10064001` runs as `JUMP`; the disassembler writes
+it `JUMP@0x10064001` and the assembler reads that back to the same
+word. `PUSH` and `POP` read their source or destination from the low
+three bits: `PUSH` accepts 1 (constant), 2 (local) and 4 (static),
+`POP` accepts 2 and 4, and any other value faults the script.
+
+Words no game runs are rendered as `UNKNOWN_0x10xxxxxx` by the
+disassembler (and reported by `ta-unknown-opcode`); if you find one in
+a real file, please open an issue with the COB sample.
 
 ---
 
@@ -746,16 +810,20 @@ are taken from Scriptor's `[UNITVLAUES]` table:
 > files. `DONT_SHADOW` and `MISSION_COMMAND` use the canonical
 > mnemonics from Scriptor (Switeck's TAK-aware compiler/decompiler);
 > the math ops have no documented semantics — Scriptor labels them
-> `??` and `????`, so kbot keeps the `TAK_MATH_09` / `TAK_MATH_0B`
-> placeholders and treats them as stack-neutral pseudo-ops, which is
-> consistent with every retail call site.
+> `??` and `????`, so kbot keeps the `TAK_MATH_09` / `TAK_MATH_0A` /
+> `TAK_MATH_0B` placeholders. Retail TA: Kingdoms scripts use each as
+> a binary operator (two values popped, one pushed) when packing and
+> unpacking bit fields. TA 3.1c has no handler for `PLAY_SOUND`,
+> `MISSION_COMMAND` or the math operators; `DONT_SHADOW` it runs as a
+> no-op.
 
 | Opcode | Mnemonic | Inline | Sites in retail TAK | Notes |
 |--------|----------|:------:|--------------------:|-------|
 | `0x1000A000` | `DONT_SHADOW` | 1 (`piece`) | 66 | Disables shadow casting for a single piece. Sits in the animation category next to `DONT_SHADE` (`0x1000E000`) — kbot earlier called this `TAK_ANIM_0A`. Same on-disk shape as the other ANIM_* ops: 4-byte opcode + one `piece` DWORD. BOS keyword: `dont-shadow <piece>;`. |
-| `0x10039000` | `TAK_MATH_09` | 0 | 264 | Math-category op, 4 bytes total. Always observed in a `<expr>` … `TAK_MATH_09` `POP_*` pattern — kbot wraps the inner expression with `__tak_math_09(...)` so the round trip reinstates the opcode. |
-| `0x1003B000` | `TAK_MATH_0B` | 0 | 66 | Same shape as `TAK_MATH_09`; sits one slot past `BITWISE_NOT` (`0x1003A000`). |
-| `0x10073000` | `MISSION_COMMAND` | 2 (`soundNameIdx`, `argCount`) | 3,885 | Engine command call. The first inline DWORD is an index into the COB's `SoundNames` table; the second is the number of values to pop off the stack as arguments. The opcode pushes a single result back onto the stack (typically dropped via a following `POP_STACK` or stored via `POP_STATIC`/`POP_LOCAL_VAR`). By far the most common TAK-only opcode. BOS keyword: `Mission-Command("name", args…)` — matches Scriptor's canonical surface. |
+| `0x10039000` | `TAK_MATH_09` | 0 | 264 | Math-category binary operator, 4 bytes total: `( a b -- r )`. BOS: `__tak_math_09(a, b)`. |
+| `0x1003A000` | `TAK_MATH_0A` | 0 | — | Same shape. Some opcode tables call it `BITWISE_NOT`; TA's bitwise NOT is `0x10038000`. BOS: `__tak_math_0a(a, b)`. |
+| `0x1003B000` | `TAK_MATH_0B` | 0 | 66 | Same shape as `TAK_MATH_09`. BOS: `__tak_math_0b(a, b)`. |
+| `0x10073000` | `MISSION_COMMAND` | 2 (`soundNameIdx`, `argCount`) | 3,885 | Engine command call. The first inline DWORD is an index into the COB's `SoundNames` table; the second is the number of values to pop off the stack as arguments. The opcode pushes a single result back onto the stack (typically dropped via a following `POP_STACK` or stored via `POP_STATIC`/`POP_LOCAL`). By far the most common TAK-only opcode. BOS keyword: `Mission-Command("name", args…)` — matches Scriptor's canonical surface. |
 
 ### Encoding (recap)
 
@@ -771,7 +839,7 @@ animation category alongside `DONT_CACHE`/`DONT_SHADE`, and
 > **Cross-reference real bytecode.**
 > ```bash
 > kbot ctx use tak-30bb-flat
-> kbot cob disassemble scripts/araat.cob -a | grep -E 'DONT_SHADOW|MISSION|TAK_MATH'
+> kbot cob disassemble scripts/araat.cob -a | grep -E 'DONT_SHADOW|MISSION|TAK_MATH|PLAY_SOUND'
 > ```
 
 ---

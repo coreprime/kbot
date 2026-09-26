@@ -15,7 +15,8 @@
 //     BP-toggle handlers
 //   - drawMvJumpArrows — per-section SVG that paints jump curves
 //     in the gutter
-//   - mvFormatOperands / mvOpCategory — instruction-text helpers
+//   - mvOpCategory — opcode colouring (operand text comes from
+//     cob-highlight.js formatCobOperands)
 //   - mvSyncBosBpForOffset — keeps the BOS pane's `.bos-bp` class
 //     in sync when a BP is toggled from the asm side
 //   - refreshMvThreadCodeHighlight — per-tick PC tracking +
@@ -34,7 +35,7 @@
 // renderMvThreadCodeLocals which still lives studio-side) + the
 // sibling bos.js (applyMvThreadCodeCrossHover, refreshMvThreadCodeDecompHighlight).
 
-import { cobaOpCategory, computeJumps as sharedComputeJumps } from './cob-highlight.js'
+import { cobaOpCategory, computeJumps as sharedComputeJumps, formatCobOperands } from './cob-highlight.js'
 import {
   applyMvThreadCodeCrossHover,
   refreshMvThreadCodeDecompHighlight,
@@ -201,7 +202,7 @@ function mvBuildAsmLine(state, scriptLower, scriptName, i, ins, pieceNames) {
   op.className = mvOpCategory(ins.name)
   op.textContent = ins.name
   code.appendChild(op)
-  const operandText = mvFormatOperands(ins, pieceNames)
+  const operandText = formatCobOperands(ins, pieceNames)
   if (operandText) {
     const opd = document.createElement('span')
     opd.className = 'coba-operand'
@@ -295,33 +296,6 @@ function drawMvJumpArrows(body, svg, jumps, laneW, gutterW) {
     if (j.isLoop) ah.classList.add('loop')
     svg.appendChild(ah)
   }
-}
-
-function mvFormatOperands(ins, pieceNames) {
-  // Piece-targeted ops with axis: piece name + axis letter
-  const pieceAxisOps = new Set(['MOVE', 'TURN', 'SPIN', 'STOP_SPIN', 'MOVE_NOW', 'TURN_NOW', 'WAIT_FOR_TURN', 'WAIT_FOR_MOVE'])
-  if (pieceAxisOps.has(ins.name)) {
-    const pn = pieceNames[ins.p1] || `#${ins.p1}`
-    const axis = ['x', 'y', 'z'][ins.p2 | 0] || '?'
-    return `${pn}, ${axis}-axis`
-  }
-  // Piece-only ops
-  const pieceOps = new Set(['SHOW', 'HIDE', 'CACHE', 'DONT_CACHE', 'SHADE', 'DONT_SHADE', 'DONT_SHADOW', 'EMIT_SFX', 'EXPLODE'])
-  if (pieceOps.has(ins.name)) {
-    const pn = pieceNames[ins.p1] || `#${ins.p1}`
-    return pn
-  }
-  // CALL / START — index into scripts array
-  if (ins.name === 'CALL_SCRIPT' || ins.name === 'START_SCRIPT') {
-    return `script[${ins.p1}], ${ins.p2 | 0} args`
-  }
-  // PUSH_CONST + immediate ops
-  if (ins.name === 'PUSH_CONST') return `${ins.p1}`
-  if (ins.name === 'PUSH_LOCAL' || ins.name === 'POP_LOCAL' || ins.name === 'CREATE_LOCAL') return `L${ins.p1}`
-  if (ins.name === 'PUSH_STATIC' || ins.name === 'POP_STATIC') return `global_${ins.p1}`
-  if (ins.name === 'JUMP' || ins.name === 'JUMP_IF_FALSE') return `→ 0x${(ins.p1 >>> 0).toString(16)}`
-  if (ins.p1 || ins.p2) return `${ins.p1}${ins.p2 ? `, ${ins.p2}` : ''}`
-  return ''
 }
 
 export function refreshMvThreadCodeHighlight(state) {

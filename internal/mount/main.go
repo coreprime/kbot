@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/text/cases"
@@ -20,6 +21,7 @@ import (
 	"github.com/coreprime/kbot-io/formats/scripting"
 	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot/internal/gamevfs"
+	"github.com/coreprime/kbot/internal/aiprofile"
 	"github.com/coreprime/kbot/internal/kbotctx"
 	"github.com/spf13/cobra"
 )
@@ -405,6 +407,15 @@ func describeTDF(filePath string) {
 	sections := doc.Sections()
 	fmt.Printf("Format: TDF/FBI\n")
 	fmt.Printf("Sections: %d\n\n", len(sections))
+	// The document is read with the game's grammar; its diagnostics note
+	// text the game reads differently from how it looks.
+	if diags := doc.Diagnostics(); len(diags) > 0 {
+		fmt.Printf("How the game reads unusual text:\n")
+		for _, d := range diags {
+			fmt.Printf("  %s\n", d)
+		}
+		fmt.Println()
+	}
 
 	// Show section details
 	for _, section := range sections {
@@ -684,48 +695,97 @@ func describePCX(filePath string) {
 	fmt.Printf("Color Type: %s\n", colorType)
 }
 
-func describeAI(filePath string, data []byte) {
-	aiFile, err := ai.Parse(data)
-	if err != nil {
-		fmt.Printf("Error parsing AI file: %v\n", err)
-		return
+func describeAI(_ string, data []byte) {
+	writeAIProfile(os.Stdout, aiprofile.Build(data, aiprofile.Units(vfs)))
+}
+
+// writeAIProfile prints a computer-player profile the way TA 3.1c reads it:
+// the lines before the first plan (ignored when a game starts), each plan's
+// weights and limits with their targets labelled unit, category or ALL (a
+// category no unit has is flagged, since the line does nothing), the parser's
+// notes on lines the game reads differently from how they look, and how many
+// units each difficulty changes.
+func writeAIProfile(w io.Writer, p *aiprofile.Profile) {
+	_, _ = fmt.Fprintf(w, "Format: AI Profile\n")
+	_, _ = fmt.Fprintf(w, "Plans: %d\n", len(p.Plans))
+	if !p.UnitsKnown {
+		_, _ = fmt.Fprintf(w, "(no units/*.fbi found: targets are not labelled unit or category)\n")
+	}
+	_, _ = fmt.Fprintln(w)
+
+	if len(p.Diagnostics) > 0 {
+		_, _ = fmt.Fprintf(w, "How the game reads unusual lines:\n")
+		for _, d := range p.Diagnostics {
+			_, _ = fmt.Fprintf(w, "  line %d: %s\n", d.Line, d.Message)
+		}
+		_, _ = fmt.Fprintln(w)
 	}
 
-	fmt.Printf("Format: Total Annihilation AI Profile\n")
-	fmt.Printf("Plans: %d\n\n", len(aiFile.Plans))
-
-	for _, plan := range aiFile.Plans {
-		fmt.Printf("=== %s Plan ===\n", cases.Title(language.English).String(strings.ToLower(plan.Name)))
-
-		if len(plan.Weights) > 0 {
-			fmt.Printf("\nUnit Build Weights:\n")
-			maxWeight := 0.0
-			for _, w := range plan.Weights {
-				if w.Weight > maxWeight {
-					maxWeight = w.Weight
-				}
-			}
-
-			for _, w := range plan.Weights {
-				barWidth := int((w.Weight / maxWeight) * 30)
-				bar := strings.Repeat("█", barWidth)
-				fmt.Printf("  %-30s %6.1f %s\n", w.UnitName, w.Weight, bar)
-			}
-		}
-
-		if len(plan.Limits) > 0 {
-			fmt.Printf("\nBuild Limits:\n")
-			for _, l := range plan.Limits {
-				limit := fmt.Sprintf("%d", l.Maximum)
-				if l.Maximum == -1 {
-					limit = "∞"
-				}
-				fmt.Printf("  %-30s %s\n", l.UnitName, limit)
-			}
-		}
-
-		fmt.Println()
+	if p.Preamble != nil {
+		_, _ = fmt.Fprintf(w, "=== Before the first plan: ignored when a game starts (may apply if the profile is reloaded) ===\n")
+		writeAIPlan(w, p.Preamble)
 	}
+	for i := range p.Plans {
+		pl := &p.Plans[i]
+		name := pl.Name
+		if name == "" {
+			name = "(no difficulty: the lines below apply to none)"
+		}
+		_, _ = fmt.Fprintf(w, "=== %s Plan (line %d) ===\n", cases.Title(language.English).String(strings.ToLower(name)), pl.Line)
+		writeAIPlan(w, pl)
+	}
+
+	if len(p.Effective) > 0 {
+		_, _ = fmt.Fprintf(w, "At game start:\n")
+		for _, e := range p.Effective {
+			forbidden := 0
+			for _, s := range e.Units {
+				if s.Forbidden {
+					forbidden++
+				}
+			}
+			_, _ = fmt.Fprintf(w, "  %-6s %d units changed, %d forbidden\n", e.Difficulty, len(e.Units), forbidden)
+		}
+	}
+}
+
+func writeAIPlan(w io.Writer, pl *aiprofile.Plan) {
+	target := func(t, kind string) string {
+		if t == "" {
+			t = "(no target)"
+		}
+		if kind != "" {
+			return fmt.Sprintf("%-24s %-9s", t, kind)
+		}
+		return fmt.Sprintf("%-24s", t)
+	}
+	// notes lists, after a directive, how the game reads its value word and
+	// whether its category matches any unit.
+	notes := func(raw string, read float64, matchesNone bool) string {
+		var out string
+		if n := aiprofile.WrittenNote(raw, read); n != "" {
+			out += "   (" + n + ")"
+		}
+		if matchesNone {
+			out += "   (matches no unit)"
+		}
+		return out
+	}
+	if len(pl.Weights) > 0 {
+		_, _ = fmt.Fprintf(w, "\nWeights (multiply build priority; a unit line locks the unit):\n")
+		for _, wt := range pl.Weights {
+			read := strconv.FormatFloat(wt.Weight, 'g', -1, 64)
+			_, _ = fmt.Fprintf(w, "  %s x%s%s\n", target(wt.Target, wt.Kind), read, notes(wt.Raw, wt.Weight, wt.MatchesNone))
+		}
+	}
+	if len(pl.Limits) > 0 {
+		_, _ = fmt.Fprintf(w, "\nLimits (-1 unlimited; 0 or any other negative value forbids):\n")
+		for _, l := range pl.Limits {
+			_, _ = fmt.Fprintf(w, "  %s %s%s\n", target(l.Target, l.Kind), aiprofile.LimitLabel(l.Maximum),
+				notes(l.Raw, float64(l.Maximum), l.MatchesNone))
+		}
+	}
+	_, _ = fmt.Fprintln(w)
 }
 
 func describeCOB(filePath string) {

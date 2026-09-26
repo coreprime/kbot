@@ -90,6 +90,11 @@ type Session struct {
 	paletteOnce sync.Once
 	adapter     games.Adapter
 
+	// TA build menus per builder, resolved once with the game's rules
+	// (gamelists.go).
+	buildListsOnce sync.Once
+	buildLists     map[string][]string
+
 	// rendered + downscaled TA:K terrain PNGs per map path (takterrain.go)
 	takTerrainMu  sync.Mutex
 	takTerrainPNG map[string][]byte

@@ -59,7 +59,13 @@ func registerCOBTools(s *server.MCPServer, r *Resolver) {
 			mcplib.WithDescription(
 				"Run kbot's static analysis on a COB file or directory of COB files. "+
 					"Returns structured diagnostics (rule, severity, script, line, message) "+
-					"plus a per-rule summary count.  Path may also be a virtual directory inside the game-data VFS.",
+					"plus a per-rule summary count.  Path may also be a virtual directory inside the game-data VFS. "+
+					"Besides the style rules, every COB that does not declare the TA: Kingdoms version (6) is checked "+
+					"against what TA 3.1c runs; those ta-* rules are errors: TA: Kingdoms instructions "+
+					"(ta-kingdoms-opcode), words the game does not run (ta-unknown-opcode), PUSH/POP flags it faults on "+
+					"(ta-push-flags), more than 32 stack slots (ta-stack-limit), GET with fewer than 5 pending values "+
+					"(ta-get-arguments), other stack underflows (ta-stack-underflow) and DISCARD_CALL with more than "+
+					"4 arguments (ta-discard-call). A file that does not load is a malformed-cob error.",
 			),
 			mcplib.WithString("path",
 				mcplib.Required(),
@@ -213,13 +219,15 @@ func runCobLint(files map[string]string) (*mcplib.CallToolResult, error) {
 	for display, local := range files {
 		cob, err := scripting.LoadFromFile(local)
 		if err != nil {
+			// The same rule name the linter uses for damage it tolerated,
+			// so a file the reader rejects outright groups with it.
 			out.Diagnostics = append(out.Diagnostics, lintDiag{
 				File:     display,
-				Rule:     "parse-error",
+				Rule:     "malformed-cob",
 				Severity: linter.Error.String(),
-				Message:  err.Error(),
+				Message:  "the file does not load: " + err.Error(),
 			})
-			out.Summary["parse-error"]++
+			out.Summary["malformed-cob"]++
 			out.HasErrors = true
 			continue
 		}
