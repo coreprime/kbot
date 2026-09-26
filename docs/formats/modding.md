@@ -305,6 +305,17 @@ kbot hpi list  myflash.ufo -v
 
 ## 10. Install and test
 
+Why a `.ufo`? TA 3.1c mounts `rev31.gp3`, then every `.ccx`, every `.ufo`
+and only the first ten `.hpi`, each group in ASCII upper-case name order,
+and reads each file from the first archive that holds it (see
+[HPI load order](hpi.md#load-order-layering)). A `.ufo` always mounts and
+ranks above every `.hpi`; a `.hpi` mod would compete for the ten `*.hpi`
+slots a retail install has already filled. Files that `rev31.gp3` or a
+`.ccx` also holds (for example `units/ARMCOM.FBI` or
+`gamedata/sidedata.tdf`) still come from those archives: ship such
+overrides as loose files in the install root. The studio's **Export
+mod…** dialog lists them for a workspace before you download.
+
 Drop the `.ufo` into the TA install root, alongside `totala1.hpi`:
 
 ```bash

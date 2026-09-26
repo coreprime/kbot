@@ -48,6 +48,19 @@ func (sess *Session) buildHPI(req saveRequest) ([]byte, error) {
 	return bundleMapHPI(req.MapName, tntBytes, otaBytes)
 }
 
+// mapArchiveName names a map's archive download. A Total Annihilation map
+// ships as .ufo: TA 3.1c mounts every *.ufo, above every *.hpi, whereas a
+// .hpi whose name sorts after the install's tenth *.hpi is mounted only by
+// the disc scan (and pushes a retail archive out of the ten when it sorts
+// before one). TA: Kingdoms maps ship as .hpi. The bytes are the same
+// archive either way.
+func mapArchiveName(mapName string, kingdoms bool) string {
+	if kingdoms {
+		return mapName + ".hpi"
+	}
+	return mapName + ".ufo"
+}
+
 // bundleMapHPI packages a TNT + OTA pair as maps/<name>.{tnt,ota} inside an
 // HPI archive. Shared by the TA build pipeline and the TA:K in-place editor,
 // which produce their bytes differently but download identically.

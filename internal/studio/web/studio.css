@@ -6269,6 +6269,13 @@ canvas {
 .fx-facts-key { color: var(--muted); width: 160px; flex: 0 0 auto; }
 .fx-facts-val { font-family: var(--mono); word-break: break-all; }
 .fx-facts-val.fx-facts-text { font-family: inherit; word-break: normal; }
+.export-check { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
+.export-check-line { margin: 0; font-size: 13px; }
+.export-check-ok { color: var(--good); }
+.export-check-warn { color: #e7c547; }
+.export-check-error { color: var(--danger); }
+.export-check-info, .export-check-hint { color: var(--muted); }
+.export-check-list { margin: 0; padding-left: 18px; font-size: 12px; }
 .fx-mount { margin-top: 16px; padding: 10px 18px; }
 .fx-mount-group summary { cursor: pointer; padding: 6px 0; color: var(--muted); }
 .fx-mount-list { margin: 4px 0 10px; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }

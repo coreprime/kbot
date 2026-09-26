@@ -732,8 +732,21 @@ open an existing map, then paint terrain from `.sct` sections, place and scatter
 features, sculpt the heightmap, mark engine voids, and set per-schema start
 positions.  Split panes, undo/redo, a ruler, and symmetry tools aid editing; a
 Quality Checker lints the map (with auto-fixes) before you save.  The export
-menu bundles a downloadable `.hpi` (or loose TNT/OTA) plus full renders,
-minimaps, heightmaps, buildmaps, and voidmaps.
+menu bundles a downloadable map archive (or loose TNT/OTA) plus full renders,
+minimaps, heightmaps, buildmaps, and voidmaps.  A Total Annihilation map
+downloads as `<map>.ufo`: TA 3.1c mounts every `.ufo`, above every `.hpi`,
+while a `.hpi` competes for the game's ten `*.hpi` slots.  TA: Kingdoms maps
+download as `.hpi`.
+
+**Workspaces and mod export** — the picker's **Export mod…** dialog packs a
+workspace's changed files into one archive.  For Total Annihilation choose
+`.ufo` (the default: no count limit, ranks above every `.hpi`), `.ccx` (ranks
+above every `.ufo`) or `.hpi`.  Before the download it checks the archive
+against the base install's mount order: its position, any retail `*.hpi` it
+would push past the ten-archive limit, and every file a higher-priority
+archive or a loose file of the install also provides — the game ignores the
+mod's copy of those, so they must ship as loose files in the game directory.
+Every exported archive ends with the Cavedog trailer the game requires.
 
 **Sandbox Mode** — drop units onto a battlefield and test them live.  A WASM
 physics core simulates movement, commands, weapon fire, and damage with team

@@ -64,7 +64,7 @@ export function NewWorkspaceDialog({ open, base, contexts, workspaceRoot, onCanc
     <${DialogModal}
       open=${open}
       title="New workspace"
-      sub="Create a local mod workspace layered on a base context. Your edits live here and can be exported as an HPI later."
+      sub="Create a local mod workspace layered on a base context. Your edits live here and can be exported as a mod archive later."
       onCancel=${onCancel}
       actions=${[
         { label: 'Cancel', onClick: onCancel },

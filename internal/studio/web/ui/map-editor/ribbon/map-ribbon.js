@@ -117,7 +117,7 @@ function FileDropdown() {
         title="File actions" />
       <${Dropdown} id="file-dropdown" anchorId="file-dropdown-btn">
         <${MenuRow} icon="💾" label="Save" dropdownId="file-dropdown"
-          title="Save current map as .hpi"
+          title="Save the current map to the workspace, or download it as an archive (.ufo for Total Annihilation, .hpi for TA: Kingdoms)"
           onClick=${() => mapRibbonBridge.fileSave()} />
         <${MenuRow} icon="📑" label="Save loose…" dropdownId="file-dropdown"
           title="Save loose .tnt + .ota files (no HPI wrapper)"

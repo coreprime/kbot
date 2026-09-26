@@ -113,7 +113,7 @@ func (m *WorkspaceManager) openWorkspace(cfg *kbotctx.Config, dir string) (*Sess
 	if err != nil {
 		return nil, err
 	}
-	id := "ws-" + slug(man.Name) + "-" + shortHash(man.Dir())
+	id := workspaceSessionID(man)
 	return m.adopt(id, func() (*Session, error) {
 		vfs, err := openWorkspaceVFS(cfg, man)
 		if err != nil {
@@ -125,6 +125,11 @@ func (m *WorkspaceManager) openWorkspace(cfg *kbotctx.Config, dir string) (*Sess
 		s.exportFormat = man.Export.Format
 		return s, nil
 	})
+}
+
+// workspaceSessionID is the hub id of a workspace's session.
+func workspaceSessionID(man *workspace.Manifest) string {
+	return "ws-" + slug(man.Name) + "-" + shortHash(man.Dir())
 }
 
 // workspaceGame returns the game a workspace's base install holds: the
@@ -302,9 +307,12 @@ func (m *WorkspaceManager) handleForget(w http.ResponseWriter, r *http.Request) 
 	writeJSONHub(w, map[string]any{"ok": true})
 }
 
-// handleExport serves a workspace's mod as a downloadable HPI, packing the
-// work folder at the given ?dir. A GET so the picker can trigger a download
-// directly.
+// handleExport serves a workspace's mod as a downloadable archive, packing
+// the work folder at the given ?dir. A GET so the picker can trigger a
+// download directly. ?ext= picks .ufo (the default for Total Annihilation),
+// .ccx or .hpi and ?name= the file name; with ?preflight it answers the
+// export check (where the archive would rank in the base install's mount
+// order, which files the game would take from elsewhere) as JSON.
 func (m *WorkspaceManager) handleExport(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
@@ -316,14 +324,44 @@ func (m *WorkspaceManager) handleExport(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	data, err := packModHPI(man.Dir(), man.Export.Format)
+	req, err := parseExportRequest(r.URL.Query(), man.Name, man.Export.Format)
 	if err != nil {
-		http.Error(w, "export failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", slug(man.Name)+".hpi"))
-	_, _ = w.Write(data)
+	if !req.Preflight {
+		serveModArchive(w, man.Dir(), man.Export.Format, req.Archive)
+		return
+	}
+	report, err := m.exportPreflight(man, req.Archive)
+	if err != nil {
+		http.Error(w, "preflight failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONHub(w, report)
+}
+
+// exportPreflight checks a workspace export against its base install. It
+// reuses the workspace's open session when there is one and otherwise
+// mounts the base context chain for the duration of the check.
+func (m *WorkspaceManager) exportPreflight(man *workspace.Manifest, archive string) (exportPreflight, error) {
+	if sess := m.getOrNil(workspaceSessionID(man)); sess != nil && sess.vfs != nil {
+		return preflightExport(sess.vfs, man.Dir(), man.Export.Format, archive, workspace.WorkspaceLabel)
+	}
+	cfg, err := kbotctx.Load()
+	if err != nil {
+		return exportPreflight{}, err
+	}
+	srcs, err := workspace.ContextSources(cfg, man.Base)
+	if err != nil {
+		return exportPreflight{}, err
+	}
+	vfs, err := gamevfs.OpenLayered(srcs, workspaceGame(cfg, man))
+	if err != nil {
+		return exportPreflight{}, err
+	}
+	defer func() { _ = vfs.Close() }()
+	return preflightExport(vfs, man.Dir(), man.Export.Format, archive, "")
 }
 
 // handleDefaults reports sensible defaults for the New Workspace dialog —

@@ -2,7 +2,9 @@
 //
 // Save handlers — two flavours:
 //   - save()       posts to /api/studio/save and downloads the
-//                  packaged HPI archive (the normal user save).
+//                  packaged map archive (the normal user save), under
+//                  the name the server gives it: <map>.ufo for Total
+//                  Annihilation, <map>.hpi for TA: Kingdoms.
 //   - saveLoose()  posts twice to /api/studio/save-loose with
 //                  ?which=tnt and ?which=ota, downloading each file
 //                  separately.  Useful for the "uncompiled assets"
@@ -22,6 +24,7 @@ import { state, setStatus, sanitiseFilename, hostCallbacks, activeMap } from '..
 import { buildSavePayload } from './save-payload.js'
 import { runQualityChecker } from './dialogs/quality-checker.js'
 import { isTakMapActive } from './tak-edit.js'
+import { downloadName } from './download-name.js'
 
 // qualityFixes runs the TA quality checker, which lints the tile-pool build
 // pipeline. TA:K maps skip it — their terrain never goes through that
@@ -72,7 +75,7 @@ export async function save() {
   const fixes = await qualityFixes(payload)
   if (!fixes) return false
   payload.fixes = fixes
-  setStatus('Building HPI archive…')
+  setStatus('Building map archive…')
   try {
     const resp = await fetch('/api/studio/save', {
       method: 'POST',
@@ -85,7 +88,7 @@ export async function save() {
     }
     // Writable workspaces answer with a JSON receipt — the map's changed
     // files were written into the workspace VFS, nothing to download.
-    // Read-only contexts stream the packaged HPI as before.
+    // Read-only contexts stream the packaged map archive.
     const ctype = resp.headers.get('Content-Type') || ''
     if (ctype.includes('application/json')) {
       const receipt = await resp.json()
@@ -96,7 +99,8 @@ export async function save() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${sanitiseFilename(state.name)}.hpi`
+      const ext = isTakMapActive() ? 'hpi' : 'ufo'
+      a.download = downloadName(resp.headers.get('Content-Disposition'), `${sanitiseFilename(state.name)}.${ext}`)
       document.body.appendChild(a)
       a.click()
       a.remove()

@@ -1731,7 +1731,7 @@ func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", mapArchiveName(req.MapName, true)))
 		_, _ = w.Write(hpiBytes)
 		return
 	}
@@ -1755,7 +1755,7 @@ func (sess *Session) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", req.MapName+".hpi"))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", mapArchiveName(req.MapName, false)))
 	_, _ = w.Write(hpiBytes)
 }
 

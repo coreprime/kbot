@@ -15,6 +15,7 @@ import { GameChip, GameIcon } from '@coreprime/kbot-ui/game-icon'
 import { confirmDialog } from '@coreprime/kbot-ui/confirm-dialog'
 import { CavedogIcon } from './icons.js'
 import { NewWorkspaceDialog } from './new-workspace-dialog.js'
+import { ExportModDialog } from './export-mod-dialog.js'
 import { ALL_GAMES } from '/ui/common/game-registry.js'
 
 // Header brand logos. All are stacked and cross-faded via CSS opacity as the
@@ -110,6 +111,7 @@ export function PickerApp() {
   const reload = () => setNonce((n) => n + 1)
 
   const [dialogBase, setDialogBase] = useState(null)
+  const [exportWs, setExportWs] = useState(null) // workspace row the Export dialog is open for
   const [actionErr, setActionErr] = useState('')
   const [filter, setFilter] = useState('all')
   const [hover, setHover] = useState(null) // { type: 'ctx'|'ws', id }
@@ -230,7 +232,7 @@ export function PickerApp() {
                 <${Tag}>base: ${w.base}<//><span class="picker-path">${w.path}</span>
               </div>
             </div>
-            <button class="btn" onClick=${() => window.open('/api/hub/export?dir=' + encodeURIComponent(w.path), '_blank')}>Export mod</button>
+            <button class="btn" onClick=${() => setExportWs(w)}>Export mod…</button>
             <button class="btn" onClick=${() => remove(w)}>Remove</button>
             <button class="btn primary" onClick=${() => open({ kind: 'workspace', dir: w.path })}>Open</button>
           </div>`)}
@@ -282,6 +284,8 @@ export function PickerApp() {
           ${workspacesCol}
         </div>
       </main>
+
+      <${ExportModDialog} workspace=${exportWs} onClose=${() => setExportWs(null)} />
 
       <${NewWorkspaceDialog}
         open=${dialogBase !== null}
