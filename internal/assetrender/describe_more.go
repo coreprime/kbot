@@ -200,17 +200,36 @@ func describeBOS(r *Renderer, vpath string, data []byte, out map[string]any) {
 			out["lintError"] = fmt.Sprintf("compilation failed: %v", err)
 			return
 		}
-		// The compiler's own warnings (a function defined twice, % under
-		// .version 6) come first; the linter then runs the style rules and,
-		// for a TA script, the TA 3.1c compatibility rules.
-		diags := make([]linter.Diagnostic, 0, len(comp.Warnings()))
-		for _, w := range comp.Warnings() {
-			diags = append(diags, linter.Diagnostic{Rule: "compiler", Severity: linter.Warning, Message: w})
-		}
-		results, summary := diagsToJSON(append(diags, linter.New().Lint(cob)...))
+		results, summary := diagsToJSON(bosLintDiagnostics(comp.Warnings(), linter.New().Lint(cob)))
 		out["lintResults"] = results
 		out["lintSummary"] = summary
 	}
+}
+
+// bosLintDiagnostics lists a compiled BOS file's problems once each: the
+// compiler's warnings (such as % under .version 6) first, then the linter's
+// findings (the style rules and, for a TA script, the TA 3.1c compatibility
+// rules). A function defined twice is both a compiler warning and the
+// linter's duplicate-function finding; only the linter's, which carries the
+// line, is kept.
+func bosLintDiagnostics(compilerWarnings []string, lint []linter.Diagnostic) []linter.Diagnostic {
+	var dupPrefixes []string
+	for _, d := range lint {
+		if d.Rule == "duplicate-function" && d.Script != "" {
+			dupPrefixes = append(dupPrefixes, "function "+d.Script+" is defined more than once")
+		}
+	}
+	diags := make([]linter.Diagnostic, 0, len(compilerWarnings)+len(lint))
+warnings:
+	for _, w := range compilerWarnings {
+		for _, p := range dupPrefixes {
+			if strings.HasPrefix(w, p) {
+				continue warnings
+			}
+		}
+		diags = append(diags, linter.Diagnostic{Rule: "compiler", Severity: linter.Warning, Message: w})
+	}
+	return append(diags, lint...)
 }
 
 // describeBOSCallGraph extracts a BOS file's call/signal graph. It prefers a

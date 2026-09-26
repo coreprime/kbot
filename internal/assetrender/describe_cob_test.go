@@ -90,10 +90,29 @@ func TestDescribeCOBReportsAFileThatDoesNotLoad(t *testing.T) {
 }
 
 func TestDescribeBOSShowsCompilerWarnings(t *testing.T) {
+	// A function defined twice is listed once, as the linter's
+	// duplicate-function finding, not again as a compiler warning.
 	src := "Helper()\n{\n\treturn 1;\n}\nHelper()\n{\n\treturn 2;\n}\nCreate()\n{\n\tcall-script Helper();\n}\n"
 	out, _ := newTestRenderer(t).Describe("scripts/dup.bos", []byte(src))
+	diags, _ := out["lintResults"].([]lintDiag)
+	var dups, compilerDups int
+	for _, d := range diags {
+		switch {
+		case d.Rule == "duplicate-function":
+			dups++
+		case d.Rule == "compiler" && strings.Contains(d.Message, "Helper"):
+			compilerDups++
+		}
+	}
+	if dups != 1 || compilerDups != 0 {
+		t.Errorf("duplicate Helper: %d duplicate-function and %d compiler entries, want 1 and 0 (out %v)", dups, compilerDups, diags)
+	}
+
+	// A compiler warning the linter has no rule for is listed.
+	src = ".version 6\nCreate()\n{\n\tvar x;\n\tx = 10 % 4;\n}\n"
+	out, _ = newTestRenderer(t).Describe("scripts/tak.bos", []byte(src))
 	if sev := lintRules(t, out)["compiler"]; sev != "warning" {
-		t.Errorf("compiler warning severity = %q, want warning (out %v)", sev, out["lintResults"])
+		t.Errorf("%% under .version 6: compiler warning severity = %q, want warning (out %v)", sev, out["lintResults"])
 	}
 
 	out, _ = newTestRenderer(t).Describe("scripts/mod.bos", []byte("Create()\n{\n\tvar x;\n\tx = 10 % 4;\n}\n"))
