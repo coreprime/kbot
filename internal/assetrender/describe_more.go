@@ -365,8 +365,12 @@ func describeFNT(_ *Renderer, _ string, data []byte, out map[string]any) {
 	}
 	out["format"] = "TA Font"
 	out["height"] = font.Height
+	out["baseline"] = font.Baseline
+	out["firstChar"] = font.FirstChar
 	out["glyphCount"] = font.GlyphCount()
-	out["flags"] = font.Flags
+	if len(font.Warnings) > 0 {
+		out["warnings"] = font.Warnings
+	}
 
 	type glyph struct {
 		Char  int `json:"char"`

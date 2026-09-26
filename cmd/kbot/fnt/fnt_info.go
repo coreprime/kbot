@@ -24,8 +24,8 @@ func newFNTInfoCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("parse fnt: %w", err)
 			}
-			fmt.Printf("%s: height=%d  glyphs=%d  flags=0x%04X\n",
-				args[0], f.Height, f.GlyphCount(), f.Flags)
+			fmt.Printf("%s: height=%d  baseline=%d  first=0x%02X  glyphs=%d\n",
+				args[0], f.Height, f.Baseline, f.FirstChar, f.GlyphCount())
 			return nil
 		},
 	}

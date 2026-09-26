@@ -167,3 +167,61 @@ func TestPCXDescribeReportsGameCompat(t *testing.T) {
 		t.Errorf("version 3 file: game_loads=%v issues=%v, want refused", out.GameLoads, out.GameIssues)
 	}
 }
+
+// testFont builds a 13-row font (baseline 2) whose glyphs (code → width)
+// have every pixel set.
+func testFont(glyphs map[byte]int) []byte {
+	out := []byte{13, 0, 2, 0}
+	offsets := make([]byte, 512)
+	var data []byte
+	for code := 0; code < 256; code++ {
+		w, ok := glyphs[byte(code)]
+		if !ok {
+			continue
+		}
+		off := 516 + len(data)
+		offsets[2*code], offsets[2*code+1] = byte(off), byte(off>>8)
+		data = append(data, byte(w))
+		data = append(data, bytes.Repeat([]byte{0xFF}, (w*13+7)/8)...)
+	}
+	return append(append(out, offsets...), data...)
+}
+
+func TestFNTToolsFollowTheGame(t *testing.T) {
+	root := mediaRoot(t)
+	r := mediaResolver(t, root)
+	src := writeFile(t, filepath.Join(root, "test.fnt"), testFont(map[byte]int{'A': 10, 0x80: 7}))
+
+	var desc fntDescribeOutput
+	if res := callTool(t, makeFNTDescribeHandler(r), "fnt_describe", map[string]any{"path": src}, &desc); res.IsError {
+		t.Fatal(textOf(res))
+	}
+	if desc.Height != 13 || desc.Baseline != 2 || desc.FirstChar != 0 {
+		t.Errorf("describe = height %d baseline %d first %d, want 13 2 0", desc.Height, desc.Baseline, desc.FirstChar)
+	}
+
+	for _, tc := range []struct {
+		text, page string
+		width      int
+	}{
+		{"A A", "", 20}, // no spacing, a missing space adds nothing
+		{"€", "", 7},    // Windows-1252 byte 0x80
+		{"A\nA", "", 10},
+	} {
+		var img fntImageOutput
+		args := map[string]any{"path": src, "output": filepath.Join(root, "out.png"), "text": tc.text}
+		if tc.page != "" {
+			args["codepage"] = tc.page
+		}
+		if res := callTool(t, makeFNTRenderHandler(r), "fnt_render", args, &img); res.IsError {
+			t.Fatal(textOf(res))
+		}
+		if img.Width != tc.width || img.Height != 13 {
+			t.Errorf("render %q: %dx%d, want %dx13", tc.text, img.Width, img.Height, tc.width)
+		}
+	}
+	if res := callTool(t, makeFNTRenderHandler(r), "fnt_render",
+		map[string]any{"path": src, "output": filepath.Join(root, "x.png"), "text": "A", "codepage": "klingon"}, nil); !res.IsError {
+		t.Error("an unknown code page was accepted")
+	}
+}

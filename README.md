@@ -347,13 +347,16 @@ holds up to 256 glyphs sharing a single height; widths vary per glyph.
 # One-line summary
 kbot fnt info comix.fnt
 
-# Detailed metadata (height, flags, glyph count, code-point coverage)
+# Detailed metadata (height, baseline, first character code, glyph
+# count, character-code coverage)
 kbot fnt describe comix.fnt
 kbot fnt describe comix.fnt --list      # also enumerate every defined glyph
 
-# Render a string to PNG
+# Render a string to PNG, laid out as the game does (text converted to
+# Windows-1252 by default; --codepage picks another, raw passes bytes through)
 kbot fnt render comix.fnt --text "Hello TA" --target hello.png
 kbot fnt render armfont.fnt --text "Commander" --fg "#ffff00" --bg transparent
+kbot fnt render comix.fnt --text "Привет" --codepage cp1251 --target ru.png
 
 # Render every defined glyph as a 16-column sprite sheet
 kbot fnt sheet comix.fnt --target sheet.png
@@ -363,6 +366,7 @@ kbot fnt dump comix.fnt --target ./glyphs
 ```
 
 Colors accept `#rrggbb`, `#rrggbbaa`, or the literal `transparent` / `none`.
+Rendering follows the game: each character byte selects the glyph with that code, a glyph advances by exactly its width, a character with no glyph adds nothing, and drawing stops at the first newline.
 
 ---
 

@@ -281,7 +281,8 @@ func (r *Renderer) renderFNT(vpath string, data []byte, req RenderRequest) (Rend
 			if err != nil {
 				return nil, fmt.Errorf("parse font: %w", err)
 			}
-			return encodePNG(font.RenderText(req.Text, fg, bg))
+			// The game indexes glyphs by Windows-1252 byte.
+			return encodePNG(font.RenderText(fnt.EncodeCP1252(req.Text), fg, bg))
 		})
 		return Rendered{ContentType: "image/png", Body: body}, err
 	}

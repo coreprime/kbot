@@ -44,7 +44,7 @@ export function FontViewer({ path, describe, source }) {
   return html`
     <div class="fx-viewer">
       <div class="fx-ctl-row">
-        ${d.glyphCount != null ? html`<span class="fx-img-dims">${d.glyphCount} glyphs · ${d.height}px tall</span>` : null}
+        ${d.glyphCount != null ? html`<span class="fx-img-dims">${d.glyphCount} glyphs · ${d.height}px tall${d.baseline != null ? ` · baseline ${d.baseline}` : ''}</span>` : null}
       </div>
       <div class="fx-img-stage"><img class="fx-img" src=${imageURL(path, 'png', source)} alt=${path} /></div>
     </div>

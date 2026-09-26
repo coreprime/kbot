@@ -221,3 +221,45 @@ func TestDescribePCXReportsGameCompat(t *testing.T) {
 		t.Errorf("gameCompat = %+v, want a bytes-per-line warning on a loadable file", c)
 	}
 }
+
+// TestFontDescribeAndPreviewFollowTheGame checks the asset explorer's font
+// facts (baseline and first character instead of a flags word) and that
+// its text preview is laid out as the game does, in Windows-1252.
+func TestFontDescribeAndPreviewFollowTheGame(t *testing.T) {
+	font := []byte{13, 0, 2, 0}
+	offsets := make([]byte, 512)
+	var glyphs []byte
+	for _, g := range []struct {
+		code byte
+		w    int
+	}{{'A', 10}, {0x80, 7}} {
+		off := 516 + len(glyphs)
+		offsets[2*int(g.code)], offsets[2*int(g.code)+1] = byte(off), byte(off>>8)
+		glyphs = append(glyphs, byte(g.w))
+		glyphs = append(glyphs, bytes.Repeat([]byte{0xFF}, (g.w*13+7)/8)...)
+	}
+	font = append(append(font, offsets...), glyphs...)
+
+	r := newTestRenderer(t)
+	desc, ok := r.Describe("fonts/test.fnt", font)
+	if !ok {
+		t.Fatal("font not described")
+	}
+	if desc["baseline"] != 2 || desc["firstChar"] != 0 || desc["height"] != 13 {
+		t.Errorf("describe = %v", desc)
+	}
+	if _, has := desc["flags"]; has {
+		t.Error("describe still reports flags")
+	}
+	out, err := r.Render("fonts/test.fnt", font, RenderRequest{Text: "A €", Sequence: -1, Frame: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(out.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Width != 17 {
+		t.Errorf(`"A €" preview is %d px wide, want 17 (10 + 0 + 7)`, cfg.Width)
+	}
+}
