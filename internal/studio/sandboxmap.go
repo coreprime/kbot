@@ -331,7 +331,8 @@ type sandboxSideJSON struct {
 
 // handleSandboxSides lists the game's playable sides from
 // gamedata/sidedata.tdf — dynamic, so TA reports ARM/CORE and TA:K its five
-// kingdoms without any hardcoding.
+// kingdoms without any hardcoding. TA offers only the sides the game reads
+// (SIDE0, SIDE1, ... without gaps, at most five; see playableSides).
 func (sess *Session) handleSandboxSides(w http.ResponseWriter, _ *http.Request) {
 	out := []sandboxSideJSON{}
 	for _, p := range []string{"gamedata/sidedata.tdf", "gamedata/SIDEDATA.tdf", "GameData/sidedata.tdf"} {
@@ -343,7 +344,8 @@ func (sess *Session) handleSandboxSides(w http.ResponseWriter, _ *http.Request) 
 		if err := tdf.Unmarshal(data, &sd); err != nil {
 			continue
 		}
-		for i, s := range sd.Sides {
+		sides, nums := playableSides(&sd, sess.isKingdoms())
+		for i, s := range sides {
 			name := strings.TrimSpace(s.Name)
 			cmdr := strings.ToLower(strings.TrimSpace(s.Commander))
 			// Only sides with a leader unit are playable — TA:K's sidedata
@@ -351,7 +353,7 @@ func (sess *Session) handleSandboxSides(w http.ResponseWriter, _ *http.Request) 
 			if name == "" || cmdr == "" {
 				continue
 			}
-			out = append(out, sandboxSideJSON{Index: i, Name: name, Commander: cmdr})
+			out = append(out, sandboxSideJSON{Index: nums[i], Name: name, Commander: cmdr})
 		}
 		break
 	}

@@ -153,6 +153,13 @@ distinct concerns:
 | `font` / `fontgui` | [FNT](fnt.md) files for HUD text and buttons. |
 | `energycolor` / `metalcolor` | Palette indices for HUD bars (`palette.pal` indices). |
 
+TA 3.1c reads the sides `[SIDE0]`, `[SIDE1]`, … in order, stopping at the
+first missing number and after five. A section with any other name
+(`[SIDE01]`, a `[SIDE3]` after a missing `[SIDE2]`, a sixth side) is never
+read, and each side it reads needs every HUD rectangle below (kbot-io's
+`ta.SideRectangles`), or the game loads no sides at all. The studio's
+sandbox side picker offers the same sides.
+
 ### HUD coordinate sub-sections
 
 Every visible HUD element is a `[NAME]` block with `x1/y1/x2/y2` pixel
@@ -195,7 +202,20 @@ can build at game-start:
 The slot number is the position on the build menu page. TA's build
 menu is a **2-column × 3-row grid**, so each page holds **6** slots:
 `canbuild1`–`canbuild6` are page 1, `canbuild7`–`canbuild12` are
-page 2, and so on. (Older documentation occasionally claimed 12 slots
+page 2, and so on.
+
+How TA 3.1c reads the table (kbot-io's `CanBuildBuilder.BuildList`;
+`kbot document`, the unit viewer and the sandbox build menu follow it):
+
+- Only a unit whose FBI sets **`Builder=1`** gets a list; a subsection
+  for any other unit is ignored.
+- The game reads the **first** `[CANBUILD]` section and in it the first
+  subsection named after the builder (ignoring case).
+- It reads `canbuild1`, `canbuild2`, … and **stops at the first missing
+  number**: `canbuild1=ARMSOLAR; canbuild3=ARMLAB;` gives one entry.
+- A name that matches no unit is skipped, and a list keeps at most
+  **30** units. Download entries (below) can take a builder's menu to
+  31. (Older documentation occasionally claimed 12 slots
 per page; the actual in-game grid is 6.) See the
 [TA build tree reference](https://github.com/coreprime/reference-ta/blob/main/ta-buildtree.md)
 for the per-page layout of every constructor in the base game.
@@ -361,9 +381,10 @@ The unit will now traverse both land and water seamlessly.
 - **`sidedata.tdf` HUD coords are at 640×480 base** and scale up by
   the engine for higher resolutions. Don't write coordinates in
   modern resolutions.
-- **`[CANBUILD]` slot numbers** beyond 12 add extra pages; the engine
-  doesn't error if you go to 11 then 14 with a gap. The gap shows as
-  a blank slot.
+- **`[CANBUILD]` numbering must not have gaps.** The game stops
+  reading a builder's list at the first missing `canbuildN`, so
+  `canbuild11` followed by `canbuild14` loses the 14th entry and every
+  one after it, without an error.
 - **Each `MovementClass` must be declared in `moveinfo.tdf` before any
   FBI references it.** Loading an FBI with an undefined class
   silently makes the unit stationary.

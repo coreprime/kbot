@@ -796,7 +796,7 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 			}
 		}
 	}
-	out.BuildOptions = sess.palettes().BuildOptions(name)
+	out.BuildOptions = sess.buildOptions(name)
 	// Corpse chain: FBI corpse= names a wreck feature whose object= is the
 	// 3DO the sandbox renders when the unit dies; its featuredead chains to
 	// the damaged wreck used for heavier kills (Killed corpsetype 2).
