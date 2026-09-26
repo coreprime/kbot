@@ -866,19 +866,16 @@ func (sess *Session) buildUnitMeta(name string, overrides [3]string) (*unitMetaJ
 // authoritative host's spawn provider runs) and mirrors the resulting fields
 // into the JSON shape the wasm bridge decodes.
 //
-// overrides are the Change Weapon picker's per-slot substitutions: the FBI's
-// reference in an overridden slot resolves to the substitute, so the slot's
-// exact-combat fields describe the weapon the JSON slot carries.
+// overrides are the Change Weapon picker's per-slot substitutions: the meta
+// is built from the FBI with each overridden slot naming its substitute (see
+// overrideFBI), so every slot's exact-combat fields describe the weapon that
+// JSON slot carries, even when two slots name the same weapon.
 func (sess *Session) enrichMetaJSON(out *unitMetaJSON, name string, overrides [3]string) {
 	fbi, err := sess.loadUnitFBIBytes(name)
 	if err != nil {
 		return
 	}
-	resolve := sess.weaponTable().Resolve
-	if info, ierr := sess.loadUnitFBI(name); ierr == nil {
-		resolve = sess.overrideResolver(&info.Info, overrides)
-	}
-	meta, err := sess.simUnitMeta(name, fbi, resolve)
+	meta, err := sess.simUnitMeta(name, overrideFBI(fbi, overrides), sess.weaponTable().Resolve)
 	if err != nil || meta == nil {
 		return
 	}

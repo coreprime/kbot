@@ -1,7 +1,9 @@
 package studio
 
 import (
+	"bytes"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/coreprime/kbot-engine/engine/fixed"
@@ -149,33 +151,53 @@ func (sess *Session) simMoveClassTable() games.MovementClasses {
 	return sess.simMoveClasses
 }
 
-// overrideResolver returns the meta builders' weapon resolver — the session
-// weapon table's Resolve: the weapon a reference names, with the game's
-// defaults for a missing range or minimum barrel angle filled in — with the
-// Change Weapon picker's per-slot substitutions applied: the FBI's reference
-// in an overridden slot resolves to the substitute ("NONE" or "-" to
-// nothing).
-func (sess *Session) overrideResolver(info *ta.UnitInfo, overrides [3]string) games.WeaponResolver {
-	subst := map[string]string{}
-	for i, ref := range []string{info.Weapon1, info.Weapon2, info.Weapon3} {
-		ref = strings.ToUpper(strings.TrimSpace(ref))
-		if ref != "" && overrides[i] != "" {
-			subst[ref] = strings.ToUpper(strings.TrimSpace(overrides[i]))
+// overrideFBI returns a unit's FBI text with the Change Weapon picker's
+// per-slot substitutions made in its [UNITINFO]: an overridden slot's
+// WeaponN names the substitute ("NONE" or "-" empties the slot). The meta
+// builders then read every slot on its own, as if the FBI named that weapon
+// there, so a slot that shares its weapon with an overridden one keeps its
+// own weapon, and a death blast naming the same weapon is untouched. A
+// substitute that cannot be written as a value (it holds a ';', say) names
+// no weapon. The text is returned as it is when no slot is overridden or the
+// FBI has no [UNITINFO].
+func overrideFBI(fbi []byte, overrides [3]string) []byte {
+	var subst [3]string
+	changed := false
+	for i, o := range overrides {
+		o = strings.ToUpper(strings.TrimSpace(o))
+		if o == "-" || (o != "" && tdf.CheckValue(o) != nil) {
+			o = "NONE"
+		}
+		subst[i] = o
+		changed = changed || o != ""
+	}
+	if !changed {
+		return fbi
+	}
+	doc, err := tdf.Parse(bytes.NewReader(fbi))
+	if err != nil {
+		return fbi
+	}
+	info := doc.Section("UNITINFO")
+	if info == nil {
+		return fbi
+	}
+	for i, o := range subst {
+		if o != "" {
+			info.Set("Weapon"+strconv.Itoa(i+1), o)
 		}
 	}
-	resolve := sess.weaponTable().Resolve
-	if len(subst) == 0 {
-		return resolve
+	if out, err := doc.Bytes(); err == nil {
+		return out
 	}
-	return func(ref string) (ta.Weapon, bool) {
-		if o, ok := subst[strings.ToUpper(strings.TrimSpace(ref))]; ok {
-			if o == "NONE" || o == "-" {
-				return ta.Weapon{}, false
-			}
-			ref = o
-		}
-		return resolve(ref)
+	// Bytes edits the source text in place and refuses an addition it cannot
+	// place there (after a section the file ends inside, say); Write lays
+	// the whole document out afresh, with the same data.
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		return fbi
 	}
+	return buf.Bytes()
 }
 
 // handleSandboxList reports the active sandbox sessions for the Join picker.

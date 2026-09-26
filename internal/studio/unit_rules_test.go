@@ -1,6 +1,7 @@
 package studio
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"github.com/coreprime/kbot-engine/engine/fixed"
 	"github.com/coreprime/kbot-engine/engine/sim"
 	"github.com/coreprime/kbot-io/filesystem"
+	"github.com/coreprime/kbot-io/formats/gamedata/ta"
+	"github.com/coreprime/kbot-io/formats/tdf"
 	"github.com/coreprime/kbot-io/testutil"
 )
 
@@ -248,5 +251,66 @@ func TestGameSoundKeys(t *testing.T) {
 	}
 	if gameSoundKeys(map[string]string{"weird": "y"}) != nil || gameSoundKeys(nil) != nil {
 		t.Fatalf("no playable keys should give nil")
+	}
+}
+
+// TestUnitMetaWeaponOverridePerSlot: the Change Weapon picker swaps one slot.
+// ARMBATS names ARM_BATS in both Weapon1 and Weapon2; overriding Weapon1 with
+// EMG must leave slot 2 exactly as it is without the override.
+func TestUnitMetaWeaponOverridePerSlot(t *testing.T) {
+	sess := mountVFSForTest(t)
+	plain, err := sess.buildUnitMeta("armbats", [3]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Weapons[0].Name != "ARM_BATS" || plain.Weapons[1].Name != "ARM_BATS" {
+		t.Fatalf("armbats weapons %s / %s, want ARM_BATS twice", plain.Weapons[0].Name, plain.Weapons[1].Name)
+	}
+	swapped, err := sess.buildUnitMeta("armbats", [3]string{"EMG", "", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emg := swapped.Weapons[0]
+	if emg.Name != "EMG" || emg.ReloadTicks != 12 || emg.BurstRateTicks != 3 {
+		t.Errorf("slot 1 = %s reload %d ticks burst rate %d, want EMG's 12 and 3", emg.Name, emg.ReloadTicks, emg.BurstRateTicks)
+	}
+	if !reflect.DeepEqual(swapped.Weapons[1], plain.Weapons[1]) {
+		t.Errorf("slot 2 changed with slot 1's override:\n got %+v\nwant %+v", swapped.Weapons[1], plain.Weapons[1])
+	}
+	if swapped.Weapons[1].ReloadTicks != 66 {
+		t.Errorf("slot 2 reload %d ticks, want ARM_BATS's 66 (reloadtime 2.2)", swapped.Weapons[1].ReloadTicks)
+	}
+
+	// NONE empties only its own slot.
+	cleared, err := sess.buildUnitMeta("armbats", [3]string{"", "NONE", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.Weapons[1].Name != "" || cleared.Weapons[1].ReloadTicks != 0 {
+		t.Errorf("slot 2 after NONE = %+v, want empty", cleared.Weapons[1])
+	}
+	if !reflect.DeepEqual(cleared.Weapons[0], plain.Weapons[0]) {
+		t.Errorf("slot 1 changed with slot 2's NONE")
+	}
+}
+
+func TestOverrideFBI(t *testing.T) {
+	fbi := []byte("[UNITINFO]\r\n\t{\r\n\tUnitName=X;\r\n\tWeapon1=GUN;\r\n\tWeapon2=GUN;\r\n\tExplodeAs=GUN;\r\n\t}\r\n")
+	if got := overrideFBI(fbi, [3]string{}); !bytes.Equal(got, fbi) {
+		t.Fatalf("no override changed the text: %q", got)
+	}
+	var u ta.Unit
+	if err := tdf.Unmarshal(overrideFBI(fbi, [3]string{"", " laser ", "rocket"}), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.Info.Weapon1 != "GUN" || u.Info.Weapon2 != "LASER" || u.Info.Weapon3 != "ROCKET" || u.Info.ExplodeAs != "GUN" {
+		t.Errorf("weapons %q %q %q explodeas %q; want GUN LASER ROCKET, GUN", u.Info.Weapon1, u.Info.Weapon2, u.Info.Weapon3, u.Info.ExplodeAs)
+	}
+	u = ta.Unit{}
+	if err := tdf.Unmarshal(overrideFBI(fbi, [3]string{"-", "A;B", ""}), &u); err != nil {
+		t.Fatal(err)
+	}
+	if u.Info.Weapon1 != "NONE" || u.Info.Weapon2 != "NONE" {
+		t.Errorf("weapons %q %q, want NONE for '-' and for a name that cannot be written", u.Info.Weapon1, u.Info.Weapon2)
 	}
 }
