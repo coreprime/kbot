@@ -2,7 +2,9 @@ package assetrender
 
 import (
 	"bytes"
+	"fmt"
 	"image/png"
+	"strings"
 	"testing"
 
 	"github.com/coreprime/kbot-io/formats/gaf"
@@ -261,5 +263,67 @@ func TestFontDescribeAndPreviewFollowTheGame(t *testing.T) {
 	}
 	if cfg.Width != 17 {
 		t.Errorf(`"A €" preview is %d px wide, want 17 (10 + 0 + 7)`, cfg.Width)
+	}
+}
+
+// tdoHeader appends a 52-byte 3DO object header to b.
+func tdoHeader(b []byte, nverts, nprims, name, verts, prims, sibling, child int32) []byte {
+	for _, w := range []int32{1, nverts, nprims, -1, 0, 0, 0, name, 0, verts, prims, sibling, child} {
+		b = append(b, byte(w), byte(w>>8), byte(w>>16), byte(w>>24))
+	}
+	return b
+}
+
+// TestDescribe3DOFollowsTheGame checks the asset explorer's 3DO facts: the
+// root's siblings are counted and listed, texture names are listed once
+// whatever their case, and a truncated file reports an error.
+func TestDescribe3DOFollowsTheGame(t *testing.T) {
+	// Root at 0 (one primitive, texture "ArmTex"), sibling at 52 (one
+	// primitive, texture "armtex"), then names, a vertex, primitives,
+	// index arrays and texture names.
+	const (
+		rootAt, sibAt = 0, 52
+		names         = 104 // "base\0" at 104, "side\0" at 109
+		vert          = 114 // one 12-byte vertex
+		prims         = 126 // two 32-byte primitive records
+		idx           = 190 // two 2-byte index arrays
+		tex           = 194 // "ArmTex\0" at 194, "armtex\0" at 201
+	)
+	b := tdoHeader(nil, 1, 1, names, vert, prims, sibAt, 0)
+	b = tdoHeader(b, 1, 1, names+5, vert, prims+32, 0, 0)
+	b = append(b, "base\x00side\x00"...)
+	b = append(b, make([]byte, 12)...)
+	for i, texAt := range []int32{tex, tex + 7} {
+		rec := make([]byte, 32)
+		rec[4] = 1 // one corner
+		idxAt := int32(idx + 2*i)
+		rec[12], rec[13] = byte(idxAt), byte(idxAt>>8)
+		rec[16], rec[17] = byte(texAt), byte(texAt>>8)
+		b = append(b, rec...)
+	}
+	b = append(b, 0, 0, 0, 0)
+	b = append(b, "ArmTex\x00armtex\x00"...)
+
+	r := newTestRenderer(t)
+	out, _ := r.Describe("objects3d/test.3do", b)
+	if e, has := out["error"]; has {
+		t.Fatalf("valid model reported %v", e)
+	}
+	if out["totalObjects"] != 2 || out["rootSiblings"] != 1 || out["totalPrimitives"] != 2 {
+		t.Errorf("totals = objects %v, siblings %v, primitives %v; want 2, 1, 2", out["totalObjects"], out["rootSiblings"], out["totalPrimitives"])
+	}
+	if tex, _ := out["textures"].([]string); len(tex) != 1 {
+		t.Errorf("textures = %v, want one case-insensitive entry", out["textures"])
+	}
+	if objs := fmt.Sprint(out["objects"]); !strings.Contains(objs, "side") {
+		t.Errorf("objects %s lack the root sibling", objs)
+	}
+
+	trunc, _ := r.Describe("objects3d/cut.3do", b[:60])
+	if trunc["format"] != "3DO Model" || trunc["error"] == nil {
+		t.Errorf("truncated model described as %v", trunc)
+	}
+	if _, has := trunc["totalObjects"]; has {
+		t.Error("truncated model reports counts")
 	}
 }

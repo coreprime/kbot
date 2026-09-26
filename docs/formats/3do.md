@@ -101,15 +101,14 @@ A primitive is a face (or a single point, or a line):
 
 ```c
 typedef struct {
-    int32 ColorIndex;              // Palette index for solid-coloured faces
+    int32 ColorIndex;              // Palette index for solid-coloured faces (low byte used)
     int32 NumberOfVertexIndexes;   // 1 = point, 2 = line, 3 = tri, 4 = quad
     int32 Always0;
     int32 OffsetToVertexIndexArray; // → uint16[NumberOfVertexIndexes]
     int32 OffsetToTextureName;     // → NUL string, or 0 for untextured
     int32 Unknown1;                // Editor scratch
     int32 Unknown2;                // Editor scratch
-    int32 IsColored;               // 0 if textured OR pure transparent;
-                                   // !=0 if solid-coloured
+    int32 IsColored;               // flag word: bit 0 set = solid-coloured
 } Primitive;
 ```
 
@@ -135,7 +134,13 @@ def walk(file, offset, depth=0):
         yield from walk(file, obj.sibling_offset, depth)
 ```
 
-The **root** object is at file offset `0` and has `SiblingOffset == 0`.
+The **root** object is at file offset `0`. In every retail model its
+`SiblingOffset` is `0`, but the game follows the root's sibling chain
+too: each root sibling (and its subtree) is loaded as a further
+top-level piece after the root's subtree, and drawn at its own vertex
+coordinates — the game's piece transform starts at the root and applies
+no piece offsets to them. kbot's model JSON carries them as
+`rootSiblings`, and the asset explorer counts and lists them.
 Every piece name in the COB script must match a piece name in this tree
 (case-insensitive); a mismatch will cause the script's animation to
 silently no-op.
@@ -152,24 +157,40 @@ to know:
   primitive's vertex order. To "rotate" a texture you re-order the
   vertex indices in the primitive's `VertexIndexArray`. The original
   3do Builder editor exposed this as a "texture orientation" knob.
-- **`OffsetToTextureName == 0`** means no texture. If `IsColored != 0`,
-  draw the primitive as a flat-shaded fill using `ColorIndex`. If both
-  are zero, the primitive is **invisible / transparent** — Cavedog uses
-  this for collision-only or pure script-anchor faces.
+- **`IsColored` is a flag word and only bit 0 matters.** More than half
+  of the retail primitives store other values in it (textured faces with
+  bit 0 clear, untextured ones with bit 0 set). A face with bit 0 set is
+  filled with the **low byte** of `ColorIndex`.
+- **`OffsetToTextureName == 0`** means no texture. If bit 0 of
+  `IsColored` is clear too, the primitive is **not drawn** — Cavedog
+  uses this for collision-only or pure script-anchor faces.
+- **A texture name that does not resolve** (looked up case-insensitively)
+  fills the face with **palette index `0xd1`**, coloured or not.
+- **Only four-corner faces are textured** in TA, corner 0 at the
+  texture's top-left texel and then clockwise. An uncoloured textured
+  triangle or n-gon is not drawn (TA: Kingdoms models texture them).
+- **Faces are drawn from the front only**: the side their corner order
+  faces by the right-hand rule, in file coordinates.
 - **In Cavedog-built files the texture name pool starts at file offset
   `0x34`** (immediately after the root object's header). This is a
   convention, not a format requirement.
 
 > [!IMPORTANT]
-> **Untextured primitives use `ColorIndex` only when `IsColored != 0`.**
-> The pseudocode for "is this primitive visible?" is:
+> **How the game draws a primitive** (kbot-io's `Primitive.Style`):
 >
 > ```c
-> bool visible = (texture_name != "") || (IsColored != 0);
+> if (texture_name != "" && !texture_found)  fill(0xd1);
+> else if (IsColored & 1)                   fill(ColorIndex & 0xff);
+> else if (texture_found && corners == 4)   texture();
+> else                                      /* not drawn */;
 > ```
 >
 > Getting this wrong is the most common 3DO rendering bug — a model
 > with collision-only faces ends up filled with random palette colour.
+> kbot's unit viewer model JSON applies these rules server-side (each
+> primitive carries `style`, `fillIndex` and `colorRGB`, and faces the
+> game never draws are left out), and the feature drawer's object
+> previews render with them.
 
 ---
 
@@ -229,10 +250,11 @@ primitives** — those exist only as **anchor points** for COB scripts
 - **Vertices are local to the object**, not global. Two objects can have
   identical vertex arrays — that's a sign of mirrored geometry, not
   shared data.
-- **The `OffsetToSelectionPrim` field is only meaningful for the root
-  object.** Children must set it to `-1` (`0xFFFFFFFF`); some editors
-  write `0` here and the game ignores it, but third-party tools that
-  validate aggressively will flag the model as broken.
+- **`OffsetToSelectionPrim` is an index, and that primitive is never
+  drawn.** The game moves it into slot 0 and skips slot 0. Retail models
+  store indices on child pieces too; `-1` means none. kbot's model JSON
+  keeps the hidden primitive flagged `hidden` and points
+  `selectionPrim` at it.
 - **`Always0` really is always 0** in observed content. It's been the
   "tell us if you find a counter-example" field since 1998 and nobody
   has.
