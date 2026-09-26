@@ -3,13 +3,16 @@ package studio
 import (
 	"bytes"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/coreprime/kbot-io/formats/gaf"
 	hpiv1 "github.com/coreprime/kbot-io/formats/hpi/v1"
 	"github.com/coreprime/kbot-io/formats/sct"
 	"github.com/coreprime/kbot-io/formats/tnt"
+	"github.com/coreprime/kbot-io/palettes"
 )
 
 // blankTileByte is the palette index used for empty tile cells.  The TA
@@ -17,6 +20,10 @@ import (
 // sentinel).  We re-use it so unfinished maps look obviously unfinished
 // rather than smeared with palette index 0.
 const blankTileByte = 0x64
+
+// maxEditorTiles is the most distinct tiles a saved map may hold: a TNT's
+// tile indices are 16-bit. A variable so tests can lower it.
+var maxEditorTiles = tnt.MaxTiles
 
 // defaultHeight is the elevation written to attribute cells when the client
 // doesn't supply explicit heights.
@@ -124,15 +131,22 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 	// would inflate the dedupTiles quality count against a synthetic
 	// per-cell pool that nothing the user did actually built.  Tile
 	// index 0 is reserved as the "blank" tile filled with the void byte
-	// so unstamped cells render uniformly.
+	// so unstamped cells render uniformly.  Tile indices are 16-bit, so
+	// the pool holds at most maxEditorTiles tiles; a map that needs more is
+	// refused below rather than written with wrapped indices.
 	type tileKey [1024]byte
 	tilePool := make([][]byte, 0, 32)
 	tileIndex := make(map[tileKey]uint16)
+	tooManyTiles := false
 	addTile := func(pixels []byte) uint16 {
 		var key tileKey
 		copy(key[:], pixels)
 		if idx, ok := tileIndex[key]; ok {
 			return idx
+		}
+		if len(tilePool) >= maxEditorTiles {
+			tooManyTiles = true
+			return 0
 		}
 		idx := uint16(len(tilePool))
 		tilePool = append(tilePool, append([]byte(nil), pixels...))
@@ -269,6 +283,10 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		}
 	}
 
+	if tooManyTiles {
+		return nil, nil, fmt.Errorf("the map needs more than %d distinct 32×32 tiles; a TNT's 16-bit tile indices address at most %d", maxEditorTiles, tnt.MaxTiles)
+	}
+
 	// Per-attr-cell heights from the client override anything the
 	// section stamping wrote.  Optional — empty slice means "use stamp
 	// heights / default".
@@ -298,6 +316,11 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 			continue
 		}
 		idx := addFeatureName(fp.Name)
+		// Feature words from 0xFFFB up are sentinels (0xFFFC void, 0xFFFF
+		// none), so the feature table must hold fewer than 0xFFFB entries.
+		if len(featureNames) >= int(tnt.FeatureSentinelFloor) {
+			return nil, nil, fmt.Errorf("the map places %d or more different features; a TNT feature table holds fewer than %d", tnt.FeatureSentinelFloor, tnt.FeatureSentinelFloor)
+		}
 		attrs[fp.AY*attrW+fp.AX].Feature = uint16(idx)
 	}
 	// Voids stomp any feature index that happened to land on the same
@@ -315,21 +338,23 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		features[i] = tnt.Feature{Index: i, Name: name}
 	}
 
-	// Minimap — 252×252 with the map's content scaled into the top-left
-	// corner and the remainder filled with the TA void sentinel byte.
-	minimap := buildMinimap(tileW, tileH, tileMap, tilePool)
-
 	seaLevel := uint32(req.SeaLevel)
 	if seaLevel == 0 && req.OTA != nil {
 		seaLevel = uint32(req.OTA.SeaLevel)
 	}
 
+	// The header matches what Save writes, so renders of the in-memory
+	// map (the Export menu's build map) see the same feature count and
+	// minimap flag as the saved file.
 	m := &tnt.Map{
 		Header: tnt.Header{
-			IDVersion: 8192,
+			IDVersion: tnt.VersionTA,
 			Width:     uint32(attrW),
 			Height:    uint32(attrH),
+			Tiles:     uint32(len(tilePool)),
+			TileAnims: uint32(len(features)),
 			SeaLevel:  seaLevel,
+			Unknown1:  tnt.MinimapPresent,
 		},
 		TileW:    tileW,
 		TileH:    tileH,
@@ -338,45 +363,29 @@ func (sess *Session) buildMap(req saveRequest) (*tnt.Map, []tnt.Feature, error) 
 		TileMap:  tileMap,
 		TileAttr: attrs,
 		Tiles:    tilePool,
-		Minimap:  minimap,
-		MinimapW: 252,
-		MinimapH: 252,
+	}
+	// Minimap — laid out as the game's own maps are: the visible map scaled
+	// into the top-left corner with its longer side 252 pixels, each pixel
+	// the average of the map pixels it covers, and the rest padding.
+	if err := m.BuildMinimap(sess.minimapPalette()); err != nil {
+		return nil, nil, fmt.Errorf("build minimap: %w", err)
 	}
 	return m, features, nil
 }
 
-// buildMinimap renders the map at 1-pixel-per-tile resolution into the
-// top-left of a 252×252 palette-indexed image.  Cells outside the map area
-// receive the void sentinel byte so the in-game minimap masks them off.
-func buildMinimap(tileW, tileH int, tileMap []uint16, tiles [][]byte) []byte {
-	const dim = 252
-	mm := make([]byte, dim*dim)
-	for i := range mm {
-		mm[i] = tnt.MinimapVoidByte
-	}
-
-	pxW, pxH := tileW, tileH
-	if pxW > dim {
-		pxW = dim
-	}
-	if pxH > dim {
-		pxH = dim
-	}
-	for y := 0; y < pxH; y++ {
-		for x := 0; x < pxW; x++ {
-			tx := x * tileW / pxW
-			ty := y * tileH / pxH
-			tileIdx := tileMap[ty*tileW+tx]
-			if int(tileIdx) >= len(tiles) {
-				continue
-			}
-			// Sample the middle of the tile so single-pixel minimap
-			// cells reflect the dominant color rather than an edge
-			// artefact.
-			mm[y*dim+x] = tiles[tileIdx][16*32+16]
+// minimapPalette is the palette the saved minimap's colours are matched
+// against: the mounted palettes/palette.pal, or the built-in TA palette.
+func (sess *Session) minimapPalette() color.Palette {
+	if sess.vfs != nil {
+		if pal := sess.loadVFSPalette(); len(pal) > 0 {
+			return pal
 		}
 	}
-	return mm
+	pal, err := gaf.LoadPaletteFromBytes(palettes.DefaultPalette)
+	if err != nil {
+		return nil
+	}
+	return pal.ColorModel()
 }
 
 // otaForRequest returns the state a new map's .ota is written from (one
